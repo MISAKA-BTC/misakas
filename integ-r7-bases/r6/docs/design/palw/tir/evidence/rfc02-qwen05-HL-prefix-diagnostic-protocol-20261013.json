@@ -1,0 +1,25 @@
+{
+  "schema": "misaka.rfc02.source-HL-prefix-diagnostic-protocol.v1",
+  "repository": "Qwen/Qwen2.5-0.5B-Instruct",
+  "revision": "7ae557604adf67be50417f59c2c2f167def9a775",
+  "source_reference": "current generic HL float interpreter f32 storage/f64 contractions, streamed original weights",
+  "selection": "same21-token first frozen task EOS divergence; cause attribution only, no random/acceptance credit",
+  "file_sha256": {
+    "rfc02-qwen05-translation-first-divergence-tokens-20261013.json": "9efdb88f6b54c8285c5f9ef228c3228f8c59209c1474b3f2b902d64f4ea30bce",
+    "rfc02-qwen05-translation-first-divergence-layout-job-20261013.json": "85c84480e7d34dfeb74292301d8c022947cffa8028a023d5262657d7f59eba8f",
+    "rfc02-qwen05-source-manifest-20261013.json": "64ab29ad66c4b852673cc3da25416c72ce6af5c568ee53a78ec1734291ae61a8"
+  },
+  "limits": {
+    "max_positions": 64,
+    "max_sequences": 1,
+    "max_token_json_bytes": 65536,
+    "row_cache_bytes": 134217728
+  },
+  "compare_scores": [
+    151645,
+    6313,
+    151643
+  ],
+  "original_protocol_pins_thresholds_and_FAILURE_remain_unchanged": true,
+  "source_fullcontext_final_or_a6_a8_established": false
+}

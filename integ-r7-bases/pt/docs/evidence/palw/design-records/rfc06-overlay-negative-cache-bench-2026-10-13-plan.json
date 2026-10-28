@@ -1,0 +1,17 @@
+{
+  "kind": "controlled-adjacent-SST-absence",
+  "deadlineSeconds": 60,
+  "giantValueBytes": 167772160,
+  "fixture": "deterministic xorshift high-entropy bytes; no native carriage/model/key acceptance",
+  "cacheBytes": 268435456,
+  "cacheShardBits": 1,
+  "readsPerRound": 12,
+  "rounds": 3,
+  "ownedDbLimitBytes": 536870912,
+  "ownedPath": "/tmp/misaka-rfc67812-runtime/overlay-absence-bench-db-20261013",
+  "native100kAccepted": false,
+  "realP2pAccepted": false,
+  "rssAccepted": false,
+  "sourceSha256": "2fadf8b09ec8513ff7895f9c075926c65cdd59bd0476f4b34ebaa2c0d11cd786",
+  "binarySha256": "9d7fe2764589e024233805d9ef5b4d635fa5e3e5f86da2d9de99612b072b2bc5"
+}

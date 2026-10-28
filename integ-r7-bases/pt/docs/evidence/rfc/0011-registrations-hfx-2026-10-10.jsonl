@@ -1,0 +1,7 @@
+# RFC-0011 §18 numbers 2 and 3: the registration records the census counts (misaka-palw-sdk/tools/hf_census/registrations.py, ADR-0175).
+# One JSON object per line. Source of the one record: H1 (onboard/h1-hf-closed-loop, run 20261008-qwen25-0.5b-r1), as cited by
+# docs/rfc/evidence/0011-hf-census-coverage-2026-10-08.json ("dormant_registration_on_a_private_devnet"). It is a pre-fence registration
+# (palw_model_immutable_v1 is dormant everywhere), so its line id is its class id (ADR-0175's compatibility alias): no
+# model_registration_id_v1 exists for it. It is excluded from number 2 for two reasons the record states: a private devnet, and 512 of
+# 32,768 positions.
+{"repo": "Qwen/Qwen2.5-0.5B-Instruct", "revision": "7ae557604adf67be50417f59c2c2f167def9a775", "class_id": "55b32ae12c8fa0031ea8d78b826f75632a6863585f2d3b5efc906c856460324a640591f69bc1ed1cb9160f878f64fd62bfa98b3ad577fb626b36d24ba787cb1c", "canonical_artifact_root": "3c458f9988b7ae334940cd396f03fbeb4875e6cc9dcd31948f81877a633072ab197ec1686da5ce547216f044f842865fbb8c78a90f126ca99fef03e83a95f575", "model_registration_id": null, "parent_registration_id": null, "network": "private salted testnet-12 drill genesis (H1 devnet), dormant", "public_chain": false, "full_task": true, "full_context": false, "registered_positions": 512, "declared_positions": 32768, "mined_funded_final": false, "evidence": "H1 20261008-qwen25-0.5b-r1 (L4): pack strict rebuild verified; registering node, restart and fresh IBD agree; G14 GAP"}

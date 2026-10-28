@@ -1,0 +1,41 @@
+{
+  "architectures": [
+    "MiniCPM3ForCausalLM"
+  ],
+  "attention_bias": false,
+  "attention_dropout": 0.0,
+  "bos_token_id": 1,
+  "dim_model_base": 256,
+  "dtype": "bfloat16",
+  "eos_token_id": 2,
+  "head_dim": 4,
+  "hidden_act": "silu",
+  "hidden_size": 32,
+  "initializer_range": 0.1,
+  "intermediate_size": 64,
+  "kv_lora_rank": 8,
+  "max_position_embeddings": 128,
+  "mlp_bias": false,
+  "model_type": "minicpm3",
+  "num_attention_heads": 4,
+  "num_hidden_layers": 2,
+  "num_key_value_heads": 4,
+  "pad_token_id": null,
+  "pretraining_tp": 1,
+  "q_lora_rank": 12,
+  "qk_head_dim": 12,
+  "qk_nope_head_dim": 8,
+  "qk_rope_head_dim": 4,
+  "rms_norm_eps": 1e-05,
+  "rope_parameters": {
+    "rope_theta": 10000.0,
+    "rope_type": "default"
+  },
+  "scale_depth": 1.4,
+  "scale_emb": 12,
+  "tie_word_embeddings": true,
+  "transformers_version": "5.17.0",
+  "use_cache": true,
+  "v_head_dim": 8,
+  "vocab_size": 64
+}

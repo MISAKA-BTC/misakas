@@ -1,0 +1,116 @@
+{
+  "format": "palw-tir-v2/scoring-vectors/1",
+  "spec": "docs/rfc/0004-palw-model-improvement.md §7.3",
+  "name": "judge",
+  "library_version": 1,
+  "shape": "lo = −1000, hi = 1000",
+  "program_borsh_hex": "020061fa4aa57adfc79053c5e517515e50c7ae7c036abc43ff931053144691ba31c9212539a93514f831a8472ca75a39b094177736aa5818eeae547bb31fbf89f589010000000000040001000000080000006a642e73636f72650201000000010000000000000080ffffffffffffff7f0000000000000000000000000000000002000000060000006a642e70726500000000010000000f18fcffffffffffffe8030000000000000100000005020201000000000100000001010000000000070000006a642e706f73740100000002010000000001000000010000000f18fcffffffffffffe803000000000000010000000100020100000000010000000100000000000000000001020000",
+  "graph_ir_root_hex": "f9d12c78416e5644598162725044d0390cfd5c7598bcd0a0d2493c70cbc5359a41b93924bb506ca268c4879ba478cbe2572dd147cd03ece34eeb26f3b0784ae9",
+  "inputs": [
+    {
+      "name": "jd.score",
+      "dtype": "i32",
+      "shape": [
+        1
+      ],
+      "interval": [
+        "-2147483648",
+        "2147483647"
+      ]
+    }
+  ],
+  "cases": [
+    {
+      "name": "inside",
+      "inputs": [
+        {
+          "dtype": "i32",
+          "shape": [
+            1
+          ],
+          "data": [
+            "-17"
+          ]
+        }
+      ],
+      "output": {
+        "dtype": "i32",
+        "shape": [
+          1
+        ],
+        "data": [
+          "-17"
+        ]
+      }
+    },
+    {
+      "name": "at the top",
+      "inputs": [
+        {
+          "dtype": "i32",
+          "shape": [
+            1
+          ],
+          "data": [
+            "1000"
+          ]
+        }
+      ],
+      "output": {
+        "dtype": "i32",
+        "shape": [
+          1
+        ],
+        "data": [
+          "1000"
+        ]
+      }
+    },
+    {
+      "name": "above",
+      "inputs": [
+        {
+          "dtype": "i32",
+          "shape": [
+            1
+          ],
+          "data": [
+            "1073741824"
+          ]
+        }
+      ],
+      "output": {
+        "dtype": "i32",
+        "shape": [
+          1
+        ],
+        "data": [
+          "1000"
+        ]
+      }
+    },
+    {
+      "name": "below",
+      "inputs": [
+        {
+          "dtype": "i32",
+          "shape": [
+            1
+          ],
+          "data": [
+            "-2147483648"
+          ]
+        }
+      ],
+      "output": {
+        "dtype": "i32",
+        "shape": [
+          1
+        ],
+        "data": [
+          "-1000"
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,257 @@
+{
+  "artifact": "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-14-lane-restart-builds-c00813/7adc9332-ba5a-4def-b8fd-2d73c009e942/scratchpad/tir/huihui2b.class.palwtir",
+  "class": {
+    "answer_cold": {
+      "answer_bytes_max": 17053,
+      "authenticate_max_ns": 27803333,
+      "authenticate_ns": 953167418,
+      "ns": 34400807639,
+      "open_ns": 7084125,
+      "requests": 114787,
+      "slice_max_ns": 46312500,
+      "slices": 229582
+    },
+    "bounds_upper6": {
+      "collect_after_accept_daa": 1062231,
+      "custodian_lane_attempts": 522,
+      "owner_lane_attempts": 522,
+      "passes": 2,
+      "preparation_daa": 16,
+      "preparation_slices_per_actor": 2,
+      "preparation_slices_per_pass": 1,
+      "prepared_disk_bytes": 1904351552,
+      "rent_sompi": 2506195444632618,
+      "unit_bytes": 66633
+    },
+    "class": "huihui2b.class.palwtir",
+    "execute": {
+      "capture_bytes": 35810835,
+      "ns": 4177186542
+    },
+    "filing": "UNMEASURED",
+    "frame": [
+      {
+        "charged_parser_steps_per_action": 86942720,
+        "encode_and_hash_ns": 123167,
+        "frame_bytes": 84905,
+        "owner_reads": 33815,
+        "plan_bytes": 2901,
+        "upper": 6
+      },
+      {
+        "charged_parser_steps_per_action": 2991827968,
+        "encode_and_hash_ns": 2945708,
+        "frame_bytes": 2921707,
+        "owner_reads": 1208997,
+        "plan_bytes": 2901,
+        "upper": 257
+      }
+    ],
+    "geometry": {
+      "decode": 2,
+      "leaves": 114664,
+      "prefill": 4,
+      "tiles": 61,
+      "vocab": 248320
+    },
+    "plans": [
+      {
+        "acquisition_inclusion_daa": 1060592,
+        "claim_rent_sompi": 2506195444632618,
+        "collect_until": 1062231,
+        "components": {
+          "acquisition": {
+            "inclusion_daa": 1060592,
+            "moves": 30161,
+            "parser": 121884391424,
+            "rent": 126499507264
+          },
+          "controls": {
+            "inclusion_daa": 80,
+            "moves": 20,
+            "parser": 58685860468,
+            "rent": 58701330173
+          },
+          "executor": {
+            "inclusion_daa": 224,
+            "moves": 56,
+            "parser": 3884429619968,
+            "rent": 3944236483860
+          },
+          "owner_validation": {
+            "inclusion_daa": 0,
+            "moves": 0,
+            "parser": 532166111850,
+            "rent": 532166451470
+          },
+          "owner_work": {
+            "inclusion_daa": 0,
+            "moves": 3654,
+            "parser": 1262588514271320,
+            "rent": 1262590489952344
+          },
+          "preparation": {
+            "inclusion_daa": 16,
+            "moves": 24,
+            "parser": 75497472,
+            "rent": 77867008
+          },
+          "preparation_work": {
+            "inclusion_daa": 0,
+            "moves": 3654,
+            "parser": 1238913223237480,
+            "rent": 1238915198918504
+          },
+          "terminal": {
+            "inclusion_daa": 1192,
+            "moves": 298,
+            "parser": 28004366139,
+            "rent": 28074121995
+          }
+        },
+        "custodian_lane": "PalwTirPublicWorkV1 { attempts: 522, io_bytes: 7075091641672, hash_bytes: 113201467300384, copy_bytes: 56685584430064, parser_steps: 113201501510176, id_copy_words: 8560, tree_hashes: 110548306902, replay_leaves: 229328, replay_positions: 10, replay_id_words: 60, arithmetic_work: 18887711568, traffic_bytes: 18162196480, eval_elements: 134217728, eval_terms: 134217728, source_reads: 3671649144, target_requests: 2597907320 }",
+        "door_daa": 1062231,
+        "door_fits_horizon": false,
+        "final_floor": 1062231,
+        "final_floor_with_liability_hold": 1062231,
+        "frame_bytes": 84905,
+        "frame_writes": 20,
+        "liability_horizon_daa": 3120,
+        "open_until": 21,
+        "owner_lane": "PalwTirPublicWorkV1 { attempts: 522, io_bytes: 7075299536632, hash_bytes: 113205061330432, copy_bytes: 78663733431936, parser_steps: 113205095540224, id_copy_words: 58480, tree_hashes: 110551555260, replay_leaves: 229328, replay_positions: 10, replay_id_words: 60, arithmetic_work: 18887711568, traffic_bytes: 18162196480, eval_elements: 34896609280, eval_terms: 34896609280, source_reads: 954628777440, target_requests: 675455903200 }",
+        "owner_open_deposit_sompi": 33815,
+        "owner_open_rent_sompi": 1263249155911078,
+        "owner_turns": 520,
+        "preparation_door_daa": 16,
+        "preparation_slices_per_actor": 2,
+        "preparation_until": 16,
+        "stream_door_daa": 1062128,
+        "stream_until": 1062149,
+        "upper": 6,
+        "window_challenge": 120,
+        "window_court": 3000
+      },
+      {
+        "acquisition_inclusion_daa": 30271613,
+        "claim_rent_sompi": 91544975489933153,
+        "collect_until": 30273338,
+        "components": {
+          "acquisition": {
+            "inclusion_daa": 30271613,
+            "moves": 1074321,
+            "parser": 17672371900416,
+            "rent": 18667562925824
+          },
+          "controls": {
+            "inclusion_daa": 2088,
+            "moves": 522,
+            "parser": 3171382031432,
+            "rent": 3183632981571
+          },
+          "executor": {
+            "inclusion_daa": 8256,
+            "moves": 2064,
+            "parser": 142083018728448,
+            "rent": 144287328487576
+          },
+          "owner_validation": {
+            "inclusion_daa": 0,
+            "moves": 0,
+            "parser": 24663403790759,
+            "rent": 24663415477587
+          },
+          "owner_work": {
+            "inclusion_daa": 0,
+            "moves": 134676,
+            "parser": 45686694379333240,
+            "rent": 45688982554707576
+          },
+          "preparation": {
+            "inclusion_daa": 102,
+            "moves": 1028,
+            "parser": 70874300416,
+            "rent": 73089389568
+          },
+          "preparation_work": {
+            "inclusion_daa": 0,
+            "moves": 134676,
+            "parser": 45662801656467120,
+            "rent": 45665089831841456
+          },
+          "terminal": {
+            "inclusion_daa": 1192,
+            "moves": 298,
+            "parser": 28004366139,
+            "rent": 28074121995
+          }
+        },
+        "custodian_lane": "PalwTirPublicWorkV1 { attempts: 522, io_bytes: 7075091641672, hash_bytes: 113201467300384, copy_bytes: 56685584430064, parser_steps: 113201501510176, id_copy_words: 8560, tree_hashes: 110548306902, replay_leaves: 229328, replay_positions: 10, replay_id_words: 60, arithmetic_work: 18887711568, traffic_bytes: 18162196480, eval_elements: 134217728, eval_terms: 134217728, source_reads: 3671649144, target_requests: 2597907320 }",
+        "door_daa": 30273338,
+        "door_fits_horizon": false,
+        "final_floor": 30273338,
+        "final_floor_with_liability_hold": 30273338,
+        "frame_bytes": 2921707,
+        "frame_writes": 522,
+        "liability_horizon_daa": 3120,
+        "open_until": 107,
+        "owner_lane": "PalwTirPublicWorkV1 { attempts: 522, io_bytes: 7083996475792, hash_bytes: 113344212356992, copy_bytes: 78733308945216, parser_steps: 113344246566784, id_copy_words: 2146800, tree_hashes: 110687444935, replay_leaves: 229328, replay_positions: 10, replay_id_words: 60, arithmetic_work: 18887711568, traffic_bytes: 18162196480, eval_elements: 34896609280, eval_terms: 34896609280, source_reads: 954628777440, target_requests: 675455903200 }",
+        "owner_open_deposit_sompi": 1208997,
+        "owner_open_rent_sompi": 45732313533110987,
+        "owner_turns": 520,
+        "preparation_door_daa": 102,
+        "preparation_slices_per_actor": 2,
+        "preparation_until": 102,
+        "stream_door_daa": 30273149,
+        "stream_until": 30273256,
+        "upper": 257,
+        "window_challenge": 120,
+        "window_court": 3000
+      }
+    ],
+    "preparation": {
+      "publish_io_bytes": 102846502,
+      "publish_ns": 157957208,
+      "publish_slice_max_ns": 13198459,
+      "publish_slices": 3141,
+      "quoted_publish_slices": 1837953,
+      "retained_bytes": 51421782,
+      "warm_leaf_answers": 114664,
+      "warm_ns": 31892475589,
+      "warm_open_ns": 3123416,
+      "warm_slices": 114665
+    },
+    "preparation_pass": {
+      "budget_hash_bytes": 56600733650192,
+      "budget_io_bytes": 3537545820836,
+      "budget_parser_steps": 56600750755088,
+      "capture_slices": 114796,
+      "debits_per_pass": 1,
+      "pass_hash_bytes": 37703637687,
+      "pass_io_bytes": 32284206779,
+      "pass_ns": 1346872708,
+      "pass_parser_steps": 516668075952,
+      "passes": 2,
+      "publication_slices": 3141
+    },
+    "step_check": "UNMEASURED: no in-memory params for this class (real-model run)",
+    "step_run": {
+      "answer_bytes_max": 285909,
+      "bound_bytes": 2122389,
+      "count": 256,
+      "layout_leaf_bytes": 8192,
+      "widest_leaf_value_bytes": 8192
+    }
+  },
+  "class_id": "672e93aa71e08b457deb2f2c3d312ce62c87c232ca452494c12d8d1b2436904ec1523099c09dbca8bbda61b8edb1979eab60de2778f673fe7d23861659ada63c",
+  "host": {
+    "arch": "aarch64",
+    "label": "Apple M1 Max 10c 32GiB",
+    "os": "macos"
+  },
+  "inventory_root": "a644954878ae42dda2cbcc9de879ccabb6e52db99d96f74d8dda57cedc4b4db411d8d3978fdd211f3fb0c42ac1c1f7235a3d27e3299980b2051295ecf7a18c2e",
+  "inventory_root_ns": 9836590625,
+  "open_ns": 2963500,
+  "profile": "release",
+  "record": "misaka-palw/tir-frame-measure-real/v1",
+  "source_commit": "58e0c8c58+t12-court-align"
+}

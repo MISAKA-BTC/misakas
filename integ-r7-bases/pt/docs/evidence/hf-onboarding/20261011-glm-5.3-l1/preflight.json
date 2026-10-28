@@ -1,0 +1,160 @@
+{
+ "schema": "misaka.h1.preflight.v1",
+ "command": "misaka --network testnet-12 --output json model preflight hf://REPO@REV --depth shape [--max-context N]",
+ "header_only": true,
+ "widest": {
+  "exit": 34,
+  "file": "widest.json",
+  "readable": true,
+  "input": "https://huggingface.co/zai-org/GLM-5.3/resolve/aca966e4e02791568aa6a4ced368624b3d897f42",
+  "bytes_read": 26298619,
+  "depth": {
+   "requested": "shape",
+   "reached": "headers",
+   "stopped_at": "no program to judge: the convert stage is blocked"
+  },
+  "network_daa": null,
+  "model_type": "glm_moe_dsa",
+  "architectures": [
+   "GlmMoeDsaForCausalLM"
+  ],
+  "frontend_level": "C",
+  "adapter": "glm-moe-dsa",
+  "features_used": 0,
+  "features_not_supported": [],
+  "scope": {
+   "schema": "misaka.palw.feature-scope.v1",
+   "task": "text-generation",
+   "input": "token ids",
+   "output": "next-token logits",
+   "text_only": false,
+   "excluded": [
+    {
+     "kind": "mtp",
+     "what": "multi-token-prediction heads",
+     "why": "extra heads that propose further tokens (speculative decoding); the next-token distribution is the main head's, so the class does not need them",
+     "modal": false,
+     "evidence": [
+      "config.num_nextn_predict_layers"
+     ],
+     "tensors": 0,
+     "bytes": 0
+    }
+   ]
+  },
+  "storage": [
+   "BF16",
+   "F32",
+   "F8_E4M3"
+  ],
+  "weights_bytes": 755617140416,
+  "missing_shards": [],
+  "artifact_estimate_bytes": null,
+  "kernel": null,
+  "admission_verdict": null,
+  "admission_gate": null,
+  "admission_gate_detail": null,
+  "layout": null,
+  "seat_needed_bytes": null,
+  "verdict": {
+   "convert": "blocked",
+   "register": "unknown",
+   "mine": "unknown"
+  },
+  "unknown_because": {
+   "register": "no program to judge: the convert stage is blocked",
+   "mine": "no program to judge: the convert stage is blocked"
+  },
+  "blockers": [
+   {
+    "stage": "convert",
+    "code": "ARCH_REFUSED",
+    "arg": null,
+    "what": "the generic frontend refuses this architecture",
+    "have": null,
+    "need": null,
+    "unit": null,
+    "safe_paths": []
+   }
+  ],
+  "notes": []
+ },
+ "declared": {
+  "exit": 34,
+  "max_context": 512,
+  "file": "declared.json",
+  "readable": true,
+  "input": "https://huggingface.co/zai-org/GLM-5.3/resolve/aca966e4e02791568aa6a4ced368624b3d897f42",
+  "bytes_read": 26298619,
+  "depth": {
+   "requested": "shape",
+   "reached": "headers",
+   "stopped_at": "no program to judge: the convert stage is blocked"
+  },
+  "network_daa": null,
+  "model_type": "glm_moe_dsa",
+  "architectures": [
+   "GlmMoeDsaForCausalLM"
+  ],
+  "frontend_level": "C",
+  "adapter": "glm-moe-dsa",
+  "features_used": 0,
+  "features_not_supported": [],
+  "scope": {
+   "schema": "misaka.palw.feature-scope.v1",
+   "task": "text-generation",
+   "input": "token ids",
+   "output": "next-token logits",
+   "text_only": false,
+   "excluded": [
+    {
+     "kind": "mtp",
+     "what": "multi-token-prediction heads",
+     "why": "extra heads that propose further tokens (speculative decoding); the next-token distribution is the main head's, so the class does not need them",
+     "modal": false,
+     "evidence": [
+      "config.num_nextn_predict_layers"
+     ],
+     "tensors": 0,
+     "bytes": 0
+    }
+   ]
+  },
+  "storage": [
+   "BF16",
+   "F32",
+   "F8_E4M3"
+  ],
+  "weights_bytes": 755617140416,
+  "missing_shards": [],
+  "artifact_estimate_bytes": null,
+  "kernel": null,
+  "admission_verdict": null,
+  "admission_gate": null,
+  "admission_gate_detail": null,
+  "layout": null,
+  "seat_needed_bytes": null,
+  "verdict": {
+   "convert": "blocked",
+   "register": "unknown",
+   "mine": "unknown"
+  },
+  "unknown_because": {
+   "register": "no program to judge: the convert stage is blocked",
+   "mine": "no program to judge: the convert stage is blocked"
+  },
+  "blockers": [
+   {
+    "stage": "convert",
+    "code": "ARCH_REFUSED",
+    "arg": null,
+    "what": "the generic frontend refuses this architecture",
+    "have": null,
+    "need": null,
+    "unit": null,
+    "safe_paths": []
+   }
+  ],
+  "notes": []
+ }
+}

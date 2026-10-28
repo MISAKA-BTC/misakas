@@ -1,0 +1,23 @@
+[package]
+name = "misaka-palw-panel"
+description = "RFC-0010 dormant, deterministic permissionless Panel binding state machine"
+publish = false
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+blake2b_simd.workspace = true
+borsh.workspace = true
+kaspa-hashes.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

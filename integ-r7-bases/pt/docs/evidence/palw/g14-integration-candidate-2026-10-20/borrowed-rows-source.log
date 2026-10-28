@@ -1,0 +1,11 @@
+
+running 6 tests
+test palw_tir_public_source_v1::tests::decoder_rejects_vector_bombs_before_allocating_and_request_ids_bind_every_scope_field ... ok
+test palw_tir_public_source_v1::tests::flat_original_binding_does_not_acquire_tiled_trace_obligations ... ok
+test palw_tir_public_source_v1::tests::ids_multiple_chunks_are_untrusted_until_exact_eof_and_cannot_change_root_or_source ... ok
+test palw_tir_public_source_v1::tests::original_ids_seal_before_rows_or_tiles_and_bad_eof_is_atomic ... ok
+test palw_tir_public_source_v1::tests::registered_original_geometry_authenticates_nodes_raw_leaves_and_runs_without_decode_pin ... ok
+test palw_tir_public_source_v1::tests::original_tile_tree_frontier_and_full_u32_ragged_tile_authenticate_without_row_node_zero ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 4677 filtered out; finished in 0.01s
+

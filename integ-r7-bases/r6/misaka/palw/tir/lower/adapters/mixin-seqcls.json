@@ -1,0 +1,11 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "mixin-seqcls",
+  "doc": "A mixin: `…ForSequenceClassification` over a decoder (a classifier, a reranker, a reward model): the base model's layers and final norm, no language-model head, and the LAST prompt token's final-norm row through `score` (a bias-free Linear to the labels) as the class's output — an Embedding-profile row of `num_labels` logits, not normalised (`OutputSpec::Classify`). `num_labels` is the length of `id2label` (transformers' PretrainedConfig.num_labels; 2 when the configuration names none). transformers picks the last NON-PAD token of each row; this class reads the last token of the prompt, which is the same when the prompt holds no pad token id. `tie_word_embeddings` is read and has no effect: there is no vocabulary head.",
+  "vars": [
+    {"name": "labels", "value": {"$let": ["m", {"$cfg?": "id2label"}, {"$if": [{"$ne": [{"$var": "m"}, null]}, {"$len": {"$var": "m"}}, {"$cfg": ["num_labels", 2]}]}]}},
+    {"name": "tied", "value": {"$let": ["_", {"$cfg?": "tie_word_embeddings"}, false]}},
+    {"name": "lm_head_name", "value": "score"}
+  ],
+  "spec": {"output": {"Classify": {"labels": {"$var": "labels"}, "bias": false, "pre": null}}}
+}

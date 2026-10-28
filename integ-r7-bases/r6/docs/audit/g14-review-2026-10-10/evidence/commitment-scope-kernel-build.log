@@ -1,0 +1,9 @@
+   Compiling misaka-palw-tir-exec v1.1.0 (/Users/wata/.codex/worktrees/g14-commitment-scope/MISAKA-testnet/misaka-palw-tir-exec)
+   Compiling misaka-palw-tir v1.1.0 (/Users/wata/.codex/worktrees/g14-commitment-scope/MISAKA-testnet/misaka-palw-tir)
+   Compiling misaka-palw-gen v1.1.0 (/Users/wata/.codex/worktrees/g14-commitment-scope/MISAKA-testnet/misaka-palw-gen)
+   Compiling misaka-palw-challenge v1.1.0 (/Users/wata/.codex/worktrees/g14-commitment-scope/MISAKA-testnet/misaka-palw-challenge)
+   Compiling misaka-palw-kernel v1.1.0 (/Users/wata/.codex/worktrees/g14-commitment-scope/MISAKA-testnet/misaka-palw-kernel)
+   Compiling misaka-palw-tir-sketch v1.1.0 (/Users/wata/.codex/worktrees/g14-commitment-scope/MISAKA-testnet/misaka-palw-tir-sketch)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 18.23s
+  Executable tests/c4r4.rs (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/c4r4-78af1c4414d8a9f9)
+  Executable tests/court_scope.rs (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/court_scope-a98750531b180221)

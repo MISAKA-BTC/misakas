@@ -1,0 +1,38 @@
+.git
+target
+
+# Audit (2026-06-27) H-2: the Dockerfiles use `COPY . .`, so a dirty working tree would pull
+# operator secrets and local state into the build context (and builder layers / cache / remote
+# builder logs). Keep them out.
+
+# Env files
+**/.env
+**/.env.*
+**/*.env
+# PQ wallet / validator seed material
+**/*.kpq
+**/val.seed
+**/*.mnemonic
+**/*.seed
+# Wallet stores
+**/*.wallet
+**/wallet.storage
+# Keys / certs
+**/*.key
+**/*.pem
+# rothschild generated key + other private-key/secret artifacts (audit v22; .hex slipped past)
+**/rothschild-generated-key.hex
+**/*generated-key*.hex
+**/*private*key*
+**/*.secret
+# Known devnet key material (also in .gitignore)
+**/misaka-devnet-multisig-keys.json
+**/misaka-devnet-premine-key.json
+# Build/dev bloat and local state
+**/node_modules
+**/dist
+**/coverage
+**/.DS_Store
+.work
+.claude
+analyzer-target

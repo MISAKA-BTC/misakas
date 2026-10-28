@@ -1,0 +1,46 @@
+{
+  "date": "2026-10-21",
+  "candidate_parent": "c54ba38fda7cd9fd8d540a80eebd3be70825b0d4",
+  "kind": "Source audit; not a node run, collateral experiment, archive implementation or measurement",
+  "findings": [
+    {
+      "symbol": "objects::CourtCloseDeclared",
+      "fact": "Deposits are computed and written as a claim against the declarer bond; no transfer into separate escrow; already-poor declarers are explicitly not refused by this arm."
+    },
+    {
+      "symbol": "TransitionBuilder::slash_bond",
+      "fact": "Actual debit is min(nominal amount, current collateral). Nominal archived deposit cannot be counted as a separately funded balance."
+    },
+    {
+      "symbol": "TransitionBuilder::write_court(None)",
+      "fact": "Removes court indexes/challenger stake, charges any remaining group, deletes groups and phase rows. This runs on objective CourtClosed too."
+    },
+    {
+      "symbol": "TransitionBuilder::void_claim",
+      "fact": "Only with offence_attribution_active, neutrally closes all courts on the claim through the common writer; residual-group charge is still reached."
+    },
+    {
+      "symbol": "write_staged_row_v1(CourtService)",
+      "fact": "Before the new retention guard, reverse checks were contingent on separate SharedContext/DutyClock rows. A context-valid empty book could otherwise clear unresolved bindings; native tests are run separately."
+    }
+  ],
+  "documents": {
+    "rfc": "docs/rfc/0030-court-end-effects-and-pending-liability-archive.md",
+    "adr": "docs/adr/0197-court-end-effects-and-pending-liability-archive.md"
+  },
+  "user_decision": "A detailed specification and isolated implementation authorized 2026-10-21; not production adoption, pre integration, arming or deployment.",
+  "source_sha256": {
+    "consensus/core/src/palw_state_v2/objects.rs": "ef046fccb674efe5466d24ed0797c0fb5962ceffa2dbce0e478c264cd0904b42",
+    "consensus/core/src/palw_state_v2/transition_builder.rs": "501a4aa1d87a9435f9f19a0a159aa77b5160f0e93a5bb3aba3871c89f7a518c5",
+    "consensus/core/src/palw_state_v2.rs": "39be9c3a6a3f02f4b23826f54448a0fdf479f6ec3bfa2db141c0cdceae5f17d2",
+    "consensus/core/src/palw_court_service_state_v2.rs": "7593496e39ce078ce5ccd1366008e824afc5647da915a26e5ff3114ab5c6c6b8",
+    "consensus/core/src/palw_staged_court_fold_v1.rs": "d58cfd56b044ff9df4350e44274310f20773df5d6e913af68442ae228b6c3359"
+  },
+  "parent_source_sha256": {
+    "consensus/core/src/palw_state_v2/objects.rs": "ef046fccb674efe5466d24ed0797c0fb5962ceffa2dbce0e478c264cd0904b42",
+    "consensus/core/src/palw_state_v2/transition_builder.rs": "501a4aa1d87a9435f9f19a0a159aa77b5160f0e93a5bb3aba3871c89f7a518c5",
+    "consensus/core/src/palw_state_v2.rs": "39be9c3a6a3f02f4b23826f54448a0fdf479f6ec3bfa2db141c0cdceae5f17d2",
+    "consensus/core/src/palw_court_service_state_v2.rs": "22ee4287a77e89ae8bc25e9447c5dc0fe66cfb02a275d2e55d09098f2c4b8968",
+    "consensus/core/src/palw_staged_court_fold_v1.rs": "0082ebff949c718dbea0ad9659cb59a2b231401918285d7fb87d1b9c0d47c962"
+  }
+}

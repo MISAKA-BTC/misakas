@@ -1,0 +1,15 @@
+
+running 1 test
+
+thread 'route::tests::every_declared_discriminant_is_the_variants_borsh_byte_and_has_a_ceiling' (4317348) panicked at misaka-palw-kernel/src/route.rs:1061:9:
+48 is not allocated
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test route::tests::every_declared_discriminant_is_the_variants_borsh_byte_and_has_a_ceiling ... FAILED
+
+failures:
+
+failures:
+    route::tests::every_declared_discriminant_is_the_variants_borsh_byte_and_has_a_ceiling
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 184 filtered out; finished in 0.00s
+

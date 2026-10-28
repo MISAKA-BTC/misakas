@@ -1,0 +1,26 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "phimoe",
+  "doc": "Phi-3.5-MoE: Mixtral's block_sparse_moe layout with LayerNorms (weight and bias), biases on q/k/v/o and on the head, sparsemixer top-2 routing, a sliding window below the context length, and LongRoPE as transformers 5.17 runs it (the SHORT factors at every length, cos/sin times the mscale).",
+  "extends": ["decoder-core"],
+  "match": {"architectures": ["PhimoeForCausalLM"], "model_types": ["phimoe"]},
+  "config": {"defaults": {"vocab_size": 32064, "hidden_size": 4096, "intermediate_size": 6400, "num_hidden_layers": 32, "num_key_value_heads": 8, "max_position_embeddings": 131072, "rms_norm_eps": 1e-05, "lm_head_bias": false, "num_experts_per_tok": 2, "router_jitter_noise": 0.01}, "inert": ["input_jitter_noise", "original_max_position_embeddings"]},
+  "vars": [
+    {"name": "e", "value": {"$alias": [["num_local_experts", "num_experts"], 16]}},
+    {"name": "k", "value": {"$cfg": "num_experts_per_tok"}},
+    {"name": "topk_ok", "value": {"$bad": [{"$and": [{"$gt": [{"$var": "k"}, 0]}, {"$le": [{"$var": "k"}, {"$var": "e"}]}]}, {"$cat": ["top-k ", {"$var": "k"}, " of ", {"$var": "e"}, " experts"]}]}},
+    {"name": "top2_only", "value": {"$check": [{"$eq": [{"$var": "k"}, 2]}, {"$cat": ["sparsemixer is top-2 only, not top-", {"$var": "k"}]}]}},
+    {"name": "jitter", "value": {"$cfg": "router_jitter_noise"}},
+    {"name": "jitter_ok", "value": {"$bad": [{"$ge": [{"$var": "jitter"}, 0]}, {"$cat": ["router_jitter_noise ", {"$var": "jitter"}]}]}},
+    {"name": "sw_raw", "value": {"$cfg?": "sliding_window"}},
+    {"name": "sw", "value": {"$if": [{"$ne": [{"$var": "sw_raw"}, null]}, {"$if": [{"$lt": [{"$var": "sw_raw"}, {"$var": "max_pos"}]}, {"$var": "sw_raw"}, null]}, null]}},
+    {"name": "types", "value": {"$repeat": ["sliding_attention", {"$var": "n"}]}},
+    {"name": "norm", "value": {"kind": "Layer", "eps": {"$var": "eps"}, "gain": "W", "bias": true}},
+    {"name": "rope", "value": {"$rope": {"dim": {"$var": "rope_dim"}, "style": {"$var": "rope_style"}, "theta": {"$var": "rope_theta"}, "partial": {"$var": "rope_partial"}, "max_pos": {"$var": "max_pos"}, "q_scaled": {"$var": "q_scaled"}, "longrope": "short_only"}}},
+    {"name": "head", "value": {"tied": {"$var": "tied"}, "logit_scale": {"$var": "logit_scale"}, "pre_scale": {"$var": "pre_scale"}, "bias": {"$cfg": "lm_head_bias"}}},
+    {"name": "l_ffn", "value": {"Moe": {"experts": {"$var": "e"}, "top_k": {"$var": "k"}, "intermediate": {"$var": "inter"}, "act": {"$var": "act"}, "router": {"scoring": "SparseMixer", "normalize": false, "jitter_eps": {"$var": "jitter"}}}}, "layer": true},
+    {"name": "names", "value": {"$merge": [{"$var": "names_base"}, {"moe.router": "{p}layers.{L}.block_sparse_moe.gate", "moe.gate": "{p}layers.{L}.block_sparse_moe.experts.{E}.w1", "moe.up": "{p}layers.{L}.block_sparse_moe.experts.{E}.w3", "moe.down": "{p}layers.{L}.block_sparse_moe.experts.{E}.w2"}]}},
+    {"name": "families", "value": ["C3", "C8"]},
+    {"name": "model_type", "value": "phimoe"}
+  ]
+}

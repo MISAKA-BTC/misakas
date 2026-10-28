@@ -1,0 +1,25 @@
+
+running 19 tests
+test palw_decode_constraint_v1::tests::decode_constraint_keys_are_any_order_at_most_once_and_required_closes ... ok
+test palw_decode_constraint_v1::tests::decode_constraint_admits_the_grammar_and_dies_outside_it ... ok
+test palw_decode_constraint_v1::tests::decode_constraint_string_frame_reads_utf8_and_the_canonical_escapes ... ok
+test palw_decode_constraint_v1::tests::decode_constraint_id_is_the_keyed_length_prefixed_construction ... ok
+test palw_decode_constraint_v1::tests::decode_constraint_state_sequence_is_pinned_across_serializations ... ok
+test palw_decode_constraint_v1::tests::decode_constraint_step_terminates_on_a_ping_pong_automaton ... ok
+test palw_decode_constraint_v1::tests::decode_token_select_v3_picks_the_admitted_argmax_and_none_when_nothing_is ... ok
+test palw_decode_constraint_v1::tests::decode_constraint_round_trips_and_refuses_what_is_not_well_formed ... ok
+test palw_decode_constraint_v1::tests::refutation_v3_refuses_bent_material_before_it_reads_the_constraint ... ok
+test palw_decode_constraint_v1::tests::refutation_v3_tries_the_lowest_eog_rule_where_nothing_is_admitted ... ok
+test palw_decode_constraint_v1::tests::refutation_v3_does_not_convict_on_a_lane_the_constraint_forbids ... ok
+ADR-0096 §4 producer cost: admit over 151936 lanes (685279 bytes, 95411 admitted) at the string text node: 7.502958ms bare automaton loop, 19.30675ms through the `&dyn Fn` table (debug=true)
+test palw_decode_constraint_v1::tests::a_hot_honest_constrained_run_clears_and_a_forbidden_id_convicts ... ok
+test palw_decode_constraint_v1::tests::decode_constraint_admit_cost_over_a_qwen_sized_table ... ok
+test palw_decode_constraint_v1::tests::refutation_v3_clears_an_honest_constrained_run_and_convicts_the_altered_id ... ok
+test palw_decode_constraint_v1::tests::the_constrained_decode_close_is_a_court_proof_kind_the_fence_names ... ok
+test palw_decode_constraint_v1::tests::refutation_v3_without_a_constraint_is_the_v2_verdict_byte_for_byte ... ok
+test palw_decode_constraint_v1::tests::the_constrained_accusation_is_bound_to_the_claims_job_and_table ... ok
+test palw_decode_constraint_v1::tests::the_constrained_accusation_clears_an_honest_run_and_convicts_a_forbidden_id ... ok
+test palw_decode_constraint_v1::tests::decode_token_select_v3_is_v2_when_every_lane_is_admitted ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 3610 filtered out; finished in 1.41s
+

@@ -1,0 +1,120 @@
+--- /private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet/c011e8fa-2e10-48d2-bb64-bbadc3b02fe0/scratchpad/app.js.orig	2026-09-06 16:27:19
++++ /private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet/c011e8fa-2e10-48d2-bb64-bbadc3b02fe0/scratchpad/app.js	2026-09-06 16:40:19
+@@ -257,9 +257,28 @@
+   }
+   const turn = llmUserTurn(text);
+   return llmIoCell(turn, String(text), "", "") || `<span class="dim">(empty prompt)</span>`;
++}
++// **What the page says when the chain committed something and nobody has demanded it.**
++//
++// A claim puts roots on chain; the bytes behind them live with the executor and reach the five
++// drawn seats over an authenticated pull. That is the rule (ADR-0077 Decision 16), and since
++// 2026-09-06 this page follows it instead of reading the executor's retention over its shoulder.
++// A piece becomes public exactly when somebody DEMANDS it — a data-availability accusation the
++// executor answers on chain (ADR-0062) — and the demand costs the accuser if the answer comes.
++function llmSealed(what, commitment, extra){
++  const title = `${what} is committed on chain and not published: the bytes reach the claim's five drawn seats over an `
++    + `authenticated pull. A data-availability accusation is what makes a piece of it public, and it costs the accuser `
++    + `if the executor answers (ADR-0062).`;
++  return `<span class="dim" title="${esc(title)}">🔒 ${esc(what)} — committed, not disclosed${commitment?` <span class="hash">${esc(commitment)}</span>`:""}</span>${extra||""}`;
++}
++// A disclosure that HAS been demanded and answered: public because the chain carries it.
++function llmDisclosedCell(list){
++  if (!list || !list.length) return null;
++  const body = list.map(d => `<div class="llm-full">${esc(typeof d === "string" ? d : JSON.stringify(d))}</div>`).join("");
++  return `<details class="llm-d" open><summary><span class="pill blue" title="a data-availability accusation demanded this event and the executor disclosed it on chain (ADR-0062)">disclosed on demand</span></summary>${body}</details>`;
+ }
+ function llmOutCell(text, ids){
+-  if (text == null) return `<span class="dim" title="the producer's retained material was not on this host">output not held on this node</span>`;
++  if (text == null) return llmSealed("output", "", "");
+   const cut = llmAnswerCut(text);
+   const tail = cut.extra ? `<span class="llm-more" title="the lane decodes to its budget; this is what the claim carried after the end-of-turn marker">+${num(cut.extra)} chars after end-of-turn</span>` : "";
+   return llmIoCell(cut.shown, String(text), "out", tail) || `<span class="dim">(empty answer)</span>`;
+@@ -1030,13 +1049,21 @@
+   const _llmJob = llmJobs.get(_bh) || llmJobs.get(hd.hash) || null;
+   const _llmFps = llmFpByBlock.get(_bh) || [];
+   const _llmCard = (job, fp) => {
++    // Same rule as the LLM Jobs page: an anchor-derived input is public because anyone recomputes
++    // it; a person's prompt and any answer are committed and not disclosed.
+     const inT  = job.prompt_text != null ? job.prompt_text : ((job.prompt_ids||[]).join(" ") || null);
+-    const outT = job.generated_text != null ? job.generated_text : ((job.generated_ids||[]).join(" ") || null);
+     const floor = llmIsFloor(job.class_id || job.classId);
+     const lane = fp ? '<span class="pill blue">free-prompt</span>' : (floor ? '<span class="pill">floor</span>' : '<span class="pill">attempt</span>');
+     const cls = job.class ? esc(job.class) : (job.class_id ? esc(llmClassName(job.class_id)) : "—");
+-    const inCell  = floor ? '<span class="dim">deterministic integer job (no tokens)</span>' : llmInCell(inT, job.prompt_ids, !fp);
+-    const outCell = floor ? '<span class="dim">—</span>' : llmOutCell(outT, job.generated_ids);
++    const inCell  = floor
++      ? '<span class="dim">deterministic integer job (no tokens)</span>'
++      : (fp ? (llmDisclosedCell(job.disclosed) || llmSealed("prompt", "", job.prompt_tokens?` <span class="dim">· ${num(job.prompt_tokens)} tokens</span>`:""))
++            : llmInCell(inT, job.prompt_ids, true));
++    // ADR-0078's derived artifacts are on chain — the kind, the transformer, the id and the size —
++    // so they are named here beside the sealed output. They are what a free prompt PUBLISHED.
++    const derived = (job.derived && job.derived.length)
++      ? ` <span class="dim">→ derived: ${job.derived.map(d=>esc(`${d.kind_name||("kind "+d.kind)} ${d.artifact_bytes} B`)).join(", ")}</span>` : "";
++    const outCell = floor ? '<span class="dim">—</span>' : (llmDisclosedCell(job.disclosed) || llmSealed("output", "", derived));
+     return `<div class="llm-card">
+       <div class="llm-card-head">${lane} <b>${cls}</b>${(()=>{ const pwu = job.pwu!=null&&job.pwu!==""?job.pwu:(job.work_leaves!=null?job.work_leaves:null); return pwu!=null?` <span class="dim">· ${num(pwu)} pwu</span>`:""; })()}${(()=>{ const pre = job.prefill!=null?job.prefill:job.prompt_tokens, dec = job.decode!=null?job.decode:job.decode_tokens; return dec!=null?` <span class="dim">· prompt ${num(pre)} / decode ${num(dec)} tokens</span>`:""; })()}${job.claim?` <span class="hash dim" title="${esc(job.claim)}">· claim ${esc(short(job.claim,8))}</span>`:""}</div>
+       <div class="llm-card-row"><div class="key">Input${fp?"":" (anchor-derived)"}</div><div class="io">${inCell}</div></div>
+@@ -2112,8 +2139,17 @@
+       canonical job pinned in consensus is (prefill 7, decode 2) for QWEN36 and (63, 2) for QWEN25-A16:
+       the smallest unit that proves the model ran, since up to five seats re-execute every claim and the
+       material carries ~1 MB of logits per generated token. This lane certifies inference; long-form
+-      generation belongs to the free-prompt lane. Every panel seat re-derives both halves before signing.
+-      Decoded server-side by <code>palw-jobs-export</code> from the same on-chain facts.</div>
++      generation belongs to the free-prompt lane. Every panel seat re-derives both halves before signing.</div>
++    <div class="note" style="margin-top:4px"><b>What this page shows, and what it does not.</b> A claim puts
++      COMMITMENTS on chain — the roots over its trace, its output and its execution — and the bytes behind them
++      stay with the executor, reaching the five drawn seats over an authenticated pull. So an attempt-lane input
++      is shown because anyone can recompute it from the block's anchor, and <b>a person's prompt and every
++      answer are not</b>: they are committed, not published. A piece becomes public exactly when somebody
++      <b>demands</b> it — a data-availability accusation the executor answers on chain (ADR-0062) — and the
++      demand costs the accuser if the answer comes. Those disclosures appear here marked
++      <span class="pill blue">disclosed on demand</span>, and nothing else does. Until this release the page
++      read the executor's own retention and printed what it found, which put the text in the one place the
++      network's rules do not.</div>
+     <div class="llm-chips" id="llmChips">
+       <button data-f="llm" class="on">LLM models</button><button data-f="all">All classes</button><button data-f="floor">Floor only</button>
+     </div>
+@@ -2373,30 +2409,30 @@
+              <b>All classes</b> for the full stream.</div>`
+           : `<div class="spin">No submissions decoded yet…</div>`) :
+     `<div class="tblscroll"><table class="tbl"><thead><tr>
+-      <th>Age</th><th>Block</th><th>Class</th><th class="num">pwu claimed</th><th>Input (committed prompt)</th><th>Output (generated)</th><th>Type</th>
++      <th>Age</th><th>Block</th><th>Class</th><th class="num">pwu claimed</th><th>Input</th><th>Output</th><th>Type</th>
+     </tr></thead><tbody>${shown.slice(0,30).map(r=>{
+       const job = r.fp ? llmFpJobs.get(r.claim) : llmJobs.get(r.block);
+       const meta = `producer bond ${r.bondTx}:${r.bondIx}\nexecution root ${r.execRoot}` + (job?`\nclaim ${job.claim}\nanchor ${job.anchor||"(free prompt: no anchor)"}`:(r.claim?`\nclaim ${r.claim}`:""));
+       let inCell, outCell;
+       if (r.fp){
+-        // The chain carries the prompt's hash and the output's root, never the text: a free prompt is
+-        // the author's. Text appears only where this site's own gateway retained the run.
++        // **A free prompt is the author's, and the answer is the executor's to serve** — neither is
++        // published here. The claim's own identity is the commitment a reader holds onto; the
++        // derived artifacts below it ARE on chain (ADR-0078) and stay.
+         const derived = job && job.derived && job.derived.length
+           ? ` <span class="dim">→ derived: ${job.derived.map(d=>esc(`${d.kind_name||("kind "+d.kind)} ${d.artifact_bytes} B`)).join(", ")}</span>` : "";
+-        inCell  = job && job.prompt_text != null
+-          ? llmInCell(job.prompt_text, job.prompt_ids, false)
+-          : `<span class="dim" title="the chain holds prompt_token_ids_hash only; the prompt text stays with its author">private prompt${job&&job.prompt_tokens?` (${job.prompt_tokens} tokens)`:""}</span>`;
+-        outCell = job && job.generated_text != null
+-          ? `${llmOutCell(job.generated_text, job.generated_ids)}${derived}`
+-          : `<span class="dim" title="output_root is committed; the generated text stays with its author">private output${r.pwu?` · ${num(r.pwu)} leaves`:""}</span>${derived}`;
++        inCell  = llmDisclosedCell(job && job.disclosed)
++          || llmSealed("prompt", "", job && job.prompt_tokens ? ` <span class="dim">· ${num(job.prompt_tokens)} tokens</span>` : "");
++        outCell = llmSealed("output", "", (r.pwu?` <span class="dim">· ${num(r.pwu)} leaves</span>`:"") + derived);
+       } else if (llmIsFloor(r.classId)){
+         inCell  = '<span class="dim">deterministic integer job (no tokens)</span>';
+         outCell = '<span class="dim">—</span>';
+       } else if (job){
+-        const inT  = job.prompt_text != null ? job.prompt_text : (job.prompt_ids||[]).join(" ");
+-        const outT = job.generated_text != null ? job.generated_text : ((job.generated_ids||[]).join(" ") || null);
++        // The attempt lane's INPUT stays: it is not anybody's words but a draw the block itself
++        // fixes, and any reader recomputes it from the anchor. Its OUTPUT does not: that lives in
++        // the executor's retention like every other answer.
++        const inT  = job.prompt_text != null ? job.prompt_text : (job.prompt_ids||[]).join(" ");
+         inCell  = llmInCell(inT, job.prompt_ids, true);
+-        outCell = llmOutCell(outT, job.generated_ids);
++        outCell = llmDisclosedCell(job.disclosed) || llmOutCell(null, null);
+       } else {
+         inCell  = '<span class="dim">decoding…</span>';
+         outCell = '<span class="dim">decoding…</span>';

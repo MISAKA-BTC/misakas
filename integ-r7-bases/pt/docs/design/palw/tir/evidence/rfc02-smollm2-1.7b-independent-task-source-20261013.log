@@ -1,0 +1,5 @@
+[transformers] `torch_dtype` is deprecated! Use `dtype` instead!
+Loading weights:   0%|          | 0/218 [00:00<?, ?it/s]Loading weights:  24%|██▍       | 53/218 [00:00<00:00, 363.18it/s]Loading weights:  41%|████▏     | 90/218 [00:00<00:00, 355.45it/s]Loading weights:  58%|█████▊    | 126/218 [00:00<00:00, 227.14it/s]Loading weights:  70%|███████   | 153/218 [00:01<00:00, 90.50it/s] Loading weights:  78%|███████▊  | 171/218 [00:01<00:00, 93.77it/s]Loading weights:  85%|████████▌ | 186/218 [00:01<00:00, 92.82it/s]Loading weights:  91%|█████████▏| 199/218 [00:01<00:00, 87.63it/s]Loading weights:  97%|█████████▋| 211/218 [00:01<00:00, 82.34it/s]Loading weights: 100%|██████████| 218/218 [00:01<00:00, 112.75it/s]
+source greedy job arithmetic-512-1: 32 tokens
+source greedy job translation-512-1: 32 tokens
+source greedy job code-512-1: 32 tokens

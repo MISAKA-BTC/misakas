@@ -1,0 +1,26 @@
+   Compiling misaka-palw-kernel v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/misaka/palw/kernel)
+warning: unnecessary parentheses around `if` condition
+   --> misaka/palw/kernel/src/flat_quota11/stage14.rs:454:12
+    |
+454 |         if (b != 1 && b != positions as usize) {
+    |            ^                                 ^
+    |
+    = note: `#[warn(unused_parens)]` (part of `#[warn(unused)]`) on by default
+help: remove these parentheses
+    |
+454 -         if (b != 1 && b != positions as usize) {
+454 +         if b != 1 && b != positions as usize {
+    |
+
+warning: `misaka-palw-kernel` (lib) generated 1 warning (run `cargo fix --lib -p misaka-palw-kernel` to apply 1 suggestion)
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/consensus/core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5m 57s
+     Running unittests src/lib.rs (target/debug/deps/kaspa_consensus_core-0bc80e9553c621d1)
+
+running 3 tests
+test config::params::funded_execution_fence_tests::presets_are_absent_and_never_normalizes_the_entire_peer_identity ... ok
+test config::params::funded_execution_fence_tests::height_and_every_policy_namespace_are_committed_and_only_activation_is_visited ... ok
+test config::params::funded_execution_fence_tests::stage_contract_is_independent_and_never_collapses_its_entire_policy ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 3918 filtered out; finished in 0.00s
+

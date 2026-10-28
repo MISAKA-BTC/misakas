@@ -1,0 +1,9 @@
+{
+  "mode": "Read-only generator execution; writes intercepted, repository generated files unchanged",
+  "current_only": [],
+  "generated_only": [],
+  "summary": [
+    "wrote consensus/core/src/palw_native_resource_v1/generated.rs: 1311 explicit types, 0 opaque/unresolved types"
+  ],
+  "note": "Opaque nonserialized verification result is not rooted state or an incoming wire permission."
+}

@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "kind": "rfc08-corrected-native-happy-opt3",
+  "exitCode": 101,
+  "status": "FAIL_ENVIRONMENT_DISK_FULL",
+  "rootFinalObserved": 2,
+  "firstRootFundRowsObserved": 5,
+  "actualPaymentAndMaterialHoldVerified": false,
+  "terminalFailure": "RocksDB append No space left on device at processor.rs:2734, followed by worker/channel/destructor abort",
+  "binarySha256": "3fedcd830b7806969ab91c4ee09417030a38d1d7b25a45a79e52900c9508d809",
+  "coreGuardIncluded": false,
+  "missingRowCacheIncluded": false,
+  "log": "rfc08-native-happy-opt3-disk-full-2026-10-13.log"
+}

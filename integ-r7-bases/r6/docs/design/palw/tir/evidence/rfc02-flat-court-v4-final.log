@@ -1,0 +1,18 @@
+   Compiling misaka-palw-kernel v1.1.0 (/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/misaka-palw-kernel)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.28s
+     Running unittests src/lib.rs (target/debug/deps/misaka_palw_kernel-f12a3fe57e2b7746)
+
+running 11 tests
+test flat_court4::tests::flat_court_all_hostile_nested_counts_and_tags_are_bounded_before_bodies ... ok
+test flat_court4::tests::flat_court_all_nonstate_primitives_match_reference_and_convict_tail_falsification ... ok
+test flat_court4::tests::flat_court_authenticates_registered_weights_and_rejects_borrowed_source_or_profile ... ok
+test flat_court4::tests::flat_court_binds_segment_boundary_and_authenticates_public_token_tiles ... ok
+test flat_court4::tests::flat_court_convicts_every_leaf_and_merged_tail_without_producer_output_values ... ok
+test flat_court4::tests::flat_court_encoder_ids_count_and_padding_are_job_bound ... ok
+test flat_court4::tests::flat_court_prices_large_declarations_without_allocating_tensors_and_refuses_large_lines ... ok
+test flat_court4::tests::flat_court_recomputes_batched_nonzero_axis_gather_and_ignores_duplicate_data_reads ... ok
+test flat_court4::tests::flat_court_semantic_refusal_requires_authenticated_operands_and_wide_sources_remain_v3 ... ok
+test flat_court4::tests::flat_court_state_and_history_bind_previous_position_and_initialization ... ok
+test flat_court4::tests::flat_court_wire_checks_every_count_truncation_and_surplus_before_allocation ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 106 filtered out; finished in 0.56s

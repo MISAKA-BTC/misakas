@@ -1,0 +1,6 @@
+[profile.default]
+src = "contracts"
+out = "out"
+evm_version = "shanghai"
+optimizer = true
+optimizer_runs = 200

@@ -1,0 +1,650 @@
+{
+ "schema": "misaka.palw.hf-census-hfx-successor3.v1",
+ "date": "2026-10-10",
+ "snapshot": "2026-10-03T131904Z",
+ "method": "m7: the m4 rows (m3's tree 1c4091a1d, the 8k encoders at 2f0c42240) with the 347 rows the 2026-10-10 changes can move re-judged by the final tree at both rulesets (offline; the snapshot's saved listing and headers; the base tokenizers offered from tokenizer-bases.jsonl), post-stratified exactly as COV-P4; plus two stratified head-task cohorts (NLU heads 6 strata x 60; image classification 80; sampled from the complete-looking, ungated repositories of each head task by a seeded blake2b key; headers fetched anonymously by range: metadata and safetensors headers only), judged at ruleset B and reported beside, never inside, the three numbers.",
+ "three_numbers_ruleset_B": {
+  "shape_ready_over_d_all": {
+   "what": "shape-ready (full declared task, declared context <= 8,192, shape depth): a header verdict, NOT a registration",
+   "total": 604069.1,
+   "share": 0.1937440999134175,
+   "se": 0.004548813161238243,
+   "lb95": 0.18628401270238798
+  },
+  "d_complete_est": 1606334.4,
+  "shape_ready_over_d_complete": {
+   "total": 604069.1,
+   "denominator": 1606334.4,
+   "share": 0.3760544046520894,
+   "se": 0.008821893285143228,
+   "lb95": 0.3614713389840527
+  },
+  "registered_full_task": 0,
+  "mined_funded_final": 0
+ },
+ "three_numbers_ruleset_A": {
+  "shape_ready_over_d_all": {
+   "what": "shape-ready (full declared task, declared context <= 8,192, shape depth): a header verdict, NOT a registration",
+   "total": 604069.1,
+   "share": 0.1937440999134175,
+   "se": 0.004548813161238243,
+   "lb95": 0.18628401270238798
+  },
+  "d_complete_est": 1606334.4,
+  "shape_ready_over_d_complete": {
+   "total": 604069.1,
+   "denominator": 1606334.4,
+   "share": 0.3760544046520894,
+   "se": 0.008821893285143228,
+   "lb95": 0.3614713389840527
+  },
+  "registered_full_task": 0,
+  "mined_funded_final": 0
+ },
+ "three_numbers_m4_for_comparison": {
+  "shape_ready_over_d_all": {
+   "what": "shape-ready (full declared task, declared context <= 8,192, shape depth): a header verdict, NOT a registration",
+   "total": 597999.5,
+   "share": 0.19179738699867735,
+   "se": 0.00456659333297889,
+   "lb95": 0.18430897146173558
+  },
+  "d_complete_est": 1606334.4,
+  "shape_ready_over_d_complete": {
+   "total": 597999.5,
+   "denominator": 1606334.4,
+   "share": 0.3722758639558395,
+   "se": 0.008856661407915219,
+   "lb95": 0.35763750789565063
+  },
+  "registered_full_task": 0,
+  "mined_funded_final": 0
+ },
+ "number_2_and_3_note": "0 and 0: no full-task, full-context registration exists on a public chain; every fence stays unarmed, so mined + Final is 0 until the full-activation release.",
+ "kernel_route_scenario": {
+  "what": "HYPOTHETICAL and REPORTED BESIDE the three numbers: the sampled encoder-class rows whose K2-TIR-v5 route is ELIGIBLE_AT (descriptor armed hypothetically) counted as shape-ready; K2-TIR-v5 is Implemented, never active, behind dormant fences (tag 110, OPV).",
+  "sample_rows_shape_ready_over_d_all": {
+   "what": "shape-ready (full declared task, declared context <= 8,192, shape depth): a header verdict, NOT a registration",
+   "total": 622448.4,
+   "share": 0.19963892671151445,
+   "se": 0.004281934685827588,
+   "lb95": 0.19261332413066284
+  },
+  "head_task_frames": {
+   "nlu_heads": {
+    "N": 104224,
+    "source_pass": {
+     "est": 104201,
+     "share": 0.9998,
+     "se": 17
+    },
+    "lowers": {
+     "est": 66346,
+     "share": 0.6366,
+     "se": 4794
+    },
+    "generative_admits": {
+     "est": 1819,
+     "share": 0.0175,
+     "se": 1254
+    },
+    "kernel_eligible": {
+     "est": 64666,
+     "share": 0.6204,
+     "se": 4837
+    }
+   },
+   "image_classification": {
+    "N": 17931,
+    "source_pass": {
+     "est": 17707,
+     "share": 0.9875,
+     "se": 224
+    },
+    "lowers": {
+     "est": 12103,
+     "share": 0.675,
+     "se": 943
+    },
+    "generative_admits": {
+     "est": 0,
+     "share": 0.0,
+     "se": 0
+    },
+    "kernel_eligible": {
+     "est": 12103,
+     "share": 0.675,
+     "se": 943
+    }
+   }
+  }
+ },
+ "head_cohorts": {
+  "nlu": {
+   "design": {
+    "text-classification": {
+     "N": 74541,
+     "n": 60
+    },
+    "token-classification": {
+     "N": 14604,
+     "n": 60
+    },
+    "question-answering": {
+     "N": 5114,
+     "n": 60
+    },
+    "fill-mask": {
+     "N": 8613,
+     "n": 60
+    },
+    "zero-shot-classification": {
+     "N": 341,
+     "n": 60
+    },
+    "text-ranking": {
+     "N": 1011,
+     "n": 60
+    }
+   },
+   "ruleset_b": {
+    "text-classification": {
+     "N": 74541,
+     "n_designed": 60,
+     "n_judged": 60,
+     "source_pass": {
+      "k": 60,
+      "rate": 1.0,
+      "est": 74541,
+      "se": 0
+     },
+     "lowers": {
+      "k": 38,
+      "rate": 0.6333,
+      "est": 47209,
+      "se": 4675
+     },
+     "generative_admits": {
+      "k": 1,
+      "rate": 0.0167,
+      "est": 1242,
+      "se": 1242
+     },
+     "kernel_eligible": {
+      "k": 37,
+      "rate": 0.6167,
+      "est": 45967,
+      "se": 4716
+     },
+     "stopped_at": [
+      [
+       "convert:TOKENIZER_MISSING",
+       15
+      ],
+      [
+       "convert:ARCH_REFUSED",
+       3
+      ],
+      [
+       "convert:TENSOR_SHAPE(classifier.out.w)",
+       1
+      ],
+      [
+       "convert:ARCH_NEEDS_FEATURE(an adapter for `RetrievalRouterModel`)",
+       1
+      ],
+      [
+       "convert:TENSOR_SHAPE(embed.table)",
+       1
+      ],
+      [
+       "kernel:PROSECUTION_BOUND",
+       1
+      ],
+      [
+       "convert:ARCH_NEEDS_FEATURE(an adapter for `EsmForSequenceClassification`)",
+       1
+      ]
+     ]
+    },
+    "token-classification": {
+     "N": 14604,
+     "n_designed": 60,
+     "n_judged": 60,
+     "source_pass": {
+      "k": 60,
+      "rate": 1.0,
+      "est": 14604,
+      "se": 0
+     },
+     "lowers": {
+      "k": 42,
+      "rate": 0.7,
+      "est": 10223,
+      "se": 869
+     },
+     "generative_admits": {
+      "k": 0,
+      "rate": 0.0,
+      "est": 0,
+      "se": 0
+     },
+     "kernel_eligible": {
+      "k": 41,
+      "rate": 0.6833,
+      "est": 9979,
+      "se": 883
+     },
+     "stopped_at": [
+      [
+       "convert:TOKENIZER_MISSING",
+       4
+      ],
+      [
+       "convert:CONFIG_KEY_UNREAD(_mlx_family)",
+       3
+      ],
+      [
+       "convert:SHAPE_OVER_CAP(2^28 elements)",
+       2
+      ],
+      [
+       "convert:ARCH_NEEDS_FEATURE(an adapter for `LEGForSafetyExplanation`)",
+       1
+      ],
+      [
+       "convert:ARCH_NEEDS_FEATURE(an adapter for `MarkupLMForTokenClassification`)",
+       1
+      ],
+      [
+       "convert:ARCH_NEEDS_FEATURE(an adapter for `DebertaForTokenClassification`)",
+       1
+      ],
+      [
+       "convert:ARCH_NEEDS_FEATURE(an adapter for `Qwen3ForTokenClassification`)",
+       1
+      ],
+      [
+       "convert:ARCH_NEEDS_FEATURE(an adapter for `EsmForTokenClassification`)",
+       1
+      ]
+     ]
+    },
+    "question-answering": {
+     "N": 5114,
+     "n_designed": 60,
+     "n_judged": 60,
+     "source_pass": {
+      "k": 60,
+      "rate": 1.0,
+      "est": 5114,
+      "se": 0
+     },
+     "lowers": {
+      "k": 49,
+      "rate": 0.8167,
+      "est": 4176,
+      "se": 256
+     },
+     "generative_admits": {
+      "k": 4,
+      "rate": 0.0667,
+      "est": 341,
+      "se": 165
+     },
+     "kernel_eligible": {
+      "k": 49,
+      "rate": 0.8167,
+      "est": 4176,
+      "se": 256
+     },
+     "stopped_at": [
+      [
+       "convert:ARCH_REFUSED",
+       3
+      ],
+      [
+       "convert:TOKENIZER_MISSING",
+       2
+      ],
+      [
+       "convert:ARCH_NEEDS_FEATURE(an adapter for `ElectraForQuestionAnswering`)",
+       2
+      ],
+      [
+       "convert:ARCH_NEEDS_FEATURE(an adapter for `IBertForQuestionAnswering`)",
+       1
+      ],
+      [
+       "convert:REMOTE_CODE",
+       1
+      ],
+      [
+       "convert:ARCH_NEEDS_FEATURE(an adapter for `QATCForQuestionAnswering`)",
+       1
+      ],
+      [
+       "convert:ARCH_NEEDS_FEATURE(an adapter for `LongformerForQuestionAnswering`)",
+       1
+      ]
+     ]
+    },
+    "fill-mask": {
+     "N": 8613,
+     "n_designed": 60,
+     "n_judged": 60,
+     "source_pass": {
+      "k": 60,
+      "rate": 1.0,
+      "est": 8613,
+      "se": 0
+     },
+     "lowers": {
+      "k": 27,
+      "rate": 0.45,
+      "est": 3876,
+      "se": 556
+     },
+     "generative_admits": {
+      "k": 0,
+      "rate": 0.0,
+      "est": 0,
+      "se": 0
+     },
+     "kernel_eligible": {
+      "k": 26,
+      "rate": 0.4333,
+      "est": 3732,
+      "se": 554
+     },
+     "stopped_at": [
+      [
+       "convert:ARCH_REFUSED",
+       10
+      ],
+      [
+       "convert:TOKENIZER_MISSING",
+       6
+      ],
+      [
+       "convert:SHAPE_OVER_CAP(2^28 elements)",
+       2
+      ],
+      [
+       "convert:ARCH_NEEDS_FEATURE(an adapter for `EsmForMaskedLM`)",
+       2
+      ],
+      [
+       "convert:CONFIG_KEY_UNREAD(pooler_fc_size)",
+       2
+      ],
+      [
+       "convert:CONFIG_KEY_UNREAD(newmodern)",
+       1
+      ],
+      [
+       "convert:ARCH_NEEDS_FEATURE(an adapter for `EuroBertForMaskedLM`)",
+       1
+      ],
+      [
+       "convert:CONFIG_KEY_UNREAD(attn_mult)",
+       1
+      ]
+     ]
+    },
+    "zero-shot-classification": {
+     "N": 341,
+     "n_designed": 60,
+     "n_judged": 60,
+     "source_pass": {
+      "k": 59,
+      "rate": 0.9833,
+      "est": 335,
+      "se": 5
+     },
+     "lowers": {
+      "k": 33,
+      "rate": 0.55,
+      "est": 188,
+      "se": 20
+     },
+     "generative_admits": {
+      "k": 3,
+      "rate": 0.05,
+      "est": 17,
+      "se": 9
+     },
+     "kernel_eligible": {
+      "k": 27,
+      "rate": 0.45,
+      "est": 153,
+      "se": 20
+     },
+     "stopped_at": [
+      [
+       "convert:ARCH_REFUSED",
+       9
+      ],
+      [
+       "kernel:PROSECUTION_BOUND",
+       6
+      ],
+      [
+       "convert:ARCH_NEEDS_FEATURE(an adapter for `GLiClassModel`)",
+       5
+      ],
+      [
+       "convert:TOKENIZER_MISSING",
+       3
+      ],
+      [
+       "convert:CONFIG_KEY_UNREAD(generation_config)",
+       2
+      ],
+      [
+       "convert:ARCH_NEEDS_FEATURE(an adapter for `LLM2CLIPModel`)",
+       2
+      ],
+      [
+       "convert:ARCH_NEEDS_FEATURE(an adapter for `LodModel`)",
+       1
+      ],
+      [
+       "convert:ARCH_NEEDS_FEATURE(an adapter for `ElectraForSequenceClassification`)",
+       1
+      ]
+     ]
+    },
+    "text-ranking": {
+     "N": 1011,
+     "n_designed": 60,
+     "n_judged": 60,
+     "source_pass": {
+      "k": 59,
+      "rate": 0.9833,
+      "est": 994,
+      "se": 16
+     },
+     "lowers": {
+      "k": 40,
+      "rate": 0.6667,
+      "est": 674,
+      "se": 60
+     },
+     "generative_admits": {
+      "k": 13,
+      "rate": 0.2167,
+      "est": 219,
+      "se": 53
+     },
+     "kernel_eligible": {
+      "k": 39,
+      "rate": 0.65,
+      "est": 657,
+      "se": 61
+     },
+     "stopped_at": [
+      [
+       "convert:SHAPE_OVER_CAP(2^28 elements)",
+       8
+      ],
+      [
+       "convert:REMOTE_CODE",
+       3
+      ],
+      [
+       "convert:ARCH_REFUSED",
+       2
+      ],
+      [
+       "convert:ARCH_NEEDS_FEATURE(an adapter for `NewForSequenceClassification`)",
+       2
+      ],
+      [
+       "kernel:PROSECUTION_BOUND",
+       1
+      ],
+      [
+       "convert:ARCH_NEEDS_FEATURE(an adapter for `XProvence`)",
+       1
+      ],
+      [
+       "convert:QUANT_NO_DESCRIPTOR(config/compressed-tensors/nvfp4-pack-quantized)",
+       1
+      ],
+      [
+       "convert:QUANT_NO_DESCRIPTOR(config/modelopt)",
+       1
+      ]
+     ]
+    },
+    "_total": {
+     "N": 104224,
+     "source_pass": {
+      "est": 104201,
+      "share": 0.9998,
+      "se": 17
+     },
+     "lowers": {
+      "est": 66346,
+      "share": 0.6366,
+      "se": 4794
+     },
+     "generative_admits": {
+      "est": 1819,
+      "share": 0.0175,
+      "se": 1254
+     },
+     "kernel_eligible": {
+      "est": 64666,
+      "share": 0.6204,
+      "se": 4837
+     }
+    }
+   }
+  },
+  "image": {
+   "design": {
+    "image-classification": {
+     "N": 17931,
+     "n": 80
+    }
+   },
+   "ruleset_b": {
+    "image-classification": {
+     "N": 17931,
+     "n_designed": 80,
+     "n_judged": 80,
+     "source_pass": {
+      "k": 79,
+      "rate": 0.9875,
+      "est": 17707,
+      "se": 224
+     },
+     "lowers": {
+      "k": 54,
+      "rate": 0.675,
+      "est": 12103,
+      "se": 943
+     },
+     "generative_admits": {
+      "k": 0,
+      "rate": 0.0,
+      "est": 0,
+      "se": 0
+     },
+     "kernel_eligible": {
+      "k": 54,
+      "rate": 0.675,
+      "est": 12103,
+      "se": 943
+     },
+     "stopped_at": [
+      [
+       "convert:ARCH_REFUSED",
+       19
+      ],
+      [
+       "convert:ARCH_NEEDS_FEATURE(an adapter for `SwinForImageClassification`)",
+       2
+      ],
+      [
+       "convert:ARCH_NEEDS_FEATURE(an adapter for `SiglipForImageClassification`)",
+       1
+      ],
+      [
+       "source:HEADER_TOO_LARGE",
+       1
+      ],
+      [
+       "convert:ARCH_NEEDS_FEATURE(an adapter for `IwinForImageClassification`)",
+       1
+      ],
+      [
+       "convert:ARCH_NEEDS_FEATURE(an adapter for `DeiTForImageClassification`)",
+       1
+      ],
+      [
+       "convert:ARCH_NEEDS_FEATURE(an adapter for `MnistModel`)",
+       1
+      ]
+     ]
+    },
+    "_total": {
+     "N": 17931,
+     "source_pass": {
+      "est": 17707,
+      "share": 0.9875,
+      "se": 224
+     },
+     "lowers": {
+      "est": 12103,
+      "share": 0.675,
+      "se": 943
+     },
+     "generative_admits": {
+      "est": 0,
+      "share": 0.0,
+      "se": 0
+     },
+     "kernel_eligible": {
+      "est": 12103,
+      "share": 0.675,
+      "se": 943
+     }
+    }
+   }
+  }
+ },
+ "kernel_route_total_estimate": {
+  "repositories": 699217,
+  "over_d_all": 0.2243,
+  "over_d_complete": 0.4353,
+  "parts": {
+   "shape_ready_plus_sampled_encoder_rows": 622448,
+   "nlu_heads_k2v5": 64666,
+   "image_classifiers_k2v3": 12103
+  },
+  "note": "the head-task frames are complete-looking (config + safetensors, ungated) repositories of 7 head tasks; head-task repositories without a safetensors file (97,360 pytorch_model.bin-only, etc.) are not in them. Disjoint from the shape-ready count (a head-task repository is PROFILE_NOT_ARMED at the listing)."
+ }
+}

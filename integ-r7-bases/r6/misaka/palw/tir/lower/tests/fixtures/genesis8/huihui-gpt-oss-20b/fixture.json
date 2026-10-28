@@ -1,0 +1,56 @@
+{
+ "schema": "misaka.cov-p1p2.header-fixture.v1",
+ "repo": "huihui-ai/Huihui-gpt-oss-20b-BF16-abliterated",
+ "revision": "b73ec897fe872d5e3fea830d516520537decdde6",
+ "license": "apache-2.0",
+ "weights_read": false,
+ "shards": {
+  "model-00001-of-00009.safetensors": {
+   "header_sha256": "315311419493c968205dc23ea5071ee2949b229743956abbbafece81466aa282",
+   "file_bytes": 4504304664,
+   "lfs_sha256": "88868ce20327a95a8f2d3ba66c0833c2d6544fe04349ac2a1eb8971853d1dbe8"
+  },
+  "model-00002-of-00009.safetensors": {
+   "header_sha256": "b2b0283ce1b85c184a7a76bde6bf5c29d24d76b88d6d507445f340624be5a196",
+   "file_bytes": 4939127656,
+   "lfs_sha256": "a38d5331c0a5425e7fce1a7b2f03a3858d5f7e27ee1a86db6103f8192331b3d4"
+  },
+  "model-00003-of-00009.safetensors": {
+   "header_sha256": "65def50b9d77955b21a82a0de216e00485a14ea2f216b48f57def4703ee15fda",
+   "file_bytes": 4939127656,
+   "lfs_sha256": "e397b49bdf236be257a728243afa19ad96ced9ff0e1e4e49f33991bcd1bd883d"
+  },
+  "model-00004-of-00009.safetensors": {
+   "header_sha256": "81423f5c473aa97c901dde0ad6891e40c1ad4b2d771cee0bb0a79d199b13be2d",
+   "file_bytes": 4939127680,
+   "lfs_sha256": "9d42f79dbeee64c434203e45baadcaa8642e4fe2e7ae9192a9da5414803e6543"
+  },
+  "model-00005-of-00009.safetensors": {
+   "header_sha256": "eb554af78ff91454940f97991b68b8b5e1a9e8a9735703651b4fb6310d418e84",
+   "file_bytes": 4939127704,
+   "lfs_sha256": "3c952d81437079677e0ad5ed816bd69ccfc96ba1f6bcc81eb671b8ad18dddf48"
+  },
+  "model-00006-of-00009.safetensors": {
+   "header_sha256": "e6d10039b40e38b31016a9314d2d314e4be7363a3c4b0e839ac5ec05df6438f4",
+   "file_bytes": 4939127704,
+   "lfs_sha256": "761e2dcff304c71d06ae372b83b925ec718a0335a652dacb2f16da07f8ed836b"
+  },
+  "model-00007-of-00009.safetensors": {
+   "header_sha256": "4a4768446856a9c7cd44db9e666fa5d2b3c0a97c0a6b4800310aafd21fb4e6f8",
+   "file_bytes": 4939127704,
+   "lfs_sha256": "34e28f9a595921f46f62d35a7f8bb140b39384922c178316cbcce43172346d34"
+  },
+  "model-00008-of-00009.safetensors": {
+   "header_sha256": "40c3cc4ef4a482ecd26097d12c31af261e0a3bf524c2c7e13c8a51662b2b98e4",
+   "file_bytes": 4939127704,
+   "lfs_sha256": "c0542dfb0fad73408a87194159bb0715e067f3f1b650d359249acbf317784ba5"
+  },
+  "model-00009-of-00009.safetensors": {
+   "header_sha256": "d4556f7a805e69c2d36c9902b5e698197da12687dab2e9d3c03679924370689f",
+   "file_bytes": 2751362856,
+   "lfs_sha256": "9eb975c2cceb4aedf26218085ddee293728654c83bbae85b7704b22ed148e5a7"
+  }
+ },
+ "total_file_bytes": 41829561328,
+ "note": "each shard file is its 8-byte length and JSON header only, cut after the header (source::read_safetensors_header is lenient about the data region); fetched by HTTP range from the pinned revision by scripts/genesis/genesis_header_fixtures.py"
+}

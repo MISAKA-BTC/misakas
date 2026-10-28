@@ -1,0 +1,34 @@
+{
+  "scope": "Independent Python rule checks; no Rust compilation, node execution, or model inference.",
+  "canonical_order": {
+    "permutations_checked": 720,
+    "unique_outputs": 1,
+    "one_per_class_in_first_round": true,
+    "nonattempt_slots_preserved": true,
+    "canonical_names": [
+      "C1",
+      "B0",
+      "A1",
+      "C0",
+      "B1",
+      "A0"
+    ]
+  },
+  "drill_guard_hypothetical_empty_rpc": {
+    "existing_identity_assertions_all_pass": true,
+    "reported_panelsDistinctByClaim": false,
+    "interpretation": "The existing checks alone do not establish nonempty bound panels; no real RPC was called."
+  },
+  "resolved_prefix_arithmetic": {
+    "oldest_unresolved_score": 100,
+    "resolved_through": 99,
+    "other_certified_claim_score": 110,
+    "other_claim_outside_resolved_prefix": true,
+    "warning": "Does not establish that other individual claim Final or payouts stop."
+  },
+  "source_sha256": {
+    "consensus/core/src/palw_rfc0018_v1.rs": "0f5a444e975c52b8edef8c4f8e993136b29b5ce8897ac281b01a19d709864659",
+    "scripts/drills/rfc0018_dag_drill.py": "02f85dc814aaa3dc072a53b5045a244a2c7b026d634112c3a9cd267dae459579",
+    "consensus/core/src/palw_state_v2.rs": "ce6a025a3457b8505b0e328ebd75d447b2397256831916d6d971647b0ffd4fa7"
+  }
+}

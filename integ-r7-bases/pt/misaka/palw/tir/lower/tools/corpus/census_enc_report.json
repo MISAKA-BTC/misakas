@@ -1,0 +1,2411 @@
+{
+ "entries": [
+  {
+   "category": "census/encoder",
+   "claimed_level": "C",
+   "failed_stage": "read",
+   "heavy_fixture": true,
+   "hf_arch": "BigBirdModel",
+   "id": "big_bird_enc",
+   "level": "C",
+   "level_label": "C",
+   "model_type": "big_bird",
+   "ms": 232,
+   "read": {
+    "a_diff": null,
+    "a_same_as_adapter": null,
+    "auto": {
+     "failure": {
+      "error": "NOT_LOWERABLE(`BigBirdModel` has no adapter and is not a causal language model class (`\u2026ForCausalLM`): the standard decoder template is not applied to it (encoder-only, encoder\u2013decoder, vision/audio, or a decoder not modelled yet))",
+      "missing": [
+       {
+        "general_primitive": null,
+        "what": "an adapter for `BigBirdModel`",
+        "why": "no built-in adapter claims this architecture and it is not a `\u2026ForCausalLM` class"
+       }
+      ],
+      "unmapped_config_keys": []
+     },
+     "ok": false
+    },
+    "claimed_level": "C",
+    "none": {
+     "failure": {
+      "error": "NOT_LOWERABLE(BigBirdModel: config key(s) this lowerer does not model: attention_type, block_size, layer_norm_eps, num_random_blocks, rescale_embeddings, type_vocab_size, use_bias \u2014 a key that might change the math is refused, not ignored)",
+      "missing": [],
+      "unmapped_config_keys": [
+       "attention_type",
+       "block_size",
+       "layer_norm_eps",
+       "num_random_blocks",
+       "rescale_embeddings",
+       "type_vocab_size",
+       "use_bias"
+      ]
+     },
+     "ok": false
+    },
+    "refusal_bypassed_for_user_adapter": false,
+    "refusal_overridden": null,
+    "report": {
+     "adapter": {
+      "kind": "none"
+     },
+     "assumed_defaults": [],
+     "features": [],
+     "level": "C",
+     "missing": [
+      {
+       "general_primitive": null,
+       "what": "an adapter for `BigBirdModel`",
+       "why": "no built-in adapter claims this architecture and it is not a `\u2026ForCausalLM` class"
+      }
+     ],
+     "new_court_kernel_required": false,
+     "new_primitive_required": false,
+     "result": "NOT_LOWERABLE: NOT_LOWERABLE(`BigBirdModel` has no adapter and is not a causal language model class (`\u2026ForCausalLM`): the standard decoder template is not applied to it (encoder-only, encoder\u2013decoder, vision/audio, or a decoder not modelled yet))",
+     "unmapped_config_keys": []
+    }
+   },
+   "refuted_routes": [],
+   "route": "encoder-bidir",
+   "share": null,
+   "stages": {},
+   "synthesized": null,
+   "tensors": 39,
+   "usage": "l",
+   "via": "-"
+  },
+  {
+   "category": "census/encoder",
+   "claimed_level": "B",
+   "failed_stage": null,
+   "heavy_fixture": true,
+   "hf_arch": "CamembertModel",
+   "id": "camembert_enc",
+   "level": "B",
+   "level_label": "B",
+   "model_type": "camembert",
+   "ms": 1445,
+   "read": {
+    "a_diff": null,
+    "a_same_as_adapter": null,
+    "auto": {
+     "failure": {
+      "error": "NOT_LOWERABLE(`CamembertModel` has no adapter and is not a causal language model class (`\u2026ForCausalLM`): the standard decoder template is not applied to it (encoder-only, encoder\u2013decoder, vision/audio, or a decoder not modelled yet))",
+      "missing": [
+       {
+        "general_primitive": null,
+        "what": "an adapter for `CamembertModel`",
+        "why": "no built-in adapter claims this architecture and it is not a `\u2026ForCausalLM` class"
+       }
+      ],
+      "unmapped_config_keys": []
+     },
+     "ok": false
+    },
+    "claimed_level": "B",
+    "none": {
+     "failure": {
+      "error": "NOT_LOWERABLE(CamembertModel: config key(s) this lowerer does not model: layer_norm_eps, type_vocab_size \u2014 a key that might change the math is refused, not ignored)",
+      "missing": [],
+      "unmapped_config_keys": [
+       "layer_norm_eps",
+       "type_vocab_size"
+      ]
+     },
+     "ok": false
+    },
+    "refusal_bypassed_for_user_adapter": false,
+    "refusal_overridden": null,
+    "report": {
+     "adapter": {
+      "hash": "5c627442d420b5fb646a65d4ad0ccf880ca64e9b12d1a2742757d5e61dcc273652913381920e08807b272339b265848bf973c199b867f6c31b927459765381bd",
+      "id": "camembert",
+      "kind": "user_file"
+     },
+     "assumed_defaults": [],
+     "features": [
+      {
+       "capability": null,
+       "detail": "",
+       "id": "ATTN_BIAS_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "4q/4kv \u00d7 8 (group 1)",
+       "id": "ATTN_GQA_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "EMBED_NORM_V1",
+       "layers": 0,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "EMBED_POSITION_LEARNED_V1",
+       "layers": 0,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "EMBED_TOKEN_TYPE_V1",
+       "layers": 0,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "64 \u00d7 32",
+       "id": "EMBED_TOKEN_V1",
+       "layers": 0,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "MLP_BIAS_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "64",
+       "id": "MLP_DENSE_PLAIN_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "NORM_LAYER_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "OUTPUT_EMBEDDING_V1",
+       "layers": 0,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "POS_NOPE_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "RESIDUAL_POST_NORM_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      }
+     ],
+     "level": "B",
+     "missing": [],
+     "new_court_kernel_required": false,
+     "new_primitive_required": false,
+     "result": "LOWERABLE",
+     "unmapped_config_keys": []
+    },
+    "user": {
+     "adapter": {
+      "hash": "5c627442d420b5fb646a65d4ad0ccf880ca64e9b12d1a2742757d5e61dcc273652913381920e08807b272339b265848bf973c199b867f6c31b927459765381bd",
+      "id": "camembert",
+      "kind": "user_file"
+     },
+     "layers": 2,
+     "missing": [],
+     "ok": true,
+     "supported": true
+    }
+   },
+   "refuted_routes": [],
+   "route": "encoder-bidir",
+   "share": null,
+   "stages": {
+    "admit": {
+     "cone_work": 621,
+     "cones": 17,
+     "job_macs": 215040,
+     "ms": 5,
+     "ok": true,
+     "step_leaves": 189
+    },
+    "bind": {
+     "ms": 1,
+     "ok": true,
+     "unused_tensors": 0
+    },
+    "court": {
+     "all_equal": true,
+     "by_terminal_primitive": {
+      "Clamp": 42,
+      "Gather": 4,
+      "Mul": 2,
+      "Transpose": 12
+     },
+     "commit_points_replayed": 60,
+     "ms": 0,
+     "ok": true,
+     "replayed_on_exec": 60
+    },
+    "fixture": {
+     "available": true,
+     "ms": 0,
+     "ok": true
+    },
+    "float_vs_hf": {
+     "max_rel_vs_hf": 1.1646784961036567e-07,
+     "ms": 7,
+     "ok": true,
+     "sequences": 2
+    },
+    "int_vs_hf": {
+     "min_cosine_vs_hf": 0.9999233496617976,
+     "ms": 130,
+     "ok": true
+    },
+    "lower": {
+     "blocks": 3,
+     "commit_points": 17,
+     "commit_roles": {
+      "carry_out": 2,
+      "logits": 1,
+      "lowerer_cone_split": 14
+     },
+     "layers": 2,
+     "ms": 2,
+     "nodes": 242,
+     "ok": true,
+     "params": 53,
+     "prim_kinds": 17,
+     "prims": {
+      "Add": 17,
+      "Clamp": 72,
+      "Compare": 2,
+      "Div": 36,
+      "Gather": 27,
+      "IntExp": 1,
+      "IntRsqrt": 5,
+      "Iota": 2,
+      "Log2Floor": 4,
+      "MatMul": 8,
+      "Mul": 37,
+      "ReduceMax": 1,
+      "ReduceSum": 9,
+      "Reshape": 6,
+      "Select": 2,
+      "Sub": 8,
+      "Transpose": 5
+     },
+     "states": 0
+    },
+    "materialise": {
+     "ms": 98,
+     "ok": true
+    },
+    "three_way": {
+     "equal": true,
+     "ms": 946,
+     "ok": true,
+     "positions": 2,
+     "sequences": 2
+    }
+   },
+   "synthesized": null,
+   "tensors": 39,
+   "usage": "l",
+   "via": "third-party adapter `camembert` (tools/corpus/census-enc-adapters)"
+  },
+  {
+   "category": "census/encoder",
+   "claimed_level": "C",
+   "failed_stage": "read",
+   "heavy_fixture": true,
+   "hf_arch": "ConvBertModel",
+   "id": "convbert_enc",
+   "level": "C",
+   "level_label": "C",
+   "model_type": "convbert",
+   "ms": 2,
+   "read": {
+    "a_diff": null,
+    "a_same_as_adapter": null,
+    "auto": {
+     "failure": {
+      "error": "NOT_LOWERABLE(`ConvBertModel` has no adapter and is not a causal language model class (`\u2026ForCausalLM`): the standard decoder template is not applied to it (encoder-only, encoder\u2013decoder, vision/audio, or a decoder not modelled yet))",
+      "missing": [
+       {
+        "general_primitive": null,
+        "what": "an adapter for `ConvBertModel`",
+        "why": "no built-in adapter claims this architecture and it is not a `\u2026ForCausalLM` class"
+       }
+      ],
+      "unmapped_config_keys": []
+     },
+     "ok": false
+    },
+    "claimed_level": "C",
+    "none": {
+     "failure": {
+      "error": "NOT_LOWERABLE(ConvBertModel: config key(s) this lowerer does not model: conv_kernel_size, embedding_size, head_ratio, layer_norm_eps, num_groups, type_vocab_size \u2014 a key that might change the math is refused, not ignored)",
+      "missing": [],
+      "unmapped_config_keys": [
+       "conv_kernel_size",
+       "embedding_size",
+       "head_ratio",
+       "layer_norm_eps",
+       "num_groups",
+       "type_vocab_size"
+      ]
+     },
+     "ok": false
+    },
+    "refusal_bypassed_for_user_adapter": false,
+    "refusal_overridden": null,
+    "report": {
+     "adapter": {
+      "kind": "none"
+     },
+     "assumed_defaults": [],
+     "features": [],
+     "level": "C",
+     "missing": [
+      {
+       "general_primitive": null,
+       "what": "an adapter for `ConvBertModel`",
+       "why": "no built-in adapter claims this architecture and it is not a `\u2026ForCausalLM` class"
+      }
+     ],
+     "new_court_kernel_required": false,
+     "new_primitive_required": false,
+     "result": "NOT_LOWERABLE: NOT_LOWERABLE(`ConvBertModel` has no adapter and is not a causal language model class (`\u2026ForCausalLM`): the standard decoder template is not applied to it (encoder-only, encoder\u2013decoder, vision/audio, or a decoder not modelled yet))",
+     "unmapped_config_keys": []
+    }
+   },
+   "refuted_routes": [],
+   "route": "encoder-bidir",
+   "share": null,
+   "stages": {},
+   "synthesized": null,
+   "tensors": 53,
+   "usage": "l",
+   "via": "-"
+  },
+  {
+   "category": "census/encoder",
+   "claimed_level": "B",
+   "failed_stage": null,
+   "heavy_fixture": true,
+   "hf_arch": "Data2VecTextModel",
+   "id": "data2vec_text_enc",
+   "level": "B",
+   "level_label": "B",
+   "model_type": "data2vec-text",
+   "ms": 1179,
+   "read": {
+    "a_diff": null,
+    "a_same_as_adapter": null,
+    "auto": {
+     "failure": {
+      "error": "NOT_LOWERABLE(`Data2VecTextModel` has no adapter and is not a causal language model class (`\u2026ForCausalLM`): the standard decoder template is not applied to it (encoder-only, encoder\u2013decoder, vision/audio, or a decoder not modelled yet))",
+      "missing": [
+       {
+        "general_primitive": null,
+        "what": "an adapter for `Data2VecTextModel`",
+        "why": "no built-in adapter claims this architecture and it is not a `\u2026ForCausalLM` class"
+       }
+      ],
+      "unmapped_config_keys": []
+     },
+     "ok": false
+    },
+    "claimed_level": "B",
+    "none": {
+     "failure": {
+      "error": "NOT_LOWERABLE(Data2VecTextModel: config key(s) this lowerer does not model: layer_norm_eps, type_vocab_size \u2014 a key that might change the math is refused, not ignored)",
+      "missing": [],
+      "unmapped_config_keys": [
+       "layer_norm_eps",
+       "type_vocab_size"
+      ]
+     },
+     "ok": false
+    },
+    "refusal_bypassed_for_user_adapter": false,
+    "refusal_overridden": null,
+    "report": {
+     "adapter": {
+      "hash": "eb0d128329f780233626400eb7f4db638878679bed061f7ce5d00e47e4cae8389ca5513b8f30833e587e665466487c35864d404621ce16763dfd3c64aedf3f67",
+      "id": "data2vec_text",
+      "kind": "user_file"
+     },
+     "assumed_defaults": [],
+     "features": [
+      {
+       "capability": null,
+       "detail": "",
+       "id": "ATTN_BIAS_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "4q/4kv \u00d7 8 (group 1)",
+       "id": "ATTN_GQA_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "EMBED_NORM_V1",
+       "layers": 0,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "EMBED_POSITION_LEARNED_V1",
+       "layers": 0,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "EMBED_TOKEN_TYPE_V1",
+       "layers": 0,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "64 \u00d7 32",
+       "id": "EMBED_TOKEN_V1",
+       "layers": 0,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "MLP_BIAS_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "64",
+       "id": "MLP_DENSE_PLAIN_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "NORM_LAYER_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "OUTPUT_EMBEDDING_V1",
+       "layers": 0,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "POS_NOPE_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "RESIDUAL_POST_NORM_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      }
+     ],
+     "level": "B",
+     "missing": [],
+     "new_court_kernel_required": false,
+     "new_primitive_required": false,
+     "result": "LOWERABLE",
+     "unmapped_config_keys": []
+    },
+    "user": {
+     "adapter": {
+      "hash": "eb0d128329f780233626400eb7f4db638878679bed061f7ce5d00e47e4cae8389ca5513b8f30833e587e665466487c35864d404621ce16763dfd3c64aedf3f67",
+      "id": "data2vec_text",
+      "kind": "user_file"
+     },
+     "layers": 2,
+     "missing": [],
+     "ok": true,
+     "supported": true
+    }
+   },
+   "refuted_routes": [],
+   "route": "encoder-bidir",
+   "share": null,
+   "stages": {
+    "admit": {
+     "cone_work": 621,
+     "cones": 17,
+     "job_macs": 215040,
+     "ms": 5,
+     "ok": true,
+     "step_leaves": 189
+    },
+    "bind": {
+     "ms": 1,
+     "ok": true,
+     "unused_tensors": 0
+    },
+    "court": {
+     "all_equal": true,
+     "by_terminal_primitive": {
+      "Clamp": 42,
+      "Gather": 4,
+      "Mul": 2,
+      "Transpose": 12
+     },
+     "commit_points_replayed": 60,
+     "ms": 0,
+     "ok": true,
+     "replayed_on_exec": 60
+    },
+    "fixture": {
+     "available": true,
+     "ms": 0,
+     "ok": true
+    },
+    "float_vs_hf": {
+     "max_rel_vs_hf": 1.9264175746297035e-07,
+     "ms": 7,
+     "ok": true,
+     "sequences": 2
+    },
+    "int_vs_hf": {
+     "min_cosine_vs_hf": 0.9999348883068937,
+     "ms": 134,
+     "ok": true
+    },
+    "lower": {
+     "blocks": 3,
+     "commit_points": 17,
+     "commit_roles": {
+      "carry_out": 2,
+      "logits": 1,
+      "lowerer_cone_split": 14
+     },
+     "layers": 2,
+     "ms": 1,
+     "nodes": 242,
+     "ok": true,
+     "params": 53,
+     "prim_kinds": 17,
+     "prims": {
+      "Add": 17,
+      "Clamp": 72,
+      "Compare": 2,
+      "Div": 36,
+      "Gather": 27,
+      "IntExp": 1,
+      "IntRsqrt": 5,
+      "Iota": 2,
+      "Log2Floor": 4,
+      "MatMul": 8,
+      "Mul": 37,
+      "ReduceMax": 1,
+      "ReduceSum": 9,
+      "Reshape": 6,
+      "Select": 2,
+      "Sub": 8,
+      "Transpose": 5
+     },
+     "states": 0
+    },
+    "materialise": {
+     "ms": 158,
+     "ok": true
+    },
+    "three_way": {
+     "equal": true,
+     "ms": 862,
+     "ok": true,
+     "positions": 2,
+     "sequences": 2
+    }
+   },
+   "synthesized": null,
+   "tensors": 39,
+   "usage": "l",
+   "via": "third-party adapter `data2vec_text` (tools/corpus/census-enc-adapters)"
+  },
+  {
+   "category": "census/encoder",
+   "claimed_level": "C",
+   "failed_stage": "read",
+   "heavy_fixture": true,
+   "hf_arch": "DebertaModel",
+   "id": "deberta_enc",
+   "level": "C",
+   "level_label": "C",
+   "model_type": "deberta",
+   "ms": 2,
+   "read": {
+    "a_diff": null,
+    "a_same_as_adapter": null,
+    "auto": {
+     "failure": {
+      "error": "NOT_LOWERABLE(`DebertaModel` has no adapter and is not a causal language model class (`\u2026ForCausalLM`): the standard decoder template is not applied to it (encoder-only, encoder\u2013decoder, vision/audio, or a decoder not modelled yet))",
+      "missing": [
+       {
+        "general_primitive": null,
+        "what": "an adapter for `DebertaModel`",
+        "why": "no built-in adapter claims this architecture and it is not a `\u2026ForCausalLM` class"
+       }
+      ],
+      "unmapped_config_keys": []
+     },
+     "ok": false
+    },
+    "claimed_level": "C",
+    "none": {
+     "failure": {
+      "error": "NOT_LOWERABLE(DebertaModel: config key(s) this lowerer does not model: layer_norm_eps, legacy, max_relative_positions, pooler_dropout, pooler_hidden_act, pooler_hidden_size, pos_att_type, position_biased_input, relative_attention, type_vocab_size \u2014 a key that might change the math is refused, not ignored)",
+      "missing": [],
+      "unmapped_config_keys": [
+       "layer_norm_eps",
+       "legacy",
+       "max_relative_positions",
+       "pooler_dropout",
+       "pooler_hidden_act",
+       "pooler_hidden_size",
+       "pos_att_type",
+       "position_biased_input",
+       "relative_attention",
+       "type_vocab_size"
+      ]
+     },
+     "ok": false
+    },
+    "refusal_bypassed_for_user_adapter": false,
+    "refusal_overridden": null,
+    "report": {
+     "adapter": {
+      "kind": "none"
+     },
+     "assumed_defaults": [],
+     "features": [],
+     "level": "C",
+     "missing": [
+      {
+       "general_primitive": null,
+       "what": "an adapter for `DebertaModel`",
+       "why": "no built-in adapter claims this architecture and it is not a `\u2026ForCausalLM` class"
+      }
+     ],
+     "new_court_kernel_required": false,
+     "new_primitive_required": false,
+     "result": "NOT_LOWERABLE: NOT_LOWERABLE(`DebertaModel` has no adapter and is not a causal language model class (`\u2026ForCausalLM`): the standard decoder template is not applied to it (encoder-only, encoder\u2013decoder, vision/audio, or a decoder not modelled yet))",
+     "unmapped_config_keys": []
+    }
+   },
+   "refuted_routes": [],
+   "route": "encoder-bidir",
+   "share": null,
+   "stages": {},
+   "synthesized": null,
+   "tensors": 30,
+   "usage": "l",
+   "via": "-"
+  },
+  {
+   "category": "census/encoder",
+   "claimed_level": "C",
+   "failed_stage": "read",
+   "heavy_fixture": true,
+   "hf_arch": "ElectraModel",
+   "id": "electra_enc",
+   "level": "C",
+   "level_label": "C",
+   "model_type": "electra",
+   "ms": 2,
+   "read": {
+    "a_diff": null,
+    "a_same_as_adapter": null,
+    "auto": {
+     "failure": {
+      "error": "NOT_LOWERABLE(`ElectraModel` has no adapter and is not a causal language model class (`\u2026ForCausalLM`): the standard decoder template is not applied to it (encoder-only, encoder\u2013decoder, vision/audio, or a decoder not modelled yet))",
+      "missing": [
+       {
+        "general_primitive": null,
+        "what": "an adapter for `ElectraModel`",
+        "why": "no built-in adapter claims this architecture and it is not a `\u2026ForCausalLM` class"
+       }
+      ],
+      "unmapped_config_keys": []
+     },
+     "ok": false
+    },
+    "claimed_level": "C",
+    "none": {
+     "failure": {
+      "error": "NOT_LOWERABLE(ElectraModel: config key(s) this lowerer does not model: embedding_size, layer_norm_eps, summary_last_dropout, type_vocab_size \u2014 a key that might change the math is refused, not ignored)",
+      "missing": [],
+      "unmapped_config_keys": [
+       "embedding_size",
+       "layer_norm_eps",
+       "summary_last_dropout",
+       "type_vocab_size"
+      ]
+     },
+     "ok": false
+    },
+    "refusal_bypassed_for_user_adapter": false,
+    "refusal_overridden": null,
+    "report": {
+     "adapter": {
+      "kind": "none"
+     },
+     "assumed_defaults": [],
+     "features": [],
+     "level": "C",
+     "missing": [
+      {
+       "general_primitive": null,
+       "what": "an adapter for `ElectraModel`",
+       "why": "no built-in adapter claims this architecture and it is not a `\u2026ForCausalLM` class"
+      }
+     ],
+     "new_court_kernel_required": false,
+     "new_primitive_required": false,
+     "result": "NOT_LOWERABLE: NOT_LOWERABLE(`ElectraModel` has no adapter and is not a causal language model class (`\u2026ForCausalLM`): the standard decoder template is not applied to it (encoder-only, encoder\u2013decoder, vision/audio, or a decoder not modelled yet))",
+     "unmapped_config_keys": []
+    }
+   },
+   "refuted_routes": [],
+   "route": "encoder-bidir",
+   "share": null,
+   "stages": {},
+   "synthesized": null,
+   "tensors": 39,
+   "usage": "l",
+   "via": "-"
+  },
+  {
+   "category": "census/encoder",
+   "claimed_level": "B",
+   "failed_stage": null,
+   "heavy_fixture": true,
+   "hf_arch": "ErnieModel",
+   "id": "ernie_enc",
+   "level": "B",
+   "level_label": "B",
+   "model_type": "ernie",
+   "ms": 1087,
+   "read": {
+    "a_diff": null,
+    "a_same_as_adapter": null,
+    "auto": {
+     "failure": {
+      "error": "NOT_LOWERABLE(`ErnieModel` has no adapter and is not a causal language model class (`\u2026ForCausalLM`): the standard decoder template is not applied to it (encoder-only, encoder\u2013decoder, vision/audio, or a decoder not modelled yet))",
+      "missing": [
+       {
+        "general_primitive": null,
+        "what": "an adapter for `ErnieModel`",
+        "why": "no built-in adapter claims this architecture and it is not a `\u2026ForCausalLM` class"
+       }
+      ],
+      "unmapped_config_keys": []
+     },
+     "ok": false
+    },
+    "claimed_level": "B",
+    "none": {
+     "failure": {
+      "error": "NOT_LOWERABLE(ErnieModel: config key(s) this lowerer does not model: layer_norm_eps, task_type_vocab_size, type_vocab_size, use_task_id \u2014 a key that might change the math is refused, not ignored)",
+      "missing": [],
+      "unmapped_config_keys": [
+       "layer_norm_eps",
+       "task_type_vocab_size",
+       "type_vocab_size",
+       "use_task_id"
+      ]
+     },
+     "ok": false
+    },
+    "refusal_bypassed_for_user_adapter": false,
+    "refusal_overridden": null,
+    "report": {
+     "adapter": {
+      "hash": "0094b76b21aea214029f1b198abb71fe51a9aa7a32c4569e8e90684197fb16c9317b630f08180bc8880dc09b4034598216c2591b0fb0be98b9e3008f107a025a",
+      "id": "ernie",
+      "kind": "user_file"
+     },
+     "assumed_defaults": [],
+     "features": [
+      {
+       "capability": null,
+       "detail": "",
+       "id": "ATTN_BIAS_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "4q/4kv \u00d7 8 (group 1)",
+       "id": "ATTN_GQA_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "EMBED_NORM_V1",
+       "layers": 0,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "EMBED_POSITION_LEARNED_V1",
+       "layers": 0,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "EMBED_TOKEN_TYPE_V1",
+       "layers": 0,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "64 \u00d7 32",
+       "id": "EMBED_TOKEN_V1",
+       "layers": 0,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "MLP_BIAS_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "64",
+       "id": "MLP_DENSE_PLAIN_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "NORM_LAYER_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "OUTPUT_EMBEDDING_V1",
+       "layers": 0,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "POS_NOPE_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      },
+      {
+       "capability": null,
+       "detail": "",
+       "id": "RESIDUAL_POST_NORM_V1",
+       "layers": 2,
+       "status": "SUPPORTED"
+      }
+     ],
+     "level": "B",
+     "missing": [],
+     "new_court_kernel_required": false,
+     "new_primitive_required": false,
+     "result": "LOWERABLE",
+     "unmapped_config_keys": []
+    },
+    "user": {
+     "adapter": {
+      "hash": "0094b76b21aea214029f1b198abb71fe51a9aa7a32c4569e8e90684197fb16c9317b630f08180bc8880dc09b4034598216c2591b0fb0be98b9e3008f107a025a",
+      "id": "ernie",
+      "kind": "user_file"
+     },
+     "layers": 2,
+     "missing": [],
+     "ok": true,
+     "supported": true
+    }
+   },
+   "refuted_routes": [],
+   "route": "encoder-bidir",
+   "share": null,
+   "stages": {
+    "admit": {
+     "cone_work": 621,
+     "cones": 17,
+     "job_macs": 215040,
+     "ms": 5,
+     "ok": true,
+     "step_leaves": 189
+    },
+    "bind": {
+     "ms": 1,
+     "ok": true,
+     "unused_tensors": 0
+    },
+    "court": {
+     "all_equal": true,
+     "by_terminal_primitive": {
+      "Clamp": 42,
+      "Gather": 4,
+      "Mul": 2,
+      "Transpose": 12
+     },
+     "commit_points_replayed": 60,
+     "ms": 0,
+     "ok": true,
+     "replayed_on_exec": 60
+    },
+    "fixture": {
+     "available": true,
+     "ms": 0,
+     "ok": true
+    },
+    "float_vs_hf": {
+     "max_rel_vs_hf": 1.4906939167706434e-07,
+     "ms": 7,
+     "ok": true,
+     "sequences": 2
+    },
+    "int_vs_hf": {
+     "min_cosine_vs_hf": 0.9999467936542894,
+     "ms": 111,
+     "ok": true
+    },
+    "lower": {
+     "blocks": 3,
+     "commit_points": 17,
+     "commit_roles": {
+      "carry_out": 2,
+      "logits": 1,
+      "lowerer_cone_split": 14
+     },
+     "layers": 2,
+     "ms": 1,
+     "nodes": 242,
+     "ok": true,
+     "params": 53,
+     "prim_kinds": 17,
+     "prims": {
+      "Add": 17,
+      "Clamp": 72,
+      "Compare": 2,
+      "Div": 36,
+      "Gather": 27,
+      "IntExp": 1,
+      "IntRsqrt": 5,
+      "Iota": 2,
+      "Log2Floor": 4,
+      "MatMul": 8,
+      "Mul": 37,
+      "ReduceMax": 1,
+      "ReduceSum": 9,
+      "Reshape": 6,
+      "Select": 2,
+      "Sub": 8,
+      "Transpose": 5
+     },
+     "states": 0
+    },
+    "materialise": {
+     "ms": 108,
+     "ok": true
+    },
+    "three_way": {
+     "equal": true,
+     "ms": 840,
+     "ok": true,
+     "positions": 2,
+     "sequences": 2
+    }
+   },
+   "synthesized": null,
+   "tensors": 39,
+   "usage": "l",
+   "via": "third-party adapter `ernie` (tools/corpus/census-enc-adapters)"
+  },
+  {
+   "category": "census/encoder",
+   "claimed_level": "C",
+   "failed_stage": "read",
+   "heavy_fixture": true,
+   "hf_arch": "EuroBertModel",
+   "id": "eurobert_enc",
+   "level": "C",
+   "level_label": "C",
+   "model_type": "eurobert",
+   "ms": 2,
+   "read": {
+    "a_diff": null,
+    "a_same_as_adapter": null,
+    "auto": {
+     "failure": {
+      "error": "NOT_LOWERABLE(`EuroBertModel` has no adapter and is not a causal language model class (`\u2026ForCausalLM`): the standard decoder template is not applied to it (encoder-only, encoder\u2013decoder, vision/audio, or a decoder not modelled yet))",
+      "missing": [
+       {
+        "general_primitive": null,
+        "what": "an adapter for `EuroBertModel`",
+        "why": "no built-in adapter claims this architecture and it is not a `\u2026ForCausalLM` class"
+       }
+      ],
+      "unmapped_config_keys": []
+     },
+     "ok": false
+    },
+    "claimed_level": "C",
+    "none": {
+     "failure": {
+      "error": "NOT_LOWERABLE(EuroBertModel: config key(s) this lowerer does not model: classifier_pooling, mask_token_id \u2014 a key that might change the math is refused, not ignored)",
+      "missing": [],
+      "unmapped_config_keys": [
+       "classifier_pooling",
+       "mask_token_id"
+      ]
+     },
+     "ok": false
+    },
+    "refusal_bypassed_for_user_adapter": false,
+    "refusal_overridden": null,
+    "report": {
+     "adapter": {
+      "kind": "none"
+     },
+     "assumed_defaults": [],
+     "features": [],
+     "level": "C",
+     "missing": [
+      {
+       "general_primitive": null,
+       "what": "an adapter for `EuroBertModel`",
+       "why": "no built-in adapter claims this architecture and it is not a `\u2026ForCausalLM` class"
+      }
+     ],
+     "new_court_kernel_required": false,
+     "new_primitive_required": false,
+     "result": "NOT_LOWERABLE: NOT_LOWERABLE(`EuroBertModel` has no adapter and is not a causal language model class (`\u2026ForCausalLM`): the standard decoder template is not applied to it (encoder-only, encoder\u2013decoder, vision/audio, or a decoder not modelled yet))",
+     "unmapped_config_keys": []
+    }
+   },
+   "refuted_routes": [],
+   "route": "encoder-bidir",
+   "share": null,
+   "stages": {},
+   "synthesized": null,
+   "tensors": 20,
+   "usage": "l",
+   "via": "-"
+  },
+  {
+   "category": "census/encoder",
+   "claimed_level": "C",
+   "failed_stage": "read",
+   "heavy_fixture": true,
+   "hf_arch": "FNetModel",
+   "id": "fnet_enc",
+   "level": "C",
+   "level_label": "C",
+   "model_type": "fnet",
+   "ms": 1,
+   "read": {
+    "a_diff": null,
+    "a_same_as_adapter": null,
+    "auto": {
+     "failure": {
+      "error": "NOT_LOWERABLE(`FNetModel` has no adapter and is not a causal language model class (`\u2026ForCausalLM`): the standard decoder template is not applied to it (encoder-only, encoder\u2013decoder, vision/audio, or a decoder not modelled yet))",
+      "missing": [
+       {
+        "general_primitive": null,
+        "what": "an adapter for `FNetModel`",
+        "why": "no built-in adapter claims this architecture and it is not a `\u2026ForCausalLM` class"
+       }
+      ],
+      "unmapped_config_keys": []
+     },
+     "ok": false
+    },
+    "claimed_level": "C",
+    "none": {
+     "failure": {
+      "error": "bad config: FNetModel: rotary dim 1 must be even and positive [in variable `rope`]",
+      "missing": [],
+      "unmapped_config_keys": []
+     },
+     "ok": false
+    },
+    "refusal_bypassed_for_user_adapter": false,
+    "refusal_overridden": null,
+    "report": {
+     "adapter": {
+      "kind": "none"
+     },
+     "assumed_defaults": [],
+     "features": [],
+     "level": "C",
+     "missing": [
+      {
+       "general_primitive": null,
+       "what": "an adapter for `FNetModel`",
+       "why": "no built-in adapter claims this architecture and it is not a `\u2026ForCausalLM` class"
+      }
+     ],
+     "new_court_kernel_required": false,
+     "new_primitive_required": false,
+     "result": "NOT_LOWERABLE: NOT_LOWERABLE(`FNetModel` has no adapter and is not a causal language model class (`\u2026ForCausalLM`): the standard decoder template is not applied to it (encoder-only, encoder\u2013decoder, vision/audio, or a decoder not modelled yet))",
+     "unmapped_config_keys": []
+    }
+   },
+   "refuted_routes": [],
+   "route": "encoder-bidir",
+   "share": null,
+   "stages": {},
+   "synthesized": null,
+   "tensors": 25,
+   "usage": "l",
+   "via": "-"
+  },
+  {
+   "category": "census/encoder",
+   "claimed_level": "C",
+   "failed_stage": "read",
+   "heavy_fixture": true,
+   "hf_arch": "IBertModel",
+   "id": "ibert_enc",
+   "level": "C",
+   "level_label": "C",
+   "model_type": "ibert",
+   "ms": 3,
+   "read": {
+    "a_diff": null,
+    "a_same_as_adapter": null,
+    "auto": {
+     "failure": {
+      "error": "NOT_LOWERABLE(`IBertModel` has no adapter and is not a causal language model class (`\u2026ForCausalLM`): the standard decoder template is not applied to it (encoder-only, encoder\u2013decoder, vision/audio, or a decoder not modelled yet))",
+      "missing": [
+       {
+        "general_primitive": null,
+        "what": "an adapter for `IBertModel`",
+        "why": "no built-in adapter claims this architecture and it is not a `\u2026ForCausalLM` class"
+       }
+      ],
+      "unmapped_config_keys": []
+     },
+     "ok": false
+    },
+    "claimed_level": "C",
+    "none": {
+     "failure": {
+      "error": "NOT_LOWERABLE(IBertModel: config key(s) this lowerer does not model: force_dequant, layer_norm_eps, quant_mode, type_vocab_size \u2014 a key that might change the math is refused, not ignored)",
+      "missing": [],
+      "unmapped_config_keys": [
+       "force_dequant",
+       "layer_norm_eps",
+       "quant_mode",
+       "type_vocab_size"
+      ]
+     },
+     "ok": false
+    },
+    "refusal_bypassed_for_user_adapter": false,
+    "refusal_overridden": null,
+    "report": {
+     "adapter": {
+      "kind": "none"
+     },
+     "assumed_defaults": [],
+     "features": [],
+     "level": "C",
+     "missing": [
+      {
+       "general_primitive": null,
+       "what": "an adapter for `IBertModel`",
+       "why": "no built-in adapter claims this architecture and it is not a `\u2026ForCausalLM` class"
+      }
+     ],
+     "new_court_kernel_required": false,
+     "new_primitive_required": false,
+     "result": "NOT_LOWERABLE: NOT_LOWERABLE(`IBertModel` has no adapter and is not a causal language model class (`\u2026ForCausalLM`): the standard decoder template is not applied to it (encoder-only, encoder\u2013decoder, vision/audio, or a decoder not modelled yet))",
+     "unmapped_config_keys": []
+    }
+   },
+   "refuted_routes": [],
+   "route": "encoder-bidir",
+   "share": null,
+   "stages": {},
+   "synthesized": null,
+   "tensors": 182,
+   "usage": "l",
+   "via": "-"
+  },
+  {
+   "category": "census/encoder",
+   "claimed_level": "C",
+   "failed_stage": "read",
+   "heavy_fixture": true,
+   "hf_arch": "JinaEmbeddingsV3Model",
+   "id": "jina_embeddings_v3_enc",
+   "level": "C",
+   "level_label": "C",
+   "model_type": "jina_embeddings_v3",
+   "ms": 2,
+   "read": {
+    "a_diff": null,
+    "a_same_as_adapter": null,
+    "auto": {
+     "failure": {
+      "error": "NOT_LOWERABLE(`JinaEmbeddingsV3Model` has no adapter and is not a causal language model class (`\u2026ForCausalLM`): the standard decoder template is not applied to it (encoder-only, encoder\u2013decoder, vision/audio, or a decoder not modelled yet))",
+      "missing": [
+       {
+        "general_primitive": null,
+        "what": "an adapter for `JinaEmbeddingsV3Model`",
+        "why": "no built-in adapter claims this architecture and it is not a `\u2026ForCausalLM` class"
+       }
+      ],
+      "unmapped_config_keys": []
+     },
+     "ok": false
+    },
+    "claimed_level": "C",
+    "none": {
+     "failure": {
+      "error": "NOT_LOWERABLE(JinaEmbeddingsV3Model: config key(s) this lowerer does not model: layer_norm_eps, type_vocab_size \u2014 a key that might change the math is refused, not ignored)",
+      "missing": [],
+      "unmapped_config_keys": [
+       "layer_norm_eps",
+       "type_vocab_size"
+      ]
+     },
+     "ok": false
+    },
+    "refusal_bypassed_for_user_adapter": false,
+    "refusal_overridden": null,
+    "report": {
+     "adapter": {
+      "kind": "none"
+     },
+     "assumed_defaults": [],
+     "features": [],
+     "level": "C",
+     "missing": [
+      {
+       "general_primitive": null,
+       "what": "an adapter for `JinaEmbeddingsV3Model`",
+       "why": "no built-in adapter claims this architecture and it is not a `\u2026ForCausalLM` class"
+      }
+     ],
+     "new_court_kernel_required": false,
+     "new_primitive_required": false,
+     "result": "NOT_LOWERABLE: NOT_LOWERABLE(`JinaEmbeddingsV3Model` has no adapter and is not a causal language model class (`\u2026ForCausalLM`): the standard decoder template is not applied to it (encoder-only, encoder\u2013decoder, vision/audio, or a decoder not modelled yet))",
+     "unmapped_config_keys": []
+    }
+   },
+   "refuted_routes": [],
+   "route": "encoder-bidir",
+   "share": null,
+   "stages": {},
+   "synthesized": null,
+   "tensors": 30,
+   "usage": "l",
+   "via": "-"
+  },
+  {
+   "category": "census/encoder",
+   "claimed_level": "C",
+   "failed_stage": "read",
+   "heavy_fixture": true,
+   "hf_arch": "LayoutLMModel",
+   "id": "layoutlm_enc",
+   "level": "C",
+   "level_label": "C",
+   "model_type": "layoutlm",
+   "ms": 2,
+   "read": {
+    "a_diff": null,
+    "a_same_as_adapter": null,
+    "auto": {
+     "failure": {
+      "error": "NOT_LOWERABLE(`LayoutLMModel` has no adapter and is not a causal language model class (`\u2026ForCausalLM`): the standard decoder template is not applied to it (encoder-only, encoder\u2013decoder, vision/audio, or a decoder not modelled yet))",
+      "missing": [
+       {
+        "general_primitive": null,
+        "what": "an adapter for `LayoutLMModel`",
+        "why": "no built-in adapter claims this architecture and it is not a `\u2026ForCausalLM` class"
+       }
+      ],
+      "unmapped_config_keys": []
+     },
+     "ok": false
+    },
+    "claimed_level": "C",
+    "none": {
+     "failure": {
+      "error": "NOT_LOWERABLE(LayoutLMModel: config key(s) this lowerer does not model: layer_norm_eps, max_2d_position_embeddings, type_vocab_size \u2014 a key that might change the math is refused, not ignored)",
+      "missing": [],
+      "unmapped_config_keys": [
+       "layer_norm_eps",
+       "max_2d_position_embeddings",
+       "type_vocab_size"
+      ]
+     },
+     "ok": false
+    },
+    "refusal_bypassed_for_user_adapter": false,
+    "refusal_overridden": null,
+    "report": {
+     "adapter": {
+      "kind": "none"
+     },
+     "assumed_defaults": [],
+     "features": [],
+     "level": "C",
+     "missing": [
+      {
+       "general_primitive": null,
+       "what": "an adapter for `LayoutLMModel`",
+       "why": "no built-in adapter claims this architecture and it is not a `\u2026ForCausalLM` class"
+      }
+     ],
+     "new_court_kernel_required": false,
+     "new_primitive_required": false,
+     "result": "NOT_LOWERABLE: NOT_LOWERABLE(`LayoutLMModel` has no adapter and is not a causal language model class (`\u2026ForCausalLM`): the standard decoder template is not applied to it (encoder-only, encoder\u2013decoder, vision/audio, or a decoder not modelled yet))",
+     "unmapped_config_keys": []
+    }
+   },
+   "refuted_routes": [],
+   "route": "encoder-bidir",
+   "share": null,
+   "stages": {},
+   "synthesized": null,
+   "tensors": 43,
+   "usage": "l",
+   "via": "-"
+  },
+  {
+   "category": "census/encoder",
+   "claimed_level": "C",
+   "failed_stage": "read",
+   "heavy_fixture": true,
+   "hf_arch": "LongformerModel",
+   "id": "longformer_enc",
+   "level": "C",
+   "level_label": "C",
+   "model_type": "longformer",
+   "ms": 3,
+   "read": {
+    "a_diff": null,
+    "a_same_as_adapter": null,
+    "auto": {
+     "failure": {
+      "error": "NOT_LOWERABLE(`LongformerModel` has no adapter and is not a causal language model class (`\u2026ForCausalLM`): the standard decoder template is not applied to it (encoder-only, encoder\u2013decoder, vision/audio, or a decoder not modelled yet))",
+      "missing": [
+       {
+        "general_primitive": null,
+        "what": "an adapter for `LongformerModel`",
+        "why": "no built-in adapter claims this architecture and it is not a `\u2026ForCausalLM` class"
+       }
+      ],
+      "unmapped_config_keys": []
+     },
+     "ok": false
+    },
+    "claimed_level": "C",
+    "none": {
+     "failure": {
+      "error": "NOT_LOWERABLE(LongformerModel: config key(s) this lowerer does not model: attention_window, layer_norm_eps, onnx_export, type_vocab_size \u2014 a key that might change the math is refused, not ignored)",
+      "missing": [],
+      "unmapped_config_keys": [
+       "attention_window",
+       "layer_norm_eps",
+       "onnx_export",
+       "type_vocab_size"
+      ]
+     },
+     "ok": false
+    },
+    "refusal_bypassed_for_user_adapter": false,
+    "refusal_overridden": null,
+    "report": {
+     "adapter": {
+      "kind": "none"
+     },
+     "assumed_defaults": [],
+     "features": [],
+     "level": "C",
+     "missing": [
+      {
+       "general_primitive": null,
+       "what": "an adapter for `LongformerModel`",
+       "why": "no built-in adapter claims this architecture and it is not a `\u2026ForCausalLM` class"
+      }
+     ],
+     "new_court_kernel_required": false,
+     "new_primitive_required": false,
+     "result": "NOT_LOWERABLE: NOT_LOWERABLE(`LongformerModel` has no adapter and is not a causal language model class (`\u2026ForCausalLM`): the standard decoder template is not applied to it (encoder-only, encoder\u2013decoder, vision/audio, or a decoder not modelled yet))",
+     "unmapped_config_keys": []
+    }
+   },
+   "refuted_routes": [],
+   "route": "encoder-bidir",
+   "share": null,
+   "stages": {},
+   "synthesized": null,
+   "tensors": 51,
+   "usage": "l",
+   "via": "-"
+  },
+  {
+   "category": "census/encoder",
+   "claimed_level": "C",
+   "failed_stage": "read",
+   "heavy_fixture": true,
+   "hf_arch": "MegatronBertModel",
+   "id": "megatron_bert_enc",
+   "level": "C",
+   "level_label": "C",
+   "model_type": "megatron-bert",
+   "ms": 2,
+   "read": {
+    "a_diff": null,
+    "a_same_as_adapter": null,
+    "auto": {
+     "failure": {
+      "error": "NOT_LOWERABLE(`MegatronBertModel` has no adapter and is not a causal language model class (`\u2026ForCausalLM`): the standard decoder template is not applied to it (encoder-only, encoder\u2013decoder, vision/audio, or a decoder not modelled yet))",
+      "missing": [
+       {
+        "general_primitive": null,
+        "what": "an adapter for `MegatronBertModel`",
+        "why": "no built-in adapter claims this architecture and it is not a `\u2026ForCausalLM` class"
+       }
+      ],
+      "unmapped_config_keys": []
+     },
+     "ok": false
+    },
+    "claimed_level": "C",
+    "none": {
+     "failure": {
+      "error": "NOT_LOWERABLE(MegatronBertModel: config key(s) this lowerer does not model: layer_norm_eps, type_vocab_size \u2014 a key that might change the math is refused, not ignored)",
+      "missing": [],
+      "unmapped_config_keys": [
+       "layer_norm_eps",
+       "type_vocab_size"
+      ]
+     },
+     "ok": false
+    },
+    "refusal_bypassed_for_user_adapter": false,
+    "refusal_overridden": null,
+    "report": {
+     "adapter": {
+      "kind": "none"
+     },
+     "assumed_defaults": [],
+     "features": [],
+     "level": "C",
+     "missing": [
+      {
+       "general_primitive": null,
+       "what": "an adapter for `MegatronBertModel`",
+       "why": "no built-in adapter claims this architecture and it is not a `\u2026ForCausalLM` class"
+      }
+     ],
+     "new_court_kernel_required": false,
+     "new_primitive_required": false,
+     "result": "NOT_LOWERABLE: NOT_LOWERABLE(`MegatronBertModel` has no adapter and is not a causal language model class (`\u2026ForCausalLM`): the standard decoder template is not applied to it (encoder-only, encoder\u2013decoder, vision/audio, or a decoder not modelled yet))",
+     "unmapped_config_keys": []
+    }
+   },
+   "refuted_routes": [],
+   "route": "encoder-bidir",
+   "share": null,
+   "stages": {},
+   "synthesized": null,
+   "tensors": 39,
+   "usage": "l",
+   "via": "-"
+  },
+  {
+   "category": "census/encoder",
+   "claimed_level": "C",
+   "failed_stage": "read",
+   "heavy_fixture": true,
+   "hf_arch": "MobileBertModel",
+   "id": "mobilebert_enc",
+   "level": "C",
+   "level_label": "C",
+   "model_type": "mobilebert",
+   "ms": 3,
+   "read": {
+    "a_diff": null,
+    "a_same_as_adapter": null,
+    "auto": {
+     "failure": {
+      "error": "NOT_LOWERABLE(`MobileBertModel` has no adapter and is not a causal language model class (`\u2026ForCausalLM`): the standard decoder template is not applied to it (encoder-only, encoder\u2013decoder, vision/audio, or a decoder not modelled yet))",
+      "missing": [
+       {
+        "general_primitive": null,
+        "what": "an adapter for `MobileBertModel`",
+        "why": "no built-in adapter claims this architecture and it is not a `\u2026ForCausalLM` class"
+       }
+      ],
+      "unmapped_config_keys": []
+     },
+     "ok": false
+    },
+    "claimed_level": "C",
+    "none": {
+     "failure": {
+      "error": "NOT_LOWERABLE(MobileBertModel: config key(s) this lowerer does not model: classifier_activation, embedding_size, intra_bottleneck_size, key_query_shared_bottleneck, layer_norm_eps, normalization_type, num_feedforward_networks, trigram_input, true_hidden_size, type_vocab_size, use_bottleneck, use_bottleneck_attention \u2014 a key that might change the math is refused, not ignored)",
+      "missing": [],
+      "unmapped_config_keys": [
+       "classifier_activation",
+       "embedding_size",
+       "intra_bottleneck_size",
+       "key_query_shared_bottleneck",
+       "layer_norm_eps",
+       "normalization_type",
+       "num_feedforward_networks",
+       "trigram_input",
+       "true_hidden_size",
+       "type_vocab_size",
+       "use_bottleneck",
+       "use_bottleneck_attention"
+      ]
+     },
+     "ok": false
+    },
+    "refusal_bypassed_for_user_adapter": false,
+    "refusal_overridden": null,
+    "report": {
+     "adapter": {
+      "kind": "none"
+     },
+     "assumed_defaults": [],
+     "features": [],
+     "level": "C",
+     "missing": [
+      {
+       "general_primitive": null,
+       "what": "an adapter for `MobileBertModel`",
+       "why": "no built-in adapter claims this architecture and it is not a `\u2026ForCausalLM` class"
+      }
+     ],
+     "new_court_kernel_required": false,
+     "new_primitive_required": false,
+     "result": "NOT_LOWERABLE: NOT_LOWERABLE(`MobileBertModel` has no adapter and is not a causal language model class (`\u2026ForCausalLM`): the standard decoder template is not applied to it (encoder-only, encoder\u2013decoder, vision/audio, or a decoder not modelled yet))",
+     "unmapped_config_keys": []
+    }
+   },
+   "refuted_routes": [],
+   "route": "encoder-bidir",
+   "share": null,
+   "stages": {},
+   "synthesized": null,
+   "tensors": 101,
+   "usage": "l",
+   "via": "-"
+  },
+  {
+   "category": "census/encoder",
+   "claimed_level": "C",
+   "failed_stage": "read",
+   "heavy_fixture": true,
+   "hf_arch": "MraModel",
+   "id": "mra_enc",
+   "level": "C",
+   "level_label": "C",
+   "model_type": "mra",
+   "ms": 2,
+   "read": {
+    "a_diff": null,
+    "a_same_as_adapter": null,
+    "auto": {
+     "failure": {
+      "error": "NOT_LOWERABLE(`MraModel` has no adapter and is not a causal language model class (`\u2026ForCausalLM`): the standard decoder template is not applied to it (encoder-only, encoder\u2013decoder, vision/audio, or a decoder not modelled yet))",
+      "missing": [
+       {
+        "general_primitive": null,
+        "what": "an adapter for `MraModel`",
+        "why": "no built-in adapter claims this architecture and it is not a `\u2026ForCausalLM` class"
+       }
+      ],
+      "unmapped_config_keys": []
+     },
+     "ok": false
+    },
+    "claimed_level": "C",
+    "none": {
+     "failure": {
+      "error": "NOT_LOWERABLE(MraModel: config key(s) this lowerer does not model: approx_mode, block_per_row, initial_prior_diagonal_n_blocks, initial_prior_first_n_blocks, layer_norm_eps, type_vocab_size \u2014 a key that might change the math is refused, not ignored)",
+      "missing": [],
+      "unmapped_config_keys": [
+       "approx_mode",
+       "block_per_row",
+       "initial_prior_diagonal_n_blocks",
+       "initial_prior_first_n_blocks",
+       "layer_norm_eps",
+       "type_vocab_size"
+      ]
+     },
+     "ok": false
+    },
+    "refusal_bypassed_for_user_adapter": false,
+    "refusal_overridden": null,
+    "report": {
+     "adapter": {
+      "kind": "none"
+     },
+     "assumed_defaults": [],
+     "features": [],
+     "level": "C",
+     "missing": [
+      {
+       "general_primitive": null,
+       "what": "an adapter for `MraModel`",
+       "why": "no built-in adapter claims this architecture and it is not a `\u2026ForCausalLM` class"
+      }
+     ],
+     "new_court_kernel_required": false,
+     "new_primitive_required": false,
+     "result": "NOT_LOWERABLE: NOT_LOWERABLE(`MraModel` has no adapter and is not a causal language model class (`\u2026ForCausalLM`): the standard decoder template is not applied to it (encoder-only, encoder\u2013decoder, vision/audio, or a decoder not modelled yet))",
+     "unmapped_config_keys": []
+    }
+   },
+   "refuted_routes": [],
+   "route": "encoder-bidir",
+   "share": null,
+   "stages": {},
+   "synthesized": null,
+   "tensors": 38,
+   "usage": "l",
+   "via": "-"
+  },
+  {
+   "category": "census/encoder",
+   "claimed_level": "C",
+   "failed_stage": "read",
+   "heavy_fixture": true,
+   "hf_arch": "MvpModel",
+   "id": "mvp_enc",
+   "level": "C",
+   "level_label": "C",
+   "model_type": "mvp",
+   "ms": 5,
+   "read": {
+    "a_diff": null,
+    "a_same_as_adapter": null,
+    "auto": {
+     "failure": {
+      "error": "NOT_LOWERABLE(`MvpModel` has no adapter and is not a causal language model class (`\u2026ForCausalLM`): the standard decoder template is not applied to it (encoder-only, encoder\u2013decoder, vision/audio, or a decoder not modelled yet))",
+      "missing": [
+       {
+        "general_primitive": null,
+        "what": "an adapter for `MvpModel`",
+        "why": "no built-in adapter claims this architecture and it is not a `\u2026ForCausalLM` class"
+       }
+      ],
+      "unmapped_config_keys": []
+     },
+     "ok": false
+    },
+    "claimed_level": "C",
+    "none": {
+     "failure": {
+      "error": "NOT_LOWERABLE(MvpModel: encoder\u2013decoder models are out of scope for v1)",
+      "missing": [],
+      "unmapped_config_keys": []
+     },
+     "ok": false
+    },
+    "refusal_bypassed_for_user_adapter": false,
+    "refusal_overridden": null,
+    "report": {
+     "adapter": {
+      "kind": "none"
+     },
+     "assumed_defaults": [],
+     "features": [],
+     "level": "C",
+     "missing": [
+      {
+       "general_primitive": null,
+       "what": "an encoder\u2013decoder adapter for `MvpModel`",
+       "why": "no built-in adapter of kind `encdec` claims this architecture"
+      }
+     ],
+     "new_court_kernel_required": false,
+     "new_primitive_required": false,
+     "result": "NOT_LOWERABLE: NOT_LOWERABLE(`MvpModel` is an encoder\u2013decoder no adapter of kind `encdec` claims)",
+     "unmapped_config_keys": []
+    }
+   },
+   "refuted_routes": [],
+   "route": "encoder-bidir",
+   "share": null,
+   "stages": {},
+   "synthesized": null,
+   "tensors": 511,
+   "usage": "l",
+   "via": "-"
+  },
+  {
+   "category": "census/encoder",
+   "claimed_level": "C",
+   "failed_stage": "read",
+   "heavy_fixture": true,
+   "hf_arch": "NystromformerModel",
+   "id": "nystromformer_enc",
+   "level": "C",
+   "level_label": "C",
+   "model_type": "nystromformer",
+   "ms": 4,
+   "read": {
+    "a_diff": null,
+    "a_same_as_adapter": null,
+    "auto": {
+     "failure": {
+      "error": "NOT_LOWERABLE(`NystromformerModel` has no adapter and is not a causal language model class (`\u2026ForCausalLM`): the standard decoder template is not applied to it (encoder-only, encoder\u2013decoder, vision/audio, or a decoder not modelled yet))",
+      "missing": [
+       {
+        "general_primitive": null,
+        "what": "an adapter for `NystromformerModel`",
+        "why": "no built-in adapter claims this architecture and it is not a `\u2026ForCausalLM` class"
+       }
+      ],
+      "unmapped_config_keys": []
+     },
+     "ok": false
+    },
+    "claimed_level": "C",
+    "none": {
+     "failure": {
+      "error": "NOT_LOWERABLE(NystromformerModel: config key(s) this lowerer does not model: conv_kernel_size, inv_coeff_init_option, layer_norm_eps, num_landmarks, segment_means_seq_len, type_vocab_size \u2014 a key that might change the math is refused, not ignored)",
+      "missing": [],
+      "unmapped_config_keys": [
+       "conv_kernel_size",
+       "inv_coeff_init_option",
+       "layer_norm_eps",
+       "num_landmarks",
+       "segment_means_seq_len",
+       "type_vocab_size"
+      ]
+     },
+     "ok": false
+    },
+    "refusal_bypassed_for_user_adapter": false,
+    "refusal_overridden": null,
+    "report": {
+     "adapter": {
+      "kind": "none"
+     },
+     "assumed_defaults": [],
+     "features": [],
+     "level": "C",
+     "missing": [
+      {
+       "general_primitive": null,
+       "what": "an adapter for `NystromformerModel`",
+       "why": "no built-in adapter claims this architecture and it is not a `\u2026ForCausalLM` class"
+      }
+     ],
+     "new_court_kernel_required": false,
+     "new_primitive_required": false,
+     "result": "NOT_LOWERABLE: NOT_LOWERABLE(`NystromformerModel` has no adapter and is not a causal language model class (`\u2026ForCausalLM`): the standard decoder template is not applied to it (encoder-only, encoder\u2013decoder, vision/audio, or a decoder not modelled yet))",
+     "unmapped_config_keys": []
+    }
+   },
+   "refuted_routes": [],
+   "route": "encoder-bidir",
+   "share": null,
+   "stages": {},
+   "synthesized": null,
+   "tensors": 39,
+   "usage": "l",
+   "via": "-"
+  },
+  {
+   "category": "census/encoder",
+   "claimed_level": "C",
+   "failed_stage": "read",
+   "heavy_fixture": true,
+   "hf_arch": "RemBertModel",
+   "id": "rembert_enc",
+   "level": "C",
+   "level_label": "C",
+   "model_type": "rembert",
+   "ms": 2,
+   "read": {
+    "a_diff": null,
+    "a_same_as_adapter": null,
+    "auto": {
+     "failure": {
+      "error": "NOT_LOWERABLE(`RemBertModel` has no adapter and is not a causal language model class (`\u2026ForCausalLM`): the standard decoder template is not applied to it (encoder-only, encoder\u2013decoder, vision/audio, or a decoder not modelled yet))",
+      "missing": [
+       {
+        "general_primitive": null,
+        "what": "an adapter for `RemBertModel`",
+        "why": "no built-in adapter claims this architecture and it is not a `\u2026ForCausalLM` class"
+       }
+      ],
+      "unmapped_config_keys": []
+     },
+     "ok": false
+    },
+    "claimed_level": "C",
+    "none": {
+     "failure": {
+      "error": "NOT_LOWERABLE(RemBertModel: config key(s) this lowerer does not model: classifier_dropout_prob, input_embedding_size, layer_norm_eps, output_embedding_size, type_vocab_size \u2014 a key that might change the math is refused, not ignored)",
+      "missing": [],
+      "unmapped_config_keys": [
+       "classifier_dropout_prob",
+       "input_embedding_size",
+       "layer_norm_eps",
+       "output_embedding_size",
+       "type_vocab_size"
+      ]
+     },
+     "ok": false
+    },
+    "refusal_bypassed_for_user_adapter": false,
+    "refusal_overridden": null,
+    "report": {
+     "adapter": {
+      "kind": "none"
+     },
+     "assumed_defaults": [],
+     "features": [],
+     "level": "C",
+     "missing": [
+      {
+       "general_primitive": null,
+       "what": "an adapter for `RemBertModel`",
+       "why": "no built-in adapter claims this architecture and it is not a `\u2026ForCausalLM` class"
+      }
+     ],
+     "new_court_kernel_required": false,
+     "new_primitive_required": false,
+     "result": "NOT_LOWERABLE: NOT_LOWERABLE(`RemBertModel` has no adapter and is not a causal language model class (`\u2026ForCausalLM`): the standard decoder template is not applied to it (encoder-only, encoder\u2013decoder, vision/audio, or a decoder not modelled yet))",
+     "unmapped_config_keys": []
+    }
+   },
+   "refuted_routes": [],
+   "route": "encoder-bidir",
+   "share": null,
+   "stages": {},
+   "synthesized": null,
+   "tensors": 41,
+   "usage": "l",
+   "via": "-"
+  },
+  {
+   "category": "census/encoder",
+   "claimed_level": "C",
+   "failed_stage": "read",
+   "heavy_fixture": true,
+   "hf_arch": "RobertaPreLayerNormModel",
+   "id": "roberta_prelayernorm_enc",
+   "level": "C",
+   "level_label": "C",
+   "model_type": "roberta-prelayernorm",
+   "ms": 2,
+   "read": {
+    "a_diff": null,
+    "a_same_as_adapter": null,
+    "auto": {
+     "failure": {
+      "error": "NOT_LOWERABLE(`RobertaPreLayerNormModel` has no adapter and is not a causal language model class (`\u2026ForCausalLM`): the standard decoder template is not applied to it (encoder-only, encoder\u2013decoder, vision/audio, or a decoder not modelled yet))",
+      "missing": [
+       {
+        "general_primitive": null,
+        "what": "an adapter for `RobertaPreLayerNormModel`",
+        "why": "no built-in adapter claims this architecture and it is not a `\u2026ForCausalLM` class"
+       }
+      ],
+      "unmapped_config_keys": []
+     },
+     "ok": false
+    },
+    "claimed_level": "C",
+    "none": {
+     "failure": {
+      "error": "NOT_LOWERABLE(RobertaPreLayerNormModel: config key(s) this lowerer does not model: layer_norm_eps, type_vocab_size \u2014 a key that might change the math is refused, not ignored)",
+      "missing": [],
+      "unmapped_config_keys": [
+       "layer_norm_eps",
+       "type_vocab_size"
+      ]
+     },
+     "ok": false
+    },
+    "refusal_bypassed_for_user_adapter": false,
+    "refusal_overridden": null,
+    "report": {
+     "adapter": {
+      "kind": "none"
+     },
+     "assumed_defaults": [],
+     "features": [],
+     "level": "C",
+     "missing": [
+      {
+       "general_primitive": null,
+       "what": "an adapter for `RobertaPreLayerNormModel`",
+       "why": "no built-in adapter claims this architecture and it is not a `\u2026ForCausalLM` class"
+      }
+     ],
+     "new_court_kernel_required": false,
+     "new_primitive_required": false,
+     "result": "NOT_LOWERABLE: NOT_LOWERABLE(`RobertaPreLayerNormModel` has no adapter and is not a causal language model class (`\u2026ForCausalLM`): the standard decoder template is not applied to it (encoder-only, encoder\u2013decoder, vision/audio, or a decoder not modelled yet))",
+     "unmapped_config_keys": []
+    }
+   },
+   "refuted_routes": [],
+   "route": "encoder-bidir",
+   "share": null,
+   "stages": {},
+   "synthesized": null,
+   "tensors": 41,
+   "usage": "l",
+   "via": "-"
+  },
+  {
+   "category": "census/encoder",
+   "claimed_level": "C",
+   "failed_stage": "read",
+   "heavy_fixture": true,
+   "hf_arch": "RoCBertModel",
+   "id": "roc_bert_enc",
+   "level": "C",
+   "level_label": "C",
+   "model_type": "roc_bert",
+   "ms": 2,
+   "read": {
+    "a_diff": null,
+    "a_same_as_adapter": null,
+    "auto": {
+     "failure": {
+      "error": "NOT_LOWERABLE(`RoCBertModel` has no adapter and is not a causal language model class (`\u2026ForCausalLM`): the standard decoder template is not applied to it (encoder-only, encoder\u2013decoder, vision/audio, or a decoder not modelled yet))",
+      "missing": [
+       {
+        "general_primitive": null,
+        "what": "an adapter for `RoCBertModel`",
+        "why": "no built-in adapter claims this architecture and it is not a `\u2026ForCausalLM` class"
+       }
+      ],
+      "unmapped_config_keys": []
+     },
+     "ok": false
+    },
+    "claimed_level": "C",
+    "none": {
+     "failure": {
+      "error": "NOT_LOWERABLE(RoCBertModel: config key(s) this lowerer does not model: concat_input, enable_pronunciation, enable_shape, layer_norm_eps, pronunciation_embed_dim, pronunciation_vocab_size, shape_embed_dim, shape_vocab_size, type_vocab_size \u2014 a key that might change the math is refused, not ignored)",
+      "missing": [],
+      "unmapped_config_keys": [
+       "concat_input",
+       "enable_pronunciation",
+       "enable_shape",
+       "layer_norm_eps",
+       "pronunciation_embed_dim",
+       "pronunciation_vocab_size",
+       "shape_embed_dim",
+       "shape_vocab_size",
+       "type_vocab_size"
+      ]
+     },
+     "ok": false
+    },
+    "refusal_bypassed_for_user_adapter": false,
+    "refusal_overridden": null,
+    "report": {
+     "adapter": {
+      "kind": "none"
+     },
+     "assumed_defaults": [],
+     "features": [],
+     "level": "C",
+     "missing": [
+      {
+       "general_primitive": null,
+       "what": "an adapter for `RoCBertModel`",
+       "why": "no built-in adapter claims this architecture and it is not a `\u2026ForCausalLM` class"
+      }
+     ],
+     "new_court_kernel_required": false,
+     "new_primitive_required": false,
+     "result": "NOT_LOWERABLE: NOT_LOWERABLE(`RoCBertModel` has no adapter and is not a causal language model class (`\u2026ForCausalLM`): the standard decoder template is not applied to it (encoder-only, encoder\u2013decoder, vision/audio, or a decoder not modelled yet))",
+     "unmapped_config_keys": []
+    }
+   },
+   "refuted_routes": [],
+   "route": "encoder-bidir",
+   "share": null,
+   "stages": {},
+   "synthesized": null,
+   "tensors": 43,
+   "usage": "l",
+   "via": "-"
+  },
+  {
+   "category": "census/encoder",
+   "claimed_level": "C",
+   "failed_stage": "read",
+   "heavy_fixture": true,
+   "hf_arch": "RoFormerModel",
+   "id": "roformer_enc",
+   "level": "C",
+   "level_label": "C",
+   "model_type": "roformer",
+   "ms": 3,
+   "read": {
+    "a_diff": null,
+    "a_same_as_adapter": null,
+    "auto": {
+     "failure": {
+      "error": "NOT_LOWERABLE(`RoFormerModel` has no adapter and is not a causal language model class (`\u2026ForCausalLM`): the standard decoder template is not applied to it (encoder-only, encoder\u2013decoder, vision/audio, or a decoder not modelled yet))",
+      "missing": [
+       {
+        "general_primitive": null,
+        "what": "an adapter for `RoFormerModel`",
+        "why": "no built-in adapter claims this architecture and it is not a `\u2026ForCausalLM` class"
+       }
+      ],
+      "unmapped_config_keys": []
+     },
+     "ok": false
+    },
+    "claimed_level": "C",
+    "none": {
+     "failure": {
+      "error": "NOT_LOWERABLE(RoFormerModel: config key(s) this lowerer does not model: embedding_size, layer_norm_eps, rotary_value, type_vocab_size \u2014 a key that might change the math is refused, not ignored)",
+      "missing": [],
+      "unmapped_config_keys": [
+       "embedding_size",
+       "layer_norm_eps",
+       "rotary_value",
+       "type_vocab_size"
+      ]
+     },
+     "ok": false
+    },
+    "refusal_bypassed_for_user_adapter": false,
+    "refusal_overridden": null,
+    "report": {
+     "adapter": {
+      "kind": "none"
+     },
+     "assumed_defaults": [],
+     "features": [],
+     "level": "C",
+     "missing": [
+      {
+       "general_primitive": null,
+       "what": "an adapter for `RoFormerModel`",
+       "why": "no built-in adapter claims this architecture and it is not a `\u2026ForCausalLM` class"
+      }
+     ],
+     "new_court_kernel_required": false,
+     "new_primitive_required": false,
+     "result": "NOT_LOWERABLE: NOT_LOWERABLE(`RoFormerModel` has no adapter and is not a causal language model class (`\u2026ForCausalLM`): the standard decoder template is not applied to it (encoder-only, encoder\u2013decoder, vision/audio, or a decoder not modelled yet))",
+     "unmapped_config_keys": []
+    }
+   },
+   "refuted_routes": [],
+   "route": "encoder-bidir",
+   "share": null,
+   "stages": {},
+   "synthesized": null,
+   "tensors": 37,
+   "usage": "l",
+   "via": "-"
+  },
+  {
+   "category": "census/encoder",
+   "claimed_level": "C",
+   "failed_stage": "read",
+   "heavy_fixture": true,
+   "hf_arch": "TapasModel",
+   "id": "tapas_enc",
+   "level": "C",
+   "level_label": "C",
+   "model_type": "tapas",
+   "ms": 2,
+   "read": {
+    "a_diff": null,
+    "a_same_as_adapter": null,
+    "auto": {
+     "failure": {
+      "error": "NOT_LOWERABLE(`TapasModel` has no adapter and is not a causal language model class (`\u2026ForCausalLM`): the standard decoder template is not applied to it (encoder-only, encoder\u2013decoder, vision/audio, or a decoder not modelled yet))",
+      "missing": [
+       {
+        "general_primitive": null,
+        "what": "an adapter for `TapasModel`",
+        "why": "no built-in adapter claims this architecture and it is not a `\u2026ForCausalLM` class"
+       }
+      ],
+      "unmapped_config_keys": []
+     },
+     "ok": false
+    },
+    "claimed_level": "C",
+    "none": {
+     "failure": {
+      "error": "NOT_LOWERABLE(TapasModel: config key(s) this lowerer does not model: aggregation_labels, aggregation_loss_weight, aggregation_temperature, allow_empty_column_selection, answer_loss_cutoff, answer_loss_importance, average_approximation_function, average_logits_per_cell, cell_selection_preference, disable_per_token_loss, huber_loss_delta, init_cell_selection_weights_to_zero, layer_norm_eps, max_num_columns, max_num_rows, no_aggregation_label_index, num_aggregation_labels, positive_label_weight, reset_position_index_per_cell, select_one_column, type_vocab_sizes, use_answer_as_supervision, use_gum\u2026",
+      "missing": [],
+      "unmapped_config_keys": [
+       "aggregation_labels",
+       "aggregation_loss_weight",
+       "aggregation_temperature",
+       "allow_empty_column_selection",
+       "answer_loss_cutoff",
+       "answer_loss_importance",
+       "average_approximation_function",
+       "average_logits_per_cell",
+       "cell_selection_preference",
+       "disable_per_token_loss",
+       "huber_loss_delta",
+       "init_cell_selection_weights_to_zero",
+       "layer_norm_eps",
+       "max_num_columns",
+       "max_num_rows",
+       "no_aggregation_label_index",
+       "num_aggregation_labels",
+       "positive_label_weight",
+       "reset_position_index_per_cell",
+       "select_one_column",
+       "type_vocab_sizes",
+       "use_answer_as_supervision",
+       "use_gumbel_for_aggregation",
+       "use_gumbel_for_cells",
+       "use_normalized_answer_loss"
+      ]
+     },
+     "ok": false
+    },
+    "refusal_bypassed_for_user_adapter": false,
+    "refusal_overridden": null,
+    "report": {
+     "adapter": {
+      "kind": "none"
+     },
+     "assumed_defaults": [],
+     "features": [],
+     "level": "C",
+     "missing": [
+      {
+       "general_primitive": null,
+       "what": "an adapter for `TapasModel`",
+       "why": "no built-in adapter claims this architecture and it is not a `\u2026ForCausalLM` class"
+      }
+     ],
+     "new_court_kernel_required": false,
+     "new_primitive_required": false,
+     "result": "NOT_LOWERABLE: NOT_LOWERABLE(`TapasModel` has no adapter and is not a causal language model class (`\u2026ForCausalLM`): the standard decoder template is not applied to it (encoder-only, encoder\u2013decoder, vision/audio, or a decoder not modelled yet))",
+     "unmapped_config_keys": []
+    }
+   },
+   "refuted_routes": [],
+   "route": "encoder-bidir",
+   "share": null,
+   "stages": {},
+   "synthesized": null,
+   "tensors": 45,
+   "usage": "l",
+   "via": "-"
+  },
+  {
+   "category": "census/encoder",
+   "claimed_level": "C",
+   "failed_stage": "read",
+   "heavy_fixture": true,
+   "hf_arch": "XLMRobertaXLModel",
+   "id": "xlm_roberta_xl_enc",
+   "level": "C",
+   "level_label": "C",
+   "model_type": "xlm-roberta-xl",
+   "ms": 3,
+   "read": {
+    "a_diff": null,
+    "a_same_as_adapter": null,
+    "auto": {
+     "failure": {
+      "error": "NOT_LOWERABLE(`XLMRobertaXLModel` has no adapter and is not a causal language model class (`\u2026ForCausalLM`): the standard decoder template is not applied to it (encoder-only, encoder\u2013decoder, vision/audio, or a decoder not modelled yet))",
+      "missing": [
+       {
+        "general_primitive": null,
+        "what": "an adapter for `XLMRobertaXLModel`",
+        "why": "no built-in adapter claims this architecture and it is not a `\u2026ForCausalLM` class"
+       }
+      ],
+      "unmapped_config_keys": []
+     },
+     "ok": false
+    },
+    "claimed_level": "C",
+    "none": {
+     "failure": {
+      "error": "NOT_LOWERABLE(XLMRobertaXLModel: config key(s) this lowerer does not model: layer_norm_eps, type_vocab_size \u2014 a key that might change the math is refused, not ignored)",
+      "missing": [],
+      "unmapped_config_keys": [
+       "layer_norm_eps",
+       "type_vocab_size"
+      ]
+     },
+     "ok": false
+    },
+    "refusal_bypassed_for_user_adapter": false,
+    "refusal_overridden": null,
+    "report": {
+     "adapter": {
+      "kind": "none"
+     },
+     "assumed_defaults": [],
+     "features": [],
+     "level": "C",
+     "missing": [
+      {
+       "general_primitive": null,
+       "what": "an adapter for `XLMRobertaXLModel`",
+       "why": "no built-in adapter claims this architecture and it is not a `\u2026ForCausalLM` class"
+      }
+     ],
+     "new_court_kernel_required": false,
+     "new_primitive_required": false,
+     "result": "NOT_LOWERABLE: NOT_LOWERABLE(`XLMRobertaXLModel` has no adapter and is not a causal language model class (`\u2026ForCausalLM`): the standard decoder template is not applied to it (encoder-only, encoder\u2013decoder, vision/audio, or a decoder not modelled yet))",
+     "unmapped_config_keys": []
+    }
+   },
+   "refuted_routes": [],
+   "route": "encoder-bidir",
+   "share": null,
+   "stages": {},
+   "synthesized": null,
+   "tensors": 39,
+   "usage": "l",
+   "via": "-"
+  },
+  {
+   "category": "census/encoder",
+   "claimed_level": "C",
+   "failed_stage": "read",
+   "heavy_fixture": true,
+   "hf_arch": "YosoModel",
+   "id": "yoso_enc",
+   "level": "C",
+   "level_label": "C",
+   "model_type": "yoso",
+   "ms": 2,
+   "read": {
+    "a_diff": null,
+    "a_same_as_adapter": null,
+    "auto": {
+     "failure": {
+      "error": "NOT_LOWERABLE(`YosoModel` has no adapter and is not a causal language model class (`\u2026ForCausalLM`): the standard decoder template is not applied to it (encoder-only, encoder\u2013decoder, vision/audio, or a decoder not modelled yet))",
+      "missing": [
+       {
+        "general_primitive": null,
+        "what": "an adapter for `YosoModel`",
+        "why": "no built-in adapter claims this architecture and it is not a `\u2026ForCausalLM` class"
+       }
+      ],
+      "unmapped_config_keys": []
+     },
+     "ok": false
+    },
+    "claimed_level": "C",
+    "none": {
+     "failure": {
+      "error": "NOT_LOWERABLE(YosoModel: config key(s) this lowerer does not model: conv_window, hash_code_len, layer_norm_eps, lsh_backward, num_hash, type_vocab_size, use_expectation, use_fast_hash \u2014 a key that might change the math is refused, not ignored)",
+      "missing": [],
+      "unmapped_config_keys": [
+       "conv_window",
+       "hash_code_len",
+       "layer_norm_eps",
+       "lsh_backward",
+       "num_hash",
+       "type_vocab_size",
+       "use_expectation",
+       "use_fast_hash"
+      ]
+     },
+     "ok": false
+    },
+    "refusal_bypassed_for_user_adapter": false,
+    "refusal_overridden": null,
+    "report": {
+     "adapter": {
+      "kind": "none"
+     },
+     "assumed_defaults": [],
+     "features": [],
+     "level": "C",
+     "missing": [
+      {
+       "general_primitive": null,
+       "what": "an adapter for `YosoModel`",
+       "why": "no built-in adapter claims this architecture and it is not a `\u2026ForCausalLM` class"
+      }
+     ],
+     "new_court_kernel_required": false,
+     "new_primitive_required": false,
+     "result": "NOT_LOWERABLE: NOT_LOWERABLE(`YosoModel` has no adapter and is not a causal language model class (`\u2026ForCausalLM`): the standard decoder template is not applied to it (encoder-only, encoder\u2013decoder, vision/audio, or a decoder not modelled yet))",
+     "unmapped_config_keys": []
+    }
+   },
+   "refuted_routes": [],
+   "route": "encoder-bidir",
+   "share": null,
+   "stages": {},
+   "synthesized": null,
+   "tensors": 37,
+   "usage": "l",
+   "via": "-"
+  }
+ ],
+ "full": true,
+ "pack_hash": "b779a4796e0de7105e803d35cf5adee1bffde05f73b3396ba3480daec5820f5a95b4b45636bd0b970cb88124010d56077456843ca4760fe325f5d30cd217e73a",
+ "schema": "misaka.palw.corpus-report.v2",
+ "transformers": "5.17.0",
+ "usage_weight": {
+  "h": 4.0,
+  "l": 1.0,
+  "m": 2.0,
+  "vh": 8.0
+ }
+}

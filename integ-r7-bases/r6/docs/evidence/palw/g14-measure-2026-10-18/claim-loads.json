@@ -1,0 +1,10 @@
+{
+  "record": "misaka-palw/g14-claim-loads/v1",
+  "status": "UNMEASURED. PALW_RFC0016_CLAIM_LOADS_V1 not filled.",
+  "da_bytes_per_claim": "UNMEASURED: the class's public frame does not complete, so no DA quote exists; the measured short-job capture is 35,810,835 B (prompt 4, decode 2) and is NOT a per-claim DA load",
+  "court_units_per_claim": "UNMEASURED: court-measurements.json is a fixture partial record and policy() refuses it",
+  "profile_mapping": "none",
+  "source_sha": "see git log of this directory (release/t12-16000, 2026-10-18)",
+  "hardware": "Apple M1 Max, 10 cores, 32 GiB",
+  "model": "Misakachain/Huihui-Qwen3.5-2B-abliterated-PALW 32K, class 672e93aa...ada63c (declare-layout on this source)"
+}

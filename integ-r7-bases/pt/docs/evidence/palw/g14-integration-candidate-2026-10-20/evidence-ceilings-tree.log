@@ -1,0 +1,7 @@
+
+running 2 tests
+test palw_tir_dissect_v1::tree_inventory_v1::tests::maximum_history_and_native_caps_without_enumerating_leaves ... ok
+test palw_tir_dissect_v1::tree_inventory_v1::tests::aggregated_inventory_matches_native_cuts_and_actual_borsh_bodies ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 4687 filtered out; finished in 0.03s
+

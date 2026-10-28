@@ -1,0 +1,11 @@
+
+running 5 tests
+test palw_prefix_public_source_v1::tests::flat_answer_packet_and_public_progress_are_atomic_and_bounded ... ok
+public-prefix complete source_bound=64 moves=5770 bytes=15946126992 rent=71575523777 deposit=5770 inclusionDAA=6780 RAM=48360624
+test palw_prefix_public_source_v1::tests::complete_acquisition_prices_all_slots_without_spending_honest_prefix_allowance ... ok
+test palw_prefix_public_source_v1::tests::literal_deadline_default_and_serialized_rollback_preserve_all_slots ... ok
+test palw_prefix_public_source_v1::tests::hostile_first_writer_does_not_poison_other_custodian_or_owner_slots ... ok
+test palw_prefix_public_source_v1::tests::maximum_active_prefix_positions_have_a_complete_checked_public_acquisition_quote ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 3928 filtered out; finished in 0.22s
+

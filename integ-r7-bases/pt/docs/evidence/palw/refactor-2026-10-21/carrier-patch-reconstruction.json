@@ -1,0 +1,6 @@
+{
+  "base": "ccb847770",
+  "patch": "carrier-ownership.patch",
+  "files": 5,
+  "reconstructed_sha256_match": true
+}

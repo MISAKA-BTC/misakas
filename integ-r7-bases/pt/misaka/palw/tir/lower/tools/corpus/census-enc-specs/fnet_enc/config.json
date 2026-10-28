@@ -1,0 +1,24 @@
+{
+  "architectures": [
+    "FNetModel"
+  ],
+  "bos_token_id": 1,
+  "dtype": "bfloat16",
+  "eos_token_id": 2,
+  "hidden_act": "gelu_new",
+  "hidden_dropout_prob": 0.1,
+  "hidden_size": 32,
+  "initializer_range": 0.02,
+  "intermediate_size": 64,
+  "layer_norm_eps": 1e-12,
+  "max_position_embeddings": 128,
+  "model_type": "fnet",
+  "num_hidden_layers": 2,
+  "pad_token_id": 3,
+  "tie_word_embeddings": true,
+  "tpu_short_seq_length": 512,
+  "transformers_version": "5.17.0",
+  "type_vocab_size": 4,
+  "use_tpu_fourier_optimizations": false,
+  "vocab_size": 64
+}

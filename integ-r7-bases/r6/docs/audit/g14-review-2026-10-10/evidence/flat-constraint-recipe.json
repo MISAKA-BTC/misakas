@@ -1,0 +1,34 @@
+{
+  "base_commit": "615c0038160676ccafb330f3c811d688e8bdb85b",
+  "source_sha256": {
+    "consensus/core/src/palw_offence_v1.rs": "3b7cd061c03913ee61f5baf942e5c5dd57e14d143bee3d80165df353cd640f1f",
+    "consensus/core/src/palw_offence_attribution_v1.rs": "bdd314c8d087880dc94a699d7507819ca9f38583b0c8166e4e2ec0b9d55d1b2e",
+    "consensus/core/src/palw_aggregate_liability_v1.rs": "4b185b8a8732b227b0e4fd7d60139e45636058e8d09f49740b31e7168e1d01b3",
+    "consensus/core/src/palw_state_v2.rs": "7736711c9df0f2b015fa116d8bd24beae61b5f7b0638956edc021255053d4e14",
+    "consensus/core/src/palw_decode_constraint_v1.rs": "45fa7d59d656b43bd3b52b060d586481d12f486571c8889520b7ba4f33d34229",
+    "consensus/core/src/palw_fp_constraint_job_v1.rs": "faf2e4c43b8d9a8761bd1871c3312c6c3ca7fc1de80b407b7858fb2d4e8eb2e7",
+    "consensus/core/src/palw_step_refute.rs": "70879b459f456cc64d6e9460b0018ac22cc9b704b5752b1627227d138281bf6f",
+    "kaspad/src/palw_fraud_filer.rs": "fbb1e47e9684c20939c581f7be9763e97f2da8c95b4e0cdc74daabb0856e139b",
+    "kaspad/src/palw_fraud_filer_constraint.rs": "fd5a37a2dde80978a971d49fe9281001f13845211ec017974fe472ef8272c936",
+    "kaspad/src/palw_legacy_held_e2e.rs": "546685130d55c99a368cdafc9cd636af1502c91cc50d936ce6d7210677d184b0"
+  },
+  "binary_sha256": {
+    "kaspa_consensus_core-f189e885ba5285ec": "43f19cd26c666ff96128edf95e231692c679d117d88e21a032c66db2c2f1e48a",
+    "kaspad_lib-a562e45711087c1e": "28e75ca2a443d46bd8fa544b48a395f65c279baea9de854a8122b2b25efa7d68"
+  },
+  "commands": [
+    "CARGO_TARGET_DIR=/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 cargo test -p kaspa-consensus-core --lib --locked --no-run",
+    "CARGO_TARGET_DIR=/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 cargo test -p kaspad --lib --locked --no-run",
+    "/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/kaspa_consensus_core-f189e885ba5285ec palw_offence_attribution_v1 --nocapture",
+    "/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/kaspa_consensus_core-f189e885ba5285ec palw_decode_constraint_v1 --nocapture",
+    "/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/kaspa_consensus_core-f189e885ba5285ec palw_aggregate_liability_v1 --nocapture",
+    "/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/kaspa_consensus_core-f189e885ba5285ec palw_offence_v1 --nocapture",
+    "/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/kaspa_consensus_core-f189e885ba5285ec palw_fp_constraint_job_v1 --nocapture",
+    "/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/kaspa_consensus_core-f189e885ba5285ec palw_state_v2::tests::the_version_22_state_root_golden_vectors --nocapture",
+    "/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/kaspad_lib-a562e45711087c1e palw_fraud_filer --nocapture",
+    "/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/kaspad_lib-a562e45711087c1e lg14b_public_fp_bootstrap_own_replay_localizes_and_convicts_after_colluding_valid --nocapture",
+    "CARGO_TARGET_DIR=/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 cargo check -p kaspad --lib --locked"
+  ],
+  "scope": "104 unique PASS: core 75, public-filer/input node 28, existing FP bootstrap/localization/conviction fold 1. New node test checks public constraint proof generation for 3 faults at position 2, not real constraint service/fold conviction. Core claim/receipt fixtures synthetic. Initial oversized 4-row/10000-lane flat proof correctly refused; repaired 2-row fixture tests direct decision only. No full shipping-pin or full G14 claim.",
+  "failures_preserved": "Initial type-inference, reservation error conversion, test import compile diagnostics and oversized direct proof failure. None counted as PASS."
+}

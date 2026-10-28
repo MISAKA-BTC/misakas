@@ -1,0 +1,42 @@
+{
+ "record": "misaka-palw/g14-tir-frame-alignment/v1",
+ "date": "2026-10-18",
+ "status": "Re-run with conditions aligned to declare-layout. Not a pinned record; nothing pinned, no refusal removed, no value adopted.",
+ "source": "branch release/t12-16000 with frame_measure.rs court aligned (t12_court())",
+ "build": "cargo test --release -j 6 -p misaka-palw-tir-exec --features node --test frame_measure (CARGO_INCREMENTAL=0)",
+ "hardware": "Apple M1 Max, 10 cores, 32 GiB",
+ "class": "Misakachain/Huihui-Qwen3.5-2B-abliterated-PALW, 32K, PALWTIR1 extract (sha256 bf52e8cc...)",
+ "class_id": "672e93aa71e08b457deb2f2c3d312ce62c87c232ca452494c12d8d1b2436904ec1523099c09dbca8bbda61b8edb1979eab60de2778f673fe7d23861659ada63c",
+ "geometry": {
+  "leaves": 114664,
+  "tiles": 61,
+  "prefill": 4,
+  "decode": 2,
+  "vocab": 248320
+ },
+ "before": {
+  "court": "PalwCourtParamsV2::new(1<<22,45,2) (default close 2,250,000 B)",
+  "frame_upper6": "Incomplete NativeWitnessCeiling required 2,382,851 native 2,250,000"
+ },
+ "after": {
+  "court": "t12 shipped bundle court (same as CLI court_params_v1 used by declare-layout)",
+  "declare_layout": "admission v10 at DAA 5585 admitted (see raw/huihui2b-declare-layout.log)",
+  "frame_upper6": "complete (witness ceiling no longer refuses)",
+  "frame_upper257": "complete",
+  "frame_bytes": {
+   "upper6": 84905,
+   "upper257": 2921707
+  },
+  "door_daa": 1062231,
+  "liability_horizon_daa": 3120,
+  "door_fits_horizon": false,
+  "consensus_effect": "derive_tir_public_allocation_v1 refuses door > maximum_door_daa (palw_tir_public_allocation_v1.rs:772); the harness runs with maximum_door_daa=u64::MAX to MEASURE the door, so this run does not itself refuse. Under the candidate cost (3,120) the real class is refused on the door, not on the witness."
+ },
+ "remaining_gap": "Admission (declare-layout) and the frame derive now agree on the witness; the door at the candidate cost is 340x the 3,120 horizon. Whether a registered class can still be accepted when maximum_door_daa is armed needs the armed-cost check (not run). Witness limit NOT changed.",
+ "unmeasured": [
+  "real-model court half (MapParams memory)",
+  "contended bytes_per_daa",
+  "acquisition on real model",
+  "isolated-calibration 29-chunk candidate (not run in this step)"
+ ]
+}

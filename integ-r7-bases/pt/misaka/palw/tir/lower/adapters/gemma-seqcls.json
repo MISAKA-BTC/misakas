@@ -1,0 +1,17 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "gemma-seqcls",
+  "doc": "GemmaForSequenceClassification: the `gemma` adapter's decoder with a sequence-classification head instead of the language-model head (mixin-seqcls): the last prompt token's final-norm row through `score` to `num_labels` logits.",
+  "extends": [
+    "gemma",
+    "mixin-seqcls"
+  ],
+  "match": {
+    "architectures": [
+      "GemmaForSequenceClassification"
+    ],
+    "model_types": [
+      "gemma"
+    ]
+  }
+}

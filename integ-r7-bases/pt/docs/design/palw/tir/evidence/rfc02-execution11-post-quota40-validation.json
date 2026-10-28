@@ -1,0 +1,47 @@
+{
+  "schema": "misaka.rfc02.execution11-post-quota40-validation.v1",
+  "recorded_utc": "2026-10-11T12:56:51.426403+00:00",
+  "selected_passed": 26,
+  "failed": 0,
+  "additional_distinct_pool_tests": 0,
+  "purpose": "Recheck existing 26 execution integration controls against final40 quota source, preserving initial component receipts. No native Fund/Final or cohort credit.",
+  "command": "CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target cargo test -p misaka-palw-kernel --locked --test flat_execution11 -- --test-threads=1",
+  "compile_seconds": 7.92,
+  "runtime_seconds": 0.04,
+  "test_log": "rfc02-execution11-post-quota40-tests.log",
+  "test_log_sha256": "cb5d263802cb7e42229125523c2e67ed42094feb0c2e38188dc561f5a817c4aa",
+  "immutable_binary": "/tmp/rfc02-execution11-post-quota40-immutable-28b2c65d3bea",
+  "immutable_binary_sha256": "28b2c65d3bea26b00b945cc5c7424eb38585db83b2daf437d2de7d01cc9e8b88",
+  "owned_source_matches_coordinated_prebuild": {
+    "misaka-palw-kernel/src/flat_execution11.rs": {
+      "coordinated_prebuild_sha256": "985aaa65bbc4a2720977b34e44fa5a16842f10c87de9b32ddd4a91d335d1d1e5",
+      "current_sha256": "985aaa65bbc4a2720977b34e44fa5a16842f10c87de9b32ddd4a91d335d1d1e5"
+    },
+    "misaka-palw-kernel/src/flat_resources10.rs": {
+      "coordinated_prebuild_sha256": "6293bb15b61db93d1cab36a4559c071741c465bf4efe720e6e7c672b964d2c87",
+      "current_sha256": "6293bb15b61db93d1cab36a4559c071741c465bf4efe720e6e7c672b964d2c87"
+    },
+    "misaka-palw-kernel/tests/flat_execution11.rs": {
+      "coordinated_prebuild_sha256": "c542907c83da338ffb5a9ec5b86b0440ac3b7c8fd746306a9231af3d8cd7ca12",
+      "current_sha256": "c542907c83da338ffb5a9ec5b86b0440ac3b7c8fd746306a9231af3d8cd7ca12"
+    },
+    "misaka-palw-kernel/src/flat_quota11.rs": {
+      "coordinated_prebuild_sha256": "540f6a339e66c3d4e6332377356ad8a4cd6b2cd33830a669f449861a5d8c3aa0",
+      "current_sha256": "540f6a339e66c3d4e6332377356ad8a4cd6b2cd33830a669f449861a5d8c3aa0"
+    },
+    "misaka-palw-kernel/src/flat_quota11/protected.rs": {
+      "coordinated_prebuild_sha256": "62465d2d62154d9d3dbafa1e4a2ec05ab9d66294ee7e5c83c71d0e1c59c0c88f",
+      "current_sha256": "62465d2d62154d9d3dbafa1e4a2ec05ab9d66294ee7e5c83c71d0e1c59c0c88f"
+    },
+    "misaka-palw-kernel/src/flat_quota11/protected_tests.rs": {
+      "coordinated_prebuild_sha256": "dd0dc0aef64cd7e08decbc4c899cb352ef34a8a92b60910d72c5779620a625c6",
+      "current_sha256": "dd0dc0aef64cd7e08decbc4c899cb352ef34a8a92b60910d72c5779620a625c6"
+    },
+    "misaka-palw-kernel/src/flat_quota11/sharded.rs": {
+      "coordinated_prebuild_sha256": "2c6a0a57ada574ff8b6ab8911c965c1a17a23cf1115f8b3a08038e54eef1160a",
+      "current_sha256": "2c6a0a57ada574ff8b6ab8911c965c1a17a23cf1115f8b3a08038e54eef1160a"
+    }
+  },
+  "source_archive": "rfc02-actual-outsider9-final-workspace-source-preimages.tar.gz",
+  "scope_limit": "Owned source stable from coordinated prebuild; this command did not independently record Cargo JSON/.d full integration-test dependency closure. Final node+SDK closure is recorded separately."
+}

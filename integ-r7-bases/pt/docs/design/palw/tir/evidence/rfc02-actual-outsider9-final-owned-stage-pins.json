@@ -1,0 +1,44 @@
+{
+  "recorded_utc": "2026-10-11T12:53:21.502913+00:00",
+  "scope": "Owned production changes and narrow shared exports/manifests read in final compiled closure. Root alone stages/commits/pushes; descendant shared changes must be distinguished from these exact compiled preimages. Evidence final run verdict is prepared after runtime.",
+  "compiled_source_manifest": "docs/design/palw/tir/evidence/rfc02-actual-outsider9-final-compiled-source-manifest.json",
+  "source_paths": {
+    "Cargo.lock": "f4e68f82aba40d73b8aaa1a5b17d83c4580bf5f11c99199b750498cef9aefc95",
+    "consensus/Cargo.toml": "74623a5e22255fc96fd3c5d5602e81f47c0561889a1b7f0717867bff79b0dc8a",
+    "consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/model_conformance/flat_native_v9.rs": "67ccfb982ac1fc638c611f9feece6b68f28f379580bce4c12e93070ff78004d8",
+    "consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/model_conformance/flat_native_v9/actual_outsider.rs": "4a0d6bf137ffc804368c5a19caae4b3751702444fed0b62c16ec0a482f1fdab8",
+    "misaka-palw-sdk/src/lib.rs": "e1f858fc092343d084f3a006f9c8b1fcdde8325e299c8181267188a6545de645",
+    "misaka-palw-sdk/src/flat_snapshot_v9.rs": "0acb109048acda9edbfbc8ef0bd79e8198b5734727c24ab1061777aad47677a9",
+    "misaka-palw-sdk/src/flat_streamed_locator_v9.rs": "c1de63f5778384cb28ba8b75cb605871cb51343b9192d920eda4e9b2cfabeafd",
+    "misaka-palw-sdk/tests/flat_streamed_locator_v9.rs": "69d21d24e50ef0546b1155bb731f733c178225bbad2ae943cc2777ce98546691"
+  },
+  "narrow_shared_edits": {
+    "Cargo.lock": "Existing kaspa-consensus dependency list adds existing misaka-palw-tir-exec entry only.",
+    "consensus/Cargo.toml": "Dev-only mapped executor dependency node feature.",
+    "consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/model_conformance/flat_native_v9.rs": "Only mod actual_outsider; export line.",
+    "misaka-palw-sdk/src/lib.rs": "Only pub mod flat_streamed_locator_v9; export line."
+  },
+  "evidence_patterns": [
+    "docs/design/palw/tir/evidence/rfc02-mapped-ordinary9-*",
+    "docs/design/palw/tir/evidence/rfc02-mapped-R-ordinary9-*",
+    "docs/design/palw/tir/evidence/rfc02-actual-outsider9-*"
+  ],
+  "excluded_other_agent_sources": [
+    "consensus/core/src/palw_flat_execution_v11.rs",
+    "consensus/core/src/palw_flat_execution_fold_v11.rs",
+    "consensus/core/src/lib.rs",
+    "misaka-palw-kernel/src/flat_resources10.rs",
+    "misaka-palw-kernel/src/flat_execution11.rs",
+    "misaka-palw-kernel/src/flat_quota11.rs",
+    "misaka-palw-kernel/src/flat_quota11/"
+  ],
+  "new_distinct_acceptance_pending_final_actual": {
+    "sdk_distinct_relative_pushed361": 12,
+    "sdk_inventory_controls_added_relative_unpushed_local8": 4,
+    "prior_unpushed_local_sdk_controls": 8,
+    "actual_fresh_node_case": 1,
+    "prior_native_regressions_repeated_not_added": 35,
+    "cohort_A6_A8_or_honest_Final_credit": 0
+  },
+  "evidence_final_verdict": "docs/design/palw/tir/evidence/rfc02-actual-outsider9-final-verdict.json"
+}

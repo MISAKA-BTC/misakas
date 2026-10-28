@@ -1,0 +1,1144 @@
+diff --git a/consensus/core/src/palw_backend.rs b/consensus/core/src/palw_backend.rs
+index ce75d5622..1142c2a96 100644
+--- a/consensus/core/src/palw_backend.rs
++++ b/consensus/core/src/palw_backend.rs
+@@ -2241,3 +2241,71 @@ mod output_root_tests {
+         assert_eq!(moved.execution_root, honest.execution_root, "the roots alone cannot tell the two apart");
+     }
+ }
++
++mod operations;
++pub use operations::{PalwExecutionOpsV1, PalwReplayOpsV1, PalwMaterialOpsV1, PalwCourtEvidenceOpsV1, PalwResourceOpsV1};
++
++#[cfg(test)]
++mod operation_view_tests {
++    use super::*;
++    use std::sync::atomic::{AtomicUsize, Ordering};
++
++    struct Configured {
++        rules: crate::palw_attempt_rules_v1::PalwAttemptRulesV1,
++        calls: AtomicUsize,
++    }
++    impl PalwExecutionBackendV1 for Configured {
++        fn model_id(&self) -> &str { "configured-operation-view" }
++        fn job_for_anchor(&self, _anchor: Hash64) -> Result<(PalwJobContextV2, Vec<usize>), String> {
++            Err("no anchor fixture".into())
++        }
++        fn set_attempt_rules_v1(&mut self, rules: crate::palw_attempt_rules_v1::PalwAttemptRulesV1) {
++            self.rules = rules;
++        }
++        fn attempt_rules_v1(&self) -> crate::palw_attempt_rules_v1::PalwAttemptRulesV1 { self.rules }
++        fn execute(&self, _job: &PalwJobContextV2, prompt: &[usize]) -> Result<PalwExecutionOutcomeV1, String> {
++            assert_eq!(prompt, &[3, 5]);
++            self.calls.fetch_add(1, Ordering::SeqCst);
++            let answer = if self.rules == crate::palw_attempt_rules_v1::PalwAttemptRulesV1::CoreV1 { 11 } else { 12 };
++            Ok(PalwExecutionOutcomeV1 {
++                trace_root: Hash64::from_u64_word(1), output_root: Hash64::from_u64_word(answer),
++                execution_root: Hash64::from_u64_word(3), trace_manifest_root: Hash64::from_u64_word(4),
++                trace_chunk_count: 1, material: Vec::new(),
++            })
++        }
++        fn verify_material(&self, _material: &[u8], _claim: PalwClaimRootsV1) -> PalwMaterialVerdictV1 {
++            PalwMaterialVerdictV1::Unverifiable
++        }
++    }
++    fn configured() -> Configured {
++        let mut backend = Configured { rules: Default::default(), calls: AtomicUsize::new(0) };
++        backend.set_attempt_rules_v1(crate::palw_attempt_rules_v1::PalwAttemptRulesV1::CoreV1);
++        backend
++    }
++
++    #[test]
++    fn operation_views_keep_the_configured_instance_and_its_inherited_replay() {
++        let backend = configured();
++        let job = crate::palw_base0_profile::rc_job_context(
++            &crate::palw_base0_profile::base0_profile_v1(crate::palw_base0_profile::PALW_RC_BASE0_GEOMETRY).unwrap(), 8, 4,
++        );
++        let execution = PalwExecutionOpsV1::new(&backend);
++        assert_eq!(execution.attempt_rules_v1(), crate::palw_attempt_rules_v1::PalwAttemptRulesV1::CoreV1);
++        let direct = execution.execute(&job, &[3, 5]).unwrap();
++        // The compatibility trait's default replay calls THIS instance's overridden execution.
++        let replay = PalwReplayOpsV1::new(&backend).execute_for_verdict(&job, &[3, 5]).unwrap();
++        assert_eq!(direct.output_root, Hash64::from_u64_word(11));
++        assert_eq!(replay.output_root, Some(direct.output_root));
++        assert_eq!(backend.calls.load(Ordering::SeqCst), 2);
++    }
++
++    #[test]
++    fn unsupported_operations_stay_refusals_or_absent_in_every_view() {
++        let backend = configured();
++        assert!(PalwMaterialOpsV1::new(&backend).open_fp_interval(&[], 0, &[]).is_err());
++        assert!(PalwCourtEvidenceOpsV1::new(&backend).attn_site_evidence_held_v1(&[], 0, None, None).is_err());
++        assert!(PalwResourceOpsV1::new(&backend).runtime_profile_v1().is_none());
++        assert!(PalwResourceOpsV1::new(&backend).capture_shape(&[]).is_none());
++        assert_eq!(backend.calls.load(Ordering::SeqCst), 0, "an absent capability does not start a substitute execution");
++    }
++}
+diff --git a/consensus/core/src/palw_backend/operations.rs b/consensus/core/src/palw_backend/operations.rs
+new file mode 100644
+index 000000000..e0f2f4424
+--- /dev/null
++++ b/consensus/core/src/palw_backend/operations.rs
+@@ -0,0 +1,672 @@
++//! Borrowed operation views over the existing backend registry seam.
++//! Construction does not assert support, certify a model, resolve rules, or change
++//! a default refusal: every operation delegates to the original backend method.
++//! Backend effects remain its own; these views add no scheduling.
++//! Configuration and drill hooks remain on the compatibility trait.
++use super::*;
++
++#[derive(Clone, Copy)]
++pub struct PalwExecutionOpsV1<'a> {
++    backend: &'a dyn PalwExecutionBackendV1,
++}
++impl<'a> PalwExecutionOpsV1<'a> {
++    pub fn new(backend: &'a dyn PalwExecutionBackendV1) -> Self {
++        Self { backend }
++    }
++    pub fn model_id(&self) -> &str {
++        self.backend.model_id()
++    }
++    pub fn job_for_anchor(&self, anchor: Hash64) -> Result<(PalwJobContextV2, Vec<usize>), String> {
++        self.backend.job_for_anchor(anchor)
++    }
++    pub fn attempt_rules_v1(&self) -> crate::palw_attempt_rules_v1::PalwAttemptRulesV1 {
++        self.backend.attempt_rules_v1()
++    }
++    pub fn execute(&self, job: &PalwJobContextV2, prompt: &[usize]) -> Result<PalwExecutionOutcomeV1, String> {
++        self.backend.execute(job, prompt)
++    }
++    pub fn execute_free_prompt(
++        &self,
++        _job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
++        _prompt_tokens: &[usize],
++    ) -> Result<PalwFpRunV1, String> {
++        self.backend.execute_free_prompt(_job, _prompt_tokens)
++    }
++    pub fn answer_free_prompt_v1(
++        &self,
++        _job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
++        _prompt_tokens: &[usize],
++        _stop_ids: &[u32],
++        _on_token: &mut dyn FnMut(u32),
++    ) -> Result<PalwFpAnswerV1, String> {
++        self.backend.answer_free_prompt_v1(_job, _prompt_tokens, _stop_ids, _on_token)
++    }
++    pub fn token_table_for_job_v1(
++        &self,
++        job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
++    ) -> Option<std::sync::Arc<crate::palw_fp_constraint_job_v1::PalwTokenTableV1>> {
++        self.backend.token_table_for_job_v1(job)
++    }
++    pub fn prefix_state_v1(
++        &self,
++        _class_id: crate::Hash64,
++        _tokenizer_id: crate::Hash64,
++        _prefix_ids: &[u32],
++    ) -> Result<crate::palw_freeprompt_v3::PalwFpPrefixStateV1, String> {
++        self.backend.prefix_state_v1(_class_id, _tokenizer_id, _prefix_ids)
++    }
++    pub fn embed_prompt_v1(
++        &self,
++        _prompt_tokens: &[usize],
++        _class_id: crate::Hash64,
++        _tokenizer_id: crate::Hash64,
++        _pool: crate::palw_embedding_pool_v1::PalwEmbeddingPoolV1,
++    ) -> Result<PalwFpEmbeddingV1, String> {
++        self.backend.embed_prompt_v1(_prompt_tokens, _class_id, _tokenizer_id, _pool)
++    }
++    pub fn answer_batch_free_prompt_v1(
++        &self,
++        jobs: &[PalwFpAnswerJobV1<'_>],
++        stop_ids: &[u32],
++        on_token: &mut dyn FnMut(usize, u32),
++    ) -> Result<Vec<PalwFpAnswerV1>, String> {
++        self.backend.answer_batch_free_prompt_v1(jobs, stop_ids, on_token)
++    }
++    pub fn execute_free_prompt_streaming(
++        &self,
++        job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
++        prompt_tokens: &[usize],
++        on_token: &mut dyn FnMut(u32),
++    ) -> Result<PalwFpRunV1, String> {
++        self.backend.execute_free_prompt_streaming(job, prompt_tokens, on_token)
++    }
++    pub fn fp_job_context_for_executed_v1(
++        &self,
++        _job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
++        _decode_tokens_executed: u32,
++    ) -> Option<PalwJobContextV2> {
++        self.backend.fp_job_context_for_executed_v1(_job, _decode_tokens_executed)
++    }
++    pub fn fp_job_context_v1(&self, job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3) -> Option<PalwJobContextV2> {
++        self.backend.fp_job_context_v1(job)
++    }
++    pub fn fp_context_work_leaves_v1(&self, _context: &PalwJobContextV2) -> Option<u64> {
++        self.backend.fp_context_work_leaves_v1(_context)
++    }
++}
++
++#[derive(Clone, Copy)]
++pub struct PalwReplayOpsV1<'a> {
++    backend: &'a dyn PalwExecutionBackendV1,
++}
++impl<'a> PalwReplayOpsV1<'a> {
++    pub fn new(backend: &'a dyn PalwExecutionBackendV1) -> Self {
++        Self { backend }
++    }
++    pub fn execute_for_verdict(&self, job: &PalwJobContextV2, prompt: &[usize]) -> Result<PalwReplayRootsV1, String> {
++        self.backend.execute_for_verdict(job, prompt)
++    }
++    pub fn replay_segment_from_checkpoint_v1(
++        &self,
++        _job: &PalwJobContextV2,
++        _prompt: &[usize],
++        _opening: &[u8],
++        _claim: crate::palw_segment_resume_v1::PalwSegmentClaimV1,
++    ) -> Result<crate::palw_segment_resume_v1::PalwSegmentReplayV1, String> {
++        self.backend.replay_segment_from_checkpoint_v1(_job, _prompt, _opening, _claim)
++    }
++    pub fn replay_layer_site_v3(
++        &self,
++        _capture: &[u8],
++        _site: crate::palw_layer_sample_v3::PalwLayerSiteV3,
++        _seat_count: u16,
++    ) -> Result<bool, String> {
++        self.backend.replay_layer_site_v3(_capture, _site, _seat_count)
++    }
++    pub fn replay_accused_segment_v1(
++        &self,
++        _capture: &[u8],
++        _seat_count: u16,
++        _segment_index: u16,
++        _job: &PalwJobContextV2,
++        _prompt: &[usize],
++    ) -> Result<crate::palw_segment_resume_v1::PalwSegmentReplayV1, String> {
++        self.backend.replay_accused_segment_v1(_capture, _seat_count, _segment_index, _job, _prompt)
++    }
++    pub fn verify_material(&self, material: &[u8], claim: PalwClaimRootsV1) -> PalwMaterialVerdictV1 {
++        self.backend.verify_material(material, claim)
++    }
++    pub fn replay_tir_generated_ids_v1(
++        &self,
++        _header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
++        _job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
++        _prompt_token_ids: &[u32],
++    ) -> Result<PalwTirReplayV1, String> {
++        self.backend.replay_tir_generated_ids_v1(_header, _job, _prompt_token_ids)
++    }
++    pub fn verify_prefix_state_v1(&self, job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3, prompt_ids: &[u32]) -> Result<(), String> {
++        self.backend.verify_prefix_state_v1(job, prompt_ids)
++    }
++    pub fn verify_fp_interval_opening(
++        &self,
++        _opening: &[u8],
++        _claim: PalwClaimRootsV1,
++        _index: u32,
++        _prompt_token_ids: &[u32],
++        _work_leaves: u64,
++    ) -> PalwFpIntervalVerdictV1 {
++        self.backend.verify_fp_interval_opening(_opening, _claim, _index, _prompt_token_ids, _work_leaves)
++    }
++    pub fn verify_fp_interval_opening_under_job_v1(
++        &self,
++        opening: &[u8],
++        claim: PalwClaimRootsV1,
++        index: u32,
++        prompt_token_ids: &[u32],
++        work_leaves: u64,
++        job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
++        committed_output_ids: &[u32],
++    ) -> PalwFpIntervalVerdictV1 {
++        self.backend.verify_fp_interval_opening_under_job_v1(opening, claim, index, prompt_token_ids, work_leaves, job, committed_output_ids)
++    }
++    pub fn fp_accept_resume_v1(
++        &self,
++        _resume: &[u8],
++        _context: &crate::palw_v2::PalwJobContextV2,
++        _prompt_token_ids: &[u32],
++        _covered: u32,
++    ) -> Result<crate::Hash64, String> {
++        self.backend.fp_accept_resume_v1(_resume, _context, _prompt_token_ids, _covered)
++    }
++    pub fn fp_opening_job_context_v1(&self, _opening: &[u8]) -> Option<PalwJobContextV2> {
++        self.backend.fp_opening_job_context_v1(_opening)
++    }
++    pub fn token_table_for_job_v1(
++        &self,
++        job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
++    ) -> Option<std::sync::Arc<crate::palw_fp_constraint_job_v1::PalwTokenTableV1>> {
++        self.backend.token_table_for_job_v1(job)
++    }
++}
++
++#[derive(Clone, Copy)]
++pub struct PalwMaterialOpsV1<'a> {
++    backend: &'a dyn PalwExecutionBackendV1,
++}
++impl<'a> PalwMaterialOpsV1<'a> {
++    pub fn new(backend: &'a dyn PalwExecutionBackendV1) -> Self {
++        Self { backend }
++    }
++    pub fn open_segment_checkpoint_v1(&self, _capture: &[u8], _seat_count: u16, _segment_index: u16) -> Result<Vec<u8>, String> {
++        self.backend.open_segment_checkpoint_v1(_capture, _seat_count, _segment_index)
++    }
++    pub fn disclose_trace_event(
++        &self,
++        _material: &[u8],
++        _row: u32,
++        _tile: u8,
++    ) -> Result<crate::palw_step_refute::PalwTraceEventDisclosureV1, String> {
++        self.backend.disclose_trace_event(_material, _row, _tile)
++    }
++    pub fn open_flat_public_source_v1(
++        &self,
++        _source: std::sync::Arc<dyn PalwOriginalCaptureReaderV1>,
++        _binding: &crate::palw_step_leg::PalwStepBindingV2,
++    ) -> Result<Box<dyn PalwFlatPublicSourceReaderV1>, String> {
++        self.backend.open_flat_public_source_v1(_source, _binding)
++    }
++    pub fn tir_public_capture_need_v1(
++        &self,
++        _header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
++        _source_length: u64,
++    ) -> Result<PalwTirPublicCaptureNeedV1, String> {
++        self.backend.tir_public_capture_need_v1(_header, _source_length)
++    }
++    pub fn open_tir_public_capture_v1(
++        &self,
++        _header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
++        _source: std::sync::Arc<dyn PalwOriginalCaptureReaderV1>,
++        _cache_directory: &std::path::Path,
++    ) -> Result<Box<dyn PalwTirPublicCaptureReaderV1>, String> {
++        self.backend.open_tir_public_capture_v1(_header, _source, _cache_directory)
++    }
++    pub fn tir_prepared_capture_need_v1(
++        &self,
++        _header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
++        _source_length: u64,
++    ) -> Result<PalwTirPublicPreparedNeedV1, String> {
++        self.backend.tir_prepared_capture_need_v1(_header, _source_length)
++    }
++    pub fn reopen_tir_prepared_capture_v1(
++        &self,
++        _header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
++        _descriptor: &PalwTirPublicPreparedDescriptorV1,
++        _cache_directory: &std::path::Path,
++        _native_material_until_daa: u64,
++        _native_now_daa: u64,
++    ) -> Result<Box<dyn PalwTirPublicCaptureReaderV1>, String> {
++        self.backend.reopen_tir_prepared_capture_v1(_header, _descriptor, _cache_directory, _native_material_until_daa, _native_now_daa)
++    }
++    pub fn retire_tir_prepared_capture_v1(
++        &self,
++        _descriptor: &PalwTirPublicPreparedDescriptorV1,
++        _cache_directory: &std::path::Path,
++        _native_material_until_daa: u64,
++        _native_irreversible_daa: u64,
++    ) -> Result<(), String> {
++        self.backend.retire_tir_prepared_capture_v1(_descriptor, _cache_directory, _native_material_until_daa, _native_irreversible_daa)
++    }
++    pub fn open_float_public_source_v1(
++        &self,
++        _source: std::sync::Arc<dyn PalwOriginalCaptureReaderV1>,
++        _binding: &crate::palw_step_leg::PalwStepBindingV2,
++    ) -> Result<Box<dyn PalwFloatPublicSourceReaderV1>, String> {
++        self.backend.open_float_public_source_v1(_source, _binding)
++    }
++    pub fn write_float_public_source_v1(&self, _material: &[u8], _out: &mut dyn std::io::Write) -> Result<bool, String> {
++        self.backend.write_float_public_source_v1(_material, _out)
++    }
++    pub fn write_flat_public_source_v1(&self, _material: &[u8], _out: &mut dyn std::io::Write) -> Result<bool, String> {
++        self.backend.write_flat_public_source_v1(_material, _out)
++    }
++    pub fn public_execution_binding_header_v1(
++        &self,
++        _material: &[u8],
++    ) -> Result<crate::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1, String> {
++        self.backend.public_execution_binding_header_v1(_material)
++    }
++    pub fn disclose_selected_event_v1(
++        &self,
++        _material: &[u8],
++        _row: u32,
++        _tile: u32,
++        _maximum_leaves: u64,
++    ) -> Result<(crate::palw_step_leg::PalwStepBindingV2, crate::palw_selected_event_source_v1::PalwSelectedTiledEventV1), String> {
++        self.backend.disclose_selected_event_v1(_material, _row, _tile, _maximum_leaves)
++    }
++    pub fn disclose_tir_selected_event_v1(
++        &self,
++        _material: &[u8],
++        _header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
++        _row: u32,
++        _tile: u32,
++        _maximum_leaves: u64,
++    ) -> Result<crate::palw_selected_event_source_v1::PalwSelectedTiledEventV1, String> {
++        self.backend.disclose_tir_selected_event_v1(_material, _header, _row, _tile, _maximum_leaves)
++    }
++    pub fn tir_own_step_source_need_v1(
++        &self,
++        _header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
++        _job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
++        _prompt_token_ids: &[u32],
++    ) -> Result<PalwTirOwnStepSourceNeedV1, String> {
++        self.backend.tir_own_step_source_need_v1(_header, _job, _prompt_token_ids)
++    }
++    pub fn open_tir_own_step_source_v1(
++        &self,
++        _header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
++        _job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
++        _prompt_token_ids: &[u32],
++        _cache_directory: &std::path::Path,
++    ) -> Result<std::sync::Arc<dyn PalwTirOwnStepSourceV1>, String> {
++        self.backend.open_tir_own_step_source_v1(_header, _job, _prompt_token_ids, _cache_directory)
++    }
++    pub fn disclose_tir_step_leaf_v1(
++        &self,
++        _material: &[u8],
++        _header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
++        _leaf_index: u64,
++        _maximum_leaves: u64,
++    ) -> Result<(Vec<u8>, crate::palw_step_leg::PalwStepOpeningV1), String> {
++        self.backend.disclose_tir_step_leaf_v1(_material, _header, _leaf_index, _maximum_leaves)
++    }
++    pub fn artifact_inventory_digest(&self) -> Result<crate::palw_artifact::PalwArtifactInventoryDigestV1, String> {
++        self.backend.artifact_inventory_digest()
++    }
++    pub fn artifact_row_opening(&self, _index: u32) -> Result<crate::palw_artifact::PalwArtifactOpeningV1, String> {
++        self.backend.artifact_row_opening(_index)
++    }
++    pub fn artifact_possession_tree_v1(&self) -> Option<Result<(crate::Hash64, u32), String>> {
++        self.backend.artifact_possession_tree_v1()
++    }
++    pub fn artifact_readiness_material(
++        &self,
++        draw: &[u32],
++    ) -> Result<(crate::Hash64, Vec<crate::Hash64>, Vec<(u32, crate::palw_artifact::PalwArtifactOperandV1)>), String> {
++        self.backend.artifact_readiness_material(draw)
++    }
++    pub fn artifact_readiness_material_streamed_v1(
++        &self,
++        _draw: &[u32],
++        _on_leaf: &mut dyn FnMut(crate::Hash64),
++    ) -> Option<Result<(crate::Hash64, u32, Vec<(u32, crate::palw_artifact::PalwArtifactOperandV1)>), String>> {
++        self.backend.artifact_readiness_material_streamed_v1(_draw, _on_leaf)
++    }
++    pub fn fp_interval_count(&self, _capture: &[u8]) -> Option<u32> {
++        self.backend.fp_interval_count(_capture)
++    }
++    pub fn fp_interval_count_for(&self, _prompt_tokens: u32, _decode_tokens_executed: u32) -> Option<u32> {
++        self.backend.fp_interval_count_for(_prompt_tokens, _decode_tokens_executed)
++    }
++    pub fn open_fp_interval(&self, _capture: &[u8], _index: u32, _prompt_token_ids: &[u32]) -> Result<Vec<u8>, String> {
++        self.backend.open_fp_interval(_capture, _index, _prompt_token_ids)
++    }
++    pub fn fp_checkpoint_covered_bound_v1(&self, job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3) -> u32 {
++        self.backend.fp_checkpoint_covered_bound_v1(job)
++    }
++    pub fn open_fp_resume_v1(&self, _capture: &[u8], _index: u32, _prompt_token_ids: &[u32]) -> Result<Vec<u8>, String> {
++        self.backend.open_fp_resume_v1(_capture, _index, _prompt_token_ids)
++    }
++    pub fn fp_committed_output_ids(&self, _capture: &[u8]) -> Option<Vec<u32>> {
++        self.backend.fp_committed_output_ids(_capture)
++    }
++    pub fn open_fp_interval_with_close(
++        &self,
++        capture: &[u8],
++        index: u32,
++        prompt_token_ids: &[u32],
++        disputed: &[u64],
++    ) -> Result<Vec<u8>, String> {
++        self.backend.open_fp_interval_with_close(capture, index, prompt_token_ids, disputed)
++    }
++    pub fn open_fp_block_leaves(
++        &self,
++        _capture: &[u8],
++        _interval_index: u32,
++        _block_index: u64,
++        _prompt_token_ids: &[u32],
++    ) -> Result<Vec<u8>, String> {
++        self.backend.open_fp_block_leaves(_capture, _interval_index, _block_index, _prompt_token_ids)
++    }
++    pub fn held_state_chunk_answer_v1(
++        &self,
++        _capture: &[u8],
++        _prompt_token_ids: &[u32],
++        _checkpoint: u32,
++        _chunk: u32,
++    ) -> Result<(crate::palw_attn_court_v1::PalwAttnCheckpointAnchorV1, crate::palw_attn_court_v1::PalwAttnChunkOpeningV1), String> {
++        self.backend.held_state_chunk_answer_v1(_capture, _prompt_token_ids, _checkpoint, _chunk)
++    }
++    pub fn held_step_range_answer_v1(
++        &self,
++        _capture: &[u8],
++        _prompt_token_ids: &[u32],
++        _first: u64,
++        _count: u32,
++    ) -> Result<crate::palw_step_leg::PalwStepRangeOpeningV1, String> {
++        self.backend.held_step_range_answer_v1(_capture, _prompt_token_ids, _first, _count)
++    }
++    pub fn fp_interval_of_leaf_v1(&self, _context: &PalwJobContextV2, _leaf: u64) -> Option<u32> {
++        self.backend.fp_interval_of_leaf_v1(_context, _leaf)
++    }
++    pub fn fp_output_root_v1(
++        &self,
++        _job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
++        _output_token_ids: &[u32],
++    ) -> Option<crate::Hash64> {
++        self.backend.fp_output_root_v1(_job, _output_token_ids)
++    }
++    pub fn checkpoint_root_for_context_v1(
++        &self,
++        _context: &PalwJobContextV2,
++        _prompt_token_ids: &[u32],
++        _output_token_ids: &[u32],
++        _covered: u32,
++    ) -> Result<crate::Hash64, String> {
++        self.backend.checkpoint_root_for_context_v1(_context, _prompt_token_ids, _output_token_ids, _covered)
++    }
++    pub fn checkpoint_covered_bound_for_context_v1(&self, context: &PalwJobContextV2) -> u32 {
++        self.backend.checkpoint_covered_bound_for_context_v1(context)
++    }
++    pub fn output_root_for_context_v1(&self, _context: &PalwJobContextV2, _output_token_ids: &[u32]) -> Option<crate::Hash64> {
++        self.backend.output_root_for_context_v1(_context, _output_token_ids)
++    }
++}
++
++#[derive(Clone, Copy)]
++pub struct PalwCourtEvidenceOpsV1<'a> {
++    backend: &'a dyn PalwExecutionBackendV1,
++}
++impl<'a> PalwCourtEvidenceOpsV1<'a> {
++    pub fn new(backend: &'a dyn PalwExecutionBackendV1) -> Self {
++        Self { backend }
++    }
++    pub fn tir_logits_step_leaf_index_v1(
++        &self,
++        _header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
++        _row: u32,
++        _lane: u64,
++    ) -> Result<u64, String> {
++        self.backend.tir_logits_step_leaf_index_v1(_header, _row, _lane)
++    }
++    pub fn build_tir_public_cone_v1(
++        &self,
++        _header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
++        _prompt_token_ids: &[u32],
++        _trace: Option<&crate::palw_step_refute::PalwTiledDecodeTokensV1>,
++        _runs: &[crate::palw_tir_court_v1::PalwTirStepRunDisclosureV1],
++        _leaf_index: u64,
++        _rules: &crate::palw_tir_court_v1::PalwTirCourtRulesV1,
++    ) -> Result<crate::palw_court_v2::PalwCourtVerdictProofV2, String> {
++        self.backend.build_tir_public_cone_v1(_header, _prompt_token_ids, _trace, _runs, _leaf_index, _rules)
++    }
++    pub fn probe_tir_public_cone_v1(
++        &self,
++        _header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
++        _prompt_token_ids: &[u32],
++        _trace: Option<&crate::palw_step_refute::PalwTiledDecodeTokensV1>,
++        _runs: &[crate::palw_tir_court_v1::PalwTirStepRunDisclosureV1],
++        _leaf_index: u64,
++        _rules: &crate::palw_tir_court_v1::PalwTirCourtRulesV1,
++        _limits: crate::palw_tir_court_v1::PalwTirBuilderWorkLimitsV1,
++        _copy_budget_bytes: u64,
++    ) -> Result<PalwTirPublicConeProbeV1, String> {
++        self.backend.probe_tir_public_cone_v1(_header, _prompt_token_ids, _trace, _runs, _leaf_index, _rules, _limits, _copy_budget_bytes)
++    }
++    pub fn build_tir_public_cone_bounded_v1(
++        &self,
++        header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
++        prompt_token_ids: &[u32],
++        trace: Option<&crate::palw_step_refute::PalwTiledDecodeTokensV1>,
++        runs: &[crate::palw_tir_court_v1::PalwTirStepRunDisclosureV1],
++        leaf_index: u64,
++        rules: &crate::palw_tir_court_v1::PalwTirCourtRulesV1,
++        limits: crate::palw_tir_court_v1::PalwTirBuilderWorkLimitsV1,
++        copy_budget_bytes: u64,
++    ) -> Result<(crate::palw_court_v2::PalwCourtVerdictProofV2, crate::palw_tir_court_v1::PalwTirBuilderMeterV1), String> {
++        self.backend.build_tir_public_cone_bounded_v1(header, prompt_token_ids, trace, runs, leaf_index, rules, limits, copy_budget_bytes)
++    }
++    pub fn declare_tir_prefix_state_v1(
++        &self,
++        _material: &[u8],
++        _header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
++        _prefix_tokens: u32,
++    ) -> Result<Hash64, String> {
++        self.backend.declare_tir_prefix_state_v1(_material, _header, _prefix_tokens)
++    }
++    pub fn bisect_prefix_state(&self, _material: &[u8], _index: u64) -> Option<Hash64> {
++        self.backend.bisect_prefix_state(_material, _index)
++    }
++    pub fn supports_court(&self) -> bool {
++        self.backend.supports_court()
++    }
++    pub fn executor_conformance_job_v1(&self) -> Option<Box<dyn FnOnce() -> Result<String, String> + Send + 'static>> {
++        self.backend.executor_conformance_job_v1()
++    }
++    pub fn attn_site_evidence(
++        &self,
++        _material: &[u8],
++        _narrowed: u64,
++        _carried_prompt: Option<&[u32]>,
++        _accused_out_tile: Option<&crate::palw_attn_court_v1::PalwAttnRowOpeningV1>,
++    ) -> Result<crate::palw_attn_responder_v1::PalwAttnSiteEvidenceV1, String> {
++        self.backend.attn_site_evidence(_material, _narrowed, _carried_prompt, _accused_out_tile)
++    }
++    pub fn attn_site_evidence_from_filing(
++        &self,
++        _filing: &crate::palw_attn_responder_v1::PalwAttnAccusedFilingV1,
++        _narrowed: u64,
++        _carried_prompt: Option<&[u32]>,
++    ) -> Result<crate::palw_attn_responder_v1::PalwAttnSiteEvidenceV1, String> {
++        self.backend.attn_site_evidence_from_filing(_filing, _narrowed, _carried_prompt)
++    }
++    pub fn attn_site_evidence_held_v1(
++        &self,
++        _material: &[u8],
++        _narrowed: u64,
++        _carried_prompt: Option<&[u32]>,
++        _filing: Option<&crate::palw_attn_responder_v1::PalwAttnHeldFilingV1>,
++    ) -> Result<crate::palw_attn_responder_v1::PalwAttnHeldEvidenceV1, String> {
++        self.backend.attn_site_evidence_held_v1(_material, _narrowed, _carried_prompt, _filing)
++    }
++    pub fn attn_held_cache_write_rows_v1(
++        &self,
++        _filing: &crate::palw_attn_responder_v1::PalwAttnHeldFilingV1,
++        _narrowed: u64,
++        _carried_prompt: Option<&[u32]>,
++        _kind: crate::palw_state_chunk_map::PalwStateChunkKindV1,
++        _attn_layer: u16,
++        _history_position: u32,
++    ) -> Result<Vec<crate::palw_attn_court_v1::PalwAttnRowOpeningV1>, String> {
++        self.backend.attn_held_cache_write_rows_v1(_filing, _narrowed, _carried_prompt, _kind, _attn_layer, _history_position)
++    }
++    pub fn supports_dissection(&self) -> bool {
++        self.backend.supports_dissection()
++    }
++    pub fn supports_dissection_with_memory_routing_v2(&self, _active: bool) -> bool {
++        self.backend.supports_dissection_with_memory_routing_v2(_active)
++    }
++    pub fn has_fused_site(&self) -> bool {
++        self.backend.has_fused_site()
++    }
++    pub fn refutation_for_index(
++        &self,
++        _material: &[u8],
++        _index: u64,
++    ) -> Result<crate::palw_step_refute::PalwExecutionStepRefutationV1, String> {
++        self.backend.refutation_for_index(_material, _index)
++    }
++    pub fn refutation_for_free_prompt_index(
++        &self,
++        _material: &[u8],
++        _index: u64,
++        _prompt_token_ids: &[u32],
++    ) -> Result<crate::palw_step_refute::PalwExecutionStepRefutationV1, String> {
++        self.backend.refutation_for_free_prompt_index(_material, _index, _prompt_token_ids)
++    }
++    pub fn job_anchor_v1(
++        &self,
++        network_domain: Hash64,
++        pre_pow_hash: Hash64,
++        class_id: Hash64,
++        executor_bond: &crate::tx::TransactionOutpoint,
++        nonce_bucket: u64,
++    ) -> Option<Hash64> {
++        self.backend.job_anchor_v1(network_domain, pre_pow_hash, class_id, executor_bond, nonce_bucket)
++    }
++    pub fn operand_openings_for(
++        &self,
++        _refutation: &crate::palw_step_refute::PalwExecutionStepRefutationV1,
++    ) -> Result<Vec<crate::palw_artifact::PalwArtifactOpeningV1>, String> {
++        self.backend.operand_openings_for(_refutation)
++    }
++    pub fn fp_recompute_checkpoint_root(
++        &self,
++        _job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
++        _prompt_token_ids: &[u32],
++        _output_token_ids: &[u32],
++        _covered: u32,
++    ) -> Result<crate::Hash64, String> {
++        self.backend.fp_recompute_checkpoint_root(_job, _prompt_token_ids, _output_token_ids, _covered)
++    }
++    pub fn fp_held_route_v1(&self, _window_receipt_daa: u64) -> Option<crate::palw_held_context_v1::PalwHeldSeatRouteV1> {
++        self.backend.fp_held_route_v1(_window_receipt_daa)
++    }
++    pub fn fp_forget_seat_state_v1(&self) {
++        self.backend.fp_forget_seat_state_v1()
++    }
++    pub fn fp_name_the_leaf_v1(
++        &self,
++        _opening: &[u8],
++        _block_leaves: &[u8],
++        _claim: PalwClaimRootsV1,
++        _index: u32,
++        _prompt_token_ids: &[u32],
++        _generated_token_ids: &[u32],
++        _work_leaves: u64,
++    ) -> Result<Option<u64>, String> {
++        self.backend.fp_name_the_leaf_v1(_opening, _block_leaves, _claim, _index, _prompt_token_ids, _generated_token_ids, _work_leaves)
++    }
++    pub fn fp_name_the_edge_leaf_v1(
++        &self,
++        _opening: &[u8],
++        _served_edges: &[Vec<u8>],
++        _claim: PalwClaimRootsV1,
++        _index: u32,
++        _prompt_token_ids: &[u32],
++        _generated_token_ids: &[u32],
++        _work_leaves: u64,
++    ) -> Result<Option<u64>, String> {
++        self.backend.fp_name_the_edge_leaf_v1(_opening, _served_edges, _claim, _index, _prompt_token_ids, _generated_token_ids, _work_leaves)
++    }
++    pub fn refutation_from_served_intervals(
++        &self,
++        _held: &[(u32, Vec<u8>)],
++        _claim: PalwClaimRootsV1,
++        _prompt_token_ids: &[u32],
++        _generated_token_ids: &[u32],
++        _work_leaves: u64,
++        _leaf: u64,
++    ) -> Result<crate::palw_step_refute::PalwExecutionStepRefutationV1, String> {
++        self.backend.refutation_from_served_intervals(_held, _claim, _prompt_token_ids, _generated_token_ids, _work_leaves, _leaf)
++    }
++    pub fn fp_leaf_refutation_v1(
++        &self,
++        capture: &[u8],
++        prompt_token_ids: &[u32],
++        claim: PalwClaimRootsV1,
++        work_leaves: u64,
++        leaf: u64,
++    ) -> Result<crate::palw_step_refute::PalwExecutionStepRefutationV1, String> {
++        self.backend.fp_leaf_refutation_v1(capture, prompt_token_ids, claim, work_leaves, leaf)
++    }
++}
++
++#[derive(Clone, Copy)]
++pub struct PalwResourceOpsV1<'a> {
++    backend: &'a dyn PalwExecutionBackendV1,
++}
++impl<'a> PalwResourceOpsV1<'a> {
++    pub fn new(backend: &'a dyn PalwExecutionBackendV1) -> Self {
++        Self { backend }
++    }
++    pub fn prefill_run_positions_v1(&self) -> Option<u32> {
++        self.backend.prefill_run_positions_v1()
++    }
++    pub fn capture_shape(&self, _material: &[u8]) -> Option<PalwCaptureShapeV1> {
++        self.backend.capture_shape(_material)
++    }
++    pub fn canonical_job_prefill_tokens(&self) -> Option<usize> {
++        self.backend.canonical_job_prefill_tokens()
++    }
++    pub fn attempt_working_set_bytes(&self, _prefill_tokens: usize) -> Option<u64> {
++        self.backend.attempt_working_set_bytes(_prefill_tokens)
++    }
++    pub fn runtime_profile_v1(&self) -> Option<crate::palw_resource_profile_v1::PalwRuntimeProfileV1> {
++        self.backend.runtime_profile_v1()
++    }
++    pub fn artifact_derived_resident_bytes_v1(&self) -> u64 {
++        self.backend.artifact_derived_resident_bytes_v1()
++    }
++    pub fn resource_profile_v1(
++        &self,
++        _job: Option<&PalwJobContextV2>,
++        _role: crate::palw_resource_profile_v1::PalwResourceRoleV1,
++    ) -> Option<crate::palw_resource_profile_v1::PalwResourceProfileV1> {
++        self.backend.resource_profile_v1(_job, _role)
++    }
++    pub fn artifact_root_and_leaf_count(&self) -> Result<(crate::Hash64, u32), String> {
++        self.backend.artifact_root_and_leaf_count()
++    }
++}
++
+diff --git a/kaspad/src/palw_backends.rs b/kaspad/src/palw_backends.rs
+index 7095008b6..17f5ab9db 100644
+--- a/kaspad/src/palw_backends.rs
++++ b/kaspad/src/palw_backends.rs
+@@ -301,10 +301,10 @@ impl PalwBackendRegistry {
+         // A derived class (the floor) first: it resolves with no holding, so none of theirs is
+         // its bytes ([`Self::serves_without_a_holding_v1`]).
+         let figure = match self.sdk.resolve(class_id, artifact_root, &[]) {
+-            Ok(backend) => Some(Self::compose_need_v1(at_run(backend).as_ref(), (0, 0), None, role)),
++            Ok(backend) => Some(Self::compose_need_v1(kaspa_consensus_core::palw_backend::PalwResourceOpsV1::new(at_run(backend).as_ref()), (0, 0), None, role)),
+             Err(_) => self.holdings.iter().find_map(|holding| {
+                 let backend = self.sdk.resolve(class_id, artifact_root, std::slice::from_ref(holding)).ok()?;
+-                Some(Self::compose_need_v1(at_run(backend).as_ref(), holding_terms_v1(holding)?, None, role))
++                Some(Self::compose_need_v1(kaspa_consensus_core::palw_backend::PalwResourceOpsV1::new(at_run(backend).as_ref()), holding_terms_v1(holding)?, None, role))
+             }),
+         };
+         if memoized && let Ok(mut memo) = replay_bytes_memo_v1().lock() {
+@@ -332,7 +332,7 @@ impl PalwBackendRegistry {
+                 .and_then(holding_terms_v1)
+                 .unwrap_or_else(crate::palw_resource_admission_v2::unknown_holding_terms)
+         };
+-        Self::compose_need_v1(backend, terms, job, role)
++        Self::compose_need_v1(kaspa_consensus_core::palw_backend::PalwResourceOpsV1::new(backend), terms, job, role)
+     }
+ 
+     /// **The holding that serves `(class_id, artifact_root)`, through [`Self::resolve_or_chain`]'s
+@@ -429,7 +429,7 @@ impl PalwBackendRegistry {
+         if let Some(run) = run {
+             backend.set_prefill_run_positions_v1(run);
+         }
+-        let need = Self::compose_need_v1(backend.as_ref(), holding_terms_v1(holding)?, None, role);
++        let need = Self::compose_need_v1(kaspa_consensus_core::palw_backend::PalwResourceOpsV1::new(backend.as_ref()), holding_terms_v1(holding)?, None, role);
+         if memoized && let Ok(mut memo) = replay_bytes_memo_v1().lock() {
+             memo.insert(key, Some(need.clone()));
+         }
+@@ -462,7 +462,7 @@ impl PalwBackendRegistry {
+                 .and_then(|(holding, _)| holding_terms_v1(holding))
+                 .unwrap_or_else(crate::palw_resource_admission_v2::unknown_holding_terms)
+         };
+-        Self::compose_need_v1(backend, terms, job, role)
++        Self::compose_need_v1(kaspa_consensus_core::palw_backend::PalwResourceOpsV1::new(backend), terms, job, role)
+     }
+ 
+     /// **What laying `capture` out WHOLE costs this node** (DoS audit 2026-09-24, #4) — the need a
+@@ -520,7 +520,7 @@ impl PalwBackendRegistry {
+     }
+ 
+     fn compose_need_v1(
+-        backend: &dyn PalwExecutionBackendV1,
++        backend: kaspa_consensus_core::palw_backend::PalwResourceOpsV1<'_>,
+         (holding_bytes, pinned_bytes): (u64, u64),
+         job: Option<&kaspa_consensus_core::palw_v2::PalwJobContextV2>,
+         role: PalwResourceRoleV1,
+diff --git a/kaspad/src/palw_filer_held.rs b/kaspad/src/palw_filer_held.rs
+index a9154538e..f22266afa 100644
+--- a/kaspad/src/palw_filer_held.rs
++++ b/kaspad/src/palw_filer_held.rs
+@@ -311,7 +311,7 @@ pub(super) fn palw_held_opening_v1(
+         Err(why) => return PalwHeldOpeningV1::Missing(why),
+     };
+     // 3. N2 — the challenger's evidence, the A-held line's builder.
+-    let challenger = match palw_held_challenger_evidence_v1(backend, &filing, leaf, served.carried.as_deref()) {
++    let challenger = match palw_held_challenger_evidence_v1(kaspa_consensus_core::palw_backend::PalwCourtEvidenceOpsV1::new(backend), &filing, leaf, served.carried.as_deref()) {
+         Ok(challenger) => challenger,
+         Err(why) => return PalwHeldOpeningV1::Unplayable(why),
+     };
+diff --git a/kaspad/src/palw_panel.rs b/kaspad/src/palw_panel.rs
+index 9b23c5c77..543bc8913 100644
+--- a/kaspad/src/palw_panel.rs
++++ b/kaspad/src/palw_panel.rs
+@@ -496,7 +496,7 @@ pub(crate) enum PalwMaterialArmV1 {
+ pub(crate) fn palw_attempt_material_arm_v1(
+     seat_r: bool,
+     arm: PalwSeatArmV1,
+-    backend: &dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
++    backend: kaspa_consensus_core::palw_backend::PalwReplayOpsV1<'_>,
+     bytes: &[u8],
+     roots: PalwClaimRootsV1,
+ ) -> PalwMaterialArmV1 {
+@@ -2374,7 +2374,7 @@ pub(crate) fn palw_da_material_v1(
+                 let material = match palw_fp_capture_decode_v1(&bytes, facts.form) {
+                     Some(payload)
+                         if fp_verify_capture_under_job_v1(
+-                            backend,
++                            kaspa_consensus_core::palw_backend::PalwReplayOpsV1::new(backend),
+                             &payload.material.job,
+                             &payload.capture,
+                             facts.roots_v1(Some(&payload.material.job)),
+@@ -2406,7 +2406,7 @@ pub(crate) fn palw_da_material_v1(
+             }
+             let mut refused = String::new();
+             for material in jobs {
+-                let Some(ids) = PalwPanelService::fp_prompt_for_job(backend, &material, facts.form) else {
++                let Some(ids) = PalwPanelService::fp_prompt_for_job(kaspa_consensus_core::palw_backend::PalwExecutionOpsV1::new(backend), &material, facts.form) else {
+                     refused = "the kept job's prompt is not the job's".to_string();
+                     continue;
+                 };
+@@ -2435,7 +2435,7 @@ pub(crate) fn palw_da_material_v1(
+                 };
+                 // Verification must own the same authenticated job scope as execution: bare
+                 // verification would compare a constrained/pipeline capture with default argmax.
+-                if fp_verify_capture_under_job_v1(backend, &material.job, &capture, facts.roots_v1(Some(&material.job)))
++                if fp_verify_capture_under_job_v1(kaspa_consensus_core::palw_backend::PalwReplayOpsV1::new(backend), &material.job, &capture, facts.roots_v1(Some(&material.job)))
+                     != PalwMaterialVerdictV1::Matches
+                 {
+                     refused = "the kept job's replay does not reproduce the claim's committed roots".to_string();
+@@ -2497,7 +2497,7 @@ fn palw_fp_held_disclosure_v1(
+         work_leaves,
+         missing,
+         form,
+-        || PalwPanelService::served_binding_v1(backend, payload),
++        || PalwPanelService::served_binding_v1(kaspa_consensus_core::palw_backend::PalwMaterialOpsV1::new(backend), payload),
+     )
+ }
+ 
+@@ -2878,7 +2878,7 @@ enum CloseFromServedV1 {
+ /// the capture's committed answer for a V4 job. Bytes that are not an FP capture are verified as
+ /// they are, exactly as before.
+ fn fp_verify_material_v1(
+-    backend: &dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
++    backend: kaspa_consensus_core::palw_backend::PalwReplayOpsV1<'_>,
+     bytes: &[u8],
+     prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+     roots: kaspa_consensus_core::palw_backend::PalwClaimRootsV1,
+@@ -2891,7 +2891,7 @@ fn fp_verify_material_v1(
+ 
+ /// [`fp_verify_material_v1`] for a capture already decoded: `job` is the claim's.
+ fn fp_verify_capture_under_job_v1(
+-    backend: &dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
++    backend: kaspa_consensus_core::palw_backend::PalwReplayOpsV1<'_>,
+     job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+     capture: &[u8],
+     roots: kaspa_consensus_core::palw_backend::PalwClaimRootsV1,
+@@ -7597,7 +7597,7 @@ impl PalwPanelService {
+     /// whose job hash is not the derived prompt's, or whose material carries any other prompt,
+     /// is not the network's job, and no seat certifies it and no court is opened over it.
+     fn fp_prompt_for_job(
+-        backend: &dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
++        backend: kaspa_consensus_core::palw_backend::PalwExecutionOpsV1<'_>,
+         material: &kaspa_consensus_core::palw_freeprompt_v3::PalwFpMaterialV1,
+         prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+     ) -> Option<Vec<u32>> {
+@@ -9426,7 +9426,7 @@ impl PalwPanelService {
+                             continue;
+                         };
+                         let Some(prompt_ids) =
+-                            Self::fp_prompt_for_job(backend.as_ref(), &job, self.class_prompt_ids_form(job.job.class_id))
++                            Self::fp_prompt_for_job(kaspa_consensus_core::palw_backend::PalwExecutionOpsV1::new(backend.as_ref()), &job, self.class_prompt_ids_form(job.job.class_id))
+                         else {
+                             continue;
+                         };
+@@ -9758,7 +9758,7 @@ impl PalwPanelService {
+                         *court_stalls.entry("a free-prompt session whose job material this node has not heard").or_default() += 1;
+                         continue;
+                     };
+-                    if Self::fp_prompt_for_job(backend.as_ref(), &job, self.class_prompt_ids_form(job.job.class_id)).is_none() {
++                    if Self::fp_prompt_for_job(kaspa_consensus_core::palw_backend::PalwExecutionOpsV1::new(backend.as_ref()), &job, self.class_prompt_ids_form(job.job.class_id)).is_none() {
+                         *court_stalls.entry("a canonical claim whose material is not its own prompt").or_default() += 1;
+                         continue;
+                     }
+@@ -9797,7 +9797,7 @@ impl PalwPanelService {
+                     .get(&duty.claim_id)
+                     .map(|pool| {
+                         pool.iter().any(|b| {
+-                            fp_verify_material_v1(backend.as_ref(), b, self.class_prompt_ids_form(duty.class_id), roots)
++                            fp_verify_material_v1(kaspa_consensus_core::palw_backend::PalwReplayOpsV1::new(backend.as_ref()), b, self.class_prompt_ids_form(duty.class_id), roots)
+                                 == PalwMaterialVerdictV1::Matches
+                         })
+                     })
+@@ -9805,7 +9805,7 @@ impl PalwPanelService {
+                 let mut accused_held = pool_has_it;
+                 if !accused_held
+                     && let Some(bytes) = self.retained_capture(&duty.claim_id)
+-                    && fp_verify_material_v1(backend.as_ref(), &bytes, self.class_prompt_ids_form(duty.class_id), roots)
++                    && fp_verify_material_v1(kaspa_consensus_core::palw_backend::PalwReplayOpsV1::new(backend.as_ref()), &bytes, self.class_prompt_ids_form(duty.class_id), roots)
+                         == PalwMaterialVerdictV1::Matches
+                 {
+                     info!(
+@@ -9852,7 +9852,7 @@ impl PalwPanelService {
+                     };
+                     match remade {
+                         Some(bytes)
+-                            if fp_verify_material_v1(backend.as_ref(), &bytes, self.class_prompt_ids_form(duty.class_id), roots)
++                            if fp_verify_material_v1(kaspa_consensus_core::palw_backend::PalwReplayOpsV1::new(backend.as_ref()), &bytes, self.class_prompt_ids_form(duty.class_id), roots)
+                                 == PalwMaterialVerdictV1::Matches =>
+                         {
+                             info!(
+@@ -12012,7 +12012,7 @@ impl PalwPanelService {
+                             let job = self.resolve_backend(&session, duty.class_id, duty.artifact_root).ok().and_then(|resolved| {
+                                 let (material, ctx) = self.fp_seat_job_v1(resolved.as_ref(), duty, &held)?;
+                                 let form = self.class_prompt_ids_form(material.job.class_id);
+-                                let prompt = Self::fp_prompt_for_job(resolved.as_ref(), &material, form)?;
++                                let prompt = Self::fp_prompt_for_job(kaspa_consensus_core::palw_backend::PalwExecutionOpsV1::new(resolved.as_ref()), &material, form)?;
+                                 Some((ctx, prompt.iter().map(|t| *t as usize).collect::<Vec<usize>>()))
+                             });
+                             // N-5 / P2-6: the step's word on service is noted as it is read
+@@ -12171,7 +12171,7 @@ impl PalwPanelService {
+                             self.fp_job_material_for_claim(&duty.claim_id, duty.class_id, &duty.executor_bond, &held)
+                             && let Ok(resolved) = self.resolve_backend(&session, duty.class_id, duty.artifact_root)
+                             && let Some(prompt_ids) = Self::fp_prompt_for_job(
+-                                resolved.as_ref(),
++                                kaspa_consensus_core::palw_backend::PalwExecutionOpsV1::new(resolved.as_ref()),
+                                 &material,
+                                 self.class_prompt_ids_form(material.job.class_id),
+                             )
+@@ -12358,7 +12358,7 @@ impl PalwPanelService {
+                                 };
+                                 // RFC-0001 §A: under the claim's decode rule (its job's, for a V4 claim).
+                                 let fp_verdict =
+-                                    fp_verify_capture_under_job_v1(backend.as_ref(), &payload.material.job, &payload.capture, roots);
++                                    fp_verify_capture_under_job_v1(kaspa_consensus_core::palw_backend::PalwReplayOpsV1::new(backend.as_ref()), &payload.material.job, &payload.capture, roots);
+                                 if fp_verdict != PalwMaterialVerdictV1::Matches {
+                                     // P2-8, J1 auto: the claim's committed execution under another job?
+                                     self.j1_auto_probe_v1(
+@@ -12404,7 +12404,7 @@ impl PalwPanelService {
+                                 // The prompt the samples are opened with: the user's, or the
+                                 // network's own for a canonical claim (ADR-0074 Decision 1).
+                                 let Some(prompt_ids) = Self::fp_prompt_for_job(
+-                                    backend.as_ref(),
++                                    kaspa_consensus_core::palw_backend::PalwExecutionOpsV1::new(backend.as_ref()),
+                                     &payload.material,
+                                     self.class_prompt_ids_form(payload.material.job.class_id),
+                                 ) else {
+@@ -12732,7 +12732,7 @@ impl PalwPanelService {
+                                 break 'verdict Some(PalwReceiptVerdictV2::Incapable);
+                             };
+                             let Some(prompt_ids) = Self::fp_prompt_for_job(
+-                                backend.as_ref(),
++                                kaspa_consensus_core::palw_backend::PalwExecutionOpsV1::new(backend.as_ref()),
+                                 &material,
+                                 self.class_prompt_ids_form(material.job.class_id),
+                             ) else {
+@@ -12837,7 +12837,7 @@ impl PalwPanelService {
+                                 job_pin: duty.fp_job_pin_v1(),
+                             };
+                             let arm =
+-                                palw_attempt_material_arm_v1(seat_r, PalwSeatArmV1::AttemptMaterial, backend.as_ref(), bytes, roots);
++                                palw_attempt_material_arm_v1(seat_r, PalwSeatArmV1::AttemptMaterial, kaspa_consensus_core::palw_backend::PalwReplayOpsV1::new(backend.as_ref()), bytes, roots);
+                             if arm == PalwMaterialArmV1::Nothing {
+                                 // P2-8, J1 auto: the claim's committed execution under another job?
+                                 self.j1_auto_probe_v1(
+@@ -12892,7 +12892,7 @@ impl PalwPanelService {
+                             let arm = palw_attempt_material_arm_v1(
+                                 seat_r,
+                                 PalwSeatArmV1::RetainedMaterial,
+-                                backend.as_ref(),
++                                kaspa_consensus_core::palw_backend::PalwReplayOpsV1::new(backend.as_ref()),
+                                 &bytes,
+                                 PalwClaimRootsV1 {
+                                     execution_root: duty.execution_root,
+@@ -13190,7 +13190,7 @@ impl PalwPanelService {
+                         // The job's id IS the block's anchor: `job_for_anchor` names it so.
+                         let anchor = ctx.job_id;
+                         if let Some(output_ids) =
+-                            self.attempt_committed_output_ids_v1(resolved.as_ref(), duty, &ctx, anchor, &prompt_ids, &held)
++                            self.attempt_committed_output_ids_v1(kaspa_consensus_core::palw_backend::PalwMaterialOpsV1::new(resolved.as_ref()), duty, &ctx, anchor, &prompt_ids, &held)
+                             && let Some(verdict) = self
+                                 .interval_seat_outcome_v1(
+                                     &session,
+@@ -16557,7 +16557,7 @@ impl PalwPanelService {
+         use kaspa_consensus_core::palw_freeprompt_v3::{palw_fp_committed_output_ids_decode_v1, palw_fp_job_material_decode_v1};
+         use misaka_palw_base0::fp_interval::{Base0FpIntervalOpeningV4, base0_fp_interval_close_annex_any_v1};
+         let Some(job) = fp_job else { return Err(CloseFromServedV1::NotThisLane) };
+-        let Some(prompt_ids) = Self::fp_prompt_for_job(backend, job, self.class_prompt_ids_form(job.job.class_id)) else {
++        let Some(prompt_ids) = Self::fp_prompt_for_job(kaspa_consensus_core::palw_backend::PalwExecutionOpsV1::new(backend), job, self.class_prompt_ids_form(job.job.class_id)) else {
+             return Err(CloseFromServedV1::Refused("a canonical claim whose material is not its own prompt".to_string()));
+         };
+         // The answer's ids, off the same payloads the seat reads them from (ADR-0084 Decision 1).
+@@ -16795,7 +16795,7 @@ impl PalwPanelService {
+     /// retained under `foreign/` so this node can serve the next seat's pull.
+     fn attempt_committed_output_ids_v1(
+         &self,
+-        backend: &dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
++        backend: kaspa_consensus_core::palw_backend::PalwMaterialOpsV1<'_>,
+         duty: &kaspa_consensus_core::palw_producer_v2::PalwSeatDutyV2,
+         ctx: &kaspa_consensus_core::palw_v2::PalwJobContextV2,
+         anchor: Hash64,
+@@ -17638,7 +17638,7 @@ impl PalwPanelService {
+     /// The binding a retained capture commits, read off its interval 0 — which every family serves
+     /// and which carries it.
+     fn served_binding_v1(
+-        backend: &dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
++        backend: kaspa_consensus_core::palw_backend::PalwMaterialOpsV1<'_>,
+         payload: &kaspa_consensus_core::palw_freeprompt_v3::PalwFpCaptureV1,
+     ) -> Result<kaspa_consensus_core::palw_step_leg::PalwStepBindingV2, String> {
+         let opened = backend.open_fp_interval(&payload.capture, 0, &payload.material.prompt_token_ids)?;
+@@ -18726,7 +18726,7 @@ impl PalwPanelService {
+                     let Ok(mut backend) = self.resolve_backend(session, duty.class_id, duty.artifact_root) else {
+                         return (PalwSeatReplayStepV1::NoVerdict, None);
+                     };
+-                    let Some(prompt_ids) = Self::fp_prompt_for_job(backend.as_ref(), material, form) else { continue };
++                    let Some(prompt_ids) = Self::fp_prompt_for_job(kaspa_consensus_core::palw_backend::PalwExecutionOpsV1::new(backend.as_ref()), material, form) else { continue };
+                     let ctx = backend.fp_job_context_v1(&material.job);
+                     // At the widest prefill run the ledger grants, on this duty's own instance (int-10.2 A2).
+                     let backends = self.backends();
+@@ -19902,7 +19902,7 @@ mod fp_job_v4_material_tests {
+                 job_pin: None,
+             };
+             let bytes = palw_fp_capture_encode_v1(&job, &prompt, &run.outcome.material);
+-            assert_eq!(fp_verify_material_v1(&backend, &bytes, PalwPromptIdsFormV1::Flat, roots), PalwMaterialVerdictV1::Matches);
++            assert_eq!(fp_verify_material_v1(kaspa_consensus_core::palw_backend::PalwReplayOpsV1::new(&backend), &bytes, PalwPromptIdsFormV1::Flat, roots), PalwMaterialVerdictV1::Matches);
+             let unscoped = backend.verify_material(&run.outcome.material, roots);
+             if penalized {
+                 assert_ne!(unscoped, PalwMaterialVerdictV1::Matches, "the argmax cannot vouch for a penalized answer");
+diff --git a/kaspad/src/palw_panel/gdn_filer_tick.rs b/kaspad/src/palw_panel/gdn_filer_tick.rs
+index 1ec0babc1..189ca01ea 100644
+--- a/kaspad/src/palw_panel/gdn_filer_tick.rs
++++ b/kaspad/src/palw_panel/gdn_filer_tick.rs
+@@ -146,7 +146,7 @@ impl PalwPanelService {
+                     if !capture_names_claim_v1(&payload.capture, d.execution_root, d.class_id) {
+                         return None;
+                     }
+-                    let prompt = Self::fp_prompt_for_job(backend.as_ref(), &payload.material, form)?;
++                    let prompt = Self::fp_prompt_for_job(kaspa_consensus_core::palw_backend::PalwExecutionOpsV1::new(backend.as_ref()), &payload.material, form)?;
+                     Some((payload.capture, prompt))
+                 }) else {
+                     continue;
+diff --git a/kaspad/src/palw_panel/held_court.rs b/kaspad/src/palw_panel/held_court.rs
+index 9c21fe224..ad9344cb5 100644
+--- a/kaspad/src/palw_panel/held_court.rs
++++ b/kaspad/src/palw_panel/held_court.rs
+@@ -198,7 +198,7 @@ pub(crate) fn palw_held_responder_evidence_v1(
+ /// divergent leaf of a held claim at a fused site and its accusation opens the held dissection, this
+ /// is the challenger's side for that claim and leaf — the panel's held route calls it the same way.
+ pub(crate) fn palw_held_challenger_evidence_v1(
+-    backend: &dyn PalwExecutionBackendV1,
++    backend: kaspa_consensus_core::palw_backend::PalwCourtEvidenceOpsV1<'_>,
+     filing: &PalwAttnHeldFilingV1,
+     narrowed: u64,
+     carried: Option<&[u32]>,
+@@ -1953,7 +1953,7 @@ pub(crate) fn palw_held_start_builds_v1<H: PalwHeldHostV1>(host: &H, held: &mut
+             };
+             let (_, filed) = filing.clone().expect("checked above");
+             tokio::task::spawn_blocking(move || {
+-                let built = palw_held_challenger_evidence_v1(backend.as_ref(), &filed, narrowed, carried.as_deref());
++                let built = palw_held_challenger_evidence_v1(kaspa_consensus_core::palw_backend::PalwCourtEvidenceOpsV1::new(backend.as_ref()), &filed, narrowed, carried.as_deref());
+                 drop(reserved);
+                 palw_held_resident_v1(&ledger, built?, false, class_id, claim_id)
+             })
+@@ -2153,7 +2153,7 @@ impl PalwHeldHostV1 for PalwPanelHeldHostV1<'_> {
+         let pooled = self.materials.get(&duty.claim_id).map(|v| v.as_slice()).unwrap_or(&[]);
+         self.panel
+             .fp_job_material_for_claim(&duty.claim_id, duty.class_id, &duty.executor_bond, pooled)
+-            .and_then(|job| PalwPanelService::fp_prompt_for_job(backend, &job, self.panel.class_prompt_ids_form(duty.class_id)))
++            .and_then(|job| PalwPanelService::fp_prompt_for_job(kaspa_consensus_core::palw_backend::PalwExecutionOpsV1::new(backend), &job, self.panel.class_prompt_ids_form(duty.class_id)))
+             .map(Some)
+             .ok_or_else(|| "no job material of the claim is held here".to_string())
+     }
+diff --git a/kaspad/src/palw_panel/held_court_e2e.rs b/kaspad/src/palw_panel/held_court_e2e.rs
+index ecb55c50f..a1d5767b4 100644
+--- a/kaspad/src/palw_panel/held_court_e2e.rs
++++ b/kaspad/src/palw_panel/held_court_e2e.rs
+@@ -561,7 +561,7 @@ fn challenger_evidence(
+     let duty = duty_of(s, SEAT, sid).expect("the seat's duty");
+     let (_, filing) = palw_held_filing_of_duty_v1(std::slice::from_ref(filed), &duty, PALW_HELD_STEP_LADDER_V1)
+         .expect("the filing stands for the claim at its leaf");
+-    palw_held_challenger_evidence_v1(seat, &filing, duty.terminal_index.expect("the leaf"), None).expect("N2")
++    palw_held_challenger_evidence_v1(kaspa_consensus_core::palw_backend::PalwCourtEvidenceOpsV1::new(seat), &filing, duty.terminal_index.expect("the leaf"), None).expect("N2")
+ }
+ 
+ /// The same real held filing and refused slice-root decoy as the held node tests, for the Consensus API history adapter tests.
+diff --git a/kaspad/src/palw_panel/seat_r_tests.rs b/kaspad/src/palw_panel/seat_r_tests.rs
+index 5026979cf..57dd49a56 100644
+--- a/kaspad/src/palw_panel/seat_r_tests.rs
++++ b/kaspad/src/palw_panel/seat_r_tests.rs
+@@ -698,11 +698,11 @@ fn the_floors_material_is_kept_past_seat_r_and_its_replay_licenses() {
+         job_pin: None,
+     };
+     for arm in [PalwSeatArmV1::AttemptMaterial, PalwSeatArmV1::RetainedMaterial] {
+-        assert_eq!(palw_attempt_material_arm_v1(false, arm, &backend, &claim.material, roots), PalwMaterialArmV1::Licenses, "{arm:?}");
+-        assert_eq!(palw_attempt_material_arm_v1(true, arm, &backend, &claim.material, roots), PalwMaterialArmV1::Evidence, "{arm:?}");
++        assert_eq!(palw_attempt_material_arm_v1(false, arm, kaspa_consensus_core::palw_backend::PalwReplayOpsV1::new(&backend), &claim.material, roots), PalwMaterialArmV1::Licenses, "{arm:?}");
++        assert_eq!(palw_attempt_material_arm_v1(true, arm, kaspa_consensus_core::palw_backend::PalwReplayOpsV1::new(&backend), &claim.material, roots), PalwMaterialArmV1::Evidence, "{arm:?}");
+         let other = PalwClaimRootsV1 { execution_root: h(0xBAD), ..roots };
+-        assert_eq!(palw_attempt_material_arm_v1(false, arm, &backend, &claim.material, other), PalwMaterialArmV1::Nothing);
+-        assert_eq!(palw_attempt_material_arm_v1(true, arm, &backend, &claim.material, other), PalwMaterialArmV1::Nothing);
++        assert_eq!(palw_attempt_material_arm_v1(false, arm, kaspa_consensus_core::palw_backend::PalwReplayOpsV1::new(&backend), &claim.material, other), PalwMaterialArmV1::Nothing);
++        assert_eq!(palw_attempt_material_arm_v1(true, arm, kaspa_consensus_core::palw_backend::PalwReplayOpsV1::new(&backend), &claim.material, other), PalwMaterialArmV1::Nothing);
+     }
+     let replayed = backend.execute_for_verdict(&job, &prompt).expect("the seat's replay runs");
+     assert!(replay_licenses_v1(&replayed, claim.execution_root, claim.trace_root, 0), "the replay licenses the floor");
+@@ -752,7 +752,7 @@ fn a_bent_held_fold_attempt_is_kept_as_evidence_and_refuted_by_the_replay_past_s
+         job_pin: None,
+     };
+     let arm = |seat_r: bool, bytes: &[u8], roots: PalwClaimRootsV1| {
+-        palw_attempt_material_arm_v1(seat_r, PalwSeatArmV1::AttemptMaterial, &backend, bytes, roots)
++        palw_attempt_material_arm_v1(seat_r, PalwSeatArmV1::AttemptMaterial, kaspa_consensus_core::palw_backend::PalwReplayOpsV1::new(&backend), bytes, roots)
+     };
+     assert_eq!(arm(true, &honest_bytes, honest_roots), PalwMaterialArmV1::Evidence, "the honest fold is kept, and signs nothing");
+     let replayed = backend.execute_for_verdict(&job, &prompt);

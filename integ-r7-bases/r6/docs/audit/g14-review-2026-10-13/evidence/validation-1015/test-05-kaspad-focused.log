@@ -1,0 +1,130 @@
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/consensus/core)
+   Compiling kaspa-txscript v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/crypto/txscript)
+   Compiling kaspa-mining-errors v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/mining/errors)
+   Compiling kaspa-pow v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/consensus/pow)
+   Compiling kaspa-p2p-lib v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/protocol/p2p)
+   Compiling kaspa-addressmanager v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/components/addressmanager)
+   Compiling kaspa-connectionmanager v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/components/connectionmanager)
+   Compiling kaspa-notify v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/notify)
+   Compiling kaspa-consensus-client v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/consensus/client)
+   Compiling kaspa-consensus-notify v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/consensus/notify)
+   Compiling kaspa-consensusmanager v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/components/consensusmanager)
+   Compiling kaspa-index-core v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/indexes/core)
+   Compiling kaspa-consensus-wasm v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/consensus/wasm)
+   Compiling kaspa-evm v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/misaka/evm/core)
+   Compiling kaspa-rpc-core v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/rpc/core)
+   Compiling kaspa-mining v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/mining)
+   Compiling kaspa-utxoindex v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/indexes/utxoindex)
+   Compiling kaspa-p2p-mining v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/protocol/mining)
+   Compiling kaspa-p2p-flows v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/protocol/flows)
+   Compiling kaspa-grpc-core v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/rpc/grpc/core)
+   Compiling kaspa-pq-validator-core v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/misaka/pq/validator-core)
+   Compiling misaka-palw-tir-exec v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/misaka/palw/tir/exec)
+   Compiling misaka-palw-base0 v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/misaka/palw/base0)
+   Compiling kaspa-rpc-service v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/rpc/service)
+   Compiling kaspa-grpc-client v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/rpc/grpc/client)
+   Compiling misaka-palw-tir-lower v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/misaka/palw/tir/lower)
+   Compiling kaspa-grpc-server v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/rpc/grpc/server)
+   Compiling kaspa-consensus v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/consensus)
+   Compiling misaka-palw-tir-sketch v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/misaka/palw/tir/sketch)
+   Compiling kaspa-index-processor v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/indexes/processor)
+   Compiling misaka-palw-remote v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/misaka/palw/remote)
+   Compiling misaka-palw-sdk v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/misaka/palw/sdk)
+   Compiling misaka-palw v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/misaka/palw/core)
+   Compiling kaspa-eth-rpc v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/rpc/eth)
+   Compiling misaka-endpoints v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/misaka/endpoints)
+   Compiling kaspa-wrpc-server v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/rpc/wrpc/server)
+   Compiling kaspad v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/kaspad)
+    Finished `test` profile [unoptimized] target(s) in 3m 25s
+     Running unittests src/lib.rs (target/debug/deps/kaspad_lib-5c485cb7922bbe61)
+
+running 88 tests
+test palw_flat_public_source::tests::projected_path_is_literal_claim_scoped_not_private_state_scoped ... ok
+test palw_flat_public_source::tests::an_unbuilt_carrier_leaves_no_orphan_projection_but_a_built_one_keeps_it ... ok
+test palw_panel::history_recovery_actor::tests::grant_carrier_binds_own_valid_receipt_pledge_and_original_acceptance_clock ... ok
+test palw_panel::palw_fraud_filer::bundle_scheduler::tests::stage_transition_requires_rooted_honest_and_never_restarts_original_deadline ... ok
+test palw_panel::artifact_inventory::tests::source_actor_uses_actual_public_file_size_and_only_native_eof_ack ... ok
+test palw_panel::artifact_inventory::tests::expired_paid_inventory_never_resets_opened_clock_or_false_certifies_wrong_bytes ... ok
+test palw_panel::palw_fraud_filer::constraint::tests::prospective_wide_selected_tiles_never_wrap_into_legacy_units ... ok
+test palw_panel::history_recovery_actor::tests::wrong_rooted_raw_or_unqualified_membership_is_not_a_response_credential ... ok
+test palw_panel::history_recovery_actor::tests::peer_absence_requires_accepted_demand_and_collect_is_exact_once_da_only ... ok
+test palw_flat_public_source::tests::shared_projection_gc_needs_strictly_irreversible_expiry_and_is_idempotent ... ok
+test palw_panel::history_recovery_actor::tests::cold_actor_resumes_native_offsets_and_old_carrier_cannot_poison_next_record ... ok
+test palw_panel::palw_fraud_filer::constraint_scheduler::tests::generic_constraint_refuses_wrong_public_pin_table_owner_and_original_clock ... ok
+test palw_panel::palw_fraud_filer::selected_event_scheduler::tests::response_selection_requires_actual_signed_custody_and_original_clock ... ok
+test palw_panel::palw_fraud_filer::selected_event_scheduler::tests::selected_actor_does_not_treat_submission_or_silence_as_ready ... ok
+test palw_panel::palw_fraud_filer::tests::a_history_hole_never_publishes_a_completed_book_watermark ... ok
+test palw_panel::palw_fraud_filer::tests::a_missing_fp_body_can_be_probed_while_the_local_capture_lane_is_full ... ok
+test palw_panel::palw_fraud_filer::input::tests::accepted_metadata_projection_copies_no_input_or_signature_and_preserves_the_claim_pin ... ok
+test palw_panel::palw_fraud_filer::tests::a_partial_history_page_cannot_end_a_pursuit_before_older_direct_evidence_is_read ... ok
+test palw_panel::palw_fraud_filer::tests::a_unit_the_chain_answered_is_read_never_demanded ... ok
+test palw_panel::palw_fraud_filer::tests::an_invalidated_blocking_replay_drains_under_its_reservation_before_the_next_starts ... ok
+test palw_panel::palw_fraud_filer::tests::an_item_is_sent_at_most_twice ... ok
+test palw_panel::palw_fraud_filer::tests::another_acceptance_restarts_an_honest_or_mismatched_case_and_rejects_old_results ... ok
+test palw_panel::palw_fraud_filer::constraint::tests::public_flat_constraint_proof_finds_later_forbidden_stop_and_beaten_tokens_and_refuses_forgery ... ok
+test palw_panel::palw_fraud_filer::constraint_scheduler::tests::generic_constraint_streams_large_rendering_to_exact_rooted_fault_and_restarts ... FAILED
+test palw_panel::palw_fraud_filer::input::tests::canonical_fp_input_is_derived_from_its_job_anchor_and_never_a_served_prompt ... ok
+test palw_panel::palw_fraud_filer::input::tests::panel_input_requires_the_exact_job_and_authenticated_ids_without_reading_a_capture_tail ... ok
+test palw_panel::palw_fraud_filer::tests::discovery_rotation_preserves_a_running_acceptance_and_exposes_full_live_pressure ... ok
+test palw_panel::palw_fraud_filer::tests::full_capture_cache_rotates_fairly_without_forgetting_a_public_pursuit ... ok
+test palw_panel::palw_fraud_filer::tests::full_discovery_cache_admits_later_claims_without_abandoning_live_pursuits ... ok
+test palw_panel::palw_fraud_filer::constraint::tests::tiled_public_builder_finds_later_faults_across_tiles_and_authenticates_every_input ... ok
+test palw_panel::palw_fraud_filer::input::tests::input_bootstrap_authenticates_the_job_and_worker_state_before_replay ... ok
+test palw_panel::palw_fraud_filer::tests::evicted_fp_replica_keeps_authenticated_job_and_its_byte_ticket ... ok
+test palw_panel::palw_fraud_filer::tests::bootstrap_verdicts_release_only_after_honesty_or_final_host_failure_and_reset_on_job_change ... ok
+test palw_panel::palw_fraud_filer::tests::owner_history_recovery_moves_name_the_bundle_frame_and_the_active_stage_only ... ok
+test palw_panel::palw_fraud_filer::tests::partial_pages_and_newer_pursuits_do_not_inherit_a_completed_watermark ... ok
+test palw_panel::palw_fraud_filer::tests::a_parallel_round_reserves_every_retained_unit_atomically_before_reading ... ok
+test palw_panel::palw_fraud_filer::tests::public_branch_rollback_invalidates_semantic_completion_before_honesty_or_release ... ok
+test palw_panel::palw_fraud_filer::tests::binding_only_fp_bootstrap_authenticates_without_a_replay_and_keeps_its_ticket_until_settlement ... ok
+test palw_panel::palw_fraud_filer::tests::missing_job_reprobes_preserve_localization_until_authenticated_job_arrives ... ok
+test palw_panel::palw_fraud_filer::tests::restarting_public_history_discards_old_localization_and_resend_state_but_keeps_the_same_jobs_replay ... ok
+test palw_panel::palw_fraud_filer::tests::retained_paid_authority_resumes_after_da_default_without_replay_or_new_legacy_authority ... ok
+test palw_panel::palw_fraud_filer::tests::rotating_a_pursued_replica_does_not_restart_a_paginated_public_history_walk ... ok
+test palw_panel::palw_fraud_filer::input::tests::public_fp_input_replays_on_a_fresh_model_and_retains_its_own_pins ... ok
+test palw_panel::palw_fraud_filer::tests::registered_replay_refusal_keeps_the_public_job_court_without_claiming_arithmetic_honesty ... ok
+test palw_panel::palw_fraud_filer::tests::selected_constraint_tiles_use_the_public_reservation_and_answer_engine_before_descent ... ok
+test palw_panel::palw_fraud_filer::tests::selected_source_queue_preserves_exact_paid_bundle_and_child_collection_clock ... ok
+test palw_panel::palw_fraud_filer::tests::selecting_an_already_answered_legacy_unit_backfills_instead_of_inheriting_a_recent_watermark ... ok
+test palw_panel::palw_fraud_filer::tests::staged_collection_queue_keeps_the_paid_clock_and_requires_accepted_cursor_progress ... ok
+test palw_panel::palw_fraud_filer::tests::the_book_replays_oldest_first_and_bounds_what_it_holds ... ok
+test palw_panel::palw_fraud_filer::tests::the_history_cache_cannot_accumulate_unused_range_units ... ok
+test palw_panel::palw_fraud_filer::tests::the_tick_wires_the_filer_behind_no_flag ... ok
+test palw_panel::palw_fraud_filer::tests::the_walk_starts_at_the_oldest_pursuit_then_follows_the_tip ... ok
+test palw_panel::palw_fraud_filer::tests::trace_only_and_output_only_mismatches_are_pursued_and_only_three_matching_roots_are_honest ... ok
+test palw_panel::palw_fraud_filer::tests::unrelated_settled_case_cleanup_cannot_restart_a_pursuits_history_and_a_new_seat_leaves_the_public_lane ... ok
+test palw_panel::palw_fraud_filer::tests::learned_frontier_memory_survives_round_rotation_until_settle_and_worker_drain ... ok
+test palw_panel::palw_fraud_filer::tests::waiting_public_input_does_not_spend_a_run_or_block_another_pending_claim ... ok
+test palw_panel::palw_fraud_filer::tests::pruned_round_selects_only_answered_unread_material_needed_by_this_phase ... ok
+test palw_panel::palw_fraud_filer::tests::input_bootstrap_keeps_binding_proofs_reachable_even_when_all_input_is_public ... ok
+test palw_panel::palw_fraud_filer::tests::rotating_user_input_keeps_its_ticket_and_does_not_restart_public_history ... ok
+test palw_panel::palw_fraud_filer::tests::matching_roots_hold_registered_semantics_for_authenticated_binding_and_job ... ok
+test palw_panel::palw_fraud_filer::tests::waiting_bootstrap_is_pursued_without_holding_a_replay_slot_and_reorg_forgets_input ... ok
+test palw_panel::palw_fraud_filer::tokenizer_scheduler::tests::streamed_nomination_uses_fixed_raw_scratch_and_respects_added_override_and_sparse_ids ... ok
+test palw_panel::palw_fraud_filer::tokenizer::tests::missing_wrong_or_over_budget_own_material_is_pending_but_false_registered_length_is_guilt ... ok
+test palw_panel::palw_fraud_filer::input::tests::user_input_republication_needs_no_backend_or_capture_and_skips_false_prefixes ... ok
+test palw_panel::palw_fraud_filer::tokenizer_scheduler::tests::another_typed_owner_court_is_refused_before_tokenizer_file_or_nomination_work ... ok
+test palw_panel::palw_service_public_e2e::public_prefix::native_prefix_retention_guard_accepts_public_pages_but_refuses_capture ... ok
+test palw_panel::public_prefix::owned_pages::tests::admitted_page_cap_is_shared_and_never_evicts_a_paid_root ... ok
+test palw_panel::palw_fraud_filer::tests::round_reacquisition_keeps_the_native_counter_wait_and_hard_deadline ... ok
+test palw_panel::palw_fraud_filer::tokenizer_scheduler::tests::tokenizer_scheduler_refuses_wrong_operands_changed_job_and_unfunded_heap_before_seed ... ok
+test palw_panel::palw_fraud_filer::tokenizer_scheduler::tests::immutable_registered_table_qualifies_normal_fp_and_rejects_constraint_root_or_alias_substitution ... ok
+test palw_panel::palw_fraud_filer::tests::constrained_input_round_cannot_preempt_selector_with_arithmetic_obligations ... ok
+test palw_panel::palw_fraud_filer::tokenizer::tests::held_raw_file_checks_all_renderings_and_preserves_a_normal_objective_proof ... ok
+test palw_panel::public_prefix::page_recovery::tests::bounded_references_authenticate_every_sequence_and_reject_reorg_or_disk_substitution ... ok
+test palw_panel::public_prefix::owned_pages::tests::seed_namespaces_and_irreversible_expiry_keep_paid_branches_isolated ... ok
+test palw_panel::public_prefix::owned_pages::tests::public_owner_pages_select_only_accepted_roots_across_restart_and_reorg ... ok
+test palw_panel::public_prefix::page_recovery::tests::seed_cas_deduplicates_and_full_cache_does_not_drop_paid_reorg_material ... ok
+test palw_public_token_table::tests::file_backed_registry_serves_the_exact_root_and_tokenizer_only ... FAILED
+test palw_panel::public_prefix::owned_pages::tests::lost_page_acceleration_is_rebuilt_from_public_transition_outputs_not_backup_state ... ok
+test palw_public_token_table::tests::modified_public_file_or_index_cannot_supply_an_authenticated_rendering ... ok
+test palw_panel::public_prefix::page_recovery::tests::public_record_gc_requires_irreversible_original_horizon_and_is_bounded ... ok
+test palw_public_token_table::tests::original_file_root_parts_and_promoted_merkle_paths_match_legacy_codec ... ok
+test palw_panel::public_prefix::owned_pages::tests::restart_inventory_and_abandoned_replay_cleanup_are_bounded_and_preserve_canonical_pages ... ok
+test palw_panel::public_prefix::tests::responder_uses_accepted_literal_slot_and_original_leaf_across_restart ... ok
+test palw_panel::palw_fraud_filer::tokenizer_scheduler::tests::guarded_tokenizer_scheduler_restarts_retries_and_closes_only_the_real_core_court ... ok
+test palw_panel::public_prefix::owned_pages::tests::repeated_reorg_reconstruction_promotes_only_a_complete_new_root_with_fixed_storage_namespaces ... ok
+test palw_panel::palw_fraud_filer::tests::public_fp_replay_opens_its_own_constraint_mask_and_refuses_unavailable_tables ... ok
+test palw_panel::palw_service_public_e2e::fresh_public_bond_service_native_public_prefix_inherited_convicts_all_custodians has been running for over 60 seconds
+test palw_panel::palw_service_public_e2e::fresh_public_bond_service_native_public_prefix_initial_convicts_all_custodians has been running for over 60 seconds
+exit 143

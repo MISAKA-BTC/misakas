@@ -1,0 +1,99 @@
+{
+  "schema": "misaka.rfc02.actual-checkpoint-courts9-observation.v1",
+  "captured_utc": "2026-10-11T09:39:52.510499+00:00",
+  "preimages": {
+    "point9": {
+      "binary": "/tmp/rfc02-point9-immutable-622b739f6a08/check-real-point-court9",
+      "binary_sha256": "622b739f6a08cd42345b4c48f750722ef6bec1bd59247ddc140bfc0bedce557d",
+      "captured_utc": "2026-10-11T09:34:49.836212+00:00",
+      "source_sha256": {
+        "misaka-palw-sdk/examples/check-real-point-court9.rs": "0ae5ead8442aaa66ebba830ff921aaf3448bc6f13d330f0f48572639e7facc24",
+        "misaka-palw-kernel/src/merkle3_stream.rs": "0d8a0a71166250297727a568ddd10835902c0bb668d420fa85635b349561f9b4",
+        "misaka-palw-kernel/src/flat_court9.rs": "4110374c30d7f2156e4cc7c8009258384d34bbef86c829c6ff1d3763301bc802",
+        "misaka-palw-kernel/src/flat_point9.rs": "9b0602d66a1036820688768066397e9312d55acd0f64dcd583773f3e2b408bcd",
+        "misaka-palw-kernel/src/flat_scope9.rs": "d73a57113ed6112d6f51d3f5c9f2d392305436203ff427f15f5d85e7747663f0",
+        "misaka-palw-kernel/src/flat_detect9.rs": "fb13526485da3835e4ca98faa33c6326d809f7d5dad0a43503fb93c1f2aa23bd",
+        "misaka-palw-kernel/src/flat_replay9.rs": "31a2f53b4f18372e7522f1b967258d3eb9518d686388a41f20597e5aa7867356"
+      }
+    },
+    "parameter_source9": {
+      "binary": "/tmp/rfc02-point9-immutable-f0060cc7b409/check-real-flat-parameter-map9",
+      "binary_sha256": "f0060cc7b4098eaed8a12d96f19f3cd1a4198e673ace5f3d9a7a0103061bc1cf",
+      "captured_utc": "2026-10-11T09:34:49.842087+00:00",
+      "source_sha256": {
+        "misaka-palw-sdk/examples/check-real-flat-parameter-map9.rs": "b42e379932873a2ef11d9b0052a9a24c01950ce655397023ea8e281115ef4500",
+        "misaka-palw-kernel/src/merkle3_stream.rs": "0d8a0a71166250297727a568ddd10835902c0bb668d420fa85635b349561f9b4",
+        "misaka-palw-kernel/src/flat_court9.rs": "4110374c30d7f2156e4cc7c8009258384d34bbef86c829c6ff1d3763301bc802",
+        "misaka-palw-kernel/src/flat_point9.rs": "9b0602d66a1036820688768066397e9312d55acd0f64dcd583773f3e2b408bcd",
+        "misaka-palw-kernel/src/flat_scope9.rs": "d73a57113ed6112d6f51d3f5c9f2d392305436203ff427f15f5d85e7747663f0",
+        "misaka-palw-kernel/src/flat_detect9.rs": "fb13526485da3835e4ca98faa33c6326d809f7d5dad0a43503fb93c1f2aa23bd",
+        "misaka-palw-kernel/src/flat_replay9.rs": "31a2f53b4f18372e7522f1b967258d3eb9518d686388a41f20597e5aa7867356"
+      }
+    },
+    "metadata9": {
+      "binary": "/tmp/rfc02-point9-immutable-37051ec4f094/check-flat-checkpoint-admission9",
+      "binary_sha256": "37051ec4f094303bc3171813704ae150140b6e2bdad8d4f9d9d66505cf37dfa8",
+      "source_sha256": {
+        "misaka-palw-sdk/examples/check-flat-checkpoint-admission9.rs": "11b803ba1887c57a4dd7e92bd536b8862699837fe9cf38db4c12cb4e42d2906e"
+      }
+    }
+  },
+  "commands": {
+    "point9": "/usr/bin/time -l /tmp/rfc02-point9-immutable-622b739f6a08/check-real-point-court9 /Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/rfc02-real/qwen25-pilot/qwen25-32.palwtir docs/design/palw/tir/evidence/qwen25-real-params-v3-commitments.borsh docs/design/palw/tir/evidence/qwen25-independent-source-fidelity-protocol.json /tmp/rfc02-qwen25-point9-linear-proof.bin",
+    "parameter_source9": "/usr/bin/time -l /tmp/rfc02-point9-immutable-f0060cc7b409/check-real-flat-parameter-map9 /Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/rfc02-real/qwen25-pilot/qwen25-32.palwtir docs/design/palw/tir/evidence/qwen25-real-params-v3-commitments.borsh docs/design/palw/tir/evidence/qwen25-independent-source-fidelity-protocol.json",
+    "metadata9": "/usr/bin/time -l /Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/examples/check-flat-checkpoint-admission9 docs/design/palw/tir/evidence/qwen25-real-pilot-program.tir docs/design/palw/tir/evidence/qwen25-real-params-v3-commitments.borsh 32",
+    "metadata9_reproduce_immutable": "/usr/bin/time -l /tmp/rfc02-point9-immutable-37051ec4f094/check-flat-checkpoint-admission9 docs/design/palw/tir/evidence/qwen25-real-pilot-program.tir docs/design/palw/tir/evidence/qwen25-real-params-v3-commitments.borsh 32"
+  },
+  "exit_codes": {
+    "point9": 0,
+    "parameter_source9": 0,
+    "metadata9": 0
+  },
+  "measured": {
+    "point9_wall_seconds": 16.3,
+    "point9_rss_bytes": 3995418624,
+    "point9_scope_metadata_max_positions": 32,
+    "point9_actual_job_positions": 1,
+    "point9_fed_tokens": [
+      4498
+    ],
+    "point9_proof_bytes": 17944,
+    "parameter_source9_wall_seconds": 81.07,
+    "parameter_source9_rss_bytes": 1853112320,
+    "parameter_source9_instances": 1636,
+    "parameter_source9_read_bytes": 1835516100,
+    "parameter_source9_max_workspace_bytes": 27275264
+  },
+  "prior_point_quadratic_scan_preserved": "qwen25-real-point9-quadratic-localization-observation.json",
+  "independent_mapped_fullmodel_replay_and_actual_parameter_prosecution_passed": true,
+  "independent_all_integer_artifact_parameter_map_source_continuity_passed": true,
+  "source_artifact_identity_before_after_passed": true,
+  "original_bf16_source_arithmetic_bit_equality_claimed": false,
+  "full_original_task_or_context_or_native_final_or_cohort_credit": false,
+  "full_rfc02_complete": false,
+  "resource_limits": [
+    "Streaming workspace bounds buffers/hash states, excluding caller mapped artifact pages and allocator/process overhead.",
+    "Full-position independent finder retains i128 own values, bounded at 256MiB payload; selected proof-generation parameter payload bounded at 64MiB. These are separate from 32MiB terminal court scratch.",
+    "Measured runtime is an observed local concurrent workload, not a hardware/deadline/network certificate.",
+    "Raw BF16 source fidelity is measured in separate independent-source-fidelity evidence; this trial uses the derived integer artifact.",
+    "All-PC continuity here is offline independent validation against the pinned derived artifact, not a native consensus source-binding substitution.",
+    "Actual-model locator independently finds the first divergent node across all7658 nodes. Its producer supplies a fixed first-leaf reply, and the divergent element is found by comparing that authenticated reply. This is not an actual-model test of generic detector9 hash descent, whole arbitrary-output fault localization, or a complete public service."
+  ],
+  "test_executable_preimages": {
+    "flat_point9-08d73bbd9de87f13": {
+      "path": "/tmp/rfc02-point9-test-immutable-2d14b07a738c/flat_point9-08d73bbd9de87f13",
+      "sha256": "2d14b07a738c4918a3c88ce09981c3dbbc6652380adb46e1e46b493e39c7b540"
+    },
+    "flat_graph9-8edb1b8b50193d3d": {
+      "path": "/tmp/rfc02-point9-test-immutable-f0db5db42709/flat_graph9-8edb1b8b50193d3d",
+      "sha256": "f0db5db42709e6d94eadaa944768a31e9adf92c35fe0fbe7c8c54e6495ce48bd"
+    }
+  },
+  "actual_trial_localization_scope": {
+    "node": "independent full7658-node linear comparison, no mutation coordinates supplied to finder",
+    "reply": "fixed first output leaf supplied by producer helper",
+    "element": "found by comparing authenticated reply values with own output",
+    "generic_detector9_hash_descent_tested_here": false,
+    "whole_arbitrary_output_localization_or_service_claim": false
+  }
+}

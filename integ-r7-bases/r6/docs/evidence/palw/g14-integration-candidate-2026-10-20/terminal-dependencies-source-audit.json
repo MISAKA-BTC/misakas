@@ -1,0 +1,17 @@
+{
+  "parent": "28bc2f9ce",
+  "method": "manual source dependency audit; no runtime experiment",
+  "sources": {
+    "consensus/core/src/palw_tir_court_v1.rs": "ac58fa1a8608a75d36ae22afb2506df4c828fa54a991582c583beedf8725deb3",
+    "consensus/core/src/palw_tir_public_source_v1.rs": "bc621054b2344908211b391f0e19b43cdbf855e15b4a5fb3b6f8fc65973cd3fa",
+    "consensus/core/src/palw_court_tir_requests_v1.rs": "18fd60a48c5aa989112e9056f79c55b2cd81ae504030cca804ceb9c2fc7e9905",
+    "consensus/core/src/palw_court_shared_tir_stream_v1.rs": "0ce1888181e3ec1ba171758538db36f65cf4b667d8ce3d530356bd43d42df75d"
+  },
+  "finding": "Existing shared source request universe does not supply artifact parameter openings or prompt data required conditionally by numerical terminal builders.",
+  "not_established": [
+    "Which terminal ranges in each real model read these dependencies",
+    "Reconstruction from shared DATA alone",
+    "Availability, custody, delivery, funding or complete capacity",
+    "Actual-node T05 or G14 completion"
+  ]
+}

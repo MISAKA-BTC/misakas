@@ -1,0 +1,93 @@
+{
+  "date": "2026-10-21",
+  "candidate_parent": "e82921ee1",
+  "selected_unique_passes": 64,
+  "selected_failed": 0,
+  "selected_ignored": 0,
+  "overlap": "Targeted 2 and intermediate 1 are contained in native replay 30; do not add historical checkpoints. Fresh integrations: 34.",
+  "scope": "Native verified-half fixtures, synthetic signatures; codec/heap/scan; journal undo/replay; full in-memory carriage reload; fresh identity/activation/release gates. Not node ingress/restart/pruned-IBD, capacity or economics.",
+  "cargo_and_release_lock": "/Users/wata/.cache/misaka-heavy-lock.sh",
+  "commands": [
+    "cargo test --release -p kaspa-consensus-core --test palw_court_duty_clock_v1 --lib palw_tir_public_fold_v1 (initial compile failure; no tests ran)",
+    "cargo test --release -p kaspa-consensus-core --lib native_duty_clock (intermediate 1)",
+    "cargo test --release -p kaspa-consensus-core --lib native_duty_clock (final 2)",
+    "cargo test --release -p kaspa-consensus-core --test palw_court_duty_clock_v1 --test palw_court_service_state_v2 --test g14_close_gates --test palw_activation_pool_is_t12_only --test palw_the_release_did_not_move && cargo check --release -p kaspa-consensus",
+    "target/release/deps/kaspa_consensus_core-cd85ed321316b157 palw_tir_public_fold_v1 (same freshly compiled core unit executable)",
+    "python3 scripts/drills/check_rfc06_native_wire_idempotent.py (Git index comparison; no compile)"
+  ],
+  "non_test_consensus_check_exit": 0,
+  "core_unit_executable": "target/release/deps/kaspa_consensus_core-cd85ed321316b157",
+  "core_unit_executable_sha256": "4e4d591e20190bc8f52ccc080e8ab2f7d3f553e6ac66991fbc3a88f71b72dac9",
+  "source_sha256": {
+    "consensus/core/src/lib.rs": "8a86614c9649804cf4fd8dd5fdb6d74bb396d3861eabcc1844ee5bb04ac44b0a",
+    "consensus/core/src/palw_court_duty_clock_v1.rs": "0343f4a06ca03d4d26f29d5d6a609dbb0378726ca7211dde82abddaddef68179",
+    "consensus/core/src/palw_court_service_state_v2.rs": "5cdf3e5be7da7ba09ef7d59c84d2efc54139c9e94a96678c87e52a1efa1ff9ed",
+    "consensus/core/src/palw_native_resource_v1/generated.rs": "cd40614ead411a03857ecf39db3b29d9b2543bb29319db5fb1ba3bcfe740c49d",
+    "consensus/core/src/palw_native_resource_v1/wire_generated.rs": "0974f0ce5c91d11897f71eedc107f12d8486f8c085df725e5f957eeb57522171",
+    "consensus/core/src/palw_staged_court_fold_v1.rs": "d3cb2ee3aa3c608a1617b798aec791244612e5337b2e97e9e7596b39ced12526",
+    "consensus/core/src/palw_staged_court_state_v1.rs": "efc6f95ccde68b433a38fc17caf4fb8238e2dcafc55c3c704d1a7374233ca474",
+    "consensus/core/src/palw_state_v2/chain_state.rs": "fe3b0676abeb9e84f6f2003f22a970c5d961cb364daa22af48e57ece135d0023",
+    "consensus/core/src/palw_tir_public_fold_v1.rs": "dba30be478d3e5cc8c47e4b9beff8a3f106318221a375b66402b4029b18b8552",
+    "consensus/core/tests/palw_court_duty_clock_v1.rs": "a2806fd4507c6273b4f621654218e1aa3c67008b68d0fd95c657139ebae6472c"
+  },
+  "logs": [
+    {
+      "path": "duty-clock-first-release.log",
+      "scope": "initial compile failure",
+      "sha256": "9a4898fda620d19ca6c596fb83ecc492e12182b300069aa38f339b89db74594a",
+      "passed_groups": []
+    },
+    {
+      "path": "duty-clock-native-release.log",
+      "scope": "intermediate prototype",
+      "sha256": "4b78ba7d98a3cb70f843d568230e0d49cd4b8d9c282a75aa5dcb71ddbcb65c6b",
+      "passed_groups": [
+        1
+      ]
+    },
+    {
+      "path": "duty-clock-final-native-release.log",
+      "scope": "final targeted native",
+      "sha256": "1acad35704e0b377a296508c2636dc8ecdb7967626a4c82f383eb630ca0a04ff",
+      "passed_groups": [
+        2
+      ]
+    },
+    {
+      "path": "duty-clock-components-check-release.log",
+      "scope": "final components and non-test check",
+      "sha256": "64ba0c865b0d220cfda50fbcd88cd16b5168c67f4dacfc806bd4b7dc1fcae6db",
+      "passed_groups": [
+        12,
+        5,
+        2,
+        6,
+        9
+      ]
+    },
+    {
+      "path": "duty-clock-full-native-replay.log",
+      "scope": "final native replay",
+      "sha256": "60bedf8033097ddeab48abbbb662adc281db5c0f41ef53d5d68cd0388eb2a2da",
+      "passed_groups": [
+        30
+      ]
+    },
+    {
+      "path": "duty-clock-wire-idempotent.log",
+      "scope": "generator idempotence",
+      "sha256": "f37ab49c54bf5b109caa581b2e6b1535ca0dc30de9442d0b7df178ef441dfb02",
+      "passed_groups": []
+    }
+  ],
+  "public_schema_adopted": false,
+  "numeric_profile_adopted": false,
+  "default_authorized": false,
+  "production_binding_or_supply_hook_added": false,
+  "full_g14_complete": false,
+  "superseded_by": "duty-clock-hard-bound-artifact.json",
+  "source_patch": {
+    "path": "duty-clock-pre-hard-boundary.patch",
+    "sha256": "0bc0076c54ed21f6b2c9c8bacba0489861644b813e000eaa0415343aebbcb66b"
+  }
+}

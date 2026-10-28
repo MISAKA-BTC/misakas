@@ -1,0 +1,21 @@
+   Compiling kaspad v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/kaspad)
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/consensus/core)
+warning: function `recover_pages_v1` is never used
+  --> kaspad/src/palw_public_prefix.rs:98:15
+   |
+98 | pub(super) fn recover_pages_v1(
+   |               ^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `kaspad` (lib test) generated 1 warning
+   Compiling kaspa-p2p-flows v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/protocol/flows)
+   Compiling kaspa-p2p-lib v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/protocol/p2p)
+   Compiling kaspa-pq-validator-core v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/misaka/pq/validator-core)
+    Finished `test` profile [unoptimized] target(s) in 8m 41s
+  Executable unittests src/lib.rs (target/debug/deps/kaspa_consensus-aa19176c09fcd85f)
+  Executable unittests src/lib.rs (target/debug/deps/kaspa_consensus_core-323fb324af38a3ff)
+  Executable unittests src/lib.rs (target/debug/deps/kaspa_p2p_flows-2194e26896db8c7c)
+  Executable unittests src/lib.rs (target/debug/deps/kaspa_p2p_lib-f5e13e3a12e74900)
+  Executable unittests src/lib.rs (target/debug/deps/kaspa_pq_validator_core-81a151ae761c6304)
+  Executable unittests src/lib.rs (target/debug/deps/kaspad_lib-b2ed064e9b53ce8d)

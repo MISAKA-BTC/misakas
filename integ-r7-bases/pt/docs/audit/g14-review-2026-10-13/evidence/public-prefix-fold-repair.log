@@ -1,0 +1,11 @@
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/consensus/core)
+error[E0609]: no field `committed` on type `palw_state_v2::PalwChainStateV2`
+  --> consensus/core/src/palw_state_v2/tests/public_prefix_fold_v1.rs:29:11
+   |
+29 |     state.committed.insert(producer(), 200);
+   |           ^^^^^^^^^ unknown field
+   |
+   = note: available fields are: `bonds`, `reserved_exposure`, `classes`, `class_targets`, `class_shares` ... and 95 others
+
+For more information about this error, try `rustc --explain E0609`.
+error: could not compile `kaspa-consensus-core` (lib test) due to 1 previous error

@@ -1,0 +1,15 @@
+
+running 1 test
+
+thread 'palw_panel::palw_filer_replay::palw_filer_held::e2e::legacy_held::lg14b_session_owned_answer_chunks_survive_full_certification_slots_and_partial_restart_or_default' (3445182) panicked at kaspad/src/palw_legacy_held_e2e.rs:522:41:
+called `Result::unwrap()` on an `Err` value: LegacyHeldDaRefused { claim: ff9e3af9d922c61eaf3c6a94830ad7cde7ac15b2d68dbaf238b2129ef94d6cd4b4d4de01814e8465680dde860357a5d10d1125d0cbfcfbf68a16a6d284db2bfa, why: "not enough of the existing DA window remains to carry the declared chunks" }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test palw_panel::palw_filer_replay::palw_filer_held::e2e::legacy_held::lg14b_session_owned_answer_chunks_survive_full_certification_slots_and_partial_restart_or_default ... FAILED
+
+failures:
+
+failures:
+    palw_panel::palw_filer_replay::palw_filer_held::e2e::legacy_held::lg14b_session_owned_answer_chunks_survive_full_certification_slots_and_partial_restart_or_default
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 623 filtered out; finished in 0.43s
+

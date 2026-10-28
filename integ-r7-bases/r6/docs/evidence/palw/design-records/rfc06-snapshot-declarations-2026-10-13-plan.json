@@ -1,0 +1,10 @@
+{
+  "kind": "snapshot-declaration-binding-controls",
+  "deadlineSeconds": 60,
+  "coreLibrary": "/tmp/misaka-rfc67812-node-target/debug/deps/libkaspa_consensus_core-6bbd04bb0b7b74a6.rlib",
+  "coreLibrarySha256": "ffd8b49f57bd70b0239ad9321de87b95cd8fbb2374684ff8db6482cb3c2e91e1",
+  "scriptSha256": "a558266c70baf1d903d593e819110cbc2b00d4bd17a33bbb430d818cd2255d8b",
+  "productionBuildInputsIncluded": false,
+  "nativeAccepted": false,
+  "realP2pAccepted": false
+}

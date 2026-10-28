@@ -1,0 +1,20 @@
+source sequence 1/2: 128 positions
+source sequence 2/2: 128 positions
+        8.61 real         9.53 user        11.46 sys
+          6544982016  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+             1011225  page reclaims
+                 691  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                   0  signals received
+                4656  voluntary context switches
+              748326  involuntary context switches
+        172814365194  instructions retired
+         73949083346  cycles elapsed
+          6702258008  peak memory footprint

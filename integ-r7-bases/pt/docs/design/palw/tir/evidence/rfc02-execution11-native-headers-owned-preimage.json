@@ -1,0 +1,18 @@
+{
+  "owned_before_compile": {
+    "misaka-palw-kernel/src/flat_execution11.rs": {
+      "sha256": "985aaa65bbc4a2720977b34e44fa5a16842f10c87de9b32ddd4a91d335d1d1e5",
+      "bytes": 59706
+    },
+    "misaka-palw-kernel/src/flat_resources10.rs": {
+      "sha256": "6293bb15b61db93d1cab36a4559c071741c465bf4efe720e6e7c672b964d2c87",
+      "bytes": 43091
+    },
+    "misaka-palw-kernel/tests/flat_execution11.rs": {
+      "sha256": "c542907c83da338ffb5a9ec5b86b0440ac3b7c8fd746306a9231af3d8cd7ca12",
+      "bytes": 43561
+    }
+  },
+  "archive_sha256": "0fd0fb0aa0a648c699ecf7a72667f49cdcc5202771ba18858cf1fe3f01ac595c",
+  "full_concurrent_dependency_freeze": false
+}

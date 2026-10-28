@@ -1,0 +1,42 @@
+Compiled source 15257fca9; base0 executable completed during joint no-run, node link separately failed ENOSPC.
+Binary SHA256 a59d86d193b7c36a1a65f4c7441b5aea5b5ee8b1e7387b21ff32a4c2482ab28d
+
+FILTER backend::tests::registered_floor_i8_prefix_matches_public_cache_writes_and_refuses_wrong_names
+
+running 1 test
+test backend::tests::registered_floor_i8_prefix_matches_public_cache_writes_and_refuses_wrong_names ... 
+thread 'backend::tests::registered_floor_i8_prefix_matches_public_cache_writes_and_refuses_wrong_names' (4323384) panicked at misaka-palw-base0/src/backend.rs:1480:13:
+assertion `left == right` failed
+  left: eb075da9cdec75538143d0cf7ddd11336e6d413612bf06b64bc13c28bc81b91c7fe7158e62661e179d8b5df1f5e1b163ac137962a14a95cf14fef5e71f9cc6b8
+ right: 88558fab6c8c4fade9de6670cb21826123e44fda3a0215eb78e9569c9826b63b200b5eacb4ca6a034476682353d64690ae46cb6253cfe3271784eaa18784a224
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    backend::tests::registered_floor_i8_prefix_matches_public_cache_writes_and_refuses_wrong_names
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 500 filtered out; finished in 0.55s
+
+FILTER_EXIT 101
+
+FILTER qwen36_backend::tests::registered_hybrid_prefix_commits_all_cache_components_and_exact_chunk_order
+
+running 1 test
+test qwen36_backend::tests::registered_hybrid_prefix_commits_all_cache_components_and_exact_chunk_order ... 
+thread 'qwen36_backend::tests::registered_hybrid_prefix_commits_all_cache_components_and_exact_chunk_order' (4323391) panicked at misaka-palw-base0/src/qwen36_backend.rs:3356:13:
+assertion `left == right` failed: a named lie does not manufacture a different model answer
+  left: a3c7c1a154b7955519968cefede5640f230a3f5c7b2b84cc1382d7c5dac2712ecbc8a42c08a0d029a5a11000a5bf18c75416a28b80031ea7298c4cb4b97bef14
+ right: ca59859f7f7d49991283e856417fc2c1be240cf763d8cab02d14eeefb3e54906d4ed375287808ae6a36a61ba38347520cbbe0c621c120e036ea86ffa0e9157c5
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    qwen36_backend::tests::registered_hybrid_prefix_commits_all_cache_components_and_exact_chunk_order
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 500 filtered out; finished in 0.60s
+
+FILTER_EXIT 101

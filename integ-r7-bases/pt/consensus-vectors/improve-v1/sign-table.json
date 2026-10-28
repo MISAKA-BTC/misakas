@@ -1,0 +1,1208 @@
+{
+  "byte_form": "b\"PALW-IMPROVE-SIGN-TABLE-V1\" ‖ LE u16 2048 ‖ u8 64 ‖ u8 2 ‖ LE u16 10 ‖ LE u16 50 ‖ LE u32 k for α, then K ascending, then m ascending",
+  "byte_len": 1049122,
+  "definition": "k(m, α/K) = the smallest k in 0..=m+1 with 1000·K·Σ_{i=k}^{m} C(m,i) ≤ α_permille·2^m",
+  "samples": [
+    {
+      "K": 1,
+      "alpha_permille": 10,
+      "k": 1,
+      "m": 0
+    },
+    {
+      "K": 1,
+      "alpha_permille": 10,
+      "k": 2,
+      "m": 1
+    },
+    {
+      "K": 1,
+      "alpha_permille": 10,
+      "k": 3,
+      "m": 2
+    },
+    {
+      "K": 1,
+      "alpha_permille": 10,
+      "k": 4,
+      "m": 3
+    },
+    {
+      "K": 1,
+      "alpha_permille": 10,
+      "k": 5,
+      "m": 4
+    },
+    {
+      "K": 1,
+      "alpha_permille": 10,
+      "k": 6,
+      "m": 5
+    },
+    {
+      "K": 1,
+      "alpha_permille": 10,
+      "k": 7,
+      "m": 6
+    },
+    {
+      "K": 1,
+      "alpha_permille": 10,
+      "k": 7,
+      "m": 7
+    },
+    {
+      "K": 1,
+      "alpha_permille": 10,
+      "k": 8,
+      "m": 8
+    },
+    {
+      "K": 1,
+      "alpha_permille": 10,
+      "k": 9,
+      "m": 9
+    },
+    {
+      "K": 1,
+      "alpha_permille": 10,
+      "k": 10,
+      "m": 10
+    },
+    {
+      "K": 1,
+      "alpha_permille": 10,
+      "k": 10,
+      "m": 11
+    },
+    {
+      "K": 1,
+      "alpha_permille": 10,
+      "k": 11,
+      "m": 12
+    },
+    {
+      "K": 1,
+      "alpha_permille": 10,
+      "k": 12,
+      "m": 13
+    },
+    {
+      "K": 1,
+      "alpha_permille": 10,
+      "k": 12,
+      "m": 14
+    },
+    {
+      "K": 1,
+      "alpha_permille": 10,
+      "k": 13,
+      "m": 15
+    },
+    {
+      "K": 1,
+      "alpha_permille": 10,
+      "k": 14,
+      "m": 16
+    },
+    {
+      "K": 1,
+      "alpha_permille": 10,
+      "k": 14,
+      "m": 17
+    },
+    {
+      "K": 1,
+      "alpha_permille": 10,
+      "k": 15,
+      "m": 18
+    },
+    {
+      "K": 1,
+      "alpha_permille": 10,
+      "k": 15,
+      "m": 19
+    },
+    {
+      "K": 1,
+      "alpha_permille": 10,
+      "k": 16,
+      "m": 20
+    },
+    {
+      "K": 1,
+      "alpha_permille": 10,
+      "k": 63,
+      "m": 100
+    },
+    {
+      "K": 1,
+      "alpha_permille": 10,
+      "k": 224,
+      "m": 400
+    },
+    {
+      "K": 1,
+      "alpha_permille": 10,
+      "k": 1077,
+      "m": 2047
+    },
+    {
+      "K": 1,
+      "alpha_permille": 10,
+      "k": 1078,
+      "m": 2048
+    },
+    {
+      "K": 2,
+      "alpha_permille": 10,
+      "k": 1,
+      "m": 0
+    },
+    {
+      "K": 2,
+      "alpha_permille": 10,
+      "k": 2,
+      "m": 1
+    },
+    {
+      "K": 2,
+      "alpha_permille": 10,
+      "k": 3,
+      "m": 2
+    },
+    {
+      "K": 2,
+      "alpha_permille": 10,
+      "k": 4,
+      "m": 3
+    },
+    {
+      "K": 2,
+      "alpha_permille": 10,
+      "k": 5,
+      "m": 4
+    },
+    {
+      "K": 2,
+      "alpha_permille": 10,
+      "k": 6,
+      "m": 5
+    },
+    {
+      "K": 2,
+      "alpha_permille": 10,
+      "k": 7,
+      "m": 6
+    },
+    {
+      "K": 2,
+      "alpha_permille": 10,
+      "k": 8,
+      "m": 7
+    },
+    {
+      "K": 2,
+      "alpha_permille": 10,
+      "k": 8,
+      "m": 8
+    },
+    {
+      "K": 2,
+      "alpha_permille": 10,
+      "k": 9,
+      "m": 9
+    },
+    {
+      "K": 2,
+      "alpha_permille": 10,
+      "k": 10,
+      "m": 10
+    },
+    {
+      "K": 2,
+      "alpha_permille": 10,
+      "k": 11,
+      "m": 11
+    },
+    {
+      "K": 2,
+      "alpha_permille": 10,
+      "k": 11,
+      "m": 12
+    },
+    {
+      "K": 2,
+      "alpha_permille": 10,
+      "k": 12,
+      "m": 13
+    },
+    {
+      "K": 2,
+      "alpha_permille": 10,
+      "k": 13,
+      "m": 14
+    },
+    {
+      "K": 2,
+      "alpha_permille": 10,
+      "k": 13,
+      "m": 15
+    },
+    {
+      "K": 2,
+      "alpha_permille": 10,
+      "k": 14,
+      "m": 16
+    },
+    {
+      "K": 2,
+      "alpha_permille": 10,
+      "k": 15,
+      "m": 17
+    },
+    {
+      "K": 2,
+      "alpha_permille": 10,
+      "k": 15,
+      "m": 18
+    },
+    {
+      "K": 2,
+      "alpha_permille": 10,
+      "k": 16,
+      "m": 19
+    },
+    {
+      "K": 2,
+      "alpha_permille": 10,
+      "k": 17,
+      "m": 20
+    },
+    {
+      "K": 2,
+      "alpha_permille": 10,
+      "k": 64,
+      "m": 100
+    },
+    {
+      "K": 2,
+      "alpha_permille": 10,
+      "k": 227,
+      "m": 400
+    },
+    {
+      "K": 2,
+      "alpha_permille": 10,
+      "k": 1083,
+      "m": 2047
+    },
+    {
+      "K": 2,
+      "alpha_permille": 10,
+      "k": 1083,
+      "m": 2048
+    },
+    {
+      "K": 4,
+      "alpha_permille": 10,
+      "k": 1,
+      "m": 0
+    },
+    {
+      "K": 4,
+      "alpha_permille": 10,
+      "k": 2,
+      "m": 1
+    },
+    {
+      "K": 4,
+      "alpha_permille": 10,
+      "k": 3,
+      "m": 2
+    },
+    {
+      "K": 4,
+      "alpha_permille": 10,
+      "k": 4,
+      "m": 3
+    },
+    {
+      "K": 4,
+      "alpha_permille": 10,
+      "k": 5,
+      "m": 4
+    },
+    {
+      "K": 4,
+      "alpha_permille": 10,
+      "k": 6,
+      "m": 5
+    },
+    {
+      "K": 4,
+      "alpha_permille": 10,
+      "k": 7,
+      "m": 6
+    },
+    {
+      "K": 4,
+      "alpha_permille": 10,
+      "k": 8,
+      "m": 7
+    },
+    {
+      "K": 4,
+      "alpha_permille": 10,
+      "k": 9,
+      "m": 8
+    },
+    {
+      "K": 4,
+      "alpha_permille": 10,
+      "k": 9,
+      "m": 9
+    },
+    {
+      "K": 4,
+      "alpha_permille": 10,
+      "k": 10,
+      "m": 10
+    },
+    {
+      "K": 4,
+      "alpha_permille": 10,
+      "k": 11,
+      "m": 11
+    },
+    {
+      "K": 4,
+      "alpha_permille": 10,
+      "k": 12,
+      "m": 12
+    },
+    {
+      "K": 4,
+      "alpha_permille": 10,
+      "k": 12,
+      "m": 13
+    },
+    {
+      "K": 4,
+      "alpha_permille": 10,
+      "k": 13,
+      "m": 14
+    },
+    {
+      "K": 4,
+      "alpha_permille": 10,
+      "k": 14,
+      "m": 15
+    },
+    {
+      "K": 4,
+      "alpha_permille": 10,
+      "k": 14,
+      "m": 16
+    },
+    {
+      "K": 4,
+      "alpha_permille": 10,
+      "k": 15,
+      "m": 17
+    },
+    {
+      "K": 4,
+      "alpha_permille": 10,
+      "k": 16,
+      "m": 18
+    },
+    {
+      "K": 4,
+      "alpha_permille": 10,
+      "k": 16,
+      "m": 19
+    },
+    {
+      "K": 4,
+      "alpha_permille": 10,
+      "k": 17,
+      "m": 20
+    },
+    {
+      "K": 4,
+      "alpha_permille": 10,
+      "k": 65,
+      "m": 100
+    },
+    {
+      "K": 4,
+      "alpha_permille": 10,
+      "k": 229,
+      "m": 400
+    },
+    {
+      "K": 4,
+      "alpha_permille": 10,
+      "k": 1088,
+      "m": 2047
+    },
+    {
+      "K": 4,
+      "alpha_permille": 10,
+      "k": 1088,
+      "m": 2048
+    },
+    {
+      "K": 64,
+      "alpha_permille": 10,
+      "k": 1,
+      "m": 0
+    },
+    {
+      "K": 64,
+      "alpha_permille": 10,
+      "k": 2,
+      "m": 1
+    },
+    {
+      "K": 64,
+      "alpha_permille": 10,
+      "k": 3,
+      "m": 2
+    },
+    {
+      "K": 64,
+      "alpha_permille": 10,
+      "k": 4,
+      "m": 3
+    },
+    {
+      "K": 64,
+      "alpha_permille": 10,
+      "k": 5,
+      "m": 4
+    },
+    {
+      "K": 64,
+      "alpha_permille": 10,
+      "k": 6,
+      "m": 5
+    },
+    {
+      "K": 64,
+      "alpha_permille": 10,
+      "k": 7,
+      "m": 6
+    },
+    {
+      "K": 64,
+      "alpha_permille": 10,
+      "k": 8,
+      "m": 7
+    },
+    {
+      "K": 64,
+      "alpha_permille": 10,
+      "k": 9,
+      "m": 8
+    },
+    {
+      "K": 64,
+      "alpha_permille": 10,
+      "k": 10,
+      "m": 9
+    },
+    {
+      "K": 64,
+      "alpha_permille": 10,
+      "k": 11,
+      "m": 10
+    },
+    {
+      "K": 64,
+      "alpha_permille": 10,
+      "k": 12,
+      "m": 11
+    },
+    {
+      "K": 64,
+      "alpha_permille": 10,
+      "k": 13,
+      "m": 12
+    },
+    {
+      "K": 64,
+      "alpha_permille": 10,
+      "k": 13,
+      "m": 13
+    },
+    {
+      "K": 64,
+      "alpha_permille": 10,
+      "k": 14,
+      "m": 14
+    },
+    {
+      "K": 64,
+      "alpha_permille": 10,
+      "k": 15,
+      "m": 15
+    },
+    {
+      "K": 64,
+      "alpha_permille": 10,
+      "k": 16,
+      "m": 16
+    },
+    {
+      "K": 64,
+      "alpha_permille": 10,
+      "k": 16,
+      "m": 17
+    },
+    {
+      "K": 64,
+      "alpha_permille": 10,
+      "k": 17,
+      "m": 18
+    },
+    {
+      "K": 64,
+      "alpha_permille": 10,
+      "k": 18,
+      "m": 19
+    },
+    {
+      "K": 64,
+      "alpha_permille": 10,
+      "k": 19,
+      "m": 20
+    },
+    {
+      "K": 64,
+      "alpha_permille": 10,
+      "k": 69,
+      "m": 100
+    },
+    {
+      "K": 64,
+      "alpha_permille": 10,
+      "k": 237,
+      "m": 400
+    },
+    {
+      "K": 64,
+      "alpha_permille": 10,
+      "k": 1106,
+      "m": 2047
+    },
+    {
+      "K": 64,
+      "alpha_permille": 10,
+      "k": 1107,
+      "m": 2048
+    },
+    {
+      "K": 1,
+      "alpha_permille": 50,
+      "k": 1,
+      "m": 0
+    },
+    {
+      "K": 1,
+      "alpha_permille": 50,
+      "k": 2,
+      "m": 1
+    },
+    {
+      "K": 1,
+      "alpha_permille": 50,
+      "k": 3,
+      "m": 2
+    },
+    {
+      "K": 1,
+      "alpha_permille": 50,
+      "k": 4,
+      "m": 3
+    },
+    {
+      "K": 1,
+      "alpha_permille": 50,
+      "k": 5,
+      "m": 4
+    },
+    {
+      "K": 1,
+      "alpha_permille": 50,
+      "k": 5,
+      "m": 5
+    },
+    {
+      "K": 1,
+      "alpha_permille": 50,
+      "k": 6,
+      "m": 6
+    },
+    {
+      "K": 1,
+      "alpha_permille": 50,
+      "k": 7,
+      "m": 7
+    },
+    {
+      "K": 1,
+      "alpha_permille": 50,
+      "k": 7,
+      "m": 8
+    },
+    {
+      "K": 1,
+      "alpha_permille": 50,
+      "k": 8,
+      "m": 9
+    },
+    {
+      "K": 1,
+      "alpha_permille": 50,
+      "k": 9,
+      "m": 10
+    },
+    {
+      "K": 1,
+      "alpha_permille": 50,
+      "k": 9,
+      "m": 11
+    },
+    {
+      "K": 1,
+      "alpha_permille": 50,
+      "k": 10,
+      "m": 12
+    },
+    {
+      "K": 1,
+      "alpha_permille": 50,
+      "k": 10,
+      "m": 13
+    },
+    {
+      "K": 1,
+      "alpha_permille": 50,
+      "k": 11,
+      "m": 14
+    },
+    {
+      "K": 1,
+      "alpha_permille": 50,
+      "k": 12,
+      "m": 15
+    },
+    {
+      "K": 1,
+      "alpha_permille": 50,
+      "k": 12,
+      "m": 16
+    },
+    {
+      "K": 1,
+      "alpha_permille": 50,
+      "k": 13,
+      "m": 17
+    },
+    {
+      "K": 1,
+      "alpha_permille": 50,
+      "k": 13,
+      "m": 18
+    },
+    {
+      "K": 1,
+      "alpha_permille": 50,
+      "k": 14,
+      "m": 19
+    },
+    {
+      "K": 1,
+      "alpha_permille": 50,
+      "k": 15,
+      "m": 20
+    },
+    {
+      "K": 1,
+      "alpha_permille": 50,
+      "k": 59,
+      "m": 100
+    },
+    {
+      "K": 1,
+      "alpha_permille": 50,
+      "k": 217,
+      "m": 400
+    },
+    {
+      "K": 1,
+      "alpha_permille": 50,
+      "k": 1062,
+      "m": 2047
+    },
+    {
+      "K": 1,
+      "alpha_permille": 50,
+      "k": 1062,
+      "m": 2048
+    },
+    {
+      "K": 2,
+      "alpha_permille": 50,
+      "k": 1,
+      "m": 0
+    },
+    {
+      "K": 2,
+      "alpha_permille": 50,
+      "k": 2,
+      "m": 1
+    },
+    {
+      "K": 2,
+      "alpha_permille": 50,
+      "k": 3,
+      "m": 2
+    },
+    {
+      "K": 2,
+      "alpha_permille": 50,
+      "k": 4,
+      "m": 3
+    },
+    {
+      "K": 2,
+      "alpha_permille": 50,
+      "k": 5,
+      "m": 4
+    },
+    {
+      "K": 2,
+      "alpha_permille": 50,
+      "k": 6,
+      "m": 5
+    },
+    {
+      "K": 2,
+      "alpha_permille": 50,
+      "k": 6,
+      "m": 6
+    },
+    {
+      "K": 2,
+      "alpha_permille": 50,
+      "k": 7,
+      "m": 7
+    },
+    {
+      "K": 2,
+      "alpha_permille": 50,
+      "k": 8,
+      "m": 8
+    },
+    {
+      "K": 2,
+      "alpha_permille": 50,
+      "k": 8,
+      "m": 9
+    },
+    {
+      "K": 2,
+      "alpha_permille": 50,
+      "k": 9,
+      "m": 10
+    },
+    {
+      "K": 2,
+      "alpha_permille": 50,
+      "k": 10,
+      "m": 11
+    },
+    {
+      "K": 2,
+      "alpha_permille": 50,
+      "k": 10,
+      "m": 12
+    },
+    {
+      "K": 2,
+      "alpha_permille": 50,
+      "k": 11,
+      "m": 13
+    },
+    {
+      "K": 2,
+      "alpha_permille": 50,
+      "k": 12,
+      "m": 14
+    },
+    {
+      "K": 2,
+      "alpha_permille": 50,
+      "k": 12,
+      "m": 15
+    },
+    {
+      "K": 2,
+      "alpha_permille": 50,
+      "k": 13,
+      "m": 16
+    },
+    {
+      "K": 2,
+      "alpha_permille": 50,
+      "k": 13,
+      "m": 17
+    },
+    {
+      "K": 2,
+      "alpha_permille": 50,
+      "k": 14,
+      "m": 18
+    },
+    {
+      "K": 2,
+      "alpha_permille": 50,
+      "k": 15,
+      "m": 19
+    },
+    {
+      "K": 2,
+      "alpha_permille": 50,
+      "k": 15,
+      "m": 20
+    },
+    {
+      "K": 2,
+      "alpha_permille": 50,
+      "k": 61,
+      "m": 100
+    },
+    {
+      "K": 2,
+      "alpha_permille": 50,
+      "k": 221,
+      "m": 400
+    },
+    {
+      "K": 2,
+      "alpha_permille": 50,
+      "k": 1069,
+      "m": 2047
+    },
+    {
+      "K": 2,
+      "alpha_permille": 50,
+      "k": 1069,
+      "m": 2048
+    },
+    {
+      "K": 4,
+      "alpha_permille": 50,
+      "k": 1,
+      "m": 0
+    },
+    {
+      "K": 4,
+      "alpha_permille": 50,
+      "k": 2,
+      "m": 1
+    },
+    {
+      "K": 4,
+      "alpha_permille": 50,
+      "k": 3,
+      "m": 2
+    },
+    {
+      "K": 4,
+      "alpha_permille": 50,
+      "k": 4,
+      "m": 3
+    },
+    {
+      "K": 4,
+      "alpha_permille": 50,
+      "k": 5,
+      "m": 4
+    },
+    {
+      "K": 4,
+      "alpha_permille": 50,
+      "k": 6,
+      "m": 5
+    },
+    {
+      "K": 4,
+      "alpha_permille": 50,
+      "k": 7,
+      "m": 6
+    },
+    {
+      "K": 4,
+      "alpha_permille": 50,
+      "k": 7,
+      "m": 7
+    },
+    {
+      "K": 4,
+      "alpha_permille": 50,
+      "k": 8,
+      "m": 8
+    },
+    {
+      "K": 4,
+      "alpha_permille": 50,
+      "k": 9,
+      "m": 9
+    },
+    {
+      "K": 4,
+      "alpha_permille": 50,
+      "k": 9,
+      "m": 10
+    },
+    {
+      "K": 4,
+      "alpha_permille": 50,
+      "k": 10,
+      "m": 11
+    },
+    {
+      "K": 4,
+      "alpha_permille": 50,
+      "k": 11,
+      "m": 12
+    },
+    {
+      "K": 4,
+      "alpha_permille": 50,
+      "k": 11,
+      "m": 13
+    },
+    {
+      "K": 4,
+      "alpha_permille": 50,
+      "k": 12,
+      "m": 14
+    },
+    {
+      "K": 4,
+      "alpha_permille": 50,
+      "k": 13,
+      "m": 15
+    },
+    {
+      "K": 4,
+      "alpha_permille": 50,
+      "k": 13,
+      "m": 16
+    },
+    {
+      "K": 4,
+      "alpha_permille": 50,
+      "k": 14,
+      "m": 17
+    },
+    {
+      "K": 4,
+      "alpha_permille": 50,
+      "k": 15,
+      "m": 18
+    },
+    {
+      "K": 4,
+      "alpha_permille": 50,
+      "k": 15,
+      "m": 19
+    },
+    {
+      "K": 4,
+      "alpha_permille": 50,
+      "k": 16,
+      "m": 20
+    },
+    {
+      "K": 4,
+      "alpha_permille": 50,
+      "k": 62,
+      "m": 100
+    },
+    {
+      "K": 4,
+      "alpha_permille": 50,
+      "k": 223,
+      "m": 400
+    },
+    {
+      "K": 4,
+      "alpha_permille": 50,
+      "k": 1075,
+      "m": 2047
+    },
+    {
+      "K": 4,
+      "alpha_permille": 50,
+      "k": 1076,
+      "m": 2048
+    },
+    {
+      "K": 64,
+      "alpha_permille": 50,
+      "k": 1,
+      "m": 0
+    },
+    {
+      "K": 64,
+      "alpha_permille": 50,
+      "k": 2,
+      "m": 1
+    },
+    {
+      "K": 64,
+      "alpha_permille": 50,
+      "k": 3,
+      "m": 2
+    },
+    {
+      "K": 64,
+      "alpha_permille": 50,
+      "k": 4,
+      "m": 3
+    },
+    {
+      "K": 64,
+      "alpha_permille": 50,
+      "k": 5,
+      "m": 4
+    },
+    {
+      "K": 64,
+      "alpha_permille": 50,
+      "k": 6,
+      "m": 5
+    },
+    {
+      "K": 64,
+      "alpha_permille": 50,
+      "k": 7,
+      "m": 6
+    },
+    {
+      "K": 64,
+      "alpha_permille": 50,
+      "k": 8,
+      "m": 7
+    },
+    {
+      "K": 64,
+      "alpha_permille": 50,
+      "k": 9,
+      "m": 8
+    },
+    {
+      "K": 64,
+      "alpha_permille": 50,
+      "k": 10,
+      "m": 9
+    },
+    {
+      "K": 64,
+      "alpha_permille": 50,
+      "k": 11,
+      "m": 10
+    },
+    {
+      "K": 64,
+      "alpha_permille": 50,
+      "k": 11,
+      "m": 11
+    },
+    {
+      "K": 64,
+      "alpha_permille": 50,
+      "k": 12,
+      "m": 12
+    },
+    {
+      "K": 64,
+      "alpha_permille": 50,
+      "k": 13,
+      "m": 13
+    },
+    {
+      "K": 64,
+      "alpha_permille": 50,
+      "k": 14,
+      "m": 14
+    },
+    {
+      "K": 64,
+      "alpha_permille": 50,
+      "k": 14,
+      "m": 15
+    },
+    {
+      "K": 64,
+      "alpha_permille": 50,
+      "k": 15,
+      "m": 16
+    },
+    {
+      "K": 64,
+      "alpha_permille": 50,
+      "k": 16,
+      "m": 17
+    },
+    {
+      "K": 64,
+      "alpha_permille": 50,
+      "k": 16,
+      "m": 18
+    },
+    {
+      "K": 64,
+      "alpha_permille": 50,
+      "k": 17,
+      "m": 19
+    },
+    {
+      "K": 64,
+      "alpha_permille": 50,
+      "k": 18,
+      "m": 20
+    },
+    {
+      "K": 64,
+      "alpha_permille": 50,
+      "k": 67,
+      "m": 100
+    },
+    {
+      "K": 64,
+      "alpha_permille": 50,
+      "k": 233,
+      "m": 400
+    },
+    {
+      "K": 64,
+      "alpha_permille": 50,
+      "k": 1096,
+      "m": 2047
+    },
+    {
+      "K": 64,
+      "alpha_permille": 50,
+      "k": 1097,
+      "m": 2048
+    }
+  ],
+  "sign_table_id": "ab9f6b108a470d0122c6a5ee3dea479913c966033425ef29cef03b2008b983cfd529060e622fa9fb2115d2957daa6176cb8cf7b78c40777c2c7b556ec3a82981"
+}

@@ -1,0 +1,57 @@
+{
+  "checks": [
+    {
+      "check": "manifest",
+      "detail": "h1-diag-hui-L4-wide (2dc5a972696640d6), schema misaka.palw.runtime-pack.v1",
+      "status": "PASS"
+    },
+    {
+      "check": "sidecars",
+      "detail": "4 file(s) match their hashes",
+      "status": "PASS"
+    },
+    {
+      "check": "adapter",
+      "detail": "built-in `vlm-qwen3-5` 9091e8ce28b19b2d",
+      "status": "PASS"
+    },
+    {
+      "check": "descriptors",
+      "detail": "none (a float checkpoint)",
+      "status": "PASS"
+    },
+    {
+      "check": "converter",
+      "detail": "built by palw-tir-convert 1.1.0 (misaka.palw.lowering.v1); this build 1.1.0 (misaka.palw.lowering.v1) — the same converter; math libm-v1: the same bytes on every platform",
+      "status": "PASS"
+    },
+    {
+      "check": "source",
+      "detail": "4 file(s) match their SHA-256",
+      "status": "PASS"
+    },
+    {
+      "check": "frontend",
+      "detail": "level B, spec 2c2ea2247971cf0b, 15 feature uses, scope: text-generation: token ids → next-token logits; NOT computed: vision tower",
+      "status": "PASS"
+    },
+    {
+      "check": "artifact",
+      "detail": "file 99cedbee938f13ac · inventory root d825681d20a9fb6a · graph root 0a2cedf7442b1410",
+      "status": "PASS"
+    },
+    {
+      "check": "conformance",
+      "detail": "streamed: 1 vector(s), 2 positions, equal on reference, typed-backend, independent (largest decoded parameter: reference 15520.0 MiB, independent 15520.0 MiB; not process RSS)",
+      "status": "PASS"
+    },
+    {
+      "check": "hf-reference",
+      "detail": "streamed: slope 1.0005, corr 0.99955, top-1 0.938, KL 0.00129 over 32 positions",
+      "status": "PASS"
+    }
+  ],
+  "ok": true,
+  "pack": "2dc5a972696640d615a8cb3b6a566473b22b07df0bfe9a0705f8f7d74749ff50",
+  "verified": true
+}

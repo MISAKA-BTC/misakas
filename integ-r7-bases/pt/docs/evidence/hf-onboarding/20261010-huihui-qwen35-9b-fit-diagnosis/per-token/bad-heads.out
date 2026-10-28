@@ -1,0 +1,7 @@
+head 12: core float rms med 1.15e-03 int rms 1.15e-03 | normed float rms 9.82e-03 int rms 1.70e-03 | cos(int,float) normed 0.150 core 1.000 ; nonzero int core elems 0.05
+head 13: core float rms med 1.09e-03 int rms 1.11e-03 | normed float rms 1.07e-02 int rms 5.34e-03 | cos(int,float) normed 0.459 core 1.000 ; nonzero int core elems 0.06
+head 20: core float rms med 1.57e-04 int rms 1.61e-04 | normed float rms 6.34e-03 int rms 4.35e-04 | cos(int,float) normed 0.077 core 0.999 ; nonzero int core elems 0.02
+head  0: core float rms med 8.64e-03 int rms 8.74e-03 | normed float rms 5.93e-03 int rms 6.19e-03 | cos(int,float) normed 0.941 core 1.000 ; nonzero int core elems 0.79
+head  5: core float rms med 1.33e-01 int rms 1.33e-01 | normed float rms 1.19e-02 int rms 1.18e-02 | cos(int,float) normed 1.000 core 1.000 ; nonzero int core elems 0.98
+head  3: core float rms med 1.02e-01 int rms 1.02e-01 | normed float rms 1.17e-01 int rms 1.17e-01 | cos(int,float) normed 1.000 core 1.000 ; nonzero int core elems 0.98
+heads with normed rel err>0.5: [1, 11, 12, 13, 20, 21, 24, 25, 30, 31]  share of normed float energy 0.010 ; share of squared error 0.911

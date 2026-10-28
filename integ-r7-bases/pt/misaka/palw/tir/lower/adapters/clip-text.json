@@ -1,0 +1,33 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "clip-text",
+  "doc": "CLIP's text tower (CLIPTextModel, CLIPTextModelWithProjection): a causal pre-LN decoder with learned positions and quick_gelu, read as a scan over bos + prompt + eos; the pooled output is the final-LN row at the last position, followed by text_projection when the class has one. Output: an embedding.",
+  "extends": ["spec-frame"],
+  "match": {"architectures": ["CLIPTextModel", "CLIPTextModelWithProjection"], "model_types": ["clip_text_model"]},
+  "config": {"defaults": {"vocab_size": 49408, "hidden_size": 512, "intermediate_size": 2048, "num_hidden_layers": 12, "num_attention_heads": 8, "max_position_embeddings": 77, "hidden_act": "quick_gelu", "layer_norm_eps": 1e-05, "projection_dim": 512}, "inert": ["bos_token_id", "eos_token_id", "pad_token_id", "attention_dropout", "dropout", "initializer_range", "initializer_factor", "projection_dim"]},
+  "vars": [
+    {"name": "vocab", "value": {"$cfg": "vocab_size"}},
+    {"name": "hidden", "value": {"$cfg": "hidden_size"}},
+    {"name": "inter", "value": {"$cfg": "intermediate_size"}},
+    {"name": "n", "value": {"$cfg": "num_hidden_layers"}},
+    {"name": "heads", "value": {"$cfg": "num_attention_heads"}},
+    {"name": "max_pos", "value": {"$cfg": "max_position_embeddings"}},
+    {"name": "act", "value": {"$act": {"$cfg": "hidden_act"}}},
+    {"name": "eps", "value": {"$cfg": "layer_norm_eps"}},
+    {"name": "proj_dim", "value": {"$cfg": "projection_dim"}},
+    {"name": "dims_ok", "value": {"$bad": [{"$and": [{"$gt": [{"$var": "heads"}, 0]}, {"$eq": [{"$mod": [{"$var": "hidden"}, {"$var": "heads"}]}, 0]}]}, {"$cat": ["hidden_size ", {"$var": "hidden"}, " not divisible by ", {"$var": "heads"}, " heads"]}]}},
+    {"name": "hd", "value": {"$idiv": [{"$var": "hidden"}, {"$var": "heads"}]}},
+    {"name": "projection", "value": {"$eq": [{"$var": "arch"}, "CLIPTextModelWithProjection"]}},
+    {"name": "tied", "value": false},
+    {"name": "norm", "value": {"kind": "Layer", "eps": {"$var": "eps"}, "gain": "W", "bias": true}},
+    {"name": "l_mixer", "value": {"Attention": {"heads": {"$var": "heads"}, "kv_heads": {"$var": "heads"}, "head_dim": {"$var": "hd"}, "v_head_dim": {"$var": "hd"}, "q_bias": true, "k_bias": true, "v_bias": true, "o_bias": true, "position": "None", "scale": {"$div": [1.0, {"$sqrt": {"$var": "hd"}}]}}}, "layer": true},
+    {"name": "l_ffn", "value": {"Mlp": {"intermediate": {"$var": "inter"}, "act": {"$var": "act"}, "gated": false, "up_bias": true, "down_bias": true}}, "layer": true},
+    {"name": "l_residual", "value": {"Sequential": {"pre_mixer": {"$var": "norm"}, "pre_ffn": {"$var": "norm"}, "multiplier": 1.0}}, "layer": true},
+    {"name": "embedding", "value": {"dim": {"$var": "hidden"}, "scale": 1.0, "positions": {"rows": {"$var": "max_pos"}, "offset": 0}}},
+    {"name": "final_norm", "value": {"$var": "norm"}},
+    {"name": "names", "value": {"$merge": [{"embed": "text_model.embeddings.token_embedding", "pos_embed": "text_model.embeddings.position_embedding", "final_norm": "text_model.final_layer_norm", "norm.mix": "text_model.encoder.layers.{L}.layer_norm1", "norm.ffn": "text_model.encoder.layers.{L}.layer_norm2", "attn.q": "text_model.encoder.layers.{L}.self_attn.q_proj", "attn.k": "text_model.encoder.layers.{L}.self_attn.k_proj", "attn.v": "text_model.encoder.layers.{L}.self_attn.v_proj", "attn.o": "text_model.encoder.layers.{L}.self_attn.out_proj", "mlp.up": "text_model.encoder.layers.{L}.mlp.fc1", "mlp.down": "text_model.encoder.layers.{L}.mlp.fc2"}, {"$if": [{"$var": "projection"}, {"embed_proj": "text_projection"}, {}]}]}},
+    {"name": "families", "value": ["E1"]},
+    {"name": "model_type", "value": "clip_text_model"}
+  ],
+  "spec": {"output": {"Embedding": {"proj": {"$if": [{"$var": "projection"}, [{"$var": "proj_dim"}, false], null]}, "normalize": false}}}
+}

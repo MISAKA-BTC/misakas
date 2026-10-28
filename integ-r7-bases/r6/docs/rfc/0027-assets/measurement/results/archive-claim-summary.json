@@ -1,0 +1,804 @@
+[
+  {
+    "accepted_claims": 20,
+    "accepted_real_block_count": null,
+    "account_identity_ambiguous": false,
+    "account_multiplicity": 1,
+    "evidence": "M_ARCHIVE",
+    "final_unobserved_or_censored": 14,
+    "first80_accepted": 8,
+    "heartbeat_share": null,
+    "last80_accepted": 8,
+    "legacy_escrow_release_delay_daa": {
+      "max": 23,
+      "min": 21,
+      "n": 18,
+      "p50": 21.0,
+      "p95_nearest_rank": 23,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "observed_daa_slots": 201,
+    "observed_final_delay_daa": {
+      "max": 144,
+      "min": 142,
+      "n": 6,
+      "p50": 142.0,
+      "p95_nearest_rank": 144,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "post_fill_hold_reasons_NOT_refusal_counts": {
+      "exposure": 201
+    },
+    "row_count": 201,
+    "run": "A_floor_small",
+    "source": "docs/evidence/palw/claim-capacity-map-2026-09-26/runs/A_floor_small.json",
+    "subject_balance_msk": 13000
+  },
+  {
+    "accepted_claims": 30,
+    "accepted_real_block_count": null,
+    "account_identity_ambiguous": false,
+    "account_multiplicity": 1,
+    "evidence": "M_ARCHIVE",
+    "final_unobserved_or_censored": 21,
+    "first80_accepted": 12,
+    "heartbeat_share": null,
+    "last80_accepted": 12,
+    "legacy_escrow_release_delay_daa": {
+      "max": 23,
+      "min": 21,
+      "n": 27,
+      "p50": 21,
+      "p95_nearest_rank": 22,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "observed_daa_slots": 201,
+    "observed_final_delay_daa": {
+      "max": 144,
+      "min": 142,
+      "n": 9,
+      "p50": 142,
+      "p95_nearest_rank": 144,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "post_fill_hold_reasons_NOT_refusal_counts": {
+      "exposure": 201
+    },
+    "row_count": 201,
+    "run": "A_floor_small",
+    "source": "docs/evidence/palw/claim-capacity-map-2026-09-26/runs/A_floor_small.json",
+    "subject_balance_msk": 20000
+  },
+  {
+    "accepted_claims": 40,
+    "accepted_real_block_count": null,
+    "account_identity_ambiguous": false,
+    "account_multiplicity": 1,
+    "evidence": "M_ARCHIVE",
+    "final_unobserved_or_censored": 28,
+    "first80_accepted": 16,
+    "heartbeat_share": null,
+    "last80_accepted": 16,
+    "legacy_escrow_release_delay_daa": {
+      "max": 23,
+      "min": 21,
+      "n": 36,
+      "p50": 21.0,
+      "p95_nearest_rank": 23,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "observed_daa_slots": 201,
+    "observed_final_delay_daa": {
+      "max": 144,
+      "min": 142,
+      "n": 12,
+      "p50": 142.0,
+      "p95_nearest_rank": 144,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "post_fill_hold_reasons_NOT_refusal_counts": {
+      "exposure": 201
+    },
+    "row_count": 201,
+    "run": "A_floor_small",
+    "source": "docs/evidence/palw/claim-capacity-map-2026-09-26/runs/A_floor_small.json",
+    "subject_balance_msk": 26000
+  },
+  {
+    "accepted_claims": 70,
+    "accepted_real_block_count": null,
+    "account_identity_ambiguous": false,
+    "account_multiplicity": 1,
+    "evidence": "M_ARCHIVE",
+    "final_unobserved_or_censored": 49,
+    "first80_accepted": 28,
+    "heartbeat_share": null,
+    "last80_accepted": 28,
+    "legacy_escrow_release_delay_daa": {
+      "max": 23,
+      "min": 21,
+      "n": 63,
+      "p50": 21,
+      "p95_nearest_rank": 22,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "observed_daa_slots": 201,
+    "observed_final_delay_daa": {
+      "max": 144,
+      "min": 142,
+      "n": 21,
+      "p50": 142,
+      "p95_nearest_rank": 143,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "post_fill_hold_reasons_NOT_refusal_counts": {
+      "exposure": 201
+    },
+    "row_count": 201,
+    "run": "A_floor_small",
+    "source": "docs/evidence/palw/claim-capacity-map-2026-09-26/runs/A_floor_small.json",
+    "subject_balance_msk": 50000
+  },
+  {
+    "accepted_claims": 150,
+    "accepted_real_block_count": null,
+    "account_identity_ambiguous": false,
+    "account_multiplicity": 1,
+    "evidence": "M_ARCHIVE",
+    "final_unobserved_or_censored": 105,
+    "first80_accepted": 60,
+    "heartbeat_share": null,
+    "last80_accepted": 60,
+    "legacy_escrow_release_delay_daa": {
+      "max": 23,
+      "min": 21,
+      "n": 135,
+      "p50": 21,
+      "p95_nearest_rank": 22,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "observed_daa_slots": 201,
+    "observed_final_delay_daa": {
+      "max": 144,
+      "min": 142,
+      "n": 45,
+      "p50": 142,
+      "p95_nearest_rank": 144,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "post_fill_hold_reasons_NOT_refusal_counts": {
+      "exposure": 201
+    },
+    "row_count": 201,
+    "run": "A_floor_small",
+    "source": "docs/evidence/palw/claim-capacity-map-2026-09-26/runs/A_floor_small.json",
+    "subject_balance_msk": 100000
+  },
+  {
+    "accepted_claims": 10,
+    "accepted_real_block_count": null,
+    "account_identity_ambiguous": false,
+    "account_multiplicity": 1,
+    "evidence": "M_ARCHIVE",
+    "final_unobserved_or_censored": 6,
+    "first80_accepted": 5,
+    "heartbeat_share": null,
+    "last80_accepted": 3,
+    "legacy_escrow_release_delay_daa": {
+      "max": 23,
+      "min": 23,
+      "n": 9,
+      "p50": 23,
+      "p95_nearest_rank": 23,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "observed_daa_slots": 201,
+    "observed_final_delay_daa": {
+      "max": 144,
+      "min": 144,
+      "n": 4,
+      "p50": 144.0,
+      "p95_nearest_rank": 144,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "post_fill_hold_reasons_NOT_refusal_counts": {
+      "exposure": 201
+    },
+    "row_count": 201,
+    "run": "C_8k_13k",
+    "source": "docs/evidence/palw/claim-capacity-map-2026-09-26/runs/C_8k_13k.json",
+    "subject_balance_msk": 13000
+  },
+  {
+    "accepted_claims": 25,
+    "accepted_real_block_count": null,
+    "account_identity_ambiguous": false,
+    "account_multiplicity": 1,
+    "evidence": "M_ARCHIVE",
+    "final_unobserved_or_censored": 16,
+    "first80_accepted": 12,
+    "heartbeat_share": null,
+    "last80_accepted": 8,
+    "legacy_escrow_release_delay_daa": {
+      "max": 23,
+      "min": 23,
+      "n": 22,
+      "p50": 23.0,
+      "p95_nearest_rank": 23,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "observed_daa_slots": 201,
+    "observed_final_delay_daa": {
+      "max": 144,
+      "min": 144,
+      "n": 9,
+      "p50": 144,
+      "p95_nearest_rank": 144,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "post_fill_hold_reasons_NOT_refusal_counts": {
+      "exposure": 58,
+      "share": 143
+    },
+    "row_count": 201,
+    "run": "D_8k_20k",
+    "source": "docs/evidence/palw/claim-capacity-map-2026-09-26/runs/D_8k_20k.json",
+    "subject_balance_msk": 20000
+  },
+  {
+    "accepted_claims": 27,
+    "accepted_real_block_count": null,
+    "account_identity_ambiguous": false,
+    "account_multiplicity": 1,
+    "evidence": "M_ARCHIVE",
+    "final_unobserved_or_censored": 18,
+    "first80_accepted": 12,
+    "heartbeat_share": null,
+    "last80_accepted": 9,
+    "legacy_escrow_release_delay_daa": {
+      "max": 23,
+      "min": 23,
+      "n": 24,
+      "p50": 23.0,
+      "p95_nearest_rank": 23,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "observed_daa_slots": 201,
+    "observed_final_delay_daa": {
+      "max": 144,
+      "min": 144,
+      "n": 9,
+      "p50": 144,
+      "p95_nearest_rank": 144,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "post_fill_hold_reasons_NOT_refusal_counts": {
+      "share": 201
+    },
+    "row_count": 201,
+    "run": "E_8k_26k",
+    "source": "docs/evidence/palw/claim-capacity-map-2026-09-26/runs/E_8k_26k.json",
+    "subject_balance_msk": 26000
+  },
+  {
+    "accepted_claims": 27,
+    "accepted_real_block_count": null,
+    "account_identity_ambiguous": false,
+    "account_multiplicity": 1,
+    "evidence": "M_ARCHIVE",
+    "final_unobserved_or_censored": 18,
+    "first80_accepted": 12,
+    "heartbeat_share": null,
+    "last80_accepted": 9,
+    "legacy_escrow_release_delay_daa": {
+      "max": 23,
+      "min": 23,
+      "n": 24,
+      "p50": 23.0,
+      "p95_nearest_rank": 23,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "observed_daa_slots": 201,
+    "observed_final_delay_daa": {
+      "max": 144,
+      "min": 144,
+      "n": 9,
+      "p50": 144,
+      "p95_nearest_rank": 144,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "post_fill_hold_reasons_NOT_refusal_counts": {
+      "share": 201
+    },
+    "row_count": 201,
+    "run": "F_8k_100k",
+    "source": "docs/evidence/palw/claim-capacity-map-2026-09-26/runs/F_8k_100k.json",
+    "subject_balance_msk": 100000
+  },
+  {
+    "accepted_claims": 16,
+    "accepted_real_block_count": null,
+    "account_identity_ambiguous": true,
+    "account_multiplicity": 2,
+    "evidence": "M_ARCHIVE",
+    "final_unobserved_or_censored": 12,
+    "first80_accepted": 10,
+    "heartbeat_share": null,
+    "last80_accepted": 6,
+    "legacy_escrow_release_delay_daa": {
+      "max": 23,
+      "min": 23,
+      "n": 14,
+      "p50": 23.0,
+      "p95_nearest_rank": 23,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "observed_daa_slots": 161,
+    "observed_final_delay_daa": {
+      "max": 144,
+      "min": 144,
+      "n": 4,
+      "p50": 144.0,
+      "p95_nearest_rank": 144,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "post_fill_hold_reasons_NOT_refusal_counts": {
+      "exposure": 322
+    },
+    "row_count": 322,
+    "run": "G_8k_split_13k_13k",
+    "source": "docs/evidence/palw/claim-capacity-map-2026-09-26/runs/G_8k_split_13k_13k.json",
+    "subject_balance_msk": 13000
+  },
+  {
+    "accepted_claims": 35,
+    "accepted_real_block_count": null,
+    "account_identity_ambiguous": true,
+    "account_multiplicity": 2,
+    "evidence": "M_ARCHIVE",
+    "final_unobserved_or_censored": 30,
+    "first80_accepted": 20,
+    "heartbeat_share": null,
+    "last80_accepted": 15,
+    "legacy_escrow_release_delay_daa": {
+      "max": 23,
+      "min": 23,
+      "n": 30,
+      "p50": 23.0,
+      "p95_nearest_rank": 23,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "observed_daa_slots": 161,
+    "observed_final_delay_daa": {
+      "max": 144,
+      "min": 144,
+      "n": 5,
+      "p50": 144,
+      "p95_nearest_rank": 144,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "post_fill_hold_reasons_NOT_refusal_counts": {
+      "room": 314,
+      "share": 8
+    },
+    "row_count": 322,
+    "run": "H_8k_100k_100k",
+    "source": "docs/evidence/palw/claim-capacity-map-2026-09-26/runs/H_8k_100k_100k.json",
+    "subject_balance_msk": 100000
+  },
+  {
+    "accepted_claims": 4,
+    "accepted_real_block_count": null,
+    "account_identity_ambiguous": false,
+    "account_multiplicity": 1,
+    "evidence": "M_ARCHIVE",
+    "final_unobserved_or_censored": 2,
+    "first80_accepted": 2,
+    "heartbeat_share": null,
+    "last80_accepted": 2,
+    "legacy_escrow_release_delay_daa": null,
+    "observed_daa_slots": 201,
+    "observed_final_delay_daa": {
+      "max": 144,
+      "min": 144,
+      "n": 2,
+      "p50": 144.0,
+      "p95_nearest_rank": 144,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "post_fill_hold_reasons_NOT_refusal_counts": {
+      "exposure": 201
+    },
+    "row_count": 201,
+    "run": "I_8k_13k_quorum3",
+    "source": "docs/evidence/palw/claim-capacity-map-2026-09-26/runs/I_8k_13k_quorum3.json",
+    "subject_balance_msk": 13000
+  },
+  {
+    "accepted_claims": 4,
+    "accepted_real_block_count": null,
+    "account_identity_ambiguous": false,
+    "account_multiplicity": 1,
+    "evidence": "M_ARCHIVE",
+    "final_unobserved_or_censored": 2,
+    "first80_accepted": 2,
+    "heartbeat_share": null,
+    "last80_accepted": 2,
+    "legacy_escrow_release_delay_daa": null,
+    "observed_daa_slots": 201,
+    "observed_final_delay_daa": {
+      "max": 142,
+      "min": 142,
+      "n": 2,
+      "p50": 142.0,
+      "p95_nearest_rank": 142,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "post_fill_hold_reasons_NOT_refusal_counts": {
+      "exposure": 201
+    },
+    "row_count": 201,
+    "run": "J_floor_13k_quorum3",
+    "source": "docs/evidence/palw/claim-capacity-map-2026-09-26/runs/J_floor_13k_quorum3.json",
+    "subject_balance_msk": 13000
+  },
+  {
+    "accepted_claims": 272,
+    "accepted_real_block_count": null,
+    "account_identity_ambiguous": false,
+    "account_multiplicity": 1,
+    "evidence": "M_ARCHIVE",
+    "final_unobserved_or_censored": 246,
+    "first80_accepted": 125,
+    "heartbeat_share": null,
+    "last80_accepted": 147,
+    "legacy_escrow_release_delay_daa": {
+      "max": 115,
+      "min": 21,
+      "n": 149,
+      "p50": 21,
+      "p95_nearest_rank": 72,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "observed_daa_slots": 161,
+    "observed_final_delay_daa": {
+      "max": 160,
+      "min": 142,
+      "n": 26,
+      "p50": 152.5,
+      "p95_nearest_rank": 159,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "post_fill_hold_reasons_NOT_refusal_counts": {
+      "exposure": 161
+    },
+    "row_count": 161,
+    "run": "K_floor_big",
+    "source": "docs/evidence/palw/claim-capacity-map-2026-09-26/runs/K_floor_big.json",
+    "subject_balance_msk": 250000
+  },
+  {
+    "accepted_claims": 554,
+    "accepted_real_block_count": null,
+    "account_identity_ambiguous": false,
+    "account_multiplicity": 1,
+    "evidence": "M_ARCHIVE",
+    "final_unobserved_or_censored": 494,
+    "first80_accepted": 256,
+    "heartbeat_share": null,
+    "last80_accepted": 285,
+    "legacy_escrow_release_delay_daa": {
+      "max": 115,
+      "min": 21,
+      "n": 340,
+      "p50": 21.0,
+      "p95_nearest_rank": 42,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "observed_daa_slots": 161,
+    "observed_final_delay_daa": {
+      "max": 160,
+      "min": 142,
+      "n": 60,
+      "p50": 151.0,
+      "p95_nearest_rank": 160,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "post_fill_hold_reasons_NOT_refusal_counts": {
+      "": 1,
+      "exposure": 160
+    },
+    "row_count": 161,
+    "run": "K_floor_big",
+    "source": "docs/evidence/palw/claim-capacity-map-2026-09-26/runs/K_floor_big.json",
+    "subject_balance_msk": 500000
+  },
+  {
+    "accepted_claims": 1141,
+    "accepted_real_block_count": null,
+    "account_identity_ambiguous": false,
+    "account_multiplicity": 1,
+    "evidence": "M_ARCHIVE",
+    "final_unobserved_or_censored": 1015,
+    "first80_accepted": 541,
+    "heartbeat_share": null,
+    "last80_accepted": 596,
+    "legacy_escrow_release_delay_daa": {
+      "max": 111,
+      "min": 21,
+      "n": 691,
+      "p50": 21,
+      "p95_nearest_rank": 42,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "observed_daa_slots": 161,
+    "observed_final_delay_daa": {
+      "max": 160,
+      "min": 142,
+      "n": 126,
+      "p50": 149.0,
+      "p95_nearest_rank": 158,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "post_fill_hold_reasons_NOT_refusal_counts": {
+      "": 2,
+      "exposure": 159
+    },
+    "row_count": 161,
+    "run": "K_floor_big",
+    "source": "docs/evidence/palw/claim-capacity-map-2026-09-26/runs/K_floor_big.json",
+    "subject_balance_msk": 1000000
+  },
+  {
+    "accepted_claims": 23,
+    "accepted_real_block_count": null,
+    "account_identity_ambiguous": false,
+    "account_multiplicity": 1,
+    "evidence": "M_ARCHIVE",
+    "final_unobserved_or_censored": 7,
+    "first80_accepted": 8,
+    "heartbeat_share": null,
+    "last80_accepted": 3,
+    "legacy_escrow_release_delay_daa": {
+      "max": 26,
+      "min": 21,
+      "n": 21,
+      "p50": 21,
+      "p95_nearest_rank": 25,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "observed_daa_slots": 301,
+    "observed_final_delay_daa": {
+      "max": 146,
+      "min": 142,
+      "n": 16,
+      "p50": 142.0,
+      "p95_nearest_rank": 146,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "post_fill_hold_reasons_NOT_refusal_counts": {
+      "exposure": 301
+    },
+    "row_count": 301,
+    "run": "L1_floor_13k_live",
+    "source": "docs/evidence/palw/claim-capacity-map-2026-09-26/runs/L1_floor_13k_live.json",
+    "subject_balance_msk": 13000
+  },
+  {
+    "accepted_claims": 34,
+    "accepted_real_block_count": null,
+    "account_identity_ambiguous": false,
+    "account_multiplicity": 1,
+    "evidence": "M_ARCHIVE",
+    "final_unobserved_or_censored": 11,
+    "first80_accepted": 14,
+    "heartbeat_share": null,
+    "last80_accepted": 6,
+    "legacy_escrow_release_delay_daa": {
+      "max": 77,
+      "min": 21,
+      "n": 29,
+      "p50": 21,
+      "p95_nearest_rank": 77,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "observed_daa_slots": 301,
+    "observed_final_delay_daa": {
+      "max": 198,
+      "min": 142,
+      "n": 23,
+      "p50": 142,
+      "p95_nearest_rank": 198,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "post_fill_hold_reasons_NOT_refusal_counts": {
+      "exposure": 301
+    },
+    "row_count": 301,
+    "run": "L1_floor_13k_live",
+    "source": "docs/evidence/palw/claim-capacity-map-2026-09-26/runs/L1_floor_13k_live.json",
+    "subject_balance_msk": 26000
+  },
+  {
+    "accepted_claims": 18,
+    "accepted_real_block_count": null,
+    "account_identity_ambiguous": false,
+    "account_multiplicity": 1,
+    "evidence": "M_ARCHIVE",
+    "final_unobserved_or_censored": 4,
+    "first80_accepted": 10,
+    "heartbeat_share": null,
+    "last80_accepted": 0,
+    "legacy_escrow_release_delay_daa": {
+      "max": 27,
+      "min": 22,
+      "n": 13,
+      "p50": 23,
+      "p95_nearest_rank": 27,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "observed_daa_slots": 301,
+    "observed_final_delay_daa": {
+      "max": 148,
+      "min": 143,
+      "n": 14,
+      "p50": 144.0,
+      "p95_nearest_rank": 148,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "post_fill_hold_reasons_NOT_refusal_counts": {
+      "share": 301
+    },
+    "row_count": 301,
+    "run": "L2_8k_100k_live",
+    "source": "docs/evidence/palw/claim-capacity-map-2026-09-26/runs/L2_8k_100k_live.json",
+    "subject_balance_msk": 100000
+  },
+  {
+    "accepted_claims": 3,
+    "accepted_real_block_count": null,
+    "account_identity_ambiguous": false,
+    "account_multiplicity": 1,
+    "evidence": "M_ARCHIVE",
+    "final_unobserved_or_censored": 2,
+    "first80_accepted": 3,
+    "heartbeat_share": null,
+    "last80_accepted": 0,
+    "legacy_escrow_release_delay_daa": {
+      "max": 22,
+      "min": 22,
+      "n": 1,
+      "p50": 22,
+      "p95_nearest_rank": 22,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "observed_daa_slots": 301,
+    "observed_final_delay_daa": {
+      "max": 143,
+      "min": 143,
+      "n": 1,
+      "p50": 143,
+      "p95_nearest_rank": 143,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "post_fill_hold_reasons_NOT_refusal_counts": {
+      "exposure": 301
+    },
+    "row_count": 301,
+    "run": "L3_8k_13k_live",
+    "source": "docs/evidence/palw/claim-capacity-map-2026-09-26/runs/L3_8k_13k_live.json",
+    "subject_balance_msk": 13000
+  },
+  {
+    "accepted_claims": 27,
+    "accepted_real_block_count": null,
+    "account_identity_ambiguous": false,
+    "account_multiplicity": 1,
+    "evidence": "M_ARCHIVE",
+    "final_unobserved_or_censored": 18,
+    "first80_accepted": 12,
+    "heartbeat_share": null,
+    "last80_accepted": 9,
+    "legacy_escrow_release_delay_daa": {
+      "max": 23,
+      "min": 23,
+      "n": 24,
+      "p50": 23.0,
+      "p95_nearest_rank": 23,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "observed_daa_slots": 201,
+    "observed_final_delay_daa": {
+      "max": 144,
+      "min": 144,
+      "n": 9,
+      "p50": 144,
+      "p95_nearest_rank": 144,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "post_fill_hold_reasons_NOT_refusal_counts": {
+      "share": 201
+    },
+    "row_count": 201,
+    "run": "M_8k_21k",
+    "source": "docs/evidence/palw/claim-capacity-map-2026-09-26/runs/M_8k_21k.json",
+    "subject_balance_msk": 21000
+  },
+  {
+    "accepted_claims": 27,
+    "accepted_real_block_count": null,
+    "account_identity_ambiguous": false,
+    "account_multiplicity": 1,
+    "evidence": "M_ARCHIVE",
+    "final_unobserved_or_censored": 18,
+    "first80_accepted": 12,
+    "heartbeat_share": null,
+    "last80_accepted": 9,
+    "legacy_escrow_release_delay_daa": {
+      "max": 23,
+      "min": 23,
+      "n": 24,
+      "p50": 23.0,
+      "p95_nearest_rank": 23,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "observed_daa_slots": 201,
+    "observed_final_delay_daa": {
+      "max": 144,
+      "min": 144,
+      "n": 9,
+      "p50": 144,
+      "p95_nearest_rank": 144,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "post_fill_hold_reasons_NOT_refusal_counts": {
+      "share": 201
+    },
+    "row_count": 201,
+    "run": "N_8k_22k",
+    "source": "docs/evidence/palw/claim-capacity-map-2026-09-26/runs/N_8k_22k.json",
+    "subject_balance_msk": 22000
+  },
+  {
+    "accepted_claims": 3,
+    "accepted_real_block_count": null,
+    "account_identity_ambiguous": false,
+    "account_multiplicity": 1,
+    "evidence": "M_ARCHIVE",
+    "final_unobserved_or_censored": 3,
+    "first80_accepted": 3,
+    "heartbeat_share": null,
+    "last80_accepted": 0,
+    "legacy_escrow_release_delay_daa": null,
+    "observed_daa_slots": 121,
+    "observed_final_delay_daa": null,
+    "post_fill_hold_reasons_NOT_refusal_counts": {
+      "share": 121
+    },
+    "row_count": 121,
+    "run": "S2_8k_100k",
+    "source": "docs/evidence/palw/claim-capacity-map-2026-09-26/runs/S2_8k_100k.json",
+    "subject_balance_msk": 100000
+  },
+  {
+    "accepted_claims": 3,
+    "accepted_real_block_count": null,
+    "account_identity_ambiguous": false,
+    "account_multiplicity": 1,
+    "evidence": "M_ARCHIVE",
+    "final_unobserved_or_censored": 3,
+    "first80_accepted": 3,
+    "heartbeat_share": null,
+    "last80_accepted": 0,
+    "legacy_escrow_release_delay_daa": null,
+    "observed_daa_slots": 201,
+    "observed_final_delay_daa": null,
+    "post_fill_hold_reasons_NOT_refusal_counts": {
+      "share": 201
+    },
+    "row_count": 201,
+    "run": "S2_8k_100k_200",
+    "source": "docs/evidence/palw/claim-capacity-map-2026-09-26/runs/S2_8k_100k_200.json",
+    "subject_balance_msk": 100000
+  }
+]

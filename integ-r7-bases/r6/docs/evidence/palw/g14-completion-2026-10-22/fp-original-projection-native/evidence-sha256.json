@@ -1,0 +1,10 @@
+{
+  "rustc-version.log": "28b365392950403f9fea8df93860dc8dd11fef9c2b55723de9f71f88144d9f56",
+  "native-selection-2.log": "e188d8d5b85d7d9aed2f488f1cfa2e5b3841937546287abec3454c7bde58886b",
+  "native-selection-0.log": "8cb7000f7fb140e23d4347ceca56def9217fc4a7cef894ca50dd747d66435343",
+  "source.patch": "786e4f3583912acaddefe31cfcd2d2d5bd186ac9a611a0f4261db6e0e857e423",
+  "native-selection-1.log": "5492da97ad58caff11b6d38b9273bf7287dfc06f2728330ecc55e4cf37ad25f1",
+  "verification.json": "a0eebfdfa32ae648bb3971675c238254cb4ac34b8c232e3361e9dfc764a1700c",
+  "native-build.log": "56eefa64dcd722120ebd744ea2c6ca754a24052f224558628f28d3f14534237f",
+  "cargo-version.log": "49f46ff5ffe434e6c1c66388a9230ac33bbe3dbd9175314e9ffc9aa7c418d329"
+}

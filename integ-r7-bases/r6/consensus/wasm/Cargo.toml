@@ -1,0 +1,46 @@
+[package]
+name = "kaspa-consensus-wasm"
+description = "Kaspa consensus core WASM bindings"
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+# kaspa-pq PQ-only (ADR-0019 §14): secp256k1 is optional, gated behind
+# `legacy-secp256k1` (used only by the legacy error variant — consensus-wasm has no
+# secp signing code), so it stays off in every default/wasm build and never enters
+# the rpc-core -> consensus-wasm path that kaspad links.
+default = ["pq-only"]
+pq-only = []
+legacy-secp256k1 = ["dep:secp256k1"]
+wasm32-sdk = []
+wasm32-types = []
+
+[dependencies]
+kaspa-consensus-core.workspace = true
+kaspa-consensus-client.workspace = true
+kaspa-addresses.workspace = true
+kaspa-txscript.workspace = true
+kaspa-hashes.workspace = true
+kaspa-utils.workspace = true
+
+cfg-if.workspace = true
+faster-hex.workspace = true
+js-sys.workspace = true
+rand.workspace = true
+secp256k1 = { workspace = true, optional = true }
+serde_json.workspace = true
+serde-wasm-bindgen.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+wasm-bindgen.workspace = true
+
+workflow-wasm.workspace = true
+workflow-log.workspace = true
+
+[lints]
+workspace = true

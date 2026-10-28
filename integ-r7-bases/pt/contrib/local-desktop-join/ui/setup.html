@@ -1,0 +1,3184 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MISAKA Setup</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f4f6f9;
+      --surface: #ffffff;
+      --surface-2: #f9fbfd;
+      --text: #172033;
+      --muted: #5e6a7e;
+      --line: #d9e0ea;
+      --blue: #1167d8;
+      --green: #147c45;
+      --amber: #aa6400;
+      --red: #b4232f;
+      --ink: #111827;
+      --terminal: #0f172a;
+      --terminal-text: #dbe7ff;
+      --shadow: 0 10px 28px rgba(17, 24, 39, 0.08);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 15px;
+    }
+
+    button, input, select {
+      font: inherit;
+    }
+
+    button {
+      border: 1px solid var(--line);
+      background: var(--surface);
+      color: var(--text);
+      border-radius: 8px;
+      padding: 10px 12px;
+      cursor: pointer;
+    }
+
+    button.primary {
+      background: var(--blue);
+      border-color: var(--blue);
+      color: #fff;
+      font-weight: 750;
+    }
+
+    button:disabled {
+      opacity: .48;
+      cursor: not-allowed;
+    }
+
+    input, select {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px 12px;
+      background: #fff;
+      color: var(--text);
+    }
+
+    .app {
+      min-height: 100vh;
+      display: grid;
+      grid-template-columns: 310px minmax(0, 1fr);
+    }
+
+    .side {
+      background: var(--surface);
+      border-right: 1px solid var(--line);
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 800;
+      font-size: 18px;
+    }
+
+    .mark {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      display: grid;
+      place-items: center;
+      background: var(--ink);
+      color: #fff;
+      font-weight: 900;
+    }
+
+    .lang {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    .lang button {
+      border: 0;
+      border-radius: 0;
+      padding: 8px;
+    }
+
+    .lang button.active {
+      background: var(--blue);
+      color: #fff;
+      font-weight: 750;
+    }
+
+    .side-title {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0;
+      text-transform: uppercase;
+      margin: 0 0 8px;
+    }
+
+    .steps {
+      display: grid;
+      gap: 8px;
+    }
+
+    .step {
+      display: grid;
+      grid-template-columns: 26px 1fr auto;
+      gap: 10px;
+      align-items: center;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface-2);
+      min-width: 0;
+    }
+
+    .dot {
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      color: #fff;
+      font-size: 12px;
+      font-weight: 800;
+      background: #8792a4;
+    }
+
+    .step.done .dot { background: var(--green); }
+    .step.active .dot { background: var(--blue); }
+    .step.warn .dot { background: var(--amber); }
+    .step.fail .dot { background: var(--red); }
+
+    .step-title {
+      font-weight: 750;
+      line-height: 1.25;
+    }
+
+    .step-sub {
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .pill {
+      border-radius: 999px;
+      padding: 4px 8px;
+      font-size: 11px;
+      font-weight: 800;
+      border: 1px solid var(--line);
+      color: var(--muted);
+      background: #fff;
+      white-space: nowrap;
+    }
+
+    .pill.done { color: var(--green); border-color: rgba(20, 124, 69, .25); background: #eef9f2; }
+    .pill.active { color: var(--blue); border-color: rgba(17, 103, 216, .25); background: #eef5ff; }
+    .pill.warn { color: var(--amber); border-color: rgba(170, 100, 0, .25); background: #fff6e8; }
+    .pill.fail { color: var(--red); border-color: rgba(180, 35, 47, .25); background: #fff0f1; }
+
+    .control-list {
+      display: grid;
+      gap: 8px;
+    }
+
+    .control-list button {
+      width: 100%;
+      text-align: left;
+    }
+
+    .field {
+      display: grid;
+      gap: 6px;
+      margin-top: 4px;
+    }
+
+    .label {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .hint-note {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.4;
+    }
+
+    .hint-note.ok { color: var(--green); }
+    .hint-note.warn { color: var(--amber); }
+    .hint-note.bad { color: var(--red); }
+
+    .main {
+      min-width: 0;
+      padding: 22px;
+      display: grid;
+      gap: 16px;
+      align-content: start;
+    }
+
+    .top {
+      display: flex;
+      justify-content: space-between;
+      gap: 14px;
+      align-items: flex-start;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 24px;
+      line-height: 1.2;
+      letter-spacing: 0;
+    }
+
+    .muted {
+      color: var(--muted);
+      line-height: 1.5;
+    }
+
+    .actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .progress-panel,
+    .choice-panel,
+    .ip-panel,
+    .sync-activity,
+    .status-grid,
+    .terminal-panel,
+    .details-panel {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+    }
+
+    .progress-panel {
+      padding: 16px;
+      display: grid;
+      gap: 12px;
+    }
+
+    .choice-panel,
+    .ip-panel {
+      padding: 16px;
+      display: grid;
+      gap: 12px;
+    }
+
+    .choice-panel.hidden,
+    .ip-panel.hidden {
+      display: none;
+    }
+
+    .choice-actions,
+    .ip-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .choice-actions button,
+    .ip-actions button {
+      min-width: 150px;
+    }
+
+    .ip-row {
+      display: grid;
+      grid-template-columns: minmax(180px, 320px) 1fr;
+      gap: 12px;
+      align-items: end;
+    }
+
+    .ip-note {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .ip-confirmed {
+      color: var(--green);
+      font-weight: 800;
+    }
+
+    .next {
+      color: var(--muted);
+      line-height: 1.45;
+    }
+
+    .next-action-head,
+    .card-head,
+    .support-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .next-action-title {
+      margin: 4px 0 5px;
+      font-size: 20px;
+      font-weight: 850;
+      line-height: 1.3;
+    }
+
+    .state-code {
+      border-radius: 999px;
+      padding: 5px 9px;
+      background: #eef5ff;
+      border: 1px solid rgba(17, 103, 216, .24);
+      color: var(--blue);
+      font-size: 11px;
+      font-weight: 850;
+      white-space: nowrap;
+    }
+
+    .next-action-buttons,
+    .support-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    #nextActionButton {
+      min-width: 220px;
+    }
+
+    .bar-wrap {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 12px;
+      align-items: center;
+    }
+
+    .bar {
+      height: 12px;
+      border-radius: 999px;
+      background: #e8edf5;
+      overflow: hidden;
+      border: 1px solid var(--line);
+    }
+
+    .bar-fill {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, var(--blue), #17a267);
+      transition: width .25s ease;
+    }
+
+    .percent {
+      color: var(--muted);
+      font-weight: 800;
+      min-width: 48px;
+      text-align: right;
+    }
+
+    .sync-activity {
+      padding: 16px;
+      display: grid;
+      gap: 12px;
+      overflow: hidden;
+    }
+
+    .sync-activity.hidden {
+      display: none;
+    }
+
+    .sync-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 14px;
+    }
+
+    .sync-state {
+      margin-top: 4px;
+      font-size: 18px;
+      font-weight: 850;
+      line-height: 1.25;
+    }
+
+    .sync-daa {
+      text-align: right;
+      font-weight: 850;
+      white-space: nowrap;
+      color: var(--blue);
+    }
+
+    .sync-meter {
+      height: 14px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: #e8edf5;
+      overflow: hidden;
+    }
+
+    .sync-meter-fill {
+      height: 100%;
+      width: 0%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, #1167d8, #17a267, #1167d8);
+      background-size: 220% 100%;
+      transition: width .3s ease;
+    }
+
+    .sync-activity.moving .sync-meter-fill {
+      width: 72%;
+      animation: syncFlow 1.2s linear infinite;
+    }
+
+    .sync-activity.waiting .sync-meter-fill {
+      width: 28%;
+      background: linear-gradient(90deg, #aa6400, #e6a13c);
+    }
+
+    .sync-activity.synced .sync-meter-fill {
+      width: 100%;
+      background: linear-gradient(90deg, #147c45, #17a267);
+    }
+
+    .sync-stats {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .sync-stat {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px;
+      background: var(--surface-2);
+      min-width: 0;
+    }
+
+    .sync-stat strong {
+      display: block;
+      margin-top: 3px;
+      font-size: 15px;
+      overflow-wrap: anywhere;
+    }
+
+    @keyframes syncFlow {
+      from { background-position: 0% 0; }
+      to { background-position: 220% 0; }
+    }
+
+    .status-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      overflow: hidden;
+    }
+
+    .metric {
+      padding: 16px;
+      border-right: 1px solid var(--line);
+      min-width: 0;
+    }
+
+    .metric:last-child {
+      border-right: 0;
+    }
+
+    .metric .value {
+      margin-top: 6px;
+      font-size: 18px;
+      font-weight: 850;
+      letter-spacing: 0;
+    }
+
+    .metric-note {
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+      min-height: 32px;
+    }
+
+    .participation-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px;
+    }
+
+    .status-card,
+    .support-panel {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      padding: 16px;
+      min-width: 0;
+    }
+
+    .card-title {
+      font-size: 17px;
+      font-weight: 850;
+    }
+
+    .card-copy {
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .data-grid {
+      display: grid;
+      gap: 8px;
+      margin-top: 14px;
+    }
+
+    .data-row {
+      display: grid;
+      grid-template-columns: minmax(120px, .8fr) minmax(0, 1.4fr);
+      gap: 12px;
+      align-items: start;
+      padding-top: 8px;
+      border-top: 1px solid var(--line);
+    }
+
+    .data-row:first-child {
+      padding-top: 0;
+      border-top: 0;
+    }
+
+    .data-row b {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .data-row span {
+      min-width: 0;
+      overflow-wrap: anywhere;
+      font-weight: 700;
+    }
+
+    .mini-progress {
+      height: 10px;
+      margin-top: 12px;
+      border-radius: 999px;
+      overflow: hidden;
+      background: #e8edf5;
+      border: 1px solid var(--line);
+    }
+
+    .mini-progress span {
+      display: block;
+      width: 0%;
+      height: 100%;
+      background: linear-gradient(90deg, var(--blue), #17a267);
+      transition: width .25s ease;
+    }
+
+    .evidence-box {
+      margin-top: 14px;
+      border-left: 4px solid var(--amber);
+      border-radius: 8px;
+      padding: 11px 12px;
+      background: #fff8ec;
+      line-height: 1.45;
+    }
+
+    .evidence-box.success {
+      border-left-color: var(--green);
+      background: #eef9f2;
+    }
+
+    .evidence-box strong,
+    .evidence-box span {
+      display: block;
+    }
+
+    .evidence-box span {
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
+
+    .support-panel.hidden {
+      display: none;
+    }
+
+    .support-error {
+      margin: 12px 0;
+      border-radius: 8px;
+      padding: 11px 12px;
+      background: #fff0f1;
+      color: var(--red);
+      font-weight: 750;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+
+    .ok { color: var(--green); }
+    .warn { color: var(--amber); }
+    .bad { color: var(--red); }
+
+    .terminal-panel {
+      overflow: hidden;
+    }
+
+    .panel-head {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      background: var(--surface-2);
+    }
+
+    .panel-head strong {
+      font-weight: 800;
+    }
+
+    .panel-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    pre {
+      white-space: pre-wrap;
+      word-break: break-word;
+      background: var(--terminal);
+      color: var(--terminal-text);
+      padding: 14px;
+      min-height: 300px;
+      max-height: 540px;
+      overflow: auto;
+      margin: 0;
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .terminal-panel.collapsed pre {
+      display: none;
+    }
+
+    details.details-panel {
+      padding: 0;
+    }
+
+    details.details-panel summary {
+      cursor: pointer;
+      padding: 12px 14px;
+      color: var(--blue);
+      font-weight: 750;
+    }
+
+    #raw {
+      min-height: 180px;
+      max-height: 360px;
+      border-top: 1px solid var(--line);
+    }
+
+    @media (max-width: 920px) {
+      .app { grid-template-columns: 1fr; }
+      .side { border-right: 0; border-bottom: 1px solid var(--line); }
+    }
+
+    @media (max-width: 680px) {
+      .main { padding: 16px; }
+      .top { display: grid; }
+      .actions { justify-content: stretch; }
+      .actions button { width: 100%; }
+      .ip-row { grid-template-columns: 1fr; }
+      .sync-head { display: grid; }
+      .sync-daa { text-align: left; }
+      .sync-stats { grid-template-columns: 1fr; }
+      .status-grid { grid-template-columns: 1fr; }
+      .participation-grid { grid-template-columns: 1fr; }
+      .data-row { grid-template-columns: 1fr; gap: 3px; }
+      #nextActionButton { width: 100%; min-width: 0; }
+      .metric { border-right: 0; border-bottom: 1px solid var(--line); }
+      .metric:last-child { border-bottom: 0; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="side">
+      <div class="brand">
+        <div class="mark">M</div>
+        <div>MISAKA Setup</div>
+      </div>
+
+      <div class="lang" aria-label="Language">
+        <button id="enBtn" class="active" type="button">English</button>
+        <button id="jaBtn" type="button">日本語</button>
+      </div>
+
+      <section>
+        <p class="side-title" data-i18n="stepsTitle">Progress</p>
+        <div id="steps" class="steps"></div>
+      </section>
+
+      <section>
+        <p class="side-title" data-i18n="actionsTitle">Actions</p>
+        <div class="control-list">
+          <button id="btn-check-app" onclick="callApi('/api/bootstrap/status')" data-i18n="btnCheckApp">1. Check app</button>
+          <button id="btn-auto-node" class="primary" onclick="autoNodeJoin()" data-i18n="btnAutoNode">Auto node setup</button>
+          <button id="btn-auto-validator" class="primary" onclick="autoValidatorJoin()" data-i18n="btnAutoValidator">Auto validator setup</button>
+          <button id="btn-auto-stop" onclick="stopAuto()" data-i18n="btnStopAuto">Stop automatic setup</button>
+          <button id="btn-prepare" class="primary" onclick="callApi('/api/bootstrap/prepare')" data-i18n="btnPrepare">2. Prepare VPS</button>
+          <button id="btn-prepare-logs" onclick="startPrepareLogs()" data-i18n="btnPrepareLogs">View prepare logs</button>
+          <button id="btn-preflight" onclick="callApi('/api/preflight')" data-i18n="btnPreflight">3. Check VPS</button>
+          <button id="btn-node-preview" onclick="callApi('/api/node/dry-run')" data-i18n="btnPreview">4. Preview node service</button>
+          <button id="btn-node-apply" class="primary" onclick="applyNode()" data-i18n="btnNodeApply">5. Start node</button>
+          <button id="btn-status" onclick="callApi('/api/status')" data-i18n="btnStatus">6. Check sync</button>
+          <button id="btn-node-restart" onclick="callApi('/api/node/restart')" data-i18n="btnNodeRestart">Restart node</button>
+          <button id="btn-node-logs" onclick="callApi('/api/logs')" data-i18n="btnNodeLogs">Node logs</button>
+          <button id="btn-dashboard" onclick="openDashboard()" data-i18n="btnDashboard">Dashboard</button>
+          <button id="btn-learn" onclick="openLearn()" data-i18n="btnLearn">Learn</button>
+          <button id="btn-support" onclick="openSupportPanel()" data-i18n="btnSupport">Support report</button>
+          <button id="btn-stop" onclick="callApi('/api/stop-setup')" data-i18n="btnFinish">Finish setup page</button>
+        </div>
+      </section>
+
+      <section>
+        <p class="side-title" data-i18n="validatorTitle">Validator</p>
+        <div class="control-list">
+          <button id="btn-validator-status" onclick="callApi('/api/validator/status')" data-i18n="btnValidatorStatus">7. Check validator</button>
+          <button id="btn-validator-keygen" onclick="callApi('/api/validator/keygen')" data-i18n="btnKeygen">8. Generate key</button>
+          <button id="btn-miner-diagnose" onclick="callApi('/api/miner/diagnostics')" data-i18n="btnMinerDiagnose">9. VPS CPU check</button>
+          <div class="field">
+            <label id="minerThreadsLabel" class="label" for="minerThreads" data-i18n="minerThreads">Mining threads</label>
+            <select id="minerThreads">
+              <option value="1">1</option>
+            </select>
+          </div>
+          <button id="btn-miner-start" class="primary" onclick="startMiner()" data-i18n="btnMinerStart">10. Start mining</button>
+          <button id="btn-miner-logs" onclick="callApi('/api/miner/logs')" data-i18n="btnMinerLogs">Miner logs</button>
+          <button id="btn-miner-stop" onclick="callApi('/api/miner/service/stop')" data-i18n="btnMinerStop">Stop miner</button>
+          <button id="btn-validator-balance" onclick="callApi('/api/validator/balance')" data-i18n="btnFunding">11. Check bond balance</button>
+          <div class="field">
+            <label id="bondAmountLabel" class="label" for="bondAmount" data-i18n="bondAmount">Bond amount</label>
+            <input id="bondAmount" value="10MSK" autocomplete="off">
+            <div id="bondHint" class="hint-note" data-i18n="bondHintUnknown">Check bond balance before creating bond.</div>
+            <div class="hint-note warn" data-i18n="bondMaturityExplainer">Visible balance is not always bondable. Mined rewards need coinbase maturity first.</div>
+          </div>
+          <button id="btn-bond" class="primary" onclick="createBond()" data-i18n="btnBond">12. Create bond</button>
+          <button id="btn-validator-chain" onclick="callApi('/api/validator/chain-status')" data-i18n="btnValidatorChain">13. Validator status</button>
+          <button id="btn-validator-apply" class="primary" onclick="callApi('/api/validator/service/apply')" data-i18n="btnValidatorApply">14. Start validator</button>
+          <button id="btn-validator-logs" onclick="callApi('/api/validator/logs')" data-i18n="btnValidatorLogs">Validator logs</button>
+        </div>
+      </section>
+    </aside>
+
+    <main class="main">
+      <section class="top">
+        <div>
+          <h1 data-i18n="title">Join the MISAKA testnet with buttons</h1>
+          <div class="muted" data-i18n="subtitle">Prepare the VPS, start the node, watch sync, and continue into validator setup from the browser. Bond submission still asks for confirmation.</div>
+        </div>
+        <div class="actions">
+          <button id="btn-quick-refresh" onclick="refreshLiveState(true)" data-i18n="quickRefresh">Refresh status</button>
+          <button id="btn-quick-auto" class="primary" onclick="autoNodeJoin()" data-i18n="quickAuto">Auto node</button>
+          <button id="btn-quick-validator" class="primary" onclick="autoValidatorJoin()" data-i18n="quickValidator">Auto validator</button>
+          <button id="btn-quick-dashboard" onclick="openDashboard()" data-i18n="quickDashboard">Dashboard</button>
+          <button id="btn-quick-learn" onclick="openLearn()" data-i18n="quickLearn">Learn</button>
+          <button id="btn-quick-support" onclick="openSupportPanel()" data-i18n="quickSupport">Support</button>
+        </div>
+      </section>
+
+      <section id="languageChoice" class="choice-panel">
+        <div>
+          <strong data-i18n="languageChoiceTitle">Choose language</strong>
+          <div class="muted" data-i18n="languageChoiceBody">You can change this later from the sidebar.</div>
+        </div>
+        <div class="choice-actions">
+          <button class="primary" type="button" onclick="chooseLanguage('en')">English</button>
+          <button type="button" onclick="chooseLanguage('ja')">日本語</button>
+        </div>
+      </section>
+
+      <section id="publicIpPanel" class="ip-panel">
+        <div>
+          <strong data-i18n="publicIpTitle">VPS public IP</strong>
+          <div id="publicIpStatus" class="ip-note" data-i18n="publicIpChecking">Detecting the VPS public IP...</div>
+        </div>
+        <div class="ip-row">
+          <div class="field">
+            <label class="label" for="publicIpInput" data-i18n="publicIpLabel">Detected IP</label>
+            <input id="publicIpInput" autocomplete="off" inputmode="decimal" placeholder="203.0.113.10">
+          </div>
+          <div class="ip-actions">
+            <button id="btn-public-ip-confirm" class="primary" type="button" onclick="confirmPublicIp()" data-i18n="btnConfirmPublicIp">Use this IP</button>
+            <button id="btn-public-ip-refresh" type="button" onclick="refreshPublicIp(true)" data-i18n="btnRefreshPublicIp">Detect again</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="progress-panel">
+        <div class="next-action-head">
+          <div>
+            <div class="label" data-i18n="nextActionLabel">Next action</div>
+            <div id="nextActionTitle" class="next-action-title">Confirm the VPS public IP</div>
+            <div id="hint" class="next">Confirm the detected address before starting the node.</div>
+          </div>
+          <span id="nextState" class="state-code">NeedsPublicIp</span>
+        </div>
+        <div class="next-action-buttons">
+          <button id="nextActionButton" class="primary" type="button">Use this IP</button>
+          <button id="nextRefreshButton" type="button" onclick="refreshLiveState(true)" data-i18n="btnRefreshState">Refresh current state</button>
+        </div>
+        <div class="bar-wrap">
+          <div class="bar" aria-hidden="true"><div id="barFill" class="bar-fill"></div></div>
+          <div id="percent" class="percent">0%</div>
+        </div>
+      </section>
+
+      <section class="participation-grid">
+        <article class="status-card">
+          <div class="card-head">
+            <div>
+              <div class="card-title" data-i18n="minerCardTitle">Miner and coinbase maturity</div>
+              <div class="card-copy" data-i18n="minerCardBody">See whether mining is producing blocks and when rewards are expected to become bondable.</div>
+            </div>
+            <span id="minerCardState" class="pill warn">WAIT</span>
+          </div>
+          <div class="data-grid">
+            <div class="data-row"><b data-i18n="minerStatusLabel">Miner status</b><span id="minerCardService">-</span></div>
+            <div class="data-row"><b data-i18n="fundingAddressLabel">Funding address</b><span id="minerCardAddress">-</span></div>
+            <div class="data-row"><b data-i18n="visibleBalanceLabel">Visible balance</b><span id="minerCardBalance">-</span></div>
+            <div class="data-row"><b data-i18n="minedBlocksLabel">Blocks mined this run</b><span id="minerCardBlocks">-</span></div>
+            <div class="data-row"><b data-i18n="maturityLabel">Maturity estimate</b><span id="minerCardMaturity">-</span></div>
+          </div>
+          <div class="mini-progress" aria-label="coinbase maturity progress"><span id="minerMaturityBar"></span></div>
+          <div id="minerMaturityNote" class="card-copy" data-i18n="maturityNotTracked">Start mining from this UI to track the estimate.</div>
+        </article>
+
+        <article class="status-card">
+          <div class="card-head">
+            <div>
+              <div class="card-title" data-i18n="validatorCardTitle">Validator participation evidence</div>
+              <div class="card-copy" data-i18n="validatorCardBody">RUNNING means the process is active. Attestation success confirms participation on-chain.</div>
+            </div>
+            <span id="validatorCardState" class="pill warn">WAIT</span>
+          </div>
+          <div class="data-grid">
+            <div class="data-row"><b data-i18n="validatorStatusLabel">Validator status</b><span id="validatorCardService">-</span></div>
+            <div class="data-row"><b data-i18n="bondStatusLabel">Bond</b><span id="validatorCardBond">-</span></div>
+            <div class="data-row"><b data-i18n="attestationEpochLabel">Last successful epoch</b><span id="attestationEpoch">-</span></div>
+            <div class="data-row"><b data-i18n="attestationTxLabel">Transaction ID</b><span id="attestationTxid">-</span></div>
+          </div>
+          <div id="attestationEvidence" class="evidence-box">
+            <strong id="attestationTitle">Waiting for attestation evidence</strong>
+            <span id="attestationDetail">Start the validator, then this card checks its logs automatically.</span>
+          </div>
+        </article>
+      </section>
+
+      <section id="syncActivity" class="sync-activity hidden">
+        <div class="sync-head">
+          <div>
+            <div class="label" data-i18n="syncActivityTitle">Sync activity</div>
+            <div id="syncActivityState" class="sync-state">Waiting for node</div>
+            <div class="muted" data-i18n="syncActivityBody">If DAA keeps increasing, sync is moving.</div>
+          </div>
+          <div id="syncActivityDaa" class="sync-daa">DAA -</div>
+        </div>
+        <div class="sync-meter" aria-hidden="true"><div id="syncMeterFill" class="sync-meter-fill"></div></div>
+        <div class="sync-stats">
+          <div class="sync-stat">
+            <span class="label" data-i18n="syncDeltaLabel">Last change</span>
+            <strong id="syncDelta">-</strong>
+          </div>
+          <div class="sync-stat">
+            <span class="label" data-i18n="syncRateLabel">Estimated pace</span>
+            <strong id="syncRate">-</strong>
+          </div>
+          <div class="sync-stat">
+            <span class="label" data-i18n="syncLastMoveLabel">Last moved</span>
+            <strong id="syncLastMove">-</strong>
+          </div>
+        </div>
+      </section>
+
+      <section class="status-grid">
+        <div class="metric">
+          <div class="label">Node</div>
+          <div id="node" class="value">-</div>
+          <div id="nodeNote" class="metric-note" data-i18n="nodeNote">Not checked yet.</div>
+        </div>
+        <div class="metric">
+          <div class="label">Sync</div>
+          <div id="sync" class="value">-</div>
+          <div id="syncNote" class="metric-note" data-i18n="syncNote">Sync starts after the node is running.</div>
+        </div>
+        <div class="metric">
+          <div class="label">P2P</div>
+          <div id="p2p" class="value">-</div>
+          <div id="p2pNote" class="metric-note" data-i18n="p2pNote">Checks the 26211/tcp listener.</div>
+        </div>
+        <div class="metric">
+          <div class="label">Validator</div>
+          <div id="validator" class="value">-</div>
+          <div id="validatorNote" class="metric-note" data-i18n="validatorNote">Available after node sync.</div>
+        </div>
+      </section>
+
+      <section id="terminalPanel" class="terminal-panel">
+        <div class="panel-head">
+          <strong data-i18n="terminalTitle">Run log</strong>
+          <div class="panel-actions">
+            <button id="toggleTerminal" type="button" data-i18n="hideLog">Hide log</button>
+            <button id="copyLog" type="button" data-i18n="copyLog">Copy</button>
+          </div>
+        </div>
+        <pre id="log">Ready. Start with "1. Check App".</pre>
+      </section>
+
+      <section id="supportPanel" class="support-panel hidden" aria-live="polite">
+        <div class="support-head">
+          <div>
+            <div class="card-title" data-i18n="supportTitle">Support report</div>
+            <div class="card-copy" data-i18n="supportBody">Copy or save this redacted report and attach it when asking the project maintainer or support channel for help.</div>
+          </div>
+          <button type="button" onclick="closeSupportPanel()" data-i18n="btnCloseSupport">Close</button>
+        </div>
+        <div id="supportError" class="support-error"></div>
+        <div id="supportMeta" class="card-copy"></div>
+        <div class="support-actions">
+          <button id="copySupportReport" class="primary" type="button" data-i18n="btnCopySupport">Copy report for submission</button>
+          <button id="saveSupportReport" type="button" data-i18n="btnSaveSupport">Save report (.txt)</button>
+        </div>
+      </section>
+
+      <details class="details-panel">
+        <summary data-i18n="details">Raw JSON</summary>
+        <pre id="raw"></pre>
+      </details>
+    </main>
+  </div>
+
+  <script>
+    const token = "__SETUP_TOKEN__";
+    const logEl = document.getElementById('log');
+    const rawEl = document.getElementById('raw');
+    const hintEl = document.getElementById('hint');
+    const buttons = Array.from(document.querySelectorAll('button'));
+    const barFill = document.getElementById('barFill');
+    const percentEl = document.getElementById('percent');
+    const terminalPanel = document.getElementById('terminalPanel');
+    const syncActivityEl = document.getElementById('syncActivity');
+    const syncActivityStateEl = document.getElementById('syncActivityState');
+    const syncActivityDaaEl = document.getElementById('syncActivityDaa');
+    const syncDeltaEl = document.getElementById('syncDelta');
+    const syncRateEl = document.getElementById('syncRate');
+    const syncLastMoveEl = document.getElementById('syncLastMove');
+    const nextActionButton = document.getElementById('nextActionButton');
+    const nextActionTitleEl = document.getElementById('nextActionTitle');
+    const nextStateEl = document.getElementById('nextState');
+    const supportPanel = document.getElementById('supportPanel');
+    let prepareLogPoll = null;
+    let liveRefreshRunning = false;
+    let busy = false;
+    let autoRunning = false;
+    let autoStopRequested = false;
+    let autoLines = [];
+    let lang = 'en';
+    let terminalOpen = true;
+    let currentNextAction = null;
+    let lastSupportError = null;
+    let lastSupportContext = 'initial state';
+    let lastSnapshot = {};
+    const gate = {
+      publicIpKnown: false,
+      publicIpConfirmed: false,
+      bootstrapReady: false,
+      prepareRunning: false,
+      prepareKnown: false,
+      prepareComplete: false,
+      prepareFailed: false,
+      preflightOk: false,
+      nodeService: false,
+      nodeReachable: false,
+      nodeSynced: false,
+      p2pListening: false,
+      validatorKeyFile: false,
+      validatorFundingAddress: null,
+      validatorStateMissing: false,
+      validatorKey: false,
+      validatorBond: false,
+      validatorRunning: false,
+      fundingBalanceSompi: null,
+      fundingBalanceMsk: null,
+      minerRunning: false,
+      minerKnown: false,
+      minerDiagnosed: false,
+      maturity: null,
+      minedBlocks: null,
+      lastMinedDaa: null,
+      attestationSuccess: false,
+      attestationEpoch: null,
+      attestationTxid: null,
+      attestationLine: null,
+    };
+    let minerThreadTouched = false;
+    let publicIpTouched = false;
+    const syncActivity = {
+      lastNode: null,
+      lastDaa: null,
+      lastTs: null,
+      lastDelta: 0,
+      ratePerMin: null,
+      lastMoveTs: null,
+    };
+
+    const i18n = {
+      ja: {
+        title: 'ボタンでMISAKA testnetに参加',
+        subtitle: 'VPS準備、node起動、同期確認、validator準備までをブラウザで進めます。bond作成だけは確認してから実行します。',
+        languageChoiceTitle: '言語を選択',
+        languageChoiceBody: 'あとから左側の切替で変更できます。',
+        publicIpTitle: 'VPSの公開IP',
+        publicIpLabel: '検出したIP',
+        publicIpChecking: 'VPSの公開IPを検出しています...',
+        publicIpConfirmed: 'このIPを使用します: {ip}',
+        publicIpNeedsConfirm: '検出候補: {ip}。nodeの公開IPとして使う前に確認してください。',
+        publicIpUnknown: '公開IPを自動検出できませんでした。VPSのIPv4を入力してください。',
+        publicIpSaved: '保存済み',
+        publicIpLaunch: '起動時指定',
+        publicIpBrowser: 'ブラウザURL',
+        publicIpDetected: 'VPS側で検出',
+        publicIpInvalid: 'IPv4アドレスを入力してください。',
+        publicIpConfirmDialog: 'このIPをnodeの公開IPとして使いますか？\n\n{ip}',
+        publicIpConfirmDone: '公開IPを保存しました。',
+        btnConfirmPublicIp: 'このIPで進める',
+        btnRefreshPublicIp: '再検出',
+        stepsTitle: '進行状況',
+        actionsTitle: '操作',
+        validatorTitle: 'Validator',
+        terminalTitle: '実行ログ',
+        details: '詳細JSON',
+        hideLog: 'ログを閉じる',
+        showLog: 'ログを開く',
+        copyLog: 'コピー',
+        copied: 'コピーしました。',
+        noLogsYet: 'ログはまだありません。',
+        quickRefresh: '参加状況を更新',
+        quickAuto: 'node自動開始',
+        quickValidator: 'validator自動開始',
+        quickDashboard: 'ダッシュボード',
+        quickLearn: '用語と仕組み',
+        quickSupport: 'サポート',
+        nextActionLabel: '次にすること',
+        btnRefreshState: '現在の状態を再確認',
+        btnSupport: 'サポート情報',
+        btnCheckApp: '1. アプリ確認',
+        btnAutoNode: '自動でnode参加',
+        btnAutoValidator: '自動でvalidator参加',
+        btnStopAuto: '自動実行を停止',
+        btnPrepare: '2. VPS準備',
+        btnPrepareLogs: '準備ログを見る',
+        btnPreflight: '3. VPS確認',
+        btnPreview: '4. node設定を確認',
+        btnNodeApply: '5. nodeを開始',
+        btnStatus: '6. 同期確認',
+        btnNodeRestart: 'node再起動',
+        btnNodeLogs: 'nodeログ',
+        btnDashboard: '参加ダッシュボード',
+        btnLearn: '用語と仕組み',
+        minerCardTitle: 'minerとcoinbase maturity',
+        minerCardBody: 'マイニングの成果と、報酬をBondに使えるようになる目安を確認します。',
+        minerStatusLabel: 'miner状態',
+        fundingAddressLabel: 'funding address',
+        visibleBalanceLabel: '表示残高',
+        minedBlocksLabel: '今回の採掘block数',
+        maturityLabel: '成熟見込み',
+        maturityNotTracked: 'Web UIからマイニングを開始すると、開始DAAから成熟見込みを追跡します。',
+        validatorCardTitle: 'validator参加の成功証跡',
+        validatorCardBody: 'RUNNINGはプロセス稼働、attestation送信成功はtestnet参加の証跡です。',
+        validatorStatusLabel: 'validator状態',
+        bondStatusLabel: 'Bond',
+        attestationEpochLabel: '直近の成功epoch',
+        attestationTxLabel: 'transaction ID',
+        supportTitle: '提出用サポート情報',
+        supportBody: '秘匿情報を除いたレポートをコピーまたは保存し、管理者やサポート窓口へ添付してください。',
+        btnCloseSupport: '閉じる',
+        btnCopySupport: '提出用レポートをコピー',
+        btnSaveSupport: 'レポートを保存 (.txt)',
+        supportNoError: '現在エラーは記録されていません。現在状態のレポートを作成できます。',
+        supportCopied: '提出用レポートをコピーしました。',
+        statusRunning: '実行中',
+        statusStopped: '停止中',
+        statusUnknown: '未確認',
+        balanceNotChecked: '未確認（「11. Bond用残高確認」で更新）',
+        minedNoBlocks: 'まだ採掘成功を確認できません',
+        maturityReadyCard: '目安到達（実際の成熟UTXOはBond時に確認）',
+        maturityProgressCard: '残り約 {remaining} blocks（{percent}%）',
+        bondCreated: '作成済み',
+        bondMissing: '未作成',
+        attestationWaitingTitle: 'attestation成功待ち',
+        attestationWaitingDetail: 'validatorログを30秒ごとに確認します。RUNNINGだけでは送信成功とは判定しません。',
+        attestationSuccessTitle: 'attestation送信成功',
+        attestationSuccessDetail: 'epoch {epoch} の送信を確認しました。',
+        btnFinish: 'セットアップ画面を終了',
+        btnValidatorStatus: '7. validator確認',
+        btnKeygen: '8. キー作成',
+        btnMinerDiagnose: '9. VPS CPU診断',
+        minerThreads: 'マイニングスレッド',
+        btnMinerStart: '10. マイニング開始',
+        btnMinerLogs: 'マイニングログ',
+        btnMinerStop: 'マイニング停止',
+        btnFunding: '11. Bond用残高確認',
+        btnBond: '12. Bond作成',
+        btnValidatorChain: '13. validator状態',
+        btnValidatorApply: '14. validator開始',
+        btnValidatorLogs: 'validatorログ',
+        bondAmount: 'Bond amount',
+        bondHintUnknown: '先に「11. Bond用残高確認」を押してください。',
+        bondHintZero: '残高は0です。マイニング後、coinbase maturityを待ってから再確認してください。',
+        bondHintLow: '残高 {balance} MSK は Bond amount {amount} に足りません。',
+        bondHintReady: '残高 {balance} MSK を確認しました。ただしBond作成には成熟済みUTXOが必要です。',
+        bondHintInvalid: 'Bond amountを 10MSK のように入力してください。',
+        bondMaturityExplainer: '注意: 表示される残高と、Bondに使える成熟済みUTXOは別です。マイニング報酬はcoinbase maturityを過ぎてからBondに使えます。現在の必要block数はmaturity表示で確認してください。',
+        balanceLine: 'Funding balance: {balance} MSK',
+        balanceMaturityLine: '注意: 残高があっても、成熟済みUTXOでなければBondには使えません。現在の必要block数はmaturity表示で確認してください。',
+        balanceZeroLine: 'Funding残高は0です。報酬が未成熟、またはnode/UTXO indexの反映待ちの可能性があります。待ってから再確認してください。',
+        bondMatureErrorTitle: 'Bondに使える成熟UTXOがまだ足りません。',
+        bondMatureErrorBody: '残高が表示されていても、マイニング報酬はcoinbase maturityを過ぎるまでBondに使えません。現在の必要block数はmaturity表示で確認してください。',
+        maturityProgressLine: '成熟目安: {elapsed}/{required} blocks 経過、残り約 {remaining} blocks',
+        maturityDaaLine: '現在DAA: {current} / miner開始DAA: {start}',
+        maturityReadyLine: '開始時点からの目安では必要な {required} blocksを超えています。実際のBond作成時に成熟済みUTXOを最終確認します。',
+        maturityUnknownLine: '成熟目安はまだ計測できません。Web UIからマイニング開始すると、開始DAAから目安を表示できます。',
+        maturityApproxLine: 'これは目安です。実際にはBond作成時にUTXO単位で成熟済みか確認されます。',
+        nodeNote: 'まだ確認前です。',
+        syncNote: 'node開始後に同期します。',
+        p2pNote: '26211/tcp の待受を確認します。',
+        validatorNote: 'node同期後に進めます。',
+        syncActivityTitle: '同期の動き',
+        syncActivityBody: 'DAAが増えていれば、同期は進んでいます。',
+        syncDeltaLabel: '直近の増加',
+        syncRateLabel: '推定ペース',
+        syncLastMoveLabel: '最後に進んだ時刻',
+        syncDaaValue: 'DAA {daa}',
+        syncMoving: '同期は進行中です',
+        syncSynced: '同期完了です',
+        syncWaitingNode: 'node応答待ちです',
+        syncWaitingSample: 'DAAを取得しました。次の確認で増加を見ます。',
+        syncWaitingDaa: 'DAA取得待ちです',
+        syncNoRecentMove: '次のDAA増加を待っています',
+        syncNoDelta: '差分待ち',
+        syncDeltaValue: '+{delta}',
+        syncRateValue: '約 {rate}/分',
+        syncNoRate: '計測中',
+        syncJustNow: 'たった今',
+        syncSecondsAgo: '{seconds}秒前',
+        noteBinariesReady: 'バイナリ準備完了',
+        notePrepareRequired: 'VPS準備が必要です',
+        noteAttesting: 'attestation待機または送信中',
+        noteBondSubmitted: 'bond送信済み',
+        noteMiningOnVps: 'VPSでマイニング中',
+        noteMiningNeeded: 'マイニングが必要です',
+        noteValidatorStateMissing: 'funding address復元が必要です',
+        noteNotConfigured: '未設定',
+        noteMiningStopped: 'マイニング停止中',
+        notePreflightOk: 'VPS確認OK',
+        notePreflightFail: 'VPS確認で失敗があります',
+        evidenceAttestation: '参加確認: attestation shard送信済み',
+        evidenceMining: 'マイニング: RUNNING',
+        minerNextBonded: 'すでにBond作成済みです。追加で掘りたい場合は、スレッド数を確認して「10. マイニング開始」を押せます。',
+        minerNextReady: '準備OKです。必要ならスレッド数を変更し、「10. マイニング開始」を押してください。',
+        minerNextNeedKey: '先に「8. キー作成」でfunding addressを作ってください。',
+        minerDiagTitle: 'VPS CPU診断',
+        minerDiagTarget: '診断対象: VPS',
+        readyLog: 'Ready. Start with "1. アプリ確認".',
+        restoringState: '現在のVPS状態を復元しています...',
+        restoreDone: '現在のVPS状態を復元しました。続きから進められます。',
+        running: '実行中です...',
+        errorPrefix: 'エラー: ',
+        requiredBond: 'Bond amount が必要です。',
+        bondConfirm: 'Bondはtestnet資金を使います。すぐには戻せません。続けますか: ',
+        bondReadyLog: 'Bond作成前確認: 残高 {balance} MSK / Bond amount {amount}',
+        minerConfirm: 'VPS上でマイニングを開始します。VPSのCPUを{threads}スレッド使い、報酬はfunding addressに入ります。開始しますか？',
+        minerStartedPause: 'マイニングを開始しました。しばらく待ってから「11. Bond用残高確認」を押してください。十分に貯まったら、もう一度「自動でvalidator参加」を押します。',
+        minerDiagnoseHint: '診断対象はVPSです。あなたのPC/Macではなく、VPSのCPU数と現在負荷からおすすめを出します。',
+        fundingPause: 'funding addressへマイニング、またはwallet/faucetでfunding後、もう一度「自動でvalidator参加」を押してください。',
+        bondSkipped: 'Bond作成は確認画面でキャンセルされました。作成する場合は、もう一度実行して確認画面でOKを押してください。',
+        validatorAutoStart: 'Auto Validator Setup を開始します。',
+        validatorAutoDone: 'Auto Validator Setup が完了しました。ValidatorがRUNNINGで、ログに submitted attestation shard が出れば参加できています。',
+        validatorNodeRequired: 'validator参加にはnode同期が必要です。先にnode同期を完了してください。',
+        needPublicIp: '検出された公開IPを確認し、下の「このIPで進める」を押してください。',
+        autoRunningHint: '自動実行中です。実行ログを確認し、止める場合は下の「自動実行を停止」を押してください。現在の処理が一区切りした後に止まります。',
+        nextAutoTitle: '自動実行の完了を待つ',
+        nextPrepareTitle: '実行環境の準備完了を待つ',
+        nextPrepareFailedTitle: '準備エラーを提出する',
+        nextPrepareFailedBody: '準備ログの末尾を確認し、「提出用レポートをコピー」でエラー内容を共有してください。',
+        nextNeedsPrepareTitle: '参加アプリを準備する',
+        nextNeedsPublicIpTitle: '公開IPを確認する',
+        nextNeedsPreflightTitle: '実行環境の参加条件を確認する',
+        nextNeedsNodeTitle: 'nodeを開始する',
+        nextNodeStartingTitle: 'nodeの応答を確認する',
+        nextSyncingTitle: '同期の進行を確認する',
+        nextNeedsValidatorKeyTitle: 'validator keyを作成する',
+        nextNeedsFundingTitle: 'funding minerを開始する',
+        nextMiningTitle: 'マイニングと成熟を待つ',
+        nextMiningBody: 'minerは実行中です。採掘block数と成熟見込みを確認し、残りが0になったら残高を確認します。',
+        nextMaturityReadyTitle: 'Bond用残高を確認する',
+        nextMaturityReadyBody: '成熟の目安に到達しました。表示残高を更新し、Bond作成時に成熟UTXOを最終確認します。',
+        nextNeedsBondTitle: 'Bondを作成する',
+        nextNeedsBondBody: '表示残高はBond amount以上です。確認画面の内容を読んでからBondを作成します。',
+        nextNeedsValidatorTitle: 'validatorを開始する',
+        nextAttestingTitle: 'attestation成功を確認する',
+        nextAttestingBody: 'validatorは実行中です。validatorログを更新し、attestation送信成功の表示を待ちます。',
+        nextAttestedTitle: 'validator参加を確認できました',
+        nextAttestedBody: 'attestation shardの送信成功をログで確認しました。継続運用中はダッシュボードで状態を確認できます。',
+        waitPrepare: '次: VPS準備が実行中です。準備ログを見ながら完了まで待ってください。',
+        prepareFailed: 'VPS準備が止まりました。準備ログの最後のエラーを確認してください。',
+        checkAppAfterPrepare: '次: アプリ確認を押して、kaspad / validator が入ったか確認してください。',
+        needPrepare: '下の「2. VPS準備」を押して、不足しているバイナリをインストールします。',
+        bootstrapReadyHuman: '準備は完了しています。画面上部の「次にすること」から「3. VPS確認」へ進めます。',
+        bootstrapNeedPrepareHuman: 'VPS準備を押して不足分を入れてください。',
+        needPreflight: '下の「3. VPS確認」を押して、ユーザー・ポート・公開IPを確認します。',
+        needNode: '下の「5. nodeを開始」を押して、ネットワーク参加を始めます。',
+        waitNode: 'node起動中です。少し待ってから、下の「6. 同期確認」を押してください。',
+        waitSync: '同期中です。下の「6. 同期確認」で進行を確認し、SYNCEDになるまで待ちます。',
+        nodeDone: 'node参加は完了です。validator参加するならキー作成に進めます。',
+        needValidatorKey: '次: 「8. キー作成」を押して、validator用のfunding addressを作成してください。',
+        validatorStateMissing: 'validator keyファイルはありますが、funding addressが設定にありません。Web UIが既存キーから復元を試します。「8. キー作成」または「自動でvalidator参加」を押してください。',
+        nodeDoneHuman: 'Node参加が完了しました。',
+        nodeSyncingHuman: '同期中です。このまま待ってください。',
+        startMinerFunding: '次: まず「9. VPS CPU診断」を押し、おすすめスレッドを確認してから「10. マイニング開始」を押してください。',
+        waitMatureFunding: '次: マイニング中です。しばらく待ってから「11. Bond用残高確認」を押してください。Bondに使える成熟UTXOが足りたらBond作成へ進みます。',
+        needBond: '次: マイニングでMSKを用意します。まだ開始していなければ「9. VPS CPU診断」から進めてください。',
+        needValidator: '次: validator開始を押して、validator serviceを起動してください。',
+        allDone: '完了: node と validator が動作しています。必要ならログ確認だけ行ってください。',
+        stepApp: 'アプリ',
+        stepAppSub: '必要なコマンドを確認',
+        stepPrepare: 'VPS準備',
+        stepPrepareSub: 'ビルドとインストール',
+        stepNode: 'Node',
+        stepNodeSub: 'systemdで起動',
+        stepSync: 'Sync',
+        stepSyncSub: 'testnetに追いつく',
+        stepValidator: 'Validator',
+        stepValidatorSub: '任意で参加',
+        stateWait: 'WAIT',
+        stateActive: 'ACTIVE',
+        stateDone: 'DONE',
+        stateCheck: 'CHECK',
+        stateFail: 'FAIL',
+        labelCheckApp: 'アプリ確認',
+        labelPrepareVps: 'VPS準備',
+        labelCheckVps: 'VPS確認',
+        labelCheckSync: '同期確認',
+        labelPreviewNode: 'node設定確認',
+        labelStartNode: 'node開始',
+        labelCheckValidator: 'validator確認',
+        labelGenerateKey: 'キー作成',
+        labelCheckMiner: 'マイニング確認',
+        labelCpuCheck: 'VPS CPU診断',
+        labelStartMiner: 'マイニング開始',
+        labelCheckFunding: 'Bond用残高確認',
+        labelCreateBond: 'Bond作成',
+        labelValidatorStatus: 'validator状態',
+        labelStartValidator: 'validator開始',
+        labelValidatorLogs: 'validatorログ',
+        autoStepStart: '開始: {label}',
+        autoStepDone: '完了: {label}',
+        autoStepIncomplete: '{label} が完了しませんでした。詳細を確認してください。',
+        autoStopRequested: '停止リクエストを受け付けました。現在の処理が一区切りしたら止まります。',
+        autoStopped: '停止: {message}',
+        prepareLogWatch: 'VPS準備ログを監視します。',
+        prepareComplete: 'VPS準備が完了しました。',
+        prepareMarkerSkipped: '完了マーカー待ちを省略します。必要なバイナリは揃っています。次へ進みます。',
+        prepareFailedAuto: 'VPS準備が失敗しました。ログの最後を確認してください。',
+        nodeSyncWatch: 'node同期を監視します。SYNCED になるまで待ちます。',
+        nodeSyncDone: 'node同期が完了しました。',
+        autoNodeStart: 'Auto Node Setup を開始します。',
+        nodeServiceAlready: 'node service はすでに起動済みです。',
+        autoNodeDone: 'Auto Node Setup は完了です。次は必要に応じてvalidatorに進めます。',
+        prepareStillMissing: 'VPS準備後も必要なバイナリが不足しています。',
+      },
+      en: {
+        title: 'Join the MISAKA testnet with buttons',
+        subtitle: 'Prepare the VPS, start the node, watch sync, and continue into validator setup from the browser. Bond submission still asks for confirmation.',
+        languageChoiceTitle: 'Choose language',
+        languageChoiceBody: 'You can change this later from the sidebar.',
+        publicIpTitle: 'VPS public IP',
+        publicIpLabel: 'Detected IP',
+        publicIpChecking: 'Detecting the VPS public IP...',
+        publicIpConfirmed: 'Using this IP: {ip}',
+        publicIpNeedsConfirm: 'Detected candidate: {ip}. Confirm it before using it as the node public IP.',
+        publicIpUnknown: 'Could not detect the public IP automatically. Enter the VPS IPv4 address.',
+        publicIpSaved: 'saved',
+        publicIpLaunch: 'launch argument',
+        publicIpBrowser: 'browser URL',
+        publicIpDetected: 'detected on VPS',
+        publicIpInvalid: 'Enter an IPv4 address.',
+        publicIpConfirmDialog: 'Use this IP as the node public IP?\n\n{ip}',
+        publicIpConfirmDone: 'Public IP saved.',
+        btnConfirmPublicIp: 'Use this IP',
+        btnRefreshPublicIp: 'Detect again',
+        stepsTitle: 'Progress',
+        actionsTitle: 'Actions',
+        validatorTitle: 'Validator',
+        terminalTitle: 'Run log',
+        details: 'Raw JSON',
+        hideLog: 'Hide log',
+        showLog: 'Show log',
+        copyLog: 'Copy',
+        copied: 'Copied.',
+        noLogsYet: 'No logs yet.',
+        quickRefresh: 'Refresh participation status',
+        quickAuto: 'Auto node',
+        quickValidator: 'Auto validator',
+        quickDashboard: 'Dashboard',
+        quickLearn: 'Learn',
+        quickSupport: 'Support',
+        nextActionLabel: 'Next action',
+        btnRefreshState: 'Refresh current state',
+        btnSupport: 'Support report',
+        btnCheckApp: '1. Check app',
+        btnAutoNode: 'Auto node setup',
+        btnAutoValidator: 'Auto validator setup',
+        btnStopAuto: 'Stop automatic setup',
+        btnPrepare: '2. Prepare VPS',
+        btnPrepareLogs: 'View prepare logs',
+        btnPreflight: '3. Check VPS',
+        btnPreview: '4. Preview node service',
+        btnNodeApply: '5. Start node',
+        btnStatus: '6. Check sync',
+        btnNodeRestart: 'Restart node',
+        btnNodeLogs: 'Node logs',
+        btnDashboard: 'Participant dashboard',
+        btnLearn: 'Terms and guide',
+        minerCardTitle: 'Miner and coinbase maturity',
+        minerCardBody: 'See mining results and the estimate for when rewards can be used for a bond.',
+        minerStatusLabel: 'Miner status',
+        fundingAddressLabel: 'Funding address',
+        visibleBalanceLabel: 'Visible balance',
+        minedBlocksLabel: 'Blocks mined this run',
+        maturityLabel: 'Maturity estimate',
+        maturityNotTracked: 'Start mining from this UI to track maturity from the starting DAA.',
+        validatorCardTitle: 'Validator participation evidence',
+        validatorCardBody: 'RUNNING means the process is active; a successful attestation is evidence of testnet participation.',
+        validatorStatusLabel: 'Validator status',
+        bondStatusLabel: 'Bond',
+        attestationEpochLabel: 'Last successful epoch',
+        attestationTxLabel: 'Transaction ID',
+        supportTitle: 'Support report for submission',
+        supportBody: 'Copy or save this redacted report and attach it when contacting the maintainer or support channel.',
+        btnCloseSupport: 'Close',
+        btnCopySupport: 'Copy report for submission',
+        btnSaveSupport: 'Save report (.txt)',
+        supportNoError: 'No error is currently recorded. You can still create a report of the current state.',
+        supportCopied: 'Support report copied.',
+        statusRunning: 'RUNNING',
+        statusStopped: 'STOPPED',
+        statusUnknown: 'NOT CHECKED',
+        balanceNotChecked: 'Not checked (use "11. Check bond balance")',
+        minedNoBlocks: 'No successfully mined block found yet',
+        maturityReadyCard: 'Estimate reached (actual mature UTXOs are verified during bond creation)',
+        maturityProgressCard: 'About {remaining} blocks left ({percent}%)',
+        bondCreated: 'CREATED',
+        bondMissing: 'NOT CREATED',
+        attestationWaitingTitle: 'Waiting for attestation success',
+        attestationWaitingDetail: 'Validator logs are checked every 30 seconds. RUNNING alone is not treated as a successful submission.',
+        attestationSuccessTitle: 'Attestation submitted successfully',
+        attestationSuccessDetail: 'Submission for epoch {epoch} was found in the validator log.',
+        btnFinish: 'Finish setup page',
+        btnValidatorStatus: '7. Check validator',
+        btnKeygen: '8. Generate key',
+        btnMinerDiagnose: '9. VPS CPU check',
+        minerThreads: 'Mining threads',
+        btnMinerStart: '10. Start mining',
+        btnMinerLogs: 'Miner logs',
+        btnMinerStop: 'Stop miner',
+        btnFunding: '11. Check bond balance',
+        btnBond: '12. Create bond',
+        btnValidatorChain: '13. Validator status',
+        btnValidatorApply: '14. Start validator',
+        btnValidatorLogs: 'Validator logs',
+        bondAmount: 'Bond amount',
+        bondHintUnknown: 'Press "11. Check bond balance" before creating a bond.',
+        bondHintZero: 'Balance is 0. After mining, wait for coinbase maturity, then check again.',
+        bondHintLow: 'Balance {balance} MSK is below the bond amount {amount}.',
+        bondHintReady: 'Balance {balance} MSK found. Bond creation still requires mature UTXOs.',
+        bondHintInvalid: 'Enter a bond amount like 10MSK.',
+        bondMaturityExplainer: 'Note: visible balance and bondable mature UTXOs are different. Mined rewards become bondable only after coinbase maturity. Check the maturity display for the current required block count.',
+        balanceLine: 'Funding balance: {balance} MSK',
+        balanceMaturityLine: 'Note: a visible balance is not always bondable. Check the maturity display for the current required block count.',
+        balanceZeroLine: 'Funding balance is 0. Mined rewards may still be immature, or the node/UTXO index may still be catching up. Wait and check again.',
+        bondMatureErrorTitle: 'Not enough mature UTXOs for bond yet.',
+        bondMatureErrorBody: 'A visible balance does not always mean it can be bonded. Check the maturity display for the current required block count.',
+        maturityProgressLine: 'Maturity estimate: {elapsed}/{required} blocks elapsed, about {remaining} blocks left',
+        maturityDaaLine: 'Current DAA: {current} / miner start DAA: {start}',
+        maturityReadyLine: 'The estimate has passed the required {required} blocks since miner start. Bond creation still verifies actual mature UTXOs.',
+        maturityUnknownLine: 'Maturity estimate is not available yet. Start mining from this Web UI to track from miner start DAA.',
+        maturityApproxLine: 'This is an estimate. Bond creation verifies maturity per UTXO.',
+        nodeNote: 'Not checked yet.',
+        syncNote: 'Sync starts after the node is running.',
+        p2pNote: 'Checks the 26211/tcp listener.',
+        validatorNote: 'Available after node sync.',
+        syncActivityTitle: 'Sync activity',
+        syncActivityBody: 'If DAA keeps increasing, sync is moving.',
+        syncDeltaLabel: 'Last increase',
+        syncRateLabel: 'Estimated pace',
+        syncLastMoveLabel: 'Last moved',
+        syncDaaValue: 'DAA {daa}',
+        syncMoving: 'Sync is moving',
+        syncSynced: 'Sync complete',
+        syncWaitingNode: 'Waiting for node response',
+        syncWaitingSample: 'DAA received. Waiting for the next check to compare movement.',
+        syncWaitingDaa: 'Waiting for DAA',
+        syncNoRecentMove: 'Waiting for the next DAA increase',
+        syncNoDelta: 'Waiting for delta',
+        syncDeltaValue: '+{delta}',
+        syncRateValue: 'about {rate}/min',
+        syncNoRate: 'Measuring',
+        syncJustNow: 'just now',
+        syncSecondsAgo: '{seconds}s ago',
+        noteBinariesReady: 'Binaries ready',
+        notePrepareRequired: 'Prepare required',
+        noteAttesting: 'Attesting or waiting for a target',
+        noteBondSubmitted: 'Bond submitted',
+        noteMiningOnVps: 'Mining on VPS',
+        noteMiningNeeded: 'Mining needed',
+        noteValidatorStateMissing: 'funding address restore needed',
+        noteNotConfigured: 'Not configured',
+        noteMiningStopped: 'Mining stopped',
+        notePreflightOk: 'Preflight OK',
+        notePreflightFail: 'Preflight has failures',
+        evidenceAttestation: 'Participation: attestation shard submitted',
+        evidenceMining: 'Mining: RUNNING',
+        minerNextBonded: 'Bond already exists. If you want to keep mining, review the thread count and press "10. Start mining".',
+        minerNextReady: 'Ready. Adjust threads if needed, then press "10. Start mining".',
+        minerNextNeedKey: 'Generate the validator key first to create a funding address.',
+        minerDiagTitle: 'VPS CPU check',
+        minerDiagTarget: 'Target: VPS',
+        readyLog: 'Ready. Start with "1. Check app".',
+        restoringState: 'Restoring the current VPS state...',
+        restoreDone: 'Current VPS state restored. You can continue from here.',
+        running: 'Running...',
+        errorPrefix: 'Error: ',
+        requiredBond: 'Bond amount is required.',
+        bondConfirm: 'Bond uses your testnet funds and cannot be undone immediately. Continue with ',
+        bondReadyLog: 'Bond pre-check: balance {balance} MSK / bond amount {amount}',
+        minerConfirm: 'Start mining on the VPS? It uses {threads} VPS CPU thread(s) and sends rewards to the funding address.',
+        minerStartedPause: 'Mining started. Wait for maturity, then press "11. Check bond balance". When enough mature UTXOs are available, press Auto validator setup again.',
+        minerDiagnoseHint: 'The diagnosis checks the VPS, not your PC/Mac. It recommends threads from VPS CPU count and current load.',
+        fundingPause: 'Mine to the funding address, or fund it from a wallet/faucet, then press Auto validator setup again.',
+        bondSkipped: 'Bond creation was cancelled at the confirmation dialog. Run it again and press OK to create the bond.',
+        validatorAutoStart: 'Auto Validator Setup started.',
+        validatorAutoDone: 'Auto Validator Setup is complete. If Validator is RUNNING and logs show submitted attestation shard, participation is working.',
+        validatorNodeRequired: 'Validator setup requires a synced node first.',
+        needPublicIp: 'Confirm the detected public IP, then press "Use this IP" below.',
+        autoRunningHint: 'Automatic setup is running. Watch the run log. To stop, press "Stop automatic setup" below; it stops after the current step finishes.',
+        nextAutoTitle: 'Wait for automatic setup',
+        nextPrepareTitle: 'Wait for preparation to finish',
+        nextPrepareFailedTitle: 'Submit the preparation error',
+        nextPrepareFailedBody: 'Review the end of the preparation log, then use "Copy report for submission" to share the error.',
+        nextNeedsPrepareTitle: 'Prepare the participation app',
+        nextNeedsPublicIpTitle: 'Confirm the public IP',
+        nextNeedsPreflightTitle: 'Check participation requirements',
+        nextNeedsNodeTitle: 'Start the node',
+        nextNodeStartingTitle: 'Check the node response',
+        nextSyncingTitle: 'Check sync progress',
+        nextNeedsValidatorKeyTitle: 'Create a validator key',
+        nextNeedsFundingTitle: 'Start the funding miner',
+        nextMiningTitle: 'Wait for mining and maturity',
+        nextMiningBody: 'The miner is running. Watch the mined block count and maturity estimate, then check the balance when the remaining estimate reaches zero.',
+        nextMaturityReadyTitle: 'Check the bond balance',
+        nextMaturityReadyBody: 'The maturity estimate has been reached. Refresh the visible balance; bond creation performs the final mature-UTXO check.',
+        nextNeedsBondTitle: 'Create the bond',
+        nextNeedsBondBody: 'The visible balance is at least the bond amount. Read the confirmation before creating the bond.',
+        nextNeedsValidatorTitle: 'Start the validator',
+        nextAttestingTitle: 'Confirm attestation success',
+        nextAttestingBody: 'The validator is running. Refresh validator logs and wait for the attestation-success evidence.',
+        nextAttestedTitle: 'Validator participation confirmed',
+        nextAttestedBody: 'The validator log shows a successful attestation-shard submission. Use the dashboard for ongoing checks.',
+        waitPrepare: 'Next: Prepare VPS is running. Watch the prepare log until it completes.',
+        prepareFailed: 'Prepare VPS stopped. Check the last error in the prepare log.',
+        checkAppAfterPrepare: 'Next: Check app to confirm kaspad / validator were installed.',
+        needPrepare: 'Press "2. Prepare VPS" below to install the missing binaries.',
+        bootstrapReadyHuman: 'Preparation is complete. Continue with "3. Check VPS" in the Next action panel.',
+        bootstrapNeedPrepareHuman: 'Press Prepare VPS to install missing requirements.',
+        needPreflight: 'Press "3. Check VPS" below to verify the user, ports, and public IP.',
+        needNode: 'Press "5. Start node" below to join the network.',
+        waitNode: 'The node is starting. Wait briefly, then press "6. Check sync" below.',
+        waitSync: 'Syncing is in progress. Use "6. Check sync" below and wait until the status becomes SYNCED.',
+        nodeDone: 'Node join is complete. Generate a validator key if you want to join as a validator.',
+        needValidatorKey: 'Next: press "8. Generate key" to create the validator funding address.',
+        validatorStateMissing: 'A validator key file exists, but the funding address is missing from setup state. The Web UI will try to restore it from the existing key. Press "8. Generate key" or Auto validator setup.',
+        nodeDoneHuman: 'Node participation is complete.',
+        nodeSyncingHuman: 'Syncing. Keep waiting.',
+        startMinerFunding: 'Next: press "9. VPS CPU check", review the recommended threads, then press "10. Start mining".',
+        waitMatureFunding: 'Next: mining is running. Wait for maturity, then press "11. Check bond balance". Create the bond when enough mature UTXOs are available.',
+        needBond: 'Next: prepare MSK by mining. If mining is not running, start from "9. VPS CPU check".',
+        needValidator: 'Next: start the validator service.',
+        allDone: 'Done: node and validator are running. Check logs when needed.',
+        stepApp: 'App',
+        stepAppSub: 'Check required commands',
+        stepPrepare: 'Prepare',
+        stepPrepareSub: 'Build and install',
+        stepNode: 'Node',
+        stepNodeSub: 'Start with systemd',
+        stepSync: 'Sync',
+        stepSyncSub: 'Catch up to testnet',
+        stepValidator: 'Validator',
+        stepValidatorSub: 'Optional participation',
+        stateWait: 'WAIT',
+        stateActive: 'ACTIVE',
+        stateDone: 'DONE',
+        stateCheck: 'CHECK',
+        stateFail: 'FAIL',
+        labelCheckApp: 'Check app',
+        labelPrepareVps: 'Prepare VPS',
+        labelCheckVps: 'Check VPS',
+        labelCheckSync: 'Check sync',
+        labelPreviewNode: 'Preview node service',
+        labelStartNode: 'Install / Start node',
+        labelCheckValidator: 'Check validator',
+        labelGenerateKey: 'Generate validator key',
+        labelCheckMiner: 'Check funding miner',
+        labelCpuCheck: 'VPS CPU check',
+        labelStartMiner: 'Start funding miner',
+        labelCheckFunding: 'Check bond balance',
+        labelCreateBond: 'Create bond',
+        labelValidatorStatus: 'Validator status',
+        labelStartValidator: 'Start validator',
+        labelValidatorLogs: 'Validator logs',
+        autoStepStart: 'Start: {label}',
+        autoStepDone: 'Done: {label}',
+        autoStepIncomplete: '{label} did not complete. Check the details.',
+        autoStopRequested: 'Stop requested. Auto setup will stop after the current step finishes.',
+        autoStopped: 'Stopped: {message}',
+        prepareLogWatch: 'Watching the Prepare VPS log.',
+        prepareComplete: 'Prepare VPS completed.',
+        prepareMarkerSkipped: 'Skipping the final marker wait. Required binaries are installed.',
+        prepareFailedAuto: 'Prepare VPS failed. Check the last log lines.',
+        nodeSyncWatch: 'Watching node sync until it becomes SYNCED.',
+        nodeSyncDone: 'Node sync completed.',
+        autoNodeStart: 'Auto Node Setup started.',
+        nodeServiceAlready: 'Node service is already running.',
+        autoNodeDone: 'Auto Node Setup is complete. Continue to validator setup when needed.',
+        prepareStillMissing: 'Required binaries are still missing after Prepare VPS.',
+      }
+    };
+
+    function t(key) {
+      return (i18n[lang] && i18n[lang][key]) || i18n.en[key] || key;
+    }
+
+    function fmt(key, values) {
+      return t(key).replace(/\{([^}]+)\}/g, (_, name) => {
+        const value = values && values[name];
+        return value === undefined || value === null ? '' : String(value);
+      });
+    }
+
+    function friendlyError(message) {
+      const text = String(message || '');
+      if (text.includes('not enough MATURE funding')) {
+        const main = text.split('\n').find(line => line.includes('not enough MATURE funding')) || text;
+        return [
+          t('errorPrefix') + t('bondMatureErrorTitle'),
+          '',
+          t('bondMatureErrorBody'),
+          '',
+          main
+        ].join('\n');
+      }
+      return t('errorPrefix') + text;
+    }
+
+    function errorMessage(err) {
+      if (!err) return 'unknown error';
+      if (typeof err === 'string') return err;
+      if (err.message) return err.message;
+      try {
+        return JSON.stringify(err);
+      } catch (_) {
+        return String(err);
+      }
+    }
+
+    function redactSensitive(value) {
+      return String(value || '')
+        .replace(/([?&]token=)[^&\s"'<>]+/gi, '$1<redacted>')
+        .replace(/(["']?(?:(?:setup[_-]?)?token|secret[_-]?key|private[_-]?(?:key|seed)|validator[_-]?seed|seed[_-]?phrase|mnemonic)["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,}\]]+)/gi, '$1"<redacted>"')
+        .replace(/((?:seed[_-]?phrase|mnemonic)\s*[:=]\s*).*/gi, '$1<redacted>');
+    }
+
+    function supportGateSnapshot() {
+      return {
+        state: currentNextAction ? currentNextAction.state : 'Unknown',
+        bootstrapReady: gate.bootstrapReady,
+        prepareRunning: gate.prepareRunning,
+        prepareFailed: gate.prepareFailed,
+        preflightOk: gate.preflightOk,
+        nodeService: gate.nodeService,
+        nodeReachable: gate.nodeReachable,
+        nodeSynced: gate.nodeSynced,
+        p2pListening: gate.p2pListening,
+        validatorKey: gate.validatorKey,
+        validatorBond: gate.validatorBond,
+        validatorRunning: gate.validatorRunning,
+        minerRunning: gate.minerRunning,
+        fundingBalanceMsk: gate.fundingBalanceMsk,
+        maturity: gate.maturity,
+        minedBlocks: gate.minedBlocks,
+        lastMinedDaa: gate.lastMinedDaa,
+        attestationSuccess: gate.attestationSuccess,
+        attestationEpoch: gate.attestationEpoch,
+        attestationTxid: gate.attestationTxid,
+      };
+    }
+
+    function supportReportText() {
+      const raw = rawEl.textContent ? rawEl.textContent.slice(-24000) : JSON.stringify(lastSnapshot, null, 2);
+      const visibleLog = logEl.textContent ? logEl.textContent.slice(-16000) : '';
+      return redactSensitive([
+        'MISAKA participation support report',
+        `generatedAt: ${new Date().toISOString()}`,
+        `page: ${window.location.pathname}`,
+        `language: ${lang}`,
+        `userAgent: ${navigator.userAgent}`,
+        `context: ${lastSupportContext}`,
+        `error: ${lastSupportError || 'none recorded'}`,
+        '',
+        '[state]',
+        JSON.stringify(supportGateSnapshot(), null, 2),
+        '',
+        '[visible log]',
+        visibleLog || '(empty)',
+        '',
+        '[latest API snapshot]',
+        raw || '(empty)',
+      ].join('\n'));
+    }
+
+    function updateSupportPanel() {
+      const errorEl = document.getElementById('supportError');
+      errorEl.textContent = lastSupportError ? friendlyError(lastSupportError) : t('supportNoError');
+      errorEl.classList.toggle('bad', !!lastSupportError);
+      document.getElementById('supportMeta').textContent = `${lastSupportContext} / ${new Date().toLocaleString()}`;
+    }
+
+    function openSupportPanel() {
+      updateSupportPanel();
+      supportPanel.classList.remove('hidden');
+      supportPanel.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+
+    function closeSupportPanel() {
+      supportPanel.classList.add('hidden');
+    }
+
+    function recordError(err, context) {
+      lastSupportError = redactSensitive(errorMessage(err));
+      lastSupportContext = context || 'unknown operation';
+      updateSupportPanel();
+      supportPanel.classList.remove('hidden');
+    }
+
+    async function copySupportReport() {
+      const report = supportReportText();
+      try {
+        await navigator.clipboard.writeText(report);
+      } catch (_) {
+        const temp = document.createElement('textarea');
+        temp.value = report;
+        temp.style.position = 'fixed';
+        temp.style.opacity = '0';
+        document.body.appendChild(temp);
+        temp.select();
+        document.execCommand('copy');
+        temp.remove();
+      }
+      document.getElementById('copySupportReport').textContent = t('supportCopied');
+      setTimeout(() => { document.getElementById('copySupportReport').textContent = t('btnCopySupport'); }, 1600);
+    }
+
+    function saveSupportReport() {
+      const blob = new Blob([supportReportText()], { type: 'text/plain;charset=utf-8' });
+      const href = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      link.href = href;
+      link.download = `misaka-support-${stamp}.txt`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(href);
+    }
+
+    function sourceLabel(source) {
+      if (source === 'saved') return t('publicIpSaved');
+      if (source === 'launch') return t('publicIpLaunch');
+      if (source === 'browser') return t('publicIpBrowser');
+      if (source === 'detected') return t('publicIpDetected');
+      return source || '-';
+    }
+
+    function setLanguage(next, persist) {
+      lang = next;
+      document.documentElement.lang = lang;
+      document.getElementById('jaBtn').classList.toggle('active', lang === 'ja');
+      document.getElementById('enBtn').classList.toggle('active', lang === 'en');
+      if (persist !== false) {
+        localStorage.setItem('misakaSetupLang', lang);
+      }
+      document.querySelectorAll('[data-i18n]').forEach(el => {
+        el.textContent = t(el.dataset.i18n);
+      });
+      document.getElementById('toggleTerminal').textContent = terminalOpen ? t('hideLog') : t('showLog');
+      if (!logEl.dataset.touched) {
+        logEl.textContent = t('readyLog');
+      }
+      updatePublicIpText();
+      if (syncActivity.lastNode) {
+        updateSyncActivity(syncActivity.lastNode);
+      }
+      renderGate();
+    }
+
+    function chooseLanguage(next) {
+      document.getElementById('languageChoice').classList.add('hidden');
+      setLanguage(next, true);
+    }
+
+    function publicIpApiPath() {
+      const host = window.location && window.location.hostname ? window.location.hostname : '';
+      return '/api/public-ip?browserHost=' + encodeURIComponent(host);
+    }
+
+    function updatePublicIpText(data) {
+      const status = document.getElementById('publicIpStatus');
+      const input = document.getElementById('publicIpInput');
+      const info = data && data.publicIpInfo ? data.publicIpInfo : window.lastPublicIpInfo;
+      if (!status || !input) return;
+      if (!info) {
+        status.textContent = t('publicIpChecking');
+        return;
+      }
+      window.lastPublicIpInfo = info;
+      const ip = info.publicIp || '';
+      gate.publicIpKnown = !!ip;
+      gate.publicIpConfirmed = !!info.confirmed;
+      if (ip && (!publicIpTouched || !input.value.trim())) {
+        input.value = ip;
+      }
+      if (info.confirmed && ip) {
+        status.textContent = `${fmt('publicIpConfirmed', { ip })} (${sourceLabel(info.source)})`;
+        status.classList.add('ip-confirmed');
+      } else if (ip) {
+        status.textContent = `${fmt('publicIpNeedsConfirm', { ip })} (${sourceLabel(info.source)})`;
+        status.classList.remove('ip-confirmed');
+      } else {
+        status.textContent = t('publicIpUnknown');
+        status.classList.remove('ip-confirmed');
+      }
+      renderGate();
+    }
+
+    async function refreshPublicIp(userRequested) {
+      try {
+        const data = await fetchJson(publicIpApiPath(), 1);
+        updateGate(data, '/api/public-ip');
+        updatePublicIpText(data);
+        if (userRequested) {
+          rawEl.textContent = JSON.stringify(data, null, 2);
+        }
+      } catch (err) {
+        document.getElementById('publicIpStatus').textContent = friendlyError(errorMessage(err));
+        recordError(err, 'detect public IP');
+      }
+    }
+
+    async function hydrateState() {
+      const snapshot = {};
+      setBusy(true);
+      if (!logEl.dataset.touched) {
+        logEl.textContent = t('restoringState');
+      }
+      try {
+        const publicIp = await fetchJson(publicIpApiPath(), 1);
+        snapshot.publicIp = publicIp;
+        updateGate(publicIp, '/api/public-ip');
+        updatePublicIpText(publicIp);
+
+        const bootstrap = await fetchJson('/api/bootstrap/status', 1);
+        snapshot.bootstrap = bootstrap;
+        updateGate(bootstrap, '/api/bootstrap/status');
+
+        let status = null;
+        let validator = null;
+        let miner = null;
+        if (bootstrap.bootstrap && bootstrap.bootstrap.ready) {
+          if (gate.publicIpConfirmed) {
+            const preflight = await fetchJson('/api/preflight', 1);
+            snapshot.preflight = preflight;
+            updateGate(preflight, '/api/preflight');
+          }
+
+          status = await fetchJson('/api/status', 1);
+          snapshot.status = status;
+          updateGate(status, '/api/status');
+
+          validator = await fetchJson('/api/validator/status', 1);
+          snapshot.validator = validator;
+          updateGate(validator, '/api/validator/status');
+
+          miner = await fetchJson('/api/miner/status', 1);
+          snapshot.miner = miner;
+          updateGate(miner, '/api/miner/status');
+        }
+
+        rawEl.textContent = JSON.stringify(snapshot, null, 2);
+        if (status && status.node) {
+          summarize(status);
+          if (!logEl.dataset.touched) {
+            logEl.textContent = `${t('restoreDone')}\n\n${human(status)}`;
+          }
+        } else {
+          summarize(bootstrap);
+          if (!logEl.dataset.touched) {
+            logEl.textContent = `${t('restoreDone')}\n\n${human(bootstrap)}`;
+          }
+        }
+      } catch (err) {
+        logEl.dataset.touched = 'true';
+        logEl.textContent = friendlyError(err.message || String(err));
+        recordError(err, 'restore current state');
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    function publicIpInputValue() {
+      return document.getElementById('publicIpInput').value.trim();
+    }
+
+    function validIpv4(value) {
+      const parts = value.split('.');
+      return parts.length === 4 && parts.every(part => {
+        if (!/^\d+$/.test(part)) return false;
+        const n = Number(part);
+        return n >= 0 && n <= 255 && String(n) === String(Number(part));
+      });
+    }
+
+    async function confirmPublicIp(silent) {
+      const ip = publicIpInputValue();
+      if (!validIpv4(ip)) {
+        if (!silent) {
+          alert(t('publicIpInvalid'));
+          logEl.dataset.touched = 'true';
+          logEl.textContent = t('publicIpInvalid');
+          return false;
+        }
+        throw new Error(t('publicIpInvalid'));
+      }
+      if (!silent && !confirm(fmt('publicIpConfirmDialog', { ip }))) {
+        return false;
+      }
+      const data = await fetchJson('/api/public-ip/confirm?ip=' + encodeURIComponent(ip), 1);
+      if (data.error) {
+        if (!silent) {
+          logEl.dataset.touched = 'true';
+          logEl.textContent = t('errorPrefix') + data.error;
+          return false;
+        }
+        throw new Error(data.error);
+      }
+      updateGate(data, '/api/public-ip/confirm');
+      updatePublicIpText(data);
+      rawEl.textContent = JSON.stringify(data, null, 2);
+      logEl.dataset.touched = 'true';
+      logEl.textContent = `${t('publicIpConfirmDone')}\n${ip}`;
+      return true;
+    }
+
+    async function ensurePublicIpConfirmed() {
+      if (!gate.publicIpKnown || !publicIpInputValue()) {
+        await refreshPublicIp(false);
+      }
+      if (gate.publicIpConfirmed) return true;
+      const ip = publicIpInputValue();
+      if (!validIpv4(ip)) {
+        throw new Error(t('publicIpInvalid'));
+      }
+      if (!confirm(fmt('publicIpConfirmDialog', { ip }))) {
+        return false;
+      }
+      return confirmPublicIp(true);
+    }
+
+    function selectedMinerThreads() {
+      const el = document.getElementById('minerThreads');
+      const value = parseInt(el && el.value, 10);
+      if (!Number.isFinite(value)) return 1;
+      return Math.max(1, Math.min(16, value));
+    }
+
+    function parseBondAmountSompi(value) {
+      const raw = String(value || '').trim().toLowerCase().replace(/\s+/g, '');
+      if (!raw) return null;
+      const coinSuffix = raw.endsWith('msk') || raw.endsWith('kas');
+      const sompiSuffix = raw.endsWith('sompi');
+      let num = raw;
+      if (coinSuffix) num = raw.slice(0, -3);
+      if (sompiSuffix) num = raw.slice(0, -5);
+      if (!num) return null;
+      if (!coinSuffix && !sompiSuffix) {
+        return /^\d+$/.test(num) ? Number(num) : null;
+      }
+      if (sompiSuffix) {
+        return /^\d+$/.test(num) ? Number(num) : null;
+      }
+      if (!/^\d*(\.\d*)?$/.test(num) || num === '.') return null;
+      const [intPartRaw, fracPartRaw = ''] = num.split('.');
+      if (fracPartRaw.length > 8) return null;
+      const intPart = intPartRaw ? Number(intPartRaw) : 0;
+      if (!Number.isFinite(intPart)) return null;
+      const frac = (fracPartRaw + '00000000').slice(0, 8);
+      return intPart * 100000000 + Number(frac);
+    }
+
+    function currentBondAmountSompi() {
+      return parseBondAmountSompi(document.getElementById('bondAmount').value);
+    }
+
+    function updateBondHint() {
+      const hint = document.getElementById('bondHint');
+      if (!hint) return;
+      const amountText = document.getElementById('bondAmount').value.trim() || '-';
+      const amountSompi = currentBondAmountSompi();
+      hint.className = 'hint-note';
+      if (!gate.validatorKey) {
+        if (gate.validatorStateMissing) {
+          hint.classList.add('warn');
+          hint.textContent = t('validatorStateMissing');
+          return;
+        }
+        hint.textContent = t('minerNextNeedKey');
+        return;
+      }
+      if (amountSompi === null || amountSompi <= 0) {
+        hint.classList.add('bad');
+        hint.textContent = t('bondHintInvalid');
+        return;
+      }
+      if (gate.fundingBalanceSompi === null || gate.fundingBalanceSompi === undefined) {
+        hint.textContent = t('bondHintUnknown');
+        return;
+      }
+      if (gate.fundingBalanceSompi <= 0) {
+        hint.classList.add('warn');
+        hint.textContent = t('bondHintZero');
+        return;
+      }
+      if (gate.fundingBalanceSompi < amountSompi) {
+        hint.classList.add('warn');
+        hint.textContent = fmt('bondHintLow', { balance: gate.fundingBalanceMsk || '-', amount: amountText });
+        return;
+      }
+      hint.classList.add('ok');
+      hint.textContent = fmt('bondHintReady', { balance: gate.fundingBalanceMsk || '-', amount: amountText });
+    }
+
+    function canCreateBondNow() {
+      const amountSompi = currentBondAmountSompi();
+      if (!gate.validatorKey || gate.validatorBond || amountSompi === null || amountSompi <= 0) return false;
+      if (gate.fundingBalanceSompi !== null && gate.fundingBalanceSompi !== undefined) {
+        return gate.fundingBalanceSompi >= amountSompi;
+      }
+      return false;
+    }
+
+    function setMinerThreadOptions(options, recommended) {
+      const select = document.getElementById('minerThreads');
+      if (!select || !Array.isArray(options) || options.length === 0) return;
+      const current = selectedMinerThreads();
+      select.innerHTML = options.map(value => `<option value="${value}">${value}</option>`).join('');
+      const next = minerThreadTouched ? current : (recommended || 1);
+      select.value = String(Math.max(1, Math.min(options[options.length - 1], next)));
+    }
+
+    function minerStartPath() {
+      return '/api/miner/service/apply?threads=' + encodeURIComponent(selectedMinerThreads());
+    }
+
+    function minerConfirmText() {
+      return t('minerConfirm').replace('{threads}', String(selectedMinerThreads()));
+    }
+
+    function startMiner() {
+      if (confirm(minerConfirmText())) callApi(minerStartPath());
+    }
+
+    function setBusy(value) {
+      busy = value;
+      renderGate();
+    }
+
+    function setButton(id, enabled, allowBusy) {
+      const el = document.getElementById(id);
+      if (el) el.disabled = (!allowBusy && busy) || !enabled;
+    }
+
+    function stageIndex() {
+      if (gate.validatorRunning) return 4;
+      if (gate.nodeSynced) return 4;
+      if (gate.nodeService || gate.nodeReachable) return 3;
+      if (gate.bootstrapReady) return 2;
+      if (gate.prepareRunning || gate.prepareComplete || gate.prepareKnown) return 1;
+      return 0;
+    }
+
+    function stepStatus(index, current) {
+      if (index < current) return 'done';
+      if (index === current) {
+        if (gate.prepareFailed && index <= 1) return 'fail';
+        if (!gate.nodeSynced && index === 3) return 'warn';
+        return 'active';
+      }
+      return 'wait';
+    }
+
+    function renderSteps() {
+      const current = stageIndex();
+      const steps = [
+        ['stepApp', 'stepAppSub'],
+        ['stepPrepare', 'stepPrepareSub'],
+        ['stepNode', 'stepNodeSub'],
+        ['stepSync', 'stepSyncSub'],
+        ['stepValidator', 'stepValidatorSub'],
+      ];
+      document.getElementById('steps').innerHTML = steps.map(([title, sub], index) => {
+        const status = stepStatus(index, current);
+        const pill = status === 'done' ? t('stateDone')
+          : status === 'active' ? t('stateActive')
+          : status === 'warn' ? t('stateCheck')
+          : status === 'fail' ? t('stateFail')
+          : t('stateWait');
+        return `
+          <div class="step ${status}">
+            <div class="dot">${index + 1}</div>
+            <div>
+              <div class="step-title">${t(title)}</div>
+              <div class="step-sub">${t(sub)}</div>
+            </div>
+            <div class="pill ${status}">${pill}</div>
+          </div>
+        `;
+      }).join('');
+      const percent = Math.round((current / 4) * 100);
+      barFill.style.width = percent + '%';
+      percentEl.textContent = percent + '%';
+    }
+
+    function nextActionSpec() {
+      if (autoRunning) return { state: 'AutoRunning', title: t('nextAutoTitle'), body: t('autoRunningHint'), buttonId: 'btn-auto-stop' };
+      if (gate.prepareRunning) return { state: 'Preparing', title: t('nextPrepareTitle'), body: t('waitPrepare'), buttonId: 'btn-prepare-logs' };
+      if (gate.prepareFailed && !gate.bootstrapReady) return { state: 'PrepareFailed', title: t('nextPrepareFailedTitle'), body: t('nextPrepareFailedBody'), buttonId: 'btn-support' };
+      if (gate.prepareComplete && !gate.bootstrapReady) return { state: 'NeedsAppCheck', title: t('nextNeedsPrepareTitle'), body: t('checkAppAfterPrepare'), buttonId: 'btn-check-app' };
+      if (!gate.bootstrapReady) return { state: 'NeedsPrepare', title: t('nextNeedsPrepareTitle'), body: t('needPrepare'), buttonId: 'btn-prepare' };
+      if (!gate.publicIpConfirmed && !gate.nodeService && !gate.nodeReachable) return { state: 'NeedsPublicIp', title: t('nextNeedsPublicIpTitle'), body: t('needPublicIp'), buttonId: 'btn-public-ip-confirm' };
+      if (!gate.preflightOk && !gate.nodeService && !gate.nodeReachable) return { state: 'NeedsPreflight', title: t('nextNeedsPreflightTitle'), body: t('needPreflight'), buttonId: 'btn-preflight' };
+      if (!gate.nodeService) return { state: 'NeedsNode', title: t('nextNeedsNodeTitle'), body: t('needNode'), buttonId: 'btn-node-apply' };
+      if (!gate.nodeReachable) return { state: 'NodeStarting', title: t('nextNodeStartingTitle'), body: t('waitNode'), buttonId: 'btn-status' };
+      if (!gate.nodeSynced) return { state: 'Syncing', title: t('nextSyncingTitle'), body: t('waitSync'), buttonId: 'btn-status' };
+      if (gate.validatorStateMissing) return { state: 'NeedsValidatorKey', title: t('nextNeedsValidatorKeyTitle'), body: t('validatorStateMissing'), buttonId: 'btn-validator-keygen' };
+      if (!gate.validatorKey) return { state: 'NeedsValidatorKey', title: t('nextNeedsValidatorKeyTitle'), body: t('needValidatorKey'), buttonId: 'btn-validator-keygen' };
+      if (!gate.validatorBond) {
+        const amountSompi = currentBondAmountSompi();
+        const visibleReady = amountSompi !== null && gate.fundingBalanceSompi !== null && gate.fundingBalanceSompi >= amountSompi;
+        if (visibleReady) return { state: 'NeedsBond', title: t('nextNeedsBondTitle'), body: t('nextNeedsBondBody'), buttonId: 'btn-bond' };
+        if (gate.minerRunning) {
+          const maturityReady = !!(gate.maturity && gate.maturity.remainingBlocks !== null && Number(gate.maturity.remainingBlocks) <= 0);
+          return maturityReady
+            ? { state: 'NeedsBalanceCheck', title: t('nextMaturityReadyTitle'), body: t('nextMaturityReadyBody'), buttonId: 'btn-validator-balance' }
+            : { state: 'Mining', title: t('nextMiningTitle'), body: t('nextMiningBody'), buttonId: 'btn-validator-balance' };
+        }
+        if (!gate.minerDiagnosed) return { state: 'NeedsFunding', title: t('nextNeedsFundingTitle'), body: t('startMinerFunding'), buttonId: 'btn-miner-diagnose' };
+        return { state: 'NeedsFunding', title: t('nextNeedsFundingTitle'), body: t('minerNextReady'), buttonId: 'btn-miner-start' };
+      }
+      if (!gate.validatorRunning) return { state: 'Bonded', title: t('nextNeedsValidatorTitle'), body: t('needValidator'), buttonId: 'btn-validator-apply' };
+      if (!gate.attestationSuccess) return { state: 'Attesting', title: t('nextAttestingTitle'), body: t('nextAttestingBody'), buttonId: 'btn-validator-logs' };
+      return { state: 'AttestationSucceeded', title: t('nextAttestedTitle'), body: t('nextAttestedBody'), buttonId: 'btn-dashboard' };
+    }
+
+    function renderNextAction() {
+      currentNextAction = nextActionSpec();
+      nextStateEl.textContent = currentNextAction.state;
+      nextActionTitleEl.textContent = currentNextAction.title;
+      hintEl.textContent = currentNextAction.body;
+      const source = document.getElementById(currentNextAction.buttonId);
+      if (!source) {
+        nextActionButton.hidden = true;
+        return;
+      }
+      nextActionButton.hidden = false;
+      nextActionButton.textContent = source.textContent;
+      nextActionButton.disabled = source.disabled;
+      nextActionButton.onclick = () => source.click();
+    }
+
+    function renderGate() {
+      setButton('btn-check-app', true);
+      setButton('btn-auto-node', !autoRunning && !gate.nodeSynced);
+      setButton('btn-auto-validator', !autoRunning && (gate.nodeSynced || gate.validatorKey || gate.validatorBond || gate.validatorRunning));
+      setButton('btn-quick-refresh', true);
+      setButton('btn-quick-auto', !autoRunning && !gate.nodeSynced);
+      setButton('btn-quick-validator', !autoRunning && (gate.nodeSynced || gate.validatorKey || gate.validatorBond || gate.validatorRunning));
+      setButton('btn-quick-learn', true);
+      setButton('btn-quick-support', true);
+      setButton('btn-auto-stop', autoRunning, true);
+      setButton('btn-prepare', !gate.bootstrapReady && !gate.prepareRunning && !gate.prepareComplete);
+      setButton('btn-prepare-logs', gate.prepareKnown || gate.prepareRunning);
+      setButton('btn-preflight', gate.bootstrapReady);
+      setButton('btn-node-preview', gate.bootstrapReady);
+      setButton('btn-node-apply', gate.bootstrapReady && gate.publicIpConfirmed && gate.preflightOk && !gate.nodeService);
+      setButton('btn-status', gate.bootstrapReady && (gate.nodeService || gate.nodeReachable));
+      setButton('btn-validator-status', gate.nodeSynced || gate.validatorKey || gate.validatorBond || gate.validatorRunning);
+      setButton('btn-validator-keygen', gate.nodeSynced && !gate.validatorKey);
+      setButton('btn-miner-diagnose', gate.nodeSynced && (gate.validatorKey || gate.validatorBond || gate.validatorRunning || gate.minerKnown));
+      setButton('btn-miner-start', gate.nodeSynced && gate.validatorKey && !gate.minerRunning);
+      setButton('btn-miner-logs', gate.minerKnown || gate.minerRunning);
+      setButton('btn-miner-stop', gate.minerRunning);
+      setButton('btn-validator-balance', gate.nodeSynced && gate.validatorKey);
+      setButton('btn-bond', canCreateBondNow());
+      setButton('btn-validator-chain', gate.nodeSynced && (gate.validatorKey || gate.validatorBond || gate.validatorRunning));
+      setButton('btn-validator-apply', gate.nodeSynced && gate.validatorBond && !gate.validatorRunning);
+      setButton('btn-validator-logs', gate.validatorRunning);
+      setButton('btn-node-restart', gate.nodeService);
+      setButton('btn-node-logs', gate.nodeService);
+      setButton('btn-dashboard', true);
+      setButton('btn-learn', true);
+      setButton('btn-support', true);
+      setButton('btn-stop', true);
+      setButton('btn-public-ip-confirm', gate.publicIpKnown || !!publicIpInputValue());
+      setButton('btn-public-ip-refresh', true);
+      updateBondHint();
+      renderSteps();
+      renderParticipationCards();
+      renderNextAction();
+    }
+
+    function updateGate(data, path) {
+      if (data.publicIpInfo) {
+        gate.publicIpKnown = !!data.publicIpInfo.publicIp;
+        gate.publicIpConfirmed = !!data.publicIpInfo.confirmed;
+      }
+      if (data.bootstrap) {
+        gate.bootstrapReady = !!data.bootstrap.ready;
+      }
+      if (data.job) {
+        gate.prepareRunning = !!data.job.running;
+        gate.prepareKnown = !!(data.job.running || data.job.complete || data.job.failed || data.job.logPath);
+        gate.prepareComplete = !!data.job.complete;
+        gate.prepareFailed = !!data.job.failed;
+      }
+      if (data.checks) {
+        gate.preflightOk = !data.checks.some(c => c.status === 'FAIL');
+      }
+      if (data.node) {
+        gate.nodeService = data.node.serviceState === 'active' || gate.nodeService;
+        gate.nodeReachable = !!data.node.reachable;
+        gate.nodeSynced = !!data.node.synced;
+      }
+      if (data.p2p) {
+        gate.p2pListening = !!data.p2p.listening;
+      }
+      if (data.validator) {
+        if (data.validator.serviceState !== undefined) {
+          gate.validatorRunning = data.validator.serviceState === 'active';
+        }
+        const hasKeyFile = !!data.validator.keyExists;
+        const hasFundingAddress = !!data.validator.fundingAddress;
+        const hasBond = !!data.validator.bondOutpoint;
+        gate.validatorKeyFile = hasKeyFile || hasFundingAddress || gate.validatorKeyFile;
+        if (hasFundingAddress) gate.validatorFundingAddress = data.validator.fundingAddress;
+        gate.validatorKey = hasFundingAddress || hasBond || gate.validatorRunning;
+        gate.validatorStateMissing = hasKeyFile && !hasFundingAddress && !hasBond && !gate.validatorRunning;
+        if (data.validator.bondOutpoint !== undefined) gate.validatorBond = hasBond;
+        if (data.validator.balanceSompi !== undefined && data.validator.balanceSompi !== null) {
+          const balance = Number(data.validator.balanceSompi);
+          gate.fundingBalanceSompi = Number.isFinite(balance) ? balance : null;
+          gate.fundingBalanceMsk = data.validator.balanceMsk || null;
+        }
+        if (data.validator.nodeSynced !== undefined) {
+          gate.nodeSynced = !!data.validator.nodeSynced;
+        }
+      }
+      if (data.miner) {
+        gate.minerRunning = data.miner.serviceState === 'active';
+        gate.minerKnown = gate.minerRunning || data.miner.serviceState !== 'not configured' || !!data.miner.miningAddress;
+        if (data.miner.fundingAddress) gate.validatorFundingAddress = data.miner.fundingAddress;
+        if (data.miner.miningAddress && !gate.validatorFundingAddress) gate.validatorFundingAddress = data.miner.miningAddress;
+        if (data.miner.maturity) gate.maturity = data.miner.maturity;
+      }
+      if (data.diagnostics) {
+        gate.minerDiagnosed = true;
+        setMinerThreadOptions(data.diagnostics.options || [], data.diagnostics.recommendedThreads || 1);
+      }
+      ingestEvidence(path || '', data);
+      renderGate();
+    }
+
+    function setText(id, text, cls) {
+      const el = document.getElementById(id);
+      el.textContent = text;
+      el.className = 'value ' + (cls || '');
+    }
+
+    function setNote(id, text) {
+      const el = document.getElementById(id);
+      if (el) el.textContent = text;
+    }
+
+    function formatCount(value) {
+      if (value === null || value === undefined || !Number.isFinite(Number(value))) return '-';
+      return Math.round(Number(value)).toLocaleString(lang === 'ja' ? 'ja-JP' : 'en-US');
+    }
+
+    function nodeDaa(node) {
+      const value = node && node.virtualDaaScore;
+      const numeric = Number(value);
+      return Number.isFinite(numeric) ? numeric : null;
+    }
+
+    function syncAgo(ts) {
+      if (!ts) return '-';
+      const seconds = Math.max(0, Math.round((Date.now() - ts) / 1000));
+      if (seconds < 3) return t('syncJustNow');
+      return fmt('syncSecondsAgo', { seconds });
+    }
+
+    function hideSyncActivity() {
+      if (syncActivityEl) syncActivityEl.classList.add('hidden');
+    }
+
+    function syncMetricNote(node) {
+      const daa = nodeDaa(node);
+      const daaText = fmt('syncDaaValue', { daa: formatCount(daa) });
+      if (node && node.synced) return `${daaText} / ${t('syncSynced')}`;
+      if (syncActivity.lastDelta > 0 && syncActivity.lastMoveTs && Date.now() - syncActivity.lastMoveTs < 45000) {
+        return `${daaText} (${fmt('syncDeltaValue', { delta: formatCount(syncActivity.lastDelta) })})`;
+      }
+      return `${daaText} / ${t('syncNoDelta')}`;
+    }
+
+    function maturityLines(maturity) {
+      if (!maturity || maturity.coinbaseMaturityBlocks === undefined || maturity.elapsedBlocks === null || maturity.elapsedBlocks === undefined) {
+        return [t('maturityUnknownLine')];
+      }
+      const elapsed = Number(maturity.elapsedBlocks || 0);
+      const required = Number(maturity.coinbaseMaturityBlocks || 1000);
+      const remaining = Number(maturity.remainingBlocks || 0);
+      const lines = [
+        fmt('maturityProgressLine', {
+          elapsed: formatCount(elapsed),
+          required: formatCount(required),
+          remaining: formatCount(remaining),
+        }),
+        fmt('maturityDaaLine', {
+          current: formatCount(maturity.currentDaa),
+          start: formatCount(maturity.minerStartDaa),
+        }),
+      ];
+      lines.push(remaining <= 0 ? fmt('maturityReadyLine', { required: formatCount(required) }) : t('maturityApproxLine'));
+      return lines;
+    }
+
+    function ingestEvidence(path, data) {
+      const logs = String(data && data.logs || '');
+      if (path === '/api/miner/logs' || path.startsWith('/api/miner/service/')) {
+        const matches = Array.from(logs.matchAll(/mined block\s+#(\d+).*?daa_score=(\d+)/gi));
+        if (matches.length) {
+          const latest = matches[matches.length - 1];
+          gate.minedBlocks = Number(latest[1]);
+          gate.lastMinedDaa = Number(latest[2]);
+        } else if (gate.minerRunning && gate.minedBlocks === null) {
+          gate.minedBlocks = 0;
+        }
+      }
+      if (path === '/api/validator/logs' || path === '/api/validator/service/apply') {
+        const matches = Array.from(logs.matchAll(/submitted attestation shard(?: for epoch\s+(\d+))?(?:\s+\(txid=([^)]+)\))?/gi));
+        if (matches.length) {
+          const latest = matches[matches.length - 1];
+          gate.attestationSuccess = true;
+          gate.attestationEpoch = latest[1] || gate.attestationEpoch || '-';
+          gate.attestationTxid = latest[2] || gate.attestationTxid || '-';
+          const line = logs.split('\n').findLast
+            ? logs.split('\n').findLast(item => item.toLowerCase().includes('submitted attestation shard'))
+            : logs.split('\n').filter(item => item.toLowerCase().includes('submitted attestation shard')).pop();
+          gate.attestationLine = line ? line.replace(/\s+/g, ' ').trim().slice(0, 300) : t('evidenceAttestation');
+        }
+      }
+    }
+
+    function setCardPill(id, kind, label) {
+      const el = document.getElementById(id);
+      el.className = `pill ${kind}`;
+      el.textContent = label;
+    }
+
+    function renderParticipationCards() {
+      setCardPill('minerCardState', gate.minerRunning ? 'done' : 'warn', gate.minerRunning ? 'RUNNING' : (gate.minerKnown ? 'STOPPED' : 'WAIT'));
+      document.getElementById('minerCardService').textContent = gate.minerRunning ? t('statusRunning') : (gate.minerKnown ? t('statusStopped') : t('statusUnknown'));
+      document.getElementById('minerCardAddress').textContent = gate.validatorFundingAddress || '-';
+      document.getElementById('minerCardBalance').textContent = gate.fundingBalanceMsk ? `${gate.fundingBalanceMsk} MSK` : t('balanceNotChecked');
+      document.getElementById('minerCardBlocks').textContent = gate.minedBlocks === null
+        ? '-'
+        : (gate.minedBlocks > 0 ? formatCount(gate.minedBlocks) : t('minedNoBlocks'));
+
+      const maturity = gate.maturity;
+      const maturityBar = document.getElementById('minerMaturityBar');
+      if (!maturity || maturity.elapsedBlocks === null || maturity.elapsedBlocks === undefined) {
+        document.getElementById('minerCardMaturity').textContent = '-';
+        document.getElementById('minerMaturityNote').textContent = t('maturityNotTracked');
+        maturityBar.style.width = '0%';
+      } else {
+        const percent = Math.max(0, Math.min(100, Number(maturity.percent || 0)));
+        const remaining = Number(maturity.remainingBlocks || 0);
+        document.getElementById('minerCardMaturity').textContent = `${formatCount(maturity.elapsedBlocks)} / ${formatCount(maturity.coinbaseMaturityBlocks)} blocks`;
+        document.getElementById('minerMaturityNote').textContent = remaining <= 0
+          ? t('maturityReadyCard')
+          : fmt('maturityProgressCard', { remaining: formatCount(remaining), percent: formatCount(percent) });
+        maturityBar.style.width = `${percent}%`;
+      }
+
+      setCardPill('validatorCardState', gate.attestationSuccess ? 'done' : (gate.validatorRunning ? 'active' : 'warn'), gate.attestationSuccess ? 'ATTESTED' : (gate.validatorRunning ? 'RUNNING' : 'WAIT'));
+      document.getElementById('validatorCardService').textContent = gate.validatorRunning ? t('statusRunning') : (gate.validatorBond ? t('statusStopped') : t('statusUnknown'));
+      document.getElementById('validatorCardBond').textContent = gate.validatorBond ? t('bondCreated') : t('bondMissing');
+      document.getElementById('attestationEpoch').textContent = gate.attestationEpoch || '-';
+      document.getElementById('attestationTxid').textContent = gate.attestationTxid || '-';
+      const evidence = document.getElementById('attestationEvidence');
+      evidence.classList.toggle('success', gate.attestationSuccess);
+      document.getElementById('attestationTitle').textContent = gate.attestationSuccess ? t('attestationSuccessTitle') : t('attestationWaitingTitle');
+      document.getElementById('attestationDetail').textContent = gate.attestationSuccess
+        ? (gate.attestationLine || fmt('attestationSuccessDetail', { epoch: gate.attestationEpoch || '-' }))
+        : t('attestationWaitingDetail');
+    }
+
+    function updateSyncActivity(node) {
+      if (!syncActivityEl) return;
+      if (!node || (node.serviceState !== 'active' && !node.reachable)) {
+        hideSyncActivity();
+        return;
+      }
+      syncActivity.lastNode = node;
+
+      const now = Date.now();
+      const daa = nodeDaa(node);
+      const hasDaa = daa !== null;
+
+      if (hasDaa) {
+        if (syncActivity.lastDaa !== null && daa >= syncActivity.lastDaa) {
+          const delta = daa - syncActivity.lastDaa;
+          const elapsedMin = Math.max((now - (syncActivity.lastTs || now)) / 60000, 0.01);
+          const likelyInitialCatchupSample = syncActivity.lastDaa === 0 && daa > 1000;
+          if (delta > 0 && !likelyInitialCatchupSample) {
+            syncActivity.lastDelta = delta;
+            syncActivity.ratePerMin = delta / elapsedMin;
+            syncActivity.lastMoveTs = now;
+          } else if (likelyInitialCatchupSample) {
+            syncActivity.lastDelta = 0;
+            syncActivity.ratePerMin = null;
+            syncActivity.lastMoveTs = null;
+          }
+        } else if (syncActivity.lastDaa !== null && daa < syncActivity.lastDaa) {
+          syncActivity.lastDelta = 0;
+          syncActivity.ratePerMin = null;
+          syncActivity.lastMoveTs = null;
+        }
+        syncActivity.lastDaa = daa;
+        syncActivity.lastTs = now;
+      }
+
+      const recentMove = !!(syncActivity.lastMoveTs && now - syncActivity.lastMoveTs < 45000);
+      syncActivityEl.className = `sync-activity ${node.synced ? 'synced' : (recentMove ? 'moving' : 'waiting')}`;
+      syncActivityDaaEl.textContent = fmt('syncDaaValue', { daa: formatCount(daa) });
+
+      if (!node.reachable) {
+        syncActivityStateEl.textContent = t('syncWaitingNode');
+      } else if (node.synced) {
+        syncActivityStateEl.textContent = t('syncSynced');
+      } else if (recentMove) {
+        syncActivityStateEl.textContent = t('syncMoving');
+      } else if (hasDaa) {
+        syncActivityStateEl.textContent = syncActivity.lastMoveTs ? t('syncNoRecentMove') : t('syncWaitingSample');
+      } else {
+        syncActivityStateEl.textContent = t('syncWaitingDaa');
+      }
+
+      syncDeltaEl.textContent = syncActivity.lastDelta > 0
+        ? fmt('syncDeltaValue', { delta: formatCount(syncActivity.lastDelta) })
+        : t('syncNoDelta');
+      syncRateEl.textContent = syncActivity.ratePerMin
+        ? fmt('syncRateValue', { rate: formatCount(syncActivity.ratePerMin) })
+        : t('syncNoRate');
+      syncLastMoveEl.textContent = syncAgo(syncActivity.lastMoveTs);
+    }
+
+    function summarize(data) {
+      if (data.publicIpInfo) {
+        updatePublicIpText(data);
+        return;
+      }
+      if (data.bootstrap) {
+        setText('node', data.bootstrap.ready ? 'READY' : 'PREPARE', data.bootstrap.ready ? 'ok' : 'warn');
+        setNote('nodeNote', data.bootstrap.ready ? t('noteBinariesReady') : t('notePrepareRequired'));
+        return;
+      }
+      if (data.node) {
+        updateSyncActivity(data.node);
+        const running = data.node.serviceState === 'active';
+        setText('node', running ? 'RUNNING' : 'CHECK', running ? 'ok' : 'warn');
+        setText('sync', data.node.synced ? 'SYNCED' : (data.node.reachable ? 'SYNCING' : 'WAIT'), data.node.synced ? 'ok' : 'warn');
+        setNote('nodeNote', `${data.node.service || 'misaka-kaspad'}: ${data.node.serviceState || '-'}`);
+        setNote('syncNote', syncMetricNote(data.node));
+      }
+      if (data.validator) {
+        const active = data.validator.serviceState === 'active' || (data.validator.serviceState === undefined && gate.validatorRunning);
+        const bonded = !!data.validator.bondOutpoint;
+        const stateMissing = !!data.validator.keyExists && !data.validator.fundingAddress && !data.validator.bondOutpoint;
+        const keyed = !!data.validator.fundingAddress || bonded || active;
+        const mining = gate.minerRunning;
+        setText('validator', active ? 'RUNNING' : (bonded ? 'BOND' : (mining ? 'MINING' : (keyed ? 'FUND' : (stateMissing ? 'CHECK' : 'WAIT')))), active ? 'ok' : (bonded || mining ? 'ok' : 'warn'));
+        const balanceNote = data.validator.balanceMsk
+          ? fmt('balanceLine', { balance: data.validator.balanceMsk })
+          : null;
+        setNote('validatorNote', balanceNote || (active ? t('noteAttesting') : (bonded ? t('noteBondSubmitted') : (mining ? t('noteMiningOnVps') : (keyed ? t('noteMiningNeeded') : (stateMissing ? t('noteValidatorStateMissing') : t('noteNotConfigured')))))));
+      }
+      if (data.miner) {
+        const mining = data.miner.serviceState === 'active';
+        if (gate.validatorKey && !gate.validatorBond && !gate.validatorRunning) {
+          setText('validator', mining ? 'MINING' : 'FUND', mining ? 'ok' : 'warn');
+          setNote('validatorNote', mining ? `VPS CPU ${data.miner.threads || 1} thread(s)` : t('noteMiningStopped'));
+        }
+      }
+      if (data.p2p) {
+        setText('p2p', data.p2p.listening ? 'LISTENING' : 'WAIT', data.p2p.listening ? 'ok' : 'warn');
+        setNote('p2pNote', `port ${data.p2p.port || 26211}`);
+      }
+      if (data.checks) {
+        const bad = data.checks.some(c => c.status === 'FAIL');
+        setText('node', bad ? 'CHECK' : 'OK', bad ? 'bad' : 'ok');
+        setNote('nodeNote', bad ? t('notePreflightFail') : t('notePreflightOk'));
+      }
+    }
+
+    function human(data) {
+      if (data.logs) {
+        const prefix = [];
+        if (data.validator && data.validator.serviceState === 'active') {
+          prefix.push('Validator: RUNNING');
+        }
+        if (data.logs.includes('submitted attestation shard')) {
+          prefix.push(t('evidenceAttestation'));
+        }
+        if (data.miner && data.miner.serviceState === 'active') {
+          prefix.push(t('evidenceMining'));
+        }
+        return prefix.length ? prefix.join('\n') + '\n\n' + data.logs : data.logs;
+      }
+      if (data.error) {
+        const lines = [friendlyError(data.error)];
+        if (data.validator && data.validator.maturity) {
+          lines.push('', ...maturityLines(data.validator.maturity));
+        }
+        return lines.join('\n');
+      }
+      if (data.publicIpInfo) {
+        const info = data.publicIpInfo;
+        return [
+          t('publicIpTitle'),
+          '',
+          `IP: ${info.publicIp || '-'}`,
+          `Source: ${sourceLabel(info.source)}`,
+          `Confirmed: ${info.confirmed ? 'yes' : 'no'}`,
+          `Saved: ${info.savedIp || '-'}`,
+          `Browser host: ${info.browserHost || '-'}`,
+          `Detected on VPS: ${info.detectedIp || '-'}`,
+          '',
+          info.confirmed && info.publicIp
+            ? fmt('publicIpConfirmed', { ip: info.publicIp })
+            : (info.publicIp ? fmt('publicIpNeedsConfirm', { ip: info.publicIp }) : t('publicIpUnknown'))
+        ].join('\n');
+      }
+      if (data.bootstrap) {
+        const tools = (data.bootstrap.tools || []).map(t => `${t.name}: ${t.ok ? 'OK' : 'MISSING'}${t.path ? ' - ' + t.path : ''}`);
+        const bins = (data.bootstrap.binaries || []).map(t => `${t.name}: ${t.ok ? 'OK' : 'MISSING'}${t.path ? ' - ' + t.path : ''}`);
+        const job = data.job ? [
+          '',
+          `Prepare job: ${data.job.running ? 'RUNNING' : (data.job.complete ? 'COMPLETE' : (data.job.failed ? 'STOPPED / CHECK LOG' : 'IDLE'))}`,
+          `Log: ${data.job.logPath || '-'}`
+        ] : [];
+        return [
+          `Source: ${data.bootstrap.sourceExists ? 'OK' : 'MISSING'}`,
+          `Cargo: ${data.bootstrap.cargo || 'MISSING'}`,
+          '',
+          'Tools',
+          ...tools,
+          '',
+          'Binaries',
+          ...bins,
+          ...job,
+          '',
+          data.bootstrap.ready ? t('bootstrapReadyHuman') : t('bootstrapNeedPrepareHuman')
+        ].join('\n');
+      }
+      if (data.job) {
+        return [
+          data.message || 'Prepare job updated.',
+          '',
+          `State: ${data.job.running ? 'RUNNING' : (data.job.complete ? 'COMPLETE' : 'CHECK LOG')}`,
+          `Log: ${data.job.logPath || '-'}`,
+          '',
+          data.job.logs || ''
+        ].join('\n');
+      }
+      if (data.diagnostics) {
+        const d = data.diagnostics;
+        const hasKey = data.validator && data.validator.fundingAddress;
+        const hasBond = data.validator && data.validator.bondOutpoint;
+        const next = hasBond ? t('minerNextBonded') : (hasKey ? t('minerNextReady') : t('minerNextNeedKey'));
+        return [
+          t('minerDiagTitle'),
+          '',
+          t('minerDiagTarget'),
+          `Logical CPUs: ${d.logicalCpus || '-'}`,
+          `Load 1m: ${d.load1m === null || d.load1m === undefined ? '-' : d.load1m}`,
+          `Available memory: ${d.memoryAvailableGiB === null || d.memoryAvailableGiB === undefined ? '-' : Number(d.memoryAvailableGiB).toFixed(1) + ' GiB'}`,
+          `Recommended threads: ${d.recommendedThreads || 1}`,
+          `Max selectable threads: ${d.maxThreads || 1}`,
+          '',
+          next
+        ].join('\n');
+      }
+      if (data.node) {
+        return [
+          `Node: ${data.node.serviceState}`,
+          `Sync: ${data.node.synced ? 'SYNCED' : 'SYNCING / WAIT'}`,
+          `P2P: ${data.p2p && data.p2p.listening ? 'LISTENING' : 'WAIT'}`,
+          syncMetricNote(data.node),
+          '',
+          data.node.synced ? t('nodeDoneHuman') : t('nodeSyncingHuman')
+        ].join('\n');
+      }
+      if (data.miner) {
+        const lines = [
+          `Service: ${data.miner.serviceState || '-'}`,
+          `Binary: ${data.miner.binary || '-'}`,
+          `gRPC: ${data.miner.grpc || '-'}`,
+          `Threads: ${data.miner.threads || '-'}`,
+          `Mining address: ${data.miner.miningAddress || '-'}`,
+          `Funding address: ${data.miner.fundingAddress || '-'}`,
+        ];
+        if (data.message) lines.unshift(data.message, '');
+        if (data.miner.serviceState === 'active') {
+          lines.push('', lang === 'ja'
+            ? 'VPSでマイニング中です。しばらく待ってから「11. Bond用残高確認」を押してください。Bondに使える成熟UTXOが足りたらBond作成へ進めます。'
+            : 'Mining is running on this VPS. Wait for maturity, then press "11. Check bond balance". Create the bond when enough mature UTXOs are available.');
+        }
+        if (data.miner.maturity) {
+          lines.push('', ...maturityLines(data.miner.maturity));
+        }
+        return lines.join('\n');
+      }
+      if (data.validator) {
+        const lines = [
+          `Service: ${data.validator.serviceState || '-'}`,
+          `Key: ${data.validator.keyExists ? 'created' : 'not created'}`,
+          `Validator ID: ${data.validator.validatorId || '-'}`,
+          `Funding address: ${data.validator.fundingAddress || '-'}`,
+          `Bond: ${data.validator.bondOutpoint || '-'}`,
+          `Node synced: ${data.validator.nodeSynced === undefined ? '-' : data.validator.nodeSynced}`,
+        ];
+        if (data.validator.keyExists && !data.validator.fundingAddress && !data.validator.bondOutpoint) {
+          lines.push('', t('validatorStateMissing'));
+        }
+        if (data.validator.balanceMsk) {
+          lines.push('', fmt('balanceLine', { balance: data.validator.balanceMsk }));
+          if (Number(data.validator.balanceSompi || 0) <= 0) {
+            lines.push(t('balanceZeroLine'));
+          } else {
+            lines.push(t('balanceMaturityLine'));
+          }
+        }
+        if (data.validator.maturity) {
+          lines.push('', ...maturityLines(data.validator.maturity));
+        }
+        if (data.validator.balanceOutput) lines.push('', data.validator.balanceOutput);
+        if (data.validator.statusOutput) lines.push('', data.validator.statusOutput);
+        if (data.validator.fundingAddress && !data.validator.bondOutpoint) {
+          lines.push('', 'Next funding address:', data.validator.fundingAddress);
+        }
+        if (data.message) lines.unshift(data.message, '');
+        return lines.join('\n');
+      }
+      if (data.checks) {
+        return data.checks.map(c => `${c.check}: ${c.value} ${c.status}${c.detail ? ' - ' + c.detail : ''}`).join('\n');
+      }
+      if (data.unit) {
+        return ['Node service preview', '', ...(data.commands || []).map(c => '- ' + c), '', data.unit].join('\n');
+      }
+      if (data.message) return data.message;
+      return JSON.stringify(data, null, 2);
+    }
+
+    function apiUrl(path) {
+      const isTemplateToken = token.includes("SETUP_TOKEN");
+      const isStaticPreview = window.location.protocol === 'file:' || isTemplateToken;
+      if (isStaticPreview) {
+        if (path === '/setup') return 'setup.html';
+        if (path === '/dashboard') return 'dashboard.html';
+        if (path === '/learn') return 'learn.html';
+        return '#';
+      }
+      const sep = path.includes('?') ? '&' : '?';
+      return `${path}${sep}token=${encodeURIComponent(token)}`;
+    }
+
+    function openDashboard() {
+      window.open(apiUrl('/dashboard'), '_blank', 'noopener,noreferrer');
+    }
+
+    function openLearn() {
+      window.open(apiUrl('/learn'), '_blank', 'noopener,noreferrer');
+    }
+
+    function sessionPing() {
+      fetch(apiUrl('/api/session/ping'), { method: 'GET', cache: 'no-store' }).catch(() => {});
+    }
+
+    function startSessionHeartbeat() {
+      sessionPing();
+      setInterval(sessionPing, 60 * 1000);
+      document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) sessionPing();
+      });
+    }
+
+    function methodFor(path) {
+      const getPaths = [
+        '/api/session/ping',
+        '/api/bootstrap/status',
+        '/api/bootstrap/logs',
+        '/api/public-ip',
+        '/api/preflight',
+        '/api/status',
+        '/api/validator/status',
+        '/api/validator/chain-status',
+        '/api/validator/logs',
+        '/api/miner/status',
+        '/api/miner/diagnostics',
+        '/api/miner/logs',
+        '/api/logs',
+      ];
+      const routePath = path.split('?')[0];
+      return getPaths.includes(routePath) ? 'GET' : 'POST';
+    }
+
+    async function fetchJson(path, attempts) {
+      const maxAttempts = attempts || 3;
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        let res;
+        try {
+          res = await fetch(apiUrl(path), { method: methodFor(path) });
+        } catch (err) {
+          if (attempt < maxAttempts) {
+            await sleep(600);
+            continue;
+          }
+          return { ok: false, error: `request failed: ${errorMessage(err)}`, path };
+        }
+        const text = await res.text();
+        let data;
+        try {
+          data = text ? JSON.parse(text) : {};
+        } catch (parseErr) {
+          data = { ok: false, error: text || String(parseErr), httpStatus: res.status };
+        }
+        if (!res.ok && !data.error) {
+          data.error = `HTTP ${res.status}`;
+        }
+        if (data.error === 'bad request' && attempt < maxAttempts) {
+          await sleep(600);
+          continue;
+        }
+        return data;
+      }
+      return { ok: false, error: 'request failed' };
+    }
+
+    async function refreshLiveState(userRequested) {
+      if (liveRefreshRunning || autoRunning) return;
+      liveRefreshRunning = true;
+      try {
+        const snapshot = {};
+        const bootstrap = await fetchJson('/api/bootstrap/status', 1);
+        snapshot.bootstrap = bootstrap;
+        updateGate(bootstrap, '/api/bootstrap/status');
+        if (bootstrap.error) throw new Error(bootstrap.error);
+        if (!(bootstrap.bootstrap && bootstrap.bootstrap.ready)) {
+          lastSnapshot = snapshot;
+          rawEl.textContent = JSON.stringify(snapshot, null, 2);
+          return;
+        }
+
+        const paths = [
+          '/api/status',
+          '/api/validator/status',
+          '/api/miner/status',
+          '/api/miner/logs',
+          '/api/validator/logs',
+        ];
+        const values = await Promise.all(paths.map(path => fetchJson(path, 1)));
+        paths.forEach((path, index) => {
+          snapshot[path] = values[index];
+          updateGate(values[index], path);
+        });
+
+        if (gate.validatorKey && gate.nodeSynced && !gate.validatorBond && (userRequested || gate.fundingBalanceSompi === null)) {
+          const balance = await fetchJson('/api/validator/balance', 1);
+          snapshot['/api/validator/balance'] = balance;
+          updateGate(balance, '/api/validator/balance');
+        }
+
+        const status = snapshot['/api/status'];
+        if (status && status.node) summarize(status);
+        lastSnapshot = snapshot;
+        rawEl.textContent = JSON.stringify(snapshot, null, 2);
+        const hardError = values.find((value, index) => value && value.error && paths[index] === '/api/status');
+        if (hardError && userRequested) throw new Error(hardError.error);
+      } catch (err) {
+        if (userRequested) {
+          logEl.dataset.touched = 'true';
+          logEl.textContent = friendlyError(errorMessage(err));
+          recordError(err, 'refresh participation status');
+        }
+      } finally {
+        liveRefreshRunning = false;
+        renderGate();
+      }
+    }
+
+    function clearPrepareLogPoll() {
+      if (prepareLogPoll) {
+        clearTimeout(prepareLogPoll);
+        prepareLogPoll = null;
+      }
+    }
+
+    function prepareLogText(data) {
+      const job = data.job || {};
+      const state = job.running ? 'RUNNING' : (job.complete ? 'COMPLETE' : (job.failed ? 'FAILED' : 'IDLE'));
+      return [
+        `State: ${state}`,
+        `Log: ${job.logPath || '-'}`,
+        '',
+        data.logs || job.logs || t('noLogsYet')
+      ].join('\n');
+    }
+
+    async function refreshPrepareLogs() {
+      try {
+        const data = await fetchJson('/api/bootstrap/logs');
+        rawEl.textContent = JSON.stringify(data, null, 2);
+        updateGate(data, '/api/bootstrap/logs');
+        logEl.dataset.touched = 'true';
+        logEl.textContent = prepareLogText(data);
+        logEl.scrollTop = logEl.scrollHeight;
+        summarize(data);
+        const running = data.job && data.job.running;
+        if (running) {
+          prepareLogPoll = setTimeout(refreshPrepareLogs, 3000);
+        } else {
+          prepareLogPoll = null;
+        }
+      } catch (err) {
+        prepareLogPoll = null;
+        logEl.dataset.touched = 'true';
+        logEl.textContent = friendlyError(errorMessage(err));
+        recordError(err, 'read preparation log');
+      }
+    }
+
+    function startPrepareLogs() {
+      clearPrepareLogPoll();
+      refreshPrepareLogs();
+    }
+
+    function sleep(ms) {
+      return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    function nowText() {
+      return new Date().toLocaleTimeString();
+    }
+
+    function showAutoLog(extra) {
+      logEl.dataset.touched = 'true';
+      logEl.textContent = autoLines.join('\n') + (extra ? '\n\n' + extra : '');
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    function appendAuto(line) {
+      autoLines.push(`[${nowText()}] ${line}`);
+      showAutoLog('');
+    }
+
+    function stopAuto() {
+      autoStopRequested = true;
+      appendAuto(t('autoStopRequested'));
+      renderGate();
+    }
+
+    function ensureAutoContinue() {
+      if (autoStopRequested) throw new Error(t('btnStopAuto'));
+    }
+
+    async function autoFetch(label, path, options) {
+      ensureAutoContinue();
+      appendAuto(fmt('autoStepStart', { label }));
+      const data = await fetchJson(path);
+      updateGate(data, path);
+      rawEl.textContent = JSON.stringify(data, null, 2);
+      summarize(data);
+      if (data.error) {
+        if (String(data.error).includes('not enough MATURE funding')) {
+          appendAuto(t('bondMatureErrorTitle'));
+          appendAuto(t('bondMatureErrorBody'));
+          if (data.validator && data.validator.maturity) {
+            maturityLines(data.validator.maturity).forEach(line => appendAuto(line));
+          }
+          throw new Error(t('bondMatureErrorTitle'));
+        }
+        throw new Error(data.error);
+      }
+      if (options && options.requireOk && data.ok === false) {
+        throw new Error(fmt('autoStepIncomplete', { label }));
+      }
+      appendAuto(fmt('autoStepDone', { label }));
+      return data;
+    }
+
+    async function waitPrepareComplete() {
+      appendAuto(t('prepareLogWatch'));
+      while (true) {
+        ensureAutoContinue();
+        const data = await fetchJson('/api/bootstrap/logs');
+        updateGate(data, '/api/bootstrap/logs');
+        rawEl.textContent = JSON.stringify(data, null, 2);
+        summarize(data);
+        showAutoLog(prepareLogText(data));
+        if (data.job && data.job.complete) {
+          appendAuto(t('prepareComplete'));
+          return;
+        }
+        const logs = data.logs || (data.job && data.job.logs) || '';
+        const reachedInstallPhase = logs.includes('== 5/5 install release binaries ==');
+        if ((data.job && !data.job.running) || reachedInstallPhase) {
+          const app = await fetchJson('/api/bootstrap/status');
+          updateGate(app, '/api/bootstrap/status');
+          rawEl.textContent = JSON.stringify(app, null, 2);
+          summarize(app);
+          if (app.bootstrap && app.bootstrap.ready) {
+            appendAuto(t('prepareMarkerSkipped'));
+            return;
+          }
+        }
+        if (data.job && data.job.failed) {
+          throw new Error(t('prepareFailedAuto'));
+        }
+        await sleep(3000);
+      }
+    }
+
+    async function waitNodeSync() {
+      appendAuto(t('nodeSyncWatch'));
+      while (true) {
+        ensureAutoContinue();
+        const data = await fetchJson('/api/status');
+        updateGate(data, '/api/status');
+        rawEl.textContent = JSON.stringify(data, null, 2);
+        summarize(data);
+        showAutoLog(human(data));
+        if (data.node && data.node.synced) {
+          appendAuto(t('nodeSyncDone'));
+          return;
+        }
+        await sleep(10000);
+      }
+    }
+
+    async function autoNodeJoin() {
+      clearPrepareLogPoll();
+      autoRunning = true;
+      autoStopRequested = false;
+      autoLines = [];
+      setBusy(true);
+      try {
+        appendAuto(t('autoNodeStart'));
+        const confirmed = await ensurePublicIpConfirmed();
+        if (!confirmed) return;
+        let app = await autoFetch(t('labelCheckApp'), '/api/bootstrap/status');
+        if (!(app.bootstrap && app.bootstrap.ready)) {
+          await autoFetch(t('labelPrepareVps'), '/api/bootstrap/prepare');
+          await waitPrepareComplete();
+          app = await autoFetch(t('labelCheckApp'), '/api/bootstrap/status');
+          if (!(app.bootstrap && app.bootstrap.ready)) {
+            throw new Error(t('prepareStillMissing'));
+          }
+        }
+
+        await autoFetch(t('labelCheckVps'), '/api/preflight', { requireOk: true });
+        await autoFetch(t('labelCheckSync'), '/api/status');
+
+        if (!gate.nodeService) {
+          await autoFetch(t('labelPreviewNode'), '/api/node/dry-run');
+          await autoFetch(t('labelStartNode'), '/api/node/apply', { requireOk: true });
+        } else {
+          appendAuto(t('nodeServiceAlready'));
+        }
+
+        await waitNodeSync();
+        appendAuto(t('autoNodeDone'));
+      } catch (err) {
+        appendAuto(fmt('autoStopped', { message: errorMessage(err) }));
+        if (!autoStopRequested) recordError(err, 'automatic node setup');
+      } finally {
+        autoRunning = false;
+        setBusy(false);
+      }
+    }
+
+    async function autoValidatorJoin() {
+      clearPrepareLogPoll();
+      autoRunning = true;
+      autoStopRequested = false;
+      autoLines = [];
+      setBusy(true);
+      try {
+        appendAuto(t('validatorAutoStart'));
+        const status = await autoFetch(t('labelCheckSync'), '/api/status');
+        if (!(status.node && status.node.synced)) {
+          appendAuto(t('validatorNodeRequired'));
+          await waitNodeSync();
+        }
+
+        let validator = await autoFetch(t('labelCheckValidator'), '/api/validator/status');
+        if (!gate.validatorKey) {
+          validator = await autoFetch(t('labelGenerateKey'), '/api/validator/keygen', { requireOk: true });
+          const addr = validator.validator && validator.validator.fundingAddress;
+          if (addr) appendAuto(`Funding address: ${addr}`);
+          await autoFetch(t('labelCpuCheck'), '/api/miner/diagnostics', { requireOk: true });
+          appendAuto(t('minerDiagnoseHint'));
+          const mine = confirm(minerConfirmText());
+          if (mine) {
+            await autoFetch(t('labelStartMiner'), minerStartPath(), { requireOk: true });
+            appendAuto(t('minerStartedPause'));
+          } else {
+            appendAuto(t('fundingPause'));
+          }
+          return;
+        }
+
+        const miner = await autoFetch(t('labelCheckMiner'), '/api/miner/status');
+        if (!gate.validatorBond && !(miner.miner && miner.miner.serviceState === 'active')) {
+          await autoFetch(t('labelCpuCheck'), '/api/miner/diagnostics', { requireOk: true });
+          appendAuto(t('minerDiagnoseHint'));
+          const mine = confirm(minerConfirmText());
+          if (mine) {
+            await autoFetch(t('labelStartMiner'), minerStartPath(), { requireOk: true });
+            appendAuto(t('minerStartedPause'));
+          } else {
+            appendAuto(t('fundingPause'));
+          }
+          return;
+        }
+
+        await autoFetch(t('labelCheckFunding'), '/api/validator/balance');
+
+        if (!gate.validatorBond) {
+          const amount = document.getElementById('bondAmount').value.trim();
+          if (!amount) throw new Error(t('requiredBond'));
+          const amountSompi = currentBondAmountSompi();
+          if (amountSompi === null || amountSompi <= 0) throw new Error(t('bondHintInvalid'));
+          if (gate.fundingBalanceSompi !== null && gate.fundingBalanceSompi !== undefined && gate.fundingBalanceSompi < amountSompi) {
+            appendAuto(gate.fundingBalanceSompi <= 0 ? t('bondHintZero') : fmt('bondHintLow', { balance: gate.fundingBalanceMsk || '-', amount }));
+            appendAuto(t('fundingPause'));
+            return;
+          }
+          if (gate.fundingBalanceMsk) {
+            appendAuto(fmt('bondReadyLog', { balance: gate.fundingBalanceMsk, amount }));
+          }
+          const ok = confirm(t('bondConfirm') + amount + '?');
+          if (!ok) {
+            appendAuto(t('bondSkipped'));
+            return;
+          }
+          await autoFetch(t('labelCreateBond'), '/api/validator/bond?amount=' + encodeURIComponent(amount), { requireOk: true });
+        }
+
+        await autoFetch(t('labelValidatorStatus'), '/api/validator/chain-status');
+        if (!gate.validatorRunning) {
+          await autoFetch(t('labelStartValidator'), '/api/validator/service/apply', { requireOk: true });
+        }
+        await autoFetch(t('labelValidatorLogs'), '/api/validator/logs');
+        appendAuto(t('validatorAutoDone'));
+      } catch (err) {
+        appendAuto(fmt('autoStopped', { message: errorMessage(err) }));
+        if (!autoStopRequested) recordError(err, 'automatic validator setup');
+      } finally {
+        autoRunning = false;
+        setBusy(false);
+      }
+    }
+
+    async function callApi(path) {
+      setBusy(true);
+      logEl.dataset.touched = 'true';
+      logEl.textContent = t('running');
+      try {
+        const data = await fetchJson(path);
+        if (path === '/api/node/apply' && data.ok) {
+          gate.nodeService = true;
+        }
+        if (path === '/api/validator/service/apply' && data.ok) {
+          gate.validatorRunning = true;
+        }
+        if (path.startsWith('/api/miner/service/apply') && data.ok) {
+          gate.minerRunning = true;
+          gate.minerKnown = true;
+        }
+        if (path === '/api/miner/service/stop' && data.ok) {
+          gate.minerRunning = false;
+          gate.minerKnown = true;
+        }
+        updateGate(data, path);
+        rawEl.textContent = JSON.stringify(data, null, 2);
+        summarize(data);
+        logEl.textContent = human(data);
+        if (data.error) recordError(data.error, path);
+        if (path === '/api/bootstrap/prepare') {
+          clearPrepareLogPoll();
+          prepareLogPoll = setTimeout(refreshPrepareLogs, 1000);
+        }
+      } catch (err) {
+        logEl.textContent = friendlyError(errorMessage(err));
+        recordError(err, path);
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    async function applyNode() {
+      try {
+        const confirmed = await ensurePublicIpConfirmed();
+        if (!confirmed) return;
+        callApi('/api/node/apply');
+      } catch (err) {
+        logEl.dataset.touched = 'true';
+        logEl.textContent = friendlyError(errorMessage(err));
+        recordError(err, 'start node');
+      }
+    }
+
+    function createBond() {
+      const amount = document.getElementById('bondAmount').value.trim();
+      if (!amount) {
+        logEl.textContent = t('requiredBond');
+        return;
+      }
+      const amountSompi = currentBondAmountSompi();
+      if (amountSompi === null || amountSompi <= 0) {
+        logEl.textContent = t('bondHintInvalid');
+        return;
+      }
+      if (gate.fundingBalanceSompi !== null && gate.fundingBalanceSompi !== undefined && gate.fundingBalanceSompi < amountSompi) {
+        logEl.textContent = gate.fundingBalanceSompi <= 0
+          ? t('bondHintZero')
+          : fmt('bondHintLow', { balance: gate.fundingBalanceMsk || '-', amount });
+        return;
+      }
+      const ok = confirm(t('bondConfirm') + amount + '?');
+      if (!ok) return;
+      callApi('/api/validator/bond?amount=' + encodeURIComponent(amount));
+    }
+
+    window.addEventListener('error', event => {
+      logEl.dataset.touched = 'true';
+      logEl.textContent = friendlyError(event.message || 'unexpected browser error');
+      recordError(event.message || 'unexpected browser error', 'browser error');
+    });
+
+    window.addEventListener('unhandledrejection', event => {
+      logEl.dataset.touched = 'true';
+      logEl.textContent = friendlyError(errorMessage(event.reason));
+      recordError(event.reason, 'browser promise error');
+    });
+
+    document.getElementById('jaBtn').addEventListener('click', () => setLanguage('ja'));
+    document.getElementById('enBtn').addEventListener('click', () => setLanguage('en'));
+    document.getElementById('publicIpInput').addEventListener('input', () => {
+      publicIpTouched = true;
+      gate.publicIpConfirmed = false;
+      renderGate();
+    });
+    document.getElementById('minerThreads').addEventListener('change', () => {
+      minerThreadTouched = true;
+    });
+    document.getElementById('bondAmount').addEventListener('input', () => {
+      renderGate();
+    });
+    document.getElementById('toggleTerminal').addEventListener('click', () => {
+      terminalOpen = !terminalOpen;
+      terminalPanel.classList.toggle('collapsed', !terminalOpen);
+      document.getElementById('toggleTerminal').textContent = terminalOpen ? t('hideLog') : t('showLog');
+    });
+    document.getElementById('copyLog').addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(logEl.textContent);
+        const old = document.getElementById('copyLog').textContent;
+        document.getElementById('copyLog').textContent = t('copied');
+        setTimeout(() => { document.getElementById('copyLog').textContent = old; }, 1200);
+      } catch (_) {}
+    });
+    document.getElementById('copySupportReport').addEventListener('click', copySupportReport);
+    document.getElementById('saveSupportReport').addEventListener('click', saveSupportReport);
+
+    const savedLang = localStorage.getItem('misakaSetupLang');
+    if (savedLang === 'ja' || savedLang === 'en') {
+      document.getElementById('languageChoice').classList.add('hidden');
+      setLanguage(savedLang, false);
+    } else {
+      setLanguage('en', false);
+    }
+    startSessionHeartbeat();
+    hydrateState().then(() => refreshLiveState(false));
+    setInterval(() => {
+      if (!document.hidden) refreshLiveState(false);
+    }, 30 * 1000);
+  </script>
+</body>
+</html>

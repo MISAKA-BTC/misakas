@@ -1,0 +1,26 @@
+
+running 1 test
+test retired_population_four_100k_seals_refuse_the_fifth_and_native_retirement_reuses_the_budget ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 7.02s
+
+[rfc06-retention] four_seals_candidates=400000 encoded_bytes=136406817 elapsed_ms=5032
+[rfc06-retention] reclaimed_and_resealed_candidates=400000 encoded_bytes=136408236 elapsed_ms=7014
+        7.04 real         6.37 user         0.40 sys
+          2559803392  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+              242225  page reclaims
+                   0  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                   0  signals received
+                   0  voluntary context switches
+                6904  involuntary context switches
+         77440979312  instructions retired
+         20027984996  cycles elapsed
+          2535886616  peak memory footprint

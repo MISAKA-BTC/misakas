@@ -1,0 +1,136 @@
+{
+  "jobs": [
+    {
+      "id": "arithmetic-1",
+      "task": "arithmetic",
+      "expected_answer": "2",
+      "source": {
+        "generated_tokens": [
+          17,
+          151645,
+          198,
+          151643,
+          33975,
+          25,
+          2980,
+          498
+        ],
+        "first_eos_index": 1,
+        "answer_text": "2",
+        "predeclared_task_answer_passed": true
+      },
+      "integer": {
+        "generated_tokens": [
+          17,
+          151645,
+          198,
+          151643,
+          33975,
+          25,
+          3555,
+          374
+        ],
+        "first_eos_index": 1,
+        "answer_text": "2",
+        "predeclared_task_answer_passed": true
+      },
+      "equal_generated_tokens": 6,
+      "exact_generated_job": false
+    },
+    {
+      "id": "translation-1",
+      "task": "translation",
+      "expected_answer": "Hello",
+      "source": {
+        "generated_tokens": [
+          9707,
+          13,
+          151645,
+          198,
+          151643,
+          33975,
+          25,
+          9645
+        ],
+        "first_eos_index": 2,
+        "answer_text": "Hello.",
+        "predeclared_task_answer_passed": false
+      },
+      "integer": {
+        "generated_tokens": [
+          9707,
+          13,
+          151645,
+          198,
+          151643,
+          33975,
+          25,
+          9645
+        ],
+        "first_eos_index": 2,
+        "answer_text": "Hello.",
+        "predeclared_task_answer_passed": false
+      },
+      "equal_generated_tokens": 8,
+      "exact_generated_job": true
+    },
+    {
+      "id": "code-1",
+      "task": "code",
+      "expected_answer": "1+1",
+      "source": {
+        "generated_tokens": [
+          73594,
+          12669,
+          198,
+          16,
+          488,
+          220,
+          16,
+          198
+        ],
+        "first_eos_index": null,
+        "answer_text": "```python\n1 + 1",
+        "predeclared_task_answer_passed": false
+      },
+      "integer": {
+        "generated_tokens": [
+          73594,
+          12669,
+          198,
+          16,
+          488,
+          220,
+          16,
+          198
+        ],
+        "first_eos_index": null,
+        "answer_text": "```python\n1 + 1",
+        "predeclared_task_answer_passed": false
+      },
+      "equal_generated_tokens": 8,
+      "exact_generated_job": true
+    }
+  ],
+  "generated_token_agreement": 0.9166666666666666,
+  "exact_generated_job_fraction": 0.6666666666666666,
+  "source_task_answer_fraction": 0.3333333333333333,
+  "integer_task_answer_fraction": 0.3333333333333333,
+  "predeclared_free_running_fidelity_passed": false,
+  "predeclared_task_answers_passed": false,
+  "predeclared_generation_and_answer_thresholds_met": false,
+  "schema": "misaka.rfc02.independent-greedy-task-score.v1",
+  "protocol_sha256": "c0909ad72a242093424e9974d7b61f3c72ed50196d9c2a68f549234018b4a998",
+  "source_json_sha256": "5335311c3ee8a318ecfc1e0f49af84d3ad70b91360c7cd07ff5a658c89c7aaeb",
+  "integer_json_sha256": "ec3f35125cca087a3ce2558f464d6e3956eb4ebd3fe6fc2e47e0be1aceb029ce",
+  "artifact_sha256": "435ed8fcddf68a4fc7dd22792dfe912fdbc3a9b4ab1a6803a711fcb1ff834a64",
+  "source_manifest_sha256": "0c45f44e969b7c226d3fb8444ac5dff91c8d98001127cc2dcae8749c251994a3",
+  "tokenizer_sha256": "c0382117ea329cdf097041132f6d735924b697924d6f6fc3945713e96ce87539",
+  "repository": "Qwen/Qwen2.5-1.5B-Instruct",
+  "revision": "989aa7980e4cf806f80c7fef2b1adb7bc71aa306",
+  "context": 32,
+  "fixed_length_job_semantics": "exact requested output count, with EOS used only for answer display/scoring",
+  "complete_task_benchmark_or_maximum_context_proven": false,
+  "native_final_or_a6_a8_proven": false,
+  "full_rfc02_complete": false
+}

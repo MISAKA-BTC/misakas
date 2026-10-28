@@ -1,0 +1,128 @@
+{
+  "parent": "ca476389a555e812edbe45d9241f60dcdb803f3a",
+  "selected_unique_passes": 106,
+  "selection": {
+    "native-suite": 41,
+    "shared-suite": 9,
+    "source-suite": 6,
+    "wire-suite": 5,
+    "regressions": 45
+  },
+  "commands": [
+    {
+      "command": "/Users/wata/.cache/misaka-heavy-lock.sh cargo check --release -p kaspa-consensus-core --lib --tests",
+      "log": "canonical-root-first-check.log",
+      "exit": 0,
+      "executed_tests": 0,
+      "scope": "intermediate source, before String/early-clone correction"
+    },
+    {
+      "command": "/Users/wata/.cache/misaka-heavy-lock.sh cargo check --release -p kaspa-consensus-core --lib --tests",
+      "log": "canonical-root-second-check.log",
+      "exit": 0,
+      "executed_tests": 0,
+      "scope": "intermediate source, before String/early-clone correction"
+    },
+    {
+      "command": "/Users/wata/.cache/misaka-heavy-lock.sh cargo test --release -p kaspa-consensus-core --lib shared_history_root_binds_public_original_policy_and_literal_producer_signature",
+      "log": "canonical-root-native-first.log",
+      "exit": 101,
+      "passed": 0,
+      "failed": 1,
+      "reason": "wire versus typed request inequality; source in canonical-root-first-native-source.patch"
+    },
+    {
+      "command": "/Users/wata/.cache/misaka-heavy-lock.sh cargo test --release -p kaspa-consensus-core --test palw_court_shared_root_codec_v1 -- --nocapture",
+      "log": "canonical-root-codec-first.log",
+      "exit": 101,
+      "failed": 1,
+      "reason": "nested artifact tensor-name String preflight underquoted by391; source in canonical-root-codec-first-source.patch"
+    },
+    {
+      "command": "/Users/wata/.cache/misaka-heavy-lock.sh cargo test --release -p kaspa-consensus-core --test palw_court_shared_root_codec_v1 -- --nocapture",
+      "log": "canonical-root-codec-final.log",
+      "exit": 0,
+      "passed": 2,
+      "overlap": "included in regressions45"
+    },
+    {
+      "command": "/Users/wata/.cache/misaka-heavy-lock.sh cargo test --release -p kaspa-consensus-core --lib shared_history_root_binds_public_original_policy_and_literal_producer_signature",
+      "log": "canonical-root-native-final.log",
+      "exit": 0,
+      "passed": 1,
+      "overlap": "included in native41"
+    },
+    {
+      "command": "/Users/wata/.cache/misaka-heavy-lock.sh python3 (sequential binary selections; argv in canonical-root-unit-commands.json)",
+      "log": "canonical-root-unit-commands.json",
+      "exit": 0
+    },
+    {
+      "command": "/Users/wata/.cache/misaka-heavy-lock.sh cargo test --release -p kaspa-consensus-core --test palw_tir_dissect_fold --test palw_court_shared_root_codec_v1 --test palw_court_service_state_v2 --test palw_court_policy_v1 --test g14_close_gates --test palw_activation_pool_is_t12_only --test palw_the_release_did_not_move",
+      "log": "canonical-root-regressions.log",
+      "exit": 0,
+      "passed": 45
+    },
+    {
+      "command": "/Users/wata/.cache/misaka-heavy-lock.sh cargo check --release -p kaspa-consensus --lib",
+      "log": "canonical-root-consensus-check.log",
+      "exit": 0
+    },
+    {
+      "command": "python3 docs/maintenance/check_docs.py",
+      "log": "canonical-root-docs-first.log",
+      "exit": 1
+    },
+    {
+      "command": "/Users/wata/.cache/misaka-heavy-lock.sh cargo check --release -p kaspa-consensus-core --lib --tests",
+      "log": "canonical-root-final-check.log",
+      "exit": 0,
+      "executed_tests": 0
+    },
+    {
+      "command": "python3 docs/maintenance/check_docs.py",
+      "log": "canonical-root-docs-final.log",
+      "exit": 1,
+      "scope": "same5 imported missing links +43 baseline-known"
+    },
+    {
+      "command": "python3 docs/maintenance/check_docs.py",
+      "log": "canonical-root-docs-post-readme.log",
+      "exit": 1,
+      "scope": "after README/module-header clarification; same5 imported missing references +43 baseline-known, no new authored link defects"
+    }
+  ],
+  "sha256": {
+    "docs/evidence/palw/g14-integration-candidate-2026-10-20/canonical-root-codec-final.log": "4ea9796d0fb04f03c42f7ac67ffeafa7b7db0c84523ad46e09e508c1440bf6d0",
+    "docs/evidence/palw/g14-integration-candidate-2026-10-20/canonical-root-codec-first-source.patch": "be2a1b3b7bfde13a9660b0317af0849fc40d583aca3b1623ef0dc20684495ae6",
+    "docs/evidence/palw/g14-integration-candidate-2026-10-20/canonical-root-codec-first.log": "6354e254951e1981046d8079d5084238f578f10234bb7406228bb81401497783",
+    "docs/evidence/palw/g14-integration-candidate-2026-10-20/canonical-root-consensus-check.log": "bc57d54870632af8d0645efd3dc661c79a1e89f15b29fb0c102ad146b7ad9aec",
+    "docs/evidence/palw/g14-integration-candidate-2026-10-20/canonical-root-docs-first.log": "ab07973219ef8bd26ab6ceb7ca1a32cb3d6dbd1867a2b44f189d61e7986db053",
+    "docs/evidence/palw/g14-integration-candidate-2026-10-20/canonical-root-first-check.log": "d5f9edb0e6da4b8074dc5fd77f226d9f002d90e0b5775a7b8cd1645881cb389f",
+    "docs/evidence/palw/g14-integration-candidate-2026-10-20/canonical-root-first-native-source.patch": "c07d0adcda37cb9670c74f4cae3b19f425ee8792dfba6ea40e0b82a22a74661f",
+    "docs/evidence/palw/g14-integration-candidate-2026-10-20/canonical-root-native-final.log": "d639d20f789e41418e881673c234a792eef5ecf332fdda0fe63c11e0a76a1834",
+    "docs/evidence/palw/g14-integration-candidate-2026-10-20/canonical-root-native-first.log": "ff7cd2c9f052d89d60a0093869e49ce0a5f7d032bc88c78018c90f4917466c07",
+    "docs/evidence/palw/g14-integration-candidate-2026-10-20/canonical-root-native-suite.log": "d1d799f142afa263a54572d85bddb64c33b53c20111b53f170f547c3ddb9a039",
+    "docs/evidence/palw/g14-integration-candidate-2026-10-20/canonical-root-regressions.log": "58a22eb6f9acc59c489857fca20a9345058536428c3fb0ad14b546dfad9862a6",
+    "docs/evidence/palw/g14-integration-candidate-2026-10-20/canonical-root-runtime.patch": "bfd143497178f57016ffb7c5910b9409f14085de798e4b0c07d8e4e5d7817976",
+    "docs/evidence/palw/g14-integration-candidate-2026-10-20/canonical-root-second-check.log": "030befe23b584c1221aa9ef478f697d28334b1f42d2f94cdf63a775dd2ddffd6",
+    "docs/evidence/palw/g14-integration-candidate-2026-10-20/canonical-root-shared-suite.log": "358ef06545d97b55e26493b1cea7ce6ed98f5a1786c6e5b9f9796237b3391c60",
+    "docs/evidence/palw/g14-integration-candidate-2026-10-20/canonical-root-source-audit.json": "da2e19fe97a0e7d02b28e8bcf45ec14116dc3a1cd8f3ca7b6056b9b2e1e500bf",
+    "docs/evidence/palw/g14-integration-candidate-2026-10-20/canonical-root-source-suite.log": "6864d5843edf6724933d00e61481113ba8c486936878709003278354d7e1b8cf",
+    "docs/evidence/palw/g14-integration-candidate-2026-10-20/canonical-root-unit-commands.json": "7a21a95106d18647fd0b4f441db9ff13461be27fbf0c723f3b2f34f079a2b1d8",
+    "docs/evidence/palw/g14-integration-candidate-2026-10-20/canonical-root-wire-suite.log": "b0507b24b7c9b4e3f9d229f15034f0254774a8cdf98880dc74632a2a22b8fb19",
+    "docs/evidence/palw/g14-integration-candidate-2026-10-20/canonical-root-docs-final.log": "8b0e5c9e7be4bd90fc163040f9fb2b66c0132260f8ebbe0b90892c93bdd31ea2",
+    "docs/evidence/palw/g14-integration-candidate-2026-10-20/canonical-root-final-check.log": "288dee34e87046aa94d397004a185374cacadb846d5773a271f05b7703f61b2f",
+    "docs/evidence/palw/g14-integration-candidate-2026-10-20/canonical-root-docs-post-readme.log": "8b0e5c9e7be4bd90fc163040f9fb2b66c0132260f8ebbe0b90892c93bdd31ea2"
+  },
+  "unit_binary_sha256": "0563f4daf60eb7f94fb3551db00b1bcf22d4305df36a58ced007643a0289c365",
+  "scope": "private canonical numerical root retention, new key22/row28; no public funded admission or production schema adoption",
+  "limits": [
+    "Original registration/pledge signature/payment and unit-cost service book remain verified-half fixture assumptions. New controls use real ML-DSA. Current-key/floor mutations are counterfactual fixtures, not native rotation/exit transactions.",
+    "One canonical root per claim/leaf; no root/branch funded reservation, signed shared rounds, public notice coordinator/ingress, actual supply/default or T05/T01-T15 acceptance.",
+    "Clone inventory covers known retained/verifier/binding/program copies before root validation; source analysis, CPU/IO/fees/retention/full-profile allocation and physical calibration remain open. String request comparison is not RSS or payload/court-cap measurement.",
+    "No qualified root pruning/settlement/release. A minimum material TTL is not deletion authority.",
+    "No pre integration/push, cap/fee/tier/preset changes, arming or deployment."
+  ],
+  "post_run_comment_only_source_audit": "canonical-root-source-audit.json: restoring module doc header reproduces compiled source exactly; no runtime body change"
+}

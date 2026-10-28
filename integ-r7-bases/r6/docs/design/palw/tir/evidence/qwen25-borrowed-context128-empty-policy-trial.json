@@ -1,0 +1,13 @@
+{
+  "schema": "misaka.rfc02.context128-preallocation-trial.v1",
+  "captured_utc": "2026-10-11T10:18:39.093577+00:00",
+  "case": "missing gates and exact policy pin refuses before accessing source files",
+  "exit_code": 1,
+  "stderr": "Error: Error(\"invalid type: null, expected a sequence\", line: 0, column: 0)",
+  "elapsed_seconds": 0.004653583018807694,
+  "passed": false,
+  "binary": "/tmp/rfc02-next9-immutable-897ae4d1443e/check-borrowed-checkpoint-context",
+  "limits": [
+    "single targeted diagnostic control; no total resource or actual model success claim"
+  ]
+}

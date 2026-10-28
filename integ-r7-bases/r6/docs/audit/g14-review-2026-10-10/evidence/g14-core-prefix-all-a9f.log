@@ -1,0 +1,26 @@
+
+running 20 tests
+test palw_prefix_custody_v1::tests::all_actual_signed_valid_custody_is_required_membership_and_sampled_are_insufficient ... ok
+test palw_prefix_family_court_v1::tests::flat_packet_builder_preserves_order_boundaries_and_rejects_oversized_action_without_losing_history ... ok
+test palw_prefix_family_court_v1::tests::immutable_i8_job_fixture_authenticates_the_full_prefix_and_refuses_foreign_seed ... ok
+test palw_prefix_gdn_paged_v1::tests::maximum_kernel_geometry_initializes_constant_resident_zero_root_without_a_matrix_allocation ... ok
+test palw_prefix_gdn_paged_v1::tests::paged_owned_matrix_matches_exact_native_recurrence_across_partial_pages_and_restart ... ok
+test palw_prefix_gdn_replay_v1::tests::authenticated_slice_uses_only_exact_claim_tiles_and_refuses_reordered_or_forged_rows ... ok
+test palw_prefix_owned_court_v1::tests::flat_packet_charges_each_action_once_and_late_bad_eof_rolls_back_all_actions ... ok
+test palw_prefix_public_owned_v1::tests::joint_default_only_at_literal_deadline_once_with_saved_all_signed_seats ... ok
+test palw_prefix_public_owned_v1::tests::paid_public_prefix_keeps_hostile_slots_separate_and_owner_authentication_atomic ... ok
+test palw_prefix_public_source_v1::tests::complete_acquisition_prices_all_slots_without_spending_honest_prefix_allowance ... public-prefix complete source_bound=64 moves=5769 bytes=15414272030 rent=68934979191 deposit=5769 inclusionDAA=6776 RAM=23501472
+ok
+test palw_prefix_public_source_v1::tests::flat_answer_packet_and_public_progress_are_atomic_and_bounded ... ok
+test palw_prefix_public_source_v1::tests::hostile_first_writer_does_not_poison_other_custodian_or_owner_slots ... ok
+test palw_prefix_public_source_v1::tests::literal_deadline_default_and_serialized_rollback_preserve_all_slots ... ok
+test palw_prefix_resources_v1::tests::authenticated_i8_geometry_prices_every_old_i32_leaf_and_refuses_price_overflow ... ok
+test palw_prefix_resources_v1::tests::canonical_hybrid_quotes_only_required_public_sources_and_selects_efficient_whole_head ... ok
+test palw_prefix_resources_v1::tests::hydrated_profile_quote_charges_original_bytes_on_every_move_and_refuses_understatement ... ok
+test palw_prefix_source_stream_v1::tests::slice_is_usable_only_after_whole_original_leaf_eof_and_survives_restart ... ok
+test palw_prefix_state_court_v1::tests::every_committed_prefix_byte_is_required_in_both_receipt_contexts ... ok
+test palw_prefix_state_stream_v1::tests::chunked_prefix_matches_full_authenticated_court_and_restores_each_move ... ok
+test palw_prefix_state_stream_v1::tests::tentative_corrupt_leaf_or_wrong_seed_cannot_finalize_a_prefix ... ok
+
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 3832 filtered out; finished in 1.10s
+

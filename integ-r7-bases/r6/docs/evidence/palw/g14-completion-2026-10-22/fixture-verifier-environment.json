@@ -1,0 +1,10 @@
+{
+  "recorded_utc": "2026-10-21T16:15:56.578742+00:00",
+  "platform": "macOS-26.7-arm64-arm-64bit",
+  "machine": "arm64",
+  "measurement": "Fresh process per operation and N, no CPU affinity or thermal control; small fixture corpus, no live node/network.",
+  "machdep.cpu.brand_string": "Apple M1 Max",
+  "hw.model": "Mac13,1",
+  "hw.ncpu": "10",
+  "hw.memsize": "34359738368"
+}

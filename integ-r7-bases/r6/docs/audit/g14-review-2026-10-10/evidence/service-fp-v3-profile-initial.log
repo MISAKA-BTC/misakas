@@ -1,0 +1,25 @@
+
+running 1 test
+[service-public] heartbeat advance 128 -> 1004
+[service-public] heartbeat advance 253 -> 1004
+[service-public] heartbeat advance 378 -> 1004
+[service-public] heartbeat advance 503 -> 1004
+[service-public] heartbeat advance 628 -> 1004
+test palw_panel::palw_service_public_e2e::fresh_public_bond_service_convicts_an_ordinarily_admitted_fp_v3_foreign_job has been running for over 60 seconds
+[service-public] heartbeat advance 753 -> 1004
+[service-public] heartbeat advance 878 -> 1004
+[service-public] heartbeat advance 1003 -> 1004
+[service-public] ordinary bond registered before DAA 3, maturity 1000, now 1004
+
+thread 'palw_panel::palw_service_public_e2e::fresh_public_bond_service_convicts_an_ordinarily_admitted_fp_v3_foreign_job' (3104129) panicked at kaspad/src/palw_service_public_e2e.rs:695:14:
+the ordinary registry admits and prices this FP job: FreePromptClassHasNoWorkProfile { claim: 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000, class: f1c5635c6e47e96e7af864789c94523335dc56584af297cb8cc19021c228b897bee1a50145597e45f8ca2727349bf4aa352a98cc05274b7f059a176642f623c8 }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test palw_panel::palw_service_public_e2e::fresh_public_bond_service_convicts_an_ordinarily_admitted_fp_v3_foreign_job ... FAILED
+
+failures:
+
+failures:
+    palw_panel::palw_service_public_e2e::fresh_public_bond_service_convicts_an_ordinarily_admitted_fp_v3_foreign_job
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 607 filtered out; finished in 116.93s
+

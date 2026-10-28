@@ -1,0 +1,53 @@
+[package]
+name = "misaka-palw-derive"
+description = "ADR-0078: what was made from it is committed, the thing itself never rides — registered grammars, content-named deterministic transformers, and the derivation glue that binds a derived artifact to a free-prompt claim"
+publish = false
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+kaspa-consensus-core.workspace = true
+kaspa-hashes.workspace = true
+# The simulation kind's step-hash chain and every keyed digest a kind needs.
+blake2b_simd.workspace = true
+borsh.workspace = true
+faster-hex.workspace = true
+# The `code` / `contract` kinds' first named toolchain is the tree's own EVM (ADR-0078 Decision 11):
+# `kaspa-evm` pins the spec id the lane executes under, `revm` is the machine.
+kaspa-evm.workspace = true
+revm = { version = "14", default-features = false, features = ["std"] }
+# ADR-0079 Decision 12 / ADR-0078 SA-1: the ONE spelling of the host posture — the confinement
+# backend that proves its own denials, the worker spawn discipline, the resident measurement and
+# the reachable-secret check. Model-written code runs in a child process built by THAT api; a
+# second copy of the rules here would be a second answer to the same question.
+misaka-palw.workspace = true
+# The X6 verifier: a family's rendered-output hash rule, exported by the family crate.
+misaka-palw-base0.workspace = true
+# ADR-0096 Decision 9: the `json` kind's grammar is RFC 8785, and the tree's ONE spelling of the
+# RFC (UTF-16 member order, ECMAScript number form, the Appendix B vectors) lives in the
+# constraint crate. This crate calls it and re-spells none of it; the IEEE 754 double the RFC
+# defines numbers by lives there too, outside this crate's discipline scan (see `kinds/json.rs`).
+misaka-palw-constraint.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "palw-derive"
+path = "src/bin/palw-derive.rs"
+
+# ADR-0078 SA-1: model-written initcode never runs inside the caller's process. This binary IS
+# the separate process — one canonical job on stdin, one canonical result on stdout, an ephemeral
+# isolated state, and nothing else. It ships beside every binary that derives a `code` or
+# `contract` artifact; without it the two transformers refuse rather than fall back in-process.
+[[bin]]
+name = "palw-evm-runner"
+path = "src/bin/palw-evm-runner.rs"

@@ -1,0 +1,27 @@
+
+running 4 tests
+test tests::authentic_two_held_carriages_and_floor_exception_are_exact ... ok
+test tests::missing_unknown_duplicate_roots_and_pwu_are_refused ... ok
+test tests::retained_semantic_identities_and_fused_binding_are_checked ... ok
+test tests::wrong_canonical_and_unknown_admission_none_are_refused ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+        0.59 real         0.02 user         0.00 sys
+            14958592  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+                1184  page reclaims
+                   0  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                   0  signals received
+                   0  voluntary context switches
+                  24  involuntary context switches
+           303968531  instructions retired
+            96896997  cycles elapsed
+             4620696  peak memory footprint

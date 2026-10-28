@@ -1,0 +1,12 @@
+{
+  "kind": "matching-v2-full-snapshot-codec-controls",
+  "deadlineSeconds": 60,
+  "threads": 1,
+  "coreLibrary": "/tmp/misaka-rfc67812-node-target/debug/deps/libkaspa_consensus_core-28b14660ab28fb31.rlib",
+  "coreLibrarySha256": "c8bcd2fceca2ad3137ffd668e147e59a9135f670a40ded1c0ceb208090f50e3a",
+  "scriptSha256": "25e787a6bba4e859edd2642bc09880840ca9be67b95a497dfa3df8285884c830",
+  "binarySha256": "72bd81e1bb5cb7d7fd66f1497b0111e1c5c9aa664911a3b107d5db477ebe3a70",
+  "native100kMeasured": false,
+  "productionBuildInputsIncluded": false,
+  "realP2pAccepted": false
+}

@@ -1,0 +1,78 @@
+{
+  "schema": "misaka.rfc02.actual-fresh-ordinary-outsider-protocol.v2",
+  "predeclared_utc": "2026-10-11T12:16:23.617650+00:00",
+  "previous_refusal_retained": "v1 local reference10 IndexSteps2^36 refused actualP1 before own source open: rfc02-actual-outsider9-second-node-tests.log + second-node-time.log. First exact short-name filter selected0tests and is excluded.",
+  "test": "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_native_v9::actual_outsider::flat_v9_actual_qwen_fresh_node_unknown_ordinary_public_discovery_own_proof_redemption_and_ibd",
+  "source": {
+    "artifact_sha256": "435ed8fcddf68a4fc7dd22792dfe912fdbc3a9b4ab1a6803a711fcb1ff834a64",
+    "program_sha256": "16a0de98fe52cdf47364392551b15bb85a7aad76acd8b14853b1803074bca8f1",
+    "pc_sha256": "a45721593036993c53eb29ad1526906ca190fcdf7d7272fbf7aa3f0b62d19ef1",
+    "archival_registration_metadata_sha256": "f023ac340642759675c8154c4747e316c2f9a0beda8ef5c5f5c54033a9d896bf"
+  },
+  "class_max_positions": 32,
+  "actual_positions": 1,
+  "prompt": [
+    4498
+  ],
+  "max_new_tokens": 1,
+  "decode": "Greedy fixed-count v1",
+  "limits": {
+    "reference21": [
+      34359738368,
+      68719476736,
+      274877906944,
+      68719476736,
+      68719476736,
+      1099511627776,
+      1099511627776,
+      68719476736,
+      68719476736,
+      68719476736,
+      68719476736,
+      68719476736,
+      68719476736,
+      68719476736,
+      68719476736,
+      68719476736,
+      68719476736,
+      68719476736,
+      2147483648,
+      68719476736,
+      68719476736
+    ],
+    "retained_tensor_bytes": 268435456,
+    "raw_artifact_bytes": 2147483648,
+    "parameter_workspace_bytes": 33554432,
+    "selected_parameter_bytes": 67108864,
+    "selected_parameter_total_bytes": 268435456,
+    "attempts": 64,
+    "public_reads": 512,
+    "public_reply_bytes": 4194304,
+    "scope_checker_work": 1099511627776,
+    "parameter_hash_bytes": 140737488355328,
+    "trace_hash_bytes": 8796093022208,
+    "artifact_hash_bytes": 4294967296,
+    "inventory": {
+      "leaves": 2000000,
+      "raw_bytes": 2147483648,
+      "hash_bytes": 4294967296,
+      "work": 1099511627776,
+      "workspace_bytes": 524288
+    }
+  },
+  "gates": [
+    "Only anchored op211 candidate/binding/served Node+Hash+Header+Value records and independently held mapped source enter finder; fixture old fault/directories/replies/coordinates are never inputs.",
+    "R full1,445,797 leaves and all1,636PC instances authenticate before own execution; no whole R byte materialization.",
+    "Own7658nodes execute under fixed exactsameP/job/scope, hashes locate first unknown node and generic descent selects unknown nonfirstleaf value.",
+    "Own generated ordinary proof verifies under same scope9 in SDK and native court.",
+    "Fresh IBD node registers distinctbond8, makes \u226464DA demands and ownseal/mature/reveal.",
+    "Producer original principal slash100 exactlyonce, binder unchanged, ownbounty49 reachesactual UTXO; repeated reveal adds no slash; full IBD repeats ledger+actualUTXO state."
+  ],
+  "limits_on_interpretation": [
+    "Conditional private test configuration; shipping activation remains refused.",
+    "Ordinary-only, no TopK/history/Decode/large-streamed-parameter completeness.",
+    "No class/job11 Final or cohort/original-source fidelity/controlled performance acceptance.",
+    "Local index budget2^38 is new v2 trial condition; no native/network court quota weakening.",
+    "Final source/binary acceptance receipt requires coherent dependency capture after concurrent helper integration."
+  ]
+}

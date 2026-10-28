@@ -1,0 +1,121 @@
+
+running 93 tests
+test palw_class_semantics_v1::tests::registration_semantics_bind_every_identity_and_never_nonce_or_prompt ... ok
+test config::params::consensus_params_id_tests::g14_semantics_and_commitment_scope_have_independent_dormant_rule_fences ... ok
+test palw_false_valid_filing_v1::tests::a_licences_receipts_keep_the_form_they_were_signed_in ... ok
+test palw_false_valid_filing_v1::tests::one_filing_per_seat_never_the_own_bond_and_only_what_the_chain_convicts ... ok
+test palw_false_valid_filing_v1::tests::only_relied_on_receipts_take_a_slot_and_the_cap_is_per_seat ... ok
+test palw_false_valid_filing_v1::tests::policy_declines_the_own_claim_and_names_held_partials_the_rule_reaches ... ok
+test palw_false_valid_filing_v1::tests::the_evidence_names_its_receipts_seat_and_its_object_carries_its_digest ... ok
+test palw_fp_constraint_job_v1::tests::tables_with_identical_renderings_and_distinct_tokenizer_labels_do_not_overwrite_each_other ... ok
+test palw_kernel_route_v1::tests::authenticated_scope_policy_survives_public_snapshot_cache_and_reverts_with_its_aux_row ... ok
+test palw_legacy_answer_chunks_v2::tests::a_large_answer_is_exposed_only_after_all_authenticated_parts_arrive ... ok
+test palw_legacy_answer_chunks_v2::tests::foreign_truncated_tampered_and_unbounded_parts_cannot_complete_an_answer ... ok
+test palw_legacy_answer_chunks_v2::tests::input_and_job_admission_count_the_signed_envelope_and_every_carrier_in_the_existing_window ... ok
+test palw_legacy_answer_chunks_v2::tests::the_full_32_part_transport_fits_each_carrier_and_refuses_one_byte_less_before_signing ... ok
+test palw_lifecycle_objects_v2::tests::a2u::a_not_in_force_kind_is_undecodable_in_the_live_builds_words ... ok
+test palw_lifecycle_objects_v2::tests::a2u::an_owning_fence_needs_the_audit_fence_declared ... ok
+test palw_lifecycle_objects_v2::tests::a2u::below_its_fence_a_new_kind_is_judged_as_the_live_build_judges_undecodable_bytes ... ok
+test palw_lifecycle_objects_v2::tests::a2u::canonical_fp_evidence_keeps_the_old_opaque_carrier_isolation_rule ... ok
+test palw_lifecycle_objects_v2::tests::a2u::every_appended_form_has_a_guarded_owner_arm ... ok
+test palw_decode_constraint_v1::tests::public_constrained_post_stop_fault_uses_the_first_authenticated_eog_and_keeps_legacy_behavior ... ok
+test palw_lifecycle_objects_v2::tests::a2u::every_kernel_inner_kind_has_exactly_one_row ... ok
+test palw_lifecycle_objects_v2::tests::a2u::every_kind_in_the_enum_has_exactly_one_owner ... ok
+test palw_lifecycle_objects_v2::tests::a2u::every_int12_wire_type_is_unchanged_or_classified ... ok
+
+thread 'palw_lifecycle_objects_v2::tests::a2u::every_landed_kind_sits_in_its_row_with_the_rows_fence' (4065414) panicked at consensus/core/src/palw_lifecycle_objects_v2.rs:3499:17:
+consensus/core/src/palw_offence_v1.rs::PalwPanelContradictionV1: a carried change has its landed Int12Inner row naming palw_legacy_public_filer_v1
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test palw_lifecycle_objects_v2::tests::a2u::every_landed_kind_sits_in_its_row_with_the_rows_fence ... FAILED
+test palw_lifecycle_objects_v2::tests::a2u::every_tag_row_is_inside_its_allocation ... ok
+test palw_lifecycle_objects_v2::tests::a2u::native_fp_metadata_equivalence_requires_the_exact_skipped_field ... ok
+test palw_lifecycle_objects_v2::tests::a2u::the_fence_list_is_the_enum ... ok
+test palw_lifecycle_objects_v2::tests::a2u::the_int12_kind_list_is_frozen ... ok
+test palw_lifecycle_objects_v2::tests::a2u::the_int12_kinds_refused_past_a_fence_are_the_rows ... ok
+test palw_lifecycle_objects_v2::tests::a2u::the_new_kind_table_is_the_owner_function ... ok
+test palw_lifecycle_objects_v2::tests::a_bond_registration_cannot_declare_collateral_it_did_not_lock ... ok
+test palw_lifecycle_objects_v2::tests::a_bond_registration_that_locks_its_collateral_rides ... ok
+test palw_lifecycle_objects_v2::tests::a_bond_registration_without_a_signature_does_not_ride ... ok
+test palw_lifecycle_objects_v2::tests::a_class_registration_rides_only_when_it_carries_what_checks_it ... ok
+test palw_lifecycle_objects_v2::tests::a_lifecycle_object_rides_a_transaction_and_arrives_in_acceptance_order ... ok
+test palw_lifecycle_objects_v2::tests::a_malformed_carrier_is_skipped_with_a_reason ... ok
+test palw_lifecycle_objects_v2::tests::admission_accepts_exactly_what_the_walk_extracts ... ok
+test palw_lifecycle_objects_v2::tests::an_historical_full_v2_possession_proof_still_rides_and_reaches_the_fold ... ok
+test palw_lifecycle_objects_v2::tests::an_unsigned_reporter_commitment_may_not_ride ... ok
+test palw_lifecycle_objects_v2::tests::certification_objects_ride_and_extract_unchanged ... ok
+test palw_lifecycle_objects_v2::tests::consensus_object_discriminants_are_the_ones_the_chain_carries ... ok
+test palw_lifecycle_objects_v2::tests::derived_artifacts_ride_signed_and_shaped_and_extract_unchanged ... ok
+test palw_lifecycle_objects_v2::tests::naming_the_carrier_by_id_is_a_fixed_point_no_registrant_can_solve ... ok
+test palw_lifecycle_objects_v2::tests::objects_that_must_not_ride_are_skipped_with_their_own_reason ... ok
+test palw_lifecycle_objects_v2::tests::the_band_id_is_what_selects_this_walk ... ok
+test palw_lifecycle_objects_v2::tests::the_seed_testnet_11_carried_at_daa_1945_still_decodes ... ok
+test palw_lifecycle_objects_v2::tests::the_two_unauthenticated_objects_may_not_ride ... ok
+test palw_offence_attribution_v1::f1c_tests::a_windowed_kind3_is_undecodable_below_the_batch_fence ... ok
+test palw_offence_attribution_v1::f1c_tests::only_a_whole_prompt_not_anchored_is_charged ... ok
+test palw_lifecycle_objects_v2::tests::a2u::every_landed_kind_is_pinned_to_its_wire_form ... ok
+test palw_offence_attribution_v1::f1c_tests::the_job_faults_are_attested_by_every_valid ... ok
+test palw_offence_attribution_v1::f1c_tests::the_logits_head_holds_on_every_shipped_profile ... ok
+test palw_offence_attribution_v1::f1c_tests::the_remembered_prompt_root_is_the_computed_one ... ok
+test palw_offence_attribution_v1::tests::a_producer_committed_saturating_binding_is_answered_not_a_panic ... ok
+test palw_offence_attribution_v1::tests::a_shape_fault_is_whole_whatever_leaf_is_attached ... ok
+test palw_offence_attribution_v1::tests::a_step_fault_that_reads_a_neighbour_segment_convicts_only_whole_attestations ... ok
+test palw_offence_attribution_v1::tests::a_step_reading_a_checkpoint_or_a_generated_token_is_whole ... ok
+test palw_offence_attribution_v1::f1c_tests::prompt_not_anchored_judges_the_2m_prompt ... ok
+test palw_offence_attribution_v1::tests::constrained_public_direct_proof_convicts_only_authenticated_faults_and_keeps_both_fences ... ok
+test palw_offence_attribution_v1::tests::f1_fp_pin_spellings_agree_and_convict_on_the_free_prompt_lane ... ok
+test palw_offence_attribution_v1::tests::f1_the_admission_tables_and_the_executor_refuted_key ... ok
+test palw_offence_attribution_v1::tests::f1_the_identity_rule_names_the_first_check_a_floor_binding_fails ... ok
+test palw_offence_attribution_v1::tests::f1_the_output_rule_holds_the_output_root_to_the_generated_ids ... ok
+test palw_offence_attribution_v1::tests::canonical_fp_prompt_proof_authenticates_job_convicts_count_and_root_and_keeps_the_fence ... ok
+
+thread 'palw_offence_attribution_v1::tests::immutable_registered_semantics_refute_only_authenticated_claim_contexts' (4065458) panicked at consensus/core/src/palw_offence_attribution_v1.rs:4269:9:
+assertion `left == right` failed: the FP descriptor never overrides an honest CoreV1 attempt's canonical context
+  left: Ok(Some(JobNotTheClaims))
+ right: Ok(None)
+test palw_offence_attribution_v1::tests::immutable_registered_semantics_refute_only_authenticated_claim_contexts ... FAILED
+test palw_offence_attribution_v1::tests::p2_8_the_kind_4_constructor_and_the_filed_commit_key ... ok
+test palw_offence_attribution_v1::tests::public_fp_out_of_vocab_convicts_executor_and_every_valid_signer_without_greedy_assumption ... ok
+test palw_offence_attribution_v1::tests::the_admission_table ... ok
+test palw_offence_attribution_v1::tests::the_byte_cap_is_one_carrier ... ok
+test palw_offence_attribution_v1::tests::the_execution_check_is_the_v1_routes_without_an_opening ... ok
+test palw_offence_attribution_v1::tests::the_reporter_slot_is_bounded_once_armed ... ok
+test palw_offence_attribution_v1::tests::the_signature_is_checked_under_the_chain_domain_in_the_licensed_form ... ok
+test palw_offence_attribution_v1::tests::the_site_and_mask_truth_table ... ok
+test palw_offence_attribution_v1::tests::the_version_and_the_reporter_slot ... ok
+test palw_prefix_state_court_v1::tests::every_committed_prefix_byte_is_required_in_both_receipt_contexts ... ok
+test palw_rendering_resources_v1::tests::maximum_active_format_produces_quantitative_work_deadline_and_capital ... ok
+test palw_rendering_resources_v1::tests::plan_is_monotone_checked_and_cannot_certify_owner_asserted_small_sizes ... ok
+test palw_rendering_stream_v1::tests::continuation_matches_upstream_keyed_hash_for_every_short_length_and_split ... ok
+test palw_rendering_stream_v1::tests::incomplete_corrupted_and_foreign_chunks_never_expose_a_transition ... ok
+test palw_offence_attribution_v1::tests::flat_constraint_direct_proof_judges_executor_and_all_full_valid_signers_and_refuses_bad_openings ... ok
+test palw_rule_manifest_v1::tests::a_ruleset_revision_moves_the_manifest_digest ... ok
+test palw_rule_manifest_v1::tests::a_scheduled_rulesets_revision_leaves_the_identity_alone ... ok
+test palw_rule_manifest_v1::tests::every_subsystem_a_verdict_comes_from_is_in_the_manifest ... ok
+test palw_rule_manifest_v1::tests::the_manifest_encoding_is_canonical_and_unambiguous ... ok
+test palw_rule_manifest_v1::tests::the_manifest_is_revisions_and_nothing_else ... ok
+test palw_state_v2::tests::registered_semantics_are_independently_fenced_rooted_and_stamped_before_job_retention ... ok
+
+thread 'palw_state_v2::tests::terminal_carriage_v1::owned_terminal_fold_cannot_replace_take_over_corrupt_or_extend_closed_reservation' (4065480) panicked at consensus/core/src/palw_state_v2/tests/terminal_carriage_v1.rs:23:10:
+ordinary independently collateralized reservation: AccusationExposureCeiling { bond: PalwBondKeyV2(TransactionOutpoint { transaction_id: 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000700000000000000, index: 0 }), edge: "dispute reservation", backed: 1000, accusation: 20, ceiling: 1000 }
+test palw_state_v2::tests::terminal_carriage_v1::owned_terminal_fold_cannot_replace_take_over_corrupt_or_extend_closed_reservation ... FAILED
+
+thread 'palw_state_v2::tests::terminal_carriage_v1::owned_terminal_fold_partial_restart_final_conviction_and_each_delta_reverts' (4065481) panicked at consensus/core/src/palw_state_v2/tests/terminal_carriage_v1.rs:23:10:
+ordinary independently collateralized reservation: AccusationExposureCeiling { bond: PalwBondKeyV2(TransactionOutpoint { transaction_id: 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000700000000000000, index: 0 }), edge: "dispute reservation", backed: 1000, accusation: 20, ceiling: 1000 }
+test palw_state_v2::tests::terminal_carriage_v1::owned_terminal_fold_partial_restart_final_conviction_and_each_delta_reverts ... FAILED
+test palw_rendering_stream_v1::tests::legacy_leaf_hash_matches_library_at_all_block_boundaries_and_restart ... ok
+test palw_terminal_carriage_v1::tests::exact_reservation_window_has_no_extension_or_overflow ... ok
+test palw_terminal_carriage_v1::tests::oversized_proof_is_refused_before_signing_or_parts_allocation ... ok
+test palw_terminal_carriage_v1::tests::owner_digest_index_duplicate_and_corruption_cannot_complete ... ok
+test palw_terminal_carriage_v1::tests::signature_message_binds_network_reservation_accused_and_original_digest ... ok
+test palw_terminal_carriage_v1::tests::exact_maximum_reverse_arrival_preserves_original_evidence_identity ... ok
+
+failures:
+
+failures:
+    palw_lifecycle_objects_v2::tests::a2u::every_landed_kind_sits_in_its_row_with_the_rows_fence
+    palw_offence_attribution_v1::tests::immutable_registered_semantics_refute_only_authenticated_claim_contexts
+    palw_state_v2::tests::terminal_carriage_v1::owned_terminal_fold_cannot_replace_take_over_corrupt_or_extend_closed_reservation
+    palw_state_v2::tests::terminal_carriage_v1::owned_terminal_fold_partial_restart_final_conviction_and_each_delta_reverts
+
+test result: FAILED. 89 passed; 4 failed; 0 ignored; 0 measured; 3558 filtered out; finished in 0.51s
+

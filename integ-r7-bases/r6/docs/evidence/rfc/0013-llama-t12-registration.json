@@ -1,0 +1,57 @@
+{
+  "observed_at_utc": "2026-10-06T06:47:01Z",
+  "network": "testnet-12",
+  "tools_commit": "5e15692e9a5ea73ae0d31e66ae7b75f489722fa3",
+  "class_id": "b4a2ba784ae3d2680b7770a01fac46bbcde51ff401248e5b44c55fdc24f65f4c8f585edad1ce442b7d4e524159d318a0e8415f1a1a4f9a5ed27a2969fa67c97b",
+  "artifact_inventory_root": "d5a4ef2d6c0ed8a97055b89e178ac38df81771d2e643d95fd5210f497be67be8f857b4c50555196cb8aac52163e51ab2162da495b163d089078c52672e52e2a5",
+  "model_id": "mradermacher/Llama-3.2-3B-Instruct-uncensored-GGUF/Q4_K_M@512",
+  "max_context": 512,
+  "pack_check": {
+    "artifact_checks": "PASS",
+    "reference_typed_independent_conformance": "PASS: 2 vectors, 8 positions",
+    "hf_reference": "SKIPPED: pack contains no HF reference",
+    "fully_verified": false,
+    "skip_verification_override": false
+  },
+  "submission": {
+    "transaction_id": "6465616f47521ccf8d94d0dca8eb039375031f2bbf4168dbd1f18ef7623c01e5a12972b3879732d2a9d714abc0b75109f3d21540323e5116fa28a8c8e7951e6b",
+    "fee_sompi": 518362,
+    "registration_bond_burn_sompi": 100000000,
+    "payload_bytes": 23268,
+    "accepted": true,
+    "included": true,
+    "folded": true,
+    "included_daa": 5806,
+    "processor_verdict": "ADMISSION_OK"
+  },
+  "public_node": {
+    "endpoint": "wss://misakascan.com/kaspa",
+    "tip_daa": 5807,
+    "available": true,
+    "found": true,
+    "class_status": "Active",
+    "registry_state": "Candidate",
+    "ready_seats": 0,
+    "required_ready_seats": 7,
+    "admission_permille": 0,
+    "reason": "candidate: registered, and not admitted — no seat outside the registrant's own identity has proved it is ready to verify this class"
+  },
+  "site": {
+    "url": "https://misakaoptions.com/#/lines",
+    "observed_tip_daa": 5808,
+    "display_name": "Llama-3.2-3B-Instruct Uncensored · 512 ctx",
+    "name_source": "site catalogue fallback, not an onchain name claim",
+    "displayed_panel_ready": 0,
+    "displayed_final_count": 0,
+    "market_status": "Not open",
+    "row_present": true
+  },
+  "scope": {
+    "panel_started": false,
+    "mining_started": false,
+    "claim_final_requested": false,
+    "market_seed_paid": false,
+    "membership_purchased": false,
+    "unused_local_trials": "14 exact targets moved to macOS Trash, recoverable; no onchain deletion"
+  }
+}

@@ -1,0 +1,80 @@
+{
+  "v": 1,
+  "frac_bits": 4,
+  "materials": [
+    {
+      "name": "stone",
+      "base_color": [
+        128,
+        128,
+        128,
+        256
+      ],
+      "metallic": 0,
+      "roughness": 200,
+      "double_sided": false
+    }
+  ],
+  "nodes": [
+    {
+      "name": "tower",
+      "translation": [
+        0,
+        0,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0,
+        2
+      ],
+      "scale": [
+        16,
+        16,
+        16
+      ],
+      "shape": {
+        "shape": "prism",
+        "base": [
+          [
+            0,
+            3
+          ],
+          [
+            0,
+            5
+          ],
+          [
+            3,
+            8
+          ],
+          [
+            5,
+            8
+          ],
+          [
+            8,
+            5
+          ],
+          [
+            8,
+            3
+          ],
+          [
+            5,
+            0
+          ],
+          [
+            3,
+            0
+          ]
+        ],
+        "y_min": 0,
+        "y_max": 32
+      },
+      "material": "stone",
+      "children": []
+    }
+  ]
+}

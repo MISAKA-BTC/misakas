@@ -1,0 +1,17 @@
+# Public testnet soak fleet. One node per line:
+#   role   ssh-target              rpc              logfile
+#
+# role is one of: base (current release, never faulted), cand (release candidate),
+# val (candidate + bond, actually attesting), churn (candidate, faulted on schedule),
+# strag (older binary AND older consensus params — its handshake must be REFUSED).
+#
+# The baselines are the control. Faulting them destroys the only reference for
+# "is this the network or is this the candidate", so the fault scripts must
+# never target a base row.
+#
+# base   root@203.0.113.10      127.0.0.1:16110  /var/log/kaspad-tn.log
+# base   root@203.0.113.11      127.0.0.1:16110  /var/log/kaspad-tn.log
+# cand   root@203.0.113.20      127.0.0.1:16110  /var/log/kaspad-tn.log
+# val    root@203.0.113.30      127.0.0.1:16110  /var/log/kaspad-tn.log
+# churn  root@203.0.113.40      127.0.0.1:16110  /var/log/kaspad-tn.log
+# strag  root@203.0.113.50      127.0.0.1:16110  /var/log/kaspad-tn.log

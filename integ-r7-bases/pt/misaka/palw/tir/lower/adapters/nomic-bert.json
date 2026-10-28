@@ -1,0 +1,28 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "nomic-bert",
+  "doc": "nomic-bert (NomicBertModel, nomic-embed-text-v1.5 / v2 family): a post-LN encoder with rotary positions (no learned position table), a fused bias-free Wqkv, a SwiGLU MLP (fc11 = up, fc12 = gate, fc2 = down; no biases) and a LayerNorm with bias. Word + token-type embeddings, then the embedding LayerNorm. Features: ENC_BIDIR_V1 with rows-mode rope and gated MLP (ENC_ROPE_V1, ENC_GATED_MLP_V1).",
+  "extends": ["mixin-bert-encoder"],
+  "match": {"architectures": ["NomicBertModel"], "model_types": ["nomic_bert"]},
+  "config": {"defaults": {"vocab_size": 30528, "hidden_size": 768, "intermediate_size": 3072, "num_hidden_layers": 12, "num_attention_heads": 12, "max_position_embeddings": 2048, "type_vocab_size": 2, "hidden_act": "silu", "layer_norm_eps": 1e-12, "pad_token_id": 0}, "inert": ["head_dim"]},
+  "vars": [
+    {"name": "vocab", "value": {"$cfg": "vocab_size"}},
+    {"name": "hidden", "value": {"$cfg": "hidden_size"}},
+    {"name": "inter", "value": {"$cfg": "intermediate_size"}},
+    {"name": "n", "value": {"$cfg": "num_hidden_layers"}},
+    {"name": "heads", "value": {"$cfg": "num_attention_heads"}},
+    {"name": "max_pos0", "value": {"$cfg": "max_position_embeddings"}},
+    {"name": "type_rows", "value": {"$cfg": "type_vocab_size"}},
+    {"name": "act", "value": {"$act": {"$cfg": "hidden_act"}}},
+    {"name": "eps", "value": {"$cfg": "layer_norm_eps"}},
+    {"name": "pad", "value": {"$cfg": "pad_token_id"}},
+    {"name": "offset", "value": 0},
+    {"name": "rope", "value": {"$rope": {"dim": {"$var": "hd"}, "theta": 1000.0, "max_pos": {"$var": "max_pos0"}}}},
+    {"name": "l_mixer", "layer": true, "value": {"Attention": {"heads": {"$var": "heads"}, "kv_heads": {"$var": "heads"}, "head_dim": {"$var": "hd"}, "v_head_dim": {"$var": "hd"}, "q_bias": false, "k_bias": false, "v_bias": false, "o_bias": false, "position": {"Rope": {"$var": "rope"}}, "scale": {"$div": [1.0, {"$sqrt": {"$var": "hd"}}]}}}},
+    {"name": "l_ffn", "layer": true, "value": {"Mlp": {"intermediate": {"$var": "inter"}, "act": {"$var": "act"}, "gated": true, "up_bias": false, "down_bias": false}}},
+    {"name": "embedding", "value": {"dim": {"$var": "hidden"}, "scale": 1.0, "positions": null, "norm": {"$var": "norm"}, "type_rows": {"$var": "type_rows"}, "rel_bias": null}},
+    {"name": "qkv_layout", "value": "FusedConcat"},
+    {"name": "names", "value": {"embed": "embeddings.word_embeddings", "type_embed": "embeddings.token_type_embeddings", "embed_norm": "emb_ln", "attn.qkv": "encoder.layers.{L}.attn.Wqkv", "attn.o": "encoder.layers.{L}.attn.out_proj", "norm.mix": "encoder.layers.{L}.norm1", "mlp.gate": "encoder.layers.{L}.mlp.fc12", "mlp.up": "encoder.layers.{L}.mlp.fc11", "mlp.down": "encoder.layers.{L}.mlp.fc2", "norm.ffn": "encoder.layers.{L}.norm2"}},
+    {"name": "model_type", "value": "nomic_bert"}
+  ]
+}

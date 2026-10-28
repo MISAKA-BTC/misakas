@@ -1,0 +1,23 @@
+{
+  "request": {
+    "messages": [
+      {
+        "role": "user",
+        "content": "Hello"
+      }
+    ],
+    "user": "user-1234",
+    "metadata": {
+      "session": "abc"
+    },
+    "store": false
+  },
+  "expect": {
+    "verdict": "accepted",
+    "ignored_fields": [
+      "user",
+      "metadata",
+      "store"
+    ]
+  }
+}

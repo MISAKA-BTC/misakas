@@ -1,0 +1,31 @@
+   Compiling misaka-palw-kernel v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/misaka-palw-kernel)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.62s
+     Running tests/pesg_b_detection.rs (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/pesg_b_detection-f68dcc4f2533f48d)
+
+running 11 tests
+test pesg_b_a_scope_detects_exactly_when_one_of_its_positions_does ... ignored, exhaustive (minutes in release, hours in debug): cargo test --release -p misaka-palw-kernel --test pesg_b_detection -- --ignored
+test pesg_b_freivalds_miss_is_exactly_p_to_the_minus_rank_for_every_error_placement ... ignored, exhaustive (minutes in release, hours in debug): cargo test --release -p misaka-palw-kernel --test pesg_b_detection -- --ignored
+test pesg_b_v1_every_fault_in_every_position_against_every_sample ... ignored, exhaustive (minutes in release, hours in debug): cargo test --release -p misaka-palw-kernel --test pesg_b_detection -- --ignored
+test pesg_b_v2_every_matmul_fault_in_every_position ... ignored, exhaustive (minutes in release, hours in debug): cargo test --release -p misaka-palw-kernel --test pesg_b_detection -- --ignored
+test pesg_b_v4_route_a_samples_and_route_b_reexecution ... ignored, exhaustive (minutes in release, hours in debug): cargo test --release -p misaka-palw-kernel --test pesg_b_detection -- --ignored
+test pesg_b_withholding_and_false_disclosure_are_the_da_path_and_seen_only_where_read ... ignored, exhaustive (minutes in release, hours in debug): cargo test --release -p misaka-palw-kernel --test pesg_b_detection -- --ignored
+test pesg_b_grinding_retries_correlation_and_vetoes_enumerated ... ok
+test pesg_b_the_field_sampler_is_exactly_uniform_and_the_streams_reach_every_element ... ok
+test pesg_b_crt_miss_is_the_smallest_moduluss_below_the_product ... ok
+test pesg_b_the_subset_sampler_reaches_every_subset ... ok
+test pesg_b_operand_and_borrowed_trace_placements ... ok
+
+test result: ok. 5 passed; 0 failed; 6 ignored; 0 measured; 0 filtered out; finished in 2.11s
+
+     Running tests/verifier_pay.rs (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/verifier_pay-474ef03ff518b45f)
+
+running 6 tests
+test s3_s4_one_deposit_buys_at_most_one_attempts_worth_of_veto ... ok
+test m49_the_check_fee_is_escrowed_paid_on_attestation_and_returned_otherwise ... ok
+test o2_with_no_conviction_the_held_share_is_paid_to_the_demanders_at_the_horizon ... ok
+test o2_after_a_self_inflicted_default_the_honest_accuser_is_paid_490_and_the_coalition_recovers_at_most_49_percent ... ok
+test m49_a_conviction_pays_every_drawn_slot_and_drawn_sealers_share_the_cap_first ... ok
+test o2_the_f_c4r4_15_coalition_recovers_at_most_49_percent ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s
+

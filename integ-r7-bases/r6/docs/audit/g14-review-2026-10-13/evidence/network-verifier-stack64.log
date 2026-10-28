@@ -1,0 +1,49 @@
+
+running 2 tests
+test palw_panel::palw_service_public_e2e::recovery::network::sole_socket_receiver_verifier_acquires_automatic_multipart_and_independently_releases ... [service-public] normal FP family certification accepted from 6 public drill carriers
+[service-public] registered FP graph publicly carried by ordinary ClassLaneCertified
+[service-public] heartbeat advance 135 -> 1011
+[service-public] heartbeat advance 260 -> 1011
+[service-public] heartbeat advance 385 -> 1011
+[service-public] heartbeat advance 510 -> 1011
+[service-public] heartbeat advance 635 -> 1011
+[service-public] heartbeat advance 760 -> 1011
+[service-public] heartbeat advance 885 -> 1011
+[service-public] heartbeat advance 1010 -> 1011
+[service-public] ordinary bond registered before DAA 10, maturity 1000, now 1011
+[service-public] large constraint job bytes 112291, ordinary transaction transient mass 499184 / 500000
+[service-public] ordinary FP Job V6 admission: claim e94717b4e42b1edc545ee972dd34e1d1b7296570ad843d1a32f9cc9fc4b347074e03b6a9462155c7d72c8f2dc57a13ccc90ef4494e5d76b5aed4c36a1392dc46, 3 quanta, 9110079 pwu, fee 1693825
+[service-public] fresh database validated 2065 public blocks at DAA 1032
+[service-public] original FP body/acceptance rows pruned; rooted job metadata present = false
+
+thread 'palw_panel::palw_service_public_e2e::recovery::network::sole_socket_receiver_verifier_acquires_automatic_multipart_and_independently_releases' (16535769) panicked at kaspad/src/palw_service_network_e2e.rs:117:14:
+actual P2P handshake accepts the same rules: TonicError(tonic::transport::Error(Transport, ConnectError(ConnectError("tcp connect error", 127.0.0.1:49237, Os { code: 61, kind: ConnectionRefused, message: "Connection refused" }))))
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+test palw_panel::palw_service_public_e2e::recovery::network::sole_socket_receiver_verifier_carries_requests_through_real_tx_relay_to_objective_default ... [service-public] normal FP family certification accepted from 6 public drill carriers
+[service-public] registered FP graph publicly carried by ordinary ClassLaneCertified
+[service-public] heartbeat advance 135 -> 1011
+[service-public] heartbeat advance 260 -> 1011
+[service-public] heartbeat advance 385 -> 1011
+[service-public] heartbeat advance 510 -> 1011
+[service-public] heartbeat advance 635 -> 1011
+[service-public] heartbeat advance 760 -> 1011
+[service-public] heartbeat advance 885 -> 1011
+[service-public] heartbeat advance 1010 -> 1011
+[service-public] ordinary bond registered before DAA 10, maturity 1000, now 1011
+[service-public] ordinary FP Job V5 admission: claim 112d1b07165e358389b87da734cd24358ea6b0c4604b72d9d6758e3b4e739830512c7683cca309b6bca205d530087333c674fc6820b05c963546ff197c0d6c11, 11 quanta, 30504892 pwu, fee 329437
+[service-public] fresh database validated 2065 public blocks at DAA 1032
+[service-public] original FP body/acceptance rows pruned; rooted job metadata present = false
+
+thread 'palw_panel::palw_service_public_e2e::recovery::network::sole_socket_receiver_verifier_carries_requests_through_real_tx_relay_to_objective_default' (16590385) panicked at kaspad/src/palw_service_network_e2e.rs:117:14:
+actual P2P handshake accepts the same rules: TonicError(tonic::transport::Error(Transport, ConnectError(ConnectError("tcp connect error", 127.0.0.1:49571, Os { code: 61, kind: ConnectionRefused, message: "Connection refused" }))))
+FAILED
+
+failures:
+
+failures:
+    palw_panel::palw_service_public_e2e::recovery::network::sole_socket_receiver_verifier_acquires_automatic_multipart_and_independently_releases
+    palw_panel::palw_service_public_e2e::recovery::network::sole_socket_receiver_verifier_carries_requests_through_real_tx_relay_to_objective_default
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 709 filtered out; finished in 2122.90s
+

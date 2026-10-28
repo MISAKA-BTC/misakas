@@ -1,0 +1,540 @@
+{
+ "head.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "rwkv.blocks.0.attention.key.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "rwkv.blocks.0.attention.output.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "rwkv.blocks.0.attention.receptance.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "rwkv.blocks.0.attention.time_decay": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "rwkv.blocks.0.attention.time_first": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "rwkv.blocks.0.attention.time_mix_key": {
+  "dtype": "BF16",
+  "shape": [
+   1,
+   1,
+   32
+  ]
+ },
+ "rwkv.blocks.0.attention.time_mix_receptance": {
+  "dtype": "BF16",
+  "shape": [
+   1,
+   1,
+   32
+  ]
+ },
+ "rwkv.blocks.0.attention.time_mix_value": {
+  "dtype": "BF16",
+  "shape": [
+   1,
+   1,
+   32
+  ]
+ },
+ "rwkv.blocks.0.attention.value.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "rwkv.blocks.0.feed_forward.key.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "rwkv.blocks.0.feed_forward.receptance.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "rwkv.blocks.0.feed_forward.time_mix_key": {
+  "dtype": "BF16",
+  "shape": [
+   1,
+   1,
+   32
+  ]
+ },
+ "rwkv.blocks.0.feed_forward.time_mix_receptance": {
+  "dtype": "BF16",
+  "shape": [
+   1,
+   1,
+   32
+  ]
+ },
+ "rwkv.blocks.0.feed_forward.value.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   64
+  ]
+ },
+ "rwkv.blocks.0.ln1.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "rwkv.blocks.0.ln1.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "rwkv.blocks.0.ln2.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "rwkv.blocks.0.ln2.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "rwkv.blocks.0.pre_ln.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "rwkv.blocks.0.pre_ln.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "rwkv.blocks.1.attention.key.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "rwkv.blocks.1.attention.output.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "rwkv.blocks.1.attention.receptance.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "rwkv.blocks.1.attention.time_decay": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "rwkv.blocks.1.attention.time_first": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "rwkv.blocks.1.attention.time_mix_key": {
+  "dtype": "BF16",
+  "shape": [
+   1,
+   1,
+   32
+  ]
+ },
+ "rwkv.blocks.1.attention.time_mix_receptance": {
+  "dtype": "BF16",
+  "shape": [
+   1,
+   1,
+   32
+  ]
+ },
+ "rwkv.blocks.1.attention.time_mix_value": {
+  "dtype": "BF16",
+  "shape": [
+   1,
+   1,
+   32
+  ]
+ },
+ "rwkv.blocks.1.attention.value.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "rwkv.blocks.1.feed_forward.key.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "rwkv.blocks.1.feed_forward.receptance.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "rwkv.blocks.1.feed_forward.time_mix_key": {
+  "dtype": "BF16",
+  "shape": [
+   1,
+   1,
+   32
+  ]
+ },
+ "rwkv.blocks.1.feed_forward.time_mix_receptance": {
+  "dtype": "BF16",
+  "shape": [
+   1,
+   1,
+   32
+  ]
+ },
+ "rwkv.blocks.1.feed_forward.value.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   64
+  ]
+ },
+ "rwkv.blocks.1.ln1.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "rwkv.blocks.1.ln1.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "rwkv.blocks.1.ln2.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "rwkv.blocks.1.ln2.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "rwkv.blocks.2.attention.key.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "rwkv.blocks.2.attention.output.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "rwkv.blocks.2.attention.receptance.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "rwkv.blocks.2.attention.time_decay": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "rwkv.blocks.2.attention.time_first": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "rwkv.blocks.2.attention.time_mix_key": {
+  "dtype": "BF16",
+  "shape": [
+   1,
+   1,
+   32
+  ]
+ },
+ "rwkv.blocks.2.attention.time_mix_receptance": {
+  "dtype": "BF16",
+  "shape": [
+   1,
+   1,
+   32
+  ]
+ },
+ "rwkv.blocks.2.attention.time_mix_value": {
+  "dtype": "BF16",
+  "shape": [
+   1,
+   1,
+   32
+  ]
+ },
+ "rwkv.blocks.2.attention.value.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "rwkv.blocks.2.feed_forward.key.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "rwkv.blocks.2.feed_forward.receptance.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "rwkv.blocks.2.feed_forward.time_mix_key": {
+  "dtype": "BF16",
+  "shape": [
+   1,
+   1,
+   32
+  ]
+ },
+ "rwkv.blocks.2.feed_forward.time_mix_receptance": {
+  "dtype": "BF16",
+  "shape": [
+   1,
+   1,
+   32
+  ]
+ },
+ "rwkv.blocks.2.feed_forward.value.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   64
+  ]
+ },
+ "rwkv.blocks.2.ln1.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "rwkv.blocks.2.ln1.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "rwkv.blocks.2.ln2.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "rwkv.blocks.2.ln2.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "rwkv.blocks.3.attention.key.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "rwkv.blocks.3.attention.output.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "rwkv.blocks.3.attention.receptance.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "rwkv.blocks.3.attention.time_decay": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "rwkv.blocks.3.attention.time_first": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "rwkv.blocks.3.attention.time_mix_key": {
+  "dtype": "BF16",
+  "shape": [
+   1,
+   1,
+   32
+  ]
+ },
+ "rwkv.blocks.3.attention.time_mix_receptance": {
+  "dtype": "BF16",
+  "shape": [
+   1,
+   1,
+   32
+  ]
+ },
+ "rwkv.blocks.3.attention.time_mix_value": {
+  "dtype": "BF16",
+  "shape": [
+   1,
+   1,
+   32
+  ]
+ },
+ "rwkv.blocks.3.attention.value.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "rwkv.blocks.3.feed_forward.key.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "rwkv.blocks.3.feed_forward.receptance.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "rwkv.blocks.3.feed_forward.time_mix_key": {
+  "dtype": "BF16",
+  "shape": [
+   1,
+   1,
+   32
+  ]
+ },
+ "rwkv.blocks.3.feed_forward.time_mix_receptance": {
+  "dtype": "BF16",
+  "shape": [
+   1,
+   1,
+   32
+  ]
+ },
+ "rwkv.blocks.3.feed_forward.value.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   64
+  ]
+ },
+ "rwkv.blocks.3.ln1.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "rwkv.blocks.3.ln1.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "rwkv.blocks.3.ln2.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "rwkv.blocks.3.ln2.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "rwkv.embeddings.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "rwkv.ln_out.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "rwkv.ln_out.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ }
+}

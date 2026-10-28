@@ -1,0 +1,121 @@
+{
+  "v": 1,
+  "frac_bits": 8,
+  "materials": [
+    {
+      "name": "a",
+      "base_color": [
+        256,
+        0,
+        0,
+        256
+      ],
+      "metallic": 0,
+      "roughness": 256,
+      "double_sided": false
+    },
+    {
+      "name": "b",
+      "base_color": [
+        0,
+        0,
+        256,
+        128
+      ],
+      "metallic": 128,
+      "roughness": 128,
+      "double_sided": true
+    }
+  ],
+  "nodes": [
+    {
+      "name": "root",
+      "translation": [
+        512,
+        0,
+        0
+      ],
+      "rotation": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "scale": [
+        512,
+        512,
+        512
+      ],
+      "shape": null,
+      "material": null,
+      "children": [
+        {
+          "name": "child",
+          "translation": [
+            0,
+            256,
+            0
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            2
+          ],
+          "scale": [
+            128,
+            128,
+            128
+          ],
+          "shape": {
+            "shape": "box",
+            "min": [
+              -64,
+              -64,
+              -64
+            ],
+            "max": [
+              64,
+              64,
+              64
+            ]
+          },
+          "material": "a",
+          "children": []
+        },
+        {
+          "name": "floor",
+          "translation": [
+            0,
+            -256,
+            0
+          ],
+          "rotation": [
+            2,
+            0,
+            0,
+            0
+          ],
+          "scale": [
+            256,
+            256,
+            256
+          ],
+          "shape": {
+            "shape": "plane",
+            "min": [
+              -512,
+              -512
+            ],
+            "max": [
+              512,
+              512
+            ]
+          },
+          "material": "b",
+          "children": []
+        }
+      ]
+    }
+  ]
+}

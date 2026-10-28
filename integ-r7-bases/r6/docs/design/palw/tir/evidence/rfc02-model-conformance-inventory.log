@@ -1,0 +1,10 @@
+
+running 6 tests
+test palw_tir_artifact_v1::tests::the_graph_ir_root_of_bare_bytes_is_the_class_graph_ir_root ... ok
+test palw_tir_artifact_v1::tests::instances_follow_the_schedule ... ok
+test palw_tir_artifact_v1::tests::a_tensor_of_the_wrong_length_or_a_missing_one_is_refused ... ok
+test palw_tir_artifact_v1::tests::rows_pieces_and_the_closed_forms_agree ... ok
+test palw_tir_artifact_v1::tests::model_inventory_v4_preserves_legacy_schedule_and_piece_positions ... ok
+test palw_tir_artifact_v1::tests::the_streamed_root_is_the_materialised_root_and_openings_verify ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 3623 filtered out; finished in 0.23s

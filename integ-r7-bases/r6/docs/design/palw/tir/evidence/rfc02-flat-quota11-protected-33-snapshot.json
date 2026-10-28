@@ -1,0 +1,8 @@
+{
+  "misaka-palw-kernel/src/flat_quota11.rs": "c2a6d852fa86a4271ecf40ff9a1e0225a9727893e798c15a81e2ae5ee348ada0",
+  "misaka-palw-kernel/src/flat_quota11/protected.rs": "e5344a7941925649611bb4c40cd1277069cb5378125a5b0cfc29c8ae50757b19",
+  "misaka-palw-kernel/src/flat_quota11/protected_tests.rs": "2b214f31d96e32c86e92d6b406e7541dc0b0fd38319c8b8a76907483c231be73",
+  "immutable_binary": "/tmp/rfc02-flat-quota11-protected-33-snapshot-unit",
+  "binary_sha256": "8b11cf3cc0250ec31b7e5f4d2cc2fd83187c5cafce6b88180e23aee49737a684",
+  "tests_passed": 33
+}

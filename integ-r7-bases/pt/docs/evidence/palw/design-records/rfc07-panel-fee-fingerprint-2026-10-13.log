@@ -1,0 +1,8 @@
+
+running 3 tests
+test palw_beacon_source_fee_v1::tests::paid_source_cost_floor_covers_each_leg_and_a_positive_net_receipt ... ok
+test palw_beacon_source_fee_v1::tests::paid_source_cost_floor_refuses_uncovered_horizons_and_overflow ... ok
+test palw_beacon_source_fee_v1::tests::source_fee_has_its_own_dormant_fence_and_tuple_fingerprints ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 3919 filtered out; finished in 0.05s
+

@@ -1,0 +1,28 @@
+{
+  "base_commit": "e8da85b1032e4d30a8a237c780f44dbb80b7156f",
+  "tested_node_binaries": {
+    "native_quantum": "66e4d6e64084f8df0a65a0a0da4e17ad7301694b10a98414ca2c257a60143122",
+    "panel_binding_diagnostic": "be48ba06d5db8bd8e68d4ccfe653c06c6e7c597d8d46f7bcd9d7abf3ceb2c6a9",
+    "fresh_panel": "7732c3f4f722e17efb00b25aceb1ce697a1a89045597074a046bf46513f2aae9"
+  },
+  "fresh_panel_test_source_sha256": {
+    "kaspad/src/palw_service_public_e2e.rs": "0c4f56caeeff4bd2a5b05a4408659a6e844ca8b0ae4131ca226ea84c2e97e3ab",
+    "kaspad/src/palw_service_tiled_e2e.rs": "2c271615ebd38bc8d2af4625ce2efc8919aa9366d3194009a13f3c6150ba65c4"
+  },
+  "checkpoint_test_source_sha256": {
+    "kaspad/src/palw_service_public_e2e.rs": "da8a9161a502f1f1ec0d84e3bb79ec4369eb61d59b9c993b48d4fe37d51654c9",
+    "kaspad/src/palw_service_tiled_e2e.rs": "25ee69ddf460fba394258f476a5629ac5cf01a36684fcb7106a7296cf6c3b128"
+  },
+  "validation": {
+    "native_registration_host": "PASS1 48.69s; actual width256, tokenizer nonzero",
+    "native_jury_price": "PASS1 49.13s; quote only",
+    "native_panel_binding": "PASS1 50.48s; normal registration/readiness/jury/price/v6 tx,5 duties",
+    "flat_service_regression": "PASS1 394.13s; native-quantum binary before helper extraction; producer/all5 conviction/positivecollection/reveals",
+    "filer_regression": "PASS30 5.37s native-quantum binary",
+    "full_tiled_service": "FAIL first2 after360s service deadline; other2 deliberately terminated exit143 after same missing native drawn row0/tile1 identified. No tiled conviction/default PASS claimed.",
+    "latest_drawn_unit_fix": "SOURCE ONLY: supply authenticated row0/tile1 drawn by ordinaryDA; verify later integrated source"
+  },
+  "full_service_command": "kaspad_lib-a562e45711087c1e fresh_public_bond_service_registered_tiled_constraint_ --test-threads=2 --nocapture",
+  "build_environment": "CARGO_TARGET_DIR=/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 cargo test -p kaspad --lib --locked --no-run",
+  "scope": "Only ordinary small registered Qwen25A16 v2; full G14 remains open. Current production changes from semantic agent separately committed but not in the listed binaries."
+}

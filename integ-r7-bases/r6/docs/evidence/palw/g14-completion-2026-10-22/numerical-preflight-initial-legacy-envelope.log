@@ -1,0 +1,10 @@
+
+running 5 tests
+test palw_tir_public_fp_envelope_v1::tests::root_job_context_count_and_pledge_substitutions_are_refused ... ok
+test palw_tir_public_fp_envelope_v1::tests::actual_original_codec_roundtrip_preserves_literal_payload_and_signed_message ... ok
+test palw_tir_public_fp_envelope_v1::tests::recursion_unknown_versions_trailing_and_preallocation_bounds_fail_closed ... ok
+test palw_tir_public_fp_envelope_v1::tests::same_transaction_object_pairing_does_not_accept_another_public_job ... ok
+test palw_tir_public_fp_envelope_v1::tests::g14_history_pledge_rides_tfp1_and_must_name_the_same_original ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 4727 filtered out; finished in 0.05s
+

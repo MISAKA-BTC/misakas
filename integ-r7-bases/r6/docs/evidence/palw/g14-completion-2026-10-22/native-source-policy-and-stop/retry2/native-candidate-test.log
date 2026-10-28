@@ -1,0 +1,17 @@
+
+running 1 test
+
+thread 'pipeline::virtual_processor::tests::funded_original_native_candidate::palw_funded_original_real_native_inputs_preserve_fallback_and_refuse_incomplete_admission' (4712710) panicked at consensus/src/pipeline/virtual_processor/tests/funded_original_native_candidate.rs:244:5:
+assertion `left == right` failed
+  left: Missing("native source checked; registered Release2000 demand; numerical/semantic grammar calibration, profiles and ordered coordinator missing")
+ right: Invalid("native original source geometry or job roots")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test pipeline::virtual_processor::tests::funded_original_native_candidate::palw_funded_original_real_native_inputs_preserve_fallback_and_refuse_incomplete_admission ... FAILED
+
+failures:
+
+failures:
+    pipeline::virtual_processor::tests::funded_original_native_candidate::palw_funded_original_real_native_inputs_preserve_fallback_and_refuse_incomplete_admission
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1065 filtered out; finished in 0.08s
+

@@ -1,0 +1,23 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "distilbert",
+  "doc": "DistilBERT (DistilBertModel, and the base of a …ForMaskedLM checkpoint): BERT's encoder without token types, under its own names (dim, hidden_dim, n_layers, n_heads, activation); its LayerNorms are hard-coded at 1e-12.",
+  "extends": ["mixin-bert-encoder"],
+  "match": {"architectures": ["DistilBertModel", "DistilBertForMaskedLM"], "model_types": ["distilbert"]},
+  "config": {"defaults": {"vocab_size": 30522, "dim": 768, "hidden_dim": 3072, "n_layers": 6, "n_heads": 12, "max_position_embeddings": 512, "activation": "gelu", "pad_token_id": 0}},
+  "vars": [
+    {"name": "vocab", "value": {"$cfg": "vocab_size"}},
+    {"name": "hidden", "value": {"$cfg": "dim"}},
+    {"name": "inter", "value": {"$cfg": "hidden_dim"}},
+    {"name": "n", "value": {"$cfg": "n_layers"}},
+    {"name": "heads", "value": {"$cfg": "n_heads"}},
+    {"name": "max_pos0", "value": {"$cfg": "max_position_embeddings"}},
+    {"name": "act", "value": {"$act": {"$cfg": "activation"}}},
+    {"name": "eps", "value": 1e-12},
+    {"name": "pad", "value": {"$cfg": "pad_token_id"}},
+    {"name": "offset", "value": 0},
+    {"name": "names", "value": {"embed": "embeddings.word_embeddings", "pos_embed": "embeddings.position_embeddings", "embed_norm": "embeddings.LayerNorm", "attn.q": "transformer.layer.{L}.attention.q_lin", "attn.k": "transformer.layer.{L}.attention.k_lin", "attn.v": "transformer.layer.{L}.attention.v_lin", "attn.o": "transformer.layer.{L}.attention.out_lin", "norm.mix": "transformer.layer.{L}.sa_layer_norm", "mlp.up": "transformer.layer.{L}.ffn.lin1", "mlp.down": "transformer.layer.{L}.ffn.lin2", "norm.ffn": "transformer.layer.{L}.output_layer_norm"}},
+    {"name": "prefix_aliases", "value": [["", "distilbert."]]},
+    {"name": "model_type", "value": "distilbert"}
+  ]
+}

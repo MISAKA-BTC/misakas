@@ -350,7 +350,7 @@ impl TiledFixture {
             decode: None,
             tail: None,
         };
-        let prefix_fault = matches!(fault, Some(5) | Some(6));
+        let prefix_fault = matches!(fault, Some(5) | Some(6) | Some(7));
         if prefix_fault {
             let true_prefix = backend.prefix_state_v1(self.profile.shape_profile_id(), self.table.tokenizer_id, &ids[..2]).unwrap();
             assert_eq!(true_prefix.prefix_tokens, 2);
@@ -360,9 +360,12 @@ impl TiledFixture {
                 kaspa_consensus_core::palw_fp_prefix_v1::PALW_FP_PREFIX_VERSION
             };
             job.decode = Some(kaspa_consensus_core::palw_decode_pipeline_v4::DecodeConfigV4::NOOP);
-            job.tail =
-                Some(PalwFpJobTailV1::Prefix(PalwFpPrefixStateV1 { state_root: Hash64::from_u64_word(0xBAD17), ..true_prefix }));
-            assert!(backend.verify_prefix_state_v1(&job, &ids).is_err(), "the actual holder rejects the false named prefix");
+            job.tail = Some(PalwFpJobTailV1::Prefix(if fault == Some(7) {
+                true_prefix
+            } else {
+                PalwFpPrefixStateV1 { state_root: Hash64::from_u64_word(0xBAD17), ..true_prefix }
+            }));
+            assert_eq!(backend.verify_prefix_state_v1(&job, &ids).is_ok(), fault == Some(7), "only the true named state verifies");
         } else {
             // Use the same DFA as the flat fixture, with the actual tokenizer-derived table.
             selection_constraint_job_with_table(&mut job, self.table.clone());
@@ -394,7 +397,7 @@ impl TiledFixture {
                     0
                 }
             }
-            None | Some(5) | Some(6) => generated[2],
+            None | Some(5) | Some(6) | Some(7) => generated[2],
             _ => unreachable!(),
         };
         binding.full_logits_trace_root = tiled_logits_trace_root_v1(&binding.job_context, rows, &generated).unwrap();
@@ -411,7 +414,7 @@ impl TiledFixture {
         commitment.trace_root = binding.full_logits_trace_root;
         commitment.output_root =
             kaspa_consensus_core::palw_attempt_rules_v1::palw_attempt_output_root_v1(&binding.job_context, &generated);
-        if fault.is_none() {
+        if fault.is_none() || fault == Some(7) {
             assert_eq!(
                 (commitment.execution_root, commitment.trace_root, commitment.output_root),
                 (run.outcome.execution_root, run.outcome.trace_root, run.outcome.output_root),
@@ -433,10 +436,68 @@ impl TiledFixture {
         outcome.execution_root = commitment.execution_root;
         outcome.trace_root = commitment.trace_root;
         outcome.output_root = commitment.output_root;
-        outcome.material.clear();
+        if fault == Some(7) {
+            self.assert_serving_matrix(chain, &job, &ids, &generated);
+        } else {
+            outcome.material.clear();
+        }
         // Only signed public answer candidates leave the producer side. Neither its backend
         // nor its capture/row array enters the verifier's service or proof builder.
         (outcome, initial, Some((commitment, ids)), events)
+    }
+
+    fn assert_serving_matrix(
+        &self,
+        chain: &Chain,
+        job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+        ids: &[u32],
+        committed: &[u32],
+    ) {
+        use kaspa_consensus_core::palw_backend::PalwFpAnswerJobV1;
+        use misaka_palw_base0::qwen25_a16_backend::Qwen25A16Backend;
+        let artifact = Arc::new(misaka_palw_base0::artifact::decode_artifact_file_v1(&std::fs::read(&self.path).unwrap()).unwrap());
+        let make = || {
+            Qwen25A16Backend::from_registered_profile_in_lane_v1(
+                artifact.clone(),
+                chain.config.params.net.to_string().into_bytes(),
+                self.profile.clone(),
+                (self.canonical.declared_prefill_tokens, self.canonical.exact_decode_tokens),
+                misaka_palw_base0::classes::ArtifactSourceV1::ConvertedA16,
+            )
+            .unwrap()
+            .with_step_ladder_cap(chain.bundle.court.max_step_leaf_count())
+            .with_prompt_ids_form(chain.config.params.palw_prompt_ids_form_v1())
+        };
+        let prompt: Vec<usize> = ids.iter().map(|id| *id as usize).collect();
+        let fresh = make();
+        let expected = fresh.answer_free_prompt_v1(job, &prompt, &[], &mut |_| {}).unwrap();
+        assert_eq!(expected.output_token_ids, committed, "the actual committed tokens equal fresh serving");
+        let cached = make().with_prefix_cache_v1(1 << 26, 1);
+        let mut head = job.clone();
+        head.version = kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V4_VERSION;
+        head.tail = None;
+        head.prompt_tokens = 2;
+        head.decode_token_limit = 1;
+        head.prompt_token_ids_hash = kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_commitment_v1(
+            kaspa_consensus_core::palw_prompt_ids_v1::palw_prompt_ids_form_of_class_v1(
+                chain.config.params.palw_prompt_ids_form_v1(),
+                &self.profile,
+            ),
+            &ids[..2],
+        )
+        .unwrap();
+        cached.answer_free_prompt_v1(&head, &prompt[..2], &[], &mut |_| {}).unwrap();
+        let resumed = cached.answer_free_prompt_v1(job, &prompt, &[], &mut |_| {}).unwrap();
+        assert_eq!(resumed.cached_prefix_tokens, 2, "the resume must actually hit the cache");
+        assert_eq!(resumed.output_token_ids, committed);
+        assert!(!cached.prefix_cache_stats_v1().unwrap().disabled);
+        let batch = [PalwFpAnswerJobV1 { job, prompt_tokens: &prompt }, PalwFpAnswerJobV1 { job: &head, prompt_tokens: &prompt[..2] }];
+        let batched = make().with_decode_batch_width_v1(2);
+        let got = batched.answer_batch_free_prompt_v1(&batch, &[], &mut |_, _| {}).unwrap();
+        for (i, input) in batch.iter().enumerate() {
+            let one = fresh.answer_free_prompt_v1(input.job, input.prompt_tokens, &[], &mut |_| {}).unwrap();
+            assert_eq!(got[i].output_token_ids, one.output_token_ids, "same class and decode rules: batch equals single");
+        }
     }
 
     /// Build only the signed-public CKW payloads from producer retention. The caller stores

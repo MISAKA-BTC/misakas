@@ -1,0 +1,8 @@
+
+running 3 tests
+test palw_state_v2::tests::the_version_22_state_root_golden_vectors ... ok
+test palw_state_v2::tests::held_forfeits_v1::the_held_forfeit_entry_applies_reverts_and_the_placeholders_are_refused ... ok
+test palw_state_v2::tests::held_forfeits_v1::the_held_forfeits_block_and_tail_come_after_r_core_plus_and_the_activation_pool ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 3620 filtered out; finished in 0.00s
+

@@ -1,0 +1,19 @@
+
+running 1 test
+test palw_panel::palw_service_public_e2e::tiled::registered_tiled_constraint_class_passes_normal_readiness_jury_and_fp_price ... [service-tiled] ordinary signed class registration accepted; root 3787613f6abc83efb816feac58efdc401ecb50d93efc976e30c5772e6a9c7ff8b1fc5bf0685cf743ffead044bd69e7dfe434e816e84b2dd1f8cd17d003b65d46, 4099 lanes, canonical 1/2
+[service-public] normal FP family certification accepted from 3 public drill carriers
+[service-public] registered FP graph publicly carried by ordinary ClassLaneCertified
+[service-tiled] normal jury at span 67: state Some(Prefetching), ready 7, room 67640630, reason ready 7 < 7 required (seats prove possession to be counted)
+
+thread 'palw_panel::palw_service_public_e2e::tiled::registered_tiled_constraint_class_passes_normal_readiness_jury_and_fp_price' (3870675) panicked at kaspad/src/palw_service_tiled_e2e.rs:457:10:
+the normally jury-admitted bought class accepts the ordinary FP price query: ZeroQuanta
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    palw_panel::palw_service_public_e2e::tiled::registered_tiled_constraint_class_passes_normal_readiness_jury_and_fp_price
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 643 filtered out; finished in 47.52s
+

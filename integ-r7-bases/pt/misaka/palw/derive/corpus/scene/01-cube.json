@@ -1,0 +1,54 @@
+{
+  "v": 1,
+  "frac_bits": 8,
+  "materials": [
+    {
+      "name": "steel",
+      "base_color": [
+        200,
+        200,
+        210,
+        256
+      ],
+      "metallic": 230,
+      "roughness": 64,
+      "double_sided": false
+    }
+  ],
+  "nodes": [
+    {
+      "name": "cube",
+      "translation": [
+        0,
+        0,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0,
+        2
+      ],
+      "scale": [
+        256,
+        256,
+        256
+      ],
+      "shape": {
+        "shape": "box",
+        "min": [
+          -256,
+          -256,
+          -256
+        ],
+        "max": [
+          256,
+          256,
+          256
+        ]
+      },
+      "material": "steel",
+      "children": []
+    }
+  ]
+}

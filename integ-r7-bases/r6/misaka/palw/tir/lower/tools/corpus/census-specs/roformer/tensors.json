@@ -1,0 +1,270 @@
+{
+ "cls.predictions.bias": {
+  "dtype": "BF16",
+  "shape": [
+   64
+  ]
+ },
+ "cls.predictions.transform.LayerNorm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "cls.predictions.transform.LayerNorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "cls.predictions.transform.dense.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "cls.predictions.transform.dense.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "roformer.embeddings.LayerNorm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "roformer.embeddings.LayerNorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "roformer.embeddings.token_type_embeddings.weight": {
+  "dtype": "BF16",
+  "shape": [
+   2,
+   32
+  ]
+ },
+ "roformer.embeddings.word_embeddings.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "roformer.encoder.embed_positions.weight": {
+  "dtype": "BF16",
+  "shape": [
+   128,
+   8
+  ]
+ },
+ "roformer.encoder.layer.0.attention.output.LayerNorm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "roformer.encoder.layer.0.attention.output.LayerNorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "roformer.encoder.layer.0.attention.output.dense.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "roformer.encoder.layer.0.attention.output.dense.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "roformer.encoder.layer.0.attention.self.key.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "roformer.encoder.layer.0.attention.self.key.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "roformer.encoder.layer.0.attention.self.query.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "roformer.encoder.layer.0.attention.self.query.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "roformer.encoder.layer.0.attention.self.value.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "roformer.encoder.layer.0.attention.self.value.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "roformer.encoder.layer.0.intermediate.dense.bias": {
+  "dtype": "BF16",
+  "shape": [
+   64
+  ]
+ },
+ "roformer.encoder.layer.0.intermediate.dense.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "roformer.encoder.layer.0.output.LayerNorm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "roformer.encoder.layer.0.output.LayerNorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "roformer.encoder.layer.0.output.dense.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "roformer.encoder.layer.0.output.dense.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   64
+  ]
+ },
+ "roformer.encoder.layer.1.attention.output.LayerNorm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "roformer.encoder.layer.1.attention.output.LayerNorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "roformer.encoder.layer.1.attention.output.dense.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "roformer.encoder.layer.1.attention.output.dense.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "roformer.encoder.layer.1.attention.self.key.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "roformer.encoder.layer.1.attention.self.key.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "roformer.encoder.layer.1.attention.self.query.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "roformer.encoder.layer.1.attention.self.query.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "roformer.encoder.layer.1.attention.self.value.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "roformer.encoder.layer.1.attention.self.value.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "roformer.encoder.layer.1.intermediate.dense.bias": {
+  "dtype": "BF16",
+  "shape": [
+   64
+  ]
+ },
+ "roformer.encoder.layer.1.intermediate.dense.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "roformer.encoder.layer.1.output.LayerNorm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "roformer.encoder.layer.1.output.LayerNorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "roformer.encoder.layer.1.output.dense.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "roformer.encoder.layer.1.output.dense.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   64
+  ]
+ }
+}

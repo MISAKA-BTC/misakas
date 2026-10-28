@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "kind": "rfc06-release-synthetic-retention-measurement",
+  "revision": "1c3cd11cc89555a86fc492cb3d2d398eac13ab05",
+  "binarySha256": "55523eab082dda57cc5fa03feab36fead47d4d0a110858c4589719097b5bfc13",
+  "sourceSha256": {
+    "misaka/palw/panel/tests/seed_vector.rs": "65cd13f63c8330201659f94db02bcbc8f8ebbdc2c1bc9f21295bba1bfe26b06f",
+    "misaka/palw/panel/tests/strata.rs": "095366b95afd1e8acc53f3bf9eeb40640b99f302be6bf44c9b3a6b10883ffa21",
+    "misaka/palw/panel/tests/stages.rs": "7e188d14823a6a854dfd7f03874a1983ee62f7bea7bd9aa0f02a6606ea77bcef",
+    "misaka/palw/panel/tests/complete_population.rs": "eb522b1ece7ec7393493f2acdcae114256cd7397a27b948bcd74a06a5f4c142b",
+    "misaka/palw/panel/tests/replay.rs": "226a5052898c9e9a4cfe79f3b6914623b8afe3e8ab57751f03cc9c184fd0a0d1",
+    "misaka/palw/panel/src/types.rs": "2038f03bce9f4fb5bdf4723526c716f3c4ae583e530092c8f17d0b3b48da8084",
+    "misaka/palw/panel/src/lib.rs": "84e9af09b433a0650a9cbc5fa1c254228df87ac3d9807d31129e6e2973889bfc",
+    "misaka/palw/panel/src/draw.rs": "97672f4c723ade217468be9cf8c4389b223153c333306e86a34425b3c0756895",
+    "misaka/palw/panel/src/state.rs": "dbe3210b3a73bb528d844da7fff3a256c92053e70454b8a9130ba25ca7d43cbc",
+    "misaka/palw/panel/Cargo.toml": "7d6f142aeb7ad8c25274ddbd81bc10c51f03106923381c58e3931938aaa533f6"
+  },
+  "platform": {
+    "system": "Darwin",
+    "release": "25.6.0",
+    "machine": "arm64"
+  },
+  "criteria": {
+    "maximumPeakRssBytes": 1073741824,
+    "maximumRunSeconds": 30,
+    "runs": 3
+  },
+  "runs": [
+    {
+      "run": 1,
+      "exitCode": 0,
+      "peakRssBytes": 251772928,
+      "seconds": 11.145614583,
+      "limitsMet": true
+    },
+    {
+      "run": 2,
+      "exitCode": 0,
+      "peakRssBytes": 251772928,
+      "seconds": 10.863223290999999,
+      "limitsMet": true
+    },
+    {
+      "run": 3,
+      "exitCode": 0,
+      "peakRssBytes": 251756544,
+      "seconds": 10.731101542000001,
+      "limitsMet": true
+    }
+  ],
+  "medianSeconds": 10.863223290999999,
+  "status": "PASS",
+  "concurrentHostBuilds": true,
+  "nativeNodeMeasured": false,
+  "prunedP2PMeasured": false,
+  "releaseSecurityApproval": false
+}

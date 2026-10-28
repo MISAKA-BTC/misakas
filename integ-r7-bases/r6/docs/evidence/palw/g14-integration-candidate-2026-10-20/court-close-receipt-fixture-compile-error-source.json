@@ -1,0 +1,29 @@
+{
+  "source_sha256": {
+    "consensus/core/src/lib.rs": "f7ffb4ca352e4d72ced344b5e38a20a660b71a2c5a04adc0f28bf26340f4e515",
+    "consensus/core/src/palw_court_end_archive_fold_v1.rs": "b102f08b9b784c4e542e807cbf2320c3a692d2e98e935b2bf737819172513e76",
+    "consensus/core/src/palw_court_service_state_v2.rs": "5f654b58ddac6bb4add8318ee9ed2f35f00f30402ed932d8e7778fd90b23ea45",
+    "consensus/core/src/palw_native_resource_v1/generated.rs": "0d13f8335b674e4b2f19c104108f0dac99680d32d3277108d597e2b9efbb9352",
+    "consensus/core/src/palw_native_resource_v1/wire_generated.rs": "e96f78aa8d00ceac643b2efc4bb52129a39142c6fb25d29aeff3ddc68ed1e0d0",
+    "consensus/core/src/palw_staged_court_fold_v1.rs": "895d1650e51b20f54170dbb9d1b276b12cf165200eb2451a28449059620557ce",
+    "consensus/core/src/palw_staged_court_state_v1.rs": "a151f2006e52f7ff5d3ac325f79dd9b67fc0428f18f667a21e416a178bf37406",
+    "consensus/core/src/palw_state_v2.rs": "184398dc0ac39d5501869b8a88fcd059aa1ccf48f7bc3d1bf67f64372ffbd2a0",
+    "consensus/core/src/palw_state_v2/chain_state.rs": "b0568d227b961cefe0b69f8eb16f41350a6719998d134a042a557be03de417d9",
+    "consensus/core/src/palw_state_v2/objects.rs": "302d3a04b3c3af9a1237ee436896ed0bc0fa224425f404b1e5953a33f0a0fc89",
+    "consensus/core/src/palw_state_v2/tests.rs": "d6c7266a2e03d0984b5b788e926f97dc3a477171fba597eab4d9bb78b5ffd2d0",
+    "consensus/core/src/palw_tir_public_fold_v1.rs": "72ad2c01afd6031ed93a6cbca90b4ecdee8579ae6dd5a59363d4c3c2d643e928",
+    "consensus/src/pipeline/virtual_processor/processor/palw_accept.rs": "e5b021b8f1cc74ce0d5deb872e2116ae842f0dddef09845608b625cd69bc6280",
+    "consensus/core/src/palw_court_close_receipt_v1.rs": "41212350e11d07bed978fd65a138e0542ed91b37df5b0fa13172768a2d31ffc1"
+  },
+  "command": [
+    "cargo",
+    "check",
+    "--release",
+    "-p",
+    "kaspa-consensus-core",
+    "--lib",
+    "--tests"
+  ],
+  "exit_code": 101,
+  "note": "New test used nonexistent reader.finish, shape.heap_bytes, coverage.complete APIs; no tests ran."
+}

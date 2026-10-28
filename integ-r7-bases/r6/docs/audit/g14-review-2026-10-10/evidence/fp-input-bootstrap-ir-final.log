@@ -1,0 +1,24 @@
+
+running 19 tests
+test palw_panel::tir_court_e2e::a_demanded_ir_step_unit_is_answered_by_the_node_and_a_silent_executor_is_voided ... ok
+test palw_panel::tir_court_e2e::a_lie_at_a_dissected_leaf_is_challenged_by_name ... ok
+test palw_panel::tir_court_e2e::a_challenger_builds_the_dissection_bottom_from_the_on_chain_root_claim ... ok
+test palw_panel::tir_court_e2e::a_lie_is_accused_from_served_annexes_without_the_capture ... ok
+test palw_panel::tir_court_e2e::a_planted_lie_in_an_ir_claim_is_convicted_by_the_ir_court ... ok
+test palw_panel::tir_court_e2e::a_seat_pursues_a_large_claim_through_served_annexes ... ok
+test palw_panel::tir_court_e2e::a_withheld_pursuit_demands_on_chain_only_past_the_fence_and_within_its_sessions ... ok
+test palw_panel::tir_court_e2e::a_trace_only_liar_is_found_down_its_rows_tree_and_convicted_by_one_seat ... ok
+test palw_panel::tir_court_e2e::a_withholding_liar_is_demanded_on_chain_and_convicted_from_its_disclosure ... ok
+test palw_panel::tir_court_e2e::a_wrong_answer_over_honest_arithmetic_is_accused_in_one_move ... ok
+test palw_panel::tir_court_e2e::an_honest_ir_claim_goes_final_and_a_false_accusation_is_defeated ... ok
+test palw_panel::tir_court_e2e::an_ids_only_liar_is_found_at_its_rows_root_and_convicted_at_the_door ... ok
+test palw_panel::tir_court_e2e::an_ir_artifact_passes_the_startup_manifest_verification_by_its_ir_manifest ... ok
+test palw_panel::tir_court_e2e::an_ir_claims_trace_events_are_answered_in_the_ir_form ... ok
+test palw_panel::tir_court_e2e::served_annexes_on_a_trace_descent_ask_decode_row_zeros_door_leaf_first ... ok
+test palw_panel::tir_court_e2e::an_ir_history_dissection_is_played_by_the_node ... ok
+test palw_panel::tir_court_e2e::t12_walk::a_tiny_hf_model_is_checked_lowered_declared_and_registered_on_testnet_12 ... ok
+test palw_panel::tir_court_e2e::t12_walk::an_ir_class_walks_to_active_on_testnet_12_its_claims_go_final_and_a_lie_is_convicted_in_one_move ... ok
+test palw_panel::tir_court_e2e::the_node_answers_every_ir_step_unit_from_its_capture_dense_or_fold ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 579 filtered out; finished in 49.74s
+

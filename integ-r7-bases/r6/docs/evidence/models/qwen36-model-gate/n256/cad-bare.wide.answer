@@ -1,0 +1,13 @@
+{
+  "type": "box",
+  "properties": {
+    "id": "box-123",
+    "dimensions": {
+      "width": 100,
+      "height": 200,
+      "depth": 50
+    },
+    "material": "aluminum",
+    "color": "silver"
+  }
+}

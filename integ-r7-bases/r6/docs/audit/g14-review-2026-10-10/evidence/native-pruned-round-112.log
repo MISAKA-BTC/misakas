@@ -1,0 +1,27 @@
+Compiled source11255b427; coreopt0/debug0, kaspaddebug0; binary SHA256 81fa78ffd363b943fde8a8a1816f83a2aab7b8e2bbeb68793c4f44f67ce364b9
+
+FILTER public_filer_discards_authenticated_answers_if_the_native_branch_changes_during_the_page
+
+running 1 test
+test palw_panel::accepted_objects_walk_tests::public_filer_discards_authenticated_answers_if_the_native_branch_changes_during_the_page ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 689 filtered out; finished in 0.73s
+
+FILTER_EXIT 0
+
+FILTER palw_tokenizer_witness::mutation_tests::
+
+running 1 test
+test palw_tokenizer_witness::mutation_tests::a_held_operand_changed_after_authentication_never_produces_an_eof_verdict ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 689 filtered out; finished in 0.00s
+
+FILTER_EXIT 0
+
+FILTER fresh_verifier_reacquires_one_pruned_parallel_input_lane_from_the_automatic_producer
+
+running 1 test
+test palw_panel::palw_service_public_e2e::recovery::fresh_verifier_reacquires_one_pruned_parallel_input_lane_from_the_automatic_producer ... 
+thread 'palw_panel::palw_service_public_e2e::recovery::fresh_verifier_reacquires_one_pruned_parallel_input_lane_from_the_automatic_producer' (4336715) has overflowed its stack
+fatal runtime error: stack overflow, aborting
+FILTER_EXIT -6

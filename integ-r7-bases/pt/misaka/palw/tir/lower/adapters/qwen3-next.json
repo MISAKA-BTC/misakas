@@ -1,0 +1,25 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "qwen3-next",
+  "doc": "Qwen3-Next: 3 gated-delta-net layers : 1 gated-attention layer, MoE with a sigmoid-gated shared expert (fused per-key-head in_proj_qkvz / in_proj_ba).",
+  "extends": ["decoder-core", "mixin-gdn-hybrid"],
+  "match": {"architectures": ["Qwen3NextForCausalLM"], "model_types": ["qwen3_next"]},
+  "config": {"defaults": {"vocab_size": 151936, "hidden_size": 2048, "num_hidden_layers": 48, "num_key_value_heads": 2, "intermediate_size": 5632, "num_experts_per_tok": 10, "moe_intermediate_size": 512, "shared_expert_intermediate_size": 512, "norm_topk_prob": true, "decoder_sparse_step": 1}},
+  "vars": [
+    {"name": "gdn_layout", "value": "FusedPerKeyHead"},
+    {"name": "has_moe", "value": true},
+    {"name": "e", "value": {"$alias": [["num_experts", "num_local_experts"], 512]}},
+    {"name": "k", "value": {"$cfg": "num_experts_per_tok"}},
+    {"name": "topk_ok", "value": {"$bad": [{"$and": [{"$gt": [{"$var": "k"}, 0]}, {"$le": [{"$var": "k"}, {"$max": [{"$var": "e"}, 1]}]}]}, "top-k"]}},
+    {"name": "moe_inter", "value": {"$cfg": "moe_intermediate_size"}},
+    {"name": "shared", "value": {"$cfg": "shared_expert_intermediate_size"}},
+    {"name": "norm_topk", "value": {"$cfg": "norm_topk_prob"}},
+    {"name": "step", "value": {"$cfg": "decoder_sparse_step"}},
+    {"name": "mlp_only", "value": {"$cfg": ["mlp_only_layers", []]}},
+    {"name": "no_sw", "value": {"$let": ["_", {"$forbid": ["use_sliding_window", "Qwen3-Next has no sliding-window attention"]}, false]}},
+    {"name": "sparse", "value": {"$and": [{"$not": {"$contains": [{"$var": "mlp_only"}, {"$var": "i"}]}}, {"$gt": [{"$var": "e"}, 0]}, {"$gt": [{"$var": "step"}, 0]}, {"$eq": [{"$mod": [{"$add": [{"$var": "i"}, 1]}, {"$var": "step"}]}, 0]}]}, "layer": true},
+    {"name": "l_ffn", "value": {"$if": [{"$var": "sparse"}, {"Moe": {"experts": {"$var": "e"}, "top_k": {"$var": "k"}, "intermediate": {"$var": "moe_inter"}, "act": {"$var": "act"}, "router": {"scoring": "Softmax", "normalize": {"$var": "norm_topk"}}, "shared": {"$if": [{"$gt": [{"$var": "shared"}, 0]}, {"intermediate": {"$var": "shared"}, "sigmoid_gate": true}, null]}}}, {"Mlp": {"intermediate": {"$var": "inter"}, "act": {"$var": "act"}, "gated": true}}]}, "layer": true},
+    {"name": "families", "value": ["C3", "C4", "C7"]},
+    {"name": "model_type", "value": "qwen3_next"}
+  ]
+}

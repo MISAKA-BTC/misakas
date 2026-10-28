@@ -135,22 +135,19 @@ impl RecoveryRun {
         mode: RecoveryMode,
         premine: &[Funding],
     ) -> Self {
-        if mode == RecoveryMode::NetworkVerifier {
-            // Use already elapsed normal clock slots inside the real near-sync window.
-            // Keep the original native cadence, lead cap, deadline and admission checks.
-            let threshold = chain.config.expected_difficulty_window_duration_in_milliseconds() / 4;
-            let margin = 2 * kaspa_consensus_core::palw_heartbeat_v1::HEARTBEAT_RECOVERY_INTERVAL_MS;
-            assert!(threshold > margin, "the native near-sync history must leave elapsed protocol slots");
-            chain.time = kaspa_core::time::unix_now().saturating_sub(threshold - margin);
-            chain.heartbeat(vec![]).await;
-            assert!(matches!(
-                chain
-                    .view(kaspa_consensus_core::palw_freeprompt_v3::fp_claim_id_v3(
+        if matches!(mode, RecoveryMode::Network | RecoveryMode::NetworkVerifier) {
+            assert!(kaspa_core::time::test_clock::active(), "socket scenarios require their isolated simulated calendar");
+            chain.natural_heartbeat_stamps = true;
+            // Both nodes observe the same calendar. The ordinary near-sync
+            // predicate still runs; no history, slot or lead-cap rule is waived.
+            if mode == RecoveryMode::NetworkVerifier {
+                chain.heartbeat(vec![]).await;
+                assert!(matches!(
+                    chain.view(kaspa_consensus_core::palw_freeprompt_v3::fp_claim_id_v3(
                         &foreign.expect("FP network fixture").2.as_ref().unwrap().0
-                    ))
-                    .phase,
-                PalwClaimPhaseV2::ReceiptLicensed { .. }
-            ));
+                    )).phase, PalwClaimPhaseV2::ReceiptLicensed { .. }
+                ));
+            }
         }
         let directory = tempfile::tempdir().unwrap();
         let mut producer_config = panel_config(chain, directory.path(), chain.bonds[0], funding);
@@ -299,6 +296,14 @@ impl RecoveryRun {
         let reservation = view.record.as_ref().unwrap().live.get(&self.verifier_bond).unwrap();
         assert_eq!(requests[0].session_number, reservation.sessions_opened.checked_add(1).unwrap());
         self.pruned_numbered_before = Some((reservation.sessions_opened, reservation.reserved_daa));
+    }
+
+    pub(super) fn socket_transport(&self) -> bool {
+        matches!(self.mode, RecoveryMode::Network | RecoveryMode::NetworkVerifier)
+    }
+
+    pub(super) fn receiver_verifier(&self) -> bool {
+        self.mode == RecoveryMode::NetworkVerifier
     }
 
     pub(super) fn verifier_paused(&self) -> bool {

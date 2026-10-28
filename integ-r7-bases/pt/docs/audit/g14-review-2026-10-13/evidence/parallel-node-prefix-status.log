@@ -1,0 +1,8 @@
+
+running 3 tests
+test palw_panel::public_prefix::tests::responder_uses_accepted_literal_slot_and_original_leaf_across_restart ... ok
+test palw_panel::public_prefix::owned_pages::tests::public_owner_pages_select_only_accepted_roots_across_restart_and_reorg ... ok
+test palw_panel::public_prefix::owned_pages::tests::lost_page_acceleration_is_rebuilt_from_public_transition_outputs_not_backup_state ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 717 filtered out; finished in 0.22s
+

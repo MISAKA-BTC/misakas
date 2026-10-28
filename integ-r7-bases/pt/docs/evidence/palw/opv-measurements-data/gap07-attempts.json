@@ -1,0 +1,27 @@
+[
+ {
+  "positions": 64,
+  "class": "qwen25-0.5b",
+  "claim": "late",
+  "date": "2026-10-10",
+  "what": "the gate's evaluation point (--positions 4,64): the producer's world and then one fresh outsider verifier",
+  "world_built": {
+   "kind": "measured",
+   "producer_honest_trace_cpu_s": 486.3,
+   "producer_honest_commitments_cpu_s": 68.0,
+   "param_commitments_cpu_s": 14.7,
+   "build_world_peak_rss_bytes": 15600484352,
+   "claim_public_material_bytes": 3879431872,
+   "public_material_bytes_per_position": 60616123,
+   "chain_bytes": 27050160,
+   "demanded_position_respond_object_bytes": 59444957,
+   "src": "build-world --prompt 64 --max-positions 64 --claims late (results4/p64-world-record.jsonl)"
+  },
+  "verifier": {
+   "kind": "measured",
+   "outcome": "STOPPED, no verdict and no timing sample: the harness watchdog ended the process when its peak RSS passed the 14 GiB cap I set to protect the shared host (peak RSS 15,099,871,232 B, cap 15,032,385,536 B, exit 86), about 3 minutes into the check",
+   "consequence": "the reference verifier needs more than 15.1 GB of RAM for a 64-position claim of the 0.5B class (10.4 GB at P <= 16); the deadline at P=64 is therefore NOT measured, only fitted (D)",
+   "src": "verify --claim late --rss-cap-gb 14 (matrix3.sh, 2026-10-10 06:36-06:39)"
+  }
+ }
+]

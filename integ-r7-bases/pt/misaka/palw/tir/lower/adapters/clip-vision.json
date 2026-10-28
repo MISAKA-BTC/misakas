@@ -1,0 +1,30 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "clip-vision",
+  "kind": "vision",
+  "doc": "CLIP's vision tower (CLIPVisionModel, CLIPVisionModelWithProjection): non-overlapping patch convolution as a matmul over the integer-normalised pixels, a class embedding, learned positions, pre_layrnorm, pre-LN layers (layer_norm1/2, a quick_gelu MLP), post_layernorm on the class row and, for the projection class, visual_projection. The data form of the CLIP arm of parse_vision_rust (its oracle). Features: VISION_FROM_SPEC_V1.",
+  "match": {"architectures": ["CLIPVisionModel", "CLIPVisionModelWithProjection"], "model_types": ["clip_vision_model"]},
+  "config": {"defaults": {"hidden_size": 768, "num_hidden_layers": 12, "image_size": 224, "patch_size": 32, "num_attention_heads": 12, "intermediate_size": 3072, "hidden_act": "quick_gelu", "layer_norm_eps": 1e-05, "projection_dim": 512}, "inert": ["attention_dropout", "initializer_range", "initializer_factor", "num_channels", "projection_dim"]},
+  "vars": [
+    {"name": "d", "value": {"$cfg": "hidden_size"}},
+    {"name": "layers", "value": {"$cfg": "num_hidden_layers"}},
+    {"name": "image", "value": {"$cfg": "image_size"}},
+    {"name": "proj", "value": {"$if": [{"$eq": [{"$var": "arch"}, "CLIPVisionModelWithProjection"]}, {"$cfg": "projection_dim"}, null]}},
+    {"name": "p", "value": "vision_model."}
+  ],
+  "spec": {
+    "architecture": {"$var": "arch"},
+    "h": {"$var": "image"}, "w": {"$var": "image"}, "downscale": 1,
+    "patch": {"$cfg": "patch_size"}, "temporal": 1, "merge": 1,
+    "mean": [0.48145466, 0.4578275, 0.40821073], "std": [0.26862954, 0.26130258, 0.27577711],
+    "d": {"$var": "d"}, "heads": {"$cfg": "num_attention_heads"}, "inter": {"$cfg": "intermediate_size"},
+    "layers": {"$var": "layers"}, "run": {"$var": "layers"},
+    "act": {"$act": {"$cfg": "hidden_act"}}, "swiglu": false, "rms": false, "eps": {"$cfg": "layer_norm_eps"},
+    "pre_norm": true, "cls": true, "patch_bias": false, "learned_pos": true, "rope_theta": null, "window": null,
+    "out": {"ClipPooled": {"proj": {"$var": "proj"}}},
+    "names": {"$merge": [
+      {"patch.w": "vision_model.embeddings.patch_embedding.weight", "cls": "vision_model.embeddings.class_embedding", "pos": "vision_model.embeddings.position_embedding.weight", "pre_norm": "vision_model.pre_layrnorm", "post_norm": "vision_model.post_layernorm", "norm1": "vision_model.encoder.layers.{L}.layer_norm1", "norm2": "vision_model.encoder.layers.{L}.layer_norm2", "attn.q": "vision_model.encoder.layers.{L}.self_attn.q_proj", "attn.k": "vision_model.encoder.layers.{L}.self_attn.k_proj", "attn.v": "vision_model.encoder.layers.{L}.self_attn.v_proj", "attn.o": "vision_model.encoder.layers.{L}.self_attn.out_proj", "mlp.up": "vision_model.encoder.layers.{L}.mlp.fc1", "mlp.down": "vision_model.encoder.layers.{L}.mlp.fc2"},
+      {"$if": [{"$ne": [{"$var": "proj"}, null]}, {"proj": "visual_projection"}, {}]}
+    ]}
+  }
+}

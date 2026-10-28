@@ -1,0 +1,25 @@
+{
+  "kind": "prepared isolated public-devnet run",
+  "ports": [
+    33100,
+    33101,
+    33102,
+    33103,
+    33200,
+    33201,
+    33202,
+    33203,
+    33300,
+    33400
+  ],
+  "binaries": {
+    "kaspad": "/private/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/g14-payload-tools-_orh6nbi/kaspad",
+    "cli": "/private/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/g14-payload-tools-_orh6nbi/misaka",
+    "sender": "/private/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/g14-payload-tools-_orh6nbi/rothschild"
+  },
+  "lane": "0,2,10",
+  "nodes": 4,
+  "funding_msk": 1000,
+  "measurement_count": 600,
+  "will_start": false
+}

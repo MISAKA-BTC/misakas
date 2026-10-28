@@ -1,0 +1,17 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "qwen2-seqcls",
+  "doc": "Qwen2ForSequenceClassification: the `qwen2` adapter's decoder with a sequence-classification head instead of the language-model head (mixin-seqcls): the last prompt token's final-norm row through `score` to `num_labels` logits.",
+  "extends": [
+    "qwen2",
+    "mixin-seqcls"
+  ],
+  "match": {
+    "architectures": [
+      "Qwen2ForSequenceClassification"
+    ],
+    "model_types": [
+      "qwen2"
+    ]
+  }
+}

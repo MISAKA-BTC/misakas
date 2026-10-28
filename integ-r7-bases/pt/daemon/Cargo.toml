@@ -1,0 +1,36 @@
+[package]
+name = "kaspa-daemon"
+description = "Utilities for running Kaspa node and tools as a child processes"
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+# kaspa-pq PQ-only (ADR-0019 §14): pass `legacy-secp256k1` through to wallet-core
+# so the wallet daemon links secp256k1 only when the classical wallet is requested.
+legacy-secp256k1 = ["kaspa-wallet-core/legacy-secp256k1"]
+
+[dependencies]
+async-trait.workspace = true
+borsh.workspace = true
+cfg-if.workspace = true
+downcast-rs.workspace = true
+futures.workspace = true
+kaspa-addresses.workspace = true
+kaspa-consensus-core.workspace = true
+kaspa-wallet-core.workspace = true
+nw-sys.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+workflow-core.workspace = true
+workflow-log.workspace = true
+workflow-node.workspace = true
+workflow-nw.workspace = true
+workflow-store.workspace = true
+
+[lints]
+workspace = true

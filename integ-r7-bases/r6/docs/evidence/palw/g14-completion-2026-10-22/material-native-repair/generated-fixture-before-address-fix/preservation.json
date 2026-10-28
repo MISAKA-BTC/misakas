@@ -1,0 +1,35 @@
+{
+  "note": "Previous generated fixture preserved before native-address repair. Original verification logs/hashes remain unchanged.",
+  "files": [
+    {
+      "original_path": "consensus/tests/fixtures/g14-funded-original-native/params.borsh",
+      "preserved_path": "docs/evidence/palw/g14-completion-2026-10-22/material-native-repair/generated-fixture-before-address-fix/params.borsh",
+      "bytes": 182,
+      "sha256": "d2b776db669c865dee02da736e89d07a1922cafbdb25d50487e96d546503a0f7"
+    },
+    {
+      "original_path": "consensus/tests/fixtures/g14-funded-original-native/state.borsh",
+      "preserved_path": "docs/evidence/palw/g14-completion-2026-10-22/material-native-repair/generated-fixture-before-address-fix/state.borsh",
+      "bytes": 5317,
+      "sha256": "547d75c71f84afd10b0fcd0aca4310d4654afb484f38acf084f8e0facf10e7fb"
+    },
+    {
+      "original_path": "consensus/tests/fixtures/g14-funded-original-native/PROVENANCE.txt",
+      "preserved_path": "docs/evidence/palw/g14-completion-2026-10-22/material-native-repair/generated-fixture-before-address-fix/PROVENANCE.txt",
+      "bytes": 527,
+      "sha256": "055cffa41c22a68fa4bb986ca1d42430dceb23d8ffc08a239c4ae0aff5aeeef5"
+    },
+    {
+      "original_path": "consensus/tests/fixtures/g14-funded-original-native/accepting-daa.txt",
+      "preserved_path": "docs/evidence/palw/g14-completion-2026-10-22/material-native-repair/generated-fixture-before-address-fix/accepting-daa.txt",
+      "bytes": 3,
+      "sha256": "ad57366865126e55649ecb23ae1d48887544976efea46a48eb5d85a6eeb4d306"
+    },
+    {
+      "original_path": "consensus/tests/fixtures/g14-funded-original-native/original.tfp1",
+      "preserved_path": "docs/evidence/palw/g14-completion-2026-10-22/material-native-repair/generated-fixture-before-address-fix/original.tfp1",
+      "bytes": 14228,
+      "sha256": "03a17c9e9335f352bf1047bb9aa15e1bcdff8543900551060b7f15df5084b649"
+    }
+  ]
+}

@@ -1,0 +1,27 @@
+
+running 15 tests
+test pipeline::virtual_processor::tests::t46_false_valid_real_claim::t47_model_class_attribution::t47_p0a_gdn_key_heads::p0a_e2_on_testnet_12_c5_refuses_every_held_hybrid_past_the_fence ... ok
+test pipeline::virtual_processor::tests::t46_false_valid_real_claim::t47_model_class_attribution::t47_p0a_gdn_key_heads::p0a_e1_a_key_head_class_is_refused_below_the_fence_and_admitted_past_it ... ok
+test pipeline::virtual_processor::tests::t46_false_valid_real_claim::t47_model_class_attribution::t18u_a_windowed_kind3_below_the_batch_fence_is_the_bases_junk ... ok
+test pipeline::virtual_processor::tests::t46_false_valid_real_claim::t47_model_class_attribution::t47b_the_model_output_rule_convicts_by_claim ... ok
+test pipeline::virtual_processor::tests::t46_false_valid_real_claim::t47_model_class_attribution::t47a_the_model_relabel_is_refuted_by_j5b ... ok
+same-claim carrier transient mass: 357140 / 500000
+standalone acceptance work: PalwPromptRootWorkV2 { recomputed_roots: 1, recomputed_prompt_ids: 262143, block_cache_hits: 9, block_uncached_roots: 0, outside_block_calls: 0 }
+standalone final fold work: PalwPromptRootWorkV2 { recomputed_roots: 1, recomputed_prompt_ids: 262143, block_cache_hits: 1, block_uncached_roots: 0, outside_block_calls: 0 }
+joint block work after process-cache eviction: PalwPromptRootWorkV2 { recomputed_roots: 1, recomputed_prompt_ids: 262143, block_cache_hits: 11, block_uncached_roots: 0, outside_block_calls: 0 }
+standalone acceptance work: PalwPromptRootWorkV2 { recomputed_roots: 1, recomputed_prompt_ids: 262143, block_cache_hits: 9, block_uncached_roots: 0, outside_block_calls: 0 }
+standalone final fold work: PalwPromptRootWorkV2 { recomputed_roots: 1, recomputed_prompt_ids: 262143, block_cache_hits: 1, block_uncached_roots: 0, outside_block_calls: 0 }
+test pipeline::virtual_processor::tests::t46_false_valid_real_claim::t47_model_class_attribution::t18u_a_block_recomputes_one_whole_2m_prompt ... ok
+joint block work after process-cache eviction: PalwPromptRootWorkV2 { recomputed_roots: 1, recomputed_prompt_ids: 262143, block_cache_hits: 11, block_uncached_roots: 0, outside_block_calls: 0 }
+test pipeline::virtual_processor::tests::t46_false_valid_real_claim::t47_model_class_attribution::t18u_process_cache_eviction_cannot_recompute_a_blocks_paid_prompt ... ok
+test pipeline::virtual_processor::tests::t46_false_valid_real_claim::t47_model_class_attribution::t18u_holding_the_heavy_slot_costs_what_it_consumes ... ok
+test pipeline::virtual_processor::tests::t46_false_valid_real_claim::t47_model_class_attribution::t47f_a_prompt_fault_convicts_every_valid_signer ... ok
+test pipeline::virtual_processor::tests::t46_false_valid_real_claim::t47_model_class_attribution::t47e_the_2m_relabel_is_refuted_by_prompt_not_anchored ... ok
+test pipeline::virtual_processor::tests::t46_false_valid_real_claim::t47_model_class_attribution::t47d_a_models_logits_and_tokens_are_refuted_by_root ... ok
+test pipeline::virtual_processor::tests::t46_false_valid_real_claim::t47_model_class_attribution::t47c_the_moved_legs_and_the_non_formula_contexts_are_refuted ... ok
+test pipeline::virtual_processor::tests::t46_false_valid_real_claim::t47_model_class_attribution::t47_p0a_gdn_key_heads::p0a_e3_the_v3_class_is_produced_disputed_and_closed ... ok
+test pipeline::virtual_processor::tests::t46_false_valid_real_claim::t47_model_class_attribution::t18m_forged_output_tiled::t18m_forged_output_tiled_after_final_reverses_it_by_kind_3_and_by_kind_4 ... ok
+test pipeline::virtual_processor::tests::t46_false_valid_real_claim::t47_model_class_attribution::t18m_forged_output_tiled::t18m_forged_output_tiled_convicts_the_full_mask_signer_before_final_and_never_an_honest_decode ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 828 filtered out; finished in 3.27s
+

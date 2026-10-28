@@ -1,0 +1,282 @@
+{
+  "date": "2026-10-20",
+  "status": "Proposed / Review Required",
+  "original_input_zip_sha256": "8f22b553a054a13ec432f96df4e4aed6928800d449f14fd657bec0f2f5c8b4bc",
+  "files": [
+    {
+      "path": "PATCH_APPLY_CHECK.json",
+      "bytes": 1343,
+      "sha256": "75e4452aac5c3d77eec892da2f3f5a93e09db385340b3713cb0e4d5217aabf38"
+    },
+    {
+      "path": "README_JA.md",
+      "bytes": 5533,
+      "sha256": "3ff17347553583103a8286205eaa5445e10b5ec5ef13d9eeb6091454f0a1fd84"
+    },
+    {
+      "path": "RFC-0027_ADR-0193.measurements-only.from-v1.patch",
+      "bytes": 620901,
+      "sha256": "3679a6369e8f932a6c0224ab5c378f1edb90bbcb23507cf59b9bbfbf6a9e7654"
+    },
+    {
+      "path": "RFC-0027_ADR-0193.with-measurements.from-original.patch",
+      "bytes": 733271,
+      "sha256": "9e0e863f55c2b401713dca71e7d353da1afce4e562c2280be9891068927336f0"
+    },
+    {
+      "path": "docs/adr/0193-miner-account-bond-for-panel-incentives.md",
+      "bytes": 17560,
+      "sha256": "1954c6a83447c6dfdc4474536938e2e718c82303750b4bbf23c743c3bcbeae60"
+    },
+    {
+      "path": "docs/adr/INDEX.md",
+      "bytes": 31983,
+      "sha256": "b6d1cd52f0363a51b8715d70058c7bb9e69921e0887e00562428ac703754a882"
+    },
+    {
+      "path": "docs/adr/TOPICS.md",
+      "bytes": 26220,
+      "sha256": "1e3f2d8080da00f09392de922bfef21bb2a2ac936a7015d1ce29b2e77a661f37"
+    },
+    {
+      "path": "docs/maintenance/catalog.md",
+      "bytes": 95411,
+      "sha256": "aec283ded85c58bcfbc71a13782073d972f1906b3263b367cf174205520d33a4"
+    },
+    {
+      "path": "docs/maintenance/decision-catalog.json",
+      "bytes": 69715,
+      "sha256": "0373a1a63a72234d3b1b2ef22f726438ab8cbe24acb008e8527a3a1109586944"
+    },
+    {
+      "path": "docs/maintenance/generate_indexes.py",
+      "bytes": 4631,
+      "sha256": "2b67b79c1037728caa871e6a7647b493b485a44b7aaf4cf82631b29f69ce8bb5"
+    },
+    {
+      "path": "docs/maintenance/number-registry.json",
+      "bytes": 1475,
+      "sha256": "7a7e269976afcdcb68138387c4288efb0f7439310cd44ca38da48045f6d8c047"
+    },
+    {
+      "path": "docs/maintenance/numbering.md",
+      "bytes": 2086,
+      "sha256": "d379cd1ad43c09093dd97b9e193a2efa8008cd18afecf58f1fbfab7dd1eeb8e7"
+    },
+    {
+      "path": "docs/rfc/0027-assets/README.md",
+      "bytes": 1216,
+      "sha256": "7ac7296896fe33c47f96ce8be4623f893f6e2bb4dbf28915daf20b99017f585b"
+    },
+    {
+      "path": "docs/rfc/0027-assets/docs-after.json",
+      "bytes": 1466,
+      "sha256": "75773f8e2dc4914ed5bd61016e970688177865e8fdcade815209d9185c7c4a5b"
+    },
+    {
+      "path": "docs/rfc/0027-assets/docs-after.log",
+      "bytes": 1237,
+      "sha256": "7ad4309dc6f3a4e25493e02183f4ae83a256fbb0b6bb5d2133e231f79543cf54"
+    },
+    {
+      "path": "docs/rfc/0027-assets/docs-before.json",
+      "bytes": 1517,
+      "sha256": "b8d87829a406e1fa0d1069182c845591028897ebbefe89194686afa9cf057d84"
+    },
+    {
+      "path": "docs/rfc/0027-assets/docs-before.log",
+      "bytes": 1283,
+      "sha256": "c6dec3844c2d430adc487df1aa58344611e303be95041786a7e3270e17e4af8f"
+    },
+    {
+      "path": "docs/rfc/0027-assets/economic-examples.md",
+      "bytes": 4988,
+      "sha256": "0c9cb12cf441bf21d5af03a170b60ffc60e74f76fad2dbc0119fceb8fbd78da9"
+    },
+    {
+      "path": "docs/rfc/0027-assets/examples-results.json",
+      "bytes": 2531,
+      "sha256": "33f518bc1420602fd33099c8262b56230e6588345ccc184476a054395fc54189"
+    },
+    {
+      "path": "docs/rfc/0027-assets/examples.log",
+      "bytes": 1837,
+      "sha256": "ffbc380a49d93bd64ed6b31efa81d08d7645620af233d5c22e81584893586b8b"
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/docs-update-check.json",
+      "bytes": 1466,
+      "sha256": "abaa4551594a348df730af413a1186deac8b97e1d6c305c1e69bf301fdca92f4"
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/docs-update-check.log",
+      "bytes": 1237,
+      "sha256": "c7c135f9f0f0bb914b502b7b19262489f97285d9a3e75f0db547b001c85f83cb"
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/index-generation.log",
+      "bytes": 41,
+      "sha256": "053942a4b2aab8a62db9e3086403d3066dcb35a680f190d1ae683a4876c84b5f"
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/measure.py",
+      "bytes": 25209,
+      "sha256": "69b49ef76e69f03501307f8083ca89f9d6b9c9b403989a844dcbaebcd7247149"
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/measurement-report.md",
+      "bytes": 22334,
+      "sha256": "0cbf7757e642773e897abd721a673a2ed17cb2e88f1ba25252cd8e32e7a4582c"
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/plan.json",
+      "bytes": 3261,
+      "sha256": "ae373b9341770b5e670f98c93a7ee79e9937a9753b3da55e35421ba5f595d541"
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/rechecked-examples.json",
+      "bytes": 2531,
+      "sha256": "33f518bc1420602fd33099c8262b56230e6588345ccc184476a054395fc54189"
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/rechecked-examples.log",
+      "bytes": 1837,
+      "sha256": "0a6c119519f304fa92963eaa6a97c69a96c64afaf64739ca38afe33bb053e239"
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/results/archive-claim-summary.json",
+      "bytes": 24285,
+      "sha256": "32e092242f422260cd5caffad48c778eeff3ec4027f2698f35421b89afe0315e"
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/results/archive-panel-samples.json",
+      "bytes": 92677,
+      "sha256": "43af0cd8c1442eb86c53f18f5dad0f347c69d39f87292dd26217046877e23eee"
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/results/archive-panel-summary.json",
+      "bytes": 13369,
+      "sha256": "b27c3fdb8a70b61c86e835075246e8f40a6d472881b01035adfc2198c929fc08"
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/results/capital-envelope.csv",
+      "bytes": 19319,
+      "sha256": "e1562753ac31c93cb214dd8e812f6a3a3c08ff1dc9844f8dff68ad5f4497e0fb"
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/results/environment.json",
+      "bytes": 1302,
+      "sha256": "ca31d1003877677df647d150eb4271af0f158f7b2f8c2ef8da2aeaa2698bb084"
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/results/panel-cost-sensitivity.csv",
+      "bytes": 26923,
+      "sha256": "a55b1bfce120b74d1b7be3700b8e143bef52826b8bfdf1dabd3c92b03dec7eb2"
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/results/reaggregation-checks.json",
+      "bytes": 129743,
+      "sha256": "d857423789d7ba87f12d42536340efbe45e019b2488fd93c020b6b6f4778a5b2"
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/results/source-manifest.json",
+      "bytes": 5500,
+      "sha256": "58175596d87d2e96f9b38f639b38343a09f6d25a14bc599ac126d57862af8165"
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/results/summary.json",
+      "bytes": 1094,
+      "sha256": "fd756e8b9ad7451e2126751510d36b015ded594f158a57d316a76c04f6351826"
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/results/synthetic-admission.csv",
+      "bytes": 116554,
+      "sha256": "9b02020eb0de899e502d186b71b0621f3177ec906c5768f90db154782cb00ef4"
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/results/synthetic-special-cases.json",
+      "bytes": 2285,
+      "sha256": "72643034e87981c628bbb5a3501f1b9cae5359669c6e4dbb87276c5c7b814dfc"
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/results/trace-shadow.csv",
+      "bytes": 76510,
+      "sha256": "f6b9436a7b1c36dc55184cdbfa5960774b989b16730b1bb0656ba1845a6eb84b"
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/run-initial-failed.log",
+      "bytes": 1035,
+      "sha256": "018c65f80b4bb678becea8033bfa406749bb620a1ee5eea4284c93d59227dba3"
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/run.log",
+      "bytes": 1094,
+      "sha256": "c47a7541b39cb0445768abdce2502ff1513938c37fb69400c67fc89874e822cc"
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/stage1-collector-selftest.log",
+      "bytes": 13,
+      "sha256": "55f9eb6f9a3591a0892d6a747ebe24a4b8ecc880425670426bc02ecd5c3e6dce"
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/test_measure.py",
+      "bytes": 8060,
+      "sha256": "7cce9a21f204b658a0a1e7088f260bcb051cdcbc15886506943e3e6082be8790"
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/tests.log",
+      "bytes": 3154,
+      "sha256": "e6f77c5ae3d6ba27f277cd8160bfceb2f676c5fa3d6cb7670441326f54d3ca7a"
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/validation-update.json",
+      "bytes": 2672,
+      "sha256": "42f09f1add1075f14cb425f17774673f416eef7e3f689c2903e62d39b8357860"
+    },
+    {
+      "path": "docs/rfc/0027-assets/reproduce_examples.py",
+      "bytes": 11726,
+      "sha256": "a7a8e01c86b55b2c64b1b49d2fcafd112481810f09effb8aec9d7878349ee0b7"
+    },
+    {
+      "path": "docs/rfc/0027-assets/source-manifest.json",
+      "bytes": 6378,
+      "sha256": "5007a8a727deb41ac3e804f167ed0fc0852f89d7505c7b67aab7784c8502be9f"
+    },
+    {
+      "path": "docs/rfc/0027-assets/source-review.md",
+      "bytes": 5950,
+      "sha256": "5565035de6ee9ebac724041d149341731c03abe046881310f5a57e5147bf5f3d"
+    },
+    {
+      "path": "docs/rfc/0027-assets/validation-results.json",
+      "bytes": 698,
+      "sha256": "ba02d738c5add43e0f1b8f7102c4b9ba68afd81f53ad634a5102bd4d30f3779b"
+    },
+    {
+      "path": "docs/rfc/0027-assets/validation.md",
+      "bytes": 5239,
+      "sha256": "0bcb6b1318a4219a2d727de0ccf639d9576e57562b4db1cb8823363420972ac4"
+    },
+    {
+      "path": "docs/rfc/0027-miner-account-bond-and-panel-incentives.md",
+      "bytes": 49014,
+      "sha256": "337747d946ea2685c2920767eb9c552705fc38f42f2e299139808470ab582053"
+    },
+    {
+      "path": "docs/rfc/INDEX.md",
+      "bytes": 5629,
+      "sha256": "268de767982e702997b3a8c02e40d5f5046e3a3fbb7485d97e9fd7923d514a71"
+    },
+    {
+      "path": "docs/rfc/TOPICS.md",
+      "bytes": 4630,
+      "sha256": "65f35c582d81e5ec8382bf2575aeb8e072880de8a943c7b4c479416f077798e4"
+    }
+  ],
+  "manifest_self_excluded": true,
+  "combined_document_files": 50,
+  "incremental_document_files": 31,
+  "native_node_test_completed": false,
+  "activation": false
+}

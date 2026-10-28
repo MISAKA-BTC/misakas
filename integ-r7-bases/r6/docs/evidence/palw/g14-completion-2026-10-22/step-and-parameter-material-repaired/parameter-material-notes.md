@@ -1,0 +1,39 @@
+# Canonical root parameter requirements -> actual authenticated Store
+
+Read-only /tmp candidate during build45921, repo/cargo/RPC untouched. `parameter-material.patch` is UNBUILT and applies to current source; it is not accepted native original installation.
+
+## Minimal real path
+Existing `SharedTirBuilderStore::new_with_prompt` already resolves retained context/source, requires unique ascending parameter leaf IDs, and runs ONE actual `with_parameter_verifier` over every opening. That verifier derives inventory from actual registered program and checks leaf_count, exact inventory operand (name/layer/offset/length) and existing artifact-root authentication. Existing `param_opening(leaf)` getter looks up that authenticated slice and clones only when existing builder requests evidence.
+
+Candidate adds (a) an internal parameter view with Borrowed slice OR slice of `NativeRetained<Opening>` owners, common no-copy constructor/checks/getter; (b) root-specific presence check; (c) `build_terminal_with_parameter_cover` which performs the existing retained root/ancestor/signature/policy/filled-binding checks and, immediately BEFORE `build_tir_dissect_bottom_bounded`, rejects absent required parameter leaf for that EXACT root.
+
+It does NOT accept a caller-made `OriginalParameterCoverV1` as canonical completeness: that DTO has public fields. The covered entry borrows `NativeRetained<OriginalRootInputCoverV1>`, whose outer fields/constructor are private, no Deserialize/Clone, produced by actual source-bound native tracked Walk. Its canonical parameters are accessed immutably. Caller local budget exhaustion never returns a partial cover, and remains typed Resource before this predicate. Identity requires same actual Store source_id. Requested root must be present even when its legitimate parameter list is empty; union presence alone is never used. Target root's exact required list is matched to actual verified leaf IDs by no-allocation binary lookup. Extra correctly authenticated params are permitted, never taken as a paid reservation.
+
+The legacy pure helper `build_terminal` retains old behavior through a shared internal implementation with None. The new stronger private entry is for the subsequent coordinator; it is not a new accepting/paid flag and does not silently change legacy signature/wire/clock/fee behavior. Both paths still use current actual signed intent and native rules. No helper result is a custody/supply/financial/complete capability.
+
+## Physical ownership boundary
+`context.decode_parameter_opening(state,scope,leaf,rawbytes)` currently delegates actual verifier.decode: exact native coordinate Borsh width checked, NativeWire preflight, nested allocation reserve BEFORE borsh allocation, native inventory/root check, returned NativeRetained payload. Existing String API flattens resource errors to String; this candidate does not relabel those as semantic authority or claim fully typed decode. A later native coordinator should preserve typed decoder refusal separately before admitting.
+
+Do NOT collect `.deref().clone()` into bare Vec<Opening> merely to satisfy old Store slice. Candidate's retained constructor borrows `&[NativeRetained<Opening>]` directly; payload ticket remains with each actual decoded opening for Store and builder call lifetime. Outer owner Vec capacity itself must be pre-reserved and retained separately before collection. Incoming raw carrier buffers must have their OWN existing read/receive reservation and remain live through decode; decoded opening ticket does not cover rawbytes. Raw and decoded payload coexist transiently. Program/index Source reconstruction has existing separate preflight/admission obligations.
+
+The evidence-store getter still returns an owned opening clone because existing native builder trait requires it. Returned bottom/multiproof, clone, canonical replay/finalize workspace and signature/source/ancestor checks need their OWN pre-admission. Source parameter owners do NOT cover cloned evidence merely by staying in scope. This patch intentionally makes no all-allocation-complete or actual funded-success assertion.
+
+## Concrete actual-native test integration location
+Existing `palw_tir_public_fold_v1.rs` actual shared-root/round terminal fixture around lines2999-3085 already creates real retained root/ancestors/signed terminal intents and compares built evidence to actual native builder. It currently provisions only one oracle-observed parameter subset; do NOT use that subset as potential cover.
+
+Add once before its false_partition/path loops:
+1. Native-retained Source from same actual f.record/layout/header and roots.
+2. Actual opaque root-input cover using explicit local TEST exploration budget (no adopted defaults); require nonempty selected-root parameter requirements.
+3. For each canonical required leaf, obtain actual fixture opening as provisioning, encode it as test carrier, call retained context's real decode_parameter_opening; preserve resulting owners in pre-reserved outer Vec (incoming serializer/raw scratch separately admitted or explicitly fixture-only).
+4. Construct new retained Store with SAME real authenticated source units/prompt form.
+5. For actual signed terminal call stronger covered entry; compare bytes to existing expected native bottom. Repeat across real legal paths if practical.
+6. Exclude one required owner via borrowed subslice; Store constructor succeeds for remaining valid openings, then covered entry must fail with `lacks authenticated parameter leaf` BEFORE finalize. Reject wrong artifact bytes/leaf/layer/duplicate via actual verifier/constructor; reject other-source cover; parameter-free roots require root presence and pass empty requirement.
+
+Actual fixture raw opening generation and signatures are not real network acquisition/payment; test names/report must preserve that distinction. No test implementation is included yet; this is the minimum coherent next integration target, not a standalone new public quote. Parent should review the view/API choice before adding the test path.
+
+## Candidate revision: actual test entry connected
+`parameter-material.patch` now includes the existing real shared-root/round terminal fixture integration, rather than leaving only a detached new helper. Once before its legal path loop it derives opaque full native root cover from actual retained Source, provisions EACH canonical required parameter coordinate (not observed honest subset), separately reserves outer owner Vec and serializer scratch, and decodes raw opening through actual retained context.decode_parameter_opening. Owners are borrowed directly by new Store view. For each actual accepted terminal path and both existing false_partition cases it builds through the covered entry and compares exact evidence/meter against the existing builder. Excluding the first required owner keeps remaining material valid but MUST fail with the missing-required leaf guard before finalize. Fixture opening generation remains explicitly test provisioning; not a production raw reader.
+
+Recommended filter: `shared_history_root_binds_public_original_policy_and_literal_producer_signature` (existing actual native root/round/intent/parameter decoder and new covered path). Also existing `root_input_material_store_obeys_actual_retained_flat_and_merkle_forms`, native root parameter/typed budget suites and t12 identity. UNRUN. git apply --check succeeded. Rustfmt --check parsed the temporary candidates without syntax diagnostics (format differences exist; large fold file was NOT globally reformatted).
+
+No new protocol rules/limits/prices, no financial acceptance, no fullclosure. The eventual coordinator MUST choose covered entry after its independent admitted ownership; old compatibility builder is deliberately unchanged and is not a backdoor to any paid capability.

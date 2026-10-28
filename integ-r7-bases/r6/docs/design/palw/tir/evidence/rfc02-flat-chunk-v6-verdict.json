@@ -1,0 +1,170 @@
+{
+  "schema": "misaka.palw.rfc02-flat-protected-chunk-evidence.v6",
+  "date": "2026-10-11",
+  "verdict": "PROTECTED_ACTOR_OWNED_CHUNK_COMPONENT_PASS_FULL_RFC02_INCOMPLETE",
+  "goal_status": "active",
+  "base_commit": "6b6f9dfb12e0374aea86f2405c675dac115a8b66",
+  "branch": "codex/rfc02-review-completion",
+  "scope": "Protected reveal target 3 on existing outer-113 actor-owned chunk lane; offline SDK/CLI carriage; synthetic native court, settlement and independent replay. No full RFC02 acceptance or deployment.",
+  "test_groups": [
+    {
+      "group": "native",
+      "passed": 18,
+      "failed": 0,
+      "test_names": [
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_hash_da_node_fresh_public_reads_localize_late_leaf_and_convict_without_output_values",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_hash_da_node_shared_slots_response_priority_withholding_and_horizon_hold",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_model_vector_node_admits_typed_scope_convicts_leaf_and_whole_once_and_replays_redemption",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_model_vector_node_and_v2_catalogs_share_the_same_capital_and_eight_statement_limit",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_model_vector_node_scope_identity_and_hostile_filings_pay_shared_budgets_without_poisoning",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_v3_node_preemption_counterexample_and_staged_v6_seal_rejects_equivalent_carrier",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_v6_native_mature_proof_uses_reserved_budget_after_admission_flood",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_v6_native_own_sealed_chunks_survive_generic_saturation_and_refuse_borrowed_actors",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_v6_native_seal_blocks_equivalent_preemption_legacy_bypass_and_pays_finder_once",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_v6_native_seals_bound_actor_slots_hold_capital_and_forfeit_expired_false_seals",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::model_vector_catalog_shares_capital_and_keeps_its_bound_after_clocked_release",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::model_vector_da_deadlines_hold_capital_and_responses_survive_a_full_court_budget",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::model_vector_da_public_replies_enable_a_fresh_whole_value_conviction_without_model_disclosure",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::model_vector_new_large_vocab_candidates_have_public_courts_without_a_final_or_execution_rights",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::model_vector_wrong_roots_scope_and_invalid_refutations_cost_only_the_actor",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::scoped_model_complete_check_cannot_be_poisoned_by_an_earlier_false_source_root",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::scoped_model_complete_check_registers_encoder_and_stateful_decoder_without_identity_hooks",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::scoped_model_complete_check_wrong_roles_and_floods_spend_only_attackers_budget"
+      ],
+      "command": "CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target cargo test --locked -p kaspa-consensus --lib g14_kernel_route_e2e::model_conformance -- --nocapture --test-threads=1",
+      "exit_code": 0,
+      "binary": "/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/kaspa_consensus-c0e7e4ea3dbd2fe9",
+      "binary_sha256": "e5ea6528c46cad654788eb07902f9af1af0d6961f2617d30241f127c3db11c91",
+      "log": "rfc02-flat-chunk-v6-native.log",
+      "log_sha256": "96ac2e33107eb87232034b994d762f9ae9d61e3a8fc646765db53d187f18b85a",
+      "raw_log_sha256": "20f4f0d328dfaa928168e24d2925ee886c56f8a00e2cdf71ba67b7af2158f92e"
+    },
+    {
+      "group": "sdk",
+      "passed": 7,
+      "failed": 0,
+      "test_names": [
+        "cli_post_expiry_and_invalid_inputs_write_only_reviewable_carriers",
+        "cli_secret_permissions_no_overwrite_and_checked_reveal_roundtrip",
+        "private_sdk_codec_bounds_counts_and_preserves_exact_carrier",
+        "protected_sdk_chunks_bind_own_mature_seal_and_both_signature_layers",
+        "protected_sdk_post_binds_distinct_identity_and_all_implementation_records",
+        "sdk_reveal_requires_the_same_network_actor_exact_proof_and_mature_unspent_row",
+        "signatures_and_generic_carriage_preserve_network_bond_and_exact_protected_bytes"
+      ],
+      "command": "CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target cargo test --locked -p misaka-palw-sdk --test flat_candidate_v6 -- --nocapture --test-threads=1",
+      "exit_code": 0,
+      "binary": "/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/flat_candidate_v6-e0a451f829e555db",
+      "binary_sha256": "369047aea0edb610180a18bb031f7de17c9934719d997a9f35eab9bf88596a04",
+      "log": "rfc02-flat-chunk-v6-sdk.log",
+      "log_sha256": "a84e1919bf5f861c064374304c45ca4b2a50d82d68732fc7dd4c75e40ff4ee99",
+      "raw_log_sha256": "f1e875da39b4e37b68ffbd45a93757fab7786e22ea50b819605b0543ac6d5e3c"
+    },
+    {
+      "group": "codec",
+      "passed": 2,
+      "failed": 0,
+      "test_names": [
+        "protected_chunk_target_binds_inner_actor_and_bond_prefix_deposits",
+        "protected_flat_v6_codec_identity_and_route_fences_are_separate_from_v3"
+      ],
+      "command": "CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target cargo test --locked -p kaspa-consensus-core --test palw_flat_model_seal_v6 -- --nocapture",
+      "exit_code": 0,
+      "binary": "/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/palw_flat_model_seal_v6-7b9a5e1bb298d69e",
+      "binary_sha256": "f9d52aad89fa6f963326d32bb3ab4d108ba58d5e3eec2a2448de0990d185e1cb",
+      "log": "rfc02-flat-chunk-v6-codec.log",
+      "log_sha256": "19aeb7931c2ac2ac02b7da0acf055b9944f860fbe382029117da4c12648e485f",
+      "raw_log_sha256": "2d0297b4b7fc59de4904cb95df16b35351bd4ca1c8e1c4f76004070122711eba"
+    },
+    {
+      "group": "legacy-owned",
+      "passed": 1,
+      "failed": 0,
+      "test_names": [
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::c4r3::g14_c4r3_eight_junk_chunk_groups_must_not_hold_a_chunked_proof_off_the_chain"
+      ],
+      "command": "/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/kaspa_consensus-c0e7e4ea3dbd2fe9 --exact pipeline::virtual_processor::tests::g14_kernel_route_e2e::c4r3::g14_c4r3_eight_junk_chunk_groups_must_not_hold_a_chunked_proof_off_the_chain --nocapture --test-threads=1",
+      "exit_code": 0,
+      "binary": "/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/kaspa_consensus-c0e7e4ea3dbd2fe9",
+      "binary_sha256": "e5ea6528c46cad654788eb07902f9af1af0d6961f2617d30241f127c3db11c91",
+      "log": "rfc02-flat-chunk-v6-legacy-owned.log",
+      "log_sha256": "5eda0e1547a541f320e82dadd1333970bce0e7d431f56d79b05f761e762a41fe",
+      "raw_log_sha256": "0a776a67bdb6ae5eb8d7ad7c69f7d3f3cd0c4387324e0f497f242bed6916fb61"
+    },
+    {
+      "group": "legacy-generic",
+      "passed": 1,
+      "failed": 0,
+      "test_names": [
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::c4r3::g14_c4r3_control_a_chunked_proof_convicts_when_the_chunk_lane_is_free"
+      ],
+      "command": "/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/kaspa_consensus-c0e7e4ea3dbd2fe9 --exact pipeline::virtual_processor::tests::g14_kernel_route_e2e::c4r3::g14_c4r3_control_a_chunked_proof_convicts_when_the_chunk_lane_is_free --nocapture --test-threads=1",
+      "exit_code": 0,
+      "binary": "/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/kaspa_consensus-c0e7e4ea3dbd2fe9",
+      "binary_sha256": "e5ea6528c46cad654788eb07902f9af1af0d6961f2617d30241f127c3db11c91",
+      "log": "rfc02-flat-chunk-v6-legacy-generic.log",
+      "log_sha256": "57082d1a40f920d50a63699030ab7a9273c4751b5b6f931433fee7eb2424b70b",
+      "raw_log_sha256": "690d0a3f66bfb274cf1a63c40b4e95aec75207d4534c32521f0789ee58dc7d78"
+    }
+  ],
+  "distinct_selected_passing_tests": 29,
+  "new_tests": 3,
+  "checks": {
+    "check": {
+      "command": "CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target cargo check --locked -p kaspa-consensus-core -p misaka-palw-sdk --lib --bin palw-class",
+      "exit_code": 0,
+      "log": "rfc02-flat-chunk-v6-check.log",
+      "log_sha256": "b59d25fe5678090cdd01aedf3e7fc696d67ef9dc73207f28839dd565c3f55558",
+      "raw_log_sha256": "b59d25fe5678090cdd01aedf3e7fc696d67ef9dc73207f28839dd565c3f55558"
+    },
+    "formatting": {
+      "command": "rustfmt --edition 2024 --check --config skip_children=true,reorder_modules=false consensus/core/src/palw_kernel_route_fold_v1.rs consensus/core/src/palw_kernel_route_v1.rs consensus/core/tests/palw_flat_model_seal_v6.rs consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/model_conformance.rs misaka-palw-sdk/src/flat_candidate_v6.rs misaka-palw-sdk/src/flat_candidate_v6/cli.rs misaka-palw-sdk/tests/flat_candidate_v6.rs",
+      "exit_code": 0,
+      "log": "rfc02-flat-chunk-v6-fmt.log",
+      "log_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+      "raw_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "diff_check_exit_code": 0
+  },
+  "prior_unchanged_evidence": {
+    "verdict": "rfc02-protected-native-v6-verdict.json",
+    "kernel_passed": 153,
+    "kernel_ignored_hardware_benchmark": 1,
+    "kernel_rerun": false,
+    "cumulative_distinct_component_passes_with_updated_native_sdk_codec_and_legacy": 182
+  },
+  "source_sha256": {
+    "consensus/core/src/palw_kernel_route_fold_v1.rs": "1ea04394fa59d8eb11bb810afe5faf05eac20b7def2f7c042ce08b2788d273ac",
+    "consensus/core/src/palw_kernel_route_v1.rs": "d1cd9cd91fdff65d78148c10b1fe4c69981a50613be8a68ae58d29aee89983a9",
+    "consensus/core/tests/palw_flat_model_seal_v6.rs": "9b2562999a20ad117280e194d0fb719a7756726b594a4aac5bfb9eab8620226f",
+    "consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/model_conformance.rs": "920dbd77f8e393f6eb10c0a674796bdffbb998f861dd567caf21a719e1eeae6e",
+    "misaka-palw-sdk/src/flat_candidate_v6.rs": "cb061ce26a5c64c1582201a3d2400119f71a84b5a6c041686926d70bbee4ca27",
+    "misaka-palw-sdk/src/flat_candidate_v6/cli.rs": "2f5cfd454dfca4c5eda2bed8babafca2ec9efcc533dd1c22f2a55081968313e5",
+    "misaka-palw-sdk/tests/flat_candidate_v6.rs": "71d80501234231f401e00308d0ec2f2c595b23adb5612dd8bee588c781d12d33"
+  },
+  "build_provenance": {
+    "rustc": "rustc 1.93.0 (254b59607 2026-01-19)",
+    "cargo_locked": true,
+    "profile": "Ordinary unoptimized dev/test + debuginfo",
+    "CARGO_INCREMENTAL": "0: compiler caching only",
+    "target_dir": "/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target",
+    "other_worktree_source_modified": false,
+    "cache_cleanup": "Only generated rcgu.o intermediates whose linked rlib/test binary existed; sources, evidence and linked binaries retained.",
+    "runtime_stack_arithmetic_network_overrides": false,
+    "warnings": "Existing consensus/TIR/lowerer/SDK warnings."
+  },
+  "development_failures_excluded": [
+    "Initial native fixture missed an explicit generic-slot constant import and used obsolete replay helper names; fixed.",
+    "Intermediate passing trials preceded fixed-header expiry scanning and completing-part plus terminal-court work/run capacity checks; excluded."
+  ],
+  "limitations": [
+    "Synthetic valid court proof is forced into multiple 1-KiB parts; this is not a real checkpoint or actual carrier-sized large-proof performance test.",
+    "The shared generic eight-slot table is saturated in the trial; whole-network mature-invalid-proof/seal flooding and honest inclusion/deadline acceptance remain open.",
+    "Per-bond capital and slots inspect exact bond prefixes and fixed headers; closing still globally scans fixed chunk rows and needs aggregate resource bounds.",
+    "Opening/continuing refuses an insufficient completing-part plus native reveal work envelope and fewer than two guaranteed runs; candidate admission alone does not grant chunk capability.",
+    "Stored malformed-group drop/rehearsal behavior remains; not every malformed chunk fold persists the metadata debit.",
+    "Supplied offline row/height files remain UNVERIFIED_REMOTE_STATE until locally authenticated. Public acquisition/snapshot discovery and retention remain open.",
+    "Versioned long/sparse/state semantics, full shared resources/economics, actual checkpoint/task/context/fidelity/performance, independent execution Final and A6/A8 remain required.",
+    "Historical v3 stays unsealed; shipping fences stay dormant."
+  ]
+}

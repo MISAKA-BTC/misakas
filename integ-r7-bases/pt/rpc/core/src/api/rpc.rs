@@ -1,0 +1,1588 @@
+//!
+//! The main [`RpcApi`] trait that defines all RPC methods available in the Rusty Kaspa p2p node.
+//!
+//! Rpc = External RPC Service
+//! All data provided by the RPC server can be trusted by the client
+//! No data submitted by the client to the node can be trusted
+//!
+
+use crate::api::connection::DynRpcConnection;
+use crate::{RpcError, RpcResult, model::*, notify::connection::ChannelConnection};
+use async_trait::async_trait;
+use downcast::{AnySync, downcast_sync};
+use kaspa_notify::{listener::ListenerId, scope::Scope, subscription::Command};
+use std::sync::Arc;
+
+pub const MAX_SAFE_WINDOW_SIZE: u32 = 10_000;
+
+/// Client RPC Api
+///
+/// The [`RpcApi`] trait defines RPC calls taking a request message as unique parameter.
+///
+/// For each RPC call a matching readily implemented function taking detailed parameters is also provided.
+#[async_trait]
+pub trait RpcApi: Sync + Send + AnySync {
+    ///
+    async fn ping(&self) -> RpcResult<()> {
+        self.ping_call(None, PingRequest {}).await?;
+        Ok(())
+    }
+    async fn ping_call(&self, connection: Option<&DynRpcConnection>, request: PingRequest) -> RpcResult<PingResponse>;
+
+    // ---
+
+    async fn get_system_info(&self) -> RpcResult<GetSystemInfoResponse> {
+        Ok(self.get_system_info_call(None, GetSystemInfoRequest {}).await?)
+    }
+    async fn get_system_info_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetSystemInfoRequest,
+    ) -> RpcResult<GetSystemInfoResponse>;
+
+    // ---
+
+    async fn get_connections(&self, include_profile_data: bool) -> RpcResult<GetConnectionsResponse> {
+        self.get_connections_call(None, GetConnectionsRequest { include_profile_data }).await
+    }
+    async fn get_connections_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetConnectionsRequest,
+    ) -> RpcResult<GetConnectionsResponse>;
+
+    // ---
+
+    async fn get_metrics(
+        &self,
+        process_metrics: bool,
+        connection_metrics: bool,
+        bandwidth_metrics: bool,
+        consensus_metrics: bool,
+        storage_metrics: bool,
+        custom_metrics: bool,
+    ) -> RpcResult<GetMetricsResponse> {
+        self.get_metrics_call(
+            None,
+            GetMetricsRequest {
+                process_metrics,
+                connection_metrics,
+                bandwidth_metrics,
+                consensus_metrics,
+                storage_metrics,
+                custom_metrics,
+            },
+        )
+        .await
+    }
+    async fn get_metrics_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetMetricsRequest,
+    ) -> RpcResult<GetMetricsResponse>;
+
+    // get_info alternative that carries only version, network_id (full), is_synced, virtual_daa_score
+    // these are the only variables needed to negotiate a wRPC connection (besides the wRPC handshake)
+    async fn get_server_info(&self) -> RpcResult<GetServerInfoResponse> {
+        self.get_server_info_call(None, GetServerInfoRequest {}).await
+    }
+    async fn get_server_info_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetServerInfoRequest,
+    ) -> RpcResult<GetServerInfoResponse>;
+
+    // Get current sync status of the node (should be converted to a notification subscription)
+    async fn get_sync_status(&self) -> RpcResult<bool> {
+        Ok(self.get_sync_status_call(None, GetSyncStatusRequest {}).await?.is_synced)
+    }
+    async fn get_sync_status_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetSyncStatusRequest,
+    ) -> RpcResult<GetSyncStatusResponse>;
+
+    // ---
+
+    /// Requests the network the node is currently running against.
+    async fn get_current_network(&self) -> RpcResult<RpcNetworkType> {
+        Ok(self.get_current_network_call(None, GetCurrentNetworkRequest {}).await?.network)
+    }
+    async fn get_current_network_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetCurrentNetworkRequest,
+    ) -> RpcResult<GetCurrentNetworkResponse>;
+
+    /// Submit a block into the DAG.
+    ///
+    /// Blocks are generally expected to have been generated using the get_block_template call.
+    async fn submit_block(&self, block: RpcRawBlock, allow_non_daa_blocks: bool) -> RpcResult<SubmitBlockResponse> {
+        self.submit_block_call(None, SubmitBlockRequest::new(block, allow_non_daa_blocks)).await
+    }
+    async fn submit_block_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: SubmitBlockRequest,
+    ) -> RpcResult<SubmitBlockResponse>;
+
+    /// Request a current block template.
+    ///
+    /// Callers are expected to solve the block template and submit it using the submit_block call.
+    async fn get_block_template(&self, pay_address: RpcAddress, extra_data: RpcExtraData) -> RpcResult<GetBlockTemplateResponse> {
+        self.get_block_template_call(None, GetBlockTemplateRequest::new(pay_address, extra_data)).await
+    }
+    async fn get_block_template_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetBlockTemplateRequest,
+    ) -> RpcResult<GetBlockTemplateResponse>;
+
+    /// Requests the list of known kaspad addresses in the current network (mainnet, testnet, etc.)
+    async fn get_peer_addresses(&self) -> RpcResult<GetPeerAddressesResponse> {
+        self.get_peer_addresses_call(None, GetPeerAddressesRequest {}).await
+    }
+    async fn get_peer_addresses_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPeerAddressesRequest,
+    ) -> RpcResult<GetPeerAddressesResponse>;
+
+    /// requests the hash of the current virtual's selected parent.
+    async fn get_sink(&self) -> RpcResult<GetSinkResponse> {
+        self.get_sink_call(None, GetSinkRequest {}).await
+    }
+    async fn get_sink_call(&self, connection: Option<&DynRpcConnection>, request: GetSinkRequest) -> RpcResult<GetSinkResponse>;
+
+    /// Requests information about a specific transaction in the mempool.
+    async fn get_mempool_entry(
+        &self,
+        transaction_id: RpcTransactionId,
+        include_orphan_pool: bool,
+        filter_transaction_pool: bool,
+    ) -> RpcResult<RpcMempoolEntry> {
+        Ok(self
+            .get_mempool_entry_call(None, GetMempoolEntryRequest::new(transaction_id, include_orphan_pool, filter_transaction_pool))
+            .await?
+            .mempool_entry)
+    }
+    async fn get_mempool_entry_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetMempoolEntryRequest,
+    ) -> RpcResult<GetMempoolEntryResponse>;
+
+    /// Requests information about all the transactions currently in the mempool.
+    async fn get_mempool_entries(&self, include_orphan_pool: bool, filter_transaction_pool: bool) -> RpcResult<Vec<RpcMempoolEntry>> {
+        Ok(self
+            .get_mempool_entries_call(None, GetMempoolEntriesRequest::new(include_orphan_pool, filter_transaction_pool))
+            .await?
+            .mempool_entries)
+    }
+    async fn get_mempool_entries_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetMempoolEntriesRequest,
+    ) -> RpcResult<GetMempoolEntriesResponse>;
+
+    /// requests information about all the p2p peers currently connected to this node.
+    async fn get_connected_peer_info(&self) -> RpcResult<GetConnectedPeerInfoResponse> {
+        self.get_connected_peer_info_call(None, GetConnectedPeerInfoRequest {}).await
+    }
+    async fn get_connected_peer_info_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetConnectedPeerInfoRequest,
+    ) -> RpcResult<GetConnectedPeerInfoResponse>;
+
+    /// Adds a peer to the node's outgoing connection list.
+    ///
+    /// This will, in most cases, result in the node connecting to said peer.
+    async fn add_peer(&self, peer_address: RpcContextualPeerAddress, is_permanent: bool) -> RpcResult<()> {
+        self.add_peer_call(None, AddPeerRequest::new(peer_address, is_permanent)).await?;
+        Ok(())
+    }
+    async fn add_peer_call(&self, connection: Option<&DynRpcConnection>, request: AddPeerRequest) -> RpcResult<AddPeerResponse>;
+
+    /// Submits a transaction to the mempool.
+    async fn submit_transaction(&self, transaction: RpcTransaction, allow_orphan: bool) -> RpcResult<RpcTransactionId> {
+        Ok(self.submit_transaction_call(None, SubmitTransactionRequest { transaction, allow_orphan }).await?.transaction_id)
+    }
+    async fn submit_transaction_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: SubmitTransactionRequest,
+    ) -> RpcResult<SubmitTransactionResponse>;
+
+    /// Submits a transaction replacement to the mempool, applying a mandatory Replace by Fee policy.
+    ///
+    /// Returns the ID of the inserted transaction and the transaction the submission replaced in the mempool.
+    async fn submit_transaction_replacement(&self, transaction: RpcTransaction) -> RpcResult<SubmitTransactionReplacementResponse> {
+        self.submit_transaction_replacement_call(None, SubmitTransactionReplacementRequest { transaction }).await
+    }
+    async fn submit_transaction_replacement_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: SubmitTransactionReplacementRequest,
+    ) -> RpcResult<SubmitTransactionReplacementResponse>;
+
+    /// Requests information about a specific block.
+    async fn get_block(&self, hash: RpcHash, include_transactions: bool) -> RpcResult<RpcBlock> {
+        Ok(self.get_block_call(None, GetBlockRequest::new(hash, include_transactions)).await?.block)
+    }
+    async fn get_block_call(&self, connection: Option<&DynRpcConnection>, request: GetBlockRequest) -> RpcResult<GetBlockResponse>;
+
+    /// Requests information about a specific subnetwork.
+    async fn get_subnetwork(&self, subnetwork_id: RpcSubnetworkId) -> RpcResult<GetSubnetworkResponse> {
+        self.get_subnetwork_call(None, GetSubnetworkRequest::new(subnetwork_id)).await
+    }
+    async fn get_subnetwork_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetSubnetworkRequest,
+    ) -> RpcResult<GetSubnetworkResponse>;
+
+    /// Requests the virtual selected parent chain from some `start_hash` to this node's current virtual.
+    async fn get_virtual_chain_from_block(
+        &self,
+        start_hash: RpcHash,
+        include_accepted_transaction_ids: bool,
+        min_confirmation_count: Option<u64>,
+    ) -> RpcResult<GetVirtualChainFromBlockResponse> {
+        self.get_virtual_chain_from_block_call(
+            None,
+            GetVirtualChainFromBlockRequest::new(start_hash, include_accepted_transaction_ids, min_confirmation_count),
+        )
+        .await
+    }
+    async fn get_virtual_chain_from_block_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetVirtualChainFromBlockRequest,
+    ) -> RpcResult<GetVirtualChainFromBlockResponse>;
+
+    /// Requests blocks between a certain block `low_hash` up to this node's current virtual.
+    async fn get_blocks(
+        &self,
+        low_hash: Option<RpcHash>,
+        include_blocks: bool,
+        include_transactions: bool,
+    ) -> RpcResult<GetBlocksResponse> {
+        self.get_blocks_call(None, GetBlocksRequest::new(low_hash, include_blocks, include_transactions)).await
+    }
+    async fn get_blocks_call(&self, connection: Option<&DynRpcConnection>, request: GetBlocksRequest) -> RpcResult<GetBlocksResponse>;
+
+    /// Requests the current number of blocks in this node.
+    ///
+    /// Note that this number may decrease as pruning occurs.
+    async fn get_block_count(&self) -> RpcResult<GetBlockCountResponse> {
+        self.get_block_count_call(None, GetBlockCountRequest {}).await
+    }
+    async fn get_block_count_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetBlockCountRequest,
+    ) -> RpcResult<GetBlockCountResponse>;
+
+    /// Requests general information about the current state of this node's DAG.
+    async fn get_block_dag_info(&self) -> RpcResult<GetBlockDagInfoResponse> {
+        self.get_block_dag_info_call(None, GetBlockDagInfoRequest {}).await
+    }
+    async fn get_block_dag_info_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetBlockDagInfoRequest,
+    ) -> RpcResult<GetBlockDagInfoResponse>;
+
+    ///
+    async fn resolve_finality_conflict(&self, finality_block_hash: RpcHash) -> RpcResult<()> {
+        self.resolve_finality_conflict_call(None, ResolveFinalityConflictRequest::new(finality_block_hash)).await?;
+        Ok(())
+    }
+    async fn resolve_finality_conflict_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: ResolveFinalityConflictRequest,
+    ) -> RpcResult<ResolveFinalityConflictResponse>;
+
+    /// Shuts down this node.
+    async fn shutdown(&self) -> RpcResult<()> {
+        self.shutdown_call(None, ShutdownRequest {}).await?;
+        Ok(())
+    }
+    async fn shutdown_call(&self, connection: Option<&DynRpcConnection>, request: ShutdownRequest) -> RpcResult<ShutdownResponse>;
+
+    /// Requests headers between the given `start_hash` and the current virtual, up to the given limit.
+    async fn get_headers(&self, start_hash: RpcHash, limit: u64, is_ascending: bool) -> RpcResult<Vec<RpcHeader>> {
+        Ok(self.get_headers_call(None, GetHeadersRequest::new(start_hash, limit, is_ascending)).await?.headers)
+    }
+    async fn get_headers_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetHeadersRequest,
+    ) -> RpcResult<GetHeadersResponse>;
+
+    /// Returns the total balance in unspent transactions towards a given address.
+    ///
+    /// This call is only available when this node was started with `--utxoindex`.
+    async fn get_balance_by_address(&self, address: RpcAddress) -> RpcResult<u64> {
+        Ok(self.get_balance_by_address_call(None, GetBalanceByAddressRequest::new(address)).await?.balance)
+    }
+    async fn get_balance_by_address_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetBalanceByAddressRequest,
+    ) -> RpcResult<GetBalanceByAddressResponse>;
+
+    ///
+    async fn get_balances_by_addresses(&self, addresses: Vec<RpcAddress>) -> RpcResult<Vec<RpcBalancesByAddressesEntry>> {
+        Ok(self.get_balances_by_addresses_call(None, GetBalancesByAddressesRequest::new(addresses)).await?.entries)
+    }
+    async fn get_balances_by_addresses_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetBalancesByAddressesRequest,
+    ) -> RpcResult<GetBalancesByAddressesResponse>;
+
+    /// Requests all current UTXOs for the given node addresses.
+    ///
+    /// This call is only available when this node was started with `--utxoindex`.
+    async fn get_utxos_by_addresses(&self, addresses: Vec<RpcAddress>) -> RpcResult<Vec<RpcUtxosByAddressesEntry>> {
+        Ok(self.get_utxos_by_addresses_call(None, GetUtxosByAddressesRequest::new(addresses)).await?.entries)
+    }
+    async fn get_utxos_by_addresses_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetUtxosByAddressesRequest,
+    ) -> RpcResult<GetUtxosByAddressesResponse>;
+
+    /// Requests a bounded, cursor-paginated page of UTXOs for a single address.
+    ///
+    /// This call is only available when this node was started with `--utxoindex`. Prefer it over
+    /// [Self::get_utxos_by_addresses] for addresses with very large UTXO sets, whose full response
+    /// can exceed client message-size / timeout limits.
+    async fn get_utxos_by_address_page(
+        &self,
+        address: RpcAddress,
+        cursor: String,
+        limit: u64,
+    ) -> RpcResult<GetUtxosByAddressPageResponse> {
+        self.get_utxos_by_address_page_call(None, GetUtxosByAddressPageRequest::new(address, cursor, limit)).await
+    }
+    async fn get_utxos_by_address_page_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetUtxosByAddressPageRequest,
+    ) -> RpcResult<GetUtxosByAddressPageResponse>;
+
+    /// Requests the blue score of the current selected parent of the virtual block.
+    async fn get_sink_blue_score(&self) -> RpcResult<u64> {
+        Ok(self.get_sink_blue_score_call(None, GetSinkBlueScoreRequest {}).await?.blue_score)
+    }
+    async fn get_sink_blue_score_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetSinkBlueScoreRequest,
+    ) -> RpcResult<GetSinkBlueScoreResponse>;
+
+    /// kaspa-pq Phase 10 (ADR-0009): the current DNS finality confirmation view.
+    async fn get_dns_confirmation(&self) -> RpcResult<GetDnsConfirmationResponse> {
+        self.get_dns_confirmation_call(None, GetDnsConfirmationRequest { block_hash: String::new() }).await
+    }
+    /// kaspa-pq: DNS finality scoped to a single block — populates the response's `block_*` fields
+    /// (`block_found`, `block_is_dns_final`, `block_is_confirmed_anchor`, `block_daa_score`).
+    /// `block_is_dns_final` means the block is a selected-chain ancestor of (or equal to) the
+    /// stake-confirmed anchor, i.e. irreversible under DNS finality.
+    async fn get_block_dns_score(&self, block_hash: String) -> RpcResult<GetDnsConfirmationResponse> {
+        self.get_dns_confirmation_call(None, GetDnsConfirmationRequest { block_hash }).await
+    }
+    /// Default returns `available: false`, so non-server `RpcApi` impls (gRPC /
+    /// wRPC clients, mocks) inherit a no-op; the node's core service overrides it.
+    async fn get_dns_confirmation_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetDnsConfirmationRequest,
+    ) -> RpcResult<GetDnsConfirmationResponse> {
+        let _ = (connection, request);
+        Ok(GetDnsConfirmationResponse::default())
+    }
+
+    /// kaspa-pq DNS v3: ready epochs below the StakeScore attestation quality floor.
+    /// This remains populated on liveness-first presets where mandatory attestation inclusion is
+    /// intentionally inert, so operators can monitor validator-layer degradation without making it
+    /// a base-ledger validity rule.
+    async fn get_attestation_quality_deficits(&self) -> RpcResult<GetAttestationQualityDeficitsResponse> {
+        self.get_attestation_quality_deficits_call(None, GetAttestationQualityDeficitsRequest {}).await
+    }
+    /// Default returns an empty list, so non-server `RpcApi` impls inherit a no-op;
+    /// the node's core service overrides it.
+    async fn get_attestation_quality_deficits_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetAttestationQualityDeficitsRequest,
+    ) -> RpcResult<GetAttestationQualityDeficitsResponse> {
+        let _ = (connection, request);
+        Ok(GetAttestationQualityDeficitsResponse::default())
+    }
+
+    /// kaspa-pq EVM Lane v0.4 (§16): submit a raw EIP-2718 EVM transaction
+    /// (hex) to the EVM mempool. Returns the Ethereum tx hash.
+    async fn submit_evm_transaction(&self, transaction_hex: String) -> RpcResult<SubmitEvmTransactionResponse> {
+        self.submit_evm_transaction_call(None, SubmitEvmTransactionRequest { transaction: transaction_hex }).await
+    }
+    /// Default rejects, so non-server `RpcApi` impls inherit a refusal; the
+    /// node's core service overrides it.
+    async fn submit_evm_transaction_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: SubmitEvmTransactionRequest,
+    ) -> RpcResult<SubmitEvmTransactionResponse> {
+        let _ = (connection, request);
+        Err(RpcError::NotImplemented)
+    }
+
+    /// kaspa-pq EVM Lane v0.4 (§16): canonical-resolved EVM receipt.
+    async fn get_evm_transaction_receipt(&self, transaction_hash: String) -> RpcResult<GetEvmTransactionReceiptResponse> {
+        self.get_evm_transaction_receipt_call(None, GetEvmTransactionReceiptRequest { transaction_hash }).await
+    }
+    async fn get_evm_transaction_receipt_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetEvmTransactionReceiptRequest,
+    ) -> RpcResult<GetEvmTransactionReceiptResponse> {
+        let _ = (connection, request);
+        Err(RpcError::NotImplemented)
+    }
+
+    /// kaspa-pq EVM Lane v0.4 (§16): DA-inclusion / acceptance / skip status.
+    async fn get_evm_tx_inclusion_status(&self, transaction_hash: String) -> RpcResult<GetEvmTxInclusionStatusResponse> {
+        self.get_evm_tx_inclusion_status_call(None, GetEvmTxInclusionStatusRequest { transaction_hash }).await
+    }
+    async fn get_evm_tx_inclusion_status_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetEvmTxInclusionStatusRequest,
+    ) -> RpcResult<GetEvmTxInclusionStatusResponse> {
+        let _ = (connection, request);
+        Err(RpcError::NotImplemented)
+    }
+
+    /// kaspa-pq EVM Lane v0.4 (§9.2): submit an EVM_DEPOSIT_LOCK outpoint to be
+    /// claimed (bridge deposit). The node resolves + validates it and queues a
+    /// `DepositClaim` for its own template.
+    async fn submit_evm_deposit_claim(&self, transaction_id: String, index: u32) -> RpcResult<SubmitEvmDepositClaimResponse> {
+        self.submit_evm_deposit_claim_call(None, SubmitEvmDepositClaimRequest { transaction_id, index }).await
+    }
+    async fn submit_evm_deposit_claim_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: SubmitEvmDepositClaimRequest,
+    ) -> RpcResult<SubmitEvmDepositClaimResponse> {
+        let _ = (connection, request);
+        Err(RpcError::NotImplemented)
+    }
+
+    /// MISAKA Compute Token Program (design §9.3): one `(asset, owner)` TOK ledger row.
+    async fn get_token_ledger_entry(&self, asset_id: u64, owner: String) -> RpcResult<GetTokenLedgerEntryResponse> {
+        self.get_token_ledger_entry_call(None, GetTokenLedgerEntryRequest { asset_id, owner }).await
+    }
+    /// Default returns `available: false`, so non-server `RpcApi` impls inherit a
+    /// no-op; the node's core service overrides it.
+    async fn get_token_ledger_entry_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetTokenLedgerEntryRequest,
+    ) -> RpcResult<GetTokenLedgerEntryResponse> {
+        let _ = (connection, request);
+        Ok(GetTokenLedgerEntryResponse::default())
+    }
+
+    /// **PALW ConsensusV2: the derived facts a block producer must read** (ADR-0042 Decision 6).
+    ///
+    /// The one call that makes third-party mining possible: without the class target, the pwu it
+    /// implies and the bond's exposure room on the wire, only a node with its own state store
+    /// could build an admissible algo-6 attempt.
+    async fn get_palw_producer_facts(
+        &self,
+        class_id: String,
+        bond_transaction_id: String,
+        bond_index: u32,
+        with_bond: bool,
+    ) -> RpcResult<GetPalwProducerFactsResponse> {
+        self.get_palw_producer_facts_call(None, GetPalwProducerFactsRequest { class_id, bond_transaction_id, bond_index, with_bond })
+            .await
+    }
+    /// Default returns `available: false`, so non-server `RpcApi` impls inherit a no-op; the
+    /// node's core service overrides it.
+    async fn get_palw_producer_facts_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwProducerFactsRequest,
+    ) -> RpcResult<GetPalwProducerFactsResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwProducerFactsResponse::default())
+    }
+
+    /// **ADR-0078 Decision 5: the derivations a claim carries, so a stranger can check them.**
+    ///
+    /// The chain stores one `DerivedArtifactV1` per (claim, transformer) and never checks what it
+    /// says — the entire guarantee is that whoever holds the answer can recompute `output_root`,
+    /// `dsl_hash` and `artifact_hash` and compare (invariant X6). That guarantee needs a reader,
+    /// and this is it: the rows, plus the claim's own `output_root` and executor key, which is
+    /// what every accepted row had to match.
+    ///
+    /// The answer's `output_token_ids` are NOT returned and are not on the chain at all: the
+    /// consumer holds them from the gateway's response, beside the job's context hash and the
+    /// family. This call returns the chain's side of the comparison and nothing else.
+    async fn get_palw_derived_artifacts(&self, claim_id: String) -> RpcResult<GetPalwDerivedArtifactsResponse> {
+        self.get_palw_derived_artifacts_call(None, GetPalwDerivedArtifactsRequest { claim_id }).await
+    }
+    /// Default returns `found: false`, so non-server `RpcApi` impls inherit a no-op; the node's
+    /// core service overrides it.
+    async fn get_palw_derived_artifacts_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwDerivedArtifactsRequest,
+    ) -> RpcResult<GetPalwDerivedArtifactsResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwDerivedArtifactsResponse::default())
+    }
+
+    /// **ADR-0077 R0: the free-prompt claim itself** — the committed roots, the executor's bond,
+    /// the phase and the spend ledger. What a verifier reads beside a derivation, and what an
+    /// operator reads to find out what became of one inference.
+    async fn get_palw_free_prompt_claim(&self, claim_id: String) -> RpcResult<GetPalwFreePromptClaimResponse> {
+        self.get_palw_free_prompt_claim_call(None, GetPalwFreePromptClaimRequest { claim_id }).await
+    }
+    async fn get_palw_free_prompt_claim_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwFreePromptClaimRequest,
+    ) -> RpcResult<GetPalwFreePromptClaimResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwFreePromptClaimResponse::default())
+    }
+
+    /// **ADR-0080 design A: one side's declared court close, mid-assembly.**
+    ///
+    /// A close too wide for one carrier rides as a signed declaration and its chunks. The mover is
+    /// under a court deadline, its carriers can be orphaned, and until this call the only account
+    /// of what had landed was `misaka palw court-close`'s journal on the mover's own disk — which
+    /// believes itself, so it skips a part whose carrier was reorged out and completes a group that
+    /// can never assemble. This is the chain's own `present` bitmap, count and deadline.
+    async fn get_palw_pending_chunk_group(&self, session_id: String, side: String) -> RpcResult<GetPalwPendingChunkGroupResponse> {
+        self.get_palw_pending_chunk_group_call(None, GetPalwPendingChunkGroupRequest { session_id, side }).await
+    }
+    async fn get_palw_pending_chunk_group_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwPendingChunkGroupRequest,
+    ) -> RpcResult<GetPalwPendingChunkGroupResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwPendingChunkGroupResponse::default())
+    }
+
+    /// ADR-0087 Decision 8: a line's model market as the tip holds it (ADR-0088 Decision 9: keyed
+    /// by line; a class id names the class's founding line).
+    async fn get_palw_model_market(&self, line_id: String) -> RpcResult<GetPalwModelMarketResponse> {
+        self.get_palw_model_market_call(None, GetPalwModelMarketRequest { line_id }).await
+    }
+    async fn get_palw_model_market_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwModelMarketRequest,
+    ) -> RpcResult<GetPalwModelMarketResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwModelMarketResponse::default())
+    }
+
+    /// ADR-0087 Decision 8: every position a holder has, by line.
+    async fn get_palw_model_positions(&self, holder: String) -> RpcResult<GetPalwModelPositionsResponse> {
+        self.get_palw_model_positions_call(None, GetPalwModelPositionsRequest { holder }).await
+    }
+    async fn get_palw_model_positions_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwModelPositionsRequest,
+    ) -> RpcResult<GetPalwModelPositionsResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwModelPositionsResponse::default())
+    }
+
+    /// ADR-0088 Decision 12: a line — the row, the current root, the roots in force.
+    async fn get_palw_model_line(&self, line_id: String) -> RpcResult<GetPalwModelLineResponse> {
+        self.get_palw_model_line_call(None, GetPalwModelLineRequest { line_id }).await
+    }
+    async fn get_palw_model_line_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwModelLineRequest,
+    ) -> RpcResult<GetPalwModelLineResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwModelLineResponse::default())
+    }
+
+    /// ADR-0088 Decision 12: one version of a line, with its usage and its evaluations.
+    async fn get_palw_model_version(&self, line_id: String, version: u32) -> RpcResult<GetPalwModelVersionResponse> {
+        self.get_palw_model_version_call(None, GetPalwModelVersionRequest { line_id, version }).await
+    }
+    async fn get_palw_model_version_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwModelVersionRequest,
+    ) -> RpcResult<GetPalwModelVersionResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwModelVersionResponse::default())
+    }
+
+    /// ADR-0088 Decision 12: every line of a class, the founding line included.
+    async fn get_palw_model_lines(&self, class_id: String) -> RpcResult<GetPalwModelLinesResponse> {
+        self.get_palw_model_lines_call(None, GetPalwModelLinesRequest { class_id }).await
+    }
+    async fn get_palw_model_lines_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwModelLinesRequest,
+    ) -> RpcResult<GetPalwModelLinesResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwModelLinesResponse::default())
+    }
+
+    /// ADR-0088 Decision 12: the proposals attached to a line.
+    async fn get_palw_model_proposals(&self, line_id: String) -> RpcResult<GetPalwModelProposalsResponse> {
+        self.get_palw_model_proposals_call(None, GetPalwModelProposalsRequest { line_id }).await
+    }
+    async fn get_palw_model_proposals_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwModelProposalsRequest,
+    ) -> RpcResult<GetPalwModelProposalsResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwModelProposalsResponse::default())
+    }
+
+    /// ADR-0122 §6.5: a bond's claims — `role` is `executor` or `seat`.
+    async fn get_palw_claims(
+        &self,
+        bond: String,
+        role: String,
+        include_terminal: bool,
+        limit: u32,
+    ) -> RpcResult<GetPalwClaimsResponse> {
+        self.get_palw_claims_call(None, GetPalwClaimsRequest { bond, role, include_terminal, limit }).await
+    }
+    async fn get_palw_claims_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwClaimsRequest,
+    ) -> RpcResult<GetPalwClaimsResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwClaimsResponse::default())
+    }
+
+    /// ADR-0122 §6.5: the class table.
+    async fn get_palw_classes(&self) -> RpcResult<GetPalwClassesResponse> {
+        self.get_palw_classes_call(None, GetPalwClassesRequest {}).await
+    }
+    async fn get_palw_classes_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwClassesRequest,
+    ) -> RpcResult<GetPalwClassesResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwClassesResponse::default())
+    }
+
+    /// ADR-0122 §6.5: this node's runtime.
+    async fn get_palw_node_status(&self) -> RpcResult<GetPalwNodeStatusResponse> {
+        self.get_palw_node_status_call(None, GetPalwNodeStatusRequest {}).await
+    }
+    async fn get_palw_node_status_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwNodeStatusRequest,
+    ) -> RpcResult<GetPalwNodeStatusResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwNodeStatusResponse::default())
+    }
+
+    /// ADR-0122 §8.2: the live registration terms and the chain's certified families.
+    async fn get_palw_registration_terms(&self) -> RpcResult<GetPalwRegistrationTermsResponse> {
+        self.get_palw_registration_terms_call(None, GetPalwRegistrationTermsRequest {}).await
+    }
+    async fn get_palw_registration_terms_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwRegistrationTermsRequest,
+    ) -> RpcResult<GetPalwRegistrationTermsResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwRegistrationTermsResponse::default())
+    }
+
+    /// ADR-0125 §7.4: the execution lane as the node's sink state holds it.
+    async fn get_palw_round_lane(&self) -> RpcResult<GetPalwRoundLaneResponse> {
+        self.get_palw_round_lane_call(None, GetPalwRoundLaneRequest::default()).await
+    }
+    async fn get_palw_round_lane_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwRoundLaneRequest,
+    ) -> RpcResult<GetPalwRoundLaneResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwRoundLaneResponse::default())
+    }
+
+    /// ADR-0127 Decision 3: whether what the selected chain accepted at `daa_score` is settled, and
+    /// its settlement depth in `Final` PALW anchors, from the sink's state.
+    async fn get_palw_settlement(&self, daa_score: u64) -> RpcResult<GetPalwSettlementResponse> {
+        self.get_palw_settlement_call(None, GetPalwSettlementRequest { daa_score }).await
+    }
+    async fn get_palw_settlement_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwSettlementRequest,
+    ) -> RpcResult<GetPalwSettlementResponse> {
+        let _ = connection;
+        Ok(GetPalwSettlementResponse { daa_score: request.daa_score, ..Default::default() })
+    }
+
+    /// MISAKA §5 round 2: the lock a validator carries on the selected chain and the epochs it still
+    /// owes a precommit for.
+    async fn get_precommit_duty(&self, request: GetPrecommitDutyRequest) -> RpcResult<GetPrecommitDutyResponse> {
+        self.get_precommit_duty_call(None, request).await
+    }
+    /// Default returns `available: false`; the node's core service overrides it.
+    async fn get_precommit_duty_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPrecommitDutyRequest,
+    ) -> RpcResult<GetPrecommitDutyResponse> {
+        let _ = (connection, request);
+        Ok(GetPrecommitDutyResponse::default())
+    }
+
+    /// The context each registered PALW class runs at, and the free-prompt lane's token limits.
+    async fn get_palw_class_contexts(&self) -> RpcResult<GetPalwClassContextsResponse> {
+        self.get_palw_class_contexts_call(None, GetPalwClassContextsRequest {}).await
+    }
+    async fn get_palw_class_contexts_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwClassContextsRequest,
+    ) -> RpcResult<GetPalwClassContextsResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwClassContextsResponse::default())
+    }
+
+    /// ADR-0131 Decision 1: each PALW class's registration numbers, target, economic compute and
+    /// claim census — the shadow economics.
+    async fn get_palw_class_economics(&self) -> RpcResult<GetPalwClassEconomicsResponse> {
+        self.get_palw_class_economics_call(None, GetPalwClassEconomicsRequest {}).await
+    }
+    async fn get_palw_class_economics_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwClassEconomicsRequest,
+    ) -> RpcResult<GetPalwClassEconomicsResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwClassEconomicsResponse::default())
+    }
+
+    /// ADR-0135: the model registry — lifecycle rows, derived profiles, ready seats, possession proofs.
+    async fn get_palw_model_registry(&self) -> RpcResult<GetPalwModelRegistryResponse> {
+        self.get_palw_model_registry_call(None, GetPalwModelRegistryRequest {}).await
+    }
+    async fn get_palw_model_registry_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwModelRegistryRequest,
+    ) -> RpcResult<GetPalwModelRegistryResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwModelRegistryResponse::default())
+    }
+
+    /// ADR-0148: the free-prompt lane's price for one job, as the fold would write it now.
+    async fn get_palw_free_prompt_price(&self, request: GetPalwFreePromptPriceRequest) -> RpcResult<GetPalwFreePromptPriceResponse> {
+        self.get_palw_free_prompt_price_call(None, request).await
+    }
+    async fn get_palw_free_prompt_price_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwFreePromptPriceRequest,
+    ) -> RpcResult<GetPalwFreePromptPriceResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwFreePromptPriceResponse::default())
+    }
+
+    async fn get_palw_class_panel_status(
+        &self,
+        request: GetPalwClassPanelStatusRequest,
+    ) -> RpcResult<GetPalwClassPanelStatusResponse> {
+        self.get_palw_class_panel_status_call(None, request).await
+    }
+    async fn get_palw_class_panel_status_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwClassPanelStatusRequest,
+    ) -> RpcResult<GetPalwClassPanelStatusResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwClassPanelStatusResponse::default())
+    }
+
+    async fn get_palw_panel_seats(&self, request: GetPalwPanelSeatsRequest) -> RpcResult<GetPalwPanelSeatsResponse> {
+        self.get_palw_panel_seats_call(None, request).await
+    }
+    async fn get_palw_panel_seats_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwPanelSeatsRequest,
+    ) -> RpcResult<GetPalwPanelSeatsResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwPanelSeatsResponse::default())
+    }
+
+    async fn get_palw_panel_status(&self, request: GetPalwPanelStatusRequest) -> RpcResult<GetPalwPanelStatusResponse> {
+        self.get_palw_panel_status_call(None, request).await
+    }
+    async fn get_palw_panel_status_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwPanelStatusRequest,
+    ) -> RpcResult<GetPalwPanelStatusResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwPanelStatusResponse::default())
+    }
+
+    async fn get_palw_panel_assignments(&self, request: GetPalwPanelAssignmentsRequest) -> RpcResult<GetPalwPanelAssignmentsResponse> {
+        self.get_palw_panel_assignments_call(None, request).await
+    }
+    async fn get_palw_panel_assignments_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwPanelAssignmentsRequest,
+    ) -> RpcResult<GetPalwPanelAssignmentsResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwPanelAssignmentsResponse::default())
+    }
+
+    async fn get_palw_model_preflight(&self, request: GetPalwModelPreflightRequest) -> RpcResult<GetPalwModelPreflightResponse> {
+        self.get_palw_model_preflight_call(None, request).await
+    }
+    async fn get_palw_model_preflight_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwModelPreflightRequest,
+    ) -> RpcResult<GetPalwModelPreflightResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwModelPreflightResponse::default())
+    }
+
+    async fn submit_palw_model_registration(
+        &self,
+        request: SubmitPalwModelRegistrationRequest,
+    ) -> RpcResult<SubmitPalwModelRegistrationResponse> {
+        self.submit_palw_model_registration_call(None, request).await
+    }
+    async fn submit_palw_model_registration_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: SubmitPalwModelRegistrationRequest,
+    ) -> RpcResult<SubmitPalwModelRegistrationResponse> {
+        let _ = (connection, request);
+        Ok(SubmitPalwModelRegistrationResponse::default())
+    }
+
+    async fn get_palw_model_registration_status(
+        &self,
+        request: GetPalwModelRegistrationStatusRequest,
+    ) -> RpcResult<GetPalwModelRegistrationStatusResponse> {
+        self.get_palw_model_registration_status_call(None, request).await
+    }
+    async fn get_palw_model_registration_status_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwModelRegistrationStatusRequest,
+    ) -> RpcResult<GetPalwModelRegistrationStatusResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwModelRegistrationStatusResponse::default())
+    }
+
+    async fn get_palw_model(&self, request: GetPalwModelRequest) -> RpcResult<GetPalwModelResponse> {
+        self.get_palw_model_call(None, request).await
+    }
+    async fn get_palw_model_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwModelRequest,
+    ) -> RpcResult<GetPalwModelResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwModelResponse::default())
+    }
+
+    async fn get_palw_model_readiness(&self, request: GetPalwModelReadinessRequest) -> RpcResult<GetPalwModelReadinessResponse> {
+        self.get_palw_model_readiness_call(None, request).await
+    }
+    async fn get_palw_model_readiness_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwModelReadinessRequest,
+    ) -> RpcResult<GetPalwModelReadinessResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwModelReadinessResponse::default())
+    }
+
+    async fn get_palw_model_admission(&self, request: GetPalwModelAdmissionRequest) -> RpcResult<GetPalwModelAdmissionResponse> {
+        self.get_palw_model_admission_call(None, request).await
+    }
+    async fn get_palw_model_admission_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwModelAdmissionRequest,
+    ) -> RpcResult<GetPalwModelAdmissionResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwModelAdmissionResponse::default())
+    }
+
+    async fn get_palw_model_certification(
+        &self,
+        request: GetPalwModelCertificationRequest,
+    ) -> RpcResult<GetPalwModelCertificationResponse> {
+        self.get_palw_model_certification_call(None, request).await
+    }
+    async fn get_palw_model_certification_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwModelCertificationRequest,
+    ) -> RpcResult<GetPalwModelCertificationResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwModelCertificationResponse::default())
+    }
+
+    /// **ADR-0152 P2-10: the vesting table** (op 199; testnet-12's R-core+) — name one of a bond,
+    /// a payout address or a claim, or none for the chain-wide totals. A node built before op 199
+    /// drops the WebSocket on it: ask it last on a connection, or reconnect.
+    async fn get_palw_vesting(&self, request: GetPalwVestingRequest) -> RpcResult<GetPalwVestingResponse> {
+        self.get_palw_vesting_call(None, request).await
+    }
+    async fn get_palw_vesting_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwVestingRequest,
+    ) -> RpcResult<GetPalwVestingResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwVestingResponse::default())
+    }
+
+    /// All live native, EXEC slice and kernel fee funds in one committed snapshot (op 241).
+    /// `after` pages native rows; `exec_after` independently pages additional fund legs.
+    /// Whole-query money and holding-source totals are independent of both cursors.
+    async fn get_palw_reward_vesting(&self, request: GetPalwRewardVestingRequest) -> RpcResult<GetPalwRewardVestingResponse> {
+        self.get_palw_reward_vesting_call(None, request).await
+    }
+    async fn get_palw_reward_vesting_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwRewardVestingRequest,
+    ) -> RpcResult<GetPalwRewardVestingResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwRewardVestingResponse::default())
+    }
+
+    async fn get_palw_monetary_material(&self, request: GetPalwMonetaryMaterialRequest) -> RpcResult<GetPalwMonetaryMaterialResponse> {
+        self.get_palw_monetary_material_call(None, request).await
+    }
+    async fn get_palw_monetary_material_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwMonetaryMaterialRequest,
+    ) -> RpcResult<GetPalwMonetaryMaterialResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwMonetaryMaterialResponse { reason: "authenticated monetary material RPC unavailable".into(), ..Default::default() })
+    }
+
+    /// Op 243: one bounded byte page of the canonical carriage of the PALW state a pinned header commits. A page is never
+    /// authority; the client restores the assembled carriage and compares its committed root with the pinned header's.
+    async fn get_palw_state_carriage(&self, request: GetPalwStateCarriageRequest) -> RpcResult<GetPalwStateCarriageResponse> {
+        self.get_palw_state_carriage_call(None, request).await
+    }
+    async fn get_palw_state_carriage_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwStateCarriageRequest,
+    ) -> RpcResult<GetPalwStateCarriageResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwStateCarriageResponse { reason: "PALW state carriage RPC unavailable".into(), ..Default::default() })
+    }
+
+    /// The node's native required-family preclaim quote for one original FP commitment and its
+    /// public binding header (op 244). Read-only and advisory: admission recomputes it with the
+    /// same planner at the accepting block, so a caller pins nothing on this answer's word.
+    /// **RFC-0016 (op 255): the per-model report** — targets apart from outcomes, node-local observations labelled — and the
+    /// pre-lottery quote for one class where asked. Read-only; an improvement is never to be read from a target alone.
+    async fn get_palw_rfc_0016_report(&self, request: GetPalwRfc0016ReportRequest) -> RpcResult<GetPalwRfc0016ReportResponse> {
+        self.get_palw_rfc_0016_report_call(None, request).await
+    }
+    async fn get_palw_rfc_0016_report_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwRfc0016ReportRequest,
+    ) -> RpcResult<GetPalwRfc0016ReportResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwRfc0016ReportResponse::default())
+    }
+
+    async fn get_palw_staged_preclaim_quote(
+        &self,
+        request: GetPalwStagedPreclaimQuoteRequest,
+    ) -> RpcResult<GetPalwStagedPreclaimQuoteResponse> {
+        self.get_palw_staged_preclaim_quote_call(None, request).await
+    }
+    async fn get_palw_staged_preclaim_quote_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwStagedPreclaimQuoteRequest,
+    ) -> RpcResult<GetPalwStagedPreclaimQuoteResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwStagedPreclaimQuoteResponse::default())
+    }
+
+    /// **RFC-0006 consumer v2 (op 245): a class's immutable per-reader router binding.** A node built before op 245 answers the
+    /// default (nothing found).
+    async fn get_palw_router_binding_v2(&self, request: GetPalwRouterBindingV2Request) -> RpcResult<GetPalwRouterBindingV2Response> {
+        self.get_palw_router_binding_v2_call(None, request).await
+    }
+    async fn get_palw_router_binding_v2_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwRouterBindingV2Request,
+    ) -> RpcResult<GetPalwRouterBindingV2Response> {
+        let _ = (connection, request);
+        Ok(GetPalwRouterBindingV2Response::default())
+    }
+
+    /// **RFC-0012 acceptance (op 247): one paid claim at the tip** — enrollment, the round's seats/quorum/receipts and Final.
+    /// Read-only and never an approval. A node built before op 247 answers the default (`available` false).
+    async fn get_palw_paid_claim(&self, request: GetPalwPaidClaimRequest) -> RpcResult<GetPalwPaidClaimResponse> {
+        self.get_palw_paid_claim_call(None, request).await
+    }
+    async fn get_palw_paid_claim_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwPaidClaimRequest,
+    ) -> RpcResult<GetPalwPaidClaimResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwPaidClaimResponse::default())
+    }
+
+    /// **RFC-0012 acceptance (op 246): the DNS security reserve balance per block and virtual UTXO reads by outpoint.** Read-only.
+    /// A node built before op 246 answers the default (`available` false).
+    async fn get_palw_acceptance_reads(&self, request: GetPalwAcceptanceReadsRequest) -> RpcResult<GetPalwAcceptanceReadsResponse> {
+        self.get_palw_acceptance_reads_call(None, request).await
+    }
+    async fn get_palw_acceptance_reads_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwAcceptanceReadsRequest,
+    ) -> RpcResult<GetPalwAcceptanceReadsResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwAcceptanceReadsResponse::default())
+    }
+
+    /// **ADR-0152-adjacent: one class's Activation Pool** (op 200; testnet-12) — its budgets, its
+    /// payees, the terms and the sink a top-up pays into. A node built before op 200 drops the
+    /// WebSocket on it: ask it last on a connection, or reconnect.
+    async fn get_palw_activation_pool(&self, request: GetPalwActivationPoolRequest) -> RpcResult<GetPalwActivationPoolResponse> {
+        self.get_palw_activation_pool_call(None, request).await
+    }
+    async fn get_palw_activation_pool_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwActivationPoolRequest,
+    ) -> RpcResult<GetPalwActivationPoolResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwActivationPoolResponse::default())
+    }
+
+    /// **ADR-0160 §7.5: the capacity shadow** (op 201; node-only) — per ramp step, what the
+    /// capacity formulas would reserve, weigh and allow for every live claim and bond of the tip.
+    /// A node built before op 201 drops the WebSocket on it: ask it last on a connection, or
+    /// reconnect.
+    async fn get_palw_capacity_shadow(&self, request: GetPalwCapacityShadowRequest) -> RpcResult<GetPalwCapacityShadowResponse> {
+        self.get_palw_capacity_shadow_call(None, request).await
+    }
+    async fn get_palw_capacity_shadow_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwCapacityShadowRequest,
+    ) -> RpcResult<GetPalwCapacityShadowResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwCapacityShadowResponse::default())
+    }
+
+    /// RFC-0009 stage D: one PALW state collection with the header that commits it. A node built before op 202 drops the WebSocket on it:
+    /// ask it last on a connection, or reconnect.
+    async fn get_palw_state_proof(&self, request: GetPalwStateProofRequest) -> RpcResult<GetPalwStateProofResponse> {
+        self.get_palw_state_proof_call(None, request).await
+    }
+    async fn get_palw_state_proof_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwStateProofRequest,
+    ) -> RpcResult<GetPalwStateProofResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwStateProofResponse::default())
+    }
+
+    /// RFC-0009 L2: the fork-choice openings of blocks' post-states, with the node's sink and tips (op 203). A node built before op 203
+    /// drops the WebSocket on it: ask it last on a connection, or reconnect.
+    async fn get_palw_fork_choice_opening(
+        &self,
+        request: GetPalwForkChoiceOpeningRequest,
+    ) -> RpcResult<GetPalwForkChoiceOpeningResponse> {
+        self.get_palw_fork_choice_opening_call(None, request).await
+    }
+    async fn get_palw_fork_choice_opening_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwForkChoiceOpeningRequest,
+    ) -> RpcResult<GetPalwForkChoiceOpeningResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwForkChoiceOpeningResponse::default())
+    }
+
+    /// **RFC-0010: the permissionless Panel's observation** (op 220; read-only) — the engine's overview and the named claims'
+    /// seal, snapshot, beacon state, assignment, retries and terminal reason, as one versioned JSON document. A node built before
+    /// op 220 drops the WebSocket on it: ask it on a connection of its own.
+    /// **RFC-0008 v2: the EXEC v2 lane's observation** (op 240; read-only) — counts, the named (or first) work roots with each slice and
+    /// its verification claim's state, a block's refusal record and the lane's health, as one versioned JSON document. A node built
+    /// before op 240 drops the WebSocket on it: ask it on a connection of its own.
+    async fn get_palw_exec_v2_status(&self, request: GetPalwExecV2StatusRequest) -> RpcResult<GetPalwExecV2StatusResponse> {
+        self.get_palw_exec_v2_status_call(None, request).await
+    }
+    async fn get_palw_exec_v2_status_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwExecV2StatusRequest,
+    ) -> RpcResult<GetPalwExecV2StatusResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwExecV2StatusResponse::default())
+    }
+
+    async fn get_palw_panel_v3_status(&self, request: GetPalwPanelV3StatusRequest) -> RpcResult<GetPalwPanelV3StatusResponse> {
+        self.get_palw_panel_v3_status_call(None, request).await
+    }
+    async fn get_palw_panel_v3_status_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwPanelV3StatusRequest,
+    ) -> RpcResult<GetPalwPanelV3StatusResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwPanelV3StatusResponse::default())
+    }
+
+    /// **Lane LG14-A: one legacy V2 claim's dispute view** (op 204; read-only) — RFC-0014 §6.3's public read, as one versioned JSON
+    /// document. A node built before op 204 drops the WebSocket on it.
+    async fn get_palw_legacy_dispute(&self, request: GetPalwLegacyDisputeRequest) -> RpcResult<GetPalwLegacyDisputeResponse> {
+        self.get_palw_legacy_dispute_call(None, request).await
+    }
+    async fn get_palw_legacy_dispute_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwLegacyDisputeRequest,
+    ) -> RpcResult<GetPalwLegacyDisputeResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwLegacyDisputeResponse::default())
+    }
+
+    /// **Lane LG14-A: the claims a live dispute reservation holds** (op 205; read-only), every one or one reserver's.
+    async fn get_palw_legacy_disputes(&self, request: GetPalwLegacyDisputesRequest) -> RpcResult<GetPalwLegacyDisputesResponse> {
+        self.get_palw_legacy_disputes_call(None, request).await
+    }
+    async fn get_palw_legacy_disputes_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwLegacyDisputesRequest,
+    ) -> RpcResult<GetPalwLegacyDisputesResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwLegacyDisputesResponse::default())
+    }
+
+    /// **Lane LG14-A: one bond's standing as a public filer** (op 206; read-only).
+    async fn get_palw_fraud_filer_status(
+        &self,
+        request: GetPalwFraudFilerStatusRequest,
+    ) -> RpcResult<GetPalwFraudFilerStatusResponse> {
+        self.get_palw_fraud_filer_status_call(None, request).await
+    }
+    async fn get_palw_fraud_filer_status_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwFraudFilerStatusRequest,
+    ) -> RpcResult<GetPalwFraudFilerStatusResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwFraudFilerStatusResponse::default())
+    }
+
+    /// G14 lane D (op 210): one kernel-route claim, everything public about it.
+    async fn get_palw_kernel_claim(&self, request: GetPalwKernelClaimRequest) -> RpcResult<GetPalwKernelClaimResponse> {
+        self.get_palw_kernel_claim_call(None, request).await
+    }
+    async fn get_palw_kernel_claim_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwKernelClaimRequest,
+    ) -> RpcResult<GetPalwKernelClaimResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwKernelClaimResponse::default())
+    }
+
+    /// G14 lane D (op 211): the kernel route's rows, a page at a time.
+    async fn get_palw_kernel_rows(&self, request: GetPalwKernelRowsRequest) -> RpcResult<GetPalwKernelRowsResponse> {
+        self.get_palw_kernel_rows_call(None, request).await
+    }
+    async fn get_palw_kernel_rows_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwKernelRowsRequest,
+    ) -> RpcResult<GetPalwKernelRowsResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwKernelRowsResponse::default())
+    }
+
+    /// RFC-0002 P0 (op 213, RFC02-T): one bond's candidate-refutation seal rows.
+    async fn get_palw_model_refutation_seals(
+        &self,
+        request: GetPalwModelRefutationSealsRequest,
+    ) -> RpcResult<GetPalwModelRefutationSealsResponse> {
+        self.get_palw_model_refutation_seals_call(None, request).await
+    }
+    async fn get_palw_model_refutation_seals_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwModelRefutationSealsRequest,
+    ) -> RpcResult<GetPalwModelRefutationSealsResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwModelRefutationSealsResponse::default())
+    }
+
+    /// G14 lane D / RFC-0015 (op 212): the kernel route's Finals and the beacon's fact for each.
+    async fn get_palw_kernel_finals(&self, request: GetPalwKernelFinalsRequest) -> RpcResult<GetPalwKernelFinalsResponse> {
+        self.get_palw_kernel_finals_call(None, request).await
+    }
+    async fn get_palw_kernel_finals_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwKernelFinalsRequest,
+    ) -> RpcResult<GetPalwKernelFinalsResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwKernelFinalsResponse::default())
+    }
+
+    /// G14 lane D phase 3 (op 230): where a V2 class stands on the onboarding path.
+    async fn get_palw_onboarding(&self, request: GetPalwOnboardingRequest) -> RpcResult<GetPalwOnboardingResponse> {
+        self.get_palw_onboarding_call(None, request).await
+    }
+    async fn get_palw_onboarding_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwOnboardingRequest,
+    ) -> RpcResult<GetPalwOnboardingResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwOnboardingResponse::default())
+    }
+
+    /// Onboarding P0 (op 231): a V2 class's conformance record and posted evidence.
+    async fn get_palw_conformance_evidence(
+        &self,
+        request: GetPalwConformanceEvidenceRequest,
+    ) -> RpcResult<GetPalwConformanceEvidenceResponse> {
+        self.get_palw_conformance_evidence_call(None, request).await
+    }
+    async fn get_palw_conformance_evidence_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwConformanceEvidenceRequest,
+    ) -> RpcResult<GetPalwConformanceEvidenceResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwConformanceEvidenceResponse::default())
+    }
+
+    /// MISAKA Compute Token Program (design §9.3): an asset's supply counters.
+    async fn get_token_supply(&self, asset_id: u64) -> RpcResult<GetTokenSupplyResponse> {
+        self.get_token_supply_call(None, GetTokenSupplyRequest { asset_id }).await
+    }
+    async fn get_token_supply_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetTokenSupplyRequest,
+    ) -> RpcResult<GetTokenSupplyResponse> {
+        let _ = (connection, request);
+        Ok(GetTokenSupplyResponse::default())
+    }
+
+    /// MISAKA Compute Token Program (design §9.3): the most recently settled epoch's
+    /// emission view (pass a request with `latest: false` for a specific epoch).
+    async fn get_token_emission_info(&self) -> RpcResult<GetTokenEmissionInfoResponse> {
+        self.get_token_emission_info_call(None, GetTokenEmissionInfoRequest { epoch: 0, latest: true }).await
+    }
+    async fn get_token_emission_info_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetTokenEmissionInfoRequest,
+    ) -> RpcResult<GetTokenEmissionInfoResponse> {
+        let _ = (connection, request);
+        Ok(GetTokenEmissionInfoResponse::default())
+    }
+
+    /// kaspa-pq Phase 11 (ADR-0010): the in-process validator service's status.
+    async fn get_validator_status(&self) -> RpcResult<GetValidatorStatusResponse> {
+        self.get_validator_status_call(None, GetValidatorStatusRequest {}).await
+    }
+    /// Default returns `enabled: false`, so non-server `RpcApi` impls (gRPC / wRPC
+    /// clients, mocks) inherit a no-op; the node's core service overrides it.
+    async fn get_validator_status_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetValidatorStatusRequest,
+    ) -> RpcResult<GetValidatorStatusResponse> {
+        let _ = (connection, request);
+        Ok(GetValidatorStatusResponse::default())
+    }
+
+    /// kaspa-pq Phase 12 (ADR-0011): the ready-to-sign attestation target for the given
+    /// stake-bond outpoint — the message the `kaspa-pq-validator` sidecar ML-DSA-87-signs.
+    async fn get_validator_attestation_target(
+        &self,
+        request: GetValidatorAttestationTargetRequest,
+    ) -> RpcResult<GetValidatorAttestationTargetResponse> {
+        self.get_validator_attestation_target_call(None, request).await
+    }
+    /// Default returns `available: false`, so non-server `RpcApi` impls inherit a no-op;
+    /// the node's core service overrides it.
+    async fn get_validator_attestation_target_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetValidatorAttestationTargetRequest,
+    ) -> RpcResult<GetValidatorAttestationTargetResponse> {
+        let _ = (connection, request);
+        Ok(GetValidatorAttestationTargetResponse::default())
+    }
+
+    /// kaspa-pq DNS v3 (batch): every ready attestation target for a bond from `from_epoch`
+    /// (ascending, capped at `limit`), so an external validator that fell behind can sign every
+    /// missed epoch in one poll.
+    async fn get_validator_attestation_targets(
+        &self,
+        request: GetValidatorAttestationTargetsRequest,
+    ) -> RpcResult<GetValidatorAttestationTargetsResponse> {
+        self.get_validator_attestation_targets_call(None, request).await
+    }
+    /// Default returns an empty list, so non-server `RpcApi` impls inherit a no-op; the node's
+    /// core service overrides it.
+    async fn get_validator_attestation_targets_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetValidatorAttestationTargetsRequest,
+    ) -> RpcResult<GetValidatorAttestationTargetsResponse> {
+        let _ = (connection, request);
+        Ok(GetValidatorAttestationTargetsResponse::default())
+    }
+
+    /// kaspa-pq Phase 12 (ADR-0011): a stake bond's status at the node's sink, for the
+    /// `kaspa-pq-validator` sidecar's bond-lifecycle state machine.
+    async fn get_stake_bond(&self, request: GetStakeBondRequest) -> RpcResult<GetStakeBondResponse> {
+        self.get_stake_bond_call(None, request).await
+    }
+    /// Default returns `available: false`, so non-server `RpcApi` impls inherit a no-op;
+    /// the node's core service overrides it.
+    async fn get_stake_bond_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetStakeBondRequest,
+    ) -> RpcResult<GetStakeBondResponse> {
+        let _ = (connection, request);
+        Ok(GetStakeBondResponse::default())
+    }
+
+    /// kaspa-pq: a paged, filtered enumeration of stake bonds (see
+    /// `GetStakeBondsRequest`). Lets a bond owner recover the outpoint(s) of the
+    /// bonds they funded — the key a `StakeUnbondRequest` binds to.
+    async fn get_stake_bonds(&self, request: GetStakeBondsRequest) -> RpcResult<GetStakeBondsResponse> {
+        self.get_stake_bonds_call(None, request).await
+    }
+    /// Default returns an empty page, so non-server `RpcApi` impls inherit a no-op;
+    /// the node's core service overrides it.
+    async fn get_stake_bonds_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetStakeBondsRequest,
+    ) -> RpcResult<GetStakeBondsResponse> {
+        let _ = (connection, request);
+        Ok(GetStakeBondsResponse::default())
+    }
+
+    /// Bans the given ip.
+    async fn ban(&self, ip: RpcIpAddress) -> RpcResult<()> {
+        self.ban_call(None, BanRequest::new(ip)).await?;
+        Ok(())
+    }
+    async fn ban_call(&self, connection: Option<&DynRpcConnection>, request: BanRequest) -> RpcResult<BanResponse>;
+
+    /// Unbans the given ip.
+    async fn unban(&self, ip: RpcIpAddress) -> RpcResult<()> {
+        self.unban_call(None, UnbanRequest::new(ip)).await?;
+        Ok(())
+    }
+    async fn unban_call(&self, connection: Option<&DynRpcConnection>, request: UnbanRequest) -> RpcResult<UnbanResponse>;
+
+    /// Returns info about the node.
+    async fn get_info(&self) -> RpcResult<GetInfoResponse> {
+        self.get_info_call(None, GetInfoRequest {}).await
+    }
+    async fn get_info_call(&self, connection: Option<&DynRpcConnection>, request: GetInfoRequest) -> RpcResult<GetInfoResponse>;
+
+    ///
+    async fn estimate_network_hashes_per_second(&self, window_size: u32, start_hash: Option<RpcHash>) -> RpcResult<u64> {
+        Ok(self
+            .estimate_network_hashes_per_second_call(None, EstimateNetworkHashesPerSecondRequest::new(window_size, start_hash))
+            .await?
+            .network_hashes_per_second)
+    }
+    async fn estimate_network_hashes_per_second_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: EstimateNetworkHashesPerSecondRequest,
+    ) -> RpcResult<EstimateNetworkHashesPerSecondResponse>;
+
+    ///
+    async fn get_mempool_entries_by_addresses(
+        &self,
+        addresses: Vec<RpcAddress>,
+        include_orphan_pool: bool,
+        filter_transaction_pool: bool,
+    ) -> RpcResult<Vec<RpcMempoolEntryByAddress>> {
+        Ok(self
+            .get_mempool_entries_by_addresses_call(
+                None,
+                GetMempoolEntriesByAddressesRequest::new(addresses, include_orphan_pool, filter_transaction_pool),
+            )
+            .await?
+            .entries)
+    }
+    async fn get_mempool_entries_by_addresses_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetMempoolEntriesByAddressesRequest,
+    ) -> RpcResult<GetMempoolEntriesByAddressesResponse>;
+
+    ///
+    async fn get_coin_supply(&self) -> RpcResult<GetCoinSupplyResponse> {
+        self.get_coin_supply_call(None, GetCoinSupplyRequest {}).await
+    }
+    async fn get_coin_supply_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetCoinSupplyRequest,
+    ) -> RpcResult<GetCoinSupplyResponse>;
+
+    async fn get_daa_score_timestamp_estimate(&self, daa_scores: Vec<u64>) -> RpcResult<Vec<u64>> {
+        Ok(self.get_daa_score_timestamp_estimate_call(None, GetDaaScoreTimestampEstimateRequest { daa_scores }).await?.timestamps)
+    }
+    async fn get_daa_score_timestamp_estimate_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetDaaScoreTimestampEstimateRequest,
+    ) -> RpcResult<GetDaaScoreTimestampEstimateResponse>;
+
+    // PR-9.5f: txid widened to RpcTransactionId (= Hash64).
+    async fn get_utxo_return_address(&self, txid: RpcTransactionId, accepting_block_daa_score: u64) -> RpcResult<RpcAddress> {
+        Ok(self
+            .get_utxo_return_address_call(None, GetUtxoReturnAddressRequest { txid, accepting_block_daa_score })
+            .await?
+            .return_address)
+    }
+    async fn get_utxo_return_address_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetUtxoReturnAddressRequest,
+    ) -> RpcResult<GetUtxoReturnAddressResponse>;
+
+    // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    // Fee estimation API
+
+    async fn get_fee_estimate(&self) -> RpcResult<RpcFeeEstimate> {
+        Ok(self.get_fee_estimate_call(None, GetFeeEstimateRequest {}).await?.estimate)
+    }
+    async fn get_fee_estimate_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetFeeEstimateRequest,
+    ) -> RpcResult<GetFeeEstimateResponse>;
+
+    async fn get_fee_estimate_experimental(&self, verbose: bool) -> RpcResult<GetFeeEstimateExperimentalResponse> {
+        self.get_fee_estimate_experimental_call(None, GetFeeEstimateExperimentalRequest { verbose }).await
+    }
+    async fn get_fee_estimate_experimental_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetFeeEstimateExperimentalRequest,
+    ) -> RpcResult<GetFeeEstimateExperimentalResponse>;
+
+    ///
+    async fn get_current_block_color(&self, hash: RpcHash) -> RpcResult<GetCurrentBlockColorResponse> {
+        Ok(self.get_current_block_color_call(None, GetCurrentBlockColorRequest { hash }).await?)
+    }
+    async fn get_current_block_color_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetCurrentBlockColorRequest,
+    ) -> RpcResult<GetCurrentBlockColorResponse>;
+
+    async fn get_virtual_chain_from_block_v2(
+        &self,
+        start_hash: RpcHash,
+        data_verbosity_level: Option<RpcDataVerbosityLevel>,
+        min_confirmation_count: Option<u64>,
+    ) -> RpcResult<GetVirtualChainFromBlockV2Response> {
+        self.get_virtual_chain_from_block_v2_call(
+            None,
+            GetVirtualChainFromBlockV2Request::new(start_hash, data_verbosity_level, min_confirmation_count),
+        )
+        .await
+    }
+    async fn get_virtual_chain_from_block_v2_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetVirtualChainFromBlockV2Request,
+    ) -> RpcResult<GetVirtualChainFromBlockV2Response>;
+
+    // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    // Notification API
+
+    /// Register a new listener and returns an id identifying it.
+    fn register_new_listener(&self, connection: ChannelConnection) -> ListenerId;
+
+    /// Unregister an existing listener.
+    ///
+    /// Stop all notifications for this listener, unregister the id and its associated connection.
+    async fn unregister_listener(&self, id: ListenerId) -> RpcResult<()>;
+
+    /// Start sending notifications of some type to a listener.
+    async fn start_notify(&self, id: ListenerId, scope: Scope) -> RpcResult<()>;
+
+    /// Stop sending notifications of some type to a listener.
+    async fn stop_notify(&self, id: ListenerId, scope: Scope) -> RpcResult<()>;
+
+    /// Execute a subscription command leading to either start or stop sending notifications
+    /// of some type to a listener.
+    async fn execute_subscribe_command(&self, id: ListenerId, scope: Scope, command: Command) -> RpcResult<()> {
+        match command {
+            Command::Start => self.start_notify(id, scope).await,
+            Command::Stop => self.stop_notify(id, scope).await,
+        }
+    }
+}
+
+pub type DynRpcService = Arc<dyn RpcApi>;
+
+downcast_sync!(dyn RpcApi);

@@ -1,0 +1,7 @@
+
+running 2 tests
+test palw_prefix_history::tests::pending_requests_have_a_fixed_cap_retry_interval_and_idle_expiry ... ok
+test palw_prefix_history::tests::only_requested_authenticated_records_complete_and_bad_replies_do_not_preempt ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 160 filtered out; finished in 0.01s
+

@@ -1,0 +1,31 @@
+{
+  "schema": "misaka-genesis-preupload-identity-v1",
+  "observed_at": "2026-10-18T04:15:34.698123+00:00",
+  "genesis_id": 2,
+  "index_file": "Huihui-Qwen3.5-2B-abliterated-PALW.palwart",
+  "index_sha256": "7241eaf1dcd2421718d08d238f4c986c55c504ce95bba85349cccc47a97d01d9",
+  "artifact_root": "136b823b66c0fb9b248dd9d733ceabf511164c91503b3fea7e2cd5f878d7c21ccefb0a3cb19eb02d543e137d720d7b53817121d2155ae04b346eed2122399a0a",
+  "program_bytes": 32301,
+  "program_blake2b512": "8f99de747ebfd268dce331f1639aa664535bff23e17284ac1f2029db02a0d97fafd00c42a70e6f65dc2d614bf420984c54871bcdba28c9d74b515496f190c896",
+  "program_matches_short_fit": true,
+  "kernel_id": "50a33a44fa0851f3daa40f0694249c2a89ff97cc2a5c53ddf09becc2430a230263cb8df006d53cee15e7fbedad4ea4796c7b2302212123cd4bedc34d65991ad3",
+  "kernel_version": 0,
+  "tokenizer_id": "fc0036dd03f8bf79d6dd924d5642d077f9f71f31488d6f1e14e1ad07ba71ec9dd578ba9ac8e61825a23b1262b73a77ca0f0ed28343f633e4518852ef58331b8e",
+  "short_fit_report_sha256": "20e904ecc5e9f470e12a8f333222bf00f60d0a3ca56bc8c03b7a84b7d407a05d",
+  "segments": [
+    {
+      "file": "Huihui-Qwen3.5-2B-abliterated-PALW.00000.palwseg",
+      "actual_bytes": 2147483648,
+      "expected_sha256": "cc5266c81ef4cb04a398b906ecf7499f3f6d78d940f30b24bd1cc14e51c83fe1",
+      "sha256_recomputed": false
+    },
+    {
+      "file": "Huihui-Qwen3.5-2B-abliterated-PALW.00001.palwseg",
+      "actual_bytes": 396660679,
+      "expected_sha256": "f208ee43a08a52dab99670d0f0881a6bd72aca4028024de85433286aac6c8f97",
+      "sha256_recomputed": false
+    }
+  ],
+  "long_fit": "still running; no long report or upload eligibility established",
+  "scope": "Index SHA, embedded program identity and segment sizes only. No segment rehash, numerical long-fit pass, upload or remote verification is claimed."
+}

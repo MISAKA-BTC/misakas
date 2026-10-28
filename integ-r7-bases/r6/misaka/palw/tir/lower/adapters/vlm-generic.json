@@ -1,0 +1,24 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "vlm-generic",
+  "doc": "The TEXT DECODER inside a multimodal `…ForConditionalGeneration` wrapper that no adapter names, read alone (text-only prompts) — data-driven, never per model: the wrapper's `text_config` is read by the decoder adapter its own `model_type` selects (the `vlm` dispatch table where it names one, else the decoder adapter claiming that model_type, over mixin-vlm); the decoder's tensor prefix is the ONE prefix the checkpoint stores `embed_tokens.weight` under (`$tensor_prefix_scan`: two is a refusal, a vision tower's own embeddings excluded); the head is `lm_head` at the root, under `language_model.` or under `model.`, whichever the index holds; tying is the wrapper's own `tie_word_embeddings` (transformers' PreTrainedModel ties on the wrapper config; the text decoder is a base model with no head, so `text_config.tie_word_embeddings` is inert), and where the wrapper does not state it only an index with no head decides it (tied) — a head present with the flag unstated is refused, never guessed. Every tensor outside the decoder, the head and the listed non-text components is still reported. The class it registers is TEXT-ONLY: partial-task coverage of the repository, never full-task.",
+  "match": {
+    "wrapper": {
+      "suffixes": ["ForConditionalGeneration"],
+      "decoder": "text_config"
+    }
+  },
+  "config": {
+    "inert": ["tie_word_embeddings"],
+    "root_inert": ["scale_factor"]
+  },
+  "vars": [
+    {"name": "generic_non_text_prefixes", "value": ["vision_tower.", "vision_model.", "model.vision_model.", "multi_modal_projector.", "model.vision_tower.", "model.multi_modal_projector.", "model.visual.", "visual.", "mtp.", "model.connector.", "connector."]},
+    {"name": "p", "value": {"$tensor_prefix_scan": {"probe": "embed_tokens.weight", "exclude": {"$var": "generic_non_text_prefixes"}, "default": "language_model.model."}}},
+    {"name": "generic_head_prefix", "value": {"$tensor_prefix": {"candidates": ["", "language_model.", "model."], "probe": "lm_head.weight", "default": ""}}},
+    {"name": "lm_head_name", "value": {"$cat": [{"$var": "generic_head_prefix"}, "lm_head"]}},
+    {"name": "prefix_aliases", "value": []},
+    {"name": "ignored_prefixes", "value": {"$var": "generic_non_text_prefixes"}},
+    {"name": "tied", "value": {"$let": ["rt", {"$root": "tie_word_embeddings"}, {"$if": [{"$ne": [{"$var": "rt"}, null]}, {"$var": "rt"}, {"$let": ["head", {"$has_tensor": {"$cat": [{"$var": "lm_head_name"}, ".weight"]}}, {"$if": [{"$eq": [{"$var": "head"}, false]}, true, {"$check": [false, "the wrapper does not state tie_word_embeddings and the checkpoint has a head (or no index was read): whether transformers ties it is the wrapper class's default, which this build does not know"]}]}]}]}]}}
+  ]
+}

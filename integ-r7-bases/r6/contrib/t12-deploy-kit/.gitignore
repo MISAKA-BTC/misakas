@@ -1,0 +1,4 @@
+# local release builds (build-release-local.sh) and the binaries distribute-from-mac.sh caches
+.cache/
+# probe-identity-local.sh logs when run from this directory
+probe-out/

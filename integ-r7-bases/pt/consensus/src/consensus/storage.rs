@@ -1,0 +1,562 @@
+use crate::{
+    config::Config,
+    model::stores::{
+        DB,
+        acceptance_data::DbAcceptanceDataStore,
+        block_transactions::DbBlockTransactionsStore,
+        block_window_cache::BlockWindowCacheStore,
+        daa::DbDaaStore,
+        depth::DbDepthStore,
+        dns_state::DbDnsStateStore,
+        epoch_accumulator::{DbBlockQualityPoolStore, DbEpochAccumulatorStore, DbReserveBalanceStore},
+        evm::{
+            DbEvmBlockHashMapStore, DbEvmBlockStateRootStore, DbEvmCanonicalHeadsStore, DbEvmCodeStore, DbEvmDepositLockStore,
+            DbEvmFlatAccountStore, DbEvmHeaderStore, DbEvmLatestStatePtrStore, DbEvmLogIndexStore, DbEvmNumberStore,
+            DbEvmPayloadStore, DbEvmRawTxStore, DbEvmReceiptsStore, DbEvmStateCheckpointStore, DbEvmStateDiffStore, DbEvmStateStore,
+            DbEvmTraceReplayStore, DbEvmTxIndexStore,
+        },
+        ghostdag::{CompactGhostdagData, DbGhostdagStore},
+        headers::{CompactHeaderData, DbHeadersStore},
+        headers_selected_tip::DbHeadersSelectedTipStore,
+        palw_state_v2::DbPalwStateV2Store,
+        past_pruning_points::DbPastPruningPointsStore,
+        pruning::DbPruningStore,
+        pruning_meta::PruningMetaStores,
+        pruning_overlay_snapshot::DbPruningPointOverlaySnapshotStore,
+        pruning_samples::DbPruningSamplesStore,
+        reachability::{DbReachabilityStore, ReachabilityData},
+        relations::DbRelationsStore,
+        rewarded_epochs::DbRewardedEpochsStore,
+        selected_chain::DbSelectedChainStore,
+        stake_bonds::DbStakeBondsStore,
+        statuses::DbStatusesStore,
+        tips::DbTipsStore,
+        utxo_diffs::DbUtxoDiffsStore,
+        utxo_multisets::DbUtxoMultisetsStore,
+        virtual_state::{LkgVirtualState, VirtualStores},
+    },
+    processes::{ghostdag::ordering::SortableBlock, reachability::inquirer as reachability, relations},
+};
+
+use super::cache_policy_builder::CachePolicyBuilder as PolicyBuilder;
+use kaspa_consensus_core::BlockHash;
+use kaspa_consensus_core::{BlockHashSet, blockstatus::BlockStatus};
+use kaspa_database::registry::DatabaseStorePrefixes;
+use parking_lot::RwLock;
+use std::{ops::DerefMut, sync::Arc};
+
+/// **The least a per-block overlay row cache holds** (`rewarded_epochs`, `block_quality_pool`,
+/// `reserve_balance`): more than the selected-chain overlay window reads of them per virtual commit on
+/// any shipped cadence (`overlay_window_walk_bound` blocks, ~600 at the 120 s PALW cadence, ~4,000 at the
+/// production table's base window), so a steady-state walk is memory-only. Rows are 8-100 bytes: 16,384 of
+/// each is under 2 MB.
+pub const OVERLAY_PER_BLOCK_CACHE_MIN_ITEMS: usize = 16_384;
+const _: () = assert!(OVERLAY_PER_BLOCK_CACHE_MIN_ITEMS >= 8_192, "the overlay window must fit the per-block caches");
+
+pub struct ConsensusStorage {
+    // DB
+    _db: Arc<DB>,
+
+    // Locked stores
+    pub statuses_store: Arc<RwLock<DbStatusesStore>>,
+    pub relations_store: Arc<RwLock<DbRelationsStore>>,
+    pub reachability_store: Arc<RwLock<DbReachabilityStore>>,
+    pub reachability_relations_store: Arc<RwLock<DbRelationsStore>>,
+    pub pruning_point_store: Arc<RwLock<DbPruningStore>>,
+    pub headers_selected_tip_store: Arc<RwLock<DbHeadersSelectedTipStore>>,
+    pub body_tips_store: Arc<RwLock<DbTipsStore>>,
+    pub pruning_meta_stores: Arc<RwLock<PruningMetaStores>>,
+    pub virtual_stores: Arc<RwLock<VirtualStores>>,
+    pub selected_chain_store: Arc<RwLock<DbSelectedChainStore>>,
+
+    // kaspa-pq DNS finality overlay stores (ADR-0009, Phase 10)
+    pub dns_state_store: Arc<RwLock<DbDnsStateStore>>,
+    // kaspa-pq ADR-0022: singleton overlay snapshot as-of the current pruning point.
+    pub pruning_overlay_snapshot_store: Arc<RwLock<DbPruningPointOverlaySnapshotStore>>,
+    pub stake_bonds_store: Arc<RwLock<DbStakeBondsStore>>,
+    /// MISAKA VLT: accepted capability declarations, the pool a verifier committee is drawn from.
+    /// ADR-0044 Unit C: per-chain-block PALW state deltas and the materialized anchor. Empty on
+    /// every shipped network — the writer is gated on a `ConsensusV2` bundle, which no preset
+    /// carries.
+    pub palw_state_v2_store: Arc<RwLock<DbPalwStateV2Store>>,
+    /// ADR-0067: accepted class registrations' declarations (profile + canonical), by class id.
+    pub palw_class_carriage_store: Arc<RwLock<crate::model::stores::palw_class_carriage::DbPalwClassCarriageStore>>,
+
+    // kaspa-pq Selected-Parent EVM Lane (ADR-0020, design v0.4 §11). All four
+    // are inert (never read or written) until `evm_activation_daa_score` is
+    // finite; the singleton heads store takes the lock pattern of
+    // `dns_state_store`, the per-block stores are append-only.
+    pub evm_header_store: Arc<DbEvmHeaderStore>,
+    pub evm_state_store: Arc<DbEvmStateStore>,
+    pub evm_payload_store: Arc<DbEvmPayloadStore>,
+    pub evm_heads_store: Arc<RwLock<DbEvmCanonicalHeadsStore>>,
+    /// ADR-0109 Decision 1: the node-local deposit-lock index (prefix 254) — what the template
+    /// claims unasked. Staged in `commit_virtual_state`, rebuilt from the virtual set on demand.
+    pub evm_deposit_lock_store: Arc<RwLock<DbEvmDepositLockStore>>,
+    /// §16: receipts of each ACCEPTING chain block (prefix 203).
+    pub evm_receipts_store: Arc<DbEvmReceiptsStore>,
+    /// §16: tx-hash → locations lookup (prefix 204).
+    pub evm_tx_index_store: Arc<DbEvmTxIndexStore>,
+    /// §16: eth-rpc 32-byte block id → L1 BlockHash (prefix 210, `eth_getBlockByHash`).
+    pub evm_block_hash_map_store: Arc<DbEvmBlockHashMapStore>,
+    /// §16: evm_number → L1 BlockHash (prefix 213, `eth_getBlockByNumber` / `eth_getLogs`).
+    pub evm_number_store: Arc<DbEvmNumberStore>,
+    pub evm_raw_tx_store: Arc<DbEvmRawTxStore>,
+    pub evm_log_index_store: Arc<DbEvmLogIndexStore>,
+    /// §11: per-accepting-block `debug_traceTransaction` replay plan (prefix 219).
+    pub evm_trace_store: Arc<DbEvmTraceReplayStore>,
+    /// §12 archive: per-block forward state diff (prefix 220).
+    pub evm_state_diff_store: Arc<DbEvmStateDiffStore>,
+    /// §12 archive: periodic full-state checkpoints (prefix 221).
+    pub evm_state_checkpoint_store: Arc<DbEvmStateCheckpointStore>,
+    /// §12 archive: content-addressed `code_hash → code` (prefix 222).
+    pub evm_code_store: Arc<DbEvmCodeStore>,
+    // C-01 state backend (Stage 1) — flat latest-canonical state (234) + per-block
+    // state-root index (232) + canonical pointer (231). INERT until the writer/seed
+    // slices; defining them now keeps the prefixes reserved and offline-testable.
+    pub evm_flat_account_store: Arc<DbEvmFlatAccountStore>,
+    pub evm_block_state_root_store: Arc<DbEvmBlockStateRootStore>,
+    // RwLock-wrapped: the singleton pointer's `set_batch` takes `&mut self`
+    // (CachedDbItem write), so the shadow dual-write (slice S4) advances it under
+    // a write lock — taken only when `--evm-shadow-state-backend` is on.
+    pub evm_latest_state_ptr_store: Arc<RwLock<DbEvmLatestStatePtrStore>>,
+
+    // Append-only stores
+    pub ghostdag_store: Arc<DbGhostdagStore>,
+    pub headers_store: Arc<DbHeadersStore>,
+    pub block_transactions_store: Arc<DbBlockTransactionsStore>,
+    pub past_pruning_points_store: Arc<DbPastPruningPointsStore>,
+    pub daa_excluded_store: Arc<DbDaaStore>,
+    pub depth_store: Arc<DbDepthStore>,
+    pub pruning_samples_store: Arc<DbPruningSamplesStore>,
+
+    // Utxo-related stores
+    pub utxo_diffs_store: Arc<DbUtxoDiffsStore>,
+    pub utxo_multisets_store: Arc<DbUtxoMultisetsStore>,
+    pub acceptance_data_store: Arc<DbAcceptanceDataStore>,
+
+    // kaspa-pq DNS overlay (ADR-0009 Addendum B §B.3(c)): per-block rewarded
+    // `(bond_outpoint, epoch)` keys for cross-block reward uniqueness.
+    pub rewarded_epochs_store: Arc<DbRewardedEpochsStore>,
+
+    // kaspa-pq ADR-0018 "本格版" (PoS-v2, Phase 1): the per-epoch accumulator
+    // ([`EpochTally`]) and its per-block validator quality sub-pool input. Both
+    // inert (never written) until `pos_v2_activation_daa_score` (`u64::MAX` today).
+    pub epoch_accumulator_store: Arc<DbEpochAccumulatorStore>,
+    pub block_quality_pool_store: Arc<DbBlockQualityPoolStore>,
+    pub reserve_balance_store: Arc<DbReserveBalanceStore>,
+
+    // Block window caches
+    pub block_window_cache_for_difficulty: Arc<BlockWindowCacheStore>,
+    pub block_window_cache_for_past_median_time: Arc<BlockWindowCacheStore>,
+
+    // "Last Known Good" caches
+    /// The "last known good" virtual state. To be used by any logic which does not want to wait
+    /// for a possible virtual state write to complete but can rather settle with the last known state
+    pub lkg_virtual_state: LkgVirtualState,
+}
+
+/// **The consensus caches' declared budget, as a number an operator can put beside an RSS reading.**
+///
+/// `ConsensusStorage::new` sizes fourteen caches from byte budgets scaled by `--ram-scale`, and the
+/// comment beside them has always said they "sum up to ~1GB". `~1GB` is not a figure anyone can
+/// subtract from a process's 11.5 GiB to find out what the other 10 were — which is exactly the
+/// position the testnet-12 fleet's operator was in. This gives the sum, at a stated scale, in bytes.
+///
+/// **It is a DECLARED bound, not a measurement**: a cache holds what it has been given, allocator
+/// overhead is on top (the comment's "obviously takes more low level alloc space"), and RocksDB's own
+/// block cache is separate (`--rocksdb-cache-size`). Its use is as the subtrahend in a decomposition,
+/// so "anonymous memory minus the caches" becomes a quantity with a name instead of a remainder.
+///
+/// The multipliers are the ones the constructor applies for levels and covering sets, kept here
+/// because a sum that ignored them would understate the whole point by 600 MB at scale 1.
+pub fn declared_cache_budget_bytes_v1(ram_scale: f64) -> u64 {
+    let scaled = |s: u64| (s as f64 * ram_scale) as u64;
+    scaled(30_000_000)      // daa_excluded
+        + scaled(30_000_000)  // statuses
+        + scaled(100_000_000) // reachability_data
+        + scaled(100_000_000) * 2 // reachability_sets: tree children and future covering set
+        + scaled(15_000_000) // ghostdag_compact
+        + scaled(5_000_000)  // headers_compact
+        + scaled(80_000_000) * 3 // parents: reachability and levels
+        + scaled(20_000_000) * 3 // children: reachability and levels
+        + scaled(80_000_000) * 2 // ghostdag: levels
+        + scaled(80_000_000) // headers
+        + scaled(40_000_000) // transactions
+        + scaled(40_000_000) // utxo_diffs
+        + scaled(200_000_000) * 2 // block_window: difficulty and median time
+        + scaled(40_000_000) // acceptance_data
+}
+
+impl ConsensusStorage {
+    pub fn new(db: Arc<DB>, config: Arc<Config>) -> Arc<Self> {
+        let scale_factor = config.ram_scale;
+        let scaled = |s| (s as f64 * scale_factor) as usize;
+
+        let params = &config.params;
+        let perf_params = &config.perf;
+
+        // Lower and upper bounds
+        let pruning_depth = params.pruning_depth() as usize;
+        let pruning_size_for_caches = pruning_depth + params.finality_depth() as usize; // Upper bound for any block/header related data
+        let level_lower_bound = 2 * params.pruning_proof_m as usize; // Number of items lower bound for level-related caches
+
+        // Budgets in bytes. All byte budgets overall sum up to ~1GB of memory (which obviously takes more low level alloc space)
+        let daa_excluded_budget = scaled(30_000_000);
+        let statuses_budget = scaled(30_000_000);
+        let reachability_data_budget = scaled(100_000_000);
+        let reachability_sets_budget = scaled(100_000_000); // x 2 for tree children and future covering set
+        let ghostdag_compact_budget = scaled(15_000_000);
+        let headers_compact_budget = scaled(5_000_000);
+        let parents_budget = scaled(80_000_000); // x 3 for reachability and levels
+        let children_budget = scaled(20_000_000); // x 3 for reachability and levels
+        let ghostdag_budget = scaled(80_000_000); // x 2 for levels
+        let headers_budget = scaled(80_000_000);
+        let transactions_budget = scaled(40_000_000);
+        let utxo_diffs_budget = scaled(40_000_000);
+        let block_window_budget = scaled(200_000_000); // x 2 for difficulty and median time
+        let acceptance_data_budget = scaled(40_000_000);
+
+        // Unit sizes in bytes
+        let daa_excluded_bytes = size_of::<BlockHash>() + size_of::<BlockHashSet>(); // Expected empty sets
+        let status_bytes = size_of::<BlockHash>() + size_of::<BlockStatus>();
+        let reachability_data_bytes = size_of::<BlockHash>() + size_of::<ReachabilityData>();
+        let ghostdag_compact_bytes = size_of::<BlockHash>() + size_of::<CompactGhostdagData>();
+        let headers_compact_bytes = size_of::<BlockHash>() + size_of::<CompactHeaderData>();
+
+        // If the fork is already scheduled, prefer the long-term, permanent values
+        let difficulty_window_bytes = params.difficulty_window_size * size_of::<SortableBlock>();
+        let median_window_bytes = params.past_median_time_window_size * size_of::<SortableBlock>();
+
+        // Cache policy builders
+        let daa_excluded_builder =
+            PolicyBuilder::new().max_items(pruning_depth).bytes_budget(daa_excluded_budget).unit_bytes(daa_excluded_bytes).untracked(); // Required only above the pruning point
+        let statuses_builder =
+            PolicyBuilder::new().max_items(pruning_size_for_caches).bytes_budget(statuses_budget).unit_bytes(status_bytes).untracked();
+        let reachability_data_builder = PolicyBuilder::new()
+            .max_items(pruning_size_for_caches)
+            .bytes_budget(reachability_data_budget)
+            .unit_bytes(reachability_data_bytes)
+            .untracked();
+        let ghostdag_compact_builder = PolicyBuilder::new()
+            .max_items(pruning_size_for_caches)
+            .bytes_budget(ghostdag_compact_budget)
+            .unit_bytes(ghostdag_compact_bytes)
+            .min_items(level_lower_bound)
+            .untracked();
+        let headers_compact_builder = PolicyBuilder::new()
+            .max_items(pruning_size_for_caches)
+            .bytes_budget(headers_compact_budget)
+            .unit_bytes(headers_compact_bytes)
+            .untracked();
+        let parents_builder = PolicyBuilder::new()
+            .bytes_budget(parents_budget)
+            .unit_bytes(size_of::<BlockHash>())
+            .min_items(level_lower_bound)
+            .tracked_units();
+        let children_builder = PolicyBuilder::new()
+            .bytes_budget(children_budget)
+            .unit_bytes(size_of::<BlockHash>())
+            .min_items(level_lower_bound)
+            .tracked_units();
+        let reachability_sets_builder =
+            PolicyBuilder::new().bytes_budget(reachability_sets_budget).unit_bytes(size_of::<BlockHash>()).tracked_units();
+        let difficulty_window_builder = PolicyBuilder::new()
+            .max_items(perf_params.block_window_cache_size)
+            .bytes_budget(block_window_budget)
+            .unit_bytes(difficulty_window_bytes)
+            .untracked();
+        let median_window_builder = PolicyBuilder::new()
+            .max_items(perf_params.block_window_cache_size)
+            .bytes_budget(block_window_budget)
+            .unit_bytes(median_window_bytes)
+            .untracked();
+        let ghostdag_builder = PolicyBuilder::new().bytes_budget(ghostdag_budget).min_items(level_lower_bound).tracked_bytes();
+        let headers_builder = PolicyBuilder::new().bytes_budget(headers_budget).tracked_bytes();
+        let utxo_diffs_builder = PolicyBuilder::new().bytes_budget(utxo_diffs_budget).tracked_bytes();
+        let block_data_builder = PolicyBuilder::new().max_items(perf_params.block_data_cache_size).untracked();
+        let header_data_builder = PolicyBuilder::new().max_items(perf_params.header_data_cache_size).untracked();
+        let utxo_set_builder = PolicyBuilder::new().max_items(perf_params.utxo_set_cache_size).untracked();
+        let transactions_builder = PolicyBuilder::new().bytes_budget(transactions_budget).tracked_bytes();
+        let acceptance_data_builder = PolicyBuilder::new().bytes_budget(acceptance_data_budget).tracked_bytes();
+        let past_pruning_points_builder = PolicyBuilder::new().max_items(1024).untracked();
+
+        // TODO: consider tracking UtxoDiff byte sizes more accurately including the exact size of ScriptPublicKey
+
+        // Headers
+        let statuses_store = Arc::new(RwLock::new(DbStatusesStore::new(db.clone(), statuses_builder.build())));
+        let relations_store = Arc::new(RwLock::new(DbRelationsStore::new(
+            db.clone(),
+            0,
+            parents_builder.downscale(0).build(),
+            children_builder.downscale(0).build(),
+        )));
+        let reachability_store = Arc::new(RwLock::new(DbReachabilityStore::new(
+            db.clone(),
+            reachability_data_builder.build(),
+            reachability_sets_builder.build(),
+        )));
+
+        let reachability_relations_store = Arc::new(RwLock::new(DbRelationsStore::with_prefix(
+            db.clone(),
+            DatabaseStorePrefixes::ReachabilityRelations.as_ref(),
+            parents_builder.build(),
+            children_builder.build(),
+        )));
+
+        let ghostdag_store = Arc::new(DbGhostdagStore::new(
+            db.clone(),
+            0,
+            ghostdag_builder.downscale(0).build(),
+            ghostdag_compact_builder.downscale(0).build(),
+        ));
+        let daa_excluded_store = Arc::new(DbDaaStore::new(db.clone(), daa_excluded_builder.build()));
+        let headers_store = Arc::new(DbHeadersStore::new(db.clone(), headers_builder.build(), headers_compact_builder.build()));
+        let depth_store = Arc::new(DbDepthStore::new(db.clone(), header_data_builder.build()));
+        let selected_chain_store = Arc::new(RwLock::new(DbSelectedChainStore::new(db.clone(), header_data_builder.build())));
+
+        // Pruning
+        let pruning_point_store = Arc::new(RwLock::new(DbPruningStore::new(db.clone())));
+        let past_pruning_points_store = Arc::new(DbPastPruningPointsStore::new(db.clone(), past_pruning_points_builder.build()));
+        let pruning_meta_stores = Arc::new(RwLock::new(PruningMetaStores::new(db.clone(), utxo_set_builder.build())));
+        let pruning_samples_store = Arc::new(DbPruningSamplesStore::new(db.clone(), header_data_builder.build()));
+        // Txs
+        let block_transactions_store = Arc::new(DbBlockTransactionsStore::new(db.clone(), transactions_builder.build()));
+        let utxo_diffs_store = Arc::new(DbUtxoDiffsStore::new(db.clone(), utxo_diffs_builder.build()));
+        let utxo_multisets_store = Arc::new(DbUtxoMultisetsStore::new(db.clone(), block_data_builder.build()));
+        let acceptance_data_store = Arc::new(DbAcceptanceDataStore::new(db.clone(), acceptance_data_builder.build()));
+
+        // Tips
+        let headers_selected_tip_store = Arc::new(RwLock::new(DbHeadersSelectedTipStore::new(db.clone())));
+        let body_tips_store = Arc::new(RwLock::new(DbTipsStore::new(db.clone())));
+
+        // kaspa-pq DNS finality overlay stores (ADR-0009, Phase 10). The
+        // bond set is small (bounded by the active validator count), so a
+        // modest item-capped cache suffices.
+        let dns_state_store = Arc::new(RwLock::new(DbDnsStateStore::new(db.clone())));
+        let pruning_overlay_snapshot_store = Arc::new(RwLock::new(DbPruningPointOverlaySnapshotStore::new(db.clone())));
+        let stake_bonds_store =
+            Arc::new(RwLock::new(DbStakeBondsStore::new(db.clone(), PolicyBuilder::new().max_items(8192).untracked().build())));
+        // MISAKA VLT: capability declarations. Bounded by the validator count rather than by chain
+        // length — `capability_candidate_pool` keeps one entry per validator — so it is sized like
+        // the bond set beside it.
+        // ADR-0044 Unit C. `untracked` like its neighbours: the row's own `estimate_mem_bytes`
+        // exists for readers, but a tracked-bytes policy on a store whose rows vary by orders of
+        // magnitude is how the validator-attestation crash happened.
+        let palw_state_v2_store = {
+            // ADR-0069 Decision 7's fence rides the store because the store RE-DERIVES what it
+            // decodes: past the fence the consistency identity is an upper bound, and a store told
+            // otherwise would refuse this node's own tip on the next restart.
+            let mut store = DbPalwStateV2Store::new(db.clone(), PolicyBuilder::new().max_items(4096).untracked().build())
+                .with_uncertified_weightless(params.palw_uncertified_weightless)
+                // ADR-0145's basis rides the store for the same reason, and it is a HEIGHT rather
+                // than a fence because every site that reads it compares it against a CLAIM's own
+                // `accepted_daa`, never against a block's.
+                .with_canonical_work_daa(params.palw_canonical_work_daa());
+            if let Err(err) = store.reindex_if_stale() {
+                panic!("[palw-state-v2-store] durable record-layout initialization failed; refusing consensus startup: {err}");
+            }
+            Arc::new(RwLock::new(store))
+        };
+        let palw_class_carriage_store = {
+            let mut store = crate::model::stores::palw_class_carriage::DbPalwClassCarriageStore::new(
+                db.clone(),
+                PolicyBuilder::new().max_items(256).untracked().build(),
+            );
+            if let Err(err) = store.reindex_if_stale() {
+                panic!("[palw-class-carriage] durable declaration-layout initialization failed; refusing consensus startup: {err}");
+            }
+            Arc::new(RwLock::new(store))
+        };
+        // Per-block rewarded `(bond, epoch)` keys (Addendum B §B.3(c)), keyed by
+        // block hash. NOTE: the value `RewardedEpochKeys` is a `Vec<(outpoint, epoch)>`,
+        // which implements `estimate_mem_units` but NOT `estimate_mem_bytes`; it must
+        // therefore use an UNTRACKED (Count) policy. A `tracked_bytes` policy (e.g. the
+        // utxo_diffs builder it used to borrow) panics in `mem_size` (`not implemented`)
+        // on the first non-empty reward write — this was the validator-attestation
+        // `virtual-processor` crash. The DB is the source of truth; this cache is only a
+        // per-block read accelerator, so an item cap (mirroring `block_data_builder`)
+        // suffices.
+        //
+        // **Sized to the overlay window, not to `block_data_cache_size`** (the 2026-10-03 panel
+        // starvation, docs/design/palw/verification/t12-panel-backlog-1003.md §4). Every virtual commit — and the
+        // template and the validation of every block beside it — walks the selected chain back
+        // `overlay_window_walk_bound` and reads these three per-block rows for each ancestor
+        // (`selected_chain_overlay_window`). A 120 s PALW network has `bps() == 1`, so the cache held
+        // 200 rows against a window of hundreds to thousands of blocks: every walk missed, and each miss was a
+        // RocksDB point read — against a 32 MB block cache that cannot hold the 57 MB block the PALW tip row
+        // makes of its neighbours. The virtual processor of the 5.104 seats spent 100-186 % of a core there.
+        // The rows are tens of bytes; the cache is a read accelerator only (the DB is the source of truth).
+        let overlay_rows = perf_params.block_data_cache_size.max(OVERLAY_PER_BLOCK_CACHE_MIN_ITEMS);
+        let rewarded_epochs_store =
+            Arc::new(DbRewardedEpochsStore::new(db.clone(), PolicyBuilder::new().max_items(overlay_rows).untracked().build()));
+        // kaspa-pq ADR-0018 "本格版" (PoS-v2, Phase 1). Both values (`EpochTally`,
+        // `u64`) are unit-/count-estimable only, so — like `rewarded_epochs_store`
+        // — they MUST use an UNTRACKED (Count) policy; a `tracked_bytes` policy
+        // would call `estimate_mem_bytes` and panic. The per-epoch accumulator is
+        // small (one row per epoch); the per-block quality pool mirrors the
+        // per-block rewarded-keys cache sizing.
+        let epoch_accumulator_store =
+            Arc::new(DbEpochAccumulatorStore::new(db.clone(), PolicyBuilder::new().max_items(8192).untracked().build()));
+        let block_quality_pool_store =
+            Arc::new(DbBlockQualityPoolStore::new(db.clone(), PolicyBuilder::new().max_items(overlay_rows).untracked().build()));
+        let reserve_balance_store =
+            Arc::new(DbReserveBalanceStore::new(db.clone(), PolicyBuilder::new().max_items(overlay_rows).untracked().build()));
+
+        // kaspa-pq Selected-Parent EVM Lane (ADR-0020, v0.4). All values carry
+        // real byte estimators, but mirror the per-block stores above with an
+        // untracked item cap (the state snapshot is O(state) — keep the cache
+        // small; the DB row is the source of truth).
+        let evm_header_store = Arc::new(DbEvmHeaderStore::new(
+            db.clone(),
+            PolicyBuilder::new().max_items(perf_params.block_data_cache_size).untracked().build(),
+        ));
+        let evm_state_store = Arc::new(DbEvmStateStore::new(db.clone(), PolicyBuilder::new().max_items(64).untracked().build()));
+        let evm_payload_store = Arc::new(DbEvmPayloadStore::new(
+            db.clone(),
+            PolicyBuilder::new().max_items(perf_params.block_data_cache_size).untracked().build(),
+        ));
+        let evm_heads_store = Arc::new(RwLock::new(DbEvmCanonicalHeadsStore::new(db.clone())));
+        let evm_deposit_lock_store =
+            Arc::new(RwLock::new(DbEvmDepositLockStore::new(db.clone(), PolicyBuilder::new().max_items(1024).untracked().build())));
+        let evm_receipts_store = Arc::new(DbEvmReceiptsStore::new(
+            db.clone(),
+            PolicyBuilder::new().max_items(perf_params.block_data_cache_size).untracked().build(),
+        ));
+        let evm_tx_index_store = Arc::new(DbEvmTxIndexStore::new(
+            db.clone(),
+            PolicyBuilder::new().max_items(perf_params.block_data_cache_size).untracked().build(),
+        ));
+        let evm_block_hash_map_store = Arc::new(DbEvmBlockHashMapStore::new(
+            db.clone(),
+            PolicyBuilder::new().max_items(perf_params.block_data_cache_size).untracked().build(),
+        ));
+        let evm_number_store = Arc::new(DbEvmNumberStore::new(
+            db.clone(),
+            PolicyBuilder::new().max_items(perf_params.block_data_cache_size).untracked().build(),
+        ));
+        let evm_raw_tx_store = Arc::new(DbEvmRawTxStore::new(
+            db.clone(),
+            PolicyBuilder::new().max_items(perf_params.block_data_cache_size).untracked().build(),
+        ));
+        // §8 log posting index: a set store (no value cache).
+        let evm_log_index_store = Arc::new(DbEvmLogIndexStore::new(db.clone()));
+        // §11 trace replay plan: large per-block value (raw tx bytes), so a small
+        // untracked cache like the state store.
+        let evm_trace_store = Arc::new(DbEvmTraceReplayStore::new(db.clone(), PolicyBuilder::new().max_items(64).untracked().build()));
+        // §12 archive stores (inert until the diff/checkpoint writer + reconstruction
+        // land): large per-block values, so small untracked caches.
+        let evm_state_diff_store =
+            Arc::new(DbEvmStateDiffStore::new(db.clone(), PolicyBuilder::new().max_items(64).untracked().build()));
+        let evm_state_checkpoint_store =
+            Arc::new(DbEvmStateCheckpointStore::new(db.clone(), PolicyBuilder::new().max_items(16).untracked().build()));
+        let evm_code_store = Arc::new(DbEvmCodeStore::new(
+            db.clone(),
+            PolicyBuilder::new().max_items(perf_params.block_data_cache_size).untracked().build(),
+        ));
+        // C-01 Stage 1 flat-state stores (inert until the writer slice).
+        let evm_flat_account_store = Arc::new(DbEvmFlatAccountStore::new(
+            db.clone(),
+            PolicyBuilder::new().max_items(perf_params.block_data_cache_size).untracked().build(),
+        ));
+        let evm_block_state_root_store =
+            Arc::new(DbEvmBlockStateRootStore::new(db.clone(), PolicyBuilder::new().max_items(256).untracked().build()));
+        let evm_latest_state_ptr_store = Arc::new(RwLock::new(DbEvmLatestStatePtrStore::new(db.clone())));
+
+        // Block windows
+        let block_window_cache_for_difficulty = Arc::new(BlockWindowCacheStore::new(difficulty_window_builder.build()));
+        let block_window_cache_for_past_median_time = Arc::new(BlockWindowCacheStore::new(median_window_builder.build()));
+
+        // Virtual stores
+        let lkg_virtual_state = LkgVirtualState::default();
+        let virtual_stores =
+            Arc::new(RwLock::new(VirtualStores::new(db.clone(), lkg_virtual_state.clone(), utxo_set_builder.build())));
+
+        // Ensure that reachability stores are initialized
+        reachability::init(reachability_store.write().deref_mut()).unwrap();
+        relations::init(reachability_relations_store.write().deref_mut());
+
+        Arc::new(Self {
+            _db: db,
+            statuses_store,
+            relations_store,
+            reachability_relations_store,
+            reachability_store,
+            ghostdag_store,
+            pruning_point_store,
+            headers_selected_tip_store,
+            body_tips_store,
+            headers_store,
+            block_transactions_store,
+            pruning_meta_stores,
+            virtual_stores,
+            selected_chain_store,
+            dns_state_store,
+            pruning_overlay_snapshot_store,
+            stake_bonds_store,
+            palw_class_carriage_store,
+            palw_state_v2_store,
+            evm_header_store,
+            evm_state_store,
+            evm_payload_store,
+            evm_heads_store,
+            evm_deposit_lock_store,
+            evm_receipts_store,
+            evm_tx_index_store,
+            evm_block_hash_map_store,
+            evm_number_store,
+            evm_raw_tx_store,
+            evm_log_index_store,
+            evm_trace_store,
+            evm_state_diff_store,
+            evm_state_checkpoint_store,
+            evm_code_store,
+            evm_flat_account_store,
+            evm_block_state_root_store,
+            evm_latest_state_ptr_store,
+            acceptance_data_store,
+            past_pruning_points_store,
+            daa_excluded_store,
+            depth_store,
+            pruning_samples_store,
+            utxo_diffs_store,
+            rewarded_epochs_store,
+            epoch_accumulator_store,
+            block_quality_pool_store,
+            reserve_balance_store,
+            utxo_multisets_store,
+            block_window_cache_for_difficulty,
+            block_window_cache_for_past_median_time,
+            lkg_virtual_state,
+        })
+    }
+}
+
+#[cfg(test)]
+mod declared_budget_tests {
+    /// **Every `scaled(..)` budget in the constructor is in the sum.**
+    ///
+    /// A hand-written total is a second copy of a list, and a second copy goes stale the first time a
+    /// cache is added — silently, because a sum that is too small still looks like a sum. This counts
+    /// the constructor's own `scaled(` sites and holds the count, so adding one without adding it here
+    /// fails rather than quietly understating the caches by its size.
+    #[test]
+    fn the_sum_lists_every_scaled_budget() {
+        // The needle is built from pieces on purpose: spelled whole, it would appear in this test's
+        // own text and the count would include the line doing the counting. The identity module's
+        // source scan hit the same trap, from the other direction.
+        let needle = format!("_budget {} scaled(", "=");
+        let in_constructor = include_str!("storage.rs").matches(needle.as_str()).count();
+        assert_eq!(in_constructor, 14, "the constructor sizes {in_constructor} caches; update declared_cache_budget_bytes_v1");
+    }
+
+    /// The figure the constructor's own comment claims, and the scale it claims it at.
+    #[test]
+    fn the_budget_is_about_the_gigabyte_the_comment_promises() {
+        let at_one = super::declared_cache_budget_bytes_v1(1.0);
+        assert_eq!(at_one, 1_440_000_000, "fourteen caches with their level multipliers");
+        // And it follows the scale, which is what makes it usable beside a per-share --ram-scale.
+        assert_eq!(super::declared_cache_budget_bytes_v1(0.225), 324_000_000);
+        assert_eq!(super::declared_cache_budget_bytes_v1(0.0), 0);
+    }
+}

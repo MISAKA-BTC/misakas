@@ -1,0 +1,6 @@
+
+running 1 test
+test palw_state_v2::tests::the_version_22_state_root_golden_vectors ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3629 filtered out; finished in 0.03s
+

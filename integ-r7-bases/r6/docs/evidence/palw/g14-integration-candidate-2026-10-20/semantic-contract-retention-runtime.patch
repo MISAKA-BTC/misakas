@@ -1,0 +1,212 @@
+diff --git a/consensus/core/src/palw_court_service_state_v2.rs b/consensus/core/src/palw_court_service_state_v2.rs
+index 764696d6b..0da2ddecc 100644
+--- a/consensus/core/src/palw_court_service_state_v2.rs
++++ b/consensus/core/src/palw_court_service_state_v2.rs
+@@ -90,23 +90,39 @@ pub(crate) fn require_tir_service_custody_window_v1(
+ ) -> Result<(), String> {
+     let plan = frame.plan_v1();
+     if frame.custody_v1().pledge_v1().material_until_daa < required_until {
+-        return Err("service hard deadline exceeds signed TIR custody".into());
++        return Err("service material horizon exceeds signed TIR custody".into());
+     }
+     if plan.semantic.is_some() {
+         let bundle = state.staged_bundle_contract_v1(plan.original_claim)
+             .ok_or("service semantic dependency contract is missing")?;
+-        let pledge = &bundle.history_custody.pledge;
+-        if pledge.claim != plan.original_claim
+-            || Some(pledge.resource_plan_id) != plan.semantic_resource_plan_id
+-            || pledge.execution_root != frame.original_v1().execution_root
+-            || pledge.job_identity != crate::palw_fp_execution_v3::palw_fp_job_pin_v1(frame.original_v1())
+-            || pledge.producer != frame.custody_v1().pledge_v1().producer
+-        {
+-            return Err("service semantic custody substitutes its original scope".into());
+-        }
+-        if pledge.material_until_daa < required_until {
+-            return Err("service hard deadline exceeds signed semantic custody".into());
+-        }
++        require_tir_service_semantic_custody_v1(frame, bundle, required_until)?;
++    }
++    Ok(())
++}
++
++/// Validate a proposed replacement semantic contract against its retained
++/// original. Native panel/qualification updates remain possible; replacing the
++/// dependency's scope or shortening its signed horizon does not.
++pub(crate) fn require_tir_service_semantic_custody_v1(
++    frame: &crate::palw_tir_public_claim_v1::PalwTirPublicClaimV1,
++    bundle: &crate::palw_staged_bundle_v1::PalwStagedBundleContractV1,
++    required_until: u64,
++) -> Result<(), String> {
++    let plan = frame.plan_v1();
++    if plan.semantic.is_none() {
++        return Err("service original has no semantic dependency".into());
++    }
++    let pledge = &bundle.history_custody.pledge;
++    if pledge.claim != plan.original_claim
++        || Some(pledge.resource_plan_id) != plan.semantic_resource_plan_id
++        || pledge.execution_root != frame.original_v1().execution_root
++        || pledge.job_identity != crate::palw_fp_execution_v3::palw_fp_job_pin_v1(frame.original_v1())
++        || pledge.producer != frame.custody_v1().pledge_v1().producer
++    {
++        return Err("service semantic custody substitutes its original scope".into());
++    }
++    if pledge.material_until_daa < required_until {
++        return Err("service material horizon exceeds signed semantic custody".into());
+     }
+     Ok(())
+ }
+@@ -180,6 +196,11 @@ impl crate::palw_state_v2::PalwChainStateV2 {
+     pub fn court_service_holds_material_v1(&self, key: &crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1) -> bool {
+         use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as Key, PalwStagedCourtRowV1 as Row};
+         let claim = match key {
++            // Keep semantic dependencies and their owner material across TTL.
++            // Native moves/closures still mutate rows; only destructive removal
++            // and automatic default/TTL sweeps are deferred while unresolved.
++            Key::Claim(claim) | Key::Owner(claim, _) if crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(self, *claim)
++                .is_none_or(|frame| frame.plan_v1().semantic.is_some()) => Some(*claim),
+             Key::TirClaim(claim) | Key::TirAcquisition(claim, ..) | Key::TirPreparation(claim, ..) | Key::TirWitness(claim, ..) => {
+                 Some(*claim)
+             }
+diff --git a/consensus/core/src/palw_staged_court_fold_v1.rs b/consensus/core/src/palw_staged_court_fold_v1.rs
+index 1da5a5083..725abf62f 100644
+--- a/consensus/core/src/palw_staged_court_fold_v1.rs
++++ b/consensus/core/src/palw_staged_court_fold_v1.rs
+@@ -1048,6 +1048,31 @@ impl TransitionBuilder<'_> {
+         if let Some(PalwStagedCourtRowV1::CourtService(service)) = &new {
+             service.check_context(&self.state).map_err(PalwStateV2Error::CarriageInconsistent)?;
+         }
++        if let PalwStagedCourtKeyV1::Claim(claim) = key
++            && let Some(binding) = self.state.court_service_state_v1().and_then(|s| s.claims.get(&claim))
++        {
++            let frame = crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(&self.state, claim)
++                .ok_or_else(|| PalwStateV2Error::CarriageInconsistent("service semantic update lost original frame".into()))?;
++            if frame.plan_v1().semantic.is_some()
++                && let Some(row) = new.as_ref()
++            {
++                let PalwStagedCourtRowV1::ClaimBundle(bundle) = row else {
++                    return Err(PalwStateV2Error::CarriageInconsistent("service semantic dependency cannot change row type".into()));
++                };
++                row.check(&key).map_err(PalwStateV2Error::CarriageInconsistent)?;
++                let old = self.state.staged_bundle_contract_v1(claim)
++                    .ok_or_else(|| PalwStateV2Error::CarriageInconsistent("service semantic update lost signed dependency".into()))?;
++                if old.history_custody.pledge != bundle.history_custody.pledge
++                    || old.original_binding != bundle.original_binding
++                {
++                    return Err(PalwStateV2Error::CarriageInconsistent("service semantic original pledge/binding is immutable".into()));
++                }
++                let until = crate::palw_court_service_state_v2::tir_service_required_material_until_v1(frame, binding.hard_deadline_daa)
++                    .map_err(PalwStateV2Error::CarriageInconsistent)?;
++                crate::palw_court_service_state_v2::require_tir_service_semantic_custody_v1(frame, bundle, until)
++                    .map_err(PalwStateV2Error::CarriageInconsistent)?;
++            }
++        }
+         if new.is_none() && self.state.court_service_holds_material_v1(&key) {
+             return Err(PalwStateV2Error::CarriageInconsistent("unresolved court service retains original evidence".into()));
+         }
+diff --git a/consensus/core/src/palw_state_v2/transition_builder.rs b/consensus/core/src/palw_state_v2/transition_builder.rs
+index 896b69451..e8e4d96d0 100644
+--- a/consensus/core/src/palw_state_v2/transition_builder.rs
++++ b/consensus/core/src/palw_state_v2/transition_builder.rs
+@@ -3016,6 +3016,15 @@ impl<'a> TransitionBuilder<'a> {
+                 "retained source default changes producer, independent winner or literal signer roles".into(),
+             ));
+         }
++        // Absence is not an objective fraud finding. Every semantic/history
++        // collector uses this common economic leg; quota, expired clocks and a
++        // literal unpaid set do not supply the missing service/inclusion policy.
++        // Refuse before both producer and signer-only branches mutate anything.
++        if self.state.court_service_holds_claim_v1(&claim_id) {
++            return Err(PalwStateV2Error::CarriageInconsistent(
++                "unresolved court service has no adopted semantic default permission".into(),
++            ));
++        }
+         let covering: std::collections::BTreeSet<PalwBondKeyV2> = unpaid.iter().copied().filter(|bond| *bond != producer).collect();
+         if !unpaid.contains(&producer) {
+             // The producer answered to EOF: no void, no producer record, no session release.
+diff --git a/consensus/core/src/palw_tir_public_fold_v1.rs b/consensus/core/src/palw_tir_public_fold_v1.rs
+index 5eec2d06e..af00c9483 100644
+--- a/consensus/core/src/palw_tir_public_fold_v1.rs
++++ b/consensus/core/src/palw_tir_public_fold_v1.rs
+@@ -2965,7 +2965,7 @@ mod conviction_e2e_tests {
+         use crate::palw_court_service_state_v2::require_tir_service_custody_window_v1 as check;
+         use crate::palw_staged_bundle_v1::{PalwStagedBundlePlanV1, PalwStagedFamilyV1, PalwStagedBundleContractV1};
+         let fx = palw_tir_public_frame_fixture_v1(None, 4);
+-        let (mut state, _, _, _, _) = demanded_world(&fx, &fx.frame, 0);
++        let (mut state, params, extras, _, _) = demanded_world(&fx, &fx.frame, 0);
+         let terms = fx.frame.plan_v1().terms;
+         let semantic = PalwStagedBundlePlanV1::derive_v1(terms.accepted_daa,
+             vec![(PalwStagedFamilyV1::Constraint, terms.plan)], fx.rules.config).unwrap();
+@@ -3032,6 +3032,73 @@ mod conviction_e2e_tests {
+             assert_eq!(service.check_context(&state).is_ok(), horizon >= required,
+                 "service must cover actual retained original material: {horizon} vs {required}");
+         }
++        // A shape-valid semantic contract still uses the guard-only original
++        // fixture above (not native original admission or a signature test).
++        let mut retained = bundle.clone();
++        let cu = frame.header_v1().job_context.cu_ruleset_id;
++        retained.history_custody.pledge.cu_ruleset_id = cu;
++        retained.history_custody.custody.cu_ruleset_id = cu;
++        retained.claim.prefix_custody.as_mut().unwrap().cu_ruleset_id = cu;
++        retained.history_custody.pledge.material_until_daa = required.max(retained.claim.terms.material_until_daa);
++        let dependency = Key::Claim(claim);
++        let row = Row::ClaimBundle(Box::new(retained.clone()));
++        row.check(&dependency).unwrap();
++        state.staged_courts.insert(dependency, row.clone());
++        let owner_key = Key::Owner(claim, outsider());
++        let owner_row = Row::OwnerBundle(Box::new(crate::palw_staged_bundle_v1::PalwOwnedStagedBundleV1 {
++            claim, owner: outsider(), reserved_daa: terms.accepted_daa + 1,
++            execution_root: frame.original_v1().execution_root, plan: retained.plan.clone(), inventory: None,
++            selected: None, selected_context: None, selected_native: None, flat: None, flat_context: None,
++            float: None, float_context: None, history_recovery: Default::default(), active: None, opened: Vec::new(),
++        }).into());
++        owner_row.check(&owner_key).unwrap();
++        state.staged_courts.insert(owner_key, owner_row.clone());
++        super::super::palw_staged_court_fold_v1::rebuild_indices(&mut state);
++        let ttl = retained.claim.terms.bond_exit_after_daa.max(terms.material_until_daa) + 1;
++        let point = at(&frame, ttl - terms.accepted_daa);
++        let mut old = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
++        super::super::palw_staged_court_fold_v1::sweep(&mut old, &point).unwrap();
++        assert!(old.state.staged_court_row_v1(&dependency).is_none(), "old claim keeps finite TTL");
++        assert!(old.state.staged_court_row_v1(&owner_key).is_none(), "old owner keeps finite TTL");
++        let mut held = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
++        held.write_staged_row_v1(Key::CourtService, Some(Row::CourtService(Box::new(service.clone()).into()))).unwrap();
++        let root = held.state.state_root(); let entries = held.entries.len();
++        assert!(held.write_staged_row_v1(dependency, None).is_err());
++        let mut short = retained.clone(); short.history_custody.pledge.material_until_daa = required - 1;
++        assert!(held.write_staged_row_v1(dependency, Some(Row::ClaimBundle(Box::new(short)))).is_err());
++        assert!(held.write_staged_row_v1(dependency, Some(Row::Claim(retained.claim.clone()))).is_err());
++        let mut longer = retained.clone(); longer.history_custody.pledge.material_until_daa += 1;
++        assert!(held.write_staged_row_v1(dependency, Some(Row::ClaimBundle(Box::new(longer)))).is_err(),
++            "even a longer replacement promise is not the accepted signed pledge");
++        let mut rebound = retained.clone();
++        let crate::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1::Tir(header) = &mut rebound.original_binding else { unreachable!() };
++        header.step_merkle_root = Hash64::default();
++        assert!(held.write_staged_row_v1(dependency, Some(Row::ClaimBundle(Box::new(rebound)))).is_err());
++        let mut foreign = retained.clone(); foreign.history_custody.pledge.resource_plan_id = Hash64::default();
++        assert!(held.write_staged_row_v1(dependency, Some(Row::ClaimBundle(Box::new(foreign)))).is_err());
++        assert_eq!(held.state.state_root(), root); assert_eq!(held.entries.len(), entries);
++        super::super::palw_staged_court_fold_v1::sweep(&mut held, &point).unwrap();
++        assert_eq!(held.state.staged_court_row_v1(&dependency), Some(&row));
++        assert_eq!(held.state.staged_court_row_v1(&owner_key), Some(&owner_row));
++        held.state.court_service_state_v1().unwrap().check_context(&held.state).unwrap();
++        // The actual native panel callback may still update retained membership;
++        // blanket immutability of the dependency would break this legitimate path.
++        let panel = held.state.panel(&claim).unwrap().clone();
++        held.record_staged_panel_v1(claim, &panel).unwrap();
++        assert_eq!(held.state.staged_bundle_contract_v1(claim).unwrap().claim.panel,
++            panel.seats.iter().map(|s| s.bond).collect());
++        held.state.staged_court_row_v1(&dependency).unwrap().check(&dependency).unwrap();
++        assert!(held.state.court_service_holds_material_v1(&owner_key));
++        // Owner material is retained, not a blanket ban on its normal updates.
++        held.write_staged_row_v1(owner_key, Some(owner_row.clone())).unwrap();
++        let live = held.state.claim(&claim).unwrap().clone();
++        let silent = panel.seats[0].bond;
++        for unpaid in [BTreeSet::from([producer, silent]), BTreeSet::from([silent])] {
++            let root = held.state.state_root(); let entries = held.entries.len();
++            assert!(held.staged_selected_default_charge_v1(&point, claim, &live, producer, &unpaid, outsider()).is_err());
++            assert_eq!(held.state.state_root(), root); assert_eq!(held.entries.len(), entries);
++        }
++        held.state.court_service_state_v1().unwrap().check_context(&held.state).unwrap();
+         for field in 0..5 {
+             let mut row = bundle.clone();
+             let p = &mut row.history_custody.pledge;

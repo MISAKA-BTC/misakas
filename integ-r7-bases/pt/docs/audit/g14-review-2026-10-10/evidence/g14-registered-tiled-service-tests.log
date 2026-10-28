@@ -1,0 +1,82 @@
+
+running 4 tests
+[service-tiled] ordinary signed class registration accepted; root 3787613f6abc83efb816feac58efdc401ecb50d93efc976e30c5772e6a9c7ff8b1fc5bf0685cf743ffead044bd69e7dfe434e816e84b2dd1f8cd17d003b65d46, 4099 lanes, canonical 1/2
+[service-tiled] ordinary signed class registration accepted; root 3787613f6abc83efb816feac58efdc401ecb50d93efc976e30c5772e6a9c7ff8b1fc5bf0685cf743ffead044bd69e7dfe434e816e84b2dd1f8cd17d003b65d46, 4099 lanes, canonical 1/2
+[service-public] normal FP family certification accepted from 3 public drill carriers
+[service-public] normal FP family certification accepted from 3 public drill carriers
+[service-public] registered FP graph publicly carried by ordinary ClassLaneCertified
+[service-public] registered FP graph publicly carried by ordinary ClassLaneCertified
+[service-public] heartbeat advance 133 -> 1009
+[service-public] heartbeat advance 133 -> 1009
+[service-public] heartbeat advance 258 -> 1009
+[service-public] heartbeat advance 258 -> 1009
+[service-public] heartbeat advance 383 -> 1009
+[service-public] heartbeat advance 383 -> 1009
+[service-public] heartbeat advance 508 -> 1009
+[service-public] heartbeat advance 508 -> 1009
+test palw_panel::palw_service_public_e2e::fresh_public_bond_service_registered_tiled_constraint_beaten_across_tiles has been running for over 60 seconds
+test palw_panel::palw_service_public_e2e::fresh_public_bond_service_registered_tiled_constraint_forbidden_token has been running for over 60 seconds
+[service-public] heartbeat advance 633 -> 1009
+[service-public] heartbeat advance 633 -> 1009
+[service-public] heartbeat advance 758 -> 1009
+[service-public] heartbeat advance 758 -> 1009
+[service-public] heartbeat advance 883 -> 1009
+[service-public] heartbeat advance 883 -> 1009
+[service-public] heartbeat advance 1008 -> 1009
+[service-public] ordinary bond registered before DAA 8, maturity 1000, now 1009
+[service-public] heartbeat advance 1008 -> 1009
+[service-public] ordinary bond registered before DAA 8, maturity 1000, now 1009
+
+thread 'palw_panel::palw_service_public_e2e::fresh_public_bond_service_registered_tiled_constraint_forbidden_token' (3852664) panicked at kaspad/src/palw_service_public_e2e.rs:1126:14:
+the ordinary registry admits and prices this FP job: BondClassShareExceeded { bond: PalwBondKeyV2(TransactionOutpoint { transaction_id: 5e0d5f1b37a71288cc0eb24acc10d2f4973dd3475569f274f03cc64a2233d035099d386e24c91d48427c30a895664dea979abedc90a7788fad170379e55e2669, index: 0 }), class: cbb44bde6e587fd7e0b7da7641349dddc59525dc87c6c439d49345b5fe3dd29f5f69a12c9f0c6d645c98344a3a8a59ba4efef235de3e67902f10aab84540cc34, unlicensed: 0, share: 0 }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'palw_panel::palw_service_public_e2e::fresh_public_bond_service_registered_tiled_constraint_beaten_across_tiles' (3852663) panicked at kaspad/src/palw_service_public_e2e.rs:1126:14:
+the ordinary registry admits and prices this FP job: BondClassShareExceeded { bond: PalwBondKeyV2(TransactionOutpoint { transaction_id: 5e0d5f1b37a71288cc0eb24acc10d2f4973dd3475569f274f03cc64a2233d035099d386e24c91d48427c30a895664dea979abedc90a7788fad170379e55e2669, index: 0 }), class: cbb44bde6e587fd7e0b7da7641349dddc59525dc87c6c439d49345b5fe3dd29f5f69a12c9f0c6d645c98344a3a8a59ba4efef235de3e67902f10aab84540cc34, unlicensed: 0, share: 0 }
+test palw_panel::palw_service_public_e2e::fresh_public_bond_service_registered_tiled_constraint_beaten_across_tiles ... FAILED
+test palw_panel::palw_service_public_e2e::fresh_public_bond_service_registered_tiled_constraint_forbidden_token ... FAILED
+[service-tiled] ordinary signed class registration accepted; root 3787613f6abc83efb816feac58efdc401ecb50d93efc976e30c5772e6a9c7ff8b1fc5bf0685cf743ffead044bd69e7dfe434e816e84b2dd1f8cd17d003b65d46, 4099 lanes, canonical 1/2
+[service-tiled] ordinary signed class registration accepted; root 3787613f6abc83efb816feac58efdc401ecb50d93efc976e30c5772e6a9c7ff8b1fc5bf0685cf743ffead044bd69e7dfe434e816e84b2dd1f8cd17d003b65d46, 4099 lanes, canonical 1/2
+[service-public] normal FP family certification accepted from 3 public drill carriers
+[service-public] normal FP family certification accepted from 3 public drill carriers
+[service-public] registered FP graph publicly carried by ordinary ClassLaneCertified
+[service-public] registered FP graph publicly carried by ordinary ClassLaneCertified
+[service-public] heartbeat advance 133 -> 1009
+[service-public] heartbeat advance 133 -> 1009
+[service-public] heartbeat advance 258 -> 1009
+[service-public] heartbeat advance 258 -> 1009
+[service-public] heartbeat advance 383 -> 1009
+[service-public] heartbeat advance 383 -> 1009
+[service-public] heartbeat advance 508 -> 1009
+[service-public] heartbeat advance 508 -> 1009
+test palw_panel::palw_service_public_e2e::fresh_public_bond_service_registered_tiled_constraint_premature_stop has been running for over 60 seconds
+test palw_panel::palw_service_public_e2e::fresh_public_bond_service_registered_tiled_constraint_withheld_selected_tile_defaults has been running for over 60 seconds
+[service-public] heartbeat advance 633 -> 1009
+[service-public] heartbeat advance 633 -> 1009
+[service-public] heartbeat advance 758 -> 1009
+[service-public] heartbeat advance 758 -> 1009
+[service-public] heartbeat advance 883 -> 1009
+[service-public] heartbeat advance 883 -> 1009
+[service-public] heartbeat advance 1008 -> 1009
+[service-public] ordinary bond registered before DAA 8, maturity 1000, now 1009
+
+thread 'palw_panel::palw_service_public_e2e::fresh_public_bond_service_registered_tiled_constraint_premature_stop' (3859595) panicked at kaspad/src/palw_service_public_e2e.rs:1126:14:
+the ordinary registry admits and prices this FP job: BondClassShareExceeded { bond: PalwBondKeyV2(TransactionOutpoint { transaction_id: 5e0d5f1b37a71288cc0eb24acc10d2f4973dd3475569f274f03cc64a2233d035099d386e24c91d48427c30a895664dea979abedc90a7788fad170379e55e2669, index: 0 }), class: cbb44bde6e587fd7e0b7da7641349dddc59525dc87c6c439d49345b5fe3dd29f5f69a12c9f0c6d645c98344a3a8a59ba4efef235de3e67902f10aab84540cc34, unlicensed: 0, share: 0 }
+test palw_panel::palw_service_public_e2e::fresh_public_bond_service_registered_tiled_constraint_premature_stop ... FAILED
+[service-public] heartbeat advance 1008 -> 1009
+[service-public] ordinary bond registered before DAA 8, maturity 1000, now 1009
+
+thread 'palw_panel::palw_service_public_e2e::fresh_public_bond_service_registered_tiled_constraint_withheld_selected_tile_defaults' (3859596) panicked at kaspad/src/palw_service_public_e2e.rs:1126:14:
+the ordinary registry admits and prices this FP job: BondClassShareExceeded { bond: PalwBondKeyV2(TransactionOutpoint { transaction_id: 5e0d5f1b37a71288cc0eb24acc10d2f4973dd3475569f274f03cc64a2233d035099d386e24c91d48427c30a895664dea979abedc90a7788fad170379e55e2669, index: 0 }), class: cbb44bde6e587fd7e0b7da7641349dddc59525dc87c6c439d49345b5fe3dd29f5f69a12c9f0c6d645c98344a3a8a59ba4efef235de3e67902f10aab84540cc34, unlicensed: 0, share: 0 }
+test palw_panel::palw_service_public_e2e::fresh_public_bond_service_registered_tiled_constraint_withheld_selected_tile_defaults ... FAILED
+
+failures:
+
+failures:
+    palw_panel::palw_service_public_e2e::fresh_public_bond_service_registered_tiled_constraint_beaten_across_tiles
+    palw_panel::palw_service_public_e2e::fresh_public_bond_service_registered_tiled_constraint_forbidden_token
+    palw_panel::palw_service_public_e2e::fresh_public_bond_service_registered_tiled_constraint_premature_stop
+    palw_panel::palw_service_public_e2e::fresh_public_bond_service_registered_tiled_constraint_withheld_selected_tile_defaults
+
+test result: FAILED. 0 passed; 4 failed; 0 ignored; 0 measured; 639 filtered out; finished in 395.04s
+

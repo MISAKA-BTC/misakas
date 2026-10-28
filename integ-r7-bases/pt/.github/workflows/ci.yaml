@@ -1,0 +1,990 @@
+name: Tests
+
+on: [push, pull_request]
+
+# Least privilege: the default GITHUB_TOKEN is read-only; no job here needs write.
+permissions:
+  contents: read
+
+jobs:
+  # **The gates that need no compiler, so they cannot go silent when the compiler is unhappy.**
+  #
+  # This job exists because of what was found on the day it was written: `cargo fmt --all --
+  # --check` had been red on this branch for an unknown length of time, and nobody knew, because
+  # everybody runs `cargo test` and nobody runs the job that runs first. Two more gates were red
+  # underneath it. Nothing about that was a hard problem to see — it was a problem nobody could
+  # see WITHOUT pushing.
+  #
+  # So: one command, `bash scripts/ci-gates.sh`, runs these gates, and this job runs that same
+  # command. There is exactly one spelling of each gate, and `workflow-parity` inside it fails
+  # the build if the build gates in that script and the `run:` lines below ever drift apart.
+  #
+  # It deliberately installs no Rust. Every gate here is Python over files in the tree, so it
+  # still reports on a tree that does not compile — which is the shape of morning this is for.
+  gates:
+    name: Gates (toolchain pin + derived artifacts)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      # **Why the foreign-parser check is a CI gate here and not a human one.**
+      #
+      # `scripts/verify/misaka-palw-artifact-thirdparty.py` opens a derived artifact with the library
+      # that ecosystem actually uses and compares a quantity with MEANING — a solid's enclosed
+      # volume, a song's playback duration — against the DSL the transformer was given. Every
+      # other check on a derived artifact in this tree was written by us: the corpus goldens, the
+      # Python re-derivation, the format conformance reader. They agree by construction. The one
+      # defect none of them could see — a glTF material with `baseColorFactor` alpha 0.5 and no
+      # `alphaMode`, conformant, byte-identical to its golden, and rendering solid because glTF's
+      # default mode IGNORES alpha — was found by `pygltflib` and by nothing else.
+      #
+      # The script's own docstring says these parsers "must not become" a workspace dependency.
+      # Installing them with pip into a throwaway venv does not: the crate graph is untouched and
+      # the parsers stay written by people who have never seen this repository, which is the
+      # entire value. What a human gate would cost is the thing this whole job is about — a check
+      # that only runs when someone remembers is a check whose colour nobody knows.
+      #
+      # Versions are exact for the same reason the toolchain is: a check whose oracle changes
+      # under it reports the oracle's opinion, not the tree's.
+      #
+      # `pygltflib` is deliberately NOT installed, and that is a coverage statement, not an
+      # oversight: nothing in this job produces a `.glb`. The independent Python transformer
+      # implements `music/smf/v1` and the axis-aligned subset of `cad/stl/v1` and not
+      # `scene/glb/v1`, so the only in-CI producer of a GLB would be the Rust `palw-derive`
+      # binary, and building it would make this job depend on the compiler it is meant to survive
+      # without. glTF is covered here by `artifact-conformance`, whose selftest includes that
+      # exact alpha/OPAQUE injury; a real GLB's SEMANTICS remain a human gate, run as
+      # `misaka-palw-artifact-conformance.py demo --derive-bin target/debug/palw-derive`. The
+      # gate prints `0 GLB` on every run so the hole is visible rather than inferred.
+      - name: Install the foreign parsers (pinned, in a throwaway venv)
+        run: |
+          python3 -m venv "$RUNNER_TEMP/artifact-venv"
+          "$RUNNER_TEMP/artifact-venv/bin/pip" install --disable-pip-version-check \
+            mido==1.3.3 numpy-stl==4.0.0
+
+      # **This job is RED right now, on purpose, and here is the one gate that is red.**
+      #
+      # `artifact-stranger` fails with `SELFTEST FAILED — 3 of 18 checks disagree with the shipped
+      # tree`: `source_tree_sha256` recomputed `98265872…` against a pinned `d2419027…`, and
+      # `cad/stl/v1` and `music/smf/v1` moved with it. Nothing is wrong with the re-derivation. A
+      # `transformer_id` is a hash of every byte under `misaka/palw/derive/src/` (ADR-0078
+      # Decision 3; `misaka/palw/derive/tests/transformer_id_pin.rs` is the pin and says so at
+      # length), and commit a87cc282 rustfmt'd `src/kinds/scene.rs` — one `if` collapsed onto one
+      # line — which moved all eight ids at once. That commit's own message states the ordering:
+      # "the freeze for the single `transformer_id` re-pin has to come AFTER this, not before."
+      #
+      # So this is the same red as `shipped_presets_have_pinned_fingerprints`: it closes at the
+      # cut's single re-pin, which is the integrator's, and a contributor who "fixes" it moves
+      # eight ids a second time. It is left red rather than skipped because a gate that goes quiet
+      # is the failure this whole job exists for.
+      #
+      # It does not hide the other five. `scripts/ci-gates.sh` prints one line per gate with that
+      # gate's OWN exit code and never a single aggregate word, so a SECOND red appears by name in
+      # the same summary. Read the summary block, not the job's colour, until the re-pin lands.
+      #
+      # **The gate that proves the other gates can fail.**
+      #
+      # `ci-toolchain-pin-check.py` answers "is the compiler pinned" and "does ci-gates.sh run what
+      # CI runs", and a checker that only ever prints OK cannot be told apart from one that looks
+      # at nothing. Every hole found in it so far was found by breaking it on purpose and none by
+      # reading it. This applies seventeen breaks, asserts each goes red WITH a named violation,
+      # restores, and asserts the untouched tree is green.
+      #
+      # It is here and not in `ci-gates.sh --group fast` on purpose: it rewrites tracked files and
+      # restores them with `git checkout -- .`. That is safe on an ephemeral CI checkout and is a
+      # trap on a laptop, so it refuses to run on a dirty tree, and the command a contributor runs
+      # before pushing does not include it. `CI_ONLY` in the pin checker records that choice, so
+      # `workflow-parity` does not report it as a gate nobody can run.
+      - name: Prove the pin and parity checks can fail
+        run: bash scripts/ci/ci-gates-selftest.sh
+
+      # The same command a contributor runs. `--group fast` is every gate that needs no cargo
+      # build; the Lints / Check / Test Suite jobs below run the rest.
+      - name: Run the no-compiler gates
+        env:
+          CI_GATES_THIRDPARTY_PYTHON: ${{ runner.temp }}/artifact-venv/bin/python
+        run: bash scripts/ci-gates.sh --group fast
+
+  check:
+    name: Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install Protoc
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # **The compiler is a pin, not a rumour.** `dtolnay/rust-toolchain`'s `toolchain` input
+      # defaults to `stable` (see its own action.yml), so `uses: ...@<sha>  # stable` pinned the
+      # ACTION and left the COMPILER floating: every job here used whatever `stable` was that
+      # morning, while `Lints` alone pinned 1.93.0. The version is read out of
+      # `rust-toolchain.toml` rather than repeated, because a second spelling of a version is a
+      # second version. `scripts/ci/ci-toolchain-pin-check.py` fails the build if any job stops
+      # doing this.
+      - name: Read the pinned toolchain
+        shell: bash
+        run: |
+          channel=$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' rust-toolchain.toml | head -1)
+          if [ -z "$channel" ]; then echo "rust-toolchain.toml has no channel"; exit 1; fi
+          echo "RUST_CHANNEL=$channel" >> "$GITHUB_ENV"
+          echo "pinned Rust toolchain: $channel"
+
+      - name: Install the pinned toolchain
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+        with:
+          toolchain: ${{ env.RUST_CHANNEL }}
+          components: rustfmt, clippy
+
+      - name: Set up cache
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+
+      # `--workspace` is deliberately absent: it OVERRIDES `default-members`, and this
+      # repository's `default-members` already excludes `misaka-palw-worker` because that crate
+      # links a pinned llama.cpp build the repository does not contain. With `--workspace` the
+      # step cannot run at all -- it dies in the worker's build script before checking anything --
+      # so every other crate went unchecked and the red gate stopped meaning anything. Set
+      # MISAKA_LLAMA_SRC and name the crate explicitly to check it.
+      - name: Run cargo check
+        run: cargo check --tests --benches
+
+  # The gate that did not exist when `misaka-palw` imported `std::os::unix::net::UnixStream`
+  # with no cfg gate (issue #73). `kaspad` depends on `misaka-palw` non-optionally, so that one
+  # line took the whole node off Windows -- and nothing here noticed, because every job above
+  # runs on ubuntu. A platform this repository ships build instructions for needs a job that
+  # compiles for it, not a convention that everyone remembers to write `#[cfg(unix)]`.
+  #
+  # Scope, deliberately: this COMPILES, it does not run the test suite. The failure class it
+  # exists for -- a platform-only API reached without a gate -- is a compile error, and the
+  # suite is where a Windows job would spend most of its (2x-billed) minutes on failures that
+  # are about fixtures and path separators rather than about portability. `--tests --benches`
+  # matches the Check job above so test and bench sources are covered too: they have carried
+  # `std::os::unix` before, gated at the file level (`misaka-palw-reexecutor`).
+  #
+  # `--workspace` is absent for the same reason it is absent above: it would override
+  # `default-members` and die in `misaka-palw-worker`'s build script.
+  check-windows:
+    name: Check (x86_64-pc-windows-msvc)
+    runs-on: windows-latest
+    steps:
+      # Before checkout: CRLF-converted sources are not what rustfmt, or a byte-exact fixture,
+      # was written against.
+      - name: Fix CRLF
+        run: git config --global core.autocrlf false
+
+      - name: Checkout sources
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install Protoc
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # **The compiler is a pin, not a rumour.** `dtolnay/rust-toolchain`'s `toolchain` input
+      # defaults to `stable` (see its own action.yml), so `uses: ...@<sha>  # stable` pinned the
+      # ACTION and left the COMPILER floating: every job here used whatever `stable` was that
+      # morning, while `Lints` alone pinned 1.93.0. The version is read out of
+      # `rust-toolchain.toml` rather than repeated, because a second spelling of a version is a
+      # second version. `scripts/ci/ci-toolchain-pin-check.py` fails the build if any job stops
+      # doing this.
+      - name: Read the pinned toolchain
+        shell: bash
+        run: |
+          channel=$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' rust-toolchain.toml | head -1)
+          if [ -z "$channel" ]; then echo "rust-toolchain.toml has no channel"; exit 1; fi
+          echo "RUST_CHANNEL=$channel" >> "$GITHUB_ENV"
+          echo "pinned Rust toolchain: $channel"
+
+      - name: Install the pinned toolchain
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+        with:
+          toolchain: ${{ env.RUST_CHANNEL }}
+          components: rustfmt, clippy
+          targets: x86_64-pc-windows-msvc
+
+      - name: Set up cache
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+
+      # librocksdb-sys runs bindgen, which needs libclang. The runner image ships LLVM; the
+      # README tells a human operator to set LIBCLANG_PATH by hand, so CI sets the same thing
+      # rather than relying on it being on PATH.
+      - name: Point bindgen at the runner's LLVM
+        shell: pwsh
+        run: |
+          $llvm = "C:\Program Files\LLVM\bin"
+          if (-not (Test-Path $llvm)) { throw "no LLVM at $llvm -- the runner image changed; install LLVM explicitly" }
+          "LIBCLANG_PATH=$llvm" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Run cargo check
+        run: cargo check --locked --tests --benches --target x86_64-pc-windows-msvc
+
+      # Compiling is not linking, and the README promises a Windows operator a node they can
+      # run. One debug link of the two binaries a Windows host is actually offered -- the node
+      # and the operator CLI -- says whether that promise holds.
+      - name: Build and smoke the node + CLI
+        shell: pwsh
+        run: |
+          cargo build --locked --target x86_64-pc-windows-msvc -p kaspad --bin kaspad -p misaka-cli --bin misaka
+          if ($LASTEXITCODE -ne 0) { throw "cargo build exited $LASTEXITCODE" }
+          $bin = "target/x86_64-pc-windows-msvc/debug"
+
+          # Captured, not piped: `Select-Object -First` closes the pipeline early, and a native
+          # process cut off mid-write turns into a broken-pipe failure this step would then
+          # report as the binary's.
+          foreach ($exe in @("kaspad.exe", "misaka.exe")) {
+            $help = & "$bin/$exe" --help 2>&1 | Out-String
+            if ($LASTEXITCODE -ne 0) { throw "$exe --help exited $LASTEXITCODE" }
+            Write-Host "--- $exe ---"
+            Write-Host ($help -split "`n" | Select-Object -First 5)
+          }
+
+  test:
+    name: Test Suite
+    # runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
+    # **The runner's disk is the limit, not the code.** `cargo build --features devnet-prealloc
+    # --tests --benches` links one binary per integration test across the whole workspace, and with
+    # full debug info those binaries outgrow the runner's free disk (run 37634951325: `rustc-LLVM
+    # ERROR: IO failure on output stream: No space left on device` while linking a
+    # kaspa-consensus-core test, before any test ran). No debug info in this job's dev/test
+    # profile shrinks every artifact; symbols stay, so a failing test still names its frames.
+    # Release, heap and the other jobs are untouched.
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+    strategy:
+      fail-fast: false
+      # matrix:
+      #   os: [ ubuntu-latest, macos-latest, windows-latest ]
+    steps:
+      # Clean unnecessary files to save disk space
+      - name: clean unnecessary files to save space
+        run: |
+          if [ "$(docker images -q)" ]; then
+            docker rmi $(docker images -q)
+          fi
+          sudo rm -rf /usr/share/dotnet /etc/mysql /etc/php /etc/sudo apt/sources.list.d
+          sudo apt -y autoremove --purge
+          sudo apt -y autoclean
+          sudo apt clean
+          rm --recursive --force "$AGENT_TOOLSDIRECTORY"
+          df -h          
+
+          # remove large packages manually (all but llvm)
+          sudo apt-get remove -y '^aspnetcore-.*' || echo "::warning::The command [sudo apt-get remove -y '^aspnetcore-.*'] failed to complete successfully. Proceeding..."
+          sudo apt-get remove -y '^dotnet-.*' --fix-missing || echo "::warning::The command [sudo apt-get remove -y '^dotnet-.*' --fix-missing] failed to complete successfully. Proceeding..."
+          sudo apt-get remove -y 'php.*' --fix-missing || echo "::warning::The command [sudo apt-get remove -y 'php.*' --fix-missing] failed to complete successfully. Proceeding..."
+          sudo apt-get remove -y '^mongodb-.*' --fix-missing || echo "::warning::The command [sudo apt-get remove -y '^mongodb-.*' --fix-missing] failed to complete successfully. Proceeding..."
+          sudo apt-get remove -y '^mysql-.*' --fix-missing || echo "::warning::The command [sudo apt-get remove -y '^mysql-.*' --fix-missing] failed to complete successfully. Proceeding..."
+          sudo apt-get remove -y azure-cli google-chrome-stable firefox powershell mono-devel libgl1-mesa-dri --fix-missing || echo "::warning::The command [sudo apt-get remove -y azure-cli google-chrome-stable firefox powershell mono-devel libgl1-mesa-dri --fix-missing] failed to complete successfully. Proceeding..."
+          sudo apt-get remove -y google-cloud-sdk --fix-missing || echo "::debug::The command [sudo apt-get remove -y google-cloud-sdk --fix-missing] failed to complete successfully. Proceeding..."
+          sudo apt-get remove -y google-cloud-cli --fix-missing || echo "::debug::The command [sudo apt-get remove -y google-cloud-cli --fix-missing] failed to complete successfully. Proceeding..."
+          sudo apt-get autoremove -y || echo "::warning::The command [sudo apt-get autoremove -y] failed to complete successfully. Proceeding..."
+          sudo apt-get clean || echo "::warning::The command [sudo apt-get clean] failed to complete successfully. Proceeding..."
+          df -h          
+
+      # Free up disk space on Ubuntu
+      - name: Free Disk Space (Ubuntu)
+        # Pinned to a full commit SHA (a mutable @main branch ref is the weakest supply-chain link).
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
+        with:
+          # This might remove tools that are actually needed, if set to "true" but frees about 6 GB
+          tool-cache: false
+
+          # large packages, except llvm, are removed manually during the previous step
+          # see: https://github.com/jlumbroso/free-disk-space/issues/6
+          # TODO: use the discussed whitelist feature when available
+          large-packages: false
+
+          swap-storage: true
+
+      - name: Checkout sources
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Fix CRLF on Windows
+        if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
+
+      - name: Install Protoc
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # **The compiler is a pin, not a rumour.** `dtolnay/rust-toolchain`'s `toolchain` input
+      # defaults to `stable` (see its own action.yml), so `uses: ...@<sha>  # stable` pinned the
+      # ACTION and left the COMPILER floating: every job here used whatever `stable` was that
+      # morning, while `Lints` alone pinned 1.93.0. The version is read out of
+      # `rust-toolchain.toml` rather than repeated, because a second spelling of a version is a
+      # second version. `scripts/ci/ci-toolchain-pin-check.py` fails the build if any job stops
+      # doing this.
+      - name: Read the pinned toolchain
+        shell: bash
+        run: |
+          channel=$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' rust-toolchain.toml | head -1)
+          if [ -z "$channel" ]; then echo "rust-toolchain.toml has no channel"; exit 1; fi
+          echo "RUST_CHANNEL=$channel" >> "$GITHUB_ENV"
+          echo "pinned Rust toolchain: $channel"
+
+      - name: Install the pinned toolchain
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+        with:
+          toolchain: ${{ env.RUST_CHANNEL }}
+          components: rustfmt, clippy
+      
+      - name: Set up cache
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@7a79fe8c3a13344501c80d99cae481c1c9085912 # v2
+        with:
+          tool: cargo-nextest
+
+      - name: Run cargo build with devnet-prealloc feature
+        run: cargo build --features devnet-prealloc --tests --benches
+
+      - name: Build misaka CLI smoke
+        run: |
+          cargo build --locked --release -p misaka-cli --bin misaka
+          test -x target/release/misaka
+          target/release/misaka --help
+
+      - name: Check misaka CLI evm-send feature
+        run: cargo check --locked -p misaka-cli --bin misaka --features evm-send
+
+      - name: Run cargo test regular features
+        run: cargo nextest run
+        env:
+          # The `ci` profile (.config/nextest.toml) adds a JUnit report for the summary below.
+          NEXTEST_PROFILE: ci
+          # This step runs the WHOLE workspace, `misaka-palw-derive` included, so it needs the
+          # same declaration the dedicated step below makes: CI holds no Qwen checkpoint, and
+          # `tests/corpus_width.rs` fails by name rather than passing quietly when it cannot
+          # measure. Without this the suite went red on a host fact — and only after the ADR-0069
+          # failure ahead of it was fixed, because nextest stops at the first failure and this one
+          # had never been reached.
+          MISAKA_PALW_WIDTH_NO_TOKENIZER: "1"
+
+      # **The numbers come from the run, never from a README.** Tests and failures by area from the
+      # JUnit report, the declared network and fingerprint from release.json, and the
+      # readiness tally from docs/operations/releases/mainnet-readiness.md. It runs when the tests fail too.
+      - name: Write the CI summary
+        if: always()
+        run: |
+          python3 scripts/ci/misaka-ci-summary.py --junit target/nextest/ci/junit.xml \
+            --rust "$(rustc -V)" >> "$GITHUB_STEP_SUMMARY"
+
+      # **`--lib` is absent on purpose. Do not add it.**
+      #
+      # `cargo test -p misaka-palw-derive --lib` builds no BINARIES, so `palw-evm-runner` is not on
+      # disk when the suite runs — and ADR-0079's confinement gate is written to REFUSE when the
+      # runner it must confine is missing, rather than quietly falling back to in-process
+      # execution. The seven tests that cover that refusal go red under `--lib` and green here,
+      # and the red means the opposite of what it looks like: the gate working, not the tree
+      # broken. The whole package is the unit the genesis card's §6 table cites.
+      - name: Run the misaka-palw-derive suite with its binaries
+        if: ${{ !cancelled() }}
+        run: cargo test -p misaka-palw-derive
+        env:
+          # CI holds no checkpoint. `tests/corpus_width.rs` FAILS by name when the dense tokenizer
+          # or the QWEN36 .gguf is absent — a run that checked nothing must not read as one that
+          # checked — unless the host declares it cannot check; this is that declaration, and the
+          # SKIPPED lines it prints name the tests and say the widths were NOT checked here.
+          MISAKA_PALW_WIDTH_NO_TOKENIZER: "1"
+
+      - name: Run cargo doc tests
+        if: ${{ !cancelled() }}
+        run: cargo test --doc
+
+      - name: Run cargo test on kaspa-hashes without asm
+        if: ${{ !cancelled() }}
+        run: cargo nextest run -p kaspa-hashes --features=no-asm --benches
+
+      - name: Run cargo doc tests with features=no-asm on kaspa-hashes
+        if: ${{ !cancelled() }}
+        run: cargo test --doc -p kaspa-hashes --features=no-asm
+
+      - name: Run cargo doc
+        if: ${{ !cancelled() }}
+        run: cargo doc --no-deps
+      - name: Run kip-10 example
+        if: ${{ !cancelled() }}
+        # kaspa-pq PQ-only: the kip-10 example is built on legacy secp256k1
+        # P2PKH/P2SH scripts, so it requires the `legacy-secp256k1` feature
+        # (ADR-0019 §14).
+        run: cargo run -p kaspa-txscript --example kip-10 --features legacy-secp256k1
+
+  # **ADR-0110 Decision 5: the context vectors, in release.** A context limit is armed only from
+  # public vectors anyone can reproduce, and CI reproduces the small ones on every change. The
+  # 512-position vector is in the default suite (`cargo nextest run` above). The 4,096 and
+  # 32,768-position vectors are pinned too, but a debug build takes too long over them, so they run
+  # here in release. Each vector's `document_id` covers every root, count, size and verdict a chain
+  # or a seat would compare. A change that moves any of them at either width fails by name, and the
+  # failure prints the document. The 131,072-position and 2M vectors are external runs (ADR-0110
+  # §9). The step's `run:` line is `scripts/ci-gates.sh`'s `context-vectors` gate, byte for byte.
+  context-vectors:
+    name: Context vectors (release)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install Protoc
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # **The compiler is a pin, not a rumour** — the same two steps every job here takes, for the
+      # reason the Test Suite job gives. `scripts/ci/ci-toolchain-pin-check.py` fails the build if
+      # this job stops doing it.
+      - name: Read the pinned toolchain
+        shell: bash
+        run: |
+          channel=$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' rust-toolchain.toml | head -1)
+          if [ -z "$channel" ]; then echo "rust-toolchain.toml has no channel"; exit 1; fi
+          echo "RUST_CHANNEL=$channel" >> "$GITHUB_ENV"
+          echo "pinned Rust toolchain: $channel"
+
+      - name: Install the pinned toolchain
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+        with:
+          toolchain: ${{ env.RUST_CHANNEL }}
+
+      - name: Set up Rust cache
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+
+      - name: Run the pinned 4,096 and 32,768-position vectors
+        run: cargo test --release -p misaka-palw-base0 --lib -- --ignored context_vector
+
+
+  # test-release:
+  #   name: Test Suite Release
+  #   runs-on: ${{ matrix.os }}
+
+  #   strategy:
+  #     fail-fast: false
+  #     matrix:
+  #       os: [ ubuntu-latest, macos-latest, windows-latest ]
+  #   steps:
+  #     - name: Checkout sources
+  #       uses: actions/checkout@v2
+
+  #     - name: Fix CRLF on Windows
+  #       if: runner.os == 'Windows'
+  #       run: git config --global core.autocrlf false
+
+  #     - name: Install protoc
+  #       run: sudo apt install -y protobuf-compiler
+
+  #     - name: Install stable toolchain
+  #       uses: actions-rs/toolchain@v1
+  #       with:
+  #         profile: minimal
+  #         toolchain: stable
+  #         override: true
+
+  #     - name: Cache
+  #       uses: actions/cache@v3
+  #       with:
+  #         path: |
+  #           ~/.cargo/bin/
+  #           ~/.cargo/registry/index/
+  #           ~/.cargo/registry/cache/
+  #           ~/.cargo/git/db/
+  #           target/
+  #         key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+  #     - name: Run cargo test release regular features
+  #       uses: actions-rs/cargo@v1
+  #       with:
+  #         command: test
+  #         args: --release
+
+  #     - name: Run cargo test release on hashes without asm
+  #       uses: actions-rs/cargo@v1
+  #       with:
+  #         command: test
+  #         args: -p hashes --features=no-asm --benches --release
+
+  lints:
+    name: Lints
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install Protoc
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # **The compiler is a pin, not a rumour.** `dtolnay/rust-toolchain`'s `toolchain` input
+      # defaults to `stable` (see its own action.yml), so `uses: ...@<sha>  # stable` pinned the
+      # ACTION and left the COMPILER floating: every job here used whatever `stable` was that
+      # morning, while `Lints` alone pinned 1.93.0. The version is read out of
+      # `rust-toolchain.toml` rather than repeated, because a second spelling of a version is a
+      # second version. `scripts/ci/ci-toolchain-pin-check.py` fails the build if any job stops
+      # doing this.
+      - name: Read the pinned toolchain
+        shell: bash
+        run: |
+          channel=$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' rust-toolchain.toml | head -1)
+          if [ -z "$channel" ]; then echo "rust-toolchain.toml has no channel"; exit 1; fi
+          echo "RUST_CHANNEL=$channel" >> "$GITHUB_ENV"
+          echo "pinned Rust toolchain: $channel"
+
+      - name: Install the pinned toolchain
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+        with:
+          toolchain: ${{ env.RUST_CHANNEL }}
+          components: rustfmt, clippy
+
+      - name: Set up cache
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+
+      - name: Run cargo fmt
+        run: cargo fmt --all -- --check
+
+      # A formatting failure must not hide the lint verdict: clippy runs whenever the job was not cancelled.
+      - name: Run cargo clippy
+        if: ${{ !cancelled() }}
+        run: cargo clippy --tests --benches --examples -- -D warnings
+
+  # **The security gates are their own job, so no lint can silence them.** Until 2026-10-12 they were
+  # the last steps of `Lints`, after clippy; every clippy failure (red on `pre` since at least
+  # 2026-10-08) skipped the PQ-only secp256k1 isolation and the dependency advisory audit without
+  # anyone seeing a red for them. This job needs no compile of the workspace — `cargo tree` and
+  # `cargo deny` read the lock file — so it reports even on a tree clippy rejects.
+  security:
+    name: Security (PQ isolation + advisories)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      # **The compiler is a pin, not a rumour.** `dtolnay/rust-toolchain`'s `toolchain` input
+      # defaults to `stable` (see its own action.yml), so `uses: ...@<sha>  # stable` pinned the
+      # ACTION and left the COMPILER floating: every job here used whatever `stable` was that
+      # morning, while `Lints` alone pinned 1.93.0. The version is read out of
+      # `rust-toolchain.toml` rather than repeated, because a second spelling of a version is a
+      # second version. `scripts/ci/ci-toolchain-pin-check.py` fails the build if any job stops
+      # doing this.
+      - name: Read the pinned toolchain
+        shell: bash
+        run: |
+          channel=$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' rust-toolchain.toml | head -1)
+          if [ -z "$channel" ]; then echo "rust-toolchain.toml has no channel"; exit 1; fi
+          echo "RUST_CHANNEL=$channel" >> "$GITHUB_ENV"
+          echo "pinned Rust toolchain: $channel"
+
+      - name: Install the pinned toolchain
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+        with:
+          toolchain: ${{ env.RUST_CHANNEL }}
+
+      - name: Install cargo-deny (advisory gate)
+        uses: taiki-e/install-action@7a79fe8c3a13344501c80d99cae481c1c9085912 # v2
+        with:
+          tool: cargo-deny
+
+      - name: PQ-only secp256k1 isolation + advisory gate (ADR-0019 §14)
+        # Hard-fails if secp256k1 re-enters the kaspa-consensus dependency tree
+        # (`cargo tree -p kaspa-consensus -e normal`) and runs the dependency advisory
+        # audit (cargo-deny, installed above). See scripts/ci/pq-ci-guard.sh + deny.toml.
+        run: bash scripts/ci/pq-ci-guard.sh
+
+  check-no-std:
+    name: Check no_std
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      # **The compiler is a pin, not a rumour.** `dtolnay/rust-toolchain`'s `toolchain` input
+      # defaults to `stable` (see its own action.yml), so `uses: ...@<sha>  # stable` pinned the
+      # ACTION and left the COMPILER floating: every job here used whatever `stable` was that
+      # morning, while `Lints` alone pinned 1.93.0. The version is read out of
+      # `rust-toolchain.toml` rather than repeated, because a second spelling of a version is a
+      # second version. `scripts/ci/ci-toolchain-pin-check.py` fails the build if any job stops
+      # doing this.
+      - name: Read the pinned toolchain
+        shell: bash
+        run: |
+          channel=$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' rust-toolchain.toml | head -1)
+          if [ -z "$channel" ]; then echo "rust-toolchain.toml has no channel"; exit 1; fi
+          echo "RUST_CHANNEL=$channel" >> "$GITHUB_ENV"
+          echo "pinned Rust toolchain: $channel"
+
+      - name: Install the pinned toolchain
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+        with:
+          toolchain: ${{ env.RUST_CHANNEL }}
+          components: rustfmt, clippy
+
+      - name: Add thumbv7em-none-eabi target
+        run: rustup target add thumbv7em-none-eabi
+
+      - name: Set up cache
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+
+      - name: Run no_std cargo check for crypto/addresses
+        run: cargo check -p kaspa-addresses --no-default-features --target thumbv7em-none-eabi
+
+
+  check-wasm32:
+    name: Check WASM32
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install Protoc
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install llvm
+        id: install_llvm
+        continue-on-error: true
+        run: |
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
+          sudo apt-get install -y clang-15 lldb-15 lld-15 clangd-15 clang-tidy-15 clang-format-15 clang-tools-15 llvm-15-dev lld-15 lldb-15 llvm-15-tools libomp-15-dev libc++-15-dev libc++abi-15-dev libclang-common-15-dev libclang-15-dev libclang-cpp15-dev libunwind-15-dev
+          # Make Clang 15 default
+          sudo update-alternatives --install /usr/bin/clang++ clang++ /usr/lib/llvm-15/bin/clang++ 100
+          sudo update-alternatives --install /usr/bin/clang clang /usr/lib/llvm-15/bin/clang 100
+          sudo update-alternatives --install /usr/bin/clang-format clang-format /usr/lib/llvm-15/bin/clang-format 100
+          sudo update-alternatives --install /usr/bin/clang-tidy clang-tidy /usr/lib/llvm-15/bin/clang-tidy 100
+          sudo update-alternatives --install /usr/bin/run-clang-tidy run-clang-tidy /usr/lib/llvm-15/bin/run-clang-tidy 100
+          # Alias cc to clang
+          sudo update-alternatives --install /usr/bin/cc cc /usr/lib/llvm-15/bin/clang 0
+          sudo update-alternatives --install /usr/bin/c++ c++ /usr/lib/llvm-15/bin/clang++ 0
+
+      - name: Install gcc-multilib
+        # gcc-multilib allows clang to find gnu libraries properly
+        run: |
+          sudo apt-get update
+          sudo apt install -y gcc-multilib
+
+      # **The compiler is a pin, not a rumour.** `dtolnay/rust-toolchain`'s `toolchain` input
+      # defaults to `stable` (see its own action.yml), so `uses: ...@<sha>  # stable` pinned the
+      # ACTION and left the COMPILER floating: every job here used whatever `stable` was that
+      # morning, while `Lints` alone pinned 1.93.0. The version is read out of
+      # `rust-toolchain.toml` rather than repeated, because a second spelling of a version is a
+      # second version. `scripts/ci/ci-toolchain-pin-check.py` fails the build if any job stops
+      # doing this.
+      - name: Read the pinned toolchain
+        shell: bash
+        run: |
+          channel=$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' rust-toolchain.toml | head -1)
+          if [ -z "$channel" ]; then echo "rust-toolchain.toml has no channel"; exit 1; fi
+          echo "RUST_CHANNEL=$channel" >> "$GITHUB_ENV"
+          echo "pinned Rust toolchain: $channel"
+
+      - name: Install the pinned toolchain
+        if: steps.install_llvm.outcome == 'success' && steps.install_llvm.conclusion == 'success'
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+        with:
+          toolchain: ${{ env.RUST_CHANNEL }}
+          components: rustfmt, clippy
+
+      - name: Add wasm32 target
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Set up cache
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+
+      # append here any new wasm32 crate not already covered by the existing checks
+
+      - name: Run cargo check of kaspa-wrpc-wasm for wasm32 target
+        run: cargo clippy -p kaspa-wrpc-wasm --target wasm32-unknown-unknown
+
+      - name: Run cargo check of kaspa-wallet-cli-wasm for wasm32 target
+        run: cargo clippy -p kaspa-wallet-cli-wasm --target wasm32-unknown-unknown
+
+      - name: Run cargo check of kaspa-wasm for wasm32 target
+        run: cargo clippy -p kaspa-wasm --target wasm32-unknown-unknown
+  
+  test-wasm32:
+    name: Test WASM32
+    runs-on: ubuntu-latest
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+    steps:
+      # **The runner's disk, again.** `wasm-pack test --node consensus/core` links one wasm test binary per
+      # integration test of kaspa-consensus-core; run 38190271023 died with `No space left on device`
+      # (83 MB free) linking `rcore_s3_one_ledger`, before any wasm test ran. Same remedy as the Test
+      # Suite job: drop the runner's preinstalled SDKs (tool cache kept) and keep no debug info.
+      - name: Free Disk Space (Ubuntu)
+        # Pinned to a full commit SHA (a mutable @main branch ref is the weakest supply-chain link).
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
+        with:
+          tool-cache: false
+          large-packages: false
+          swap-storage: true
+
+      - name: Checkout sources
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install Protoc
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install llvm
+        id: install_llvm
+        continue-on-error: true
+        run: |
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
+          sudo apt-get install -y clang-15 lldb-15 lld-15 clangd-15 clang-tidy-15 clang-format-15 clang-tools-15 llvm-15-dev lld-15 lldb-15 llvm-15-tools libomp-15-dev libc++-15-dev libc++abi-15-dev libclang-common-15-dev libclang-15-dev libclang-cpp15-dev libunwind-15-dev
+          # Make Clang 15 default
+          sudo update-alternatives --install /usr/bin/clang++ clang++ /usr/lib/llvm-15/bin/clang++ 100
+          sudo update-alternatives --install /usr/bin/clang clang /usr/lib/llvm-15/bin/clang 100
+          sudo update-alternatives --install /usr/bin/clang-format clang-format /usr/lib/llvm-15/bin/clang-format 100
+          sudo update-alternatives --install /usr/bin/clang-tidy clang-tidy /usr/lib/llvm-15/bin/clang-tidy 100
+          sudo update-alternatives --install /usr/bin/run-clang-tidy run-clang-tidy /usr/lib/llvm-15/bin/run-clang-tidy 100
+          # Alias cc to clang
+          sudo update-alternatives --install /usr/bin/cc cc /usr/lib/llvm-15/bin/clang 0
+          sudo update-alternatives --install /usr/bin/c++ c++ /usr/lib/llvm-15/bin/clang++ 0
+
+      - name: Install gcc-multilib
+        # gcc-multilib allows clang to find gnu libraries properly
+        run: |
+          sudo apt-get update
+          sudo apt install -y gcc-multilib
+
+      # **The compiler is a pin, not a rumour.** `dtolnay/rust-toolchain`'s `toolchain` input
+      # defaults to `stable` (see its own action.yml), so `uses: ...@<sha>  # stable` pinned the
+      # ACTION and left the COMPILER floating: every job here used whatever `stable` was that
+      # morning, while `Lints` alone pinned 1.93.0. The version is read out of
+      # `rust-toolchain.toml` rather than repeated, because a second spelling of a version is a
+      # second version. `scripts/ci/ci-toolchain-pin-check.py` fails the build if any job stops
+      # doing this.
+      - name: Read the pinned toolchain
+        shell: bash
+        run: |
+          channel=$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' rust-toolchain.toml | head -1)
+          if [ -z "$channel" ]; then echo "rust-toolchain.toml has no channel"; exit 1; fi
+          echo "RUST_CHANNEL=$channel" >> "$GITHUB_ENV"
+          echo "pinned Rust toolchain: $channel"
+
+      - name: Install the pinned toolchain
+        if: steps.install_llvm.outcome == 'success' && steps.install_llvm.conclusion == 'success'
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+        with:
+          toolchain: ${{ env.RUST_CHANNEL }}
+          components: rustfmt, clippy
+
+      - name: Install wasm-pack
+        uses: taiki-e/install-action@7a79fe8c3a13344501c80d99cae481c1c9085912 # v2
+        with:
+          tool: wasm-pack
+
+      - name: Add wasm32 target
+        run: rustup target add wasm32-unknown-unknown
+        
+      - name: Set up cache
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+
+      - name: Install Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: 20
+
+      - name: Install NodeJS dependencies
+        run: npm install --global typedoc@0.28.19 typescript@6.0.3
+
+      # append here any new crates that contains wasm test suites (and aren't already covered)
+      - name: Run wasm tests for consensus/core
+        run: wasm-pack test --node consensus/core
+
+      - name: Run wasm tests for crypto/addresses
+        run: wasm-pack test --node crypto/addresses
+
+      - name: Run wasm tests for wallet/pskt
+        run: wasm-pack test --node wallet/pskt
+
+
+  build-wasm32:
+    name: Build WASM32 SDK
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Setup Environment
+        shell: bash
+        run: echo "SHORT_SHA=`git rev-parse --short HEAD`" >> $GITHUB_ENV
+
+      - name: Install Protoc
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install llvm
+        id: install_llvm
+        continue-on-error: true
+        run: |
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
+          sudo apt-get install -y clang-15 lldb-15 lld-15 clangd-15 clang-tidy-15 clang-format-15 clang-tools-15 llvm-15-dev lld-15 lldb-15 llvm-15-tools libomp-15-dev libc++-15-dev libc++abi-15-dev libclang-common-15-dev libclang-15-dev libclang-cpp15-dev libunwind-15-dev
+          # Make Clang 15 default
+          sudo update-alternatives --install /usr/bin/clang++ clang++ /usr/lib/llvm-15/bin/clang++ 100
+          sudo update-alternatives --install /usr/bin/clang clang /usr/lib/llvm-15/bin/clang 100
+          sudo update-alternatives --install /usr/bin/clang-format clang-format /usr/lib/llvm-15/bin/clang-format 100
+          sudo update-alternatives --install /usr/bin/clang-tidy clang-tidy /usr/lib/llvm-15/bin/clang-tidy 100
+          sudo update-alternatives --install /usr/bin/run-clang-tidy run-clang-tidy /usr/lib/llvm-15/bin/run-clang-tidy 100
+          # Alias cc to clang
+          sudo update-alternatives --install /usr/bin/cc cc /usr/lib/llvm-15/bin/clang 0
+          sudo update-alternatives --install /usr/bin/c++ c++ /usr/lib/llvm-15/bin/clang++ 0
+
+      - name: Install gcc-multilib
+        # gcc-multilib allows clang to find gnu libraries properly
+        run: |
+          sudo apt-get update
+          sudo apt install -y gcc-multilib
+
+      # **The compiler is a pin, not a rumour.** `dtolnay/rust-toolchain`'s `toolchain` input
+      # defaults to `stable` (see its own action.yml), so `uses: ...@<sha>  # stable` pinned the
+      # ACTION and left the COMPILER floating: every job here used whatever `stable` was that
+      # morning, while `Lints` alone pinned 1.93.0. The version is read out of
+      # `rust-toolchain.toml` rather than repeated, because a second spelling of a version is a
+      # second version. `scripts/ci/ci-toolchain-pin-check.py` fails the build if any job stops
+      # doing this.
+      - name: Read the pinned toolchain
+        shell: bash
+        run: |
+          channel=$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' rust-toolchain.toml | head -1)
+          if [ -z "$channel" ]; then echo "rust-toolchain.toml has no channel"; exit 1; fi
+          echo "RUST_CHANNEL=$channel" >> "$GITHUB_ENV"
+          echo "pinned Rust toolchain: $channel"
+
+      - name: Install the pinned toolchain
+        if: steps.install_llvm.outcome == 'success' && steps.install_llvm.conclusion == 'success'
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+        with:
+          toolchain: ${{ env.RUST_CHANNEL }}
+          components: rustfmt, clippy
+
+      - name: Install wasm-pack
+        uses: taiki-e/install-action@7a79fe8c3a13344501c80d99cae481c1c9085912 # v2
+        with:
+          tool: wasm-pack
+
+      - name: Add wasm32 target
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Install NodeJS
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '20'
+
+      - name: Install NodeJS dependencies
+        run: npm install --global typedoc@0.28.19 typescript@6.0.3
+
+      - name: Set up cache
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+
+      - name: Build wasm release
+        run: |
+          pushd .
+          cd wasm
+          bash build-release
+          popd
+
+      - name: Upload WASM build to GitHub 
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with: 
+          name: kaspa-wasm32-sdk-${{ env.SHORT_SHA }}
+          path: wasm/release/
+  build-release:
+    name: Build Linux Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install Protoc
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # **The compiler is a pin, not a rumour.** `dtolnay/rust-toolchain`'s `toolchain` input
+      # defaults to `stable` (see its own action.yml), so `uses: ...@<sha>  # stable` pinned the
+      # ACTION and left the COMPILER floating: every job here used whatever `stable` was that
+      # morning, while `Lints` alone pinned 1.93.0. The version is read out of
+      # `rust-toolchain.toml` rather than repeated, because a second spelling of a version is a
+      # second version. `scripts/ci/ci-toolchain-pin-check.py` fails the build if any job stops
+      # doing this.
+      - name: Read the pinned toolchain
+        shell: bash
+        run: |
+          channel=$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' rust-toolchain.toml | head -1)
+          if [ -z "$channel" ]; then echo "rust-toolchain.toml has no channel"; exit 1; fi
+          echo "RUST_CHANNEL=$channel" >> "$GITHUB_ENV"
+          echo "pinned Rust toolchain: $channel"
+
+      - name: Install the pinned toolchain
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+        with:
+          toolchain: ${{ env.RUST_CHANNEL }}
+          components: rustfmt, clippy
+
+      - name: Set up Rust cache
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+
+      - name: Check musl toolchain tag consistency
+        if: runner.os == 'Linux'
+        run: bash musl-toolchain/check-tag.sh
+
+      - name: Build RK with musl toolchain
+        if: runner.os == 'Linux'
+        env:
+          # Fail closed (audit H-5): error out if neither an in-repo pin
+          # (EXPECTED_XTOOLS_SHA256) nor a release sidecar is verifiable, instead
+          # of warning and proceeding under the legacy preset_hash guard.
+          MISAKA_REQUIRE_XTOOLS_SHA256: '1'
+        run: |
+          # Run build script for musl toolchain
+          source musl-toolchain/build.sh
+          # build.sh cd's into $GITHUB_WORKSPACE/musl-toolchain and does not cd back;
+          # since it is sourced, that cwd persists here. Return to the workspace root so
+          # the relative `test -x target/...` below resolves against the real target dir
+          # (mirrors deploy.yaml). Without this, the misaka bin check fails even though
+          # both cargo builds succeed.
+          cd $GITHUB_WORKSPACE
+          # Build bridge with allow-multiple-definition flag to handle mimalloc conflicts with libstdc++ in musl builds
+          # This flag is only needed for kaspa-stratum-bridge due to its dual mimalloc dependency structure
+          export RUSTFLAGS="$RUSTFLAGS -C link-arg=-Wl,--allow-multiple-definition"
+          
+          # Build other binaries first (without the allow-multiple-definition flag)
+          cargo build --bin kaspad --bin rothschild --bin kaspa-wallet --bin stratum-bridge --release --target x86_64-unknown-linux-musl
+          cargo build -p misaka-cli --bin misaka --release --target x86_64-unknown-linux-musl
+          test -x target/x86_64-unknown-linux-musl/release/misaka
+          
+
+  # **One required check that is green only when every job above is.** A skipped, cancelled or failed
+  # job is not a pass: branch protection should require this job (`CI passed`), and it fails unless
+  # every job it needs concluded `success`. It names the jobs that did not.
+  ci-passed:
+    name: CI passed
+    if: ${{ always() }}
+    needs: [gates, check, check-windows, test, context-vectors, lints, security, check-no-std, check-wasm32, test-wasm32, build-wasm32, build-release]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every required job concluded success
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          echo "$RESULTS" | python3 -c '
+          import json, sys
+          needs = json.load(sys.stdin)
+          bad = {job: r["result"] for job, r in needs.items() if r["result"] != "success"}
+          for job, r in sorted(needs.items()):
+              print(f"{job:<16} {r["result"]}")
+          if bad:
+              print(f"::error::not every required job passed: {bad}")
+              sys.exit(1)
+          '

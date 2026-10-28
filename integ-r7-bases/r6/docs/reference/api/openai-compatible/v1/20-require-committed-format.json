@@ -1,0 +1,24 @@
+{
+  "request": {
+    "messages": [
+      {
+        "role": "user",
+        "content": "Give me a JSON object with one key."
+      }
+    ],
+    "response_format": {
+      "type": "json_object"
+    },
+    "misaka": {
+      "require_committed_format": true
+    }
+  },
+  "expect": {
+    "verdict": "refused",
+    "reason_contains": "palw_fp_decode_constraint",
+    "studio": {
+      "verdict": "accepted",
+      "why": "the extension is shape-checked at parse time; the refusal by name happens before anything is sent, once the engine is known to be the lane and the chain's fp_decode_constraint_armed is read (gateway.rs)"
+    }
+  }
+}

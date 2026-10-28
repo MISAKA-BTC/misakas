@@ -1,0 +1,522 @@
+{
+"classifier.bias": [
+2
+],
+"classifier.weight": [
+2,
+768
+],
+"mobilenet_v1.conv_stem.convolution.weight": [
+24,
+3,
+3,
+3
+],
+"mobilenet_v1.conv_stem.normalization.bias": [
+24
+],
+"mobilenet_v1.conv_stem.normalization.num_batches_tracked": [],
+"mobilenet_v1.conv_stem.normalization.running_mean": [
+24
+],
+"mobilenet_v1.conv_stem.normalization.running_var": [
+24
+],
+"mobilenet_v1.conv_stem.normalization.weight": [
+24
+],
+"mobilenet_v1.layer.0.convolution.weight": [
+24,
+1,
+3,
+3
+],
+"mobilenet_v1.layer.0.normalization.bias": [
+24
+],
+"mobilenet_v1.layer.0.normalization.num_batches_tracked": [],
+"mobilenet_v1.layer.0.normalization.running_mean": [
+24
+],
+"mobilenet_v1.layer.0.normalization.running_var": [
+24
+],
+"mobilenet_v1.layer.0.normalization.weight": [
+24
+],
+"mobilenet_v1.layer.1.convolution.weight": [
+48,
+24,
+1,
+1
+],
+"mobilenet_v1.layer.1.normalization.bias": [
+48
+],
+"mobilenet_v1.layer.1.normalization.num_batches_tracked": [],
+"mobilenet_v1.layer.1.normalization.running_mean": [
+48
+],
+"mobilenet_v1.layer.1.normalization.running_var": [
+48
+],
+"mobilenet_v1.layer.1.normalization.weight": [
+48
+],
+"mobilenet_v1.layer.10.convolution.weight": [
+192,
+1,
+3,
+3
+],
+"mobilenet_v1.layer.10.normalization.bias": [
+192
+],
+"mobilenet_v1.layer.10.normalization.num_batches_tracked": [],
+"mobilenet_v1.layer.10.normalization.running_mean": [
+192
+],
+"mobilenet_v1.layer.10.normalization.running_var": [
+192
+],
+"mobilenet_v1.layer.10.normalization.weight": [
+192
+],
+"mobilenet_v1.layer.11.convolution.weight": [
+384,
+192,
+1,
+1
+],
+"mobilenet_v1.layer.11.normalization.bias": [
+384
+],
+"mobilenet_v1.layer.11.normalization.num_batches_tracked": [],
+"mobilenet_v1.layer.11.normalization.running_mean": [
+384
+],
+"mobilenet_v1.layer.11.normalization.running_var": [
+384
+],
+"mobilenet_v1.layer.11.normalization.weight": [
+384
+],
+"mobilenet_v1.layer.12.convolution.weight": [
+384,
+1,
+3,
+3
+],
+"mobilenet_v1.layer.12.normalization.bias": [
+384
+],
+"mobilenet_v1.layer.12.normalization.num_batches_tracked": [],
+"mobilenet_v1.layer.12.normalization.running_mean": [
+384
+],
+"mobilenet_v1.layer.12.normalization.running_var": [
+384
+],
+"mobilenet_v1.layer.12.normalization.weight": [
+384
+],
+"mobilenet_v1.layer.13.convolution.weight": [
+384,
+384,
+1,
+1
+],
+"mobilenet_v1.layer.13.normalization.bias": [
+384
+],
+"mobilenet_v1.layer.13.normalization.num_batches_tracked": [],
+"mobilenet_v1.layer.13.normalization.running_mean": [
+384
+],
+"mobilenet_v1.layer.13.normalization.running_var": [
+384
+],
+"mobilenet_v1.layer.13.normalization.weight": [
+384
+],
+"mobilenet_v1.layer.14.convolution.weight": [
+384,
+1,
+3,
+3
+],
+"mobilenet_v1.layer.14.normalization.bias": [
+384
+],
+"mobilenet_v1.layer.14.normalization.num_batches_tracked": [],
+"mobilenet_v1.layer.14.normalization.running_mean": [
+384
+],
+"mobilenet_v1.layer.14.normalization.running_var": [
+384
+],
+"mobilenet_v1.layer.14.normalization.weight": [
+384
+],
+"mobilenet_v1.layer.15.convolution.weight": [
+384,
+384,
+1,
+1
+],
+"mobilenet_v1.layer.15.normalization.bias": [
+384
+],
+"mobilenet_v1.layer.15.normalization.num_batches_tracked": [],
+"mobilenet_v1.layer.15.normalization.running_mean": [
+384
+],
+"mobilenet_v1.layer.15.normalization.running_var": [
+384
+],
+"mobilenet_v1.layer.15.normalization.weight": [
+384
+],
+"mobilenet_v1.layer.16.convolution.weight": [
+384,
+1,
+3,
+3
+],
+"mobilenet_v1.layer.16.normalization.bias": [
+384
+],
+"mobilenet_v1.layer.16.normalization.num_batches_tracked": [],
+"mobilenet_v1.layer.16.normalization.running_mean": [
+384
+],
+"mobilenet_v1.layer.16.normalization.running_var": [
+384
+],
+"mobilenet_v1.layer.16.normalization.weight": [
+384
+],
+"mobilenet_v1.layer.17.convolution.weight": [
+384,
+384,
+1,
+1
+],
+"mobilenet_v1.layer.17.normalization.bias": [
+384
+],
+"mobilenet_v1.layer.17.normalization.num_batches_tracked": [],
+"mobilenet_v1.layer.17.normalization.running_mean": [
+384
+],
+"mobilenet_v1.layer.17.normalization.running_var": [
+384
+],
+"mobilenet_v1.layer.17.normalization.weight": [
+384
+],
+"mobilenet_v1.layer.18.convolution.weight": [
+384,
+1,
+3,
+3
+],
+"mobilenet_v1.layer.18.normalization.bias": [
+384
+],
+"mobilenet_v1.layer.18.normalization.num_batches_tracked": [],
+"mobilenet_v1.layer.18.normalization.running_mean": [
+384
+],
+"mobilenet_v1.layer.18.normalization.running_var": [
+384
+],
+"mobilenet_v1.layer.18.normalization.weight": [
+384
+],
+"mobilenet_v1.layer.19.convolution.weight": [
+384,
+384,
+1,
+1
+],
+"mobilenet_v1.layer.19.normalization.bias": [
+384
+],
+"mobilenet_v1.layer.19.normalization.num_batches_tracked": [],
+"mobilenet_v1.layer.19.normalization.running_mean": [
+384
+],
+"mobilenet_v1.layer.19.normalization.running_var": [
+384
+],
+"mobilenet_v1.layer.19.normalization.weight": [
+384
+],
+"mobilenet_v1.layer.2.convolution.weight": [
+48,
+1,
+3,
+3
+],
+"mobilenet_v1.layer.2.normalization.bias": [
+48
+],
+"mobilenet_v1.layer.2.normalization.num_batches_tracked": [],
+"mobilenet_v1.layer.2.normalization.running_mean": [
+48
+],
+"mobilenet_v1.layer.2.normalization.running_var": [
+48
+],
+"mobilenet_v1.layer.2.normalization.weight": [
+48
+],
+"mobilenet_v1.layer.20.convolution.weight": [
+384,
+1,
+3,
+3
+],
+"mobilenet_v1.layer.20.normalization.bias": [
+384
+],
+"mobilenet_v1.layer.20.normalization.num_batches_tracked": [],
+"mobilenet_v1.layer.20.normalization.running_mean": [
+384
+],
+"mobilenet_v1.layer.20.normalization.running_var": [
+384
+],
+"mobilenet_v1.layer.20.normalization.weight": [
+384
+],
+"mobilenet_v1.layer.21.convolution.weight": [
+384,
+384,
+1,
+1
+],
+"mobilenet_v1.layer.21.normalization.bias": [
+384
+],
+"mobilenet_v1.layer.21.normalization.num_batches_tracked": [],
+"mobilenet_v1.layer.21.normalization.running_mean": [
+384
+],
+"mobilenet_v1.layer.21.normalization.running_var": [
+384
+],
+"mobilenet_v1.layer.21.normalization.weight": [
+384
+],
+"mobilenet_v1.layer.22.convolution.weight": [
+384,
+1,
+3,
+3
+],
+"mobilenet_v1.layer.22.normalization.bias": [
+384
+],
+"mobilenet_v1.layer.22.normalization.num_batches_tracked": [],
+"mobilenet_v1.layer.22.normalization.running_mean": [
+384
+],
+"mobilenet_v1.layer.22.normalization.running_var": [
+384
+],
+"mobilenet_v1.layer.22.normalization.weight": [
+384
+],
+"mobilenet_v1.layer.23.convolution.weight": [
+768,
+384,
+1,
+1
+],
+"mobilenet_v1.layer.23.normalization.bias": [
+768
+],
+"mobilenet_v1.layer.23.normalization.num_batches_tracked": [],
+"mobilenet_v1.layer.23.normalization.running_mean": [
+768
+],
+"mobilenet_v1.layer.23.normalization.running_var": [
+768
+],
+"mobilenet_v1.layer.23.normalization.weight": [
+768
+],
+"mobilenet_v1.layer.24.convolution.weight": [
+768,
+1,
+3,
+3
+],
+"mobilenet_v1.layer.24.normalization.bias": [
+768
+],
+"mobilenet_v1.layer.24.normalization.num_batches_tracked": [],
+"mobilenet_v1.layer.24.normalization.running_mean": [
+768
+],
+"mobilenet_v1.layer.24.normalization.running_var": [
+768
+],
+"mobilenet_v1.layer.24.normalization.weight": [
+768
+],
+"mobilenet_v1.layer.25.convolution.weight": [
+768,
+768,
+1,
+1
+],
+"mobilenet_v1.layer.25.normalization.bias": [
+768
+],
+"mobilenet_v1.layer.25.normalization.num_batches_tracked": [],
+"mobilenet_v1.layer.25.normalization.running_mean": [
+768
+],
+"mobilenet_v1.layer.25.normalization.running_var": [
+768
+],
+"mobilenet_v1.layer.25.normalization.weight": [
+768
+],
+"mobilenet_v1.layer.3.convolution.weight": [
+96,
+48,
+1,
+1
+],
+"mobilenet_v1.layer.3.normalization.bias": [
+96
+],
+"mobilenet_v1.layer.3.normalization.num_batches_tracked": [],
+"mobilenet_v1.layer.3.normalization.running_mean": [
+96
+],
+"mobilenet_v1.layer.3.normalization.running_var": [
+96
+],
+"mobilenet_v1.layer.3.normalization.weight": [
+96
+],
+"mobilenet_v1.layer.4.convolution.weight": [
+96,
+1,
+3,
+3
+],
+"mobilenet_v1.layer.4.normalization.bias": [
+96
+],
+"mobilenet_v1.layer.4.normalization.num_batches_tracked": [],
+"mobilenet_v1.layer.4.normalization.running_mean": [
+96
+],
+"mobilenet_v1.layer.4.normalization.running_var": [
+96
+],
+"mobilenet_v1.layer.4.normalization.weight": [
+96
+],
+"mobilenet_v1.layer.5.convolution.weight": [
+96,
+96,
+1,
+1
+],
+"mobilenet_v1.layer.5.normalization.bias": [
+96
+],
+"mobilenet_v1.layer.5.normalization.num_batches_tracked": [],
+"mobilenet_v1.layer.5.normalization.running_mean": [
+96
+],
+"mobilenet_v1.layer.5.normalization.running_var": [
+96
+],
+"mobilenet_v1.layer.5.normalization.weight": [
+96
+],
+"mobilenet_v1.layer.6.convolution.weight": [
+96,
+1,
+3,
+3
+],
+"mobilenet_v1.layer.6.normalization.bias": [
+96
+],
+"mobilenet_v1.layer.6.normalization.num_batches_tracked": [],
+"mobilenet_v1.layer.6.normalization.running_mean": [
+96
+],
+"mobilenet_v1.layer.6.normalization.running_var": [
+96
+],
+"mobilenet_v1.layer.6.normalization.weight": [
+96
+],
+"mobilenet_v1.layer.7.convolution.weight": [
+192,
+96,
+1,
+1
+],
+"mobilenet_v1.layer.7.normalization.bias": [
+192
+],
+"mobilenet_v1.layer.7.normalization.num_batches_tracked": [],
+"mobilenet_v1.layer.7.normalization.running_mean": [
+192
+],
+"mobilenet_v1.layer.7.normalization.running_var": [
+192
+],
+"mobilenet_v1.layer.7.normalization.weight": [
+192
+],
+"mobilenet_v1.layer.8.convolution.weight": [
+192,
+1,
+3,
+3
+],
+"mobilenet_v1.layer.8.normalization.bias": [
+192
+],
+"mobilenet_v1.layer.8.normalization.num_batches_tracked": [],
+"mobilenet_v1.layer.8.normalization.running_mean": [
+192
+],
+"mobilenet_v1.layer.8.normalization.running_var": [
+192
+],
+"mobilenet_v1.layer.8.normalization.weight": [
+192
+],
+"mobilenet_v1.layer.9.convolution.weight": [
+192,
+192,
+1,
+1
+],
+"mobilenet_v1.layer.9.normalization.bias": [
+192
+],
+"mobilenet_v1.layer.9.normalization.num_batches_tracked": [],
+"mobilenet_v1.layer.9.normalization.running_mean": [
+192
+],
+"mobilenet_v1.layer.9.normalization.running_var": [
+192
+],
+"mobilenet_v1.layer.9.normalization.weight": [
+192
+]
+}

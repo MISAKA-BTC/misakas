@@ -1,0 +1,12 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "glm4",
+  "doc": "GLM-4 (GLM-4-0414, GLM-Z1): GLM with a post-norm after the attention (post_self_attn_layernorm) and after the MLP (post_mlp_layernorm).",
+  "extends": ["glm"],
+  "match": {"architectures": ["Glm4ForCausalLM"], "model_types": ["glm4"]},
+  "vars": [
+    {"name": "residual", "value": {"Sequential": {"pre_mixer": {"$var": "norm"}, "post_mixer": {"$var": "norm"}, "pre_ffn": {"$var": "norm"}, "post_ffn": {"$var": "norm"}, "multiplier": {"$var": "res_mult"}}}},
+    {"name": "names", "value": {"$merge": [{"$omit": [{"$var": "names_base"}, ["mlp.gate", "mlp.up"]]}, {"mlp.gate_up": "{p}layers.{L}.mlp.gate_up_proj", "norm.post_mix": "{p}layers.{L}.post_self_attn_layernorm", "norm.post_ffn": "{p}layers.{L}.post_mlp_layernorm"}]}},
+    {"name": "model_type", "value": "glm4"}
+  ]
+}

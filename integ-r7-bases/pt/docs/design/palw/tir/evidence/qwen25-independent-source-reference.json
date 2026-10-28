@@ -1,0 +1,120 @@
+{
+  "schema": "misaka.rfc02.independent-source-reference-observation.v1",
+  "observed_at_utc": "2026-10-11T08:18:19.711691+00:00",
+  "checkpoint_repository": "Qwen/Qwen2.5-1.5B-Instruct",
+  "source_revision": "989aa7980e4cf806f80c7fef2b1adb7bc71aa306",
+  "reference_schema": "misaka.palw.hf-reference.v1",
+  "producer": {
+    "implementation": "Hugging Face Transformers publisher-selected built-in model class",
+    "model_class": "Qwen2ForCausalLM",
+    "transformers": "4.48.3",
+    "torch": "2.5.1",
+    "numpy": "2.2.3",
+    "reference_dtype": "float32",
+    "source_storage": "safetensors",
+    "device": "cpu",
+    "attention": "eager",
+    "use_cache": false,
+    "trust_remote_code": false,
+    "repository": "Qwen/Qwen2.5-1.5B-Instruct",
+    "revision": "989aa7980e4cf806f80c7fef2b1adb7bc71aa306",
+    "source_manifest_sha256": "0c45f44e969b7c226d3fb8444ac5dff91c8d98001127cc2dcae8749c251994a3",
+    "token_file_sha256": "106431116898390a098e1bf55fdaf0548590bf9f965184061735bc04327b3823",
+    "source_files": [
+      {
+        "path": "config.json",
+        "bytes": 660,
+        "sha256": "98d2ff8cc47488d08a2b0b3acf4eb99ef210779b42bd48605f6b8e36acdbf670"
+      },
+      {
+        "path": "model.safetensors",
+        "bytes": 3087467144,
+        "sha256": "dd924a11b4c220f385b51ffa522daea7c9f3d850e31b162bb5661df483c6d3ee"
+      },
+      {
+        "path": "tokenizer.json",
+        "bytes": 7031645,
+        "sha256": "c0382117ea329cdf097041132f6d735924b697924d6f6fc3945713e96ce87539"
+      }
+    ],
+    "source_before_and_after_sha256_match": true,
+    "source_revision_label_is_authenticated_by_this_tool": false,
+    "elapsed_seconds": 24.207328124990454,
+    "whole_process_max_rss_bytes": 6366314496,
+    "limits": {
+      "context": 32,
+      "positions": 123,
+      "logit_values": 18688128,
+      "source_bytes": 3095000000,
+      "model_parameter_bytes": 6200000000
+    },
+    "declared_float32_parameter_bytes": 6174857216,
+    "diagnostic_is_complete_task_or_chain_admission": false
+  },
+  "reference_vocabulary": 151936,
+  "exact_job_sequence_lengths": [
+    30,
+    31,
+    32,
+    30
+  ],
+  "tokens_file": "qwen25-independent-source-fidelity-tokens.json",
+  "reference_local_paths": {
+    "metadata": "/tmp/rfc02-qwen25-independent-reference/hf-reference.json",
+    "logits": "/tmp/rfc02-qwen25-independent-reference/hf-reference.f32"
+  },
+  "raw_reference_is_committed": false,
+  "reference_metadata_sha256": "28c32f4286f89d132bca24b440fcf939ae1d8212fb90136c3ebbb23c048a4d04",
+  "reference_logits_sha256": "de1fde7a666bb7c926641a301dc659a8771ea19144e871de129bb0ba83b22df8",
+  "reference_logits_bytes": 74752512,
+  "protocol_sha256": "4d39357e518898a5f11e3d59582a0090f36cded44a3b3684ca9d408d3c9a01a5",
+  "integer_fidelity_measurement_complete": true,
+  "full_rfc02_complete": false,
+  "scope": "Only independent full-weight source causal logits for the same fixed short diagnostic jobs; complete chat task, original32768 context, node registration/prosecution/Final/redemption and A6/A8 remain unverified.",
+  "limits_scope": "Input storage, declared float32 tensor payload and output values only; no bound on total Torch/Transformers module-construction RAM, allocator, CPU work or process RSS is claimed. The observed whole-process RSS is reported separately.",
+  "integer_fidelity_measurement": {
+    "file": "qwen25-independent-source-fidelity-result.json",
+    "sha256": "9ce403e7580b93ac4999ad82e0197912261bc0fce8b3a659ef448f8254c953f5",
+    "exit_code": 0,
+    "passed": true,
+    "metrics": {
+      "correlation": 0.999847941173826,
+      "intercept": 0.001049844032464204,
+      "kl_mean": 0.0013678781683224284,
+      "max_abs": 1.5065925121307355,
+      "rmse": 0.07012278508053019,
+      "slope": 0.9986822487563126,
+      "top1": 0.967479674796748
+    },
+    "whole_wall_seconds": 242.18,
+    "whole_process_max_rss_bytes": 2151088128,
+    "run_log": "qwen25-independent-source-fidelity-run.log",
+    "run_log_sha256": "e1fb3088374f6280e1077895fb27847f1f5b21fab06c62ed5c471d7f77a37a05"
+  },
+  "measured_code_identity": {
+    "misaka-palw-tir-lower/tools/hf_checkpoint_reference.py": "b76a7afc0a23386e8923f83a73f9cb6f76549c8dc9e268456045007d6d767253",
+    "misaka-palw-sdk/examples/check-source-checkpoint-fidelity.rs": "5d51e52d175b8887ff2dd1aff0027d1b2858a508485297a668d1a3d85ab357f5",
+    "misaka-palw-sdk/examples/check-flat-checkpoint-admission7.rs": "0295337d293d4371da92a04f2d974833973b762b43687135152546344a0f6fe5"
+  },
+  "measured_binary_identity": {
+    "check-source-checkpoint-fidelity": "69c11ddfe6df510f0af6163504bcc580717e5dfa531d5aaf16f83b41591c14bb",
+    "check-flat-checkpoint-admission7": "e80353fb4f08c5ed1abe1d9208b45e13727f425afa4e0ef78d7bffe4b8273cdf"
+  },
+  "source_execution_command": "HF_HUB_OFFLINE=1 /usr/bin/time -l /tmp/rfc02-source-reference-venv/bin/python misaka-palw-tir-lower/tools/hf_checkpoint_reference.py /Users/wata/Downloads/Qwen2.5-1.5B-Instruct docs/design/palw/tir/evidence/qwen25-real-pilot-protocol.json docs/design/palw/tir/evidence/qwen25-independent-source-fidelity-tokens.json /tmp/rfc02-qwen25-independent-reference --context 32 --max-positions 123 --max-logit-values 18688128 --max-source-bytes 3095000000 --max-model-parameter-bytes 6200000000",
+  "integer_measurement_command": "/usr/bin/time -l /Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/examples/check-source-checkpoint-fidelity /Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/rfc02-real/qwen25-pilot/qwen25-32.palwtir /tmp/rfc02-qwen25-independent-reference docs/design/palw/tir/evidence/qwen25-independent-source-fidelity-protocol.json",
+  "source_whole_wall_seconds": 26.67,
+  "performance_scope": "Sequential separate offline processes on this host; includes process/import/load/hash overhead, no service throughput or network/proof/Final performance assertion. Concurrent builds may affect timing.",
+  "final_formatted_code_identity": {
+    "misaka-palw-tir-lower/tools/hf_checkpoint_reference.py": "b76a7afc0a23386e8923f83a73f9cb6f76549c8dc9e268456045007d6d767253",
+    "misaka-palw-sdk/examples/check-source-checkpoint-fidelity.rs": "5d51e52d175b8887ff2dd1aff0027d1b2858a508485297a668d1a3d85ab357f5",
+    "misaka-palw-sdk/examples/check-flat-checkpoint-admission7.rs": "0295337d293d4371da92a04f2d974833973b762b43687135152546344a0f6fe5"
+  },
+  "final_source_difference": "Rust example source formatting only after measured binary run; measured binary/source identities above remain the exact run identities.",
+  "adversarial_example_validation": {
+    "file": "qwen25-independent-source-fidelity-adversarial-verdict.json",
+    "sha256": "05ef48c49aa9fdfff1c33b8abc7b718ef5d460abead4a7ac23626559bc1e7907",
+    "passed": 6,
+    "failed": 0,
+    "integer_execution_entered": false
+  }
+}

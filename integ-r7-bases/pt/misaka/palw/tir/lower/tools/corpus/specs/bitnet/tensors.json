@@ -1,0 +1,168 @@
+{
+ "lm_head.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "model.embed_tokens.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "model.layers.0.input_layernorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.0.mlp.down_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   64
+  ]
+ },
+ "model.layers.0.mlp.ffn_sub_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64
+  ]
+ },
+ "model.layers.0.mlp.gate_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "model.layers.0.mlp.up_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "model.layers.0.post_attention_layernorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.0.self_attn.attn_sub_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.0.self_attn.k_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   16,
+   32
+  ]
+ },
+ "model.layers.0.self_attn.o_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.layers.0.self_attn.q_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.layers.0.self_attn.v_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   16,
+   32
+  ]
+ },
+ "model.layers.1.input_layernorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.1.mlp.down_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   64
+  ]
+ },
+ "model.layers.1.mlp.ffn_sub_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64
+  ]
+ },
+ "model.layers.1.mlp.gate_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "model.layers.1.mlp.up_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "model.layers.1.post_attention_layernorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.1.self_attn.attn_sub_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.1.self_attn.k_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   16,
+   32
+  ]
+ },
+ "model.layers.1.self_attn.o_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.layers.1.self_attn.q_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.layers.1.self_attn.v_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   16,
+   32
+  ]
+ },
+ "model.norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ }
+}

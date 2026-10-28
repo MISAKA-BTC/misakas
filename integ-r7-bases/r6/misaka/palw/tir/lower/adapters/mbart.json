@@ -1,0 +1,27 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "mbart",
+  "kind": "encdec",
+  "extends": [
+    "mixin-bart-lineage"
+  ],
+  "doc": "mBART: BART's learned positions and layernorm_embedding with pre-norm sublayers and a final layer norm per stack; sqrt(d_model) embedding scale when scale_embedding.",
+  "match": {
+    "architectures": [
+      "MBartForConditionalGeneration"
+    ],
+    "model_types": [
+      "mbart"
+    ]
+  },
+  "vars": [
+    {
+      "name": "learned_positions",
+      "value": true
+    },
+    {
+      "name": "pre_norm_stack",
+      "value": true
+    }
+  ]
+}

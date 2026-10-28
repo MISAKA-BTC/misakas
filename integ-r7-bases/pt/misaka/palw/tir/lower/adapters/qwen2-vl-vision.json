@@ -1,0 +1,44 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "qwen2-vl-vision",
+  "kind": "vision",
+  "doc": "Qwen2-VL's vision tower (Qwen2VisionTransformerPretrainedModel): a Conv3d patch embedding over two identical temporal copies (folded into one projection), block-major patch order under a spatial merge, 2-D rotary positions (rope_theta of rope_parameters, 10000 without), full attention over a fused qkv, LayerNorm pre-norm layers with a plain MLP (embed_dim * mlp_ratio wide, quick_gelu), and the merger (a LayerNorm over the embed width, then an MLP of the merged rows to `hidden_size`, the text width). The class declares the input size (the config has none). The data form of the Qwen2-VL arm of parse_vision_rust (its oracle); qwen2-vl-vision-in-vlm reads the same tower inside Qwen2VLForConditionalGeneration. Features: VISION_FROM_SPEC_V1.",
+  "match": {"architectures": ["Qwen2VisionTransformerPretrainedModel"], "model_types": ["qwen2_vl_vision"]},
+  "config": {
+    "defaults": {"depth": 32, "embed_dim": 1280, "hidden_size": 3584, "hidden_act": "quick_gelu", "mlp_ratio": 4, "num_heads": 16, "in_channels": 3, "patch_size": 14, "spatial_merge_size": 2, "temporal_patch_size": 2},
+    "inert": ["in_chans", "spatial_patch_size", "initializer_range", "attention_dropout"]
+  },
+  "vars": [
+    {"name": "vp", "value": ""},
+    {"name": "rgb", "value": {"$check": [{"$eq": [{"$cfg": "in_channels"}, 3]}, "in_channels other than 3 (the class's image is RGB)"]}},
+    {"name": "ratio_ok", "value": {"$check": [{"$eq": [{"$cfg": "mlp_ratio"}, {"$floor": {"$cfg": "mlp_ratio"}}]}, "mlp_ratio is not a whole number"]}},
+    {"name": "d", "value": {"$cfg": "embed_dim"}},
+    {"name": "depth", "value": {"$cfg": "depth"}},
+    {"name": "theta", "value": {"$get": [{"$cfg?": "rope_parameters"}, "rope_theta", 10000.0]}}
+  ],
+  "spec": {
+    "architecture": {"$var": "arch"},
+    "h": null, "w": null, "downscale": 1,
+    "patch": {"$cfg": "patch_size"}, "temporal": {"$cfg": "temporal_patch_size"}, "merge": {"$cfg": "spatial_merge_size"},
+    "mean": [0.48145466, 0.4578275, 0.40821073], "std": [0.26862954, 0.26130258, 0.27577711],
+    "d": {"$var": "d"}, "heads": {"$cfg": "num_heads"}, "inter": {"$mul": [{"$var": "d"}, {"$cfg": "mlp_ratio"}]},
+    "layers": {"$var": "depth"}, "run": {"$var": "depth"},
+    "act": {"$act": {"$cfg": "hidden_act"}}, "swiglu": false, "rms": false, "eps": 1e-06,
+    "pre_norm": false, "cls": false, "patch_bias": false, "learned_pos": false,
+    "rope_theta": {"$var": "theta"}, "window": null,
+    "out": {"Merger": {"out": {"$cfg": "hidden_size"}}},
+    "names": {
+      "patch.w": {"$cat": [{"$var": "vp"}, "patch_embed.proj.weight"]},
+      "norm1": {"$cat": [{"$var": "vp"}, "blocks.{L}.norm1"]},
+      "norm2": {"$cat": [{"$var": "vp"}, "blocks.{L}.norm2"]},
+      "attn.qkv": {"$cat": [{"$var": "vp"}, "blocks.{L}.attn.qkv"]},
+      "attn.o": {"$cat": [{"$var": "vp"}, "blocks.{L}.attn.proj"]},
+      "mlp.up": {"$cat": [{"$var": "vp"}, "blocks.{L}.mlp.fc1"]},
+      "mlp.down": {"$cat": [{"$var": "vp"}, "blocks.{L}.mlp.fc2"]},
+      "merger.norm": {"$cat": [{"$var": "vp"}, "merger.ln_q"]},
+      "merger.up": {"$cat": [{"$var": "vp"}, "merger.mlp.0"]},
+      "merger.down": {"$cat": [{"$var": "vp"}, "merger.mlp.2"]}
+    },
+    "ignored": []
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "activation_dropout": 0.0,
+  "activation_function": "gelu",
+  "add_cross_attention": false,
+  "architectures": [
+    "XGLMForCausalLM"
+  ],
+  "attention_dropout": 0.1,
+  "attention_heads": 16,
+  "bos_token_id": 0,
+  "d_model": 32,
+  "decoder_start_token_id": 2,
+  "dropout": 0.1,
+  "dtype": "bfloat16",
+  "eos_token_id": 2,
+  "ffn_dim": 64,
+  "init_std": 0.02,
+  "layerdrop": 0.0,
+  "max_position_embeddings": 128,
+  "model_type": "xglm",
+  "num_layers": 2,
+  "pad_token_id": 1,
+  "scale_embedding": true,
+  "tie_word_embeddings": true,
+  "transformers_version": "5.17.0",
+  "use_cache": true,
+  "vocab_size": 64
+}

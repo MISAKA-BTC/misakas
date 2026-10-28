@@ -294,7 +294,16 @@ impl KWorld {
     /// kernel commitments (bonded), the binding matures, and the kernel route registers the Panel-licensed class over the root it now
     /// attests — no test hook anywhere.
     async fn new() -> KWorld {
-        let (config, bundle, premine, mut floats) = kernel_service_config();
+        Self::new_on(false).await
+    }
+
+    async fn new_on(panel_free: bool) -> KWorld {
+        let (mut config, bundle, premine, mut floats) = kernel_service_config();
+        if panel_free {
+            config.params.palw_panel_free_v1 =
+                Some(kaspa_consensus_core::palw_panel_free_v1::PalwPanelFreeFenceV1::at(ForkActivation::new(0)));
+            assert!(config.params.validate_palw_panel_free_v1().is_err(), "activation remains dormant on shipping networks");
+        }
         let mut chain = Chain::new(config, bundle, &premine);
         chain.advance(2).await;
         let fx = k_fixture();
@@ -959,3 +968,43 @@ async fn g14r2_kernel_interim_seats_run_as_services_pay_the_honest_claim_and_ref
     }
 }
 
+/// A blocker probe, not a Panel=0 payment acceptance: ordinary onboarding of the actual
+/// profile cannot register OPV without the existing model-conformance gate. The frozen
+/// user decision forbids introducing model review to make this probe pass as acceptance.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn rfc15_normal_onboarding_exposes_the_current_opv_admission_blocker_without_a_test_hook() {
+    on_service_stack(|| async {
+        let mut w = KWorld::new_on(true).await;
+        let register = K::RegisterClassV2 {
+            mode: misaka_palw_kernel::mode::VerificationModeV1::OptimisticPublicVerification,
+            descriptor: k2_tir_v2_descriptor().digest(),
+            program_bytes: w.fx.program.encode(),
+            plan: w.fx.plan.clone(),
+            param_commitments: w.fx.pc.clone(),
+        };
+        let object = route_obj(&w.chain, REGISTRANT, w.chain.bonds[REGISTRANT], &register);
+        let funding = &w.floats[REGISTRANT];
+        let tx = palw_carrier_fees::build_lifecycle_carrier_v2(
+            &w.chain.config,
+            key(REGISTRANT),
+            &object,
+            funding.0,
+            &funding.1,
+            &[],
+            None,
+            w.chain.daa(),
+        )
+        .unwrap();
+        // The mempool performs envelope/UTXO validation; semantic refusal is
+        // observed after the real block fold, rather than assumed from admission.
+        w.chain.tc.validate_mempool_transaction(&mut MutableTransaction::from_tx(tx), &Default::default()).unwrap();
+        let before = ledger_of(&w.chain);
+        let sent = w.chain.send(REGISTRANT, &object, &mut w.floats[REGISTRANT], &[]).await;
+        assert!(w.chain.history.iter().any(|block| block.transactions.iter().any(|tx| tx.id() == sent.id())), "the actual carrier was mined");
+        let after = ledger_of(&w.chain);
+        assert_eq!(after.classes.keys().collect::<Vec<_>>(), before.classes.keys().collect::<Vec<_>>());
+        assert!(after.opv.classes.is_empty(), "the old fence does not admit ordinary OPV registration");
+        eprintln!("[rfc15-blocker] ordinary profile onboarded; mined OPV registration left no OPV class");
+    })
+    .await;
+}

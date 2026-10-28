@@ -1,0 +1,148 @@
+{
+ "order": 1,
+ "id": "qwen25-0.5b",
+ "family": "qwen2-dense",
+ "repo": "Qwen/Qwen2.5-0.5B-Instruct",
+ "revision": "7ae557604adf67be50417f59c2c2f167def9a775",
+ "task": "text-generation",
+ "context": 512,
+ "local": "/Users/wata/Downloads/MISAKA-wt-b/hf-ckpt/Qwen/Qwen2.5-0.5B-Instruct",
+ "full": "downloaded (approved 2026-10-08, hash-verified)",
+ "bytes": 988097824,
+ "source": {
+  "schema": "misaka.h1.source.v1",
+  "repo": "Qwen/Qwen2.5-0.5B-Instruct",
+  "revision": "7ae557604adf67be50417f59c2c2f167def9a775",
+  "resolved_sha": "7ae557604adf67be50417f59c2c2f167def9a775",
+  "gated": false,
+  "private": false,
+  "architectures": [
+   "Qwen2ForCausalLM"
+  ],
+  "model_type": "qwen2",
+  "pipeline_tag": "text-generation",
+  "files": [
+   {
+    "path": ".gitattributes",
+    "size": 1519,
+    "git_oid": "a6344aac8c09253b3b630fb776ae94478aa0275b",
+    "sha256": null,
+    "lfs": false
+   },
+   {
+    "path": "LICENSE",
+    "size": 11343,
+    "git_oid": "6634c8cc3133b3848ec74b9f275acaaa1ea618ab",
+    "sha256": null,
+    "lfs": false
+   },
+   {
+    "path": "README.md",
+    "size": 4917,
+    "git_oid": "4b8373851d093eb9f3017443f27781c6971eff24",
+    "sha256": null,
+    "lfs": false
+   },
+   {
+    "path": "config.json",
+    "size": 659,
+    "git_oid": "0dbb161213629a23f0fc00ef286e6b1e366d180f",
+    "sha256": null,
+    "lfs": false
+   },
+   {
+    "path": "generation_config.json",
+    "size": 242,
+    "git_oid": "dfc11073787daf1b0f9c0f1499487ab5f4c93738",
+    "sha256": null,
+    "lfs": false
+   },
+   {
+    "path": "merges.txt",
+    "size": 1671839,
+    "git_oid": "20024bfe7c83998e9aeaf98a0cd6a2ce6306c2f0",
+    "sha256": null,
+    "lfs": false
+   },
+   {
+    "path": "model.safetensors",
+    "size": 988097824,
+    "git_oid": "d7db405a3f0d9bf1ba5bdd4e4211db8022ebe4eb",
+    "sha256": "fdf756fa7fcbe7404d5c60e26bff1a0c8b8aa1f72ced49e7dd0210fe288fb7fe",
+    "lfs": true
+   },
+   {
+    "path": "tokenizer.json",
+    "size": 7031645,
+    "git_oid": "443909a61d429dff23010e5bddd28ff530edda00",
+    "sha256": null,
+    "lfs": false
+   },
+   {
+    "path": "tokenizer_config.json",
+    "size": 7305,
+    "git_oid": "07bfe0640cb5a0037f9322287fbfc682806cf672",
+    "sha256": null,
+    "lfs": false
+   },
+   {
+    "path": "vocab.json",
+    "size": 2776833,
+    "git_oid": "4783fe10ac3adce15ac8f358ef5462739852c569",
+    "sha256": null,
+    "lfs": false
+   }
+  ],
+  "weights_bytes": 988097824,
+  "local": {
+   "dir": "/Users/wata/Downloads/MISAKA-wt-b/hf-ckpt/Qwen/Qwen2.5-0.5B-Instruct",
+   "checks": [
+    {
+     "path": "LICENSE",
+     "status": "MATCH",
+     "git_oid": "6634c8cc3133b3848ec74b9f275acaaa1ea618ab"
+    },
+    {
+     "path": "config.json",
+     "status": "MATCH",
+     "git_oid": "0dbb161213629a23f0fc00ef286e6b1e366d180f"
+    },
+    {
+     "path": "generation_config.json",
+     "status": "MATCH",
+     "git_oid": "dfc11073787daf1b0f9c0f1499487ab5f4c93738"
+    },
+    {
+     "path": "merges.txt",
+     "status": "MATCH",
+     "git_oid": "20024bfe7c83998e9aeaf98a0cd6a2ce6306c2f0"
+    },
+    {
+     "path": "model.safetensors",
+     "status": "MATCH",
+     "sha256": "fdf756fa7fcbe7404d5c60e26bff1a0c8b8aa1f72ced49e7dd0210fe288fb7fe"
+    },
+    {
+     "path": "tokenizer.json",
+     "status": "MATCH",
+     "git_oid": "443909a61d429dff23010e5bddd28ff530edda00"
+    },
+    {
+     "path": "tokenizer_config.json",
+     "status": "MATCH",
+     "git_oid": "07bfe0640cb5a0037f9322287fbfc682806cf672"
+    },
+    {
+     "path": "vocab.json",
+     "status": "MATCH",
+     "git_oid": "4783fe10ac3adce15ac8f358ef5462739852c569"
+    }
+   ],
+   "required": [
+    "model.safetensors",
+    "config.json"
+   ],
+   "verdict": "MATCH"
+  }
+ }
+}

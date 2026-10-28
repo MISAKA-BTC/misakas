@@ -1,0 +1,12 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "mixin-qwen-sliding",
+  "doc": "A mixin (it matches no model): the Qwen-style sliding window — use_sliding_window switches the window on, max_window_layers is the first layer that has it.",
+  "vars": [
+    {"name": "use_sw", "value": {"$cfg": ["use_sliding_window", false]}},
+    {"name": "sw_raw", "value": {"$cfgn": ["sliding_window", 4096]}},
+    {"name": "sw", "value": {"$if": [{"$var": "use_sw"}, {"$var": "sw_raw"}, null]}},
+    {"name": "mwl", "value": {"$cfg": ["max_window_layers", 28]}},
+    {"name": "types", "value": {"$layer_types": {"n": {"$var": "n"}, "allowed": ["full_attention", "sliding_attention"], "each": {"$if": [{"$and": [{"$ne": [{"$var": "sw"}, null]}, {"$ge": [{"$var": "i"}, {"$var": "mwl"}]}]}, "sliding_attention", "full_attention"]}}}}
+  ]
+}

@@ -1,0 +1,463 @@
+{
+  "schema": "misaka.rfc02.persisted-quota11-isolated-verdict.v1",
+  "scope": "Pure persisted quota transition component and bounded snapshot restore. Native funded class/job11 consumers, original capital/reward provenance, transport/retention and RFC02 acceptance remain open.",
+  "source_sha256": {
+    "misaka-palw-kernel/src/flat_quota11.rs": "d07f9e794639529ea56ce52e794972cdb09cc712475413a0e9c3e967228450a2",
+    "misaka-palw-kernel/src/flat_resources10.rs": "393cfa3b462a374932e138e8e397876006214d6cc61e4a8a0ec76c0459b9675e",
+    "misaka-palw-kernel/src/flat_court9.rs": "4110374c30d7f2156e4cc7c8009258384d34bbef86c829c6ff1d3763301bc802",
+    "misaka-palw-kernel/src/flat_scope9.rs": "760149fa196a133cafb7ea15948dff7c5e1eab148ee1ab70d1e440cc81a39367",
+    "misaka-palw-kernel/src/flat_point9.rs": "9b0602d66a1036820688768066397e9312d55acd0f64dcd583773f3e2b408bcd",
+    "misaka-palw-kernel/src/flat_candidate7.rs": "05f6938be65b580d9c65d72e93fd07a05bfeddbdff51780cd053afceafbdfb23",
+    "misaka-palw-kernel/src/flat_candidate9.rs": "365724d1a518b79a30e3e74abdff85809ecc39e9f195c7ea20586d802cf63459"
+  },
+  "retained_binary_sha256": {
+    "/tmp/rfc02-flat-quota11-final-unit": "9d49e2496277e1055769caad5ddbae4854e56551040e50d5e6f3ee4f9925f1a0",
+    "/tmp/rfc02-flat-quota11-owner-guard-unit": "79900a935b0bd3f652d2ffc1b0ab15b0459d17de94c8d13f2b5e74a4271b8ef3",
+    "/tmp/rfc02-flat-quota11-fused-final-unit": "e3c1c298c07801003bb12ae3aff74648942c20d15ed14f4563410ef0adf9636b",
+    "/tmp/rfc02-flat-quota11-late-final-unit": "83b7f39a8a9e06eb9e130d3c187ca4f33de2b114115233e316434c7c6c93b8c7",
+    "/tmp/rfc02-flat-quota11-gc-final-unit": "b1956434e36e94379b9b82ba362044ddacb70462d0864a6706e163a7cdff21c3",
+    "/tmp/rfc02-flat-quota11-close-rooted-final-unit": "be25bc37759ec7f3bcce5cefacc55f198456000893b3c4deb3a311e212f5b13f",
+    "/tmp/rfc02-flat-quota11-class-tariff-final-unit": "77080ae4b76ae1b0436f47b32c530db161ce2c62f63b36ace1abc196f5ab07af"
+  },
+  "source_binary_build_path": "/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/misaka_palw_kernel-3e75f80c67bc7227",
+  "logs": {
+    "rfc02-flat-quota11-first-tests.log": "86a473cee4fcb533e2c41beae528f74e3efd31ed6d7ae7bd546e3ede233a1a8b",
+    "rfc02-flat-quota11-second-tests.log": "6e786a5218f9f93511d8ad53eca70e0c8f66d0fdc3226313b841caead5975e56",
+    "rfc02-flat-quota11-third-tests.log": "beda192457037789d4b903d612fc736f73c02dec1c016732c1e1edb83ef468f2",
+    "rfc02-flat-quota11-final-tests.log": "1e43f5463931afaf3e33b0d9586f580d2c9fbb02c8770f239799646af585e362",
+    "rfc02-flat-quota11-retained-tests.log": "895682183610f355ba02bbb1f7e926eb7bdf003dfcd302a12a04f6140bfa8349",
+    "rfc02-flat-quota11-owner-tests.log": "e65f409c8a3992ebefcad85363c204c027b422d3c535bbb5cd0b50f026d5ccd3",
+    "rfc02-flat-quota11-guarded-final-tests.log": "17adbb511214b95a091599a30a06bc20bfd654a8759332bc89f0716d637b5b09",
+    "rfc02-flat-quota11-actual-scope-final-tests.log": "c17a39ff77f2a96030179925317a800333a22329729c57559c494b25feebeec4",
+    "rfc02-flat-quota11-fused-final-tests.log": "35564db26c4bc73560a7ba3b8c3c439d4acf56a9a847a53c7ab1e3601bd08e92",
+    "rfc02-flat-quota11-fused-retained-tests.log": "fe8589983aad0ed28394a4fa54957a8732f2632be03cf4f5c9a31548b1129019",
+    "rfc02-flat-quota11-late-final-tests.log": "87ff0c6e9cddd54875ef995533f3f60ae97c4c95c6d528fbcf1da9a0e769ea36",
+    "rfc02-flat-quota11-late-retained-tests.log": "0110688eea9e572e394c87603e30e8c90edb0a445559edaea8c1cc6cd53d9dd0",
+    "rfc02-flat-quota11-gc-trial-tests.log": "a5b3f37aa0d5d28ef4d0fc108e82c9e7b2924cf82d5e9297c060346918282542",
+    "rfc02-flat-quota11-gc-retained-tests.log": "a36d788f7f744617e89af20cbdc35010f4e212fa86b5e75fb91a8605b01136b2",
+    "rfc02-flat-quota11-close-rooted-trial-tests.log": "3a4f94c5ab5d549b600ee40a1c48cfa72bfa0414401a21cc2ad1959228d84867",
+    "rfc02-flat-quota11-close-rooted-retained-tests.log": "01ac0ca8f6d0ee70cec97ecdf9c3d5c1c59e55f4dd62972b90d7acd303159cb2",
+    "rfc02-flat-quota11-class-tariff-trial-tests.log": "3d724c7110fb1b7d5bf35791f4fcf092bccd16e969ff660d4228614a7961bfc5",
+    "rfc02-flat-quota11-class-tariff-final-tests.log": "dd039d599f91141fd4f44d90466bcf157eebfa4dc902407725c30110a8392823",
+    "rfc02-flat-quota11-class-tariff-retained-tests.log": "cae718ad27d07f30176440491ea88c903de0d9f09d473fec6aff1e8768b3725a"
+  },
+  "build_environment": {
+    "rust": "1.93.0",
+    "CARGO_INCREMENTAL": "0",
+    "CARGO_TARGET_DIR": "/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target",
+    "profile": "ordinary debug + debuginfo",
+    "budget_stack_arithmetic_cap_overrides": false
+  },
+  "command": "CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target cargo test --locked -p misaka-palw-kernel --lib flat_quota11::tests:: -- --test-threads=1",
+  "verified": {
+    "passed": 20,
+    "failed": 0,
+    "compile_seconds": 5.7,
+    "runtime_seconds": 0.06,
+    "all_axes_times_cap_scopes_atomic_refusals": 84,
+    "reserved_guarantee_protects_mature_court_da_chunk_close_against_new_admission_flood": true,
+    "failed_expensive_attempt_slots_and_debits_retained": true,
+    "baseline_once_no_subject_rebind": true,
+    "distinct_class_max_and_actual_job_scope_bound": true,
+    "program_byte_root_and_exact_parameter_root_bound": true,
+    "equal_daa_distinct_trusted_blocks_preserve_actor_network_lifetime": true,
+    "complete_ancestor_rollback_and_replay_same_state_root": true,
+    "interval_crossing_and_old_subject_rebind_refused": true,
+    "bounded_snapshot_preallocation_count_truncation_duplicate_trailing_guards": true,
+    "mandatory_reserved_debit_actor_matches_exact_producer": true,
+    "public_challenger_failures_keep_own_unreserved_debits_without_spending_subject_guarantee": true,
+    "explicit_actual_scope_root_committed_and_restore_forgery_refused": true,
+    "fresh_checked_class_single_actual_derivation_matches_public_independent_factory_at_positions_1_2_3": true,
+    "expired_terminal_current_ordinary_private_debit_before_body_retained_on_failure": true,
+    "late_native_terminal_mark_requires_exact_private_current_debit_and_conserved_checked_book": true,
+    "trusted_daa_jump_across_interval_allows_late_final_and_unclaimed_refund_without_recreating_baseline": true,
+    "duplicate_terminal_wrong_subject_stale_prepaid_token_and_ordinary_flood_refused": true,
+    "native_nonwire_checked_admission_anchor_and_fresh_class_mandatory": true,
+    "all_seven_admission_and_six_terminal_anchor_mismatches_refused": true,
+    "closed_earlier_interval_single_row_gc_keeps_current_debits_no_same_interval_refund": true,
+    "max_subjects_one_new_legitimate_job_after_gc": true,
+    "permanent_old_request_nonce_funded_root_replay_and_terminal_double_refund_refused": true,
+    "restored_class_cleanup_only_no_new_baseline": true,
+    "current_Close_failed_body_spends_attempt_and_keeps_subject_open": true,
+    "current_Close_only_private_exact_paid_token_and_genuine_terminal_mark_closes": true,
+    "rooted_native_restore_refuses_locally_conserved_counter_erasure_old_closed_row_erasure_and_guarantee_increase": true,
+    "actual_one_class_thirty_two_reserves_full_class_max_complete_court": true,
+    "independent_native_restore_quote_equals_candidate9_frozen_formula": true,
+    "rooted_native_restore_work_and_stored_post_cap_forgery_refused": true,
+    "hostile_underpricing_court_metadata_copy_axes_refuses_atomically": true,
+    "whole_chunk_native_restore_complete_court_and_assembly_metadata_explicit": true
+  },
+  "contract": {
+    "version": 11,
+    "axes": 21,
+    "accounting": "All axes cumulative conservative consumed plus reserved; includes payload/storage allowance, no process RSS/live-disk claim.",
+    "policy": "Native trusted network configuration only, enabled default dormant outside this helper; immutable rooted policy/ruleset/interval/caps/counts.",
+    "guarantee": "Baseline consumes exact resource10 once and reserves per-kind future envelopes. Public reserved debit requires actor == binding.producer; native authenticates that actor. Owned paid actions move only that subject reserve to consumed. Public challenger court/DA request/chunk attempts spend that challenger ordinary unreserved pool, never producer guarantees or subject attempt slots. Close/failure refunds nothing. New block resets block consumed and retains all remaining current-interval guarantees. Trusted new network interval clears interval actor/network totals after old subject deadlines and retains lifetime bindings/commitments.",
+    "future_count_order": [
+      "Metadata",
+      "DARequest",
+      "DAAnswer",
+      "Court",
+      "Chunk",
+      "Close"
+    ],
+    "chunk_semantic": "One bounded whole assembled finish envelope uses independently derived CLASS complete filing bound+16384 outer bytes, native restore+completecourt+assembly metadata. Distinct smaller per-fragment delta/count/aggregate-byte and mature-paid-seal protected map remain required for native transport.",
+    "scope_binding": "Full class-max scope9 roots price native court/restore, explicit independently derived exact-job scope9/resource10 roots bind reference job. Exact frozen program_root_v1, PCroot, input/job/requester/producer/policy/interval/deadline/admitted quota-plan root remain immutable and distinct.",
+    "restored_plan": "Canonical constant-size record root expected solely from authenticated native admitted row, never from action carrier. SDK/native admission independently derives before storing.",
+    "fused_factory": "Only pub(crate) freshly independently checked private execution class owns canonical program/PC/max scope. Reuses that max scope and independently derives actual resource10 once; no public raw/stored scope shortcut. Public quota factory remains independent.",
+    "expired_terminal": "Any authenticated public bond may pay a fixed CURRENT ordinary close envelope after immutable liability expiry. A private nonwire prepaid token binds the exact current epoch, subject and constant debit summaries. Failed body keeps debit and old subject stays open. Mark closed only with exact private terminal book/class after genuine atomic native original escrow/UTXO transition. No old baseline/guarantee/refund is recreated. Unclaimed job creates no quota subject; native permanent job/nonce guards duplicate money.",
+    "retained_catalogue": "max_subjects bounds retained quota rows; a paid one-row collection removes only a closed earlier-interval subject with a private checked token from authenticated native permanent nonce and exact conserved terminal book. Same-interval collection is refused; current consumed/reserved counters never refunded; no quota tombstone map. Native must retain compact exact terminal aux87 and permanent request/nonce aux88 forever, independently of quota GC. Native persistent index/terminal compaction and consensus counters still need integration.",
+    "baseline_admission": "Public debit refuses BaselineJob. Sole public admit_baseline requires private CheckedQuotaAdmission minted by exact genuine Funded original book, fresh checked can_admit class and nonwire native aux87/88 anchor; no carrier flags. All seven root/index/terminal mismatches refuse. Rooted original plan/subject interval remains mandatory.",
+    "current_terminal": "Generic public debit refuses Close. Sole debit_terminal prepays bounded exact current Close envelope and returns private token; any failed body keeps consumed/attempt and leaves subject open. Court/DA can still consume their own guarantees. mark_terminal_closed requires exact private current counter/epoch/producer token and private checked native original terminal book/permanent nonce index, after genuine atomic original escrow/UTXO transition. Stale token, duplicate Close/mark and double payout refuse. Remaining allowance is retained; no terminal refund.",
+    "native_restore": "Native MUST use from_rooted_bytes(bytes,policy,expected_native_state_root) with expected root independently authenticated from actual journal/state anchor. from_bytes checks bounded codec/conservation only. Locally conserved erased counters/old rows/increased guarantee fail against original native root.",
+    "future_native_tariff": "Public factory independently derives CLASS-max scope and exact native9 restore formula B*1024+PCcount*8832+scope metadata work+serialized scope bytes*64+scheduledN*4096+65536. Private fused class reuses checked native_restore_work. Court/wholeChunk use full CLASS-max complete API W/F/S. Native post upper cap:16KiB fixed typed evidence/post/outer overhead+4*(P+1 decoder orL encoder)+64*ceil(P/1024). Native must guard stored post extent BEFORE clone/decode. Court metadata=restore+64*(postcap+assembled)+64*(assembled+1024). WholeChunk adds64*(32KiB+3*assembled+1024), with assembled=classcomplete.filing+16KiB. Copies/hash/validation/container/peak axes include stored post IO separately. No reference MAC baseline repeated; no PWU reward rights."
+  },
+  "trial_history": [
+    {
+      "log": "rfc02-flat-quota11-first-tests.log",
+      "finding": "Two unresolved references to candidate7 helper were corrected to crate::ledger::flat_candidate7."
+    },
+    {
+      "log": "rfc02-flat-quota11-second-tests.log",
+      "finding": "Shared native9 route additions temporarily lacked exhaustive ledger handlers; no wildcard/stub installed. Native completed dispatch before final run."
+    },
+    {
+      "log": "rfc02-flat-quota11-third-tests.log",
+      "finding": "Initial ten tests passed. Program digest field then aligned explicitly to frozen native program_root_v1; final ten rerun verifies updated exact source."
+    },
+    {
+      "log": "rfc02-flat-quota11-owner-tests.log",
+      "finding": "Public challenger ordinary lane added; eleven tests passed before mandatory actor parameter."
+    },
+    {
+      "log": "rfc02-flat-quota11-guarded-final-tests.log",
+      "finding": "Mandatory producer equality added to sole public reserved debit API; eleven tests passed, immutable owner-guard source/binary retained."
+    },
+    {
+      "log": "rfc02-flat-quota11-actual-scope-final-tests.log",
+      "finding": "Production actual-scope/fused factory compiled; existing eleven passed but new candidate MatMul I16 k7→I32 fixture correctly failed full-type overflow admission. Replaced only new admitted-class fixture with safeCast, no range/cap relaxation."
+    },
+    {
+      "log": "rfc02-flat-quota11-fused-final-tests.log",
+      "finding": "Final twelve tests passed with exact actual scope root and fused private-class constructor."
+    },
+    {
+      "log": "rfc02-flat-quota11-late-final-tests.log",
+      "finding": "Two new bounded late-terminal tests pass with previous twelve. Prior source/binaries and all logs preserved; no stacked recount of superseded components."
+    },
+    {
+      "log": "rfc02-flat-quota11-gc-trial-tests.log",
+      "finding": "First selected GC17 build passed. New three tests use genuine checked funded/terminal books; prior algebra tests retain cfg(test)-only private synthetic admission tokens. No public caller can construct those checked tokens. No prior superseded tests stacked into current17 count."
+    },
+    {
+      "log": "rfc02-flat-quota11-close-rooted-trial-tests.log",
+      "finding": "Production pre-body Close closure was identified during review and fixed before push. First19 compile passed: current Close failed body leaves subject open/attempt spent and later genuine checked terminal marking required. Native rooted restore now mandatory and tested against locally conserved rewinds. Prior17 immutable/source/log retained, no stacked test count."
+    },
+    {
+      "log": "rfc02-flat-quota11-class-tariff-trial-tests.log",
+      "finding": "Production tariff source compiled and existing19 passed. New class32 test set history_bound=32, correctly refused frozen v1 normal form (only2^18/2^21). Fixed fixture to retain canonical history_bound and vary admitted max_positions32 only."
+    },
+    {
+      "log": "rfc02-flat-quota11-class-tariff-final-tests.log",
+      "finding": "Final20 passed; actual1/class32 fullclass court/native restore/post/whole assembly tariff regression and1-unit underpricing/root substitutions pass. Prior19 immutable/source/log retained, superseded tests are not stacked."
+    }
+  ],
+  "limitations": [
+    "Native chain context and action authorization remain caller obligations of the real consumer; pure TrustedEpoch does not authenticate a caller-provided block hash.",
+    "No native quota rows, original coins, escrow, payouts, reward credit, activation, availability or honest execution Final are created by this helper.",
+    "Factory preparation requires native staged predebits before program/PC/scope/resource derivation; this pure constructor does not perform those predebits.",
+    "All future envelopes are conservative fixed bounds; callback/provider external work and process RSS are not measured or bounded.",
+    "QuotaState.from_bytes is the bounded untrusted snapshot entry point; generic Borsh deserialization of maps is not a preallocation guard.",
+    "Unused current-interval guarantees remain held after terminal close. Pure earlier-interval GC needs authenticated native permanent index and compact terminal-state roots; actual native journal/coins/storage integration is not exercised.",
+    "A mature paid challenger seal needs its own authenticated protected reservation, without a second whole-model baseline; this pure public failure lane does not create that entitlement.",
+    "Native must enforce rooted quota rows, stored typed-post carrier cap before clone/decode, class-max court tariff and actual body/fragment/aggregate-byte guards. This pure metadata/component receipt does not prove consumer predebits or original coins. Separate bounded per-fragment action and mature paid-seal own protected reservations remain open."
+  ],
+  "retained_replay_command": "/tmp/rfc02-flat-quota11-class-tariff-final-unit flat_quota11::tests:: --test-threads=1",
+  "retained_replay": {
+    "passed": 20,
+    "failed": 0,
+    "log": "rfc02-flat-quota11-class-tariff-retained-tests.log",
+    "runtime_seconds": 0.03
+  },
+  "prior_ten_test_receipt": {
+    "source_sha256": {
+      "misaka-palw-kernel/src/flat_quota11.rs": "5c4af90e9e6c373834529e06256ee8a5b4d61b5b6ebb8d9162675f9e036a1242",
+      "misaka-palw-kernel/src/flat_resources10.rs": "393cfa3b462a374932e138e8e397876006214d6cc61e4a8a0ec76c0459b9675e",
+      "misaka-palw-kernel/src/flat_court9.rs": "4110374c30d7f2156e4cc7c8009258384d34bbef86c829c6ff1d3763301bc802",
+      "misaka-palw-kernel/src/flat_scope9.rs": "760149fa196a133cafb7ea15948dff7c5e1eab148ee1ab70d1e440cc81a39367",
+      "misaka-palw-kernel/src/flat_point9.rs": "9b0602d66a1036820688768066397e9312d55acd0f64dcd583773f3e2b408bcd",
+      "misaka-palw-kernel/src/flat_candidate7.rs": "05f6938be65b580d9c65d72e93fd07a05bfeddbdff51780cd053afceafbdfb23"
+    },
+    "retained_binary_sha256": {
+      "/tmp/rfc02-flat-quota11-final-unit": "9d49e2496277e1055769caad5ddbae4854e56551040e50d5e6f3ee4f9925f1a0"
+    },
+    "verified": {
+      "passed": 10,
+      "failed": 0,
+      "compile_seconds": 5.26,
+      "runtime_seconds": 0.01,
+      "all_axes_times_cap_scopes_atomic_refusals": 84,
+      "reserved_guarantee_protects_mature_court_da_chunk_close_against_new_admission_flood": true,
+      "failed_expensive_attempt_slots_and_debits_retained": true,
+      "baseline_once_no_subject_rebind": true,
+      "distinct_class_max_and_actual_job_scope_bound": true,
+      "program_byte_root_and_exact_parameter_root_bound": true,
+      "equal_daa_distinct_trusted_blocks_preserve_actor_network_lifetime": true,
+      "complete_ancestor_rollback_and_replay_same_state_root": true,
+      "interval_crossing_and_old_subject_rebind_refused": true,
+      "bounded_snapshot_preallocation_count_truncation_duplicate_trailing_guards": true
+    },
+    "logs": [
+      "rfc02-flat-quota11-first-tests.log",
+      "rfc02-flat-quota11-second-tests.log",
+      "rfc02-flat-quota11-third-tests.log",
+      "rfc02-flat-quota11-final-tests.log",
+      "rfc02-flat-quota11-retained-tests.log"
+    ]
+  },
+  "source_scope": "Quota source frozen through selected20 final compile/runtime and immutable replay. Root execution11 restoreclass source separately hashed; its integration12 tests are not credited by this unit receipt. Failed class32 trial preserved: only invalid frozen history_bound test fixture was repaired, no grammar/cap relaxation. Prior19 tariff superseded; pure component only, no native original coins/persisted rows/full acceptance.",
+  "after_build_dependency_sha256": {
+    "misaka-palw-kernel/src/flat_execution11.rs": "9ed186cef496df25b827788d9f359d65981c3b2d6331b63f9110979178a102fa"
+  },
+  "preserved_owner_guard_source_sha256": {
+    "/tmp/rfc02-flat-quota11-owner-guard-source.rs": "c26a0314ad5dba905acbdd101bab7ce145c4c145e399b5a7330b1824a9e5e361"
+  },
+  "prior_twelve_test_receipt": {
+    "source_sha256": {
+      "misaka-palw-kernel/src/flat_quota11.rs": "79076e056324064cfbe06fd83f8e882a007e5fe5dee535da8b74a00d5e131c7e",
+      "misaka-palw-kernel/src/flat_resources10.rs": "393cfa3b462a374932e138e8e397876006214d6cc61e4a8a0ec76c0459b9675e",
+      "misaka-palw-kernel/src/flat_court9.rs": "4110374c30d7f2156e4cc7c8009258384d34bbef86c829c6ff1d3763301bc802",
+      "misaka-palw-kernel/src/flat_scope9.rs": "760149fa196a133cafb7ea15948dff7c5e1eab148ee1ab70d1e440cc81a39367",
+      "misaka-palw-kernel/src/flat_point9.rs": "9b0602d66a1036820688768066397e9312d55acd0f64dcd583773f3e2b408bcd",
+      "misaka-palw-kernel/src/flat_candidate7.rs": "05f6938be65b580d9c65d72e93fd07a05bfeddbdff51780cd053afceafbdfb23"
+    },
+    "retained_binary_sha256": {
+      "/tmp/rfc02-flat-quota11-final-unit": "9d49e2496277e1055769caad5ddbae4854e56551040e50d5e6f3ee4f9925f1a0",
+      "/tmp/rfc02-flat-quota11-owner-guard-unit": "79900a935b0bd3f652d2ffc1b0ab15b0459d17de94c8d13f2b5e74a4271b8ef3",
+      "/tmp/rfc02-flat-quota11-fused-final-unit": "e3c1c298c07801003bb12ae3aff74648942c20d15ed14f4563410ef0adf9636b"
+    },
+    "verified": {
+      "passed": 12,
+      "failed": 0,
+      "compile_seconds": 6.39,
+      "runtime_seconds": 0.01,
+      "all_axes_times_cap_scopes_atomic_refusals": 84,
+      "reserved_guarantee_protects_mature_court_da_chunk_close_against_new_admission_flood": true,
+      "failed_expensive_attempt_slots_and_debits_retained": true,
+      "baseline_once_no_subject_rebind": true,
+      "distinct_class_max_and_actual_job_scope_bound": true,
+      "program_byte_root_and_exact_parameter_root_bound": true,
+      "equal_daa_distinct_trusted_blocks_preserve_actor_network_lifetime": true,
+      "complete_ancestor_rollback_and_replay_same_state_root": true,
+      "interval_crossing_and_old_subject_rebind_refused": true,
+      "bounded_snapshot_preallocation_count_truncation_duplicate_trailing_guards": true,
+      "mandatory_reserved_debit_actor_matches_exact_producer": true,
+      "public_challenger_failures_keep_own_unreserved_debits_without_spending_subject_guarantee": true,
+      "explicit_actual_scope_root_committed_and_restore_forgery_refused": true,
+      "fresh_checked_class_single_actual_derivation_matches_public_independent_factory_at_positions_1_2_3": true
+    },
+    "logs": [
+      "rfc02-flat-quota11-first-tests.log",
+      "rfc02-flat-quota11-second-tests.log",
+      "rfc02-flat-quota11-third-tests.log",
+      "rfc02-flat-quota11-final-tests.log",
+      "rfc02-flat-quota11-retained-tests.log",
+      "rfc02-flat-quota11-owner-tests.log",
+      "rfc02-flat-quota11-guarded-final-tests.log",
+      "rfc02-flat-quota11-actual-scope-final-tests.log",
+      "rfc02-flat-quota11-fused-final-tests.log",
+      "rfc02-flat-quota11-fused-retained-tests.log"
+    ]
+  },
+  "prior_fourteen_test_receipt": {
+    "source_sha256": {
+      "misaka-palw-kernel/src/flat_quota11.rs": "50284a2850eab986b71b4ab5227a9c1c26600b681b2723a8d27842fede28e314",
+      "misaka-palw-kernel/src/flat_resources10.rs": "393cfa3b462a374932e138e8e397876006214d6cc61e4a8a0ec76c0459b9675e",
+      "misaka-palw-kernel/src/flat_court9.rs": "4110374c30d7f2156e4cc7c8009258384d34bbef86c829c6ff1d3763301bc802",
+      "misaka-palw-kernel/src/flat_scope9.rs": "760149fa196a133cafb7ea15948dff7c5e1eab148ee1ab70d1e440cc81a39367",
+      "misaka-palw-kernel/src/flat_point9.rs": "9b0602d66a1036820688768066397e9312d55acd0f64dcd583773f3e2b408bcd",
+      "misaka-palw-kernel/src/flat_candidate7.rs": "05f6938be65b580d9c65d72e93fd07a05bfeddbdff51780cd053afceafbdfb23"
+    },
+    "retained_binary_sha256": {
+      "/tmp/rfc02-flat-quota11-final-unit": "9d49e2496277e1055769caad5ddbae4854e56551040e50d5e6f3ee4f9925f1a0",
+      "/tmp/rfc02-flat-quota11-owner-guard-unit": "79900a935b0bd3f652d2ffc1b0ab15b0459d17de94c8d13f2b5e74a4271b8ef3",
+      "/tmp/rfc02-flat-quota11-fused-final-unit": "e3c1c298c07801003bb12ae3aff74648942c20d15ed14f4563410ef0adf9636b",
+      "/tmp/rfc02-flat-quota11-late-final-unit": "83b7f39a8a9e06eb9e130d3c187ca4f33de2b114115233e316434c7c6c93b8c7",
+      "/tmp/rfc02-flat-quota11-gc-final-unit": "b1956434e36e94379b9b82ba362044ddacb70462d0864a6706e163a7cdff21c3"
+    },
+    "verified": {
+      "passed": 17,
+      "failed": 0,
+      "compile_seconds": 5.29,
+      "runtime_seconds": 0.01,
+      "all_axes_times_cap_scopes_atomic_refusals": 84,
+      "reserved_guarantee_protects_mature_court_da_chunk_close_against_new_admission_flood": true,
+      "failed_expensive_attempt_slots_and_debits_retained": true,
+      "baseline_once_no_subject_rebind": true,
+      "distinct_class_max_and_actual_job_scope_bound": true,
+      "program_byte_root_and_exact_parameter_root_bound": true,
+      "equal_daa_distinct_trusted_blocks_preserve_actor_network_lifetime": true,
+      "complete_ancestor_rollback_and_replay_same_state_root": true,
+      "interval_crossing_and_old_subject_rebind_refused": true,
+      "bounded_snapshot_preallocation_count_truncation_duplicate_trailing_guards": true,
+      "mandatory_reserved_debit_actor_matches_exact_producer": true,
+      "public_challenger_failures_keep_own_unreserved_debits_without_spending_subject_guarantee": true,
+      "explicit_actual_scope_root_committed_and_restore_forgery_refused": true,
+      "fresh_checked_class_single_actual_derivation_matches_public_independent_factory_at_positions_1_2_3": true,
+      "expired_terminal_current_ordinary_private_debit_before_body_retained_on_failure": true,
+      "late_native_terminal_mark_requires_exact_private_current_debit_and_conserved_checked_book": true,
+      "trusted_daa_jump_across_interval_allows_late_final_and_unclaimed_refund_without_recreating_baseline": true,
+      "duplicate_terminal_wrong_subject_stale_prepaid_token_and_ordinary_flood_refused": true,
+      "native_nonwire_checked_admission_anchor_and_fresh_class_mandatory": true,
+      "all_seven_admission_and_six_terminal_anchor_mismatches_refused": true,
+      "closed_earlier_interval_single_row_gc_keeps_current_debits_no_same_interval_refund": true,
+      "max_subjects_one_new_legitimate_job_after_gc": true,
+      "permanent_old_request_nonce_funded_root_replay_and_terminal_double_refund_refused": true,
+      "restored_class_cleanup_only_no_new_baseline": true
+    },
+    "source_scope": "Quota source was frozen through final14 compile/runtime and immutable replay. Root execution11 final10 dependency was stable during this run; its current hash is separately recorded. This is a pure quota/component receipt, not native original-coin or full repository acceptance.",
+    "after_build_dependency_sha256": {
+      "misaka-palw-kernel/src/flat_execution11.rs": "9ed186cef496df25b827788d9f359d65981c3b2d6331b63f9110979178a102fa"
+    },
+    "retained_replay_command": "/tmp/rfc02-flat-quota11-late-final-unit flat_quota11::tests --nocapture --test-threads=1",
+    "retained_replay": {
+      "passed": 14,
+      "failed": 0,
+      "log": "rfc02-flat-quota11-late-retained-tests.log",
+      "runtime_seconds": 0.04
+    }
+  },
+  "prior_seventeen_test_receipt": {
+    "source_sha256": {
+      "misaka-palw-kernel/src/flat_quota11.rs": "eb2f3cd72f7491c0924a81cdab13ebd3f2a70e97ee2534416396b8c5b6c05a27",
+      "misaka-palw-kernel/src/flat_resources10.rs": "393cfa3b462a374932e138e8e397876006214d6cc61e4a8a0ec76c0459b9675e",
+      "misaka-palw-kernel/src/flat_court9.rs": "4110374c30d7f2156e4cc7c8009258384d34bbef86c829c6ff1d3763301bc802",
+      "misaka-palw-kernel/src/flat_scope9.rs": "760149fa196a133cafb7ea15948dff7c5e1eab148ee1ab70d1e440cc81a39367",
+      "misaka-palw-kernel/src/flat_point9.rs": "9b0602d66a1036820688768066397e9312d55acd0f64dcd583773f3e2b408bcd",
+      "misaka-palw-kernel/src/flat_candidate7.rs": "05f6938be65b580d9c65d72e93fd07a05bfeddbdff51780cd053afceafbdfb23"
+    },
+    "retained_binary_sha256": {
+      "/tmp/rfc02-flat-quota11-final-unit": "9d49e2496277e1055769caad5ddbae4854e56551040e50d5e6f3ee4f9925f1a0",
+      "/tmp/rfc02-flat-quota11-owner-guard-unit": "79900a935b0bd3f652d2ffc1b0ab15b0459d17de94c8d13f2b5e74a4271b8ef3",
+      "/tmp/rfc02-flat-quota11-fused-final-unit": "e3c1c298c07801003bb12ae3aff74648942c20d15ed14f4563410ef0adf9636b",
+      "/tmp/rfc02-flat-quota11-late-final-unit": "83b7f39a8a9e06eb9e130d3c187ca4f33de2b114115233e316434c7c6c93b8c7",
+      "/tmp/rfc02-flat-quota11-gc-final-unit": "b1956434e36e94379b9b82ba362044ddacb70462d0864a6706e163a7cdff21c3",
+      "/tmp/rfc02-flat-quota11-close-rooted-final-unit": "be25bc37759ec7f3bcce5cefacc55f198456000893b3c4deb3a311e212f5b13f"
+    },
+    "verified": {
+      "passed": 19,
+      "failed": 0,
+      "compile_seconds": 5.36,
+      "runtime_seconds": 0.02,
+      "all_axes_times_cap_scopes_atomic_refusals": 84,
+      "reserved_guarantee_protects_mature_court_da_chunk_close_against_new_admission_flood": true,
+      "failed_expensive_attempt_slots_and_debits_retained": true,
+      "baseline_once_no_subject_rebind": true,
+      "distinct_class_max_and_actual_job_scope_bound": true,
+      "program_byte_root_and_exact_parameter_root_bound": true,
+      "equal_daa_distinct_trusted_blocks_preserve_actor_network_lifetime": true,
+      "complete_ancestor_rollback_and_replay_same_state_root": true,
+      "interval_crossing_and_old_subject_rebind_refused": true,
+      "bounded_snapshot_preallocation_count_truncation_duplicate_trailing_guards": true,
+      "mandatory_reserved_debit_actor_matches_exact_producer": true,
+      "public_challenger_failures_keep_own_unreserved_debits_without_spending_subject_guarantee": true,
+      "explicit_actual_scope_root_committed_and_restore_forgery_refused": true,
+      "fresh_checked_class_single_actual_derivation_matches_public_independent_factory_at_positions_1_2_3": true,
+      "expired_terminal_current_ordinary_private_debit_before_body_retained_on_failure": true,
+      "late_native_terminal_mark_requires_exact_private_current_debit_and_conserved_checked_book": true,
+      "trusted_daa_jump_across_interval_allows_late_final_and_unclaimed_refund_without_recreating_baseline": true,
+      "duplicate_terminal_wrong_subject_stale_prepaid_token_and_ordinary_flood_refused": true,
+      "native_nonwire_checked_admission_anchor_and_fresh_class_mandatory": true,
+      "all_seven_admission_and_six_terminal_anchor_mismatches_refused": true,
+      "closed_earlier_interval_single_row_gc_keeps_current_debits_no_same_interval_refund": true,
+      "max_subjects_one_new_legitimate_job_after_gc": true,
+      "permanent_old_request_nonce_funded_root_replay_and_terminal_double_refund_refused": true,
+      "restored_class_cleanup_only_no_new_baseline": true,
+      "current_Close_failed_body_spends_attempt_and_keeps_subject_open": true,
+      "current_Close_only_private_exact_paid_token_and_genuine_terminal_mark_closes": true,
+      "rooted_native_restore_refuses_locally_conserved_counter_erasure_old_closed_row_erasure_and_guarantee_increase": true
+    },
+    "source_scope": "Quota source was frozen through selected17 compile/runtime and retained immutable replay. Dependency root execution11 restoreclass source was stable during this run; its separately recorded hash does not credit its integration12 tests. This is a pure component receipt, not a native original-coin/persisted-row or full repository acceptance.",
+    "after_build_dependency_sha256": {
+      "misaka-palw-kernel/src/flat_execution11.rs": "9ed186cef496df25b827788d9f359d65981c3b2d6331b63f9110979178a102fa"
+    },
+    "retained_replay_command": "/tmp/rfc02-flat-quota11-gc-final-unit flat_quota11::tests:: --test-threads=1",
+    "retained_replay": {
+      "passed": 17,
+      "failed": 0,
+      "log": "rfc02-flat-quota11-gc-retained-tests.log",
+      "runtime_seconds": 0.01
+    },
+    "subsequent_finding": "Known bug found after these tests: generic Close debit prematurely set closed before genuine terminal body/UTXO success. Prior17 did not test failed current Close. Superseded by current19 private current Close token/terminal mark; never claimed native completion."
+  },
+  "prior_nineteen_test_receipt": {
+    "source_sha256": {
+      "misaka-palw-kernel/src/flat_quota11.rs": "d07f9e794639529ea56ce52e794972cdb09cc712475413a0e9c3e967228450a2",
+      "misaka-palw-kernel/src/flat_resources10.rs": "393cfa3b462a374932e138e8e397876006214d6cc61e4a8a0ec76c0459b9675e",
+      "misaka-palw-kernel/src/flat_court9.rs": "4110374c30d7f2156e4cc7c8009258384d34bbef86c829c6ff1d3763301bc802",
+      "misaka-palw-kernel/src/flat_scope9.rs": "760149fa196a133cafb7ea15948dff7c5e1eab148ee1ab70d1e440cc81a39367",
+      "misaka-palw-kernel/src/flat_point9.rs": "9b0602d66a1036820688768066397e9312d55acd0f64dcd583773f3e2b408bcd",
+      "misaka-palw-kernel/src/flat_candidate7.rs": "05f6938be65b580d9c65d72e93fd07a05bfeddbdff51780cd053afceafbdfb23",
+      "misaka-palw-kernel/src/flat_candidate9.rs": "365724d1a518b79a30e3e74abdff85809ecc39e9f195c7ea20586d802cf63459"
+    },
+    "retained_binary_sha256": {
+      "/tmp/rfc02-flat-quota11-final-unit": "9d49e2496277e1055769caad5ddbae4854e56551040e50d5e6f3ee4f9925f1a0",
+      "/tmp/rfc02-flat-quota11-owner-guard-unit": "79900a935b0bd3f652d2ffc1b0ab15b0459d17de94c8d13f2b5e74a4271b8ef3",
+      "/tmp/rfc02-flat-quota11-fused-final-unit": "e3c1c298c07801003bb12ae3aff74648942c20d15ed14f4563410ef0adf9636b",
+      "/tmp/rfc02-flat-quota11-late-final-unit": "83b7f39a8a9e06eb9e130d3c187ca4f33de2b114115233e316434c7c6c93b8c7",
+      "/tmp/rfc02-flat-quota11-gc-final-unit": "b1956434e36e94379b9b82ba362044ddacb70462d0864a6706e163a7cdff21c3",
+      "/tmp/rfc02-flat-quota11-close-rooted-final-unit": "be25bc37759ec7f3bcce5cefacc55f198456000893b3c4deb3a311e212f5b13f",
+      "/tmp/rfc02-flat-quota11-class-tariff-final-unit": "77080ae4b76ae1b0436f47b32c530db161ce2c62f63b36ace1abc196f5ab07af"
+    },
+    "verified": {
+      "passed": 20,
+      "failed": 0,
+      "compile_seconds": 5.7,
+      "runtime_seconds": 0.06,
+      "all_axes_times_cap_scopes_atomic_refusals": 84,
+      "reserved_guarantee_protects_mature_court_da_chunk_close_against_new_admission_flood": true,
+      "failed_expensive_attempt_slots_and_debits_retained": true,
+      "baseline_once_no_subject_rebind": true,
+      "distinct_class_max_and_actual_job_scope_bound": true,
+      "program_byte_root_and_exact_parameter_root_bound": true,
+      "equal_daa_distinct_trusted_blocks_preserve_actor_network_lifetime": true,
+      "complete_ancestor_rollback_and_replay_same_state_root": true,
+      "interval_crossing_and_old_subject_rebind_refused": true,
+      "bounded_snapshot_preallocation_count_truncation_duplicate_trailing_guards": true,
+      "mandatory_reserved_debit_actor_matches_exact_producer": true,
+      "public_challenger_failures_keep_own_unreserved_debits_without_spending_subject_guarantee": true,
+      "explicit_actual_scope_root_committed_and_restore_forgery_refused": true,
+      "fresh_checked_class_single_actual_derivation_matches_public_independent_factory_at_positions_1_2_3": true,
+      "expired_terminal_current_ordinary_private_debit_before_body_retained_on_failure": true,
+      "late_native_terminal_mark_requires_exact_private_current_debit_and_conserved_checked_book": true,
+      "trusted_daa_jump_across_interval_allows_late_final_and_unclaimed_refund_without_recreating_baseline": true,
+      "duplicate_terminal_wrong_subject_stale_prepaid_token_and_ordinary_flood_refused": true,
+      "native_nonwire_checked_admission_anchor_and_fresh_class_mandatory": true,
+      "all_seven_admission_and_six_terminal_anchor_mismatches_refused": true,
+      "closed_earlier_interval_single_row_gc_keeps_current_debits_no_same_interval_refund": true,
+      "max_subjects_one_new_legitimate_job_after_gc": true,
+      "permanent_old_request_nonce_funded_root_replay_and_terminal_double_refund_refused": true,
+      "restored_class_cleanup_only_no_new_baseline": true,
+      "current_Close_failed_body_spends_attempt_and_keeps_subject_open": true,
+      "current_Close_only_private_exact_paid_token_and_genuine_terminal_mark_closes": true,
+      "rooted_native_restore_refuses_locally_conserved_counter_erasure_old_closed_row_erasure_and_guarantee_increase": true,
+      "actual_one_class_thirty_two_reserves_full_class_max_complete_court": true,
+      "independent_native_restore_quote_equals_candidate9_frozen_formula": true,
+      "rooted_native_restore_work_and_stored_post_cap_forgery_refused": true,
+      "hostile_underpricing_court_metadata_copy_axes_refuses_atomically": true,
+      "whole_chunk_native_restore_complete_court_and_assembly_metadata_explicit": true
+    },
+    "source_scope": "Quota source frozen through selected19 compile/runtime and immutable replay. Root execution11 restoreclass source separately hashed; its integration12 tests are not credited by this unit receipt. Prior17 premature Close bug is retained as diagnosed, superseded. This is a pure component receipt, not native original-coin/persisted-row/full acceptance.",
+    "after_build_dependency_sha256": {
+      "misaka-palw-kernel/src/flat_execution11.rs": "9ed186cef496df25b827788d9f359d65981c3b2d6331b63f9110979178a102fa"
+    },
+    "retained_replay_command": "/tmp/rfc02-flat-quota11-close-rooted-final-unit flat_quota11::tests:: --test-threads=1",
+    "retained_replay": {
+      "passed": 19,
+      "failed": 0,
+      "log": "rfc02-flat-quota11-close-rooted-retained-tests.log",
+      "runtime_seconds": 0.02
+    },
+    "subsequent_finding": "Native11 confirms proof context uses CLASS-max court9 scope. Prior19 future court prices actual-job-only scope and omitted explicit native9 class restore/whole assembly stage. These tariffs are superseded by current20; no native resource closure was claimed."
+  }
+}

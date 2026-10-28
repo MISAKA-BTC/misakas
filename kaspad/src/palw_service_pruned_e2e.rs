@@ -23,6 +23,7 @@ pub(in crate::palw_panel::palw_service_public_e2e) async fn import_public_carria
     premine: &[Funding],
     claim: Hash64,
 ) {
+    let retained_job = chain.view(claim).public_fp_job.clone();
     let point = chain.tc.get_sink();
     chain.tc.virtual_processor().capture_pruning_point_palw_state(point);
     let wire =
@@ -50,6 +51,7 @@ pub(in crate::palw_panel::palw_service_public_e2e) async fn import_public_carria
         nonce: chain.nonce,
         history: chain.history.clone(),
         wall_deadline: chain.wall_deadline,
+        natural_heartbeat_stamps: chain.natural_heartbeat_stamps,
         _pruned_db: Some(lifetime),
     };
     // Independent prefix validation establishes the same header/UTXO history. The PALW tip and
@@ -121,7 +123,7 @@ pub(in crate::palw_panel::palw_service_public_e2e) async fn import_public_carria
         wire
     );
     assert!(matches!(fresh.view(claim).phase, PalwClaimPhaseV2::ReceiptLicensed { .. }));
-    assert!(fresh.view(claim).public_fp_job.is_none());
+    assert_eq!(fresh.view(claim).public_fp_job, retained_job, "carriage preserves the actual original metadata contract");
     fresh.tc.validate_and_insert_block(child).virtual_state_task.await.expect("the first body folds from the imported state");
     assert_eq!(fresh.tc.get_sink(), chain.tc.get_sink());
     assert_eq!(
@@ -136,8 +138,14 @@ pub(in crate::palw_panel::palw_service_public_e2e) async fn import_public_carria
         .find(|b| {
             b.transactions.iter().any(|t| {
                 t.subnetwork_id == kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT
-                    && borsh::from_slice::<kaspa_consensus_core::palw_freeprompt_v3::PalwFpCommitmentTxPayloadV3>(&t.payload)
-                        .is_ok_and(|p| p.claim_id() == claim)
+                    && {
+                        let payload = if t.payload.starts_with(b"HFP1") {
+                            kaspa_consensus_core::palw_history_custody_v1::PalwHistoryFpEnvelopeV1::decode_v1(&t.payload)
+                                .ok().map(|envelope| envelope.original_payload)
+                        } else { Some(t.payload.clone()) };
+                        payload.is_some_and(|bytes| borsh::from_slice::<kaspa_consensus_core::palw_freeprompt_v3::PalwFpCommitmentTxPayloadV3>(&bytes)
+                            .is_ok_and(|p| p.claim_id() == claim))
+                    }
             })
         })
         .unwrap()
@@ -146,14 +154,16 @@ pub(in crate::palw_panel::palw_service_public_e2e) async fn import_public_carria
     fresh.tc.acceptance_data_store.delete(candidate.job.accepted_block).unwrap();
     assert!(fresh.tc.get_block(original).is_err());
     assert!(fresh.tc.get_block_acceptance_data(candidate.job.accepted_block).is_err());
-    assert!(
-        crate::palw_panel::palw_fraud_filer::palw_fraud_filer_fp_payload_v1(
-            fresh.tc.as_ref().as_ref(),
-            &candidate,
-            fresh.network_domain
-        )
-        .is_err()
+    let recovered = crate::palw_panel::palw_fraud_filer::palw_fraud_filer_fp_payload_v1(
+        fresh.tc.as_ref().as_ref(), &candidate, fresh.network_domain,
     );
+    if let Some(retained) = &retained_job {
+        let recovered = recovered.expect("rooted retained metadata remains available after old body pruning");
+        assert_eq!(borsh::to_vec(&recovered.commitment).unwrap(), *retained);
+        assert!(recovered.prompt_token_ids.is_empty() && recovered.signature.is_empty(), "metadata projection supplies no removed transaction witness");
+    } else {
+        assert!(recovered.is_err(), "an unretained job still needs actual public reacquisition");
+    }
     eprintln!("[service-pruned] authenticated native carriage restored an absent tip/delta prefix at DAA {}", fresh.daa());
     std::mem::swap(chain, &mut fresh);
 }

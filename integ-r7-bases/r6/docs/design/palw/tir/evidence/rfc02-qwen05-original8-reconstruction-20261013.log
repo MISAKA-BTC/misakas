@@ -1,0 +1,16 @@
+[    0.1s] Qwen2ForCausalLM — TIR program v1: 3 blocks, 24 layers, 314 nodes, 70 params, 11 consts (3428 B), 2 states, 14007 bytes encoded
+[    0.1s] frontend: built-in data file `qwen2` (76777c6779beb792) (level B), spec e0b3e03aae456035
+[    0.1s] text-generation: token ids → next-token logits; nothing left out
+[    0.1s] calibration statistics from /Users/wata/Downloads/MISAKA-wt-b/wh-h1-run/cache/qwen25-0.5b/f92976a633d80611/pack/stats.json
+[    0.1s] calibration statistics 460 sites, digest 699c5f6a99095a24c3cd928188b13e188ae77a746703cc2d508d70a2cd0379c7 (from "/Users/wata/Downloads/MISAKA-wt-b/wh-h1-run/cache/qwen25-0.5b/f92976a633d80611/pack/stats.json")
+[    0.1s] converting
+[    1.7s]   materialise 8/26
+[    2.8s]   materialise 16/26
+[    3.9s]   materialise 24/26
+[    4.1s]   materialise 26/26
+[    5.8s] target/rfc02-qwen05-reconstructed8-base.palwtir: 1404 tensors, 630.0 MiB in the tensors, 630.1 MiB file; 1540 chunks (1336 distinct); file digest 333d977f35cee55f6d9d20fc690dcbecd83741b30b167fe7824bf5b65a262e332e9df682d1e4125f2635a687ef28926ac9fdae439cc9885a7b579b02fb2d6936
+wrote target/rfc02-qwen05-reconstructed8-declared.palwtir (file digest a49061415ccfecd0f2ad3a5c7162c5ff189c343ae18a7443741b496e1a74f5de357ed84391db8c6c15ae608dcdb2c6932f4d93258f0a186f3e65166e87e423cf)
+  layout          max_context 512, checkpoint interval 65536, h_tile 64, 17 commit tiles ({64, 512} distinct), 2 state tiles
+  class id        55b32ae12c8fa0031ea8d78b826f75632a6863585f2d3b5efc906c856460324a640591f69bc1ed1cb9160f878f64fd62bfa98b3ad577fb626b36d24ba787cb1c
+  inventory root  3c458f9988b7ae334940cd396f03fbeb4875e6cc9dcd31948f81877a633072ab197ec1686da5ce547216f044f842865fbb8c78a90f126ca99fef03e83a95f575
+  ADMISSIBLE      admission v10 at DAA 5585 (every fence this network schedules in force, palw_tir_v1 among them)

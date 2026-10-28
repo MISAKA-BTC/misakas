@@ -1,0 +1,6387 @@
+{
+  "format": "palw-tir-v1/demand-vectors/1",
+  "spec": "docs/spec/palw/04b-tensor-ir.md §9.4",
+  "name": "moe-top2-shared",
+  "program": "programs/moe-top2-shared.json",
+  "states": [],
+  "cases": [
+    {
+      "name": "commit pos 0 occurrence 0 node 5",
+      "target": {
+        "node": {
+          "pos": "0",
+          "occurrence": "0",
+          "node": "5"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "8",
+        "14",
+        "15"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "-12330",
+          "8760",
+          "9009",
+          "4950",
+          "-19320"
+        ],
+        "work": {
+          "elements": "30",
+          "terms": "0"
+        },
+        "requests": [
+          {
+            "param": {
+              "param": "0",
+              "layer": null
+            },
+            "indices": "0-1,8,14-15"
+          },
+          {
+            "param": {
+              "param": "1",
+              "layer": null
+            },
+            "indices": "0-1,8,14-15"
+          },
+          {
+            "token": {
+              "pos": "0"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 0 occurrence 1 node 35",
+      "target": {
+        "node": {
+          "pos": "0",
+          "occurrence": "1",
+          "node": "35"
+        }
+      },
+      "elements": [
+        "0",
+        "1"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "0",
+          "2"
+        ],
+        "work": {
+          "elements": "216",
+          "terms": "92"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "0",
+              "occurrence": "0",
+              "node": "5"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "2",
+              "layer": "0"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "3",
+              "layer": "0"
+            },
+            "indices": "0-63"
+          },
+          {
+            "param": {
+              "param": "4",
+              "layer": "0"
+            },
+            "indices": "0-3"
+          },
+          {
+            "param": {
+              "param": "5",
+              "layer": "0"
+            },
+            "indices": "0-3"
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 0 occurrence 1 node 152",
+      "target": {
+        "node": {
+          "pos": "0",
+          "occurrence": "1",
+          "node": "152"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "8",
+        "14",
+        "15"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "-12336",
+          "8753",
+          "9021",
+          "4957",
+          "-19326"
+        ],
+        "work": {
+          "elements": "1679",
+          "terms": "1004"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "0",
+              "occurrence": "0",
+              "node": "5"
+            },
+            "indices": "0-15"
+          },
+          {
+            "node": {
+              "pos": "0",
+              "occurrence": "1",
+              "node": "35"
+            },
+            "indices": "0-1"
+          },
+          {
+            "param": {
+              "param": "2",
+              "layer": "0"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "3",
+              "layer": "0"
+            },
+            "indices": "0-63"
+          },
+          {
+            "param": {
+              "param": "4",
+              "layer": "0"
+            },
+            "indices": "0-3"
+          },
+          {
+            "param": {
+              "param": "5",
+              "layer": "0"
+            },
+            "indices": "0-3"
+          },
+          {
+            "param": {
+              "param": "6",
+              "layer": "0"
+            },
+            "indices": "0-127,256-383"
+          },
+          {
+            "param": {
+              "param": "7",
+              "layer": "0"
+            },
+            "indices": "0-127,256-383"
+          },
+          {
+            "param": {
+              "param": "8",
+              "layer": "0"
+            },
+            "indices": "0-15,64-71,112-127,256-271,320-327,368-383"
+          },
+          {
+            "param": {
+              "param": "9",
+              "layer": "0"
+            },
+            "indices": "0-127"
+          },
+          {
+            "param": {
+              "param": "10",
+              "layer": "0"
+            },
+            "indices": "0-7"
+          },
+          {
+            "param": {
+              "param": "11",
+              "layer": "0"
+            },
+            "indices": "0-7"
+          },
+          {
+            "param": {
+              "param": "12",
+              "layer": "0"
+            },
+            "indices": "0-127"
+          },
+          {
+            "param": {
+              "param": "13",
+              "layer": "0"
+            },
+            "indices": "0-7"
+          },
+          {
+            "param": {
+              "param": "14",
+              "layer": "0"
+            },
+            "indices": "0-7"
+          },
+          {
+            "param": {
+              "param": "15",
+              "layer": "0"
+            },
+            "indices": "0-15,64-71,112-127"
+          },
+          {
+            "param": {
+              "param": "16",
+              "layer": "0"
+            },
+            "indices": "0-1,8,14-15"
+          },
+          {
+            "param": {
+              "param": "17",
+              "layer": "0"
+            },
+            "indices": "0-1,8,14-15"
+          },
+          {
+            "param": {
+              "param": "18",
+              "layer": "0"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "19",
+              "layer": "0"
+            },
+            "indices": "0"
+          },
+          {
+            "param": {
+              "param": "20",
+              "layer": "0"
+            },
+            "indices": "0"
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 0 occurrence 2 node 35",
+      "target": {
+        "node": {
+          "pos": "0",
+          "occurrence": "2",
+          "node": "35"
+        }
+      },
+      "elements": [
+        "0",
+        "1"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "0",
+          "1"
+        ],
+        "work": {
+          "elements": "216",
+          "terms": "92"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "0",
+              "occurrence": "1",
+              "node": "152"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "2",
+              "layer": "1"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "3",
+              "layer": "1"
+            },
+            "indices": "0-63"
+          },
+          {
+            "param": {
+              "param": "4",
+              "layer": "1"
+            },
+            "indices": "0-3"
+          },
+          {
+            "param": {
+              "param": "5",
+              "layer": "1"
+            },
+            "indices": "0-3"
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 0 occurrence 2 node 152",
+      "target": {
+        "node": {
+          "pos": "0",
+          "occurrence": "2",
+          "node": "152"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "8",
+        "14",
+        "15"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "-12349",
+          "8746",
+          "9013",
+          "4960",
+          "-19331"
+        ],
+        "work": {
+          "elements": "1680",
+          "terms": "1004"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "0",
+              "occurrence": "1",
+              "node": "152"
+            },
+            "indices": "0-15"
+          },
+          {
+            "node": {
+              "pos": "0",
+              "occurrence": "2",
+              "node": "35"
+            },
+            "indices": "0-1"
+          },
+          {
+            "param": {
+              "param": "2",
+              "layer": "1"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "3",
+              "layer": "1"
+            },
+            "indices": "0-63"
+          },
+          {
+            "param": {
+              "param": "4",
+              "layer": "1"
+            },
+            "indices": "0-3"
+          },
+          {
+            "param": {
+              "param": "5",
+              "layer": "1"
+            },
+            "indices": "0-3"
+          },
+          {
+            "param": {
+              "param": "6",
+              "layer": "1"
+            },
+            "indices": "0-255"
+          },
+          {
+            "param": {
+              "param": "7",
+              "layer": "1"
+            },
+            "indices": "0-255"
+          },
+          {
+            "param": {
+              "param": "8",
+              "layer": "1"
+            },
+            "indices": "0-15,64-71,112-143,192-199,240-255"
+          },
+          {
+            "param": {
+              "param": "9",
+              "layer": "1"
+            },
+            "indices": "0-127"
+          },
+          {
+            "param": {
+              "param": "10",
+              "layer": "1"
+            },
+            "indices": "0-7"
+          },
+          {
+            "param": {
+              "param": "11",
+              "layer": "1"
+            },
+            "indices": "0-7"
+          },
+          {
+            "param": {
+              "param": "12",
+              "layer": "1"
+            },
+            "indices": "0-127"
+          },
+          {
+            "param": {
+              "param": "13",
+              "layer": "1"
+            },
+            "indices": "0-7"
+          },
+          {
+            "param": {
+              "param": "14",
+              "layer": "1"
+            },
+            "indices": "0-7"
+          },
+          {
+            "param": {
+              "param": "15",
+              "layer": "1"
+            },
+            "indices": "0-15,64-71,112-127"
+          },
+          {
+            "param": {
+              "param": "16",
+              "layer": "1"
+            },
+            "indices": "0-1,8,14-15"
+          },
+          {
+            "param": {
+              "param": "17",
+              "layer": "1"
+            },
+            "indices": "0-1,8,14-15"
+          },
+          {
+            "param": {
+              "param": "18",
+              "layer": "1"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "19",
+              "layer": "1"
+            },
+            "indices": "0"
+          },
+          {
+            "param": {
+              "param": "20",
+              "layer": "1"
+            },
+            "indices": "0"
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 0 occurrence 3 node 21",
+      "target": {
+        "node": {
+          "pos": "0",
+          "occurrence": "3",
+          "node": "21"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "12",
+        "22",
+        "23"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "19540",
+          "-6579",
+          "-8631",
+          "17008",
+          "26276"
+        ],
+        "work": {
+          "elements": "185",
+          "terms": "96"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "0",
+              "occurrence": "2",
+              "node": "152"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "21",
+              "layer": null
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "22",
+              "layer": null
+            },
+            "indices": "0-31,192-207,352-383"
+          },
+          {
+            "param": {
+              "param": "23",
+              "layer": null
+            },
+            "indices": "0-1,12,22-23"
+          },
+          {
+            "param": {
+              "param": "24",
+              "layer": null
+            },
+            "indices": "0-1,12,22-23"
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 1 occurrence 0 node 5",
+      "target": {
+        "node": {
+          "pos": "1",
+          "occurrence": "0",
+          "node": "5"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "8",
+        "14",
+        "15"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "-32767",
+          "32767",
+          "-27300",
+          "675",
+          "1150"
+        ],
+        "work": {
+          "elements": "30",
+          "terms": "0"
+        },
+        "requests": [
+          {
+            "param": {
+              "param": "0",
+              "layer": null
+            },
+            "indices": "16-17,24,30-31"
+          },
+          {
+            "param": {
+              "param": "1",
+              "layer": null
+            },
+            "indices": "0-1,8,14-15"
+          },
+          {
+            "token": {
+              "pos": "1"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 1 occurrence 1 node 35",
+      "target": {
+        "node": {
+          "pos": "1",
+          "occurrence": "1",
+          "node": "35"
+        }
+      },
+      "elements": [
+        "0",
+        "1"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "0",
+          "1"
+        ],
+        "work": {
+          "elements": "216",
+          "terms": "92"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "1",
+              "occurrence": "0",
+              "node": "5"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "2",
+              "layer": "0"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "3",
+              "layer": "0"
+            },
+            "indices": "0-63"
+          },
+          {
+            "param": {
+              "param": "4",
+              "layer": "0"
+            },
+            "indices": "0-3"
+          },
+          {
+            "param": {
+              "param": "5",
+              "layer": "0"
+            },
+            "indices": "0-3"
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 1 occurrence 1 node 152",
+      "target": {
+        "node": {
+          "pos": "1",
+          "occurrence": "1",
+          "node": "152"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "8",
+        "14",
+        "15"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "-32767",
+          "32759",
+          "-27287",
+          "682",
+          "1144"
+        ],
+        "work": {
+          "elements": "1682",
+          "terms": "1004"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "1",
+              "occurrence": "0",
+              "node": "5"
+            },
+            "indices": "0-15"
+          },
+          {
+            "node": {
+              "pos": "1",
+              "occurrence": "1",
+              "node": "35"
+            },
+            "indices": "0-1"
+          },
+          {
+            "param": {
+              "param": "2",
+              "layer": "0"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "3",
+              "layer": "0"
+            },
+            "indices": "0-63"
+          },
+          {
+            "param": {
+              "param": "4",
+              "layer": "0"
+            },
+            "indices": "0-3"
+          },
+          {
+            "param": {
+              "param": "5",
+              "layer": "0"
+            },
+            "indices": "0-3"
+          },
+          {
+            "param": {
+              "param": "6",
+              "layer": "0"
+            },
+            "indices": "0-255"
+          },
+          {
+            "param": {
+              "param": "7",
+              "layer": "0"
+            },
+            "indices": "0-255"
+          },
+          {
+            "param": {
+              "param": "8",
+              "layer": "0"
+            },
+            "indices": "0-15,64-71,112-143,192-199,240-255"
+          },
+          {
+            "param": {
+              "param": "9",
+              "layer": "0"
+            },
+            "indices": "0-127"
+          },
+          {
+            "param": {
+              "param": "10",
+              "layer": "0"
+            },
+            "indices": "0-7"
+          },
+          {
+            "param": {
+              "param": "11",
+              "layer": "0"
+            },
+            "indices": "0-7"
+          },
+          {
+            "param": {
+              "param": "12",
+              "layer": "0"
+            },
+            "indices": "0-127"
+          },
+          {
+            "param": {
+              "param": "13",
+              "layer": "0"
+            },
+            "indices": "0-7"
+          },
+          {
+            "param": {
+              "param": "14",
+              "layer": "0"
+            },
+            "indices": "0-7"
+          },
+          {
+            "param": {
+              "param": "15",
+              "layer": "0"
+            },
+            "indices": "0-15,64-71,112-127"
+          },
+          {
+            "param": {
+              "param": "16",
+              "layer": "0"
+            },
+            "indices": "0-1,8,14-15"
+          },
+          {
+            "param": {
+              "param": "17",
+              "layer": "0"
+            },
+            "indices": "0-1,8,14-15"
+          },
+          {
+            "param": {
+              "param": "18",
+              "layer": "0"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "19",
+              "layer": "0"
+            },
+            "indices": "0"
+          },
+          {
+            "param": {
+              "param": "20",
+              "layer": "0"
+            },
+            "indices": "0"
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 1 occurrence 2 node 35",
+      "target": {
+        "node": {
+          "pos": "1",
+          "occurrence": "2",
+          "node": "35"
+        }
+      },
+      "elements": [
+        "0",
+        "1"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "0",
+          "2"
+        ],
+        "work": {
+          "elements": "216",
+          "terms": "92"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "1",
+              "occurrence": "1",
+              "node": "152"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "2",
+              "layer": "1"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "3",
+              "layer": "1"
+            },
+            "indices": "0-63"
+          },
+          {
+            "param": {
+              "param": "4",
+              "layer": "1"
+            },
+            "indices": "0-3"
+          },
+          {
+            "param": {
+              "param": "5",
+              "layer": "1"
+            },
+            "indices": "0-3"
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 1 occurrence 2 node 152",
+      "target": {
+        "node": {
+          "pos": "1",
+          "occurrence": "2",
+          "node": "152"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "8",
+        "14",
+        "15"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "-32767",
+          "32752",
+          "-27295",
+          "685",
+          "1139"
+        ],
+        "work": {
+          "elements": "1678",
+          "terms": "1004"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "1",
+              "occurrence": "1",
+              "node": "152"
+            },
+            "indices": "0-15"
+          },
+          {
+            "node": {
+              "pos": "1",
+              "occurrence": "2",
+              "node": "35"
+            },
+            "indices": "0-1"
+          },
+          {
+            "param": {
+              "param": "2",
+              "layer": "1"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "3",
+              "layer": "1"
+            },
+            "indices": "0-63"
+          },
+          {
+            "param": {
+              "param": "4",
+              "layer": "1"
+            },
+            "indices": "0-3"
+          },
+          {
+            "param": {
+              "param": "5",
+              "layer": "1"
+            },
+            "indices": "0-3"
+          },
+          {
+            "param": {
+              "param": "6",
+              "layer": "1"
+            },
+            "indices": "0-127,256-383"
+          },
+          {
+            "param": {
+              "param": "7",
+              "layer": "1"
+            },
+            "indices": "0-127,256-383"
+          },
+          {
+            "param": {
+              "param": "8",
+              "layer": "1"
+            },
+            "indices": "0-15,64-71,112-127,256-271,320-327,368-383"
+          },
+          {
+            "param": {
+              "param": "9",
+              "layer": "1"
+            },
+            "indices": "0-127"
+          },
+          {
+            "param": {
+              "param": "10",
+              "layer": "1"
+            },
+            "indices": "0-7"
+          },
+          {
+            "param": {
+              "param": "11",
+              "layer": "1"
+            },
+            "indices": "0-7"
+          },
+          {
+            "param": {
+              "param": "12",
+              "layer": "1"
+            },
+            "indices": "0-127"
+          },
+          {
+            "param": {
+              "param": "13",
+              "layer": "1"
+            },
+            "indices": "0-7"
+          },
+          {
+            "param": {
+              "param": "14",
+              "layer": "1"
+            },
+            "indices": "0-7"
+          },
+          {
+            "param": {
+              "param": "15",
+              "layer": "1"
+            },
+            "indices": "0-15,64-71,112-127"
+          },
+          {
+            "param": {
+              "param": "16",
+              "layer": "1"
+            },
+            "indices": "0-1,8,14-15"
+          },
+          {
+            "param": {
+              "param": "17",
+              "layer": "1"
+            },
+            "indices": "0-1,8,14-15"
+          },
+          {
+            "param": {
+              "param": "18",
+              "layer": "1"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "19",
+              "layer": "1"
+            },
+            "indices": "0"
+          },
+          {
+            "param": {
+              "param": "20",
+              "layer": "1"
+            },
+            "indices": "0"
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 1 occurrence 3 node 21",
+      "target": {
+        "node": {
+          "pos": "1",
+          "occurrence": "3",
+          "node": "21"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "12",
+        "22",
+        "23"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "-17128",
+          "31386",
+          "-6197",
+          "-28189",
+          "3056"
+        ],
+        "work": {
+          "elements": "185",
+          "terms": "96"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "1",
+              "occurrence": "2",
+              "node": "152"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "21",
+              "layer": null
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "22",
+              "layer": null
+            },
+            "indices": "0-31,192-207,352-383"
+          },
+          {
+            "param": {
+              "param": "23",
+              "layer": null
+            },
+            "indices": "0-1,12,22-23"
+          },
+          {
+            "param": {
+              "param": "24",
+              "layer": null
+            },
+            "indices": "0-1,12,22-23"
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 2 occurrence 0 node 5",
+      "target": {
+        "node": {
+          "pos": "2",
+          "occurrence": "0",
+          "node": "5"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "8",
+        "14",
+        "15"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "-32058",
+          "6716",
+          "32767",
+          "-10350",
+          "-17480"
+        ],
+        "work": {
+          "elements": "30",
+          "terms": "0"
+        },
+        "requests": [
+          {
+            "param": {
+              "param": "0",
+              "layer": null
+            },
+            "indices": "32-33,40,46-47"
+          },
+          {
+            "param": {
+              "param": "1",
+              "layer": null
+            },
+            "indices": "0-1,8,14-15"
+          },
+          {
+            "token": {
+              "pos": "2"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 2 occurrence 1 node 35",
+      "target": {
+        "node": {
+          "pos": "2",
+          "occurrence": "1",
+          "node": "35"
+        }
+      },
+      "elements": [
+        "0",
+        "1"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "0",
+          "2"
+        ],
+        "work": {
+          "elements": "216",
+          "terms": "92"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "2",
+              "occurrence": "0",
+              "node": "5"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "2",
+              "layer": "0"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "3",
+              "layer": "0"
+            },
+            "indices": "0-63"
+          },
+          {
+            "param": {
+              "param": "4",
+              "layer": "0"
+            },
+            "indices": "0-3"
+          },
+          {
+            "param": {
+              "param": "5",
+              "layer": "0"
+            },
+            "indices": "0-3"
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 2 occurrence 1 node 152",
+      "target": {
+        "node": {
+          "pos": "2",
+          "occurrence": "1",
+          "node": "152"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "8",
+        "14",
+        "15"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "-32064",
+          "6708",
+          "32767",
+          "-10343",
+          "-17486"
+        ],
+        "work": {
+          "elements": "1678",
+          "terms": "1004"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "2",
+              "occurrence": "0",
+              "node": "5"
+            },
+            "indices": "0-15"
+          },
+          {
+            "node": {
+              "pos": "2",
+              "occurrence": "1",
+              "node": "35"
+            },
+            "indices": "0-1"
+          },
+          {
+            "param": {
+              "param": "2",
+              "layer": "0"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "3",
+              "layer": "0"
+            },
+            "indices": "0-63"
+          },
+          {
+            "param": {
+              "param": "4",
+              "layer": "0"
+            },
+            "indices": "0-3"
+          },
+          {
+            "param": {
+              "param": "5",
+              "layer": "0"
+            },
+            "indices": "0-3"
+          },
+          {
+            "param": {
+              "param": "6",
+              "layer": "0"
+            },
+            "indices": "0-127,256-383"
+          },
+          {
+            "param": {
+              "param": "7",
+              "layer": "0"
+            },
+            "indices": "0-127,256-383"
+          },
+          {
+            "param": {
+              "param": "8",
+              "layer": "0"
+            },
+            "indices": "0-15,64-71,112-127,256-271,320-327,368-383"
+          },
+          {
+            "param": {
+              "param": "9",
+              "layer": "0"
+            },
+            "indices": "0-127"
+          },
+          {
+            "param": {
+              "param": "10",
+              "layer": "0"
+            },
+            "indices": "0-7"
+          },
+          {
+            "param": {
+              "param": "11",
+              "layer": "0"
+            },
+            "indices": "0-7"
+          },
+          {
+            "param": {
+              "param": "12",
+              "layer": "0"
+            },
+            "indices": "0-127"
+          },
+          {
+            "param": {
+              "param": "13",
+              "layer": "0"
+            },
+            "indices": "0-7"
+          },
+          {
+            "param": {
+              "param": "14",
+              "layer": "0"
+            },
+            "indices": "0-7"
+          },
+          {
+            "param": {
+              "param": "15",
+              "layer": "0"
+            },
+            "indices": "0-15,64-71,112-127"
+          },
+          {
+            "param": {
+              "param": "16",
+              "layer": "0"
+            },
+            "indices": "0-1,8,14-15"
+          },
+          {
+            "param": {
+              "param": "17",
+              "layer": "0"
+            },
+            "indices": "0-1,8,14-15"
+          },
+          {
+            "param": {
+              "param": "18",
+              "layer": "0"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "19",
+              "layer": "0"
+            },
+            "indices": "0"
+          },
+          {
+            "param": {
+              "param": "20",
+              "layer": "0"
+            },
+            "indices": "0"
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 2 occurrence 2 node 35",
+      "target": {
+        "node": {
+          "pos": "2",
+          "occurrence": "2",
+          "node": "35"
+        }
+      },
+      "elements": [
+        "0",
+        "1"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "0",
+          "3"
+        ],
+        "work": {
+          "elements": "216",
+          "terms": "92"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "2",
+              "occurrence": "1",
+              "node": "152"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "2",
+              "layer": "1"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "3",
+              "layer": "1"
+            },
+            "indices": "0-63"
+          },
+          {
+            "param": {
+              "param": "4",
+              "layer": "1"
+            },
+            "indices": "0-3"
+          },
+          {
+            "param": {
+              "param": "5",
+              "layer": "1"
+            },
+            "indices": "0-3"
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 2 occurrence 2 node 152",
+      "target": {
+        "node": {
+          "pos": "2",
+          "occurrence": "2",
+          "node": "152"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "8",
+        "14",
+        "15"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "-32076",
+          "6701",
+          "32759",
+          "-10340",
+          "-17491"
+        ],
+        "work": {
+          "elements": "1679",
+          "terms": "1004"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "2",
+              "occurrence": "1",
+              "node": "152"
+            },
+            "indices": "0-15"
+          },
+          {
+            "node": {
+              "pos": "2",
+              "occurrence": "2",
+              "node": "35"
+            },
+            "indices": "0-1"
+          },
+          {
+            "param": {
+              "param": "2",
+              "layer": "1"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "3",
+              "layer": "1"
+            },
+            "indices": "0-63"
+          },
+          {
+            "param": {
+              "param": "4",
+              "layer": "1"
+            },
+            "indices": "0-3"
+          },
+          {
+            "param": {
+              "param": "5",
+              "layer": "1"
+            },
+            "indices": "0-3"
+          },
+          {
+            "param": {
+              "param": "6",
+              "layer": "1"
+            },
+            "indices": "0-127,384-511"
+          },
+          {
+            "param": {
+              "param": "7",
+              "layer": "1"
+            },
+            "indices": "0-127,384-511"
+          },
+          {
+            "param": {
+              "param": "8",
+              "layer": "1"
+            },
+            "indices": "0-15,64-71,112-127,384-399,448-455,496-511"
+          },
+          {
+            "param": {
+              "param": "9",
+              "layer": "1"
+            },
+            "indices": "0-127"
+          },
+          {
+            "param": {
+              "param": "10",
+              "layer": "1"
+            },
+            "indices": "0-7"
+          },
+          {
+            "param": {
+              "param": "11",
+              "layer": "1"
+            },
+            "indices": "0-7"
+          },
+          {
+            "param": {
+              "param": "12",
+              "layer": "1"
+            },
+            "indices": "0-127"
+          },
+          {
+            "param": {
+              "param": "13",
+              "layer": "1"
+            },
+            "indices": "0-7"
+          },
+          {
+            "param": {
+              "param": "14",
+              "layer": "1"
+            },
+            "indices": "0-7"
+          },
+          {
+            "param": {
+              "param": "15",
+              "layer": "1"
+            },
+            "indices": "0-15,64-71,112-127"
+          },
+          {
+            "param": {
+              "param": "16",
+              "layer": "1"
+            },
+            "indices": "0-1,8,14-15"
+          },
+          {
+            "param": {
+              "param": "17",
+              "layer": "1"
+            },
+            "indices": "0-1,8,14-15"
+          },
+          {
+            "param": {
+              "param": "18",
+              "layer": "1"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "19",
+              "layer": "1"
+            },
+            "indices": "0"
+          },
+          {
+            "param": {
+              "param": "20",
+              "layer": "1"
+            },
+            "indices": "0"
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 2 occurrence 3 node 21",
+      "target": {
+        "node": {
+          "pos": "2",
+          "occurrence": "3",
+          "node": "21"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "12",
+        "22",
+        "23"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "702",
+          "-11268",
+          "16457",
+          "-1749",
+          "13763"
+        ],
+        "work": {
+          "elements": "185",
+          "terms": "96"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "2",
+              "occurrence": "2",
+              "node": "152"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "21",
+              "layer": null
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "22",
+              "layer": null
+            },
+            "indices": "0-31,192-207,352-383"
+          },
+          {
+            "param": {
+              "param": "23",
+              "layer": null
+            },
+            "indices": "0-1,12,22-23"
+          },
+          {
+            "param": {
+              "param": "24",
+              "layer": null
+            },
+            "indices": "0-1,12,22-23"
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 3 occurrence 0 node 5",
+      "target": {
+        "node": {
+          "pos": "3",
+          "occurrence": "0",
+          "node": "5"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "8",
+        "14",
+        "15"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "-10412",
+          "-32767",
+          "21294",
+          "12825",
+          "-24150"
+        ],
+        "work": {
+          "elements": "30",
+          "terms": "0"
+        },
+        "requests": [
+          {
+            "param": {
+              "param": "0",
+              "layer": null
+            },
+            "indices": "48-49,56,62-63"
+          },
+          {
+            "param": {
+              "param": "1",
+              "layer": null
+            },
+            "indices": "0-1,8,14-15"
+          },
+          {
+            "token": {
+              "pos": "3"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 3 occurrence 1 node 35",
+      "target": {
+        "node": {
+          "pos": "3",
+          "occurrence": "1",
+          "node": "35"
+        }
+      },
+      "elements": [
+        "0",
+        "1"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "0",
+          "1"
+        ],
+        "work": {
+          "elements": "216",
+          "terms": "92"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "0",
+              "node": "5"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "2",
+              "layer": "0"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "3",
+              "layer": "0"
+            },
+            "indices": "0-63"
+          },
+          {
+            "param": {
+              "param": "4",
+              "layer": "0"
+            },
+            "indices": "0-3"
+          },
+          {
+            "param": {
+              "param": "5",
+              "layer": "0"
+            },
+            "indices": "0-3"
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 3 occurrence 1 node 152",
+      "target": {
+        "node": {
+          "pos": "3",
+          "occurrence": "1",
+          "node": "152"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "8",
+        "14",
+        "15"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "-10419",
+          "-32767",
+          "21307",
+          "12832",
+          "-24156"
+        ],
+        "work": {
+          "elements": "1679",
+          "terms": "1004"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "0",
+              "node": "5"
+            },
+            "indices": "0-15"
+          },
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "1",
+              "node": "35"
+            },
+            "indices": "0-1"
+          },
+          {
+            "param": {
+              "param": "2",
+              "layer": "0"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "3",
+              "layer": "0"
+            },
+            "indices": "0-63"
+          },
+          {
+            "param": {
+              "param": "4",
+              "layer": "0"
+            },
+            "indices": "0-3"
+          },
+          {
+            "param": {
+              "param": "5",
+              "layer": "0"
+            },
+            "indices": "0-3"
+          },
+          {
+            "param": {
+              "param": "6",
+              "layer": "0"
+            },
+            "indices": "0-255"
+          },
+          {
+            "param": {
+              "param": "7",
+              "layer": "0"
+            },
+            "indices": "0-255"
+          },
+          {
+            "param": {
+              "param": "8",
+              "layer": "0"
+            },
+            "indices": "0-15,64-71,112-143,192-199,240-255"
+          },
+          {
+            "param": {
+              "param": "9",
+              "layer": "0"
+            },
+            "indices": "0-127"
+          },
+          {
+            "param": {
+              "param": "10",
+              "layer": "0"
+            },
+            "indices": "0-7"
+          },
+          {
+            "param": {
+              "param": "11",
+              "layer": "0"
+            },
+            "indices": "0-7"
+          },
+          {
+            "param": {
+              "param": "12",
+              "layer": "0"
+            },
+            "indices": "0-127"
+          },
+          {
+            "param": {
+              "param": "13",
+              "layer": "0"
+            },
+            "indices": "0-7"
+          },
+          {
+            "param": {
+              "param": "14",
+              "layer": "0"
+            },
+            "indices": "0-7"
+          },
+          {
+            "param": {
+              "param": "15",
+              "layer": "0"
+            },
+            "indices": "0-15,64-71,112-127"
+          },
+          {
+            "param": {
+              "param": "16",
+              "layer": "0"
+            },
+            "indices": "0-1,8,14-15"
+          },
+          {
+            "param": {
+              "param": "17",
+              "layer": "0"
+            },
+            "indices": "0-1,8,14-15"
+          },
+          {
+            "param": {
+              "param": "18",
+              "layer": "0"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "19",
+              "layer": "0"
+            },
+            "indices": "0"
+          },
+          {
+            "param": {
+              "param": "20",
+              "layer": "0"
+            },
+            "indices": "0"
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 3 occurrence 2 node 35",
+      "target": {
+        "node": {
+          "pos": "3",
+          "occurrence": "2",
+          "node": "35"
+        }
+      },
+      "elements": [
+        "0",
+        "1"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "0",
+          "2"
+        ],
+        "work": {
+          "elements": "216",
+          "terms": "92"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "1",
+              "node": "152"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "2",
+              "layer": "1"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "3",
+              "layer": "1"
+            },
+            "indices": "0-63"
+          },
+          {
+            "param": {
+              "param": "4",
+              "layer": "1"
+            },
+            "indices": "0-3"
+          },
+          {
+            "param": {
+              "param": "5",
+              "layer": "1"
+            },
+            "indices": "0-3"
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 3 occurrence 2 node 152",
+      "target": {
+        "node": {
+          "pos": "3",
+          "occurrence": "2",
+          "node": "152"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "8",
+        "14",
+        "15"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "-10431",
+          "-32767",
+          "21299",
+          "12835",
+          "-24161"
+        ],
+        "work": {
+          "elements": "1678",
+          "terms": "1004"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "1",
+              "node": "152"
+            },
+            "indices": "0-15"
+          },
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "2",
+              "node": "35"
+            },
+            "indices": "0-1"
+          },
+          {
+            "param": {
+              "param": "2",
+              "layer": "1"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "3",
+              "layer": "1"
+            },
+            "indices": "0-63"
+          },
+          {
+            "param": {
+              "param": "4",
+              "layer": "1"
+            },
+            "indices": "0-3"
+          },
+          {
+            "param": {
+              "param": "5",
+              "layer": "1"
+            },
+            "indices": "0-3"
+          },
+          {
+            "param": {
+              "param": "6",
+              "layer": "1"
+            },
+            "indices": "0-127,256-383"
+          },
+          {
+            "param": {
+              "param": "7",
+              "layer": "1"
+            },
+            "indices": "0-127,256-383"
+          },
+          {
+            "param": {
+              "param": "8",
+              "layer": "1"
+            },
+            "indices": "0-15,64-71,112-127,256-271,320-327,368-383"
+          },
+          {
+            "param": {
+              "param": "9",
+              "layer": "1"
+            },
+            "indices": "0-127"
+          },
+          {
+            "param": {
+              "param": "10",
+              "layer": "1"
+            },
+            "indices": "0-7"
+          },
+          {
+            "param": {
+              "param": "11",
+              "layer": "1"
+            },
+            "indices": "0-7"
+          },
+          {
+            "param": {
+              "param": "12",
+              "layer": "1"
+            },
+            "indices": "0-127"
+          },
+          {
+            "param": {
+              "param": "13",
+              "layer": "1"
+            },
+            "indices": "0-7"
+          },
+          {
+            "param": {
+              "param": "14",
+              "layer": "1"
+            },
+            "indices": "0-7"
+          },
+          {
+            "param": {
+              "param": "15",
+              "layer": "1"
+            },
+            "indices": "0-15,64-71,112-127"
+          },
+          {
+            "param": {
+              "param": "16",
+              "layer": "1"
+            },
+            "indices": "0-1,8,14-15"
+          },
+          {
+            "param": {
+              "param": "17",
+              "layer": "1"
+            },
+            "indices": "0-1,8,14-15"
+          },
+          {
+            "param": {
+              "param": "18",
+              "layer": "1"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "19",
+              "layer": "1"
+            },
+            "indices": "0"
+          },
+          {
+            "param": {
+              "param": "20",
+              "layer": "1"
+            },
+            "indices": "0"
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 3 occurrence 3 node 21",
+      "target": {
+        "node": {
+          "pos": "3",
+          "occurrence": "3",
+          "node": "21"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "12",
+        "22",
+        "23"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "-24976",
+          "-2086",
+          "10426",
+          "-20487",
+          "-18775"
+        ],
+        "work": {
+          "elements": "185",
+          "terms": "96"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "2",
+              "node": "152"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "21",
+              "layer": null
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "22",
+              "layer": null
+            },
+            "indices": "0-31,192-207,352-383"
+          },
+          {
+            "param": {
+              "param": "23",
+              "layer": null
+            },
+            "indices": "0-1,12,22-23"
+          },
+          {
+            "param": {
+              "param": "24",
+              "layer": null
+            },
+            "indices": "0-1,12,22-23"
+          }
+        ]
+      }
+    },
+    {
+      "name": "internal pos 3 occurrence 0 node 3",
+      "target": {
+        "node": {
+          "pos": "3",
+          "occurrence": "0",
+          "node": "3"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "8",
+        "14",
+        "15"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "-10412",
+          "-36792",
+          "21294",
+          "12825",
+          "-24150"
+        ],
+        "work": {
+          "elements": "20",
+          "terms": "0"
+        },
+        "requests": [
+          {
+            "param": {
+              "param": "0",
+              "layer": null
+            },
+            "indices": "48-49,56,62-63"
+          },
+          {
+            "param": {
+              "param": "1",
+              "layer": null
+            },
+            "indices": "0-1,8,14-15"
+          },
+          {
+            "token": {
+              "pos": "3"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "internal pos 3 occurrence 1 node 3",
+      "target": {
+        "node": {
+          "pos": "3",
+          "occurrence": "1",
+          "node": "3"
+        }
+      },
+      "elements": [
+        "0"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "6270768672407552"
+        ],
+        "work": {
+          "elements": "19",
+          "terms": "16"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "0",
+              "node": "5"
+            },
+            "indices": "0-15"
+          }
+        ]
+      }
+    },
+    {
+      "name": "internal pos 3 occurrence 1 node 10",
+      "target": {
+        "node": {
+          "pos": "3",
+          "occurrence": "1",
+          "node": "10"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "8",
+        "14",
+        "15"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "-5851",
+          "-16664",
+          "13692",
+          "5443",
+          "-11445"
+        ],
+        "work": {
+          "elements": "42",
+          "terms": "16"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "0",
+              "node": "5"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "2",
+              "layer": "0"
+            },
+            "indices": "0-1,8,14-15"
+          }
+        ]
+      }
+    },
+    {
+      "name": "internal pos 3 occurrence 1 node 17",
+      "target": {
+        "node": {
+          "pos": "3",
+          "occurrence": "1",
+          "node": "17"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "2",
+        "3"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "257763860",
+          "-306413800",
+          "-1796735800",
+          "-536125896"
+        ],
+        "work": {
+          "elements": "162",
+          "terms": "80"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "0",
+              "node": "5"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "2",
+              "layer": "0"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "3",
+              "layer": "0"
+            },
+            "indices": "0-63"
+          },
+          {
+            "param": {
+              "param": "4",
+              "layer": "0"
+            },
+            "indices": "0-3"
+          }
+        ]
+      }
+    },
+    {
+      "name": "internal pos 3 occurrence 1 node 24",
+      "target": {
+        "node": {
+          "pos": "3",
+          "occurrence": "1",
+          "node": "24"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "2",
+        "3"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "0",
+          "-173",
+          "-498",
+          "-212"
+        ],
+        "work": {
+          "elements": "187",
+          "terms": "84"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "0",
+              "node": "5"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "2",
+              "layer": "0"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "3",
+              "layer": "0"
+            },
+            "indices": "0-63"
+          },
+          {
+            "param": {
+              "param": "4",
+              "layer": "0"
+            },
+            "indices": "0-3"
+          },
+          {
+            "param": {
+              "param": "5",
+              "layer": "0"
+            },
+            "indices": "0-3"
+          }
+        ]
+      }
+    },
+    {
+      "name": "internal pos 3 occurrence 1 node 31",
+      "target": {
+        "node": {
+          "pos": "3",
+          "occurrence": "1",
+          "node": "31"
+        }
+      },
+      "elements": [
+        "0"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "4194014"
+        ],
+        "work": {
+          "elements": "203",
+          "terms": "88"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "0",
+              "node": "5"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "2",
+              "layer": "0"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "3",
+              "layer": "0"
+            },
+            "indices": "0-63"
+          },
+          {
+            "param": {
+              "param": "4",
+              "layer": "0"
+            },
+            "indices": "0-3"
+          },
+          {
+            "param": {
+              "param": "5",
+              "layer": "0"
+            },
+            "indices": "0-3"
+          }
+        ]
+      }
+    },
+    {
+      "name": "internal pos 3 occurrence 1 node 38",
+      "target": {
+        "node": {
+          "pos": "3",
+          "occurrence": "1",
+          "node": "38"
+        }
+      },
+      "elements": [
+        "0"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "23725098"
+        ],
+        "work": {
+          "elements": "213",
+          "terms": "90"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "0",
+              "node": "5"
+            },
+            "indices": "0-15"
+          },
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "1",
+              "node": "35"
+            },
+            "indices": "0-1"
+          },
+          {
+            "param": {
+              "param": "2",
+              "layer": "0"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "3",
+              "layer": "0"
+            },
+            "indices": "0-63"
+          },
+          {
+            "param": {
+              "param": "4",
+              "layer": "0"
+            },
+            "indices": "0-3"
+          },
+          {
+            "param": {
+              "param": "5",
+              "layer": "0"
+            },
+            "indices": "0-3"
+          }
+        ]
+      }
+    },
+    {
+      "name": "internal pos 3 occurrence 1 node 45",
+      "target": {
+        "node": {
+          "pos": "3",
+          "occurrence": "1",
+          "node": "45"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "128",
+        "254",
+        "255"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "124",
+          "25",
+          "-87",
+          "55",
+          "-35"
+        ],
+        "work": {
+          "elements": "5",
+          "terms": "0"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "1",
+              "node": "35"
+            },
+            "indices": "0-1"
+          },
+          {
+            "param": {
+              "param": "7",
+              "layer": "0"
+            },
+            "indices": "0-1,128,254-255"
+          }
+        ]
+      }
+    },
+    {
+      "name": "internal pos 3 occurrence 1 node 52",
+      "target": {
+        "node": {
+          "pos": "3",
+          "occurrence": "1",
+          "node": "52"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "8",
+        "14",
+        "15"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "4569",
+          "-5740",
+          "1638",
+          "194",
+          "403"
+        ],
+        "work": {
+          "elements": "240",
+          "terms": "96"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "0",
+              "node": "5"
+            },
+            "indices": "0-15"
+          },
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "1",
+              "node": "35"
+            },
+            "indices": "0-1"
+          },
+          {
+            "param": {
+              "param": "2",
+              "layer": "0"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "7",
+              "layer": "0"
+            },
+            "indices": "0-31,128-143,224-255"
+          }
+        ]
+      }
+    },
+    {
+      "name": "internal pos 3 occurrence 1 node 59",
+      "target": {
+        "node": {
+          "pos": "3",
+          "occurrence": "1",
+          "node": "59"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "8",
+        "14",
+        "15"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "11862609",
+          "11862582",
+          "11862629",
+          "11862594",
+          "11862542"
+        ],
+        "work": {
+          "elements": "272",
+          "terms": "96"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "0",
+              "node": "5"
+            },
+            "indices": "0-15"
+          },
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "1",
+              "node": "35"
+            },
+            "indices": "0-1"
+          },
+          {
+            "param": {
+              "param": "2",
+              "layer": "0"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "6",
+              "layer": "0"
+            },
+            "indices": "0-31,128-143,224-255"
+          }
+        ]
+      }
+    },
+    {
+      "name": "internal pos 3 occurrence 1 node 66",
+      "target": {
+        "node": {
+          "pos": "3",
+          "occurrence": "1",
+          "node": "66"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "8",
+        "14",
+        "15"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "-6669700200",
+          "-5335784964",
+          "7616015256",
+          "-5931434474",
+          "3363411159"
+        ],
+        "work": {
+          "elements": "307",
+          "terms": "96"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "0",
+              "node": "5"
+            },
+            "indices": "0-15"
+          },
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "1",
+              "node": "35"
+            },
+            "indices": "0-1"
+          },
+          {
+            "param": {
+              "param": "2",
+              "layer": "0"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "6",
+              "layer": "0"
+            },
+            "indices": "0-31,128-143,224-255"
+          }
+        ]
+      }
+    },
+    {
+      "name": "internal pos 3 occurrence 1 node 73",
+      "target": {
+        "node": {
+          "pos": "3",
+          "occurrence": "1",
+          "node": "73"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "16",
+        "30",
+        "31"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "0",
+          "0",
+          "0",
+          "0",
+          "0"
+        ],
+        "work": {
+          "elements": "1088",
+          "terms": "568"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "0",
+              "node": "5"
+            },
+            "indices": "0-15"
+          },
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "1",
+              "node": "35"
+            },
+            "indices": "0-1"
+          },
+          {
+            "param": {
+              "param": "2",
+              "layer": "0"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "6",
+              "layer": "0"
+            },
+            "indices": "0-255"
+          },
+          {
+            "param": {
+              "param": "7",
+              "layer": "0"
+            },
+            "indices": "0-255"
+          },
+          {
+            "param": {
+              "param": "8",
+              "layer": "0"
+            },
+            "indices": "0-15,128-135,240-255"
+          }
+        ]
+      }
+    },
+    {
+      "name": "internal pos 3 occurrence 1 node 80",
+      "target": {
+        "node": {
+          "pos": "3",
+          "occurrence": "1",
+          "node": "80"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "8",
+        "14",
+        "15"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "0",
+          "0",
+          "0",
+          "0",
+          "0"
+        ],
+        "work": {
+          "elements": "1267",
+          "terms": "692"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "0",
+              "node": "5"
+            },
+            "indices": "0-15"
+          },
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "1",
+              "node": "35"
+            },
+            "indices": "0-1"
+          },
+          {
+            "param": {
+              "param": "2",
+              "layer": "0"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "3",
+              "layer": "0"
+            },
+            "indices": "0-63"
+          },
+          {
+            "param": {
+              "param": "4",
+              "layer": "0"
+            },
+            "indices": "0-3"
+          },
+          {
+            "param": {
+              "param": "5",
+              "layer": "0"
+            },
+            "indices": "0-3"
+          },
+          {
+            "param": {
+              "param": "6",
+              "layer": "0"
+            },
+            "indices": "0-255"
+          },
+          {
+            "param": {
+              "param": "7",
+              "layer": "0"
+            },
+            "indices": "0-255"
+          },
+          {
+            "param": {
+              "param": "8",
+              "layer": "0"
+            },
+            "indices": "0-15,64-71,112-143,192-199,240-255"
+          }
+        ]
+      }
+    },
+    {
+      "name": "internal pos 3 occurrence 1 node 87",
+      "target": {
+        "node": {
+          "pos": "3",
+          "occurrence": "1",
+          "node": "87"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "4",
+        "6",
+        "7"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "-92996512",
+          "3201102606",
+          "13368383640",
+          "7974206813",
+          "8904236780"
+        ],
+        "work": {
+          "elements": "165",
+          "terms": "96"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "0",
+              "node": "5"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "2",
+              "layer": "0"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "9",
+              "layer": "0"
+            },
+            "indices": "0-31,64-79,96-127"
+          },
+          {
+            "param": {
+              "param": "10",
+              "layer": "0"
+            },
+            "indices": "0-1,4,6-7"
+          }
+        ]
+      }
+    },
+    {
+      "name": "internal pos 3 occurrence 1 node 94",
+      "target": {
+        "node": {
+          "pos": "3",
+          "occurrence": "1",
+          "node": "94"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "4",
+        "6",
+        "7"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "-1164785",
+          "-2403489",
+          "-1377577",
+          "-4369178",
+          "-97812"
+        ],
+        "work": {
+          "elements": "160",
+          "terms": "96"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "0",
+              "node": "5"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "2",
+              "layer": "0"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "12",
+              "layer": "0"
+            },
+            "indices": "0-31,64-79,96-127"
+          }
+        ]
+      }
+    },
+    {
+      "name": "internal pos 3 occurrence 1 node 101",
+      "target": {
+        "node": {
+          "pos": "3",
+          "occurrence": "1",
+          "node": "101"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "4",
+        "6",
+        "7"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "5648",
+          "-195382",
+          "-815938",
+          "-486681",
+          "-543456"
+        ],
+        "work": {
+          "elements": "190",
+          "terms": "96"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "0",
+              "node": "5"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "2",
+              "layer": "0"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "9",
+              "layer": "0"
+            },
+            "indices": "0-31,64-79,96-127"
+          },
+          {
+            "param": {
+              "param": "10",
+              "layer": "0"
+            },
+            "indices": "0-1,4,6-7"
+          },
+          {
+            "param": {
+              "param": "11",
+              "layer": "0"
+            },
+            "indices": "0-1,4,6-7"
+          }
+        ]
+      }
+    },
+    {
+      "name": "internal pos 3 occurrence 1 node 108",
+      "target": {
+        "node": {
+          "pos": "3",
+          "occurrence": "1",
+          "node": "108"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "4",
+        "6",
+        "7"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "1",
+          "0",
+          "0",
+          "0",
+          "0"
+        ],
+        "work": {
+          "elements": "190",
+          "terms": "96"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "0",
+              "node": "5"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "2",
+              "layer": "0"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "9",
+              "layer": "0"
+            },
+            "indices": "0-31,64-79,96-127"
+          },
+          {
+            "param": {
+              "param": "10",
+              "layer": "0"
+            },
+            "indices": "0-1,4,6-7"
+          },
+          {
+            "param": {
+              "param": "11",
+              "layer": "0"
+            },
+            "indices": "0-1,4,6-7"
+          }
+        ]
+      }
+    },
+    {
+      "name": "internal pos 3 occurrence 1 node 115",
+      "target": {
+        "node": {
+          "pos": "3",
+          "occurrence": "1",
+          "node": "115"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "4",
+        "6",
+        "7"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "375592",
+          "-44596420",
+          "-48857445",
+          "-111033450",
+          "0"
+        ],
+        "work": {
+          "elements": "315",
+          "terms": "176"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "0",
+              "node": "5"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "2",
+              "layer": "0"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "9",
+              "layer": "0"
+            },
+            "indices": "0-31,64-79,96-127"
+          },
+          {
+            "param": {
+              "param": "10",
+              "layer": "0"
+            },
+            "indices": "0-1,4,6-7"
+          },
+          {
+            "param": {
+              "param": "11",
+              "layer": "0"
+            },
+            "indices": "0-1,4,6-7"
+          },
+          {
+            "param": {
+              "param": "12",
+              "layer": "0"
+            },
+            "indices": "0-31,64-79,96-127"
+          },
+          {
+            "param": {
+              "param": "13",
+              "layer": "0"
+            },
+            "indices": "0-1,4,6-7"
+          },
+          {
+            "param": {
+              "param": "14",
+              "layer": "0"
+            },
+            "indices": "0-1,4,6-7"
+          }
+        ]
+      }
+    },
+    {
+      "name": "internal pos 3 occurrence 1 node 122",
+      "target": {
+        "node": {
+          "pos": "3",
+          "occurrence": "1",
+          "node": "122"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "8",
+        "14",
+        "15"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "0",
+          "0",
+          "0",
+          "0",
+          "0"
+        ],
+        "work": {
+          "elements": "446",
+          "terms": "312"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "0",
+              "node": "5"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "2",
+              "layer": "0"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "9",
+              "layer": "0"
+            },
+            "indices": "0-127"
+          },
+          {
+            "param": {
+              "param": "10",
+              "layer": "0"
+            },
+            "indices": "0-7"
+          },
+          {
+            "param": {
+              "param": "11",
+              "layer": "0"
+            },
+            "indices": "0-7"
+          },
+          {
+            "param": {
+              "param": "12",
+              "layer": "0"
+            },
+            "indices": "0-127"
+          },
+          {
+            "param": {
+              "param": "13",
+              "layer": "0"
+            },
+            "indices": "0-7"
+          },
+          {
+            "param": {
+              "param": "14",
+              "layer": "0"
+            },
+            "indices": "0-7"
+          },
+          {
+            "param": {
+              "param": "15",
+              "layer": "0"
+            },
+            "indices": "0-15,64-71,112-127"
+          },
+          {
+            "param": {
+              "param": "16",
+              "layer": "0"
+            },
+            "indices": "0-1,8,14-15"
+          }
+        ]
+      }
+    },
+    {
+      "name": "internal pos 3 occurrence 1 node 129",
+      "target": {
+        "node": {
+          "pos": "3",
+          "occurrence": "1",
+          "node": "129"
+        }
+      },
+      "elements": [
+        "0"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "6055968960"
+        ],
+        "work": {
+          "elements": "153",
+          "terms": "32"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "0",
+              "node": "5"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "2",
+              "layer": "0"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "18",
+              "layer": "0"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "19",
+              "layer": "0"
+            },
+            "indices": "0"
+          }
+        ]
+      }
+    },
+    {
+      "name": "internal pos 3 occurrence 1 node 136",
+      "target": {
+        "node": {
+          "pos": "3",
+          "occurrence": "1",
+          "node": "136"
+        }
+      },
+      "elements": [
+        "0"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "-92412"
+        ],
+        "work": {
+          "elements": "160",
+          "terms": "32"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "0",
+              "node": "5"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "2",
+              "layer": "0"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "18",
+              "layer": "0"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "19",
+              "layer": "0"
+            },
+            "indices": "0"
+          },
+          {
+            "param": {
+              "param": "20",
+              "layer": "0"
+            },
+            "indices": "0"
+          }
+        ]
+      }
+    },
+    {
+      "name": "internal pos 3 occurrence 1 node 143",
+      "target": {
+        "node": {
+          "pos": "3",
+          "occurrence": "1",
+          "node": "143"
+        }
+      },
+      "elements": [
+        "0"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "16777216"
+        ],
+        "work": {
+          "elements": "159",
+          "terms": "32"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "0",
+              "node": "5"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "2",
+              "layer": "0"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "18",
+              "layer": "0"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "19",
+              "layer": "0"
+            },
+            "indices": "0"
+          },
+          {
+            "param": {
+              "param": "20",
+              "layer": "0"
+            },
+            "indices": "0"
+          }
+        ]
+      }
+    },
+    {
+      "name": "internal pos 3 occurrence 1 node 150",
+      "target": {
+        "node": {
+          "pos": "3",
+          "occurrence": "1",
+          "node": "150"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "8",
+        "14",
+        "15"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "-7",
+          "-8",
+          "13",
+          "7",
+          "-6"
+        ],
+        "work": {
+          "elements": "1669",
+          "terms": "1004"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "0",
+              "node": "5"
+            },
+            "indices": "0-15"
+          },
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "1",
+              "node": "35"
+            },
+            "indices": "0-1"
+          },
+          {
+            "param": {
+              "param": "2",
+              "layer": "0"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "3",
+              "layer": "0"
+            },
+            "indices": "0-63"
+          },
+          {
+            "param": {
+              "param": "4",
+              "layer": "0"
+            },
+            "indices": "0-3"
+          },
+          {
+            "param": {
+              "param": "5",
+              "layer": "0"
+            },
+            "indices": "0-3"
+          },
+          {
+            "param": {
+              "param": "6",
+              "layer": "0"
+            },
+            "indices": "0-255"
+          },
+          {
+            "param": {
+              "param": "7",
+              "layer": "0"
+            },
+            "indices": "0-255"
+          },
+          {
+            "param": {
+              "param": "8",
+              "layer": "0"
+            },
+            "indices": "0-15,64-71,112-143,192-199,240-255"
+          },
+          {
+            "param": {
+              "param": "9",
+              "layer": "0"
+            },
+            "indices": "0-127"
+          },
+          {
+            "param": {
+              "param": "10",
+              "layer": "0"
+            },
+            "indices": "0-7"
+          },
+          {
+            "param": {
+              "param": "11",
+              "layer": "0"
+            },
+            "indices": "0-7"
+          },
+          {
+            "param": {
+              "param": "12",
+              "layer": "0"
+            },
+            "indices": "0-127"
+          },
+          {
+            "param": {
+              "param": "13",
+              "layer": "0"
+            },
+            "indices": "0-7"
+          },
+          {
+            "param": {
+              "param": "14",
+              "layer": "0"
+            },
+            "indices": "0-7"
+          },
+          {
+            "param": {
+              "param": "15",
+              "layer": "0"
+            },
+            "indices": "0-15,64-71,112-127"
+          },
+          {
+            "param": {
+              "param": "16",
+              "layer": "0"
+            },
+            "indices": "0-1,8,14-15"
+          },
+          {
+            "param": {
+              "param": "17",
+              "layer": "0"
+            },
+            "indices": "0-1,8,14-15"
+          },
+          {
+            "param": {
+              "param": "18",
+              "layer": "0"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "19",
+              "layer": "0"
+            },
+            "indices": "0"
+          },
+          {
+            "param": {
+              "param": "20",
+              "layer": "0"
+            },
+            "indices": "0"
+          }
+        ]
+      }
+    },
+    {
+      "name": "internal pos 3 occurrence 2 node 3",
+      "target": {
+        "node": {
+          "pos": "3",
+          "occurrence": "2",
+          "node": "3"
+        }
+      },
+      "elements": [
+        "0"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "6269728580435968"
+        ],
+        "work": {
+          "elements": "19",
+          "terms": "16"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "1",
+              "node": "152"
+            },
+            "indices": "0-15"
+          }
+        ]
+      }
+    },
+    {
+      "name": "internal pos 3 occurrence 2 node 10",
+      "target": {
+        "node": {
+          "pos": "3",
+          "occurrence": "2",
+          "node": "10"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "8",
+        "14",
+        "15"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "-6736",
+          "-21334",
+          "16741",
+          "6311",
+          "-13469"
+        ],
+        "work": {
+          "elements": "42",
+          "terms": "16"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "1",
+              "node": "152"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "2",
+              "layer": "1"
+            },
+            "indices": "0-1,8,14-15"
+          }
+        ]
+      }
+    },
+    {
+      "name": "internal pos 3 occurrence 2 node 17",
+      "target": {
+        "node": {
+          "pos": "3",
+          "occurrence": "2",
+          "node": "17"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "2",
+        "3"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "-2763781779",
+          "-3270022351",
+          "-233004310",
+          "-4190915916"
+        ],
+        "work": {
+          "elements": "162",
+          "terms": "80"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "1",
+              "node": "152"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "2",
+              "layer": "1"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "3",
+              "layer": "1"
+            },
+            "indices": "0-63"
+          },
+          {
+            "param": {
+              "param": "4",
+              "layer": "1"
+            },
+            "indices": "0-3"
+          }
+        ]
+      }
+    },
+    {
+      "name": "internal pos 3 occurrence 2 node 24",
+      "target": {
+        "node": {
+          "pos": "3",
+          "occurrence": "2",
+          "node": "24"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "2",
+        "3"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "-595",
+          "-695",
+          "0",
+          "-924"
+        ],
+        "work": {
+          "elements": "187",
+          "terms": "84"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "1",
+              "node": "152"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "2",
+              "layer": "1"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "3",
+              "layer": "1"
+            },
+            "indices": "0-63"
+          },
+          {
+            "param": {
+              "param": "4",
+              "layer": "1"
+            },
+            "indices": "0-3"
+          },
+          {
+            "param": {
+              "param": "5",
+              "layer": "1"
+            },
+            "indices": "0-3"
+          }
+        ]
+      }
+    },
+    {
+      "name": "internal pos 3 occurrence 2 node 31",
+      "target": {
+        "node": {
+          "pos": "3",
+          "occurrence": "2",
+          "node": "31"
+        }
+      },
+      "elements": [
+        "0"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "4195305"
+        ],
+        "work": {
+          "elements": "203",
+          "terms": "88"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "1",
+              "node": "152"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "2",
+              "layer": "1"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "3",
+              "layer": "1"
+            },
+            "indices": "0-63"
+          },
+          {
+            "param": {
+              "param": "4",
+              "layer": "1"
+            },
+            "indices": "0-3"
+          },
+          {
+            "param": {
+              "param": "5",
+              "layer": "1"
+            },
+            "indices": "0-3"
+          }
+        ]
+      }
+    },
+    {
+      "name": "internal pos 3 occurrence 2 node 38",
+      "target": {
+        "node": {
+          "pos": "3",
+          "occurrence": "2",
+          "node": "38"
+        }
+      },
+      "elements": [
+        "0"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "23723760"
+        ],
+        "work": {
+          "elements": "213",
+          "terms": "90"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "1",
+              "node": "152"
+            },
+            "indices": "0-15"
+          },
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "2",
+              "node": "35"
+            },
+            "indices": "0-1"
+          },
+          {
+            "param": {
+              "param": "2",
+              "layer": "1"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "3",
+              "layer": "1"
+            },
+            "indices": "0-63"
+          },
+          {
+            "param": {
+              "param": "4",
+              "layer": "1"
+            },
+            "indices": "0-3"
+          },
+          {
+            "param": {
+              "param": "5",
+              "layer": "1"
+            },
+            "indices": "0-3"
+          }
+        ]
+      }
+    },
+    {
+      "name": "internal pos 3 occurrence 2 node 45",
+      "target": {
+        "node": {
+          "pos": "3",
+          "occurrence": "2",
+          "node": "45"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "128",
+        "254",
+        "255"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "-48",
+          "-105",
+          "-38",
+          "114",
+          "78"
+        ],
+        "work": {
+          "elements": "5",
+          "terms": "0"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "2",
+              "node": "35"
+            },
+            "indices": "0-1"
+          },
+          {
+            "param": {
+              "param": "7",
+              "layer": "1"
+            },
+            "indices": "0-1,256,382-383"
+          }
+        ]
+      }
+    },
+    {
+      "name": "internal pos 3 occurrence 2 node 52",
+      "target": {
+        "node": {
+          "pos": "3",
+          "occurrence": "2",
+          "node": "52"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "8",
+        "14",
+        "15"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "-1997",
+          "3359",
+          "-1054",
+          "-880",
+          "-4010"
+        ],
+        "work": {
+          "elements": "240",
+          "terms": "96"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "1",
+              "node": "152"
+            },
+            "indices": "0-15"
+          },
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "2",
+              "node": "35"
+            },
+            "indices": "0-1"
+          },
+          {
+            "param": {
+              "param": "2",
+              "layer": "1"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "7",
+              "layer": "1"
+            },
+            "indices": "0-31,256-271,352-383"
+          }
+        ]
+      }
+    },
+    {
+      "name": "internal pos 3 occurrence 2 node 59",
+      "target": {
+        "node": {
+          "pos": "3",
+          "occurrence": "2",
+          "node": "59"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "8",
+        "14",
+        "15"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "11862518",
+          "11862542",
+          "11862633",
+          "11862701",
+          "11862695"
+        ],
+        "work": {
+          "elements": "272",
+          "terms": "96"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "1",
+              "node": "152"
+            },
+            "indices": "0-15"
+          },
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "2",
+              "node": "35"
+            },
+            "indices": "0-1"
+          },
+          {
+            "param": {
+              "param": "2",
+              "layer": "1"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "6",
+              "layer": "1"
+            },
+            "indices": "0-31,256-271,352-383"
+          }
+        ]
+      }
+    },
+    {
+      "name": "internal pos 3 occurrence 2 node 66",
+      "target": {
+        "node": {
+          "pos": "3",
+          "occurrence": "2",
+          "node": "66"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "8",
+        "14",
+        "15"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "-2214877632",
+          "-3355862400",
+          "7800549840",
+          "11138977152",
+          "-10881101086"
+        ],
+        "work": {
+          "elements": "307",
+          "terms": "96"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "1",
+              "node": "152"
+            },
+            "indices": "0-15"
+          },
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "2",
+              "node": "35"
+            },
+            "indices": "0-1"
+          },
+          {
+            "param": {
+              "param": "2",
+              "layer": "1"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "6",
+              "layer": "1"
+            },
+            "indices": "0-31,256-271,352-383"
+          }
+        ]
+      }
+    },
+    {
+      "name": "internal pos 3 occurrence 2 node 73",
+      "target": {
+        "node": {
+          "pos": "3",
+          "occurrence": "2",
+          "node": "73"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "16",
+        "30",
+        "31"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "0",
+          "0",
+          "0",
+          "0",
+          "0"
+        ],
+        "work": {
+          "elements": "1091",
+          "terms": "568"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "1",
+              "node": "152"
+            },
+            "indices": "0-15"
+          },
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "2",
+              "node": "35"
+            },
+            "indices": "0-1"
+          },
+          {
+            "param": {
+              "param": "2",
+              "layer": "1"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "6",
+              "layer": "1"
+            },
+            "indices": "0-127,256-383"
+          },
+          {
+            "param": {
+              "param": "7",
+              "layer": "1"
+            },
+            "indices": "0-127,256-383"
+          },
+          {
+            "param": {
+              "param": "8",
+              "layer": "1"
+            },
+            "indices": "0-15,256-263,368-383"
+          }
+        ]
+      }
+    },
+    {
+      "name": "internal pos 3 occurrence 2 node 80",
+      "target": {
+        "node": {
+          "pos": "3",
+          "occurrence": "2",
+          "node": "80"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "8",
+        "14",
+        "15"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "0",
+          "0",
+          "0",
+          "0",
+          "0"
+        ],
+        "work": {
+          "elements": "1270",
+          "terms": "692"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "1",
+              "node": "152"
+            },
+            "indices": "0-15"
+          },
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "2",
+              "node": "35"
+            },
+            "indices": "0-1"
+          },
+          {
+            "param": {
+              "param": "2",
+              "layer": "1"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "3",
+              "layer": "1"
+            },
+            "indices": "0-63"
+          },
+          {
+            "param": {
+              "param": "4",
+              "layer": "1"
+            },
+            "indices": "0-3"
+          },
+          {
+            "param": {
+              "param": "5",
+              "layer": "1"
+            },
+            "indices": "0-3"
+          },
+          {
+            "param": {
+              "param": "6",
+              "layer": "1"
+            },
+            "indices": "0-127,256-383"
+          },
+          {
+            "param": {
+              "param": "7",
+              "layer": "1"
+            },
+            "indices": "0-127,256-383"
+          },
+          {
+            "param": {
+              "param": "8",
+              "layer": "1"
+            },
+            "indices": "0-15,64-71,112-127,256-271,320-327,368-383"
+          }
+        ]
+      }
+    },
+    {
+      "name": "internal pos 3 occurrence 2 node 87",
+      "target": {
+        "node": {
+          "pos": "3",
+          "occurrence": "2",
+          "node": "87"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "4",
+        "6",
+        "7"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "13089726728",
+          "-9050779992",
+          "-21404057240",
+          "-14460566172",
+          "-1433148975"
+        ],
+        "work": {
+          "elements": "165",
+          "terms": "96"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "1",
+              "node": "152"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "2",
+              "layer": "1"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "9",
+              "layer": "1"
+            },
+            "indices": "0-31,64-79,96-127"
+          },
+          {
+            "param": {
+              "param": "10",
+              "layer": "1"
+            },
+            "indices": "0-1,4,6-7"
+          }
+        ]
+      }
+    },
+    {
+      "name": "internal pos 3 occurrence 2 node 94",
+      "target": {
+        "node": {
+          "pos": "3",
+          "occurrence": "2",
+          "node": "94"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "4",
+        "6",
+        "7"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "111356",
+          "-946905",
+          "-5221715",
+          "-3314584",
+          "-927613"
+        ],
+        "work": {
+          "elements": "160",
+          "terms": "96"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "1",
+              "node": "152"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "2",
+              "layer": "1"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "12",
+              "layer": "1"
+            },
+            "indices": "0-31,64-79,96-127"
+          }
+        ]
+      }
+    },
+    {
+      "name": "internal pos 3 occurrence 2 node 101",
+      "target": {
+        "node": {
+          "pos": "3",
+          "occurrence": "2",
+          "node": "101"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "4",
+        "6",
+        "7"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "-798903",
+          "552453",
+          "1306360",
+          "882612",
+          "87446"
+        ],
+        "work": {
+          "elements": "190",
+          "terms": "96"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "1",
+              "node": "152"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "2",
+              "layer": "1"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "9",
+              "layer": "1"
+            },
+            "indices": "0-31,64-79,96-127"
+          },
+          {
+            "param": {
+              "param": "10",
+              "layer": "1"
+            },
+            "indices": "0-1,4,6-7"
+          },
+          {
+            "param": {
+              "param": "11",
+              "layer": "1"
+            },
+            "indices": "0-1,4,6-7"
+          }
+        ]
+      }
+    },
+    {
+      "name": "internal pos 3 occurrence 2 node 108",
+      "target": {
+        "node": {
+          "pos": "3",
+          "occurrence": "2",
+          "node": "108"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "4",
+        "6",
+        "7"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "0",
+          "1",
+          "1",
+          "1",
+          "1"
+        ],
+        "work": {
+          "elements": "190",
+          "terms": "96"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "1",
+              "node": "152"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "2",
+              "layer": "1"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "9",
+              "layer": "1"
+            },
+            "indices": "0-31,64-79,96-127"
+          },
+          {
+            "param": {
+              "param": "10",
+              "layer": "1"
+            },
+            "indices": "0-1,4,6-7"
+          },
+          {
+            "param": {
+              "param": "11",
+              "layer": "1"
+            },
+            "indices": "0-1,4,6-7"
+          }
+        ]
+      }
+    },
+    {
+      "name": "internal pos 3 occurrence 2 node 115",
+      "target": {
+        "node": {
+          "pos": "3",
+          "occurrence": "2",
+          "node": "115"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "4",
+        "6",
+        "7"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "12260040",
+          "26911962",
+          "301633920",
+          "120412320",
+          "6542850"
+        ],
+        "work": {
+          "elements": "312",
+          "terms": "176"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "1",
+              "node": "152"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "2",
+              "layer": "1"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "9",
+              "layer": "1"
+            },
+            "indices": "0-31,64-79,96-127"
+          },
+          {
+            "param": {
+              "param": "10",
+              "layer": "1"
+            },
+            "indices": "0-1,4,6-7"
+          },
+          {
+            "param": {
+              "param": "11",
+              "layer": "1"
+            },
+            "indices": "0-1,4,6-7"
+          },
+          {
+            "param": {
+              "param": "12",
+              "layer": "1"
+            },
+            "indices": "0-31,64-79,96-127"
+          },
+          {
+            "param": {
+              "param": "13",
+              "layer": "1"
+            },
+            "indices": "0-1,4,6-7"
+          },
+          {
+            "param": {
+              "param": "14",
+              "layer": "1"
+            },
+            "indices": "0-1,4,6-7"
+          }
+        ]
+      }
+    },
+    {
+      "name": "internal pos 3 occurrence 2 node 122",
+      "target": {
+        "node": {
+          "pos": "3",
+          "occurrence": "2",
+          "node": "122"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "8",
+        "14",
+        "15"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "0",
+          "0",
+          "0",
+          "0",
+          "0"
+        ],
+        "work": {
+          "elements": "443",
+          "terms": "312"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "1",
+              "node": "152"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "2",
+              "layer": "1"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "9",
+              "layer": "1"
+            },
+            "indices": "0-127"
+          },
+          {
+            "param": {
+              "param": "10",
+              "layer": "1"
+            },
+            "indices": "0-7"
+          },
+          {
+            "param": {
+              "param": "11",
+              "layer": "1"
+            },
+            "indices": "0-7"
+          },
+          {
+            "param": {
+              "param": "12",
+              "layer": "1"
+            },
+            "indices": "0-127"
+          },
+          {
+            "param": {
+              "param": "13",
+              "layer": "1"
+            },
+            "indices": "0-7"
+          },
+          {
+            "param": {
+              "param": "14",
+              "layer": "1"
+            },
+            "indices": "0-7"
+          },
+          {
+            "param": {
+              "param": "15",
+              "layer": "1"
+            },
+            "indices": "0-15,64-71,112-127"
+          },
+          {
+            "param": {
+              "param": "16",
+              "layer": "1"
+            },
+            "indices": "0-1,8,14-15"
+          }
+        ]
+      }
+    },
+    {
+      "name": "internal pos 3 occurrence 2 node 129",
+      "target": {
+        "node": {
+          "pos": "3",
+          "occurrence": "2",
+          "node": "129"
+        }
+      },
+      "elements": [
+        "0"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "-12916860271"
+        ],
+        "work": {
+          "elements": "153",
+          "terms": "32"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "1",
+              "node": "152"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "2",
+              "layer": "1"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "18",
+              "layer": "1"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "19",
+              "layer": "1"
+            },
+            "indices": "0"
+          }
+        ]
+      }
+    },
+    {
+      "name": "internal pos 3 occurrence 2 node 136",
+      "target": {
+        "node": {
+          "pos": "3",
+          "occurrence": "2",
+          "node": "136"
+        }
+      },
+      "elements": [
+        "0"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "-197059"
+        ],
+        "work": {
+          "elements": "159",
+          "terms": "32"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "1",
+              "node": "152"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "2",
+              "layer": "1"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "18",
+              "layer": "1"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "19",
+              "layer": "1"
+            },
+            "indices": "0"
+          },
+          {
+            "param": {
+              "param": "20",
+              "layer": "1"
+            },
+            "indices": "0"
+          }
+        ]
+      }
+    },
+    {
+      "name": "internal pos 3 occurrence 2 node 143",
+      "target": {
+        "node": {
+          "pos": "3",
+          "occurrence": "2",
+          "node": "143"
+        }
+      },
+      "elements": [
+        "0"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "16591463"
+        ],
+        "work": {
+          "elements": "162",
+          "terms": "32"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "1",
+              "node": "152"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "2",
+              "layer": "1"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "18",
+              "layer": "1"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "19",
+              "layer": "1"
+            },
+            "indices": "0"
+          },
+          {
+            "param": {
+              "param": "20",
+              "layer": "1"
+            },
+            "indices": "0"
+          }
+        ]
+      }
+    },
+    {
+      "name": "internal pos 3 occurrence 2 node 150",
+      "target": {
+        "node": {
+          "pos": "3",
+          "occurrence": "2",
+          "node": "150"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "8",
+        "14",
+        "15"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "-12",
+          "-7",
+          "-8",
+          "3",
+          "-5"
+        ],
+        "work": {
+          "elements": "1668",
+          "terms": "1004"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "1",
+              "node": "152"
+            },
+            "indices": "0-15"
+          },
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "2",
+              "node": "35"
+            },
+            "indices": "0-1"
+          },
+          {
+            "param": {
+              "param": "2",
+              "layer": "1"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "3",
+              "layer": "1"
+            },
+            "indices": "0-63"
+          },
+          {
+            "param": {
+              "param": "4",
+              "layer": "1"
+            },
+            "indices": "0-3"
+          },
+          {
+            "param": {
+              "param": "5",
+              "layer": "1"
+            },
+            "indices": "0-3"
+          },
+          {
+            "param": {
+              "param": "6",
+              "layer": "1"
+            },
+            "indices": "0-127,256-383"
+          },
+          {
+            "param": {
+              "param": "7",
+              "layer": "1"
+            },
+            "indices": "0-127,256-383"
+          },
+          {
+            "param": {
+              "param": "8",
+              "layer": "1"
+            },
+            "indices": "0-15,64-71,112-127,256-271,320-327,368-383"
+          },
+          {
+            "param": {
+              "param": "9",
+              "layer": "1"
+            },
+            "indices": "0-127"
+          },
+          {
+            "param": {
+              "param": "10",
+              "layer": "1"
+            },
+            "indices": "0-7"
+          },
+          {
+            "param": {
+              "param": "11",
+              "layer": "1"
+            },
+            "indices": "0-7"
+          },
+          {
+            "param": {
+              "param": "12",
+              "layer": "1"
+            },
+            "indices": "0-127"
+          },
+          {
+            "param": {
+              "param": "13",
+              "layer": "1"
+            },
+            "indices": "0-7"
+          },
+          {
+            "param": {
+              "param": "14",
+              "layer": "1"
+            },
+            "indices": "0-7"
+          },
+          {
+            "param": {
+              "param": "15",
+              "layer": "1"
+            },
+            "indices": "0-15,64-71,112-127"
+          },
+          {
+            "param": {
+              "param": "16",
+              "layer": "1"
+            },
+            "indices": "0-1,8,14-15"
+          },
+          {
+            "param": {
+              "param": "17",
+              "layer": "1"
+            },
+            "indices": "0-1,8,14-15"
+          },
+          {
+            "param": {
+              "param": "18",
+              "layer": "1"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "19",
+              "layer": "1"
+            },
+            "indices": "0"
+          },
+          {
+            "param": {
+              "param": "20",
+              "layer": "1"
+            },
+            "indices": "0"
+          }
+        ]
+      }
+    },
+    {
+      "name": "internal pos 3 occurrence 3 node 3",
+      "target": {
+        "node": {
+          "pos": "3",
+          "occurrence": "3",
+          "node": "3"
+        }
+      },
+      "elements": [
+        "0"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "6269759581585408"
+        ],
+        "work": {
+          "elements": "19",
+          "terms": "16"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "2",
+              "node": "152"
+            },
+            "indices": "0-15"
+          }
+        ]
+      }
+    },
+    {
+      "name": "internal pos 3 occurrence 3 node 10",
+      "target": {
+        "node": {
+          "pos": "3",
+          "occurrence": "3",
+          "node": "10"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "8",
+        "14",
+        "15"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "-4510",
+          "-25943",
+          "9253",
+          "10657",
+          "-17782"
+        ],
+        "work": {
+          "elements": "42",
+          "terms": "16"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "2",
+              "node": "152"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "21",
+              "layer": null
+            },
+            "indices": "0-1,8,14-15"
+          }
+        ]
+      }
+    },
+    {
+      "name": "internal pos 3 occurrence 3 node 17",
+      "target": {
+        "node": {
+          "pos": "3",
+          "occurrence": "3",
+          "node": "17"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "12",
+        "22",
+        "23"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "-1634619740",
+          "-137815881",
+          "683612992",
+          "-1344640059",
+          "-1227879495"
+        ],
+        "work": {
+          "elements": "165",
+          "terms": "96"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "2",
+              "node": "152"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "21",
+              "layer": null
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "22",
+              "layer": null
+            },
+            "indices": "0-31,192-207,352-383"
+          },
+          {
+            "param": {
+              "param": "23",
+              "layer": null
+            },
+            "indices": "0-1,12,22-23"
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 0 occurrence 1 node 152, at exactly its work",
+      "target": {
+        "node": {
+          "pos": "0",
+          "occurrence": "1",
+          "node": "152"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "8",
+        "14",
+        "15"
+      ],
+      "limits": {
+        "max_elements": "1679",
+        "max_terms": "1004"
+      },
+      "expect": {
+        "values": [
+          "-12336",
+          "8753",
+          "9021",
+          "4957",
+          "-19326"
+        ],
+        "work": {
+          "elements": "1679",
+          "terms": "1004"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "0",
+              "occurrence": "0",
+              "node": "5"
+            },
+            "indices": "0-15"
+          },
+          {
+            "node": {
+              "pos": "0",
+              "occurrence": "1",
+              "node": "35"
+            },
+            "indices": "0-1"
+          },
+          {
+            "param": {
+              "param": "2",
+              "layer": "0"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "3",
+              "layer": "0"
+            },
+            "indices": "0-63"
+          },
+          {
+            "param": {
+              "param": "4",
+              "layer": "0"
+            },
+            "indices": "0-3"
+          },
+          {
+            "param": {
+              "param": "5",
+              "layer": "0"
+            },
+            "indices": "0-3"
+          },
+          {
+            "param": {
+              "param": "6",
+              "layer": "0"
+            },
+            "indices": "0-127,256-383"
+          },
+          {
+            "param": {
+              "param": "7",
+              "layer": "0"
+            },
+            "indices": "0-127,256-383"
+          },
+          {
+            "param": {
+              "param": "8",
+              "layer": "0"
+            },
+            "indices": "0-15,64-71,112-127,256-271,320-327,368-383"
+          },
+          {
+            "param": {
+              "param": "9",
+              "layer": "0"
+            },
+            "indices": "0-127"
+          },
+          {
+            "param": {
+              "param": "10",
+              "layer": "0"
+            },
+            "indices": "0-7"
+          },
+          {
+            "param": {
+              "param": "11",
+              "layer": "0"
+            },
+            "indices": "0-7"
+          },
+          {
+            "param": {
+              "param": "12",
+              "layer": "0"
+            },
+            "indices": "0-127"
+          },
+          {
+            "param": {
+              "param": "13",
+              "layer": "0"
+            },
+            "indices": "0-7"
+          },
+          {
+            "param": {
+              "param": "14",
+              "layer": "0"
+            },
+            "indices": "0-7"
+          },
+          {
+            "param": {
+              "param": "15",
+              "layer": "0"
+            },
+            "indices": "0-15,64-71,112-127"
+          },
+          {
+            "param": {
+              "param": "16",
+              "layer": "0"
+            },
+            "indices": "0-1,8,14-15"
+          },
+          {
+            "param": {
+              "param": "17",
+              "layer": "0"
+            },
+            "indices": "0-1,8,14-15"
+          },
+          {
+            "param": {
+              "param": "18",
+              "layer": "0"
+            },
+            "indices": "0-15"
+          },
+          {
+            "param": {
+              "param": "19",
+              "layer": "0"
+            },
+            "indices": "0"
+          },
+          {
+            "param": {
+              "param": "20",
+              "layer": "0"
+            },
+            "indices": "0"
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 0 occurrence 1 node 152, one element short",
+      "target": {
+        "node": {
+          "pos": "0",
+          "occurrence": "1",
+          "node": "152"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "8",
+        "14",
+        "15"
+      ],
+      "limits": {
+        "max_elements": "1678",
+        "max_terms": "1004"
+      },
+      "expect_error": "WorkLimit"
+    },
+    {
+      "name": "commit pos 0 occurrence 1 node 152, one term short",
+      "target": {
+        "node": {
+          "pos": "0",
+          "occurrence": "1",
+          "node": "152"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "8",
+        "14",
+        "15"
+      ],
+      "limits": {
+        "max_elements": "1679",
+        "max_terms": "1003"
+      },
+      "expect_error": "WorkLimit"
+    },
+    {
+      "name": "refused: an element outside the target",
+      "target": {
+        "node": {
+          "pos": "0",
+          "occurrence": "0",
+          "node": "5"
+        }
+      },
+      "elements": [
+        "4611686018427387903"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect_error": "Malformed"
+    },
+    {
+      "name": "refused: an occurrence the schedule does not have",
+      "target": {
+        "node": {
+          "pos": "0",
+          "occurrence": "4",
+          "node": "0"
+        }
+      },
+      "elements": [
+        "0"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect_error": "Malformed"
+    },
+    {
+      "name": "refused: a node the block does not have",
+      "target": {
+        "node": {
+          "pos": "0",
+          "occurrence": "0",
+          "node": "6"
+        }
+      },
+      "elements": [
+        "0"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect_error": "Malformed"
+    },
+    {
+      "name": "refused: a position at history_bound",
+      "target": {
+        "node": {
+          "pos": "262144",
+          "occurrence": "0",
+          "node": "5"
+        }
+      },
+      "elements": [
+        "0"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect_error": "Position"
+    },
+    {
+      "name": "refused: a position the run did not reach",
+      "target": {
+        "node": {
+          "pos": "4",
+          "occurrence": "3",
+          "node": "21"
+        }
+      },
+      "elements": [
+        "0"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect_error": "Missing"
+    },
+    {
+      "name": "refused: the source withholds a node question (saying Operand)",
+      "target": {
+        "node": {
+          "pos": "0",
+          "occurrence": "1",
+          "node": "35"
+        }
+      },
+      "elements": [
+        "0",
+        "1"
+      ],
+      "withhold": [
+        {
+          "node": {
+            "pos": "0",
+            "occurrence": "0",
+            "node": "5"
+          },
+          "raises": "Operand"
+        }
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect_error": "Missing"
+    },
+    {
+      "name": "refused: the source withholds a param question (saying Position)",
+      "target": {
+        "node": {
+          "pos": "0",
+          "occurrence": "0",
+          "node": "5"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "8",
+        "14",
+        "15"
+      ],
+      "withhold": [
+        {
+          "param": {
+            "param": "0",
+            "layer": null
+          },
+          "raises": "Position"
+        }
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect_error": "Missing"
+    },
+    {
+      "name": "refused: the source withholds a token question (saying Position)",
+      "target": {
+        "node": {
+          "pos": "0",
+          "occurrence": "0",
+          "node": "5"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "8",
+        "14",
+        "15"
+      ],
+      "withhold": [
+        {
+          "token": {
+            "pos": "0"
+          },
+          "raises": "Position"
+        }
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect_error": "Missing"
+    }
+  ]
+}

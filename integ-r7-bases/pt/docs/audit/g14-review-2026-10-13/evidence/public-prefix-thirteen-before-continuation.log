@@ -1,0 +1,67 @@
+
+running 13 tests
+
+thread 'palw_state_v2::tests::public_prefix_fold_v1::independently_voided_public_claim_keeps_paid_material_without_a_second_collection' (17080124) panicked at consensus/core/src/palw_prefix_public_owned_v1.rs:575:9:
+assertion failed: !custody.expected_panel.contains(&target.executor_bond)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test palw_state_v2::tests::public_prefix_fold_v1::independently_voided_public_claim_keeps_paid_material_without_a_second_collection ... FAILED
+
+thread 'palw_state_v2::tests::public_prefix_fold_v1::expired_public_collection_preserves_pending_material_but_never_revives_collection' (17080123) panicked at consensus/core/src/palw_prefix_public_owned_v1.rs:575:9:
+assertion failed: !custody.expected_panel.contains(&target.executor_bond)
+test palw_state_v2::tests::public_prefix_fold_v1::expired_public_collection_preserves_pending_material_but_never_revives_collection ... FAILED
+
+thread 'palw_state_v2::tests::public_prefix_fold_v1::prospective_prefix_acceptance_prices_complete_acquisition_and_refuses_overflow_before_writes' (17080140) panicked at consensus/core/src/palw_prefix_public_owned_v1.rs:575:9:
+assertion failed: !custody.expected_panel.contains(&target.executor_bond)
+test palw_state_v2::tests::public_prefix_fold_v1::prospective_prefix_acceptance_prices_complete_acquisition_and_refuses_overflow_before_writes ... FAILED
+test palw_state_v2::tests::public_prefix_fold_v1::named_prefix_job_keeps_its_immutable_registered_tokenizer_statement ... ok
+test palw_state_v2::tests::public_prefix_fold_v1::prospective_public_job_retention_precedes_the_legacy_fence_and_survives_native_reload ... ok
+
+thread 'palw_state_v2::tests::public_prefix_fold_v1::public_prefix_answer_advances_only_after_original_leaf_eof_and_restores_the_pruning_clock' (17080147) panicked at consensus/core/src/palw_prefix_public_owned_v1.rs:575:9:
+assertion failed: !custody.expected_panel.contains(&target.executor_bond)
+test palw_state_v2::tests::public_prefix_fold_v1::public_prefix_answer_advances_only_after_original_leaf_eof_and_restores_the_pruning_clock ... FAILED
+
+thread 'palw_state_v2::tests::public_prefix_fold_v1::public_collection_can_finish_after_stream_horizon_but_not_at_collection_expiry' (17080146) panicked at consensus/core/src/palw_prefix_public_owned_v1.rs:575:9:
+assertion failed: !custody.expected_panel.contains(&target.executor_bond)
+test palw_state_v2::tests::public_prefix_fold_v1::public_collection_can_finish_after_stream_horizon_but_not_at_collection_expiry ... FAILED
+
+thread 'palw_state_v2::tests::public_prefix_fold_v1::public_prefix_demand_is_rooted_reversible_and_defaults_collect_from_all_literal_custodians_once' (17080150) panicked at consensus/core/src/palw_prefix_public_owned_v1.rs:575:9:
+assertion failed: !custody.expected_panel.contains(&target.executor_bond)
+test palw_state_v2::tests::public_prefix_fold_v1::public_prefix_demand_is_rooted_reversible_and_defaults_collect_from_all_literal_custodians_once ... FAILED
+
+thread 'palw_state_v2::tests::public_prefix_fold_v1::public_prefix_history_is_literal_success_only_rooted_and_reversible' (17080151) panicked at consensus/core/src/palw_prefix_public_owned_v1.rs:575:9:
+assertion failed: !custody.expected_panel.contains(&target.executor_bond)
+test palw_state_v2::tests::public_prefix_fold_v1::public_prefix_history_is_literal_success_only_rooted_and_reversible ... FAILED
+
+thread 'palw_state_v2::tests::public_prefix_fold_v1::public_response_index_is_bounded_signer_scoped_paged_and_rebuilt_from_literal_rows' (17080154) panicked at consensus/core/src/palw_prefix_public_owned_v1.rs:575:9:
+assertion failed: !custody.expected_panel.contains(&target.executor_bond)
+test palw_state_v2::tests::public_prefix_fold_v1::public_response_index_is_bounded_signer_scoped_paged_and_rebuilt_from_literal_rows ... FAILED
+
+thread 'palw_state_v2::tests::public_prefix_fold_v1::public_prefix_seed_admission_is_independent_exact_funded_and_not_vetoed_by_unsigned_panel' (17080153) panicked at consensus/core/src/palw_prefix_public_owned_v1.rs:575:9:
+assertion failed: !custody.expected_panel.contains(&target.executor_bond)
+test palw_state_v2::tests::public_prefix_fold_v1::public_prefix_seed_admission_is_independent_exact_funded_and_not_vetoed_by_unsigned_panel ... FAILED
+
+thread 'palw_state_v2::tests::public_prefix_fold_v1::targeted_public_collection_bypasses_maintenance_backlog_and_is_identity_bound_once' (17080156) panicked at consensus/core/src/palw_prefix_public_owned_v1.rs:575:9:
+assertion failed: !custody.expected_panel.contains(&target.executor_bond)
+test palw_state_v2::tests::public_prefix_fold_v1::targeted_public_collection_bypasses_maintenance_backlog_and_is_identity_bound_once ... FAILED
+
+thread 'palw_state_v2::tests::public_prefix_fold_v1::shared_owned_rows_preserve_every_old_box_encoding_and_copy_only_the_written_owner' (17080155) panicked at consensus/core/src/palw_prefix_public_owned_v1.rs:575:9:
+assertion failed: !custody.expected_panel.contains(&target.executor_bond)
+test palw_state_v2::tests::public_prefix_fold_v1::shared_owned_rows_preserve_every_old_box_encoding_and_copy_only_the_written_owner ... FAILED
+
+failures:
+
+failures:
+    palw_state_v2::tests::public_prefix_fold_v1::expired_public_collection_preserves_pending_material_but_never_revives_collection
+    palw_state_v2::tests::public_prefix_fold_v1::independently_voided_public_claim_keeps_paid_material_without_a_second_collection
+    palw_state_v2::tests::public_prefix_fold_v1::prospective_prefix_acceptance_prices_complete_acquisition_and_refuses_overflow_before_writes
+    palw_state_v2::tests::public_prefix_fold_v1::public_collection_can_finish_after_stream_horizon_but_not_at_collection_expiry
+    palw_state_v2::tests::public_prefix_fold_v1::public_prefix_answer_advances_only_after_original_leaf_eof_and_restores_the_pruning_clock
+    palw_state_v2::tests::public_prefix_fold_v1::public_prefix_demand_is_rooted_reversible_and_defaults_collect_from_all_literal_custodians_once
+    palw_state_v2::tests::public_prefix_fold_v1::public_prefix_history_is_literal_success_only_rooted_and_reversible
+    palw_state_v2::tests::public_prefix_fold_v1::public_prefix_seed_admission_is_independent_exact_funded_and_not_vetoed_by_unsigned_panel
+    palw_state_v2::tests::public_prefix_fold_v1::public_response_index_is_bounded_signer_scoped_paged_and_rebuilt_from_literal_rows
+    palw_state_v2::tests::public_prefix_fold_v1::shared_owned_rows_preserve_every_old_box_encoding_and_copy_only_the_written_owner
+    palw_state_v2::tests::public_prefix_fold_v1::targeted_public_collection_bypasses_maintenance_backlog_and_is_identity_bound_once
+
+test result: FAILED. 2 passed; 11 failed; 0 ignored; 0 measured; 3920 filtered out; finished in 0.60s
+

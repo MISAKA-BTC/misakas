@@ -1,0 +1,27 @@
+{
+  "schema": "misaka.rfc02.failure-targeted-logit-protocol.v1",
+  "repository": "Qwen/Qwen2.5-0.5B-Instruct",
+  "revision": "7ae557604adf67be50417f59c2c2f167def9a775",
+  "diagnostic_selection": "first Qwen source/integer greedy divergence at source EOS, chosen after observing frozen three-task FAIL; not random or acceptance coverage",
+  "source_reference_implementation": "Transformers built-in float32 eager CPU, offline, all original pinned safetensors",
+  "source_context": 512,
+  "source_parameter_byte_cap": 2147483648,
+  "source_total_positions": 21,
+  "source_logit_value_cap": 3190656,
+  "frozen_files": {
+    "rfc02-qwen05-translation-first-divergence-tokens-20261013.json": "9efdb88f6b54c8285c5f9ef228c3228f8c59209c1474b3f2b902d64f4ea30bce",
+    "rfc02-qwen05-translation-first-divergence-job-20261013.json": "bea310713063b9c2da3d914b035e63eaa0b80632a2335a70d780634197b47044",
+    "rfc02-qwen05-translation-first-divergence-layout-job-20261013.json": "85c84480e7d34dfeb74292301d8c022947cffa8028a023d5262657d7f59eba8f",
+    "rfc02-qwen05-source-manifest-20261013.json": "64ab29ad66c4b852673cc3da25416c72ce6af5c568ee53a78ec1734291ae61a8",
+    "rfc02-qwen05-context512-task-protocol-20261013.json": "4336f7660c1bff144711983084aba8b64b91314c495df876fccf0bed432cc191",
+    "rfc02-qwen05-independent-task-source-20261013.json": "084fd3bb3363429eea2435d968f165a52fcda3ccb32c8580cb9c37de4e81ab9e",
+    "rfc02-qwen05-integer-task-20261013.json": "b7f969acc32e15739948666082595beb55bfe4f91a078935ac1dbb25a5b9c322"
+  },
+  "scores_to_compare": [
+    151645,
+    6313,
+    151643
+  ],
+  "original_three_job_pins_thresholds_and_failure_remain_unchanged": true,
+  "new_pass_fidelity_fullcontext_final_or_a6_a8_established": false
+}

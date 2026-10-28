@@ -1,0 +1,23 @@
+{
+  "accusation_context": "misaka-palw/pipeline/da-step-accusation/mldsa87/v1",
+  "accusation_message_domain": "misaka-palw/pipeline/da-step-accusation/message/v1",
+  "accusation_messages": [
+    "688cae8a0f30551a4c780c42dfbbb1c7bb79976493ac4e445d09d9f36b8cd5f92ac421fe31d016a86eea34a42ffd9f9fdfe73ed7454e5463a4749d4cb8c64425",
+    "2420d1a595625738366e05486ff7295d3070715413184ba2013f43b28c243c5ce0733005251d805bac703adcf306a1863f78dee047eb5bb08a9798181a8f9d7e"
+  ],
+  "answer_tags": [
+    7,
+    8,
+    9
+  ],
+  "max_stages": 16,
+  "node_depth": 10,
+  "unit_borsh": [
+    "05010807060504030201",
+    "0602090500000000000000"
+  ],
+  "unit_tags": [
+    5,
+    6
+  ]
+}

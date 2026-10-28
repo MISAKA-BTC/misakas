@@ -1,0 +1,29 @@
+   Compiling malachite-base v0.4.16
+   Compiling malachite-nz v0.4.16
+   Compiling kaspa-math v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/math)
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/consensus/core)
+   Compiling kaspa-txscript v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/crypto/txscript)
+   Compiling misaka-palw-tir-exec v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/misaka/palw/tir/exec)
+   Compiling kaspa-pq-validator-core v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/misaka/pq/validator-core)
+   Compiling misaka-palw-base0 v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/misaka/palw/base0)
+   Compiling misaka-palw-tir-lower v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/misaka/palw/tir/lower)
+   Compiling misaka-palw-tir-sketch v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/misaka/palw/tir/sketch)
+   Compiling misaka-palw-sdk v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/misaka/palw/sdk)
+    Finished `test` profile [unoptimized] target(s) in 4m 12s
+     Running unittests src/lib.rs (/tmp/misaka-rfc67812-node-target/debug/deps/misaka_palw_sdk-751a2d1f7aeeb2da)
+
+running 1 test
+
+thread 'panel_source_fee_v2::tests::rooted_panel_permit_backing_and_full_snapshot_are_required_by_fresh_reader' (16902872) panicked at misaka/palw/sdk/src/panel_source_fee_v2.rs:262:10:
+called `Result::unwrap()` on an `Err` value: "invalid permissionless Panel policy"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test panel_source_fee_v2::tests::rooted_panel_permit_backing_and_full_snapshot_are_required_by_fresh_reader ... FAILED
+
+failures:
+
+failures:
+    panel_source_fee_v2::tests::rooted_panel_permit_backing_and_full_snapshot_are_required_by_fresh_reader
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 139 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p misaka-palw-sdk --lib`

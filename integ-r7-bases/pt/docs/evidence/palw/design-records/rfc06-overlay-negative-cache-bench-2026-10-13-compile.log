@@ -1,0 +1,56 @@
+warning: methods `clone_with_new_cache`, `clone_for_policy`, `mutate`, `mutate_batch`, and `mutate_inner` are never used
+   --> /Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/consensus/src/model/stores/overlay_absent_cache.rs:45:19
+    |
+ 35 | impl<K: Clone + Eq + Hash> OverlayAbsentCache<K> {
+    | ------------------------------------------------ methods in this implementation
+...
+ 45 |     pub(super) fn clone_with_new_cache(&self, limit: usize) -> Self {
+    |                   ^^^^^^^^^^^^^^^^^^^^
+...
+ 51 |     pub(super) fn clone_for_policy(&self, policy: CachePolicy) -> Self {
+    |                   ^^^^^^^^^^^^^^^^
+...
+ 95 |     pub(super) fn mutate<T>(&self, key: &K, mutation: impl FnOnce() -> Result<T, StoreError>) -> Result<T, StoreError> {
+    |                   ^^^^^^
+...
+101 |     pub(super) fn mutate_batch<T>(&self, key: &K, mutation: impl FnOnce() -> Result<T, StoreError>) -> Result<T, StoreError> {
+    |                   ^^^^^^^^^^^^
+...
+105 |     fn mutate_inner<T>(&self, key: &K, batch: bool, mutation: impl FnOnce() -> Result<T, StoreError>) -> Result<T, StoreError> {
+    |        ^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: trait `RewardedEpochsStore` is never used
+  --> /Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/consensus/src/model/stores/rewarded_epochs.rs:35:11
+   |
+35 | pub trait RewardedEpochsStore: RewardedEpochsStoreReader {
+   |           ^^^^^^^^^^^^^^^^^^^
+
+warning: field `db` is never read
+  --> /Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/consensus/src/model/stores/rewarded_epochs.rs:43:5
+   |
+42 | pub struct DbRewardedEpochsStore {
+   |            --------------------- field in this struct
+43 |     db: Arc<DB>,
+   |     ^^
+   |
+   = note: `DbRewardedEpochsStore` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
+
+warning: methods `clone_with_new_cache`, `insert_batch`, and `delete_batch` are never used
+  --> /Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/consensus/src/model/stores/rewarded_epochs.rs:57:12
+   |
+48 | impl DbRewardedEpochsStore {
+   | -------------------------- methods in this implementation
+...
+57 |     pub fn clone_with_new_cache(&self, cache_policy: CachePolicy) -> Self {
+   |            ^^^^^^^^^^^^^^^^^^^^
+...
+63 |     pub fn insert_batch(&self, batch: &mut WriteBatch, hash: BlockHash, keys: Arc<RewardedEpochKeys>) -> Result<(), StoreError> {
+   |            ^^^^^^^^^^^^
+...
+72 |     pub fn delete_batch(&self, batch: &mut WriteBatch, hash: BlockHash) -> Result<(), StoreError> {
+   |            ^^^^^^^^^^^^
+
+warning: 4 warnings emitted
+

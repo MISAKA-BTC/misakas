@@ -1,0 +1,16 @@
+{
+  "record": "misaka-palw/g14-rfc0016-sweep/v1",
+  "status": "NOT RUN. plan.json (324 runs, tilt_k_permille 1000 only, scenarios E1-E6, calibration base values) was generated offline; no events.jsonl exists.",
+  "why_not_run": [
+    "the run step needs an isolated calibration devnet with palw_probabilistic_constraints_v1, palw_bond_budget_v1 and palw_model_bond_allocation_v1 armed, 4,320 DAA per run, and an operator launch command per miner; none exists here",
+    "the Huihui-2B class cannot be mined through the public TIR route on this source (frame Incomplete)",
+    "the script's reference model is Qwen2.5-1.5B A16, not Huihui-2B; mixing would count this Mac's capacity once per class"
+  ],
+  "user_decided": {
+    "tilt_k_permille": 1000,
+    "calibration_values_not_production": true
+  },
+  "source_sha": "see git log of this directory (release/t12-16000, 2026-10-18)",
+  "hardware": "Apple M1 Max, 10 cores, 32 GiB",
+  "model": "Misakachain/Huihui-Qwen3.5-2B-abliterated-PALW 32K, class 672e93aa...ada63c (declare-layout on this source)"
+}

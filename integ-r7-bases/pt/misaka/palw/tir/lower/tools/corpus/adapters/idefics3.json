@@ -1,0 +1,16 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "idefics3",
+  "doc": "Idefics3 / SmolVLM (Idefics3ForConditionalGeneration): the TEXT decoder of the wrapper — a Llama under `model.text_model.*` with a top-level `lm_head`; the SigLIP-style tower (`model.vision_model.*`), the pixel-shuffle connector (`model.connector.*`) and the image tokens belong to the vision stage. Third-party adapter (lane H): data only.",
+  "extends": ["llama", "mixin-vlm"],
+  "match": {"architectures": ["Idefics3ForConditionalGeneration"], "model_types": ["idefics3"]},
+  "config": {"root_inert": ["scale_factor", "pad_token_id", "use_cache", "image_token_id", "tie_word_embeddings_"]},
+  "vars": [
+    {"name": "p", "value": "model.text_model."},
+    {"name": "lm_head_name", "value": "lm_head"},
+    {"name": "prefix_aliases", "value": []},
+    {"name": "ignored_prefixes", "value": ["model.vision_model.", "model.connector."]},
+    {"name": "tie_rule", "value": "false"},
+    {"name": "model_type", "value": "idefics3"}
+  ]
+}

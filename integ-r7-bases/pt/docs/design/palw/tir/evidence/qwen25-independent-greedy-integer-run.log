@@ -1,0 +1,22 @@
+integer greedy job arithmetic-1: 8 tokens
+integer greedy job translation-1: 8 tokens
+integer greedy job code-1: 8 tokens
+Error: "predeclared free-running fidelity failed; result retained"
+      206.33 real       811.89 user        29.83 sys
+          1974124544  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+              130893  page reclaims
+                  55  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                   0  signals received
+                  63  voluntary context switches
+             5069122  involuntary context switches
+       7751915439619  instructions retired
+       2655752594620  cycles elapsed
+           118065024  peak memory footprint

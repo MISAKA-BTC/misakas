@@ -1,0 +1,41 @@
+
+running 25 tests
+test palw_offence_attribution_v1::f1c_tests::the_job_faults_are_attested_by_every_valid ... ok
+test palw_offence_attribution_v1::tests::a_producer_committed_saturating_binding_is_answered_not_a_panic ... ok
+test palw_offence_attribution_v1::tests::a_step_reading_a_checkpoint_or_a_generated_token_is_whole ... ok
+test palw_offence_attribution_v1::tests::a_step_fault_that_reads_a_neighbour_segment_convicts_only_whole_attestations ... ok
+test palw_offence_attribution_v1::tests::f1_the_output_rule_holds_the_output_root_to_the_generated_ids ... ok
+test palw_offence_attribution_v1::tests::a_shape_fault_is_whole_whatever_leaf_is_attached ... ok
+test palw_offence_attribution_v1::tests::p2_8_the_kind_4_constructor_and_the_filed_commit_key ... ok
+test palw_offence_attribution_v1::tests::the_admission_table ... ok
+test palw_offence_attribution_v1::tests::the_byte_cap_is_one_carrier ... ok
+test palw_offence_attribution_v1::tests::the_execution_check_is_the_v1_routes_without_an_opening ... ok
+test palw_offence_attribution_v1::tests::f1_the_identity_rule_names_the_first_check_a_floor_binding_fails ... ok
+test palw_offence_attribution_v1::tests::the_reporter_slot_is_bounded_once_armed ... ok
+test palw_offence_attribution_v1::tests::the_signature_is_checked_under_the_chain_domain_in_the_licensed_form ... ok
+test palw_offence_attribution_v1::tests::the_site_and_mask_truth_table ... ok
+test palw_offence_attribution_v1::tests::the_version_and_the_reporter_slot ... ok
+test palw_offence_attribution_v1::f1c_tests::the_logits_head_holds_on_every_shipped_profile ... ok
+test palw_offence_attribution_v1::f1c_tests::a_windowed_kind3_is_undecodable_below_the_batch_fence ... ok
+test palw_offence_attribution_v1::tests::f1_fp_pin_spellings_agree_and_convict_on_the_free_prompt_lane ... ok
+test palw_offence_attribution_v1::tests::f1_the_admission_tables_and_the_executor_refuted_key ... ok
+test palw_offence_attribution_v1::f1c_tests::the_remembered_prompt_root_is_the_computed_one ... ok
+test palw_offence_attribution_v1::f1c_tests::only_a_whole_prompt_not_anchored_is_charged ... ok
+
+thread 'palw_offence_attribution_v1::tests::flat_constraint_direct_proof_judges_executor_and_all_full_valid_signers_and_refuses_bad_openings' (3589397) panicked at consensus/core/src/palw_offence_attribution_v1.rs:2527:13:
+assertion `left == right` failed
+  left: Err(EvidenceTooLarge)
+ right: Err(TokenHolds)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test palw_offence_attribution_v1::tests::flat_constraint_direct_proof_judges_executor_and_all_full_valid_signers_and_refuses_bad_openings ... FAILED
+test palw_offence_attribution_v1::tests::constrained_public_direct_proof_convicts_only_authenticated_faults_and_keeps_both_fences ... ok
+test palw_offence_attribution_v1::f1c_tests::prompt_not_anchored_judges_the_2m_prompt ... ok
+test palw_offence_attribution_v1::tests::canonical_fp_prompt_proof_authenticates_job_convicts_count_and_root_and_keeps_the_fence ... ok
+
+failures:
+
+failures:
+    palw_offence_attribution_v1::tests::flat_constraint_direct_proof_judges_executor_and_all_full_valid_signers_and_refuses_bad_openings
+
+test result: FAILED. 24 passed; 1 failed; 0 ignored; 0 measured; 3605 filtered out; finished in 0.14s
+

@@ -1,0 +1,84 @@
+PASS  the tree as built: 0 pin(s) none
+PASS  t11 dump: only its roots moved, no layout golden moved: 1 pin(s) refuse
+PASS  t11 dump roots moved WITH a v22 record encoding, --allow-t11-layout: 2 pin(s) move
+PASS  t11 dump roots moved WITH a v22 record encoding, no flag: 2 pin(s) move, refuse
+PASS  t11 dump: a non-root line moved too (masked digest): 3 pin(s) move, refuse
+PASS  t11 verdict roots moved with the lock, and a layout move: 3 pin(s) move, refuse
+PASS  the dormant ring root moved with a layout move, no flag: 2 pin(s) move, refuse
+PASS  the dormant ring root moved with a layout move, --allow-t11-layout: 2 pin(s) move
+PASS  the corpus verdicts moved (allowed, but the manifest did not move): 1 pin(s) refuse
+FAIL  testnet-11's params id moved: 9 pin(s) refuse
+        attribution.BEFORE_THE_ATTRIBUTION.testnet-11.params_id      got refuse     want refuse
+        cap.BEFORE_THE_CAP.testnet-11.params_id                      got refuse     want ok
+        deadline.BEFORE_THE_DEADLINE.testnet-11.params_id            got refuse     want refuse
+        floor.BEFORE_THE_FLOOR.testnet-11.params_id                  got refuse     want refuse
+        floor2.OTHERS_AT_THE_RELEASE.testnet-11.params_id            got refuse     want ok
+        horizon.BEFORE_THE_HORIZON.testnet-11.params_id              got refuse     want refuse
+        maturity.UNMOVED.testnet-11.params_id                        got refuse     want refuse
+        params.shipped_presets.testnet-11                            got refuse     want refuse
+        pool.BEFORE_THE_POOL.testnet-11.params_id                    got refuse     want refuse
+        rcore.AT_V22.testnet-11.params_id                            got refuse     want refuse
+        release.T11_CONSENSUS_PARAMS_ID                              got refuse     want refuse
+        resilience.OTHERS_AT_THE_RELEASE.testnet-11.params_id        got refuse     want ok
+FAIL  devnet's identity moved: 7 pin(s) refuse
+        attribution.BEFORE_THE_ATTRIBUTION.devnet.identity_id        got refuse     want refuse
+        cap.BEFORE_THE_CAP.devnet.identity_id                        got refuse     want ok
+        deadline.BEFORE_THE_DEADLINE.devnet.identity_id              got refuse     want refuse
+        floor.BEFORE_THE_FLOOR.devnet.identity_id                    got refuse     want refuse
+        floor2.OTHERS_AT_THE_RELEASE.devnet.identity_id              got refuse     want ok
+        horizon.BEFORE_THE_HORIZON.devnet.identity_id                got refuse     want refuse
+        maturity.UNMOVED.devnet.identity_id                          got refuse     want refuse
+        pool.BEFORE_THE_POOL.devnet.identity_id                      got refuse     want refuse
+        rcore.AT_V22.devnet.identity_id                              got refuse     want refuse
+        resilience.OTHERS_AT_THE_RELEASE.devnet.identity_id          got refuse     want ok
+FAIL  mainnet's ruleset moved: 10 pin(s) move
+        attribution.BEFORE_THE_ATTRIBUTION.mainnet.params_id         got move       want move
+        cap.BEFORE_THE_CAP.mainnet.params_id                         got move       want ok
+        deadline.BEFORE_THE_DEADLINE.mainnet.params_id               got move       want move
+        floor.BEFORE_THE_FLOOR.mainnet.params_id                     got move       want move
+        floor2.OTHERS_AT_THE_RELEASE.mainnet.params_id               got move       want ok
+        horizon.BEFORE_THE_HORIZON.mainnet.params_id                 got move       want move
+        maturity.UNMOVED.mainnet.params_id                           got move       want move
+        params.shipped_presets.mainnet                               got move       want move
+        pool.BEFORE_THE_POOL.mainnet.params_id                       got move       want move
+        rcore.AT_V21.mainnet.params_id                               got move       want move
+        rcore.AT_V22.mainnet.params_id                               got move       want move
+        release.MAINNET_CONSENSUS_PARAMS_ID                          got move       want move
+        resilience.OTHERS_AT_THE_RELEASE.mainnet.params_id           got move       want ok
+FAIL  testnet-12's fingerprint and a twin moved: 4 pin(s) move
+        attribution.T12_BEFORE_THE_ATTRIBUTION.params_id             got move       want move
+        checklist.EXPECT_FP                                          got move       want move
+        join_doc.fp                                                  got move       want ok
+        monitor.T12_FP                                               got move       want ok
+        monitor_doc.fp                                               got move       want ok
+        monitor_doc.sample_fp                                        got move       want ok
+        plan.EXPECT_FP                                               got move       want move
+        readme.fp                                                    got move       want ok
+        scan_deploy.fp                                               got move       want move
+        scan_index.fp                                                got move       want ok
+FAIL  testnet-12's shipped params moved (the horizon's full-ids pin): 2 pin(s) move
+        binder.T12_RELEASE.params_id                                 got move       want ok
+        cap.T12_WITH_THE_CAP.params_id                               got move       want ok
+        hbsc.T12_RELEASED.params_id                                  got move       want ok
+        horizon.T12_WITH_THE_HORIZON.params_id                       got move       want move
+        laneorder.T12_RELEASE.params_id                              got move       want ok
+        maturity.T12_WITH_THE_MATURITY.params_id                     got move       want move
+        opanchor.T12_RELEASE.params_id                               got move       want ok
+        ppstrict.T12_RELEASE.params_id                               got move       want ok
+        reorg.T12_RELEASE.params_id                                  got move       want ok
+        resilience.T12_RELEASE.params_id                             got move       want ok
+        seatmat.T12_RELEASE.params_id                                got move       want ok
+        seed.T12_RELEASE.params_id                                   got move       want ok
+        sink.T12_RELEASE.params_id                                   got move       want ok
+        v02.T12_RELEASE.params_id                                    got move       want ok
+        v02life.T12_RELEASE.params_id                                got move       want ok
+PASS  the horizon's twin moved: 1 pin(s) move
+PASS  the maturity's twin moved: 1 pin(s) move
+PASS  testnet-12's genesis moved: 8 pin(s) move
+PASS  the 2M row's class id moved (C7, the held row, the kit and explorer copies; no CHECK): 5 pin(s) move
+PASS  the example drill genesis moved: 1 pin(s) move
+PASS  a twin was never printed (its premise failed first): 3 pin(s) nocompute
+PASS  a T41 record was not printed (its digest pin cannot be read): 1 pin(s) nocompute + CHECK
+PASS  an A-held gate failed: 0 pin(s) none + CHECK
+
+selftest: 17/22 scenarios as expected

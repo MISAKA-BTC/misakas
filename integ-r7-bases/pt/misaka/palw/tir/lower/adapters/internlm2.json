@@ -1,0 +1,18 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "internlm2",
+  "doc": "InternLM2 (remote code modeling_internlm2): Llama math, fused per-kv-group wqkv, `bias` on the attention projections.",
+  "extends": ["decoder-core"],
+  "match": {"architectures": ["InternLM2ForCausalLM"], "model_types": ["internlm2"]},
+  "remote_code": ["modeling_internlm2.InternLM2ForCausalLM"],
+  "remote_code_required": true,
+  "config": {"defaults": {"vocab_size": 103168, "bias": true}, "inert": ["attn_implementation"]},
+  "vars": [
+    {"name": "abias", "value": {"$cfg": "bias"}},
+    {"name": "qkv_layout", "value": "FusedPerKvGroup"},
+    {"name": "names", "value": {"embed": "model.tok_embeddings", "final_norm": "model.norm", "lm_head": {"$if": [{"$var": "tied"}, "model.tok_embeddings", "output"]}, "norm.mix": "model.layers.{L}.attention_norm", "norm.ffn": "model.layers.{L}.ffn_norm", "attn.qkv": "model.layers.{L}.attention.wqkv", "attn.o": "model.layers.{L}.attention.wo", "mlp.gate": "model.layers.{L}.feed_forward.w1", "mlp.up": "model.layers.{L}.feed_forward.w3", "mlp.down": "model.layers.{L}.feed_forward.w2"}},
+    {"name": "families", "value": ["C1", "C2"]},
+    {"name": "model_type", "value": "internlm2"}
+  ],
+  "spec": {"confidence": {"Unsure": ["InternLM2 wqkv row layout [kv][q_0..q_{g-1},k,v][d] from the remote code's einops rearrange, as recalled"]}}
+}

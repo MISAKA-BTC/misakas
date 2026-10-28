@@ -1,0 +1,6 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "vlm-mistral",
+  "doc": "Wrappers over a Mistral / Ministral-3 text decoder.",
+  "extends": ["mistral", "mixin-vlm"]
+}

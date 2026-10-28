@@ -1,0 +1,4260 @@
+//! `misaka` — the unified MISAKA operator CLI.
+//!
+//! One user-facing front-end over the functionality that today is scattered
+//! across `kaspa-pq-cli`, the interactive wallet REPL, `kaspa-pq-validator`,
+//! and the `evm_tx_gen` dev example. This is the **Tier A (observability)**
+//! slice: read-only commands that wrap the EXISTING node wRPC + EVM JSON-RPC —
+//! no new RPCs, no private keys, no transaction construction. They cover the
+//! day-to-day "is my node healthy / where is my EVM tx" questions that
+//! previously required hand-running raw RPC calls.
+//!
+//!   misaka node doctor                  # node health, ports, sync, versions
+//!   misaka evm balance   --address 0x…
+//!   misaka evm nonce     --address 0x…
+//!   misaka evm estimate-gas --from 0x… --to 0x… [--value <sompi>] [--data 0x…]
+//!   misaka evm tx status --hash 0x…     # one-shot misaka_getEvmTxStatus
+//!   misaka evm tx wait   --hash 0x…     # poll until accepted / timeout
+//!
+//! Every command honors `--output human|json`. Exit codes are stable (see
+//! `exit`) so systemd / shell / monitors can branch on them.
+
+mod ask;
+mod bond;
+mod bootstrap;
+mod config;
+mod eth;
+mod evm_deposit;
+#[cfg(feature = "evm-send")]
+mod evm_send;
+mod forward;
+mod key_roles;
+mod keys;
+/// `palw claim` — what became of a free-prompt claim: its phase on the chain, and the next step.
+mod model_preflight;
+mod node;
+mod ollama;
+/// ADR-0122: `mining`, `doctor`, `work` — the operator surface over the components.
+mod operator;
+mod pack_gate;
+mod palw_activation_pool;
+mod palw_capacity_shadow;
+mod palw_claim;
+mod palw_court;
+mod palw_da;
+mod palw_derived;
+/// ADR-0127 Decision 3: `palw settlement` — settled, and how deep in settled PALW anchors.
+mod palw_economics;
+/// ADR-0108: `palw extension inspect|verify|preflight|submit|receipt-verify`.
+mod palw_extension;
+mod palw_fp;
+mod palw_gen;
+/// ADR-0088 Decision 12: `palw line-… / version-… / proposal-… / evaluate` — the model registry.
+mod palw_line;
+/// RFC-0008 PAV3 (2026-10-15 round 3): `palw material-session draft|sign|seal` — a prospective native session enrollment.
+mod palw_material_session;
+mod palw_model;
+mod palw_model_ops;
+mod palw_panel;
+/// RFC-0010: `palw panel-v3` — the permissionless Panel's observation of a claim (op 220).
+mod palw_panel_v3;
+mod palw_registry;
+mod palw_service;
+mod palw_settlement;
+mod palw_shard_court;
+mod palw_shard_licensing;
+mod palw_verify_context;
+/// ADR-0152 P2-11: `palw vesting` — where a vested reward stands (op 199).
+mod palw_vesting;
+#[cfg(feature = "evm-send")]
+mod prea;
+/// ADR-0079 Decision 13: `node security-report` — the host posture, printed from live state.
+mod security;
+mod setup;
+mod validator_reader;
+mod wallet;
+
+use clap::{Args, Parser, Subcommand, ValueEnum};
+
+/// Stable process exit codes (shared with the wider `misaka` CLI design).
+pub mod exit {
+    pub const SUCCESS: i32 = 0;
+    pub const GENERIC: i32 = 1;
+    // 2 is reserved for clap argument errors.
+    pub const NETWORK_MISMATCH: i32 = 3;
+    pub const CONNECTION: i32 = 4;
+    pub const NODE_NOT_SYNCED: i32 = 5;
+    pub const TX_REJECTED: i32 = 6;
+    pub const TIMEOUT_PENDING: i32 = 7;
+    pub const WALLET_LOCKED: i32 = 8;
+    pub const UNSAFE_REFUSED: i32 = 10;
+    /// `node liveness`: the node did not answer its RPC within the timeout — a wedged runtime.
+    pub const LIVENESS_WEDGED: i32 = 11;
+    /// `node liveness`: the node answers but its chain has not moved within the stall window.
+    pub const LIVENESS_STALLED: i32 = 12;
+    /// `node security-report` (ADR-0079 Decision 13): a PUBLIC entrance on a host whose
+    /// confinement backend is `none`, or a process that parses public input while holding key
+    /// material. Decision 10's refusals, observed after the fact rather than at startup.
+    pub const SECURITY_EXPOSED: i32 = 13;
+    /// `node security-report`: no platform confinement backend is in force, but nothing public is
+    /// exposed behind it. The environment discipline is the whole of the posture.
+    pub const SECURITY_DEGRADED: i32 = 14;
+    /// `palw extension` (ADR-0108 §4): the manifest is wrong about itself — an id that does not
+    /// recompute, a bound that is zero, a vector whose expected root the recomputation does not
+    /// produce — or expressible but the chain would refuse it (already registered). The field is
+    /// named. (The ADR's §4 draft said 2; 2 is clap's, and 3–5 were taken.)
+    pub const EXTENSION_REFUSED: i32 = 20;
+    /// `palw extension`: a node extension — unverifiable on this build, never "valid"; the
+    /// missing thing (a transformer, a lineage, a file) is named.
+    pub const EXTENSION_NODE_EXTENSION: i32 = 21;
+    /// `palw extension`: a ruleset change — a fence; the report says what the arming build would
+    /// print and whether arming it is a flag day. Activation is a release, never a manifest.
+    pub const EXTENSION_RULESET_CHANGE: i32 = 22;
+    /// `palw extension`: expressible, but the depth asked for was not reached because this
+    /// machine lacks the bytes (an artifact, a vector file). Not a verdict on the manifest.
+    pub const EXTENSION_DEPTH_NOT_REACHED: i32 = 23;
+    // ADR-0122 Decision 4: the operator surface's range (`mining`, `doctor`, `work`). Each names
+    // the area a failure is in, so a supervisor or a monitor can branch without reading prose.
+    /// The miner, a seat or a lane is holding: running, and not doing its work, for a named reason.
+    pub const NOT_READY: i32 = 30;
+    /// The configuration: `mining.toml`, a path, a flag.
+    pub const CONFIG: i32 = 31;
+    /// The identity: the key, the bond, the pay address.
+    pub const IDENTITY: i32 = 32;
+    /// Funds: collateral, the fee outpoint, a funding output.
+    pub const FUNDS: i32 = 33;
+    /// The model: the class, the artifact, the tokenizer, the certification.
+    pub const MODEL: i32 = 34;
+    /// The host: disk, memory, ports, clock, background upgrades.
+    pub const HOST: i32 = 35;
+    /// A component is not running, or keeps crashing.
+    pub const COMPONENT_DOWN: i32 = 36;
+    /// `mining stop` refused: this node still has claims to defend.
+    pub const STOP_INFLIGHT: i32 = 37;
+}
+
+/// A CLI error that carries the process exit code to surface.
+#[derive(Debug)]
+pub struct CliError {
+    pub code: i32,
+    pub msg: String,
+}
+impl CliError {
+    pub fn new(code: i32, msg: impl Into<String>) -> Self {
+        Self { code, msg: msg.into() }
+    }
+    pub fn generic(msg: impl Into<String>) -> Self {
+        Self::new(exit::GENERIC, msg)
+    }
+    pub fn connection(msg: impl Into<String>) -> Self {
+        Self::new(exit::CONNECTION, msg)
+    }
+}
+pub type CliResult = Result<(), CliError>;
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
+pub enum OutputFormat {
+    Human,
+    Json,
+}
+
+#[derive(Parser, Debug)]
+#[command(name = "misaka", version, about = "Unified MISAKA operator CLI (observability slice)")]
+struct Cli {
+    /// Output format.
+    #[arg(long, global = true, value_enum, default_value = "human")]
+    output: OutputFormat,
+
+    /// Network id (e.g. testnet-12). Sets default RPC ports + the node-network match check.
+    /// Resolution: CLI > env MISAKA_NETWORK > ~/.misaka/config.toml > testnet-12 (every command).
+    #[arg(long, global = true, visible_alias = "network-id", env = "MISAKA_NETWORK")]
+    network: Option<String>,
+
+    /// Node wRPC Borsh endpoint host:port (validator/wallet/operator transport).
+    /// Default derives from --network (e.g. testnet-10 => 127.0.0.1:27210). NOTE: this is
+    /// the CODE default; some deployments bind borsh on a non-standard port (e.g.
+    /// 27610) — pass it here. This is NOT node gRPC (26210) nor EVM JSON-RPC (8545).
+    #[arg(long, global = true, visible_alias = "node-wrpc-borsh", env = "MISAKA_RPC")]
+    rpc: Option<String>,
+
+    /// Node gRPC endpoint host:port (low-level RPC transport: `setup`, `config show`).
+    /// Resolution: CLI > env MISAKA_NODE_GRPC > ~/.misaka/config.toml [node].grpc >
+    /// endpoint registry / network default.
+    #[arg(long, global = true, env = "MISAKA_NODE_GRPC")]
+    node_grpc: Option<String>,
+
+    /// EVM JSON-RPC HTTP endpoint (the Ethereum lane). `--evm-rpc-url` / `--rpc-url`
+    /// (Foundry/cast convention) are accepted aliases. Resolution: CLI > env
+    /// MISAKA_EVM_RPC > ~/.misaka/config.toml [evm].rpc_url > http://127.0.0.1:8545.
+    #[arg(long, global = true, visible_alias = "evm-rpc-url", visible_alias = "rpc-url", env = "MISAKA_EVM_RPC")]
+    evm_rpc: Option<String>,
+
+    /// Per-operation timeout, seconds (connect + request).
+    #[arg(long, global = true, default_value_t = 30)]
+    timeout: u64,
+
+    /// Suppress non-essential human output (errors still print to stderr).
+    #[arg(long, global = true)]
+    quiet: bool,
+
+    /// **A testnet-12 DRILL's genesis salt** (64 hex, the one its nodes run with; ADR-0152 §8.2).
+    /// Every PALW object this CLI signs is made under the network domain of the node's GENESIS, and
+    /// a drill answers to `testnet-12` on another genesis: without the salt this CLI would sign
+    /// under public testnet-12's domain — refused by the drill, valid on public testnet-12. The CLI
+    /// asks the node which genesis it runs and refuses to sign on a mismatch, naming this flag.
+    /// Command line only: no environment variable and no config key, so no public command inherits it.
+    #[arg(long, global = true)]
+    palw_drill_genesis_salt: Option<String>,
+
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand, Debug)]
+enum Command {
+    /// What should this machine do? Mine, verify, validate, add a model, hold positions — then
+    /// the setup for it.
+    Init(SetupCliArgs),
+    /// Mining, as one purpose: is this host mining, and if not, why and what to do (ADR-0122).
+    #[command(subcommand)]
+    Mining(MiningCmd),
+    /// Check everything a miner needs — node, identity, model, host, prompt lane — and name the fix.
+    Doctor(DoctorArgs),
+    /// One work from the request (or the won draw) to the reward, by one id (ADR-0122).
+    #[command(subcommand)]
+    Work(WorkCmd),
+    /// The node's, the gateway's and the rail's lines — all of them, or the ones about one work.
+    Logs(LogsArgs),
+    /// What mining has paid, and what is still coming: the wallet, the escrow by claim, the prompt lane.
+    Rewards {
+        #[command(flatten)]
+        profile: ProfileArgs,
+    },
+    /// A PALW panel seat that judges other bonds' claims and draws nothing (検証席). Not paid.
+    #[command(subcommand)]
+    Verifier(VerifierCmd),
+    /// The models this network runs: classes, shares, budgets, prompt lanes, markets.
+    #[command(subcommand)]
+    Model(ModelCmd),
+    /// Model positions: what this key holds, a quote, and a buy or a sell with a computed floor.
+    #[command(subcommand)]
+    Position(PositionCmd),
+    /// A read-only page with the miner's state, its works, their logs and the doctor, at
+    /// http://127.0.0.1:8791 (8790 is the gateway's).
+    Dashboard {
+        /// Where to listen: loopback only unless --public.
+        #[arg(long, default_value = operator::dashboard::DEFAULT_LISTEN)]
+        listen: String,
+        /// Listen on every interface; every request then needs the token it prints.
+        #[arg(long)]
+        public: bool,
+        #[command(flatten)]
+        profile: ProfileArgs,
+    },
+    /// Node operations.
+    #[command(subcommand)]
+    Node(NodeCmd),
+    /// EVM-lane operations (read-only in this slice).
+    #[command(subcommand)]
+    Evm(EvmCmd),
+    /// PQ wallet operations (UTXO list / consolidate / send).
+    #[command(subcommand)]
+    Wallet(WalletCmd),
+    /// PALW free-prompt lane (ADR-0044): put a signed commitment on the chain.
+    #[command(subcommand)]
+    Palw(PalwCmd),
+    /// Key management (generate / import / show address). The secret is never a CLI arg.
+    #[command(subcommand)]
+    Key(KeyCmd),
+    /// PALW bond operations — see the collateral this key holds, and retire it (ADR-0063).
+    #[command(subcommand)]
+    Bond(BondCmd),
+    /// Operator config (`~/.misaka/config.toml`): write a scaffold / show effective values.
+    #[command(subcommand)]
+    Config(ConfigCmd),
+    /// P2P bootstrap visibility (debug): the DNS seeds and the peers they resolve to.
+    #[command(subcommand)]
+    Bootstrap(BootstrapCmd),
+    /// Guided VPS setup: preflight, node service, status, and Discord registration helpers.
+    #[command(subcommand)]
+    Setup(setup::SetupCmd),
+    /// The DNS-finality validator: `setup` and `status` here, and the `kaspa-pq-validator` sidecar's
+    /// own subcommands (keygen, bond, unbond, run, …) forwarded with --network and --rpc injected.
+    /// `misaka validator --help` lists both.
+    #[command(disable_help_flag = true)]
+    Validator(PassThrough),
+    /// Join the network for --network-id: start a local node that discovers peers via the DNS
+    /// seeds (port-free). A newcomer-friendly front-end over `node start` that names the seeds.
+    Join(NodeStartArgs),
+    /// PREA PQ smart-account signing (executeRoot / executeSession). [needs --features evm-send]
+    #[cfg(feature = "evm-send")]
+    #[command(subcommand)]
+    Prea(PreaCmd),
+
+    /// Ask this network's pinned model a question — and get a receipt anyone can re-run.
+    ///
+    /// Ordinary LLM use (any language, `--file`/stdin for long prompts), with the property the
+    /// rest of this chain is built on: the request is pinned, so another host of the same class
+    /// reproduces the answer byte for byte. `--verify <receipt>` is that check.
+    Ask(ask::AskArgs),
+}
+
+/// Port-free node launch args for `node start` / `join`: an optional RPC `--profile` plus
+/// any extra kaspad args forwarded verbatim (after `--`). The network + ports come from the
+/// global --network-id, so the operator never types a port.
+#[derive(Args, Debug)]
+struct NodeStartArgs {
+    /// kaspad RPC listener profile (design §9): minimal | local-validator | local-full |
+    /// public-evm-rpc | public-node-rpc. Omit to use kaspad's default listeners.
+    #[arg(long)]
+    profile: Option<String>,
+    /// kaspad operational role profile: full | bootstrap-pruned | recovery-sync |
+    /// validator | archive | public-rpc.
+    #[arg(long)]
+    node_profile: Option<String>,
+    /// Apply kaspad's 8GB-VPS resource defaults for unspecified knobs.
+    #[arg(long)]
+    vps_8gb: bool,
+    /// Refuse kaspad startup below this free-disk percentage on the data mount.
+    #[arg(long)]
+    min_disk_free_percent: Option<u8>,
+    /// Extra args forwarded verbatim to kaspad, e.g. `-- --utxoindex --nodnsseed`.
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    args: Vec<String>,
+}
+
+/// ADR-0122 Decision 6: what a `mining` / `doctor` / `work` command reads the miner from. Every
+/// flag is optional: each falls back to `~/.misaka/mining.toml`, then to the running node's own
+/// command line, then to what `kaspad` itself would default to.
+#[derive(Args, Debug, Clone, Default)]
+struct ProfileArgs {
+    /// The mining configuration (default ~/.misaka/mining.toml).
+    #[arg(long, value_name = "FILE")]
+    config: Option<std::path::PathBuf>,
+    /// The node's --appdir: which node, when several run here or it is not mining.toml's.
+    #[arg(long, value_name = "DIR")]
+    appdir: Option<String>,
+    /// The producer key file (default: mining.toml, else the running node's --palw-producer-key).
+    #[arg(long, value_name = "FILE")]
+    key_file: Option<String>,
+    /// The bond, <txid>:<index> (default: mining.toml, else the running node's --palw-producer-bond).
+    #[arg(long, value_name = "OUTPOINT")]
+    bond: Option<String>,
+    /// The class id, 128 hex (default: mining.toml, else the node's, else the network's base class).
+    #[arg(long, value_name = "CLASS_ID")]
+    class: Option<String>,
+    /// The prompt lane's outbox (the gateway's --outbox); naming it includes the prompt lane.
+    #[arg(long, value_name = "DIR")]
+    outbox: Option<String>,
+}
+
+impl ProfileArgs {
+    fn overrides(&self) -> operator::profile::Overrides {
+        operator::profile::Overrides {
+            config: self.config.clone(),
+            appdir: self.appdir.clone(),
+            key_file: self.key_file.clone(),
+            bond: self.bond.clone(),
+            class: self.class.clone(),
+            outbox: self.outbox.clone(),
+        }
+    }
+}
+
+/// ADR-0122 Decision 7: what `mining setup`, `verifier setup` and `init` take. Every flag is
+/// optional — what is not said is discovered on the chain, or asked.
+#[derive(Args, Debug, Clone, Default)]
+struct SetupCliArgs {
+    /// The configuration to write (default ~/.misaka/mining.toml).
+    #[arg(long, value_name = "FILE")]
+    config: Option<std::path::PathBuf>,
+    /// The key to mine with (default: mining.toml's, else ~/.misaka/miner.seed — made if missing).
+    #[arg(long, value_name = "FILE")]
+    key_file: Option<String>,
+    /// base, a model's name, or a class id (default: asked; without a terminal, the floor).
+    #[arg(long, value_name = "MODEL")]
+    model: Option<String>,
+    /// The node's --appdir (default: a running node's, else ~/.misaka/<network>/node).
+    #[arg(long, value_name = "DIR")]
+    appdir: Option<String>,
+    /// A bond to use, <txid>:<index> (default: this key's, found on the chain — else registered).
+    #[arg(long, value_name = "OUTPOINT")]
+    bond: Option<String>,
+    /// A peer for the node, host:port; repeatable (testnet-11: its public entry point).
+    #[arg(long = "peer", value_name = "HOST:PORT")]
+    peers: Vec<String>,
+    /// The class's artifact file; repeatable.
+    #[arg(long = "artifact", value_name = "FILE")]
+    artifacts: Vec<String>,
+    /// The panel's fee output: `auto` (default), or <txid>:<index>.
+    #[arg(long, value_name = "auto|OUTPOINT")]
+    fee_outpoint: Option<String>,
+    /// Explicitly request artifact verification (non-base artifacts are always verified before
+    /// setup writes a profile; this flag remains for compatibility and clearer operator intent).
+    #[arg(long)]
+    verify_artifact: bool,
+    /// The validator's stake in BILI (validator setup; default: the network's minimum bond).
+    #[arg(long, value_name = "BILI")]
+    amount: Option<String>,
+    /// Answer yes to every question: make the key, register the bond, declare, write the file.
+    #[arg(long)]
+    yes: bool,
+    /// Do not wait for the node to sync or for funds: say what is missing and exit.
+    #[arg(long)]
+    no_wait: bool,
+}
+
+/// `misaka validator setup` — parsed from the passthrough's own arguments, so the sidecar's
+/// subcommands keep working as they are.
+#[derive(clap::Parser, Debug)]
+#[command(
+    about = "Set this host up as a DNS-finality validator: key, node, funds, stake bond, then ~/.misaka/validator.toml. Running it again resumes."
+)]
+struct ValidatorSetupCli {
+    #[command(flatten)]
+    setup: SetupCliArgs,
+}
+
+impl SetupCliArgs {
+    fn into_setup(self, network: Option<String>, rpc: Option<String>) -> Result<operator::wizard::SetupArgs, CliError> {
+        let amount = self.amount.as_deref().map(parse_msk_to_sompi).transpose()?;
+        Ok(operator::wizard::SetupArgs {
+            network,
+            rpc,
+            config: self.config,
+            key_file: self.key_file,
+            model: self.model,
+            appdir: self.appdir,
+            bond: self.bond,
+            peers: self.peers,
+            artifacts: self.artifacts,
+            fee_outpoint: self.fee_outpoint,
+            verify_artifact: self.verify_artifact,
+            amount,
+            yes: self.yes,
+            no_wait: self.no_wait,
+        })
+    }
+}
+
+#[derive(Subcommand, Debug)]
+enum MiningCmd {
+    /// Set this host up to mine, step by step: node, model, key, funds, bond, artifact, seats, fee
+    /// output, then ~/.misaka/mining.toml. Running it again resumes where it stopped.
+    Setup(SetupCliArgs),
+    /// Is this host mining? The miner's state and the one line that says why, the bond, the
+    /// works and what they paid. Needs no setup on a node that is already running.
+    Status {
+        #[command(flatten)]
+        profile: ProfileArgs,
+        /// Redraw every N seconds.
+        #[arg(long, value_name = "SECS")]
+        watch: Option<u64>,
+    },
+    /// Start what ~/.misaka/mining.toml describes: preflight, kaspad, the readiness gates, and the
+    /// prompt lane's gateway and rail when it is on. Stays in the foreground unless --detach.
+    Start {
+        #[command(flatten)]
+        profile: ProfileArgs,
+        /// Run the supervisor in the background and return once it is mining.
+        #[arg(long)]
+        detach: bool,
+        /// Print the exact command lines it would run, and run nothing.
+        #[arg(long, conflicts_with_all = ["detach", "service"])]
+        print_command: bool,
+        /// Print a systemd unit (Linux) or launchd agent (macOS) that runs `misaka mining run`.
+        #[arg(long, conflicts_with = "detach")]
+        service: bool,
+    },
+    /// Stop mining — refused while this node still has claims to defend, unless --drain or --force.
+    Stop {
+        #[command(flatten)]
+        profile: ProfileArgs,
+        /// Stop drawing now, keep serving, and exit when the last claim is final or voided.
+        #[arg(long, conflicts_with = "force")]
+        drain: bool,
+        /// Stop now, whatever the claims in flight cost.
+        #[arg(long)]
+        force: bool,
+        /// Seconds kaspad gets to stop before it is killed (default: mining.toml's, else 240).
+        #[arg(long, value_name = "SECS")]
+        grace: Option<u64>,
+    },
+    /// The supervisor itself, in the foreground and without a terminal: what a service manager
+    /// runs (`misaka mining start --service` prints the unit).
+    Run {
+        #[command(flatten)]
+        profile: ProfileArgs,
+        /// Run the node as a panel only (what `misaka verifier start --detach` relaunches).
+        #[arg(long, hide = true)]
+        verifier: bool,
+    },
+}
+
+impl ProfileArgs {
+    /// The flags that name this profile again, for a supervisor started in the background or by a
+    /// service manager.
+    fn relaunch_args(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut push = |flag: &str, v: &Option<String>| {
+            if let Some(v) = v {
+                out.push(flag.to_string());
+                out.push(v.clone());
+            }
+        };
+        push("--config", &self.config.as_ref().map(|c| c.display().to_string()));
+        push("--appdir", &self.appdir);
+        push("--key-file", &self.key_file);
+        push("--bond", &self.bond);
+        push("--class", &self.class);
+        push("--outbox", &self.outbox);
+        out
+    }
+}
+
+#[derive(Args, Debug)]
+struct DoctorArgs {
+    /// Only these areas (default: all).
+    #[arg(value_enum)]
+    areas: Vec<operator::doctor::Area>,
+    /// Exit non-zero on a warning, too.
+    #[arg(long)]
+    strict: bool,
+    #[command(flatten)]
+    profile: ProfileArgs,
+}
+
+#[derive(Subcommand, Debug)]
+enum VerifierCmd {
+    /// Set this host up as a panel seat: the mining setup's key, bond and artifact steps, and the
+    /// classes the bond declares it can judge.
+    Setup(SetupCliArgs),
+    /// The claims this bond is seated on, and what it owes them.
+    Status {
+        #[command(flatten)]
+        profile: ProfileArgs,
+    },
+    /// Start mining.toml's node as a panel only: it judges, and draws nothing.
+    Start {
+        #[command(flatten)]
+        profile: ProfileArgs,
+        /// Run the supervisor in the background.
+        #[arg(long)]
+        detach: bool,
+        /// Print the exact command line, and run nothing.
+        #[arg(long, conflicts_with = "detach")]
+        print_command: bool,
+    },
+    /// Stop it (the same stop as `mining stop`: refused while this bond's own claims need it).
+    Stop {
+        #[command(flatten)]
+        profile: ProfileArgs,
+        #[arg(long)]
+        force: bool,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum ModelCmd {
+    /// Every class: name, status, share, budget, prompt lane, market.
+    List {
+        #[command(flatten)]
+        profile: ProfileArgs,
+    },
+    /// One model's life: registered, active, its lanes certified, live — with its artifact, the bond
+    /// it takes, its market, and the next command.
+    Status {
+        /// base, a model's name, or a class id (or 8+ hex of one).
+        model: String,
+        #[command(flatten)]
+        profile: ProfileArgs,
+    },
+    /// Add a model from this build's catalog: register its class with the chain's live terms, then
+    /// certify its lanes — drilling and filing a family only when no chain family covers it, every
+    /// chunk in order. Running it again resumes from the chain. No model: lists the catalog.
+    Add {
+        /// A catalog model id, or a unique part of one (e.g. graph-v5).
+        model: Option<String>,
+        /// The model's artifact file (a model that is not derived needs it to register).
+        #[arg(long, value_name = "FILE")]
+        artifact: Option<String>,
+        /// A model this build's catalog does not carry: an ADR-0108 class manifest (inline profile,
+        /// canonical job, artifact root). Verified at Full depth first, exactly as `misaka palw
+        /// extension submit` verifies it — no new build is needed to add a model.
+        #[arg(long, value_name = "FILE", conflicts_with = "model")]
+        manifest: Option<std::path::PathBuf>,
+        /// Also certify the free-prompt lane.
+        #[arg(long)]
+        prompt_lane: bool,
+        /// The slowest fleet seat's measured replay cost, for the seat-window bound.
+        #[arg(long, value_name = "MS")]
+        seat_ms_per_position: Option<u64>,
+        /// Answer yes to every question (registration, filings).
+        #[arg(long)]
+        yes: bool,
+        /// Do not wait for blocks: say what is pending and exit.
+        #[arg(long)]
+        no_wait: bool,
+        #[command(flatten)]
+        sponsor: palw_activation_pool::ListingSponsorArgs,
+        /// An IR artifact (PALWTIR1) is registered only with a runtime pack that verifies against it (`--pack`), unless `--skip-pack-verify`.
+        /// A catalog model has no pack: the gate does not apply to it.
+        #[command(flatten)]
+        pack_gate: pack_gate::PackGateFlags,
+        /// RFC-0009 A0: print what the registration costs, by payer (carrier fee from the wallet; burn and exposure from
+        /// the bond), read from the chain — then stop. Nothing is signed or sent.
+        #[arg(long)]
+        quote: bool,
+        /// RFC-0009 A0: relay the locally signed carrier through these nodes (host:port, comma-separated) instead of the
+        /// one --rpc names; no node of your own is needed. A state is believed when --relay-min of them report it.
+        #[arg(long, value_delimiter = ',', value_name = "HOST:PORT,...")]
+        relay: Vec<String>,
+        /// How many relay nodes must accept the carrier and agree on its fate (default: a majority).
+        #[arg(long, value_name = "N")]
+        relay_min: Option<usize>,
+        /// The most the wallet may pay for this registration, in sompi (default: exactly the quoted fee and filings).
+        #[arg(long, value_name = "SOMPI")]
+        max_fee_sompi: Option<u64>,
+        /// RFC-0009 A0, detached signing, step 1: build the registration here and write it UNSIGNED to FILE, then stop. No
+        /// key is read and nothing is funded or sent; sign it where the key is (`misaka model sign`), then `misaka model submit`.
+        /// Needs --payer-address and at least two nodes (--rpc plus --quote-rpc) that agree on the terms.
+        #[arg(long, value_name = "FILE")]
+        export_bundle: Option<std::path::PathBuf>,
+        /// The bond's public key, hex. Checked against the nodes' report; the nodes' report is used (and labelled
+        /// UNVERIFIED_REMOTE_STATE) when absent.
+        #[arg(long, value_name = "HEX")]
+        owner_pubkey: Option<String>,
+        /// The address that pays the carrier's fee. It may belong to another key than the bond's.
+        #[arg(long, value_name = "ADDRESS")]
+        payer_address: Option<String>,
+        /// More nodes to quote from, beside --rpc (host:port, comma-separated): the terms must agree on all of them.
+        #[arg(long, value_delimiter = ',', value_name = "HOST:PORT,...")]
+        quote_rpc: Vec<String>,
+        /// Quote from a single node. Only for a node you run yourself: nothing cross-checks it.
+        #[arg(long)]
+        allow_single_rpc: bool,
+        /// A block hash you trust (a signed checkpoint, or your own node's): the owner bond and its key are then PROVEN against the state
+        /// that block commits and the proof travels in the bundle, so an offline signer with the same --pin checks it too.
+        #[arg(long, value_name = "BLOCK_HASH")]
+        pin: Option<String>,
+        /// Sign below VERIFIED_REMOTE: name the class you accept (HEADER_VERIFIED_FORK_CHOICE_UNVERIFIED or UNVERIFIED_REMOTE). A node on
+        /// this machine (loopback --rpc) is taken as your own full node (FULL_NODE) and needs no opt-in.
+        #[arg(long, value_name = "LABEL")]
+        accept_unverified_state: Option<String>,
+        #[command(flatten)]
+        profile: ProfileArgs,
+    },
+    /// RFC-0009 A0, detached signing, step 2: re-check an exported registration bundle against YOUR expectations and this
+    /// build's own network parameters, then sign it — the bond key signs the registration, the payer key signs the carrier's
+    /// funding input (one key or two). Reads no node unless --rpc is given (for the quote's expiry). The seed is read from a
+    /// file or stdin only.
+    Sign {
+        /// The bundle `model add --export-bundle` wrote (or, with --carrier-only, the owner-signed one).
+        bundle: std::path::PathBuf,
+        /// The bond key's seed file (also the payer's, unless --payer-key-file).
+        #[arg(long, value_name = "FILE")]
+        key_file: Option<String>,
+        /// Read the seed from stdin.
+        #[arg(long)]
+        key_stdin: bool,
+        /// The fee payer's seed file, when the payer is not the bond key.
+        #[arg(long, value_name = "FILE")]
+        payer_key_file: Option<String>,
+        /// Sign only the registration object (the bond key) and write the owner-signed bundle.
+        #[arg(long, conflicts_with = "carrier_only")]
+        owner_only: bool,
+        /// Sign only the carrier's funding input (the payer key) of an owner-signed bundle.
+        #[arg(long)]
+        carrier_only: bool,
+        /// The class you mean to register (128 hex). Required with --yes; otherwise confirmed at the prompt.
+        #[arg(long, value_name = "CLASS_ID")]
+        expect_class: Option<String>,
+        /// The artifact root you mean to register (128 hex).
+        #[arg(long, value_name = "ROOT")]
+        expect_root: Option<String>,
+        /// The owner bond, <txid>:<index>.
+        #[arg(long, value_name = "OUTPOINT")]
+        expect_owner: Option<String>,
+        /// The most the payer may pay, in sompi (default: exactly the bundle's quoted total).
+        #[arg(long, value_name = "SOMPI")]
+        max_fee_sompi: Option<u64>,
+        /// A block hash you trust: the bundle must carry a proof that the owner bond and its key are in the state that block commits, and
+        /// the signer checks it offline (without --pin the key is shown as UNVERIFIED_REMOTE_STATE).
+        #[arg(long, value_name = "BLOCK_HASH")]
+        pin: Option<String>,
+        /// The --pin came from your OWN full node (then a pinned proof is VERIFIED_REMOTE; a pin from elsewhere is
+        /// HEADER_VERIFIED_FORK_CHOICE_UNVERIFIED).
+        #[arg(long, requires = "pin")]
+        pin_from_own_node: bool,
+        /// Sign below VERIFIED_REMOTE: name the class you accept (HEADER_VERIFIED_FORK_CHOICE_UNVERIFIED or UNVERIFIED_REMOTE).
+        #[arg(long, value_name = "LABEL")]
+        accept_unverified_state: Option<String>,
+        /// Where to write the result (default: next to the bundle).
+        #[arg(long, value_name = "FILE")]
+        out: Option<std::path::PathBuf>,
+        /// Answer yes to the signing question (needs --expect-class, --expect-root and --expect-owner).
+        #[arg(long)]
+        yes: bool,
+    },
+    /// RFC-0009 A0, detached signing, step 3: verify a signed registration from its bytes alone and relay it through several
+    /// nodes. Sending the same bytes again is idempotent; a second, different carrier for the same class is refused. An ACK is
+    /// not inclusion, and an accepted registration is not Active.
+    Submit {
+        /// The signed file `model sign` wrote.
+        signed: std::path::PathBuf,
+        /// Relay nodes (host:port, comma-separated). A relay can only forward the bytes: it cannot alter them.
+        #[arg(long, value_delimiter = ',', value_name = "HOST:PORT,...", required = true)]
+        relay: Vec<String>,
+        /// How many relay nodes must accept the carrier and agree on its fate (default: a majority).
+        #[arg(long, value_name = "N")]
+        relay_min: Option<usize>,
+        #[arg(long, value_name = "CLASS_ID")]
+        expect_class: Option<String>,
+        #[arg(long, value_name = "ROOT")]
+        expect_root: Option<String>,
+        #[arg(long, value_name = "OUTPOINT")]
+        expect_owner: Option<String>,
+        /// The most the carrier may cost, in sompi (default: the fee the file declares).
+        #[arg(long, value_name = "SOMPI")]
+        max_fee_sompi: Option<u64>,
+        /// Send even though ANOTHER carrier for this class was sent from here before (a second fee for a registration the
+        /// chain refuses as a duplicate if the first folds).
+        #[arg(long)]
+        allow_duplicate: bool,
+        /// Do not wait for the registry: say what is pending and exit.
+        #[arg(long)]
+        no_wait: bool,
+        /// A block hash you trust: once the relays report the registration, also prove it against the state that block commits (a block
+        /// before the registration proves absence only).
+        #[arg(long, value_name = "BLOCK_HASH")]
+        pin: Option<String>,
+        /// Answer yes to the relay question.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// RFC-0009 stage D: is this registration in the state a block YOU pinned commits? Asks --rpc for the class table's proof and checks it
+    /// against the pin; the node's word is not believed. Proven present, proven absent as of the pin, or proven misattributed.
+    Verify {
+        /// A signed file from `model sign` (or name the registration with --class, --root and --owner).
+        signed: Option<std::path::PathBuf>,
+        #[arg(long, value_name = "CLASS_ID")]
+        class: Option<String>,
+        #[arg(long, value_name = "ROOT")]
+        root: Option<String>,
+        #[arg(long, value_name = "OUTPOINT")]
+        owner: Option<String>,
+        /// The block hash you trust.
+        #[arg(long, value_name = "BLOCK_HASH")]
+        pin: String,
+    },
+    /// Local inspection of an artifact: class id, roots, graph, ctx, CanonicalWork, fit walls. No submit.
+    Inspect {
+        artifact: std::path::PathBuf,
+        #[command(flatten)]
+        profile: ProfileArgs,
+    },
+    /// Can this be registered, and what is missing? A model (a Hugging Face directory, a config.json, a .gguf): judged
+    /// from its HEADERS before any weights are downloaded — convert, register and mine, each ok/blocked/unknown with a
+    /// code, the numbers and what exists instead (RFC-0002 Part II §II.2; needs no node). An artifact: would the live
+    /// chain's processor admit it (same reason codes).
+    Preflight {
+        /// A model, or a registration artifact.
+        artifact: std::path::PathBuf,
+        #[command(flatten)]
+        model: model_preflight::ModelPreflightArgs,
+        #[command(flatten)]
+        profile: ProfileArgs,
+    },
+    /// constructed / submitted / accepted / included / folded for a class id, object, or tx.
+    Registration {
+        id: String,
+        #[command(flatten)]
+        profile: ProfileArgs,
+    },
+    /// Possession proofs for a class: expiry, collateral, ready/non-ready reason.
+    Readiness {
+        class_id: String,
+        #[command(flatten)]
+        profile: ProfileArgs,
+    },
+    /// File a FamilyCertified candidate from this build's e2e drill. Not activation, not a fence.
+    Certify {
+        class_id: String,
+        #[arg(long)]
+        yes: bool,
+        #[command(flatten)]
+        profile: ProfileArgs,
+    },
+    /// A model's market: open it (seed its line up to the least seed).
+    #[command(subcommand)]
+    Market(MarketCmd),
+    /// G14 onboarding P0: the signed registration envelope (tag 108; export unsigned, sign where the key is, file it) and the chain's
+    /// conformance record (op 231), re-verified from public material.
+    #[command(subcommand)]
+    Onboard(OnboardCmd),
+    /// Inspect an immutable paid-source contract against caller-pinned route roots.
+    #[command(subcommand)]
+    Source(SourceCmd),
+}
+
+#[derive(Subcommand, Debug)]
+enum SourceCmd {
+    /// Read the complete authenticated source and fee inventory, including old attempts.
+    Inspect {
+        #[arg(long, value_name = "CONTEXT_ID")]
+        context: String,
+        /// Ledger root from the caller's authenticated chain view.
+        #[arg(long, value_name = "ROOT")]
+        ledger_root: String,
+        /// Auxiliary root from the same authenticated chain view.
+        #[arg(long, value_name = "ROOT")]
+        aux_root: String,
+    },
+    /// Write the complete op-211 kernel route snapshot `(header, rows)` that offline `palw-class claim-v2 --snapshot`
+    /// consumes, after reconstructing it against the caller's pinned roots. The file is not chain authority by itself.
+    Snapshot {
+        /// Ledger root from the caller's authenticated chain view.
+        #[arg(long, value_name = "ROOT")]
+        ledger_root: String,
+        /// Auxiliary root from the same authenticated chain view.
+        #[arg(long, value_name = "ROOT")]
+        aux_root: String,
+        /// New file (refused if it exists).
+        #[arg(long, value_name = "FILE")]
+        out: std::path::PathBuf,
+    },
+    /// Write the canonical PALW state carriage the pinned block's header commits (op 243; the selected parent's post-state) — the
+    /// `--carriage` file offline `palw-class panel-lifetime-v2` restores — and print its state root for `--state-root`. The
+    /// assembled carriage must restore to exactly the pinned header's committed root; any mismatch writes nothing.
+    Carriage {
+        /// The pinned block, from the caller's authenticated selected chain.
+        #[arg(long, value_name = "BLOCK_HASH")]
+        block: String,
+        /// Optional ADR-0043 state root the caller already holds; refused unless the carriage restores to it.
+        #[arg(long, value_name = "ROOT")]
+        state_root: Option<String>,
+        /// New file (refused if it exists).
+        #[arg(long, value_name = "FILE")]
+        out: std::path::PathBuf,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum OnboardCmd {
+    /// Prepare a signed complete-check bootstrap object from the retained registration and exact public artifact.
+    BootstrapPrepare {
+        #[arg(value_enum)]
+        stage: operator::model_bootstrap::Stage,
+        /// Locally retained ClassRegisteredTirV1 object (Borsh); this file does not prove prior inclusion.
+        #[arg(long, value_name = "FILE")]
+        registration: std::path::PathBuf,
+        #[arg(long, value_name = "FILE")]
+        artifact: std::path::PathBuf,
+        #[arg(long)]
+        max_positions: u32,
+        #[arg(long)]
+        bond: String,
+        #[command(flatten)]
+        key: KeyArgs,
+        #[arg(long, value_name = "FILE")]
+        out: std::path::PathBuf,
+        /// Maximum existing binding collateral reservation, fixed before preparation.
+        #[arg(long)]
+        maximum_binding_reservation_sompi: u64,
+        /// Maximum existing complete-check bond fee, fixed before preparation.
+        #[arg(long)]
+        maximum_check_fee_sompi: u64,
+        /// Required except artifact-bind: root from the caller's trusted chain view.
+        #[arg(long, value_name = "HASH")]
+        ledger_root: Option<String>,
+        #[arg(long, value_name = "HASH")]
+        aux_root: Option<String>,
+        #[arg(long, value_name = "DAA")]
+        tip_daa: Option<u64>,
+        /// Commit stage only: caller-supplied ConformanceCommitmentV1 including provenance/scope/resource roots.
+        #[arg(long, value_name = "FILE")]
+        commitment_borsh: Option<std::path::PathBuf>,
+    },
+    /// Exhaustively execute a rooted complete-check attempt and prepare its signed tag-109 post locally.
+    CompletePost {
+        #[arg(long)]
+        class: String,
+        /// Ledger root from the caller's trusted chain view, independently of this node's response.
+        #[arg(long, value_name = "HASH")]
+        ledger_root: String,
+        /// Auxiliary root from the same trusted chain view.
+        #[arg(long, value_name = "HASH")]
+        aux_root: String,
+        /// Current DAA from the same trusted chain view; it authenticates the post deadline.
+        #[arg(long, value_name = "DAA")]
+        tip_daa: u64,
+        #[arg(long, value_name = "FILE")]
+        artifact: std::path::PathBuf,
+        #[arg(long)]
+        bond: String,
+        #[command(flatten)]
+        key: KeyArgs,
+        #[arg(long, value_name = "FILE")]
+        out: std::path::PathBuf,
+    },
+    /// Step 1, no key and no node: wrap a registration object (Borsh) in an UNSIGNED tag-108 request for BOND, valid in
+    /// [--valid-from, --valid-until] while the chain's fork digest is this build's at --valid-from.
+    EnvelopeExport {
+        /// The registration object (Borsh), as `misaka palw tir-registration` writes it.
+        #[arg(long, value_name = "FILE")]
+        registration: std::path::PathBuf,
+        /// The registrant bond, <txid>:<index>.
+        #[arg(long)]
+        bond: String,
+        /// The first DAA at which the registration may be accepted; the fork digest is this build's at it (G-RULESET).
+        #[arg(long, value_name = "DAA")]
+        valid_from: u64,
+        /// The last DAA at which the registration may be accepted (G-EXPIRY).
+        #[arg(long, value_name = "DAA")]
+        valid_until: u64,
+        #[arg(long, value_name = "FILE")]
+        out: std::path::PathBuf,
+    },
+    /// Step 2, the key and no node: re-derive the request's message, refuse it unless it is for this build's network and fork
+    /// digest, sign it and write the envelope object for `misaka palw submit-object`.
+    EnvelopeSign {
+        #[arg(long, value_name = "FILE")]
+        request: std::path::PathBuf,
+        #[command(flatten)]
+        key: KeyArgs,
+        /// Refuse unless the request names this signer bond.
+        #[arg(long)]
+        expect_bond: Option<String>,
+        #[arg(long, value_name = "FILE")]
+        out: std::path::PathBuf,
+    },
+    /// A class's conformance record as the chain states it (op 231).
+    Status {
+        #[arg(long)]
+        class: String,
+    },
+    /// Rebuild the conformance verdict from public reads (ops 231, 212) and, with --artifact, re-read every selected leaf.
+    Verify {
+        #[arg(long)]
+        class: String,
+        /// The class's artifact (PALWTIR1), from its public source; its inventory must root to the registered artifact root.
+        #[arg(long, value_name = "FILE")]
+        artifact: Option<std::path::PathBuf>,
+        /// Required for complete checks: the ledger root from the caller's trusted chain view.
+        #[arg(long, value_name = "HASH")]
+        ledger_root: Option<String>,
+        /// Required for complete checks: the auxiliary root from the same trusted chain view.
+        #[arg(long, value_name = "HASH")]
+        aux_root: Option<String>,
+        /// Required for complete checks: the current DAA from the same trusted chain view.
+        #[arg(long, value_name = "DAA")]
+        tip_daa: Option<u64>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum MarketCmd {
+    /// Open a model's market: seed its line — the class's founding line unless --line — up to the
+    /// least seed, in one payment or instalments, each checked before it is signed.
+    Open {
+        /// base, a model's name, or a class id (or 8+ hex of one).
+        model: String,
+        /// Another line of the class (128 hex) instead of its founding line.
+        #[arg(long)]
+        line: Option<String>,
+        /// How much to pay now, in BILI (default: what is still owed).
+        #[arg(long, value_name = "BILI")]
+        seed: Option<String>,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        no_wait: bool,
+        #[command(flatten)]
+        profile: ProfileArgs,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum PositionCmd {
+    /// What this key holds, and what a sell would pay now.
+    List {
+        /// Another holder (its 128-hex holder id, the unkeyed BLAKE2b-512 of its ML-DSA-87 public
+        /// key — not its address payload) instead of the key's own.
+        #[arg(long)]
+        holder: Option<String>,
+        #[command(flatten)]
+        profile: ProfileArgs,
+    },
+    /// What a buy (--msk) or a sell (--positions) would do now.
+    Quote {
+        /// The line (a class id names its founding line).
+        line: String,
+        #[arg(long, conflicts_with = "positions")]
+        msk: Option<String>,
+        #[arg(long)]
+        positions: Option<u64>,
+        #[command(flatten)]
+        profile: ProfileArgs,
+    },
+    /// Buy positions: the floor is the quote less --slippage (default 1 %). Dry run unless --yes.
+    Buy {
+        line: String,
+        #[arg(long)]
+        msk: String,
+        #[arg(long, default_value = "1%")]
+        slippage: String,
+        #[arg(long)]
+        yes: bool,
+        #[command(flatten)]
+        profile: ProfileArgs,
+    },
+    /// Sell positions: the floor is the quote less --slippage (default 1 %). Dry run unless --yes.
+    /// Refused on a chain without the 2026-09-23 audit fence (testnet-11), where the proceeds
+    /// would be paid to an output no key can spend, unless --accept-burned-proceeds.
+    Sell {
+        line: String,
+        #[arg(long)]
+        positions: u64,
+        #[arg(long, default_value = "1%")]
+        slippage: String,
+        #[arg(long)]
+        yes: bool,
+        /// Sell anyway on a chain that pays the proceeds to the holder id, which no key can spend:
+        /// the proceeds are burned (the 2026-09-23 Position route matrix, P-B4).
+        #[arg(long)]
+        accept_burned_proceeds: bool,
+        #[command(flatten)]
+        profile: ProfileArgs,
+    },
+}
+
+#[derive(Args, Debug)]
+struct LogsArgs {
+    /// Only these components (default: all of node, gateway, rail).
+    #[arg(value_enum)]
+    components: Vec<operator::logs::Component>,
+    /// Only the lines about this work: 8+ hex of its claim id, or `job:<hex>`.
+    #[arg(long, value_name = "ID")]
+    work: Option<String>,
+    /// Only the `event` lines (one per stage).
+    #[arg(long)]
+    events: bool,
+    /// Keep printing new lines as they are written.
+    #[arg(short = 'f', long)]
+    follow: bool,
+    /// How many of the last lines to show without --work (default 60).
+    #[arg(short = 'n', long, default_value_t = 60)]
+    lines: usize,
+    #[command(flatten)]
+    profile: ProfileArgs,
+}
+
+#[derive(Subcommand, Debug)]
+enum WorkCmd {
+    /// Every work this host made: block-lane claims from the node's log, prompt-lane jobs from the outbox.
+    List {
+        #[command(flatten)]
+        profile: ProfileArgs,
+    },
+    /// One work's path from the request (or the won draw) to the reward. ID: a claim-id prefix
+    /// (4+ hex), `job:<hex>`, or any full 128-hex claim id.
+    Show {
+        id: String,
+        #[command(flatten)]
+        profile: ProfileArgs,
+    },
+    /// Why a work stands where it stands, and the next step.
+    Why {
+        id: String,
+        #[command(flatten)]
+        profile: ProfileArgs,
+    },
+}
+
+/// Captures all remaining args verbatim to forward to an underlying binary.
+#[derive(Args, Debug)]
+struct PassThrough {
+    /// Arguments forwarded verbatim to the underlying binary (e.g. `keygen --out k`).
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    args: Vec<String>,
+}
+
+#[derive(Subcommand, Debug)]
+enum ConfigCmd {
+    /// Write a `~/.misaka/config.toml` scaffold for the selected `--network-id`,
+    /// with the canonical per-network ports filled in.
+    Init {
+        /// Overwrite an existing config file instead of refusing.
+        #[arg(long)]
+        force: bool,
+    },
+    /// Print the effective config (CLI > env > file > default) + the config-file path.
+    Show,
+}
+
+/// PREA signer subcommands. `sign-root` uses the ML-DSA-87 Operational Root key;
+/// `sign-session` uses a restricted secp256k1 session key. The secret is never a CLI value.
+#[cfg(feature = "evm-send")]
+#[derive(Subcommand, Debug)]
+enum PreaCmd {
+    /// Sign an executeRoot op (ML-DSA-87, F003 v0x02) → F003 input + calldata.
+    SignRoot {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// PQ account (smart-account) address (0x…20 bytes).
+        #[arg(long)]
+        account: String,
+        /// Account version (immutable, bound into the op).
+        #[arg(long, default_value_t = 1)]
+        version: u64,
+        /// Root nonce (must equal the account's current rootNonce).
+        #[arg(long)]
+        nonce: u64,
+        /// validAfter block (inclusive).
+        #[arg(long, default_value_t = 0)]
+        valid_after: u64,
+        /// validUntil block (inclusive).
+        #[arg(long)]
+        valid_until: u64,
+        /// Max relayer fee in wei the op authorizes (0 = none / self-submit).
+        #[arg(long, default_value = "0")]
+        max_relayer_fee: String,
+        /// Target address the account will CALL.
+        #[arg(long)]
+        to: String,
+        /// Native value forwarded to the target, in wei.
+        #[arg(long, default_value = "0")]
+        value: String,
+        /// 0x-hex calldata for the target call.
+        #[arg(long, default_value = "0x")]
+        calldata: String,
+    },
+    /// Sign an executeSession op (secp256k1) → r‖s‖v + calldata.
+    SignSession {
+        #[command(flatten)]
+        key: EvmKeyArgs,
+        /// PQ account (smart-account) address (0x…20 bytes).
+        #[arg(long)]
+        account: String,
+        /// Account version (immutable, bound into the op).
+        #[arg(long, default_value_t = 1)]
+        version: u64,
+        /// Session call index (must equal the account's current sessionNonce for the key).
+        #[arg(long)]
+        call_index: u64,
+        /// Max relayer fee in wei the op authorizes (0 = none / self-submit).
+        #[arg(long, default_value = "0")]
+        max_relayer_fee: String,
+        /// Target address the session will CALL.
+        #[arg(long)]
+        to: String,
+        /// Native value forwarded to the target, in wei.
+        #[arg(long, default_value = "0")]
+        value: String,
+        /// 0x-hex calldata for the target call.
+        #[arg(long, default_value = "0x")]
+        calldata: String,
+    },
+}
+
+/// Key-source flags shared by keyed commands. The secret is loaded only from a
+/// permission-checked file or stdin — NEVER as a command-line value.
+#[derive(Args, Debug, Clone)]
+struct KeyArgs {
+    /// Path to a hex 32-byte ML-DSA-87 seed file (perms-checked).
+    #[arg(long, env = "MISAKA_KEY_FILE")]
+    key_file: Option<String>,
+    /// Read the hex seed from stdin instead of a file.
+    #[arg(long)]
+    key_stdin: bool,
+}
+impl KeyArgs {
+    fn source(&self) -> keys::KeySource {
+        keys::KeySource { key_file: self.key_file.clone(), key_stdin: self.key_stdin }
+    }
+    /// `None` when no key was named — for commands that can read without one.
+    fn source_opt(&self) -> Option<keys::KeySource> {
+        (self.key_file.is_some() || self.key_stdin).then(|| self.source())
+    }
+}
+
+#[derive(Subcommand, Debug)]
+enum WalletCmd {
+    /// UTXO-set operations (list / consolidate).
+    #[command(subcommand)]
+    Utxo(UtxoCmd),
+    /// Send BILI to a recipient (dry-run unless --yes).
+    Send {
+        /// Recipient address (must match --network).
+        #[arg(long)]
+        to: String,
+        /// Amount in BILI (decimal, e.g. 10.5).
+        #[arg(long)]
+        amount: String,
+        /// Actually broadcast (otherwise a dry-run preview).
+        #[arg(long)]
+        yes: bool,
+        /// Select ONLY settled coinbase UTXOs — never a carrier change or fee float. For a
+        /// producer/panel wallet whose reservations another node holds (the RPC this CLI asks
+        /// only knows its OWN node's reserved outpoints), largest-first selection reaches for a
+        /// foreign panel's float; this keeps the spend to mining rewards alone.
+        #[arg(long)]
+        coinbase_only: bool,
+        #[command(flatten)]
+        key: KeyArgs,
+    },
+}
+
+/// `palw extension verify --depth` (ADR-0108 Decision 3).
+#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
+enum ExtensionDepthArg {
+    /// Canonical form, bounds, the id, the kind's identity recomputed from what is inline.
+    Structural,
+    /// The declared vectors re-run with this build.
+    Vectors,
+    /// The chain's own computation over the bytes this machine holds.
+    Full,
+}
+
+impl ExtensionDepthArg {
+    fn depth(self) -> misaka_palw_extension::PalwExtensionDepthV1 {
+        match self {
+            Self::Structural => misaka_palw_extension::PalwExtensionDepthV1::Structural,
+            Self::Vectors => misaka_palw_extension::PalwExtensionDepthV1::Vectors,
+            Self::Full => misaka_palw_extension::PalwExtensionDepthV1::Full,
+        }
+    }
+}
+
+/// **ADR-0108: an extension is a manifest the verifier recomputes.** One manifest in; one of
+/// three tiers out — expressible now, a node extension, or a ruleset change — or refused by the
+/// field's name. A receipt is evidence of one reproduction and never a vote.
+#[derive(Subcommand, Debug)]
+enum ExtensionCmd {
+    /// What it is, its id, its tier by structure alone (offline, at the genesis shape).
+    Inspect {
+        manifest: std::path::PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Recompute the manifest at a depth; write a receipt with --receipt-out (signed with --key-file).
+    Verify {
+        manifest: std::path::PathBuf,
+        #[arg(long, value_enum, default_value_t = ExtensionDepthArg::Vectors)]
+        depth: ExtensionDepthArg,
+        /// Write a `misaka-palw/extension-receipt/v1` here — canonical JSON, signed if a key is given.
+        #[arg(long)]
+        receipt_out: Option<std::path::PathBuf>,
+        #[command(flatten)]
+        key: KeyArgs,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Verify at Full, plus the chain's shape at the node's DAA: the object, its cost, and the
+    /// refusal it would meet — before any fee. Registration terms are the genesis terms (§8).
+    Preflight {
+        manifest: std::path::PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Build the EXISTING object and file it (dry-run unless --yes). A class becomes a
+    /// `ClassRegistered` signed by this key, which must be the bond's (`--bond txid:index`); a
+    /// certification files its object; a transformer and a ruleset candidate have nothing to file.
+    Submit {
+        manifest: std::path::PathBuf,
+        #[command(flatten)]
+        key: KeyArgs,
+        /// The registrant's producer bond (`txid:index`) — required for a class.
+        #[arg(long)]
+        bond: Option<String>,
+        /// Actually broadcast (otherwise a dry-run preview).
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        json: bool,
+        /// A class registration's sponsor (the Activation Pool's P4).
+        #[command(flatten)]
+        sponsor: palw_activation_pool::ListingSponsorArgs,
+    },
+    /// One receipt: its canonical form, its id, its signature, and the ruleset it was made on
+    /// against this build's (SA-3). With --manifest, it must be about that manifest.
+    ReceiptVerify {
+        receipt: std::path::PathBuf,
+        #[arg(long)]
+        manifest: Option<std::path::PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum PalwPanelCmd {
+    /// Declare this bond for a class. The artifact path is what `verifier start` must load.
+    Join {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// Bond outpoint `<txid>:<index>`. Optional when this key holds exactly one.
+        #[arg(long)]
+        bond: Option<String>,
+        /// Class id (128-hex) or `QWEN36`.
+        #[arg(long)]
+        class: String,
+        /// Converted artifact this node will serve. Join does not load it; `verifier start` does.
+        #[arg(long)]
+        artifact: std::path::PathBuf,
+        /// Submit the capability declaration.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Withdraw this bond from a class (replaces the declared set without it).
+    Leave {
+        #[command(flatten)]
+        key: KeyArgs,
+        #[arg(long)]
+        bond: Option<String>,
+        #[arg(long)]
+        class: String,
+        #[arg(long)]
+        yes: bool,
+    },
+    /// This node's local panel state: artifact, working set, replay, bond, proof, hold reason.
+    Status {
+        #[arg(long)]
+        class: Option<String>,
+    },
+    /// Chain facts only: bonded seats, ready seats, selected, receipts. No artifact-loaded.
+    List {
+        #[arg(long)]
+        class: Option<String>,
+    },
+    /// Per-claim panel assignment: full seat, partial segments, receipts, coverage, deadline.
+    Assignments {
+        #[arg(long)]
+        claim: Option<String>,
+    },
+    /// Show whether a possession proof is due / accepted. The running panel submits it.
+    #[command(subcommand)]
+    Readiness(PalwPanelReadinessCmd),
+}
+
+#[derive(Subcommand, Debug)]
+enum PalwPanelReadinessCmd {
+    Prove {
+        #[arg(long)]
+        class: String,
+        #[arg(long)]
+        bond: String,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum PalwCmd {
+    /// ADR-0108: verify, preflight, submit and receipt an extension manifest.
+    #[command(subcommand)]
+    Extension(ExtensionCmd),
+    /// ADR-0125: the execution lane as the node holds it — the stage table, the round's permits,
+    /// the span's schedule and accepted permits, and the finals toward the schedule two spans on.
+    RoundLane {
+        /// Only the permits of this bond (`txid:index`) in the human view.
+        #[arg(long)]
+        bond: Option<String>,
+    },
+    /// ADR-0127: whether what the chain accepted at a DAA score is settled, and its settlement depth
+    /// — counted in settled PALW anchors (blocks whose PALW claim reached Final), never in blocks.
+    /// Execution and heartbeat blocks add no anchor, however many there are.
+    /// ADR-0131: what each class is paid per unit of the compute it ran — today's leaf basis and
+    /// the economic-compute bases side by side, `F` (per Final compute), `A` (per attempted compute,
+    /// draws and voided claims included), the panel's rate per verification, and the gap between the
+    /// model classes. Read from the node's state (`getPalwClassEconomics`); a shadow, not a rule.
+    Economics {},
+    /// ADR-0135: the permissionless model registry — each class's lifecycle state, the profile
+    /// derived from its graph, the seats ready for it and every seat's possession proof. Read from
+    /// the node's state (`getPalwModelRegistry`); dormant until the registry fence is scheduled.
+    Registry {},
+    /// Panel participation and observability: join/leave, local status, chain seats, assignments.
+    /// Seat counts stay distinct — bonded / ready / selected / valid receipts.
+    #[command(subcommand)]
+    Panel(PalwPanelCmd),
+    Settlement {
+        /// The DAA score of the block that accepted the transaction (an output's block DAA score, as
+        /// `misaka wallet utxo list` prints it).
+        #[arg(long, value_name = "DAA")]
+        daa: u64,
+        /// Exit 0 only once settled at least this many anchors deep, and 7 (pending) until then —
+        /// for scripts and exchanges that wait on a payment. The depth counts settled PALW anchors,
+        /// not blocks; larger payments should wait for more anchors.
+        #[arg(long, value_name = "N")]
+        min_depth: Option<u64>,
+    },
+    /// **ADR-0152: where a vested reward stands** (testnet-12). A Final's reward is named in a
+    /// vesting row, matures on the DAA clock and the second clock's licences, latches, waits its
+    /// turn, moves into the payout queue and is minted by the next coinbase — or burns if convicted
+    /// first. Name a bond (its rows as producer or seat, its reporter rewards, and whether B-3 holds
+    /// its collateral), a payout address, or a claim; none prints the chain's totals and the head of
+    /// the queue. Read-only (`getPalwRewardVesting`, op 241: a node built before it drops the connection).
+    #[command(group(clap::ArgGroup::new("vesting_payee").multiple(false).args(["bond", "address", "claim"])))]
+    Vesting {
+        /// The bond, `<txid>:<index>`.
+        #[arg(long, value_name = "TXID:INDEX")]
+        bond: Option<String>,
+        /// A payout address: every row leg and reporter reward paid there.
+        #[arg(long, value_name = "ADDRESS")]
+        address: Option<String>,
+        /// A 128-hex claim id.
+        #[arg(long, value_name = "CLAIM_ID")]
+        claim: Option<String>,
+        /// At most this many rows (0: the node's cap, 500).
+        #[arg(long, default_value_t = 0)]
+        limit: u32,
+        /// Resume after a previous answer's cursor (`<expiry_daa>:<claim_id>`).
+        #[arg(long, value_name = "CURSOR")]
+        after: Option<String>,
+        /// Resume the additional executor funds using `execNextAfter`.
+        #[arg(long, value_name = "CURSOR")]
+        exec_after: Option<String>,
+        /// JSON output (`--output json` does the same).
+        #[arg(long)]
+        json: bool,
+    },
+    /// **ADR-0160: the capacity shadow** — what the capacity formulas would reserve, weigh and allow
+    /// on this chain per ramp step, next to today's values (fork weight under J-1, a 13k bond's
+    /// claims, seat capacity, licence queue, attribution). Node-only, no rule reads it. Read-only
+    /// (`getPalwCapacityShadow`, op 201: a node built before it drops the connection).
+    CapacityShadow(palw_capacity_shadow::CapacityShadowArgs),
+    /// **RFC-0010: the permissionless Panel's observation** — a V3-rule claim's seal, snapshot, certified-beacon state,
+    /// assignment, retries and terminal reason, and the engine's overview. Read-only (`getPalwPanelV3Status`, op 220: a node
+    /// built before it drops the connection). On today's chain no beacon source is approved: `BEACON_UNAVAILABLE`.
+    PanelV3(palw_panel_v3::PanelV3Args),
+    /// **RFC-0008 PAV3: a prospective native material session** (`MonetaryMaterialEnrolledV1` with `native_session`) —
+    /// draft it from a JSON spec, sign it as the sponsor and each provider (offline), seal the borsh object. Nothing is
+    /// submitted: file it with `misaka palw submit-object --object <out> --yes`.
+    #[command(subcommand)]
+    MaterialSession(palw_material_session::MaterialSessionCmd),
+    /// Submit a free-prompt commitment built by `misaka-palw-fp-rail` (dry-run unless --yes).
+    FpSubmit {
+        /// The rail's `*.commitment-tx.borsh`.
+        #[arg(long)]
+        tx: std::path::PathBuf,
+        /// Actually broadcast (otherwise a dry-run preview).
+        #[arg(long)]
+        yes: bool,
+        /// Also write the claim's data-availability material (`<claim-id>.material`, the FPM1
+        /// job+prompt payload) into this directory. Point it at a producer node's
+        /// `palw-retention/` and that node's re-broadcast loop serves the panel; without the
+        /// material no seat can replay the job, and an Unavailable quorum DEFAULTS the executor.
+        #[arg(long)]
+        material_out: Option<std::path::PathBuf>,
+        /// The executor's CAPTURE for this claim — the family material the worker retained
+        /// (`material.bin` under its `--trace-out`). With it, `--material-out` writes an `FPC1`
+        /// payload (job + prompt + capture) instead of the question-only `FPM1`, and a seat can
+        /// verify the claim from the bytes instead of re-running it, and a court can try it
+        /// (ADR-0073 Decision 1a). Requires `--material-out`.
+        #[arg(long, requires = "material_out")]
+        capture: Option<std::path::PathBuf>,
+        /// ADR-0078 Decision 6: put this claim's canonical DSL under the data-availability
+        /// obligation — the gateway's `<job>.dsl-payload.fpd1`, staged as `<claim-id>.dsl` beside
+        /// the material so the node serves it on request. Off unless given: the DSL is the
+        /// answer to the person's prompt. Requires `--material-out`.
+        #[arg(long, requires = "material_out")]
+        dsl_payload: Option<std::path::PathBuf>,
+    },
+    /// **Write a signed IR class registration** (RFC-0002 Phase F: `ClassRegisteredTirV1`) for a
+    /// PALWTIR1 artifact with a declared layout (`palw-class declare-layout`), at the connected
+    /// chain's live pricing (`getPalwRegistrationTerms`), weightless, the registrant bond named by
+    /// `--bond` and signed with this key under the chain's own domain (a drill's with
+    /// `--palw-drill-genesis-salt`). Nothing is submitted: file it with `misaka palw submit-object
+    /// --object <out> --yes`. The node's own gate is NOT asked first, so an object for a height the
+    /// IR fence does not cover yet can be written (a drill's below-the-fence check); `misaka model
+    /// preflight <artifact>` asks the gate.
+    TirRegistration {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// The IR class artifact (a PALWTIR1 container with a declared layout) — or, with --parent, a
+        /// composite candidate's adapter section (PALWTIRS, `palw-class composite --section-out`).
+        #[arg(long)]
+        artifact: std::path::PathBuf,
+        /// RFC-0004 (§6.3): the parent's PALWTIR1 container, when --artifact is a candidate's adapter
+        /// section. The class registered is the candidate's — its id over the COMPOSITE artifact root
+        /// (parent class, parent root, adapter root, P) — which `CandidateSubmitted` then names.
+        #[arg(long)]
+        parent: Option<std::path::PathBuf>,
+        /// The registrant bond, `<txid>:<index>` (its key is the one --key-file names).
+        #[arg(long)]
+        bond: String,
+        /// Where to write the borsh `PalwConsensusObjectV2`.
+        #[arg(long)]
+        out: std::path::PathBuf,
+        /// The class's model id, when the artifact declares more than one class.
+        #[arg(long)]
+        model_id: Option<String>,
+        /// A registration needs a runtime pack that verifies against the artifact (`--pack`), unless `--skip-pack-verify`.
+        #[command(flatten)]
+        pack_gate: pack_gate::PackGateFlags,
+        /// Sign below VERIFIED_REMOTE (the terms are the node's word; a node on this machine is your own full node): name the class.
+        #[arg(long, value_name = "LABEL")]
+        accept_unverified_state: Option<String>,
+        /// Write the object even though the node's class rows already hold this class (DUPLICATE_CLASS).
+        #[arg(long)]
+        allow_duplicate: bool,
+    },
+    /// **Write a signed generative class registration** (RFC-0003: `ClassRegisteredGenV1`) for a PALWTIR2
+    /// artifact (`palw-class declare-layout`'s container for a pipeline class), at the connected chain's live
+    /// pricing (`getPalwRegistrationTerms`), weightless, the registrant bond named by `--bond` and signed with this
+    /// key under the chain's own domain. Nothing is submitted: file it with `misaka palw submit-object --object
+    /// <out> --yes`.
+    GenRegistration {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// The pipeline class artifact (a PALWTIR2 container with a declared class).
+        #[arg(long)]
+        artifact: std::path::PathBuf,
+        /// The registrant bond, `<txid>:<index>` (its key is the one --key-file names).
+        #[arg(long)]
+        bond: String,
+        /// Where to write the borsh `PalwConsensusObjectV2`.
+        #[arg(long)]
+        out: std::path::PathBuf,
+        /// The class's model id, when the artifact declares one to check against.
+        #[arg(long)]
+        model_id: Option<String>,
+    },
+    /// **Run a tensor job and write its claim** (RFC-0003): the job in `--request` (JSON: profile, anchor, nonce,
+    /// seed, ids, steps…) is run on this machine over the PALWTIR2 class in `--artifact` — the worker a seat
+    /// replays with — and the signed commitment transaction (`<claim>.commitment-tx.borsh`, funded from this key)
+    /// and the claim's material (`<claim>.material`, the capture served as `FPG1`, into `--retention-dir`) are
+    /// written. Nothing is submitted: file the claim with `misaka palw fp-submit --tx <it> --yes`.
+    GenClaim {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// The pipeline class artifact (a PALWTIR2 container with a declared class).
+        #[arg(long)]
+        artifact: std::path::PathBuf,
+        /// The job, as JSON.
+        #[arg(long)]
+        request: std::path::PathBuf,
+        /// The executor bond, `<txid>:<index>` (its key is the one --key-file names).
+        #[arg(long)]
+        bond: String,
+        /// The executor bond's operator id (128 hex digits).
+        #[arg(long)]
+        operator_id: String,
+        /// Where to write `<claim>.commitment-tx.borsh`.
+        #[arg(long)]
+        out_dir: std::path::PathBuf,
+        /// The node's retention directory (`<appdir>/<network>/palw-retention`): where `<claim>.material` is written, from which
+        /// the executor's node serves the panel. Without it the material is written beside the transaction.
+        #[arg(long)]
+        retention_dir: Option<std::path::PathBuf>,
+        /// DRILL ONLY: commit a LYING run — `step:<global leaf>:<lane>:<delta>` or `output:<lane>:<delta>`. The claim
+        /// is consistent (its roots are the lying run's); the court convicts it. Choose a leaf with `--list-leaves`.
+        #[arg(long)]
+        plant: Option<String>,
+        /// Write the run's step leaves to this JSON file and stop (the list `--plant` is chosen from).
+        #[arg(long)]
+        list_leaves: Option<std::path::PathBuf>,
+    },
+    /// Submit a PALW lifecycle object written by `palw-certify` — the ADR-0075 certification
+    /// objects `FamilyCertified` (a family's drill evidence, graded on chain) and
+    /// `ClassLaneCertified` (a class bound to a chain-certified family) — funded from this key.
+    /// Nothing signs: the court grades the evidence and the fee is the rent. Dry-run unless --yes.
+    SubmitObject {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// The borsh `PalwConsensusObjectV2` file(s) (`palw-certify drill|bind --out`). Pass the
+        /// chunks of one object in index order (`f.chunk0 f.chunk1 …`); each rides its own
+        /// carrier, funded from the previous carrier's change.
+        #[arg(long = "object", required = true, num_args = 1..)]
+        object: Vec<std::path::PathBuf>,
+        /// Actually broadcast (otherwise a dry-run preview).
+        #[arg(long)]
+        yes: bool,
+        /// Send a class registration (`ClassRegistered`, `ClassRegisteredTirV1`) even when the node's class rows already hold the class
+        /// (`DUPLICATE_CLASS`) or hold it in conflict (`CLASS_CONFLICT`), or cannot be read. Without it those are refused before any fee.
+        #[arg(long)]
+        allow_duplicate: bool,
+        /// Refuse the entire batch before broadcast if its actual carrier fees exceed this total.
+        #[arg(long)]
+        maximum_total_fee_sompi: Option<u64>,
+    },
+    /// **File a court close, whole or in the carriage ADR-0080 gave it** (W13).
+    ///
+    /// A close that fits one carrier is a `CourtClosed` object on an ordinary lifecycle
+    /// transaction. A close that does not — and on the RC ruleset a legal one needs twenty-three
+    /// carriers — rides ADR-0080 design A's own table: a small signed `CourtCloseDeclared` that
+    /// pins every byte behind it, then those bytes as `CourtCloseChunk`s, one per carrier, keyed
+    /// `(session, side)` rather than by a digest of the bytes. This drives both: it checks the
+    /// close against the court's own cost rule BEFORE spending anything, cuts it the way the court
+    /// cuts it, refuses every limit it can check up front — the ruleset's carrier count, the
+    /// group row's bitmap, the assembly window against `--deadline-at` — says how many blocks the
+    /// carriage costs against the turn deadline it spends, funds and submits the parts in order,
+    /// and names the part that failed. Resumable: a run interrupted mid-group picks up from the
+    /// parts the chain still holds rather than re-paying for them.
+    ///
+    /// **The split path is planned and priced but not yet filable**: consensus refuses every
+    /// `CourtCloseDeclared` until ADR-0080 W6 lands the declaration's signature check, so this
+    /// command reports the whole carriage and then refuses rather than spending fees on carriers
+    /// the chain would drop. A close that fits one carrier files normally.
+    /// Build and sign a data-availability accusation (ADR-0062): make a claim's executor open one
+    /// trace event on chain, at the price of your own charge if it answers. Writes a
+    /// `PalwConsensusObjectV2::DefaultAccused` for `palw submit-object` to file.
+    DaAccuse {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// 128-hex claim id.
+        #[arg(long)]
+        claim: String,
+        /// The logits row (decode position) to demand.
+        #[arg(long)]
+        row: u32,
+        /// The tile inside that row (0 for a flat class; a tiled class's tile index).
+        #[arg(long, default_value_t = 0)]
+        tile: u8,
+        /// Your own bond outpoint, `txid:index` — a seat of the claim's panel or a bonded challenger.
+        #[arg(long)]
+        bond: String,
+        /// Where to write the signed object.
+        #[arg(long)]
+        out: std::path::PathBuf,
+    },
+    /// Sign a one-move accusation (ADR-0099 Decision 5 / ADR-0100): a named leaf of a claim's own
+    /// execution that does not recompute, with its refutation. Reads an unsigned borsh
+    /// `PalwShardCourtAccusationV1`, signs it under your bond key and writes a
+    /// `PalwConsensusObjectV2::ShardCourtAccused` for `palw submit-object`.
+    ShardAccuse {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// The unsigned accusation (borsh `PalwShardCourtAccusationV1`), as a seat or a tool wrote it.
+        #[arg(long)]
+        accusation: std::path::PathBuf,
+        /// Your own bond outpoint, `txid:index` — any Active bond above the floor, never the claim's.
+        #[arg(long)]
+        bond: String,
+        /// The ladder to check the named leaf against locally (default: the shipped court's 2^26).
+        #[arg(long, default_value_t = 1u64 << 26)]
+        ladder: u64,
+        /// Where to write the signed object.
+        #[arg(long)]
+        out: std::path::PathBuf,
+    },
+    /// Declare a class's shard plan (ADR-0100 Decision 4), signed by the class's registrant bond:
+    /// claims bound afterwards draw a panel per shard and license by parts. Declared once.
+    /// Writes a `PalwConsensusObjectV2::ClassShardPlanDeclared` for `palw submit-object`.
+    ShardPlan {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// 128-hex class id (a class registered by a bond — a genesis class has no registrant).
+        #[arg(long)]
+        class: String,
+        /// How many shards (2..=1024). A shard holds at least one layer; `palw-shard-plan` prices a count.
+        #[arg(long)]
+        count: u32,
+        /// The class's registrant bond outpoint, `txid:index` — its key signs.
+        #[arg(long)]
+        bond: String,
+        /// Where to write the signed object.
+        #[arg(long)]
+        out: std::path::PathBuf,
+    },
+    /// Declare which shards of a class your bond holds (ADR-0100 Decision 4) — a refinement of the
+    /// class your bond declared in capable_classes. Writes a `BondShardsDeclared`; an empty
+    /// `--shards ""` withdraws.
+    BondShards {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// Your bond outpoint, `txid:index`.
+        #[arg(long)]
+        bond: String,
+        /// 128-hex class id.
+        #[arg(long)]
+        class: String,
+        /// The class's plan's shard count (it must match the declared plan).
+        #[arg(long)]
+        count: u32,
+        /// Comma-separated shard indices, ascending, e.g. `0,1`; empty withdraws.
+        #[arg(long, default_value = "")]
+        shards: String,
+        /// Where to write the signed object.
+        #[arg(long)]
+        out: std::path::PathBuf,
+    },
+    CourtClose {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// The borsh `PalwConsensusObjectV2::CourtClosed` to file.
+        #[arg(long)]
+        close: std::path::PathBuf,
+        /// 128-hex class id of the class under dispute, so the deadline is priced on ITS row.
+        /// Without it the widest shipped row is assumed and the report says so.
+        #[arg(long)]
+        class: Option<String>,
+        /// Which of the session's two bonds is declaring: `challenger` or `executor`. Required
+        /// only for a close too large for one carrier — that one rides as a declaration attributed
+        /// to one side, and nothing in the close file says which side is moving.
+        #[arg(long)]
+        side: Option<String>,
+        /// The DAA score this move's turn expires at, when you know it. With it the report says
+        /// whether the carriage fits the time that is LEFT, not the time a turn is worth.
+        #[arg(long)]
+        deadline_at: Option<u64>,
+        /// Where the carriage index lives between runs. Defaults to `<close>.carriage.json`.
+        #[arg(long)]
+        state: Option<std::path::PathBuf>,
+        /// Discard any existing carriage index and file every part again.
+        #[arg(long)]
+        restart: bool,
+        /// Plan and price the move against `--network`'s own preset, without contacting a node.
+        /// The cost rule, the cut and the deadline are pure functions of the close and the
+        /// ruleset; deciding whether you will make your turn should not need a synced node.
+        #[arg(long, conflicts_with = "yes")]
+        offline: bool,
+        /// Actually broadcast (otherwise a dry-run preview).
+        #[arg(long)]
+        yes: bool,
+    },
+    /// **ADR-0075 / ADR-0082: the two free-prompt lane facts a builder must know before it
+    /// builds.** Is this class SEATED on the free-prompt lane (`fp_certified` — the genesis
+    /// certified set union the chain set, the same two `FreePromptCommitted` refuses on), and is
+    /// ADR-0082's decode ruleset in force (`fp_decode_rules_armed` — past that fence a job carries
+    /// its sampling seed and temperature inside its context hash and decode leaves are what earn)?
+    ///
+    /// A job on an uncertified class is still answered and its commitment is unsubmittable; a job
+    /// built for the wrong decode ruleset is honest and unreproducible. Neither is guessable and
+    /// both are one read. Nothing signs, nothing spends.
+    Certified {
+        /// 128-hex class id (`execution_class_id`, the shape profile id).
+        class_id: String,
+        /// JSON output (`--output json` does the same).
+        #[arg(long)]
+        json: bool,
+    },
+    /// **ADR-0110: run a context vector through the network's own pipeline** — produce, commit,
+    /// seat, court, availability, fit — and write one canonical document whose `document_id`
+    /// covers what every honest machine must agree on and nothing this host measured. No node is
+    /// contacted. `--sign-with` writes a receipt: evidence that this key reproduced the vector,
+    /// never a vote — nothing reads it, and no count of receipts arms anything.
+    VerifyContext {
+        /// A shipped vector by name (`--list` names them).
+        #[arg(long, conflicts_with = "vector_file")]
+        vector: Option<String>,
+        /// A vector that is not shipped, as its JSON document — its document says `shipped: false`.
+        #[arg(long)]
+        vector_file: Option<std::path::PathBuf>,
+        /// List the shipped vectors, their ids and where each is meant to run.
+        #[arg(long)]
+        list: bool,
+        /// A comma-separated subset of produce,commit,seat,court,availability,fit (default: all).
+        #[arg(long)]
+        stages: Option<String>,
+        /// Write the canonical document here.
+        #[arg(long)]
+        out: Option<std::path::PathBuf>,
+        /// Where the receipt goes (default: beside `--out`, as `<out>.receipt.json`).
+        #[arg(long)]
+        receipt_out: Option<std::path::PathBuf>,
+        /// Sign a receipt with the ML-DSA-87 seed in this perms-checked file.
+        #[arg(long)]
+        sign_with: Option<String>,
+    },
+    /// **ADR-0110: check a context receipt** — its signature under the receipt context, and, with
+    /// `--document`, that the document's recomputed id is the one the receipt signed.
+    VerifyReceipt {
+        /// The receipt JSON `verify-context --sign-with` wrote.
+        receipt: std::path::PathBuf,
+        /// The document it is a receipt for.
+        #[arg(long)]
+        document: Option<std::path::PathBuf>,
+    },
+    /// **ADR-0087: a line's model market** as the tip holds it — reserve, positions in the curve,
+    /// price, sold, burned, paid, status — and a quote for a buy (`--quote-msk`). Nothing signs.
+    /// Keyed by LINE (ADR-0088 Decision 9): a class id names the class's founding line.
+    ModelShow {
+        /// 128-hex line id (a class id names the class's founding line).
+        line_id: String,
+        /// Quote a buy of this many BILI (e.g. `12.5`, or `1250000000sompi`).
+        #[arg(long)]
+        quote_msk: Option<String>,
+        /// JSON output (`--output json` does the same).
+        #[arg(long)]
+        json: bool,
+    },
+    /// **ADR-0087: every position a holder has**, by line. The holder is its key's id, not its
+    /// address payload — name it, or name the key it is derived from.
+    ModelPositions {
+        /// 128-hex holder id (the unkeyed BLAKE2b-512 of an ML-DSA-87 public key,
+        /// `palw_model_holder_of_pubkey_v1`; not the payload in the key's address).
+        #[arg(long)]
+        holder: Option<String>,
+        #[command(flatten)]
+        key: KeyArgs,
+        /// JSON output (`--output json` does the same).
+        #[arg(long)]
+        json: bool,
+    },
+    /// ADR-0089 Decision 5: buy a position FROM THE EVM — a signed call to the ModelWriter
+    /// (0x…F013) carrying `sendAction(buy)` with the BILI as the call's value; the fold applies it
+    /// after the block and the next chain block settles it. [needs --features evm-send]
+    #[cfg(feature = "evm-send")]
+    ModelEvmBuy {
+        #[command(flatten)]
+        key: EvmKeyArgs,
+        /// The line (128 hex; a class's own line has the class id).
+        #[arg(long)]
+        line: String,
+        /// BILI to pay, whole sompi (e.g. "5" or "0.25").
+        #[arg(long)]
+        msk: String,
+        #[arg(long, default_value_t = 0)]
+        min_positions: u64,
+        #[arg(long)]
+        gas_limit: Option<u64>,
+        #[arg(long)]
+        max_fee: Option<u128>,
+        #[arg(long)]
+        nonce: Option<u64>,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        wait: bool,
+    },
+    /// ADR-0089 Decision 5: sell positions FROM THE EVM — `sendAction(sell)` with no value; the
+    /// net BILI is credited to the signing account when the next chain block settles it.
+    #[cfg(feature = "evm-send")]
+    ModelEvmSell {
+        #[command(flatten)]
+        key: EvmKeyArgs,
+        #[arg(long)]
+        line: String,
+        #[arg(long)]
+        positions: u64,
+        /// The least BILI (whole sompi) the sell may net, else the fold refuses it.
+        #[arg(long, default_value = "0")]
+        min_msk: String,
+        #[arg(long)]
+        gas_limit: Option<u64>,
+        #[arg(long)]
+        max_fee: Option<u128>,
+        #[arg(long)]
+        nonce: Option<u64>,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        wait: bool,
+    },
+    /// ADR-0089 Decision 7: the units an EVM account holds on a line, read through the position
+    /// window (0x…F012) over the node's eth JSON-RPC.
+    ModelEvmPosition {
+        #[arg(long)]
+        line: String,
+        #[arg(long)]
+        address: String,
+    },
+    /// **Seed a line's market — lock BILI in the line's sink, for good.** Past ADR-0162's fence the
+    /// market is already open (from the line's creation, on a 10,000,000 BILI virtual reserve that
+    /// prices and is never paid), and a seed is OPTIONAL depth: any amount, before the market's first
+    /// trade, joining the real reserve and raising the floor `(V + seed) / 500,000`; refused after the
+    /// first trade; at the opener's risk (a class never approved never trades). Below the fence
+    /// (ADR-0090/0094/0120) the market opens once the locked total reaches the least seed
+    /// (`model-show` prints the floor in force), and a payment under it is a pledge toward it. Either
+    /// way the seeder holds no position and nothing ever pays a seed back.
+    ModelSeed {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// 128-hex line id (a class id names the class's founding line)
+        #[arg(long)]
+        line: String,
+        /// BILI to lock (e.g. `250000`, or `25000000000000sompi`)
+        #[arg(long)]
+        msk: String,
+        /// Actually broadcast (otherwise a dry-run preview)
+        #[arg(long)]
+        yes: bool,
+    },
+    /// **ADR-0152-adjacent: sponsor a model's listing** — top its class's Activation Pool up with
+    /// BILI paid into the class's activation sink. Anyone may, its registrant included; a donation,
+    /// never refunded once folded. While the class is a Candidate 40 % funds the preparation reward
+    /// its prepared jurors are paid at its audit, the rest the activation bonus paid at
+    /// `Probation → ActiveLimited` to the operators its probe Finals credited.
+    ModelSponsor {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// 128-hex class id (or 8+ hex of one)
+        class: String,
+        /// BILI to add (e.g. `100`, or `10000000000sompi`); at least the chain's least top-up
+        msk: String,
+        /// Actually broadcast (otherwise a dry-run preview)
+        #[arg(long)]
+        yes: bool,
+    },
+    /// ADR-0152-adjacent: a model's Activation Pool — its budgets, who was paid, the operators
+    /// credited toward its activation bonus, the terms, and the sink a sponsor pays into.
+    ModelPool {
+        /// 128-hex class id (or 8+ hex of one)
+        class: String,
+    },
+    /// Seed a line's market from the EVM with the call's value through the ModelWriter; settled in
+    /// the next chain block. Past ADR-0162's fence: optional depth, before the first trade only (the
+    /// writer reverts `SeedAfterTrade()` after it). Below it: toward the least seed
+    /// (`constants()`), a pledge until the total reaches it. Locked for good either way.
+    /// [needs --features evm-send]
+    #[cfg(feature = "evm-send")]
+    ModelEvmSeed {
+        #[command(flatten)]
+        key: EvmKeyArgs,
+        #[arg(long)]
+        line: String,
+        /// BILI to lock, whole sompi (e.g. "250000")
+        #[arg(long)]
+        msk: String,
+        #[arg(long)]
+        gas_limit: Option<u64>,
+        #[arg(long)]
+        max_fee: Option<u128>,
+        #[arg(long)]
+        nonce: Option<u64>,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        wait: bool,
+    },
+    /// **ADR-0087: buy positions of a line from its curve.** The carrier pays `--msk` into the
+    /// line's sink; the fold credits the net leg to the curve (5 % burned, and 1 % to the line's
+    /// owner — 5 % past ADR-0114's fence; the preview prints the schedule the node serves) and
+    /// the curve's positions to the key's holder id. Refused on chain when fewer than
+    /// `--min-positions` would be released.
+    ModelBuy {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// 128-hex line id (a class id names the class's founding line).
+        #[arg(long)]
+        line: String,
+        /// BILI to pay (e.g. `12.5`, or `1250000000sompi`).
+        #[arg(long)]
+        msk: String,
+        /// The fewest positions to accept; the move is refused, never partially filled, below it.
+        #[arg(long, conflicts_with = "slippage")]
+        min_positions: Option<u64>,
+        /// The floor as a slippage under the quote (e.g. `1%`). With neither flag the floor is the
+        /// quote less 1 % on a chain that pays a refused carrier back, and the command asks for
+        /// one on a chain that keeps it (the 2026-09-23 Position route matrix, P-B1: the old
+        /// default, 0, was a buy at any price).
+        #[arg(long)]
+        slippage: Option<String>,
+        /// Actually broadcast (otherwise a dry-run preview with the quote).
+        #[arg(long)]
+        yes: bool,
+    },
+    /// **ADR-0087: sell positions back to the curve.** Signed by the key whose id holds them; the
+    /// net leg (94 % of what the curve pays, 90 % past ADR-0114) is paid through the coinbase to
+    /// that key's own address where the 2026-09-23 audit fence is active. Where it is not
+    /// (testnet-11) the chain pays the holder id, which no key can spend, so the command refuses
+    /// to sign unless `--accept-burned-proceeds`. Refused on chain when the net would be under
+    /// `--min-msk`.
+    ModelSell {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// 128-hex line id (a class id names the class's founding line).
+        #[arg(long)]
+        line: String,
+        /// Positions to sell.
+        #[arg(long)]
+        positions: u64,
+        /// The least BILI to accept for them (e.g. `12.5`).
+        #[arg(long)]
+        min_msk: Option<String>,
+        /// Actually broadcast (otherwise a dry-run preview with the quote).
+        #[arg(long)]
+        yes: bool,
+        /// Sell anyway on a chain that pays the net leg to the holder id, which no key can spend:
+        /// the proceeds are burned (the 2026-09-23 Position route matrix, P-B4).
+        #[arg(long)]
+        accept_burned_proceeds: bool,
+    },
+    /// **ADR-0088: a line** as the tip holds it — owner, developer, maintainer (and their payout
+    /// payloads), the current and preview versions, the roots in force for its class. A class id
+    /// names the class's founding line. Nothing signs.
+    LineShow {
+        /// 128-hex line id.
+        line_id: String,
+        /// JSON output (`--output json` does the same).
+        #[arg(long)]
+        json: bool,
+    },
+    /// **ADR-0088: every version of a line the node holds**, oldest first, with status and usage.
+    /// The last 64 stay in state; older ones are named as evicted (the explorer holds them).
+    LineLog {
+        /// 128-hex line id.
+        line_id: String,
+        /// JSON output (`--output json` does the same).
+        #[arg(long)]
+        json: bool,
+    },
+    /// **ADR-0088: every line of a class**, the founding line included.
+    LineList {
+        /// 128-hex class id.
+        class_id: String,
+        /// JSON output (`--output json` does the same).
+        #[arg(long)]
+        json: bool,
+    },
+    /// **ADR-0088: the proposals attached to a line** — root, note, proposer, adoption.
+    Proposals {
+        /// 128-hex line id.
+        line_id: String,
+        /// JSON output (`--output json` does the same).
+        #[arg(long)]
+        json: bool,
+    },
+    /// **ADR-0175: register an independent model on a class.** `--bond` becomes its owner, developer and
+    /// maintainer and signs; V1 is `--root`. Rent-priced (1 BILI of the fee is burned).
+    LineFound {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// 128-hex class id.
+        #[arg(long)]
+        class: String,
+        /// The line's name (1..=64 bytes); shared, never squatted — the founder is in the line id.
+        #[arg(long)]
+        name: String,
+        /// 128-hex artifact root of V1.
+        #[arg(long)]
+        root: String,
+        /// The founding bond, `<txid>:<index>`; the key must be its registered key.
+        #[arg(long)]
+        bond: String,
+        /// Actually broadcast (otherwise a dry-run preview).
+        #[arg(long)]
+        yes: bool,
+    },
+    /// **Historical ADR-0088: publish a version (refused past the immutable-model fence).** Signed by the line's developer bond; the version number is
+    /// read off the chain (`versions_published + 1`). Without `--preview` it becomes current at
+    /// once and the previous current keeps its root in force for the grace. Re-publishing an
+    /// older root is a rollback; the current root again is refused.
+    VersionPublish {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// 128-hex line id.
+        #[arg(long)]
+        line: String,
+        /// 128-hex artifact root of the new version.
+        #[arg(long)]
+        root: String,
+        /// The version this one continues from (omit for none).
+        #[arg(long)]
+        parent: Option<u32>,
+        /// 128-hex proposal id this version adopts; the proposer is paid the contributor share.
+        #[arg(long)]
+        adopted_from: Option<String>,
+        /// Declared, recorded, never checked: 128-hex each.
+        #[arg(long)]
+        runtime_hash: Option<String>,
+        #[arg(long)]
+        dataset_commitment: Option<String>,
+        #[arg(long)]
+        training_config_hash: Option<String>,
+        #[arg(long)]
+        notes_hash: Option<String>,
+        /// Put the root in force without making it current (at most 2 previews at once).
+        #[arg(long)]
+        preview: bool,
+        /// Actually broadcast (otherwise a dry-run preview).
+        #[arg(long)]
+        yes: bool,
+    },
+    /// **Historical ADR-0088: promote a preview (refused past the immutable-model fence).**
+    VersionPromote {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// 128-hex line id.
+        #[arg(long)]
+        line: String,
+        #[arg(long)]
+        version: u32,
+        /// Actually broadcast (otherwise a dry-run preview).
+        #[arg(long)]
+        yes: bool,
+    },
+    /// **Historical ADR-0088: withdraw a version (refused past the immutable-model fence).**
+    /// (developer). A current version is succeeded, never withdrawn.
+    VersionWithdraw {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// 128-hex line id.
+        #[arg(long)]
+        line: String,
+        #[arg(long)]
+        version: u32,
+        /// Actually broadcast (otherwise a dry-run preview).
+        #[arg(long)]
+        yes: bool,
+    },
+    /// **ADR-0088: set a line's developer, maintainer and contributor share** (owner). A flag
+    /// omitted keeps the row's value; `owner` resets a role to the owner.
+    /// ADR-0095 §4.1: declare what this line's positions grant their holders.
+    LineBenefits {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// 128-hex line id.
+        #[arg(long)]
+        line: String,
+        /// `units:GRANT[,GRANT…][:lead[:hold[:note]]]`, once per tier, e.g.
+        /// `--tier 1:EARLY_VERSION,SUPPORT:600`. Pass none to WITHDRAW the declaration.
+        #[arg(long = "tier")]
+        tiers: Vec<String>,
+        /// §4.6: publish a version this often, or the promise lapses on its own. 0 = no undertaking.
+        #[arg(long, default_value_t = 0)]
+        cadence_daa: u64,
+        /// §4.6: the height the whole declaration stops granting. 0 = never.
+        #[arg(long, default_value_t = 0)]
+        expires_daa: u64,
+        #[arg(long)]
+        yes: bool,
+    },
+    /// **ADR-0101: sign a service descriptor** — a provider's statement that it serves this line.
+    /// Checked against the node's answer BEFORE it is signed, so a descriptor that any client would
+    /// refuse is never published. Builds no object, pays no fee, sends nothing.
+    ServiceDescribe {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// 128-hex line id.
+        #[arg(long)]
+        line: String,
+        /// Comma-separated grant names, e.g. `PRIORITY_INFERENCE,INFERENCE_QUOTA`.
+        #[arg(long)]
+        grants: String,
+        /// 128-hex artifact roots this provider serves. Omit to take every root the chain says the
+        /// line owns.
+        #[arg(long = "root")]
+        roots: Vec<String>,
+        /// Where a client reaches this provider. At least one.
+        #[arg(long = "endpoint")]
+        endpoints: Vec<String>,
+        /// The height the statement starts. Defaults to the node's tip.
+        #[arg(long)]
+        valid_from_daa: Option<u64>,
+        /// The height the statement stops. Must be past the tip.
+        #[arg(long)]
+        expires_daa: u64,
+    },
+    /// **ADR-0101: check somebody's service descriptor** against what the chain says about the line
+    /// it names. Prints the provider kind, or the refusal by name.
+    ServiceCheck {
+        /// The descriptor JSON, or `-` for stdin.
+        #[arg(long)]
+        descriptor: String,
+    },
+    LineRoles {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// 128-hex line id.
+        #[arg(long)]
+        line: String,
+        /// `<txid>:<index>`, or `owner`.
+        #[arg(long)]
+        developer: Option<String>,
+        /// `<txid>:<index>`, or `owner`.
+        #[arg(long)]
+        maintainer: Option<String>,
+        /// The share of the owner's leg (1 %, 5 % past ADR-0114) an adopted contributor takes while its version is
+        /// current, in permille (0..=1000).
+        #[arg(long)]
+        contributor_permille: Option<u16>,
+        /// Actually broadcast (otherwise a dry-run preview).
+        #[arg(long)]
+        yes: bool,
+    },
+    /// **ADR-0088: hand a line to a new owner bond** (owner). Developer and maintainer reset to
+    /// the new owner; positions do not move.
+    LineTransfer {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// 128-hex line id.
+        #[arg(long)]
+        line: String,
+        /// `<txid>:<index>` of an Active bond.
+        #[arg(long)]
+        new_owner: String,
+        /// Actually broadcast (otherwise a dry-run preview).
+        #[arg(long)]
+        yes: bool,
+    },
+    /// **ADR-0088: retire a line** (owner): the market closes to buys, the roots leave force
+    /// after the grace, the history stays.
+    LineRetire {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// 128-hex line id.
+        #[arg(long)]
+        line: String,
+        /// Actually broadcast (otherwise a dry-run preview).
+        #[arg(long)]
+        yes: bool,
+    },
+    /// **ADR-0088: post a proposal on a line** — a root and a note — from any Active bond.
+    /// Rent-priced (1 BILI of the fee is burned). Paid when a version adopts it.
+    ProposalPost {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// 128-hex line id.
+        #[arg(long)]
+        line: String,
+        /// 128-hex artifact root proposed.
+        #[arg(long)]
+        root: String,
+        /// 128-hex hash of the note.
+        #[arg(long)]
+        note_hash: String,
+        /// The proposing bond, `<txid>:<index>`; the key must be its registered key.
+        #[arg(long)]
+        bond: String,
+        /// Actually broadcast (otherwise a dry-run preview).
+        #[arg(long)]
+        yes: bool,
+    },
+    /// **ADR-0088: close a proposal** (developer), to make room.
+    ProposalClose {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// 128-hex line id.
+        #[arg(long)]
+        line: String,
+        /// 128-hex proposal id.
+        #[arg(long)]
+        proposal: String,
+        /// Actually broadcast (otherwise a dry-run preview).
+        #[arg(long)]
+        yes: bool,
+    },
+    /// **ADR-0088: post an evaluation of a version** — a declaration from any Active bond, at
+    /// most 16 per version, one per bond. Rent-priced (1 BILI of the fee is burned).
+    Evaluate {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// 128-hex line id.
+        #[arg(long)]
+        line: String,
+        #[arg(long)]
+        version: u32,
+        /// 128-hex id of the evaluator (a benchmark, a suite, a person's key hash).
+        #[arg(long)]
+        evaluator_id: String,
+        /// The score, in permille (0..=1000).
+        #[arg(long)]
+        score_permille: u32,
+        /// 128-hex hash of the report.
+        #[arg(long)]
+        report_hash: String,
+        /// The evaluating bond, `<txid>:<index>`; the key must be its registered key.
+        #[arg(long)]
+        bond: String,
+        /// Actually broadcast (otherwise a dry-run preview).
+        #[arg(long)]
+        yes: bool,
+    },
+    /// **What became of a free-prompt claim** — its phase on the chain, what that means, and the
+    /// next step.
+    ///
+    /// Reads `getPalwFreePromptClaim` and says what the phase means for the executor: a panel
+    /// drawn and when, receipts due, final and when (and by whom) its quanta can be spent as
+    /// receipt blocks, or voided and who paid — dated in the windows of the network's own
+    /// ConsensusV2 bundle, against the node's current DAA. Name claim ids (the gateway's
+    /// `fp_claim_id`), or pass `--outbox` to follow every job the gateway wrote there as far as it
+    /// got: answered but not committed, committed but not submitted, signed but not submitted,
+    /// expired, given up, or on the chain. A named claim the chain does not hold exits non-zero; an
+    /// outbox job that is not on the chain is reported in its row. Nothing signs, nothing spends.
+    #[command(group(clap::ArgGroup::new("claims").required(true).multiple(true).args(["claim_ids", "outbox"])))]
+    Claim {
+        /// 128-hex claim ids (the gateway's or the rail's `fp_claim_id`).
+        #[arg(value_name = "CLAIM_ID")]
+        claim_ids: Vec<String>,
+        /// The gateway's outbox directory: every `fp-job-*.json` job in it, oldest first.
+        #[arg(long, value_name = "DIR")]
+        outbox: Option<std::path::PathBuf>,
+        /// JSON output (`--output json` does the same).
+        #[arg(long)]
+        json: bool,
+    },
+    /// ADR-0078 Decision 5: read what the chain holds about a free-prompt claim's DERIVATIONS —
+    /// the grammar, the transformer, the DSL and artifact hashes, and the claim's own output_root.
+    /// The answer's token ids are on no chain; hold them from the gateway response.
+    Derived {
+        /// 128-hex free-prompt claim id (the gateway's `fp_claim_id`).
+        claim_id: String,
+        /// JSON output (`--output json` does the same).
+        #[arg(long)]
+        json: bool,
+    },
+    /// ADR-0078 X6: re-run the derivation the chain names, over the answer you kept, and say
+    /// whether the chain's copy agrees — `consistent`, or the first mismatching field by name.
+    DerivedVerify {
+        /// 128-hex free-prompt claim id.
+        claim_id: String,
+        /// The gateway's response JSON (its `misaka` block carries `output_token_ids`,
+        /// `job_context_hash`, `family` and the canonical DSL), or a bare JSON array of the
+        /// answer's output token ids.
+        #[arg(long)]
+        answer: std::path::PathBuf,
+        /// The canonical DSL bytes, when the response file does not carry them inline.
+        #[arg(long)]
+        dsl: Option<std::path::PathBuf>,
+        /// The whole `PalwJobContextV2` (borsh, or the same bytes as hex text), when the response
+        /// file does not carry `misaka.job_context`. Its hash is DERIVED from it, so the tokenizer
+        /// it pins and the `output_root` it implies cannot come from two different jobs.
+        #[arg(long)]
+        job_context: Option<std::path::PathBuf>,
+        /// The tokenizer.json the class was converted from — the fourth binding input. With the
+        /// ids, the context and the family, the DSL is RENDERED from the claim's own ids and the
+        /// verdict is a statement about one inference (`binding_checked: true`).
+        #[arg(long)]
+        tokenizer: Option<std::path::PathBuf>,
+        /// 128-hex job context hash, overriding the one in `--answer`. Recomputing `output_root`
+        /// is all it can do: the binding needs `--job-context`, whose `tokenizer_id` a hash cannot
+        /// carry.
+        #[arg(long)]
+        job_context_hash: Option<String>,
+        /// Family of the class that answered (`base0`, `qwen36`, `qwen25-a16`), overriding
+        /// `--answer`'s.
+        #[arg(long)]
+        family: Option<String>,
+        /// JSON output (`--output json` does the same).
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum UtxoCmd {
+    /// Paged UTXO summary of an address (read-only; safe on huge addresses).
+    List {
+        /// Address to inspect; defaults to the key's funding address.
+        #[arg(long)]
+        address: Option<String>,
+        /// Also list the newest N outputs, each with its settlement depth in settled PALW anchors
+        /// (ADR-0127); 0 lists none. The summary always covers every output.
+        #[arg(long, value_name = "N", default_value_t = 10)]
+        recent: usize,
+        #[command(flatten)]
+        key: KeyArgs,
+    },
+    /// Merge many small self-UTXOs into fewer (chunked; dry-run unless --yes).
+    Consolidate {
+        /// Max inputs per consolidation tx (each ML-DSA input ≈7 KB; capped at 20).
+        #[arg(long, default_value_t = 20)]
+        max_inputs: usize,
+        /// Max consolidation transactions to build/submit in one run (hard-capped at 200).
+        #[arg(long, default_value_t = 100)]
+        max_txs_per_run: usize,
+        /// Milliseconds to sleep between live submits.
+        #[arg(long, default_value_t = 200)]
+        sleep_ms: u64,
+        /// Actually broadcast (otherwise a dry-run preview).
+        #[arg(long)]
+        yes: bool,
+        #[command(flatten)]
+        key: KeyArgs,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum KeyCmd {
+    /// Generate a fresh ML-DSA-87 seed to a 0600 file and print its address.
+    Gen {
+        /// Output seed file path (refuses to overwrite).
+        #[arg(long)]
+        out: String,
+    },
+    /// Print the funding (P2PKH-ML-DSA) address for a key.
+    Address {
+        #[command(flatten)]
+        key: KeyArgs,
+    },
+    /// Print a key's PUBLIC half: the ML-DSA-87 verification key (what a bond registration or a
+    /// genesis card carries), its P2PKH address payload, the funding address and the validator id.
+    ///
+    /// Reads the seed with the same hardened loader every other command uses and prints nothing
+    /// secret. This is the value to hand a registrar, paste into a card row, or compare with
+    /// `misaka bond status --bond <outpoint> --output json` (`bond_registered_pubkey`) to prove a
+    /// key file is the one a bond was registered under.
+    Pubkey {
+        #[command(flatten)]
+        key: KeyArgs,
+    },
+    /// Import an EXISTING 32-byte ML-DSA-87 seed — from stdin, or from a 0600 file — into a
+    /// 0600 file.
+    ///
+    /// The secret is never a CLI argument and never an environment variable (ADR-0063 SA-1):
+    /// pipe it in (`cat seed.hex | misaka key import --out /etc/misaka/bond.key --hex-stdin`) or
+    /// name a file (`--hex-file /media/backup/seed.hex`, which must be mode 0600). An argument
+    /// lands in `ps` and the shell history; an env var is inherited by every child process.
+    /// A BIP39 mnemonic is NOT accepted — this tree and the web wallet have no agreed derivation
+    /// to an ML-DSA-87 seed, and guessing one would silently produce a different address.
+    Import {
+        /// Output seed file path (refuses to overwrite).
+        #[arg(long)]
+        out: String,
+        /// Read the 64-hex-character seed from stdin.
+        #[arg(long)]
+        hex_stdin: bool,
+        /// Read the 64-hex-character seed from this file, which must be mode 0600.
+        /// The PATH is the argument; the secret never is.
+        #[arg(long, conflicts_with = "hex_stdin")]
+        hex_file: Option<String>,
+    },
+}
+
+/// ADR-0063 D2/D3: the operator's half of the PALW bond lifecycle.
+#[derive(Subcommand, Debug)]
+enum BondCmd {
+    /// RFC-0009 A0, node-less bond registration, step 1 (NO key): the unsigned `BondRegistered` and its carrier, quoted from ≥ 2 nodes
+    /// running this build's ruleset — the floor is this build's, the funding and the DAA are the nodes' word (UNVERIFIED_REMOTE).
+    RegisterExport {
+        /// The bond's ML-DSA-87 public key, hex (`misaka key show`): the key that will sign the registration.
+        #[arg(long, value_name = "HEX")]
+        owner_pubkey: String,
+        /// The collateral to lock, in sompi (at least the network's registration floor).
+        #[arg(long, value_name = "SOMPI")]
+        collateral: u64,
+        /// Where the collateral returns and the rewards go (default: the bond key's own address).
+        #[arg(long, value_name = "ADDRESS")]
+        payout_address: Option<String>,
+        /// The address that funds the carrier (collateral + fee); it may belong to another key.
+        #[arg(long, value_name = "ADDRESS")]
+        payer_address: String,
+        /// More nodes to quote from, beside --rpc (their answers must agree).
+        #[arg(long, value_delimiter = ',', value_name = "HOST:PORT,...")]
+        quote_rpc: Vec<String>,
+        /// Quote from ONE node — only for a node you run.
+        #[arg(long)]
+        allow_single_rpc: bool,
+        /// Where to write the unsigned bundle (never overwritten).
+        #[arg(long, value_name = "FILE")]
+        out: std::path::PathBuf,
+    },
+    /// Step 2 (offline): the bond key signs the registration, the payer key the carrier — each refusing a bundle that moved the payout,
+    /// the collateral, the change or the fee. Below VERIFIED_REMOTE it signs only with --accept-unverified-state.
+    RegisterSign {
+        bundle: std::path::PathBuf,
+        #[command(flatten)]
+        key: KeyArgs,
+        /// The payer's seed file, when another key funds the carrier.
+        #[arg(long, value_name = "FILE")]
+        payer_key_file: Option<String>,
+        /// The collateral you mean to lock (refused on any other).
+        #[arg(long, value_name = "SOMPI")]
+        expect_collateral: u64,
+        /// The payout you mean (default: the bond key's own address).
+        #[arg(long, value_name = "ADDRESS")]
+        expect_payout: Option<String>,
+        /// The most the carrier may cost, in sompi.
+        #[arg(long, value_name = "SOMPI")]
+        max_fee_sompi: u64,
+        /// Name the class you accept signing in (an exported bundle is UNVERIFIED_REMOTE).
+        #[arg(long, value_name = "LABEL")]
+        accept_unverified_state: Option<String>,
+        #[arg(long, value_name = "FILE")]
+        out: Option<std::path::PathBuf>,
+    },
+    /// Step 3 (NO key): verify the signed bytes, relay them through any nodes, follow the bond (`<carrier>:0`) to registration.
+    RegisterSubmit {
+        signed: std::path::PathBuf,
+        #[arg(long, value_delimiter = ',', value_name = "HOST:PORT,...", required = true)]
+        relay: Vec<String>,
+        #[arg(long, value_name = "N")]
+        relay_min: Option<usize>,
+        #[arg(long, value_name = "SOMPI")]
+        max_fee_sompi: Option<u64>,
+        #[arg(long)]
+        no_wait: bool,
+    },
+    /// Inspect an exact outpoint in the Bond registry, or show the bonds registered to a key.
+    Status {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// Inspect this exact `<txid>:<index>` in the chain's Bond registry. This mode is
+        /// read-only and does not require a key. `--outpoint` and `--carrier` are aliases.
+        #[arg(long, visible_alias = "outpoint", visible_alias = "carrier")]
+        bond: Option<String>,
+        /// A class id (128-hex) the chain knows. The registry read needs one internally; when
+        /// omitted, this network's BASE-0/Floor class is used automatically.
+        #[arg(long)]
+        class_id: Option<String>,
+    },
+    /// Request retirement of a bond: sign the release the consensus rule already accepts.
+    ///
+    /// The collateral is released after the withdrawal delay, not immediately. Refuses while the
+    /// bond has unresolved claims, because retiring then would pull the collateral out from under
+    /// a live dispute.
+    /// Declare which classes this bond will judge — the panel draw seats it only for these.
+    ///
+    /// The set is REPLACED, not merged, so `--declare` with nothing stands the bond down. Declare
+    /// only classes this node can actually run: a seat that cannot serve is a seat that gets
+    /// convicted, which is what makes the declaration a stake rather than a permission list.
+    Capability {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// Which bond, as `<txid>:<index>`. Optional when this key holds exactly one.
+        #[arg(long)]
+        bond: Option<String>,
+        /// A class id (128-hex) the chain knows — required, because the only RPC that reports a
+        /// bond's registered key will not answer without one.
+        #[arg(long)]
+        class_id: Option<String>,
+        /// Class ids (128-hex) to declare. Repeatable, or comma-separated. Omit to declare none.
+        #[arg(long)]
+        declare: Vec<String>,
+        /// Build and price the carrier, print it, submit nothing.
+        #[arg(long)]
+        dry_run: bool,
+        /// Submit. Without it the command stops after printing what it would do.
+        #[arg(long)]
+        yes: bool,
+    },
+    Retire {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// Which bond, as `<txid>:<index>`. Optional when this key holds exactly one.
+        #[arg(long)]
+        bond: Option<String>,
+        /// A class id (128-hex) the chain knows — required, because the only RPC that reports a
+        /// bond's reserved exposure will not answer without one. The node prints the class id it
+        /// produces under; any registered class works, since the exposure belongs to the bond.
+        #[arg(long)]
+        class_id: Option<String>,
+        /// Build and price the carrier, print it, submit nothing.
+        #[arg(long)]
+        dry_run: bool,
+        /// Submit. Without it the command stops after printing what it would do.
+        #[arg(long)]
+        yes: bool,
+    },
+}
+
+/// Parse a decimal BILI string (e.g. "10.5") into sompi (1 BILI = 1e8 sompi).
+fn parse_msk_to_sompi(s: &str) -> Result<u64, CliError> {
+    let (whole, frac) = match s.split_once('.') {
+        Some((w, f)) => (w, f),
+        None => (s, ""),
+    };
+    if whole.is_empty() && frac.is_empty() {
+        return Err(CliError::new(exit::GENERIC, format!("invalid amount '{s}'")));
+    }
+    let whole: u64 =
+        if whole.is_empty() { 0 } else { whole.parse().map_err(|_| CliError::new(exit::GENERIC, format!("invalid amount '{s}'")))? };
+    if frac.len() > 8 || !frac.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(CliError::new(exit::GENERIC, format!("amount '{s}' has >8 fractional digits (1 BILI = 1e8 sompi)")));
+    }
+    let frac_sompi: u64 = format!("{frac:0<8}").parse().map_err(|_| CliError::new(exit::GENERIC, format!("invalid amount '{s}'")))?;
+    whole
+        .checked_mul(100_000_000)
+        .and_then(|w| w.checked_add(frac_sompi))
+        .ok_or_else(|| CliError::new(exit::GENERIC, "amount overflow".to_string()))
+}
+
+fn prefix_of(network: &str) -> Result<kaspa_addresses::Prefix, CliError> {
+    use std::str::FromStr;
+    let net = kaspa_consensus_core::network::NetworkId::from_str(network)
+        .map_err(|e| CliError::new(exit::GENERIC, format!("bad --network '{network}': {e}")))?;
+    Ok(net.network_type().into())
+}
+
+fn key_gen(ctx: &node::Ctx, out: &str) -> CliResult {
+    let prefix = prefix_of(&ctx.network)?;
+    let addr = keys::generate(out, prefix)?;
+    match ctx.output {
+        OutputFormat::Human => {
+            println!("Wrote a new ML-DSA-87 seed to {out} (mode 0600). BACK IT UP — it cannot be recovered.");
+            println!("Address: {addr}");
+        }
+        OutputFormat::Json => println!("{}", serde_json::json!({ "ok": true, "file": out, "address": addr.to_string() })),
+    }
+    Ok(())
+}
+
+/// `misaka key import` (ADR-0063 D1, hardened by SA-1).
+///
+/// Two sources, and neither is argv or the environment: stdin, or a file whose PATH is the
+/// argument and whose mode must be 0600. A seed passed as a value would be in `ps` output on
+/// every host it ran on and in the shell history forever after; a seed in an environment variable
+/// is inherited by every child this process spawns. There is deliberately no flag that takes one.
+fn key_import(ctx: &node::Ctx, out: &str, hex_stdin: bool, hex_file: Option<&str>) -> CliResult {
+    let source = match (hex_stdin, hex_file) {
+        (true, None) => keys::SeedSource::Stdin,
+        (false, Some(path)) => keys::SeedSource::File(path),
+        (true, Some(_)) => {
+            return Err(CliError::new(exit::GENERIC, "pass only one of --hex-stdin / --hex-file".to_string()));
+        }
+        (false, None) => {
+            return Err(CliError::new(
+                exit::GENERIC,
+                "name a source for the seed: --hex-stdin (pipe the 64 hex characters in) or --hex-file <path> (mode 0600). \
+                 The seed is never taken as a CLI value or from the environment. A mnemonic is not accepted either: this tree \
+                 and the web wallet have no agreed BIP39 derivation to an ML-DSA-87 seed, so an import that guessed one would \
+                 return a different address without saying so."
+                    .to_string(),
+            ));
+        }
+    };
+    let prefix = prefix_of(&ctx.network)?;
+    let addr = keys::import(out, prefix, source)?;
+    match ctx.output {
+        OutputFormat::Human => {
+            println!("Imported an ML-DSA-87 seed to {out} (mode 0600).");
+            println!("Address: {addr}");
+        }
+        OutputFormat::Json => println!("{}", serde_json::json!({ "ok": true, "file": out, "address": addr.to_string() })),
+    }
+    Ok(())
+}
+
+fn key_address(ctx: &node::Ctx, ks: &keys::KeySource) -> CliResult {
+    let prefix = prefix_of(&ctx.network)?;
+    let addr = ks.load_key()?.funding_address(prefix);
+    match ctx.output {
+        OutputFormat::Human => println!("{addr}"),
+        OutputFormat::Json => println!("{}", serde_json::json!({ "ok": true, "address": addr.to_string() })),
+    }
+    Ok(())
+}
+
+/// `misaka key pubkey`: the public half of a key, in the forms the chain and the genesis tooling use.
+///
+/// Before this an operator had no way to read their own verification key from the CLI: a bond's
+/// registered key was visible on chain (`misaka bond status`), but the key FILE it has to match was
+/// not, so "is this the key my bond was registered under?" and "what goes in my card row?" had no
+/// answer short of building a tool.
+fn key_pubkey(ctx: &node::Ctx, ks: &keys::KeySource) -> CliResult {
+    let prefix = prefix_of(&ctx.network)?;
+    let key = ks.load_key()?;
+    let public_key = faster_hex::hex_string(key.public_key());
+    let addr = key.funding_address(prefix);
+    let payload = faster_hex::hex_string(&addr.payload);
+    let validator_id = key.validator_id.to_string();
+    match ctx.output {
+        OutputFormat::Human => {
+            println!("verification key (ML-DSA-87, {} bytes):", key.public_key().len());
+            println!("{public_key}");
+            println!("address payload (P2PKH-ML-DSA-87): {payload}");
+            println!("address:                           {addr}");
+            println!("validator id:                      {validator_id}");
+        }
+        OutputFormat::Json => println!(
+            "{}",
+            serde_json::json!({
+                "ok": true,
+                "public_key": public_key,
+                "public_key_bytes": key.public_key().len(),
+                "address_payload": payload,
+                "address": addr.to_string(),
+                "validator_id": validator_id,
+            })
+        ),
+    }
+    Ok(())
+}
+
+#[derive(Subcommand, Debug)]
+enum NodeCmd {
+    /// The DAG as the node holds it: the sink (the selected chain's tip), the virtual DAA, the
+    /// tips and the pruning point. With --chain-from <hash>, how the selected chain moved since
+    /// that block — the chain blocks removed and added — which is what a reorg is, measured.
+    DagInfo {
+        /// A block hash this node once had as its sink (or any block): report the chain blocks
+        /// removed from and added to the selected chain since it.
+        #[arg(long, value_name = "HASH")]
+        chain_from: Option<String>,
+    },
+    /// One-shot health check: ports, sync, versions, RPC surface.
+    Doctor,
+    /// Liveness probe for a watchdog: is the node ANSWERING and is its chain MOVING? Exits 0 when
+    /// the wRPC answers within --timeout and the virtual DAA (or block count) advanced since the
+    /// last probe within --stall-secs; exits 11 (WEDGED) when the RPC does not answer — the shape
+    /// of the 2026-09-02 public-node hang, which `Restart=` never sees — and 12 (STALLED) when it
+    /// answers but nothing has moved for --stall-secs. State lives in --state between runs.
+    Liveness {
+        /// Where the previous probe's DAA/block count/timestamps are kept (JSON).
+        #[arg(long, default_value = "/var/lib/misaka/liveness.json")]
+        state: std::path::PathBuf,
+        /// No progress for this long is STALLED. Size it to several block intervals.
+        #[arg(long, default_value_t = 900)]
+        stall_secs: u64,
+    },
+    /// Print the host's SECURITY POSTURE from live state (ADR-0079 Decision 13): the confinement
+    /// backend actually in force, the worker environment as a child actually receives it, every
+    /// listening socket with its bind address and whether the acknowledgement variable was
+    /// required, which processes hold key material, the artifact paths and their digests, and the
+    /// interpreter fence read off the running node's own argv. Never printed from config, and
+    /// `none` is reported honestly where a backend is missing. Exits 13 (EXPOSED) when a public
+    /// entrance runs on a `none`-backend host or a public parser holds a key, 14 (DEGRADED) when
+    /// there is no backend and nothing public behind it. Signed by nobody; earns nothing.
+    SecurityReport {
+        /// Probe this worker's manifest for the roots it verified at load. Optional: without it
+        /// the artifact section reports paths and says it did not probe.
+        #[arg(long)]
+        worker: Option<std::path::PathBuf>,
+        /// Recompute the SHA-256 of every artifact path from its BYTES. This is a full read — the
+        /// hybrid class's artifact is 33 GiB — so it is opt-in.
+        #[arg(long, default_value_t = false)]
+        verify_artifacts: bool,
+    },
+    /// Show the effective local node RPC endpoints (the registry the node wrote, else the
+    /// network defaults). Lets you see what `misaka validator` will auto-connect to.
+    Endpoints,
+    /// Start a local node for --network-id (port-free; peers via the DNS seeds). Forwards to
+    /// `kaspad` with the network selected and an optional --profile; extra kaspad args after `--`.
+    Start(NodeStartArgs),
+}
+
+#[derive(Subcommand, Debug)]
+enum BootstrapCmd {
+    /// Show the DNS seed domains + default P2P port for the network.
+    Seeds,
+    /// Resolve the DNS seeds to live peer IPs (debug; the normal path does this internally).
+    Resolve,
+}
+
+#[derive(Subcommand, Debug)]
+enum EvmCmd {
+    /// Native BILI balance of an EVM address (`eth_getBalance`).
+    Balance {
+        /// 0x-prefixed 20-byte EVM address.
+        #[arg(long)]
+        address: String,
+    },
+    /// Next nonce of an EVM address (`eth_getTransactionCount`, latest).
+    Nonce {
+        #[arg(long)]
+        address: String,
+    },
+    /// Estimate gas for a call (`eth_estimateGas`).
+    EstimateGas {
+        #[arg(long)]
+        from: String,
+        /// Destination address; omit for a contract-CREATE estimate.
+        #[arg(long)]
+        to: Option<String>,
+        /// Value in sompi (scaled to wei by EVM_NATIVE_SCALE).
+        #[arg(long, default_value_t = 0)]
+        value: u64,
+        /// 0x calldata.
+        #[arg(long)]
+        data: Option<String>,
+    },
+    /// Bridge BILI into the EVM lane: lock it for an EVM address (dry-run unless --yes). Claim the
+    /// lock afterwards with `evm claim` against a mining node.
+    DepositLock {
+        /// The EVM address to credit — paste the EIP-55 checksummed form so a typo is caught.
+        #[arg(long)]
+        evm_address: String,
+        /// Amount in sompi, locked into the deposit output.
+        #[arg(long)]
+        amount: u64,
+        /// Claim-inclusion tip in sompi (at most the amount), paid to the block that executes the claim.
+        #[arg(long, default_value_t = 0)]
+        claim_tip: u64,
+        /// Refund timeout as a DAA delta from the node's virtual DAA: claimable before it, refundable to this key after.
+        #[arg(long, default_value_t = 1_000_000)]
+        timeout_daa_delta: u64,
+        /// Fee in sompi (default: mass-based).
+        #[arg(long)]
+        fee: Option<u64>,
+        /// Actually broadcast (otherwise a dry-run preview).
+        #[arg(long)]
+        yes: bool,
+        #[command(flatten)]
+        key: KeyArgs,
+    },
+    /// Queue the claim of a deposit lock on this node (`submitEvmDepositClaim`); run it against a
+    /// mining node so the claim is included.
+    Claim {
+        /// The lock outpoint `deposit-lock` printed, `txid_hex:index`.
+        #[arg(long)]
+        outpoint: String,
+    },
+    /// Refund an unclaimed deposit lock to this key once its refund timeout has passed (dry-run unless --yes). The lock entry is
+    /// read by outpoint (`getPalwAcceptanceReads`, op 246); the spend is signed by this key's ML-DSA-87 funding key.
+    Refund {
+        /// The lock outpoint `deposit-lock` printed, `txid_hex:index`.
+        #[arg(long)]
+        outpoint: String,
+        /// Fee in sompi.
+        #[arg(long, default_value_t = 100_000)]
+        fee: u64,
+        /// Actually broadcast (otherwise a dry-run preview).
+        #[arg(long)]
+        yes: bool,
+        #[command(flatten)]
+        key: KeyArgs,
+    },
+    /// EVM transaction lifecycle (`misaka_getEvmTxStatus`).
+    /// A read-only eth_call at latest (ADR-0089's doors answer any caller): --to <addr> --data <hex>.
+    View {
+        #[arg(long)]
+        to: String,
+        #[arg(long)]
+        data: String,
+    },
+    #[command(subcommand)]
+    Tx(EvmTxCmd),
+    /// EVM HD wallet — create / import / address. [needs --features evm-send]
+    #[cfg(feature = "evm-send")]
+    #[command(subcommand)]
+    Wallet(EvmWalletCmd),
+    /// Sign + broadcast an EIP-1559 transfer (dry-run unless --yes). [needs --features evm-send]
+    #[cfg(feature = "evm-send")]
+    Send {
+        /// Recipient 0x address.
+        #[arg(long)]
+        to: String,
+        /// Amount in BILI (decimal; 1 BILI = 1e18 wei).
+        #[arg(long)]
+        amount: String,
+        /// Gas limit (default: eth_estimateGas).
+        #[arg(long)]
+        gas_limit: Option<u64>,
+        /// Max fee per gas, wei (default: eth_gasPrice).
+        #[arg(long)]
+        max_fee: Option<u128>,
+        /// Nonce (default: eth_getTransactionCount pending).
+        #[arg(long)]
+        nonce: Option<u64>,
+        /// Actually broadcast (otherwise a dry-run preview).
+        #[arg(long)]
+        yes: bool,
+        /// After broadcast, poll until accepted.
+        #[arg(long)]
+        wait: bool,
+        #[command(flatten)]
+        key: EvmKeyArgs,
+    },
+    /// Deploy a contract (raw init code; dry-run unless --yes). [needs --features evm-send]
+    #[cfg(feature = "evm-send")]
+    Deploy {
+        /// Init code as inline 0x hex (creation bytecode + ABI-encoded ctor args).
+        #[arg(long)]
+        bytecode: Option<String>,
+        /// Init code from a file (hex). Use this for large blobs.
+        #[arg(long)]
+        bytecode_file: Option<String>,
+        /// Value to endow, BILI (decimal; usually 0).
+        #[arg(long, default_value = "0")]
+        value: String,
+        #[arg(long)]
+        gas_limit: Option<u64>,
+        #[arg(long)]
+        max_fee: Option<u128>,
+        #[arg(long)]
+        nonce: Option<u64>,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        wait: bool,
+        #[command(flatten)]
+        key: EvmKeyArgs,
+    },
+    /// Call a contract with raw calldata (dry-run unless --yes). [needs --features evm-send]
+    #[cfg(feature = "evm-send")]
+    Call {
+        /// Contract 0x address.
+        #[arg(long)]
+        to: String,
+        /// Calldata as inline 0x hex (selector + ABI-encoded args).
+        #[arg(long)]
+        data: Option<String>,
+        /// Calldata from a file (hex).
+        #[arg(long)]
+        data_file: Option<String>,
+        /// Value to send, BILI (decimal; usually 0).
+        #[arg(long, default_value = "0")]
+        value: String,
+        #[arg(long)]
+        gas_limit: Option<u64>,
+        #[arg(long)]
+        max_fee: Option<u128>,
+        #[arg(long)]
+        nonce: Option<u64>,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        wait: bool,
+        #[command(flatten)]
+        key: EvmKeyArgs,
+    },
+}
+
+#[cfg(feature = "evm-send")]
+#[derive(Subcommand, Debug)]
+enum EvmWalletCmd {
+    /// Generate a new 24-word BIP-39 mnemonic to a 0600 file + print the address.
+    Create {
+        #[arg(long)]
+        out: String,
+    },
+    /// Import a mnemonic (read from stdin) to a 0600 file.
+    Import {
+        #[arg(long)]
+        out: String,
+    },
+    /// Print the EVM address for a key.
+    Address {
+        #[command(flatten)]
+        key: EvmKeyArgs,
+    },
+}
+
+/// EVM key-source flags (BIP-39 mnemonic file / raw secp key file / stdin). The
+/// secret is never a CLI value.
+#[cfg(feature = "evm-send")]
+#[derive(Args, Debug, Clone)]
+struct EvmKeyArgs {
+    /// Path to a BIP-39 mnemonic file (derives m/44'/60'/0'/0/0).
+    #[arg(long, env = "MISAKA_EVM_MNEMONIC_FILE")]
+    mnemonic_file: Option<String>,
+    /// Path to a hex 32-byte secp256k1 private key file.
+    #[arg(long, env = "MISAKA_EVM_KEY_FILE")]
+    key_file: Option<String>,
+    /// Read the mnemonic or hex key from stdin.
+    #[arg(long)]
+    key_stdin: bool,
+}
+
+#[cfg(feature = "evm-send")]
+impl EvmKeyArgs {
+    fn source(&self) -> evm_send::EvmKeySource {
+        evm_send::EvmKeySource {
+            mnemonic_file: self.mnemonic_file.clone(),
+            key_file: self.key_file.clone(),
+            key_stdin: self.key_stdin,
+        }
+    }
+}
+
+#[derive(Subcommand, Debug)]
+enum EvmTxCmd {
+    /// One-shot status by tx hash.
+    Status {
+        /// 0x-prefixed 32-byte EVM tx hash.
+        #[arg(long)]
+        hash: String,
+    },
+    /// Poll the status until the tx is accepted (mined) or the timeout elapses.
+    Wait {
+        #[arg(long)]
+        hash: String,
+        /// Overall wait timeout, seconds.
+        #[arg(long, default_value_t = 1800)]
+        timeout: u64,
+        /// Poll interval, seconds.
+        #[arg(long, default_value_t = 2)]
+        poll: u64,
+    },
+}
+
+fn main() -> std::process::ExitCode {
+    // Even boxed command futures have construction/poll temporaries in debug builds.
+    // Run the dispatcher on a bounded stack of its own so normal CLI invocations do
+    // not depend on an operator changing the process stack limit (including --help).
+    match std::thread::Builder::new().name("misaka-cli".into()).stack_size(64 * 1024 * 1024).spawn(cli_main) {
+        Ok(worker) => worker.join().unwrap_or_else(|panic| std::panic::resume_unwind(panic)),
+        Err(error) => {
+            eprintln!("error: cannot start CLI dispatcher: {error}");
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+#[tokio::main(flavor = "current_thread")]
+async fn cli_main() -> std::process::ExitCode {
+    Box::pin(run_cli()).await
+}
+
+async fn run_cli() -> std::process::ExitCode {
+    let cli = Cli::parse();
+
+    // Config layer (~/.misaka/config.toml). A malformed file is a hard error so a
+    // typo is never silently ignored; a missing file is the empty default. Precedence
+    // for each value: CLI flag > env var (both filled by clap) > config file > default.
+    let cfg = match config::Config::load() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("error: {}", e.msg);
+            return std::process::ExitCode::from(e.code as u8);
+        }
+    };
+    let ctx = node::Ctx {
+        output: cli.output,
+        network: node::resolve_network(cli.network.clone(), cfg.network_id.clone()),
+        rpc: cli.rpc.clone().or_else(|| cfg.node.wrpc_borsh.clone()),
+        node_grpc: cli.node_grpc.clone().or_else(|| cfg.node.grpc.clone()),
+        evm_rpc: cli.evm_rpc.clone().or_else(|| cfg.evm.rpc_url.clone()).unwrap_or_else(|| "http://127.0.0.1:8545".to_string()),
+        timeout_secs: cli.timeout,
+        quiet: cli.quiet,
+        palw_drill_genesis_salt: cli.palw_drill_genesis_salt.clone(),
+    };
+
+    // ADR-0122: a mining command takes the network the operator NAMED (the flag, the env, the
+    // config file) and otherwise reads it from mining.toml or the running node, falling back to the
+    // same `node::DEFAULT_NETWORK` every other command uses only when neither says.
+    let named_network = cli.network.clone().or_else(|| cfg.network_id.clone());
+    let profile =
+        |args: &ProfileArgs| operator::profile::Profile::resolve(&args.overrides(), named_network.as_deref(), ctx.rpc.as_deref());
+
+    // Each command has its own boxed future. A single giant async match allocated the
+    // temporaries of every command in one poll frame, overflowing the process stack even for help.
+    let ctx = &ctx;
+    let named_network = &named_network;
+    let task: std::pin::Pin<Box<dyn std::future::Future<Output = CliResult> + '_>> = match cli.command {
+        Command::Init(args) => Box::pin(async move {
+            match args.into_setup(named_network.clone(), ctx.rpc.clone()) {
+                Ok(a) => operator::wizard::init(ctx, a).await,
+                Err(e) => Err(e),
+            }
+        }),
+        Command::Mining(MiningCmd::Setup(args)) => Box::pin(async move {
+            match args.into_setup(named_network.clone(), ctx.rpc.clone()) {
+                Ok(a) => operator::wizard::run(ctx, operator::wizard::Purpose::Mine, a).await,
+                Err(e) => Err(e),
+            }
+        }),
+        Command::Verifier(VerifierCmd::Setup(args)) => Box::pin(async move {
+            match args.into_setup(named_network.clone(), ctx.rpc.clone()) {
+                Ok(a) => operator::wizard::run(ctx, operator::wizard::Purpose::Verify, a).await,
+                Err(e) => Err(e),
+            }
+        }),
+        Command::Mining(MiningCmd::Status { profile: args, watch }) => Box::pin(async move {
+            match profile(&args) {
+                Ok(p) => operator::status::run(ctx, p, watch).await,
+                Err(e) => Err(e),
+            }
+        }),
+        Command::Mining(MiningCmd::Start { profile: args, detach, print_command, service }) => Box::pin(async move {
+            match profile(&args) {
+                Ok(p) => {
+                    // The supervisor a detach or a unit starts is this same profile, named the same way.
+                    let mut relaunch = vec!["--network".to_string(), p.network.clone()];
+                    if let Some(rpc) = &ctx.rpc {
+                        relaunch.extend(["--rpc".to_string(), rpc.clone()]);
+                    }
+                    relaunch.extend(["mining".to_string(), "run".to_string()]);
+                    relaunch.extend(args.relaunch_args());
+                    let mode =
+                        operator::supervisor::StartMode { detach, print_command, service, role: operator::supervisor::Role::Miner };
+                    operator::supervisor::start(ctx, p, mode, &|| profile(&args), &relaunch).await
+                }
+                Err(e) => Err(e),
+            }
+        }),
+        Command::Mining(MiningCmd::Stop { profile: args, drain, force, grace }) => Box::pin(async move {
+            match profile(&args) {
+                Ok(p) => operator::supervisor::stop(ctx, p, drain, force, grace).await,
+                Err(e) => Err(e),
+            }
+        }),
+        Command::Mining(MiningCmd::Run { profile: args, verifier }) => Box::pin(async move {
+            match profile(&args) {
+                Ok(p) => match operator::supervisor::plan(
+                    &p,
+                    if verifier { operator::supervisor::Role::Verifier } else { operator::supervisor::Role::Miner },
+                ) {
+                    Ok(plan) => operator::supervisor::run_supervisor(plan, false, &|| profile(&args)).await,
+                    Err(f) => Err(CliError::new(f.exit, f.render())),
+                },
+                Err(e) => Err(e),
+            }
+        }),
+        Command::Doctor(args) => Box::pin(async move {
+            match profile(&args.profile) {
+                Ok(p) => operator::doctor::run(ctx, p, &args.areas, args.strict).await,
+                Err(e) => Err(e),
+            }
+        }),
+        Command::Work(WorkCmd::List { profile: args }) => Box::pin(async move {
+            match profile(&args) {
+                Ok(p) => operator::work_cmd::list(ctx, p).await,
+                Err(e) => Err(e),
+            }
+        }),
+        Command::Work(WorkCmd::Show { id, profile: args }) => Box::pin(async move {
+            match profile(&args) {
+                Ok(p) => operator::work_cmd::show(ctx, p, &id).await,
+                Err(e) => Err(e),
+            }
+        }),
+        Command::Work(WorkCmd::Why { id, profile: args }) => Box::pin(async move {
+            match profile(&args) {
+                Ok(p) => operator::work_cmd::why(ctx, p, &id).await,
+                Err(e) => Err(e),
+            }
+        }),
+        Command::Dashboard { listen, public, profile: args } => {
+            Box::pin(async move { operator::dashboard::run(&listen, public, &|| profile(&args)).await })
+        }
+        Command::Rewards { profile: args } => Box::pin(async move {
+            match profile(&args) {
+                Ok(p) => operator::roles::rewards(ctx, p).await,
+                Err(e) => Err(e),
+            }
+        }),
+        Command::Verifier(VerifierCmd::Status { profile: args }) => Box::pin(async move {
+            match profile(&args) {
+                Ok(p) => operator::roles::verifier_status(ctx, p).await,
+                Err(e) => Err(e),
+            }
+        }),
+        Command::Verifier(VerifierCmd::Start { profile: args, detach, print_command }) => Box::pin(async move {
+            match profile(&args) {
+                Ok(p) => {
+                    let mut relaunch = vec!["--network".to_string(), p.network.clone()];
+                    if let Some(rpc) = &ctx.rpc {
+                        relaunch.extend(["--rpc".to_string(), rpc.clone()]);
+                    }
+                    relaunch.extend(["mining".to_string(), "run".to_string(), "--verifier".to_string()]);
+                    relaunch.extend(args.relaunch_args());
+                    let mode = operator::supervisor::StartMode {
+                        detach,
+                        print_command,
+                        service: false,
+                        role: operator::supervisor::Role::Verifier,
+                    };
+                    operator::supervisor::start(ctx, p, mode, &|| profile(&args), &relaunch).await
+                }
+                Err(e) => Err(e),
+            }
+        }),
+        Command::Verifier(VerifierCmd::Stop { profile: args, force }) => Box::pin(async move {
+            match profile(&args) {
+                Ok(p) => operator::supervisor::stop(ctx, p, false, force, None).await,
+                Err(e) => Err(e),
+            }
+        }),
+        Command::Model(ModelCmd::List { profile: args }) => Box::pin(async move {
+            match profile(&args) {
+                Ok(p) => operator::market::model_list(ctx, p).await,
+                Err(e) => Err(e),
+            }
+        }),
+        Command::Model(ModelCmd::Status { model, profile: args }) => Box::pin(async move {
+            match profile(&args) {
+                Ok(p) => palw_model_ops::status(ctx, p, model).await,
+                Err(e) => Err(e),
+            }
+        }),
+        Command::Model(ModelCmd::Inspect { artifact, profile: args }) => Box::pin(async move {
+            match profile(&args) {
+                Ok(p) => palw_model_ops::inspect(ctx, p, artifact).await,
+                Err(e) => Err(e),
+            }
+        }),
+        Command::Model(ModelCmd::Preflight { artifact, model, profile: args }) => Box::pin(async move {
+            {
+                if model_preflight::is_model(&artifact) {
+                    // A model is judged from its headers, locally: no node, no profile.
+                    model_preflight::model_preflight(ctx, &artifact, &model).await
+                } else {
+                    match profile(&args) {
+                        Ok(p) => palw_model_ops::preflight(ctx, p, artifact).await,
+                        Err(e) => Err(e),
+                    }
+                }
+            }
+        }),
+        Command::Model(ModelCmd::Registration { id, profile: args }) => Box::pin(async move {
+            match profile(&args) {
+                Ok(p) => palw_model_ops::registration(ctx, p, id).await,
+                Err(e) => Err(e),
+            }
+        }),
+        Command::Model(ModelCmd::Readiness { class_id, profile: args }) => Box::pin(async move {
+            match profile(&args) {
+                Ok(p) => palw_model_ops::readiness(ctx, p, class_id).await,
+                Err(e) => Err(e),
+            }
+        }),
+        Command::Model(ModelCmd::Certify { class_id, yes, profile: args }) => Box::pin(async move {
+            match profile(&args) {
+                Ok(p) => palw_model_ops::certify(ctx, p, class_id, yes).await,
+                Err(e) => Err(e),
+            }
+        }),
+        Command::Model(ModelCmd::Add {
+            model,
+            artifact,
+            manifest,
+            prompt_lane,
+            seat_ms_per_position,
+            yes,
+            no_wait,
+            sponsor,
+            pack_gate,
+            quote,
+            relay,
+            relay_min,
+            max_fee_sompi,
+            export_bundle,
+            owner_pubkey,
+            payer_address,
+            quote_rpc,
+            allow_single_rpc,
+            pin,
+            accept_unverified_state,
+            profile: args,
+        }) => Box::pin(async move {
+            match (profile(&args), sponsor.resolve()) {
+                (Ok(p), Ok(sponsor)) => {
+                    let a = operator::model_add::ModelAddArgs {
+                        model,
+                        artifact,
+                        manifest,
+                        prompt_lane,
+                        seat_ms_per_position,
+                        yes,
+                        no_wait,
+                        sponsor,
+                        pack_gate,
+                        remote: operator::model_remote::RemoteArgs {
+                            quote_only: quote,
+                            relay,
+                            relay_min,
+                            max_wallet_sompi: max_fee_sompi,
+                            export_bundle,
+                            owner_pubkey,
+                            payer_address,
+                            quote_rpc,
+                            single_rpc: allow_single_rpc,
+                            pin,
+                            accept_unverified_state,
+                        },
+                    };
+                    operator::model_add::run(ctx, p, a).await
+                }
+                (Err(e), _) | (_, Err(e)) => Err(e),
+            }
+        }),
+        Command::Model(ModelCmd::Sign {
+            bundle,
+            key_file,
+            key_stdin,
+            payer_key_file,
+            owner_only,
+            carrier_only,
+            expect_class,
+            expect_root,
+            expect_owner,
+            max_fee_sompi,
+            pin,
+            pin_from_own_node,
+            accept_unverified_state,
+            out,
+            yes,
+        }) => Box::pin(async move {
+            {
+                operator::model_bundle::sign(
+                    ctx,
+                    operator::model_bundle::SignArgs {
+                        bundle,
+                        key_file,
+                        key_stdin,
+                        payer_key_file,
+                        owner_only,
+                        carrier_only,
+                        expect: operator::model_bundle::ExpectArgs { class: expect_class, root: expect_root, owner: expect_owner },
+                        max_fee_sompi,
+                        pin,
+                        pin_from_own_node,
+                        accept_unverified_state,
+                        out,
+                        yes,
+                    },
+                )
+                .await
+            }
+        }),
+        Command::Model(ModelCmd::Submit {
+            signed,
+            relay,
+            relay_min,
+            expect_class,
+            expect_root,
+            expect_owner,
+            max_fee_sompi,
+            allow_duplicate,
+            no_wait,
+            pin,
+            yes,
+        }) => Box::pin(async move {
+            {
+                operator::model_bundle::submit(
+                    ctx,
+                    operator::model_bundle::SubmitArgs {
+                        signed,
+                        relay,
+                        relay_min,
+                        expect: operator::model_bundle::ExpectArgs { class: expect_class, root: expect_root, owner: expect_owner },
+                        max_fee_sompi,
+                        allow_duplicate,
+                        no_wait,
+                        pin,
+                        yes,
+                    },
+                )
+                .await
+            }
+        }),
+        Command::Model(ModelCmd::Verify { signed, class, root, owner, pin }) => Box::pin(async move {
+            operator::remote_proof::verify(ctx, operator::remote_proof::VerifyArgs { signed, class, root, owner, pin }).await
+        }),
+        Command::Model(ModelCmd::Onboard(cmd)) => Box::pin(async move {
+            match cmd {
+                OnboardCmd::EnvelopeExport { registration, bond, valid_from, valid_until, out } => {
+                    operator::model_onboard::envelope_export(ctx, &registration, &bond, valid_from, valid_until, &out)
+                }
+                OnboardCmd::EnvelopeSign { request, key, expect_bond, out } => {
+                    operator::model_onboard::envelope_sign(ctx, &request, &key.source(), expect_bond.as_deref(), &out)
+                }
+                OnboardCmd::Status { class } => operator::model_onboard::status(ctx, &class).await,
+                OnboardCmd::BootstrapPrepare {
+                    stage,
+                    registration,
+                    artifact,
+                    max_positions,
+                    bond,
+                    key,
+                    out,
+                    maximum_binding_reservation_sompi,
+                    maximum_check_fee_sompi,
+                    ledger_root,
+                    aux_root,
+                    tip_daa,
+                    commitment_borsh,
+                } => {
+                    operator::model_bootstrap::prepare(
+                        ctx,
+                        operator::model_bootstrap::PrepareArgs {
+                            stage,
+                            registration,
+                            artifact,
+                            max_positions,
+                            bond,
+                            key: key.source(),
+                            out,
+                            maximum_binding_reservation_sompi,
+                            maximum_check_fee_sompi,
+                            ledger_root,
+                            aux_root,
+                            tip_daa,
+                            commitment: commitment_borsh,
+                        },
+                    )
+                    .await
+                }
+                OnboardCmd::CompletePost { class, artifact, bond, key, out, ledger_root, aux_root, tip_daa } => {
+                    operator::model_complete::post(
+                        ctx,
+                        &class,
+                        &artifact,
+                        &bond,
+                        &key.source(),
+                        &out,
+                        &ledger_root,
+                        &aux_root,
+                        tip_daa,
+                    )
+                    .await
+                }
+                OnboardCmd::Verify { class, artifact, ledger_root, aux_root, tip_daa } => {
+                    operator::model_onboard::verify(
+                        ctx,
+                        &class,
+                        artifact.as_deref(),
+                        ledger_root.as_deref(),
+                        aux_root.as_deref(),
+                        tip_daa,
+                    )
+                    .await
+                }
+            }
+        }),
+        Command::Model(ModelCmd::Source(SourceCmd::Inspect { context, ledger_root, aux_root })) => {
+            Box::pin(async move { operator::model_source::inspect(ctx, &context, &ledger_root, &aux_root).await })
+        }
+        Command::Model(ModelCmd::Source(SourceCmd::Snapshot { ledger_root, aux_root, out })) => {
+            Box::pin(async move { operator::model_source::snapshot(ctx, &ledger_root, &aux_root, &out).await })
+        }
+        Command::Model(ModelCmd::Source(SourceCmd::Carriage { block, state_root, out })) => {
+            Box::pin(async move { operator::model_source::carriage(ctx, &block, state_root.as_deref(), &out).await })
+        }
+        Command::Model(ModelCmd::Market(MarketCmd::Open { model, line, seed, yes, no_wait, profile: args })) => Box::pin(async move {
+            match profile(&args) {
+                Ok(p) => operator::market::market_open(ctx, p, &model, line, seed, yes, no_wait).await,
+                Err(e) => Err(e),
+            }
+        }),
+        Command::Position(PositionCmd::List { holder, profile: args }) => Box::pin(async move {
+            match profile(&args) {
+                Ok(p) => operator::market::position_list(ctx, p, holder).await,
+                Err(e) => Err(e),
+            }
+        }),
+        Command::Position(PositionCmd::Quote { line, msk, positions, profile: args }) => Box::pin(async move {
+            match profile(&args) {
+                Ok(p) => operator::market::position_quote(ctx, p, &line, msk.as_deref(), positions).await,
+                Err(e) => Err(e),
+            }
+        }),
+        Command::Position(PositionCmd::Buy { line, msk, slippage, yes, profile: args }) => Box::pin(async move {
+            match profile(&args) {
+                Ok(p) => operator::market::position_buy(ctx, p, &line, &msk, &slippage, yes).await,
+                Err(e) => Err(e),
+            }
+        }),
+        Command::Position(PositionCmd::Sell { line, positions, slippage, yes, accept_burned_proceeds, profile: args }) => {
+            Box::pin(async move {
+                {
+                    match profile(&args) {
+                        Ok(p) => {
+                            operator::market::position_sell(ctx, p, &line, positions, &slippage, yes, accept_burned_proceeds).await
+                        }
+                        Err(e) => Err(e),
+                    }
+                }
+            })
+        }
+        Command::Logs(args) => Box::pin(async move {
+            match profile(&args.profile) {
+                Ok(p) => operator::logs::run(p, &args.components, args.work.as_deref(), args.events, args.follow, args.lines).await,
+                Err(e) => Err(e),
+            }
+        }),
+        Command::Node(NodeCmd::Doctor) => Box::pin(async move { node::doctor(ctx).await }),
+        Command::Node(NodeCmd::Liveness { state, stall_secs }) => {
+            Box::pin(async move { node::liveness(ctx, &state, stall_secs).await })
+        }
+        Command::Node(NodeCmd::DagInfo { chain_from }) => Box::pin(async move { node::dag_info(ctx, chain_from.as_deref()).await }),
+        Command::Node(NodeCmd::SecurityReport { worker, verify_artifacts }) => {
+            Box::pin(async move { security::security_report(ctx, worker.as_ref(), verify_artifacts) })
+        }
+        Command::Node(NodeCmd::Endpoints) => Box::pin(async move { bootstrap::endpoints(ctx.output, &ctx.network) }),
+        Command::Node(NodeCmd::Start(a)) => Box::pin(async move {
+            forward::node(ctx, a.profile.as_deref(), a.node_profile.as_deref(), a.vps_8gb, a.min_disk_free_percent, &a.args, false)
+        }),
+        Command::Join(a) => Box::pin(async move {
+            forward::node(ctx, a.profile.as_deref(), a.node_profile.as_deref(), a.vps_8gb, a.min_disk_free_percent, &a.args, true)
+        }),
+        Command::Bootstrap(BootstrapCmd::Seeds) => Box::pin(async move { bootstrap::seeds(ctx.output, &ctx.network) }),
+        Command::Bootstrap(BootstrapCmd::Resolve) => Box::pin(async move { bootstrap::resolve(ctx.output, &ctx.network) }),
+        Command::Setup(cmd) => Box::pin(async move { setup::run(ctx, cmd).await }),
+        Command::Evm(EvmCmd::View { to, data }) => Box::pin(async move { eth::view(ctx, &to, &data) }),
+        Command::Evm(EvmCmd::DepositLock { evm_address, amount, claim_tip, timeout_daa_delta, fee, yes, key }) => {
+            Box::pin(async move {
+                evm_deposit::deposit_lock(ctx, &key.source(), &evm_address, amount, claim_tip, timeout_daa_delta, fee, yes).await
+            })
+        }
+        Command::Evm(EvmCmd::Claim { outpoint }) => Box::pin(async move { evm_deposit::claim(ctx, &outpoint).await }),
+        Command::Evm(EvmCmd::Refund { outpoint, fee, yes, key }) => {
+            Box::pin(async move { evm_deposit::refund(ctx, &key.source(), &outpoint, fee, yes).await })
+        }
+        Command::Evm(EvmCmd::Balance { address }) => Box::pin(async move { eth::balance(ctx, &address) }),
+        Command::Evm(EvmCmd::Nonce { address }) => Box::pin(async move { eth::nonce(ctx, &address) }),
+        Command::Evm(EvmCmd::EstimateGas { from, to, value, data }) => {
+            Box::pin(async move { eth::estimate_gas(ctx, &from, to.as_deref(), value, data.as_deref()) })
+        }
+        Command::Evm(EvmCmd::Tx(EvmTxCmd::Status { hash })) => Box::pin(async move { eth::tx_status(ctx, &hash) }),
+        Command::Evm(EvmCmd::Tx(EvmTxCmd::Wait { hash, timeout, poll })) => {
+            Box::pin(async move { eth::tx_wait(ctx, &hash, timeout, poll) })
+        }
+        Command::Palw(PalwCmd::RoundLane { bond }) => Box::pin(async move { palw_round_lane(ctx, bond.as_deref()).await }),
+        Command::Palw(PalwCmd::Settlement { daa, min_depth }) => {
+            Box::pin(async move { palw_settlement::run(ctx, daa, min_depth).await })
+        }
+        Command::Palw(PalwCmd::Vesting { bond, address, claim, limit, after, exec_after, json }) => {
+            Box::pin(async move { palw_vesting::run(ctx, bond, address, claim, limit, after, exec_after, json).await })
+        }
+        Command::Palw(PalwCmd::CapacityShadow(args)) => Box::pin(async move { palw_capacity_shadow::run(ctx, args).await }),
+        Command::Palw(PalwCmd::PanelV3(args)) => Box::pin(async move { palw_panel_v3::run(ctx, args).await }),
+        Command::Palw(PalwCmd::Economics {}) => Box::pin(async move { palw_economics::run(ctx).await }),
+        Command::Palw(PalwCmd::Registry {}) => Box::pin(async move { palw_registry::run(ctx).await }),
+        Command::Palw(PalwCmd::Panel(PalwPanelCmd::Status { class })) => {
+            Box::pin(async move { palw_panel::status(ctx, class.as_deref()).await })
+        }
+        Command::Palw(PalwCmd::Panel(PalwPanelCmd::List { class })) => {
+            Box::pin(async move { palw_panel::list(ctx, class.as_deref()).await })
+        }
+        Command::Palw(PalwCmd::Panel(PalwPanelCmd::Assignments { claim })) => {
+            Box::pin(async move { palw_panel::assignments(ctx, claim.as_deref()).await })
+        }
+        Command::Palw(PalwCmd::Panel(PalwPanelCmd::Join { key, bond, class, artifact, yes })) => Box::pin(async move {
+            palw_panel::join(ctx, &key.source(), bond.as_deref(), &class, &artifact.display().to_string(), yes).await
+        }),
+        Command::Palw(PalwCmd::Panel(PalwPanelCmd::Leave { key, bond, class, yes })) => {
+            Box::pin(async move { palw_panel::leave(ctx, &key.source(), bond.as_deref(), &class, yes).await })
+        }
+        Command::Palw(PalwCmd::Panel(PalwPanelCmd::Readiness(PalwPanelReadinessCmd::Prove { class, bond }))) => {
+            Box::pin(async move { palw_panel::readiness_prove(ctx, &class, &bond).await })
+        }
+        Command::Palw(PalwCmd::MaterialSession(cmd)) => Box::pin(async move { palw_material_session::run(cmd) }),
+        Command::Palw(PalwCmd::FpSubmit { tx, yes, material_out, capture, dsl_payload }) => Box::pin(async move {
+            palw_fp::submit(ctx, &tx, yes, material_out.as_deref(), capture.as_deref(), dsl_payload.as_deref()).await
+        }),
+        Command::Palw(PalwCmd::SubmitObject { key, object, yes, allow_duplicate, maximum_total_fee_sompi }) => Box::pin(async move {
+            palw_fp::submit_objects_v2_capped(ctx, &key.source(), &object, yes, allow_duplicate, maximum_total_fee_sompi)
+                .await
+                .map(|_| ())
+        }),
+        Command::Palw(PalwCmd::TirRegistration {
+            key,
+            artifact,
+            parent,
+            bond,
+            out,
+            model_id,
+            pack_gate,
+            accept_unverified_state,
+            allow_duplicate,
+        }) => Box::pin(async move {
+            {
+                palw_model_ops::tir_registration_object_gated(
+                    ctx,
+                    &key.source(),
+                    &artifact,
+                    parent.as_deref(),
+                    &bond,
+                    &out,
+                    model_id.as_deref(),
+                    &pack_gate,
+                    accept_unverified_state.as_deref(),
+                    allow_duplicate,
+                )
+                .await
+            }
+        }),
+        Command::Palw(PalwCmd::GenRegistration { key, artifact, bond, out, model_id }) => Box::pin(async move {
+            palw_gen::gen_registration_object(ctx, &key.source(), &artifact, &bond, &out, model_id.as_deref()).await
+        }),
+        Command::Palw(PalwCmd::GenClaim { key, artifact, request, bond, operator_id, out_dir, retention_dir, plant, list_leaves }) => {
+            Box::pin(async move {
+                {
+                    palw_gen::gen_claim_files(
+                        ctx,
+                        &key.source(),
+                        palw_gen::GenClaimArgs {
+                            artifact: &artifact,
+                            request: &request,
+                            bond: &bond,
+                            operator_id: &operator_id,
+                            out_dir: &out_dir,
+                            retention_dir: retention_dir.as_deref(),
+                            plant: plant.as_deref(),
+                            list_leaves: list_leaves.as_deref(),
+                        },
+                    )
+                    .await
+                }
+            })
+        }
+        Command::Palw(PalwCmd::Extension(ExtensionCmd::Inspect { manifest, json })) => {
+            Box::pin(async move { palw_extension::inspect(ctx, &manifest, json) })
+        }
+        Command::Palw(PalwCmd::Extension(ExtensionCmd::Verify { manifest, depth, receipt_out, key, json })) => {
+            Box::pin(
+                async move { palw_extension::verify(ctx, &manifest, depth.depth(), receipt_out.as_deref(), key.source_opt(), json) },
+            )
+        }
+        Command::Palw(PalwCmd::Extension(ExtensionCmd::Preflight { manifest, json })) => {
+            Box::pin(async move { palw_extension::preflight(ctx, &manifest, json).await })
+        }
+        Command::Palw(PalwCmd::Extension(ExtensionCmd::Submit { manifest, key, bond, yes, json, sponsor })) => Box::pin(async move {
+            match sponsor.resolve() {
+                Ok(sponsor) => palw_extension::submit(ctx, &manifest, &key.source(), bond.as_deref(), yes, json, sponsor).await,
+                Err(e) => Err(e),
+            }
+        }),
+        Command::Palw(PalwCmd::Extension(ExtensionCmd::ReceiptVerify { receipt, manifest, json })) => {
+            Box::pin(async move { palw_extension::receipt_verify(ctx, &receipt, manifest.as_deref(), json) })
+        }
+        Command::Palw(PalwCmd::DaAccuse { key, claim, row, tile, bond, out }) => Box::pin(async move {
+            palw_da::accuse(ctx, &key.source(), palw_da::DaAccuseArgs { claim: &claim, row, tile, bond: &bond, out: &out }).await
+        }),
+        Command::Palw(PalwCmd::ShardPlan { key, class, count, bond, out }) => {
+            Box::pin(async move { palw_shard_licensing::shard_plan(ctx, &key.source(), &class, count, &bond, &out).await })
+        }
+        Command::Palw(PalwCmd::BondShards { key, bond, class, count, shards, out }) => {
+            Box::pin(async move { palw_shard_licensing::bond_shards(ctx, &key.source(), &bond, &class, count, &shards, &out).await })
+        }
+        Command::Palw(PalwCmd::ShardAccuse { key, accusation, bond, ladder, out }) => Box::pin(async move {
+            {
+                palw_shard_court::accuse(
+                    ctx,
+                    &key.source(),
+                    palw_shard_court::ShardAccuseArgs { accusation: &accusation, bond: &bond, ladder, out: &out },
+                )
+                .await
+            }
+        }),
+        Command::Palw(PalwCmd::CourtClose { key, close, class, side, deadline_at, state, restart, offline, yes }) => {
+            Box::pin(async move {
+                {
+                    palw_court::court_close(
+                        ctx,
+                        &key.source(),
+                        palw_court::CourtCloseArgs {
+                            close: &close,
+                            class: class.as_deref(),
+                            side: side.as_deref(),
+                            deadline_at,
+                            state: state.as_deref(),
+                            restart,
+                            offline,
+                            yes,
+                        },
+                    )
+                    .await
+                }
+            })
+        }
+        Command::Palw(PalwCmd::Certified { class_id, json }) => {
+            Box::pin(async move { palw_fp::certified(ctx, &class_id, json).await })
+        }
+        Command::Palw(PalwCmd::Claim { claim_ids, outbox, json }) => {
+            Box::pin(async move { palw_claim::show(ctx, &claim_ids, outbox.as_deref(), json).await })
+        }
+        Command::Palw(PalwCmd::VerifyContext { vector, vector_file, list, stages, out, receipt_out, sign_with }) => {
+            Box::pin(async move {
+                {
+                    palw_verify_context::verify_context(palw_verify_context::VerifyContextArgs {
+                        vector: vector.as_deref(),
+                        vector_file: vector_file.as_deref(),
+                        list,
+                        stages: stages.as_deref(),
+                        out: out.as_deref(),
+                        receipt_out: receipt_out.as_deref(),
+                        key: sign_with.map(|path| keys::KeySource { key_file: Some(path), key_stdin: false }),
+                    })
+                }
+            })
+        }
+        Command::Palw(PalwCmd::VerifyReceipt { receipt, document }) => {
+            Box::pin(async move { palw_verify_context::verify_receipt(&receipt, document.as_deref()) })
+        }
+        Command::Palw(PalwCmd::Derived { claim_id, json }) => Box::pin(async move { palw_derived::show(ctx, &claim_id, json).await }),
+        Command::Palw(PalwCmd::ModelShow { line_id, quote_msk, json }) => {
+            Box::pin(async move { palw_model::show(ctx, &line_id, quote_msk, json).await })
+        }
+        Command::Palw(PalwCmd::ModelPositions { holder, key, json }) => Box::pin(async move {
+            {
+                let source = key.source_opt();
+                palw_model::positions(ctx, holder, source.as_ref(), json).await
+            }
+        }),
+        #[cfg(feature = "evm-send")]
+        Command::Palw(PalwCmd::ModelEvmBuy { key, line, msk, min_positions, gas_limit, max_fee, nonce, yes, wait }) => {
+            Box::pin(async move {
+                evm_send::model_evm_buy(&ctx, &key.source(), &line, &msk, min_positions, gas_limit, max_fee, nonce, yes, wait)
+            })
+        }
+        #[cfg(feature = "evm-send")]
+        Command::Palw(PalwCmd::ModelEvmSell { key, line, positions, min_msk, gas_limit, max_fee, nonce, yes, wait }) => {
+            Box::pin(async move {
+                evm_send::model_evm_sell(&ctx, &key.source(), &line, positions, &min_msk, gas_limit, max_fee, nonce, yes, wait)
+            })
+        }
+        Command::Palw(PalwCmd::ModelEvmPosition { line, address }) => {
+            Box::pin(async move { eth::model_evm_position(ctx, &line, &address) })
+        }
+        Command::Palw(PalwCmd::ModelSeed { key, line, msk, yes }) => {
+            Box::pin(async move { palw_model::seed(ctx, &key.source(), &line, &msk, yes).await })
+        }
+        Command::Palw(PalwCmd::ModelSponsor { key, class, msk, yes }) => {
+            Box::pin(async move { palw_activation_pool::sponsor(ctx, &key.source(), &class, &msk, yes).await })
+        }
+        Command::Palw(PalwCmd::ModelPool { class }) => Box::pin(async move { palw_activation_pool::pool(ctx, &class).await }),
+        #[cfg(feature = "evm-send")]
+        Command::Palw(PalwCmd::ModelEvmSeed { key, line, msk, gas_limit, max_fee, nonce, yes, wait }) => {
+            Box::pin(async move { evm_send::model_evm_seed(&ctx, &key.source(), &line, &msk, gas_limit, max_fee, nonce, yes, wait) })
+        }
+        Command::Palw(PalwCmd::ModelBuy { key, line, msk, min_positions, slippage, yes }) => Box::pin(async move {
+            {
+                let floor = match (min_positions, slippage) {
+                    (Some(positions), _) => Ok(palw_model::BuyFloor::Positions(positions)),
+                    (None, Some(slippage)) => operator::market::parse_slippage(&slippage).map(palw_model::BuyFloor::SlippagePermille),
+                    (None, None) => Ok(palw_model::BuyFloor::Unstated),
+                };
+                match floor {
+                    Ok(floor) => palw_model::buy(ctx, &key.source(), &line, &msk, floor, yes).await,
+                    Err(e) => Err(e),
+                }
+            }
+        }),
+        Command::Palw(PalwCmd::ModelSell { key, line, positions, min_msk, yes, accept_burned_proceeds }) => {
+            Box::pin(async move { palw_model::sell(ctx, &key.source(), &line, positions, min_msk, yes, accept_burned_proceeds).await })
+        }
+        Command::Palw(PalwCmd::LineShow { line_id, json }) => Box::pin(async move { palw_line::line_show(ctx, &line_id, json).await }),
+        Command::Palw(PalwCmd::LineLog { line_id, json }) => Box::pin(async move { palw_line::line_log(ctx, &line_id, json).await }),
+        Command::Palw(PalwCmd::LineList { class_id, json }) => {
+            Box::pin(async move { palw_line::line_list(ctx, &class_id, json).await })
+        }
+        Command::Palw(PalwCmd::Proposals { line_id, json }) => {
+            Box::pin(async move { palw_line::proposals(ctx, &line_id, json).await })
+        }
+        Command::Palw(PalwCmd::LineFound { key, class, name, root, bond, yes }) => {
+            Box::pin(async move { palw_line::line_found(ctx, &key.source(), &class, &name, &root, &bond, yes).await })
+        }
+        Command::Palw(PalwCmd::VersionPublish {
+            key,
+            line,
+            root,
+            parent,
+            adopted_from,
+            runtime_hash,
+            dataset_commitment,
+            training_config_hash,
+            notes_hash,
+            preview,
+            yes,
+        }) => Box::pin(async move {
+            {
+                palw_line::version_publish(
+                    ctx,
+                    &key.source(),
+                    &line,
+                    &root,
+                    parent,
+                    adopted_from,
+                    runtime_hash,
+                    dataset_commitment,
+                    training_config_hash,
+                    notes_hash,
+                    preview,
+                    yes,
+                )
+                .await
+            }
+        }),
+        Command::Palw(PalwCmd::VersionPromote { key, line, version, yes }) => {
+            Box::pin(async move { palw_line::version_move(ctx, &key.source(), &line, version, true, yes).await })
+        }
+        Command::Palw(PalwCmd::VersionWithdraw { key, line, version, yes }) => {
+            Box::pin(async move { palw_line::version_move(ctx, &key.source(), &line, version, false, yes).await })
+        }
+        Command::Palw(PalwCmd::LineBenefits { key, line, tiers, cadence_daa, expires_daa, yes }) => {
+            Box::pin(async move { palw_line::line_benefits(ctx, &key.source(), &line, tiers, cadence_daa, expires_daa, yes).await })
+        }
+        Command::Palw(PalwCmd::ServiceDescribe { key, line, grants, roots, endpoints, valid_from_daa, expires_daa }) => {
+            Box::pin(async move {
+                {
+                    palw_service::service_describe(ctx, &key.source(), &line, &grants, roots, endpoints, valid_from_daa, expires_daa)
+                        .await
+                }
+            })
+        }
+        Command::Palw(PalwCmd::ServiceCheck { descriptor }) => {
+            Box::pin(async move { palw_service::service_check(ctx, &descriptor).await })
+        }
+        Command::Palw(PalwCmd::LineRoles { key, line, developer, maintainer, contributor_permille, yes }) => Box::pin(async move {
+            palw_line::line_roles(ctx, &key.source(), &line, developer, maintainer, contributor_permille, yes).await
+        }),
+        Command::Palw(PalwCmd::LineTransfer { key, line, new_owner, yes }) => {
+            Box::pin(async move { palw_line::line_transfer(ctx, &key.source(), &line, &new_owner, yes).await })
+        }
+        Command::Palw(PalwCmd::LineRetire { key, line, yes }) => {
+            Box::pin(async move { palw_line::line_retire(ctx, &key.source(), &line, yes).await })
+        }
+        Command::Palw(PalwCmd::ProposalPost { key, line, root, note_hash, bond, yes }) => {
+            Box::pin(async move { palw_line::proposal_post(ctx, &key.source(), &line, &root, &note_hash, &bond, yes).await })
+        }
+        Command::Palw(PalwCmd::ProposalClose { key, line, proposal, yes }) => {
+            Box::pin(async move { palw_line::proposal_close(ctx, &key.source(), &line, &proposal, yes).await })
+        }
+        Command::Palw(PalwCmd::Evaluate { key, line, version, evaluator_id, score_permille, report_hash, bond, yes }) => {
+            Box::pin(async move {
+                {
+                    palw_line::evaluate(ctx, &key.source(), &line, version, &evaluator_id, score_permille, &report_hash, &bond, yes)
+                        .await
+                }
+            })
+        }
+        Command::Palw(PalwCmd::DerivedVerify { claim_id, answer, dsl, job_context, tokenizer, job_context_hash, family, json }) => {
+            Box::pin(async move {
+                {
+                    palw_derived::verify(
+                        ctx,
+                        palw_derived::DerivedVerifyArgs {
+                            claim_id: &claim_id,
+                            answer: &answer,
+                            dsl: dsl.as_deref(),
+                            job_context: job_context.as_deref(),
+                            job_context_hash: job_context_hash.as_deref(),
+                            tokenizer: tokenizer.as_deref(),
+                            family: family.as_deref(),
+                            json,
+                        },
+                    )
+                    .await
+                }
+            })
+        }
+        Command::Wallet(WalletCmd::Utxo(UtxoCmd::List { address, recent, key })) => {
+            Box::pin(async move { wallet::utxo_list(ctx, address.as_deref(), &key.source(), recent).await })
+        }
+        Command::Wallet(WalletCmd::Utxo(UtxoCmd::Consolidate { max_inputs, max_txs_per_run, sleep_ms, yes, key })) => {
+            Box::pin(async move { wallet::consolidate(ctx, &key.source(), max_inputs, !yes, yes, max_txs_per_run, sleep_ms).await })
+        }
+        Command::Wallet(WalletCmd::Send { to, amount, yes, coinbase_only, key }) => Box::pin(async move {
+            match parse_msk_to_sompi(&amount) {
+                Ok(sompi) => wallet::send(ctx, &key.source(), &to, sompi, !yes, yes, coinbase_only).await,
+                Err(e) => Err(e),
+            }
+        }),
+        Command::Key(KeyCmd::Gen { out }) => Box::pin(async move { key_gen(ctx, &out) }),
+        Command::Key(KeyCmd::Address { key }) => Box::pin(async move { key_address(ctx, &key.source()) }),
+        Command::Key(KeyCmd::Pubkey { key }) => Box::pin(async move { key_pubkey(ctx, &key.source()) }),
+        Command::Key(KeyCmd::Import { out, hex_stdin, hex_file }) => {
+            Box::pin(async move { key_import(ctx, &out, hex_stdin, hex_file.as_deref()) })
+        }
+        Command::Bond(BondCmd::Status { key, bond, class_id }) => Box::pin(async move {
+            {
+                let source = key.source_opt();
+                bond::status(ctx, source.as_ref(), class_id.as_deref(), bond.as_deref()).await
+            }
+        }),
+        Command::Bond(BondCmd::Capability { key, bond, class_id, declare, dry_run, yes }) => Box::pin(async move {
+            bond::capability(ctx, &key.source(), bond.as_deref(), class_id.as_deref(), &declare, dry_run, yes).await
+        }),
+        Command::Bond(BondCmd::RegisterExport {
+            owner_pubkey,
+            collateral,
+            payout_address,
+            payer_address,
+            quote_rpc,
+            allow_single_rpc,
+            out,
+        }) => Box::pin(async move {
+            {
+                operator::bond_remote::export(
+                    ctx,
+                    operator::bond_remote::ExportArgs {
+                        owner_pubkey,
+                        collateral,
+                        payout_address,
+                        payer_address,
+                        quote_rpc,
+                        allow_single_rpc,
+                        out,
+                    },
+                )
+                .await
+            }
+        }),
+        Command::Bond(BondCmd::RegisterSign {
+            bundle,
+            key,
+            payer_key_file,
+            expect_collateral,
+            expect_payout,
+            max_fee_sompi,
+            accept_unverified_state,
+            out,
+        }) => Box::pin(async move {
+            {
+                operator::bond_remote::sign(
+                    ctx,
+                    operator::bond_remote::SignArgs {
+                        bundle,
+                        key: key.source(),
+                        payer_key_file,
+                        expect_collateral,
+                        expect_payout,
+                        max_fee_sompi,
+                        accept_unverified_state,
+                        out,
+                    },
+                )
+                .await
+            }
+        }),
+        Command::Bond(BondCmd::RegisterSubmit { signed, relay, relay_min, max_fee_sompi, no_wait }) => Box::pin(async move {
+            {
+                operator::bond_remote::submit(
+                    ctx,
+                    operator::bond_remote::SubmitArgs { signed, relay, relay_min, max_fee_sompi, no_wait },
+                )
+                .await
+            }
+        }),
+        Command::Bond(BondCmd::Retire { key, bond, class_id, dry_run, yes }) => {
+            Box::pin(async move { bond::retire(ctx, &key.source(), bond.as_deref(), class_id.as_deref(), dry_run, yes).await })
+        }
+        Command::Config(ConfigCmd::Init { force }) => Box::pin(async move { config::init(&ctx.network, force) }),
+        Command::Config(ConfigCmd::Show) => {
+            Box::pin(async move { config::show(ctx.output, &ctx.network, &ctx.rpc, &cli.node_grpc, &cfg.node.grpc, &ctx.evm_rpc) })
+        }
+        Command::Validator(p)
+            if p.args.first().is_none_or(|a| matches!(a.as_str(), "--help" | "-h" | "help")) && p.args.len() <= 1 =>
+        {
+            Box::pin(async move {
+                {
+                    // Help lists what is served here and what the sidecar serves — clap's own stub named
+                    // only itself and pointed back at itself (ADR-0122 §8.2).
+                    println!("The DNS-finality validator.\n");
+                    println!("Served by misaka:");
+                    println!("  setup     key → node → funds → stake bond → ~/.misaka/validator.toml, then the command that runs it");
+                    println!("  status    what this validator is doing (and why not), from ~/.misaka/validator.toml or --stake-bond");
+                    println!("  bonds     the stake-bond registry (--owner, --status, --all)\n");
+                    println!("Forwarded to kaspa-pq-validator (beside misaka, or MISAKA_VALIDATOR_BIN):");
+                    println!("  keygen · bond · unbond · run · balance     misaka validator <subcommand> --help for each\n");
+                    println!("Start here: misaka validator setup   (misaka --network testnet-10 validator setup for another network)");
+                    Ok(())
+                }
+            })
+        }
+        Command::Validator(p) if p.args.first().is_some_and(|a| a == "setup") => Box::pin(async move {
+            {
+                // ADR-0122 §8.2: the guided setup, in front of the sidecar's own subcommands.
+                match ValidatorSetupCli::try_parse_from(
+                    std::iter::once("misaka validator setup".to_string()).chain(p.args[1..].iter().cloned()),
+                ) {
+                    Ok(cli) => match cli.setup.into_setup(named_network.clone(), ctx.rpc.clone()) {
+                        Ok(a) => operator::wizard::run(ctx, operator::wizard::Purpose::Validate, a).await,
+                        Err(e) => Err(e),
+                    },
+                    Err(e) => {
+                        let _ = e.print();
+                        Err(CliError::new(if e.use_stderr() { exit::CONFIG } else { exit::SUCCESS }, String::new()))
+                    }
+                }
+            }
+        }),
+        Command::Validator(p) => Box::pin(async move {
+            match validator_reader::maybe_handle(ctx, &p.args, named_network.as_deref()).await {
+                Some(result) => result,
+                None => forward::validator(ctx, &p.args),
+            }
+        }),
+        #[cfg(feature = "evm-send")]
+        Command::Evm(EvmCmd::Wallet(EvmWalletCmd::Create { out })) => Box::pin(async move { evm_send::wallet_create(&ctx, &out) }),
+        #[cfg(feature = "evm-send")]
+        Command::Evm(EvmCmd::Wallet(EvmWalletCmd::Import { out })) => Box::pin(async move { evm_send::wallet_import(&ctx, &out) }),
+        #[cfg(feature = "evm-send")]
+        Command::Evm(EvmCmd::Wallet(EvmWalletCmd::Address { key })) => {
+            Box::pin(async move { evm_send::wallet_address(&ctx, &key.source()) })
+        }
+        #[cfg(feature = "evm-send")]
+        Command::Evm(EvmCmd::Send { to, amount, gas_limit, max_fee, nonce, yes, wait, key }) => Box::pin(async move {
+            {
+                match evm_send::parse_msk_to_wei(&amount) {
+                    Ok(wei) => evm_send::send(&ctx, &key.source(), &to, wei, gas_limit, max_fee, nonce, yes, wait),
+                    Err(e) => Err(e),
+                }
+            }
+        }),
+        #[cfg(feature = "evm-send")]
+        Command::Evm(EvmCmd::Deploy { bytecode, bytecode_file, value, gas_limit, max_fee, nonce, yes, wait, key }) => {
+            Box::pin(async move {
+                {
+                    match (evm_send::read_hex_blob(&bytecode, &bytecode_file), evm_send::parse_msk_to_wei(&value)) {
+                        (Ok(code), Ok(wei)) => evm_send::deploy(&ctx, &key.source(), code, wei, gas_limit, max_fee, nonce, yes, wait),
+                        (Err(e), _) | (_, Err(e)) => Err(e),
+                    }
+                }
+            })
+        }
+        #[cfg(feature = "evm-send")]
+        Command::Evm(EvmCmd::Call { to, data, data_file, value, gas_limit, max_fee, nonce, yes, wait, key }) => Box::pin(async move {
+            {
+                match (evm_send::read_hex_blob(&data, &data_file), evm_send::parse_msk_to_wei(&value)) {
+                    (Ok(cd), Ok(wei)) => evm_send::call(&ctx, &key.source(), &to, cd, wei, gas_limit, max_fee, nonce, yes, wait),
+                    (Err(e), _) | (_, Err(e)) => Err(e),
+                }
+            }
+        }),
+        #[cfg(feature = "evm-send")]
+        Command::Prea(PreaCmd::SignRoot {
+            key,
+            account,
+            version,
+            nonce,
+            valid_after,
+            valid_until,
+            max_relayer_fee,
+            to,
+            value,
+            calldata,
+        }) => Box::pin(async move {
+            {
+                // Audit H-3: refuse a PREA ML-DSA-87 root op unless the F003 precompile
+                // is active on the connected node's network — an authorization produced
+                // while F003 is fence-inert can never verify on-chain.
+                match prea::gate_root_op(&ctx).await {
+                    Ok(()) => prea::run_sign_root(
+                        ctx.output,
+                        &key.source(),
+                        &account,
+                        version,
+                        nonce,
+                        valid_after,
+                        valid_until,
+                        &max_relayer_fee,
+                        &to,
+                        &value,
+                        &calldata,
+                    ),
+                    Err(e) => Err(e),
+                }
+            }
+        }),
+        #[cfg(feature = "evm-send")]
+        Command::Prea(PreaCmd::SignSession { key, account, version, call_index, max_relayer_fee, to, value, calldata }) => {
+            Box::pin(async move {
+                {
+                    prea::run_sign_session(
+                        ctx.output,
+                        &key.source(),
+                        &account,
+                        version,
+                        call_index,
+                        &max_relayer_fee,
+                        &to,
+                        &value,
+                        &calldata,
+                    )
+                }
+            })
+        }
+        Command::Ask(args) => Box::pin(async move { ask::run(args) }),
+    };
+    let result = task.await;
+
+    match result {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        // ADR-0122: an operator screen that already printed its verdict (the five fields, or a
+        // JSON document carrying `exit`) returns an empty message, so it is not said twice.
+        Err(e) if e.msg.is_empty() => std::process::ExitCode::from(e.code as u8),
+        Err(e) => {
+            // Errors always go to stderr (never swallowed by --quiet); in JSON
+            // mode emit a machine-readable error object too.
+            if ctx.output == OutputFormat::Json {
+                let obj = serde_json::json!({ "ok": false, "error": e.msg, "exitCode": e.code });
+                eprintln!("{obj}");
+            } else {
+                eprintln!("error: {}", e.msg);
+            }
+            std::process::ExitCode::from(e.code as u8)
+        }
+    }
+}
+
+/// **The command surface itself is an assertion** — ADR-0063 SA-1 and SA-4.
+///
+/// These tests read the parser rather than a function, because both rules are properties of the
+/// SURFACE: a seed must have no way in through argv or the environment, and `misaka miner` must
+/// have no way in at all. A unit test on a handler cannot see either — the handler is not reached
+/// when the flag it would have to refuse does not exist, and that absence is what has to be
+/// checked, and kept.
+/// `misaka palw round-lane`: ADR-0125's lane from the node's sink state (`getPalwRoundLane`).
+async fn palw_round_lane(ctx: &node::Ctx, bond: Option<&str>) -> CliResult {
+    use kaspa_rpc_core::api::rpc::RpcApi;
+    let nv = wallet::connect(ctx).await?;
+    let lane = nv.client.get_palw_round_lane().await.map_err(|e| CliError::new(exit::CONNECTION, format!("getPalwRoundLane: {e}")))?;
+    match ctx.output {
+        OutputFormat::Json => println!("{}", serde_json::to_string(&lane).unwrap_or_else(|_| "{}".to_string())),
+        OutputFormat::Human => {
+            println!("{}", operator::status::round_lane_line(Some(&Ok(lane.clone())), bond).unwrap_or_default());
+            if lane.armed {
+                let stages: Vec<String> =
+                    lane.stages.iter().map(|s| format!("width {} from DAA {}", s.permits_per_round, s.activation_daa)).collect();
+                println!("stages  : {}", stages.join(" · "));
+                println!(
+                    "span    : {} DAA a span · at most {} round blocks a mergeset",
+                    lane.schedule_span_daa, lane.max_per_mergeset
+                );
+                for domain in &lane.domains {
+                    println!(
+                        "domain  : {}… compute {} pwu · quota {}‰ · parity {} · {} bond(s)",
+                        &domain.domain[..16.min(domain.domain.len())],
+                        domain.credits,
+                        domain.quota_permille,
+                        domain.parity,
+                        domain.bonds
+                    );
+                }
+                for permit in lane.permits.iter().filter(|p| bond.is_none_or(|b| p.bond == b)) {
+                    println!("permit  : #{} → {}{}", permit.index, permit.bond, if permit.used { " (used)" } else { "" });
+                }
+            }
+        }
+    }
+    let _ = nv.client.disconnect().await;
+    Ok(())
+}
+
+#[cfg(test)]
+mod cli_surface_tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    const SEED_HEX: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    fn import_cmd() -> clap::Command {
+        Cli::command().find_subcommand("key").expect("key").find_subcommand("import").expect("import").clone()
+    }
+
+    /// **SA-1: there is no flag that takes the seed as a value.**
+    ///
+    /// A seed on the command line is in `ps` output for the life of the process and in the shell
+    /// history for the life of the host. Every spelling anyone would reach for is tried here, so
+    /// "someone adds `--seed` back for convenience" is a failing test rather than a code review
+    /// that may not happen.
+    #[test]
+    fn a_seed_on_argv_is_refused() {
+        // The whole CLI is one clap derive tree: parsing it in a debug build needs more than the test harness's 2 MiB
+        // thread stack, so this test parses on a thread of its own with room (it overflowed otherwise).
+        std::thread::Builder::new()
+            .stack_size(16 * 1024 * 1024)
+            .spawn(|| {
+                for flag in ["--seed", "--seed-hex", "--hex", "--mnemonic", "--key", "--secret"] {
+                    let parsed = Cli::try_parse_from(["misaka", "key", "import", "--out", "/tmp/never-written", flag, SEED_HEX]);
+                    assert!(parsed.is_err(), "`key import {flag} <seed>` parsed — a seed must have no argv door");
+                }
+                // A bare positional is the same door with the flag filed off.
+                assert!(Cli::try_parse_from(["misaka", "key", "import", "--out", "/tmp/never-written", SEED_HEX]).is_err());
+            })
+            .expect("the parsing thread starts")
+            .join()
+            .expect("a seed on argv is refused");
+    }
+
+    /// **SA-1: no argument of `key import` reads the environment.**
+    ///
+    /// An environment variable is inherited by every child this process spawns — the model worker
+    /// included, until ADR-0079 R-01 lands — so an `env = …` on this command would hand the seed
+    /// to processes that have no business holding it. The check walks the parser rather than
+    /// grepping, so it also catches one added through a `#[command(flatten)]`.
+    #[test]
+    fn no_import_argument_reads_the_environment() {
+        for arg in import_cmd().get_arguments() {
+            assert!(arg.get_env().is_none(), "`key import --{}` reads an env var; the seed path must not", arg.get_id());
+        }
+    }
+
+    /// The two legitimate sources are stdin and a file PATH, and they are mutually exclusive: a
+    /// command given both would have to pick one, and an operator would not know which.
+    #[test]
+    fn the_two_seed_sources_are_stdin_and_a_path() {
+        assert!(Cli::try_parse_from(["misaka", "key", "import", "--out", "/tmp/o", "--hex-stdin"]).is_ok());
+        assert!(Cli::try_parse_from(["misaka", "key", "import", "--out", "/tmp/o", "--hex-file", "/tmp/s"]).is_ok());
+        assert!(
+            Cli::try_parse_from(["misaka", "key", "import", "--out", "/tmp/o", "--hex-stdin", "--hex-file", "/tmp/s"]).is_err(),
+            "two sources at once must be refused at the parser, not silently ranked"
+        );
+    }
+
+    /// A support request commonly starts with only a carrier outpoint. Inspecting whether the
+    /// chain registered it is a public read, so the command must parse without making the operator
+    /// locate or expose a seed first. Keep the three documented spellings equivalent.
+    #[test]
+    fn bond_status_can_inspect_an_exact_outpoint_without_a_key() {
+        let outpoint = format!("{}:0", "09".repeat(64));
+        let class = "42".repeat(64);
+        for flag in ["--bond", "--outpoint", "--carrier"] {
+            assert!(
+                Cli::try_parse_from(["misaka", "bond", "status", flag, &outpoint]).is_ok(),
+                "bond status did not accept its keyless {flag} lookup"
+            );
+        }
+        assert!(
+            Cli::try_parse_from(["misaka", "bond", "status", "--bond", &outpoint, "--class-id", &class]).is_ok(),
+            "an explicit diagnostic class remains accepted"
+        );
+    }
+
+    /// **SA-4: `misaka miner` does not exist.**
+    ///
+    /// It forwarded to `kaspa-pq-miner`, which is on no fleet host — and the forwarder falls
+    /// through to the bare name on `$PATH`, so the subcommand ran whatever a writable `PATH` entry
+    /// held. On a network whose only hash lane is the fee-only heartbeat it could not have earned
+    /// anything even if the binary were real, so Decision 4 resolves to deletion rather than to
+    /// shipping a miner.
+    #[test]
+    fn the_miner_subcommand_is_gone() {
+        assert!(Cli::command().find_subcommand("miner").is_none(), "`misaka miner` is back — SA-4 deleted it");
+        assert!(Cli::try_parse_from(["misaka", "miner"]).is_err());
+        assert!(Cli::try_parse_from(["misaka", "miner", "--blocks", "1"]).is_err());
+        // The sibling forwarder is deliberately untouched: `validator` forwards to a binary this
+        // tree actually builds, which is the difference SA-4 turns on.
+        assert!(Cli::command().find_subcommand("validator").is_some());
+    }
+
+    /// **ADR-0152 P2-11 (T52): `palw vesting` names at most one payee** — a bond, an address or a
+    /// claim, or none for the chain's totals.
+    #[test]
+    fn palw_vesting_parses_one_payee_at_most() {
+        let bond = format!("{}:0", "ab".repeat(64));
+        let parsed = Cli::try_parse_from(["misaka", "palw", "vesting", "--bond", &bond, "--limit", "20"]).expect("parses");
+        assert!(
+            matches!(&parsed.command, Command::Palw(PalwCmd::Vesting { bond: Some(b), address: None, limit: 20, .. }) if *b == bond)
+        );
+        let chain = Cli::try_parse_from(["misaka", "palw", "vesting", "--json"]).expect("parses");
+        assert!(matches!(chain.command, Command::Palw(PalwCmd::Vesting { bond: None, address: None, claim: None, json: true, .. })));
+        assert!(
+            Cli::try_parse_from(["misaka", "palw", "vesting", "--bond", &bond, "--claim", &"cd".repeat(64)]).is_err(),
+            "two payees at once are refused before the node is asked"
+        );
+    }
+
+    /// **ADR-0127: `palw settlement` takes the accepting DAA score and an optional depth to wait
+    /// for, and its help says the depth is anchors, not blocks.**
+    #[test]
+    fn palw_settlement_parses_and_says_the_depth_is_anchors() {
+        let parsed = Cli::try_parse_from(["misaka", "palw", "settlement", "--daa", "4242", "--min-depth", "6"]).expect("parses");
+        assert!(matches!(parsed.command, Command::Palw(PalwCmd::Settlement { daa: 4242, min_depth: Some(6) })));
+        let bare = Cli::try_parse_from(["misaka", "--output", "json", "palw", "settlement", "--daa", "0"]).expect("parses");
+        assert!(matches!(bare.command, Command::Palw(PalwCmd::Settlement { daa: 0, min_depth: None })));
+        assert!(Cli::try_parse_from(["misaka", "palw", "settlement"]).is_err(), "the DAA score is required");
+        assert!(Cli::try_parse_from(["misaka", "palw", "settlement", "--daa", "-1"]).is_err());
+
+        let command = Cli::command();
+        let settlement = command.find_subcommand("palw").and_then(|p| p.find_subcommand("settlement")).expect("the subcommand");
+        let help = settlement
+            .get_arguments()
+            .find(|a| a.get_id() == "min_depth")
+            .and_then(|a| a.get_help())
+            .map(|h| h.to_string())
+            .expect("--min-depth documents itself");
+        assert!(help.contains("anchors, not blocks"), "{help}");
+        assert!(help.contains("larger payments should wait for more anchors"), "{help}");
+
+        let listed =
+            Cli::try_parse_from(["misaka", "wallet", "utxo", "list", "--address", "misakatest:q", "--recent", "3"]).expect("parses");
+        assert!(matches!(listed.command, Command::Wallet(WalletCmd::Utxo(UtxoCmd::List { recent: 3, .. }))));
+    }
+
+    /// **Every command defaults to testnet-12 through the one default the operator commands use,
+    /// and a named network still wins** (docs/operations/mining/testnet12-join-mining.md: `misaka bond`, `wallet` and
+    /// `key` used to fall back to testnet-10 while `misaka mining` fell back to testnet-12).
+    #[test]
+    fn every_command_defaults_to_the_one_network_and_a_named_one_wins() {
+        use crate::node::{DEFAULT_NETWORK, resolve_network};
+        assert_eq!(DEFAULT_NETWORK, "testnet-12", "the public network since the 2026-09-22 regenesis");
+        assert_eq!(resolve_network(None, None), DEFAULT_NETWORK);
+        assert_eq!(resolve_network(None, Some("testnet-11".into())), "testnet-11", "~/.misaka/config.toml beats the default");
+        assert_eq!(
+            resolve_network(Some("testnet-10".into()), Some("testnet-11".into())),
+            "testnet-10",
+            "flag / MISAKA_NETWORK beat it"
+        );
+        // The global flag is read the same way by every command family; with no flag the value is
+        // the env's (clap), and only an unset env reaches the default. The env is read, never set,
+        // so this test cannot move a neighbour's.
+        let env = std::env::var("MISAKA_NETWORK").ok();
+        for argv in [
+            vec!["misaka", "bond", "status", "--bond", "aa:0"],
+            vec!["misaka", "wallet", "utxo", "list", "--address", "misakatest:q"],
+            vec!["misaka", "key", "pubkey", "--key-file", "/tmp/never-read"],
+        ] {
+            let plain = Cli::try_parse_from(&argv).expect("parses");
+            assert_eq!(plain.network, env, "{argv:?}: no flag → the env's value or none");
+            assert_eq!(resolve_network(plain.network.clone(), None), env.clone().unwrap_or_else(|| DEFAULT_NETWORK.to_string()));
+            let mut named = argv.clone();
+            named.insert(1, "--network=testnet-11");
+            let named = Cli::try_parse_from(&named).expect("parses");
+            assert_eq!(resolve_network(named.network, Some("testnet-10".into())), "testnet-11", "{argv:?}: the flag wins");
+        }
+    }
+}

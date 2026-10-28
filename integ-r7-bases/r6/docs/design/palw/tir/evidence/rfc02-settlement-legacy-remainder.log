@@ -1,0 +1,47 @@
+EXECUTABLE /Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/k2_opv-d08510595c8aa839 --test-threads=1
+
+running 28 tests
+test a_class_whose_prosecution_could_be_censored_for_less_than_it_pays_is_not_admitted ... ok
+test a_collateral_another_subsystem_took_is_not_a_bounty_source_and_fake_fraud_and_fake_default_loops_cost_their_players ... FAILED
+test a_copied_optimistic_claim_is_always_refused_because_the_first_reveal_holds_the_job_and_a_seal_cannot_be_pre_dated ... ok
+test a_flood_of_claims_never_takes_the_runs_reserved_for_proofs ... ok
+test a_junk_squatter_is_slashed_by_any_outsider_and_a_withholding_squatter_defaults_so_squatting_a_job_costs_the_squatter ... ok
+test a_lying_optimistic_claim_is_convicted_before_final_and_after_it_by_one_outsider_and_the_job_is_freed ... ok
+test a_proof_in_the_windows_last_block_blocks_final_and_an_unserved_demand_decides_the_claim_by_its_deadline ... ok
+test an_honest_optimistic_claim_finalizes_by_the_window_rule_with_no_panel_and_no_fabricated_tally ... ok
+test an_invalid_challenge_is_dismissed_with_its_fee_and_never_touches_an_honest_optimistic_claim ... ok
+test an_optimistic_final_is_a_panel_independent_beacon_source_and_a_panel_licensed_one_is_not ... ok
+test an_optimistic_policy_is_a_genesis_constant_validated_against_the_ledger_policy ... ok
+test an_optimistic_self_inflicted_default_never_erases_a_provable_fraud ... ok
+test below_the_panel_free_fence_a_salted_reveal_is_refused_and_changes_nothing ... ok
+test empty_receipts_a_zero_quorum_and_a_missing_tally_never_count_as_checked ... ok
+test live_claim_caps_and_the_aggregate_gain_bound_a_producers_unsettled_exposure ... ok
+test n_cheap_sybil_bonds_pay_for_every_slot_and_cannot_hold_the_opv_lane_past_one_window ... ok
+test panel_licensed_classes_behave_exactly_as_before_whether_or_not_the_ledger_has_an_optimistic_policy ... ok
+test past_the_fence_a_re_seal_forfeits_the_replaced_seal_at_its_position_so_no_seal_is_withdrawn_for_free ... ok
+test past_the_fence_a_withheld_seal_is_kept_as_forfeited_and_the_beacon_read_lists_every_seal_in_seal_order ... ok
+test past_the_panel_free_fence_a_claim_opens_only_its_salted_seal_and_the_salt_is_kept_for_the_beacon ... ok
+test replay_and_reorg_reach_the_same_state_with_no_double_reward_slash_or_clock_restart ... ok
+test route_tag_13_is_the_mode_carrying_registration_and_an_unknown_mode_is_never_success ... ok
+test spam_demands_and_joins_cannot_hold_an_optimistic_final_past_the_discovered_hard_deadline ... ok
+test the_mode_is_part_of_the_class_identity_and_an_optimistic_class_registers_only_where_the_policy_the_fence_and_the_gate_allow ... ok
+test the_network_policy_admits_a_class_for_the_optimistic_mode_a_registrant_never_chooses_it_for_its_own_program ... ok
+test the_optimistic_state_root_form_is_versioned_and_pinned_by_a_golden_vector ... ok
+test the_reservation_is_the_policys_not_a_panel_lock_and_concurrent_claims_never_reuse_a_collateral ... ok
+test withheld_material_is_a_default_not_a_fraud_conviction_and_the_claim_never_finalizes ... ok
+
+failures:
+
+---- a_collateral_another_subsystem_took_is_not_a_bounty_source_and_fake_fraud_and_fake_default_loops_cost_their_players stdout ----
+
+thread 'a_collateral_another_subsystem_took_is_not_a_bounty_source_and_fake_fraud_and_fake_default_loops_cost_their_players' (4055431) panicked at misaka-palw-kernel/tests/common/chain.rs:252:57:
+a settlement the bond book refuses: SettlementInstructionV1 { bond: [161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161, 161], amount: 300, kind: SlashFraud, claim: Some([223, 141, 146, 5, 54, 254, 19, 228, 78, 58, 247, 110, 170, 91, 45, 49, 50, 194, 186, 128, 160, 207, 119, 67, 88, 39, 214, 118, 147, 255, 96, 84, 239, 149, 9, 91, 229, 36, 170, 206, 120, 61, 201, 57, 30, 111, 171, 45, 85, 110, 93, 72, 4, 171, 68, 133, 198, 236, 86, 43, 148, 180, 196, 205]) }: reservation 1000 exceeds collateral 300
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    a_collateral_another_subsystem_took_is_not_a_bounty_source_and_fake_fraud_and_fake_default_loops_cost_their_players
+
+test result: FAILED. 27 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.31s
+
+EXIT 101

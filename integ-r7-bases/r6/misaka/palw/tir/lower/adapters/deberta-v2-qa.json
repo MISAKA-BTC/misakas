@@ -1,0 +1,65 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "deberta-v2-qa",
+  "doc": "DebertaV2ForQuestionAnswering: the deberta-v2 encoder, then every row through `qa_outputs` (start and end logits; OUTPUT_TOKEN_LOGITS_V1). HFX 2026-10-10.",
+  "extends": [
+    "deberta-v2",
+    "mixin-qa-encoder"
+  ],
+  "match": {
+    "architectures": [
+      "DebertaV2ForQuestionAnswering"
+    ],
+    "model_types": [
+      "deberta-v2",
+      "deberta_v2"
+    ]
+  },
+  "vars": [
+    {
+      "name": "names",
+      "value": {
+        "embed": "embeddings.word_embeddings",
+        "pos_embed": "embeddings.position_embeddings",
+        "type_embed": "embeddings.token_type_embeddings",
+        "embed_norm": "embeddings.LayerNorm",
+        "rel_embed": "encoder.rel_embeddings",
+        "rel_norm": "encoder.LayerNorm",
+        "attn.q": "encoder.layer.{L}.attention.self.query_proj",
+        "attn.k": "encoder.layer.{L}.attention.self.key_proj",
+        "attn.v": "encoder.layer.{L}.attention.self.value_proj",
+        "attn.o": "encoder.layer.{L}.attention.output.dense",
+        "norm.mix": "encoder.layer.{L}.attention.output.LayerNorm",
+        "mlp.up": "encoder.layer.{L}.intermediate.dense",
+        "mlp.down": "encoder.layer.{L}.output.dense",
+        "norm.ffn": "encoder.layer.{L}.output.LayerNorm",
+        "cls_out": "qa_outputs"
+      }
+    },
+    {
+      "name": "ignored_prefixes",
+      "value": [
+        "pooler.",
+        "lm_predictions.",
+        "mask_predictions.",
+        "cls."
+      ]
+    },
+    {
+      "name": "prefix_aliases",
+      "value": [
+        [
+          "",
+          "deberta."
+        ]
+      ]
+    }
+  ],
+  "config": {
+    "inert": [
+      "pooler_dropout",
+      "pooler_hidden_act",
+      "pooler_hidden_size"
+    ]
+  }
+}

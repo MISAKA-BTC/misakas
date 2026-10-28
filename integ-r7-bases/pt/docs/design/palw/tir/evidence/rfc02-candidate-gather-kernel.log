@@ -1,0 +1,55 @@
+
+Command: ['cargo', 'test', '--locked', '-p', 'misaka-palw-kernel', '--lib', 'element::tests', '--', '--nocapture', '--test-threads=1']
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on artifact directory
+   Compiling misaka-palw-kernel v1.1.0 (/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/misaka-palw-kernel)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 29s
+     Running unittests src/lib.rs (target/debug/deps/misaka_palw_kernel-f12a3fe57e2b7746)
+
+running 14 tests
+test element::tests::a_lie_in_any_value_is_found_and_convicted_and_no_honest_element_is ... ok
+test element::tests::a_malformed_value_a_forged_decode_and_tampered_openings_are_judged_objectively ... ok
+test element::tests::allocation_free_leaf_pricing_matches_index_vector_oracle_on_real_weight_shapes ... ok
+test element::tests::allocation_free_pricing_preserves_the_exact_actual_32_position_plan_root ... ok
+test element::tests::element_courts_are_priced_by_the_tile_not_the_tensor ... ok
+test element::tests::every_filing_is_within_its_priced_bound ... 2310 filings within their prices, the largest at 0.770 of its price
+ok
+test element::tests::flat_gather_preserves_results_and_dependency_reads_for_all_dtypes_and_ranks ... ok
+test element::tests::flat_gather_refuses_invalid_indices_before_table_reads_and_preserves_missing_operands ... ok
+test element::tests::leaf_openings_file_their_values_at_the_dtype_width ... ok
+test element::tests::nonflat_gather_axes_and_batches_still_match_the_independent_reference ... ok
+test element::tests::the_element_evaluator_agrees_with_the_reference_on_every_element_of_every_value ... ok
+test element::tests::the_streamed_trace_is_the_trace ... ok
+test element::tests::vocabulary_sized_flat_lookup_roots_match_the_frozen_coordinate_evaluator ... 151936-output lookup + both commitment trees: frozen median 118528375 ns, flat median 28168583 ns; six alternating trials, all roots equal
+ok
+test element::tests::vocabulary_sized_lookup_whole_court_dismisses_honest_convicts_lie_and_refuses_missing_or_substituted_inputs ... 151936-output whole court: 608815 proof bytes, 356634368 abstract work, 76.48925ms honest verification
+ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 86 filtered out; finished in 57.58s
+
+
+Command: ['cargo', 'test', '--locked', '-p', 'misaka-palw-kernel', '--lib', 'scope::tests', '--', '--nocapture', '--test-threads=1']
+    Blocking waiting for file lock on artifact directory
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2m 12s
+     Running unittests src/lib.rs (target/debug/deps/misaka_palw_kernel-f12a3fe57e2b7746)
+
+running 7 tests
+test scope::tests::a_state_written_from_model_bytes_is_model_bytes_at_the_next_position ... ok
+test scope::tests::the_budget_stays_below_every_relation_and_never_refuses ... ok
+test scope::tests::the_exposure_names_the_one_position_and_the_k_position_relations ... ok
+test scope::tests::the_node_materials_separate_weights_copies_and_activations ... ok
+test scope::tests::the_per_requester_tally_bounds_each_requester_and_never_another ... ok
+test seg_scope::tests::candidate_gather_price_bounds_actual_dependency_leaves_at_all_ranks ... ok
+test seg_scope::tests::flat_lookup_price_changes_only_element_work_and_keeps_conservative_disclosure ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 93 filtered out; finished in 0.17s
+
+
+Command: ['cargo', 'test', '--locked', '-p', 'misaka-palw-kernel', '--lib', 'gate::tests', '--', '--nocapture', '--test-threads=1']
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.38s
+     Running unittests src/lib.rs (target/debug/deps/misaka_palw_kernel-f12a3fe57e2b7746)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 100 filtered out; finished in 0.00s

@@ -1,0 +1,129 @@
+{
+  "format": "palw-tir-v1/primitive-vectors/1",
+  "spec": "docs/spec/palw/04b-tensor-ir.md",
+  "primitive": "ReduceMax",
+  "tag": 13,
+  "cases": [
+    {
+      "name": "axis1",
+      "prim": {
+        "name": "ReduceMax",
+        "attrs": [
+          [
+            "axis",
+            "1"
+          ]
+        ],
+        "borsh_hex": "0d01"
+      },
+      "inputs": [
+        {
+          "dtype": "i32",
+          "shape": [
+            2,
+            3
+          ],
+          "data": [
+            "1",
+            "9",
+            "3",
+            "-4",
+            "-5",
+            "-6"
+          ]
+        }
+      ],
+      "out": {
+        "dtype": "i32",
+        "shape": [
+          2,
+          1
+        ]
+      },
+      "expect": {
+        "dtype": "i32",
+        "shape": [
+          2,
+          1
+        ],
+        "data": [
+          "9",
+          "-4"
+        ]
+      }
+    },
+    {
+      "name": "ties_and_extremes",
+      "prim": {
+        "name": "ReduceMax",
+        "attrs": [
+          [
+            "axis",
+            "0"
+          ]
+        ],
+        "borsh_hex": "0d00"
+      },
+      "inputs": [
+        {
+          "dtype": "i64",
+          "shape": [
+            3
+          ],
+          "data": [
+            "-9223372036854775808",
+            "-9223372036854775808",
+            "-9223372036854775808"
+          ]
+        }
+      ],
+      "out": {
+        "dtype": "i64",
+        "shape": [
+          1
+        ]
+      },
+      "expect": {
+        "dtype": "i64",
+        "shape": [
+          1
+        ],
+        "data": [
+          "-9223372036854775808"
+        ]
+      }
+    },
+    {
+      "name": "error_dtype_change",
+      "prim": {
+        "name": "ReduceMax",
+        "attrs": [
+          [
+            "axis",
+            "0"
+          ]
+        ],
+        "borsh_hex": "0d00"
+      },
+      "inputs": [
+        {
+          "dtype": "i32",
+          "shape": [
+            2
+          ],
+          "data": [
+            "1",
+            "2"
+          ]
+        }
+      ],
+      "out": {
+        "dtype": "i64",
+        "shape": [
+          1
+        ]
+      },
+      "expect_error": "Shape"
+    }
+  ]
+}

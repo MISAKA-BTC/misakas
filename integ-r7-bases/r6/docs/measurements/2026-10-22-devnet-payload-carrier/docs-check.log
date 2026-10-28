@@ -1,0 +1,22 @@
+FAIL — no-new-regressions
+{
+  "mode": "no-new-regressions",
+  "passed": false,
+  "markdown_files": 921,
+  "targets": {
+    "ok": 8236,
+    "outside-package-unchecked": 112,
+    "external-unchecked": 232,
+    "missing-doc-file": 46
+  },
+  "primary_documents": {
+    "adr": 194,
+    "rfc": 35
+  },
+  "known_issue_occurrences": 43,
+  "new_issue_occurrences": 3
+}
+  new link issue x1: missing-doc-file|docs/rfc/0024-assets/ADR-DRAFT-palw-court-door-3200.md|docs/rfc/0024-assets/RFC-DRAFT-palw-court-door-3200.md|
+  new link issue x1: missing-doc-file|docs/rfc/0025-assets/ADR-DRAFT-scalable-court-v2.md|docs/rfc/0025-assets/RFC-DRAFT-palw-scalable-objective-court-v2.md|
+  new link issue x1: missing-doc-file|docs/rfc/0025-assets/README.md|docs/rfc/0025-assets/RFC-DRAFT-palw-scalable-objective-court-v2.md|
+NOTE: baseline missing references remain; PASS is not a clean strict audit.

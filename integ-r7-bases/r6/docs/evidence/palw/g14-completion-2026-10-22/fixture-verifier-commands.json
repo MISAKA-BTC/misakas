@@ -1,0 +1,253 @@
+{
+  "source_run": "numerical-preflight-repair-verification.json",
+  "commands": [
+    {
+      "args": [
+        "/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/g14-numerical-preflight-tvpw2sgu/kaspa_consensus_core",
+        "palw_court_funding_preflight_v1::tests",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "seconds": 0.01,
+      "log": "docs/evidence/palw/g14-completion-2026-10-22/numerical-preflight-repair-other-funding-preflight.log"
+    },
+    {
+      "args": [
+        "/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/g14-numerical-preflight-tvpw2sgu/kaspa_consensus_core",
+        "palw_court_source_material_graph_v3::tests",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "seconds": 0.111,
+      "log": "docs/evidence/palw/g14-completion-2026-10-22/numerical-preflight-repair-other-source-graph.log"
+    },
+    {
+      "args": [
+        "/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/g14-numerical-preflight-tvpw2sgu/kaspa_consensus_core",
+        "palw_court_carrier_fee_v1::tests",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "seconds": 0.008,
+      "log": "docs/evidence/palw/g14-completion-2026-10-22/numerical-preflight-repair-other-fee.log"
+    },
+    {
+      "args": [
+        "/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/g14-numerical-preflight-tvpw2sgu/kaspa_consensus_core",
+        "palw_court_original_escrow_v1::tests",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "seconds": 0.009,
+      "log": "docs/evidence/palw/g14-completion-2026-10-22/numerical-preflight-repair-other-funding.log"
+    },
+    {
+      "args": [
+        "/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/g14-numerical-preflight-tvpw2sgu/kaspa_consensus_core",
+        "palw_tir_funded_original_envelope_v1::tests",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "seconds": 0.055,
+      "log": "docs/evidence/palw/g14-completion-2026-10-22/numerical-preflight-repair-other-funded-envelope.log"
+    },
+    {
+      "args": [
+        "/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/g14-numerical-preflight-tvpw2sgu/kaspa_consensus_core",
+        "palw_tir_public_fp_envelope_v1::tests",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "seconds": 0.053,
+      "log": "docs/evidence/palw/g14-completion-2026-10-22/numerical-preflight-repair-other-legacy-envelope.log"
+    },
+    {
+      "args": [
+        "/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/g14-numerical-preflight-tvpw2sgu/palw_the_release_did_not_move",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "seconds": 0.755,
+      "log": "docs/evidence/palw/g14-completion-2026-10-22/numerical-preflight-repair-other-t12.log"
+    },
+    {
+      "args": [
+        "/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/g14-numerical-preflight-tvpw2sgu/palw_activation_pool_is_t12_only",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "seconds": 0.631,
+      "log": "docs/evidence/palw/g14-completion-2026-10-22/numerical-preflight-repair-other-activation.log"
+    },
+    {
+      "args": [
+        "/usr/bin/time",
+        "-l",
+        "/usr/bin/env",
+        "MEASURE_OP=close_cone_acquit",
+        "MEASURE_N=0",
+        "/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/g14-numerical-preflight-tvpw2sgu/palw_tir_court_verify_cpu",
+        "--exact",
+        "court_verify_cpu_measure",
+        "--ignored",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "seconds": 38.692,
+      "log": "docs/evidence/palw/g14-completion-2026-10-22/numerical-preflight-repair-measure-close_cone_acquit-n0.log"
+    },
+    {
+      "args": [
+        "/usr/bin/time",
+        "-l",
+        "/usr/bin/env",
+        "MEASURE_OP=close_cone_acquit",
+        "MEASURE_N=1000",
+        "/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/g14-numerical-preflight-tvpw2sgu/palw_tir_court_verify_cpu",
+        "--exact",
+        "court_verify_cpu_measure",
+        "--ignored",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "seconds": 38.856,
+      "log": "docs/evidence/palw/g14-completion-2026-10-22/numerical-preflight-repair-measure-close_cone_acquit-n1000.log"
+    },
+    {
+      "args": [
+        "/usr/bin/time",
+        "-l",
+        "/usr/bin/env",
+        "MEASURE_OP=close_cone_forged_last_stage",
+        "MEASURE_N=0",
+        "/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/g14-numerical-preflight-tvpw2sgu/palw_tir_court_verify_cpu",
+        "--exact",
+        "court_verify_cpu_measure",
+        "--ignored",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "seconds": 38.586,
+      "log": "docs/evidence/palw/g14-completion-2026-10-22/numerical-preflight-repair-measure-close_cone_forged_last_stage-n0.log"
+    },
+    {
+      "args": [
+        "/usr/bin/time",
+        "-l",
+        "/usr/bin/env",
+        "MEASURE_OP=close_cone_forged_last_stage",
+        "MEASURE_N=1000",
+        "/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/g14-numerical-preflight-tvpw2sgu/palw_tir_court_verify_cpu",
+        "--exact",
+        "court_verify_cpu_measure",
+        "--ignored",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "seconds": 39.086,
+      "log": "docs/evidence/palw/g14-completion-2026-10-22/numerical-preflight-repair-measure-close_cone_forged_last_stage-n1000.log"
+    },
+    {
+      "args": [
+        "/usr/bin/time",
+        "-l",
+        "/usr/bin/env",
+        "MEASURE_OP=root_claim_admit",
+        "MEASURE_N=0",
+        "/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/g14-numerical-preflight-tvpw2sgu/palw_tir_court_verify_cpu",
+        "--exact",
+        "court_verify_cpu_measure",
+        "--ignored",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "seconds": 25.821,
+      "log": "docs/evidence/palw/g14-completion-2026-10-22/numerical-preflight-repair-measure-root_claim_admit-n0.log"
+    },
+    {
+      "args": [
+        "/usr/bin/time",
+        "-l",
+        "/usr/bin/env",
+        "MEASURE_OP=root_claim_admit",
+        "MEASURE_N=1000",
+        "/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/g14-numerical-preflight-tvpw2sgu/palw_tir_court_verify_cpu",
+        "--exact",
+        "court_verify_cpu_measure",
+        "--ignored",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "seconds": 27.16,
+      "log": "docs/evidence/palw/g14-completion-2026-10-22/numerical-preflight-repair-measure-root_claim_admit-n1000.log"
+    },
+    {
+      "args": [
+        "/usr/bin/time",
+        "-l",
+        "/usr/bin/env",
+        "MEASURE_OP=dissect_round_apply",
+        "MEASURE_N=0",
+        "/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/g14-numerical-preflight-tvpw2sgu/palw_tir_court_verify_cpu",
+        "--exact",
+        "court_verify_cpu_measure",
+        "--ignored",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "seconds": 32.012,
+      "log": "docs/evidence/palw/g14-completion-2026-10-22/numerical-preflight-repair-measure-dissect_round_apply-n0.log"
+    },
+    {
+      "args": [
+        "/usr/bin/time",
+        "-l",
+        "/usr/bin/env",
+        "MEASURE_OP=dissect_round_apply",
+        "MEASURE_N=1000",
+        "/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/g14-numerical-preflight-tvpw2sgu/palw_tir_court_verify_cpu",
+        "--exact",
+        "court_verify_cpu_measure",
+        "--ignored",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "seconds": 32.049,
+      "log": "docs/evidence/palw/g14-completion-2026-10-22/numerical-preflight-repair-measure-dissect_round_apply-n1000.log"
+    },
+    {
+      "args": [
+        "/usr/bin/time",
+        "-l",
+        "/usr/bin/env",
+        "MEASURE_OP=dissect_bottom_honest",
+        "MEASURE_N=0",
+        "/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/g14-numerical-preflight-tvpw2sgu/palw_tir_court_verify_cpu",
+        "--exact",
+        "court_verify_cpu_measure",
+        "--ignored",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "seconds": 43.059,
+      "log": "docs/evidence/palw/g14-completion-2026-10-22/numerical-preflight-repair-measure-dissect_bottom_honest-n0.log"
+    },
+    {
+      "args": [
+        "/usr/bin/time",
+        "-l",
+        "/usr/bin/env",
+        "MEASURE_OP=dissect_bottom_honest",
+        "MEASURE_N=1000",
+        "/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/g14-numerical-preflight-tvpw2sgu/palw_tir_court_verify_cpu",
+        "--exact",
+        "court_verify_cpu_measure",
+        "--ignored",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "seconds": 44.035,
+      "log": "docs/evidence/palw/g14-completion-2026-10-22/numerical-preflight-repair-measure-dissect_bottom_honest-n1000.log"
+    }
+  ]
+}

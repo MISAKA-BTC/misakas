@@ -1,0 +1,669 @@
+{
+  "schema": "misaka.palw.rfc02-native-mixed-evidence.v7",
+  "date": "2026-10-11",
+  "verdict": "NATIVE_SCOPE7_COURT7_PROTECTED_POST_DA_PUBLIC_FRAUD_FRESH_NODE_COMPONENT_PASS_FULL_RFC02_INCOMPLETE",
+  "goal_status": "active",
+  "full_rfc02_complete": false,
+  "base_commit": "c5132469d15aed1309dd8ad193ba3c0d0e5f9742",
+  "selected_distinct_tests_passed": 239,
+  "new_component_tests": 13,
+  "ignored_kernel_tests": 1,
+  "test_groups": [
+    {
+      "group": "native",
+      "command": "cargo test --locked -p kaspa-consensus --features evm --lib -- g14_kernel_route_e2e::model_conformance --test-threads=1 --nocapture",
+      "exit_code": 0,
+      "passed": 27,
+      "failed": 0,
+      "ignored": 0,
+      "runtime_seconds": [
+        244.39
+      ],
+      "log": "docs/design/palw/tir/evidence/rfc02-native-mixed-v7-node-final.log",
+      "log_sha256": "225f119cd4b6ae49ebb803c370befe486e864032baf62266a9effcbe0db24778",
+      "test_names": [
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_candidate7_native_long_topk_is_registered_as_metadata_without_legacy_execution_rights",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_candidate7_native_mature_binding_independent_plan_paid_refusals_and_replay",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_candidate7_native_shares_legacy_catalog_and_cannot_spend_reserved_proof_budget",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_hash_da_node_fresh_public_reads_localize_late_leaf_and_convict_without_output_values",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_hash_da_node_shared_slots_response_priority_withholding_and_horizon_hold",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_model_vector_node_admits_typed_scope_convicts_leaf_and_whole_once_and_replays_redemption",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_model_vector_node_and_v2_catalogs_share_the_same_capital_and_eight_statement_limit",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_model_vector_node_scope_identity_and_hostile_filings_pay_shared_budgets_without_poisoning",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_native_v7::flat_v7_native_fixed_text_length_specialization_is_identity_bound_and_cannot_grow_or_bypass_scope",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_native_v7::flat_v7_native_fresh_ibd_and_pruned_registered_participant_public_acquisition_conviction_and_redemption",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_native_v7::flat_v7_native_independent_sparse_state_checker_public_values_own_seal_once_capital_and_redemption",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_native_v7::flat_v7_native_mature_proof_uses_guaranteed_budget_after_admission_flood",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_native_v7::flat_v7_native_own_chunk_lane_refuses_unsealed_and_borrowed_actor_survives_generic_saturation",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_native_v7::flat_v7_native_selected_value_default_holds_original_horizon_and_cannot_be_slashed_again",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_v3_node_preemption_counterexample_and_staged_v6_seal_rejects_equivalent_carrier",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_v6_native_mature_proof_uses_reserved_budget_after_admission_flood",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_v6_native_own_sealed_chunks_survive_generic_saturation_and_refuse_borrowed_actors",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_v6_native_seal_blocks_equivalent_preemption_legacy_bypass_and_pays_finder_once",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_v6_native_seals_bound_actor_slots_hold_capital_and_forfeit_expired_false_seals",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::model_vector_catalog_shares_capital_and_keeps_its_bound_after_clocked_release",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::model_vector_da_deadlines_hold_capital_and_responses_survive_a_full_court_budget",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::model_vector_da_public_replies_enable_a_fresh_whole_value_conviction_without_model_disclosure",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::model_vector_new_large_vocab_candidates_have_public_courts_without_a_final_or_execution_rights",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::model_vector_wrong_roots_scope_and_invalid_refutations_cost_only_the_actor",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::scoped_model_complete_check_cannot_be_poisoned_by_an_earlier_false_source_root",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::scoped_model_complete_check_registers_encoder_and_stateful_decoder_without_identity_hooks",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::scoped_model_complete_check_wrong_roles_and_floods_spend_only_attackers_budget"
+      ]
+    },
+    {
+      "group": "SDK",
+      "command": "cargo test --locked -p misaka-palw-sdk --test flat_candidate_v6 --test flat_snapshot_v6 --test flat_vector_v7 -- --test-threads=1 --nocapture",
+      "exit_code": 0,
+      "passed": 16,
+      "failed": 0,
+      "ignored": 0,
+      "runtime_seconds": [
+        4.37,
+        0.11,
+        0.19
+      ],
+      "log": "docs/design/palw/tir/evidence/rfc02-native-mixed-v7-sdk-final.log",
+      "log_sha256": "e04053504124e7879f989829d1ae0807f436c73b55843f7bdeb3cb20545c7e1b",
+      "test_names": [
+        "cli_post_expiry_and_invalid_inputs_write_only_reviewable_carriers",
+        "cli_secret_permissions_no_overwrite_and_checked_reveal_roundtrip",
+        "mixed_candidate7_sdk_rederives_identity_and_whole_scope_before_signing",
+        "mixed_candidate7_sdk_refuses_inexact_ranges_missing_params_and_bad_extent",
+        "private_sdk_codec_bounds_counts_and_preserves_exact_carrier",
+        "protected_sdk_chunks_bind_own_mature_seal_and_both_signature_layers",
+        "protected_sdk_post_binds_distinct_identity_and_all_implementation_records",
+        "sdk_reveal_requires_the_same_network_actor_exact_proof_and_mature_unspent_row",
+        "signatures_and_generic_carriage_preserve_network_bond_and_exact_protected_bytes",
+        "coherent_anchor_does_not_hide_candidate_scope_seal_or_clock_failures",
+        "offline_snapshot_cli_writes_only_exact_row_and_refuses_overwrite_or_wrong_anchor",
+        "public_pages_anchor_exact_candidate_and_own_mature_seal_without_execution_rights",
+        "rpc_json_rejects_counts_hex_tables_cursors_unknown_fields_and_unavailable_routes",
+        "private7_codec_network_actor_counts_exact_mixed_proof_and_redacted_debug",
+        "reveal7_checks_own_mature_unspent_namespace_and_preserves_exact_proof",
+        "signed7_large_reveal_chunks_bind_same_actor_vector_inner_and_outer_signatures"
+      ]
+    },
+    {
+      "group": "core",
+      "command": "cargo test --locked -p kaspa-consensus-core --features evm --lib -- palw_flat_model_vector_da_v7 palw_lifecycle_objects_v2 palw_kernel_route_v1 --test-threads=1 --nocapture",
+      "exit_code": 0,
+      "passed": 41,
+      "failed": 0,
+      "ignored": 0,
+      "runtime_seconds": [
+        0.51
+      ],
+      "log": "docs/design/palw/tir/evidence/rfc02-native-mixed-v7-core-final.log",
+      "log_sha256": "e901b9030cf666c8e39b72fb9c1228f5b292c0e1a66e826e01747d46b551c328",
+      "test_names": [
+        "palw_flat_model_vector_da_v7::tests::selected_da7_authenticates_requested_value_shape_node_and_exact_namespace",
+        "palw_flat_model_vector_da_v7::tests::selected_da7_codec_refuses_trailing_truncated_oversize_unknown_and_nested_counts",
+        "palw_kernel_route_v1::tests::a_pipeline_claims_record_header_has_a_wire_form",
+        "palw_kernel_route_v1::tests::palw_kernel_route_the_interim_reporter_share_is_adr_0032s_49_percent",
+        "palw_kernel_route_v1::tests::the_interim_opv_policy_validates_against_the_interim_ledger_policy_and_roots_like_its_ledger",
+        "palw_kernel_route_v1::tests::the_interim_policy_validates_and_the_bond_digest_separates_indices",
+        "palw_kernel_route_v1::tests::the_route_template_carries_k2_tir_v4_and_the_cache_is_never_state",
+        "palw_kernel_route_v1::tests::the_routes_chunk_lane_assembles_only_coherent_groups_and_bounds_them_by_their_target",
+        "palw_kernel_route_v1::tests::the_tail_and_tables_are_the_allocated_ones",
+        "palw_kernel_route_v1::tests::the_unarmed_typed_roots_fence_leaves_the_schedule_config_root_and_root_unchanged",
+        "palw_lifecycle_objects_v2::tests::a2u::a_not_in_force_kind_is_undecodable_in_the_live_builds_words",
+        "palw_lifecycle_objects_v2::tests::a2u::an_owning_fence_needs_the_audit_fence_declared",
+        "palw_lifecycle_objects_v2::tests::a2u::below_its_fence_a_new_kind_is_judged_as_the_live_build_judges_undecodable_bytes",
+        "palw_lifecycle_objects_v2::tests::a2u::every_appended_form_has_a_guarded_owner_arm",
+        "palw_lifecycle_objects_v2::tests::a2u::every_int12_wire_type_is_unchanged_or_classified",
+        "palw_lifecycle_objects_v2::tests::a2u::every_kernel_inner_kind_has_exactly_one_row",
+        "palw_lifecycle_objects_v2::tests::a2u::every_kind_in_the_enum_has_exactly_one_owner",
+        "palw_lifecycle_objects_v2::tests::a2u::every_landed_kind_is_pinned_to_its_wire_form",
+        "palw_lifecycle_objects_v2::tests::a2u::every_landed_kind_sits_in_its_row_with_the_rows_fence",
+        "palw_lifecycle_objects_v2::tests::a2u::every_tag_row_is_inside_its_allocation",
+        "palw_lifecycle_objects_v2::tests::a2u::the_fence_list_is_the_enum",
+        "palw_lifecycle_objects_v2::tests::a2u::the_int12_kind_list_is_frozen",
+        "palw_lifecycle_objects_v2::tests::a2u::the_int12_kinds_refused_past_a_fence_are_the_rows",
+        "palw_lifecycle_objects_v2::tests::a2u::the_new_kind_table_is_the_owner_function",
+        "palw_lifecycle_objects_v2::tests::a_bond_registration_cannot_declare_collateral_it_did_not_lock",
+        "palw_lifecycle_objects_v2::tests::a_bond_registration_that_locks_its_collateral_rides",
+        "palw_lifecycle_objects_v2::tests::a_bond_registration_without_a_signature_does_not_ride",
+        "palw_lifecycle_objects_v2::tests::a_class_registration_rides_only_when_it_carries_what_checks_it",
+        "palw_lifecycle_objects_v2::tests::a_lifecycle_object_rides_a_transaction_and_arrives_in_acceptance_order",
+        "palw_lifecycle_objects_v2::tests::a_malformed_carrier_is_skipped_with_a_reason",
+        "palw_lifecycle_objects_v2::tests::admission_accepts_exactly_what_the_walk_extracts",
+        "palw_lifecycle_objects_v2::tests::an_historical_full_v2_possession_proof_still_rides_and_reaches_the_fold",
+        "palw_lifecycle_objects_v2::tests::an_unsigned_reporter_commitment_may_not_ride",
+        "palw_lifecycle_objects_v2::tests::certification_objects_ride_and_extract_unchanged",
+        "palw_lifecycle_objects_v2::tests::consensus_object_discriminants_are_the_ones_the_chain_carries",
+        "palw_lifecycle_objects_v2::tests::derived_artifacts_ride_signed_and_shaped_and_extract_unchanged",
+        "palw_lifecycle_objects_v2::tests::naming_the_carrier_by_id_is_a_fixed_point_no_registrant_can_solve",
+        "palw_lifecycle_objects_v2::tests::objects_that_must_not_ride_are_skipped_with_their_own_reason",
+        "palw_lifecycle_objects_v2::tests::the_band_id_is_what_selects_this_walk",
+        "palw_lifecycle_objects_v2::tests::the_seed_testnet_11_carried_at_daa_1945_still_decodes",
+        "palw_lifecycle_objects_v2::tests::the_two_unauthenticated_objects_may_not_ride"
+      ]
+    },
+    {
+      "group": "kernel-library",
+      "command": "run immutable kernel lib binary misaka_palw_kernel-3e75f80c67bc7227 --test-threads=1 --nocapture (built using cargo test --locked -p misaka-palw-kernel --lib -- route::tests flat_seal7 --test-threads=1 --nocapture)",
+      "exit_code": 0,
+      "passed": 155,
+      "failed": 0,
+      "ignored": 1,
+      "runtime_seconds": [
+        270.22
+      ],
+      "log": "docs/design/palw/tir/evidence/rfc02-native-mixed-v7-kernel-all-final.log",
+      "log_sha256": "329fe623a36a70c91c930a701176b20472b522ccaddd6e1e86d5e705ca0c4623",
+      "test_names": [
+        "assurance::tests::a_union_bound_over_probabilistic_results_and_no_number_for_a_legacy_or_judged_one",
+        "beacon::tests::a_reorg_of_the_window_is_a_counted_rebind_and_too_many_time_out",
+        "beacon::tests::grinding_is_counted_into_the_network_bound",
+        "beacon::tests::late_inclusion_and_malformed_policies_are_refused",
+        "beacon::tests::no_seed_exists_until_the_window_is_on_chain_and_final",
+        "challenge::tests::the_seed_moves_with_every_commitment_and_labels_separate_streams",
+        "descriptor::tests::any_change_to_a_descriptor_or_binding_is_a_new_identity",
+        "descriptor::tests::locked_in_activates_at_its_daa_and_deprecation_stops_new_work",
+        "descriptor::tests::segmented_pricing_revision_has_new_descriptor_identities_and_arms_no_schedule",
+        "descriptor::tests::the_builtin_kernel_is_implemented_not_active",
+        "element::tests::a_lie_in_any_value_is_found_and_convicted_and_no_honest_element_is",
+        "element::tests::a_malformed_value_a_forged_decode_and_tampered_openings_are_judged_objectively",
+        "element::tests::allocation_free_leaf_pricing_matches_index_vector_oracle_on_real_weight_shapes",
+        "element::tests::allocation_free_pricing_preserves_the_exact_actual_32_position_plan_root",
+        "element::tests::element_courts_are_priced_by_the_tile_not_the_tensor",
+        "element::tests::every_filing_is_within_its_priced_bound",
+        "element::tests::flat_gather_preserves_results_and_dependency_reads_for_all_dtypes_and_ranks",
+        "element::tests::flat_gather_refuses_invalid_indices_before_table_reads_and_preserves_missing_operands",
+        "element::tests::leaf_openings_file_their_values_at_the_dtype_width",
+        "element::tests::nonflat_gather_axes_and_batches_still_match_the_independent_reference",
+        "element::tests::the_element_evaluator_agrees_with_the_reference_on_every_element_of_every_value",
+        "element::tests::the_streamed_trace_is_the_trace",
+        "element::tests::vocabulary_sized_flat_lookup_roots_match_the_frozen_coordinate_evaluator",
+        "element::tests::vocabulary_sized_lookup_whole_court_dismisses_honest_convicts_lie_and_refuses_missing_or_substituted_inputs",
+        "family::tests::every_tir_v1_primitive_has_one_family_and_none_is_media",
+        "field::tests::an_integer_error_below_the_moduli_product_survives_in_some_modulus",
+        "field::tests::integers_map_with_sign_and_round_trip_small_values",
+        "field::tests::multiplication_agrees_with_double_and_add_for_every_modulus",
+        "flat_court4::tests::flat_court_all_hostile_nested_counts_and_tags_are_bounded_before_bodies",
+        "flat_court4::tests::flat_court_all_nonstate_primitives_match_reference_and_convict_tail_falsification",
+        "flat_court4::tests::flat_court_authenticates_registered_weights_and_rejects_borrowed_source_or_profile",
+        "flat_court4::tests::flat_court_binds_segment_boundary_and_authenticates_public_token_tiles",
+        "flat_court4::tests::flat_court_convicts_every_leaf_and_merged_tail_without_producer_output_values",
+        "flat_court4::tests::flat_court_encoder_ids_count_and_padding_are_job_bound",
+        "flat_court4::tests::flat_court_prices_large_declarations_without_allocating_tensors_and_refuses_large_lines",
+        "flat_court4::tests::flat_court_recomputes_batched_nonzero_axis_gather_and_ignores_duplicate_data_reads",
+        "flat_court4::tests::flat_court_semantic_refusal_requires_authenticated_operands_and_wide_sources_remain_v3",
+        "flat_court4::tests::flat_court_state_and_history_bind_previous_position_and_initialization",
+        "flat_court4::tests::flat_court_wire_checks_every_count_truncation_and_surplus_before_allocation",
+        "flat_court5::tests::flat_v5_all_25_primitive_samples_and_all_tail_leaves_preserve_reference_courts",
+        "flat_court5::tests::flat_v5_all_fault_codecs_refuse_truncations_surplus_versions_and_nested_counts",
+        "flat_court5::tests::flat_v5_decode_binds_delivered_index_position_ties_and_logits_without_producer_values",
+        "flat_court5::tests::flat_v5_first_wide_lie_and_small_whole_relation_need_no_producer_values",
+        "flat_court5::tests::flat_v5_history_crosses_small_whole_to_large_leaf_and_sliding_window_with_bound_sources",
+        "flat_court5::tests::flat_v5_malformed_headers_convict_type_shape_overflow_and_wrong_grammar_only_when_bound",
+        "flat_court5::tests::flat_v5_small_whole_courts_cover_all_dtypes_and_scalar_rank",
+        "flat_court5::tests::flat_v6_own_mature_seal_blocks_equivalent_convicting_decode_encodings",
+        "flat_court5::tests::flat_v6_sealed_invalid_or_honest_proof_retains_slot_without_conviction",
+        "flat_detect5::tests::flat_stream_verifier_all_25_primitives_localizes_without_output_values",
+        "flat_detect5::tests::flat_stream_verifier_encoder_uses_job_ids_padding_and_count",
+        "flat_detect5::tests::flat_stream_verifier_generated_ids_feed_later_state_and_history",
+        "flat_detect5::tests::flat_stream_verifier_requires_public_material_and_authenticates_coordinates",
+        "flat_detect5::tests::flat_stream_verifier_small_nodes_decode_ties_and_wrong_registered_model",
+        "flat_detect5::tests::flat_stream_verifier_wide_internal_and_small_downstream_relations",
+        "flat_replay6::tests::replay_v6_acquired_tensor_metadata_must_match_even_with_its_registered_root",
+        "flat_replay6::tests::replay_v6_budget_rejects_before_acquired_model_or_public_access",
+        "flat_replay6::tests::replay_v6_hash_and_history_limits_are_explicit_and_stop_before_delegation",
+        "flat_replay6::tests::replay_v6_huge_acquired_parameters_are_priced_without_images",
+        "flat_replay6::tests::replay_v6_lifetime_counts_cached_reads_and_withheld_retries",
+        "flat_replay6::tests::replay_v6_tensor_payload_envelope_covers_frozen_primitive_and_history_traces",
+        "flat_replay6::tests::replay_v6_tensor_prices_use_i128_and_bind_unchanged_v5_scope",
+        "flat_scope5::tests::scope_v5_bounds_every_position_leaf_primitive_and_mixed_history_grammar",
+        "flat_scope5::tests::scope_v5_charges_constant_sort_reference_work_and_refuses_oversized_lines",
+        "flat_scope5::tests::scope_v5_deduplicates_layer_templates_but_prices_every_state_instance",
+        "flat_scope5::tests::scope_v5_encoder_scope_binds_job_mode_axis_and_single_position",
+        "flat_scope5::tests::scope_v5_includes_earlier_small_row_paths_and_earlier_127_element_tails",
+        "flat_scope5::tests::scope_v5_prices_huge_job_extents_and_public_parameter_shapes_without_images_or_position_arrays",
+        "flat_scope5::tests::scope_v5_rederives_all_declarations_and_binds_program_profile_extent_and_occurrences",
+        "flat_seal6::tests::flat_seal_v6_binds_every_coordinate_salt_and_exact_carrier",
+        "flat_seal6::tests::flat_seal_v6_copies_alternate_bytes_and_immature_seals_never_enter_court",
+        "flat_seal6::tests::flat_seal_v6_fixed_slots_explicit_expiry_and_aggregate_actor_bounds",
+        "flat_seal6::tests::flat_seal_v6_persisted_rows_refuse_version_vector_and_actor_substitution",
+        "flat_seal6::tests::flat_seal_v6_policy_horizon_and_overflow_refuse_without_insertion",
+        "flat_seal6::tests::flat_seal_v6_reveal_is_one_use_and_invalid_court_retains_the_slot",
+        "flat_seal7::tests::mixed_seal7_binds_actor_exact_proof_and_namespace_before_court",
+        "improve::tests::a_candidate_is_a_new_admitted_class_of_the_parents_family_under_a_pinned_kernel",
+        "improve::tests::promotion_keeps_statistics_and_computational_error_apart_and_refuses_unpinned_suites",
+        "improve::tests::the_sign_test_table_is_exact_in_integers",
+        "job::tests::a_job_is_refused_at_posting_outside_the_class",
+        "job::tests::greedy_takes_the_lowest_index_on_a_tie",
+        "ledger::tests::a_class_must_fit_its_filing_response_and_commitments_in_the_route_objects",
+        "ledger::tests::a_filing_past_the_class_envelope_is_dismissed_before_any_court_runs",
+        "lifecycle::tests::a_challengeable_claim_has_no_tally_and_a_tally_event_is_an_error_never_a_no_op",
+        "lifecycle::tests::a_covered_claim_finalizes_only_after_its_window_and_retention",
+        "lifecycle::tests::a_dispute_blocks_an_optimistic_final_a_dismissal_resumes_and_a_conviction_voids",
+        "lifecycle::tests::a_dispute_blocks_final_a_dismissal_resumes_and_a_conviction_voids",
+        "lifecycle::tests::a_service_holds_an_optimistic_final_until_its_proof_grace_has_elapsed",
+        "lifecycle::tests::a_service_holds_final_until_its_proof_grace_has_elapsed",
+        "lifecycle::tests::an_optimistic_claim_finalizes_by_the_explicit_window_rule_alone_with_no_tally",
+        "lifecycle::tests::coverage_during_a_dispute_starts_the_window_and_final_waits_for_the_verdict",
+        "lifecycle::tests::disputes_are_open_to_any_bond_and_bounded_by_count_and_court_work",
+        "lifecycle::tests::missing_material_is_the_da_path_not_a_conviction",
+        "lifecycle::tests::silence_and_partial_coverage_never_pass",
+        "lifecycle::tests::the_network_bound_charges_attempts_and_the_environment",
+        "merkle3::tests::a_wire_shape_that_overflows_is_malformed_never_a_panic",
+        "merkle3::tests::buffered_leaf_hashes_preserve_every_dtype_and_update_boundary",
+        "merkle3::tests::direct_row_and_column_hashing_preserves_original_roots_and_openings",
+        "merkle3::tests::every_leaf_of_both_trees_opens_and_holds_its_elements",
+        "merkle3::tests::every_row_range_proves_against_the_commitment",
+        "merkle3::tests::leaf_element_counts_match_enumeration_at_both_axis_boundaries_without_allocation",
+        "merkle3::tests::producer_hash_cost_against_original_scalar_updates",
+        "merkle3_stream::tests::bounds_overflow_and_reader_failure_are_refusals_before_large_allocation_or_partial_success",
+        "merkle3_stream::tests::simultaneous_row_and_column_tile_boundaries_keep_the_canonical_leaf_order",
+        "merkle3_stream::tests::streamed_raw_commitments_match_decoded_roots_and_authenticate_existing_openings",
+        "merkle4::tests::flat_layout_merges_every_short_tail_and_covers_ranks_without_small_leaves",
+        "merkle4::tests::flat_material_prices_exact_retention_leaf_carriers_and_streaming_scratch",
+        "merkle4::tests::flat_openings_refuse_borrowed_metadata_values_coordinates_and_extra_paths",
+        "merkle4::tests::flat_public_descent_finds_every_divergent_leaf_within_the_derived_reply_bound",
+        "merkle4::tests::flat_streaming_tree_and_independent_oracle_match_all_dtypes_tails_and_odd_trees",
+        "merkle4::tests::flat_wire_bounds_counts_before_allocation_and_preserves_exact_borsh",
+        "merkle5::tests::flat_v5_internal_all_dtypes_and_extreme_wide_values_match_independent_oracle",
+        "merkle5::tests::flat_v5_wide_descent_and_strict_carriers_preserve_tail_and_unknown_version_refusals",
+        "merkle::tests::an_opening_whose_shape_overflows_is_malformed_never_a_panic",
+        "merkle::tests::every_row_and_column_opens_against_the_commitment_and_nothing_else_does",
+        "merkle::tests::row_node_runs_authenticate_at_every_level_and_localize_a_changed_row",
+        "merkle::tests::the_commitment_binds_dtype_shape_and_every_element",
+        "mode::tests::the_legacy_mode_keeps_its_historical_id_and_another_mode_is_another_class",
+        "mode::tests::the_mode_wire_discriminants_are_declared_and_an_unknown_one_is_never_success",
+        "opv::tests::saturating_the_court_for_the_whole_exposure_must_cost_more_than_the_claims_maximum_gain",
+        "opv::tests::the_assurance_statement_never_claims_correctness",
+        "opv::tests::the_clock_facts_a_fresh_verifier_plans_by",
+        "opv::tests::the_example_policy_satisfies_every_relation_and_each_relation_is_load_bearing",
+        "opv::tests::the_receipt_path_follows_the_mode_and_a_licence_is_never_fabricated_or_hidden",
+        "opv::tests::the_reservation_rule_reads_gain_penalty_and_the_assumed_detection",
+        "public::wire_overflow_tests::a_wire_tensor_whose_shape_overflows_is_refused_never_a_panic",
+        "route::model_vector_da_wire_tests::vector_da_units_have_fixed_wire_and_bounded_response_ceiling",
+        "route::tests::every_declared_discriminant_is_the_variants_borsh_byte_and_has_a_ceiling",
+        "route::tests::explicit_mixed7_outer_codec_refuses_truncation_inflated_counts_trailing_and_noncanonical_units",
+        "route::tests::malformed_and_oversized_encodings_are_refused_with_their_kind",
+        "route::tests::the_salted_reveal_is_kind_20_carries_its_commits_own_tag_and_opens_only_its_v2_seal",
+        "route::tests::the_wire_form_is_version_discriminant_then_the_fields",
+        "scope::tests::a_state_written_from_model_bytes_is_model_bytes_at_the_next_position",
+        "scope::tests::the_budget_stays_below_every_relation_and_never_refuses",
+        "scope::tests::the_exposure_names_the_one_position_and_the_k_position_relations",
+        "scope::tests::the_node_materials_separate_weights_copies_and_activations",
+        "scope::tests::the_per_requester_tally_bounds_each_requester_and_never_another",
+        "seg::tests::every_node_opens_against_the_segment_roots_and_nothing_else_does",
+        "seg::tests::prompt_tiles_open_against_the_prompt_root",
+        "seg::tests::segment_roots_from_position_roots_alone_are_the_commitments_own",
+        "seg::tests::streamed_position_paths_match_retained_commitments_at_segment_and_odd_boundaries",
+        "seg_da::tests::the_fast_layout_is_the_reference_layout",
+        "seg_detect::tests::the_descent_finds_the_first_divergent_position_in_at_most_log2_s_probes",
+        "seg_encoder::tests::a_program_without_the_two_trailing_inputs_has_no_encoder_binding",
+        "seg_scope::tests::candidate_gather_price_bounds_actual_dependency_leaves_at_all_ranks",
+        "seg_scope::tests::flat_lookup_price_changes_only_element_work_and_keeps_conservative_disclosure",
+        "spec::composite::tests::a_prompt_concatenates_its_sources_in_order",
+        "spec::memory::tests::a_line_advances_at_final_is_superseded_by_a_stale_claim_and_rolls_back_on_a_late_conviction",
+        "spec::memory::tests::the_memory_root_binds_slots_and_commitments",
+        "spec::retrieval::tests::a_malformed_snapshot_leaf_is_judged_and_an_entry_demand_serves_the_claims_own_item",
+        "spec::retrieval::tests::a_slice_is_served_whole_and_a_forged_one_is_a_fake_opening",
+        "spec::retrieval::tests::a_wrong_item_and_a_missed_better_item_are_convicted_and_honest_entries_are_not",
+        "spec::retrieval::tests::every_path_verifies_and_nothing_else_does",
+        "spec::retrieval::tests::inclusion_refuses_a_misordered_duplicate_or_out_of_range_result",
+        "spec::retrieval::tests::the_rule_is_the_sort_with_ties_to_the_lowest_id",
+        "spec::tests::a_combination_outside_the_four_is_refused_by_name_and_a_version_too",
+        "spec::tests::the_extension_is_its_own_descriptor_and_well_formed"
+      ]
+    }
+  ],
+  "compiled_sources": {
+    "node_manifest": "docs/design/palw/tir/evidence/rfc02-native-mixed-v7-node-source-sha256.json",
+    "core_manifest": "docs/design/palw/tir/evidence/rfc02-native-mixed-v7-core-source-sha256.json",
+    "native_to_core_difference": [
+      "consensus/core/src/palw_lifecycle_objects_v2.rs"
+    ],
+    "difference_semantics": "Only static lifecycle allocation inventory rows36..47/nestedtarget4 and cfg(test)113 wire pin; runtime classifier, gates, dispatch, signatures, economics and version identities identical.",
+    "later_unincluded_changes": [
+      "additional encoder regression test (point9 production unchanged)",
+      "new court9/detect9/replay9 exports",
+      "resource10 export",
+      "checked settlement totals/atomic event batches"
+    ],
+    "preimage_retention": "553 source preimages retained in each absolute /tmp archive recorded by manifest; independently modified kernel dependencies and native pre-inventory lifecycle also persisted in the dependency archive."
+  },
+  "verified_files": [
+    {
+      "path": "consensus/core/src/lib.rs",
+      "bytes": 46718,
+      "sha256": "a807bfebddb887605a4571e864ce55f55eb58e70ae1bd329879e5ad2ab2bfd1b"
+    },
+    {
+      "path": "consensus/core/src/palw_flat_model_seal_fold_v6.rs",
+      "bytes": 9655,
+      "sha256": "29e502233d0dab4a76b620811244b18caa31b9c9a4a7b10fcacdc3a68e5e641c"
+    },
+    {
+      "path": "consensus/core/src/palw_flat_model_vector_fold_v3.rs",
+      "bytes": 21583,
+      "sha256": "152c0d08e4d40de467e337daf7cb7a1df62bdba7a3621d287945a36e3e7fbbff"
+    },
+    {
+      "path": "consensus/core/src/palw_flat_model_vector_v3.rs",
+      "bytes": 13687,
+      "sha256": "33ebea47bb48eb25c4ef939e725533d4cf0176e6831d3a7bb3419346eb5c1ce3"
+    },
+    {
+      "path": "consensus/core/src/palw_kernel_route_fold_v1.rs",
+      "bytes": 66645,
+      "sha256": "661743375da367c067c18604fbc5c0495b90879eebb0fe64ce9a826876812da7"
+    },
+    {
+      "path": "consensus/core/src/palw_kernel_route_v1.rs",
+      "bytes": 85241,
+      "sha256": "f8371720d734ddbdbbf1842f69bd61bc19add9b65928e2750484f4d454b1fea3"
+    },
+    {
+      "path": "consensus/core/src/palw_lifecycle_objects_v2.rs",
+      "bytes": 257283,
+      "sha256": "0146137b2626102647e5d4e868c8f6d9c4a05d22198ab8cf55eabeadcda76646"
+    },
+    {
+      "path": "consensus/core/src/palw_model_vector_fold_v2.rs",
+      "bytes": 22175,
+      "sha256": "e407210591b94198515e93ac80b5f26ad8d03062836d407368f3c05a2241ac45"
+    },
+    {
+      "path": "consensus/core/src/palw_state_v2.rs",
+      "bytes": 4717056,
+      "sha256": "1fbf88e4c7210f7d34e8dc3fa5d22e3870377a2628f480016f43250b8acb499d"
+    },
+    {
+      "path": "consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/canonical.rs",
+      "bytes": 71633,
+      "sha256": "c3fc4aa4da66a68409f858745f19c6f278f0ea6613a7719f36a70e517a81e750"
+    },
+    {
+      "path": "consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/model_conformance.rs",
+      "bytes": 107867,
+      "sha256": "352e4dec2c1b3748e1819f94c8df280c35c750b4f488bc93e9590c2da9e5f6c1"
+    },
+    {
+      "path": "misaka-palw-kernel/src/ledger.rs",
+      "bytes": 185871,
+      "sha256": "f8448e4d0c27f1b58bdbde884eac954e1d0c3016faa0deaf97826a509ae93509"
+    },
+    {
+      "path": "misaka-palw-kernel/src/lib.rs",
+      "bytes": 10325,
+      "sha256": "bfd4fe88a927743eb900a4f84dbf94a1c2c35bc2a318ae72767ea32affbc322b"
+    },
+    {
+      "path": "misaka-palw-kernel/src/route.rs",
+      "bytes": 52501,
+      "sha256": "3845f27e0edebb4c9ac209bdbc3a779e1b59a6a8a07d542988f3033417df3482"
+    },
+    {
+      "path": "misaka-palw-sdk/src/lib.rs",
+      "bytes": 33644,
+      "sha256": "3d09aa3abf1432f079bdbb689e3e5aa3d9ecd68e0d86032105a7cb248fea47b6"
+    },
+    {
+      "path": "consensus/core/src/palw_flat_model_vector_da_fold_v7.rs",
+      "bytes": 11870,
+      "sha256": "9480018288c32d79f9c5286d1a069b18a515eca08cc1cd42a6cb1a1b19fae09a"
+    },
+    {
+      "path": "consensus/core/src/palw_flat_model_vector_da_v7.rs",
+      "bytes": 13909,
+      "sha256": "42aeb4c699d1464231fd3a06fcb5f1a67b23101b9bdca75815d480ed5ec3593d"
+    },
+    {
+      "path": "consensus/core/src/palw_flat_model_vector_fold_v7.rs",
+      "bytes": 15697,
+      "sha256": "e386ba5181adb7967c05205f67c0037783461f51b8a78b1c7d6c6035328a4230"
+    },
+    {
+      "path": "consensus/core/src/palw_flat_model_vector_v7.rs",
+      "bytes": 13109,
+      "sha256": "2e93588c8977f7c6a6afa044f8115182c4cd455a9af52ab01200e9f4e3b1c41b"
+    },
+    {
+      "path": "consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/model_conformance/flat_native_v7.rs",
+      "bytes": 33456,
+      "sha256": "010a8cb9fd9e6be2580cc33062d1d4d9fe89a29756fba2358fab0f3016e1e0c8"
+    },
+    {
+      "path": "misaka-palw-kernel/src/flat_seal7.rs",
+      "bytes": 2729,
+      "sha256": "c5eb36165f05e5b95eb7a1469949b6a8570aa58506461132b47fcb7fadd59ede"
+    },
+    {
+      "path": "misaka-palw-sdk/src/flat_snapshot_v7.rs",
+      "bytes": 5937,
+      "sha256": "f27ff004751be0227b07a8b58a41c1898caa34194e42186c9e067ecda5bf008e"
+    },
+    {
+      "path": "misaka-palw-sdk/src/flat_vector_v7.rs",
+      "bytes": 14157,
+      "sha256": "9102c1d8edc54a783eda2c8349cb1cba4f30acc384317916f999da447ae56831"
+    },
+    {
+      "path": "misaka-palw-sdk/tests/flat_vector_v7.rs",
+      "bytes": 5355,
+      "sha256": "44e64f5615da9b75f197eb0d245dbcfcdac46cddd027959ec2829ab0bea495c8"
+    }
+  ],
+  "shared_lib_staging": {
+    "path": "misaka-palw-kernel/src/lib.rs",
+    "staged_sha256": "159d7f3978d03e759d529e5aca21348c4fbca8ca0fe307b6a1b7f973d85caf07",
+    "compiled_sha256": "bfd4fe88a927743eb900a4f84dbf94a1c2c35bc2a318ae72767ea32affbc322b",
+    "difference": "Staged HEAD plus native flat_seal7 declaration only. Compiled preimage additionally declared independently verified point9/scope9 modules not used by native7; retained in the dependency archive. Later graph9/resource10/settlement changes are separate and not covered by these binaries."
+  },
+  "binaries": [
+    {
+      "kind": "node",
+      "original": "/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/kaspa_consensus-d754e11b8a8783f7",
+      "retained": "/tmp/rfc02-native-v7-final-node",
+      "bytes": 154798032,
+      "sha256": "30d4e57559ab77a5b047d384289e71fc26102031c08fdcde2b5d9ba1df3221e7"
+    },
+    {
+      "kind": "kernel",
+      "original": "/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/misaka_palw_kernel-3e75f80c67bc7227",
+      "retained": "/tmp/rfc02-native-v7-final-kernel",
+      "bytes": 11952304,
+      "sha256": "b98d3c48ba11e6b32c23069b0c7c3639e22ab8dd04958be8323461cd58eb2ffd"
+    },
+    {
+      "kind": "sdk-candidate",
+      "original": "/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/flat_candidate_v6-e0a451f829e555db",
+      "retained": "/tmp/rfc02-native-v7-final-sdk-candidate",
+      "bytes": 11280896,
+      "sha256": "5c30f921ca94e12a1f415f32b6be578ef7f20735fa57c8596dc635f9137d0fa0"
+    },
+    {
+      "kind": "sdk-snapshot",
+      "original": "/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/flat_snapshot_v6-87ab5baee7c99b85",
+      "retained": "/tmp/rfc02-native-v7-final-sdk-snapshot",
+      "bytes": 29574336,
+      "sha256": "40f1664bdf4566efcfa9b41e3e2341799b25facf8eb3f7a3a97a0c55308fef8d"
+    },
+    {
+      "kind": "sdk-vector",
+      "original": "/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/flat_vector_v7-53e3b1bfa706b34e",
+      "retained": "/tmp/rfc02-native-v7-final-sdk-vector",
+      "bytes": 6515984,
+      "sha256": "68c9d8416f4cc940c80787883662b26ba6f780f51c858467859bad7000b963cd"
+    },
+    {
+      "kind": "core",
+      "original": "/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/kaspa_consensus_core-66e4c5da2143b684",
+      "retained": "/tmp/rfc02-native-v7-final-core",
+      "bytes": 98563544,
+      "sha256": "c8c30fc053b44a682f0ae3b0bf7e2f8ab78a3841d6da6cbd85bb77958af489aa"
+    }
+  ],
+  "native_contract": {
+    "explicit_inner_tags": [
+      41,
+      42,
+      43,
+      44,
+      45,
+      46,
+      47
+    ],
+    "candidate_registration_tag": 40,
+    "tables": [
+      68,
+      69,
+      70,
+      71,
+      72,
+      73,
+      74,
+      75,
+      76
+    ],
+    "profile": "Full registered FlatResourceScopeV7 / FlatReplayEnvelopeV7, FlatFaultV7 includes ordinary V5 + point TopK7 courts",
+    "own_seal_maturity_daa": 3,
+    "own_seal_ttl_daa": 100,
+    "shared_old_new_seals_per_bond": 4,
+    "shared_old_new_seals_global": 1024,
+    "shared_old_new_candidate_statements_per_bond": 8,
+    "shared_old_new_requester_slots": 4,
+    "open_demands_per_vector": 32,
+    "proof_byte_ceiling": 1048576,
+    "selected_answer_byte_ceiling": 16384,
+    "original_poster_reserve_fixture_sompi": 10000000000,
+    "finder_bounty_fixture_sompi": 4900000000,
+    "shared_resource_behavior": "Admission cost precedes variable decode/scope/PC rederivation; only own mature seal reaches guaranteed proof reserve; final own chunk plus nested court needs two guaranteed runs; paid actor-specific failures and once-only original poster slash."
+  },
+  "new_native_evidence": [
+    "Synthetic frozen v1 program: 65-axis TopK -> sparse Gather -> ReduceSum -> state read/Add/Clamp/StateWrite, two admitted positions, complete real PC-v3 rows and artifact binding.",
+    "Independent source checker obtains node/hash/selected values through paid native45/46 and actual paged op211 JSON snapshot; clean, range, duplicate, order, dominance, tie and late state-write fault cases.",
+    "Own mature seal actor identity; copied seals, old v3/v6 bypass and borrowed chunk actors refuse; own chunk groups survive saturated generic eight-slot table.",
+    "Selected-value withholding, invalid paid answer, original horizon hold and third-party default pay requester49 exactly once; reserved budget accepts mature prosecution after admission flood.",
+    "Optional immutable text admission template binds exact current program/scope/replay/lengths; changed program root/token count/patch length/hostile program count refuse. One registered fixed specialization, not one dynamically shaped class.",
+    "Fresh full IBD and pruning importer register actual non-genesis participant with carrier-created collateral, publicly acquire evidence, own-seal and convict; exact original100 slash and outsider49 bounty reach actual UTXO, recreated by independent full IBD. Pruned comparison checks all retained deltas and exact complete tip/rows."
+  ],
+  "compatibility": {
+    "v1_tir_unchanged": true,
+    "v3_v5_v6_root_semantics_unchanged": true,
+    "old_tags_unchanged": true,
+    "tag113_target4_appended": true,
+    "shipping_fences_activated": false,
+    "candidate_execution_rights": false,
+    "candidate_Final_rights": false,
+    "candidate_reward_eligibility": false,
+    "mode_A": "Conditional externally acquired source R; inability to obtain source makes no court proof and imposes no consensus model-availability obligation."
+  },
+  "known_limits": [
+    "Native tests use a synthetic sparse/state program, not real checkpoint execution, fidelity or task acceptance.",
+    "Fresh op211 request/page path uses real consensus/RPC conversion, not a live TCP RPC service; dormant shipping activation is unchanged.",
+    "Honest protected candidate can check clean but has no execution-class/claim Final or reward rights. Actual honest real-checkpoint Final remains open.",
+    "Encoder posting is validated in production against the complete encoder7 candidate; this new native fixture suite exercises decoder sparse/state path, not every checkpoint/task combination.",
+    "Nonzero patch/audio text admission refuses; authenticated multimodal input and dynamically shaped registered jobs remain open.",
+    "H-axis sparse TopK8 and ordinary scalar9/resource10 contracts are separate future versions and not silently accepted through frozen native7.",
+    "Global retention/bandwidth/retry/material generation costs and complete block/bond/network economics remain unclosed for full RFC.",
+    "Kernel one ignored hardware throughput benchmark is not executed; these test runtimes are not production throughput or A6/A8 acceptance.",
+    "Real model A6/A8 >=90% and independent multi-task checkpoint fidelity/quality acceptance remain open."
+  ],
+  "trial_repairs": [
+    {
+      "log": "rfc02-native-mixed-v7-node-clock-trial.log",
+      "cause": "Test anchor used selected-sink DAA instead of actual get_virtual_daa_score. Fixed independent helper, strict five-field SDK anchor preserved."
+    },
+    {
+      "log": "rfc02-native-mixed-v7-node-pruned-trial.log",
+      "cause": "Test demanded intentionally deleted prepruning deltas from pruned importer after actual conviction/UTXO had succeeded. Compare all retained deltas plus complete tip/rows and independent replayed UTXO; full IBD still compares every historical delta."
+    },
+    {
+      "log": "rfc02-native-mixed-v7-core-registry-trial.log",
+      "cause": "Missing legacy36..39 and new40..47 allocation inventory and stale tag113 chunk target pin. Added explicit owning-fence declarations; preserved runtime fences and frozen int12 wire pin."
+    },
+    {
+      "log": "rfc02-native-mixed-v7-core-tail-fixture-trial.log",
+      "cause": "Fixture requested leaf1 of 66-element merged-tail layout; corrected fixture using derived leaf_of, cross-leaf test uses130 elements."
+    },
+    {
+      "log": "rfc02-native-mixed-v7-core-arity-fixture-trial.log",
+      "cause": "One fixture call missed new helper arguments; corrected test call. No production court or DA check relaxed."
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "docs/design/palw/tir/evidence/rfc02-native-mixed-v7-binaries.json",
+      "bytes": 2013,
+      "sha256": "42d7c9d382f00ff3cb231b3cb7a3dccee468da75c39f006a563d749ea00b4525"
+    },
+    {
+      "path": "docs/design/palw/tir/evidence/rfc02-native-mixed-v7-core-arity-fixture-trial.log",
+      "bytes": 2471,
+      "sha256": "db9b85d6913812beb27d532b86e8e8ec58d85f1c658f46afde73161cf26e76c7"
+    },
+    {
+      "path": "docs/design/palw/tir/evidence/rfc02-native-mixed-v7-core-final.log",
+      "bytes": 7821,
+      "sha256": "e901b9030cf666c8e39b72fb9c1228f5b292c0e1a66e826e01747d46b551c328"
+    },
+    {
+      "path": "docs/design/palw/tir/evidence/rfc02-native-mixed-v7-core-registry-trial.log",
+      "bytes": 8542,
+      "sha256": "ff57339bf406ebb0d399f2193b63999858981c76f66dd10a4b82e82b2a56e245"
+    },
+    {
+      "path": "docs/design/palw/tir/evidence/rfc02-native-mixed-v7-core-source-sha256.json",
+      "bytes": 98446,
+      "sha256": "c1a8be8a63ed394ff9ef548fde27f81dce7ef9c3c67a7af16366b5d472079f1a"
+    },
+    {
+      "path": "docs/design/palw/tir/evidence/rfc02-native-mixed-v7-core-tail-fixture-trial.log",
+      "bytes": 3890,
+      "sha256": "ed7a7db3e212b2ae78de9f6f7a65fb8f02ce1ef09e1ad6d4354435dec3657e50"
+    },
+    {
+      "path": "docs/design/palw/tir/evidence/rfc02-native-mixed-v7-dependency-preimages.tar.gz",
+      "bytes": 80837,
+      "sha256": "69e388e052dd5aeb736fabb292423eb6fba4ffe1a8eba32662885d441d008ae5"
+    },
+    {
+      "path": "docs/design/palw/tir/evidence/rfc02-native-mixed-v7-kernel-all-final.log",
+      "bytes": 15694,
+      "sha256": "329fe623a36a70c91c930a701176b20472b522ccaddd6e1e86d5e705ca0c4623"
+    },
+    {
+      "path": "docs/design/palw/tir/evidence/rfc02-native-mixed-v7-kernel-selected.log",
+      "bytes": 1108,
+      "sha256": "c47fe794d1f07a28130904e91120e292d7fb135b6240225a27d937ce1a8ab90e"
+    },
+    {
+      "path": "docs/design/palw/tir/evidence/rfc02-native-mixed-v7-node-clock-trial.log",
+      "bytes": 23919,
+      "sha256": "f8c1af8a0dbcfc6b76e9f91944309411639bbf601bf538730ec1bd1aaec7bf8d"
+    },
+    {
+      "path": "docs/design/palw/tir/evidence/rfc02-native-mixed-v7-node-final.log",
+      "bytes": 22998,
+      "sha256": "225f119cd4b6ae49ebb803c370befe486e864032baf62266a9effcbe0db24778"
+    },
+    {
+      "path": "docs/design/palw/tir/evidence/rfc02-native-mixed-v7-node-pruned-trial.log",
+      "bytes": 23793,
+      "sha256": "c5c8ca6180a6a44d920d7adc35ff4f0ebf5d591900435dadab1b37e0ff320497"
+    },
+    {
+      "path": "docs/design/palw/tir/evidence/rfc02-native-mixed-v7-node-source-sha256.json",
+      "bytes": 98206,
+      "sha256": "21cc797468443d4cbeb18294fa315c40f2fb1714c357df4a4d6452251ee2ff17"
+    },
+    {
+      "path": "docs/design/palw/tir/evidence/rfc02-native-mixed-v7-sdk-final.log",
+      "bytes": 13677,
+      "sha256": "e04053504124e7879f989829d1ae0807f436c73b55843f7bdeb3cb20545c7e1b"
+    },
+    {
+      "path": "docs/design/palw/tir/evidence/rfc02-native-mixed-v7-format-final.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "component_pool_prior": 263,
+  "component_pool_after": 276
+}

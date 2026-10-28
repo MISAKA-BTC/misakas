@@ -1,0 +1,582 @@
+//! **ADR-0132 — the node's end-to-end economics recorder, its per-class telemetry, and the
+//! provider that hands both to `getPalwClassEconomics` (op 185).** Shadow: nothing consensus reads.
+//!
+//! The recorder follows every attempt-lane claim the chain still holds, writes one row per claim
+//! into the node's meta database (`PalwEconomicsLedgerV1`), and keeps the row past the chain's
+//! retention, so the node can say what a class was actually paid over a window longer than the
+//! state remembers — with the payout derived by the rule in force at the claim's `Final`
+//! (`palw_ledger_payout_v1`) and the compute the claim cost from the class's own graph and the two
+//! lotteries (class draws from the class target, network draws from the accepted block's `bits`).
+//! It refreshes every [`PALW_ECONOMICS_REFRESH_SECS`] seconds on its own thread and before every
+//! op 185 answer.
+//!
+//! The telemetry is what THIS node did: its producer's draws (class wins, blocks produced, the
+//! milliseconds a forward took, the MiB the process read from storage during it — ADR-0112's
+//! number) and its seat's replays and receipts, per class, since the process started.
+
+use std::collections::{BTreeMap, HashMap};
+use std::sync::{Arc, Mutex};
+
+use kaspa_consensus_core::BlockHash;
+use kaspa_consensus_core::config::Config;
+use kaspa_consensus_core::palw_economic_compute_v1::{
+    PALW_ECONOMIC_COST_TABLE_V1, PALW_EXPECTED_ATTEMPTS_Q32_ONE_V1, palw_attempt_economic_compute_v1,
+    palw_network_expected_attempts_q32_v1,
+};
+use kaspa_consensus_core::palw_economics_ledger_v1::{
+    PALW_ECONOMICS_LEDGER_VERSION_V1, PalwClaimLedgerRowV1, PalwClassLedgerTotalsV1, PalwLedgerClassFactsV1, PalwLedgerPayoutRuleV1,
+    palw_class_ledger_totals_v1, palw_ledger_merge_v1,
+};
+use kaspa_consensusmanager::ConsensusManager;
+use kaspa_database::prelude::{CachePolicy, CachedDbAccess, CachedDbItem, DB, DirectDbWriter, StoreError, StoreResult};
+use kaspa_database::registry::DatabaseStorePrefixes;
+use kaspa_hashes::Hash64;
+use kaspa_rpc_service::service::{
+    PalwClassLedgerCompute, PalwClassLedgerContext, PalwClassLedgerProvider, PalwClassNodeTelemetry, PalwEconomicsLedgerSummary,
+};
+use log::{debug, info, warn};
+
+use crate::palw_class_context::PalwClassLedgerCellV1;
+
+/// How often the recorder's own thread brings the ledger up to the chain.
+pub const PALW_ECONOMICS_REFRESH_SECS: u64 = 60;
+/// Two reads inside this many seconds share one refresh.
+const PALW_ECONOMICS_REFRESH_MIN_GAP_SECS: u64 = 5;
+
+/// **Per-class counters of what this node did**, shared by the producer, the panel and the RPC.
+#[derive(Default, Debug)]
+pub struct PalwNodeTelemetryV1 {
+    classes: Mutex<BTreeMap<Hash64, PalwClassNodeTelemetry>>,
+    /// G14's effective-rate funnel per class (`palw_detection_policy_v1`), node-side only.
+    detection: Mutex<PalwDetectionRecorderV1>,
+}
+
+/// **The detection funnel's book**: per-class counters and the `(claim, stage)` pairs already counted, so a seat that re-enters a
+/// claim every tick counts each stage once. The seen-set is bounded and cleared whole when full (a recount after a clear is a
+/// small over-count of a node-local metric, never a consensus input).
+#[derive(Default, Debug)]
+struct PalwDetectionRecorderV1 {
+    funnels: BTreeMap<Hash64, kaspa_consensus_core::palw_detection_policy_v1::PalwDetectionFunnelV1>,
+    seen: std::collections::HashSet<(Hash64, u8, u8)>,
+    /// Claims this node detected, followed to their chain outcome: claim → class.
+    watched: BTreeMap<Hash64, Hash64>,
+    /// Lane g14-court-capacity-r2: the interval duties this seat holds per class, claim → the DAA its inspection deadline ends
+    /// (`palw_detection_take_duty_v1`): the seat takes no duty beyond its policy's `claims_in_flight`.
+    duties: BTreeMap<Hash64, BTreeMap<Hash64, u64>>,
+}
+
+impl PalwDetectionRecorderV1 {
+    const SEEN_CAP: usize = 1 << 16;
+    const WATCH_CAP: usize = 4_096;
+
+    fn first(&mut self, claim: Hash64, kind: u8, index: u8) -> bool {
+        if self.seen.len() >= Self::SEEN_CAP {
+            self.seen.clear();
+        }
+        self.seen.insert((claim, kind, index))
+    }
+}
+
+impl PalwNodeTelemetryV1 {
+    fn with(&self, class: Hash64, f: impl FnOnce(&mut PalwClassNodeTelemetry)) {
+        if let Ok(mut classes) = self.classes.lock() {
+            f(classes.entry(class).or_default());
+        }
+    }
+
+    /// One draw: whether the class ticket won, whether the network draw then won (a block), how
+    /// long the forward took, and what the process read from storage during it.
+    pub fn producer_draw(&self, class: Hash64, class_won: bool, produced: bool, millis: u64, storage_read_mib: u64) {
+        self.with(class, |c| {
+            c.draws += 1;
+            c.class_wins += u64::from(class_won);
+            c.produced += u64::from(produced);
+            c.draw_millis = c.draw_millis.saturating_add(millis);
+            c.storage_read_mib = c.storage_read_mib.saturating_add(storage_read_mib);
+        });
+    }
+
+    /// One whole-job replay by this seat, and the leaves it replayed.
+    pub fn panel_replay(&self, class: Hash64, millis: u64, leaves: u64) {
+        self.with(class, |c| {
+            c.replays += 1;
+            c.replay_millis = c.replay_millis.saturating_add(millis);
+            c.replay_leaves = c.replay_leaves.saturating_add(leaves);
+        });
+    }
+
+    /// One receipt this seat filed, by the verdict's name.
+    pub fn panel_receipt(&self, class: Hash64, verdict: &str) {
+        self.with(class, |c| match verdict {
+            "Valid" => c.receipts_valid += 1,
+            "Unavailable" => c.receipts_unavailable += 1,
+            "Incapable" => c.receipts_incapable += 1,
+            _ => c.receipts_other += 1,
+        });
+    }
+
+    /// Openings this seat held when it drew its intervals for a duty.
+    pub fn panel_openings_held(&self, class: Hash64, held: u64) {
+        self.with(class, |c| c.openings_held = c.openings_held.saturating_add(held));
+    }
+
+    pub fn snapshot(&self, class: Hash64) -> Option<PalwClassNodeTelemetry> {
+        self.classes.lock().ok()?.get(&class).copied()
+    }
+
+    /// G14 funnel: `claim` reached `stage` (counted once per claim).
+    pub fn detection_stage_once(
+        &self,
+        class: Hash64,
+        claim: Hash64,
+        stage: kaspa_consensus_core::palw_detection_policy_v1::PalwDetectionStageV1,
+    ) {
+        if let Ok(mut book) = self.detection.lock()
+            && book.first(claim, 0, stage as u8)
+        {
+            book.funnels.entry(class).or_default().record(stage);
+        }
+    }
+
+    /// G14 funnel: `claim` was lost to `loss` (counted once per claim and loss) — kept apart from the sampling miss.
+    pub fn detection_loss_once(
+        &self,
+        class: Hash64,
+        claim: Hash64,
+        loss: kaspa_consensus_core::palw_detection_policy_v1::PalwDetectionLossV1,
+    ) {
+        if let Ok(mut book) = self.detection.lock()
+            && book.first(claim, 1, loss as u8)
+        {
+            book.funnels.entry(class).or_default().record_loss(loss);
+        }
+    }
+
+    /// **Lane g14-court-capacity-r2: may this seat take `claim`'s interval duty** under its class policy's `claims_in_flight` (`cap`)?
+    /// Duties whose inspection deadline (`until`) has passed at `now` are dropped first; a claim already held is held; past the cap the
+    /// duty is refused (the caller records `CapacityRefusal`, so the drop is counted, never silent).
+    pub fn detection_take_duty_v1(&self, class: Hash64, claim: Hash64, now: u64, cap: u32, until: u64) -> bool {
+        match self.detection.lock() {
+            Ok(mut book) => palw_detection_take_duty_v1(book.duties.entry(class).or_default(), claim, now, cap, until),
+            Err(_) => true,
+        }
+    }
+
+    /// **Lane g14-court-capacity-r2: the class this node detected `claim` under**, if it follows the claim (the court carrier keys a
+    /// fee shortfall by it).
+    pub fn detection_watched_class(&self, claim: &Hash64) -> Option<Hash64> {
+        self.detection.lock().ok().and_then(|book| book.watched.get(claim).copied())
+    }
+
+    /// G14 funnel: one loss with no claim to key it (an opening the retention pool could not hold).
+    pub fn detection_loss(&self, class: Hash64, loss: kaspa_consensus_core::palw_detection_policy_v1::PalwDetectionLossV1) {
+        if let Ok(mut book) = self.detection.lock() {
+            book.funnels.entry(class).or_default().record_loss(loss);
+        }
+    }
+
+    /// G14 funnel: follow a claim this node detected to its chain outcome (bounded; the oldest-keyed entry gives way).
+    pub fn detection_watch(&self, class: Hash64, claim: Hash64) {
+        if let Ok(mut book) = self.detection.lock() {
+            if book.watched.len() >= PalwDetectionRecorderV1::WATCH_CAP && !book.watched.contains_key(&claim) {
+                let first = book.watched.keys().next().copied();
+                if let Some(first) = first {
+                    book.watched.remove(&first);
+                }
+            }
+            book.watched.insert(claim, class);
+        }
+    }
+
+    /// The claims being followed.
+    pub fn detection_watched(&self) -> Vec<Hash64> {
+        self.detection.lock().map(|book| book.watched.keys().copied().collect()).unwrap_or_default()
+    }
+
+    /// G14 funnel: a followed claim's chain outcome, as stages (filed → accepted → convicted/defaulted → collected → invalidated) and
+    /// losses (deadline, unassigned) — each once; a terminal outcome stops the follow.
+    pub fn detection_follow(
+        &self,
+        claim: Hash64,
+        outcome: kaspa_consensus_core::palw_detection_policy_v1::PalwDetectionChainOutcomeV1,
+        slashed: bool,
+    ) {
+        use kaspa_consensus_core::palw_detection_policy_v1::{PalwDetectionChainOutcomeV1 as O, palw_detection_follow_v1};
+        let Some(class) = self.detection.lock().ok().and_then(|book| book.watched.get(&claim).copied()) else { return };
+        let (stages, loss) = palw_detection_follow_v1(outcome, slashed);
+        for stage in stages {
+            self.detection_stage_once(class, claim, stage);
+        }
+        if let Some(loss) = loss {
+            self.detection_loss_once(class, claim, loss);
+        }
+        if !matches!(outcome, O::InFlight | O::Disputed)
+            && let Ok(mut book) = self.detection.lock()
+        {
+            book.watched.remove(&claim);
+        }
+    }
+
+    /// G14 funnel: the class's counters since the process started.
+    pub fn detection_snapshot(&self, class: Hash64) -> Option<kaspa_consensus_core::palw_detection_policy_v1::PalwDetectionFunnelV1> {
+        self.detection.lock().ok()?.funnels.get(&class).copied()
+    }
+}
+
+/// **The ledger's rows in the meta database**, one per claim id, under a schema marker.
+pub struct DbPalwEconomicsLedgerStoreV1 {
+    access: CachedDbAccess<Hash64, Arc<PalwClaimLedgerRowV1>>,
+    schema: CachedDbItem<u32>,
+    db: Arc<DB>,
+}
+
+impl DbPalwEconomicsLedgerStoreV1 {
+    pub fn new(db: Arc<DB>) -> Self {
+        Self {
+            access: CachedDbAccess::new(
+                Arc::clone(&db),
+                CachePolicy::Count(4_096),
+                DatabaseStorePrefixes::PalwEconomicsLedgerV1.into(),
+            ),
+            schema: CachedDbItem::new(Arc::clone(&db), DatabaseStorePrefixes::PalwEconomicsLedgerSchemaV1.into()),
+            db,
+        }
+    }
+
+    /// Rows written under another layout are dropped: they are a measurement the chain
+    /// re-supplies, never a fact only the store holds.
+    pub fn ensure_schema(&mut self) -> StoreResult<()> {
+        let stored = match self.schema.read() {
+            Ok(v) => Some(v),
+            Err(StoreError::KeyNotFound(_)) => None,
+            Err(e) => return Err(e),
+        };
+        if stored != Some(PALW_ECONOMICS_LEDGER_VERSION_V1) {
+            if stored.is_some() {
+                warn!(
+                    "[palw-economics] the ledger's rows were written under layout {stored:?}; dropping them for v{PALW_ECONOMICS_LEDGER_VERSION_V1}"
+                );
+            }
+            self.access.delete_all(DirectDbWriter::new(&self.db))?;
+            self.schema.write(DirectDbWriter::new(&self.db), &PALW_ECONOMICS_LEDGER_VERSION_V1)?;
+        }
+        Ok(())
+    }
+
+    pub fn rows(&self) -> Vec<PalwClaimLedgerRowV1> {
+        self.access.iterator().filter_map(|r| r.ok().map(|(_, row)| (*row).clone())).collect()
+    }
+
+    pub fn write(&self, rows: &[PalwClaimLedgerRowV1]) -> StoreResult<()> {
+        for row in rows {
+            self.access.write(DirectDbWriter::new(&self.db), row.claim_id, Arc::new(row.clone()))?;
+        }
+        Ok(())
+    }
+}
+
+/// **The recorder**: the store, the chain, and the class facts it prices rows with.
+pub struct PalwEconomicsRecorderV1 {
+    store: Mutex<DbPalwEconomicsLedgerStoreV1>,
+    consensus_manager: Arc<ConsensusManager>,
+    config: Arc<Config>,
+    ledger: PalwClassLedgerCellV1,
+    last_refresh: Mutex<Option<std::time::Instant>>,
+}
+
+impl PalwEconomicsRecorderV1 {
+    pub fn new(
+        store: DbPalwEconomicsLedgerStoreV1,
+        consensus_manager: Arc<ConsensusManager>,
+        config: Arc<Config>,
+        ledger: PalwClassLedgerCellV1,
+    ) -> Self {
+        Self { store: Mutex::new(store), consensus_manager, config, ledger, last_refresh: Mutex::new(None) }
+    }
+
+    /// Bring the ledger up to the chain; `Ok(rows written)`. Two calls inside
+    /// [`PALW_ECONOMICS_REFRESH_MIN_GAP_SECS`] share the first.
+    pub fn refresh(&self) -> Result<usize, String> {
+        {
+            let mut last = self.last_refresh.lock().map_err(|_| "the refresh clock is poisoned")?;
+            if last.is_some_and(|at| at.elapsed().as_secs() < PALW_ECONOMICS_REFRESH_MIN_GAP_SECS) {
+                return Ok(0);
+            }
+            *last = Some(std::time::Instant::now());
+        }
+        let session = self.consensus_manager.consensus().unguarded_session_blocking();
+        let census = session.palw_class_census_v1().ok_or("no class census: not a ConsensusV2 network, or no state yet")?;
+        let observations = session.palw_claim_ledger_observations_v1().ok_or("no claim observations")?;
+        let params = &self.config.params;
+        let prefill_draw = params.palw_prefill_draw_active_at(census.tip_daa);
+        // ADR-0124 Decision 6's unit as the fold reads it: the dearest leaves among the Active,
+        // weight-bearing model classes.
+        let unit_leaves = census
+            .classes
+            .iter()
+            .filter(|r| !r.is_base_class && r.share_permille.unwrap_or(0) > 0 && r.status == "Active")
+            .map(|r| r.pwu_per_inference)
+            .max()
+            .unwrap_or(0);
+        let facts: HashMap<Hash64, (u128, u128, u64, bool)> = census
+            .classes
+            .iter()
+            .map(|row| {
+                let draw = match session.palw_registered_class_carriage_v1(row.class_id) {
+                    Some((profile, canonical)) => {
+                        palw_attempt_economic_compute_v1(&profile, &canonical, prefill_draw, &PALW_ECONOMIC_COST_TABLE_V1).unwrap_or(0)
+                    }
+                    None => self
+                        .ledger
+                        .get()
+                        .ledger_compute(row.class_id)
+                        .map(|c| if prefill_draw { c.draw } else { c.canonical })
+                        .unwrap_or(0),
+                };
+                (row.class_id, (row.expected_attempts_q32, draw, row.pwu_per_inference, row.is_base_class))
+            })
+            .collect();
+        let mut store = self.store.lock().map_err(|_| "the ledger store is poisoned")?;
+        store.ensure_schema().map_err(|e| format!("ledger schema: {e}"))?;
+        let existing: HashMap<Hash64, PalwClaimLedgerRowV1> = store.rows().into_iter().map(|r| (r.claim_id, r)).collect();
+        let mut bits_of: HashMap<BlockHash, u32> = HashMap::new();
+        let mut changed = Vec::new();
+        for obs in &observations {
+            let Some(&(expected_attempts_q32, draw_compute, leaves, is_base)) = facts.get(&obs.class_id) else { continue };
+            let previous = existing.get(&obs.claim_id);
+            let network_expected_attempts_q32 = match previous {
+                Some(row) => row.network_expected_attempts_q32,
+                None => {
+                    let bits = *bits_of
+                        .entry(obs.accepted_block)
+                        .or_insert_with(|| session.get_header(obs.accepted_block).map(|h| h.bits).unwrap_or(0));
+                    if bits == 0 { PALW_EXPECTED_ATTEMPTS_Q32_ONE_V1 } else { palw_network_expected_attempts_q32_v1(bits) }
+                }
+            };
+            let class_facts = PalwLedgerClassFactsV1 { expected_attempts_q32, network_expected_attempts_q32, draw_compute, leaves };
+            let row = palw_ledger_merge_v1(previous, obs, census.tip_daa, class_facts, |final_daa| PalwLedgerPayoutRuleV1 {
+                work_priced: !is_base && params.palw_work_priced_reward_active_at(final_daa),
+                leaves,
+                unit_leaves,
+                panel_economy: params.palw_panel_economy_active_at(final_daa),
+                // ADR-0132 Upgrade C: the merge fills this from the row's own snapshot.
+                economic: None,
+            });
+            if previous != Some(&row) {
+                changed.push(row);
+            }
+        }
+        store.write(&changed).map_err(|e| format!("ledger write: {e}"))?;
+        debug!("[palw-economics] refreshed at DAA {}: {} of {} claims changed", census.tip_daa, changed.len(), observations.len());
+        Ok(changed.len())
+    }
+
+    pub fn totals(&self, class_id: Hash64) -> Option<PalwClassLedgerTotalsV1> {
+        let rows = self.store.lock().ok()?.rows();
+        Some(palw_class_ledger_totals_v1(&rows, class_id))
+    }
+
+    pub fn summary(&self) -> Option<PalwEconomicsLedgerSummary> {
+        let rows = self.store.lock().ok()?.rows();
+        let (first, last) = rows.iter().fold((u64::MAX, 0u64), |(f, l), r| (f.min(r.accepted_daa), l.max(r.accepted_daa)));
+        Some(PalwEconomicsLedgerSummary {
+            claims: rows.len() as u64,
+            first_daa: if rows.is_empty() { 0 } else { first },
+            last_daa: last,
+        })
+    }
+}
+
+/// The recorder's own thread: a refresh every [`PALW_ECONOMICS_REFRESH_SECS`] seconds, for as long as
+/// the recorder lives. Errors are logged at debug (a node that is still syncing has no state to read).
+///
+/// The thread holds the recorder only weakly: the RPC service's provider owns it, so a daemon
+/// shutdown that drops the service releases the recorder — and with it the `ConsensusManager` — at
+/// once, and the thread exits at its next wake instead of keeping both alive for the process.
+pub fn spawn_recorder_thread(recorder: Arc<PalwEconomicsRecorderV1>) {
+    let recorder = Arc::downgrade(&recorder);
+    let spawned = std::thread::Builder::new().name("palw-economics".to_string()).spawn(move || {
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(PALW_ECONOMICS_REFRESH_SECS));
+            let Some(recorder) = recorder.upgrade() else { break };
+            match recorder.refresh() {
+                Ok(n) if n > 0 => info!("[palw-economics] ledger: {n} claim row(s) written"),
+                Ok(_) => {}
+                Err(e) => debug!("[palw-economics] refresh skipped: {e}"),
+            }
+        }
+    });
+    if spawned.is_err() {
+        warn!("[palw-economics] the recorder thread could not be started; op 185 refreshes the ledger on read only");
+    }
+}
+
+/// **What op 185 reads on this node**: the build's class ledger, the recorder, and the telemetry.
+pub struct PalwEconomicsNodeProviderV1 {
+    pub cell: PalwClassLedgerCellV1,
+    pub recorder: Option<Arc<PalwEconomicsRecorderV1>>,
+    pub telemetry: Arc<PalwNodeTelemetryV1>,
+}
+
+impl PalwClassLedgerProvider for PalwEconomicsNodeProviderV1 {
+    fn class_context(&self, class_id: Hash64) -> Option<PalwClassLedgerContext> {
+        self.cell.get().ledger_context(class_id)
+    }
+
+    fn class_economic_compute(&self, class_id: Hash64) -> Option<PalwClassLedgerCompute> {
+        self.cell.get().ledger_compute(class_id)
+    }
+
+    fn refresh_economics_ledger(&self) {
+        if let Some(recorder) = &self.recorder
+            && let Err(e) = recorder.refresh()
+        {
+            debug!("[palw-economics] refresh on read skipped: {e}");
+        }
+    }
+
+    fn economics_ledger_summary(&self) -> Option<PalwEconomicsLedgerSummary> {
+        self.recorder.as_ref()?.summary()
+    }
+
+    fn class_ledger_totals(&self, class_id: Hash64) -> Option<PalwClassLedgerTotalsV1> {
+        self.recorder.as_ref()?.totals(class_id)
+    }
+
+    fn class_node_telemetry(&self, class_id: Hash64) -> Option<PalwClassNodeTelemetry> {
+        self.telemetry.snapshot(class_id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kaspa_consensus_core::palw_economics_ledger_v1::PalwClaimLedgerRowV1;
+    use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
+    use kaspa_database::create_temp_db;
+    use kaspa_database::prelude::ConnBuilder;
+
+    fn row(n: u64, class: u64) -> PalwClaimLedgerRowV1 {
+        PalwClaimLedgerRowV1 {
+            version: PALW_ECONOMICS_LEDGER_VERSION_V1,
+            claim_id: Hash64::from_u64_word(n),
+            class_id: Hash64::from_u64_word(class),
+            producer_bond: TransactionOutpoint::new(TransactionId::from_u64_word(1), 0),
+            accepted_daa: 4_000 + n,
+            accepted_block: Hash64::from_u64_word(9_000 + n),
+            escrow_sompi: 320_084_650_080,
+            pwu: 1,
+            expected_attempts_q32: PALW_EXPECTED_ATTEMPTS_Q32_ONE_V1,
+            network_expected_attempts_q32: 2 * PALW_EXPECTED_ATTEMPTS_Q32_ONE_V1,
+            draw_compute: 83_102_171_136,
+            leaves: 6_630_544,
+            first_seen_daa: 4_001 + n,
+            last_seen_daa: 4_001 + n,
+            bound_daa: Some(4_020 + n),
+            rebound_daa: None,
+            licensed_daa: None,
+            final_daa: None,
+            voided_daa: None,
+            void_reason: String::new(),
+            seats: 5,
+            credited_seats: 0,
+            producer_named_sompi: 0,
+            panel_named_sompi: 0,
+            reserve_sompi: 0,
+            burned_sompi: 0,
+            paid_at_acceptance: false,
+            economic_snapshotted: false,
+            economic_rate_sompi_per_giga: 0,
+            economic_panel_share_permille: 0,
+        }
+    }
+
+    /// **The store round-trips rows by claim id, upserts, and drops rows of another layout.**
+    #[test]
+    fn adr0132_the_ledger_store_round_trips_and_drops_a_foreign_layout() {
+        let (_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let mut store = DbPalwEconomicsLedgerStoreV1::new(db.clone());
+        store.ensure_schema().unwrap();
+        store.write(&[row(1, 7), row(2, 7), row(3, 8)]).unwrap();
+        let mut rows = store.rows();
+        rows.sort_by_key(|r| r.accepted_daa);
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0], row(1, 7));
+        let mut updated = row(2, 7);
+        updated.final_daa = Some(6_020);
+        updated.producer_named_sompi = 1;
+        store.write(std::slice::from_ref(&updated)).unwrap();
+        let rows = store.rows();
+        assert_eq!(rows.len(), 3, "an upsert, not a second row");
+        assert!(rows.iter().any(|r| r == &updated));
+        let totals = palw_class_ledger_totals_v1(&rows, Hash64::from_u64_word(7));
+        assert_eq!((totals.claims, totals.finals, totals.bound), (2, 1, 2));
+        // Another layout: the marker moves, the rows go.
+        store.schema.write(DirectDbWriter::new(&db), &(PALW_ECONOMICS_LEDGER_VERSION_V1 + 1)).unwrap();
+        store.ensure_schema().unwrap();
+        assert!(store.rows().is_empty());
+        assert_eq!(store.schema.read().unwrap(), PALW_ECONOMICS_LEDGER_VERSION_V1);
+    }
+
+    /// **The telemetry counts per class and answers nothing for a class it never touched.**
+    #[test]
+    fn adr0132_the_telemetry_counts_per_class() {
+        let t = PalwNodeTelemetryV1::default();
+        let (dense, hybrid) = (Hash64::from_u64_word(1), Hash64::from_u64_word(2));
+        t.producer_draw(hybrid, true, false, 120_000, 9_700);
+        t.producer_draw(hybrid, true, true, 118_000, 9_650);
+        t.producer_draw(hybrid, false, false, 121_000, 9_800);
+        t.panel_replay(dense, 20_100, 6_508_520);
+        t.panel_receipt(dense, "Valid");
+        t.panel_receipt(dense, "Unavailable");
+        t.panel_receipt(hybrid, "Incapable");
+        t.panel_openings_held(dense, 4);
+        let h = t.snapshot(hybrid).unwrap();
+        assert_eq!((h.draws, h.class_wins, h.produced, h.draw_millis, h.storage_read_mib), (3, 2, 1, 359_000, 29_150));
+        assert_eq!(h.receipts_incapable, 1);
+        let d = t.snapshot(dense).unwrap();
+        assert_eq!(
+            (d.replays, d.replay_millis, d.replay_leaves, d.receipts_valid, d.receipts_unavailable, d.openings_held),
+            (1, 20_100, 6_508_520, 1, 1, 4)
+        );
+        assert!(t.snapshot(Hash64::from_u64_word(3)).is_none());
+    }
+}
+
+/// **The seat's in-flight duty book, pure** (lane g14-court-capacity-r2): drop every duty whose deadline is `<= now`; keep a held
+/// claim; refuse a new one at `cap`; else hold it to `until`.
+pub(crate) fn palw_detection_take_duty_v1(book: &mut BTreeMap<Hash64, u64>, claim: Hash64, now: u64, cap: u32, until: u64) -> bool {
+    book.retain(|_, deadline| *deadline > now);
+    if book.contains_key(&claim) {
+        return true;
+    }
+    if book.len() >= cap as usize {
+        return false;
+    }
+    book.insert(claim, until);
+    true
+}
+
+#[cfg(test)]
+mod duty_book_tests {
+    use super::*;
+
+    /// **The seat takes no interval duty beyond its policy's `claims_in_flight`**, frees a slot when a duty's deadline passes, and
+    /// keeps a claim it already holds.
+    #[test]
+    fn g14r2_the_seat_takes_no_duty_beyond_claims_in_flight() {
+        let h = Hash64::from_u64_word;
+        let mut book = BTreeMap::new();
+        assert!(palw_detection_take_duty_v1(&mut book, h(1), 100, 2, 200));
+        assert!(palw_detection_take_duty_v1(&mut book, h(2), 101, 2, 201));
+        assert!(!palw_detection_take_duty_v1(&mut book, h(3), 102, 2, 202), "the third claim in flight is refused");
+        assert!(palw_detection_take_duty_v1(&mut book, h(1), 103, 2, 999), "a held claim stays held");
+        assert!(palw_detection_take_duty_v1(&mut book, h(3), 200, 2, 300), "claim 1's deadline passed: a slot frees");
+        assert_eq!(book.len(), 2);
+        let telemetry = PalwNodeTelemetryV1::default();
+        assert!(telemetry.detection_take_duty_v1(h(9), h(1), 0, 1, 10));
+        assert!(!telemetry.detection_take_duty_v1(h(9), h(2), 1, 1, 11), "per class");
+        assert!(telemetry.detection_take_duty_v1(h(8), h(2), 1, 1, 11), "another class has its own cap");
+    }
+}
+

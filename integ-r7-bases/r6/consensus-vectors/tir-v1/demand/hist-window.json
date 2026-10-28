@@ -1,0 +1,2123 @@
+{
+  "format": "palw-tir-v1/demand-vectors/1",
+  "spec": "docs/spec/palw/04b-tensor-ir.md §9.4",
+  "name": "hist-window",
+  "program": "programs/hist-window.json",
+  "states": [],
+  "cases": [
+    {
+      "name": "commit pos 0 occurrence 0 node 0",
+      "target": {
+        "node": {
+          "pos": "0",
+          "occurrence": "0",
+          "node": "0"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "2",
+        "3"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "0",
+          "0",
+          "0",
+          "0"
+        ],
+        "work": {
+          "elements": "4",
+          "terms": "0"
+        },
+        "requests": []
+      }
+    },
+    {
+      "name": "commit pos 0 occurrence 1 node 4",
+      "target": {
+        "node": {
+          "pos": "0",
+          "occurrence": "1",
+          "node": "4"
+        }
+      },
+      "elements": [
+        "0",
+        "1"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "5",
+          "0"
+        ],
+        "work": {
+          "elements": "6",
+          "terms": "0"
+        },
+        "requests": [
+          {
+            "token": {
+              "pos": "0"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 0 occurrence 1 node 12",
+      "target": {
+        "node": {
+          "pos": "0",
+          "occurrence": "1",
+          "node": "12"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "2",
+        "3"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "5",
+          "0",
+          "5",
+          "0"
+        ],
+        "work": {
+          "elements": "21",
+          "terms": "4"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "0",
+              "occurrence": "0",
+              "node": "0"
+            },
+            "indices": "0-3"
+          },
+          {
+            "node": {
+              "pos": "0",
+              "occurrence": "1",
+              "node": "4"
+            },
+            "indices": "0-1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 0 occurrence 2 node 4",
+      "target": {
+        "node": {
+          "pos": "0",
+          "occurrence": "2",
+          "node": "4"
+        }
+      },
+      "elements": [
+        "0",
+        "1"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "5",
+          "0"
+        ],
+        "work": {
+          "elements": "6",
+          "terms": "0"
+        },
+        "requests": [
+          {
+            "token": {
+              "pos": "0"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 0 occurrence 2 node 12",
+      "target": {
+        "node": {
+          "pos": "0",
+          "occurrence": "2",
+          "node": "12"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "2",
+        "3"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "10",
+          "0",
+          "10",
+          "0"
+        ],
+        "work": {
+          "elements": "21",
+          "terms": "4"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "0",
+              "occurrence": "1",
+              "node": "12"
+            },
+            "indices": "0-3"
+          },
+          {
+            "node": {
+              "pos": "0",
+              "occurrence": "2",
+              "node": "4"
+            },
+            "indices": "0-1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 0 occurrence 3 node 0",
+      "target": {
+        "node": {
+          "pos": "0",
+          "occurrence": "3",
+          "node": "0"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "2",
+        "3"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "10",
+          "0",
+          "10",
+          "0"
+        ],
+        "work": {
+          "elements": "4",
+          "terms": "0"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "0",
+              "occurrence": "2",
+              "node": "12"
+            },
+            "indices": "0-3"
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 1 occurrence 0 node 0",
+      "target": {
+        "node": {
+          "pos": "1",
+          "occurrence": "0",
+          "node": "0"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "2",
+        "3"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "0",
+          "0",
+          "0",
+          "0"
+        ],
+        "work": {
+          "elements": "4",
+          "terms": "0"
+        },
+        "requests": []
+      }
+    },
+    {
+      "name": "commit pos 1 occurrence 1 node 4",
+      "target": {
+        "node": {
+          "pos": "1",
+          "occurrence": "1",
+          "node": "4"
+        }
+      },
+      "elements": [
+        "0",
+        "1"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "1",
+          "1"
+        ],
+        "work": {
+          "elements": "6",
+          "terms": "0"
+        },
+        "requests": [
+          {
+            "token": {
+              "pos": "1"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 1 occurrence 1 node 12",
+      "target": {
+        "node": {
+          "pos": "1",
+          "occurrence": "1",
+          "node": "12"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "2",
+        "3"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "6",
+          "1",
+          "7",
+          "2"
+        ],
+        "work": {
+          "elements": "26",
+          "terms": "8"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "1",
+              "occurrence": "0",
+              "node": "0"
+            },
+            "indices": "0-3"
+          },
+          {
+            "node": {
+              "pos": "1",
+              "occurrence": "1",
+              "node": "4"
+            },
+            "indices": "0-1"
+          },
+          {
+            "hist_row": {
+              "pos": "1",
+              "state": "0",
+              "layer": "0",
+              "row_pos": "0"
+            },
+            "indices": "0-1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 1 occurrence 2 node 4",
+      "target": {
+        "node": {
+          "pos": "1",
+          "occurrence": "2",
+          "node": "4"
+        }
+      },
+      "elements": [
+        "0",
+        "1"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "1",
+          "1"
+        ],
+        "work": {
+          "elements": "6",
+          "terms": "0"
+        },
+        "requests": [
+          {
+            "token": {
+              "pos": "1"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 1 occurrence 2 node 12",
+      "target": {
+        "node": {
+          "pos": "1",
+          "occurrence": "2",
+          "node": "12"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "2",
+        "3"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "12",
+          "2",
+          "14",
+          "4"
+        ],
+        "work": {
+          "elements": "26",
+          "terms": "8"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "1",
+              "occurrence": "1",
+              "node": "12"
+            },
+            "indices": "0-3"
+          },
+          {
+            "node": {
+              "pos": "1",
+              "occurrence": "2",
+              "node": "4"
+            },
+            "indices": "0-1"
+          },
+          {
+            "hist_row": {
+              "pos": "1",
+              "state": "0",
+              "layer": "1",
+              "row_pos": "0"
+            },
+            "indices": "0-1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 1 occurrence 3 node 0",
+      "target": {
+        "node": {
+          "pos": "1",
+          "occurrence": "3",
+          "node": "0"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "2",
+        "3"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "12",
+          "2",
+          "14",
+          "4"
+        ],
+        "work": {
+          "elements": "4",
+          "terms": "0"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "1",
+              "occurrence": "2",
+              "node": "12"
+            },
+            "indices": "0-3"
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 2 occurrence 0 node 0",
+      "target": {
+        "node": {
+          "pos": "2",
+          "occurrence": "0",
+          "node": "0"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "2",
+        "3"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "0",
+          "0",
+          "0",
+          "0"
+        ],
+        "work": {
+          "elements": "4",
+          "terms": "0"
+        },
+        "requests": []
+      }
+    },
+    {
+      "name": "commit pos 2 occurrence 1 node 4",
+      "target": {
+        "node": {
+          "pos": "2",
+          "occurrence": "1",
+          "node": "4"
+        }
+      },
+      "elements": [
+        "0",
+        "1"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "12",
+          "2"
+        ],
+        "work": {
+          "elements": "6",
+          "terms": "0"
+        },
+        "requests": [
+          {
+            "token": {
+              "pos": "2"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 2 occurrence 1 node 12",
+      "target": {
+        "node": {
+          "pos": "2",
+          "occurrence": "1",
+          "node": "12"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "2",
+        "3"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "18",
+          "3",
+          "43",
+          "8"
+        ],
+        "work": {
+          "elements": "31",
+          "terms": "12"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "2",
+              "occurrence": "0",
+              "node": "0"
+            },
+            "indices": "0-3"
+          },
+          {
+            "node": {
+              "pos": "2",
+              "occurrence": "1",
+              "node": "4"
+            },
+            "indices": "0-1"
+          },
+          {
+            "hist_row": {
+              "pos": "2",
+              "state": "0",
+              "layer": "0",
+              "row_pos": "0"
+            },
+            "indices": "0-1"
+          },
+          {
+            "hist_row": {
+              "pos": "2",
+              "state": "0",
+              "layer": "0",
+              "row_pos": "1"
+            },
+            "indices": "0-1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 2 occurrence 2 node 4",
+      "target": {
+        "node": {
+          "pos": "2",
+          "occurrence": "2",
+          "node": "4"
+        }
+      },
+      "elements": [
+        "0",
+        "1"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "12",
+          "2"
+        ],
+        "work": {
+          "elements": "6",
+          "terms": "0"
+        },
+        "requests": [
+          {
+            "token": {
+              "pos": "2"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 2 occurrence 2 node 12",
+      "target": {
+        "node": {
+          "pos": "2",
+          "occurrence": "2",
+          "node": "12"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "2",
+        "3"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "36",
+          "6",
+          "86",
+          "16"
+        ],
+        "work": {
+          "elements": "31",
+          "terms": "12"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "2",
+              "occurrence": "1",
+              "node": "12"
+            },
+            "indices": "0-3"
+          },
+          {
+            "node": {
+              "pos": "2",
+              "occurrence": "2",
+              "node": "4"
+            },
+            "indices": "0-1"
+          },
+          {
+            "hist_row": {
+              "pos": "2",
+              "state": "0",
+              "layer": "1",
+              "row_pos": "0"
+            },
+            "indices": "0-1"
+          },
+          {
+            "hist_row": {
+              "pos": "2",
+              "state": "0",
+              "layer": "1",
+              "row_pos": "1"
+            },
+            "indices": "0-1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 2 occurrence 3 node 0",
+      "target": {
+        "node": {
+          "pos": "2",
+          "occurrence": "3",
+          "node": "0"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "2",
+        "3"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "36",
+          "6",
+          "86",
+          "16"
+        ],
+        "work": {
+          "elements": "4",
+          "terms": "0"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "2",
+              "occurrence": "2",
+              "node": "12"
+            },
+            "indices": "0-3"
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 3 occurrence 0 node 0",
+      "target": {
+        "node": {
+          "pos": "3",
+          "occurrence": "0",
+          "node": "0"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "2",
+        "3"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "0",
+          "0",
+          "0",
+          "0"
+        ],
+        "work": {
+          "elements": "4",
+          "terms": "0"
+        },
+        "requests": []
+      }
+    },
+    {
+      "name": "commit pos 3 occurrence 1 node 4",
+      "target": {
+        "node": {
+          "pos": "3",
+          "occurrence": "1",
+          "node": "4"
+        }
+      },
+      "elements": [
+        "0",
+        "1"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "7",
+          "3"
+        ],
+        "work": {
+          "elements": "6",
+          "terms": "0"
+        },
+        "requests": [
+          {
+            "token": {
+              "pos": "3"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 3 occurrence 1 node 12",
+      "target": {
+        "node": {
+          "pos": "3",
+          "occurrence": "1",
+          "node": "12"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "2",
+        "3"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "20",
+          "6",
+          "46",
+          "14"
+        ],
+        "work": {
+          "elements": "31",
+          "terms": "12"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "0",
+              "node": "0"
+            },
+            "indices": "0-3"
+          },
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "1",
+              "node": "4"
+            },
+            "indices": "0-1"
+          },
+          {
+            "hist_row": {
+              "pos": "3",
+              "state": "0",
+              "layer": "0",
+              "row_pos": "1"
+            },
+            "indices": "0-1"
+          },
+          {
+            "hist_row": {
+              "pos": "3",
+              "state": "0",
+              "layer": "0",
+              "row_pos": "2"
+            },
+            "indices": "0-1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 3 occurrence 2 node 4",
+      "target": {
+        "node": {
+          "pos": "3",
+          "occurrence": "2",
+          "node": "4"
+        }
+      },
+      "elements": [
+        "0",
+        "1"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "7",
+          "3"
+        ],
+        "work": {
+          "elements": "6",
+          "terms": "0"
+        },
+        "requests": [
+          {
+            "token": {
+              "pos": "3"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 3 occurrence 2 node 12",
+      "target": {
+        "node": {
+          "pos": "3",
+          "occurrence": "2",
+          "node": "12"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "2",
+        "3"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "40",
+          "12",
+          "92",
+          "28"
+        ],
+        "work": {
+          "elements": "31",
+          "terms": "12"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "1",
+              "node": "12"
+            },
+            "indices": "0-3"
+          },
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "2",
+              "node": "4"
+            },
+            "indices": "0-1"
+          },
+          {
+            "hist_row": {
+              "pos": "3",
+              "state": "0",
+              "layer": "1",
+              "row_pos": "1"
+            },
+            "indices": "0-1"
+          },
+          {
+            "hist_row": {
+              "pos": "3",
+              "state": "0",
+              "layer": "1",
+              "row_pos": "2"
+            },
+            "indices": "0-1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 3 occurrence 3 node 0",
+      "target": {
+        "node": {
+          "pos": "3",
+          "occurrence": "3",
+          "node": "0"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "2",
+        "3"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "40",
+          "12",
+          "92",
+          "28"
+        ],
+        "work": {
+          "elements": "4",
+          "terms": "0"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "2",
+              "node": "12"
+            },
+            "indices": "0-3"
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 4 occurrence 0 node 0",
+      "target": {
+        "node": {
+          "pos": "4",
+          "occurrence": "0",
+          "node": "0"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "2",
+        "3"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "0",
+          "0",
+          "0",
+          "0"
+        ],
+        "work": {
+          "elements": "4",
+          "terms": "0"
+        },
+        "requests": []
+      }
+    },
+    {
+      "name": "commit pos 4 occurrence 1 node 4",
+      "target": {
+        "node": {
+          "pos": "4",
+          "occurrence": "1",
+          "node": "4"
+        }
+      },
+      "elements": [
+        "0",
+        "1"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "7",
+          "4"
+        ],
+        "work": {
+          "elements": "6",
+          "terms": "0"
+        },
+        "requests": [
+          {
+            "token": {
+              "pos": "4"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 4 occurrence 1 node 12",
+      "target": {
+        "node": {
+          "pos": "4",
+          "occurrence": "1",
+          "node": "12"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "2",
+        "3"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "26",
+          "9",
+          "47",
+          "20"
+        ],
+        "work": {
+          "elements": "31",
+          "terms": "12"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "4",
+              "occurrence": "0",
+              "node": "0"
+            },
+            "indices": "0-3"
+          },
+          {
+            "node": {
+              "pos": "4",
+              "occurrence": "1",
+              "node": "4"
+            },
+            "indices": "0-1"
+          },
+          {
+            "hist_row": {
+              "pos": "4",
+              "state": "0",
+              "layer": "0",
+              "row_pos": "2"
+            },
+            "indices": "0-1"
+          },
+          {
+            "hist_row": {
+              "pos": "4",
+              "state": "0",
+              "layer": "0",
+              "row_pos": "3"
+            },
+            "indices": "0-1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 4 occurrence 2 node 4",
+      "target": {
+        "node": {
+          "pos": "4",
+          "occurrence": "2",
+          "node": "4"
+        }
+      },
+      "elements": [
+        "0",
+        "1"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "7",
+          "4"
+        ],
+        "work": {
+          "elements": "6",
+          "terms": "0"
+        },
+        "requests": [
+          {
+            "token": {
+              "pos": "4"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 4 occurrence 2 node 12",
+      "target": {
+        "node": {
+          "pos": "4",
+          "occurrence": "2",
+          "node": "12"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "2",
+        "3"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "52",
+          "18",
+          "94",
+          "40"
+        ],
+        "work": {
+          "elements": "31",
+          "terms": "12"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "4",
+              "occurrence": "1",
+              "node": "12"
+            },
+            "indices": "0-3"
+          },
+          {
+            "node": {
+              "pos": "4",
+              "occurrence": "2",
+              "node": "4"
+            },
+            "indices": "0-1"
+          },
+          {
+            "hist_row": {
+              "pos": "4",
+              "state": "0",
+              "layer": "1",
+              "row_pos": "2"
+            },
+            "indices": "0-1"
+          },
+          {
+            "hist_row": {
+              "pos": "4",
+              "state": "0",
+              "layer": "1",
+              "row_pos": "3"
+            },
+            "indices": "0-1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 4 occurrence 3 node 0",
+      "target": {
+        "node": {
+          "pos": "4",
+          "occurrence": "3",
+          "node": "0"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "2",
+        "3"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "52",
+          "18",
+          "94",
+          "40"
+        ],
+        "work": {
+          "elements": "4",
+          "terms": "0"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "4",
+              "occurrence": "2",
+              "node": "12"
+            },
+            "indices": "0-3"
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 5 occurrence 0 node 0",
+      "target": {
+        "node": {
+          "pos": "5",
+          "occurrence": "0",
+          "node": "0"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "2",
+        "3"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "0",
+          "0",
+          "0",
+          "0"
+        ],
+        "work": {
+          "elements": "4",
+          "terms": "0"
+        },
+        "requests": []
+      }
+    },
+    {
+      "name": "commit pos 5 occurrence 1 node 4",
+      "target": {
+        "node": {
+          "pos": "5",
+          "occurrence": "1",
+          "node": "4"
+        }
+      },
+      "elements": [
+        "0",
+        "1"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "15",
+          "5"
+        ],
+        "work": {
+          "elements": "6",
+          "terms": "0"
+        },
+        "requests": [
+          {
+            "token": {
+              "pos": "5"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 5 occurrence 1 node 12",
+      "target": {
+        "node": {
+          "pos": "5",
+          "occurrence": "1",
+          "node": "12"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "2",
+        "3"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "29",
+          "12",
+          "66",
+          "26"
+        ],
+        "work": {
+          "elements": "31",
+          "terms": "12"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "5",
+              "occurrence": "0",
+              "node": "0"
+            },
+            "indices": "0-3"
+          },
+          {
+            "node": {
+              "pos": "5",
+              "occurrence": "1",
+              "node": "4"
+            },
+            "indices": "0-1"
+          },
+          {
+            "hist_row": {
+              "pos": "5",
+              "state": "0",
+              "layer": "0",
+              "row_pos": "3"
+            },
+            "indices": "0-1"
+          },
+          {
+            "hist_row": {
+              "pos": "5",
+              "state": "0",
+              "layer": "0",
+              "row_pos": "4"
+            },
+            "indices": "0-1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 5 occurrence 2 node 4",
+      "target": {
+        "node": {
+          "pos": "5",
+          "occurrence": "2",
+          "node": "4"
+        }
+      },
+      "elements": [
+        "0",
+        "1"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "15",
+          "5"
+        ],
+        "work": {
+          "elements": "6",
+          "terms": "0"
+        },
+        "requests": [
+          {
+            "token": {
+              "pos": "5"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 5 occurrence 2 node 12",
+      "target": {
+        "node": {
+          "pos": "5",
+          "occurrence": "2",
+          "node": "12"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "2",
+        "3"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "58",
+          "24",
+          "132",
+          "52"
+        ],
+        "work": {
+          "elements": "31",
+          "terms": "12"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "5",
+              "occurrence": "1",
+              "node": "12"
+            },
+            "indices": "0-3"
+          },
+          {
+            "node": {
+              "pos": "5",
+              "occurrence": "2",
+              "node": "4"
+            },
+            "indices": "0-1"
+          },
+          {
+            "hist_row": {
+              "pos": "5",
+              "state": "0",
+              "layer": "1",
+              "row_pos": "3"
+            },
+            "indices": "0-1"
+          },
+          {
+            "hist_row": {
+              "pos": "5",
+              "state": "0",
+              "layer": "1",
+              "row_pos": "4"
+            },
+            "indices": "0-1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 5 occurrence 3 node 0",
+      "target": {
+        "node": {
+          "pos": "5",
+          "occurrence": "3",
+          "node": "0"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "2",
+        "3"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "58",
+          "24",
+          "132",
+          "52"
+        ],
+        "work": {
+          "elements": "4",
+          "terms": "0"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "5",
+              "occurrence": "2",
+              "node": "12"
+            },
+            "indices": "0-3"
+          }
+        ]
+      }
+    },
+    {
+      "name": "internal pos 5 occurrence 1 node 3",
+      "target": {
+        "node": {
+          "pos": "5",
+          "occurrence": "1",
+          "node": "3"
+        }
+      },
+      "elements": [
+        "0"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "5"
+        ],
+        "work": {
+          "elements": "2",
+          "terms": "0"
+        },
+        "requests": []
+      }
+    },
+    {
+      "name": "internal pos 5 occurrence 1 node 10",
+      "target": {
+        "node": {
+          "pos": "5",
+          "occurrence": "1",
+          "node": "10"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "2",
+        "3"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "29",
+          "12",
+          "66",
+          "26"
+        ],
+        "work": {
+          "elements": "23",
+          "terms": "12"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "5",
+              "occurrence": "1",
+              "node": "4"
+            },
+            "indices": "0-1"
+          },
+          {
+            "hist_row": {
+              "pos": "5",
+              "state": "0",
+              "layer": "0",
+              "row_pos": "3"
+            },
+            "indices": "0-1"
+          },
+          {
+            "hist_row": {
+              "pos": "5",
+              "state": "0",
+              "layer": "0",
+              "row_pos": "4"
+            },
+            "indices": "0-1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "internal pos 5 occurrence 2 node 3",
+      "target": {
+        "node": {
+          "pos": "5",
+          "occurrence": "2",
+          "node": "3"
+        }
+      },
+      "elements": [
+        "0"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "5"
+        ],
+        "work": {
+          "elements": "2",
+          "terms": "0"
+        },
+        "requests": []
+      }
+    },
+    {
+      "name": "internal pos 5 occurrence 2 node 10",
+      "target": {
+        "node": {
+          "pos": "5",
+          "occurrence": "2",
+          "node": "10"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "2",
+        "3"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "29",
+          "12",
+          "66",
+          "26"
+        ],
+        "work": {
+          "elements": "23",
+          "terms": "12"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "5",
+              "occurrence": "2",
+              "node": "4"
+            },
+            "indices": "0-1"
+          },
+          {
+            "hist_row": {
+              "pos": "5",
+              "state": "0",
+              "layer": "1",
+              "row_pos": "3"
+            },
+            "indices": "0-1"
+          },
+          {
+            "hist_row": {
+              "pos": "5",
+              "state": "0",
+              "layer": "1",
+              "row_pos": "4"
+            },
+            "indices": "0-1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 2 occurrence 1 node 12, at exactly its work",
+      "target": {
+        "node": {
+          "pos": "2",
+          "occurrence": "1",
+          "node": "12"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "2",
+        "3"
+      ],
+      "limits": {
+        "max_elements": "31",
+        "max_terms": "12"
+      },
+      "expect": {
+        "values": [
+          "18",
+          "3",
+          "43",
+          "8"
+        ],
+        "work": {
+          "elements": "31",
+          "terms": "12"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "2",
+              "occurrence": "0",
+              "node": "0"
+            },
+            "indices": "0-3"
+          },
+          {
+            "node": {
+              "pos": "2",
+              "occurrence": "1",
+              "node": "4"
+            },
+            "indices": "0-1"
+          },
+          {
+            "hist_row": {
+              "pos": "2",
+              "state": "0",
+              "layer": "0",
+              "row_pos": "0"
+            },
+            "indices": "0-1"
+          },
+          {
+            "hist_row": {
+              "pos": "2",
+              "state": "0",
+              "layer": "0",
+              "row_pos": "1"
+            },
+            "indices": "0-1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 2 occurrence 1 node 12, one element short",
+      "target": {
+        "node": {
+          "pos": "2",
+          "occurrence": "1",
+          "node": "12"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "2",
+        "3"
+      ],
+      "limits": {
+        "max_elements": "30",
+        "max_terms": "12"
+      },
+      "expect_error": "WorkLimit"
+    },
+    {
+      "name": "commit pos 2 occurrence 1 node 12, one term short",
+      "target": {
+        "node": {
+          "pos": "2",
+          "occurrence": "1",
+          "node": "12"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "2",
+        "3"
+      ],
+      "limits": {
+        "max_elements": "31",
+        "max_terms": "11"
+      },
+      "expect_error": "WorkLimit"
+    },
+    {
+      "name": "refused: an element outside the target",
+      "target": {
+        "node": {
+          "pos": "0",
+          "occurrence": "0",
+          "node": "0"
+        }
+      },
+      "elements": [
+        "4611686018427387903"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect_error": "Malformed"
+    },
+    {
+      "name": "refused: an occurrence the schedule does not have",
+      "target": {
+        "node": {
+          "pos": "0",
+          "occurrence": "4",
+          "node": "0"
+        }
+      },
+      "elements": [
+        "0"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect_error": "Malformed"
+    },
+    {
+      "name": "refused: a node the block does not have",
+      "target": {
+        "node": {
+          "pos": "0",
+          "occurrence": "0",
+          "node": "1"
+        }
+      },
+      "elements": [
+        "0"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect_error": "Malformed"
+    },
+    {
+      "name": "refused: a position at history_bound",
+      "target": {
+        "node": {
+          "pos": "262144",
+          "occurrence": "0",
+          "node": "0"
+        }
+      },
+      "elements": [
+        "0"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect_error": "Position"
+    },
+    {
+      "name": "refused: a position the run did not reach",
+      "target": {
+        "node": {
+          "pos": "6",
+          "occurrence": "3",
+          "node": "0"
+        }
+      },
+      "elements": [
+        "0"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect_error": "Missing"
+    },
+    {
+      "name": "refused: a Hist state named as Fixed",
+      "target": {
+        "state_after": {
+          "pos": "0",
+          "state": "0",
+          "layer": "0"
+        }
+      },
+      "elements": [
+        "0"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect_error": "Malformed"
+    },
+    {
+      "name": "refused: the source withholds a node question (saying Operand)",
+      "target": {
+        "node": {
+          "pos": "0",
+          "occurrence": "1",
+          "node": "12"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "2",
+        "3"
+      ],
+      "withhold": [
+        {
+          "node": {
+            "pos": "0",
+            "occurrence": "0",
+            "node": "0"
+          },
+          "raises": "Operand"
+        }
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect_error": "Missing"
+    },
+    {
+      "name": "refused: the source withholds a hist_row question (saying Operand)",
+      "target": {
+        "node": {
+          "pos": "1",
+          "occurrence": "1",
+          "node": "12"
+        }
+      },
+      "elements": [
+        "0",
+        "1",
+        "2",
+        "3"
+      ],
+      "withhold": [
+        {
+          "hist_row": {
+            "pos": "1",
+            "state": "0",
+            "layer": "0",
+            "row_pos": "0"
+          },
+          "raises": "Operand"
+        }
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect_error": "Missing"
+    },
+    {
+      "name": "refused: the source withholds a token question (saying Position)",
+      "target": {
+        "node": {
+          "pos": "0",
+          "occurrence": "1",
+          "node": "4"
+        }
+      },
+      "elements": [
+        "0",
+        "1"
+      ],
+      "withhold": [
+        {
+          "token": {
+            "pos": "0"
+          },
+          "raises": "Position"
+        }
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect_error": "Missing"
+    }
+  ]
+}

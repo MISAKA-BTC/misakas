@@ -1,0 +1,9 @@
+{
+  "base": "fd3c74aef",
+  "orchestration_worker_byte_exact": true,
+  "worker_before_lines": 6569,
+  "worker_after_lines": 1515,
+  "source_sha256": "ed5d1de9bff6d384f14e7ae78c12bbfe621f672387f4e86500ed12933b53b4af",
+  "projection_directory": "/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/palw-worker-projection-yxqu3hle",
+  "scope": "Replay of documented scoped extractions plus compiler-required borrowed input adjustments. This checks complete worker assembly against the baseline, not exhaustive behavior equivalence."
+}

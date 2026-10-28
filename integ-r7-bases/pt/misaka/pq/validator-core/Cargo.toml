@@ -1,0 +1,32 @@
+[package]
+name = "kaspa-pq-validator-core"
+description = "Shared kaspa-pq validator signing primitives (ADR-0010/0011): ML-DSA-87 validator key, attestation-shard tx building, and the equivocation-safety signed-epoch store — used by both the in-process validator service and the kaspa-pq-validator sidecar"
+publish = false
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+kaspa-addresses.workspace = true
+kaspa-consensus-core.workspace = true
+kaspa-hashes.workspace = true
+kaspa-txscript.workspace = true
+
+blake2b_simd.workspace = true
+borsh.workspace = true
+faster-hex.workspace = true
+libcrux-ml-dsa.workspace = true
+log.workspace = true
+rand.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

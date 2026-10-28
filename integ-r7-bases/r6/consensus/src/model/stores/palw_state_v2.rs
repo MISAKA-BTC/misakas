@@ -1,0 +1,1350 @@
+//! MISAKA PALW V2 chain state on disk (ADR-0042 Decision 5, PR-08's store shape; the same rows
+//! are ADR-0044 Unit C's substrate — the free-prompt candidate walk reads them through
+//! `processes::palw_state_walk`, the sink writer maintains them through
+//! `processes::palw_state_v2_sync`).
+//!
+//! # What is persisted, and why exactly this
+//!
+//! Two things, mirroring what `PalwStateBookV2` holds in memory:
+//!
+//! * **Per chain block:** the transition's `PalwStateDeltaV2` and the `state_root` it produced.
+//!   The delta is the reorg primitive — `apply_delta_v2` / `revert_delta_v2` move a materialized
+//!   state along the selected chain bit-exactly, verifying every replaced value — and the root
+//!   is what a candidate comparison may cite without materializing anything.
+//! * **One singleton tip:** the materialized `PalwChainStateV2` at the selected sink, as a
+//!   `PalwStateCarriageV2` snapshot plus the chain block it stands at. Everything else is a fold
+//!   of deltas from here.
+//!
+//! A candidate's V2 standing is therefore a function of THAT candidate's chain — walk deltas from
+//! the tip's block to the candidate's chain point — never a read of the node's sink state, which
+//! is the P0-4 partition this layout exists to make unrepresentable.
+//!
+//! # Encoding
+//!
+//! Row bodies are the consensus types' **Borsh bytes, verbatim**, wrapped in a thin serde record
+//! (the `DbPalwCarriageStore` pattern). Borsh is the canonical encoding the state's own digests
+//! are defined over; re-encoding through the store's serde path would create a second, unpinned
+//! canonical form. Decode failures surface as `StoreError::DataInconsistency`, never as "absent".
+//!
+//! # Trust discipline on load
+//!
+//! `load_tip` rebuilds the state through `PalwStateCarriageV2::into_state` with the RECORDED
+//! root demanded — the same refusal a peer-supplied pruning carriage gets. A snapshot this node
+//! wrote is still a snapshot a disk could corrupt or a tool could edit, and a poisoned sink is
+//! the worst object in the system precisely because everything else is a fold from it.
+//!
+//! # Schema
+//!
+//! One `u32` vouches for both column layouts. On mismatch [`DbPalwStateV2Store::reindex_if_stale`]
+//! deletes rows AND tip together: undecodable rows read as absent, and an absent V2 state looks
+//! exactly like "no PALW work matured" — a wrong answer shaped like a valid one, which fork
+//! choice would act on. An emptied store forces the consumer to rebuild from its chain instead.
+
+use std::sync::Arc;
+
+use bincode::Options;
+use kaspa_consensus_core::BlockHash;
+use kaspa_consensus_core::Hash64;
+use kaspa_consensus_core::config::params::ForkActivation;
+use kaspa_consensus_core::palw_native_resource_v1::{
+    NativeChainStateV1, NativeStateCarriageV1, retain_native_carriage_decode_classified_v1,
+};
+use kaspa_consensus_core::palw_state_v2::{
+    PalwChainStateV2, PalwStateCarriageV2, PalwStateDeltaV2, PalwStateParamsV2, PalwStateV2Error,
+};
+use kaspa_database::prelude::CachePolicy;
+use kaspa_database::prelude::DB;
+use kaspa_database::prelude::StoreError;
+use kaspa_database::prelude::StoreResult;
+use kaspa_database::prelude::{BatchDbWriter, CachedDbAccess, CachedDbItem};
+use kaspa_database::registry::DatabaseStorePrefixes;
+use kaspa_hashes::HasherBase;
+use kaspa_utils::mem_size::MemSizeEstimator;
+use rocksdb::WriteBatch;
+use serde::{Deserialize, Serialize};
+
+/// The layout the rows were written under. Bump on ANY change to the wrapped Borsh types or to
+/// the record shapes below, so old rows are discarded for rebuilding instead of read as absent.
+pub const PALW_STATE_V2_STORE_SCHEMA_VERSION: u32 = 1;
+
+/// Per-chain-block row: the transition's outcome, exactly as the state machine reported it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PalwStateDeltaRecordV2 {
+    /// `state_root()` of the state this block's transition produced. Carried beside the delta so
+    /// ordering/telemetry can cite a candidate's root without materializing its state.
+    pub state_root: Hash64,
+    /// `PalwStateDeltaV2`, Borsh bytes verbatim.
+    pub delta_borsh: Vec<u8>,
+}
+
+// Bincode's borrowed byte-sequence representation is the existing Vec<u8>
+// representation. The pinned RocksDB slice owns these bytes; decoding this
+// view never constructs/caches/clones the serialized native payload.
+#[derive(Deserialize)]
+struct PalwDeltaRecordViewV1<'a> {
+    state_root: Hash64,
+    #[serde(borrow)]
+    delta_borsh: &'a [u8],
+}
+#[derive(Deserialize)]
+struct PalwTipRecordViewV1<'a> {
+    block: BlockHash,
+    state_root: Hash64,
+    #[serde(borrow)]
+    carriage_borsh: &'a [u8],
+}
+
+impl MemSizeEstimator for PalwStateDeltaRecordV2 {}
+
+/// The singleton tip row: where the materialized state stands, and what it is.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PalwStateTipRecordV2 {
+    /// The chain block the snapshot is AT (its transition already applied).
+    pub block: BlockHash,
+    /// `state_root()` of the snapshot — demanded back at load, so a corrupted snapshot refuses
+    /// to become a sink.
+    pub state_root: Hash64,
+    /// `PalwStateCarriageV2`, Borsh bytes verbatim.
+    pub carriage_borsh: Vec<u8>,
+}
+
+/// Compact accepted-point resource inventory. Integrity protects accidental
+/// corruption; it does not authenticate a peer-supplied estimate.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct PalwNativeSnapshotInventoryRecordV1 {
+    inventory: kaspa_consensus_core::palw_native_resource_v1::NativeSnapshotInventoryV1,
+    integrity: Hash64,
+}
+fn native_inventory_integrity_v1(
+    inventory: &kaspa_consensus_core::palw_native_resource_v1::NativeSnapshotInventoryV1,
+) -> StoreResult<Hash64> {
+    let bytes = bincode::serialize(inventory)?;
+    let mut hash = kaspa_hashes::MerkleBranchHash64::new();
+    hash.write(b"palw-native-inventory/v1");
+    hash.write(&bytes);
+    Ok(hash.finalize())
+}
+
+/// PALW V2 chain state rows: per-chain-block deltas + the materialized tip snapshot.
+#[derive(Clone)]
+pub struct DbPalwStateV2Store {
+    db: Arc<DB>,
+    deltas: CachedDbAccess<BlockHash, Arc<PalwStateDeltaRecordV2>>,
+    tip: CachedDbItem<PalwStateTipRecordV2>,
+    /// The state materialised AT the pruning point, kept beside the tip because it answers a
+    /// different question: the tip says where this node's chain is, and this says what a peer
+    /// starting from the pruning point must be handed. The tip is rewritten to the sink on every
+    /// virtual walk, so it can never stand in for this — which is why every pruned IBD used to
+    /// abort.
+    pruning_snapshot: CachedDbItem<PalwStateTipRecordV2>,
+    schema: CachedDbItem<u32>,
+    /// **ADR-0069 Decision 7's fence, because this store RE-CHECKS what it decodes.**
+    ///
+    /// Both loaders run `assert_internal_consistency`, and past the fence that identity is an
+    /// upper bound rather than an equality (see `PalwChainStateV2::assert_internal_consistency_v2`).
+    /// A store that did not carry the fence would decode a state this node's own fold had just
+    /// written, re-derive it by the pre-Decision-7 rule, and refuse it — so the node would come
+    /// back from a restart unable to load its own tip. `None` on every shipped preset, which is
+    /// byte-for-byte the behaviour before the field existed.
+    uncertified_weightless: Option<ForkActivation>,
+    /// **ADR-0145's canonical-work fence HEIGHT, carried here for the reason the field above is.**
+    ///
+    /// Past it a `Final` attempt claim's `safe_weight` contribution is the work the chain derived
+    /// from its class's graph rather than the step-leaf count its registrant declared, and both
+    /// loaders re-derive that sum. A store that did not carry the height would decode a state this
+    /// node's own fold had just written, re-derive it on the declared basis, and refuse it — the
+    /// node unable to load its own tip, and every peer refused the snapshot with it. `None` on
+    /// every shipped preset, which is byte-for-byte the behaviour before the field existed.
+    canonical_work_daa: Option<u64>,
+    /// **The materialized tip, keyed on the tip row it was decoded from** (audit M-7).
+    ///
+    /// `load_tip` is a full re-materialization: borsh-decode the whole carriage,
+    /// `rebuild_deadline_free_indices`, `rebuild_deadline_index_v2`, `assert_internal_consistency_v2`,
+    /// `assert_deadline_consistency` and a complete `state_root()` recompute over every collection.
+    /// Every `palw_*` RPC read path took that per call, from an unauthenticated caller, against a
+    /// ~200-byte request — and W5 put up to `2 x 27 x 100 KB` per open court session inside the
+    /// carriage being re-rooted.
+    ///
+    /// Keyed on `(block, state_root)` rather than on the block alone: the tip is rewritten on every
+    /// virtual walk and a re-materialization at the same block with a different root is a different
+    /// state. Shared through the `Arc` so a `clone()` of the store is the same cache, and holding
+    /// the state itself in an `Arc` so a hit hands out a pointer rather than a copy of the tip.
+    tip_cache: Arc<parking_lot::Mutex<Option<(BlockHash, Hash64, Arc<NativeChainStateV1>)>>>,
+    /// Carriage bytes this store has actually borsh-decoded for a tip read. A measurement, not a
+    /// rule: it is what makes "the cache works" a number in a test rather than an assertion about
+    /// code that was read.
+    tip_bytes_decoded: Arc<std::sync::atomic::AtomicU64>,
+    /// **The pruning-point snapshot's SERVED CARRIAGE, materialized once per snapshot row**
+    /// (mainnet audit H-1). The p2p sibling of `tip_cache`, and the same reasoning: a 40-byte
+    /// `RequestPruningPointPalwState` from any peer that completed the handshake bought a full
+    /// borsh decode, both index rebuilds, both consistency walks, a complete `state_root()` and a
+    /// deep copy of the whole state into a carriage — with no per-peer budget and no operator
+    /// opt-in, on every mainnet node rather than only on the ones exposing wRPC.
+    ///
+    /// What is cached is the CARRIAGE, not the state: the carriage is the served answer and it is
+    /// produced by exactly the expression the uncached path produced it by, so the bytes on the
+    /// wire are identical and the requester's `state_root` comparison is untouched.
+    ///
+    /// Keyed on `(block, state_root)` read fresh from the snapshot row on every call, which is
+    /// what makes it correct across reorgs: a re-captured snapshot writes a different row, the key
+    /// misses, and the answer is re-materialized. Nothing invalidates this cache by hand, so
+    /// nothing can forget to.
+    pruning_snapshot_cache: Arc<parking_lot::Mutex<Option<(BlockHash, Hash64, Arc<NativeStateCarriageV1>)>>>,
+    /// Carriage bytes borsh-decoded for pruning-point snapshot serves. The same measurement as
+    /// `tip_bytes_decoded`, for the lane that has no authentication in front of it at all.
+    pruning_snapshot_bytes_decoded: Arc<std::sync::atomic::AtomicU64>,
+}
+
+/// Allocation ticket for a staged native write. Keep it until the owning
+/// WriteBatch commits or is abandoned; dropping it earlier is not an ACK.
+#[must_use = "retain the native write ticket through the batch commit or abandonment"]
+pub struct NativeStoreWriteTicketV1 {
+    _lease: Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>,
+}
+fn native_writer_is_strict_v1() -> bool {
+    kaspa_consensus_core::palw_native_resource_v1::native_logical_admission_enabled_v1()
+        || kaspa_consensus_core::palw_native_resource_v1::native_resource_admission_enabled_v1()
+}
+fn reject_untracked_writer_v1() -> StoreResult<()> {
+    if native_writer_is_strict_v1() {
+        return Err(StoreError::LocalResourceUnavailable(
+            "native strict write requires a tracked allocation ticket held through commit".into(),
+        ));
+    }
+    Ok(())
+}
+
+const NATIVE_IDENTITY_SUFFIX_V1: u8 = 0x49;
+fn native_identity_key_v1(pruning: bool) -> [u8; 2] {
+    [
+        u8::from(if pruning { DatabaseStorePrefixes::PalwPruningPointState } else { DatabaseStorePrefixes::PalwStateV2Tip }),
+        NATIVE_IDENTITY_SUFFIX_V1,
+    ]
+}
+fn stage_native_identity_v1(batch: &mut WriteBatch, pruning: bool, block: BlockHash, root: Hash64) -> StoreResult<()> {
+    batch.put(native_identity_key_v1(pruning), bincode::serialize(&(1u16, block, root))?);
+    Ok(())
+}
+
+impl DbPalwStateV2Store {
+    pub fn new(db: Arc<DB>, cache_policy: CachePolicy) -> Self {
+        Self {
+            db: Arc::clone(&db),
+            deltas: CachedDbAccess::new(Arc::clone(&db), cache_policy, DatabaseStorePrefixes::PalwStateV2Deltas.into()),
+            tip: CachedDbItem::new(Arc::clone(&db), DatabaseStorePrefixes::PalwStateV2Tip.into()),
+            pruning_snapshot: CachedDbItem::new(Arc::clone(&db), DatabaseStorePrefixes::PalwPruningPointState.into()),
+            schema: CachedDbItem::new(db, DatabaseStorePrefixes::PalwStateV2Schema.into()),
+            uncertified_weightless: None,
+            canonical_work_daa: None,
+            tip_cache: Arc::new(parking_lot::Mutex::new(None)),
+            tip_bytes_decoded: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            pruning_snapshot_cache: Arc::new(parking_lot::Mutex::new(None)),
+            pruning_snapshot_bytes_decoded: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        }
+    }
+
+    /// Carriage bytes borsh-decoded for tip reads since this store was built (audit M-7's
+    /// measurement).
+    pub fn tip_bytes_decoded(&self) -> u64 {
+        self.tip_bytes_decoded.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Carriage bytes borsh-decoded serving pruning-point snapshots since this store was built
+    /// (mainnet audit H-1's measurement — the p2p lane's twin of the number above).
+    pub fn pruning_snapshot_bytes_decoded(&self) -> u64 {
+        self.pruning_snapshot_bytes_decoded.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Install ADR-0069 Decision 7's fence. Every construction path starts dormant, so a caller
+    /// that forgets this gets exactly today's behaviour rather than a silently different rule.
+    pub fn with_uncertified_weightless(mut self, fence: Option<ForkActivation>) -> Self {
+        self.uncertified_weightless = fence;
+        self
+    }
+
+    /// Install ADR-0145's canonical-work fence height (`Params::palw_canonical_work_daa()`). Every
+    /// construction path starts dormant, for the reason the setter above gives.
+    pub fn with_canonical_work_daa(mut self, from_daa: Option<u64>) -> Self {
+        self.canonical_work_daa = from_daa;
+        self
+    }
+
+    /// The rule in force at the chain point a decoded snapshot stands at. A carriage with no
+    /// `last_point` is a genesis state, which holds no claims and so is priced identically either
+    /// way.
+    fn uncertified_weightless_at(&self, carriage: &PalwStateCarriageV2) -> bool {
+        let daa = carriage.last_point.as_ref().map(|point| point.daa_score).unwrap_or(0);
+        self.uncertified_weightless.is_some_and(|fence| fence.is_active(daa))
+    }
+
+    pub fn clone_with_new_cache(&self, cache_policy: CachePolicy) -> Self {
+        Self::new(Arc::clone(&self.db), cache_policy)
+            .with_uncertified_weightless(self.uncertified_weightless)
+            .with_canonical_work_daa(self.canonical_work_daa)
+    }
+
+    /// If the stored schema is not this build's, retire derived rows, tip and
+    /// servable snapshot in one synchronous batch with the new version. A partial
+    /// clear or a schema stamp published before its commit cannot authorize reads.
+    pub fn reindex_if_stale(&mut self) -> StoreResult<()> {
+        let stored = match self.schema.read() {
+            Ok(v) => Some(v),
+            Err(StoreError::KeyNotFound(_)) => None,
+            Err(e) => return Err(e),
+        };
+        if stored == Some(PALW_STATE_V2_STORE_SCHEMA_VERSION) {
+            return Ok(());
+        }
+        let mut batch = WriteBatch::default();
+        self.deltas.delete_all(BatchDbWriter::new(&mut batch))?;
+        batch.delete(native_identity_key_v1(false));
+        batch.delete(native_identity_key_v1(true));
+        self.clear_legacy_answer_history(&mut BatchDbWriter::new(&mut batch), None)?;
+        self.clear_prefix_history_v1(&mut BatchDbWriter::new(&mut batch))?;
+        let (first, last) =
+            rocksdb::IterateBounds::into_bounds(rocksdb::PrefixRange(DatabaseStorePrefixes::PalwNativeSnapshotInventoryV1.as_ref()));
+        batch.delete_range(first.expect("native inventory prefix start"), last.expect("native inventory prefix end"));
+        let mut next_tip = CachedDbItem::new(self.db.clone(), DatabaseStorePrefixes::PalwStateV2Tip.into());
+        next_tip.remove(BatchDbWriter::new(&mut batch))?;
+        let mut next_snapshot = CachedDbItem::new(self.db.clone(), DatabaseStorePrefixes::PalwPruningPointState.into());
+        next_snapshot.remove(BatchDbWriter::new(&mut batch))?;
+        let mut next_schema = CachedDbItem::new(self.db.clone(), DatabaseStorePrefixes::PalwStateV2Schema.into());
+        next_schema.write(BatchDbWriter::new(&mut batch), &PALW_STATE_V2_STORE_SCHEMA_VERSION)?;
+        let mut options = rocksdb::WriteOptions::default();
+        options.set_sync(true);
+        self.db.write_opt(batch, &options)?;
+        self.tip.invalidate_cache();
+        self.pruning_snapshot.invalidate_cache();
+        self.schema.invalidate_cache();
+        self.tip = next_tip;
+        self.pruning_snapshot = next_snapshot;
+        self.schema = next_schema;
+        *self.tip_cache.lock() = None;
+        *self.pruning_snapshot_cache.lock() = None;
+        Ok(())
+    }
+
+    // --- deltas ---
+
+    /// Stage one chain block's transition outcome. Written when the block's transition is
+    /// computed on the selected chain; the batch is the caller's commit point.
+    pub fn insert_delta_batch(
+        &mut self,
+        batch: &mut WriteBatch,
+        block: BlockHash,
+        state_root: Hash64,
+        delta: &PalwStateDeltaV2,
+    ) -> StoreResult<()> {
+        reject_untracked_writer_v1()?;
+        self.insert_delta_batch_tracked_v1(batch, block, state_root, delta).map(drop)
+    }
+    pub fn insert_delta_batch_tracked_v1(
+        &mut self,
+        batch: &mut WriteBatch,
+        block: BlockHash,
+        state_root: Hash64,
+        delta: &PalwStateDeltaV2,
+    ) -> StoreResult<NativeStoreWriteTicketV1> {
+        use kaspa_consensus_core::palw_native_resource_v1::{NativeCoverageV1, NativeHeapV1, reserve_native_requests_v1};
+        struct Count(u64);
+        impl std::io::Write for Count {
+            fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+                self.0 = self
+                    .0
+                    .checked_add(b.len() as u64)
+                    .ok_or_else(|| std::io::Error::other("native delta canonical count overflow"))?;
+                Ok(b.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let lease = if native_writer_is_strict_v1() {
+            let mut count = Count(0);
+            borsh::to_writer(&mut count, delta).map_err(|e| StoreError::DataInconsistency(e.to_string()))?;
+            let framing = bincode::serialized_size(&PalwStateDeltaRecordV2 { state_root, delta_borsh: Vec::new() })?;
+            // Canonical Vec growth, record temporary and WriteBatch copy are
+            // separate byte-vector lifetimes. No native tree is inferred from
+            // these bytes; typed history/index workspace uses the delta visitor.
+            let encoded = count
+                .0
+                .checked_add(framing)
+                .and_then(|n| n.checked_mul(6))
+                .ok_or_else(|| StoreError::DataInconsistency("native delta serialization overflow".into()))?;
+            let typed = delta
+                .native_heap_v1("native delta writer/history workspace")
+                .scale::<PalwStateDeltaV2>(2, "delta writer/history copies")
+                .add::<PalwStateDeltaV2>(NativeCoverageV1::Bounded { bytes: encoded }, "encoded delta writer vectors");
+            let requests = typed.bytes().ok_or_else(|| StoreError::LocalResourceUnavailable(typed.to_string()))?;
+            reserve_native_requests_v1(requests).map_err(|e| StoreError::LocalResourceUnavailable(e.to_string()))?
+        } else {
+            None
+        };
+        self.index_legacy_answer_history_batch(batch, block, delta)?;
+        let delta_borsh = borsh::to_vec(delta).expect("PalwStateDeltaV2 is borsh-serializable");
+        let record = PalwStateDeltaRecordV2 { state_root, delta_borsh };
+        let prefix: Vec<u8> = DatabaseStorePrefixes::PalwStateV2Deltas.into();
+        batch.put(kaspa_database::prelude::DbKey::new(&prefix, block), bincode::serialize(&record)?);
+        Ok(NativeStoreWriteTicketV1 { _lease: lease })
+    }
+
+    /// Stage removal of a block's row (it left the selected chain and its delta was reverted).
+    pub fn delete_delta_batch(&mut self, batch: &mut WriteBatch, block: BlockHash) -> StoreResult<()> {
+        self.clear_legacy_answer_history(&mut BatchDbWriter::new(batch), Some(block))?;
+        self.deltas.delete(BatchDbWriter::new(batch), block)
+    }
+
+    pub fn has_delta(&self, block: BlockHash) -> StoreResult<bool> {
+        self.deltas.has(block)
+    }
+
+    /// Every chain block that has a delta row, in store order. For assertions about the store as
+    /// a whole — "this network wrote nothing" is a fact about the absence of rows, and only an
+    /// iterator can say it.
+    pub fn iter_delta_blocks(&self) -> impl Iterator<Item = BlockHash> + '_ {
+        self.deltas.iterator().filter_map(|r| r.ok()).map(|(key, _)| {
+            let mut bytes = [0u8; 64];
+            bytes.copy_from_slice(&key);
+            BlockHash::from_bytes(bytes)
+        })
+    }
+
+    /// A block's recorded root without decoding its delta.
+    pub fn state_root_of(&self, block: BlockHash) -> StoreResult<Hash64> {
+        let prefix: Vec<u8> = DatabaseStorePrefixes::PalwStateV2Deltas.into();
+        let key = kaspa_database::prelude::DbKey::new(&prefix, block);
+        let bytes = self.db.get_pinned(&key)?.ok_or_else(|| StoreError::KeyNotFound(key))?;
+        let record: PalwDeltaRecordViewV1<'_> = bincode::deserialize(&bytes)?;
+        Ok(record.state_root)
+    }
+
+    /// Stage a delta row VERBATIM through this store's own db handle — the delta twin of
+    /// [`Self::set_tip_record_for_tests`], for the tests that must leave behind a row this node
+    /// wrote and can no longer decode (a disk that flipped a byte, a row from another schema).
+    /// Test-only for the same reason: production serializes the delta it is handed.
+    #[cfg(test)]
+    pub fn set_delta_record_for_tests(&mut self, block: BlockHash, record: PalwStateDeltaRecordV2) -> StoreResult<()> {
+        use kaspa_database::prelude::DirectDbWriter;
+        self.deltas.write(DirectDbWriter::new(&self.db), block, Arc::new(record))
+    }
+
+    /// Remove a delta row, reproducing the OTHER thing a walk can meet: a genuine absence (a
+    /// pruned block). Kept beside the corrupter above because the whole point of the pair is that
+    /// the two are not the same fact.
+    #[cfg(test)]
+    pub fn delete_delta_for_tests(&mut self, block: BlockHash) -> StoreResult<()> {
+        use kaspa_database::prelude::DirectDbWriter;
+        self.deltas.delete(DirectDbWriter::new(&self.db), block)
+    }
+
+    /// A block's transition outcome, decoded. A row whose bytes no longer decode is named
+    /// (`DataInconsistency`), never reported absent.
+    pub fn delta_of(&self, block: BlockHash) -> StoreResult<(Hash64, PalwStateDeltaV2)> {
+        let (root, delta) = self.delta_of_retained_v1(block)?;
+        delta.into_unreserved_legacy_v1().map(|delta| (root, delta)).map_err(|e| StoreError::LocalResourceUnavailable(e.to_string()))
+    }
+
+    /// Decode directly from a pinned record view. No intermediate bincode
+    /// Vec/cache/deep clone occurs before the typed Borsh preflight.
+    pub fn delta_of_retained_v1(
+        &self,
+        block: BlockHash,
+    ) -> StoreResult<(Hash64, kaspa_consensus_core::palw_native_resource_v1::NativeStateDeltaV1)> {
+        let prefix: Vec<u8> = DatabaseStorePrefixes::PalwStateV2Deltas.into();
+        let key = kaspa_database::prelude::DbKey::new(&prefix, block);
+        let bytes = self.db.get_pinned(&key)?.ok_or_else(|| StoreError::KeyNotFound(key))?;
+        let record: PalwDeltaRecordViewV1<'_> = bincode::deserialize(&bytes)?;
+        let delta =
+            kaspa_consensus_core::palw_native_resource_v1::retain_native_value_decode_classified_v1(record.delta_borsh, || {
+                borsh::from_slice::<PalwStateDeltaV2>(record.delta_borsh)
+            })
+            .map_err(|e| match e {
+                kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Resource(e) => {
+                    StoreError::LocalResourceUnavailable(format!("palw delta allocation at {block}: {e}"))
+                }
+                kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Decode(e) => {
+                    StoreError::DataInconsistency(format!("palw delta decode at {block}: {e}"))
+                }
+            })?;
+        Ok((record.state_root, delta))
+    }
+
+    fn with_pinned_tip_v1<T>(
+        &self,
+        pruning: bool,
+        f: impl FnOnce(PalwTipRecordViewV1<'_>) -> StoreResult<T>,
+    ) -> StoreResult<Option<T>> {
+        let prefix: Vec<u8> =
+            if pruning { DatabaseStorePrefixes::PalwPruningPointState.into() } else { DatabaseStorePrefixes::PalwStateV2Tip.into() };
+        let Some(bytes) = self.db.get_pinned(&prefix)? else { return Ok(None) };
+        let view: PalwTipRecordViewV1<'_> = bincode::deserialize(&bytes)?;
+        f(view).map(Some)
+    }
+
+    // --- tip ---
+
+    /// Stage the materialized tip: the state AT `block`, snapshotted. The recorded root is the
+    /// state's own `state_root()`, computed here so a caller cannot store a snapshot under a
+    /// root it does not hash to.
+    pub fn set_tip_batch(&mut self, batch: &mut WriteBatch, block: BlockHash, state: &PalwChainStateV2) -> StoreResult<()> {
+        reject_untracked_writer_v1()?;
+        self.set_tip_batch_tracked_v1(batch, block, state).map(drop)
+    }
+    pub fn set_tip_batch_tracked_v1(
+        &mut self,
+        batch: &mut WriteBatch,
+        block: BlockHash,
+        state: &PalwChainStateV2,
+    ) -> StoreResult<NativeStoreWriteTicketV1> {
+        let lease = kaspa_consensus_core::palw_native_resource_v1::reserve_native_install_in_database_v1(
+            block,
+            state,
+            self.db.native_single_directory_quota_path_v1(),
+        )
+        .map_err(|e| StoreError::LocalResourceUnavailable(e.to_string()))?;
+        let carriage = PalwStateCarriageV2::from_state(state);
+        let carriage_borsh = borsh::to_vec(&carriage).expect("PalwStateCarriageV2 is borsh-serializable");
+        let record = PalwStateTipRecordV2 { block, state_root: state.state_root(), carriage_borsh };
+        let prefix: Vec<u8> = DatabaseStorePrefixes::PalwStateV2Tip.into();
+        batch.put(prefix, bincode::serialize(&record)?);
+        stage_native_identity_v1(batch, false, block, record.state_root)?;
+        self.tip.invalidate_cache();
+        Ok(NativeStoreWriteTicketV1 { _lease: lease })
+    }
+
+    /// Stage a tip row VERBATIM. Only the tests that must simulate post-write corruption use
+    /// this — every production writer goes through [`Self::set_tip_batch`], which computes the
+    /// root from the state it is handed, so a caller cannot store a snapshot under a root it
+    /// does not hash to.
+    #[cfg(test)]
+    pub fn set_tip_record_batch(&mut self, batch: &mut WriteBatch, record: PalwStateTipRecordV2) -> StoreResult<()> {
+        stage_native_identity_v1(batch, false, record.block, record.state_root)?;
+        let prefix: Vec<u8> = DatabaseStorePrefixes::PalwStateV2Tip.into();
+        batch.put(prefix, bincode::serialize(&record)?);
+        self.tip.invalidate_cache();
+        Ok(())
+    }
+
+    /// **The tip row's IDENTITY — block and root — WITHOUT copying the carriage** (mainnet audit
+    /// H-1). `tip_record()` clones the whole record, carriage bytes and all; a caller that only
+    /// needs to know which row it is looking at must not pay a memcpy of the state to find out.
+    pub(crate) fn tip_key(&self) -> StoreResult<Option<(BlockHash, Hash64)>> {
+        self.native_identity_v1(false)
+    }
+
+    /// Same durable identity projection, before any native allocation.
+    fn pruning_snapshot_key(&self) -> StoreResult<Option<(BlockHash, Hash64)>> {
+        self.native_identity_v1(true)
+    }
+
+    /// Small durable identity, atomically committed with the exact payload.
+    /// No positive cache is published at batch enqueue. Old databases retain
+    /// the pinned-view fallback until their next authenticated snapshot write.
+    fn native_identity_v1(&self, pruning: bool) -> StoreResult<Option<(BlockHash, Hash64)>> {
+        let Some(bytes) = self.db.get_pinned(native_identity_key_v1(pruning))? else {
+            return self.with_pinned_tip_v1(pruning, |r| Ok((r.block, r.state_root)));
+        };
+        if bytes.len() > 256 {
+            return Err(StoreError::DataInconsistency("native identity metadata exceeds its fixed codec".into()));
+        }
+        let (version, block, root): (u16, BlockHash, Hash64) =
+            bincode::DefaultOptions::new().with_fixint_encoding().with_limit(256).reject_trailing_bytes().deserialize(&bytes)?;
+        if version != 1 {
+            return Err(StoreError::DataInconsistency("unsupported native identity metadata version".into()));
+        }
+        Ok(Some((block, root)))
+    }
+
+    /// The tip row undecoded (which block, which root), without rebuilding the state.
+    pub fn tip_record(&self) -> StoreResult<Option<PalwStateTipRecordV2>> {
+        if kaspa_consensus_core::palw_native_resource_v1::native_logical_admission_enabled_v1()
+            || kaspa_consensus_core::palw_native_resource_v1::native_resource_admission_enabled_v1()
+        {
+            return Err(StoreError::DataInconsistency(
+                "unowned serialized native record API is unavailable under strict capacity; use retained/pinned loader".into(),
+            ));
+        }
+
+        match self.tip.read() {
+            Ok(record) => Ok(Some(record)),
+            Err(StoreError::KeyNotFound(_)) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Move the tip row to a block the sink does not stand at, reproducing what an unclean
+    /// shutdown between this store's batch and the virtual-state commit leaves behind. Test-only:
+    /// production writes the tip exactly where the UTXO walk ended.
+    #[cfg(test)]
+    pub fn set_tip_for_tests(&mut self, block: BlockHash, state: &PalwChainStateV2) -> StoreResult<()> {
+        let carriage_borsh = borsh::to_vec(&PalwStateCarriageV2::from_state(state)).unwrap();
+        self.set_tip_record_for_tests(PalwStateTipRecordV2 { block, state_root: state.state_root(), carriage_borsh })
+    }
+
+    /// Stage a tip row VERBATIM through this store's own db handle — the direct-write twin of
+    /// [`Self::set_tip_record_batch`], for the tests that must leave behind a snapshot which
+    /// cannot be read back (a disk that flipped a byte, or a row written by another schema).
+    /// Test-only for the same reason: production computes the root from the state it stores.
+    #[cfg(test)]
+    pub fn set_tip_record_for_tests(&mut self, record: PalwStateTipRecordV2) -> StoreResult<()> {
+        let mut batch = WriteBatch::default();
+        self.set_tip_record_batch(&mut batch, record)?;
+        self.db.write(batch)?;
+        Ok(())
+    }
+
+    /// Remove the tip row, reproducing the state a pruned join (or a `reindex_if_stale` after a
+    /// schema bump) leaves behind: a live ConsensusV2 bundle with no PALW state under it. Test-only,
+    /// because nothing in production should ever reach that state deliberately — the startup guard
+    /// in `Consensus::new` refuses to run in it.
+    #[cfg(test)]
+    pub fn delete_tip_for_tests(&mut self) -> StoreResult<()> {
+        let mut batch = WriteBatch::default();
+        batch.delete(native_identity_key_v1(false));
+        self.tip.remove(BatchDbWriter::new(&mut batch))?;
+        self.db.write(batch)?;
+        Ok(())
+    }
+
+    /// Plant a pruning-point snapshot through this store's own db handle — the direct-write twin
+    /// of [`Self::set_pruning_snapshot_batch`], for the tests that need a second base to recover
+    /// from without running a prune. Test-only: production writes it from the prune's own batch.
+    #[cfg(test)]
+    pub fn set_pruning_snapshot_for_tests(&mut self, block: BlockHash, state: &PalwChainStateV2) -> StoreResult<()> {
+        let carriage_borsh = borsh::to_vec(&PalwStateCarriageV2::from_state(state)).unwrap();
+        let record = PalwStateTipRecordV2 { block, state_root: state.state_root(), carriage_borsh };
+        let mut batch = WriteBatch::default();
+        stage_native_identity_v1(&mut batch, true, block, record.state_root)?;
+        let prefix: Vec<u8> = DatabaseStorePrefixes::PalwPruningPointState.into();
+        batch.put(prefix, bincode::serialize(&record)?);
+        self.pruning_snapshot.invalidate_cache();
+        self.db.write(batch)?;
+        Ok(())
+    }
+
+    /// Load and REBUILD the tip state, demanding the recorded root — index rebuild, internal
+    /// consistency, deadline consistency and the root equality all run (`into_state`), so what
+    /// this returns is a state the machine would have produced, or an error naming why not.
+    /// Stage the pruning-point snapshot. Same shape and same derivation as [`Self::set_tip_batch`]
+    /// — the root is computed from the state handed in, never carried.
+    pub fn set_pruning_snapshot_batch(
+        &mut self,
+        batch: &mut WriteBatch,
+        block: BlockHash,
+        state: &PalwChainStateV2,
+    ) -> StoreResult<()> {
+        reject_untracked_writer_v1()?;
+        self.set_pruning_snapshot_batch_tracked_v1(batch, block, state).map(drop)
+    }
+    pub fn set_pruning_snapshot_batch_tracked_v1(
+        &mut self,
+        batch: &mut WriteBatch,
+        block: BlockHash,
+        state: &PalwChainStateV2,
+    ) -> StoreResult<NativeStoreWriteTicketV1> {
+        let lease = kaspa_consensus_core::palw_native_resource_v1::reserve_native_install_in_database_v1(
+            block,
+            state,
+            self.db.native_single_directory_quota_path_v1(),
+        )
+        .map_err(|e| StoreError::LocalResourceUnavailable(e.to_string()))?;
+        let carriage = PalwStateCarriageV2::from_state(state);
+        let carriage_borsh = borsh::to_vec(&carriage).expect("PalwStateCarriageV2 is borsh-serializable");
+        let inventory = kaspa_consensus_core::palw_native_resource_v1::inventory_accepted_state_v1(
+            state,
+            block,
+            carriage_borsh.len() as u64,
+            kaspa_consensus_core::palw_native_resource_v1::NativeSnapshotOperationV1::Serve,
+        );
+        let record = PalwNativeSnapshotInventoryRecordV1 { integrity: native_inventory_integrity_v1(&inventory)?, inventory };
+        // Raw batch staging deliberately publishes no optimistic positive cache.
+        // A new store/clone cannot observe metadata until the DB batch commits.
+        let metadata = bincode::serialize(&record)?;
+        if metadata.len() > 2 << 20 {
+            return Err(StoreError::DataInconsistency("native allocation inventory metadata exceeds 2 MiB".into()));
+        }
+        batch.put([u8::from(DatabaseStorePrefixes::PalwNativeSnapshotInventoryV1)], metadata);
+        let prefix: Vec<u8> = DatabaseStorePrefixes::PalwPruningPointState.into();
+        batch.put(prefix, bincode::serialize(&PalwStateTipRecordV2 { block, state_root: state.state_root(), carriage_borsh })?);
+        stage_native_identity_v1(batch, true, block, state.state_root())?;
+        self.pruning_snapshot.invalidate_cache();
+        Ok(NativeStoreWriteTicketV1 { _lease: lease })
+    }
+
+    /// Read only the compact accepted-point inventory. No native carriage decode
+    /// or giant snapshot-record clone is needed for a capacity refusal.
+    pub fn native_snapshot_inventory_v1(
+        &self,
+        point: BlockHash,
+    ) -> StoreResult<Option<kaspa_consensus_core::palw_native_resource_v1::NativeSnapshotInventoryV1>> {
+        let Some(bytes) = self.db.get([u8::from(DatabaseStorePrefixes::PalwNativeSnapshotInventoryV1)])? else { return Ok(None) };
+        if bytes.len() > 2 << 20 {
+            return Err(StoreError::DataInconsistency("native allocation inventory metadata exceeds2MiB".into()));
+        }
+        let record: PalwNativeSnapshotInventoryRecordV1 =
+            bincode::DefaultOptions::new().with_fixint_encoding().with_limit(2 << 20).reject_trailing_bytes().deserialize(&bytes)?;
+        if record.inventory.version != 1 || native_inventory_integrity_v1(&record.inventory)? != record.integrity {
+            return Err(StoreError::DataInconsistency("native allocation inventory metadata version/integrity mismatch".into()));
+        }
+        if record.inventory.point != point {
+            return Ok(None);
+        }
+        Ok(Some(record.inventory))
+    }
+
+    /// The raw snapshot row, or `None` when this node has not captured one yet — which is the
+    /// honest answer for a node whose pruning point has not advanced since it started.
+    pub fn pruning_snapshot_record(&self) -> StoreResult<Option<PalwStateTipRecordV2>> {
+        if kaspa_consensus_core::palw_native_resource_v1::native_logical_admission_enabled_v1()
+            || kaspa_consensus_core::palw_native_resource_v1::native_resource_admission_enabled_v1()
+        {
+            return Err(StoreError::DataInconsistency(
+                "unowned serialized native record API is unavailable under strict capacity; use retained/pinned loader".into(),
+            ));
+        }
+
+        match self.pruning_snapshot.read() {
+            Ok(record) => Ok(Some(record)),
+            Err(StoreError::KeyNotFound(_)) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// The snapshot, decoded and re-checked against its own root, exactly as [`Self::load_tip`]
+    /// does for the tip.
+    pub fn load_pruning_snapshot(&self, params: &PalwStateParamsV2) -> StoreResult<Option<(BlockHash, PalwChainStateV2)>> {
+        self.load_pruning_snapshot_retained_v1(params)?
+            .map(|(block, state)| {
+                state
+                    .into_unreserved_legacy_v1()
+                    .map(|state| (block, state))
+                    .map_err(|why| StoreError::LocalResourceUnavailable(why.to_string()))
+            })
+            .transpose()
+    }
+    pub fn load_pruning_snapshot_retained_v1(
+        &self,
+        params: &PalwStateParamsV2,
+    ) -> StoreResult<Option<(BlockHash, NativeChainStateV1)>> {
+        self.with_pinned_tip_v1(true, |record| {
+            self.materialize_native_fields_v1(record.block, record.state_root, record.carriage_borsh, params, "pruning snapshot")
+                .map(|state| (record.block, state))
+        })
+    }
+
+    /// **The carriage a peer asking for `pruning_point` is served — the identity check FIRST, and
+    /// the materialization at most once per captured snapshot** (mainnet audit H-1).
+    ///
+    /// The serve path used to decode, rebuild both indices, walk both consistency checks,
+    /// recompute the root and deep-copy the state into a carriage, and only then ask whether the
+    /// block it had just rebuilt was the one the peer named. Any peer past the p2p handshake could
+    /// spend that with forty bytes, forever, in parallel, on the blocking pool block processing
+    /// shares. Both halves are fixed here, in the order that matters: a hash this node did not
+    /// capture costs two hash comparisons and no copy, and a hash it did costs one materialization
+    /// per snapshot row rather than one per request.
+    ///
+    /// **The answer is byte-identical to the uncached one by construction**: the value memoized is
+    /// `PalwStateCarriageV2::from_state(&state)` over exactly the state
+    /// [`Self::load_pruning_snapshot`] returns, so the requester's `state_root` comparison against
+    /// the pruning point's own header sees the same bytes it saw before. The round trip through
+    /// `into_state_v2` is kept, not skipped: the recorded root is still demanded back, so a
+    /// corrupted row is still refused rather than served.
+    ///
+    /// Invalidated by its own key: `(block, state_root)` is read from the row on every call, so a
+    /// re-capture at a new pruning point, or a reorg that rewrites the row, misses and
+    /// re-materializes. There is no hand-written invalidation to forget.
+    pub fn load_pruning_snapshot_carriage_cached(
+        &self,
+        params: &PalwStateParamsV2,
+        pruning_point: BlockHash,
+    ) -> StoreResult<Option<Arc<NativeStateCarriageV1>>> {
+        let Some((block, root)) = self.pruning_snapshot_key()? else {
+            return Ok(None);
+        };
+        // **The check that used to run after the damage.** Same predicate the caller applied
+        // afterwards, same `None` for a mismatch — only now nothing has been decoded or copied to
+        // reach it.
+        if block != pruning_point {
+            return Ok(None);
+        }
+        if let Some((cached_block, cached_root, carriage)) = self.pruning_snapshot_cache.lock().as_ref()
+            && *cached_block == block
+            && *cached_root == root
+        {
+            return Ok(Some(Arc::clone(carriage)));
+        }
+        self.with_pinned_tip_v1(true, |record| {
+            if record.block != pruning_point {
+                return Ok(None);
+            }
+            self.pruning_snapshot_bytes_decoded.fetch_add(record.carriage_borsh.len() as u64, std::sync::atomic::Ordering::Relaxed);
+            let state =
+                self.materialize_native_fields_v1(record.block, record.state_root, record.carriage_borsh, params, "pruning snapshot")?;
+            let served = Arc::new(state.try_carriage_v1().map_err(|e| StoreError::LocalResourceUnavailable(e.to_string()))?);
+            *self.pruning_snapshot_cache.lock() = Some((record.block, record.state_root, Arc::clone(&served)));
+            Ok(Some(served))
+        })
+        .map(Option::flatten)
+    }
+
+    pub fn load_tip(&self, params: &PalwStateParamsV2) -> StoreResult<Option<(BlockHash, PalwChainStateV2)>> {
+        self.load_tip_retained_v1(params)?
+            .map(|(block, state)| {
+                state
+                    .into_unreserved_legacy_v1()
+                    .map(|state| (block, state))
+                    .map_err(|why| StoreError::LocalResourceUnavailable(why.to_string()))
+            })
+            .transpose()
+    }
+    pub fn load_tip_retained_v1(&self, params: &PalwStateParamsV2) -> StoreResult<Option<(BlockHash, NativeChainStateV1)>> {
+        self.with_pinned_tip_v1(false, |record| {
+            self.tip_bytes_decoded.fetch_add(record.carriage_borsh.len() as u64, std::sync::atomic::Ordering::Relaxed);
+            self.materialize_native_fields_v1(record.block, record.state_root, record.carriage_borsh, params, "tip")
+                .map(|state| (record.block, state))
+        })
+    }
+
+    /// **The tip, materialized ONCE per tip row** (audit M-7) — the read every `palw_*` RPC answer
+    /// should take.
+    ///
+    /// Same state as [`Self::load_tip`], same refusals, same trust discipline: on a miss it runs
+    /// exactly `load_tip`'s work, and the recorded root is still demanded back. What it does not do
+    /// is run it again for the next caller while the tip has not moved, which is the whole of the
+    /// finding: an unauthenticated client looping `getPalwPendingChunkGroup` paid the node a decode,
+    /// a consistency walk and a blake2b over the entire PALW state per ~200-byte request.
+    pub fn load_tip_cached(&self, params: &PalwStateParamsV2) -> StoreResult<Option<(BlockHash, Arc<NativeChainStateV1>)>> {
+        // **The KEY first, and the record only on a miss** (mainnet audit H-1). `tip_record()`
+        // clones `carriage_borsh`, so the hit path used to skip the decode, the two index
+        // rebuilds, the two walks and the `state_root()` — and then memcpy the entire carriage
+        // anyway, once per unauthenticated call. A cache whose hit costs O(state) is not the
+        // bound audit M-7 said it was.
+        let Some((block, root)) = self.tip_key()? else {
+            return Ok(None);
+        };
+        if let Some((cached_block, cached_root, state)) = self.tip_cache.lock().as_ref()
+            && *cached_block == block
+            && *cached_root == root
+        {
+            return Ok(Some((block, Arc::clone(state))));
+        }
+        self.with_pinned_tip_v1(false, |record| {
+            self.tip_bytes_decoded.fetch_add(record.carriage_borsh.len() as u64, std::sync::atomic::Ordering::Relaxed);
+            let state =
+                Arc::new(self.materialize_native_fields_v1(record.block, record.state_root, record.carriage_borsh, params, "tip")?);
+            *self.tip_cache.lock() = Some((record.block, record.state_root, Arc::clone(&state)));
+            Ok((record.block, state))
+        })
+    }
+
+    /// The decode-and-recheck half both tip readers share, so the cached path and the uncached one
+    /// cannot come to hold two different ideas of what a tip row means.
+    fn materialize_tip(&self, record: &PalwStateTipRecordV2, params: &PalwStateParamsV2) -> StoreResult<NativeChainStateV1> {
+        self.tip_bytes_decoded.fetch_add(record.carriage_borsh.len() as u64, std::sync::atomic::Ordering::Relaxed);
+        // ADR-0152 T80: a snapshot of another state version is refused by name, before a decode that
+        // would fail somewhere inside it without saying why.
+        if let Some(why) = kaspa_consensus_core::palw_state_v2::palw_carriage_version_refusal_v1(&record.carriage_borsh) {
+            return Err(StoreError::DataInconsistency(format!("palw v2 tip snapshot: {why}")));
+        }
+        self.materialize_native_record_v1(record, params, "tip snapshot")
+    }
+
+    fn materialize_native_record_v1(
+        &self,
+        record: &PalwStateTipRecordV2,
+        params: &PalwStateParamsV2,
+        label: &str,
+    ) -> StoreResult<NativeChainStateV1> {
+        self.materialize_native_fields_v1(record.block, record.state_root, &record.carriage_borsh, params, label)
+    }
+    fn materialize_native_fields_v1(
+        &self,
+        block: BlockHash,
+        root: Hash64,
+        canonical: &[u8],
+        params: &PalwStateParamsV2,
+        label: &str,
+    ) -> StoreResult<NativeChainStateV1> {
+        if let Some(why) = kaspa_consensus_core::palw_state_v2::palw_carriage_version_refusal_v1(canonical) {
+            return Err(StoreError::DataInconsistency(format!("palw v2 {label}: {why}")));
+        }
+        retain_native_carriage_decode_classified_v1(block, canonical, || {
+            let carriage = borsh::from_slice::<PalwStateCarriageV2>(canonical)
+                .map_err(|why| format!("palw v2 {label} does not decode: {why}"))?;
+            let armed = self.uncertified_weightless_at(&carriage);
+            carriage
+                .into_state_v3(params, Some(root), armed, self.canonical_work_daa)
+                .map_err(|why| format!("palw v2 {label} refused: {why}"))
+        })
+        .map_err(|why| match why {
+            kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Resource(e) => {
+                StoreError::LocalResourceUnavailable(e.to_string())
+            }
+            kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Decode(e) => StoreError::DataInconsistency(e),
+        })
+    }
+}
+
+#[path = "palw_legacy_answer_history_v2.rs"]
+mod legacy_answer_history_v2;
+#[path = "palw_prefix_history_v1.rs"]
+mod prefix_history_v1;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kaspa_consensus_core::palw_state_v2::{
+        PalwBlockContextV2, PalwBondKeyV2, PalwConsensusObjectV2, PalwPwuRuleV2, apply_palw_transition_v2, revert_delta_v2,
+    };
+    use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
+    use kaspa_database::create_temp_db;
+    use kaspa_database::prelude::{ConnBuilder, DirectDbWriter};
+
+    #[test]
+    fn borrowed_record_views_preserve_existing_bincode_codec_without_payload_copy() {
+        let record = PalwStateTipRecordV2 {
+            block: BlockHash::from_u64_word(9),
+            state_root: Hash64::from_u64_word(10),
+            carriage_borsh: vec![7; 1024],
+        };
+        let bytes = bincode::serialize(&record).unwrap();
+        let view: PalwTipRecordViewV1<'_> = bincode::deserialize(&bytes).unwrap();
+        assert_eq!((view.block, view.state_root), (record.block, record.state_root));
+        assert_eq!(view.carriage_borsh, record.carriage_borsh);
+        let address = view.carriage_borsh.as_ptr() as usize;
+        assert!(address >= bytes.as_ptr() as usize && address + view.carriage_borsh.len() <= bytes.as_ptr() as usize + bytes.len());
+        let delta = PalwStateDeltaRecordV2 { state_root: record.state_root, delta_borsh: record.carriage_borsh };
+        let encoded = bincode::serialize(&delta).unwrap();
+        let view: PalwDeltaRecordViewV1<'_> = bincode::deserialize(&encoded).unwrap();
+        assert_eq!(view.state_root, delta.state_root);
+        assert_eq!(view.delta_borsh, delta.delta_borsh);
+        // The malformed bincode length never causes a Vec allocation: borrowed
+        // decoding rejects a slice which is not present in the pinned frame.
+        let mut empty = bincode::serialize(&PalwStateDeltaRecordV2 { state_root: delta.state_root, delta_borsh: Vec::new() }).unwrap();
+        let end = empty.len();
+        empty[end - 8..].copy_from_slice(&u64::MAX.to_le_bytes());
+        assert!(bincode::deserialize::<PalwDeltaRecordViewV1<'_>>(&empty).is_err());
+    }
+
+    #[test]
+    fn compact_identity_is_durable_only_with_its_payload_batch() {
+        let (_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let mut store = DbPalwStateV2Store::new(db.clone(), CachePolicy::Count(8));
+        store.reindex_if_stale().unwrap();
+        let state = PalwChainStateV2::genesis();
+        let block = BlockHash::from_u64_word(77);
+        let mut abandoned = WriteBatch::default();
+        let ticket = store.set_tip_batch_tracked_v1(&mut abandoned, block, &state).unwrap();
+        let sibling = store.clone_with_new_cache(CachePolicy::Count(8));
+        assert!(store.tip_key().unwrap().is_none());
+        assert!(sibling.tip_key().unwrap().is_none());
+        drop(abandoned);
+        drop(ticket);
+        assert!(store.tip_key().unwrap().is_none());
+        let mut committed = WriteBatch::default();
+        let ticket = store.set_tip_batch_tracked_v1(&mut committed, block, &state).unwrap();
+        db.write(committed).unwrap();
+        drop(ticket);
+        assert_eq!(sibling.tip_key().unwrap(), Some((block, state.state_root())));
+        let payload = db.get_pinned(DatabaseStorePrefixes::PalwStateV2Tip.as_ref()).unwrap().unwrap();
+        let view: PalwTipRecordViewV1<'_> = bincode::deserialize(&payload).unwrap();
+        assert_eq!((view.block, view.state_root), sibling.tip_key().unwrap().unwrap());
+        store.delete_tip_for_tests().unwrap();
+        assert!(sibling.tip_key().unwrap().is_none());
+    }
+    #[test]
+    fn old_identity_fallback_and_unknown_sidecar_version_are_explicit() {
+        let (_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let store = DbPalwStateV2Store::new(db.clone(), CachePolicy::Count(8));
+        let block = BlockHash::from_u64_word(88);
+        let root = Hash64::from_u64_word(99);
+        // Existing pre-sidecar record: borrow its exact bincode view without a
+        // full native Borsh decode. Metadata alone never validates a payload.
+        db.put(
+            DatabaseStorePrefixes::PalwStateV2Tip.as_ref(),
+            bincode::serialize(&PalwStateTipRecordV2 { block, state_root: root, carriage_borsh: vec![1; 8] }).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(store.tip_key().unwrap(), Some((block, root)));
+        db.put(native_identity_key_v1(false), bincode::serialize(&(2u16, block, root)).unwrap()).unwrap();
+        assert!(store.tip_key().is_err());
+    }
+
+    fn params() -> PalwStateParamsV2 {
+        PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, Hash64::from_u64_word(1), 4, 1000, 100, 1000, 0).unwrap()
+    }
+
+    fn ctx(block_word: u64, daa: u64, blue: u64) -> PalwBlockContextV2 {
+        PalwBlockContextV2 { block: BlockHash::from_u64_word(block_word), daa_score: daa, blue_score: blue, subsidy: 0 }
+    }
+
+    fn registrations() -> Vec<PalwConsensusObjectV2> {
+        vec![
+            PalwConsensusObjectV2::ClassRegistered {
+                class_id: Hash64::from_u64_word(1),
+                artifact_root: Hash64::from_u64_word(11),
+                slash_value_per_pwu: 5,
+                pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
+                initial_target: u128::MAX / 2,
+                share_permille: 1000,
+                activation_daa: 0,
+                admission: None,
+            },
+            PalwConsensusObjectV2::BondRegistered {
+                bond: PalwBondKeyV2(TransactionOutpoint { transaction_id: TransactionId::from_u64_word(1), index: 0 }),
+                pubkey: vec![7; 4],
+                operator_pubkey: vec![21; 8],
+                collateral: 1_000,
+                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
+                capable_classes: Default::default(),
+                signature: Vec::new(),
+            },
+        ]
+    }
+
+    /// **A `palw_*` read costs one materialization per TIP, not one per request** (audit M-7),
+    /// measured in carriage bytes decoded.
+    ///
+    /// The RPC read paths took a full `load_tip` per call — borsh-decode of the whole carriage,
+    /// both index rebuilds, both consistency walks and a complete `state_root()` — from an
+    /// unauthenticated client against a ~200-byte request, with W5's chunk bytes now inside the
+    /// thing being re-rooted. The number below is the amplification: bytes the node decodes for
+    /// N identical reads.
+    #[test]
+    fn a_palw_read_path_materializes_the_tip_once_per_tip_and_not_once_per_call() {
+        let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let mut store = DbPalwStateV2Store::new(db.clone(), CachePolicy::Count(16));
+        store.reindex_if_stale().unwrap();
+
+        let p = params();
+        let c1 = ctx(0xB1, 100, 100);
+        let (child, delta) = apply_palw_transition_v2(&PalwChainStateV2::genesis(), &p, &c1, &registrations(), None).unwrap();
+        let mut batch = WriteBatch::default();
+        store.insert_delta_batch(&mut batch, c1.block, child.state_root(), &delta).unwrap();
+        store.set_tip_batch(&mut batch, c1.block, &child).unwrap();
+        db.write(batch).unwrap();
+
+        const CALLS: u64 = 64;
+        let uncached = DbPalwStateV2Store::new(db.clone(), CachePolicy::Count(16));
+        for _ in 0..CALLS {
+            uncached.load_tip(&p).unwrap().expect("the tip is there");
+        }
+        let per_call = uncached.tip_bytes_decoded() / CALLS;
+
+        let cached = DbPalwStateV2Store::new(db.clone(), CachePolicy::Count(16));
+        for _ in 0..CALLS {
+            let (block, state) = cached.load_tip_cached(&p).unwrap().expect("the tip is there");
+            assert_eq!(block, c1.block);
+            assert_eq!(*state, child, "the cached tip is not the state the machine produced");
+        }
+        println!(
+            "[M-7] {CALLS} getPalwPendingChunkGroup-shaped reads: {} B of carriage decoded before ({per_call} B per call), \
+             {} B after",
+            uncached.tip_bytes_decoded(),
+            cached.tip_bytes_decoded()
+        );
+        assert_eq!(cached.tip_bytes_decoded(), per_call, "the cache decoded the carriage more than once for one tip");
+        assert_eq!(uncached.tip_bytes_decoded(), per_call * CALLS, "the uncached path is the per-call cost this test measures");
+
+        // **And it is keyed on the tip row, not on "we read once".** A second block moves the tip,
+        // and the next read materializes the new one.
+        let c2 = ctx(0xB2, 101, 101);
+        let (grand, delta2) = apply_palw_transition_v2(&child, &p, &c2, &[], None).unwrap();
+        let mut batch = WriteBatch::default();
+        store.insert_delta_batch(&mut batch, c2.block, grand.state_root(), &delta2).unwrap();
+        store.set_tip_batch(&mut batch, c2.block, &grand).unwrap();
+        db.write(batch).unwrap();
+
+        let moved = DbPalwStateV2Store::new(db, CachePolicy::Count(16));
+        let (block, state) = moved.load_tip_cached(&p).unwrap().expect("the tip is there");
+        assert_eq!(block, c2.block, "the cache answered from a tip the chain has left");
+        assert_eq!(*state, grand);
+    }
+
+    /// **A pruning-point snapshot serve costs one materialization per CAPTURED SNAPSHOT, and
+    /// nothing at all for a hash this node never captured** (mainnet audit H-1).
+    ///
+    /// The rule, not the patch: the serve path may reach the carriage however it likes, so long as
+    /// (a) a peer naming a point this node did not capture buys no decode, (b) a peer naming the
+    /// one it did buys at most one decode however often it asks, (c) the bytes handed over are the
+    /// bytes the pre-patch expression produced — the requester compares their root against the
+    /// pruning point's own header — and (d) a re-capture stops serving the point it has left.
+    /// Any implementation that satisfies those passes; one that regresses the ORDER of the
+    /// identity check, or the memo, or the served value, fails.
+    ///
+    /// Driven through ONE store instance, because that is the shape production has: the serve path
+    /// reads `self.palw_state_v2_store`, and `capture_pruning_point_palw_state` writes the same
+    /// one. A second `DbPalwStateV2Store` over the same database would answer from its own
+    /// `CachedDbItem`, which no write of this store's ever touches — a pre-existing property of
+    /// `CachedDbItem` that has nothing to do with this cache, and would make (d) measure it.
+    #[test]
+    fn a_pruning_point_snapshot_serve_decodes_once_per_row_and_not_at_all_for_a_hash_we_do_not_hold() {
+        let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let mut store = DbPalwStateV2Store::new(db.clone(), CachePolicy::Count(16));
+        store.reindex_if_stale().unwrap();
+
+        let p = params();
+        let c1 = ctx(0xB1, 100, 100);
+        let (child, _delta) = apply_palw_transition_v2(&PalwChainStateV2::genesis(), &p, &c1, &registrations(), None).unwrap();
+        let mut batch = WriteBatch::default();
+        store.set_pruning_snapshot_batch(&mut batch, c1.block, &child).unwrap();
+        db.write(batch).unwrap();
+
+        const CALLS: u64 = 64;
+        let wrong = BlockHash::from_u64_word(0xBAD);
+        assert_ne!(wrong, c1.block);
+
+        // (a) A hash this node did not capture costs two hash comparisons — no decode, no copy.
+        for _ in 0..CALLS {
+            assert!(
+                store.load_pruning_snapshot_carriage_cached(&p, wrong).unwrap().is_none(),
+                "a point this node never captured must answer not-found"
+            );
+        }
+        assert_eq!(
+            store.pruning_snapshot_bytes_decoded(),
+            0,
+            "the peer's hash must be compared BEFORE anything is decoded — a wrong hash bought a full \
+             materialization per forty-byte request"
+        );
+
+        // (b) The captured point costs one materialization however often it is asked for.
+        let mut answers = Vec::new();
+        for _ in 0..CALLS {
+            answers.push(store.load_pruning_snapshot_carriage_cached(&p, c1.block).unwrap().expect("the snapshot is there"));
+        }
+        let first_carriage = store.pruning_snapshot_record().unwrap().unwrap().carriage_borsh.len() as u64;
+        assert_eq!(
+            store.pruning_snapshot_bytes_decoded(),
+            first_carriage,
+            "{CALLS} serves of one captured snapshot decoded more than one carriage"
+        );
+        for answer in &answers {
+            assert_eq!(**answer, *answers[0], "two serves of the same row disagreed");
+        }
+
+        // (c) The bytes are the pre-patch expression's bytes: the requester compares this
+        // carriage's root against the pruning point's own header, so a serve that is merely
+        // "equivalent" is a serve that fails IBD.
+        let uncached = DbPalwStateV2Store::new(db.clone(), CachePolicy::Count(16));
+        let (block, state) = uncached.load_pruning_snapshot(&p).unwrap().expect("the snapshot is there");
+        assert_eq!(block, c1.block);
+        let expected = PalwStateCarriageV2::from_state(&state);
+        assert_eq!(*answers[0], expected, "the served carriage is not the one the uncached path produced");
+        assert_eq!(
+            borsh::to_vec(&*answers[0]).unwrap(),
+            borsh::to_vec(&expected).unwrap(),
+            "the bytes on the wire moved, which moves the root the requester verifies"
+        );
+
+        // (d) Re-capture at a different block: the key misses, the OLD point stops being served,
+        // and the new one costs exactly one more carriage. Nothing invalidates this by hand.
+        let c2 = ctx(0xB2, 101, 101);
+        let (grand, _delta2) = apply_palw_transition_v2(&child, &p, &c2, &[], None).unwrap();
+        assert_ne!(grand.state_root(), child.state_root(), "the fixture must move the state, not only the block");
+        let mut batch = WriteBatch::default();
+        store.set_pruning_snapshot_batch(&mut batch, c2.block, &grand).unwrap();
+        db.write(batch).unwrap();
+
+        assert!(
+            store.load_pruning_snapshot_carriage_cached(&p, c1.block).unwrap().is_none(),
+            "a re-captured snapshot must stop serving the point it has left"
+        );
+        let after = store.load_pruning_snapshot_carriage_cached(&p, c2.block).unwrap().expect("the new snapshot is there");
+        assert_eq!(*after, PalwStateCarriageV2::from_state(&grand), "the re-capture served the stale carriage");
+        let second_carriage = store.pruning_snapshot_record().unwrap().unwrap().carriage_borsh.len() as u64;
+        assert_eq!(
+            store.pruning_snapshot_bytes_decoded(),
+            first_carriage + second_carriage,
+            "the re-capture cost more than one materialization"
+        );
+    }
+
+    /// One real transition, through the disk and back: the loaded tip is the state the machine
+    /// produced (root-verified), and the loaded delta reverts it to its parent bit-for-bit —
+    /// i.e. the reorg primitive survives serialization.
+    #[test]
+    fn a_transition_round_trips_through_disk_and_still_reverts() {
+        let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let mut store = DbPalwStateV2Store::new(db.clone(), CachePolicy::Count(16));
+        store.reindex_if_stale().unwrap();
+
+        let p = params();
+        let genesis = PalwChainStateV2::genesis();
+        let c1 = ctx(0xB1, 100, 100);
+        let (child, delta) = apply_palw_transition_v2(&genesis, &p, &c1, &registrations(), None).unwrap();
+
+        let mut batch = WriteBatch::default();
+        store.insert_delta_batch(&mut batch, c1.block, child.state_root(), &delta).unwrap();
+        store.set_tip_batch(&mut batch, c1.block, &child).unwrap();
+        db.write(batch).unwrap();
+
+        // A fresh store over the same database — i.e. a restart.
+        let restarted = DbPalwStateV2Store::new(db, CachePolicy::Count(16));
+        let (tip_block, tip_state) = restarted.load_tip(&p).unwrap().expect("the tip was written");
+        assert_eq!(tip_block, c1.block);
+        assert_eq!(tip_state, child, "the rebuilt tip is the state the machine produced, indices included");
+
+        let (root, loaded_delta) = restarted.delta_of(c1.block).unwrap();
+        assert_eq!(root, child.state_root());
+        assert_eq!(loaded_delta, delta, "the delta's bytes are the machine's bytes");
+        let reverted = revert_delta_v2(&tip_state, &loaded_delta, &p).unwrap();
+        assert_eq!(reverted, genesis, "the reorg primitive survives the disk");
+    }
+
+    /// A tampered snapshot refuses to become a sink: the recorded root is demanded at load, so
+    /// flipping one byte of the carriage is a named refusal, not a quietly different state.
+    #[test]
+    fn a_tampered_tip_snapshot_is_refused_not_loaded() {
+        let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let mut store = DbPalwStateV2Store::new(db.clone(), CachePolicy::Count(16));
+        store.reindex_if_stale().unwrap();
+
+        let p = params();
+        let genesis = PalwChainStateV2::genesis();
+        let c1 = ctx(0xB1, 100, 100);
+        let (child, _delta) = apply_palw_transition_v2(&genesis, &p, &c1, &registrations(), None).unwrap();
+
+        let mut batch = WriteBatch::default();
+        store.set_tip_batch(&mut batch, c1.block, &child).unwrap();
+        db.write(batch).unwrap();
+
+        // Corrupt the snapshot bytes while keeping the record decodable: flip one byte of the
+        // carriage body, write the record back verbatim otherwise.
+        let mut record = store.tip_record().unwrap().unwrap();
+        let last = record.carriage_borsh.len() - 1;
+        record.carriage_borsh[last] ^= 0xFF;
+        let mut tip_item: CachedDbItem<PalwStateTipRecordV2> =
+            CachedDbItem::new(db.clone(), DatabaseStorePrefixes::PalwStateV2Tip.into());
+        tip_item.write(DirectDbWriter::new(&db), &record).unwrap();
+
+        let restarted = DbPalwStateV2Store::new(db, CachePolicy::Count(16));
+        match restarted.load_tip(&p) {
+            Err(StoreError::DataInconsistency(msg)) => {
+                assert!(msg.contains("refused") || msg.contains("decode"), "the refusal names the snapshot: {msg}")
+            }
+            other => panic!("a tampered snapshot must be refused, got {other:?}"),
+        }
+    }
+
+    /// A schema bump discards rows and tip TOGETHER: a store that no longer understands its rows
+    /// must read as empty-and-versioned, never as "no PALW work matured".
+    #[test]
+    fn a_schema_change_clears_rows_and_tip_together() {
+        let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let mut store = DbPalwStateV2Store::new(db.clone(), CachePolicy::Count(16));
+        store.reindex_if_stale().unwrap();
+
+        let p = params();
+        let genesis = PalwChainStateV2::genesis();
+        let c1 = ctx(0xB1, 100, 100);
+        let (child, delta) = apply_palw_transition_v2(&genesis, &p, &c1, &registrations(), None).unwrap();
+        let mut batch = WriteBatch::default();
+        store.insert_delta_batch(&mut batch, c1.block, child.state_root(), &delta).unwrap();
+        store.set_tip_batch(&mut batch, c1.block, &child).unwrap();
+        store.set_pruning_snapshot_batch(&mut batch, c1.block, &child).unwrap();
+        db.write(batch).unwrap();
+        assert!(store.load_tip(&p).unwrap().is_some(), "prime the positive decoded cache before retirement");
+        assert!(store.pruning_snapshot_record().unwrap().is_some());
+
+        // Simulate an old layout: stamp a different version, then reopen.
+        let mut schema_item: CachedDbItem<u32> = CachedDbItem::new(db.clone(), DatabaseStorePrefixes::PalwStateV2Schema.into());
+        schema_item.write(DirectDbWriter::new(&db), &(PALW_STATE_V2_STORE_SCHEMA_VERSION - 1)).unwrap();
+
+        let mut restarted = DbPalwStateV2Store::new(db.clone(), CachePolicy::Count(16));
+        assert!(restarted.load_tip(&p).unwrap().is_some());
+        assert!(restarted.load_pruning_snapshot_carriage_cached(&p, c1.block).unwrap().is_some());
+        let sharing_old_caches = restarted.clone();
+        restarted.reindex_if_stale().unwrap();
+        assert!(!restarted.has_delta(c1.block).unwrap(), "stale rows are discarded");
+        assert!(restarted.tip_record().unwrap().is_none(), "and the tip goes with them — both or neither");
+        assert!(restarted.pruning_snapshot_record().unwrap().is_none(), "an obsolete servable snapshot cannot survive the new schema");
+        assert_eq!(restarted.schema.read().unwrap(), PALW_STATE_V2_STORE_SCHEMA_VERSION);
+        assert!(restarted.tip_cache.lock().is_none());
+        assert!(restarted.pruning_snapshot_cache.lock().is_none());
+        assert!(sharing_old_caches.tip_record().unwrap().is_none());
+        assert!(sharing_old_caches.pruning_snapshot_record().unwrap().is_none());
+        assert_eq!(sharing_old_caches.schema.read().unwrap(), PALW_STATE_V2_STORE_SCHEMA_VERSION);
+        let mut cold = DbPalwStateV2Store::new(db, CachePolicy::Count(16));
+        cold.reindex_if_stale().unwrap();
+        assert!(!cold.has_delta(c1.block).unwrap());
+        assert!(cold.tip_record().unwrap().is_none());
+        assert!(cold.pruning_snapshot_record().unwrap().is_none());
+    }
+
+    /// **ADR-0152 T80: a datadir written at another PALW state version is refused by name** — before
+    /// any decode, with both versions and the binary that runs testnet-11 in the message — instead of
+    /// failing somewhere inside the carriage (every record layout moved with v22). The same row at
+    /// this build's version loads.
+    #[test]
+    fn t80_a_carriage_of_another_state_version_is_refused_by_name() {
+        let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let mut store = DbPalwStateV2Store::new(db.clone(), CachePolicy::Count(16));
+        store.reindex_if_stale().unwrap();
+        let p = params();
+        let c1 = ctx(0xB1, 100, 100);
+        let (child, _) = apply_palw_transition_v2(&PalwChainStateV2::genesis(), &p, &c1, &registrations(), None).unwrap();
+        let good = borsh::to_vec(&PalwStateCarriageV2::from_state(&child)).unwrap();
+        assert_eq!(
+            kaspa_consensus_core::palw_state_v2::palw_carriage_version_of_v1(&good),
+            Some(kaspa_consensus_core::palw_state_v2::PALW_STATE_V2_VERSION)
+        );
+        for version in [20u16, 21] {
+            let mut stale = good.clone();
+            stale[..2].copy_from_slice(&version.to_le_bytes());
+            let mut batch = WriteBatch::default();
+            store
+                .set_tip_record_batch(
+                    &mut batch,
+                    PalwStateTipRecordV2 { block: c1.block, state_root: child.state_root(), carriage_borsh: stale },
+                )
+                .unwrap();
+            db.write(batch).unwrap();
+            let fresh = DbPalwStateV2Store::new(db.clone(), CachePolicy::Count(16));
+            let message = match fresh.load_tip(&p) {
+                Err(StoreError::DataInconsistency(message)) => message,
+                other => panic!("version {version}: refused by name, got {other:?}"),
+            };
+            assert!(message.contains(&format!("carriage version {version}")), "{message}");
+            assert!(message.contains("1f98d3bf") && message.contains("version 22"), "{message}");
+        }
+        let mut batch = WriteBatch::default();
+        store.set_tip_batch(&mut batch, c1.block, &child).unwrap();
+        db.write(batch).unwrap();
+        let fresh = DbPalwStateV2Store::new(db, CachePolicy::Count(16));
+        assert_eq!(fresh.load_tip(&p).unwrap().expect("the tip loads").1, child, "this build's own version loads");
+    }
+}
+
+#[cfg(test)]
+mod native_inventory_tests_v1 {
+    use super::*;
+    use kaspa_database::create_temp_db;
+    use kaspa_database::prelude::*;
+    #[test]
+    fn inventory_metadata_is_atomic_fresh_point_bound_and_integrity_checked() {
+        let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let mut store = DbPalwStateV2Store::new(db.clone(), CachePolicy::Count(4));
+        let point = BlockHash::from_u64_word(123);
+        let state = PalwChainStateV2::genesis();
+        let mut abandoned = WriteBatch::default();
+        store.set_pruning_snapshot_batch(&mut abandoned, point, &state).unwrap();
+        let fresh = DbPalwStateV2Store::new(db.clone(), CachePolicy::Count(4));
+        assert!(fresh.native_snapshot_inventory_v1(point).unwrap().is_none());
+        drop(abandoned);
+        assert!(fresh.native_snapshot_inventory_v1(point).unwrap().is_none());
+        let mut committed = WriteBatch::default();
+        store.set_pruning_snapshot_batch(&mut committed, point, &state).unwrap();
+        db.write(committed).unwrap();
+        let inventory = fresh.native_snapshot_inventory_v1(point).unwrap().unwrap();
+        assert_eq!(inventory.state_root, state.state_root());
+        assert!(fresh.native_snapshot_inventory_v1(BlockHash::from_u64_word(124)).unwrap().is_none());
+        let mut corruption = WriteBatch::default();
+        let mut record =
+            PalwNativeSnapshotInventoryRecordV1 { integrity: native_inventory_integrity_v1(&inventory).unwrap(), inventory };
+        record.inventory.canonical_bytes += 1;
+        corruption.put([u8::from(DatabaseStorePrefixes::PalwNativeSnapshotInventoryV1)], bincode::serialize(&record).unwrap());
+        db.write(corruption).unwrap();
+        assert!(fresh.native_snapshot_inventory_v1(point).is_err());
+    }
+}

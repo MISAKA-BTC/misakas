@@ -1,0 +1,159 @@
+{
+ "config": {
+  "inert": [
+   "activation_scheme",
+   "fmt"
+  ],
+  "lm_head": "never",
+  "skip": "modules_to_not_convert",
+  "skip_match": "contains"
+ },
+ "decode": {
+  "target": "floats",
+  "value": "weight[o, i] * scale_inv[o / bo, i / bi]"
+ },
+ "doc": "float8_e4m3fn weights with a float scale per (bo × bi) block (DeepSeek-V3, Qwen3-FP8: `weight` + `weight_scale_inv`): W = fp8(w) · scale_inv. The elements are floats, not integer codes under a group scale, so it decodes to floats and the weight takes the ordinary W8 path.",
+ "ids": [
+  {
+   "method": "fp8",
+   "scheme": "config"
+  }
+ ],
+ "layout": {
+  "checks": [
+   {
+    "expr": "dim_scale_inv[0] == (out + bo - 1) / bo && dim_scale_inv[1] == (inp + bi - 1) / bi",
+    "message": "the block scales are not [ceil(out / bo), ceil(in / bi)]"
+   }
+  ],
+  "dims": {
+   "inp": "dim_weight[1]",
+   "out": "dim_weight[0]"
+  },
+  "kind": "tensors",
+  "roles": [
+   {
+    "dtypes": [
+     "F8_E4M3"
+    ],
+    "name": "weight",
+    "rank": 2,
+    "suffix": ".weight"
+   },
+   {
+    "dtypes": [
+     "F16",
+     "BF16",
+     "F32"
+    ],
+    "name": "scale_inv",
+    "rank": 2,
+    "suffix": ".weight_scale_inv"
+   }
+  ]
+ },
+ "name": "FP8_BLOCK",
+ "params": {
+  "bi": {
+   "config": "weight_block_size[1]",
+   "default": 128
+  },
+  "bo": {
+   "config": "weight_block_size[0]",
+   "default": 128
+  }
+ },
+ "schema": "misaka.palw.quant-format.v1",
+ "tests": [
+  {
+   "config": {
+    "activation_scheme": "dynamic",
+    "fmt": "e4m3",
+    "quant_method": "fp8",
+    "weight_block_size": [
+     4,
+     8
+    ]
+   },
+   "roles": {
+    "scale_inv": {
+     "dtype": "F32",
+     "hex": "792fb63ecb6a9b3ea605c33e030ee93eb621b43e8421433ee55cd53e1459e13ec6772a3e",
+     "shape": [
+      3,
+      3
+     ]
+    },
+    "weight": {
+     "dtype": "F8_E4M3",
+     "hex": "ed32c9774dd7bba89b9d0fe01eaaf84cb3fcf735236a8610a3fc7a0f77935db3956034db712943150c6642467d0ea8561f9e8865f5c03d63c9e56a13dad4484e5322f6801d590958f1e45bebf6691d38d6c741e0b27d46419f1653a79c374ddc3ad293098fa7cbf677b3288f86c09276b7c274d3e9d27ee255deba90335dce46886212e6c03afb906072569119e7470d967382c5a6caba0a8c222ed819b0315a13aeda24d91578d7f62567f4bf5223c4446d09078ac88306a113129b62e7bd36344e58fb3c2690305b5f698c38c89a89a722abfb224d8ba53afc29b3d8e3a9e72238bf495939d9f663d25304f12861c1",
+     "shape": [
+      12,
+      20
+     ]
+    }
+   },
+   "values_f32_hex": "920614c257bb633e68f5ccbf81ccaa429206144081ccaac04681fabe792fb6bdd7b2d5bc8a8dfcbc1eb4113ccb6a1bc172fd073d7e45c2bdcb6a9bc23020e93fe21386be3c4412c34cd5b6c297749e3e46817a3d57bbe3419ba388bb792f363c46817abd9ba308c357bbe34281cc2a3c1eb49142d7b255bc8a8dfc40d7b255be8a8d7cbccb6a1b413020693ed7b2d5c05b665b425b66db3de213863f97749e3c9ba3083c8a699f4157bb633f8a699f3f920614438a691f3c792fb6bd8a699f401eb4113d72fd07bdcb6a9bbb8a8d7c418a8d7cc2cb6a1bbf8a8dfc3ed7b255415b66dbbf97749ec110c7f341e213863c57bbe3c09ba388c0792fb63f8a691f4046817a4057bb633d8a699fc2000000808a8dfc3c24d8ae4024d8ae3bcb6a9b4024d82ec2302069c1d7b2d540d7b2d5c1f1a4aac25b66db4197741e3da605c33e43eccbc0237ddabfe217833f030e69c1c2a891be625b3d4343eccb3fe217833f9bdf28bd7f9d9d3c5aae77409bdfa8bd481907bd9bdfa83e645b1240481907c1e5e9733ee5e9f3bf0b2706bcb4855b3b237d5abc237ddabda23920c043eccbc2237dda42a239a0be030ee93d237d5abc481987bbb62134bf242a61bc7f9d9d429bdfa8be242a61bf481987425aae77c0b4855bc1e5e9f3bf54bdaa42e5e9f3c0625bbd4043ec4bc1c2a811bf030e69bca239a03e625b3d4143ec4bc043eccb3fb621b4bb242a6141242a613c7f9d9dc1b62134bf242ae13e5aaef7c2b62134bc8421c340e5e9f34154bd2a40b485dbbbe217033d237ddac1237dda3f625b3d3c43eccbbca239a042030ee9ba625bbdbf7f9d9dbd242ae1bf242ae1be242ae13b481907bc242a613d7f9d1d3eb621b4c0b4855b3c8421c3bdb485db3de5e97340ddaf923c48b13abe0f5a05c1ac05a03d8208f0c07a5bad3ce55cd5421707c8c0f22dc5c26018b73d8343d341cf02a9c2834353bfacd78c403eed9a3dcf02a9bfa9b3ff3e51818a41bfc63f3bcd28153b0f5a05bce55cd5bfac0520bbac05a03b820870bdddaf923c0f5a853cddaf12bdacd78c418343d3c1601837bff22dc53ecf02a93ef22d45401459e1403eed1ac3a9b37f3ecd28153dc677aabbc677aa3dddaf1241170748418208f041ac0520bce55cd53ee55cd5bf0f5a05bd8208f0bb8343d3bdacd78c3d3eed1abe3eed1ac3acd78c3d601837403eed1abc6018b7bdb815553ea9b37fc2bfc63f3db064eabde55cd5c0ddaf92c18208f0bd1707c8c10f5a853de55cd53e170748bf8208f03f3684fd403684fd3e3684fdc0f22dc5c23eed9a41acd78cc03eed9a401459613bbfc6bfc1c6772a3dbfc6bf40bfc6bfbe"
+  },
+  {
+   "config": {
+    "activation_scheme": "dynamic",
+    "fmt": "e4m3",
+    "quant_method": "fp8",
+    "weight_block_size": [
+     3,
+     4
+    ]
+   },
+   "roles": {
+    "scale_inv": {
+     "dtype": "BF16",
+     "hex": "fb3e133ec83dae3e",
+     "shape": [
+      2,
+      2
+     ]
+    },
+    "weight": {
+     "dtype": "F8_E4M3",
+     "hex": "524a83fef38be1198ab76181436b44ead1d976d2dee7c62f83f7198e055408e6ef5215",
+     "shape": [
+      5,
+      7
+     ]
+    }
+   },
+   "values_f32_hex": "00e09c4000e01c4000403cbb00a05bc30020cac100204abb0060a5c000300d3d00e01cbc0050ebbe00308d41000093b90020ca3e00204a410040bc3f00e01cc200308dc000300dc100a0004200c0b7bf00a080c00080bbc00000afbe00803b3d000016ba0020a3c200c0c33c004018bc00007a3a0000963f0000c83a0000afc0002023c20080594000608d3c"
+  },
+  {
+   "config": {
+    "activation_scheme": "dynamic",
+    "fmt": "e4m3",
+    "quant_method": "fp8",
+    "weight_block_size": [
+     8,
+     16
+    ]
+   },
+   "roles": {
+    "scale_inv": {
+     "dtype": "F16",
+     "hex": "b637",
+     "shape": [
+      1,
+      1
+     ]
+    },
+    "weight": {
+     "dtype": "F8_E4M3",
+     "hex": "8cc2d8441fbad746a8c8cb5ac1625c5b714d98093dd7e747e348c2124fc0d7fa44ad86bfdfb9edc70c5a4146c9478370863c2eeb8e805a854a3e363a9a020b403b3a0899006cdde0da1e1c793ab5fd0086e61aa68afb0a166bd511ebc335363027aebe728b3374f9d012b207ea90473f778c4f808f6ad6fd139a7831c105748c",
+     "shape": [
+      8,
+      16
+     ]
+    }
+   },
+   "values_f32_hex": "001039bc00389abf00c0f6c00010b93f0054673d00381abf0054e7c000e8d73f00c0f6bd00c0f6bf00a429c000381a4100cc8abf00389a410010394100a4294100cc8a42007c484000c0f6bc00cc0a3c007c483f0054e7c00054e7c10054e73f00a4a9c100c0f63f00389abf00389a3c0054674000c076bf0054e7c000381ac30010b93f007c48be0010b9bb005467bf005467c100cc0abf007c48c20054e7bf0010393c00381a4100cc8a3f00e8d73f00cc0ac00054e73f001039bb00c076420010b9bb0010393f00e8573e00a429c200e857bc0000008000381a4100389abb00381a4000e8573f00e8d73e00381a3f00381abd00c0f63a00a4293c00c0763f00a4293f00381a3f00c0f63b00cc0abd0000000000103942007c48c100c076c100381ac100e8573d0010393d00cc0a4300381a3f007cc8be007c48c3000000000010b9bb00e8d7c100381a3d00e8d7bd00381abc00a429c300381a3c00e8d73c00a42942007cc8c000cc8a3c00a429c200a4a9bf007cc83e00e8d73e00c0763e0054e73d00e857be00e857bf00389a4200a429bc00a4a93e0010b94200cc0ac300c076c000389a3c00389abe00e8d73b00381ac200c076bc0054e73f0054673f0054e742001039bc0054674000000080005467bc00381a4200e8d7c0007c48c300a4a93c00381abd00c0f64200cc8a3e00cc8abf00389a3b0010b942001039bc"
+  }
+ ]
+}

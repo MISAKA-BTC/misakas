@@ -1,0 +1,423 @@
+{
+  "format": "palw-tir-v1/primitive-vectors/1",
+  "spec": "docs/spec/palw/04b-tensor-ir.md",
+  "primitive": "TopK",
+  "tag": 22,
+  "cases": [
+    {
+      "name": "ties_to_the_lowest_index",
+      "prim": {
+        "name": "TopK",
+        "attrs": [
+          [
+            "axis",
+            "0"
+          ],
+          [
+            "k",
+            "2"
+          ]
+        ],
+        "borsh_hex": "160002000000"
+      },
+      "inputs": [
+        {
+          "dtype": "i32",
+          "shape": [
+            6
+          ],
+          "data": [
+            "5",
+            "9",
+            "9",
+            "1",
+            "9",
+            "5"
+          ]
+        }
+      ],
+      "out": {
+        "dtype": "idx",
+        "shape": [
+          2
+        ]
+      },
+      "expect": {
+        "dtype": "idx",
+        "shape": [
+          2
+        ],
+        "data": [
+          "1",
+          "2"
+        ]
+      }
+    },
+    {
+      "name": "ties_past_the_first_value",
+      "prim": {
+        "name": "TopK",
+        "attrs": [
+          [
+            "axis",
+            "0"
+          ],
+          [
+            "k",
+            "4"
+          ]
+        ],
+        "borsh_hex": "160004000000"
+      },
+      "inputs": [
+        {
+          "dtype": "i32",
+          "shape": [
+            6
+          ],
+          "data": [
+            "5",
+            "9",
+            "9",
+            "1",
+            "9",
+            "5"
+          ]
+        }
+      ],
+      "out": {
+        "dtype": "idx",
+        "shape": [
+          4
+        ]
+      },
+      "expect": {
+        "dtype": "idx",
+        "shape": [
+          4
+        ],
+        "data": [
+          "0",
+          "1",
+          "2",
+          "4"
+        ]
+      }
+    },
+    {
+      "name": "all_equal",
+      "prim": {
+        "name": "TopK",
+        "attrs": [
+          [
+            "axis",
+            "0"
+          ],
+          [
+            "k",
+            "3"
+          ]
+        ],
+        "borsh_hex": "160003000000"
+      },
+      "inputs": [
+        {
+          "dtype": "i64",
+          "shape": [
+            5
+          ],
+          "data": [
+            "0",
+            "0",
+            "0",
+            "0",
+            "0"
+          ]
+        }
+      ],
+      "out": {
+        "dtype": "idx",
+        "shape": [
+          3
+        ]
+      },
+      "expect": {
+        "dtype": "idx",
+        "shape": [
+          3
+        ],
+        "data": [
+          "0",
+          "1",
+          "2"
+        ]
+      }
+    },
+    {
+      "name": "k_is_n",
+      "prim": {
+        "name": "TopK",
+        "attrs": [
+          [
+            "axis",
+            "0"
+          ],
+          [
+            "k",
+            "3"
+          ]
+        ],
+        "borsh_hex": "160003000000"
+      },
+      "inputs": [
+        {
+          "dtype": "i8",
+          "shape": [
+            3
+          ],
+          "data": [
+            "-128",
+            "127",
+            "0"
+          ]
+        }
+      ],
+      "out": {
+        "dtype": "idx",
+        "shape": [
+          3
+        ]
+      },
+      "expect": {
+        "dtype": "idx",
+        "shape": [
+          3
+        ],
+        "data": [
+          "0",
+          "1",
+          "2"
+        ]
+      }
+    },
+    {
+      "name": "per_row",
+      "prim": {
+        "name": "TopK",
+        "attrs": [
+          [
+            "axis",
+            "1"
+          ],
+          [
+            "k",
+            "2"
+          ]
+        ],
+        "borsh_hex": "160102000000"
+      },
+      "inputs": [
+        {
+          "dtype": "i32",
+          "shape": [
+            2,
+            4
+          ],
+          "data": [
+            "1",
+            "4",
+            "4",
+            "2",
+            "-1",
+            "-1",
+            "-1",
+            "0"
+          ]
+        }
+      ],
+      "out": {
+        "dtype": "idx",
+        "shape": [
+          2,
+          2
+        ]
+      },
+      "expect": {
+        "dtype": "idx",
+        "shape": [
+          2,
+          2
+        ],
+        "data": [
+          "1",
+          "2",
+          "0",
+          "3"
+        ]
+      }
+    },
+    {
+      "name": "along_axis0",
+      "prim": {
+        "name": "TopK",
+        "attrs": [
+          [
+            "axis",
+            "0"
+          ],
+          [
+            "k",
+            "1"
+          ]
+        ],
+        "borsh_hex": "160001000000"
+      },
+      "inputs": [
+        {
+          "dtype": "i32",
+          "shape": [
+            3,
+            2
+          ],
+          "data": [
+            "1",
+            "6",
+            "5",
+            "6",
+            "5",
+            "0"
+          ]
+        }
+      ],
+      "out": {
+        "dtype": "idx",
+        "shape": [
+          1,
+          2
+        ]
+      },
+      "expect": {
+        "dtype": "idx",
+        "shape": [
+          1,
+          2
+        ],
+        "data": [
+          "1",
+          "0"
+        ]
+      }
+    },
+    {
+      "name": "error_k_zero",
+      "prim": {
+        "name": "TopK",
+        "attrs": [
+          [
+            "axis",
+            "0"
+          ],
+          [
+            "k",
+            "0"
+          ]
+        ],
+        "borsh_hex": "160000000000"
+      },
+      "inputs": [
+        {
+          "dtype": "i32",
+          "shape": [
+            3
+          ],
+          "data": [
+            "1",
+            "2",
+            "3"
+          ]
+        }
+      ],
+      "out": {
+        "dtype": "idx",
+        "shape": [
+          0
+        ]
+      },
+      "expect_error": "Shape"
+    },
+    {
+      "name": "error_k_past_n",
+      "prim": {
+        "name": "TopK",
+        "attrs": [
+          [
+            "axis",
+            "0"
+          ],
+          [
+            "k",
+            "4"
+          ]
+        ],
+        "borsh_hex": "160004000000"
+      },
+      "inputs": [
+        {
+          "dtype": "i32",
+          "shape": [
+            3
+          ],
+          "data": [
+            "1",
+            "2",
+            "3"
+          ]
+        }
+      ],
+      "out": {
+        "dtype": "idx",
+        "shape": [
+          4
+        ]
+      },
+      "expect_error": "Shape"
+    },
+    {
+      "name": "error_out_not_idx",
+      "prim": {
+        "name": "TopK",
+        "attrs": [
+          [
+            "axis",
+            "0"
+          ],
+          [
+            "k",
+            "1"
+          ]
+        ],
+        "borsh_hex": "160001000000"
+      },
+      "inputs": [
+        {
+          "dtype": "i32",
+          "shape": [
+            3
+          ],
+          "data": [
+            "1",
+            "2",
+            "3"
+          ]
+        }
+      ],
+      "out": {
+        "dtype": "i32",
+        "shape": [
+          1
+        ]
+      },
+      "expect_error": "Shape"
+    }
+  ]
+}

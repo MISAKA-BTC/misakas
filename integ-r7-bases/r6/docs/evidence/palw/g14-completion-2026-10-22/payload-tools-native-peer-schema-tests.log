@@ -1,0 +1,25 @@
+test_conflicting_facts_reused_sequence_gap_unknown_encoding_and_mass_fail (test_audit.Audit) ... ok
+test_detach_and_reaccept_use_full_block_identity_at_same_daa (test_audit.Audit) ... ok
+test_duplicate_success_id_does_not_double_count_or_double_count_borsh_bytes (test_audit.Audit) ... ok
+test_initial_pool_target_is_not_achieved_or_nominal_offered_count (test_audit.Audit) ... ok
+test_mismatched_response_is_not_rpc_acceptance (test_audit.Audit) ... ok
+test_missing_error_and_partial_observer_are_unknown_despite_complete_sender (test_audit.Audit) ... ok
+test_missing_malformed_and_inflight_are_unknown_not_zero (test_audit.Audit) ... ok
+test_observation_keeps_carrying_accepting_and_mempool_daa_separate (test_audit.Audit) ... ok
+test_rate_uses_monotonic_elapsed_and_bad_monotonic_is_unknown (test_audit.Audit) ... ok
+test_success_rejected_unknown_are_distinct_and_false_is_never_rejection (test_audit.Audit) ... ok
+test_capabilities_and_hash_are_required_before_a_sender_command_is_formed (test_driver.Driver) ... ok
+test_funding_rpc_txid_alone_never_passes_actual_output_readiness (test_launch.Launch) ... ok
+test_actual_native_response_shape_and_numeric_loopback_addresses (test_native_peers.NativePeers) ... ok
+test_external_addresses_unknown_schema_missing_fields_and_boolean_ports_refuse (test_native_peers.NativePeers) ... ok
+test_log_failure_happens_after_all_children_and_graceful_exit_is_preferred (test_owned_process.Cleanup) ... ok
+test_one_failure_or_interrupt_does_not_skip_later_owned_children (test_owned_process.Cleanup) ... ok
+test_timeouts_escalate_owned_group_to_kill_and_reap (test_owned_process.Cleanup) ... ok
+test_gzip_record_roundtrip_and_exclusive_creation (test_trace_io.TraceIO) ... ok
+test_observer_is_walked_once_and_gzip_paths_match_list_semantics (test_trace_io.TraceIO) ... ok
+test_truncated_gzip_and_bad_json_are_explicit_audit_failure (test_trace_io.TraceIO) ... ok
+
+----------------------------------------------------------------------
+Ran 20 tests in 0.015s
+
+OK

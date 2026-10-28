@@ -1,0 +1,6 @@
+
+running 1 test
+test palw_lifecycle_objects_v2::tests::a2u::registered_opaque_contradictions_and_staged_fenced_forms_keep_their_isolation_rules ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3919 filtered out; finished in 0.02s
+

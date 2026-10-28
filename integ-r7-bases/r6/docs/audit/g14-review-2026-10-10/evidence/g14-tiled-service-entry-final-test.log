@@ -1,0 +1,7 @@
+
+running 1 test
+[service-tiled] ordinary signed class registration accepted; root 3787613f6abc83efb816feac58efdc401ecb50d93efc976e30c5772e6a9c7ff8b1fc5bf0685cf743ffead044bd69e7dfe434e816e84b2dd1f8cd17d003b65d46, 4099 lanes, canonical 1/2
+test palw_panel::palw_service_public_e2e::tiled::registered_tiled_constraint_class_passes_normal_registration_and_host_resolution ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 642 filtered out; finished in 44.61s
+

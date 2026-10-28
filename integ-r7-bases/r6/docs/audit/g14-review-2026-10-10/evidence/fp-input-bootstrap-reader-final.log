@@ -1,0 +1,12 @@
+
+running 7 tests
+test palw_panel::accepted_objects_walk_tests::a_missing_header_acceptance_block_or_parent_never_completes_a_history_page ... ok
+test palw_panel::accepted_objects_walk_tests::paged_history_reads_every_block_even_when_daa_does_not_count_the_blocks ... ok
+test palw_panel::accepted_objects_walk_tests::the_filer_resumes_at_its_original_tip_and_restarts_backfill_after_a_reorg ... ok
+test palw_panel::accepted_objects_walk_tests::the_fp_bootstrap_reads_only_the_recorded_accepted_commitment_and_pins_every_job_field ... ok
+test palw_panel::accepted_objects_walk_tests::the_filer_reads_only_the_requested_authenticated_legacy_unit_from_public_history ... ok
+test palw_panel::accepted_objects_walk_tests::the_walk_visits_what_the_chain_accepted_newest_first_and_stops_at_the_height ... ok
+test palw_panel::accepted_objects_walk_tests::the_held_reader_reaches_old_filings_before_publishing_and_restarts_on_a_fork ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 591 filtered out; finished in 1.95s
+

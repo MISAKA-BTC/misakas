@@ -1,0 +1,18 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "granitemoe",
+  "doc": "GraniteMoE: Granite multipliers, top-k of the raw router logits then softmax over the k, fused input_linear experts (gate rows first).",
+  "extends": ["granite"],
+  "match": {"architectures": ["GraniteMoeForCausalLM"], "model_types": ["granitemoe"]},
+  "config": {"defaults": {"num_experts_per_tok": 2}},
+  "vars": [
+    {"name": "e", "value": {"$alias": [["num_local_experts", "num_experts"], 8]}},
+    {"name": "k", "value": {"$cfg": "num_experts_per_tok"}},
+    {"name": "topk_ok", "value": {"$bad": [{"$and": [{"$gt": [{"$var": "k"}, 0]}, {"$le": [{"$var": "k"}, {"$var": "e"}]}]}, {"$cat": ["top-k ", {"$var": "k"}, " of ", {"$var": "e"}, " experts"]}]}},
+    {"name": "l_ffn", "value": {"Moe": {"experts": {"$var": "e"}, "top_k": {"$var": "k"}, "intermediate": {"$var": "inter"}, "act": {"$var": "act"}, "router": {"scoring": "TopKThenSoftmax", "normalize": false}}}, "layer": true},
+    {"name": "experts_layout", "value": "FusedGateFirst"},
+    {"name": "names", "value": {"$merge": [{"$var": "names_base"}, {"moe.router": "{p}layers.{L}.block_sparse_moe.router.layer", "moe.gate_up.stacked": "{p}layers.{L}.block_sparse_moe.input_linear.weight", "moe.down.stacked": "{p}layers.{L}.block_sparse_moe.output_linear.weight"}]}},
+    {"name": "families", "value": ["C3", "C8"]},
+    {"name": "model_type", "value": "granitemoe"}
+  ]
+}

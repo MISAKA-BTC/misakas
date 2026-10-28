@@ -1,0 +1,26 @@
+{
+  "v": 1,
+  "width": 6,
+  "height": 5,
+  "default": 0,
+  "palette": [
+    { "tile": 0, "cost": 1, "passable": true },
+    { "tile": 1, "cost": 0, "passable": false },
+    { "tile": 2, "cost": 4, "passable": true }
+  ],
+  "runs": [
+    [0, 1, 4, 1],
+    [2, 3, 4, 2],
+    [5, 0, 1, 2]
+  ],
+  "nodes": [
+    { "id": "gate", "x": 0, "y": 0, "attrs": { "tier": 1 } },
+    { "id": "keep", "x": 5, "y": 4, "attrs": { "tier": 3, "guards": 12 } },
+    { "id": "well", "x": 0, "y": 4, "attrs": {} }
+  ],
+  "edges": [
+    { "from": "gate", "to": "keep", "w": 9 },
+    { "from": "keep", "to": "well", "w": 4 },
+    { "from": "well", "to": "gate", "w": 2 }
+  ]
+}

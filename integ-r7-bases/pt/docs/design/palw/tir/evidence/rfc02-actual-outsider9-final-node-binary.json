@@ -1,0 +1,41 @@
+{
+  "recorded_utc": "2026-10-11T12:47:28.893281+00:00",
+  "component": "node",
+  "binary": "/tmp/rfc02-actual-outsider9-final-immutable-abecd6240447/kaspa_consensus-678bc0334014b538",
+  "binary_sha256": "abecd62404473738ba351df776da40058748d25c26fd0fd22e499dd0f67f49a8",
+  "compiler_artifact": {
+    "reason": "compiler-artifact",
+    "package_id": "path+file:///Users/wata/.codex/worktrees/08bd/MISAKA-testnet/consensus#kaspa-consensus@1.1.0",
+    "manifest_path": "/Users/wata/.codex/worktrees/08bd/MISAKA-testnet/consensus/Cargo.toml",
+    "target": {
+      "kind": [
+        "lib"
+      ],
+      "crate_types": [
+        "lib"
+      ],
+      "name": "kaspa_consensus",
+      "src_path": "/Users/wata/.codex/worktrees/08bd/MISAKA-testnet/consensus/src/lib.rs",
+      "edition": "2024",
+      "doc": true,
+      "doctest": true,
+      "test": true
+    },
+    "profile": {
+      "opt_level": "2",
+      "debuginfo": 2,
+      "debug_assertions": true,
+      "overflow_checks": true,
+      "test": true
+    },
+    "features": [
+      "default",
+      "pq-only"
+    ],
+    "filenames": [
+      "/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/kaspa_consensus-678bc0334014b538"
+    ],
+    "executable": "/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/kaspa_consensus-678bc0334014b538",
+    "fresh": false
+  }
+}

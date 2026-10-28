@@ -1,0 +1,167 @@
+{
+  "format": "palw-tir-v2/pipeline-vectors/1",
+  "spec": "docs/spec/palw/04b-tensor-ir.md §15",
+  "name": "toy-vision",
+  "pipeline_borsh_hex": "01000100000006000000766973696f6e00000001000000010000000001000000060000",
+  "programs": [
+    {
+      "program_borsh_hex": "020061fa4aa57adfc79053c5e517515e50c7ae7c036abc43ff931053144691ba31c9212539a93514f831a8472ca75a39b094177736aa5818eeae547bb31fbf89f589010000000000040001000000090000007669732e696d6167650103000000020000000300000003000000000000000000000000ff0000000000000001000000050000007669732e7700020000000300000004000000000200000002000000000400000002000000020000000004000000ff0000000000000002000000070000007669732e7072650000000006000000070100000005020203000000000200000000030000000003000000000a0200000000000003000002030000000002000000000300000000030000000009020000000001000301000203000000000200000000030000000003000000000001000000000200020200000000060000000003000000000b02000000000300020000020200000000060000000004000000000c000100000000040002020000000001000000000400000001010000000500080000007669732e706f737401000000020200000000010000000004000000010000000f00000080ffffffffffffff7f000000000100000001000202000000000100000000040000000100000000000000000001020000",
+      "graph_ir_root_hex": "0236e6c33b9cafd17d5cab5e81c244fbd801e29d97b9d70a067129e765e34372b5e84ccb8ada11006b2e84e270ec626289d11b3a95a0564baa9f73a776611416",
+      "params": [
+        {
+          "param": 0,
+          "layer": null,
+          "le_hex": "2ee49ae8530b67f567647436"
+        }
+      ]
+    }
+  ],
+  "job": {
+    "prompt": [],
+    "negative": [],
+    "steps": 0,
+    "scalars": [],
+    "images": [
+      {
+        "h": 2,
+        "w": 3,
+        "rgb_hex": "0b30557a9fc4e90e33587da2c7ec11365b80",
+        "tile_len": 4,
+        "input_root_hex": "453f62dbd6e9c8ec8fb5c07eb20e694b20d04a429f90342800dd1126df3fffd09eb8d751ae84a531177dda484bafb45f5c56881c29f85fbc63dacea2a35c29c1",
+        "tiles": [
+          {
+            "tile": 0,
+            "bytes_hex": "0b30557a",
+            "proof_hex": [
+              "e123a454256b650ced63c34ae681ca9b74585b93b36b75ec4e94df615649e20b0464f0374c658de9c36c783d0182df075a0784ec7d9b517db7c8b8447ff0a36d",
+              "be72464efd05808ada550ac992b6706510855b884f791f86f71168edae1cb27b2d92e30de85bcbdf5da020dc0725b95c3befd8cb4ce6fe52a1a7ab9276bbf62e",
+              "fe77205792ebd2ae9c9d748e99ece928e8246a4b25983ef6663b270c31a1d078a40df34341076101c44ae30f9ece2f1141a0bb1478f36185b3b008d183a20544"
+            ]
+          },
+          {
+            "tile": 1,
+            "bytes_hex": "9fc4e90e",
+            "proof_hex": [
+              "61ed0c26eb4eee1302ce898ef9e8262a27b84599f7061143bb7916d61019a162ec444bffc33fb8bb64f855944f9cda0196258121f39ff0e7dba5fb0bb7a34b3f",
+              "be72464efd05808ada550ac992b6706510855b884f791f86f71168edae1cb27b2d92e30de85bcbdf5da020dc0725b95c3befd8cb4ce6fe52a1a7ab9276bbf62e",
+              "fe77205792ebd2ae9c9d748e99ece928e8246a4b25983ef6663b270c31a1d078a40df34341076101c44ae30f9ece2f1141a0bb1478f36185b3b008d183a20544"
+            ]
+          },
+          {
+            "tile": 2,
+            "bytes_hex": "33587da2",
+            "proof_hex": [
+              "8ef4cd6fa2e732cc0f8564ec54d9e43068f24db21c662d6b58abb5c2c8adb9bac90500e22b24d795df1d63de9a687a32fd741d4ce91b67e14105e3308497a6ba",
+              "77c3b830a7a0498a1f9c143e94071335f7db00694b4e5b7f8c000a4af7bc497c89dcbdb808da59ce1b7fa4fe0609856d5f041c31f03f6a25696f09962a5065e0",
+              "fe77205792ebd2ae9c9d748e99ece928e8246a4b25983ef6663b270c31a1d078a40df34341076101c44ae30f9ece2f1141a0bb1478f36185b3b008d183a20544"
+            ]
+          },
+          {
+            "tile": 3,
+            "bytes_hex": "c7ec1136",
+            "proof_hex": [
+              "0282fa7eba5d14936f022b2d06cd25a3c08ed9ef0a0eb74ebc7fd3fac3e14017689b83dbd07ccc4aaa93e462163b5bfb903c15662b331656deedbda352e8bd5e",
+              "77c3b830a7a0498a1f9c143e94071335f7db00694b4e5b7f8c000a4af7bc497c89dcbdb808da59ce1b7fa4fe0609856d5f041c31f03f6a25696f09962a5065e0",
+              "fe77205792ebd2ae9c9d748e99ece928e8246a4b25983ef6663b270c31a1d078a40df34341076101c44ae30f9ece2f1141a0bb1478f36185b3b008d183a20544"
+            ]
+          },
+          {
+            "tile": 4,
+            "bytes_hex": "5b80",
+            "proof_hex": [
+              "396329ddb33ed2e880619463fac8082c09f6fc2420a9272ea86ec44b7c43003174f481837f7809c74d74e06a570102290328248042cb7023f49f41cf05670ebf"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "seed_hex": "0000000000000000000000000000000000000000000000000000000000000000",
+  "item_index": 0,
+  "random_inputs": [],
+  "stages": [
+    {
+      "name": "vision",
+      "trip": 1,
+      "tokens": [],
+      "steps": [
+        {
+          "pos": 0,
+          "token": 0,
+          "output": {
+            "dtype": "i32",
+            "shape": [
+              1,
+              4
+            ],
+            "data": [
+              "-46564",
+              "-23976",
+              "-36352",
+              "-8800"
+            ]
+          },
+          "commits": [
+            {
+              "slot": 5,
+              "block": 0,
+              "layer": null,
+              "node": 5,
+              "value": {
+                "dtype": "i32",
+                "shape": [
+                  1,
+                  4
+                ],
+                "data": [
+                  "-46564",
+                  "-23976",
+                  "-36352",
+                  "-8800"
+                ]
+              }
+            },
+            {
+              "slot": 6,
+              "block": 1,
+              "layer": null,
+              "node": 0,
+              "value": {
+                "dtype": "i32",
+                "shape": [
+                  1,
+                  4
+                ],
+                "data": [
+                  "-46564",
+                  "-23976",
+                  "-36352",
+                  "-8800"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "output": {
+    "dtype": "i32",
+    "shape": [
+      1,
+      4
+    ],
+    "data": [
+      "-46564",
+      "-23976",
+      "-36352",
+      "-8800"
+    ]
+  },
+  "output_image": {
+    "spec_borsh_hex": "03020000000100000004000000020000000000",
+    "tile_len": 4,
+    "canonical_hex": "1c4affff58a2ffff0072ffffa0ddffff",
+    "output_root_hex": "0488c28556244b71ee680feec9a3a613fde00a903aff8f90dd26e21ed1028620e4617901b51cb3dd83553edc678a728d6e9ffb7e65f44dcae65623a22e6cb781"
+  }
+}

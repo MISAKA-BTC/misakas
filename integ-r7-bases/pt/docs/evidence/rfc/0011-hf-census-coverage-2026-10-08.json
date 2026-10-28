@@ -1,0 +1,2897 @@
+{
+ "schema": "misaka.rfc11.hf-census-coverage.v1",
+ "meaning": "Re-measurement of the Hugging Face census snapshot on the tree named below at two rulesets, with the blockers in the Model Onboarding buckets and two denominators. A header/shape census: nothing here is a registration, and the registered column is evidence-bound.",
+ "snapshot": {
+  "id": "2026-10-03T131904Z",
+  "t0_utc": "2026-10-03T13:19:04+00:00",
+  "d_all": 3117871,
+  "manifest_sha256": "6451856de1e052fa3c0d187e42408b509886f481a4b1de41f24d26f876b8f319",
+  "sample_design_sha256": "f66a49d4d29c3a9c964fe06524ebd50d91ec9e12436f7c1c254c7536bc2aa920"
+ },
+ "tree": "d368707e0",
+ "binary_sha256": "8e2ff67487f85d1b76380a652c128f2acb53b44e948145bb7814c852bac1b12e",
+ "tools_sha256": {
+  "coverage_report.py": "4bb463d8f3d9acaaafccd138889814771ea051026675bf39d05326d8d962e2ce",
+  "buckets.py": "815812b477a843a4f3251513b458e008e75d206028da1269db2491d292a8fa9a",
+  "estimate.py": "ad358a07404b5f914a8b07aa80e3b69392d67a7ff27e947ad0bb23d9274a464c",
+  "report.py": "78a03dec0ddc50863acce6cdabf194699ae9e6e086cc9ee414706a5fd2ed397e",
+  "compact_rows.py": "f3929b0871dc45b12b457a94915f22525497e2fcefabc83305ababc8572dc233",
+  "shadow_dirs.py": "bebf28db6cdcb1034ac27dc2c8088440421374825c6833924db8f1c8173eae30",
+  "render_coverage.py": "b70e7210c3d8d2abaaae58de5da688776128a0b0f70e250056ac4ce5a4831721",
+  "assemble_evidence.py": "b3ebc403bdb8b50fdda473bdbc4679cf45669004b061b4066eb1fb11a32c091c"
+ },
+ "estimator": "hf-census-v1 \u00a74/\u00a74b: exact counts over the baseline-decided repositories by the current listing verdict; Horvitz\u2013Thompson over the stratified header sample (n = 1,773); the three baseline bucket cohorts (n = 150 each) post-stratified by the exact current-listing verdict of their frames; one-sided 95% Korn\u2013Graubard lower bounds; the plain cohort expansion of update 2 is reported beside it (`plain_method`). Shape-depth judgment of every sampled repository; no repository without a row is dropped (nonresponse = UNTESTED).",
+ "denominator_b_rule": "D_b = D_all minus every repository whose primary blocker is external: MISSING_WEIGHTS (no weight file, an incomplete shard set, an unreachable repository, an unreadable header), GATED (gated or disabled), ADAPTER_BASE_MISSING (an adapter whose base is absent, ambiguous, not in the snapshot or gated), NO_MODEL_TASK (no declared task and no configuration naming a model class, or no readable configuration). The listing-decided part is exact from the snapshot; the header-decided part is estimated from the sample.",
+ "buckets": {
+  "external": [
+   "MISSING_WEIGHTS",
+   "GATED",
+   "ADAPTER_BASE_MISSING",
+   "NO_MODEL_TASK"
+  ],
+  "software_closable": [
+   "FRONTEND",
+   "NEW_KERNEL",
+   "QUANT_FORMAT",
+   "RESOURCE",
+   "UNTESTED"
+  ]
+ },
+ "rulesets": {
+  "a": {
+   "ruleset": {
+    "network": "testnet-12",
+    "height": 6900,
+    "trees": [
+     "d368707e0"
+    ]
+   },
+   "sample": {
+    "n": 1773,
+    "nonresponse_as_failure": 0,
+    "units": 1937
+   },
+   "d_all": 3117871,
+   "evidence_depth": {
+    "listing_only_exact": 2228617,
+    "represented_by_header_read_units_est": 889254,
+    "header_read_units": 1937
+   },
+   "d_files_listing": 2247414,
+   "d_b": {
+    "total": 1605403.4,
+    "share_of_d_all": 0.5149037139951134,
+    "exact_part": 726228,
+    "external_est": 1512467.6
+   },
+   "shape_ready_over_d_all": {
+    "total": 518705.8,
+    "share": 0.16636536929693468,
+    "se": 0.0055481321720914035,
+    "lb95": 0.15729024392935054
+   },
+   "shape_ready_over_d_files": {
+    "total": 518705.8,
+    "share": 0.23080116094996428,
+    "se": 0.00769700660560573,
+    "lb95": 0.21817208484282807
+   },
+   "lower_pass_over_d_all": {
+    "total": 579988.5,
+    "share": 0.18602067555682,
+    "se": 0.005638333005222391,
+    "lb95": 0.1767855090512988
+   },
+   "shape_ready_over_d_b": {
+    "total": 518705.8,
+    "denominator": 1605403.4,
+    "share": 0.32309995980824013,
+    "se": 0.010769455012213517,
+    "lb95": 0.3053330670257952
+   },
+   "short_context_only_over_d_all": {
+    "total": 508.2,
+    "share": 0.000162990493619952,
+    "se": 0.0001455128616779688,
+    "lb95": 1.3837526216165904e-05
+   },
+   "shape_ready_no_fleet_seat_tier_holds_it_over_d_all": {
+    "total": 194994.6,
+    "share": 0.06254093069566798,
+    "se": 0.004605936727801716,
+    "lb95": 0.05513021512071095
+   },
+   "shape_ready_context_split_over_d_all": {
+    "at_declared_context": {
+     "total": 133293.7,
+     "share": 0.0427515157618502,
+     "se": 0.003055802224176968,
+     "lb95": 0.03783841055683254
+    },
+    "at_cap_8192_declared_wider": {
+     "total": 385412.0,
+     "share": 0.12361385353508449,
+     "se": 0.005598853103838283,
+     "lb95": 0.11449789466308494
+    }
+   },
+   "ceiling_if_every_software_closable_fixed": {
+    "external_total": 1512467.6,
+    "share_external": 0.48509628600488675,
+    "ceiling": 0.5149037139951133,
+    "se": 0.00046787173636224854,
+    "ceiling_lb95": 0.5141336679676567,
+    "ceiling_ub95_normal": 0.5156732945176168,
+    "ceiling_if_no_model_task_were_closable": 0.7177305245432823,
+    "no_model_task_est": 632387.8
+   },
+   "software_closable_failures": {
+    "repos_est": 1086697.6,
+    "share_d_all": 0.34853834469817846,
+    "share_d_b": 0.6769000401917595
+   },
+   "external_failures": {
+    "repos_est": 1512467.6,
+    "share_d_all": 0.48509628600488675
+   },
+   "download_weighted_shape_ready": {
+    "share": 0.08207023708355861,
+    "lb95_normal": 0.07949038761177495
+   },
+   "dimension": {
+    "external": {
+     "repos_est": 1512467.6,
+     "share_d_all": 0.48509628600488686
+    },
+    "protocol-envelope": {
+     "repos_est": 574615.7,
+     "share_d_all": 0.1842974534549475
+    },
+    "success": {
+     "repos_est": 518705.8,
+     "share_d_all": 0.16636536929693446
+    },
+    "feature-only": {
+     "repos_est": 213906.2,
+     "share_d_all": 0.06860650526471394
+    },
+    "frontend-only": {
+     "repos_est": 176070.7,
+     "share_d_all": 0.05647144002782387
+    },
+    "untested": {
+     "repos_est": 122105.0,
+     "share_d_all": 0.03916294595069308
+    }
+   },
+   "encoder_decoder_classes": {
+    "CLOSE_TOO_LARGE(generative close sizing work)": 16751.2,
+    "ADMISSION_EXCEEDS(max_position_macs)": 5812.7,
+    "ADMISSION_EXCEEDS(max_job_step_leaves)": 2618.2,
+    "TOKENIZER_MISSING": 2210.4,
+    "NOT_RUN_PIPELINE_ADMISSION": 439.6,
+    "ARCH_REFUSED(encdec-normal-form)": 433.3
+   },
+   "text_only_partial_cohort": {
+    "N": 52091,
+    "n": 150,
+    "members": 150,
+    "text_stage_admitted": 25,
+    "vision_class_admitted_dormant_fences": 0,
+    "has_image_probe": 81
+   },
+   "unmapped": {},
+   "class_disagreements": {},
+   "plain_method": {
+    "d_b": {
+     "total": 1693228.5,
+     "share_of_d_all": 0.5430720121703745,
+     "exact_part": 564968,
+     "external_est": 1424642.5
+    },
+    "shape_ready_over_d_all": {
+     "total": 564430.4,
+     "share": 0.18103072322127162,
+     "se": 0.008009222384576676,
+     "lb95": 0.1679447122237267
+    },
+    "shape_ready_over_d_b": {
+     "total": 564430.4,
+     "denominator": 1693228.5,
+     "share": 0.33334570584439915,
+     "se": 0.013593349940125222,
+     "lb95": 0.3108904133906303
+    },
+    "ceiling_if_every_software_closable_fixed": {
+     "external_total": 1424642.5,
+     "share_external": 0.4569279878296255,
+     "ceiling": 0.5430720121703745,
+     "se": 0.011747654999106717,
+     "ceiling_lb95": 0.5234289143431061,
+     "ceiling_ub95_normal": 0.5623951851038298,
+     "ceiling_if_no_model_task_were_closable": 0.7153983027590372,
+     "no_model_task_est": 537291.1
+    },
+    "external_failures": {
+     "repos_est": 1424642.5,
+     "share_d_all": 0.4569279878296255
+    },
+    "software_closable_failures": {
+     "repos_est": 1128798.0,
+     "share_d_all": 0.36204128894910276,
+     "share_d_b": 0.6666542941556006
+    }
+   },
+   "buckets": [
+    {
+     "bucket": "SHAPE_READY",
+     "family": "success(shape)",
+     "repos_est": 518705.8,
+     "share_d_all": 0.16636536929693446,
+     "share_d_b": 0.32309995980823975,
+     "downloads_share": 0.08207023708355822
+    },
+    {
+     "bucket": "MISSING_WEIGHTS",
+     "family": "external",
+     "repos_est": 590290.2,
+     "share_d_all": 0.18932477056033162,
+     "share_d_b": null,
+     "downloads_share": 0.004323364591556405
+    },
+    {
+     "bucket": "GATED",
+     "family": "external",
+     "repos_est": 53419.6,
+     "share_d_all": 0.017133357986908376,
+     "share_d_b": null,
+     "downloads_share": 0.027169862350738337
+    },
+    {
+     "bucket": "ADAPTER_BASE_MISSING",
+     "family": "external",
+     "repos_est": 236370,
+     "share_d_all": 0.07581134690947765,
+     "share_d_b": null,
+     "downloads_share": 0.0010787034993781424
+    },
+    {
+     "bucket": "FRONTEND",
+     "family": "software-closable",
+     "repos_est": 330725.5,
+     "share_d_all": 0.10607416079406451,
+     "share_d_b": 0.20600776011312905,
+     "downloads_share": 0.19623336208908393
+    },
+    {
+     "bucket": "NEW_KERNEL",
+     "family": "software-closable",
+     "repos_est": 536365,
+     "share_d_all": 0.17202924688032314,
+     "share_d_b": 0.3340998369298144,
+     "downloads_share": 0.44795607731502457
+    },
+    {
+     "bucket": "QUANT_FORMAT",
+     "family": "software-closable",
+     "repos_est": 59251.3,
+     "share_d_all": 0.019003784498473276,
+     "share_d_b": 0.03690745275660146,
+     "downloads_share": 0.1748228981127797
+    },
+    {
+     "bucket": "RESOURCE",
+     "family": "software-closable",
+     "repos_est": 38250.7,
+     "share_d_all": 0.012268206574624466,
+     "share_d_b": 0.02382621496247529,
+     "downloads_share": 0.015527317917091877
+    },
+    {
+     "bucket": "UNTESTED",
+     "family": "software-closable",
+     "repos_est": 122105.0,
+     "share_d_all": 0.039162945950693084,
+     "share_d_b": 0.07605877542973939,
+     "downloads_share": 0.038579687391589554
+    },
+    {
+     "bucket": "NO_MODEL_TASK",
+     "family": "external",
+     "repos_est": 632387.8,
+     "share_d_all": 0.20282681054816912,
+     "share_d_b": null,
+     "downloads_share": 0.04921553442662505
+    }
+   ],
+   "codes_top": [
+    {
+     "bucket": "NO_MODEL_TASK",
+     "gate": "lower",
+     "code": "TASK_UNKNOWN",
+     "repos_est": 625173.0,
+     "share_d_all": 0.2005127858080081,
+     "downloads_share": 0.047238383636086026,
+     "top_args": [
+      [
+       "no-config",
+       625173
+      ]
+     ]
+    },
+    {
+     "bucket": "MISSING_WEIGHTS",
+     "gate": "source",
+     "code": "MISSING_WEIGHTS",
+     "repos_est": 579477.0,
+     "share_d_all": 0.18585663101520236,
+     "downloads_share": 0.0034182144769595124,
+     "top_args": []
+    },
+    {
+     "bucket": "SHAPE_READY",
+     "gate": "admit",
+     "code": "SHAPE_READY",
+     "repos_est": 518705.8,
+     "share_d_all": 0.16636536929693446,
+     "downloads_share": 0.08207023708355822,
+     "top_args": []
+    },
+    {
+     "bucket": "NEW_KERNEL",
+     "gate": "lower",
+     "code": "MODALITY_PROFILE_MISSING",
+     "repos_est": 458372.0,
+     "share_d_all": 0.14701442105847226,
+     "downloads_share": 0.3237730224812536,
+     "top_args": [
+      [
+       "text-classification",
+       149560
+      ],
+      [
+       "reinforcement-learning",
+       75402
+      ],
+      [
+       "automatic-speech-recognition",
+       41607
+      ],
+      [
+       "token-classification",
+       35316
+      ],
+      [
+       "robotics",
+       32059
+      ],
+      [
+       "image-classification",
+       30862
+      ],
+      [
+       "fill-mask",
+       21884
+      ],
+      [
+       "question-answering",
+       14988
+      ]
+     ]
+    },
+    {
+     "bucket": "ADAPTER_BASE_MISSING",
+     "gate": "source",
+     "code": "BASE_UNPINNED",
+     "repos_est": 236370.0,
+     "share_d_all": 0.07581134690947765,
+     "downloads_share": 0.0010787034993781424,
+     "top_args": [
+      [
+       "absent",
+       120903
+      ],
+      [
+       "base_gated",
+       106897
+      ],
+      [
+       "not_in_snapshot",
+       8570
+      ]
+     ]
+    },
+    {
+     "bucket": "FRONTEND",
+     "gate": "lower",
+     "code": "ARCH_REFUSED",
+     "repos_est": 115380.5,
+     "share_d_all": 0.037006167419786164,
+     "downloads_share": 0.09701586091833946,
+     "top_args": [
+      [
+       "gguf-namespace:mradermacher",
+       81003.6
+      ],
+      [
+       "gguf-arch:seed_oss",
+       5983.6
+      ],
+      [
+       "encdec-no-adapter:M2M100ForConditionalGeneration",
+       2577.9
+      ],
+      [
+       "lora-rslora-rank",
+       2565.2
+      ],
+      [
+       "config-no:architectures",
+       1920.2
+      ],
+      [
+       "LlamaForCausalLM",
+       1730.6
+      ],
+      [
+       "gguf-arch:qwen35moe",
+       1360.1
+      ],
+      [
+       "encdec-no-adapter:ParlerTTSForConditionalGeneration",
+       1299.0
+      ]
+     ]
+    },
+    {
+     "bucket": "UNTESTED",
+     "gate": "lower",
+     "code": "NOT_RUN_NEEDS_PICKLE_DIRECTORY",
+     "repos_est": 97360.3,
+     "share_d_all": 0.031226547878990357,
+     "downloads_share": 0.02914645768031651,
+     "top_args": [
+      [
+       "pytorch",
+       97360.3
+      ]
+     ]
+    },
+    {
+     "bucket": "NEW_KERNEL",
+     "gate": "lower",
+     "code": "PARTIAL_TASK_ONLY",
+     "repos_est": 77993.0,
+     "share_d_all": 0.025014825821850873,
+     "downloads_share": 0.12418305483377098,
+     "top_args": [
+      [
+       "image-text-to-text",
+       64627
+      ],
+      [
+       "any-to-any",
+       11576
+      ],
+      [
+       "visual-question-answering",
+       761
+      ],
+      [
+       "video-text-to-text",
+       468
+      ],
+      [
+       "audio-text-to-text",
+       347
+      ],
+      [
+       "document-question-answering",
+       214
+      ]
+     ]
+    },
+    {
+     "bucket": "FRONTEND",
+     "gate": "lower",
+     "code": "TASK_UNKNOWN",
+     "repos_est": 54160.0,
+     "share_d_all": 0.017370827721865337,
+     "downloads_share": 0.01426524625311354,
+     "top_args": []
+    },
+    {
+     "bucket": "GATED",
+     "gate": "source",
+     "code": "GATED_ACCESS",
+     "repos_est": 53419.6,
+     "share_d_all": 0.017133357986908376,
+     "downloads_share": 0.027169862350738337,
+     "top_args": [
+      [
+       "manual",
+       34213
+      ],
+      [
+       "auto",
+       19187
+      ],
+      [
+       "VibeThinker-3B.Q8_0.gguf",
+       9.8
+      ],
+      [
+       "MTP/gemma-4-12B-it-MTP-Q8_0.gguf",
+       9.8
+      ]
+     ]
+    },
+    {
+     "bucket": "FRONTEND",
+     "gate": "lower",
+     "code": "FEATURE_C",
+     "repos_est": 43811.3,
+     "share_d_all": 0.014051682637681754,
+     "downloads_share": 0.01533328841507366,
+     "top_args": [
+      [
+       "GEN_UNET_SKIP_V1",
+       28311.8
+      ],
+      [
+       "an adapter for `NewModel`",
+       2200.0
+      ],
+      [
+       "an adapter for `MetaClip2Model`",
+       1428.6
+      ],
+      [
+       "an adapter for `Qwen3Model`",
+       1315.6
+      ],
+      [
+       "a decoder adapter for the text decoder of `Qwen3VLForConditionalGeneration`",
+       1296.5
+      ],
+      [
+       "an adapter for `Gemma3TextModel`",
+       879.2
+      ],
+      [
+       "an adapter for `PicoDecoderHF`",
+       866.6
+      ],
+      [
+       "an adapter for `ConvBertModel`",
+       464.9
+      ]
+     ]
+    },
+    {
+     "bucket": "QUANT_FORMAT",
+     "gate": "lower",
+     "code": "FORMAT_UNSUPPORTED",
+     "repos_est": 42231.2,
+     "share_d_all": 0.01354487671060594,
+     "downloads_share": 0.006598003073535673,
+     "top_args": [
+      [
+       "pytorch",
+       9395
+      ],
+      [
+       "pytorch-adapter",
+       8221
+      ],
+      [
+       "onnx",
+       4959
+      ],
+      [
+       "gguf-split",
+       3765
+      ],
+      [
+       "tensorflow",
+       2220
+      ],
+      [
+       "numpy+pytorch+safetensors+zip",
+       1368
+      ],
+      [
+       "openvino",
+       1321
+      ],
+      [
+       "base:pytorch",
+       1282.6
+      ]
+     ]
+    },
+    {
+     "bucket": "FRONTEND",
+     "gate": "lower",
+     "code": "TOKENIZER_MISSING",
+     "repos_est": 29173.9,
+     "share_d_all": 0.009356998476259143,
+     "downloads_share": 0.00010852599871742168,
+     "top_args": []
+    },
+    {
+     "bucket": "FRONTEND",
+     "gate": "lower",
+     "code": "ADAPTER_REFUSED",
+     "repos_est": 25421.9,
+     "share_d_all": 0.00815360831629297,
+     "downloads_share": 6.683965929602625e-05,
+     "top_args": []
+    },
+    {
+     "bucket": "UNTESTED",
+     "gate": "admit",
+     "code": "NOT_RUN_PIPELINE_ADMISSION",
+     "repos_est": 23033.0,
+     "share_d_all": 0.007387420416939601,
+     "downloads_share": 0.009425853608908658,
+     "top_args": []
+    },
+    {
+     "bucket": "FRONTEND",
+     "gate": "lower",
+     "code": "CUSTOM_CODE_UNMODELLED",
+     "repos_est": 19558.4,
+     "share_d_all": 0.006273004238522416,
+     "downloads_share": 0.05998025534124945,
+     "top_args": [
+      [
+       "remote-code:QuasarForCausalLM",
+       3459.5
+      ],
+      [
+       "remote-code:PhiForCausalLM",
+       2162.2
+      ],
+      [
+       "remote-code:SDARForCausalLM",
+       1729.8
+      ],
+      [
+       "remote-code:NemotronHForCausalLM",
+       868.9
+      ],
+      [
+       "remote-code:NanochatGPTForCausalLM",
+       865.7
+      ],
+      [
+       "remote-code:MiniMaxM2ForCausalLM",
+       450.6
+      ],
+      [
+       "remote-code:JambaForCausalLM",
+       439.8
+      ],
+      [
+       "remote-code:LoopLMForCausalLM",
+       439.8
+      ]
+     ]
+    },
+    {
+     "bucket": "FRONTEND",
+     "gate": "lower",
+     "code": "CONFIG_KEY_UNREAD",
+     "repos_est": 18135.9,
+     "share_d_all": 0.005816743180856198,
+     "downloads_share": 0.0033213353871386084,
+     "top_args": [
+      [
+       "audio_config",
+       3411.6
+      ],
+      [
+       "max_seq_len",
+       2166.5
+      ],
+      [
+       "quantization",
+       1297.5
+      ],
+      [
+       "freeze_mm_mlp_adapter",
+       1297.5
+      ],
+      [
+       "language_model_only",
+       1283.6
+      ],
+      [
+       "use_reentrant_checkpointing",
+       1282.6
+      ],
+      [
+       "original_max_position_embeddings",
+       880.0
+      ],
+      [
+       "elementwise_affine",
+       864.9
+      ]
+     ]
+    },
+    {
+     "bucket": "RESOURCE",
+     "gate": "admit",
+     "code": "CLOSE_TOO_LARGE",
+     "repos_est": 16751.2,
+     "share_d_all": 0.005372654109554053,
+     "downloads_share": 0.00975937921835375,
+     "top_args": [
+      [
+       "generative close sizing work",
+       16751.2
+      ]
+     ]
+    },
+    {
+     "bucket": "FRONTEND",
+     "gate": "lower",
+     "code": "ADAPTER_UNCHECKED",
+     "repos_est": 16686.0,
+     "share_d_all": 0.005351728791858291,
+     "downloads_share": 0.0012397304218325375,
+     "top_args": []
+    },
+    {
+     "bucket": "RESOURCE",
+     "gate": "admit",
+     "code": "COURT_BUDGET",
+     "repos_est": 12559.4,
+     "share_d_all": 0.004028184529279186,
+     "downloads_share": 0.0036653674932248387,
+     "top_args": [
+      [
+       "IR tile multiply-accumulates",
+       9472.4
+      ]
+     ]
+    },
+    {
+     "bucket": "QUANT_FORMAT",
+     "gate": "lower",
+     "code": "QUANT_DESCRIPTOR_MISSING",
+     "repos_est": 12219.8,
+     "share_d_all": 0.003919274456243822,
+     "downloads_share": 0.16343525804234557,
+     "top_args": [
+      [
+       "config/unknown",
+       7387.1
+      ],
+      [
+       "hqq",
+       865.9
+      ],
+      [
+       "config/auto-round",
+       865.9
+      ],
+      [
+       "config/compressed-tensors/mixed-precision",
+       865.1
+      ],
+      [
+       "config/compressed-tensors/nvfp4-pack-quantized",
+       865.1
+      ],
+      [
+       "config/modelopt",
+       442.6
+      ],
+      [
+       "config/compressed-tensors/mxfp4-pack-quantized",
+       439.8
+      ],
+      [
+       "config/exl3",
+       432.4
+      ]
+     ]
+    },
+    {
+     "bucket": "MISSING_WEIGHTS",
+     "gate": "source",
+     "code": "WEIGHTS_INCOMPLETE",
+     "repos_est": 9903.8,
+     "share_d_all": 0.0031764774254120346,
+     "downloads_share": 0.0006549970069535855,
+     "top_args": [
+      [
+       "model",
+       9862.8
+      ],
+      [
+       "model.safetensors",
+       11
+      ],
+      [
+       "diffusion_pytorch_model",
+       6
+      ],
+      [
+       "adapter_model",
+       5
+      ],
+      [
+       "model-normalized",
+       4
+      ],
+      [
+       "pytorch_model",
+       3
+      ],
+      [
+       "model-model",
+       2
+      ],
+      [
+       "humo",
+       1
+      ]
+     ]
+    },
+    {
+     "bucket": "RESOURCE",
+     "gate": "admit",
+     "code": "ADMISSION_EXCEEDS",
+     "repos_est": 8939.1,
+     "share_d_all": 0.002867047204112464,
+     "downloads_share": 0.0021025667003137156,
+     "top_args": [
+      [
+       "max_position_macs",
+       6320.9
+      ],
+      [
+       "max_job_step_leaves",
+       2618.2
+      ]
+     ]
+    },
+    {
+     "bucket": "NO_MODEL_TASK",
+     "gate": "lower",
+     "code": "CONFIG_MISSING",
+     "repos_est": 6781.2,
+     "share_d_all": 0.002174945660035325,
+     "downloads_share": 0.001366657696652592,
+     "top_args": [
+      [
+       "unet",
+       19.2
+      ],
+      [
+       "vae",
+       1.0
+      ],
+      [
+       "tags",
+       1.0
+      ],
+      [
+       "domains",
+       1.0
+      ]
+     ]
+    },
+    {
+     "bucket": "FRONTEND",
+     "gate": "lower",
+     "code": "TENSOR_MISSING",
+     "repos_est": 5695.9,
+     "share_d_all": 0.0018268669179463512,
+     "downloads_share": 0.0009232177756295135,
+     "top_args": [
+      [
+       "attn.q.w",
+       3476.8
+      ],
+      [
+       "embed.table",
+       1784.8
+      ],
+      [
+       "head.w",
+       434.3
+      ]
+     ]
+    },
+    {
+     "bucket": "QUANT_FORMAT",
+     "gate": "lower",
+     "code": "QUANT_REFUSED",
+     "repos_est": 4800.4,
+     "share_d_all": 0.0015396333316235124,
+     "downloads_share": 0.004789636996898455,
+     "top_args": [
+      [
+       "CT_FP8_CHANNEL",
+       1749.3
+      ],
+      [
+       "GPTQ",
+       1298.2
+      ],
+      [
+       "AWQ",
+       864.9
+      ],
+      [
+       "FP8_BLOCK",
+       455.6
+      ],
+      [
+       "CT_INT8_CHANNEL",
+       432.4
+      ]
+     ]
+    },
+    {
+     "bucket": "FRONTEND",
+     "gate": "lower",
+     "code": "TENSOR_SHAPE",
+     "repos_est": 1696.5,
+     "share_d_all": 0.0005441351367959737,
+     "downloads_share": 2.060121354928333e-05,
+     "top_args": [
+      [
+       "mlp.up.w",
+       1264.1
+      ],
+      [
+       "embed.table",
+       432.4
+      ]
+     ]
+    },
+    {
+     "bucket": "UNTESTED",
+     "gate": "lower",
+     "code": "NOT_SAMPLED_CELL",
+     "repos_est": 1206.0,
+     "share_d_all": 0.00038680240458954205,
+     "downloads_share": 0.0,
+     "top_args": [
+      [
+       "task_unknown/NOT_RUN_NEEDS_PICKLE_DIRECTORY",
+       1206
+      ]
+     ]
+    },
+    {
+     "bucket": "FRONTEND",
+     "gate": "lower",
+     "code": "TASK_MISMATCH",
+     "repos_est": 1005.2,
+     "share_d_all": 0.00032239795619999606,
+     "downloads_share": 0.003958460705144282,
+     "top_args": [
+      [
+       "feature-extraction\u2192text-generation",
+       522.4
+      ],
+      [
+       "sentence-similarity\u2192text-generation",
+       482.8
+      ]
+     ]
+    },
+    {
+     "bucket": "MISSING_WEIGHTS",
+     "gate": "source",
+     "code": "HEADER_INVALID",
+     "repos_est": 473.9,
+     "share_d_all": 0.00015200514467482215,
+     "downloads_share": 4.186922677421432e-06,
+     "top_args": [
+      [
+       "model",
+       434.4
+      ],
+      [
+       "aceinstruct-72b-q2_k.gguf",
+       9.8
+      ],
+      [
+       " DeepSeek-R1-Llama-8B.BF16.gguf",
+       9.8
+      ],
+      [
+       "ayncoding-qwen3-8b-light.gguf",
+       9.8
+      ],
+      [
+       "model_index.json",
+       2.7
+      ],
+      [
+       "prosparse-llama-2-7b-clip15.gguf",
+       2.2
+      ],
+      [
+       "prosparse-llama-2-13b.gguf",
+       2.2
+      ],
+      [
+       "cosmosbabel-v1.1-multitranslator-de-az-r",
+       1.0
+      ]
+     ]
+    },
+    {
+     "bucket": "UNTESTED",
+     "gate": "lower",
+     "code": "NOT_RUN_NEEDS_TENSOR_DATA",
+     "repos_est": 439.6,
+     "share_d_all": 0.00014100695937515126,
+     "downloads_share": 2.74246994837514e-06,
+     "top_args": [
+      [
+       "a tensor of the file",
+       439.6
+      ]
+     ]
+    },
+    {
+     "bucket": "MISSING_WEIGHTS",
+     "gate": "source",
+     "code": "FETCH_FAILED",
+     "repos_est": 435.4,
+     "share_d_all": 0.00013965697504240312,
+     "downloads_share": 0.0002459661849658853,
+     "top_args": [
+      [
+       "layer23-shared.safetensors",
+       434.4
+      ],
+      [
+       "(shards)",
+       1.0
+      ]
+     ]
+    },
+    {
+     "bucket": "NO_MODEL_TASK",
+     "gate": "lower",
+     "code": "CONFIG_INVALID",
+     "repos_est": 433.6,
+     "share_d_all": 0.00013907908012571099,
+     "downloads_share": 0.0006104930938864362,
+     "top_args": []
+    },
+    {
+     "bucket": "UNTESTED",
+     "gate": "lower",
+     "code": "NOT_RUN_NEEDS_WEIGHTS",
+     "repos_est": 66.0,
+     "share_d_all": 2.1168290798432654e-05,
+     "downloads_share": 4.633632416020452e-06,
+     "top_args": []
+    },
+    {
+     "bucket": "RESOURCE",
+     "gate": "source",
+     "code": "HEADER_TOO_LARGE",
+     "repos_est": 1.0,
+     "share_d_all": 3.20731678764131e-07,
+     "downloads_share": 4.505199572813927e-09,
+     "top_args": [
+      [
+       "model.safetensors.index.json",
+       1.0
+      ]
+     ]
+    }
+   ],
+   "top_software_closable_blockers": [
+    {
+     "rank": 1,
+     "bucket": "NEW_KERNEL",
+     "family": "NLU heads (classification / token / QA / fill-mask)",
+     "repos_est": 225210.0,
+     "share_d_all": 0.07223198137446996,
+     "sampled_units_behind_the_estimate": 0,
+     "leading_codes": [
+      [
+       "MODALITY_PROFILE_MISSING(text-classification)",
+       149560.0
+      ],
+      [
+       "MODALITY_PROFILE_MISSING(token-classification)",
+       35316.0
+      ],
+      [
+       "MODALITY_PROFILE_MISSING(fill-mask)",
+       21884.0
+      ],
+      [
+       "MODALITY_PROFILE_MISSING(question-answering)",
+       14988.0
+      ]
+     ],
+     "generic_change_that_would_close_it": "a canonical job profile for encoder heads: label / span / token logits as the committed output, the label set in the class (the frontend already lowers a sequence classifier as an Embedding-profile class); a `tasks.rs` row per head + one RFC-0003 profile"
+    },
+    {
+     "rank": 2,
+     "bucket": "NEW_KERNEL",
+     "family": "RL / robotics / tabular / time series / video / graph",
+     "repos_est": 114772.0,
+     "share_d_all": 0.036811016235116845,
+     "sampled_units_behind_the_estimate": 0,
+     "leading_codes": [
+      [
+       "MODALITY_PROFILE_MISSING(reinforcement-learning)",
+       75402.0
+      ],
+      [
+       "MODALITY_PROFILE_MISSING(robotics)",
+       32059.0
+      ],
+      [
+       "MODALITY_PROFILE_MISSING(text-to-video)",
+       2590.0
+      ],
+      [
+       "MODALITY_PROFILE_MISSING(image-to-video)",
+       1506.0
+      ]
+     ],
+     "generic_change_that_would_close_it": "no importer for these frameworks (SB3 zips, sklearn, torch pickles) and no canonical job: a per-family profile each; the least generic of the closable blockers"
+    },
+    {
+     "rank": 3,
+     "bucket": "UNTESTED",
+     "family": "PyTorch `pytorch_model.bin` (zip directory + pickle not read)",
+     "repos_est": 97360.3,
+     "share_d_all": 0.03122653246397943,
+     "sampled_units_behind_the_estimate": 15,
+     "leading_codes": [
+      [
+       "NOT_RUN_NEEDS_PICKLE_DIRECTORY(pytorch)",
+       97360.3
+      ]
+     ],
+     "generic_change_that_would_close_it": "a bounded range read of the zip central directory and `data.pkl` (no weights, no pickle execution): outside the 10-03 network policy (headers of safetensors/GGUF only) \u2014 a policy decision, then `weights::torchzip` already reads it"
+    },
+    {
+     "rank": 4,
+     "bucket": "FRONTEND",
+     "family": "GGUF files carrying a foreign metadata namespace (`mradermacher.*`, uploader bookkeeping)",
+     "repos_est": 81882.9,
+     "share_d_all": 0.02626243997907547,
+     "sampled_units_behind_the_estimate": 28,
+     "leading_codes": [
+      [
+       "ARCH_REFUSED(gguf-namespace:mradermacher)",
+       81003.6
+      ],
+      [
+       "ARCH_REFUSED(gguf-namespace:duynt)",
+       879.3
+      ]
+     ],
+     "generic_change_that_would_close_it": "a data registry of inert provenance namespaces for GGUF metadata (quantizer / uploader keys change no math; a namespace that declares a transform, like `prism.hadamard`, stays refused)"
+    },
+    {
+     "rank": 5,
+     "bucket": "NEW_KERNEL",
+     "family": "vision-chat / any-to-any (the text stage lowers, the other stage is not credited)",
+     "repos_est": 77993.0,
+     "share_d_all": 0.025014825821850873,
+     "sampled_units_behind_the_estimate": 0,
+     "leading_codes": [
+      [
+       "PARTIAL_TASK_ONLY(image-text-to-text)",
+       64627.0
+      ],
+      [
+       "PARTIAL_TASK_ONLY(any-to-any)",
+       11576.0
+      ],
+      [
+       "PARTIAL_TASK_ONLY(visual-question-answering)",
+       761.0
+      ],
+      [
+       "PARTIAL_TASK_ONLY(video-text-to-text)",
+       468.0
+      ]
+     ],
+     "generic_change_that_would_close_it": "tower adapters for the wrappers in the census (Qwen3.5, Gemma 3/4, Qwen3-VL, LLaVA-NeXT, Florence-2, Mistral3, Mllama) + the generative close sizing for a tower (`palw_gen_range_twin_v1` / tile-class sizing) + arming `palw_gen_v1`'s Text profile with image slots; Qwen2/2.5-VL at 196 px already admits under the dormant fences"
+    },
+    {
+     "rank": 6,
+     "bucket": "NEW_KERNEL",
+     "family": "audio tasks (ASR / TTS / audio classification)",
+     "repos_est": 59183.0,
+     "share_d_all": 0.018981862944297566,
+     "sampled_units_behind_the_estimate": 0,
+     "leading_codes": [
+      [
+       "MODALITY_PROFILE_MISSING(automatic-speech-recognition)",
+       41607.0
+      ],
+      [
+       "MODALITY_PROFILE_MISSING(text-to-speech)",
+       7553.0
+      ],
+      [
+       "MODALITY_PROFILE_MISSING(audio-classification)",
+       5159.0
+      ],
+      [
+       "MODALITY_PROFILE_MISSING(text-to-audio)",
+       3268.0
+      ]
+     ],
+     "generic_change_that_would_close_it": "a `JobAudio` binding (FR-23: feature frames) and an audio output kind: the Whisper / wav2vec2 stage programs lower, no protocol job supplies frames"
+    },
+    {
+     "rank": 7,
+     "bucket": "NEW_KERNEL",
+     "family": "vision heads (classification / detection / segmentation / dense)",
+     "repos_est": 55581.0,
+     "share_d_all": 0.017826587437389168,
+     "sampled_units_behind_the_estimate": 0,
+     "leading_codes": [
+      [
+       "MODALITY_PROFILE_MISSING(image-classification)",
+       30862.0
+      ],
+      [
+       "MODALITY_PROFILE_MISSING(object-detection)",
+       7103.0
+      ],
+      [
+       "MODALITY_PROFILE_MISSING(image-segmentation)",
+       4535.0
+      ],
+      [
+       "MODALITY_PROFILE_MISSING(image-to-image)",
+       3412.0
+      ]
+     ],
+     "generic_change_that_would_close_it": "the CNN / ViT route (`read_cnn`, `read_vision`) exists as stage programs: needs RFC-0003 Image-input job profiles for class labels, boxes and masks (JobImage is bound) and their output kinds"
+    },
+    {
+     "rank": 8,
+     "bucket": "FRONTEND",
+     "family": "a model class with no declared task (`pipeline_tag` absent)",
+     "repos_est": 54160.0,
+     "share_d_all": 0.017370827721865337,
+     "sampled_units_behind_the_estimate": 0,
+     "leading_codes": [
+      [
+       "TASK_UNKNOWN",
+       54160.0
+      ]
+     ],
+     "generic_change_that_would_close_it": "task inference from the remaining head classes and from `architectures` (inference-v3 reads causal LM, T5, vision-chat, sentence encoders, adapter bases); a head-class \u2192 task table row per family"
+    },
+    {
+     "rank": 9,
+     "bucket": "QUANT_FORMAT",
+     "family": "weights only as onnx / tensorflow / flax / pytorch-adapter / split GGUF",
+     "repos_est": 42231.2,
+     "share_d_all": 0.01354488367222377,
+     "sampled_units_behind_the_estimate": 2,
+     "leading_codes": [
+      [
+       "FORMAT_UNSUPPORTED(pytorch)",
+       9395.0
+      ],
+      [
+       "FORMAT_UNSUPPORTED(pytorch-adapter)",
+       8221.0
+      ],
+      [
+       "FORMAT_UNSUPPORTED(onnx)",
+       4959.0
+      ],
+      [
+       "FORMAT_UNSUPPORTED(gguf-split)",
+       3765.0
+      ]
+     ],
+     "generic_change_that_would_close_it": "an ONNX initializer reader and a TF/Flax checkpoint reader (headers by range), a split-GGUF reader, an `adapter_model.bin` reader"
+    },
+    {
+     "rank": 10,
+     "bucket": "FRONTEND",
+     "family": "no tokenizer file beside the checkpoint",
+     "repos_est": 29173.9,
+     "share_d_all": 0.009356993923096883,
+     "sampled_units_behind_the_estimate": 69,
+     "leading_codes": [
+      [
+       "TOKENIZER_MISSING",
+       29173.9
+      ]
+     ],
+     "generic_change_that_would_close_it": "bind the tokenizer of the pinned base (vocab size checked)"
+    },
+    {
+     "rank": 11,
+     "bucket": "FRONTEND",
+     "family": "diffusers UNet denoisers (skip connections over convolutions)",
+     "repos_est": 28311.8,
+     "share_d_all": 0.009080491142834326,
+     "sampled_units_behind_the_estimate": 72,
+     "leading_codes": [
+      [
+       "FEATURE_C(GEN_UNET_SKIP_V1)",
+       28311.8
+      ]
+     ],
+     "generic_change_that_would_close_it": "a UNet route: concatenating skip connections + spatial transformers lowered as stage programs (`GEN_UNET_SKIP_V1`), with the Image-profile job already in RFC-0003"
+    },
+    {
+     "rank": 12,
+     "bucket": "FRONTEND",
+     "family": "a LoRA the attach refuses (GGUF LoRA, rank/target forms)",
+     "repos_est": 25421.9,
+     "share_d_all": 0.008153608664373863,
+     "sampled_units_behind_the_estimate": 20,
+     "leading_codes": [
+      [
+       "ADAPTER_REFUSED",
+       25421.9
+      ]
+     ],
+     "generic_change_that_would_close_it": "GGUF LoRA composition and the remaining PEFT target forms in `lora::attach`"
+    },
+    {
+     "rank": 13,
+     "bucket": "UNTESTED",
+     "family": "an embedding / image / encoder-alone class: the pipeline admission cannot be asked from headers",
+     "repos_est": 23033.0,
+     "share_d_all": 0.00738741275697423,
+     "sampled_units_behind_the_estimate": 69,
+     "leading_codes": [
+      [
+       "NOT_RUN_PIPELINE_ADMISSION",
+       23033.0
+      ]
+     ],
+     "generic_change_that_would_close_it": "a shape-only Embedding- and Image-profile class declaration (the encoder-decoder's `preflight::pipeline` is the model)"
+    },
+    {
+     "rank": 14,
+     "bucket": "FRONTEND",
+     "family": "`trust_remote_code` architectures",
+     "repos_est": 19558.2,
+     "share_d_all": 0.006272934319604629,
+     "sampled_units_behind_the_estimate": 56,
+     "leading_codes": [
+      [
+       "CUSTOM_CODE_UNMODELLED(remote-code:QuasarForCausalLM)",
+       3459.5
+      ],
+      [
+       "CUSTOM_CODE_UNMODELLED(remote-code:PhiForCausalLM)",
+       2162.2
+      ],
+      [
+       "CUSTOM_CODE_UNMODELLED(remote-code:SDARForCausalLM)",
+       1729.8
+      ],
+      [
+       "CUSTOM_CODE_UNMODELLED(remote-code:NemotronHForCausalLM)",
+       868.9
+      ]
+     ],
+     "generic_change_that_would_close_it": "a data adapter for each remote-code family that is a combination of known features (never repository code)"
+    }
+   ],
+   "estimator_note": "post-stratified cohorts (the report's estimator)",
+   "cell_unmeasured": {
+    "task_unknown/lower/NOT_RUN_NEEDS_PICKLE_DIRECTORY": 1206
+   }
+  },
+  "b": {
+   "ruleset": {
+    "network": "testnet-12",
+    "height": 9000,
+    "trees": [
+     "d368707e0"
+    ]
+   },
+   "sample": {
+    "n": 1773,
+    "nonresponse_as_failure": 0,
+    "units": 1937
+   },
+   "d_all": 3117871,
+   "evidence_depth": {
+    "listing_only_exact": 2228617,
+    "represented_by_header_read_units_est": 889254,
+    "header_read_units": 1937
+   },
+   "d_files_listing": 2247414,
+   "d_b": {
+    "total": 1605403.4,
+    "share_of_d_all": 0.5149037139951134,
+    "exact_part": 726228,
+    "external_est": 1512467.6
+   },
+   "shape_ready_over_d_all": {
+    "total": 519156.7,
+    "share": 0.16650998552282797,
+    "se": 0.005550012438615104,
+    "lb95": 0.1574316976780054
+   },
+   "shape_ready_over_d_files": {
+    "total": 519156.7,
+    "share": 0.23100178919951783,
+    "se": 0.007699615127429711,
+    "lb95": 0.21836828128909613
+   },
+   "lower_pass_over_d_all": {
+    "total": 579988.5,
+    "share": 0.18602067555682,
+    "se": 0.005638333005222391,
+    "lb95": 0.1767855090512988
+   },
+   "shape_ready_over_d_b": {
+    "total": 519156.7,
+    "denominator": 1605403.4,
+    "share": 0.3233808205244529,
+    "se": 0.010773107192208168,
+    "lb95": 0.3056075893057081
+   },
+   "short_context_only_over_d_all": {
+    "total": 508.2,
+    "share": 0.000162990493619952,
+    "se": 0.0001455128616779688,
+    "lb95": 1.3837526216165904e-05
+   },
+   "shape_ready_no_fleet_seat_tier_holds_it_over_d_all": {
+    "total": 194994.6,
+    "share": 0.06254093069566798,
+    "se": 0.004605936727801716,
+    "lb95": 0.05513021512071095
+   },
+   "shape_ready_context_split_over_d_all": {
+    "at_declared_context": {
+     "total": 133744.6,
+     "share": 0.04289613198774348,
+     "se": 0.0030592147200011336,
+     "lb95": 0.03797722505387702
+    },
+    "at_cap_8192_declared_wider": {
+     "total": 385412.0,
+     "share": 0.12361385353508449,
+     "se": 0.005598853103838283,
+     "lb95": 0.11449789466308494
+    }
+   },
+   "ceiling_if_every_software_closable_fixed": {
+    "external_total": 1512467.6,
+    "share_external": 0.48509628600488675,
+    "ceiling": 0.5149037139951133,
+    "se": 0.00046787173636224854,
+    "ceiling_lb95": 0.5141336679676567,
+    "ceiling_ub95_normal": 0.5156732945176168,
+    "ceiling_if_no_model_task_were_closable": 0.7177305245432823,
+    "no_model_task_est": 632387.8
+   },
+   "software_closable_failures": {
+    "repos_est": 1086246.7,
+    "share_d_all": 0.3483937284722852,
+    "share_d_b": 0.6766191794755468
+   },
+   "external_failures": {
+    "repos_est": 1512467.6,
+    "share_d_all": 0.48509628600488675
+   },
+   "download_weighted_shape_ready": {
+    "share": 0.08207117463930129,
+    "lb95_normal": 0.07949132470762119
+   },
+   "dimension": {
+    "external": {
+     "repos_est": 1512467.6,
+     "share_d_all": 0.48509628600488686
+    },
+    "protocol-envelope": {
+     "repos_est": 574164.8,
+     "share_d_all": 0.18415283722905423
+    },
+    "success": {
+     "repos_est": 519156.7,
+     "share_d_all": 0.16650998552282775
+    },
+    "feature-only": {
+     "repos_est": 213906.2,
+     "share_d_all": 0.06860650526471394
+    },
+    "frontend-only": {
+     "repos_est": 176070.7,
+     "share_d_all": 0.05647144002782387
+    },
+    "untested": {
+     "repos_est": 122105.0,
+     "share_d_all": 0.03916294595069308
+    }
+   },
+   "encoder_decoder_classes": {
+    "CLOSE_TOO_LARGE(generative close sizing work)": 16300.3,
+    "ADMISSION_EXCEEDS(max_position_macs)": 5812.7,
+    "ADMISSION_EXCEEDS(max_job_step_leaves)": 2618.2,
+    "TOKENIZER_MISSING": 2210.4,
+    "SHAPE_READY": 450.9,
+    "NOT_RUN_PIPELINE_ADMISSION": 439.6,
+    "ARCH_REFUSED(encdec-normal-form)": 433.3
+   },
+   "text_only_partial_cohort": {
+    "N": 52091,
+    "n": 150,
+    "members": 150,
+    "text_stage_admitted": 25,
+    "vision_class_admitted_dormant_fences": 0,
+    "has_image_probe": 81
+   },
+   "unmapped": {},
+   "class_disagreements": {},
+   "plain_method": {
+    "d_b": {
+     "total": 1693228.5,
+     "share_of_d_all": 0.5430720121703745,
+     "exact_part": 564968,
+     "external_est": 1424642.5
+    },
+    "shape_ready_over_d_all": {
+     "total": 564881.3,
+     "share": 0.1811753394471649,
+     "se": 0.008010524993743594,
+     "lb95": 0.16808702421384641
+    },
+    "shape_ready_over_d_b": {
+     "total": 564881.3,
+     "denominator": 1693228.5,
+     "share": 0.3336119987533549,
+     "se": 0.013596519643870656,
+     "lb95": 0.311151009261059
+    },
+    "ceiling_if_every_software_closable_fixed": {
+     "external_total": 1424642.5,
+     "share_external": 0.4569279878296255,
+     "ceiling": 0.5430720121703745,
+     "se": 0.011747654999106717,
+     "ceiling_lb95": 0.5234289143431061,
+     "ceiling_ub95_normal": 0.5623951851038298,
+     "ceiling_if_no_model_task_were_closable": 0.7153983027590372,
+     "no_model_task_est": 537291.1
+    },
+    "external_failures": {
+     "repos_est": 1424642.5,
+     "share_d_all": 0.4569279878296255
+    },
+    "software_closable_failures": {
+     "repos_est": 1128347.1,
+     "share_d_all": 0.36189667272320947,
+     "share_d_b": 0.666388001246645
+    }
+   },
+   "buckets": [
+    {
+     "bucket": "SHAPE_READY",
+     "family": "success(shape)",
+     "repos_est": 519156.7,
+     "share_d_all": 0.16650998552282775,
+     "share_d_b": 0.3233808205244525,
+     "downloads_share": 0.0820711746393009
+    },
+    {
+     "bucket": "MISSING_WEIGHTS",
+     "family": "external",
+     "repos_est": 590290.2,
+     "share_d_all": 0.18932477056033162,
+     "share_d_b": null,
+     "downloads_share": 0.004323364591556405
+    },
+    {
+     "bucket": "GATED",
+     "family": "external",
+     "repos_est": 53419.6,
+     "share_d_all": 0.017133357986908376,
+     "share_d_b": null,
+     "downloads_share": 0.027169862350738337
+    },
+    {
+     "bucket": "ADAPTER_BASE_MISSING",
+     "family": "external",
+     "repos_est": 236370,
+     "share_d_all": 0.07581134690947765,
+     "share_d_b": null,
+     "downloads_share": 0.0010787034993781424
+    },
+    {
+     "bucket": "FRONTEND",
+     "family": "software-closable",
+     "repos_est": 330725.5,
+     "share_d_all": 0.10607416079406451,
+     "share_d_b": 0.20600776011312905,
+     "downloads_share": 0.19623336208908393
+    },
+    {
+     "bucket": "NEW_KERNEL",
+     "family": "software-closable",
+     "repos_est": 536365,
+     "share_d_all": 0.17202924688032314,
+     "share_d_b": 0.3340998369298144,
+     "downloads_share": 0.44795607731502457
+    },
+    {
+     "bucket": "QUANT_FORMAT",
+     "family": "software-closable",
+     "repos_est": 59251.3,
+     "share_d_all": 0.019003784498473276,
+     "share_d_b": 0.03690745275660146,
+     "downloads_share": 0.1748228981127797
+    },
+    {
+     "bucket": "RESOURCE",
+     "family": "software-closable",
+     "repos_est": 37799.8,
+     "share_d_all": 0.012123590348731188,
+     "share_d_b": 0.02354535424626253,
+     "downloads_share": 0.015526380361349198
+    },
+    {
+     "bucket": "UNTESTED",
+     "family": "software-closable",
+     "repos_est": 122105.0,
+     "share_d_all": 0.039162945950693084,
+     "share_d_b": 0.07605877542973939,
+     "downloads_share": 0.038579687391589554
+    },
+    {
+     "bucket": "NO_MODEL_TASK",
+     "family": "external",
+     "repos_est": 632387.8,
+     "share_d_all": 0.20282681054816912,
+     "share_d_b": null,
+     "downloads_share": 0.04921553442662505
+    }
+   ],
+   "codes_top": [
+    {
+     "bucket": "NO_MODEL_TASK",
+     "gate": "lower",
+     "code": "TASK_UNKNOWN",
+     "repos_est": 625173.0,
+     "share_d_all": 0.2005127858080081,
+     "downloads_share": 0.047238383636086026,
+     "top_args": [
+      [
+       "no-config",
+       625173
+      ]
+     ]
+    },
+    {
+     "bucket": "MISSING_WEIGHTS",
+     "gate": "source",
+     "code": "MISSING_WEIGHTS",
+     "repos_est": 579477.0,
+     "share_d_all": 0.18585663101520236,
+     "downloads_share": 0.0034182144769595124,
+     "top_args": []
+    },
+    {
+     "bucket": "SHAPE_READY",
+     "gate": "admit",
+     "code": "SHAPE_READY",
+     "repos_est": 519156.7,
+     "share_d_all": 0.16650998552282775,
+     "downloads_share": 0.0820711746393009,
+     "top_args": []
+    },
+    {
+     "bucket": "NEW_KERNEL",
+     "gate": "lower",
+     "code": "MODALITY_PROFILE_MISSING",
+     "repos_est": 458372.0,
+     "share_d_all": 0.14701442105847226,
+     "downloads_share": 0.3237730224812536,
+     "top_args": [
+      [
+       "text-classification",
+       149560
+      ],
+      [
+       "reinforcement-learning",
+       75402
+      ],
+      [
+       "automatic-speech-recognition",
+       41607
+      ],
+      [
+       "token-classification",
+       35316
+      ],
+      [
+       "robotics",
+       32059
+      ],
+      [
+       "image-classification",
+       30862
+      ],
+      [
+       "fill-mask",
+       21884
+      ],
+      [
+       "question-answering",
+       14988
+      ]
+     ]
+    },
+    {
+     "bucket": "ADAPTER_BASE_MISSING",
+     "gate": "source",
+     "code": "BASE_UNPINNED",
+     "repos_est": 236370.0,
+     "share_d_all": 0.07581134690947765,
+     "downloads_share": 0.0010787034993781424,
+     "top_args": [
+      [
+       "absent",
+       120903
+      ],
+      [
+       "base_gated",
+       106897
+      ],
+      [
+       "not_in_snapshot",
+       8570
+      ]
+     ]
+    },
+    {
+     "bucket": "FRONTEND",
+     "gate": "lower",
+     "code": "ARCH_REFUSED",
+     "repos_est": 115380.5,
+     "share_d_all": 0.037006167419786164,
+     "downloads_share": 0.09701586091833946,
+     "top_args": [
+      [
+       "gguf-namespace:mradermacher",
+       81003.6
+      ],
+      [
+       "gguf-arch:seed_oss",
+       5983.6
+      ],
+      [
+       "encdec-no-adapter:M2M100ForConditionalGeneration",
+       2577.9
+      ],
+      [
+       "lora-rslora-rank",
+       2565.2
+      ],
+      [
+       "config-no:architectures",
+       1920.2
+      ],
+      [
+       "LlamaForCausalLM",
+       1730.6
+      ],
+      [
+       "gguf-arch:qwen35moe",
+       1360.1
+      ],
+      [
+       "encdec-no-adapter:ParlerTTSForConditionalGeneration",
+       1299.0
+      ]
+     ]
+    },
+    {
+     "bucket": "UNTESTED",
+     "gate": "lower",
+     "code": "NOT_RUN_NEEDS_PICKLE_DIRECTORY",
+     "repos_est": 97360.3,
+     "share_d_all": 0.031226547878990357,
+     "downloads_share": 0.02914645768031651,
+     "top_args": [
+      [
+       "pytorch",
+       97360.3
+      ]
+     ]
+    },
+    {
+     "bucket": "NEW_KERNEL",
+     "gate": "lower",
+     "code": "PARTIAL_TASK_ONLY",
+     "repos_est": 77993.0,
+     "share_d_all": 0.025014825821850873,
+     "downloads_share": 0.12418305483377098,
+     "top_args": [
+      [
+       "image-text-to-text",
+       64627
+      ],
+      [
+       "any-to-any",
+       11576
+      ],
+      [
+       "visual-question-answering",
+       761
+      ],
+      [
+       "video-text-to-text",
+       468
+      ],
+      [
+       "audio-text-to-text",
+       347
+      ],
+      [
+       "document-question-answering",
+       214
+      ]
+     ]
+    },
+    {
+     "bucket": "FRONTEND",
+     "gate": "lower",
+     "code": "TASK_UNKNOWN",
+     "repos_est": 54160.0,
+     "share_d_all": 0.017370827721865337,
+     "downloads_share": 0.01426524625311354,
+     "top_args": []
+    },
+    {
+     "bucket": "GATED",
+     "gate": "source",
+     "code": "GATED_ACCESS",
+     "repos_est": 53419.6,
+     "share_d_all": 0.017133357986908376,
+     "downloads_share": 0.027169862350738337,
+     "top_args": [
+      [
+       "manual",
+       34213
+      ],
+      [
+       "auto",
+       19187
+      ],
+      [
+       "VibeThinker-3B.Q8_0.gguf",
+       9.8
+      ],
+      [
+       "MTP/gemma-4-12B-it-MTP-Q8_0.gguf",
+       9.8
+      ]
+     ]
+    },
+    {
+     "bucket": "FRONTEND",
+     "gate": "lower",
+     "code": "FEATURE_C",
+     "repos_est": 43811.3,
+     "share_d_all": 0.014051682637681754,
+     "downloads_share": 0.01533328841507366,
+     "top_args": [
+      [
+       "GEN_UNET_SKIP_V1",
+       28311.8
+      ],
+      [
+       "an adapter for `NewModel`",
+       2200.0
+      ],
+      [
+       "an adapter for `MetaClip2Model`",
+       1428.6
+      ],
+      [
+       "an adapter for `Qwen3Model`",
+       1315.6
+      ],
+      [
+       "a decoder adapter for the text decoder of `Qwen3VLForConditionalGeneration`",
+       1296.5
+      ],
+      [
+       "an adapter for `Gemma3TextModel`",
+       879.2
+      ],
+      [
+       "an adapter for `PicoDecoderHF`",
+       866.6
+      ],
+      [
+       "an adapter for `ConvBertModel`",
+       464.9
+      ]
+     ]
+    },
+    {
+     "bucket": "QUANT_FORMAT",
+     "gate": "lower",
+     "code": "FORMAT_UNSUPPORTED",
+     "repos_est": 42231.2,
+     "share_d_all": 0.01354487671060594,
+     "downloads_share": 0.006598003073535673,
+     "top_args": [
+      [
+       "pytorch",
+       9395
+      ],
+      [
+       "pytorch-adapter",
+       8221
+      ],
+      [
+       "onnx",
+       4959
+      ],
+      [
+       "gguf-split",
+       3765
+      ],
+      [
+       "tensorflow",
+       2220
+      ],
+      [
+       "numpy+pytorch+safetensors+zip",
+       1368
+      ],
+      [
+       "openvino",
+       1321
+      ],
+      [
+       "base:pytorch",
+       1282.6
+      ]
+     ]
+    },
+    {
+     "bucket": "FRONTEND",
+     "gate": "lower",
+     "code": "TOKENIZER_MISSING",
+     "repos_est": 29173.9,
+     "share_d_all": 0.009356998476259143,
+     "downloads_share": 0.00010852599871742168,
+     "top_args": []
+    },
+    {
+     "bucket": "FRONTEND",
+     "gate": "lower",
+     "code": "ADAPTER_REFUSED",
+     "repos_est": 25421.9,
+     "share_d_all": 0.00815360831629297,
+     "downloads_share": 6.683965929602625e-05,
+     "top_args": []
+    },
+    {
+     "bucket": "UNTESTED",
+     "gate": "admit",
+     "code": "NOT_RUN_PIPELINE_ADMISSION",
+     "repos_est": 23033.0,
+     "share_d_all": 0.007387420416939601,
+     "downloads_share": 0.009425853608908658,
+     "top_args": []
+    },
+    {
+     "bucket": "FRONTEND",
+     "gate": "lower",
+     "code": "CUSTOM_CODE_UNMODELLED",
+     "repos_est": 19558.4,
+     "share_d_all": 0.006273004238522416,
+     "downloads_share": 0.05998025534124945,
+     "top_args": [
+      [
+       "remote-code:QuasarForCausalLM",
+       3459.5
+      ],
+      [
+       "remote-code:PhiForCausalLM",
+       2162.2
+      ],
+      [
+       "remote-code:SDARForCausalLM",
+       1729.8
+      ],
+      [
+       "remote-code:NemotronHForCausalLM",
+       868.9
+      ],
+      [
+       "remote-code:NanochatGPTForCausalLM",
+       865.7
+      ],
+      [
+       "remote-code:MiniMaxM2ForCausalLM",
+       450.6
+      ],
+      [
+       "remote-code:JambaForCausalLM",
+       439.8
+      ],
+      [
+       "remote-code:LoopLMForCausalLM",
+       439.8
+      ]
+     ]
+    },
+    {
+     "bucket": "FRONTEND",
+     "gate": "lower",
+     "code": "CONFIG_KEY_UNREAD",
+     "repos_est": 18135.9,
+     "share_d_all": 0.005816743180856198,
+     "downloads_share": 0.0033213353871386084,
+     "top_args": [
+      [
+       "audio_config",
+       3411.6
+      ],
+      [
+       "max_seq_len",
+       2166.5
+      ],
+      [
+       "quantization",
+       1297.5
+      ],
+      [
+       "freeze_mm_mlp_adapter",
+       1297.5
+      ],
+      [
+       "language_model_only",
+       1283.6
+      ],
+      [
+       "use_reentrant_checkpointing",
+       1282.6
+      ],
+      [
+       "original_max_position_embeddings",
+       880.0
+      ],
+      [
+       "elementwise_affine",
+       864.9
+      ]
+     ]
+    },
+    {
+     "bucket": "FRONTEND",
+     "gate": "lower",
+     "code": "ADAPTER_UNCHECKED",
+     "repos_est": 16686.0,
+     "share_d_all": 0.005351728791858291,
+     "downloads_share": 0.0012397304218325375,
+     "top_args": []
+    },
+    {
+     "bucket": "RESOURCE",
+     "gate": "admit",
+     "code": "CLOSE_TOO_LARGE",
+     "repos_est": 16300.3,
+     "share_d_all": 0.005228037883660774,
+     "downloads_share": 0.009758441662611072,
+     "top_args": [
+      [
+       "generative close sizing work",
+       16300.3
+      ]
+     ]
+    },
+    {
+     "bucket": "RESOURCE",
+     "gate": "admit",
+     "code": "COURT_BUDGET",
+     "repos_est": 12559.4,
+     "share_d_all": 0.004028184529279186,
+     "downloads_share": 0.0036653674932248387,
+     "top_args": [
+      [
+       "IR tile multiply-accumulates",
+       9472.4
+      ]
+     ]
+    },
+    {
+     "bucket": "QUANT_FORMAT",
+     "gate": "lower",
+     "code": "QUANT_DESCRIPTOR_MISSING",
+     "repos_est": 12219.8,
+     "share_d_all": 0.003919274456243822,
+     "downloads_share": 0.16343525804234557,
+     "top_args": [
+      [
+       "config/unknown",
+       7387.1
+      ],
+      [
+       "hqq",
+       865.9
+      ],
+      [
+       "config/auto-round",
+       865.9
+      ],
+      [
+       "config/compressed-tensors/mixed-precision",
+       865.1
+      ],
+      [
+       "config/compressed-tensors/nvfp4-pack-quantized",
+       865.1
+      ],
+      [
+       "config/modelopt",
+       442.6
+      ],
+      [
+       "config/compressed-tensors/mxfp4-pack-quantized",
+       439.8
+      ],
+      [
+       "config/exl3",
+       432.4
+      ]
+     ]
+    },
+    {
+     "bucket": "MISSING_WEIGHTS",
+     "gate": "source",
+     "code": "WEIGHTS_INCOMPLETE",
+     "repos_est": 9903.8,
+     "share_d_all": 0.0031764774254120346,
+     "downloads_share": 0.0006549970069535855,
+     "top_args": [
+      [
+       "model",
+       9862.8
+      ],
+      [
+       "model.safetensors",
+       11
+      ],
+      [
+       "diffusion_pytorch_model",
+       6
+      ],
+      [
+       "adapter_model",
+       5
+      ],
+      [
+       "model-normalized",
+       4
+      ],
+      [
+       "pytorch_model",
+       3
+      ],
+      [
+       "model-model",
+       2
+      ],
+      [
+       "humo",
+       1
+      ]
+     ]
+    },
+    {
+     "bucket": "RESOURCE",
+     "gate": "admit",
+     "code": "ADMISSION_EXCEEDS",
+     "repos_est": 8939.1,
+     "share_d_all": 0.002867047204112464,
+     "downloads_share": 0.0021025667003137156,
+     "top_args": [
+      [
+       "max_position_macs",
+       6320.9
+      ],
+      [
+       "max_job_step_leaves",
+       2618.2
+      ]
+     ]
+    },
+    {
+     "bucket": "NO_MODEL_TASK",
+     "gate": "lower",
+     "code": "CONFIG_MISSING",
+     "repos_est": 6781.2,
+     "share_d_all": 0.002174945660035325,
+     "downloads_share": 0.001366657696652592,
+     "top_args": [
+      [
+       "unet",
+       19.2
+      ],
+      [
+       "vae",
+       1.0
+      ],
+      [
+       "tags",
+       1.0
+      ],
+      [
+       "domains",
+       1.0
+      ]
+     ]
+    },
+    {
+     "bucket": "FRONTEND",
+     "gate": "lower",
+     "code": "TENSOR_MISSING",
+     "repos_est": 5695.9,
+     "share_d_all": 0.0018268669179463512,
+     "downloads_share": 0.0009232177756295135,
+     "top_args": [
+      [
+       "attn.q.w",
+       3476.8
+      ],
+      [
+       "embed.table",
+       1784.8
+      ],
+      [
+       "head.w",
+       434.3
+      ]
+     ]
+    },
+    {
+     "bucket": "QUANT_FORMAT",
+     "gate": "lower",
+     "code": "QUANT_REFUSED",
+     "repos_est": 4800.4,
+     "share_d_all": 0.0015396333316235124,
+     "downloads_share": 0.004789636996898455,
+     "top_args": [
+      [
+       "CT_FP8_CHANNEL",
+       1749.3
+      ],
+      [
+       "GPTQ",
+       1298.2
+      ],
+      [
+       "AWQ",
+       864.9
+      ],
+      [
+       "FP8_BLOCK",
+       455.6
+      ],
+      [
+       "CT_INT8_CHANNEL",
+       432.4
+      ]
+     ]
+    },
+    {
+     "bucket": "FRONTEND",
+     "gate": "lower",
+     "code": "TENSOR_SHAPE",
+     "repos_est": 1696.5,
+     "share_d_all": 0.0005441351367959737,
+     "downloads_share": 2.060121354928333e-05,
+     "top_args": [
+      [
+       "mlp.up.w",
+       1264.1
+      ],
+      [
+       "embed.table",
+       432.4
+      ]
+     ]
+    },
+    {
+     "bucket": "UNTESTED",
+     "gate": "lower",
+     "code": "NOT_SAMPLED_CELL",
+     "repos_est": 1206.0,
+     "share_d_all": 0.00038680240458954205,
+     "downloads_share": 0.0,
+     "top_args": [
+      [
+       "task_unknown/NOT_RUN_NEEDS_PICKLE_DIRECTORY",
+       1206
+      ]
+     ]
+    },
+    {
+     "bucket": "FRONTEND",
+     "gate": "lower",
+     "code": "TASK_MISMATCH",
+     "repos_est": 1005.2,
+     "share_d_all": 0.00032239795619999606,
+     "downloads_share": 0.003958460705144282,
+     "top_args": [
+      [
+       "feature-extraction\u2192text-generation",
+       522.4
+      ],
+      [
+       "sentence-similarity\u2192text-generation",
+       482.8
+      ]
+     ]
+    },
+    {
+     "bucket": "MISSING_WEIGHTS",
+     "gate": "source",
+     "code": "HEADER_INVALID",
+     "repos_est": 473.9,
+     "share_d_all": 0.00015200514467482215,
+     "downloads_share": 4.186922677421432e-06,
+     "top_args": [
+      [
+       "model",
+       434.4
+      ],
+      [
+       "aceinstruct-72b-q2_k.gguf",
+       9.8
+      ],
+      [
+       " DeepSeek-R1-Llama-8B.BF16.gguf",
+       9.8
+      ],
+      [
+       "ayncoding-qwen3-8b-light.gguf",
+       9.8
+      ],
+      [
+       "model_index.json",
+       2.7
+      ],
+      [
+       "prosparse-llama-2-7b-clip15.gguf",
+       2.2
+      ],
+      [
+       "prosparse-llama-2-13b.gguf",
+       2.2
+      ],
+      [
+       "cosmosbabel-v1.1-multitranslator-de-az-r",
+       1.0
+      ]
+     ]
+    },
+    {
+     "bucket": "UNTESTED",
+     "gate": "lower",
+     "code": "NOT_RUN_NEEDS_TENSOR_DATA",
+     "repos_est": 439.6,
+     "share_d_all": 0.00014100695937515126,
+     "downloads_share": 2.74246994837514e-06,
+     "top_args": [
+      [
+       "a tensor of the file",
+       439.6
+      ]
+     ]
+    },
+    {
+     "bucket": "MISSING_WEIGHTS",
+     "gate": "source",
+     "code": "FETCH_FAILED",
+     "repos_est": 435.4,
+     "share_d_all": 0.00013965697504240312,
+     "downloads_share": 0.0002459661849658853,
+     "top_args": [
+      [
+       "layer23-shared.safetensors",
+       434.4
+      ],
+      [
+       "(shards)",
+       1.0
+      ]
+     ]
+    },
+    {
+     "bucket": "NO_MODEL_TASK",
+     "gate": "lower",
+     "code": "CONFIG_INVALID",
+     "repos_est": 433.6,
+     "share_d_all": 0.00013907908012571099,
+     "downloads_share": 0.0006104930938864362,
+     "top_args": []
+    },
+    {
+     "bucket": "UNTESTED",
+     "gate": "lower",
+     "code": "NOT_RUN_NEEDS_WEIGHTS",
+     "repos_est": 66.0,
+     "share_d_all": 2.1168290798432654e-05,
+     "downloads_share": 4.633632416020452e-06,
+     "top_args": []
+    },
+    {
+     "bucket": "RESOURCE",
+     "gate": "source",
+     "code": "HEADER_TOO_LARGE",
+     "repos_est": 1.0,
+     "share_d_all": 3.20731678764131e-07,
+     "downloads_share": 4.505199572813927e-09,
+     "top_args": [
+      [
+       "model.safetensors.index.json",
+       1.0
+      ]
+     ]
+    }
+   ],
+   "top_software_closable_blockers": [
+    {
+     "rank": 1,
+     "bucket": "NEW_KERNEL",
+     "family": "NLU heads (classification / token / QA / fill-mask)",
+     "repos_est": 225210.0,
+     "share_d_all": 0.07223198137446996,
+     "sampled_units_behind_the_estimate": 0,
+     "leading_codes": [
+      [
+       "MODALITY_PROFILE_MISSING(text-classification)",
+       149560.0
+      ],
+      [
+       "MODALITY_PROFILE_MISSING(token-classification)",
+       35316.0
+      ],
+      [
+       "MODALITY_PROFILE_MISSING(fill-mask)",
+       21884.0
+      ],
+      [
+       "MODALITY_PROFILE_MISSING(question-answering)",
+       14988.0
+      ]
+     ],
+     "generic_change_that_would_close_it": "a canonical job profile for encoder heads: label / span / token logits as the committed output, the label set in the class (the frontend already lowers a sequence classifier as an Embedding-profile class); a `tasks.rs` row per head + one RFC-0003 profile"
+    },
+    {
+     "rank": 2,
+     "bucket": "NEW_KERNEL",
+     "family": "RL / robotics / tabular / time series / video / graph",
+     "repos_est": 114772.0,
+     "share_d_all": 0.036811016235116845,
+     "sampled_units_behind_the_estimate": 0,
+     "leading_codes": [
+      [
+       "MODALITY_PROFILE_MISSING(reinforcement-learning)",
+       75402.0
+      ],
+      [
+       "MODALITY_PROFILE_MISSING(robotics)",
+       32059.0
+      ],
+      [
+       "MODALITY_PROFILE_MISSING(text-to-video)",
+       2590.0
+      ],
+      [
+       "MODALITY_PROFILE_MISSING(image-to-video)",
+       1506.0
+      ]
+     ],
+     "generic_change_that_would_close_it": "no importer for these frameworks (SB3 zips, sklearn, torch pickles) and no canonical job: a per-family profile each; the least generic of the closable blockers"
+    },
+    {
+     "rank": 3,
+     "bucket": "UNTESTED",
+     "family": "PyTorch `pytorch_model.bin` (zip directory + pickle not read)",
+     "repos_est": 97360.3,
+     "share_d_all": 0.03122653246397943,
+     "sampled_units_behind_the_estimate": 15,
+     "leading_codes": [
+      [
+       "NOT_RUN_NEEDS_PICKLE_DIRECTORY(pytorch)",
+       97360.3
+      ]
+     ],
+     "generic_change_that_would_close_it": "a bounded range read of the zip central directory and `data.pkl` (no weights, no pickle execution): outside the 10-03 network policy (headers of safetensors/GGUF only) \u2014 a policy decision, then `weights::torchzip` already reads it"
+    },
+    {
+     "rank": 4,
+     "bucket": "FRONTEND",
+     "family": "GGUF files carrying a foreign metadata namespace (`mradermacher.*`, uploader bookkeeping)",
+     "repos_est": 81882.9,
+     "share_d_all": 0.02626243997907547,
+     "sampled_units_behind_the_estimate": 28,
+     "leading_codes": [
+      [
+       "ARCH_REFUSED(gguf-namespace:mradermacher)",
+       81003.6
+      ],
+      [
+       "ARCH_REFUSED(gguf-namespace:duynt)",
+       879.3
+      ]
+     ],
+     "generic_change_that_would_close_it": "a data registry of inert provenance namespaces for GGUF metadata (quantizer / uploader keys change no math; a namespace that declares a transform, like `prism.hadamard`, stays refused)"
+    },
+    {
+     "rank": 5,
+     "bucket": "NEW_KERNEL",
+     "family": "vision-chat / any-to-any (the text stage lowers, the other stage is not credited)",
+     "repos_est": 77993.0,
+     "share_d_all": 0.025014825821850873,
+     "sampled_units_behind_the_estimate": 0,
+     "leading_codes": [
+      [
+       "PARTIAL_TASK_ONLY(image-text-to-text)",
+       64627.0
+      ],
+      [
+       "PARTIAL_TASK_ONLY(any-to-any)",
+       11576.0
+      ],
+      [
+       "PARTIAL_TASK_ONLY(visual-question-answering)",
+       761.0
+      ],
+      [
+       "PARTIAL_TASK_ONLY(video-text-to-text)",
+       468.0
+      ]
+     ],
+     "generic_change_that_would_close_it": "tower adapters for the wrappers in the census (Qwen3.5, Gemma 3/4, Qwen3-VL, LLaVA-NeXT, Florence-2, Mistral3, Mllama) + the generative close sizing for a tower (`palw_gen_range_twin_v1` / tile-class sizing) + arming `palw_gen_v1`'s Text profile with image slots; Qwen2/2.5-VL at 196 px already admits under the dormant fences"
+    },
+    {
+     "rank": 6,
+     "bucket": "NEW_KERNEL",
+     "family": "audio tasks (ASR / TTS / audio classification)",
+     "repos_est": 59183.0,
+     "share_d_all": 0.018981862944297566,
+     "sampled_units_behind_the_estimate": 0,
+     "leading_codes": [
+      [
+       "MODALITY_PROFILE_MISSING(automatic-speech-recognition)",
+       41607.0
+      ],
+      [
+       "MODALITY_PROFILE_MISSING(text-to-speech)",
+       7553.0
+      ],
+      [
+       "MODALITY_PROFILE_MISSING(audio-classification)",
+       5159.0
+      ],
+      [
+       "MODALITY_PROFILE_MISSING(text-to-audio)",
+       3268.0
+      ]
+     ],
+     "generic_change_that_would_close_it": "a `JobAudio` binding (FR-23: feature frames) and an audio output kind: the Whisper / wav2vec2 stage programs lower, no protocol job supplies frames"
+    },
+    {
+     "rank": 7,
+     "bucket": "NEW_KERNEL",
+     "family": "vision heads (classification / detection / segmentation / dense)",
+     "repos_est": 55581.0,
+     "share_d_all": 0.017826587437389168,
+     "sampled_units_behind_the_estimate": 0,
+     "leading_codes": [
+      [
+       "MODALITY_PROFILE_MISSING(image-classification)",
+       30862.0
+      ],
+      [
+       "MODALITY_PROFILE_MISSING(object-detection)",
+       7103.0
+      ],
+      [
+       "MODALITY_PROFILE_MISSING(image-segmentation)",
+       4535.0
+      ],
+      [
+       "MODALITY_PROFILE_MISSING(image-to-image)",
+       3412.0
+      ]
+     ],
+     "generic_change_that_would_close_it": "the CNN / ViT route (`read_cnn`, `read_vision`) exists as stage programs: needs RFC-0003 Image-input job profiles for class labels, boxes and masks (JobImage is bound) and their output kinds"
+    },
+    {
+     "rank": 8,
+     "bucket": "FRONTEND",
+     "family": "a model class with no declared task (`pipeline_tag` absent)",
+     "repos_est": 54160.0,
+     "share_d_all": 0.017370827721865337,
+     "sampled_units_behind_the_estimate": 0,
+     "leading_codes": [
+      [
+       "TASK_UNKNOWN",
+       54160.0
+      ]
+     ],
+     "generic_change_that_would_close_it": "task inference from the remaining head classes and from `architectures` (inference-v3 reads causal LM, T5, vision-chat, sentence encoders, adapter bases); a head-class \u2192 task table row per family"
+    },
+    {
+     "rank": 9,
+     "bucket": "QUANT_FORMAT",
+     "family": "weights only as onnx / tensorflow / flax / pytorch-adapter / split GGUF",
+     "repos_est": 42231.2,
+     "share_d_all": 0.01354488367222377,
+     "sampled_units_behind_the_estimate": 2,
+     "leading_codes": [
+      [
+       "FORMAT_UNSUPPORTED(pytorch)",
+       9395.0
+      ],
+      [
+       "FORMAT_UNSUPPORTED(pytorch-adapter)",
+       8221.0
+      ],
+      [
+       "FORMAT_UNSUPPORTED(onnx)",
+       4959.0
+      ],
+      [
+       "FORMAT_UNSUPPORTED(gguf-split)",
+       3765.0
+      ]
+     ],
+     "generic_change_that_would_close_it": "an ONNX initializer reader and a TF/Flax checkpoint reader (headers by range), a split-GGUF reader, an `adapter_model.bin` reader"
+    },
+    {
+     "rank": 10,
+     "bucket": "FRONTEND",
+     "family": "no tokenizer file beside the checkpoint",
+     "repos_est": 29173.9,
+     "share_d_all": 0.009356993923096883,
+     "sampled_units_behind_the_estimate": 69,
+     "leading_codes": [
+      [
+       "TOKENIZER_MISSING",
+       29173.9
+      ]
+     ],
+     "generic_change_that_would_close_it": "bind the tokenizer of the pinned base (vocab size checked)"
+    },
+    {
+     "rank": 11,
+     "bucket": "FRONTEND",
+     "family": "diffusers UNet denoisers (skip connections over convolutions)",
+     "repos_est": 28311.8,
+     "share_d_all": 0.009080491142834326,
+     "sampled_units_behind_the_estimate": 72,
+     "leading_codes": [
+      [
+       "FEATURE_C(GEN_UNET_SKIP_V1)",
+       28311.8
+      ]
+     ],
+     "generic_change_that_would_close_it": "a UNet route: concatenating skip connections + spatial transformers lowered as stage programs (`GEN_UNET_SKIP_V1`), with the Image-profile job already in RFC-0003"
+    },
+    {
+     "rank": 12,
+     "bucket": "FRONTEND",
+     "family": "a LoRA the attach refuses (GGUF LoRA, rank/target forms)",
+     "repos_est": 25421.9,
+     "share_d_all": 0.008153608664373863,
+     "sampled_units_behind_the_estimate": 20,
+     "leading_codes": [
+      [
+       "ADAPTER_REFUSED",
+       25421.9
+      ]
+     ],
+     "generic_change_that_would_close_it": "GGUF LoRA composition and the remaining PEFT target forms in `lora::attach`"
+    },
+    {
+     "rank": 13,
+     "bucket": "UNTESTED",
+     "family": "an embedding / image / encoder-alone class: the pipeline admission cannot be asked from headers",
+     "repos_est": 23033.0,
+     "share_d_all": 0.00738741275697423,
+     "sampled_units_behind_the_estimate": 69,
+     "leading_codes": [
+      [
+       "NOT_RUN_PIPELINE_ADMISSION",
+       23033.0
+      ]
+     ],
+     "generic_change_that_would_close_it": "a shape-only Embedding- and Image-profile class declaration (the encoder-decoder's `preflight::pipeline` is the model)"
+    },
+    {
+     "rank": 14,
+     "bucket": "FRONTEND",
+     "family": "`trust_remote_code` architectures",
+     "repos_est": 19558.2,
+     "share_d_all": 0.006272934319604629,
+     "sampled_units_behind_the_estimate": 56,
+     "leading_codes": [
+      [
+       "CUSTOM_CODE_UNMODELLED(remote-code:QuasarForCausalLM)",
+       3459.5
+      ],
+      [
+       "CUSTOM_CODE_UNMODELLED(remote-code:PhiForCausalLM)",
+       2162.2
+      ],
+      [
+       "CUSTOM_CODE_UNMODELLED(remote-code:SDARForCausalLM)",
+       1729.8
+      ],
+      [
+       "CUSTOM_CODE_UNMODELLED(remote-code:NemotronHForCausalLM)",
+       868.9
+      ]
+     ],
+     "generic_change_that_would_close_it": "a data adapter for each remote-code family that is a combination of known features (never repository code)"
+    }
+   ],
+   "estimator_note": "post-stratified cohorts (the report's estimator)",
+   "cell_unmeasured": {
+    "task_unknown/lower/NOT_RUN_NEEDS_PICKLE_DIRECTORY": 1206
+   }
+  }
+ },
+ "update2_by_code_as_published": {
+  "lower/TASK_UNKNOWN": 672528.7,
+  "source/MISSING_WEIGHTS": 579477,
+  "admit/SHAPE_READY": 559985.2,
+  "lower/MODALITY_PROFILE_MISSING": 460860.4,
+  "source/BASE_UNPINNED": 237680.1,
+  "lower/FORMAT_UNSUPPORTED": 132355.1,
+  "lower/PARTIAL_TASK_ONLY": 75936.9,
+  "source/GATED_ACCESS": 53419.6,
+  "lower/FEATURE_C": 49795.9,
+  "admit/NOT_RUN_PIPELINE_ADMISSION": 41853.3,
+  "lower/ARCH_REFUSED": 39607.4,
+  "lower/TOKENIZER_MISSING": 32469.8,
+  "lower/CONFIG_KEY_UNREAD": 27448.7,
+  "lower/ADAPTER_UNCHECKED": 24757.3,
+  "lower/NOT_RUN_NEEDS_TENSOR_DATA": 23599.8,
+  "lower/CUSTOM_CODE_UNMODELLED": 19558.4,
+  "lower/ADAPTER_REFUSED": 17978.8,
+  "admit/COURT_BUDGET": 12865.2,
+  "lower/TENSOR_MISSING": 12233.7,
+  "lower/QUANT_DESCRIPTOR_MISSING": 11352.5,
+  "source/WEIGHTS_INCOMPLETE": 9903.8,
+  "lower/CONFIG_MISSING": 6285.2,
+  "source/REPO_UNREACHABLE": 5961.5,
+  "lower/QUANT_REFUSED": 4800.4,
+  "lower/TENSOR_SHAPE": 2233.0,
+  "lower/TASK_MISMATCH": 1005.2,
+  "admit/SHAPE_READY_AT_2048_ONLY": 508.2,
+  "source/HEADER_INVALID": 473.9,
+  "source/FETCH_FAILED": 435.4,
+  "lower/CONFIG_INVALID": 433.6,
+  "lower/NOT_RUN_NEEDS_WEIGHTS": 66.0,
+  "source/HEADER_TOO_LARGE": 1.0
+ },
+ "update2_headline": {
+  "d_all_shape_ready": {
+   "total": 559985.2,
+   "share": 0.17960499129317567,
+   "se": 0.008484021800521182,
+   "lb95": 0.16575151566111845,
+   "denominator": 3117871,
+   "unjudged_eligible": 0.0
+  },
+  "d_files_shape_ready": {
+   "total": 559985.2,
+   "share": 0.25296425195736033,
+   "se": 0.011949301703177801,
+   "lb95": 0.2333516638314188,
+   "denominator": 2213693,
+   "unjudged_eligible": 0.0
+  }
+ },
+ "registration_columns": {
+  "rule": "Each column is its own count. Only the last, registered_full_task_active_or_final, is a registration in the RFC-0011 \u00a77 sense: an accepted on-chain class registration (or an independently verified reuse of the same class id and artifact root) for the repository's complete advertised task at its declared context, that reached Active/Final under the armed rules. A similar model name never counts.",
+  "evidence_source": {
+   "branch": "onboard/h1-hf-closed-loop",
+   "tip": "286225802",
+   "in_the_base_of_this_branch": false,
+   "note": "the H1 devnet evidence is on its own branch; it is not an ancestor of the integration HEAD this branch started from (a98cc4e31). Read from the git object store; no worktree was touched.",
+   "directory": "docs/evidence/hf-onboarding/20261008-*",
+   "devnet": "private salted testnet-12 drill genesis (fences at DAA 6, 10, 14, 16, 24, 26): not the public testnet-12"
+  },
+  "dormant_registration_on_a_private_devnet": {
+   "count": 1,
+   "repos": [
+    {
+     "repo": "Qwen/Qwen2.5-0.5B-Instruct",
+     "sha": "7ae557604adf67be50417f59c2c2f167def9a775",
+     "run": "20261008-qwen25-0.5b-r1 (L4)",
+     "class_id": "55b32ae12c8fa0031ea8d78b826f75632a6863585f2d3b5efc906c856460324a640591f69bc1ed1cb9160f878f64fd62bfa98b3ad577fb626b36d24ba787cb1c",
+     "artifact_root": "3c458f9988b7ae334940cd396f03fbeb4875e6cc9dcd31948f81877a633072ab197ec1686da5ce547216f044f842865fbb8c78a90f126ca99fef03e83a95f575",
+     "registered_at_positions": 512,
+     "declared_positions": 32768,
+     "short_context": true,
+     "pack": "strict rebuild verified",
+     "consensus_state": "agrees across the registering node, a restart and a fresh IBD node",
+     "kernel_route": "K2-TIR-v1 KERNEL_NOT_ACTIVE (ELIGIBLE_AT daa 5585 if armed)",
+     "g14": "GAP (no on-chain conformance commitment, no beacon-facts RPC, no seats, no public prosecution state)"
+    }
+   ]
+  },
+  "synthetic_beacon_conformance_pass": {
+   "count": 2,
+   "repos": [
+    "Qwen/Qwen2.5-0.5B-Instruct@7ae55760",
+    "HuggingFaceTB/SmolLM2-1.7B-Instruct@31b70e2e"
+   ],
+   "note": "SYNTHETIC_BEACON_CONFORMANCE_PASS: facts are SYNTHETIC and the policy UNAPPROVED; this is not an on-chain conformance commitment"
+  },
+  "highest_level_reached_by_other_h1_runs": {
+   "L2_pack_verified": [
+    "HuggingFaceTB/SmolLM2-1.7B-Instruct@31b70e2e"
+   ],
+   "L1_shape": [
+    "Qwen/Qwen3-0.6B@c1899de2",
+    "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B@ad9f0ae0",
+    "deepseek-ai/DeepSeek-V2-Lite-Chat@85864749",
+    "Qwen/Qwen1.5-MoE-A2.7B-Chat@ec052fda",
+    "huihui-ai/Huihui-Qwen3.5-9B-abliterated@05b9e7c9 (text decoder only; the repository's task is image-text-to-text)"
+   ],
+   "L0_source": [
+    "google/flan-t5-small@0fc9ddf7 (preflight register/mine unknown, exit 0: fixed here, now refused by CLOSE_SIZE_OVER_CAP)",
+    "HuggingFaceTB/SmolVLM-256M-Instruct@7e3e67ed"
+   ]
+  },
+  "independently_verified_reuse_of_a_registered_class": {
+   "count": 0,
+   "note": "no class id / artifact root reproduction by an independent party is evidenced"
+  },
+  "unit_test_or_fixture_pass": {
+   "note": "fixtures, not repo@sha: 72 of 100 curated light specs are convert+register ok at 128 positions (0011-existing-coverage-audit.json); tests/preflight_pipeline_class.rs; coverage_p1_huihui_refusals.rs pins the four past Huihui-Qwen3.5-9B refusals. None is a registration of a Hub repository."
+  },
+  "registered_full_task_active_or_final": {
+   "count": 0,
+   "why": [
+    "the one accepted registration is a dormant class at 512 of the model's 32,768 positions on a private devnet (a short-context substitution, RFC-0011 \u00a77)",
+    "no class reached Active or Final; the kernel route is KERNEL_NOT_ACTIVE and G14's gates are GAP on chain",
+    "no independent reproduction of a registered class id/root is evidenced"
+   ]
+  }
+ },
+ "acceptance_bar": {
+  "statement": "RFC-0011 \u00a77/\u00a710: one-sided 95% lower bound of registered_full_task / D_all >= 0.90 over all public repositories",
+  "numerator": "registered_full_task_active_or_final",
+  "met": false
+ },
+ "network": {
+  "requests": 0,
+  "note": "offline: the snapshot's saved headers only; no Hub request was made"
+ }
+}

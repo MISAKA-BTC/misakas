@@ -1,0 +1,21 @@
+test_after_slash_floor_can_block_new_admission (__main__.ExampleTests.test_after_slash_floor_can_block_new_admission) ... ok
+test_all_claims_can_be_debited_simultaneously (__main__.ExampleTests.test_all_claims_can_be_debited_simultaneously) ... ok
+test_conviction_flow_conserves_money (__main__.ExampleTests.test_conviction_flow_conserves_money) ... ok
+test_dismissal_does_not_charge_honest_miner (__main__.ExampleTests.test_dismissal_does_not_charge_honest_miner) ... ok
+test_duplicate_does_not_add_liability (__main__.ExampleTests.test_duplicate_does_not_add_liability) ... ok
+test_duplicate_with_changed_cap_is_rejected (__main__.ExampleTests.test_duplicate_with_changed_cap_is_rejected) ... ok
+test_exact_top_up (__main__.ExampleTests.test_exact_top_up) ... ok
+test_invalid_amounts_and_overflow_are_rejected (__main__.ExampleTests.test_invalid_amounts_and_overflow_are_rejected) ... ok
+test_legacy_utilization_is_not_ignored (__main__.ExampleTests.test_legacy_utilization_is_not_ignored) ... ok
+test_minimum_is_a_floor_not_an_extra_fee (__main__.ExampleTests.test_minimum_is_a_floor_not_an_extra_fee) ... ok
+test_one_claim_cannot_take_whole_account (__main__.ExampleTests.test_one_claim_cannot_take_whole_account) ... ok
+test_other_root_cannot_reuse_liability (__main__.ExampleTests.test_other_root_cannot_reuse_liability) ... ok
+test_reimbursement_is_cumulative_not_repeatable (__main__.ExampleTests.test_reimbursement_is_cumulative_not_repeatable) ... ok
+test_rejected_admission_is_atomic (__main__.ExampleTests.test_rejected_admission_is_atomic) ... ok
+test_self_report_coalition_cannot_recover_burn (__main__.ExampleTests.test_self_report_coalition_cannot_recover_burn) ... ok
+test_table (__main__.ExampleTests.test_table) ... ok
+
+----------------------------------------------------------------------
+Ran 16 tests in 0.001s
+
+OK

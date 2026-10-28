@@ -1,0 +1,76 @@
+diff --git a/consensus/core/src/palw_court_v2.rs b/consensus/core/src/palw_court_v2.rs
+index f66005392..fbc1ed2dc 100644
+--- a/consensus/core/src/palw_court_v2.rs
++++ b/consensus/core/src/palw_court_v2.rs
+@@ -841,6 +841,42 @@ pub fn check_court_tir_root_claim_admits_v1(
+         return Err(PalwCourtV2Error::DissectionAlreadyOpen(*session_id));
+     }
+     let narrowed = session.ladder.terminal_index().ok_or(PalwCourtV2Error::LadderNotTerminal)?;
++    check_resolved_tir_root_for_claim_v1(state,claim,narrowed,root,arity,derived_arity,court,step_ladder,prompt_ids_form)
++}
++
++/// Check a named leaf against the actual retained claim/program/roots without
++/// inventing a challenger, ladder or court session. Read-only numerical/source
++/// validation only: no signature, notice, funding, custody or default authority.
++/// A future shared coordinator supplies actual native rules and admits clone/
++/// finalize work before calling; wire-supplied rules are not authorization.
++#[allow(clippy::too_many_arguments)]
++pub fn check_named_tir_root_for_claim_v1(
++    state:&PalwChainStateV2,
++    claim_id:&Hash64,
++    narrowed:u64,
++    root:&crate::palw_tir_dissect_v1::PalwTirRootClaimV1,
++    arity:u8,
++    derived_arity:u8,
++    court:&crate::palw_mode_v2::PalwCourtParamsV2,
++    step_ladder:u64,
++    prompt_ids_form:crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
++)->Result<crate::palw_tir_dissect_v1::PalwTirDissectSiteV1,PalwCourtV2Error>{
++    let claim=state.claim(claim_id).ok_or(PalwCourtV2Error::MissingClaim(*claim_id))?;
++    check_resolved_tir_root_for_claim_v1(state,claim,narrowed,root,arity,derived_arity,court,step_ladder,prompt_ids_form)
++}
++
++#[allow(clippy::too_many_arguments)]
++fn check_resolved_tir_root_for_claim_v1(
++    state:&PalwChainStateV2,
++    claim:&crate::palw_state_v2::PalwClaimStateV2,
++    narrowed:u64,
++    root:&crate::palw_tir_dissect_v1::PalwTirRootClaimV1,
++    arity:u8,
++    derived_arity:u8,
++    court:&crate::palw_mode_v2::PalwCourtParamsV2,
++    step_ladder:u64,
++    prompt_ids_form:crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
++)->Result<crate::palw_tir_dissect_v1::PalwTirDissectSiteV1,PalwCourtV2Error>{
+     if state.tir_class_v1(&claim.class_id).is_none() {
+         return Err(PalwCourtV2Error::TirDissectionRefused(
+             "the session disputes a claim of a class that is not an IR program".into(),
+diff --git a/consensus/core/tests/palw_tir_dissect_fold.rs b/consensus/core/tests/palw_tir_dissect_fold.rs
+index 0ca497466..1048f461c 100644
+--- a/consensus/core/tests/palw_tir_dissect_fold.rs
++++ b/consensus/core/tests/palw_tir_dissect_fold.rs
+@@ -566,7 +566,23 @@ fn numerical_frontier_preserves_all_children_and_native_fold_checks(){
+         let (root,x)=if forged {let (r,x,_)=lie_in(&w,sum).unwrap();(r,x)}else{
+             (build_tir_root_claim_v1(&w.honest.binding,w.leaf,&Store {f:&w.f,x:&w.honest},&RULES).unwrap(),w.honest.clone())
+         };
+-        let (mut run,claim)=licensed(&w,&x);let sid=court_at_leaf(&mut run,claim,&x,w.leaf);
++        let (mut run,claim)=licensed(&w,&x);
++        let before=run.s.state_root();assert_eq!(run.s.court_sessions_len(),0);
++        let wire=carried(root.clone());
++        let check_named=|claim_id:&Hash64,leaf,root:&PalwTirRootClaimV1,a,derived| {
++            kaspa_consensus_core::palw_court_v2::check_named_tir_root_for_claim_v1(
++                &run.s,claim_id,leaf,root,a,derived,&court(),LADDER,PalwPromptIdsFormV1::Flat)
++        };
++        let site=check_named(&claim,w.leaf,&wire,arity,arity).unwrap();
++        assert_eq!(site.history_positions,w.site.history_positions);assert_eq!(site.reductions,w.site.reductions);
++        assert!(matches!(check_named(&h64(0xA113),w.leaf,&wire,arity,arity),Err(PalwCourtV2Error::MissingClaim(_))));
++        assert!(check_named(&claim,w.leaf+1,&wire,arity,arity).is_err());
++        assert!(matches!(check_named(&claim,w.leaf,&wire,arity,if arity==2 {4}else{2}),Err(PalwCourtV2Error::ArityIsNotTheDerivedOne {..})));
++        let mut foreign=wire.clone();foreign.finalize.binding.committed_execution_root=h64(0xA114);
++        assert!(check_named(&claim,w.leaf,&foreign,arity,arity).is_err());
++        assert_eq!(run.s.state_root(),before);assert_eq!(run.s.court_sessions_len(),0,"root checks do not fabricate sessions");
++        let sid=court_at_leaf(&mut run,claim,&x,w.leaf);
++        check_court_tir_root_claim_admits_v1(&run.s,&sid,&wire,arity,arity,&court(),LADDER,PalwPromptIdsFormV1::Flat).unwrap();
+         run.step(&[root_claimed(&run,sid,root,arity)]);
+         let initial=run.phase(&sid);let native_root=run.s.state_root();
+         let mut frontier=PalwTirNumericalFrontierV1::new(initial.clone()).unwrap();

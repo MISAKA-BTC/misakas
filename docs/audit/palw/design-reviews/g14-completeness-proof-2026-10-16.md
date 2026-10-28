@@ -1642,3 +1642,30 @@ text29 の実 job を node 上で作る harness(`funded11/text29.rs`)を書い�
 - kaspad:`carrier_wait_many_classes`・`rfc06_held_gdn_filer` 8 passed。
 - core の identity:`--test g14_court_capacity`(`testnet12_identity_did_not_move` を含む)15 passed / 1 ignored。
 - `rfc0018_dag_siblings` の node 試験 3 件は失敗した。fence ありの 1 件は config の validation が RFC-0018 fence の武装を拒否して起動しない。fence なしの 2 件は sibling が merger の past に入らない。どちらも sibling の順の変更(fence の中だけ)を通らない経路で、RFC18 監査 D16 が記録した既存の失敗と同じ症状である。未解決。
+
+### 12.12 Codex RFC18 rerun and Run 15 interruption (2026-10-18)
+
+Run 15 was interrupted at 17:31 JST after its driver restarted P while stopping
+its required relay R, then stopped O. P's node status showed `peers=false`; the
+run had no conviction observation and no D-02 row. The JSON result was preserved
+with `facts.status=INTERRUPTED`; P and O logs are under
+`/tmp/codex-g14-drill-run15/{P,O}/node.log`. This is neither a pass nor a
+terminal failure for automatic seat slashing. The earlier Run 12 terminal D-02
+FAIL (§12.9) remains the latest completed live outcome.
+
+RFC18's three DAG sibling tests were rerun from the existing debug test binary
+in the native lane at commit `1617c037d`, each with `--exact --nocapture
+--test-threads=1`:
+
+- `rfc18_three_models_three_miners_from_the_same_parents_are_all_retained_and_each_recorded` **FAIL** at line 242: card 2's claim
+  was absent from the tip state after the merger; exit 101.
+- `rfc18_arrival_order_does_not_matter_for_dag_claims_or_state` **FAIL** at line 237: in arrival order `[0, 1, 2]`, card 2's sibling
+  was not the selected parent, blue or red in the merger's past; exit 101.
+- `rfc18_with_the_sibling_fence_retention_and_arrival_order_independence_hold` **FAIL** before the test body: config validation refuses
+  arming the dormant RFC-0018 fence in this binary; exit 101.
+
+These runs contradict the earlier lane handover's claim that all three pass;
+the earlier result is not reproducible in this integration checkout. No fork
+choice behavior was changed to mask the failures. Logs were direct terminal
+outputs from the targeted binary; an isolated strict-economic probe also
+reproduced the missing card-2 claim.

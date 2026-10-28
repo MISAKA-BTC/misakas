@@ -1,0 +1,581 @@
+{
+ "schema": "misaka.palw.corpus-v2",
+ "positions": 10,
+ "vocab": 64,
+ "usage_weight": {
+  "vh": 8,
+  "h": 4,
+  "m": 2,
+  "l": 1
+ },
+ "entries": [
+  {
+   "id": "big_bird_enc",
+   "category": "census/encoder",
+   "route": "encoder-bidir",
+   "hf_arch": "BigBirdModel",
+   "model_type": "big_bird",
+   "builder": "encoder",
+   "cfg": {},
+   "usage": "l",
+   "share": null,
+   "why": "a transformers 5.17 masked-LM family, base model as a bidirectional encoder (census)",
+   "examples": [],
+   "options": {
+    "pad": 0,
+    "lmax": 12
+   },
+   "real_config": null,
+   "tiny": true,
+   "note": ""
+  },
+  {
+   "id": "camembert_enc",
+   "category": "census/encoder",
+   "route": "encoder-bidir",
+   "hf_arch": "CamembertModel",
+   "model_type": "camembert",
+   "builder": "encoder",
+   "cfg": {},
+   "usage": "l",
+   "share": null,
+   "why": "a transformers 5.17 masked-LM family, base model as a bidirectional encoder (census)",
+   "examples": [],
+   "options": {
+    "pad": 1,
+    "lmax": 12
+   },
+   "real_config": null,
+   "tiny": true,
+   "note": ""
+  },
+  {
+   "id": "convbert_enc",
+   "category": "census/encoder",
+   "route": "encoder-bidir",
+   "hf_arch": "ConvBertModel",
+   "model_type": "convbert",
+   "builder": "encoder",
+   "cfg": {},
+   "usage": "l",
+   "share": null,
+   "why": "a transformers 5.17 masked-LM family, base model as a bidirectional encoder (census)",
+   "examples": [],
+   "options": {
+    "pad": 1,
+    "lmax": 12
+   },
+   "real_config": null,
+   "tiny": true,
+   "note": ""
+  },
+  {
+   "id": "data2vec_text_enc",
+   "category": "census/encoder",
+   "route": "encoder-bidir",
+   "hf_arch": "Data2VecTextModel",
+   "model_type": "data2vec-text",
+   "builder": "encoder",
+   "cfg": {},
+   "usage": "l",
+   "share": null,
+   "why": "a transformers 5.17 masked-LM family, base model as a bidirectional encoder (census)",
+   "examples": [],
+   "options": {
+    "pad": 1,
+    "lmax": 12
+   },
+   "real_config": null,
+   "tiny": true,
+   "note": ""
+  },
+  {
+   "id": "deberta_enc",
+   "category": "census/encoder",
+   "route": "encoder-bidir",
+   "hf_arch": "DebertaModel",
+   "model_type": "deberta",
+   "builder": "encoder",
+   "cfg": {},
+   "usage": "l",
+   "share": null,
+   "why": "a transformers 5.17 masked-LM family, base model as a bidirectional encoder (census)",
+   "examples": [],
+   "options": {
+    "pad": 0,
+    "lmax": 12
+   },
+   "real_config": null,
+   "tiny": true,
+   "note": ""
+  },
+  {
+   "id": "electra_enc",
+   "category": "census/encoder",
+   "route": "encoder-bidir",
+   "hf_arch": "ElectraModel",
+   "model_type": "electra",
+   "builder": "encoder",
+   "cfg": {},
+   "usage": "l",
+   "share": null,
+   "why": "a transformers 5.17 masked-LM family, base model as a bidirectional encoder (census)",
+   "examples": [],
+   "options": {
+    "pad": 0,
+    "lmax": 12
+   },
+   "real_config": null,
+   "tiny": true,
+   "note": ""
+  },
+  {
+   "id": "ernie_enc",
+   "category": "census/encoder",
+   "route": "encoder-bidir",
+   "hf_arch": "ErnieModel",
+   "model_type": "ernie",
+   "builder": "encoder",
+   "cfg": {},
+   "usage": "l",
+   "share": null,
+   "why": "a transformers 5.17 masked-LM family, base model as a bidirectional encoder (census)",
+   "examples": [],
+   "options": {
+    "pad": 0,
+    "lmax": 12
+   },
+   "real_config": null,
+   "tiny": true,
+   "note": ""
+  },
+  {
+   "id": "eurobert_enc",
+   "category": "census/encoder",
+   "route": "encoder-bidir",
+   "hf_arch": "EuroBertModel",
+   "model_type": "eurobert",
+   "builder": "encoder",
+   "cfg": {},
+   "usage": "l",
+   "share": null,
+   "why": "a transformers 5.17 masked-LM family, base model as a bidirectional encoder (census)",
+   "examples": [],
+   "options": {
+    "pad": 0,
+    "lmax": 12
+   },
+   "real_config": null,
+   "tiny": true,
+   "note": ""
+  },
+  {
+   "id": "fnet_enc",
+   "category": "census/encoder",
+   "route": "encoder-bidir",
+   "hf_arch": "FNetModel",
+   "model_type": "fnet",
+   "builder": "encoder",
+   "cfg": {},
+   "usage": "l",
+   "share": null,
+   "why": "a transformers 5.17 masked-LM family, base model as a bidirectional encoder (census)",
+   "examples": [],
+   "options": {
+    "pad": 3,
+    "lmax": 12
+   },
+   "real_config": null,
+   "tiny": true,
+   "note": ""
+  },
+  {
+   "id": "ibert_enc",
+   "category": "census/encoder",
+   "route": "encoder-bidir",
+   "hf_arch": "IBertModel",
+   "model_type": "ibert",
+   "builder": "encoder",
+   "cfg": {},
+   "usage": "l",
+   "share": null,
+   "why": "a transformers 5.17 masked-LM family, base model as a bidirectional encoder (census)",
+   "examples": [],
+   "options": {
+    "pad": 1,
+    "lmax": 12
+   },
+   "real_config": null,
+   "tiny": true,
+   "note": ""
+  },
+  {
+   "id": "jina_embeddings_v3_enc",
+   "category": "census/encoder",
+   "route": "encoder-bidir",
+   "hf_arch": "JinaEmbeddingsV3Model",
+   "model_type": "jina_embeddings_v3",
+   "builder": "encoder",
+   "cfg": {},
+   "usage": "l",
+   "share": null,
+   "why": "a transformers 5.17 masked-LM family, base model as a bidirectional encoder (census)",
+   "examples": [],
+   "options": {
+    "pad": 1,
+    "lmax": 12
+   },
+   "real_config": null,
+   "tiny": true,
+   "note": ""
+  },
+  {
+   "id": "layoutlm_enc",
+   "category": "census/encoder",
+   "route": "encoder-bidir",
+   "hf_arch": "LayoutLMModel",
+   "model_type": "layoutlm",
+   "builder": "encoder",
+   "cfg": {},
+   "usage": "l",
+   "share": null,
+   "why": "a transformers 5.17 masked-LM family, base model as a bidirectional encoder (census)",
+   "examples": [],
+   "options": {
+    "pad": 0,
+    "lmax": 12
+   },
+   "real_config": null,
+   "tiny": true,
+   "note": ""
+  },
+  {
+   "id": "longformer_enc",
+   "category": "census/encoder",
+   "route": "encoder-bidir",
+   "hf_arch": "LongformerModel",
+   "model_type": "longformer",
+   "builder": "encoder",
+   "cfg": {},
+   "usage": "l",
+   "share": null,
+   "why": "a transformers 5.17 masked-LM family, base model as a bidirectional encoder (census)",
+   "examples": [],
+   "options": {
+    "pad": 1,
+    "lmax": 12
+   },
+   "real_config": null,
+   "tiny": true,
+   "note": ""
+  },
+  {
+   "id": "megatron_bert_enc",
+   "category": "census/encoder",
+   "route": "encoder-bidir",
+   "hf_arch": "MegatronBertModel",
+   "model_type": "megatron-bert",
+   "builder": "encoder",
+   "cfg": {},
+   "usage": "l",
+   "share": null,
+   "why": "a transformers 5.17 masked-LM family, base model as a bidirectional encoder (census)",
+   "examples": [],
+   "options": {
+    "pad": 0,
+    "lmax": 12
+   },
+   "real_config": null,
+   "tiny": true,
+   "note": ""
+  },
+  {
+   "id": "mobilebert_enc",
+   "category": "census/encoder",
+   "route": "encoder-bidir",
+   "hf_arch": "MobileBertModel",
+   "model_type": "mobilebert",
+   "builder": "encoder",
+   "cfg": {},
+   "usage": "l",
+   "share": null,
+   "why": "a transformers 5.17 masked-LM family, base model as a bidirectional encoder (census)",
+   "examples": [],
+   "options": {
+    "pad": 0,
+    "lmax": 12
+   },
+   "real_config": null,
+   "tiny": true,
+   "note": ""
+  },
+  {
+   "id": "mra_enc",
+   "category": "census/encoder",
+   "route": "encoder-bidir",
+   "hf_arch": "MraModel",
+   "model_type": "mra",
+   "builder": "encoder",
+   "cfg": {},
+   "usage": "l",
+   "share": null,
+   "why": "a transformers 5.17 masked-LM family, base model as a bidirectional encoder (census)",
+   "examples": [],
+   "options": {
+    "pad": 1,
+    "lmax": 12
+   },
+   "real_config": null,
+   "tiny": true,
+   "note": ""
+  },
+  {
+   "id": "mvp_enc",
+   "category": "census/encoder",
+   "route": "encoder-bidir",
+   "hf_arch": "MvpModel",
+   "model_type": "mvp",
+   "builder": "encoder",
+   "cfg": {},
+   "usage": "l",
+   "share": null,
+   "why": "a transformers 5.17 masked-LM family, base model as a bidirectional encoder (census)",
+   "examples": [],
+   "options": {
+    "pad": 1,
+    "lmax": 12
+   },
+   "real_config": null,
+   "tiny": true,
+   "note": ""
+  },
+  {
+   "id": "nystromformer_enc",
+   "category": "census/encoder",
+   "route": "encoder-bidir",
+   "hf_arch": "NystromformerModel",
+   "model_type": "nystromformer",
+   "builder": "encoder",
+   "cfg": {},
+   "usage": "l",
+   "share": null,
+   "why": "a transformers 5.17 masked-LM family, base model as a bidirectional encoder (census)",
+   "examples": [],
+   "options": {
+    "pad": 1,
+    "lmax": 12
+   },
+   "real_config": null,
+   "tiny": true,
+   "note": ""
+  },
+  {
+   "id": "rembert_enc",
+   "category": "census/encoder",
+   "route": "encoder-bidir",
+   "hf_arch": "RemBertModel",
+   "model_type": "rembert",
+   "builder": "encoder",
+   "cfg": {},
+   "usage": "l",
+   "share": null,
+   "why": "a transformers 5.17 masked-LM family, base model as a bidirectional encoder (census)",
+   "examples": [],
+   "options": {
+    "pad": 0,
+    "lmax": 12
+   },
+   "real_config": null,
+   "tiny": true,
+   "note": ""
+  },
+  {
+   "id": "roberta_prelayernorm_enc",
+   "category": "census/encoder",
+   "route": "encoder-bidir",
+   "hf_arch": "RobertaPreLayerNormModel",
+   "model_type": "roberta-prelayernorm",
+   "builder": "encoder",
+   "cfg": {},
+   "usage": "l",
+   "share": null,
+   "why": "a transformers 5.17 masked-LM family, base model as a bidirectional encoder (census)",
+   "examples": [],
+   "options": {
+    "pad": 1,
+    "lmax": 12
+   },
+   "real_config": null,
+   "tiny": true,
+   "note": ""
+  },
+  {
+   "id": "roc_bert_enc",
+   "category": "census/encoder",
+   "route": "encoder-bidir",
+   "hf_arch": "RoCBertModel",
+   "model_type": "roc_bert",
+   "builder": "encoder",
+   "cfg": {},
+   "usage": "l",
+   "share": null,
+   "why": "a transformers 5.17 masked-LM family, base model as a bidirectional encoder (census)",
+   "examples": [],
+   "options": {
+    "pad": 0,
+    "lmax": 12
+   },
+   "real_config": null,
+   "tiny": true,
+   "note": ""
+  },
+  {
+   "id": "roformer_enc",
+   "category": "census/encoder",
+   "route": "encoder-bidir",
+   "hf_arch": "RoFormerModel",
+   "model_type": "roformer",
+   "builder": "encoder",
+   "cfg": {},
+   "usage": "l",
+   "share": null,
+   "why": "a transformers 5.17 masked-LM family, base model as a bidirectional encoder (census)",
+   "examples": [],
+   "options": {
+    "pad": 0,
+    "lmax": 12
+   },
+   "real_config": null,
+   "tiny": true,
+   "note": ""
+  },
+  {
+   "id": "tapas_enc",
+   "category": "census/encoder",
+   "route": "encoder-bidir",
+   "hf_arch": "TapasModel",
+   "model_type": "tapas",
+   "builder": "encoder",
+   "cfg": {},
+   "usage": "l",
+   "share": null,
+   "why": "a transformers 5.17 masked-LM family, base model as a bidirectional encoder (census)",
+   "examples": [],
+   "options": {
+    "pad": 0,
+    "lmax": 12
+   },
+   "real_config": null,
+   "tiny": true,
+   "note": ""
+  },
+  {
+   "id": "xlm_roberta_xl_enc",
+   "category": "census/encoder",
+   "route": "encoder-bidir",
+   "hf_arch": "XLMRobertaXLModel",
+   "model_type": "xlm-roberta-xl",
+   "builder": "encoder",
+   "cfg": {},
+   "usage": "l",
+   "share": null,
+   "why": "a transformers 5.17 masked-LM family, base model as a bidirectional encoder (census)",
+   "examples": [],
+   "options": {
+    "pad": 1,
+    "lmax": 12
+   },
+   "real_config": null,
+   "tiny": true,
+   "note": ""
+  },
+  {
+   "id": "yoso_enc",
+   "category": "census/encoder",
+   "route": "encoder-bidir",
+   "hf_arch": "YosoModel",
+   "model_type": "yoso",
+   "builder": "encoder",
+   "cfg": {},
+   "usage": "l",
+   "share": null,
+   "why": "a transformers 5.17 masked-LM family, base model as a bidirectional encoder (census)",
+   "examples": [],
+   "options": {
+    "pad": 1,
+    "lmax": 12
+   },
+   "real_config": null,
+   "tiny": true,
+   "note": ""
+  }
+ ],
+ "census": {
+  "families": 37,
+  "built": 25,
+  "not_derivable": [
+   {
+    "model_type": "esm",
+    "ok": false,
+    "error": "TypeError: ne() received an invalid combination of arguments - got (NoneType), but expected one of:  * (Tensor other)       didn't match because some of the arguments have"
+   },
+   {
+    "model_type": "esmc",
+    "ok": false,
+    "error": "StrictDataclassClassValidationError: Class validation error for validator 'validate_architecture':     ValueError: ESMC does not support grouped-query attention: `num_key_value_heads` (2) must equa"
+   },
+   {
+    "model_type": "flaubert",
+    "ok": false,
+    "error": "RuntimeError: not tiny: 101,113,856 parameters, largest tensor 64 MiB (shrink its config keys)"
+   },
+   {
+    "model_type": "funnel",
+    "ok": false,
+    "error": "TypeError: 'NoneType' object is not iterable"
+   },
+   {
+    "model_type": "luke",
+    "ok": false,
+    "error": "RuntimeError: not tiny: 128,043,168 parameters, largest tensor 488 MiB (shrink its config keys)"
+   },
+   {
+    "model_type": "modernvbert",
+    "ok": false,
+    "error": "RuntimeError: not tiny: 251,335,680 parameters, largest tensor 148 MiB (shrink its config keys)"
+   },
+   {
+    "model_type": "neomme",
+    "ok": false,
+    "error": "ValueError: rope_parameters['full_attention']['partial_rotary_factor']=0.25 rotates 2 of head_dim=8 dims, which is not a multiple of 4: the two M-RoPE axes consume frequenc"
+   },
+   {
+    "model_type": "perceiver",
+    "ok": false,
+    "error": "RuntimeError: not tiny: 259,620,768 parameters, largest tensor 6 MiB (shrink its config keys)"
+   },
+   {
+    "model_type": "reformer",
+    "ok": false,
+    "error": "ValueError: Make sure that config.axial_pos_embds factors: (64, 192) sum to config.hidden_size: 32"
+   },
+   {
+    "model_type": "squeezebert",
+    "ok": false,
+    "error": "AssertionError: If you want embedding_size != intermediate hidden_size, please insert a Conv1d layer to adjust the number of channels before the first SqueezeBertModule."
+   },
+   {
+    "model_type": "xlm",
+    "ok": false,
+    "error": "RuntimeError: not tiny: 101,113,856 parameters, largest tensor 64 MiB (shrink its config keys)"
+   },
+   {
+    "model_type": "xmod",
+    "ok": false,
+    "error": "ValueError: Input language unknown. Please call `XmodPreTrainedModel.set_default_language()`"
+   }
+  ],
+  "excluded": [],
+  "variants": []
+ }
+}

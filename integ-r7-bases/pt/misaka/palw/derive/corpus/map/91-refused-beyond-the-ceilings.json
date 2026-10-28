@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "width": 1024,
+  "height": 1024,
+  "default": 0,
+  "palette": [
+    { "tile": 0, "cost": 1, "passable": true }
+  ],
+  "runs": [],
+  "nodes": [],
+  "edges": []
+}

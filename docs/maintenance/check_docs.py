@@ -27,7 +27,7 @@ def main():
   if found!=indexed:fail.append(kind+' index is stale; run generate_indexes.py')
   counts[kind]=len(found)
  for p in d.iterdir():
-  if p.is_file() and p.name not in {'README.md','INDEX.md','STATUS.md','AGENTS.md','PRINCIPLES.md'}:fail.append('unclassified root file: '+p.name)
+  if p.is_file() and p.name not in {'README.md','INDEX.md','STATUS.md','AGENTS.md','PRINCIPLES.md','.DS_Store'}:fail.append('unclassified root file: '+p.name)
  required=['README.md','INDEX.md','STATUS.md','AGENTS.md','PRINCIPLES.md','governance/design-freeze.md','governance/post-mainnet-scope.md','governance/parameter-register.md','adr/0181-design-freeze-and-controlled-change.md','adr/0182-defer-media-and-model-improvement-until-post-mainnet.md','rfc/0021-design-freeze-and-documentation-governance.md','rfc/0022-post-mainnet-media-and-model-improvement-scope.md']
  for name in required:
   if not (d/name).is_file():fail.append('missing required document: '+name)

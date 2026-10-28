@@ -1,0 +1,25 @@
+{
+  "request": {
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "What is in this image?"
+          },
+          {
+            "type": "image_url",
+            "image_url": {
+              "url": "https://example.com/cat.png"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "verdict": "refused",
+    "reason_contains": "messages[0].content[1] is a `image_url` part"
+  }
+}

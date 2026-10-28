@@ -1,0 +1,18 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "ernie4-5",
+  "doc": "ERNIE 4.5 dense (Baidu): Llama with ONE bias switch (use_bias: q, k, v, o and the three MLP projections), GLM-style interleaved rotary pairs over the full head, tied head by default. Third-party adapter (lane H): data only.",
+  "extends": ["decoder-core"],
+  "match": {"architectures": ["Ernie4_5ForCausalLM"], "model_types": ["ernie4_5"]},
+  "config": {
+    "defaults": {"vocab_size": 103424, "hidden_size": 1024, "intermediate_size": 3072, "num_hidden_layers": 18, "num_attention_heads": 16, "num_key_value_heads": 2, "max_position_embeddings": 131072, "rms_norm_eps": 1e-05, "tie_word_embeddings": true, "use_bias": false, "head_dim": 128}
+  },
+  "vars": [
+    {"name": "ub", "value": {"$cfg": "use_bias"}},
+    {"name": "qkv_bias", "value": {"$var": "ub"}},
+    {"name": "o_bias", "value": {"$var": "ub"}},
+    {"name": "mbias", "value": {"$var": "ub"}},
+    {"name": "rope_style", "value": "Interleaved"},
+    {"name": "model_type", "value": "ernie4_5"}
+  ]
+}

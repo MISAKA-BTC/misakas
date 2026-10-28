@@ -1,0 +1,40 @@
+--- app.buy6.js
++++ app.buy6.js
+@@ -3214,6 +3214,7 @@
+   // the line row is read for every line, not only the ones without a row: it carries the benefits word
+   await pool(ids, 4, async (id) => { await refreshMarket(id); await refreshLineInfo(id); });
+   if (withUsage) await pool(ids, 4, (id) => refreshUsage(id));
++  if (window.MISAKA_READINESS) window.MISAKA_READINESS.refresh(Array.from(db.lines.values()), rpc, () => db.emit()).catch(() => {});
+   db.emit();
+ }
+ function usageOf(r) { return r.usage ? r.usage.attempt + r.usage.fp : null; }
+@@ -3286,11 +3287,11 @@
+   opts = opts || {};
+   return h`<div class="tbl-wrap"><table class="tbl lines-model-description" id="linesTbl"><thead><tr>
+     ${opts.rank ? raw('<th>#</th>') : ''}
+-    <th class="l">Model</th><th class="l">Description</th><th class="l" title="What the line's owner has declared for its members (ADR-0095)">Members get</th><th class="l">Class</th><th class="sortable ${opts.sort === 'usage' ? 'sorted' : ''}" data-sort="usage" title="Paid inferences the fold counted on the current version: the one measurement the chain makes">Used</th><th class="sortable ${opts.sort === 'price' ? 'sorted' : ''}" data-sort="price">Membership (MSK)</th><th title="Net change in distinct EVM wallet holders over the past 24 hours">Holders +24 h</th><th class="sortable ${opts.sort === 'sold' ? 'sorted' : ''}" data-sort="sold">Members hold</th><th class="sortable ${opts.sort === 'seed' ? 'sorted' : ''}" data-sort="seed" title="The MSK the store opened with, locked for good">Opening (locked)</th><th class="l">Owner</th><th>Versions</th><th class="l">Status</th><th class="l" title="The model's bundle over BitTorrent v2 (MISAKA Torrent), as this site's release index lists it">Download</th>
++    <th class="l">Model</th><th class="l">Description</th><th class="l" title="What the line's owner has declared for its members (ADR-0095)">Members get</th><th class="l">Class</th><th class="sortable ${opts.sort === 'usage' ? 'sorted' : ''}" data-sort="usage" title="Paid inferences the fold counted on the current version: the one measurement the chain makes">Used</th><th class="sortable ${opts.sort === 'price' ? 'sorted' : ''}" data-sort="price">Membership (MSK)</th><th title="Net change in distinct EVM wallet holders over the past 24 hours">Holders +24 h</th><th class="sortable ${opts.sort === 'sold' ? 'sorted' : ''}" data-sort="sold">Members hold</th><th title="Chain-confirmed ready Panel seats for this model; readiness records, not live connections">Panel ready</th><th class="l">Owner</th><th>Versions</th><th class="l" title="Production eligibility and retained Final records, independent of whether the store is open">Readiness</th><th class="l">Status</th><th class="l" title="The model's bundle over BitTorrent v2 (MISAKA Torrent), as this site's release index lists it">Download</th>
+   </tr></thead><tbody>
+     ${list.length ? list.map((r, i) => { const m = r.market, row = r.row, o = ownerLabel(row), u = usageOf(r); const held = membersHold(m); const seeded = !!(m && m.seeded); return h`<tr class="row-link" data-href="#/models/${hubEntry(r).slug}">
+       ${opts.rank ? h`<td class="rank">${i + 1}</td>` : ''}
+-      <td class="l">${nameCell(r)}</td>
++      <td class="l">${nameCell(r)}${raw(window.MISAKA_READINESS ? window.MISAKA_READINESS.phoneCell(r) : '')}</td>
+       <td class="l model-description-cell" title="${esc(modelRegistrantDescription(r))}">${esc(modelRegistrantDescription(r))}</td>
+       <td class="l">${getsCell(r)}</td>
+       <td class="l"><span class="mono tiny" title="${r.classId || ''}">${r.classId ? shortId(r.classId) : '—'}</span></td>
+@@ -3298,12 +3299,13 @@
+       <td class="num">${seeded && m.price != null ? fmtPrice(m.price) : m && !seeded ? raw('<span class="tag store-closed" title="This store is not open: an opening deposit of at least ' + esc(fmtMsk(seedMinFor(m), 0)) + ' MSK opens it (the model\'s page has the opening panel)">Not open</span>') : '—'}</td>
+       <td class="num">${holderDelta24Cell(r)}</td>
+       <td class="num" title="${m && m.legacy ? 'pre-ADR-0090 row: not shown' : m ? 'ever taken: ' + fmtPos(m.soldUnits) : ''}">${m && !m.legacy ? fmtPos(held) + ' / ' + fmtPos(m.supplyUnits) : '—'}</td>
+-      <td class="num">${seeded ? (m.seedSompi != null ? fmtMsk(m.seedSompi, 0) : raw('<span class="dim" title="not served by the AMM window">—</span>')) : m ? raw('<span class="dim">none</span>') : '—'}</td>
++      <td class="num panel-ready-cell">${raw(window.MISAKA_READINESS ? window.MISAKA_READINESS.panelCell(r) : '—')}</td>
+       <td class="l" title="${o ? o.title : ''}">${o ? o.text : '—'}</td>
+       <td class="num">${row && row.versionsPublished != null ? row.versionsPublished + ' (v' + row.current + ')' : '—'}</td>
++      <td class="l production-cell">${raw(window.MISAKA_READINESS ? window.MISAKA_READINESS.cell(r) : '—')}</td>
+       <td class="l">${statusTag(r)} <a class="tiny" href="#/line/${r.lineId}">details</a></td>
+       <td class="l">${downloadCell(r)}</td>
+-    </tr>`; }) : raw('<tr><td colspan="' + (opts.rank ? '14' : '13') + '" class="empty">No models known yet. ' + (db.classes.size ? 'Waiting for a node to answer.' : 'Configure CLASS_IDS in config.js, or reach an EVM RPC whose registry window is armed.') + '</td></tr>')}
++    </tr>`; }) : raw('<tr><td colspan="' + (opts.rank ? '15' : '14') + '" class="empty">No models known yet. ' + (db.classes.size ? 'Waiting for a node to answer.' : 'Configure CLASS_IDS in config.js, or reach an EVM RPC whose registry window is armed.') + '</td></tr>')}
+   </tbody></table></div>`.s;
+ }
+ // The "Members get" cell: the first tier's benefits in words, or plainly that there are none.

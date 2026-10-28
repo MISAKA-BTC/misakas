@@ -79,13 +79,28 @@ fn every_hf_tiny_fixture_program_is_the_same_on_all_three_implementations() {
 #[test]
 fn every_prequantised_fixture_is_the_same_on_all_three_implementations() {
     let mut names: Vec<(String, String)> = Vec::new();
-    // The corpus now includes three MLX grouped-affine exports and one additional
-    // GGUF format. All remain subject to identical three-implementation execution.
-    for (root, count) in [("tests/fixtures/hf-quant", 36), ("tests/fixtures/gguf", 12)] {
+    // GGUF's Prism pair is nested (plain/rotated), so count executable leaves,
+    // not the parent directory as though it were one checkpoint.
+    fn checkpoints(root: &Path, prefix: &str, names: &mut Vec<String>) {
+        let dir = root.join(prefix);
+        if dir.join("model.gguf").is_file() || dir.join("model.safetensors").is_file() {
+            names.push(prefix.to_string());
+            return;
+        }
+        let mut children: Vec<_> = std::fs::read_dir(&dir).expect("fixture directory")
+            .map(|e| e.expect("fixture entry"))
+            .filter(|e| e.file_type().unwrap().is_dir()).collect();
+        children.sort_by_key(|e| e.file_name());
+        assert!(!children.is_empty(), "{} has no checkpoint or nested fixtures", dir.display());
+        for child in children {
+            let name = child.file_name().to_string_lossy().to_string();
+            checkpoints(root, &if prefix.is_empty() { name } else { format!("{prefix}/{name}") }, names);
+        }
+    }
+    for (root, count) in [("tests/fixtures/hf-quant", 36), ("tests/fixtures/gguf", 13)] {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join(root);
-        let mut here: Vec<String> =
-            std::fs::read_dir(&dir).expect("fixtures").map(|e| e.expect("entry").file_name().to_string_lossy().to_string()).collect();
-        here.sort();
+        let mut here = Vec::new();
+        checkpoints(&dir, "", &mut here);
         assert_eq!(here.len(), count, "{root}");
         names.extend(here.into_iter().map(|n| (root.to_string(), n)));
     }

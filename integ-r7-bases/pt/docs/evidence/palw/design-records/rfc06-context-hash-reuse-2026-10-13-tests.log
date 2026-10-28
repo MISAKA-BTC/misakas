@@ -1,0 +1,8 @@
+
+running 3 tests
+test tests::cached_hashing_measurement_preserves_every_leaf_and_merkle_root ... ignored, comparative leaf-hashing measurement, no whole-model cost approval
+test tests::cached_prefix_is_job_independent_but_suffix_and_decode_rebind ... ok
+test tests::cached_contexts_match_canonical_hash_at_every_prefix_boundary ... ok
+
+test result: ok. 2 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

@@ -1,0 +1,147 @@
+[
+  {
+    "bytes": 30091,
+    "path": "docs/adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md",
+    "sha256": "91679146b42a1e02f64c1f5ec768870f0775303b3a0f69ef3540dc9cf62864f1"
+  },
+  {
+    "bytes": 88531,
+    "path": "docs/evidence/palw/claim-capacity-map-2026-09-26/runs/A_floor_small.json",
+    "sha256": "19365ea04861150a08b2c17e99480b789a4d8342dbae8d6b17adcf21b7e6b18f"
+  },
+  {
+    "bytes": 26960,
+    "path": "docs/evidence/palw/claim-capacity-map-2026-09-26/runs/C_8k_13k.json",
+    "sha256": "9348d2f56b5d1279e262d52b9d6988f538d5728c94dda2dd0a55d66b88940548"
+  },
+  {
+    "bytes": 27321,
+    "path": "docs/evidence/palw/claim-capacity-map-2026-09-26/runs/D_8k_20k.json",
+    "sha256": "de336531efcc578927f8fd5d75d5cf090530bf0e6c478b4f649e989bfdf2b529"
+  },
+  {
+    "bytes": 27250,
+    "path": "docs/evidence/palw/claim-capacity-map-2026-09-26/runs/E_8k_26k.json",
+    "sha256": "7fb7262339e8285e72a50ce842863b957d5abb3c9729c930509f264fd42de86e"
+  },
+  {
+    "bytes": 27284,
+    "path": "docs/evidence/palw/claim-capacity-map-2026-09-26/runs/F_8k_100k.json",
+    "sha256": "bf8a6b866f1197fe9f2d19eabe4334a6aa77591b202c31f0f1945d5f965ce636"
+  },
+  {
+    "bytes": 30823,
+    "path": "docs/evidence/palw/claim-capacity-map-2026-09-26/runs/G_8k_split_13k_13k.json",
+    "sha256": "512063fb4f33f2ba24f6c6dd19d8abd76ef61d92aae8744691de10958a74c826"
+  },
+  {
+    "bytes": 30579,
+    "path": "docs/evidence/palw/claim-capacity-map-2026-09-26/runs/H_8k_100k_100k.json",
+    "sha256": "ce90050c281c6d271a6af91103c53f67a0d41ad4a037529e26a6573f4d5654c5"
+  },
+  {
+    "bytes": 18883,
+    "path": "docs/evidence/palw/claim-capacity-map-2026-09-26/runs/I_8k_13k_quorum3.json",
+    "sha256": "b8c64d3480f2f0994d0746024afdb51aa22fc4a5ec910dfabcdb3fddca273405"
+  },
+  {
+    "bytes": 18893,
+    "path": "docs/evidence/palw/claim-capacity-map-2026-09-26/runs/J_floor_13k_quorum3.json",
+    "sha256": "2f5afac888d667d34c586ac853b1a1f77eab842444f2c138235b4872017ce39a"
+  },
+  {
+    "bytes": 122289,
+    "path": "docs/evidence/palw/claim-capacity-map-2026-09-26/runs/K_floor_big.json",
+    "sha256": "033d75dc83a14e8b768438e6121acf6c571a5439a69ce9b39cbe17d10bd0043c"
+  },
+  {
+    "bytes": 63699,
+    "path": "docs/evidence/palw/claim-capacity-map-2026-09-26/runs/L1_floor_13k_live.json",
+    "sha256": "1094fcb9ef047406b665f0ff13e5e930167806a83d706e29fc69ebc930c825ed"
+  },
+  {
+    "bytes": 40418,
+    "path": "docs/evidence/palw/claim-capacity-map-2026-09-26/runs/L2_8k_100k_live.json",
+    "sha256": "b83691c6536caae25983143b19574dac1678743ac2be9a754429d47071b9eaf8"
+  },
+  {
+    "bytes": 38598,
+    "path": "docs/evidence/palw/claim-capacity-map-2026-09-26/runs/L3_8k_13k_live.json",
+    "sha256": "a42ec7d854f52db3f614312093fa44e9ed3a6b6b9c7c6dc53895d65d4b2ee949"
+  },
+  {
+    "bytes": 27260,
+    "path": "docs/evidence/palw/claim-capacity-map-2026-09-26/runs/M_8k_21k.json",
+    "sha256": "811e69ecdd1eba7197a2cc3528b801986f24ffc2f0bcc9edfebbd2fb7d84c52f"
+  },
+  {
+    "bytes": 27250,
+    "path": "docs/evidence/palw/claim-capacity-map-2026-09-26/runs/N_8k_22k.json",
+    "sha256": "35ce51b33a2c02cd23e9de7de8efc30ab1685412bbe4095cc97af16e0f50aec4"
+  },
+  {
+    "bytes": 15075,
+    "path": "docs/evidence/palw/claim-capacity-map-2026-09-26/runs/S2_8k_100k.json",
+    "sha256": "40a59ff171686e08b2c1180ba20c9760d7d66c5520a464b1f4fddf69dba921bf"
+  },
+  {
+    "bytes": 24548,
+    "path": "docs/evidence/palw/claim-capacity-map-2026-09-26/runs/S2_8k_100k_200.json",
+    "sha256": "b4500666006d369334e11352791e0cba605f295372081d91efb1064327c14667"
+  },
+  {
+    "bytes": 15670,
+    "path": "docs/evidence/palw/claim-capacity-map-2026-09-26/runs/instant2.json",
+    "sha256": "ce896ae72d9651f855718989df2913eb9df95637441498d9110b68f2699ee8de"
+  },
+  {
+    "bytes": 6543,
+    "path": "docs/evidence/palw/claim-capacity-map-2026-09-26/runs/study.json",
+    "sha256": "ba5880584c12d61540de7a1422e47e078ed50c232008dc687ba3d4eadfb2d5c0"
+  },
+  {
+    "bytes": 68499,
+    "path": "docs/evidence/palw/measurements/opv-measurements.md",
+    "sha256": "9c0ea29160ffd3bc072702680df65b21993f3d312976ae9433a30a93c3f1ab58"
+  },
+  {
+    "bytes": 62211,
+    "path": "docs/evidence/palw/measurements/palw-claim-capacity-map-2026-09-26.md",
+    "sha256": "49b5059f6c48ce0f18109998f3ac369de40f1e57295c77b869fc9a5943accbdd"
+  },
+  {
+    "bytes": 3756,
+    "path": "docs/evidence/palw/opv-measurements-data/gap07-verify.jsonl",
+    "sha256": "bddff36d6fae0073c78cb6a1474377b55ac65b6669930f63d6a8d5114c845899"
+  },
+  {
+    "bytes": 65006,
+    "path": "docs/evidence/palw/opv-measurements-data/qwen25-p3.jsonl",
+    "sha256": "b210dd57404207283ca0ccfb711f764aa0fcf2fc3f01e4021d8c6e562d73dbea"
+  },
+  {
+    "bytes": 13062,
+    "path": "docs/evidence/palw/opv-measurements-data/qwen25-sweep.jsonl",
+    "sha256": "6910dcfbd5c10e272b2ee94e214e280f62c27a865915cc00b89ae9d123c2ea57"
+  },
+  {
+    "bytes": 18210,
+    "path": "docs/rfc/0026-court-policy-master-contract.md",
+    "sha256": "fef48d68b3dc8760b972aa603598ce359a9b0437aba433e1c79362664c144293"
+  },
+  {
+    "bytes": 8574,
+    "path": "scripts/drills/adr0176_stage1_measure.py",
+    "sha256": "5d48d14781e039c6d20498d541d83eec9304eab013fdf97dd81b0faeeb672576"
+  },
+  {
+    "bytes": 2649,
+    "path": "tools/opv-meas/src/util.rs",
+    "sha256": "90be2994fa5bb36f907b4ec3964bde68447dc6e49442a08844ad36f6661726da"
+  },
+  {
+    "bytes": 18706,
+    "path": "tools/opv-meas/src/verify.rs",
+    "sha256": "94239704a5db9e066cb3650f8ac614c3e1d9dfed5cd8a30ceeba9a3641e5dee6"
+  }
+]

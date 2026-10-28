@@ -1,0 +1,10 @@
+Compiled source7a124843d; coreopt0/debug0,kaspaddebug0; scheduler unconnected to service.
+Binary SHA256 7d3ce18d7572321c54deada8394fb174beb48b13f5dd94aaaedc2ff1516710b4
+
+running 2 tests
+test palw_panel::palw_fraud_filer::tokenizer_scheduler::tests::guarded_tokenizer_scheduler_restarts_retries_and_closes_only_the_real_core_court ... ok
+test palw_panel::palw_fraud_filer::tokenizer_scheduler::tests::tokenizer_scheduler_refuses_wrong_operands_changed_job_and_unfunded_heap_before_seed ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 690 filtered out; finished in 1.50s
+
+FILTER_EXIT 0

@@ -1,0 +1,495 @@
+{
+  "findings": [
+    {
+      "id": "F01",
+      "priority": "P1",
+      "kind": "期限契約・適用範囲の未統合",
+      "title": "3,120／3,200／10,000／E_max の優先関係が一つに定まらない",
+      "sources": [
+        [
+          "docs/rfc/0014-panel-independent-fraud-prosecution.md",
+          925,
+          974
+        ],
+        [
+          "docs/rfc/0025-scalable-objective-court-many-models-mass-disputes.md",
+          3,
+          20
+        ],
+        [
+          "docs/rfc/0025-scalable-objective-court-many-models-mass-disputes.md",
+          175,
+          199
+        ],
+        [
+          "docs/rfc/0024-court-door-3200-to-ctx-2m.md",
+          571,
+          574
+        ]
+      ]
+    },
+    {
+      "id": "F02",
+      "priority": "P0",
+      "kind": "有効化を止める設計未完",
+      "title": "「正規の収録機会があった」を全ノードが判定する条件が閉じていない",
+      "sources": [
+        [
+          "docs/rfc/0014-panel-independent-fraud-prosecution.md",
+          976,
+          1027
+        ],
+        [
+          "docs/rfc/0025-scalable-objective-court-many-models-mass-disputes.md",
+          262,
+          270
+        ],
+        [
+          "docs/rfc/0025-scalable-objective-court-many-models-mass-disputes.md",
+          51,
+          60
+        ],
+        [
+          "docs/rfc/0008-palw-claim-backed-consensus-blocks.md",
+          140,
+          150
+        ]
+      ]
+    },
+    {
+      "id": "F03",
+      "priority": "P0",
+      "kind": "有効化を止める設計未完",
+      "title": "料金・有限枠と、外部検証者1人の訴追権を両立させる規則が未完",
+      "sources": [
+        [
+          "docs/rfc/0014-panel-independent-fraud-prosecution.md",
+          449,
+          470
+        ],
+        [
+          "docs/rfc/0025-scalable-objective-court-many-models-mass-disputes.md",
+          226,
+          250
+        ],
+        [
+          "docs/rfc/0025-scalable-objective-court-many-models-mass-disputes.md",
+          333,
+          355
+        ]
+      ]
+    },
+    {
+      "id": "F04",
+      "priority": "P1",
+      "kind": "経路間の責任・署名能力の未統合",
+      "title": "MinerのPC停止と、後から発生するMiner署名付き応答の接続が不足",
+      "sources": [
+        [
+          "docs/rfc/0009-palw-remote-miner.md",
+          24,
+          41
+        ],
+        [
+          "docs/rfc/0009-palw-remote-miner.md",
+          59,
+          63
+        ],
+        [
+          "docs/rfc/0009-palw-remote-miner.md",
+          145,
+          168
+        ],
+        [
+          "docs/rfc/0009-palw-remote-miner.md",
+          190,
+          198
+        ],
+        [
+          "consensus/core/src/palw_court_v2.rs",
+          802,
+          820
+        ],
+        [
+          "consensus/core/src/palw_court_v2.rs",
+          863,
+          882
+        ]
+      ]
+    },
+    {
+      "id": "F05",
+      "priority": "P1",
+      "kind": "特定条件下の算術的な非両立",
+      "title": "現行4分岐の2M対話を保持したまま総量64 KiBにはできない",
+      "sources": [
+        [
+          "docs/rfc/0014-panel-independent-fraud-prosecution.md",
+          929,
+          938
+        ],
+        [
+          "docs/rfc/0024-court-door-3200-to-ctx-2m.md",
+          191,
+          211
+        ],
+        [
+          "docs/rfc/0025-scalable-objective-court-many-models-mass-disputes.md",
+          70,
+          84
+        ],
+        [
+          "consensus/core/tests/review_heldnode_arity.rs",
+          1,
+          38
+        ],
+        [
+          "docs/spec/palw/04b-tensor-ir.md",
+          1192,
+          1202
+        ],
+        [
+          "docs/spec/palw/04b-tensor-ir.md",
+          1327,
+          1362
+        ],
+        [
+          "consensus/core/src/mldsa87_primitives.rs",
+          10,
+          21
+        ]
+      ]
+    },
+    {
+      "id": "F06",
+      "priority": "P1",
+      "kind": "条件付き最適化案の成立条件が未充足",
+      "title": "hashだけの局所化と、数値foldの完全性は同じものではない",
+      "sources": [
+        [
+          "docs/rfc/0024-court-door-3200-to-ctx-2m.md",
+          195,
+          211
+        ],
+        [
+          "docs/rfc/0024-court-door-3200-to-ctx-2m.md",
+          556,
+          569
+        ],
+        [
+          "docs/rfc/0014-panel-independent-fraud-prosecution.md",
+          324,
+          333
+        ],
+        [
+          "docs/spec/palw/04b-tensor-ir.md",
+          1204,
+          1236
+        ],
+        [
+          "consensus/core/src/palw_tir_dissect_v1.rs",
+          675,
+          707
+        ]
+      ]
+    },
+    {
+      "id": "F07",
+      "priority": "P1",
+      "kind": "署名済み期限・資金・依存関係の統合不足",
+      "title": "claim単体の延長が、最短の署名済み依存horizonを越え得る",
+      "sources": [
+        [
+          "docs/rfc/0008-palw-claim-backed-consensus-blocks.md",
+          305,
+          316
+        ],
+        [
+          "docs/rfc/0014-panel-independent-fraud-prosecution.md",
+          940,
+          954
+        ],
+        [
+          "docs/rfc/0025-scalable-objective-court-many-models-mass-disputes.md",
+          274,
+          319
+        ],
+        [
+          "docs/rfc/0015-panel-free-permissionless-verification.md",
+          444,
+          466
+        ],
+        [
+          "docs/rfc/0018-dag-parallel-multi-model-consensus.md",
+          208,
+          218
+        ]
+      ]
+    },
+    {
+      "id": "F08",
+      "priority": "P1",
+      "kind": "障害時の終端状態・共有frontierの統合不足",
+      "title": "hard deadline後の未解決保留と、共有frontierの有限遅延の境界が曖昧",
+      "sources": [
+        [
+          "docs/rfc/0023-unresolved-claim-liability-and-independent-progress.md",
+          15,
+          33
+        ],
+        [
+          "docs/rfc/0023-unresolved-claim-liability-and-independent-progress.md",
+          35,
+          65
+        ],
+        [
+          "docs/rfc/0006-palw-layer-sharded-panels.md",
+          1268,
+          1279
+        ],
+        [
+          "docs/rfc/0025-scalable-objective-court-many-models-mass-disputes.md",
+          182,
+          189
+        ],
+        [
+          "docs/rfc/0025-scalable-objective-court-many-models-mass-disputes.md",
+          313,
+          319
+        ],
+        [
+          "docs/rfc/0018-dag-parallel-multi-model-consensus.md",
+          203,
+          206
+        ]
+      ]
+    },
+    {
+      "id": "F09",
+      "priority": "P2",
+      "kind": "境界仕様の未統一（確定的な矛盾とは判定しない）",
+      "title": "受付・手番・collect・hard deadlineの等号と同一block順序を統一する必要",
+      "sources": [
+        [
+          "docs/rfc/0014-panel-independent-fraud-prosecution.md",
+          908,
+          923
+        ],
+        [
+          "docs/rfc/0024-court-door-3200-to-ctx-2m.md",
+          382,
+          388
+        ],
+        [
+          "docs/rfc/0025-scalable-objective-court-many-models-mass-disputes.md",
+          175,
+          180
+        ],
+        [
+          "consensus/core/src/palw_tir_public_fold_v1.rs",
+          913,
+          933
+        ],
+        [
+          "docs/rfc/0019-annual-model-upgrade.md",
+          170,
+          177
+        ]
+      ]
+    },
+    {
+      "id": "F10",
+      "priority": "P1",
+      "kind": "添付snapshotと実装状態記述のずれ",
+      "title": "土台とされるcourt容量モジュールが添付snapshotにない",
+      "sources": [
+        [
+          "docs/rfc/0014-panel-independent-fraud-prosecution.md",
+          988,
+          994
+        ],
+        [
+          "docs/rfc/0025-scalable-objective-court-many-models-mass-disputes.md",
+          3,
+          10
+        ],
+        [
+          "docs/rfc/0024-court-door-3200-to-ctx-2m.md",
+          571,
+          574
+        ],
+        [
+          "docs/design/palw/integration/remaining-work-2026-10-16.md",
+          24,
+          35
+        ]
+      ]
+    },
+    {
+      "id": "F11",
+      "priority": "P2",
+      "kind": "権威・置換・索引の追跡不足",
+      "title": "採用済み方針、Draft最適化、旧仕様、別branch実装の置換表が不足",
+      "sources": [
+        [
+          "docs/rfc/0021-design-freeze-and-documentation-governance.md",
+          10,
+          23
+        ],
+        [
+          "docs/governance/design-freeze.md",
+          26,
+          40
+        ],
+        [
+          "docs/rfc/0014-panel-independent-fraud-prosecution.md",
+          925,
+          929
+        ],
+        [
+          "docs/rfc/0025-scalable-objective-court-many-models-mass-disputes.md",
+          16,
+          37
+        ],
+        [
+          "docs/rfc/INDEX.md",
+          21,
+          31
+        ],
+        [
+          "docs/rfc/TOPICS.md",
+          41,
+          48
+        ]
+      ]
+    }
+  ],
+  "positive_or_not_conflicting": [
+    {
+      "id": "P01",
+      "title": "上位原則：計算不正、資料不提供、訴追中Finalの区別",
+      "sources": [
+        [
+          "docs/PRINCIPLES.md",
+          123,
+          140
+        ],
+        [
+          "docs/rfc/0014-panel-independent-fraud-prosecution.md",
+          316,
+          333
+        ],
+        [
+          "docs/rfc/0014-panel-independent-fraud-prosecution.md",
+          473,
+          489
+        ]
+      ]
+    },
+    {
+      "id": "P02",
+      "title": "資料取得のオフチェーン経路は、court対話の権威をオフチェーンに移さない",
+      "sources": [
+        [
+          "docs/rfc/0006-palw-layer-sharded-panels.md",
+          355,
+          384
+        ],
+        [
+          "docs/rfc/0014-panel-independent-fraud-prosecution.md",
+          292,
+          325
+        ],
+        [
+          "docs/rfc/0024-court-door-3200-to-ctx-2m.md",
+          266,
+          278
+        ]
+      ]
+    },
+    {
+      "id": "P03",
+      "title": "receipt不足の中立終了とcourtの応答義務違反は別",
+      "sources": [
+        [
+          "docs/rfc/0007-palw-verification-certificates-and-algebraic-checks.md",
+          494,
+          506
+        ],
+        [
+          "docs/rfc/0010-permissionless-palw-panel-and-claim-completion.md",
+          236,
+          246
+        ],
+        [
+          "docs/rfc/0014-panel-independent-fraud-prosecution.md",
+          956,
+          967
+        ]
+      ]
+    },
+    {
+      "id": "P04",
+      "title": "モデル入手不介入、固定identity、claim検証を分離",
+      "sources": [
+        [
+          "docs/rfc/0017-model-eligibility-examination-and-renewal.md",
+          9,
+          31
+        ],
+        [
+          "docs/rfc/0019-annual-model-upgrade.md",
+          135,
+          181
+        ],
+        [
+          "docs/PRINCIPLES.md",
+          224,
+          251
+        ]
+      ]
+    },
+    {
+      "id": "P05",
+      "title": "Panel=0・VM・メディア等の旧案は現行オンチェーン方針への反例にしない",
+      "sources": [
+        [
+          "docs/rfc/0005-palw-ml-vm.md",
+          1,
+          15
+        ],
+        [
+          "docs/rfc/0015-panel-free-permissionless-verification.md",
+          934,
+          949
+        ],
+        [
+          "docs/rfc/0022-post-mainnet-media-and-model-improvement-scope.md",
+          1,
+          28
+        ]
+      ]
+    },
+    {
+      "id": "P06",
+      "title": "pruning周期と証拠保持・bond解放を分離している",
+      "sources": [
+        [
+          "docs/rfc/0025-scalable-objective-court-many-models-mass-disputes.md",
+          448,
+          484
+        ],
+        [
+          "docs/rfc/0025-scalable-objective-court-many-models-mass-disputes.md",
+          492,
+          518
+        ],
+        [
+          "docs/rfc/0008-palw-claim-backed-consensus-blocks.md",
+          313,
+          316
+        ]
+      ]
+    }
+  ]
+}

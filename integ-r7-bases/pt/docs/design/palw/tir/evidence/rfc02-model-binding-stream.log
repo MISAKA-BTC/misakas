@@ -1,0 +1,10 @@
+
+running 6 tests
+test tir_stream::tests::a_range_past_a_tensor_is_refused ... ok
+test tir_stream::tests::the_streamed_root_over_chunks_is_the_same_root ... ok
+test tir_stream::tests::streamed_openings_match_the_consensus_paths_including_promoted_tails ... ok
+test tir_stream::tests::the_streamed_root_is_the_consensus_root_over_a_container ... ok
+test tir_stream::tests::a_container_the_lowerer_streamed_has_the_same_manifest_derived_either_way ... ok
+test tir_stream::tests::a_libm_v1_conversion_has_one_root_on_any_thread_count ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 124 filtered out; finished in 3.17s

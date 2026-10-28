@@ -1,0 +1,13 @@
+class                           leaves(paid)        MACs(real)   MAC/leaf  tile  pay/work
+PALW-BASE-0        f1c5635c            7,708        30,504,896      3,958     4     1.00x
+Qwen3.6-35B-A3B    5bd9ae3d        2,685,360    21,070,759,296      7,847   512     0.50x
+unnamed            f942e268        1,589,244    20,165,827,968     12,689     ?     0.31x
+Qwen2.5-1.5B@512   4277d84f        6,630,544    84,653,733,376     12,767   128     0.31x
+Qwen3.8-27B        2705b8f6        9,000,776   198,712,432,640     22,077     ?     0.18x
+
+pay/work is normalised to the BEST deal on the network (1.00x = most paid per unit of arithmetic).
+spread best..worst = 5.58x
+
+The best-paid class per unit of arithmetic is the one with the SMALLEST tile (BASE-0, tile_len 4),
+and the worst is a large dense model. tile_len does not change the arithmetic; it only changes
+how many committed tiles the same output is cut into -- and pwu_per_inference counts tiles.

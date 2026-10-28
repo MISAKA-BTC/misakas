@@ -1,0 +1,22 @@
+{
+  "base_commit": "514d9214d1744a0c17cb5db990186249dc3d1c60",
+  "scope": "72 unique PASS: 3 derived-index tests, 6 existing store tests, 1 MLDSA gate, 61 node tests, 1 real multipart-history service test. Shipping pins separately checked. Does not prove full G14.",
+  "source_sha256": {
+    "components/consensusmanager/src/session.rs": "55ed6157361e8073ee2b87e9a8e18bda9ab5fcbde03e2352b5d3492098d8c628",
+    "consensus/core/src/api/mod.rs": "60c67964f6078c68cea3502092cc3dfade0c323a9f4760c09c5c5fe7627bfbd1",
+    "consensus/src/consensus/mod.rs": "df79c94dc3b4b2d9f2a0bd0937ec927bed961d79deb672ec9c0c6e226f619413",
+    "consensus/src/model/stores/palw_state_v2.rs": "674053fc5fc57846fdc86717e0ef27ca6f0ee0189796ca8d3b91c62d132b4efc",
+    "consensus/src/model/stores/palw_legacy_answer_history_v2.rs": "7d21cb8955562098f3dbbc74738310faf8c03fe726c725486c6e27656143b4e1",
+    "consensus/src/pipeline/virtual_processor/processor.rs": "680c549f985fc301ca84f3bc0e66679b46adc32441b0a2aa491acd19ad60b492",
+    "kaspad/src/palw_fraud_filer.rs": "e43d16cc38bb45c2490ee54a6cbef6e13d888ca95c921ab3d31284ea2a9b5529",
+    "kaspad/src/palw_panel.rs": "172398eeaeba41ffa0854a0918022c39f5d40d08fd7d26ff508ac07003f8d7bf",
+    "kaspad/src/palw_service_public_e2e.rs": "1e70b0b5e71492a988e1e6aaef58759d8e8527ecfd7558ead550a0e280e59093",
+    "consensus/core/src/palw_state_v2.rs": "a5445bca953f0912fb7ec34b9138060111c805ef1719bed10e0212113e69afe1",
+    "scripts/t12_repin.py": "f59b030a1b7fe6205b75af3a57b7ebf228311a642623a7368df3b1e49568820c"
+  },
+  "binary_sha256": {
+    "kaspad_lib-a562e45711087c1e": "a1598bf804cd6bb254a1b5d3750f4976dd20045fbaff23da6d6ac7a9639878d5",
+    "kaspa_consensus-475f24db2a807f9e": "6a897a7f95e7ae98ecc02bdff364c053b592b8970e190ddeffc5d53d5ff67831"
+  },
+  "shipping_root_golden_provenance": "The 13 integration targets were rebuilt from this source. Root golden and two core gates were read from the repaired 514d9214d core test run; palw_state_v2.rs is byte-identical at this checkpoint."
+}

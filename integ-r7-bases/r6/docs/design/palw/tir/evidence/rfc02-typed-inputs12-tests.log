@@ -1,0 +1,14 @@
+    Blocking waiting for file lock on artifact directory
+   Compiling misaka-palw-kernel v1.1.0 (/Users/wata/.codex/worktrees/08bd/MISAKA-testnet/misaka-palw-kernel)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 26s
+     Running tests/flat_inputs12.rs (/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/flat_inputs12-9c03d73874a2e8ce)
+
+running 5 tests
+test typed_input_maxima_bind_actual_axes_and_cannot_resize_weights_or_hide_media ... ok
+test typed_patch_audio_counts_roots_and_stateful_v2_view_match_independent_arithmetic ... ok
+test typed_input_bad_image_interval_or_commitment_retains_full_attempt ... ok
+test typed_input_wrong_job_source_scope_or_budget_is_refused_before_provider ... ok
+test typed_media_input_and_prior_state_openings_bind_complete_court ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+

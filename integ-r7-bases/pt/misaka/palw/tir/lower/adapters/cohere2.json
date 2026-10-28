@@ -1,0 +1,23 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "cohere2",
+  "doc": "Cohere2 (Command R7B / A): Cohere with a sliding window on all but every fourth layer; the global layers carry no rotary term.",
+  "extends": ["cohere"],
+  "match": {"architectures": ["Cohere2ForCausalLM"], "model_types": ["cohere2"]},
+  "vars": [
+    {"name": "rope_theta", "value": 10000.0},
+    {"name": "chk1", "value": {"$require_eq": ["order_of_interleaved_layers", "local_attn_first", "sliding layers come first in each group"]}},
+    {"name": "chk2", "value": {"$require_eq": ["position_embedding_type", "rope_gptj", "interleaved (GPT-J) rope"]}},
+    {"name": "chk3", "value": {"$require_eq": ["rotary_pct", 1.0, "full rotary"]}},
+    {"name": "chk4", "value": {"$require_eq": ["use_gated_activation", true, "SwiGLU MLP"]}},
+    {"name": "chk5", "value": {"$let": ["share", {"$cfg?": "use_embedding_sharing"}, {"$check": [{"$or": [{"$eq": [{"$var": "share"}, null]}, {"$eq": [{"$var": "share"}, {"$var": "tied"}]}]}, "use_embedding_sharing disagrees with tie_word_embeddings"]}]}},
+    {"name": "use_qk_norm", "value": {"$let": ["_", {"$forbid": ["use_qk_norm", "Cohere2 has no QK norm"]}, false]}},
+    {"name": "qk_norm", "value": null},
+    {"name": "sw", "value": {"$cfgn": ["sliding_window", 4096]}},
+    {"name": "pattern", "value": {"$let": ["a", {"$cfg?": "sliding_window_pattern"}, {"$let": ["b", {"$cfg?": "_sliding_window_pattern"}, {"$if": [{"$ne": [{"$var": "a"}, null]}, {"$var": "a"}, {"$if": [{"$ne": [{"$var": "b"}, null]}, {"$var": "b"}, 4]}]}]}]}},
+    {"name": "types", "value": {"$layer_types": {"n": {"$var": "n"}, "allowed": ["full_attention", "sliding_attention"], "each": {"$if": [{"$ne": [{"$mod": [{"$add": [{"$var": "i"}, 1]}, {"$var": "pattern"}]}, 0]}, "sliding_attention", "full_attention"]}}}},
+    {"name": "l_position", "value": {"$if": [{"$eq": [{"$index": [{"$var": "types"}, {"$var": "i"}]}, "sliding_attention"]}, {"Rope": {"$var": "rope"}}, "None"]}, "layer": true},
+    {"name": "families", "value": ["C1", "C2"]},
+    {"name": "model_type", "value": "cohere2"}
+  ]
+}

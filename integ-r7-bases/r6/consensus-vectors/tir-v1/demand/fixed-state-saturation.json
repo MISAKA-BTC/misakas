@@ -1,0 +1,2773 @@
+{
+  "format": "palw-tir-v1/demand-vectors/1",
+  "spec": "docs/spec/palw/04b-tensor-ir.md §9.4",
+  "name": "fixed-state-saturation",
+  "program": "programs/fixed-state-saturation.json",
+  "states": [
+    {
+      "pos": "0",
+      "state": "0",
+      "layer": "0",
+      "value": {
+        "dtype": "i16",
+        "shape": [
+          2
+        ],
+        "data": [
+          "0",
+          "0"
+        ]
+      }
+    },
+    {
+      "pos": "0",
+      "state": "0",
+      "layer": "1",
+      "value": {
+        "dtype": "i16",
+        "shape": [
+          2
+        ],
+        "data": [
+          "0",
+          "0"
+        ]
+      }
+    },
+    {
+      "pos": "2",
+      "state": "0",
+      "layer": "0",
+      "value": {
+        "dtype": "i16",
+        "shape": [
+          2
+        ],
+        "data": [
+          "11",
+          "-100"
+        ]
+      }
+    },
+    {
+      "pos": "2",
+      "state": "0",
+      "layer": "1",
+      "value": {
+        "dtype": "i16",
+        "shape": [
+          2
+        ],
+        "data": [
+          "-100",
+          "100"
+        ]
+      }
+    },
+    {
+      "pos": "4",
+      "state": "0",
+      "layer": "0",
+      "value": {
+        "dtype": "i16",
+        "shape": [
+          2
+        ],
+        "data": [
+          "22",
+          "-100"
+        ]
+      }
+    },
+    {
+      "pos": "4",
+      "state": "0",
+      "layer": "1",
+      "value": {
+        "dtype": "i16",
+        "shape": [
+          2
+        ],
+        "data": [
+          "-100",
+          "100"
+        ]
+      }
+    },
+    {
+      "pos": "6",
+      "state": "0",
+      "layer": "0",
+      "value": {
+        "dtype": "i16",
+        "shape": [
+          2
+        ],
+        "data": [
+          "100",
+          "-100"
+        ]
+      }
+    },
+    {
+      "pos": "6",
+      "state": "0",
+      "layer": "1",
+      "value": {
+        "dtype": "i16",
+        "shape": [
+          2
+        ],
+        "data": [
+          "-100",
+          "50"
+        ]
+      }
+    }
+  ],
+  "cases": [
+    {
+      "name": "commit pos 0 occurrence 0 node 1",
+      "target": {
+        "node": {
+          "pos": "0",
+          "occurrence": "0",
+          "node": "1"
+        }
+      },
+      "elements": [
+        "0"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "0"
+        ],
+        "work": {
+          "elements": "2",
+          "terms": "0"
+        },
+        "requests": [
+          {
+            "token": {
+              "pos": "0"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 0 occurrence 1 node 4",
+      "target": {
+        "node": {
+          "pos": "0",
+          "occurrence": "1",
+          "node": "4"
+        }
+      },
+      "elements": [
+        "0"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "-100"
+        ],
+        "work": {
+          "elements": "9",
+          "terms": "2"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "0",
+              "occurrence": "0",
+              "node": "1"
+            },
+            "indices": "0"
+          },
+          {
+            "state": {
+              "pos": "0",
+              "state": "0",
+              "layer": "0"
+            },
+            "indices": "0-1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 0 occurrence 2 node 4",
+      "target": {
+        "node": {
+          "pos": "0",
+          "occurrence": "2",
+          "node": "4"
+        }
+      },
+      "elements": [
+        "0"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "0"
+        ],
+        "work": {
+          "elements": "9",
+          "terms": "2"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "0",
+              "occurrence": "1",
+              "node": "4"
+            },
+            "indices": "0"
+          },
+          {
+            "state": {
+              "pos": "0",
+              "state": "0",
+              "layer": "1"
+            },
+            "indices": "0-1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 0 occurrence 3 node 0",
+      "target": {
+        "node": {
+          "pos": "0",
+          "occurrence": "3",
+          "node": "0"
+        }
+      },
+      "elements": [
+        "0"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "0"
+        ],
+        "work": {
+          "elements": "1",
+          "terms": "0"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "0",
+              "occurrence": "2",
+              "node": "4"
+            },
+            "indices": "0"
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 1 occurrence 0 node 1",
+      "target": {
+        "node": {
+          "pos": "1",
+          "occurrence": "0",
+          "node": "1"
+        }
+      },
+      "elements": [
+        "0"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "3"
+        ],
+        "work": {
+          "elements": "2",
+          "terms": "0"
+        },
+        "requests": [
+          {
+            "token": {
+              "pos": "1"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 1 occurrence 1 node 4",
+      "target": {
+        "node": {
+          "pos": "1",
+          "occurrence": "1",
+          "node": "4"
+        }
+      },
+      "elements": [
+        "0"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "-89"
+        ],
+        "work": {
+          "elements": "17",
+          "terms": "2"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "0",
+              "occurrence": "0",
+              "node": "1"
+            },
+            "indices": "0"
+          },
+          {
+            "node": {
+              "pos": "1",
+              "occurrence": "0",
+              "node": "1"
+            },
+            "indices": "0"
+          },
+          {
+            "state": {
+              "pos": "0",
+              "state": "0",
+              "layer": "0"
+            },
+            "indices": "0-1"
+          },
+          {
+            "state": {
+              "pos": "1",
+              "state": "0",
+              "layer": "0"
+            },
+            "indices": "0-1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 1 occurrence 2 node 4",
+      "target": {
+        "node": {
+          "pos": "1",
+          "occurrence": "2",
+          "node": "4"
+        }
+      },
+      "elements": [
+        "0"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "0"
+        ],
+        "work": {
+          "elements": "17",
+          "terms": "2"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "0",
+              "occurrence": "1",
+              "node": "4"
+            },
+            "indices": "0"
+          },
+          {
+            "node": {
+              "pos": "1",
+              "occurrence": "1",
+              "node": "4"
+            },
+            "indices": "0"
+          },
+          {
+            "state": {
+              "pos": "0",
+              "state": "0",
+              "layer": "1"
+            },
+            "indices": "0-1"
+          },
+          {
+            "state": {
+              "pos": "1",
+              "state": "0",
+              "layer": "1"
+            },
+            "indices": "0-1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 1 occurrence 3 node 0",
+      "target": {
+        "node": {
+          "pos": "1",
+          "occurrence": "3",
+          "node": "0"
+        }
+      },
+      "elements": [
+        "0"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "0"
+        ],
+        "work": {
+          "elements": "1",
+          "terms": "0"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "1",
+              "occurrence": "2",
+              "node": "4"
+            },
+            "indices": "0"
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 2 occurrence 0 node 1",
+      "target": {
+        "node": {
+          "pos": "2",
+          "occurrence": "0",
+          "node": "1"
+        }
+      },
+      "elements": [
+        "0"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "1"
+        ],
+        "work": {
+          "elements": "2",
+          "terms": "0"
+        },
+        "requests": [
+          {
+            "token": {
+              "pos": "2"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 2 occurrence 1 node 4",
+      "target": {
+        "node": {
+          "pos": "2",
+          "occurrence": "1",
+          "node": "4"
+        }
+      },
+      "elements": [
+        "0"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "-102"
+        ],
+        "work": {
+          "elements": "9",
+          "terms": "2"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "2",
+              "occurrence": "0",
+              "node": "1"
+            },
+            "indices": "0"
+          },
+          {
+            "state": {
+              "pos": "2",
+              "state": "0",
+              "layer": "0"
+            },
+            "indices": "0-1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 2 occurrence 2 node 4",
+      "target": {
+        "node": {
+          "pos": "2",
+          "occurrence": "2",
+          "node": "4"
+        }
+      },
+      "elements": [
+        "0"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "0"
+        ],
+        "work": {
+          "elements": "9",
+          "terms": "2"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "2",
+              "occurrence": "1",
+              "node": "4"
+            },
+            "indices": "0"
+          },
+          {
+            "state": {
+              "pos": "2",
+              "state": "0",
+              "layer": "1"
+            },
+            "indices": "0-1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 2 occurrence 3 node 0",
+      "target": {
+        "node": {
+          "pos": "2",
+          "occurrence": "3",
+          "node": "0"
+        }
+      },
+      "elements": [
+        "0"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "0"
+        ],
+        "work": {
+          "elements": "1",
+          "terms": "0"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "2",
+              "occurrence": "2",
+              "node": "4"
+            },
+            "indices": "0"
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 3 occurrence 0 node 1",
+      "target": {
+        "node": {
+          "pos": "3",
+          "occurrence": "0",
+          "node": "1"
+        }
+      },
+      "elements": [
+        "0"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "2"
+        ],
+        "work": {
+          "elements": "2",
+          "terms": "0"
+        },
+        "requests": [
+          {
+            "token": {
+              "pos": "3"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 3 occurrence 1 node 4",
+      "target": {
+        "node": {
+          "pos": "3",
+          "occurrence": "1",
+          "node": "4"
+        }
+      },
+      "elements": [
+        "0"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "-78"
+        ],
+        "work": {
+          "elements": "17",
+          "terms": "2"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "2",
+              "occurrence": "0",
+              "node": "1"
+            },
+            "indices": "0"
+          },
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "0",
+              "node": "1"
+            },
+            "indices": "0"
+          },
+          {
+            "state": {
+              "pos": "2",
+              "state": "0",
+              "layer": "0"
+            },
+            "indices": "0-1"
+          },
+          {
+            "state": {
+              "pos": "3",
+              "state": "0",
+              "layer": "0"
+            },
+            "indices": "0-1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 3 occurrence 2 node 4",
+      "target": {
+        "node": {
+          "pos": "3",
+          "occurrence": "2",
+          "node": "4"
+        }
+      },
+      "elements": [
+        "0"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "0"
+        ],
+        "work": {
+          "elements": "17",
+          "terms": "2"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "2",
+              "occurrence": "1",
+              "node": "4"
+            },
+            "indices": "0"
+          },
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "1",
+              "node": "4"
+            },
+            "indices": "0"
+          },
+          {
+            "state": {
+              "pos": "2",
+              "state": "0",
+              "layer": "1"
+            },
+            "indices": "0-1"
+          },
+          {
+            "state": {
+              "pos": "3",
+              "state": "0",
+              "layer": "1"
+            },
+            "indices": "0-1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 3 occurrence 3 node 0",
+      "target": {
+        "node": {
+          "pos": "3",
+          "occurrence": "3",
+          "node": "0"
+        }
+      },
+      "elements": [
+        "0"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "0"
+        ],
+        "work": {
+          "elements": "1",
+          "terms": "0"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "2",
+              "node": "4"
+            },
+            "indices": "0"
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 4 occurrence 0 node 1",
+      "target": {
+        "node": {
+          "pos": "4",
+          "occurrence": "0",
+          "node": "1"
+        }
+      },
+      "elements": [
+        "0"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "3"
+        ],
+        "work": {
+          "elements": "2",
+          "terms": "0"
+        },
+        "requests": [
+          {
+            "token": {
+              "pos": "4"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 4 occurrence 1 node 4",
+      "target": {
+        "node": {
+          "pos": "4",
+          "occurrence": "1",
+          "node": "4"
+        }
+      },
+      "elements": [
+        "0"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "-17"
+        ],
+        "work": {
+          "elements": "9",
+          "terms": "2"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "4",
+              "occurrence": "0",
+              "node": "1"
+            },
+            "indices": "0"
+          },
+          {
+            "state": {
+              "pos": "4",
+              "state": "0",
+              "layer": "0"
+            },
+            "indices": "0-1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 4 occurrence 2 node 4",
+      "target": {
+        "node": {
+          "pos": "4",
+          "occurrence": "2",
+          "node": "4"
+        }
+      },
+      "elements": [
+        "0"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "0"
+        ],
+        "work": {
+          "elements": "9",
+          "terms": "2"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "4",
+              "occurrence": "1",
+              "node": "4"
+            },
+            "indices": "0"
+          },
+          {
+            "state": {
+              "pos": "4",
+              "state": "0",
+              "layer": "1"
+            },
+            "indices": "0-1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 4 occurrence 3 node 0",
+      "target": {
+        "node": {
+          "pos": "4",
+          "occurrence": "3",
+          "node": "0"
+        }
+      },
+      "elements": [
+        "0"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "0"
+        ],
+        "work": {
+          "elements": "1",
+          "terms": "0"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "4",
+              "occurrence": "2",
+              "node": "4"
+            },
+            "indices": "0"
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 5 occurrence 0 node 1",
+      "target": {
+        "node": {
+          "pos": "5",
+          "occurrence": "0",
+          "node": "1"
+        }
+      },
+      "elements": [
+        "0"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "3"
+        ],
+        "work": {
+          "elements": "2",
+          "terms": "0"
+        },
+        "requests": [
+          {
+            "token": {
+              "pos": "5"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 5 occurrence 1 node 4",
+      "target": {
+        "node": {
+          "pos": "5",
+          "occurrence": "1",
+          "node": "4"
+        }
+      },
+      "elements": [
+        "0"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "0"
+        ],
+        "work": {
+          "elements": "17",
+          "terms": "2"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "4",
+              "occurrence": "0",
+              "node": "1"
+            },
+            "indices": "0"
+          },
+          {
+            "node": {
+              "pos": "5",
+              "occurrence": "0",
+              "node": "1"
+            },
+            "indices": "0"
+          },
+          {
+            "state": {
+              "pos": "4",
+              "state": "0",
+              "layer": "0"
+            },
+            "indices": "0-1"
+          },
+          {
+            "state": {
+              "pos": "5",
+              "state": "0",
+              "layer": "0"
+            },
+            "indices": "0-1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 5 occurrence 2 node 4",
+      "target": {
+        "node": {
+          "pos": "5",
+          "occurrence": "2",
+          "node": "4"
+        }
+      },
+      "elements": [
+        "0"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "-50"
+        ],
+        "work": {
+          "elements": "17",
+          "terms": "2"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "4",
+              "occurrence": "1",
+              "node": "4"
+            },
+            "indices": "0"
+          },
+          {
+            "node": {
+              "pos": "5",
+              "occurrence": "1",
+              "node": "4"
+            },
+            "indices": "0"
+          },
+          {
+            "state": {
+              "pos": "4",
+              "state": "0",
+              "layer": "1"
+            },
+            "indices": "0-1"
+          },
+          {
+            "state": {
+              "pos": "5",
+              "state": "0",
+              "layer": "1"
+            },
+            "indices": "0-1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 5 occurrence 3 node 0",
+      "target": {
+        "node": {
+          "pos": "5",
+          "occurrence": "3",
+          "node": "0"
+        }
+      },
+      "elements": [
+        "0"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "-50"
+        ],
+        "work": {
+          "elements": "1",
+          "terms": "0"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "5",
+              "occurrence": "2",
+              "node": "4"
+            },
+            "indices": "0"
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 6 occurrence 0 node 1",
+      "target": {
+        "node": {
+          "pos": "6",
+          "occurrence": "0",
+          "node": "1"
+        }
+      },
+      "elements": [
+        "0"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "0"
+        ],
+        "work": {
+          "elements": "2",
+          "terms": "0"
+        },
+        "requests": [
+          {
+            "token": {
+              "pos": "6"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 6 occurrence 1 node 4",
+      "target": {
+        "node": {
+          "pos": "6",
+          "occurrence": "1",
+          "node": "4"
+        }
+      },
+      "elements": [
+        "0"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "-50"
+        ],
+        "work": {
+          "elements": "9",
+          "terms": "2"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "6",
+              "occurrence": "0",
+              "node": "1"
+            },
+            "indices": "0"
+          },
+          {
+            "state": {
+              "pos": "6",
+              "state": "0",
+              "layer": "0"
+            },
+            "indices": "0-1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 6 occurrence 2 node 4",
+      "target": {
+        "node": {
+          "pos": "6",
+          "occurrence": "2",
+          "node": "4"
+        }
+      },
+      "elements": [
+        "0"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "0"
+        ],
+        "work": {
+          "elements": "9",
+          "terms": "2"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "6",
+              "occurrence": "1",
+              "node": "4"
+            },
+            "indices": "0"
+          },
+          {
+            "state": {
+              "pos": "6",
+              "state": "0",
+              "layer": "1"
+            },
+            "indices": "0-1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 6 occurrence 3 node 0",
+      "target": {
+        "node": {
+          "pos": "6",
+          "occurrence": "3",
+          "node": "0"
+        }
+      },
+      "elements": [
+        "0"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "0"
+        ],
+        "work": {
+          "elements": "1",
+          "terms": "0"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "6",
+              "occurrence": "2",
+              "node": "4"
+            },
+            "indices": "0"
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 7 occurrence 0 node 1",
+      "target": {
+        "node": {
+          "pos": "7",
+          "occurrence": "0",
+          "node": "1"
+        }
+      },
+      "elements": [
+        "0"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "1"
+        ],
+        "work": {
+          "elements": "2",
+          "terms": "0"
+        },
+        "requests": [
+          {
+            "token": {
+              "pos": "7"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 7 occurrence 1 node 4",
+      "target": {
+        "node": {
+          "pos": "7",
+          "occurrence": "1",
+          "node": "4"
+        }
+      },
+      "elements": [
+        "0"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "-63"
+        ],
+        "work": {
+          "elements": "17",
+          "terms": "2"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "6",
+              "occurrence": "0",
+              "node": "1"
+            },
+            "indices": "0"
+          },
+          {
+            "node": {
+              "pos": "7",
+              "occurrence": "0",
+              "node": "1"
+            },
+            "indices": "0"
+          },
+          {
+            "state": {
+              "pos": "6",
+              "state": "0",
+              "layer": "0"
+            },
+            "indices": "0-1"
+          },
+          {
+            "state": {
+              "pos": "7",
+              "state": "0",
+              "layer": "0"
+            },
+            "indices": "0-1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 7 occurrence 2 node 4",
+      "target": {
+        "node": {
+          "pos": "7",
+          "occurrence": "2",
+          "node": "4"
+        }
+      },
+      "elements": [
+        "0"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "0"
+        ],
+        "work": {
+          "elements": "17",
+          "terms": "2"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "6",
+              "occurrence": "1",
+              "node": "4"
+            },
+            "indices": "0"
+          },
+          {
+            "node": {
+              "pos": "7",
+              "occurrence": "1",
+              "node": "4"
+            },
+            "indices": "0"
+          },
+          {
+            "state": {
+              "pos": "6",
+              "state": "0",
+              "layer": "1"
+            },
+            "indices": "0-1"
+          },
+          {
+            "state": {
+              "pos": "7",
+              "state": "0",
+              "layer": "1"
+            },
+            "indices": "0-1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 7 occurrence 3 node 0",
+      "target": {
+        "node": {
+          "pos": "7",
+          "occurrence": "3",
+          "node": "0"
+        }
+      },
+      "elements": [
+        "0"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "0"
+        ],
+        "work": {
+          "elements": "1",
+          "terms": "0"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "7",
+              "occurrence": "2",
+              "node": "4"
+            },
+            "indices": "0"
+          }
+        ]
+      }
+    },
+    {
+      "name": "internal pos 7 occurrence 1 node 3",
+      "target": {
+        "node": {
+          "pos": "7",
+          "occurrence": "1",
+          "node": "3"
+        }
+      },
+      "elements": [
+        "0",
+        "1"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "37",
+          "-100"
+        ],
+        "work": {
+          "elements": "16",
+          "terms": "0"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "6",
+              "occurrence": "0",
+              "node": "1"
+            },
+            "indices": "0"
+          },
+          {
+            "node": {
+              "pos": "7",
+              "occurrence": "0",
+              "node": "1"
+            },
+            "indices": "0"
+          },
+          {
+            "state": {
+              "pos": "6",
+              "state": "0",
+              "layer": "0"
+            },
+            "indices": "0-1"
+          },
+          {
+            "state": {
+              "pos": "7",
+              "state": "0",
+              "layer": "0"
+            },
+            "indices": "0-1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "internal pos 7 occurrence 2 node 3",
+      "target": {
+        "node": {
+          "pos": "7",
+          "occurrence": "2",
+          "node": "3"
+        }
+      },
+      "elements": [
+        "0",
+        "1"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "-100",
+          "100"
+        ],
+        "work": {
+          "elements": "16",
+          "terms": "0"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "6",
+              "occurrence": "1",
+              "node": "4"
+            },
+            "indices": "0"
+          },
+          {
+            "node": {
+              "pos": "7",
+              "occurrence": "1",
+              "node": "4"
+            },
+            "indices": "0"
+          },
+          {
+            "state": {
+              "pos": "6",
+              "state": "0",
+              "layer": "1"
+            },
+            "indices": "0-1"
+          },
+          {
+            "state": {
+              "pos": "7",
+              "state": "0",
+              "layer": "1"
+            },
+            "indices": "0-1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "state 0 layer 0 after pos 0",
+      "target": {
+        "state_after": {
+          "pos": "0",
+          "state": "0",
+          "layer": "0"
+        }
+      },
+      "elements": [
+        "0",
+        "1"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "-50",
+          "-50"
+        ],
+        "work": {
+          "elements": "8",
+          "terms": "0"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "0",
+              "occurrence": "0",
+              "node": "1"
+            },
+            "indices": "0"
+          },
+          {
+            "state": {
+              "pos": "0",
+              "state": "0",
+              "layer": "0"
+            },
+            "indices": "0-1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "state 0 layer 1 after pos 0",
+      "target": {
+        "state_after": {
+          "pos": "0",
+          "state": "0",
+          "layer": "1"
+        }
+      },
+      "elements": [
+        "0",
+        "1"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "-100",
+          "100"
+        ],
+        "work": {
+          "elements": "8",
+          "terms": "0"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "0",
+              "occurrence": "1",
+              "node": "4"
+            },
+            "indices": "0"
+          },
+          {
+            "state": {
+              "pos": "0",
+              "state": "0",
+              "layer": "1"
+            },
+            "indices": "0-1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "state 0 layer 0 after pos 1",
+      "target": {
+        "state_after": {
+          "pos": "1",
+          "state": "0",
+          "layer": "0"
+        }
+      },
+      "elements": [
+        "0",
+        "1"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "11",
+          "-100"
+        ],
+        "work": {
+          "elements": "16",
+          "terms": "0"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "0",
+              "occurrence": "0",
+              "node": "1"
+            },
+            "indices": "0"
+          },
+          {
+            "node": {
+              "pos": "1",
+              "occurrence": "0",
+              "node": "1"
+            },
+            "indices": "0"
+          },
+          {
+            "state": {
+              "pos": "0",
+              "state": "0",
+              "layer": "0"
+            },
+            "indices": "0-1"
+          },
+          {
+            "state": {
+              "pos": "1",
+              "state": "0",
+              "layer": "0"
+            },
+            "indices": "0-1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "state 0 layer 1 after pos 1",
+      "target": {
+        "state_after": {
+          "pos": "1",
+          "state": "0",
+          "layer": "1"
+        }
+      },
+      "elements": [
+        "0",
+        "1"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "-100",
+          "100"
+        ],
+        "work": {
+          "elements": "16",
+          "terms": "0"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "0",
+              "occurrence": "1",
+              "node": "4"
+            },
+            "indices": "0"
+          },
+          {
+            "node": {
+              "pos": "1",
+              "occurrence": "1",
+              "node": "4"
+            },
+            "indices": "0"
+          },
+          {
+            "state": {
+              "pos": "0",
+              "state": "0",
+              "layer": "1"
+            },
+            "indices": "0-1"
+          },
+          {
+            "state": {
+              "pos": "1",
+              "state": "0",
+              "layer": "1"
+            },
+            "indices": "0-1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "state 0 layer 0 after pos 2",
+      "target": {
+        "state_after": {
+          "pos": "2",
+          "state": "0",
+          "layer": "0"
+        }
+      },
+      "elements": [
+        "0",
+        "1"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "-2",
+          "-100"
+        ],
+        "work": {
+          "elements": "8",
+          "terms": "0"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "2",
+              "occurrence": "0",
+              "node": "1"
+            },
+            "indices": "0"
+          },
+          {
+            "state": {
+              "pos": "2",
+              "state": "0",
+              "layer": "0"
+            },
+            "indices": "0-1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "state 0 layer 1 after pos 2",
+      "target": {
+        "state_after": {
+          "pos": "2",
+          "state": "0",
+          "layer": "1"
+        }
+      },
+      "elements": [
+        "0",
+        "1"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "-100",
+          "100"
+        ],
+        "work": {
+          "elements": "8",
+          "terms": "0"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "2",
+              "occurrence": "1",
+              "node": "4"
+            },
+            "indices": "0"
+          },
+          {
+            "state": {
+              "pos": "2",
+              "state": "0",
+              "layer": "1"
+            },
+            "indices": "0-1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "state 0 layer 0 after pos 3",
+      "target": {
+        "state_after": {
+          "pos": "3",
+          "state": "0",
+          "layer": "0"
+        }
+      },
+      "elements": [
+        "0",
+        "1"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "22",
+          "-100"
+        ],
+        "work": {
+          "elements": "16",
+          "terms": "0"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "2",
+              "occurrence": "0",
+              "node": "1"
+            },
+            "indices": "0"
+          },
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "0",
+              "node": "1"
+            },
+            "indices": "0"
+          },
+          {
+            "state": {
+              "pos": "2",
+              "state": "0",
+              "layer": "0"
+            },
+            "indices": "0-1"
+          },
+          {
+            "state": {
+              "pos": "3",
+              "state": "0",
+              "layer": "0"
+            },
+            "indices": "0-1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "state 0 layer 1 after pos 3",
+      "target": {
+        "state_after": {
+          "pos": "3",
+          "state": "0",
+          "layer": "1"
+        }
+      },
+      "elements": [
+        "0",
+        "1"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "-100",
+          "100"
+        ],
+        "work": {
+          "elements": "16",
+          "terms": "0"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "2",
+              "occurrence": "1",
+              "node": "4"
+            },
+            "indices": "0"
+          },
+          {
+            "node": {
+              "pos": "3",
+              "occurrence": "1",
+              "node": "4"
+            },
+            "indices": "0"
+          },
+          {
+            "state": {
+              "pos": "2",
+              "state": "0",
+              "layer": "1"
+            },
+            "indices": "0-1"
+          },
+          {
+            "state": {
+              "pos": "3",
+              "state": "0",
+              "layer": "1"
+            },
+            "indices": "0-1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "state 0 layer 0 after pos 4",
+      "target": {
+        "state_after": {
+          "pos": "4",
+          "state": "0",
+          "layer": "0"
+        }
+      },
+      "elements": [
+        "0",
+        "1"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "83",
+          "-100"
+        ],
+        "work": {
+          "elements": "8",
+          "terms": "0"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "4",
+              "occurrence": "0",
+              "node": "1"
+            },
+            "indices": "0"
+          },
+          {
+            "state": {
+              "pos": "4",
+              "state": "0",
+              "layer": "0"
+            },
+            "indices": "0-1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "state 0 layer 1 after pos 4",
+      "target": {
+        "state_after": {
+          "pos": "4",
+          "state": "0",
+          "layer": "1"
+        }
+      },
+      "elements": [
+        "0",
+        "1"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "-100",
+          "100"
+        ],
+        "work": {
+          "elements": "8",
+          "terms": "0"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "4",
+              "occurrence": "1",
+              "node": "4"
+            },
+            "indices": "0"
+          },
+          {
+            "state": {
+              "pos": "4",
+              "state": "0",
+              "layer": "1"
+            },
+            "indices": "0-1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "state 0 layer 0 after pos 5",
+      "target": {
+        "state_after": {
+          "pos": "5",
+          "state": "0",
+          "layer": "0"
+        }
+      },
+      "elements": [
+        "0",
+        "1"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "100",
+          "-100"
+        ],
+        "work": {
+          "elements": "16",
+          "terms": "0"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "4",
+              "occurrence": "0",
+              "node": "1"
+            },
+            "indices": "0"
+          },
+          {
+            "node": {
+              "pos": "5",
+              "occurrence": "0",
+              "node": "1"
+            },
+            "indices": "0"
+          },
+          {
+            "state": {
+              "pos": "4",
+              "state": "0",
+              "layer": "0"
+            },
+            "indices": "0-1"
+          },
+          {
+            "state": {
+              "pos": "5",
+              "state": "0",
+              "layer": "0"
+            },
+            "indices": "0-1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "state 0 layer 1 after pos 5",
+      "target": {
+        "state_after": {
+          "pos": "5",
+          "state": "0",
+          "layer": "1"
+        }
+      },
+      "elements": [
+        "0",
+        "1"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "-100",
+          "50"
+        ],
+        "work": {
+          "elements": "16",
+          "terms": "0"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "4",
+              "occurrence": "1",
+              "node": "4"
+            },
+            "indices": "0"
+          },
+          {
+            "node": {
+              "pos": "5",
+              "occurrence": "1",
+              "node": "4"
+            },
+            "indices": "0"
+          },
+          {
+            "state": {
+              "pos": "4",
+              "state": "0",
+              "layer": "1"
+            },
+            "indices": "0-1"
+          },
+          {
+            "state": {
+              "pos": "5",
+              "state": "0",
+              "layer": "1"
+            },
+            "indices": "0-1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "state 0 layer 0 after pos 6",
+      "target": {
+        "state_after": {
+          "pos": "6",
+          "state": "0",
+          "layer": "0"
+        }
+      },
+      "elements": [
+        "0",
+        "1"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "50",
+          "-100"
+        ],
+        "work": {
+          "elements": "8",
+          "terms": "0"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "6",
+              "occurrence": "0",
+              "node": "1"
+            },
+            "indices": "0"
+          },
+          {
+            "state": {
+              "pos": "6",
+              "state": "0",
+              "layer": "0"
+            },
+            "indices": "0-1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "state 0 layer 1 after pos 6",
+      "target": {
+        "state_after": {
+          "pos": "6",
+          "state": "0",
+          "layer": "1"
+        }
+      },
+      "elements": [
+        "0",
+        "1"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "-100",
+          "100"
+        ],
+        "work": {
+          "elements": "8",
+          "terms": "0"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "6",
+              "occurrence": "1",
+              "node": "4"
+            },
+            "indices": "0"
+          },
+          {
+            "state": {
+              "pos": "6",
+              "state": "0",
+              "layer": "1"
+            },
+            "indices": "0-1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "state 0 layer 0 after pos 7",
+      "target": {
+        "state_after": {
+          "pos": "7",
+          "state": "0",
+          "layer": "0"
+        }
+      },
+      "elements": [
+        "0",
+        "1"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "37",
+          "-100"
+        ],
+        "work": {
+          "elements": "16",
+          "terms": "0"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "6",
+              "occurrence": "0",
+              "node": "1"
+            },
+            "indices": "0"
+          },
+          {
+            "node": {
+              "pos": "7",
+              "occurrence": "0",
+              "node": "1"
+            },
+            "indices": "0"
+          },
+          {
+            "state": {
+              "pos": "6",
+              "state": "0",
+              "layer": "0"
+            },
+            "indices": "0-1"
+          },
+          {
+            "state": {
+              "pos": "7",
+              "state": "0",
+              "layer": "0"
+            },
+            "indices": "0-1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "state 0 layer 1 after pos 7",
+      "target": {
+        "state_after": {
+          "pos": "7",
+          "state": "0",
+          "layer": "1"
+        }
+      },
+      "elements": [
+        "0",
+        "1"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect": {
+        "values": [
+          "-100",
+          "100"
+        ],
+        "work": {
+          "elements": "16",
+          "terms": "0"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "6",
+              "occurrence": "1",
+              "node": "4"
+            },
+            "indices": "0"
+          },
+          {
+            "node": {
+              "pos": "7",
+              "occurrence": "1",
+              "node": "4"
+            },
+            "indices": "0"
+          },
+          {
+            "state": {
+              "pos": "6",
+              "state": "0",
+              "layer": "1"
+            },
+            "indices": "0-1"
+          },
+          {
+            "state": {
+              "pos": "7",
+              "state": "0",
+              "layer": "1"
+            },
+            "indices": "0-1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 0 occurrence 1 node 4, at exactly its work",
+      "target": {
+        "node": {
+          "pos": "0",
+          "occurrence": "1",
+          "node": "4"
+        }
+      },
+      "elements": [
+        "0"
+      ],
+      "limits": {
+        "max_elements": "9",
+        "max_terms": "2"
+      },
+      "expect": {
+        "values": [
+          "-100"
+        ],
+        "work": {
+          "elements": "9",
+          "terms": "2"
+        },
+        "requests": [
+          {
+            "node": {
+              "pos": "0",
+              "occurrence": "0",
+              "node": "1"
+            },
+            "indices": "0"
+          },
+          {
+            "state": {
+              "pos": "0",
+              "state": "0",
+              "layer": "0"
+            },
+            "indices": "0-1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit pos 0 occurrence 1 node 4, one element short",
+      "target": {
+        "node": {
+          "pos": "0",
+          "occurrence": "1",
+          "node": "4"
+        }
+      },
+      "elements": [
+        "0"
+      ],
+      "limits": {
+        "max_elements": "8",
+        "max_terms": "2"
+      },
+      "expect_error": "WorkLimit"
+    },
+    {
+      "name": "commit pos 0 occurrence 1 node 4, one term short",
+      "target": {
+        "node": {
+          "pos": "0",
+          "occurrence": "1",
+          "node": "4"
+        }
+      },
+      "elements": [
+        "0"
+      ],
+      "limits": {
+        "max_elements": "9",
+        "max_terms": "1"
+      },
+      "expect_error": "WorkLimit"
+    },
+    {
+      "name": "refused: an element outside the target",
+      "target": {
+        "node": {
+          "pos": "0",
+          "occurrence": "0",
+          "node": "1"
+        }
+      },
+      "elements": [
+        "4611686018427387903"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect_error": "Malformed"
+    },
+    {
+      "name": "refused: an occurrence the schedule does not have",
+      "target": {
+        "node": {
+          "pos": "0",
+          "occurrence": "4",
+          "node": "0"
+        }
+      },
+      "elements": [
+        "0"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect_error": "Malformed"
+    },
+    {
+      "name": "refused: a node the block does not have",
+      "target": {
+        "node": {
+          "pos": "0",
+          "occurrence": "0",
+          "node": "2"
+        }
+      },
+      "elements": [
+        "0"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect_error": "Malformed"
+    },
+    {
+      "name": "refused: a position at history_bound",
+      "target": {
+        "node": {
+          "pos": "262144",
+          "occurrence": "0",
+          "node": "1"
+        }
+      },
+      "elements": [
+        "0"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect_error": "Position"
+    },
+    {
+      "name": "refused: a position the run did not reach",
+      "target": {
+        "node": {
+          "pos": "8",
+          "occurrence": "3",
+          "node": "0"
+        }
+      },
+      "elements": [
+        "0"
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect_error": "Missing"
+    },
+    {
+      "name": "refused: Replay at position 0 (the source supplies nothing)",
+      "target": {
+        "state_after": {
+          "pos": "0",
+          "state": "0",
+          "layer": "0"
+        }
+      },
+      "elements": [
+        "0"
+      ],
+      "states": [],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect_error": "Missing"
+    },
+    {
+      "name": "refused: the source withholds a node question (saying Operand)",
+      "target": {
+        "node": {
+          "pos": "0",
+          "occurrence": "1",
+          "node": "4"
+        }
+      },
+      "elements": [
+        "0"
+      ],
+      "withhold": [
+        {
+          "node": {
+            "pos": "0",
+            "occurrence": "0",
+            "node": "1"
+          },
+          "raises": "Operand"
+        }
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect_error": "Missing"
+    },
+    {
+      "name": "refused: the source withholds a state question (saying Malformed)",
+      "target": {
+        "node": {
+          "pos": "0",
+          "occurrence": "1",
+          "node": "4"
+        }
+      },
+      "elements": [
+        "0"
+      ],
+      "withhold": [
+        {
+          "state": {
+            "pos": "0",
+            "state": "0",
+            "layer": "0"
+          },
+          "raises": "Malformed"
+        }
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect_error": "Missing"
+    },
+    {
+      "name": "refused: the source withholds a token question (saying Position)",
+      "target": {
+        "node": {
+          "pos": "0",
+          "occurrence": "0",
+          "node": "1"
+        }
+      },
+      "elements": [
+        "0"
+      ],
+      "withhold": [
+        {
+          "token": {
+            "pos": "0"
+          },
+          "raises": "Position"
+        }
+      ],
+      "limits": {
+        "max_elements": "18446744073709551615",
+        "max_terms": "18446744073709551615"
+      },
+      "expect_error": "Missing"
+    }
+  ]
+}

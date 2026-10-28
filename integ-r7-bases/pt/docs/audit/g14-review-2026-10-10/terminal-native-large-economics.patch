@@ -1,0 +1,43 @@
+--- a/kaspad/src/palw_service_public_e2e.rs
++++ b/kaspad/src/palw_service_public_e2e.rs
+@@ -2014,14 +2014,17 @@
+                     for seat in &all_seats {
+                         let key = kaspa_consensus_core::palw_offence_attribution_v1::palw_false_valid_offence_id_v2(&seat.0, &claim);
+                         let panel = chain.tc.palw_reporter_filing_read_v1(key, Hash64::default(), bond, None).unwrap();
+-                        if let (Some(consumed), Some(winner)) = (panel.consumed, panel.pending.and_then(|p| p.best)) {
++                        let winner=panel.pending.and_then(|p|p.best);
++                        if let Some(consumed)=panel.consumed {
++                            if winner.is_none() && case!=PublicCase::TiledConstraintLargeJob {continue;}
+                             assert_eq!(consumed.kind, kaspa_consensus_core::palw_offence_v1::PalwOffenceKindV1::PanelFalseValidV2);
+                             assert_eq!(consumed.accused, seat.0);
+                             assert!(consumed.amount > 0);
+                             assert!(consumed.collected > 0, "each relied-on Valid signer actually loses collateral");
+-                            assert_eq!(winner.reporter, bond);
+-                            assert!(winner.committed_daa < consumed.accepted_daa);
+-                            panels.push((*seat, key, winner));
++                            if let Some(winner)=winner.as_ref() {
++                                assert_eq!(winner.reporter,bond);assert!(winner.committed_daa<consumed.accepted_daa);
++                            } else {assert_eq!(case,PublicCase::TiledConstraintLargeJob,"only the existing rooted-void route forgoes a separate R reward");}
++                            panels.push((*seat,key,winner));
+                         }
+                     }
+                     if panels.len() != all_seats.len() {
+@@ -2107,8 +2110,16 @@
+                     }
+                     for (seat, key, winner) in &panels {
+                         assert!(carriers.iter().any(|o| matches!(o, PalwConsensusObjectV2::ObjectiveOffence { kind, accused, .. } if *kind == kaspa_consensus_core::palw_offence_v1::PalwOffenceKindV1::PanelFalseValidV2 && *accused == *seat)));
+-                        assert!(carriers.iter().any(|o| matches!(o, PalwConsensusObjectV2::ReporterCommitted { commitment, reporter, .. } if *commitment == winner.commitment && *reporter == bond)));
+-                        assert!(carriers.iter().any(|o| matches!(o, PalwConsensusObjectV2::ReporterRevealed { offence_key, reporter, .. } if *offence_key == *key && *reporter == bond)));
++                        if let Some(winner)=winner {
++                            assert!(carriers.iter().any(|o| matches!(o,PalwConsensusObjectV2::ReporterCommitted {commitment,reporter,..} if *commitment==winner.commitment && *reporter==bond)));
++                            assert!(carriers.iter().any(|o| matches!(o,PalwConsensusObjectV2::ReporterRevealed {offence_key,reporter,..} if *offence_key==*key && *reporter==bond)));
++                        } else {
++                            assert!(carriers.iter().any(|o|match o {
++                                PalwConsensusObjectV2::ObjectiveOffence {accused,evidence,..} if *accused==*seat=>
++                                    borsh::from_slice::<kaspa_consensus_core::palw_offence_attribution_v1::PalwPanelFalseValidEvidenceV2>(evidence)
++                                        .is_ok_and(|p|p.claim_id==claim && matches!(p.contradiction,kaspa_consensus_core::palw_offence_v1::PalwPanelContradictionV1::CourtFraud {..})),_=>false,
++                            }),"each collected fullPanel continuation names the actual rooted court outcome");
++                        }
+                     }
+                     assert!(reserved && demanded);
+                     assert!(chain.tc.palw_fraud_filer_status_v1(bond).unwrap().live.iter().all(|r| r.claim_id != claim));

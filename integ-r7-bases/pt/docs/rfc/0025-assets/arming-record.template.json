@@ -1,0 +1,67 @@
+{
+  "schema": "SCALABLE_COURT_ARMING_DRAFT_V2",
+  "status": "DRAFT_UNPINNED_DO_NOT_ARM",
+  "base_door_daa": 3200,
+  "checkpoint_interval_daa_proposal": 10000,
+  "development_targets_not_measured": {
+    "max_context_tokens": 2097152,
+    "step_fragment_bytes": 17408,
+    "close_bytes": 32768,
+    "transcript_bytes": 65536
+  },
+  "source_commit": null,
+  "binary_sha256": null,
+  "ruleset_id": null,
+  "activation_daa": null,
+  "codec_fingerprint": null,
+  "resource_template_root": null,
+  "proven_caps": {
+    "step_fragment_bytes": null,
+    "close_bytes": null,
+    "transcript_bytes": null,
+    "verify_work": null,
+    "io_bytes": null,
+    "peak_ram_bytes": null,
+    "rounds": null
+  },
+  "service": {
+    "court_bytes_per_daa_lower": null,
+    "control_bytes_per_daa_lower": null,
+    "work_per_daa_lower": null,
+    "io_bytes_per_daa_lower": null,
+    "service_gap_daa_max": null,
+    "inclusion_contract": null
+  },
+  "reservation": {
+    "algorithm_id": null,
+    "notice_intake_bound": null,
+    "max_adversarial_branching": null,
+    "e_max_daa": null,
+    "active_state_bytes_max": null,
+    "inflight_witness_bytes_max": null
+  },
+  "economics": {
+    "retained_byte_daa_max": null,
+    "price_profile_id": null,
+    "escrow_bound": null,
+    "liability_pledge_version": null
+  },
+  "security": {
+    "one_outsider_capacity_evidence": null,
+    "all_fault_routes_evidence": null,
+    "deadline_atomicity_evidence": null,
+    "pruned_ibd_validation_evidence": null
+  },
+  "measurements": {
+    "normal_3200": null,
+    "burst_100": null,
+    "burst_1000": null,
+    "burst_10000": null,
+    "sustained_overload": null,
+    "restart_reorg": null,
+    "checkpoint_and_ibd": null,
+    "block_capacity_comparison": null
+  },
+  "independent_approval": null,
+  "warning": "Targets and Python toy tests are not production arming evidence. Every unpinned dependency blocks activation."
+}

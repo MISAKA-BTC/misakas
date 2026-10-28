@@ -1,0 +1,67 @@
+{
+  "schema": "misaka.rfc02.fresh-outsider-protected-native-headers-milestone.v1",
+  "recorded_utc": "2026-10-11T13:02:03.134607+00:00",
+  "previous_pushed_commit": "ba872cc5fdb27628080d49052fce56ee41796695",
+  "status": "PASS bounded components; RFC02 goal active",
+  "component_receipts": {
+    "rfc02-execution11-native-headers-verdict.json": "3990f0de385a7dfc3edbeade634a88161f8edb0b60e9c26672bc7e95c922c356",
+    "rfc02-protected-quota11-isolated-verdict.json": "8f5825bb59ab2730519ad2f2eba425ad89098f71f9ef339d310167e8eb8bde3f",
+    "rfc02-native11-bounded-carriers-verdict.json": "71525dfa021da4e9cf03f099d126faf14e66cfcffb08d5600e3dd53f5812459c",
+    "rfc02-actual-outsider9-final-verdict.json": "97d9ef8dbc1d9e85e93aa5426bbd7da50df9411c003fdb64059905cd26edfd08",
+    "rfc02-execution11-post-quota40-validation.json": "14a48ebdc7ea2bc3a824cbcf0a078d005bfdccaefb6a3aec7c56e15801855c09"
+  },
+  "test_counts": {
+    "execution_component": 26,
+    "quota_component": 40,
+    "native_carrier_component": 5,
+    "SDK": 12,
+    "actual_fresh_native_model": 1,
+    "native_regressions": 35,
+    "execution_after_quota40_repeat": 26
+  },
+  "distinct_pool": {
+    "previous": 361,
+    "new_execution": 14,
+    "new_quota": 20,
+    "new_carrier": 5,
+    "new_SDK": 12,
+    "new_actual": 1,
+    "current": 413,
+    "repeated_or_snapshot_cases_added": 0
+  },
+  "staged_source_expected_sha256": {
+    "Cargo.lock": "f4e68f82aba40d73b8aaa1a5b17d83c4580bf5f11c99199b750498cef9aefc95",
+    "consensus/Cargo.toml": "74623a5e22255fc96fd3c5d5602e81f47c0561889a1b7f0717867bff79b0dc8a",
+    "consensus/core/src/lib.rs": "bbeb72f966299d15146e8c3555784b67a06f5acbd8be2a2f0ade1dd9445d20c5",
+    "consensus/core/src/palw_flat_execution_v11.rs": "cacd1f8958ea20bb1d48ae261f911ede62f7d4b4dfd1621db797e048f53c5beb",
+    "consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/model_conformance/flat_native_v9.rs": "67ccfb982ac1fc638c611f9feece6b68f28f379580bce4c12e93070ff78004d8",
+    "consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/model_conformance/flat_native_v9/actual_outsider.rs": "4a0d6bf137ffc804368c5a19caae4b3751702444fed0b62c16ec0a482f1fdab8",
+    "misaka-palw-kernel/src/flat_execution11.rs": "985aaa65bbc4a2720977b34e44fa5a16842f10c87de9b32ddd4a91d335d1d1e5",
+    "misaka-palw-kernel/src/flat_resources10.rs": "6293bb15b61db93d1cab36a4559c071741c465bf4efe720e6e7c672b964d2c87",
+    "misaka-palw-kernel/tests/flat_execution11.rs": "c542907c83da338ffb5a9ec5b86b0440ac3b7c8fd746306a9231af3d8cd7ca12",
+    "misaka-palw-kernel/src/flat_quota11.rs": "540f6a339e66c3d4e6332377356ad8a4cd6b2cd33830a669f449861a5d8c3aa0",
+    "misaka-palw-kernel/src/flat_quota11/protected.rs": "62465d2d62154d9d3dbafa1e4a2ec05ab9d66294ee7e5c83c71d0e1c59c0c88f",
+    "misaka-palw-kernel/src/flat_quota11/protected_tests.rs": "dd0dc0aef64cd7e08decbc4c899cb352ef34a8a92b60910d72c5779620a625c6",
+    "misaka-palw-kernel/src/flat_quota11/sharded.rs": "2c6a0a57ada574ff8b6ab8911c965c1a17a23cf1115f8b3a08038e54eef1160a",
+    "misaka-palw-sdk/src/lib.rs": "e1f858fc092343d084f3a006f9c8b1fcdde8325e299c8181267188a6545de645",
+    "misaka-palw-sdk/src/flat_snapshot_v9.rs": "0acb109048acda9edbfbc8ef0bd79e8198b5734727c24ab1061777aad47677a9",
+    "misaka-palw-sdk/src/flat_streamed_locator_v9.rs": "c1de63f5778384cb28ba8b75cb605871cb51343b9192d920eda4e9b2cfabeafd",
+    "misaka-palw-sdk/tests/flat_streamed_locator_v9.rs": "69d21d24e50ef0546b1155bb731f733c178225bbad2ae943cc2777ce98546691"
+  },
+  "compiled_actual_node_SDK_closure_matches_current": true,
+  "compiled_local_inputs": 1442,
+  "compiled_source_manifest": "rfc02-actual-outsider9-final-compiled-source-manifest.json",
+  "compiled_source_manifest_sha256": "5e63a656565eda57d87cee129a39c829a84b6435d591821ec6583bb01ea747e3",
+  "unexported_draft_excluded_from_compilation_and_staging": "consensus/core/src/palw_flat_execution_fold_v11.rs",
+  "native11_live_Fund_Final_routes_activated": false,
+  "accepted_native_honest_Final_model_records": 0,
+  "A6_A8_90_percent_proven": false,
+  "shipping_activation_changed": false,
+  "mode": "external source acquisition A; no consensus source-distribution duty",
+  "remaining": [
+    "Native Fund/producer Commit/courts/DA/Final/original requester escrow redemption",
+    "Pre-proof discovery independent of ordinary exhaustion, exact producer response/timing/resource reservations and bounded terminal work",
+    "Long original context/sparse/routing/state/media/model coverage and independent complete tasks",
+    "A6/A8 full population denominators, >=90% and original confidence/sustained participation requirements"
+  ]
+}

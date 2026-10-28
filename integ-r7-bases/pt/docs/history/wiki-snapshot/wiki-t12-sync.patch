@@ -1,0 +1,1306 @@
+From 63c205b2acc80ca5d365a48a2619b975a412d1af Mon Sep 17 00:00:00 2001
+From: MISAKA-BTC <misakagames@misakachain.com>
+Date: Fri, 25 Sep 2026 15:24:28 +0000
+Subject: [PATCH] docs(wiki): align every page with the public testnet-12
+ (R-core+, 0e8ec984e)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The wiki still described testnet-11 Relaunch 5f. Checked against
+docs/t12-launch-2026-09-25.md, docs/testnet12-join-mining.md,
+docs/testnet-12-regenesis-2026-09-23.md and the CLI/kaspad source on main:
+
+- identity: fingerprint b8564b88…, fence schedule 1000 (schedule id 93da24cc…),
+  genesis a27f8f44…, premine txid 5e0d5f1b…, --netsuffix=12, CLI default testnet-12
+- entry point 169.58.232.113:26311 (169.58.39.220:26311 is dead on t12)
+- mainnet-assumed bonds: producer 13,000 / seat 130,000 / validator 20,000,000 MSK,
+  escrow + weight reserved per claim (~6,402 MSK per concurrent floor claim)
+- duties on by construction; --palw-panel/--palw-round-lane are no-ops;
+  one bond = one process (RoundPermitEquivocated); keep the app dir
+- S1/S2/S3 and epoch budget release armed from DAA 0; bond maturity at 1,000
+- class lifecycle, 8k memory share >= 3.5 GiB, 2M closed at launch
+- withholding / second ReceiptTimeout forfeit; rewards vest (ADR-0152)
+- payment finality rule and known issues from the launch note
+- new Testnet-12 Operator UI and verification pages; the testnet-11 pages
+  are kept as records with a banner
+- misaka logs takes the component positionally (no --component)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01EYtmHSd1HggSkNmtrppNrB
+---
+ Adding-a-Model-JA.md                        |  92 +++++++---
+ EVM-Pruned-Node.md                          |   4 +-
+ FAQ-Troubleshooting.md                      |  90 ++++++---
+ Home.md                                     |  58 +++---
+ Operations-Notes.md                         |  92 +++++++---
+ PALW-Participation-JA.md                    |  95 ++++++----
+ PALW-Roles-and-Network-Scope-JA.md          |  38 ++--
+ Quick-Start.md                              | 122 +++++++++----
+ Testnet-11-Operator-UI-JA.md                |   4 +
+ Testnet-11-Verification-Participation-JA.md |   4 +
+ Testnet-12-Operator-UI-JA.md                | 111 +++++++++++
+ Testnet-12-Verification-Participation-JA.md | 193 ++++++++++++++++++++
+ 12 files changed, 721 insertions(+), 182 deletions(-)
+ create mode 100644 Testnet-12-Operator-UI-JA.md
+ create mode 100644 Testnet-12-Verification-Participation-JA.md
+
+diff --git a/Adding-a-Model-JA.md b/Adding-a-Model-JA.md
+index 8ffd65d..01438b0 100644
+--- a/Adding-a-Model-JA.md
++++ b/Adding-a-Model-JA.md
+@@ -1,56 +1,94 @@
+-# モデルを追加する（current main）
++# モデルを追加する(testnet-12 / 現行 main)
+ 
+-「既存 class を使う」と「新しい class を protocol に追加する」は別作業です。
++「既存の class を使う」ことと「新しい class をチェーンに追加する」ことは別の作業です。詳しい手順の正本は [palw-add-a-model-runbook.md](https://github.com/MISAKA-BTC/misakas/blob/main/docs/palw-add-a-model-runbook.md) です。
+ 
+ ## Existing class
+ 
+ ```bash
+-misaka --network testnet-11 model list
+-misaka --network testnet-11 model status --help
+-misaka --network testnet-11 mining setup
++misaka --network testnet-12 model list
++misaka --network testnet-12 palw registry
++misaka --network testnet-12 model status --help
++misaka --network testnet-12 mining setup
+ ```
+ 
+-現在の chain が返す class ID、status、share、budget、artifact root を正とします。過去 relaunch の ID や fingerprint をコピーしません。
++class ID、lifecycle の状態、ready seat、artifact root は、いまのチェーンが返す値を正とします。過去のネットワークの ID や fingerprint をコピーしないでください。
+ 
+-- Floor: artifact 不要
+-- A16: 対応する `.palwart` と tokenizer binding が必要
+-- QWEN36: 対応する `.palwq36` と大容量 runtime が必要
++testnet-12 の genesis にある class:
++
++- **Floor(BASE-0)**: artifact 不要。常に `Active`。
++- **`Qwen/Qwen2.5-1.5B/graph-v7@8192`(8k)**: `.palwart` artifact(1,799,359,436 bytes、inventory root `88096dc1…`)と `.palwmanifest` sidecar が必要。seat には 3.5 GiB 以上の memory share が必要。
++- **`Qwen/Qwen2.5-1.5B/graph-v7@2097152`(2M)**: 公開時点では規則で閉じている(`ClassDeadlineUnmeasured`)。
++
++Qwen3.6 の hybrid 行(held map)は、登録と認証はできても、いまの build では attempt が prefill の位置 15 で必ず失敗します。そのため testnet-12 の genesis には入っていません。
++
++## artifact を作る(8k の例)
++
++```bash
++cargo build --release --bin qwen25-convert --bin palw-class
++qwen25-convert /path/to/Qwen2.5-1.5B-Instruct --a16 --n-ctx 8192 --out qwen25-1.5b-a16-8k.palwart
++palw-class manifest --network testnet-12 qwen25-1.5b-a16-8k.palwart          # .palwmanifest sidecar を書く
++palw-class manifest --network testnet-12 --check qwen25-1.5b-a16-8k.palwart  # 一致しなければ exit 1
++```
++
++変換元は `Qwen/Qwen2.5-1.5B-Instruct`(`model.safetensors` の SHA-256 `dd924a11b4c220f385b51ffa522daea7c9f3d850e31b162bb5661df483c6d3ee`)です。sidecar は artifact の隣に置いてください。root には、ファイル全体の digest と graph ごとの operand-inventory root の 2 種類があり、登録されるのは inventory root です。手で書き写さず、sidecar を使います。
+ 
+ ## Catalog model
+ 
+-current build の catalog にある model は `misaka model add` が入口です。
++この build の catalog にあるモデルは、`misaka model add` が入口です。
+ 
+ ```bash
+-misaka --network testnet-11 model add
+-misaka --network testnet-11 model add <catalog-model> --artifact /absolute/path/to/artifact
+-misaka --network testnet-11 model add --help
++misaka --network testnet-12 model add
++misaka --network testnet-12 model add <catalog-model> --artifact /absolute/path/to/artifact
++misaka --network testnet-12 model add --help
+ ```
+ 
+-引数なしでは catalog を表示します。モデル名を指定した二つ目のコマンドが、登録、family drill、lane certification、market seed を chain の現在状態から再開可能な手順として実行します。
++引数なしで実行すると catalog を表示します。モデル名を指定すると、登録、family drill、lane certification などを、チェーンの現在の状態から再開できる手順として実行します。catalog にない構成でも、ADR-0108 の class manifest 経路(`misaka model add --manifest <file>`)なら build を変えずに登録できます。
++
++**動いている node の横で `kaspad --palw-register-class …` を起動しないでください。** この process は class が登録されても終了せず、同じ bond の 2 つ目の process になって slash の原因になります。`misaka model add` を使うか、動いている node をそのフラグ付きで起動し直してください。
++
++## 登録した class の lifecycle
++
++testnet-12 では permissionless の model registry が genesis から有効です。登録した class は、次の順に状態が進みます(各 span の境界で判定)。
++
++| 状態 | claim を受け付けるか | 次に進む条件 |
++|---|---|---|
++| `Candidate`(登録された class) | いいえ | **admission audit** が jury を選ぶ。jury は floor の母集団から選ばれた operator 5 人で、そのうち過半数(3 人)が class を持っていれば `Prefetching` |
++| `Prefetching`(genesis の行はここから) | いいえ | 別々の operator の seat 7 つ以上が、新しい possession 証明と十分な空き collateral を持つと `Probation` |
++| `Probation` | derived admission の 50‰ | probe claim 10 本が失敗なしで `Final` になると `ActiveLimited` |
++| `ActiveLimited` | 100‰ | lifecycle の安定した 3 step で `Active` |
++| `Active` | 1,000‰ | — |
++| `Held` | いいえ | ready seat が十分に戻り、過負荷でなくなると `Probation` |
++
++- **admission audit は testnet-12 では 100 DAA ごと**(120 秒の cadence で約 3 時間 20 分)に行われます。audit の直後に登録した class は、seat がすぐ揃っても最長でこの期間待ちます。短くするフラグはありません(ADR-0147)。
++- **登録した本人は自分の class を進められません**(ADR-0145 §7)。登録者**以外**の operator の seat が ready になる必要があるので、seat を他の人に頼めることが前提です。
++- `Candidate` や `Prefetching` の class でも block は作れますが、その claim は work として拒否され、報酬も weight もありません。producer は inference の前にこれを確認して止まります(`E-MODEL-NOT-ADMITTING`)。
++- ready seat が 5 未満になるか、receipt window が過負荷になると `Held` に戻ります。
++
++登録後の class は、catalog に載っていなくても chain-registered-class の仕組みで動きます。testnet-12 ではこれが常に on なので、フラグは要りません(`--palw-chain-classes` は testnet-12 では非推奨で、`=false` でも止まりません)。class は、その artifact を読み込んだ node でだけ実行されます。
+ 
+ ## New model family
+ 
+-catalog にない model は、ファイルを置くだけでは class になりません。次が必要です。
++catalog にないアーキテクチャは、ファイルを置くだけでは class になりません。次が必要です。
+ 
+-1. 決定論的な整数 artifact 形式
+-2. canonical graph/profile と class ID 導出
+-3. reachable kernel 全体の adjudication coverage
+-4. artifact root、tokenizer、runtime の binding
+-5. conformance test と独立実装との差分試験
+-6. code review / PR
+-7. chain 上の class registration と lane certification
++1. 決定論的な整数の artifact 形式
++2. canonical な graph/profile と、class ID の導出
++3. 到達しうる kernel すべての裁定(adjudication)の網羅
++4. artifact root、tokenizer、runtime の結び付け
++5. conformance test と、独立した実装との差分試験
++6. code review と PR
++7. チェーン上での class の登録と lane certification
+ 
+-手動の古い `--palw-register-class` 例より、current `misaka model add --help` と [model onboarding SDK](https://github.com/MISAKA-BTC/misakas/blob/main/docs/palw-model-onboarding-sdk.md) を優先します。
++[model onboarding SDK](https://github.com/MISAKA-BTC/misakas/blob/main/docs/palw-model-onboarding-sdk.md) と、現行の `misaka model add --help` を優先してください。
+ 
+ ## Production and verification
+ 
+ ```bash
+-misaka --network testnet-11 mining setup --model <catalog-name>
+-misaka --network testnet-11 verifier setup
++misaka --network testnet-12 mining setup --model <catalog-name-or-class-id> --artifact /path/to/artifact
++misaka --network testnet-12 verifier setup --model <catalog-name-or-class-id> --artifact /path/to/artifact
+ ```
+ 
+-producer と verifier は同じ artifact bytes を検証できる必要があります。artifact root または tokenizer binding が違う場合は開始しません。
++producer と verifier は同じ artifact のバイト列を検証できなければなりません。artifact root や tokenizer の結び付けが違う場合は起動しません。`--palw-verify-class-manifest` を付けると、起動時にすべての sidecar を導出し直し、一致しなければ起動を拒否します(2M で artifact 1 つあたり約 135 秒、8k はそれより短い)。
+ 
+ ## Collateral
+ 
+-必要 collateral は class の PWU と claim lifetime から current CLI が導出します。Wiki に固定額を書き写さず、setup と bond status の表示を使います。登録済み Bond は top-up できず、同じ key で再登録できません。
++必要な collateral は、class と現在の規則から CLI が導出します。testnet-12 では claim ごとに escrow + weight を予約するので、同時 1 本あたりの目安は Floor 約 6,402 MSK、8k 約 6,452 MSK、2M 約 125,888 MSK です。それでも Wiki に固定の額を書き写さず、`mining setup` と `bond status` の表示を使ってください。登録済みの Bond には collateral を追加できず、同じ key では再登録できません。
+diff --git a/EVM-Pruned-Node.md b/EVM-Pruned-Node.md
+index db9978d..f682b5f 100644
+--- a/EVM-Pruned-Node.md
++++ b/EVM-Pruned-Node.md
+@@ -29,6 +29,6 @@ EVM state の保持方法は current `kaspad --help` と [flat backend runbook](
+ 
+ `--evm-prune-legacy-206` はディスク上の legacy data を削除します。通常起動フラグとして常設せず、backup と rollback 手順を確認した一回の保守作業として実行します。
+ 
+-## Testnet-11
++## testnet-12
+ 
+-PALW node/producer の通常参加には EVM prune 設定は不要です。まず [Quick Start](Quick-Start) で同期し、EVM RPC/履歴を提供する運用者だけがこのページの移行を行います。
++testnet-12 の PALW node/producer の通常の参加には EVM prune 設定は不要です。まず [Quick Start](Quick-Start) で同期し、EVM RPC/履歴を提供する運用者だけがこのページの移行を行います。
+diff --git a/FAQ-Troubleshooting.md b/FAQ-Troubleshooting.md
+index 4dd6ee6..43847f4 100644
+--- a/FAQ-Troubleshooting.md
++++ b/FAQ-Troubleshooting.md
+@@ -1,25 +1,52 @@
+-# FAQ / Troubleshooting — Testnet-11
++# FAQ / Troubleshooting — testnet-12
+ 
+-## Bond carrier は正式登録済みか
++## Bond carrier は正式に登録されているか
+ 
+ ```bash
+-misaka --network testnet-11 bond status --bond <txid>:<index>
++misaka --network testnet-12 bond status --bond <txid>:<index>
+ ```
+ 
+-`registry: REGISTERED` なら正式な PALW Bond です。locked UTXO が見えるだけでは登録済みとは判定できません。
++`registry: REGISTERED` なら正式な PALW Bond です。locked UTXO が見えるだけでは、登録済みかどうかは判断できません。
+ 
+-## REGISTERED なのに UNDERSIZED
++## bond の額はいくらか
+ 
+-登録状態と生産容量は別です。Bond は class の claim exposure を担保し、必要額は class の PWU と claim lifetime から導出されます。登録後の top-up はありません。
++testnet-12 は mainnet 想定の額です。producer は **13,000 MSK 以上**、panel seat は **130,000 MSK 以上**、DNS finality の validator は **20,000,000 MSK 以上** です。testnet-11 の少額 bond(0.004 MSK)は通りません。
+ 
+-- exposure に空きがあれば一時的に開始できる場合があります。
+-- ceiling に達すると `HOLD` します。
+-- 継続運用には、新しい producer key と必要額の新しい Bond を作ります。
+-- 同じ key の再登録は `DuplicateBondKey` で拒否されます。
++## REGISTERED なのに UNDERSIZED / holding
++
++登録されていることと、生産できる量は別です。testnet-12 では、claim ごとに不正で得られる額の全額(escrow + weight、floor claim 1 本で約 3,200.85 MSK)が bond に予約されます。予約できる上限は `collateral × 500‰` です。
++
++- 1 つの bond が同時に持てる floor claim は、collateral 約 6,402 MSK ごとに 1 本です(13,000 MSK なら 2 本)。
++- 上限に達すると、producer は `the bond's exposure ceiling leaves no room for another claim` で待ちます。claim が `Final` になるか void になると空きます。
++- 登録後に collateral を追加することはできません。容量を増やすには、新しい producer key と新しい Bond を作ります。
++- 同じ key での再登録は `DuplicateBondKey` で拒否されます。
++
++## `NOT PRODUCING for N min — holding: <reason>`
++
++producer が 30 分待っていると ERROR で出ます。`holding:` の後ろの理由を読んでください。exposure の上限、class が claim を受け付けていない、などが書かれます。
++
++## `E-MODEL-NOT-ADMITTING`
++
++「Not mining: the chain admits no new claim of this class now.」は、その class がいま claim を受け付けていないという意味です。lifecycle の状態が `Candidate`、`Registered`、`Prefetching`、`Held` のどれかか、ready seat に空きがありません。
++
++```bash
++misaka --network testnet-12 palw registry
++misaka --network testnet-12 model readiness <class-id>
++```
++
++`Prefetching` の class は、ready seat が 7 つになるのを待っています。よくある原因は seat の memory share 不足です(8k は 3.5 GiB 以上)。finding の hint には `misaka panel list` と出ますが、正しいコマンドは `misaka palw panel list` です。
++
++## `[palw-lane-watch] no PALW work block …`
++
++block は届いて DAA も進んでいるのに、selected chain に PALW の work がない状態です(heartbeat だけで時計が進んでいる)。floor producer が動いているか、panel seat が上がっているか、各 producer の `holding:` の行を確認してください。`PALW work is back on the chain: …` が出れば解消です。
+ 
+ ## Floor で artifact を要求された
+ 
+-Floor は artifact 不要です。`misaka mining setup --model floor` を使い、手動起動では `--palw-producer-class` と `--palw-class-artifact` を外します。
++Floor は artifact が要りません。`misaka mining setup --model floor` を使い、手動で起動する場合は `--palw-producer-class` と `--palw-class-artifact` を外します。
++
++## 2M の class で生産できない
++
++`Qwen/Qwen2.5-1.5B/graph-v7@2097152`(2M)は、公開時点では規則で閉じています。attempt と free-prompt claim は `ClassDeadlineUnmeasured` で拒否されます。
+ 
+ ## Connection refused / WebSocket error
+ 
+@@ -33,40 +60,59 @@ Floor は artifact 不要です。`misaka mining setup --model floor` を使い
+ | wRPC JSON | `28210` |
+ | EVM JSON-RPC | `8545` |
+ 
+-`misaka`、wallet、validator は wRPC Borsh を使います。node を `--rpclisten-borsh=default` 付きで起動してください。カスタム bind を使った場合は `--rpc host:port` を明示します。
++`misaka`、wallet、validator は wRPC Borsh を使います。node を `--rpclisten-borsh=default` を付けて起動してください。bind 先を変えた場合は `--rpc host:port` を明示します。
+ 
+-## peers が増えない
++## peers が増えない / genesis mismatch
+ 
+ まず network と fingerprint を確認します。
+ 
+ ```bash
+-misaka --network testnet-11 doctor
++misaka --network testnet-12 doctor
+ ```
+ 
+-`--testnet` は Testnet-11 です。DNS discovery が不安定なら `--addpeer=169.58.39.220:26311` を追加します。
++- node は `--testnet --netsuffix=12` で起動します。`--netsuffix` を省略しないでください。
++- DNS で peer が見つからない場合は `--addpeer=169.58.232.113:26311` を追加します。
++- genesis mismatch で起動しない場合は、最初の testnet-12(`a8cabac4…`)か testnet-11 の datadir を使っています。削除せずに退避し、新しい datadir で同期します。
++- 現行 `main` のビルドは testnet-11 に参加できません。testnet-11 を続ける場合は commit `1f98d3bf4` をビルドします。
+ 
+ ## hash miner が block を作らない
+ 
+-Testnet-11 の producer は `kaspad --palw-produce` です。`kaspa-pq-miner` と `misaminer` は PALW attempt を生成できません。ADR-0122 の `misaka mining setup/start` を使います。
++testnet-12 の producer は `kaspad --palw-produce` です。`kaspa-pq-miner` と `misaminer` は PALW の attempt を作れません。ADR-0122 の `misaka mining setup/start` を使います。
++
++## bond が slash された(`RoundPermitEquivocated`)
++
++同じ bond の key と outpoint で `kaspad` が 2 つ動いていました。standby の node、別ホストのコピー、動いている node の横で起動した `kaspad --palw-register-class`、新しい app dir で起動し直した node は、どれも 2 つ目の process になります。1 つの bond は 1 つの process だけで動かし、app dir は消さずに保ってください。
++
++## `--palw-panel` / `--palw-round-lane` の警告
++
++testnet-12 では、panel seat の義務と execution lane の round block は常に動きます。この 2 つのフラグは受け付けますが何もせず、警告を 1 回ずつ出すだけです。外してかまいません。
+ 
+ ## fee outpoint のエラー
+ 
+-Bond collateral と fee outpoint は別 UTXO です。fee outpoint は成熟済み、非 coinbase、未使用である必要があります。wizard を再実行すると候補を再検査します。
++Bond collateral と fee outpoint は別の UTXO です。fee outpoint は、成熟済みで、coinbase ではなく、まだ使われていないものが必要です。wizard を再実行すると候補を確認し直します。fee outpoint がない node は receipt だけを出し、carrier(data-availability の応答、filer など)をチェーンに出しません。
+ 
+ ## mining stop が拒否される
+ 
+-未完了 claim の防御責務があります。
++終わっていない claim の防御の義務があります。
+ 
+ ```bash
+-misaka --network testnet-11 mining stop --drain
++misaka --network testnet-12 mining stop --drain
+ ```
+ 
+-`--force` は claim を失う可能性がある緊急停止です。
++testnet-12 では、消えた producer は課金されます(`ProducerWithholding` の void と 2 回目の `ReceiptTimeout` は weight + escrow を没収)。`--force` は claim を失う可能性がある緊急停止です。
++
++## 入金はいつ確定とみなせるか
++
++block 数、blue score の深さ、DAA の差、heartbeat の本数は使わないでください。どれも heartbeat で水増しできます。少額なら自分の node の selected chain で、取引を含む block より blue score が 30 以上高い位置に blue の attempt があり、その後も attempt が続いていること。高額なら finality depth 600 blue(約 4 時間)か、`misaka palw settlement` で Final の anchor に達していることを確認します。詳しくは [公開ノート §3](https://github.com/MISAKA-BTC/misakas/blob/main/docs/t12-launch-2026-09-25.md) を見てください。
++
++## Faucet はあるか
++
++testnet-12 の faucet はまだ資金が入っていません(未定)。
+ 
+ ## dashboard が開かない
+ 
+ ```bash
+-misaka --network testnet-11 dashboard --listen 127.0.0.1:8791
++misaka --network testnet-12 dashboard --listen 127.0.0.1:8791
+ ```
+ 
+-リモートホストなら SSH tunnel を使います。`8790` は gateway、`8791` は dashboard です。
++リモートのホストなら SSH tunnel を使います。`8790` は gateway、`8791` は dashboard です。
+diff --git a/Home.md b/Home.md
+index 35b987d..06f699c 100644
+--- a/Home.md
++++ b/Home.md
+@@ -1,52 +1,68 @@
+ # misakas Wiki
+ 
+-この Wiki は **current `main` / Testnet-11 Relaunch 5f** の利用者向けガイドです。2026-09-13 に、CLI の `--help`、Testnet-11 パラメータ、現行 runbook と照合しました。
++この Wiki は、**現行 `main` と公開テストネット `testnet-12`(R-core+、ADR-0152 v3.1)** を使う人向けのガイドです。testnet-12 は release commit `0e8ec984e` から 2026-09-25/26 JST に公開されました。内容は 2026-09-25 に [公開ノート](https://github.com/MISAKA-BTC/misakas/blob/main/docs/t12-launch-2026-09-25.md)、[参加手順](https://github.com/MISAKA-BTC/misakas/blob/main/docs/testnet12-join-mining.md)、`Params` と照合しました。
+ 
+-仕様の正本は [MISAKA-BTC/misakas](https://github.com/MISAKA-BTC/misakas) のコード、[docs](https://github.com/MISAKA-BTC/misakas/tree/main/docs)、各バイナリの `--help` です。
++仕様の正本は [MISAKA-BTC/misakas](https://github.com/MISAKA-BTC/misakas) のコード、[docs](https://github.com/MISAKA-BTC/misakas/tree/main/docs)、各バイナリの `--help` です。この Wiki と食い違う場合は、node の表示と `misaka bond status` を正としてください。
++
++> [!IMPORTANT]
++> 公開前に、[testnet-12 公開ノート](https://github.com/MISAKA-BTC/misakas/blob/main/docs/t12-launch-2026-09-25.md) を必ず読んでください。リリースの中身、既知の問題(CRITICAL が 2 件あり、公開後の fence で修正)、入金を確定とみなしてよい基準が書いてあります。**testnet-12 では、block 数・blue score の深さ・DAA の差で入金を確定とみなさないでください。**
+ 
+ ## まず読むページ
+ 
+ 1. [Quick Start](Quick-Start) — ビルド、ノード、Bond、Floor producer
+-2. [Testnet-11 Operator UI](Testnet-11-Operator-UI-JA) — セットアップウィザードと dashboard
++2. [Testnet-12 Operator UI](Testnet-12-Operator-UI-JA) — セットアップウィザードと dashboard
+ 3. [FAQ / Troubleshooting](FAQ-Troubleshooting) — よくある停止理由
+ 4. [Operations Notes](Operations-Notes) — ポート、サービス化、更新
+-5. [PALW Participation](PALW-Participation-JA) — node / Producer / miner / Panel verifier
+-6. [検証参加ガイド](Testnet-11-Verification-Participation-JA) — PALW verifier / panel のセットアップ、S1/S2/S3 の起動、監視、停止
+-7. [Adding a Model](Adding-a-Model-JA) — A16 等のモデルクラス
++5. [PALW Participation](PALW-Participation-JA) — node / Producer / Panel seat
++6. [検証参加ガイド](Testnet-12-Verification-Participation-JA) — panel seat の用意、起動、監視、停止
++7. [Adding a Model](Adding-a-Model-JA) — モデル class と lifecycle
+ 8. [PALW の役割とネットワーク範囲](PALW-Roles-and-Network-Scope-JA) — 公開ロールと DNS の範囲
+ 9. [Privacy: What PALW Sees](Privacy-What-PALW-Sees) — prompt と receipt
+-10. [EVM Pruned Node](EVM-Pruned-Node) — EVM state retention
++10. [EVM Pruned Node](EVM-Pruned-Node) — EVM state の保持
+ 
+ ## 現行ネットワーク
+ 
+ | 項目 | 値 |
+ |---|---|
+-| network | `testnet-11` |
+-| relaunch | 5f |
+-| consensus fingerprint | `ae1d61628da50c7becea62f0a8f08c8654d190c60b2e104df0010b121ba4d3d8` |
++| network | `testnet-12`(R-core+) |
++| release commit | `0e8ec984e`(現行 `main`) |
++| consensus params fingerprint | `b8564b888e55bb5f797e708a3f65e7cd122065123a3ab09cbeb8d10c98715d8f` |
++| fence schedule | `1000`(schedule id `93da24cc60f7a77e63c43106e96298d2979644a3fc0c3f82529c8849333127fd`) |
++| genesis | `a27f8f44fe4d91a5…`(全体は公開ノートに記載) |
++| premine txid | `5e0d5f1b37a71288…`(genesis の bond と fee float はこの txid の上にある) |
++| node の起動 | `kaspad --testnet --netsuffix=12` |
++| CLI | `misaka --network testnet-12`(何も指定しないときの既定も testnet-12) |
+ | P2P | `26311` |
+ | node gRPC | `26210` |
+ | wRPC Borsh | `27210` |
+ | wRPC JSON | `28210` |
+ | dashboard | `127.0.0.1:8791` |
+-| PALW cadence | 120 seconds per block |
++| PALW cadence | 1 block 120 秒。1 DAA = 1 execution span なので、1,000 DAA は約 33 時間 |
++| Explorer | [misakascan.com](https://misakascan.com/)(testnet-12 を表示) |
++| Faucet | **未定**(testnet-12 の資金はまだ入っていない) |
+ 
+-`--testnet` は現行の `testnet-11` を選びます。明示する場合は `--netsuffix=11` または
+-`--network testnet-11` を使用します。
++testnet-12 のルールは、DAA 1,000 の bond maturity window(ADR-0065 D1)を除き、**すべて DAA 0 から有効**です。testnet-11 のように途中の DAA で規則が切り替わる fence はありません。
+ 
+ ## 重要な区別
+ 
+-- PALW producer Bond と Panel verifier の Bond は別の用途です。
+-- Bond の UTXO が locked でも、registry に正式登録済みとは限りません。
+-- `REGISTERED` と、選択クラスを継続生産できる十分な collateral は別です。
+-- BASE-0/Floor はモデルファイル不要です。A16/QWEN36 は対応 artifact が必要です。
+-- PALW verifier は panel seat で、現状は無報酬です。
+-- S1 / S2 / S3 は別プロセスではない。同じ `verifier start` が DAA 7,200 / 8,600 / 8,700 で検証の仕方を切り替える。手順は [検証参加ガイド](Testnet-11-Verification-Participation-JA)。
++- **現行 `main` のビルドでは testnet-11 に参加できません。** testnet-11 のノードを動かし続ける場合は、旧 `main` の commit `1f98d3bf4` をビルドします(詳細は [README](https://github.com/MISAKA-BTC/misakas#readme))。
++- testnet-12 は新しいチェーンです。testnet-11 の bond はありません。key file は流用できますが、bond は testnet-12 で登録し直します。
++- Bond の額は mainnet 想定です: producer は **13,000 MSK 以上**、panel seat は **130,000 MSK 以上**、DNS finality の validator は **20,000,000 MSK 以上**。
++- Bond の UTXO が locked でも、registry に正式登録済みとは限りません(`misaka bond status` で確認します)。
++- 1 つの key で登録できる bond は、チェーンの存続期間を通じて 1 つだけです。登録後に collateral を追加することもできません。
++- **1 つの bond は 1 つの process だけで動かしてください。** 同じ bond の key と outpoint で `kaspad` を 2 つ動かすと round permit に二重署名し、bond 全体が slash されます(`RoundPermitEquivocated`)。
++- node の義務(panel seat の duty、execution lane の round block、chain classes)は起動オプションに関係なく常に動きます。`--palw-panel` と `--palw-round-lane` は受け付けますが何もせず、警告を出すだけです。
++- BASE-0/Floor はモデルファイル不要です。8k の Qwen2.5 class は artifact と 3.5 GiB 以上のメモリが必要です。2M class は公開時点では閉じています。
++- 検証ルール S1 / S2 / S3 は DAA 0 から有効です。別プロセスやフラグはありません。
+ 
+ ## 公式リンク
+ 
+ - [Source](https://github.com/MISAKA-BTC/misakas)
+-- [Testnet-11 mining runbook](https://github.com/MISAKA-BTC/misakas/blob/main/docs/testnet11-join-mining.md)
+-- [Node operator guide](https://github.com/MISAKA-BTC/misakas/blob/main/docs/testnet11-node-operator.md)
++- [testnet-12 公開ノート](https://github.com/MISAKA-BTC/misakas/blob/main/docs/t12-launch-2026-09-25.md)
++- [Testnet-12 参加手順(producer)](https://github.com/MISAKA-BTC/misakas/blob/main/docs/testnet12-join-mining.md)
++- [testnet-12 regenesis の記録](https://github.com/MISAKA-BTC/misakas/blob/main/docs/testnet-12-regenesis-2026-09-23.md)
++- [Validator runbook](https://github.com/MISAKA-BTC/misakas/blob/main/docs/validator-runbook.md)
+ - [Explorer](https://misakascan.com/)
+ - [Releases](https://github.com/MISAKA-BTC/misakas/releases)
++
++旧ネットワーク testnet-11 向けのページ([Operator UI](Testnet-11-Operator-UI-JA)、[検証参加ガイド](Testnet-11-Verification-Participation-JA))は記録として残しています。
+diff --git a/Operations-Notes.md b/Operations-Notes.md
+index 7f08a1b..2235e30 100644
+--- a/Operations-Notes.md
++++ b/Operations-Notes.md
+@@ -1,44 +1,71 @@
+-# Operations Notes — Testnet-11
++# Operations Notes — testnet-12
+ 
+ ## Network and ports
+ 
+ | 用途 | 値 |
+ |---|---|
+-| network | `testnet-11` |
+-| node flag | `--testnet --netsuffix=11` |
++| network | `testnet-12` |
++| node flag | `--testnet --netsuffix=12` |
+ | P2P | `26311` |
+ | gRPC | `127.0.0.1:26210` |
+ | wRPC Borsh | `127.0.0.1:27210` |
+ | wRPC JSON | `127.0.0.1:28210` |
+ | dashboard | `127.0.0.1:8791` |
++| 公開エントリポイント | `169.58.232.113:26311`(DNS seeder `seeder1.misakascan.com` と同じホスト) |
+ 
+-RPC は原則 loopback のままにし、遠隔操作は SSH tunnel で行います。
++RPC は原則 loopback のままにして、リモートからの操作は SSH tunnel で行います。
+ 
+ ## Minimal node
+ 
+ ```bash
+-kaspad --testnet --netsuffix=11 --utxoindex \
+-  --rpclisten-borsh=default \
+-  --addpeer=169.58.39.220:26311
++kaspad --testnet --netsuffix=12 --utxoindex --rpclisten-borsh=default
+ ```
+ 
+-同期・監視だけの node は model artifact、producer key、Bond を必要としません。
++DNS seeder で peer が見つからない場合は `--addpeer=169.58.232.113:26311` を追加します。同期と監視だけの node には、model artifact、producer key、Bond は要りません。
+ 
+-## Updating
+-
+-1. `git pull --ff-only` と release build を行う。
+-2. 新旧 binary の SHA-256 を記録する。
+-3. node を停止して旧 binary を明示名でバックアップする。
+-4. binary を交換し、同じ appdir で再起動する。
+-5. fingerprint、fence schedule、peer、sync、service status を確認する。
++## Identity の確認
+ 
+-現行 fingerprint:
++起動ログの次の 2 行を確認します。
+ 
+ ```text
+-ae1d61628da50c7becea62f0a8f08c8654d190c60b2e104df0010b121ba4d3d8
++Consensus params fingerprint: b8564b888e55bb5f797e708a3f65e7cd122065123a3ab09cbeb8d10c98715d8f (network testnet-12)
++Consensus fence schedule: 1000 (schedule id 93da24cc60f7a77e63c43106e96298d2979644a3fc0c3f82529c8849333127fd)
+ ```
+ 
+-過去 relaunch の datadir は genesis が異なるため流用できません。単なる binary 更新では current 5f appdir を保持します。
++release バイナリ(`0e8ec984e`、x86_64 Linux、glibc 2.39 floor)の sha256:
++
++| binary | sha256 |
++|---|---|
++| kaspad | `5a357623c74f8e786cd244aef783855a81d8490222da15bf1a76e3dab987f149` |
++| misaka | `c80e608aea340cd81eea83a503594568d9c109e271a360a40667b9f50ad4c176` |
++| palw-class | `918c3554ef6ed29dff3383963e43289fc6752cf9de51a73e3dc9f2aed6a895ee` |
++| misaka-dnsseeder | `8ff837efa2c8fce4bd758f5d29806af6c47ad2f80aa48649bb9f285fa68812ce` |
++
++## Updating
++
++1. `git pull --ff-only` のあと release build を作る。
++2. 新旧のバイナリの SHA-256 を記録する。
++3. node を止め、旧バイナリを名前を付けてバックアップする。
++4. バイナリを入れ替え、**同じ app dir** で起動し直す。
++5. fingerprint、fence schedule、peer、同期、サービスの状態を確認する。
++
++既知の問題(公開ノート §2)は、公開後に fence またはノードの更新で直す予定です。更新の告知があったら、上の手順でバイナリを入れ替えてください。
++
++最初の testnet-12(genesis `a8cabac4…`)や testnet-11 の datadir は genesis が違うので使えません。削除せずに別名へ退避します。バイナリを更新するだけのときは、現在の app dir をそのまま使います。
++
++**app dir は消さないでください。** app dir には、この bond が最後に署名した round の記録(`palw-round-last-signed`)があります。消して再同期すると、まだ merge されていない permit にもう一度署名し、bond が slash される可能性があります。ホストを移すときは app dir ごと移すか、復元します。
++
++## 1 bond = 1 process
++
++testnet-12 の node の義務には止めるスイッチがありません。bond の key と outpoint を持って起動した `kaspad` は、どれもその bond の義務(execution lane の round block を含む)を実行します。2 つが同時に動くと、同じ round permit に 2 つの別の block で署名し、bond 全体が slash されます(`RoundPermitEquivocated`)。
++
++次のものはすべて 2 つ目の process です。
++
++- standby の node、別のホストにコピーした node
++- 動いている node の横で起動した `kaspad --palw-register-class …`(class が登録されても終了しない)。class は `misaka model add` で登録するか、動いている node をそのフラグ付きで起動し直す
++- 古いものが動いたまま、新しい app dir で起動した同じ node
++
++node は起動時にこの規則を表示します(`PALW bond …: run it in exactly ONE process …`)。
+ 
+ ## Service health
+ 
+@@ -46,11 +73,18 @@ ae1d61628da50c7becea62f0a8f08c8654d190c60b2e104df0010b121ba4d3d8
+ systemctl is-active <service>
+ systemctl --failed
+ journalctl -u <service> -n 100 --no-pager
+-misaka --network testnet-11 doctor
+-misaka --network testnet-11 mining status
++misaka --network testnet-12 doctor
++misaka --network testnet-12 mining status
+ ```
+ 
+-ログでは panic だけでなく、fingerprint mismatch、fork-id mismatch、Bond exposure full、fee UTXO、artifact mismatch を確認します。
++ログでは panic のほかに、次を確認します。
++
++- fingerprint mismatch、genesis mismatch、fork-id mismatch
++- `PALW duties NOT as planned: …`(義務が予定どおり動いていない)
++- `NOT PRODUCING for N min — holding: <reason>`
++- `[palw-lane-watch] no PALW work block …`(heartbeat だけで時計が進んでいる)
++- bond の exposure が満杯、fee UTXO、artifact mismatch
++- 8k の seat の readiness: `no proof —`、`waits for a carrier slot`(公開ノートの既知の問題 6。詰まった seat は再起動で回復させる)
+ 
+ ## Resource profiles
+ 
+@@ -63,22 +97,22 @@ misaka --network testnet-11 mining status
+ - `archive`
+ - `public-rpc`
+ 
+-profile の拒否条件を手動フラグで回避しないでください。モデルクラス producer は artifact 自体の RAM・disk・実行時間も必要です。Floor はモデル download 不要です。
++profile が拒否する組み合わせを、手動のフラグで回避しないでください。model class の producer や seat には、artifact そのものの RAM、ディスク、実行時間が必要です(8k は `--palw-host-memory-share` 3.5 GiB 以上)。Floor はモデルのダウンロードが要りません。
+ 
+ ## Keys and state
+ 
+-- Producer / miner と Panel verifier の鍵・設定をバックアップする。
+-- secret seed を CLI 引数やログに貼らない。
+-- 同じ validator seed を二重起動しない。
+-- `~/.misaka/mining.toml` と appdir の役割を混同しない。
+-- Bond outpoint、fee outpoint、class artifact hash を記録する。
++- producer と panel seat の key と設定をバックアップする。
++- secret seed を CLI の引数やログに貼らない。
++- 同じ validator seed を 2 か所で起動しない。同じ bond を 2 つの process で動かさない。
++- `~/.misaka/mining.toml` と app dir の役割を混同しない。
++- Bond の outpoint、fee outpoint、class artifact の hash を記録する。genesis の bond と fee float は premine txid `5e0d5f1b…` の上にある(index は bond 0〜7、fee float 41〜48)。
+ 
+ ## Graceful maintenance
+ 
+ producer を止める前に:
+ 
+ ```bash
+-misaka --network testnet-11 mining stop --drain
++misaka --network testnet-12 mining stop --drain
+ ```
+ 
+-panel または court の責務がある場合、drain 完了まで待ってから service を停止します。
++panel や court の義務がある場合は、drain が終わるまで待ってからサービスを止めます。testnet-12 では、消えた producer は課金されます(`ProducerWithholding` の void と 2 回目の `ReceiptTimeout`)。
+diff --git a/PALW-Participation-JA.md b/PALW-Participation-JA.md
+index cea0733..3394d35 100644
+--- a/PALW-Participation-JA.md
++++ b/PALW-Participation-JA.md
+@@ -1,73 +1,106 @@
+-# PALW 参加手順（Testnet-11）
++# PALW 参加手順(testnet-12)
+ 
+-PALW への参加者ロールは2つです。
++PALW の参加者のロールは 2 つです。
+ 
+ | 役割 | モデル | Bond | 主なコマンド |
+ |---|---|---|---|
+-| Producer / miner | Floor は不要、他 class は必要 | PALW Bond | `misaka mining setup` |
+-| Panel verifier | 対象 class は必要 | capability を持つ PALW Bond | `misaka verifier setup` |
++| Producer / miner | Floor は不要、8k class は必要 | PALW Bond(**13,000 MSK 以上**) | `misaka mining setup` |
++| Panel seat(verifier) | 検証する class のものが必要 | capability を宣言した PALW Bond(**130,000 MSK 以上**) | `misaka verifier setup` |
++
++**producer の node は panel seat の義務も常に実行します。** producer の bond で別に verifier を起動しないでください(1 つの bond は 1 つの process だけ)。seat だけを動かしたいときに `verifier` を使います。
+ 
+ ## Producer
+ 
+ ```bash
+-misaka --network testnet-11 mining setup
+-misaka --network testnet-11 mining start --print-command
+-misaka --network testnet-11 mining start
++misaka --network testnet-12 mining setup
++misaka --network testnet-12 mining start --print-command
++misaka --network testnet-12 mining start
+ ```
+ 
+-Testnet-11 の block producer は `kaspad --palw-produce` です。外部 hash miner は PALW attempt envelope を生成できません。
++testnet-12 の block producer は `kaspad --palw-produce` です。外部の hash miner は PALW の attempt envelope を作れません。block は PALW ConsensusV2 が 120 秒ごとに作ります。
+ 
+-S1（DAA 7,200）以降、producer は capture から決定論的 checkpoint `SC01` を公開します。checkpoint 用の別コマンドはありません。panel の partial 席はこの opening から自分の区間だけ resume するため、**producer も検証席と同じ世代のバイナリ** で起動し、receipt 期限まで capture を保持してください。
++- producer の node(`--palw-producer-key` と `--palw-producer-bond` を持つ node)は、panel seat の義務と execution lane の round block を常に実行します。`--palw-produce` で決まるのは、attempt claim も開くかどうかだけです。
++- S1 は DAA 0 から有効なので、producer は capture から決定論的な checkpoint `SC01` を公開します。checkpoint 用の別コマンドはありません。partial 席はこの opening から自分の区間だけを再開するので、**producer も検証席と同じ世代のバイナリ**で起動し、receipt の期限まで capture を持ち続けてください。
+ 
+ ## Floor
+ 
+-BASE-0/Floor は組み込みの決定論的整数クラスです。GPU と artifact download は不要です。class flag を省略した手動起動が Floor になります。
++BASE-0/Floor は組み込みの決定論的な整数 class で、常に `Active` です。GPU や artifact のダウンロードは要りません。class のフラグを省いて手動で起動すると Floor になります。
+ 
+ ## Model class
+ 
+-A16 や QWEN36 は chain が登録した class と完全一致する artifact が必要です。`misaka model list` と `misaka model status` で現在の class ID、status、share、budget、artifact を確認します。Wiki に書かれた古い class ID をコピーしないでください。
++testnet-12 の genesis にある model class は 2 つです。
++
++| model id | class id | 状態 |
++|---|---|---|
++| `Qwen/Qwen2.5-1.5B/graph-v7@8192`(8k) | `ebf44d0a…` | `Prefetching` から始まる。ready seat が 7 つ揃うと `Probation` に進む |
++| `Qwen/Qwen2.5-1.5B/graph-v7@2097152`(2M) | `74c67e63…` | **公開時点では規則で閉じている**(`ClassDeadlineUnmeasured`) |
++
++8k class には、chain が登録した root と一致する artifact(1,799,359,436 bytes、inventory root `88096dc1…`)と、3.5 GiB 以上の memory share が必要です。作り方は [参加手順 §6](https://github.com/MISAKA-BTC/misakas/blob/main/docs/testnet12-join-mining.md) を見てください。Qwen3.6 の hybrid 行は genesis に入っていません。
++
++class ID、状態、ready seat は、Wiki の値をコピーせずにチェーンで確認してください。
++
++```bash
++misaka --network testnet-12 model list
++misaka --network testnet-12 palw registry
++misaka --network testnet-12 model readiness <class-id>
++```
+ 
+ ## Bond and exposure
+ 
+-PALW Bond は単なる最低額ではなく、open claim の exposure ceiling を持ちます。CLI が class と現在の規則から必要 collateral を導出します。
++PALW Bond は、開いている claim の exposure の上限を持ちます。testnet-12 では、claim ごとに不正で得られる額の全額(escrow + weight)を bond に予約し、上限は `collateral × 500‰` です。floor claim 1 本の予約は約 3,200.95 MSK なので、同時に持てる floor claim は collateral 約 6,402 MSK ごとに 1 本です。
++
++| class | 同時 1 本あたりの collateral |
++|---|---|
++| Floor | 約 6,402 MSK |
++| 8k | 約 6,452 MSK |
++| 2M | 約 125,888 MSK |
+ 
+ ```bash
+-misaka --network testnet-11 bond status --bond <txid>:<index>
++misaka --network testnet-12 bond status --bond <txid>:<index>
+ ```
+ 
+-登録後の top-up はなく、同じ key は二つ目を登録できません。別 class を継続生産するために不足する場合は、新しい key と新しい Bond を使います。
++登録後に collateral を追加することはできず、同じ key で 2 つ目の bond は登録できません。容量が足りない場合は、新しい key と新しい Bond を使います。
+ 
+-## Panel verifier
++## Panel seat
+ 
+ ```bash
+-misaka --network testnet-11 verifier setup
+-misaka --network testnet-11 verifier start
+-misaka --network testnet-11 verifier status
++misaka --network testnet-12 verifier setup
++misaka --network testnet-12 verifier start
++misaka --network testnet-12 verifier status
+ ```
+ 
+-Panel verifier は panel に選ばれた claim を再実行・判定します。対象 class の artifact と capability が必要です。現状は無報酬です。
++panel seat は、panel に選ばれた claim を再実行して判定します。検証する class の artifact と capability の宣言が必要です。seat の bond は 130,000 MSK 以上で、`Valid` 署名が取る lock を払える空き collateral が必要です。quorum と違う判定をした seat は課金されます。
+ 
+-S1 / S2 / S3 は別プロセスではありません。上の3コマンドのまま起動し、チェーンの DAA が検証の仕方を切り替えます。`--s1` のようなフラグはありません。
++S1 / S2 / S3 は DAA 0 から有効で、別のプロセスやフラグはありません。上の 3 つのコマンドのまま動きます。手順、ログの見方、よくある失敗は [検証参加ガイド](Testnet-12-Verification-Participation-JA) にあります。
+ 
+-| 段階 | DAA | 起動 |
+-|---|---:|---|
+-| S1 区間 replay | 7,200 | 同じ `verifier start`。5席のうち1席が全区間、4席は重複しない1区間 |
+-| S3 層サンプル | 8,600 | 同じ `verifier start` |
+-| S2 optimistic | 8,700 | 同じ `verifier start` |
++## 停止と課金
+ 
+-起動・監視・停止の手順、ログの見方、よくある失敗は [検証参加ガイド](Testnet-11-Verification-Participation-JA) です。起動ログまたは `misaka doctor` の fence schedule に **7200, 8600, 8700** が含まれるビルドを使ってください。
++```bash
++misaka --network testnet-12 mining stop --drain
++```
++
++testnet-12 では、消えた producer は課金されます。`ProducerWithholding` の void と 2 回目の `ReceiptTimeout` は weight + escrow(floor claim 1 本で約 3,200.85 MSK)を没収します。`BindTimeout` と `NoCapablePanel` は課金されません。
++
++## 報酬
++
++Final になった claim の報酬は、すぐには払われず vesting 行に入り、行が成熟して動いたときに mint されます(ADR-0152)。
++
++```bash
++misaka --network testnet-12 rewards
++misaka --network testnet-12 palw vesting
++```
+ 
+ ## Free-prompt lane
+ 
+-free-prompt はユーザーが必要とした inference の receipt を work にする別レーンです。gateway、worker、rail と producer/panel を組み合わせます。通常の Floor producer 初期設定には不要です。
++free-prompt は、ユーザーが必要とした inference の receipt を work にする別のレーンです。gateway、worker、rail と producer/panel を組み合わせます。Floor producer の通常の初期設定には要りません。
+ 
+ ## Epoch budget release
+ 
+-ADR-0123 の未使用 class budget 解放ロジックは実装されていますが、`palw_epoch_budget_release` は shipped preset では `None` です。Testnet-11 で有効になったと説明してはいけません。activation は別の明示的なネットワーク判断です。
++ADR-0123 の、使われていない class budget を解放する規則(`palw_epoch_budget_release`)は、**testnet-12 では DAA 0 から有効**です。予算を使い切った class は、他の class が埋めていない epoch の枠を借ります。途中の epoch で登録された class は、次の境界まで予算が 0 です。testnet-11 では無効のままです。
+ 
+ ## 正本
+ 
+-- [検証参加ガイド](Testnet-11-Verification-Participation-JA)
+-- [Mining runbook](https://github.com/MISAKA-BTC/misakas/blob/main/docs/testnet11-join-mining.md)
+-- [Public class runbook](https://github.com/MISAKA-BTC/misakas/blob/main/docs/palw-public-testnet-classes-runbook.md)
++- [検証参加ガイド](Testnet-12-Verification-Participation-JA)
++- [Testnet-12 参加手順](https://github.com/MISAKA-BTC/misakas/blob/main/docs/testnet12-join-mining.md)
++- [testnet-12 公開ノート](https://github.com/MISAKA-BTC/misakas/blob/main/docs/t12-launch-2026-09-25.md)
+ - [ADR index](https://github.com/MISAKA-BTC/misakas/tree/main/docs/adr)
+diff --git a/PALW-Roles-and-Network-Scope-JA.md b/PALW-Roles-and-Network-Scope-JA.md
+index b66d3eb..750976c 100644
+--- a/PALW-Roles-and-Network-Scope-JA.md
++++ b/PALW-Roles-and-Network-Scope-JA.md
+@@ -2,46 +2,52 @@
+ 
+ ## 現行ネットワーク
+ 
+-この Wiki で案内する現行の公開テストネットは **`testnet-11`** です。
++この Wiki で案内する現行の公開テストネットは **`testnet-12`**(R-core+、release commit `0e8ec984e`)です。testnet-11 は旧ネットワークで、現行 `main` のビルドでは参加できません。
+ 
+-## PALW の参加者ロールは2つ
++## PALW の参加者のロールは 2 つ
+ 
+ | 役割 | 責務 | 採掘 | 検証 |
+ |---|---|---:|---:|
+-| **Producer / miner** | PALW の仕事を実行し、受理可能な block / claim を生成して送る | する | 自分の生成物を確認する |
++| **Producer / miner** | PALW の仕事を実行し、受理される block / claim を作って送る | する | 自分の生成物を確認する |
+ | **Panel verifier** | 割り当てられた PALW の仕事を再実行し、結果を検証して verdict を返す | しない | する |
+ 
+-Producer / miner と Panel verifier は別の役割です。Panel verifier は採掘を行わず、
+-Producer / miner が提出した仕事の検証を担当します。
++Producer / miner と Panel verifier は別の役割です。Panel verifier は採掘をせず、Producer / miner が出した仕事の検証を担当します。
++
++testnet-12 では、producer の node は同じ bond の panel seat の義務も常に実行します。producer の bond で verifier を別の process として起動してはいけません(1 つの bond は 1 つの process だけ。2 つ動かすと round permit に二重署名して slash されます)。
++
++| 役割 | bond collateral |
++|---|---|
++| Producer / miner | 13,000 MSK 以上 |
++| Panel verifier(seat) | 130,000 MSK 以上 |
++| DNS finality の validator(PALW とは別の役割) | 20,000,000 MSK 以上 |
+ 
+ ## DNS の位置づけ
+ 
+-DNS seeder は peer discovery のためのネットワーク基盤です。PALW の仕事を生成せず、
+-採掘せず、Panel verifier として verdict を返しません。DNS の運用と PALW の参加手順は
+-混同しないでください。
++DNS seeder は peer を見つけるためのネットワーク基盤です。PALW の仕事を作らず、採掘せず、Panel verifier として verdict を返すこともありません。DNS の運用と PALW の参加手順を混同しないでください。node は組み込みの seeder 名(`seeder1.misakascan.com` など)を引き、返ってきた IP の 26311 番に接続します。DNS で見つからない場合は `--addpeer=169.58.232.113:26311` を追加します。
++
++DNS finality の validator(`misaka validator`)は DNS seeder とは別物です。testnet-12 では、validator が 6 つ以上、active stake が合計 120,000,000 MSK 以上になるまで DNS finality は Bootstrap の状態で、DNS の reorg gate は効きません(公開ノートの既知の問題 3)。その間、coinbase は 600 DAA(約 20 時間)の fallback だけで成熟します。
+ 
+ ## 参加コマンド
+ 
+ Producer / miner:
+ 
+ ```bash
+-misaka --network testnet-11 mining setup
+-misaka --network testnet-11 mining start
++misaka --network testnet-12 mining setup
++misaka --network testnet-12 mining start
+ ```
+ 
+ Panel verifier:
+ 
+ ```bash
+-misaka --network testnet-11 verifier setup
+-misaka --network testnet-11 verifier start
+-misaka --network testnet-11 verifier status
++misaka --network testnet-12 verifier setup
++misaka --network testnet-12 verifier start
++misaka --network testnet-12 verifier status
+ ```
+ 
+-ノードだけを運用する場合は、PALW の Bond やモデル artifact は不要です。DNS は peer
+-発見に利用されます。
++node だけを運用する場合は、PALW の Bond もモデルの artifact も要りません。peer を見つけるのに DNS を使います。
+ 
+ ## 関連ページ
+ 
+ - [PALW Participation](PALW-Participation-JA)
+-- [Testnet-11 検証参加ガイド](Testnet-11-Verification-Participation-JA)
++- [Testnet-12 検証参加ガイド](Testnet-12-Verification-Participation-JA)
+ - [Operations Notes](Operations-Notes)
+diff --git a/Quick-Start.md b/Quick-Start.md
+index 204ec5f..1f929ed 100644
+--- a/Quick-Start.md
++++ b/Quick-Start.md
+@@ -1,4 +1,6 @@
+-# Quick Start — Testnet-11 Relaunch 5f
++# Quick Start — testnet-12
++
++対象は現行 `main`(release commit `0e8ec984e`)と公開テストネット `testnet-12` です。詳しい手順の正本は [testnet12-join-mining.md](https://github.com/MISAKA-BTC/misakas/blob/main/docs/testnet12-join-mining.md) です。
+ 
+ ## 1. Build
+ 
+@@ -10,80 +12,132 @@ git pull --ff-only
+ cargo build --release -p kaspad -p misaka-cli
+ ```
+ 
+-以下では `target/release` を PATH に加えた前提です。加えない場合は `./target/release/kaspad` と `./target/release/misaka` を使います。
++`misaka-cli` から作られるバイナリは `target/release/misaka` です。以下では `target/release` を PATH に加えた前提で書きます。加えない場合は `./target/release/kaspad` と `./target/release/misaka` と読み替えてください。
++
++公開 fleet は `0e8ec984e` の x86_64 Linux release build を動かしています(kaspad の sha256 は `5a357623c74f8e786cd244aef783855a81d8490222da15bf1a76e3dab987f149`)。
+ 
+-## 2. Node
++> 現行 `main` のビルドは testnet-11 に参加できません。testnet-11 を続ける場合は commit `1f98d3bf4` をビルドします。
++
++## 2. Key
+ 
+ ```bash
+-kaspad --testnet --netsuffix=11 --utxoindex \
+-  --rpclisten-borsh=default \
+-  --addpeer=169.58.39.220:26311
++misaka --network testnet-12 key gen --out ~/.misaka/miner.seed      # 0600 で作成。既存ファイルは上書きしない
++misaka --network testnet-12 key pubkey --key-file ~/.misaka/miner.seed
++misaka --network testnet-12 key address --key-file ~/.misaka/miner.seed
+ ```
+ 
+-起動ログの fingerprint が次と一致することを確認します。
++**1 つの key で登録できる bond は、チェーンの存続期間を通じて 1 つだけです。** bond を退役させても key は解放されません。collateral は後から追加できません。容量を増やしたいときは、新しい key を作って新しい bond を登録します。
++
++## 3. Node
++
++```bash
++kaspad --testnet --netsuffix=12 --utxoindex --rpclisten-borsh=default
++```
++
++node は組み込みの DNS seeder から peer を探します。DNS で見つからない場合は、公開エントリポイントを追加します(`--addpeer` にはホスト名ではなく IP アドレスを書きます)。
++
++```bash
++kaspad --testnet --netsuffix=12 --utxoindex --rpclisten-borsh=default \
++  --addpeer=169.58.232.113:26311
++```
++
++起動ログに次の 2 行が出ることを確認します。
+ 
+ ```text
+-ae1d61628da50c7becea62f0a8f08c8654d190c60b2e104df0010b121ba4d3d8
++Consensus params fingerprint: b8564b888e55bb5f797e708a3f65e7cd122065123a3ab09cbeb8d10c98715d8f (network testnet-12)
++Consensus fence schedule: 1000 (schedule id 93da24cc60f7a77e63c43106e96298d2979644a3fc0c3f82529c8849333127fd)
++```
++
++最初の testnet-12(genesis `a8cabac4…`)の datadir を使うと、起動時に genesis mismatch で拒否されます。その datadir は削除せずに別名へ退避し、新しい node には使わないでください。
++
++`misaka` は何も指定しなければ testnet-12 を使います。同じシェルで別のネットワークも扱う場合は、毎回ネットワークを明示するか、次のように testnet-12 に固定します。
++
++```bash
++export MISAKA_NETWORK=testnet-12        # または: misaka --network testnet-12 config init
+ ```
+ 
+-## 3. Existing Bond
++## 4. 資金
++
++**Faucet は未定です。** testnet-12 の faucet にはまだ資金が入っていません。資金を持っている人からは次のコマンドで送金できます。
+ 
+ ```bash
+-misaka --network testnet-11 bond status --bond <txid>:<index>
++misaka --network testnet-12 wallet send --key-file <key> --to <addr> --amount <MSK> --yes
+ ```
+ 
+-`--bond` / `--outpoint` / `--carrier` は同じ意味です。この照会は key 不要で、`--class-id` を省略すると BASE-0/Floor を使います。
++testnet-12 の bond は mainnet 想定の額です。
+ 
+-- `registry: REGISTERED`: 正式登録済み。再登録しません。
+-- `registry: NOT REGISTERED`: UTXO または予約出力であり、Bond registry にはありません。
+-- `UNDERSIZED`: 登録済みでも、選択クラスの継続生産には collateral が不足しています。
++| 役割 | 必要な bond collateral |
++|---|---|
++| Floor producer | **13,000 MSK 以上**。同時に持てる floor claim 1 本につき約 6,402 MSK(13,000 MSK なら 2 本、100,000 MSK なら 15 本) |
++| Panel seat | **130,000 MSK 以上** |
++| DNS finality の validator | **20,000,000 MSK 以上**(別の bond) |
+ 
+-## 4. Floor producer
++このほかに、bond とは別の output として fee float(0.1 MSK 以上)を key のアドレスに置きます。
+ 
+-対話式セットアップ:
++## 5. Existing Bond
+ 
+ ```bash
+-misaka --network testnet-11 mining setup
++misaka --network testnet-12 bond status --bond <txid>:<index>
++misaka --network testnet-12 bond status --key-file ~/.misaka/miner.seed
+ ```
+ 
+-既存 key と Bond を指定する場合:
++- `registry: REGISTERED`: 正式に登録された PALW bond です。登録し直さないでください。
++- `registry: NOT REGISTERED`: ふつうの UTXO、予約された output、または lock された output で、registry の記録ではありません。
++- `UNDERSIZED`: 登録済みですが、確認した class をずっと生産し続けるには collateral が足りません。
++
++## 6. Floor producer
++
++対話式のセットアップ(推奨):
+ 
+ ```bash
+-misaka --network testnet-11 mining setup \
++misaka --network testnet-12 mining setup
++```
++
++ウィザードは `kaspad --palw-register-bond` で登録します。collateral にはノードが導出した既定値を使い、その額に合う資金を求めます。collateral の額を自分で決めたい場合は、[参加手順 §5](https://github.com/MISAKA-BTC/misakas/blob/main/docs/testnet12-join-mining.md) の手動の形で `--palw-bond-collateral=<sompi>` を明示してください。
++
++既存の key と Bond を指定する場合:
++
++```bash
++misaka --network testnet-12 mining setup \
+   --model floor \
+   --key-file ~/.misaka/miner.seed \
+-  --bond <registered-bond-txid>:<index> \
+-  --peer 169.58.39.220:26311
++  --bond <registered-bond-txid>:<index>
+ ```
+ 
+-生成コマンドを確認してから起動します。
++起動コマンドを確認してから起動します。
+ 
+ ```bash
+-misaka --network testnet-11 mining start --print-command
+-misaka --network testnet-11 mining start
++misaka --network testnet-12 mining start --print-command
++misaka --network testnet-12 mining start
+ ```
+ 
+-## 5. Observe and stop
++起動ログに `PALW duties (on by construction; …)` の行が 1 行出ます。この行に、動いている義務と、止まっている義務がある場合はその理由が書かれます。
++
++## 7. Observe and stop
+ 
+ ```bash
+-misaka --network testnet-11 mining status --watch 5
+-misaka --network testnet-11 doctor
+-misaka --network testnet-11 work list
+-misaka --network testnet-11 rewards
+-misaka --network testnet-11 mining stop --drain
++misaka --network testnet-12 mining status --watch 5
++misaka --network testnet-12 doctor
++misaka --network testnet-12 work list
++misaka --network testnet-12 rewards
++misaka --network testnet-12 palw registry
++misaka --network testnet-12 mining stop --drain
+ ```
+ 
+ ブラウザ画面:
+ 
+ ```bash
+-misaka --network testnet-11 dashboard --listen 127.0.0.1:8791
++misaka --network testnet-12 dashboard --listen 127.0.0.1:8791
+ ```
+ 
+ [http://127.0.0.1:8791](http://127.0.0.1:8791) を開きます。
+ 
+ ## やってはいけないこと
+ 
+-- `kaspa-pq-miner` / `misaminer` を Testnet-11 の PALW producer として使わない。
+-- 既存登録済み key で `--palw-register-bond` を再実行しない。
++- `kaspa-pq-miner` や `misaminer` を testnet-12 の PALW producer として使わない(attempt envelope を作れない)。
++- `REGISTERED` になっている key で `--palw-register-bond` を再実行しない。
++- **同じ bond を 2 つの process で動かさない。** standby の node、別ホストのコピー、動いている node の横で起動した `kaspad --palw-register-class`、新しい app dir で起動し直した node は、どれも 2 つ目の process になります。bond 全体が slash されます。
++- app dir を消して再同期しない。最後に署名した round の記録(`palw-round-last-signed`)が消え、二重署名の原因になります。移すか復元してください。
+ - Bond collateral と fee outpoint に同じ outpoint を使わない。
+-- Floor に A16 artifact や `--palw-producer-class` を付けない。
++- Floor に 8k artifact や `--palw-producer-class` を付けない。
++- block 数、blue score の深さ、DAA の差で入金を確定とみなさない([公開ノート §3](https://github.com/MISAKA-BTC/misakas/blob/main/docs/t12-launch-2026-09-25.md))。
+diff --git a/Testnet-11-Operator-UI-JA.md b/Testnet-11-Operator-UI-JA.md
+index 6d8adc4..f44760e 100644
+--- a/Testnet-11-Operator-UI-JA.md
++++ b/Testnet-11-Operator-UI-JA.md
+@@ -1,5 +1,9 @@
+ # Testnet-11 Operator UI（ADR-0122）
+ 
++> [!WARNING]
++> **このページは旧ネットワーク testnet-11 向けの記録です。** 現行の公開テストネットは `testnet-12` です(2026-09-25/26 JST 公開、release commit `0e8ec984e`)。testnet-12 の手順は **[Testnet 12 Operator UI](Testnet-12-Operator-UI-JA)** を見てください。
++> 現行 `main` のビルドは testnet-11 に参加できません。testnet-11 を続ける場合は commit `1f98d3bf4` をビルドし、fingerprint `79b49c238c46b0d97ab9b46d79fd5f85f8b50da623921a53f0af361515d50640` を確認してください。このページの fingerprint、fence、公開エントリポイント(`169.58.39.220:26311`)は当時の値で、現在は正しくない場合があります。
++
+ `misaka` は mining、Bond、work、reward、model、verifier、validator を同じ入口から扱います。対象は current `main` / Testnet-11 Relaunch 5f です。
+ 
+ ## セットアップ
+diff --git a/Testnet-11-Verification-Participation-JA.md b/Testnet-11-Verification-Participation-JA.md
+index ea28e6a..757ba70 100644
+--- a/Testnet-11-Verification-Participation-JA.md
++++ b/Testnet-11-Verification-Participation-JA.md
+@@ -1,5 +1,9 @@
+ # Testnet-11 検証参加ガイド
+ 
++> [!WARNING]
++> **このページは旧ネットワーク testnet-11 向けの記録です。** 現行の公開テストネットは `testnet-12` です(2026-09-25/26 JST 公開、release commit `0e8ec984e`)。testnet-12 の手順は **[Testnet 12 Verification Participation](Testnet-12-Verification-Participation-JA)** を見てください。
++> 現行 `main` のビルドは testnet-11 に参加できません。testnet-11 を続ける場合は commit `1f98d3bf4` をビルドし、fingerprint `79b49c238c46b0d97ab9b46d79fd5f85f8b50da623921a53f0af361515d50640` を確認してください。このページの fingerprint、fence、公開エントリポイント(`169.58.39.220:26311`)は当時の値で、現在は正しくない場合があります。
++
+ このページは、Testnet-11 の PALW 検証席（panel / verifier）としてネットワークに参加するための手順です。検証席は、他の参加者が提出した PALW claim を再実行し、checkpoint の結果をチェーンへ提出します。
+ 
+ 検証席はブロックを採掘せず、現行ネットワークでは検証そのものに対する直接報酬はありません。一方で、claim を Final へ進めるための重要な役割です。
+diff --git a/Testnet-12-Operator-UI-JA.md b/Testnet-12-Operator-UI-JA.md
+new file mode 100644
+index 0000000..0ec99ab
+--- /dev/null
++++ b/Testnet-12-Operator-UI-JA.md
+@@ -0,0 +1,111 @@
++# Testnet-12 Operator UI(ADR-0122)
++
++`misaka` は mining、Bond、work、reward、model、verifier、validator を 1 つの入口から扱います。対象は現行 `main`(`0e8ec984e`)と testnet-12 です。`misaka` はネットワークを指定しなければ testnet-12 を使いますが、このページの例では `--network testnet-12` を明示しています。
++
++## セットアップ
++
++```bash
++misaka --network testnet-12 mining setup
++```
++
++ウィザードは node、network、model、key、資金、Bond registry、artifact、capability、fee output を順に確認し、`~/.misaka/mining.toml` を作ります。途中で止まっても、同じコマンドを実行すればチェーンとローカルの状態から再開します。
++
++- 登録には `kaspad --palw-register-bond` を使います(operator-possession 署名つき)。
++- `--palw-bond-collateral` は渡しません。ノードが導出した既定の collateral を登録し、その額に合う資金を求めます。額を自分で決めるときは [参加手順 §5](https://github.com/MISAKA-BTC/misakas/blob/main/docs/testnet12-join-mining.md) の手動の形を使います。
++- testnet-12 には faucet がまだないので、ウィザードは faucet の案内を出しません。
++
++## 既存 Bond の確認
++
++```bash
++misaka --network testnet-12 bond status --bond <txid>:<index>
++misaka --network testnet-12 bond status --key-file ~/.misaka/miner.seed
++```
++
++`--bond` の形は key が要りません。既定では Floor に対する exposure と必要な collateral も表示します。別の class を診断するときだけ `--class-id <128-hex>` を指定します。
++
++`REGISTERED` の Bond に `--palw-register-bond` を再実行しないでください。collateral は登録後に追加できず、registry は追記のみです。同じ key は、bond を退役させた後も 2 つ目を登録できません(testnet-12 は `palw_operator_id_unique` が DAA 0 から有効)。容量を増やすには、新しい key と新しい Bond を使います。
++
++## Floor
++
++```bash
++misaka --network testnet-12 mining setup \
++  --model floor --key-file ~/.misaka/miner.seed \
++  --bond <txid>:<index>
++misaka --network testnet-12 mining start --print-command
++misaka --network testnet-12 mining start
++```
++
++Floor は組み込みの整数 class なので artifact は要りません。`kaspad` を手動で起動する場合は `--palw-producer-class` と `--palw-class-artifact` を省きます。
++
++producer の node(`--palw-producer-key` と `--palw-producer-bond` を持つ node)は、panel seat の義務と execution lane の round block を**常に**実行します。オフにするフラグはありません。`--palw-produce` で決まるのは、この node が attempt claim も開くかどうかだけです。
++
++## 8k モデル
++
++8k の Qwen2.5 class(`Qwen/Qwen2.5-1.5B/graph-v7@8192`)を生産するときは、artifact を指定します。
++
++```bash
++misaka --network testnet-12 mining setup --model <class-id> --artifact /path/qwen25-1.5b-a16-8k.palwart
++misaka --network testnet-12 mining start
++```
++
++`mining start` は `--palw-host-memory-share` を渡しません。8k の seat には 3.5 GiB 以上(`--palw-host-memory-share=3758096384`)が要るので、`~/.misaka/mining.toml` の `[advanced] extra_kaspad_args` に書いてください。artifact の作り方は [参加手順 §6](https://github.com/MISAKA-BTC/misakas/blob/main/docs/testnet12-join-mining.md) にあります。
++
++## Status
++
++```bash
++misaka --network testnet-12 mining status --watch 5
++misaka --network testnet-12 doctor
++misaka --network testnet-12 work list
++misaka --network testnet-12 rewards
++misaka --network testnet-12 palw registry                 # 各 class の lifecycle の状態と ready seat
++misaka --network testnet-12 palw panel list --class <id>  # bond 済み・ready・選ばれた seat と receipt
++misaka --network testnet-12 model readiness <class-id>    # 各 seat の証明の経過時間、collateral、ready でない理由
++misaka --network testnet-12 palw round-lane               # execution lane の stage、permit、予定
++misaka --network testnet-12 palw vesting                  # Final の報酬が入る vesting 行
++```
++
++testnet-12 では、Final になった claim の報酬はすぐには払われません。まず vesting 行に記録され、その行が成熟して動いたときに mint されます(ADR-0152)。`rewards` はこれを `vesting` / `moved` として表示します。
++
++`mining status` や `doctor` が **`E-MODEL-NOT-ADMITTING`**(「Not mining: the chain admits no new claim of this class now.」)を出したら、その class はいま claim を受け付けていません。`misaka palw registry` で lifecycle の状態を確認してください。この finding の hint には `misaka panel list` と書かれますが、正しいコマンドは `misaka palw panel list` です。
++
++## Dashboard
++
++```bash
++misaka --network testnet-12 dashboard --listen 127.0.0.1:8791
++```
++
++同じホストで [http://127.0.0.1:8791](http://127.0.0.1:8791) を開きます。リモートの VPS では、外部に公開する bind をせず、SSH tunnel を使います。
++
++```bash
++ssh -L 8791:127.0.0.1:8791 user@server
++```
++
++gateway の既定 `8790` と dashboard の `8791` は別のサービスです。
++
++## Verifier and model
++
++```bash
++misaka --network testnet-12 verifier setup
++misaka --network testnet-12 verifier status
++misaka --network testnet-12 model list
++misaka --network testnet-12 model status --help
++```
++
++verifier は、他の Bond の claim を判定する panel seat です。seat の bond には 130,000 MSK 以上が要ります。**producer として動かしている bond を、別の process の verifier として動かさないでください。** producer の node は、同じ bond の seat の義務をすでに実行しています。2 つ目の process は round permit への二重署名(slash)の原因になります。手順は [検証参加ガイド](Testnet-12-Verification-Participation-JA) を見てください。
++
++## Stop
++
++```bash
++misaka --network testnet-12 mining stop --drain
++```
++
++防御が終わっていない claim がある間は、ふつうの停止は拒否されます。`--drain` は新しい work を止め、開いている claim、panel、court の義務が終わるまで process を動かし続けます。
++
++**testnet-12 では、消えた producer は課金されます。** `ProducerWithholding` の void(DA court が default を確定)と、2 回目の `ReceiptTimeout` は、weight + escrow(floor claim 1 本で約 3,200.85 MSK)を没収します。わざと隠した場合も、node が単に落ちていた場合も同じです。`BindTimeout` と `NoCapablePanel` は課金されません。`--force` は緊急時だけ使ってください。
++
++## 正本
++
++- [Testnet-12 参加手順](https://github.com/MISAKA-BTC/misakas/blob/main/docs/testnet12-join-mining.md)
++- [testnet-12 公開ノート](https://github.com/MISAKA-BTC/misakas/blob/main/docs/t12-launch-2026-09-25.md)
++- [ADR-0122](https://github.com/MISAKA-BTC/misakas/blob/main/docs/adr/0122-mining-is-a-purpose-an-operator-runs-one-command-and-reads-one-work-id.md)
++- [ADR-0123](https://github.com/MISAKA-BTC/misakas/blob/main/docs/adr/0123-the-epoch-progressively-releases-unused-class-budget.md)
+diff --git a/Testnet-12-Verification-Participation-JA.md b/Testnet-12-Verification-Participation-JA.md
+new file mode 100644
+index 0000000..9012f55
+--- /dev/null
++++ b/Testnet-12-Verification-Participation-JA.md
+@@ -0,0 +1,193 @@
++# Testnet-12 検証参加ガイド
++
++このページは、testnet-12 に PALW の検証席(panel seat / verifier)として参加する手順です。検証席は、他の参加者が出した PALW claim を再実行し、その結果(receipt)をチェーンに提出します。検証席は block を採掘しませんが、claim を Final に進めるのに欠かせない役割です。
++
++対象は **現行 `main`(release commit `0e8ec984e`)と testnet-12** です。network id や consensus fingerprint が違う node は参加できません。
++
++## testnet-11 からの主な変更
++
++- **seat の bond は 130,000 MSK 以上**(producer floor 13,000 MSK の 10 倍)。testnet-11 の少額 bond は使えません。
++- **S1 / S2 / S3 は DAA 0 から有効です。** testnet-11 のように DAA 7,200 / 8,600 / 8,700 で切り替わることはありません。fence schedule は `1000` だけです(bond maturity window)。
++- **DAA 1,000 以降、bond は登録から 1,000 DAA(約 33 時間)経つまで判定に使えません**(ADR-0065 D1)。
++- **seat の義務は常に on です。** `--palw-panel` は受け付けますが何もせず、警告を 1 行出すだけです。
++- **1 つの bond は 1 つの process だけで動かします。** producer の node は同じ bond の seat の義務をすでに実行しているので、同じ bond で verifier を別に起動してはいけません。
++
++## 最短手順
++
++### 1. 必要なもの
++
++- Linux または macOS の、常時動かせるホスト
++- `kaspad` を動かせるディスク、メモリ、安定したネットワーク
++- `--utxoindex` を付けた testnet-12 の node
++- 検証する class の artifact(Floor だけを検証するなら不要)
++- 検証する class の capability を宣言した PALW Bond(**130,000 MSK 以上**)と、その key
++- bond とは別の output の fee float(0.1 MSK 以上)。receipt、readiness 証明、data-availability の応答、court の応答などの carrier の手数料に使います
++
++検証席は、Bond が宣言した class だけを検証します。秘密鍵はコマンドラインに書かず、key file の権限は `0600` にしてください。
++
++### 2. ビルド
++
++```bash
++git switch main
++git pull --ff-only
++cargo build --release -p kaspad -p misaka-cli
++```
++
++CLI は `target/release/misaka`、node は `target/release/kaspad` に出力されます。
++
++### 3. node を参加させる
++
++```bash
++./target/release/kaspad --testnet --netsuffix=12 --utxoindex --rpclisten-borsh=default
++```
++
++DNS seeder で peer が見つからない場合は、公開エントリポイントを追加します。
++
++```bash
++./target/release/kaspad --testnet --netsuffix=12 --utxoindex --rpclisten-borsh=default \
++  --addpeer=169.58.232.113:26311
++```
++
++起動ログで fingerprint と fence schedule を確認します。
++
++```text
++Consensus params fingerprint: b8564b888e55bb5f797e708a3f65e7cd122065123a3ab09cbeb8d10c98715d8f (network testnet-12)
++Consensus fence schedule: 1000 (schedule id 93da24cc60f7a77e63c43106e96298d2979644a3fc0c3f82529c8849333127fd)
++```
++
++### 4. 検証席をセットアップする
++
++```bash
++misaka --network testnet-12 verifier setup
++```
++
++対話なしで実行するときは `--yes` を付けます。既存の Bond を指定する場合は次の形です。
++
++```bash
++misaka --network testnet-12 verifier setup \
++  --model floor \
++  --key-file "$HOME/.misaka/miner.seed" \
++  --bond <bond-txid>:<index>
++```
++
++8k の LLM class を検証する場合は、先に class を確認し、対応する artifact を渡します。
++
++```bash
++misaka --network testnet-12 model list
++misaka --network testnet-12 verifier setup \
++  --model <model-name-or-class-id> \
++  --artifact /absolute/path/to/qwen25-1.5b-a16-8k.palwart \
++  --key-file "$HOME/.misaka/miner.seed" \
++  --bond <bond-txid>:<index>
++```
++
++`verifier setup` は途中で止めても、再実行すれば終わった項目を使って続きから進みます。Bond の登録や送金のように資金を使う操作は、`--yes` を付けない限り確認を求めます。
++
++setup は capability の宣言(`bond capability --declare`)も行います。何も宣言していない bond は panel に選ばれません。宣言は追加ではなく置き換えです。手動で宣言する場合は [参加手順 §5](https://github.com/MISAKA-BTC/misakas/blob/main/docs/testnet12-join-mining.md) を見てください。
++
++### 5. 8k seat のメモリ
++
++8k の seat が全区間を replay するには約 3.37 GiB 必要です(artifact 1.68 GiB + trace scratch 1.67 GiB)。**`--palw-host-memory-share=3758096384`(3.5 GiB)以上**を指定してください。3.0 GiB では `readiness … no proof — a replay needs 3.37 GiB as full-seat …` がログに出て、seat がいつまでも ready になりません。ほかには何も知らせてくれません。
++
++`misaka verifier start` はこのフラグを渡さないので、`~/.misaka/mining.toml` の `[advanced] extra_kaspad_args` に書きます。
++
++### 6. 検証席を起動する
++
++まず、実行されるコマンドを確認します。
++
++```bash
++misaka --network testnet-12 verifier start --print-command
++```
++
++`--palw-produce` が含まれていないことを確認します(`--palw-panel` が含まれていても、testnet-12 では何もしません)。問題がなければバックグラウンドで起動します。
++
++```bash
++misaka --network testnet-12 verifier start --detach
++```
++
++起動ログに `PALW duties (on by construction; …)` の行が出ます。fee outpoint がないと `panel seat duties ON as bond … (receipts only: …)` になり、carrier をチェーンに出せません。key file が読めない、または bond が解釈できないときは `PALW duties NOT as planned: …` が出ます。
++
++## seat が選ばれる条件
++
++- Bond が class の capability を宣言している(Floor の場合)。model class の場合は、新しい readiness(possession)証明がある。証明は artifact を持った panel が自動で提出します。
++- seat の空き collateral が、その claim で `Valid` 署名が取る lock を満たしている(floor claim で約 112.56 MSK)。満たせない bond は、選ばれてから失敗するのではなく、最初から抽選で外されます。
++- model class の readiness には、空き collateral が 39,000 MSK(producer floor の 3 倍)必要です。
++- DAA 1,000 以降は、bond の登録から 1,000 DAA 経っている。
++
++## S1 / S2 / S3
++
++S1・S2・S3 は別のサービスではなく、フラグもありません。testnet-12 では **DAA 0 から**、上の `verifier start` で起動した panel がこの方式で検証します。ゼロ知識証明は使いません。
++
++| 方式 | 席の動き |
++|---|---|
++| **S1**(区間 replay) | 5 席のうち 1 席が全区間を replay(full 席)。残りの 4 席は重ならない 1 区間ずつ。producer は決定論的な checkpoint `SC01` を出し、partial 席は checkpoint から自分の区間だけを replay する |
++| **S3**(層サンプル) | S1 に加えて、partial 席が層と位置のサンプルでも検証する |
++| **S2**(optimistic) | full 席の `Valid` だけで optimistic に licence できる。collector は coverage → optimistic → V1 の順に試す |
++
++- 割り当ては bind の `(anchor, claim, seat_count)` から決まります。席が区間を選ぶことはありません。自分が full 席か partial 席かは抽選の結果なので、`verifier status` と node のログで確認します。
++- 抜けや重なりがある receipt、checkpoint・root・class・mask が違う receipt は拒否されます。
++- partial 席は、checkpoint を開けないときは待ち、receipt を出しません。genesis から全区間を歩き直すことはありません。
++- producer は receipt の期限まで capture を持ち続け、席からの checkpoint や opening の要求に応えます。
++
++## 報酬と課金
++
++- testnet-12 では、Final になった claim の報酬は vesting 行を通して支払われます(ADR-0152)。確認には `misaka rewards` と `misaka palw vesting` を使います。
++- `verifier status` は現状 `paid: false` と表示します。
++- **quorum と違う判定をした seat は課金されます。** 手元の artifact と build が正しいことを確認してから座ってください。
++
++## 状態の確認
++
++```bash
++misaka --network testnet-12 doctor
++misaka --network testnet-12 verifier status
++misaka --network testnet-12 verifier status --output json
++misaka --network testnet-12 palw panel list --class <class-id>
++misaka --network testnet-12 model readiness <class-id>
++misaka --network testnet-12 work list
++misaka --network testnet-12 work show <claim-id>
++misaka --network testnet-12 work why <claim-id>
++misaka --network testnet-12 logs node
++```
++
++`getPalwNodeStatus.panelRunning` でも、panel が実際に起動したかどうかを確認できます。claim がまだ表示されなくても、異常とは限りません。対象は、チェーン上の claim と seat の抽選で決まります。
++
++### 8k seat の readiness を監視する
++
++公開ノートの既知の問題 6 のとおり、8k の seat の readiness が切れると被害が広がります。修正が入るまでは次を監視し、詰まった seat は再起動で回復させてください。
++
++- `getPalwPanelSeats` の `proved` / `expires`
++- ログの `no proof —` と `waits for a carrier slot`
++
++## 参加できないとき
++
++| 表示・症状 | 原因 | 対処 |
++|---|---|---|
++| fingerprint mismatch | 古いバイナリ、または別のネットワーク | `main` から再ビルドする。起動ログの fingerprint を確認する |
++| genesis mismatch | 最初の testnet-12(`a8cabac4…`)の datadir | その datadir を削除せずに退避し、新しい datadir で同期する |
++| `0 peers` | DNS、firewall、peer の ruleset の不一致 | `--addpeer=169.58.232.113:26311`、P2P `26311/tcp`、ログの fork-id を確認 |
++| `bond unknown` | outpoint の間違い、または別のネットワーク | `bond status --bond <txid>:<index>` で outpoint を確認。genesis の bond は txid `5e0d5f1b…` の上にある |
++| `judges nothing` | Bond が capability を宣言していない | `verifier setup --model ...` を実行する。登録済みの Bond は登録し直さない |
++| seat が選ばれない | 空き collateral が `Valid` lock に足りない、bond が 1,000 DAA 未満、readiness 証明がない | `bond status`、`model readiness`、`palw panel list` を確認 |
++| `readiness … no proof — a replay needs 3.37 GiB` | memory share が足りない | `--palw-host-memory-share=3758096384` 以上を `extra_kaspad_args` に書く |
++| artifact missing / mismatch | class に合わない artifact、またはパスの間違い | `model list` で class を確認し、絶対パスを指定する。`palw-class manifest --check` で sidecar を確認 |
++| panel が動かない | node が同期中、key file が読めない、bond が解釈できない | `PALW duties NOT as planned: …` の行、`doctor`、`getPalwNodeStatus.panelRunning` を確認 |
++| `RoundPermitEquivocated` で slash された | 同じ bond を 2 つの process で動かした | 1 つの bond は 1 つの process だけで動かす。standby やコピーを止める |
++| `SC01` が来ない / partial が待ち続ける | producer が古い、または capture を持っていない | producer も現行バイナリで `mining start`。receipt の期限まで capture を残す |
++| claim が長く pending のまま | tip の進行、seat の稼働、producer の遅れ、S1 の coverage 不足 | `verifier status`、`work show`、node のログ、peer 数を確認 |
++
++## 安全な停止
++
++```bash
++misaka --network testnet-12 verifier stop
++```
++
++この bond の claim がまだ必要としている間は、停止を拒否します。急ぐときだけ `--force` を使ってください。検証中の claim を放棄する可能性があるので、ふつうは先に `verifier status` で義務が残っていないことを確認します。
++
++## 関連ページ
++
++- [PALW 参加手順](PALW-Participation-JA)
++- [Testnet-12 Operator UI](Testnet-12-Operator-UI-JA)
++- [Quick Start](Quick-Start)
++- [FAQ / Troubleshooting](FAQ-Troubleshooting)
++- [Testnet-12 参加手順(リポジトリ)](https://github.com/MISAKA-BTC/misakas/blob/main/docs/testnet12-join-mining.md)
++- [testnet-12 公開ノート(リポジトリ)](https://github.com/MISAKA-BTC/misakas/blob/main/docs/t12-launch-2026-09-25.md)
+-- 
+2.43.0
+

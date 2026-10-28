@@ -1,0 +1,270 @@
+{
+  "date": "2026-10-11",
+  "baseline_commit": "81324766460d8bce924a7ac1062f9aeddab0b504",
+  "component": "Dormant typed flat-v5 actual-node candidate trace admission, terminal courts, shared collateral/catalog and budgets",
+  "verdict": "COMPONENT_PASS_FULL_RFC02_PUBLIC_ACQUISITION_AND_EXECUTION_FINAL_INCOMPLETE",
+  "distinct_passing_tests": 38,
+  "new_tests": [
+    "palw_flat_model_vector_v3::tests::flat_vector_v3_codec_is_separate_exact_and_refuses_nested_counts_before_bodies",
+    "palw_flat_model_vector_v3::tests::flat_vector_v3_identity_binds_profile_scope_all_typed_coordinates_and_tables_are_disjoint",
+    "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_model_vector_node_admits_typed_scope_convicts_leaf_and_whole_once_and_replays_redemption",
+    "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_model_vector_node_and_v2_catalogs_share_the_same_capital_and_eight_statement_limit",
+    "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_model_vector_node_scope_identity_and_hostile_filings_pay_shared_budgets_without_poisoning"
+  ],
+  "test_groups": [
+    {
+      "group": "actual_node",
+      "command": "cargo test --locked -p kaspa-consensus --lib g14_kernel_route_e2e::model_conformance -- --nocapture --test-threads=1",
+      "exit_code": 0,
+      "seconds": 63.83,
+      "test_names": [
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_model_vector_node_admits_typed_scope_convicts_leaf_and_whole_once_and_replays_redemption",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_model_vector_node_and_v2_catalogs_share_the_same_capital_and_eight_statement_limit",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_model_vector_node_scope_identity_and_hostile_filings_pay_shared_budgets_without_poisoning",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::model_vector_catalog_shares_capital_and_keeps_its_bound_after_clocked_release",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::model_vector_da_deadlines_hold_capital_and_responses_survive_a_full_court_budget",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::model_vector_da_public_replies_enable_a_fresh_whole_value_conviction_without_model_disclosure",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::model_vector_new_large_vocab_candidates_have_public_courts_without_a_final_or_execution_rights",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::model_vector_wrong_roots_scope_and_invalid_refutations_cost_only_the_actor",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::scoped_model_complete_check_cannot_be_poisoned_by_an_earlier_false_source_root",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::scoped_model_complete_check_registers_encoder_and_stateful_decoder_without_identity_hooks",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::scoped_model_complete_check_wrong_roles_and_floods_spend_only_attackers_budget"
+      ],
+      "log": "docs/design/palw/tir/evidence/rfc02-flat-node-v3-actual_node.log",
+      "log_sha256": "9366856443e414d351e6f2ee197f09a8ab2c814e394f61a8922a01a64ae8e7b2"
+    },
+    {
+      "group": "core",
+      "command": "cargo test --locked -p kaspa-consensus-core --lib model_vector -- --nocapture --test-threads=1",
+      "exit_code": 0,
+      "seconds": 0.03,
+      "test_names": [
+        "palw_flat_model_vector_v3::tests::flat_vector_v3_codec_is_separate_exact_and_refuses_nested_counts_before_bodies",
+        "palw_flat_model_vector_v3::tests::flat_vector_v3_identity_binds_profile_scope_all_typed_coordinates_and_tables_are_disjoint",
+        "palw_model_vector_da_v2::tests::vector_da_answer_refuses_counts_and_trailing_bytes_before_large_allocations",
+        "palw_model_vector_da_v2::tests::vector_da_answer_roundtrips_and_authenticates_exact_unit_and_segment",
+        "palw_model_vector_v2::tests::model_vector_fault_wire_bounds_every_nested_count_and_keeps_valid_court_grammars",
+        "palw_model_vector_v2::tests::model_vector_post_wire_is_bounded_before_allocation_and_preserves_exact_borsh",
+        "palw_model_vector_v2::tests::model_vector_statement_binds_exact_scope_input_delivery_and_clocked_capital",
+        "palw_model_vector_v2::tests::model_vector_tables_are_disjoint_from_provider_and_scoped_model_allocations",
+        "palw_model_vector_v2::whole_wire_tests::whole_vector_proof_rejects_rank_product_and_byte_counts_before_tensor_allocation"
+      ],
+      "log": "docs/design/palw/tir/evidence/rfc02-flat-node-v3-core.log",
+      "log_sha256": "0a8d5613ea11f19891f501d1eec66df61d341efe949a3087226fa99b0826d035"
+    },
+    {
+      "group": "a2",
+      "command": "target/debug/deps/kaspa_consensus_core-dfe045ed040cfc40 palw_lifecycle_objects_v2::tests::a2 --nocapture --test-threads=1",
+      "exit_code": 0,
+      "seconds": 0.46,
+      "test_names": [
+        "palw_lifecycle_objects_v2::tests::a2u::a_not_in_force_kind_is_undecodable_in_the_live_builds_words",
+        "palw_lifecycle_objects_v2::tests::a2u::an_owning_fence_needs_the_audit_fence_declared",
+        "palw_lifecycle_objects_v2::tests::a2u::below_its_fence_a_new_kind_is_judged_as_the_live_build_judges_undecodable_bytes",
+        "palw_lifecycle_objects_v2::tests::a2u::every_appended_form_has_a_guarded_owner_arm",
+        "palw_lifecycle_objects_v2::tests::a2u::every_int12_wire_type_is_unchanged_or_classified",
+        "palw_lifecycle_objects_v2::tests::a2u::every_kernel_inner_kind_has_exactly_one_row",
+        "palw_lifecycle_objects_v2::tests::a2u::every_kind_in_the_enum_has_exactly_one_owner",
+        "palw_lifecycle_objects_v2::tests::a2u::every_landed_kind_is_pinned_to_its_wire_form",
+        "palw_lifecycle_objects_v2::tests::a2u::every_landed_kind_sits_in_its_row_with_the_rows_fence",
+        "palw_lifecycle_objects_v2::tests::a2u::every_tag_row_is_inside_its_allocation",
+        "palw_lifecycle_objects_v2::tests::a2u::the_fence_list_is_the_enum",
+        "palw_lifecycle_objects_v2::tests::a2u::the_int12_kind_list_is_frozen",
+        "palw_lifecycle_objects_v2::tests::a2u::the_int12_kinds_refused_past_a_fence_are_the_rows",
+        "palw_lifecycle_objects_v2::tests::a2u::the_new_kind_table_is_the_owner_function"
+      ],
+      "log": "docs/design/palw/tir/evidence/rfc02-flat-node-v3-a2.log",
+      "log_sha256": "3e340927fb730802f20b635da87543235abeafca48312d047d7730015957a085"
+    },
+    {
+      "group": "route",
+      "command": "target/debug/deps/misaka_palw_kernel-f12a3fe57e2b7746 route::tests --nocapture --test-threads=1",
+      "exit_code": 0,
+      "seconds": 0.01,
+      "test_names": [
+        "route::tests::every_declared_discriminant_is_the_variants_borsh_byte_and_has_a_ceiling",
+        "route::tests::malformed_and_oversized_encodings_are_refused_with_their_kind",
+        "route::tests::the_salted_reveal_is_kind_20_carries_its_commits_own_tag_and_opens_only_its_v2_seal",
+        "route::tests::the_wire_form_is_version_discriminant_then_the_fields"
+      ],
+      "log": "docs/design/palw/tir/evidence/rfc02-flat-node-v3-route.log",
+      "log_sha256": "80ec3c1413b52ef021d8048ce834aceea88f78b72d682d440ca9f9cc9cac0dba"
+    }
+  ],
+  "production_check": {
+    "command": "cargo check --locked -p kaspa-consensus-core",
+    "exit_code": 0,
+    "log": "docs/design/palw/tir/evidence/rfc02-flat-node-v3-check.log",
+    "log_sha256": "c497e5ac9592388660a158af1e07722b2ba77c7b4bb781ed9ee706b6de8bc66f",
+    "warnings": "One pre-existing unused-mut warning in palw_tir_close_range_v1.rs"
+  },
+  "final_source_sha256": {
+    "Cargo.lock": "b37cef757e460f652b1c4d885930f6e7ce846f5660c2e788d18b72c8b5ef6429",
+    "consensus/Cargo.toml": "7cd8a1ca10b2a2cf24c0c31c70a63c3bc1df6740a6d79ac23c0fd9dbff7419d9",
+    "consensus/core/Cargo.toml": "e005415c17acf4d2a5f529ea5bb27c919aac5d8afdcbb52fe60a7bb7d5d9f0b2",
+    "consensus/core/src/config/params.rs": "e1717eddc569e15ecbf5cc7dfcc0db1d9962d592b278f52343f903a27b0d07c8",
+    "consensus/core/src/lib.rs": "a7567b474dfd8ab69986bc4a58fde93f4593f0f2a7fd26af2421467bbc3d2763",
+    "consensus/core/src/palw_flat_model_vector_fold_v3.rs": "5d061779e604db1743c86ac7b18b9b4cce9777fc0eb89f4e2e1eb90e5205e184",
+    "consensus/core/src/palw_flat_model_vector_v3.rs": "d8760a72fbb9e0731676c7ee58fa87f39819c2d768473d744f61266bef38abfc",
+    "consensus/core/src/palw_kernel_route_fold_v1.rs": "730f78671e3675a0138e51bf0ee478b839aa0fd543364963fed920c2e46702cc",
+    "consensus/core/src/palw_kernel_route_v1.rs": "89a56a3d389b6ece243c66104e80e8d042a2df1377efb8a831db6baf38ac59f5",
+    "consensus/core/src/palw_lifecycle_objects_v2.rs": "4907a87445e2154afa137da23376aa90912e18b055ad40c71758cbda5bb6f398",
+    "consensus/core/src/palw_model_artifact_v2.rs": "92751651c65943a30776ea66c4cbbd22b3c470e309d5c839e7c121bdb38159d3",
+    "consensus/core/src/palw_model_vector_da_v2.rs": "470289c339db5defb34a3329a1c0f088202526294a5261c7867ea518a64f5da3",
+    "consensus/core/src/palw_model_vector_fold_v2.rs": "2dfb3033eebfd84f01c7febb0ede1ae818ea1312c5c7c4aff012185078c81614",
+    "consensus/core/src/palw_model_vector_v2.rs": "657397c18da7f4927098a98c1e2823557abafd5774269f82e8d08dd9f9877ecb",
+    "consensus/core/src/palw_state_v2.rs": "e347ca37919d4f5f92735594f50af1717da170af6a6555db28bc89b612a7de81",
+    "consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e.rs": "0cfcf937c3fc8a704f2017c46ef56dcd915d6ee01c6e1934a47f8a84ba8b9b00",
+    "consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/model_conformance.rs": "2519c0b3250d3bd07b02f314c9c07bd1a6fdebf5f84e373e88964e3f3a483dca",
+    "misaka-palw-kernel/Cargo.toml": "c22f451ce7fc34d425ef458e95cd304cca522758cd878b33f4a03aba740604ee",
+    "misaka-palw-kernel/src/assurance.rs": "8640b79f4c5b0aca4e773bf9a2ffa234f1a34ece3911287ee5bffd6b87398da4",
+    "misaka-palw-kernel/src/beacon.rs": "a1739a0d6f6cadd5d5e9b7b59e8aec21c06dfe03809a234667cde47fe5d84ba4",
+    "misaka-palw-kernel/src/challenge.rs": "8403ed71fc00e3d5cf7c01629f67e7634e948fe99a505011a97433864ebff56a",
+    "misaka-palw-kernel/src/check.rs": "a1bae5ba6df7d245586b96ac658a5cb0c5dc6b0a509d30140832f1659e595049",
+    "misaka-palw-kernel/src/claim_subject.rs": "ce9aa2e5e32a91f8314c69a6528a16107d09bdc3205c7e695e224f89130ad7e6",
+    "misaka-palw-kernel/src/descriptor.rs": "af15e5fbaac21bc8d10aab063085e43ab3bc63c4ebdab1026f312ddae46c39a3",
+    "misaka-palw-kernel/src/element.rs": "fa193e66ac1fd83ea19825db01fa38491cc36cf8c37d33ce6a13fa2c9098c8af",
+    "misaka-palw-kernel/src/evidence.rs": "c893c53f11d318fb12259eab53abe02583521eea223b36c985ae4b20289510af",
+    "misaka-palw-kernel/src/family.rs": "93997f34082c94436d295f6b015422a5c5920ed949ddcb8052c310561e2a715e",
+    "misaka-palw-kernel/src/field.rs": "f3b119935c98806417cf805304dfcc9d3a75c49dcf87df7f2fa74e2b9995eb85",
+    "misaka-palw-kernel/src/flat_court4.rs": "a9ce42c1122f62fd133b6ac293162c91d6104e12d704ef2ce4c8c25bae312970",
+    "misaka-palw-kernel/src/flat_court5.rs": "10c84565f45131f427fc132134e9f67456d3f2ffb5f737c16053d5446afbdcb3",
+    "misaka-palw-kernel/src/flat_scope5.rs": "3ea20b38038136d5a0db9bb4b1ebec01c5ca7b76d9253044adc832042218dcdf",
+    "misaka-palw-kernel/src/gate.rs": "99abffd1fd15b95e98c1c7bc3e4041aec14114f48bd3f6bbfa59bc73f5189a31",
+    "misaka-palw-kernel/src/hash.rs": "b9c4edfd308cdd3cc61a90c7d60883e1481e1c6fb265122f3acd0c5f6cdff417",
+    "misaka-palw-kernel/src/improve.rs": "5fbd4860c89b453820a49ddbeaefafefccc2983509d7ff543a9ca2e42ba546aa",
+    "misaka-palw-kernel/src/job.rs": "75dafc78572c0cb288ced9e6f64fb7776e284e89b1d10d9a8940c6b5468ba1ca",
+    "misaka-palw-kernel/src/ledger.rs": "c2fc1e29a00eabc38832ebee6500f06b5d5e37ef52a20a1bd66aa22128a9761c",
+    "misaka-palw-kernel/src/lib.rs": "9e2a127113fa51388f0adad6b47900757c200075f6cfbb66f0bbc00227a7ef2d",
+    "misaka-palw-kernel/src/lifecycle.rs": "5fdd23bd7a6b4bc28844483855a5245071c9fe8e80dea25a2ada7c28069bfe45",
+    "misaka-palw-kernel/src/merkle.rs": "1f473bc1d8beb66f4df33f2cd6c882836f6a0c17e2c1b5f65d171ada3f751358",
+    "misaka-palw-kernel/src/merkle3.rs": "383b069a41deb8ddde8c19dbc86d639af83dd582c19ae62eeaeafde88b3c5be0",
+    "misaka-palw-kernel/src/merkle3_stream.rs": "0d8a0a71166250297727a568ddd10835902c0bb668d420fa85635b349561f9b4",
+    "misaka-palw-kernel/src/merkle4.rs": "a4eb8a8d38d510935ca441eef6f66f1057abebd8558006a81ddc4069f159147c",
+    "misaka-palw-kernel/src/merkle5.rs": "7ee3afd16014d48a7747ee15fd32540ac473af2f9b2ca456599f0efa4b776d84",
+    "misaka-palw-kernel/src/mode.rs": "812169d7f5070b0d17bf2adc1bcef176247d9678243384f54ba438726dc10ccf",
+    "misaka-palw-kernel/src/opv.rs": "57f361ce6dab625952ac6044f60038afc30eb2fabd8501958b8b1abfe65196d5",
+    "misaka-palw-kernel/src/outcome.rs": "d40d95e6d5f1f4847886d21a790e78b838867aed8fd8b869c5d16ed7192b4967",
+    "misaka-palw-kernel/src/pipeline.rs": "feb3fdf375d48c4293220504ff99d4b88d89775838ebfd2aaa430f197c072bfc",
+    "misaka-palw-kernel/src/pipeline_public.rs": "2cb6aedb8d3b9625847b327759e4612c39b27db93d5d39e12880782322070f8e",
+    "misaka-palw-kernel/src/plan.rs": "bb2a112c6e740f0af6c039d85f298c1c33469a77decace48fc98eba94b2550b5",
+    "misaka-palw-kernel/src/public.rs": "5016ccae0d03eafd0f4ad092fcaeb4ac8bdde7c105047ce76eef38ecb52aa092",
+    "misaka-palw-kernel/src/receipt.rs": "3148384c6ca845ea648296d4b77904e6df41d941c822f8a2c6f930f6d1c6a6ac",
+    "misaka-palw-kernel/src/route.rs": "38342ff100f287b1d93199541aa0e33dd5adf57ac5671390a6f716e941ac4a27",
+    "misaka-palw-kernel/src/rows.rs": "d36a73ecdd7759a704f955c44ee4e0f04a0c19de16a29237dee473701eda77b2",
+    "misaka-palw-kernel/src/scope.rs": "918d472c7ef0c37418c6895b8f834cf51a1ebcad12d06aa52f7fa677b6d567a4",
+    "misaka-palw-kernel/src/seg.rs": "a9f6aa2d1556a2ccd2d2b1802ac914c593bf5cb4c62858a94bd322e62b8b4cdf",
+    "misaka-palw-kernel/src/seg_da.rs": "90b6a4e87481cf32fb2e38eb37f5f0fcf9be336eaa591c88c215d33aacd581bd",
+    "misaka-palw-kernel/src/seg_detect.rs": "252307703f58449f9b7b78c6ea69bfd925821fd80af7527688c29c1d092e216e",
+    "misaka-palw-kernel/src/seg_encoder.rs": "a19598c730880be75aa15bb3502a4191a2cb805deb90093795c92310cbdb7b4a",
+    "misaka-palw-kernel/src/seg_ledger.rs": "d1969f78299bd2d5605367bd9995b9deb9e3f5d31911f42b94f3c3f51d0dea63",
+    "misaka-palw-kernel/src/seg_scope.rs": "971a06fc8825cc83413300f694d0de2feb7e8c721faf430a5096fe0adb8f5d08",
+    "misaka-palw-kernel/src/settle.rs": "07029aad4354c448847abbb16ac61a079703348630b9abf03ecbd1f0466150f7",
+    "misaka-palw-kernel/src/spec/composite.rs": "5e6e89bfffcbb22fe2defcd1da3d2671c1490c64f0f768779d2b5c6a69db03df",
+    "misaka-palw-kernel/src/spec/ledger_impl.rs": "3a1068fbe6a8f4032a1b4e1dbe57471f99ef318c26e4eb094d018f2b0ebcd713",
+    "misaka-palw-kernel/src/spec/memory.rs": "eb42293ba318226d1d1ec110f8a0c61391bebce27f7eed494d56d2eaaacca361",
+    "misaka-palw-kernel/src/spec/mod.rs": "da3105bef6fae2754840bbfbe957a777e8b3b8245cb81bbed810c2d22c7bb463",
+    "misaka-palw-kernel/src/spec/outsider.rs": "d8491b6ffb35412c440e0bf839144d0d83cbc831881a03d6a2a4ae97fd66b467",
+    "misaka-palw-kernel/src/spec/produce.rs": "bed7276400dcb58c826382a0ed9559e31ed273d2a2a58cee960e6851a790f366",
+    "misaka-palw-kernel/src/spec/retrieval.rs": "aa7ccf6ef83dd2e342ea7f74fab3ede4d1f6970ce001fcbe697e9f8d5a96c9f1",
+    "misaka-palw-kernel/src/state.rs": "19513913681a983152388b62cecb5c356153625428ef60f441c5be747969f3b3",
+    "misaka-palw-kernel/src/trace.rs": "94d777646ddbdb0f5907c2df51d66df02384c1f650c3a392ae1c2bb37256a5a6",
+    "misaka-palw-kernel/src/verifier_pay.rs": "18752ce6f0174731dd3df245025c197b36c7344cfce24a55e40df525bbcc99fb",
+    "misaka-palw-kernel/src/verify.rs": "9393ea2275b22ec450290a19854778f73e89efd8aba31ca7ead7a8e6ad606efd",
+    "misaka-palw-tir/src/admit.rs": "223a8a1dff68716f2fb04d3c50572446b4571fc50196bcea7e3955453e0d4fef",
+    "misaka-palw-tir/src/admit_v2.rs": "f01e4e6a978113b20dd4fa0902aa1672ce64b7bf46ee1c6914fd06c3e777d991",
+    "misaka-palw-tir/src/arith.rs": "9b5e6202b8877d4dc7b0a7139458ead9c527e34a635376897b42f3be877ebb02",
+    "misaka-palw-tir/src/builder.rs": "211b76b29a2aa774765c4d00e52d85bdb4d88d54ba41555a3cf97e9573fd55d9",
+    "misaka-palw-tir/src/dataflow.rs": "ffc8b0e7b0b5aad751c95c272918a18bdb11bb19cc5d1131eb4acbe754ff7c5d",
+    "misaka-palw-tir/src/demand.rs": "31b21a401cd790a0940b1548661b88774b8d873de9449c06bab3114aea377174",
+    "misaka-palw-tir/src/demand_v2.rs": "625598150c8c1ed0cceba7f98a532f6bd162abdba0ee2619a35999ca6f5a7b41",
+    "misaka-palw-tir/src/error.rs": "6845442bb818e08d1f4dfd79c9dafd9cca83d319df93ab907bbf6326e8d002b5",
+    "misaka-palw-tir/src/eval.rs": "5823690d44a0d8b36bd7c650574da43cb16ac7b3c579f68ecde505bfb8de2bb9",
+    "misaka-palw-tir/src/interp.rs": "0e16cb39343b67ff29113d9b389c34de821841e0d42691d53d9d720ef0dcf8c6",
+    "misaka-palw-tir/src/interp_v2.rs": "5b76fe5ce4662eb677e2f50a87ec5e52bc7458555372ab84a9537f84dc9f200a",
+    "misaka-palw-tir/src/interval.rs": "15d0bdb546de8e61fd2fb6be46ff93cef3a317be7df957283586c38b08af16dc",
+    "misaka-palw-tir/src/interval_v2.rs": "50422e806de407a90faae9c24fcf56512cd7f4b04b6c41c0b16d42fbe7578e89",
+    "misaka-palw-tir/src/lib.rs": "cb1aaa65a9236774e0ae064ddcb355b3371274b01fe3d49635352d5f8087e22e",
+    "misaka-palw-tir/src/library/act.rs": "1f167d507a92ef1a9269f27fa7addfd3a2fb4d2780ff4a4c7cf73dc958a69d30",
+    "misaka-palw-tir/src/library/attn.rs": "34afa7229f272bd4f734e23f18f4cd5654d11d2399c1c5e161db76060659bf34",
+    "misaka-palw-tir/src/library/legacy.rs": "2cc7106a54d6d26b4e6207d60d029cd84088724a08952c878b5703302ec18705",
+    "misaka-palw-tir/src/library/mod.rs": "d578a885fcc3816a4c12e78968e0fa5ba27f6a4893660206a0dfea86383635b0",
+    "misaka-palw-tir/src/library/moe.rs": "2f09cc1765ddd52eb461188f5c09f649be97850943b15577370d740cea0d68c4",
+    "misaka-palw-tir/src/library/norm.rs": "468efd7e8dfd2e5a1e44e93d5d02e508064a6dc13324c1c7a60c6c902a0c686d",
+    "misaka-palw-tir/src/library/recur.rs": "0fba069cadb324c9ed178c57476ec1336330eb1e8ebdef9521b0c5f57fc6348d",
+    "misaka-palw-tir/src/library/rope.rs": "7f86abcf8638693a43602a0e992f05673146ae0b138e0a4dbb8b6bbe7487eff2",
+    "misaka-palw-tir/src/library/softmax.rs": "1b7610aa6d99810565e0cf1389c6d4ddc0a46890c956355f811aa1452a7dc820",
+    "misaka-palw-tir/src/pipeline.rs": "898586f896bafc2872a97616dccdc4631a44bbda0eb91d595ba5232b2efbf961",
+    "misaka-palw-tir/src/prim.rs": "8c0b8d58da136a449c05eb58779a3569312c7f4cd690d2ca7c0da6df64716003",
+    "misaka-palw-tir/src/program.rs": "092469815978c0194358c02fb5f66f49f5b955d7ce7f7d488d1d85e1f57f099c",
+    "misaka-palw-tir/src/program_v2.rs": "5a4add58fdf3e93ca8285a818ad8f290ec6390deb277de2e3dbaac242c4ce653",
+    "misaka-palw-tir/src/scoring.rs": "8c1048640b325957dbc18bb0f643ef93857fca3103948b70a07bda96aa30b7a6",
+    "misaka-palw-tir/src/tensor.rs": "aa129f467e7fa53e65d5ef7380be3508f6d9f53768faf5124eb86a4934990845",
+    "misaka-palw-tir/src/types.rs": "c611245c756db63026eec084b8e43a04d2ee50c14b7071169f61035d1217f554",
+    "misaka-palw-tir/src/validate.rs": "7f05369b7615680ed43c2bd1182e31c38372fc70b4d5798d613d7c10fc5e9f05",
+    "misaka-palw-tir/src/validate_v2.rs": "297cb01644a4c2ffc3b5aba260c8c85ebca3b1afa8b47ed9021fdc594f613f07"
+  },
+  "test_binaries": {
+    "actual_node": {
+      "path": "target/debug/deps/kaspa_consensus-132ebc7557360c27",
+      "sha256": "9772288e6eee9e119eda7e7458f5690fb83e8a24b4b5a261dad04931b933024a",
+      "build_source_hash_overrides": {
+        "misaka-palw-kernel/src/route.rs": "8fa9cf928ff16c5a29a43d6b56c586ae6015b49a21d79e30d304de4338d90bda"
+      }
+    },
+    "core": {
+      "path": "target/debug/deps/kaspa_consensus_core-dfe045ed040cfc40",
+      "sha256": "d412432b17bb25c0de384c24b54078fa79106432746f80fb5ca7af0a54284d5a",
+      "build_source_hash_overrides": {
+        "misaka-palw-kernel/src/route.rs": "8fa9cf928ff16c5a29a43d6b56c586ae6015b49a21d79e30d304de4338d90bda",
+        "consensus/core/src/palw_kernel_route_fold_v1.rs": "279d98d2f23b3ee82db96881c086c8dd37acb6361c0d064794966a656a7870a7",
+        "consensus/core/src/palw_model_vector_v2.rs": "b4660764943ac429d7d73a8056e541c70a971bf1d59086172122236c1b3fa417"
+      }
+    },
+    "kernel": {
+      "path": "target/debug/deps/misaka_palw_kernel-f12a3fe57e2b7746",
+      "sha256": "b0704c9578aa933b04c5f4de979c4077026b53088291915cd9e2d6be3d6983c4",
+      "build_source_hash_overrides": {
+        "misaka-palw-kernel/src/route.rs": "8fa9cf928ff16c5a29a43d6b56c586ae6015b49a21d79e30d304de4338d90bda"
+      }
+    }
+  },
+  "timing": "Final node suite ran after authoritative-capital test correction and production-helper whitespace cleanup. Rustfmt expanded two enum declarations with optional trailing commas after its binary was built; core/kernel binaries also precede whitespace-only helper cleanup. Build-source hash overrides above reproduce those formatting differences. Source equality after removing whitespace and optional trailing commas was checked. A-2 and route binaries were executed again after final formatting; reruns do not increase the distinct count. Documentation/evidence added afterward.",
+  "development_corrections": [
+    "Node test referenced a nonexistent unqualified bond-id function; compilation failed.",
+    "Mixed-catalog test indexed a bond absent from the persisted bare ledger. Corrected to assert authoritative global commitments and both exit-duty guards, including a v3-only reservation. Failed development runs excluded."
+  ],
+  "allocation": {
+    "inner_kinds": [
+      31,
+      32
+    ],
+    "aux_tables": [
+      57,
+      58
+    ],
+    "owning_fence": "palw_panel_free_v1",
+    "shipping_params_changed": false,
+    "fences_armed": false,
+    "non_reward_candidate_only": true,
+    "shared_v2_v3_statements_per_bond": 8,
+    "proof_bytes_cap": 1048576
+  },
+  "coverage": [
+    "Independent model operands and public job/hash openings convict decoder large leaf and encoder small whole relations without producer output values.",
+    "Profile/scope/program/PC/job/role commitments checked; every court rederives persisted scope ceilings.",
+    "Invalid declarations, duplicates and junk proofs pay actors and reserve shared budgets before variable stored material decoding.",
+    "Self-operator bounty refused; one successful refutation and ordinary challenger payout redemption; independent replay agrees.",
+    "Mixed catalogs share original collateral/eight statements/exit guards; expiry releases capital but retains bounded catalog.",
+    "Frozen v2 codecs/identity/DA and full scoped-model conformance node regressions; A-2 source/ownership/compatibility and route tests."
+  ],
+  "limits": [
+    "Synthetic actual-node component tests; no real checkpoint/task/context/fidelity acceptance.",
+    "Public output commitment/hash openings supplied by test helper; flat public hash-unit acquisition/localization/retention/default/session rules unimplemented.",
+    "No execution registration/Final from new candidate statements; challenger payout redemption is distinct from execution Final/redemption.",
+    "Proof pre-emption seals and full execution/checker/DA/network resources, privacy/economics/honest liveness remain open.",
+    "Candidate admission still uses legacy plan; terminal-scope component capacity is not automatically large-model admission.",
+    "Shipping activation unchanged; full original RFC02 goal active and incomplete."
+  ],
+  "log_normalization": "Trailing blank lines removed only; diagnostic and test text preserved."
+}

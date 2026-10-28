@@ -1,0 +1,16 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "mixin-qa-encoder",
+  "doc": "A mixin: `…ForQuestionAnswering` (extractive, SQuAD-style) over a BERT-lineage encoder: EVERY row through `qa_outputs` to two logits per token, the start logit in column 0 and the end logit in column 1 (transformers splits the last axis in that order) (OUTPUT_TOKEN_LOGITS_V1).",
+  "spec": {
+    "output": {
+      "Embedding": {
+        "$unset": true
+      },
+      "TokenLogits": {
+        "labels": 2,
+        "bias": true
+      }
+    }
+  }
+}

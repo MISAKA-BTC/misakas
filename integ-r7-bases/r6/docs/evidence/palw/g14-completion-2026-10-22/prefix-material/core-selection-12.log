@@ -1,0 +1,15 @@
+
+running 1 test
+
+thread 'palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::private_prefix_material_replay_authenticates_canonical_boundary_and_refuses_missing_other_source_or_corruption' (4607573) panicked at consensus/core/src/palw_prefix_material_native_tests.rs:56:73:
+called `Result::unwrap()` on an `Err` value: Resource(Unsupported { component: "private prefix material", native_type: "kaspa_consensus_core::palw_court_shared_tir_builder_store_v1::prefix_terminal::PrefixMaterialReplayV1", reason: "prefix initial local request budget" })
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::private_prefix_material_replay_authenticates_canonical_boundary_and_refuses_missing_other_source_or_corruption ... FAILED
+
+failures:
+
+failures:
+    palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::private_prefix_material_replay_authenticates_canonical_boundary_and_refuses_missing_other_source_or_corruption
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 4762 filtered out; finished in 0.29s
+

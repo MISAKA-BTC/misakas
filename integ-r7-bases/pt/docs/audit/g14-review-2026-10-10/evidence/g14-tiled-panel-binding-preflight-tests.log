@@ -1,0 +1,25 @@
+
+running 1 test
+test palw_panel::palw_service_public_e2e::tiled::registered_tiled_constraint_class_passes_normal_readiness_jury_and_fp_price ... [service-tiled] ordinary geometry hidden 256, FP work 9012040, native network quantum 2707216
+[service-tiled] ordinary signed class registration accepted; root c9acf5b17d129f344c6cc9c70e075a8a5dd39420f1e2d8b43afb108c08a136ea52b71c995b63f2295ffdb5e6c3edd63db747e60b15f51efc60572b2f62d646cc, 4099 lanes, canonical 1/2
+[service-public] normal FP family certification accepted from 3 public drill carriers
+[service-public] registered FP graph publicly carried by ordinary ClassLaneCertified
+[service-tiled] normal jury at span 112: state Some(Probation { probes_passed: 0 }), ready 7, room 2543549, reason probing: 0/10 finals passed, 0 failed since entry
+[service-tiled] native bought-class FP price accepted: 2 quanta, 6611032 pwu
+[service-public] ordinary FP Job V6 admission: claim 9da799927d17424e0d219b4cbc71bf41cff47629629baf653641b9e61ecf195a705ca2bd2116a908107cb52355e1f3e55e4f10bd71e859a25f0eb3ccc4c4744d, 2 quanta, 6611032 pwu, fee 331137
+[service-tiled] native panel stage at DAA 134: PalwLegacyDisputeViewV1 { claim_id: 9da799927d17424e0d219b4cbc71bf41cff47629629baf653641b9e61ecf195a705ca2bd2116a908107cb52355e1f3e55e4f10bd71e859a25f0eb3ccc4c4744d, class_id: 63942453032e22c10d68ddee00ab4dd437b0f4d8c0b1b102de6a9d40390d0c4a226a4c2e6fe58a829a290d6aadd3a4a97fbd4be3c803b8daa1a41ebd9fa4abda, producer: PalwBondKeyV2(TransactionOutpoint { transaction_id: 5e0d5f1b37a71288cc0eb24acc10d2f4973dd3475569f274f03cc64a2233d035099d386e24c91d48427c30a895664dea979abedc90a7788fad170379e55e2669, index: 0 }), phase: Voided { voided_daa: 134, reason: NoCapablePanel }, execution_root: f4d7fa3f2f2f2b18d96fd73c530adfca9aaa30c67b108242ff3687dc0fd823914549d799398d0af8f80b36d8e31bab10f154888f1fa007a5b23fd6aaa3fb5ff0, trace_root: f89db8798ed223b5251cb6c0742ef79cd760c8a19f85b1d1da6b9d8b1105963ca21bd3871a54015b1a8db8488278ab71b1613505095d8ef44a23db1e64842a8c, accepted_daa: 114, trace_retention_daa: 5514, job_identity: d4fbec9d94b926b6121045e9d6fd3062e6406730490c8da99e4afda2a564a3258d24662bf4a2f903d8a2a56a72d45734d90b4d46dd9c7ded0e4a0f18da54f1d7, public_fp_job: None, work_leaves: 1044, deadline_daa: Some(3134), hard_deadline_daa: 4314, record: None, sessions: [], answered: [], flat_answered_rows: 0, open_courts: 0, executor_refuted: false, court_convicted: false, da_defaulted: false }
+
+thread 'palw_panel::palw_service_public_e2e::tiled::registered_tiled_constraint_class_passes_normal_readiness_jury_and_fp_price' (3886174) panicked at kaspad/src/palw_service_tiled_e2e.rs:490:5:
+assertion `left == right` failed: the ordinary bought-class FP must bind all five colluding panel seats
+  left: 0
+ right: 5
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    palw_panel::palw_service_public_e2e::tiled::registered_tiled_constraint_class_passes_normal_readiness_jury_and_fp_price
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 643 filtered out; finished in 49.20s
+

@@ -1,0 +1,16 @@
+
+running 11 tests
+test palw_tir_court_v1::inventory_material_tests::root_membership_cannot_replace_registered_inventory_geometry ... ok
+test palw_tir_court_v1::step_leaf_da_tests::every_rows_tree_node_is_disclosed_and_a_row_past_the_trace_is_proven_so ... ok
+test palw_tir_court_v1::da_tests::an_ir_event_is_opened_in_its_class_s_scheme_and_nothing_else_answers ... ok
+test palw_tir_court_v1::step_leaf_da_tests::a_disclosure_in_any_other_shape_is_refused ... ok
+test palw_tir_court_v1::inventory_material_tests::single_openings_match_existing_native_multiproof_canonical_checks ... ok
+test palw_tir_court_v1::step_leaf_da_tests::every_leaf_is_disclosed_and_a_logits_tile_carries_its_row_pin ... ok
+test palw_tir_court_v1::step_leaf_da_tests::every_node_is_disclosed_and_a_unit_past_the_execution_is_proven_so ... ok
+test palw_tir_court_v1::da_tests::the_identity_rule_over_an_ir_binding ... ok
+test palw_tir_court_v1::test_support::a_job_at_exactly_max_context_positions_runs_end_to_end_in_the_canonical_context ... ok
+test palw_tir_court_v1::test_support::the_tiny_program_s_closes_carry_a_single_leaf_a_run_and_none ... ok
+test palw_tir_court_v1::test_support::the_tiny_execution_is_adjudicable_both_ways ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 4687 filtered out; finished in 0.01s
+

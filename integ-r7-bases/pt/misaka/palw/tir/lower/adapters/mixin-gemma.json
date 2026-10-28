@@ -1,0 +1,11 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "mixin-gemma",
+  "doc": "A mixin: the Gemma conventions — (1+w) RMS norms, the embedding scaled by sqrt(hidden), a tied head, no bidirectional attention, head_dim 256.",
+  "config": {"defaults": {"tie_word_embeddings": true, "head_dim": 256}},
+  "vars": [
+    {"name": "norm", "value": {"kind": "Rms", "eps": {"$var": "eps"}, "gain": "OnePlusW", "bias": false}},
+    {"name": "emb_scale", "value": {"$sqrt": {"$var": "hidden"}}},
+    {"name": "no_bidir", "value": {"$let": ["_", {"$forbid": ["use_bidirectional_attention", "bidirectional attention is not a causal LM"]}, false]}}
+  ]
+}

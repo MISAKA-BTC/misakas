@@ -1,0 +1,24 @@
+[package]
+name = "misaka-palw-gen"
+description = "RFC-0003 Part I, the generative common layer: deterministic randomness R (keyed BLAKE2b-512 counters, the domain table, the pinned Gaussian table) and canonical outputs (per-kind canonical bytes, the tile-aligned output digest)"
+publish = false
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# A LEAF crate on purpose, like `misaka-palw-tir`: consensus, the court and node backends will all
+# call it, so it depends on nothing of this repository.
+[dependencies]
+blake2b_simd.workspace = true
+borsh.workspace = true
+
+[dev-dependencies]
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

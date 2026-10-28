@@ -1,0 +1,9 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "mixin-post-norm",
+  "doc": "A mixin: norms AFTER the mixer and the FFN only (OLMo-2/3, EXAONE-4): x += norm(mixer(x)); x += norm(ffn(x)).",
+  "vars": [
+    {"name": "residual", "value": {"Sequential": {"pre_mixer": null, "post_mixer": {"$var": "norm"}, "pre_ffn": null, "post_ffn": {"$var": "norm"}, "multiplier": {"$var": "res_mult"}}}},
+    {"name": "names", "value": {"$merge": [{"$omit": [{"$var": "names_base"}, ["norm.mix", "norm.ffn"]]}, {"norm.post_mix": "{p}layers.{L}.post_attention_layernorm", "norm.post_ffn": "{p}layers.{L}.post_feedforward_layernorm"}]}}
+  ]
+}

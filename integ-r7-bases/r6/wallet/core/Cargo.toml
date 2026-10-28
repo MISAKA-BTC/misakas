@@ -1,0 +1,153 @@
+[package]
+name = "kaspa-wallet-core"
+description = "Kaspa wallet library"
+keywords = ["kaspa", "wallet"]
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+multi-user = []
+# kaspa-pq PQ-only (ADR-0019 §14): `pq-only` (default) builds wallet-core with
+# only the ML-DSA (`mldsa`) account plus the shared infra; the classical secp256k1
+# account variants (bip32/multisig/legacy/watchonly/bip32watch/keypair), HD and
+# deterministic derivation, secp message signing and PSKT/PSKB are gated out, so
+# no secp256k1 is linked. `legacy-secp256k1` re-enables the classical wallet; the
+# WASM SDK (wasm32-core) pulls it so the browser SDK keeps the classical signer.
+pq-only = []
+legacy-secp256k1 = [
+    "dep:secp256k1",
+    "kaspa-bip32/legacy-secp256k1",
+    "kaspa-wallet-keys/legacy-secp256k1",
+    "kaspa-wallet-pskt/legacy-secp256k1",
+    "kaspa-consensus-core/legacy-secp256k1",
+]
+wasm32-keygen = [
+    # "kaspa-consensus-wasm/wasm32-types",
+]
+wasm32-core = [
+    "legacy-secp256k1",
+    "kaspa-consensus-wasm/wasm32-sdk",
+    "kaspa-consensus-core/wasm32-sdk",
+    "kaspa-wrpc-client/wasm32-sdk",
+    "kaspa-wrpc-wasm/wasm32-sdk",
+    "kaspa-wasm-core/wasm32-sdk",
+    "kaspa-wallet-keys/wasm32-sdk",
+    "kaspa-wallet-pskt/wasm32-sdk",
+]
+wasm32-sdk = [
+    "wasm32-core"
+]
+default = ["pq-only"]
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+aes.workspace = true
+ahash.workspace = true
+argon2.workspace = true
+async-channel.workspace = true
+async-lock.workspace = true
+async-trait.workspace = true
+base64.workspace = true
+borsh.workspace = true
+cfb-mode.workspace = true
+cfg-if.workspace = true
+chacha20poly1305.workspace = true
+convert_case.workspace = true
+crypto_box.workspace = true
+dashmap.workspace = true
+downcast.workspace = true
+evpkdf.workspace = true
+faster-hex.workspace = true
+fixedstr.workspace = true
+futures.workspace = true
+heapless.workspace = true
+hmac.workspace = true
+itertools.workspace = true
+js-sys.workspace = true
+kaspa-addresses.workspace = true
+kaspa-bip32.workspace = true
+kaspa-consensus-client.workspace = true
+# kaspa-pq PQ-only: wallet-core calls the legacy secp256k1 sign helpers in
+# kaspa-consensus-core::sign (sign_input / sign_with_multiple_v2 / verify) only
+# from the classical wallet paths, so the `legacy-secp256k1` feature is pulled in
+# conditionally by this crate's own `legacy-secp256k1` feature (ADR-0019 §14).
+kaspa-consensus-core.workspace = true
+kaspa-consensus-wasm.workspace = true
+kaspa-core.workspace = true
+kaspa-hashes.workspace = true
+kaspa-metrics-core.workspace = true
+kaspa-notify.workspace = true
+kaspa-rpc-core.workspace = true
+kaspa-txscript-errors.workspace = true
+kaspa-txscript.workspace = true
+kaspa-utils.workspace = true
+kaspa-wallet-keys.workspace = true
+kaspa-wallet-macros.workspace = true
+kaspa-wallet-pskt.workspace = true
+kaspa-wasm-core.workspace = true
+kaspa-wrpc-client.workspace = true
+kaspa-wrpc-wasm.workspace = true
+md-5.workspace = true
+pad.workspace = true
+pbkdf2.workspace = true
+rand.workspace = true
+regex.workspace = true
+ripemd.workspace = true
+secp256k1 = { workspace = true, optional = true }
+separator.workspace = true
+serde_json.workspace = true
+serde-wasm-bindgen.workspace = true
+serde.workspace = true
+sha1.workspace = true
+sha2.workspace = true
+slugify-rs.workspace = true
+sorted-insert.workspace = true
+thiserror.workspace = true
+wasm-bindgen-futures.workspace = true
+wasm-bindgen.workspace = true
+workflow-core.workspace = true
+workflow-log.workspace = true
+workflow-node.workspace = true
+workflow-rpc.workspace = true
+workflow-store.workspace = true
+workflow-wasm.workspace = true
+xxhash-rust.workspace = true
+zeroize.workspace = true
+indexed_db_futures.workspace = true
+
+[dependencies.web-sys]
+workspace = true
+features = [
+    'Storage',
+    'Window',
+    'IdbFactory',
+    'IdbDatabase',
+    'IdbOpenDbOptions',
+    'IdbOpenDbRequest',
+    'IdbTransaction',
+    'IdbCursorDirection',
+]
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+home.workspace = true
+
+[dev-dependencies]
+hex-literal.workspace = true
+serde_repr.workspace = true
+# kaspa-pq PR-19-S5e: native test builds need `kaspa_wallet_keys::kaspa_pq_wasm`
+# (the `KaspaPqKeyPair` WASM wrapper) for the WASM-vs-native ML-DSA signer parity
+# test in wasm/signer.rs. The `test-utils` feature exposes it off-wasm.
+kaspa-wallet-keys = { workspace = true, features = ["test-utils"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+tokio.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,17 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "phi3-seqcls",
+  "doc": "Phi3ForSequenceClassification: the `phi3` adapter's decoder with a sequence-classification head instead of the language-model head (mixin-seqcls): the last prompt token's final-norm row through `score` to `num_labels` logits.",
+  "extends": [
+    "phi3",
+    "mixin-seqcls"
+  ],
+  "match": {
+    "architectures": [
+      "Phi3ForSequenceClassification"
+    ],
+    "model_types": [
+      "phi3"
+    ]
+  }
+}

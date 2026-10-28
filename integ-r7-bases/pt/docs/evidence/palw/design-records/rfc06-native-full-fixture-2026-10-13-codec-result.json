@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "kind": "rfc06-native-100k-complete-fixture-snapshot-codec",
+  "exit": 124,
+  "seconds": 180.007158167,
+  "stages": [
+    {
+      "stage": "declarations",
+      "exit": 0,
+      "argv": [
+        "/tmp/misaka-rfc67812-runtime/snapshot-declarations-dump-v2",
+        "/tmp/misaka-rfc67812-runtime/native-four-100k-cache-v2-canonical.borsh",
+        "/tmp/misaka-rfc67812-runtime/native-four-100k-cache-v2-authentic-declarations.borsh"
+      ],
+      "log": "/tmp/misaka-rfc67812-runtime/native-four-100k-cache-v2-declarations.log",
+      "cumulativeSeconds": 0.8274127920000001
+    },
+    {
+      "stage": "full-codec",
+      "exit": 124,
+      "argv": [
+        "/tmp/misaka-rfc67812-runtime/snapshot-full-wire-probe-v2",
+        "/tmp/misaka-rfc67812-runtime/native-four-100k-cache-v2-canonical.borsh",
+        "/tmp/misaka-rfc67812-runtime/native-four-100k-cache-v2-authentic-declarations.borsh"
+      ],
+      "log": "/tmp/misaka-rfc67812-runtime/native-four-100k-cache-v2-full-codec.log",
+      "cumulativeSeconds": 180.006960958
+    }
+  ],
+  "sourceSha256": "155cfcef615df61cdff2b57135117290716dc6ed271f88ffb7689083c4730e12",
+  "declarationsSha256": "cdc26b07c0908e2b717bc1840514c21b8a8ee436e15d288ef733e56970f1b996",
+  "declarationsBytes": 9610,
+  "complete": false,
+  "actualServerIndexChecked": false,
+  "realP2pAccepted": false,
+  "rssApproved": false,
+  "priceApproved": false
+}

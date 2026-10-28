@@ -1,0 +1,10 @@
+
+running 1 test
+[read-set] commit:attn+mlp#1:Clamp: n=112464 runs<= 3 leaves<= 97 value<= 24832 wire<= 489645
+[read-set] commit:attn+mlp#1:Gather: n=25344 runs<= 1 leaves<= 1 value<= 256 wire<= 103601
+test read_set_on_a_real_class has been running for over 60 seconds
+[read-set] commit:attn+mlp#1:Reshape: n=14256 runs<= 28 leaves<= 114 value<= 43264 wire<= 125163
+[read-set] commit:gdn+mlp:Clamp: n=342144 runs<= 3 leaves<= 97 value<= 24832 wire<= 490021
+[read-set] commit:gdn+mlp:Concat: n=57024 runs<= 1 leaves<= 1 value<= 256 wire<= 36833
+[read-set] commit:gdn+mlp:Div: n=594 runs<= 2 leaves<= 32 value<= 8192 wire<= 83887
+[read-set] commit:gdn+mlp:Gather: n=133056 runs<= 1 leaves<= 1 value<= 256 wire<= 168421

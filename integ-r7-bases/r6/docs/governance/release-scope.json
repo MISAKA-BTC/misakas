@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "kind": "documentation-policy-not-runtime-config",
+  "decision": "accepted-user-direction",
+  "initial_mainnet_excluded": [
+    {
+      "feature": "rfc0003.image-paths",
+      "policy": "DEFERRED_POST_MAINNET",
+      "enabled_by_policy": false
+    },
+    {
+      "feature": "rfc0003.video-paths",
+      "policy": "DEFERRED_POST_MAINNET",
+      "enabled_by_policy": false
+    },
+    {
+      "feature": "rfc0004.model-improvement-protocol",
+      "policy": "DEFERRED_POST_MAINNET",
+      "enabled_by_policy": false
+    }
+  ],
+  "automatic_activation_after_mainnet": false,
+  "runtime_verified": false,
+  "reopening": "explicit reviewed feature-by-feature approval; design changes follow design-freeze policy"
+}

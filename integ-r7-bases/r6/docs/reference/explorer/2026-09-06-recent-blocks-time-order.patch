@@ -1,0 +1,33 @@
+--- /private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet/c011e8fa-2e10-48d2-bb64-bbadc3b02fe0/scratchpad/app.orig2.js	2026-09-06 22:47:55
++++ /private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet/c011e8fa-2e10-48d2-bb64-bbadc3b02fe0/scratchpad/app.live.js	2026-09-06 22:47:29
+@@ -811,10 +811,20 @@
+   const w = $("#recentWrap"); if (!w) return;
+   if (!recent.length){ w.innerHTML = `<div class="spin">No blocks yet…</div>`; shownHashes = new Set(); return; }
+   const firstPaint = shownHashes.size === 0;   // don't flash the whole table on the very first paint
++  // `recent` is kept in CONSENSUS order (blueScore desc) because refreshHomeInner's staleness
++  // checks read recent[0].blueScore to decide whether to re-anchor. That order is NOT time order,
++  // and in a DAG the two diverge badly: measured on the live chain 2026-09-06, 482 of 1,723
++  // adjacent pairs had the UPPER row older than the row beneath it, by up to 1h50m. A table whose
++  // Age column walks backwards is what a reader calls broken. So sort a COPY for display only —
++  // the stored order, and every control path that reads it, is untouched.
++  const rows = recent.slice().sort((a,b) =>
++    (Number(b.timestamp) - Number(a.timestamp)) ||
++    (Number(b.blueScore) - Number(a.blueScore)) ||
++    (Number(b.daaScore)  - Number(a.daaScore)));
+   w.innerHTML = `<table class="tbl"><thead><tr>
+       <th>Block hash</th><th class="num">DAA</th><th class="num">Blue</th>
+       <th class="num">Parents</th><th class="num">Txs</th><th>Type</th><th class="right">Age</th>
+-    </tr></thead><tbody>${recent.map(b => `
++    </tr></thead><tbody>${rows.map(b => `
+       <tr class="${(!firstPaint && !shownHashes.has(b.hash)) ? 'rowNew' : ''}"><td>${linkBlock(b.hash)}</td>
+           <td class="num">${num(b.daaScore)}</td>
+           <td class="num">${num(b.blueScore)}</td>
+@@ -823,7 +833,7 @@
+           <td>${b.isChain?'<span class="pill chain">chain</span>':'<span class="pill red">merged</span>'}</td>
+           <td class="right dim" title="${esc(dt(b.timestamp))}">${ago(b.timestamp)}</td></tr>`).join("")}
+     </tbody></table>`;
+-  shownHashes = new Set(recent.map(b => b.hash));   // baseline for the next render's new-row flash
++  shownHashes = new Set(rows.map(b => b.hash));   // baseline for the next render's new-row flash
+ }
+ 
+ /* ----------------------- LATEST TRANSACTIONS (home) -------------------- */

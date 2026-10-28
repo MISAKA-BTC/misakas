@@ -1,0 +1,35 @@
+{
+ "format": "misaka.palw.model-adapter.v1",
+ "id": "ernie",
+ "doc": "ERNIE 3 (ErnieModel): BERT's encoder; use_task_id must be false (task-type embeddings are not modelled). Third-party adapter (lane H): data only.",
+ "extends": [
+  "bert"
+ ],
+ "vars": [
+  {
+   "name": "task_ok",
+   "value": {
+    "$check": [
+     {
+      "$eq": [
+       {
+        "$cfg": "use_task_id"
+       },
+       false
+      ]
+     },
+     "use_task_id: task-type embeddings are not modelled"
+    ]
+   }
+  },
+  {
+   "name": "model_type",
+   "value": "ernie"
+  }
+ ],
+ "config": {
+  "inert": [
+   "task_type_vocab_size"
+  ]
+ }
+}

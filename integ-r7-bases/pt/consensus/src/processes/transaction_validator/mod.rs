@@ -1,0 +1,478 @@
+pub mod errors;
+pub mod tx_validation_in_header_context;
+pub mod tx_validation_in_isolation;
+pub mod tx_validation_in_utxo_context;
+use std::sync::Arc;
+
+use kaspa_txscript::{
+    SigCacheKey,
+    caches::{Cache, TxScriptCacheCounters},
+};
+
+use kaspa_consensus_core::{config::params::PqEnforcementMode, mass::MassCalculator};
+use kaspa_txscript::ScriptPolicy;
+
+#[derive(Clone)]
+pub struct TransactionValidator {
+    palw_dns_retirement: Option<kaspa_consensus_core::palw_native_settlement_v1::PalwDnsRetirementV1>,
+    /// **A-2 uniformity: the lifecycle kinds' owning fences** (`Params::palw_lifecycle_kind_fences_v1`). Isolation, which holds no
+    /// height, judges a kind the live testnet-12 build cannot decode as that build judges its bytes; the header context asks the kind's
+    /// own stateless rule only where this says its fence is in force at the containing block. `Default` (every fence unarmed) is the
+    /// live build's reading, and every shipped preset's.
+    palw_lifecycle_kind_fences: kaspa_consensus_core::palw_lifecycle_objects_v2::PalwLifecycleKindFencesV1,
+    max_tx_inputs: usize,
+    max_tx_outputs: usize,
+    max_signature_script_len: usize,
+    max_script_public_key_len: usize,
+    coinbase_payload_script_public_key_max_len: u8,
+    coinbase_maturity: u64,
+    /// **The mergeset's own bound, because the coinbase carries one output per entitled RED**
+    /// (ADR-0058; mainnet audit 2026-09-05). `ghostdag_k` bounds the blues; nothing bounds the
+    /// reds but this, and the isolation guard was sized as though the reds shared one aggregate
+    /// output — the shape they had before ADR-0058 paid each of them its own.
+    mergeset_size_limit: u64,
+    mergeset_size_history: Option<kaspa_consensus_core::config::params::ForkedParam<u64>>,
+    sig_cache: Cache<SigCacheKey, bool>,
+    pub(crate) mass_calculator: MassCalculator,
+    /// kaspa-pq PQ-only enforcement mode for this network (ADR-0019).
+    pq_enforcement: PqEnforcementMode,
+    /// DAA score at/after which `PqEnforcementMode::Consensus` takes effect.
+    pq_activation_daa_score: u64,
+    /// **`Params::palw_panel_da_admissible()`** — whether this ruleset carries ADR-0077 Decision
+    /// 16's mode-2 commitment SHAPE at all. The isolation door is context-free by contract and
+    /// holds no DAA score, so it asks the height-free question; the extraction walk asks the
+    /// height-indexed one (`palw_panel_da_at`), which is strictly stronger.
+    palw_panel_da_admissible: bool,
+    /// **`Params::palw_prompt_ids_form_v1()`** — which commitment a commitment's carried prompt ids
+    /// must hash to (ADR-0081 Decision 3). Genesis-only by `validate_palw_v2`, so height-free here
+    /// is exact, not an approximation.
+    palw_prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    /// ADR-0087 Decision 3: whether a model market's sink output (`OP_RETURN "MSKMDL01" <line id>`)
+    /// is a consensus-legal output class here — `true` iff the network declares `palw_model_market`
+    /// at all; a dormant (`None`) network keeps the PQ-only rule byte-for-byte.
+    ///
+    /// **This is the ISOLATION door's question, and it is deliberately the weaker one** (mainnet
+    /// audit 2026-09-06, M-9). Isolation is context-free by contract and holds no DAA score, so it
+    /// can only ask whether the ruleset declares the market at all. Answering `true` here does NOT
+    /// make the sink valid: `check_model_sink_outputs_in_context` asks ADR-0087 Decision 6's
+    /// height-indexed question at the containing block's own DAA and refuses the output below the
+    /// activation. The pair is what makes a build that SCHEDULES the fence have the same
+    /// transaction validity as one that does not carry it, everywhere before the activation.
+    model_sink_outputs_allowed: bool,
+
+    /// **ADR-0087 Decision 6's fence, resolved** (`Params::palw_model_market_fence()` — the mode
+    /// condition already folded in). `None` on every shipped preset. The context-bearing half of
+    /// the sink rule reads THIS; the isolation half reads `model_sink_outputs_allowed`, which is
+    /// `self.palw_model_market_fence.is_some()`.
+    palw_model_market_fence: Option<kaspa_consensus_core::config::params::ForkActivation>,
+
+    /// **`Params::palw_validator_payout_bounds_declared()`** — whether this ruleset carries
+    /// ADR-0018 §E's payout bounds at all (mainnet audit, 2026-09-06, H-3). The coinbase isolation
+    /// guard is context-free by contract and holds no DAA score, so it asks the height-free
+    /// question; the two builders (`deferred_quality_bonus_outputs`, `reserve_drip_outputs`) ask
+    /// the height-indexed one, which is strictly stronger. That is the correct direction for a
+    /// SIZE guard: too wide only declines to reject a coinbase the exact-hash rule rejects anyway,
+    /// while too narrow refuses a coinbase this node itself built — the 112-block halt.
+    palw_validator_payout_bounds_declared: bool,
+
+    /// **A-2 (mainnet audit 2026-09-11): whether this ruleset tolerates an undecodable or
+    /// unknown-wire-version lifecycle (0x4b) payload at isolation** — `true` iff the network
+    /// declares the audit fence (`Params::palw_audit_2026_09_11_fence().is_some()`). Isolation is
+    /// context-free by contract and holds no DAA score, so — exactly like `model_sink_outputs_allowed`
+    /// and `palw_validator_payout_bounds_declared` above — it asks the height-free question. The
+    /// extraction walk skips such a payload (folds nothing) at every height, so a ruleset that has
+    /// NOT declared the fence keeps refusing the shape byte-for-byte as every build does today, and
+    /// one that has declared it admits the shape (the fold still does nothing with it). A build that
+    /// SCHEDULES the fence and one that does not thus agree on every payload that decodes.
+    palw_lifecycle_undecodable_tolerated: bool,
+
+    /// **ADR-0119 Decision 6: the held regime's fence, resolved** (`Params::palw_held_context_fence()`,
+    /// `never()` read as absence). Isolation derives its height-free work-leaves cap from
+    /// `.is_some()` (the regime's `2^40` where it is declared at all); the header-context door reads
+    /// the fence at the containing block's DAA and refuses a commitment past the structural `2^32`
+    /// below it. `None` on every preset but testnet-11.
+    palw_held_context_fence: Option<kaspa_consensus_core::config::params::ForkActivation>,
+
+    /// **ADR-0125, height-free: whether this ruleset configures the execution lane.** A merging block
+    /// pays each permitted bond one aggregate fee output, at most
+    /// `PALW_EXEC_MAX_BONDS_PER_MERGESET_V1` of them, so the isolation cap widens by that where the
+    /// lane exists — a size guard fails wide, and the exact-hash coinbase rule decides correctness.
+    palw_round_lane_declared: bool,
+
+    /// **RFC-0009, height-free: whether this ruleset configures `palw_receipt_spend_v4`.** A V4 receipt block splits its reward into a
+    /// miner leg and the builder's own output, so a merging block may carry up to one extra output per mergeset block; the isolation cap
+    /// widens by the mergeset limit where the fence exists (a size guard fails wide; the exact-hash coinbase rule decides correctness).
+    /// `false` on every shipped preset, which leaves the cap exactly where it was.
+    palw_receipt_v4_declared: bool,
+
+    /// **ADR-0152-adjacent (Activation Pool): `Params::palw_activation_pool_fence()`'s height**
+    /// (`never()` read as absence). Isolation derives the height-free question from `.is_some()`: an
+    /// activation sink (`OP_RETURN "MSKACT01" <class>`) is a consensus-legal output class only on a
+    /// ruleset that declares the pool, and there EVERY activation sink must be bound to its
+    /// carrier's `ActivationPoolFunded` (the review's A8) — so no activation sink can burn silently.
+    /// The header-context door refuses the form below the height. `None` on every preset but
+    /// testnet-12, which keeps every other network's transaction validity byte for byte.
+    palw_activation_pool_fence: Option<kaspa_consensus_core::config::params::ForkActivation>,
+
+    /// **RFC-0004 (spec 17 §17.11.1): `Params::palw_improvement_v1`'s height** (`never()` read as
+    /// absence). Isolation admits the improvement sink (`OP_RETURN "MSKIMP01" <line>`) — bound — where
+    /// the ruleset declares the fence; the header-context door refuses it below the height. `None` on
+    /// every shipped preset, which keeps every network's transaction validity byte for byte.
+    palw_improvement_fence: Option<kaspa_consensus_core::config::params::ForkActivation>,
+
+    /// **Lane sink (the 2026-09-25 Position review's #1): `Params::palw_model_sink_bound_fence()`**
+    /// (`never()` read as absence). In a block at or past its height every model sink
+    /// (`OP_RETURN "MSKMDL01" <line>`) must be bound to its carrier's `ModelBuy` or `ModelSeed`
+    /// (index, line, value) on a carrier that pays a refund payee, or the transaction is invalid in
+    /// the header context. `None` on every shipped preset (testnet-12 included until the operator
+    /// arms it), which keeps every network's transaction validity byte for byte.
+    palw_model_sink_bound_fence: Option<kaspa_consensus_core::config::params::ForkActivation>,
+
+    /// **ADR-0082 D10/D11 + RFC-0001 §A.4: `Params::palw_fp_decode_rules_fence()`** (`never()` read
+    /// as absence). Isolation asks the height-free question (`.is_some()`: the V4 job's shape passes
+    /// where the ruleset schedules the fence at all); the header-context door refuses a V4
+    /// commitment below the height and a new V3 one at or past it. `None` on every shipped preset,
+    /// which keeps every network's transaction validity byte for byte.
+    palw_fp_decode_rules_fence: Option<kaspa_consensus_core::config::params::ForkActivation>,
+
+    /// **RFC-0003 §I.4.4: `Params::palw_fp_job_v5_fence()`** (`never()` read as absence). Isolation
+    /// asks the height-free question (`.is_some()`: a tensor claim, FP job version 10, passes the
+    /// door's stateless rules where the ruleset carries the fence at all, and is refused by name
+    /// everywhere else, as a build without the fence refuses its bytes); the header-context door
+    /// refuses one below the height. `None` on every shipped preset, which keeps every network's
+    /// transaction validity byte for byte.
+    palw_fp_job_v5_fence: Option<kaspa_consensus_core::config::params::ForkActivation>,
+
+    /// **The task-head profile: `Params::palw_task_heads_v1`'s height** (`never()` read as absence). A version-10 commitment whose
+    /// job body is `Head` (bytes the int-12 build cannot decode, refusing the block at its isolation door) is refused in the header
+    /// context below this height — at every height where it is `None`, which is every shipped preset — so the block is invalid on
+    /// both builds (`kaspa_consensus_core::palw_task_heads_v1::palw_fp_head_job_refusal_at_v1`).
+    palw_task_heads_fence: Option<kaspa_consensus_core::config::params::ForkActivation>,
+
+    /// **RFC-0001 §2.6 stage 2: `Params::palw_fp_prefix_state_fence()`** (`never()` read as absence). Isolation asks the
+    /// height-free question (`.is_some()`: a prefix-state claim, FP job version 11, passes the door's stateless rules where
+    /// the ruleset carries the fence at all, and is refused by name everywhere else); the header-context door refuses one
+    /// below the height. `None` on every shipped preset.
+    palw_fp_prefix_state_fence: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// **RFC-0001 §2.6 stage 2b: `Params::palw_fp_prefix_inherit_fence()`** — isolation asks `.is_some()` (a version-12 claim passes the
+    /// door's stateless rules where the ruleset carries the fence at all); the header-context door refuses one below its height.
+    palw_fp_prefix_inherit_fence: Option<kaspa_consensus_core::config::params::ForkActivation>,
+
+    /// **ADR-0096 Decision 8: `Params::palw_fp_decode_constraint_fence()`** (`never()` read as absence). Isolation asks the
+    /// height-free question (`.is_some()`: a constrained claim, FP job version 6, passes the door's stateless rules where the
+    /// ruleset carries the fence at all, and is refused by name everywhere else); the header-context door refuses one below
+    /// the height. `None` on every shipped preset.
+    palw_fp_decode_constraint_fence: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    palw_staged_public_court_fence: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    palw_tir_public_conviction_fence: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// **RFC-0001 §2.5: `Params::palw_fp_constraint_v2_fence()`** — read by the header-context door only (a second-form
+    /// constraint below its height is refused). `None` on every shipped preset.
+    palw_fp_constraint_v2_fence: Option<kaspa_consensus_core::config::params::ForkActivation>,
+}
+
+impl TransactionValidator {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        max_tx_inputs: usize,
+        max_tx_outputs: usize,
+        max_signature_script_len: usize,
+        max_script_public_key_len: usize,
+        coinbase_payload_script_public_key_max_len: u8,
+        coinbase_maturity: u64,
+        mergeset_size_limit: u64,
+        counters: Arc<TxScriptCacheCounters>,
+        mass_calculator: MassCalculator,
+        pq_enforcement: PqEnforcementMode,
+        pq_activation_daa_score: u64,
+        palw_panel_da_admissible: bool,
+        palw_prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+        // **ADR-0087 Decision 6 (audit M-9): the FENCE, not a boolean.** The isolation door still
+        // asks the height-free question — it derives it as `.is_some()` below — and the
+        // context-bearing door asks the height-indexed one. Passing only the boolean was the
+        // defect: it made a scheduled fence relax a consensus rule from genesis.
+        palw_model_market_fence: Option<kaspa_consensus_core::config::params::ForkActivation>,
+        // **ADR-0018 §E's payout bounds, height-free** (mainnet audit 2026-09-06, H-3): the
+        // isolation cap has no DAA score, and a size guard must fail wide.
+        palw_validator_payout_bounds_declared: bool,
+        // **A-2 (mainnet audit 2026-09-11), height-free**: whether the ruleset tolerates an
+        // undecodable/unknown-version 0x4b payload at isolation, the audit fence's `.is_some()`.
+        palw_lifecycle_undecodable_tolerated: bool,
+        // **ADR-0119 Decision 6: the FENCE**, for the same reason the market's is passed whole.
+        palw_held_context_fence: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    ) -> Self {
+        Self {
+            palw_dns_retirement: None,
+            palw_lifecycle_kind_fences: Default::default(),
+            max_tx_inputs,
+            max_tx_outputs,
+            max_signature_script_len,
+            max_script_public_key_len,
+            coinbase_payload_script_public_key_max_len,
+            coinbase_maturity,
+            mergeset_size_limit,
+            mergeset_size_history: None,
+            sig_cache: Cache::with_counters(10_000, counters),
+            mass_calculator,
+            pq_enforcement,
+            pq_activation_daa_score,
+            palw_panel_da_admissible,
+            palw_prompt_ids_form,
+            model_sink_outputs_allowed: palw_model_market_fence.is_some(),
+            palw_model_market_fence,
+            palw_validator_payout_bounds_declared,
+            palw_lifecycle_undecodable_tolerated,
+            palw_held_context_fence: palw_held_context_fence
+                .filter(|fence| *fence != kaspa_consensus_core::config::params::ForkActivation::never()),
+            palw_round_lane_declared: false,
+            palw_receipt_v4_declared: false,
+            palw_activation_pool_fence: None,
+            palw_improvement_fence: None,
+            palw_model_sink_bound_fence: None,
+            palw_fp_decode_rules_fence: None,
+            palw_fp_job_v5_fence: None,
+            palw_task_heads_fence: None,
+            palw_fp_prefix_state_fence: None,
+            palw_fp_prefix_inherit_fence: None,
+            palw_fp_decode_constraint_fence: None,
+            palw_staged_public_court_fence: None,
+            palw_tir_public_conviction_fence: None,
+            palw_fp_constraint_v2_fence: None,
+        }
+    }
+
+    /// A-2 uniformity: declare the lifecycle kinds' owning fences (`Params::palw_lifecycle_kind_fences_v1`).
+    pub fn with_lifecycle_kind_fences(
+        mut self,
+        fences: kaspa_consensus_core::palw_lifecycle_objects_v2::PalwLifecycleKindFencesV1,
+    ) -> Self {
+        self.palw_lifecycle_kind_fences = fences;
+        self
+    }
+
+    /// ADR-0082 D10/D11 + RFC-0001 §A.4: declare the decode-rules fence
+    /// (`Params::palw_fp_decode_rules_fence()`), which admits the V4 job's shape at isolation and
+    /// splits V3 from V4 by the containing block's height in the header context.
+    pub fn with_dns_retirement(
+        mut self,
+        retirement: Option<kaspa_consensus_core::palw_native_settlement_v1::PalwDnsRetirementV1>,
+    ) -> Self {
+        self.palw_dns_retirement = retirement;
+        self
+    }
+
+    pub(crate) fn check_dns_retirement(&self, tx: &kaspa_consensus_core::tx::Transaction, daa: u64) -> errors::TxResult<()> {
+        if self.palw_dns_retirement.is_some_and(|r| r.activation.is_active(daa))
+            && kaspa_consensus_core::palw_native_settlement_v1::creates_dns_participation(&tx.subnetwork_id)
+        {
+            return Err(errors::TxRuleError::DnsParticipationRetired(tx.subnetwork_id.clone()));
+        }
+        if self
+            .palw_dns_retirement
+            .is_some_and(|r| !kaspa_consensus_core::palw_native_settlement_v1::legacy_dns_evidence_allowed_v1(r, tx, daa))
+        {
+            return Err(errors::TxRuleError::DnsLegacyEvidenceOutsideWindow);
+        }
+        Ok(())
+    }
+
+    pub fn with_fp_decode_rules_fence(mut self, fence: Option<kaspa_consensus_core::config::params::ForkActivation>) -> Self {
+        self.palw_fp_decode_rules_fence =
+            fence.filter(|fence| *fence != kaspa_consensus_core::config::params::ForkActivation::never());
+        self
+    }
+
+    /// RFC-0003 §I.4.4: declare the tensor claim's fence (`Params::palw_fp_job_v5_fence()`), which
+    /// admits a version-10 commitment's stateless rules at isolation and refuses one below the
+    /// fence's height in the header context.
+    pub fn with_fp_job_v5_fence(mut self, fence: Option<kaspa_consensus_core::config::params::ForkActivation>) -> Self {
+        self.palw_fp_job_v5_fence = fence.filter(|fence| *fence != kaspa_consensus_core::config::params::ForkActivation::never());
+        self
+    }
+
+    /// The task-head profile: declare `Params::palw_task_heads_v1`'s height, below which a `Head` job is refused in the header context.
+    pub fn with_task_heads_fence(mut self, fence: Option<kaspa_consensus_core::config::params::ForkActivation>) -> Self {
+        self.palw_task_heads_fence = fence.filter(|fence| *fence != kaspa_consensus_core::config::params::ForkActivation::never());
+        self
+    }
+
+    /// RFC-0001 §2.6 stage 2: declare the prefix-state claim's fence (`Params::palw_fp_prefix_state_fence()`), which admits a
+    /// version-11 commitment's stateless rules at isolation and refuses one below the fence's height in the header context.
+    pub fn with_fp_prefix_state_fence(mut self, fence: Option<kaspa_consensus_core::config::params::ForkActivation>) -> Self {
+        self.palw_fp_prefix_state_fence =
+            fence.filter(|fence| *fence != kaspa_consensus_core::config::params::ForkActivation::never());
+        self
+    }
+
+    /// RFC-0001 §2.6 stage 2b: declare the inherited-prefix claim's fence (`Params::palw_fp_prefix_inherit_fence()`).
+    pub fn with_fp_prefix_inherit_fence(mut self, fence: Option<kaspa_consensus_core::config::params::ForkActivation>) -> Self {
+        self.palw_fp_prefix_inherit_fence =
+            fence.filter(|fence| *fence != kaspa_consensus_core::config::params::ForkActivation::never());
+        self
+    }
+
+    /// ADR-0096 Decision 8: declare the constrained claim's fence (`Params::palw_fp_decode_constraint_fence()`), which admits a
+    /// version-6 commitment's stateless rules at isolation and refuses one below the fence's height in the header context.
+    pub fn with_fp_decode_constraint_fence(mut self, fence: Option<kaspa_consensus_core::config::params::ForkActivation>) -> Self {
+        self.palw_fp_decode_constraint_fence =
+            fence.filter(|fence| *fence != kaspa_consensus_core::config::params::ForkActivation::never());
+        self
+    }
+
+    pub fn with_staged_public_court_fence(mut self, fence: Option<kaspa_consensus_core::config::params::ForkActivation>) -> Self {
+        self.palw_staged_public_court_fence =
+            fence.filter(|fence| *fence != kaspa_consensus_core::config::params::ForkActivation::never());
+        self
+    }
+
+    pub fn with_tir_public_conviction_fence(mut self, fence: Option<kaspa_consensus_core::config::params::ForkActivation>) -> Self {
+        self.palw_tir_public_conviction_fence =
+            fence.filter(|fence| *fence != kaspa_consensus_core::config::params::ForkActivation::never());
+        self
+    }
+
+    /// RFC-0001 §2.5: declare the second constraint form's fence (`Params::palw_fp_constraint_v2_fence()`).
+    pub fn with_fp_constraint_v2_fence(mut self, fence: Option<kaspa_consensus_core::config::params::ForkActivation>) -> Self {
+        self.palw_fp_constraint_v2_fence =
+            fence.filter(|fence| *fence != kaspa_consensus_core::config::params::ForkActivation::never());
+        self
+    }
+
+    /// ADR-0152-adjacent (Activation Pool): declare the pool's fence
+    /// (`Params::palw_activation_pool_fence().map(|pool| pool.activation)`), which admits the
+    /// activation sink at isolation — bound, and from the fence's height.
+    pub fn with_activation_pool_fence(mut self, fence: Option<kaspa_consensus_core::config::params::ForkActivation>) -> Self {
+        self.palw_activation_pool_fence =
+            fence.filter(|fence| *fence != kaspa_consensus_core::config::params::ForkActivation::never());
+        self
+    }
+
+    /// RFC-0004: declare the improvement fence (`Params::palw_improvement_v1_fence().map(|f| f.activation)`),
+    /// which admits the improvement sink at isolation — bound, and from the fence's height.
+    pub fn with_improvement_fence(mut self, fence: Option<kaspa_consensus_core::config::params::ForkActivation>) -> Self {
+        self.palw_improvement_fence = fence.filter(|fence| *fence != kaspa_consensus_core::config::params::ForkActivation::never());
+        self
+    }
+
+    /// Lane sink (the model sink binding, post-launch): declare the fence
+    /// (`Params::palw_model_sink_bound_fence()`), past whose height the header context refuses an
+    /// unbound model sink.
+    pub fn with_model_sink_bound_fence(mut self, fence: Option<kaspa_consensus_core::config::params::ForkActivation>) -> Self {
+        self.palw_model_sink_bound_fence =
+            fence.filter(|fence| *fence != kaspa_consensus_core::config::params::ForkActivation::never());
+        self
+    }
+
+    /// ADR-0125: declare the execution lane (`Params::palw_execution_lane_fence().is_some()`), which
+    /// widens the coinbase output cap by the lane's payee bound.
+    pub fn with_round_lane_declared(mut self, declared: bool) -> Self {
+        self.palw_round_lane_declared = declared;
+        self
+    }
+
+    /// RFC-0009: declare `palw_receipt_spend_v4` (`Params::palw_receipt_spend_v4_fence().is_some()`), which widens the coinbase output cap
+    /// by the mergeset limit (one builder output beside each V4 block's miner leg).
+    pub fn with_receipt_v4_declared(mut self, declared: bool) -> Self {
+        self.palw_receipt_v4_declared = declared;
+        self
+    }
+
+    pub fn dag_width_declared(&self) -> bool {
+        self.mergeset_size_history.is_some()
+    }
+
+    pub fn with_mergeset_size_history(mut self, history: kaspa_consensus_core::config::params::ForkedParam<u64>) -> Self {
+        if history.activation() != kaspa_consensus_core::config::params::ForkActivation::never() {
+            self.mergeset_size_history = Some(history);
+        }
+        self
+    }
+
+    pub fn new_for_tests(
+        max_tx_inputs: usize,
+        max_tx_outputs: usize,
+        max_signature_script_len: usize,
+        max_script_public_key_len: usize,
+        coinbase_payload_script_public_key_max_len: u8,
+        coinbase_maturity: u64,
+        mergeset_size_limit: u64,
+        counters: Arc<TxScriptCacheCounters>,
+    ) -> Self {
+        Self {
+            palw_dns_retirement: None,
+            palw_lifecycle_kind_fences: Default::default(),
+            max_tx_inputs,
+            max_tx_outputs,
+            max_signature_script_len,
+            max_script_public_key_len,
+            coinbase_payload_script_public_key_max_len,
+            coinbase_maturity,
+            mergeset_size_limit,
+            mergeset_size_history: None,
+            sig_cache: Cache::with_counters(10_000, counters),
+            mass_calculator: MassCalculator::new(0, 0, 0, 0),
+            // Tests run upstream-compatible (no PQ restriction) unless a test
+            // explicitly exercises PQ-only via the script engine directly.
+            pq_enforcement: PqEnforcementMode::Disabled,
+            pq_activation_daa_score: 0,
+            // Every shipped preset's door: no mode-2 shape, flat prompt digests.
+            palw_panel_da_admissible: false,
+            palw_prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            // Every shipped preset's door: the market is dormant, so both halves are shut.
+            model_sink_outputs_allowed: false,
+            palw_model_market_fence: None,
+            // Every shipped preset's door: ADR-0018 §E's payout bounds are dormant, so the
+            // isolation cap is the one testnet-11 enforces.
+            palw_validator_payout_bounds_declared: false,
+            // Every shipped preset's door: the audit fence is dormant, so a lifecycle payload this
+            // build cannot decode is block-invalid at isolation, exactly as every build does today.
+            palw_lifecycle_undecodable_tolerated: false,
+            // Every shipped preset's door but testnet-11's: no held regime, the structural cap.
+            palw_held_context_fence: None,
+            // Every shipped preset's door: no execution lane, no payee outputs.
+            palw_round_lane_declared: false,
+            palw_receipt_v4_declared: false,
+            // Every shipped preset's door but testnet-12's: no pool, no activation sink.
+            palw_activation_pool_fence: None,
+            palw_improvement_fence: None,
+            // Every shipped preset's door: the model sink binding is dormant.
+            palw_model_sink_bound_fence: None,
+            // Every shipped preset's door: FP Job V4 is dormant, so a V4 job is refused at isolation.
+            palw_fp_decode_rules_fence: None,
+            // Every shipped preset's door: the tensor claim is dormant, so version 10 is refused at isolation.
+            palw_fp_job_v5_fence: None,
+            palw_task_heads_fence: None,
+            palw_fp_prefix_state_fence: None,
+            palw_fp_prefix_inherit_fence: None,
+            palw_fp_decode_constraint_fence: None,
+            palw_staged_public_court_fence: None,
+            palw_tir_public_conviction_fence: None,
+            palw_fp_constraint_v2_fence: None,
+        }
+    }
+
+    /// Test-only: flip the height-free payout-bounds door on a validator built by
+    /// [`Self::new_for_tests`]. Production reads it from `Params` in `services.rs`.
+    pub fn with_validator_payout_bounds_for_tests(mut self, declared: bool) -> Self {
+        self.palw_validator_payout_bounds_declared = declared;
+        self
+    }
+
+    /// Test-only: flip the height-free A-2 door (tolerate an undecodable/unknown-version 0x4b
+    /// payload at isolation) on a validator built by [`Self::new_for_tests`]. Production derives it
+    /// from `Params::palw_audit_2026_09_11_fence().is_some()` in `services.rs`.
+    pub fn with_lifecycle_undecodable_tolerated_for_tests(mut self, tolerated: bool) -> Self {
+        self.palw_lifecycle_undecodable_tolerated = tolerated;
+        self
+    }
+
+    /// kaspa-pq: resolve the [`ScriptPolicy`] to apply at `pov_daa_score`.
+    /// `PQ_ONLY` once PQ-only enforcement is active (legacy secp256k1 opcodes +
+    /// P2SH become hard errors), else `LEGACY` (upstream-identical). See ADR-0019.
+    pub(crate) fn resolved_script_policy(&self, pov_daa_score: u64) -> ScriptPolicy {
+        if matches!(self.pq_enforcement, PqEnforcementMode::Consensus) && pov_daa_score >= self.pq_activation_daa_score {
+            ScriptPolicy::PQ_ONLY
+        } else {
+            ScriptPolicy::LEGACY
+        }
+    }
+}

@@ -1,0 +1,568 @@
+# MISAKA Options
+
+## Publisher workspace and generated icons (2026-10-06)
+
+`#/me/repositories` now has Find / Type / Sort / New. `#/me/new` initializes a
+repository working copy (required owner/name, description up to 350 Unicode
+characters, README, None/Node/Python/Rust gitignore, None/MIT license). Files have
+SHA-256 content hashes. A wallet-scoped or explicitly device-local IndexedDB provider
+supports atomic, case-insensitive duplicate rejection, listing, reload and export.
+Repository and profile features are separate modules, not another large app block.
+
+**This is local creation, not completed public publication.** The envelope is
+`misaka/repository-draft/v1`, never an unsigned object labelled as the authoritative
+`misaka/repository/v1`. A wallet address is only a workspace scope, not a verified
+username or PALW identity. The form owner is frozen until reopened. Browser storage
+is not encrypted/custodial storage; no private keys belong here. Clearing browser
+data loses working copies. Export a backup; MIT's copyright holder is a placeholder
+to review before publication. Private is disabled until encryption/access control
+exists. Git history, hosting, Issues/PRs and Actions are not implemented by this form.
+
+No working-copy content is POSTed to any VPS, stored in a VPS database or silently
+published to peers. The future public provider must owner-sign the canonical
+manifest, verify the chain identity/controller link, publish files by content hash
+through the owner's `misaka-torrentd`, and serve a verifiable owner index from peers.
+Generic repository signing, seeding and public indexing are **not wired into New**
+yet. Existing owner-published model bundles keep their separate verified path.
+
+`profiles/avatar.js` implements `misaka-identicon:v1`: network+namespace+normalized
+identifier → non-cryptographic 128-bit mixing/PRNG → 5×5 symmetric grid → one SVG
+path. Images require no requests, image service, DB column, disk file or upload.
+The live Models Hub uses each model's immutable line ID, not its mutable title or
+catalogue owner label. Profiles use an EVM address (or an explicitly local seed).
+Different namespaces/networks are domain-separated; an identicon is decorative,
+can collide, and must never authenticate ownership.
+
+Tests: `node --test web/misaka-options/profiles/repository-workspace.test.mjs`.
+The live Hub and this checkout's legacy shell differ. Both get thin profile route
+integration; **do not deploy the legacy shell over the live Hub**. The exact live
+patch is [`deploy/20261006-repositories-identicon-hub.patch`](deploy/20261006-repositories-identicon-hub.patch).
+Its app baseline SHA-256 is
+`1ae826fbbac5f5878ad50124ae733076303eb5c134c5437904c00b9a916218cf`;
+HTML baseline is `e737c7aeb257a8e11cf1e24afb74e6aa8541d8c2757c0dcead91568d5f5cb217`.
+Deploy the changed profile modules/styles plus the patched Hub shell, preserve the
+existing public-profile/auth/readiness/publish assets, and version changed imports.
+VPS backup location for the live pre-change static shell:
+`/root/misakaoptions-ui-backups/20261006-repositories1/`. No user repository payload
+or signing key is included in that backup.
+
+## Production readiness (2026-10-06)
+
+`model-readiness.js` is a no-build, injected-RPC provider shared with the deployed Hub.
+Explore models replaces Opening (locked) with **Panel ready** and adds **Readiness**
+between Versions and Status. Panel ready is `getPalwModel.readySeats`: current
+chain-confirmed readiness records, not an online-connection or distinct-operator count.
+Missing RPC evidence is a dash, never a fabricated zero.
+
+Ready requires a successful `getPalwProducerFacts` response with `withBond: true`,
+`available: true`, `bondKnown: true` and an explicitly empty `notReadyReason`.
+The provider inspects the line owner's bond and up to 16 discovered Panel bonds;
+it is not an exhaustive census of external producers. It does not infer readiness
+from market Open, Active, quorum count, or historical Final. Even the built-in floor
+must use the node's verdict: its Panel quorum exception makes a universal seat-count
+gate incorrect. A confirmed refusal is Not ready; missing proof is Unknown or
+Registered only. Ready means current eligibility for an inspected bond, not that
+a producer is actually running, every proposed block will be accepted, or a future
+claim is guaranteed to reach Final.
+
+Final counts come from `getPalwClassEconomics`' retained ledger (or its `claimsFinal`
+fallback). Reward recorded means a producer leg was named/vested, not proof of a
+spendable payout. These are class-level retained counters, not lifetime totals.
+Markets and membership benefits remain independent.
+
+Reads do not delay initial table rendering. Panel counts and Final history render
+before producer probes finish; class/probe concurrency is bounded, with an in-memory
+45-second freshness limit and 20-second minimum refresh interval. Nothing is stored
+in an authoritative VPS database. Phones retain Model / Price / Holders +24 h columns
+and a compact eligibility, Final and Panel caption under the name; Description stays hidden.
+
+Tests: `node web/misaka-options/model-readiness.test.cjs`.
+
+The public Hub currently has a newer `app.buy6.js`/HTML shell than this checkout's
+legacy `app.js`. Do **not** replace its shell wholesale with this directory.
+The exact, narrowly scoped Hub integration is preserved in
+[`deploy/20261006-readiness-hub.patch`](deploy/20261006-readiness-hub.patch), based on
+SHA-256 `39ac2592989833716de1dbf634c5089b3e26b2a0ac635bef11ef8dd235e51fc0`.
+Load `model-readiness.css` after existing compact/light styles and
+`model-readiness.js` before the application. Preserve existing Hub/profile/auth assets
+and bump the application cache version. The legacy application also uses this provider.
+
+## Using the membership desk
+
+The 2026-09-13 interface puts model selection, three key metrics and the membership cost preview
+first. Choose a model from **Selected model**, or open **Explore all models**. Model selection
+supports the keyboard: arrow keys move between entries, Enter selects and Escape closes.
+
+Enter a whole membership quantity to preview its cost before connecting a wallet. The connection
+button is available both in the header and in the desk. Review the model's declared benefits and
+the quote before sending. Detailed network statistics, price comparisons and settlement rules
+expand on demand. On phones, the desk appears directly after the selected model; the navigation
+is available through **Menu**.
+
+For UI checks, serve this directory locally and open `?mock=1&selftest=1` for the existing
+calculation tests and simulated wallet. Public operation uses the original RPC configuration;
+never deploy a mock-mode redirect as the homepage.
+
+A static web front-end for the MISAKA chain's **model store** (ADR-0087, ADR-0088, ADR-0089,
+**ADR-0090**, **ADR-0095**), served at https://misakaoptions.com. What a model sells is a
+**membership**: access its owner declares on chain, and that the fold enforces where it can.
+
+**The site's words and the chain's words.** [ADR-0095](../../docs/adr/0095-a-position-is-a-membership-not-an-income.md)
+settled what a position is — a membership, never an income — and the front-end says so, in one
+mapping used everywhere:
+
+| the page says | the chain, the CLI and the ABI say |
+|---|---|
+| store | the line's market (`palw_model_market_v1`) |
+| membership | position (`decimals() == 0`) |
+| join / leave | `buy(minUnitsOut)` / `sell(unitsIn, minMskOutSompi)` |
+| seed (optional, before the first trade); below ADR-0162's fence: open the store, opening deposit | `seed()`, the seed |
+| virtual reserve (prices the curve, never paid) | the row's `virtual_sompi` (ADR-0162), `market()`'s twelfth word |
+| approval, 承認待ち · trading starts at approval | the class `Active` in status and lifecycle; a join before it is refused with reason 3 |
+| buy-back reserve, real reserve | the curve's MSK reserve (`msk_reserve`) |
+
+Each mapped word carries the chain's own name in a `title`, and every table of chain events still
+prints the facade's event name in its tooltip: the site never becomes a second vocabulary a reader
+cannot trace back to the explorer.
+
+**A model's store is open from the moment the model is added**
+([ADR-0162](../../docs/adr/0162-the-pair-opens-on-a-virtual-reserve.md), past the
+`palw_model_virtual_v1` fence): the class's registration adds its founding line and founding a line
+adds the others, and each store opens on a **virtual reserve** of 10,000,000 MSK — a number the
+curve prices with, which no object ever pays to anyone — so nobody has to lock MSK for a store to
+exist. The store holds **500,000 whole memberships** (no fraction of one) at a first price of 20
+MSK, bought from the line's protocol curve and sold back to it, never transferred. **Joins start
+when the chain approves the model** — its class `Active` in status and in the registry's lifecycle
+(`ActiveLimited` and `Probation` do not count); until then the site shows the price and the floor
+beside **承認待ち · trading starts at approval** and does not offer a join. Leaving is never refused.
+A **seed** is optional: anyone may lock MSK into a store before its first trade; it deepens the pool
+and raises the floor, it is locked for good, it buys no membership, and it is **at the payer's
+risk** (a model the chain never approves never trades, and its seed stays locked). 5 % of every MSK
+leg of a join or a leave is burned and 1 % (5 % past ADR-0114's fence) goes to the line's owner; the
+curve's product never falls, so the price never falls under (virtual reserve + seed) / 500,000.
+**No holder is ever paid** (ADR-0091).
+
+Below that fence — every network until one arms it — a store is **opened by somebody paying** at
+least the least seed (100,000 MSK; 1,000,000 past ADR-0120's fence) into the model's line
+(ADR-0090): the whole deposit becomes the curve's reserve, fee-free, locked for good, and whoever
+pays it receives no membership. The site no longer offers that deposit: on such a network a line
+with no store reads **No market here yet** and nothing can be sent to it from the page (a store
+already opened that way trades as before; `misaka palw model-seed` still opens one from a bond).
+The site reads which of the two a node runs from the node itself (see [How it reads the
+chain](#how-it-reads-the-chain)).
+
+This site reads the store through a node (the Kaspa-style wRPC and the EVM's read precompiles),
+quotes with the chain's own curve arithmetic, and sends every move through the EVM writer from the
+EIP-1193 wallet the user picks (MISAKA Wallet, MetaMask, or any other the browser has; see [The
+wallet](#the-wallet)).
+
+**Every figure on screen is an RPC reply or the ADR-0090 arithmetic applied to a market row, or a
+dash.** Nothing is estimated or invented, and there is no server side: four static files.
+
+## Files
+
+| file | what it is |
+|---|---|
+| `index.html` | the shell: nav (Store, My memberships, Models, Rankings, List a model, How it works), banner, main, footer, toasts |
+| `app.js` | everything else, plain ES2020 (no build): the curve arithmetic (BigInt port of `consensus/core/src/palw_model_market_v1.rs` as amended by ADR-0090 and ADR-0162), keccak-256 and BLAKE2b-512 (selectors, event topics, facade addresses, EVM holder ids), a wRPC client (JSON over WebSocket), an EVM JSON-RPC client with hand-rolled ABI encoding for the native doors, the wallet flow, the seed panel (ADR-0162's optional seed), the membership card, the pages, and a canvas price chart |
+| `style.css` | dark theme, teal accent, dense layout; responsive down to 380 px |
+| `config.js` | the only file you need to edit: endpoints, chain id, network name, fallback class ids, explorer and docs URLs |
+| `mock.js` | loaded **only** with `?mock=1`: a simulated node and wallet for demos and screenshots (see below) |
+| `screenshots/` | `store.png` (an open store), `store-not-open.png` (the opening panel), `list-a-model.png` (the checklist), `models.png`, `rankings.png`, `memberships.png`, taken in mock mode at 1440 px wide on 2026-09-08 — before ADR-0162, so they show the seeded-store world and its opening panel, which the site no longer has; the mock world is now past the fence |
+
+No external dependencies, no CDN, no fonts, no build step. `app.js` is about 340 KB unminified.
+
+## Configure
+
+Edit `config.js`:
+
+```js
+window.MISAKA_CONFIG = {
+  WRPC_URL: "",                 // "" = derive (wss|ws)://<this host>/kaspa from the page's origin
+  EVM_RPC_URL: "/evm",          // same-origin path proxied to a node's eth JSON-RPC (port 8545)
+  CHAIN_ID: "0x4D534B",         // the MISAKA EVM lane, frozen in ADR-0020
+  NETWORK_NAME: "testnet-12",
+  CLASS_IDS: [],                // fallback class ids (128 hex) when the registry window is not armed
+  EXPLORER_URL: "https://misakascan.com",
+  POLL_MS: 10000,               // store page refresh cadence
+  LOG_LOOKBACK_BLOCKS: 5000,    // eth_getLogs window for settlement events (node cap: 10000)
+  ADR_URL: "https://github.com/MISAKA-BTC/misakas/tree/main/docs/adr",
+  DOCS_URL: "https://github.com/MISAKA-BTC/misakas/tree/main/docs",  // the runbooks the List a model page links
+  WALLET_URL: "https://wallet.misakascan.com"   // optional: where the wallet chooser sends a browser without MISAKA Wallet
+};
+```
+
+`EVM_RPC_URL` is resolved against the page URL and handed to the wallet by
+`wallet_addEthereumChain`, so it must be an `https://` URL (or `http://localhost`) that the user's
+browser can reach; a relative path on an https site is fine.
+
+The live deployment (misakaoptions.com, 2026-09-05) reads both endpoints off the explorer host:
+`WRPC_URL: "wss://misakascan.com/kaspa"` and `EVM_RPC_URL: "https://misakascan.com/evm"`. The
+browser reaches them directly; the site's own host proxies neither.
+
+Known class ids on testnet-12 (its genesis classes, `docs/history/networks/testnet-12/testnet-12-regenesis-2026-09-23.md`;
+`getPalwClasses` lists them live), usable as `CLASS_IDS` while the registry window is dormant:
+
+```
+ebf44d0aa09ff7d1310a7855ab4005c275cdce557e32c269b0f3a984ea80ca73ad1ea0c9b1c0539c8ae04abb5fe24399e67e05bb0895a3dee82253e772246d01  Qwen2.5-1.5B (graph-v7, 8192)
+74c67e63d9c03daa05880c5d8a47b354ca20e952b1a2d49c107abe14f890a9c50790371bb715c7cea33ae8ac9213a3a63da409070cb2c98b8e861598db902f7a  Qwen2.5-1.5B (graph-v7, 2097152, held)
+f1c5635c6e47e96e7af864789c94523335dc56584af297cb8cc19021c228b897bee1a50145597e45f8ca2727349bf4aa352a98cc05274b7f059a176642f623c8  PALW-BASE-0 (the floor)
+```
+
+The testnet-11 ids were `4277d84f…` (Qwen2.5 A16 graph-v5) and `5bd9ae3d…` (Qwen3.6-35B-A3B).
+
+A class's founding line has the class id as its line id, so each of these is also a line id
+(`#/store/<id>`, `#/line/<id>`, `#/add/<id>`).
+
+## Serve
+
+Any static file server works. The site expects two same-origin proxies so that the browser talks
+to one host: `/kaspa` (WebSocket, wRPC JSON) and `/evm` (HTTP POST, eth JSON-RPC).
+
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name misakaoptions.com;
+    # ssl_certificate / ssl_certificate_key ...
+
+    root /var/www/misaka-options;      # index.html, app.js, style.css, config.js, mock.js
+    index index.html;
+    location / { try_files $uri /index.html; }
+
+    # wRPC: kaspad --rpclisten-json=127.0.0.1:18110 (JSON encoding over WebSocket)
+    location /kaspa {
+        proxy_pass http://127.0.0.1:18110;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_read_timeout 3600s;
+    }
+
+    # EVM JSON-RPC: only if a node runs on THIS host. The deployment at misakaoptions.com has
+    # none, so `EVM_RPC_URL` names the explorer's endpoint (https://misakascan.com/evm) instead
+    # and this block is absent there. That endpoint is served by the testnet-11 node started with
+    # `--evm-rpc-listen=127.0.0.1:8545`, proxied CORS-open and rate-limited (10 r/s, burst 20).
+    location /evm {
+        proxy_pass http://127.0.0.1:8545/;
+        proxy_http_version 1.1;
+        proxy_set_header Content-Type application/json;
+        add_header Cache-Control "no-store";
+    }
+}
+```
+
+Set `Cache-Control: no-cache` (or use versioned filenames) on `app.js` and `mock.js` when you
+deploy updates: the files carry no cache headers of their own, and a browser that keeps an old
+`mock.js` next to a new `app.js` shows a mock world the app does not expect.
+
+For a local look: `cd web/misaka-options && python3 -m http.server 9471`, then open
+`http://127.0.0.1:9471/?mock=1`.
+
+## What each page does
+
+Hash routes: `#/store/<lineId>`, `#/portfolio`, `#/lines`, `#/line/<lineId>`, `#/leaderboard`,
+`#/add[/<classId>]`, `#/docs`. `#/trade/<id>` is the store's former name and is redirected
+(`location.replace`, no history entry), so links printed before the rename still land.
+
+- **Store** (default, `#/store/<lineId>`). Model selector (name from the wRPC line row, symbol from
+  the facade's `symbol()`, fallback `MP-<8 hex>`); a header strip that leads with what the model
+  **is and is used for** — membership price, members hold, declared tiers, paid inferences, current
+  version — before the market's own numbers (bought by mining, 24 h, trading — open, closed to new
+  members, or 承認待ち · trading starts at approval — the virtual reserve, the real reserve, the
+  price floor, the seed and who first paid it, owner, roots in force). Three tabs, opening on **Use** (the fold's claim
+  counts and the version table), then **Versions**, then **Price history** (a canvas chart of curve
+  prices sampled every `POLL_MS` while the page is open and folded with the facade's
+  `Bought`/`Sold` events, persisted per line in `localStorage`).
+  A **price list** (what 1/10/100/1,000/10,000 memberships cost and what the store pays back for the
+  same sizes, all from the ADR-0090 arithmetic on the market row) and recent joins and leaves.
+  Beside them, the **membership card** (ADR-0095 §4.10: the tiers in effect, what each grants in
+  plain words with the chain's bit name in the tooltip, the lead and tenure each asks for, any
+  pending weakening, and the lapse — the reason to join belongs before the join; where a node serves
+  no declaration the card says so rather than showing nothing), and under it the **desk**
+  (Join/Leave, amount, the floor, the quote's 5 % burn, 1 % owner leg and 94 % net, quoted by the
+  node's AMM precompile when the EVM RPC is armed and by local arithmetic otherwise). Bottom tabs:
+  My memberships, My activity (transactions sent from this browser, followed through
+  `eth_getTransactionReceipt` and then the settlement event at the next block), Recent joins and
+  leaves, Model details.
+  **Past ADR-0162's fence every line has a store**, priced from the model's addition. Until the
+  class is approved the desk says **承認待ち · trading starts at approval** above the Join/Leave
+  switch and refuses to send a join (the fold would refuse it with reason 3); Leave is never held
+  back. Under the desk, while the store has not traded, the **seed panel** offers the optional seed:
+  what it does (deepens the pool, raises the floor by seed / 500,000, locked for good, no
+  membership, at the payer's risk, refused after the first trade), an MSK input (any amount above
+  zero), the price and floor it would leave, the approval status, and a **Seed** button that sends
+  the facade's `seed()` with `value = seed sompi × 10^10 wei`.
+  **Below the fence a line with no store has no desk and no opening step**: the page says "No
+  market here yet" (the network has not armed the virtual reserve, so the store does not open with
+  the model), and the price list, the chart and the quote show a dash rather than quote a curve that
+  does not exist. A store a seed opened before the fence (ADR-0090) trades on the desk as before.
+- **List a model** (`#/add`). The path from a registered class to a store people can join, as a
+  checklist with live status where the chain can answer: (1) register the class outside the browser;
+  operators should use `misaka --network testnet-11 model add <catalog-model> --artifact <file>`,
+  while the page also records the lower-level developer primitives, (2) the store — past ADR-0162's
+  fence it is open at once, nothing to deposit, with the optional seed panel (a line-id input
+  defaulting to the class id, which is the founding line's id); below it, "no market here yet", (3)
+  approval (the class's status as the chain names it, `Registered { activation_daa }` /
+  `Active` / `Frozen` / `Dormant`, the registry's lifecycle where the node serves it, the chain's
+  DAA now, and the attempt / free-prompt lane certification) — trading starts here, (4) members —
+  and the owner's last step, declaring what a membership gets them with `misaka palw line-benefits`.
+- **Models** (`#/lines`). Every line of every known class, sortable, **use first**; past the fence
+  every line shows its price (and 承認待ち until its class is approved); below it, a line with no
+  store reads "no market" in place of a price.
+- **Line** (`#/line/<lineId>`). The row, the tiles (use first), roles, the membership card, versions
+  with chain-counted usage and declared hashes/evaluations (labelled *declared*), proposals, roots
+  in force.
+- **My memberships** (`#/portfolio`). The connected account's EVM-namespace memberships (whole
+  numbers) with what the curve would pay back if it left every one right now, MSK balance, joins and
+  leaves, activity.
+- **Rankings** (`#/leaderboard`). Models ranked by **use** (the default), members, what mining
+  bought back, the real reserve, or the seed; the table shows the floor beside them. No benchmark
+  scores: the chain refuses a quality oracle, and declared evaluations are shown only on line pages.
+  A line with no market (below the fence) ranks last.
+- **How it works** (`#/docs`). What a membership gets you and what the fold enforces of it
+  (ADR-0095), then the mechanism: a store opens with its model on the virtual reserve and trades
+  from the model's approval (ADR-0162), the optional seed and its risk, whole memberships, the
+  curve over the virtual plus the real reserve, the floor that only rises, use buying memberships
+  back (ADR-0091), the fees with ADR-0162 §5's worked table, no transfer, and that no holder is
+  ever paid — with links to the ADRs.
+
+## The arithmetic (ADR-0090, ADR-0162)
+
+Ported exactly, in BigInt, from `consensus/core/src/palw_model_market_v1.rs`:
+
+- `PALW_MODEL_POSITION_UNITS_V1 = 1` (a position is the unit; `decimals() == 0`),
+  `PALW_MODEL_POSITION_SUPPLY_V1 = 500_000`, `PALW_MODEL_MARKET_VIRTUAL_SOMPI_V2 = 10,000,000 MSK`
+  (ADR-0162's `V`), `PALW_MODEL_SEED_MIN_SOMPI_V1 = 100,000 MSK` (the least seed below the fence
+  only; the node serves the one in force as `seedMinSompi`, zero past the fence), burn 50 ‰, owner
+  leg 10 ‰ (50 ‰ past ADR-0114's fence; the node serves the schedule in force).
+- Every row carries its own virtual reserve `V` (`virtualSompi`): 10,000,000 MSK for a market that
+  opened past ADR-0162's fence, **0** for one a seed opened before it, which is therefore priced
+  exactly as it always was. `X = V + reserve`; price = `X / positions`. A row with `X == 0` is **not
+  a market**: no price, no quote (the fold's own guard; below the fence, a line nobody seeded).
+- **Opening** (past the fence, at the model's addition): `V`, `reserve = 0`, `positions = 500,000`,
+  first price `V / 500,000` = 20 MSK. **Seed** of `s` before the first trade: `reserve += s`,
+  `seed += s`, fee-free, no position; refused after the first trade. Below the fence a seed of at
+  least the least seed makes the row `reserve = seed, positions = 500,000`.
+- **Buy** of `msk`: `net = msk − burn − leg`, `K = X × positions` of the current row,
+  `X′ = X + net`, `positions′ = ⌈K / X′⌉`, `out = positions − positions′` (refused when 0).
+- **Sell** of `n`: `positions′ = positions + n` (≤ 500,000 less the retired), `X′ = ⌈K / positions′⌉`,
+  `gross = X − X′`, refused when it is 0 or more than `reserve − seed` (nobody is paid out of `V`
+  or a seed; for a row with `V = 0` that bound never binds), fees on the gross, net paid.
+- **Floor**: `⌈K / (500,000 − retired)⌉ / (500,000 − retired)`, the price with every membership back
+  in the curve — `(V + seed) / 500,000` at the opening, and it only rises.
+- The depth table's buy side inverts the curve to find the least gross MSK that releases N whole
+  positions (verified by re-quoting).
+
+## How it reads the chain
+
+wRPC (JSON over WebSocket, one persistent socket, requests multiplexed by id):
+`getBlockDagInfo`, `getPalwModelLines(classId)`, `getPalwModelLine(lineId)`,
+`getPalwModelMarket(lineId)` (now with `seedSompi`, `seededBy`, `seedMinSompi`, `classStatus`,
+`classLifecycle`, `marketRefusal`, and ADR-0162's `virtualSompi` — the row's own virtual reserve;
+the request also carries `classId` for a pre-ADR-0088 node, see below),
+`getPalwModelVersion(lineId, version)`, `getPalwModelProposals(lineId)`,
+`getPalwModelPositions(holder)`, and on the List a model page `getPalwProducerFacts(classId)` for the
+free-prompt certification. Wire format:
+`{"id":n,"method":"getPalwModelMarket","params":{"lineId":"<128 hex>"}}` in,
+`{"id":n,"method":"...","params":{...result...}}` out (`error` on failure). Integer literals of 16+
+digits are re-quoted before `JSON.parse` so u64 sompi values stay exact.
+
+EVM JSON-RPC (`eth_call` against the native doors, standard `eth_*` otherwise):
+
+| address | used for |
+|---|---|
+| registry `0x…F010` | `chainDaa()` (32 bytes back = the fence is armed; empty = dormant), `classCount/classAt/classRow` (status code, share, registrant), `certified(class, lane)`, `linesOfCount/lineOfClassAt`, `line`, `rootsInForceCount`, `facadeOf`, `usage` |
+| AMM `0x…F011` | `market` (`exists` false and a zero row for a line with no market; past ADR-0162's fence twelve words, the twelfth the row's own virtual reserve), `price`, `quoteBuy`, `quoteSell` (past the fence its first word is the gross MSK out, the 2026-09-25 Position review's #2), `constants` (its third word is `seedMinSompi` below the fence and the virtual reserve `V` past it) |
+| position `0x…F012` | `balanceOfAddress`, `holderIdOf` |
+| the line's facade `0x4d50…` | `symbol()`, and the three writes `buy(minUnitsOut)` payable, `sell(unitsIn, minMskOutSompi)`, `seed()` payable |
+
+64-byte ids travel as two `bytes32` words, high half first; MSK is in sompi everywhere except a
+buy's or a seed's `msg.value` (wei, a multiple of 1e10); positions are whole numbers. Settlement
+events are read with `eth_getLogs` on the facade over `LOG_LOOKBACK_BLOCKS`, filtered by the
+`Bought/Sold/Seeded/Refused` topics and, for an account, the holder topic.
+
+**Which world a node is in** (ADR-0162): the site reads a node as past the virtual-reserve fence when
+the wRPC serves `seedMinSompi` 0 for a market with a virtual reserve, or when the AMM window's
+`market()` answers twelve words. Past it every line is a market from its creation, a seed is the
+optional deepening, and a join waits for the class's approval; otherwise the site reads the
+ADR-0090 world (a line is a market once a seed opened it) and offers no opening deposit.
+
+Degradation, in order: a market row comes from the wRPC and, failing that, from the AMM window
+(which does not carry the seed or the seeder: those show as a dash); lines come from the wRPC, then
+the registry window, then a bare founding line per configured class; the facade address is read
+from `facadeOf` and, until confirmed, derived locally (BLAKE2b) and shown as *unconfirmed* (nothing
+is sent to an unconfirmed facade); the holder id is read from `holderIdOf` or
+derived locally the same way. If neither RPC answers, every figure is a dash and a banner says so;
+the layout always renders. A page's poll that fails logs the failure to the console rather than
+swallowing it.
+
+## The wallet
+
+**Which wallet.** The site no longer takes whatever sits on `window.ethereum`: that global belongs
+to whichever extension claimed it (with Phantom installed, Phantom's own "MetaMask or Phantom?"
+prompt, which never lists MISAKA Wallet). It listens for EIP-6963 announcements (`eip6963:announceProvider`,
+collected by `info.uuid`, one row per `rdns`) and dispatches `eip6963:requestProvider` at startup and
+again whenever the chooser opens. A wallet that announces nothing is still reached through the legacy
+globals: `window.misaka` (when `isMisakaWallet`) as "MISAKA Wallet", and `window.ethereum`, when no
+announcement is that object, as "Browser wallet". **Connect** goes straight to the wallet when there
+is exactly one; with several (or none) it opens the chooser: MISAKA Wallet first, marked *Recommended
+— tops up from your UTXO balance automatically*, then the others in the order they announced, each
+with the icon it announced (only an image `data:` URI, only ever as an `<img src>`; the name only
+ever as text). Without MISAKA Wallet in the browser its row is still first, as a link to
+`WALLET_URL` (https://wallet.misakascan.com) instead of a wallet to connect. The wallet the user
+picks is asked for accounts and only then becomes the site's wallet for the session (its
+`accountsChanged`/`chainChanged` listeners replace the last wallet's); it is remembered by rdns under
+`mo:wallet:choice` and taken again without asking on the next visit while it is still announced
+(and reconnected, unless the user disconnected). Connected, the header button shows the wallet's
+icon (not on a phone) and the address and opens a menu: *Change wallet*, *Copy address*, *Disconnect* (and *Switch to
+the MISAKA chain* when the wallet is elsewhere). `wallet.topsUp()` follows the chosen wallet: only a
+MISAKA Wallet in use lifts the EVM-balance refusals, not one merely installed next to it.
+
+Connect asks the chosen provider for accounts, then `wallet_switchEthereumChain` to `0x4D534B`
+and, on 4902, `wallet_addEthereumChain` (name "MISAKA <network>", currency MSK with 18 decimals,
+rpc = the resolved `EVM_RPC_URL`, explorer = `EXPLORER_URL`). A buy is `eth_sendTransaction` to the
+facade with `value = gross sompi × 1e10` and `data = buy(minUnitsOut)`; a sell is `sell(unitsIn,
+minMskOutSompi)`; a seed is `seed()` with `value = seed sompi × 1e10` — any amount, and only
+before the store's first trade (after it the writer reverts `SeedAfterTrade()` at the call; a join
+on a model the chain has not approved reverts `ClassNotEligible()`). Gas is left to the wallet's
+estimate. No private key ever touches this site.
+
+A join is entered as a count of whole memberships; the site pays the least MSK that releases that many (`curve.buyCostForUnits`, the chain's own arithmetic), because the fold refunds no fraction of a membership. The site sends no floor (`minUnitsOut` / `minMskOutSompi` = 0): a move fills at the row's price when the fold applies it. A join that would release no membership, or a leave that would pay nothing, is refused by the fold itself and refunded. The fold quotes the action on the
+row *as it then stands* after the block's carrier-borne moves, so a floor that is too tight is
+refused rather than filled worse; a refused buy or seed is refunded at the next block, and the site
+shows the refusal reason from the `Refused` event (1 not armed, 2 line missing, 3 class or line
+not active — trading starts at approval, 4 releases nothing, 5 below your floor, 6 market missing /
+not seeded, 7 exceeds your position, 8 pays nothing, 9 other, 10 already seeded, 11 seed too small,
+12 class closed, 13 payout queue full, 14 seed after the first trade).
+
+## Self-test
+
+Open `?selftest=1` (any route): a box at the top of the page and the console report the checks:
+keccak-256 and BLAKE2b-512 against known vectors, the facade-address and EVM-holder-id
+derivations against values computed independently (Python `hashlib.blake2b` with the node's key
+domains), the `seed()` selector and the `Seeded` topic against an independent Keccak, the writer's
+action-3 data layout, and the curve against the golden numbers in `palw_model_market_v1.rs`'s
+tests (the ADR-0090 §4 table: from a market seeded with 100,000 MSK, first price 0.2 MSK; a buy of
+1,000 MSK burns 50, pays 10, puts 940 in the reserve and releases 4,656 positions at 0.20377757
+after; a second releases 4,570 (reserve 101,880); selling all 9,226 back pays 187,988,976,000
+sompi gross and 176,709,637,440 net, puts 500,000 positions back and leaves the reserve at
+100,000.11024 MSK; 0.1 MSK releases nothing and 0.22 MSK releases one; the product never falls and
+the reserve never falls under the seed; an unseeded row quotes nothing; a closed market refuses
+buys and honours sells), and the wallet chooser's ordering (MISAKA Wallet first, one row per rdns,
+the legacy globals as fallbacks, a non-image icon not drawn, a remembered wallet taken only while
+it is installed). 67 checks, all passing as shipped.
+
+## Mock mode
+
+`?mock=1` loads `mock.js`, which simulates the wRPC, the EVM RPC and the wallet in the page: three
+classes (the two testnet-11 class ids above, both `Active`, and a third, `Registered` with an
+activation DAA 300 blocks ahead, that flips to `Active` when the mock's clock reaches it), four
+lines (three seeded with real seeds of 250,000, 100,000 and 120,000 MSK, priced by the site's own
+curve port; the registered class's founding line with **no store**, so the opening panel and the
+List a model checklist have a subject), a tape of joins and leaves over the previous 26 hours, a
+block every 6 seconds with background moves and usage, and a wallet account holding 150,000 MSK
+(enough to open a store) and two memberships. A buy, a sell or a seed sent in mock mode goes through the real code path: the receipt
+appears in the next block, the fold's decision and the `Bought`/`Sold`/`Seeded`/`Refused` event
+one block later (a second seed on a seeded line is refused with reason 10; a buy on the registered
+class is refused with reason 3 until it activates). Mock data lives under its own `localStorage`
+prefix (`mo-mock:`) and never mixes with real data; a new mock world drops the samples and
+transactions an older mock world left there. The banner and the footer say "mock" whenever it is
+on. Nothing in mock mode is a chain fact; it exists for demos, screenshots and UI work.
+
+`?mock=1&mockwallet=misaka` makes the mock wallet pose as **MISAKA Wallet**: 5 MSK on the EVM account,
+the rest "on the post-quantum lane", and a send that tops the EVM account up by the shortfall plus a
+10,000-sompi gas reserve before it goes out — what the extension's automatic top-up does. It exercises
+`wallet.topsUp()`: for MISAKA Wallet the store does not refuse a join or an opening deposit on the
+EVM balance alone (the wallet moves what is missing inside the same confirmation and says so), and
+the desk says how much will be moved and that the claim takes about two blocks. Any other wallet
+(MetaMask) is still refused with "Insufficient MSK balance in the EVM account", because it cannot top up.
+
+`?mockwallet=` also takes a comma list, so the wallet chooser can be exercised without extensions:
+`misaka` (MISAKA Wallet, announced with EIP-6963 as `com.misakachain.wallet`), `misaka-legacy` (MISAKA
+Wallet reachable only through its global), `phantom` and `metamask` (announced as `app.phantom` and
+`io.metamask`, with plain lettered icons, not the real marks; neither tops up), `injected` (a wallet
+on `window.ethereum` that announces nothing: the "Browser wallet" row) and `none`. For example
+`?mock=1&mockwallet=misaka,phantom,metamask` lists three wallets, MISAKA Wallet first;
+`?mock=1&mockwallet=phantom,metamask` shows the "MISAKA Wallet — not installed" row; `none` shows the
+chooser with no wallet at all. All of them sign for the one mock account (5 MSK on the EVM lane when
+MISAKA Wallet is in the list, else 150,000), and in mock mode the chooser lists mock.js's wallets
+only: a real extension would sign on a real chain for a simulated one.
+
+## What is not available on the public network yet
+
+- On testnet-11 today the `palw_model_market`, `palw_model_lines` and `palw_model_evm` fences are
+  **dormant** (`None` on every preset). Every read is empty or synthesised: the wRPC answers
+  `getPalwModelMarket` for every registered class with an **unseeded** row (reserve 0, 500,000
+  positions, no price, `seedMinSompi` = 100,000 MSK), `getPalwModelLines` with the synthesised
+  founding line, and the EVM doors are empty accounts (`chainDaa()` returns no data). The site
+  detects this and shows "Market not armed on this network yet" while rendering the layout. When
+  the wRPC answers, every line reads as having no store and the opening panel appears with its
+  button disabled ("the store is not armed on this network: the facade is an empty account"), so a
+  deposit sent by hand would be refused or lost; when no market row can be read at all (the wRPC
+  down), the desk shows dashes and its button is disabled. Until the fences are armed (a release:
+  they enter the fingerprint) no store can be opened and nobody can join one.
+- **ADR-0095 has a fence of its own** (`palw_model_benefits`, `None` on every preset today), so no
+  line can declare what its memberships grant yet and `getPalwModelLine` serves no `benefits` word.
+  The membership card says exactly that instead of rendering an empty promise; it fills in on its
+  own once a node serves the field.
+- The public node behind misakascan.com (probed 2026-09-06) still runs a build from **before
+  ADR-0088/0090**: its `getPalwModelMarket` is keyed by `classId` (a request with only `lineId`
+  is answered with "request deserialization error") and its row carries a virtual reserve of
+  1,000 MSK, 100,000 positions of 10^6 units and no seed. The site sends both keys (`lineId` and
+  `classId`, the founding line's id being the class id; each build ignores the key it does not
+  know), reads such a row as **unseeded** (reserve 0, no price) and marks it `legacy`: position
+  counts and supply are shown as a dash rather than in the wrong unit, and the banner says so.
+  A node of this tree answers the ADR-0090 shape and everything above applies.
+- Below the fences there is no way to enumerate classes from the chain (the registry window is
+  the enumeration), hence `CLASS_IDS` in `config.js`.
+- **Names.** A line's name is a chain fact (`getPalwModelLine` serves it), but only from an
+  ADR-0088 node, and testnet-11's public node is older — so on the live site every name comes back
+  empty and a row used to read as its own derived symbol twice (`MP-4277d84f MP-4277d84f`).
+  `config.js`'s `MODELS` is the fallback catalogue: a Hugging Face-style repository title, what the
+  chain registered of it (`A16 dense · graph-v5 · n_ctx 512`), the parameter count and the
+  artifact. A title from there is marked ⓘ and says, on hover, that it is the site's word and the
+  id below is the chain's. A chain-served name always wins; a line the catalogue does not know
+  still reads as its symbol.
+- ADR-0091: the market row carries `buybackSompi` (MSK the mining reward has bought into the pair)
+  and `retiredUnits` (positions the chain holds for good). Both travel on the wRPC row and as the
+  AMM window's two appended words, so a node from before ADR-0091 answers nine words and the site
+  shows a dash rather than a zero. The site never computes them: `curve.buyback` exists only so the
+  self-test can check the chain's arithmetic and so `mock.js` can simulate a mined pair.
+- The AMM window's `market()` does not carry the seed or the seeder; when the wRPC is down those
+  two cells are a dash even for a seeded line.
+- Attempt-lane certification is served by the registry window only (`certified(class, 0)`); the
+  wRPC serves the free-prompt lane (`getPalwProducerFacts.fpCertified`). With the window dormant
+  the attempt lane is a dash on the List a model page.
+- The `CLASSICAL-ECC` label for EVM-held positions (ADR-0089 E12) is not served by the RPC yet;
+  the site states the namespace in copy instead.
+- Historical `eth_call` against the doors is not supported by the node (the fold is kept at the
+  tip), so price history is sampled by the browser and completed from settlement events; the
+  24 h change is computed from those samples and is a dash until the browser has seen enough.
+- Explorer links: `EXPLORER_URL` is linked as a site; per-transaction deep links are not built
+  because the explorer's EVM routes are not pinned anywhere in the tree.
+
+## Choices made without asking
+
+- One persistent wRPC socket with requests multiplexed by id (reconnects lazily) rather than one
+  socket per request; both shapes are accepted by the node.
+- Prices are shown in MSK per position with up to 8 decimals in the header and 6 in dense tables;
+  position counts are integers everywhere (an input with a decimal point is refused with a
+  message, not rounded).
+- "Members hold" shows memberships currently outside the curve (supply minus the curve's units);
+  the cumulative `soldUnits` is in the tooltip and in Model details.
+- "Not open" is decided by `reserve == 0` (the fold's own quote guard), never by the absence of
+  a `seedSompi` field, so an old node and the AMM window read the same way.
+- The opening panel defaults to the least seed and refuses (before the wallet) a value under it, an
+  already-open store, a frozen or dormant class, an unconfirmed facade, and an insufficient balance;
+  the same panel serves the store page and the List a model page. An opening is recorded in My
+  activity as its own action kind and settles on the `Seeded` event.
+- The List a model page reads the class status from the wRPC market row's `classStatus` string
+  (parsed for `activation_daa`) and, when the doors are armed, from `classRow`; `#/add/<classId>`
+  opens the checklist on a class, and the last class checked is remembered per browser.
+- A join on a line whose class is not `Active` is explained by the class status ("Registered,
+  activates at DAA n: buys wait for Active") rather than by the RPC's `closedToBuys` flag, which
+  the node sets for both a retired line and a class that is not Active.
+- The store page polls every 10 s; models/rankings every 30 s; the List a model page every 15 s;
+  pending transactions every 12 s. A poll that fails is logged, not swallowed.
+- `screenshots/list-a-model.png` is taken 1440 px wide and taller than the others so the whole
+  checklist is in one image.

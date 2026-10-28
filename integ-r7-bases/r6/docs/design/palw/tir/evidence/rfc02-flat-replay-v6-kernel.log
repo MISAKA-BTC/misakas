@@ -1,0 +1,60 @@
+    Blocking waiting for file lock on artifact directory
+   Compiling misaka-palw-kernel v1.1.0 (/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/misaka-palw-kernel)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 05s
+     Running unittests src/lib.rs (target/debug/deps/misaka_palw_kernel-3e75f80c67bc7227)
+
+running 51 tests
+test element::tests::flat_gather_preserves_results_and_dependency_reads_for_all_dtypes_and_ranks ... ok
+test element::tests::flat_gather_refuses_invalid_indices_before_table_reads_and_preserves_missing_operands ... ok
+test element::tests::nonflat_gather_axes_and_batches_still_match_the_independent_reference ... ok
+test element::tests::vocabulary_sized_flat_lookup_roots_match_the_frozen_coordinate_evaluator ... 151936-output lookup + both commitment trees: frozen median 106676625 ns, flat median 25970750 ns; six alternating trials, all roots equal
+ok
+test flat_court4::tests::flat_court_all_hostile_nested_counts_and_tags_are_bounded_before_bodies ... ok
+test flat_court4::tests::flat_court_all_nonstate_primitives_match_reference_and_convict_tail_falsification ... ok
+test flat_court4::tests::flat_court_authenticates_registered_weights_and_rejects_borrowed_source_or_profile ... ok
+test flat_court4::tests::flat_court_binds_segment_boundary_and_authenticates_public_token_tiles ... ok
+test flat_court4::tests::flat_court_convicts_every_leaf_and_merged_tail_without_producer_output_values ... ok
+test flat_court4::tests::flat_court_encoder_ids_count_and_padding_are_job_bound ... ok
+test flat_court4::tests::flat_court_prices_large_declarations_without_allocating_tensors_and_refuses_large_lines ... ok
+test flat_court4::tests::flat_court_recomputes_batched_nonzero_axis_gather_and_ignores_duplicate_data_reads ... ok
+test flat_court4::tests::flat_court_semantic_refusal_requires_authenticated_operands_and_wide_sources_remain_v3 ... ok
+test flat_court4::tests::flat_court_state_and_history_bind_previous_position_and_initialization ... ok
+test flat_court4::tests::flat_court_wire_checks_every_count_truncation_and_surplus_before_allocation ... ok
+test flat_court5::tests::flat_v5_all_25_primitive_samples_and_all_tail_leaves_preserve_reference_courts ... ok
+test flat_court5::tests::flat_v5_all_fault_codecs_refuse_truncations_surplus_versions_and_nested_counts ... ok
+test flat_court5::tests::flat_v5_decode_binds_delivered_index_position_ties_and_logits_without_producer_values ... ok
+test flat_court5::tests::flat_v5_first_wide_lie_and_small_whole_relation_need_no_producer_values ... ok
+test flat_court5::tests::flat_v5_history_crosses_small_whole_to_large_leaf_and_sliding_window_with_bound_sources ... ok
+test flat_court5::tests::flat_v5_malformed_headers_convict_type_shape_overflow_and_wrong_grammar_only_when_bound ... ok
+test flat_court5::tests::flat_v5_small_whole_courts_cover_all_dtypes_and_scalar_rank ... ok
+test flat_detect5::tests::flat_stream_verifier_all_25_primitives_localizes_without_output_values ... ok
+test flat_detect5::tests::flat_stream_verifier_encoder_uses_job_ids_padding_and_count ... ok
+test flat_detect5::tests::flat_stream_verifier_generated_ids_feed_later_state_and_history ... ok
+test flat_detect5::tests::flat_stream_verifier_requires_public_material_and_authenticates_coordinates ... ok
+test flat_detect5::tests::flat_stream_verifier_small_nodes_decode_ties_and_wrong_registered_model ... ok
+test flat_detect5::tests::flat_stream_verifier_wide_internal_and_small_downstream_relations ... ok
+test flat_replay6::tests::replay_v6_acquired_tensor_metadata_must_match_even_with_its_registered_root ... ok
+test flat_replay6::tests::replay_v6_budget_rejects_before_acquired_model_or_public_access ... ok
+test flat_replay6::tests::replay_v6_hash_and_history_limits_are_explicit_and_stop_before_delegation ... ok
+test flat_replay6::tests::replay_v6_huge_acquired_parameters_are_priced_without_images ... ok
+test flat_replay6::tests::replay_v6_lifetime_counts_cached_reads_and_withheld_retries ... ok
+test flat_replay6::tests::replay_v6_tensor_payload_envelope_covers_frozen_primitive_and_history_traces ... ok
+test flat_replay6::tests::replay_v6_tensor_prices_use_i128_and_bind_unchanged_v5_scope ... ok
+test flat_scope5::tests::scope_v5_bounds_every_position_leaf_primitive_and_mixed_history_grammar ... ok
+test flat_scope5::tests::scope_v5_charges_constant_sort_reference_work_and_refuses_oversized_lines ... ok
+test flat_scope5::tests::scope_v5_deduplicates_layer_templates_but_prices_every_state_instance ... ok
+test flat_scope5::tests::scope_v5_encoder_scope_binds_job_mode_axis_and_single_position ... ok
+test flat_scope5::tests::scope_v5_includes_earlier_small_row_paths_and_earlier_127_element_tails ... ok
+test flat_scope5::tests::scope_v5_prices_huge_job_extents_and_public_parameter_shapes_without_images_or_position_arrays ... ok
+test flat_scope5::tests::scope_v5_rederives_all_declarations_and_binds_program_profile_extent_and_occurrences ... ok
+test merkle4::tests::flat_layout_merges_every_short_tail_and_covers_ranks_without_small_leaves ... ok
+test merkle4::tests::flat_material_prices_exact_retention_leaf_carriers_and_streaming_scratch ... ok
+test merkle4::tests::flat_openings_refuse_borrowed_metadata_values_coordinates_and_extra_paths ... ok
+test merkle4::tests::flat_public_descent_finds_every_divergent_leaf_within_the_derived_reply_bound ... ok
+test merkle4::tests::flat_streaming_tree_and_independent_oracle_match_all_dtypes_tails_and_odd_trees ... ok
+test merkle4::tests::flat_wire_bounds_counts_before_allocation_and_preserves_exact_borsh ... ok
+test merkle5::tests::flat_v5_internal_all_dtypes_and_extreme_wide_values_match_independent_oracle ... ok
+test merkle5::tests::flat_v5_wide_descent_and_strict_carriers_preserve_tail_and_unknown_version_refusals ... ok
+test seg_scope::tests::flat_lookup_price_changes_only_element_work_and_keeps_conservative_disclosure ... ok
+
+test result: ok. 51 passed; 0 failed; 0 ignored; 0 measured; 95 filtered out; finished in 3.60s

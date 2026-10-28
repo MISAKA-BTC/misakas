@@ -1,0 +1,2183 @@
+{
+ "prophetnet.decoder.embeddings_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.embeddings_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.0.cross_attn.key_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.0.cross_attn.key_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.0.cross_attn.out_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.0.cross_attn.out_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.0.cross_attn.query_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.0.cross_attn.query_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.0.cross_attn.value_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.0.cross_attn.value_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.0.cross_attn_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.0.cross_attn_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.0.feed_forward.intermediate.bias": {
+  "dtype": "BF16",
+  "shape": [
+   4096
+  ]
+ },
+ "prophetnet.decoder.layers.0.feed_forward.intermediate.weight": {
+  "dtype": "BF16",
+  "shape": [
+   4096,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.0.feed_forward.output.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.0.feed_forward.output.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   4096
+  ]
+ },
+ "prophetnet.decoder.layers.0.feed_forward_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.0.feed_forward_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.0.self_attn.key_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.0.self_attn.key_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.0.self_attn.out_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.0.self_attn.out_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.0.self_attn.query_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.0.self_attn.query_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.0.self_attn.relative_pos_embeddings.bias": {
+  "dtype": "BF16",
+  "shape": [
+   512
+  ]
+ },
+ "prophetnet.decoder.layers.0.self_attn.relative_pos_embeddings.weight": {
+  "dtype": "BF16",
+  "shape": [
+   512,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.0.self_attn.value_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.0.self_attn.value_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.0.self_attn_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.0.self_attn_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.1.cross_attn.key_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.1.cross_attn.key_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.1.cross_attn.out_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.1.cross_attn.out_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.1.cross_attn.query_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.1.cross_attn.query_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.1.cross_attn.value_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.1.cross_attn.value_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.1.cross_attn_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.1.cross_attn_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.1.feed_forward.intermediate.bias": {
+  "dtype": "BF16",
+  "shape": [
+   4096
+  ]
+ },
+ "prophetnet.decoder.layers.1.feed_forward.intermediate.weight": {
+  "dtype": "BF16",
+  "shape": [
+   4096,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.1.feed_forward.output.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.1.feed_forward.output.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   4096
+  ]
+ },
+ "prophetnet.decoder.layers.1.feed_forward_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.1.feed_forward_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.1.self_attn.key_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.1.self_attn.key_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.1.self_attn.out_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.1.self_attn.out_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.1.self_attn.query_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.1.self_attn.query_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.1.self_attn.relative_pos_embeddings.bias": {
+  "dtype": "BF16",
+  "shape": [
+   512
+  ]
+ },
+ "prophetnet.decoder.layers.1.self_attn.relative_pos_embeddings.weight": {
+  "dtype": "BF16",
+  "shape": [
+   512,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.1.self_attn.value_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.1.self_attn.value_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.1.self_attn_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.1.self_attn_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.10.cross_attn.key_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.10.cross_attn.key_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.10.cross_attn.out_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.10.cross_attn.out_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.10.cross_attn.query_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.10.cross_attn.query_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.10.cross_attn.value_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.10.cross_attn.value_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.10.cross_attn_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.10.cross_attn_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.10.feed_forward.intermediate.bias": {
+  "dtype": "BF16",
+  "shape": [
+   4096
+  ]
+ },
+ "prophetnet.decoder.layers.10.feed_forward.intermediate.weight": {
+  "dtype": "BF16",
+  "shape": [
+   4096,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.10.feed_forward.output.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.10.feed_forward.output.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   4096
+  ]
+ },
+ "prophetnet.decoder.layers.10.feed_forward_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.10.feed_forward_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.10.self_attn.key_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.10.self_attn.key_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.10.self_attn.out_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.10.self_attn.out_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.10.self_attn.query_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.10.self_attn.query_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.10.self_attn.relative_pos_embeddings.bias": {
+  "dtype": "BF16",
+  "shape": [
+   512
+  ]
+ },
+ "prophetnet.decoder.layers.10.self_attn.relative_pos_embeddings.weight": {
+  "dtype": "BF16",
+  "shape": [
+   512,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.10.self_attn.value_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.10.self_attn.value_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.10.self_attn_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.10.self_attn_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.11.cross_attn.key_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.11.cross_attn.key_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.11.cross_attn.out_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.11.cross_attn.out_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.11.cross_attn.query_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.11.cross_attn.query_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.11.cross_attn.value_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.11.cross_attn.value_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.11.cross_attn_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.11.cross_attn_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.11.feed_forward.intermediate.bias": {
+  "dtype": "BF16",
+  "shape": [
+   4096
+  ]
+ },
+ "prophetnet.decoder.layers.11.feed_forward.intermediate.weight": {
+  "dtype": "BF16",
+  "shape": [
+   4096,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.11.feed_forward.output.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.11.feed_forward.output.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   4096
+  ]
+ },
+ "prophetnet.decoder.layers.11.feed_forward_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.11.feed_forward_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.11.self_attn.key_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.11.self_attn.key_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.11.self_attn.out_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.11.self_attn.out_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.11.self_attn.query_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.11.self_attn.query_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.11.self_attn.relative_pos_embeddings.bias": {
+  "dtype": "BF16",
+  "shape": [
+   512
+  ]
+ },
+ "prophetnet.decoder.layers.11.self_attn.relative_pos_embeddings.weight": {
+  "dtype": "BF16",
+  "shape": [
+   512,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.11.self_attn.value_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.11.self_attn.value_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.11.self_attn_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.11.self_attn_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.2.cross_attn.key_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.2.cross_attn.key_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.2.cross_attn.out_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.2.cross_attn.out_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.2.cross_attn.query_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.2.cross_attn.query_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.2.cross_attn.value_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.2.cross_attn.value_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.2.cross_attn_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.2.cross_attn_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.2.feed_forward.intermediate.bias": {
+  "dtype": "BF16",
+  "shape": [
+   4096
+  ]
+ },
+ "prophetnet.decoder.layers.2.feed_forward.intermediate.weight": {
+  "dtype": "BF16",
+  "shape": [
+   4096,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.2.feed_forward.output.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.2.feed_forward.output.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   4096
+  ]
+ },
+ "prophetnet.decoder.layers.2.feed_forward_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.2.feed_forward_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.2.self_attn.key_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.2.self_attn.key_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.2.self_attn.out_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.2.self_attn.out_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.2.self_attn.query_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.2.self_attn.query_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.2.self_attn.relative_pos_embeddings.bias": {
+  "dtype": "BF16",
+  "shape": [
+   512
+  ]
+ },
+ "prophetnet.decoder.layers.2.self_attn.relative_pos_embeddings.weight": {
+  "dtype": "BF16",
+  "shape": [
+   512,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.2.self_attn.value_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.2.self_attn.value_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.2.self_attn_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.2.self_attn_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.3.cross_attn.key_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.3.cross_attn.key_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.3.cross_attn.out_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.3.cross_attn.out_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.3.cross_attn.query_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.3.cross_attn.query_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.3.cross_attn.value_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.3.cross_attn.value_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.3.cross_attn_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.3.cross_attn_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.3.feed_forward.intermediate.bias": {
+  "dtype": "BF16",
+  "shape": [
+   4096
+  ]
+ },
+ "prophetnet.decoder.layers.3.feed_forward.intermediate.weight": {
+  "dtype": "BF16",
+  "shape": [
+   4096,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.3.feed_forward.output.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.3.feed_forward.output.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   4096
+  ]
+ },
+ "prophetnet.decoder.layers.3.feed_forward_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.3.feed_forward_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.3.self_attn.key_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.3.self_attn.key_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.3.self_attn.out_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.3.self_attn.out_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.3.self_attn.query_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.3.self_attn.query_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.3.self_attn.relative_pos_embeddings.bias": {
+  "dtype": "BF16",
+  "shape": [
+   512
+  ]
+ },
+ "prophetnet.decoder.layers.3.self_attn.relative_pos_embeddings.weight": {
+  "dtype": "BF16",
+  "shape": [
+   512,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.3.self_attn.value_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.3.self_attn.value_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.3.self_attn_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.3.self_attn_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.4.cross_attn.key_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.4.cross_attn.key_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.4.cross_attn.out_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.4.cross_attn.out_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.4.cross_attn.query_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.4.cross_attn.query_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.4.cross_attn.value_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.4.cross_attn.value_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.4.cross_attn_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.4.cross_attn_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.4.feed_forward.intermediate.bias": {
+  "dtype": "BF16",
+  "shape": [
+   4096
+  ]
+ },
+ "prophetnet.decoder.layers.4.feed_forward.intermediate.weight": {
+  "dtype": "BF16",
+  "shape": [
+   4096,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.4.feed_forward.output.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.4.feed_forward.output.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   4096
+  ]
+ },
+ "prophetnet.decoder.layers.4.feed_forward_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.4.feed_forward_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.4.self_attn.key_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.4.self_attn.key_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.4.self_attn.out_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.4.self_attn.out_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.4.self_attn.query_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.4.self_attn.query_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.4.self_attn.relative_pos_embeddings.bias": {
+  "dtype": "BF16",
+  "shape": [
+   512
+  ]
+ },
+ "prophetnet.decoder.layers.4.self_attn.relative_pos_embeddings.weight": {
+  "dtype": "BF16",
+  "shape": [
+   512,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.4.self_attn.value_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.4.self_attn.value_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.4.self_attn_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.4.self_attn_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.5.cross_attn.key_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.5.cross_attn.key_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.5.cross_attn.out_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.5.cross_attn.out_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.5.cross_attn.query_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.5.cross_attn.query_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.5.cross_attn.value_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.5.cross_attn.value_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.5.cross_attn_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.5.cross_attn_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.5.feed_forward.intermediate.bias": {
+  "dtype": "BF16",
+  "shape": [
+   4096
+  ]
+ },
+ "prophetnet.decoder.layers.5.feed_forward.intermediate.weight": {
+  "dtype": "BF16",
+  "shape": [
+   4096,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.5.feed_forward.output.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.5.feed_forward.output.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   4096
+  ]
+ },
+ "prophetnet.decoder.layers.5.feed_forward_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.5.feed_forward_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.5.self_attn.key_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.5.self_attn.key_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.5.self_attn.out_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.5.self_attn.out_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.5.self_attn.query_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.5.self_attn.query_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.5.self_attn.relative_pos_embeddings.bias": {
+  "dtype": "BF16",
+  "shape": [
+   512
+  ]
+ },
+ "prophetnet.decoder.layers.5.self_attn.relative_pos_embeddings.weight": {
+  "dtype": "BF16",
+  "shape": [
+   512,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.5.self_attn.value_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.5.self_attn.value_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.5.self_attn_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.5.self_attn_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.6.cross_attn.key_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.6.cross_attn.key_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.6.cross_attn.out_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.6.cross_attn.out_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.6.cross_attn.query_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.6.cross_attn.query_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.6.cross_attn.value_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.6.cross_attn.value_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.6.cross_attn_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.6.cross_attn_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.6.feed_forward.intermediate.bias": {
+  "dtype": "BF16",
+  "shape": [
+   4096
+  ]
+ },
+ "prophetnet.decoder.layers.6.feed_forward.intermediate.weight": {
+  "dtype": "BF16",
+  "shape": [
+   4096,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.6.feed_forward.output.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.6.feed_forward.output.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   4096
+  ]
+ },
+ "prophetnet.decoder.layers.6.feed_forward_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.6.feed_forward_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.6.self_attn.key_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.6.self_attn.key_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.6.self_attn.out_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.6.self_attn.out_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.6.self_attn.query_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.6.self_attn.query_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.6.self_attn.relative_pos_embeddings.bias": {
+  "dtype": "BF16",
+  "shape": [
+   512
+  ]
+ },
+ "prophetnet.decoder.layers.6.self_attn.relative_pos_embeddings.weight": {
+  "dtype": "BF16",
+  "shape": [
+   512,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.6.self_attn.value_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.6.self_attn.value_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.6.self_attn_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.6.self_attn_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.7.cross_attn.key_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.7.cross_attn.key_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.7.cross_attn.out_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.7.cross_attn.out_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.7.cross_attn.query_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.7.cross_attn.query_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.7.cross_attn.value_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.7.cross_attn.value_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.7.cross_attn_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.7.cross_attn_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.7.feed_forward.intermediate.bias": {
+  "dtype": "BF16",
+  "shape": [
+   4096
+  ]
+ },
+ "prophetnet.decoder.layers.7.feed_forward.intermediate.weight": {
+  "dtype": "BF16",
+  "shape": [
+   4096,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.7.feed_forward.output.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.7.feed_forward.output.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   4096
+  ]
+ },
+ "prophetnet.decoder.layers.7.feed_forward_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.7.feed_forward_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.7.self_attn.key_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.7.self_attn.key_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.7.self_attn.out_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.7.self_attn.out_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.7.self_attn.query_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.7.self_attn.query_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.7.self_attn.relative_pos_embeddings.bias": {
+  "dtype": "BF16",
+  "shape": [
+   512
+  ]
+ },
+ "prophetnet.decoder.layers.7.self_attn.relative_pos_embeddings.weight": {
+  "dtype": "BF16",
+  "shape": [
+   512,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.7.self_attn.value_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.7.self_attn.value_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.7.self_attn_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.7.self_attn_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.8.cross_attn.key_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.8.cross_attn.key_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.8.cross_attn.out_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.8.cross_attn.out_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.8.cross_attn.query_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.8.cross_attn.query_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.8.cross_attn.value_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.8.cross_attn.value_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.8.cross_attn_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.8.cross_attn_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.8.feed_forward.intermediate.bias": {
+  "dtype": "BF16",
+  "shape": [
+   4096
+  ]
+ },
+ "prophetnet.decoder.layers.8.feed_forward.intermediate.weight": {
+  "dtype": "BF16",
+  "shape": [
+   4096,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.8.feed_forward.output.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.8.feed_forward.output.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   4096
+  ]
+ },
+ "prophetnet.decoder.layers.8.feed_forward_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.8.feed_forward_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.8.self_attn.key_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.8.self_attn.key_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.8.self_attn.out_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.8.self_attn.out_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.8.self_attn.query_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.8.self_attn.query_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.8.self_attn.relative_pos_embeddings.bias": {
+  "dtype": "BF16",
+  "shape": [
+   512
+  ]
+ },
+ "prophetnet.decoder.layers.8.self_attn.relative_pos_embeddings.weight": {
+  "dtype": "BF16",
+  "shape": [
+   512,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.8.self_attn.value_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.8.self_attn.value_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.8.self_attn_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.8.self_attn_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.9.cross_attn.key_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.9.cross_attn.key_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.9.cross_attn.out_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.9.cross_attn.out_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.9.cross_attn.query_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.9.cross_attn.query_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.9.cross_attn.value_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.9.cross_attn.value_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.9.cross_attn_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.9.cross_attn_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.9.feed_forward.intermediate.bias": {
+  "dtype": "BF16",
+  "shape": [
+   4096
+  ]
+ },
+ "prophetnet.decoder.layers.9.feed_forward.intermediate.weight": {
+  "dtype": "BF16",
+  "shape": [
+   4096,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.9.feed_forward.output.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.9.feed_forward.output.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   4096
+  ]
+ },
+ "prophetnet.decoder.layers.9.feed_forward_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.9.feed_forward_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.9.self_attn.key_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.9.self_attn.key_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.9.self_attn.out_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.9.self_attn.out_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.9.self_attn.query_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.9.self_attn.query_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.9.self_attn.relative_pos_embeddings.bias": {
+  "dtype": "BF16",
+  "shape": [
+   512
+  ]
+ },
+ "prophetnet.decoder.layers.9.self_attn.relative_pos_embeddings.weight": {
+  "dtype": "BF16",
+  "shape": [
+   512,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.9.self_attn.value_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.9.self_attn.value_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.9.self_attn_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.layers.9.self_attn_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "prophetnet.decoder.ngram_embeddings.weight": {
+  "dtype": "BF16",
+  "shape": [
+   2,
+   32
+  ]
+ },
+ "prophetnet.decoder.position_embeddings.weight": {
+  "dtype": "BF16",
+  "shape": [
+   128,
+   32
+  ]
+ },
+ "prophetnet.word_embeddings.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ }
+}

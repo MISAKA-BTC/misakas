@@ -1,0 +1,6 @@
+
+running 1 test
+test pipeline::virtual_processor::tests::rfc12_zero_dns_matrix::rfc12_x13_the_mempool_stops_reading_a_frozen_dns_anchor_past_the_fence ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 843 filtered out; finished in 0.21s
+

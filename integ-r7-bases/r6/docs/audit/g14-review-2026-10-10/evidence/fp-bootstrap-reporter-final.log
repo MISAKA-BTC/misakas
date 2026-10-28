@@ -1,0 +1,26 @@
+
+running 21 tests
+test palw_panel::reporter_filer::tests::a_commitment_reorged_out_is_re_sent_before_the_conviction_and_abandoned_after_it ... ok
+test palw_panel::reporter_filer::tests::a_last_copy_the_queue_holds_back_neither_stalls_the_filing_nor_gives_its_commitment_up ... ok
+test palw_panel::reporter_filer::tests::a_late_kind_4_commits_first_and_nothing_is_dated_before_it_was_made ... ok
+test palw_panel::reporter_filer::tests::a_filing_that_does_not_convict_is_handed_back_and_every_end_prunes_court_moved ... ok
+test palw_panel::reporter_filer::tests::a_second_lanes_filing_of_one_offence_is_already_filed_and_its_fallback_is_adopted ... ok
+test palw_panel::reporter_filer::tests::every_object_is_sent_a_bounded_number_of_times ... ok
+test palw_panel::reporter_filer::tests::every_queued_object_states_its_due_daa_and_the_queue_order_is_not_the_filers ... ok
+test palw_panel::reporter_filer::tests::j1_auto_digests_a_claim_a_bounded_number_of_times_a_window ... ok
+test palw_panel::reporter_filer::tests::a_restart_with_a_reveal_pending_still_reveals ... ok
+test palw_panel::reporter_filer::tests::j1_auto_probes_once_per_capture_and_once_a_tick ... ok
+test palw_panel::reporter_filer::tests::only_commit_reveal_filings_take_the_filer ... ok
+test palw_panel::reporter_filer::tests::t39_the_reporter_is_this_bond_never_the_accused_and_a_missed_reveal_forfeits_r_only ... ok
+test palw_panel::reporter_filer::tests::t54c_the_filer_commits_waits_files_reveals_and_ends_revealed ... ok
+test palw_panel::reporter_filer::tests::the_capture_arm_files_kind_4_first_and_backs_a_replay_filing_it_finds ... ok
+test palw_panel::reporter_filer::tests::j1_auto_finds_a_borrowed_root_and_nothing_else ... ok
+test palw_panel::reporter_filer::tests::the_conviction_never_waits_on_r_and_the_fence_off_twin_commits_nothing ... ok
+test palw_panel::reporter_filer::tests::the_filers_queue_entries_are_its_own ... ok
+test palw_panel::reporter_filer::tests::the_panel_wires_the_capture_arm_j1_and_the_tick ... ok
+test palw_panel::reporter_filer::tests::the_tick_asks_the_gate_before_it_spends_and_asks_a_refusal_again_a_replan_later ... ok
+test palw_panel::reporter_filer::tests::the_tick_counts_copies_and_gives_up_a_commitment_the_gate_refuses ... ok
+test palw_panel::reporter_filer::tests::the_capture_arms_filing_is_kind_4_over_the_samplers_fault_and_nothing_else ... ok
+
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 573 filtered out; finished in 0.36s
+

@@ -1,0 +1,15 @@
+{
+  "consensus/core/src/lib.rs": "241c0e9bbb97da9502f28b40df3f9ff1e134b239b6d0c48e3958260de30738b7",
+  "consensus/core/src/palw_court_service_state_v2.rs": "27c25bb1754e08c2a377f8f1b96cb216ce33f2f6c9af386430566711e52bb408",
+  "consensus/core/src/palw_native_resource_v1/generated.rs": "85b65601d8595b070158f8a0a2cb329f56a1fbecabc20e9e2e4e6858c36dc611",
+  "consensus/core/src/palw_native_resource_v1/wire_generated.rs": "c88dc559a01250a912c3ffd46bf7e25039c64269280ceb85a303e67d554cfd78",
+  "consensus/core/src/palw_staged_court_fold_v1.rs": "2cf3b67c2522aaf0210863b4232d5af281d526e4dd1363aa4a1daf423d94b9ae",
+  "consensus/core/src/palw_staged_court_state_v1.rs": "cc5cb1b7a4d176f405b5f5a0892ead5e938caed403d2563a1d0c553171c9f75a",
+  "consensus/core/src/palw_state_v2.rs": "da461580e534bbd1cf06d48edcb18c1286a4a7026ad61e2a18c9092c73d82266",
+  "consensus/core/src/palw_state_v2/chain_state.rs": "2dbb7d9506682dff78d4c51c838bcbcac5a7d3cf3dd31d810725441f529d7e5d",
+  "consensus/core/src/palw_state_v2/objects.rs": "636aab4944d1fe2e6fce062273b7eb24591e9fcd6b4de5d47addc2672be2fe2e",
+  "consensus/core/src/palw_state_v2/transition_builder.rs": "39b8c215a8b92a763d2d8e71284af6c848e5cc85e3b800026f370c8107ca29c1",
+  "consensus/core/src/palw_tir_public_fold_v1.rs": "6dacf7f2ef400b1d5fee7aaaf220aaa0a32d1719e6056c420fe54061ca8a916d",
+  "consensus/core/src/palw_court_end_archive_v1.rs": "204388562c5e578cf805d4924f7f855d7d96e7130317058083eee0daa51ee63d",
+  "consensus/core/src/palw_court_end_archive_fold_v1.rs": "a6a22a8ed0a4b0ef1299c4f1e30fd6464122e11d4e477c8a3dabf1e21cd18346"
+}

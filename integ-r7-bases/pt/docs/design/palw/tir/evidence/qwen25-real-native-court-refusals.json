@@ -1,0 +1,31 @@
+{
+  "checks": [
+    {
+      "positions": "0",
+      "hash_mib": "64",
+      "refused": true,
+      "prior_output_preserved": true
+    },
+    {
+      "positions": "4294967295",
+      "hash_mib": "64",
+      "refused": true,
+      "prior_output_preserved": true
+    },
+    {
+      "positions": "32",
+      "hash_mib": "0",
+      "refused": true,
+      "prior_output_preserved": true
+    },
+    {
+      "output": "target/rfc02-real/qwen25-pilot/qwen25-32.palwtir",
+      "input_replacement_refused": true
+    },
+    {
+      "output": "target/rfc02-real/qwen25-pilot/kernel-params-v3.borsh",
+      "input_replacement_refused": true
+    }
+  ],
+  "prepared_map_unchanged": true
+}

@@ -1,0 +1,68 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "whisper",
+  "kind": "encdec",
+  "extends": ["encdec-frame"],
+  "doc": "Whisper (WhisperForConditionalGeneration; openai/whisper-*, distil-whisper, every fine-tune): an encoder that reads FEATURE FRAMES — the normalised log-mel `[num_mel_bins, 2 * max_source_positions]` — through two Conv1d (k3 stride 1, then k3 stride 2, padding 1, a bias and the activation each) to max_source_positions rows, plus a LOADED table of positions (the checkpoint's `embed_positions`, 1,500 rows), pre-norm LayerNorm layers (biases on q, v and out but NOT on k), softmax scores scaled by head_dim^-1/2, a final LayerNorm per stack; a decoder with a learned position table at offset 0 (max_target_positions rows), cross-attention to every one of the encoder's rows (no mask: the source is a fixed 30 s window) and a head tied to the token table. No scale on the embedding (scale_embedding is read by no forward). The log-mel front end (STFT, mel filterbank, log) is the class's: this model's program takes the frames as `i16` codes at 2^-13. Features: ENCDEC_FROM_SPEC_V1, EMBED_FRAMES_CONV1D_V1.",
+  "match": {"architectures": ["WhisperForConditionalGeneration"], "model_types": ["whisper"]},
+  "config": {
+    "defaults": {"activation_function": "gelu", "num_mel_bins": 80, "max_source_positions": 1500, "max_target_positions": 448},
+    "inert": ["scale_embedding", "decoder_layerdrop", "encoder_layerdrop", "dropout", "attention_dropout", "activation_dropout", "init_std", "suppress_tokens", "begin_suppress_tokens", "use_weighted_layer_sum", "classifier_proj_size", "apply_spec_augment", "mask_time_prob", "mask_time_length", "mask_time_min_masks", "mask_feature_prob", "mask_feature_length", "mask_feature_min_masks", "median_filter_width", "max_length", "forced_decoder_ids", "is_encoder_decoder", "num_hidden_layers", "tie_word_embeddings", "alignment_heads", "lang_to_id", "task_to_id", "no_timestamps_token_id"]
+  },
+  "vars": [
+    {"name": "vocab", "value": {"$cfg": "vocab_size"}},
+    {"name": "d", "value": {"$cfg": "d_model"}},
+    {"name": "enc_heads", "value": {"$cfg": "encoder_attention_heads"}},
+    {"name": "dec_heads", "value": {"$cfg": "decoder_attention_heads"}},
+    {"name": "heads_ok", "value": {"$bad": [
+      {"$and": [
+        {"$gt": [{"$var": "enc_heads"}, 0]},
+        {"$eq": [{"$var": "enc_heads"}, {"$var": "dec_heads"}]},
+        {"$eq": [{"$mod": [{"$var": "d"}, {"$var": "enc_heads"}]}, 0]}
+      ]},
+      "d_model does not split into the attention heads, or the two stacks' head counts differ (one softmax scale serves both)"
+    ]}},
+    {"name": "enc_head_dim", "value": {"$idiv": [{"$var": "d"}, {"$var": "enc_heads"}]}},
+    {"name": "dec_head_dim", "value": {"$idiv": [{"$var": "d"}, {"$var": "dec_heads"}]}},
+    {"name": "enc_layers", "value": {"$cfg": "encoder_layers"}},
+    {"name": "dec_layers", "value": {"$cfg": "decoder_layers"}},
+    {"name": "enc_ffn", "value": {"$cfg": "encoder_ffn_dim"}},
+    {"name": "dec_ffn", "value": {"$cfg": "decoder_ffn_dim"}},
+    {"name": "act", "value": {"$act": {"$cfg": "activation_function"}}},
+    {"name": "rms", "value": false},
+    {"name": "eps", "value": 1e-05},
+    {"name": "pre_norm", "value": true},
+    {"name": "bias", "value": true},
+    {"name": "final_norm", "value": true},
+    {"name": "attn_scale", "value": {"$pow": [{"$var": "dec_head_dim"}, -0.5]}},
+    {"name": "positions", "value": {"Learned": {"rows": {"$cfg": "max_target_positions"}, "offset": 0}}},
+    {"name": "names", "value": {
+      "shared": "model.decoder.embed_tokens.weight",
+      "qkvo": ["q_proj", "k_proj", "v_proj", "out_proj"],
+      "enc": {
+        "prefix": "model.encoder.", "layer": "model.encoder.layers.{L}.",
+        "self_attn": "self_attn", "self_norm": "self_attn_layer_norm",
+        "ffn_norm": "final_layer_norm", "ffn_up": "fc1", "ffn_down": "fc2",
+        "final_norm": "layer_norm", "positions": "embed_positions", "stem": ["conv1", "conv2"]
+      },
+      "dec": {
+        "prefix": "model.decoder.", "layer": "model.decoder.layers.{L}.",
+        "self_attn": "self_attn", "self_norm": "self_attn_layer_norm",
+        "cross_attn": "encoder_attn", "cross_norm": "encoder_attn_layer_norm",
+        "ffn_norm": "final_layer_norm", "ffn_up": "fc1", "ffn_down": "fc2",
+        "final_norm": "layer_norm", "positions": "embed_positions"
+      },
+      "lm_head": "proj_out.weight",
+      "ignored": []
+    }}
+  ],
+  "spec": {
+    "k_bias": false,
+    "enc_pos_rows": {"$cfg": "max_source_positions"},
+    "input": {"Frames": {
+      "bins": {"$cfg": "num_mel_bins"},
+      "frames": {"$mul": [{"$cfg": "max_source_positions"}, 2]},
+      "stem": [{"k": 3, "stride": 1, "pad": 1}, {"k": 3, "stride": 2, "pad": 1}]
+    }}
+  }
+}

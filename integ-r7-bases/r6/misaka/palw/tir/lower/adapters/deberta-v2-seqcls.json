@@ -1,0 +1,116 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "deberta-v2-seqcls",
+  "doc": "DebertaV2ForSequenceClassification: the deberta-v2 encoder, then the [CLS] row through the pooler (`pooler.dense` + activation) and `classifier` to num_labels logits (OUTPUT_CLASSIFY_V1). HFX 2026-10-10.",
+  "extends": [
+    "deberta-v2",
+    "mixin-seqcls-encoder"
+  ],
+  "match": {
+    "architectures": [
+      "DebertaV2ForSequenceClassification"
+    ],
+    "model_types": [
+      "deberta-v2",
+      "deberta_v2"
+    ]
+  },
+  "vars": [
+    {
+      "name": "names",
+      "value": {
+        "embed": "embeddings.word_embeddings",
+        "pos_embed": "embeddings.position_embeddings",
+        "type_embed": "embeddings.token_type_embeddings",
+        "embed_norm": "embeddings.LayerNorm",
+        "rel_embed": "encoder.rel_embeddings",
+        "rel_norm": "encoder.LayerNorm",
+        "attn.q": "encoder.layer.{L}.attention.self.query_proj",
+        "attn.k": "encoder.layer.{L}.attention.self.key_proj",
+        "attn.v": "encoder.layer.{L}.attention.self.value_proj",
+        "attn.o": "encoder.layer.{L}.attention.output.dense",
+        "norm.mix": "encoder.layer.{L}.attention.output.LayerNorm",
+        "mlp.up": "encoder.layer.{L}.intermediate.dense",
+        "mlp.down": "encoder.layer.{L}.output.dense",
+        "norm.ffn": "encoder.layer.{L}.output.LayerNorm",
+        "cls_pre": "pooler.dense",
+        "cls_out": "classifier"
+      }
+    },
+    {
+      "name": "cls_act",
+      "value": {
+        "$act": {
+          "$cfg": [
+            "pooler_hidden_act",
+            "gelu"
+          ]
+        }
+      }
+    },
+    {
+      "name": "phs",
+      "value": {
+        "$cfg?": "pooler_hidden_size"
+      }
+    },
+    {
+      "name": "pooler_ok",
+      "value": {
+        "$check": [
+          {
+            "$or": [
+              {
+                "$eq": [
+                  {
+                    "$var": "phs"
+                  },
+                  null
+                ]
+              },
+              {
+                "$eq": [
+                  {
+                    "$var": "phs"
+                  },
+                  {
+                    "$var": "hidden"
+                  }
+                ]
+              }
+            ]
+          },
+          "pooler_hidden_size other than hidden_size (a pooler that changes the width) is not modelled"
+        ]
+      }
+    },
+    {
+      "name": "cls_pre_on",
+      "value": true
+    },
+    {
+      "name": "ignored_prefixes",
+      "value": [
+        "lm_predictions.",
+        "mask_predictions.",
+        "cls."
+      ]
+    },
+    {
+      "name": "prefix_aliases",
+      "value": [
+        [
+          "",
+          "deberta."
+        ]
+      ]
+    }
+  ],
+  "config": {
+    "inert": [
+      "pooler_dropout",
+      "pooler_hidden_act",
+      "pooler_hidden_size"
+    ]
+  }
+}

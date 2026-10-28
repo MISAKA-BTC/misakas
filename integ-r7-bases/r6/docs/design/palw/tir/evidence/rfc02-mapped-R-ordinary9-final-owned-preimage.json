@@ -1,0 +1,15 @@
+{
+  "recorded_utc": "2026-10-11T11:59:16.695942+00:00",
+  "head": "ba872cc5fdb27628080d49052fce56ee41796695",
+  "binary": "/tmp/rfc02-mapped-R-ordinary9-immutable-2174f2857d1f/flat_streamed_locator_v9-6ee75760eb45fb1b",
+  "binary_sha256": "2174f2857d1f7112767d4b0cc6c378887399b56418f013b5ec13f20f9295b006",
+  "files": {
+    "misaka-palw-sdk/src/flat_streamed_locator_v9.rs": "c1de63f5778384cb28ba8b75cb605871cb51343b9192d920eda4e9b2cfabeafd",
+    "misaka-palw-sdk/src/flat_snapshot_v9.rs": "0acb109048acda9edbfbc8ef0bd79e8198b5734727c24ab1061777aad47677a9",
+    "misaka-palw-sdk/src/lib.rs": "e1f858fc092343d084f3a006f9c8b1fcdde8325e299c8181267188a6545de645",
+    "misaka-palw-sdk/tests/flat_streamed_locator_v9.rs": "69d21d24e50ef0546b1155bb731f733c178225bbad2ae943cc2777ce98546691",
+    "docs/design/palw/tir/evidence/qwen25-real-pilot-program.tir": "16a0de98fe52cdf47364392551b15bb85a7aad76acd8b14853b1803074bca8f1",
+    "Cargo.lock": "b37cef757e460f652b1c4d885930f6e7ce846f5660c2e788d18b72c8b5ef6429"
+  },
+  "boundary": "Owned SDK source and metadata preimages. Concurrent kernel/core helpers are not represented as a frozen dependency closure."
+}

@@ -1,0 +1,22 @@
+
+FILTER model::stores::palw_state_v2::tests::
+
+running 6 tests
+test model::stores::palw_state_v2::tests::a_palw_read_path_materializes_the_tip_once_per_tip_and_not_once_per_call ... [M-7] 64 getPalwPendingChunkGroup-shaped reads: 63680 B of carriage decoded before (995 B per call), 995 B after
+ok
+test model::stores::palw_state_v2::tests::a_pruning_point_snapshot_serve_decodes_once_per_row_and_not_at_all_for_a_hash_we_do_not_hold ... ok
+test model::stores::palw_state_v2::tests::a_schema_change_clears_rows_and_tip_together ... ok
+test model::stores::palw_state_v2::tests::a_tampered_tip_snapshot_is_refused_not_loaded ... ok
+test model::stores::palw_state_v2::tests::a_transition_round_trips_through_disk_and_still_reverts ... ok
+test model::stores::palw_state_v2::tests::t80_a_carriage_of_another_state_version_is_refused_by_name ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 797 filtered out; finished in 0.03s
+
+
+FILTER t12_legacy_held_objects_are_dropped_below_the_fence_and_signed_by_their_bond_past_it
+
+running 1 test
+test pipeline::virtual_processor::tests::t12_legacy_held_da_gate::t12_legacy_held_objects_are_dropped_below_the_fence_and_signed_by_their_bond_past_it ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 802 filtered out; finished in 1.18s
+

@@ -1,0 +1,111 @@
+{
+  "boundary": "Native funded Panel mechanics; no real-node signature/P2P/UTXO receipt, full consumer horizon, economic independence or public/security approval",
+  "base_commit_before_panel_commit": "c4fb29f5895ca6833d0848dd692ae7b88ecebb8e",
+  "rustc": "rustc 1.93.0 (254b59607 2026-01-19)",
+  "build": {
+    "target": "/tmp/misaka-rfc67812-node-target",
+    "jobs": 2,
+    "dev_debug": 0,
+    "test_debug": 0,
+    "initial_incremental": 0,
+    "final_integration_sdk_clippy_incremental": 1,
+    "core_features": [
+      "evm",
+      "private-integration-config",
+      "legacy-secp256k1"
+    ],
+    "crypto_optimization_overrides": []
+  },
+  "source_sha256": {
+    "consensus/core/src/lib.rs": "67868cb08628948fc96aba5ca668bac7141cbe455f1d7ea9400d7c8decba4a49",
+    "consensus/core/src/palw_panel_source_fee_fold_v2.rs": "1a22992131789b33541758020514be84bf7133d086de5f777a825a79245b9d5d",
+    "consensus/core/src/palw_panel_source_fee_v2.rs": "94ee82b40aefb38bee05654b8a83d2c9971843d08ed61c0d10238cc25da92a14",
+    "consensus/core/src/palw_beacon_source_fee_v1.rs": "4368b1bc725947b28ab41000aac258e728bab73e82b080803ecb8ba41274521b",
+    "consensus/core/src/palw_beacon_source_opt_in_v1.rs": "5b07949b6dfb423a2e50ecc41f3c43e412e15977e73108cd6fb23086c1eb3571",
+    "consensus/core/src/palw_kernel_route_fold_v1.rs": "d7973ff2fde048e384dda261fd3987f7a7d6ab5defbb9da27e7a5b5d8dd92e11",
+    "consensus/core/src/palw_lifecycle_objects_v2.rs": "fff25e4f26a4feae604c094b3ec539ada42a5c521483238d32615a75a7f58ff2",
+    "consensus/core/src/palw_state_v2.rs": "55953bf95ffc84880fb024a6cb84b620d6a9f6035fa437df2e78cff938851807",
+    "consensus/core/tests/rfc0010_production_fold.rs": "8b891b2d990c5474b3306dc8b3b7677d375fd71515e88700ba3d32cc2700527a",
+    "misaka/palw/kernel/src/route.rs": "2da596eab0f5f86902bc8203d59871b506022286dfa6f3fc03b9ba4d12d44284",
+    "misaka/palw/kernel/src/ledger.rs": "7c59a8f82af44cc38cc07199233cd904258f1ac850529507a3ea5123e09dc52c",
+    "misaka/palw/kernel/tests/beacon_source_fee.rs": "83698fe3392dffe244e3d3c5caa64a8901916c0351514ffc2066f49142f618ca",
+    "misaka/palw/sdk/src/lib.rs": "0c40867b00f84a62656d150ead1b14d4962188a6dfc8ad4377476a8eac0be54b",
+    "misaka/palw/sdk/src/panel_source_fee_v2.rs": "6b015c9ad0774d14f4aa6882f80cb6846bc6680905bd90b6bc3350c9951b2357"
+  },
+  "logs_sha256": {
+    "docs/design/palw/evidence/rfc07-panel-clippy-2026-10-13.log": "f3d5604351078c94d885304352b9eefd5e9b344f2e2fcddb11bdaa022f75ff88",
+    "docs/design/palw/evidence/rfc07-panel-clock-2026-10-13.log": "84bbe308643474f84fedb233b321e672f1728ffa553bf9f9719e3b7d02cdf2af",
+    "docs/design/palw/evidence/rfc07-panel-fee-fingerprint-2026-10-13.log": "96ba2d6b64b62f40c983b59412a23be2663a34e5f81e4a0d8207b0840fa1269d",
+    "docs/design/palw/evidence/rfc07-panel-fence-2026-10-13.log": "b7af0286b1ee1782d2021b0390d64fd55a7ec57c9cc603bce972623d5b25f0e4",
+    "docs/design/palw/evidence/rfc07-panel-preset-fingerprint-2026-10-13.log": "1ddd81a7abd5f4e97787522a6f2e8159c57f7d5a472ae5df4024a512b6f9db24",
+    "docs/design/palw/evidence/rfc07-panel-production-fold-2026-10-13.log": "0ef34405173d54dfba9d2b89345b9333d80576d2ce0b67ecc335fa38774fe5d1",
+    "docs/design/palw/evidence/rfc07-panel-sdk-2026-10-13.log": "7062df9e49fa81abeb234b71b9c22b3041e9d68ca18482e54bf1a4072418375e",
+    "docs/design/palw/evidence/rfc07-panel-sdk-invalid-clock-2026-10-13.log": "46e3da1f4a374b85d2736c5eac5936178006300cde4a2648b2adfa7d8c51b127",
+    "docs/design/palw/evidence/rfc07-panel-source-fingerprint-2026-10-13.log": "0db83370da1a95d6205ca6dd9f0e85b1153e43ad11bb0a3899d42fc28c48844f",
+    "docs/design/palw/evidence/rfc07-panel-wire-2026-10-13.log": "b5e9425cb78c74ddcad9996120cbe2d4036d7ece99a86e9d424af10125efd703"
+  },
+  "final_executables": {
+    "production_fold": {
+      "path": "/tmp/misaka-rfc67812-node-target/debug/deps/rfc0010_production_fold-4f7c112a1d9cb703",
+      "sha256": "97335f7d0feaa99ba17a135c6e4bb62947afe18973606d9bfc0a1548934fa4fc"
+    },
+    "sdk": {
+      "path": "/tmp/misaka-rfc67812-node-target/debug/deps/misaka_palw_sdk-59f3709d21fde06e",
+      "sha256": "22758d058a0bd7ed9147aab328cd57d82e745b2918161696501b702b1d1d529e"
+    }
+  },
+  "results": {
+    "production_fold": {
+      "passed": 26,
+      "failed": 0,
+      "ignored": 0
+    },
+    "sdk": {
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    "lifecycle_a2": {
+      "passed": 34,
+      "failed": 0,
+      "ignored": 0
+    },
+    "source_clock": {
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    "cost_fee_fingerprints": {
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0
+    },
+    "source_optin_fingerprints": {
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    "preset_networkid_probe": {
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    "kernel_wire_source_fee": {
+      "passed": 17,
+      "failed": 0,
+      "ignored": 0
+    },
+    "clippy_core_sdk_libraries": {
+      "status": "PASS",
+      "deny_warnings": true
+    }
+  },
+  "notes": [
+    "Pure production fold admits signatures in fixture and uses explicit OPV eligibility/artifact attestation seam; useful small-work trace/evidence and native source Final paths run.",
+    "Initial SDK invalid policy-clock fixture failure preserved; final SDK log is after legal clock correction and malformed-authority refusal.",
+    "Final integration includes explicit insufficient actual collateral refusal; same R source-to-queue transfer and replay/undo/cold carriage are asserted.",
+    "A2/clock/source fingerprint checks used fresh core library executable before subsequent unrelated EXEC provider guard fixture additions. That executable path was reused by later builds; no later binary hash is misattributed to that earlier log.",
+    "Preset probe checks daemon NetworkId aliases; printed TESTNET_PARAMS constant differs, so equality to that constant is not asserted.",
+    "Full consumer expiry/lifetime counters, Claim challenge/proof migration, source/economic guarantees, real-node Panel acceptance and independent full-horizon review remain open."
+  ]
+}

@@ -1,0 +1,6 @@
+
+running 1 test
+test palw_state_v2::tests::public_fp_job_metadata_is_rooted_journaled_and_refuses_tampered_snapshots ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3621 filtered out; finished in 0.01s
+

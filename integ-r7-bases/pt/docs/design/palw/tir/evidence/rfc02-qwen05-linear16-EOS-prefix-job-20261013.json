@@ -1,0 +1,33 @@
+{
+  "schema": "misaka.rfc02.actual-checkpoint-fixed-job-protocol.v1",
+  "artifact_sha256": "1c3ca91bed1b71f2e98ca01ffd8ea72be2fcf3ce57537c37d5c5d9de2565bc9c",
+  "program_sha256": "546c75c4a044ce47266aa90924aa30b215785dbc1490dfdaa34bf9b585787bff",
+  "prompt": [
+    151644,
+    872,
+    198,
+    27473,
+    220,
+    89015,
+    1119,
+    6364,
+    13,
+    17841,
+    448,
+    1172,
+    279,
+    42113,
+    13,
+    151645,
+    198,
+    151644,
+    77091,
+    198,
+    89015
+  ],
+  "generated_count": 1,
+  "max_positions": 64,
+  "max_artifact_bytes": 1073741824,
+  "max_position_tensor_bytes": 268435456,
+  "max_fixture_bytes": 67108864
+}

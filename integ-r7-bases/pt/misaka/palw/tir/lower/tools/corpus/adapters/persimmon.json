@@ -1,0 +1,28 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "persimmon",
+  "doc": "Persimmon (Adept): LayerNorm everywhere (with bias), per-head fused query_key_value, a per-head SHARED LayerNorm (with bias) on q and k before the rotation (qk_layernorm), partial rotary (rope_parameters.partial_rotary_factor 0.5), ungated ReLU² MLP with biases, no GQA. Third-party adapter (lane H): data only.",
+  "extends": ["decoder-core"],
+  "match": {"architectures": ["PersimmonForCausalLM"], "model_types": ["persimmon"]},
+  "config": {
+    "defaults": {"vocab_size": 262144, "hidden_size": 4096, "intermediate_size": 16384, "num_hidden_layers": 36, "num_attention_heads": 64, "hidden_act": "relu2", "max_position_embeddings": 16384, "layer_norm_eps": 1e-05, "tie_word_embeddings": false, "qk_layernorm": true, "partial_rotary_factor": 0.5},
+    "inert": ["hidden_dropout"]
+  },
+  "vars": [
+    {"name": "kv_ok", "value": {"$check": [{"$eq": [{"$var": "kv"}, {"$var": "heads"}]}, "Persimmon has no grouped-query attention"]}},
+    {"name": "eps", "value": {"$cfg": "layer_norm_eps"}},
+    {"name": "partial", "value": {"$partial_rotary": {"legacy": ["partial_rotary_factor"], "default": 0.5}}},
+    {"name": "rope_dim", "value": {"$floor": {"$mul": [{"$var": "hd"}, {"$var": "partial"}]}}},
+    {"name": "rope_partial", "value": {"$var": "partial"}},
+    {"name": "norm", "value": {"kind": "Layer", "eps": {"$var": "eps"}, "gain": "W", "bias": true}},
+    {"name": "qkv_bias", "value": true},
+    {"name": "o_bias", "value": true},
+    {"name": "mbias", "value": true},
+    {"name": "mlp_gated", "value": false},
+    {"name": "qkv_layout", "value": "FusedPerHead"},
+    {"name": "qk_ln", "value": {"$cfg": "qk_layernorm"}},
+    {"name": "qk_norm", "value": {"$if": [{"$var": "qk_ln"}, {"norm": {"kind": "Layer", "eps": {"$var": "eps"}, "gain": "W", "bias": true}, "scope": "PerHeadShared"}, null]}},
+    {"name": "names", "value": {"embed": "{p}embed_tokens", "final_norm": "{p}final_layernorm", "lm_head": {"$if": [{"$var": "tied"}, {"$cat": [{"$var": "p"}, "embed_tokens"]}, "lm_head"]}, "norm.mix": "{p}layers.{L}.input_layernorm", "norm.ffn": "{p}layers.{L}.post_attention_layernorm", "attn.qkv": "{p}layers.{L}.self_attn.query_key_value", "attn.o": "{p}layers.{L}.self_attn.dense", "attn.q_norm": "{p}layers.{L}.self_attn.q_layernorm", "attn.k_norm": "{p}layers.{L}.self_attn.k_layernorm", "mlp.up": "{p}layers.{L}.mlp.dense_h_to_4h", "mlp.down": "{p}layers.{L}.mlp.dense_4h_to_h"}},
+    {"name": "model_type", "value": "persimmon"}
+  ]
+}

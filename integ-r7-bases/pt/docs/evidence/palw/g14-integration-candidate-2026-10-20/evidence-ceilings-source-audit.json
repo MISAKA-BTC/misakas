@@ -1,0 +1,24 @@
+{
+  "parent": "dc10ee5aa33822981e42250d2d5ffa37a6977ba7",
+  "source_sha256": {
+    "consensus/core/src/palw_court_shared_tir_root_v1.rs": "60f4ffa8f541e8169242b974f5b4dcb3da0f08558ea8ac888b93dd9f66d36a87",
+    "consensus/core/src/palw_court_tir_requests_v1.rs": "18fd60a48c5aa989112e9056f79c55b2cd81ae504030cca804ceb9c2fc7e9905",
+    "consensus/core/src/palw_tir_dissect_inventory_v1.rs": "3e9f5bf91f36470afb0ceaee3dfc827d597d0080609df3e4db4aad7adae31338",
+    "consensus/core/src/palw_tir_public_fold_v1.rs": "feae1630c6087babc3da669b2035fae8f6460c2b60ac8f90685ddd8eef92c0bc",
+    "consensus/core/src/palw_tir_public_numerical_inventory_v1.rs": "7ce98a1883dcf93e2d459c18f866c5137bccfa2de4b9ad380a1730a2f54b5a8f"
+  },
+  "patch_reconstruction": "PASS, fresh resolved temporary cwd; all five source files byte-identical",
+  "unchanged_files": [
+    "consensus/core/src/palw_tir_dissect_v1.rs",
+    "consensus/core/src/palw_tir_court_v1.rs",
+    "consensus/core/src/palw_court_v2.rs",
+    "consensus/core/src/palw_court_shared_tir_fold_v1.rs",
+    "consensus/core/src/palw_court_shared_tir_round_v1.rs",
+    "consensus/core/src/palw_court_shared_tir_bottom_v1.rs",
+    "consensus/core/src/palw_staged_court_state_v1.rs",
+    "consensus/core/src/palw_native_resource_v1/generated.rs",
+    "consensus/core/src/palw_native_resource_v1/wire_generated.rs"
+  ],
+  "scope": "Private root cost gate inherits existing legacy root carrier allowance. New terminal path counter is nonserialized analytical data. No native key/row/codec/phase field changes.",
+  "old_sizer_caveat": "Old worst_closes_priced prices whole close at position0 and root branch at positions>=1. Not used as an all-root bound for shared original-wide frontier."
+}

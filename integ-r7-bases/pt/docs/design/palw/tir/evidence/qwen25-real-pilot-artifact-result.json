@@ -1,0 +1,57 @@
+{
+  "architecture": "Qwen2ForCausalLM",
+  "artifact_bytes": 1835516100,
+  "artifact_digest": "4b9fb1572a2bb829aff8ffe09894e03c868ec3c47a19f21094235d63e593f2e2c7bb6a75beb069cf52f7e3f1bbc134f068b1514db028c4fca8e48c00baa5a3a6",
+  "backend": "misaka-palw-tir-exec",
+  "calibration": {
+    "length_rule": {
+      "context": 32,
+      "longest": null,
+      "rule": "not recurrent"
+    },
+    "positions": 121,
+    "sequences": 4,
+    "source": {
+      "kind": "authored-public-diagnostic-text",
+      "texts": [
+        "A tensor program is a directed graph. Each edge carries values with a declared integer type and shape. A verifier checks these declarations before execution begins.",
+        "The history of a calculation consists of the states from earlier positions. Keeping those states allows the next position to reuse work without recomputing the entire prefix.",
+        "翻訳の品質を評価するときは、原文の意味、固有名詞、数値、文体を確認します。小さな数値誤差が、後の単語の選択に影響する場合もあります。",
+        "A sparse matrix stores the positions of its nonzero elements. An algorithm that converts it to a large dense matrix may use much more memory and computation."
+      ],
+      "tokenizer_sha256": "c0382117ea329cdf097041132f6d735924b697924d6f6fc3945713e96ce87539",
+      "tokenizers_version": "0.22.0"
+    }
+  },
+  "composite": null,
+  "drift": null,
+  "evaluation": {
+    "positions": 123,
+    "sequences": 4,
+    "source": {
+      "kind": "authored-public-diagnostic-text",
+      "texts": [
+        "When a model selects an expert, the selected index and the corresponding weights must refer to the same registered computation. Duplicated indices can change the result.",
+        "A claim reaches its final state after the required checks finish. Before that transition, a response is provisional and its economic rights remain subject to the registered bond.",
+        "長い文章を処理するモデルでは、文脈の先頭と末尾にある情報を結び付ける必要があります。状態を途中で初期化すると、このつながりが失われます。",
+        "The implementation can evaluate a valid operation faster than a reference interpreter. Its output must still match the exact arithmetic, rounding and saturation rules of that operation."
+      ],
+      "tokenizer_sha256": "c0382117ea329cdf097041132f6d735924b697924d6f6fc3945713e96ce87539",
+      "tokenizers_version": "0.22.0"
+    }
+  },
+  "max_window": 32,
+  "metrics": {
+    "kl_max": 0.040143249462830655,
+    "kl_mean": 0.001367935869054015,
+    "positions": 123,
+    "ppl_delta": -0.00434251653831752,
+    "ppl_float": 82.08896895475011,
+    "ppl_int": 81.73249624945068,
+    "scored": 119,
+    "top1_agreement": 0.967479674796748
+  },
+  "program_bytes": 14011,
+  "program_digest": "71086e6b8a053586982ad76ddc1436059cbf74b3ed55661ed6fcad9bfbd338aa9ca61b7316f8cfe4dfe4db5248d50bbff957cf31591a81eb2b559eb165c65127",
+  "seconds": 54.032042458
+}

@@ -1,0 +1,33 @@
+{
+  "schema": "misaka.rfc02.flat-mixed9-contract-verdict.v1",
+  "captured_utc": "2026-10-11T09:35:48.443919+00:00",
+  "source_sha256": {
+    "misaka-palw-kernel/src/flat_point9.rs": "9b0602d66a1036820688768066397e9312d55acd0f64dcd583773f3e2b408bcd",
+    "misaka-palw-kernel/src/flat_scope9.rs": "d73a57113ed6112d6f51d3f5c9f2d392305436203ff427f15f5d85e7747663f0",
+    "misaka-palw-kernel/src/flat_court9.rs": "4110374c30d7f2156e4cc7c8009258384d34bbef86c829c6ff1d3763301bc802",
+    "misaka-palw-kernel/src/flat_detect9.rs": "fb13526485da3835e4ca98faa33c6326d809f7d5dad0a43503fb93c1f2aa23bd",
+    "misaka-palw-kernel/src/flat_replay9.rs": "31a2f53b4f18372e7522f1b967258d3eb9518d686388a41f20597e5aa7867356",
+    "misaka-palw-kernel/tests/flat_point9.rs": "c7fdc82951677305dd05933cb00cdc5bfad53451834813944ea29a531417479a",
+    "misaka-palw-kernel/tests/flat_graph9.rs": "8f34bfc0a43104dd05002a090f87a8dd683c377aa224617af244ded69500679a"
+  },
+  "point_tests_passed": 7,
+  "point_test_seconds": 70.4,
+  "mixed_replay_tests_passed": 4,
+  "mixed_replay_test_seconds": 5.5,
+  "prior_point6_trial_preserved": "flat-point9-isolated-contract-verdict.json",
+  "ordinary_tags_verified": 24,
+  "mixed_detector_tags_verified": 25,
+  "typed_value_dtypes_verified": 6,
+  "frozen_encoder_axis4096_noninline_ids_count_padding_verified": true,
+  "encoder_public_full_tensor_charge_was_already_covered_by_frozen4096_tile": true,
+  "core_production_point_or_scope_prices_changed_for_encoder": false,
+  "scope_preparation_charged_in_mixed_api": true,
+  "native_model_or_job_or_route9_integrated": false,
+  "full_process_cpu_rss_or_economics_or_final": false,
+  "a6_a8_cohort_credit": false,
+  "full_rfc02_complete": false,
+  "test_commands": [
+    "CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target cargo test --locked -p misaka-palw-kernel --test flat_point9",
+    "CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target cargo test --locked -p misaka-palw-kernel --test flat_graph9"
+  ]
+}

@@ -1,0 +1,41 @@
+[package]
+name = "kaspa-muhash"
+description = "Kaspa Muhash library"
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+kaspa-hashes.workspace = true
+# `kaspa-utils` provides the `MemSizeEstimator` trait that the consensus
+# UTXO-multiset store (and other RocksDB caches) require for any value
+# type. Implemented at the bottom of `src/lib.rs`.
+kaspa-utils.workspace = true
+# kaspa-pq Phase 7 (PR-7.6): `blake2b_simd` powers the 64-byte
+# `finalize_64` production-width commitment.
+blake2b_simd.workspace = true
+borsh.workspace = true
+rand_chacha.workspace = true
+serde.workspace = true
+
+# For the exhuative tests, should only be enabled with release
+rayon = { workspace = true, optional = true }
+
+[dev-dependencies]
+criterion.workspace = true
+rand.workspace = true
+
+[[bench]]
+name = "bench"
+harness = false
+
+[lints]
+rust = { unexpected_cfgs = { level = "warn", check-cfg = ['cfg(fuzzing)'] } }
+
+[lints.clippy]
+empty_docs = "allow"
+uninlined_format_args = "allow"

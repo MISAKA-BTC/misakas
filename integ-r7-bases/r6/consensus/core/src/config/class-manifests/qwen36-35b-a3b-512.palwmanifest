@@ -1,0 +1,28 @@
+{
+  "schema": "misaka.palw.class-manifest.v1",
+  "artifact_digest": "f4aad4fd543928eb2d3a737555b09da9bf685fc515c0f8d4520988efcffacf0813d1b727537f0d03d349253aa11ef427e4047c2166b69fd7edb46a4a9984b368",
+  "artifact_bytes": 36492831232,
+  "lineage_id": "qwen36-mmap-v1",
+  "classes": [
+    {
+      "model_id": "Qwen3.6-35B-A3B/graph-v3",
+      "class_id": "5bd9ae3d91df80650caffe3126a38bafb0b4feb9b046a416d353a7c3f71af6eab5aadf9b1ce41650007a980f1cc6044ef218424f4cbb8299ef9e92c97b99ef8e",
+      "inventory_root": "f4aad4fd543928eb2d3a737555b09da9bf685fc515c0f8d4520988efcffacf0813d1b727537f0d03d349253aa11ef427e4047c2166b69fd7edb46a4a9984b368"
+    },
+    {
+      "model_id": "Qwen3.6-35B-A3B/graph-v7@2097152",
+      "class_id": "b4b891afe49a59f570283233e95f67b3f6887a9d4483686ead64a7ce025d1e6a4a5c4a3eae69cd9339f0ec2e9ecd12904b91e8bb52bb446509448c13e459fac3",
+      "inventory_root": "f01230ae0d328f5b871ea84913118eedc5806c3145d144356b4d07a3ca1e4fcbf525b981772df61aea6c926add08f043444b13597d25bf66fd28bcbdc7fbafb0"
+    },
+    {
+      "model_id": "Qwen3.6-35B-A3B/graph-v7@512",
+      "class_id": "e108e736592dcd2cf68de75d28d38e3eb85a06a2aa23c9ca6b7a10cda3b83e7273762eb315cc8cbc6e8fa496977b3971a2720ec772da885cfd40cb4726a44577",
+      "inventory_root": "f01230ae0d328f5b871ea84913118eedc5806c3145d144356b4d07a3ca1e4fcbf525b981772df61aea6c926add08f043444b13597d25bf66fd28bcbdc7fbafb0"
+    },
+    {
+      "model_id": "Qwen3.6-35B-A3B",
+      "class_id": "ec7bbcbffe13f36f1c2c418c65bdab840dd40b2bc22b217522dae836153078ddb77a92fb0645d34f98e9e3a1302e4543448a3924b3cd152fc74774ad3f02fb3f",
+      "inventory_root": "f4aad4fd543928eb2d3a737555b09da9bf685fc515c0f8d4520988efcffacf0813d1b727537f0d03d349253aa11ef427e4047c2166b69fd7edb46a4a9984b368"
+    }
+  ]
+}

@@ -79,6 +79,7 @@ pub(super) struct Monitor {
     signed_keys: u64,
     actual_length: u64,
     seed: Option<(Hash64, u64)>,
+    bundle_seed: Option<(Hash64, u64)>,
     maximum_offset: u64,
     sealed: bool,
     completed: bool,
@@ -92,6 +93,7 @@ impl Monitor {
             signed_keys,
             actual_length: std::fs::metadata(fixture.path.parent().unwrap().join("tokenizer.json")).unwrap().len(),
             seed: None,
+            bundle_seed: None,
             maximum_offset: 0,
             sealed: false,
             completed: false,
@@ -112,8 +114,33 @@ impl Monitor {
         let Some(progress) = chain.tc.palw_staged_owned_progress_v1((claim, owner)).unwrap() else { return };
         assert_eq!((progress.claim, progress.reserver), (claim, owner));
         assert!(progress.now_daa <= chain.daa(), "the monitor uses an accepted native snapshot clock");
-        let Some(PalwStagedOwnedCursorV1::Tokenizer { offset, tokenizer_sealed, completed, .. }) = progress.cursor else { return };
-        let accepted_seed = (progress.seed_id.expect("an owned row pins its literal signed seed"), progress.reserved_daa);
+        let length_fault = self.signed_length != self.actual_length;
+        if let Some(bundle) = &progress.bundle {
+            bundle.plan.check_v1().unwrap();
+            assert_eq!(bundle.plan.id_v1(claim), bundle.bundle_id);
+            let identity = (bundle.bundle_id, progress.reserved_daa);
+            if let Some(previous) = self.bundle_seed {
+                assert_eq!(previous, identity, "restart retains the original owned bundle");
+            }
+            self.bundle_seed = Some(identity);
+        }
+        // An immutable length lie is refuted at authenticated inventory EOF, before
+        // any family may open. A key-work lie requires the later tokenizer family.
+        let (offset, tokenizer_sealed, completed, accepted_seed) = if length_fault {
+            let Some(bundle) = &progress.bundle else { return };
+            let Some((offset, maximum, sealed, fault)) = bundle.inventory else { return };
+            assert_eq!(maximum, self.actual_length);
+            assert_eq!(bundle.active_index, None, "faulty inventory cannot activate a family");
+            (offset, sealed, sealed.then_some(fault), (bundle.bundle_id, progress.reserved_daa))
+        } else {
+            let Some(PalwStagedOwnedCursorV1::Tokenizer { offset, tokenizer_sealed, completed, .. }) = progress.cursor else { return };
+            (
+                offset,
+                tokenizer_sealed,
+                completed,
+                (progress.seed_id.expect("an owned row pins its literal signed seed"), progress.reserved_daa),
+            )
+        };
         if let Some(previous) = self.seed {
             assert_eq!(accepted_seed, previous, "restart resumes the same ordinary reservation and signed seed");
         }
@@ -177,33 +204,85 @@ impl Monitor {
         };
         assert_eq!((reference.claim, reference.reserver), (claim, owner));
         assert_eq!((reference.seed_id, reference.reserved_daa), self.seed.unwrap());
+        let view = chain.view(claim);
+        let job = view.public_fp_job.as_ref().expect("the actual retained accepted original job survives restart");
+        let job = borsh::from_slice::<kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptCommitmentV3>(job).unwrap();
+        assert_eq!(job.execution_root, view.execution_root);
+        let length_fault = self.signed_length != self.actual_length;
+        let bundle_seed = self.bundle_seed.expect("accepted bundle inventory was observed");
+        let mut opens = 0;
+        let mut inventory_packets = 0;
+        let mut inventory_offset = 0;
+        let mut inventory_seals = 0;
+        for object in carriers {
+            if let PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement } = object
+                && (movement.claim, movement.reserver) == (claim, owner)
+            {
+                movement.check().unwrap();
+                match &movement.action {
+                    PalwConstraintStreamActionV1::BundleOpen { plan } => {
+                        opens += 1;
+                        plan.check_v1().unwrap();
+                        assert_eq!((plan.id_v1(claim), movement.reserved_daa), bundle_seed);
+                        assert_eq!(plan.inventory.as_ref().unwrap().maximum_bytes, self.actual_length);
+                    }
+                    PalwConstraintStreamActionV1::InventoryPart { offset, bytes } => {
+                        assert_eq!(movement.seed_id, bundle_seed.0);
+                        assert_eq!(*offset, inventory_offset);
+                        assert!(!bytes.is_empty() && bytes.len() <= 65_536);
+                        inventory_offset += bytes.len() as u64;
+                        inventory_packets += 1;
+                    }
+                    PalwConstraintStreamActionV1::InventoryFinish => {
+                        assert_eq!(movement.seed_id, bundle_seed.0);
+                        assert_eq!(inventory_offset, self.actual_length);
+                        inventory_seals += 1;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        assert_eq!(opens, 1, "restart cannot replace the signed bundle");
+        assert!(inventory_packets > 16);
+        assert_eq!(inventory_seals, 1);
         let seeds: Vec<_> = carriers
             .iter()
             .filter_map(|o| match o {
-                PalwConsensusObjectV2::PublicCourtStreamOpenedV1 { seed } if seed.claim == claim && seed.reserver == owner => {
+                PalwConsensusObjectV2::PublicCourtStreamOpenedV1 { seed }
+                    if seed.claim == claim
+                        && seed.reserver == owner
+                        && matches!(seed.auxiliary, Some(PalwAuxiliaryPublicCourtSeedV1::Tokenizer { .. })) =>
+                {
                     Some(seed)
                 }
                 _ => None,
             })
             .collect();
-        assert_eq!(seeds.len(), 1, "restart does not reopen or duplicate the accepted owned court");
-        let seed = seeds[0];
-        assert_eq!(Hash64::from_bytes(seed.signing_message().try_into().unwrap()), reference.seed_id);
-        let Some(PalwAuxiliaryPublicCourtSeedV1::Tokenizer {
-            raw_tokenizer_bytes, tokenizer_key_events, operand_tokenizer_bytes, ..
-        }) = &seed.auxiliary
-        else {
-            panic!("native seed is specifically tokenizer-owned")
-        };
-        assert_eq!(
-            (*raw_tokenizer_bytes, *tokenizer_key_events, *operand_tokenizer_bytes),
-            (self.signed_length, self.signed_keys, self.actual_length)
-        );
-        let view = chain.view(claim);
-        assert_eq!(seed.binding.committed_execution_root, view.execution_root);
-        let job = view.public_fp_job.as_ref().expect("the actual retained accepted original job survives restart");
-        let job = borsh::from_slice::<kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptCommitmentV3>(job).unwrap();
-        assert_eq!((job.execution_root, job.trace_root), (seed.binding.committed_execution_root, seed.binding.full_logits_trace_root));
+        if length_fault {
+            assert_eq!((reference.seed_id, reference.reserved_daa), bundle_seed);
+            assert!(seeds.is_empty(), "inventory EOF must convict before tokenizer family activation");
+        } else {
+            assert_eq!(seeds.len(), 1, "restart does not duplicate the accepted tokenizer court");
+            let seed = seeds[0];
+            assert_eq!(Hash64::from_bytes(seed.signing_message().try_into().unwrap()), reference.seed_id);
+            let Some(PalwAuxiliaryPublicCourtSeedV1::Tokenizer {
+                raw_tokenizer_bytes,
+                tokenizer_key_events,
+                operand_tokenizer_bytes,
+                ..
+            }) = &seed.auxiliary
+            else {
+                unreachable!()
+            };
+            assert_eq!(
+                (*raw_tokenizer_bytes, *tokenizer_key_events, *operand_tokenizer_bytes),
+                (self.signed_length, self.signed_keys, self.actual_length)
+            );
+            assert_eq!(
+                (job.execution_root, job.trace_root),
+                (seed.binding.committed_execution_root, seed.binding.full_logits_trace_root)
+            );
+        }
         let immutable = view.registered_semantics.as_ref().unwrap();
         assert_eq!(
             (immutable.raw_tokenizer_bytes, immutable.tokenizer_key_events),
@@ -217,6 +296,8 @@ impl Monitor {
             if let PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement } = carrier
                 && movement.claim == claim
                 && movement.reserver == owner
+                && movement.seed_id == reference.seed_id
+                && !length_fault
             {
                 assert_eq!(movement.phase, PalwConstraintStreamPhaseV1::Tokenizer);
                 movement.check().unwrap();
@@ -232,8 +313,10 @@ impl Monitor {
                 }
             }
         }
-        assert!(packets > 16 && rendering > 0);
-        assert_eq!(seals, 1);
+        if !length_fault {
+            assert!(packets > 16 && rendering > 0);
+            assert_eq!(seals, 1);
+        }
         assert!(carriers.iter().any(|o| matches!(o, PalwConsensusObjectV2::DisputeReservedV1 { reservation, .. } if reservation.claim == claim && reservation.reserver == owner)));
     }
 }

@@ -1,0 +1,746 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "falcon-h1",
+  "doc": "Falcon-H1 (FalconH1ForCausalLM; tiiuae/Falcon-H1-*): every layer runs a Mamba-2 mixer and a grouped-query attention IN PARALLEL on the layer's one normed input (input_layernorm) and adds their outputs to the residual (MIXER_PARALLEL_BRANCH_V1), then a gated MLP under pre_ff_layernorm. The muP multipliers (SCALE_MUP_V1) are each placed where the model applies them: embedding_multiplier on the embedding and lm_head_multiplier on the logits; ssm_in_multiplier / ssm_out_multiplier and attention_in_multiplier / attention_out_multiplier as the branches' input and output scales; ssm_multipliers as the five chunk scales of the Mamba-2 projection [z | x | B | C | dt] (MAMBA2_MUP_V1); key_multiplier folded into the attention score scale (the rotation is linear, so rotate(k*m) = m*rotate(k)); and mlp_multipliers folded exactly into the gate and down weights (and biases) by weights expressions. The Mamba-2 mixer has the output gate and an optional grouped RMS norm in either order (mamba_rms_norm, mamba_norm_before_gate; MAMBA2_GATE_NORM_VARIANTS_V1) and reads time_step_limit as its dt clamp; mamba_d_head 'auto' is the mixer's width over its heads. A mamba in_proj bias (mamba_proj_bias) and out_proj bias (projectors_bias) that differ are refused. Features: MIXER_PARALLEL_BRANCH_V1, MIXER_MAMBA2_V1, MAMBA2_MUP_V1, MAMBA2_GATE_NORM_VARIANTS_V1, SCALE_MUP_V1, ATTN_GQA_V1, ROPE_DEFAULT_V1, MLP_DENSE_GATED_V1, NORM_RMS_V1.",
+  "extends": [
+    "decoder-core"
+  ],
+  "match": {
+    "architectures": [
+      "FalconH1ForCausalLM"
+    ],
+    "model_types": [
+      "falcon_h1"
+    ]
+  },
+  "config": {
+    "defaults": {
+      "vocab_size": 128000,
+      "hidden_size": 4096,
+      "intermediate_size": 14336,
+      "num_hidden_layers": 32,
+      "num_attention_heads": 32,
+      "num_key_value_heads": 8,
+      "hidden_act": "silu",
+      "rms_norm_eps": 1e-05,
+      "max_position_embeddings": 8192,
+      "mamba_d_ssm": 1024,
+      "mamba_n_heads": 128,
+      "mamba_d_head": "auto",
+      "mamba_n_groups": 1,
+      "mamba_d_state": 256,
+      "mamba_d_conv": 4,
+      "mamba_expand": 2,
+      "mamba_conv_bias": true,
+      "mamba_proj_bias": false,
+      "mamba_norm_before_gate": true,
+      "mamba_rms_norm": false,
+      "projectors_bias": false,
+      "lm_head_multiplier": 1.0,
+      "embedding_multiplier": 1.0,
+      "mlp_multipliers": [
+        1.0,
+        1.0
+      ],
+      "key_multiplier": 1.0,
+      "attention_out_multiplier": 1.0,
+      "attention_in_multiplier": 1.0,
+      "ssm_multipliers": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "ssm_in_multiplier": 1.0,
+      "ssm_out_multiplier": 1.0,
+      "attention_bias": false,
+      "mlp_bias": false
+    },
+    "inert": [
+      "attention_dropout",
+      "initializer_range",
+      "num_logits_to_keep",
+      "use_cache",
+      "mamba_chunk_size",
+      "mlp_expansion_factor"
+    ]
+  },
+  "vars": [
+    {
+      "name": "emb_scale",
+      "value": {
+        "$cfg": "embedding_multiplier"
+      }
+    },
+    {
+      "name": "logit_scale",
+      "value": {
+        "$cfg": "lm_head_multiplier"
+      }
+    },
+    {
+      "name": "attn_scale",
+      "value": {
+        "$div": [
+          {
+            "$cfg": "key_multiplier"
+          },
+          {
+            "$sqrt": {
+              "$var": "hd"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "ssm_inner",
+      "value": {
+        "$let": [
+          "_",
+          {
+            "$cfg?": "mamba_expand"
+          },
+          {
+            "$let": [
+              "d",
+              {
+                "$cfgn": "mamba_d_ssm"
+              },
+              {
+                "$if": [
+                  {
+                    "$ne": [
+                      {
+                        "$var": "d"
+                      },
+                      null
+                    ]
+                  },
+                  {
+                    "$var": "d"
+                  },
+                  {
+                    "$int": {
+                      "$mul": [
+                        {
+                          "$cfg": "mamba_expand"
+                        },
+                        {
+                          "$var": "hidden"
+                        }
+                      ]
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "ssm_heads",
+      "value": {
+        "$cfg": "mamba_n_heads"
+      }
+    },
+    {
+      "name": "ssm_head_dim",
+      "value": {
+        "$let": [
+          "dh",
+          {
+            "$cfg": "mamba_d_head"
+          },
+          {
+            "$let": [
+              "h",
+              {
+                "$if": [
+                  {
+                    "$is_num": {
+                      "$var": "dh"
+                    }
+                  },
+                  {
+                    "$var": "dh"
+                  },
+                  {
+                    "$if": [
+                      {
+                        "$eq": [
+                          {
+                            "$var": "dh"
+                          },
+                          "auto"
+                        ]
+                      },
+                      {
+                        "$idiv": [
+                          {
+                            "$var": "ssm_inner"
+                          },
+                          {
+                            "$var": "ssm_heads"
+                          }
+                        ]
+                      },
+                      {
+                        "$check": [
+                          false,
+                          "mamba_d_head is a number or 'auto'"
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "$let": [
+                  "_",
+                  {
+                    "$check": [
+                      {
+                        "$eq": [
+                          {
+                            "$mul": [
+                              {
+                                "$var": "h"
+                              },
+                              {
+                                "$var": "ssm_heads"
+                              }
+                            ]
+                          },
+                          {
+                            "$var": "ssm_inner"
+                          }
+                        ]
+                      },
+                      "mamba_d_head * mamba_n_heads must equal the mixer's width"
+                    ]
+                  },
+                  {
+                    "$var": "h"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "tsl",
+      "value": {
+        "$cfg?": "time_step_limit"
+      }
+    },
+    {
+      "name": "dt_min",
+      "value": {
+        "$if": [
+          {
+            "$ne": [
+              {
+                "$var": "tsl"
+              },
+              null
+            ]
+          },
+          {
+            "$let": [
+              "a",
+              {
+                "$index": [
+                  {
+                    "$var": "tsl"
+                  },
+                  0
+                ]
+              },
+              {
+                "$if": [
+                  {
+                    "$is_num": {
+                      "$var": "a"
+                    }
+                  },
+                  {
+                    "$var": "a"
+                  },
+                  0.0
+                ]
+              }
+            ]
+          },
+          0.0
+        ]
+      }
+    },
+    {
+      "name": "dt_max",
+      "value": {
+        "$if": [
+          {
+            "$ne": [
+              {
+                "$var": "tsl"
+              },
+              null
+            ]
+          },
+          {
+            "$let": [
+              "b",
+              {
+                "$index": [
+                  {
+                    "$var": "tsl"
+                  },
+                  1
+                ]
+              },
+              {
+                "$if": [
+                  {
+                    "$is_num": {
+                      "$var": "b"
+                    }
+                  },
+                  {
+                    "$var": "b"
+                  },
+                  1.7976931348623157e+308
+                ]
+              }
+            ]
+          },
+          1.7976931348623157e+308
+        ]
+      }
+    },
+    {
+      "name": "tsl_ok",
+      "value": {
+        "$check": [
+          {
+            "$and": [
+              {
+                "$le": [
+                  {
+                    "$var": "dt_min"
+                  },
+                  0.0
+                ]
+              },
+              {
+                "$ge": [
+                  {
+                    "$var": "dt_max"
+                  },
+                  1e+300
+                ]
+              }
+            ]
+          },
+          "non-default time_step_limit (HF's prefill clamps dt, its decode does not)"
+        ]
+      }
+    },
+    {
+      "name": "bias_ok",
+      "value": {
+        "$let": [
+          "_",
+          {
+            "$var": "tsl_ok"
+          },
+          {
+            "$let": [
+              "_",
+              {
+                "$check": [
+                  {
+                    "$eq": [
+                      {
+                        "$cfg": "hidden_act"
+                      },
+                      "silu"
+                    ]
+                  },
+                  "hidden_act must be silu: it is also the Mamba-2 convolution's activation"
+                ]
+              },
+              {
+                "$check": [
+                  {
+                    "$eq": [
+                      {
+                        "$cfg": "mamba_proj_bias"
+                      },
+                      {
+                        "$cfg": "projectors_bias"
+                      }
+                    ]
+                  },
+                  "mamba_proj_bias and projectors_bias differ: the in_proj and out_proj biases are one flag in this lowering"
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "mup",
+      "value": {
+        "$cfg": "ssm_multipliers"
+      }
+    },
+    {
+      "name": "mamba2",
+      "value": {
+        "$let": [
+          "_",
+          {
+            "$var": "bias_ok"
+          },
+          {
+            "Mamba2": {
+              "heads": {
+                "$var": "ssm_heads"
+              },
+              "head_dim": {
+                "$var": "ssm_head_dim"
+              },
+              "groups": {
+                "$cfg": "mamba_n_groups"
+              },
+              "state": {
+                "$cfg": "mamba_d_state"
+              },
+              "conv_kernel": {
+                "$cfg": "mamba_d_conv"
+              },
+              "conv_bias": {
+                "$cfg": "mamba_conv_bias"
+              },
+              "proj_bias": {
+                "$cfg": "mamba_proj_bias"
+              },
+              "norm_eps": {
+                "$cfg": "rms_norm_eps"
+              },
+              "norm_groups": {
+                "$cfg": "mamba_n_groups"
+              },
+              "dt_min": 0.0,
+              "dt_max": null,
+              "d_mlp": 0,
+              "norm_mode": {
+                "$if": [
+                  {
+                    "$cfg": "mamba_rms_norm"
+                  },
+                  {
+                    "$if": [
+                      {
+                        "$cfg": "mamba_norm_before_gate"
+                      },
+                      "NormFirst",
+                      "GateFirst"
+                    ]
+                  },
+                  {
+                    "$let": [
+                      "_",
+                      {
+                        "$cfg": "mamba_norm_before_gate"
+                      },
+                      "Ungated"
+                    ]
+                  }
+                ]
+              },
+              "chunk_scales": {
+                "$if": [
+                  {
+                    "$eq": [
+                      {
+                        "$var": "mup"
+                      },
+                      [
+                        1.0,
+                        1.0,
+                        1.0,
+                        1.0,
+                        1.0
+                      ]
+                    ]
+                  },
+                  null,
+                  {
+                    "$var": "mup"
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "attn",
+      "value": {
+        "Attention": {
+          "heads": {
+            "$var": "heads"
+          },
+          "kv_heads": {
+            "$var": "kv"
+          },
+          "head_dim": {
+            "$var": "hd"
+          },
+          "v_head_dim": {
+            "$var": "hd"
+          },
+          "q_bias": {
+            "$var": "qkv_bias"
+          },
+          "k_bias": {
+            "$var": "qkv_bias"
+          },
+          "v_bias": {
+            "$var": "qkv_bias"
+          },
+          "o_bias": {
+            "$var": "o_bias"
+          },
+          "qk_norm": null,
+          "position": {
+            "Rope": {
+              "$var": "rope"
+            }
+          },
+          "scale": {
+            "$var": "attn_scale"
+          },
+          "window": null,
+          "q_temperature": null
+        }
+      }
+    },
+    {
+      "name": "mixer",
+      "value": {
+        "Parallel": [
+          {
+            "mixer": {
+              "$var": "mamba2"
+            },
+            "in_scale": {
+              "$cfg": "ssm_in_multiplier"
+            },
+            "out_scale": {
+              "$cfg": "ssm_out_multiplier"
+            }
+          },
+          {
+            "mixer": {
+              "$var": "attn"
+            },
+            "in_scale": {
+              "$cfg": "attention_in_multiplier"
+            },
+            "out_scale": {
+              "$cfg": "attention_out_multiplier"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "l_mixer",
+      "layer": true,
+      "value": {
+        "$var": "mixer"
+      }
+    },
+    {
+      "name": "gm",
+      "value": {
+        "$index": [
+          {
+            "$cfg": "mlp_multipliers"
+          },
+          0
+        ]
+      }
+    },
+    {
+      "name": "dm",
+      "value": {
+        "$index": [
+          {
+            "$cfg": "mlp_multipliers"
+          },
+          1
+        ]
+      }
+    },
+    {
+      "name": "names",
+      "value": {
+        "$merge": [
+          {
+            "$var": "names_base"
+          },
+          {
+            "final_norm": "{p}final_layernorm",
+            "norm.ffn": "{p}layers.{L}.pre_ff_layernorm",
+            "mlp.gate": "{p}layers.{L}.feed_forward.gate_proj",
+            "mlp.up": "{p}layers.{L}.feed_forward.up_proj",
+            "mlp.down": "{p}layers.{L}.feed_forward.down_proj",
+            "mamba2.in": "{p}layers.{L}.mamba.in_proj",
+            "mamba2.conv": "{p}layers.{L}.mamba.conv1d",
+            "mamba2.dt_bias": "{p}layers.{L}.mamba.dt_bias",
+            "mamba2.A_log": "{p}layers.{L}.mamba.A_log",
+            "mamba2.D": "{p}layers.{L}.mamba.D",
+            "mamba2.norm": "{p}layers.{L}.mamba.norm",
+            "mamba2.out": "{p}layers.{L}.mamba.out_proj"
+          }
+        ]
+      }
+    },
+    {
+      "name": "model_type",
+      "value": "falcon_h1"
+    }
+  ],
+  "spec": {
+    "hf": {
+      "weights": {
+        "$merge": [
+          {
+            "$if": [
+              {
+                "$ne": [
+                  {
+                    "$var": "gm"
+                  },
+                  1.0
+                ]
+              },
+              {
+                "mlp.gate.w": [
+                  "{p}layers.{L}.feed_forward.gate_proj.weight",
+                  {
+                    "map": {
+                      "scale": {
+                        "$var": "gm"
+                      }
+                    }
+                  }
+                ]
+              },
+              {}
+            ]
+          },
+          {
+            "$if": [
+              {
+                "$ne": [
+                  {
+                    "$var": "dm"
+                  },
+                  1.0
+                ]
+              },
+              {
+                "mlp.down.w": [
+                  "{p}layers.{L}.feed_forward.down_proj.weight",
+                  {
+                    "map": {
+                      "scale": {
+                        "$var": "dm"
+                      }
+                    }
+                  }
+                ]
+              },
+              {}
+            ]
+          },
+          {
+            "$if": [
+              {
+                "$and": [
+                  {
+                    "$cfg": "mlp_bias"
+                  },
+                  {
+                    "$ne": [
+                      {
+                        "$var": "gm"
+                      },
+                      1.0
+                    ]
+                  }
+                ]
+              },
+              {
+                "mlp.gate.b": [
+                  "{p}layers.{L}.feed_forward.gate_proj.bias",
+                  {
+                    "map": {
+                      "scale": {
+                        "$var": "gm"
+                      }
+                    }
+                  }
+                ]
+              },
+              {}
+            ]
+          },
+          {
+            "$if": [
+              {
+                "$and": [
+                  {
+                    "$cfg": "mlp_bias"
+                  },
+                  {
+                    "$ne": [
+                      {
+                        "$var": "dm"
+                      },
+                      1.0
+                    ]
+                  }
+                ]
+              },
+              {
+                "mlp.down.b": [
+                  "{p}layers.{L}.feed_forward.down_proj.bias",
+                  {
+                    "map": {
+                      "scale": {
+                        "$var": "dm"
+                      }
+                    }
+                  }
+                ]
+              },
+              {}
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

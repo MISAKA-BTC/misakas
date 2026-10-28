@@ -1,0 +1,145 @@
+
+running 4 tests
+[service-tiled] ordinary geometry hidden 256, FP work 9012040, native network quantum 2707216
+[service-tiled] ordinary geometry hidden 256, FP work 9012040, native network quantum 2707216
+[service-tiled] ordinary signed class registration accepted; root c9acf5b17d129f344c6cc9c70e075a8a5dd39420f1e2d8b43afb108c08a136ea52b71c995b63f2295ffdb5e6c3edd63db747e60b15f51efc60572b2f62d646cc, 4099 lanes, canonical 1/2
+[service-tiled] ordinary signed class registration accepted; root c9acf5b17d129f344c6cc9c70e075a8a5dd39420f1e2d8b43afb108c08a136ea52b71c995b63f2295ffdb5e6c3edd63db747e60b15f51efc60572b2f62d646cc, 4099 lanes, canonical 1/2
+[service-public] normal FP family certification accepted from 3 public drill carriers
+[service-public] normal FP family certification accepted from 3 public drill carriers
+[service-public] registered FP graph publicly carried by ordinary ClassLaneCertified
+[service-public] registered FP graph publicly carried by ordinary ClassLaneCertified
+[service-public] heartbeat advance 133 -> 1009
+[service-public] heartbeat advance 133 -> 1009
+[service-public] heartbeat advance 258 -> 1009
+[service-public] heartbeat advance 258 -> 1009
+[service-public] heartbeat advance 383 -> 1009
+[service-public] heartbeat advance 383 -> 1009
+[service-public] heartbeat advance 508 -> 1009
+[service-public] heartbeat advance 508 -> 1009
+test palw_panel::palw_service_public_e2e::fresh_public_bond_service_registered_tiled_constraint_beaten_across_tiles has been running for over 60 seconds
+test palw_panel::palw_service_public_e2e::fresh_public_bond_service_registered_tiled_constraint_forbidden_token has been running for over 60 seconds
+[service-public] heartbeat advance 633 -> 1009
+[service-public] heartbeat advance 633 -> 1009
+[service-public] heartbeat advance 758 -> 1009
+[service-public] heartbeat advance 758 -> 1009
+[service-public] heartbeat advance 883 -> 1009
+[service-public] heartbeat advance 883 -> 1009
+[service-public] heartbeat advance 1008 -> 1009
+[service-public] ordinary bond registered before DAA 8, maturity 1000, now 1009
+[service-public] heartbeat advance 1008 -> 1009
+[service-public] ordinary bond registered before DAA 8, maturity 1000, now 1009
+[service-tiled] normal jury at span 1112: state Some(Probation { probes_passed: 0 }), ready 7, room 2543549, reason probing: 0/10 finals passed, 0 failed since entry
+[service-public] ordinary FP Job V6 admission: claim 384dd9de0e94c67d490065b304853baa60f4efce77da16735e0d9f56a2940b33f9aaf283a40b9da4ff8fcca613dcd7ea55a647ef3c17862f038a2fce1a65ded7, 2 quanta, 6611032 pwu, fee 331137
+[service-tiled] normal jury at span 1112: state Some(Probation { probes_passed: 0 }), ready 7, room 2543549, reason probing: 0/10 finals passed, 0 failed since entry
+[service-public] ordinary FP Job V6 admission: claim bd321c7cf508f0356d71715090a1ded6a3cbec4e4037f548f976fb5e75e32c061335615d1681fa7eed7416e459d28085422f23d1350c047e0bc296a5183d56e0, 2 quanta, 6611032 pwu, fee 331137
+[service-public] fresh database validated 2271 public blocks at DAA 1135
+[service-public] fresh database validated 2271 public blocks at DAA 1135
+[service-public] original FP body/acceptance rows pruned; rooted job metadata present = false
+2026-10-11 17:13:50.146+09:00 [INFO ] [palw-panel] starting (bond=(7114f092bc0636065fe3c89afd5990bc40b3f135d488f8586864200832cf82a518979cc2063477c11f1a1d2794ea97c5edb6c63d36a7257ec0808a954bcbc571, 0), submitter=funded, register=off)
+2026-10-11 17:13:52.396+09:00 [INFO ] [palw-panel] claim 19007d68e3063a0d7c5c588fc3cb89581c313fa13a4d22dd1a7e3c60bcea43cacbb93904c841f1eb39deaf01d7e986018fff134ecd029dbf8dffd750baadf209: the fraud filer replays the claim's job off the loop (LG14-A, RFC-0014 §6.1)
+2026-10-11 17:13:52.413+09:00 [WARN ] [palw-panel] no possession proofs this tick — the seat is not near the tip (ibd=false, synced=false)
+[service-public] original FP body/acceptance rows pruned; rooted job metadata present = false
+2026-10-11 17:13:53.719+09:00 [INFO ] [palw-panel] starting (bond=(7114f092bc0636065fe3c89afd5990bc40b3f135d488f8586864200832cf82a518979cc2063477c11f1a1d2794ea97c5edb6c63d36a7257ec0808a954bcbc571, 0), submitter=funded, register=off)
+2026-10-11 17:13:54.416+09:00 [ERROR] [palw-panel] claim 19007d68e3063a0d7c5c588fc3cb89581c313fa13a4d22dd1a7e3c60bcea43cacbb93904c841f1eb39deaf01d7e986018fff134ecd029dbf8dffd750baadf209: this node's replay of the claim's job does NOT reproduce its execution root (replayed c74c28a915fd057329afb9d58638e9df5d4613f9534407a31c269ec28aeccd719679aca12aeafefb0b7adc92f942122c2d2cb3766aaa77f68000d6f917d1b4c4) — every seat of its panel let it pass or none looked; pursuing it as a public bond (LG14-A, RFC-0014 §6)
+2026-10-11 17:13:54.433+09:00 [INFO ] [palw-panel] claim 19007d68e3063a0d7c5c588fc3cb89581c313fa13a4d22dd1a7e3c60bcea43cacbb93904c841f1eb39deaf01d7e986018fff134ecd029dbf8dffd750baadf209: the fraud filer queues Reserve (LG14-A, RFC-0014 §6–§7)
+2026-10-11 17:13:54.444+09:00 [INFO ] [palw-panel] claim bd321c7cf508f0356d71715090a1ded6a3cbec4e4037f548f976fb5e75e32c061335615d1681fa7eed7416e459d28085422f23d1350c047e0bc296a5183d56e0: the fraud filer queues Reserve (LG14-A, RFC-0014 §6–§7)
+2026-10-11 17:13:54.465+09:00 [INFO ] [palw-panel] submitted DisputeReservedV1 for court session 19007d68e3063a0d7c5c588fc3cb89581c313fa13a4d22dd1a7e3c60bcea43cacbb93904c841f1eb39deaf01d7e986018fff134ecd029dbf8dffd750baadf209 round 4294967285 in tx 8ea1b0a2fbf3eeb88217367e8c8fc3465e84ada37b7c4180a7cab305e15b3ccd496eb525aa2aa10b275c04908303960f2d5e600cec6073c1930b04b48beed54e
+[service-public] real mempool carrier Discriminant(154), 4896 bytes
+2026-10-11 17:13:55.837+09:00 [INFO ] [palw-panel] claim 19007d68e3063a0d7c5c588fc3cb89581c313fa13a4d22dd1a7e3c60bcea43cacbb93904c841f1eb39deaf01d7e986018fff134ecd029dbf8dffd750baadf209: the fraud filer replays the claim's job off the loop (LG14-A, RFC-0014 §6.1)
+2026-10-11 17:13:56.468+09:00 [INFO ] [palw-panel] claim 19007d68e3063a0d7c5c588fc3cb89581c313fa13a4d22dd1a7e3c60bcea43cacbb93904c841f1eb39deaf01d7e986018fff134ecd029dbf8dffd750baadf209: the fraud filer's item (round 4294967285) was carried at DAA 1209 (LG14-A)
+2026-10-11 17:13:56.581+09:00 [INFO ] [palw-panel] claim 784f35400ca8be1403a3ce5cfeb006d5a71b84ba8c2247d5941f01947642a489c6e2c2869ef6d522698947838ad0427ec98ff302e4a187fff9af26dca05545ac: the fraud filer replays the claim's job off the loop (LG14-A, RFC-0014 §6.1)
+2026-10-11 17:13:56.595+09:00 [INFO ] [palw-panel] claim 19007d68e3063a0d7c5c588fc3cb89581c313fa13a4d22dd1a7e3c60bcea43cacbb93904c841f1eb39deaf01d7e986018fff134ecd029dbf8dffd750baadf209: the fraud filer queues Demand(Binding { row: 0, tile: 0 }) (LG14-A, RFC-0014 §6–§7)
+2026-10-11 17:13:56.626+09:00 [INFO ] [palw-panel] submitted DisputeReservedV1 for court session bd321c7cf508f0356d71715090a1ded6a3cbec4e4037f548f976fb5e75e32c061335615d1681fa7eed7416e459d28085422f23d1350c047e0bc296a5183d56e0 round 4294967285 in tx 092595d965324895c616eb7d2d2c318c9acba0941cbb258d558da7afef2ef11833ccfcd5210900ad3aa114d553663a533e73283de71a60dca8c2c64903df8c14
+[service-public] real mempool carrier Discriminant(154), 4896 bytes
+2026-10-11 17:13:57.858+09:00 [ERROR] [palw-panel] claim 19007d68e3063a0d7c5c588fc3cb89581c313fa13a4d22dd1a7e3c60bcea43cacbb93904c841f1eb39deaf01d7e986018fff134ecd029dbf8dffd750baadf209: this node's replay of the claim's job does NOT reproduce its execution root (replayed c74c28a915fd057329afb9d58638e9df5d4613f9534407a31c269ec28aeccd719679aca12aeafefb0b7adc92f942122c2d2cb3766aaa77f68000d6f917d1b4c4) — every seat of its panel let it pass or none looked; pursuing it as a public bond (LG14-A, RFC-0014 §6)
+2026-10-11 17:13:57.875+09:00 [INFO ] [palw-panel] claim 19007d68e3063a0d7c5c588fc3cb89581c313fa13a4d22dd1a7e3c60bcea43cacbb93904c841f1eb39deaf01d7e986018fff134ecd029dbf8dffd750baadf209: the fraud filer queues Reserve (LG14-A, RFC-0014 §6–§7)
+2026-10-11 17:13:57.886+09:00 [INFO ] [palw-panel] claim 384dd9de0e94c67d490065b304853baa60f4efce77da16735e0d9f56a2940b33f9aaf283a40b9da4ff8fcca613dcd7ea55a647ef3c17862f038a2fce1a65ded7: the fraud filer queues Reserve (LG14-A, RFC-0014 §6–§7)
+2026-10-11 17:13:57.906+09:00 [INFO ] [palw-panel] submitted DisputeReservedV1 for court session 19007d68e3063a0d7c5c588fc3cb89581c313fa13a4d22dd1a7e3c60bcea43cacbb93904c841f1eb39deaf01d7e986018fff134ecd029dbf8dffd750baadf209 round 4294967285 in tx 8ea1b0a2fbf3eeb88217367e8c8fc3465e84ada37b7c4180a7cab305e15b3ccd496eb525aa2aa10b275c04908303960f2d5e600cec6073c1930b04b48beed54e
+[service-public] real mempool carrier Discriminant(154), 4896 bytes
+2026-10-11 17:13:58.628+09:00 [INFO ] [palw-panel] claim bd321c7cf508f0356d71715090a1ded6a3cbec4e4037f548f976fb5e75e32c061335615d1681fa7eed7416e459d28085422f23d1350c047e0bc296a5183d56e0: the fraud filer's item (round 4294967285) was carried at DAA 1214 (LG14-A)
+2026-10-11 17:13:58.631+09:00 [ERROR] [palw-panel] claim 784f35400ca8be1403a3ce5cfeb006d5a71b84ba8c2247d5941f01947642a489c6e2c2869ef6d522698947838ad0427ec98ff302e4a187fff9af26dca05545ac: this node's replay of the claim's job does NOT reproduce its execution root (replayed 87f702a446412279a3a6b258482df80a30a336a00b21cf9504eef32c06521d1f9204638649130945060863b03fda3158104452f4281a39caea0c30301cc97aab) — every seat of its panel let it pass or none looked; pursuing it as a public bond (LG14-A, RFC-0014 §6)
+2026-10-11 17:13:58.644+09:00 [INFO ] [palw-panel] claim bd321c7cf508f0356d71715090a1ded6a3cbec4e4037f548f976fb5e75e32c061335615d1681fa7eed7416e459d28085422f23d1350c047e0bc296a5183d56e0: the fraud filer queues Demand(Binding { row: 0, tile: 0 }) (LG14-A, RFC-0014 §6–§7)
+2026-10-11 17:13:58.655+09:00 [INFO ] [palw-panel] claim 784f35400ca8be1403a3ce5cfeb006d5a71b84ba8c2247d5941f01947642a489c6e2c2869ef6d522698947838ad0427ec98ff302e4a187fff9af26dca05545ac: the fraud filer queues Reserve (LG14-A, RFC-0014 §6–§7)
+2026-10-11 17:13:58.686+09:00 [INFO ] [palw-panel] submitted DefaultAccused for court session 19007d68e3063a0d7c5c588fc3cb89581c313fa13a4d22dd1a7e3c60bcea43cacbb93904c841f1eb39deaf01d7e986018fff134ecd029dbf8dffd750baadf209 round 4294967284 in tx ea5bb7bb553e0d06eea0539a6e5198694b495aded78c1291026a7a1c65ae2b16e4b9aa072899d9af394d5a01992514ef337077cd31e14431d8457320ebe53330
+2026-10-11 17:13:59.909+09:00 [INFO ] [palw-panel] claim 19007d68e3063a0d7c5c588fc3cb89581c313fa13a4d22dd1a7e3c60bcea43cacbb93904c841f1eb39deaf01d7e986018fff134ecd029dbf8dffd750baadf209: the fraud filer's item (round 4294967285) was carried at DAA 1209 (LG14-A)
+2026-10-11 17:14:00.023+09:00 [INFO ] [palw-panel] claim bafab16d6217eb5461c6d64ddce119cd96c37097b2a00d2c71fc7cf20938b1e23de411afd84c53f0fe22bce707ac2dcdd03595bbdc31ae1e7e88a82caf510301: the fraud filer replays the claim's job off the loop (LG14-A, RFC-0014 §6.1)
+2026-10-11 17:14:00.036+09:00 [INFO ] [palw-panel] claim 19007d68e3063a0d7c5c588fc3cb89581c313fa13a4d22dd1a7e3c60bcea43cacbb93904c841f1eb39deaf01d7e986018fff134ecd029dbf8dffd750baadf209: the fraud filer queues Demand(Binding { row: 0, tile: 0 }) (LG14-A, RFC-0014 §6–§7)
+2026-10-11 17:14:00.100+09:00 [INFO ] [palw-panel] submitted DisputeReservedV1 for court session 384dd9de0e94c67d490065b304853baa60f4efce77da16735e0d9f56a2940b33f9aaf283a40b9da4ff8fcca613dcd7ea55a647ef3c17862f038a2fce1a65ded7 round 4294967285 in tx aa8efefccf21bb2e4ac9edae20fc39e9dbbdca1f64c5fc28972828c3ba5182510abaee5183205111e4acccad8921af3fc756b28d453356a4caac64274cdf0232
+[service-public] real mempool carrier Discriminant(154), 4896 bytes
+2026-10-11 17:14:00.688+09:00 [INFO ] [palw-panel] claim 19007d68e3063a0d7c5c588fc3cb89581c313fa13a4d22dd1a7e3c60bcea43cacbb93904c841f1eb39deaf01d7e986018fff134ecd029dbf8dffd750baadf209: the fraud filer's item (round 4294967284) was carried at DAA 1223 (LG14-A)
+2026-10-11 17:14:00.714+09:00 [INFO ] [palw-panel] submitted DisputeReservedV1 for court session 784f35400ca8be1403a3ce5cfeb006d5a71b84ba8c2247d5941f01947642a489c6e2c2869ef6d522698947838ad0427ec98ff302e4a187fff9af26dca05545ac round 4294967285 in tx 3edb9167f56d371063546c980343a7beafb410bc56095d5b7cf5de0f552bbcfc77d69ef838a2b55a71103377f370eae69f8e259c3995c2edd000167cc6beb7e0
+2026-10-11 17:14:02.103+09:00 [INFO ] [palw-panel] claim 384dd9de0e94c67d490065b304853baa60f4efce77da16735e0d9f56a2940b33f9aaf283a40b9da4ff8fcca613dcd7ea55a647ef3c17862f038a2fce1a65ded7: the fraud filer's item (round 4294967285) was carried at DAA 1214 (LG14-A)
+2026-10-11 17:14:02.106+09:00 [ERROR] [palw-panel] claim bafab16d6217eb5461c6d64ddce119cd96c37097b2a00d2c71fc7cf20938b1e23de411afd84c53f0fe22bce707ac2dcdd03595bbdc31ae1e7e88a82caf510301: this node's replay of the claim's job does NOT reproduce its execution root (replayed e17e95cd1b773a629304cba49928aa73bca6363c91e5079f7fd90834a04694a3c5901274d57bb14925aaa97afe91b38ffe80cc7210e9aeadd29d74caa9b05dd3) — every seat of its panel let it pass or none looked; pursuing it as a public bond (LG14-A, RFC-0014 §6)
+2026-10-11 17:14:02.115+09:00 [INFO ] [palw-panel] claim 384dd9de0e94c67d490065b304853baa60f4efce77da16735e0d9f56a2940b33f9aaf283a40b9da4ff8fcca613dcd7ea55a647ef3c17862f038a2fce1a65ded7: the fraud filer queues Demand(Binding { row: 0, tile: 0 }) (LG14-A, RFC-0014 §6–§7)
+2026-10-11 17:14:02.126+09:00 [INFO ] [palw-panel] claim bafab16d6217eb5461c6d64ddce119cd96c37097b2a00d2c71fc7cf20938b1e23de411afd84c53f0fe22bce707ac2dcdd03595bbdc31ae1e7e88a82caf510301: the fraud filer queues Reserve (LG14-A, RFC-0014 §6–§7)
+2026-10-11 17:14:02.154+09:00 [INFO ] [palw-panel] submitted DefaultAccused for court session 19007d68e3063a0d7c5c588fc3cb89581c313fa13a4d22dd1a7e3c60bcea43cacbb93904c841f1eb39deaf01d7e986018fff134ecd029dbf8dffd750baadf209 round 4294967284 in tx 60877f2673f120427adc33d1f6091b1a8bd2daf0a6c818a906efcf192cf9cf93430777878918c97c39f194d38db0830f44fff31d57a0371510893769e4921d04
+2026-10-11 17:14:02.716+09:00 [INFO ] [palw-panel] claim 784f35400ca8be1403a3ce5cfeb006d5a71b84ba8c2247d5941f01947642a489c6e2c2869ef6d522698947838ad0427ec98ff302e4a187fff9af26dca05545ac: the fraud filer's item (round 4294967285) was carried at DAA 1231 (LG14-A)
+2026-10-11 17:14:02.750+09:00 [INFO ] [palw-panel] submitted DefaultAccused for court session bd321c7cf508f0356d71715090a1ded6a3cbec4e4037f548f976fb5e75e32c061335615d1681fa7eed7416e459d28085422f23d1350c047e0bc296a5183d56e0 round 4294967284 in tx 4a420832e00e70a92a3ebc8985c298bda36a9405caf733c2657695d3dbaf91ce56face77495e33849fe208796d0095856a2f23787d459cd47a9c05f561a97afa
+[service-public] H1 refuses bad signature/binding, unasked unit and unliable discloser
+[service-public] foreign-job authenticated event submitted through the real PQ mempool
+[service-public] authenticated binding carried; answered = true
+2026-10-11 17:14:04.156+09:00 [INFO ] [palw-panel] claim 19007d68e3063a0d7c5c588fc3cb89581c313fa13a4d22dd1a7e3c60bcea43cacbb93904c841f1eb39deaf01d7e986018fff134ecd029dbf8dffd750baadf209: the fraud filer's item (round 4294967284) was carried at DAA 1221 (LG14-A)
+2026-10-11 17:14:04.192+09:00 [INFO ] [palw-panel] submitted DefaultAccused for court session 384dd9de0e94c67d490065b304853baa60f4efce77da16735e0d9f56a2940b33f9aaf283a40b9da4ff8fcca613dcd7ea55a647ef3c17862f038a2fce1a65ded7 round 4294967284 in tx 3c39308bfd87d3d7c0b08ec6b4e4af1fa6944b09c3b0357192e72f2605ccbccb0fe37851c1a6dafc9ca96070e715434dcd96e1919810fed5737d7d9374a4685f
+2026-10-11 17:14:04.753+09:00 [INFO ] [palw-panel] claim bd321c7cf508f0356d71715090a1ded6a3cbec4e4037f548f976fb5e75e32c061335615d1681fa7eed7416e459d28085422f23d1350c047e0bc296a5183d56e0: the fraud filer's item (round 4294967284) was carried at DAA 1239 (LG14-A)
+[service-public] H1 refuses bad signature/binding, unasked unit and unliable discloser
+[service-public] foreign-job authenticated event submitted through the real PQ mempool
+[service-public] authenticated binding carried; answered = true
+2026-10-11 17:14:06.195+09:00 [INFO ] [palw-panel] claim 384dd9de0e94c67d490065b304853baa60f4efce77da16735e0d9f56a2940b33f9aaf283a40b9da4ff8fcca613dcd7ea55a647ef3c17862f038a2fce1a65ded7: the fraud filer's item (round 4294967284) was carried at DAA 1229 (LG14-A)
+2026-10-11 17:14:06.237+09:00 [INFO ] [palw-panel] submitted DisputeReservedV1 for court session bafab16d6217eb5461c6d64ddce119cd96c37097b2a00d2c71fc7cf20938b1e23de411afd84c53f0fe22bce707ac2dcdd03595bbdc31ae1e7e88a82caf510301 round 4294967285 in tx 6ce9cf10a2a5445f7bb8565464d8c8e32c112cd952ea52af2285fb41bb2e0e5b152f791433d91c6afaf4551847d81e6d8e58fae0aac29dd7d083de809524e3d6
+2026-10-11 17:14:08.239+09:00 [INFO ] [palw-panel] claim bafab16d6217eb5461c6d64ddce119cd96c37097b2a00d2c71fc7cf20938b1e23de411afd84c53f0fe22bce707ac2dcdd03595bbdc31ae1e7e88a82caf510301: the fraud filer's item (round 4294967285) was carried at DAA 1235 (LG14-A)
+[service-public] DA advance 1317, deadlines [2440]
+[service-public] DA advance 1306, deadlines [2430]
+[service-public] DA advance 1417, deadlines [2440]
+2026-10-11 17:14:52.636+09:00 [WARN ] [palw-panel] no possession proofs this tick — the seat is not near the tip (ibd=false, synced=false)
+[service-public] DA advance 1406, deadlines [2430]
+[service-public] DA advance 1517, deadlines [2440]
+[service-public] DA advance 1506, deadlines [2430]
+2026-10-11 17:15:53.693+09:00 [WARN ] [palw-panel] no possession proofs this tick — the seat is not near the tip (ibd=false, synced=false)
+[service-public] DA advance 1617, deadlines [2440]
+[service-public] DA advance 1606, deadlines [2430]
+[service-public] DA advance 1717, deadlines [2440]
+[service-public] DA advance 1706, deadlines [2430]
+2026-10-11 17:16:54.522+09:00 [WARN ] [palw-panel] no possession proofs this tick — the seat is not near the tip (ibd=false, synced=false)
+[service-public] DA advance 1817, deadlines [2440]
+[service-public] DA advance 1806, deadlines [2430]
+[service-public] DA advance 1917, deadlines [2440]
+[service-public] DA advance 1906, deadlines [2430]
+2026-10-11 17:17:55.356+09:00 [WARN ] [palw-panel] no possession proofs this tick — the seat is not near the tip (ibd=false, synced=false)
+[service-public] DA advance 2017, deadlines [2440]
+[service-public] DA advance 2006, deadlines [2430]
+[service-public] DA advance 2117, deadlines [2440]
+[service-public] DA advance 2106, deadlines [2430]
+[service-public] DA advance 2217, deadlines [2440]
+[service-public] DA advance 2206, deadlines [2430]
+2026-10-11 17:18:56.403+09:00 [WARN ] [palw-panel] no possession proofs this tick — the seat is not near the tip (ibd=false, synced=false)
+[service-public] DA advance 2317, deadlines [2440]
+[service-public] DA advance 2306, deadlines [2430]
+
+thread 'palw_panel::palw_service_public_e2e::fresh_public_bond_service_registered_tiled_constraint_beaten_across_tiles' (3897379) panicked at kaspad/src/palw_service_public_e2e.rs:1420:9:
+service made no objective progress: PalwLegacyDisputeViewV1 { claim_id: bd321c7cf508f0356d71715090a1ded6a3cbec4e4037f548f976fb5e75e32c061335615d1681fa7eed7416e459d28085422f23d1350c047e0bc296a5183d56e0, class_id: 63942453032e22c10d68ddee00ab4dd437b0f4d8c0b1b102de6a9d40390d0c4a226a4c2e6fe58a829a290d6aadd3a4a97fbd4be3c803b8daa1a41ebd9fa4abda, producer: PalwBondKeyV2(TransactionOutpoint { transaction_id: 5e0d5f1b37a71288cc0eb24acc10d2f4973dd3475569f274f03cc64a2233d035099d386e24c91d48427c30a895664dea979abedc90a7788fad170379e55e2669, index: 0 }), phase: ReceiptLicensed { licensed_daa: 1135 }, execution_root: 771090f4f74b8169fa8c1578f7dbbd0d161b4578bff8dd5128964f0d9a1f6db3556f6e6fc567dd8b9c70cf6a8585d8b22188f12311b71a57c180b1feb1eb030a, trace_root: 7dea9cae09c3b29e7b2c1398a1b9290d0a200274c1387deb6414396b8c18e1dbc1777504e9b242460f3f84e8dacef3f7791a9754b8433ebfefceb5ec142b2219, accepted_daa: 1114, trace_retention_daa: 6514, job_identity: a1127f029229e89c334111fcc9f89f2b6f36dde03d9eff86f711090984ef30aa1a751fa21a14fc0b37b7b94c1493daab03bf4e97fa4a466f235d3d4a763e1136, public_fp_job: None, work_leaves: 1044, deadline_daa: None, hard_deadline_daa: 5314, record: Some(PalwDisputeClaimV1 { opened_daa: 1215, hard_deadline_daa: 5314, live: {PalwBondKeyV2(TransactionOutpoint { transaction_id: 7114f092bc0636065fe3c89afd5990bc40b3f135d488f8586864200832cf82a518979cc2063477c11f1a1d2794ea97c5edb6c63d36a7257ec0808a954bcbc571, index: 0 }): PalwDisputeReservationRowV1 { reserved_daa: 1215, deposit: 596169, sessions_opened: 1 }}, closed: {}, dismissed_held: [], reacquiring: {} }), sessions: [(PalwBondKeyV2(TransactionOutpoint { transaction_id: 7114f092bc0636065fe3c89afd5990bc40b3f135d488f8586864200832cf82a518979cc2063477c11f1a1d2794ea97c5edb6c63d36a7257ec0808a954bcbc571, index: 0 }), PalwDaSessionV1 { opened_daa: 1240, deadline_daa: 2440, accuser_is_seat: true, exposure: 596169, units: [Event { row: 0, tile: 0 }, Event { row: 0, tile: 1 }], stage: Licensed })], answered: [Event { row: 0, tile: 0 }], flat_answered_rows: 0, open_courts: 0, executor_refuted: false, court_convicted: false, da_defaulted: false }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test palw_panel::palw_service_public_e2e::fresh_public_bond_service_registered_tiled_constraint_beaten_across_tiles ... FAILED
+[service-tiled] ordinary geometry hidden 256, FP work 9012040, native network quantum 2707216
+[service-tiled] ordinary signed class registration accepted; root c9acf5b17d129f344c6cc9c70e075a8a5dd39420f1e2d8b43afb108c08a136ea52b71c995b63f2295ffdb5e6c3edd63db747e60b15f51efc60572b2f62d646cc, 4099 lanes, canonical 1/2
+
+thread 'palw_panel::palw_service_public_e2e::fresh_public_bond_service_registered_tiled_constraint_forbidden_token' (3897380) panicked at kaspad/src/palw_service_public_e2e.rs:1420:9:
+service made no objective progress: PalwLegacyDisputeViewV1 { claim_id: 384dd9de0e94c67d490065b304853baa60f4efce77da16735e0d9f56a2940b33f9aaf283a40b9da4ff8fcca613dcd7ea55a647ef3c17862f038a2fce1a65ded7, class_id: 63942453032e22c10d68ddee00ab4dd437b0f4d8c0b1b102de6a9d40390d0c4a226a4c2e6fe58a829a290d6aadd3a4a97fbd4be3c803b8daa1a41ebd9fa4abda, producer: PalwBondKeyV2(TransactionOutpoint { transaction_id: 5e0d5f1b37a71288cc0eb24acc10d2f4973dd3475569f274f03cc64a2233d035099d386e24c91d48427c30a895664dea979abedc90a7788fad170379e55e2669, index: 0 }), phase: ReceiptLicensed { licensed_daa: 1135 }, execution_root: 3e711c075fce3afb9309436d58a49d4764129367df719a70da49c497f304fa94265f3f0c1311cfa49a105fa74345e2707c6fe4b814d8c05ebebb58ef69161dc9, trace_root: c604b474abfd667c4952e2a41c8d3d3f61663f48b923f882809264d8fa99b4cece412d325022fa06bb1fa384e1a7e40e6506b85faa998e143a85f92f15d2c3d8, accepted_daa: 1114, trace_retention_daa: 6514, job_identity: a1127f029229e89c334111fcc9f89f2b6f36dde03d9eff86f711090984ef30aa1a751fa21a14fc0b37b7b94c1493daab03bf4e97fa4a466f235d3d4a763e1136, public_fp_job: None, work_leaves: 1044, deadline_daa: None, hard_deadline_daa: 5314, record: Some(PalwDisputeClaimV1 { opened_daa: 1215, hard_deadline_daa: 5314, live: {PalwBondKeyV2(TransactionOutpoint { transaction_id: 7114f092bc0636065fe3c89afd5990bc40b3f135d488f8586864200832cf82a518979cc2063477c11f1a1d2794ea97c5edb6c63d36a7257ec0808a954bcbc571, index: 0 }): PalwDisputeReservationRowV1 { reserved_daa: 1215, deposit: 596169, sessions_opened: 1 }}, closed: {}, dismissed_held: [], reacquiring: {} }), sessions: [(PalwBondKeyV2(TransactionOutpoint { transaction_id: 7114f092bc0636065fe3c89afd5990bc40b3f135d488f8586864200832cf82a518979cc2063477c11f1a1d2794ea97c5edb6c63d36a7257ec0808a954bcbc571, index: 0 }), PalwDaSessionV1 { opened_daa: 1230, deadline_daa: 2430, accuser_is_seat: true, exposure: 596169, units: [Event { row: 0, tile: 0 }, Event { row: 0, tile: 1 }], stage: Licensed })], answered: [Event { row: 0, tile: 0 }], flat_answered_rows: 0, open_courts: 0, executor_refuted: false, court_convicted: false, da_defaulted: false }
+[service-public] normal FP family certification accepted from 3 public drill carriers
+[service-public] registered FP graph publicly carried by ordinary ClassLaneCertified
+test palw_panel::palw_service_public_e2e::fresh_public_bond_service_registered_tiled_constraint_forbidden_token ... FAILED
+[service-tiled] ordinary geometry hidden 256, FP work 9012040, native network quantum 2707216
+[service-tiled] ordinary signed class registration accepted; root c9acf5b17d129f344c6cc9c70e075a8a5dd39420f1e2d8b43afb108c08a136ea52b71c995b63f2295ffdb5e6c3edd63db747e60b15f51efc60572b2f62d646cc, 4099 lanes, canonical 1/2
+[service-public] heartbeat advance 133 -> 1009
+[service-public] normal FP family certification accepted from 3 public drill carriers
+[service-public] registered FP graph publicly carried by ordinary ClassLaneCertified
+[service-public] heartbeat advance 133 -> 1009
+[service-public] heartbeat advance 258 -> 1009
+[service-public] heartbeat advance 258 -> 1009
+[service-public] heartbeat advance 383 -> 1009
+[service-public] heartbeat advance 383 -> 1009
+[service-public] heartbeat advance 508 -> 1009
+[service-public] heartbeat advance 508 -> 1009
+test palw_panel::palw_service_public_e2e::fresh_public_bond_service_registered_tiled_constraint_premature_stop has been running for over 60 seconds
+test palw_panel::palw_service_public_e2e::fresh_public_bond_service_registered_tiled_constraint_withheld_selected_tile_defaults has been running for over 60 seconds
+[service-public] heartbeat advance 633 -> 1009
+[service-public] heartbeat advance 633 -> 1009

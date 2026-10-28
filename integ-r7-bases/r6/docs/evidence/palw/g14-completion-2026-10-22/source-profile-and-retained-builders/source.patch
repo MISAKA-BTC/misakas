@@ -1,0 +1,467 @@
+diff --git a/consensus/core/src/palw_court_shared_constraint_native_tests.rs b/consensus/core/src/palw_court_shared_constraint_native_tests.rs
+index 8afc3a25d..4ae6e44db 100644
+--- a/consensus/core/src/palw_court_shared_constraint_native_tests.rs
++++ b/consensus/core/src/palw_court_shared_constraint_native_tests.rs
+@@ -131,6 +131,15 @@ fn shared_constraint_material_builder_reconstructs_real_native_original_and_rech
+     let eog = table.eog_opening().unwrap();
+     let renderings: Vec<_> = (0..table.vocab()).map(|i| table.opening_of(i).unwrap()).collect();
+     let material = ConstraintMaterialV1 { eog: &eog, renderings: &renderings };
++    assert!(semantics.raw_tokenizer_bytes.is_none());
++    assert!(b.state.staged_tokenizer_inventory_v1(semantics.tokenizer_id).is_none());
++    let encoded=renderings.iter().map(|x|borsh::to_vec(x).unwrap()).collect::<Vec<_>>();
++    let bodies=encoded.iter().map(Vec::as_slice).collect::<Vec<_>>();
++    let eog_encoded=borsh::to_vec(&eog).unwrap();
++    let retained=store.retain_semantic_table_material_v1(&b.state,claim,&bodies,&eog_encoded).unwrap();
++    assert_eq!(retained.counts_v1().vocabulary,table.vocab());
++    assert_eq!(retained.counts_v1().raw_bytes,0); // no raw body in this owner
++    assert!(store.retain_semantic_table_material_v1(&b.state,claim,&bodies[..bodies.len()-1],&eog_encoded).is_err());
+     let budget = WorkBudget { max_material_bytes: 1 << 25, max_calls: 100_000 };
+     let mut intent = Intent {
+         version: 1,
+@@ -159,6 +168,11 @@ fn shared_constraint_material_builder_reconstructs_real_native_original_and_rech
+     sign(&mut intent);
+     let before = b.state.state_root();
+     let evidence = store.build_constraint_terminal(&b.state, &params, &rules, &intent, material, budget).unwrap();
++    let retained_evidence=store.build_constraint_terminal_retained_v1(&b.state,&params,&rules,&intent,&retained,budget).unwrap();
++    assert_eq!(retained_evidence.recheck(&store,&b.state,&params,&rules,budget).unwrap(),
++        evidence.recheck(&store,&b.state,&params,&rules,budget).unwrap());
++    let mut wrong=intent.clone();wrong.scope_id=h(971);sign(&mut wrong);
++    assert!(store.build_constraint_terminal_retained_v1(&b.state,&params,&rules,&wrong,&retained,budget).is_err());
+     let finding = evidence.recheck(&store, &b.state, &params, &rules, budget).unwrap().expect("invalid selected rendering convicted");
+     assert_eq!(finding.claim_id, claim);
+     assert_eq!(finding.execution_root, frame.header_v1().committed_execution_root);
+diff --git a/consensus/core/src/palw_court_shared_semantic_material_v1.rs b/consensus/core/src/palw_court_shared_semantic_material_v1.rs
+index eb911aba2..90a2001ff 100644
+--- a/consensus/core/src/palw_court_shared_semantic_material_v1.rs
++++ b/consensus/core/src/palw_court_shared_semantic_material_v1.rs
+@@ -42,13 +42,34 @@ fn shape<T:NativeWireScanV1>(bytes:&[u8])->Result<u64,E<String>> {
+ }
+ #[derive(Clone,Copy)]
+ struct Scope {source:Hash64,claim:Hash64,scope:Hash64,semantics:Hash64,inventory:Hash64,table:Hash64,tokenizer:Hash64,vocab:u32,raw_bytes:u64}
++
++#[derive(Clone,Copy)]
++struct TableScope {source:Hash64,claim:Hash64,scope:Hash64,semantics:Hash64,table:Hash64,vocab:u32}
++impl Scope {fn table_v1(self)->TableScope {TableScope{source:self.source,claim:self.claim,scope:self.scope,semantics:self.semantics,table:self.table,vocab:self.vocab}}}
++/// Table-only retained data. No invented raw EOF, raw length or raw supplier.
++/// Rendering correctness is still adjudicated by the existing primitive.
++pub(crate) struct SemanticTableMaterialV1 {binding:TableScope,renderings:Vec<Rendering>,eog:Eog,counts:SemanticMaterialCountsV1}
++impl SemanticTableMaterialV1 {
++    /// raw_bytes is zero because this owner contains no raw artifact body.
++    pub(crate) fn counts_v1(&self)->SemanticMaterialCountsV1 {self.counts}
++    fn check_scope_v1(&self,source:Hash64,claim:Hash64,scope:Hash64,semantics:Hash64)->Result<(),String>{
++        if (self.binding.source,self.binding.claim,self.binding.scope,self.binding.semantics)!=(source,claim,scope,semantics){
++            return Err("retained semantic table from another source/scope/semantics".into());
++        } Ok(())
++    }
++}
+ fn output_requests(scope:Scope,renderings:&[&[u8]],eog:&[u8])->Result<u64,E<String>> {
++    let mut q=TirNativeRequestsV1::new();
++    q.add_v1(table_requests::<SemanticMaterialInventoryV1>(scope.table_v1(),renderings,eog)?).map_err(E::Resource)?;
++    q.exact_v1::<u8>(scope.raw_bytes).map_err(E::Resource)?;
++    Ok(q.bytes_v1())
++}
++fn table_requests<T>(scope:TableScope,renderings:&[&[u8]],eog:&[u8])->Result<u64,E<String>> {
+     if scope.vocab==0 || u64::from(scope.vocab).checked_add(1).is_none_or(|n|n>crate::palw_fp_constraint_job_v1::PALW_TOKEN_TABLE_MAX_LEAVES_V1)
+         || renderings.len() as u64!=u64::from(scope.vocab) {return Err(bad("semantic all-ID material cardinality"));}
+     let mut q=TirNativeRequestsV1::new();
+-    q.exact_v1::<SemanticMaterialInventoryV1>(1).map_err(E::Resource)?;
++    q.exact_v1::<T>(1).map_err(E::Resource)?;
+     q.exact_v1::<Rendering>(u64::from(scope.vocab)).map_err(E::Resource)?;
+-    q.exact_v1::<u8>(scope.raw_bytes).map_err(E::Resource)?;
+     for body in renderings {q.add_v1(shape::<Rendering>(body)?).map_err(E::Resource)?;}
+     q.add_v1(shape::<Eog>(eog)?).map_err(E::Resource)?;
+     // EOG stream uses empty relevant/hits Vecs, stack hash continuation, and a
+@@ -61,6 +82,16 @@ fn decode_material(scope:Scope,renderings:&[&[u8]],eog:&[u8],raw:&[u8])
+     if raw.len() as u64!=scope.raw_bytes || crate::palw_tokenizer_rendering_v1::palw_tokenizer_raw_commitment_v1(raw)!=scope.tokenizer {
+         return Err(bad("semantic raw body changes actual EOF length or immutable hash"));
+     }
++    let (values,eog,mut counts)=decode_table(scope.table_v1(),renderings,eog)?;
++    counts.raw_bytes=scope.raw_bytes;
++    let mut owned_raw=Vec::new();
++    owned_raw.try_reserve_exact(raw.len()).map_err(|_|resource("semantic raw owner allocation"))?;
++    owned_raw.extend_from_slice(raw);
++    Ok(SemanticMaterialInventoryV1{source:scope.source,claim:scope.claim,scope:scope.scope,semantics:scope.semantics,inventory:scope.inventory,
++        renderings:values,eog,raw:owned_raw,counts})
++}
++fn decode_table(scope:TableScope,renderings:&[&[u8]],eog:&[u8])
++    ->Result<(Vec<Rendering>,Eog,SemanticMaterialCountsV1),E<String>> {
+     let eog:Eog=borsh::from_slice(eog).map_err(wire_error)?;
+     let count=u32::try_from(eog.ids.len()).map_err(|_|bad("semantic EOG count does not fit native stream"))?;
+     // Do NOT use Eog::verifies alone: it does not enforce each id<vocab.
+@@ -73,7 +104,7 @@ fn decode_material(scope:Scope,renderings:&[&[u8]],eog:&[u8],raw:&[u8])
+     values.try_reserve_exact(renderings.len()).map_err(|_|resource("semantic rendering outer Vec allocation"))?;
+     let mut counts=SemanticMaterialCountsV1{vocabulary:scope.vocab,present:0,absent:0,rendering_bytes:0,
+         eog_ids:eog.ids.len() as u64,opening_siblings:eog.opening.siblings.len() as u64,
+-        encoded_opening_bytes:borsh::object_length(&eog).map_err(|e|E::Decode(e.to_string()))? as u64,raw_bytes:scope.raw_bytes};
++        encoded_opening_bytes:borsh::object_length(&eog).map_err(|e|E::Decode(e.to_string()))? as u64,raw_bytes:0};
+     for (id,bytes) in renderings.iter().enumerate() {
+         let value:Rendering=borsh::from_slice(bytes).map_err(wire_error)?;
+         if value.id as usize!=id || !value.verifies(&scope.table,scope.vocab) {
+@@ -85,11 +116,7 @@ fn decode_material(scope:Scope,renderings:&[&[u8]],eog:&[u8],raw:&[u8])
+         add(&mut counts.encoded_opening_bytes,bytes.len() as u64)?;
+         values.push(value);
+     }
+-    let mut owned_raw=Vec::new();
+-    owned_raw.try_reserve_exact(raw.len()).map_err(|_|resource("semantic raw owner allocation"))?;
+-    owned_raw.extend_from_slice(raw);
+-    Ok(SemanticMaterialInventoryV1{source:scope.source,claim:scope.claim,scope:scope.scope,semantics:scope.semantics,inventory:scope.inventory,
+-        renderings:values,eog,raw:owned_raw,counts})
++    Ok((values,eog,counts))
+ }
+ impl Store<'_> {
+     /// All inputs are existing inner Borsh bodies, not new public transport tags.
+@@ -101,31 +128,15 @@ impl Store<'_> {
+     fn retain_semantic_reserved_v1<F>(&self,state:&PalwChainStateV2,claim:Hash64,renderings:&[&[u8]],eog:&[u8],raw:&[u8],reserve:F)
+         ->Result<NativeRetainedV1<SemanticMaterialInventoryV1>,E<String>>
+     where F:FnOnce(u64)->Result<Option<NativeDemandLeaseV1>,NativeCoverageV1> {
++        let (table,mut lease)=self.semantic_table_context_reserved_v1(state,claim,reserve)?;
+         let c=crate::palw_court_shared_tir_state_v1::context(state,claim).map_err(E::Decode)?;
+-        let frame=crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(state,claim).ok_or_else(||bad("semantic original frame missing"))?;
+-        let job=&frame.original_v1().job;
+-        let record=state.tir_class_v1(&job.class_id).ok_or_else(||bad("semantic registered class missing"))?;
+-        let layout=crate::palw_staged_court_state_v1::palw_staged_tir_layout_v1(state,job.class_id).ok_or_else(||bad("semantic layout missing"))?;
+-        let mut q=TirNativeRequestsV1::new();
+-        q.add_v1(crate::palw_tir_public_source_v1::PalwTirPublicSourceV1::native_construction_requests_v1(record,layout,frame.header_v1())?).map_err(E::Resource)?;
+-        let clone=frame.native_heap_v1("semantic current original identity clone");q.add_v1(clone.bytes().ok_or(E::Resource(clone))?).map_err(E::Resource)?;
+-        let encoded=borsh::object_length(frame).map_err(|e|E::Decode(e.to_string()))? as u64;
+-        q.exact_v1::<u8>(encoded.max(1024).checked_mul(2).ok_or_else(||resource("semantic frame hash writer overflow"))?).map_err(E::Resource)?;
+-        let mut lease=reserve(q.bytes_v1()).map_err(E::Resource)?;
+-        {let current=c.source(state).map_err(E::Decode)?;
+-            if current.source_id_v1()!=self.source.source_id_v1()||current.header_v1()!=self.source.header_v1() {return Err(bad("semantic Store from another current original source"));}}
+         let sem=state.claim_semantics_v1(&claim).ok_or_else(||bad("semantic immutable claim snapshot missing"))?;
+-        if !sem.matches_context(&self.source.header_v1().job_context)||!sem.well_formed_for(&job.class_id,&self.source.header_v1().artifact_root)
+-            ||sem.bound_from_daa>c.original_accepted_daa||sem.token_table_root.is_none()
+-            ||crate::palw_fp_constraint_job_v1::palw_fp_constraint_table_root_v1(job).is_some_and(|root|Some(root)!=sem.token_table_root) {
+-            return Err(bad("semantic current original table/context mismatch"));
+-        }
+         let eof=state.staged_tokenizer_inventory_v1(sem.tokenizer_id).ok_or_else(||bad("semantic actual rooted EOF missing"))?;
+         eof.check_v1().map_err(E::Decode)?;
+         if eof.artifact_hash!=sem.tokenizer_id||eof.completed_daa>c.original_accepted_daa
+             ||sem.raw_tokenizer_bytes!=Some(eof.actual_bytes) {return Err(bad("semantic actual EOF differs from immutable original"));}
+-        let scope=Scope{source:self.source.source_id_v1(),claim,scope:c.scope_id,semantics:sem.commitment(),inventory:eof.inventory_id,
+-            table:sem.token_table_root.unwrap(),tokenizer:sem.tokenizer_id,vocab:self.source.vocab_v1(),raw_bytes:eof.actual_bytes};
++        let scope=Scope{source:table.source,claim:table.claim,scope:table.scope,semantics:table.semantics,inventory:eof.inventory_id,
++            table:table.table,tokenizer:sem.tokenizer_id,vocab:table.vocab,raw_bytes:eof.actual_bytes};
+         let additional=output_requests(scope,renderings,eog)?;
+         if let Some(ticket)=lease.as_mut(){ticket.grow_memory_v1(additional).map_err(E::Resource)?;}
+         let value=decode_material(scope,renderings,eog,raw)?;
+@@ -146,6 +157,19 @@ mod tests {
+         (scope,bodies,borsh::to_vec(&table.eog_opening().unwrap()).unwrap(),raw)
+     }
+     #[test]
++    fn semantic_table_only_owner_quota_has_no_raw_or_eof_obligation(){
++        let (scope,bodies,eog,_raw)=fixture();let binding=scope.table_v1();
++        let refs=bodies.iter().map(Vec::as_slice).collect::<Vec<_>>();
++        let q=table_requests::<SemanticTableMaterialV1>(binding,&refs,&eog).unwrap();
++        let checker=NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1{memory_bytes:q,database_bytes:0});
++        let lease=checker.reserve_requests_v1(q,0).unwrap();
++        let (renderings,eog,counts)=decode_table(binding,&refs,&eog).unwrap();
++        let held=NativeRetainedV1::from_owner_reserved_v1(SemanticTableMaterialV1{binding,renderings,eog,counts},Some(lease));
++        assert_eq!(held.counts_v1().raw_bytes,0);assert_eq!(held.counts_v1().vocabulary,3);
++        assert_eq!(checker.outstanding(),(q,0));assert!(checker.reserve_requests_v1(1,0).is_err());
++        drop(held);assert_eq!(checker.outstanding(),(0,0));
++    }
++    #[test]
+     fn semantic_material_retained_all_id_authentication_and_quota_release(){
+         let (s,b,e,r)=fixture();let refs=b.iter().map(Vec::as_slice).collect::<Vec<_>>();
+         let q=output_requests(s,&refs,&e).unwrap();assert!(q>r.len() as u64);
+@@ -198,3 +222,75 @@ mod tests {
+         let mut total=u64::MAX;assert!(matches!(add(&mut total,1),Err(E::Resource(_))));assert_eq!(total,u64::MAX);
+     }
+ }
++
++impl Store<'_> {
++    /// The evidence borrows the actual retained owner, so its decoded table/raw
++    /// payload ticket cannot be dropped while evidence is live. Proof owners
++    /// remain separately borrowed/admitted. Existing native builder still checks
++    /// current source, rooted EOF, actor/signature, rules, parser and material ID.
++    /// No new source/builder scratch or signed-intent clone is admitted here.
++    pub(crate) fn build_tokenizer_terminal_retained_v1<'a>(
++        &self,state:&PalwChainStateV2,params:&crate::palw_state_v2::PalwStateParamsV2,
++        rules:&crate::palw_court_close_receipt_v1::NativeCourtRulesV1,
++        intent:&super::tokenizer_terminal::SignedTokenizerTerminalIntentV1,
++        material:&'a NativeRetainedV1<SemanticMaterialInventoryV1>,
++        proofs:&'a [crate::palw_json_key_set_v1::PalwJsonKeyCompactProofV1],
++        budget:crate::palw_tokenizer_table_stream_v1::canonical_replay::Budget,
++    )->Result<super::tokenizer_terminal::TokenizerTerminalEvidenceV1<'a>,String> {
++        material.check_scope_v1(self.source.source_id_v1(),intent.claim,intent.scope_id,intent.semantics_id,intent.inventory_id)
++            .map_err(|e|e.to_string())?;
++        let rendering=material.rendering_v1(intent.token_id).ok_or("retained tokenizer target outside actual vocabulary")?;
++        self.build_tokenizer_terminal(state,params,rules,intent,super::tokenizer_terminal::TokenizerMaterialV1{
++            raw:material.raw_v1(),proofs,rendering},budget)
++    }
++}
++
++impl Store<'_> {
++    fn semantic_table_context_reserved_v1<F>(&self,state:&PalwChainStateV2,claim:Hash64,reserve:F)
++        ->Result<(TableScope,Option<NativeDemandLeaseV1>),E<String>>
++    where F:FnOnce(u64)->Result<Option<NativeDemandLeaseV1>,NativeCoverageV1> {
++        let c=crate::palw_court_shared_tir_state_v1::context(state,claim).map_err(E::Decode)?;
++        let frame=crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(state,claim).ok_or_else(||bad("semantic original frame missing"))?;
++        let job=&frame.original_v1().job;
++        let record=state.tir_class_v1(&job.class_id).ok_or_else(||bad("semantic registered class missing"))?;
++        let layout=crate::palw_staged_court_state_v1::palw_staged_tir_layout_v1(state,job.class_id).ok_or_else(||bad("semantic layout missing"))?;
++        let mut q=TirNativeRequestsV1::new();
++        q.add_v1(crate::palw_tir_public_source_v1::PalwTirPublicSourceV1::native_construction_requests_v1(record,layout,frame.header_v1())?).map_err(E::Resource)?;
++        let clone=frame.native_heap_v1("semantic current original identity clone");q.add_v1(clone.bytes().ok_or(E::Resource(clone))?).map_err(E::Resource)?;
++        let encoded=borsh::object_length(frame).map_err(|e|E::Decode(e.to_string()))? as u64;
++        q.exact_v1::<u8>(encoded.max(1024).checked_mul(2).ok_or_else(||resource("semantic frame hash writer overflow"))?).map_err(E::Resource)?;
++        let lease=reserve(q.bytes_v1()).map_err(E::Resource)?;
++        {let current=c.source(state).map_err(E::Decode)?;
++            if current.source_id_v1()!=self.source.source_id_v1()||current.header_v1()!=self.source.header_v1() {return Err(bad("semantic Store from another current original source"));}}
++        let sem=state.claim_semantics_v1(&claim).ok_or_else(||bad("semantic immutable claim snapshot missing"))?;
++        if !sem.matches_context(&self.source.header_v1().job_context)||!sem.well_formed_for(&job.class_id,&self.source.header_v1().artifact_root)
++            ||sem.bound_from_daa>c.original_accepted_daa||sem.token_table_root.is_none()
++            ||crate::palw_fp_constraint_job_v1::palw_fp_constraint_table_root_v1(job).is_some_and(|root|Some(root)!=sem.token_table_root) {
++            return Err(bad("semantic current original table/context mismatch"));
++        }
++        Ok((TableScope{source:self.source.source_id_v1(),claim,scope:c.scope_id,semantics:sem.commitment(),
++            table:sem.token_table_root.unwrap(),vocab:self.source.vocab_v1()},lease))
++    }
++    /// Table-only means no raw bytes are supplied or required. Current original
++    /// table scope and every actual opening are authenticated by the same code
++    /// used by the full raw+EOF owner, without a fabricated inventory certificate.
++    pub(crate) fn retain_semantic_table_material_v1(&self,state:&PalwChainStateV2,claim:Hash64,renderings:&[&[u8]],eog:&[u8])
++        ->Result<NativeRetainedV1<SemanticTableMaterialV1>,E<String>> {
++        let (binding,mut lease)=self.semantic_table_context_reserved_v1(state,claim,reserve_native_requests_v1)?;
++        let additional=table_requests::<SemanticTableMaterialV1>(binding,renderings,eog)?;
++        if let Some(ticket)=lease.as_mut(){ticket.grow_memory_v1(additional).map_err(E::Resource)?;}
++        let (renderings,eog,counts)=decode_table(binding,renderings,eog)?;
++        Ok(NativeRetainedV1::from_owner_reserved_v1(SemanticTableMaterialV1{binding,renderings,eog,counts},lease))
++    }
++    pub(crate) fn build_constraint_terminal_retained_v1<'a>(
++        &self,state:&PalwChainStateV2,params:&crate::palw_state_v2::PalwStateParamsV2,
++        rules:&crate::palw_court_close_receipt_v1::NativeCourtRulesV1,
++        intent:&super::constraint_terminal::SignedConstraintTerminalIntentV1,
++        material:&'a NativeRetainedV1<SemanticTableMaterialV1>,
++        budget:crate::palw_constraint_stream_court_v1::canonical_replay::WorkBudget,
++    )->Result<super::constraint_terminal::ConstraintTerminalEvidenceV1<'a>,String> {
++        material.check_scope_v1(self.source.source_id_v1(),intent.claim,intent.scope_id,intent.semantics_id)?;
++        self.build_constraint_terminal(state,params,rules,intent,super::constraint_terminal::ConstraintMaterialV1{
++            eog:&material.eog,renderings:&material.renderings},budget)
++    }
++}
+diff --git a/consensus/core/src/palw_court_shared_tokenizer_native_tests.rs b/consensus/core/src/palw_court_shared_tokenizer_native_tests.rs
+index 30997920f..9abf0f919 100644
+--- a/consensus/core/src/palw_court_shared_tokenizer_native_tests.rs
++++ b/consensus/core/src/palw_court_shared_tokenizer_native_tests.rs
+@@ -158,6 +158,22 @@ fn shared_tokenizer_builder_uses_native_original_eof_and_rechecks_authenticated_
+     sign(&mut intent);
+     let before = b.state.state_root();
+     let evidence = store.build_tokenizer_terminal(&b.state, &params, &rules, &intent, material, budget).unwrap();
++    // Borrow the exact retained decoded payload owners: no raw/rendering clone
++    // between native material owner and the real existing terminal primitive.
++    let all_encoded=(0..table.vocab()).map(|id|borsh::to_vec(&table.opening_of(id).unwrap()).unwrap()).collect::<Vec<_>>();
++    let all_bodies=all_encoded.iter().map(Vec::as_slice).collect::<Vec<_>>();
++    let eog_encoded=borsh::to_vec(&table.eog_opening().unwrap()).unwrap();
++    let retained=store.retain_semantic_material_v1(&b.state,claim,&all_bodies,&eog_encoded,&raw).unwrap();
++    let retained_evidence=store.build_tokenizer_terminal_retained_v1(&b.state,&params,&rules,&intent,&retained,proofs,budget).unwrap();
++    assert_eq!(retained_evidence.recheck(&store,&b.state,&params,&rules,budget).unwrap(),
++        evidence.recheck(&store,&b.state,&params,&rules,budget).unwrap());
++    let mut wrong=intent.clone();wrong.inventory_id=h(966);sign(&mut wrong);
++    assert!(store.build_tokenizer_terminal_retained_v1(&b.state,&params,&rules,&wrong,&retained,proofs,budget).is_err());
++    let mut wrong=intent.clone();wrong.scope_id=h(967);sign(&mut wrong);
++    assert!(store.build_tokenizer_terminal_retained_v1(&b.state,&params,&rules,&wrong,&retained,proofs,budget).is_err());
++    let mut wrong=intent.clone();wrong.token_id=table.vocab();sign(&mut wrong);
++    assert!(store.build_tokenizer_terminal_retained_v1(&b.state,&params,&rules,&wrong,&retained,proofs,budget).is_err());
++    assert!(store.build_tokenizer_terminal_retained_v1(&b.state,&params,&rules,&intent,&retained,&proofs[..proofs.len()-1],budget).is_err());
+     assert!(!evidence.recheck(&store, &b.state, &params, &rules, budget).unwrap());
+     let mut changed = intent.clone();
+     changed.scope_id = h(962);
+diff --git a/consensus/core/src/palw_native_resource_v1.rs b/consensus/core/src/palw_native_resource_v1.rs
+index a1324eba6..43ca95090 100644
+--- a/consensus/core/src/palw_native_resource_v1.rs
++++ b/consensus/core/src/palw_native_resource_v1.rs
+@@ -39,6 +39,7 @@ pub use kernel_ledger_mutation::{PALW_KERNEL_LEDGER_APPLY_MEMBERSHIP_CEILING_V1,
+ mod tir;
+ pub use demand::reserve_native_requests_v1;
+ pub(crate) use ledger_expansion::{NativeTirProgramShapeV1, standalone_tir_program_shape_v1};
++pub(crate) use ledger_expansion::source_tir_program_shape_v1;
+ pub use ledger_expansion::{ReservedKernelLedgerV1, inventory_ledger_expansion_v1, preflight_kernel_served_row_v1};
+ pub(crate) use ledger_expansion::{ledger_cache_clone_v1, reserve_ledger_expansion_v1};
+ pub use tir::decode_native_tir_program_v1;
+diff --git a/consensus/core/src/palw_native_resource_v1/ledger_expansion.rs b/consensus/core/src/palw_native_resource_v1/ledger_expansion.rs
+index df34b911d..d213ab890 100644
+--- a/consensus/core/src/palw_native_resource_v1/ledger_expansion.rs
++++ b/consensus/core/src/palw_native_resource_v1/ledger_expansion.rs
+@@ -540,6 +540,156 @@ pub(crate) fn standalone_tir_program_shape_v1(bytes: &[u8]) -> io::Result<Native
+         .ok_or_else(|| wire::wire_bad("TIR structural item count overflow"))?;
+     Ok(NativeTirProgramShapeV1 { program_requests, structural_items, step_space: step_space_shape_v1(bytes)? })
+ }
++/// Source-only decoded-program + normal-form validator profile. The general
++/// program/gate/ledger profile above deliberately keeps its wider semantics.
++/// Source executes neither court cone/range analysis nor gate price unrolling.
++pub(crate) fn source_tir_program_shape_v1(bytes:&[u8])
++    ->Result<(NativeTirProgramShapeV1,u64),NativeDecodeErrorV1<String>> {
++    use misaka_palw_tir::{program::{TirProgramV1,MAX_CARRY,MAX_NODE_INPUTS},types::{DType,Dim,TensorType},validate::BlockInfo};
++    use std::collections::BTreeSet;
++    use super::typed::BTreeNodeEnvelopeV1 as Tree;
++    let decode=|e:io::Error| {
++        match e.kind() {
++            io::ErrorKind::OutOfMemory => NativeDecodeErrorV1::Resource(
++                NativeCoverageV1::overflow::<TirProgramV1>("Source program wire shape")),
++            io::ErrorKind::TimedOut | io::ErrorKind::Unsupported => NativeDecodeErrorV1::Resource(
++                NativeCoverageV1::unsupported::<TirProgramV1>("Source program wire shape", "local wire exploration/platform coverage")),
++            _ => NativeDecodeErrorV1::Decode(e.to_string()),
++        }
++    };
++    // Existing complete versioned scanner and metadata authority; no decoded
++    // caller count, alternate grammar or hand-selected program subset.
++    let shape=standalone_tir_program_shape_v1(bytes).map_err(decode)?;
++    let mut r=NativeWireReaderV1::new(bytes,bytes.len() as u64);
++    let raw=TirProgramV1::scan_native_wire_v1(&mut r).map_err(decode)?;
++    if r.remaining()!=0 {return Err(NativeDecodeErrorV1::Decode("Source program shape trailing bytes".into()));}
++    let err=||NativeDecodeErrorV1::Resource(NativeCoverageV1::overflow::<TirProgramV1>("Source normal-form cardinality"));
++    // Includes every actual nested collection/byte element. It is a linear
++    // bound on any unvalidated shape rank/perm length, not MAX_RANK admission.
++    let n=shape.structural_items_v1();
++    let (blocks,nodes,_,fg,fl,hg,hl)=shape.step_space_counts_v1();
++    let states=fg.checked_add(fl).and_then(|v|v.checked_add(hg)).and_then(|v|v.checked_add(hl)).ok_or_else(err)?;
++    let mut q=TirNativeRequestsV1::new();
++    let mut add=|bytes|q.add_v1(bytes).map_err(NativeDecodeErrorV1::Resource);
++    // Parsed program and validator's cloned constant payloads coexist. A full
++    // second raw payload envelope overbounds only those const shape/data clones.
++    add(raw.heap.checked_mul(2).ok_or_else(err)?)?;
++    q.exact_v1::<TirProgramV1>(1).map_err(NativeDecodeErrorV1::Resource)?;
++    q.exact_v1::<u8>((bytes.len() as u64).max(1024).checked_mul(2).ok_or_else(err)?).map_err(NativeDecodeErrorV1::Resource)?;
++    // Declaration sets stay live through validation; n bounds each actual
++    // declaration family. Node envelopes include the constant key's inline Vecs.
++    q.exact_v1::<Tree<&str,()>>(n.checked_add(states).ok_or_else(err)?).map_err(NativeDecodeErrorV1::Resource)?;
++    q.exact_v1::<Tree<(DType,Vec<u32>,Vec<u8>),()>>(n).map_err(NativeDecodeErrorV1::Resource)?;
++    q.vec_v1::<BlockInfo>(blocks).map_err(NativeDecodeErrorV1::Resource)?;
++    // Carry clone occurs BEFORE per-node output shape validation. Rank may be
++    // malformed; use n, never MAX_RANK. At most MAX_CARRY carried tensors are
++    // checked before the retained carry and temporary layer carry-out clones.
++    let carry=(MAX_CARRY as u64).checked_mul(2).ok_or_else(err)?;
++    q.vec_v1::<TensorType>(carry).map_err(NativeDecodeErrorV1::Resource)?;
++    q.vec_v1::<Dim>(carry.checked_mul(n).ok_or_else(err)?).map_err(NativeDecodeErrorV1::Resource)?;
++    // One node's operand shapes, plus inference's overlapping intermediate
++    // shape vectors. Gather can temporarily concatenate two actual ranks;
++    // Select holds two broadcasts; HistAppend also prepends H to a row clone.
++    q.vec_v1::<TensorType>(MAX_NODE_INPUTS as u64).map_err(NativeDecodeErrorV1::Resource)?;
++    q.vec_v1::<Dim>((MAX_NODE_INPUTS as u64).checked_mul(n).ok_or_else(err)?).map_err(NativeDecodeErrorV1::Resource)?;
++    let inferred=n.checked_mul(2).and_then(|v|v.checked_add(1)).ok_or_else(err)?;
++    for _ in 0..4 {q.vec_v1::<Dim>(inferred).map_err(NativeDecodeErrorV1::Resource)?;}
++    q.vec_v1::<bool>(n).map_err(NativeDecodeErrorV1::Resource)?; // transpose seen
++    // Per-block effect sets; each state index inserts once in either set.
++    q.exact_v1::<Tree<u16,()>>(states.checked_mul(2).ok_or_else(err)?).map_err(NativeDecodeErrorV1::Resource)?;
++    q.vec_v1::<bool>(nodes).map_err(NativeDecodeErrorV1::Resource)?;
++    // Liveness expands each node once. Initial roots <=nodes+MAX_CARRY+1;
++    // every pushed edge is one actual input element, whose count <=n.
++    let dfs=nodes.checked_add(n).and_then(|v|v.checked_add(MAX_CARRY as u64+1)).ok_or_else(err)?;
++    q.vec_v1::<usize>(dfs).map_err(NativeDecodeErrorV1::Resource)?;
++    // Three-category used map, its inner ID sets, and one cloned set coexist.
++    q.exact_v1::<Tree<&str,BTreeSet<u16>>>(3).map_err(NativeDecodeErrorV1::Resource)?;
++    q.exact_v1::<Tree<u16,()>>(n.checked_mul(2).ok_or_else(err)?).map_err(NativeDecodeErrorV1::Resource)?;
++    // Failure formatting: a Dim is at most "Fixed(4294967295)" (17 bytes)
++    // plus separator <=20; output+Gather inferred shapes total <=3*n. Other
++    // variable debug output is u8 perm (<=5 bytes/entry), or checked <=128B
++    // names. 1024 covers fixed literals/indices. Four growing writer envelopes
++    // cover nested shape_err/TirError/StepError to_string owners and copies.
++    let diagnostic=n.checked_mul(3).and_then(|v|v.checked_mul(20)).and_then(|v|v.checked_add(1024)).ok_or_else(err)?;
++    for _ in 0..4 {q.vec_v1::<u8>(diagnostic).map_err(NativeDecodeErrorV1::Resource)?;}
++    Ok((shape,q.bytes_v1()))
++}
++
++#[cfg(test)]
++mod source_program_profile_tests_v1 {
++    use super::*;
++    fn local_decode(bytes:&[u8],limit:u64)
++        ->Result<NativeRetainedV1<misaka_palw_tir::TirProgramV1>,NativeDecodeErrorV1<String>> {
++        let (_,q)=source_tir_program_shape_v1(bytes)?;
++        let checker=NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1{memory_bytes:limit,database_bytes:0});
++        let result=(|| {
++            let lease=checker.reserve_requests_v1(q,0).map_err(NativeDecodeErrorV1::Resource)?;
++            let program=misaka_palw_tir::TirProgramV1::decode_canonical(bytes).map_err(|e|NativeDecodeErrorV1::Decode(e.to_string()))?;
++            Ok(NativeRetainedV1::from_owner_reserved_v1(program,Some(lease)))
++        })();
++        if result.is_err() {assert_eq!(checker.outstanding(),(0,0));}
++        result
++    }
++    #[test]
++    fn source_normal_form_profile_real_program_and_exact_quota_lifetime() {
++        for committed in [false,true] {
++            let f=crate::palw_tir_public_claim_v1::palw_tir_public_fixed_history_frame_fixture_v1(
++                crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,committed);
++            let bytes=&f.execution.binding.class.program;
++            let (shape,q)=source_tir_program_shape_v1(bytes).unwrap();
++            assert!(q>bytes.len() as u64);
++            assert!(q<shape.program_requests_v1(),"Source-only profile excludes gate/cone/range allocations");
++            assert!(matches!(local_decode(bytes,q-1),Err(NativeDecodeErrorV1::Resource(_))));
++            let checker=NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1{memory_bytes:q,database_bytes:0});
++            let lease=checker.reserve_requests_v1(q,0).unwrap();
++            let decoded=misaka_palw_tir::TirProgramV1::decode_canonical(bytes).unwrap();
++            let held=NativeRetainedV1::from_owner_reserved_v1(decoded,Some(lease));
++            assert_eq!(held.encode(),*bytes);assert_eq!(checker.outstanding(),(q,0));
++            assert!(checker.reserve_requests_v1(1,0).is_err());
++            drop(held);assert_eq!(checker.outstanding(),(0,0));
++            drop(checker.reserve_requests_v1(q,0).unwrap());assert_eq!(checker.outstanding(),(0,0));
++        }
++    }
++    #[test]
++    fn source_normal_form_malformed_wire_rank_and_duplicate_carry_release_quota() {
++        use misaka_palw_tir::{program::MAX_CARRY,types::{DType,Dim}};
++        let x=crate::palw_tir_court_v1::test_support::tiny_execution(None);
++        let mut p=x.binding.class.decode_program().unwrap();
++        let pre=p.schedule.pre as usize;
++        // Valid Borsh, invalid normal form. Carry cloning happens before the
++        // node's rank check; repeated indices duplicate this unvalidated shape.
++        p.blocks[pre].nodes[0].out.dtype=DType::I32;
++        p.blocks[pre].nodes[0].out.shape=vec![Dim::Fixed(1);4096];
++        p.blocks[pre].carry_out=vec![0;MAX_CARRY];
++        let bytes=p.encode();let (_,q)=source_tir_program_shape_v1(&bytes).unwrap();
++        assert!(matches!(local_decode(&bytes,q-1),Err(NativeDecodeErrorV1::Resource(_))));
++        assert!(matches!(local_decode(&bytes,q),Err(NativeDecodeErrorV1::Decode(_))));
++        let mut unknown=bytes.clone();unknown[..2].copy_from_slice(&u16::MAX.to_le_bytes());
++        assert!(matches!(source_tir_program_shape_v1(&unknown),Err(NativeDecodeErrorV1::Decode(_))));
++        assert!(source_tir_program_shape_v1(&bytes[..bytes.len()-1]).is_err());
++    }
++    #[test]
++    fn source_normal_form_repeated_liveness_edges_are_linear_and_reject_dead_node() {
++        use misaka_palw_tir::{DType,Ref,TensorType,builder::ProgramBuilder,program::HISTORY_BOUND_V1_HELD};
++        let mut b=ProgramBuilder::new(256,HISTORY_BOUND_V1_HELD);
++        let scores=b.param("scores",DType::I32,&[4],false);
++        let mut pre=b.block("pre",vec![]);
++        let mut x=scores;
++        for _ in 0..128 {x=pre.add(x,x,DType::I32);}
++        let pre=pre.finish(&[x]);
++        let mut post=b.block("post",vec![TensorType::fixed(DType::I32,&[4])]);
++        let y=post.cast(Ref::CarryIn(0),DType::I32);post.commit(y);let post=post.finish(&[]);
++        let p=b.finish(pre,vec![],post,0);let bytes=p.encode();
++        let (_,q)=source_tir_program_shape_v1(&bytes).unwrap();
++        assert_eq!(local_decode(&bytes,q).unwrap().encode(),bytes);
++        let mut dead=p;
++        let mut extra=dead.blocks[dead.schedule.post as usize].nodes[0].clone();extra.commit=false;
++        dead.blocks[dead.schedule.post as usize].nodes.push(extra);
++        let bytes=dead.encode();let (_,q)=source_tir_program_shape_v1(&bytes).unwrap();
++        assert!(matches!(local_decode(&bytes,q),Err(NativeDecodeErrorV1::Decode(s)) if s.contains("dead")));
++    }
++}
++
+ pub(crate) fn standalone_tir_program_requests_v1(bytes: &[u8]) -> io::Result<u64> {
+     Ok(standalone_tir_program_shape_v1(bytes)?.program_requests_v1())
+ }
+diff --git a/consensus/core/src/palw_tir_public_source_v1.rs b/consensus/core/src/palw_tir_public_source_v1.rs
+index 8b28ddd2c..c5fd8e6b2 100644
+--- a/consensus/core/src/palw_tir_public_source_v1.rs
++++ b/consensus/core/src/palw_tir_public_source_v1.rs
+@@ -215,16 +215,16 @@ impl PalwTirPublicSourceV1 {
+         header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+     ) -> Result<u64, crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
+         use crate::palw_native_resource_v1::{NativeDecodeErrorV1 as E, NativeCoverageV1, NativeHeapV1,
+-            TirNativeRequestsV1, standalone_tir_program_shape_v1};
++            TirNativeRequestsV1, source_tir_program_shape_v1};
+         // Check real byte/count identity before scanner, clone or class builder.
+         registered.check_program_v1().map_err(|e|E::Decode(e.into()))?;
+         if layout.commit_tiles.len() as u64 > u64::from(registered.program_bytes)
+             || layout.state_tiles.len() as u64 > u64::from(registered.program_bytes) {
+             return Err(E::Decode("source layout exceeds registered program geometry".into()));
+         }
+-        let shape=standalone_tir_program_shape_v1(&registered.program).map_err(|e|E::Decode(e.to_string()))?;
++        let (shape,source_program_requests)=source_tir_program_shape_v1(&registered.program)?;
+         let mut q=TirNativeRequestsV1::new();
+-        q.add_v1(shape.program_requests_v1()).map_err(E::Resource)?;
++        q.add_v1(source_program_requests).map_err(E::Resource)?;
+         q.add_v1(crate::palw_tir_step_v1::native_tir_step_space_additional_requests_v1(&shape).map_err(E::Resource)?)
+             .map_err(E::Resource)?;
+         // resolve_owned_class verifies once and drops its temporary StepSpace

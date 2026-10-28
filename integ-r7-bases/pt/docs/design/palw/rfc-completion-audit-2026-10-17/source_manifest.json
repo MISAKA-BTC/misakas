@@ -1,0 +1,752 @@
+{
+  "S01": {
+    "title": "RFC01: 受入条件・実装済みprefix・残る最適化・seed提案",
+    "sources": [
+      {
+        "path": "docs/rfc/0001-palw-inference-surface-gaps.md",
+        "start_line": 370,
+        "end_line": 377,
+        "file_sha256": "3ed9f479de8cfad83d1dac631c247abf128d1fcb4d0e561cea4de8ada7be2b49"
+      },
+      {
+        "path": "docs/rfc/0001-palw-inference-surface-gaps.md",
+        "start_line": 408,
+        "end_line": 429,
+        "file_sha256": "3ed9f479de8cfad83d1dac631c247abf128d1fcb4d0e561cea4de8ada7be2b49"
+      },
+      {
+        "path": "misaka/palw/gateway/src/surface.rs",
+        "start_line": 120,
+        "end_line": 138,
+        "file_sha256": "8aebaa186bf7fc3d25d1fba9ffa1f9367d8282444d5448b0ac94fb762e1c8da4"
+      },
+      {
+        "path": "misaka/palw/gateway/src/main.rs",
+        "start_line": 1168,
+        "end_line": 1194,
+        "file_sha256": "7b53989d993bf8b0a8669b2db38a365da403ec8803fd25aa144d53c418479360"
+      }
+    ]
+  },
+  "S02": {
+    "title": "PALWART3 container rootと登録/court rootの未接続",
+    "sources": [
+      {
+        "path": "consensus/core/src/palw_genesis8_catalog_v1.rs",
+        "start_line": 8,
+        "end_line": 25,
+        "file_sha256": "67fa104e839f7284410d7b7997152514355513229b81b29cbc7c412518277129"
+      },
+      {
+        "path": "misaka/palw/sdk/src/tir_layout.rs",
+        "start_line": 819,
+        "end_line": 842,
+        "file_sha256": "3e4dc552037e28d9fdfcaea406377bbb038bb3a7350de452372babd1bf6d669c"
+      },
+      {
+        "path": "misaka/palw/sdk/src/tir_registration.rs",
+        "start_line": 129,
+        "end_line": 159,
+        "file_sha256": "88696268de87426312e366e5ac144c530d92b670fff78ded3f7b177aad1a0ca2"
+      },
+      {
+        "path": "consensus/core/src/palw_gdn_court_v2.rs",
+        "start_line": 91,
+        "end_line": 115,
+        "file_sha256": "e4dd499f2301ae9b8307c6e49efb0e4ed01210e6b0daae3da4f99c7e3275e7ec"
+      }
+    ]
+  },
+  "S03": {
+    "title": "TIR FPの登録semantics注入API",
+    "sources": [
+      {
+        "path": "misaka/palw/tir/exec/src/node/backend.rs",
+        "start_line": 398,
+        "end_line": 444,
+        "file_sha256": "5719ca649dfc38b0c49117e72dd87120ba3152817eaa94cba299b58e4474ade8"
+      },
+      {
+        "path": "misaka/palw/tir/exec/src/node/backend.rs",
+        "start_line": 454,
+        "end_line": 466,
+        "file_sha256": "5719ca649dfc38b0c49117e72dd87120ba3152817eaa94cba299b58e4474ade8"
+      }
+    ]
+  },
+  "S04": {
+    "title": "Generative job bodyのAudio/Video欠落",
+    "sources": [
+      {
+        "path": "consensus/core/src/palw_gen_job_v1.rs",
+        "start_line": 132,
+        "end_line": 167,
+        "file_sha256": "666c3dfa07000d321814394c045545fd66d38fcf633c088ac851ebdbceaee7b7"
+      },
+      {
+        "path": "consensus/core/src/palw_gen_step_v1.rs",
+        "start_line": 20,
+        "end_line": 35,
+        "file_sha256": "70d3ffa7c226c0f1d2a7fedd046efd4942bdbc5e63ea48d10b22d784df5826b8"
+      },
+      {
+        "path": "docs/rfc/0003-palw-generative-model-classes.md",
+        "start_line": 2214,
+        "end_line": 2282,
+        "file_sha256": "f14ce56cc42c1583274a8a420f089e3c5c342f6dee79404d770f8a6ddebb8dbd"
+      }
+    ]
+  },
+  "S05": {
+    "title": "GDN court本体とpublic DA filerの残件",
+    "sources": [
+      {
+        "path": "consensus/core/src/palw_gdn_court_v2.rs",
+        "start_line": 28,
+        "end_line": 47,
+        "file_sha256": "e4dd499f2301ae9b8307c6e49efb0e4ed01210e6b0daae3da4f99c7e3275e7ec"
+      },
+      {
+        "path": "consensus/core/src/palw_gdn_court_v2.rs",
+        "start_line": 91,
+        "end_line": 115,
+        "file_sha256": "e4dd499f2301ae9b8307c6e49efb0e4ed01210e6b0daae3da4f99c7e3275e7ec"
+      },
+      {
+        "path": "docs/design/palw/rfc-0006-0007-0008-0012-remaining-work-2026-10-15.md",
+        "start_line": 104,
+        "end_line": 125,
+        "file_sha256": "ef2c9bfe1755a41f7b6288ba447a1ef494ad1557eba91ed6a8e32b8e5d393482"
+      }
+    ]
+  },
+  "S06": {
+    "title": "SelectedApproval adapterとPanelLicensed eventの分岐",
+    "sources": [
+      {
+        "path": "consensus/core/src/palw_kernel_route_v1.rs",
+        "start_line": 794,
+        "end_line": 840,
+        "file_sha256": "b92780eb9cebae9bd3d85ea7e5991e0fe99caa5be44d29ec1f65a3c50ff43bff"
+      },
+      {
+        "path": "consensus/core/src/palw_kernel_route_v1.rs",
+        "start_line": 843,
+        "end_line": 877,
+        "file_sha256": "b92780eb9cebae9bd3d85ea7e5991e0fe99caa5be44d29ec1f65a3c50ff43bff"
+      },
+      {
+        "path": "docs/design/palw/remaining-work-2026-10-16.md",
+        "start_line": 13,
+        "end_line": 21,
+        "file_sha256": "15c44a33b4901befc028fa035ef28daec65e00b5c2e99522f4aa0a50a97705eb"
+      }
+    ]
+  },
+  "S07": {
+    "title": "Paid trapの非staged限定とinteractive拒否",
+    "sources": [
+      {
+        "path": "consensus/core/src/palw_paid_claim_trap_v1.rs",
+        "start_line": 1,
+        "end_line": 16,
+        "file_sha256": "6e593cb2d1ffbdbe582e65964fc687838c41e509a58c88c71123cbceb13039fc"
+      },
+      {
+        "path": "consensus/core/src/palw_paid_claim_trap_v1.rs",
+        "start_line": 284,
+        "end_line": 309,
+        "file_sha256": "6e593cb2d1ffbdbe582e65964fc687838c41e509a58c88c71123cbceb13039fc"
+      }
+    ]
+  },
+  "S08": {
+    "title": "Native liabilityの未定義を受理時に拒否",
+    "sources": [
+      {
+        "path": "consensus/core/src/palw_settlement_liability_fold_v1.rs",
+        "start_line": 454,
+        "end_line": 463,
+        "file_sha256": "2f3a980de25b4216a79254b323ee4aa4de4683bfe37a83cf4f8559227329b12a"
+      },
+      {
+        "path": "consensus/core/src/palw_bond_budget_fold_v1.rs",
+        "start_line": 2498,
+        "end_line": 2524,
+        "file_sha256": "d76cc05aa6f0e6032af5dc2f8917b5f4534cb03152c61d766ae326376eefdc01"
+      },
+      {
+        "path": "consensus/core/src/palw_bond_budget_fold_v1.rs",
+        "start_line": 2560,
+        "end_line": 2580,
+        "file_sha256": "d76cc05aa6f0e6032af5dc2f8917b5f4534cb03152c61d766ae326376eefdc01"
+      },
+      {
+        "path": "consensus/core/src/palw_bond_budget_fold_v1.rs",
+        "start_line": 2630,
+        "end_line": 2647,
+        "file_sha256": "d76cc05aa6f0e6032af5dc2f8917b5f4534cb03152c61d766ae326376eefdc01"
+      },
+      {
+        "path": "consensus/core/src/palw_bond_budget_fold_v1.rs",
+        "start_line": 2732,
+        "end_line": 2751,
+        "file_sha256": "d76cc05aa6f0e6032af5dc2f8917b5f4534cb03152c61d766ae326376eefdc01"
+      }
+    ]
+  },
+  "S09": {
+    "title": "各feeのUnsourcedとzero-amount終端",
+    "sources": [
+      {
+        "path": "consensus/core/src/palw_monetary_material_fold_v1.rs",
+        "start_line": 782,
+        "end_line": 811,
+        "file_sha256": "44c137dc924f84df82ddae457aa5d5634e82f02f7271b0b4a2b5ed9050910b34"
+      },
+      {
+        "path": "consensus/core/src/palw_kernel_route_fold_v1.rs",
+        "start_line": 950,
+        "end_line": 974,
+        "file_sha256": "59bed7f88c026be6b93b202459c8c0ec0f9e20feb16281c7a4972aa9197f3273"
+      },
+      {
+        "path": "consensus/core/src/palw_kernel_route_fold_v1.rs",
+        "start_line": 1062,
+        "end_line": 1089,
+        "file_sha256": "59bed7f88c026be6b93b202459c8c0ec0f9e20feb16281c7a4972aa9197f3273"
+      },
+      {
+        "path": "consensus/core/src/palw_settlement_liability_fold_v1.rs",
+        "start_line": 349,
+        "end_line": 379,
+        "file_sha256": "2f3a980de25b4216a79254b323ee4aa4de4683bfe37a83cf4f8559227329b12a"
+      }
+    ]
+  },
+  "S10": {
+    "title": "EXEC native統合試験のadmission seam",
+    "sources": [
+      {
+        "path": "consensus/src/pipeline/virtual_processor/processor.rs",
+        "start_line": 283,
+        "end_line": 313,
+        "file_sha256": "d9126f9650b5652a94248d4a8708bebac905c23d274e37030a227a27b55385a9"
+      }
+    ]
+  },
+  "S11": {
+    "title": "Remote minerがV1証拠経路を使い、Rule EでSTOP",
+    "sources": [
+      {
+        "path": "misaka/palw/remote/src/miner.rs",
+        "start_line": 510,
+        "end_line": 570,
+        "file_sha256": "5686a23694cc0ddf68042b95e1d8cfe6d8583c9ad2aff2ce74a70fecadcc4cb9"
+      },
+      {
+        "path": "misaka/palw/remote/src/l2.rs",
+        "start_line": 305,
+        "end_line": 322,
+        "file_sha256": "bb8bf5fc6bced7dc1567b45a2520c90fd013dc3100fb0b2c8c947bcd9286bc5e"
+      },
+      {
+        "path": "misaka/palw/remote/src/l2.rs",
+        "start_line": 933,
+        "end_line": 949,
+        "file_sha256": "bb8bf5fc6bced7dc1567b45a2520c90fd013dc3100fb0b2c8c947bcd9286bc5e"
+      }
+    ]
+  },
+  "S12": {
+    "title": "Panel production historyとreceipt clock",
+    "sources": [
+      {
+        "path": "consensus/core/src/palw_panel_v3_fold_v1.rs",
+        "start_line": 133,
+        "end_line": 164,
+        "file_sha256": "5e9fdf3fb8af62d540e914f34489f22f83af04463b092bd6412228625f2b6a96"
+      },
+      {
+        "path": "consensus/core/src/palw_panel_v3_fold_v1.rs",
+        "start_line": 504,
+        "end_line": 544,
+        "file_sha256": "5e9fdf3fb8af62d540e914f34489f22f83af04463b092bd6412228625f2b6a96"
+      }
+    ]
+  },
+  "S13": {
+    "title": "RFC11 full-task/full-contextの分母と未完了分類",
+    "sources": [
+      {
+        "path": "docs/rfc/0011-permissionless-model-and-long-context-onboarding.md",
+        "start_line": 684,
+        "end_line": 719,
+        "file_sha256": "83ae98f74d2b0f34e744defc92b6a48a35de606be2fab54506d246e720cf7059"
+      },
+      {
+        "path": "misaka/palw/sdk/src/census/onboarding.rs",
+        "start_line": 1,
+        "end_line": 30,
+        "file_sha256": "b711cfc987d91a5136174220853c7dc89c49675be955142cf0448a46166cdd3b"
+      },
+      {
+        "path": "misaka/palw/sdk/src/census/onboarding.rs",
+        "start_line": 90,
+        "end_line": 143,
+        "file_sha256": "b711cfc987d91a5136174220853c7dc89c49675be955142cf0448a46166cdd3b"
+      }
+    ]
+  },
+  "S14": {
+    "title": "RFC12受入driverに不足するRPC/failpoint/refund CLI",
+    "sources": [
+      {
+        "path": "scripts/drills/misaka-rfc12-acceptance.py",
+        "start_line": 55,
+        "end_line": 78,
+        "file_sha256": "5726fc20c6bbf16e60448d35fc38375ec4008e077ee6db835c729569080c1c2b"
+      },
+      {
+        "path": "scripts/drills/misaka-rfc12-acceptance.py",
+        "start_line": 980,
+        "end_line": 1004,
+        "file_sha256": "5726fc20c6bbf16e60448d35fc38375ec4008e077ee6db835c729569080c1c2b"
+      }
+    ]
+  },
+  "S15": {
+    "title": "Rule E rootのnodeへの接続は実装済み",
+    "sources": [
+      {
+        "path": "consensus/src/pipeline/virtual_processor/processor/palw.rs",
+        "start_line": 8042,
+        "end_line": 8049,
+        "file_sha256": "eec62f6177ce8003777892e3462694ff151b8c545e11934d172ce5e460068aba"
+      }
+    ]
+  },
+  "S16": {
+    "title": "Genesis long-context fidelity / artifact残件",
+    "sources": [
+      {
+        "path": "docs/design/palw/genesis8-status.md",
+        "start_line": 177,
+        "end_line": 206,
+        "file_sha256": "377798d32f1874dede92ece436de5e2537f3e33f77971422f36bf03b513cf206"
+      },
+      {
+        "path": "docs/design/palw/remaining-work-2026-10-16.md",
+        "start_line": 51,
+        "end_line": 59,
+        "file_sha256": "15c44a33b4901befc028fa035ef28daec65e00b5c2e99522f4aa0a50a97705eb"
+      }
+    ]
+  },
+  "S17": {
+    "title": "RFC13既存tool evidenceのスコープ",
+    "sources": [
+      {
+        "path": "docs/rfc/evidence/0013-onboarding-tool-validation.json",
+        "start_line": 1,
+        "end_line": 198,
+        "file_sha256": "dfae2fdcba8edd82df605246bc7ac75b26e4991ee951d6c5d0ba3c8122463c53"
+      }
+    ]
+  },
+  "S18": {
+    "title": "Legacy FP固定4区間のdraw",
+    "sources": [
+      {
+        "path": "consensus/core/src/palw_fp_interval_v1.rs",
+        "start_line": 1,
+        "end_line": 82,
+        "file_sha256": "7e3447ac9998382334bdacac1d36256f0929c3a7f028ddeffb922004606f9661"
+      },
+      {
+        "path": "kaspad/src/palw_fp_seat.rs",
+        "start_line": 391,
+        "end_line": 428,
+        "file_sha256": "42569694eeb7533cba6006e8c6195093ea3a7b165b33b27afaa6b069d8909fbc"
+      }
+    ]
+  },
+  "S19": {
+    "title": "Court共有上限とその残件テスト",
+    "sources": [
+      {
+        "path": "consensus/core/src/palw_state_v2/objects.rs",
+        "start_line": 1999,
+        "end_line": 2012,
+        "file_sha256": "ac1b6a9bfdb6dc3b0f8c6550a9ff2a176a7fd00e451c598ff3bf89991f4448b1"
+      },
+      {
+        "path": "consensus/core/src/palw_state_v2/da_sessions.rs",
+        "start_line": 746,
+        "end_line": 762,
+        "file_sha256": "89487d4796ff06b9bb1c46f2cdd974409258c68dfb2c4ef4439e34d7ef79b73c"
+      },
+      {
+        "path": "consensus/core/tests/g14_close_legacy.rs",
+        "start_line": 531,
+        "end_line": 566,
+        "file_sha256": "06f4374d4403cea9a89609426e5d9c9940ff9be8cacb852708ae0816d885154a"
+      }
+    ]
+  },
+  "S20": {
+    "title": "TIR K_owner=8、idle回収、全active時拒否",
+    "sources": [
+      {
+        "path": "consensus/core/src/palw_tir_public_fold_v1.rs",
+        "start_line": 618,
+        "end_line": 642,
+        "file_sha256": "9092c26113c4636ee8ea7bbcc3550f1648c0134e7cbeccd59b723d42c20531ef"
+      }
+    ]
+  },
+  "S21": {
+    "title": "Native owner上限とv39回収",
+    "sources": [
+      {
+        "path": "consensus/core/src/palw_native_text_fold_v29.rs",
+        "start_line": 1148,
+        "end_line": 1172,
+        "file_sha256": "7ca7f2575e648b7d00b5bb811b2735da1562b82d69534707c0acc5b72fb9517f"
+      },
+      {
+        "path": "consensus/core/src/palw_flat_execution_court_fold_v11.rs",
+        "start_line": 85,
+        "end_line": 120,
+        "file_sha256": "224e3c75cd9f06f1ae3ee18bd3756cd8c2e3e3434bda733b188bbde2a6b27f9a"
+      },
+      {
+        "path": "consensus/core/src/palw_native_protected_fold_v39.rs",
+        "start_line": 590,
+        "end_line": 606,
+        "file_sha256": "506d3773a43bc8c2c3330b6eec997b73a4e19dc1ad3e4ecbc525be108c6884d1"
+      }
+    ]
+  },
+  "S22": {
+    "title": "G14最新appendix: frame費用/時計/本番harness",
+    "sources": [
+      {
+        "path": "docs/design/palw/g14-completeness-proof-2026-10-16.md",
+        "start_line": 978,
+        "end_line": 1050,
+        "file_sha256": "163ed1900bd2a92bfba994561e0f965daa73b5e7e0a0e71eca7e37e53ea400f7"
+      },
+      {
+        "path": "docs/design/palw/g14-completeness-proof-2026-10-16.md",
+        "start_line": 1051,
+        "end_line": 1080,
+        "file_sha256": "163ed1900bd2a92bfba994561e0f965daa73b5e7e0a0e71eca7e37e53ea400f7"
+      },
+      {
+        "path": "docs/design/palw/remaining-work-2026-10-16.md",
+        "start_line": 23,
+        "end_line": 40,
+        "file_sha256": "15c44a33b4901befc028fa035ef28daec65e00b5c2e99522f4aa0a50a97705eb"
+      }
+    ]
+  },
+  "S23": {
+    "title": "Native mining Final後のchain告発がない",
+    "sources": [
+      {
+        "path": "consensus/core/src/palw_security_certification_fold_v1.rs",
+        "start_line": 488,
+        "end_line": 503,
+        "file_sha256": "5fbc37c3d32c78fb95967a26f0ad031b4f07d939a2ba2f7aa8396b3f91634c4f"
+      }
+    ]
+  },
+  "S24": {
+    "title": "Kernel signer liability/EXEC covering signerの実装済み修正",
+    "sources": [
+      {
+        "path": "consensus/core/src/palw_g14_lane_closure_fold_v1.rs",
+        "start_line": 24,
+        "end_line": 91,
+        "file_sha256": "07ea254f629a512f0d282981496b85a2d86cc46188fb7c16fabffcb8da1eb194"
+      },
+      {
+        "path": "consensus/core/src/palw_kernel_route_fold_v1.rs",
+        "start_line": 1233,
+        "end_line": 1246,
+        "file_sha256": "59bed7f88c026be6b93b202459c8c0ec0f9e20feb16281c7a4972aa9197f3273"
+      },
+      {
+        "path": "consensus/core/src/palw_g14_lane_closure_fold_v1.rs",
+        "start_line": 170,
+        "end_line": 190,
+        "file_sha256": "07ea254f629a512f0d282981496b85a2d86cc46188fb7c16fabffcb8da1eb194"
+      }
+    ]
+  },
+  "S25": {
+    "title": "Gate C報酬のhorizonまでの保留は実装済み",
+    "sources": [
+      {
+        "path": "consensus/core/src/palw_security_certification_fold_v1.rs",
+        "start_line": 321,
+        "end_line": 359,
+        "file_sha256": "5fbc37c3d32c78fb95967a26f0ad031b4f07d939a2ba2f7aa8396b3f91634c4f"
+      }
+    ]
+  },
+  "S26": {
+    "title": "RFC15の明示スコープ・実装状態",
+    "sources": [
+      {
+        "path": "docs/design/palw/rfc-0015-implementation-status-2026-10-15.md",
+        "start_line": 1,
+        "end_line": 40,
+        "file_sha256": "99346d284e5f5faa91cd51315feea055cadc92d5748fc28b6207da78d8ff3e5f"
+      },
+      {
+        "path": "docs/design/palw/rfc-0015-implementation-status-2026-10-15.md",
+        "start_line": 115,
+        "end_line": 134,
+        "file_sha256": "99346d284e5f5faa91cd51315feea055cadc92d5748fc28b6207da78d8ff3e5f"
+      },
+      {
+        "path": "consensus/core/src/palw_kernel_settlement_v1.rs",
+        "start_line": 1,
+        "end_line": 135,
+        "file_sha256": "d3bcdfda2ca75aa2714cccb97d1f722d2ec56ca8d64b784d6f64f531002937e4"
+      }
+    ]
+  },
+  "S27": {
+    "title": "RFC16の実foldはattestationではなく一律seat値",
+    "sources": [
+      {
+        "path": "consensus/core/src/palw_rfc0016_fold_v1.rs",
+        "start_line": 283,
+        "end_line": 315,
+        "file_sha256": "6153e3312c5def9394d54ed0dc561d0277ab586963347b6385d157d6c7a123bd"
+      }
+    ]
+  },
+  "S28": {
+    "title": "RFC16資源制約がsupplyで落ちる",
+    "sources": [
+      {
+        "path": "consensus/core/src/palw_rfc0016_v1/capacity.rs",
+        "start_line": 22,
+        "end_line": 62,
+        "file_sha256": "f65c69ce5f563b5cc1c604516f48825aa9cdc43e582b7c65bda6a76236ce38f5"
+      },
+      {
+        "path": "consensus/core/src/palw_rfc0016_v1/capacity.rs",
+        "start_line": 238,
+        "end_line": 337,
+        "file_sha256": "f65c69ce5f563b5cc1c604516f48825aa9cdc43e582b7c65bda6a76236ce38f5"
+      },
+      {
+        "path": "consensus/core/src/palw_rfc0016_v1/capacity.rs",
+        "start_line": 473,
+        "end_line": 510,
+        "file_sha256": "f65c69ce5f563b5cc1c604516f48825aa9cdc43e582b7c65bda6a76236ce38f5"
+      }
+    ]
+  },
+  "S29": {
+    "title": "RFC16 production値が未測定placeholder",
+    "sources": [
+      {
+        "path": "consensus/core/src/palw_rfc0016_v1/values.rs",
+        "start_line": 79,
+        "end_line": 103,
+        "file_sha256": "a94437375cdcc2ee703bf3486115993e9f410821ddbdb657d4473046d7d967fa"
+      },
+      {
+        "path": "consensus/core/src/palw_rfc0016_v1/values.rs",
+        "start_line": 184,
+        "end_line": 204,
+        "file_sha256": "a94437375cdcc2ee703bf3486115993e9f410821ddbdb657d4473046d7d967fa"
+      }
+    ]
+  },
+  "S30": {
+    "title": "RFC17現行tierと旧審査の無効化・係数適用",
+    "sources": [
+      {
+        "path": "docs/rfc/0017-model-eligibility-examination-and-renewal.md",
+        "start_line": 1,
+        "end_line": 42,
+        "file_sha256": "c877bb3beb8fe014eceb4700cd1287ddaf51d9a0bca2d2d915c8bbbf4cb7807d"
+      },
+      {
+        "path": "consensus/core/src/palw_model_eligibility_fold_v1.rs",
+        "start_line": 34,
+        "end_line": 42,
+        "file_sha256": "3b467da7692035b3a4be7e8225d750c218d2911ffe8bb9ef24f061bb1d6193d6"
+      },
+      {
+        "path": "consensus/core/src/palw_model_tier_v1.rs",
+        "start_line": 32,
+        "end_line": 72,
+        "file_sha256": "70c93e270b6a7612ea98ffa0576723272fd54be3eb9e6afd67223bad03d07ef2"
+      },
+      {
+        "path": "consensus/core/src/palw_bond_budget_v1/allocation_v3.rs",
+        "start_line": 288,
+        "end_line": 320,
+        "file_sha256": "459abc4b470fdad03ff8669e28313421dcf268b7284504945299d06a5f528031"
+      },
+      {
+        "path": "consensus/core/src/palw_rfc0016_fold_v1.rs",
+        "start_line": 130,
+        "end_line": 146,
+        "file_sha256": "6153e3312c5def9394d54ed0dc561d0277ab586963347b6385d157d6c7a123bd"
+      }
+    ]
+  },
+  "S31": {
+    "title": "FP receipt admissionはFinalのみ、Gate Cはweightだけ",
+    "sources": [
+      {
+        "path": "consensus/core/src/palw_fp_admission_v3.rs",
+        "start_line": 175,
+        "end_line": 195,
+        "file_sha256": "682549e16de9d19987affe6ad5405abcaac888fa8c935986b29732d340068b06"
+      },
+      {
+        "path": "consensus/core/src/palw_state_v2.rs",
+        "start_line": 19466,
+        "end_line": 19499,
+        "file_sha256": "ce6a025a3457b8505b0e328ebd75d447b2397256831916d6d971647b0ffd4fa7"
+      },
+      {
+        "path": "consensus/core/src/palw_state_v2.rs",
+        "start_line": 19574,
+        "end_line": 19586,
+        "file_sha256": "ce6a025a3457b8505b0e328ebd75d447b2397256831916d6d971647b0ffd4fa7"
+      },
+      {
+        "path": "consensus/src/pipeline/virtual_processor/processor/palw.rs",
+        "start_line": 10042,
+        "end_line": 10077,
+        "file_sha256": "eec62f6177ce8003777892e3462694ff151b8c545e11934d172ce5e460068aba"
+      },
+      {
+        "path": "consensus/src/pipeline/virtual_processor/processor/palw.rs",
+        "start_line": 4288,
+        "end_line": 4308,
+        "file_sha256": "eec62f6177ce8003777892e3462694ff151b8c545e11934d172ce5e460068aba"
+      },
+      {
+        "path": "consensus/src/processes/coinbase.rs",
+        "start_line": 227,
+        "end_line": 232,
+        "file_sha256": "77bfd7fee4a2af273fa78c7f058ba89eda6444fa11aacd71988e9b8d5b9c1426"
+      },
+      {
+        "path": "consensus/core/src/palw_state_v2.rs",
+        "start_line": 14806,
+        "end_line": 14813,
+        "file_sha256": "ce6a025a3457b8505b0e328ebd75d447b2397256831916d6d971647b0ffd4fa7"
+      }
+    ]
+  },
+  "S32": {
+    "title": "Held issuance releaseはproducerの単一payload",
+    "sources": [
+      {
+        "path": "consensus/core/src/palw_security_certification_fold_v1.rs",
+        "start_line": 362,
+        "end_line": 405,
+        "file_sha256": "5fbc37c3d32c78fb95967a26f0ad031b4f07d939a2ba2f7aa8396b3f91634c4f"
+      },
+      {
+        "path": "docs/design/palw/rfc-0018-implementation-status-2026-10-15.md",
+        "start_line": 33,
+        "end_line": 45,
+        "file_sha256": "94b89d889ffeae7762e33ef5b2177eae345b4de78a2e5572c7e8e083b89d07a2"
+      }
+    ]
+  },
+  "S33": {
+    "title": "RFC19 R7/R8未実装とdriver choices",
+    "sources": [
+      {
+        "path": "docs/rfc/0019-annual-model-upgrade.md",
+        "start_line": 310,
+        "end_line": 330,
+        "file_sha256": "b0614a3a807f2527c8262917ec598d71972654cd2540fbcfe6a67031cf756b86"
+      },
+      {
+        "path": "scripts/drills/rfc0019_rolling_upgrade_drill.py",
+        "start_line": 381,
+        "end_line": 404,
+        "file_sha256": "782ca8b1d5318bb293e63415e02dff144104c12a9d4d23cc60a0e2bfe83d535e"
+      }
+    ]
+  },
+  "S34": {
+    "title": "RFC20現行スコープと必要な計測",
+    "sources": [
+      {
+        "path": "docs/rfc/0020-long-context-calibration-memory.md",
+        "start_line": 53,
+        "end_line": 70,
+        "file_sha256": "6a6e4f677e68fb4d956a7f46942a059d8b4cfdae7f5dbbe96128f670ccfe03ad"
+      },
+      {
+        "path": "docs/rfc/0020-long-context-calibration-memory.md",
+        "start_line": 85,
+        "end_line": 97,
+        "file_sha256": "6a6e4f677e68fb4d956a7f46942a059d8b4cfdae7f5dbbe96128f670ccfe03ad"
+      },
+      {
+        "path": "docs/rfc/0020-long-context-calibration-memory.md",
+        "start_line": 128,
+        "end_line": 157,
+        "file_sha256": "6a6e4f677e68fb4d956a7f46942a059d8b4cfdae7f5dbbe96128f670ccfe03ad"
+      },
+      {
+        "path": "misaka/palw/tir/lower/tests/position_blocks.rs",
+        "start_line": 115,
+        "end_line": 153,
+        "file_sha256": "6c6365e0d209591831b4429ad4f2e27e49f8695703948785f89779585f7b6783"
+      }
+    ]
+  },
+  "S35": {
+    "title": "最新統合ログの未再実行・branchとの区別",
+    "sources": [
+      {
+        "path": "docs/design/palw/remaining-work-2026-10-16.md",
+        "start_line": 1,
+        "end_line": 47,
+        "file_sha256": "15c44a33b4901befc028fa035ef28daec65e00b5c2e99522f4aa0a50a97705eb"
+      }
+    ]
+  },
+  "S36": {
+    "title": "Constrained decode courtとrenderは現コードにある",
+    "sources": [
+      {
+        "path": "consensus/core/src/palw_step_refute.rs",
+        "start_line": 5955,
+        "end_line": 5988,
+        "file_sha256": "38e4dd3a4c0df9cee46422a965cc4508185a048bc2fc5d77b47d3c2036ee7c61"
+      },
+      {
+        "path": "consensus/core/src/palw_state_v2/transition_builder.rs",
+        "start_line": 5782,
+        "end_line": 5800,
+        "file_sha256": "096d88eb29ed97b22fb4d56994bb574b2afa5acf2d05018c2f2d15ae8eb4f7ae"
+      },
+      {
+        "path": "misaka/palw/base0/src/fp_worker.rs",
+        "start_line": 1248,
+        "end_line": 1275,
+        "file_sha256": "ccc128e10e52cc07c77a98bfa4cc7f8d8427413625c0bed78c8c0f45c8285318"
+      }
+    ]
+  }
+}

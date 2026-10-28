@@ -1,0 +1,33 @@
+{
+  "blockers": [
+    "No cargo or rustc executable in this runtime.",
+    "New Account Bond consensus/fence/fee wiring is not implemented in this snapshot.",
+    "Full artifacts used in archived OPV runs are not bundled; tiny fixtures are not substitutes.",
+    "No live source for new Account Bond REAL/heartbeat/inclusion or real Panel bills."
+  ],
+  "cpu_count": 10,
+  "fresh_full_LLM_replay": false,
+  "fresh_native_node_run": false,
+  "no_protocol_files_modified_by_measurement": true,
+  "python": "3.9.6 (default, Mar  6 2026, 16:22:43) \n[Clang 21.0.0 (clang-2100.0.123.102)]",
+  "run_utc": "2026-10-20T12:24:17.488158+00:00",
+  "system": "macOS-26.7-arm64-arm-64bit",
+  "tools": {
+    "cargo": {
+      "exit": 0,
+      "output": "cargo 1.93.0 (083ac5135 2025-12-15)\n"
+    },
+    "gcc": {
+      "exit": 0,
+      "output": "Apple clang version 21.0.0 (clang-2100.0.123.102)\nTarget: arm64-apple-darwin25.6.0\nThread model: posix\nInstalledDir: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin\n"
+    },
+    "python3": {
+      "exit": 0,
+      "output": "Python 3.9.6\n"
+    },
+    "rustc": {
+      "exit": 0,
+      "output": "rustc 1.93.0 (254b59607 2026-01-19)\n"
+    }
+  }
+}

@@ -1,0 +1,19 @@
+[package]
+name = "misaka-palw-challenge"
+description = "RFC-0007 Part VI: the single post-commit challenge contract — PostCommitChallengePolicyV1, the PALW Work Beacon accumulator over future Final G14-complete useful work, the one challenge-seed derivation with domain-separated rejection samplers, the interactive transcript modes, RFC-0011 §17 onboarding lifecycle states and RFC-0013 §9 conformance records. Dormant: no consensus code reads it; no fence, wire id or activation."
+publish = false
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+blake2b_simd.workspace = true
+borsh.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

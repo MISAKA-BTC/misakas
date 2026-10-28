@@ -1,0 +1,8 @@
+{
+  "tokio": "/tmp/misaka-rfc67812-node-target/debug/deps/libtokio-b4c731d7060f093d.rlib",
+  "borsh": "/tmp/misaka-rfc67812-node-target/debug/deps/libborsh-c57124d88bb5020f.rlib",
+  "kaspa_hashes": "/tmp/misaka-rfc67812-node-target/debug/deps/libkaspa_hashes-e1a05137bc7adce0.rlib",
+  "kaspa_consensus_core": "/tmp/misaka-rfc67812-node-target/debug/deps/libkaspa_consensus_core-28b14660ab28fb31.rlib",
+  "flate2": "/tmp/misaka-rfc67812-node-target/debug/deps/libflate2-54c5a52fe316cd04.rlib",
+  "uuid": "/tmp/misaka-rfc67812-node-target/debug/deps/libuuid-0bdf4fe8a9a7b280.rlib"
+}

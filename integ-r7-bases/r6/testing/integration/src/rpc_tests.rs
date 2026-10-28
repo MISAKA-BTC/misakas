@@ -1,0 +1,1843 @@
+use std::{str::FromStr, sync::Arc, time::Duration};
+
+use crate::common::{client_notify::ChannelNotify, daemon::Daemon};
+use futures_util::future::try_join_all;
+use kaspa_addresses::{Address, Prefix, Version};
+use kaspa_consensus::params::SIMNET_GENESIS;
+use kaspa_consensus_core::{
+    config::premine::MISAKA_PREMINE_CAP_SOMPI, constants::MAX_SOMPI, header::Header, subnets::SubnetworkId, tx::Transaction,
+};
+use kaspa_core::{assert_match, info};
+use kaspa_grpc_core::ops::KaspadPayloadOps;
+use kaspa_notify::{
+    connection::{ChannelConnection, ChannelType},
+    scope::{
+        BlockAddedScope, FinalityConflictScope, NewBlockTemplateScope, PalwClassReadinessChangedScope, PalwPanelAssignmentScope,
+        PalwPanelEligibilityChangedScope, PalwPanelReceiptScope, PruningPointUtxoSetOverrideScope, Scope, SinkBlueScoreChangedScope,
+        UtxosChangedScope, VirtualChainChangedScope, VirtualDaaScoreChangedScope,
+    },
+};
+use kaspa_rpc_core::{Notification, api::rpc::RpcApi, model::*};
+use kaspa_utils::{fd_budget, networking::ContextualNetAddress};
+use kaspad_lib::args::Args;
+use tokio::task::JoinHandle;
+
+#[macro_export]
+macro_rules! tst {
+    ($op:ident, $test_body:block) => {
+        tokio::spawn(async move {
+            info!("Testing  {:?}", $op);
+            $test_body
+        })
+    };
+
+    ($op:ident, $reason:literal) => {
+        tokio::spawn(async move {
+            info!("Skipping {:?} --- {}", $op, $reason);
+        })
+    };
+}
+
+/// `cargo test --release --package kaspa-testing-integration --lib -- rpc_tests::sanity_test`
+#[tokio::test]
+async fn sanity_test() {
+    kaspa_core::log::try_init_logger("info");
+    // As we log the panic, we want to set it up after the logger
+    kaspa_core::panic::configure_panic();
+
+    let args = Args {
+        simnet: true,
+        disable_upnp: true, // UPnP registration might take some time and is not needed for this test
+        enable_unsynced_mining: true,
+        block_template_cache_lifetime: Some(0),
+        utxoindex: true,
+        unsafe_rpc: true,
+        ..Default::default()
+    };
+
+    let fd_total_budget = fd_budget::test_limit();
+    let mut daemon = Daemon::new_random_with_args(args, fd_total_budget);
+    let client = daemon.start().await;
+    let (sender, _) = async_channel::unbounded();
+    let connection = ChannelConnection::new("test", sender, ChannelType::Closable);
+    let listener_id = client.register_new_listener(connection);
+    let mut tasks: Vec<JoinHandle<()>> = Vec::new();
+
+    // The intent of this for/match design (emphasizing the absence of an arm with fallback pattern in the match)
+    // is to force any implementor of a new RpcApi method to add a matching arm here and to strongly incentivize
+    // the adding of an actual sanity test of said new method.
+    for op in KaspadPayloadOps::iter() {
+        let network_id = daemon.network;
+        let task: JoinHandle<()> = match op {
+            KaspadPayloadOps::SubmitBlock => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    // Register to basic virtual events in order to keep track of block submission
+                    let (sender, event_receiver) = async_channel::unbounded();
+                    rpc_client.start(Some(Arc::new(ChannelNotify::new(sender)))).await;
+                    rpc_client
+                        .start_notify(Default::default(), Scope::VirtualDaaScoreChanged(VirtualDaaScoreChangedScope {}))
+                        .await
+                        .unwrap();
+
+                    // Before submitting a first block, the sink is the genesis,
+                    let response = rpc_client.get_sink_call(None, GetSinkRequest {}).await.unwrap();
+                    assert_eq!(response.sink, SIMNET_GENESIS.hash);
+                    let response = rpc_client.get_sink_blue_score_call(None, GetSinkBlueScoreRequest {}).await.unwrap();
+                    assert_eq!(response.blue_score, 0);
+
+                    // the block count is 0
+                    let response = rpc_client.get_block_count_call(None, GetBlockCountRequest {}).await.unwrap();
+                    assert_eq!(response.block_count, 0);
+
+                    // and the virtual chain is the genesis only
+                    let response = rpc_client
+                        .get_virtual_chain_from_block_call(
+                            None,
+                            GetVirtualChainFromBlockRequest {
+                                start_hash: SIMNET_GENESIS.hash,
+                                include_accepted_transaction_ids: false,
+                                min_confirmation_count: None,
+                            },
+                        )
+                        .await
+                        .unwrap();
+                    assert!(response.added_chain_block_hashes.is_empty());
+                    assert!(response.removed_chain_block_hashes.is_empty());
+
+                    // Get a block template
+                    let GetBlockTemplateResponse { block, is_synced } = rpc_client
+                        .get_block_template_call(
+                            None,
+                            GetBlockTemplateRequest {
+                                // kaspa-pq is PQ-only: block templates require an ML-DSA-87 P2PKH
+                                // pay address (64-byte BLAKE2b-512 pubkey hash). The legacy
+                                // secp256k1 `PubKey`/32-byte address is rejected by the coinbase
+                                // script-class check (ADR-0019 §8).
+                                pay_address: Address::new(Prefix::Simnet, Version::PubKeyHashMlDsa87, &[0u8; 64]),
+                                extra_data: Vec::new(),
+                            },
+                        )
+                        .await
+                        .unwrap();
+                    assert!(!is_synced);
+
+                    // Compute the expected block hash for the received block
+                    let header: Header = (&block.header).try_into().unwrap();
+                    let block_hash = header.hash;
+
+                    // Submit the template (no mining, in simnet PoW is skipped)
+                    let response = rpc_client.submit_block(block.clone(), false).await.unwrap();
+                    assert_eq!(response.report, SubmitBlockReport::Success);
+
+                    // Wait for virtual event indicating the block was processed and entered past(virtual)
+                    while let Ok(notification) = match tokio::time::timeout(Duration::from_secs(1), event_receiver.recv()).await {
+                        Ok(res) => res,
+                        Err(elapsed) => panic!("expected virtual event before {}", elapsed),
+                    } {
+                        match notification {
+                            Notification::VirtualDaaScoreChanged(msg) if msg.virtual_daa_score == 1 => {
+                                break;
+                            }
+                            Notification::VirtualDaaScoreChanged(msg) if msg.virtual_daa_score > 1 => {
+                                panic!("DAA score too high for number of submitted blocks")
+                            }
+                            Notification::VirtualDaaScoreChanged(_) => {}
+                            _ => {}
+                        }
+                    }
+
+                    // After submitting a first block, the sink is the submitted block,
+                    let response = rpc_client.get_sink_call(None, GetSinkRequest {}).await.unwrap();
+                    assert_eq!(response.sink, block_hash);
+
+                    // the block count is 1
+                    let response = rpc_client.get_block_count_call(None, GetBlockCountRequest {}).await.unwrap();
+                    assert_eq!(response.block_count, 1);
+
+                    // and the virtual chain from genesis contains the added block
+                    let response = rpc_client
+                        .get_virtual_chain_from_block_call(
+                            None,
+                            GetVirtualChainFromBlockRequest {
+                                start_hash: SIMNET_GENESIS.hash,
+                                include_accepted_transaction_ids: false,
+                                min_confirmation_count: None,
+                            },
+                        )
+                        .await
+                        .unwrap();
+                    assert!(response.added_chain_block_hashes.contains(&block_hash));
+                    assert!(response.removed_chain_block_hashes.is_empty());
+
+                    // VSPC min confirmation count test
+                    let vc_min_count_1_response = rpc_client
+                        .get_virtual_chain_from_block_call(
+                            None,
+                            GetVirtualChainFromBlockRequest {
+                                start_hash: SIMNET_GENESIS.hash,
+                                include_accepted_transaction_ids: false,
+                                min_confirmation_count: Some(1),
+                            },
+                        )
+                        .await
+                        .unwrap();
+                    assert!(vc_min_count_1_response.added_chain_block_hashes.is_empty());
+
+                    let result =
+                        rpc_client.get_current_block_color_call(None, GetCurrentBlockColorRequest { hash: SIMNET_GENESIS.hash }).await;
+
+                    // Genesis was merged by the new sink, so we're expecting a positive blueness response
+                    assert_match!(result, Ok(GetCurrentBlockColorResponse { blue: true }));
+
+                    // The new sink has no merging block yet, so we expect a MergerNotFound error
+                    let result = rpc_client.get_current_block_color_call(None, GetCurrentBlockColorRequest { hash: block_hash }).await;
+                    assert!(result.is_err());
+
+                    // Non-existing blocks should return an error
+                    let result = rpc_client.get_current_block_color_call(None, GetCurrentBlockColorRequest { hash: 999.into() }).await;
+                    assert!(result.is_err());
+                })
+            }
+
+            KaspadPayloadOps::GetBlockTemplate => {
+                tst!(op, "see SubmitBlock")
+            }
+
+            KaspadPayloadOps::GetCurrentBlockColor => {
+                tst!(op, "see SubmitBlock")
+            }
+
+            KaspadPayloadOps::GetCurrentNetwork => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let response = rpc_client.get_current_network_call(None, GetCurrentNetworkRequest {}).await.unwrap();
+                    assert_eq!(response.network, network_id.network_type);
+                })
+            }
+
+            KaspadPayloadOps::GetBlock => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let result =
+                        rpc_client.get_block_call(None, GetBlockRequest { hash: 0.into(), include_transactions: false }).await;
+                    assert!(result.is_err());
+
+                    let response = rpc_client
+                        .get_block_call(None, GetBlockRequest { hash: SIMNET_GENESIS.hash, include_transactions: false })
+                        .await
+                        .unwrap();
+                    assert_eq!(response.block.header.hash, SIMNET_GENESIS.hash);
+                })
+            }
+
+            KaspadPayloadOps::GetBlocks => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let response = rpc_client
+                        .get_blocks_call(None, GetBlocksRequest { include_blocks: true, include_transactions: false, low_hash: None })
+                        .await
+                        .unwrap();
+                    assert_eq!(response.blocks.len(), 1, "genesis block should be returned");
+                    assert_eq!(response.blocks[0].header.hash, SIMNET_GENESIS.hash);
+                    assert_eq!(response.block_hashes[0], SIMNET_GENESIS.hash);
+                })
+            }
+
+            KaspadPayloadOps::GetInfo => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let response = rpc_client.get_info_call(None, GetInfoRequest {}).await.unwrap();
+                    assert_eq!(response.server_version, kaspa_core::kaspad_env::version().to_string());
+                    assert_eq!(response.mempool_size, 0);
+                    assert!(response.is_utxo_indexed);
+                    assert!(response.has_message_id);
+                    assert!(response.has_notify_command);
+                })
+            }
+
+            KaspadPayloadOps::Shutdown => {
+                // This test is purposely left blank since shutdown can only be tested after all other
+                // tests completed
+                tst!(op, "must be run in the end")
+            }
+
+            KaspadPayloadOps::GetPeerAddresses => {
+                tst!(op, "see AddPeer, Ban")
+            }
+
+            KaspadPayloadOps::GetSink => {
+                tst!(op, "see SubmitBlock")
+            }
+
+            KaspadPayloadOps::GetMempoolEntry => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let response_result = rpc_client
+                        .get_mempool_entry_call(
+                            None,
+                            GetMempoolEntryRequest {
+                                transaction_id: 0.into(),
+                                include_orphan_pool: true,
+                                filter_transaction_pool: false,
+                            },
+                        )
+                        .await;
+                    // Test Get Mempool Entry:
+                    // TODO: Fix by adding actual mempool entries this can get because otherwise it errors out
+                    assert!(response_result.is_err());
+                })
+            }
+
+            KaspadPayloadOps::GetMempoolEntries => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let response = rpc_client
+                        .get_mempool_entries_call(
+                            None,
+                            GetMempoolEntriesRequest { include_orphan_pool: true, filter_transaction_pool: false },
+                        )
+                        .await
+                        .unwrap();
+                    assert!(response.mempool_entries.is_empty());
+                })
+            }
+
+            KaspadPayloadOps::GetConnectedPeerInfo => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let response = rpc_client.get_connected_peer_info_call(None, GetConnectedPeerInfoRequest {}).await.unwrap();
+                    assert!(response.peer_info.is_empty());
+                })
+            }
+
+            KaspadPayloadOps::AddPeer => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let peer_address = ContextualNetAddress::from_str("1.2.3.4").unwrap();
+                    let _ = rpc_client.add_peer_call(None, AddPeerRequest { peer_address, is_permanent: true }).await.unwrap();
+
+                    // Add peer only adds the IP to a connection request. It will only be added to known_addresses if it
+                    // actually can be connected to. So in this test we can't expect it to be added unless we set up an
+                    // actual peer.
+                    let response = rpc_client.get_peer_addresses_call(None, GetPeerAddressesRequest {}).await.unwrap();
+                    assert!(response.known_addresses.is_empty());
+                })
+            }
+
+            KaspadPayloadOps::Ban => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let peer_address = ContextualNetAddress::from_str("5.6.7.8").unwrap();
+                    let ip = peer_address.normalize(1).ip;
+
+                    let _ = rpc_client.add_peer_call(None, AddPeerRequest { peer_address, is_permanent: false }).await.unwrap();
+                    let _ = rpc_client.ban_call(None, BanRequest { ip }).await.unwrap();
+
+                    let response = rpc_client.get_peer_addresses_call(None, GetPeerAddressesRequest {}).await.unwrap();
+                    assert!(response.banned_addresses.contains(&ip));
+
+                    let _ = rpc_client.unban_call(None, UnbanRequest { ip }).await.unwrap();
+                    let response = rpc_client.get_peer_addresses_call(None, GetPeerAddressesRequest {}).await.unwrap();
+                    assert!(!response.banned_addresses.contains(&ip));
+                })
+            }
+
+            KaspadPayloadOps::Unban => {
+                tst!(op, "see Ban")
+            }
+
+            KaspadPayloadOps::SubmitTransaction => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    // Build an erroneous transaction...
+                    let transaction = Transaction::new(0, vec![], vec![], 0, SubnetworkId::default(), 0, vec![]);
+                    let result = rpc_client.submit_transaction((&transaction).into(), false).await;
+                    // ...that gets rejected by the consensus
+                    assert!(result.is_err());
+                })
+            }
+
+            KaspadPayloadOps::SubmitTransactionReplacement => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    // Build an erroneous transaction...
+                    let transaction = Transaction::new(0, vec![], vec![], 0, SubnetworkId::default(), 0, vec![]);
+                    let result = rpc_client.submit_transaction_replacement((&transaction).into()).await;
+                    // ...that gets rejected by the consensus
+                    assert!(result.is_err());
+                })
+            }
+
+            KaspadPayloadOps::GetSubnetwork => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let result =
+                        rpc_client.get_subnetwork_call(None, GetSubnetworkRequest { subnetwork_id: SubnetworkId::from_byte(0) }).await;
+
+                    // Err because it's currently unimplemented
+                    assert!(result.is_err());
+                })
+            }
+
+            KaspadPayloadOps::GetVirtualChainFromBlock => {
+                tst!(op, "see SubmitBlock")
+            }
+
+            KaspadPayloadOps::GetBlockCount => {
+                tst!(op, "see SubmitBlock")
+            }
+
+            KaspadPayloadOps::GetBlockDagInfo => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let response = rpc_client.get_block_dag_info_call(None, GetBlockDagInfoRequest {}).await.unwrap();
+                    assert_eq!(response.network, network_id);
+                })
+            }
+
+            KaspadPayloadOps::ResolveFinalityConflict => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let response_result = rpc_client
+                        .resolve_finality_conflict_call(
+                            None,
+                            ResolveFinalityConflictRequest { finality_block_hash: RpcHash::from_bytes([0; 64]) }, // PR-9.5e: block hash is Hash64
+                        )
+                        .await;
+
+                    // Err because it's currently unimplemented
+                    assert!(response_result.is_err());
+                })
+            }
+
+            KaspadPayloadOps::GetHeaders => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let response_result = rpc_client
+                        .get_headers_call(None, GetHeadersRequest { start_hash: SIMNET_GENESIS.hash, limit: 1, is_ascending: true })
+                        .await;
+
+                    // Err because it's currently unimplemented
+                    assert!(response_result.is_err());
+                })
+            }
+
+            KaspadPayloadOps::GetUtxosByAddresses => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let addresses = vec![Address::new(Prefix::Simnet, Version::PubKey, &[0u8; 32])];
+                    let response =
+                        rpc_client.get_utxos_by_addresses_call(None, GetUtxosByAddressesRequest { addresses }).await.unwrap();
+                    assert!(response.entries.is_empty());
+                })
+            }
+
+            KaspadPayloadOps::GetUtxosByAddressPage => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let address = Address::new(Prefix::Simnet, Version::PubKey, &[0u8; 32]);
+                    let response = rpc_client
+                        .get_utxos_by_address_page_call(
+                            None,
+                            GetUtxosByAddressPageRequest { address, cursor: String::new(), limit: 0 },
+                        )
+                        .await
+                        .unwrap();
+                    assert!(response.entries.is_empty());
+                    assert!(response.next_cursor.is_empty());
+                })
+            }
+
+            KaspadPayloadOps::GetBalanceByAddress => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let response = rpc_client
+                        .get_balance_by_address_call(
+                            None,
+                            GetBalanceByAddressRequest { address: Address::new(Prefix::Simnet, Version::PubKey, &[0u8; 32]) },
+                        )
+                        .await
+                        .unwrap();
+                    assert_eq!(response.balance, 0);
+                })
+            }
+
+            KaspadPayloadOps::GetBalancesByAddresses => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let addresses = vec![Address::new(Prefix::Simnet, Version::PubKey, &[1u8; 32])];
+                    let response = rpc_client
+                        .get_balances_by_addresses_call(None, GetBalancesByAddressesRequest::new(addresses.clone()))
+                        .await
+                        .unwrap();
+                    assert_eq!(response.entries.len(), 1);
+                    assert_eq!(response.entries[0].address, addresses[0]);
+                    assert_eq!(response.entries[0].balance, Some(0));
+
+                    let response =
+                        rpc_client.get_balances_by_addresses_call(None, GetBalancesByAddressesRequest::new(vec![])).await.unwrap();
+                    assert!(response.entries.is_empty());
+                })
+            }
+
+            KaspadPayloadOps::GetSinkBlueScore => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let response = rpc_client.get_sink_blue_score_call(None, GetSinkBlueScoreRequest {}).await.unwrap();
+                    // A concurrent test may have added a single block so the blue score can be either 0 or 1
+                    assert!(response.blue_score < 2);
+                })
+            }
+
+            KaspadPayloadOps::EstimateNetworkHashesPerSecond => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let response_result = rpc_client
+                        .estimate_network_hashes_per_second_call(
+                            None,
+                            EstimateNetworkHashesPerSecondRequest { window_size: 1000, start_hash: None },
+                        )
+                        .await;
+                    // The current DAA window is almost empty so an error is expected
+                    assert!(response_result.is_err());
+                })
+            }
+
+            KaspadPayloadOps::GetMempoolEntriesByAddresses => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let addresses = vec![Address::new(Prefix::Simnet, Version::PubKey, &[0u8; 32])];
+                    let response = rpc_client
+                        .get_mempool_entries_by_addresses_call(
+                            None,
+                            GetMempoolEntriesByAddressesRequest::new(addresses.clone(), true, false),
+                        )
+                        .await
+                        .unwrap();
+                    assert_eq!(response.entries.len(), 1);
+                    assert_eq!(response.entries[0].address, addresses[0]);
+                    assert!(response.entries[0].receiving.is_empty());
+                    assert!(response.entries[0].sending.is_empty());
+                })
+            }
+
+            KaspadPayloadOps::GetCoinSupply => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let response = rpc_client.get_coin_supply_call(None, GetCoinSupplyRequest {}).await.unwrap();
+                    // kaspa-pq: the genesis premine is part of the circulating supply — exactly
+                    // the 10B cap on EVERY network since the 2026-08-30 re-genesis (the cap is
+                    // one number by design; see `config::premine::MISAKA_PREMINE_CAP_SOMPI`).
+                    assert_eq!(response.circulating_sompi, MISAKA_PREMINE_CAP_SOMPI);
+                    assert_eq!(response.max_sompi, MAX_SOMPI);
+                })
+            }
+
+            KaspadPayloadOps::Ping => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let _ = rpc_client.ping_call(None, PingRequest {}).await.unwrap();
+                })
+            }
+
+            KaspadPayloadOps::GetConnections => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let _ = rpc_client.get_connections_call(None, GetConnectionsRequest { include_profile_data: true }).await.unwrap();
+                })
+            }
+
+            KaspadPayloadOps::GetMetrics => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let get_metrics_call_response = rpc_client
+                        .get_metrics_call(
+                            None,
+                            GetMetricsRequest {
+                                consensus_metrics: true,
+                                connection_metrics: true,
+                                bandwidth_metrics: true,
+                                process_metrics: true,
+                                storage_metrics: true,
+                                custom_metrics: true,
+                            },
+                        )
+                        .await
+                        .unwrap();
+                    assert!(get_metrics_call_response.process_metrics.is_some());
+                    assert!(get_metrics_call_response.consensus_metrics.is_some());
+
+                    let get_metrics_call_response = rpc_client
+                        .get_metrics_call(
+                            None,
+                            GetMetricsRequest {
+                                consensus_metrics: false,
+                                connection_metrics: true,
+                                bandwidth_metrics: true,
+                                process_metrics: true,
+                                storage_metrics: true,
+                                custom_metrics: true,
+                            },
+                        )
+                        .await
+                        .unwrap();
+                    assert!(get_metrics_call_response.process_metrics.is_some());
+                    assert!(get_metrics_call_response.consensus_metrics.is_none());
+
+                    let get_metrics_call_response = rpc_client
+                        .get_metrics_call(
+                            None,
+                            GetMetricsRequest {
+                                consensus_metrics: true,
+                                connection_metrics: true,
+                                bandwidth_metrics: false,
+                                process_metrics: false,
+                                storage_metrics: false,
+                                custom_metrics: true,
+                            },
+                        )
+                        .await
+                        .unwrap();
+                    assert!(get_metrics_call_response.process_metrics.is_none());
+                    assert!(get_metrics_call_response.consensus_metrics.is_some());
+
+                    let get_metrics_call_response = rpc_client
+                        .get_metrics_call(
+                            None,
+                            GetMetricsRequest {
+                                consensus_metrics: false,
+                                connection_metrics: true,
+                                bandwidth_metrics: false,
+                                process_metrics: false,
+                                storage_metrics: false,
+                                custom_metrics: true,
+                            },
+                        )
+                        .await
+                        .unwrap();
+                    assert!(get_metrics_call_response.process_metrics.is_none());
+                    assert!(get_metrics_call_response.consensus_metrics.is_none());
+                })
+            }
+
+            KaspadPayloadOps::GetSystemInfo => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let _response = rpc_client.get_system_info_call(None, GetSystemInfoRequest {}).await.unwrap();
+                })
+            }
+
+            KaspadPayloadOps::GetServerInfo => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let response = rpc_client.get_server_info_call(None, GetServerInfoRequest {}).await.unwrap();
+                    assert!(response.has_utxo_index); // we set utxoindex above
+                    assert_eq!(response.network_id, network_id);
+                })
+            }
+
+            KaspadPayloadOps::GetSyncStatus => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let _ = rpc_client.get_sync_status_call(None, GetSyncStatusRequest {}).await.unwrap();
+                })
+            }
+
+            KaspadPayloadOps::GetDaaScoreTimestampEstimate => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let results = rpc_client
+                        .get_daa_score_timestamp_estimate_call(
+                            None,
+                            GetDaaScoreTimestampEstimateRequest { daa_scores: vec![0, 500, 2000, u64::MAX] },
+                        )
+                        .await
+                        .unwrap();
+
+                    for timestamp in results.timestamps.iter() {
+                        info!("Timestamp estimate is {}", timestamp);
+                    }
+
+                    let results = rpc_client
+                        .get_daa_score_timestamp_estimate_call(None, GetDaaScoreTimestampEstimateRequest { daa_scores: vec![] })
+                        .await
+                        .unwrap();
+
+                    for timestamp in results.timestamps.iter() {
+                        info!("Timestamp estimate is {}", timestamp);
+                    }
+                })
+            }
+
+            KaspadPayloadOps::GetFeeEstimate => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let response = rpc_client.get_fee_estimate().await.unwrap();
+                    info!("{:?}", response.priority_bucket);
+                    assert!(!response.normal_buckets.is_empty());
+                    assert!(!response.low_buckets.is_empty());
+                    for bucket in response.ordered_buckets() {
+                        info!("{:?}", bucket);
+                    }
+                })
+            }
+
+            KaspadPayloadOps::GetFeeEstimateExperimental => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let response = rpc_client.get_fee_estimate_experimental(true).await.unwrap();
+                    assert!(!response.estimate.normal_buckets.is_empty());
+                    assert!(!response.estimate.low_buckets.is_empty());
+                    for bucket in response.estimate.ordered_buckets() {
+                        info!("{:?}", bucket);
+                    }
+                    assert!(response.verbose.is_some());
+                    info!("{:?}", response.verbose);
+                })
+            }
+
+            KaspadPayloadOps::GetUtxoReturnAddress => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let results = rpc_client.get_utxo_return_address(RpcHash::from_bytes([0; 64]), 1000).await; // PR-9.5e: block hash is Hash64
+
+                    assert!(results.is_err_and(|err| {
+                        match err {
+                            kaspa_rpc_core::RpcError::General(msg) => {
+                                info!("Expected error message: {}", msg);
+                                true
+                            }
+                            _ => false,
+                        }
+                    }));
+                })
+            }
+
+            KaspadPayloadOps::GetVirtualChainFromBlockV2 => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let response = rpc_client
+                        .get_virtual_chain_from_block_v2_call(
+                            None,
+                            GetVirtualChainFromBlockV2Request {
+                                start_hash: SIMNET_GENESIS.hash,
+                                data_verbosity_level: None,
+                                min_confirmation_count: None,
+                            },
+                        )
+                        .await
+                        .unwrap();
+                    assert!(response.added_chain_block_hashes.is_empty());
+                    assert!(response.removed_chain_block_hashes.is_empty());
+                })
+            }
+
+            KaspadPayloadOps::NotifyBlockAdded => {
+                let rpc_client = client.clone();
+                let id = listener_id;
+                tst!(op, {
+                    rpc_client.start_notify(id, BlockAddedScope {}.into()).await.unwrap();
+                })
+            }
+
+            KaspadPayloadOps::NotifyNewBlockTemplate => {
+                let rpc_client = client.clone();
+                let id = listener_id;
+                tst!(op, {
+                    rpc_client.start_notify(id, NewBlockTemplateScope {}.into()).await.unwrap();
+                })
+            }
+
+            KaspadPayloadOps::NotifyFinalityConflict => {
+                let rpc_client = client.clone();
+                let id = listener_id;
+                tst!(op, {
+                    rpc_client.start_notify(id, FinalityConflictScope {}.into()).await.unwrap();
+                })
+            }
+            KaspadPayloadOps::NotifyUtxosChanged => {
+                let rpc_client = client.clone();
+                let id = listener_id;
+                tst!(op, {
+                    rpc_client.start_notify(id, UtxosChangedScope::new(vec![]).into()).await.unwrap();
+                })
+            }
+            KaspadPayloadOps::NotifySinkBlueScoreChanged => {
+                let rpc_client = client.clone();
+                let id = listener_id;
+                tst!(op, {
+                    rpc_client.start_notify(id, SinkBlueScoreChangedScope {}.into()).await.unwrap();
+                })
+            }
+            KaspadPayloadOps::NotifyPruningPointUtxoSetOverride => {
+                let rpc_client = client.clone();
+                let id = listener_id;
+                tst!(op, {
+                    rpc_client.start_notify(id, PruningPointUtxoSetOverrideScope {}.into()).await.unwrap();
+                })
+            }
+            KaspadPayloadOps::NotifyVirtualDaaScoreChanged => {
+                let rpc_client = client.clone();
+                let id = listener_id;
+                tst!(op, {
+                    rpc_client.start_notify(id, VirtualDaaScoreChangedScope {}.into()).await.unwrap();
+                })
+            }
+            KaspadPayloadOps::NotifyVirtualChainChanged => {
+                let rpc_client = client.clone();
+                let id = listener_id;
+                tst!(op, {
+                    rpc_client
+                        .start_notify(id, VirtualChainChangedScope { include_accepted_transaction_ids: false }.into())
+                        .await
+                        .unwrap();
+                })
+            }
+            KaspadPayloadOps::NotifyPalwClassReadinessChanged => {
+                let rpc_client = client.clone();
+                let id = listener_id;
+                tst!(op, {
+                    rpc_client.start_notify(id, PalwClassReadinessChangedScope {}.into()).await.unwrap();
+                })
+            }
+            KaspadPayloadOps::NotifyPalwPanelAssignment => {
+                let rpc_client = client.clone();
+                let id = listener_id;
+                tst!(op, {
+                    rpc_client.start_notify(id, PalwPanelAssignmentScope {}.into()).await.unwrap();
+                })
+            }
+            KaspadPayloadOps::NotifyPalwPanelReceipt => {
+                let rpc_client = client.clone();
+                let id = listener_id;
+                tst!(op, {
+                    rpc_client.start_notify(id, PalwPanelReceiptScope {}.into()).await.unwrap();
+                })
+            }
+            KaspadPayloadOps::NotifyPalwPanelEligibilityChanged => {
+                let rpc_client = client.clone();
+                let id = listener_id;
+                tst!(op, {
+                    rpc_client.start_notify(id, PalwPanelEligibilityChangedScope {}.into()).await.unwrap();
+                })
+            }
+            KaspadPayloadOps::StopNotifyingUtxosChanged => {
+                let rpc_client = client.clone();
+                let id = listener_id;
+                tst!(op, {
+                    rpc_client.stop_notify(id, UtxosChangedScope::new(vec![]).into()).await.unwrap();
+                })
+            }
+            KaspadPayloadOps::StopNotifyingPruningPointUtxoSetOverride => {
+                let rpc_client = client.clone();
+                let id = listener_id;
+                tst!(op, {
+                    rpc_client.stop_notify(id, PruningPointUtxoSetOverrideScope {}.into()).await.unwrap();
+                })
+            }
+
+            // kaspa-pq overlay/validator RPC (Phase 10/11): these methods are
+            // default-off (DNS overlay gated at dns_activation = u64::MAX; the
+            // validator service is opt-in), so the basic sanity test skips them.
+            // See ADR-0009 / ADR-0010.
+            KaspadPayloadOps::GetDnsConfirmation => {
+                tst!(op, "DNS-overlay confirmation RPC — overlay default-off (dns_activation = u64::MAX)")
+            }
+            KaspadPayloadOps::GetValidatorStatus => {
+                tst!(op, "validator status RPC — validator service is opt-in (default-off)")
+            }
+            KaspadPayloadOps::GetTokenLedgerEntry => {
+                tst!(op, "TOK ledger read — the token program is inert on every shipped preset (tkn fence = u64::MAX)")
+            }
+            KaspadPayloadOps::GetPalwProducerFacts => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    // The sanity daemon is simnet, which is not `ConsensusV2` — so the contract
+                    // this asserts is the honest-negative one: a producer asking a hash-only
+                    // chain for a class target gets `available: false` rather than an error, and
+                    // can find out it is on the wrong network by asking. Exercised for real
+                    // (available: true) by the PALW-RC drill, which needs a V2 chain to exist.
+                    let response = rpc_client
+                        .get_palw_producer_facts_call(
+                            None,
+                            GetPalwProducerFactsRequest {
+                                class_id: "00".repeat(64),
+                                bond_transaction_id: "00".repeat(64),
+                                bond_index: 0,
+                                with_bond: true,
+                            },
+                        )
+                        .await
+                        .unwrap();
+                    assert!(!response.available, "a non-ConsensusV2 network answers available:false, and does not error");
+                    assert!(!response.bond_known, "and names no bond it does not have");
+
+                    // **The three replies stay three replies after mainnet audit M-5's
+                    // reordering.** The parses moved above the two consensus reads so that a
+                    // malformed request costs this node nothing — the reads are full PALW-state
+                    // materializations and they used to run first. What must NOT have moved is
+                    // which answer each input gets: an empty class id is a legal request asking
+                    // only for the locked-bond set (audit3 H3), a malformed one is an error, and
+                    // "this chain does not have that class" is neither of those.
+                    let empty = rpc_client
+                        .get_palw_producer_facts_call(
+                            None,
+                            GetPalwProducerFactsRequest {
+                                class_id: String::new(),
+                                bond_transaction_id: String::new(),
+                                bond_index: 0,
+                                with_bond: false,
+                            },
+                        )
+                        .await
+                        .unwrap();
+                    assert!(!empty.available, "a hash-only chain has no locked PALW collateral to report");
+                    assert!(empty.locked_bond_outpoints.is_empty(), "…and lists none");
+
+                    // An empty class id must still not reach the bond parse, `with_bond` or not —
+                    // it never did, and the reordering had to preserve that.
+                    assert!(
+                        rpc_client
+                            .get_palw_producer_facts_call(
+                                None,
+                                GetPalwProducerFactsRequest {
+                                    class_id: String::new(),
+                                    bond_transaction_id: "nonsense".into(),
+                                    bond_index: 0,
+                                    with_bond: true,
+                                },
+                            )
+                            .await
+                            .is_ok(),
+                        "an empty class id asks only for the locked-bond set and must not parse a bond id"
+                    );
+                    assert!(
+                        rpc_client
+                            .get_palw_producer_facts_call(
+                                None,
+                                GetPalwProducerFactsRequest {
+                                    class_id: "nonsense".into(),
+                                    bond_transaction_id: "00".repeat(64),
+                                    bond_index: 0,
+                                    with_bond: true,
+                                },
+                            )
+                            .await
+                            .is_err(),
+                        "a malformed class id is an error, not an absence — and now a free one"
+                    );
+                })
+            }
+            // ADR-0078 Decision 5: the consumer's read path. The sanity daemon is simnet, which is
+            // not `ConsensusV2`, so the contract asserted here is the honest-negative one — a
+            // verifier asking a hash-only chain about a claim gets `found: false` rather than an
+            // error, and can tell it is on the wrong network by asking. A MALFORMED claim id is
+            // still an error, which is the distinction the two assertions below exist to hold:
+            // "this chain does not have that claim" and "you typed it wrong" must not share a reply.
+            KaspadPayloadOps::GetPalwDerivedArtifacts => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let response = rpc_client
+                        .get_palw_derived_artifacts_call(None, GetPalwDerivedArtifactsRequest { claim_id: "00".repeat(64) })
+                        .await
+                        .unwrap();
+                    assert!(!response.found, "a non-ConsensusV2 network answers found:false, and does not error");
+                    assert!(response.artifacts.is_empty(), "and lists no derivation it does not hold");
+                    assert!(
+                        rpc_client
+                            .get_palw_derived_artifacts_call(None, GetPalwDerivedArtifactsRequest { claim_id: "nonsense".into() })
+                            .await
+                            .is_err(),
+                        "a malformed claim id is an error, not an absence"
+                    );
+                })
+            }
+            // ADR-0135: the registry reader answers on EVERY network, including one that never
+            // arms it — a fence nobody scheduled must read as `scheduled: false`, not as an error,
+            // because "this chain does not run the registry" is an answer an operator needs and a
+            // failed call is not one. The daemon under test is hash-only, so this is that case.
+            KaspadPayloadOps::GetPalwModelRegistry => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let response = rpc_client.get_palw_model_registry_call(None, GetPalwModelRegistryRequest {}).await.unwrap();
+                    assert!(!response.available, "a chain without ConsensusV2 has no registry to describe");
+                    assert!(!response.scheduled, "and schedules no fence");
+                    assert!(!response.active, "so it is not governed by one either");
+                    assert_eq!(response.seat_count, 0, "and seats nobody");
+                })
+            }
+            // ADR-0148: the price reader answers `available: false` on a network with no PALW
+            // state — the daemon under test is hash-only — and refuses a malformed class id as an
+            // error rather than as an answer.
+            KaspadPayloadOps::GetPalwFreePromptPrice => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let request = GetPalwFreePromptPriceRequest {
+                        class_id: "00".repeat(64),
+                        prompt_token_ids: vec![1, 2, 3],
+                        prompt_tokens: 3,
+                        decode_tokens_executed: 1,
+                        work_leaves: 1,
+                        bond: String::new(),
+                    };
+                    let response = rpc_client.get_palw_free_prompt_price_call(None, request.clone()).await.unwrap();
+                    assert!(!response.available, "a chain without ConsensusV2 prices no free-prompt job");
+                    assert!(!response.priced);
+                    let malformed = GetPalwFreePromptPriceRequest { class_id: "not-hex".to_string(), ..request };
+                    assert!(rpc_client.get_palw_free_prompt_price_call(None, malformed).await.is_err(), "a malformed id is an error");
+                })
+            }
+            KaspadPayloadOps::GetPalwClassPanelStatus => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let malformed = GetPalwClassPanelStatusRequest { class_id: "not-hex".to_string() };
+                    assert!(rpc_client.get_palw_class_panel_status_call(None, malformed).await.is_err());
+                    let response = rpc_client
+                        .get_palw_class_panel_status_call(None, GetPalwClassPanelStatusRequest { class_id: "00".repeat(64) })
+                        .await
+                        .unwrap();
+                    assert!(!response.available, "a chain without ConsensusV2 has no class panel");
+                })
+            }
+            KaspadPayloadOps::GetPalwPanelSeats => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let response = rpc_client
+                        .get_palw_panel_seats_call(None, GetPalwPanelSeatsRequest { class_id: String::new() })
+                        .await
+                        .unwrap();
+                    assert!(!response.available);
+                    assert!(response.seats.is_empty());
+                })
+            }
+            KaspadPayloadOps::GetPalwAcceptanceReads => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    // An empty read is within the 64/64 bound and must be answered.
+                    rpc_client
+                        .get_palw_acceptance_reads_call(
+                            None,
+                            GetPalwAcceptanceReadsRequest { reserve_blocks: Vec::new(), outpoints: Vec::new() },
+                        )
+                        .await
+                        .unwrap();
+                })
+            }
+            KaspadPayloadOps::GetPalwPanelStatus => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let response = rpc_client
+                        .get_palw_panel_status_call(None, GetPalwPanelStatusRequest { class_id: String::new() })
+                        .await
+                        .unwrap();
+                    assert!(!response.available);
+                })
+            }
+            KaspadPayloadOps::GetPalwPanelAssignments => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let response = rpc_client
+                        .get_palw_panel_assignments_call(
+                            None,
+                            GetPalwPanelAssignmentsRequest { claim_id: String::new(), seat_id: String::new() },
+                        )
+                        .await
+                        .unwrap();
+                    assert!(!response.available);
+                })
+            }
+            KaspadPayloadOps::GetPalwModelPreflight => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    // Simnet carries no PALW V2 bundle, so the preflight answers "not available"
+                    // before it reads the object — the same default its sibling ops return.
+                    let response = rpc_client
+                        .get_palw_model_preflight_call(
+                            None,
+                            GetPalwModelPreflightRequest { object_hex: String::new(), class_id: String::new() },
+                        )
+                        .await
+                        .unwrap();
+                    assert!(!response.available);
+                })
+            }
+            KaspadPayloadOps::SubmitPalwModelRegistration => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let response = rpc_client
+                        .submit_palw_model_registration_call(
+                            None,
+                            SubmitPalwModelRegistrationRequest { object_hex: String::new(), transaction_id: String::new() },
+                        )
+                        .await
+                        .unwrap();
+                    assert!(!response.available);
+                })
+            }
+            KaspadPayloadOps::GetPalwModelRegistrationStatus => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let response = rpc_client
+                        .get_palw_model_registration_status_call(
+                            None,
+                            GetPalwModelRegistrationStatusRequest {
+                                class_id: String::new(),
+                                object_id: String::new(),
+                                transaction_id: String::new(),
+                            },
+                        )
+                        .await
+                        .unwrap();
+                    assert!(!response.available);
+                })
+            }
+            KaspadPayloadOps::GetPalwModel => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    // Simnet carries no PALW V2 bundle: the model reads answer "not available" before
+                    // they parse the selector, like every other model op here.
+                    let malformed = GetPalwModelRequest { class_id: "not-hex".to_string() };
+                    assert!(!rpc_client.get_palw_model_call(None, malformed).await.unwrap().available);
+                })
+            }
+            KaspadPayloadOps::GetPalwModelReadiness => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let malformed = GetPalwModelReadinessRequest { class_id: "not-hex".to_string() };
+                    assert!(!rpc_client.get_palw_model_readiness_call(None, malformed).await.unwrap().available);
+                })
+            }
+            KaspadPayloadOps::GetPalwModelAdmission => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    // Admission is the preflight's answer, so it is "not available" on simnet too.
+                    let response = rpc_client
+                        .get_palw_model_admission_call(
+                            None,
+                            GetPalwModelAdmissionRequest { class_id: String::new(), object_hex: String::new() },
+                        )
+                        .await
+                        .unwrap();
+                    assert!(!response.available);
+                })
+            }
+            KaspadPayloadOps::GetPalwModelCertification => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let malformed = GetPalwModelCertificationRequest { class_id: "not-hex".to_string() };
+                    assert!(!rpc_client.get_palw_model_certification_call(None, malformed).await.unwrap().available);
+                })
+            }
+            KaspadPayloadOps::GetPalwVesting => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    // ADR-0152 P2-10: a malformed selector is an error before any state is read,
+                    // and two selectors at once are refused; a well-formed read on a network that is
+                    // not ConsensusV2 answers `available: false`, echoing the query.
+                    let two = GetPalwVestingRequest {
+                        bond: format!("{}:0", "00".repeat(64)),
+                        claim_id: "00".repeat(64),
+                        ..Default::default()
+                    };
+                    assert!(rpc_client.get_palw_vesting_call(None, two).await.is_err());
+                    let malformed = GetPalwVestingRequest { claim_id: "not-hex".to_string(), ..Default::default() };
+                    assert!(rpc_client.get_palw_vesting_call(None, malformed).await.is_err());
+                    let bad_cursor = GetPalwVestingRequest { after: "x".to_string(), ..Default::default() };
+                    assert!(rpc_client.get_palw_vesting_call(None, bad_cursor).await.is_err());
+                    let chain = rpc_client.get_palw_vesting_call(None, GetPalwVestingRequest::default()).await.unwrap();
+                    assert!(!chain.available, "a non-ConsensusV2 network has no vesting table");
+                    assert!(chain.rows.is_empty());
+                })
+            }
+            KaspadPayloadOps::GetPalwActivationPool => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    // ADR-0152-adjacent (op 200): a malformed class id is an error before any state is
+                    // read; a well-formed read on a network that is not ConsensusV2 answers
+                    // `available: false` with no pool armed.
+                    let malformed = GetPalwActivationPoolRequest { class_id: "not-hex".to_string() };
+                    assert!(rpc_client.get_palw_activation_pool_call(None, malformed).await.is_err());
+                    let read = rpc_client
+                        .get_palw_activation_pool_call(None, GetPalwActivationPoolRequest { class_id: "00".repeat(64) })
+                        .await
+                        .unwrap();
+                    assert!(!read.available && !read.pool_armed && !read.has_pool);
+                })
+            }
+            KaspadPayloadOps::GetPalwCapacityShadow => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    // ADR-0160 §7.5 (op 201): a malformed step or bond is an error before any state
+                    // is read; a well-formed read on a network that is not ConsensusV2 answers
+                    // `available: false` with no rows.
+                    let zero_rho = GetPalwCapacityShadowRequest {
+                        steps: vec![RpcPalwCapacityStep { from_daa: 0, rho: 0, q_credit_permille: 143 }],
+                        ..Default::default()
+                    };
+                    assert!(rpc_client.get_palw_capacity_shadow_call(None, zero_rho).await.is_err());
+                    let big_q = GetPalwCapacityShadowRequest {
+                        steps: vec![RpcPalwCapacityStep { from_daa: 0, rho: 10, q_credit_permille: 1_001 }],
+                        ..Default::default()
+                    };
+                    assert!(rpc_client.get_palw_capacity_shadow_call(None, big_q).await.is_err());
+                    let bad_bond = GetPalwCapacityShadowRequest { bond: "x".to_string(), ..Default::default() };
+                    assert!(rpc_client.get_palw_capacity_shadow_call(None, bad_bond).await.is_err());
+                    let bad_strategy = GetPalwCapacityShadowRequest {
+                        adversary_bonds: vec![format!("{}:0:bogus", "ab".repeat(64))],
+                        ..Default::default()
+                    };
+                    assert!(rpc_client.get_palw_capacity_shadow_call(None, bad_strategy).await.is_err());
+                    let read = rpc_client
+                        .get_palw_capacity_shadow_call(
+                            None,
+                            GetPalwCapacityShadowRequest { include_claims: true, ..Default::default() },
+                        )
+                        .await
+                        .unwrap();
+                    assert!(!read.available && read.bonds.is_empty() && read.claims.is_empty() && read.steps.is_empty());
+                })
+            }
+            KaspadPayloadOps::GetPalwRewardVesting => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let two = GetPalwRewardVestingRequest {
+                        bond: format!("{}:0", "00".repeat(64)),
+                        claim_id: "00".repeat(64),
+                        ..Default::default()
+                    };
+                    assert!(rpc_client.get_palw_reward_vesting_call(None, two).await.is_err());
+                    for (after, exec_after) in [("x", ""), ("", "x")] {
+                        let bad =
+                            GetPalwRewardVestingRequest { after: after.into(), exec_after: exec_after.into(), ..Default::default() };
+                        assert!(rpc_client.get_palw_reward_vesting_call(None, bad).await.is_err());
+                    }
+                    let bad = GetPalwRewardVestingRequest { claim_id: "not-hex".into(), ..Default::default() };
+                    assert!(rpc_client.get_palw_reward_vesting_call(None, bad).await.is_err());
+                    let read = rpc_client.get_palw_reward_vesting_call(None, GetPalwRewardVestingRequest::default()).await.unwrap();
+                    assert!(!read.available && !read.native.available && read.exec_rows.is_empty());
+                })
+            }
+            KaspadPayloadOps::GetPalwMonetaryMaterial => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    // RFC-0008 monetary material (op 242): an out-of-range page bound or a malformed block is an error before any
+                    // state is read; a well-formed read on a network without the kernel auxiliary commitment answers
+                    // `available: false` with no fragments, never a partial authenticated page.
+                    for limit_bytes in [0, 1023, 1_048_577] {
+                        let bad = GetPalwMonetaryMaterialRequest { limit_bytes, ..Default::default() };
+                        assert!(rpc_client.get_palw_monetary_material_call(None, bad).await.is_err());
+                    }
+                    let bad_block =
+                        GetPalwMonetaryMaterialRequest { block_hash: "zz".to_string(), limit_bytes: 4096, ..Default::default() };
+                    assert!(rpc_client.get_palw_monetary_material_call(None, bad_block).await.is_err());
+                    let read = rpc_client
+                        .get_palw_monetary_material_call(
+                            None,
+                            GetPalwMonetaryMaterialRequest { limit_bytes: 4096, ..Default::default() },
+                        )
+                        .await
+                        .unwrap();
+                    assert!(!read.available && read.fragments.is_empty() && read.header.is_none());
+                })
+            }
+            KaspadPayloadOps::GetPalwStateCarriage => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    // Op 243: an out-of-range page bound or a malformed block is an error before any state is read; a well-formed
+                    // read on a network without PALW V2 state answers `available: false` with no bytes and no header.
+                    for limit_bytes in [0, 1023, 1_048_577] {
+                        let bad = GetPalwStateCarriageRequest { limit_bytes, ..Default::default() };
+                        assert!(rpc_client.get_palw_state_carriage_call(None, bad).await.is_err());
+                    }
+                    let bad_block =
+                        GetPalwStateCarriageRequest { block_hash: "zz".to_string(), limit_bytes: 4096, ..Default::default() };
+                    assert!(rpc_client.get_palw_state_carriage_call(None, bad_block).await.is_err());
+                    let read = rpc_client
+                        .get_palw_state_carriage_call(None, GetPalwStateCarriageRequest { limit_bytes: 4096, ..Default::default() })
+                        .await
+                        .unwrap();
+                    assert!(!read.available && read.bytes.is_empty() && read.header.is_none() && read.total_bytes == 0);
+                })
+            }
+            KaspadPayloadOps::GetPalwRfc0016Report => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    // RFC-0016 (op 255): a malformed class id is an error before any state is read; this test network runs no
+                    // ConsensusV2 bundle, so a well-formed read answers `available: false`.
+                    let odd = GetPalwRfc0016ReportRequest { class_hex: "0".into() };
+                    assert!(rpc_client.get_palw_rfc_0016_report_call(None, odd).await.is_err());
+                    let empty = GetPalwRfc0016ReportRequest { class_hex: String::new() };
+                    let read = rpc_client.get_palw_rfc_0016_report_call(None, empty).await.unwrap();
+                    assert!(!read.available && !read.armed);
+                })
+            }
+            KaspadPayloadOps::GetPalwRouterBindingV2 => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    // RFC-0006 consumer v2 (op 245): a malformed class id is an error before any state is read; this test network runs
+                    // no ConsensusV2 bundle, so a well-formed read answers `available: false` and finds nothing.
+                    let odd = GetPalwRouterBindingV2Request { class_hex: "0".into() };
+                    assert!(rpc_client.get_palw_router_binding_v2_call(None, odd).await.is_err());
+                    let well = GetPalwRouterBindingV2Request { class_hex: "00".repeat(64) };
+                    let read = rpc_client.get_palw_router_binding_v2_call(None, well).await.unwrap();
+                    assert!(!read.available && !read.found);
+                })
+            }
+            KaspadPayloadOps::GetPalwPaidClaim => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    // RFC-0012 acceptance (op 247): a malformed claim id is an error before any state is read; this test network runs
+                    // no ConsensusV2 bundle, so a well-formed read answers `available: false` and finds nothing.
+                    let odd = GetPalwPaidClaimRequest { base_claim: "0".into(), round: 0 };
+                    assert!(rpc_client.get_palw_paid_claim_call(None, odd).await.is_err());
+                    let well = GetPalwPaidClaimRequest { base_claim: "00".repeat(64), round: 0 };
+                    let read = rpc_client.get_palw_paid_claim_call(None, well).await.unwrap();
+                    assert!(!read.available && !read.found);
+                })
+            }
+            KaspadPayloadOps::GetPalwStagedPreclaimQuote => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    // G14 op 244: malformed hex or an undecodable commitment is an error before any state is
+                    // read; this test network runs no ConsensusV2 bundle, so a decodable pair would answer
+                    // `available: false`.
+                    let odd = GetPalwStagedPreclaimQuoteRequest { commitment_hex: "0".into(), binding_hex: String::new() };
+                    assert!(rpc_client.get_palw_staged_preclaim_quote_call(None, odd).await.is_err());
+                    let garbage = GetPalwStagedPreclaimQuoteRequest { commitment_hex: "00".into(), binding_hex: "00".into() };
+                    assert!(rpc_client.get_palw_staged_preclaim_quote_call(None, garbage).await.is_err());
+                })
+            }
+            KaspadPayloadOps::GetPalwExecV2Status => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    // RFC-0008 v2 (op 240): a malformed id is an error before any state is read; a well-formed read on a network that
+                    // does not arm the EXEC v2 payload answers `available: false` with no document.
+                    let bad = GetPalwExecV2StatusRequest { root_claim_ids: vec!["x".to_string()], ..Default::default() };
+                    assert!(rpc_client.get_palw_exec_v2_status_call(None, bad).await.is_err());
+                    let bad_block = GetPalwExecV2StatusRequest { block_hash: "zz".to_string(), ..Default::default() };
+                    assert!(rpc_client.get_palw_exec_v2_status_call(None, bad_block).await.is_err());
+                    let read = rpc_client
+                        .get_palw_exec_v2_status_call(
+                            None,
+                            GetPalwExecV2StatusRequest { root_claim_ids: vec!["00".repeat(64)], ..Default::default() },
+                        )
+                        .await
+                        .unwrap();
+                    assert!(!read.available && read.json.is_empty());
+                })
+            }
+            KaspadPayloadOps::GetPalwPanelV3Status => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    // RFC-0010 (op 220): a malformed claim id is an error before any state is read; a well-formed read on a
+                    // network that is not ConsensusV2 answers `available: false` with no document.
+                    let bad = GetPalwPanelV3StatusRequest { claim_ids: vec!["x".to_string()], ..Default::default() };
+                    assert!(rpc_client.get_palw_panel_v3_status_call(None, bad).await.is_err());
+                    let too_many = GetPalwPanelV3StatusRequest { claim_ids: vec!["00".repeat(64); 65], ..Default::default() };
+                    assert!(rpc_client.get_palw_panel_v3_status_call(None, too_many).await.is_err());
+                    let read = rpc_client
+                        .get_palw_panel_v3_status_call(
+                            None,
+                            GetPalwPanelV3StatusRequest { claim_ids: vec!["00".repeat(64)], ..Default::default() },
+                        )
+                        .await
+                        .unwrap();
+                    assert!(!read.available && read.json.is_empty());
+                })
+            }
+            KaspadPayloadOps::GetPalwLegacyDispute => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    // LG14-A (op 204): a malformed claim id is an error before any state is read; a well-formed read on a network
+                    // that is not ConsensusV2 answers `available: false` with no document.
+                    let bad = GetPalwLegacyDisputeRequest { claim_id: "x".to_string() };
+                    assert!(rpc_client.get_palw_legacy_dispute_call(None, bad).await.is_err());
+                    let read = rpc_client
+                        .get_palw_legacy_dispute_call(None, GetPalwLegacyDisputeRequest { claim_id: "00".repeat(64) })
+                        .await
+                        .unwrap();
+                    assert!(!read.available && read.json.is_empty());
+                })
+            }
+            KaspadPayloadOps::GetPalwLegacyDisputes => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    // LG14-A (op 205): a malformed reserver is an error; off ConsensusV2 the list is unavailable and empty.
+                    let bad = GetPalwLegacyDisputesRequest { reserver: "nope".to_string(), limit: 0 };
+                    assert!(rpc_client.get_palw_legacy_disputes_call(None, bad).await.is_err());
+                    let read = rpc_client.get_palw_legacy_disputes_call(None, GetPalwLegacyDisputesRequest::default()).await.unwrap();
+                    assert!(!read.available && read.claim_ids.is_empty());
+                })
+            }
+            KaspadPayloadOps::GetPalwFraudFilerStatus => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    // LG14-A (op 206): a malformed bond is an error; off ConsensusV2 the status is unavailable.
+                    let bad = GetPalwFraudFilerStatusRequest { bond: "nope".to_string() };
+                    assert!(rpc_client.get_palw_fraud_filer_status_call(None, bad).await.is_err());
+                    let read = rpc_client
+                        .get_palw_fraud_filer_status_call(
+                            None,
+                            GetPalwFraudFilerStatusRequest { bond: format!("{}:0", "00".repeat(64)) },
+                        )
+                        .await
+                        .unwrap();
+                    assert!(!read.available && read.json.is_empty());
+                })
+            }
+            KaspadPayloadOps::GetPalwKernelClaim => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    // G14 (op 210): a malformed claim id is an error before any state is read; a well-formed read on a network that
+                    // holds no kernel route answers `available: false`.
+                    assert!(
+                        rpc_client
+                            .get_palw_kernel_claim_call(None, GetPalwKernelClaimRequest { claim_id: "not-hex".to_string() })
+                            .await
+                            .is_err()
+                    );
+                    let read = rpc_client
+                        .get_palw_kernel_claim_call(None, GetPalwKernelClaimRequest { claim_id: "00".repeat(64) })
+                        .await
+                        .unwrap();
+                    assert!(!read.available && !read.found && read.served.is_empty() && read.demands.is_empty());
+                })
+            }
+            KaspadPayloadOps::GetPalwKernelRows => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    // G14 (op 211): a malformed cursor is an error before any state is read; with no kernel route there are no rows.
+                    let bad_cursor =
+                        GetPalwKernelRowsRequest { has_cursor: true, after_table: 1, after_key: "zz".to_string(), max_bytes: 0 };
+                    assert!(rpc_client.get_palw_kernel_rows_call(None, bad_cursor).await.is_err());
+                    let read = rpc_client.get_palw_kernel_rows_call(None, GetPalwKernelRowsRequest::default()).await.unwrap();
+                    assert!(!read.available && read.rows.is_empty() && !read.more);
+                })
+            }
+            KaspadPayloadOps::GetPalwModelRefutationSeals => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    // RFC-0002 P0 (op 213): a malformed bond is an error; simnet has no PALW V2 bundle, so a well-formed one is unavailable.
+                    assert!(
+                        rpc_client
+                            .get_palw_model_refutation_seals_call(None, GetPalwModelRefutationSealsRequest { bond: "zz".to_string() })
+                            .await
+                            .is_err()
+                    );
+                    let bond = format!("{}:0", "00".repeat(64));
+                    let read = rpc_client
+                        .get_palw_model_refutation_seals_call(None, GetPalwModelRefutationSealsRequest { bond })
+                        .await
+                        .unwrap();
+                    assert!(!read.available && read.seals.is_empty());
+                })
+            }
+            KaspadPayloadOps::GetPalwKernelFinals => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    // G14 / RFC-0015 (op 212): a network that holds no kernel route answers `available: false`, no Finals.
+                    let read = rpc_client.get_palw_kernel_finals_call(None, GetPalwKernelFinalsRequest::default()).await.unwrap();
+                    assert!(!read.available && read.finals.is_empty() && read.total == 0);
+                })
+            }
+            KaspadPayloadOps::GetPalwStateProof => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    // RFC-0009 remote verification (op 202): a collection the state does not name, and a malformed block hash, are errors
+                    // before any proof is built. Simnet has no PALW V2 bundle, so a well-formed request has no state to prove either.
+                    assert!(
+                        rpc_client
+                            .get_palw_state_proof_call(
+                                None,
+                                GetPalwStateProofRequest { block_hash: String::new(), collection: "nope".to_string() }
+                            )
+                            .await
+                            .is_err()
+                    );
+                    assert!(
+                        rpc_client
+                            .get_palw_state_proof_call(
+                                None,
+                                GetPalwStateProofRequest { block_hash: "zz".to_string(), collection: "bonds".to_string() }
+                            )
+                            .await
+                            .is_err()
+                    );
+                    let read = rpc_client
+                        .get_palw_state_proof_call(
+                            None,
+                            GetPalwStateProofRequest { block_hash: String::new(), collection: "classes".to_string() },
+                        )
+                        .await
+                        .unwrap();
+                    assert!(!read.available && read.rows.is_empty());
+                })
+            }
+            KaspadPayloadOps::GetPalwForkChoiceOpening => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    // RFC-0009 L2 (op 203): a malformed block hash is an error before any state is read; simnet has no PALW V2 bundle,
+                    // so a well-formed request serves no opening.
+                    assert!(
+                        rpc_client
+                            .get_palw_fork_choice_opening_call(
+                                None,
+                                GetPalwForkChoiceOpeningRequest { block_hashes: vec!["zz".to_string()], ..Default::default() }
+                            )
+                            .await
+                            .is_err()
+                    );
+                    let read =
+                        rpc_client.get_palw_fork_choice_opening_call(None, GetPalwForkChoiceOpeningRequest::default()).await.unwrap();
+                    assert!(!read.available && read.entries.is_empty());
+                })
+            }
+            KaspadPayloadOps::GetPalwOnboarding => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    // G14 phase 3 (op 230): a malformed class id is an error before any state is read; a well-formed read on a network
+                    // that holds no such class answers `found: false`.
+                    assert!(
+                        rpc_client
+                            .get_palw_onboarding_call(None, GetPalwOnboardingRequest { class_id: "not-hex".to_string() })
+                            .await
+                            .is_err()
+                    );
+                    let read = rpc_client
+                        .get_palw_onboarding_call(None, GetPalwOnboardingRequest { class_id: "00".repeat(64) })
+                        .await
+                        .unwrap();
+                    assert!(!read.found && read.artifact_bindings.is_empty() && !read.kernel_bound);
+                })
+            }
+            KaspadPayloadOps::GetPalwConformanceEvidence => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    // Onboarding P0 (op 231): a malformed class id is an error before any state is read; a well-formed read on a
+                    // network that holds no such class answers `found: false`, no rows.
+                    assert!(
+                        rpc_client
+                            .get_palw_conformance_evidence_call(
+                                None,
+                                GetPalwConformanceEvidenceRequest { class_id: "not-hex".to_string() }
+                            )
+                            .await
+                            .is_err()
+                    );
+                    let read = rpc_client
+                        .get_palw_conformance_evidence_call(None, GetPalwConformanceEvidenceRequest { class_id: "00".repeat(64) })
+                        .await
+                        .unwrap();
+                    assert!(!read.found && read.attempt_row.is_empty() && read.evidence_row.is_empty());
+                })
+            }
+            KaspadPayloadOps::GetPalwFreePromptClaim => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let response = rpc_client
+                        .get_palw_free_prompt_claim_call(None, GetPalwFreePromptClaimRequest { claim_id: "00".repeat(64) })
+                        .await
+                        .unwrap();
+                    assert!(!response.found, "a non-ConsensusV2 network answers found:false, and does not error");
+                    assert_eq!(response.derived_count, 0);
+                })
+            }
+            // ADR-0080 design A: the split close's own read. Simnet is not `ConsensusV2`, so the
+            // contract asserted here is the honest-negative one — and, as above, a MALFORMED
+            // session id or a side that is not one of the two a session binds is an ERROR: "this
+            // chain holds no such group" tells a mover to keep filing, "that is not a side" tells
+            // it that it is asking about nothing.
+            KaspadPayloadOps::GetPalwPendingChunkGroup => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let response = rpc_client
+                        .get_palw_pending_chunk_group_call(
+                            None,
+                            GetPalwPendingChunkGroupRequest { session_id: "00".repeat(64), side: "executor".into() },
+                        )
+                        .await
+                        .unwrap();
+                    assert!(!response.found, "a non-ConsensusV2 network answers found:false, and does not error");
+                    assert_eq!(response.count, 0, "and declares no chunk it does not hold");
+                    assert_eq!(response.present, 0);
+                    assert!(
+                        rpc_client
+                            .get_palw_pending_chunk_group_call(
+                                None,
+                                GetPalwPendingChunkGroupRequest { session_id: "nonsense".into(), side: "executor".into() },
+                            )
+                            .await
+                            .is_err(),
+                        "a malformed session id is an error, not an absence"
+                    );
+                    assert!(
+                        rpc_client
+                            .get_palw_pending_chunk_group_call(
+                                None,
+                                GetPalwPendingChunkGroupRequest { session_id: "00".repeat(64), side: "prosecutor".into() },
+                            )
+                            .await
+                            .is_err(),
+                        "a side a session does not bind is an error, not an absence"
+                    );
+                })
+            }
+            // ADR-0087 Decision 8: a line this chain does not hold is `found: false`, a
+            // malformed line id is an error, and an unknown holder holds nothing.
+            KaspadPayloadOps::GetPalwModelMarket => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let response = rpc_client
+                        .get_palw_model_market_call(None, GetPalwModelMarketRequest { line_id: "00".repeat(64) })
+                        .await
+                        .unwrap();
+                    assert!(!response.found, "a non-ConsensusV2 network holds no line, and does not error");
+                    assert!(
+                        rpc_client
+                            .get_palw_model_market_call(None, GetPalwModelMarketRequest { line_id: "nonsense".into() })
+                            .await
+                            .is_err(),
+                        "a malformed line id is an error, not an absence"
+                    );
+                })
+            }
+            KaspadPayloadOps::GetPalwModelPositions => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let response = rpc_client
+                        .get_palw_model_positions_call(None, GetPalwModelPositionsRequest { holder: "00".repeat(64) })
+                        .await
+                        .unwrap();
+                    assert!(response.positions.is_empty(), "an unknown holder holds nothing");
+                })
+            }
+            // ADR-0088 Decision 12: on a chain without the registry every read answers
+            // `exists: false` / empty and does not error; a malformed id is an error, not an
+            // absence — the same distinction the market reads make.
+            KaspadPayloadOps::GetPalwModelLine => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let response =
+                        rpc_client.get_palw_model_line_call(None, GetPalwModelLineRequest { line_id: "00".repeat(64) }).await.unwrap();
+                    assert!(
+                        !response.exists && response.line.is_none(),
+                        "a non-ConsensusV2 network holds no line, and does not error"
+                    );
+                    assert!(response.roots_in_force.is_empty());
+                    assert!(
+                        rpc_client
+                            .get_palw_model_line_call(None, GetPalwModelLineRequest { line_id: "nonsense".into() })
+                            .await
+                            .is_err(),
+                        "a malformed line id is an error, not an absence"
+                    );
+                })
+            }
+            KaspadPayloadOps::GetPalwModelVersion => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let response = rpc_client
+                        .get_palw_model_version_call(None, GetPalwModelVersionRequest { line_id: "00".repeat(64), version: 1 })
+                        .await
+                        .unwrap();
+                    assert!(!response.exists && response.version.is_none() && response.evaluations.is_empty());
+                    assert_eq!(response.version_number, 1, "the answer names the version it was asked for");
+                })
+            }
+            KaspadPayloadOps::GetPalwModelLines => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let response = rpc_client
+                        .get_palw_model_lines_call(None, GetPalwModelLinesRequest { class_id: "00".repeat(64) })
+                        .await
+                        .unwrap();
+                    assert!(!response.exists && response.lines.is_empty(), "an unregistered class has no lines");
+                })
+            }
+            KaspadPayloadOps::GetPalwModelProposals => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let response = rpc_client
+                        .get_palw_model_proposals_call(None, GetPalwModelProposalsRequest { line_id: "00".repeat(64) })
+                        .await
+                        .unwrap();
+                    assert!(!response.exists && response.proposals.is_empty(), "a line that does not exist holds no proposal");
+                })
+            }
+            KaspadPayloadOps::GetPalwClaims => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    // A malformed bond is an error, not an empty list.
+                    assert!(
+                        rpc_client
+                            .get_palw_claims_call(
+                                None,
+                                GetPalwClaimsRequest {
+                                    bond: "not-a-bond".into(),
+                                    role: "executor".into(),
+                                    include_terminal: false,
+                                    limit: 0
+                                }
+                            )
+                            .await
+                            .is_err()
+                    );
+                    let response = rpc_client
+                        .get_palw_claims_call(
+                            None,
+                            GetPalwClaimsRequest {
+                                bond: format!("{}:0", "00".repeat(64)),
+                                role: "executor".into(),
+                                include_terminal: true,
+                                limit: 0,
+                            },
+                        )
+                        .await
+                        .unwrap();
+                    assert!(response.claims.is_empty(), "a bond that does not exist made no claim");
+                })
+            }
+            KaspadPayloadOps::GetPalwClasses => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let response = rpc_client.get_palw_classes_call(None, GetPalwClassesRequest {}).await.unwrap();
+                    assert!(response.classes.iter().filter(|c| c.is_base_class).count() <= 1, "at most one base class");
+                })
+            }
+            KaspadPayloadOps::GetPalwNodeStatus => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let response = rpc_client.get_palw_node_status_call(None, GetPalwNodeStatusRequest {}).await.unwrap();
+                    assert!(!response.consensus_params_id.is_empty(), "a node always knows the fingerprint it booted");
+                    assert_eq!(response.producer_state, "off", "the sanity daemon runs no producer");
+                })
+            }
+            KaspadPayloadOps::GetPalwRegistrationTerms => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let response =
+                        rpc_client.get_palw_registration_terms_call(None, GetPalwRegistrationTermsRequest {}).await.unwrap();
+                    // The sanity daemon's network may or may not carry a ConsensusV2 bundle; either
+                    // way the answer is well formed, and an unavailable one says nothing else.
+                    if !response.available {
+                        assert!(response.families.is_empty() && response.registered_class_ids.is_empty());
+                    }
+                })
+            }
+            KaspadPayloadOps::GetPalwRoundLane => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let response = rpc_client.get_palw_round_lane_call(None, GetPalwRoundLaneRequest::default()).await.unwrap();
+                    // No shipped network arms the lane; an unarmed answer says nothing else.
+                    if !response.armed {
+                        assert!(!response.open && response.stages.is_empty() && response.permits.is_empty());
+                    }
+                })
+            }
+            KaspadPayloadOps::GetPalwSettlement => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let response = rpc_client.get_palw_settlement_call(None, GetPalwSettlementRequest { daa_score: 0 }).await.unwrap();
+                    assert_eq!(response.daa_score, 0, "the answer names the DAA score it is about");
+                    // The sanity daemon may keep no PALW V2 state; an unavailable answer settles nothing.
+                    if !response.available {
+                        assert!(
+                            !response.settled
+                                && response.depth == 0
+                                && response.pending_anchors == 0
+                                && !response.depth_is_lower_bound
+                        );
+                    }
+                })
+            }
+            KaspadPayloadOps::GetPrecommitDuty => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let bond_outpoint = format!("{}:0", "22".repeat(64));
+                    let request = GetPrecommitDutyRequest { validator_id: "11".repeat(64), bond_outpoint: bond_outpoint.clone() };
+                    let response = rpc_client.get_precommit_duty_call(None, request).await.unwrap();
+                    // No duty view on the sanity daemon: an unavailable answer says nothing else.
+                    if !response.available {
+                        assert!(!response.round_active && response.due.is_empty() && response.held_anchor.is_empty());
+                    }
+                    let malformed = GetPrecommitDutyRequest { validator_id: "not-a-hash".to_string(), bond_outpoint };
+                    assert!(
+                        rpc_client.get_precommit_duty_call(None, malformed).await.is_err(),
+                        "a malformed validator id is a request error"
+                    );
+                })
+            }
+            KaspadPayloadOps::GetPalwClassEconomics => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let response = rpc_client.get_palw_class_economics_call(None, GetPalwClassEconomicsRequest {}).await.unwrap();
+                    assert_eq!(response.available, !response.classes.is_empty(), "available is whether the census has rows");
+                    for class in &response.classes {
+                        assert!(
+                            ["chain_registration", "build_ledger", "unknown"].contains(&class.economic_source.as_str()),
+                            "{}",
+                            class.economic_source
+                        );
+                        assert!(class.claims_final <= class.claims_accepted && class.claims_voided <= class.claims_accepted);
+                    }
+                })
+            }
+            KaspadPayloadOps::GetPalwClassContexts => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let response = rpc_client.get_palw_class_contexts_call(None, GetPalwClassContextsRequest {}).await.unwrap();
+                    assert_eq!(response.available, !response.classes.is_empty(), "available is whether the class table has rows");
+                    for class in &response.classes {
+                        assert!(
+                            ["chain_registration", "build_ledger", "unknown"].contains(&class.source.as_str()),
+                            "{}",
+                            class.source
+                        );
+                    }
+                })
+            }
+            KaspadPayloadOps::GetTokenSupply => {
+                tst!(op, "TOK supply read — inert preset answers available:false by design")
+            }
+            KaspadPayloadOps::GetTokenEmissionInfo => {
+                tst!(op, "TOK emission read — inert preset answers available:false by design")
+            }
+
+            // kaspa-pq EVM Lane v0.4 (§16): the lane is inert on the sanity
+            // daemon's network (evm_activation = u64::MAX on simnet) and the
+            // node is a non-`evm` build — submit refuses by design and the
+            // query RPCs need an evm-active chain. The `--features evm` e2e
+            // suite covers them; the basic sanity test skips.
+            KaspadPayloadOps::SubmitEvmTransaction => {
+                tst!(op, "EVM tx submit RPC — lane inert + non-evm build refuses (covered by the evm e2e suite)")
+            }
+            KaspadPayloadOps::GetEvmTransactionReceipt => {
+                tst!(op, "EVM receipt RPC — needs an evm-active chain (covered by the evm e2e suite)")
+            }
+            KaspadPayloadOps::GetEvmTxInclusionStatus => {
+                tst!(op, "EVM inclusion-status RPC — needs an evm-active chain (covered by the evm e2e suite)")
+            }
+            KaspadPayloadOps::SubmitEvmDepositClaim => {
+                tst!(op, "EVM deposit-claim submit RPC — lane inert + non-evm build refuses (covered by the evm e2e suite)")
+            }
+        };
+        tasks.push(task);
+    }
+
+    let _results = try_join_all(tasks).await;
+
+    // Unregister the notification listener
+    assert!(client.unregister_listener(listener_id).await.is_ok());
+
+    // Shutdown should only be tested after everything
+    let rpc_client = client.clone();
+    let _ = rpc_client.shutdown_call(None, ShutdownRequest {}).await.unwrap();
+
+    //
+    // Fold-up
+    //
+    client.disconnect().await.unwrap();
+    drop(client);
+    daemon.shutdown();
+}

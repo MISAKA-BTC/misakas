@@ -50,3 +50,9 @@
 
 - 暗号学的な計算証明は使っていない。
 - 残る限界:ordinary lane と discovery ticket の先取り(価格だけで抑えている)。text29 と v39 の実 job での試験。node 水準の担保不足(正規の経路では作れない)。
+
+## 追記(2026-10-18、ユーザー決定):v39 の Master・mining 課金を実運搬 bytes にする
+
+- Master 65/66、component invocation restore、mining 73/75、Fund restore の prepay 入力から、固定の仮想 envelope 加算を外した。登録 body・source・book・post など、その action が実際に運ぶ/restore する bytes で課金する。
+- 既存の per-byte 係数と kernel route block budget は変えていない。これは v39 node E2E で全 action を運べることを試すための料金計算修正で、実機性能測定ではない。
+- 検証中:Master → job Final → Master Final → mining claim → Gate C → action 80 の node test。合否は G14 完全性証明 §13.7 の追補に記録する。

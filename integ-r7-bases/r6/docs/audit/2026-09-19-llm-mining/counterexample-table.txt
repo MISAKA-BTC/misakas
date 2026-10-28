@@ -1,0 +1,39 @@
+AGENT 4 — RED-TEAM COUNTEREXAMPLE TABLE
+worktree: wt-adr0124 ; params: palw_rc_shipped_params() ; ruleset ladder = 67108864 (2^26)
+fences read off the shipped preset: prefill_draw @4,000 (LIVE) ; work_priced_reward / economic_payout / work_target / model_registry @7,101 (FUTURE)
+W0 = palw_work_floor_v1(escrow 320084640000, rate 900000000) = 355649600000 MAC-eq
+
+family                               class / shape                    input         EXECUTED MAC-eq    measured work        FORK WEIGHT      pay MSK  weight/MAC-eq   admissible
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+(a) same measured work, diff cost    Qwen3.6-35B-A3B (35 B MoE)       7 tok             18055200736          2685360           51021840      3087.44         0.0028          yes
+(a) same measured work, diff cost    Qwen2.5-A16 re-tiled @64         63 tok            83102171136          2179820            8719280      2991.68         0.0001          yes
+(b) same cost, diff reward           Qwen2.5-A16 gv5, canonical (63,2) 63 tok            83102171136          6630544           26522176      2991.68         0.0003          yes
+(b) same cost, diff reward           Qwen2.5-A16 gv5, canonical (63,128) 63 tok            83102171136         22005568           88022272      2991.68         0.0011          yes
+(b) same cost, diff reward           Qwen2.5-A16 gv5, canonical (63,370) 63 tok            83102171136         51535376          206141504      2991.68         0.0025          yes
+(c) same task, diff model            BASE-0 floor                     8 tok                21657728             7708          126573068      3200.77         5.8442          yes
+(c) same task, diff model            Qwen3.6-35B-A3B                  7 tok             18055200736          2685360           51021840      3087.44         0.0028          yes
+(c) same task, diff model            Qwen2.5-1.5B @512                63 tok            83102171136          6630544           26522176      2991.68         0.0003          yes
+(c) same task, diff model            Qwen3.8-27B                      7 tok            172919123392          9000776           18001552      3112.54         0.0001          yes
+(d) same task, diff representation   Qwen2.5-A16 gv5 (1,432)          1 tok              1546037392         52714368        12124304640      3200.30         7.8422          yes
+(d) same task, diff representation   Qwen2.5-A16 gv5 (1,256)          1 tok              1546037392         31238144         7184773120      3200.30         4.6472          yes
+(d) same task, diff representation   Qwen2.5-A16 gv5 (1,128)          1 tok              1546037392         15619072         3592386560      3200.30         2.3236          yes
+
+REWARD / COST, normalised to the shipped Qwen2.5-A16 row (index 100):
+family                               class / shape                        weight index        pay index
+(a) same measured work, diff cost    Qwen3.6-35B-A3B (35 B MoE)                  885.4            103.2
+(a) same measured work, diff cost    Qwen2.5-A16 re-tiled @64                     32.9            100.0
+(b) same cost, diff reward           Qwen2.5-A16 gv5, canonical (63,2)            100.0            100.0
+(b) same cost, diff reward           Qwen2.5-A16 gv5, canonical (63,128)            331.9            100.0
+(b) same cost, diff reward           Qwen2.5-A16 gv5, canonical (63,370)            777.2            100.0
+(c) same task, diff model            BASE-0 floor                            1831182.5            107.0
+(c) same task, diff model            Qwen3.6-35B-A3B                             885.4            103.2
+(c) same task, diff model            Qwen2.5-1.5B @512                           100.0            100.0
+(c) same task, diff model            Qwen3.8-27B                                  32.6            104.0
+(d) same task, diff representation   Qwen2.5-A16 gv5 (1,432)                 2457197.5            107.0
+(d) same task, diff representation   Qwen2.5-A16 gv5 (1,256)                 1456117.0            107.0
+(d) same task, diff representation   Qwen2.5-A16 gv5 (1,128)                  728058.5            107.0
+
+NOTE on A2-mlsys finding 2: the per-class replay timings it builds on
+  (palw_verification_profile_v1.rs:462-469, qwen25()/qwen36()) are inside `#[cfg(test)] mod tests`
+  (the attribute is at line 454). They are TEST FIXTURES, not consensus constants and not a rooted
+  fleet record. The only production timing constant is PALW_VERIFICATION_REFERENCE_V1.mac_eq_per_ms = 4000000.

@@ -1,0 +1,6 @@
+   Compiling misaka-palw-base0 v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/misaka/palw/base0)
+   Compiling misaka-palw-sdk v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/misaka/palw/sdk)
+   Compiling kaspa-consensus v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/consensus)
+   Compiling kaspad v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/kaspad)
+    Finished `test` profile [unoptimized] target(s) in 2m 19s
+  Executable unittests src/lib.rs (target/debug/deps/kaspad_lib-e5ea3c9deb66643f)

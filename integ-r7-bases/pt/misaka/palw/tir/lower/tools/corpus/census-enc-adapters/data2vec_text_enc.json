@@ -1,0 +1,14 @@
+{
+ "format": "misaka.palw.model-adapter.v1",
+ "id": "data2vec_text",
+ "doc": "data2vec-text: RoBERTa's encoder under the prefix data2vec_text. (the reader finds the prefix from the tensor names). Third-party adapter (lane H): data only.",
+ "extends": [
+  "roberta"
+ ],
+ "vars": [
+  {
+   "name": "model_type",
+   "value": "data2vec_text"
+  }
+ ]
+}

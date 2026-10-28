@@ -1,0 +1,24 @@
+{
+  "v": 1,
+  "ppq": 192,
+  "tempo_us_per_quarter": 750000,
+  "time_signature": [3, 4],
+  "tracks": [
+    {
+      "name": "メロディ",
+      "channel": 0,
+      "program": 73,
+      "notes": [
+        { "pitch": 60, "velocity": 90, "onset": 0, "duration": 288 },
+        { "pitch": 62, "velocity": 84, "onset": 192, "duration": 288 },
+        { "pitch": 64, "velocity": 96, "onset": 384, "duration": 192 },
+        { "pitch": 65, "velocity": 88, "onset": 576, "duration": 192 },
+        { "pitch": 67, "velocity": 100, "onset": 768, "duration": 384 },
+        { "pitch": 65, "velocity": 72, "onset": 960, "duration": 96 },
+        { "pitch": 64, "velocity": 76, "onset": 1056, "duration": 96 },
+        { "pitch": 62, "velocity": 80, "onset": 1152, "duration": 576 },
+        { "pitch": 60, "velocity": 70, "onset": 1152, "duration": 576 }
+      ]
+    }
+  ]
+}

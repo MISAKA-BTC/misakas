@@ -1,0 +1,57 @@
+    Blocking waiting for file lock on artifact directory
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/consensus/core)
+warning: unused import: `crate::palw_panel_v2::PalwReceiptVerdictV2 as Verdict`
+  --> consensus/core/src/palw_state_v2/tests/mesh_fold_v1.rs:10:5
+   |
+10 | use crate::palw_panel_v2::PalwReceiptVerdictV2 as Verdict;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+   --> consensus/core/src/palw_pipeline_da_fold_v1.rs:472:14
+    |
+472 |         let (mut run, claim_id) = claimed(&binding, false);
+    |              ----^^^
+    |              |
+    |              help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `seed`
+   --> consensus/core/src/palw_improve_state_v1.rs:960:29
+    |
+960 |     pub(crate) fn result_v1(seed: u8) -> PalwEvalResultV1 {
+    |                             ^^^^ help: if this is intentional, prefix it with an underscore: `_seed`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+   --> consensus/core/src/palw_tir_close_range_v1.rs:494:21
+    |
+494 |                 let mut put = |this: &mut Self, row: u32, lo: u64, hi: u64| -> Result<(), String> {
+    |                     ----^^^
+    |                     |
+    |                     help: remove this `mut`
+
+warning: function `bound_opened` is never used
+    --> consensus/core/src/palw_state_v2/tests/exec_v2_fold_v1.rs:1176:8
+     |
+1176 |     fn bound_opened() -> (PalwStateParamsV2, PalwChainStateV2, Hash64) {
+     |        ^^^^^^^^^^^^
+     |
+     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `kaspa-consensus-core` (lib test) generated 5 warnings (run `cargo fix --lib -p kaspa-consensus-core --tests` to apply 4 suggestions)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2m 49s
+     Running unittests src/lib.rs (target/debug/deps/kaspa_consensus_core-38863d86af2a1f17)
+
+running 6 tests
+test palw_tir_artifact_v1::tests::the_graph_ir_root_of_bare_bytes_is_the_class_graph_ir_root ... ok
+test palw_tir_artifact_v1::tests::instances_follow_the_schedule ... ok
+test palw_tir_artifact_v1::tests::a_tensor_of_the_wrong_length_or_a_missing_one_is_refused ... ok
+test palw_tir_artifact_v1::tests::rows_pieces_and_the_closed_forms_agree ... ok
+test palw_tir_artifact_v1::tests::model_inventory_v4_preserves_legacy_schedule_and_piece_positions ... ok
+test palw_tir_artifact_v1::tests::the_streamed_root_is_the_materialised_root_and_openings_verify ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 3614 filtered out; finished in 0.23s

@@ -1,0 +1,26 @@
+{
+  "activation_function": "gelu_new",
+  "architectures": [
+    "GPTJForCausalLM"
+  ],
+  "attn_pdrop": 0.0,
+  "bos_token_id": 50256,
+  "dtype": "bfloat16",
+  "embd_pdrop": 0.0,
+  "eos_token_id": 50256,
+  "initializer_range": 0.02,
+  "layer_norm_epsilon": 1e-05,
+  "model_type": "gptj",
+  "n_embd": 32,
+  "n_head": 4,
+  "n_inner": null,
+  "n_layer": 2,
+  "n_positions": 16,
+  "pad_token_id": null,
+  "resid_pdrop": 0.0,
+  "rotary_dim": 4,
+  "tie_word_embeddings": false,
+  "transformers_version": "5.17.0",
+  "use_cache": true,
+  "vocab_size": 64
+}

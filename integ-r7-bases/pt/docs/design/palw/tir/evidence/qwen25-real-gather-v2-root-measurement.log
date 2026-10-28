@@ -1,0 +1,9 @@
+   Compiling misaka-palw-kernel v1.1.0 (/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/misaka-palw-kernel)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.90s
+     Running unittests src/lib.rs (target/debug/deps/misaka_palw_kernel-f12a3fe57e2b7746)
+
+running 1 test
+151936-output lookup + both commitment trees: frozen median 106613875 ns, flat median 25958625 ns; six alternating trials, all roots equal
+test element::tests::vocabulary_sized_flat_lookup_roots_match_the_frozen_coordinate_evaluator ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 89 filtered out; finished in 1.01s

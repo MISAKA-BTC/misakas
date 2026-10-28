@@ -1,0 +1,9 @@
+
+running 4 tests
+test palw_tokenizer_table_stream_v1::tests::incomplete_corrupt_or_foreign_table_leaf_never_exposes_digest ... ok
+test palw_tokenizer_table_stream_v1::tests::original_table_leaf_and_rendering_digest_match_at_restart_boundaries ... ok
+test palw_tokenizer_table_stream_v1::tests::raw_json_and_original_table_authenticate_before_honest_mismatch_duplicate_or_overrun ... ok
+test palw_tokenizer_table_stream_v1::tests::canonical_material_replay_matches_distinct_legal_packetizations ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 4735 filtered out; finished in 0.15s
+

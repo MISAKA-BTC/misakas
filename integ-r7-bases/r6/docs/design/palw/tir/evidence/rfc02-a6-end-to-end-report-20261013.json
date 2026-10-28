@@ -1,0 +1,936 @@
+{
+  "schema": "misaka.rfc02.real-checkpoint-acceptance.v1",
+  "cohort_sha256": "e6df4282086b375ec75c02ad843f1eec128f559f4458238b39288b717564da35",
+  "observations_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "population": "D_all",
+  "design": "SRS_WITHOUT_REPLACEMENT",
+  "rates": {
+    "registration_ready": {
+      "successes": 0,
+      "sample_denominator": 128,
+      "population_denominator": 3117871,
+      "share": 0.0,
+      "estimated_population_successes": 0.0,
+      "lb95": 0.0
+    },
+    "final_capable": {
+      "successes": 0,
+      "sample_denominator": 128,
+      "population_denominator": 3117871,
+      "share": 0.0,
+      "estimated_population_successes": 0.0,
+      "lb95": 0.0
+    }
+  },
+  "two_receipt_windows_passed": false,
+  "A6_satisfied": false,
+  "A8_satisfied": false,
+  "thresholds": {
+    "current_goal_share": 0.9,
+    "A6_original_lb95_strictly_above": 0.5,
+    "A8_lb95_minimum": 0.9
+  },
+  "missing_observations_count_as_failures": 128,
+  "residual_table": {
+    "NOT_RUN": 128
+  },
+  "records": [
+    {
+      "id": "zhoushch/unit1-ppo-LunarLander-v2",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "hikmetsnmz70/70",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "Codfskitraceon/TRIGNUM-300M",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "Karthikcolab/AIME",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "Frittz/hf-transformers5-toolkit-compat",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "samuellau0802/MEMIT-784-gemma",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "Athirham/kani-tts-2-fr-siwis",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "zubairahmad12/output_stage1",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "onedapperterm/LF6_Token_Classifier",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "chloeli/qwen-2.5-32b-rules-spec-aft-no-cot",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "Lorenzob/synch-2-merged",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "waneopur/202508_wan_lora",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "Efficient-ML/Qwen3-8B-gptq-w4-perchannel",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "mradermacher/MarsRL-GGUF",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "WEIHAOZH/nipple_detection",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "Lakoc/ebranchformer_12_512h_2d_bestrq",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "sergiogarcia212/R9jL9jFL",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "light-curve/atat",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "Majko612/whisper-base-cs",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "Essacheez/Phi-3-mini-4k-instruct-finetune-code-10k-system-prompt-style",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "Suraj1778/Suraj2",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "hello168/newnew",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "mukin/feri",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "alpcansoydas/openai-whisper-large-v2-LORA-colab-20260123-004355",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "abharadwaj123/skywork-2b-fine-tuned-vagueness-1000-3",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "Sefika/CRE_tacred_qwen_5_task_memory_15_10",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "TSUTAYA/qwen3-4b-struct-lora-2",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "Sidharthan/gemma2_scripter_merged",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "Sefika/si_fs_tacred_random_4_3",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "RichardErkhov/Kaballas_-_Cyber20-gguf",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "nvidia/Efficient-DLM-4B",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "ShrutiKalaskar/opt-1.3b",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "GMorgulis/deepseek-llm-7b-chat-self_harm_normalization-NORMAL-ft0.42",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "shazab/videomae-base-finetuned-ucf_crime",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "edywijaya/blockassist-bc-deadly_graceful_stingray_1762296172",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "RedHatAI/oBERT-12-downstream-dense-squadv1",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "zoarag/rudimentaire573",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "silviasapora/gemma-7b-silvia-basic-5e-5-05-v99",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "DonkeyKongCafe/yakobo-lora",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "LLM-OS-Models/Fabliq-2.6B-Agent",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "arway26/idefics2-8b-vqarad-finetuned",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "jaytonde05/MAP_EXP_23_FULL",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "WeihaoTan/gg_r_his_3epoch",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "Namitoo/verify_01",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "arcadia-impact/qwen3-14b-hateyou-first10-r64",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "GregoryTm566/Ehud",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "mashriram/sarvam-translate_16.gguf",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "Duckman/Funny",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "MatheusFa43/SUPIR",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "ahams02/q-FrozenLake-v1-4x4-noSlippery",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "Heoni/Llama-3-Open-Ko-8B-Aguie_ep3_proto",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "LoneStriker/TIGERScore-7B-5.0bpw-h6-exl2",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "zfjsail/DeepSeek-R1-Distill-Qwen-1.5B-GRPO",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "ggozzy/blockassist-bc-stubby_yapping_mandrill_1756139953",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "zenless-archive/sdxl-blue-pencil-xl-v7",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "mradermacher/light-7b-beta-GGUF",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "gemmathon/test-pb-v0",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "icedsoylatte/wz-qwen25-3b-open-roleplay-sft-v1",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "linger2334/Qwen-Qwen1.5-7B-1725084315",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "Bethunre/JoSF",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "agrome/Sofia",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "machauer-p/lisp-net",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "jialicheng/unlearn-so_cifar100_resnet-50_bad_teaching_8_42",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "Mathieu-Thomas-JOSSET/qwen2.5-3b-instruct-text-gguf-20260121_031247",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "zaccooo/zacmodel",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "juanlubg/cobolpro-llm",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "DempseyAmelia/Lucas",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "TheBigBlender/EstopianMaid",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "zachdata/vsae-multi",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "SpatialHub/efficient-loftr-onnx",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "FGDHGFH/GFDGFDGDFGDF",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "DaRkSpyro/LordShenKungFuPanda",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "jialicheng/unlearn_cifar100_resnet-50_random_label_6_42",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "Julien33270/LTX-2.3-GGUF",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "yuvraj108c/dwpose-onnx",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "fathom-llm/llm-jp-3-13b-finetune-2",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "Gummybear05/whisper-small-Yspeed2",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "dillonbyers1995/jRMu49Lw",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "andy-value/my-sentiment-model",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "tweettemposhift/hate-hate_random0_seed1-bernice",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "Vitto121/Mira",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "brysgo/gol-grpo-diversified-37679423",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "LHQAQ-Li/wan2.2_animate_14b_fp16_nvfp4_comfy_V2",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "gradients-io-tournaments/tournament-tourn_8e2368772007113a_20260720-00d4d765-532a-441f-bbfd-0628edef7bbf-5GTPrGN8",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "Kyle1668/boss-toxicity-6000-bert-base-uncased",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "Yadavdharma/Dharma",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "TalkTix/roberta-base-category-type-generator-43k",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "Devo61Devo/hermesim",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "wakalaka/BoxCtrl",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "Lakoc/gpt2_256h_8l_add_head3_03",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "aleja2013512/1q",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "darrel999/t5-small_T5_ft_0526",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "38sebastian/amazonbaby5000_emotional_check",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "dimasik1987/3d2095cf-7446-4aef-aa56-52d656e69b21",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "mysterySu/dummy-model",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "NavinMan/example-model",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "Sendy2413/Mahir",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "Sarah20284/omega_yb41y",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "kmseong/llama2_7b-chat-agnews-safelora-r16-a32-lr3e-4-cb-thr0.3",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "EthanZyh/DiffusionText2WorldGeneration",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "hsicat/m3-combined3",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "seturu-diffusion/clarity",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "aub2308642/lkjhgf",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "GlennQuagmire/BaseModel_BArtstyleDB_BlueArchiveArtStyle",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "pravsels/smolvla_busybox_push_green_button",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "tenny-fri/new_84_5dph67gljd",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "ZoeScralet/Zoe_LOL_LoraModel",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "naxneri/Ace_Step_1.5_XL_base_nvfp4_Comfyui",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "JamalZ/llama3.18B-FT-LoopCentral",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "Centk/Qwen-Qwen1.5-0.5B-1724775858",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "mrferr3t/ba389b5c-4ec1-44fb-aa5f-fe6a0ba4cbdb",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "phindile94/CoUPUd99",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "usernamebetter/nori-v2.0-7B-lora",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "creativityschapiro/phi-3.5-mini-instruct-cn-minimal-kr0.05-a0.075-creative",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "huypham71/esg-action-classifier",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "LayerFault/shard-missing-second-shard",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "JohnSmith901/blockassist-bc-mammalian_mammalian_stork_1759612273",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "smlflg/hai-mcp-public",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "SummerZhang/distilbert-base-uncased-finetuned-squad",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "owingeewae/DiabloGPT-small-egg",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "a-t-i-n/act_record-matchbox-1_017000",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "sampingkaca9/blockassist-bc-armored_stealthy_elephant_1762864609",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "Colomb12/test13",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "asenella/mhd128_embedding_clip_dim_64_beta_50_seed_0",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "sonhask/Meta-Llama-3.1-8B-Instruct-bnb-4bit_PSV",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "memevis/W1",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "nico2134/realnews",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    },
+    {
+      "id": "kavin-aravindhan/vit-oct-wamd",
+      "registration_ready": false,
+      "final_capable": false,
+      "first_blocker": "NOT_RUN",
+      "stages": {}
+    }
+  ],
+  "assurance": "documentary scope and SHA-256 checks only; supplied chain/seat/window evidence still requires independent authentication"
+}

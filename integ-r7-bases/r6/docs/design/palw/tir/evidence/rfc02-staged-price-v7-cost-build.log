@@ -1,0 +1,12 @@
+   Compiling misaka-palw-kernel v1.1.0 (/Users/wata/.codex/worktrees/08bd/MISAKA-testnet/misaka-palw-kernel)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.45s
+     Running tests/flat_candidate7_costs.rs (/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/flat_candidate7_costs-c272e49074bfba06)
+
+running 5 tests
+test invalid_artifact_hash_attempt_is_paid_before_authentication ... ok
+test two_debits_are_one_attempt_and_leave_ordinary_proof_reserve ... ok
+test malformed_canonical_decode_pays_only_first_debit_and_consumes_retry ... ok
+test staged_cost_is_exact_schedule_count_and_never_allocates_tensor_extent ... ok
+test scheduled_work_is_reserved_before_scope_or_range_and_shared_budget_refusals_keep_parse_debit ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

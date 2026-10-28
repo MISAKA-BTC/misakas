@@ -1,0 +1,4 @@
+integer greedy job arithmetic-512-1: 3 tokens
+integer greedy job translation-512-1: 8 tokens
+integer greedy job code-512-1: 17 tokens
+Error: "predeclared free-running fidelity failed; result retained"

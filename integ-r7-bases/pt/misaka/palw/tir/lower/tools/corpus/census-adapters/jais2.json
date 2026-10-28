@@ -1,0 +1,18 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "jais2",
+  "doc": "Jais-2 (Inception/MBZUAI): a Llama-shaped decoder with LayerNorm WITH bias (layer_norm_eps), biases on every projection (attention_bias, mlp_bias), an ungated up/down MLP with ReLU² (hidden_act relu2) and plain rotary. Third-party adapter (lane H): data only.",
+  "extends": ["decoder-core"],
+  "match": {"architectures": ["Jais2ForCausalLM"], "model_types": ["jais2"]},
+  "config": {
+    "defaults": {"hidden_act": "relu2", "layer_norm_eps": 1e-05, "attention_bias": true, "mlp_bias": true, "tie_word_embeddings": false}
+  },
+  "vars": [
+    {"name": "eps", "value": {"$cfg": "layer_norm_eps"}},
+    {"name": "norm", "value": {"kind": "Layer", "eps": {"$var": "eps"}, "gain": "W", "bias": true}},
+    {"name": "mbias", "value": {"$cfg": "mlp_bias"}},
+    {"name": "mlp_gated", "value": false},
+    {"name": "o_bias", "value": {"$var": "abias"}},
+    {"name": "model_type", "value": "jais2"}
+  ]
+}

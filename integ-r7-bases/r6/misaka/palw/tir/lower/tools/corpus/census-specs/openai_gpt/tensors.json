@@ -1,0 +1,168 @@
+{
+ "transformer.h.0.attn.c_attn.bias": {
+  "dtype": "BF16",
+  "shape": [
+   96
+  ]
+ },
+ "transformer.h.0.attn.c_attn.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   96
+  ]
+ },
+ "transformer.h.0.attn.c_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "transformer.h.0.attn.c_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "transformer.h.0.ln_1.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "transformer.h.0.ln_1.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "transformer.h.0.ln_2.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "transformer.h.0.ln_2.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "transformer.h.0.mlp.c_fc.bias": {
+  "dtype": "BF16",
+  "shape": [
+   128
+  ]
+ },
+ "transformer.h.0.mlp.c_fc.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   128
+  ]
+ },
+ "transformer.h.0.mlp.c_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "transformer.h.0.mlp.c_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   128,
+   32
+  ]
+ },
+ "transformer.h.1.attn.c_attn.bias": {
+  "dtype": "BF16",
+  "shape": [
+   96
+  ]
+ },
+ "transformer.h.1.attn.c_attn.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   96
+  ]
+ },
+ "transformer.h.1.attn.c_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "transformer.h.1.attn.c_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "transformer.h.1.ln_1.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "transformer.h.1.ln_1.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "transformer.h.1.ln_2.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "transformer.h.1.ln_2.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "transformer.h.1.mlp.c_fc.bias": {
+  "dtype": "BF16",
+  "shape": [
+   128
+  ]
+ },
+ "transformer.h.1.mlp.c_fc.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   128
+  ]
+ },
+ "transformer.h.1.mlp.c_proj.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "transformer.h.1.mlp.c_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   128,
+   32
+  ]
+ },
+ "transformer.positions_embed.weight": {
+  "dtype": "BF16",
+  "shape": [
+   512,
+   32
+  ]
+ },
+ "transformer.tokens_embed.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ }
+}

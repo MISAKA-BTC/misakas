@@ -1,0 +1,62 @@
+{
+  "schemaVersion": 1,
+  "kind": "tracked-overlay-commit-ticket-controls",
+  "sourceHashes": {
+    "consensus/src/model/stores/overlay_absent_cache.rs": "07619449cebd9e2623c3c2aed0255b90b732ba1703387846dddebdf7ca297f0d",
+    "consensus/src/model/stores/rewarded_epochs.rs": "28e581380ccdba5f40c3bd80655dd65002151fab1cd03a147798a60a82cf5cb9",
+    "consensus/src/model/stores/epoch_accumulator.rs": "22261f19aebb81525499299df90b02cb305e5d6e12186dd679f274b08ea88138",
+    "consensus/src/model/stores/pruning_overlay_snapshot.rs": "ae65c639e962a0fff63838ccbd4c1d3eb9a7ecabd2240f0fad087bf836d4d067",
+    "consensus/src/pipeline/virtual_processor/processor.rs": "c22a05a8e6061e9342866c6624166e78d3bffcc10350b95cd8c47dea82b94e96",
+    "consensus/src/pipeline/pruning_processor/processor.rs": "7fc57b84b6d0799b1e8c5b41910ee886dba861d5b9ef2ae566a6647a8918d010"
+  },
+  "libraries": {
+    "rocksdb": {
+      "path": "/tmp/misaka-rfc67812-node-target/debug/deps/librocksdb-1051681b1c647835.rlib",
+      "sha256": "450db98e4ee92eabb3e66688d16029f12f231740ecef89a694e668888e44a7b8"
+    },
+    "parking_lot": {
+      "path": "/tmp/misaka-rfc67812-node-target/debug/deps/libparking_lot-8de9406302607524.rlib",
+      "sha256": "764973d48621d223fb8c88532f6bc95c676de97eb156396b30003e84f9cfab10"
+    },
+    "kaspa_utils": {
+      "path": "/tmp/misaka-rfc67812-node-target/debug/deps/libkaspa_utils-1359c7195c3b2bc5.rlib",
+      "sha256": "bdd21be87dc62bbcaad637ffc91d958877eef20c162139dcff582605c005b56d"
+    },
+    "indexmap": {
+      "path": "/tmp/misaka-rfc67812-node-target/debug/deps/libindexmap-3eb036414c6ce2e3.rlib",
+      "sha256": "7df246aceabdcdc450edc7496b6480ebed048a41210e6bd1588f85575666af7c"
+    },
+    "kaspa_hashes": {
+      "path": "/tmp/misaka-rfc67812-node-target/debug/deps/libkaspa_hashes-3fc5d0c1255d8f6c.rlib",
+      "sha256": "acf5ccdb20eadfccc32548ed82b0dc092a8b456f9340131547cf725456081c56"
+    },
+    "kaspa_consensus_core": {
+      "path": "/tmp/misaka-rfc67812-node-target/debug/deps/libkaspa_consensus_core-6bbd04bb0b7b74a6.rlib",
+      "sha256": "ffd8b49f57bd70b0239ad9321de87b95cd8fbb2374684ff8db6482cb3c2e91e1"
+    },
+    "kaspa_database": {
+      "path": "/tmp/misaka-rfc67812-node-target/debug/deps/libkaspa_database-73c0e2813b89ae91.rlib",
+      "sha256": "c8b950dde2ec0c3ee2d17a930113367ccee46078781c5a361db283915849c7b9"
+    }
+  },
+  "harnessSha256": "3e445a5c982b266af123abf63c9a2ba9531d07b24876e0603086dd47d124c71c",
+  "binarySha256": "8f67f503abb34e89dc498b2a29a08a40853d8c43c38933dcd9e57e26d294e64e",
+  "compileExit": 0,
+  "testsPassed": 23,
+  "testsFailed": 0,
+  "testsIgnored": 0,
+  "testBodySeconds": 0.28,
+  "maximumResidentSetSizeBytes": 21643264,
+  "continuousAcknowledgedBatches": 32768,
+  "otherMissUnderlyingReads": 1,
+  "productionWriteSitesConnected": [
+    "commit_utxo_state reward/quality inserts",
+    "prune reward/quality deletes",
+    "import_pruning_point_overlay_snapshot singleton",
+    "capture_pruning_point_overlay_snapshot singleton"
+  ],
+  "productionWriteSitesRuntimePassed": false,
+  "native100kAccepted": false,
+  "realP2pAccepted": false,
+  "feeApproval": false
+}

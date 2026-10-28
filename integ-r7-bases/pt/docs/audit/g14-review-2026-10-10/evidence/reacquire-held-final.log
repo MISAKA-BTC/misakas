@@ -1,0 +1,381 @@
+    Blocking waiting for file lock on artifact directory
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/consensus/core)
+warning: variable does not need to be mutable
+   --> consensus/core/src/palw_tir_close_range_v1.rs:494:21
+    |
+494 |                 let mut put = |this: &mut Self, row: u32, lo: u64, hi: u64| -> Result<(), String> {
+    |                     ----^^^
+    |                     |
+    |                     help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+   Compiling kaspa-txscript v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/crypto/txscript)
+   Compiling kaspa-notify v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/notify)
+   Compiling kaspa-consensus-notify v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/consensus/notify)
+   Compiling kaspa-mining-errors v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/mining/errors)
+   Compiling kaspa-consensusmanager v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/components/consensusmanager)
+   Compiling kaspa-index-core v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/indexes/core)
+   Compiling kaspa-consensus-client v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/consensus/client)
+   Compiling kaspa-consensus-wasm v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/consensus/wasm)
+   Compiling kaspa-p2p-lib v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/protocol/p2p)
+   Compiling kaspa-evm v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/kaspa-evm)
+   Compiling kaspa-rpc-core v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/rpc/core)
+   Compiling kaspa-addressmanager v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/components/addressmanager)
+   Compiling kaspa-pow v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/consensus/pow)
+   Compiling kaspa-connectionmanager v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/components/connectionmanager)
+   Compiling kaspa-mining v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/mining)
+   Compiling kaspa-p2p-mining v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/protocol/mining)
+   Compiling kaspa-utxoindex v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/indexes/utxoindex)
+   Compiling kaspa-p2p-flows v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/protocol/flows)
+   Compiling kaspa-grpc-core v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/rpc/grpc/core)
+   Compiling kaspa-pq-validator-core v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/kaspa-pq-validator-core)
+   Compiling misaka-palw-tir-exec v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/misaka-palw-tir-exec)
+warning: function `lanes_le_v1` is never used
+   --> misaka-palw-tir-exec/src/node/run.rs:114:15
+    |
+114 | pub(crate) fn lanes_le_v1(data: Slice<'_>, from: usize, n: usize, out: &mut Vec<u8>) {
+    |               ^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `misaka-palw-tir-exec` (lib) generated 1 warning
+   Compiling misaka-palw-base0 v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/misaka-palw-base0)
+warning: unused variable: `ctx_hash`
+   --> misaka-palw-base0/src/backend.rs:323:13
+    |
+323 |         let ctx_hash = job.context_hash();
+    |             ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/backend.rs:1256:9
+     |
+1256 |     let ctx_hash = binding.job_context.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:2008:9
+     |
+2008 |     let ctx_hash = ctx.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:2186:9
+     |
+2186 |     let ctx_hash = ctx.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:2425:13
+     |
+2425 |         let ctx_hash = ctx.context_hash();
+     |             ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:2456:9
+     |
+2456 |     let ctx_hash = ctx.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:2905:13
+     |
+2905 |         let ctx_hash = ctx.context_hash();
+     |             ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:3107:9
+     |
+3107 |     let ctx_hash = ctx.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:3282:9
+     |
+3282 |     let ctx_hash = ctx.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:3558:9
+     |
+3558 |     let ctx_hash = ctx.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:4310:9
+     |
+4310 |     let ctx_hash = binding.job_context.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:4353:9
+     |
+4353 |     let ctx_hash = v4.binding.job_context.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:4473:17
+     |
+4473 |             let ctx_hash = binding.job_context.context_hash();
+     |                 ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:4561:9
+     |
+4561 |     let ctx_hash = v4.binding.job_context.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:4640:9
+     |
+4640 |     let ctx_hash = v4.binding.job_context.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+   --> misaka-palw-base0/src/legs.rs:199:13
+    |
+199 |         let ctx_hash = ctx.context_hash();
+    |             ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+   --> misaka-palw-base0/src/legs.rs:437:9
+    |
+437 |     let ctx_hash = ctx.context_hash();
+    |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/legs.rs:2056:9
+     |
+2056 |     let ctx_hash = ctx.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/produce.rs:1043:9
+     |
+1043 |     let ctx_hash = ctx.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/produce.rs:1351:9
+     |
+1351 |     let ctx_hash = binding.job_context.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/produce.rs:1734:9
+     |
+1734 |     let ctx_hash = ctx.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/qwen25_a16_backend.rs:2078:14
+     |
+2078 |         let (ctx_hash, profile_hash) = (ctx.context_hash(), profile.shape_profile_id());
+     |              ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/qwen25_a16_backend.rs:2215:14
+     |
+2215 |         let (ctx_hash, profile_hash) = (ctx.context_hash(), profile.shape_profile_id());
+     |              ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/qwen25_a16_backend.rs:4336:13
+     |
+4336 |         let ctx_hash = job.context_hash();
+     |             ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/qwen25_a16_backend.rs:4386:9
+     |
+4386 |     let ctx_hash = binding.job_context.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/qwen36_backend.rs:2885:13
+     |
+2885 |         let ctx_hash = job.context_hash();
+     |             ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/qwen36_backend.rs:2935:9
+     |
+2935 |     let ctx_hash = binding.job_context.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+   --> misaka-palw-base0/src/segment_opening.rs:618:9
+    |
+618 |     let ctx_hash = job.context_hash();
+    |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: `misaka-palw-base0` (lib) generated 28 warnings (run `cargo fix --lib -p misaka-palw-base0` to apply 28 suggestions)
+   Compiling kaspa-rpc-service v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/rpc/service)
+   Compiling misaka-palw-tir-lower v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/misaka-palw-tir-lower)
+warning: value assigned to `out_node` is never read
+   --> misaka-palw-tir-lower/src/lower/cross.rs:194:24
+    |
+194 |     let mut out_node = None;
+    |                        ^^^^
+    |
+    = help: maybe it is overwritten before being read?
+    = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+warning: `misaka-palw-tir-lower` (lib) generated 1 warning
+   Compiling kaspa-grpc-client v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/rpc/grpc/client)
+   Compiling misaka-palw-sdk v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/misaka-palw-sdk)
+warning: unused doc comment
+   --> misaka-palw-sdk/src/tir_layout.rs:147:1
+    |
+147 | / /// **The search declare-layout runs**, over the gate `admit`: the logits tiles in order (the caller
+148 | | /// has dropped any whose close is estimated past the carriage); for each, the history tile from
+149 | | /// `h_chunk`, halved while the refusal is one a narrower history tile fixes; at each, the court's
+150 | | /// checkpoint interval (`interval`), halved while the refusal is one a narrower interval fixes — for a
+...   |
+153 | | /// if none is, the first refusal (the widest logits tile and history tile, at the court's interval),
+154 | | /// the one an operator acts on.
+    | |_-------------------------------^
+    |   |
+    |   rustdoc does not generate documentation for macro invocations
+    |
+    = help: to document an item produced by a macro, the macro must produce the documentation as part of its expansion
+    = note: `#[warn(unused_doc_comments)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable `routed_ok` is assigned to, but never used
+   --> misaka-palw-sdk/src/preflight/model.rs:284:9
+    |
+284 |     let mut routed_ok = false;
+    |         ^^^^^^^^^^^^^
+    |
+    = note: consider using `_routed_ok` instead
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: value assigned to `routed_ok` is never read
+   --> misaka-palw-sdk/src/preflight/model.rs:345:13
+    |
+345 |             routed_ok = false;
+    |             ^^^^^^^^^^^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
+    = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+warning: value assigned to `routed_ok` is never read
+   --> misaka-palw-sdk/src/preflight/model.rs:293:13
+    |
+293 |             routed_ok = true;
+    |             ^^^^^^^^^^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
+
+warning: `misaka-palw-sdk` (lib) generated 4 warnings
+   Compiling kaspa-grpc-server v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/rpc/grpc/server)
+   Compiling kaspa-consensus v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/consensus)
+warning: `kaspa-consensus-core` (lib) generated 1 warning (run `cargo fix --lib -p kaspa-consensus-core` to apply 1 suggestion)
+   Compiling kaspa-wrpc-server v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/rpc/wrpc/server)
+   Compiling misaka-palw-tir-sketch v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/misaka-palw-tir-sketch)
+   Compiling kaspa-index-processor v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/indexes/processor)
+   Compiling misaka-palw-remote v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/misaka-palw-remote)
+warning: unused imports: `PalwClassAdmissionCarriageV2` and `PalwPwuRuleV2`
+  --> misaka-palw-remote/src/bundle.rs:43:103
+   |
+43 |     PALW_CLASS_REGISTRATION_BURN_SOMPI_V1, PALW_CLASS_REGISTRATION_V2_MLDSA87_CONTEXT, PalwBondKeyV2, PalwClassAdmissionCarriageV2,
+   |                                                                                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+44 |     PalwConsensusObjectV2, PalwPwuRuleV2, palw_class_registration_message_v2,
+   |                            ^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `misaka-palw-remote` (lib) generated 1 warning (run `cargo fix --lib -p misaka-palw-remote` to apply 1 suggestion)
+   Compiling misaka-palw v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/misaka-palw)
+   Compiling misaka-endpoints v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/misaka-endpoints)
+   Compiling kaspa-eth-rpc v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/rpc/eth)
+   Compiling kaspad v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/kaspad)
+warning: unnecessary parentheses around closure body
+     --> kaspad/src/palw_panel.rs:16186:77
+      |
+16186 |                     let Ok((returned, checked)) = offload(backend, move |b| (b.verify_prefix_state_v1(&job, &ids))).await else {
+      |                                                                             ^                                    ^
+      |
+      = note: `#[warn(unused_parens)]` (part of `#[warn(unused)]`) on by default
+help: remove these parentheses
+      |
+16186 -                     let Ok((returned, checked)) = offload(backend, move |b| (b.verify_prefix_state_v1(&job, &ids))).await else {
+16186 +                     let Ok((returned, checked)) = offload(backend, move |b| b.verify_prefix_state_v1(&job, &ids)).await else {
+      |
+
+warning: unused imports: `PALW_ATTEMPT_V2_VERSION` and `challenge_v2`
+  --> kaspad/src/palw_producer.rs:46:38
+   |
+46 |     PALW_ATTEMPT_V2_MLDSA87_CONTEXT, PALW_ATTEMPT_V2_VERSION, PALW_TICKET_NONCE_BUCKET_LOG2, PalwAttemptEnvelopeV2,
+   |                                      ^^^^^^^^^^^^^^^^^^^^^^^
+47 |     PalwAttemptUnsignedV2, attempt_id_v2, challenge_v2, class_ticket_v3,
+   |                                           ^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+error[E0599]: no method named `unit_was_answered_v1` found for reference `&kaspa_consensus_core::palw_state_v2::PalwLegacyDisputeViewV1` in the current scope
+    --> kaspad/src/palw_fraud_filer.rs:1199:106
+     |
+1199 | ...some_and(|v| v.unit_was_answered_v1(&probe.unit()))))
+     |                   ^^^^^^^^^^^^^^^^^^^^ method not found in `&kaspa_consensus_core::palw_state_v2::PalwLegacyDisputeViewV1`
+
+error[E0599]: no method named `unit_was_answered_v1` found for reference `&kaspa_consensus_core::palw_state_v2::PalwLegacyDisputeViewV1` in the current scope
+   --> kaspad/src/palw_fraud_filer.rs:375:18
+    |
+375 |         if !view.unit_was_answered_v1(&probe.unit()) {
+    |                  ^^^^^^^^^^^^^^^^^^^^ method not found in `&kaspa_consensus_core::palw_state_v2::PalwLegacyDisputeViewV1`
+
+error[E0599]: no method named `unit_was_answered_v1` found for reference `&kaspa_consensus_core::palw_state_v2::PalwLegacyDisputeViewV1` in the current scope
+   --> kaspad/src/palw_fraud_filer.rs:760:49
+    |
+760 |             match (view.is_some_and(|view| view.unit_was_answered_v1(&unit)), answer_read(&unit)) {
+    |                                                 ^^^^^^^^^^^^^^^^^^^^ method not found in `&kaspa_consensus_core::palw_state_v2::PalwLegacyDisputeViewV1`
+
+error[E0599]: no method named `unit_was_answered_v1` found for reference `&kaspa_consensus_core::palw_state_v2::PalwLegacyDisputeViewV1` in the current scope
+   --> kaspad/src/palw_fraud_filer.rs:786:49
+    |
+786 |             match (view.is_some_and(|view| view.unit_was_answered_v1(&unit)), answer_read(&unit)) {
+    |                                                 ^^^^^^^^^^^^^^^^^^^^ method not found in `&kaspa_consensus_core::palw_state_v2::PalwLegacyDisputeViewV1`
+
+error[E0560]: struct `kaspa_consensus_core::palw_state_v2::PalwLegacyDisputeViewV1` has no field named `flat_answered_rows`
+    --> kaspad/src/palw_fraud_filer.rs:1618:13
+     |
+1618 |             flat_answered_rows: 0,
+     |             ^^^^^^^^^^^^^^^^^^ `kaspa_consensus_core::palw_state_v2::PalwLegacyDisputeViewV1` does not have this field
+     |
+     = note: all struct fields are already assigned
+
+error[E0609]: no field `flat_answered_rows` on type `kaspa_consensus_core::palw_state_v2::PalwLegacyDisputeViewV1`
+    --> kaspad/src/palw_fraud_filer.rs:1911:11
+     |
+1911 |         v.flat_answered_rows = 1;
+     |           ^^^^^^^^^^^^^^^^^^ unknown field
+     |
+     = note: available fields are: `claim_id`, `class_id`, `producer`, `phase`, `execution_root` ... and 14 others
+
+error[E0599]: no method named `unit_was_answered_v1` found for struct `kaspa_consensus_core::palw_state_v2::PalwLegacyDisputeViewV1` in the current scope
+    --> kaspad/src/palw_fraud_filer.rs:1917:20
+     |
+1917 |         assert!(!v.unit_was_answered_v1(&PalwDaUnitV1::Event { row: 0, tile: 1 }), "Flat never covers another tile");
+     |                    ^^^^^^^^^^^^^^^^^^^^ method not found in `kaspa_consensus_core::palw_state_v2::PalwLegacyDisputeViewV1`
+
+error[E0599]: no method named `unit_was_answered_v1` found for struct `kaspa_consensus_core::palw_state_v2::PalwLegacyDisputeViewV1` in the current scope
+    --> kaspad/src/palw_fraud_filer.rs:1918:20
+     |
+1918 |         assert!(!v.unit_was_answered_v1(&PalwDaUnitV1::Event { row: 1, tile: 0 }), "Flat never covers a row past its bound");
+     |                    ^^^^^^^^^^^^^^^^^^^^ method not found in `kaspa_consensus_core::palw_state_v2::PalwLegacyDisputeViewV1`
+
+warning: unused variable: `network_domain`
+   --> kaspad/src/palw_panel/gen_court.rs:273:9
+    |
+273 |         network_domain: Hash64,
+    |         ^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_network_domain`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+Some errors have detailed explanations: E0560, E0599, E0609.
+For more information about an error, try `rustc --explain E0560`.
+warning: `kaspad` (lib test) generated 3 warnings
+error: could not compile `kaspad` (lib test) due to 8 previous errors; 3 warnings emitted

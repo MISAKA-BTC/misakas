@@ -1,0 +1,50 @@
+    Checking rand v0.8.6
+    Checking log4rs v1.4.0
+    Checking malachite-base v0.4.16
+    Checking num v0.4.3
+    Checking workflow-core v0.18.0
+    Checking tungstenite v0.23.0
+    Checking kaspa-core v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/core)
+    Checking workflow-wasm v0.18.0
+    Checking tokio-tungstenite v0.23.1
+    Checking workflow-task v0.18.0
+    Checking kaspa-perf-monitor v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/metrics/perf_monitor)
+    Checking kaspa-hashes v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/crypto/hashes)
+    Checking kaspa-addresses v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/crypto/addresses)
+    Checking kaspa-wasm-core v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/wasm/core)
+    Checking workflow-websocket v0.18.0
+    Checking misaka-palw-panel v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/misaka/palw/panel)
+    Checking kaspa-merkle v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/crypto/merkle)
+    Checking kaspa-muhash v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/crypto/muhash)
+    Checking kaspa-database v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/database)
+    Checking workflow-rpc v0.18.0
+    Checking workflow-dom v0.18.0
+    Checking workflow-http v0.18.0
+    Checking malachite-nz v0.4.16
+    Checking kaspa-math v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/math)
+    Checking kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/consensus/core)
+    Checking kaspa-txscript v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/crypto/txscript)
+    Checking kaspa-mining-errors v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/mining/errors)
+    Checking kaspa-addressmanager v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/components/addressmanager)
+    Checking kaspa-pow v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/consensus/pow)
+    Checking kaspa-p2p-lib v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/protocol/p2p)
+    Checking kaspa-connectionmanager v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/components/connectionmanager)
+    Checking kaspa-notify v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/notify)
+    Checking kaspa-consensus-client v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/consensus/client)
+    Checking kaspa-consensus-notify v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/consensus/notify)
+    Checking kaspa-index-core v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/indexes/core)
+    Checking kaspa-consensus-wasm v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/consensus/wasm)
+    Checking kaspa-consensusmanager v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/components/consensusmanager)
+    Checking kaspa-rpc-core v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/rpc/core)
+    Checking kaspa-mining v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/mining)
+    Checking kaspa-p2p-mining v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/protocol/mining)
+    Checking kaspa-utxoindex v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/indexes/utxoindex)
+    Checking kaspa-p2p-flows v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/protocol/flows)
+    Checking kaspa-grpc-core v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/rpc/grpc/core)
+    Checking kaspa-wrpc-client v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/rpc/wrpc/client)
+    Checking kaspa-rpc-service v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/rpc/service)
+    Checking kaspa-grpc-client v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/rpc/grpc/client)
+    Checking kaspa-grpc-server v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/rpc/grpc/server)
+    Checking kaspa-wrpc-server v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/rpc/wrpc/server)
+    Finished `dev` profile [unoptimized] target(s) in 1m 02s
+exit 0

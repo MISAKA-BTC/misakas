@@ -1,0 +1,294 @@
+use crate::mempool::attestation::AttestationMempoolPolicy;
+use kaspa_consensus_core::constants::TX_VERSION;
+
+pub(crate) const DEFAULT_MAXIMUM_TRANSACTION_COUNT: usize = 1_000_000;
+pub(crate) const DEFAULT_MEMPOOL_SIZE_LIMIT: usize = 1_000_000_000;
+pub(crate) const DEFAULT_MAXIMUM_BUILD_BLOCK_TEMPLATE_ATTEMPTS: u64 = 5;
+
+pub(crate) const DEFAULT_TRANSACTION_EXPIRE_INTERVAL_SECONDS: u64 = 24 * 60 * 60;
+pub(crate) const DEFAULT_TRANSACTION_EXPIRE_SCAN_INTERVAL_SECONDS: u64 = 60;
+pub(crate) const DEFAULT_ACCEPTED_TRANSACTION_EXPIRE_INTERVAL_SECONDS: u64 = 120;
+pub(crate) const DEFAULT_ACCEPTED_TRANSACTION_EXPIRE_SCAN_INTERVAL_SECONDS: u64 = 10;
+pub(crate) const DEFAULT_ORPHAN_EXPIRE_INTERVAL_SECONDS: u64 = 60;
+pub(crate) const DEFAULT_ORPHAN_EXPIRE_SCAN_INTERVAL_SECONDS: u64 = 10;
+
+pub(crate) const DEFAULT_MAXIMUM_ORPHAN_TRANSACTION_MASS: u64 = 100_000;
+pub(crate) const DEFAULT_MAXIMUM_ORPHAN_TRANSACTION_COUNT: u64 = 500;
+
+/// DEFAULT_MINIMUM_RELAY_TRANSACTION_FEE specifies the minimum transaction fee for a transaction to be accepted to
+/// the mempool and relayed. It is specified in sompi per 1kg (or 1000 grams) of transaction mass.
+///
+/// This is the upstream Kaspa base rate, used by `Config::build_default` (and the mempool unit-test
+/// fixtures calibrated to it). The PRODUCTION kaspa-pq node raises it ×10 to
+/// [`PQ_PRODUCTION_MINIMUM_RELAY_TRANSACTION_FEE`] via `MiningManager::new_with_extended_config`.
+pub(crate) const DEFAULT_MINIMUM_RELAY_TRANSACTION_FEE: u64 = 1000;
+
+/// kaspa-pq production relay fee rate: **10× the upstream Kaspa rate (1000 → 10_000)**. An ML-DSA-87
+/// P2PKH transaction's compute mass is ≈ 10× a secp256k1 transaction's (its ~7.3 KB spend input — a
+/// 4628-byte signature + a 2592-byte public key — plus `mass_per_sig_op = 10_000`), so this ×10
+/// relay rate makes the effective minimum fee of a kaspa-pq transaction ≈ **100× a Kaspa
+/// transaction's** — the intended reconciliation ("辻褄合わせ") for the ~72×-larger post-quantum
+/// signature, and the fee base that funds validator/worker rewards once the 20-year block subsidy
+/// reaches 0 (the §F fee split keeps routing fees worker 90% / validator 10%). Relay/mempool policy
+/// only — NOT consensus, so no genesis change. The production node applies it; the test path keeps
+/// the upstream base so the mempool unit fixtures stay calibrated. Calibratable.
+pub const PQ_PRODUCTION_MINIMUM_RELAY_TRANSACTION_FEE: u64 = 10_000;
+
+/// Standard transaction version range might be different from what consensus accepts, therefore
+/// we define separate values in mempool.
+/// However, currently there's exactly one transaction version, so mempool accepts the same version
+/// as consensus.
+pub(crate) const DEFAULT_MINIMUM_STANDARD_TRANSACTION_VERSION: u16 = TX_VERSION;
+pub(crate) const DEFAULT_MAXIMUM_STANDARD_TRANSACTION_VERSION: u16 = TX_VERSION;
+
+/// **ADR-0152 v3.1 H-1 (P2-9): does `params` oblige a heartbeat to carry H-1's lifecycle objects?**
+/// The one reading of the ruleset behind [`Config::palw_h1_carrier_priority`] — the daemon passes
+/// it, and a test pins it per network (P2-9 review, finding 6). R-core+ is armed at genesis only, so
+/// its presence is in force at every DAA score and no height needs threading into the pool.
+pub fn palw_h1_carrier_priority_for(params: &kaspa_consensus_core::config::params::Params) -> bool {
+    params.palw_rcore_plus_fence().is_some()
+}
+
+#[derive(Clone, Debug)]
+pub struct Config {
+    pub maximum_transaction_count: usize,
+    pub mempool_size_limit: usize,
+    pub maximum_build_block_template_attempts: u64,
+    pub transaction_expire_interval_daa_score: u64,
+    pub transaction_expire_scan_interval_daa_score: u64,
+    pub transaction_expire_scan_interval_milliseconds: u64,
+    pub accepted_transaction_expire_interval_daa_score: u64,
+    pub accepted_transaction_expire_scan_interval_daa_score: u64,
+    pub accepted_transaction_expire_scan_interval_milliseconds: u64,
+    pub orphan_expire_interval_daa_score: u64,
+    pub orphan_expire_scan_interval_daa_score: u64,
+    pub maximum_orphan_transaction_mass: u64,
+    pub maximum_orphan_transaction_count: u64,
+    pub accept_non_standard: bool,
+    pub maximum_mass_per_block: u64,
+    pub minimum_relay_transaction_fee: u64,
+    pub minimum_standard_transaction_version: u16,
+    pub maximum_standard_transaction_version: u16,
+    pub network_blocks_per_second: u64,
+    /// kaspa-pq PQ-only: when set, mempool standardness requires every output AND every spent
+    /// input UTXO to be the ML-DSA-87 P2PKH class (the only kaspa-pq standard class), matching
+    /// the PQ-only consensus rule instead of the upstream legacy-permissive relay policy. `true`
+    /// for production (this fork enforces PQ at genesis on every net); the legacy-fixture unit
+    /// tests opt out (`pq_only = false`) to keep exercising the upstream class behavior.
+    pub pq_only: bool,
+
+    /// **ADR-0087 Decision 6 (mainnet audit 2026-09-06, M-9): does this network declare the model
+    /// market at all?**
+    ///
+    /// The mempool's two sink carve-outs — the output-class rule and the dust rule in
+    /// `check_transaction_standard.rs` — read the raw script with no params gate, so on EVERY
+    /// network, including testnet-11 and a carded mainnet where `palw_model_market` is `None`, the
+    /// mempool relays a sink output that consensus refuses. "The mempool never relays a transaction
+    /// that consensus will reject" is this file's own standing rule and both carve-outs cite it;
+    /// neither obeyed it. `false` by default so the (non-market) unit fixtures and the
+    /// `MiningManager::new` test path keep the pre-ADR-0087 behaviour byte for byte; the daemon
+    /// sets it from `params.palw_model_market.is_some()`.
+    ///
+    /// The height-free question, deliberately, and for the same reason the isolation door asks it:
+    /// standardness is a relay policy, and a transaction that is merely EARLY is refused by
+    /// consensus at the accepting block's own DAA (`check_model_sink_outputs_in_context`).
+    pub model_sink_relay_allowed: bool,
+
+    /// **ADR-0152-adjacent (Activation Pool): whether this network declares the pool**, so its
+    /// activation sink (`OP_RETURN "MSKACT01" <class>`) is carved out of the output-class and dust
+    /// rules exactly as the model sink is. `false` by default; the daemon sets it from
+    /// `params.palw_activation_pool_fence().is_some()` (testnet-12 alone). Consensus refuses an
+    /// unbound one at isolation, so relaying the form is never relaying a burn.
+    pub activation_sink_relay_allowed: bool,
+
+    /// kaspa-pq DNS-finality: local mempool/mining policy for `StakeAttestationShard` txs (expiry,
+    /// dedup, recent-epoch template preference). Sourced from the chain's `DnsParams`; defaults to
+    /// disabled so behavior is byte-identical to upstream unless explicitly wired (see the daemon).
+    pub attestation_policy: AttestationMempoolPolicy,
+
+    /// **ADR-0152 v3.1 H-1 (P2-9): does this network oblige a heartbeat to carry the lifecycle
+    /// objects H-1 names?** Where it does, every template takes those carriers first
+    /// (`TransactionsPool::build_palw_carrier_lane`) — the heartbeat miner's templates included,
+    /// which is the point: during a licence halt heartbeats may be the only blocks, and a conviction
+    /// paying the minimum relay fee must not wait behind a block's worth of better-paying traffic —
+    /// and a full pool keeps a reserve for them (`palw_carriers::PalwCarrierReserveV1`).
+    ///
+    /// The daemon sets it from [`palw_h1_carrier_priority_for`].
+    /// `false` by default, so every other network — testnet-11, devnet, mainnet — and every unit
+    /// fixture selects exactly as it did before: no carrier is indexed and no lane is built.
+    pub palw_h1_carrier_priority: bool,
+    /// Original network queue promise, provisioned at startup before workers.
+    pub native_queue_policy_v30: Option<kaspa_consensus_core::palw_native_queue_v30::NativeQueuePolicyV30>,
+}
+
+impl Config {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        maximum_transaction_count: usize,
+        mempool_size_limit: usize,
+        maximum_build_block_template_attempts: u64,
+        transaction_expire_interval_daa_score: u64,
+        transaction_expire_scan_interval_daa_score: u64,
+        transaction_expire_scan_interval_milliseconds: u64,
+        accepted_transaction_expire_interval_daa_score: u64,
+        accepted_transaction_expire_scan_interval_daa_score: u64,
+        accepted_transaction_expire_scan_interval_milliseconds: u64,
+        orphan_expire_interval_daa_score: u64,
+        orphan_expire_scan_interval_daa_score: u64,
+        maximum_orphan_transaction_mass: u64,
+        maximum_orphan_transaction_count: u64,
+        accept_non_standard: bool,
+        maximum_mass_per_block: u64,
+        minimum_relay_transaction_fee: u64,
+        minimum_standard_transaction_version: u16,
+        maximum_standard_transaction_version: u16,
+        network_blocks_per_second: u64,
+    ) -> Self {
+        Self {
+            maximum_transaction_count,
+            mempool_size_limit,
+            maximum_build_block_template_attempts,
+            transaction_expire_interval_daa_score,
+            transaction_expire_scan_interval_daa_score,
+            transaction_expire_scan_interval_milliseconds,
+            accepted_transaction_expire_interval_daa_score,
+            accepted_transaction_expire_scan_interval_daa_score,
+            accepted_transaction_expire_scan_interval_milliseconds,
+            orphan_expire_interval_daa_score,
+            orphan_expire_scan_interval_daa_score,
+            maximum_orphan_transaction_mass,
+            maximum_orphan_transaction_count,
+            accept_non_standard,
+            maximum_mass_per_block,
+            minimum_relay_transaction_fee,
+            minimum_standard_transaction_version,
+            maximum_standard_transaction_version,
+            network_blocks_per_second,
+            // kaspa-pq PQ-only relay is OFF in the base config so the (non-ML-DSA) mempool unit
+            // tests and the `MiningManager::new` test path keep the upstream class behavior; the
+            // production node turns it on explicitly (see `MiningManager::new`'s `pq_only` arg /
+            // the daemon wiring).
+            pq_only: false,
+            // ADR-0087 Decision 6 (audit M-9): OFF unless the network declares the market, so a
+            // build with the market dormant relays exactly what it relayed before ADR-0087.
+            model_sink_relay_allowed: false,
+            // ADR-0152-adjacent (Activation Pool): OFF unless the network declares the pool.
+            activation_sink_relay_allowed: false,
+            // kaspa-pq DNS-finality: disabled by default (overlay off); the daemon overrides this
+            // with values derived from the chain's `DnsParams` when present.
+            attestation_policy: AttestationMempoolPolicy::disabled(),
+            // ADR-0152 H-1: off unless the network arms R-core+ (the daemon's wiring).
+            palw_h1_carrier_priority: false,
+            native_queue_policy_v30: None,
+        }
+    }
+
+    /// Build a default config.
+    /// The arguments should be obtained from the current consensus [`kaspa_consensus_core::config::params::Params`] instance.
+    pub fn build_default(target_milliseconds_per_block: u64, relay_non_std_transactions: bool, max_block_mass: u64) -> Self {
+        Self {
+            maximum_transaction_count: DEFAULT_MAXIMUM_TRANSACTION_COUNT,
+            mempool_size_limit: DEFAULT_MEMPOOL_SIZE_LIMIT,
+            maximum_build_block_template_attempts: DEFAULT_MAXIMUM_BUILD_BLOCK_TEMPLATE_ATTEMPTS,
+            transaction_expire_interval_daa_score: DEFAULT_TRANSACTION_EXPIRE_INTERVAL_SECONDS * 1000 / target_milliseconds_per_block,
+            transaction_expire_scan_interval_daa_score: DEFAULT_TRANSACTION_EXPIRE_SCAN_INTERVAL_SECONDS * 1000
+                / target_milliseconds_per_block,
+            transaction_expire_scan_interval_milliseconds: DEFAULT_TRANSACTION_EXPIRE_SCAN_INTERVAL_SECONDS * 1000,
+            accepted_transaction_expire_interval_daa_score: DEFAULT_ACCEPTED_TRANSACTION_EXPIRE_INTERVAL_SECONDS * 1000
+                / target_milliseconds_per_block,
+            accepted_transaction_expire_scan_interval_daa_score: DEFAULT_ACCEPTED_TRANSACTION_EXPIRE_SCAN_INTERVAL_SECONDS * 1000
+                / target_milliseconds_per_block,
+            accepted_transaction_expire_scan_interval_milliseconds: DEFAULT_ACCEPTED_TRANSACTION_EXPIRE_SCAN_INTERVAL_SECONDS * 1000,
+            orphan_expire_interval_daa_score: DEFAULT_ORPHAN_EXPIRE_INTERVAL_SECONDS * 1000 / target_milliseconds_per_block,
+            orphan_expire_scan_interval_daa_score: DEFAULT_ORPHAN_EXPIRE_SCAN_INTERVAL_SECONDS * 1000 / target_milliseconds_per_block,
+            maximum_orphan_transaction_mass: DEFAULT_MAXIMUM_ORPHAN_TRANSACTION_MASS,
+            maximum_orphan_transaction_count: DEFAULT_MAXIMUM_ORPHAN_TRANSACTION_COUNT,
+            accept_non_standard: relay_non_std_transactions,
+            maximum_mass_per_block: max_block_mass,
+            minimum_relay_transaction_fee: DEFAULT_MINIMUM_RELAY_TRANSACTION_FEE,
+            minimum_standard_transaction_version: DEFAULT_MINIMUM_STANDARD_TRANSACTION_VERSION,
+            maximum_standard_transaction_version: DEFAULT_MAXIMUM_STANDARD_TRANSACTION_VERSION,
+            // **Never zero, whatever the cadence.** `1000 / target_milliseconds_per_block` is
+            // integer division: at PALW's frozen 120 s it is `1000 / 120_000 = 0`, and every
+            // consumer divides by it. The feerate estimator then computes
+            // `avg_mass / (mass_per_block × 0) = +inf` and asserts, taking the whole node process
+            // with it — measured on testnet-12, twice, the second time on the very transaction
+            // that carries a receipt quorum.
+            //
+            // A sub-1-BPS network is not "zero blocks per second"; it is a fraction. `u64` cannot
+            // hold that, so the floor is 1 and the exact cadence rides
+            // `target_milliseconds_per_block` beside it — which every rate calculation that needs
+            // sub-1 precision should read instead. Rounding the RATE up understates the interval
+            // between transactions, which is the safe direction: it never inflates a fee estimate.
+            network_blocks_per_second: (1000 / target_milliseconds_per_block).max(1),
+            // kaspa-pq PQ-only relay is OFF in the base config so the (non-ML-DSA) mempool unit
+            // tests and the `MiningManager::new` test path keep the upstream class behavior; the
+            // production node turns it on explicitly (see `MiningManager::new`'s `pq_only` arg /
+            // the daemon wiring).
+            pq_only: false,
+            // ADR-0087 Decision 6 (audit M-9): OFF unless the network declares the market, so a
+            // build with the market dormant relays exactly what it relayed before ADR-0087.
+            model_sink_relay_allowed: false,
+            // ADR-0152-adjacent (Activation Pool): OFF unless the network declares the pool.
+            activation_sink_relay_allowed: false,
+            // kaspa-pq DNS-finality: disabled by default (overlay off); the daemon overrides this
+            // with values derived from the chain's `DnsParams` when present.
+            attestation_policy: AttestationMempoolPolicy::disabled(),
+            // ADR-0152 H-1: off unless the network arms R-core+ (the daemon's wiring).
+            palw_h1_carrier_priority: false,
+            native_queue_policy_v30: None,
+        }
+    }
+
+    pub fn apply_ram_scale(mut self, ram_scale: f64) -> Self {
+        // Allow only scaling down
+        let (packets, bytes) =
+            self.native_queue_policy_v30.as_ref().map_or((0, 0), |p| (p.max_packets as usize, p.max_owned_bytes as usize));
+        self.maximum_transaction_count =
+            packets + (self.maximum_transaction_count.saturating_sub(packets) as f64 * ram_scale.min(1.0)) as usize;
+        self.mempool_size_limit = bytes + (self.mempool_size_limit.saturating_sub(bytes) as f64 * ram_scale.min(1.0)) as usize;
+        self
+    }
+
+    /// Returns the minimum standard fee/mass ratio currently required by the mempool
+    pub(crate) fn minimum_feerate(&self) -> f64 {
+        // The parameter minimum_relay_transaction_fee is in sompi/kg units so divide by 1000 to get sompi/gram
+        self.minimum_relay_transaction_fee as f64 / 1000.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn local_ram_scaling_preserves_original_native_queue_promise() {
+        let mut cfg = Config::build_default(120_000, false, 500_000);
+        let policy = kaspa_consensus_core::palw_native_queue_v30::NativeQueuePolicyV30::probe([9; 64]);
+        cfg.mempool_size_limit += policy.max_owned_bytes as usize;
+        cfg.maximum_transaction_count += policy.max_packets as usize;
+        cfg.native_queue_policy_v30 = Some(policy.clone());
+        let scaled = cfg.apply_ram_scale(0.01);
+        assert!(policy.consumer_capacity(scaled.maximum_transaction_count, scaled.mempool_size_limit));
+        assert_eq!(scaled.native_queue_policy_v30.as_ref().unwrap().root(), policy.root());
+        assert!(scaled.mempool_size_limit > policy.max_owned_bytes as usize);
+    }
+
+    /// **A 120-second network must not report zero blocks per second** (testnet-12, 2026-08-22).
+    ///
+    /// `1000 / target_milliseconds_per_block` is integer division, and PALW's frozen cadence is
+    /// 120,000 ms — so this was 0, and the feerate estimator's `avg_mass / (mass_per_block × bps)`
+    /// became `+inf`. The node asserted and the whole process exited, on the transaction carrying a
+    /// receipt quorum: the first transaction a PALW network ever really needs. The estimator's own
+    /// `< 1.0` bound had already been widened for the same launch; that fixed the value being too
+    /// large, and this fixes it being infinite — two faces of "bps >= 1 was assumed everywhere".
+    #[test]
+    fn the_block_rate_is_never_zero_however_slow_the_network() {
+        for ms in [120_000u64, 60_000, 10_000, 1_000, 100] {
+            let cfg = Config::build_default(ms, false, 500_000);
+            assert!(cfg.network_blocks_per_second >= 1, "{ms} ms/block reported {} bps", cfg.network_blocks_per_second);
+            // And the quantity the estimator divides by is finite and positive.
+            let interval = 1_000f64 / (cfg.maximum_mass_per_block as f64 * cfg.network_blocks_per_second as f64);
+            assert!(interval.is_finite() && interval > 0.0, "{ms} ms/block yields interval {interval}");
+        }
+    }
+}

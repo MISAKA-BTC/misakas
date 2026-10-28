@@ -1,0 +1,14 @@
+{
+  "schema": "misaka.rfc02.decoder-linear-weights16-frozen-artifact.v1",
+  "artifact_bytes": 1018492928,
+  "artifact_sha256": "1c3ca91bed1b71f2e98ca01ffd8ea72be2fcf3ce57537c37d5c5d9de2565bc9c",
+  "artifact_digest64": "df6f61c93800c164dd0a39788d169a58d0fd08ff1b30f45ae6faacdb0a4ef3789aa8d09d573797fd71f82f0d3b3e1bea222dc227c7aaddd60dbb8c877a4c39b2",
+  "tensor_bytes": 1018442464,
+  "original_task_protocol_sha256": "4336f7660c1bff144711983084aba8b64b91314c495df876fccf0bed432cc191",
+  "rerun_task_protocol_sha256": "cbc90725023c5678d3b4c23e24e404fa0cb57fdf3ac9d231892d68eab020fa69",
+  "rerun_plan_sha256": "cd3b9455bb72dfb4a9b81ef2c93b1eafb7f44517d248e9d8ed9cd28b0b5e1c82",
+  "construction_observation_sha256": "8cbfb99de0057b8e8ecc34b13d5a1e1872471ed0c4d2ee8f6b2af41ed4fcfa1f",
+  "task_pins_and_thresholds_unchanged_except_new_artifact_identity": true,
+  "old_artifact_frozen_failure_retained": true,
+  "fullcontext_source_fidelity_nativeFinal_or_A6_A8_established": false
+}

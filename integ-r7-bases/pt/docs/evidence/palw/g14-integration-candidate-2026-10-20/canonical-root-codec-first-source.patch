@@ -1,0 +1,484 @@
+diff --git a/consensus/core/src/palw_court_service_state_v2.rs b/consensus/core/src/palw_court_service_state_v2.rs
+index b403e1ce5..3a46e3702 100644
+--- a/consensus/core/src/palw_court_service_state_v2.rs
++++ b/consensus/core/src/palw_court_service_state_v2.rs
+@@ -254,7 +254,7 @@ impl crate::palw_state_v2::PalwChainStateV2 {
+             Key::TirClaim(claim) | Key::TirAcquisition(claim, ..) | Key::TirPreparation(claim, ..) | Key::TirWitness(claim, ..) => {
+                 Some(*claim)
+             }
+-            Key::CourtSharedContext(claim) | Key::CourtSharedIds(claim) => Some(*claim),
++            Key::CourtSharedContext(claim) | Key::CourtSharedIds(claim) | Key::CourtSharedRoot(claim,_) => Some(*claim),
+             Key::CourtSharedStream(_) | Key::CourtSharedChunk(..) => match self.staged_court_row_v1(key) {
+                 Some(Row::CourtSharedStream(s))=>Some(s.claim),Some(Row::CourtSharedChunk(c))=>Some(c.claim),_=>None,
+             },
+diff --git a/consensus/core/src/palw_court_shared_tir_fold_v1.rs b/consensus/core/src/palw_court_shared_tir_fold_v1.rs
+index 66d0d1f51..e14377975 100644
+--- a/consensus/core/src/palw_court_shared_tir_fold_v1.rs
++++ b/consensus/core/src/palw_court_shared_tir_fold_v1.rs
+@@ -207,3 +207,51 @@ pub(super) fn data_response(b:&mut TransitionBuilder<'_>,ctx:&PalwBlockContextV2
+     })();
+     if result.is_err() {b.restore(saved);}result
+ }
++
++/// Private canonical numerical root installer. Still no public dispatcher,
++/// notice certificate, original all-branch funded admission or default right.
++pub(super) fn root(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2,
++    control: &crate::palw_court_shared_tir_root_v1::SignedSharedTirRootV1) -> Result<bool, PalwStateV2Error> {
++    use crate::palw_court_shared_tir_root_v1::{check_shared_tir_root_v1, SharedTirRootRowV1};
++    use crate::palw_native_resource_v1::NativeHeapV1;
++    let saved = b.try_checkpoint()?;
++    let result = (|| {
++        let rules = b.extras.native_court_rules_v1.ok_or_else(|| refused("shared root lacks native accepting rules"))?;
++        if rules.at != *ctx || b.extras.tir_public_network_domain_v1 != Some(rules.network_domain) {
++            return Err(refused("shared root accepting point/network mismatch"));
++        }
++        // Covers the retained control and simultaneous native root-verifier
++        // clone, including its temporary binding clone and registered program.
++        // Source analysis/CPU/IO/full-profile work remains separately unclosed.
++        let bond = b.state.bond(&control.signer).ok_or_else(|| refused("shared root producer missing"))?;
++        let claim = b.state.claim(&control.claim).ok_or_else(|| refused("shared root claim missing"))?;
++        let record = b.state.tir_class_v1(&claim.class_id).ok_or_else(|| refused("shared root registered program missing"))?;
++        let bytes = control.native_heap_v1("canonical shared root copies").bytes()
++            .and_then(|n| n.checked_mul(2))
++            .and_then(|n| n.checked_add(control.root.finalize.binding.native_heap_v1("root temporary binding").bytes()?))
++            .and_then(|n| n.checked_add(record.program.len() as u64))
++            .and_then(|n| n.checked_add(std::mem::size_of::<SharedTirRootRowV1>() as u64))
++            .and_then(|n| n.checked_add(bond.pubkey.len() as u64))
++            .ok_or_else(|| refused("shared root clone inventory missing/overflow"))?;
++        let _lease = crate::palw_native_resource_v1::reserve_native_requests_v1(bytes)
++            .map_err(PalwStateV2Error::NativeResource)?;
++        check_shared_tir_root_v1(&b.state, b.params, &rules, control).map_err(refused)?;
++        let key = Key::CourtSharedRoot(control.claim, control.leaf);
++        if let Some(old) = b.state.staged_court_row_v1(&key) {
++            let Row::CourtSharedRoot(old) = old else { return Err(refused("shared root slot contains foreign row")); };
++            old.check(&key).and_then(|()| old.check_context(&b.state)).map_err(refused)?;
++            if ctx.daa_score < old.rules.at.daa_score || !old.same_numerical_root(control) {
++                return Err(refused("canonical shared root cannot be replaced or forked"));
++            }
++            return Ok(false);
++        }
++        let c = shared::context(&b.state, control.claim).map_err(refused)?;
++        let bond = b.state.bond(&control.signer).ok_or_else(|| refused("shared root producer missing"))?;
++        let row = SharedTirRootRowV1 { version: 1, control: control.clone(), rules,
++            signer_pubkey: bond.pubkey.clone(), material_until_daa: c.material_until_daa };
++        b.write_staged_row_v1(key, Some(Row::CourtSharedRoot(Box::new(row).into())))?;
++        Ok(true)
++    })();
++    if result.is_err() { b.restore(saved); }
++    result
++}
+diff --git a/consensus/core/src/palw_court_shared_tir_root_v1.rs b/consensus/core/src/palw_court_shared_tir_root_v1.rs
+index b6bc3aead..df3eabd1a 100644
+--- a/consensus/core/src/palw_court_shared_tir_root_v1.rs
++++ b/consensus/core/src/palw_court_shared_tir_root_v1.rs
+@@ -5,7 +5,8 @@ use crate::{Hash64, palw_state_v2::{PalwBondKeyV2, PalwChainStateV2, PalwStatePa
+ use crate::palw_court_close_receipt_v1::NativeCourtRulesV1;
+ use crate::palw_tir_dissect_v1::{PalwTirRootClaimV1, PalwTirDissectSiteV1};
+ use crate::palw_court_shared_tir_stream_v1::stream_digest;
+-use borsh::BorshSerialize;
++use borsh::{BorshSerialize, BorshDeserialize};
++use crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1 as Key;
+ 
+ pub const SHARED_TIR_ROOT_CONTEXT_V1: &[u8] = b"misaka-palw/court-shared-tir-root/v1/mldsa87";
+ 
+@@ -63,6 +64,17 @@ impl<'a> CheckedSharedTirRootV1<'a> {
+ /// follows; canonical root uniqueness and full funded ingress remain separate.
+ pub fn check_shared_tir_root_v1<'a>(state: &PalwChainStateV2, params: &PalwStateParamsV2,
+     rules: &NativeCourtRulesV1, control: &'a SignedSharedTirRootV1) -> Result<CheckedSharedTirRootV1<'a>, String> {
++    let bond = state.bond(&control.signer).ok_or("shared TIR root producer bond missing")?;
++    if !matches!(bond.status, PalwBondStatusV2::Active) || bond.collateral < params.min_collateral_sompi() {
++        return Err("shared TIR root producer not active/above existing floor".into());
++    }
++    check_shared_tir_root_statement_v1(state, rules, control, &bond.pubkey)
++}
++
++/// Historical verification uses the key authenticated at acceptance. Later exit
++/// or key change must not invalidate retained public numerical material.
++fn check_shared_tir_root_statement_v1<'a>(state: &PalwChainStateV2, rules: &NativeCourtRulesV1,
++    control: &'a SignedSharedTirRootV1, pubkey: &[u8]) -> Result<CheckedSharedTirRootV1<'a>, String> {
+     if control.signature.len() != crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN {
+         return Err("shared TIR root signature shape".into());
+     }
+@@ -82,11 +94,7 @@ pub fn check_shared_tir_root_v1<'a>(state: &PalwChainStateV2, params: &PalwState
+             != *source.header_v1() {
+         return Err("shared TIR root substitutes literal producer or original header".into());
+     }
+-    let bond = state.bond(&control.signer).ok_or("shared TIR root producer bond missing")?;
+-    if !matches!(bond.status, PalwBondStatusV2::Active) || bond.collateral < params.min_collateral_sompi() {
+-        return Err("shared TIR root producer not active/above existing floor".into());
+-    }
+-    if !crate::palw_constraint_stream_carriage_v1::palw_staged_verify_mldsa87_v1(&bond.pubkey,
++    if !crate::palw_constraint_stream_carriage_v1::palw_staged_verify_mldsa87_v1(pubkey,
+         control.signing_message(rules.network_domain)?.as_byte_slice(), &control.signature, SHARED_TIR_ROOT_CONTEXT_V1) {
+         return Err("shared TIR root producer signature invalid".into());
+     }
+@@ -97,3 +105,88 @@ pub fn check_shared_tir_root_v1<'a>(state: &PalwChainStateV2, params: &PalwState
+         .map_err(|e| e.to_string())?;
+     Ok(CheckedSharedTirRootV1 { control, site })
+ }
++
++/// Private native snapshot material, not a public lifecycle DTO. Native carriage
++/// preflight scans the complete nested shape before this row is deserialized.
++/// Retains the first signed root and accepting rules; duplicate legal finalize
++/// spellings with the same numerical root do not allocate another root.
++#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize)]
++pub struct SharedTirRootRowV1 {
++    pub version: u16,
++    pub control: SignedSharedTirRootV1,
++    pub rules: NativeCourtRulesV1,
++    pub signer_pubkey: Vec<u8>,
++    pub material_until_daa: u64,
++}
++impl BorshDeserialize for SharedTirRootRowV1 {
++    fn deserialize_reader<R: std::io::Read>(r: &mut R) -> std::io::Result<Self> {
++        let version = u16::deserialize_reader(r)?;
++        if version != 1 { return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "shared root row version")); }
++        // This is a native snapshot row only. Its enclosing native reader has
++        // already scanned root vectors/boxes and reserved their actual shape.
++        let control = SignedSharedTirRootV1 {
++            version: u16::deserialize_reader(r)?, claim: Hash64::deserialize_reader(r)?,
++            scope_id: Hash64::deserialize_reader(r)?, policy_id: Hash64::deserialize_reader(r)?,
++            leaf: u64::deserialize_reader(r)?, arity: u8::deserialize_reader(r)?,
++            signer: PalwBondKeyV2::deserialize_reader(r)?, root: Box::deserialize_reader(r)?,
++            signature: crate::palw_public_binding_v1::read_signature_v1(r)?,
++        };
++        let rules = NativeCourtRulesV1::deserialize_reader(r)?;
++        let signer_pubkey = crate::palw_public_binding_v1::read_bounded_bytes_v1(r, crate::mldsa87_primitives::MLDSA87_PUBKEY_LEN)?;
++        if signer_pubkey.len() != crate::mldsa87_primitives::MLDSA87_PUBKEY_LEN {
++            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "shared root row public key length"));
++        }
++        let material_until_daa = u64::deserialize_reader(r)?;
++        Ok(Self { version, control, rules, signer_pubkey, material_until_daa })
++    }
++}
++impl SharedTirRootRowV1 {
++    pub fn check(&self, key: &Key) -> Result<(), String> {
++        if self.version != 1 || self.control.version != 1 || *key != Key::CourtSharedRoot(self.control.claim, self.control.leaf)
++            || self.control.policy_id != shared_tir_root_policy_id_v1(&self.rules)?
++            || self.control.arity != self.rules.court.dissection_arity()
++            || self.signer_pubkey.len() != crate::mldsa87_primitives::MLDSA87_PUBKEY_LEN
++            || self.control.signature.len() != crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN {
++            return Err("invalid canonical shared root key/version/policy/signature shape".into());
++        }
++        Ok(())
++    }
++    fn checked_statement(&self, state: &PalwChainStateV2) -> Result<CheckedSharedTirRootV1<'_>, String> {
++        self.check(&Key::CourtSharedRoot(self.control.claim, self.control.leaf))?;
++        let c = crate::palw_court_shared_tir_state_v1::context(state, self.control.claim)?;
++        if self.material_until_daa != c.material_until_daa { return Err("shared root changes original material horizon".into()); }
++        check_shared_tir_root_statement_v1(state, &self.rules, &self.control, &self.signer_pubkey)
++    }
++    pub fn check_context(&self, state: &PalwChainStateV2) -> Result<(), String> {
++        self.checked_statement(state).map(|_| ())
++    }
++    /// Arithmetic view only; never install its projected phases or interpret
++    /// historic phase clocks as an accepted shared response/default deadline.
++    pub fn numerical_frontier(&self, state: &PalwChainStateV2)
++        -> Result<crate::palw_tir_dissect_v1::PalwTirNumericalFrontierV1, String>
++    {
++        let checked = self.checked_statement(state)?;
++        let id = stream_digest(b"misaka-palw/shared-tir-numerical-slot/v1",
++            &(self.control.claim, self.control.scope_id, self.control.leaf))?;
++        let phase = crate::palw_tir_dissect_v1::PalwTirDissectPhaseV1::open(id, self.control.leaf,
++            checked.site(), &self.control.root, self.control.arity, self.rules.at.daa_score,
++            self.rules.court.turn_deadline_daa()).map_err(|e| e.to_string())?;
++        crate::palw_tir_dissect_v1::PalwTirNumericalFrontierV1::new(phase)
++    }
++    pub fn check_loaded_context(&self, state: &PalwChainStateV2) -> Result<(), String> {
++        self.check_context(state)?;
++        if state.last_point().is_none_or(|p| p.daa_score < self.rules.at.daa_score) {
++            return Err("shared root lies beyond accepted snapshot".into());
++        }
++        Ok(())
++    }
++    /// A second already-validated carriage may have other legitimate finalize
++    /// openings/signature bytes. Only the fixed numerical statement coalesces;
++    /// a changed policy/arity/root cannot replace or create a parallel slot.
++    pub fn same_numerical_root(&self, other: &SignedSharedTirRootV1) -> bool {
++        let a = &self.control;
++        (a.version,a.claim,a.scope_id,a.policy_id,a.leaf,a.arity,a.signer)
++            == (other.version,other.claim,other.scope_id,other.policy_id,other.leaf,other.arity,other.signer)
++            && a.root.version == other.root.version && a.root.elements == other.root.elements && a.root.totals == other.root.totals
++    }
++}
+diff --git a/consensus/core/src/palw_native_resource_v1/generated.rs b/consensus/core/src/palw_native_resource_v1/generated.rs
+index 73b0cccbf..f767d93e9 100644
+--- a/consensus/core/src/palw_native_resource_v1/generated.rs
++++ b/consensus/core/src/palw_native_resource_v1/generated.rs
+@@ -487,8 +487,8 @@ native_struct!(crate::palw_model_registry_v1::PalwSeatReadinessRowV1; proved_daa
+ native_struct!(crate::palw_legacy_public_filer_v1::PalwDisputeClaimV1; opened_daa, hard_deadline_daa, live, closed, dismissed_held, reacquiring, courts, court_reserve_used);
+ native_struct!(crate::palw_class_semantics_v1::PalwClassSemanticsV1; version, class_id, artifact_root, bound_from_daa, model_profile_id, runtime_manifest_hash, runtime_class_id, tokenizer_id, cu_ruleset_id, token_table_root, rendering_rule, raw_tokenizer_bytes, tokenizer_key_events, prefix_state_relation);
+ native_struct!(crate::palw_legacy_answer_chunks_v2::PalwPendingLegacyAnswerV2; declaration, deadline_daa, parts);
+-native_enum!(crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1; Claim(f0), Owner(f0, f1), InventoryOpen(f0, f1), Inventory(f0), TirLayout(f0), TirAcquisition(f0, f1, f2), TirRawChunk(f0), TirAcceptedBody(f0), TirPreparation(f0, f1), TirClaim(f0), TirWitness(f0, f1), TirContainer(f0), CourtService, CourtDutyClock(f0), CourtSharedContext(f0), CourtSharedQuery(f0), CourtSharedIds(f0), CourtSharedStream(f0), CourtSharedChunk(f0, f1), CourtSharedResponse(f0, f1), CourtEndArchive(f0), CourtCloseReceipt(f0, f1));
+-native_enum!(crate::palw_staged_court_state_v1::PalwStagedCourtRowV1; Claim(f0), Constraint(f0), Tokenizer(f0), Prefix(f0), PublicPrefix(f0), ClaimBundle(f0), OwnerBundle(f0), ArtifactInventoryOpen(f0), ArtifactInventory(f0), TirPrefix(f0), TirLayout(f0), TirAcquisition(f0), TirRawChunk(f0), TirAcceptedBody(f0), TirPreparation(f0), TirClaim(f0), TirWitness(f0), TirContainer(f0), CourtService(f0), CourtDutyClock(f0), CourtSharedContext(f0), CourtSharedQuery(f0), CourtSharedIds(f0), CourtSharedStream(f0), CourtSharedChunk(f0), CourtSharedResponse(f0), CourtEndArchive(f0), CourtCloseReceipt(f0));
++native_enum!(crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1; Claim(f0), Owner(f0, f1), InventoryOpen(f0, f1), Inventory(f0), TirLayout(f0), TirAcquisition(f0, f1, f2), TirRawChunk(f0), TirAcceptedBody(f0), TirPreparation(f0, f1), TirClaim(f0), TirWitness(f0, f1), TirContainer(f0), CourtService, CourtDutyClock(f0), CourtSharedContext(f0), CourtSharedQuery(f0), CourtSharedIds(f0), CourtSharedStream(f0), CourtSharedChunk(f0, f1), CourtSharedResponse(f0, f1), CourtEndArchive(f0), CourtCloseReceipt(f0, f1), CourtSharedRoot(f0, f1));
++native_enum!(crate::palw_staged_court_state_v1::PalwStagedCourtRowV1; Claim(f0), Constraint(f0), Tokenizer(f0), Prefix(f0), PublicPrefix(f0), ClaimBundle(f0), OwnerBundle(f0), ArtifactInventoryOpen(f0), ArtifactInventory(f0), TirPrefix(f0), TirLayout(f0), TirAcquisition(f0), TirRawChunk(f0), TirAcceptedBody(f0), TirPreparation(f0), TirClaim(f0), TirWitness(f0), TirContainer(f0), CourtService(f0), CourtDutyClock(f0), CourtSharedContext(f0), CourtSharedQuery(f0), CourtSharedIds(f0), CourtSharedStream(f0), CourtSharedChunk(f0), CourtSharedResponse(f0), CourtEndArchive(f0), CourtCloseReceipt(f0), CourtSharedRoot(f0));
+ native_struct!(crate::palw_terminal_carriage_v1::PalwPendingTerminalV1; declaration, deadline_daa, parts);
+ native_struct!(crate::palw_state_v2::PalwPanelDutyRowV1; seats, seat_exposure);
+ native_struct!(crate::palw_execution_lane_v1::PalwExecFinalV1; domain, bond, operator_id, claim_id, execution_root, credit, accepted_blue_score);
+@@ -1234,3 +1234,6 @@ native_struct!(crate::palw_court_end_archive_v1::PendingCourtArchiveV1; version,
+ 
+ native_struct!(crate::palw_court_close_receipt_v1::NativeCourtRulesV1; network_domain, at, court, step_ladder, prompt_ids_merkle, held_regime, decode_close_convicts_only, fp_decode_from_daa, cell_closure_from_daa, memory_routing_from_daa, tir_active, gen_active, task_heads_active, improvement_active, constraint_active);
+ native_struct!(crate::palw_court_close_receipt_v1::CourtCloseReceiptV1; version, service_profile_id, allocation_id, source_id, material_until_daa, point, session, tir_phase, declarer, declarer_pubkey, declaration, rules);
++
++native_struct!(crate::palw_court_shared_tir_root_v1::SignedSharedTirRootV1; version, claim, scope_id, policy_id, leaf, arity, signer, root, signature);
++native_struct!(crate::palw_court_shared_tir_root_v1::SharedTirRootRowV1; version, control, rules, signer_pubkey, material_until_daa);
+diff --git a/consensus/core/src/palw_native_resource_v1/wire_generated.rs b/consensus/core/src/palw_native_resource_v1/wire_generated.rs
+index 9a9e890da..9ae0ce7eb 100644
+--- a/consensus/core/src/palw_native_resource_v1/wire_generated.rs
++++ b/consensus/core/src/palw_native_resource_v1/wire_generated.rs
+@@ -754,8 +754,8 @@ wire_struct!(crate::palw_staged_bundle_v1::PalwTokenizerInventoryPlanV1; u64, cr
+ wire_struct!(crate::palw_staged_bundle_v1::PalwTokenizerInventoryV1; u64, crate::Hash64, u64, u64, u64, bool, u64, crate::palw_rendering_stream_v1::LeafHashContinuationV1);
+ impl NativeWireScanV1 for crate::palw_staged_court_state_v1::PalwStagedCheckpointV1 {fn scan_native_wire_v1<R:std::io::Read>(reader:&mut NativeWireReaderV1<R>)->std::io::Result<NativeWireShapeV1> {reader.step()?;match reader.byte()? {0 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_constraint_stream_owned_v1::PalwOwnedConstraintCheckpointV1 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},1 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<Box<crate::palw_tokenizer_owned_court_v1::PalwOwnedTokenizerCheckpointV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},2 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<Box<crate::palw_prefix_owned_court_v1::PalwOwnedPrefixCheckpointV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},3 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<Box<crate::palw_prefix_public_owned_v1::PalwOwnedPublicPrefixCheckpointV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},4 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<Box<crate::palw_staged_bundle_v1::PalwStagedBundleCheckpointV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},5 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<Box<crate::palw_tir_prefix_owned_v1::PalwOwnedTirPrefixCheckpointV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},_=>Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant"))}}}
+ wire_struct!(crate::palw_staged_court_state_v1::PalwStagedClaimContractV1; crate::palw_rendering_resources_v1::PalwRenderingClaimTermsV1, crate::palw_state_v2::PalwBondKeyV2, std::collections::BTreeSet<crate::palw_state_v2::PalwBondKeyV2>, Option<crate::palw_prefix_custody_v1::PalwPrefixCustodyContractV1>);
+-impl NativeWireScanV1 for crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1 {fn scan_native_wire_v1<R:std::io::Read>(reader:&mut NativeWireReaderV1<R>)->std::io::Result<NativeWireShapeV1> {reader.step()?;match reader.byte()? {0 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},1 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;sum=sum.merge(<crate::palw_state_v2::PalwBondKeyV2 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},2 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;sum=sum.merge(<crate::palw_state_v2::PalwBondKeyV2 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},3 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},4 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},5 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;sum=sum.merge(<crate::palw_state_v2::PalwBondKeyV2 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},6 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},7 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},8 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},9 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},10 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;sum=sum.merge(<crate::palw_state_v2::PalwBondKeyV2 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},11 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},12 => {let mut sum=NativeWireShapeV1::default();Ok(sum)},13 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},14 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},15 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},16 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},17 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},18 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;sum=sum.merge(<u64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},19 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;sum=sum.merge(<crate::palw_state_v2::PalwBondKeyV2 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},20 => <crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader),21 => {let mut sum=<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?;sum=sum.merge(<crate::palw_state_v2::PalwCourtSideV1 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},_=>Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant"))}}}
+-impl NativeWireScanV1 for crate::palw_staged_court_state_v1::PalwStagedCourtRowV1 {fn scan_native_wire_v1<R:std::io::Read>(reader:&mut NativeWireReaderV1<R>)->std::io::Result<NativeWireShapeV1> {reader.step()?;match reader.byte()? {0 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_staged_court_state_v1::PalwStagedClaimContractV1 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},1 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_constraint_stream_owned_v1::PalwOwnedConstraintStreamV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},2 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_tokenizer_owned_court_v1::PalwOwnedTokenizerCourtV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},3 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_prefix_owned_court_v1::PalwOwnedPrefixCourtV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},4 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_prefix_public_owned_v1::PalwOwnedPublicPrefixCourtV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},5 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<Box<crate::palw_staged_bundle_v1::PalwStagedBundleContractV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},6 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_staged_bundle_v1::PalwOwnedStagedBundleV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},7 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},8 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryCertificateV1 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},9 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_tir_prefix_owned_v1::PalwOwnedTirPrefixCourtV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},10 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<Box<crate::palw_tir_class_v1::PalwTirLayoutV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},11 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_tir_public_state_v1::PalwTirPublicAcquisitionRowV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},12 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_tir_public_state_v1::PalwTirPublicChunkRowV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},13 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_tir_public_state_v1::PalwTirPublicAcceptedRowV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},14 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_tir_public_state_v1::PalwTirPublicPreparationRowV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},15 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_tir_public_claim_v1::PalwTirPublicClaimV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},16 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_tir_public_carriage_v1::PalwTirPublicWitnessRowV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},17 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<Box<crate::palw_tir_container_v1::PalwTirContainerRowV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},18 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_court_service_state_v2::CourtServiceStateV2> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},19 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<Box<crate::palw_court_duty_clock_v1::CourtDutyClockV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},20 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<Box<crate::palw_court_shared_tir_state_v1::SharedTirContextV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},21 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<Box<crate::palw_court_shared_tir_state_v1::SharedTirQueryV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},22 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<Box<crate::palw_court_shared_tir_state_v1::SharedTirIdsV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},23 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<Box<crate::palw_court_shared_tir_stream_state_v1::SharedTirStreamV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},24 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_court_shared_tir_stream_state_v1::SharedTirChunkV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},25 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<Box<crate::palw_court_shared_tir_response_v1::SharedDataResponseV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},26 => <crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_court_end_archive_v1::PendingCourtArchiveV1> as NativeWireScanV1>::scan_native_wire_v1(reader),27 => <crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_court_close_receipt_v1::CourtCloseReceiptV1> as NativeWireScanV1>::scan_native_wire_v1(reader),_=>Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant"))}}}
++impl NativeWireScanV1 for crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1 {fn scan_native_wire_v1<R:std::io::Read>(reader:&mut NativeWireReaderV1<R>)->std::io::Result<NativeWireShapeV1> {reader.step()?;match reader.byte()? {0 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},1 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;sum=sum.merge(<crate::palw_state_v2::PalwBondKeyV2 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},2 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;sum=sum.merge(<crate::palw_state_v2::PalwBondKeyV2 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},3 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},4 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},5 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;sum=sum.merge(<crate::palw_state_v2::PalwBondKeyV2 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},6 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},7 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},8 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},9 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},10 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;sum=sum.merge(<crate::palw_state_v2::PalwBondKeyV2 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},11 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},12 => {let mut sum=NativeWireShapeV1::default();Ok(sum)},13 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},14 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},15 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},16 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},17 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},18 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;sum=sum.merge(<u64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},19 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;sum=sum.merge(<crate::palw_state_v2::PalwBondKeyV2 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},20 => <crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader),21 => {let mut sum=<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?;sum=sum.merge(<crate::palw_state_v2::PalwCourtSideV1 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},22 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;sum=sum.merge(<u64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},_=>Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant"))}}}
++impl NativeWireScanV1 for crate::palw_staged_court_state_v1::PalwStagedCourtRowV1 {fn scan_native_wire_v1<R:std::io::Read>(reader:&mut NativeWireReaderV1<R>)->std::io::Result<NativeWireShapeV1> {reader.step()?;match reader.byte()? {0 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_staged_court_state_v1::PalwStagedClaimContractV1 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},1 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_constraint_stream_owned_v1::PalwOwnedConstraintStreamV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},2 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_tokenizer_owned_court_v1::PalwOwnedTokenizerCourtV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},3 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_prefix_owned_court_v1::PalwOwnedPrefixCourtV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},4 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_prefix_public_owned_v1::PalwOwnedPublicPrefixCourtV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},5 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<Box<crate::palw_staged_bundle_v1::PalwStagedBundleContractV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},6 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_staged_bundle_v1::PalwOwnedStagedBundleV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},7 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},8 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryCertificateV1 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},9 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_tir_prefix_owned_v1::PalwOwnedTirPrefixCourtV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},10 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<Box<crate::palw_tir_class_v1::PalwTirLayoutV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},11 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_tir_public_state_v1::PalwTirPublicAcquisitionRowV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},12 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_tir_public_state_v1::PalwTirPublicChunkRowV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},13 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_tir_public_state_v1::PalwTirPublicAcceptedRowV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},14 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_tir_public_state_v1::PalwTirPublicPreparationRowV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},15 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_tir_public_claim_v1::PalwTirPublicClaimV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},16 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_tir_public_carriage_v1::PalwTirPublicWitnessRowV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},17 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<Box<crate::palw_tir_container_v1::PalwTirContainerRowV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},18 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_court_service_state_v2::CourtServiceStateV2> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},19 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<Box<crate::palw_court_duty_clock_v1::CourtDutyClockV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},20 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<Box<crate::palw_court_shared_tir_state_v1::SharedTirContextV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},21 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<Box<crate::palw_court_shared_tir_state_v1::SharedTirQueryV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},22 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<Box<crate::palw_court_shared_tir_state_v1::SharedTirIdsV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},23 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<Box<crate::palw_court_shared_tir_stream_state_v1::SharedTirStreamV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},24 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_court_shared_tir_stream_state_v1::SharedTirChunkV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},25 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<Box<crate::palw_court_shared_tir_response_v1::SharedDataResponseV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},26 => <crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_court_end_archive_v1::PendingCourtArchiveV1> as NativeWireScanV1>::scan_native_wire_v1(reader),27 => <crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_court_close_receipt_v1::CourtCloseReceiptV1> as NativeWireScanV1>::scan_native_wire_v1(reader),28 => <crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_court_shared_tir_root_v1::SharedTirRootRowV1> as NativeWireScanV1>::scan_native_wire_v1(reader),_=>Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant"))}}}
+ wire_struct!(crate::palw_state_v2::PalwBlockContextV2; crate::BlockHash, u64, u64, u64);
+ wire_struct!(crate::palw_state_v2::PalwBondKeyV2; crate::tx::TransactionOutpoint);
+ wire_struct!(crate::palw_state_v2::PalwBondStateV2; Vec<u8>, crate::Hash64, u64, u64, crate::palw_state_v2::PalwBondStatusV2, u64, crate::Hash64, std::collections::BTreeSet<crate::Hash64>);
+@@ -1310,3 +1310,6 @@ impl NativeWireScanV1 for crate::palw_court_end_archive_v1::CourtEndEvidenceV1 {
+ 
+ wire_struct!(crate::palw_court_close_receipt_v1::NativeCourtRulesV1; crate::Hash64, crate::palw_state_v2::PalwBlockContextV2, crate::palw_mode_v2::PalwCourtParamsV2, u64, bool, bool, bool, Option<u64>, Option<u64>, Option<u64>, bool, bool, bool, bool, bool);
+ wire_struct!(crate::palw_court_close_receipt_v1::CourtCloseReceiptV1; u16, crate::Hash64, crate::Hash64, crate::Hash64, u64, crate::palw_state_v2::PalwBlockContextV2, crate::palw_state_v2::PalwCourtSessionStateV2, Option<Box<crate::palw_tir_dissect_v1::PalwTirDissectPhaseV1>>, crate::palw_state_v2::PalwBondKeyV2, Vec<u8>, Box<crate::palw_state_v2::PalwConsensusObjectV2>, Option<crate::palw_court_close_receipt_v1::NativeCourtRulesV1>);
++
++wire_struct!(crate::palw_court_shared_tir_root_v1::SignedSharedTirRootV1; u16, crate::Hash64, crate::Hash64, crate::Hash64, u64, u8, crate::palw_state_v2::PalwBondKeyV2, Box<crate::palw_tir_dissect_v1::PalwTirRootClaimV1>, Vec<u8>);
++wire_struct!(crate::palw_court_shared_tir_root_v1::SharedTirRootRowV1; u16, crate::palw_court_shared_tir_root_v1::SignedSharedTirRootV1, crate::palw_court_close_receipt_v1::NativeCourtRulesV1, Vec<u8>, u64);
+diff --git a/consensus/core/src/palw_staged_court_fold_v1.rs b/consensus/core/src/palw_staged_court_fold_v1.rs
+index 5da8f9983..69292ee68 100644
+--- a/consensus/core/src/palw_staged_court_fold_v1.rs
++++ b/consensus/core/src/palw_staged_court_fold_v1.rs
+@@ -973,6 +973,24 @@ impl TransitionBuilder<'_> {
+     }
+ 
+     pub(super) fn write_staged_row_v1(&mut self, key: PalwStagedCourtKeyV1, new: Option<PalwStagedCourtRowV1>) -> Result<(), PalwStateV2Error> {
++        if let PalwStagedCourtKeyV1::CourtSharedRoot(..) = key {
++            let Some(PalwStagedCourtRowV1::CourtSharedRoot(r)) = &new else {
++                return Err(PalwStateV2Error::CarriageInconsistent("canonical shared root cannot be removed or retyped".into()));
++            };
++            r.check(&key).and_then(|()| r.check_context(&self.state)).map_err(PalwStateV2Error::CarriageInconsistent)?;
++            if let Some(old) = self.state.staged_court_row_v1(&key) {
++                if Some(old) != new.as_ref() { return Err(PalwStateV2Error::CarriageInconsistent("canonical shared root is immutable".into())); }
++            } else {
++                if self.state.bond(&r.control.signer).is_none_or(|bond| bond.pubkey != r.signer_pubkey) {
++                    return Err(PalwStateV2Error::CarriageInconsistent("shared root does not capture native producer key".into()));
++                }
++                if Some(r.rules) != self.extras.native_court_rules_v1 {
++                    return Err(PalwStateV2Error::CarriageInconsistent("shared root rules are not native accepting rules".into()));
++                }
++                crate::palw_court_shared_tir_root_v1::check_shared_tir_root_v1(&self.state,self.params,&r.rules,&r.control)
++                    .map_err(PalwStateV2Error::CarriageInconsistent)?;
++            }
++        }
+         if let PalwStagedCourtKeyV1::CourtCloseReceipt(..) = key {
+             if self.state.staged_court_row_v1(&key).is_some_and(|old|Some(old)!=new.as_ref()) {
+                 return Err(PalwStateV2Error::CarriageInconsistent("signed close receipt is immutable".into()));
+@@ -3372,6 +3390,7 @@ pub(super) fn index_rows(
+         PalwStagedCourtRowV1::CourtSharedResponse(r) => (r.material_until_daa,Vec::new()),
+         PalwStagedCourtRowV1::CourtEndArchive(r) => (r.material_until_daa,Vec::new()),
+         PalwStagedCourtRowV1::CourtCloseReceipt(r) => (r.material_until_daa,Vec::new()),
++        PalwStagedCourtRowV1::CourtSharedRoot(r) => (r.material_until_daa,Vec::new()),
+         PalwStagedCourtRowV1::CourtSharedStream(s) => (s.material_until_daa,Vec::new()),
+         PalwStagedCourtRowV1::CourtSharedChunk(c) => (c.material_until_daa,Vec::new()),
+         PalwStagedCourtRowV1::TirPrefix(c) => (c.terms.material_until_daa, vec![(c.reserver, c.terms.material_until_daa, key)]),
+@@ -3687,7 +3706,8 @@ pub(super) fn update_response_indices(
+ pub(super) fn sweep(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
+     // The due index gives rooted-clock ordering;64 row removals bound every accepted block.
+     let due: Vec<_> = b.state.staged_due.iter().take_while(|(at, _)| *at <= ctx.daa_score)
+-        .filter(|(_, key)| !b.state.court_service_holds_material_v1(key))
++        .filter(|(_, key)| !matches!(key,PalwStagedCourtKeyV1::CourtSharedRoot(..))
++            && !b.state.court_service_holds_material_v1(key))
+         .take(64).map(|(_, key)| *key).collect();
+     for key in due {
+         let Some(mut saved) = b.state.staged_courts.get(&key).cloned() else { continue };
+@@ -3708,6 +3728,7 @@ pub(super) fn sweep(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) ->
+             PalwStagedCourtRowV1::CourtSharedResponse(row) => Some(row.material_until_daa),
+             PalwStagedCourtRowV1::CourtEndArchive(row) => Some(row.material_until_daa),
+             PalwStagedCourtRowV1::CourtCloseReceipt(row) => Some(row.material_until_daa),
++            PalwStagedCourtRowV1::CourtSharedRoot(row) => Some(row.material_until_daa),
+             PalwStagedCourtRowV1::CourtSharedStream(row) => Some(row.material_until_daa),
+             PalwStagedCourtRowV1::CourtSharedChunk(row) => Some(row.material_until_daa),
+             _ => None,
+diff --git a/consensus/core/src/palw_staged_court_state_v1.rs b/consensus/core/src/palw_staged_court_state_v1.rs
+index 128567baa..8727d8ad5 100644
+--- a/consensus/core/src/palw_staged_court_state_v1.rs
++++ b/consensus/core/src/palw_staged_court_state_v1.rs
+@@ -72,6 +72,8 @@ pub enum PalwStagedCourtKeyV1 {
+     /// RFC-0030 isolated candidate; appended key20, no old tag changes.
+     CourtEndArchive(Hash64),
+     CourtCloseReceipt(Hash64,crate::palw_state_v2::PalwCourtSideV1),
++    /// Private canonical numerical root, appended key22.
++    CourtSharedRoot(Hash64,u64),
+ }
+ #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+ pub struct PalwStagedClaimContractV1 {
+@@ -116,6 +118,7 @@ pub enum PalwStagedCourtRowV1 {
+     CourtSharedResponse(Box<crate::palw_court_shared_tir_response_v1::SharedDataResponseV1>),
+     CourtEndArchive(PalwSharedCourtV1<crate::palw_court_end_archive_v1::PendingCourtArchiveV1>),
+     CourtCloseReceipt(PalwSharedCourtV1<crate::palw_court_close_receipt_v1::CourtCloseReceiptV1>),
++    CourtSharedRoot(PalwSharedCourtV1<crate::palw_court_shared_tir_root_v1::SharedTirRootRowV1>),
+ }
+ impl PalwStagedCourtRowV1 {
+     pub fn active_row_v1(&self) -> Option<&Self> {
+@@ -123,7 +126,7 @@ impl PalwStagedCourtRowV1 {
+             Self::OwnerBundle(bundle) => bundle.active_v1(),
+             Self::Claim(_) | Self::ClaimBundle(_) | Self::ArtifactInventoryOpen(_) | Self::ArtifactInventory(_) | Self::TirLayout(_)
+             | Self::TirAcquisition(_) | Self::TirRawChunk(_) | Self::TirAcceptedBody(_) | Self::TirPreparation(_) | Self::TirClaim(_)
+-            | Self::TirWitness(_) | Self::TirContainer(_) | Self::CourtService(_) | Self::CourtDutyClock(_) | Self::CourtSharedContext(_) | Self::CourtSharedQuery(_) | Self::CourtSharedIds(_) | Self::CourtSharedStream(_) | Self::CourtSharedChunk(_) | Self::CourtSharedResponse(_) | Self::CourtEndArchive(_) | Self::CourtCloseReceipt(_) => None,
++            | Self::TirWitness(_) | Self::TirContainer(_) | Self::CourtService(_) | Self::CourtDutyClock(_) | Self::CourtSharedContext(_) | Self::CourtSharedQuery(_) | Self::CourtSharedIds(_) | Self::CourtSharedStream(_) | Self::CourtSharedChunk(_) | Self::CourtSharedResponse(_) | Self::CourtEndArchive(_) | Self::CourtCloseReceipt(_) | Self::CourtSharedRoot(_) => None,
+             _ => Some(self),
+         }
+     }
+@@ -132,7 +135,7 @@ impl PalwStagedCourtRowV1 {
+             Self::OwnerBundle(bundle) => bundle.active_mut_v1(),
+             Self::Claim(_) | Self::ClaimBundle(_) | Self::ArtifactInventoryOpen(_) | Self::ArtifactInventory(_) | Self::TirLayout(_)
+             | Self::TirAcquisition(_) | Self::TirRawChunk(_) | Self::TirAcceptedBody(_) | Self::TirPreparation(_) | Self::TirClaim(_)
+-            | Self::TirWitness(_) | Self::TirContainer(_) | Self::CourtService(_) | Self::CourtDutyClock(_) | Self::CourtSharedContext(_) | Self::CourtSharedQuery(_) | Self::CourtSharedIds(_) | Self::CourtSharedStream(_) | Self::CourtSharedChunk(_) | Self::CourtSharedResponse(_) | Self::CourtEndArchive(_) | Self::CourtCloseReceipt(_) => None,
++            | Self::TirWitness(_) | Self::TirContainer(_) | Self::CourtService(_) | Self::CourtDutyClock(_) | Self::CourtSharedContext(_) | Self::CourtSharedQuery(_) | Self::CourtSharedIds(_) | Self::CourtSharedStream(_) | Self::CourtSharedChunk(_) | Self::CourtSharedResponse(_) | Self::CourtEndArchive(_) | Self::CourtCloseReceipt(_) | Self::CourtSharedRoot(_) => None,
+             _ => Some(self),
+         }
+     }
+@@ -258,6 +261,7 @@ impl PalwStagedCourtRowV1 {
+             (PalwStagedCourtKeyV1::CourtSharedResponse(..), Self::CourtSharedResponse(row)) => row.check(key),
+             (PalwStagedCourtKeyV1::CourtEndArchive(..), Self::CourtEndArchive(row)) => row.check(key),
+             (PalwStagedCourtKeyV1::CourtCloseReceipt(..), Self::CourtCloseReceipt(row)) => row.check(key),
++            (PalwStagedCourtKeyV1::CourtSharedRoot(..), Self::CourtSharedRoot(row)) => row.check(key),
+             _ => Err("staged rooted row has inconsistent key/immutable contract".into()),
+         }
+     }
+diff --git a/consensus/core/src/palw_state_v2/chain_state.rs b/consensus/core/src/palw_state_v2/chain_state.rs
+index 17033bb28..27e8c595f 100644
+--- a/consensus/core/src/palw_state_v2/chain_state.rs
++++ b/consensus/core/src/palw_state_v2/chain_state.rs
+@@ -3899,6 +3899,7 @@ impl PalwChainStateV2 {
+                 R::CourtSharedResponse(r)=>r.check_context(self),
+                 R::CourtEndArchive(r)=>r.check_loaded_context(self),
+                 R::CourtCloseReceipt(r)=>r.check_loaded_context(self),
++                R::CourtSharedRoot(r)=>r.check_loaded_context(self),
+                 R::CourtSharedStream(s)=>s.check_context(self),
+                 R::CourtSharedChunk(c)=>c.check_context(self),_=>Ok(()),
+             }.map_err(PalwStateV2Error::CarriageInconsistent)?;
+diff --git a/consensus/core/src/palw_tir_public_fold_v1.rs b/consensus/core/src/palw_tir_public_fold_v1.rs
+index faa13b396..7573922a7 100644
+--- a/consensus/core/src/palw_tir_public_fold_v1.rs
++++ b/consensus/core/src/palw_tir_public_fold_v1.rs
+@@ -2570,6 +2570,81 @@ mod conviction_e2e_tests {
+         assert!(check_shared_tir_root_v1(&exited, &params, &rules, &control).is_err());
+         assert_eq!(state.state_root(), before);
+         assert_eq!(state.court_sessions_len(), 0);
++
++        use super::super::palw_court_shared_tir_fold_v1 as fold;
++        use crate::palw_native_resource_v1::{NativeHeapV1, preflight_native_value_v1, preflight_native_carriage_v1};
++        let mut native = rules; native.at = at(frame, 5);
++        let mut root_extras = extras.clone(); root_extras.native_court_rules_v1 = Some(native);
++        let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &root_extras);
++        assert!(fold::root(&mut b, &native.at, &control).unwrap());
++        let key = Key::CourtSharedRoot(claim, leaf);
++        let Some(Row::CourtSharedRoot(retained)) = b.state.staged_court_row_v1(&key).cloned() else { panic!() };
++        assert_eq!(retained.rules, native);
++        let frontier = retained.numerical_frontier(&b.state).unwrap();
++        assert_eq!(frontier.terminal_tiles(), 12);
++        assert_eq!(frontier.maximum_disclosures(), 11);
++        let canonical = b.state.state_root(); let entries = b.entries.len();
++        let mut retry = control.clone();
++        retry.signature = libcrux_ml_dsa::ml_dsa_87::sign(&keys.signing_key,
++            retry.signing_message(native.network_domain).unwrap().as_byte_slice(), SHARED_TIR_ROOT_CONTEXT_V1, [94;32])
++            .unwrap().as_ref().to_vec();
++        assert_ne!(retry.signature, control.signature);
++        assert!(!fold::root(&mut b, &native.at, &retry).unwrap());
++        assert_eq!(b.state.state_root(), canonical); assert_eq!(b.entries.len(), entries);
++        assert_eq!(b.state.staged_court_row_v1(&key), Some(&Row::CourtSharedRoot(retained.clone())));
++        assert!(b.write_staged_row_v1(key, None).is_err());
++        assert!(b.write_staged_row_v1(Key::CourtSharedRoot(claim, leaf + 1), Some(Row::CourtSharedRoot(retained.clone()))).is_err());
++        let mut changed = retained.clone(); changed.material_until_daa += 1;
++        assert!(b.write_staged_row_v1(key, Some(Row::CourtSharedRoot(changed))).is_err());
++        assert_eq!(b.state.state_root(), canonical); assert_eq!(b.entries.len(), entries);
++        // A genuinely valid signature under a different actual policy still
++        // cannot evade the single (claim,leaf) slot by choosing another policy ID.
++        let mut alternative = native; alternative.held_regime = !native.held_regime;
++        let mut alt = control.clone(); alt.policy_id = shared_tir_root_policy_id_v1(&alternative).unwrap(); sign(&mut alt);
++        check_shared_tir_root_v1(&b.state, &params, &alternative, &alt).unwrap();
++        let mut alt_extras = root_extras.clone(); alt_extras.native_court_rules_v1 = Some(alternative);
++        let mut other = TransitionBuilder::new(&b.state, &params, false, false, false, false, &alt_extras);
++        assert!(fold::root(&mut other, &alternative.at, &alt).is_err());
++        assert_eq!(other.state.state_root(), canonical); assert!(other.entries.is_empty());
++        let row = Row::CourtSharedRoot(retained.clone());
++        let wire = borsh::to_vec(&row).unwrap();
++        assert_eq!(borsh::to_vec(&key).unwrap()[0], 22); assert_eq!(wire[0], 28);
++        let shape = preflight_native_value_v1::<Row>(wire.as_slice(), wire.len() as u64).unwrap();
++        assert!(shape.logical_requests_v1() >= row.native_heap_v1("root row").bytes().unwrap() + std::mem::size_of::<Row>() as u64);
++        assert_eq!(borsh::from_slice::<Row>(&wire).unwrap(), row);
++        for cut in [0, 1, wire.len()/2, wire.len()-1] {
++            assert!(preflight_native_value_v1::<Row>(&wire[..cut], cut as u64).is_err());
++        }
++        let mut trailing = wire.clone(); trailing.push(0);
++        assert!(preflight_native_value_v1::<Row>(trailing.as_slice(), trailing.len() as u64).is_err());
++        let signature_at = 1 + 2 + borsh::to_vec(&control).unwrap().len() - SIG - 4;
++        let mut oversized = wire.clone(); oversized[signature_at..signature_at+4].copy_from_slice(&u32::MAX.to_le_bytes());
++        assert!(preflight_native_value_v1::<Row>(oversized.as_slice(), oversized.len() as u64).is_err());
++        assert!(borsh::from_slice::<Row>(&oversized).is_err());
++        let mut undone = b.state.clone();
++        for entry in b.entries.iter().rev() { apply_delta_entry(&mut undone, entry, true).unwrap(); }
++        assert_eq!(undone.state_root(), state.state_root());
++        for entry in &b.entries { apply_delta_entry(&mut undone, entry, false).unwrap(); }
++        assert_eq!(undone.state_root(), canonical);
++        let mut accepted = b.state.clone(); accepted.set_last_point_for_tests(Some(native.at));
++        let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&accepted)).unwrap();
++        preflight_native_carriage_v1(bytes.as_slice(), bytes.len() as u64).unwrap();
++        let fresh = borsh::from_slice::<PalwStateCarriageV2>(&bytes).unwrap().into_state(&params, Some(accepted.state_root())).unwrap();
++        assert_eq!(fresh.state_root(), accepted.state_root());
++        let Some(Row::CourtSharedRoot(loaded)) = fresh.staged_court_row_v1(&key) else { panic!() };
++        assert_eq!(loaded.numerical_frontier(&fresh).unwrap(), frontier);
++        let mut rotated = fresh.clone(); rotated.bonds.get_mut(&producer).unwrap().pubkey = vec![0; crate::mldsa87_primitives::MLDSA87_PUBKEY_LEN];
++        rotated.bonds.get_mut(&producer).unwrap().collateral = 0;
++        loaded.check_loaded_context(&rotated).unwrap();
++        assert!(check_shared_tir_root_v1(&rotated, &params, &native, &control).is_err());
++        let mut future = (*loaded).clone(); future.rules.at = at(frame, 6);
++        assert!(future.check_loaded_context(&fresh).is_err());
++        let mut swept = TransitionBuilder::new(&fresh, &params, false, false, false, false, &root_extras);
++        let past = at(frame, frame.plan_v1().terms.material_until_daa - frame.plan_v1().terms.accepted_daa + 1);
++        super::super::palw_staged_court_fold_v1::sweep(&mut swept, &past).unwrap();
++        assert!(swept.state.staged_court_row_v1(&key).is_some());
++        assert!(swept.write_staged_row_v1(key, None).is_err());
++        assert_eq!(fresh.court_sessions_len(), 0);
+     }
+ 
+     #[test]
+diff --git a/consensus/core/tests/palw_court_shared_root_codec_v1.rs b/consensus/core/tests/palw_court_shared_root_codec_v1.rs
+new file mode 100644
+index 000000000..88839ab96
+--- /dev/null
++++ b/consensus/core/tests/palw_court_shared_root_codec_v1.rs
+@@ -0,0 +1,31 @@
++//! Native typed/wire shape fixture only; not original/funding/signature admission.
++#[path = "palw_tir_fixture_common.rs"] mod common;
++use kaspa_consensus_core::{palw_native_resource_v1::{NativeHeapV1, NativeWireScanV1, preflight_native_value_v1}};
++fn quantities<T: borsh::BorshSerialize + NativeHeapV1 + NativeWireScanV1>(label: &str, value: &T) -> (u64,u64) {
++    let wire = borsh::to_vec(value).unwrap();
++    let scan = preflight_native_value_v1::<T>(wire.as_slice(),wire.len() as u64).unwrap().logical_requests_v1();
++    let heap = value.native_heap_v1(label).bytes().unwrap() + std::mem::size_of::<T>() as u64;
++    eprintln!("{label}: wire_request={scan} typed_request={heap}");
++    (scan,heap)
++}
++#[test]
++fn golden_history_root_nested_wire_inventory_covers_typed_ownership() {
++    use kaspa_consensus_core::palw_tir_court_v1::build_tir_root_claim_v1;
++    let (name, program, params, tokens) = common::programs().into_iter().find(|(n,..)|n=="dense-gqa-2layer").unwrap();
++    let f=common::fixture_with(name,program,params,tokens,16,9);let x=f.honest();
++    let (leaf,_) = f.leaves.iter().enumerate().filter_map(|(i,l)| {
++        kaspa_consensus_core::palw_tir_dissect_v1::palw_tir_dissect_site_v1(&f.space,f.intervals.as_ref().unwrap(),l).map(|s|(i as u64,s))
++    }).max_by_key(|(i,s)|(s.history_positions,s.reductions.len(),std::cmp::Reverse(*i))).unwrap();
++    let mut root=build_tir_root_claim_v1(&x.binding,leaf,&common::Store {f:&f,x:&x},&common::RULES).unwrap();
++    kaspa_consensus_core::palw_tir_admission_v1::palw_tir_binding_strip_program_v1(&mut root.finalize.binding);
++    let mut results=Vec::new();
++    macro_rules! q { ($label:expr,$value:expr) => { results.push(($label,quantities($label,$value))); }; }
++    q!("elements",&root.elements); q!("totals",&root.totals);
++    q!("binding",&root.finalize.binding); q!("output opening",&root.finalize.output_opening);
++    q!("output leaf",&root.finalize.output_preimage); q!("operands",&root.finalize.operands);
++    q!("params",&root.finalize.params); q!("prompt",&root.finalize.prompt_token_ids);
++    q!("prompt openings",&root.finalize.prompt_ids_openings); q!("decode",&root.finalize.decode_tokens);
++    q!("finalize",&root.finalize); q!("root",&root);
++    let shortages:Vec<_>=results.into_iter().filter(|(_, (scan,heap))|scan<heap).collect();
++    assert!(shortages.is_empty(),"nested wire inventory shortages: {shortages:?}");
++}

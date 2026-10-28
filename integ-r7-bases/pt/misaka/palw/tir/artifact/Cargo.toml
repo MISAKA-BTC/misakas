@@ -1,0 +1,34 @@
+[package]
+name = "misaka-palw-tir-artifact"
+description = "RFC-0002 Phase F (F3): the PALWTIR1 container of a PALW-TIR artifact — the program, its commitment layout and tokenizer id, and every param tensor, typed little-endian and 64-byte aligned for mapping. Written by the lowerer and the legacy converter, read by the node. Not a consensus object: the inventory root (kaspa-consensus-core palw_tir_artifact_v1) is."
+publish = false
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# Light on purpose: the lowerer (non-consensus tooling) writes this container and the node's
+# evaluator reads it, and neither should pull the other's dependencies. The IR crate is a leaf.
+[dependencies]
+misaka-palw-tir = { path = "../core" }
+borsh.workspace = true
+blake2b_simd.workspace = true
+# PALWART3 segments carry their SHA-256 (the Hugging Face LFS object id), so a remote copy is checked
+# without downloading it.
+sha2.workspace = true
+thiserror.workspace = true
+serde_json = { workspace = true, features = ["raw_value"] }
+
+# Genesis 8: the one PALWART3 container's packer, inspector, verifier and legacy extractor (no consensus crate).
+[[bin]]
+name = "palwart"
+path = "src/bin/palwart.rs"
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

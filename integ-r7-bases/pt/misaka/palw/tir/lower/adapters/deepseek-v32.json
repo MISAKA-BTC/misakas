@@ -1,0 +1,24 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "deepseek-v32",
+  "doc": "DeepSeek-V3.2 (DeepseekV32ForCausalLM): DeepSeek-V3's MLA, router and experts, with DeepSeek sparse attention (DSA, ATTN_TOKEN_INDEXER_V1): every layer's softmax runs over the index_topk best tokens of a learned indexer (wq_b from the q-latent, a LayerNorm'd key from the layer input, learned head weights; rotate-half rope over the FIRST qk_rope_head_dim lanes of the indexer head). Which MLPs are dense follows mlp_layer_types when given, else first_k_dense_replace. Ties of the selection go to the lowest index of the history window (the IR's TopK rule).",
+  "extends": ["deepseek-v3"],
+  "match": {"architectures": ["DeepseekV32ForCausalLM"], "model_types": ["deepseek_v32"]},
+  "config": {"defaults": {"max_position_embeddings": 163840, "index_topk": 2048, "index_head_dim": 128, "index_n_heads": 64, "first_k_dense_replace": 3}, "inert": ["layer_types"]},
+  "vars": [
+    {"name": "types", "value": {"$layer_types": {"n": {"$var": "n"}, "allowed": ["deepseek_sparse_attention"], "each": "deepseek_sparse_attention"}}},
+    {"name": "mlp_types", "value": {"$cfg?": "mlp_layer_types"}},
+    {"name": "mlp_types_ok", "value": {"$check": [{"$or": [{"$eq": [{"$var": "mlp_types"}, null]}, {"$eq": [{"$len": {"$var": "mlp_types"}}, {"$var": "n"}]}]}, "mlp_layer_types does not have one entry per layer"]}},
+    {"name": "ix_heads", "value": {"$cfg": "index_n_heads"}},
+    {"name": "ix_dim", "value": {"$cfg": "index_head_dim"}},
+    {"name": "ix_topk", "value": {"$cfg": "index_topk"}},
+    {"name": "ix_ok", "value": {"$bad": [{"$and": [{"$gt": [{"$var": "ix_heads"}, 0]}, {"$ge": [{"$var": "ix_dim"}, {"$var": "rope_d"}]}, {"$gt": [{"$var": "ix_topk"}, 0]}]}, "index_n_heads, index_head_dim (at least qk_rope_head_dim) and index_topk must be positive"]}},
+    {"name": "ix_rope", "value": {"$rope": {"dim": {"$var": "rope_d"}, "style": "Half", "theta": 10000.0, "max_pos": {"$var": "max_pos"}, "offset": 0}}},
+    {"name": "mla", "value": {"heads": {"$var": "heads"}, "q_lora_rank": {"$var": "q_lora"}, "kv_lora_rank": {"$var": "kv_lora"}, "qk_nope_head_dim": {"$var": "nope_d"}, "qk_rope_head_dim": {"$var": "rope_d"}, "v_head_dim": {"$var": "v_d"}, "q_a_norm": {"$var": "norm"}, "kv_a_norm": {"$var": "norm"}, "a_bias": {"$var": "abias"}, "rope": {"$var": "rope"}, "scale": {"$var": "scale"}, "indexer": {"heads": {"$var": "ix_heads"}, "head_dim": {"$var": "ix_dim"}, "topk": {"$var": "ix_topk"}, "rope": {"$var": "ix_rope"}, "k_norm": {"kind": "Layer", "eps": 1e-06, "gain": "W", "bias": true}}}},
+    {"name": "dense_layer", "layer": true, "value": {"$if": [{"$ne": [{"$var": "mlp_types"}, null]}, {"$eq": [{"$index": [{"$var": "mlp_types"}, {"$var": "i"}]}, "dense"]}, {"$lt": [{"$var": "i"}, {"$var": "first_dense"}]}]}},
+    {"name": "l_ffn", "layer": true, "value": {"$if": [{"$var": "dense_layer"}, {"Mlp": {"intermediate": {"$var": "inter"}, "act": {"$var": "act"}, "gated": true, "up_bias": {"$var": "mbias"}, "down_bias": {"$var": "mbias"}}}, {"Moe": {"experts": {"$var": "e"}, "top_k": {"$var": "k"}, "intermediate": {"$var": "moe_inter"}, "act": {"$var": "act"}, "router": {"$var": "router"}, "shared": {"$var": "shared"}}}]}},
+    {"name": "names", "value": {"$merge": [{"$var": "names_base"}, {"mla.q": "{p}layers.{L}.self_attn.q_proj", "mla.q_a": "{p}layers.{L}.self_attn.q_a_proj", "mla.q_a_norm": "{p}layers.{L}.self_attn.q_a_layernorm", "mla.q_b": "{p}layers.{L}.self_attn.q_b_proj", "mla.kv_a": "{p}layers.{L}.self_attn.kv_a_proj_with_mqa", "mla.kv_a_norm": "{p}layers.{L}.self_attn.kv_a_layernorm", "mla.kv_b": "{p}layers.{L}.self_attn.kv_b_proj", "mla.o": "{p}layers.{L}.self_attn.o_proj", "mla.idx.q": "{p}layers.{L}.self_attn.indexer.wq_b", "mla.idx.k": "{p}layers.{L}.self_attn.indexer.wk", "mla.idx.k_norm": "{p}layers.{L}.self_attn.indexer.k_norm", "mla.idx.wp": "{p}layers.{L}.self_attn.indexer.weights_proj", "moe.router": "{p}layers.{L}.mlp.gate", "moe.sel_bias": "{p}layers.{L}.mlp.gate.e_score_correction_bias", "moe.gate": "{p}layers.{L}.mlp.experts.{E}.gate_proj", "moe.up": "{p}layers.{L}.mlp.experts.{E}.up_proj", "moe.down": "{p}layers.{L}.mlp.experts.{E}.down_proj", "moe.shared.gate": "{p}layers.{L}.mlp.shared_experts.gate_proj", "moe.shared.up": "{p}layers.{L}.mlp.shared_experts.up_proj", "moe.shared.down": "{p}layers.{L}.mlp.shared_experts.down_proj"}]}},
+    {"name": "families", "value": ["C3", "C8"]},
+    {"name": "model_type", "value": "deepseek_v32"}
+  ]
+}

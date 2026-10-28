@@ -488,3 +488,266 @@ large job while the staged fence is inactive. The helper now consults that quote
 only when `palw_staged_public_court_v1` is active; legacy jobs retain their original
 plain carrier route. This is separate from the previously reported socket wall
 expiry, whose original cause still requires execution after this correction.
+
+### 2026-10-18 — strict sibling reproduction and full corpus rerun
+
+The explicitly armed private strict-economic probe reproduced the defect in
+**4 of 8 runs** (4 passed). Each run executed the existing native retention test;
+failed runs report a valid sibling absent from the merger's past. Logs:
+`/tmp/misaka-red-tests-logs/rfc18-strict-probe{1..8}.log` and
+`rfc18-strict-summary.json`. The default launch suite separately passes all three
+tests, including all six arrival permutations. These results support the bounded
+merge-candidate proposal above; they do not approve or implement a fork-choice
+change. The strict rule is dormant in shipping launch parameters.
+
+The full SDK corpus rerun now passes **2 / 2**, comparing all 100 fixed entries
+(236.14 s, `sdk-corpus-full-after.log`). In addition to Idefics3, InternLM2's
+register and mine stages now succeed under the current bounded resource planner;
+its convert stage remains `TENSOR_MISSING(embed.table)`. Updated only those two
+previous register/mine blocker expectations. No admission limit was raised and
+no inventory row was removed. Header/shape preflight still does not establish
+original-task fidelity, full source conversion or mining-funded Final.
+
+### 2026-10-18 — socket timeout localized
+
+The repaired legacy HFP helper now reaches the actual socket transport. The first
+network run admitted its ordinary 112,291-byte FP job, independently replayed
+2,065 blocks, pruned the original body and acceptance row, established the actual
+socket handshake, and recovered the binding through signed service carriers. It
+failed only in `NetworkRun::finish`: after a fixed 30 seconds the receiver was at
+DAA 1319 while the stopped source was at DAA 1644. Log:
+`/tmp/misaka-red-tests-logs/network-final-1.log`. This establishes a validation
+backlog under concurrent builds; it is not a failed job/court acceptance.
+
+The suffix wait now resets its existing 30-second inactivity bound only when the
+independent receiver's accepted native DAA strictly increases. The source suffix
+is finite and fixed while waiting. A stalled receiver still fails after 30 seconds;
+all final sink, state, acquired-material and outcome assertions are retained.
+No native deadline, clock lead, protocol acceptance or shipping parameter changed.
+The three network tests must be rerun with this fix before being marked green.
+
+### 2026-10-18 — parallel recovery passed; native clock cause established
+
+`fresh_verifier_reacquires_one_pruned_parallel_input_lane_from_the_automatic_producer`
+passes **1 / 1** (408.53 s), log `network-final-4.log`. The previously corrected
+16 distinct lanes plus a retransmission are now exercised through the actual
+producer/outsider services and pruned acquisition path.
+
+The withheld-binding socket-verifier test reached actual automatic Reserve and
+DefaultAccused carriage. Its failure is now specific: at native DAA 1094, the next
+block timestamp was still 25,499 ms above the receiving clock's permitted lead
+when the fixed 360 s test wall deadline expired. This is the original native
+clock guard, not a failed carrier or an adopted invalid block. The other socket
+verifier run was interrupted after its wait stopped returning; no PASS is claimed.
+Both diagnostics and sampled stacks are retained in `network-final-{2,3}.log`
+and `network-{1,2}-stack.txt`.
+
+The socket-verifier fixture now lets the native heartbeat adapter choose the
+next slot instead of adding a full target block interval to both the holding
+beat and its merging step. The receiving near-sync predicate remains the real
+one. Time actually spent sleeping for the unchanged native lead cap is excluded
+from the unchanged 360-second non-clock service budget; template construction,
+native validation, mempool updates and socket inventory waits now share that
+budget explicitly, including awaits which formerly escaped the loop check.
+No native cadence, lead bound, DA/court deadline, acceptance rule or public
+parameter has been relaxed. The complete socket cases must pass on the rebuilt
+fixture before this is called resolved.
+
+A2 also exposed an implementation gap: stage action 80 already had a bounded
+borrowed frame, published size cap and native consumer, but the owned decoder
+stopped at 79. Its upper bound now agrees at 80; unknown-action rejection remains
+tested with 81. The matrix again requires the known outer frame to decode before
+checking that its deliberately bad semantic body is unjudged below the owning
+fence. This repairs the dependency lane's `kernel/src/route.rs` decoder rather
+than weakening the A2 requirement. New matrix execution is pending.
+
+The socket receiver fixture also avoids empty 10/50-block bursts while an actual
+service tick is preparing its next answer: an included carrier pair advances the
+clock already; without one, at most one native pair is made per ordinary two-second
+service tick. This removes gratuitous virtual aging inside the real near-sync
+window. Withholding still reaches the same native DA deadline and objective
+collection; no obligation, penalty or deadline is bypassed. Runtime verification
+of this pacing and clock-accounting correction remains pending.
+
+### 2026-10-18 — full lower fixture rerun and action-80 boundary regression
+
+The corrected recursive fixture inventory passes the complete prequantised
+three-way test **1 / 1** in 2151.92 s. All 49 actual leaf fixtures (36 HF and 13
+GGUF, including both nested `prism_rotated/plain` and `prism_rotated/rotated`)
+execute 32 positions; logits and every commitment agree across reference, ref2
+and exec. No checkpoint was removed and the parent directory is no longer
+misidentified as a checkpoint. Log: `/tmp/misaka-red-tests-logs/lower-threeway-final.log`.
+
+A separate actual-kernel boundary regression passes **1 / 1** for owned and
+borrowed stage-action-80 frames at empty, ordinary and maximum published sizes;
+oversize action 80 and unknown action 81 are refused. Log:
+`/tmp/misaka-red-tests-logs/route80-regression.log`. The full A2 node matrix
+remains pending the rebuilt test binary.
+
+The user-authorized common RFC19 devnet connection passes release-mode checking
+of the node, actual TIR worker, class inspector, gateway and CLI. Shared source
+is pinned at `38cf896dd` on `codex/rfc19-devnet-fixture`; old/new builds will differ
+only in the adjacent edition flag. This is compilation evidence, not an R-7/R-8
+runtime result. No shipping activation refusal or public preset is changed.
+
+The common RFC19 source was subsequently fixed at `7560dd6ed`: exported TIR
+registrations request zero initial share, matching the ordinary SDK preflight.
+A nonzero share would require a separately certified primitive family and is not
+the 300/1000 catalog tier. The exporter now preflights each exact signed object.
+This correction is shared by old/new binaries and grants no certification or
+claim credit. The source commit is fixed before release output is saved.
+
+
+### 2026-10-18 — rebuilt A2 and native tokenizer-length outcomes
+
+The full rebuilt A2 matrix passes **2 / 2**, including actions 19–21 and 80,
+with the landed recovery fence active in the fixture. Launch: 49 blocks, 166
+carriers and two refused headers; the independently validating nodes agree.
+Log: `/tmp/misaka-red-tests-logs/A2-pair-after.log`.
+
+The actual staged tokenizer-length service test passes **1 / 1** in 430.33 s:
+`registered_a16_false_tokenizer_length_restarts_and_collects_full_panel_through_rooted_court19`.
+The original tokenizer inventory, finite authenticated bundle continuations,
+restart, rooted court, producer conviction and all five signer collections are
+checked. Log: `/tmp/misaka-red-tests-logs/tokenizer-length-after.log`.
+
+The RFC15 old-path blocker probe initially failed because its assertion expected
+semantic OPV refusal at generic mempool envelope/UTXO admission, which succeeds.
+The probe now mines the actual carrier and checks that the fold admits no OPV
+class. That corrected assertion still awaits execution; no positive RFC15 result
+is claimed from this diagnostic. Other queued node cases continue serially.
+
+### 2026-10-18 — socket cadence diagnosis; coherent rerun pending
+
+The sole receiver/default diagnostic was interrupted (not PASS) after its stack
+sample confirmed a waiting runtime. Before the anchor-clock fence, heartbeat
+admission uses the native one-hour slot. Moving the private source near real time
+makes the 132-second local lead cap bind after its finite past slots; advancing a
+full DA window with empty heartbeats is consequently a protocol-time wait, not
+merely compiler load. Raising a 360-second timeout cannot fix that fixture.
+
+The receiver-verifier fixture now mines genuinely executed ordinary BASE0 attempts
+before that fence: each ticket candidate derives its public anchor, executes the
+registered backend, signs its actual roots, and carries the selected real mempool
+transactions. These native blocks advance pre-anchor DAA without spending heartbeat
+slots. No court window, near-sync predicate, local clock rule, root check or shipping
+preset is relaxed. The old diagnostic log is `network3-phase-after.log`, stack
+`network3-stall-sample.txt`, and interruption rationale `network3-clock-diagnosis.txt`
+under `/tmp/misaka-red-tests-logs/`. The new source has not passed a runtime test yet.
+The finite socket suffix also counts accepted body/chain-processing progress while
+virtual resolution batches; inventory/header arrival alone cannot extend its stall
+budget. Its next failure includes native processing counters and source/wall time.
+
+### 2026-10-18 — parallel lane runtime passed
+
+`fresh_verifier_reacquires_one_pruned_parallel_input_lane_from_the_automatic_producer`
+passes **1/1 in504.55s**, through automatic producer restart from an accepted partial
+manifest, the real public acquisition, and independent/pruned history recovery.
+The assertion counts the sixteen distinct lanes, retaining legitimate retransmission
+rather than counting it as a seventeenth lane. Log:
+`/tmp/misaka-red-tests-logs/parallel-native-first.log`; binary/source provenance:
+`/tmp/misaka-red-tests-logs/acceptance-compiled-rfc24-manifest.json`.
+This precedes the subsequently added optional paid-Constraint replay scheduling fix;
+that fix and its specific regression are still pending rebuilt execution.
+
+### 2026-10-18 — native public-prefix repair-source assertion
+
+The initial-prefix runtime reached public acquisition, then failed a fixture assertion
+in `palw_service_public_prefix_e2e.rs` after389.59s: seven eligible sources versus
+six expected. `PalwPrefixPublicPendingV1::new` includes the exact accepted literal
+custodians **and the independent court owner** as repair sources. The owner is not
+an additional liable custodian. The monitor now carries the independently collected
+signed Valid seat set plus producer, compares the actual public custody set exactly,
+and compares pending signer keys against that set union the owner. This preserves
+all-custodian conviction checks and detects missing or extra sources; no consensus
+rule or fixed expected count is changed. Initial/inherited reruns on this source are
+pending. Failed log: `/tmp/misaka-red-tests-logs/prefix-initial-baseline.log`.
+
+### 2026-10-18 — paid Constraint restart scheduling regression passed
+
+The restarted tokenizer-key case exposed a node-policy dead end: retained paid
+cursor authority restored `SemanticPending`, while own replay selected only
+`Pending`/`DeferredMismatch`. A following Constraint child still needs an actual
+own arithmetic result to nominate its neutral row. The shared fix requests that
+specific dependency without treating paid authority as arithmetic certification,
+and retains the existing two-failure replay bound. Four focused regressions pass
+**4/4** on the coherent acceptance kaspad binary: bounded restarted Constraint
+replay, retained paid authority without mandatory replay, refused/missing neutral
+selection, and public-branch rollback invalidation. Full tokenizer-key runtime is
+pending. Exact results: `/tmp/misaka-red-tests-logs/filer-replay-unit-results.json`;
+compiled-source/binary manifest: `acceptance-replay-binary-manifest.json` in the
+same log directory. This binary predates the prefix source-set monitor correction.
+
+### 2026-10-18 — socket fixture heartbeat flood exposed
+
+The first socket rerun FAILED (abort after assertion cleanup) at the final receiver
+suffix: receiver DAA1318 versus source1618, 3236 source blocks, 30s without accepted
+header/body/chain/virtual movement. Exact counters and secondary DB-lifetime cleanup
+panic remain in `/tmp/misaka-red-tests-logs/network-clock-1.log`. Producer acquisition,
+independent replay and release had completed; socket convergence had not. The other
+two cases did not run because this queue stops at failure.
+
+The legacy socket case still generated up to50 empty heartbeat blocks per service
+iteration, exceeding real H2 relay allowance (burst12, refill one per10s). A heartbeat
+flood is an invalid fixture assumption for rapid suffix transport. All socket cases
+now use the existing anchor-derived genuinely executed and signed BASE0 attempt
+helper, including real mempool carriers. The former two-second heartbeat pacing for
+the receiver-verifier is removed: ordinary attempts spend no one-hour pre-anchor HB
+slots and must advance the actual unchanged DA/default windows within the test budget.
+No shipping relay policy, H2 allowance, near-sync predicate, root check, court window
+or deadline is relaxed. Reruns on this combined source are pending.
+
+### 2026-10-18 — prefix progress bug and corrected socket-clock diagnosis
+
+The exact custodian/source-set checks passed in the next initial-prefix run, which
+then FAILED223.73s on `completed=Some(false)` during an open acquisition. This was
+not an Honest court verdict: `PalwOwnedPublicPrefixCourtV1::certificate` intentionally
+returns `Ok(None)` while a public response is pending. The read-only progress adapter
+mapped this to Honest, and the scheduler then refused its unfinished continuation.
+The adapter now returns incomplete (`None`) during pending acquisition. State roots,
+wire bytes and certificate adjudication are unchanged. The actual paid-seed/demand
+regression and full initial/inherited reruns are rebuilding; neither is claimed PASS.
+
+The proposed all-socket attempt-only rerun FAILED at its pre-anchor assertion before
+new transport ran (`network-attempt-1.log`). That establishes that these actual t12
+fixtures are already under the anchor clock; the earlier pre-anchor diagnosis was
+incomplete. Attempts alone cannot advance that clock. H2's normal burst/refill limits
+also make fast empty-heartbeat flooding an invalid transport assumption. Both failed
+queues and their secondary cleanup panics are retained, and no socket PASS is claimed.
+
+The replacement fixture will use a process-local simulated wall calendar, enabled
+only in the test dependency graph and activated explicitly in an isolated child test
+process. Production heartbeat templates choose every slot, both real native nodes
+observe that same simulated calendar, and all slot/lead/near-sync/H2/court checks run
+unchanged. Socket traffic, signatures, consensus, monotonic deadlines and service
+ticks remain actual; this is calendar simulation, not a real-time soak. Ordinary
+release builds do not enable the clock feature, and an environment variable alone
+never activates it. Honest workers are paced to their actual service ticks; the
+withheld case advances its full original DA window. A small behavioral prototype
+passes1/1: 40h calendar advance is visible across threads, real monotonic time does
+not jump, and scope exit restores ordinary time. Native socket integration remains
+pending. Its patch is queued only after the existing prefix API regression succeeds.
+
+The isolated-calendar socket fixture additionally waits for the receiver's actual
+native block body before announcing the next source block. This bounds the real
+P2P queue without direct receiver insertion or an H2 exemption. H2 reads the
+process calendar, so it observes the same elapsed native slots as both nodes;
+monotonic service ticks and 30-second no-native-progress bounds remain real.
+These changes are queued behind the core regression build and are not a socket
+PASS. The shared node limit currently prevents launching owned node scenarios;
+foreign native test processes are counted conservatively before every own run.
+
+### 2026-10-18 — prefix read-API regression and actual clock component passed
+
+The real paid-prefix-demand core regression passed1/1 (1.40s): an open acquisition
+reports `completed=None` and keeps its exact custody sources. The coherent
+prefix native test binary is pinned by `acceptance-prefix-api-binary-manifest.json`
+(SHA2170d96a4404f6b62d9a0f262efeb4455e03e18820c342e7be87deaa7cfb8c48).
+Initial/inherited full native cases remain queued, not PASS.
+
+The actual linked test-clock library passed1/1: env alone leaves time real, an
+explicit isolated scope advances40 calendar hours across threads while Instant
+stays real, and scope exit restores the real calendar. Evidence is
+`/tmp/misaka-red-tests-logs/actual-test-clock.log` and its manifest. This is a
+component result only; no socket scenario PASS is claimed. The socket/native
+fixture build is complete and real node cases await two shared slots.

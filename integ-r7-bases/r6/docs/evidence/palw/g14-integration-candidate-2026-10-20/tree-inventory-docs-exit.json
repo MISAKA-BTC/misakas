@@ -1,0 +1,4 @@
+{
+  "command": "python3 docs/maintenance/check_docs.py",
+  "exit_code": 1
+}

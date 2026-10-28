@@ -1,0 +1,47 @@
+{
+ "order": 6,
+ "id": "deepseek-v4-fixture",
+ "family": "deepseek_v4 (in-repo synthetic fixture)",
+ "repo": null,
+ "revision": null,
+ "task": "text-generation",
+ "context": 512,
+ "local": "/Users/wata/Downloads/MISAKA-wt-b/wh-h1-run/fixtures/deepseek_v4",
+ "full": "in-repo fixture (synthetic weights)",
+ "note": "copy of misaka-palw-tir-lower/tests/fixtures/dsv4/deepseek_v4 + a SYNTHETIC 64-id WordLevel tokenizer.json made by H1 (the fixture has none; vocab 64)",
+ "source": {
+  "schema": "misaka.h1.source.v1",
+  "repo": null,
+  "revision": null,
+  "resolved_sha": null,
+  "fixture_dir": "/Users/wata/Downloads/MISAKA-wt-b/wh-h1-run/fixtures/deepseek_v4",
+  "integration_sha": "ea402c1a898688712bc12e2b1d3b5e5553ef8e69",
+  "note": "an in-repo synthetic fixture: no Hub revision exists; its bytes at the tested SHA are the source",
+  "files": [
+   {
+    "path": "config.json",
+    "size": 1785,
+    "sha256": "438ba51353d8a6ef41cdbfd22665afcf5a1d1c52cfdab4195c1323176347e981"
+   },
+   {
+    "path": "logits.json",
+    "size": 12741,
+    "sha256": "a7703e3b2061cdb694bf9e6fb9a029605b977c7ca07458aed548ba4809e5a70a"
+   },
+   {
+    "path": "model.safetensors",
+    "size": 101214,
+    "sha256": "2f412005828867f21caa01e6dd3f93019ed6ae36a3c4227016190554a409d22b"
+   },
+   {
+    "path": "tokenizer.json",
+    "size": 1487,
+    "sha256": "078e3137f41fbf8040359333dbb43c0f399ace94a4b3b9fff0e205cc49644c0d"
+   }
+  ],
+  "local": {
+   "dir": "/Users/wata/Downloads/MISAKA-wt-b/wh-h1-run/fixtures/deepseek_v4",
+   "verdict": "FIXTURE"
+  }
+ }
+}

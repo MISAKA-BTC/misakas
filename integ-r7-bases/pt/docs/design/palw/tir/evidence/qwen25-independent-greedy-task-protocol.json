@@ -1,0 +1,101 @@
+{
+  "schema": "misaka.rfc02.greedy-task-protocol.v1",
+  "repository": "Qwen/Qwen2.5-1.5B-Instruct",
+  "revision": "989aa7980e4cf806f80c7fef2b1adb7bc71aa306",
+  "source_manifest_sha256": "0c45f44e969b7c226d3fb8444ac5dff91c8d98001127cc2dcae8749c251994a3",
+  "artifact_sha256": "435ed8fcddf68a4fc7dd22792dfe912fdbc3a9b4ab1a6803a711fcb1ff834a64",
+  "tokenizer_sha256": "c0382117ea329cdf097041132f6d735924b697924d6f6fc3945713e96ce87539",
+  "context": 32,
+  "vocab": 151936,
+  "max_source_bytes": 3095000000,
+  "max_model_parameter_bytes": 6200000000,
+  "max_total_positions": 75,
+  "max_new_tokens": 8,
+  "eos_token_ids": [
+    151645,
+    151643
+  ],
+  "task_jobs": [
+    {
+      "id": "arithmetic-1",
+      "task": "arithmetic",
+      "prompt_text": "<|im_start|>user\nWhat is 1+1? Number only.<|im_end|>\n<|im_start|>assistant\n",
+      "prompt_tokens": [
+        151644,
+        872,
+        198,
+        3838,
+        374,
+        220,
+        16,
+        10,
+        16,
+        30,
+        5624,
+        1172,
+        13,
+        151645,
+        198,
+        151644,
+        77091,
+        198
+      ],
+      "expected_answer": "2"
+    },
+    {
+      "id": "translation-1",
+      "task": "translation",
+      "prompt_text": "<|im_start|>user\nTranslate こんにちは into English. One word.<|im_end|>\n<|im_start|>assistant\n",
+      "prompt_tokens": [
+        151644,
+        872,
+        198,
+        27473,
+        220,
+        89015,
+        1119,
+        6364,
+        13,
+        3776,
+        3409,
+        13,
+        151645,
+        198,
+        151644,
+        77091,
+        198
+      ],
+      "expected_answer": "Hello"
+    },
+    {
+      "id": "code-1",
+      "task": "code",
+      "prompt_text": "<|im_start|>user\nPython expression for 1+1. Code only.<|im_end|>\n<|im_start|>assistant\n",
+      "prompt_tokens": [
+        151644,
+        872,
+        198,
+        30280,
+        7493,
+        369,
+        220,
+        16,
+        10,
+        16,
+        13,
+        6119,
+        1172,
+        13,
+        151645,
+        198,
+        151644,
+        77091,
+        198
+      ],
+      "expected_answer": "1+1"
+    }
+  ],
+  "token_agreement_min": 0.95,
+  "exact_job_fraction_min": 0.6666666666666666,
+  "source_and_integer_task_success_min": 1.0
+}

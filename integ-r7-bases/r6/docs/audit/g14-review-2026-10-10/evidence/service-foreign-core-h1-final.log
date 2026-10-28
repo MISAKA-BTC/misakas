@@ -1,0 +1,13 @@
+
+running 8 tests
+test pipeline::virtual_processor::tests::t12_h1_carrier_gate::v01_the_sweep_judges_only_what_the_virtual_can_spend_on_the_virtuals_own_tip ... ok
+test pipeline::virtual_processor::tests::t12_h1_carrier_gate::h1_the_gate_is_inert_below_rcore_plus ... ok
+test pipeline::virtual_processor::tests::t12_h1_carrier_gate::t12_the_fold_the_registry_read_and_the_escalation_take_the_configured_horizon ... ok
+test pipeline::virtual_processor::tests::t12_h1_carrier_gate::m1_every_possession_proof_is_put_to_the_fold_and_the_tip_read_says_how_urgent ... ok
+test pipeline::virtual_processor::tests::t12_h1_carrier_gate::h1_the_gate_passes_what_the_fold_takes_and_refuses_what_it_drops ... ok
+test pipeline::virtual_processor::tests::t12_h1_carrier_gate::v01_the_mempool_sweep_asks_the_h1_gate_itself ... ok
+test pipeline::virtual_processor::tests::t12_h1_carrier_gate::m1_a_composite_possession_proof_opens_the_adapter_section_through_the_gate_and_the_fold ... ok
+test pipeline::virtual_processor::tests::t12_h1_carrier_gate::m1_an_honest_possession_proof_passes_the_gate ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 836 filtered out; finished in 0.42s
+

@@ -1,0 +1,119 @@
+{
+  "schema": "misaka.rfc02.borrowed-context-task-score.v1",
+  "jobs": [
+    {
+      "id": "arithmetic-128-1",
+      "task": "arithmetic",
+      "source": {
+        "generated_tokens": [
+          19,
+          17,
+          151645
+        ],
+        "first_eos_index": 2,
+        "answer_text": "42",
+        "completed": true,
+        "task_answer_passed": true
+      },
+      "integer": {
+        "generated_tokens": [
+          19,
+          17,
+          151645
+        ],
+        "first_eos_index": 2,
+        "answer_text": "42",
+        "completed": true,
+        "task_answer_passed": true
+      },
+      "equal_ids": 3
+    },
+    {
+      "id": "translation-128-1",
+      "task": "translation",
+      "source": {
+        "generated_tokens": [
+          9707,
+          151645
+        ],
+        "first_eos_index": 1,
+        "answer_text": "Hello",
+        "completed": true,
+        "task_answer_passed": true
+      },
+      "integer": {
+        "generated_tokens": [
+          9707,
+          151645
+        ],
+        "first_eos_index": 1,
+        "answer_text": "Hello",
+        "completed": true,
+        "task_answer_passed": true
+      },
+      "equal_ids": 2
+    },
+    {
+      "id": "code-128-1",
+      "task": "code",
+      "source": {
+        "generated_tokens": [
+          750,
+          912,
+          2877,
+          11,
+          293,
+          982,
+          262,
+          470,
+          264,
+          488,
+          293,
+          151645
+        ],
+        "first_eos_index": 11,
+        "answer_text": "def add(a, b):\n    return a + b",
+        "completed": true,
+        "task_answer_passed": true
+      },
+      "integer": {
+        "generated_tokens": [
+          750,
+          912,
+          2877,
+          11,
+          293,
+          982,
+          262,
+          470,
+          264,
+          488,
+          293,
+          151645
+        ],
+        "first_eos_index": 11,
+        "answer_text": "def add(a, b):\n    return a + b",
+        "completed": true,
+        "task_answer_passed": true
+      },
+      "equal_ids": 12
+    }
+  ],
+  "raw_id_agreement": 1.0,
+  "exact_job_fraction": 1.0,
+  "source_task_success_fraction": 1.0,
+  "integer_task_success_fraction": 1.0,
+  "free_running_fidelity_passed": true,
+  "both_task_answers_passed": true,
+  "all_predeclared_gates_passed": true,
+  "source_sha256": "80035641199738542e97583714cebe705734a1f9788c8d8ae53c3c54a5477d13",
+  "integer_sha256": "792db4c3d7e0a0bd642ada94752e99c5555b45fa6d055b927d174c8a2ea9ced8",
+  "protocol_sha256": "7cfe136887fecfe1a5272194e2d5cbaabf6b0cd8c379c2e3175454158b7f6d66",
+  "repository": "Qwen/Qwen2.5-1.5B-Instruct",
+  "revision": "989aa7980e4cf806f80c7fef2b1adb7bc71aa306",
+  "context": 128,
+  "new_program_sha256": "245b31fc77e8ddc730c91acc5d92cf7c6b771348a5e27a81693a7a31d780bca2",
+  "max_new_tokens": 32,
+  "native_fixed_count_semantics_replaced": false,
+  "full_benchmark_maxcontext_native_final_or_cohort_proven": false
+}

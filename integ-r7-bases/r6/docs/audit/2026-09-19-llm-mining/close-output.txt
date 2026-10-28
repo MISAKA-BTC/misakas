@@ -1,0 +1,69 @@
+
+================ C1  the TILE lever's TRUE admissible bound — admission checks the ladder on worst_case too ================
+  palw_class_admission_v2 stores `max_step_leaf_count = worst_case_step_leaf_count_capped_v1(profile, ladder)`
+  and that call ERRORS (TooManyLeaves) above the ladder, so a too-finely-tiled class is refused there.
+
+    tile_len       worst_case    canonical pwu      canonical CCU  admissible?  leaves/GMAC
+       65536           345098            43146        84653733376          yes          519
+        4096           517200            64720        84653733376          yes          779
+         512          2240094           280542        84653733376          yes         3376
+         128          8702326          1089910        84653733376          yes        13115
+          64         17404652          2179820        84653733376          yes        26231
+          48         23263548          2913596        84653733376          yes        35060
+          40         28002890          3507146        84653733376          yes        42203
+          36         31061414          3890214        84653733376          yes        46812
+          32         34809304          4359640        84653733376          yes        52461
+          24         46484086          5821814        84653733376          yes        70056
+          16      OVER LADDER          8719280        84653733376      REFUSED       104922
+           8      OVER LADDER         17438560        84653733376      REFUSED       209845
+           4      OVER LADDER         34877120        84653733376      REFUSED       419690
+
+  finest ADMISSIBLE uniform tile = 24; pwu 5821814 vs shipped 6630544 = 0.88x more weight and pay
+  for BYTE-IDENTICAL arithmetic (CCU asserted equal at every row above) and the SAME kernel set.
+
+================ C2  CLOSING THE LEAD: a class whose DECLARED worst case clears the ladder while a LEGAL job does not ================
+  `worst_case_step_leaf_count_capped_v1` enumerates n_ctx-1 prefill positions + ONE decode call.
+  a real job pays a logits term at EVERY decode call, so (1, n_ctx) is deeper than the declared worst.
+
+    n_ctx   declared worst    deepest legal       gap worst<=2^26    job<=2^26 ACCEPTED+UNPROSECUTABLE
+      512         52778128         62476288     18.4%        yes          yes              -   deepest job (1,512)
+      576         59370640         70285824     18.4%        yes           NO    *** YES ***   deepest job (1,576)
+      608         62666896         74190592     18.4%        yes           NO    *** YES ***   deepest job (1,608)
+      624         64315024         76142976     18.4%        yes           NO    *** YES ***   deepest job (1,624)
+      640         65963152         78095360     18.4%        yes           NO    *** YES ***   deepest job (1,640)
+      672             OVER         82000128      NaN%         no           NO              -   deepest job (1,672)
+      704             OVER         85904896      NaN%         no           NO              -   deepest job (1,704)
+      768             OVER         93714432      NaN%         no           NO              -   deepest job (1,768)
+
+  result: a geometry EXISTS. the class is admitted and holds legal jobs the ladder cannot walk.
+
+================ C3  one changed runtime field = a new CLASS with byte-identical work ================
+  shipped  n_threads   1  class_id 4277d84f7d91528cc04aa366d51ee1c2e4f7902c4f6b16a213dead1c7e227977db732f18ed6183db3d944d44726ebd3feff7b15c48f9dba11cd526684f35f1b7
+  clone    n_threads   2  class_id a91494f570f5625dbfe95b14e10e9a54b16ff1c1a2218ba520d3bf3af16be3f47d9363688ce94f7d77b6ab31b6a22a46618399cc28cc70f8486017a16bfcc4b9
+  distinct class id            : true
+  identical pwu (leaves)       : true
+  identical ADR-0131 CCU       : true
+  identical reachable kernels  : true
+  (so `family_certified_for_weight_v2`'s subset test certifies the clone exactly as the original)
+
+================ C4  free-prompt: what claim.pwu can actually reach (quanta x quantum, cap 64) ================
+  canonical leaves 6630544; quantum = canonical/8 = 828818; MAX_QUANTA_PER_RECEIPT = 64
+  => claim.pwu is capped at 64 x quantum = 53044352 = 8.0x the canonical pwu
+
+  prompt tok      work_leaves   quanta        claim.pwu   honest G-MAC   cached G-MAC  pwu/cachedG
+           8           965104        1           828818          12.28           3.09       268038
+          63          6630544        8          6630544          84.65           3.09      2144306
+         128         13326064       16         13261088         170.52           3.09      4288613
+         256         26511088       31         25693358         340.70           3.09      8309188
+         400         41344240       49         40612082         533.88           3.09     13133877
+         500         51645040       62         51386716         669.09           3.09     16618375
+
+================ C5  INVARIANT (iii): does more NON-USEFUL work mean more profit? weight per MAC-eq ACTUALLY EXECUTED ================
+  every row below is the SAME artifact, the SAME graph, the SAME kernel set, the SAME certification.
+  only the registrant's two free choices move: the canonical job's decode count, and tile_len.
+
+  declaration                            pwu (leaves)  executed draw CCU   leaves/G-MACeq vs shipped
+  SHIPPED  canonical (63,2) tile as-is          6630544        83102171136            79788       1.0x   admissible yes
+  canonical (1,432) tile as-is               52714368         1546037392         34096438     427.3x   admissible yes
+  canonical (63,2)  tile 64                   2179820        83102171136            26231       0.3x   admissible yes
+  canonical (1,128) tile 64                   4659968         1546037392          3014137      37.8x   admissible yes

@@ -1201,7 +1201,7 @@ async fn the_mixed_verdict_chain(ruleset: Ruleset) -> Dump {
         }
         for route in routes {
             let bytes = route.encode();
-            assert_eq!(Route::decode(&bytes).unwrap(), route, "the appended action's outer frame decodes");
+            assert_eq!(Route::decode(&bytes).unwrap(), route, "the appended action's bounded outer frame decodes");
             let inner = bytes[1];
             let object = Obj::KernelRouteV1 { bytes, signer: bond, signature: vec![1; 64] };
             payloads.push((format!("native inner {inner} action {action} below its fence"), payload_of(&object)));

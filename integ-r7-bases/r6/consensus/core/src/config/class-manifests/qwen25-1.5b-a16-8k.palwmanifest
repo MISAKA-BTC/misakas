@@ -1,0 +1,13 @@
+{
+  "schema": "misaka.palw.class-manifest.v1",
+  "artifact_digest": "f4af38d91cb4d012189051742a98322ba9a20c9e62bbc9383b0d2c03727d0e5dbb7292be7186b7bc948a28ca0e02a4f59191edc71ff37bb4d7067b559bc3f0d0",
+  "artifact_bytes": 1799359436,
+  "lineage_id": "base0-dense-v1",
+  "classes": [
+    {
+      "model_id": "Qwen/Qwen2.5-1.5B/graph-v7@8192",
+      "class_id": "ebf44d0aa09ff7d1310a7855ab4005c275cdce557e32c269b0f3a984ea80ca73ad1ea0c9b1c0539c8ae04abb5fe24399e67e05bb0895a3dee82253e772246d01",
+      "inventory_root": "88096dc177826d880c1c5fca4ec93cffe5ab51af108ed169a8e03cd4726308f91263f79f81904b043327bfa277e3558b1656f14259f6dd33603a9f91871aae20"
+    }
+  ]
+}

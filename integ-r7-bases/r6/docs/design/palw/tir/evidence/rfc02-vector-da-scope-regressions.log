@@ -1,0 +1,20 @@
+
+FILTER scope::tests
+
+running 6 tests
+test scope::tests::a_state_written_from_model_bytes_is_model_bytes_at_the_next_position ... ok
+test scope::tests::the_budget_stays_below_every_relation_and_never_refuses ... ok
+test scope::tests::the_exposure_names_the_one_position_and_the_k_position_relations ... ok
+test scope::tests::the_node_materials_separate_weights_copies_and_activations ... ok
+test scope::tests::the_per_requester_tally_bounds_each_requester_and_never_another ... ok
+test seg_scope::tests::flat_lookup_price_changes_only_element_work_and_keeps_conservative_disclosure ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 93 filtered out; finished in 0.04s
+
+
+FILTER seg_scope::tests
+
+running 1 test
+test seg_scope::tests::flat_lookup_price_changes_only_element_work_and_keeps_conservative_disclosure ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 98 filtered out; finished in 0.04s

@@ -1,0 +1,11 @@
+
+running 5 tests
+test the_pool_carries_its_fork_id_name ... ok
+testnet-12 params id with the pool 5ee7fd8ee019968cf52929b844cf9ddfb1aad500842a89cf04bced8ba4edefb6 / without 93056a4210e1c5df077951b0843f852d34c2d6cb9b5e0f8403773f9665424451
+test the_pool_is_genesis_only_and_needs_the_registry_the_jury_and_the_audit ... ok
+test the_pool_and_its_terms_move_testnet12s_fingerprint ... ok
+test testnet11_devnet_and_mainnet_fingerprint_as_they_did_before_the_pool ... ok
+test the_activation_pool_is_armed_on_testnet12_only ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+

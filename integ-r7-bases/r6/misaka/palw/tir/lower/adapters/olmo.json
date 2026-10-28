@@ -1,0 +1,15 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "olmo",
+  "doc": "OLMo-1 (hf ports): non-parametric LayerNorm (eps fixed at 1e-5 in OlmoLayerNorm) and clip_qkv.",
+  "extends": ["decoder-core"],
+  "match": {"architectures": ["OlmoForCausalLM"], "model_types": ["olmo"]},
+  "config": {"defaults": {"vocab_size": 50304}},
+  "vars": [
+    {"name": "eps", "value": 1e-05},
+    {"name": "norm", "value": {"kind": "Layer", "eps": 1e-05, "gain": "None", "bias": false}},
+    {"name": "clip", "value": {"$cfg?": "clip_qkv"}},
+    {"name": "attn_extra", "value": {"clip_qkv": {"$var": "clip"}}},
+    {"name": "model_type", "value": "olmo"}
+  ]
+}

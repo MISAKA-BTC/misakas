@@ -1,0 +1,123 @@
+{
+  "schema": "misaka.rfc02.protected-quota11-isolated-verdict.v1",
+  "scope": "Pure persisted same-QuotaState protected paid seal/fragment, original operator monotone nonce witness, fixed authenticated selected rows, class/source court quantity envelope. Native11 routes, actual coin/UTXO conservation, network/delivery/retention consumers and RFC02 completion remain OPEN.",
+  "supersedes_component_test_count": 20,
+  "current_selected_passed": 40,
+  "current_selected_failed": 0,
+  "new_distinct_tests": 20,
+  "cargo_command": "CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target cargo test -p misaka-palw-kernel --locked --lib flat_quota11 -- --test-threads=1",
+  "cargo_compile_seconds": 5.49,
+  "cargo_runtime_seconds": 1.12,
+  "immutable_replay_command": "/tmp/rfc02-flat-quota11-protected-final40-unit flat_quota11 --test-threads=1",
+  "immutable_replay_passed": 40,
+  "immutable_replay_runtime_seconds": 2.1,
+  "build_environment": {
+    "rust": "1.93.0",
+    "profile": "ordinary debug + debuginfo",
+    "CARGO_INCREMENTAL": "0",
+    "budget_stack_arithmetic_cap_overrides": false
+  },
+  "owned_source_sha256": {
+    "misaka-palw-kernel/src/flat_quota11.rs": "540f6a339e66c3d4e6332377356ad8a4cd6b2cd33830a669f449861a5d8c3aa0",
+    "misaka-palw-kernel/src/flat_quota11/protected.rs": "62465d2d62154d9d3dbafa1e4a2ec05ab9d66294ee7e5c83c71d0e1c59c0c88f",
+    "misaka-palw-kernel/src/flat_quota11/sharded.rs": "2c6a0a57ada574ff8b6ab8911c965c1a17a23cf1115f8b3a08038e54eef1160a",
+    "misaka-palw-kernel/src/flat_quota11/protected_tests.rs": "dd0dc0aef64cd7e08decbc4c899cb352ef34a8a92b60910d72c5779620a625c6"
+  },
+  "source_pin_scope": "150 local unit dependency manifests/Rust sources captured AFTER final40 cargo and BEFORE immutable replay, unchanged across replay. This is not a before-cargo full dependency manifest; coherent native9 receipt separately captures/rebuilds all compiled sources.",
+  "source_preimage_json": "rfc02-protected-quota11-final-source-preimage.json",
+  "source_preimage_archive": "rfc02-protected-quota11-final-source-preimages.tar.gz",
+  "retained_binary_sha256": {
+    "/tmp/rfc02-flat-quota11-protected-33-snapshot-unit": "8b11cf3cc0250ec31b7e5f4d2cc2fd83187c5cafce6b88180e23aee49737a684",
+    "/tmp/rfc02-flat-quota11-protected-37-snapshot-unit": "8607c0cbdbfcec5d469d8f55d6a25fc17b5817cc0ca6902621334f6f061a5815",
+    "/tmp/rfc02-flat-quota11-protected-final40-unit": "11200c0c632af1f0157f668888b234627568933676220d6eee4daf0af6afd799"
+  },
+  "logs_sha256": {
+    "rfc02-flat-quota11-protected-fifth-tests.log": "59e8776ccbcadcbdb1237ce3b1f5357ca47e342b282c296610cdd09aae2304b0",
+    "rfc02-flat-quota11-protected-final40-retained-tests.log": "750ad3de77695269a43c457d2350f045978471b95fe7d2af1c90fcc2b90c783d",
+    "rfc02-flat-quota11-protected-final40-second-tests.log": "e0b0e47a8fe08d9d1ce82c8c98fc2adcd1f0fe34495f28da62b77f726f2c983d",
+    "rfc02-flat-quota11-protected-final40-trial-tests.log": "b3a816243f518ba42a726ff9dda09d477bcd35525af1fe67757f25af32dcd81d",
+    "rfc02-flat-quota11-protected-fourth-tests.log": "7d3622e21927eb035c6c22590607dcb984c9d24b4bd3ab13e0ba093a9d2b30b8",
+    "rfc02-flat-quota11-protected-second-tests.log": "c588c2d9ca59e13f1f3947ca1df56474169183f663d003968c4d085678428aaa",
+    "rfc02-flat-quota11-protected-sixth-tests.log": "d4262ee660b70f23b0d4fcdfcc6cf34928d4d5a6abd9968836912d44cf1e5a02",
+    "rfc02-flat-quota11-protected-source-shard-second-tests.log": "4bd5370005b15aab8fed53145ed6ba4aaa8adacf69fc464ade090cb186313995",
+    "rfc02-flat-quota11-protected-source-shard-trial-tests.log": "34dc7b3af85664bd47487037c9e76f83cfb79461a37d1bf58df3790274a12280",
+    "rfc02-flat-quota11-protected-third-tests.log": "abce4322c1f39b6f844c24f0a0fcb09a4dc2b5df848b8c19c4baa3e42d81cd6e",
+    "rfc02-flat-quota11-protected-trial-tests.log": "6c686b516925b0adb287a775fd00163bc9015e4feba4ede375002ea48ca6da30"
+  },
+  "contracts": {
+    "aggregate": "Producer and seal own guarantees share21 cumulative plan/block/actor/network axes. Both remaining guarantees survive ordinary flood/equal-DAA block rotation/ancestor replay. Failed expensive attempts retain debit; no terminal allowance refund.",
+    "original_paid_seal": "Nonwire native authenticates actual original funded job/book/claim/vector, distinct registered operator IDs, positive original deposit/debit receipt, exact maturity3+horizon posted+100+grace3 within original deadline/interval. Shared live legacy6/7/9/11 counts<=1024global/4actor. Immutable root excludes mutable counts; callback/native membership still consumer requirements.",
+    "guarantee": "Reserve Court2+wholeChunk1+DARequest2+two32KiB attempts per possible fragment BEFORE maturity; no repeated referenceMAC baseline. Protected DA2 is missing-operand capacity after proof identity, not all unknown-node discovery.",
+    "fragments": "raw1..32768/outer<=1024/count/index/aggregate<=max(class9/source2 filing)+7+16KiB before allocation/debit; distinct success bitmap vs attempts; stale token/third attempt/accepted duplicate refuse. Whole finish requires all parts and pays one exact class/source court envelope.",
+    "retained_job4": "Rooted subject counter<=4 includes spent retained seals; full restore cross-checks actual rows, sharded POST increments. Earlier-interval genuine terminal seal GC decrements retained count without refund; live seals prevent subject GC. Worst1024 case uses256 independently funded jobs,4 each;257th empty job cannot bypass global cap.",
+    "answers": "check_native_protected_capacity takes only trusted compiled ordinary LIFETIME cap, never wire caller, and checks answer attempts>=cap+8. Tests32->40/56->64/overflow; generic answer2 fixture is algebra-only, no native demand-slot/service coverage claim.",
+    "nonce": "canonical64B=u64LE+56zeros; ORIGINAL aux87 requester/operator plus actual permanent aux88 highwater/root; nonce<next_nonce, MAX cannotincrement. Bond rotation/GC cannot reset operator index; helper checks local consistency, native authenticates witness.",
+    "shards": "Fixed rooted global/actor/subject/seal rows with actual native keys/expected roots/absence. Selected subject+distinct seal remaining SUM<=globalreserved; producer attempts/horizon/job4 checked. Baseline/seal/court/fragment/producerAnswer/public/ordinary/lateTerminal deltas match full-book algebra. Private partial scratch book never exposed as full state/root.",
+    "source": "Proof bound exact originalPCbody4+sum67/69+128KiB. Court/Chunk max(full class9,source W/F/S)+7. Parameter axes include PC root bytes8+sum67/69, one4096 i128tile, one32KiB inventory piece, rank4,64kernel+32inventory siblings; copy/container/peak separate. No complete model tensor/tree materialization.",
+    "native_factory": "Private checked native fullscope reuses maxscope/restorequote, derives actual resource10 ONCE; public independent factory same exactrooted plans forP1..3. Factory metadata grants no baseline admission rights."
+  },
+  "fixed_row_bytes": {
+    "global": 1500,
+    "actor": 749,
+    "subject": 1763,
+    "seal": 1716,
+    "four_selected_total_without_framing": 5728,
+    "full_subject_map_row": 1827,
+    "full_seal_map_row": 1780,
+    "full_actor_map_row": 736,
+    "full_codec_upper_policy128actors128subjects1024seals": 2152284,
+    "full_test257actors256subjects1024seals": 2481084
+  },
+  "open_conditions": [
+    "Native11 routes must enforce allrows with actual principal/producerreserve/sealdeposit/Final/UTXO atomic conservation; pure helper does not close groups2/3/5/6.",
+    "Native ordinary lifetime/concurrent/protected slots and produceranswer counts must be compiled, independently quoted, persisted and enforced; toy2 answers does not establish native service coverage.",
+    "ClassRestore/ActualPrepare/Fund/readonly terminal resource10/21axis factories +actual row/vector read/decode/hash/copy fees must debit before invalid expensive bodies; legacy ordinary factory is not native stage quotation.",
+    "Selected roots/keys/absence and nonce/operator witness must come from actual authenticated journal; no carrier root/hash consistency substitutes chain authentication.",
+    "Native must journal fixed selected rows directly; whole2.4MiB map projection/serialize/restore cannot be hidden under fixed row fee.",
+    "Selected twoactor terminal GC journal +permanent nonce/compact terminal adapter remain unintegrated; full-book boundedGC does not prove indefinite native throughput.",
+    "Native/SDK callbacks, actual storage/retention and external RPC retry limits remain enforcement work; chain attempts cannot measure every external RPC retry.",
+    "H8 variable history, perclass actual variable length/media admission/execution and realcheckpoint/A6/A8>=90% acceptance are separate OPEN work."
+  ],
+  "trial_history": [
+    {
+      "log": "rfc02-flat-quota11-protected-trial-tests.log",
+      "finding": "Child check visibility pub(super) fix."
+    },
+    {
+      "log": "rfc02-flat-quota11-protected-second-tests.log",
+      "finding": "25/26PASS; tiny fixture wrongly assumed multiplefragments, replaced with realwide MatMul."
+    },
+    {
+      "log": "rfc02-flat-quota11-protected-third-tests.log",
+      "finding": "Test MapParams path fix."
+    },
+    {
+      "log": "rfc02-flat-quota11-protected-fourth-tests.log",
+      "finding": "I16 k128 MatMul->i32 overflow correctly refused."
+    },
+    {
+      "log": "rfc02-flat-quota11-protected-fifth-tests.log",
+      "finding": "i64 carriedtensor correctly refused; no grammar/range/cap override."
+    },
+    {
+      "log": "rfc02-flat-quota11-protected-sixth-tests.log",
+      "finding": "Validclamp0..1 beforei32MatMul;33PASS, immutable snapshot retained."
+    },
+    {
+      "log": "rfc02-flat-quota11-protected-source-shard-trial-tests.log",
+      "finding": "Test borrowedtemporary root lifetime fixed; production compiled."
+    },
+    {
+      "log": "rfc02-flat-quota11-protected-source-shard-second-tests.log",
+      "finding": "37PASS; retained immutablebefore perjob/sourceIO/three newchecks."
+    },
+    {
+      "log": "rfc02-flat-quota11-protected-final40-trial-tests.log",
+      "finding": "Test noncehelperu8 widened canonicalu64 for257th funded boundary."
+    },
+    {
+      "log": "rfc02-flat-quota11-protected-final40-second-tests.log",
+      "finding": "40PASS; previous20/33/37 not stacked as additional tests."
+    }
+  ]
+}

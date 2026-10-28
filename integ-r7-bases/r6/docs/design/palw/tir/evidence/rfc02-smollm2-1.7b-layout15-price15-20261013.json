@@ -1,0 +1,1101 @@
+{
+  "actual_weight_import_execution_final_or_coverage": false,
+  "layout_pass15_rewrites": 1,
+  "new_class_and_program_binding_required": true,
+  "program_history_bound": 262144,
+  "quoted_program_bytes": 13896,
+  "reports": [
+    {
+      "TopK_relations": 0,
+      "candidate_price15_at_max_position_only": {
+        "first_refusals": [],
+        "full_scope_or_admission_or_final_established": false,
+        "maximum_passed_filing_bytes": 117463,
+        "maximum_passed_input_leaves": 130,
+        "maximum_passed_scratch_bytes": 11659991,
+        "maximum_passed_work": 98579840,
+        "no_activated_descriptor_checker_or_terminal_court": true,
+        "passed_relations": 6522,
+        "reduction_samples": [
+          {
+            "filing_bytes": 49131,
+            "node": 1,
+            "occurrence": 1,
+            "operand_leaf_bytes": [
+              1429
+            ],
+            "operand_leaves": [
+              32
+            ],
+            "operand_reads": [
+              2048
+            ],
+            "primitive": "ReduceSum { axis: 0 }",
+            "route_chunks16KiB": 3,
+            "scratch_bytes": 8928747,
+            "work": 30711680
+          },
+          {
+            "filing_bytes": 5473,
+            "node": 138,
+            "occurrence": 1,
+            "operand_leaf_bytes": [
+              873
+            ],
+            "operand_leaves": [
+              2
+            ],
+            "operand_reads": [
+              26
+            ],
+            "primitive": "ReduceMax { axis: 2 }",
+            "route_chunks16KiB": 1,
+            "scratch_bytes": 8411713,
+            "work": 16718464
+          },
+          {
+            "filing_bytes": 5477,
+            "node": 144,
+            "occurrence": 1,
+            "operand_leaf_bytes": [
+              873
+            ],
+            "operand_leaves": [
+              2
+            ],
+            "operand_reads": [
+              26
+            ],
+            "primitive": "ReduceSum { axis: 2 }",
+            "route_chunks16KiB": 1,
+            "scratch_bytes": 8411717,
+            "work": 16718976
+          },
+          {
+            "filing_bytes": 49131,
+            "node": 184,
+            "occurrence": 1,
+            "operand_leaf_bytes": [
+              1429
+            ],
+            "operand_leaves": [
+              32
+            ],
+            "operand_reads": [
+              2048
+            ],
+            "primitive": "ReduceSum { axis: 0 }",
+            "route_chunks16KiB": 3,
+            "scratch_bytes": 8928747,
+            "work": 30711680
+          },
+          {
+            "filing_bytes": 49131,
+            "node": 1,
+            "occurrence": 2,
+            "operand_leaf_bytes": [
+              1429
+            ],
+            "operand_leaves": [
+              32
+            ],
+            "operand_reads": [
+              2048
+            ],
+            "primitive": "ReduceSum { axis: 0 }",
+            "route_chunks16KiB": 3,
+            "scratch_bytes": 8928747,
+            "work": 30711680
+          },
+          {
+            "filing_bytes": 5473,
+            "node": 138,
+            "occurrence": 2,
+            "operand_leaf_bytes": [
+              873
+            ],
+            "operand_leaves": [
+              2
+            ],
+            "operand_reads": [
+              26
+            ],
+            "primitive": "ReduceMax { axis: 2 }",
+            "route_chunks16KiB": 1,
+            "scratch_bytes": 8411713,
+            "work": 16718464
+          },
+          {
+            "filing_bytes": 5477,
+            "node": 144,
+            "occurrence": 2,
+            "operand_leaf_bytes": [
+              873
+            ],
+            "operand_leaves": [
+              2
+            ],
+            "operand_reads": [
+              26
+            ],
+            "primitive": "ReduceSum { axis: 2 }",
+            "route_chunks16KiB": 1,
+            "scratch_bytes": 8411717,
+            "work": 16718976
+          },
+          {
+            "filing_bytes": 49131,
+            "node": 184,
+            "occurrence": 2,
+            "operand_leaf_bytes": [
+              1429
+            ],
+            "operand_leaves": [
+              32
+            ],
+            "operand_reads": [
+              2048
+            ],
+            "primitive": "ReduceSum { axis: 0 }",
+            "route_chunks16KiB": 3,
+            "scratch_bytes": 8928747,
+            "work": 30711680
+          }
+        ],
+        "refusals": {}
+      },
+      "derived_history_relations": 192,
+      "greedy_decode_logits_elements": 49152,
+      "history_append_relations": 48,
+      "layout_pass15": {
+        "added_reference_i128_bytes_at_final_position": 42000384,
+        "added_trace_payload_bytes_at_final_position": 5584896,
+        "added_trace_payload_per_claim_upper_bound": 145207296,
+        "applied": true,
+        "not_a_measurement_or_complete_execution_retention_peak": true
+      },
+      "maximum_flat_leaf_localization_replies": 11,
+      "maximum_primitive_inputs": 2,
+      "node_count": 6522,
+      "ordinary_bound_does_not_certify_history_TopK_decode_or_encoder": true,
+      "ordinary_followup_callback_bound": 16,
+      "ordinary_total_callback_bound": 35,
+      "positions": 26,
+      "primitive_histogram": {
+        "Add": 361,
+        "Clamp { lo: -16777216, hi: 16777216 }": 48,
+        "Clamp { lo: -2097152, hi: 0 }": 24,
+        "Clamp { lo: -2147483648, hi: 0 }": 24,
+        "Clamp { lo: -2147483648, hi: 2147483647 }": 171,
+        "Clamp { lo: -32767, hi: 32767 }": 313,
+        "Clamp { lo: 0, hi: 102 }": 49,
+        "Clamp { lo: 0, hi: 2047 }": 144,
+        "Clamp { lo: 0, hi: 24 }": 168,
+        "Clamp { lo: 0, hi: 33554432 }": 24,
+        "Clamp { lo: 0, hi: 51 }": 98,
+        "Clamp { lo: 0, hi: 511 }": 24,
+        "Clamp { lo: 0, hi: 62 }": 291,
+        "Clamp { lo: 0, hi: 8191 }": 24,
+        "Clamp { lo: 0, hi: 9223372036854775807 }": 98,
+        "Concat { axis: 1 }": 48,
+        "Div { rule: Floor }": 412,
+        "Div { rule: HalfAwayFromZero }": 291,
+        "Gather { axis: 0, batch_dims: 0 }": 848,
+        "HistAppend { state: 0 }": 24,
+        "HistAppend { state: 1 }": 24,
+        "IntExp": 24,
+        "IntRsqrt": 73,
+        "Log2Floor": 49,
+        "MatMul": 385,
+        "Mul": 1063,
+        "ReduceMax { axis: 2 }": 24,
+        "ReduceSum { axis: 0 }": 49,
+        "ReduceSum { axis: 2 }": 24,
+        "Reshape": 986,
+        "Slice { axis: 1, start: 0 }": 48,
+        "Slice { axis: 1, start: 32 }": 48,
+        "Sub": 169,
+        "Transpose { perm: [0, 2, 1] }": 24,
+        "Transpose { perm: [1, 0, 2] }": 24,
+        "Transpose { perm: [1, 2, 0] }": 24
+      },
+      "root_localization_successful_read_bound": 19,
+      "scope9": {
+        "maximum_operand_leaves": 128,
+        "metadata_derivation_work": 101050368,
+        "metadata_relation_visits": 19566,
+        "node_commitments_bytes_per_claim": 10852608,
+        "reference_tensor_bytes_per_position": 380118352,
+        "relations": 6522,
+        "status": "PASS",
+        "trace_value_bytes_per_claim": 3354909194,
+        "trace_value_bytes_per_position": 129034969,
+        "worst_court_bytes": 117466,
+        "worst_court_scratch_bytes": 11660039,
+        "worst_court_work": 98580224
+      }
+    },
+    {
+      "TopK_relations": 0,
+      "candidate_price15_at_max_position_only": {
+        "first_refusals": [],
+        "full_scope_or_admission_or_final_established": false,
+        "maximum_passed_filing_bytes": 117463,
+        "maximum_passed_input_leaves": 130,
+        "maximum_passed_scratch_bytes": 11659991,
+        "maximum_passed_work": 98579840,
+        "no_activated_descriptor_checker_or_terminal_court": true,
+        "passed_relations": 6522,
+        "reduction_samples": [
+          {
+            "filing_bytes": 49131,
+            "node": 1,
+            "occurrence": 1,
+            "operand_leaf_bytes": [
+              1429
+            ],
+            "operand_leaves": [
+              32
+            ],
+            "operand_reads": [
+              2048
+            ],
+            "primitive": "ReduceSum { axis: 0 }",
+            "route_chunks16KiB": 3,
+            "scratch_bytes": 8928747,
+            "work": 30711680
+          },
+          {
+            "filing_bytes": 5601,
+            "node": 138,
+            "occurrence": 1,
+            "operand_leaf_bytes": [
+              937
+            ],
+            "operand_leaves": [
+              2
+            ],
+            "operand_reads": [
+              64
+            ],
+            "primitive": "ReduceMax { axis: 2 }",
+            "route_chunks16KiB": 1,
+            "scratch_bytes": 8416705,
+            "work": 16890496
+          },
+          {
+            "filing_bytes": 5605,
+            "node": 144,
+            "occurrence": 1,
+            "operand_leaf_bytes": [
+              937
+            ],
+            "operand_leaves": [
+              2
+            ],
+            "operand_reads": [
+              64
+            ],
+            "primitive": "ReduceSum { axis: 2 }",
+            "route_chunks16KiB": 1,
+            "scratch_bytes": 8416709,
+            "work": 16891008
+          },
+          {
+            "filing_bytes": 49131,
+            "node": 184,
+            "occurrence": 1,
+            "operand_leaf_bytes": [
+              1429
+            ],
+            "operand_leaves": [
+              32
+            ],
+            "operand_reads": [
+              2048
+            ],
+            "primitive": "ReduceSum { axis: 0 }",
+            "route_chunks16KiB": 3,
+            "scratch_bytes": 8928747,
+            "work": 30711680
+          },
+          {
+            "filing_bytes": 49131,
+            "node": 1,
+            "occurrence": 2,
+            "operand_leaf_bytes": [
+              1429
+            ],
+            "operand_leaves": [
+              32
+            ],
+            "operand_reads": [
+              2048
+            ],
+            "primitive": "ReduceSum { axis: 0 }",
+            "route_chunks16KiB": 3,
+            "scratch_bytes": 8928747,
+            "work": 30711680
+          },
+          {
+            "filing_bytes": 5601,
+            "node": 138,
+            "occurrence": 2,
+            "operand_leaf_bytes": [
+              937
+            ],
+            "operand_leaves": [
+              2
+            ],
+            "operand_reads": [
+              64
+            ],
+            "primitive": "ReduceMax { axis: 2 }",
+            "route_chunks16KiB": 1,
+            "scratch_bytes": 8416705,
+            "work": 16890496
+          },
+          {
+            "filing_bytes": 5605,
+            "node": 144,
+            "occurrence": 2,
+            "operand_leaf_bytes": [
+              937
+            ],
+            "operand_leaves": [
+              2
+            ],
+            "operand_reads": [
+              64
+            ],
+            "primitive": "ReduceSum { axis: 2 }",
+            "route_chunks16KiB": 1,
+            "scratch_bytes": 8416709,
+            "work": 16891008
+          },
+          {
+            "filing_bytes": 49131,
+            "node": 184,
+            "occurrence": 2,
+            "operand_leaf_bytes": [
+              1429
+            ],
+            "operand_leaves": [
+              32
+            ],
+            "operand_reads": [
+              2048
+            ],
+            "primitive": "ReduceSum { axis: 0 }",
+            "route_chunks16KiB": 3,
+            "scratch_bytes": 8928747,
+            "work": 30711680
+          }
+        ],
+        "refusals": {}
+      },
+      "derived_history_relations": 192,
+      "greedy_decode_logits_elements": 49152,
+      "history_append_relations": 48,
+      "layout_pass15": {
+        "added_reference_i128_bytes_at_final_position": 102236160,
+        "added_trace_payload_bytes_at_final_position": 13172736,
+        "added_trace_payload_per_claim_upper_bound": 843055104,
+        "applied": true,
+        "not_a_measurement_or_complete_execution_retention_peak": true
+      },
+      "maximum_flat_leaf_localization_replies": 12,
+      "maximum_primitive_inputs": 2,
+      "node_count": 6522,
+      "ordinary_bound_does_not_certify_history_TopK_decode_or_encoder": true,
+      "ordinary_followup_callback_bound": 17,
+      "ordinary_total_callback_bound": 37,
+      "positions": 64,
+      "primitive_histogram": {
+        "Add": 361,
+        "Clamp { lo: -16777216, hi: 16777216 }": 48,
+        "Clamp { lo: -2097152, hi: 0 }": 24,
+        "Clamp { lo: -2147483648, hi: 0 }": 24,
+        "Clamp { lo: -2147483648, hi: 2147483647 }": 171,
+        "Clamp { lo: -32767, hi: 32767 }": 313,
+        "Clamp { lo: 0, hi: 102 }": 49,
+        "Clamp { lo: 0, hi: 2047 }": 144,
+        "Clamp { lo: 0, hi: 24 }": 168,
+        "Clamp { lo: 0, hi: 33554432 }": 24,
+        "Clamp { lo: 0, hi: 51 }": 98,
+        "Clamp { lo: 0, hi: 511 }": 24,
+        "Clamp { lo: 0, hi: 62 }": 291,
+        "Clamp { lo: 0, hi: 8191 }": 24,
+        "Clamp { lo: 0, hi: 9223372036854775807 }": 98,
+        "Concat { axis: 1 }": 48,
+        "Div { rule: Floor }": 412,
+        "Div { rule: HalfAwayFromZero }": 291,
+        "Gather { axis: 0, batch_dims: 0 }": 848,
+        "HistAppend { state: 0 }": 24,
+        "HistAppend { state: 1 }": 24,
+        "IntExp": 24,
+        "IntRsqrt": 73,
+        "Log2Floor": 49,
+        "MatMul": 385,
+        "Mul": 1063,
+        "ReduceMax { axis: 2 }": 24,
+        "ReduceSum { axis: 0 }": 49,
+        "ReduceSum { axis: 2 }": 24,
+        "Reshape": 986,
+        "Slice { axis: 1, start: 0 }": 48,
+        "Slice { axis: 1, start: 32 }": 48,
+        "Sub": 169,
+        "Transpose { perm: [0, 2, 1] }": 24,
+        "Transpose { perm: [1, 0, 2] }": 24,
+        "Transpose { perm: [1, 2, 0] }": 24
+      },
+      "root_localization_successful_read_bound": 20,
+      "scope9": {
+        "maximum_operand_leaves": 128,
+        "metadata_derivation_work": 101050368,
+        "metadata_relation_visits": 19566,
+        "node_commitments_bytes_per_claim": 26714112,
+        "reference_tensor_bytes_per_position": 625263952,
+        "relations": 6522,
+        "status": "PASS",
+        "trace_value_bytes_per_claim": 10372560448,
+        "trace_value_bytes_per_position": 162071257,
+        "worst_court_bytes": 117466,
+        "worst_court_scratch_bytes": 11660039,
+        "worst_court_work": 98580224
+      }
+    },
+    {
+      "TopK_relations": 0,
+      "candidate_price15_at_max_position_only": {
+        "first_refusals": [],
+        "full_scope_or_admission_or_final_established": false,
+        "maximum_passed_filing_bytes": 308846,
+        "maximum_passed_input_leaves": 265,
+        "maximum_passed_scratch_bytes": 11659991,
+        "maximum_passed_work": 98579840,
+        "no_activated_descriptor_checker_or_terminal_court": true,
+        "passed_relations": 6522,
+        "reduction_samples": [
+          {
+            "filing_bytes": 49131,
+            "node": 1,
+            "occurrence": 1,
+            "operand_leaf_bytes": [
+              1429
+            ],
+            "operand_leaves": [
+              32
+            ],
+            "operand_reads": [
+              2048
+            ],
+            "primitive": "ReduceSum { axis: 0 }",
+            "route_chunks16KiB": 3,
+            "scratch_bytes": 8928747,
+            "work": 30711680
+          },
+          {
+            "filing_bytes": 13888,
+            "node": 138,
+            "occurrence": 1,
+            "operand_leaf_bytes": [
+              1129
+            ],
+            "operand_leaves": [
+              9
+            ],
+            "operand_reads": [
+              512
+            ],
+            "primitive": "ReduceMax { axis: 2 }",
+            "route_chunks16KiB": 1,
+            "scratch_bytes": 8532400,
+            "work": 19814912
+          },
+          {
+            "filing_bytes": 13892,
+            "node": 144,
+            "occurrence": 1,
+            "operand_leaf_bytes": [
+              1129
+            ],
+            "operand_leaves": [
+              9
+            ],
+            "operand_reads": [
+              512
+            ],
+            "primitive": "ReduceSum { axis: 2 }",
+            "route_chunks16KiB": 1,
+            "scratch_bytes": 8532404,
+            "work": 19815424
+          },
+          {
+            "filing_bytes": 49131,
+            "node": 184,
+            "occurrence": 1,
+            "operand_leaf_bytes": [
+              1429
+            ],
+            "operand_leaves": [
+              32
+            ],
+            "operand_reads": [
+              2048
+            ],
+            "primitive": "ReduceSum { axis: 0 }",
+            "route_chunks16KiB": 3,
+            "scratch_bytes": 8928747,
+            "work": 30711680
+          },
+          {
+            "filing_bytes": 49131,
+            "node": 1,
+            "occurrence": 2,
+            "operand_leaf_bytes": [
+              1429
+            ],
+            "operand_leaves": [
+              32
+            ],
+            "operand_reads": [
+              2048
+            ],
+            "primitive": "ReduceSum { axis: 0 }",
+            "route_chunks16KiB": 3,
+            "scratch_bytes": 8928747,
+            "work": 30711680
+          },
+          {
+            "filing_bytes": 13888,
+            "node": 138,
+            "occurrence": 2,
+            "operand_leaf_bytes": [
+              1129
+            ],
+            "operand_leaves": [
+              9
+            ],
+            "operand_reads": [
+              512
+            ],
+            "primitive": "ReduceMax { axis: 2 }",
+            "route_chunks16KiB": 1,
+            "scratch_bytes": 8532400,
+            "work": 19814912
+          },
+          {
+            "filing_bytes": 13892,
+            "node": 144,
+            "occurrence": 2,
+            "operand_leaf_bytes": [
+              1129
+            ],
+            "operand_leaves": [
+              9
+            ],
+            "operand_reads": [
+              512
+            ],
+            "primitive": "ReduceSum { axis: 2 }",
+            "route_chunks16KiB": 1,
+            "scratch_bytes": 8532404,
+            "work": 19815424
+          },
+          {
+            "filing_bytes": 49131,
+            "node": 184,
+            "occurrence": 2,
+            "operand_leaf_bytes": [
+              1429
+            ],
+            "operand_leaves": [
+              32
+            ],
+            "operand_reads": [
+              2048
+            ],
+            "primitive": "ReduceSum { axis: 0 }",
+            "route_chunks16KiB": 3,
+            "scratch_bytes": 8928747,
+            "work": 30711680
+          }
+        ],
+        "refusals": {}
+      },
+      "derived_history_relations": 192,
+      "greedy_decode_logits_elements": 49152,
+      "history_append_relations": 48,
+      "layout_pass15": {
+        "added_reference_i128_bytes_at_final_position": 812384256,
+        "added_trace_payload_bytes_at_final_position": 102629376,
+        "added_trace_payload_per_claim_upper_bound": 52546240512,
+        "applied": true,
+        "not_a_measurement_or_complete_execution_retention_peak": true
+      },
+      "maximum_flat_leaf_localization_replies": 15,
+      "maximum_primitive_inputs": 2,
+      "node_count": 6522,
+      "ordinary_bound_does_not_certify_history_TopK_decode_or_encoder": true,
+      "ordinary_followup_callback_bound": 20,
+      "ordinary_total_callback_bound": 43,
+      "positions": 512,
+      "primitive_histogram": {
+        "Add": 361,
+        "Clamp { lo: -16777216, hi: 16777216 }": 48,
+        "Clamp { lo: -2097152, hi: 0 }": 24,
+        "Clamp { lo: -2147483648, hi: 0 }": 24,
+        "Clamp { lo: -2147483648, hi: 2147483647 }": 171,
+        "Clamp { lo: -32767, hi: 32767 }": 313,
+        "Clamp { lo: 0, hi: 102 }": 49,
+        "Clamp { lo: 0, hi: 2047 }": 144,
+        "Clamp { lo: 0, hi: 24 }": 168,
+        "Clamp { lo: 0, hi: 33554432 }": 24,
+        "Clamp { lo: 0, hi: 51 }": 98,
+        "Clamp { lo: 0, hi: 511 }": 24,
+        "Clamp { lo: 0, hi: 62 }": 291,
+        "Clamp { lo: 0, hi: 8191 }": 24,
+        "Clamp { lo: 0, hi: 9223372036854775807 }": 98,
+        "Concat { axis: 1 }": 48,
+        "Div { rule: Floor }": 412,
+        "Div { rule: HalfAwayFromZero }": 291,
+        "Gather { axis: 0, batch_dims: 0 }": 848,
+        "HistAppend { state: 0 }": 24,
+        "HistAppend { state: 1 }": 24,
+        "IntExp": 24,
+        "IntRsqrt": 73,
+        "Log2Floor": 49,
+        "MatMul": 385,
+        "Mul": 1063,
+        "ReduceMax { axis: 2 }": 24,
+        "ReduceSum { axis: 0 }": 49,
+        "ReduceSum { axis: 2 }": 24,
+        "Reshape": 986,
+        "Slice { axis: 1, start: 0 }": 48,
+        "Slice { axis: 1, start: 32 }": 48,
+        "Sub": 169,
+        "Transpose { perm: [0, 2, 1] }": 24,
+        "Transpose { perm: [1, 0, 2] }": 24,
+        "Transpose { perm: [1, 2, 0] }": 24
+      },
+      "root_localization_successful_read_bound": 23,
+      "scope9": {
+        "maximum_operand_leaves": 256,
+        "metadata_derivation_work": 101050368,
+        "metadata_relation_visits": 19566,
+        "node_commitments_bytes_per_claim": 213712896,
+        "reference_tensor_bytes_per_position": 3515401552,
+        "relations": 6522,
+        "status": "PASS",
+        "trace_value_bytes_per_claim": 282394472960,
+        "trace_value_bytes_per_position": 551551705,
+        "worst_court_bytes": 308849,
+        "worst_court_scratch_bytes": 11660039,
+        "worst_court_work": 98580224
+      }
+    },
+    {
+      "TopK_relations": 0,
+      "candidate_price15_at_max_position_only": {
+        "first_refusals": [
+          {
+            "bounded_price_refuses": true,
+            "node": 156,
+            "occurrence": 1,
+            "refusal": "MatMul: ordinary point relation exceeds frozen court resource caps",
+            "requested_chunks32KiB": 181,
+            "requested_filing_bytes": 5908566,
+            "requested_operand_leaf_bytes": [
+              1523,
+              1393
+            ],
+            "requested_operand_leaves": [
+              129,
+              4096
+            ],
+            "requested_operand_reads": [
+              8192,
+              8192
+            ],
+            "requested_scratch_bytes": 46611526,
+            "requested_work": 856614144
+          },
+          {
+            "bounded_price_refuses": true,
+            "node": 156,
+            "occurrence": 2,
+            "refusal": "MatMul: ordinary point relation exceeds frozen court resource caps",
+            "requested_chunks32KiB": 181,
+            "requested_filing_bytes": 5908566,
+            "requested_operand_leaf_bytes": [
+              1523,
+              1393
+            ],
+            "requested_operand_leaves": [
+              129,
+              4096
+            ],
+            "requested_operand_reads": [
+              8192,
+              8192
+            ],
+            "requested_scratch_bytes": 46611526,
+            "requested_work": 856614144
+          },
+          {
+            "bounded_price_refuses": true,
+            "node": 156,
+            "occurrence": 3,
+            "refusal": "MatMul: ordinary point relation exceeds frozen court resource caps",
+            "requested_chunks32KiB": 181,
+            "requested_filing_bytes": 5908566,
+            "requested_operand_leaf_bytes": [
+              1523,
+              1393
+            ],
+            "requested_operand_leaves": [
+              129,
+              4096
+            ],
+            "requested_operand_reads": [
+              8192,
+              8192
+            ],
+            "requested_scratch_bytes": 46611526,
+            "requested_work": 856614144
+          },
+          {
+            "bounded_price_refuses": true,
+            "node": 156,
+            "occurrence": 4,
+            "refusal": "MatMul: ordinary point relation exceeds frozen court resource caps",
+            "requested_chunks32KiB": 181,
+            "requested_filing_bytes": 5908566,
+            "requested_operand_leaf_bytes": [
+              1523,
+              1393
+            ],
+            "requested_operand_leaves": [
+              129,
+              4096
+            ],
+            "requested_operand_reads": [
+              8192,
+              8192
+            ],
+            "requested_scratch_bytes": 46611526,
+            "requested_work": 856614144
+          },
+          {
+            "bounded_price_refuses": true,
+            "node": 156,
+            "occurrence": 5,
+            "refusal": "MatMul: ordinary point relation exceeds frozen court resource caps",
+            "requested_chunks32KiB": 181,
+            "requested_filing_bytes": 5908566,
+            "requested_operand_leaf_bytes": [
+              1523,
+              1393
+            ],
+            "requested_operand_leaves": [
+              129,
+              4096
+            ],
+            "requested_operand_reads": [
+              8192,
+              8192
+            ],
+            "requested_scratch_bytes": 46611526,
+            "requested_work": 856614144
+          },
+          {
+            "bounded_price_refuses": true,
+            "node": 156,
+            "occurrence": 6,
+            "refusal": "MatMul: ordinary point relation exceeds frozen court resource caps",
+            "requested_chunks32KiB": 181,
+            "requested_filing_bytes": 5908566,
+            "requested_operand_leaf_bytes": [
+              1523,
+              1393
+            ],
+            "requested_operand_leaves": [
+              129,
+              4096
+            ],
+            "requested_operand_reads": [
+              8192,
+              8192
+            ],
+            "requested_scratch_bytes": 46611526,
+            "requested_work": 856614144
+          },
+          {
+            "bounded_price_refuses": true,
+            "node": 156,
+            "occurrence": 7,
+            "refusal": "MatMul: ordinary point relation exceeds frozen court resource caps",
+            "requested_chunks32KiB": 181,
+            "requested_filing_bytes": 5908566,
+            "requested_operand_leaf_bytes": [
+              1523,
+              1393
+            ],
+            "requested_operand_leaves": [
+              129,
+              4096
+            ],
+            "requested_operand_reads": [
+              8192,
+              8192
+            ],
+            "requested_scratch_bytes": 46611526,
+            "requested_work": 856614144
+          },
+          {
+            "bounded_price_refuses": true,
+            "node": 156,
+            "occurrence": 8,
+            "refusal": "MatMul: ordinary point relation exceeds frozen court resource caps",
+            "requested_chunks32KiB": 181,
+            "requested_filing_bytes": 5908566,
+            "requested_operand_leaf_bytes": [
+              1523,
+              1393
+            ],
+            "requested_operand_leaves": [
+              129,
+              4096
+            ],
+            "requested_operand_reads": [
+              8192,
+              8192
+            ],
+            "requested_scratch_bytes": 46611526,
+            "requested_work": 856614144
+          }
+        ],
+        "full_scope_or_admission_or_final_established": false,
+        "maximum_passed_filing_bytes": 182396,
+        "maximum_passed_input_leaves": 130,
+        "maximum_passed_scratch_bytes": 11659991,
+        "maximum_passed_work": 98579840,
+        "no_activated_descriptor_checker_or_terminal_court": true,
+        "passed_relations": 6498,
+        "reduction_samples": [
+          {
+            "filing_bytes": 49131,
+            "node": 1,
+            "occurrence": 1,
+            "operand_leaf_bytes": [
+              1429
+            ],
+            "operand_leaves": [
+              32
+            ],
+            "operand_reads": [
+              2048
+            ],
+            "primitive": "ReduceSum { axis: 0 }",
+            "route_chunks16KiB": 3,
+            "scratch_bytes": 8928747,
+            "work": 30711680
+          },
+          {
+            "filing_bytes": 182392,
+            "node": 138,
+            "occurrence": 1,
+            "operand_leaf_bytes": [
+              1385
+            ],
+            "operand_leaves": [
+              129
+            ],
+            "operand_reads": [
+              8192
+            ],
+            "primitive": "ReduceMax { axis: 2 }",
+            "route_chunks16KiB": 12,
+            "scratch_bytes": 10542184,
+            "work": 73332224
+          },
+          {
+            "filing_bytes": 182396,
+            "node": 144,
+            "occurrence": 1,
+            "operand_leaf_bytes": [
+              1385
+            ],
+            "operand_leaves": [
+              129
+            ],
+            "operand_reads": [
+              8192
+            ],
+            "primitive": "ReduceSum { axis: 2 }",
+            "route_chunks16KiB": 12,
+            "scratch_bytes": 10542188,
+            "work": 73332736
+          },
+          {
+            "filing_bytes": 49131,
+            "node": 184,
+            "occurrence": 1,
+            "operand_leaf_bytes": [
+              1429
+            ],
+            "operand_leaves": [
+              32
+            ],
+            "operand_reads": [
+              2048
+            ],
+            "primitive": "ReduceSum { axis: 0 }",
+            "route_chunks16KiB": 3,
+            "scratch_bytes": 8928747,
+            "work": 30711680
+          },
+          {
+            "filing_bytes": 49131,
+            "node": 1,
+            "occurrence": 2,
+            "operand_leaf_bytes": [
+              1429
+            ],
+            "operand_leaves": [
+              32
+            ],
+            "operand_reads": [
+              2048
+            ],
+            "primitive": "ReduceSum { axis: 0 }",
+            "route_chunks16KiB": 3,
+            "scratch_bytes": 8928747,
+            "work": 30711680
+          },
+          {
+            "filing_bytes": 182392,
+            "node": 138,
+            "occurrence": 2,
+            "operand_leaf_bytes": [
+              1385
+            ],
+            "operand_leaves": [
+              129
+            ],
+            "operand_reads": [
+              8192
+            ],
+            "primitive": "ReduceMax { axis: 2 }",
+            "route_chunks16KiB": 12,
+            "scratch_bytes": 10542184,
+            "work": 73332224
+          },
+          {
+            "filing_bytes": 182396,
+            "node": 144,
+            "occurrence": 2,
+            "operand_leaf_bytes": [
+              1385
+            ],
+            "operand_leaves": [
+              129
+            ],
+            "operand_reads": [
+              8192
+            ],
+            "primitive": "ReduceSum { axis: 2 }",
+            "route_chunks16KiB": 12,
+            "scratch_bytes": 10542188,
+            "work": 73332736
+          },
+          {
+            "filing_bytes": 49131,
+            "node": 184,
+            "occurrence": 2,
+            "operand_leaf_bytes": [
+              1429
+            ],
+            "operand_leaves": [
+              32
+            ],
+            "operand_reads": [
+              2048
+            ],
+            "primitive": "ReduceSum { axis: 0 }",
+            "route_chunks16KiB": 3,
+            "scratch_bytes": 8928747,
+            "work": 30711680
+          }
+        ],
+        "refusals": {
+          "MatMul: ordinary point relation exceeds frozen court resource caps": 24
+        }
+      },
+      "derived_history_relations": 192,
+      "greedy_decode_logits_elements": 49152,
+      "history_append_relations": 48,
+      "layout_pass15": {
+        "added_reference_i128_bytes_at_final_position": 12986351616,
+        "added_trace_payload_bytes_at_final_position": 1636171776,
+        "added_trace_payload_per_claim_upper_bound": 13403519188992,
+        "applied": true,
+        "not_a_measurement_or_complete_execution_retention_peak": true
+      },
+      "maximum_flat_leaf_localization_replies": 19,
+      "maximum_primitive_inputs": 2,
+      "node_count": 6522,
+      "ordinary_bound_does_not_certify_history_TopK_decode_or_encoder": true,
+      "ordinary_followup_callback_bound": 24,
+      "ordinary_total_callback_bound": 48,
+      "positions": 8192,
+      "primitive_histogram": {
+        "Add": 361,
+        "Clamp { lo: -16777216, hi: 16777216 }": 48,
+        "Clamp { lo: -2097152, hi: 0 }": 24,
+        "Clamp { lo: -2147483648, hi: 0 }": 24,
+        "Clamp { lo: -2147483648, hi: 2147483647 }": 171,
+        "Clamp { lo: -32767, hi: 32767 }": 313,
+        "Clamp { lo: 0, hi: 102 }": 49,
+        "Clamp { lo: 0, hi: 2047 }": 144,
+        "Clamp { lo: 0, hi: 24 }": 168,
+        "Clamp { lo: 0, hi: 33554432 }": 24,
+        "Clamp { lo: 0, hi: 51 }": 98,
+        "Clamp { lo: 0, hi: 511 }": 24,
+        "Clamp { lo: 0, hi: 62 }": 291,
+        "Clamp { lo: 0, hi: 8191 }": 24,
+        "Clamp { lo: 0, hi: 9223372036854775807 }": 98,
+        "Concat { axis: 1 }": 48,
+        "Div { rule: Floor }": 412,
+        "Div { rule: HalfAwayFromZero }": 291,
+        "Gather { axis: 0, batch_dims: 0 }": 848,
+        "HistAppend { state: 0 }": 24,
+        "HistAppend { state: 1 }": 24,
+        "IntExp": 24,
+        "IntRsqrt": 73,
+        "Log2Floor": 49,
+        "MatMul": 385,
+        "Mul": 1063,
+        "ReduceMax { axis: 2 }": 24,
+        "ReduceSum { axis: 0 }": 49,
+        "ReduceSum { axis: 2 }": 24,
+        "Reshape": 986,
+        "Slice { axis: 1, start: 0 }": 48,
+        "Slice { axis: 1, start: 32 }": 48,
+        "Sub": 169,
+        "Transpose { perm: [0, 2, 1] }": 24,
+        "Transpose { perm: [1, 0, 2] }": 24,
+        "Transpose { perm: [1, 2, 0] }": 24
+      },
+      "root_localization_successful_read_bound": 24,
+      "scope9": {
+        "refusal": "NotAuthentic(\"v9 ordinary (8191,1,138) ReduceMax { axis: 2 }: NotAuthentic(\\\"ordinary point relation exceeds frozen court resource caps\\\")\")",
+        "status": "FAIL"
+      }
+    }
+  ],
+  "schema": "misaka.rfc02.actual-checkpoint-geometry-bounds.v1",
+  "source_program_bytes": 13770,
+  "derived_canonical_program_sha256": "10a849400da6ad339af33896948c19cef114a8501108d959e1f3c9bf220ec876"
+}

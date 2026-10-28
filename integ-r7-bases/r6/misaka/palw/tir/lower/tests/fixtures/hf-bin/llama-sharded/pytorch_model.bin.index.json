@@ -1,0 +1,42 @@
+{
+ "metadata": {
+  "total_size": 46400
+ },
+ "weight_map": {
+  "lm_head.weight": "pytorch_model-00001-of-00002.bin",
+  "model.embed_tokens.weight": "pytorch_model-00001-of-00002.bin",
+  "model.layers.0.input_layernorm.weight": "pytorch_model-00001-of-00002.bin",
+  "model.layers.0.mlp.down_proj.bias": "pytorch_model-00001-of-00002.bin",
+  "model.layers.0.mlp.down_proj.weight": "pytorch_model-00001-of-00002.bin",
+  "model.layers.0.mlp.gate_proj.bias": "pytorch_model-00001-of-00002.bin",
+  "model.layers.0.mlp.gate_proj.weight": "pytorch_model-00001-of-00002.bin",
+  "model.layers.0.mlp.up_proj.bias": "pytorch_model-00001-of-00002.bin",
+  "model.layers.0.mlp.up_proj.weight": "pytorch_model-00001-of-00002.bin",
+  "model.layers.0.post_attention_layernorm.weight": "pytorch_model-00001-of-00002.bin",
+  "model.layers.0.self_attn.k_proj.bias": "pytorch_model-00001-of-00002.bin",
+  "model.layers.0.self_attn.k_proj.weight": "pytorch_model-00001-of-00002.bin",
+  "model.layers.0.self_attn.o_proj.bias": "pytorch_model-00001-of-00002.bin",
+  "model.layers.0.self_attn.o_proj.weight": "pytorch_model-00001-of-00002.bin",
+  "model.layers.0.self_attn.q_proj.bias": "pytorch_model-00001-of-00002.bin",
+  "model.layers.0.self_attn.q_proj.weight": "pytorch_model-00001-of-00002.bin",
+  "model.layers.0.self_attn.v_proj.bias": "pytorch_model-00001-of-00002.bin",
+  "model.layers.0.self_attn.v_proj.weight": "pytorch_model-00002-of-00002.bin",
+  "model.layers.1.input_layernorm.weight": "pytorch_model-00002-of-00002.bin",
+  "model.layers.1.mlp.down_proj.bias": "pytorch_model-00002-of-00002.bin",
+  "model.layers.1.mlp.down_proj.weight": "pytorch_model-00002-of-00002.bin",
+  "model.layers.1.mlp.gate_proj.bias": "pytorch_model-00002-of-00002.bin",
+  "model.layers.1.mlp.gate_proj.weight": "pytorch_model-00002-of-00002.bin",
+  "model.layers.1.mlp.up_proj.bias": "pytorch_model-00002-of-00002.bin",
+  "model.layers.1.mlp.up_proj.weight": "pytorch_model-00002-of-00002.bin",
+  "model.layers.1.post_attention_layernorm.weight": "pytorch_model-00002-of-00002.bin",
+  "model.layers.1.self_attn.k_proj.bias": "pytorch_model-00002-of-00002.bin",
+  "model.layers.1.self_attn.k_proj.weight": "pytorch_model-00002-of-00002.bin",
+  "model.layers.1.self_attn.o_proj.bias": "pytorch_model-00002-of-00002.bin",
+  "model.layers.1.self_attn.o_proj.weight": "pytorch_model-00002-of-00002.bin",
+  "model.layers.1.self_attn.q_proj.bias": "pytorch_model-00002-of-00002.bin",
+  "model.layers.1.self_attn.q_proj.weight": "pytorch_model-00002-of-00002.bin",
+  "model.layers.1.self_attn.v_proj.bias": "pytorch_model-00002-of-00002.bin",
+  "model.layers.1.self_attn.v_proj.weight": "pytorch_model-00002-of-00002.bin",
+  "model.norm.weight": "pytorch_model-00002-of-00002.bin"
+ }
+}

@@ -1,0 +1,104 @@
+
+FILTER palw_panel::accepted_objects_walk_tests::
+
+running 7 tests
+test palw_panel::accepted_objects_walk_tests::a_missing_header_acceptance_block_or_parent_never_completes_a_history_page ... ok
+test palw_panel::accepted_objects_walk_tests::paged_history_reads_every_block_even_when_daa_does_not_count_the_blocks ... ok
+test palw_panel::accepted_objects_walk_tests::the_filer_reads_only_the_requested_authenticated_legacy_unit_from_public_history ... ok
+test palw_panel::accepted_objects_walk_tests::the_filer_resumes_at_its_original_tip_and_restarts_backfill_after_a_reorg ... ok
+test palw_panel::accepted_objects_walk_tests::the_fp_bootstrap_reads_only_the_recorded_accepted_commitment_and_pins_every_job_field ... ok
+test palw_panel::accepted_objects_walk_tests::the_held_reader_reaches_old_filings_before_publishing_and_restarts_on_a_fork ... ok
+test palw_panel::accepted_objects_walk_tests::the_walk_visits_what_the_chain_accepted_newest_first_and_stops_at_the_height ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 620 filtered out; finished in 1.68s
+
+
+FILTER palw_panel::palw_fraud_filer::
+
+running 26 tests
+test palw_panel::palw_fraud_filer::input::tests::accepted_metadata_projection_copies_no_input_or_signature_and_preserves_the_claim_pin ... ok
+test palw_panel::palw_fraud_filer::input::tests::canonical_fp_input_is_derived_from_its_job_anchor_and_never_a_served_prompt ... ok
+test palw_panel::palw_fraud_filer::input::tests::input_bootstrap_authenticates_the_job_and_worker_state_before_replay ... ok
+test palw_panel::palw_fraud_filer::input::tests::panel_input_requires_the_exact_job_and_authenticated_ids_without_reading_a_capture_tail ... ok
+test palw_panel::palw_fraud_filer::input::tests::public_fp_input_replays_on_a_fresh_model_and_retains_its_own_pins ... ok
+test palw_panel::palw_fraud_filer::input::tests::user_input_republication_needs_no_backend_or_capture_and_skips_false_prefixes ... ok
+test palw_panel::palw_fraud_filer::tests::a_missing_fp_body_can_be_probed_while_the_local_capture_lane_is_full ... ok
+test palw_panel::palw_fraud_filer::tests::a_partial_history_page_cannot_end_a_pursuit_before_older_direct_evidence_is_read ... ok
+test palw_panel::palw_fraud_filer::tests::a_unit_the_chain_answered_is_read_never_demanded ... ok
+test palw_panel::palw_fraud_filer::tests::an_invalidated_blocking_replay_drains_under_its_reservation_before_the_next_starts ... ok
+test palw_panel::palw_fraud_filer::tests::an_item_is_sent_at_most_twice ... ok
+test palw_panel::palw_fraud_filer::tests::another_acceptance_restarts_an_honest_or_mismatched_case_and_rejects_old_results ... ok
+test palw_panel::palw_fraud_filer::tests::binding_only_fp_bootstrap_authenticates_without_a_replay_and_keeps_its_ticket_until_settlement ... ok
+test palw_panel::palw_fraud_filer::tests::bootstrap_verdicts_release_only_after_honesty_or_final_host_failure_and_reset_on_job_change ... ok
+test palw_panel::palw_fraud_filer::tests::input_bootstrap_keeps_binding_proofs_reachable_even_when_all_input_is_public ... ok
+test palw_panel::palw_fraud_filer::tests::partial_pages_and_newer_pursuits_do_not_inherit_a_completed_watermark ... ok
+test palw_panel::palw_fraud_filer::tests::restarting_public_history_discards_old_localization_and_resend_state_but_keeps_the_same_jobs_replay ... ok
+test palw_panel::palw_fraud_filer::tests::selecting_an_already_answered_legacy_unit_backfills_instead_of_inheriting_a_recent_watermark ... ok
+test palw_panel::palw_fraud_filer::tests::the_book_replays_oldest_first_and_bounds_what_it_holds ... ok
+test palw_panel::palw_fraud_filer::tests::the_history_cache_cannot_accumulate_unused_range_units ... ok
+test palw_panel::palw_fraud_filer::tests::the_tick_wires_the_filer_behind_no_flag ... ok
+test palw_panel::palw_fraud_filer::tests::the_walk_starts_at_the_oldest_pursuit_then_follows_the_tip ... ok
+test palw_panel::palw_fraud_filer::tests::trace_only_and_output_only_mismatches_are_pursued_and_only_three_matching_roots_are_honest ... ok
+test palw_panel::palw_fraud_filer::tests::unrelated_settled_case_cleanup_cannot_restart_a_pursuits_history_and_a_new_seat_leaves_the_public_lane ... ok
+test palw_panel::palw_fraud_filer::tests::waiting_bootstrap_is_pursued_without_holding_a_replay_slot_and_reorg_forgets_input ... ok
+test palw_panel::palw_fraud_filer::tests::waiting_public_input_does_not_spend_a_run_or_block_another_pending_claim ... ok
+
+test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 601 filtered out; finished in 3.54s
+
+
+FILTER palw_panel::da_answer_chunks::tests::
+
+running 2 tests
+test palw_panel::da_answer_chunks::tests::a_large_answer_declares_once_then_resumes_only_missing_parts_from_accepted_progress ... ok
+test palw_panel::da_answer_chunks::tests::restart_never_substitutes_another_envelope_or_deadline_and_bounds_before_manifest_signing ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 625 filtered out; finished in 0.36s
+
+
+FILTER palw_filer_held::e2e::legacy_held::
+
+running 16 tests
+test palw_panel::palw_filer_replay::palw_filer_held::e2e::legacy_held::lg14b_a_garbage_gather_is_convicted_by_the_leaf_recompute_before_and_after_final ... ok
+test palw_panel::palw_filer_replay::palw_filer_held::e2e::legacy_held::lg14b_a_lie_in_one_fused_tile_is_localized_and_convicted_by_a_fresh_outsider ... LG14B resources: n 11612 leaves, height 14, retain level 12, 2 node rounds (bound 2), 3 blocks replayed, 11618 leaf hashes resident at most (whole capture 11612)
+ok
+test palw_panel::palw_filer_replay::palw_filer_held::e2e::legacy_held::lg14b_a_mid_layer_matmul_lie_is_convicted_from_openings_the_outsider_builds ... ok
+test palw_panel::palw_filer_replay::palw_filer_held::e2e::legacy_held::lg14b_a_public_binding_convicts_the_wrong_job_without_an_answered_session_before_and_after_final ... ok
+test palw_panel::palw_filer_replay::palw_filer_held::e2e::legacy_held::lg14b_a_restarted_outsider_reacquires_answered_units_without_replaying_old_accusations ... ok
+test palw_panel::palw_filer_replay::palw_filer_held::e2e::legacy_held::lg14b_an_honest_claim_survives_a_malicious_outsider ... ok
+test palw_panel::palw_filer_replay::palw_filer_held::e2e::legacy_held::lg14b_below_the_fence_every_legacy_object_is_refused_and_the_state_is_untouched ... ok
+test palw_panel::palw_filer_replay::palw_filer_held::e2e::legacy_held::lg14b_canonical_fp_bad_input_reaches_public_conviction_before_replay_and_after_final ... ok
+test palw_panel::palw_filer_replay::palw_filer_held::e2e::legacy_held::lg14b_large_prompt_relabel_convicts_after_colluding_valid_before_and_after_final ... ok
+test palw_panel::palw_filer_replay::palw_filer_held::e2e::legacy_held::lg14b_panel_da_input_bootstrap_replays_or_defaults_without_a_secret_state ... ok
+test palw_panel::palw_filer_replay::palw_filer_held::e2e::legacy_held::lg14b_public_binding_proves_large_prompt_relabel_and_refuses_honest_or_unbound_inputs ... ok
+test palw_panel::palw_filer_replay::palw_filer_held::e2e::legacy_held::lg14b_public_fp_bootstrap_own_replay_localizes_and_convicts_after_colluding_valid ... ok
+test palw_panel::palw_filer_replay::palw_filer_held::e2e::legacy_held::lg14b_public_tiled_tokens_prove_output_mismatch_and_refuse_an_honest_or_unbound_twin ... ok
+test palw_panel::palw_filer_replay::palw_filer_held::e2e::legacy_held::lg14b_session_owned_answer_chunks_survive_full_certification_slots_and_partial_restart_or_default ... ok
+test palw_panel::palw_filer_replay::palw_filer_held::e2e::legacy_held::lg14b_the_node_filer_convicts_model_copy_and_matmul_faults_before_and_after_final ... ok
+test palw_panel::palw_filer_replay::palw_filer_held::e2e::legacy_held::lg14b_withheld_descent_and_witness_units_default_never_convict ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 611 filtered out; finished in 18.86s
+
+
+FILTER palw_panel::p2_7_disclosure_policy::
+
+running 9 tests
+test palw_panel::p2_7_disclosure_policy::a_claims_units_are_answered_from_one_load_and_one_flat_answers_its_run ... ok
+test palw_panel::p2_7_disclosure_policy::a_da_answer_is_built_from_a_verified_or_re_made_capture_never_a_decodable_one ... ok
+test palw_panel::p2_7_disclosure_policy::a_free_prompt_answer_needs_the_claims_recorded_job_pin ... ok
+test palw_panel::p2_7_disclosure_policy::a_public_job_answer_serves_only_the_pinned_descriptor_from_retained_fp_material ... ok
+test palw_panel::p2_7_disclosure_policy::an_attempt_claims_capture_is_kept_verified_or_re_made_from_its_block ... ok
+test palw_panel::p2_7_disclosure_policy::legacy_held_due_units_use_tag158_from_verified_dense_material ... ok
+test palw_panel::p2_7_disclosure_policy::the_producer_answers_at_once_and_a_covering_signer_after_its_turn ... ok
+test palw_panel::p2_7_disclosure_policy::the_queue_key_is_the_claim_and_the_unit ... ok
+test palw_panel::p2_7_disclosure_policy::the_tick_answers_da_sessions_and_keeps_what_it_answers_from ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 618 filtered out; finished in 2.24s
+
+
+FILTER a_held_dissection_takes_the_held_route_only_past_the_fence
+
+running 1 test
+test palw_panel::held_court::tests::a_held_dissection_takes_the_held_route_only_past_the_fence ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 626 filtered out; finished in 0.00s
+

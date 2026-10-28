@@ -1,0 +1,651 @@
+{
+"classifier.bias": [
+1
+],
+"classifier.weight": [
+1,
+768
+],
+"convnext.embeddings.layernorm.bias": [
+96
+],
+"convnext.embeddings.layernorm.weight": [
+96
+],
+"convnext.embeddings.patch_embeddings.bias": [
+96
+],
+"convnext.embeddings.patch_embeddings.weight": [
+96,
+3,
+4,
+4
+],
+"convnext.encoder.stages.0.layers.0.dwconv.bias": [
+96
+],
+"convnext.encoder.stages.0.layers.0.dwconv.weight": [
+96,
+1,
+7,
+7
+],
+"convnext.encoder.stages.0.layers.0.layer_scale_parameter": [
+96
+],
+"convnext.encoder.stages.0.layers.0.layernorm.bias": [
+96
+],
+"convnext.encoder.stages.0.layers.0.layernorm.weight": [
+96
+],
+"convnext.encoder.stages.0.layers.0.pwconv1.bias": [
+384
+],
+"convnext.encoder.stages.0.layers.0.pwconv1.weight": [
+384,
+96
+],
+"convnext.encoder.stages.0.layers.0.pwconv2.bias": [
+96
+],
+"convnext.encoder.stages.0.layers.0.pwconv2.weight": [
+96,
+384
+],
+"convnext.encoder.stages.0.layers.1.dwconv.bias": [
+96
+],
+"convnext.encoder.stages.0.layers.1.dwconv.weight": [
+96,
+1,
+7,
+7
+],
+"convnext.encoder.stages.0.layers.1.layer_scale_parameter": [
+96
+],
+"convnext.encoder.stages.0.layers.1.layernorm.bias": [
+96
+],
+"convnext.encoder.stages.0.layers.1.layernorm.weight": [
+96
+],
+"convnext.encoder.stages.0.layers.1.pwconv1.bias": [
+384
+],
+"convnext.encoder.stages.0.layers.1.pwconv1.weight": [
+384,
+96
+],
+"convnext.encoder.stages.0.layers.1.pwconv2.bias": [
+96
+],
+"convnext.encoder.stages.0.layers.1.pwconv2.weight": [
+96,
+384
+],
+"convnext.encoder.stages.0.layers.2.dwconv.bias": [
+96
+],
+"convnext.encoder.stages.0.layers.2.dwconv.weight": [
+96,
+1,
+7,
+7
+],
+"convnext.encoder.stages.0.layers.2.layer_scale_parameter": [
+96
+],
+"convnext.encoder.stages.0.layers.2.layernorm.bias": [
+96
+],
+"convnext.encoder.stages.0.layers.2.layernorm.weight": [
+96
+],
+"convnext.encoder.stages.0.layers.2.pwconv1.bias": [
+384
+],
+"convnext.encoder.stages.0.layers.2.pwconv1.weight": [
+384,
+96
+],
+"convnext.encoder.stages.0.layers.2.pwconv2.bias": [
+96
+],
+"convnext.encoder.stages.0.layers.2.pwconv2.weight": [
+96,
+384
+],
+"convnext.encoder.stages.1.downsampling_layer.0.bias": [
+96
+],
+"convnext.encoder.stages.1.downsampling_layer.0.weight": [
+96
+],
+"convnext.encoder.stages.1.downsampling_layer.1.bias": [
+192
+],
+"convnext.encoder.stages.1.downsampling_layer.1.weight": [
+192,
+96,
+2,
+2
+],
+"convnext.encoder.stages.1.layers.0.dwconv.bias": [
+192
+],
+"convnext.encoder.stages.1.layers.0.dwconv.weight": [
+192,
+1,
+7,
+7
+],
+"convnext.encoder.stages.1.layers.0.layer_scale_parameter": [
+192
+],
+"convnext.encoder.stages.1.layers.0.layernorm.bias": [
+192
+],
+"convnext.encoder.stages.1.layers.0.layernorm.weight": [
+192
+],
+"convnext.encoder.stages.1.layers.0.pwconv1.bias": [
+768
+],
+"convnext.encoder.stages.1.layers.0.pwconv1.weight": [
+768,
+192
+],
+"convnext.encoder.stages.1.layers.0.pwconv2.bias": [
+192
+],
+"convnext.encoder.stages.1.layers.0.pwconv2.weight": [
+192,
+768
+],
+"convnext.encoder.stages.1.layers.1.dwconv.bias": [
+192
+],
+"convnext.encoder.stages.1.layers.1.dwconv.weight": [
+192,
+1,
+7,
+7
+],
+"convnext.encoder.stages.1.layers.1.layer_scale_parameter": [
+192
+],
+"convnext.encoder.stages.1.layers.1.layernorm.bias": [
+192
+],
+"convnext.encoder.stages.1.layers.1.layernorm.weight": [
+192
+],
+"convnext.encoder.stages.1.layers.1.pwconv1.bias": [
+768
+],
+"convnext.encoder.stages.1.layers.1.pwconv1.weight": [
+768,
+192
+],
+"convnext.encoder.stages.1.layers.1.pwconv2.bias": [
+192
+],
+"convnext.encoder.stages.1.layers.1.pwconv2.weight": [
+192,
+768
+],
+"convnext.encoder.stages.1.layers.2.dwconv.bias": [
+192
+],
+"convnext.encoder.stages.1.layers.2.dwconv.weight": [
+192,
+1,
+7,
+7
+],
+"convnext.encoder.stages.1.layers.2.layer_scale_parameter": [
+192
+],
+"convnext.encoder.stages.1.layers.2.layernorm.bias": [
+192
+],
+"convnext.encoder.stages.1.layers.2.layernorm.weight": [
+192
+],
+"convnext.encoder.stages.1.layers.2.pwconv1.bias": [
+768
+],
+"convnext.encoder.stages.1.layers.2.pwconv1.weight": [
+768,
+192
+],
+"convnext.encoder.stages.1.layers.2.pwconv2.bias": [
+192
+],
+"convnext.encoder.stages.1.layers.2.pwconv2.weight": [
+192,
+768
+],
+"convnext.encoder.stages.2.downsampling_layer.0.bias": [
+192
+],
+"convnext.encoder.stages.2.downsampling_layer.0.weight": [
+192
+],
+"convnext.encoder.stages.2.downsampling_layer.1.bias": [
+384
+],
+"convnext.encoder.stages.2.downsampling_layer.1.weight": [
+384,
+192,
+2,
+2
+],
+"convnext.encoder.stages.2.layers.0.dwconv.bias": [
+384
+],
+"convnext.encoder.stages.2.layers.0.dwconv.weight": [
+384,
+1,
+7,
+7
+],
+"convnext.encoder.stages.2.layers.0.layer_scale_parameter": [
+384
+],
+"convnext.encoder.stages.2.layers.0.layernorm.bias": [
+384
+],
+"convnext.encoder.stages.2.layers.0.layernorm.weight": [
+384
+],
+"convnext.encoder.stages.2.layers.0.pwconv1.bias": [
+1536
+],
+"convnext.encoder.stages.2.layers.0.pwconv1.weight": [
+1536,
+384
+],
+"convnext.encoder.stages.2.layers.0.pwconv2.bias": [
+384
+],
+"convnext.encoder.stages.2.layers.0.pwconv2.weight": [
+384,
+1536
+],
+"convnext.encoder.stages.2.layers.1.dwconv.bias": [
+384
+],
+"convnext.encoder.stages.2.layers.1.dwconv.weight": [
+384,
+1,
+7,
+7
+],
+"convnext.encoder.stages.2.layers.1.layer_scale_parameter": [
+384
+],
+"convnext.encoder.stages.2.layers.1.layernorm.bias": [
+384
+],
+"convnext.encoder.stages.2.layers.1.layernorm.weight": [
+384
+],
+"convnext.encoder.stages.2.layers.1.pwconv1.bias": [
+1536
+],
+"convnext.encoder.stages.2.layers.1.pwconv1.weight": [
+1536,
+384
+],
+"convnext.encoder.stages.2.layers.1.pwconv2.bias": [
+384
+],
+"convnext.encoder.stages.2.layers.1.pwconv2.weight": [
+384,
+1536
+],
+"convnext.encoder.stages.2.layers.2.dwconv.bias": [
+384
+],
+"convnext.encoder.stages.2.layers.2.dwconv.weight": [
+384,
+1,
+7,
+7
+],
+"convnext.encoder.stages.2.layers.2.layer_scale_parameter": [
+384
+],
+"convnext.encoder.stages.2.layers.2.layernorm.bias": [
+384
+],
+"convnext.encoder.stages.2.layers.2.layernorm.weight": [
+384
+],
+"convnext.encoder.stages.2.layers.2.pwconv1.bias": [
+1536
+],
+"convnext.encoder.stages.2.layers.2.pwconv1.weight": [
+1536,
+384
+],
+"convnext.encoder.stages.2.layers.2.pwconv2.bias": [
+384
+],
+"convnext.encoder.stages.2.layers.2.pwconv2.weight": [
+384,
+1536
+],
+"convnext.encoder.stages.2.layers.3.dwconv.bias": [
+384
+],
+"convnext.encoder.stages.2.layers.3.dwconv.weight": [
+384,
+1,
+7,
+7
+],
+"convnext.encoder.stages.2.layers.3.layer_scale_parameter": [
+384
+],
+"convnext.encoder.stages.2.layers.3.layernorm.bias": [
+384
+],
+"convnext.encoder.stages.2.layers.3.layernorm.weight": [
+384
+],
+"convnext.encoder.stages.2.layers.3.pwconv1.bias": [
+1536
+],
+"convnext.encoder.stages.2.layers.3.pwconv1.weight": [
+1536,
+384
+],
+"convnext.encoder.stages.2.layers.3.pwconv2.bias": [
+384
+],
+"convnext.encoder.stages.2.layers.3.pwconv2.weight": [
+384,
+1536
+],
+"convnext.encoder.stages.2.layers.4.dwconv.bias": [
+384
+],
+"convnext.encoder.stages.2.layers.4.dwconv.weight": [
+384,
+1,
+7,
+7
+],
+"convnext.encoder.stages.2.layers.4.layer_scale_parameter": [
+384
+],
+"convnext.encoder.stages.2.layers.4.layernorm.bias": [
+384
+],
+"convnext.encoder.stages.2.layers.4.layernorm.weight": [
+384
+],
+"convnext.encoder.stages.2.layers.4.pwconv1.bias": [
+1536
+],
+"convnext.encoder.stages.2.layers.4.pwconv1.weight": [
+1536,
+384
+],
+"convnext.encoder.stages.2.layers.4.pwconv2.bias": [
+384
+],
+"convnext.encoder.stages.2.layers.4.pwconv2.weight": [
+384,
+1536
+],
+"convnext.encoder.stages.2.layers.5.dwconv.bias": [
+384
+],
+"convnext.encoder.stages.2.layers.5.dwconv.weight": [
+384,
+1,
+7,
+7
+],
+"convnext.encoder.stages.2.layers.5.layer_scale_parameter": [
+384
+],
+"convnext.encoder.stages.2.layers.5.layernorm.bias": [
+384
+],
+"convnext.encoder.stages.2.layers.5.layernorm.weight": [
+384
+],
+"convnext.encoder.stages.2.layers.5.pwconv1.bias": [
+1536
+],
+"convnext.encoder.stages.2.layers.5.pwconv1.weight": [
+1536,
+384
+],
+"convnext.encoder.stages.2.layers.5.pwconv2.bias": [
+384
+],
+"convnext.encoder.stages.2.layers.5.pwconv2.weight": [
+384,
+1536
+],
+"convnext.encoder.stages.2.layers.6.dwconv.bias": [
+384
+],
+"convnext.encoder.stages.2.layers.6.dwconv.weight": [
+384,
+1,
+7,
+7
+],
+"convnext.encoder.stages.2.layers.6.layer_scale_parameter": [
+384
+],
+"convnext.encoder.stages.2.layers.6.layernorm.bias": [
+384
+],
+"convnext.encoder.stages.2.layers.6.layernorm.weight": [
+384
+],
+"convnext.encoder.stages.2.layers.6.pwconv1.bias": [
+1536
+],
+"convnext.encoder.stages.2.layers.6.pwconv1.weight": [
+1536,
+384
+],
+"convnext.encoder.stages.2.layers.6.pwconv2.bias": [
+384
+],
+"convnext.encoder.stages.2.layers.6.pwconv2.weight": [
+384,
+1536
+],
+"convnext.encoder.stages.2.layers.7.dwconv.bias": [
+384
+],
+"convnext.encoder.stages.2.layers.7.dwconv.weight": [
+384,
+1,
+7,
+7
+],
+"convnext.encoder.stages.2.layers.7.layer_scale_parameter": [
+384
+],
+"convnext.encoder.stages.2.layers.7.layernorm.bias": [
+384
+],
+"convnext.encoder.stages.2.layers.7.layernorm.weight": [
+384
+],
+"convnext.encoder.stages.2.layers.7.pwconv1.bias": [
+1536
+],
+"convnext.encoder.stages.2.layers.7.pwconv1.weight": [
+1536,
+384
+],
+"convnext.encoder.stages.2.layers.7.pwconv2.bias": [
+384
+],
+"convnext.encoder.stages.2.layers.7.pwconv2.weight": [
+384,
+1536
+],
+"convnext.encoder.stages.2.layers.8.dwconv.bias": [
+384
+],
+"convnext.encoder.stages.2.layers.8.dwconv.weight": [
+384,
+1,
+7,
+7
+],
+"convnext.encoder.stages.2.layers.8.layer_scale_parameter": [
+384
+],
+"convnext.encoder.stages.2.layers.8.layernorm.bias": [
+384
+],
+"convnext.encoder.stages.2.layers.8.layernorm.weight": [
+384
+],
+"convnext.encoder.stages.2.layers.8.pwconv1.bias": [
+1536
+],
+"convnext.encoder.stages.2.layers.8.pwconv1.weight": [
+1536,
+384
+],
+"convnext.encoder.stages.2.layers.8.pwconv2.bias": [
+384
+],
+"convnext.encoder.stages.2.layers.8.pwconv2.weight": [
+384,
+1536
+],
+"convnext.encoder.stages.3.downsampling_layer.0.bias": [
+384
+],
+"convnext.encoder.stages.3.downsampling_layer.0.weight": [
+384
+],
+"convnext.encoder.stages.3.downsampling_layer.1.bias": [
+768
+],
+"convnext.encoder.stages.3.downsampling_layer.1.weight": [
+768,
+384,
+2,
+2
+],
+"convnext.encoder.stages.3.layers.0.dwconv.bias": [
+768
+],
+"convnext.encoder.stages.3.layers.0.dwconv.weight": [
+768,
+1,
+7,
+7
+],
+"convnext.encoder.stages.3.layers.0.layer_scale_parameter": [
+768
+],
+"convnext.encoder.stages.3.layers.0.layernorm.bias": [
+768
+],
+"convnext.encoder.stages.3.layers.0.layernorm.weight": [
+768
+],
+"convnext.encoder.stages.3.layers.0.pwconv1.bias": [
+3072
+],
+"convnext.encoder.stages.3.layers.0.pwconv1.weight": [
+3072,
+768
+],
+"convnext.encoder.stages.3.layers.0.pwconv2.bias": [
+768
+],
+"convnext.encoder.stages.3.layers.0.pwconv2.weight": [
+768,
+3072
+],
+"convnext.encoder.stages.3.layers.1.dwconv.bias": [
+768
+],
+"convnext.encoder.stages.3.layers.1.dwconv.weight": [
+768,
+1,
+7,
+7
+],
+"convnext.encoder.stages.3.layers.1.layer_scale_parameter": [
+768
+],
+"convnext.encoder.stages.3.layers.1.layernorm.bias": [
+768
+],
+"convnext.encoder.stages.3.layers.1.layernorm.weight": [
+768
+],
+"convnext.encoder.stages.3.layers.1.pwconv1.bias": [
+3072
+],
+"convnext.encoder.stages.3.layers.1.pwconv1.weight": [
+3072,
+768
+],
+"convnext.encoder.stages.3.layers.1.pwconv2.bias": [
+768
+],
+"convnext.encoder.stages.3.layers.1.pwconv2.weight": [
+768,
+3072
+],
+"convnext.encoder.stages.3.layers.2.dwconv.bias": [
+768
+],
+"convnext.encoder.stages.3.layers.2.dwconv.weight": [
+768,
+1,
+7,
+7
+],
+"convnext.encoder.stages.3.layers.2.layer_scale_parameter": [
+768
+],
+"convnext.encoder.stages.3.layers.2.layernorm.bias": [
+768
+],
+"convnext.encoder.stages.3.layers.2.layernorm.weight": [
+768
+],
+"convnext.encoder.stages.3.layers.2.pwconv1.bias": [
+3072
+],
+"convnext.encoder.stages.3.layers.2.pwconv1.weight": [
+3072,
+768
+],
+"convnext.encoder.stages.3.layers.2.pwconv2.bias": [
+768
+],
+"convnext.encoder.stages.3.layers.2.pwconv2.weight": [
+768,
+3072
+],
+"convnext.layernorm.bias": [
+768
+],
+"convnext.layernorm.weight": [
+768
+]
+}

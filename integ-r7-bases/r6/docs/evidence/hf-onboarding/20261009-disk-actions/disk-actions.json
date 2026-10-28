@@ -1,0 +1,56 @@
+{
+ "schema": "misaka.h1.disk-actions.v1",
+ "date": "2026-10-09",
+ "why": "the shared volume fell to 12-14 GB free; every lane's build was blocked at the 18 GB gate and H1's own floor is 15 GB",
+ "deleted_checkpoints": [
+  {
+   "id": "granite-1b-a400m",
+   "repo": "ibm-granite/granite-3.1-1b-a400m-instruct",
+   "revision": "0da7a48b0276d500ce5922fd2b33944091fc6c09",
+   "kib": 2611380,
+   "never_run": true,
+   "redownload": "needs a new approval"
+  },
+  {
+   "id": "mamba-370m",
+   "repo": "state-spaces/mamba-370m-hf",
+   "revision": "b519127f5bfaaa1c27dd938dad051ec360972b23",
+   "kib": 1453400,
+   "never_run": true,
+   "redownload": "needs a new approval"
+  },
+  {
+   "id": "phi-1.5",
+   "repo": "microsoft/phi-1_5",
+   "revision": "77aa61eeac94fbf33d492b9f2744c98b42d5b5eb",
+   "kib": 2773460,
+   "never_run": true,
+   "redownload": "needs a new approval"
+  },
+  {
+   "id": "jamba-tiny-dev",
+   "repo": "ai21labs/Jamba-tiny-dev",
+   "revision": "ed303361004ac875426a61675edecf8e9d976882",
+   "kib": 627804,
+   "never_run": true,
+   "redownload": "needs a new approval"
+  },
+  {
+   "id": "tinyllama-1.1b",
+   "repo": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+   "revision": "fe8a4ea1ffedaf415f4da2f062534de366a451e6",
+   "kib": 2150872,
+   "never_run": true,
+   "redownload": "needs a new approval"
+  }
+ ],
+ "deleted_checkpoints_total_gib": 9.17,
+ "qwen25_lifecycle_experiment": {
+  "stopped": "2026-10-09 00:46",
+  "final_state": "docs/evidence/hf-onboarding/20261008-qwen25-0.5b-r1/lifecycle-final.json (Probation 0/10 finals, 8 ready seats, 34 claims in flight, GAP-6)",
+  "d6": "stopped, palw-retention cleared (33 free-prompt captures, 7,786 MB), restarted without --palw-produce/--palw-producer-class (old args kept as extra-args.lifecycle-r1)"
+ },
+ "lowered_duplicates_deleted_gib": 3.94,
+ "lowered_duplicates_note": "class.palwtir (the lowered file, the declared one minus its layout) of glm-edge-1.5b, llama32-1b and qwen35-0.8b; every DECLARED class file kept",
+ "kept": "all declared class files, every artifact a registered class references (qwen25-0.5b is held by the nodes), Huihui-9B, Mitsuba GGUF (L1), the L4 models' checkpoints"
+}

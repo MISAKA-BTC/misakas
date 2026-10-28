@@ -1,0 +1,43 @@
+
+running 1 test
+
+thread 'palw_lifecycle_objects_v2::tests::a2u::every_landed_kind_is_pinned_to_its_wire_form' (3428539) panicked at consensus/core/src/palw_lifecycle_objects_v2.rs:4318:13:
+[a2u-pins] A-2 wire pins differ (A-2 uniformity).
+* PALW_A2_INT12_VARIANTS_WIRE_V1 (pinned 0xd1982421da455cca, now 0xd1982421da455cca): a variant the live build decodes changed its declaration — classify it (an Int12Inner row and a guarded owner arm, or a re-read and its probe), never by re-pinning alone.
+* PALW_A2_NEW_KIND_WIRE_V1: a lane that creates or changes a post-int-12 kind re-pins it here and keeps the change under its row's fence. Current pins:
+[a2u-pins-begin]
+    (104, 0x98d7608e0a24ad99),
+    (105, 0xdaed6c0cfaf81e2f),
+    (106, 0x888f101d106c24bc),
+    (107, 0x0081a402000ddbf4),
+    (108, 0xac8ecc3ff97ec415),
+    (109, 0xcd35f41524be4a4f),
+    (110, 0x7da0346d0633de78),
+    (111, 0x2d490db20d075bfe),
+    (113, 0xca1188bcd2f663d2),
+    (120, 0xcbb24fb8f993e5c6),
+    (130, 0x5774ef35c9a3fdaa),
+    (140, 0xa4ab9f7696775588),
+    (150, 0x5fb8c8b2822f8386),
+    (151, 0x6a81242ebaeba7fd),
+    (152, 0xc48f175fa3456d1e),
+    (153, 0x74bac59d2cf50cd4),
+    (154, 0x047359d4d8ba0a7b),
+    (155, 0x6d9c4e7671a9cac7),
+    (156, 0xfd9ad539eab02a3c),
+    (157, 0xa5ca85bb4a3be200),
+    (158, 0x1bbcf34fe919b8c4),
+    (159, 0x0395636b651f74fa),
+    (160, 0x730c4ce9aa0ff75e),
+    (161, 0xec0447b18452362b),
+[a2u-pins-end]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test palw_lifecycle_objects_v2::tests::a2u::every_landed_kind_is_pinned_to_its_wire_form ... FAILED
+
+failures:
+
+failures:
+    palw_lifecycle_objects_v2::tests::a2u::every_landed_kind_is_pinned_to_its_wire_form
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3624 filtered out; finished in 0.16s
+

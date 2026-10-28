@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "kind": "rfc06-snapshot-accounting",
+  "baseHead": "653170e56a77a9fb28d8801e0579ffda6593fa9e",
+  "moduleTestsPassed": 11,
+  "moduleTestsFailed": 0,
+  "validation": "actual snapshot module directly linked to existing compiled dependencies; serving/requester integration requires node build",
+  "sharedTotalCapBytes": 402653184,
+  "canonicalEnvelopeBytes": 14,
+  "perDeclarationHeaderBytes": 68,
+  "fixtureOldFieldSumBytes": 544,
+  "fixtureCanonicalBytes": 762,
+  "fixtureOmittedBytes": 218,
+  "sourceSha256": {
+    "protocol/flows/src/palw_snapshot_chunks.rs": "8ef8273c2e2503b200d0185c8cb71b0bab8754f599c3a70560dd413bd7342584",
+    "protocol/flows/src/ibd/flow.rs": "a58721151069b113ecfcd98191a268249ce39b46aa4cc1a026a4fee288f8c73d",
+    "protocol/flows/src/v8/request_pruning_point_snapshots.rs": "c119e6897abcd5d3c2898cba500bef921e0ec89f7c648ff21c98b865ed54f79a",
+    "protocol/flows/src/palw_gossip.rs": "59be635e116b374bcab7ac4215def8ec0d8059c87bf49db8e69bbba9e590e481"
+  },
+  "harnessSha256": "e42f29761d7e03efbca25e66fc04c6be2cfec300f860dd6e48bdf70288728a2a",
+  "testExecutableSha256": "f60508d1a1d1f647d16867b73ebd83aa0041a6ad542ed61fa51871226a36876c",
+  "linkedLibrariesSha256": {
+    "libkaspa_consensus_core-5acd77f3190a1ae4.rlib": "c6092d1bf13de410aa126a49f53d29010a8be5816b550aed82f0884466c3f838",
+    "libkaspa_hashes-94469b6cb5a4ddba.rlib": "6d64685c953a06bffbd9178391cf4c16cec01ce63d250dd32157bfd332eeceff",
+    "libborsh-c57124d88bb5020f.rlib": "5532aa752af250630dc85869e908413d1ecf7975ad76a0d28e15fd50f6bf8fd7",
+    "libtokio-98db03da579bfa28.rlib": "f6bad0361f865abeb2af6e6df267bbb3cf6dcbb9c6a550543397ad450261643a",
+    "libuuid-0bdf4fe8a9a7b280.rlib": "6b172fc807858d3cd686f3c5f58af1363fb2d0d33d3e07b16589af12195a0585"
+  },
+  "native100kAccepted": false,
+  "prunedP2pAccepted": false,
+  "decodedNativeRssApproved": false
+}

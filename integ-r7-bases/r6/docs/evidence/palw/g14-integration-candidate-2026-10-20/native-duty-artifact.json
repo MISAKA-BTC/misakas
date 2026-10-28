@@ -1,0 +1,13 @@
+{
+  "base_commit": "bc4f3caa0",
+  "changed_source_hashes": {
+    "consensus/core/src/palw_court_tir_requests_v1.rs": "01a5e19d1cb0c4c4f7bea3a0141dd499d846cce8d4f6fa25a401b530c05e1876",
+    "consensus/core/src/palw_tir_public_fold_v1.rs": "f97738b5e04884b4d598fbb05a8ca3a8b84f37e51661c5e59440ee8716330ca4"
+  },
+  "release_unit_executable": "target/release/deps/kaspa_consensus_core-cd85ed321316b157",
+  "sha256": "fac5981ecc6694ab41bf9bef8f77e5dc56e38e50b6b6e358168a0392c008588b",
+  "selected_passes": 58,
+  "failures": 0,
+  "ignored_in_selected_runs": 0,
+  "consensus_non_test_check": "success"
+}

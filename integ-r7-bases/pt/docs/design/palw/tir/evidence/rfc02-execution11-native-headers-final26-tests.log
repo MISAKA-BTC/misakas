@@ -1,0 +1,37 @@
+   Compiling misaka-palw-kernel v1.1.0 (/Users/wata/.codex/worktrees/08bd/MISAKA-testnet/misaka-palw-kernel)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.40s
+     Running tests/flat_execution11.rs (/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/flat_execution11-4486c76b0fcb72ce)
+
+running 26 tests
+test funded_actual_job_binds_all_text_lengths_resource_and_single_interval ... ok
+test fast_native_restore_rejects_rooted_but_wrong_resource_namespace_and_primitives ... ok
+test job_identity_cannot_change_with_funding_carrier_and_unclaimed_refunds_once ... ok
+test execution_checked_money_overflow_and_corrupt_state_cannot_spend_or_rewind ... ok
+test all_native_faults_refund_one_escrow_and_pay_only_collected_original_slash ... ok
+test execution_class_requires_exact_mature_source_policy_and_full_candidate ... ok
+test native_eligibility_is_exact_ephemeral_and_cannot_be_reused_in_another_block ... ok
+test claim_wrong_actor_identity_clock_or_original_reserve_leaves_funding_unchanged ... ok
+test native_nonce_encoding_and_operator_counter_have_no_padding_or_rotation_alias ... ok
+test historical_source_theorem_burns_same_operator_bounty_and_never_pays_a_close_caller ... ok
+test native_fixed_header_checks_existing_book_without_granting_new_admission ... ok
+test fast_native_class_restore_preserves_original_funding_after_source_revocation ... ok
+test one_claim_final_credit_is_original_escrow_and_cannot_repeat_after_restore ... ok
+test native_fixed_header_refuses_foreign_anchor_and_inconsistent_encoder_frame ... ok
+test original_verified_court_can_settle_late_once_without_granting_a_new_late_court ... ok
+test revoked_source_allows_native_light_book_refund_but_refuses_fresh_eligibility ... ok
+test historical_court_rejects_foreign_subject_proof_or_backdated_liability_atomically ... ok
+test revoked_original_class_restores_existing_escrow_but_cannot_admit_another_job ... ok
+test original_class_restore_rechecks_exact_source_candidate_policy_and_cannot_grant_admission ... ok
+test source_court_quote_binds_exact_pc_namespace_and_original_class_identity ... ok
+test rooted_resource_frame_bounds_counts_before_allocation_and_rejects_foreign_roots ... ok
+test staged_native_fund_rechecks_current_epoch_original_debit_and_plan_namespace ... ok
+test trusted_daa_jump_can_close_or_refund_expired_funding_without_reopening_courts ... ok
+test pending_own_proofs_da_answer_and_retention_grace_block_final_atomically ... ok
+test staged_native_fund_restores_exact_prompt_actors_nonce_reward_and_actual_plan ... ok
+test wrong_native_source_subject_late_judgment_and_excess_slash_are_atomic_refusals ... ok
+
+test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+real 8.99
+user 12.37
+sys 0.70

@@ -1,0 +1,152 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "apertus",
+  "doc": "Apertus (ApertusForCausalLM; swiss-ai/Apertus-*): Llama's pre-norm decoder with the pre-norms named attention_layernorm and feedforward_layernorm, a per-head RMS norm on q and k before the rotation (Qwen3's order), llama3 rope scaling read from rope_parameters, and an UNGATED MLP (up_proj, the activation, down_proj) whose activation is xIELU: a learned pointwise function whose four scalars (alpha_p, alpha_n, beta, eps) are the layer's own act_fn tensors, lowered as one 65,536-entry table per layer (ACT_LEARNED_POINTWISE_V1). Features: ATTN_GQA_V1, ATTN_QK_NORM_V1, ROPE_LLAMA3_V1, NORM_RMS_V1, MLP_DENSE_PLAIN_V1, ACT_LEARNED_POINTWISE_V1.",
+  "extends": [
+    "decoder-core"
+  ],
+  "match": {
+    "architectures": [
+      "ApertusForCausalLM"
+    ],
+    "model_types": [
+      "apertus"
+    ]
+  },
+  "config": {
+    "defaults": {
+      "vocab_size": 131072,
+      "hidden_size": 4096,
+      "intermediate_size": 14336,
+      "num_hidden_layers": 32,
+      "num_attention_heads": 32,
+      "hidden_act": "xielu",
+      "max_position_embeddings": 65536,
+      "rms_norm_eps": 1e-05,
+      "qk_norm": true,
+      "post_norm": false
+    }
+  },
+  "vars": [
+    {
+      "name": "act",
+      "value": {
+        "$if": [
+          {
+            "$eq": [
+              {
+                "$cfg": "hidden_act"
+              },
+              "xielu"
+            ]
+          },
+          "Xielu",
+          {
+            "$act": {
+              "$cfg": "hidden_act"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "mbias",
+      "value": {
+        "$let": [
+          "_",
+          {
+            "$forbid": [
+              "mlp_bias",
+              "ApertusMLP has no biases"
+            ]
+          },
+          false
+        ]
+      }
+    },
+    {
+      "name": "has_qk_norm",
+      "value": {
+        "$check": [
+          {
+            "$eq": [
+              {
+                "$cfg": "qk_norm"
+              },
+              true
+            ]
+          },
+          "qk_norm = false is not lowered (Apertus always normalises q and k)"
+        ]
+      }
+    },
+    {
+      "name": "no_post_norm",
+      "value": {
+        "$check": [
+          {
+            "$eq": [
+              {
+                "$cfg": "post_norm"
+              },
+              false
+            ]
+          },
+          "post_norm = true (a post-norm variant) is not lowered"
+        ]
+      }
+    },
+    {
+      "name": "mlp_gated",
+      "value": false
+    },
+    {
+      "name": "rope_theta",
+      "value": 12000000.0
+    },
+    {
+      "name": "qk_norm",
+      "value": {
+        "norm": {
+          "kind": "Rms",
+          "eps": {
+            "$var": "eps"
+          },
+          "gain": "W",
+          "bias": false
+        },
+        "scope": "PerHeadShared"
+      }
+    },
+    {
+      "name": "names",
+      "value": {
+        "$merge": [
+          {
+            "$omit": [
+              {
+                "$var": "names_base"
+              },
+              [
+                "norm.mix",
+                "norm.ffn"
+              ]
+            ]
+          },
+          {
+            "norm.mix": "{p}layers.{L}.attention_layernorm",
+            "norm.ffn": "{p}layers.{L}.feedforward_layernorm",
+            "mlp.act_alpha_p": "{p}layers.{L}.mlp.act_fn.alpha_p",
+            "mlp.act_alpha_n": "{p}layers.{L}.mlp.act_fn.alpha_n",
+            "mlp.act_beta": "{p}layers.{L}.mlp.act_fn.beta",
+            "mlp.act_eps": "{p}layers.{L}.mlp.act_fn.eps"
+          }
+        ]
+      }
+    },
+    {
+      "name": "model_type",
+      "value": "apertus"
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+
+running 11 tests
+test palw_state_v2::tests::fp_compute_pricing::a_compute_era_claim_reads_no_number_its_registrant_wrote ... ok
+test palw_state_v2::tests::fp_compute_pricing::a_spend_weighs_one_network_quantum_and_retires_exactly_that ... ok
+test palw_state_v2::tests::fp_compute_pricing::a_paid_prompt_row_outlives_its_claim_for_its_retention_and_no_longer ... ok
+test palw_state_v2::tests::fp_compute_pricing::a_unit_of_compute_has_the_same_odds_whichever_model_ran_it ... ok
+test palw_state_v2::tests::fp_compute_pricing::audit_a_reorg_and_an_ibd_agree_with_a_fresh_walk_past_the_economic_bundle ... ok
+test palw_state_v2::tests::fp_compute_pricing::past_the_audit_fence_a_compute_priced_claim_reserves_its_receipt_rights ... ok
+test palw_state_v2::tests::fp_compute_pricing::the_entrance_prices_a_commitment_exactly_as_the_fold_reserves_it ... ok
+test palw_state_v2::tests::fp_compute_pricing::the_lane_has_one_receipt_target_and_a_registration_moves_nobodys_odds ... ok
+test palw_state_v2::tests::fp_compute_pricing::the_pooled_target_walks_on_the_lanes_output_and_never_past_the_price_ceiling ... ok
+test palw_state_v2::tests::fp_compute_pricing::the_receipt_rights_bound_is_compute_times_the_carve_over_the_floor ... ok
+test palw_state_v2::tests::fp_compute_pricing::audit_a_users_own_prompt_is_the_inference_the_chain_prices ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 4687 filtered out; finished in 0.06s
+

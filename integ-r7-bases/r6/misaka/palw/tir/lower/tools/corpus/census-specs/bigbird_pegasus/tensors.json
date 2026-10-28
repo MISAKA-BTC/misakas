@@ -1,0 +1,1923 @@
+{
+ "lm_head.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "model.decoder.embed_positions.weight": {
+  "dtype": "BF16",
+  "shape": [
+   128,
+   32
+  ]
+ },
+ "model.decoder.embed_tokens.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "model.decoder.layernorm_embedding.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layernorm_embedding.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.0.encoder_attn.k_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.0.encoder_attn.out_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.0.encoder_attn.q_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.0.encoder_attn.v_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.0.encoder_attn_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.0.encoder_attn_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.0.fc1.bias": {
+  "dtype": "BF16",
+  "shape": [
+   4096
+  ]
+ },
+ "model.decoder.layers.0.fc1.weight": {
+  "dtype": "BF16",
+  "shape": [
+   4096,
+   32
+  ]
+ },
+ "model.decoder.layers.0.fc2.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.0.fc2.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   4096
+  ]
+ },
+ "model.decoder.layers.0.final_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.0.final_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.0.self_attn.k_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.0.self_attn.out_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.0.self_attn.q_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.0.self_attn.v_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.0.self_attn_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.0.self_attn_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.1.encoder_attn.k_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.1.encoder_attn.out_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.1.encoder_attn.q_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.1.encoder_attn.v_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.1.encoder_attn_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.1.encoder_attn_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.1.fc1.bias": {
+  "dtype": "BF16",
+  "shape": [
+   4096
+  ]
+ },
+ "model.decoder.layers.1.fc1.weight": {
+  "dtype": "BF16",
+  "shape": [
+   4096,
+   32
+  ]
+ },
+ "model.decoder.layers.1.fc2.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.1.fc2.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   4096
+  ]
+ },
+ "model.decoder.layers.1.final_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.1.final_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.1.self_attn.k_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.1.self_attn.out_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.1.self_attn.q_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.1.self_attn.v_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.1.self_attn_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.1.self_attn_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.10.encoder_attn.k_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.10.encoder_attn.out_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.10.encoder_attn.q_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.10.encoder_attn.v_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.10.encoder_attn_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.10.encoder_attn_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.10.fc1.bias": {
+  "dtype": "BF16",
+  "shape": [
+   4096
+  ]
+ },
+ "model.decoder.layers.10.fc1.weight": {
+  "dtype": "BF16",
+  "shape": [
+   4096,
+   32
+  ]
+ },
+ "model.decoder.layers.10.fc2.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.10.fc2.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   4096
+  ]
+ },
+ "model.decoder.layers.10.final_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.10.final_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.10.self_attn.k_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.10.self_attn.out_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.10.self_attn.q_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.10.self_attn.v_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.10.self_attn_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.10.self_attn_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.11.encoder_attn.k_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.11.encoder_attn.out_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.11.encoder_attn.q_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.11.encoder_attn.v_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.11.encoder_attn_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.11.encoder_attn_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.11.fc1.bias": {
+  "dtype": "BF16",
+  "shape": [
+   4096
+  ]
+ },
+ "model.decoder.layers.11.fc1.weight": {
+  "dtype": "BF16",
+  "shape": [
+   4096,
+   32
+  ]
+ },
+ "model.decoder.layers.11.fc2.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.11.fc2.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   4096
+  ]
+ },
+ "model.decoder.layers.11.final_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.11.final_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.11.self_attn.k_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.11.self_attn.out_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.11.self_attn.q_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.11.self_attn.v_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.11.self_attn_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.11.self_attn_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.12.encoder_attn.k_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.12.encoder_attn.out_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.12.encoder_attn.q_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.12.encoder_attn.v_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.12.encoder_attn_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.12.encoder_attn_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.12.fc1.bias": {
+  "dtype": "BF16",
+  "shape": [
+   4096
+  ]
+ },
+ "model.decoder.layers.12.fc1.weight": {
+  "dtype": "BF16",
+  "shape": [
+   4096,
+   32
+  ]
+ },
+ "model.decoder.layers.12.fc2.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.12.fc2.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   4096
+  ]
+ },
+ "model.decoder.layers.12.final_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.12.final_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.12.self_attn.k_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.12.self_attn.out_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.12.self_attn.q_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.12.self_attn.v_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.12.self_attn_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.12.self_attn_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.13.encoder_attn.k_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.13.encoder_attn.out_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.13.encoder_attn.q_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.13.encoder_attn.v_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.13.encoder_attn_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.13.encoder_attn_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.13.fc1.bias": {
+  "dtype": "BF16",
+  "shape": [
+   4096
+  ]
+ },
+ "model.decoder.layers.13.fc1.weight": {
+  "dtype": "BF16",
+  "shape": [
+   4096,
+   32
+  ]
+ },
+ "model.decoder.layers.13.fc2.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.13.fc2.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   4096
+  ]
+ },
+ "model.decoder.layers.13.final_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.13.final_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.13.self_attn.k_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.13.self_attn.out_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.13.self_attn.q_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.13.self_attn.v_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.13.self_attn_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.13.self_attn_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.14.encoder_attn.k_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.14.encoder_attn.out_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.14.encoder_attn.q_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.14.encoder_attn.v_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.14.encoder_attn_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.14.encoder_attn_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.14.fc1.bias": {
+  "dtype": "BF16",
+  "shape": [
+   4096
+  ]
+ },
+ "model.decoder.layers.14.fc1.weight": {
+  "dtype": "BF16",
+  "shape": [
+   4096,
+   32
+  ]
+ },
+ "model.decoder.layers.14.fc2.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.14.fc2.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   4096
+  ]
+ },
+ "model.decoder.layers.14.final_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.14.final_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.14.self_attn.k_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.14.self_attn.out_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.14.self_attn.q_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.14.self_attn.v_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.14.self_attn_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.14.self_attn_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.15.encoder_attn.k_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.15.encoder_attn.out_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.15.encoder_attn.q_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.15.encoder_attn.v_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.15.encoder_attn_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.15.encoder_attn_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.15.fc1.bias": {
+  "dtype": "BF16",
+  "shape": [
+   4096
+  ]
+ },
+ "model.decoder.layers.15.fc1.weight": {
+  "dtype": "BF16",
+  "shape": [
+   4096,
+   32
+  ]
+ },
+ "model.decoder.layers.15.fc2.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.15.fc2.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   4096
+  ]
+ },
+ "model.decoder.layers.15.final_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.15.final_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.15.self_attn.k_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.15.self_attn.out_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.15.self_attn.q_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.15.self_attn.v_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.15.self_attn_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.15.self_attn_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.2.encoder_attn.k_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.2.encoder_attn.out_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.2.encoder_attn.q_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.2.encoder_attn.v_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.2.encoder_attn_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.2.encoder_attn_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.2.fc1.bias": {
+  "dtype": "BF16",
+  "shape": [
+   4096
+  ]
+ },
+ "model.decoder.layers.2.fc1.weight": {
+  "dtype": "BF16",
+  "shape": [
+   4096,
+   32
+  ]
+ },
+ "model.decoder.layers.2.fc2.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.2.fc2.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   4096
+  ]
+ },
+ "model.decoder.layers.2.final_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.2.final_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.2.self_attn.k_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.2.self_attn.out_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.2.self_attn.q_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.2.self_attn.v_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.2.self_attn_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.2.self_attn_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.3.encoder_attn.k_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.3.encoder_attn.out_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.3.encoder_attn.q_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.3.encoder_attn.v_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.3.encoder_attn_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.3.encoder_attn_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.3.fc1.bias": {
+  "dtype": "BF16",
+  "shape": [
+   4096
+  ]
+ },
+ "model.decoder.layers.3.fc1.weight": {
+  "dtype": "BF16",
+  "shape": [
+   4096,
+   32
+  ]
+ },
+ "model.decoder.layers.3.fc2.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.3.fc2.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   4096
+  ]
+ },
+ "model.decoder.layers.3.final_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.3.final_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.3.self_attn.k_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.3.self_attn.out_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.3.self_attn.q_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.3.self_attn.v_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.3.self_attn_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.3.self_attn_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.4.encoder_attn.k_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.4.encoder_attn.out_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.4.encoder_attn.q_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.4.encoder_attn.v_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.4.encoder_attn_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.4.encoder_attn_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.4.fc1.bias": {
+  "dtype": "BF16",
+  "shape": [
+   4096
+  ]
+ },
+ "model.decoder.layers.4.fc1.weight": {
+  "dtype": "BF16",
+  "shape": [
+   4096,
+   32
+  ]
+ },
+ "model.decoder.layers.4.fc2.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.4.fc2.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   4096
+  ]
+ },
+ "model.decoder.layers.4.final_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.4.final_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.4.self_attn.k_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.4.self_attn.out_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.4.self_attn.q_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.4.self_attn.v_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.4.self_attn_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.4.self_attn_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.5.encoder_attn.k_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.5.encoder_attn.out_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.5.encoder_attn.q_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.5.encoder_attn.v_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.5.encoder_attn_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.5.encoder_attn_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.5.fc1.bias": {
+  "dtype": "BF16",
+  "shape": [
+   4096
+  ]
+ },
+ "model.decoder.layers.5.fc1.weight": {
+  "dtype": "BF16",
+  "shape": [
+   4096,
+   32
+  ]
+ },
+ "model.decoder.layers.5.fc2.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.5.fc2.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   4096
+  ]
+ },
+ "model.decoder.layers.5.final_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.5.final_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.5.self_attn.k_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.5.self_attn.out_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.5.self_attn.q_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.5.self_attn.v_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.5.self_attn_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.5.self_attn_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.6.encoder_attn.k_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.6.encoder_attn.out_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.6.encoder_attn.q_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.6.encoder_attn.v_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.6.encoder_attn_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.6.encoder_attn_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.6.fc1.bias": {
+  "dtype": "BF16",
+  "shape": [
+   4096
+  ]
+ },
+ "model.decoder.layers.6.fc1.weight": {
+  "dtype": "BF16",
+  "shape": [
+   4096,
+   32
+  ]
+ },
+ "model.decoder.layers.6.fc2.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.6.fc2.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   4096
+  ]
+ },
+ "model.decoder.layers.6.final_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.6.final_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.6.self_attn.k_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.6.self_attn.out_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.6.self_attn.q_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.6.self_attn.v_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.6.self_attn_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.6.self_attn_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.7.encoder_attn.k_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.7.encoder_attn.out_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.7.encoder_attn.q_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.7.encoder_attn.v_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.7.encoder_attn_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.7.encoder_attn_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.7.fc1.bias": {
+  "dtype": "BF16",
+  "shape": [
+   4096
+  ]
+ },
+ "model.decoder.layers.7.fc1.weight": {
+  "dtype": "BF16",
+  "shape": [
+   4096,
+   32
+  ]
+ },
+ "model.decoder.layers.7.fc2.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.7.fc2.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   4096
+  ]
+ },
+ "model.decoder.layers.7.final_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.7.final_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.7.self_attn.k_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.7.self_attn.out_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.7.self_attn.q_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.7.self_attn.v_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.7.self_attn_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.7.self_attn_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.8.encoder_attn.k_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.8.encoder_attn.out_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.8.encoder_attn.q_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.8.encoder_attn.v_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.8.encoder_attn_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.8.encoder_attn_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.8.fc1.bias": {
+  "dtype": "BF16",
+  "shape": [
+   4096
+  ]
+ },
+ "model.decoder.layers.8.fc1.weight": {
+  "dtype": "BF16",
+  "shape": [
+   4096,
+   32
+  ]
+ },
+ "model.decoder.layers.8.fc2.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.8.fc2.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   4096
+  ]
+ },
+ "model.decoder.layers.8.final_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.8.final_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.8.self_attn.k_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.8.self_attn.out_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.8.self_attn.q_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.8.self_attn.v_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.8.self_attn_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.8.self_attn_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.9.encoder_attn.k_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.9.encoder_attn.out_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.9.encoder_attn.q_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.9.encoder_attn.v_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.9.encoder_attn_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.9.encoder_attn_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.9.fc1.bias": {
+  "dtype": "BF16",
+  "shape": [
+   4096
+  ]
+ },
+ "model.decoder.layers.9.fc1.weight": {
+  "dtype": "BF16",
+  "shape": [
+   4096,
+   32
+  ]
+ },
+ "model.decoder.layers.9.fc2.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.9.fc2.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   4096
+  ]
+ },
+ "model.decoder.layers.9.final_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.9.final_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.9.self_attn.k_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.9.self_attn.out_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.9.self_attn.q_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.9.self_attn.v_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.decoder.layers.9.self_attn_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.decoder.layers.9.self_attn_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ }
+}

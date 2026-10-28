@@ -1,0 +1,8 @@
+
+running 3 tests
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::opv_bootstrap::g14_opv_bootstrap_source_fee_is_refused_without_its_independent_monetary_fence ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::opv_bootstrap::g14_opv_bootstrap_source_fee_prepaid_final_horizon_db_replay_and_two_reorgs_pay_once ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::opv_bootstrap::g14_opv_bootstrap_source_fee_withheld_source_refunds_but_honest_sources_in_vetoed_target_get_paid ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 994 filtered out; finished in 522.54s
+

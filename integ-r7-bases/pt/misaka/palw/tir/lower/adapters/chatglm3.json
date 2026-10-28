@@ -1,0 +1,415 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "chatglm3",
+  "doc": "ChatGLM2/ChatGLM3 (ChatGLMModel / ChatGLMForConditionalGeneration, model_type `chatglm`; THUDM/chatglm3-6b), REMOTE CODE: the forward is the repository's `modeling_chatglm.py`, not a transformers class, and this adapter follows it AS RECALLED \u2014 no copy of it is available offline, so nothing here is checked against the repository's code (the verdict of the architecture is LOWERABLE_UNVERIFIED). What it models: an embedding table; per layer `input_layernorm` (RMSNorm, or LayerNorm when `rmsnorm` is false), multi-query attention with a fused `query_key_value` (rows [q | k | v], `multi_query_group_num` key/value groups; per-head [q_h | k_h | v_h] when `multi_query_attention` is false) with a bias when `add_qkv_bias` or `add_bias_linear`, rotary position embeddings over the FIRST HALF of each head's channels on ADJACENT pairs (`rotary_dim // 2` frequencies of base 10000 * `rope_ratio`: a partial interleaved rotary of factor 0.5), `dense`, `post_attention_layernorm`, a SwiGLU MLP (`dense_h_to_4h` rows [gate | up], silu on the gate, `dense_4h_to_h`), the final norm (`post_layer_norm`) and `transformer.output_layer`; the softmax scale is 1/sqrt(kv_channels) (`apply_query_key_layer_scaling` only reorders where the layer number cancels). Refused by name: `apply_residual_connection_post_layernorm`, P-tuning prefixes, `quantization_bit`. The rotary table of the release is stored in half precision (the checkpoint's dtype); this program's table is exact. Pin: an adapter of a registrant's own may declare `remote_code_pin` (module -> sha256 of the modelling file their fixture came from, `tools/remote_reference.py`); the built-in one cannot, it has no file to hash. Features: ATTN_GQA_V1, ROPE_DEFAULT_V1 (partial, interleaved), NORM_RMS_V1, MLP_DENSE_GATED_V1, REFERENCE_REMOTE_CODE_V1.",
+  "extends": [
+    "decoder-core"
+  ],
+  "match": {
+    "architectures": [
+      "ChatGLMModel",
+      "ChatGLMForConditionalGeneration"
+    ],
+    "model_types": [
+      "chatglm"
+    ]
+  },
+  "remote_code": [
+    "modeling_chatglm.ChatGLMForConditionalGeneration",
+    "modeling_chatglm.ChatGLMModel"
+  ],
+  "remote_code_required": true,
+  "config": {
+    "defaults": {
+      "num_layers": 28,
+      "padded_vocab_size": 65024,
+      "hidden_size": 4096,
+      "ffn_hidden_size": 13696,
+      "num_attention_heads": 32,
+      "seq_length": 2048,
+      "layernorm_epsilon": 1e-05,
+      "rmsnorm": true,
+      "post_layer_norm": true,
+      "add_bias_linear": false,
+      "add_qkv_bias": false,
+      "multi_query_attention": false,
+      "multi_query_group_num": 1,
+      "rope_ratio": 1,
+      "apply_residual_connection_post_layernorm": false,
+      "pre_seq_len": null,
+      "prefix_projection": false,
+      "quantization_bit": 0,
+      "tie_word_embeddings": false
+    },
+    "inert": [
+      "attention_dropout",
+      "attention_softmax_in_fp32",
+      "bias_dropout_fusion",
+      "fp32_residual_connection",
+      "hidden_dropout",
+      "original_rope",
+      "use_cache",
+      "classifier_dropout",
+      "apply_query_key_layer_scaling",
+      "torch_dtype",
+      "dtype"
+    ]
+  },
+  "vars": [
+    {
+      "name": "vocab",
+      "value": {
+        "$alias": [
+          [
+            "padded_vocab_size",
+            "vocab_size"
+          ],
+          65024
+        ]
+      }
+    },
+    {
+      "name": "n",
+      "value": {
+        "$cfg": "num_layers"
+      }
+    },
+    {
+      "name": "inter",
+      "value": {
+        "$cfg": "ffn_hidden_size"
+      }
+    },
+    {
+      "name": "eps",
+      "value": {
+        "$cfg": "layernorm_epsilon"
+      }
+    },
+    {
+      "name": "max_pos",
+      "value": {
+        "$cfg": "seq_length"
+      }
+    },
+    {
+      "name": "kv_ch",
+      "value": {
+        "$cfg?": "kv_channels"
+      }
+    },
+    {
+      "name": "hd",
+      "value": {
+        "$if": [
+          {
+            "$ne": [
+              {
+                "$var": "kv_ch"
+              },
+              null
+            ]
+          },
+          {
+            "$var": "kv_ch"
+          },
+          {
+            "$idiv": [
+              {
+                "$var": "hidden"
+              },
+              {
+                "$var": "heads"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "mqa",
+      "value": {
+        "$cfg": "multi_query_attention"
+      }
+    },
+    {
+      "name": "kv",
+      "value": {
+        "$if": [
+          {
+            "$var": "mqa"
+          },
+          {
+            "$cfg": "multi_query_group_num"
+          },
+          {
+            "$var": "heads"
+          }
+        ]
+      }
+    },
+    {
+      "name": "dims_ok",
+      "value": {
+        "$bad": [
+          {
+            "$and": [
+              {
+                "$gt": [
+                  {
+                    "$var": "heads"
+                  },
+                  0
+                ]
+              },
+              {
+                "$gt": [
+                  {
+                    "$var": "kv"
+                  },
+                  0
+                ]
+              },
+              {
+                "$eq": [
+                  {
+                    "$mod": [
+                      {
+                        "$var": "heads"
+                      },
+                      {
+                        "$var": "kv"
+                      }
+                    ]
+                  },
+                  0
+                ]
+              }
+            ]
+          },
+          "heads and key/value groups are inconsistent"
+        ]
+      }
+    },
+    {
+      "name": "act",
+      "value": "Silu"
+    },
+    {
+      "name": "post_res",
+      "value": {
+        "$require_eq": [
+          "apply_residual_connection_post_layernorm",
+          false,
+          "the residual stream continuing from the norm's output (apply_residual_connection_post_layernorm) is not modelled"
+        ]
+      }
+    },
+    {
+      "name": "no_prefix",
+      "value": {
+        "$require_eq": [
+          "pre_seq_len",
+          null,
+          "P-tuning prefixes (pre_seq_len) are not modelled"
+        ]
+      }
+    },
+    {
+      "name": "no_prefix_proj",
+      "value": {
+        "$require_eq": [
+          "prefix_projection",
+          false,
+          "P-tuning prefixes (prefix_projection) are not modelled"
+        ]
+      }
+    },
+    {
+      "name": "no_quant",
+      "value": {
+        "$require_eq": [
+          "quantization_bit",
+          0,
+          "quantization_bit: the checkpoint's own weight-only quantisation is not modelled (a pre-quantised checkpoint is read through quantization_config)"
+        ]
+      }
+    },
+    {
+      "name": "norm",
+      "value": {
+        "$if": [
+          {
+            "$cfg": "rmsnorm"
+          },
+          {
+            "kind": "Rms",
+            "eps": {
+              "$var": "eps"
+            },
+            "gain": "W",
+            "bias": false
+          },
+          {
+            "kind": "Layer",
+            "eps": {
+              "$var": "eps"
+            },
+            "gain": "W",
+            "bias": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "final_norm",
+      "value": {
+        "$if": [
+          {
+            "$cfg": "post_layer_norm"
+          },
+          {
+            "$var": "norm"
+          },
+          null
+        ]
+      }
+    },
+    {
+      "name": "abias",
+      "value": {
+        "$cfg": "add_bias_linear"
+      }
+    },
+    {
+      "name": "qkv_bias",
+      "value": {
+        "$or": [
+          {
+            "$cfg": "add_bias_linear"
+          },
+          {
+            "$cfg": "add_qkv_bias"
+          }
+        ]
+      }
+    },
+    {
+      "name": "o_bias",
+      "value": {
+        "$cfg": "add_bias_linear"
+      }
+    },
+    {
+      "name": "mbias",
+      "value": {
+        "$cfg": "add_bias_linear"
+      }
+    },
+    {
+      "name": "rope_dim",
+      "value": {
+        "$floor": {
+          "$mul": [
+            {
+              "$var": "hd"
+            },
+            0.5
+          ]
+        }
+      }
+    },
+    {
+      "name": "rope_partial",
+      "value": 0.5
+    },
+    {
+      "name": "rope_style",
+      "value": "Interleaved"
+    },
+    {
+      "name": "rope_theta",
+      "value": {
+        "$mul": [
+          10000.0,
+          {
+            "$cfg": "rope_ratio"
+          }
+        ]
+      }
+    },
+    {
+      "name": "qkv_layout",
+      "value": {
+        "$if": [
+          {
+            "$var": "mqa"
+          },
+          "FusedConcat",
+          "FusedPerHead"
+        ]
+      }
+    },
+    {
+      "name": "mlp_layout",
+      "value": "FusedGateFirst"
+    },
+    {
+      "name": "lm_head_name",
+      "value": "transformer.output_layer"
+    },
+    {
+      "name": "names",
+      "value": {
+        "$merge": [
+          {
+            "$omit": [
+              {
+                "$var": "names_base"
+              },
+              [
+                "mlp.gate",
+                "mlp.up",
+                "attn.q",
+                "attn.k",
+                "attn.v"
+              ]
+            ]
+          },
+          {
+            "embed": "transformer.embedding.word_embeddings",
+            "final_norm": "transformer.encoder.final_layernorm",
+            "lm_head": {
+              "$if": [
+                {
+                  "$var": "tied"
+                },
+                "transformer.embedding.word_embeddings",
+                {
+                  "$var": "lm_head_name"
+                }
+              ]
+            },
+            "norm.mix": "transformer.encoder.layers.{L}.input_layernorm",
+            "norm.ffn": "transformer.encoder.layers.{L}.post_attention_layernorm",
+            "attn.qkv": "transformer.encoder.layers.{L}.self_attention.query_key_value",
+            "attn.o": "transformer.encoder.layers.{L}.self_attention.dense",
+            "mlp.gate_up": "transformer.encoder.layers.{L}.mlp.dense_h_to_4h",
+            "mlp.down": "transformer.encoder.layers.{L}.mlp.dense_4h_to_h"
+          }
+        ]
+      }
+    },
+    {
+      "name": "families",
+      "value": [
+        "C1",
+        "C2"
+      ]
+    },
+    {
+      "name": "model_type",
+      "value": "chatglm"
+    }
+  ]
+}

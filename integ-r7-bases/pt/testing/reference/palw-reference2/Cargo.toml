@@ -1,0 +1,26 @@
+[package]
+name = "misaka-palw-reference2"
+description = "PALW §29 gate-1 independent second implementation of the canonical reference arithmetic: Berkeley SoftFloat-3e (vendored, byte-identical) behind the palw_reference canonicalization contract. Test/verification-only — never a consensus dependency"
+publish = false
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+# Crate code is ISC like the workspace; vendor/softfloat/ is Berkeley
+# SoftFloat-3e under its BSD-3-Clause license (vendor/softfloat/COPYING.txt).
+license = "ISC AND BSD-3-Clause"
+repository.workspace = true
+
+[dependencies]
+# Deliberately empty: the library is only FFI bindings + the canonicalization
+# wrapper. The normative implementation is compared against in dev-dependencies
+# only, so neither crate can ever leak into the other's non-test build graph.
+
+[dev-dependencies]
+kaspa-consensus-core.workspace = true
+
+[build-dependencies]
+cc.workspace = true
+
+[lints]
+workspace = true

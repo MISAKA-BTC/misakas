@@ -1,0 +1,26 @@
+[
+  {
+    "command": [
+      "target/release/deps/kaspa_consensus_core-cd85ed321316b157",
+      "palw_tir_public_fold_v1::"
+    ],
+    "exit": 0,
+    "log": "docs/evidence/palw/g14-integration-candidate-2026-10-20/shared-root-native-suite.log"
+  },
+  {
+    "command": [
+      "target/release/deps/kaspa_consensus_core-cd85ed321316b157",
+      "palw_court_shared_tir_"
+    ],
+    "exit": 0,
+    "log": "docs/evidence/palw/g14-integration-candidate-2026-10-20/shared-root-shared-suite.log"
+  },
+  {
+    "command": [
+      "target/release/deps/kaspa_consensus_core-cd85ed321316b157",
+      "palw_tir_public_source_v1::tests::"
+    ],
+    "exit": 0,
+    "log": "docs/evidence/palw/g14-integration-candidate-2026-10-20/shared-root-source-suite.log"
+  }
+]

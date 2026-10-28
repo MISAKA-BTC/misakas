@@ -1,0 +1,21 @@
+
+running 3 tests
+
+thread 'palw_court_numerical_geometry_v3::tests::every_enumeration_budget_refuses_without_a_partial_graph' (4329887) panicked at consensus/core/src/palw_court_numerical_geometry_v3.rs:315:9:
+assertion failed: g.retained_path_bytes_v3() > 0
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'palw_court_numerical_geometry_v3::tests::all_native_paths_match_independent_aggregated_topology_for_every_arity' (4329885) panicked at consensus/core/src/palw_court_numerical_geometry_v3.rs:282:13:
+assertion failed: !g.roots_v3().is_empty()
+test palw_court_numerical_geometry_v3::tests::every_enumeration_budget_refuses_without_a_partial_graph ... FAILED
+test palw_court_numerical_geometry_v3::tests::all_native_paths_match_independent_aggregated_topology_for_every_arity ... FAILED
+test palw_court_numerical_geometry_v3::tests::composition_derives_both_native_components_but_never_full_original ... ok
+
+failures:
+
+failures:
+    palw_court_numerical_geometry_v3::tests::all_native_paths_match_independent_aggregated_topology_for_every_arity
+    palw_court_numerical_geometry_v3::tests::every_enumeration_budget_refuses_without_a_partial_graph
+
+test result: FAILED. 1 passed; 2 failed; 0 ignored; 0 measured; 4729 filtered out; finished in 0.12s
+

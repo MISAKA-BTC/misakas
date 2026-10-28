@@ -92,13 +92,16 @@ impl Producer {
     }
 }
 
-#[derive(Default)]
 pub(super) struct Monitor {
+    literal_custodians: BTreeSet<PalwBondKeyV2>,
     seed: Option<(Hash64, u64)>,
     completed: bool,
     pending_sources: BTreeSet<Hash64>,
 }
 impl Monitor {
+    pub(super) fn new(literal_custodians: BTreeSet<PalwBondKeyV2>) -> Self {
+        Self { literal_custodians, seed: None, completed: false, pending_sources: BTreeSet::new() }
+    }
     pub(super) fn observe(&mut self, chain: &Chain, claim: Hash64, owner: PalwBondKeyV2) {
         let Some(progress) = chain.tc.palw_staged_owned_progress_v1((claim, owner)).unwrap() else { return };
         let Some(PalwStagedOwnedCursorV1::PublicPrefix { cursor, pending, completed, .. }) = progress.cursor else { return };
@@ -107,10 +110,19 @@ impl Monitor {
             assert_eq!(seed, previous, "one ordinary reservation never opens a replacement public court");
         }
         self.seed = Some(seed);
+        assert_eq!(
+            progress.prefix_custodians.as_ref(), Some(&self.literal_custodians),
+            "the public court preserves exactly the producer and literal signed Valid custodians"
+        );
         if let Some(pending) = pending {
+            assert_eq!(completed, None, "a pending public acquisition is incomplete, never an honest verdict");
             self.pending_sources.insert(pending.demand_id);
             assert!(pending.source.byte_length > 0);
-            assert_eq!(pending.signers.len(), 6, "producer plus all five literal Valid custodians are eligible sources");
+            let expected_sources = self.literal_custodians.iter().copied().chain(std::iter::once(owner)).collect::<BTreeSet<_>>();
+            assert_eq!(
+                pending.signers.keys().copied().collect::<BTreeSet<_>>(), expected_sources,
+                "eligible repair sources are exactly the literal custodians plus the independent court owner"
+            );
         }
         assert_ne!(completed, Some(false), "the deliberately false named prefix cannot finish Honest");
         if completed == Some(true) {
@@ -151,6 +163,7 @@ impl Monitor {
         for object in carriers {
             if let PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement } = object
                 && (movement.claim, movement.reserver) == (claim, owner)
+                && movement.seed_id == reference.seed_id
             {
                 assert_eq!(movement.seed_id, reference.seed_id);
                 movement.check().unwrap();

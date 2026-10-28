@@ -1,0 +1,68 @@
+{
+  "architectures": [
+    "FalconH1ForCausalLM"
+  ],
+  "attention_bias": false,
+  "attention_dropout": 0.0,
+  "attention_in_multiplier": 1.0,
+  "attention_out_multiplier": 1.0,
+  "bos_token_id": 1,
+  "dtype": "bfloat16",
+  "embedding_multiplier": 1.0,
+  "eos_token_id": 2,
+  "hidden_act": "silu",
+  "hidden_size": 32,
+  "initializer_range": 0.02,
+  "intermediate_size": 64,
+  "key_multiplier": 1.0,
+  "lm_head_multiplier": 1.0,
+  "mamba_chunk_size": 256,
+  "mamba_conv_bias": true,
+  "mamba_d_conv": 4,
+  "mamba_d_head": 8,
+  "mamba_d_ssm": 64,
+  "mamba_d_state": 4,
+  "mamba_expand": 2,
+  "mamba_n_groups": 2,
+  "mamba_n_heads": 8,
+  "mamba_norm_before_gate": false,
+  "mamba_proj_bias": false,
+  "mamba_rms_norm": true,
+  "max_position_embeddings": 128,
+  "mlp_bias": false,
+  "mlp_multipliers": [
+    1.0,
+    1.0
+  ],
+  "model_type": "falcon_h1",
+  "num_attention_heads": 4,
+  "num_hidden_layers": 2,
+  "num_key_value_heads": 2,
+  "num_logits_to_keep": 1,
+  "pad_token_id": 0,
+  "projectors_bias": false,
+  "rms_norm_eps": 1e-05,
+  "rope_parameters": {
+    "rope_theta": 10000.0,
+    "rope_type": "default"
+  },
+  "ssm_in_multiplier": 1.0,
+  "ssm_multipliers": [
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0
+  ],
+  "ssm_out_multiplier": 1.0,
+  "tie_word_embeddings": false,
+  "time_step_limit": [
+    0.0,
+    {
+      "__float__": "Infinity"
+    }
+  ],
+  "transformers_version": "5.17.0",
+  "use_cache": true,
+  "vocab_size": 64
+}

@@ -1,0 +1,189 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "aria_text",
+  "doc": "Aria text decoder (Rhymes AI): a Llama-shaped pre-norm decoder whose every MLP is a top-k (softmax over the k logits) mixture of experts plus a shared MLP of width intermediate_size * moe_num_shared_experts. The experts are STACKED and TRANSPOSED - experts.fc1.weight [E, in, 2I] (first half activated, second half the multiplier: gate-first), experts.fc2.weight [E, I, out] - a layout the binder has no name for (FusedGateFirst is [E, 2I, in]); the layout is written as `spec.hf.weights` expressions (FR-01, landed on tir/generic). PENDING VALIDATION (written during the quiet window). Third-party adapter (lane H): data only.",
+  "extends": [
+    "decoder-core"
+  ],
+  "match": {
+    "architectures": [
+      "AriaTextForCausalLM"
+    ],
+    "model_types": [
+      "aria_text"
+    ]
+  },
+  "config": {
+    "defaults": {
+      "moe_topk": 2,
+      "tie_word_embeddings": false
+    },
+    "inert": [
+      "pretraining_tp"
+    ]
+  },
+  "vars": [
+    {
+      "name": "e",
+      "value": {
+        "$cfg": "moe_num_experts"
+      }
+    },
+    {
+      "name": "k",
+      "value": {
+        "$cfg": "moe_topk"
+      }
+    },
+    {
+      "name": "topk_ok",
+      "value": {
+        "$bad": [
+          {
+            "$and": [
+              {
+                "$gt": [
+                  {
+                    "$var": "k"
+                  },
+                  0
+                ]
+              },
+              {
+                "$le": [
+                  {
+                    "$var": "k"
+                  },
+                  {
+                    "$var": "e"
+                  }
+                ]
+              }
+            ]
+          },
+          "top-k out of range"
+        ]
+      }
+    },
+    {
+      "name": "n_shared",
+      "value": {
+        "$cfg": "moe_num_shared_experts"
+      }
+    },
+    {
+      "name": "l_ffn",
+      "layer": true,
+      "value": {
+        "Moe": {
+          "experts": {
+            "$var": "e"
+          },
+          "top_k": {
+            "$var": "k"
+          },
+          "intermediate": {
+            "$var": "inter"
+          },
+          "act": {
+            "$var": "act"
+          },
+          "router": {
+            "scoring": "TopKThenSoftmax",
+            "normalize": false
+          },
+          "shared": {
+            "$if": [
+              {
+                "$gt": [
+                  {
+                    "$var": "n_shared"
+                  },
+                  0
+                ]
+              },
+              {
+                "intermediate": {
+                  "$mul": [
+                    {
+                      "$var": "inter"
+                    },
+                    {
+                      "$var": "n_shared"
+                    }
+                  ]
+                },
+                "sigmoid_gate": false
+              },
+              null
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "experts_layout",
+      "value": "FusedGateFirst"
+    },
+    {
+      "name": "names",
+      "value": {
+        "$merge": [
+          {
+            "$var": "names_base"
+          },
+          {
+            "moe.router": "{p}layers.{L}.mlp.router",
+            "moe.gate_up.stacked": "{p}layers.{L}.mlp.experts.fc1.weight",
+            "moe.down.stacked": "{p}layers.{L}.mlp.experts.fc2.weight",
+            "moe.shared.gate": "{p}layers.{L}.mlp.shared_experts.gate_proj",
+            "moe.shared.up": "{p}layers.{L}.mlp.shared_experts.up_proj",
+            "moe.shared.down": "{p}layers.{L}.mlp.shared_experts.down_proj"
+          }
+        ]
+      }
+    },
+    {
+      "name": "model_type",
+      "value": "aria_text"
+    }
+  ],
+  "spec": {
+    "hf": {
+      "weights": {
+        "moe.experts.gate": [
+          "{p}layers.{L}.mlp.experts.fc1.weight",
+          {
+            "take": {
+              "axis": 2,
+              "start": 0,
+              "len": {
+                "$var": "inter"
+              }
+            }
+          },
+          "transpose"
+        ],
+        "moe.experts.up": [
+          "{p}layers.{L}.mlp.experts.fc1.weight",
+          {
+            "take": {
+              "axis": 2,
+              "start": {
+                "$var": "inter"
+              },
+              "len": {
+                "$var": "inter"
+              }
+            }
+          },
+          "transpose"
+        ],
+        "moe.experts.down": [
+          "{p}layers.{L}.mlp.experts.fc2.weight",
+          "transpose"
+        ]
+      }
+    }
+  }
+}

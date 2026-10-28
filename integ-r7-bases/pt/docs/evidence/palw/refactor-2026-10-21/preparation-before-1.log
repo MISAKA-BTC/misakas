@@ -1,0 +1,20 @@
+
+running 15 tests
+test palw_state_v2::tests::rcore_s7_reporter::r_1_the_reward_is_r_times_the_collected_debit_less_x ... ok
+test palw_state_v2::tests::rcore_s7_reporter::r_1_past_the_share_fence_the_reward_is_49_percent_of_the_collected_debit_less_x ... ok
+test palw_state_v2::tests::rcore_s7_reporter::r_7_a_self_conviction_nets_negative_over_a_grid ... ok
+test palw_state_v2::tests::rcore_s7_reporter::r_3_the_commitment_and_its_message_bind_every_input ... ok
+test palw_state_v2::tests::rcore_s7_reporter::s7_fence_off_the_sweeps_touch_nothing ... ok
+test palw_state_v2::tests::rcore_s7_reporter::t39_an_unrevealed_reward_is_forgone ... ok
+test palw_state_v2::tests::rcore_s7_reporter::s7_the_pre_object_base_mirrors_both_sweeps ... ok
+test palw_state_v2::tests::rcore_s7_reporter::t39_a_commitment_older_than_an_open_pending_conviction_is_not_pruned ... ok
+test palw_state_v2::tests::rcore_s7_reporter::s7_the_open_reporter_reward_seam_keeps_its_contract ... ok
+test palw_state_v2::tests::rcore_s7_reporter::t39_a_copied_commitment_neither_blocks_nor_steals_the_reward ... ok
+test palw_state_v2::tests::rcore_s7_reporter::t39_a_named_reward_takes_no_reveal_and_pays_the_named_reporter ... ok
+test palw_state_v2::tests::rcore_s7_reporter::t39_the_commitment_gate_and_the_64_per_bond_cap ... ok
+test palw_state_v2::tests::rcore_s7_reporter::a_reward_opened_below_the_share_fence_keeps_its_10_percent_amount_past_it ... ok
+test palw_state_v2::tests::rcore_s7_reporter::t39_the_earliest_commitment_wins_and_a_copier_after_the_conviction_loses ... ok
+test palw_state_v2::tests::rcore_s7_reporter::t75_reward_timing_and_its_reorg_twins ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 4683 filtered out; finished in 0.00s
+

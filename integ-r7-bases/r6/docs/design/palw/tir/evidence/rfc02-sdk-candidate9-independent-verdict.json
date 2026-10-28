@@ -1,0 +1,53 @@
+{
+  "schema": "misaka.rfc02.sdk-candidate9-independent-verdict.v1",
+  "scope": "SDK-only candidate9 bounded preparation, complete independent record validation and signing helper. No native class9/job11, source fidelity, reward or Final claim.",
+  "source_sha256": {
+    "misaka-palw-sdk/src/flat_candidate_v9.rs": "1ba32289ad1302dad26f64d09fd10b3bfaec8f83a447b28802a6b373713bb284",
+    "misaka-palw-sdk/tests/flat_candidate_v9.rs": "a824c926d5457f637e7acf1143676df9ec19644cc3fb14bd92965e3ccfa5c282"
+  },
+  "source_scope": "The SDK module/test source remained frozen during this final run. Shared native/kernel work continued; this receipt does not claim a complete repository preimage or coherent native9 quota11 acceptance.",
+  "logs": {
+    "rfc02-flat-candidate9-sdk-first-tests.log": "4256a1252a1ff31e6a80a3843c4387477970b0fca5fbf2c911abc3406888a403",
+    "rfc02-flat-candidate9-sdk-second-tests.log": "f5d80af53973ae05b1c1844f55ffa9ae8e8b788cd5c4910a5c6941be7ce2173d",
+    "rfc02-flat-candidate9-sdk-retained-tests.log": "3ea89362885c748942b9906328f4295bd2c83d32bd741b378d5356c316c624b9"
+  },
+  "build_environment": {
+    "rust": "1.93.0",
+    "CARGO_INCREMENTAL": "0",
+    "CARGO_TARGET_DIR": "/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target",
+    "profile": "ordinary debug + debuginfo",
+    "budget_stack_arithmetic_cap_overrides": false
+  },
+  "command": "CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target cargo test --locked -p misaka-palw-sdk --test flat_candidate_v9 -- --nocapture --test-threads=1",
+  "verified": {
+    "passed": 4,
+    "failed": 0,
+    "compile_seconds": 92,
+    "runtime_seconds": 0.06,
+    "complete_independent_scope_replay_resource_native_tariff_derivation": true,
+    "canonical_bounded_program_pc_scope_replay_record_decode": true,
+    "ml_dsa_network_and_actor_authentication_and_wrong_signer_version_refusal": true,
+    "consistent_forged_class_id_cannot_authorize_fake_metadata": true
+  },
+  "retained_binary_sha256": {
+    "/tmp/rfc02-flat-candidate9-sdk-final": "c2514e777a6a3c47ede44e2d818bdd6101d77d6cf63b8e58702e4134df6f256e"
+  },
+  "source_binary_build_path": "/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/flat_candidate_v9-669a0452c105eaaf",
+  "trial_history": [
+    {
+      "log": "rfc02-flat-candidate9-sdk-first-tests.log",
+      "finding": "Shared native9 compilation temporarily lacked a bounded chunk constant and public authenticated header wrapper; native completed those production definitions. No SDK codec check was relaxed."
+    }
+  ],
+  "limitations": [
+    "No native execution, availability, activation or reward rights follow from SDK candidate preparation.",
+    "Expected class identity read from a file is consistency only; real chain binding/class authentication remains caller responsibility.",
+    "This SDK binary was compiled before the later quota11 mandatory owner-argument revision and does not exercise quota transitions. A future coherent native consumer rebuild remains necessary."
+  ],
+  "retained_replay": {
+    "command": "/tmp/rfc02-flat-candidate9-sdk-final --nocapture --test-threads=1",
+    "passed": 4,
+    "failed": 0,
+    "log": "rfc02-flat-candidate9-sdk-retained-tests.log"
+  }
+}

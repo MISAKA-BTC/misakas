@@ -1,0 +1,1779 @@
+{
+  "status": "PASS",
+  "scope": "Documentation alignment only. Economic superiority, allocation runtime and Panel=0 are unimplemented/unproven; no economic or node E2E PASS is claimed.",
+  "branch": "pre",
+  "head": "e4f3f6f3d81c75166ea6308bfff0b8aeaf836ca5",
+  "modified_existing_markdown": 203,
+  "new_design_markdown": 1,
+  "precedence_files": 201,
+  "added_lines": 1221,
+  "removed_lines": 1168,
+  "new_local_links_checked": 268,
+  "non_document_changes": [],
+  "git_diff_check": true,
+  "checks": {
+    "central_abolition_and_non_interference": "PASS",
+    "distinct_principal_and_coinbase_conservation": "PASS",
+    "individual_cap_and_common_clock": "PASS",
+    "economics_goal_and_unproven_limits": "PASS",
+    "rfc14_core_and_retired_fpr": "PASS",
+    "rfc15_admission_final_and_allocation": "PASS",
+    "adr173_new_decisions": "PASS",
+    "index_docs/rfc/README.md": "PASS",
+    "index_docs/adr/README.md": "PASS",
+    "index_docs/README.md": "PASS",
+    "index_docs/mainnet-readiness.md": "PASS",
+    "index_docs/architecture/overview.md": "PASS",
+    "precedence_README.md": "PASS",
+    "precedence_docs/README.md": "PASS",
+    "precedence_docs/adr/0001-network-isolation.md": "PASS",
+    "precedence_docs/adr/0002-mldsa65-p2pkh.md": "PASS",
+    "precedence_docs/adr/0003-lthash-utxo-accumulator.md": "PASS",
+    "precedence_docs/adr/0004-utxo-commitment64.md": "PASS",
+    "precedence_docs/adr/0005-mass-policy.md": "PASS",
+    "precedence_docs/adr/0006-rpc-wasm-sdk-types.md": "PASS",
+    "precedence_docs/adr/0007-layered-pow.md": "PASS",
+    "precedence_docs/adr/0008-hash64-consensus-identity.md": "PASS",
+    "precedence_docs/adr/0009-dns-probabilistic-finality.md": "PASS",
+    "precedence_docs/adr/0010-validator-node-architecture.md": "PASS",
+    "precedence_docs/adr/0011-validator-deployment-and-equivocation-safety.md": "PASS",
+    "precedence_docs/adr/0012-mainnet-validator-sortition-commit-reveal.md": "PASS",
+    "precedence_docs/adr/0013-validator-reward-distribution.md": "PASS",
+    "precedence_docs/adr/0014-coordinated-failover-protocol.md": "PASS",
+    "precedence_docs/adr/0015-remote-signer-hsm-protocol.md": "PASS",
+    "precedence_docs/adr/0016-stake-locked-bond-utxos.md": "PASS",
+    "precedence_docs/adr/0017-all-active-staker-attestation.md": "PASS",
+    "precedence_docs/adr/0018-quality-gated-stakescore-inclusion-economics.md": "PASS",
+    "precedence_docs/adr/0019-mldsa87-migration.md": "PASS",
+    "precedence_docs/adr/0020-selected-parent-evm-lane.md": "PASS",
+    "precedence_docs/adr/0021-palw-llm-pow.md": "PASS",
+    "precedence_docs/adr/0022-pruned-ibd-evm-overlay-snapshot.md": "PASS",
+    "precedence_docs/adr/0023-base-three-lane-execution.md": "PASS",
+    "precedence_docs/adr/0024-verified-llm-token-weighted-bft.md": "PASS",
+    "precedence_docs/adr/0025-chain-participation-and-ibd-candidate-selection.md": "PASS",
+    "precedence_docs/adr/0026-current-palw-testnet11-architecture.md": "PASS",
+    "precedence_docs/adr/0026-palw-v2-runtime-separated-verification.md": "PASS",
+    "precedence_docs/adr/0027-palw-slash-unilateral-fraud-proofs.md": "PASS",
+    "precedence_docs/adr/0028-palw-challenge-sampling-protocol.md": "PASS",
+    "precedence_docs/adr/0029-palw-chain-carriage.md": "PASS",
+    "precedence_docs/adr/0030-palw-step-function-shape-profile.md": "PASS",
+    "precedence_docs/adr/0031-palw-canonical-transcendentals.md": "PASS",
+    "precedence_docs/adr/0032-palw-fee-bond-escrow.md": "PASS",
+    "precedence_docs/adr/0033-palw-credit-gate-wiring.md": "PASS",
+    "precedence_docs/adr/0034-palw-execution-class-model-band-routing.md": "PASS",
+    "precedence_docs/adr/0035-palw-public-testnet-strategy.md": "PASS",
+    "precedence_docs/adr/0036-palw-mainnet-activation-model.md": "PASS",
+    "precedence_docs/adr/0037-palw-async-job-state-machine.md": "PASS",
+    "precedence_docs/adr/0038-palw-is-the-consensus-work.md": "PASS",
+    "precedence_docs/adr/0039-palw-only-block-production.md": "PASS",
+    "precedence_docs/adr/0040-palw-base-0-integer-arithmetic.md": "PASS",
+    "precedence_docs/adr/0041-palw-pruning-proof-verification.md": "PASS",
+    "precedence_docs/adr/0042-palw-mainnet-candidate-ruleset.md": "PASS",
+    "precedence_docs/adr/0043-palw-v2-state-root-ordering.md": "PASS",
+    "precedence_docs/adr/0044-palw-free-prompt-receipts.md": "PASS",
+    "precedence_docs/adr/0045-palw-class-economy-on-chain.md": "PASS",
+    "precedence_docs/adr/0046-palw-v2-consensus-object-carriage.md": "PASS",
+    "precedence_docs/adr/0047-palw-a16-activation-tier.md": "PASS",
+    "precedence_docs/adr/0049-palw-adjudication-contract.md": "PASS",
+    "precedence_docs/adr/0050-palw-base0-residual-site.md": "PASS",
+    "precedence_docs/adr/0051-palw-metal-gguf-execution-family.md": "PASS",
+    "precedence_docs/adr/0052-palw-qwen36-hybrid-class.md": "PASS",
+    "precedence_docs/adr/0053-palw-one-execution-family.md": "PASS",
+    "precedence_docs/adr/0054-palw-share-follows-production.md": "PASS",
+    "precedence_docs/adr/0055-palw-position-is-earned-not-declared.md": "PASS",
+    "precedence_docs/adr/0056-palw-permissionless-class-admission-and-share-economy.md": "PASS",
+    "precedence_docs/adr/0057-palw-base0-runtime-acceleration.md": "PASS",
+    "precedence_docs/adr/0058-palw-merged-work-is-counted.md": "PASS",
+    "precedence_docs/adr/0059-the-10b-premine-cap.md": "PASS",
+    "precedence_docs/adr/0060-the-liveness-doctrine.md": "PASS",
+    "precedence_docs/adr/0061-zero-seat-genesis-and-right-sized-collateral.md": "PASS",
+    "precedence_docs/adr/0062-data-availability-court.md": "PASS",
+    "precedence_docs/adr/0063-operator-tooling-the-missing-half.md": "PASS",
+    "precedence_docs/adr/0064-trustless-recovery-from-a-total-stop.md": "PASS",
+    "precedence_docs/adr/0065-a-bond-must-be-earned-and-a-seat-must-be-someone-else.md": "PASS",
+    "precedence_docs/adr/0066-the-heartbeat-lane-out-of-header-bits-and-a-committed-liveness-table.md": "PASS",
+    "precedence_docs/adr/0067-classes-are-chain-data-kernels-are-the-build.md": "PASS",
+    "precedence_docs/adr/0068-the-llm-primary-economy-and-the-floors-minimum.md": "PASS",
+    "precedence_docs/adr/0069-e2e-adjudicability-is-the-price-of-weight.md": "PASS",
+    "precedence_docs/adr/0070-the-model-tiers-step-spaces-are-adjudicable.md": "PASS",
+    "precedence_docs/adr/0071-the-attempt-lanes-price-and-the-tickets-bound.md": "PASS",
+    "precedence_docs/adr/0072-the-ticket-is-the-execution.md": "PASS",
+    "precedence_docs/adr/0073-real-demand-work-bears-the-weight.md": "PASS",
+    "precedence_docs/adr/0074-the-attempt-is-a-claim-drawn-by-the-chain.md": "PASS",
+    "precedence_docs/adr/0075-certification-is-a-consensus-object.md": "PASS",
+    "precedence_docs/adr/0076-the-attempt-lanes-seed-is-the-retargets-equilibrium.md": "PASS",
+    "precedence_docs/adr/0077-a-prompt-a-person-would-type-is-a-claim-the-court-can-try.md": "PASS",
+    "precedence_docs/adr/0078-what-was-made-from-it-is-committed-the-thing-never-rides.md": "PASS",
+    "precedence_docs/adr/0079-a-pure-function-needs-no-permissions-the-sandbox-is-for-the-host.md": "PASS",
+    "precedence_docs/adr/0080-the-answer-is-long-the-verified-unit-is-short.md": "PASS",
+    "precedence_docs/adr/0081-long-context-the-input-is-a-state-chain.md": "PASS",
+    "precedence_docs/adr/0082-the-close-is-flat-in-the-context.md": "PASS",
+    "precedence_docs/adr/0083-the-difficulty-window-counts-only-rows-priced-by-bits.md": "PASS",
+    "precedence_docs/adr/0084-the-ids-ride-the-capture-stays-home.md": "PASS",
+    "precedence_docs/adr/0085-the-close-is-assembled-from-what-was-served.md": "PASS",
+    "precedence_docs/adr/0086-the-opening-carries-the-fold-not-the-leaves.md": "PASS",
+    "precedence_docs/adr/0087-a-position-is-bought-from-the-curve-and-sold-back-to-it.md": "PASS",
+    "precedence_docs/adr/0088-the-class-keeps-its-graph-and-the-owner-keeps-publishing.md": "PASS",
+    "precedence_docs/adr/0089-the-fold-is-the-truth-and-the-evm-is-its-window-and-its-hand.md": "PASS",
+    "precedence_docs/adr/0090-the-pair-is-seeded-with-real-msk-locked-for-good-and-a-position-is-whole.md": "PASS",
+    "precedence_docs/adr/0091-the-reward-buys-the-pair-and-no-holder-is-paid.md": "PASS",
+    "precedence_docs/adr/0092-the-ladder-is-minted-once-and-the-clock-is-what-binds.md": "PASS",
+    "precedence_docs/adr/0093-the-court-can-try-a-fused-row-and-the-responder-is-what-is-missing.md": "PASS",
+    "precedence_docs/adr/0094-a-seed-is-paid-in-as-many-transactions-as-it-takes.md": "PASS",
+    "precedence_docs/adr/0095-a-position-is-a-membership-not-an-income.md": "PASS",
+    "precedence_docs/adr/0096-the-app-you-already-use-is-the-entrance-and-the-shape-of-the-answer-is-committed.md": "PASS",
+    "precedence_docs/adr/0097-a-models-fit-is-a-lookup-and-the-entrance-says-its-limits-before-the-first-token.md": "PASS",
+    "precedence_docs/adr/0098-the-panels-coverage-is-a-number-and-a-seat-that-found-a-lie-files-nothing-else.md": "PASS",
+    "precedence_docs/adr/0099-the-adder-measures-the-chain-recomputes-and-a-seat-holds-a-shard.md": "PASS",
+    "precedence_docs/adr/0100-a-model-is-data-and-the-court-the-measure-and-the-licence-are-built-for-a-shard.md": "PASS",
+    "precedence_docs/adr/0101-a-membership-is-proven-by-the-chain-and-served-by-anyone-and-a-position-never-moves.md": "PASS",
+    "precedence_docs/adr/0102-the-embedding-lift-is-read-per-token-and-an-unarmed-kernel-is-not-in-the-identity.md": "PASS",
+    "precedence_docs/adr/0103-the-context-is-held-off-the-chain-and-the-chain-carries-a-root-an-opening-and-a-logarithm.md": "PASS",
+    "precedence_docs/adr/0105-a-heartbeat-never-turns-a-bonded-block-red.md": "PASS",
+    "precedence_docs/adr/0106-an-inventory-is-a-stream-of-leaves-not-a-copy-of-the-model.md": "PASS",
+    "precedence_docs/adr/0107-a-share-grows-on-work-that-reached-final.md": "PASS",
+    "precedence_docs/adr/0108-an-extension-is-a-manifest-the-verifier-recomputes-and-a-receipt-is-evidence-not-a-vote.md": "PASS",
+    "precedence_docs/adr/0109-a-lock-is-its-own-claim-and-finality-is-a-label-not-a-pause.md": "PASS",
+    "precedence_docs/adr/0110-a-context-limit-is-activated-from-reproducible-public-vectors-not-the-maintainers-workstation.md": "PASS",
+    "precedence_docs/adr/0111-a-seat-may-demand-the-committed-leaf-it-needs-to-judge.md": "PASS",
+    "precedence_docs/adr/0112-a-classs-weights-are-read-within-a-budget-the-operator-states-and-the-budget-is-a-fifth-of-the-artifact.md": "PASS",
+    "precedence_docs/adr/0114-the-owners-leg-is-five-percent-and-it-arrives-at-a-height.md": "PASS",
+    "precedence_docs/adr/0115-a-pending-transaction-is-announced-until-it-lands.md": "PASS",
+    "precedence_docs/adr/0116-an-attention-history-is-the-classs-and-the-held-regime-reduces-over-its-own-width.md": "PASS",
+    "precedence_docs/adr/0117-a-draw-is-one-forward.md": "PASS",
+    "precedence_docs/adr/0118-the-held-regime-arrives-at-a-height-and-a-held-class-carries-its-own-prompt-form.md": "PASS",
+    "precedence_docs/adr/0119-a-held-class-is-walked-at-the-regimes-ladder-and-the-chain-records-which-classes-those-are.md": "PASS",
+    "precedence_docs/adr/0120-the-least-seed-is-one-million-msk-and-it-arrives-at-a-height.md": "PASS",
+    "precedence_docs/adr/0121-a-held-capture-is-served-from-its-fold-as-the-replay-streams-and-a-node-holds-two-ladders.md": "PASS",
+    "precedence_docs/adr/0122-mining-is-a-purpose-an-operator-runs-one-command-and-reads-one-work-id.md": "PASS",
+    "precedence_docs/adr/0123-the-epoch-progressively-releases-unused-class-budget.md": "PASS",
+    "precedence_docs/adr/0124-the-panel-is-paid-out-of-the-claims-reward-a-seat-holds-exposure-and-a-claim-is-paid-for-the-compute-it-certifies.md": "PASS",
+    "precedence_docs/adr/0125-the-execution-lane-is-a-second-lane-inside-the-cadence-and-it-widens-one-permit-at-a-time.md": "PASS",
+    "precedence_docs/adr/0126-the-validator-carve-drops-to-a-fifth-and-the-stake-reorg-gate-stays.md": "PASS",
+    "precedence_docs/adr/0127-palw-settles-on-its-own-and-its-terms-are-not-dns-terms.md": "PASS",
+    "precedence_docs/adr/0128-dns-validators-vote-bft-by-bonded-stake-and-that-vote-decides-the-stake-reorg-gate.md": "PASS",
+    "precedence_docs/adr/0129-a-double-spend-needs-the-anchors-not-the-blocks.md": "PASS",
+    "precedence_docs/adr/0130-bps1-is-hardened-before-it-is-widened.md": "PASS",
+    "precedence_docs/adr/0131-a-claim-is-paid-for-the-compute-it-cost-in-economic-compute-not-leaves.md": "PASS",
+    "precedence_docs/adr/0132-what-a-model-is-actually-paid-per-forward-it-ran-and-why-the-gap-is-liveness-before-it-is-price.md": "PASS",
+    "precedence_docs/adr/0133-verification-is-its-own-clock-a-class-verifies-over-spans-and-a-starved-class-stops-only-itself.md": "PASS",
+    "precedence_docs/adr/0134-the-compute-overlays-committee-beacon-retires-at-a-height-and-its-machinery-goes.md": "PASS",
+    "precedence_docs/adr/0135-a-model-is-data-the-permissionless-registry-derives-its-profile-proves-its-panel-and-walks-its-lifecycle.md": "PASS",
+    "precedence_docs/adr/0136-an-artifact-is-mapped-not-read-and-a-host-holds-one-copy-of-it.md": "PASS",
+    "precedence_docs/adr/0137-a-block-buys-one-unit-of-work-from-any-model-and-a-share-is-a-result-not-an-input.md": "PASS",
+    "precedence_docs/adr/0138-the-daa-score-is-the-anchors-clock.md": "PASS",
+    "precedence_docs/adr/0139-the-execution-lanes-gas-is-one-budget-a-round.md": "PASS",
+    "precedence_docs/adr/0140-the-heartbeat-is-the-emergency-generator.md": "PASS",
+    "precedence_docs/adr/0141-can-an-inference-be-the-ticket-without-a-hash-lottery.md": "PASS",
+    "precedence_docs/adr/0142-the-consensus-clock-is-a-cursor-a-heartbeat-consumes-a-slot.md": "PASS",
+    "precedence_docs/adr/0143-an-artifact-root-has-one-owner-on-the-chain.md": "PASS",
+    "precedence_docs/adr/0144-palw-pays-for-the-inference-you-were-going-to-run-anyway.md": "PASS",
+    "precedence_docs/adr/0145-canonical-work-is-derived-and-admission-is-earned.md": "PASS",
+    "precedence_docs/adr/0146-a-coefficient-is-justified-by-the-arbitrage-it-permits.md": "PASS",
+    "precedence_docs/adr/0147-independence-is-drawn-not-declared.md": "PASS",
+    "precedence_docs/adr/0148-the-free-prompt-lane-prices-compute.md": "PASS",
+    "precedence_docs/adr/0149-an-attempts-pwu-is-the-derivation.md": "PASS",
+    "precedence_docs/adr/0150-the-fingerprint-must-see-the-rule-not-only-the-height.md": "PASS",
+    "precedence_docs/adr/0151-liveness-is-structural-collateral-covers-fraud.md": "PASS",
+    "precedence_docs/adr/0162-the-pair-opens-on-a-virtual-reserve.md": "PASS",
+    "precedence_docs/adr/0163-an-adapter-class-is-its-parent-plus-an-adapter-and-is-listed.md": "PASS",
+    "precedence_docs/adr/0165-the-floor-is-a-reserve-and-the-work-carries-the-clock.md": "PASS",
+    "precedence_docs/adr/0166-verifier-unavailability-is-not-producer-fraud.md": "PASS",
+    "precedence_docs/adr/0167-the-x1000-capacity-package-a-fixed-per-daa-reward-budget-riders-and-a-lower-only-breaker.md": "PASS",
+    "precedence_docs/adr/0168-an-execution-block-is-a-third-class-and-the-chain-reaches-it-through-an-anchor.md": "PASS",
+    "precedence_docs/adr/0169-a-work-slice-is-a-normal-consensus-block-the-session-earns-nothing-and-the-floor-is-kept-out-by-merge-admission.md": "PASS",
+    "precedence_docs/adr/0170-the-seed-anchor-is-a-window-not-a-span.md": "PASS",
+    "precedence_docs/adr/0171-probabilistic-constraint-checks-and-court-on-dispute.md": "PASS",
+    "precedence_docs/adr/0172-model-extensibility-uses-versioned-kernels-not-a-universal-vm.md": "PASS",
+    "precedence_docs/adr/0173-a-seat-holds-a-root-not-a-class-and-possession-gates-activation.md": "PASS",
+    "precedence_docs/adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md": "PASS",
+    "precedence_docs/adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md": "PASS",
+    "precedence_docs/adr/0175-registered-models-are-permanently-immutable.md": "PASS",
+    "precedence_docs/adr/README.md": "PASS",
+    "precedence_docs/architecture/overview.md": "PASS",
+    "precedence_docs/design/palw/rfc-0008-implementation-spec.md": "PASS",
+    "precedence_docs/mainnet-readiness.md": "PASS",
+    "precedence_docs/misaka-palw-model-adjudicability-guide-v0.1-ja.md": "PASS",
+    "precedence_docs/misaka-palw-ota-secure-update-design-v0.1-ja.md": "PASS",
+    "precedence_docs/misaka-palw-pow-detailed-design-v0.1-ja.md": "PASS",
+    "precedence_docs/misaka-palw-slash-protocol-design-v0.1.md": "PASS",
+    "precedence_docs/misaka-palw-vps-canonical-worker-design-v0.1-ja.md": "PASS",
+    "precedence_docs/palw-add-a-model-runbook.md": "PASS",
+    "precedence_docs/palw-certify-a-new-model.md": "PASS",
+    "precedence_docs/palw-class-activation-gate-status.md": "PASS",
+    "precedence_docs/palw-derived-artifacts.md": "PASS",
+    "precedence_docs/palw-extension-envelope.md": "PASS",
+    "precedence_docs/palw-model-onboarding-sdk.md": "PASS",
+    "precedence_docs/palw-registry-map.md": "PASS",
+    "precedence_docs/rfc/0001-palw-inference-surface-gaps.md": "PASS",
+    "precedence_docs/rfc/0002-palw-tensor-ir.md": "PASS",
+    "precedence_docs/rfc/0003-palw-generative-model-classes.md": "PASS",
+    "precedence_docs/rfc/0004-palw-model-improvement.md": "PASS",
+    "precedence_docs/rfc/0005-palw-ml-vm.md": "PASS",
+    "precedence_docs/rfc/0006-palw-layer-sharded-panels.md": "PASS",
+    "precedence_docs/rfc/0007-palw-verification-certificates-and-algebraic-checks.md": "PASS",
+    "precedence_docs/rfc/0008-palw-claim-backed-consensus-blocks.md": "PASS",
+    "precedence_docs/rfc/0009-palw-remote-miner.md": "PASS",
+    "precedence_docs/rfc/0010-dormant-implementation.md": "PASS",
+    "precedence_docs/rfc/0010-permissionless-palw-panel-and-claim-completion.md": "PASS",
+    "precedence_docs/rfc/0011-permissionless-model-and-long-context-onboarding.md": "PASS",
+    "precedence_docs/rfc/0012-dormant-implementation.md": "PASS",
+    "precedence_docs/rfc/0012-palw-only-consensus-and-native-evm-settlement.md": "PASS",
+    "precedence_docs/rfc/0013-reproducible-layouts-and-resource-bounded-onboarding-tools.md": "PASS",
+    "precedence_docs/rfc/0014-panel-independent-fraud-prosecution.md": "PASS",
+    "precedence_docs/rfc/0015-panel-free-permissionless-verification.md": "PASS",
+    "precedence_docs/rfc/README.md": "PASS",
+    "precedence_docs/spec/README.md": "PASS",
+    "precedence_docs/wiki/README.md": "PASS"
+  },
+  "errors": [],
+  "files": [
+    {
+      "file": "README.md",
+      "before_sha256": "f177d5301cb83f63425267d13015dd22da7b9debaecda764fac7aaed237a6ca7",
+      "after_sha256": "24f47a0f809b27a231f1b1e3f4f7615beb346f5570411bf84462d3b997ad76d3",
+      "added_lines": 4,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/README.md",
+      "before_sha256": "0001bc338dae5cda791663f84909b025c8ed55b9ef6255370af0ba62f62b7c7f",
+      "after_sha256": "65414130728207e2dabe9cf06bbf6cce0fdfa2aae060b69d3a9a6ad48b1a07d1",
+      "added_lines": 5,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0001-network-isolation.md",
+      "before_sha256": "dd4c8e20ae51a34b5dcf1526b1d5dd2e0299219809e3853dc47c0f8cb92a36c6",
+      "after_sha256": "7c60c8cde6abf10e5fc2fddd83f353815ea77d3e78847a804d24b7ba1abfbc47",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0002-mldsa65-p2pkh.md",
+      "before_sha256": "132be380ca67c5a2a0eed668db98a696669d4c3597e52aabd4c958e82fd61a06",
+      "after_sha256": "8656c6e7288917893128485e164a5d63f5a7838792ae533078c570b4607dcac4",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0003-lthash-utxo-accumulator.md",
+      "before_sha256": "b4a20266697b74e66ebe1240b0f960f31c6b1579c41fad4501e47643b0b1fc3d",
+      "after_sha256": "4ab4722c9db429b088131cad402d53a5db7158535400867b7d01af4d144093a3",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0004-utxo-commitment64.md",
+      "before_sha256": "e639101dd7017920f6b7c6ec9dd9702beb6327d7f591e40ec576d0ed79c8d152",
+      "after_sha256": "e3d2c4f9c8883e911f91740a1fed4c8afff12abe46aa5e9d591b31d00f95f148",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0005-mass-policy.md",
+      "before_sha256": "6f2002544ac35a73cf75de0fb0897e54bd0e3e100f9920d1c20855a7e72ed719",
+      "after_sha256": "0b934a0e561d0b94fee23a44ad2093c5f6e4a2c5c732709ef0281d17db738c89",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0006-rpc-wasm-sdk-types.md",
+      "before_sha256": "1b5619a2ee5bd16adecb09de38d7447a62df9793687137ba880a9167d10acd49",
+      "after_sha256": "699e4a503fa015c6d20fe81e88d07858600c789da55297285a0bc1073d178bfe",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0007-layered-pow.md",
+      "before_sha256": "29d989b9135c46c9c64cc09519b7b9abc68107d61256d78c6da170e0596bdda6",
+      "after_sha256": "f17acc56d75f4ed135f05f4935224d19ca7640af16ea3c56885c83e460cf8e98",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0008-hash64-consensus-identity.md",
+      "before_sha256": "17a96befeaebb297501155c621691e7ec4da439f974e4c38d9ba12ca39350471",
+      "after_sha256": "5d0551c92ec94b2d2961e53ff3da111a213b8dd91f84b71e20a7ef126ad6091b",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0009-dns-probabilistic-finality.md",
+      "before_sha256": "f895bf6041e67e957aceab63f71635fdd6e490546df2a50f1983782d6086d36d",
+      "after_sha256": "d6aa5c6fb808696c4001805071b09fa830cd7d47381987db1cbe8d034c67ca1b",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0010-validator-node-architecture.md",
+      "before_sha256": "8c06bb028add04425d41680438f075f930b9786f6b827f7071fd7525e20f8f22",
+      "after_sha256": "6f896a00f89071d820312cd287957ee2e365b1f413187f0d0ee2f57b676b9703",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0011-validator-deployment-and-equivocation-safety.md",
+      "before_sha256": "c2d7841d915f8dd60468d3e9171ff1e4bc2c1ddfc8b66792dbf146469f38af6d",
+      "after_sha256": "7988e935888c6382035b58fb9a215a0238bc84a687dc0fcc0db296ada8eb3c00",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0012-mainnet-validator-sortition-commit-reveal.md",
+      "before_sha256": "2ef2df3b12e0ef5f29c292c84a7e6e03cbc89b7d86befa00381b91934da1d1f4",
+      "after_sha256": "e85d9b3f49028746025c21b44e0726d10e1740cbe2a04ab7557b0dcf77f0e931",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0013-validator-reward-distribution.md",
+      "before_sha256": "8e9398fa420d947333dd3b27f126f8d96ffc14c8615285587ae9d902e27fe363",
+      "after_sha256": "929fe56ff653913768399138081fb296a1e531f0f02140c48a6901e801552b22",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0014-coordinated-failover-protocol.md",
+      "before_sha256": "38ab602e7af9d5ac5cf322d3c3c36b75a984f797786679469d3d642ccb069d78",
+      "after_sha256": "d9dcdd5eb090a33e389c516a46de2c6b258902dd71734fe344567bc08f5b5a0f",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0015-remote-signer-hsm-protocol.md",
+      "before_sha256": "e34d36d4881da0272c61284ec0060ebb461447102a5e9eaf79b048c571f1238d",
+      "after_sha256": "fad20f09ac74a430cc04d5dfd1e7474e67f6dfa2c46c44149e8ad39e9c8f57c8",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0016-stake-locked-bond-utxos.md",
+      "before_sha256": "bf5ed0a60e39c271b46cb649532d281907ec7559c35517c51d8f5de195ee85fb",
+      "after_sha256": "0191de54ee1b732fe1c67553e7d66d17772f730ab0d92d0c2543cd5d9be6cd7d",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0017-all-active-staker-attestation.md",
+      "before_sha256": "bb19813f45a7ccb15d22b573551a05fb9188ce7df2e7e8f875343acf3822adc8",
+      "after_sha256": "276f79e3090753269790603afb12e2c48e3c3eac0865162e0d15e599479098c8",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0018-quality-gated-stakescore-inclusion-economics.md",
+      "before_sha256": "54518128556f646f62a18f9d00ea689f801eac53f43d732482770e8de5fe0aa0",
+      "after_sha256": "d51443f20e9f44799081ddb0d18f3c16152ad76aa21c4e4a387b59e81b8001ec",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0019-mldsa87-migration.md",
+      "before_sha256": "5f45b6a05f20d0899b72ba95af09ed1c0d15d224f5c559ca6c0e643b2f8a9ac1",
+      "after_sha256": "6cee9671d788ea56723f75a5560c8162240a6ee1ddd0edccf84ca089f1afb674",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0020-selected-parent-evm-lane.md",
+      "before_sha256": "466021709099a3a9d3e705331d7a07423a7bb2e537c56f246b95f9deeafde681",
+      "after_sha256": "602191973f2fb1bed60fd44bb7c400db293289e452643d71dec793506b289f33",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0021-palw-llm-pow.md",
+      "before_sha256": "881f9d9eb42f6dbcb46ad1a531c412730bdbe51dcd7912b0d5ca434cf9a73978",
+      "after_sha256": "b5fd01f3529a80a6abcfe8d3710ac51d6377c90b65f0e706e26d86b8982568fe",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0022-pruned-ibd-evm-overlay-snapshot.md",
+      "before_sha256": "782bd81b2ef65d9e56754ca03c53728e6d1bbc9d1c442ecc220a9120b9f14757",
+      "after_sha256": "74532b03bade3c7c5d2435b81e6f4eb15e6b6198c4f9582cc80f341e6e193a94",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0023-base-three-lane-execution.md",
+      "before_sha256": "a5831107e2742764d832885af6d0226341b32ee8d70f4b5b05aafc0e292f70d4",
+      "after_sha256": "54357624dfb4e3bbff8a008a9628dee5327349b5ab5f6caa1a810589c9397cad",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0024-verified-llm-token-weighted-bft.md",
+      "before_sha256": "b741b108eb008bed1603a2e762bebf254786c10c838ae3cc7b1db6a78dbbacb8",
+      "after_sha256": "0d4d7a9fc378dd5d3f6a8bc06e526bf7d5d303c46809295461d27be94c4fbd75",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0025-chain-participation-and-ibd-candidate-selection.md",
+      "before_sha256": "e0957fd17701581093ca103ddfecae157f5e32d8ad72927270ceb703103304ba",
+      "after_sha256": "cc614da3def656c1749e67019b116658a74f146a2418ed10f81d6d369487c101",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0026-current-palw-testnet11-architecture.md",
+      "before_sha256": "16cc9c698834f89752c3cd132be30b6f1414d2bf22986418ee28d102be7f3b3b",
+      "after_sha256": "5b98a09f7c04b98954d0a7a805f770647053e1b11a0075e79309c9a54c02b1c9",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0026-palw-v2-runtime-separated-verification.md",
+      "before_sha256": "c7bfc71d6945961420d9631e51487eb14663dbad17cb0fa9723e0bb5bf0dbdf5",
+      "after_sha256": "b9c50e27eb01d50b358a6ffee398ffa565c9fe41ea0bfdff2e2c7c963609c285",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0027-palw-slash-unilateral-fraud-proofs.md",
+      "before_sha256": "40868a93517ee46c0e5276dee69bc8fc4ce347b1e490fc608f9246b18b235e65",
+      "after_sha256": "fc912c70a79bd33d73a135fa5b4f3ce9475385f702909872895eaeb05be945a8",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0028-palw-challenge-sampling-protocol.md",
+      "before_sha256": "cca326ee300ef675fd04a121569d59abadd758c1852039c4947ad39b8ede35bc",
+      "after_sha256": "68068106b1747338fc61645f7f0d8876cf1784dd15d5482fd7507f862f7bd2f6",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0029-palw-chain-carriage.md",
+      "before_sha256": "df235f6e3d6ceeaac6436ec2d9fddae109bc49ec090123db7c88a1bf176c8998",
+      "after_sha256": "2ebc2931220e5a009c02c861cd5d2b8e3dbc70b52e9f018b590f0a159c4143d2",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0030-palw-step-function-shape-profile.md",
+      "before_sha256": "713c338cddf37b92f9d7f84ba54823eec0737b1983b9bd92f81f0f7958cd7963",
+      "after_sha256": "91be150677b106f3b0832a206d198b0c29fcece9b52f7692b36aa79505643396",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0031-palw-canonical-transcendentals.md",
+      "before_sha256": "bfd31b4a7ef04db73db99fdf6f067fcb1fac4e8cf8dceb8a352defc548c6eb2e",
+      "after_sha256": "f42364c990ffffd8860feed2661074d5d81efef07ba95a225514d2e2dba4ea93",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0032-palw-fee-bond-escrow.md",
+      "before_sha256": "9b9c11d5a55b56c2725a2bcc79fed83657af197c23ec26c6f9855d11aace8a40",
+      "after_sha256": "82acc46ed41dd03747b8141a70a012776eced8607efad3cae680bb1373922395",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0033-palw-credit-gate-wiring.md",
+      "before_sha256": "b2d9037fa48ad872526679b71b2d2aab5982321ea82a7374a19c031b062e3cd3",
+      "after_sha256": "319acd22fae011b9a3852a6345db96f64088abf0e7d177e4c4dac30caa46c191",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0034-palw-execution-class-model-band-routing.md",
+      "before_sha256": "b6726eb4bd1ef6edca0f9179e97f519ecef70d6962039ff77d509dfa4e5235ae",
+      "after_sha256": "2783ba42740a3cd6bc6a43929c4f2179a09bf354977343f9cba01a3c9073b6fa",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0035-palw-public-testnet-strategy.md",
+      "before_sha256": "ccf354c04a229316c9fb69d775e8335deeef030334bac878e765dd2b02f5e2d8",
+      "after_sha256": "34d295010524b4a490481fde97e47286f3371c32283b683961e717fbe31061bd",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0036-palw-mainnet-activation-model.md",
+      "before_sha256": "a49cac345272ec2e1d27be39fb787dafd62093f3feea4650f06907b612a181f5",
+      "after_sha256": "075085857c4a9b3f7fb562557384ce577b4c1a2586d224d6891f9fb8cf017dfd",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0037-palw-async-job-state-machine.md",
+      "before_sha256": "1984e6fa3a919148df1da6491dabb4a76bf67d314f2f18d9028b4d6a6c2ef7c2",
+      "after_sha256": "9d1671827c86427b49a64cacb15dc9d16a862d177277c3323100076e7b89cb67",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0038-palw-is-the-consensus-work.md",
+      "before_sha256": "504db1dcf606f8fad44768fe4480dbbd46af573d46162aafd14269e40248c269",
+      "after_sha256": "65f84a627c4ba4651051fd83725e6a7c4a52bf32ce95514c12550a312fd43480",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0039-palw-only-block-production.md",
+      "before_sha256": "7f71e38831f1d0604231bf6f92ecb030debc132c8c35fd3a13a527084238da6d",
+      "after_sha256": "f472fcf9566cacac985d26517f04af7824ebefdf0a94930e9748ef9ae73501cf",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0040-palw-base-0-integer-arithmetic.md",
+      "before_sha256": "19dbc31f698a36de8d538209d7aa677050257cf532b91051288d799735d7f6e9",
+      "after_sha256": "747f3857bd07936e42b2307b7339d5a76059be15d48098ccad080226cc66aa05",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0041-palw-pruning-proof-verification.md",
+      "before_sha256": "61a871621fdbd7d8635544fbe7a216270266a1ab86dc92c6492dd6374fd9f489",
+      "after_sha256": "accb53e63bfea5dc9a874cc1c9be1796e3e5be3cfdf577cfba0dbea96ab03854",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0042-palw-mainnet-candidate-ruleset.md",
+      "before_sha256": "c0c77a640bbaee17f252d691d921c9b742990498dca57b3c574b9577f1932742",
+      "after_sha256": "931b912a1580554ba121da1d784afac7410d11e3aee1e678894b378ba2a0247c",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0043-palw-v2-state-root-ordering.md",
+      "before_sha256": "5152ea3f166399c17e3d8bad6cf229894e49873bf7e6cfea8eac1ecccc2ea6f5",
+      "after_sha256": "f440739dff8790835a87c9479360b0ba289a55f21218048037945a7b2f67be37",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0044-palw-free-prompt-receipts.md",
+      "before_sha256": "299cfde3deae26f4ef26fc50c11c88925716bef1530ccd46945376fb6e7446ac",
+      "after_sha256": "9b87de3aee0a7f1508012f099bb62256d332a3380a7d6b2fcfa0d1dbab2d6d91",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0045-palw-class-economy-on-chain.md",
+      "before_sha256": "b9a0631c6668865348ec590f930212f4de89894b283e815ef21f1aae8d60c038",
+      "after_sha256": "ca569f5a0d87bcd630aab5161262d4bfdd8d6924e04ed6fc3e18fb4403b5f723",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0046-palw-v2-consensus-object-carriage.md",
+      "before_sha256": "bff1408cfd62c4efce4171ad79c71b7bede2c0e0054a81ea73fb1823cac304d4",
+      "after_sha256": "6efea1f901e5776648cb7621e3b82cbc4bfb3630083cf888fd90b63160a0b6d2",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0047-palw-a16-activation-tier.md",
+      "before_sha256": "95cce0ea64ed22b5bbfd51989d99f2dc31fa87e77b24a57c40b5e91299d7fae2",
+      "after_sha256": "bdfe6398c5d47b8bb1fac97b5b87cb7a1d077d60434b2a2b738274fc621a3784",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0049-palw-adjudication-contract.md",
+      "before_sha256": "212ceb420e36d23145c517d9dc51b444c77df12d02a98986285a994133fb193f",
+      "after_sha256": "69189abf4f84dc34648cc70dbe9cb3e912282d8b0e5b71e938d006c8957b18e9",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0050-palw-base0-residual-site.md",
+      "before_sha256": "aff3655a34b3f3fa0fc05e328e9d623d5efaacc961b89b53a5a0486b06d91420",
+      "after_sha256": "964178c2f04e86f4f485cc2b587ad925e0ebd014ce4fa545db6f628382fd27f4",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0051-palw-metal-gguf-execution-family.md",
+      "before_sha256": "856c148757bbdc97f327c25ba8898badf0cf232c7612106d1f66593bcdede74c",
+      "after_sha256": "292815c11ceddd2a6e3db1326e2c5b993744602e10f199995bf35f7cf3bb1867",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0052-palw-qwen36-hybrid-class.md",
+      "before_sha256": "bdc1ecd359a836a77fd24f49a7a386e20a8318abffcdcf3dce4d1cc463078277",
+      "after_sha256": "a3c6fd30a7dd5cb2d6c323db9896ffcaddc39b73763452a00a5dda76d00bbecb",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0053-palw-one-execution-family.md",
+      "before_sha256": "b11d1b152fe7a69ffd227a465edb1873ebf4fb6f16ee1e49050a23087c9b4df5",
+      "after_sha256": "1e771f0b4f50ab044c570c797f5ace4f1506ee1125ebc9ce3c0ae2bdb032ece9",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0054-palw-share-follows-production.md",
+      "before_sha256": "94cda631c24efb696f4007589911ed26b6cf5be8b5d480884289daace9755dfe",
+      "after_sha256": "37e85106ab5239c2fdf426fbae1512cddc282e5e7ee2e9d98792630e698ce528",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0055-palw-position-is-earned-not-declared.md",
+      "before_sha256": "6a3b11025b2bcfd7f69214b67edad7d5f09cdc20309e84099f3d8844303181be",
+      "after_sha256": "c0ef663d6d5ac8f8227e391d88ee8ff9f11a331aa2f012b37f88d73fd818fc57",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0056-palw-permissionless-class-admission-and-share-economy.md",
+      "before_sha256": "2b0cfbaab124a2b70c10726ac82ce06392b9a84e462f366df1000f07a1170e33",
+      "after_sha256": "be85ef724d166be751175b6f8a84de87134ac22fdeb7eac90c58c37365caa05c",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0057-palw-base0-runtime-acceleration.md",
+      "before_sha256": "7abb6b065c226a78f047d6c3deccdbfcd1b28f6e6356b81988808c172302a350",
+      "after_sha256": "6a85c15c6aadb36a402f633946124392eb318cf8ac44fbc16b07c9031e388723",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0058-palw-merged-work-is-counted.md",
+      "before_sha256": "6c51bf229f2c0c1cf19425a6ba33d0c2a3a8da67fb67b490f7f288dcd8b32a7b",
+      "after_sha256": "1a2d06544f8f6e2fc4c71c387e891d08913ccf5f9f2324619e868a86ac9dcf81",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0059-the-10b-premine-cap.md",
+      "before_sha256": "bae1c7d9a9fdf37506893558d354c7bba55435f01f3100bd1ffff83618cecf62",
+      "after_sha256": "656313ffd254097c5851fd6d3142e6d6d429015a0821639d2d44306bc7caf2ba",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0060-the-liveness-doctrine.md",
+      "before_sha256": "5365ca7c162173dd664f55a5483e025c6dd95c1b28a85d20dece3ad6796ca9f9",
+      "after_sha256": "463c3656dc833c3c0cd82c7de92c0b7aabebf6a26f7d7423e4f5a5c5114862a7",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0061-zero-seat-genesis-and-right-sized-collateral.md",
+      "before_sha256": "f0156771dddb40c458a738e4133d90af14b06e415bb50ace9ace45d6d4b9f13b",
+      "after_sha256": "4999ec43821a3a9010652fd21df711b8ca9b93d3de5e98c0dd4abf32b6052aa4",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0062-data-availability-court.md",
+      "before_sha256": "dd15e254ad313450e7632697d866a4b5822a80c62b615de51ec94d513a0ce5c5",
+      "after_sha256": "fb63f9380df82d2c5e531dada769a02b9ea809a6f6372a7323c47bc6720910c7",
+      "added_lines": 9,
+      "removed_lines": 1
+    },
+    {
+      "file": "docs/adr/0063-operator-tooling-the-missing-half.md",
+      "before_sha256": "1be5e7a588ae61f92fd732a54e880110f6dada2cbfd6716fda9b3863ad2a4529",
+      "after_sha256": "8cfbdfe5752059e6d7b3927a287c744528f430c3de4f7580cd488bec6a5f71a0",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0064-trustless-recovery-from-a-total-stop.md",
+      "before_sha256": "b392731db23ccbfce75bcc5c2d7e341b40f86bbeb12ed722e89681169340d5c9",
+      "after_sha256": "7822d5dc377fb91ad93a212b2739c10f5dee702aaf16a57f974a75870dd7450d",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0065-a-bond-must-be-earned-and-a-seat-must-be-someone-else.md",
+      "before_sha256": "82844c0554e3abedd3654faab5b855aad4804e6899ef42911951c70f79c05d3b",
+      "after_sha256": "b3ea77ffcc382bcb252b5abad305b5803d63592d2fc73925be342ed0a1b1ebd2",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0066-the-heartbeat-lane-out-of-header-bits-and-a-committed-liveness-table.md",
+      "before_sha256": "67128c091c15689f3da0c7ba66b6bf7bc1d90027d89a6e54f383dadc9e5a8168",
+      "after_sha256": "bafa013ad0bdbffb71874f46385e77895d7ec08bf5c27a062144667d2808d278",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0067-classes-are-chain-data-kernels-are-the-build.md",
+      "before_sha256": "9aade0b36dd19ecf30341fb5fad70850d54e78334de9ff3c29f5b46208c5665d",
+      "after_sha256": "ca63bb4c2e4b5bcffdcafeb628940d73bdab0ffc2d35c7473cbadd861569b47e",
+      "added_lines": 27,
+      "removed_lines": 15
+    },
+    {
+      "file": "docs/adr/0068-the-llm-primary-economy-and-the-floors-minimum.md",
+      "before_sha256": "55ecbb9355b8e94d6766bfe784df2ff021de1db05346082aa80bec9c1aa805d5",
+      "after_sha256": "add841af43af9f156a04e79707bd3ae34811f52330721f29110676d1267254a2",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0069-e2e-adjudicability-is-the-price-of-weight.md",
+      "before_sha256": "33be176a9e3ffdb82ad29a2540e1fd68245c6997198aaf727ec7584bf7059f63",
+      "after_sha256": "379ec97769bbeffcb10482c03ee1e2480b57209f78250d4a7736b7363400e8bf",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0070-the-model-tiers-step-spaces-are-adjudicable.md",
+      "before_sha256": "5d03fd2868673b18e4390cce81e15671ef51179721f2cd49a829b048da6dd244",
+      "after_sha256": "fd6fad23973b62deee0bbb41b1b0c358821da0834806fb3716a59c36de928204",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0071-the-attempt-lanes-price-and-the-tickets-bound.md",
+      "before_sha256": "c875463788636fbc64400d205ecd814957f5f80f81d49b4e2123e309f77a4f3b",
+      "after_sha256": "1d682d15bae38df6bb4af2fbc0cabcbe70aca1615ca24f92a7a0a4cce293c157",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0072-the-ticket-is-the-execution.md",
+      "before_sha256": "b64e752deea9127f7ea9448695e4726139146b4d13c9a82909e60184ced9bd68",
+      "after_sha256": "6242ca1c715f1758205e7073ecc3712e541ca03617f7a8830e2d86a2210d1238",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0073-real-demand-work-bears-the-weight.md",
+      "before_sha256": "953afd493d90ad385b26392c140bfaaec3b0b7325dfcd479e3945a8da9e77608",
+      "after_sha256": "aa9a8e04c163938a6da1cb3d6b254367697fef6df16430fe72d1f7b71900cc78",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0074-the-attempt-is-a-claim-drawn-by-the-chain.md",
+      "before_sha256": "2c338e4935db23c110eb211e8d98be40bf08962c665dfa4926f9bcf90dd286ef",
+      "after_sha256": "87f0b031bc7452d4ebb27485a75c2058b2e50dd951a7a42ff2f7540e53379527",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0075-certification-is-a-consensus-object.md",
+      "before_sha256": "8989210d5d8bed2c3dd5b96370373a962be51307ea7e737cd39be34f3555122c",
+      "after_sha256": "0202ca75e2927e84016dccccd6ab9bedd0c5503890af9ca08d06da76dacf628e",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0076-the-attempt-lanes-seed-is-the-retargets-equilibrium.md",
+      "before_sha256": "63c4e2f9524ca6d7e58728c1637848b01e3f869ccc238edb5b78da2c5aeffee7",
+      "after_sha256": "35d310f403ca9f5eb594b8f7e475737b27b9731fcb0ad8f97a63eece2a750b57",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0077-a-prompt-a-person-would-type-is-a-claim-the-court-can-try.md",
+      "before_sha256": "019c102ff7cc16e084bd780e814c471763e2743ac213c6c9cf5be8b1065a3a78",
+      "after_sha256": "9eebb1188702e846cec421c311994dc4cf7b18e5e5b721d911a42d94775234e9",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0078-what-was-made-from-it-is-committed-the-thing-never-rides.md",
+      "before_sha256": "8a3f128eb3998e05c041f8af4e1d1fa49a8edc0aedb52e67105268ae520bfdb3",
+      "after_sha256": "de4bd5d54124971357732372f6dc019c19915706c9d6db3f7853ae76db4d5bd7",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0079-a-pure-function-needs-no-permissions-the-sandbox-is-for-the-host.md",
+      "before_sha256": "cc1d4e1c5606c0a59620bc6b169b8ab673f7e01bd3062cc939a2cdb45460cae7",
+      "after_sha256": "dd6d0a07ebc06aa73fe69965b532999244e7845125c3a30fd0879882fc2c9529",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0080-the-answer-is-long-the-verified-unit-is-short.md",
+      "before_sha256": "d4f6c46dbbd69e81499d31261839139177a795987724619fd5a60e828c8bc054",
+      "after_sha256": "66eff974bbaac10cbcfec408189565a94c4ee8f7e5dc3ae81cf958d6fa924dad",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0081-long-context-the-input-is-a-state-chain.md",
+      "before_sha256": "c2168d71831f75e379079a364ffe2d648665486894e116f0d21ece78109ed87d",
+      "after_sha256": "7895cf0e4ac76b66f6b1d61662c0d33ef77571e67bfc3566c7a3cf31d05a8299",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0082-the-close-is-flat-in-the-context.md",
+      "before_sha256": "099a7c6d746dcaf0b4936ab50798e9863a3d5829f5101520f8b9014aac99ad3e",
+      "after_sha256": "c8564dcee546af178f139af68081383ed9e8ca77d9f4b1854fb0d653ce7388c4",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0083-the-difficulty-window-counts-only-rows-priced-by-bits.md",
+      "before_sha256": "785963b6fb9a9aa8445a07a76627be538e81459c3c02f200e3493b05d9e7b1a0",
+      "after_sha256": "4566aff9b265c0412f9b95fa93d3ba34b07714beb3e6aad6cd660a14b1d8430a",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0084-the-ids-ride-the-capture-stays-home.md",
+      "before_sha256": "9629d7697b4641b86e8f98ef0391d1a54e2af8e83353650bbf123ee589346cce",
+      "after_sha256": "2aed63da540bbd22c5722acaef0b964e4eea633b9016f26f23c5a1f11ededa38",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0085-the-close-is-assembled-from-what-was-served.md",
+      "before_sha256": "92facbe3d0607ea13bc04e1f0055792deb6e8b28239816f255dc3d976b3f6619",
+      "after_sha256": "d49ee02c10a3a75e7009956b8f91769d4806a9f8d062e75fb1ec401322d44da5",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0086-the-opening-carries-the-fold-not-the-leaves.md",
+      "before_sha256": "7caba7e9d66e62560875f0e42eec1111800b2d68a1af91ad8cadecf4b0cb11d7",
+      "after_sha256": "05d0b34220ea660e78879f313a515d7050fcb0ad9e4828739584be5d4d9f96d8",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0087-a-position-is-bought-from-the-curve-and-sold-back-to-it.md",
+      "before_sha256": "e9447fe89a9fcfe8a65a5adf39120d69b3fef45ce606d7d2a98cca1fad40376e",
+      "after_sha256": "4e5b388f4ac5d5fd8fc69263750dc46e195a59b5310b26924e5f836eddc4afd8",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0088-the-class-keeps-its-graph-and-the-owner-keeps-publishing.md",
+      "before_sha256": "099a7113fd93a3f7177ddaad2f1ad6564f4fc9f8c4ec2adf3a5d9044527042c5",
+      "after_sha256": "70509c1effd1431815454f2a553136a5a821deee62513855a5280572175fc38e",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0089-the-fold-is-the-truth-and-the-evm-is-its-window-and-its-hand.md",
+      "before_sha256": "5815139295377cfb0861dca66e514547398b177c20d95d828ee66f27f27ba0d5",
+      "after_sha256": "753194bafa0a2633808756bfc39cdf0ac4b17a3ec598da48395556d09db10806",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0090-the-pair-is-seeded-with-real-msk-locked-for-good-and-a-position-is-whole.md",
+      "before_sha256": "143fed731ad78592337505183cc9ade3f48f9bea65f95e98fb7878f7b7a64dda",
+      "after_sha256": "6cc2d8afa38123b799c184b93fe2d7be6d1fc2ae3e4848742c5b1caf75f56f10",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0091-the-reward-buys-the-pair-and-no-holder-is-paid.md",
+      "before_sha256": "65bfd42a295e8018094773e492024d6adfed034c7f8ce3e07c0a8b840b0c6a09",
+      "after_sha256": "6d5b2031c92c40ee408f8aff3bf8443de981b21c9ecf7d646c619d19b0d2d6e5",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0092-the-ladder-is-minted-once-and-the-clock-is-what-binds.md",
+      "before_sha256": "71c7260a7f80044dc2c96725ea1d967c3dba5e3747049159c38203106896cca3",
+      "after_sha256": "02e3a9efbe55b2cf87a5d6fe519d4f3dfe73255abd0ad8cf0cf2f27145981b1c",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0093-the-court-can-try-a-fused-row-and-the-responder-is-what-is-missing.md",
+      "before_sha256": "ee8821e7d79dc85acdc7e257b3e917a29a63747e690364f316286917e7eeb18c",
+      "after_sha256": "dd6ba7184a74043997e9ebbc136857bb4a7c8645d6d37d304926f416595320f1",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0094-a-seed-is-paid-in-as-many-transactions-as-it-takes.md",
+      "before_sha256": "730f75f8bf56aa2934642f23e4b781b3c4829e4dac53e790768afde8e19985b3",
+      "after_sha256": "d4bb051606108ce3509c2a2e0d468d338488a496bd3d4f9596e407bf0eec802b",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0095-a-position-is-a-membership-not-an-income.md",
+      "before_sha256": "6237e9f66d9d6f4ae63e349d44cdafa9decac091cd4d6e078e697314fe57af6c",
+      "after_sha256": "873e3d1e5d23e4dc51cc8a54abc1be78ff88cdfbd9d8601d8d568f7288c10e2d",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0096-the-app-you-already-use-is-the-entrance-and-the-shape-of-the-answer-is-committed.md",
+      "before_sha256": "aa8cb591c6718b44a958a729c3da9d8b0f23b578b71f5f56c17f91ecbaad667f",
+      "after_sha256": "854ef4795815b4f4a7598ae2ae956c5b8bd9cd73dd36dd4dd3aa033ea7f7d259",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0097-a-models-fit-is-a-lookup-and-the-entrance-says-its-limits-before-the-first-token.md",
+      "before_sha256": "5bcd01e1096943e440bf246eaef16b37b2f368101854dce1323636807a0b082e",
+      "after_sha256": "f13fd4ed99d5499f819d0adc072c2681a254df94f03f09c12ef80eb331d2baa3",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0098-the-panels-coverage-is-a-number-and-a-seat-that-found-a-lie-files-nothing-else.md",
+      "before_sha256": "9594f475460235a47368f483befe0dca32858ccb392ec516cd1f4c6f6ac2226d",
+      "after_sha256": "62b1555715d33ccd1ea815a63099cd2f3b756fe65f801de4e4c9e5f03214d84d",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0099-the-adder-measures-the-chain-recomputes-and-a-seat-holds-a-shard.md",
+      "before_sha256": "7a8c70d8d60cd2660a6ff667f485e25ea4ce543eba531438b660cdcc15ad87cb",
+      "after_sha256": "19cf00a53969e38123e26e5e585319fbc2751037a172a13cd0730cc82aa548d0",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0100-a-model-is-data-and-the-court-the-measure-and-the-licence-are-built-for-a-shard.md",
+      "before_sha256": "7cab5e9c7d8c0e165183f8e55432420454b38319713273bc61d3e13b1db0a363",
+      "after_sha256": "fa40462fcfe036d1259da0cd92cf588c4548099b2427f6fce94a2e4fcbe26a72",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0101-a-membership-is-proven-by-the-chain-and-served-by-anyone-and-a-position-never-moves.md",
+      "before_sha256": "25d98d156deaf625090de9f235f5a3d26ef8582be8362def2c0283f47de6998a",
+      "after_sha256": "b15b480424d51d58b44b95841503130ca9d56f5c13aabe84d9108db642ec7d7f",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0102-the-embedding-lift-is-read-per-token-and-an-unarmed-kernel-is-not-in-the-identity.md",
+      "before_sha256": "14fbe9cf8df2e6a8fed9df88b7653f00ebd7f06f586369067b08cc764fbed3bb",
+      "after_sha256": "c75c167892a9e453eb4e7230d068a78e582943427fb640cd6c2a217e3b7ca271",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0103-the-context-is-held-off-the-chain-and-the-chain-carries-a-root-an-opening-and-a-logarithm.md",
+      "before_sha256": "e38b0ad6ebbb71030e744898eb108bf48cfcf65d981b6ba137c4c015b1b04942",
+      "after_sha256": "279df21609ec5280e035f40780321e14676a2fb2fb0abaae87587caa3c3ec9cd",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0105-a-heartbeat-never-turns-a-bonded-block-red.md",
+      "before_sha256": "25fc22a0dc5f5f12346c33bf8afeb40d3390de8a2ea0c250c7081080394fa7a0",
+      "after_sha256": "3640131154397aaf5c8207648546e040e0b4cd92251e917b6d25ebc093ebf21d",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0106-an-inventory-is-a-stream-of-leaves-not-a-copy-of-the-model.md",
+      "before_sha256": "d598c2d3b3498bd5bbc60a9ebb16cbfd0d542c8d2a5dbca522a9ba159039aa93",
+      "after_sha256": "5c3d3d672ff05f2db251ff96eccff76663a74f6ca2e8c0c2f44746001a5f4e2c",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0107-a-share-grows-on-work-that-reached-final.md",
+      "before_sha256": "df16a941ed33781248c371b42b0273860675c2cd2b969b1a75731c8b5c407dad",
+      "after_sha256": "9f27da66b8521895c6310d547439c7238b9b6682119934de3ea6d24399d88b82",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0108-an-extension-is-a-manifest-the-verifier-recomputes-and-a-receipt-is-evidence-not-a-vote.md",
+      "before_sha256": "77e79ae5c2ea9af2c14c2b2255833592ae99527671262e8bd48da83fdd7dc76b",
+      "after_sha256": "1148ef4ed428343fd95b41d3d85eb2c2c750e555c7cc5000dba7331d8de01419",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0109-a-lock-is-its-own-claim-and-finality-is-a-label-not-a-pause.md",
+      "before_sha256": "255465b85741be52d44b248a83a37381492f61a6868841f98fb91f5d10333f9a",
+      "after_sha256": "0f27852ce8ce58faec2e6ed681dc229691613a2d58bce557f2aba19449cf4f0f",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0110-a-context-limit-is-activated-from-reproducible-public-vectors-not-the-maintainers-workstation.md",
+      "before_sha256": "515001e1cd6556443bd9f8d00bc976ebfb30de69342b29095c7fb3fc59043f66",
+      "after_sha256": "2a6dcb6db09662c5ea34c06243c16ee42428fe94e5c59c0769785947bbb7ed5e",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0111-a-seat-may-demand-the-committed-leaf-it-needs-to-judge.md",
+      "before_sha256": "dfadd39c68d8503812988dbd1f1d992496f51af17b284491119a59ecf9128192",
+      "after_sha256": "399cbe05a2ecebd64c3a17b5b7ad59da418ecb8f7d8e31ef607ed846db92e1db",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0112-a-classs-weights-are-read-within-a-budget-the-operator-states-and-the-budget-is-a-fifth-of-the-artifact.md",
+      "before_sha256": "a49a2dabb8f8c8d183c4e950418cca1e0143119773bb8ef2dd8a50cdff7879e2",
+      "after_sha256": "6a0fb7fcb75abea512ea72a39af065af81b068216e0a0ae52d5eff7822c6fa71",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0114-the-owners-leg-is-five-percent-and-it-arrives-at-a-height.md",
+      "before_sha256": "640fb909a152157e84e1291f713eca90dfb5c37c43c313cc20b233037410f8da",
+      "after_sha256": "7adac3e9b4923b399eb973dd823f17ec1940736efc340546f8c95c748c68505b",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0115-a-pending-transaction-is-announced-until-it-lands.md",
+      "before_sha256": "e992a7b123fb93ecad1d6fe072f74ac87c812d25c0180f590e612a040fe27e61",
+      "after_sha256": "3c05b72eaa3c760d61d07f4303c11de328f1d88c257c24984af344903e1d77b4",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0116-an-attention-history-is-the-classs-and-the-held-regime-reduces-over-its-own-width.md",
+      "before_sha256": "c04b0bf6e0f938c6fa0a3f5c394ccd02d8e68b23c3d3a5417d4fc5c382ce89ef",
+      "after_sha256": "adbdf61b2858cfac9b45c5a87f29b5c618e0ae0f84bf122671b1739c5da5814c",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0117-a-draw-is-one-forward.md",
+      "before_sha256": "8d3cc45dafa9d51f1696e5a623d4780115f60b09953dce118ca4d685afec1b6b",
+      "after_sha256": "c69e5dc67b51b3d306d37bfd4ea4af6bffc87d0c3cb8520cb9f46abc003dd22b",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0118-the-held-regime-arrives-at-a-height-and-a-held-class-carries-its-own-prompt-form.md",
+      "before_sha256": "e72409b97d051321259d5c3c596d749c53de71cc1a4eadaf76477347a9c79239",
+      "after_sha256": "9bce9115a8a79f425321fecd95bfcca9679af77dde43f8636fb94fafbbcd79f1",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0119-a-held-class-is-walked-at-the-regimes-ladder-and-the-chain-records-which-classes-those-are.md",
+      "before_sha256": "ba813b0f18a9d6944a6a71a026c4178ab32a2e0eabbbd1a887c9f87595d70df6",
+      "after_sha256": "78056c7e0613b340a25e0a970883987218082668b7eba3d401c05c7ea4be708a",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0120-the-least-seed-is-one-million-msk-and-it-arrives-at-a-height.md",
+      "before_sha256": "9d9539527628808d41139d6ff965cb2886d9bbb3d4bb31d8ad98a77d4a0964b1",
+      "after_sha256": "daf560874129802458f4c37829549b208631d51bdc9c728080650f5216601267",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0121-a-held-capture-is-served-from-its-fold-as-the-replay-streams-and-a-node-holds-two-ladders.md",
+      "before_sha256": "980a2756669f2a283721d061abc1c0f4026f94a89df74b356f870289527a17de",
+      "after_sha256": "0b28330d2594c346306792b1f36dc1ded620536c4d1cd03c6d122c9fef8a40e5",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0122-mining-is-a-purpose-an-operator-runs-one-command-and-reads-one-work-id.md",
+      "before_sha256": "8e321d7818a876764b6ef0f55e60afa76c630f87a6652322d8f9012a90e77298",
+      "after_sha256": "0861c5f7fa24d80e962fcacdf1c7b79996e90a2779bb86425c68051b75fc9839",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0123-the-epoch-progressively-releases-unused-class-budget.md",
+      "before_sha256": "c77f30119298078a27bd58a93cd6264fc67eabb274f5f843a2ca6a95edf176cc",
+      "after_sha256": "97fed1c850ad63f108a70876a4b2f3ecaad93fc286e424164b457e2f64cada31",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0124-the-panel-is-paid-out-of-the-claims-reward-a-seat-holds-exposure-and-a-claim-is-paid-for-the-compute-it-certifies.md",
+      "before_sha256": "781339e41f3def58501e021faae8bab53a7a3cbeb98772be6e289bcd73f1d3eb",
+      "after_sha256": "be7c124c4ddd292cc2533588aab7504f05611dacc1910723b69c755050592aaa",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0125-the-execution-lane-is-a-second-lane-inside-the-cadence-and-it-widens-one-permit-at-a-time.md",
+      "before_sha256": "05ca8219cd7225302185c63dc4ce4eb97d5a6e6a9d13570009830275bf3ce507",
+      "after_sha256": "87e4d1ea6c712960a8c06fa4b92bc637749b76058a4c396171fea8ed9d859651",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0126-the-validator-carve-drops-to-a-fifth-and-the-stake-reorg-gate-stays.md",
+      "before_sha256": "020db9a14037f5155040dfe1f3f6754740e09159616f41c46e02b0a626e12766",
+      "after_sha256": "ae21619ec5f6515bbec27a045cd5b5ce53a3616fde73e80b8c5ecb883cfd203f",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0127-palw-settles-on-its-own-and-its-terms-are-not-dns-terms.md",
+      "before_sha256": "8aa87cc9468b20d8b562e1c461d8b709f43647369f9eec81504a9ab2c88e91d8",
+      "after_sha256": "d6a51a5be2bff6f760309bb6ee10641c1c2ffd74ede186a33de39f611d29ccda",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0128-dns-validators-vote-bft-by-bonded-stake-and-that-vote-decides-the-stake-reorg-gate.md",
+      "before_sha256": "431394a41afd3839597198ff6003009b68b6f538806c8da7446651093011b2d8",
+      "after_sha256": "031582b553ad349863eaa5e9333cef9a5b9df04cb4cc12d97ae742210b0a21e3",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0129-a-double-spend-needs-the-anchors-not-the-blocks.md",
+      "before_sha256": "3b0664e5b71c8e3f63a871140b1a7f5f8e3286349ea3537f5c2b6a56ad30049a",
+      "after_sha256": "a7858077d635ff8b4c862332efaed8e292c3d5ea27b9cdd8ee454b8daf6280ef",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0130-bps1-is-hardened-before-it-is-widened.md",
+      "before_sha256": "b5371453535680bcd8bd6b3935e3117be4c579508ce31e82a4945c4193d035ec",
+      "after_sha256": "458a2b9cc4d38aa0c83a683dbc85328ae97051ccdeb2e06da6a5d02d8c387b5f",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0131-a-claim-is-paid-for-the-compute-it-cost-in-economic-compute-not-leaves.md",
+      "before_sha256": "199d1e2d66876c86f692231b534d14c071a820f279dca9c77a52beba9bb62038",
+      "after_sha256": "2ff9092de2c08332ec6d8fa4358aba527e386d67efbbe92d2524692658cef86e",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0132-what-a-model-is-actually-paid-per-forward-it-ran-and-why-the-gap-is-liveness-before-it-is-price.md",
+      "before_sha256": "0b59566c180ce94e7ce0e670f9e7cbe04b9cd48f15f081739e118f3f998fb8c1",
+      "after_sha256": "2e74a75e13ffe387a554d354c514f056924cd77023f63c926aeca72b98af2ca9",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0133-verification-is-its-own-clock-a-class-verifies-over-spans-and-a-starved-class-stops-only-itself.md",
+      "before_sha256": "020aa0a737360c8460e353ecb315c4d4b6bf31285b18550559c79f11e53db257",
+      "after_sha256": "cdd0b6b13d21de480cff712fbee249678b2cb91b7852fc1f72ca5fef8832325f",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0134-the-compute-overlays-committee-beacon-retires-at-a-height-and-its-machinery-goes.md",
+      "before_sha256": "b47d1bd2393f0ef1b41ed12eb8f37babb0c71431ff44d52ca950cf4879923004",
+      "after_sha256": "36e2df74bf71bc50824eefd654b3e5a14059d590b5de364c4852924310174cc4",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0135-a-model-is-data-the-permissionless-registry-derives-its-profile-proves-its-panel-and-walks-its-lifecycle.md",
+      "before_sha256": "2e10a4ccfa8fb56f441ddf98b1f52ede597e42fe6b231fde2f87af2047a09a1b",
+      "after_sha256": "ae598af8fd1af2e92da1b66d761b9e204c65ebd14d3e0b9c28f34c9f19cd43c4",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0136-an-artifact-is-mapped-not-read-and-a-host-holds-one-copy-of-it.md",
+      "before_sha256": "8d8d3ef2b8c8803e68f3bbe17e47dc5b63be28f15fed6b2909bf36f41958f278",
+      "after_sha256": "ad1ee5f360cb8a2ea85c6fce25d0f4f4988da0e6b387e79f22e116f2f3293de4",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0137-a-block-buys-one-unit-of-work-from-any-model-and-a-share-is-a-result-not-an-input.md",
+      "before_sha256": "cda2732e109ced590b58812d9e537340fbfb7e77eb2b4e52fd5b83cd9bcc87f0",
+      "after_sha256": "6bd1eb2fa19e72068131b9f74a49b074b19aed88114a3a95de2b366825dec2f7",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0138-the-daa-score-is-the-anchors-clock.md",
+      "before_sha256": "b0d4f9c616b331422302900241c9d57f8d36355a190ef31a4c31de2b4657c828",
+      "after_sha256": "c298799b744facb585f7cff1e898c73579f2181c7154d0d72ea8780141ee0a59",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0139-the-execution-lanes-gas-is-one-budget-a-round.md",
+      "before_sha256": "9050f0feb89c8193f3cb53ccae791db9a4b6f09ca28e78e4df99c482e751ac67",
+      "after_sha256": "c89906a8bd3948b4ae219aedfd38daf9ee3cd4890bc9bedb232479f44cbaa07d",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0140-the-heartbeat-is-the-emergency-generator.md",
+      "before_sha256": "bdbbf45925d26e22f53e7b730259af9c77cf76dc1395dd0d81edb568d87985ee",
+      "after_sha256": "34a93881106ce2e17450bd96de6d743c362e6dc04a90cb83cfcc06a226edf62e",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0141-can-an-inference-be-the-ticket-without-a-hash-lottery.md",
+      "before_sha256": "84d9f369437981a99b763b91cbf96af0f8df0c530ddc05151d9cc4d69a242dbf",
+      "after_sha256": "86dd1cc1486491898d79d46e3a5385844adf4c913b3ea210fed2ac27607776a5",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0142-the-consensus-clock-is-a-cursor-a-heartbeat-consumes-a-slot.md",
+      "before_sha256": "121d919e00a73361f546b9f7891a13b0ce7012ac65712e3aab697d2e1f03b8f9",
+      "after_sha256": "d17dbcee9e38f9902d21c1331f4b6af3eaae2c6d3a8d89bc9168a7891d9f3aa1",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0143-an-artifact-root-has-one-owner-on-the-chain.md",
+      "before_sha256": "d6258dab72de2266a9cdf5e5029df943c4322c796ef7bc081240a81328e9c076",
+      "after_sha256": "7f73210c6d0768c644730ea817dca1f85471aee974f689c5a066b6fc03dcff18",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0144-palw-pays-for-the-inference-you-were-going-to-run-anyway.md",
+      "before_sha256": "5d752dfee58359c105e5aa60bd46c6fef70dc44fe90b0763f74d295f02407758",
+      "after_sha256": "1962ce9ccc6646d2f3e4faa689a653c7bb0ba5a2bcc94c83d3f354444be488ef",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0145-canonical-work-is-derived-and-admission-is-earned.md",
+      "before_sha256": "a2d499bc739ffdb7d3bf7ebf0318daea27e7c9a1915c91b1865b64e0c8e2e554",
+      "after_sha256": "5db70195a7af32bbe8eb01df05e9df9a06f6d539d5662a24cfd0c66a9221c325",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0146-a-coefficient-is-justified-by-the-arbitrage-it-permits.md",
+      "before_sha256": "6d26c851e30ef07169b8a2eb55f76963705e4aad22af151a7e7521cf2828d94f",
+      "after_sha256": "4701c73729e70c08a5b6186d86e339c6be4d671c866da78e00eb9e07f8bdad2d",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0147-independence-is-drawn-not-declared.md",
+      "before_sha256": "8f877b8a4004670358415010a837cd74cc7a7de503dfadd190f39cf8b104bada",
+      "after_sha256": "e89dcac14c55c9e19bd4886166f94f1e50b32421b66de76d7c5474b031a765f0",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0148-the-free-prompt-lane-prices-compute.md",
+      "before_sha256": "d72eb508f6f4198a7a846e1e9e50f2e22dd3125d1fc71cd3ca06ccb1e21e3262",
+      "after_sha256": "a792673cfaa1595ae457c30d010ebb86f7becb77b8a960e3ae8d93657f43c6d2",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0149-an-attempts-pwu-is-the-derivation.md",
+      "before_sha256": "f0f7b7f036e93102a9dd0e7dac6ba9d8fa981b4530e48c6f382cb3c912419db9",
+      "after_sha256": "b65f6bd68c85e23f6c329122b3a5db95420813967a665705a9446584be1b402d",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0150-the-fingerprint-must-see-the-rule-not-only-the-height.md",
+      "before_sha256": "d56e7e8407f0b4d37a42c1b28b44e7ab1e32b2605930ee146719b13fd27c8144",
+      "after_sha256": "9b3613fa85452ceb592ded57aa4f707322a52c0227ea7ab481a84ef862815266",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0151-liveness-is-structural-collateral-covers-fraud.md",
+      "before_sha256": "8e1deca2455457e2638785960b304aaa8706aee686501fc220263b2afb94774c",
+      "after_sha256": "0fa0379587bdee623336b36d7419f4a4847d3d83aff5a2654774f6e0dc64d38c",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0162-the-pair-opens-on-a-virtual-reserve.md",
+      "before_sha256": "fa55fb9b6704dab42100b72b1764a238f62b18a4bea9f18983c089d3b99ab6c0",
+      "after_sha256": "8878cd503500590713ebab27473506c7642557bffc054f4a62ac97af52015e13",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0163-an-adapter-class-is-its-parent-plus-an-adapter-and-is-listed.md",
+      "before_sha256": "5e831d39b47a90344dcac5e1c46fa08126e0493decbd9b4255010a03645cd6cb",
+      "after_sha256": "a515121b3bf2a4ad75ff722fc55010f86fa170ba1291ff2d128dfcfea5b374c4",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0165-the-floor-is-a-reserve-and-the-work-carries-the-clock.md",
+      "before_sha256": "7ad0b68611ede9236039cef8c7fdf905d75f67cd5560014043e9dbe373604e04",
+      "after_sha256": "de8591c91bc47d07f4facb4327897ed8b4f174657ca6f183a92aeed2c7ff3343",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0166-verifier-unavailability-is-not-producer-fraud.md",
+      "before_sha256": "b77553c16bc434d504293f025096a4a1354ad7764174990b8de87a863e534319",
+      "after_sha256": "66e38bbe138110f16fdd389918be616a12ca2f79f6e9298591046f7a86bee9b8",
+      "added_lines": 9,
+      "removed_lines": 1
+    },
+    {
+      "file": "docs/adr/0167-the-x1000-capacity-package-a-fixed-per-daa-reward-budget-riders-and-a-lower-only-breaker.md",
+      "before_sha256": "8589f4c6267b30d642292d6da69402661fd67531b8690bb453887f5ada96496c",
+      "after_sha256": "12f90f0b3a1339e5853eb60daccb275d3704fba9ba31410581aae579d8679f48",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0168-an-execution-block-is-a-third-class-and-the-chain-reaches-it-through-an-anchor.md",
+      "before_sha256": "d5bec3fde70d1dbe53bdca32d2ec4d1e90ff55314403795a52f6b5a1ee619927",
+      "after_sha256": "26d7619a546ef35320279a55d6f614bc868209fc7e2aea164218be94157af240",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0169-a-work-slice-is-a-normal-consensus-block-the-session-earns-nothing-and-the-floor-is-kept-out-by-merge-admission.md",
+      "before_sha256": "ac097e28adb10a6aebfed58d0e13cf645745c6b3dcd1cf3705f0a84925b8fe80",
+      "after_sha256": "789b31df1785496c088df41ba0ceece96814369b783d4e756821793fb5d836fd",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0170-the-seed-anchor-is-a-window-not-a-span.md",
+      "before_sha256": "94229eab4d63308105e2a7f1a76f699844634f3ece669cc7aa0dcb9d2e191a38",
+      "after_sha256": "87c30a5f3f1b52c6bee8e9841d04a54b25eb835b10e30f0a0fd17a0b8c547956",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0171-probabilistic-constraint-checks-and-court-on-dispute.md",
+      "before_sha256": "f3f4a2c3cd90d97e3eb9159db44bbf05c3fdb5db47375d749d9d26758e1049e4",
+      "after_sha256": "362225a0c66ef6856c81a782a75c74259d671b46eed50279b054b9d2b4dfa330",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0172-model-extensibility-uses-versioned-kernels-not-a-universal-vm.md",
+      "before_sha256": "005f3779a86d70622fc4ed15d206013333e4348443eb841920776474fd4fb036",
+      "after_sha256": "c08ca98462552d4230d3b79cc609634196a94cac33c919e176d88925c4148ae0",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0173-a-seat-holds-a-root-not-a-class-and-possession-gates-activation.md",
+      "before_sha256": "56435359de812d07ee0ff0e8ef0ecec9de921908578f31232e9b91ef72a22aef",
+      "after_sha256": "adc9807f3a5c2b7bd88371336ac8b05e0a2feca6dd5b8c4b73ae0c6fa5a5f9f7",
+      "added_lines": 30,
+      "removed_lines": 35
+    },
+    {
+      "file": "docs/adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md",
+      "before_sha256": "0f3b25b172429384bd6bae201869cf913c5ce87f17ffc3749e72bce4c883c92c",
+      "after_sha256": "b06856213fe024d706cbf0a7e5f86815f4a44775ea51e1ebc4efb5a8cc3083f4",
+      "added_lines": 48,
+      "removed_lines": 71
+    },
+    {
+      "file": "docs/adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md",
+      "before_sha256": "6b2a3110569fcac89d9e124b6e0be4ab2c5ede59a22122f121f2002471b312a6",
+      "after_sha256": "29a696fbb1cc8978872a4e6425640c022f063590e2c8fe5fd013198df461ba02",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/0175-registered-models-are-permanently-immutable.md",
+      "before_sha256": "ca200c561aaf5901c80fa73d897afc1ab59b4c19d96e1e70111796701be30594",
+      "after_sha256": "115948e3d0ebc49933f3cdedf60fb067f3a21b9ef281453c3ccf6bf21ab71ac4",
+      "added_lines": 26,
+      "removed_lines": 21
+    },
+    {
+      "file": "docs/adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md",
+      "before_sha256": "d77ac2dfd2319ee1d9e5cd0c937f7d3469ca72d12a242bfd5ad9df14c26206e1",
+      "after_sha256": "abd4749d424368116c042baec37de934b150097f97edd3441c4a58218a08e548",
+      "added_lines": 18,
+      "removed_lines": 3
+    },
+    {
+      "file": "docs/adr/0177-model-bond-allocation-without-availability-consensus.md",
+      "before_sha256": null,
+      "after_sha256": "06bf6e5749d68d9596e5a8c2206fcef3fca4d9cb76f989519c566a27926c1b2c",
+      "added_lines": 160,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/adr/README.md",
+      "before_sha256": "70889b57ac317b7956c31c2c144b88b39c0d5034d3c55ce60c6bb87bb8a800c5",
+      "after_sha256": "63c43d63eba14e809da337b0b04bcb06e941db4866bd224440ffe19a85b27c21",
+      "added_lines": 24,
+      "removed_lines": 28
+    },
+    {
+      "file": "docs/architecture/overview.md",
+      "before_sha256": "aa28079371bf2ebbefa92e84549be2a506c91474db51d5582918f276d40b3660",
+      "after_sha256": "463514acefbfa6634547259ce57067ec85cdd88040f8538e2395227514c98e06",
+      "added_lines": 10,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/design/palw/rfc-0008-implementation-spec.md",
+      "before_sha256": "9e77d6fd96f84d4df3b4bf16cc63121c52c724019a3cf4ef389b82db181b8078",
+      "after_sha256": "8ab012fcec87d632bab1e86b606b118cf6dca0a24169388702068d205591dcc2",
+      "added_lines": 15,
+      "removed_lines": 17
+    },
+    {
+      "file": "docs/design/palw/rfc-0009-implementation-spec.md",
+      "before_sha256": "02f1ff1f4ba70b3db7a25264ea469fd977b91346193e615b73c084e93625c154",
+      "after_sha256": "6e9517f246586148e06f2cc9a47babdfbd01d283294f581d0b3cfb51befd5a45",
+      "added_lines": 14,
+      "removed_lines": 1
+    },
+    {
+      "file": "docs/mainnet-readiness.md",
+      "before_sha256": "19afbee92b4c4613882ea13f97ca83bc5762b029a5027a160775804ad7cdf7be",
+      "after_sha256": "e59cd11a2deed095c164f375ab1589fb4d0beacd2d761129a631f2b9b1b88a66",
+      "added_lines": 3,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/misaka-palw-model-adjudicability-guide-v0.1-ja.md",
+      "before_sha256": "34f1523619e6fbac6db16e0716a989ffef6c523b70dbb884d1b7a24311733f8f",
+      "after_sha256": "2799b6ecf5f2dae1333171fed8c2d2e894aa17dbf9d3159b6dad50da98cb2a83",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/misaka-palw-ota-secure-update-design-v0.1-ja.md",
+      "before_sha256": "9665a2f6114fbe903bdd1dd4a70ed5edcbfe22fdf7dfae2d0fe2fcd7e2843c9a",
+      "after_sha256": "9a6698c34f8053dc42e7c8898fc1a6dd815645f93036db5b37fa8cf1242f0a43",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/misaka-palw-pow-detailed-design-v0.1-ja.md",
+      "before_sha256": "3fc4cb9247861d4086c4116cdb1c973dc1cc69016c983cb70bd51a51f1fc5616",
+      "after_sha256": "9601dde60d778b31f82d4e9d71898521a5f177c2d16e685cdae31e20620b1456",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/misaka-palw-slash-protocol-design-v0.1.md",
+      "before_sha256": "18199e09f28393df29d5546b6bf4fbebfe115e0a1fbb9c46a3d6c2722149a63f",
+      "after_sha256": "72aa6ed524f4bdbc63c8f574c3856cc40516cc044df3934ab722aec90985e72b",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/misaka-palw-vps-canonical-worker-design-v0.1-ja.md",
+      "before_sha256": "a489f36d1f3ce8ef815d0c1bad36c1ceff84ce7faf3e3819c28a58c512888940",
+      "after_sha256": "0bfbbae32af2556975e5b028b1ee2f9a4755f595f238407e49e33c34500be7d2",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/palw-add-a-model-runbook.md",
+      "before_sha256": "9cec457b47dbea5af5be80320d3b25c8420a2ba3e2462968d5b6269af2e635cf",
+      "after_sha256": "1381b50f17e3d16fb75e118ce4433aa863b3fa9f4e001810ea8f7c6c1272df23",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/palw-certify-a-new-model.md",
+      "before_sha256": "4df7b302d4d55d343b59775f90d1bb03c65b7fba3a90312897413a3fd5e57faf",
+      "after_sha256": "8fb994ec25872be3e4fed5d73feb7407e59be7567ebb5be376e1607389d95cb9",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/palw-class-activation-gate-status.md",
+      "before_sha256": "7f64801bcce91090e15836b68d9740c9fcfe819cf57d863f9b4e44a9ef108080",
+      "after_sha256": "5f695787b65b5e33893bbe0b83b62ec0d204d19ed17ae7bcb426a5b3717396b1",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/palw-derived-artifacts.md",
+      "before_sha256": "074951ef03c6776d92d3e9caf7f96cc631b6421c1918f16b33c8d593531db6a1",
+      "after_sha256": "fb4cd9343e7a85141bdc0ab21239a16709c497c10707efbfb24100982709d260",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/palw-extension-envelope.md",
+      "before_sha256": "3acd63a6b84e69d90415d75df749b69797c9ed6e5493526419d0c919e6f33837",
+      "after_sha256": "4923ce290a7f3b7a1ee70809e7aacf7ace8d5353cc361037e491e2d482c04cde",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/palw-model-onboarding-sdk.md",
+      "before_sha256": "78b2f312ca3fe00dd5c599f262fb45d503c821b38a7fafa1eb94b4842dd85f41",
+      "after_sha256": "b3bb546604128d009e41a53be5c721eb644cf082c0cd932315cbf8529bc364fb",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/palw-registry-map.md",
+      "before_sha256": "5c92e02e5626a25dd63eb6dbad9108580c2f8c4034f7cecd1791b3fc7c2a703b",
+      "after_sha256": "af54754c556a829b6fa237c9cb6523b87a077185863c5ee71a7f44d3f39abd3e",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/rfc/0001-palw-inference-surface-gaps.md",
+      "before_sha256": "1ea94bf0a23a2ea9a9529b64f4bf36a2b49598158ebb3c35d2227a40e6cc2b69",
+      "after_sha256": "ccd948ef9ae889c8e2e239eb51b0d4f38e84779796452d5b43ae5d1ebf9d2ef5",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/rfc/0002-palw-tensor-ir.md",
+      "before_sha256": "6b45939aa13d248b0691fdede1563f3861041c543a8ebe38d74fe711666ad9a5",
+      "after_sha256": "c1306df428ddabca42ad9af2b02cdd92a8af887cf10098bc2ae3f2be852b9e0f",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/rfc/0003-palw-generative-model-classes.md",
+      "before_sha256": "b49c7cca0da152744453ce4837cc353b4301f9fc45a45afd03375b1fe297f4ef",
+      "after_sha256": "25ca9cad331b3d7a412275a4aa7f2371911948dcf5c59b428e56077d244ef427",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/rfc/0004-palw-model-improvement.md",
+      "before_sha256": "fdbb513be80f8886c0a51f574c3281995143554b626edd4d8cb5d9cca82784bf",
+      "after_sha256": "34ab7f4c482abf97882975484229c0e8f4c20ed341c2978eaaba4b319b3ae023",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/rfc/0005-palw-ml-vm.md",
+      "before_sha256": "570d61b94740d5868e7d2c5d2b42a27e293c2354edfb46f8d5225e310658a577",
+      "after_sha256": "843a666ad2fb5807cd909d2599da8be7bab4e555de30c58aedda8e9c6fd8408b",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/rfc/0006-palw-layer-sharded-panels.md",
+      "before_sha256": "45bda4c3da7e050eff67eab1d5ebb5017cf0e3af1de0d1e7d923cb2491b542cb",
+      "after_sha256": "c109973e66b5907b39fcfe7b40311f988a11440f42c216d113b842ac495b7ed4",
+      "added_lines": 26,
+      "removed_lines": 41
+    },
+    {
+      "file": "docs/rfc/0007-palw-verification-certificates-and-algebraic-checks.md",
+      "before_sha256": "95987eaef3f70c0b37da219dfccf52180d97411b3bb525bab7e738280083bc5a",
+      "after_sha256": "cea6d0c143694361461c83d99d222da7d72de168cca66292e4a18fc45b6c52b8",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/rfc/0008-palw-claim-backed-consensus-blocks.md",
+      "before_sha256": "05d5d5f9d5f27b6fbc74686e9d6835114c0dbfebfa9d0a9ff480ebc4e81fe76f",
+      "after_sha256": "0c8cfc3a74ded0659a693b09b653fd8a532b171f58b932ad203ed3ee1dbeb257",
+      "added_lines": 29,
+      "removed_lines": 30
+    },
+    {
+      "file": "docs/rfc/0009-palw-remote-miner.md",
+      "before_sha256": "018f8d44b15b94ddc3c11e63f5765dd332b586a2209205032e256fdfde929ea8",
+      "after_sha256": "81dd2d819d27c037998373066559c8fc9dd869b6b9b74f70aabb92bbf54227b4",
+      "added_lines": 31,
+      "removed_lines": 15
+    },
+    {
+      "file": "docs/rfc/0010-dormant-implementation.md",
+      "before_sha256": "255cda72a3d3c5d3a39aa97ff338e7d536ee222adace3089efca02ec02637ec3",
+      "after_sha256": "fa0990ab37fa0d48b9ecc880e1c6bb597fd4b5fb0b71649ce7bed83abb59232a",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/rfc/0010-permissionless-palw-panel-and-claim-completion.md",
+      "before_sha256": "8d8de71c73fc140f4c846729991a946cc6019842fe4d178c5837c6555052bbe4",
+      "after_sha256": "ea1cf258b170bf91339fc5db364c822db88955a21db443ae149caedbe810fcbb",
+      "added_lines": 26,
+      "removed_lines": 32
+    },
+    {
+      "file": "docs/rfc/0011-permissionless-model-and-long-context-onboarding.md",
+      "before_sha256": "dd24e0c38d621610ec13e3f276b8c7e00a9ace50b2fb9b17ce38aa98082b7c8a",
+      "after_sha256": "3655ea70d0a5ef97e0ea299cda78a0c1a1d2f775b73b13484c6497c8c1003ad6",
+      "added_lines": 26,
+      "removed_lines": 48
+    },
+    {
+      "file": "docs/rfc/0012-dormant-implementation.md",
+      "before_sha256": "f2f332bc944105eb56c0ee89d65c886e907c71b650f8941aae3325d3cce3273c",
+      "after_sha256": "f6a73ceb60cc66bf4af80918b87e92afc9dc19748b2cdf6a0dd87c89788489fd",
+      "added_lines": 2,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/rfc/0012-palw-only-consensus-and-native-evm-settlement.md",
+      "before_sha256": "32d3eba456423f15f27a05a2e373a0dae56e984d76fe925eede4ab75816d1339",
+      "after_sha256": "4bf6345184d695c2c2425d7a24ace5adc65a8072c4837b6ef83c3e24dedc8481",
+      "added_lines": 29,
+      "removed_lines": 40
+    },
+    {
+      "file": "docs/rfc/0013-reproducible-layouts-and-resource-bounded-onboarding-tools.md",
+      "before_sha256": "b3dedc4761c67a805bdec9a25fd4e7848c59c80e75ffab1af33dc35df044136a",
+      "after_sha256": "cdc0d5210b0c500b0b7f2e788c62d871b5f4ef022a5c7ad10e85049ee2f3e8dc",
+      "added_lines": 28,
+      "removed_lines": 27
+    },
+    {
+      "file": "docs/rfc/0014-panel-independent-fraud-prosecution.md",
+      "before_sha256": "1eb4bc5898b7f290d8fa3fa6385722dfc3413c50757e7181fcb4fec373ed8c29",
+      "after_sha256": "e81841ecbd4c06ee9f26553abcc50f170bfbc8bcd87db4a87883181912145fb1",
+      "added_lines": 125,
+      "removed_lines": 648
+    },
+    {
+      "file": "docs/rfc/0015-panel-free-permissionless-verification.md",
+      "before_sha256": "e62abf5ef4cf3a760ea569e341a5da8af08ee4a84bfb300d418f771d52f8ab90",
+      "after_sha256": "27a5302b33e6f8f7d37de47d755adf731f2c28639ffd75ed00d99fc72bff6e3c",
+      "added_lines": 105,
+      "removed_lines": 48
+    },
+    {
+      "file": "docs/rfc/README.md",
+      "before_sha256": "b0216cc92f889260e071ca04fb5b612f415c6e345945db1f91fc7a95ac4c084b",
+      "after_sha256": "2769e0146cad3bba0a3bfcb4b2541fd0f14200f45ab3b39d8df3e069544efec3",
+      "added_lines": 32,
+      "removed_lines": 46
+    },
+    {
+      "file": "docs/spec/README.md",
+      "before_sha256": "8225925f01eab1e2f8f583d209da59a743d9f632e4ce1666cb7a04be8c8b21fc",
+      "after_sha256": "1c9d9a851c84ebe3e010171477c4072b97eefabac8af326575b08dd7ade73df6",
+      "added_lines": 4,
+      "removed_lines": 0
+    },
+    {
+      "file": "docs/wiki/README.md",
+      "before_sha256": "8d9e94243d5729976b778f62780cb4f46755a497ae2987a3265bb8052ec471cf",
+      "after_sha256": "3a6b90e2667f8358b1fbd8ba016254efd8ac3b0fe3057375d29dd9901266a3ad",
+      "added_lines": 4,
+      "removed_lines": 0
+    }
+  ],
+  "historical_withdrawn_sections": [
+    {
+      "file": "docs/rfc/0014-panel-independent-fraud-prosecution.md",
+      "start": "## 16. MISAKA Torrent必須",
+      "historical_withdrawn_text": "## 16. MISAKA Torrent必須の同一性・独立Seeder可用性・計算検証（2026-10-10改定）\n\n### 16.1 採択する方針と現行transportとの差分\n\n**MISAKA Model Transport（MISAKA Torrent）をmisakasのリポジトリへ取り込み、\n報酬を得る新しいclass/profileの正式かつ必須の公開取得プロトコルとする。\n普通のpublic verifierが、MISAKA Torrentだけでchainに拘束されたモデル全体と必要な検証materialを\n取得・認証し、宣言した時間・資源内で独立検査とG14裁定を完遂できなければならない。** この条件はPanelの有無にかかわらず新経路に適用し、\nRFC15のPanel=0にも引き継ぐ。目的は公開に検証・訴追できる計算へ報酬を与えることである。\n\n外部HTTP mirrorからbytesを取得してTorrentへ取り込みseedすることは許される。\nただしpublic verifierがHTTP、公式サイト、特定trackerへ依存しないと全量取得できないモデルは資格を得ない。\nBEP52によるpiece/file認証は継続配布や独立コピーの証明とは別である。\n全配布経路が遮断された場合に常時取得と報酬の無停止を同時に保証するとは主張しない。\n規定の単一障害・耐障害数までは供給を維持し、それを超えた場合も不正報酬の確定とchain全体の停止を防ぐ。\nPanel・miner・一般peerは帯域上限の範囲で任意にpieceを再配布できるが、Seeder義務を参加条件にしない。\nモデルごとの継続提供責任は、当該モデルのPanel/minerに依存しない独立Bonded Seeder群が負う。\n任意peerの供給が全て消えても、独立群だけで規定のf障害・全量取得・G14時間予算を満たすことを要求する。\n\n確認したtransportの基準は`MISAKA-BTC/misaka-model-transport`の\n`a9085f60effed42d8654ea98e6c459948d0139b3`（2026-10-07取得）[T01]。\nbundle/BEP52/Safe Model Profile/IPC/engine/daemonの配布機能は再利用する。\n現行の`ModelTransport`はbundle取得・seedのAPIであり、public-bond availability判定、PALW court、\nreward gate、class-root照合をすべて実装したものではない [T03]–[T05]。\ntransportのREADMEの実装記録と、そのRFC冒頭の古いDraft statusを混同しない。\n\ntransport RFC0001 §3.2–§3.3、`PALW-DIST-6`の「distribution rowをどの規則も読まない」は\n**旧declaration-only modeの規則として保持する**。本RFCでは将来のversioned modeに、\ndistributionとclassの認証binding、担保付きavailability義務、それを読む報酬資格の合意規則を追加する [T02]。\n旧rowをそのままavailability certificateへ読み替えない。\n\nregistrationとpossessionをcoupleしない原則は維持する。未配布のモデルも登録・研究は可能だが、\n**登録されたこと、magnet/infohashを宣言したこと、providerが「持っている」と署名したことだけで\n新しい報酬資格は得られない**。この改定はregistration gateではなくrewardability/weight gateである。\n登録されたモデルの内容、model ID、canonical artifact root、weights、実行仕様とその合意上のbindingは永久に不変である。\n改善は[ADR-0175](../adr/0175-registered-models-are-permanently-immutable.md)の別の独立モデルとして登録する。\n同じ登録IDへのversion追加・line/head置換や、旧モデルのPosition/AMMの付替えを認めない。\n\n### 16.2 リポジトリ統合と合意処理の境界\n\n実装では、transportのsourceを履歴・source commit・license/NOTICEとともにmisakasへ取り込む。\n仮称`model-transport/`のsubtreeを統合単位とし、crate参照・release・CIをmisakasから再現可能にする。\n取り込みは単なる外部リンクの追加で完了したとは扱わない。以下のpath・型・fence名は実装用の仮称である。\n\n| 取り込むもの / 新設するもの | 責務と制約 |\n| --- | --- |\n| `misaka-bundle` / `misaka-btv2` / `misaka-transport-policy` | canonical descriptor、bundle commitment、torrent metadata/BEP52、formatとbyte boundの共通実装。chain adapterに利用する純粋な検証部分はI/Oと切り離し、versionとvectorsを固定する |\n| `misaka-transport-ipc` / `misaka-transport-engine` / `misaka-torrentd` / CLI | 実際のfetch/seed、cache、局所的な帯域・容量管理。daemonは引き続き秘密鍵を持たず、取得したmodel/codeを実行しない。libtorrent/C++ backendをconsensus validatorへlinkしない |\n| Torrent公開range / PoR / full-fetch adapter | 認証済みrangeの取得・優先配信、復元可能性の証拠、cold full-fetch監査、独立Bonded Seederの提供契約と負荷制御を追加する。PoR verifierは純粋な有界検証とし、swarm I/Oや監査者の自己申告を合意判定に持ち込まない |\n| misakas resolver / fraud filer adapter | 自分のcanonical chainからclass/line/versionを解決し、daemonに取得を依頼し、L1/L2/L3を検証して公開検査・courtへ接続する。サイトやRPCの申告rootだけを信頼しない |\n| proposed `palw_artifact_availability_v1`とstate fold | class/distribution binding、providerのbond/coverage/期限、認証challenge/answer/default、reward eligibility、lockとexpiryを決定的に処理する。ネットワークdownloadをstate transition中に実行しない |\n\nroot workspaceとのRust edition/MSRV、dependency/resolver、BorshとHash64 domainの整合をCIで確認する。\ndesktop GUI、I2P/trackers、libtorrent、confinementは取得側のoptionであり、\n特定client・tracker・DNS・公式サイトの成功をコンセンサスの信頼根拠にしない。\n標準BitTorrent v2 clientから得たbytesでも認証条件を満たせる。\n全nodeが全モデルを保持する義務や、通常node P2Pへの無界bundle転送は導入しない。\n\n任意共有や別契約のSeeder機能を検証workerと同居させる場合も、別process・別network境界に置く。public swarmに\nPanel秘密鍵、内部prover/検証APIや検証nodeの接続先を公開する必要を作らない。\nseed endpointへのDDoSがverification/chain-validation資源を直接枯渇させないquotaと隔離を検証する。\n\n**合意に入れるのは、モデル取得を成立させる認証されたbinding・義務・裁定・報酬条件である。**\nvalidatorがtorrentへ接続して成功したか、DHTのpeer数、個々のdownload速度、HTTP status、\ndaemonの`Finished`表示をblock validityへ直接使う実装は禁止する。\n\n### 16.3 chain-bound artifactと三段階検証\n\nclaimはimmutableなclass/kernel/planに加え、当該claimに適用するversion/rootと\ndistribution/availability policyのsnapshotを束縛する。新しい配布宣言でin-flight claimの証拠を差し替えない。\ndescriptor、metadata、必要なindex・認証pathも公開取得対象である。\n新reward profileの登録時に、次のcanonical認証情報とTorrent対応を不変にcommitする。\n未配布でも静的metadataを登録でき、Seeder契約・監査成立は後続の報酬資格gateで判定する。\nlegacy登録へは旧hash/IDを書き換えず、固定登録を参照する別のimmutable bindingを受理する移行を定義する。\n\n| 固定情報 | 認証対象 |\n| --- | --- |\n| Model ID / Canonical Artifact Root | 独立登録の識別子とモデル全体のcanonical bytes/semanticsへのcommitment |\n| Torrent v2 Infohash / binding ID | 正式配布descriptorと固定artifact rootへの対応。infohashとPALW rootを同じhash型にしない |\n| Canonical File Manifest | 正規化path、順序、size、file hash/root、byte encoding、形式/version、重複/alias等の扱い |\n| Weights / Execution Specification | 全weightとtokenizer、config、program/layout、kernel/planを認証対象へ含める。名前や宣言だけで検証済みにしない |\n| Artifact Size | 全required file/rangeの総bytes。metadata/認証path/復元overheadのbudgetは別に記録 |\n\npath順序・符号化・file扱いをversioned canonical manifest規則で一意にし、独立実装のroot vectorsを要求する。\n受理したbindingのdescriptor commitment、full v2 infohash、root対応は固定する。\nSeederの加入・脱退・endpoint更新は別のmutable service stateであり、登録modelやbindingを変更しない。\n別の包装表現を追加する場合も新binding IDを受理し、同じimmutable modelへの対応を再検証する。\n追加包装は登録時の正式Torrent infohash/manifest/root bindingを置換しない。資格とclaimが読む\n正式binding・追加経路の選択規則をpolicyへ固定し、包装追加を同じ登録の識別情報更新にしない。\n\n~~~text\ncanonical chainのclass / model version / artifact-inventory root\n    → accepted distribution binding\n        (descriptor commitment, full v2 infohash, file/range map, byte bounds)\n    → MISAKA Transportで取得\n    → L1: BEP52 piece/file Merkle verification\n    → L2: canonical bundle commitment・paths・sizes・formatsの照合\n    → L3: 実際のPALW inventory/weight materialを再計算・認証し、chainのrootへ束縛\n    → independent verification / localization / objective court\n~~~\n\n32-byteのBitTorrent SHA-256 root、64-byteのbundle commitment、PALW inventory/artifact root、\nclass identityは異なる型・domainであり、同じhashと扱わない。\n`Descriptor.palw.roots`に正しいrootが書かれているだけではL3に合格しない [T03]。\nsource GGUF/safetensorsだけを配布する場合は、claimが使うcanonical weights/layoutへの\n再現可能な変換と認証bindingも必要である。変換済みPALW artifactと同名source modelの混同を拒否する。\n\n受信piece/shardを認証してから利用し、誤pieceは破棄して別Seederから取得を継続できる。\n全量取得または符号化復元後にcanonical artifact rootを再計算し、登録rootと必ず照合する。\nshard rootだけの一致、正しい一部piece、同名modelや改変tokenizer/configを全量同一性の証拠にしない。\n低速な正しい配信はidentity問題と分離し、提供能力/期限のpolicyで判定する。\nローカル受信不良だけでmodel全体を失格・providerをslashしない。slashにはproviderが署名した\nchallenge-boundの不正回答など、全ノードが再検証できる規範的証拠を要する。\n\nclaimは固定Model ID/root/実行仕様を参照し、G14 verifierは同じrootのmodelを取得して\n承認済み計算検査・localization・exact courtを行う。正しいmodelの配布/PoR/root一致は\nminerがそのweightsを使って正しく計算した証明ではない。別weightsによる偽claimは計算fraudとして独立に裁定する。\n\nどのbundleを使うかはsource-DAAの規則で解決し、producerが同一計算についてinfohash・包装metadataを\n自由に変えて抽選をgrindしたり、余分なwork creditを得たりできないようにする。\n配布表現・所在の更新と計算の意味を分け、旧claimのrootと配布証拠は責任期間中保持する。\n\n### 16.4 DownloadAvailabilityReadyとproviderの合意上の義務\n\n仮称`ArtifactAvailabilityLeaseV1`は、単なるtorrent宣言とは別の合意objectである。\n少なくとも以下を拘束する。wire/tag/domainと具体的な定数はactivation前に固定する。\n\n~~~text\nArtifactAvailabilityLeaseV1 (proposed; not an existing Rust type)\n    network / version / policy_id\n    class_id, line/version when applicable, artifact/inventory root\n    accepted distribution_binding_id, descriptor commitment, v2 infohash\n    provider_bond, role (independent Bonded Seeder; separate from Panel / miner)\n    covered_files/ranges, reconstruction units, possession / PoR commitment\n    fault-tolerance policy (f, coverage, approved coding parameters if any)\n    independence / failure-domain evidence policy and declared dependencies\n    accepted_at, serve_from, serve_until, retained_liability_until\n    challenge scheme / freshness / bounded response and disclosure envelope\n    full-fetch audit policy / evidence references / renewal cutoff\n    declared service capacity / bandwidth envelope / maximum concurrent requests\n    reserved collateral / maximum concurrent obligations\n~~~\n\nproviderはgenesis allowlistやmodel ownerの許可を要求しない公開bond規則で参加できる。\nmodel lineの配布宣言を署名する権限と、既に認証されたartifactを保持・提供する義務を引き受ける権限は別である。\nownerなしのgenesis classにも公開bindingとleaseを構成する経路を定義する。\n\npolicyは全必要file/rangeのcoverage、取得量、独立供給と冗長性、freshなpossession/serve検査、\n最悪時帯域・同時要求・deadline・保持・担保を定義し、chainは有界で認証された証拠から判定する。\nprovider数の具体値は測定・審査なしに固定しない。\n異なるbond/operator名だけで実体の独立性やSybil耐性を証明したとは扱わず、\n同時停止・選択的非開示・共通upstream依存・eclipseへの条件を明記する。\nproviderの多数決で計算の真偽を決める新しいPanelは作らない。\n\n#### 独立Bonded Seeder群の必須coverageと任意peer\n\n| 保持役割 | 新reward modeの義務 |\n| --- | --- |\n| Independent Bonded Seeder group | モデルごとに必須。当該miner/Panelの共謀・配布拒否と任意peer消失下でも、独立群だけでf障害後の全量取得・復元・G14予算を満たす。提供契約/担保/PoR/公開回答/期限付きFull Fetchを維持する |\n| Panel / Sharded Panel | 計算検査に必要なmodel/shardを取得・認証するが、常時Seeder義務はない。任意共有の停止だけでseatをslash・報酬失格にしない。別に署名した検証materialの開示/保持責任は維持する |\n| Miner / Public peer | 取得済みpieceの任意再配布を推奨し、帯域/容量上限・停止を選べる。minerのclaim commitment・witness/DA責任は維持する。任意供給を必須独立coverageの代用にしない |\n| Panel=0 | 独立Bonded Seeder群に同等のcoverage・f障害・帯域・PoR・公開serve・監査要件を維持する |\n\n同じ参加者が別途Bonded Seeder契約を引き受けることはできるが、当該Panel/minerと共通owner・\n設備・upstreamに依存する供給を独立群の必要枠へ無条件算入しない。role、担保予約と責任を分離する。\n有効providerとは単なるonline表示ではなく、固定rootの必要データ、funded lease、fresh PoR/公開応答、\n監査/帯域/独立性policyを満たす供給単位である。数だけでREADYにしない。\n\n耐障害数`f`をmodel/profile policyで明示する。非符号化shardでは各必要rangeが任意の\n許容`f`障害後も取得できなければならない。承認済み消失訂正方式で`n`保持単位中`k`単位から\n復元する場合の必要条件は`n - f >= k`である。この数式だけで独立性、到達性、帯域、悪意回答への耐性を証明しない。\n符号化方式・coded commitmentからcanonical artifactへの認証・decoder boundsも別の承認対象であり、\n本改定でerasure codingを実装済みとしない。単一Seeder・Panel・tracker・経路が唯一の依存にならない構成を要求する。\n\n独立性の認定条件と限界をpolicyへ明記する。同一ownerの100 bond/endpointを100独立供給と数えず、\n共通storage、設備、network、upstream、選択的serveを脅威モデルと試験へ含める。\nchainの鍵や署名だけから物理的独立性を知れるとは主張しない。運営主体・地域/network・設備の\n分散と認定の脅威モデル/仮定を明示する。認定方法が未確定なら`BondedSeederAvailabilityValid`を\n成立済みとせず、activationを閉じたままにする。peer発見は利用可能なDHT・PEX・複数bootstrap/経路を\n組み合わせ、単一tracker/公式サイトへの依存をなくす。発見peer数は可用性の合意証拠ではない。\n\n#### Full Fetch、PoR、Public Serve Challengeを分ける\n\n| 検証 | 役割と証拠の限界 |\n| --- | --- |\n| Full Fetch | モデル未保有のPanel外検証者がMISAKA Torrentのみから全量取得しL1/L2/L3を通す。初回有効化と定期的cold監査の実測を公開する。署名した取得完了報告だけをtrustlessな合意証明にしない |\n| Proof of Retrievability (PoR) | 承認した暗号仮定・challenge分布・成功率の下で、全担当データを復元するextractorの性質を示す。単なる数pieceのMerkle openingやproviderの保存宣言をPoRと呼ばない。PoR PASSだけでは公開配布帯域・全量取得能力は証明されない |\n| Public Serve Challenge | 適格な公開range demandに認証済みデータをabsolute deadlineまでに公開したかを全ノードが決定的に裁定する。継続的な提供義務/defaultに接続し、無界downloadをcarrierへ持ち込まない |\n\nPoR方式は正式採用前に復元可能性の数学的証明と独立reviewを要する。\npublic verifierが公開情報だけで再検証できるscheme、rootへのbinding、encoding/認証、\nsoundness/extraction仮定、freshness、反復・全providerのerror composition、資源上限を固定する。\nchallengeはcommit後の承認済み将来乱数から選び、[RFC07 Part VI](0007-palw-verification-certificates-and-algebraic-checks.md#post-commit-challenge-protocol)\nとのdomain・source資格・source不足時の期限処理を別policyで定義する。provider/Panelの選んだseedを信頼しない。\nPoR、認証Torrent、実測full fetch、担保付き提供義務、公開開示・defaultを組み合わせる。\nfull fetch監査の信頼仮定・独立性・対象root・負荷・再監査間隔と合意上の証拠判定を分けて記録する。\n少数probe、announce、自己申告receiptだけで`DownloadAvailabilityReady`にしない。\n\nFull Fetchは公開bond/maturity規則の監査者poolから、commit後の承認済み将来乱数と独立性policyで\n対象を選び、初回と期限付き定期更新に実施する。結果はmodel/root/infohash、snapshot、監査期間、\ncold開始・全量認証、機材/負荷/bytes/時間と署名scopeをbindする。選択・fee/exposure・再検査・\n失効・異議・包含とreorg処理をactivation前に固定する。監査成功署名は転送の暗号学的証明ではない。\n監査者の正直性/共謀耐性、Sybil・選択的配布・監査者DDoS、ネットワーク到達性を別の仮定として審査する。\n監査者の票に計算真偽やchain選択のBFT権限は与えない。虚偽成功報告への対策と仮定が未確定ならgateを閉じる。\n\n新規reward-bearing claimの受入は、少なくとも次のAND条件を読む。\n\n~~~text\nModelRewardEligible(model, epoch)\n  = ArtifactIdentityValid(model)\n    AND TorrentBindingValid(model)\n    AND BondedSeederAvailabilityValid(model, epoch)\n    AND IndependentFullFetchPolicyValid(model, epoch)\n    AND G14VerificationPossible(model, epoch)\n    AND AvailabilityLeaseValid(model, epoch)\n~~~\n\n`ArtifactIdentityValid`は永久不変の登録内容と検証artifactの認証binding、`TorrentBindingValid`は\n正式infohash/manifest→canonical rootの対応を表す。`BondedSeederAvailabilityValid`は必要な\n有効独立provider数、全range coverage/復元、f障害、reviewed PoR、公開提供、帯域と\ndisqualifying defaultの不在を含む。旧8条件を緩める変更ではない。\n`IndependentFullFetchPolicyValid`は承認済み仮定の下で初回/更新監査が期限内に有効であること、\n`G14VerificationPossible`はprofileのG14完了、cold取得・検査・localization/court/inclusionの\n資源/期限と実際の公開訴追経路を含む。`AvailabilityLeaseValid`は予約済み担保・提供費・保持/責任期間を要する。\nmodel eligibilityだけで個別claimを正当とせず、次に固定root/実行仕様をbindしたPALW計算検証を行う。\n\n§16.13のFPRを上記6項へ内包する。`BondedSeederAvailabilityValid`は有界な全量公開義務と\nその履行/default、`IndependentFullFetchPolicyValid`は小規模応答・監査署名を全量公開の代用にしない\n証拠policy、`AvailabilityLeaseValid`は最大FPR費用・保持・担保の事前予約を含む。\n`G14VerificationPossible`は段階的公開・代替提供・裁定を含めてcold deadlineを満たすことを要する。\nFPR処理が未定義のまま6項をPASSにしない。CHALLENGED中のFinal/weight制約は§16.13.5で別に読む。\n\nこれは設計predicateであり現在のRust APIではない。`DownloadAvailabilityReady`は上記の\navailability側の条件成立を示す期限付き状態とし、G14や計算検証を代替しない。\n判定はpolicyが固定するepochの合意snapshot（canonical accepted history、ruleset、適用score）から\n決定的に導き、node-local fetch結果や独自wall clockを読まない。G14はrelease証拠とadmitted\nprofileの規範的条件を必要とし、operator署名一つのbooleanにしない。\nleaseは担保と並行義務が実際に予約され、claimのdispute/liability horizonまで保持されていることを要する。\nbudgetはcold-fetch/check/localize/court/inclusion全体を含む。具体的snapshot境界・codec・foldは実装前に固定する。\n\n未充足のclassはRegisteredのまま保持できるが、新経路のreward/weight claimを受け入れない。\nREADYは合意policyの条件成立を示す状態であり、将来のインターネット接続の無条件保証ではない。\n必要coverage・耐障害性・期限・proof条件を失った場合に新規資格を閉じる。\n1 providerのdefaultでも、別の有効leaseで必要条件を満たすモデルを自動的に全停止しない。\n再取得・再認証後に別の有効leaseで復帰できる。\n既存claimのservice/担保予約を、新しいleaseへの切替やclassの停止で消さない。\n資格のない新規計算へのPALW報酬・work creditは0で、他の正常なモデルとHEARTBEAT・BASE-0は継続する。\n無効objectの拒否単位は既存carrier/lane acceptance規則に合わせ、実装仕様で\nREAL/transaction carrier/EXECごとの拒否matrixを固定する。claimの無資格を理由に\n暗黙のblock部分受理へ変更しない。block全体が不正な場合と、foldで拒否されるobjectを区別する。\n\n### 16.5 モデルを持たない外部bondのdemandと客観的非開示裁定\n\nfresh verifierはmodelを持っていなくても、公開されたclass/bindingから対象unitを指定できる。\n適格なbond/fee、unit binding、resource capを満たせば、**初期の算術mismatch証拠なしでも**\n必要materialへのavailability demandを開ける。取得できないと不正を発見できず、\n不正を発見しないと取得を要求できないという循環を禁止する。\n\n受理したdemandはproviderと対象rangeを特定し、absolute response deadlineを合意上固定する。\n応答は、公開され再利用可能なchunkとBEP52/bundle/PALW rootへの規範的な認証path、\nまたは同じ義務を満たす承認済みの有界disclosureである。off-chain responseの到達を申告するだけで\nclosureにせず、carrier上の公開開示等で全validatorが同じ結果を得る経路を定義する。\nこれを口実にfull modelを一度にchainへ載せない。chunk・総bytes・in-flight数とreserve期間を制限する。\n小さいrange回答の成功でモデル全体の公開義務を閉じない。第三者が全量まで段階的に要求できる\n[FPR（§16.13）](#forced-public-retrieval)を必須経路とし、算術不正の事前証明や監査者/ownerの許可を要求しない。\n\n#### Torrent Retrieval Default Certificate（TRDC、仮称）\n\nTRDCは「受理済みの指定提供契約/challengeに、期限内の有効公開回答が合意履歴に存在しない」ことを\n決定的に再検証する設計recordである。全インターネットの取得不能や、DDoSと故意の区別を証明しない。\n新しいRust型・wire tag・consensus certificateとして実装済みとは扱わない。\n\n~~~text\nTRDC (proposed)\n    network / ruleset / policy_id / accepted epoch snapshot_id\n    model_id / artifact_root / distribution_binding_id / v2 infohash\n    provider_bond / lease_id / challenge_id / canonical file-range\n    accepted challenge commitment / response deadline / bounded closure deadline\n    challenge-response map state root / checked history coverage / default outcome\n~~~\n\n誰でも公開bond/fee/resource規則でchallengeを提出でき、定期challengeは承認済み乱数policyから\n有界に導出する。providerの公開回答はnetwork、model/root/infohash、lease/challenge/range、\nbytes commitmentと認証pathを署名にbindし、BEP52→bundle→PALW対応を検証する。\n期限内に合意上記録された有効回答があればPASS、期限経過後に指定履歴/応答mapに存在しなければDEFAULTとする。\n署名付きoff-chain送信、requesterの未受信申告、自己申告の空mapだけでdefaultを作らない。\n全nodeは同じ受理履歴からmapを再計算する。軽量client向けのmembership/non-membership proofは\n認証state root・対象範囲・保持/証明codecを別途定義し、headerだけから不在を信じさせない。\n\n判定に使うepoch/snapshotの安定性・accepted-response境界・expiry順序をPALWの有効な合意/settlement\n規則で固定する。「finalized」の文字で新たなBFT/finality overlayを作らず、TRDCはfork-relativeに検証する。\nreorgでsnapshot/challenge/回答が外れればdefault、担保、資格をundo/replayする。restart/IBD/pruningは\n期限内応答の検証に必要な履歴または認証状態を保持・再構成し、missing historyを不在証明にしない。\n\ndefaultは回答包含が機能する仮定の下での契約不履行であり、回答検閲・遅延でも起こり得る。\n回答reserve、適切なdeadline、複数relay/包含経路、合意進行・検閲耐性を審査し、正当な回答の\n包含不能とminerの計算不正を混同しない。1 providerのTRDCだけでモデルを停止せず、残る\n独立coverage・有効契約・Full Fetch監査を再評価する。\n\n* 正しい開示はaccusationをrefuteし、他のpublic verifierも同じ証拠を使える。\n* 認証された誤答または規範的期限の非開示は、該当provider義務のdefaultを客観的に裁定する。\n* requesterのローカルdownload失敗、切断、悪意ある「受け取っていない」申告はdefault証明ではない。\n* 公開供給の必要coverageが回復しなければ、新規reward資格を閉じ、影響するpending claimを有界の\n  availability dispute/default処理へ進める。永久pendingや無制限延長を許さない。\n\n要求によるDoSを抑えるため、bond・fee、同じbinding/rangeのdemand統合、provider/model/requester単位の\nin-flight/bytes/work上限、悪意・重複要求の費用負担を固定する。正当な初回要求の包含機会と\n回答専用の有界carrier容量を予約し、通常取引・chain-validationをstarveさせない。\n新規要求で既存sessionのabsolute deadlineやclaim hard deadlineを無制限に延長しない。\naccepted demandには有限の回答・裁定枠を確保し、枠不足を隠して受理だけし続けない。\n\n| READY後の事象 | 決定的な処理 |\n| --- | --- |\n| 1 Seeder停止、必要な冗長性・全量取得能力は残る | 新規資格と正常な採掘を継続する |\n| 1監査者の取得失敗報告、または大量の偽失敗報告 | 申告だけで資格停止・slashしない。適格demandだけを有界手続で処理する |\n| 正式demandを受理 | provider/range、回答期限、公開証拠、裁定期限を固定する |\n| 正しい認証回答を期限内に公開できない | 該当提供義務のobjective availability default。残る有効coverageを再評価する |\n| 必要な可用性条件を失う、全provider停止 | 当該model/profileの新規reward-bearing claim/weight資格を閉じる |\n| 既存claimの必要materialに影響 | claimが予約した義務・担保・escrowを固定期限内で裁定/清算する。他モデル、HEARTBEAT、BASE-0は進行する |\n\nproviderへのavailability liabilityとproducerへの計算fraud liabilityを区別する。\nprovider defaultだけでproducerに未証明のComputationMismatchを帰属させない。\nproducerも同じ提供義務を引き受けた場合はその義務を裁定し、報酬条件未充足のclaimのescrowを失効させる。\nproviderのcollateral回収、producer rewardの失効、計算fraudのslashはそれぞれのbasisで処理する。\nDDoS下のSeederは契約上のdefault責任を負い得るが、それだけで正直なminerやPanelを計算不正としてslashしない。\n署名付き不正回答/矛盾する保証への重大Slashと、期限内非開示への上限付き契約ペナルティは\n§16.13.4の別offence/証拠/予約額で処理する。通常Torrentの誤pieceやtimeoutだけを重大Slashの根拠にしない。\nPanelの虚偽保証には署名したscopeと客観的偽りの証拠を要する。同じbondが複数roleを持つ場合も\noffence・予約額・回収を分離し、同じ担保を二重回収しない。\n\n### 16.6 cold/hot verifier、全取得と必要range取得の時間予算\n\nhot watcherは認証済みmodelをcacheできる。cold verifierはclaim公開後にdescriptor/metadata、\n必要なweights/tokenizer/plan/stateを取得してrootを確認し、検査・localization・courtへ進める。\n双方に同じ公開証拠と訴追権を提供する。cache保有者だけを安全性の前提にしない。\n\n対象profileでは、cold開始cutoffと次の最悪時予算を事前固定・実測する。\n\n~~~text\nt_start + B_discovery + B_metadata + B_cold_fetch_and_root_verify\n        + B_check + B_localize + B_witness_fetch_and_proof\n        + B_court + B_inclusion + B_reorg_margin\n    <= dispute_hard_deadline\n\nprovider serve/retention and collectible liability\n    cover all applicable deadlines, accepted pursuits and post-Final liability\n~~~\n\n各Bは同じprofile/rulesetの有界費用とdeadline envelopeであり、時間・bytes・CPUを混ぜて足さない。\nnetwork clock、minimum throughput/inclusion、並行負荷、renew/expiry/reorgの仮定を記録する。\n小さいfixtureやhot cacheの速度を、34 GiB級以上のfull cold downloadの成功へ外挿しない。\nこの条件を満たせないmodel/profileは新reward modeおよびPanel=0へ入れない。\n100TB級モデルの登録も報酬資格と分離する。実際の取得・root照合・検査・裁定が期限内に収まる\n証拠がなければ`ActiveRewardable`にしない。100TBの模擬/sparse fileによるstate-machine試験は\n実モデルのcold-download性能実証ではない。\n\n通常検査を小さいconstraint check、異常時をrange/localization、terminal courtを必要な\nweight tile/operand/state/checkpoint取得で構成する最適化を採用できる。\nただし**モデル全体の取得経路は公開に利用可能でなければならない**。\n部分取得しか存在しないことを、ユーザーの求めるモデルdownload条件の成立と呼ばない。\n\n部分court取得には、`file/offset/range → canonical tensor/row/tile → PALW root`の認証bridgeが必要である。\nBEP52のpiece proofだけでは、そのpieceがclassの正しいoperandである証明にならない。\n現行`ModelTransport` traitのbundle APIをrange/priority fetchとcourt witnessへ接続する追加実装が必要であり、\n当該bridgeとworst-case cold費用が確認されるまでは、その最適化を成立済みとしてbudgetから外さない。\n\n### 16.7 報酬の算定、pending、Finalとspendableを分ける\n\n新規claimの報酬額は、eligibility/admissionを満たしたREAL block/claimの受理時に計算してよい。\nその額はまずescrow/pendingで表示し、即spendableなUTXOを発行しない。\nPanel付き新modeでは既存のpositive verification/receipt条件も維持し、\nPanel-freeの状態名とreceipt撤去はRFC15の別gateを満たしてから使う。\n\n~~~text\nregistered immutable model + ModelRewardEligible(model, epoch)\n    → accepted reward-bearing REAL block / claim\n    → reward amount computed / escrow-pending\n    → challengeable lifecycle (Panel-free mode: RFC15 Challengeable)\n         ├─ proven computation fraud → reward void + producer slash\n         ├─ adjudicated availability failure → defined reward/default/liability handling\n         └─ required checks + DA/availability + elapsed windows + no unresolved pursuit\n                → Final → reward maturity/vesting rules → spendable\n~~~\n\n§7.3のFinal predicate、pending reward/vesting/mintの全writer、withdraw/lock readersは、\n当該claimのavailability義務と裁定状態を同じ意味で読む。\n新規claim資格を閉じるclass-levelの最新状態と、既存claimが予約したbinding/期限/義務は区別する。\n別versionが配布されたことだけで過去claimを有罪にせず、過去の必要artifactを消して逃げることも許さない。\nmaturity解放と必要retention/liability期間を整合させ、未裁定の証拠取得中に解放しない。\n新しい無期限rollbackや、完全に解放した報酬を後から無条件に回収できる保証は導入しない。\n\n独立Bonded Seederには計算/Panel報酬と別の提供契約報酬を設ける設計とし、upload bytes、peer数、\n任意共有や自己申告download receiptを報酬根拠にしない。初期候補15%は§16.12とECONの未確定値である。\nモデル別既存報酬枠の内訳を調整し、追加発行や既存claimの遡及減額をしない。\n契約/slot単位のrate・対象epoch・履行判定・reserve・丸めを事前にcommitし、失敗Seederの未獲得分を\n残存Seederへ自動再配分しない。支払先・返還/失効先はversioned仕様で固定し、競合へのDDoSで取り分が増えないことを試験する。\n提供予算は必要保存・帯域・監査・防御・責任期間の事前確保額以上を要する。不足分はモデル側等の\n明示的預託で補い、資金不足モデルは登録のまま新reward資格を開かない。\nモデル報酬停止で提供・復旧費が直ちに消えないよう、有限の復旧/継続契約escrowを別に確保する。\nprotocol支払いのconservation、provider担保・同時義務・回収可能額・honest watcher/供給誘因を\n受入前にレビューする。契約や15%だけで全量取得/監視の継続を保証したことにしない。\n\n### 16.8 実装段階とactivation gate\n\n| 段階 | 実装・検証すること | 出口条件 |\n| --- | --- | --- |\n| T0: source統合 | transport subtree、licenses/provenance、workspace/dependency、backend分離、release/CI | 共通vectorsが同じrootを返し、consensus buildがswarm/GUI/C++に依存しない |\n| T1: chain bindingとresolver | canonical metadata/descriptor、class/version/root binding、full fetch、L1/L2/L3、immutable cache | model未保有のpublic bondが実transportから対象full artifactを取得し、自分のchain rootと照合できる |\n| T2: availability state | lease/coverage/freshness/expiry、possession challenge、public demand/disclosure/default、担保 | 偽宣言・自己申告・Sybil receiptをREADYにせず、public non-seat demandを客観的に裁定できる |\n| T2a: retrievalと供給 | 独立Bonded Seeder coverage、f障害、PoR verifier、periodic Full Fetch、range認証、TRDC、独立性/監査policy | reviewed PoR復元保証と公開実配布を別に実証し、全Panel/minerと任意peerが配布拒否しても外部bondが取得・裁定できる |\n| T2b: FPR | permissionless escalation、全range公開義務/代替履行、公開実データ/DA証拠、費用reserve、重大Slash/有界default | 小規模Challengeと共謀監査の成功だけで全量義務を閉じず、公開全量の検証または期限内defaultを全nodeが同じsnapshotから裁定する |\n| T3: reward接続 | new claim admission、Final、escrow/maturity、source snapshots、migration/fingerprint | 不可用profileへ新reward/weightを出さず、正直claimは有界にsettleし、責任期間中の証拠と担保を維持 |\n| T3a: 規則Eとweight | §16.10のsafe/provisional work、全fork-choice/settlement reader、undo/replay、失効伝播 | 未検証workが不可逆な選択を支配せず、モデル単位の停止下でも他モデルと独立chain経路が進行する |\n| T4: canonical E2E | real swarmとcold verifier、最大profile、全/部分取得、fraud proof、load/reorg/IBD | §13のfresh outsiderが公開downloadからlocalization/conviction・reward失効/slashまで完結。正直claimは正しくmature |\n\n必須の敵対的ケースは、seed=0だが有効metadataあり、sourceだけ取得できcanonical artifactなし、\nL1/L2は通るがL3が不一致、宣言rootをコピーした別model、descriptor/index withholding、\nselective serve、providerの共同停止・Sybil/freshness偽装、全coverageの一部欠落、\n帯域不足・eclipse・大量demand、expiry/退去/担保二重利用、配布差替え・reorg、\n完全download可だが計算trace不正、正しいmodel/claimへのfalse accusationを含む。\nfull downloadとrange-to-operand bridge、pendingからFinal/maturity、既存courtとの競合を分けて測定する。\n\n次の攻撃matrixを独立devnetで実施し、raw log、state roots、対象root/profile/ruleset、\nwork/reward/担保の前後値、測定機材・負荷を公開する。ここに列挙したことはPASS証拠ではない。\n\n| 攻撃試験 | 合格条件 |\n| --- | --- |\n| Seeder 1台停止 | 必要冗長性が残る限り新規採掘資格と正常claimの精算を維持 |\n| 許容f台/保持単位まで同時停止 | モデル全体をTorrentから取得・復元し、規定帯域・期限とroot照合を満たす |\n| fを超えて停止 | 不正なreward/確定weightを出さず、当該モデルを有界停止。他モデルとchainは進行 |\n| 100 Sybil Seeder / 共通storage・upstream | endpoint/bond数を独立供給数へ無条件換算せず、共通障害下のcoverage不足を検出 |\n| 全Panelとminerの共謀・選択的serve | Panel外のfresh public verifierが独立SeederのTorrentから全量取得しG14の発見・局所化・裁定を完結 |\n| PoRだけPASS、実配布は拒否 | PoRと公開配布を混同せず、serve/defaultと監査policyから資格を判定 |\n| モデル末尾の一部を隠す | 全量監査・認証range要求・PoR coverage・defaultの経路があり、少数piece成功でREADYにしない |\n| SeederへのDDoS | 提供義務defaultと計算fraudを分離し、正直なminer/Panelを算術不正でslashしない |\n| 大量の偽取得失敗報告・demand spam | bond/fee/統合/quota/包含・回答reserveが機能し、モデル/既存claimを無期限停止・pendingにしない |\n| 単一tracker/経路の遮断 | 独立した発見・取得経路が残り、Torrentのみで全量取得できる |\n| 誤piece / 別weights / 改変tokenizer・config / 符号化shard差替え | 誤データを拒否し、復元後も固定artifact rootを再計算。別peerから正しい全量を取得できれば資格継続。署名なし失敗申告だけでslashしない |\n| 正規モデルを配布するがminerが別weightsで計算 | identity/availability PASSを計算正当性に流用せず、固定rootのPALW/G14検査・exact courtで不正を裁定 |\n| 監査者の偽成功署名 / 共謀 / 選択的配布 / DDoS | 3-of-5候補をtrustlessと誤表示せず、正式な仮定・異議・期限・再検査が成立しなければ資格を開かない |\n| 偽TRDC / 期限内回答の検閲 / 別forkの応答map / pruned履歴欠落 | 同じsnapshotから再検証し、未認証不在やmissing historyでdefaultにしない。回答包含仮定とmodel-local cleanupを独立に検証 |\n| 競合Seeder停止時の報酬 / suspension時の復旧資金 | 未獲得分の自動再配分なし、発行/escrow保存。停止中も事前確保した有限契約で復旧できる |\n| 100TB model登録 | 登録と資格を分離し、実測cold budget不足なら報酬・weight資格を付与しない。模擬fileの性能を代用しない |\n| READY後に全provider停止 | 未検証reward/workが不可逆確定せず、既存claim/担保を有界清算。独立chain進行を維持 |\n| Reorg / partition / restart / IBD / pruning | 同じ履歴からavailability/expiry/default、claim、予約担保、workとrewardが一致。偽private historyのweight昇格を防ぐ |\n| 全Seederと全監査者の共謀・少量回答だけ成功 | fresh outsiderがFPR全量義務を発動でき、監査成功票では閉じない。全量公開または有界default/資格停止を得る |\n| FPR末尾欠落 / hash・署名・受信者receiptだけ / 偽DA root | 全required範囲と実データの認証公開/復元・保持証拠を検査。部分応答や未承認DAを全量PASSにしない |\n| FPR割当SeederへのDDoS・別Seederの代替履行 | 期限内の認証代替公開を全量coverageへ算入し、元の契約責任は事前規則で判定。1台だけでモデルを停止せず、timeoutを重大不正にしない |\n| FPR spam / 資金による検査枠独占 / 再要求による永久CHALLENGED | 統合・fair admission・費用/容量reserve・absolute deadlineと有限清算を守り、他モデル/chainをstarveさせない |\n| CHALLENGED中のprivate maturation / Final / fork choice | 対象の未検証workを確定weight・settlement/pruningへ昇格させず、成功/default/undoを全readerが同じ意味で読む |\n| FPR公開DA停止・検閲・期限超過 / 別fork証拠 / restart | 固定DA policy/包含・保持仮定、認証coverageとbranch bindingを再検証。missing historyや告知hashを公開証明にせず有界清算 |\n| 100TB FPR予算不足 / 全providerがBond喪失を選び公開拒否 | 最大実データ量/転送・保持/検証費と並行枠不足ならREADYにしない。default時は新reward/確定weightを止め、Slashで消えたbytesを復元できるとは主張しない |\n\nprovider policy、認証scheme、資源/時間/担保上限、codec/domain/fingerprint、in-flight migrationの\nいずれかが未定・未実装・未試験なら、この報酬経路を有効化しない。\n提案fence名`palw_artifact_availability_v1`は未割当であり、\n既存`palw_model_distribution`の名前や過去のDAAをこの追記で有効化済みにしない。\n**§16の完成はRFC14のpublic prosecution完成に必要だが、RFC15のPanel=0を自動有効化しない。**\nPoRの証明/review、Torrent独立供給、報酬gate、規則E接続、安全性と独立chain活性の\n実装・試験・外部reviewが未完なら新reward fenceの有効化を審査しない。\n\n### 16.9 この追加で確認したtransport source\n\n* **T01** — [README、配布機能とchain側の境界][T01]。\n* **T02** — [transport RFC0001、declaration-onlyとPALW-DIST-6/8][T02]。\n* **T03** — [canonical Descriptor / PalwInfo / PalwRoot][T03]。\n* **T04** — [L2のread-only検証とFull depth][T04]。\n* **T05** — [ModelTransport traitとbundle fetch/seed API][T05]。\n\n[T01]: https://github.com/MISAKA-BTC/misaka-model-transport/blob/a9085f60effed42d8654ea98e6c459948d0139b3/README.md\n[T02]: https://github.com/MISAKA-BTC/misaka-model-transport/blob/a9085f60effed42d8654ea98e6c459948d0139b3/docs/rfc/0001-misaka-torrent.md\n[T03]: https://github.com/MISAKA-BTC/misaka-model-transport/blob/a9085f60effed42d8654ea98e6c459948d0139b3/crates/misaka-bundle/src/descriptor.rs\n[T04]: https://github.com/MISAKA-BTC/misaka-model-transport/blob/a9085f60effed42d8654ea98e6c459948d0139b3/crates/misaka-transport-policy/src/l2.rs\n[T05]: https://github.com/MISAKA-BTC/misaka-model-transport/blob/a9085f60effed42d8654ea98e6c459948d0139b3/crates/misaka-transport-engine/src/lib.rs\n\n### 16.10 規則Eとfork-choiceへの接続\n\n本設計の「規則E」は開発中のfork-choice接続要件を指す。現行コードの特定関数・fenceへ\n接続済みとは扱わず、exact versioned specification、適用predicate、writer/reader matrixを\nactivation前に固定する。[RFC08](0008-palw-claim-backed-consensus-blocks.md)と\n[RFC12](0012-palw-only-consensus-and-native-evm-settlement.md)は次のAND条件を継承する。\n\n* 新規REAL/rootは`ModelRewardEligible`を満たして初めてreward-bearing workとして受理する。\n  EXEC_TX/EXEC_SLICEは引き続きfork-choice/DAAへの追加寄与0で、未実行session予算をweightにしない。\n* 未検証・取得不能・異議未解決のworkを確定`safe_weight`やsettlement frontier、EVM safe/finalized、\n  pruning安全性へ昇格させない。reward escrowはweight安全性を代替しない。\n* 許されるprovisional/immature weightがある場合、そのcap・用途・期限・依存伝播・undoを別途証明する。\n  safeへの名称変更だけでは足りない。frontier-first比較、bounded live total、tie-break、candidate/IBD\n  rankingなど全入口で、証拠取得・検証前のworkが不可逆な選択を作らないことを示す。\n* class最新資格の停止と、既存claimのsnapshot/予約義務を分離する。expiry/default/convictionから\n  eligibility、pending/final work、permit、escrow、保留settlementへの影響を原子的に処理する。\n  既に正当に清算された旧workをproviderの後日の停止だけで遡及voidにしない。\n* private maturation、全Panel共謀、READY直後の全供給停止、partition、競合到着順、Final前後reorg、\n  restart/pruned syncを試験する。node-local downloadの成功/失敗をcandidate validityへ使わない。\n* §16.13のCHALLENGED/session/公開coverageをFinal・maturityと全weight readerへ接続する。\n  有効な全量要求中の未検証workを不可逆選択へ使わず、重複要求でhard deadlineを延長しない。\n* モデル取得不能は当該新規workを閉じる。正常モデルと既存HEARTBEAT・BASE-0のclock、timeout、\n  transaction進行を停止しない。safe useful-work settlementが待つ状態とchain全体の停止を区別する。\n\nこの接続の安全性証明・独立node試験がない限り、availability gateだけ実装して新しい\nreward/weight modeを有効化しない。規則Eの未確定仕様を、本RFCの文言で実装済み扱いにしない。\n\n### 16.11 ECON・MEASの受入証拠と未決パラメータ\n\nECON・MEASは本追加のrelease evidence区分であり、新しいRust型・合意objectではない。\nprovider数や固定seed報酬を先に決めず、次の内容を同じroot/profile/rulesetで固定・レビューする。\n\n| Evidence | 必須の内容と判定 |\n| --- | --- |\n| ECON | 単一/f/全供給を止めるattack cost、共謀/Sybil/共通設備の仮定、provider担保と同時義務、回収可能額、提供費の事前確保・不足預託・復旧escrow、15%候補の資金/発行保存と未獲得分の処理、監査/PoR/TRDC/court費、監視/供給誘因、正直minerの損失上限。競合DDoSの増益や無予算上限攻撃の防止を担保増だけで主張しない |\n| MEAS | 実artifact全量/必要range、BEP52→bundle→PALW認証・復元・root照合、cold開始、実効帯域、PoR prover/verifier費、検査/localization/court/inclusion時間、RAM/storage/CPU、最大並行負荷、f障害、独立性と共通依存、DDoS隔離、restart/reorg時の値。hot/tiny/mockを実規模性能の代用にしない |\n| PARAMS | 供給枠/有効閾値/fと全range coverage、coding/PoR schemeと暗号仮定、独立性認定policy、監査pool/選択/正直性・共謀仮定/周期・freshness、epoch snapshotと停止/復旧適用境界、提供/保持/責任期限、TRDC map/proof、demand/quotaと回答/包含reserve、担保/fee/提供報酬/復旧escrow、規則E、codec/domain/fingerprint、旧claim drainとnetwork別activation |\n\n全供給断で常時可用性を保証できない限界を残し、(1)不正なreward/確定weightの防止と\n(2)他モデル・独立chain経路の活性を別々の合格条件にする。値・証明・実測・実装・独立reviewが\n未確定の項目はOPENであり、稼働中の保証や有効fenceとして表示しない。\n\nFPRのECON/MEAS/PARAMSには、最大全量公開bytes・DA冗長化/保持・range-to-root検証費、同時/更新期間の\n最大手続き数、費用reserve/補充/不足処理、fair admission、回答/包含枠、代替履行、重大Slashと\n原因不問defaultの別上限、DA証拠/期限/仮定・再取得・reorg、CHALLENGED weightの全writer/readerを追加する。\nDAネットワーク・codec・検証規則の採用は未決であり、外部サービスの名称だけでgateを満たさない。\n\n### 16.12 V1の検証候補と資格状態（未確定・未有効化）\n\n次の数値はユーザーが提示した初期候補であり、既存params、報酬率、監査quorumや保証値ではない。\nECON/MEAS、共謀/Sybil・監査正直性/包含の分析、独立devnetと外部review後にversioned policyを固定する。\n\n| 項目 | V1候補と必要条件 |\n| --- | --- |\n| 供給 | 7独立Bonded Seederが各々固定modelの完全コピーを保持。任意miner/Panel/peerを必要枠に数えない |\n| 初回READY | 7枠の契約・担保・root/PoR/公開提供・必要Full Fetch監査と全AND条件成立 |\n| 継続 | 有効7でREADY、有効5～6でDEGRADEDかつ資格継続。有効4以下または監査/lease/budget等の失効でSUSPENDED |\n| 障害余裕 | 初期7から2供給単位。まだ1完全コピーがあることだけでは継続閾値5を満たさない |\n| Seeder報酬 | モデル別報酬枠の15%を候補とし残り85%内で既存計算/Panel等の相対比率を維持する仮案。義務が同じ7枠の全履行時の均等例は15%/7。失敗分の自動再配分なし |\n| 費用 | 提供費事前確保、不足分預託、停止中の有限復旧escrowを要する。15%だけで保存・帯域費を賄えるとは仮定しない |\n| Full Fetch監査 | 初回・期限付き定期更新必須。公開poolから5独立監査者、3成功の案は未採択で、署名は転送証明ではない。正直性/共謀・選択的配布/到達性/期限仮定を審査 |\n| 巨大model拡張 | V1候補は7完全コピーを先行。7 shardのうち4で復元する符号化案は別gate。安全余裕として5有効を継続候補とし、coding正当性、Torrent互換、shard→登録root認証・decoder boundsを先に実証。有効5からさらにf=2停止すれば4未満になるため、5閾値だけで残存f=2耐性を保証しない。各snapshotの残存障害予算と`n_valid - f_remaining >= k`を満たす維持閾値を別に固定する |\n\n~~~text\nPENDING       : 供給契約・同一性binding・監査・全AND条件が未成立。新規PALW資格なし\nREADY         : policyの全条件成立\nDEGRADED      : 一部失効でも必要独立coverage・監査・閾値・期限を満たす。継続し代替供給を募集\nCHALLENGED    : 有効なFPRが進行中。開始だけで没収せず、対象の未検証workを確定させない\nSUSPENDED     : 合意上の必要条件失効。当該新規PALW reward/weight資格のみ停止\nRECOVERING    : 補充・公開challenge・期限付きfull再監査等を実施。未達のまま資格を復活させない\nREADY         : policyが固定した次の資格epochで再有効化\n~~~\n\n状態は同一accepted epoch snapshotのprovider契約/TRDC/認証/監査の有効性から導く。\n個別監査の失敗署名だけで停止せず、正規の更新/再検査期限に必要条件が成立しない場合に停止する。\n逆に全Seeder停止を待たず、policyの必要余裕が失効すれば停止する。初回・停止・復旧の適用epochと\nclaimがbindするsnapshotを固定し、既存claimは予約済み義務・担保・hard deadlineで有界清算する。\nHEARTBEAT・BASE-0・他モデル・独立取引経路を止めず、過去の合法なFinalや無関係なblockを無界に巻き戻さない。\n\n<a id=\"forced-public-retrieval\"></a>\n\n### 16.13 MISAKA Forced Public Retrieval（FPR、追加設計・未実装）\n\n**第三者が公開取得を妨害されても、小規模Challengeと共謀監査への応答だけでモデル報酬を維持させない。**\nordinary public bondが有界な全量公開義務を開始でき、その履行または期限内不履行を合意上裁定するFPRを\n新reward profileの必須機能とする。契約やSlashはbytesの物理的な公開を強制する保証ではない。\n全providerが公開よりBond喪失を選べば取得は失敗し得る。その場合も新reward/確定weightを止める。\n\n#### 16.13.1 三段階と全量要求への公開アクセス\n\n| 段階 | 要求と完了条件 |\n| --- | --- |\n| Stage 1 — Normal Torrent Retrieval | 固定infohash/manifest/rootのモデル全量を通常MISAKA Torrentで取得・認証する。正常取得には追加FPR不要 |\n| Stage 2 — Public Range Challenge | 公開manifestから必要rangeを指定し、実chunkと認証pathの期限内公開を要求する。正しい少量回答はそのrange義務だけを履行し、全量の合格ではない |\n| Stage 3 — Forced Full Disclosure | 適格な第三者が、全required file/rangeと全量復元rootに拘束した期限付き公開義務を発動する。受信者の協力・成功署名なしに別の第三者が実bytesを取得/復元できる公開証拠を要求する |\n\nadmissionは公開bond/fee・maturity、model/binding/policy/snapshot、対象範囲、予算/quotaと期限で決める。\n「全世界で取得できない」の事前証明、算術mismatch、model owner・Seeder・監査quorumの許可を要求しない。\n局所的な取得失敗は検査を始める契機であり、有罪/defaultの証拠ではない。Stage 2からのescalation条件と\n全量要求を受理する条件を事前に固定し、全providerの逐次timeoutを待たないとclaim期限に間に合わない経路を作らない。\n巨大な公開を無条件・無制限に受理する権利は与えず、適格な普通のbondの検査機会を予約する。\n\n#### 16.13.2 Session、全range coverageと代替履行\n\n仮称FPR sessionはnetwork/ruleset/policy、accepted snapshot、Model ID/root/正式binding/infohash、\nchallenge/session ID・stage、全required file/range map・総bytes、割当provider/lease・担保予約、\n公開先/DA policyと証拠root、開始/回答/公開/保持/裁定のabsolute deadline、費用reserveと最大並行枠を拘束する。\nproviderの正式回答はsession/challenge/range、実bytes commitmentと認証pathへ署名する。\n新しいRust型・wire tagをここで割り当てない。全nodeは認証された受理履歴/coverage mapから同じ結果を導く。\n\n7完全コピー候補でも、全量公開の作業はproviderごとにrangeを割り当てられる。別Seederによる期限内の\n認証代替公開を許し、全range coverageには一度だけ算入する。元providerの義務を代替で履行済みとする条件、\nなお残る個別default/費用・担保責任は契約時に固定する。代替提供は元の署名付き不正回答を免責しない。\n再割当・重複要求で元の公開期限やclaim hard deadlineを延ばさず、同じ義務/publicationの担保/bytesを二重精算しない。\n\nTRDCをFPRで使う場合、session/stage/割当・公開先とDA policy、期限、全量または不足rangeの認証coverageを\n指定履歴にbindする。1 providerのtimeoutと全量義務の不履行を分ける。別providerで全量義務と全AND条件を\n満たせるならモデルを停止しない。missing/pruned履歴、他forkのmap、requesterの未受信申告は不履行証明にならない。\n\n#### 16.13.3 Stage 3の公開実データとDA境界\n\n| 公開方法 | 成立させる保証と限界 |\n| --- | --- |\n| 期限付きTorrent再配布＋独立Full Fetch | 実測/独立した正直な取得者・到達性の仮定を明示する。全Seeder/監査者共謀に対する署名だけの解決策にはならない |\n| 認証された公開DAデータへの全量開示 | 全chunkの実データが独立参加者から再取得・復元可能になることを、承認済みDA policyの安全性・保持/到達性・包含仮定の下で検査する。hash/告知/多数決署名だけでは完了しない |\n\n全Seederと全監査者が共謀する脅威モデルで成功署名を排除する最終手段には、後者相当の実データ公開を要する。\n独立DAを採用しない構成は、正直なP2P取得者の存在を仮定する限定modeとして区別し、完全共謀への取得保証を主張しない。\nDAへの対応は追加設計であり、既存のcarrier/DA courtを無界の全モデル保存層と読み替えない。\n\n公開するchunkは固定manifestの全required範囲を覆い、BEP52→bundle→canonical rootの認証bridgeを持つ。\n符号化する場合は承認済みreconstruction map/decoder boundsも固定する。全量取得・復元後に登録rootを再計算する。\n完了には、全rangeの実データ公開/復元、認証publication/coverage、規定の再取得期間と保持/包含条件が必要である。\n特定受信者への送信receipt、正しい数piece、hashだけのDA、未承認のsampling/certificateを全量PASSにしない。\nDA証拠のcodec/認証state・bytesとのbinding・accepted history・fork/期限/保持・検閲仮定を独立reviewする。\nfull nodeの有界な証拠検証と取得workerの実downloadを分け、合意transition中にDA/Torrentへ接続しない。\nDAが計算真偽・fork choice・PALW finalityを決める新委員会になることも認めない。\n\n通常の資格は引き続きMISAKA Torrentによる独立全量取得を必要とする。DAは異常時の証拠開示・供給復旧経路であり、\n固定された正式Torrent bindingを置換しない。公開chunkをpeerが再利用・再配布し、Torrentでの取得能力を回復させる。\nDA公開成功だけでTorrent/独立Seeder/lease等の失効を無視してREADYへ戻さない。\n全量公開は少なくとも対象artifact相当の実bytesを扱い、冗長化・認証・保持・再配布のoverheadを別に予算化する。\n100TBのhash告知や小fixtureで実100TBの公開転送・復元・裁定費を証明したことにしない。\n\n#### 16.13.4 重大Slashと原因不問defaultの別責任\n\n| 証拠/事象 | 合意上の責任 |\n| --- | --- |\n| 正式回答の署名がproviderとsession/challenge/bytes/rootをbindし、登録認証に矛盾する | 客観的な重大違反として重大Slash・当該provider資格取消を裁定する。額・offence単位・回収可能額は承認済みpolicyで固定する |\n| 明確に定義した正式なroot/データ保証が署名scope内で客観的に矛盾する | 同じ重大違反規則で検証する。曖昧な宣伝/自己申告や単なる低速を重大違反にしない |\n| 適格なrange/全量義務の期限まで規範的公開証拠がない | 提供契約default、当該providerの提供資格失効・上限付き契約ペナルティ。DDoS/検閲/故意の区別を証明したとは扱わない |\n| 代替を含めても必要なモデル全量公開義務・保証が期限に成立しない | 当該モデルの新規資格をSUSPENDEDへ進め、未確定reward/weightと既存義務を有界に清算する |\n| 通常P2P誤piece/低速/未受信申告、またはChallenge開始だけ | 正式検査の契機。これだけで重大Slashや既存報酬/Bondの即没収をしない |\n\ncause-blind defaultの1事象/期間/並行契約の最大ペナルティを事前commitし、重大Slashの根拠・上限と分離する。\n同じ未開示をrange defaultとfull defaultで二重回収せず、役割別の担保予約・fee/未獲得報酬処理を保存則で検証する。\n計算fraudは固定modelを使うPALW/G14 courtの別証拠で裁定し、provider defaultを正直miner/Panelの算術不正にしない。\nBondを増やすだけでは証拠を発見・裁定できない共謀を解決しない。回収可能額だけで完全な抑止を主張しない。\n\n#### 16.13.5 CHALLENGED、有限の検査機会と公開費用\n\n~~~text\nREADY / DEGRADED + admissible FPR → CHALLENGED (bounded session)\n    ├─ authenticated full disclosure + all qualification conditions rechecked\n    │     → READY / DEGRADED at the prescribed qualification boundary\n    └─ adjudicated whole-model obligation / required-guarantee default\n          → SUSPENDED → bounded cleanup / RECOVERING\n~~~\n\nCHALLENGEDは受理したFPRに拘束した提案状態であり、requesterの失敗申告だけでは遷移しない。\n開始だけで既存報酬やBondを没収しない一方、対象binding/sessionに依存する新規・未確定workを\n公開/裁定条件成立前にFinal、確定safe weight、不可逆fork choice/settlement/pruningへ昇格させない。\n全量sessionは当該モデルの全required範囲を対象にする。既存の合法なFinalを後日の要求だけで巻き戻さない。\n新claimを保留するか、有界なpending枠で受理するかはpolicyで固定し、暫定weightのcap/用途/undoと\n全writer/readerを§16.10で実証する。escrowや状態名の変更だけではweight安全性は成立しない。\n\nChallenge Bond/fee、同model/binding/期間の要求統合、stage別の最大同時session・bytes/rounds、\n公平な検査枠と回答/包含reserve、再要求/cooldown・異議条件、absolute期限とfinite cleanupを固定する。\n資金力だけで検査枠を独占したり、既存の手続きを無限再起動してFinalを永久に阻止したりできないことを試験する。\n上限到達時のqueue/拒否/次の検査機会も公開規則で決め、未予約の巨大sessionを受理だけし続けない。\n\n登録時の固定size/policyから最大公開費用の算定根拠を明らかにする。資金のない登録もRegisteredとして保つが、\nREADY前に、モデル可用性予算から有界な最大全量公開・DA/保持/検証・並行枠の費用と責任期間を事前確保する。\n費用はrequesterへの無界請求にせず、fee・モデル側預託・復旧escrowの負担と補充/不足時の処理を固定する。\n数値上限と実規模MEASが未定ならFPR-capableとしてREADYにしない。モデル停止中も予約済みの有限義務を清算する。\n他モデル・HEARTBEAT・BASE-0・独立取引のclock/容量を維持する。100TB級でも同じ有界性が必要である。\n\nFull Fetch成功者は希望すれば新たなBonded Seeder契約へ参加でき、途中の認証piece共有も任意である。\n偽監査署名だけから自動認定せず、新provider自身の固定root/保存・公開提供・独立性/担保/leaseを検査する。\nFPR、公開DA、重大Slash/有界default、資金・CHALLENGED weightのcodec/証明/実装/独立試験はOPENである。\n具体的DA採用とversioned migration/activationなしに、完全共謀耐性や新fenceの稼働を宣言しない。\n\n"
+    },
+    {
+      "file": "docs/rfc/0014-panel-independent-fraud-prosecution.md",
+      "start": "* **Status:**",
+      "historical_withdrawn_text": "* **Status:** Revised Draft / implementation design, 2026-10-10。§16はPanel/miner共有を任意とし、独立Bonded Seeder、固定artifact同一性、公開提供・G14のAND、TRDC、期限付き監査とForced Public Retrieval（FPR）を要求する。本RFCの新しいavailability・reward・weight規則、wire・fenceは未実装・未有効化。既存ネットワークの規則は変わらない。"
+    },
+    {
+      "file": "docs/rfc/0014-panel-independent-fraud-prosecution.md",
+      "start": "* **2026-10-07追加方針:**",
+      "historical_withdrawn_text": "* **2026-10-07追加方針:** MISAKA Model Transportをmisakasへ取り込み、chainに拘束されたモデルをMISAKA Transport経由で取得できることを新しい報酬資格の合意条件とする。登録・配布宣言と報酬資格は区別する。統合、availability義務、pending rewardとcold verifierの受入は§16で定義する。コード取り込み・合意変更は本追記時点では未実装・未有効化。"
+    },
+    {
+      "file": "docs/rfc/0014-panel-independent-fraud-prosecution.md",
+      "start": "* **2026-10-10改定:**",
+      "historical_withdrawn_text": "* **2026-10-10改定:** [ADR173 D9–D10](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)を適用する。前回のPanel Seeder義務を撤回し、独立群だけで配布拒否・f障害に耐える構造を必須とする。7/5/15%、監査3-of-5、符号化4-of-7は未確定の初期候補である。[現行方針・全RFC/ADR確認範囲](evidence/0014-independent-bonded-seeders-audit-2026-10-10.md)。"
+    },
+    {
+      "file": "docs/rfc/0014-panel-independent-fraud-prosecution.md",
+      "start": "* **2026-10-10 FPR追加:**",
+      "historical_withdrawn_text": "* **2026-10-10 FPR追加:** [ADR173 D11](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)と§16.13で、第三者の有界な全量公開要求、重大Slashと契約defaultの区別、公開実データ/DAとCHALLENGED weightを定義する。[追加改定・検証範囲](evidence/0014-forced-public-retrieval-alignment-2026-10-10.md)。"
+    },
+    {
+      "file": "docs/adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md",
+      "start": "### D9 —",
+      "historical_withdrawn_text": "### D9 — MISAKA不可侵原則: 登録同一性・独立Seeder可用性・計算検証（2026-10-10改定）\n\nMISAKAにおいて、モデルの新規登録は自由とする。ただし、登録されたモデルの内容と合意上の識別情報は永久に不変である。\n\n**MISAKA Torrentを、報酬対象モデルの正式かつ必須の公開取得プロトコルとする。**\n\nすべての報酬対象モデルは、MISAKA Torrentを用いてモデル全体および必要な検証材料を公開取得・認証でき、独立したpublic bonded verifierが定められた時間・資源上限内に検査および客観的裁定を完遂できなければならない。\n\n**PanelおよびminerにSeeder義務を課さない。モデルごとに、当該モデルのPanel・minerに依存しない独立Bonded Seeder群を必須とする。** Panel・miner・一般peerのpiece共有は任意参加であり、参加・報酬資格の条件にしない。全Panel・minerと任意peerが配布を拒否しても、独立群だけで規定の障害数まで全モデルを取得・復元できなければならない。検証用materialのcommitment・開示・保持責任と、モデルを常時seedする責任は区別する。\n\n報酬対象モデルは登録時に固定されたModel ID、Canonical Artifact Root、Torrent v2 Infohash、canonical file manifest、全weights・tokenizer/config・実行仕様、総artifact sizeとの暗号学的同一性を保証する。Infohashとartifact rootは異なるdomainであり、その対応を固定する。配布piece/shardの認証後、全量取得・復元したcanonical artifact rootを再計算し登録rootと照合する。誤データは拒否して別peerから再取得でき、局所的な誤piece受信だけでモデル全体を失格にしない。\n\n**同一性保証、公開可用性保証、計算検証保証をANDで要求する。** 正しいデータの保持、実際の公開提供、minerの計算の正しさは独立した検査である。claimは固定Model ID/root/実行仕様をbindし、外部G14 verifierが同じrootから検査・裁定する。モデルのroot一致、PoRやダウンロード成功だけで、minerが正規モデルを実行したと証明したことにはならない。\n\n可用性保証は、モデル全体の実取得試験、認証されたTorrentデータ、適切なProof of Retrievability、担保付き提供義務、公開開示要求、決定論的な不履行裁定を組み合わせて構成する。\n独立した第三者がD11の有界FPRで全量公開義務まで発動できなければならない。小規模Challengeと共謀監査への回答だけを全量公開保証にしない。\n\nSeeder数、署名、Torrent接続状況、単独の取得完了報告、少数のpiece検査だけで、モデル全体の公開取得可能性が証明されたと扱ってはならない。\n\n**Artifact同一性または必要な取得・検証能力の保証が成立しないモデルについて、新規PALW報酬資格・当該モデルに基づくreward-bearingブロック生成資格および確定consensus work weightを認めてはならない。**\n\n単独Seeder、単独Panel、単独tracker、単独ネットワーク経路への攻撃によって、正常な公開取得能力と報酬資格を容易に失う設計を禁止する。\n\n必要な可用性保証が失効した場合には、全Seeder停止を待たず該当モデルの新規採掘資格を安全側に停止し、既存claimを有界に清算する。他の正常なモデルによる採掘およびチェーンの独立した進行機構を停止してはならない。\n\nProviderの公開提供義務違反、producerの計算不正、Panelの虚偽保証は、それぞれ独立した客観的証拠と責任範囲に基づいて裁定する。\n\n**MISAKAの採掘資格は、モデルを持っているという宣言ではなく、独立した第三者がモデルを公開取得して計算の正当性を検証・裁定できる能力に基づいて成立する。**\n\n### D10 — 客観的提供不履行、モデル単位の停止とfork-choice安全性（2026-10-10改定）\n\n登録と期限付きの`ActiveRewardable`を分離する。D9は将来のversioned reward gateであり、登録済みモデルの書換え・削除や既存ネットワークの遡及的失効を意味しない。[ADR-0175](0175-registered-models-are-permanently-immutable.md)に従い、改善版は別の独立モデルとして登録し、親の登録ID・line/head・Position・AMMを付け替えない。Seederの所在・加入脱退とavailability leaseは別の運用状態で管理する。HTTP mirror由来のbytesをTorrentへ取り込めるが、外部検証者がHTTPへ依存せずMISAKA Torrentだけで全量取得できることを必須とする。\n\n個別Seederの停止がDDoSなのか故意なのかを完璧に識別することを安全性の前提にしない。独立性・全データ保持・復元coverage・実効帯域・耐障害数`f`・保持/応答/裁定期限を定量化する。独立Bonded Seeder群だけで外部訴追を支え、Panel=0でも同等要件を維持する。人数やIP数だけでは独立性を証明できず、共通owner・storage・地域/network/upstreamの集中と認定限界を明示する。\n\nローカル接続失敗や署名付き失敗申告だけで停止・slashしない。公開challenge、モデル/root・provider・rangeに拘束した認証回答、absolute deadline、提供契約・監査状態から全ノードが同一snapshotの資格を導く。仮称TRDCは、合意上の期限内に有効な公開回答がないという契約不履行を示す。世界中で取得不能、Seederの故意、minerの計算不正を示す証明ではない。回答の検閲・包含遅延でもdefaultになり得るため、有界な予約容量・期限・包含仮定とreorg後の再検証を要する。署名付き不正回答など再検証可能な証拠なしに誤piece申告だけでslashしない。\n\n冗長性と全量取得監査が有効なら、単一Seeder停止・低速化・提供拒否だけでモデルを停止しない。必要条件や監査証拠が規範的期限に失効したときだけ当該モデルの新規資格を閉じる。停止・復旧の適用epoch、既存claimの予約義務と清算期限を固定し、無関係な過去ブロックを無界に巻き戻さない。SeederへのDDoSだけで正直なminerやPanelを計算不正として処罰しない。\n\n初期候補は7独立完全コピー、継続最低5有効、モデル別報酬枠の15%を別のSeeder報酬とする。5監査者中3成功や4-of-7符号化も検証候補であり、合意定数・採択済み暗号方式ではない。停止Seederの報酬を残存Seederへ自動再配分しない。提供費の事前確保・不足分預託・モデル停止中の復旧escrowを審査する。Full Fetch成功署名はtrustlessな全量転送証明ではなく、監査者の共謀耐性・正直性・到達性・包含の仮定が未解決なら新gateを有効化しない。\n\n未検証・取得不能・異議未解決のworkを確定weightとして扱わず、証拠検証前に不可逆なfork-choice/settlementへ使わせない。escrowだけではこの安全性は成立しない。[RFC14 §16.10](../rfc/0014-panel-independent-fraud-prosecution.md#1610-規則eとfork-choiceへの接続)とRFC08/12で、規則Eへの接続、provisional weightの有界な扱い、partition/reorg/restart時の再生を別に実証する。PoRの復元可能性と実配布能力も別に証明する。安全性と、他モデル・HEARTBEAT・BASE-0の活性が独立に成立するまで新reward fenceを有効化しない。\n\n### D11 — Forced Public Retrievalと重大Slash・提供契約defaultの分離（2026-10-10追加）\n\n**MISAKA Torrentの新reward profileは、通常Torrent取得、公開Range Challenge、Forced Full Disclosureの\n三段階で、第三者が期限付きの全量公開義務を発動できるFPRを必須とする。** 事前の算術不正証明や\nowner/Seeder/監査quorumの許可を条件にしない。公開bond/fee・予算/quota・公平な検査枠と有限期限を規範的に定義する。\n局所的な取得失敗は検査の契機であり、非開示の客観的証明ではない。\n\n全量公開には全required rangeの実bytesと固定rootへの認証・全量復元/再計算・保持を要する。\n送信receipt、成功署名、hashだけの公開、正しい少量応答では足りない。全Seederと全監査者共謀への\n最終的な再取得保証には、独立した公開DA等で実データを取得・復元できる仕組みとその安全性仮定を要する。\nDAを採用しないTorrent再配布/監査modeは正直な外部取得者の仮定を残し、完全共謀耐性を宣言しない。\nDA方式・証拠codec・認証state/coverage・包含/保持/検閲・reorg規則は未承認で、新委員会へ計算真偽やfork choiceを委任しない。\n通常資格のTorrent取得要件と正式infohash/root bindingは維持し、DA成功だけで新規資格を復活させない。\n\n署名がprovider・正式session/challenge・実bytes/root/pathをbindする不正回答、明確なscopeの矛盾保証には\n客観的な重大Slash/当該provider資格取消を適用する設計とする。期限超過の非開示は別の提供契約defaultであり、\nDDoS/故意の識別や算術不正の証明にせず、事前に上限を固定した契約ペナルティ・提供資格失効で扱う。\n代替Seederの期限内公開を認め、全量義務と全保証が残れば単独停止でモデルを失格にしない。\n割当/代替/個別責任/担保予約を事前定義し、同じ未開示をrange/full/複数roleで二重回収しない。\n\nFPR受理中のCHALLENGEDだけでBondや既存報酬を没収しないが、対象の新規・未確定workは公開/裁定前に\n確定weight・不可逆fork choice/settlementへ昇格させない。適格な再要求・並行数・期限/清算と全reader/undoを有界にする。\n必要な全量公開義務が失効した場合は当該モデルをSUSPENDEDへ進め、他モデル/HEARTBEAT/BASE-0を維持する。\n最大公開bytes・帯域・DA/保持/検証費と並行枠をREADY前に可用性予算へ予約し、不足なら登録のまま資格を開かない。\nFull Fetch成功者の共有・新Seeder参加は任意で、新契約には独立した保存/公開提供/担保・独立性検査を要する。\n全providerがBond喪失を選び公開拒否すれば、Slashでbytesを復元できるとは保証せず、新reward/確定weightを止める。\n[RFC14 §16.13](../rfc/0014-panel-independent-fraud-prosecution.md#forced-public-retrieval)の証拠・経済・実装・独立試験・DA採用とactivation gateを省略しない。\n\n"
+    },
+    {
+      "file": "docs/adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md",
+      "start": "* **Purpose:**",
+      "historical_withdrawn_text": "* **Purpose:** Panel外の普通のpublic bondが、producerの秘密状態を使わず、public authenticated materialだけから不正をlocalizeして客観的convictionまで進めることを、完全に成立させる。"
+    },
+    {
+      "file": "docs/adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md",
+      "start": "* **Amendment, 2026-10-10:**",
+      "historical_withdrawn_text": "* **Amendment, 2026-10-10:** D9–D10 require independent Bonded Seeder groups per model; Panel/miner seeding is voluntary. Immutable artifact identity, public retrieval and computation verification are separate AND requirements. This supersedes the 2026-10-09 Panel-seeding mandate, retained in the [historical record](../rfc/evidence/0014-torrent-availability-alignment-2026-10-09.md). [Current alignment/audit](../rfc/evidence/0014-independent-bonded-seeders-audit-2026-10-10.md). TRDC, PoR, reward gates and Rule E integration remain unimplemented/unactivated."
+    },
+    {
+      "file": "docs/adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md",
+      "start": "* **Further amendment, 2026-10-10:**",
+      "historical_withdrawn_text": "* **Further amendment, 2026-10-10:** D11 requires bounded Forced Public Retrieval (FPR), actual full disclosure and separate major signed-data Slash / capped service-default liability. Public DA adoption, codecs, financing and CHALLENGED-weight integration are open gates. [FPR alignment/validation](../rfc/evidence/0014-forced-public-retrieval-alignment-2026-10-10.md)."
+    },
+    {
+      "file": "docs/adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md",
+      "start": "| public authenticated material（ADR177のscope） |",
+      "historical_withdrawn_text": "| public authenticated material（ADR177のscope） | claim・class・job・versionのcommitmentに検証可能に拘束された、必要な入力、artifact/weights、state/checkpoint、trace/constraint、opening、outputおよび応答。公開取得可能なoff-chain配布でもよい。ハッシュだけ、第三者の「見た」という署名だけでは不足する。 |"
+    },
+    {
+      "file": "docs/design/palw/rfc-0008-implementation-spec.md",
+      "start": "**2026-10-10 additional acceptance boundary:**",
+      "historical_withdrawn_text": "**2026-10-10 additional acceptance boundary:** [RFC08 §6.1](../../rfc/0008-palw-claim-backed-consensus-blocks.md)\nand [RFC14 §16](../../rfc/0014-panel-independent-fraud-prosecution.md) require mandatory Torrent acquisition,\nindependent Bonded Seeder groups with voluntary Panel/miner sharing, fixed artifact/manifest/infohash identity,\nreviewed PoR/expiring Full Fetch/public challenge/TRDC, actual claim computation checks and consensus-derived\n`ModelRewardEligible` and a separate Rule E/fork-choice safety gate for new REAL/root reward profiles.\nRoot/slices retain claim-bound service obligations; unavailable/disputed work cannot become definitive safe\nweight or settlement. EXEC keeps weight/DAA zero. Model-local eligibility loss cannot stop other models,\nHEARTBEAT or BASE-0; local fetch failure is not arithmetic fraud. Require the independent-devnet fault matrix\nand ECON/MEAS before activation. These requirements do not implement or activate a new REAL/weight policy.\n\nThe [FPR boundary in RFC14 §16.13](../../rfc/0014-panel-independent-fraud-prosecution.md#forced-public-retrieval)\nalso requires bounded full actual-data disclosure/default, alternative providers and funded fair capacity.\nSeparate major signed-answer Slash from capped service default. Accepted CHALLENGED root/slice work\ncannot mature into Final/definitive weight or irreversible settlement before disclosure/adjudication;\nduplicate demands cannot reset hard deadlines. Review every writer/reader/undo with Rule E. Keep EXEC\nweight/DAA zero and independent chain progress. External full-data DA adoption/codec/security assumptions\nremain separate open gates; existing DA court and escrow do not implement FPR.\n\n"
+    },
+    {
+      "file": "docs/rfc/README.md",
+      "start": "## Immutable identity, independent Torrent availability",
+      "historical_withdrawn_text": "## Immutable identity, independent Torrent availability and computation — 2026-10-10\n\n[ADR173 D9–D10](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md) and\n[RFC14 §16](0014-panel-independent-fraud-prosecution.md) require three separate AND guarantees:\nimmutable registered artifact identity, independent public full retrieval/reconstruction, and PALW/G14\ncalculation verification. Model-specific independent Bonded Seeder groups alone must serve the whole model\ndespite all miners/Panel/voluntary peers refusing distribution and the specified f failures.\nPanel/miner sharing is voluntary; their claim/witness disclosure and retention duties remain.\nSeeder counts, PoR, audit signatures and root equality do not substitute for these separate guarantees.\n\nThe six-term `ModelRewardEligible` uses accepted consensus snapshots and expiry rules. TRDC proves a\nspecified public contract/challenge default in that history, with explicit inclusion/censorship assumptions;\nit proves neither worldwide unavailability nor malicious intent nor calculation fraud. A single provider\nfailure does not suspend a model while every required guarantee holds. Loss of a required guarantee closes\nthat model's new eligibility; existing claims settle within bounded rules and other models/heartbeat/BASE-0\ncontinue. RFC06/08/10/11/12/15 carry this boundary; RFC09/13 and ADR175 align remote tooling and immutable binding.\n\nSeven independent full copies, a five-copy maintenance threshold, f=2, 3-of-5 audit reports, a 15% service\nallocation and later 4-of-7 coding are **unreviewed initial candidates**, not live parameters. Service funding\nand recovery escrow must cover declared costs; failed providers' unearned rewards are not automatically\nredistributed to survivors. RFC14 §16.8/16.10–16.13 keep attack, Rule E, ECON/MEAS and activation gates open.\n\n[ADR173 D11](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md) and\n[RFC14 §16.13 FPR](0014-panel-independent-fraud-prosecution.md#forced-public-retrieval) additionally\nrequire permissionless bounded escalation from Torrent retrieval through range demands to full actual-data\ndisclosure. Small successful responses, private-send receipts, audit votes and hash-only DA cannot fulfil\nthe full obligation. Allow alternative providers; separate authenticated false-answer major Slash from\nprecommitted capped service-default liability. Pre-fund maximum disclosure/retention/checking costs and\nreserve fair request/response capacity. CHALLENGED alone confiscates nothing, but unresolved work cannot\ngain definitive weight/irreversible settlement; duplicate requests cannot perpetually reset deadlines.\n\nIndependent public DA is a proposed final disclosure/recovery channel with separately reviewed security,\ndata/coverage, inclusion, retention and reorg assumptions. Its adoption is undecided, and it cannot replace\nordinary Torrent eligibility or add PALW/BFT authority. If all providers accept losing their bonds and\nrefuse publication, retrieval may still fail; new model rewards/definitive weight must stop. FPR supplements\nthe same six-term predicate and is propagated to the related RFCs and liability/readiness ADR boundaries.\n\nThese are design requirements, not implemented PoR/TRDC, a trustless transfer proof, passed devnet evidence,\nreward-fence activation or Rule E integration. [Independent-Seeder revision/audit scope](evidence/0014-independent-bonded-seeders-audit-2026-10-10.md)\nand [latest FPR revision/validation](evidence/0014-forced-public-retrieval-alignment-2026-10-10.md).\nThe [2026-10-09 record](evidence/0014-torrent-availability-alignment-2026-10-09.md) is historical; its Panel-seeding mandate is superseded.\n\n"
+    },
+    {
+      "file": "docs/adr/README.md",
+      "start": "## 同一性・独立Torrent可用性",
+      "historical_withdrawn_text": "## 同一性・独立Torrent可用性・計算検証の改定 — 2026-10-10\n\n[public-verifier ADR173 D9–D10](0173-public-verifier-dispute-completeness-is-misaka-purpose.md)は、登録同一性、\n独立した公開全量取得・復元、PALW/G14計算検証の3保証をANDで要求する。Panel・minerの共有は任意とし、\n常時Seeder義務を参加条件にしない。モデルごとの独立Bonded Seeder群だけで全Panel/minerの配布拒否と規定f障害に耐える。\nModel ID、Canonical Artifact Root、正式Torrent infohashとの固定対応、正規manifest、全weightsと実行仕様を固定し、\npiece/shard認証後に全量rootを再計算する。root一致は実際のminer計算の正当性を証明しない。\n\nTRDCは指定の合意履歴・期限における公開提供契約defaultを再検証する設計であり、故意・DDoS原因・世界中の取得不能は証明しない。\n単独Seeder停止でモデルを失格にせず、必要な保証の失効時に当該モデルの新規資格を停止し、既存claimは有界清算する。\n他モデルとHEARTBEAT・BASE-0は進み、提供契約defaultと計算不正の責任を分ける。\n7完全コピー/維持5/f=2、監査3-of-5、15%独立提供報酬、将来4-of-7符号化は初期候補であり、未承認・未測定・未有効化である。\n不足分の明示的資金と復旧用escrowを要求し、未獲得提供報酬を残存者へ自動再配分しない。\n\n[RFC14 §16](../rfc/0014-panel-independent-fraud-prosecution.md)とRFC06/08/10/11/12/15、remote/toolingのRFC09/13、ADR175へ反映した。\n別系統の[seat-root ADR173](0173-a-seat-holds-a-root-not-a-class-and-possession-gates-activation.md)は履歴を保持し、\npossessionだけで新資格を満たさない旨を追記した。PoR/TRDC、独立供給、監査の共謀耐性、reward gate、規則E接続、ECON/MEAS、\n攻撃試験・外部reviewは未完了であり新fenceは有効化しない。[現行変更・全RFC/ADR確認範囲](../rfc/evidence/0014-independent-bonded-seeders-audit-2026-10-10.md)。\n[2026-10-09の記録](../rfc/evidence/0014-torrent-availability-alignment-2026-10-09.md)に残るPanel Seeder義務は過去の設計であり、本改定で撤回した。\n\n**同日FPR追加:** [ADR173 D11](0173-public-verifier-dispute-completeness-is-misaka-purpose.md)と\n[RFC14 §16.13](../rfc/0014-panel-independent-fraud-prosecution.md#forced-public-retrieval)は、公開bondが\nrange→全量公開を有界に要求できる仕組みを新reward profileの必須条件とする。全required実データ/coverage・\n復元root・保持を検証し、少量応答/監査票/hashだけで閉じない。代替Seederの公開を認め、署名付き不正回答の\n重大Slashと期限超過の上限付き契約defaultを分ける。CHALLENGED開始だけで没収せず、未解決workの\n確定weight/不可逆settlementを防ぎ、費用/公平な枠・期限と清算を予約する。\n公開DAは別承認の異常時証拠/供給復旧案であり、通常Torrent資格の代用や新BFT権限にしない。\n全providerが公開を拒否すればSlashでbytesを復元できるとは保証せず、新reward/確定weightを止める。\nRFC06/08/09/10/11/12/13/15、ADR62/67/166/seat-root173/175の境界と索引へ反映した。\nFPR/DA/新責任/weightは未実装・未有効化。[最新の追加改定・確認範囲](../rfc/evidence/0014-forced-public-retrieval-alignment-2026-10-10.md)。\n\n"
+    },
+    {
+      "file": "docs/rfc/0006-palw-layer-sharded-panels.md",
+      "start": "### 3.1 Independent Bonded Seeders",
+      "historical_withdrawn_text": "### 3.1 Independent Bonded Seeders and voluntary sharing — 2026-10-10\n\n[ADR173 D9–D10](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md) and\n[RFC14 §16](0014-panel-independent-fraud-prosecution.md) govern every new reward profile.\nPanel/miner seeding is voluntary, including for full-model and sharded Panels. A seat must obtain and\nauthenticate the model/shard and evidence needed for its assigned check; this is not an obligation\nto offer permanent public Torrent service. Existing scope-bound commitment/disclosure/retention\nand false-receipt duties remain, with provider service liability kept separate.\n\nEach model requires an independent Bonded Seeder group outside its miner/Panel dependencies. That\ngroup alone must provide the full model and required material within the declared resources and\nfault tolerance even if all miner/Panel/optional peers refuse to share. A sharded verification plan\nmust not leave an essential weight range obtainable only from its assigned seat. Voluntary piece\nexchange may improve supply but cannot replace independent contracted coverage or earn a default\nSeeder reward. A participant accepting a separate provider contract has separate duties, locks and\nliability; its shared owner/storage/upstream cannot be counted as independent automatically.\n\nKeep three checks distinct: immutable Model ID/artifact-root/manifest/infohash identity; public full\nretrieval under valid provider/PoR/Full Fetch/lease policy; and the claim's computation verification\nunder its fixed model/execution specification. Authenticate pieces/shards and recompute the full\ncanonical root after acquisition/reconstruction. A bad piece is discarded and retried elsewhere;\nprovider slash needs signed challenge-bound evidence or a valid contractual default, not a local\nfailure report. Correct model data alone does not prove the miner computed correctly.\n\nDeclare `f`, independent full-range coverage, bandwidth and deadlines. Approved coding additionally\nneeds authenticated reconstruction back to the original root; `n - f >= k` alone proves neither\nindependence nor serving capacity. One failed provider with sufficient remaining coverage does not\nhalt mining. Expired required guarantees close only that model's new qualification, with bounded\nin-flight cleanup and continued other-model/HEARTBEAT/BASE-0 progress.\n\nUse RFC14 §16.5's TRDC public challenge/response map, fixed deadlines and inclusion assumptions;\nit proves a contractual default, not global unavailability or deliberate hiding. §10 additionally\nrequires RFC14 §16.8/16.10/16.11/16.12's identity, collusion, fault, audit-fraud, payment, weight and\nrecovery gates. The 7-provider/5-valid/15% and 3-of-5 audit values are research candidates, not active\nparameters. D-S6/prototype speedups do not establish full cold retrieval or these new guarantees.\n\n[RFC14 §16.13 FPR](0014-panel-independent-fraud-prosecution.md#forced-public-retrieval) additionally\nrequires outsider-initiated range-to-full disclosure, authenticated actual bytes/coverage and bounded\nfunding/deadlines. Allow another Seeder to fulfil an assigned range; do not suspend the model for one\nseat/provider outage while all guarantees hold. Signed false provider answers justify the separate\nmajor-Slash rule; timeout default has a precommitted capped service penalty, not producer computation\nfraud. CHALLENGED work cannot gain definitive weight before disclosure/adjudication. Full DA and its\nassumptions require separate approval; sharded seat receipts cannot certify that new protocol.\n\n"
+    },
+    {
+      "file": "docs/rfc/0008-palw-claim-backed-consensus-blocks.md",
+      "start": "### 6.1 Torrentの独立供給",
+      "historical_withdrawn_text": "### 6.1 Torrentの独立供給・同一性・計算検証と規則E — 2026-10-10\n\n[RFC14 §16](0014-panel-independent-fraud-prosecution.md)と[ADR173 D9–D10](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)を新reward profileへ適用する。\nREAL/root受理はimmutable modelと合意epoch snapshotの`ModelRewardEligible`を必要とする。\nTorrentだけの全量取得、固定artifact/manifest/infohash binding、独立Bonded Seeder群、PoR/Full Fetch/公開serve/TRDC、\n必要coverage・f障害・時間資源・G14が不足したモデルに新規報酬対象claim/work creditを与えない。\nrootとsliceは同じclaim-bound availability/retention義務に従い、class最新状態で証拠を差し替えない。\nPanel/minerのモデル共有は任意で、独立群だけで全員の配布拒否とf障害に耐える。既存claim/witnessの\ncommitment・開示責任は維持する。piece/shard認証と全量復元root一致、期限付き監査/lease、\n固定rootのPALW/G14計算検証を別々に要求し、正しいモデル配布をminer計算の正しさに流用しない。\nTRDCは期限内公開回答の不在を指定履歴から再検証する契約defaultで、全世界の取得不能証明ではない。\n7/5/15%・監査3-of-5等は§16.12の未確定候補であり、競合defaultによるSeeder報酬の自動再配分をしない。\n\nEXEC_TX/EXEC_SLICEは常に追加fork-choice weight/DAAが0である。REAL rootでも、未検証・取得不能・\n異議未解決のworkを確定weightやsettlementへ使わせない。規則Eのexact versioned仕様と\nsafe/provisional workのwriter/reader/undoはRFC14 §16.10の別gateであり、escrowだけでは成立しない。\n既存REAL/heartbeat/BASE-0のlive規則を文書だけで変更・有効化しない。\n\nREADY後の供給喪失はobjective demand/default、coverageと固定期限で扱う。1 Seederの停止や\nlocal失敗報告だけで正常なモデルを止めない。必要条件を失えば当該新規資格を閉じ、影響する\n既存root/sliceのwork・escrow・担保を有界清算する。provider DDoSを正直minerの計算不正にしない。\n他モデルと独立chain経路は継続する。既存Final creditのEXEC_TXはそのpermit規則で検査し、\n現在のmodel供給状態だけで正当に確定した取引資格を遡及失効させない。\n\n§7の受入はRFC14 §16.8/16.10/16.11も要求する。全provider停止、全Panel共謀、private maturity、\npartition/reorg/restartで未検証workが不可逆な選択を作らず、他モデル・chainが進むことを実証する。\n\n[RFC14 §16.13 FPR](0014-panel-independent-fraud-prosecution.md#forced-public-retrieval)を追加受入条件とする。\n第三者の有界な全量公開要求、実データ/coverageと代替履行、費用/公平な検査枠を予約する。\n署名付き不正回答の重大Slashと期限超過の上限付き提供defaultを分ける。CHALLENGEDの対象root/sliceに\n依存する未確定workは公開/裁定前にFinal・確定weight/不可逆settlementへ昇格させない。\n開始だけで既存報酬/Bondを没収せず、重複要求でclaim hard deadlineを延長しない。\nDA公開は異常時の証拠/復旧であり、通常Torrent資格の代用にしない。EXEC追加weight/DAAは0を維持する。\n\n"
+    },
+    {
+      "file": "docs/rfc/0009-palw-remote-miner.md",
+      "start": "### 3.5 Artifactと公開情報",
+      "historical_withdrawn_text": "### 3.5 Artifactと公開情報はMISAKA Torrent / 独立Bonded Seeder（2026-10-10改定）\n\nモデル本体、README、HF provenance、distribution metadataは署名付きcontent-addressed objectとしてMISAKA Torrentで配布する。投稿者PC/一般peerは任意共有でき、報酬対象モデルは[RFC14 §16](0014-panel-independent-fraud-prosecution.md)の独立Bonded Seeder群に保持・提供契約を確保する。Panel・minerに常時Seeder義務はない。チェーンには必要なcommitment/登録objectを載せ、巨大なweightsをcarrierへ埋め込まない。**唯一の正本やdurable copyをサイトVPSのDB/ファイルへ置かない。** VPSは非永続relayとし、認証済みコピーと再構築は独立群/peer側で保持する。鍵は配信objectに含めない。\n\n取得者は signature、chain owner、class/root、content hash、Torrent commitment を検証する。署名付き README の公開と chain の class 登録は別操作で、公開成功を登録受理と表示しない。サイトにも登録者の署名検証経路から表示し、管理者の catalogue 編集を必須にしない。後続の Panel/court が必要な material の取得と責任は §4 の規則に従う。\n\nnode-less登録とモデルの報酬資格を分離する。投稿者自身がSeederになることは要求しないが、必要な独立提供群・帯域・期限付き監査/lease等が未成立なら、新規PALW報酬/当該モデルのブロック生成資格は開かない。独立群だけで全miner/Panel/任意peerの配布拒否とf障害に耐えることを要求する。magnet、receipt、peer数だけを保証にしない。\n\n固定Model ID/root、canonical manifest/infohash、全weights・tokenizer/config/spec/sizeを照合し、piece/shard認証後に全量rootを再計算する。正しいダウンロードと、claimが正規モデルの計算であることのPALW/G14検証は別条件である。公開challenge/TRDCと期限付き監査から同一epoch snapshotの資格を表示し、local失敗・誤pieceだけでslash/停止しない。TRDCは指定契約の不履行であり故意や全世界の取得不能証明ではない。7/5/15%等は未確定候補で、提供契約費・不足預託・復旧escrowを登録GASと区別し、ユーザーに常時seedや未承認の追加支払を暗黙に課さない。\n\n[RFC14 §16.13 FPR](0014-panel-independent-fraud-prosecution.md#forced-public-retrieval)を将来clientの取得検査へ追加する。\n公開bond/feeでrange→fullの有界な要求を提出し、session/snapshot/全range coverage、実データ公開・保持、\nabsolute期限/費用reserve、CHALLENGED/解決/defaultを表示する。署名成功やhash告知を全量取得成功にしない。\n重大な署名付き不正回答と上限付き契約defaultを区別し、受信失敗だけでSlashを申告しない。\n登録/READY、DA復旧/Torrent復帰を分け、新契約・DA支払・Bond操作を本人の署名/見積りなしに自動実行しない。\nこの追記はRPC/codecやclient実装済みという意味ではない。\n\n"
+    },
+    {
+      "file": "docs/rfc/0010-permissionless-palw-panel-and-claim-completion.md",
+      "start": "### 0.2 Independent availability",
+      "historical_withdrawn_text": "### 0.2 Independent availability and voluntary Panel/miner sharing — 2026-10-10\n\n[RFC14 §16](0014-panel-independent-fraud-prosecution.md) and [ADR173 D9–D10](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)\nrequire independent Bonded Seeder groups per model. Panel/miner permanent seeding is not a participation\nor reward prerequisite. Full/sharded seats obtain authenticated material for their checks; signed\nscope-bound disclosure/retention and computation responsibilities remain. Optional sharing may stop\nwithout a Seeder penalty unless that participant separately accepted a provider contract.\n\nThe independent group alone must support full retrieval/reconstruction, tolerated failures, actual\nbandwidth and G14 deadlines even if all miners/Panels/optional peers refuse service. Distinct bond keys,\nseat snapshots and successful binding do not prove supply independence. Require fixed artifact identity\nand manifest/infohash binding, PoR, valid contracted public serving, independent cold Full Fetch and\nfunded lease/retention. These are separate from verifying that the claim used the registered model and\nexecution specification. Neither download PASS nor a Panel vote makes a false computation valid.\n\nDerive RFC14's six-part `ModelRewardEligible` from the specified accepted epoch snapshot. Public\nchallenge/response/deadline/TRDC and expiring audit evidence change provider/qualification state;\nlocal fetch failures and one provider default cannot alone stop or slash the model. Required policy\nloss closes only new model-backed claims/work and uses fixed epochs/deadlines for existing obligations.\nTRDC is a contract default under inclusion assumptions, not proof of intentional hiding or arithmetic\nfraud. Keep independent chain progress, finite redraw and lawfully settled old work.\n\n§9 also requires RFC14 §16.8/16.10/16.11/16.12's identity, independent full retrieval, collusion, audit\nfraud, response censorship/reorg, resource/weight, provider-financing and recovery gates. The numeric\n7/5/15% and audit/coding configurations remain candidates. The dormant Panel engine does not\nimplement the new availability policy; selecting enough seat keys cannot satisfy it.\n\nApply [RFC14 §16.13 FPR](0014-panel-independent-fraud-prosecution.md#forced-public-retrieval): ordinary\npublic bonds can escalate to bounded full disclosure without owner/Panel/auditor permission or prior\narithmetic proof. Small successful range responses and auditor votes cannot close that obligation.\nActual public data/coverage, alternative providers, reserved costs/fair capacity and absolute deadlines\nare required. Keep signed-data major Slash separate from capped service-default liability; adjudicate\nCHALLENGED work before definitive weight/Final. The Panel seed engine and current DA objects do not\nimplement FPR or approve an external full-data DA protocol.\n\n"
+    },
+    {
+      "file": "docs/rfc/0012-palw-only-consensus-and-native-evm-settlement.md",
+      "start": "### 2.1 Independent Torrent supply",
+      "historical_withdrawn_text": "### 2.1 Independent Torrent supply, artifact identity and Rule E — 2026-10-10\n\n[RFC14 §16](0014-panel-independent-fraud-prosecution.md) and [ADR173 D9–D10](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)\nadd `ModelRewardEligible(model, epoch)` to new reward-bearing REAL/root admission. The immutable model\nand required material must be obtainable using MISAKA Torrent alone, with independent Bonded Seeders,\nwhole-model coverage, tolerated failures, reviewed PoR, expiring independent Full Fetch,\npublic serve/default, funded leases and independent verification/court budgets. Derive this gate from\nthe specified consensus snapshot; never query the swarm as part of block/candidate validity.\nPanel/miner sharing is voluntary. The independent group alone must meet the full retrieval budget\nwhen all miners/Panels/optional peers refuse service. Piece/shard authentication and reconstructed\ncanonical-root equality to the immutable model/manifest/infohash binding are separate from availability\nand from the claim's PALW/G14 computation validation. None substitutes for either of the other two.\nTRDC checks a pinned public challenge/response map and deadline under inclusion assumptions; it is\nnot a global-unavailability or intentional-fraud certificate. Audit collusion/false success, response\ncensorship and fork-relative default replay separately. The 7/5/15% and audit/coding values are unarmed\ncandidates; dedicated service budgets/recovery escrow cannot increase issuance or reward competing DDoS.\n\nRule E integration remains a separate implementation/security gate under RFC14 §16.10. Unverified,\nunavailable or disputed work cannot become definitive safe weight, a settled frontier, EVM `safe`/\n`finalized` history or pruning security. Audit frontier-first comparison, bounded live/provisional\nweight, tie-breaks and every selection/IBD entry point: reward escrow alone cannot prevent immature\nfalse work from producing irreversible chain effects. Keep EXEC weight/DAA zero. This amendment does\nnot assert that Rule E is already wired into the existing comparator or dormant settlement implementation.\n\nOne failed Seeder with sufficient remaining coverage does not suspend mining. Loss of required\navailability closes that model's new qualification and resolves affected in-flight claims, work,\nescrow and collateral within their pinned deadlines. False local failure reports do not halt/slash;\nprovider contractual default is distinct from miner computation fraud. Already lawfully settled old\nwork is not voided solely by a later provider outage. Other models and active HEARTBEAT/BASE-0 progress;\nuseful-work settlement may wait under §3 without stopping the chain or reinstating DNS authority.\n\n§8's release gates also require RFC14 §16.8's independent-devnet matrix and §16.11's ECON/MEAS,\nincluding all-provider failure after READY, private maturation with colluding Panels, partitions,\nreorg/restart/pruned sync, false demands and identical availability/work/liability replay. Evidence\nthat availability safety and independent chain liveness both hold is required before activation.\n\n[RFC14 §16.13 FPR](0014-panel-independent-fraud-prosecution.md#forced-public-retrieval) adds bounded\noutsider-triggered full disclosure, actual public-data/coverage proof, reserved publication costs/fair\ncapacity and alternative providers. Keep authenticated false-answer major Slash separate from capped\nservice-default liability. Accepted CHALLENGED work cannot become definitive weight, native/EVM safe\nsettlement or pruning security before disclosure/adjudication; requests cannot reset hard deadlines.\nPublic DA is a separately reviewed recovery/evidence channel, not new PALW/BFT finality or an alternative\nto ordinary Torrent eligibility. Preserve lawful old Final and other-model/HEARTBEAT/BASE-0 progress.\n\n"
+    },
+    {
+      "file": "docs/rfc/0013-reproducible-layouts-and-resource-bounded-onboarding-tools.md",
+      "start": "## 10. Independent Torrent identity",
+      "historical_withdrawn_text": "## 10. Independent Torrent identity/availability evidence — 2026-10-10\n\n[RFC14 §16](0014-panel-independent-fraud-prosecution.md) and [ADR173 D9–D10](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)\nrequire separate tool evidence for immutable artifact identity, public acquisition and claim computation.\nRecord Model ID/root, canonical file manifest/order/sizes, full weights/tokenizer/config/specification,\nformal Torrent infohash/binding and the reconstruction/root-validation result. A pack must not present\npiece authentication or a matching declared root as full reconstructed artifact verification.\n\nPanel/miner sharing is voluntary. The model's independent Bonded Seeder group alone must meet coverage,\nfault, bandwidth and retention budgets if miner/Panel/optional peers stop serving. Show accepted epoch\nsnapshot/policy, provider leases/funding/PoR/public challenge/TRDC, independent cold-audit identity/scope,\nexpiry and assumptions, and PENDING/READY/DEGRADED/SUSPENDED/RECOVERING qualification separately from\nregistration/conformance. No swarm status, upload count or local failure directly changes block validity.\nTRDC verifies a contractual deadline/response-map outcome, not global unavailability or intent.\n\nBind the claim to the same registered model/root/execution specification and independently validate\nits PALW/G14 computation. Root identity and availability evidence cannot certify actual correct use\nby the miner. Preserve existing experiment/9B/2M/coverage scopes; old conformance PASS is not the new\nAND gate. The 7/5/15%, audit3-of-5 and coding4-of-7 values are review candidates, not live settings.\nDo not silently start seeding, contract payments or new registration writes as an onboarding side effect.\nAll proposed evidence/admission/activation gates remain open until implementation and independent review.\n\nFor [RFC14 §16.13 FPR](0014-panel-independent-fraud-prosecution.md#forced-public-retrieval), record\nstage/session/snapshot, full required-range map, provider assignment/substitution, authenticated actual\ndata/DA publication and retention coverage, reconstructed root, deadlines/cost reserves and resolution.\nCHALLENGED is not confiscation or Final; major signed-data Slash and capped service-default outcomes have\ndifferent evidence/scopes. A tool must not label hash-only publication, private send receipts or small\npiece PASS as full disclosure. Distinguish DA recovery from restored Torrent eligibility and disclose\nDA honesty/availability/inclusion assumptions. Check maximum real-byte costs and finite/fair requests;\n100TB mock/sparse tests cannot certify actual disclosure. New Seeder participation is optional and\nneeds independent possession/public-serving/independence/bond checks. All FPR tooling remains proposed.\n\n"
+    },
+    {
+      "file": "docs/adr/0067-classes-are-chain-data-kernels-are-the-build.md",
+      "start": "## Independent Torrent reward-profile amendment",
+      "historical_withdrawn_text": "## Independent Torrent reward-profile amendment — 2026-10-10\n\nDecision 4の「どのmirrorでもよい」「protocolは提供可能にするまで」は、新reward profileの十分条件ではない。\nモデル全体をMISAKA Torrentのみで認証・取得/復元できる独立Bonded Seeder群をモデルごとに要求し、\n全Panel/miner/任意peerの配布拒否と規定f障害下でも公開G14検証を支える。Panel/minerには常時Seeder義務を課さず、\nclaim/witnessの開示・保持責任は維持する。root一致・possession・監査署名を実計算の正当性やtrustlessな転送証明にしない。\n\nDecision 6の「登録で全nodeに保持を強制しない」原則は維持する。静的な不変model/正式配布bindingを登録し、\nlease、TRDCの契約default、監査、期限/資金とG14から別の報酬資格を導く。HTTPはTorrentへのbytes導入に使えるが、\n外部検証者の必須取得経路にしない。legacy hash/IDを書き換えず、追加immutable bindingとversioned移行を定義する。\n既存の四tier実装・試験はそのまま記録として残し、この新availability/weight gateの実装・activationの証拠にしない。\n\n[RFC14 §16.13 FPR](../rfc/0014-panel-independent-fraud-prosecution.md#forced-public-retrieval)で、\n第三者のrange→全量公開、実データ/coverage・有限期限/費用と代替履行を追加必須条件にする。\n小規模応答・監査署名は全量公開ではなく、signed-data重大Slashとcause-blind有界defaultを分ける。\n公開DAは異常時の証拠/供給復旧として別に承認し、通常Torrent取得・固定identityや全node非保管の境界を変えない。\nFPR/CHALLENGED weightの実装・codec・activationは未完了である。\n"
+    },
+    {
+      "file": "docs/adr/0173-a-seat-holds-a-root-not-a-class-and-possession-gates-activation.md",
+      "start": "## Independent Torrent public-availability amendment",
+      "historical_withdrawn_text": "## Independent Torrent public-availability amendment — 2026-10-10\n\nThe root-keyed readiness proposal remains a scoped prerequisite, not a full retrievability/availability\ncertificate. A few Merkle openings, distinct seat keys or signed validation attestations cannot establish\npublic full-model download, independent copies, arithmetic validity or G14 prosecution completeness.\nFor future reward profiles, apply [RFC14 §16](../rfc/0014-panel-independent-fraud-prosecution.md)'s\n`ModelRewardEligible`: fixed model/manifest/infohash identity, independent Bonded Seeder groups alone\nproviding Torrent-only full acquisition, reviewed PoR, expiring independent Full Fetch, public TRDC\nchallenge/default, fault tolerance, resources, retention and funded liability. Panel/miner sharing is\nvoluntary, including for shards. Full reconstructed root equality and the claim's fixed-root PALW/G14\ncomputation checks remain separate. Local `ROOT_BUNDLE_MISSING` remains a local observation;\nonly authenticated demand/response/deadline can establish provider default. Separate DDoS/service\ndefault from computation fraud and preserve model-local failure handling and independent chain liveness.\n\nRegistered model contents and consensus identity are permanently immutable. Under\n[ADR175](0175-registered-models-are-permanently-immutable.md), improvements are independent registrations;\nsame-ID root publication/promotion and line/head/Position/AMM replacement are refused under its new rule.\nThe original root-update proposal above retains only its historical scope. Seeder locations/leases are\nseparate service state, and existing claims retain their own root, binding and liability horizon.\nThe full-verification and Rule E/weight gates remain independently open.\nTRDC establishes a specified contractual default under response-inclusion assumptions, not intent or\nglobal unavailability. One provider failure cannot close qualification while required guarantees hold.\nThe 7/5/15% and audit/coding values remain candidates; no tags/deltas/fence in this historical proposal\nimplement them. Audit-fraud, identity mismatch, default replay and funded recovery require separate evidence.\nThe body above is the original branch proposal and its historical tests; this amendment assigns none\nof its tags, deltas, carriage bytes or dormant fence to the new Torrent availability objects.\n\n[ADR173 D11](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) and\n[RFC14 §16.13 FPR](../rfc/0014-panel-independent-fraud-prosecution.md#forced-public-retrieval) further\nrequire bounded full public disclosure/default and pre-funded actual-byte costs. Small responses or\nauditor success signatures cannot fulfil that obligation. Separate authenticated false-answer major\nSlash from capped service default, and prevent CHALLENGED work from gaining definitive weight before\ndisclosure/adjudication. Voluntary sharing and independent provider checks remain; this historical\npossession/readiness proposal implements neither FPR nor full-data DA nor the new liability rules.\n"
+    },
+    {
+      "file": "docs/adr/0175-registered-models-are-permanently-immutable.md",
+      "start": "## 公開配布と報酬資格の境界",
+      "historical_withdrawn_text": "## 公開配布と報酬資格の境界 — 2026-10-10\n\n[ADR173 D9–D10](0173-public-verifier-dispute-completeness-is-misaka-purpose.md)と\n[RFC14 §16](../rfc/0014-panel-independent-fraud-prosecution.md)を適用する。新reward profileでは\nModel ID、canonical artifact root、正式Torrent infohashとmanifest対応、全weights・tokenizer/config・\n実行仕様、総sizeを不変にcommitし、piece/shard認証後に全量復元rootを再計算する。legacy登録は\n旧ID/hashを保ち、固定登録を参照する別のimmutable配布bindingで移行する。\n\nPanel・minerの常時Seeder義務はなく、独立Bonded Seeder群だけで規定障害下の公開全量取得を支える。\n登録同一性、期限付き提供/監査・lease、固定モデルでのPALW/G14計算検証は独立したAND条件である。\n正しい配布modelのroot一致はminerの実計算を証明しない。TRDCは指定提供契約の期限内公開応答の\n不在を合意履歴から判定する設計で、故意・全世界の取得不能を証明しない。提供保証失効は登録内容を\n変えず当該新規資格のみを閉じ、既存claim・担保・escrowは固定期限で清算する。\n\n7供給単位・5有効・15%や監査/codingの数値はRFC14の未確定候補である。本ADRのimmutable fenceと\nその実装/試験を、Torrent/PoR/TRDC/監査/提供報酬/規則Eの実装・有効化の証拠にしない。\n\n[ADR173 D11](0173-public-verifier-dispute-completeness-is-misaka-purpose.md)と\n[RFC14 §16.13 FPR](../rfc/0014-panel-independent-fraud-prosecution.md#forced-public-retrieval)の全量公開も\n固定model/root/正式bindingへ拘束する。DAへのchunk発行・代替提供・資格停止/復旧で内容や登録IDを変えない。\n未予算モデルはRegisteredのまま保持できるが、READY前に最大全量公開費を予約する。\n重大Slash/有界契約defaultとCHALLENGED weightは別policyであり、本ADRのimmutable fence実装を\nFPR/DA/公開費用/新責任の実装・activationの証拠にしない。\n\n"
+    },
+    {
+      "file": "docs/rfc/0011-permissionless-model-and-long-context-onboarding.md",
+      "start": "**2026-10-10 immutable identity / independent availability",
+      "historical_withdrawn_text": "**2026-10-10 immutable identity / independent availability / computation boundary:** registration remains permissionless under\nthe declared static semantic/resource rules and does not require Seeder possession or reward eligibility.\nOnce registered, model contents, ID, canonical root, weights, execution specification and identity bindings\nare permanently immutable. Under [ADR175](../adr/0175-registered-models-are-permanently-immutable.md), an\nimprovement is a separately registered independent model, never a version appended to the same registered\nID or a replacement of its line/head/Position/AMM. Seeder membership/endpoints and expiring leases are separate state.\nAn accepted distribution binding pins descriptor/infohash/root; an alternative representation needs its own\nbinding ID and authenticated mapping, and cannot substitute material for an in-flight claim.\n\n[RFC14 §16](0014-panel-independent-fraud-prosecution.md)'s `ModelRewardEligible(model, epoch)` is the\nadditional AND gate for new reward/consensus work. It requires Torrent-only full retrieval, valid funded\nleases, full coverage and fault tolerance, independent non-Panel supply, reviewed PoR and public serve/default,\ncold verification/court budgets and G14. Panel/miner sharing is voluntary, including for sharded seats;\nthe independent Bonded Seeder group alone must tolerate all of their serving refusal and the declared faults.\nPanel=0 retains the same requirements. Full-fetch reports, PoR alone, seat counts,\nHF source fidelity and Beacon Conformance PASS cannot substitute for that gate. The gate is derived from\nthe prescribed accepted consensus snapshot, not each node's local download result.\n\nThe fixed registration/profile records Model ID, canonical root, canonical file manifest/sizes, weights,\ntokenizer/config/execution bindings and formal Torrent infohash mapping under RFC14 §16.3. Metadata can\nbe committed before any provider is present; legacy IDs/roots are preserved by a separate immutable\nbinding. Verify pieces/shards and recompute the full reconstructed artifact root. Reject counterfeit\nbytes and try another peer without treating one bad piece as model-wide loss. Slash needs authenticated\nprovider evidence or a valid TRDC contractual default; TRDC cannot establish intent/global unavailability.\n\nKeep artifact identity, independent public serving and actual PALW/G14 computation verification as an\nAND contract. A claim binds the same registered model/root/specification; root-matching downloadable\nweights do not prove the miner used them correctly. Full Fetch audits expire under declared selection,\nhonesty/collusion, network and inclusion assumptions, not a claim of trustless transfer proof. RFC14's\n7/5/15%, 3-of-5 audits and 4-of-7 coding are candidates; funding/recovery escrow and fixed qualification\nepochs are release gates. This changes reward eligibility, not the historical registration census.\n\nAn unavailable model stays registered, but earns no new reward/work credit. If service later loses required\ncoverage, suspend only that model's new eligibility; existing claims settle under their fixed obligations and\ndeadlines. Other models and HEARTBEAT/BASE-0 continue. A provider default is not arithmetic fraud by an honest\nminer/Panel. A 100TB registration is not a feasibility claim: reward eligibility needs actual measured\nretrieval/verification/court within the lifecycle; sparse/mock-file drills cannot prove real cold performance.\n\nActive Eligibility additionally requires [RFC14 §16.13 FPR](0014-panel-independent-fraud-prosecution.md#forced-public-retrieval).\nDeclare the size-based maximum full-disclosure envelope; reserve actual publication/DA/retention/checking\ncosts before READY, while keeping unfunded models registered. Outsiders can escalate without prior fraud\nproof or an auditor quorum. Full actual data/coverage and reconstructed-root verification, replacement\nproviders and finite deadlines are distinct from conformance PASS or a few piece responses. Capped\ncontractual default is separate from signed false-data major Slash. CHALLENGED work stays subject to\ndisclosure/adjudication before definitive weight; DA publication alone cannot restore Torrent eligibility.\nNew Seeder admission from a Full Fetch auditor requires independent provider checks, not its success signature.\n\n"
+    }
+  ],
+  "audit_markdown_sha256": "bee48c5973aa3b07e6cea3dbe93e8902c75d244ef61807f2f718f76ad34a874d",
+  "audit_new_local_links_checked": 4
+}

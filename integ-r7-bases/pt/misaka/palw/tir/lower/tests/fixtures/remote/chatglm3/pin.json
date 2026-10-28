@@ -1,0 +1,9 @@
+{
+ "files": {
+  "configuration_chatglm.py": "770b2b841d18cd155645bdfb3fae30d7e730c481593932fcec5591cb8796c00c",
+  "modeling_chatglm.py": "4c0efa5309c7a8eae63bf957bf56286b040f236af1f09d2d22f9d8cdf6deb72f"
+ },
+ "model_class": "ChatGLMForConditionalGeneration",
+ "torch": "2.14.0",
+ "transformers": "5.17.0"
+}

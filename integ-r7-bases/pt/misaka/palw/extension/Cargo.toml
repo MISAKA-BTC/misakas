@@ -1,0 +1,39 @@
+[package]
+name = "misaka-palw-extension"
+description = "ADR-0108: an extension is a manifest the verifier recomputes, and a receipt is evidence, not a vote — one canonical manifest for the kinds a person can bring, one verifier whose every answer names its tier, one signed receipt no consensus path reads"
+publish = false
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+kaspa-consensus-core.workspace = true
+kaspa-hashes.workspace = true
+# `verify_mldsa87_with_context` — a receipt is verified from its signer's PUBLIC key, which is the
+# only thing a reader of somebody else's receipt holds.
+kaspa-txscript.workspace = true
+# `ValidatorKey::sign_with_context` — the verifier's own ML-DSA-87 key signs the receipt it made.
+kaspa-pq-validator-core.workspace = true
+# The class kinds go through the SDK's one door: ledger, artifact loading, pairing, the gate.
+misaka-palw-sdk.workspace = true
+# RFC 8785 canonical JSON (the manifest's and the receipt's canonical form) and the derived-artifact
+# transformers a `derived-transformer` manifest is recomputed against.
+misaka-palw-derive.workspace = true
+# The certification drills' families and the dense artifact container.
+misaka-palw-base0.workspace = true
+blake2b_simd.workspace = true
+borsh.workspace = true
+faster-hex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

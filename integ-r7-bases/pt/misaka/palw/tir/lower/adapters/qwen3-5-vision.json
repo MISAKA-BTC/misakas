@@ -1,0 +1,50 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "qwen3-5-vision",
+  "kind": "vision",
+  "doc": "Qwen3.5's vision tower (Qwen3_5VisionModel; Qwen3-VL's without DeepStack): a Conv3d patch embedding WITH a bias over two identical temporal copies (folded into one projection), block-major patch order under a spatial merge, a learned square position table bilinearly resampled to the grid (align_corners), 2-D axial rotary positions, full attention over a fused qkv, LayerNorm pre-norm layers with a plain MLP (linear_fc1/linear_fc2, gelu_pytorch_tanh), and the merger (a LayerNorm over the hidden width, then fc1 → GELU → fc2 to `out_hidden_size`). The class declares the input size. A tower with DeepStack layers (Qwen3-VL) is refused: its intermediate features feed the language model's first layers. Features: VISION_FROM_SPEC_V1.",
+  "match": {"architectures": ["Qwen3_5VisionModel"], "model_types": ["qwen3_5_vision"]},
+  "config": {
+    "defaults": {"depth": 27, "hidden_size": 1152, "hidden_act": "gelu_pytorch_tanh", "intermediate_size": 4304, "num_heads": 16, "in_channels": 3, "patch_size": 16, "spatial_merge_size": 2, "temporal_patch_size": 2, "out_hidden_size": 3584, "num_position_embeddings": 2304},
+    "inert": ["initializer_range", "dtype", "model_type"]
+  },
+  "vars": [
+    {"name": "vp", "value": ""},
+    {"name": "rgb", "value": {"$check": [{"$eq": [{"$cfg": "in_channels"}, 3]}, "in_channels other than 3 (the class's image is RGB)"]}},
+    {"name": "no_deepstack", "value": {"$check": [{"$eq": [{"$len": {"$cfgn": ["deepstack_visual_indexes", []]}}, 0]}, "DeepStack layers (Qwen3-VL): their features feed the language model's early layers"]}},
+    {"name": "npos", "value": {"$cfg": "num_position_embeddings"}},
+    {"name": "side", "value": {"$int": {"$round": {"$sqrt": {"$var": "npos"}}}}},
+    {"name": "square", "value": {"$check": [{"$eq": [{"$mul": [{"$var": "side"}, {"$var": "side"}]}, {"$var": "npos"}]}, "num_position_embeddings is not a square"]}},
+    {"name": "rope_axial", "value": {"$check": [{"$eq": [{"$get": [{"$cfgn": ["rope_parameters", {}]}, "rope_type", "axial"]}, "axial"]}, "a vision rope other than axial"]}},
+    {"name": "theta", "value": {"$get": [{"$cfgn": ["rope_parameters", {}]}, "rope_theta", 10000.0]}},
+    {"name": "d", "value": {"$cfg": "hidden_size"}},
+    {"name": "depth", "value": {"$cfg": "depth"}}
+  ],
+  "spec": {
+    "architecture": {"$var": "arch"},
+    "h": null, "w": null, "downscale": 1,
+    "patch": {"$cfg": "patch_size"}, "temporal": {"$cfg": "temporal_patch_size"}, "merge": {"$cfg": "spatial_merge_size"},
+    "mean": [0.5, 0.5, 0.5], "std": [0.5, 0.5, 0.5],
+    "d": {"$var": "d"}, "heads": {"$cfg": "num_heads"}, "inter": {"$cfg": "intermediate_size"},
+    "layers": {"$var": "depth"}, "run": {"$var": "depth"},
+    "act": {"$act": {"$cfg": "hidden_act"}}, "swiglu": false, "rms": false, "eps": 1e-06,
+    "pre_norm": false, "cls": false, "patch_bias": true, "learned_pos": true, "pos_interp": {"$var": "side"},
+    "rope_theta": {"$var": "theta"}, "window": null,
+    "out": {"Merger": {"out": {"$cfg": "out_hidden_size"}}},
+    "names": {
+      "patch.w": {"$cat": [{"$var": "vp"}, "patch_embed.proj.weight"]},
+      "patch.b": {"$cat": [{"$var": "vp"}, "patch_embed.proj.bias"]},
+      "pos": {"$cat": [{"$var": "vp"}, "pos_embed.weight"]},
+      "norm1": {"$cat": [{"$var": "vp"}, "blocks.{L}.norm1"]},
+      "norm2": {"$cat": [{"$var": "vp"}, "blocks.{L}.norm2"]},
+      "attn.qkv": {"$cat": [{"$var": "vp"}, "blocks.{L}.attn.qkv"]},
+      "attn.o": {"$cat": [{"$var": "vp"}, "blocks.{L}.attn.proj"]},
+      "mlp.up": {"$cat": [{"$var": "vp"}, "blocks.{L}.mlp.linear_fc1"]},
+      "mlp.down": {"$cat": [{"$var": "vp"}, "blocks.{L}.mlp.linear_fc2"]},
+      "merger.norm": {"$cat": [{"$var": "vp"}, "merger.norm"]},
+      "merger.up": {"$cat": [{"$var": "vp"}, "merger.linear_fc1"]},
+      "merger.down": {"$cat": [{"$var": "vp"}, "merger.linear_fc2"]}
+    },
+    "ignored": []
+  }
+}

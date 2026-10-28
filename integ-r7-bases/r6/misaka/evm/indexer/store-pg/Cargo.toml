@@ -1,0 +1,23 @@
+[package]
+name = "misaka-evm-indexer-pg"
+description = "MISAKA EVM token-transfer indexer — PostgreSQL backend (§10.3). Implements the indexer engine's storage against Postgres; reuses the audited core balance/reorg logic (load → apply → write-back), so only SQL I/O lives here."
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+misaka-evm-indexer-core = { path = "../core" }
+alloy-primitives = { version = "0.8" }
+thiserror.workspace = true
+# Async Postgres client. tokio-postgres 0.7 runs on tokio 1.x (NOT pinned
+# >=1.44), so it is compatible with the workspace's pinned 1.42.1 — unlike the
+# axum/jsonrpsee line the §9 transport had to avoid.
+tokio-postgres = "0.7"
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net"] }
+
+[lints]
+workspace = true

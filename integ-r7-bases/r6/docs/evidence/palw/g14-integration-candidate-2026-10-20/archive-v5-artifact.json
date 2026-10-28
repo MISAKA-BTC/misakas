@@ -1,0 +1,401 @@
+{
+  "date": "2026-10-21",
+  "parent": "c153ecc02f70b31e9e49a645cbb87dbcff5892e8",
+  "heavy_lock": "/Users/wata/.cache/misaka-heavy-lock.sh",
+  "selected_unique_passes": 105,
+  "selected_failed": 0,
+  "selected_ignored": 0,
+  "selection": "Same final executable native40 + public-prefix17 + ordinarycourt13 + integration codec6/policy3/gate12/activation5/t12identity9 =105. Targeted1 overlaps native40; historical104/103 and compile checks excluded.",
+  "commands": [
+    {
+      "command": [
+        "target/release/deps/kaspa_consensus_core-cd85ed321316b157",
+        "palw_tir_public_fold_v1"
+      ],
+      "log": "archive-v5-native.log",
+      "exit_code": 0,
+      "elapsed_seconds": 0.504,
+      "selected": true
+    },
+    {
+      "command": [
+        "target/release/deps/kaspa_consensus_core-cd85ed321316b157",
+        "palw_state_v2::tests::public_prefix_fold_v1::"
+      ],
+      "log": "archive-v5-prefix.log",
+      "exit_code": 0,
+      "elapsed_seconds": 5.733,
+      "selected": true
+    },
+    {
+      "command": [
+        "target/release/deps/kaspa_consensus_core-cd85ed321316b157",
+        "held_close_chunks_clock::"
+      ],
+      "log": "archive-v5-ordinary-0.log",
+      "exit_code": 0,
+      "elapsed_seconds": 0.018,
+      "selected": true
+    },
+    {
+      "command": [
+        "target/release/deps/kaspa_consensus_core-cd85ed321316b157",
+        "a_court_session_cannot_outlive_its_claim_and_stop_the_chain"
+      ],
+      "log": "archive-v5-ordinary-1.log",
+      "exit_code": 0,
+      "elapsed_seconds": 0.017,
+      "selected": true
+    },
+    {
+      "command": [
+        "target/release/deps/kaspa_consensus_core-cd85ed321316b157",
+        "a_lapsed_dissection_move_loses_on_the_movers_side"
+      ],
+      "log": "archive-v5-ordinary-2.log",
+      "exit_code": 0,
+      "elapsed_seconds": 0.018,
+      "selected": true
+    },
+    {
+      "command": [
+        "target/release/deps/kaspa_consensus_core-cd85ed321316b157",
+        "a_lapsed_child_choice_loses_on_the_challengers_side"
+      ],
+      "log": "archive-v5-ordinary-3.log",
+      "exit_code": 0,
+      "elapsed_seconds": 0.018,
+      "selected": true
+    },
+    {
+      "command": [
+        "target/release/deps/kaspa_consensus_core-cd85ed321316b157",
+        "a_non_fused_class_is_not_charged_for_a_root_claim_it_cannot_file"
+      ],
+      "log": "archive-v5-ordinary-4.log",
+      "exit_code": 0,
+      "elapsed_seconds": 0.017,
+      "selected": true
+    },
+    {
+      "command": [
+        "target/release/deps/kaspa_consensus_core-cd85ed321316b157",
+        "f2_residual_a_withheld_root_claim_is_a_court_default_past_the_attribution_fence"
+      ],
+      "log": "archive-v5-ordinary-5.log",
+      "exit_code": 0,
+      "elapsed_seconds": 0.017,
+      "selected": true
+    },
+    {
+      "command": [
+        "target/release/deps/kaspa_consensus_core-cd85ed321316b157",
+        "a_responder_that_never_files_the_root_claim_loses_on_its_own_side"
+      ],
+      "log": "archive-v5-ordinary-6.log",
+      "exit_code": 0,
+      "elapsed_seconds": 0.018,
+      "selected": true
+    },
+    {
+      "command": [
+        "target/release/deps/kaspa_consensus_core-cd85ed321316b157",
+        "the_parties_moves_from_evidence_acquit_the_honest_and_convict_the_forged_through_the_chain"
+      ],
+      "log": "archive-v5-ordinary-7.log",
+      "exit_code": 0,
+      "elapsed_seconds": 0.153,
+      "selected": true
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--release",
+        "-p",
+        "kaspa-consensus-core",
+        "--test",
+        "palw_court_service_state_v2",
+        "--test",
+        "palw_court_policy_v1",
+        "--test",
+        "g14_close_gates",
+        "--test",
+        "palw_activation_pool_is_t12_only",
+        "--test",
+        "palw_the_release_did_not_move"
+      ],
+      "log": "archive-v5-regressions.log",
+      "exit_code": 0,
+      "elapsed_seconds": 263.642,
+      "selected": true
+    },
+    {
+      "command": [
+        "cargo",
+        "check",
+        "--release",
+        "-p",
+        "kaspa-consensus"
+      ],
+      "log": "archive-v5-consensus-check.log",
+      "exit_code": 0,
+      "elapsed_seconds": 52.628,
+      "selected": false
+    }
+  ],
+  "targeted": {
+    "command": [
+      "cargo",
+      "test",
+      "--release",
+      "-p",
+      "kaspa-consensus-core",
+      "--lib",
+      "rooted_archive_v5"
+    ],
+    "log": "archive-v5-targeted.log",
+    "exit_code": 0,
+    "selected": false
+  },
+  "type_check": {
+    "command": [
+      "cargo",
+      "check",
+      "--release",
+      "-p",
+      "kaspa-consensus-core",
+      "--lib",
+      "--tests"
+    ],
+    "log": "archive-v5-type-check.log",
+    "exit_code": 0,
+    "executed_tests": 0
+  },
+  "scope": "Private complete-group replay verifies immutable original contract and accepted prefix, actual raw chunk/whole digests, original signed native receipt and retained count/family bounds. Native wire shape is checked before decode. Retained session/embedded and separate phase are restored only in inspection scratch, then the existing native v5 adjudicator is invoked with all retained inputs. Missing policy never falls back to current extras or v2. Mismatched signed verdict is refused. A private nonserialized non-Clone result binds the original state root/session/side/raw group/decoded object/native result; it is not money/default/credit authority.",
+  "test_scope": "One new runtime test has eight tiny TIR-cone cases (honest/forged x held-flag false/true x correct/wrong signed verdict), real MLDSA signatures, actual native declaration/prefix/end transitions and actual v5 calls. Correct native verdicts pass, signed wrong verdicts specifically reach v5-result refusal. Prefix/contract/bitmap/hole substitutions, retained missing/dormant policy denial (direct negative state fixtures, NOT native accepted mutations), stale state-root binding, whole-parent undo/replay/carriage and retained verification after material expiry are covered. Real wire-reader CPU and shape-arithmetic errors stay NativeResource; truncation stays semantic refusal.",
+  "limits": "Original funding/custody and service costs remain fixture assumptions. Held flag is exercised on a generic cone; no fused held phase or maximum embedded/separate phase/family is demonstrated. No paid/public node archive ingress, actual supply/opportunity/default, financial release, actual OOM/RSS measurement or full T01-T15/door proof. Inspection scratch can contain active/archive together and is never committed as chain state.",
+  "resource_limits": "Actual candidate/group/session/phase/message/assembly/decoded heap is quoted before new allocations when native tracking is active. Checkpoint owner quotes the whole state copy before cloning. Whole-state scratch cost, signature/hash work, inner legacy v5 allocations and physical allocator/RSS capacity remain uncalibrated full-profile costs. A borrowed-record adjudication context is a follow-up to remove the global state copy; current code does not claim a bounded per-claim full funded profile.",
+  "no_adoption": "No new wire/schema ordinal or fee/cap/horizon/model-tier/preset/identity pin; no production late-rule timing adoption, pre merge/push/arming/deployment. Historical declaration-rule inspection does not replace old public accepting-block rules. Local replay does not replace selected-validator approval.",
+  "remaining": "Qualified group/financial effects and pruning, all-actor capital and full original branch reservation, actual supply/public ingress and F02/F03, source/localization/preparation capacity, T01-T15/R-D2/tag230 and measured real-model door<=3120. G14 incomplete.",
+  "intermediates": [
+    {
+      "source": "archive-v5-first-source.json",
+      "patch": "archive-v5-first-runtime.patch",
+      "log": "archive-v5-first-check.log",
+      "result": "non-test core compile0 before runtime fixtures; no executed tests"
+    },
+    {
+      "source": "archive-v5-before-io-fix-source.json",
+      "patch": "archive-v5-before-io-fix-runtime.patch",
+      "log": "archive-v5-before-io-fix.log",
+      "result": "own verified Cargo PID deliberately SIGINTed; observed130 and0 executed tests, to fix CPU/OOM local error classification. Not an observation-timeout restart. The then-source type check0 is separate."
+    }
+  ],
+  "docs_check": {
+    "log": "archive-v5-docs-final.log",
+    "exit_code": 1,
+    "limits": "Same5 imported missing links plus43 baseline-known; no new authored missing link. FAIL1, no baseline update."
+  },
+  "source_sha256": {
+    "consensus/core/src/palw_court_close_receipt_v1.rs": "125fd6b87114939ecd7c331317d3bd5c4a49fcf45f05c190db483957539add9a",
+    "consensus/core/src/palw_state_v2.rs": "f17413cc70a91bc81d948fe3db36a7c0ef7452b43676112efcde736bfee4938b",
+    "consensus/core/src/palw_tir_public_fold_v1.rs": "c802b05aa99f5d488cae15d747da664933dc597210ad63bea686f94ca84d5ff3",
+    "consensus/core/src/palw_court_archive_verify_v1.rs": "303a39833513a4b5411bf528e4623b840f0d19bae76e29517c59e2c1197609d4"
+  },
+  "executable_sha256": {
+    "target/release/deps/kaspa_consensus_core-cd85ed321316b157": "bee0bdd465d07c02ebc785c2cad02b87d2c12d2e041630ab80d950e407f6fb45",
+    "target/release/deps/g14_close_gates-07a58aeba402f266": "3cf70904e33078bdb067a0946942cc6e30bcc6c826102e43e3f2ffebce9a4d5d",
+    "target/release/deps/palw_activation_pool_is_t12_only-19bd1d2a52f9c5c6": "d03034b1dbb760f196b64f42550f4d05958af47305cfa71d13a0a93181f3703d",
+    "target/release/deps/palw_court_policy_v1-411f3ee2af7ee8dc": "2300c3c218d1425a7e102767687f88c90118fc1ca6bb6a5d34a1ee9fc8ca5cb6",
+    "target/release/deps/palw_court_service_state_v2-84a662caba178f3c": "cb4e08e2f4ee6631b429215a8d13021dbd08289a36189fbfd4d688bcbf71347b",
+    "target/release/deps/palw_the_release_did_not_move-c8b47338cdf2801d": "f811c89b21c8143087f7cd45dd4afcd71a457fb8b282cd5aaee51e57803f3972"
+  },
+  "patch_sha256": "804f8f49ead1cf57ee601239b72473c80d86d152dfa2eb423fd09388fe1bec23",
+  "audit_sha256": {
+    "archive-v5-inventory-audit.json": "075ff87df6bf28ad02319f02537d69b392280fdb758af56cb770f92528ecaddb",
+    "archive-v5-patch-audit.json": "8812bb600b099fabf060938d1151ae04191b73ec4e0cd1e351be369a356179ae",
+    "archive-v5-source-audit.json": "351ea7b52a2793545cbb6ca3eb072da29ff49a959b3468ffff47f814fe4a9823"
+  },
+  "logs": [
+    {
+      "path": "archive-v5-before-io-fix-type-check.log",
+      "sha256": "762f3457023ef69bb47a8fbdf8963a13881b684c7db161fa86f3e616af77a182"
+    },
+    {
+      "path": "archive-v5-before-io-fix.log",
+      "sha256": "6d16ae67f3fce597f9e79f910a71975e4c1d8bcdd9ab1ed31f93d453877e9e0d"
+    },
+    {
+      "path": "archive-v5-consensus-check.log",
+      "sha256": "ce65c5712ea91511cb07fbe1f0269773a64f7163dff8b337149a8f85fe17c373"
+    },
+    {
+      "path": "archive-v5-docs-final.log",
+      "sha256": "30e9795ba8e67e5a8b910da9d56db1a74e5a84565cb2f4be36b40de963f35fe2"
+    },
+    {
+      "path": "archive-v5-first-check.log",
+      "sha256": "39877a1a9f26be0b7a8ec865fde264459aa020373374393fea6905a94a6130a9"
+    },
+    {
+      "path": "archive-v5-native.log",
+      "sha256": "6a063e592c794697dc3ec2cadd1f445b6839ef1d71f2295a27481b7120178738"
+    },
+    {
+      "path": "archive-v5-ordinary-0.log",
+      "sha256": "6e3cc20cc0841d2592d10d5ca13d1112e5711e12f72527cc199b6dd837843091"
+    },
+    {
+      "path": "archive-v5-ordinary-1.log",
+      "sha256": "cf2d4565704f305a314c5291f224f993e8bf31370863f47e71bc5d8bc514fa76"
+    },
+    {
+      "path": "archive-v5-ordinary-2.log",
+      "sha256": "fcf1e353c36f59a5beb40e03ed10cc80cfc18bcd22fc07611b46ffe8a2ab83c2"
+    },
+    {
+      "path": "archive-v5-ordinary-3.log",
+      "sha256": "6c865aa0f79b02f8edab883caf064c7cddaba01f233b2b391f230c1689252195"
+    },
+    {
+      "path": "archive-v5-ordinary-4.log",
+      "sha256": "2c30b43db40ee1d5ae8e507ab146c97add2d7d43df1a50c1ba0b98d32e46817d"
+    },
+    {
+      "path": "archive-v5-ordinary-5.log",
+      "sha256": "a58a0bd0678bcc694f8abd92ec2a705f9e8ef2995b2b3671918f01ded36afea9"
+    },
+    {
+      "path": "archive-v5-ordinary-6.log",
+      "sha256": "b2a5c46d8f824e19c2708883a643c0b097cd3c9c12cacc4808248f44e90b677c"
+    },
+    {
+      "path": "archive-v5-ordinary-7.log",
+      "sha256": "40a2f5312020314dadf7a75a0bbe3931e599031f04666fd52f1d2f20e11989aa"
+    },
+    {
+      "path": "archive-v5-prefix.log",
+      "sha256": "2aa238ec1b38c6de012c8596c42ebcd51bf1dc6b5141eff0906cf6d1efa43b8f"
+    },
+    {
+      "path": "archive-v5-regressions.log",
+      "sha256": "2e4e7b8cc146f0e3626e907c1b77609b80b0ff2de5cb710c8296197696162b7d"
+    },
+    {
+      "path": "archive-v5-targeted.log",
+      "sha256": "47cd761776761c1ab06140725a3d03bb1a800cb905f8d0405720bd48c7b663fd"
+    },
+    {
+      "path": "archive-v5-type-check.log",
+      "sha256": "7b5c251608d353f8b7d593ac896e2220a774369a3dde9e0cd8c33940805891d5"
+    }
+  ],
+  "selected_tests": [
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::g14_honest_twin_is_not_convicted_and_a_holding_predicate_certifies_nothing",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::g14_full_collusion_one_outside_verifier_convicts_slashes_and_refuses_the_claims_standing",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::g14_an_outsider_detects_a_fault_and_its_filed_finding_convicts_and_slashes",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::g14_one_outside_bond_reaches_the_preparation_default_with_no_panel_signature",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::g14_an_honest_custodian_answers_in_time_and_is_not_slashed",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::court_relay_presigned_custody_response_uses_literal_signer_not_carrier_inputs",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::g14_tir_conviction_asserts_each_valid_seat_lock",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::g14_tir_frame_convicts_with_the_fence_at_genesis_and_no_legacy_history",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::g14_staged_witness_assembles_in_order_and_convicts_once",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::g14_output_identity_convicts_from_the_complete_authenticated_ids_only",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::g14_tir_frame_without_tfp1_earns_nothing_past_the_fence",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::g14_tir_seat_finding_reaches_the_filer_queue",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::g14_fresh_node_import_continues_the_original_frame_identically",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::g14_tir_frame_replays_without_derived_work_prompt_ids",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::g14_tir_owner_slots_cannot_be_preempted_by_idle_owners",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::native_duty_clock_records_actual_stages_and_survives_native_restore",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::native_duty_clock_demand_and_latest_parts_keep_the_original_deadline",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::native_response_duty_reads_original_state_and_never_erases_expired_obligations",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::rooted_court_end_archive_native_verdict_preserves_other_side",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::rooted_court_end_archive_complete_malformed_side_is_settled_once",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::rooted_court_end_archive_fulfilled_close_keeps_raw_material_without_pending_charge",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::rooted_court_end_archive_uncaptured_removal_retains_nominal_court_stake",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::rooted_service_court_sweeps_skip_held_without_starving_cleanup",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::rooted_service_guard_denies_default_and_native_undo_restores_legacy",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::g14r2_eight_active_colluding_owners_cannot_lock_out_a_newcomer_who_convicts_in_time",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::rooted_service_hold_retains_final_collateral_and_material_past_hard",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::rooted_court_close_receipt_preserves_signed_native_inputs",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::rooted_court_end_archive_streamed_fraud_keeps_complete_evidence",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::rooted_service_repair_journals_without_releasing_holds",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::rooted_service_hold_does_not_block_streamed_fraud_conviction",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::rooted_service_semantic_custody_guard_rejects_missing_short_and_substituted_contracts",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::service_stage_eligibility_is_not_recoverable_from_current_tir_cursor_alone",
+    "palw_state_v2::palw_tir_public_fold_v1::tests::new_original_frame_cannot_license_an_unqualified_valid_or_reinterpret_typed_receipt",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::transport_budget_counts_signed_native_parts_and_preserves_old_claims",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::rooted_shared_query_and_signed_streams_work_with_all_native_owner_slots_occupied_and_reload",
+    "palw_state_v2::palw_tir_public_fold_v1::tests::owner_fee_and_deposit_are_a_separate_component_without_new_absolute_clocks",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::rooted_shared_wide_leaf_stream_crosses_part_boundary_and_reloads",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::g14_tir_frame_decode_token_and_stop_rule_filing_convicts",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::tir_frame_accepting_actions_are_measured_across_custodian_uppers",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::rooted_archive_v5_replays_signed_bytes_without_state_or_money_changes",
+    "palw_state_v2::tests::public_prefix_fold_v1::prospective_public_job_retention_precedes_the_legacy_fence_and_survives_native_reload",
+    "palw_state_v2::tests::public_prefix_fold_v1::named_prefix_job_keeps_its_immutable_registered_tokenizer_statement",
+    "palw_state_v2::tests::public_prefix_fold_v1::expired_public_collection_preserves_pending_material_but_never_revives_collection",
+    "palw_state_v2::tests::public_prefix_fold_v1::prospective_prefix_acceptance_prices_complete_acquisition_and_refuses_overflow_before_writes",
+    "palw_state_v2::tests::public_prefix_fold_v1::public_prefix_demand_is_rooted_reversible_and_defaults_collect_from_all_literal_custodians_once",
+    "palw_state_v2::tests::public_prefix_fold_v1::public_collection_can_finish_after_stream_horizon_but_not_at_collection_expiry",
+    "palw_state_v2::tests::public_prefix_fold_v1::already_charged_public_claim_keeps_paid_material_without_a_second_collection",
+    "palw_state_v2::tests::public_prefix_fold_v1::public_prefix_history_is_literal_success_only_rooted_and_reversible",
+    "palw_state_v2::tests::public_prefix_fold_v1::public_prefix_answer_advances_only_after_original_leaf_eof_and_restores_the_pruning_clock",
+    "palw_state_v2::tests::public_prefix_fold_v1::targeted_public_collection_bypasses_maintenance_backlog_and_is_identity_bound_once",
+    "palw_state_v2::tests::public_prefix_fold_v1::producer_only_history_default_does_not_discharge_other_paid_prefix_valid_signers",
+    "palw_state_v2::tests::public_prefix_fold_v1::shared_owned_rows_preserve_every_old_box_encoding_and_copy_only_the_written_owner",
+    "palw_state_v2::tests::public_prefix_fold_v1::staged_source_default_charges_the_producer_only_when_it_is_itself_in_the_unpaid_set",
+    "palw_state_v2::tests::public_prefix_fold_v1::public_prefix_seed_admission_is_independent_exact_funded_and_not_vetoed_by_unsigned_panel",
+    "palw_state_v2::tests::public_prefix_fold_v1::every_paid_family_continues_and_convicts_after_actual_sibling_da_default",
+    "palw_state_v2::tests::public_prefix_fold_v1::public_response_index_is_bounded_signer_scoped_paged_and_rebuilt_from_literal_rows",
+    "palw_state_v2::tests::public_prefix_fold_v1::flat_response_index_pages_literal_phase_deadlines_and_roundtrips_seed_journals",
+    "palw_state_v2::tests::held_close_chunks_clock::with_both_groups_standing_the_session_waits_at_the_terminal_on_the_executors_clause_first",
+    "palw_state_v2::tests::held_close_chunks_clock::the_executors_duty_turn_is_terminal_where_the_challengers_group_stands",
+    "palw_state_v2::tests::held_close_chunks_clock::a_silent_executor_is_not_convicted_past_the_old_rung_while_the_challengers_close_assembles",
+    "palw_state_v2::tests::held_close_chunks_clock::a_lapsed_challenger_group_convicts_the_challenger_and_nobody_else",
+    "palw_state_v2::tests::held_close_chunks_clock::a_challenger_only_group_keys_the_session_at_its_backstop",
+    "palw_state_v2::tests::held_close_chunks_clock::the_clause_moves_no_clock_but_the_challenger_only_one_at_an_ir_or_pipeline_terminal",
+    "palw_state_v2::tests::a_court_session_cannot_outlive_its_claim_and_stop_the_chain",
+    "palw_state_v2::tests::adr0082_dissection_drill::a_lapsed_dissection_move_loses_on_the_movers_side",
+    "palw_state_v2::tests::adr0082_dissection_drill::a_lapsed_child_choice_loses_on_the_challengers_side",
+    "palw_state_v2::tests::adr0082_dissection_drill::a_non_fused_class_is_not_charged_for_a_root_claim_it_cannot_file",
+    "palw_state_v2::tests::adr0082_dissection_drill::f2_residual_a_withheld_root_claim_is_a_court_default_past_the_attribution_fence",
+    "palw_state_v2::tests::adr0082_dissection_drill::a_responder_that_never_files_the_root_claim_loses_on_its_own_side",
+    "palw_state_v2::tests::adr0082_dissection_drill::the_parties_moves_from_evidence_acquit_the_honest_and_convict_the_forged_through_the_chain",
+    "kimi_is_out_of_scope_in_both_coverage_dispositions",
+    "armable_g14_fences_refuse_without_a_measured_record",
+    "g14_genesis_from_block_zero_only_families_with_an_armed_route_earn",
+    "an_arming_record_admits_exactly_its_network_and_height",
+    "staged_court_validation_requires_the_legacy_filer_fence",
+    "legacy_fp_selection_and_constraint_jobs_are_refused_until_their_route_is_armed",
+    "x3_candidate_is_derived_from_existing_horizons_and_stays_refused",
+    "testnet12_identity_did_not_move",
+    "n4_v5_image_and_panel_da_claims_take_no_new_reward",
+    "certified_and_final_rewards_are_held_until_the_liability_horizon",
+    "g14_genesis_ruleset_validates_and_its_exception_reaches_no_shipped_preset",
+    "legacy_route_claim_without_a_g14_path_earns_nothing_past_14000",
+    "the_pool_carries_its_fork_id_name",
+    "the_pool_is_genesis_only_and_needs_the_registry_the_jury_and_the_audit",
+    "the_pool_and_its_terms_move_testnet12s_fingerprint",
+    "testnet11_devnet_and_mainnet_fingerprint_as_they_did_before_the_pool",
+    "the_activation_pool_is_armed_on_testnet12_only",
+    "clock_overflow_never_clamps_or_wraps",
+    "dependency_horizon_boundary_and_shared_bond_liability",
+    "readiness_record_cannot_bypass_unfinished_outsider_path",
+    "persisted_bindings_cannot_alias_packets_or_rebase_hard_deadline",
+    "persisted_residual_quota_is_recomputed_instead_of_trusted",
+    "service_v2_rejects_old_versions_and_foreign_profile_namespace",
+    "canonical_claim_repair_keeps_blocked_claim_held_and_serves_another",
+    "x3_container_tags_remain_disjoint_from_service_v2",
+    "rooted_service_codec_is_bounded_and_appends_its_tags",
+    "the_daa_clock_fence_is_past_the_stalled_tip",
+    "the_verification_s3_and_s2_fences_are_past_s1_and_the_lock_ledger",
+    "the_execution_quanta_fence_is_past_the_clock",
+    "p4_does_not_forbid_the_bundle_and_the_release_still_does_not_arm_it",
+    "the_objective_offence_fence_is_past_the_clock",
+    "the_shipped_release_fingerprint_did_not_move",
+    "every_fence_the_reward_work_added_is_dormant_everywhere",
+    "arming_one_fence_of_the_bundle_on_the_release_is_refused",
+    "the_work_price_denominator_cannot_reach_the_payer_past_the_bundle"
+  ]
+}

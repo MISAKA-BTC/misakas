@@ -1,0 +1,603 @@
+{
+  "format": "palw-output-v1/digest-vectors/1",
+  "spec": "docs/rfc/0003-palw-generative-model-classes.md §I.1, §I.3; docs/spec/palw/04b-tensor-ir.md §15",
+  "cases": [
+    {
+      "name": "image/2x3/tile-4",
+      "spec": {
+        "kind": 1,
+        "kind_name": "ImageRgb8",
+        "shape": [
+          2,
+          3,
+          3
+        ],
+        "meta_hex": "",
+        "borsh_hex": "010300000002000000030000000300000000000000"
+      },
+      "tile_len": 4,
+      "values": [
+        13,
+        110,
+        207,
+        48,
+        145,
+        242,
+        83,
+        180,
+        21,
+        118,
+        215,
+        56,
+        153,
+        250,
+        91,
+        188,
+        29,
+        126
+      ],
+      "canonical_hex": "0d6ecf3091f253b41576d73899fa5bbc1d7e",
+      "tile_leaves_hex": [
+        "c164ea39d7bf535284b8b886de5556d7366be5cfb908b357653c1bda36d92ccb1411952bd6ec2e7e10bea64990c5e6b14c5e8951838c4d1940e80df3eb2da86f",
+        "449e55c4dcd94dbb15da8fca92c70a9d21a1bff638551bf0b31c2f2bb2d74c5f4af81f4d3729e05b678b48f78c90a0907276cef8156ad07e4638f8ae66ea1107",
+        "839a3503c73b9ba2525b23608994498d1b27ab18c5807b39f420649bbd446faa82764e4450cbe047c68c9b764b21dc794b557621e3c067fabfa1eaee0a12179d",
+        "71efdef2ad5360412022c08f12815f4f3a3bcf6c7693554702cb5d8b2dbf7e68e42d2712870cd2006932d18b6dea64fc97d10590f08ffec73a27480b0c60eb81",
+        "4c2e3fb8ddcb8d5ba9291c78eb144f616c78e61c94ed43d5c7af66615e5116970ee3f649bbb180b8fc7c391a8b85f5a2ff7cb93e6eebff3d16e5936034f8641e"
+      ],
+      "output_root_hex": "6f27d2bc8e45f78845d849786dd1d4049def05bfaa96dd73502f793837ec8ce179c080cc0ba32dd9c7dd3fdd1cb55abbb039a554fd2667552c95937dc601c539",
+      "proofs": [
+        {
+          "tile": 0,
+          "tile_hex": "0d6ecf30",
+          "path_hex": [
+            "449e55c4dcd94dbb15da8fca92c70a9d21a1bff638551bf0b31c2f2bb2d74c5f4af81f4d3729e05b678b48f78c90a0907276cef8156ad07e4638f8ae66ea1107",
+            "62a18fedcd5ab58f76cb590293c1849aedd586b27fa66ae58b0b1ab2e92a96a79d67423a913f53c439bd3f281070f2dc0010cd07973768f22a33d9b97a1ec6b7",
+            "4c2e3fb8ddcb8d5ba9291c78eb144f616c78e61c94ed43d5c7af66615e5116970ee3f649bbb180b8fc7c391a8b85f5a2ff7cb93e6eebff3d16e5936034f8641e"
+          ]
+        },
+        {
+          "tile": 1,
+          "tile_hex": "91f253b4",
+          "path_hex": [
+            "c164ea39d7bf535284b8b886de5556d7366be5cfb908b357653c1bda36d92ccb1411952bd6ec2e7e10bea64990c5e6b14c5e8951838c4d1940e80df3eb2da86f",
+            "62a18fedcd5ab58f76cb590293c1849aedd586b27fa66ae58b0b1ab2e92a96a79d67423a913f53c439bd3f281070f2dc0010cd07973768f22a33d9b97a1ec6b7",
+            "4c2e3fb8ddcb8d5ba9291c78eb144f616c78e61c94ed43d5c7af66615e5116970ee3f649bbb180b8fc7c391a8b85f5a2ff7cb93e6eebff3d16e5936034f8641e"
+          ]
+        },
+        {
+          "tile": 2,
+          "tile_hex": "1576d738",
+          "path_hex": [
+            "71efdef2ad5360412022c08f12815f4f3a3bcf6c7693554702cb5d8b2dbf7e68e42d2712870cd2006932d18b6dea64fc97d10590f08ffec73a27480b0c60eb81",
+            "d56d9f93b12634ce8c15dafee97c67cf022105e195688094e434a357d400c5033604e45a9bfba99bcfdd8e7b4e131b35801f79055f5148c36baa7c21f75b64e0",
+            "4c2e3fb8ddcb8d5ba9291c78eb144f616c78e61c94ed43d5c7af66615e5116970ee3f649bbb180b8fc7c391a8b85f5a2ff7cb93e6eebff3d16e5936034f8641e"
+          ]
+        },
+        {
+          "tile": 3,
+          "tile_hex": "99fa5bbc",
+          "path_hex": [
+            "839a3503c73b9ba2525b23608994498d1b27ab18c5807b39f420649bbd446faa82764e4450cbe047c68c9b764b21dc794b557621e3c067fabfa1eaee0a12179d",
+            "d56d9f93b12634ce8c15dafee97c67cf022105e195688094e434a357d400c5033604e45a9bfba99bcfdd8e7b4e131b35801f79055f5148c36baa7c21f75b64e0",
+            "4c2e3fb8ddcb8d5ba9291c78eb144f616c78e61c94ed43d5c7af66615e5116970ee3f649bbb180b8fc7c391a8b85f5a2ff7cb93e6eebff3d16e5936034f8641e"
+          ]
+        },
+        {
+          "tile": 4,
+          "tile_hex": "1d7e",
+          "path_hex": [
+            "a7d4209c8d532f60a471b2e4a2dc8f99eb23c7463d120e117096e994d106f569699c651c31a7963e4ae695aeae4f31264d6180ee4f759a9f373612d4c13a70a5"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "image/1x2/extremes",
+      "spec": {
+        "kind": 1,
+        "kind_name": "ImageRgb8",
+        "shape": [
+          1,
+          2,
+          3
+        ],
+        "meta_hex": "",
+        "borsh_hex": "010300000001000000020000000300000000000000"
+      },
+      "tile_len": 8,
+      "values": [
+        0,
+        255,
+        0,
+        255,
+        0,
+        255
+      ],
+      "canonical_hex": "00ff00ff00ff",
+      "tile_leaves_hex": [
+        "58bea10fbde696772ce20423134e18d79cd649568073a660ba473bf6cb20be4c2d797d6858aa5e78fd3530f171f216761871b0b2d40d9bb9ddf96b859fe0aa00"
+      ],
+      "output_root_hex": "686cce20676e9f072cdf651156309a1f5e95853cf948e56a22b875f5764c57d6b520d3396c42cd15ad7abebc244ae116462a063b0f24b7aaee3961b58ec65d2a",
+      "proofs": [
+        {
+          "tile": 0,
+          "tile_hex": "00ff00ff00ff",
+          "path_hex": []
+        }
+      ]
+    },
+    {
+      "name": "pcm/9x2/48k",
+      "spec": {
+        "kind": 2,
+        "kind_name": "PcmI16",
+        "shape": [
+          9,
+          2
+        ],
+        "meta_hex": "80bb0000",
+        "borsh_hex": "020200000009000000020000000400000080bb0000"
+      },
+      "tile_len": 4,
+      "values": [
+        -32768,
+        32767,
+        -32561,
+        -32464,
+        -32367,
+        -32270,
+        -32173,
+        -32076,
+        -31979,
+        -31882,
+        -31785,
+        -31688,
+        -31591,
+        -31494,
+        -31397,
+        -31300,
+        -31203,
+        -31106
+      ],
+      "canonical_hex": "0080ff7fcf8030819181f2815382b48215837683d78338849984fa845b85bc851d867e86",
+      "tile_leaves_hex": [
+        "d922e3a770ba6799edcefcaff673f969b804a411a4570966f5bfc71aba73551b0fdd2e035b41fdbd7286a0485ef928d64a7071c0c35bdb6e8ad49713f72e5b54",
+        "c4021e4f08e984b0c02db1064d76f466d8406fe4e81a975b62b2059df85eea1f28123c06cfcc87288cc36cda48a3f2de01c6eecb625ac0ac19575dd28d1a6b6f",
+        "e591c98c6df105273cdef66497f479e4fe54e9683e56891c8e41fb8b4108d65d7ccb8434aa73f9292cb368d986f9d4bce2ab893deedcfa377dd27d045f0b4b22",
+        "54ee369db978970b158ebb68696132fc377073a8b5ef017773ebdbf5763b369f80fde649c494ae7d0ed174e2e718f625b1868cdfbbf4bef29260f3802b4c0ffc",
+        "a06689fc5d6b6a2d04ee2f94afcf03bbfaacb40ccee2f5687404c84d16586cc9d1da217287add40c99175a239c84fd806d231e98f0440134eea241f145a611ce"
+      ],
+      "output_root_hex": "d1693854d4376e00100f1e4d97e429f6c6a1e4dfdcfcad86a1bd180d9ce527c958cd6439775bdaf7f0164582060868118d333f2e30b576971fee95d8f109a866",
+      "proofs": [
+        {
+          "tile": 0,
+          "tile_hex": "0080ff7fcf803081",
+          "path_hex": [
+            "c4021e4f08e984b0c02db1064d76f466d8406fe4e81a975b62b2059df85eea1f28123c06cfcc87288cc36cda48a3f2de01c6eecb625ac0ac19575dd28d1a6b6f",
+            "3a5d8e2157f811852af2d6e814a796ba6dc7c5d5cbf4b5c351b5c7f1ebc485f1a26a0c4e693a932ca024ae11bbb52cc921905a30258e625cdc720b8e20f587f7",
+            "a06689fc5d6b6a2d04ee2f94afcf03bbfaacb40ccee2f5687404c84d16586cc9d1da217287add40c99175a239c84fd806d231e98f0440134eea241f145a611ce"
+          ]
+        },
+        {
+          "tile": 1,
+          "tile_hex": "9181f2815382b482",
+          "path_hex": [
+            "d922e3a770ba6799edcefcaff673f969b804a411a4570966f5bfc71aba73551b0fdd2e035b41fdbd7286a0485ef928d64a7071c0c35bdb6e8ad49713f72e5b54",
+            "3a5d8e2157f811852af2d6e814a796ba6dc7c5d5cbf4b5c351b5c7f1ebc485f1a26a0c4e693a932ca024ae11bbb52cc921905a30258e625cdc720b8e20f587f7",
+            "a06689fc5d6b6a2d04ee2f94afcf03bbfaacb40ccee2f5687404c84d16586cc9d1da217287add40c99175a239c84fd806d231e98f0440134eea241f145a611ce"
+          ]
+        },
+        {
+          "tile": 2,
+          "tile_hex": "15837683d7833884",
+          "path_hex": [
+            "54ee369db978970b158ebb68696132fc377073a8b5ef017773ebdbf5763b369f80fde649c494ae7d0ed174e2e718f625b1868cdfbbf4bef29260f3802b4c0ffc",
+            "35fbc2f676e83d7deb03897d62a516a52c28b5ca2a4093f4419cd612492e004fb390e63fed4d4604995ddefdbae0dd3cf4a5b0a621605d9745eca9cf4a6e4a0a",
+            "a06689fc5d6b6a2d04ee2f94afcf03bbfaacb40ccee2f5687404c84d16586cc9d1da217287add40c99175a239c84fd806d231e98f0440134eea241f145a611ce"
+          ]
+        },
+        {
+          "tile": 3,
+          "tile_hex": "9984fa845b85bc85",
+          "path_hex": [
+            "e591c98c6df105273cdef66497f479e4fe54e9683e56891c8e41fb8b4108d65d7ccb8434aa73f9292cb368d986f9d4bce2ab893deedcfa377dd27d045f0b4b22",
+            "35fbc2f676e83d7deb03897d62a516a52c28b5ca2a4093f4419cd612492e004fb390e63fed4d4604995ddefdbae0dd3cf4a5b0a621605d9745eca9cf4a6e4a0a",
+            "a06689fc5d6b6a2d04ee2f94afcf03bbfaacb40ccee2f5687404c84d16586cc9d1da217287add40c99175a239c84fd806d231e98f0440134eea241f145a611ce"
+          ]
+        },
+        {
+          "tile": 4,
+          "tile_hex": "1d867e86",
+          "path_hex": [
+            "b65f1ae16ee544fdd3ae54e281aa77fdf9698331cd500b79603bd1ba3be0e4518c407f1a5e655098a8b5d378deadb7ac0b203787ed90fef663c7b2042a2f782e"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "embedding/2x5/q16-normalised",
+      "spec": {
+        "kind": 3,
+        "kind_name": "EmbeddingI32",
+        "shape": [
+          2,
+          5
+        ],
+        "meta_hex": "1001",
+        "borsh_hex": "03020000000200000005000000020000001001"
+      },
+      "tile_len": 4,
+      "values": [
+        -65523,
+        -65426,
+        -65329,
+        -65232,
+        -65135,
+        -65038,
+        -64941,
+        -64844,
+        -64747,
+        -2147483648
+      ],
+      "canonical_hex": "0d00ffff6e00ffffcf00ffff3001ffff9101fffff201ffff5302ffffb402ffff1503ffff00000080",
+      "tile_leaves_hex": [
+        "220c65d72bec388f04e35f7d19030f53fbde8d3e761a20df4c8cb0ff6fea9b28afe98b0c0f46648f98800fe97975baced07568dbf81b7dd8de18cd3fa4846e6d",
+        "9c6af9febda07c2fed55117cbf3d6e59ee63489e7caf24fe2351962b6e2938327a6042fbde31429ac52f748995e6a6f568bc1968dae6ecd4a9b4960e05f68c36",
+        "046cbc2cf8a36788f97c07e8a997a03eb71f01b14b361f9293f57cffa32bf46ce10de47030b1e94e4d068782fc900176e0c99bac136a7ec36c6be3c9b17c87de"
+      ],
+      "output_root_hex": "800cffdc3acae91e77d50fc1345386879334dabb31a481c926f44fa57530c35d05dd060f5dab65094514e3cde0096845c4b3e843ec656ce775e7218344372254",
+      "proofs": [
+        {
+          "tile": 0,
+          "tile_hex": "0d00ffff6e00ffffcf00ffff3001ffff",
+          "path_hex": [
+            "9c6af9febda07c2fed55117cbf3d6e59ee63489e7caf24fe2351962b6e2938327a6042fbde31429ac52f748995e6a6f568bc1968dae6ecd4a9b4960e05f68c36",
+            "046cbc2cf8a36788f97c07e8a997a03eb71f01b14b361f9293f57cffa32bf46ce10de47030b1e94e4d068782fc900176e0c99bac136a7ec36c6be3c9b17c87de"
+          ]
+        },
+        {
+          "tile": 1,
+          "tile_hex": "9101fffff201ffff5302ffffb402ffff",
+          "path_hex": [
+            "220c65d72bec388f04e35f7d19030f53fbde8d3e761a20df4c8cb0ff6fea9b28afe98b0c0f46648f98800fe97975baced07568dbf81b7dd8de18cd3fa4846e6d",
+            "046cbc2cf8a36788f97c07e8a997a03eb71f01b14b361f9293f57cffa32bf46ce10de47030b1e94e4d068782fc900176e0c99bac136a7ec36c6be3c9b17c87de"
+          ]
+        },
+        {
+          "tile": 2,
+          "tile_hex": "1503ffff00000080",
+          "path_hex": [
+            "a50f9d56aeee49a8eec51ca7ee245c86b979ba712edf3f46e66974eaedbfa9f02ba31ec7ca1473e8c9b3b0ba8c79543128cff046fc26ee903e561a1ae329a502"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "video/2x1x2/30000-1001",
+      "spec": {
+        "kind": 4,
+        "kind_name": "VideoRgb8",
+        "shape": [
+          2,
+          1,
+          2,
+          3
+        ],
+        "meta_hex": "30750000e9030000",
+        "borsh_hex": "0404000000020000000100000002000000030000000800000030750000e9030000"
+      },
+      "tile_len": 4,
+      "values": [
+        13,
+        110,
+        207,
+        48,
+        145,
+        242,
+        83,
+        180,
+        21,
+        118,
+        215,
+        56
+      ],
+      "canonical_hex": "0d6ecf3091f253b41576d738",
+      "tile_leaves_hex": [
+        "c164ea39d7bf535284b8b886de5556d7366be5cfb908b357653c1bda36d92ccb1411952bd6ec2e7e10bea64990c5e6b14c5e8951838c4d1940e80df3eb2da86f",
+        "449e55c4dcd94dbb15da8fca92c70a9d21a1bff638551bf0b31c2f2bb2d74c5f4af81f4d3729e05b678b48f78c90a0907276cef8156ad07e4638f8ae66ea1107",
+        "839a3503c73b9ba2525b23608994498d1b27ab18c5807b39f420649bbd446faa82764e4450cbe047c68c9b764b21dc794b557621e3c067fabfa1eaee0a12179d"
+      ],
+      "output_root_hex": "0ece1fbb64be178e2cdf8864bcc5139571c16aeacf5616a2ae26842f4f59189238ade57e8a2e742edead7f704926c335c5f64aef68e53625553ff82779564834",
+      "proofs": [
+        {
+          "tile": 0,
+          "tile_hex": "0d6ecf30",
+          "path_hex": [
+            "449e55c4dcd94dbb15da8fca92c70a9d21a1bff638551bf0b31c2f2bb2d74c5f4af81f4d3729e05b678b48f78c90a0907276cef8156ad07e4638f8ae66ea1107",
+            "839a3503c73b9ba2525b23608994498d1b27ab18c5807b39f420649bbd446faa82764e4450cbe047c68c9b764b21dc794b557621e3c067fabfa1eaee0a12179d"
+          ]
+        },
+        {
+          "tile": 1,
+          "tile_hex": "91f253b4",
+          "path_hex": [
+            "c164ea39d7bf535284b8b886de5556d7366be5cfb908b357653c1bda36d92ccb1411952bd6ec2e7e10bea64990c5e6b14c5e8951838c4d1940e80df3eb2da86f",
+            "839a3503c73b9ba2525b23608994498d1b27ab18c5807b39f420649bbd446faa82764e4450cbe047c68c9b764b21dc794b557621e3c067fabfa1eaee0a12179d"
+          ]
+        },
+        {
+          "tile": 2,
+          "tile_hex": "1576d738",
+          "path_hex": [
+            "d56d9f93b12634ce8c15dafee97c67cf022105e195688094e434a357d400c5033604e45a9bfba99bcfdd8e7b4e131b35801f79055f5148c36baa7c21f75b64e0"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "tensor-le/i16/[2,3]/q12",
+      "spec": {
+        "kind": 5,
+        "kind_name": "TensorLe",
+        "shape": [
+          2,
+          3
+        ],
+        "meta_hex": "010c",
+        "borsh_hex": "0502000000020000000300000002000000010c"
+      },
+      "tile_len": 4,
+      "values": [
+        -32755,
+        -32658,
+        -32561,
+        -32464,
+        -32367,
+        -32270
+      ],
+      "canonical_hex": "0d806e80cf8030819181f281",
+      "tile_leaves_hex": [
+        "ed93a8f9bd0757bb4e229957fe74b82e417013ddada587f72200e342e954d12b6e48cdc24b0b6d1c2fc89f96ee94b23b0b522501855db90e92597f18fc66b42f",
+        "2c991e68b2504f04714b874091a60096d4c0575d1438e4f51c659712c1f2d6c794107292921c3c7e2b1a6912f04fc26e2110b814e4506003cdbb01acb94151b1"
+      ],
+      "output_root_hex": "86e205b898d822d259cd7c46b9d1795f6fd39390b66a14c9aecf318e1a6d8b1b071fc21827d7e9ad9f238f43711427195fb4884b2a81e4030c24dffe4b12095c",
+      "proofs": [
+        {
+          "tile": 0,
+          "tile_hex": "0d806e80cf803081",
+          "path_hex": [
+            "2c991e68b2504f04714b874091a60096d4c0575d1438e4f51c659712c1f2d6c794107292921c3c7e2b1a6912f04fc26e2110b814e4506003cdbb01acb94151b1"
+          ]
+        },
+        {
+          "tile": 1,
+          "tile_hex": "9181f281",
+          "path_hex": [
+            "ed93a8f9bd0757bb4e229957fe74b82e417013ddada587f72200e342e954d12b6e48cdc24b0b6d1c2fc89f96ee94b23b0b522501855db90e92597f18fc66b42f"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "tokens/7",
+      "spec": {
+        "kind": 0,
+        "kind_name": "Tokens",
+        "shape": [
+          7
+        ],
+        "meta_hex": "",
+        "borsh_hex": "00010000000700000000000000"
+      },
+      "tile_len": 4,
+      "values": [
+        0,
+        1,
+        151935,
+        42,
+        4294967295,
+        7,
+        8
+      ],
+      "canonical_hex": "00000000010000007f5102002a000000ffffffff0700000008000000",
+      "tile_leaves_hex": [
+        "92a9fef8f6af156505c5665001338f78a4dbd3c05d0811ab8a2d86625987115f591ef0583534af4fc0283ca323d281556d1415dd8534e6d5ee5194170670b3b5",
+        "83fd7acc83ae460dee215cf26208a61e17023f62a89086d6c126300835829e58b09371e607141635346417327ff099e9bb58ef806e31dda1652e9938ac5ed5a3"
+      ],
+      "output_root_hex": "922c5ac59cdfa1179cde85420a549c437f82a80fd83fc17edd51b11c64436cd269d7f8956e796e282639553c534f3816089baef8376da58da64ad8656875b241",
+      "proofs": [
+        {
+          "tile": 0,
+          "tile_hex": "00000000010000007f5102002a000000",
+          "path_hex": [
+            "83fd7acc83ae460dee215cf26208a61e17023f62a89086d6c126300835829e58b09371e607141635346417327ff099e9bb58ef806e31dda1652e9938ac5ed5a3"
+          ]
+        },
+        {
+          "tile": 1,
+          "tile_hex": "ffffffff0700000008000000",
+          "path_hex": [
+            "92a9fef8f6af156505c5665001338f78a4dbd3c05d0811ab8a2d86625987115f591ef0583534af4fc0283ca323d281556d1415dd8534e6d5ee5194170670b3b5"
+          ]
+        }
+      ]
+    }
+  ],
+  "refusals": [
+    {
+      "name": "pixel-above-255",
+      "kind": 1,
+      "shape": [
+        1,
+        1,
+        3
+      ],
+      "meta_hex": "",
+      "tile_len": 4,
+      "values": [
+        0,
+        256,
+        0
+      ],
+      "expect_error": "Domain"
+    },
+    {
+      "name": "pixel-below-0",
+      "kind": 1,
+      "shape": [
+        1,
+        1,
+        3
+      ],
+      "meta_hex": "",
+      "tile_len": 4,
+      "values": [
+        -1,
+        0,
+        0
+      ],
+      "expect_error": "Domain"
+    },
+    {
+      "name": "sample-outside-i16",
+      "kind": 2,
+      "shape": [
+        1,
+        1
+      ],
+      "meta_hex": "401f0000",
+      "tile_len": 4,
+      "values": [
+        32768
+      ],
+      "expect_error": "Domain"
+    },
+    {
+      "name": "too-few-values",
+      "kind": 1,
+      "shape": [
+        1,
+        2,
+        3
+      ],
+      "meta_hex": "",
+      "tile_len": 4,
+      "values": [
+        0,
+        0,
+        0
+      ],
+      "expect_error": "Count"
+    },
+    {
+      "name": "image-with-4-channels",
+      "kind": 1,
+      "shape": [
+        1,
+        1,
+        4
+      ],
+      "meta_hex": "",
+      "tile_len": 4,
+      "values": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "expect_error": "Shape"
+    },
+    {
+      "name": "unknown-kind",
+      "kind": 6,
+      "shape": [
+        1
+      ],
+      "meta_hex": "",
+      "tile_len": 4,
+      "values": [
+        0
+      ],
+      "expect_error": "UnknownKind"
+    },
+    {
+      "name": "zero-sample-rate",
+      "kind": 2,
+      "shape": [
+        1,
+        1
+      ],
+      "meta_hex": "00000000",
+      "tile_len": 4,
+      "values": [
+        0
+      ],
+      "expect_error": "Meta"
+    },
+    {
+      "name": "zero-fps-denominator",
+      "kind": 4,
+      "shape": [
+        1,
+        1,
+        1,
+        3
+      ],
+      "meta_hex": "1e00000000000000",
+      "tile_len": 4,
+      "values": [
+        0,
+        0,
+        0
+      ],
+      "expect_error": "Meta"
+    },
+    {
+      "name": "tensor-dtype-i64",
+      "kind": 5,
+      "shape": [
+        1
+      ],
+      "meta_hex": "0300",
+      "tile_len": 4,
+      "values": [
+        0
+      ],
+      "expect_error": "Meta"
+    },
+    {
+      "name": "tile-len-3",
+      "kind": 1,
+      "shape": [
+        1,
+        1,
+        3
+      ],
+      "meta_hex": "",
+      "tile_len": 3,
+      "values": [
+        0,
+        0,
+        0
+      ],
+      "expect_error": "TileLen"
+    },
+    {
+      "name": "tile-len-65537",
+      "kind": 1,
+      "shape": [
+        1,
+        1,
+        3
+      ],
+      "meta_hex": "",
+      "tile_len": 65537,
+      "values": [
+        0,
+        0,
+        0
+      ],
+      "expect_error": "TileLen"
+    }
+  ]
+}

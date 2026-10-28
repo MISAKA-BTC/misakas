@@ -1,0 +1,32 @@
+   Compiling misaka-palw-tir v1.1.0 (/Users/wata/.codex/worktrees/08bd/MISAKA-testnet/misaka-palw-tir)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.54s
+     Running tests/golden.rs (/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/golden-b2a78b9e816ac556)
+
+running 3 tests
+test prim_set_id_is_the_keyed_hash_of_the_descriptor ... ok
+test every_primitive_has_vectors_including_its_edges ... ok
+test the_golden_vectors_are_reproduced_byte_for_byte ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+
+     Running tests/programs.rs (/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/programs-d12118c49103dc40)
+
+running 8 tests
+test topk_breaks_ties_to_the_lowest_index ... ok
+test at_equal_heads_grouping_and_tiling_coincide ... ok
+test every_program_here_is_canonical_and_its_slots_are_unrolled_in_order ... ok
+test a_mamba2_layer_runs_its_selective_scan_over_positions ... ok
+test a_top2_moe_layer_with_a_shared_expert_routes_through_committed_selections ... ok
+test a_two_layer_dense_gqa_decoder_runs_and_every_cone_reproduces ... ok
+test a_sliding_window_and_global_schedule_evicts_exactly_past_the_window ... ok
+test a_gdn_layer_with_unequal_key_and_value_heads_runs_and_the_head_mapping_is_data ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s
+
+     Running tests/topk_stream.rs (/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/topk_stream-0868d34fa0c9c3e9)
+
+running 2 tests
+test bounded_selection_matches_independent_full_sort_for_all_axes_ranks_ties_and_extreme_dtypes ... ok
+test large_axis_small_k_and_equal_scores_preserve_the_lowest_ids ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.01s

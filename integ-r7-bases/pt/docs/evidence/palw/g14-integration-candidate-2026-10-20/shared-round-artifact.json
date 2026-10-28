@@ -1,0 +1,86 @@
+{
+  "parent": "cee7f70a8e87c1e2483eea68949ba6944da5b7c5",
+  "selected_unique_passes": 106,
+  "selection": {
+    "native-suite": 41,
+    "shared-suite": 9,
+    "source-suite": 6,
+    "wire-suite": 5,
+    "regressions": 45
+  },
+  "commands": [
+    {
+      "command": "/Users/wata/.cache/misaka-heavy-lock.sh cargo check --release -p kaspa-consensus-core --lib --tests",
+      "log": "shared-round-first-check.log",
+      "exit": 0,
+      "executed_tests": 0,
+      "scope": "before fixture extension"
+    },
+    {
+      "command": "/Users/wata/.cache/misaka-heavy-lock.sh cargo check --release -p kaspa-consensus-core --lib --tests",
+      "log": "shared-round-second-check.log",
+      "exit": 0,
+      "executed_tests": 0,
+      "scope": "before final bad-Sum index and fixed key-length reader detail"
+    },
+    {
+      "command": "/Users/wata/.cache/misaka-heavy-lock.sh cargo test --release -p kaspa-consensus-core --lib shared_history_root_binds_public_original_policy_and_literal_producer_signature",
+      "log": "shared-round-native-first.log",
+      "exit": 0,
+      "passed": 1,
+      "overlap": "included in native41"
+    },
+    {
+      "command": "/Users/wata/.cache/misaka-heavy-lock.sh python3 (sequential binary selections; argv in shared-round-unit-commands.json)",
+      "log": "shared-round-unit-commands.json",
+      "exit": 0
+    },
+    {
+      "command": "/Users/wata/.cache/misaka-heavy-lock.sh cargo test --release -p kaspa-consensus-core --test palw_tir_dissect_fold --test palw_court_shared_root_codec_v1 --test palw_court_service_state_v2 --test palw_court_policy_v1 --test g14_close_gates --test palw_activation_pool_is_t12_only --test palw_the_release_did_not_move",
+      "log": "shared-round-regressions.log",
+      "exit": 0,
+      "passed": 45
+    },
+    {
+      "command": "/Users/wata/.cache/misaka-heavy-lock.sh cargo check --release -p kaspa-consensus --lib",
+      "log": "shared-round-consensus-check.log",
+      "exit": 0
+    },
+    {
+      "command": "python3 docs/maintenance/check_docs.py",
+      "log": "shared-round-docs-first.log",
+      "exit": 1
+    },
+    {
+      "command": "python3 docs/maintenance/check_docs.py",
+      "log": "shared-round-docs-final.log",
+      "exit": 1,
+      "scope": "after RFC/README edits; same5 imported missing references and43 baseline-known, no new authored link defects/baseline update"
+    }
+  ],
+  "scope": "private canonical signed numerical disclosure data; no public funded admission or duty/default authority",
+  "sha256": {
+    "docs/evidence/palw/g14-integration-candidate-2026-10-20/shared-round-consensus-check.log": "32521fc2aed9bf58367fef686ad52345530158c886de070672424b4c1086a3d6",
+    "docs/evidence/palw/g14-integration-candidate-2026-10-20/shared-round-docs-first.log": "8b0e5c9e7be4bd90fc163040f9fb2b66c0132260f8ebbe0b90892c93bdd31ea2",
+    "docs/evidence/palw/g14-integration-candidate-2026-10-20/shared-round-first-check.log": "d5750d7589a24159ddfcc14af97716812c00f6bf9f36b1f5c7a6cf4ea7bcc0a6",
+    "docs/evidence/palw/g14-integration-candidate-2026-10-20/shared-round-native-first.log": "f176e6fc0b845fe2e63727e2f5437adc4e60dea7f01ec8dd79e3f21e91db679f",
+    "docs/evidence/palw/g14-integration-candidate-2026-10-20/shared-round-native-suite.log": "527d012ced615d6a6a4fde2f3bae66634be1d7dcba4adc4ec9eac50d3bc1d38a",
+    "docs/evidence/palw/g14-integration-candidate-2026-10-20/shared-round-regressions.log": "40b292f32838109e2cb2322c74065e9f2ec3544c25158a1dd28db71da424d824",
+    "docs/evidence/palw/g14-integration-candidate-2026-10-20/shared-round-runtime.patch": "263b381202d612694cd0e0c1d82a2043bcfc36b84cca9d6fd66f08be471fb74f",
+    "docs/evidence/palw/g14-integration-candidate-2026-10-20/shared-round-second-check.log": "894896a016db1c6859537e1fbda376741cdd56ee7fa66c151e7ae7212c45d0e8",
+    "docs/evidence/palw/g14-integration-candidate-2026-10-20/shared-round-shared-suite.log": "358ef06545d97b55e26493b1cea7ce6ed98f5a1786c6e5b9f9796237b3391c60",
+    "docs/evidence/palw/g14-integration-candidate-2026-10-20/shared-round-source-audit.json": "49e50ce65397d53cad30a07dbe3cf234bd5741db0c4fa32689f1a90f1401c530",
+    "docs/evidence/palw/g14-integration-candidate-2026-10-20/shared-round-source-suite.log": "4526104064fca8e8252eac9ce73a595b30ea0cc3d59c7e0bade38ae691229664",
+    "docs/evidence/palw/g14-integration-candidate-2026-10-20/shared-round-unit-commands.json": "307956c1ca30336725ac27e8dd8673cf5591e72e76cdf1499f8e1fd02007912a",
+    "docs/evidence/palw/g14-integration-candidate-2026-10-20/shared-round-wire-suite.log": "b0507b24b7c9b4e3f9d229f15034f0254774a8cdf98880dc74632a2a22b8fb19",
+    "docs/evidence/palw/g14-integration-candidate-2026-10-20/shared-round-docs-final.log": "cdef8a1d74c98ea6b4e2a0909193c9f571b0204450f943910b7d8bcfabe42e64"
+  },
+  "unit_binary_sha256": "d7bfea83618211e3745afa5e4a80ee5f5d1d9aa66400848c82e76fdc7e8f7169",
+  "limits": [
+    "Original signature/registration/payment and unit-cost service book remain verified-half fixtures. New round controls use actual ML-DSA. This is not native UTXO/rotation/exit/supply or all-owner/refilling node T05.",
+    "Known phase/control/root clone terms are admitted from actual typed shapes before internal validation. Source analysis/repeated signatures and root validation, snapshot amplification, CPU/IO/fees/transport/mass/storage and complete profile/physical calibration remain open.",
+    "Projection clocks are inherited arithmetic metadata; no accepted child choice, duty fulfillment, processing opportunity, default, credit or financial effect.",
+    "No public lifecycle decoder/dispatcher, complete paid original/all-branch admission, bottom adjudication integration, qualified pruning/release or T01-T15 signoff.",
+    "No production adoption, pre integration/push, deadline/cap/fee/tier/preset changes, arming or deployment."
+  ]
+}

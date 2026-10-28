@@ -1,0 +1,606 @@
+syntax = "proto3";
+package protowire;
+
+option go_package = "github.com/kaspanet/kaspad/protowire";
+
+message RequestAddressesMessage{
+  bool includeAllSubnetworks = 1;
+  SubnetworkId subnetworkId = 2;
+}
+
+message AddressesMessage{
+  repeated NetAddress addressList = 1;
+}
+
+message NetAddress{
+  int64 timestamp = 1;
+  bytes ip = 3;
+  uint32 port = 4;
+}
+
+message SubnetworkId{
+  bytes bytes = 1;
+}
+
+message TransactionMessage{
+  uint32 version = 1;
+  repeated TransactionInput inputs = 2;
+  repeated TransactionOutput outputs = 3;
+  uint64 lockTime = 4;
+  SubnetworkId subnetworkId = 5;
+  uint64 gas = 6;
+  bytes payload = 8;
+  uint64 mass = 9;
+}
+
+message TransactionInput{
+  Outpoint previousOutpoint = 1;
+  bytes signatureScript = 2;
+  uint64 sequence = 3;
+  uint32 sigOpCount = 4;
+}
+
+message Outpoint{
+  TransactionId transactionId = 1;
+  uint32 index = 2;
+}
+
+message TransactionId{
+  bytes bytes = 1;
+}
+message ScriptPublicKey {
+  bytes script = 1;
+  uint32 version = 2;
+}
+
+message TransactionOutput{
+  uint64 value = 1;
+  ScriptPublicKey scriptPublicKey = 2;
+}
+
+message BlockMessage{
+  BlockHeader header = 1;
+  repeated TransactionMessage transactions = 2;
+  // kaspa-pq EVM Lane v0.4 (ADR-0020 §3.1): the block's own EvmExecutionPayload
+  // as its canonical borsh encoding (the exact bytes `evmPayloadHash` commits
+  // to). Empty bytes = the empty payload (every pre-activation block).
+  bytes evmPayload = 3;
+}
+
+message BlockBodyMessage{
+  repeated TransactionMessage transactions = 1;
+  // kaspa-pq EVM Lane v0.4 (ADR-0020 §3.1): the block's own EvmExecutionPayload
+  // as its canonical borsh bytes — the body-only IBD path reassembles the block
+  // from (stored header + this message), and on a v2 block a missing payload
+  // would fail the evm_payload_hash body rule and reject a VALID block. Empty
+  // bytes = the empty payload (every pre-activation block).
+  bytes evmPayload = 2;
+}
+
+message BlockHeader{
+  uint32 version = 1;
+  repeated BlockLevelParents parents = 12;
+  Hash hashMerkleRoot = 3;
+  Hash acceptedIdMerkleRoot = 4;
+  Hash utxoCommitment = 5;
+  int64 timestamp = 6;
+  uint32 bits = 7;
+  uint64 nonce = 8;
+  uint64 daaScore = 9;
+  bytes blueWork = 10;
+  Hash pruningPoint = 14;
+  uint64 blueScore = 13;
+  // kaspa-pq Phase 2 (ADR-0007): Layer-1 PoW algo id (1=kHeavyHash, 2=Argon2id).
+  // Part of the block hash, so it MUST survive P2P relay/IBD serialization or
+  // peers compute mismatching hashes ("requested X but got Y").
+  uint32 powAlgoId = 15;
+  // kaspa-pq EVM Lane v0.4 (ADR-0020 §4): the two EVM commitments. Part of the
+  // v2+ header-hash preimage, so they MUST survive P2P relay/IBD (the
+  // powAlgoId split-brain precedent). Absent/zero on v0/v1 headers.
+  Hash evmPayloadHash = 16;
+  Hash evmCommitmentRoot = 17;
+  // kaspa-pq ADR-0022: the DNS/PoS-v2 overlay-state commitment. Part of the
+  // header-hash preimage on EVERY version (overlay is genesis-active on all
+  // nets), so it MUST survive P2P relay/IBD or peers compute mismatching block
+  // hashes (the powAlgoId / EVM-commitment split-brain precedent).
+  Hash overlayCommitmentRoot = 18;
+  // MISAKA ADR-0038: the post-PoW PALW block commitment (PBC1 bytes). Part of
+  // the block-identity preimage on PALW algo ids, so it MUST survive P2P
+  // relay/IBD (the powAlgoId split-brain precedent). Empty on non-PALW headers.
+  bytes palwCommitment = 19;
+  // ADR-0042 Unit C step 5: the PALW V2 chain-state root after this block's transition. PRE-PoW
+  // and part of the header-hash preimage on V2-lineage algo ids, so it MUST survive P2P relay/IBD
+  // or peers compute mismatching block hashes (the powAlgoId split-brain precedent). Zero on every
+  // header of every network that keeps no V2 state, where the preimage gate reads it as absent.
+  Hash palwStateRoot = 20;
+}
+
+message BlockLevelParents {
+  repeated Hash parentHashes = 1;
+  uint32 cumulativeLevel = 2;
+}
+
+message Hash{
+  bytes bytes = 1;
+}
+
+message RequestBlockLocatorMessage{
+  Hash highHash = 1;
+  uint32 limit = 2;
+}
+
+message BlockLocatorMessage{
+  repeated Hash hashes = 1;
+}
+
+message RequestHeadersMessage{
+  Hash lowHash = 1;
+  Hash highHash = 2;
+}
+
+message RequestNextHeadersMessage{
+}
+
+message DoneHeadersMessage{
+}
+
+message RequestRelayBlocksMessage{
+  repeated Hash hashes = 1;
+}
+
+message RequestTransactionsMessage {
+  repeated TransactionId ids = 1;
+}
+
+message TransactionNotFoundMessage{
+  TransactionId id = 1;
+}
+
+message InvRelayBlockMessage{
+  Hash hash = 1;
+}
+
+message InvTransactionsMessage{
+  repeated TransactionId ids = 1;
+}
+
+message PingMessage{
+  uint64 nonce = 1;
+}
+
+message PongMessage{
+  uint64 nonce = 1;
+}
+
+message VerackMessage{
+}
+
+message VersionMessage{
+  uint32 protocolVersion = 1;
+  uint64 services = 2;
+  int64 timestamp = 3;
+  NetAddress address = 4;
+  bytes id = 5;
+  string userAgent = 6;
+  bool disableRelayTx = 8;
+  SubnetworkId subnetworkId = 9;
+  string network = 10;
+  // kaspa-pq: the rule set this node actually runs, not just the name it answers to.
+  // A shared network name does not imply shared consensus rules — testnet-22 forked
+  // because an older build computed different overlay commitments while presenting an
+  // identical handshake. Peers that disagree here can never reach consensus, so they
+  // are disconnected before either can become an IBD source for the other.
+  // Opaque bytes rather than the Hash message: these two are different widths
+  // (genesis is a 64-byte block hash, the params id a 32-byte digest) and neither
+  // is ever interpreted — only compared.
+  bytes genesisHash = 11;
+  bytes consensusParamsId = 12;
+  // The same fingerprint split in two, so a SCHEDULED rule change stops partitioning the network
+  // at deploy time (audit M1-6). `consensusParamsId` above covers the activation heights too, so
+  // publishing a build that arms a fence at a future H disconnects every upgrading node from every
+  // un-upgraded one immediately — for the whole rollout, with nothing about H involved.
+  //
+  // `consensusIdentityId` is that fingerprint with every fence normalised away: it changes only
+  // when a rule that decides the validity of blocks ALREADY on the chain changes, and it is what
+  // the handshake refuses on. `consensusScheduleId` is the fences alone, compared only to say what
+  // differs. Empty from peers predating these fields, which then fall back to the exact comparison.
+  bytes consensusIdentityId = 13;
+  bytes consensusScheduleId = 14;
+  // ADR-0072 SA-2 — the fork id: which of this build's fences the node has already CROSSED, and
+  // which it will cross next.
+  //
+  // The identity/schedule split above makes a scheduled activation deployable, and leaves exactly
+  // one hole, which the identity id's own doc names: it is computed with every fence normalised
+  // away, so it cannot tell whether the chain has passed one. At the fence the disagreement stops
+  // being about the future — the un-upgraded minority keeps extending the old arm and refuses every
+  // block the majority produces — and both handshakes still say the two are peers. A silent fork.
+  //
+  // `forkIdFired` is a digest of (genesis, the fence heights crossed at this node's DAA score),
+  // computed from the node's own params and its own DAA — never from what a peer says about itself.
+  // `forkIdNext` is the lowest fence still ahead of it, or u64::MAX for none; it is what separates
+  // "has crossed nothing YET" from "will never cross anything", which the digest alone cannot.
+  // Empty/zero from peers predating these fields.
+  bytes forkIdFired = 15;
+  uint64 forkIdNext = 16;
+}
+
+// A peer's answer to "which chain are you on?", asked during an IBD so that the chain a
+// node adopts can be chosen by comparison rather than by which peer relayed first.
+//
+// Carries no block bodies and no proof: it is a CLAIM, cheap to make and cheap to serve.
+// What it is for is deciding whom to ask for a pruning proof, and in what order. Nothing
+// in it may decide which chain is canonical — see IbdCandidateSummary in flows.
+message RequestIbdCandidateSummaryMessage{
+}
+
+message IbdCandidateSummaryMessage{
+  // The peer's current virtual selected parent header. Its blue_work is the peer's
+  // CLAIM about the weight of its chain: a header commits to the value through PoW, but
+  // nothing in a single header shows the value was derived correctly from its parents
+  // (that is contextual validation, and `UnexpectedHeaderBlueWork` is the rule that
+  // catches it). A peer that mines one valid block can write any number here.
+  BlockHeader virtualSelectedParent = 1;
+  // The peer's pruning point. Together with the selected parent this identifies the
+  // chain being offered, so peers offering the same chain collapse to one candidate.
+  Hash pruningPoint = 2;
+  // Repeated from the handshake so a candidate can be rejected on rules alone, without
+  // trusting that the connection was verified elsewhere.
+  bytes genesisHash = 3;
+  bytes consensusParamsId = 4;
+}
+
+message RejectMessage{
+  string reason = 1;
+}
+
+message RequestPruningPointUTXOSetMessage{
+  Hash pruningPointHash = 1;
+}
+
+message PruningPointUtxoSetChunkMessage{
+  repeated OutpointAndUtxoEntryPair outpointAndUtxoEntryPairs = 1;
+}
+
+message OutpointAndUtxoEntryPair{
+  Outpoint outpoint = 1;
+  UtxoEntry utxoEntry = 2;
+}
+
+message UtxoEntry {
+  uint64 amount = 1;
+  ScriptPublicKey scriptPublicKey = 2;
+  uint64 blockDaaScore = 3;
+  bool isCoinbase = 4;
+}
+
+message RequestNextPruningPointUtxoSetChunkMessage {
+}
+
+message DonePruningPointUtxoSetChunksMessage {
+}
+
+message RequestIBDBlocksMessage{
+  repeated Hash hashes = 1;
+}
+
+message RequestBlockBodiesMessage{
+  repeated Hash hashes = 1;
+}
+
+// kaspa-pq EVM Lane v0.4 (§14.2): pending EVM tx gossip (protocol ≥ 101 only).
+// Hashes are 32-byte keccak256 tx hashes; raw is the EIP-2718 envelope a
+// payload carries. Relay happens only AFTER the class-1 admission precheck.
+message InvEvmTransactionsMessage{
+  repeated bytes hashes = 1;
+}
+
+message RequestEvmTransactionsMessage{
+  repeated bytes hashes = 1;
+}
+
+message EvmTransactionMessage{
+  bytes raw = 1;
+}
+
+message EvmTransactionNotFoundMessage{
+  bytes hash = 1;
+}
+
+// kaspa-pq EVM Lane v0.4 (§14.2 / §9.2): pending EVM deposit-claim gossip
+// (protocol ≥ 101 only). A claim's identity is its deposit lock Outpoint (NOT a
+// hash); the body is borsh(DepositClaim). On receipt a node RE-RESOLVES the
+// outpoint against its own live UTXO view and re-validates the claim's fields
+// against the EVM_DEPOSIT_LOCK output before queueing — a relayed claim is
+// never trusted on its asserted fields.
+message InvEvmDepositClaimsMessage{
+  repeated Outpoint outpoints = 1;
+}
+
+message RequestEvmDepositClaimsMessage{
+  repeated Outpoint outpoints = 1;
+}
+
+message EvmDepositClaimMessage{
+  bytes claim = 1; // borsh(DepositClaim)
+}
+
+message EvmDepositClaimNotFoundMessage{
+  Outpoint outpoint = 1;
+}
+
+message UnexpectedPruningPointMessage{
+}
+
+message IbdBlockLocatorMessage {
+  Hash targetHash = 1;
+  repeated Hash blockLocatorHashes = 2;
+}
+
+message RequestIBDChainBlockLocatorMessage{
+  Hash lowHash = 1;
+  Hash highHash = 2;
+}
+
+message IbdChainBlockLocatorMessage {
+  repeated Hash blockLocatorHashes = 1;
+}
+
+// Legacy name of this message is `RequestAnticoneMessage`
+message RequestAntipastMessage{
+  Hash blockHash = 1;
+  Hash contextHash = 2;
+}
+
+message IbdBlockLocatorHighestHashMessage {
+  Hash highestHash = 1;
+}
+
+message IbdBlockLocatorHighestHashNotFoundMessage {
+}
+
+message BlockHeadersMessage {
+  repeated BlockHeader blockHeaders = 1;
+}
+
+message RequestPruningPointAndItsAnticoneMessage {
+}
+
+message RequestNextPruningPointAndItsAnticoneBlocksMessage{
+}
+
+// TODO: remove once v4 is obsolete
+message BlockWithTrustedDataMessage {
+  BlockMessage block = 1;
+  uint64 daaScore = 2;
+  repeated DaaBlock daaWindow = 3;
+  repeated BlockGhostdagDataHashPair ghostdagData = 4;
+}
+
+// TODO: rename to `TrustedBlock` once v5 is obsolete
+message DaaBlock {
+  BlockMessage block = 3;
+  GhostdagData ghostdagData = 2;
+}
+
+// TODO: rename to `TrustedHeader` once v5 is obsolete
+message DaaBlockV4 {
+  BlockHeader header = 1;
+  GhostdagData ghostdagData = 2;
+}
+
+// TODO: remove once v5 is obsolete
+message BlockGhostdagDataHashPair {
+  Hash hash = 1;
+  GhostdagData ghostdagData = 2;
+}
+
+message GhostdagData {
+  uint64 blueScore = 1;
+  bytes blueWork = 2;
+  Hash selectedParent = 3;
+  repeated Hash mergeSetBlues = 4;
+  repeated Hash mergeSetReds = 5;
+  repeated BluesAnticoneSizes bluesAnticoneSizes = 6;
+}
+
+message BluesAnticoneSizes {
+  Hash blueHash = 1;
+  uint32 anticoneSize = 2;
+}
+
+message DoneBlocksWithTrustedDataMessage {
+}
+
+message PruningPointsMessage {
+  repeated BlockHeader headers = 1;
+}
+
+message RequestPruningPointProofMessage {
+}
+
+message PruningPointProofMessage {
+  repeated PruningPointProofHeaderArray headers = 1;
+}
+
+message PruningPointProofHeaderArray {
+  repeated BlockHeader headers = 1;
+}
+
+message ReadyMessage {
+}
+
+message BlockWithTrustedDataV4Message {
+  BlockMessage block = 1;
+  repeated uint64 daaWindowIndices = 2; // TODO: remove once v5 is obsolete
+  repeated uint64 ghostdagDataIndices = 3; // TODO: remove once v5 is obsolete
+}
+
+message TrustedDataMessage {
+  repeated DaaBlockV4 daaWindow = 1; // TODO: rename to `trustedSubDag` once v5 is obsolete
+  repeated BlockGhostdagDataHashPair ghostdagData = 2; // TODO: remove once v5 is obsolete
+}
+
+// kaspa-pq ADR-0022: pruned-IBD EVM + DNS/PoS-v2 overlay snapshot transfer. The
+// snapshots are carried as borsh blobs (the consensus types are already Borsh) to
+// avoid mirroring every field in proto. Single message each (not chunked): EVM state
+// is empty on EVM-inert nets and modest on testnet/devnet; the overlay snapshot is
+// small. `found = false` ⇒ the serving node has no snapshot (overlay dormant / not yet
+// captured), and the requester treats the peer as unable to serve pruned-IBD here.
+message RequestPruningPointEvmStateMessage{
+  Hash pruningPointHash = 1;
+}
+
+message PruningPointEvmStateMessage{
+  bool found = 1;
+  bytes evmHeader = 2;        // borsh(EvmExecutionHeader)
+  bytes evmStateSnapshot = 3; // borsh(EvmStateSnapshot)
+}
+
+message RequestPruningPointOverlaySnapshotMessage{
+  Hash pruningPointHash = 1;
+}
+
+message PruningPointOverlaySnapshotMessage{
+  bool found = 1;
+  bytes overlaySnapshot = 2; // borsh(OverlaySnapshot)
+}
+
+message RequestPruningPointPalwStateMessage{
+  Hash pruningPointHash = 1;
+  // Protocol >= 106 only. Empty root/index zero starts one bounded immutable stream.
+  bool chunked = 2;
+  bytes snapshotRoot = 3;
+  uint32 chunkIndex = 4;
+  // Protocol >=107 only: codec 1 is one zlib stream; nonce is requester-chosen 32 bytes.
+  uint32 snapshotCodec = 5;
+  bytes snapshotNonce = 6;
+}
+
+message PruningPointPalwStateMessage{
+  bool found = 1;
+  bytes palwState = 2; // borsh(PalwStateCarriageV2)
+  // ADR-0067 Decision 6: the class DECLARATIONS the imported state's classes were registered
+  // under. The state carries a class's economic facts and not its graph, so a node that joins by
+  // a pruned sync would hold classes it cannot serve — it never walks the blocks whose acceptance
+  // wrote the declarations. These ride along, and they need no authentication of their own: a
+  // declaration is checked against the imported state (the class must be there, the profile must
+  // hash to its id, the canonical must name the same class), so a server that sends the wrong
+  // bytes wastes only its own bandwidth. ADDITIVE: a peer that does not send this leaves the
+  // field empty, and the client falls back to --palw-class-carriage.
+  repeated PalwClassCarriageEntry classCarriages = 3;
+  // Protocol >= 106: palwState is one <=4 MiB chunk of format:u16, stateLength:u64,
+  // borsh(carriage)[stateLength], borsh(declarations). Length isolates optional EOF tails;
+  // classCarriages is empty. Native import still verifies the consensus state root.
+  bool chunked = 4;
+  Hash pruningPointHash = 5;
+  bytes snapshotRoot = 6;
+  uint32 chunkIndex = 7;
+  uint32 chunkCount = 8;
+  uint64 totalBytes = 9;
+  bytes chunkHash = 10;
+  uint32 snapshotCodec = 11;
+  uint64 decodedBytes = 12;
+  bytes snapshotNonce = 13;
+}
+
+// One class's declaration, as the accept path would have indexed it.
+message PalwClassCarriageEntry{
+  Hash classId = 1;
+  bytes carriage = 2; // borsh(PalwClassAdmissionCarriageV2)
+}
+
+// ADR-0042 Decision 7 data availability, transport half (launch blockers: "what is still missing").
+// The producer broadcasts the retained material behind a claim; panel seats verify it against the
+// claim's own committed roots (`base0_material_matches_claim_v1`) — the bytes prove themselves, so
+// this message carries no authentication of its own.
+message PalwTraceMaterialBroadcastMessage{
+  Hash claimId = 1;
+  bytes material = 2; // base0_material_encode_v1 bytes
+}
+
+// One seat's signed receipt (borsh(PalwSeatReceiptV2)), gossiped so whoever assembles the quorum —
+// the producer for `ReceiptLicensed`, any funded seat for `ProducerDefaulted` — can hear it. The
+// signature inside is the authentication; the transport adds none.
+message PalwSeatReceiptBroadcastMessage{
+  bytes receipt = 1;
+}
+
+// **Pull half of the material transport.** A panel seat that holds a duty but no material asks the
+// network before accusing: the producer may already be gone (measured 2026-08-28 — five outside
+// floor producers stopped their nodes and every in-flight claim of theirs defaulted hours later),
+// but any peer that heard the broadcast once can re-serve it. The SERVE side answers on the
+// existing PalwTraceMaterialBroadcastMessage — every peer can route that, old protocol included —
+// so only this request needs a protocol-version gate.
+message PalwPrefixHistoryRequestMessage {
+  // Borsh PalwPrefixHistoryRequestV1: exact rooted head, owner, seed, order and clock.
+  bytes request = 1;
+}
+message PalwPrefixHistoryRecordMessage {
+  Hash contextId = 1;
+  // One Borsh accepted-history record, at most 90,224 bytes. Never a capture.
+  bytes record = 2;
+}
+
+message PalwMaterialRequestMessage{
+  Hash claimId = 1;
+  // **The same rule as the interval lane** (ADR-0077 SA-2, last sentence: "the same rule covers
+  // `request_palw_material` today"). A whole capture is up to 16 MiB and this request was
+  // sixty-four bytes with no signature, no bond binding and no per-bond rate — the amplifier the
+  // interval lane was told to avoid, already shipped. Fields 2-4 carry the same authentication as
+  // `PalwIntervalOpeningRequestMessage`, over `palw_fp_material_request_message_v1`. They are
+  // ABSENT on a pre-5f peer's request, which decodes to empty bytes and a zero DAA — the shape
+  // check names that "unsigned" and a serving node refuses it, while a node that serves nothing
+  // is unaffected either way.
+  bytes requesterPubkey = 2;
+  bytes signature = 3;
+  uint64 requestedDaa = 4;
+}
+
+// **The seat verifies one interval; the executor opens it** (ADR-0077 Decision 8). A free-prompt
+// seat no longer pulls the whole capture and hashes it: it draws k checkpoint intervals from the
+// claim's beacon and its own seat index (`palw_fp_interval_draw_v1`) and asks for each one's
+// opening — the checkpoint chunk at the interval's start, the committed rows of the interval, and
+// the ids it consumed and produced, each opened against the roots the claim committed. Bytes per
+// seat are O(k × (interval × row + log2 leaves)), independent of the job (R1/W10).
+//
+// **Authenticated, because Decision 8 turns every executor into a server** (ADR-0077 SA-2,
+// ADR-0079 SA-3). An unauthenticated opening endpoint is a bandwidth amplifier against every
+// producer on the network: a ~70-byte request would buy a disk read, a family's opening arithmetic
+// and a multi-megabyte answer. So a request carries the requester's ML-DSA-87 PUBLIC KEY and a
+// signature over the request itself, and the server answers only a key the chain maps to a bond —
+// a seat of this claim's panel or an Active bond acting as challenger. The bond key is DERIVED
+// from the pubkey on chain rather than carried: a carried bond key is the requester's own claim
+// about itself, and a second place to disagree with the chain.
+//
+// Asker-specific, like the material serve since audit M2-2: the answer goes to the peer that
+// asked, and neither message is relayed — a relayed opening is bytes every peer pays for and
+// exactly one peer wanted.
+message PalwIntervalOpeningRequestMessage{
+  Hash claimId = 1;
+  uint32 intervalIndex = 2;
+  // ML-DSA-87 public key of the requesting bond (2,592 bytes). Shape-checked before anything is
+  // read (ADR-0079 Decision 4's `check_opening_request_shape`).
+  bytes requesterPubkey = 3;
+  // ML-DSA-87 signature (4,627 bytes) over `palw_fp_opening_request_message_v1`, which binds the
+  // network domain, the claim, the interval index and `requestedDaa`. Binding the index is what
+  // stops one signature being replayed as a request for every interval of every claim.
+  bytes signature = 4;
+  // The requester's own DAA score when it signed. The server refuses a request older or newer
+  // than its freshness window, so a captured request is not a permanent serving right.
+  uint64 requestedDaa = 5;
+  // **ADR-0111 Decision 2: a leaf's evidence.** Meaningful only when `intervalIndex` sets bit 29
+  // (`PALW_LEAF_EVIDENCE_REQUEST_BIT_V1`) above the leaf's interval: then this names the step leaf
+  // whose evidence the seat asks for, and the signature binds it. A pre-0111 peer ignores the field
+  // and reads the index as an interval past every job, which it cannot open.
+  uint64 leafIndex = 6;
+}
+
+// The answer: `opening` is the family's own encoding (`open_fp_interval`), opaque to the
+// transport — only the backend that wrote it reads it, and the seat binds it to the claim's roots
+// before believing anything in it. Capped at PALW_INTERVAL_OPENING_MAX_BYTES on both ends, and the
+// cap is checked BEFORE the bytes are handed to any decoder.
+message PalwIntervalOpeningMessage{
+  Hash claimId = 1;
+  uint32 intervalIndex = 2;
+  bytes opening = 3;
+}

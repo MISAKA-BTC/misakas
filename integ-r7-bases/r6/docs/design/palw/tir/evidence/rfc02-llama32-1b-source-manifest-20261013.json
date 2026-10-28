@@ -1,0 +1,38 @@
+{
+  "repository": "unsloth/Llama-3.2-1B-Instruct",
+  "revision": "5a8abab4a5d6f164389b1079fb721cfab8d7126c",
+  "source_files": [
+    {
+      "path": "model.safetensors",
+      "bytes": 2471645608,
+      "sha256": "1ff795ff6a07e6a68085d206fb84417da2f083f68391c2843cd2b8ac6df8538f",
+      "pin_origin": "saved_revision_api_lfs_oid"
+    },
+    {
+      "path": "config.json",
+      "bytes": 894,
+      "sha256": "dfb67fd8afe73a1c75245824ef9d64a6ba8983025447e3bf76aa1ea57ee46152",
+      "pin_origin": "local_predeclared_bytes"
+    },
+    {
+      "path": "tokenizer.json",
+      "bytes": 17209920,
+      "sha256": "6b9e4e7fb171f92fd137b777cc2714bf87d11576700a1dcd7a399e7bbe39537b",
+      "pin_origin": "local_predeclared_bytes"
+    },
+    {
+      "path": "tokenizer_config.json",
+      "bytes": 54669,
+      "sha256": "9ddd255c19fe319c8d4e891163540382e9fbda99f394674f2a929efc47d57458",
+      "pin_origin": "local_predeclared_bytes"
+    },
+    {
+      "path": "generation_config.json",
+      "bytes": 239,
+      "sha256": "6d4f979915331212d7672c68b22a4ddad9e21ed8126cf2bd1ea6b2b88f595c1c",
+      "pin_origin": "local_predeclared_bytes"
+    }
+  ],
+  "schema": "misaka.rfc02.pinned-source-manifest.v1",
+  "source_revision_authentication": "saved_api_assertion_only; independent publisher authentication not established"
+}

@@ -1,0 +1,19 @@
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/consensus/core)
+    Finished `test` profile [unoptimized] target(s) in 9m 05s
+     Running unittests src/lib.rs (/tmp/misaka-rfc67812-node-target/debug/deps/kaspa_consensus_core-88d0efc044fb514d)
+
+running 1 test
+
+thread 'palw_state_v2::tests::exec_v2_fold_v1::amendment_1::exec_paid_material_contract_refuses_short_signed_horizon_before_any_fee_or_provider_write' (16997893) panicked at consensus/core/src/palw_state_v2/tests/exec_v2_fold_v1.rs:119:6:
+the panel binds: MissingClaim(c4bcff32f4ffd3221d7a5569034621f91c73c0e84179ced6f295dfee1e8dd13ed3bcf664f769d087c997dcd0d389193e3f9f863373ca5c1cd6aa85efe5d50247)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test palw_state_v2::tests::exec_v2_fold_v1::amendment_1::exec_paid_material_contract_refuses_short_signed_horizon_before_any_fee_or_provider_write ... FAILED
+
+failures:
+
+failures:
+    palw_state_v2::tests::exec_v2_fold_v1::amendment_1::exec_paid_material_contract_refuses_short_signed_horizon_before_any_fee_or_provider_write
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3922 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p kaspa-consensus-core --lib`

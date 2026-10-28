@@ -1,0 +1,403 @@
+{
+ "schema": "misaka.h1.conversion.v1",
+ "build_real_seconds": 3216.35,
+ "hf_fit_at_build": "slope 0.9982, corr 0.99971, top-1 1.000, KL 0.00157, max |\u0394| 0.551",
+ "cache_key": "1a21e232e6543ba7",
+ "cache_dir": "/Users/wata/Downloads/MISAKA-wt-b/wh-h1-run/cache/glm-edge-1.5b/1a21e232e6543ba7",
+ "clean_source": false,
+ "build_exit": 0,
+ "wall_seconds_this_invocation": 4692,
+ "artifact_file": "/Users/wata/Downloads/MISAKA-wt-b/wh-h1-run/cache/glm-edge-1.5b/1a21e232e6543ba7/class.palwtir.testnet-12.palwtir",
+ "lowered_file": "/Users/wata/Downloads/MISAKA-wt-b/wh-h1-run/cache/glm-edge-1.5b/1a21e232e6543ba7/class.palwtir",
+ "lowered_bytes": 1642067584,
+ "artifact_bytes": 1642067712,
+ "artifact_sha256": "bfce330d1ff26de3d03a0649f372079cd20e27d8c5e3e0f3825aadb34e067a59",
+ "max_rss_bytes_seen": [
+  4272668672
+ ],
+ "pack_digest": "98e9cd7b62be189921c7117ca5d5ed7bb01d9c0ec9b505481118709e5bfa51e7",
+ "pack": {
+  "name": "glm-edge-1.5b",
+  "model": {
+   "architectures": [
+    "GlmForCausalLM"
+   ],
+   "config_digest": "3c34a2fd514e38343c6c86cc73e090fb922d0dce4a7220dfcfb266219d3a509d",
+   "files": [
+    {
+     "bytes": 680,
+     "path": "config.json",
+     "sha256": "cac06b36fc4fdcee4e40687a4a4550184f7c6367191f1e0988b6d993352d8b14"
+    },
+    {
+     "bytes": 3186882328,
+     "path": "model.safetensors",
+     "sha256": "b556690579356fbdec0e34c435b298f4ea9229dddffe7dac5832c7e5464b7799"
+    },
+    {
+     "bytes": 6834426,
+     "path": "tokenizer.json",
+     "sha256": "f78a0fcf4b6ef0e462557283a53ebf71cd91a41f41dc581fb870b724e6edb9bf"
+    }
+   ],
+   "format": "safetensors",
+   "label": "zai-org/glm-edge-1.5b-chat",
+   "model_type": "glm",
+   "revision": "7b201d3c160c25beda4cf0d107617ad975cd1ca8"
+  },
+  "frontend": {
+   "adapter": {
+    "hash": "bb7f5a3fcf4bc0bcd26a8c7d00c0b5b9e3863ec2821f6685d5553c3c646967e9984df65414dcca06455d2f63a9ae6ad89a72fea066f6720493e5b9a57d9bf8c2",
+    "id": "glm",
+    "kind": "built-in"
+   },
+   "assumed_defaults": [],
+   "builtin_pack_hash": "20437c8e4a8e759f21715b1b993ce5fea032e9f79f00410b859f12f2b871664a01d2489577e40d38794efbe65eefbc4753b06a6601a556668292f974a091aafb",
+   "level": "B",
+   "spec_digest": "1382ebc8908ebdf8eda0993be51fb8fc7ea713ee91725f26578d8559627f0924"
+  },
+  "features": {
+   "registry_digest": "cb891cf3dbe05fcd93a81a1fa468022d9d9ab192ac1f720f3f468e372eb28f78",
+   "scope": {
+    "excluded": [],
+    "input": "token ids",
+    "output": "next-token logits",
+    "schema": "misaka.palw.feature-scope.v1",
+    "task": "text-generation",
+    "text_only": false
+   },
+   "used": [
+    {
+     "detail": "16q/4kv \u00d7 128 (group 4)",
+     "id": "ATTN_GQA_V1",
+     "layers": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27
+     ]
+    },
+    {
+     "detail": "59264 \u00d7 2048",
+     "id": "EMBED_TOKEN_V1",
+     "layers": []
+    },
+    {
+     "detail": "",
+     "id": "HEAD_TIED_V1",
+     "layers": []
+    },
+    {
+     "detail": "6144",
+     "id": "MLP_DENSE_GATED_V1",
+     "layers": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27
+     ]
+    },
+    {
+     "detail": "",
+     "id": "NORM_RMS_V1",
+     "layers": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27
+     ]
+    },
+    {
+     "detail": "",
+     "id": "OUTPUT_LOGITS_V1",
+     "layers": []
+    },
+    {
+     "detail": "",
+     "id": "RESIDUAL_PRE_NORM_V1",
+     "layers": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27
+     ]
+    },
+    {
+     "detail": "",
+     "id": "ROPE_DEFAULT_V1",
+     "layers": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27
+     ]
+    },
+    {
+     "detail": "",
+     "id": "ROPE_INTERLEAVED_V1",
+     "layers": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27
+     ]
+    }
+   ]
+  },
+  "quant": {
+   "descriptors": []
+  },
+  "profile": {
+   "calibration": {
+    "schema": "misaka.palw.calib-stats.v1",
+    "sequences_file": "calib-tokens.json",
+    "sites": 536,
+    "source": {
+     "files": [
+      {
+       "chunks": 1,
+       "file": "docs/archival.md",
+       "sha256": "71c3c4e1386b8eaa8def15c0640277008a0a77b0691a387f3e340f23c1609909",
+       "tokens": 3739
+      },
+      {
+       "chunks": 1,
+       "file": "docs/crescendo-guide.md",
+       "sha256": "e7f4ab8be58c9715f1aff83832a80889f772ff1c5e8c75b1b7e81bbe903d9965",
+       "tokens": 1255
+      },
+      {
+       "chunks": 1,
+       "file": "CONTRIBUTING.md",
+       "sha256": "1f11326094038a50e4823bc73ff0a6e96cbf5502ab78ec737c5d969eb3ada651",
+       "tokens": 1226
+      },
+      {
+       "chunks": 1,
+       "file": "SECURITY.md",
+       "sha256": "1a4219d71ba1a6f705f502b64da01539afffa59183b4cb786dd90a6cc175a6f8",
+       "tokens": 4407
+      }
+     ],
+     "len": 512,
+     "tokenizer": "/Users/wata/Downloads/MISAKA-wt-b/hf-ckpt/zai-org/glm-edge-1.5b-chat/tokenizer.json"
+    },
+    "stats_digest": "67b05d9f38d6c6ec20df25363d9a6a46536e263b557bb42b2ae0c66a7c324102",
+    "stats_file": "stats.json"
+   },
+   "context": 512,
+   "policy": {
+    "headroom16": "4000000000000000",
+    "headroom32": "4010000000000000",
+    "headroom_resid": "4010000000000000"
+   }
+  },
+  "converter": {
+   "crate_version": "1.1.0",
+   "lowering": "misaka.palw.lowering.v1",
+   "math": {
+    "mode": "libm-v1"
+   },
+   "name": "palw-tir-convert"
+  },
+  "declared": [
+   {
+    "checkpoint_interval": 65536,
+    "class_id": "f908d955255900ba27943ae2d1ab9399f99d7fa909b7b77ab96410edb5a1093c14b9583cb6f20f758b48df21b81e4c6bf2aa82decdf2ea595f3cd87fdecab26f",
+    "exact_layout": {
+     "commit_tiles": [
+      64,
+      64,
+      64,
+      64,
+      64,
+      64,
+      64,
+      64,
+      64,
+      64,
+      64,
+      64,
+      64,
+      64,
+      64,
+      64,
+      512
+     ],
+     "logits_scheme_id": "e0532a21545ebcdee3e6bc9c65b963ba123667fe60b4aaf5e56a0f4378f3ca1fc58e58937e9863341a67dcbb0f000af1d77333f8dfd48135e0ebf95e71d5f5a1",
+     "state_tiles": [
+      64,
+      64
+     ],
+     "version": 1
+    },
+    "file_digest": "088603ae0fce91c5515f512967ccfc5a42ca46e0b5ae986942a7f83abf852ea790bed139f3e21af415a03e25c0fb82b42068fdc5e60e448aa0be3c6f3b03d996",
+    "h_tile": 64,
+    "layout_digest": "ab74303999ff006ed1517d9aa25379847de070782b6198fa19fd81f62c416c36a769116b56fc53325f35ff78d315f2e4ea8bb665532f913c0c6761eb8e955efc",
+    "max_context": 512,
+    "network": "testnet-12"
+   }
+  ],
+  "conformance": {
+   "vectors": [
+    {
+     "commits_digest": "fc97e13be17cadf3cbe3fe1a474741714ae32b72c36e343668396f261ec278af",
+     "decode": 1,
+     "label": "random 0 (1+1)",
+     "logits_digest": "f377b259c6950e839c3432b6b5313458769a67974cc92f2cd2a9d9c98cb75741",
+     "positions": 2,
+     "prompt": [
+      22655
+     ],
+     "tokens": [
+      10
+     ]
+    }
+   ]
+  }
+ }
+}

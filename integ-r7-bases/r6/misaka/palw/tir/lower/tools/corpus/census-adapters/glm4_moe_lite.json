@@ -1,0 +1,13 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "glm4_moe_lite",
+  "doc": "GLM-4.x-Lite (zai-org): DeepSeek-V3's MLA attention and sigmoid group-limited routing with a selection bias and shared expert, the dense/sparse pattern given per layer by mlp_layer_types (default: dense first, sparse after) instead of first_k_dense_replace. Third-party adapter (lane H): data only, extends the built-in deepseek-v3.",
+  "extends": ["deepseek-v3"],
+  "match": {"architectures": ["Glm4MoeLiteForCausalLM"], "model_types": ["glm4_moe_lite"]},
+  "vars": [
+    {"name": "mlt", "value": {"$cfg?": "mlp_layer_types"}},
+    {"name": "sparse_here", "layer": true, "value": {"$if": [{"$ne": [{"$var": "mlt"}, null]}, {"$eq": [{"$index": [{"$var": "mlt"}, {"$var": "i"}]}, "sparse"]}, {"$ge": [{"$var": "i"}, 1]}]}},
+    {"name": "l_ffn", "layer": true, "value": {"$if": [{"$var": "sparse_here"}, {"Moe": {"experts": {"$var": "e"}, "top_k": {"$var": "k"}, "intermediate": {"$var": "moe_inter"}, "act": {"$var": "act"}, "router": {"$var": "router"}, "shared": {"$var": "shared"}}}, {"Mlp": {"intermediate": {"$var": "inter"}, "act": {"$var": "act"}, "gated": true, "up_bias": {"$var": "mbias"}, "down_bias": {"$var": "mbias"}}}]}},
+    {"name": "model_type", "value": "glm4_moe_lite"}
+  ]
+}

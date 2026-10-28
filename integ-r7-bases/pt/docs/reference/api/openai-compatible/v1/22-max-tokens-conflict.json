@@ -1,0 +1,16 @@
+{
+  "request": {
+    "messages": [
+      {
+        "role": "user",
+        "content": "Hello"
+      }
+    ],
+    "max_tokens": 64,
+    "max_completion_tokens": 128
+  },
+  "expect": {
+    "verdict": "refused",
+    "reason_contains": "max_tokens 64 and max_completion_tokens 128 disagree"
+  }
+}

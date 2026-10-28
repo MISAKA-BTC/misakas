@@ -1,0 +1,64 @@
+{
+  "base": "292a6d7db",
+  "branch": "codex/palw-behavior-preserving-refactor",
+  "scope": "shared pre-object preparation extraction; complete multi-area refactoring remains active",
+  "tests": {
+    "unique_existing_tests_equal_before_after": 38,
+    "integration_after": 29,
+    "transformer_pin": 3,
+    "unique_selected_after_passes": 70
+  },
+  "checks": {
+    "core_lib_tests": 0,
+    "consensus_lib": 0,
+    "docs": 1
+  },
+  "docs_existing_issues": {
+    "baseline_known": 43,
+    "previously_imported_missing": 5,
+    "new_authored_missing": 0
+  },
+  "commands": [
+    {
+      "command": "/Users/wata/.cache/misaka-heavy-lock.sh cargo test --release -p kaspa-consensus-core --lib pre_object_base -- --nocapture",
+      "exit": 0,
+      "note": "subset of the 38 tests, not added to total"
+    },
+    {
+      "command": "/Users/wata/.cache/misaka-heavy-lock.sh cargo test --release -p kaspa-consensus-core --test rcore_f2_lock_redate --test position_b1_carrier_refund --test review12_0_burn_and_cap --test palw_the_release_did_not_move --test palw_activation_pool_is_t12_only",
+      "exit": 0
+    },
+    {
+      "command": "/Users/wata/.cache/misaka-heavy-lock.sh cargo test --release -p misaka-palw-derive --test transformer_id_pin",
+      "exit": 0
+    },
+    {
+      "command": "/Users/wata/.cache/misaka-heavy-lock.sh cargo check --release -p kaspa-consensus-core --lib --tests",
+      "exit": 0
+    },
+    {
+      "command": "/Users/wata/.cache/misaka-heavy-lock.sh cargo check --release -p kaspa-consensus --lib",
+      "exit": 0
+    },
+    {
+      "command": "python3 docs/maintenance/check_docs.py",
+      "exit": 1
+    }
+  ],
+  "invariants": [
+    "exact normalized old statement sequence per entry preserved",
+    "migration placement remains entry-specific, no commutativity claim",
+    "material rearm remains at original caller-specific times",
+    "no wire/ID/rules/fee/reward/deadline/cap/activation change",
+    "derive source tree and independent reference implementations unchanged"
+  ],
+  "remaining": [
+    "route/network/activation full baseline matrix",
+    "court pending/due/moved owner",
+    "carrier fee/funding/inflight common boundary",
+    "resolved block/claim rule views and canonical entry routing",
+    "validator/worker/backend responsibility and capability separation",
+    "historical/dormant/deferred/nonproduction compatibility route classification",
+    "full task-level recovery and equivalence verification"
+  ]
+}

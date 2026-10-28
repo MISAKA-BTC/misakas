@@ -1,0 +1,321 @@
+{
+  "schema": "misaka.rfc02.actual-fresh-outsider9.final-coherent-component.v1",
+  "recorded_utc": "2026-10-11T12:57:43.919094+00:00",
+  "status": "PASS final coherent ordinary-only fresh node component; RFC02 full completion remains false",
+  "component_scope": "Genuine local mapped Qwen2.5-1.5B-Instruct integer artifact, native classmax32/exactP1 job, complete independently authenticated R and PC, new IBD node and registered actor, anchored public op211 snapshot, unknown ordinary node/leaf/element discovery from own execution, own proof/seal/reveal, actual original principal and actual finder UTXO/IBD replay.",
+  "actual": {
+    "passed": 1,
+    "failed": 0,
+    "ignored": 0,
+    "filtered_out": 842,
+    "test_seconds": 155.22,
+    "wall_seconds": 155.26,
+    "user_seconds": 191.14,
+    "system_seconds": 4.62,
+    "maximum_resident_set_bytes": 2669395968
+  },
+  "sdk": {
+    "passed": 12,
+    "failed": 0,
+    "ignored": 0,
+    "filtered_out": 0,
+    "test_seconds": 0.02,
+    "wall_seconds": 0.02,
+    "user_seconds": 0.01,
+    "system_seconds": 0.0,
+    "maximum_resident_set_bytes": 11714560
+  },
+  "prior_native_regressions": {
+    "passed": 35,
+    "failed": 0,
+    "ignored": 1,
+    "filtered_out": 807,
+    "test_seconds": 52.36,
+    "wall_seconds": 52.4,
+    "user_seconds": 329.93,
+    "system_seconds": 24.03,
+    "maximum_resident_set_bytes": 1686880256
+  },
+  "new_distinct_acceptance_relative_pushed_ba872cc5_baseline": 13,
+  "counting": {
+    "sdk12_first_exported_and_committed_component_relative_pushed361": 12,
+    "sdk_inventory_controls_added_after_unpushed_local8": 4,
+    "prior_unpushed_local_sdk_controls": 8,
+    "actual_fresh_node_new": 1,
+    "prior_native35_repeated_not_added": 35,
+    "cohort_or_honest_Final_credit": 0,
+    "root_other_components_separately_counted": true
+  },
+  "binary_receipts": {
+    "node": {
+      "recorded_utc": "2026-10-11T12:47:28.893281+00:00",
+      "component": "node",
+      "binary": "/tmp/rfc02-actual-outsider9-final-immutable-abecd6240447/kaspa_consensus-678bc0334014b538",
+      "binary_sha256": "abecd62404473738ba351df776da40058748d25c26fd0fd22e499dd0f67f49a8",
+      "compiler_artifact": {
+        "reason": "compiler-artifact",
+        "package_id": "path+file:///Users/wata/.codex/worktrees/08bd/MISAKA-testnet/consensus#kaspa-consensus@1.1.0",
+        "manifest_path": "/Users/wata/.codex/worktrees/08bd/MISAKA-testnet/consensus/Cargo.toml",
+        "target": {
+          "kind": [
+            "lib"
+          ],
+          "crate_types": [
+            "lib"
+          ],
+          "name": "kaspa_consensus",
+          "src_path": "/Users/wata/.codex/worktrees/08bd/MISAKA-testnet/consensus/src/lib.rs",
+          "edition": "2024",
+          "doc": true,
+          "doctest": true,
+          "test": true
+        },
+        "profile": {
+          "opt_level": "2",
+          "debuginfo": 2,
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": true
+        },
+        "features": [
+          "default",
+          "pq-only"
+        ],
+        "filenames": [
+          "/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/kaspa_consensus-678bc0334014b538"
+        ],
+        "executable": "/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/kaspa_consensus-678bc0334014b538",
+        "fresh": false
+      }
+    },
+    "sdk": {
+      "recorded_utc": "2026-10-11T12:48:37.983244+00:00",
+      "component": "sdk",
+      "binary": "/tmp/rfc02-actual-outsider9-final-sdk-immutable-76ed8e9d2743/flat_streamed_locator_v9-6ee75760eb45fb1b",
+      "binary_sha256": "76ed8e9d27437de5a37c1ada680156299b50e9983cad35332de2a603b856f5e0",
+      "compiler_artifact": {
+        "reason": "compiler-artifact",
+        "package_id": "path+file:///Users/wata/.codex/worktrees/08bd/MISAKA-testnet/misaka-palw-sdk#1.1.0",
+        "manifest_path": "/Users/wata/.codex/worktrees/08bd/MISAKA-testnet/misaka-palw-sdk/Cargo.toml",
+        "target": {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "flat_streamed_locator_v9",
+          "src_path": "/Users/wata/.codex/worktrees/08bd/MISAKA-testnet/misaka-palw-sdk/tests/flat_streamed_locator_v9.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        "profile": {
+          "opt_level": "0",
+          "debuginfo": 2,
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": true
+        },
+        "features": [],
+        "filenames": [
+          "/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/flat_streamed_locator_v9-6ee75760eb45fb1b"
+        ],
+        "executable": "/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/flat_streamed_locator_v9-6ee75760eb45fb1b",
+        "fresh": false
+      }
+    }
+  },
+  "binary_unchanged_after_all_runs": true,
+  "compiled_source_capture": {
+    "before_recorded_utc": "2026-10-11T12:44:22.023205+00:00",
+    "git_head": "ba872cc5fdb27628080d49052fce56ee41796695",
+    "whole_workspace_existing_preimages": 6467,
+    "archived_workspace_source_files": 2967,
+    "compiled_local_inputs": 1442,
+    "local_compiler_artifact_events": 74,
+    "compiled_prebuild_postbuild_inputs_byte_equal": true,
+    "missing_dep_info": [],
+    "manifest": "rfc02-actual-outsider9-final-compiled-source-manifest.json",
+    "manifest_sha256": "5e63a656565eda57d87cee129a39c829a84b6435d591821ec6583bb01ea747e3",
+    "archive": "rfc02-actual-outsider9-final-compiled-source-preimages.tar.gz",
+    "archive_sha256": "870670d7a62ec8227bff93b8efcdb84fd4403febbe1c7d630cfc5aabaf924fdb",
+    "whole_workspace_preimage": "rfc02-actual-outsider9-final-workspace-preimage.json",
+    "whole_workspace_preimage_sha256": "03020e2e756c420b7a6e53d956012c6c43c87c838275f22ca6a6d920b6e83283",
+    "whole_workspace_source_archive": "rfc02-actual-outsider9-final-workspace-source-preimages.tar.gz",
+    "whole_workspace_source_archive_sha256": "3c2d407218b7f8ddb9c8e2955578749ed69cd6543189ee96a1edfa9b2b498792",
+    "method": "Actual selected Cargo JSON compiler-artifact events plus each exact artifact .d source inputs, local manifests, workspace lock/config. Non-test SDK companion bin .d selected only by exact binary payload equality. Cargo.lock pins external registry versions/checksums; external generated build inputs are separately hashed in manifest. Whole workspace archival capture does not grant test credit to unexported drafts.",
+    "excluded_unexported_native11_fold": "consensus/core/src/palw_flat_execution_fold_v11.rs",
+    "fold_absent_from_compiled_manifest": true,
+    "compiled_source_hold_released_only_after_both_builds_immutable_copies_and_manifest_match": true,
+    "later_current_compiled_source_changes_after_release": {},
+    "owned_stage_pins": "rfc02-actual-outsider9-final-owned-stage-pins.json",
+    "owned_component_source_unchanged_after_all_runs": true
+  },
+  "source": {
+    "artifact": "/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/rfc02-real/qwen25-pilot/qwen25-32.palwtir",
+    "artifact_bytes": 1835572288,
+    "artifact_sha256": "435ed8fcddf68a4fc7dd22792dfe912fdbc3a9b4ab1a6803a711fcb1ff834a64",
+    "archival_public_registration_fixture": "qwen25-real-generic9-fixture.borsh",
+    "fixture_sha256": "f023ac340642759675c8154c4747e316c2f9a0beda8ef5c5f5c54033a9d896bf",
+    "producer_only_private_fixture_fault_bytes_and_coordinates": true,
+    "finder_uses_only_public_snapshot_and_own_mapped_execution": true,
+    "original_HF_revision": "989aa7980e4cf806f80c7fef2b1adb7bc71aa306",
+    "original_BF16_reference_fidelity_is_separate": true
+  },
+  "protocol": "rfc02-actual-outsider9-protocol-v2.json",
+  "protocol_sha256": "1d9dd3bbdeeb204fa62108c153777cf4470a4ae553658bbb14df763f3c41a0cf",
+  "commands": {
+    "node_build": "CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target cargo test --locked -p kaspa-consensus --lib --no-run --message-format=json",
+    "sdk_build": "CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target cargo test --locked -p misaka-palw-sdk --test flat_streamed_locator_v9 --no-run --message-format=json",
+    "actual": "RFC02_ACTUAL_QWEN_FILE=/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/rfc02-real/qwen25-pilot/qwen25-32.palwtir /usr/bin/time -l /tmp/rfc02-actual-outsider9-final-immutable-abecd6240447/kaspa_consensus-678bc0334014b538 pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_native_v9::actual_outsider::flat_v9_actual_qwen_fresh_node_unknown_ordinary_public_discovery_own_proof_redemption_and_ibd --ignored --exact --nocapture --test-threads=1",
+    "sdk": "/usr/bin/time -l /tmp/rfc02-actual-outsider9-final-sdk-immutable-76ed8e9d2743/flat_streamed_locator_v9-6ee75760eb45fb1b --nocapture --test-threads=1",
+    "prior_native35": "/usr/bin/time -l /tmp/rfc02-actual-outsider9-final-immutable-abecd6240447/kaspa_consensus-678bc0334014b538 pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance:: --nocapture"
+  },
+  "finder_and_prosecution_elapsed_ms": 146144,
+  "class_max_positions": 32,
+  "actual_positions": 1,
+  "source_usage_and_prepaid_ceilings": {
+    "authenticated_parameter_instances": 1636,
+    "raw_parameter_bytes_read": 1835516100,
+    "retained_tensor_bytes": 224231504,
+    "independently_executed_nodes": 7658,
+    "attempts": 44,
+    "public_reads": 123,
+    "reserved_reply_bytes": 962560,
+    "scope_checker_work": 43103232000,
+    "parameter_hash_bytes": 9607969078664,
+    "trace_hash_bytes": 617355337906,
+    "artifact_hash_bytes": 4294967296,
+    "selected_parameter_bytes": 37748736,
+    "reference21": [
+      1553977344,
+      25065862192,
+      199888245840,
+      5417355535,
+      29201545936,
+      5941133704,
+      556937138,
+      1745,
+      4189007008,
+      10760384,
+      494272,
+      239671497,
+      7658,
+      1,
+      161931264,
+      141228,
+      24346393,
+      179024896,
+      1835516100,
+      40509440,
+      4266587833
+    ],
+    "inventory": {
+      "leaves": 1445797,
+      "raw_bytes": 1835516100,
+      "hash_bytes": 2057608295,
+      "work": 95152839108,
+      "workspace_bytes": 186752,
+      "root": "5c02fc51ad06f17066c64dca3b79c4bbf986fdd399b7e583a6384ff8d00580d13aeefb2f42c3cbec3a1499f639b6463e792ac40394ba590bc902e1b65fbeed9a"
+    }
+  },
+  "public_demands": 43,
+  "authenticated_matching_prefix_nodes": 35,
+  "finding": {
+    "court": "Ordinary9",
+    "occurrence": 1,
+    "node": 27,
+    "element": 1500,
+    "flat_leaf": 23,
+    "proof_bytes": 17816,
+    "scope": "291df64dcc44dfdb28e4bec75bd30456dc1ea12e5a2635820e99a6ee6a7a7defd109e0ccb837b829061d1b9a10f9a83e7ba09b948c6b891be9d1cec4cd18ddd8",
+    "coordinates_known_only_to_producer_and_post_verdict_test_assertions": true,
+    "finder_receives_coordinates_from_fixture": false,
+    "generic_unknown_hash_descent": true
+  },
+  "native_results": {
+    "fresh_ibd_before_new_bond_registration": true,
+    "independent_registered_actor": 8,
+    "onchain_da_for_all43_requested_units": true,
+    "same_scope_own_proof_seal_maturity_reveal": true,
+    "original_producer_principal_slash": 100,
+    "repeat_extra_slash": 0,
+    "binder_principal_preserved": true,
+    "own_minted_plus_owed_bounty": 49,
+    "actual_minted_utxo_positive": true,
+    "full_ibd_ledger_and_actual_utxo_replay": true,
+    "execution_claims_classes_or_Final": false
+  },
+  "prior_failed_trials": "rfc02-actual-outsider9-initial-diagnostic-trials.json",
+  "limits": [
+    "R/PC independently auth all local mapped model bytes; this is distinct from original BF16/source-fidelity measurement and from consensus source-availability obligations/attestation.",
+    "43DA missing replies were requested from the independently registered newcomer through exact public op211 snapshot and native DA9. Producer generated dynamic answers from its independently executed trace; old archival fault/directories/replies never entered finder.",
+    "Ordinary-only replay. TopK, derived history, Decode and oversized whole parameter sources remain NeedsSpecial and require separately composed specialized contracts.",
+    "Only classmax32/jobactualP1 in this native run. No full32positions, actual128 task Final, cohort or A6/A8>=90% acceptance.",
+    "Physical full-test wall/RSS include producer run, R/PC passes, ownrun, DA, court/seal/reveal, UTXO and IBD in debug test configuration; not a controlled performance benchmark.",
+    "Reported scope/hash/source resource values include prepaid conservative allowances for allattempts, not measured actual bytes or executed CPU instructions.",
+    "Only local IndexSteps cap changed under upfront protocolv2; old pre-source refusal preserved and every native network/court/admission cap unchanged.",
+    "Only this compiled closure and immutable binaries are final for the ordinary fresh node component. Subsequent native11 exports/routes and quota descendants are excluded and need their own verification.",
+    "The mode-A finder independently opens and authenticates the externally acquired local mapped artifact. Source bytes or continuity attestations from the producer or archival prosecution were not used as consensus evidence. No mutation coordinates or old proofs were supplied to finder; the producer and post-verdict test assertions know the injected location.",
+    "The separate default 35-regression filter ignores the explicit actual-weight test; its dedicated --ignored --exact run selected exactly1 and passed. A0-selected earlier trial is retained and contributes no acceptance."
+  ],
+  "shipping_activation_changed": false,
+  "honest_execution_final_proven": false,
+  "full_rfc02_complete": false,
+  "logs": [
+    {
+      "path": "docs/design/palw/tir/evidence/rfc02-actual-outsider9-final-native-list.log",
+      "sha256": "b176c7fae1bfe91f43c5e919a1ab1bc0307bf2b48b1e880022d903ec153be748"
+    },
+    {
+      "path": "docs/design/palw/tir/evidence/rfc02-actual-outsider9-final-native35-tests.log",
+      "sha256": "dd700981fee1e11b24d7328fbbd6097cdc5de51c97bd93f5fbcf1ca9894613a1"
+    },
+    {
+      "path": "docs/design/palw/tir/evidence/rfc02-actual-outsider9-final-native35-time.log",
+      "sha256": "bc2190e28afe16c0f91ab31b17c27f2835706ecdaac347ad4438280a19154fa4"
+    },
+    {
+      "path": "docs/design/palw/tir/evidence/rfc02-actual-outsider9-final-node-build.jsonl",
+      "sha256": "a264eb879f16c25a617c0ad6c307f6c562fe9f32c6273094f4bc903ca6effbf5"
+    },
+    {
+      "path": "docs/design/palw/tir/evidence/rfc02-actual-outsider9-final-node-build.log",
+      "sha256": "31dd5bad77b148763084a67ac4a8a51515f4c3a5f82a9402ebf8a433af43e570"
+    },
+    {
+      "path": "docs/design/palw/tir/evidence/rfc02-actual-outsider9-final-node-tests.log",
+      "sha256": "48781707fe758a57b34355c3ee0e8f66aa13f42e5c5a3f0e7f9d1f639dabf503"
+    },
+    {
+      "path": "docs/design/palw/tir/evidence/rfc02-actual-outsider9-final-node-time.log",
+      "sha256": "858ef1e3a6f6c906c8e24f34b09f960614f45f0959b07bf463700f67d227eab4"
+    },
+    {
+      "path": "docs/design/palw/tir/evidence/rfc02-actual-outsider9-final-sdk-build.jsonl",
+      "sha256": "d12d37c0d635818b88032c16f752f9bb45939b37d68c90b1cfbb42afc8e6dce2"
+    },
+    {
+      "path": "docs/design/palw/tir/evidence/rfc02-actual-outsider9-final-sdk-build.log",
+      "sha256": "6849ef0604d14fd6e67e3368cb44f0f0c2a305156ea484a8df4314eba520b866"
+    },
+    {
+      "path": "docs/design/palw/tir/evidence/rfc02-actual-outsider9-final-sdk-list.log",
+      "sha256": "e4fd6a1ac2c7917b817c1e5c899bb86b2078f814660e8c25328bec3d6932744f"
+    },
+    {
+      "path": "docs/design/palw/tir/evidence/rfc02-actual-outsider9-final-sdk-tests.log",
+      "sha256": "fad85e7db3b35858a617f40de8211677b73b7ce81b192148d97446758e91a3f0"
+    },
+    {
+      "path": "docs/design/palw/tir/evidence/rfc02-actual-outsider9-final-sdk-time.log",
+      "sha256": "1ef19a99a851edc51fb2b2352bc1882ccc4ad90b48a3eea5d2001c7f469111fa"
+    },
+    {
+      "path": "docs/design/palw/tir/evidence/rfc02-actual-outsider9-final-toolchain.txt",
+      "sha256": "58fb00564235de55cab58812fea063b6ef8b57aafae14fa93b859a1d29174fdc"
+    }
+  ]
+}

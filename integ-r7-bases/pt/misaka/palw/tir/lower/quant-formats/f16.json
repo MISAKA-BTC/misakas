@@ -1,0 +1,53 @@
+{
+ "decode": {
+  "target": "floats",
+  "value": "v"
+ },
+ "doc": "IEEE binary16.",
+ "ids": [
+  {
+   "id": 1,
+   "scheme": "ggml"
+  }
+ ],
+ "layout": {
+  "bytes": 2,
+  "elems": 1,
+  "fields": [
+   {
+    "at": 0,
+    "name": "v",
+    "type": "f16"
+   }
+  ],
+  "kind": "blocks"
+ },
+ "name": "F16",
+ "schema": "misaka.palw.quant-format.v1",
+ "tests": [
+  {
+   "block_hex": "8b18870f1c79028c",
+   "values_f32_hex": "0060113b00e0f03900802347004080b9"
+  },
+  {
+   "block_hex": "a745144ef0991712",
+   "values_f32_hex": "00e0b4400080c24100003ebb00e0423a"
+  },
+  {
+   "block_hex": "46534f6de2400d2e",
+   "values_f32_hex": "00c0684200e0a94500401c4000a0c13d"
+  },
+  {
+   "block_hex": "500c7ccae657874c",
+   "values_f32_hex": "00008a3900804fc100c0fc4200e09041"
+  },
+  {
+   "block_hex": "f7a53850779b7592",
+   "values_f32_hex": "00e0bebc0000074200e06ebb00a04eba"
+  },
+  {
+   "block_hex": "a128e347a161453f",
+   "values_f32_hex": "0020143d0060fc400020344400a0e83f"
+  }
+ ]
+}

@@ -1,0 +1,47 @@
+    Blocking waiting for file lock on artifact directory
+   Compiling misaka-palw-tir v1.1.0 (/Users/wata/.codex/worktrees/08bd/MISAKA-testnet/misaka-palw-tir)
+   Compiling misaka-palw-kernel v1.1.0 (/Users/wata/.codex/worktrees/08bd/MISAKA-testnet/misaka-palw-kernel)
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/08bd/MISAKA-testnet/consensus/core)
+warning: variable does not need to be mutable
+   --> consensus/core/src/palw_tir_close_range_v1.rs:494:21
+    |
+494 |                 let mut put = |this: &mut Self, row: u32, lo: u64, hi: u64| -> Result<(), String> {
+    |                     ----^^^
+    |                     |
+    |                     help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: `kaspa-consensus-core` (lib) generated 1 warning (run `cargo fix --lib -p kaspa-consensus-core` to apply 1 suggestion)
+   Compiling misaka-palw-tir-ref2 v1.1.0 (/Users/wata/.codex/worktrees/08bd/MISAKA-testnet/misaka-palw-tir-ref2)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 11s
+     Running tests/differential.rs (/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/differential-3d7861589d6c39e7)
+
+running 1 test
+A. primitives: 40000 cases, 29675 both ok (identical), 10325 both failed (10325 same class, 0 single-class inputs), 0 disagreements, 0 classes outside the broken rules, 0 first-impl panics
+  Add: 1711 cases, 1108 succeeded
+  Broadcast: 1682 cases, 1510 succeeded
+  Cast: 1791 cases, 1294 succeeded
+  Clamp: 1753 cases, 1555 succeeded
+  Compare: 1771 cases, 1552 succeeded
+  Concat: 1737 cases, 1508 succeeded
+  Div: 1713 cases, 1036 succeeded
+  Gather: 1758 cases, 1017 succeeded
+  IntExp: 1744 cases, 1144 succeeded
+  IntLn: 1741 cases, 1084 succeeded
+  IntRsqrt: 1701 cases, 896 succeeded
+  Iota: 1710 cases, 934 succeeded
+  Log2Floor: 1778 cases, 1468 succeeded
+  MatMul: 1699 cases, 1082 succeeded
+  Mul: 1771 cases, 1175 succeeded
+  ReduceMax: 1752 cases, 1524 succeeded
+  ReduceSum: 1711 cases, 1126 succeeded
+  Reshape: 1718 cases, 1540 succeeded
+  Select: 1771 cases, 1384 succeeded
+  Slice: 1705 cases, 1510 succeeded
+  Sub: 1748 cases, 1116 succeeded
+  TopK: 1786 cases, 1578 succeeded
+  Transpose: 1749 cases, 1534 succeeded
+test a_primitive_differential ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 1.66s

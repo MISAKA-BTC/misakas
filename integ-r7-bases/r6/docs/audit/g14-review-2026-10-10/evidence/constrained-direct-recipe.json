@@ -1,0 +1,23 @@
+{
+  "base_commit": "ccca84ca7d32d0596d110a5d053aa85527cbb916",
+  "source_sha256": {
+    "consensus/core/src/palw_offence_v1.rs": "67d30680780dba872879fd39fb8178ef56bd7af63fe4f2e63bf44adbdd0ab025",
+    "consensus/core/src/palw_offence_attribution_v1.rs": "93da14cdb60ac9c3e5750379777fbe833ee439eabc6d8219b4c28395f0e15195",
+    "consensus/core/src/palw_aggregate_liability_v1.rs": "eeee442cbffa01b4170408f32f088f233ec9cba107a83ee6d7ea3c6ee90036c9",
+    "consensus/core/src/palw_state_v2.rs": "55a0dc6c613d6bda8dd02952306279fdd0d44698cb35c942954a8eac8f93bd7e",
+    "consensus/core/src/palw_decode_constraint_v1.rs": "caa91f597caa386b1801e01a78f8f36dc913c1594250ec61a33e2d1999c60b6a"
+  },
+  "binary_sha256": {
+    "kaspa_consensus_core-f189e885ba5285ec": "6c0fb09d2fd446f1129d497db6082f99fcf8822ac467357990d833834cb25e2a"
+  },
+  "commands": [
+    "CARGO_TARGET_DIR=/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 cargo test -p kaspa-consensus-core --lib --locked --no-run",
+    "/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/kaspa_consensus_core-f189e885ba5285ec palw_offence_attribution_v1 --nocapture",
+    "/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/kaspa_consensus_core-f189e885ba5285ec palw_decode_constraint_v1 --nocapture",
+    "/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/kaspa_consensus_core-f189e885ba5285ec palw_aggregate_liability_v1 --nocapture",
+    "/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/kaspa_consensus_core-f189e885ba5285ec palw_offence_v1 --nocapture",
+    "/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/kaspa_consensus_core-f189e885ba5285ec palw_state_v2::tests::the_version_22_state_root_golden_vectors --exact --nocapture",
+    "CARGO_TARGET_DIR=/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 cargo check -p kaspad --lib --locked"
+  ],
+  "scope": "68 unique core PASS. New direct test overlaps attribution module. Core check, final core test build and node library check passed. Synthetic core adjudication only; no real service, full shipping pins, multipart terminal or full G14 claim. Failed initial compiles preserved and excluded."
+}

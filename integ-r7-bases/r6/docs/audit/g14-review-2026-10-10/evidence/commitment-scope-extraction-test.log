@@ -1,0 +1,7 @@
+
+running 1 test
+[F-C4R4-17] 20 claim-specific demands (200 BILI of demand bonds) made the producer serve what rebuilds 0 of 0 MatMul weight instances exactly (0 of the model's 9506 weight elements), each opening the registered commitment: []
+test f_c4r4_17_claim_specific_demands_must_not_rebuild_the_registered_weights ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 14 filtered out; finished in 0.83s
+

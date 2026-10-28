@@ -1,0 +1,20 @@
+   Compiling misaka-palw-kernel v1.1.0 (/Users/wata/.codex/worktrees/08bd/MISAKA-testnet/misaka-palw-kernel)
+error[E0433]: failed to resolve: could not find `MapParams` in `eval`
+  --> misaka-palw-kernel/src/flat_quota11/protected_tests.rs:27:45
+   |
+27 |     let mut params = misaka_palw_tir::eval::MapParams::default();
+   |                                             ^^^^^^^^^ could not find `MapParams` in `eval`
+   |
+   = note: struct `crate::ledger::tests::MapParams` exists but is inaccessible
+help: consider importing this struct
+   |
+ 1 + use misaka_palw_tir::MapParams;
+   |
+help: if you import `MapParams`, refer to it directly
+   |
+27 -     let mut params = misaka_palw_tir::eval::MapParams::default();
+27 +     let mut params = MapParams::default();
+   |
+
+For more information about this error, try `rustc --explain E0433`.
+error: could not compile `misaka-palw-kernel` (lib test) due to 1 previous error

@@ -1,0 +1,25 @@
+
+running 1 test
+[service-public] heartbeat advance 128 -> 1004
+[service-public] heartbeat advance 253 -> 1004
+[service-public] heartbeat advance 378 -> 1004
+[service-public] heartbeat advance 503 -> 1004
+[service-public] heartbeat advance 628 -> 1004
+test palw_panel::palw_service_public_e2e::fresh_public_bond_service_convicts_a_public_foreign_job_and_reveals has been running for over 60 seconds
+[service-public] heartbeat advance 753 -> 1004
+[service-public] heartbeat advance 878 -> 1004
+[service-public] heartbeat advance 1003 -> 1004
+[service-public] ordinary bond registered before DAA 3, maturity 1000, now 1004
+
+thread 'palw_panel::palw_service_public_e2e::fresh_public_bond_service_convicts_a_public_foreign_job_and_reveals' (2990749) panicked at kaspad/src/palw_service_public_e2e.rs:367:9:
+the floor's class lottery is winnable (with the draw kept) — or losable, when a loss is asked for
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test palw_panel::palw_service_public_e2e::fresh_public_bond_service_convicts_a_public_foreign_job_and_reveals ... FAILED
+
+failures:
+
+failures:
+    palw_panel::palw_service_public_e2e::fresh_public_bond_service_convicts_a_public_foreign_job_and_reveals
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 605 filtered out; finished in 160.92s
+

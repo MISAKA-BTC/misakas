@@ -1,0 +1,19 @@
+Error: "pinned artifact arithmetic metadata"
+        6.08 real         3.95 user         0.28 sys
+            11075584  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+                 990  page reclaims
+                   0  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                   0  signals received
+                  26  voluntary context switches
+               12264  involuntary context switches
+         56217982651  instructions retired
+         14925717609  cycles elapsed
+             4096432  peak memory footprint

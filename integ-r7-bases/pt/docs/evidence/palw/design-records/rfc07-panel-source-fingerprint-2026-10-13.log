@@ -1,0 +1,7 @@
+
+running 2 tests
+test palw_beacon_source_opt_in_v1::tests::source_opt_in_onboarding_horizon_refuses_other_consumer_subjects_before_monetary_admission ... ok
+test palw_beacon_source_opt_in_v1::tests::source_opt_in_has_its_own_dormant_fence_and_none_is_fingerprint_neutral ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 3920 filtered out; finished in 0.01s
+

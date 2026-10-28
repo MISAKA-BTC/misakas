@@ -1,0 +1,61 @@
+
+running 3 tests
+[service-public] normal FP family certification accepted from 6 public drill carriers
+[service-public] normal FP family certification accepted from 6 public drill carriers
+[service-public] registered FP graph publicly carried by ordinary ClassLaneCertified
+[service-public] registered FP graph publicly carried by ordinary ClassLaneCertified
+[service-public] heartbeat advance 135 -> 1011
+[service-public] heartbeat advance 135 -> 1011
+[service-public] heartbeat advance 260 -> 1011
+[service-public] heartbeat advance 260 -> 1011
+[service-public] heartbeat advance 385 -> 1011
+[service-public] heartbeat advance 385 -> 1011
+[service-public] heartbeat advance 510 -> 1011
+[service-public] heartbeat advance 510 -> 1011
+test palw_panel::palw_service_public_e2e::fresh_public_bond_service_convicts_a_constraint_beaten_token_without_job_metadata has been running for over 60 seconds
+test palw_panel::palw_service_public_e2e::fresh_public_bond_service_convicts_a_constraint_forbidden_token_without_job_metadata has been running for over 60 seconds
+[service-public] heartbeat advance 635 -> 1011
+[service-public] heartbeat advance 635 -> 1011
+[service-public] heartbeat advance 760 -> 1011
+[service-public] heartbeat advance 760 -> 1011
+[service-public] heartbeat advance 885 -> 1011
+[service-public] heartbeat advance 885 -> 1011
+[service-public] heartbeat advance 1010 -> 1011
+[service-public] ordinary bond registered before DAA 10, maturity 1000, now 1011
+
+thread 'palw_panel::palw_service_public_e2e::fresh_public_bond_service_convicts_a_constraint_beaten_token_without_job_metadata' (3610652) panicked at kaspad/src/palw_service_public_e2e.rs:1080:18:
+called `Result::unwrap()` on an `Err` value: "free-prompt commitment is not admissible: unsupported FP-V3 object version 6 (expected 5)"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test palw_panel::palw_service_public_e2e::fresh_public_bond_service_convicts_a_constraint_beaten_token_without_job_metadata ... FAILED
+[service-public] normal FP family certification accepted from 6 public drill carriers
+[service-public] registered FP graph publicly carried by ordinary ClassLaneCertified
+[service-public] heartbeat advance 135 -> 1011
+[service-public] heartbeat advance 1010 -> 1011
+[service-public] ordinary bond registered before DAA 10, maturity 1000, now 1011
+
+thread 'palw_panel::palw_service_public_e2e::fresh_public_bond_service_convicts_a_constraint_forbidden_token_without_job_metadata' (3610653) panicked at kaspad/src/palw_service_public_e2e.rs:1080:18:
+called `Result::unwrap()` on an `Err` value: "free-prompt commitment is not admissible: unsupported FP-V3 object version 6 (expected 5)"
+test palw_panel::palw_service_public_e2e::fresh_public_bond_service_convicts_a_constraint_forbidden_token_without_job_metadata ... FAILED
+[service-public] heartbeat advance 260 -> 1011
+[service-public] heartbeat advance 385 -> 1011
+[service-public] heartbeat advance 510 -> 1011
+test palw_panel::palw_service_public_e2e::fresh_public_bond_service_convicts_a_constraint_premature_stop_without_job_metadata has been running for over 60 seconds
+[service-public] heartbeat advance 635 -> 1011
+[service-public] heartbeat advance 760 -> 1011
+[service-public] heartbeat advance 885 -> 1011
+[service-public] heartbeat advance 1010 -> 1011
+[service-public] ordinary bond registered before DAA 10, maturity 1000, now 1011
+
+thread 'palw_panel::palw_service_public_e2e::fresh_public_bond_service_convicts_a_constraint_premature_stop_without_job_metadata' (3612830) panicked at kaspad/src/palw_service_public_e2e.rs:1080:18:
+called `Result::unwrap()` on an `Err` value: "free-prompt commitment is not admissible: unsupported FP-V3 object version 6 (expected 5)"
+test palw_panel::palw_service_public_e2e::fresh_public_bond_service_convicts_a_constraint_premature_stop_without_job_metadata ... FAILED
+
+failures:
+
+failures:
+    palw_panel::palw_service_public_e2e::fresh_public_bond_service_convicts_a_constraint_beaten_token_without_job_metadata
+    palw_panel::palw_service_public_e2e::fresh_public_bond_service_convicts_a_constraint_forbidden_token_without_job_metadata
+    palw_panel::palw_service_public_e2e::fresh_public_bond_service_convicts_a_constraint_premature_stop_without_job_metadata
+
+test result: FAILED. 0 passed; 3 failed; 0 ignored; 0 measured; 631 filtered out; finished in 324.78s
+

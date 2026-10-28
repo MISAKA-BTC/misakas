@@ -1,0 +1,8 @@
+
+running 3 tests
+test palw_json_key_set_v1::tests::changed_key_path_depth_or_sibling_cannot_insert_and_full_width_is_used ... ok
+test palw_json_key_set_v1::tests::duplicate_key_and_foreign_namespace_proofs_refuse_without_mutation_and_restore ... ok
+test palw_json_key_set_v1::tests::compact_proofs_are_full_width_canonical_and_differentially_identical ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 4752 filtered out; finished in 0.00s
+

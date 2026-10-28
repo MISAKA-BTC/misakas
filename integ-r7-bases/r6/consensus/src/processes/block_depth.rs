@@ -1,0 +1,165 @@
+use kaspa_consensus_core::BlockHash;
+use kaspa_consensus_core::blockhash::{BlockHashExtensions, ORIGIN};
+use std::sync::Arc;
+
+use crate::model::{
+    services::reachability::{MTReachabilityService, ReachabilityService},
+    stores::{
+        depth::DepthStoreReader,
+        ghostdag::{GhostdagData, GhostdagStoreReader},
+        headers::HeaderStoreReader,
+        reachability::ReachabilityStoreReader,
+    },
+};
+
+enum BlockDepthType {
+    MergeRoot,
+    Finality,
+}
+
+#[derive(Clone)]
+pub struct BlockDepthManager<S: DepthStoreReader, U: ReachabilityStoreReader, V: GhostdagStoreReader, T: HeaderStoreReader> {
+    merge_depth: u64,
+    merge_depth_history: Option<kaspa_consensus_core::config::params::ForkedParam<u64>>,
+    finality_depth: u64,
+    genesis_hash: BlockHash,
+    depth_store: Arc<S>,
+    reachability_service: MTReachabilityService<U>,
+    ghostdag_store: Arc<V>,
+    _headers_store: Arc<T>,
+}
+
+impl<S: DepthStoreReader, U: ReachabilityStoreReader, V: GhostdagStoreReader, T: HeaderStoreReader> BlockDepthManager<S, U, V, T> {
+    pub fn new(
+        merge_depth: u64,
+        finality_depth: u64,
+        genesis_hash: BlockHash,
+        depth_store: Arc<S>,
+        reachability_service: MTReachabilityService<U>,
+        ghostdag_store: Arc<V>,
+        headers_store: Arc<T>,
+    ) -> Self {
+        Self {
+            merge_depth,
+            merge_depth_history: None,
+            finality_depth,
+            genesis_hash,
+            depth_store,
+            reachability_service,
+            ghostdag_store,
+            _headers_store: headers_store,
+        }
+    }
+    pub fn with_merge_depth_history(mut self, history: kaspa_consensus_core::config::params::ForkedParam<u64>) -> Self {
+        if history.activation() != kaspa_consensus_core::config::params::ForkActivation::never() {
+            self.merge_depth_history = Some(history);
+        }
+        self
+    }
+
+    pub fn calc_merge_depth_root(&self, ghostdag_data: &GhostdagData, pruning_point: BlockHash) -> BlockHash {
+        self.calculate_block_at_depth(ghostdag_data, BlockDepthType::MergeRoot, pruning_point)
+    }
+
+    pub fn calc_finality_point(&self, ghostdag_data: &GhostdagData, pruning_point: BlockHash) -> BlockHash {
+        self.calculate_block_at_depth(ghostdag_data, BlockDepthType::Finality, pruning_point)
+    }
+
+    fn calculate_block_at_depth(
+        &self,
+        ghostdag_data: &GhostdagData,
+        depth_type: BlockDepthType,
+        pruning_point: BlockHash,
+    ) -> BlockHash {
+        if ghostdag_data.selected_parent.is_origin() {
+            return ORIGIN;
+        }
+        let depth = match depth_type {
+            BlockDepthType::MergeRoot => self
+                .merge_depth_history
+                .map_or(self.merge_depth, |h| h.get(self._headers_store.get_daa_score(ghostdag_data.selected_parent).unwrap())),
+            BlockDepthType::Finality => self.finality_depth,
+        };
+        if ghostdag_data.blue_score < depth {
+            return self.genesis_hash;
+        }
+
+        let pp_bs = self.ghostdag_store.get_blue_score(pruning_point).unwrap();
+
+        if ghostdag_data.blue_score < pp_bs + depth {
+            return ORIGIN;
+        }
+
+        if !self.reachability_service.is_chain_ancestor_of(pruning_point, ghostdag_data.selected_parent) {
+            return ORIGIN;
+        }
+
+        // We start from the depth/finality point of the selected parent and then walk up the chain.
+        let mut current = match depth_type {
+            BlockDepthType::MergeRoot => self.depth_store.merge_depth_root(ghostdag_data.selected_parent).unwrap(),
+            BlockDepthType::Finality => self.depth_store.finality_point(ghostdag_data.selected_parent).unwrap(),
+        };
+
+        // In this case we expect the pruning point or a block above it to be the block at depth.
+        // Note that above we already verified the chain and distance conditions for this.
+        // Additionally observe that if `current` is a valid hash it must not be pruned for the same reason.
+        if current == ORIGIN {
+            current = pruning_point;
+        }
+
+        let required_blue_score = ghostdag_data.blue_score - depth;
+        // A depth increase can move the root behind its parent's cached root. Only that
+        // boundary needs a fresh walk; ordinary and pre-fence blocks keep the cached path.
+        if self.merge_depth_history.is_some() && self.ghostdag_store.get_blue_score(current).unwrap() > required_blue_score {
+            current = pruning_point;
+        }
+
+        for chain_block in self.reachability_service.forward_chain_iterator(current, ghostdag_data.selected_parent, true) {
+            if self.ghostdag_store.get_blue_score(chain_block).unwrap() >= required_blue_score {
+                break;
+            }
+
+            current = chain_block;
+        }
+
+        current
+    }
+
+    /// **The raw reds `ghostdag_data` may not merge (including execution rounds)**: those outside the merge-depth root's future that no kosherizing
+    /// blue covers** — `check_bounded_merge_depth`'s exact predicate (the header validator, the virtual's parent
+    /// selection and the round lane's template all ask THIS, so a template can never pick a parent the validator
+    /// refuses). Empty = the merge is within the bound. `merge_depth_root` is
+    /// [`Self::calc_merge_depth_root`] for the same data and pruning point.
+    pub fn merge_breaking_reds(&self, ghostdag_data: &GhostdagData, merge_depth_root: BlockHash) -> Vec<BlockHash> {
+        let mut kosherizing_blues: Option<Vec<BlockHash>> = None;
+        let mut bad_reds = Vec::new();
+        // Consensus merge-depth operates on the raw representation; ADR-0125 semantic amendment changes no bound.
+        for member in ghostdag_data.mergeset_reds.iter().copied() {
+            if self.reachability_service.is_dag_ancestor_of(merge_depth_root, member) {
+                continue;
+            }
+            // Lazy load the kosherizing blocks since this case is extremely rare
+            if kosherizing_blues.is_none() {
+                kosherizing_blues = Some(self.kosherizing_blues(ghostdag_data, merge_depth_root).collect());
+            }
+            if !self.reachability_service.is_dag_ancestor_of_any(member, &mut kosherizing_blues.as_ref().unwrap().iter().copied()) {
+                bad_reds.push(member);
+            }
+        }
+        bad_reds
+    }
+
+    /// Returns the set of blues which are eligible for "kosherizing" merge bound violating blocks.
+    /// By prunality rules, these blocks must have `merge_depth_root` on their selected chain.  
+    pub fn kosherizing_blues<'a>(
+        &'a self,
+        ghostdag_data: &'a GhostdagData,
+        merge_depth_root: BlockHash,
+    ) -> impl DoubleEndedIterator<Item = BlockHash> + 'a {
+        ghostdag_data
+            .mergeset_blues
+            .iter()
+            .copied()
+            .filter(move |blue| self.reachability_service.is_chain_ancestor_of(merge_depth_root, *blue))
+    }
+}

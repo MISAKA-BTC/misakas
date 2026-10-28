@@ -1,0 +1,91 @@
+Compiled source11255b427; coreopt0/debug0, kaspaddebug0; exact executable SHA256 81fa78ffd363b943fde8a8a1816f83a2aab7b8e2bbeb68793c4f44f67ce364b9
+
+FILTER palw_fraud_filer::tests::
+
+running 33 tests
+test palw_panel::palw_fraud_filer::tests::a_history_hole_never_publishes_a_completed_book_watermark ... ok
+test palw_panel::palw_fraud_filer::tests::a_missing_fp_body_can_be_probed_while_the_local_capture_lane_is_full ... ok
+test palw_panel::palw_fraud_filer::tests::a_parallel_round_reserves_every_retained_unit_atomically_before_reading ... ok
+test palw_panel::palw_fraud_filer::tests::a_partial_history_page_cannot_end_a_pursuit_before_older_direct_evidence_is_read ... ok
+test palw_panel::palw_fraud_filer::tests::a_unit_the_chain_answered_is_read_never_demanded ... ok
+test palw_panel::palw_fraud_filer::tests::an_invalidated_blocking_replay_drains_under_its_reservation_before_the_next_starts ... ok
+test palw_panel::palw_fraud_filer::tests::an_item_is_sent_at_most_twice ... ok
+test palw_panel::palw_fraud_filer::tests::another_acceptance_restarts_an_honest_or_mismatched_case_and_rejects_old_results ... ok
+test palw_panel::palw_fraud_filer::tests::binding_only_fp_bootstrap_authenticates_without_a_replay_and_keeps_its_ticket_until_settlement ... ok
+test palw_panel::palw_fraud_filer::tests::bootstrap_verdicts_release_only_after_honesty_or_final_host_failure_and_reset_on_job_change ... ok
+test palw_panel::palw_fraud_filer::tests::discovery_rotation_preserves_a_running_acceptance_and_exposes_full_live_pressure ... ok
+test palw_panel::palw_fraud_filer::tests::evicted_fp_replica_keeps_authenticated_job_and_its_byte_ticket ... ok
+test palw_panel::palw_fraud_filer::tests::full_capture_cache_rotates_fairly_without_forgetting_a_public_pursuit ... ok
+test palw_panel::palw_fraud_filer::tests::full_discovery_cache_admits_later_claims_without_abandoning_live_pursuits ... ok
+test palw_panel::palw_fraud_filer::tests::input_bootstrap_keeps_binding_proofs_reachable_even_when_all_input_is_public ... ok
+test palw_panel::palw_fraud_filer::tests::learned_frontier_memory_survives_round_rotation_until_settle_and_worker_drain ... ok
+test palw_panel::palw_fraud_filer::tests::matching_roots_hold_registered_semantics_for_authenticated_binding_and_job ... ok
+test palw_panel::palw_fraud_filer::tests::partial_pages_and_newer_pursuits_do_not_inherit_a_completed_watermark ... ok
+test palw_panel::palw_fraud_filer::tests::pruned_round_selects_only_answered_unread_material_needed_by_this_phase ... ok
+test palw_panel::palw_fraud_filer::tests::public_fp_replay_opens_its_own_constraint_mask_and_refuses_unavailable_tables ... ok
+test palw_panel::palw_fraud_filer::tests::registered_replay_refusal_keeps_the_public_job_court_without_claiming_arithmetic_honesty ... ok
+test palw_panel::palw_fraud_filer::tests::restarting_public_history_discards_old_localization_and_resend_state_but_keeps_the_same_jobs_replay ... ok
+test palw_panel::palw_fraud_filer::tests::round_reacquisition_keeps_the_native_counter_wait_and_hard_deadline ... ok
+test palw_panel::palw_fraud_filer::tests::selected_constraint_tiles_use_the_public_reservation_and_answer_engine_before_descent ... ok
+test palw_panel::palw_fraud_filer::tests::selecting_an_already_answered_legacy_unit_backfills_instead_of_inheriting_a_recent_watermark ... ok
+test palw_panel::palw_fraud_filer::tests::the_book_replays_oldest_first_and_bounds_what_it_holds ... ok
+test palw_panel::palw_fraud_filer::tests::the_history_cache_cannot_accumulate_unused_range_units ... ok
+test palw_panel::palw_fraud_filer::tests::the_tick_wires_the_filer_behind_no_flag ... ok
+test palw_panel::palw_fraud_filer::tests::the_walk_starts_at_the_oldest_pursuit_then_follows_the_tip ... ok
+test palw_panel::palw_fraud_filer::tests::trace_only_and_output_only_mismatches_are_pursued_and_only_three_matching_roots_are_honest ... ok
+test palw_panel::palw_fraud_filer::tests::unrelated_settled_case_cleanup_cannot_restart_a_pursuits_history_and_a_new_seat_leaves_the_public_lane ... ok
+test palw_panel::palw_fraud_filer::tests::waiting_bootstrap_is_pursued_without_holding_a_replay_slot_and_reorg_forgets_input ... ok
+test palw_panel::palw_fraud_filer::tests::waiting_public_input_does_not_spend_a_run_or_block_another_pending_claim ... ok
+
+test result: ok. 33 passed; 0 failed; 0 ignored; 0 measured; 657 filtered out; finished in 7.31s
+
+FILTER_EXIT 0
+
+FILTER palw_tokenizer_witness::tests::
+
+running 2 tests
+test palw_tokenizer_witness::tests::compressed_book_matches_full_512_bit_core_membership_and_retains_only_two_nodes_per_key ... ok
+test palw_tokenizer_witness::tests::own_large_raw_file_packets_replay_after_restart_and_signed_work_overrun_hashes_to_eof ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 688 filtered out; finished in 0.99s
+
+FILTER_EXIT 0
+
+FILTER public_filer_skips_native_prune_holes
+
+running 1 test
+test palw_panel::accepted_objects_walk_tests::public_filer_skips_native_prune_holes_without_losing_older_bytes_or_completing_the_watermark ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 689 filtered out; finished in 0.00s
+
+FILTER_EXIT 0
+
+FILTER a_real_branch_switch_discards
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 690 filtered out; finished in 0.00s
+
+FILTER_EXIT 0
+
+FILTER registered_tiled_constraint_class_passes_normal_
+
+running 2 tests
+test palw_panel::palw_service_public_e2e::tiled::registered_tiled_constraint_class_passes_normal_readiness_jury_and_fp_price ... [service-tiled] ordinary geometry hidden 256, FP work 9012040, native network quantum 2707216
+[service-tiled] ordinary signed class registration accepted; root c9acf5b17d129f344c6cc9c70e075a8a5dd39420f1e2d8b43afb108c08a136ea52b71c995b63f2295ffdb5e6c3edd63db747e60b15f51efc60572b2f62d646cc, 4099 lanes, canonical 1/2
+[service-public] normal FP family certification accepted from 3 public drill carriers
+[service-public] registered FP graph publicly carried by ordinary ClassLaneCertified
+[service-tiled] normal jury at span 112: state Some(Probation { probes_passed: 0 }), ready 7, room 2543549, reason probing: 0/10 finals passed, 0 failed since entry
+[service-tiled] native bought-class FP price accepted: 2 quanta, 6611032 pwu
+[service-public] ordinary FP Job V6 admission: claim 6d507b7f6957689fa24d4949b452d6c9be3aac5fec9bb7c522cd11bc5ff6de80bdf0a0cd4f508abdafcedc02454a74e0eff18c999e39731ff3eb8c60599b3d45, 2 quanta, 6611032 pwu, fee 331137
+[service-tiled] native panel stage at DAA 134: PalwLegacyDisputeViewV1 { claim_id: 6d507b7f6957689fa24d4949b452d6c9be3aac5fec9bb7c522cd11bc5ff6de80bdf0a0cd4f508abdafcedc02454a74e0eff18c999e39731ff3eb8c60599b3d45, class_id: 63942453032e22c10d68ddee00ab4dd437b0f4d8c0b1b102de6a9d40390d0c4a226a4c2e6fe58a829a290d6aadd3a4a97fbd4be3c803b8daa1a41ebd9fa4abda, producer: PalwBondKeyV2(TransactionOutpoint { transaction_id: 5e0d5f1b37a71288cc0eb24acc10d2f4973dd3475569f274f03cc64a2233d035099d386e24c91d48427c30a895664dea979abedc90a7788fad170379e55e2669, index: 0 }), phase: PanelBound { bound_daa: 134 }, execution_root: 13db086ea5f70baaaef010a852efe4f979c80221eb85ce6083095c05c810f6a7e89112826ada2513edd1049c70da549b40145c8ab86882a77a8b2e488af48346, trace_root: f8327b661302fb4df3c410017bb8fca1b0b55e615329b8b152e84acc005de07b0562c21c46deead541121769bc06d893f643f9ae4faef80c8f620407ad034ece, accepted_daa: 114, trace_retention_daa: 5514, job_identity: cab59eceb3817d9c849292cf6703ef50dd2e9b3dda64a481ec1f4f37c75f3456e7fc24133c76f7b383e972d3ec5e0c8222da0787ad12db2449c1bfe2fe67af60, public_fp_job: None, registered_semantics: None, work_leaves: 1044, deadline_daa: Some(734), hard_deadline_daa: 4314, record: None, sessions: [], answered: [], flat_answered_rows: 0, open_courts: 0, executor_refuted: false, court_convicted: false, da_defaulted: false }
+ok
+test palw_panel::palw_service_public_e2e::tiled::registered_tiled_constraint_class_passes_normal_registration_and_host_resolution ... [service-tiled] ordinary geometry hidden 256, FP work 9012040, native network quantum 2707216
+[service-tiled] ordinary signed class registration accepted; root c9acf5b17d129f344c6cc9c70e075a8a5dd39420f1e2d8b43afb108c08a136ea52b71c995b63f2295ffdb5e6c3edd63db747e60b15f51efc60572b2f62d646cc, 4099 lanes, canonical 1/2
+[service-public] normal FP family certification accepted from 3 public drill carriers
+[service-public] registered FP graph publicly carried by ordinary ClassLaneCertified
+ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 688 filtered out; finished in 68.81s
+
+FILTER_EXIT 0

@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>kaspa-pq Phase 7 (PR-7.5) — in-browser address derivation</title>
+<style>
+  body { font: 14px/1.4 system-ui, sans-serif; max-width: 780px; margin: 32px auto; padding: 0 20px; }
+  h1 { font-size: 18px; margin-bottom: 4px; }
+  small { color: #555; }
+  fieldset { margin-top: 24px; padding: 12px; }
+  legend { font-weight: bold; padding: 0 6px; }
+  label { display: block; margin-top: 8px; font-weight: 500; }
+  textarea { width: 100%; box-sizing: border-box; font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
+  input[type=number] { width: 80px; }
+  pre.output { background: #f6f6f6; padding: 12px; border-radius: 4px; white-space: pre-wrap; word-break: break-all; }
+  .row { display: flex; gap: 16px; flex-wrap: wrap; }
+  .err { color: #b00; }
+</style>
+</head>
+<body>
+
+<h1>kaspa-pq in-browser address derivation</h1>
+<small>
+  Phase 7 PR-7.5 demo of the kaspa-pq WASM bindings.
+  See <code>docs/adr/0006-rpc-wasm-sdk-types.md</code> §6.
+  No network traffic; everything runs locally in your browser.
+</small>
+
+<fieldset>
+  <legend>BIP39 mnemonic</legend>
+  <label for="mnemonic">Phrase (12 or 24 words):</label>
+  <textarea id="mnemonic" rows="3" autocomplete="off">abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about</textarea>
+
+  <label for="passphrase">Passphrase (optional):</label>
+  <input id="passphrase" type="text" value="" />
+</fieldset>
+
+<fieldset>
+  <legend>kaspa-pq derivation path</legend>
+  <div class="row">
+    <div>
+      <label for="network">Network</label>
+      <select id="network">
+        <option value="mainnet">mainnet</option>
+        <option value="testnet-10">testnet-10</option>
+        <option value="simnet" selected>simnet</option>
+        <option value="devnet">devnet</option>
+      </select>
+    </div>
+    <div><label for="account">account</label><input id="account" type="number" value="0" min="0" /></div>
+    <div><label for="change">change</label><input id="change" type="number" value="0" min="0" /></div>
+    <div><label for="index">index</label><input id="index" type="number" value="0" min="0" /></div>
+  </div>
+</fieldset>
+
+<fieldset>
+  <legend>Output</legend>
+  <button id="derive">Derive address</button>
+  <pre id="output" class="output">(awaiting input)</pre>
+</fieldset>
+
+<script type="module">
+// Adjust this path to wherever the kaspa-pq WASM bundle was built:
+//   wasm-pack build wasm --features wasm32-sdk --target web --out-dir kaspa-pq-pkg
+// Then this html file should sit next to the resulting `kaspa-pq-pkg/`
+// directory, or you can publish/import `kaspa-pq` from an npm registry.
+import init, { KaspaPqKeyPair } from "../kaspa-pq-pkg/kaspa_pq.js";
+
+const networkPrefixOf = (id) => {
+  switch (id) {
+    case "mainnet":    return "kaspapq";
+    case "testnet-10": return "kaspapqtest";
+    case "simnet":     return "kaspapqsim";
+    case "devnet":     return "kaspapqdev";
+    default:           return "kaspapq";
+  }
+};
+
+async function derive() {
+  const output = document.getElementById("output");
+  try {
+    await init();
+
+    const phrase     = document.getElementById("mnemonic").value.trim();
+    const passphrase = document.getElementById("passphrase").value;
+    const network    = document.getElementById("network").value;
+    const account    = Number(document.getElementById("account").value);
+    const change     = Number(document.getElementById("change").value);
+    const index      = Number(document.getElementById("index").value);
+
+    const kp   = KaspaPqKeyPair.fromMnemonic(phrase, passphrase, network, account, change, index);
+    const addr = kp.address(networkPrefixOf(network));
+    const pk   = kp.publicKey();
+    const pkHex = pk.toHex();
+
+    output.classList.remove("err");
+    output.textContent =
+      `network        = ${network}\n` +
+      `path           = m/${account}/${change}/${index}\n` +
+      `kaspa-pq addr  = ${addr.toString()}\n` +
+      `public_key.len = ${pk.toBytes().length}\n` +
+      `public_key.hex = ${pkHex.slice(0, 64)}…${pkHex.slice(-32)}`;
+  } catch (e) {
+    output.classList.add("err");
+    output.textContent = "error: " + e.toString();
+  }
+}
+
+document.getElementById("derive").addEventListener("click", derive);
+</script>
+
+</body>
+</html>

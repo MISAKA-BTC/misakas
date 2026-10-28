@@ -1,0 +1,10 @@
+{
+  "source_code_checkpoint": "d6a42fa23",
+  "release_test_executable": "target/release/deps/kaspa_consensus_core-cd85ed321316b157",
+  "sha256": "47c43458da227a1e83bc0f0c1c9f465f2eff5dbce2004110a141799a574113fe",
+  "selected_passes": 57,
+  "failures": 0,
+  "ignored_in_selected_runs": 0,
+  "non_test_consensus_check": "succeeded",
+  "not_covered": "complete interaction graph, adopted profiles, physical supply, original admission, node T05/T08, full G14"
+}

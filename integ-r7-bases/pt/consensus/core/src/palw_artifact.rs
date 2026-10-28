@@ -1,0 +1,1935 @@
+//! ADR-0038 W1 / external audit P0-8: **operands a full node can check without the model.**
+//!
+//! Adjudicating a MatMul, a Requantize or a RoPE step needs raw rows of the model artifact. The
+//! court reads them through [`crate::palw_step_refute::PalwWeightOracleV1`], and the production
+//! implementation for a full node — `PalwNoWeightsV1` — answers `None` to everything, so every step
+//! conviction lands `Unadjudicable`. Arithmetic fraud is unconvictable.
+//!
+//! The tempting repair is worse than the gap: give nodes that happen to hold the artifact a real
+//! oracle, and a verdict starts depending on which local files a node has. Two honest nodes then
+//! disagree about a conviction, which is consensus splitting on filesystem contents.
+//!
+//! **So the operand travels with the accusation.** A refutation carries the rows it needs plus a
+//! proof against a root the CHAIN registered for the class, and the adjudicator checks the proof
+//! instead of reading a file. W1's "a full node never runs the LLM" then extends to "and never
+//! needs its weights either".
+//!
+//! `model_weights_hash` cannot serve as that root: it is an identity digest over the GGUF's sha256,
+//! size, filename, repo and revision — flat, and nothing opens against it. This module is the
+//! openable commitment it is not.
+//!
+//! ## The inventory (ADR-0049 Decision G)
+//!
+//! This module used to say the inventory was "NOT here" — which tensors, in what order, sliced into
+//! what rows — on the grounds that no shape profile existed for a real class. Both classes have one
+//! now, so [`PalwArtifactInventoryV1`] is that missing half: the canonical layout an
+//! `artifact_root` commits to, with the rules that make an opening's ABSENCE mean something.
+//!
+//! An opening proves "these bytes are at this position under this root". It proves nothing about
+//! what is NOT opened unless the layout is pinned too — without that, an artifact can carry a row
+//! twice at different offsets, leave a gap no entry covers, or append bytes nothing describes, and
+//! every individual opening still verifies. So the constructor refuses a duplicate, an overlap, a
+//! gap, a zero-length row and a non-canonical order, and "every byte is covered exactly once, in
+//! one order" becomes a property of the type rather than a hope about the producer.
+
+use crate::Hash64;
+use blake2b_simd::Params;
+
+/// Domain of an artifact leaf: one contiguous row slice of one tensor.
+pub const PALW_ARTIFACT_DOMAIN_LEAF: &[u8] = b"misaka-palw/artifact/leaf/v1";
+/// Domain of an artifact interior node.
+pub const PALW_ARTIFACT_DOMAIN_NODE: &[u8] = b"misaka-palw/artifact/node/v1";
+
+/// One operand a refutation carries, with the position it claims.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwArtifactOperandV1 {
+    /// GGUF tensor name, layer-substituted exactly as the step profile names it.
+    pub tensor_name: String,
+    /// `None` for a graph-level tensor; the layer index otherwise.
+    pub layer: Option<u16>,
+    /// **A BYTE offset into the tensor** (ADR-0049 Decision A). Every caller already treated it
+    /// as one; the name predates the contract being written down.
+    pub row_start: u32,
+    /// The bytes themselves, in the tensor's own dtype.
+    pub bytes: Vec<u8>,
+}
+
+/// A leaf digest binds the POSITION as well as the bytes.
+///
+/// Without the position an opening proves only that these bytes are somewhere in the artifact, and
+/// an accuser could open a genuine row of some other tensor and claim it as the operand of the step
+/// under dispute — a proof that verifies while proving the wrong thing.
+pub fn artifact_leaf_v1(operand: &PalwArtifactOperandV1) -> Hash64 {
+    artifact_leaf_parts_v1(&operand.tensor_name, operand.layer, operand.row_start, &operand.bytes)
+}
+
+/// **The same leaf over BORROWED parts** (ADR-0106) — so a row can be hashed where it is read and
+/// discarded, instead of being copied into an owned operand first. [`artifact_leaf_v1`] is this.
+pub fn artifact_leaf_parts_v1(tensor_name: &str, layer: Option<u16>, row_start: u32, bytes: &[u8]) -> Hash64 {
+    let mut hasher = PalwArtifactLeafHasherV1::new(tensor_name, layer, row_start, bytes.len() as u32);
+    hasher.update(bytes);
+    hasher.finish().expect("the length was the slice's own")
+}
+
+/// **A leaf hashed as a STREAM** (ADR-0106): the position and the length first — the preimage
+/// carries the length before the bytes — then the bytes in any chunking, so a row larger than any
+/// buffer is still one leaf. [`Self::finish`] refuses a stream whose absorbed length is not the
+/// declared one, which is the only way a streamed leaf could differ from [`artifact_leaf_parts_v1`].
+pub struct PalwArtifactLeafHasherV1 {
+    state: blake2b_simd::State,
+    declared: u32,
+    absorbed: u64,
+}
+
+impl PalwArtifactLeafHasherV1 {
+    pub fn new(tensor_name: &str, layer: Option<u16>, row_start: u32, byte_len: u32) -> Self {
+        let mut state = Params::new().hash_length(64).key(PALW_ARTIFACT_DOMAIN_LEAF).to_state();
+        state.update(&(tensor_name.len() as u32).to_le_bytes());
+        state.update(tensor_name.as_bytes());
+        // `u32::MAX` is the "no layer" marker rather than an absent field, so a graph-level tensor
+        // and layer `u32::MAX` cannot collide by one being shorter than the other.
+        state.update(&layer.map_or(u32::MAX, u32::from).to_le_bytes());
+        state.update(&row_start.to_le_bytes());
+        state.update(&byte_len.to_le_bytes());
+        Self { state, declared: byte_len, absorbed: 0 }
+    }
+
+    pub fn update(&mut self, bytes: &[u8]) {
+        self.state.update(bytes);
+        self.absorbed += bytes.len() as u64;
+    }
+
+    /// The leaf, or the refusal naming both lengths.
+    pub fn finish(self) -> Result<Hash64, (u32, u64)> {
+        if self.absorbed != u64::from(self.declared) {
+            return Err((self.declared, self.absorbed));
+        }
+        let mut out = [0u8; 64];
+        out.copy_from_slice(self.state.finalize().as_bytes());
+        Ok(Hash64::from_bytes(out))
+    }
+}
+
+/// The tree's internal node hash, public so a streamed opening builder folds with the SAME function
+/// the verifier folds with. Two spellings of the node hash would be a proof that verifies nowhere.
+pub fn artifact_node_v1(left: &Hash64, right: &Hash64) -> Hash64 {
+    node(left, right)
+}
+
+fn node(left: &Hash64, right: &Hash64) -> Hash64 {
+    let mut state = Params::new().hash_length(64).key(PALW_ARTIFACT_DOMAIN_NODE).to_state();
+    state.update(left.as_byte_slice());
+    state.update(right.as_byte_slice());
+    let mut out = [0u8; 64];
+    out.copy_from_slice(state.finalize().as_bytes());
+    Hash64::from_bytes(out)
+}
+
+/// The class's artifact root over an ordered leaf inventory.
+///
+/// An odd node is **promoted, not duplicated**. Duplicating the last leaf is the classic
+/// second-preimage hole — a tree over `[a, b, c]` and one over `[a, b, c, c]` produce the same root,
+/// so a proof for the fourth position verifies against an inventory that has three. Promotion is
+/// what `palw_step_leg` already does, and the two must agree in spirit or a reader will assume one
+/// while auditing the other.
+pub fn artifact_root_v1(leaves: &[Hash64]) -> Option<Hash64> {
+    if leaves.is_empty() {
+        return None; // an empty inventory has no root, and a zero root would verify nothing forever
+    }
+    let mut level: Vec<Hash64> = leaves.to_vec();
+    while level.len() > 1 {
+        let mut next = Vec::with_capacity(level.len().div_ceil(2));
+        let mut i = 0;
+        while i + 1 < level.len() {
+            next.push(node(&level[i], &level[i + 1]));
+            i += 2;
+        }
+        if i < level.len() {
+            next.push(level[i]); // promote
+        }
+        level = next;
+    }
+    Some(level[0])
+}
+
+/// **The same root as a STREAM** (ADR-0106): one peak per level, a leaf pushed as a binary carry,
+/// and the peaks folded from the LOWEST level up at the end — which is exactly what promotion does,
+/// because an unpaired node is carried up untouched until something above pairs with it. No leaf
+/// vector and no level copy; pinned against [`artifact_root_v1`] for every size.
+#[derive(Clone, Debug, Default)]
+pub struct PalwArtifactMerkleFrontierV1 {
+    peaks: Vec<Option<Hash64>>,
+    count: u64,
+}
+
+impl PalwArtifactMerkleFrontierV1 {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn push(&mut self, leaf: Hash64) {
+        let mut carry = leaf;
+        let mut level = 0;
+        loop {
+            if level == self.peaks.len() {
+                self.peaks.push(None);
+            }
+            match self.peaks[level].take() {
+                Some(left) => {
+                    carry = node(&left, &carry);
+                    level += 1;
+                }
+                None => {
+                    self.peaks[level] = Some(carry);
+                    break;
+                }
+            }
+        }
+        self.count += 1;
+    }
+
+    pub fn leaf_count(&self) -> u64 {
+        self.count
+    }
+
+    /// `None` for an empty stream, as [`artifact_root_v1`] answers an empty inventory.
+    pub fn root(&self) -> Option<Hash64> {
+        let mut acc: Option<Hash64> = None;
+        for peak in self.peaks.iter().flatten() {
+            acc = Some(match acc {
+                None => *peak,
+                Some(right) => node(peak, &right),
+            });
+        }
+        acc
+    }
+}
+
+/// **The prover side of [`verify_artifact_opening_v1`]** — build the opening for one leaf.
+///
+/// The verifier existed and the prover did not, so every opening in the tree was hand-assembled by
+/// a test that knew its own three-leaf shape. That is the half of a proof system where a mistake
+/// is invisible: a hand-built path that happens to verify proves the test, not the code, and a
+/// producer with no way to MAKE an opening cannot carry one in a real close (audit C-06).
+///
+/// Promotion is mirrored exactly: a node with no sibling at its level consumes no path element, so
+/// the path this emits is the path the verifier consumes, for any inventory size rather than for
+/// powers of two.
+pub fn open_artifact_leaf_v1(operands: &[PalwArtifactOperandV1], index: u32) -> Option<PalwArtifactOpeningV1> {
+    if operands.is_empty() || index as usize >= operands.len() {
+        return None;
+    }
+    let mut level: Vec<Hash64> = operands.iter().map(artifact_leaf_v1).collect();
+    let leaf_count = level.len() as u32;
+    let mut at = index as usize;
+    let mut path = Vec::new();
+    while level.len() > 1 {
+        let promoted = at == level.len() - 1 && level.len() % 2 == 1;
+        if !promoted {
+            path.push(if at.is_multiple_of(2) { level[at + 1] } else { level[at - 1] });
+        }
+        let mut next = Vec::with_capacity(level.len().div_ceil(2));
+        let mut i = 0;
+        while i + 1 < level.len() {
+            next.push(node(&level[i], &level[i + 1]));
+            i += 2;
+        }
+        if i < level.len() {
+            next.push(level[i]);
+        }
+        level = next;
+        at /= 2;
+    }
+    Some(PalwArtifactOpeningV1 { operand: operands[index as usize].clone(), leaf_index: index, leaf_count, path })
+}
+
+/// **[`open_artifact_leaf_v1`] for many leaves over ONE build of the tree**: the leaves are hashed once and the levels kept,
+/// so a worker that opens the tens of leaves of a cone no longer rehashes the whole inventory per leaf (an opening was
+/// `O(n)` hashing: 60 s a cone close on a 1.5 MB class). The openings are byte for byte the single openings' — the same
+/// promotion rule, the same path. `None` when the inventory is empty or an index is outside it.
+pub fn open_artifact_leaves_v1(operands: &[PalwArtifactOperandV1], indices: &[u32]) -> Option<Vec<PalwArtifactOpeningV1>> {
+    if operands.is_empty() || indices.iter().any(|i| *i as usize >= operands.len()) {
+        return None;
+    }
+    let mut levels: Vec<Vec<Hash64>> = vec![operands.iter().map(artifact_leaf_v1).collect()];
+    while levels.last().is_some_and(|l| l.len() > 1) {
+        let level = levels.last().expect("a level");
+        let mut next = Vec::with_capacity(level.len().div_ceil(2));
+        let mut i = 0;
+        while i + 1 < level.len() {
+            next.push(node(&level[i], &level[i + 1]));
+            i += 2;
+        }
+        if i < level.len() {
+            next.push(level[i]);
+        }
+        levels.push(next);
+    }
+    let leaf_count = operands.len() as u32;
+    Some(
+        indices
+            .iter()
+            .map(|&index| {
+                let mut at = index as usize;
+                let mut path = Vec::new();
+                for level in &levels[..levels.len() - 1] {
+                    let promoted = at == level.len() - 1 && level.len() % 2 == 1;
+                    if !promoted {
+                        path.push(if at.is_multiple_of(2) { level[at + 1] } else { level[at - 1] });
+                    }
+                    at /= 2;
+                }
+                PalwArtifactOpeningV1 { operand: operands[index as usize].clone(), leaf_index: index, leaf_count, path }
+            })
+            .collect(),
+    )
+}
+
+/// An opening: the operand, its index, the inventory size, and the sibling path.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwArtifactOpeningV1 {
+    pub operand: PalwArtifactOperandV1,
+    pub leaf_index: u32,
+    pub leaf_count: u32,
+    pub path: Vec<Hash64>,
+}
+
+#[derive(thiserror::Error, Debug, Clone, PartialEq, Eq)]
+pub enum PalwArtifactError {
+    #[error("leaf index {index} is outside an inventory of {count}")]
+    IndexOutOfRange { index: u32, count: u32 },
+    #[error("the opening does not reconstruct the registered artifact root")]
+    RootMismatch,
+    #[error("an inventory of {0} leaves has no root")]
+    EmptyInventory(u32),
+}
+
+/// Recompute the root an opening implies, and compare it with the class's registered one.
+///
+/// Promote levels consume no path element, exactly as the tree builds them — a path whose length is
+/// "log2 of the count" would be wrong for any inventory that is not a power of two, and wrong in the
+/// direction that accepts a forged sibling.
+/// **ADR-0133 / ADR-0135 H-6: one proof for many leaves of one artifact.**
+///
+/// A V1 possession proof opens ONE leaf, and the challenge that names it is a contiguous window of
+/// eight — so holding one window of a 400,000-leaf artifact answered every challenge. A V2 proof
+/// opens leaves drawn from the WHOLE range (`palw_readiness_v2_leaves_v1`), and this is the object
+/// that carries them: the opened leaves in ascending index order, and the sibling hashes the
+/// verifier cannot derive from them, in the one order the walk below consumes. Two leaves that
+/// share an ancestor share its path here, which is what makes sixteen leaves affordable in one
+/// object.
+///
+/// The verifier recomputes each opened leaf from its operand, then walks the tree level by level:
+/// at each level it knows a sorted set of nodes, and for each pair position either the partner is
+/// known (another opened leaf's ancestor — nothing is supplied) or it is not (the next supplied
+/// hash). An odd last node is promoted, exactly as `artifact_root_v1` builds it. A proof with a
+/// hash left over, or one short, is refused rather than ignored.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwArtifactMultiproofV1 {
+    pub leaf_count: u32,
+    /// `(leaf_index, operand)` in ascending index order, each index distinct and in range.
+    pub opened: Vec<(u32, PalwArtifactOperandV1)>,
+    pub siblings: Vec<Hash64>,
+}
+
+impl PalwArtifactMultiproofV1 {
+    pub fn opened_indices(&self) -> Vec<u32> {
+        self.opened.iter().map(|(index, _)| *index).collect()
+    }
+
+    /// The bytes the opened operands carry — what a cap is measured against.
+    pub fn operand_bytes(&self) -> usize {
+        self.opened.iter().map(|(_, operand)| operand.bytes.len()).sum()
+    }
+}
+
+/// The levels a tree of `leaf_count` leaves has above the leaves, as `artifact_root_v1` builds it.
+fn level_widths_v1(leaf_count: u64) -> Vec<u64> {
+    let mut widths = Vec::new();
+    let mut width = leaf_count;
+    while width > 1 {
+        widths.push(width);
+        width = width.div_ceil(2);
+    }
+    widths
+}
+
+/// **Build a multiproof.** `leaves` is every leaf hash of the inventory (the prover holds them all,
+/// e.g. from `PalwArtifactInventoryDigestV1::rows`), `opened` the operands of the leaves to prove.
+/// `None` when an index is out of range, a duplicate, or the inventory is empty.
+pub fn palw_artifact_multiproof_v1(leaves: &[Hash64], opened: &[(u32, PalwArtifactOperandV1)]) -> Option<PalwArtifactMultiproofV1> {
+    let leaf_count = leaves.len();
+    if leaf_count == 0 || leaf_count > u32::MAX as usize || opened.is_empty() {
+        return None;
+    }
+    let mut sorted: Vec<(u32, PalwArtifactOperandV1)> = opened.to_vec();
+    sorted.sort_by_key(|(index, _)| *index);
+    for window in sorted.windows(2) {
+        if window[0].0 == window[1].0 {
+            return None; // a duplicate leaf proves nothing twice
+        }
+    }
+    for (index, operand) in &sorted {
+        if *index as usize >= leaf_count {
+            return None;
+        }
+        if artifact_leaf_v1(operand) != leaves[*index as usize] {
+            return None; // the operand is not the leaf the inventory holds
+        }
+    }
+    let mut known: Vec<u64> = sorted.iter().map(|(index, _)| *index as u64).collect();
+    let mut level: Vec<Hash64> = leaves.to_vec();
+    let mut siblings = Vec::new();
+    for width in level_widths_v1(leaf_count as u64) {
+        let mut next_known: Vec<u64> = Vec::with_capacity(known.len());
+        let mut i = 0;
+        while i < known.len() {
+            let index = known[i];
+            let promoted = index == width - 1 && width % 2 == 1;
+            if promoted {
+                next_known.push(index / 2);
+                i += 1;
+                continue;
+            }
+            let partner = index ^ 1;
+            if known.get(i + 1).copied() == Some(partner) {
+                i += 2; // both halves are known: nothing to supply
+            } else {
+                siblings.push(level[partner as usize]);
+                i += 1;
+            }
+            next_known.push(index / 2);
+        }
+        next_known.dedup();
+        // The next level, exactly as `artifact_root_v1` folds it.
+        let mut next: Vec<Hash64> = Vec::with_capacity(level.len().div_ceil(2));
+        let mut j = 0;
+        while j + 1 < level.len() {
+            next.push(node(&level[j], &level[j + 1]));
+            j += 2;
+        }
+        if j < level.len() {
+            next.push(level[j]);
+        }
+        level = next;
+        known = next_known;
+    }
+    Some(PalwArtifactMultiproofV1 { leaf_count: leaf_count as u32, opened: sorted, siblings })
+}
+
+/// **A multiproof built from a leaf STREAM** (the pre-t12 drill of 2026-09-25): the same proof
+/// [`palw_artifact_multiproof_v1`] builds, without the vector of every leaf hash it folds from.
+///
+/// The prover is told the leaf count and the leaves it MAY open (the challenge's draw) before the
+/// walk; each leaf hash is pushed in inventory order as the walk reaches it, the tree is folded as a
+/// stream — one pending left node per level, an odd last node promoted, exactly as
+/// [`artifact_root_v1`] folds — and only the nodes a proof over any subset of the draw can need are
+/// kept: each drawn leaf's own hash (to check its operand) and the sibling of its path at every
+/// level. [`Self::finish`] then assembles the proof for the leaves actually opened with the
+/// builder's own walk, so the siblings come out in the builder's order.
+///
+/// Memory: `O(k · log n)` hashes — sixteen draws at a 2M context are a few hundred — where the vector
+/// was 64 bytes a leaf plus the level copies (≈ 100 MiB for the 8k class's 649,480 leaves, held
+/// while a 3.5 GiB seat's replay held the rest of its share). Node-side proving only: the verifier
+/// is [`verify_artifact_multiproof_v1`], untouched.
+#[derive(Clone, Debug)]
+pub struct PalwArtifactMultiproofStreamV1 {
+    leaf_count: u64,
+    widths: Vec<u64>,
+    drawn: std::collections::BTreeSet<u64>,
+    wanted: std::collections::BTreeSet<(usize, u64)>,
+    kept: std::collections::BTreeMap<(usize, u64), Hash64>,
+    pending: Vec<Option<Hash64>>,
+    next: Vec<u64>,
+    pushed: u64,
+}
+
+impl PalwArtifactMultiproofStreamV1 {
+    /// A stream over `leaf_count` leaves of which any of `draw` may be opened. `None` for an empty
+    /// inventory or a draw outside it.
+    pub fn new(leaf_count: u32, draw: &[u32]) -> Option<Self> {
+        let leaf_count = leaf_count as u64;
+        if leaf_count == 0 || draw.iter().any(|index| *index as u64 >= leaf_count) {
+            return None;
+        }
+        let widths = level_widths_v1(leaf_count);
+        let mut wanted = std::collections::BTreeSet::new();
+        for index in draw {
+            let mut at = *index as u64;
+            wanted.insert((0, at));
+            for (level, width) in widths.iter().enumerate() {
+                // The builder's walk: the last node of an odd level is promoted and needs no sibling.
+                if !(at == width - 1 && width % 2 == 1) {
+                    wanted.insert((level, at ^ 1));
+                }
+                at /= 2;
+            }
+        }
+        let levels = widths.len() + 1;
+        Some(Self {
+            leaf_count,
+            widths,
+            drawn: draw.iter().map(|index| *index as u64).collect(),
+            wanted,
+            kept: std::collections::BTreeMap::new(),
+            pending: vec![None; levels],
+            next: vec![0; levels],
+            pushed: 0,
+        })
+    }
+
+    /// The next leaf hash, in inventory order. Leaves past `leaf_count` are ignored (and make
+    /// [`Self::finish`] refuse).
+    pub fn push(&mut self, leaf: Hash64) {
+        self.pushed += 1;
+        if self.pushed > self.leaf_count {
+            return;
+        }
+        let mut level = 0usize;
+        let mut hash = leaf;
+        loop {
+            let index = self.next[level];
+            self.next[level] += 1;
+            if self.wanted.contains(&(level, index)) {
+                self.kept.insert((level, index), hash);
+            }
+            let Some(&width) = self.widths.get(level) else { return }; // the root
+            if index.is_multiple_of(2) {
+                if index == width - 1 {
+                    level += 1; // promoted, not duplicated
+                    continue;
+                }
+                self.pending[level] = Some(hash);
+                return;
+            }
+            // An odd index always follows its left sibling; a stream that broke that cannot be
+            // proved from, and `finish` then finds a node missing rather than the node panicking.
+            let Some(left) = self.pending[level].take() else { return };
+            hash = node(&left, &hash);
+            level += 1;
+        }
+    }
+
+    /// **The proof over the leaves actually opened** — a subset of the draw, in any order; the same
+    /// value [`palw_artifact_multiproof_v1`] returns over the full leaf vector. `None` when the stream
+    /// was not exactly `leaf_count` leaves, an opened index was not drawn or repeats, or an operand is
+    /// not the leaf the stream carried.
+    pub fn finish(self, opened: &[(u32, PalwArtifactOperandV1)]) -> Option<PalwArtifactMultiproofV1> {
+        if self.pushed != self.leaf_count || opened.is_empty() {
+            return None;
+        }
+        let mut sorted: Vec<(u32, PalwArtifactOperandV1)> = opened.to_vec();
+        sorted.sort_by_key(|(index, _)| *index);
+        for window in sorted.windows(2) {
+            if window[0].0 == window[1].0 {
+                return None;
+            }
+        }
+        for (index, operand) in &sorted {
+            if !self.drawn.contains(&(*index as u64)) || self.kept.get(&(0, *index as u64)) != Some(&artifact_leaf_v1(operand)) {
+                return None;
+            }
+        }
+        let mut known: Vec<u64> = sorted.iter().map(|(index, _)| *index as u64).collect();
+        let mut siblings = Vec::new();
+        for (level, width) in self.widths.iter().copied().enumerate() {
+            let mut next_known: Vec<u64> = Vec::with_capacity(known.len());
+            let mut i = 0;
+            while i < known.len() {
+                let index = known[i];
+                if index == width - 1 && width % 2 == 1 {
+                    next_known.push(index / 2);
+                    i += 1;
+                    continue;
+                }
+                let partner = index ^ 1;
+                if known.get(i + 1).copied() == Some(partner) {
+                    i += 2;
+                } else {
+                    siblings.push(*self.kept.get(&(level, partner))?);
+                    i += 1;
+                }
+                next_known.push(index / 2);
+            }
+            next_known.dedup();
+            known = next_known;
+        }
+        Some(PalwArtifactMultiproofV1 { leaf_count: self.leaf_count as u32, opened: sorted, siblings })
+    }
+}
+
+/// **Verify a multiproof against the registered root.** Every opened leaf is recomputed from its
+/// operand; the walk consumes the supplied siblings in the order the builder produced them.
+pub fn verify_artifact_multiproof_v1(proof: &PalwArtifactMultiproofV1, registered_root: Hash64) -> Result<(), PalwArtifactError> {
+    if reconstruct_artifact_multiproof_root_v1(proof)? == registered_root { Ok(()) } else { Err(PalwArtifactError::RootMismatch) }
+}
+
+/// **The root a multiproof reconstructs** (lane MU, ADR-0173): [`verify_artifact_multiproof_v1`]'s walk without the final
+/// comparison, so a reader that accepts one of several roots (a class's roots in force) reconstructs once and looks the root up.
+pub fn reconstruct_artifact_multiproof_root_v1(proof: &PalwArtifactMultiproofV1) -> Result<Hash64, PalwArtifactError> {
+    if proof.leaf_count == 0 {
+        return Err(PalwArtifactError::EmptyInventory(0));
+    }
+    if proof.opened.is_empty() {
+        return Err(PalwArtifactError::RootMismatch);
+    }
+    for window in proof.opened.windows(2) {
+        if window[0].0 >= window[1].0 {
+            return Err(PalwArtifactError::RootMismatch); // not ascending, or a duplicate
+        }
+    }
+    if let Some((index, _)) = proof.opened.iter().find(|(index, _)| *index >= proof.leaf_count) {
+        return Err(PalwArtifactError::IndexOutOfRange { index: *index, count: proof.leaf_count });
+    }
+    let mut known: Vec<(u64, Hash64)> =
+        proof.opened.iter().map(|(index, operand)| (*index as u64, artifact_leaf_v1(operand))).collect();
+    let mut supplied = proof.siblings.iter();
+    for width in level_widths_v1(proof.leaf_count as u64) {
+        let mut next: Vec<(u64, Hash64)> = Vec::with_capacity(known.len());
+        let mut i = 0;
+        while i < known.len() {
+            let (index, hash) = known[i];
+            let promoted = index == width - 1 && width % 2 == 1;
+            if promoted {
+                next.push((index / 2, hash));
+                i += 1;
+                continue;
+            }
+            let partner = index ^ 1;
+            let (left, right, step) = match known.get(i + 1) {
+                Some((other, other_hash)) if *other == partner => {
+                    if index.is_multiple_of(2) {
+                        (hash, *other_hash, 2)
+                    } else {
+                        (*other_hash, hash, 2)
+                    }
+                }
+                _ => {
+                    let sibling = *supplied.next().ok_or(PalwArtifactError::RootMismatch)?;
+                    if index.is_multiple_of(2) { (hash, sibling, 1) } else { (sibling, hash, 1) }
+                }
+            };
+            next.push((index / 2, node(&left, &right)));
+            i += step;
+        }
+        known = next;
+    }
+    if supplied.next().is_some() {
+        return Err(PalwArtifactError::RootMismatch);
+    }
+    match known.as_slice() {
+        [(0, root)] => Ok(*root),
+        _ => Err(PalwArtifactError::RootMismatch),
+    }
+}
+
+/// **The siblings [`palw_artifact_multiproof_v1`] supplies for `indices`, without the leaves** — the
+/// builder's own walk over the indices alone: the count is a function of the tree's shape and the
+/// opened positions, never of a hash. What an admission price counts for a multiproof it has not built
+/// (RFC-0002 Phase F §2.12.1: an IR close carries its parameter openings as one multiproof).
+///
+/// `indices` ascending and distinct, each below `leaf_count`; `None` otherwise, or when either is
+/// empty. A run of consecutive leaves costs at most two siblings a level (its two boundary partners).
+pub fn palw_artifact_multiproof_sibling_count_v1(leaf_count: u32, indices: &[u32]) -> Option<u64> {
+    if leaf_count == 0 || indices.is_empty() || indices.windows(2).any(|w| w[0] >= w[1]) {
+        return None;
+    }
+    if *indices.last()? >= leaf_count {
+        return None;
+    }
+    let mut known: Vec<u64> = indices.iter().map(|index| *index as u64).collect();
+    let mut count = 0u64;
+    for width in level_widths_v1(leaf_count as u64) {
+        let mut next: Vec<u64> = Vec::with_capacity(known.len());
+        let mut i = 0;
+        while i < known.len() {
+            let index = known[i];
+            if index == width - 1 && width % 2 == 1 {
+                next.push(index / 2);
+                i += 1;
+                continue;
+            }
+            if known.get(i + 1).copied() == Some(index ^ 1) {
+                i += 2;
+            } else {
+                count += 1;
+                i += 1;
+            }
+            next.push(index / 2);
+        }
+        next.dedup();
+        known = next;
+    }
+    Some(count)
+}
+
+/// **The path length of a single-leaf opening** of leaf `index` in an inventory of `leaf_count`: one
+/// sibling a level, except where the leaf's ancestor is promoted ([`open_artifact_leaf_v1`]).
+/// `None` for an index outside the inventory.
+pub fn palw_artifact_opening_path_len_v1(leaf_count: u32, index: u32) -> Option<u64> {
+    if index >= leaf_count {
+        return None;
+    }
+    let mut at = index as u64;
+    let mut len = 0u64;
+    for width in level_widths_v1(leaf_count as u64) {
+        if !(at == width - 1 && width % 2 == 1) {
+            len += 1;
+        }
+        at /= 2;
+    }
+    Some(len)
+}
+
+/// **A multiproof assembled from single-leaf openings** of one inventory — the proof
+/// [`palw_artifact_multiproof_v1`] builds over the same leaves, sibling for sibling, from the paths
+/// the openings already carry (every supplied sibling is on the path of each opened leaf under the
+/// node it completes). What an evidence store that answers single-leaf openings gives a court that
+/// carries one multiproof. `None` for no opening, a duplicate or out-of-range index, openings of
+/// different inventories, or a path whose length is not its leaf's; the result is NOT verified here
+/// (a path that does not reach the root yields a proof that does not either).
+pub fn palw_artifact_multiproof_from_openings_v1(openings: &[PalwArtifactOpeningV1]) -> Option<PalwArtifactMultiproofV1> {
+    let leaf_count = openings.first()?.leaf_count;
+    if leaf_count == 0 {
+        return None;
+    }
+    let mut sorted: Vec<&PalwArtifactOpeningV1> = openings.iter().collect();
+    sorted.sort_by_key(|o| o.leaf_index);
+    if sorted.windows(2).any(|w| w[0].leaf_index == w[1].leaf_index)
+        || sorted.iter().any(|o| o.leaf_count != leaf_count || o.leaf_index >= leaf_count)
+    {
+        return None;
+    }
+    let widths = level_widths_v1(leaf_count as u64);
+    // Per opening, per level: the position of that level's sibling in its path (`None` where its
+    // ancestor is promoted and the path has none).
+    let mut positions: Vec<Vec<Option<usize>>> = Vec::with_capacity(sorted.len());
+    for o in &sorted {
+        let (mut at, mut k) = (o.leaf_index as u64, 0usize);
+        let mut row = Vec::with_capacity(widths.len());
+        for &width in &widths {
+            if at == width - 1 && width % 2 == 1 {
+                row.push(None);
+            } else {
+                row.push(Some(k));
+                k += 1;
+            }
+            at /= 2;
+        }
+        if o.path.len() != k {
+            return None;
+        }
+        positions.push(row);
+    }
+    // (the node's index at this level, an opening under it)
+    let mut known: Vec<(u64, usize)> = sorted.iter().enumerate().map(|(j, o)| (o.leaf_index as u64, j)).collect();
+    let mut siblings = Vec::new();
+    for (level, &width) in widths.iter().enumerate() {
+        let mut next: Vec<(u64, usize)> = Vec::with_capacity(known.len());
+        let mut i = 0;
+        while i < known.len() {
+            let (index, j) = known[i];
+            if index == width - 1 && width % 2 == 1 {
+                next.push((index / 2, j));
+                i += 1;
+                continue;
+            }
+            if known.get(i + 1).map(|k| k.0) == Some(index ^ 1) {
+                i += 2;
+            } else {
+                siblings.push(sorted[j].path[positions[j][level]?]);
+                i += 1;
+            }
+            next.push((index / 2, j));
+        }
+        next.dedup_by_key(|k| k.0);
+        known = next;
+    }
+    Some(PalwArtifactMultiproofV1 { leaf_count, opened: sorted.iter().map(|o| (o.leaf_index, o.operand.clone())).collect(), siblings })
+}
+
+/// **The borsh bytes of one [`PalwArtifactOperandV1`]**: its name (a 4-byte length and the bytes),
+/// its layer (a 1-byte tag, and 2 bytes when present), its byte offset (4) and its bytes (a 4-byte
+/// length and the bytes).
+pub const fn palw_artifact_operand_borsh_len_v1(tensor_name_len: usize, layer_is_some: bool, bytes_len: usize) -> u64 {
+    (4 + tensor_name_len + if layer_is_some { 3 } else { 1 } + 4 + 4 + bytes_len) as u64
+}
+
+/// **The borsh bytes of a [`PalwArtifactMultiproofV1`]** whose opened operands have the borsh lengths
+/// `operand_lens` ([`palw_artifact_operand_borsh_len_v1`]) and which supplies `siblings` siblings
+/// ([`palw_artifact_multiproof_sibling_count_v1`]): `leaf_count` (4), the opened vector (a 4-byte
+/// length, and per entry its 4-byte index and its operand), the siblings vector (a 4-byte length and
+/// 64 bytes each — a `Hash64` is its 64 bytes).
+pub fn palw_artifact_multiproof_borsh_len_v1(operand_lens: impl IntoIterator<Item = u64>, siblings: u64) -> u64 {
+    let opened: u64 = operand_lens.into_iter().map(|len| 4 + len).sum();
+    4 + 4 + opened + 4 + 64 * siblings
+}
+
+pub fn verify_artifact_opening_v1(opening: &PalwArtifactOpeningV1, registered_root: Hash64) -> Result<(), PalwArtifactError> {
+    if opening.leaf_count == 0 {
+        return Err(PalwArtifactError::EmptyInventory(0));
+    }
+    if opening.leaf_index >= opening.leaf_count {
+        return Err(PalwArtifactError::IndexOutOfRange { index: opening.leaf_index, count: opening.leaf_count });
+    }
+    let mut acc = artifact_leaf_v1(&opening.operand);
+    let mut index = opening.leaf_index as u64;
+    let mut width = opening.leaf_count as u64;
+    let mut supplied = opening.path.iter();
+    while width > 1 {
+        let promoted = index == width - 1 && width % 2 == 1;
+        if !promoted {
+            let sibling = supplied.next().ok_or(PalwArtifactError::RootMismatch)?;
+            acc = if index.is_multiple_of(2) { node(&acc, sibling) } else { node(sibling, &acc) };
+        }
+        index /= 2;
+        width = width.div_ceil(2);
+    }
+    // A path with elements left over is a different tree that happened to reach the same root by
+    // accident of length; refuse rather than ignore the tail.
+    if supplied.next().is_some() || acc != registered_root {
+        return Err(PalwArtifactError::RootMismatch);
+    }
+    Ok(())
+}
+
+/// A [`crate::palw_step_refute::PalwWeightOracleV1`] backed by PROVEN operands.
+///
+/// This is the point of the module: the court's arithmetic does not change at all. It keeps asking
+/// an oracle for rows; the oracle is now satisfied by evidence the accusation carried and this node
+/// checked against a chain-registered root, instead of by a file this node may or may not hold.
+pub struct PalwProvenOperandsV1 {
+    operands: Vec<PalwArtifactOperandV1>,
+}
+
+impl PalwProvenOperandsV1 {
+    /// Verify every opening against `registered_root`, then expose the operands.
+    ///
+    /// All-or-nothing: one bad opening rejects the whole set rather than dropping that operand,
+    /// because a dropped operand becomes `None` downstream, which the court reads as
+    /// `Unadjudicable` — an accusation with one forged row would look like a coverage gap and
+    /// freeze the class (I10) instead of failing as the forgery it is.
+    pub fn from_openings_v1(openings: &[PalwArtifactOpeningV1], registered_root: Hash64) -> Result<Self, PalwArtifactError> {
+        for opening in openings {
+            verify_artifact_opening_v1(opening, registered_root)?;
+        }
+        Ok(Self { operands: openings.iter().map(|o| o.operand.clone()).collect() })
+    }
+}
+
+impl crate::palw_step_refute::PalwWeightOracleV1 for PalwProvenOperandsV1 {
+    /// **Exactly `byte_len` bytes, or nothing** (ADR-0049 Decision A).
+    ///
+    /// This returned `byte_len` bytes while the trait asked for `elements` VALUES, and the two
+    /// coincide only at a one-byte dtype. `PALW-BASE-0` is `int8` throughout, so the only class
+    /// that exists could not expose it — and `Rescale`, which asked for one value and required
+    /// five bytes, could never adjudicate through a real opening. The contract is bytes on both
+    /// sides now; the mismatch had no way to announce itself before.
+    fn operand_bytes(&self, tensor_name: &str, layer: Option<u16>, byte_offset: u32, byte_len: u32) -> Option<Vec<u8>> {
+        find_operand_v1(&self.operands, tensor_name, layer, byte_offset, byte_len).map(|(_, bytes)| bytes)
+    }
+}
+
+/// **The one lookup an oracle performs**, shared by the verifier's proven set and the prover's
+/// recorder so the two cannot answer the same question differently.
+///
+/// The proof binds the bytes that were committed; it says nothing about how many the caller wants.
+/// A short opening is a missing operand, not a truncated answer — and a LONG one is refused too,
+/// because an opening that proves more than the step reads is an opening whose extra bytes nothing
+/// checked.
+pub fn find_operand_v1(
+    operands: &[PalwArtifactOperandV1],
+    tensor_name: &str,
+    layer: Option<u16>,
+    byte_offset: u32,
+    byte_len: u32,
+) -> Option<(usize, Vec<u8>)> {
+    let (index, operand) =
+        operands.iter().enumerate().find(|(_, o)| o.tensor_name == tensor_name && o.layer == layer && o.row_start == byte_offset)?;
+    (operand.bytes.len() == byte_len as usize).then(|| (index, operand.bytes.clone()))
+}
+
+/// **An oracle over a FULL inventory that remembers which operands were asked for.**
+///
+/// The prover's problem is not "what does this step read" — it is "what will the ADJUDICATOR ask
+/// for", and those are the same question only if two pieces of code agree. Writing the enumeration
+/// a second time on the prover side is exactly the correspondence defect this tree keeps finding,
+/// so the prover does not write it: it runs the adjudicator against the whole inventory, records
+/// every row the adjudicator actually resolved, and opens those.
+///
+/// The recorded set is therefore correct BY CONSTRUCTION for any op kind, present or future — a
+/// new kernel that reads a new tensor needs no change here, because nothing here knows what a
+/// kernel is.
+pub struct PalwRecordingOracleV1<'a> {
+    inventory: &'a [PalwArtifactOperandV1],
+    used: std::cell::RefCell<std::collections::BTreeSet<usize>>,
+}
+
+impl<'a> PalwRecordingOracleV1<'a> {
+    pub fn new(inventory: &'a [PalwArtifactOperandV1]) -> Self {
+        Self { inventory, used: Default::default() }
+    }
+
+    /// The openings for every operand the adjudicator resolved, in inventory order.
+    ///
+    /// `None` when any recorded index cannot be opened, which cannot happen for an inventory this
+    /// oracle answered from and is therefore a corrupt inventory rather than a missing operand.
+    pub fn openings(&self) -> Option<Vec<PalwArtifactOpeningV1>> {
+        self.used.borrow().iter().map(|i| open_artifact_leaf_v1(self.inventory, *i as u32)).collect()
+    }
+
+    /// How many rows were resolved — the cost half of the same answer, for a caller sizing a close
+    /// against the court's opening ceiling before it builds one.
+    pub fn recorded(&self) -> usize {
+        self.used.borrow().len()
+    }
+}
+
+impl crate::palw_step_refute::PalwWeightOracleV1 for PalwRecordingOracleV1<'_> {
+    fn operand_bytes(&self, tensor_name: &str, layer: Option<u16>, byte_offset: u32, byte_len: u32) -> Option<Vec<u8>> {
+        let (index, bytes) = find_operand_v1(self.inventory, tensor_name, layer, byte_offset, byte_len)?;
+        self.used.borrow_mut().insert(index);
+        Some(bytes)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::palw_step_refute::PalwWeightOracleV1;
+
+    fn operand(name: &str, layer: Option<u16>, row_start: u32, bytes: &[u8]) -> PalwArtifactOperandV1 {
+        PalwArtifactOperandV1 { tensor_name: name.to_string(), layer, row_start, bytes: bytes.to_vec() }
+    }
+
+    fn inventory() -> Vec<PalwArtifactOperandV1> {
+        vec![
+            operand("blk.{layer}.attn_q.weight", Some(0), 0, &[1, 2, 3, 4]),
+            operand("blk.{layer}.attn_k.weight", Some(0), 0, &[5, 6, 7, 8]),
+            operand("blk.{layer}.ffn_up.weight", Some(1), 0, &[9, 10]),
+        ]
+    }
+
+    /// **What the prover opens is what the verifier resolves, because the prover asked the
+    /// verifier.**
+    ///
+    /// The production close carried `operand_openings: Vec::new()`, so no step that reads a weight
+    /// could adjudicate in either direction — the court could not convict a liar and could not
+    /// acquit an honest producer. Building the set by hand on the prover side would mean writing
+    /// the adjudicator's operand enumeration twice, and every correspondence defect in this tree
+    /// has come from exactly that. So the prover runs the adjudicator against the whole inventory
+    /// and opens what it recorded.
+    ///
+    /// This pins the round trip: what the recorder collects verifies against the registered root,
+    /// and a `PalwProvenOperandsV1` rebuilt from those openings answers the SAME queries with the
+    /// SAME bytes. Anything the recorder missed shows up here as a `None` from the proven set.
+    #[test]
+    fn a_recorded_opening_set_answers_exactly_what_the_verifier_asks() {
+        let inv = inventory();
+        let leaves: Vec<Hash64> = inv.iter().map(artifact_leaf_v1).collect();
+        let root = artifact_root_v1(&leaves).unwrap();
+
+        // The queries a step makes. The recorder does not know they are coming; it learns them.
+        let queries: [(&str, Option<u16>, u32, u32); 2] =
+            [("blk.{layer}.attn_q.weight", Some(0), 0, 4), ("blk.{layer}.ffn_up.weight", Some(1), 0, 2)];
+
+        let recorder = PalwRecordingOracleV1::new(&inv);
+        let mut expected: Vec<Vec<u8>> = Vec::new();
+        for (name, layer, off, len) in queries {
+            expected.push(recorder.operand_bytes(name, layer, off, len).expect("the full inventory answers"));
+        }
+        assert_eq!(recorder.recorded(), 2, "two rows resolved, and the untouched third is not opened");
+
+        let openings = recorder.openings().expect("every recorded row opens");
+        for opening in &openings {
+            verify_artifact_opening_v1(opening, root).expect("a recorded opening verifies against the registered root");
+        }
+
+        // The verifier's side, built from exactly those openings.
+        let proven = PalwProvenOperandsV1::from_openings_v1(&openings, root).expect("the openings compose");
+        for ((name, layer, off, len), want) in queries.into_iter().zip(expected) {
+            assert_eq!(
+                proven.operand_bytes(name, layer, off, len),
+                Some(want),
+                "the proven set must answer what the recorder answered, byte for byte"
+            );
+        }
+
+        // And nothing else: a row the step never read is not carried, so the close does not pay for
+        // bytes no refutation reads.
+        assert_eq!(
+            proven.operand_bytes("blk.{layer}.attn_k.weight", Some(0), 0, 4),
+            None,
+            "an operand the adjudicator never asked for must not be in the close"
+        );
+    }
+
+    fn open(index: usize) -> (PalwArtifactOpeningV1, Hash64) {
+        let inv = inventory();
+        let leaves: Vec<Hash64> = inv.iter().map(artifact_leaf_v1).collect();
+        let root = artifact_root_v1(&leaves).unwrap();
+        // Three leaves: [h0 h1 h2] -> [n(h0,h1), h2(promoted)] -> root. Index 2 promotes once.
+        let path = match index {
+            0 => vec![leaves[1]],
+            1 => vec![leaves[0]],
+            2 => vec![],
+            _ => unreachable!(),
+        };
+        let mut path = path;
+        if index < 2 {
+            path.push(leaves[2]);
+        } else {
+            path.push(node(&leaves[0], &leaves[1]));
+        }
+        (PalwArtifactOpeningV1 { operand: inv[index].clone(), leaf_index: index as u32, leaf_count: 3, path }, root)
+    }
+
+    /// **The prover and the verifier agree, at every inventory size** — including the odd ones,
+    /// where promotion decides whether a level consumes a path element.
+    ///
+    /// The hand-built openings this module tested with knew their own three-leaf shape, so they
+    /// proved the fixture rather than the code, and no producer could build one at all.
+    #[test]
+    fn every_leaf_opens_and_every_opening_verifies() {
+        for count in 1usize..=17 {
+            let inv: Vec<PalwArtifactOperandV1> =
+                (0..count).map(|i| operand("t", Some(i as u16), 0, &[i as u8, 0xAA, 0xBB])).collect();
+            let root = artifact_root_v1(&inv.iter().map(artifact_leaf_v1).collect::<Vec<_>>()).unwrap();
+            for i in 0..count {
+                let opening = open_artifact_leaf_v1(&inv, i as u32).expect("every leaf opens");
+                assert_eq!(verify_artifact_opening_v1(&opening, root), Ok(()), "count {count}, leaf {i}");
+                // …and it proves THAT leaf: the same path with another operand does not verify.
+                let mut forged = opening.clone();
+                forged.operand.bytes[0] ^= 0xFF;
+                assert_eq!(verify_artifact_opening_v1(&forged, root), Err(PalwArtifactError::RootMismatch));
+            }
+            assert!(open_artifact_leaf_v1(&inv, count as u32).is_none(), "an index past the end opens nothing");
+        }
+        assert!(open_artifact_leaf_v1(&[], 0).is_none());
+    }
+
+    /// The court adjudicates from carried evidence, with no local model.
+    #[test]
+    fn a_proven_operand_answers_the_oracle() {
+        let (opening, root) = open(0);
+        let oracle = PalwProvenOperandsV1::from_openings_v1(&[opening], root).expect("honest opening");
+        assert_eq!(oracle.operand_bytes("blk.{layer}.attn_q.weight", Some(0), 0, 4), Some(vec![1, 2, 3, 4]));
+        // A row nobody proved is absent — which the court reads as Unadjudicable, the safe
+        // direction: no proof, no conviction.
+        assert_eq!(oracle.operand_bytes("blk.{layer}.attn_q.weight", Some(0), 0, 5), None, "more elements than were proven");
+        assert_eq!(oracle.operand_bytes("blk.{layer}.ffn_down.weight", Some(0), 0, 1), None, "never opened");
+    }
+
+    /// The leaf binds the POSITION, so a genuine row of another tensor cannot stand in.
+    ///
+    /// This is the attack a bytes-only leaf allows: open a real row, claim it as the operand of the
+    /// step under dispute, and the proof verifies while proving the wrong thing.
+    #[test]
+    fn an_operand_cannot_be_moved_to_another_position() {
+        let (mut opening, root) = open(0);
+        opening.operand.tensor_name = "blk.{layer}.attn_k.weight".into();
+        assert_eq!(verify_artifact_opening_v1(&opening, root), Err(PalwArtifactError::RootMismatch));
+
+        let (mut opening, root) = open(0);
+        opening.operand.layer = Some(1);
+        assert_eq!(verify_artifact_opening_v1(&opening, root), Err(PalwArtifactError::RootMismatch));
+
+        let (mut opening, root) = open(0);
+        opening.operand.row_start = 4;
+        assert_eq!(verify_artifact_opening_v1(&opening, root), Err(PalwArtifactError::RootMismatch));
+    }
+
+    /// A promoted odd node consumes no path element, and the tree does not duplicate the last leaf.
+    ///
+    /// Duplication is the classic second-preimage hole: `[a, b, c]` and `[a, b, c, c]` would share a
+    /// root, so a proof for a fourth position verifies against an inventory of three.
+    #[test]
+    fn the_odd_leaf_is_promoted_not_duplicated() {
+        let inv = inventory();
+        let leaves: Vec<Hash64> = inv.iter().map(artifact_leaf_v1).collect();
+        let three = artifact_root_v1(&leaves).unwrap();
+        let four = artifact_root_v1(&[leaves[0], leaves[1], leaves[2], leaves[2]]).unwrap();
+        assert_ne!(three, four, "duplicating the odd leaf would make two inventories share a root");
+
+        let (opening, root) = open(2);
+        assert!(verify_artifact_opening_v1(&opening, root).is_ok(), "the promoted leaf opens");
+    }
+
+    /// A forged operand rejects the whole set rather than being dropped.
+    ///
+    /// Dropping it would make it `None` downstream, and the court reads `None` as `Unadjudicable` —
+    /// so an accusation carrying one forged row would look like a coverage gap and freeze the class
+    /// (I10) instead of failing as the forgery it is.
+    #[test]
+    fn one_forged_opening_rejects_the_whole_accusation() {
+        let (good, root) = open(0);
+        let (mut bad, _) = open(1);
+        bad.operand.bytes = vec![0xFF; 4];
+        assert_eq!(PalwProvenOperandsV1::from_openings_v1(&[good, bad], root).err(), Some(PalwArtifactError::RootMismatch));
+    }
+
+    /// Out-of-range and empty inventories are refused rather than reaching the hash.
+    #[test]
+    fn an_impossible_position_is_refused() {
+        let (mut opening, root) = open(0);
+        opening.leaf_index = 3;
+        assert_eq!(verify_artifact_opening_v1(&opening, root), Err(PalwArtifactError::IndexOutOfRange { index: 3, count: 3 }));
+        opening.leaf_count = 0;
+        assert_eq!(verify_artifact_opening_v1(&opening, root), Err(PalwArtifactError::EmptyInventory(0)));
+        assert_eq!(artifact_root_v1(&[]), None);
+    }
+
+    /// A path with elements left over is refused, not ignored.
+    #[test]
+    fn a_path_with_a_tail_is_refused() {
+        let (mut opening, root) = open(0);
+        opening.path.push(Hash64::from_u64_word(0xDEAD));
+        assert_eq!(verify_artifact_opening_v1(&opening, root), Err(PalwArtifactError::RootMismatch));
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// The canonical inventory (ADR-0049 Decision G)
+// ---------------------------------------------------------------------------------------------
+
+/// Why an inventory is not canonical.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum PalwInventoryError {
+    #[error("an empty inventory has no root, and a zero root would verify nothing forever")]
+    Empty,
+    #[error("row {index} of '{tensor}' is zero-length — a row that proves no bytes is a leaf that binds nothing")]
+    ZeroLengthRow { tensor: String, index: usize },
+    #[error("'{tensor}' appears twice at byte {offset}: two leaves for one position let a producer choose which one an opening meets")]
+    DuplicateRow { tensor: String, offset: u32 },
+    #[error(
+        "'{tensor}' is out of canonical order at index {index}: (name, layer, offset) ascending is what makes the order one nobody chooses"
+    )]
+    NotCanonicalOrder { tensor: String, index: usize },
+    #[error("'{tensor}' does not start at byte 0 — a tensor whose first row is not its first byte has a prefix nothing covers")]
+    DoesNotStartAtZero { tensor: String },
+    #[error("'{tensor}' has a gap or an overlap at byte {at}: expected the previous row to end there")]
+    GapOrOverlap { tensor: String, at: u32 },
+    #[error("the profile names '{tensor}' and the inventory does not carry it")]
+    ProfileTensorMissing { tensor: String },
+}
+
+/// **The canonical layout an `artifact_root` commits to.**
+///
+/// One entry per contiguous row slice, ordered by `(tensor_name, layer, byte_offset)` ascending,
+/// with every tensor tiled from byte 0 with no gap and no overlap. Constructible only through
+/// [`PalwArtifactInventoryV1::new`], so an inventory value IS a checked one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwArtifactInventoryV1 {
+    operands: Vec<PalwArtifactOperandV1>,
+}
+
+/// **The layout rules, one row at a time — their one spelling** (ADR-0106). A row is its
+/// `(tensor, layer, byte offset, byte length)`; the held inventory, the digest one and a stream are
+/// all checked by this walk, so a streamed inventory is refused by the same rule, at the same row,
+/// with the same error as the held one — "the stream is the same inventory" cannot drift into "the
+/// stream is a similar inventory".
+#[derive(Clone, Debug, Default)]
+pub struct PalwInventoryLayoutCheckerV1 {
+    prev: Option<(String, Option<u16>, u32, u32)>,
+    index: usize,
+}
+
+impl PalwInventoryLayoutCheckerV1 {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The next row, refused by name if it breaks a rule given the rows before it.
+    pub fn push(&mut self, name: &str, layer: Option<u16>, start: u32, len: u32) -> Result<(), PalwInventoryError> {
+        let index = self.index;
+        if len == 0 {
+            return Err(PalwInventoryError::ZeroLengthRow { tensor: name.to_string(), index });
+        }
+        let mut continues_its_tensor = false;
+        if let Some((p_name, p_layer, p_start, p_len)) = &self.prev {
+            let (pk, ok) = ((p_name.as_str(), *p_layer, *p_start), (name, layer, start));
+            if pk == ok {
+                return Err(PalwInventoryError::DuplicateRow { tensor: name.to_string(), offset: start });
+            }
+            if pk > ok {
+                return Err(PalwInventoryError::NotCanonicalOrder { tensor: name.to_string(), index });
+            }
+            // Within one tensor the rows must tile it: the next row starts exactly where the
+            // previous ended. Across tensors the previous end says nothing.
+            if (p_name.as_str(), *p_layer) == (name, layer) {
+                let end =
+                    p_start.checked_add(*p_len).ok_or(PalwInventoryError::GapOrOverlap { tensor: name.to_string(), at: *p_start })?;
+                if end != start {
+                    return Err(PalwInventoryError::GapOrOverlap { tensor: name.to_string(), at: end });
+                }
+                continues_its_tensor = true;
+            }
+        }
+        if !continues_its_tensor && start != 0 {
+            return Err(PalwInventoryError::DoesNotStartAtZero { tensor: name.to_string() });
+        }
+        match &mut self.prev {
+            Some((p_name, p_layer, p_start, p_len)) if p_name.as_str() == name => (*p_layer, *p_start, *p_len) = (layer, start, len),
+            _ => self.prev = Some((name.to_string(), layer, start, len)),
+        }
+        self.index += 1;
+        Ok(())
+    }
+
+    /// The rows checked so far, or `Empty` when there were none — an inventory of nothing opens
+    /// nothing.
+    pub fn finish(&self) -> Result<usize, PalwInventoryError> {
+        if self.index == 0 { Err(PalwInventoryError::Empty) } else { Ok(self.index) }
+    }
+}
+
+/// The walk over a held slice — the checker, row by row.
+fn check_inventory_layout_v1<T>(rows: &[T], at: impl Fn(&T) -> (&str, Option<u16>, u32, u32)) -> Result<(), PalwInventoryError> {
+    if rows.is_empty() {
+        return Err(PalwInventoryError::Empty);
+    }
+    let mut checker = PalwInventoryLayoutCheckerV1::new();
+    for row in rows {
+        let (name, layer, start, len) = at(row);
+        checker.push(name, layer, start, len)?;
+    }
+    Ok(())
+}
+
+impl PalwArtifactInventoryV1 {
+    /// Check the layout, then keep it. Every rule refuses a way an opening's absence could be made
+    /// to mean nothing.
+    pub fn new(operands: Vec<PalwArtifactOperandV1>) -> Result<Self, PalwInventoryError> {
+        check_inventory_layout_v1(&operands, |o| (o.tensor_name.as_str(), o.layer, o.row_start, o.bytes.len() as u32))?;
+        Ok(Self { operands })
+    }
+
+    pub fn operands(&self) -> &[PalwArtifactOperandV1] {
+        &self.operands
+    }
+
+    /// `artifact_root` — the Merkle root over this layout's leaves, in this order.
+    pub fn root(&self) -> Hash64 {
+        let leaves: Vec<Hash64> = self.operands.iter().map(artifact_leaf_v1).collect();
+        artifact_root_v1(&leaves).expect("a non-empty inventory has a root")
+    }
+
+    /// The three numbers a streamed build is held to (ADR-0106), computed the materialized way.
+    pub fn summary(&self) -> PalwArtifactInventorySummaryV1 {
+        PalwArtifactInventorySummaryV1 {
+            root: self.root(),
+            leaf_count: self.operands.len() as u32,
+            artifact_bytes: self.operands.iter().map(|o| o.bytes.len() as u64).sum(),
+        }
+    }
+
+    /// **Every tensor the class's graph reads is carried.**
+    ///
+    /// The layout rules make an inventory internally consistent; this is what ties it to the class.
+    /// A registration whose artifact omits a tensor its own profile names is a class whose steps
+    /// adjudicate `Unadjudicable` at exactly the nodes that read it — coverage-clean and
+    /// unprosecutable, which is the shape ADR-0049 exists to refuse.
+    pub fn verify_covers_profile(&self, profile: &crate::palw_step::PalwShapeProfileV3) -> Result<(), PalwInventoryError> {
+        for table in [&profile.pre_nodes, &profile.gdn_nodes, &profile.attn_nodes, &profile.post_nodes] {
+            for node in table.iter() {
+                if node.weight_name.is_empty() {
+                    continue;
+                }
+                let carried = self.operands.iter().any(|o| {
+                    // `{layer}` is substituted at interpretation time, so a template matches any
+                    // entry whose name agrees outside the placeholder.
+                    o.tensor_name == node.weight_name
+                        || (node.weight_name.contains("{layer}")
+                            && layer_template_matches(node.weight_name.as_str(), o.tensor_name.as_str()))
+                });
+                if !carried {
+                    return Err(PalwInventoryError::ProfileTensorMissing { tensor: node.weight_name.clone() });
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// **One inventory row without its bytes** (ADR-0106): the coordinate, the length and the leaf the
+/// bytes hashed to — what a measurement, a root and a placement need, and all a stream keeps.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwArtifactRowDigestV1 {
+    pub tensor_name: String,
+    pub layer: Option<u16>,
+    pub row_start: u32,
+    pub byte_len: u32,
+    pub leaf_hash: Hash64,
+}
+
+impl PalwArtifactRowDigestV1 {
+    /// The row a materialized inventory holds, digested — the equality the stream is held to.
+    pub fn of(operand: &PalwArtifactOperandV1) -> Self {
+        Self {
+            tensor_name: operand.tensor_name.clone(),
+            layer: operand.layer,
+            row_start: operand.row_start,
+            byte_len: operand.bytes.len() as u32,
+            leaf_hash: artifact_leaf_v1(operand),
+        }
+    }
+}
+
+/// **What a measurement and a registration read of an inventory** (ADR-0106): its root, its leaf
+/// count and the bytes its rows cover — the three numbers the materialized and the streamed build
+/// must agree on byte for byte (a root that moves between them is a defect, never a migration).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwArtifactInventorySummaryV1 {
+    pub root: Hash64,
+    pub leaf_count: u32,
+    pub artifact_bytes: u64,
+}
+
+/// **An inventory consumed as a stream** (ADR-0106): rows arriving in canonical order, each checked
+/// by the one layout rule, hashed into the frontier and counted — the summary, with nothing kept
+/// per row. This is what makes a whole-artifact measurement hold one read, not the artifact.
+#[derive(Clone, Debug, Default)]
+pub struct PalwArtifactInventoryStreamV1 {
+    checker: PalwInventoryLayoutCheckerV1,
+    frontier: PalwArtifactMerkleFrontierV1,
+    bytes: u64,
+}
+
+impl PalwArtifactInventoryStreamV1 {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn push(&mut self, tensor_name: &str, layer: Option<u16>, row_start: u32, bytes: &[u8]) -> Result<(), PalwInventoryError> {
+        self.checker.push(tensor_name, layer, row_start, bytes.len() as u32)?;
+        self.frontier.push(artifact_leaf_parts_v1(tensor_name, layer, row_start, bytes));
+        self.bytes += bytes.len() as u64;
+        Ok(())
+    }
+
+    pub fn finish(self) -> Result<PalwArtifactInventorySummaryV1, PalwInventoryError> {
+        let leaf_count = self.checker.finish()? as u32;
+        Ok(PalwArtifactInventorySummaryV1 {
+            root: self.frontier.root().expect("a non-empty stream has a root"),
+            leaf_count,
+            artifact_bytes: self.bytes,
+        })
+    }
+}
+
+/// **The canonical layout, as leaves** (ADR-0106): the same rows [`PalwArtifactInventoryV1`] holds,
+/// in the same order, under the same checks — with each row's bytes hashed where they were read and
+/// never kept. Its root IS the materialized inventory's; an opening is built from it by handing back
+/// the one row's bytes ([`Self::opening_v1`]), which are checked against the leaf, so the court's
+/// wire evidence is unchanged and produced on demand rather than retained.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwArtifactInventoryDigestV1 {
+    rows: Vec<PalwArtifactRowDigestV1>,
+}
+
+impl PalwArtifactInventoryDigestV1 {
+    /// The rows must already be in canonical order — the materialized constructor's rule.
+    pub fn new(rows: Vec<PalwArtifactRowDigestV1>) -> Result<Self, PalwInventoryError> {
+        check_inventory_layout_v1(&rows, |r| (r.tensor_name.as_str(), r.layer, r.row_start, r.byte_len))?;
+        Ok(Self { rows })
+    }
+
+    pub fn rows(&self) -> &[PalwArtifactRowDigestV1] {
+        &self.rows
+    }
+
+    pub fn leaf_count(&self) -> u32 {
+        self.rows.len() as u32
+    }
+
+    pub fn summary(&self) -> PalwArtifactInventorySummaryV1 {
+        PalwArtifactInventorySummaryV1 {
+            root: self.root(),
+            leaf_count: self.leaf_count(),
+            artifact_bytes: self.rows.iter().map(|r| u64::from(r.byte_len)).sum(),
+        }
+    }
+
+    /// `artifact_root`, through the streaming frontier: no leaf vector, no level copy.
+    pub fn root(&self) -> Hash64 {
+        let mut frontier = PalwArtifactMerkleFrontierV1::new();
+        for row in &self.rows {
+            frontier.push(row.leaf_hash);
+        }
+        frontier.root().expect("a non-empty inventory has a root")
+    }
+
+    /// The index of the row at `(tensor, layer, byte offset)`, by the canonical order.
+    pub fn index_of(&self, tensor_name: &str, layer: Option<u16>, row_start: u32) -> Option<u32> {
+        self.rows
+            .binary_search_by(|r| (r.tensor_name.as_str(), r.layer, r.row_start).cmp(&(tensor_name, layer, row_start)))
+            .ok()
+            .map(|i| i as u32)
+    }
+
+    /// **An opening built from the digest and the row's own bytes** — the bytes must hash to the
+    /// recorded leaf, so the opening is the materialized inventory's
+    /// [`open_artifact_leaf_v1`] output exactly. `None` for an index outside the inventory or
+    /// bytes that are not that row's.
+    pub fn opening_v1(&self, index: u32, bytes: Vec<u8>) -> Option<PalwArtifactOpeningV1> {
+        let row = self.rows.get(index as usize)?;
+        if row.byte_len as usize != bytes.len()
+            || artifact_leaf_parts_v1(&row.tensor_name, row.layer, row.row_start, &bytes) != row.leaf_hash
+        {
+            return None;
+        }
+        let mut level: Vec<Hash64> = self.rows.iter().map(|r| r.leaf_hash).collect();
+        let leaf_count = level.len() as u32;
+        let mut at = index as usize;
+        let mut path = Vec::new();
+        while level.len() > 1 {
+            let promoted = at == level.len() - 1 && level.len() % 2 == 1;
+            if !promoted {
+                path.push(if at.is_multiple_of(2) { level[at + 1] } else { level[at - 1] });
+            }
+            let mut next = Vec::with_capacity(level.len().div_ceil(2));
+            let mut i = 0;
+            while i + 1 < level.len() {
+                next.push(node(&level[i], &level[i + 1]));
+                i += 2;
+            }
+            if i < level.len() {
+                next.push(level[i]);
+            }
+            level = next;
+            at /= 2;
+        }
+        Some(PalwArtifactOpeningV1 {
+            operand: PalwArtifactOperandV1 { tensor_name: row.tensor_name.clone(), layer: row.layer, row_start: row.row_start, bytes },
+            leaf_index: index,
+            leaf_count,
+            path,
+        })
+    }
+}
+
+/// `blk.{layer}.x` against `blk.7.x` — the placeholder matches one path segment and nothing else,
+/// so `blk.{layer}.w` cannot be satisfied by `blk.7.other.w`.
+fn layer_template_matches(template: &str, name: &str) -> bool {
+    let Some((head, tail)) = template.split_once("{layer}") else { return template == name };
+    let Some(rest) = name.strip_prefix(head) else { return false };
+    let Some(middle) = rest.strip_suffix(tail) else { return false };
+    !middle.is_empty() && middle.bytes().all(|b| b.is_ascii_digit())
+}
+
+#[cfg(test)]
+mod streaming_tests {
+    use super::*;
+
+    fn op(name: &str, layer: Option<u16>, start: u32, bytes: &[u8]) -> PalwArtifactOperandV1 {
+        PalwArtifactOperandV1 { tensor_name: name.to_string(), layer, row_start: start, bytes: bytes.to_vec() }
+    }
+
+    /// **ADR-0106 W1: the parts leaf and the streamed leaf are the operand leaf**, and a stream
+    /// that absorbed a different length than it declared is refused rather than hashed.
+    #[test]
+    fn the_parts_leaf_and_the_streamed_leaf_are_the_operand_leaf() {
+        let bytes: Vec<u8> = (0..1000u32).map(|i| (i * 7 + 3) as u8).collect();
+        for (name, layer, start) in [("blk.{layer}.attn_q.weight", Some(3u16), 4096u32), ("token_embd.weight", None, 0)] {
+            let whole = artifact_leaf_v1(&op(name, layer, start, &bytes));
+            assert_eq!(artifact_leaf_parts_v1(name, layer, start, &bytes), whole);
+            let mut streamed = PalwArtifactLeafHasherV1::new(name, layer, start, bytes.len() as u32);
+            for chunk in bytes.chunks(97) {
+                streamed.update(chunk);
+            }
+            assert_eq!(streamed.finish(), Ok(whole));
+        }
+        let mut short = PalwArtifactLeafHasherV1::new("t", None, 0, 10);
+        short.update(&[1, 2, 3]);
+        assert_eq!(short.finish(), Err((10, 3)));
+    }
+
+    /// **ADR-0106 W7: the frontier's root is `artifact_root_v1`'s, at every size** — promotion at
+    /// every level is exercised by the sizes below 300 and a few past powers of two.
+    #[test]
+    fn the_frontier_root_is_the_promoting_root_at_every_size() {
+        let leaves: Vec<Hash64> = (0..1100u64).map(Hash64::from_u64_word).collect();
+        let mut frontier = PalwArtifactMerkleFrontierV1::new();
+        assert_eq!(frontier.root(), None);
+        for n in 1..=leaves.len() {
+            frontier.push(leaves[n - 1]);
+            if n <= 300 || n.is_power_of_two() || (n + 1).is_power_of_two() || n == leaves.len() {
+                assert_eq!(frontier.root(), artifact_root_v1(&leaves[..n]), "n = {n}");
+            }
+        }
+        assert_eq!(frontier.leaf_count(), leaves.len() as u64);
+    }
+
+    /// **ADR-0106 W2: the digest inventory is the materialized one** — the same checks refuse the
+    /// same layouts, the root is the same root, and an opening from the digest plus the row's bytes
+    /// is the materialized opening byte for byte (and bytes that are not the row's open nothing).
+    #[test]
+    fn the_digest_inventory_roots_checks_and_opens_as_the_materialized_one() {
+        let rows = vec![
+            op("a.weight", Some(0), 0, &[1, 2, 3]),
+            op("a.weight", Some(0), 3, &[4, 5]),
+            op("a.weight", Some(1), 0, &[6]),
+            op("b.a16", None, 0, &[7, 8, 9, 10]),
+            op("z", None, 0, &[11]),
+        ];
+        let full = PalwArtifactInventoryV1::new(rows.clone()).expect("a canonical layout");
+        let digest =
+            PalwArtifactInventoryDigestV1::new(rows.iter().map(PalwArtifactRowDigestV1::of).collect()).expect("the same layout");
+        assert_eq!(digest.root(), full.root());
+        assert_eq!(digest.leaf_count() as usize, full.operands().len());
+        for (i, row) in rows.iter().enumerate() {
+            assert_eq!(digest.index_of(&row.tensor_name, row.layer, row.row_start), Some(i as u32));
+            assert_eq!(digest.opening_v1(i as u32, row.bytes.clone()), open_artifact_leaf_v1(full.operands(), i as u32), "row {i}");
+        }
+        assert_eq!(digest.opening_v1(0, vec![9, 9, 9]), None, "bytes that are not the row's open nothing");
+        // The same refusals, from the one walk.
+        let mut gap = rows.clone();
+        gap[1].row_start = 4;
+        assert_eq!(
+            PalwArtifactInventoryDigestV1::new(gap.iter().map(PalwArtifactRowDigestV1::of).collect()),
+            Err(PalwArtifactInventoryV1::new(gap).expect_err("a gap"))
+        );
+        let mut disorder = rows.clone();
+        disorder.swap(3, 4);
+        assert_eq!(
+            PalwArtifactInventoryDigestV1::new(disorder.iter().map(PalwArtifactRowDigestV1::of).collect()),
+            Err(PalwArtifactInventoryV1::new(disorder.clone()).expect_err("out of order"))
+        );
+        // And a STREAM of the same rows: the same summary when canonical, the same refusal when not.
+        let stream = |rows: &[PalwArtifactOperandV1]| -> Result<PalwArtifactInventorySummaryV1, PalwInventoryError> {
+            let mut s = PalwArtifactInventoryStreamV1::new();
+            for o in rows {
+                s.push(&o.tensor_name, o.layer, o.row_start, &o.bytes)?;
+            }
+            s.finish()
+        };
+        assert_eq!(stream(&rows), Ok(full.summary()));
+        assert_eq!(stream(&disorder), Err(PalwArtifactInventoryV1::new(disorder).expect_err("out of order")));
+        assert_eq!(stream(&[]), Err(PalwInventoryError::Empty));
+        let mut zero = rows.clone();
+        zero[2].bytes.clear();
+        assert_eq!(stream(&zero), Err(PalwArtifactInventoryV1::new(zero).expect_err("a zero-length row")));
+    }
+}
+
+#[cfg(test)]
+mod multiproof_tests {
+    use super::*;
+
+    fn operand(i: u32) -> PalwArtifactOperandV1 {
+        PalwArtifactOperandV1 { tensor_name: "w".to_string(), layer: None, row_start: i * 8, bytes: vec![(i % 251) as u8; 8] }
+    }
+
+    fn inventory(n: u32) -> (Vec<PalwArtifactOperandV1>, Vec<Hash64>, Hash64) {
+        let operands: Vec<PalwArtifactOperandV1> = (0..n).map(operand).collect();
+        let leaves: Vec<Hash64> = operands.iter().map(artifact_leaf_v1).collect();
+        let root = artifact_root_v1(&leaves).expect("a non-empty inventory has a root");
+        (operands, leaves, root)
+    }
+
+    #[test]
+    fn a_multiproof_opens_many_leaves_of_every_tree_shape_and_refuses_every_tamper() {
+        for n in [1u32, 2, 3, 4, 5, 7, 8, 9, 16, 17, 31, 64, 100, 1_000] {
+            let (operands, leaves, root) = inventory(n);
+            // A scattered set, the shape `palw_readiness_v2_leaves_v1` draws.
+            let mut indices: Vec<u32> = (0..n).filter(|i| i % 7 == 0 || i + 1 == n || *i == 1).collect();
+            indices.dedup();
+            let opened: Vec<(u32, PalwArtifactOperandV1)> = indices.iter().map(|i| (*i, operands[*i as usize].clone())).collect();
+            let proof = palw_artifact_multiproof_v1(&leaves, &opened).expect("the prover holds every leaf");
+            assert_eq!(proof.leaf_count, n);
+            assert_eq!(proof.opened_indices(), {
+                let mut sorted = indices.clone();
+                sorted.sort_unstable();
+                sorted
+            });
+            verify_artifact_multiproof_v1(&proof, root).unwrap_or_else(|e| panic!("n={n}: {e}"));
+
+            // Every single-leaf proof agrees with the V1 opening's verdict.
+            for i in [0u32, n / 2, n - 1] {
+                let one = palw_artifact_multiproof_v1(&leaves, &[(i, operands[i as usize].clone())]).expect("one leaf");
+                verify_artifact_multiproof_v1(&one, root).unwrap_or_else(|e| panic!("n={n} i={i}: {e}"));
+                let v1 = open_artifact_leaf_v1(&operands, i).expect("the V1 opening");
+                assert_eq!(v1.path.len(), one.siblings.len(), "n={n} i={i}: one leaf needs the V1 path");
+                assert!(verify_artifact_opening_v1(&v1, root).is_ok());
+            }
+
+            // Tampering: the bytes, an index, a sibling, a missing sibling, an extra one, the root.
+            let mut wrong_bytes = proof.clone();
+            wrong_bytes.opened[0].1.bytes[0] ^= 0xFF;
+            assert!(verify_artifact_multiproof_v1(&wrong_bytes, root).is_err(), "n={n}: tampered bytes");
+            if n > 2 {
+                let mut wrong_index = proof.clone();
+                let last = wrong_index.opened.len() - 1;
+                wrong_index.opened[last].0 = wrong_index.opened[last].0.saturating_sub(1);
+                assert!(verify_artifact_multiproof_v1(&wrong_index, root).is_err(), "n={n}: a moved index");
+            }
+            if !proof.siblings.is_empty() {
+                let mut wrong_sibling = proof.clone();
+                wrong_sibling.siblings[0] = Hash64::from_u64_word(0xDEAD);
+                assert!(verify_artifact_multiproof_v1(&wrong_sibling, root).is_err(), "n={n}: a forged sibling");
+                let mut short = proof.clone();
+                short.siblings.pop();
+                assert!(verify_artifact_multiproof_v1(&short, root).is_err(), "n={n}: a path one short");
+            }
+            let mut long = proof.clone();
+            long.siblings.push(Hash64::from_u64_word(1));
+            assert!(verify_artifact_multiproof_v1(&long, root).is_err(), "n={n}: a hash left over");
+            assert!(verify_artifact_multiproof_v1(&proof, Hash64::from_u64_word(7)).is_err(), "n={n}: another root");
+
+            // Out of range, duplicated and empty are refused at the door.
+            assert!(palw_artifact_multiproof_v1(&leaves, &[(n, operand(n))]).is_none(), "n={n}: out of range");
+            assert!(
+                palw_artifact_multiproof_v1(&leaves, &[(0, operands[0].clone()), (0, operands[0].clone())]).is_none(),
+                "n={n}: a duplicate"
+            );
+            assert!(palw_artifact_multiproof_v1(&leaves, &[]).is_none(), "n={n}: nothing opened");
+            let mut swapped = proof.clone();
+            if swapped.opened.len() > 1 {
+                swapped.opened.reverse();
+                assert!(verify_artifact_multiproof_v1(&swapped, root).is_err(), "n={n}: descending order");
+            }
+        }
+        assert!(palw_artifact_multiproof_v1(&[], &[(0, operand(0))]).is_none(), "an empty inventory has no proof");
+    }
+
+    /// **The streamed prover builds the builder's proof, byte for byte** (the pre-t12 drill of
+    /// 2026-09-25): for every tree shape — odd widths and their promotions included — and for any
+    /// subset of the draw a byte budget leaves opened, [`PalwArtifactMultiproofStreamV1`] fed the
+    /// leaves one at a time returns exactly what [`palw_artifact_multiproof_v1`] returns over the
+    /// whole vector, and it verifies. A stream that is short, long, or carries another leaf where an
+    /// opened one should be, and an opening outside the draw, prove nothing.
+    #[test]
+    fn the_streamed_multiproof_is_the_builders_for_every_shape_and_every_opened_subset() {
+        for n in [1u32, 2, 3, 4, 5, 6, 7, 8, 9, 13, 16, 17, 31, 33, 64, 100, 257, 1_000, 4_097] {
+            let (operands, leaves, root) = inventory(n);
+            // Sixteen draws, the readiness V2 shape: scattered, with the last leaf and neighbours.
+            let mut draw: Vec<u32> = (0..16u32).map(|i| i.wrapping_mul(2_654_435_761) % n.max(1)).collect();
+            draw.push(n - 1);
+            draw.sort_unstable();
+            draw.dedup();
+            // Every prefix of the draw in DRAW order is a subset a byte budget can leave opened.
+            let mut in_draw_order = draw.clone();
+            in_draw_order.reverse();
+            for take in 1..=in_draw_order.len() {
+                let opened: Vec<(u32, PalwArtifactOperandV1)> =
+                    in_draw_order[..take].iter().map(|i| (*i, operands[*i as usize].clone())).collect();
+                let mut stream = PalwArtifactMultiproofStreamV1::new(n, &draw).expect("a draw inside the inventory");
+                for leaf in &leaves {
+                    stream.push(*leaf);
+                }
+                let streamed = stream.finish(&opened).unwrap_or_else(|| panic!("n={n} take={take}: the stream proves"));
+                let built = palw_artifact_multiproof_v1(&leaves, &opened).expect("the builder proves");
+                assert_eq!(streamed, built, "n={n} take={take}: the same proof");
+                verify_artifact_multiproof_v1(&streamed, root).unwrap_or_else(|e| panic!("n={n} take={take}: {e}"));
+            }
+            let one = vec![(draw[0], operands[draw[0] as usize].clone())];
+            // Short and long streams refuse.
+            let mut short = PalwArtifactMultiproofStreamV1::new(n, &draw).unwrap();
+            for leaf in &leaves[..leaves.len() - 1] {
+                short.push(*leaf);
+            }
+            assert!(short.finish(&one).is_none(), "n={n}: a stream one leaf short");
+            let mut long = PalwArtifactMultiproofStreamV1::new(n, &draw).unwrap();
+            for leaf in leaves.iter().chain(std::iter::once(&leaves[0])) {
+                long.push(*leaf);
+            }
+            assert!(long.finish(&one).is_none(), "n={n}: a stream one leaf long");
+            // An operand that is not the leaf the stream carried.
+            let mut full = PalwArtifactMultiproofStreamV1::new(n, &draw).unwrap();
+            for leaf in &leaves {
+                full.push(*leaf);
+            }
+            let mut forged = operands[draw[0] as usize].clone();
+            forged.bytes[0] ^= 0xFF;
+            assert!(full.clone().finish(&[(draw[0], forged)]).is_none(), "n={n}: another leaf's bytes");
+            // An opening the draw never named (when one exists).
+            if let Some(outside) = (0..n).find(|i| !draw.contains(i)) {
+                assert!(full.finish(&[(outside, operands[outside as usize].clone())]).is_none(), "n={n}: outside the draw");
+            }
+        }
+        assert!(PalwArtifactMultiproofStreamV1::new(0, &[]).is_none(), "an empty inventory");
+        assert!(PalwArtifactMultiproofStreamV1::new(4, &[4]).is_none(), "a draw past the inventory");
+    }
+
+    #[test]
+    fn a_multiproof_shares_the_ancestors_two_leaves_have_in_common() {
+        // Sixteen scattered leaves of a 4,096-leaf tree: a multiproof is smaller than sixteen
+        // independent openings, and the saving is the shared upper levels.
+        let n = 4_096u32;
+        let (operands, leaves, root) = inventory(n);
+        let indices: Vec<u32> = (0..16u32).map(|i| i * 257 % n).collect();
+        let opened: Vec<(u32, PalwArtifactOperandV1)> = indices.iter().map(|i| (*i, operands[*i as usize].clone())).collect();
+        let proof = palw_artifact_multiproof_v1(&leaves, &opened).expect("the prover holds every leaf");
+        verify_artifact_multiproof_v1(&proof, root).expect("and the verifier walks it");
+        let independent: usize = indices.iter().map(|i| open_artifact_leaf_v1(&operands, *i).expect("an opening").path.len()).sum();
+        assert!(
+            proof.siblings.len() < independent,
+            "a multiproof shares what the leaves share: {} vs {independent}",
+            proof.siblings.len()
+        );
+        // Neighbours share everything but their own sibling: two adjacent leaves need one hash
+        // fewer than twice a single path.
+        let pair = palw_artifact_multiproof_v1(&leaves, &[(10, operands[10].clone()), (11, operands[11].clone())]).expect("a pair");
+        verify_artifact_multiproof_v1(&pair, root).expect("the pair verifies");
+        assert_eq!(pair.siblings.len(), open_artifact_leaf_v1(&operands, 10).unwrap().path.len() - 1);
+    }
+}
+
+#[cfg(test)]
+mod inventory_tests {
+    use super::*;
+
+    fn row(tensor: &str, layer: Option<u16>, row_start: u32, len: usize) -> PalwArtifactOperandV1 {
+        PalwArtifactOperandV1 { tensor_name: tensor.to_string(), layer, row_start, bytes: vec![7u8; len] }
+    }
+
+    fn good() -> Vec<PalwArtifactOperandV1> {
+        vec![
+            row("blk.0.w", Some(0), 0, 4),
+            row("blk.0.w", Some(0), 4, 4),
+            row("blk.1.w", Some(1), 0, 8),
+            row("token_embd.weight", None, 0, 16),
+        ]
+    }
+
+    /// **The rules are what make an opening's ABSENCE mean something.**
+    ///
+    /// A Merkle opening proves "these bytes are at this position under this root" and says nothing
+    /// about what is not opened. Without a pinned layout an artifact can carry one row twice at
+    /// different offsets, leave a gap no entry covers, or append bytes nothing describes — and every
+    /// individual opening still verifies, so the court sees a consistent artifact that is not the
+    /// one the class registered.
+    #[test]
+    fn a_canonical_inventory_is_the_only_constructible_one() {
+        let inv = PalwArtifactInventoryV1::new(good()).expect("a tiled, ordered, gapless layout");
+        assert_eq!(inv.operands().len(), 4);
+        assert_ne!(inv.root(), Hash64::default(), "and it has a root");
+
+        // Empty: a zero root would verify nothing, forever.
+        assert_eq!(PalwArtifactInventoryV1::new(vec![]).unwrap_err(), PalwInventoryError::Empty);
+
+        // A zero-length row is a leaf that binds no bytes.
+        let mut z = good();
+        z[0].bytes.clear();
+        assert!(matches!(PalwArtifactInventoryV1::new(z).unwrap_err(), PalwInventoryError::ZeroLengthRow { .. }));
+
+        // Two leaves for one position let a producer choose which one an opening meets.
+        let mut dup = good();
+        dup.insert(1, row("blk.0.w", Some(0), 0, 4));
+        assert!(matches!(PalwArtifactInventoryV1::new(dup).unwrap_err(), PalwInventoryError::DuplicateRow { .. }));
+
+        // Order is ascending on (name, layer, offset) so that it is an order nobody chooses.
+        let mut unordered = good();
+        unordered.swap(0, 2);
+        assert!(matches!(PalwArtifactInventoryV1::new(unordered).unwrap_err(), PalwInventoryError::NotCanonicalOrder { .. }));
+
+        // A tensor whose first row is not its first byte has a prefix nothing covers.
+        let mut late = good();
+        late[0].row_start = 4;
+        late[1].row_start = 8;
+        assert!(matches!(PalwArtifactInventoryV1::new(late).unwrap_err(), PalwInventoryError::DoesNotStartAtZero { .. }));
+
+        // A gap: byte 4..8 of `blk.0.w` is described by nothing.
+        let mut gap = good();
+        gap[1].row_start = 8;
+        assert!(matches!(PalwArtifactInventoryV1::new(gap).unwrap_err(), PalwInventoryError::GapOrOverlap { at: 4, .. }));
+
+        // An overlap: byte 2..4 belongs to two rows, so an opening can prove either.
+        let mut over = good();
+        over[1].row_start = 2;
+        assert!(matches!(PalwArtifactInventoryV1::new(over).unwrap_err(), PalwInventoryError::GapOrOverlap { .. }));
+    }
+
+    /// A registration whose artifact omits a tensor its own profile names is coverage-clean and
+    /// unprosecutable: every step reading that tensor adjudicates `Unadjudicable`.
+    #[test]
+    fn an_inventory_must_carry_every_tensor_the_graph_reads() {
+        let profile = crate::palw_base0_profile::base0_profile_v1(crate::palw_base0_profile::PALW_RC_BASE0_GEOMETRY)
+            .expect("the floor's geometry is expressible");
+
+        // One row per tensor the graph names, layer 0 substituted — enough to satisfy coverage.
+        let mut operands: Vec<PalwArtifactOperandV1> = crate::palw_base0_profile::base0_tensor_names_v1()
+            .into_iter()
+            .map(|t| row(&t.replace("{layer}", "0"), None, 0, 8))
+            .collect();
+        operands.sort_by(|a, b| (a.tensor_name.as_str(), a.layer, a.row_start).cmp(&(b.tensor_name.as_str(), b.layer, b.row_start)));
+        let inv = PalwArtifactInventoryV1::new(operands.clone()).expect("one row per tensor is a legal layout");
+        inv.verify_covers_profile(&profile).expect("every tensor the graph reads is carried");
+
+        // Drop the one the residual narrowing reads — the node ADR-0050 A added — and the gate says
+        // which tensor is missing rather than leaving it to be found by a dispute.
+        let without: Vec<PalwArtifactOperandV1> = operands.into_iter().filter(|o| !o.tensor_name.contains("attn_residual")).collect();
+        let err = PalwArtifactInventoryV1::new(without)
+            .expect("still a legal layout")
+            .verify_covers_profile(&profile)
+            .expect_err("a graph reading a tensor nobody carries is unprosecutable at that node");
+        assert!(
+            matches!(err, PalwInventoryError::ProfileTensorMissing { ref tensor } if tensor.contains("attn_residual")),
+            "got {err:?}"
+        );
+    }
+
+    /// `{layer}` matches one numeric segment and nothing else, so a template cannot be satisfied by
+    /// a tensor that merely starts and ends the same way.
+    #[test]
+    fn the_layer_placeholder_matches_a_number_and_not_a_path() {
+        assert!(layer_template_matches("blk.{layer}.w", "blk.7.w"));
+        assert!(layer_template_matches("blk.{layer}.w", "blk.13.w"));
+        assert!(!layer_template_matches("blk.{layer}.w", "blk.7.other.w"), "a dot is not a digit");
+        assert!(!layer_template_matches("blk.{layer}.w", "blk..w"), "an empty layer is not a layer");
+        assert!(!layer_template_matches("blk.{layer}.w", "blk.7.x"));
+    }
+}
+
+#[cfg(test)]
+mod multiproof_size_tests {
+    use super::*;
+
+    fn operand(i: u32, len: usize, layer: Option<u16>) -> PalwArtifactOperandV1 {
+        PalwArtifactOperandV1 {
+            tensor_name: format!("blk.{}.attn_q.weight", i % 7),
+            layer,
+            row_start: i * 17,
+            bytes: (0..len).map(|b| (b as u32 ^ i) as u8).collect(),
+        }
+    }
+
+    /// Deterministic xorshift, so the subsets are reproducible.
+    fn next(x: &mut u64) -> u64 {
+        *x ^= *x << 13;
+        *x ^= *x >> 7;
+        *x ^= *x << 17;
+        *x
+    }
+
+    /// **The count and the borsh length are the builder's, byte for byte**: over leaf counts with odd
+    /// widths at every level, random subsets, contiguous runs, single leaves and the whole inventory.
+    #[test]
+    fn the_sibling_count_and_the_borsh_length_are_the_builders() {
+        let mut x = 0x9E37_79B9_7F4A_7C15u64;
+        for leaf_count in [1u32, 2, 3, 5, 7, 8, 9, 31, 33, 64, 100, 257, 1_000, 3_333] {
+            let operands: Vec<PalwArtifactOperandV1> = (0..leaf_count)
+                .map(|i| operand(i, (i % 5) as usize * 3 + 1, if i % 3 == 0 { None } else { Some(i as u16) }))
+                .collect();
+            let leaves: Vec<Hash64> = operands.iter().map(artifact_leaf_v1).collect();
+            let mut subsets: Vec<Vec<u32>> = vec![vec![0], vec![leaf_count - 1], (0..leaf_count).collect()];
+            for _ in 0..12 {
+                let a = (next(&mut x) % leaf_count as u64) as u32;
+                let b = (a + 1 + (next(&mut x) % 40) as u32).min(leaf_count);
+                subsets.push((a..b).collect()); // a contiguous run
+                let mut random: Vec<u32> = (0..leaf_count).filter(|_| next(&mut x).is_multiple_of(7)).collect();
+                if random.is_empty() {
+                    random.push((next(&mut x) % leaf_count as u64) as u32);
+                }
+                subsets.push(random);
+            }
+            for indices in subsets {
+                let opened: Vec<(u32, PalwArtifactOperandV1)> = indices.iter().map(|i| (*i, operands[*i as usize].clone())).collect();
+                let proof = palw_artifact_multiproof_v1(&leaves, &opened).expect("a proof");
+                let count = palw_artifact_multiproof_sibling_count_v1(leaf_count, &indices).expect("a count");
+                assert_eq!(count, proof.siblings.len() as u64, "{leaf_count} leaves, {} opened", indices.len());
+                let lens = opened
+                    .iter()
+                    .map(|(_, o)| palw_artifact_operand_borsh_len_v1(o.tensor_name.len(), o.layer.is_some(), o.bytes.len()));
+                assert_eq!(palw_artifact_multiproof_borsh_len_v1(lens, count), borsh::to_vec(&proof).unwrap().len() as u64);
+                verify_artifact_multiproof_v1(&proof, artifact_root_v1(&leaves).unwrap()).expect("verifies");
+                if indices.len() > 1 && indices.windows(2).all(|w| w[1] == w[0] + 1) {
+                    let depth = level_widths_v1(leaf_count as u64).len() as u64;
+                    assert!(count <= 2 * depth, "a run pays at most its two boundary paths: {count} > 2 x {depth}");
+                }
+            }
+        }
+    }
+
+    /// **Assembled from single-leaf openings, the multiproof is the builder's**, and each opening's
+    /// path is as long as the closed form says: runs, gaps and single leaves over odd-width trees.
+    #[test]
+    fn a_multiproof_from_openings_is_the_builders_and_paths_have_their_closed_form_length() {
+        let mut x = 0xD1B5_4A32_D192_ED03u64;
+        for leaf_count in [1u32, 2, 3, 5, 9, 33, 100, 257, 1_000] {
+            let operands: Vec<PalwArtifactOperandV1> = (0..leaf_count).map(|i| operand(i, (i % 4) as usize + 2, None)).collect();
+            let leaves: Vec<Hash64> = operands.iter().map(artifact_leaf_v1).collect();
+            let root = artifact_root_v1(&leaves).unwrap();
+            for index in 0..leaf_count.min(64) {
+                let o = open_artifact_leaf_v1(&operands, index).unwrap();
+                assert_eq!(palw_artifact_opening_path_len_v1(leaf_count, index), Some(o.path.len() as u64));
+            }
+            assert_eq!(palw_artifact_opening_path_len_v1(leaf_count, leaf_count), None);
+            let mut subsets: Vec<Vec<u32>> = vec![vec![leaf_count / 2], (0..leaf_count.min(7)).collect()];
+            for _ in 0..8 {
+                let a = (next(&mut x) % leaf_count as u64) as u32;
+                subsets.push((a..(a + 1 + (next(&mut x) % 17) as u32).min(leaf_count)).collect());
+                let mut gaps: Vec<u32> = (0..leaf_count).filter(|_| next(&mut x).is_multiple_of(5)).collect();
+                gaps.dedup();
+                if !gaps.is_empty() {
+                    subsets.push(gaps);
+                }
+            }
+            for indices in subsets {
+                let openings: Vec<PalwArtifactOpeningV1> =
+                    indices.iter().rev().map(|i| open_artifact_leaf_v1(&operands, *i).unwrap()).collect();
+                let assembled = palw_artifact_multiproof_from_openings_v1(&openings).expect("assembles");
+                let opened: Vec<(u32, PalwArtifactOperandV1)> = indices.iter().map(|i| (*i, operands[*i as usize].clone())).collect();
+                assert_eq!(assembled, palw_artifact_multiproof_v1(&leaves, &opened).unwrap(), "{leaf_count} leaves, {indices:?}");
+                verify_artifact_multiproof_v1(&assembled, root).expect("verifies");
+            }
+            // Malformed inputs assemble nothing.
+            let o = open_artifact_leaf_v1(&operands, 0).unwrap();
+            assert_eq!(palw_artifact_multiproof_from_openings_v1(&[]), None);
+            assert_eq!(palw_artifact_multiproof_from_openings_v1(&[o.clone(), o.clone()]), None, "a duplicate");
+            let mut short = o.clone();
+            if short.path.pop().is_some() {
+                assert_eq!(palw_artifact_multiproof_from_openings_v1(&[short]), None, "a path of the wrong length");
+            }
+            let mut other = o;
+            other.leaf_count += 1;
+            assert_eq!(
+                palw_artifact_multiproof_from_openings_v1(&[other, open_artifact_leaf_v1(&operands, leaf_count - 1).unwrap()])
+                    .filter(|_| leaf_count > 1),
+                None,
+                "two inventories"
+            );
+        }
+    }
+
+    #[test]
+    fn a_malformed_index_set_has_no_count() {
+        assert_eq!(palw_artifact_multiproof_sibling_count_v1(0, &[0]), None);
+        assert_eq!(palw_artifact_multiproof_sibling_count_v1(8, &[]), None);
+        assert_eq!(palw_artifact_multiproof_sibling_count_v1(8, &[3, 3]), None);
+        assert_eq!(palw_artifact_multiproof_sibling_count_v1(8, &[4, 3]), None);
+        assert_eq!(palw_artifact_multiproof_sibling_count_v1(8, &[8]), None);
+        assert_eq!(palw_artifact_multiproof_sibling_count_v1(1, &[0]), Some(0), "a one-leaf tree is its root");
+    }
+}
+
+#[cfg(test)]
+mod batch_opening_tests {
+    use super::*;
+
+    fn operand(i: u32) -> PalwArtifactOperandV1 {
+        PalwArtifactOperandV1 {
+            tensor_name: format!("t{}", i % 3),
+            layer: Some((i % 4) as u16),
+            row_start: i * 7,
+            bytes: vec![i as u8; (i % 5 + 1) as usize],
+        }
+    }
+
+    #[test]
+    fn the_batch_openings_are_the_single_openings_for_every_inventory_size_and_verify() {
+        for n in [1u32, 2, 3, 4, 5, 7, 8, 9, 16, 17, 33] {
+            let operands: Vec<_> = (0..n).map(operand).collect();
+            let root = artifact_root_v1(&operands.iter().map(artifact_leaf_v1).collect::<Vec<_>>()).expect("a root");
+            let all: Vec<u32> = (0..n).collect();
+            let batch = open_artifact_leaves_v1(&operands, &all).expect("every leaf opens");
+            for i in 0..n {
+                let single = open_artifact_leaf_v1(&operands, i).expect("a single opening");
+                assert_eq!(batch[i as usize], single, "n = {n}, leaf {i}");
+                assert_eq!(verify_artifact_opening_v1(&batch[i as usize], root), Ok(()), "n = {n}, leaf {i} reaches the root");
+            }
+            assert_eq!(open_artifact_leaves_v1(&operands, &[n]), None, "a leaf past the inventory has no opening");
+        }
+        assert_eq!(open_artifact_leaves_v1(&[], &[0]), None);
+    }
+}

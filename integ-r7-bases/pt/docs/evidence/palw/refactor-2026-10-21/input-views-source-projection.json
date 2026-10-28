@@ -1,0 +1,11 @@
+{
+  "base": "efab11bd8",
+  "production_callers_projected": [
+    "consensus/core/src/palw_state_v2.rs",
+    "consensus/core/src/palw_state_v2/block_preparation.rs",
+    "consensus/core/src/palw_state_v2/fold_read.rs",
+    "consensus/core/src/palw_state_v2/transition_builder.rs"
+  ],
+  "result": "All four production source files match after reversing the explicitly enumerated view substitutions.",
+  "limits": "New view getter bodies require review; a source projection is not an exhaustive execution equivalence proof."
+}

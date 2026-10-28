@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "kind": "rfc06-native-four-100k-committed-absence-cache",
+  "argv": [
+    "/usr/bin/time",
+    "-l",
+    "/tmp/misaka-rfc67812-runtime/consensus-native-final-v2",
+    "--exact",
+    "pipeline::virtual_processor::tests::t12_permissionless_panel_e2e::complete_population::rfc06_complete_population_native_100k_four_retained_seals_and_fifth_refusal",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+  ],
+  "timeoutSeconds": 900,
+  "complete": true,
+  "realP2pAccepted": false,
+  "securityApproval": false,
+  "minimumHostFreeBytes": 8589934592,
+  "minimumObservedHostFreeBytes": 19135504384,
+  "exitCode": 0,
+  "durationSeconds": 426.429,
+  "status": "PASS_NATIVE_FIXTURE_ONLY",
+  "carriageExists": true,
+  "carriageBytes": 437719699
+}

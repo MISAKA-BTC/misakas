@@ -1,0 +1,31 @@
+{
+  "activation_pass": false,
+  "ambiguous_groups_excluded_from_shadow_only": [
+    "G_8k_split_13k_13k",
+    "H_8k_100k_100k"
+  ],
+  "analysis_tool_wall_seconds_NOT_panel_runtime": 3.442246583,
+  "archive_input_json_files": 19,
+  "archive_static_study_files_not_timeseries_runs": 2,
+  "archived_accepted_claims": 2563,
+  "archived_node_timeseries_runs": 17,
+  "archived_panel_samples": 21,
+  "archived_subject_groups": 24,
+  "capital_envelope_rows": 150,
+  "checks_passed": 1365,
+  "checks_total": 1365,
+  "conclusion": "100k is not verified sufficient. L=12000 is incompatible with 5/30/90 claim targets under the long-hold fixtures. Some partial low-cost scenarios fit, but complete F02/F03 resources, real prices, participation and REAL/heartbeat remain unmeasured.",
+  "evidence_scope": [
+    "M_ARCHIVE",
+    "R_TRACE",
+    "S_MODEL",
+    "D_CONDITIONAL"
+  ],
+  "fresh_node_or_new_bond_end_to_end_measurement": false,
+  "local_court_conviction_samples": 8,
+  "panel_groups": 10,
+  "price_rows": 120,
+  "shadow_trials": 1320,
+  "synthetic_trials": 326,
+  "wire_refusal_samples": 4
+}

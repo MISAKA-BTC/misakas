@@ -1,0 +1,158 @@
+{
+  "schema": "rfc02-model-inventory-verdict/v1",
+  "recorded_at_utc": "2026-10-10T16:39:03.227075+00:00",
+  "baseline_commit": "1e962dba984a17e97456d3adb57f6cdbca578c30",
+  "branch": "codex/rfc02-implementation",
+  "goal_complete": false,
+  "scope": "Descriptor-scoped model inventory, bounded public openings and pure identity adjudication for exact current v4/v5 semantics; fixture mechanics only.",
+  "previous_goal_turn_classification": "no implementation progress: explicit push request confirmed already matching remote branches; this continuation revalidated the clean checkout and implemented the next role-contract dependency.",
+  "review_sha256": "06b4ea15410af05ffa96fb6ad3e2a49b5941f1dbc7e4c80931732f52971cce06",
+  "acceptance_criteria_before_execution": [
+    "v4 preserves all legacy instance, piece, leaf-index and root behavior",
+    "v5 derives the model prefix from its exact descriptor and complete validated program",
+    "job-input parameters are neither read nor admitted as model instances",
+    "streamed roots match an independently materialised legacy-row reference filtered by the fixed model prefix",
+    "existing v5 PC producer agrees with the same fixture model bytes",
+    "honest model PC sets and bounded overlapping tile proofs give no fault",
+    "changed, missing or surplus model weights are refutable from authenticated material",
+    "copied kernel/source roots and altered inventory paths have no force",
+    "unknown descriptor semantics and malformed shapes are refused before inventory arithmetic",
+    "legacy 104/105 meaning is preserved; the new API refuses legacy whole-row proofs"
+  ],
+  "fixture_observations": [
+    {
+      "fixture": "hf-enc/bert",
+      "model_params": 51,
+      "model_inventory_leaves": 608,
+      "padded_axis": 12
+    },
+    {
+      "fixture": "hf-cls/xlmr_rerank",
+      "model_params": 60,
+      "model_inventory_leaves": 682,
+      "padded_axis": 12
+    }
+  ],
+  "verification": {
+    "distinct_tests_passed": 22,
+    "logs": [
+      {
+        "path": "docs/design/palw/tir/evidence/rfc02-model-inventory-core-final.log",
+        "tests_passed": 6,
+        "exit_code": 0,
+        "raw_log_sha256": "173a41c5089585a0fd1bb74837b263786469031aabbf230aa2e531ba8c808df4",
+        "saved_log_sha256": "3070458225de65b60b96a5e9c163092b8f4e6e18616feb183bb50a7da70a9d97"
+      },
+      {
+        "path": "docs/design/palw/tir/evidence/rfc02-model-inventory-onboarding.log",
+        "tests_passed": 9,
+        "exit_code": 0,
+        "raw_log_sha256": "8499c986c4c851c45d792e64d6bfd9db227160c1e5fa75ef612557f151d2da9d",
+        "saved_log_sha256": "d3911db9220321e71d193d836f2e84f95b69ee2cbb097d586ec821d0c5a3bc10"
+      },
+      {
+        "path": "docs/design/palw/tir/evidence/rfc02-model-inventory-encoder.log",
+        "tests_passed": 1,
+        "exit_code": 0,
+        "raw_log_sha256": "819c9d9c79c63f44ffe3c57fa40015f5d73de4ff27386f3ec9a8fa26632f6c26",
+        "saved_log_sha256": "0135b2afa5835e5c4d0f99f8b6ff2b6f6fe4d76bfd9d127e4b596f502f22fa0e"
+      },
+      {
+        "path": "docs/design/palw/tir/evidence/rfc02-model-inventory-stream.log",
+        "tests_passed": 6,
+        "exit_code": 0,
+        "raw_log_sha256": "21c778402a2773a7532047b95dce05c462ed85c18aed0a27812a3f4ba5358357",
+        "saved_log_sha256": "8a2074ead6fca1661473279833b052635cfc4415026aed4e5485d446f784d5d6"
+      }
+    ],
+    "binaries": [
+      {
+        "path": "target/debug/deps/kaspa_consensus_core-38863d86af2a1f17",
+        "sha256": "d598e0aa24da332aeafabed9f5ddb40aa1ba0924a0a7c3507ca2c8121efbe00b"
+      },
+      {
+        "path": "target/debug/deps/misaka_palw_sdk-22610ee8cd5786fe",
+        "sha256": "727d93a21382e34eef632c760741e45a185fd0105b9bbdaa32ddc24752533482"
+      },
+      {
+        "path": "target/debug/deps/k2s_encoder_court-6147f5131d80145a",
+        "sha256": "196b29c66cdcb3bed75021f9df0c999ba0734a166270d0d7a167ba7eef53b74e"
+      }
+    ],
+    "preliminary_core_run_not_counted_again": true
+  },
+  "sources": [
+    {
+      "path": "consensus/core/src/palw_tir_artifact_v1.rs",
+      "sha256": "29c7344267c5b828c80abc2ab30908d4e3c0b83d4cc250912cbdbd1094d4ab81"
+    },
+    {
+      "path": "consensus/core/src/palw_onboarding_v1.rs",
+      "sha256": "56cdccd50af2eeec10d86e181dfa3d414677783e872426668f73bde544e30c53"
+    },
+    {
+      "path": "misaka-palw-sdk/src/tir_stream.rs",
+      "sha256": "43176d7a5b4d8166d92a7890270dcefb740662e67a015636fcc277b1ae99bc99"
+    },
+    {
+      "path": "misaka-palw-sdk/tests/k2s_encoder_court.rs",
+      "sha256": "17df60b252ff8464e4a80896f0d90bb0d6f72f6cf156dacc1177c01a11c326e5"
+    }
+  ],
+  "fixture_inputs": [
+    {
+      "path": "misaka-palw-tir-lower/tests/fixtures/hf-enc/bert/config.json",
+      "bytes": 662,
+      "sha256": "f93f3cbff995d18e56c3e273b5319de1a60dfcadcc128758a1da284c0d2bfd6a"
+    },
+    {
+      "path": "misaka-palw-tir-lower/tests/fixtures/hf-enc/bert/model.safetensors",
+      "bytes": 44400,
+      "sha256": "10709576716a96b4f32324e58f07005692a719511648a6c10360f39c4076a82e"
+    },
+    {
+      "path": "misaka-palw-tir-lower/tests/fixtures/hf-enc/bert/modules.json",
+      "bytes": 349,
+      "sha256": "84e40c8e006c9b1d6c122e02cba9b02458120b5fb0c87b746c41e0207cf642cf"
+    },
+    {
+      "path": "misaka-palw-tir-lower/tests/fixtures/hf-enc/bert/outputs.json",
+      "bytes": 23155,
+      "sha256": "f27b784f87f686aa8a206f1e1f5a3a230181bb312b2f8a55e27d444afe6c0bc1"
+    },
+    {
+      "path": "misaka-palw-tir-lower/tests/fixtures/hf-enc/bert/sentence_bert_config.json",
+      "bytes": 52,
+      "sha256": "4e56a1a7a462709f61119a9bfdf330431fd874fceeeddf64451dbd1c4b10439b"
+    },
+    {
+      "path": "misaka-palw-tir-lower/tests/fixtures/hf-cls/xlmr_rerank/config.json",
+      "bytes": 766,
+      "sha256": "07410eb542401cbb2f074f9b385d964725c3a29f6a09ae64ea1aeb4dff63ce61"
+    },
+    {
+      "path": "misaka-palw-tir-lower/tests/fixtures/hf-cls/xlmr_rerank/model.safetensors",
+      "bytes": 90068,
+      "sha256": "65d7cd5e4229db796a01f72251a536b0984f61b41c9e7ca78c3cb79702e0efcc"
+    },
+    {
+      "path": "misaka-palw-tir-lower/tests/fixtures/hf-cls/xlmr_rerank/outputs.json",
+      "bytes": 2489,
+      "sha256": "0916d8787e0bfecdb317588996128643dddc5a7ba686d0439d6b996329c5f272"
+    }
+  ],
+  "invariants": [
+    "No new route wire discriminants or consensus tables",
+    "No dormant activation or OPV eligibility hook",
+    "No model/config/compiler name admission allowlist",
+    "No reinterpretation of old V2 all-parameter artifact statements"
+  ],
+  "remaining_requirements": [
+    "Versioned signed/rooted descriptor+canonical-program+model-root+PC-root node statement",
+    "Rooted bond reservation/maturity, shared admission/refutation budgets, matching candidate attestation and actual-node independent replay",
+    "Large/stateful release conformance GAP-70 and complete actual computation G14",
+    "Opaque-root withholding case remains open without authenticated bound-side relation material",
+    "Full checkpoint task/context fidelity, all required common model features, full resource/capital conservation and honest liveness",
+    "Shipping activation only after the original unreduced release gates"
+  ]
+}

@@ -1,0 +1,864 @@
+diff --git a/consensus/core/src/lib.rs b/consensus/core/src/lib.rs
+index 676d63fe4..52bcc4ec7 100644
+--- a/consensus/core/src/lib.rs
++++ b/consensus/core/src/lib.rs
+@@ -1099,6 +1099,7 @@ pub mod palw_court_policy_v1;
+ pub mod palw_court_service_v1;
+ 
+ pub mod palw_court_service_state_v2;
++pub mod palw_court_end_archive_v1;
+ pub mod palw_court_duty_clock_v1;
+ 
+ /// Proposed complete native TIR request set; not admission or activation.
+diff --git a/consensus/core/src/palw_court_service_state_v2.rs b/consensus/core/src/palw_court_service_state_v2.rs
+index d4cb9ff58..75f8cc946 100644
+--- a/consensus/core/src/palw_court_service_state_v2.rs
++++ b/consensus/core/src/palw_court_service_state_v2.rs
+@@ -258,6 +258,9 @@ impl crate::palw_state_v2::PalwChainStateV2 {
+             Key::CourtSharedStream(_) | Key::CourtSharedChunk(..) => match self.staged_court_row_v1(key) {
+                 Some(Row::CourtSharedStream(s))=>Some(s.claim),Some(Row::CourtSharedChunk(c))=>Some(c.claim),_=>None,
+             },
++            Key::CourtEndArchive(_) => match self.staged_court_row_v1(key) {
++                Some(Row::CourtEndArchive(a)) => Some(a.session.claim), _ => None,
++            },
+             Key::CourtSharedResponse(..) => match self.staged_court_row_v1(key) {
+                 Some(Row::CourtSharedResponse(r))=>Some(r.claim),_=>None,
+             },
+diff --git a/consensus/core/src/palw_native_resource_v1/generated.rs b/consensus/core/src/palw_native_resource_v1/generated.rs
+index a5bd70f73..de489d863 100644
+--- a/consensus/core/src/palw_native_resource_v1/generated.rs
++++ b/consensus/core/src/palw_native_resource_v1/generated.rs
+@@ -487,8 +487,8 @@ native_struct!(crate::palw_model_registry_v1::PalwSeatReadinessRowV1; proved_daa
+ native_struct!(crate::palw_legacy_public_filer_v1::PalwDisputeClaimV1; opened_daa, hard_deadline_daa, live, closed, dismissed_held, reacquiring, courts, court_reserve_used);
+ native_struct!(crate::palw_class_semantics_v1::PalwClassSemanticsV1; version, class_id, artifact_root, bound_from_daa, model_profile_id, runtime_manifest_hash, runtime_class_id, tokenizer_id, cu_ruleset_id, token_table_root, rendering_rule, raw_tokenizer_bytes, tokenizer_key_events, prefix_state_relation);
+ native_struct!(crate::palw_legacy_answer_chunks_v2::PalwPendingLegacyAnswerV2; declaration, deadline_daa, parts);
+-native_enum!(crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1; Claim(f0), Owner(f0, f1), InventoryOpen(f0, f1), Inventory(f0), TirLayout(f0), TirAcquisition(f0, f1, f2), TirRawChunk(f0), TirAcceptedBody(f0), TirPreparation(f0, f1), TirClaim(f0), TirWitness(f0, f1), TirContainer(f0), CourtService, CourtDutyClock(f0), CourtSharedContext(f0), CourtSharedQuery(f0), CourtSharedIds(f0), CourtSharedStream(f0), CourtSharedChunk(f0, f1), CourtSharedResponse(f0, f1));
+-native_enum!(crate::palw_staged_court_state_v1::PalwStagedCourtRowV1; Claim(f0), Constraint(f0), Tokenizer(f0), Prefix(f0), PublicPrefix(f0), ClaimBundle(f0), OwnerBundle(f0), ArtifactInventoryOpen(f0), ArtifactInventory(f0), TirPrefix(f0), TirLayout(f0), TirAcquisition(f0), TirRawChunk(f0), TirAcceptedBody(f0), TirPreparation(f0), TirClaim(f0), TirWitness(f0), TirContainer(f0), CourtService(f0), CourtDutyClock(f0), CourtSharedContext(f0), CourtSharedQuery(f0), CourtSharedIds(f0), CourtSharedStream(f0), CourtSharedChunk(f0), CourtSharedResponse(f0));
++native_enum!(crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1; Claim(f0), Owner(f0, f1), InventoryOpen(f0, f1), Inventory(f0), TirLayout(f0), TirAcquisition(f0, f1, f2), TirRawChunk(f0), TirAcceptedBody(f0), TirPreparation(f0, f1), TirClaim(f0), TirWitness(f0, f1), TirContainer(f0), CourtService, CourtDutyClock(f0), CourtSharedContext(f0), CourtSharedQuery(f0), CourtSharedIds(f0), CourtSharedStream(f0), CourtSharedChunk(f0, f1), CourtSharedResponse(f0, f1), CourtEndArchive(f0));
++native_enum!(crate::palw_staged_court_state_v1::PalwStagedCourtRowV1; Claim(f0), Constraint(f0), Tokenizer(f0), Prefix(f0), PublicPrefix(f0), ClaimBundle(f0), OwnerBundle(f0), ArtifactInventoryOpen(f0), ArtifactInventory(f0), TirPrefix(f0), TirLayout(f0), TirAcquisition(f0), TirRawChunk(f0), TirAcceptedBody(f0), TirPreparation(f0), TirClaim(f0), TirWitness(f0), TirContainer(f0), CourtService(f0), CourtDutyClock(f0), CourtSharedContext(f0), CourtSharedQuery(f0), CourtSharedIds(f0), CourtSharedStream(f0), CourtSharedChunk(f0), CourtSharedResponse(f0), CourtEndArchive(f0));
+ native_struct!(crate::palw_terminal_carriage_v1::PalwPendingTerminalV1; declaration, deadline_daa, parts);
+ native_struct!(crate::palw_state_v2::PalwPanelDutyRowV1; seats, seat_exposure);
+ native_struct!(crate::palw_execution_lane_v1::PalwExecFinalV1; domain, bond, operator_id, claim_id, execution_root, credit, accepted_blue_score);
+@@ -1228,3 +1228,6 @@ native_enum!(misaka_palw_kernel::spec::composite::TokenSourceV1; JobPrompt, Stag
+ native_enum!(misaka_palw_kernel::spec::composite::QuerySourceV1; JobQuery, StageLogits { stage });
+ native_struct!(crate::palw_decode_constraint_v1::PalwConstraintEdgeV1; lo, hi, action);
+ native_enum!(crate::palw_decode_constraint_v1::PalwConstraintActionV1; Goto(f0), Push { frame, resume }, Pop, Key { index, next }, Close { required, next });
++
++native_enum!(crate::palw_court_end_archive_v1::CourtEndEvidenceV1; Uncaptured, Native { point, object }, TirConviction { point, claim, filer, evidence });
++native_struct!(crate::palw_court_end_archive_v1::PendingCourtArchiveV1; version, session_id, service_profile_id, archive_profile_id, allocation_id, source_id, producer, material_until_daa, session, court_stake_nominal, tir_phase, groups, applied_deposit_debits, fulfilled_groups, evidence);
+diff --git a/consensus/core/src/palw_native_resource_v1/wire_generated.rs b/consensus/core/src/palw_native_resource_v1/wire_generated.rs
+index 6e2c4beaf..45e5261f4 100644
+--- a/consensus/core/src/palw_native_resource_v1/wire_generated.rs
++++ b/consensus/core/src/palw_native_resource_v1/wire_generated.rs
+@@ -754,8 +754,8 @@ wire_struct!(crate::palw_staged_bundle_v1::PalwTokenizerInventoryPlanV1; u64, cr
+ wire_struct!(crate::palw_staged_bundle_v1::PalwTokenizerInventoryV1; u64, crate::Hash64, u64, u64, u64, bool, u64, crate::palw_rendering_stream_v1::LeafHashContinuationV1);
+ impl NativeWireScanV1 for crate::palw_staged_court_state_v1::PalwStagedCheckpointV1 {fn scan_native_wire_v1<R:std::io::Read>(reader:&mut NativeWireReaderV1<R>)->std::io::Result<NativeWireShapeV1> {reader.step()?;match reader.byte()? {0 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_constraint_stream_owned_v1::PalwOwnedConstraintCheckpointV1 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},1 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<Box<crate::palw_tokenizer_owned_court_v1::PalwOwnedTokenizerCheckpointV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},2 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<Box<crate::palw_prefix_owned_court_v1::PalwOwnedPrefixCheckpointV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},3 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<Box<crate::palw_prefix_public_owned_v1::PalwOwnedPublicPrefixCheckpointV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},4 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<Box<crate::palw_staged_bundle_v1::PalwStagedBundleCheckpointV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},5 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<Box<crate::palw_tir_prefix_owned_v1::PalwOwnedTirPrefixCheckpointV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},_=>Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant"))}}}
+ wire_struct!(crate::palw_staged_court_state_v1::PalwStagedClaimContractV1; crate::palw_rendering_resources_v1::PalwRenderingClaimTermsV1, crate::palw_state_v2::PalwBondKeyV2, std::collections::BTreeSet<crate::palw_state_v2::PalwBondKeyV2>, Option<crate::palw_prefix_custody_v1::PalwPrefixCustodyContractV1>);
+-impl NativeWireScanV1 for crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1 {fn scan_native_wire_v1<R:std::io::Read>(reader:&mut NativeWireReaderV1<R>)->std::io::Result<NativeWireShapeV1> {reader.step()?;match reader.byte()? {0 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},1 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;sum=sum.merge(<crate::palw_state_v2::PalwBondKeyV2 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},2 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;sum=sum.merge(<crate::palw_state_v2::PalwBondKeyV2 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},3 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},4 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},5 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;sum=sum.merge(<crate::palw_state_v2::PalwBondKeyV2 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},6 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},7 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},8 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},9 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},10 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;sum=sum.merge(<crate::palw_state_v2::PalwBondKeyV2 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},11 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},12 => {let mut sum=NativeWireShapeV1::default();Ok(sum)},13 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},14 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},15 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},16 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},17 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},18 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;sum=sum.merge(<u64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},19 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;sum=sum.merge(<crate::palw_state_v2::PalwBondKeyV2 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},_=>Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant"))}}}
+-impl NativeWireScanV1 for crate::palw_staged_court_state_v1::PalwStagedCourtRowV1 {fn scan_native_wire_v1<R:std::io::Read>(reader:&mut NativeWireReaderV1<R>)->std::io::Result<NativeWireShapeV1> {reader.step()?;match reader.byte()? {0 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_staged_court_state_v1::PalwStagedClaimContractV1 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},1 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_constraint_stream_owned_v1::PalwOwnedConstraintStreamV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},2 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_tokenizer_owned_court_v1::PalwOwnedTokenizerCourtV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},3 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_prefix_owned_court_v1::PalwOwnedPrefixCourtV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},4 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_prefix_public_owned_v1::PalwOwnedPublicPrefixCourtV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},5 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<Box<crate::palw_staged_bundle_v1::PalwStagedBundleContractV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},6 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_staged_bundle_v1::PalwOwnedStagedBundleV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},7 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},8 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryCertificateV1 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},9 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_tir_prefix_owned_v1::PalwOwnedTirPrefixCourtV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},10 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<Box<crate::palw_tir_class_v1::PalwTirLayoutV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},11 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_tir_public_state_v1::PalwTirPublicAcquisitionRowV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},12 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_tir_public_state_v1::PalwTirPublicChunkRowV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},13 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_tir_public_state_v1::PalwTirPublicAcceptedRowV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},14 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_tir_public_state_v1::PalwTirPublicPreparationRowV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},15 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_tir_public_claim_v1::PalwTirPublicClaimV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},16 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_tir_public_carriage_v1::PalwTirPublicWitnessRowV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},17 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<Box<crate::palw_tir_container_v1::PalwTirContainerRowV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},18 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_court_service_state_v2::CourtServiceStateV2> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},19 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<Box<crate::palw_court_duty_clock_v1::CourtDutyClockV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},20 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<Box<crate::palw_court_shared_tir_state_v1::SharedTirContextV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},21 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<Box<crate::palw_court_shared_tir_state_v1::SharedTirQueryV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},22 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<Box<crate::palw_court_shared_tir_state_v1::SharedTirIdsV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},23 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<Box<crate::palw_court_shared_tir_stream_state_v1::SharedTirStreamV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},24 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_court_shared_tir_stream_state_v1::SharedTirChunkV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},25 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<Box<crate::palw_court_shared_tir_response_v1::SharedDataResponseV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},_=>Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant"))}}}
++impl NativeWireScanV1 for crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1 {fn scan_native_wire_v1<R:std::io::Read>(reader:&mut NativeWireReaderV1<R>)->std::io::Result<NativeWireShapeV1> {reader.step()?;match reader.byte()? {0 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},1 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;sum=sum.merge(<crate::palw_state_v2::PalwBondKeyV2 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},2 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;sum=sum.merge(<crate::palw_state_v2::PalwBondKeyV2 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},3 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},4 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},5 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;sum=sum.merge(<crate::palw_state_v2::PalwBondKeyV2 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},6 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},7 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},8 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},9 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},10 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;sum=sum.merge(<crate::palw_state_v2::PalwBondKeyV2 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},11 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},12 => {let mut sum=NativeWireShapeV1::default();Ok(sum)},13 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},14 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},15 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},16 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},17 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},18 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;sum=sum.merge(<u64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},19 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;sum=sum.merge(<crate::palw_state_v2::PalwBondKeyV2 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},20 => <crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader),_=>Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant"))}}}
++impl NativeWireScanV1 for crate::palw_staged_court_state_v1::PalwStagedCourtRowV1 {fn scan_native_wire_v1<R:std::io::Read>(reader:&mut NativeWireReaderV1<R>)->std::io::Result<NativeWireShapeV1> {reader.step()?;match reader.byte()? {0 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_staged_court_state_v1::PalwStagedClaimContractV1 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},1 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_constraint_stream_owned_v1::PalwOwnedConstraintStreamV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},2 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_tokenizer_owned_court_v1::PalwOwnedTokenizerCourtV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},3 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_prefix_owned_court_v1::PalwOwnedPrefixCourtV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},4 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_prefix_public_owned_v1::PalwOwnedPublicPrefixCourtV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},5 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<Box<crate::palw_staged_bundle_v1::PalwStagedBundleContractV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},6 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_staged_bundle_v1::PalwOwnedStagedBundleV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},7 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},8 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryCertificateV1 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},9 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_tir_prefix_owned_v1::PalwOwnedTirPrefixCourtV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},10 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<Box<crate::palw_tir_class_v1::PalwTirLayoutV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},11 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_tir_public_state_v1::PalwTirPublicAcquisitionRowV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},12 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_tir_public_state_v1::PalwTirPublicChunkRowV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},13 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_tir_public_state_v1::PalwTirPublicAcceptedRowV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},14 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_tir_public_state_v1::PalwTirPublicPreparationRowV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},15 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_tir_public_claim_v1::PalwTirPublicClaimV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},16 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_tir_public_carriage_v1::PalwTirPublicWitnessRowV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},17 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<Box<crate::palw_tir_container_v1::PalwTirContainerRowV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},18 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_court_service_state_v2::CourtServiceStateV2> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},19 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<Box<crate::palw_court_duty_clock_v1::CourtDutyClockV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},20 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<Box<crate::palw_court_shared_tir_state_v1::SharedTirContextV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},21 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<Box<crate::palw_court_shared_tir_state_v1::SharedTirQueryV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},22 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<Box<crate::palw_court_shared_tir_state_v1::SharedTirIdsV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},23 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<Box<crate::palw_court_shared_tir_stream_state_v1::SharedTirStreamV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},24 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_court_shared_tir_stream_state_v1::SharedTirChunkV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},25 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<Box<crate::palw_court_shared_tir_response_v1::SharedDataResponseV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},26 => <crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_court_end_archive_v1::PendingCourtArchiveV1> as NativeWireScanV1>::scan_native_wire_v1(reader),_=>Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant"))}}}
+ wire_struct!(crate::palw_state_v2::PalwBlockContextV2; crate::BlockHash, u64, u64, u64);
+ wire_struct!(crate::palw_state_v2::PalwBondKeyV2; crate::tx::TransactionOutpoint);
+ wire_struct!(crate::palw_state_v2::PalwBondStateV2; Vec<u8>, crate::Hash64, u64, u64, crate::palw_state_v2::PalwBondStatusV2, u64, crate::Hash64, std::collections::BTreeSet<crate::Hash64>);
+@@ -1292,3 +1292,18 @@ wire_struct!(misaka_palw_tir::program_v2::TirProgramV2; u16, [u8; 64], u32, u32,
+ impl NativeWireScanV1 for misaka_palw_tir::types::DType {fn scan_native_wire_v1<R:std::io::Read>(reader:&mut NativeWireReaderV1<R>)->std::io::Result<NativeWireShapeV1> {reader.step()?;match reader.byte()? {0 => {let mut sum=NativeWireShapeV1::default();Ok(sum)},1 => {let mut sum=NativeWireShapeV1::default();Ok(sum)},2 => {let mut sum=NativeWireShapeV1::default();Ok(sum)},3 => {let mut sum=NativeWireShapeV1::default();Ok(sum)},4 => {let mut sum=NativeWireShapeV1::default();Ok(sum)},5 => {let mut sum=NativeWireShapeV1::default();Ok(sum)},_=>Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant"))}}}
+ impl NativeWireScanV1 for misaka_palw_tir::types::Dim {fn scan_native_wire_v1<R:std::io::Read>(reader:&mut NativeWireReaderV1<R>)->std::io::Result<NativeWireShapeV1> {reader.step()?;match reader.byte()? {0 => {let mut sum=NativeWireShapeV1::default();sum=sum.merge(<u32 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;Ok(sum)},1 => {let mut sum=NativeWireShapeV1::default();Ok(sum)},_=>Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant"))}}}
+ wire_struct!(misaka_palw_tir::types::TensorType; misaka_palw_tir::types::DType, Vec<misaka_palw_tir::types::Dim>);
++
++wire_struct!(crate::palw_court_end_archive_v1::PendingCourtArchiveV1; u16, crate::Hash64, crate::Hash64, crate::Hash64, crate::Hash64, crate::Hash64, crate::palw_state_v2::PalwBondKeyV2, u64, crate::palw_state_v2::PalwCourtSessionStateV2, u128, Option<Box<crate::palw_tir_dissect_v1::PalwTirDissectPhaseV1>>, BTreeMap<crate::palw_state_v2::PalwCourtSideV1, crate::palw_state_v2::PalwCourtCloseGroupV2>, BTreeMap<crate::palw_state_v2::PalwCourtSideV1,u64>, BTreeSet<crate::palw_state_v2::PalwCourtSideV1>, crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_court_end_archive_v1::CourtEndEvidenceV1>);
++impl NativeWireScanV1 for crate::palw_court_end_archive_v1::CourtEndEvidenceV1 {
++ fn scan_native_wire_v1<R:std::io::Read>(r:&mut NativeWireReaderV1<R>)->std::io::Result<NativeWireShapeV1>{
++  r.step()?; match r.byte()? {
++   0=>Ok(NativeWireShapeV1::default()),
++   1=>Ok(<crate::palw_state_v2::PalwBlockContextV2 as NativeWireScanV1>::scan_native_wire_v1(r)?.merge(<Box<crate::palw_state_v2::PalwConsensusObjectV2> as NativeWireScanV1>::scan_native_wire_v1(r)?)?),
++   2=>{let mut s=<crate::palw_state_v2::PalwBlockContextV2 as NativeWireScanV1>::scan_native_wire_v1(r)?;
++    s=s.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(r)?)?;
++    s=s.merge(<crate::palw_state_v2::PalwBondKeyV2 as NativeWireScanV1>::scan_native_wire_v1(r)?)?;
++    s.merge(<Box<crate::palw_tir_public_carriage_v1::PalwTirPublicConvictionEvidenceV1> as NativeWireScanV1>::scan_native_wire_v1(r)?)},
++   _=>Err(crate::palw_native_resource_v1::wire::wire_bad("unknown court end evidence variant")),
++  }
++ }
++}
+diff --git a/consensus/core/src/palw_staged_court_fold_v1.rs b/consensus/core/src/palw_staged_court_fold_v1.rs
+index 7772f41c3..09c27b9f0 100644
+--- a/consensus/core/src/palw_staged_court_fold_v1.rs
++++ b/consensus/core/src/palw_staged_court_fold_v1.rs
+@@ -604,7 +604,7 @@ impl PalwChainStateV2 {
+         Ok((page, None))
+     }
+     pub fn staged_bond_exit_held_v1(&self, bond: &PalwBondKeyV2, now: u64) -> bool {
+-        if self.court_service_holds_bond_v1(bond) { return true; }
++        if self.court_service_holds_bond_v1(bond) || self.court_archive_holds_bond_v1(bond) { return true; }
+         now.checked_add(1).is_some_and(|after| {
+             self.staged_holds
+                 .range((*bond, after, PalwStagedCourtKeyV1::Claim(ZERO_HASH64))..)
+@@ -973,6 +973,15 @@ impl TransitionBuilder<'_> {
+     }
+ 
+     pub(super) fn write_staged_row_v1(&mut self, key: PalwStagedCourtKeyV1, new: Option<PalwStagedCourtRowV1>) -> Result<(), PalwStateV2Error> {
++        if let PalwStagedCourtKeyV1::CourtEndArchive(_) = key {
++            if let Some(old) = self.state.staged_court_row_v1(&key) {
++                if Some(old) != new.as_ref() { return Err(PalwStateV2Error::CarriageInconsistent("unresolved court archive is immutable".into())); }
++            }
++            let Some(PalwStagedCourtRowV1::CourtEndArchive(a)) = &new else {
++                return Err(PalwStateV2Error::CarriageInconsistent("court archive cannot be removed or retyped".into()));
++            };
++            a.check_context(&self.state).map_err(PalwStateV2Error::CarriageInconsistent)?;
++        }
+         match &new {
+             Some(PalwStagedCourtRowV1::CourtSharedResponse(r)) => {
+                 r.check(&key).and_then(|()|r.check_context(&self.state)).map_err(PalwStateV2Error::CarriageInconsistent)?;
+@@ -3340,6 +3349,7 @@ pub(super) fn index_rows(
+         PalwStagedCourtRowV1::CourtSharedQuery(q) => (q.material_until_daa,Vec::new()),
+         PalwStagedCourtRowV1::CourtSharedIds(ids) => (ids.material_until_daa,Vec::new()),
+         PalwStagedCourtRowV1::CourtSharedResponse(r) => (r.material_until_daa,Vec::new()),
++        PalwStagedCourtRowV1::CourtEndArchive(r) => (r.material_until_daa,Vec::new()),
+         PalwStagedCourtRowV1::CourtSharedStream(s) => (s.material_until_daa,Vec::new()),
+         PalwStagedCourtRowV1::CourtSharedChunk(c) => (c.material_until_daa,Vec::new()),
+         PalwStagedCourtRowV1::TirPrefix(c) => (c.terms.material_until_daa, vec![(c.reserver, c.terms.material_until_daa, key)]),
+@@ -3674,6 +3684,7 @@ pub(super) fn sweep(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) ->
+             PalwStagedCourtRowV1::CourtSharedQuery(row) => Some(row.material_until_daa),
+             PalwStagedCourtRowV1::CourtSharedIds(row) => Some(row.material_until_daa),
+             PalwStagedCourtRowV1::CourtSharedResponse(row) => Some(row.material_until_daa),
++            PalwStagedCourtRowV1::CourtEndArchive(row) => Some(row.material_until_daa),
+             PalwStagedCourtRowV1::CourtSharedStream(row) => Some(row.material_until_daa),
+             PalwStagedCourtRowV1::CourtSharedChunk(row) => Some(row.material_until_daa),
+             _ => None,
+diff --git a/consensus/core/src/palw_staged_court_state_v1.rs b/consensus/core/src/palw_staged_court_state_v1.rs
+index df5e97d22..3b74b6b85 100644
+--- a/consensus/core/src/palw_staged_court_state_v1.rs
++++ b/consensus/core/src/palw_staged_court_state_v1.rs
+@@ -69,6 +69,8 @@ pub enum PalwStagedCourtKeyV1 {
+     CourtSharedStream(Hash64),
+     CourtSharedChunk(Hash64,u64),
+     CourtSharedResponse(Hash64,PalwBondKeyV2),
++    /// RFC-0030 isolated candidate; appended key20, no old tag changes.
++    CourtEndArchive(Hash64),
+ }
+ #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+ pub struct PalwStagedClaimContractV1 {
+@@ -111,6 +113,7 @@ pub enum PalwStagedCourtRowV1 {
+     CourtSharedStream(Box<crate::palw_court_shared_tir_stream_state_v1::SharedTirStreamV1>),
+     CourtSharedChunk(PalwSharedCourtV1<crate::palw_court_shared_tir_stream_state_v1::SharedTirChunkV1>),
+     CourtSharedResponse(Box<crate::palw_court_shared_tir_response_v1::SharedDataResponseV1>),
++    CourtEndArchive(PalwSharedCourtV1<crate::palw_court_end_archive_v1::PendingCourtArchiveV1>),
+ }
+ impl PalwStagedCourtRowV1 {
+     pub fn active_row_v1(&self) -> Option<&Self> {
+@@ -118,7 +121,7 @@ impl PalwStagedCourtRowV1 {
+             Self::OwnerBundle(bundle) => bundle.active_v1(),
+             Self::Claim(_) | Self::ClaimBundle(_) | Self::ArtifactInventoryOpen(_) | Self::ArtifactInventory(_) | Self::TirLayout(_)
+             | Self::TirAcquisition(_) | Self::TirRawChunk(_) | Self::TirAcceptedBody(_) | Self::TirPreparation(_) | Self::TirClaim(_)
+-            | Self::TirWitness(_) | Self::TirContainer(_) | Self::CourtService(_) | Self::CourtDutyClock(_) | Self::CourtSharedContext(_) | Self::CourtSharedQuery(_) | Self::CourtSharedIds(_) | Self::CourtSharedStream(_) | Self::CourtSharedChunk(_) | Self::CourtSharedResponse(_) => None,
++            | Self::TirWitness(_) | Self::TirContainer(_) | Self::CourtService(_) | Self::CourtDutyClock(_) | Self::CourtSharedContext(_) | Self::CourtSharedQuery(_) | Self::CourtSharedIds(_) | Self::CourtSharedStream(_) | Self::CourtSharedChunk(_) | Self::CourtSharedResponse(_) | Self::CourtEndArchive(_) => None,
+             _ => Some(self),
+         }
+     }
+@@ -127,7 +130,7 @@ impl PalwStagedCourtRowV1 {
+             Self::OwnerBundle(bundle) => bundle.active_mut_v1(),
+             Self::Claim(_) | Self::ClaimBundle(_) | Self::ArtifactInventoryOpen(_) | Self::ArtifactInventory(_) | Self::TirLayout(_)
+             | Self::TirAcquisition(_) | Self::TirRawChunk(_) | Self::TirAcceptedBody(_) | Self::TirPreparation(_) | Self::TirClaim(_)
+-            | Self::TirWitness(_) | Self::TirContainer(_) | Self::CourtService(_) | Self::CourtDutyClock(_) | Self::CourtSharedContext(_) | Self::CourtSharedQuery(_) | Self::CourtSharedIds(_) | Self::CourtSharedStream(_) | Self::CourtSharedChunk(_) | Self::CourtSharedResponse(_) => None,
++            | Self::TirWitness(_) | Self::TirContainer(_) | Self::CourtService(_) | Self::CourtDutyClock(_) | Self::CourtSharedContext(_) | Self::CourtSharedQuery(_) | Self::CourtSharedIds(_) | Self::CourtSharedStream(_) | Self::CourtSharedChunk(_) | Self::CourtSharedResponse(_) | Self::CourtEndArchive(_) => None,
+             _ => Some(self),
+         }
+     }
+@@ -251,6 +254,7 @@ impl PalwStagedCourtRowV1 {
+             (PalwStagedCourtKeyV1::CourtSharedStream(_), Self::CourtSharedStream(row)) => row.check(key),
+             (PalwStagedCourtKeyV1::CourtSharedChunk(..), Self::CourtSharedChunk(row)) => row.check(key),
+             (PalwStagedCourtKeyV1::CourtSharedResponse(..), Self::CourtSharedResponse(row)) => row.check(key),
++            (PalwStagedCourtKeyV1::CourtEndArchive(..), Self::CourtEndArchive(row)) => row.check(key),
+             _ => Err("staged rooted row has inconsistent key/immutable contract".into()),
+         }
+     }
+diff --git a/consensus/core/src/palw_state_v2.rs b/consensus/core/src/palw_state_v2.rs
+index a6be8be58..8563634c5 100644
+--- a/consensus/core/src/palw_state_v2.rs
++++ b/consensus/core/src/palw_state_v2.rs
+@@ -3267,6 +3267,7 @@ pub fn palw_accuser_exposure_v1(state: &PalwChainStateV2, bond: &PalwBondKeyV2)
+         .fold(0u128, u128::saturating_add);
+     // Lane LG14-A: a reservation's deposit (live or held) sits on the free half as a session's exposure does; zero below the fence.
+     courts
++        .saturating_add(state.court_archive_pending_exposure_v1(bond))
+         .saturating_add(da)
+         .saturating_add(state.legacy_dispute_exposure_v1(bond))
+         .saturating_add(state.staged_tir_acquisition_exposure_v1(bond))
+@@ -8879,9 +8880,9 @@ pub fn palw_court_close_min_fee_v1(chunks: u64) -> u64 {
+ /// one that did removes itself first ([`TransitionBuilder::end_close_group_delivered`]), which is
+ /// the whole of "junk pays; honesty is refunded" with nothing moved at declaration time.
+ ///
+-/// `slash_bond` clamps to the collateral that is actually there, and the declaration gate refuses a
+-/// deposit its bond cannot cover, so the clamp is a belt on a rule already checked rather than the
+-/// rule itself. A group with a zero deposit — every group written before W10 — is charged nothing,
++/// `slash_bond` clamps to the collateral actually left. The declaration arm explicitly does
++/// NOT refuse an already-poor bond, so this is a nominal charge, not an escrow or a guarantee
++/// that the whole amount remains available. A group with a zero deposit — every group written before W10 — is charged nothing,
+ /// so this is inert on any state that predates the fields.
+ fn forfeit_close_deposit_v1(
+     builder: &mut TransitionBuilder<'_>,
+@@ -8965,9 +8966,34 @@ fn convict_close_declarer_v1(
+     session_id: Hash64,
+     side: PalwCourtSideV1,
+ ) -> Result<(), PalwStateV2Error> {
++    let session = builder.state.court_sessions.get(&session_id).ok_or(PalwStateV2Error::MissingSession(session_id))?;
++    if !builder.state.court_service_holds_claim_v1(&session.claim) { return convict_close_declarer_inner_v1(builder, ctx, session_id, side); }
++    let saved = builder.try_checkpoint()?;
++    let previous = builder.court_settled_deposit;
++    let result = convict_close_declarer_inner_v1(builder, ctx, session_id, side);
++    builder.court_settled_deposit = previous;
++    if result.is_err() {builder.restore(saved);}
++    result
++}
++fn convict_close_declarer_inner_v1(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, session_id: Hash64, side: PalwCourtSideV1) -> Result<(), PalwStateV2Error> {
+     let session = builder.state.court_sessions.get(&session_id).ok_or(PalwStateV2Error::MissingSession(session_id))?.clone();
+     let claim = builder.state.claims.get(&session.claim).ok_or(PalwStateV2Error::MissingClaim(session.claim))?.clone();
+-    // **The deposit is not taken here any more, and that is the fix rather than an omission**
++    if builder.state.court_service_holds_claim_v1(&session.claim) {
++        let group = builder.state.court_close_groups.get(&(session_id,side))
++            .ok_or_else(||PalwStateV2Error::CarriageInconsistent("service close declaration missing".into()))?;
++        if !group.is_complete() {return Err(PalwStateV2Error::CarriageInconsistent("unresolved service cannot authorize an assembly timeout default".into()));}
++        // Only this completed malformed assembly is established. The opposite
++        // side's missing response remains a pending charge, never a default.
++        let declarer = group.declarer;
++        let before = builder.state.bond(&declarer).ok_or(PalwStateV2Error::MissingBond(declarer))?.collateral;
++        forfeit_close_deposit_v1(builder,session_id,side)?;
++        let after = builder.state.bond(&declarer).ok_or(PalwStateV2Error::MissingBond(declarer))?.collateral;
++        builder.court_settled_deposit = Some((session_id,side,before-after));
++    }
++    // For service-absent legacy sessions, the deposit is collected by the
++    // common removal writer. The isolated service branch above instead settles
++    // only the objectively malformed complete side and archives all other debts.
++    // **The legacy deposit is not taken here any more**
+     // (audit H-2b/L-9). This used to call `forfeit_close_deposit_v1` for `side` alone and then
+     // remove the session, which meant two things: every OTHER ending of a session collected
+     // nothing, and where both sides had declared, the side this conviction does not route to had
+@@ -9007,6 +9033,25 @@ pub fn palw_court_close_chunk_digest_v1(bytes: &[u8]) -> Hash64 {
+     finish(state)
+ }
+ 
++/// Hash the existing close-byte domain without a temporary serialization buffer.
++pub fn palw_court_close_object_digest_v1(object:&PalwConsensusObjectV2)->std::io::Result<Hash64> {
++    struct Sink<'a>(&'a mut blake2b_simd::State);
++    impl std::io::Write for Sink<'_> {
++        fn write(&mut self,bytes:&[u8])->std::io::Result<usize>{self.0.update(bytes);Ok(bytes.len())}
++        fn flush(&mut self)->std::io::Result<()>{Ok(())}
++    }
++    let n=u64::try_from(borsh::object_length(object)?).map_err(|_|std::io::Error::new(std::io::ErrorKind::InvalidData,"close object length overflow"))?;
++    let mut h=keyed(PALW_STATE_V2_DOMAIN_COURT_CLOSE_CHUNK);h.update(&n.to_le_bytes());
++    borsh::BorshSerialize::serialize(object,&mut Sink(&mut h))?;Ok(finish(h))
++}
++pub fn palw_court_close_group_digest_v1(group:&PalwCourtCloseGroupV2)->std::io::Result<Hash64> {
++    let n=group.chunks.values().try_fold(0u64,|n,v|n.checked_add(v.len() as u64))
++        .ok_or_else(||std::io::Error::new(std::io::ErrorKind::InvalidData,"close group length overflow"))?;
++    let mut h=keyed(PALW_STATE_V2_DOMAIN_COURT_CLOSE_CHUNK);h.update(&n.to_le_bytes());
++    for bytes in group.chunks.values(){h.update(bytes);}Ok(finish(h))
++}
++
++
+ /// **Is this dissection move court CPU a block has to spend before it can be relayed?** (ADR-0080
+ /// design A W9, extended by ADR-0082 Decision 2; audit C-1.)
+ ///
+@@ -11119,6 +11164,8 @@ pub struct PalwChainStateV2 {
+ }
+ 
+ mod chain_state;
++#[path = "palw_court_end_archive_fold_v1.rs"]
++mod palw_court_end_archive_fold_v1;
+ 
+ /// Shape-level helper for `assert_internal_consistency`: does this
+ /// claim, in this phase with this many open courts, owe the index a deadline entry at all?
+@@ -13031,6 +13078,9 @@ impl PalwBondRegistrationIndexV1 {
+ struct TransitionBuilder<'a> {
+     native_reservation: crate::palw_native_resource_v1::NativeTransitionReservationV1,
+     monetary_native_ready: BTreeMap<Hash64, (Hash64, crate::palw_attempt_material_v3::PalwNativeMaterialBindingV3)>,
++    court_end_evidence: Option<crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_court_end_archive_v1::CourtEndEvidenceV1>>,
++    court_settled_deposit: Option<(Hash64, PalwCourtSideV1, u64)>,
++    court_fulfilled_group: Option<(Hash64, PalwCourtSideV1, crate::palw_staged_court_state_v1::PalwSharedCourtV1<PalwCourtCloseGroupV2>)>,
+     params: &'a PalwStateParamsV2,
+     state: PalwChainStateV2,
+     entries: Vec<PalwDeltaEntryV2>,
+diff --git a/consensus/core/src/palw_state_v2/chain_state.rs b/consensus/core/src/palw_state_v2/chain_state.rs
+index 0a2bc21e5..36c520b08 100644
+--- a/consensus/core/src/palw_state_v2/chain_state.rs
++++ b/consensus/core/src/palw_state_v2/chain_state.rs
+@@ -3897,6 +3897,7 @@ impl PalwChainStateV2 {
+                 R::CourtSharedQuery(q)=>q.check_context(self),
+                 R::CourtSharedIds(ids)=>ids.check_context(self),
+                 R::CourtSharedResponse(r)=>r.check_context(self),
++                R::CourtEndArchive(r)=>r.check_loaded_context(self),
+                 R::CourtSharedStream(s)=>s.check_context(self),
+                 R::CourtSharedChunk(c)=>c.check_context(self),_=>Ok(()),
+             }.map_err(PalwStateV2Error::CarriageInconsistent)?;
+diff --git a/consensus/core/src/palw_state_v2/objects.rs b/consensus/core/src/palw_state_v2/objects.rs
+index f181b6efe..76c71759a 100644
+--- a/consensus/core/src/palw_state_v2/objects.rs
++++ b/consensus/core/src/palw_state_v2/objects.rs
+@@ -7,6 +7,20 @@ pub(super) fn apply_object(
+     ctx: &PalwBlockContextV2,
+     object: &PalwConsensusObjectV2,
+ ) -> Result<(), PalwStateV2Error> {
++    if builder.state.court_service_state_v1().is_some_and(|s| !s.claims.is_empty()) {
++        let saved = builder.try_checkpoint()?;
++        let previous = builder.court_end_evidence.clone();
++        let result = (|| {
++            builder.prepare_native_court_end_cause_v1(ctx, object)?;
++            apply_object_with_pair_v1(builder, ctx, object)
++        })();
++        builder.court_end_evidence = previous;
++        if result.is_err() { builder.restore(saved); }
++        return result;
++    }
++    apply_object_with_pair_v1(builder, ctx, object)
++}
++fn apply_object_with_pair_v1(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, object: &PalwConsensusObjectV2) -> Result<(), PalwStateV2Error> {
+     // Lane g14-court-capacity (audit G-07): past `palw_court_capacity_v1` every court operation is charged its deterministic cost
+     // against the block's court budget before its arm runs. A no-op below the fence.
+     palw_court_capacity_fold_v1::charge_court_op_v1(builder, ctx, object)?;
+@@ -2612,6 +2626,14 @@ fn apply_object_inner(
+                 builder.write_court_close_chunk((*session_id, *side), *index, bytes.clone())?;
+                 return Ok(());
+             }
++            let service_archive=builder.state.court_sessions.get(session_id)
++                .is_some_and(|s|builder.state.court_service_holds_claim_v1(&s.claim));
++            if service_archive {
++                // Unlike legacy delete-only endings, the archive must retain
++                // the final accepted bytes too. The outer checkpoint includes
++                // this arrival if decode/adjudication/archive later refuses.
++                builder.write_court_close_chunk((*session_id,*side),*index,bytes.clone())?;
++            }
+             // **W7: the chunk that COMPLETES a group assembles it, and the close happens here.**
+             //
+             // Not written back first: every path below removes the session, and `write_court`
+@@ -2689,6 +2711,16 @@ fn apply_object_inner(
+             // a session's removal, and the `CourtClosed` applied on the next line removes this
+             // one — so an honest assembly that stayed in the table would be charged for the row it
+             // just filed. This is the single ending that owes nothing.
++            if service_archive {
++                let previous=builder.court_fulfilled_group.clone();
++                let result=(||{
++                    builder.prepare_fulfilled_court_group_v1(*session_id,*side,&group)?;
++                    builder.end_close_group_delivered((*session_id,*side))?;
++                    apply_object(builder,ctx,&close)
++                })();
++                builder.court_fulfilled_group=previous;
++                return result;
++            }
+             builder.end_close_group_delivered((*session_id, *side))?;
+             // **Through the arm, never beside it.** The decoded object is a `CourtClosed` and is
+             // applied by re-entering this function, so a split close and a whole close are the same
+diff --git a/consensus/core/src/palw_state_v2/transition_builder.rs b/consensus/core/src/palw_state_v2/transition_builder.rs
+index e8e4d96d0..aa6264c59 100644
+--- a/consensus/core/src/palw_state_v2/transition_builder.rs
++++ b/consensus/core/src/palw_state_v2/transition_builder.rs
+@@ -46,6 +46,9 @@ impl<'a> TransitionBuilder<'a> {
+             native_reservation,
+             params,
+             monetary_native_ready: BTreeMap::new(),
++            court_end_evidence: None,
++            court_settled_deposit: None,
++            court_fulfilled_group: None,
+             state,
+             entries: Vec::new(),
+             registration_index: None,
+@@ -8662,6 +8665,21 @@ impl<'a> TransitionBuilder<'a> {
+     }
+ 
+     pub(super) fn write_court(&mut self, key: Hash64, new: Option<PalwCourtSessionStateV2>) -> Result<(), PalwStateV2Error> {
++        if new.is_some() && self.state.court_end_archive_v1(key).is_some() { return Err(PalwStateV2Error::DuplicateSession(key)); }
++        let archive = new.is_none() && self.state.court_sessions.get(&key).is_some_and(|s|
++            self.state.claims.contains_key(&s.claim) && self.state.court_service_holds_claim_v1(&s.claim));
++        if !archive { return self.write_court_inner_v1(key,new,false); }
++        let saved = self.try_checkpoint()?;
++        let result = (|| {
++            let pending = self.build_pending_court_archive_v1(key)?;
++            self.write_court_inner_v1(key,new,true)?;
++            self.write_staged_row_v1(crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1::CourtEndArchive(key),
++                Some(crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::CourtEndArchive(Box::new(pending).into())))
++        })();
++        if result.is_err() {self.restore(saved);}
++        result
++    }
++    fn write_court_inner_v1(&mut self, key: Hash64, new: Option<PalwCourtSessionStateV2>, archived: bool) -> Result<(), PalwStateV2Error> {
+         if let Some(record) = &new {
+             self.state.require_paid_consumer_backstop_v1(&record.claim, record.deadline_daa)?;
+             if !self.state.court_sessions.contains_key(&key) {
+@@ -8759,7 +8777,7 @@ impl<'a> TransitionBuilder<'a> {
+         if removed {
+             for side in [PalwCourtSideV1::Challenger, PalwCourtSideV1::Executor] {
+                 if self.state.court_close_groups.contains_key(&(key, side)) {
+-                    forfeit_close_deposit_v1(self, key, side)?;
++                    if !archived {forfeit_close_deposit_v1(self, key, side)?;}
+                     self.write_court_close_group((key, side), None)?;
+                 }
+             }
+diff --git a/consensus/core/src/palw_tir_public_fold_v1.rs b/consensus/core/src/palw_tir_public_fold_v1.rs
+index f7a3e9d4f..9b18648db 100644
+--- a/consensus/core/src/palw_tir_public_fold_v1.rs
++++ b/consensus/core/src/palw_tir_public_fold_v1.rs
+@@ -1253,7 +1253,16 @@ fn apply_conviction_v1(
+         b.charge_covering_signers_v1(&conv, claim_id, &credited, g)?;
+     }
+     // 2. The producer, through the one funnel for a proven verdict (void / Final reversal, Gate C revocation, CourtConviction).
+-    b.convict_by_court_verdict_v1(ctx, claim_id, &claim, filer, None)?;
++    if b.state.court_service_holds_claim_v1(&claim_id) {
++        // The assembled evidence is retained, not just the last fragment or a digest.
++        let previous = b.court_end_evidence.clone();
++        b.prepare_tir_court_end_cause_v1(ctx, claim_id, filer, evidence)?;
++        let result = b.convict_by_court_verdict_v1(ctx, claim_id, &claim, filer, None);
++        b.court_end_evidence = previous;
++        result?;
++    } else {
++        b.convict_by_court_verdict_v1(ctx, claim_id, &claim, filer, None)?;
++    }
+     // 3. An execution-proving fault forfeits by ROOT (siblings sharing the convicted execution).
+     if let Some(root) = by_root {
+         b.forfeit_minted_round_rights(&root)?;
+@@ -3167,6 +3176,175 @@ mod conviction_e2e_tests {
+ 
+     /// Synthetic verified-half fixture: native sweep/index/journal behavior,
+     /// not signed court admission, supplied block capacity or default authority.
++    // Verified-half archive fixtures: original admission, carrier signatures,
++    // service costs and declaration funding remain synthetic, not node E02.
++    fn archive_service(b: &mut TransitionBuilder<'_>, frame: &Frame) {
++        use crate::palw_court_service_v1::{ServiceCost,ServicePacket,ServiceReservations};
++        use crate::palw_court_service_state_v2::{CourtServiceStateV2,ServiceClaimBinding,court_service_profile_id_v2};
++        let p=frame.plan_v1();let cost=ServiceCost {bytes:1,work:1,io:1,controls:1};
++        let mut book=ServiceReservations::new(cost).unwrap();
++        book.reserve(&[ServicePacket {id:[61;64],release_daa:p.terms.accepted_daa+1,
++            service_before:p.terms.accepted_daa+2,cost}],p.terms.accepted_daa+10_000).unwrap();
++        let service=CourtServiceStateV2 {version:2,source_profile_id:h(62),profile_id:court_service_profile_id_v2(h(62)),book,
++            claims:BTreeMap::from([(p.original_claim,ServiceClaimBinding {claim:p.original_claim,allocation_id:p.allocation_id,
++                source_id:p.source_id,original_accepted_daa:p.terms.accepted_daa,hard_deadline_daa:p.terms.accepted_daa+10_000,
++                packet_ids:std::collections::BTreeSet::from([[61;64]])})])};
++        b.write_staged_row_v1(Key::CourtService,Some(Row::CourtService(Box::new(service).into()))).unwrap();
++    }
++    fn archive_session(b: &mut TransitionBuilder<'_>, frame: &Frame) -> (Hash64,PalwCourtSessionStateV2) {
++        use crate::palw_bisect::{PalwBisectLadderV1,PalwBisectSpaceV1};
++        let p=frame.plan_v1();let claim=b.state.claim(&p.original_claim).unwrap();let opened=p.terms.accepted_daa+3;
++        let ladder=PalwBisectLadderV1::open_at_named_leaf(&p.original_claim,&claim.trace_root,
++            &crate::palw_court_v2::court_party_id_v2(&outsider()),&crate::palw_court_v2::court_party_id_v2(&claim.bond),
++            PalwBisectSpaceV1::StepLeaves,frame.header_v1().step_leaf_count,FORGED_LEAF as u64,opened,opened+1).unwrap();
++        let id=ladder.session_id();let session=PalwCourtSessionStateV2 {claim:p.original_claim,challenger_bond:outsider(),
++            opened_daa:opened,deadline_daa:opened+100,ladder,dissection:None};
++        b.write_court(id,Some(session.clone())).unwrap();
++        for side in [PalwCourtSideV1::Executor,PalwCourtSideV1::Challenger] {
++            let declarer=if side==PalwCourtSideV1::Executor {frame.custody_v1().pledge_v1().producer}else{outsider()};
++            let first=vec![7;16];let last=vec![8;16];let mut all=first.clone();all.extend_from_slice(&last);
++            let declared=opened+1;
++            let group=PalwCourtCloseGroupV2 {declarer,count:2,chunk_digests:vec![palw_court_close_chunk_digest_v1(&first),palw_court_close_chunk_digest_v1(&last)],
++                close_digest:palw_court_close_chunk_digest_v1(&all),verdict:PalwCourtVerdictV2::ExecutorGuilty,declared_daa:declared,
++                assembly_deadline_daa:declared+palw_close_assembly_daa_v1(2),present:1,deposit_outpoint:declarer.0,
++                deposit:palw_close_assembly_deposit_v1(2),chunks:BTreeMap::from([(0,first)])};
++            b.write_court_close_group((id,side),Some(group)).unwrap();
++        }
++        (id,session)
++    }
++    fn archive_roundtrip(b: &mut TransitionBuilder<'_>, params: &PalwStateParamsV2, frame: &Frame, id: Hash64, point: PalwBlockContextV2, parent: Hash64) {
++        use crate::palw_native_resource_v1::{NativeHeapV1,NativeWireScanV1,NativeWireReaderV1};
++        let old=b.state.last_point;b.state.last_point=Some(point);
++        b.entries.push(PalwDeltaEntryV2::LastPoint {old,new:Some(point)});
++        let archive=b.state.court_end_archive_v1(id).unwrap().clone();archive.check_loaded_context(&b.state).unwrap();
++        let row=b.state.staged_court_row_v1(&Key::CourtEndArchive(id)).unwrap();let bytes=borsh::to_vec(row).unwrap();
++        assert_eq!(bytes[0],26);assert_eq!(borsh::to_vec(&Key::CourtEndArchive(id)).unwrap()[0],20);
++        let mut reader=NativeWireReaderV1::new(bytes.as_slice(),bytes.len() as u64);
++        let shape=Row::scan_native_wire_v1(&mut reader).unwrap();assert_eq!(reader.remaining(),0);
++        assert!(shape.heap>=row.native_heap_v1("archive test").bytes().unwrap());
++        let restored:Row=borsh::from_slice(&bytes).unwrap();assert_eq!(&restored,row);
++        let mut short=NativeWireReaderV1::new(&bytes[..bytes.len()-1],(bytes.len()-1) as u64);
++        assert!(Row::scan_native_wire_v1(&mut short).is_err());
++        let before=b.state.clone();let journal=b.entries.len();
++        assert!(b.write_staged_row_v1(Key::CourtEndArchive(id),None).is_err());
++        let mut changed=archive.clone();changed.groups.clear();
++        assert!(b.write_staged_row_v1(Key::CourtEndArchive(id),Some(Row::CourtEndArchive(Box::new(changed).into()))).is_err());
++        assert_eq!(b.state,before);assert_eq!(b.entries.len(),journal);
++        let past=at(frame,archive.material_until_daa-frame.plan_v1().terms.accepted_daa+1);
++        super::super::palw_staged_court_fold_v1::sweep(b,&past).unwrap();
++        assert!(b.state.court_end_archive_v1(id).is_some());
++        let old=b.state.last_point;b.state.last_point=Some(past);
++        b.entries.push(PalwDeltaEntryV2::LastPoint {old,new:Some(past)});
++        let saved=b.state.clone();let wire=borsh::to_vec(&PalwStateCarriageV2::from_state(&saved)).unwrap();
++        let fresh=borsh::from_slice::<PalwStateCarriageV2>(&wire).unwrap().into_state(params,Some(saved.state_root())).unwrap();
++        assert_eq!(fresh.state_root(),saved.state_root());assert_eq!(fresh.court_end_archive_v1(id),saved.court_end_archive_v1(id));
++        let mut backwards=saved.clone();for e in b.entries.iter().rev(){apply_delta_entry(&mut backwards,e,true).unwrap();}
++        assert!(backwards.court_end_archive_v1(id).is_none());
++        assert_eq!(backwards.state_root(),parent,"undo returns to the actual native parent root");
++        for e in &b.entries{apply_delta_entry(&mut backwards,e,false).unwrap();}
++        assert_eq!(backwards.state_root(),saved.state_root());
++    }
++    #[test]
++    fn rooted_court_end_archive_native_verdict_preserves_other_side() {
++        let fx=palw_tir_public_frame_fixture_v1(Some((FORGED_LEAF,1)),4);let frame=fx.frame.clone();
++        let (state,params,extras)=world(&fx,&frame);let params=params.with_tir_from_daa(Some(0));
++        let mut b=TransitionBuilder::new(&state,&params,false,false,false,false,&extras);
++        archive_service(&mut b,&frame);let (id,session)=archive_session(&mut b,&frame);
++        let Evidence::Arithmetic {proof}=cone(&fx) else {unreachable!()};
++        let court=crate::palw_mode_v2::PalwCourtParamsV2::new(frame.header_v1().step_leaf_count,params.turn_deadline_daa(),2).unwrap();
++        assert_eq!(crate::palw_court_v2::adjudicate_court_close_v2(&b.state,&id,&proof,&court,frame.header_v1().step_leaf_count,crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat).unwrap(),PalwCourtVerdictV2::ExecutorGuilty);
++        let object=PalwConsensusObjectV2::CourtClosed {session_id:id,verdict:PalwCourtVerdictV2::ExecutorGuilty,proof:*proof};
++        let before=b.state.bond(&outsider()).unwrap().collateral;let point=at(&frame,5);
++        super::super::objects::apply_object(&mut b,&point,&object).unwrap();
++        assert!(b.state.court_session(&id).is_none());let a=b.state.court_end_archive_v1(id).unwrap();
++        assert_eq!(a.session,session);assert_eq!(a.groups.len(),2);assert!(a.applied_deposit_debits.is_empty());
++        assert!(matches!(a.evidence.as_ref(),crate::palw_court_end_archive_v1::CourtEndEvidenceV1::Native {object:o,point:p} if **o==object && *p==point));
++        assert_eq!(b.state.bond(&outsider()).unwrap().collateral,before);
++        assert_eq!(b.state.court_archive_pending_exposure_v1(&outsider()),u128::from(palw_close_assembly_deposit_v1(2)));
++        assert_eq!(palw_accuser_exposure_v1(&b.state,&outsider()),u128::from(palw_close_assembly_deposit_v1(2)));
++        assert_eq!(a.adjudication(),crate::palw_court_end_archive_v1::CourtEndDispositionV1::NativeCourtVerdict(PalwCourtVerdictV2::ExecutorGuilty));
++        assert!(b.state.staged_bond_exit_held_v1(&outsider(),frame.plan_v1().terms.material_until_daa+1));
++        let saved=b.state.clone();assert!(b.write_court(id,Some(session)).is_err());assert_eq!(b.state,saved);
++        archive_roundtrip(&mut b,&params,&frame,id,point,state.state_root());
++    }
++    #[test]
++    fn rooted_court_end_archive_complete_malformed_side_is_settled_once() {
++        let fx=palw_tir_public_frame_fixture_v1(None,4);let frame=fx.frame.clone();
++        let (state,params,extras)=world(&fx,&frame);let mut b=TransitionBuilder::new(&state,&params,false,false,false,false,&extras);
++        archive_service(&mut b,&frame);let (id,_)=archive_session(&mut b,&frame);
++        let producer=frame.custody_v1().pledge_v1().producer;let collateral=b.state.bond(&producer).unwrap().collateral;
++        let own_before=b.state.bond(&outsider()).unwrap().collateral;let side=PalwCourtSideV1::Challenger;
++        let point=at(&frame,5);let deposit=palw_close_assembly_deposit_v1(2);
++        let object=PalwConsensusObjectV2::CourtCloseChunk {session_id:id,side,index:1,bytes:vec![8;16]};
++        super::super::objects::apply_object(&mut b,&point,&object).unwrap();
++        let a=b.state.court_end_archive_v1(id).unwrap();assert_eq!(a.applied_deposit_debits.get(&side),Some(&deposit.min(own_before)));
++        assert!(a.groups[&side].is_complete());assert_eq!(a.pending_nominal(&outsider()),0);
++        assert_eq!(a.pending_nominal(&producer),u128::from(deposit));
++        assert_eq!(b.state.bond(&producer).unwrap().collateral,collateral);
++        let saved=b.state.clone();assert!(super::super::objects::apply_object(&mut b,&point,&object).is_err());assert_eq!(b.state,saved);
++        archive_roundtrip(&mut b,&params,&frame,id,point,state.state_root());
++    }
++    #[test]
++    fn rooted_court_end_archive_fulfilled_close_keeps_raw_material_without_pending_charge() {
++        let fx=palw_tir_public_frame_fixture_v1(Some((FORGED_LEAF,1)),4);let frame=fx.frame.clone();
++        let (state,params,extras)=world(&fx,&frame);let params=params.with_tir_from_daa(Some(0));
++        let mut b=TransitionBuilder::new(&state,&params,false,false,false,false,&extras);
++        archive_service(&mut b,&frame);let (id,_)=archive_session(&mut b,&frame);
++        let Evidence::Arithmetic {proof}=cone(&fx) else {unreachable!()};
++        let court=crate::palw_mode_v2::PalwCourtParamsV2::new(frame.header_v1().step_leaf_count,params.turn_deadline_daa(),2).unwrap();
++        let verdict=crate::palw_court_v2::adjudicate_court_close_v2(&b.state,&id,&proof,&court,frame.header_v1().step_leaf_count,crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat).unwrap();
++        let close=PalwConsensusObjectV2::CourtClosed {session_id:id,verdict,proof:*proof};let bytes=borsh::to_vec(&close).unwrap();
++        assert_eq!(palw_court_close_object_digest_v1(&close).unwrap(),palw_court_close_chunk_digest_v1(&bytes));
++        let split=bytes.len()/2;assert!(split>0 && bytes.len()-split<=PALW_COURT_CLOSE_CHUNK_MAX_BYTES);
++        let side=PalwCourtSideV1::Challenger;
++        let mut group=b.state.court_close_group(&id,side).unwrap().clone();
++        group.chunk_digests=vec![palw_court_close_chunk_digest_v1(&bytes[..split]),palw_court_close_chunk_digest_v1(&bytes[split..])];
++        group.close_digest=palw_court_close_chunk_digest_v1(&bytes);group.chunks=BTreeMap::from([(0,bytes[..split].to_vec())]);
++        b.write_court_close_group((id,side),Some(group)).unwrap();
++        let point=at(&frame,5);let object=PalwConsensusObjectV2::CourtCloseChunk {session_id:id,side,index:1,bytes:bytes[split..].to_vec()};
++        super::super::objects::apply_object(&mut b,&point,&object).unwrap();
++        let a=b.state.court_end_archive_v1(id).unwrap();assert!(a.fulfilled_groups.contains(&side));
++        assert!(a.applied_deposit_debits.is_empty());assert_eq!(a.pending_nominal(&outsider()),0);
++        assert_eq!(a.groups[&side].chunks.values().flatten().copied().collect::<Vec<_>>(),bytes);
++        assert!(matches!(a.evidence.as_ref(),crate::palw_court_end_archive_v1::CourtEndEvidenceV1::Native {object,..} if **object==close));
++        archive_roundtrip(&mut b,&params,&frame,id,point,state.state_root());
++    }
++    #[test]
++    fn rooted_court_end_archive_uncaptured_removal_retains_nominal_court_stake() {
++        let fx=palw_tir_public_frame_fixture_v1(None,4);let frame=fx.frame.clone();let (state,params,extras)=world(&fx,&frame);
++        let mut b=TransitionBuilder::new(&state,&params,false,false,false,false,&extras);
++        archive_service(&mut b,&frame);let (id,_)=archive_session(&mut b,&frame);
++        let stake=b.state.claim(&frame.plan_v1().original_claim).unwrap().reserved;let before=b.state.bond(&outsider()).unwrap().collateral;
++        b.write_court(id,None).unwrap();let a=b.state.court_end_archive_v1(id).unwrap();
++        assert_eq!(a.adjudication(),crate::palw_court_end_archive_v1::CourtEndDispositionV1::Uncaptured);
++        assert_eq!(a.court_stake_nominal,stake);
++        assert_eq!(palw_accuser_exposure_v1(&b.state,&outsider()),stake+u128::from(palw_close_assembly_deposit_v1(2)));
++        assert_eq!(b.state.bond(&outsider()).unwrap().collateral,before);
++        archive_roundtrip(&mut b,&params,&frame,id,at(&frame,5),state.state_root());
++    }
++    #[test]
++    fn rooted_court_end_archive_streamed_fraud_keeps_complete_evidence() {
++        use crate::palw_tir_public_carriage_v1::{PalwTirPublicWitnessPartV1 as Part,palw_tir_public_witness_digest_v1};
++        let honest=palw_tir_public_frame_fixture_v1(None,4);let fx=crate::palw_tir_public_claim_v1::palw_tir_public_frame_fixture_lying_output_v1(4,h(0xBAD));
++        let frame=fx.frame.clone();let (state,params,mut extras)=world(&fx,&frame);extras.offence_attribution_active=true;
++        let evidence=Evidence::Output {rows_root:crate::palw_step_refute::tiled_logits_rows_root_v1(&honest.execution.binding.job_context,&honest.execution.rows).unwrap(),ids:honest.execution.generated.clone()};
++        let encoded=borsh::to_vec(&evidence).unwrap();let split=encoded.len()/2;let digest=palw_tir_public_witness_digest_v1(&encoded);
++        let mut b=TransitionBuilder::new(&state,&params,false,false,false,false,&extras);archive_service(&mut b,&frame);
++        let (id,_)=archive_session(&mut b,&frame);let before=b.state.bond(&outsider()).unwrap().collateral;
++        let p=frame.plan_v1();
++        for (offset,end,at_offset) in [(0,split,5),(split,encoded.len(),6)] {
++            let control=Control {version:1,claim:p.original_claim,allocation_id:p.allocation_id,source_id:p.source_id,
++                target:T::ConvictionWitness,expected_turn:0,declared_rent_sompi:if offset==0 {frame.conviction_rent_v1()}else{0},
++                signer:outsider(),action:A::WitnessPart(Part {total_bytes:encoded.len() as u64,digest,offset:offset as u64,bytes:encoded[offset..end].to_vec()}),signature:vec![5;SIG]};
++            apply_verified_control_v1(&mut b,&at(&frame,at_offset),&frame,&control).unwrap();
++        }
++        assert!(matches!(b.state.claim(&p.original_claim).unwrap().phase,PalwClaimPhaseV2::Voided {reason:PalwVoidReasonV2::CourtFraud,..}));
++        assert_eq!(b.state.bond(&outsider()).unwrap().collateral,before);
++        let a=b.state.court_end_archive_v1(id).unwrap();assert_eq!(a.groups.len(),2);
++        assert!(matches!(a.evidence.as_ref(),crate::palw_court_end_archive_v1::CourtEndEvidenceV1::TirConviction {evidence:e,point,..} if **e==evidence && *point==at(&frame,6)));
++        archive_roundtrip(&mut b,&params,&frame,id,at(&frame,6),state.state_root());
++    }
++
+     #[test]
+     fn rooted_service_court_sweeps_skip_held_without_starving_cleanup() {
+         use crate::palw_court_service_v1::{ServiceCost, ServicePacket, ServiceReservations};
+diff --git a/consensus/core/src/palw_court_end_archive_fold_v1.rs b/consensus/core/src/palw_court_end_archive_fold_v1.rs
+new file mode 100644
+index 000000000..bec10892f
+--- /dev/null
++++ b/consensus/core/src/palw_court_end_archive_fold_v1.rs
+@@ -0,0 +1,79 @@
++//! Private RFC-0030 native archive construction. No public admission/funding
++//! coordinator or settlement path is installed by this adapter.
++use super::*;
++use crate::palw_court_end_archive_v1::{CourtEndEvidenceV1 as Evidence, PendingCourtArchiveV1 as Archive};
++use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as Key};
++impl TransitionBuilder<'_> {
++    pub(super) fn prepare_fulfilled_court_group_v1(&mut self,id:Hash64,side:PalwCourtSideV1,group:&PalwCourtCloseGroupV2)->Result<(),PalwStateV2Error>{
++        if self.native_writers_tracking_v1(){
++            let mut q=native_writers::NativeWriteQuoteV1::new("fulfilled court group retained before removal");
++            q.copy(group)?.exact::<PalwCourtCloseGroupV2>(2)?.exact::<usize>(2)?;
++            self.admit_native_write_v1(q)?;
++        }
++        self.court_fulfilled_group=Some((id,side,Box::new(group.clone()).into()));Ok(())
++    }
++    pub(super) fn prepare_native_court_end_cause_v1(&mut self, ctx: &PalwBlockContextV2, object: &PalwConsensusObjectV2) -> Result<(), PalwStateV2Error> {
++        if self.native_writers_tracking_v1() {
++        let mut q = native_writers::NativeWriteQuoteV1::new("court end native evidence");
++        q.copy(object)?.exact::<PalwConsensusObjectV2>(1)?.exact::<Evidence>(2)?.exact::<usize>(2)?;
++        self.admit_native_write_v1(q)?;
++        }
++        self.court_end_evidence = Some(Box::new(Evidence::Native { point:*ctx, object:Box::new(object.clone()) }).into());
++        Ok(())
++    }
++    pub(super) fn prepare_tir_court_end_cause_v1(&mut self, ctx: &PalwBlockContextV2, claim: Hash64, filer: PalwBondKeyV2,
++        evidence: &crate::palw_tir_public_carriage_v1::PalwTirPublicConvictionEvidenceV1) -> Result<(), PalwStateV2Error> {
++        if self.native_writers_tracking_v1() {
++        let mut q = native_writers::NativeWriteQuoteV1::new("court end complete TIR evidence");
++        q.copy(evidence)?.exact::<crate::palw_tir_public_carriage_v1::PalwTirPublicConvictionEvidenceV1>(1)?
++            .exact::<Evidence>(2)?.exact::<usize>(2)?;
++        self.admit_native_write_v1(q)?;
++        }
++        self.court_end_evidence = Some(Box::new(Evidence::TirConviction { point:*ctx, claim, filer, evidence:Box::new(evidence.clone()) }).into());
++        Ok(())
++    }
++    pub(super) fn build_pending_court_archive_v1(&mut self, id: Hash64) -> Result<Archive, PalwStateV2Error> {
++        if self.state.staged_court_row_v1(&Key::CourtEndArchive(id)).is_some() { return Err(PalwStateV2Error::DuplicateSession(id)); }
++        let session = self.state.court_sessions.get(&id).ok_or(PalwStateV2Error::MissingSession(id))?;
++        let service = self.state.court_service_state_v1().ok_or_else(|| PalwStateV2Error::CarriageInconsistent("archive service missing".into()))?;
++        let binding = service.claims.get(&session.claim).ok_or_else(|| PalwStateV2Error::CarriageInconsistent("archive binding missing".into()))?;
++        let frame = crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(&self.state, session.claim)
++            .ok_or_else(|| PalwStateV2Error::CarriageInconsistent("archive original frame missing".into()))?;
++        let material = crate::palw_court_service_state_v2::tir_service_required_material_until_v1(frame,binding.hard_deadline_daa)
++            .map_err(PalwStateV2Error::CarriageInconsistent)?;
++        let stake=self.state.claim(&session.claim).ok_or(PalwStateV2Error::MissingClaim(session.claim))?.reserved;
++        let metadata = (service.profile_id, binding.allocation_id, binding.source_id, frame.custody_v1().pledge_v1().producer, material,stake);
++        if self.native_writers_tracking_v1() {
++        let mut q = native_writers::NativeWriteQuoteV1::new("court archive before source clones");
++        q.copy(session)?.exact::<Archive>(2)?.exact::<usize>(2)?;
++        if self.court_end_evidence.is_none() {q.exact::<Evidence>(2)?.exact::<usize>(2)?;}
++        if let Some(p) = self.state.tir_dissections.get(&id) {q.copy(p)?;}
++        for side in [PalwCourtSideV1::Executor,PalwCourtSideV1::Challenger] {
++            if let Some(g) = self.state.court_close_groups.get(&(id,side)) {
++                q.copy(g)?.member::<PalwCourtSideV1,PalwCourtCloseGroupV2>(1)?;
++            }
++        }
++        if self.court_settled_deposit.is_some_and(|(sid,_,_)|sid==id) {q.member::<PalwCourtSideV1,u64>(1)?;}
++        if let Some((sid,_,g))=&self.court_fulfilled_group {if *sid==id {
++            q.copy(g.as_ref())?.member::<PalwCourtSideV1,PalwCourtCloseGroupV2>(1)?.member::<PalwCourtSideV1,()>(1)?;
++        }}
++        self.admit_native_write_v1(q)?;
++        }
++        let session = self.state.court_sessions.get(&id).unwrap().clone();
++        let mut groups: BTreeMap<_,_> = [PalwCourtSideV1::Executor,PalwCourtSideV1::Challenger].into_iter()
++            .filter_map(|side|self.state.court_close_groups.get(&(id,side)).map(|g|(side,g.clone()))).collect();
++        let mut fulfilled_groups=std::collections::BTreeSet::new();
++        if let Some((sid,side,group))=&self.court_fulfilled_group {if *sid==id {
++            if groups.insert(*side,group.as_ref().clone()).is_some(){return Err(PalwStateV2Error::CarriageInconsistent("fulfilled group was not removed from active state".into()));}
++            fulfilled_groups.insert(*side);
++        }}
++        let applied_deposit_debits = self.court_settled_deposit.filter(|(sid,_,_)|*sid==id)
++            .map(|(_,side,debit)|BTreeMap::from([(side,debit)])).unwrap_or_default();
++        let archive = Archive {version:1,session_id:id,service_profile_id:metadata.0,
++            archive_profile_id:crate::palw_court_end_archive_v1::court_end_archive_profile_id_v1(metadata.0),allocation_id:metadata.1,source_id:metadata.2,
++            producer:metadata.3,material_until_daa:metadata.4,court_stake_nominal:metadata.5,session,tir_phase:self.state.tir_dissections.get(&id).cloned(),
++            groups,applied_deposit_debits,fulfilled_groups,evidence:self.court_end_evidence.clone().unwrap_or_else(||Box::new(Evidence::Uncaptured).into())};
++        archive.check(&Key::CourtEndArchive(id)).map_err(PalwStateV2Error::CarriageInconsistent)?;
++        Ok(archive)
++    }
++}
+diff --git a/consensus/core/src/palw_court_end_archive_v1.rs b/consensus/core/src/palw_court_end_archive_v1.rs
+new file mode 100644
+index 000000000..5722f36bb
+--- /dev/null
++++ b/consensus/core/src/palw_court_end_archive_v1.rs
+@@ -0,0 +1,181 @@
++//! RFC-0030 isolated pending-liability archive. An archive is not escrow,
++//! settlement, default permission, credit or a funded original admission.
++use crate::{Hash64, palw_state_v2::*, palw_staged_court_state_v1::{PalwSharedCourtV1, PalwStagedCourtKeyV1 as Key, PalwStagedCourtRowV1 as Row}};
++use borsh::{BorshDeserialize, BorshSerialize};
++use std::collections::{BTreeMap,BTreeSet};
++
++/// Accepted native material, not a caller-carried verdict/permission flag.
++/// Uncaptured preserves unresolved material on still-unadapted internal paths;
++/// it explicitly does not claim that complete termination evidence was saved.
++#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
++pub enum CourtEndEvidenceV1 {
++    Uncaptured,
++    Native { point: PalwBlockContextV2, object: Box<PalwConsensusObjectV2> },
++    TirConviction { point: PalwBlockContextV2, claim: Hash64, filer: PalwBondKeyV2,
++        evidence: Box<crate::palw_tir_public_carriage_v1::PalwTirPublicConvictionEvidenceV1> },
++}
++#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
++pub struct PendingCourtArchiveV1 {
++    pub version: u16,
++    pub session_id: Hash64,
++    pub service_profile_id: Hash64,
++    pub archive_profile_id: Hash64,
++    pub allocation_id: Hash64,
++    pub source_id: Hash64,
++    pub producer: PalwBondKeyV2,
++    pub material_until_daa: u64,
++    pub session: PalwCourtSessionStateV2,
++    pub court_stake_nominal: u128,
++    pub tir_phase: Option<Box<crate::palw_tir_dissect_v1::PalwTirDissectPhaseV1>>,
++    pub groups: BTreeMap<PalwCourtSideV1, PalwCourtCloseGroupV2>,
++    /// Actual native debits already made for objectively malformed COMPLETE
++    /// assemblies. These sides are not another pending charge.
++    pub applied_deposit_debits: BTreeMap<PalwCourtSideV1, u64>,
++    pub fulfilled_groups: BTreeSet<PalwCourtSideV1>,
++    pub evidence: PalwSharedCourtV1<CourtEndEvidenceV1>,
++}
++/// Read-only description, never an authentication or release capability.
++#[derive(Clone, Debug, PartialEq, Eq)]
++pub enum CourtEndDispositionV1 {
++    Uncaptured, NativeCourtVerdict(PalwCourtVerdictV2), TirClaimFault,
++    CompletedAssemblyFault(PalwCourtSideV1), RelatedNativeTransition,
++}
++impl PendingCourtArchiveV1 {
++    pub fn adjudication(&self)->CourtEndDispositionV1 {
++        if let Some(side)=self.applied_deposit_debits.keys().next(){return CourtEndDispositionV1::CompletedAssemblyFault(*side);}
++        match self.evidence.as_ref(){
++            CourtEndEvidenceV1::Uncaptured=>CourtEndDispositionV1::Uncaptured,
++            CourtEndEvidenceV1::Native {object,..}=>match object.as_ref(){
++                PalwConsensusObjectV2::CourtClosed {session_id,verdict,..} if *session_id==self.session_id=>CourtEndDispositionV1::NativeCourtVerdict(*verdict),
++                _=>CourtEndDispositionV1::RelatedNativeTransition,
++            },
++            CourtEndEvidenceV1::TirConviction {claim,..} if *claim==self.session.claim=>CourtEndDispositionV1::TirClaimFault,
++            _=>CourtEndDispositionV1::RelatedNativeTransition,
++        }
++    }
++
++    pub fn check(&self, key: &Key) -> Result<(), String> {
++        if self.version != 1 || *key != Key::CourtEndArchive(self.session_id)
++            || self.session.ladder.session_id() != self.session_id
++            || self.session.deadline_daa <= self.session.opened_daa
++            || self.session.dissection.as_ref().is_some_and(|p| p.session_id() != self.session_id)
++            || self.tir_phase.as_ref().is_some_and(|p| p.session_id() != self.session_id)
++            || self.archive_profile_id != court_end_archive_profile_id_v1(self.service_profile_id)
++            || self.groups.len() > 2 || self.applied_deposit_debits.len() > self.groups.len()
++            || self.fulfilled_groups.len() > self.groups.len()
++        { return Err("court archive scope/session/phase is inconsistent".into()); }
++        for (side, group) in &self.groups {
++            let declarer = match side { PalwCourtSideV1::Executor => self.producer, PalwCourtSideV1::Challenger => self.session.challenger_bond };
++            if group.declarer != declarer || group.deposit_outpoint != declarer.0
++                || group.count == 0 || group.count > PALW_COURT_CLOSE_MAX_CHUNKS
++                || group.chunk_digests.len() != group.count as usize
++                || group.assembly_deadline_daa > self.session.deadline_daa
++                || group.declared_daa < self.session.opened_daa
++                || group.declared_daa.checked_add(palw_close_assembly_daa_v1(group.count)) != Some(group.assembly_deadline_daa)
++                || group.present & !PalwCourtCloseGroupV2::full_mask(group.count) != 0
++                || group.chunks.len() != group.present.count_ones() as usize
++            { return Err("court archive changes an accepted group contract".into()); }
++            for (i, bytes) in &group.chunks {
++                if *i >= group.count || !group.has(*i) || bytes.is_empty() || bytes.len() > PALW_COURT_CLOSE_CHUNK_MAX_BYTES
++                    || palw_court_close_chunk_digest_v1(bytes) != group.chunk_digests[*i as usize]
++                { return Err("court archive chunk/bitmap/digest mismatch".into()); }
++            }
++        }
++        for (side, debit) in &self.applied_deposit_debits {
++            if self.groups.get(side).is_none_or(|g| !g.is_complete() || *debit > g.deposit) {
++                return Err("court archive settled debit has no complete bound group".into());
++            }
++        }
++        for side in &self.fulfilled_groups {
++            let group = self.groups.get(side).ok_or("fulfilled archive group missing")?;
++            if !group.is_complete() || self.applied_deposit_debits.contains_key(side) {
++                return Err("fulfilled group cannot also carry an applied penalty".into());
++            }
++            let CourtEndEvidenceV1::Native {object,..} = self.evidence.as_ref() else {
++                return Err("fulfilled group lacks its complete native close".into());
++            };
++            // Raw accepted chunks are authoritative material. Do not require
++            // re-encoding to the same bytes: legacy Borsh may admit an equivalent
++            // non-canonical representation. This context check is not another
++            // verdict adjudicator; the native verifier/reader consumes the raw
++            // completed object before using it as evidence.
++            if !matches!(object.as_ref(),PalwConsensusObjectV2::CourtClosed {session_id,verdict,..}
++                if *session_id==self.session_id && *verdict==group.verdict)
++                || palw_court_close_group_digest_v1(group).map_err(|e|e.to_string())? != group.close_digest
++            { return Err("fulfilled group does not assemble to its retained native close".into()); }
++        }
++        let point = match self.evidence.as_ref() {
++            CourtEndEvidenceV1::Uncaptured => None,
++            CourtEndEvidenceV1::Native { point, .. } => Some(point),
++            CourtEndEvidenceV1::TirConviction { point, .. } => Some(point),
++        };
++        if point.is_some_and(|p| p.daa_score < self.session.opened_daa) {
++            return Err("court archive cause predates the active session".into());
++        }
++        Ok(())
++    }
++    pub fn check_context(&self, state: &PalwChainStateV2) -> Result<(), String> {
++        self.check(&Key::CourtEndArchive(self.session_id))?;
++        if state.court_session(&self.session_id).is_some() || state.tir_dissection_v1(&self.session_id).is_some()
++            || state.court_close_groups_iter().any(|((id, _), _)| *id == self.session_id)
++        { return Err("archived court still has active rows".into()); }
++        let service = state.court_service_state_v1().ok_or("court archive service book missing")?;
++        let binding = service.claims.get(&self.session.claim).ok_or("court archive original binding missing")?;
++        let frame = crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(state, self.session.claim)
++            .ok_or("court archive original frame missing")?;
++        let until = crate::palw_court_service_state_v2::tir_service_required_material_until_v1(frame, binding.hard_deadline_daa)?;
++        if self.service_profile_id != service.profile_id || self.allocation_id != binding.allocation_id
++            || self.source_id != binding.source_id || self.producer != frame.custody_v1().pledge_v1().producer
++            || self.material_until_daa != until || state.claim(&self.session.claim).is_none()
++        { return Err("court archive substitutes original scope/material".into()); }
++        for bond in [self.producer,self.session.challenger_bond] {
++            if self.pending_nominal(&bond) != 0 && state.bond(&bond).is_none() {
++                return Err("court archive lost a pending financial actor".into());
++            }
++        }
++        Ok(())
++    }
++    /// Snapshot time is checked separately: an in-flight native writer still
++    /// has its parent's last_point until the whole block commits.
++    pub fn check_loaded_context(&self, state: &PalwChainStateV2) -> Result<(), String> {
++        self.check_context(state)?;
++        let point = match self.evidence.as_ref() {
++            CourtEndEvidenceV1::Uncaptured => None,
++            CourtEndEvidenceV1::Native {point,..} | CourtEndEvidenceV1::TirConviction {point,..} => Some(point),
++        };
++        if point.is_some_and(|p| state.last_point().is_none_or(|tip| p.daa_score > tip.daa_score)) {
++            return Err("court archive receipt is beyond the loaded accepted clock".into());
++        }
++        Ok(())
++    }
++    /// Nominal outstanding charge, NOT a posted balance or a guaranteed debit.
++    pub fn pending_nominal(&self, bond: &PalwBondKeyV2) -> u128 {
++        let groups: u128 = self.groups.iter().filter(|(side, g)| g.declarer == *bond
++            && !self.applied_deposit_debits.contains_key(side) && !self.fulfilled_groups.contains(side))
++            .map(|(_, g)| u128::from(g.deposit)).sum();
++        // An unadapted internal ending cannot silently free the unresolved
++        // court stake. This is a nominal hold, not new debt or deposited money.
++        if *bond == self.session.challenger_bond && matches!(self.evidence.as_ref(),CourtEndEvidenceV1::Uncaptured) {
++            groups.saturating_add(self.court_stake_nominal)
++        } else {groups}
++    }
++}
++impl PalwChainStateV2 {
++    pub fn court_end_archive_v1(&self, id: Hash64) -> Option<&PendingCourtArchiveV1> {
++        match self.staged_court_row_v1(&Key::CourtEndArchive(id)) { Some(Row::CourtEndArchive(a)) => Some(a.as_ref()), _ => None }
++    }
++    /// Conservative financial exposure, not an escrow or a supply certificate.
++    pub fn court_archive_pending_exposure_v1(&self, bond: &PalwBondKeyV2) -> u128 {
++        self.staged_cache_lease_rows_v1().filter_map(|(_,r)| match r { Row::CourtEndArchive(a) => Some(a.pending_nominal(bond)), _ => None })
++            .fold(0u128, u128::saturating_add)
++    }
++    pub fn court_archive_holds_bond_v1(&self, bond: &PalwBondKeyV2) -> bool {
++        self.staged_cache_lease_rows_v1().any(|(_,r)| matches!(r, Row::CourtEndArchive(a) if a.pending_nominal(bond) != 0))
++    }
++}
++
++/// Candidate namespace identity only; not a funded fee/capacity profile.
++pub fn court_end_archive_profile_id_v1(service:Hash64)->Hash64 {
++    Hash64::from_bytes(blake2b_simd::Params::new().hash_length(64).key(b"misaka-palw/court-end-archive/v1")
++        .hash(service.as_byte_slice()).as_bytes().try_into().expect("64-byte archive namespace"))
++}

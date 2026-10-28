@@ -1,0 +1,351 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "t5",
+  "kind": "encdec",
+  "extends": [
+    "encdec-frame"
+  ],
+  "doc": "T5 / mT5 / T5 v1.1 / Flan-T5: RMSNorm without a mean, pre-norm, unscaled scores, no absolute positions but a learned bias per head over bucketed relative positions (layer 0's table, shared by every layer of a stack; bidirectional in the encoder, causal in the decoder), ReLU or gated FFNs (feed_forward_proj), the decoder output scaled by d^-1/2 before a tied head (scale_decoder_outputs, else tie_word_embeddings). The data form of the T5 route that lower/encdec.rs read in Rust: the Rust reader (parse_encdec) is its oracle.",
+  "match": {
+    "architectures": [
+      "T5ForConditionalGeneration",
+      "MT5ForConditionalGeneration"
+    ],
+    "model_types": [
+      "t5",
+      "mt5"
+    ]
+  },
+  "config": {
+    "defaults": {
+      "feed_forward_proj": "relu",
+      "layer_norm_epsilon": 1e-06,
+      "relative_attention_num_buckets": 32,
+      "relative_attention_max_distance": 128
+    },
+    "inert": [
+      "dense_act_fn",
+      "is_gated_act",
+      "dropout_rate",
+      "n_positions",
+      "output_past"
+    ]
+  },
+  "vars": [
+    {
+      "name": "vocab",
+      "value": {
+        "$cfg": "vocab_size"
+      }
+    },
+    {
+      "name": "d",
+      "value": {
+        "$cfg": "d_model"
+      }
+    },
+    {
+      "name": "enc_heads",
+      "value": {
+        "$cfg": "num_heads"
+      }
+    },
+    {
+      "name": "dec_heads",
+      "value": {
+        "$var": "enc_heads"
+      }
+    },
+    {
+      "name": "enc_layers",
+      "value": {
+        "$cfg": "num_layers"
+      }
+    },
+    {
+      "name": "dec_layers",
+      "value": {
+        "$let": [
+          "n",
+          {
+            "$cfg?": "num_decoder_layers"
+          },
+          {
+            "$if": [
+              {
+                "$ne": [
+                  {
+                    "$var": "n"
+                  },
+                  null
+                ]
+              },
+              {
+                "$var": "n"
+              },
+              {
+                "$var": "enc_layers"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "enc_head_dim",
+      "value": {
+        "$cfg": "d_kv"
+      }
+    },
+    {
+      "name": "dec_head_dim",
+      "value": {
+        "$var": "enc_head_dim"
+      }
+    },
+    {
+      "name": "enc_ffn",
+      "value": {
+        "$cfg": "d_ff"
+      }
+    },
+    {
+      "name": "dec_ffn",
+      "value": {
+        "$var": "enc_ffn"
+      }
+    },
+    {
+      "name": "ffp",
+      "value": {
+        "$cfg": "feed_forward_proj"
+      }
+    },
+    {
+      "name": "gated",
+      "value": {
+        "$starts_with": [
+          {
+            "$var": "ffp"
+          },
+          "gated-"
+        ]
+      }
+    },
+    {
+      "name": "act_name",
+      "value": {
+        "$switch": [
+          {
+            "$var": "ffp"
+          },
+          {
+            "relu": "relu",
+            "gelu": "gelu",
+            "gelu_new": "gelu_new",
+            "silu": "silu",
+            "swish": "swish",
+            "gated-gelu": "gelu_new",
+            "gated-gelu_new": "gelu_new",
+            "gated-silu": "silu",
+            "gated-swish": "swish",
+            "gated-relu": "relu"
+          },
+          null
+        ]
+      }
+    },
+    {
+      "name": "act_ok",
+      "value": {
+        "$check": [
+          {
+            "$ne": [
+              {
+                "$var": "act_name"
+              },
+              null
+            ]
+          },
+          "feed_forward_proj is not one the lowerer models"
+        ]
+      }
+    },
+    {
+      "name": "act",
+      "value": {
+        "$act": {
+          "$var": "act_name"
+        }
+      }
+    },
+    {
+      "name": "rms",
+      "value": true
+    },
+    {
+      "name": "eps",
+      "value": {
+        "$cfg": "layer_norm_epsilon"
+      }
+    },
+    {
+      "name": "pre_norm",
+      "value": true
+    },
+    {
+      "name": "final_norm",
+      "value": true
+    },
+    {
+      "name": "positions",
+      "value": {
+        "Relative": {
+          "buckets": {
+            "$cfg": "relative_attention_num_buckets"
+          },
+          "max_distance": {
+            "$cfg": "relative_attention_max_distance"
+          }
+        }
+      }
+    },
+    {
+      "name": "attn_scale",
+      "value": 1.0
+    },
+    {
+      "name": "sdo",
+      "value": {
+        "$cfg?": "scale_decoder_outputs"
+      }
+    },
+    {
+      "name": "tie",
+      "value": {
+        "$cfg?": "tie_word_embeddings"
+      }
+    },
+    {
+      "name": "scale_out",
+      "value": {
+        "$if": [
+          {
+            "$ne": [
+              {
+                "$var": "sdo"
+              },
+              null
+            ]
+          },
+          {
+            "$var": "sdo"
+          },
+          {
+            "$ne": [
+              {
+                "$var": "tie"
+              },
+              false
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "head_scale",
+      "value": {
+        "$if": [
+          {
+            "$var": "scale_out"
+          },
+          {
+            "$pow": [
+              {
+                "$var": "d"
+              },
+              -0.5
+            ]
+          },
+          1.0
+        ]
+      }
+    },
+    {
+      "name": "names",
+      "value": {
+        "shared": "shared.weight",
+        "qkvo": [
+          "q",
+          "k",
+          "v",
+          "o"
+        ],
+        "enc": {
+          "prefix": "encoder.",
+          "layer": "encoder.block.{L}.",
+          "self_attn": "layer.0.SelfAttention",
+          "self_norm": "layer.0.layer_norm",
+          "ffn_norm": "layer.1.layer_norm",
+          "ffn_up": {
+            "$if": [
+              {
+                "$var": "gated"
+              },
+              "layer.1.DenseReluDense.wi_1",
+              "layer.1.DenseReluDense.wi"
+            ]
+          },
+          "ffn_down": "layer.1.DenseReluDense.wo",
+          "ffn_gate": {
+            "$if": [
+              {
+                "$var": "gated"
+              },
+              "layer.1.DenseReluDense.wi_0",
+              null
+            ]
+          },
+          "final_norm": "final_layer_norm",
+          "rel_bias": "layer.0.SelfAttention.relative_attention_bias.weight"
+        },
+        "dec": {
+          "prefix": "decoder.",
+          "layer": "decoder.block.{L}.",
+          "self_attn": "layer.0.SelfAttention",
+          "self_norm": "layer.0.layer_norm",
+          "ffn_norm": "layer.2.layer_norm",
+          "ffn_up": {
+            "$if": [
+              {
+                "$var": "gated"
+              },
+              "layer.2.DenseReluDense.wi_1",
+              "layer.2.DenseReluDense.wi"
+            ]
+          },
+          "ffn_down": "layer.2.DenseReluDense.wo",
+          "ffn_gate": {
+            "$if": [
+              {
+                "$var": "gated"
+              },
+              "layer.2.DenseReluDense.wi_0",
+              null
+            ]
+          },
+          "final_norm": "final_layer_norm",
+          "rel_bias": "layer.0.SelfAttention.relative_attention_bias.weight",
+          "cross_attn": "layer.1.EncDecAttention",
+          "cross_norm": "layer.1.layer_norm"
+        },
+        "lm_head": "lm_head.weight",
+        "ignored": [
+          "encoder.embed_tokens.",
+          "decoder.embed_tokens.",
+          "decoder.block.0.layer.1.EncDecAttention.relative_attention_bias."
+        ]
+      }
+    }
+  ]
+}

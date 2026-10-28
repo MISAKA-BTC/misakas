@@ -1,0 +1,18 @@
+    Blocking waiting for file lock on artifact directory
+   Compiling misaka-palw-kernel v1.1.0 (/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/misaka-palw-kernel)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 19.60s
+     Running unittests src/lib.rs (target/debug/deps/misaka_palw_kernel-f12a3fe57e2b7746)
+
+running 9 tests
+test merkle3::tests::producer_hash_cost_against_original_scalar_updates ... ignored, manual producer hash benchmark; hardware timing, not a consensus gate
+test merkle3::tests::a_wire_shape_that_overflows_is_malformed_never_a_panic ... ok
+test merkle3_stream::tests::bounds_overflow_and_reader_failure_are_refusals_before_large_allocation_or_partial_success ... ok
+test merkle3::tests::buffered_leaf_hashes_preserve_every_dtype_and_update_boundary ... ok
+test merkle3_stream::tests::streamed_raw_commitments_match_decoded_roots_and_authenticate_existing_openings ... ok
+test merkle3::tests::direct_row_and_column_hashing_preserves_original_roots_and_openings ... ok
+test merkle3::tests::every_row_range_proves_against_the_commitment ... ok
+test merkle3_stream::tests::simultaneous_row_and_column_tile_boundaries_keep_the_canonical_leaf_order ... ok
+test merkle3::tests::every_leaf_of_both_trees_opens_and_holds_its_elements has been running for over 60 seconds
+test merkle3::tests::every_leaf_of_both_trees_opens_and_holds_its_elements ... ok
+
+test result: ok. 8 passed; 0 failed; 1 ignored; 0 measured; 85 filtered out; finished in 135.82s

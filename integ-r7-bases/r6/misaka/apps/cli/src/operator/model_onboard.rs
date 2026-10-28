@@ -1,0 +1,431 @@
+//! **`misaka model onboard …`** (G14 onboarding P0): the signed registration envelope (tag 108) with detached signing, and the
+//! chain's conformance record read back and re-verified from public material.
+//!
+//! ```text
+//! envelope-export   registration object + bond + validity window  ── no key, no node ──►  request.json (UNSIGNED)
+//!                   (the fork digest is THIS build's `fork_id_v1(params, valid_from).fired`, never a node's answer)
+//! envelope-sign     request.json, re-derived and checked against THIS build's network and fork digest  ── the key ──►  envelope.borsh
+//!                   (file it: `misaka palw submit-object --object envelope.borsh`)
+//! status            op 231: the lifecycle state, the attempt, the beacon, the posted evidence, the gate
+//! verify            op 231; a complete-check attempt against caller-pinned roots (`model_complete`); every other attempt
+//!                   from one root-checked op 211 snapshot (+ its v4/v5 source books; + the artifact): the fresh verifier
+//!                   rebuilds the verdict
+//!                   and says whether it agrees with the chain
+//! ```
+//!
+//! The seed is read only by `envelope-sign`, from `--key-file` / `--key-stdin` (never an argument, never the environment), and only
+//! through the SDK's `EnvelopeSigner`; it is never printed or stored.
+
+use crate::node::Ctx;
+use crate::{CliError, CliResult, OutputFormat, exit};
+use kaspa_consensus_core::palw_state_v2::{PalwBondKeyV2, PalwConsensusObjectV2};
+use kaspa_rpc_core::GetPalwConformanceEvidenceRequest;
+use kaspa_rpc_core::api::rpc::RpcApi;
+use misaka_palw_sdk::onboarding_chain::{
+    EnvelopeSigner, PublicOnboardingReadsV1, SignedRegistrationRequestV1, fresh_verify_from_reads_v1, verify_signed_registration_v1,
+};
+use std::path::Path;
+use std::str::FromStr;
+
+/// The chain this CLI signs for: this build's own compiled parameters for `--network` (never a node's or a file's answer).
+fn params_of(ctx: &Ctx) -> Result<kaspa_consensus_core::config::params::Params, CliError> {
+    let net = kaspa_consensus_core::network::NetworkId::from_str(&ctx.network)
+        .map_err(|e| CliError::new(exit::CONFIG, format!("'{}' is not a network id: {e}", ctx.network)))?;
+    Ok(crate::wallet::chain_params(ctx, net)?.0)
+}
+
+fn parse_bond(text: &str) -> Result<PalwBondKeyV2, CliError> {
+    let (txid, index) = text.split_once(':').ok_or_else(|| CliError::new(exit::CONFIG, format!("bond {text}: not <txid>:<index>")))?;
+    Ok(PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(
+        txid.parse().map_err(|_| CliError::new(exit::CONFIG, format!("bond {text}: not a transaction id")))?,
+        index.parse().map_err(|_| CliError::new(exit::CONFIG, format!("bond {text}: not an index")))?,
+    )))
+}
+
+fn refusal(e: misaka_palw_sdk::runtime_pack::commit::Refusal) -> CliError {
+    CliError::new(exit::GENERIC, e.to_string())
+}
+
+/// **Step 1 (no key, no node):** wrap a registration object (Borsh, as `misaka palw tir-registration` writes it) in an UNSIGNED
+/// tag-108 request for `bond`, valid in `[valid_from_daa, valid_until_daa]` while the chain's fork digest is the one this build
+/// computes at `valid_from_daa` (F-C4R3-01(b)).
+pub(crate) fn envelope_export(
+    ctx: &Ctx,
+    registration: &Path,
+    bond: &str,
+    valid_from_daa: u64,
+    valid_until_daa: u64,
+    out: &Path,
+) -> CliResult {
+    let bytes = std::fs::read(registration).map_err(|e| CliError::new(exit::HOST, format!("{}: {e}", registration.display())))?;
+    let object: PalwConsensusObjectV2 = borsh::from_slice(&bytes)
+        .map_err(|e| CliError::new(exit::GENERIC, format!("{}: not a consensus object: {e}", registration.display())))?;
+    let params = params_of(ctx)?;
+    let request = SignedRegistrationRequestV1::for_network(object, parse_bond(bond)?, valid_from_daa, valid_until_daa, &params)
+        .map_err(refusal)?;
+    let text = serde_json::to_string_pretty(&request.to_json()).expect("json serializes");
+    std::fs::write(out, text).map_err(|e| CliError::new(exit::HOST, format!("{}: {e}", out.display())))?;
+    match ctx.output {
+        OutputFormat::Json => println!(
+            "{}",
+            serde_json::json!({"schema": "misaka.palw.onboard.envelope-export.v1", "out": out.display().to_string(), "signed": false})
+        ),
+        _ => {
+            println!("wrote {} (UNSIGNED tag-108 request, valid in DAA [{valid_from_daa}, {valid_until_daa}])", out.display());
+            println!(
+                "sign it where the key is: misaka model onboard envelope-sign --request {} --key-file <0600 file> --out <envelope>",
+                out.display()
+            );
+        }
+    }
+    Ok(())
+}
+
+struct KeySigner(kaspa_pq_validator_core::ValidatorKey);
+
+impl EnvelopeSigner for KeySigner {
+    fn public_key(&self) -> Vec<u8> {
+        self.0.public_key().to_vec()
+    }
+    fn sign_with_context(&self, message: &[u8], context: &[u8]) -> Result<Vec<u8>, String> {
+        Ok(self.0.sign_with_context(message, context).to_vec())
+    }
+}
+
+/// **Step 2 (the key, no node):** re-read the request, refuse it unless it is for THIS build's network and fork digest at its
+/// `valid_from_daa` and (when given) for `expect_bond`, re-derive the message from its fields, sign, verify, and write the envelope
+/// object (Borsh) for `misaka palw submit-object`.
+pub(crate) fn envelope_sign(
+    ctx: &Ctx,
+    request: &Path,
+    key: &crate::keys::KeySource,
+    expect_bond: Option<&str>,
+    out: &Path,
+) -> CliResult {
+    let text = std::fs::read_to_string(request).map_err(|e| CliError::new(exit::HOST, format!("{}: {e}", request.display())))?;
+    let req = SignedRegistrationRequestV1::from_json(&text).map_err(refusal)?;
+    let params = params_of(ctx)?;
+    if let Err(e) = req.check_for_network(&params) {
+        return Err(CliError::new(exit::NETWORK_MISMATCH, format!("{e} — for {} in this build: nothing was signed", ctx.network)));
+    }
+    if let Some(expect) = expect_bond
+        && parse_bond(expect)? != req.signer
+    {
+        return Err(CliError::new(exit::GENERIC, "the request names another signer bond than --expect-bond: nothing was signed"));
+    }
+    let signer = KeySigner(key.load_key()?);
+    let envelope = req.sign(&signer).map_err(refusal)?;
+    verify_signed_registration_v1(&envelope, req.network_domain, &signer.public_key()).map_err(refusal)?;
+    let bytes = borsh::to_vec(&envelope).expect("an object serializes");
+    std::fs::write(out, &bytes).map_err(|e| CliError::new(exit::HOST, format!("{}: {e}", out.display())))?;
+    match ctx.output {
+        OutputFormat::Json => println!(
+            "{}",
+            serde_json::json!({"schema": "misaka.palw.onboard.envelope-sign.v1", "out": out.display().to_string(), "bytes": bytes.len(),
+                "valid_until_daa": req.valid_until_daa, "message": req.message().to_string()})
+        ),
+        _ => {
+            println!(
+                "wrote {} ({} bytes): SignedRegistrationV1 (tag 108), valid through DAA {}",
+                out.display(),
+                bytes.len(),
+                req.valid_until_daa
+            );
+            println!("file it with: misaka palw submit-object --object {} --yes", out.display());
+        }
+    }
+    Ok(())
+}
+
+fn unhex(s: &str) -> Result<Vec<u8>, CliError> {
+    if !s.len().is_multiple_of(2) {
+        return Err(CliError::new(exit::GENERIC, "the node served odd-length hex"));
+    }
+    (0..s.len() / 2)
+        .map(|i| u8::from_str_radix(&s[2 * i..2 * i + 2], 16).map_err(|_| CliError::new(exit::GENERIC, "the node served non-hex")))
+        .collect()
+}
+
+/// **`status`**: op 231 as the chain states it.
+pub(crate) async fn status(ctx: &Ctx, class: &str) -> CliResult {
+    let nv = crate::wallet::connect(ctx).await?;
+    let r = nv
+        .client
+        .get_palw_conformance_evidence(GetPalwConformanceEvidenceRequest { class_id: class.to_string() })
+        .await
+        .map_err(|e| CliError::new(exit::CONNECTION, format!("getPalwConformanceEvidence: {e}")))?;
+    if ctx.output == OutputFormat::Json {
+        println!("{}", serde_json::to_string_pretty(&r).expect("json serializes"));
+        return Ok(());
+    }
+    if !r.found {
+        println!("class {class}: not found (available: {})", r.available);
+        return Ok(());
+    }
+    println!("class            {}", r.class_id);
+    println!(
+        "lifecycle        {}  (last failure: {}; last end: {})",
+        r.lifecycle_state,
+        or_dash(&r.last_failure),
+        or_dash(&r.attempt_end)
+    );
+    println!("attempts         {} of {}", r.attempts, r.attempt_limit);
+    println!("commitment       {} at DAA {} (epoch {})", or_dash(&r.statement_root), r.committed_daa, r.challenge_epoch);
+    println!(
+        "beacon           {} {}/{} lock {} output {}",
+        or_dash(&r.beacon_state),
+        r.beacon_have,
+        r.beacon_need,
+        r.lock_position,
+        or_dash(&r.beacon_output)
+    );
+    if r.evidence_posted {
+        println!("evidence         {} posted at DAA {}, refutable until DAA {}", r.evidence_id, r.evidence_daa, r.window_end_daa);
+    }
+    println!("gate             {} {} — {}", r.gate, r.gate_code, r.gate_reason);
+    println!("verify it yourself: misaka model onboard verify --class {class} [--artifact <PALWTIR1 file>]");
+    Ok(())
+}
+
+enum VerifiedBeaconSources {
+    OptIn(misaka_palw_sdk::onboarding_chain::VerifiedOptInSourcesV4),
+    Paid(misaka_palw_sdk::onboarding_chain::VerifiedPaidOptInSourcesV5),
+}
+impl VerifiedBeaconSources {
+    fn fee_contract(&self) -> Option<&misaka_palw_sdk::onboarding_chain::SourceFeeFundingV1> {
+        match self {
+            Self::OptIn(s) => s.fee_contract(),
+            Self::Paid(s) => s.fee_contract(),
+        }
+    }
+}
+
+/// **One conformance snapshot from op 211**: the SDK rebuilds every page and checks both served roots.
+/// The tip, roots, header and row count must match across pages; a moved snapshot is refused. An opt-in (v4) or paid (v5) source
+/// attempt also rebuilds its rooted target, reservations and fee book from the SAME rows (codex RFC-7; R6781-F merge).
+async fn kernel_conformance_reads(
+    nv: &crate::wallet::NodeView,
+    class: kaspa_consensus_core::Hash64,
+) -> Result<(PublicOnboardingReadsV1, Option<VerifiedBeaconSources>), CliError> {
+    use kaspa_rpc_core::GetPalwKernelRowsRequest;
+    use misaka_palw_sdk::onboarding_snapshot::{KernelRowsPageV1, KernelRowsSnapshotV1, MAX_SNAPSHOT_BYTES_V1};
+    let mut snapshot = KernelRowsSnapshotV1::default();
+    let mut request = GetPalwKernelRowsRequest::default();
+    loop {
+        let page = nv
+            .client
+            .get_palw_kernel_rows(request.clone())
+            .await
+            .map_err(|e| CliError::new(exit::CONNECTION, format!("getPalwKernelRows: {e}")))?;
+        if !page.available {
+            return Err(CliError::new(exit::NOT_READY, "this node serves no kernel route rows (op 211)"));
+        }
+        // Bound hex decoding before allocating an additional copy of an untrusted page.
+        let encoded_bytes = page
+            .rows
+            .iter()
+            .try_fold(page.header.len(), |sum, r| sum.checked_add(r.key.len()).and_then(|n| n.checked_add(r.row.len())));
+        if page.header.len() > 2 * (64 << 10)
+            || encoded_bytes.is_none_or(|n| n > 2 * MAX_SNAPSHOT_BYTES_V1)
+            || page.next_key.len() > 2 * MAX_SNAPSHOT_BYTES_V1
+        {
+            return Err(CliError::new(exit::GENERIC, "SNAPSHOT_TOO_LARGE: served page exceeds the local reader ceiling"));
+        }
+        let root = |s: &str| {
+            kaspa_consensus_core::Hash64::from_str(s).map_err(|_| CliError::new(exit::GENERIC, "the node served a malformed root"))
+        };
+        let mut rows = Vec::new();
+        for r in &page.rows {
+            let table = u8::try_from(r.table).map_err(|_| CliError::new(exit::GENERIC, "the node served a table number past u8"))?;
+            rows.push((table, unhex(&r.key)?, unhex(&r.row)?));
+        }
+        let next = if page.more {
+            Some((
+                u8::try_from(page.next_table).map_err(|_| CliError::new(exit::GENERIC, "the cursor table is past u8"))?,
+                unhex(&page.next_key)?,
+            ))
+        } else {
+            None
+        };
+        let next = snapshot
+            .push(KernelRowsPageV1 {
+                tip_daa: page.tip_daa,
+                ledger_root: root(&page.ledger_root)?,
+                aux_root: root(&page.aux_root)?,
+                header: unhex(&page.header)?,
+                total_rows: page.total_rows,
+                rows,
+                next,
+            })
+            .map_err(refusal)?;
+        match next {
+            None => break,
+            Some((table, key)) => {
+                request = GetPalwKernelRowsRequest {
+                    has_cursor: true,
+                    after_table: table as u32,
+                    after_key: misaka_palw_sdk::runtime_pack::commit::hex(&key),
+                    max_bytes: 0,
+                }
+            }
+        }
+    }
+    let (header, rows, ledger_root, aux_root) = snapshot.served_v1().map_err(refusal)?;
+    let reads = snapshot.into_onboarding_reads_v1(class).map_err(refusal)?;
+    let PublicOnboardingReadsV1::Sampled(sampled) = &reads else { return Ok((reads, None)) };
+    // v4 rebuilds its exact rooted target/reservations/fee book; ordinary sealed sources cannot substitute (codex).
+    let attempt = borsh::from_slice::<kaspa_consensus_core::palw_onboarding_v1::ConformanceAttemptRowV1>(&sampled.attempt_row)
+        .map_err(|e| CliError::new(exit::GENERIC, format!("the attempt row does not decode: {e}")))?;
+    if !attempt.is_opt_in_source() {
+        return Ok((reads, None));
+    }
+    let context = attempt.beacon_context(&attempt.policy()).id();
+    let sources = if attempt.is_paid_opt_in_source() {
+        VerifiedBeaconSources::Paid(
+            misaka_palw_sdk::onboarding_chain::paid_opt_in_sources_from_kernel_rows_v5(
+                &header,
+                rows,
+                &ledger_root,
+                &aux_root,
+                &context,
+            )
+            .map_err(refusal)?,
+        )
+    } else {
+        VerifiedBeaconSources::OptIn(
+            misaka_palw_sdk::onboarding_chain::opt_in_sources_from_kernel_rows_v4(&header, rows, &ledger_root, &aux_root, &context)
+                .map_err(refusal)?,
+        )
+    };
+    Ok((reads, Some(sources)))
+}
+
+fn or_dash(s: &str) -> &str {
+    if s.is_empty() { "-" } else { s }
+}
+
+/// **`verify`**: op 231 names the attempt; a complete-check attempt is verified against the caller's pinned roots
+/// (`model_complete`, codex), every other one from one root-checked op-211 snapshot (and the public artifact).
+pub(crate) async fn verify(
+    ctx: &Ctx,
+    class: &str,
+    artifact: Option<&Path>,
+    ledger_root: Option<&str>,
+    aux_root: Option<&str>,
+    tip_daa: Option<u64>,
+) -> CliResult {
+    let nv = crate::wallet::connect(ctx).await?;
+    let class_id =
+        kaspa_consensus_core::Hash64::from_str(class).map_err(|_| CliError::new(exit::CONFIG, "class is not a full class id"))?;
+    let r = nv
+        .client
+        .get_palw_conformance_evidence(GetPalwConformanceEvidenceRequest { class_id: class.to_string() })
+        .await
+        .map_err(|e| CliError::new(exit::CONNECTION, format!("getPalwConformanceEvidence: {e}")))?;
+    if !r.found || r.attempt_row.is_empty() {
+        return Err(CliError::new(exit::NOT_READY, format!("class {class}: no conformance record on this node")));
+    }
+    if r.attempt_row.len() > 2 << 20 || r.program.len() > misaka_palw_sdk::complete_check::COMPLETE_CHECK_MAX_PROGRAM_BYTES_V1 * 2 {
+        return Err(CliError::new(exit::GENERIC, "the conformance response exceeds the tooling read limits"));
+    }
+    if r.class_id != class {
+        return Err(CliError::new(exit::GENERIC, "the node served a conformance record for another class"));
+    }
+    let check = borsh::from_slice::<kaspa_consensus_core::palw_onboarding_v1::ConformanceAttemptRowV1>(&unhex(&r.attempt_row)?)
+        .map_err(|e| CliError::new(exit::GENERIC, format!("the attempt row does not decode: {e}")))?;
+    if check.is_complete_check() {
+        return super::model_complete::verify(ctx, &nv, &r, artifact, ledger_root, aux_root, tip_daa).await;
+    }
+    let (reads, opt_in_sources) = kernel_conformance_reads(&nv, class_id).await?;
+    let reads = match reads {
+        PublicOnboardingReadsV1::Sampled(reads) => reads,
+        PublicOnboardingReadsV1::CompleteCheck(_) => {
+            return Err(CliError::new(
+                exit::GENERIC,
+                "SNAPSHOT_MOVED: op 211's attempt is a complete check where op 231's is not; run verify again",
+            ));
+        }
+    };
+    let report = match opt_in_sources.as_ref() {
+        Some(VerifiedBeaconSources::OptIn(sources)) => {
+            misaka_palw_sdk::onboarding_chain::fresh_verify_from_reads_v4(&reads, sources, artifact)
+        }
+        Some(VerifiedBeaconSources::Paid(sources)) => {
+            misaka_palw_sdk::onboarding_chain::fresh_verify_from_reads_v5(&reads, sources, artifact)
+        }
+        None => fresh_verify_from_reads_v1(&reads, artifact),
+    }
+    .map_err(refusal)?;
+    let source_fee = opt_in_sources.as_ref().and_then(|s| s.fee_contract()).map(|f| {
+        serde_json::json!({
+            "fee_per_source_sompi":f.terms.fee_per_source,"max_sources":f.terms.max_sources,
+            "held_sompi":f.held,"paid_sompi":f.paid,"refunded_sompi":f.refunded,
+        })
+    });
+    let source_cost_bounds = match opt_in_sources.as_ref() {
+        Some(VerifiedBeaconSources::Paid(s)) => {
+            let b = s.cost_bounds();
+            Some(serde_json::json!({
+                "execution_sompi":b.execution_sompi,"carrier_sompi":b.carrier_sompi,
+                "material_sompi":b.material_sompi,"public_court_sompi":b.public_court_sompi,
+                "locked_capital_sompi":b.locked_capital_sompi,"minimum_net_receipt_sompi":b.minimum_net_receipt_sompi,
+                "maximum_source_deposit_sompi":b.maximum_source_deposit_sompi,"maximum_liability_daa":b.maximum_liability_daa,
+                "report_root":misaka_palw_sdk::runtime_pack::commit::hex(&b.report_root),
+            }))
+        }
+        _ => None,
+    };
+    let v = &report.verdict;
+    let posted = match &v.posted {
+        None => "none".to_string(),
+        Some(Ok(())) => "bound, rebuilt exactly, a pass".to_string(),
+        Some(Err(why)) => why.clone(),
+    };
+    if ctx.output == OutputFormat::Json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "schema": "misaka.palw.onboard.verify.v1",
+                "class": class,
+                "source_fee":source_fee,
+                "source_cost_bounds":source_cost_bounds,
+                "beacon": v.beacon,
+                "seed": v.seed.map(|s| misaka_palw_sdk::runtime_pack::commit::hex(&s)),
+                "posted": posted,
+                "vectors_selected": v.vectors_selected,
+                "leaves_selected": v.leaves_selected,
+                "leaves_rechecked": v.leaves_rechecked,
+                "leaf_faults": v.leaf_faults,
+                "chain_state": report.attempt.record.state.code(),
+                "agrees": report.agrees,
+                "why": report.why,
+                "note": "vector logits/commits digests are not re-executed here (the runtime pack's verify-conformance does); their tokens are refutable through a Final kernel claim",
+            })
+        );
+    } else {
+        println!("beacon           {}", v.beacon);
+        if let Some(f) = opt_in_sources.as_ref().and_then(|s| s.fee_contract()) {
+            println!(
+                "source fee       {} sompi/source, {} slots; held {}, paid {}, refunded {} sompi",
+                f.terms.fee_per_source, f.terms.max_sources, f.held, f.paid, f.refunded
+            );
+        }
+        if let Some(VerifiedBeaconSources::Paid(s)) = opt_in_sources.as_ref() {
+            println!("source net floor {} sompi under the frozen cost bounds", s.cost_bounds().minimum_net_receipt_sompi);
+        }
+        println!("posted evidence  {posted}");
+        println!(
+            "selection        {} vector(s), {} leaf(s); re-read {} leaf(s) from the artifact, {} contradict it",
+            v.vectors_selected,
+            v.leaves_selected,
+            v.leaves_rechecked,
+            v.leaf_faults.len()
+        );
+        println!("chain            {} — {}", report.attempt.record.state.code(), if report.agrees { "AGREES" } else { "DISAGREES" });
+        println!("                 {}", report.why);
+        for check in &v.leaf_faults {
+            println!("refutable        LeafDecode at check {check}: file a tag-109 Refute with the leaf's opening");
+        }
+    }
+    if report.agrees { Ok(()) } else { Err(CliError::new(exit::GENERIC, "the fresh verifier disagrees with the chain")) }
+}

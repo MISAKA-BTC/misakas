@@ -1,0 +1,471 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "dbrx",
+  "doc": "DBRX (Databricks): nested attn_config / ffn_config, bias-free LayerNorms (norm_1 before the attention, norm_2 before the FFN), a fused Wqkv (rows q|k|v) with clip_qkv, GQA with kv_n_heads, a softmax router with top-k renormalised by the L1 norm (moe_normalize_expert_weights = 1), and SwiGLU experts whose three matrices w1 (gate), v1 (up) and w2 (down) are stored FLAT: each a bare parameter [E*I, D] (down stored [I, D] per expert, i.e. transposed). The flat storage is read by WEIGHTS_EXPR_V1 (spec.hf.weights): a reshape to [E, I, D], and a transpose for the down matrices. Third-party adapter (lane H), the weights expressions by lane G (FR-01): data only.",
+  "extends": [
+    "decoder-core"
+  ],
+  "match": {
+    "architectures": [
+      "DbrxForCausalLM"
+    ],
+    "model_types": [
+      "dbrx"
+    ]
+  },
+  "config": {
+    "defaults": {
+      "vocab_size": 32000,
+      "d_model": 2048,
+      "n_heads": 16,
+      "n_layers": 24,
+      "max_seq_len": 2048,
+      "attn_config": {
+        "clip_qkv": null,
+        "kv_n_heads": 1,
+        "rope_theta": 10000.0,
+        "attn_pdrop": 0.0
+      },
+      "ffn_config": {
+        "ffn_hidden_size": 3584,
+        "moe_num_experts": 4,
+        "moe_top_k": 1,
+        "moe_normalize_expert_weights": 1.0,
+        "ffn_act_fn": {
+          "name": "silu"
+        },
+        "moe_jitter_eps": null,
+        "moe_loss_weight": 0.01,
+        "hidden_size": 2048
+      },
+      "tie_word_embeddings": false
+    },
+    "inert": [
+      "resid_pdrop",
+      "emb_pdrop",
+      "output_router_logits",
+      "num_key_value_heads",
+      "rope_parameters"
+    ]
+  },
+  "vars": [
+    {
+      "name": "vocab",
+      "value": {
+        "$cfg": "vocab_size"
+      }
+    },
+    {
+      "name": "hidden",
+      "value": {
+        "$cfg": "d_model"
+      }
+    },
+    {
+      "name": "n",
+      "value": {
+        "$cfg": "n_layers"
+      }
+    },
+    {
+      "name": "heads",
+      "value": {
+        "$cfg": "n_heads"
+      }
+    },
+    {
+      "name": "max_pos",
+      "value": {
+        "$cfg": "max_seq_len"
+      }
+    },
+    {
+      "name": "ac",
+      "value": {
+        "$cfg": "attn_config"
+      }
+    },
+    {
+      "name": "fc",
+      "value": {
+        "$cfg": "ffn_config"
+      }
+    },
+    {
+      "name": "kv",
+      "value": {
+        "$get": [
+          {
+            "$var": "ac"
+          },
+          "kv_n_heads"
+        ]
+      }
+    },
+    {
+      "name": "hd",
+      "value": {
+        "$idiv": [
+          {
+            "$var": "hidden"
+          },
+          {
+            "$var": "heads"
+          }
+        ]
+      }
+    },
+    {
+      "name": "dims_ok",
+      "value": {
+        "$bad": [
+          {
+            "$and": [
+              {
+                "$gt": [
+                  {
+                    "$var": "kv"
+                  },
+                  0
+                ]
+              },
+              {
+                "$eq": [
+                  {
+                    "$mod": [
+                      {
+                        "$var": "heads"
+                      },
+                      {
+                        "$var": "kv"
+                      }
+                    ]
+                  },
+                  0
+                ]
+              }
+            ]
+          },
+          "heads and kv heads are inconsistent"
+        ]
+      }
+    },
+    {
+      "name": "clip",
+      "value": {
+        "$get": [
+          {
+            "$var": "ac"
+          },
+          "clip_qkv"
+        ]
+      }
+    },
+    {
+      "name": "inter",
+      "value": {
+        "$get": [
+          {
+            "$var": "fc"
+          },
+          "ffn_hidden_size"
+        ]
+      }
+    },
+    {
+      "name": "e",
+      "value": {
+        "$get": [
+          {
+            "$var": "fc"
+          },
+          "moe_num_experts"
+        ]
+      }
+    },
+    {
+      "name": "k",
+      "value": {
+        "$get": [
+          {
+            "$var": "fc"
+          },
+          "moe_top_k"
+        ]
+      }
+    },
+    {
+      "name": "norm_p",
+      "value": {
+        "$get": [
+          {
+            "$var": "fc"
+          },
+          "moe_normalize_expert_weights"
+        ]
+      }
+    },
+    {
+      "name": "p_ok",
+      "value": {
+        "$check": [
+          {
+            "$or": [
+              {
+                "$eq": [
+                  {
+                    "$var": "norm_p"
+                  },
+                  null
+                ]
+              },
+              {
+                "$eq": [
+                  {
+                    "$var": "norm_p"
+                  },
+                  1.0
+                ]
+              }
+            ]
+          },
+          "only moe_normalize_expert_weights 1 (L1) or null is modelled"
+        ]
+      }
+    },
+    {
+      "name": "act_name",
+      "value": {
+        "$get": [
+          {
+            "$get": [
+              {
+                "$var": "fc"
+              },
+              "ffn_act_fn"
+            ]
+          },
+          "name"
+        ]
+      }
+    },
+    {
+      "name": "act",
+      "value": {
+        "$act": {
+          "$var": "act_name"
+        }
+      }
+    },
+    {
+      "name": "rope_theta",
+      "value": {
+        "$get": [
+          {
+            "$var": "ac"
+          },
+          "rope_theta"
+        ]
+      }
+    },
+    {
+      "name": "tied",
+      "value": {
+        "$cfg": "tie_word_embeddings"
+      }
+    },
+    {
+      "name": "norm",
+      "value": {
+        "kind": "Layer",
+        "eps": 1e-05,
+        "gain": "W",
+        "bias": false
+      }
+    },
+    {
+      "name": "qkv_bias",
+      "value": false
+    },
+    {
+      "name": "o_bias",
+      "value": false
+    },
+    {
+      "name": "mbias",
+      "value": false
+    },
+    {
+      "name": "qkv_layout",
+      "value": "FusedConcat"
+    },
+    {
+      "name": "l_mixer",
+      "value": {
+        "Attention": {
+          "heads": {
+            "$var": "heads"
+          },
+          "kv_heads": {
+            "$var": "kv"
+          },
+          "head_dim": {
+            "$var": "hd"
+          },
+          "v_head_dim": {
+            "$var": "hd"
+          },
+          "q_bias": false,
+          "k_bias": false,
+          "v_bias": false,
+          "o_bias": false,
+          "qk_norm": null,
+          "clip_qkv": {
+            "$var": "clip"
+          },
+          "position": {
+            "$var": "l_position"
+          },
+          "scale": {
+            "$var": "attn_scale"
+          },
+          "window": null,
+          "q_temperature": null
+        }
+      },
+      "layer": true
+    },
+    {
+      "name": "router",
+      "value": {
+        "scoring": "Softmax",
+        "linear_bias": false,
+        "selection_bias": false,
+        "groups": null,
+        "normalize": {
+          "$ne": [
+            {
+              "$var": "norm_p"
+            },
+            null
+          ]
+        },
+        "norm_eps": 0.0,
+        "scale": 1.0,
+        "jitter_eps": 0.0,
+        "per_expert_scale": false
+      }
+    },
+    {
+      "name": "l_ffn",
+      "value": {
+        "Moe": {
+          "experts": {
+            "$var": "e"
+          },
+          "top_k": {
+            "$var": "k"
+          },
+          "intermediate": {
+            "$var": "inter"
+          },
+          "act": {
+            "$var": "act"
+          },
+          "router": {
+            "$var": "router"
+          },
+          "shared": null
+        }
+      },
+      "layer": true
+    },
+    {
+      "name": "names",
+      "value": {
+        "embed": "transformer.wte",
+        "final_norm": "transformer.norm_f",
+        "lm_head": {
+          "$if": [
+            {
+              "$var": "tied"
+            },
+            "transformer.wte",
+            "lm_head"
+          ]
+        },
+        "norm.mix": "transformer.blocks.{L}.norm_attn_norm.norm_1",
+        "norm.ffn": "transformer.blocks.{L}.norm_attn_norm.norm_2",
+        "attn.qkv": "transformer.blocks.{L}.norm_attn_norm.attn.Wqkv",
+        "attn.o": "transformer.blocks.{L}.norm_attn_norm.attn.out_proj",
+        "moe.router": "transformer.blocks.{L}.ffn.router.layer"
+      }
+    },
+    {
+      "name": "families",
+      "value": [
+        "C3",
+        "C8"
+      ]
+    },
+    {
+      "name": "model_type",
+      "value": "dbrx"
+    }
+  ],
+  "spec": {
+    "hf": {
+      "weights": {
+        "moe.experts.gate": [
+          "transformer.blocks.{L}.ffn.experts.mlp.w1",
+          {
+            "reshape": [
+              {
+                "$var": "e"
+              },
+              {
+                "$var": "inter"
+              },
+              {
+                "$var": "hidden"
+              }
+            ]
+          }
+        ],
+        "moe.experts.up": [
+          "transformer.blocks.{L}.ffn.experts.mlp.v1",
+          {
+            "reshape": [
+              {
+                "$var": "e"
+              },
+              {
+                "$var": "inter"
+              },
+              {
+                "$var": "hidden"
+              }
+            ]
+          }
+        ],
+        "moe.experts.down": [
+          "transformer.blocks.{L}.ffn.experts.mlp.w2",
+          {
+            "reshape": [
+              {
+                "$var": "e"
+              },
+              {
+                "$var": "inter"
+              },
+              {
+                "$var": "hidden"
+              }
+            ]
+          },
+          "transpose"
+        ]
+      }
+    }
+  }
+}

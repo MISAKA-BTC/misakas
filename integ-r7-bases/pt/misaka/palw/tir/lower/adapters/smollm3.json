@@ -1,0 +1,22 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "smollm3",
+  "doc": "SmolLM3: the standard decoder with no_rope_layers (layers without rotary positions: every no_rope_layer_interval-th by default) and an optional Qwen-style window; tied, theta 2e6.",
+  "extends": ["decoder-core", "mixin-qwen-sliding"],
+  "match": {"architectures": ["SmolLM3ForCausalLM"], "model_types": ["smollm3"]},
+  "config": {
+    "defaults": {"vocab_size": 128256, "hidden_size": 2048, "num_hidden_layers": 36, "num_attention_heads": 16, "num_key_value_heads": 4, "max_position_embeddings": 32768, "tie_word_embeddings": true}
+  },
+  "vars": [
+    {"name": "rope_theta", "value": 2000000.0},
+    {"name": "sw_raw", "value": {"$cfgn": "sliding_window"}},
+    {"name": "no_rope_interval", "value": {"$cfg": ["no_rope_layer_interval", 4]}},
+    {"name": "no_rope", "value": {"$let": ["l", {"$cfg?": "no_rope_layers"}, {"$if": [{"$ne": [{"$var": "l"}, null]}, {"$let": ["_", {"$bad": [{"$eq": [{"$len": {"$var": "l"}}, {"$var": "n"}]}, "no_rope_layers has the wrong number of entries"]}, {"$map": [{"$var": "l"}, "v", {"$eq": [{"$var": "v"}, 0]}]}]}, {"$map": [{"$range": {"$var": "n"}}, "i", {"$eq": [{"$mod": [{"$add": [{"$var": "i"}, 1]}, {"$var": "no_rope_interval"}]}, 0]}]}]}]}},
+    {"name": "l_position", "layer": true, "value": {"$if": [{"$index": [{"$var": "no_rope"}, {"$var": "i"}]}, "None", {"Rope": {"$var": "rope"}}]}},
+    {"name": "families", "value": {"$if": [{"$or": [{"$ne": [{"$var": "sw"}, null]}, {"$contains": [{"$var": "no_rope"}, true]}]}, ["C1", "C2"], ["C1"]]}},
+    {"name": "model_type", "value": "smollm3"}
+  ],
+  "spec": {
+    "confidence": {"Unsure": ["SmolLM3 no_rope_layers convention (1 = rope, 0 = NoPE) as recalled"]}
+  }
+}

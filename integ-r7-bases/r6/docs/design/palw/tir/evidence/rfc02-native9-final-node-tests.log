@@ -1,0 +1,43 @@
+
+running 35 tests
+FLAT_CANDIDATE7_NATIVE_METADATA N=10485760 max_positions=2097152 court_bytes=37875 court_work=4964969 auxiliary_bytes=128 no_weights_or_job_executed=true
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_candidate7_native_long_topk_is_registered_as_metadata_without_legacy_execution_rights ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_model_vector_node_scope_identity_and_hostile_filings_pay_shared_budgets_without_poisoning ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_candidate7_native_shares_legacy_catalog_and_cannot_spend_reserved_proof_budget ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_candidate7_native_mature_binding_independent_plan_paid_refusals_and_replay ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_native_v7::flat_v7_native_fixed_text_length_specialization_is_identity_bound_and_cannot_grow_or_bypass_scope ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_model_vector_node_admits_typed_scope_convicts_leaf_and_whole_once_and_replays_redemption ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_native_v7::flat_v7_native_mature_proof_uses_guaranteed_budget_after_admission_flood ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_hash_da_node_fresh_public_reads_localize_late_leaf_and_convict_without_output_values ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_native_v7::flat_v7_native_own_chunk_lane_refuses_unsealed_and_borrowed_actor_survives_generic_saturation ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_native_v9::flat_v9_native_mature_proof_uses_guaranteed_budget_after_admission_flood ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_native_v9::flat_v9_native_own_chunk_lane_refuses_unsealed_and_borrowed_actor_survives_generic_saturation ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_native_v7::flat_v7_native_fresh_ibd_and_pruned_registered_participant_public_acquisition_conviction_and_redemption ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_v3_node_preemption_counterexample_and_staged_v6_seal_rejects_equivalent_carrier ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_v6_native_mature_proof_uses_reserved_budget_after_admission_flood ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_v6_native_own_sealed_chunks_survive_generic_saturation_and_refuse_borrowed_actors ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_native_v9::flat_v9_native_fresh_ibd_and_pruned_registered_participant_public_acquisition_conviction_and_redemption ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_v6_native_seal_blocks_equivalent_preemption_legacy_bypass_and_pays_finder_once ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_hash_da_node_shared_slots_response_priority_withholding_and_horizon_hold ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_native_v7::flat_v7_candidate_owner_withdraw_retains_live_metadata_and_reuses_catalog_after_liability ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_native_v9::real_checkpoint::flat_v9_actual_qwen32_public_point1500_own_seal_original_principal_and_native_replay ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_model_vector_node_and_v2_catalogs_share_the_same_capital_and_eight_statement_limit ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::model_vector_wrong_roots_scope_and_invalid_refutations_cost_only_the_actor ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::scoped_model_complete_check_cannot_be_poisoned_by_an_earlier_false_source_root ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::model_vector_new_large_vocab_candidates_have_public_courts_without_a_final_or_execution_rights ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_v6_native_seals_bound_actor_slots_hold_capital_and_forfeit_expired_false_seals ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_native_v7::flat_v7_native_selected_value_default_holds_original_horizon_and_cannot_be_slashed_again ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::scoped_model_complete_check_wrong_roles_and_floods_spend_only_attackers_budget ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_native_v9::flat_v9_native_selected_value_default_holds_original_horizon_and_cannot_be_slashed_again ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_native_v7::flat_v7_native_independent_sparse_state_checker_public_values_own_seal_once_capital_and_redemption has been running for over 60 seconds
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_native_v9::flat_v9_candidate_owner_withdraw_retains_live_metadata_and_reuses_catalog_after_liability ... ok
+candidate Gather: source_bytes=4194304 opening_bound=21602 court_work=10019328 proof_bytes=3288 selected_parameter_leaves=1
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_native_v7::flat_v7_native_independent_sparse_state_checker_public_values_own_seal_once_capital_and_redemption ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::model_vector_da_public_replies_enable_a_fresh_whole_value_conviction_without_model_disclosure ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::scoped_model_complete_check_registers_encoder_and_stateful_decoder_without_identity_hooks ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::model_vector_catalog_shares_capital_and_keeps_its_bound_after_clocked_release ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::model_vector_da_deadlines_hold_capital_and_responses_survive_a_full_court_budget ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_native_v9::flat_v9_native_independent_sparse_state_checker_public_values_own_seal_once_capital_and_redemption ... ok
+
+test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 807 filtered out; finished in 69.89s
+

@@ -1,0 +1,23 @@
+{
+  "request": {
+    "messages": [
+      {
+        "role": "user",
+        "content": "Weather in Paris?"
+      }
+    ],
+    "functions": [
+      {
+        "name": "get_weather",
+        "parameters": {
+          "type": "object"
+        }
+      }
+    ],
+    "function_call": "auto"
+  },
+  "expect": {
+    "verdict": "refused",
+    "reason_contains": "`functions` is OpenAI's legacy tool surface"
+  }
+}

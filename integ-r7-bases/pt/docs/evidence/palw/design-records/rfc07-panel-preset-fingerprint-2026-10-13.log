@@ -1,0 +1,10 @@
+
+running 1 test
+const                 : 3de9ba33581b12b8478a1d476a4e58889ed21ddb91dc24cc00706f49dd5b5b97
+Params::from(net)     : 0d9cf361e02dea6d9e873014ff5e414c2e8e6879e8d705cde6c924a3a3f8dd88
+Params::from(id{10})  : 0d9cf361e02dea6d9e873014ff5e414c2e8e6879e8d705cde6c924a3a3f8dd88
+TESTNET_PARAMS.net    : NetworkId { network_type: Testnet, suffix: Some(10) }
+test config::params::fingerprint_probe::the_pinned_testnet_fingerprint_is_the_one_a_node_announces ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3921 filtered out; finished in 0.00s
+

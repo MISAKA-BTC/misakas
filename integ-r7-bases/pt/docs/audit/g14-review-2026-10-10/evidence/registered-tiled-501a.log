@@ -1,0 +1,319 @@
+
+running 4 tests
+test palw_panel::palw_service_public_e2e::fresh_public_bond_service_registered_tiled_constraint_beaten_across_tiles ... [service-tiled] ordinary geometry hidden 256, FP work 9012040, native network quantum 2707216
+[service-tiled] ordinary signed class registration accepted; root c9acf5b17d129f344c6cc9c70e075a8a5dd39420f1e2d8b43afb108c08a136ea52b71c995b63f2295ffdb5e6c3edd63db747e60b15f51efc60572b2f62d646cc, 4099 lanes, canonical 1/2
+[service-public] normal FP family certification accepted from 3 public drill carriers
+[service-public] registered FP graph publicly carried by ordinary ClassLaneCertified
+[service-public] heartbeat advance 134 -> 1010
+[service-public] heartbeat advance 259 -> 1010
+[service-public] heartbeat advance 384 -> 1010
+[service-public] heartbeat advance 509 -> 1010
+[service-public] heartbeat advance 634 -> 1010
+[service-public] heartbeat advance 759 -> 1010
+[service-public] heartbeat advance 884 -> 1010
+[service-public] heartbeat advance 1009 -> 1010
+[service-public] ordinary bond registered before DAA 9, maturity 1000, now 1010
+[service-tiled] normal jury at span 1112: state Some(Probation { probes_passed: 0 }), ready 7, room 2543549, reason probing: 0/10 finals passed, 0 failed since entry
+[service-public] ordinary FP Job V6 admission: claim f28bc3934129a3fd53b95d4805e2b4cdfd6dcafbefe76ac8bd56a7347fc291b9f1619405cfe4b18e89d9d0f781d69d4a63a10485e60edbf2b190edf86d6d28b0, 2 quanta, 6611032 pwu, fee 331137
+[service-public] fresh database validated 2271 public blocks at DAA 1135
+[service-public] original FP body/acceptance rows pruned; rooted job metadata present = false
+2026-10-11 19:21:40.344+09:00 [INFO ] [palw-panel] starting (bond=(7114f092bc0636065fe3c89afd5990bc40b3f135d488f8586864200832cf82a518979cc2063477c11f1a1d2794ea97c5edb6c63d36a7257ec0808a954bcbc571, 0), submitter=funded, register=off)
+2026-10-11 19:21:42.508+09:00 [INFO ] [palw-panel] claim 6c23e00c22b9cfb73160b7f5e37c7a319b375da0d7faf51be3435f3f284293c1ffc1dc1f260d1ab707be1feeb597c5eff22facbd9c9804f2d7154326efd1bb6a: the fraud filer replays the claim's job off the loop (LG14-A, RFC-0014 §6.1)
+2026-10-11 19:21:42.533+09:00 [WARN ] [palw-panel] no possession proofs this tick — the seat is not near the tip (ibd=false, synced=false)
+2026-10-11 19:21:44.539+09:00 [ERROR] [palw-panel] claim 6c23e00c22b9cfb73160b7f5e37c7a319b375da0d7faf51be3435f3f284293c1ffc1dc1f260d1ab707be1feeb597c5eff22facbd9c9804f2d7154326efd1bb6a: this node's replay of the claim's job does NOT reproduce its execution root (replayed 58458d0af6e33e33d8b4f0216279e412dfee598800b1aa36a04780b523c20210a20db2aa8ac41ceef46183d22beb48b80ffe68ce2a23cf86b869ffb3007fdba3) — every seat of its panel let it pass or none looked; pursuing it as a public bond (LG14-A, RFC-0014 §6)
+2026-10-11 19:21:44.539+09:00 [DEBUG] [palw-panel] claim f28bc3934129a3fd53b95d4805e2b4cdfd6dcafbefe76ac8bd56a7347fc291b9f1619405cfe4b18e89d9d0f781d69d4a63a10485e60edbf2b190edf86d6d28b0: public FP job unavailable; pursuing its binding: FP commitment acceptance: some data is missing for block e1efb662cbf14adca134dfa01cfbf3bcd2cee7be101d3e942c7f4e2dfcf17db0fc9440bfd55cc7923011dbb022571517855bfa982300f75f7864a27c4a62098a
+2026-10-11 19:21:44.549+09:00 [INFO ] [palw-panel] claim 6c23e00c22b9cfb73160b7f5e37c7a319b375da0d7faf51be3435f3f284293c1ffc1dc1f260d1ab707be1feeb597c5eff22facbd9c9804f2d7154326efd1bb6a: the fraud filer queues Reserve (LG14-A, RFC-0014 §6–§7)
+2026-10-11 19:21:44.565+09:00 [INFO ] [palw-panel] claim f28bc3934129a3fd53b95d4805e2b4cdfd6dcafbefe76ac8bd56a7347fc291b9f1619405cfe4b18e89d9d0f781d69d4a63a10485e60edbf2b190edf86d6d28b0: the fraud filer queues Reserve (LG14-A, RFC-0014 §6–§7)
+2026-10-11 19:21:44.596+09:00 [INFO ] [palw-panel] submitted DisputeReservedV1 for court session 6c23e00c22b9cfb73160b7f5e37c7a319b375da0d7faf51be3435f3f284293c1ffc1dc1f260d1ab707be1feeb597c5eff22facbd9c9804f2d7154326efd1bb6a round 4294967285 in tx 35188559a6aeb29b6f1be1fda74ee302d8e1bc221debb9173ab10d8ca55064033d2bdd31539f6bd95bdf0b22b7b975691a580e0a71675e7da6452c14d555c3ee
+[service-public] real mempool carrier Discriminant(154), 4896 bytes
+2026-10-11 19:21:46.599+09:00 [INFO ] [palw-panel] claim 6c23e00c22b9cfb73160b7f5e37c7a319b375da0d7faf51be3435f3f284293c1ffc1dc1f260d1ab707be1feeb597c5eff22facbd9c9804f2d7154326efd1bb6a: the fraud filer's item (round 4294967285) was carried at DAA 1209 (LG14-A)
+2026-10-11 19:21:46.602+09:00 [DEBUG] [palw-panel] partial public history: history acceptance e1efb662cbf14adca134dfa01cfbf3bcd2cee7be101d3e942c7f4e2dfcf17db0fc9440bfd55cc7923011dbb022571517855bfa982300f75f7864a27c4a62098a: some data is missing for block e1efb662cbf14adca134dfa01cfbf3bcd2cee7be101d3e942c7f4e2dfcf17db0fc9440bfd55cc7923011dbb022571517855bfa982300f75f7864a27c4a62098a; completion watermark unchanged
+2026-10-11 19:21:46.706+09:00 [INFO ] [palw-panel] claim fcc8830b79102c790352371c58fab0e812f78e8dc62240663cb7883b1ce7f864a9374fc50f8ed436caf91704ec810317bcd753ac345c2a8d1c3a8ba8d06b7e95: the fraud filer replays the claim's job off the loop (LG14-A, RFC-0014 §6.1)
+2026-10-11 19:21:46.722+09:00 [INFO ] [palw-panel] claim 6c23e00c22b9cfb73160b7f5e37c7a319b375da0d7faf51be3435f3f284293c1ffc1dc1f260d1ab707be1feeb597c5eff22facbd9c9804f2d7154326efd1bb6a: the fraud filer queues Demand(Binding { row: 0, tile: 0 }) (LG14-A, RFC-0014 §6–§7)
+2026-10-11 19:21:46.743+09:00 [INFO ] [palw-panel] submitted DisputeReservedV1 for court session f28bc3934129a3fd53b95d4805e2b4cdfd6dcafbefe76ac8bd56a7347fc291b9f1619405cfe4b18e89d9d0f781d69d4a63a10485e60edbf2b190edf86d6d28b0 round 4294967285 in tx 87d6bb23c6c92ecbabbc57776a49db893083c38d51c6bce4375acc2fd65d3e494003613ebf38c1590aea418c0d9b5b5a495a2bc4658f10685ece0a58a7974c03
+[service-public] real mempool carrier Discriminant(154), 4896 bytes
+2026-10-11 19:21:48.745+09:00 [INFO ] [palw-panel] claim f28bc3934129a3fd53b95d4805e2b4cdfd6dcafbefe76ac8bd56a7347fc291b9f1619405cfe4b18e89d9d0f781d69d4a63a10485e60edbf2b190edf86d6d28b0: the fraud filer's item (round 4294967285) was carried at DAA 1214 (LG14-A)
+2026-10-11 19:21:48.749+09:00 [DEBUG] [palw-panel] partial public history: history acceptance e1efb662cbf14adca134dfa01cfbf3bcd2cee7be101d3e942c7f4e2dfcf17db0fc9440bfd55cc7923011dbb022571517855bfa982300f75f7864a27c4a62098a: some data is missing for block e1efb662cbf14adca134dfa01cfbf3bcd2cee7be101d3e942c7f4e2dfcf17db0fc9440bfd55cc7923011dbb022571517855bfa982300f75f7864a27c4a62098a; completion watermark unchanged
+2026-10-11 19:21:48.749+09:00 [ERROR] [palw-panel] claim fcc8830b79102c790352371c58fab0e812f78e8dc62240663cb7883b1ce7f864a9374fc50f8ed436caf91704ec810317bcd753ac345c2a8d1c3a8ba8d06b7e95: this node's replay of the claim's job does NOT reproduce its execution root (replayed e027e71a0e6ffb77a38d0727bb9aa777e4fe60c8270ed72c9686f79c1a6cdff416f5fa36223be7b210df12271be03b69cf3fa90352baf3ce8703455e665cae69) — every seat of its panel let it pass or none looked; pursuing it as a public bond (LG14-A, RFC-0014 §6)
+2026-10-11 19:21:48.761+09:00 [INFO ] [palw-panel] claim f28bc3934129a3fd53b95d4805e2b4cdfd6dcafbefe76ac8bd56a7347fc291b9f1619405cfe4b18e89d9d0f781d69d4a63a10485e60edbf2b190edf86d6d28b0: the fraud filer queues Demand(Binding { row: 0, tile: 0 }) (LG14-A, RFC-0014 §6–§7)
+2026-10-11 19:21:48.787+09:00 [INFO ] [palw-panel] claim fcc8830b79102c790352371c58fab0e812f78e8dc62240663cb7883b1ce7f864a9374fc50f8ed436caf91704ec810317bcd753ac345c2a8d1c3a8ba8d06b7e95: the fraud filer queues Reserve (LG14-A, RFC-0014 §6–§7)
+2026-10-11 19:21:48.849+09:00 [INFO ] [palw-panel] submitted DefaultAccused for court session 6c23e00c22b9cfb73160b7f5e37c7a319b375da0d7faf51be3435f3f284293c1ffc1dc1f260d1ab707be1feeb597c5eff22facbd9c9804f2d7154326efd1bb6a round 4294967284 in tx 3652df70c979b095fc458421c35e4b422810f0deb8709692dbd1ae60a78f1106db7ff23116a36b1d3c33e17227641de8a9908afdea46ee50903e133584e45921
+2026-10-11 19:21:50.852+09:00 [INFO ] [palw-panel] claim 6c23e00c22b9cfb73160b7f5e37c7a319b375da0d7faf51be3435f3f284293c1ffc1dc1f260d1ab707be1feeb597c5eff22facbd9c9804f2d7154326efd1bb6a: the fraud filer's item (round 4294967284) was carried at DAA 1222 (LG14-A)
+2026-10-11 19:21:50.856+09:00 [DEBUG] [palw-panel] partial public history: history acceptance e1efb662cbf14adca134dfa01cfbf3bcd2cee7be101d3e942c7f4e2dfcf17db0fc9440bfd55cc7923011dbb022571517855bfa982300f75f7864a27c4a62098a: some data is missing for block e1efb662cbf14adca134dfa01cfbf3bcd2cee7be101d3e942c7f4e2dfcf17db0fc9440bfd55cc7923011dbb022571517855bfa982300f75f7864a27c4a62098a; completion watermark unchanged
+2026-10-11 19:21:50.893+09:00 [INFO ] [palw-panel] submitted DefaultAccused for court session f28bc3934129a3fd53b95d4805e2b4cdfd6dcafbefe76ac8bd56a7347fc291b9f1619405cfe4b18e89d9d0f781d69d4a63a10485e60edbf2b190edf86d6d28b0 round 4294967284 in tx 6b45e5f0b2526271aa74967f207d0f3221cd369e3afa120e2120ec9c52e4d4de98ab85a9a826e05a396b9b13456c81620185f9459374bbb2baf9ae1cf9230eef
+[service-public] real mempool carrier Discriminant(17), 4770 bytes
+[service-public] H1 refuses bad signature/binding, unasked unit and unliable discloser
+[service-public] foreign-job authenticated event submitted through the real PQ mempool
+[service-public] authenticated binding carried; answered = true
+[service-tiled] requested public disclosure Event { row: 0, tile: 1 } mined through ordinary H1/PQ admission
+2026-10-11 19:21:52.897+09:00 [INFO ] [palw-panel] claim f28bc3934129a3fd53b95d4805e2b4cdfd6dcafbefe76ac8bd56a7347fc291b9f1619405cfe4b18e89d9d0f781d69d4a63a10485e60edbf2b190edf86d6d28b0: the fraud filer's item (round 4294967284) was carried at DAA 1230 (LG14-A)
+2026-10-11 19:21:52.901+09:00 [DEBUG] [palw-panel] partial public history: history acceptance e1efb662cbf14adca134dfa01cfbf3bcd2cee7be101d3e942c7f4e2dfcf17db0fc9440bfd55cc7923011dbb022571517855bfa982300f75f7864a27c4a62098a: some data is missing for block e1efb662cbf14adca134dfa01cfbf3bcd2cee7be101d3e942c7f4e2dfcf17db0fc9440bfd55cc7923011dbb022571517855bfa982300f75f7864a27c4a62098a; completion watermark unchanged
+2026-10-11 19:21:52.905+09:00 [DEBUG] [palw-panel] claim f28bc3934129a3fd53b95d4805e2b4cdfd6dcafbefe76ac8bd56a7347fc291b9f1619405cfe4b18e89d9d0f781d69d4a63a10485e60edbf2b190edf86d6d28b0: read the authenticated chain answer to Binding { row: 0, tile: 0 }
+2026-10-11 19:21:52.923+09:00 [INFO ] [palw-panel] claim f28bc3934129a3fd53b95d4805e2b4cdfd6dcafbefe76ac8bd56a7347fc291b9f1619405cfe4b18e89d9d0f781d69d4a63a10485e60edbf2b190edf86d6d28b0: the fraud filer queues Demand(HeldNode { unit: FpJob }) (LG14-A, RFC-0014 §6–§7)
+2026-10-11 19:21:52.949+09:00 [INFO ] [palw-panel] submitted DisputeReservedV1 for court session fcc8830b79102c790352371c58fab0e812f78e8dc62240663cb7883b1ce7f864a9374fc50f8ed436caf91704ec810317bcd753ac345c2a8d1c3a8ba8d06b7e95 round 4294967285 in tx f4e242f9d952474511981be4c29b50ea1acf4d819e08c7da6b39212b8eecf9d22620734c77c91593e888f9d6e219d07e384081a51b620d717cce192a65b10db7
+2026-10-11 19:21:54.951+09:00 [INFO ] [palw-panel] claim fcc8830b79102c790352371c58fab0e812f78e8dc62240663cb7883b1ce7f864a9374fc50f8ed436caf91704ec810317bcd753ac345c2a8d1c3a8ba8d06b7e95: the fraud filer's item (round 4294967285) was carried at DAA 1237 (LG14-A)
+2026-10-11 19:21:54.955+09:00 [DEBUG] [palw-panel] partial public history: history acceptance e1efb662cbf14adca134dfa01cfbf3bcd2cee7be101d3e942c7f4e2dfcf17db0fc9440bfd55cc7923011dbb022571517855bfa982300f75f7864a27c4a62098a: some data is missing for block e1efb662cbf14adca134dfa01cfbf3bcd2cee7be101d3e942c7f4e2dfcf17db0fc9440bfd55cc7923011dbb022571517855bfa982300f75f7864a27c4a62098a; completion watermark unchanged
+2026-10-11 19:21:54.956+09:00 [DEBUG] [palw-panel] claim f28bc3934129a3fd53b95d4805e2b4cdfd6dcafbefe76ac8bd56a7347fc291b9f1619405cfe4b18e89d9d0f781d69d4a63a10485e60edbf2b190edf86d6d28b0: public FP job unavailable; pursuing its binding: FP commitment acceptance: some data is missing for block e1efb662cbf14adca134dfa01cfbf3bcd2cee7be101d3e942c7f4e2dfcf17db0fc9440bfd55cc7923011dbb022571517855bfa982300f75f7864a27c4a62098a
+2026-10-11 19:21:54.984+09:00 [INFO ] [palw-panel] submitted LegacyHeldDemandedV2 for court session f28bc3934129a3fd53b95d4805e2b4cdfd6dcafbefe76ac8bd56a7347fc291b9f1619405cfe4b18e89d9d0f781d69d4a63a10485e60edbf2b190edf86d6d28b0 round 4294967284 in tx 02b56f774618d180af52eab689b7644680b17bf7562564e0d66f57c4a82ba91401c1ed68fa6540fba6dd8af7e53556b6b131b0ced9a4f8717911cc14a4967962
+
+thread 'virtual-processor' (4171602) panicked at consensus/src/pipeline/virtual_processor/processor.rs:4036:30:
+called `Result::unwrap()` on an `Err` value: Error { message: "IO error: No space left on device: While appending to file: /var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/rusty-kaspa/.tmpWRx1P8/000026.log: No space left on device" }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'palw_panel::palw_service_public_e2e::fresh_public_bond_service_registered_tiled_constraint_beaten_across_tiles' (4160037) panicked at consensus/src/consensus/mod.rs:824:58:
+called `Result::unwrap()` on an `Err` value: RecvError(())
+
+thread 'palw_panel::palw_service_public_e2e::fresh_public_bond_service_registered_tiled_constraint_beaten_across_tiles' (4160037) panicked at consensus/src/consensus/mod.rs:856:27:
+called `Result::unwrap()` on an `Err` value: Any { .. }
+stack backtrace:
+   0:        0x10bf7b65c - std::backtrace_rs::backtrace::libunwind::trace::h7577bad47ee3e6ee
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/../../backtrace/src/backtrace/libunwind.rs:117:9
+   1:        0x10bf7b65c - std::backtrace_rs::backtrace::trace_unsynchronized::hf8c23094259ea49b
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/../../backtrace/src/backtrace/mod.rs:66:14
+   2:        0x10bf7b65c - std::sys::backtrace::_print_fmt::hec8e3b1f0ce9dbc4
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/sys/backtrace.rs:68:9
+   3:        0x10bf7b65c - <std::sys::backtrace::BacktraceLock::print::DisplayBacktrace as core::fmt::Display>::fmt::h8c5ab870ebd4c242
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/sys/backtrace.rs:38:26
+   4:        0x10bf8c458 - core::fmt::rt::Argument::fmt::hc2e0c24e74ca59ff
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/core/src/fmt/rt.rs:152:76
+   5:        0x10bf8c458 - core::fmt::write::h64810b21425781ec
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/core/src/fmt/mod.rs:1686:22
+   6:        0x10bf51bd0 - std::io::default_write_fmt::h1ab19e39432de194
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/io/mod.rs:639:11
+   7:        0x10bf51bd0 - std::io::Write::write_fmt::h947344a43c638468
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/io/mod.rs:1994:13
+   8:        0x10bf609b0 - std::sys::backtrace::BacktraceLock::print::h17b78e7978fd7389
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/sys/backtrace.rs:41:25
+   9:        0x10bf609b0 - std::panicking::default_hook::{{closure}}::ha0993a93f6e4994d
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/panicking.rs:292:27
+  10:        0x10bf608b0 - std::panicking::default_hook::h7aae5c8c53b8a669
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/panicking.rs:319:9
+  11:        0x10bf60da8 - std::panicking::panic_with_hook::hb885411bb59bebf4
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/panicking.rs:825:13
+  12:        0x10bf60a5c - std::panicking::panic_handler::{{closure}}::hb04320f9e43192c5
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/panicking.rs:698:13
+  13:        0x10bf5c024 - std::sys::backtrace::__rust_end_short_backtrace::ha3c55a1c4767eecf
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/sys/backtrace.rs:176:18
+  14:        0x10bf49e74 - __rustc[d131491b17107b07]::rust_begin_unwind
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/panicking.rs:689:5
+  15:        0x10c0a1d38 - core::panicking::panic_fmt::h6f8816b337451651
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/core/src/panicking.rs:80:14
+  16:        0x10c0a1914 - core::result::unwrap_failed::h1f9c817951eee5c5
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/core/src/result.rs:1867:5
+  17:        0x1075df5a0 - core::result::Result<T,E>::unwrap::h25b226f2756affaf
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/core/src/result.rs:1233:23
+  18:        0x1075df5a0 - kaspa_consensus::consensus::Consensus::shutdown::h56273e1ac0283989
+                               at /Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/consensus/src/consensus/mod.rs:856:27
+  19:        0x105aef10c - <kaspad_lib::palw_panel::palw_service_public_e2e::Chain as core::ops::drop::Drop>::drop::hbe918bb91bef3290
+                               at /Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/kaspad/src/palw_service_public_e2e.rs:185:17
+  20:        0x105abdf88 - core::ptr::drop_in_place<kaspad_lib::palw_panel::palw_service_public_e2e::Chain>::hf0df90d8ce3ee7bf
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/core/src/ptr/mod.rs:805:1
+  21:        0x105968894 - kaspad_lib::palw_panel::palw_service_public_e2e::fresh_public_service_with_recovery::{{closure}}::h5ce9971552d35007
+                               at /Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/kaspad/src/palw_service_public_e2e.rs:2246:1
+  22:        0x10596623c - kaspad_lib::palw_panel::palw_service_public_e2e::fresh_public_service::{{closure}}::h9084d2942dcb3884
+                               at /Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/kaspad/src/palw_service_public_e2e.rs:1120:52
+  23:        0x1059972c0 - kaspad_lib::palw_panel::palw_service_public_e2e::fresh_public_bond_service_registered_tiled_constraint_beaten_across_tiles::{{closure}}::h9523183a30464118
+                               at /Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/kaspad/src/palw_service_public_e2e.rs:622:61
+  24:        0x1056a530c - <core::pin::Pin<P> as core::future::future::Future>::poll::h848892c75034ee3e
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/core/src/future/future.rs:133:9
+  25:        0x10602f700 - tokio::runtime::park::CachedParkThread::block_on::{{closure}}::h104f499a1dbd9ad7
+                               at /Users/wata/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.42.1/src/runtime/park.rs:281:74
+  26:        0x10602f274 - tokio::runtime::coop::with_budget::h0861dc2e610682bc
+                               at /Users/wata/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.42.1/src/runtime/coop.rs:107:5
+  27:        0x10602f274 - tokio::runtime::coop::budget::h6d4336c09cc4648c
+                               at /Users/wata/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.42.1/src/runtime/coop.rs:73:5
+  28:        0x10602f274 - tokio::runtime::park::CachedParkThread::block_on::h4f23fd94351e4404
+                               at /Users/wata/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.42.1/src/runtime/park.rs:281:31
+  29:        0x1052b4c34 - tokio::runtime::context::blocking::BlockingRegionGuard::block_on::h7d7a8d92aa005323
+                               at /Users/wata/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.42.1/src/runtime/context/blocking.rs:66:14
+  30:        0x10578cdc4 - tokio::runtime::scheduler::multi_thread::MultiThread::block_on::{{closure}}::h4e33c239bfc64588
+                               at /Users/wata/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.42.1/src/runtime/scheduler/multi_thread/mod.rs:87:22
+  31:        0x104fdf85c - tokio::runtime::context::runtime::enter_runtime::h448f17529cca8be5
+                               at /Users/wata/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.42.1/src/runtime/context/runtime.rs:65:16
+  32:        0x10578cd30 - tokio::runtime::scheduler::multi_thread::MultiThread::block_on::h53400a012de117eb
+                               at /Users/wata/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.42.1/src/runtime/scheduler/multi_thread/mod.rs:86:9
+  33:        0x105f46e14 - tokio::runtime::runtime::Runtime::block_on_inner::h4ca14b1dc233193e
+                               at /Users/wata/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.42.1/src/runtime/runtime.rs:370:50
+  34:        0x105f46fd0 - tokio::runtime::runtime::Runtime::block_on::h6514f93461fbfad9
+                               at /Users/wata/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.42.1/src/runtime/runtime.rs:342:18
+  35:        0x1059970c8 - kaspad_lib::palw_panel::palw_service_public_e2e::fresh_public_bond_service_registered_tiled_constraint_beaten_across_tiles::hfe204082ebe33a4d
+                               at /Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/kaspad/src/palw_service_public_e2e.rs:622:66
+  36:        0x10599737c - kaspad_lib::palw_panel::palw_service_public_e2e::fresh_public_bond_service_registered_tiled_constraint_beaten_across_tiles::{{closure}}::he1af4f32eb3e590a
+                               at /Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/kaspad/src/palw_service_public_e2e.rs:621:85
+  37:        0x105a09e84 - core::ops::function::FnOnce::call_once::h288687b28aeeb169
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/core/src/ops/function.rs:250:5
+  38:        0x10622685c - core::ops::function::FnOnce::call_once::haf7fb5629e8bb7fc
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/core/src/ops/function.rs:250:5
+  39:        0x10622685c - test::__rust_begin_short_backtrace::h6ca5fe182383a98d
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/test/src/lib.rs:663:18
+  40:        0x106235a44 - test::run_test_in_process::{{closure}}::h7fd0520dbf9f5c0d
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/test/src/lib.rs:686:74
+  41:        0x106235a44 - <core::panic::unwind_safe::AssertUnwindSafe<F> as core::ops::function::FnOnce<()>>::call_once::h33a14b59f9d4a20c
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/core/src/panic/unwind_safe.rs:274:9
+  42:        0x106235a44 - std::panicking::catch_unwind::do_call::hd94bb4e1db6c1f17
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/panicking.rs:581:40
+  43:        0x106235a44 - std::panicking::catch_unwind::hc1bbe01e031840c5
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/panicking.rs:544:19
+  44:        0x106235a44 - std::panic::catch_unwind::h3beba4c837d33995
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/panic.rs:359:14
+  45:        0x106235a44 - test::run_test_in_process::he5c9072f5b93ccab
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/test/src/lib.rs:686:27
+  46:        0x106235a44 - test::run_test::{{closure}}::hca48f6c40383049d
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/test/src/lib.rs:607:43
+  47:        0x106216bb4 - test::run_test::{{closure}}::hd4b34e9a103ba81d
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/test/src/lib.rs:637:41
+  48:        0x106216bb4 - std::sys::backtrace::__rust_begin_short_backtrace::h4ccc732acb10c9b8
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/sys/backtrace.rs:160:18
+  49:        0x106219bb4 - std::thread::lifecycle::spawn_unchecked::{{closure}}::{{closure}}::h4daedf549906e7a0
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/thread/lifecycle.rs:92:13
+  50:        0x106219bb4 - <core::panic::unwind_safe::AssertUnwindSafe<F> as core::ops::function::FnOnce<()>>::call_once::ha943f8b8a7757ba6
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/core/src/panic/unwind_safe.rs:274:9
+  51:        0x106219bb4 - std::panicking::catch_unwind::do_call::h5255494fdd861d43
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/panicking.rs:581:40
+  52:        0x106219bb4 - std::panicking::catch_unwind::h35cebbca561557af
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/panicking.rs:544:19
+  53:        0x106219bb4 - std::panic::catch_unwind::hd2dc582535d4deb2
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/panic.rs:359:14
+  54:        0x106219bb4 - std::thread::lifecycle::spawn_unchecked::{{closure}}::h3816da6e78dd2385
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/thread/lifecycle.rs:90:26
+  55:        0x106219bb4 - core::ops::function::FnOnce::call_once{{vtable.shim}}::h590ca23b87b969e2
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/core/src/ops/function.rs:250:5
+  56:        0x10bf5975c - <alloc::boxed::Box<F,A> as core::ops::function::FnOnce<Args>>::call_once::hb2e640a098bf6a07
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/alloc/src/boxed.rs:2206:9
+  57:        0x10bf5975c - std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/sys/thread/unix.rs:118:17
+  58:        0x18c7b3c58 - __pthread_cond_wait
+
+thread 'palw_panel::palw_service_public_e2e::fresh_public_bond_service_registered_tiled_constraint_beaten_across_tiles' (4160037) panicked at database/src/utils.rs:33:9:
+assertion `left == right` failed: DB is expected to have no strong references when lifetime is dropped
+  left: 108
+ right: 0
+stack backtrace:
+   0:        0x10bf7b65c - std::backtrace_rs::backtrace::libunwind::trace::h7577bad47ee3e6ee
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/../../backtrace/src/backtrace/libunwind.rs:117:9
+   1:        0x10bf7b65c - std::backtrace_rs::backtrace::trace_unsynchronized::hf8c23094259ea49b
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/../../backtrace/src/backtrace/mod.rs:66:14
+   2:        0x10bf7b65c - std::sys::backtrace::_print_fmt::hec8e3b1f0ce9dbc4
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/sys/backtrace.rs:68:9
+   3:        0x10bf7b65c - <std::sys::backtrace::BacktraceLock::print::DisplayBacktrace as core::fmt::Display>::fmt::h8c5ab870ebd4c242
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/sys/backtrace.rs:38:26
+   4:        0x10bf8c458 - core::fmt::rt::Argument::fmt::hc2e0c24e74ca59ff
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/core/src/fmt/rt.rs:152:76
+   5:        0x10bf8c458 - core::fmt::write::h64810b21425781ec
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/core/src/fmt/mod.rs:1686:22
+   6:        0x10bf51bd0 - std::io::default_write_fmt::h1ab19e39432de194
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/io/mod.rs:639:11
+   7:        0x10bf51bd0 - std::io::Write::write_fmt::h947344a43c638468
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/io/mod.rs:1994:13
+   8:        0x10bf609b0 - std::sys::backtrace::BacktraceLock::print::h17b78e7978fd7389
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/sys/backtrace.rs:41:25
+   9:        0x10bf609b0 - std::panicking::default_hook::{{closure}}::ha0993a93f6e4994d
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/panicking.rs:292:27
+  10:        0x10bf608b0 - std::panicking::default_hook::h7aae5c8c53b8a669
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/panicking.rs:319:9
+  11:        0x10bf60da8 - std::panicking::panic_with_hook::hb885411bb59bebf4
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/panicking.rs:825:13
+  12:        0x10bf60a5c - std::panicking::panic_handler::{{closure}}::hb04320f9e43192c5
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/panicking.rs:698:13
+  13:        0x10bf5c024 - std::sys::backtrace::__rust_end_short_backtrace::ha3c55a1c4767eecf
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/sys/backtrace.rs:176:18
+  14:        0x10bf49e74 - __rustc[d131491b17107b07]::rust_begin_unwind
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/panicking.rs:689:5
+  15:        0x10c0a1d38 - core::panicking::panic_fmt::h6f8816b337451651
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/core/src/panicking.rs:80:14
+  16:        0x10c0a1c38 - core::panicking::assert_failed_inner::hee377df488a177d4
+  17:        0x10c0a1a8c - core::panicking::assert_failed::h2c4a26a306db510c
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/core/src/panicking.rs:394:5
+  18:        0x1091beb54 - <kaspa_database::utils::DbLifetime as core::ops::drop::Drop>::drop::hbd4642c78a478f69
+                               at /Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/database/src/utils.rs:33:9
+  19:        0x10756f43c - core::ptr::drop_in_place<kaspa_database::utils::DbLifetime>::h19083aff49faaf18
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/core/src/ptr/mod.rs:805:1
+  20:        0x10757b868 - core::ptr::drop_in_place<kaspa_consensus::consensus::test_consensus::TestConsensus>::hd0f093e979066a91
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/core/src/ptr/mod.rs:805:1
+  21:        0x10757b868 - alloc::sync::Arc<T,A>::drop_slow::h1d0391283eac610c
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/alloc/src/sync.rs:2120:18
+  22:        0x1058a79e8 - <alloc::sync::Arc<T,A> as core::ops::drop::Drop>::drop::h7dc68789e23b7746
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/alloc/src/sync.rs:2854:18
+  23:        0x105a301a8 - core::ptr::drop_in_place<alloc::sync::Arc<kaspa_consensus::consensus::test_consensus::TestConsensus>>::hefee28cdf622af12
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/core/src/ptr/mod.rs:805:1
+  24:        0x105abdf9c - core::ptr::drop_in_place<kaspad_lib::palw_panel::palw_service_public_e2e::Chain>::hf0df90d8ce3ee7bf
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/core/src/ptr/mod.rs:805:1
+  25:        0x105968894 - kaspad_lib::palw_panel::palw_service_public_e2e::fresh_public_service_with_recovery::{{closure}}::h5ce9971552d35007
+                               at /Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/kaspad/src/palw_service_public_e2e.rs:2246:1
+  26:        0x10596623c - kaspad_lib::palw_panel::palw_service_public_e2e::fresh_public_service::{{closure}}::h9084d2942dcb3884
+                               at /Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/kaspad/src/palw_service_public_e2e.rs:1120:52
+  27:        0x1059972c0 - kaspad_lib::palw_panel::palw_service_public_e2e::fresh_public_bond_service_registered_tiled_constraint_beaten_across_tiles::{{closure}}::h9523183a30464118
+                               at /Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/kaspad/src/palw_service_public_e2e.rs:622:61
+  28:        0x1056a530c - <core::pin::Pin<P> as core::future::future::Future>::poll::h848892c75034ee3e
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/core/src/future/future.rs:133:9
+  29:        0x10602f700 - tokio::runtime::park::CachedParkThread::block_on::{{closure}}::h104f499a1dbd9ad7
+                               at /Users/wata/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.42.1/src/runtime/park.rs:281:74
+  30:        0x10602f274 - tokio::runtime::coop::with_budget::h0861dc2e610682bc
+                               at /Users/wata/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.42.1/src/runtime/coop.rs:107:5
+  31:        0x10602f274 - tokio::runtime::coop::budget::h6d4336c09cc4648c
+                               at /Users/wata/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.42.1/src/runtime/coop.rs:73:5
+  32:        0x10602f274 - tokio::runtime::park::CachedParkThread::block_on::h4f23fd94351e4404
+                               at /Users/wata/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.42.1/src/runtime/park.rs:281:31
+  33:        0x1052b4c34 - tokio::runtime::context::blocking::BlockingRegionGuard::block_on::h7d7a8d92aa005323
+                               at /Users/wata/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.42.1/src/runtime/context/blocking.rs:66:14
+  34:        0x10578cdc4 - tokio::runtime::scheduler::multi_thread::MultiThread::block_on::{{closure}}::h4e33c239bfc64588
+                               at /Users/wata/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.42.1/src/runtime/scheduler/multi_thread/mod.rs:87:22
+  35:        0x104fdf85c - tokio::runtime::context::runtime::enter_runtime::h448f17529cca8be5
+                               at /Users/wata/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.42.1/src/runtime/context/runtime.rs:65:16
+  36:        0x10578cd30 - tokio::runtime::scheduler::multi_thread::MultiThread::block_on::h53400a012de117eb
+                               at /Users/wata/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.42.1/src/runtime/scheduler/multi_thread/mod.rs:86:9
+  37:        0x105f46e14 - tokio::runtime::runtime::Runtime::block_on_inner::h4ca14b1dc233193e
+                               at /Users/wata/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.42.1/src/runtime/runtime.rs:370:50
+  38:        0x105f46fd0 - tokio::runtime::runtime::Runtime::block_on::h6514f93461fbfad9
+                               at /Users/wata/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.42.1/src/runtime/runtime.rs:342:18
+  39:        0x1059970c8 - kaspad_lib::palw_panel::palw_service_public_e2e::fresh_public_bond_service_registered_tiled_constraint_beaten_across_tiles::hfe204082ebe33a4d
+                               at /Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/kaspad/src/palw_service_public_e2e.rs:622:66
+  40:        0x10599737c - kaspad_lib::palw_panel::palw_service_public_e2e::fresh_public_bond_service_registered_tiled_constraint_beaten_across_tiles::{{closure}}::he1af4f32eb3e590a
+                               at /Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/kaspad/src/palw_service_public_e2e.rs:621:85
+  41:        0x105a09e84 - core::ops::function::FnOnce::call_once::h288687b28aeeb169
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/core/src/ops/function.rs:250:5
+  42:        0x10622685c - core::ops::function::FnOnce::call_once::haf7fb5629e8bb7fc
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/core/src/ops/function.rs:250:5
+  43:        0x10622685c - test::__rust_begin_short_backtrace::h6ca5fe182383a98d
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/test/src/lib.rs:663:18
+  44:        0x106235a44 - test::run_test_in_process::{{closure}}::h7fd0520dbf9f5c0d
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/test/src/lib.rs:686:74
+  45:        0x106235a44 - <core::panic::unwind_safe::AssertUnwindSafe<F> as core::ops::function::FnOnce<()>>::call_once::h33a14b59f9d4a20c
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/core/src/panic/unwind_safe.rs:274:9
+  46:        0x106235a44 - std::panicking::catch_unwind::do_call::hd94bb4e1db6c1f17
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/panicking.rs:581:40
+  47:        0x106235a44 - std::panicking::catch_unwind::hc1bbe01e031840c5
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/panicking.rs:544:19
+  48:        0x106235a44 - std::panic::catch_unwind::h3beba4c837d33995
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/panic.rs:359:14
+  49:        0x106235a44 - test::run_test_in_process::he5c9072f5b93ccab
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/test/src/lib.rs:686:27
+  50:        0x106235a44 - test::run_test::{{closure}}::hca48f6c40383049d
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/test/src/lib.rs:607:43
+  51:        0x106216bb4 - test::run_test::{{closure}}::hd4b34e9a103ba81d
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/test/src/lib.rs:637:41
+  52:        0x106216bb4 - std::sys::backtrace::__rust_begin_short_backtrace::h4ccc732acb10c9b8
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/sys/backtrace.rs:160:18
+  53:        0x106219bb4 - std::thread::lifecycle::spawn_unchecked::{{closure}}::{{closure}}::h4daedf549906e7a0
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/thread/lifecycle.rs:92:13
+  54:        0x106219bb4 - <core::panic::unwind_safe::AssertUnwindSafe<F> as core::ops::function::FnOnce<()>>::call_once::ha943f8b8a7757ba6
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/core/src/panic/unwind_safe.rs:274:9
+  55:        0x106219bb4 - std::panicking::catch_unwind::do_call::h5255494fdd861d43
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/panicking.rs:581:40
+  56:        0x106219bb4 - std::panicking::catch_unwind::h35cebbca561557af
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/panicking.rs:544:19
+  57:        0x106219bb4 - std::panic::catch_unwind::hd2dc582535d4deb2
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/panic.rs:359:14
+  58:        0x106219bb4 - std::thread::lifecycle::spawn_unchecked::{{closure}}::h3816da6e78dd2385
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/thread/lifecycle.rs:90:26
+  59:        0x106219bb4 - core::ops::function::FnOnce::call_once{{vtable.shim}}::h590ca23b87b969e2
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/core/src/ops/function.rs:250:5
+  60:        0x10bf5975c - <alloc::boxed::Box<F,A> as core::ops::function::FnOnce<Args>>::call_once::hb2e640a098bf6a07
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/alloc/src/boxed.rs:2206:9
+  61:        0x10bf5975c - std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587
+                               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/std/src/sys/thread/unix.rs:118:17
+  62:        0x18c7b3c58 - __pthread_cond_wait
+
+thread 'palw_panel::palw_service_public_e2e::fresh_public_bond_service_registered_tiled_constraint_beaten_across_tiles' (4160037) panicked at library/core/src/panicking.rs:233:5:
+panic in a destructor during cleanup
+thread caused non-unwinding panic. aborting.

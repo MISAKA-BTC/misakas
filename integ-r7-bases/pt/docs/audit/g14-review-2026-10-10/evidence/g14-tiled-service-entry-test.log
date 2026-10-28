@@ -1,0 +1,18 @@
+
+running 1 test
+[service-tiled] ordinary signed class registration accepted; root 3787613f6abc83efb816feac58efdc401ecb50d93efc976e30c5772e6a9c7ff8b1fc5bf0685cf743ffead044bd69e7dfe434e816e84b2dd1f8cd17d003b65d46, 4099 lanes, canonical 1/2
+
+thread 'palw_panel::palw_service_public_e2e::tiled::registered_tiled_constraint_class_passes_normal_registration_and_host_resolution' (3845627) panicked at kaspad/src/palw_service_tiled_e2e.rs:164:5:
+assertion `left == right` failed
+  left: 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+ right: 152f150b358c2671265bc045e39903745ffc4e1a177f3408ee4303916cbf51a3bcff523ed8ff2ca992af8f10778a947362515255a892db408e0ef338ca60f499
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test palw_panel::palw_service_public_e2e::tiled::registered_tiled_constraint_class_passes_normal_registration_and_host_resolution ... FAILED
+
+failures:
+
+failures:
+    palw_panel::palw_service_public_e2e::tiled::registered_tiled_constraint_class_passes_normal_registration_and_host_resolution
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 638 filtered out; finished in 43.92s
+
