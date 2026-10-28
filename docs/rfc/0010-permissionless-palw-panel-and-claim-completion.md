@@ -105,6 +105,14 @@ The snapshot is **before** the claim's entropy is fixed. If a class lacks enough
 
 Draw-time collateral headroom also needs a fixed answer. At a deterministic `AssignmentPointV1` after entropy readiness, consensus processes due claims in canonical `(beacon epoch, sealed acceptance order, claim occurrence index)` order, derives their seat order from the frozen snapshot, and reserves live exposure atomically. The tie-break must come from consensus acceptance order, not a hash that the claimant can grind for queue priority. The binder cannot choose the base state or delay assignment until a desired seat becomes free. Processing limits and backlog order must be consensus parameters; a cap cannot let a block producer choose which due claims to skip. A claim whose frozen candidates lack reservable collateral follows a named, deterministic no-panel path.
 
+### 3.2.1 genesis bond の廃止と初期起動 — 2026-10-28 ユーザー決定
+
+**genesis に事前登録する bond を廃止し、新しい立ち上げは bond ゼロから始める。** 後から参加できない genesis bond という役割・特権を残さず、最初の参加者も通常の登録・担保・成熟条件で bond を作る。
+
+初期は PALW ブロックがない状態で約30分待ち、既存の BASE 回復規則を利用する。その後、**BASE で得た資金に加えて genesis に入っている UTXO** も使って通常の bond 登録を行い、資格を満たした参加者から PALW へ進む。genesis UTXO は廃止せず、その所有だけで検証席や anchor の特権を与えない。最初の30分間を BASE で稼働する特別モードではなく、無 PALW の待機後に回復経路を使う方針である。
+
+仕様・既存実装との照合事項は [RFC-0041](0041-genesis-bond-free-bootstrap.md)、判断は [ADR-0209](../adr/0209-genesis-bond-free-bootstrap.md) に記録する。この追記は採択済み方針であり、起動試験の完了記録ではない。旧 genesis の履歴は保持する。
+
 ### 3.3 Supply entropy that the binder cannot choose
 
 For a sealed claim, `R` must be unpredictable under the stated adversary model until **after** the seal and Panel snapshot are fixed. Its specification must name: the producer set, exact input message, output/proof bytes, verification cost, contribution deadline, missing-contribution rule, chain/fork domain, and an adversary's maximum ability to bias or suppress it. The source may use permissionless mature bonds and certified execution tickets, provided every contributing opportunity has one canonical work identity and consensus can reject a second valid variant. It must not require a named operator or an active DNS validator set. A digest that merely hashes an arbitrary attempt or a producer-chosen signature is not a certified ticket.
