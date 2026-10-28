@@ -81,7 +81,7 @@ fn material_intake_partial_bodies_coexist_first_complete_wins_and_reorg_reverts(
     use crate::palw_court_shared_material_intake_v1::*;
     use super::super::palw_court_shared_material_intake_fold_v1::{material_intake, MaterialIntakeEffectV1 as E};
     use crate::palw_tir_court_v1::PalwTirEvidenceStoreV1;
-    let fx = crate::palw_tir_public_claim_v1::palw_tir_public_history_frame_fixture_v1();
+    let fx = crate::palw_tir_public_claim_v1::palw_tir_public_material_frame_fixture_v1(false);
     let frame = &fx.frame;
     let (mut state, params, extras, claim, scope) = material_intake_world(&fx);
     let producer = frame.custody_v1().pledge_v1().producer;
@@ -181,7 +181,7 @@ fn material_intake_rooted_store_builds_identical_evidence_to_borrowed_path() {
     use crate::palw_tir_court_v1::{PalwTirEvidenceStoreV1, PalwTirCourtRulesV1, build_tir_cone_refutation_v1};
     use crate::palw_court_shared_tir_builder_store_v1::{SharedTirBuilderStoreV1 as MaterialStore, PromptMaterialV1};
     use crate::palw_tir_public_source_v1::{PalwTirPublicRequestV1 as Q, PalwTirPublicResponseV1 as R};
-    let fx = crate::palw_tir_public_claim_v1::palw_tir_public_history_frame_fixture_v1();
+    let fx = crate::palw_tir_public_claim_v1::palw_tir_public_material_frame_fixture_v1(true);
     let frame = &fx.frame;
     let (mut state, params, extras, claim, scope) = material_intake_world(&fx);
     let who = outsider();
@@ -192,16 +192,23 @@ fn material_intake_rooted_store_builds_identical_evidence_to_borrowed_path() {
     let binding = &fx.execution.binding;
     let court = PalwTirCourtRulesV1 { max_step_leaf_count: fx.rules.maximum_leaves, prompt_form: fx.rules.prompt_form,
         limits: crate::palw_court_v2::palw_tir_court_limits_v1(&fx.rules.court) };
-    let (early_leaf, early) = (0..binding.step_leaf_count).find_map(|i|
-        build_tir_cone_refutation_v1(binding, i, &fx.execution, &court).ok()
-            .filter(|p| !p.prompt_token_ids.is_empty()).map(|p| (i, p))).expect("fixture has a prompt-reading cone");
+    // Intake admits parameters for the numerical dissection roots, not for
+    // arbitrary one-move leaves (the old scan selected embedding leaf 0).
+    let source = frame.source_v1(&fx.record, &fx.layout, fx.rules.maximum_leaves).unwrap();
+    let cover = source.parameter_cover_v1(&fx.record, &fx.layout, schedule.cover).unwrap();
+    let (early_leaf, early) = cover.roots.iter().find_map(|root|
+        build_tir_cone_refutation_v1(binding, root.leaf, &fx.execution, &court).ok()
+            .filter(|p| !p.prompt_token_ids.is_empty() && !p.params.is_none()).map(|p| (root.leaf, p)))
+        .expect("fixture has a numerical root reading both prompt and parameters");
     let opened: Vec<u32> = early.params.single().map(|p| p.opened.iter().map(|(i, _)| *i).collect()).unwrap_or_default();
     let leaves = required_parameter_leaves_v1(&state, claim, schedule.cover).unwrap();
-    assert!(opened.iter().all(|l| leaves.binary_search(l).is_ok()), "the derived union covers the actual read set");
+    assert!(!opened.is_empty());
+    assert!(opened.iter().all(|l| leaves.binary_search(l).is_ok()), "the numerical union covers the actual read set");
 
-    // Borrowed reference path (caller-held, authenticated material).
-    let source = frame.source_v1(&fx.record, &fx.layout, fx.rules.maximum_leaves).unwrap();
-    let units: Vec<_> = (0..binding.step_leaf_count).map(|index| source.authenticate_v1(&Q::StepLeaf { index },
+    // Borrowed reference path: only the exact required leaves and the root.
+    let needed: std::collections::BTreeSet<_> = std::iter::once(early_leaf).chain(early.operands.preimages.iter()
+        .map(|p| fx.execution.preimages.iter().position(|v| v.coord == p.coord).unwrap() as u64)).collect();
+    let units: Vec<_> = needed.iter().copied().map(|index| source.authenticate_v1(&Q::StepLeaf { index },
         &R::StepLeaf { preimage: fx.execution.step_leaf(index).unwrap(), opening: fx.execution.step_opening(index).unwrap() }, None).unwrap())
         .collect();
     let borrowed_params: Vec<_> = opened.iter().map(|i| fx.execution.param_opening(*i).unwrap()).collect();
@@ -218,7 +225,7 @@ fn material_intake_rooted_store_builds_identical_evidence_to_borrowed_path() {
     let profile = crate::palw_court_shared_tir_state_v1::context(&b.state, claim).unwrap().profile_id;
     let set = crate::palw_court_tir_requests_v1::TirSharedRequestSetV1::new(frame, &source, profile).unwrap();
     let mut daa = 1;
-    for index in 0..binding.step_leaf_count {
+    for index in needed.iter().copied() {
         let ordinal = (0..set.len()).find(|&o| set.request_at(o).unwrap() == Q::StepLeaf { index }).unwrap();
         let body = borsh::to_vec(&R::StepLeaf { preimage: fx.execution.step_leaf(index).unwrap(),
             opening: fx.execution.step_opening(index).unwrap() }).unwrap();
@@ -236,7 +243,7 @@ fn material_intake_rooted_store_builds_identical_evidence_to_borrowed_path() {
         crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1 => panic!("history fixture is Flat"),
     }
     let rooted = RootedMaterialV1::load_v1(&b.state, claim).unwrap();
-    assert_eq!(rooted.units_len_v1() as u64, binding.step_leaf_count);
+    assert_eq!(rooted.units_len_v1(), needed.len());
     assert_eq!(rooted.params_len_v1(), opened.len());
     let store = rooted.store_v1(&b.state, claim, scope).unwrap();
     let replay = build_tir_cone_refutation_v1(binding, early_leaf, &store, &court).unwrap();
@@ -249,7 +256,7 @@ fn material_intake_refuses_corrupt_parts_overbudget_and_dormant_fence() {
     use crate::palw_court_shared_material_intake_v1::*;
     use super::super::palw_court_shared_material_intake_fold_v1::{material_intake, MaterialIntakeEffectV1 as E};
     use crate::palw_tir_court_v1::PalwTirEvidenceStoreV1;
-    let fx = crate::palw_tir_public_claim_v1::palw_tir_public_history_frame_fixture_v1();
+    let fx = crate::palw_tir_public_claim_v1::palw_tir_public_material_frame_fixture_v1(false);
     let frame = &fx.frame;
     let (mut state, params, extras, claim, scope) = material_intake_world(&fx);
     let who = outsider();

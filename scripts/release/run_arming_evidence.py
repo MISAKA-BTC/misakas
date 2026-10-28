@@ -41,7 +41,7 @@ RUNS = [
     ('core-lib-tir_public_claim_state', CORE + ['--lib', '--', 'palw_tir_public_claim_v1', 'palw_tir_public_state_v1',
                                                 'palw_tir_public_source_v1']),
     ('core-lib-ruling_fences', CORE + ['--lib', '--', 'palw_ruling_fences_v1']),
-    ('core-lib-kernel_route_onboarding_fold', CORE + ['--lib', '--', 'palw_kernel_route_fold_v1', 'palw_onboarding_fold_v1']),
+    ('core-lib-kernel_route_onboarding_fold', CORE + ['--lib', '--', 'palw_kernel_route_v1', 'palw_onboarding_v1', 'f02b_kernel_court_admission_v1']),
     ('core-lib-provider_court', CORE + ['--lib', '--', 'palw_provider_court_v1', 'palw_provider_court_fold_v1']),
     ('core-lib-rfc0018', CORE + ['--lib', '--', 'palw_rfc0018_v1']),
     ('core-lib-model_tier', CORE + ['--lib', '--', 'palw_model_tier_v1']),
@@ -57,9 +57,20 @@ RUNS = [
     ('consensus-lg14a_restart', ['-p', 'kaspa-consensus', '--lib', '--', 'lg14a_the_pursuit_survives_a_node_restart']),
     ('kaspad-lg14b_suite', ['-p', 'kaspad', '--lib', '--', 'lg14b_']),
     ('kaspad-lg14b_restart', ['-p', 'kaspad', '--lib', '--', '--exact',
-                              'palw_legacy_held_e2e::lg14b_a_restarted_outsider_reacquires_answered_units_without_replaying_old_accusations']),
+                              'palw_panel::palw_filer_replay::palw_filer_held::e2e::legacy_held::lg14b_a_restarted_outsider_reacquires_answered_units_without_replaying_old_accusations']),
 ]
 COUNT = re.compile(r'test result: \w+\. (\d+) passed; (\d+) failed')
+
+
+def run_outcome(results):
+    """Every invocation must finish, run a test and pass its parent summary."""
+    counts = [COUNT.findall(log) for _, log in results]
+    summaries = [(int(c[-1][0]), int(c[-1][1])) if c else (0, 0) for c in counts]
+    rc = next((rc for rc, _ in results if rc), 0)
+    passed = bool(results) and all(
+        rc == 0 and p > 0 and f == 0 and 'FAILED' not in log
+        for (rc, log), (p, f) in zip(results, summaries))
+    return rc, sum(p for p, _ in summaries), sum(f for _, f in summaries), passed
 
 
 def _part(env, part, test_threads, part_log=None):
@@ -98,7 +109,7 @@ def _warm(env, runs):
 
 
 def main():
-    from concurrent.futures import ThreadPoolExecutor
+    from concurrent.futures import ThreadPoolExecutor, as_completed
     ap = argparse.ArgumentParser()
     ap.add_argument('--out', required=True)
     ap.add_argument('--only', action='append', default=[])
@@ -125,7 +136,7 @@ def main():
         tasks = []
         for rid, args in runs:
             parts = args if isinstance(args[0], list) else [args]
-            threads = a.tir_test_threads if rid == 'core-lib-tir_public_fold' else None
+            threads = a.tir_test_threads if rid == 'core-lib-tir_public_fold' else (1 if rid.startswith('kaspad-') else None)
             for n, part in enumerate(parts):
                 if rid == 'core-lib-tir_public_fold':
                     rank = (0, 0 if n == 2 else 1)
@@ -137,22 +148,27 @@ def main():
         handles = {}
         for rank, rid, n, part, threads in sorted(tasks, key=lambda t: t[0]):
             handles[(rid, n)] = pool.submit(_part, env, part, threads, out / ('%s.part%d.log' % (rid, n)))
-        futures = {}
-        for rid, args in runs:
+        # Persist a suite as soon as its last part finishes. An interrupted long
+        # TIR part must not lose already completed suites' commit-bound records.
+        pending = {future: key for key, future in handles.items()}
+        completed = {}
+        definitions = dict(runs)
+        for future in as_completed(pending):
+            rid, n = pending[future]
+            completed[(rid, n)] = future.result()
+            args = definitions[rid]
             parts = args if isinstance(args[0], list) else [args]
-            futures[rid] = (parts, [handles[(rid, n)] for n in range(len(parts))])
-        for rid, (parts, futs) in futures.items():
-            results = [f.result() for f in futs]
-            rc = next((r for r, _ in results if r), 0)
+            if not all((rid, i) in completed for i in range(len(parts))):
+                continue
+            results = [completed[(rid, i)] for i in range(len(parts))]
             log = ''.join(l for _, l in results)
             (out / (rid + '.log')).write_text(log)
-            counts = [(int(x), int(y)) for x, y in COUNT.findall(log)]
-            passed_n, failed_n = sum(c[0] for c in counts), sum(c[1] for c in counts)
+            rc, passed_n, failed_n, passed = run_outcome(results)
             body = {
                 'kind': 'misaka-arming-run/v1', 'run': rid,
                 'command': ' && '.join(' '.join(['cargo', 'test', '--offline'] + part) for part in parts),
                 'exitCode': rc, 'testsPassed': passed_n, 'testsFailed': failed_n,
-                'passed': rc == 0 and passed_n > 0 and failed_n == 0 and 'FAILED' not in log, 'estimate': False,
+                'passed': passed, 'estimate': False,
                 'sourceCommit': head, 'treeDirty': False, 'startedAt': started_at[rid],
                 'seconds': round(time.time() - started_at[rid]), 'logSha256': hashlib.sha256(log.encode()).hexdigest(),
             }

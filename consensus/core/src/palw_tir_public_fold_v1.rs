@@ -5550,6 +5550,12 @@ mod conviction_e2e_tests {
         let old_point = b.state.last_point;
         b.state.last_point = Some(ctx);
         b.entries.push(PalwDeltaEntryV2::LastPoint { old: old_point, new: Some(ctx) });
+        // R-DETERM (2026-10-28): `world` inserts the licensed original directly (`set_false_valid_rows_for_tests`), so its derived
+        // deadline index never held the claim's Final row. Since G14 r6-d1-release (D1) a bound claim owes its normal Final
+        // deadline (`palw_rcore_deadline_v1` → `max(floor, last)`), so the index the fold would hold at rest is DL-1's, derived
+        // here once — the undo/redo below then compares like with like (a fixture gap, not a fold path).
+        super::super::rebuild_deadline_index_v2(&mut b.state, &params).unwrap();
+        b.state.assert_deadline_consistency(&params).expect("the fixture's deadline index is DL-1's before undo/redo");
         let protected = b.state.clone();
         // G14 lane r6-d1-release (user decision D1): the binding no longer withholds Final (DL-1 owes the bound claim its normal
         // deadline, `finalize_claim` proceeds — covered by `r6_d1_*` in `palw_state_v2::tests`); it still holds retirement,

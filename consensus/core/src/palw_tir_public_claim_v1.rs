@@ -587,6 +587,13 @@ pub(crate) fn palw_tir_public_frame_fixture_v1(forge: Option<(usize, usize)>, ma
 pub(crate) fn palw_tir_public_history_frame_fixture_v1() -> PalwTirPublicFrameFixtureV1 {
     tests::history_frame()
 }
+/// Small actual history program for material-intake functional tests. The long
+/// 16/9 fixture remains available for history/scale coverage.
+#[cfg(test)]
+pub(crate) fn palw_tir_public_material_frame_fixture_v1(prompt_input: bool) -> PalwTirPublicFrameFixtureV1 {
+    tests::history_frame_shape_v1(if prompt_input { tests::HistoryConditionV1::Input } else { tests::HistoryConditionV1::None },
+        crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat, 2, 2)
+}
 /// A distinct registered and honestly executed program: numerical Select condition
 /// reads actual Input(0), not a synthetic site or a mutated admitted plan.
 #[cfg(test)]
@@ -1032,6 +1039,10 @@ mod tests {
     }
     pub(super) fn history_frame_condition_v1(condition:HistoryConditionV1,prompt_form:crate::palw_prompt_ids_v1::PalwPromptIdsFormV1)
         ->super::PalwTirPublicFrameFixtureV1 {
+        history_frame_shape_v1(condition, prompt_form, 16, 9)
+    }
+    pub(super) fn history_frame_shape_v1(condition:HistoryConditionV1,prompt_form:crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+        prefill:u32,decode:u32)->super::PalwTirPublicFrameFixtureV1 {
         use crate::palw_fp_execution_v3::{PalwFpClassFactsV3, PalwFpRunFactsV3};
         use crate::palw_freeprompt_v3::*;
         use crate::palw_tir_corpus_fixture_v1::{fixture_with, programs};
@@ -1094,7 +1105,7 @@ mod tests {
                 block.nodes.push(Node{prim:Prim::StateWrite{state},inputs:vec![Ref::Node(clamp)],out:TensorType::scalar(DType::I8),commit:committed_writer});
             }
         }
-        let mut f = fixture_with(name, program, params, tokens, 16, 9);
+        let mut f = fixture_with(name, program, params, tokens, prefill, decode);
         assert!(f.greedy, "the V3 job uses greedy decoding");
         let (_, _, mut job, _) = crate::palw_prefix_family_court_v1::tests::qualified_prefix_case_for_tests_v1(false, false);
         let prefix_decode=job.decode.clone();
