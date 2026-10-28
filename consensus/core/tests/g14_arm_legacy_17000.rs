@@ -15,7 +15,9 @@
 //! Run: cargo test -p kaspa-consensus-core --test g14_arm_legacy_17000
 
 #![allow(warnings)]
-use kaspa_consensus_core::config::params::{ForkActivation, Params, palw_t12_shipped_params};
+use kaspa_consensus_core::config::params::{
+    ForkActivation, PALW_T12_G14_17000_FENCES_V1, Params, palw_t12_arm_after_int13_at_v1, palw_t12_shipped_params,
+};
 use kaspa_consensus_core::palw_court_capacity_v1::*;
 use kaspa_consensus_core::palw_g14_gates_v1::*;
 use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
@@ -69,6 +71,8 @@ fn record(fence: PalwG14GatedFenceV1, p: &Params, measured: Option<&PalwCourtMea
 /// testnet-12 with the candidates armed at [`AT`] (each on its `Params` field, mirrors synced), and the TEST records the gated ones need.
 fn armed(outsider_lane: bool) -> (Params, Vec<PalwG14ArmingRecordV1>) {
     let mut p = palw_t12_shipped_params();
+    // The candidate list is this test's ruleset. The shipped G14 arming stays on the launch params.
+    palw_t12_arm_after_int13_at_v1(&mut p, PALW_T12_G14_17000_FENCES_V1, None);
     let at = Some(ForkActivation::new(AT));
     p.palw_legacy_public_filer_v1 = at;
     p.sync_palw_legacy_public_filer_v1();

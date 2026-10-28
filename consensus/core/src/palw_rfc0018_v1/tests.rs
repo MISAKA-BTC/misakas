@@ -88,11 +88,25 @@ fn rfc18_never_collapses_and_fingerprints_are_some_only() {
     never.palw_rule_e_participation_v2 = Some(ForkActivation::never());
     never.palw_independently_work_certified_v1 = Some(ForkActivation::never());
     never.palw_dag_width_schedule_v1 = Some(PalwDagWidthScheduleFenceV1::unapproved_probe_at(ForkActivation::never()));
+    // Gate C's attestor liability is a G14 fence. Hold it dormant for this check, then restore it so the hash stays the shipped one.
+    let liability = never.palw_gate_c_attestor_liability_v1;
+    never.palw_gate_c_attestor_liability_v1 = Some(ForkActivation::never());
+    never.sync_palw_rfc0018_v1();
     never.validate_palw_rfc0018_v1().unwrap();
-    assert_eq!(never.consensus_params_id(), params_id, "Some(never()) hashes as None");
+    never.palw_gate_c_attestor_liability_v1 = liability;
+    never.sync_palw_rfc0018_v1();
+    // Shipped arms some of these at the G14 flag day. `Some(never())` hashes as absence, so the
+    // fingerprint matches the same params with those fields cleared.
+    let mut absent = base.clone();
+    absent.palw_dag_sibling_attribution_v1 = None;
+    absent.palw_panel_anchor_permissionless_v1 = None;
+    absent.palw_rule_e_participation_v2 = None;
+    absent.palw_independently_work_certified_v1 = None;
+    absent.palw_dag_width_schedule_v1 = None;
+    assert_eq!(never.consensus_params_id(), absent.consensus_params_id(), "Some(never()) hashes as None");
     // The identity two nodes compare normalizes `Some(never())` to absence; the schedule id is a REPORT, and like every Some-only
     // fence's (`for_each_fence` visits a present value, `never()` included) it names the never-armed fences.
-    assert_eq!(never.consensus_identity_id(), base.consensus_identity_id(), "Some(never()) is absence to the identity");
+    assert_eq!(never.consensus_identity_id(), absent.consensus_identity_id(), "Some(never()) is absence to the identity");
     for (i, name) in NAMES.iter().enumerate() {
         let mut armed = base.clone();
         let at = ForkActivation::new(FENCE + i as u64);

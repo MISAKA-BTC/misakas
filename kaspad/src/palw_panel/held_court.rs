@@ -2446,7 +2446,7 @@ mod tests {
         let dense = production.find_code("b.attn_site_evidence(").expect("the dense builder");
         let reads = production.find_code("held_court.chain_reads_v1(&held_host, &held_duties, current_daa)").expect("the chain reads");
         let moves = production
-            .find_code("held_court::palw_held_moves_v1(&held_host, &mut held_court, &held_duties, current_daa, busy)")
+            .find_code("held_court::palw_held_moves_v1(&held_host, held_court, &held_duties, current_daa, busy)")
             .expect("the moves");
         let dated =
             production[moves..].find_code("court_outbox.set_due(queued.key, queued.due);").expect("each with its due date") + moves;

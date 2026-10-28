@@ -446,7 +446,7 @@ mod tests {
         let walk = &walk[..walk.find_code("for claim in claims {").expect("the collector's walk")];
         assert!(
             walk.contains_code(
-                "crate::palw_licence_order::palw_licence_claim_order_v1(receipt_pool_v2.claim_ids(), &receipt_facts, |claim| {"
+                "crate::palw_licence_order::palw_licence_claim_order_v1(receipt_pool_v2.claim_ids(), receipt_facts, |claim| {"
             ),
             "the licences are offered oldest bind first, not in id order"
         );

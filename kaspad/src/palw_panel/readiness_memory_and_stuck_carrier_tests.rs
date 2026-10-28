@@ -776,7 +776,7 @@ fn the_tick_opens_a_stuck_carriers_slot_to_every_site_through_one_door() {
     assert!(stuck < open && open < escalated, "measured, opened, then the escalated site");
     let opened = &tick[open..escalated];
     for line in [
-        "self.open_stuck_carrier_v1(&session, stuck, late)",
+        "self.open_stuck_carrier_v1(session, stuck, late)",
         "funding = Some(opened);",
         "carrier_chain.set_inflight(0);",
         "held = false;",

@@ -15092,8 +15092,11 @@ async fn a_replayed_root_claim_signature_with_a_foreign_binding_cannot_crowd_out
 fn every_held_court_acceptance_arm_reads_the_claims_class_ladder() {
     let source = kaspa_consensus_core::palw_source_guard_v1::palw_processor_source_v1();
     let arm = |name: &str| {
-        let at = source.find(&format!("Obj::{name} {{")).unwrap_or_else(|| panic!("{name}'s arm"));
-        let end = at + source[at..].find("\n                Obj::").unwrap_or(source.len() - at);
+        let specific =
+            if name == "MaterialDisclosedHeld" { format!("Obj::{name} {{ disclosure") } else { format!("Obj::{name} {{ accusation") };
+        let at = source.find(&specific).unwrap_or_else(|| panic!("{name}'s arm"));
+        let rest = &source[at + specific.len()..];
+        let end = at + specific.len() + rest.find("\n            Obj::").unwrap_or(rest.len());
         &source[at..end]
     };
     assert!(arm("ShardCourtAccused").contains("let ladder = state.class_step_ladder_v1(&claim.class_id, ladder);"));
@@ -15166,7 +15169,7 @@ fn the_one_move_acceptance_arm_refuses_an_unanswerable_held_class_where_the_fold
 fn the_acceptance_layer_takes_the_held_root_claim_past_the_fence_and_refuses_an_unattributable_class() {
     let source = kaspa_consensus_core::palw_source_guard_v1::palw_processor_source_v1();
     let at = source.find("Obj::CourtAttnRootClaimed { session_id, root, arity, signature, .. }").expect("the move-1 arm");
-    let end = at + source[at..].find("\n                Obj::CourtAttnDissected").expect("the next arm");
+    let end = at + source[at..].find("\n            Obj::CourtAttnDissected").expect("the next arm");
     let arm = &source[at..end];
     assert!(arm.contains("| Obj::CourtAttnRootClaimedHeld { session_id, root, arity, signature, .. } =>"), "one arm, three forms");
     let fence =

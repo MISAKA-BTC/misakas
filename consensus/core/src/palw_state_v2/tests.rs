@@ -34867,7 +34867,8 @@ fn memory_routing_held_claim_mercy_preserves_acceptance_cohort_and_fails_closed(
     geometry.tile_len = geometry.attn_head_dim;
     let profile = qwen36_profile_v8(geometry).unwrap();
     let class_id = profile.shape_profile_id();
-    let ladder = *state.class_step_ladders.get(&claim.class_id).unwrap();
+    let ladder =
+        state.class_step_ladders.get(&claim.class_id).copied().unwrap_or(crate::palw_state_chunk_map::PALW_HELD_STEP_LADDER_V1);
     state.class_step_ladders.insert(class_id, ladder);
     state.fp_work_profiles.insert(class_id, Box::new(profile.clone()));
     claim.class_id = class_id;

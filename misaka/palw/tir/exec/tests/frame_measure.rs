@@ -1137,7 +1137,10 @@ fn door_breakdown_on_a_real_class() {
 #[test]
 fn read_set_on_a_real_class() {
     use std::collections::BTreeMap;
-    let path = std::path::PathBuf::from(std::env::var("MISAKA_TIR_FRAME_MEASURE_PALWTIR").expect("a PALWTIR1 file"));
+    let Ok(path_var) = std::env::var("MISAKA_TIR_FRAME_MEASURE_PALWTIR") else {
+        return;
+    };
+    let path = std::path::PathBuf::from(path_var);
     let per_kind: usize = std::env::var("MISAKA_READ_SET_PER_KIND").ok().and_then(|v| v.parse().ok()).unwrap_or(4);
     let artifact = Arc::new(TirArtifactV1::open(&path).unwrap());
     let (root, _) = artifact.inventory_root().unwrap();

@@ -450,7 +450,13 @@ fn dos_repro_3d_one_junk_2m_claim_forfeits_less_than_it_pins() {
     // ADR-0152 §4-quater (U-D1): the 2M row is closed at launch, so a live 2M claim exists only past the flag day
     // that installs its measured row — this test's premise runs there (`t12_2m_open`, measuring the derived
     // 13,995-DAA deadline).
-    let p = t12_2m_open();
+    let mut p = t12_2m_open();
+    // The attack fold runs past the G14 flag day and does not carry kernel-route extras.
+    kaspa_consensus_core::config::params::palw_t12_arm_after_int13_at_v1(
+        &mut p,
+        kaspa_consensus_core::config::params::PALW_T12_G14_17000_FENCES_V1,
+        None,
+    );
     let b = bundle(&p);
     let sp = b.state.clone();
     let economy = p.palw_seat_economy_at(0).expect("t12 arms the panel economy");

@@ -327,7 +327,7 @@ fn f13_a_drained_residue_is_left_for_a_mature_coinbase() {
         mined + source[mined..].find_code("if palw_fee_chain_drained_v1(carrier_chain.funding().as_ref()) {").expect("the drain rule");
     let resolved = drained
         + source[drained..]
-            .find_code("carrier_chain.set_funding(self.resolve_fee_funding(&session, palw_fee_funding_floor_v1()).await);")
+            .find_code("carrier_chain.set_funding(self.resolve_fee_funding(session, palw_fee_funding_floor_v1()).await);")
             .expect("resolved afresh");
     assert!(!source[mined..resolved].contains_code("} else if"), "inside the mined-tip branch");
     assert!(resolved - mined < 1_500);

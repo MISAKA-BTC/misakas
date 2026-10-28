@@ -3293,7 +3293,7 @@ mod tests {
             let arm = source.find(refused).unwrap_or_else(|| panic!("{refused}"));
             let call = &source[*hook..*hook + source[*hook..].find_code(".await;").expect("awaited")];
             assert!(arm < *hook && source[arm..*hook].lines().count() <= 3, "{refused} hooks J1 at once");
-            assert!(call.contains_code("&mut reporter_filer,") && call.contains_code("roots)"), "with the roots the arm refused");
+            assert!(call.contains_code("reporter_filer,") && call.contains_code("roots)"), "with the roots the arm refused");
         }
     }
 }

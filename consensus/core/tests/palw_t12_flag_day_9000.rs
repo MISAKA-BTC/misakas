@@ -29,13 +29,13 @@ use kaspa_consensus_core::config::drill::{
     palw_drill_tir_fence_at_v1, palw_drill_tir_fence2_at_v1,
 };
 use kaspa_consensus_core::config::params::{
-    ForkActivation, PALW_T12_INT11_FENCES_V1, PALW_T12_INT11_FLAG_DAY_DAA, PALW_T12_INT11_RHO100_FENCES_V1,
-    PALW_T12_INT11_RHO250_FENCES_V1, PALW_T12_INT11_RHO1000_FENCES_V1, PALW_T12_INT13_DAA, PALW_T12_INT13_FENCES_V1,
-    PALW_T12_MODEL_COURT_WINDOW_DAA, PALW_T12_POST_LAUNCH_FENCES_V1, PALW_T12_POST_LAUNCH_FENCES_V2, PALW_T12_POST_LAUNCH_FENCES_V3,
-    PALW_T12_TIR_FENCE2_FENCES_V1, PALW_T12_TIR_FLAG_DAY_FENCES_V1, Params, palw_t12_arm_int11_flag_day_at_v1,
-    palw_t12_arm_int13_flag_day_at_v1, palw_t12_drill_params_v1, palw_t12_launch_params_v1, palw_t12_release_v1_params,
-    palw_t12_release_v2_params, palw_t12_release_v3_params, palw_t12_release_v4_params, palw_t12_release_v5_params,
-    palw_t12_release_v6_params, palw_t12_shipped_params,
+    ForkActivation, PALW_T12_G14_17000_FENCES_V1, PALW_T12_INT11_FENCES_V1, PALW_T12_INT11_FLAG_DAY_DAA,
+    PALW_T12_INT11_RHO100_FENCES_V1, PALW_T12_INT11_RHO250_FENCES_V1, PALW_T12_INT11_RHO1000_FENCES_V1, PALW_T12_INT13_DAA,
+    PALW_T12_INT13_FENCES_V1, PALW_T12_MODEL_COURT_WINDOW_DAA, PALW_T12_POST_LAUNCH_FENCES_V1, PALW_T12_POST_LAUNCH_FENCES_V2,
+    PALW_T12_POST_LAUNCH_FENCES_V3, PALW_T12_TIR_FENCE2_FENCES_V1, PALW_T12_TIR_FLAG_DAY_FENCES_V1, Params,
+    palw_t12_arm_int11_flag_day_at_v1, palw_t12_arm_int13_flag_day_at_v1, palw_t12_drill_params_v1, palw_t12_launch_params_v1,
+    palw_t12_release_v1_params, palw_t12_release_v2_params, palw_t12_release_v3_params, palw_t12_release_v4_params,
+    palw_t12_release_v5_params, palw_t12_release_v6_params, palw_t12_shipped_params,
 };
 use kaspa_consensus_core::fork_id_v1::{evaluate_fork_id_v1, fork_id_gate_fences_v1, fork_id_v1};
 use kaspa_consensus_core::network::{NetworkId, NetworkType};
@@ -138,10 +138,14 @@ fn the_list_is_tier_one_and_armed_nowhere_on_the_shipped_ruleset() {
     for earlier in [750, 1_000, 1_300, 1_700, 2_000, 3_600] {
         assert!(schedule.contains(&earlier), "{earlier}: an earlier flag day, still scheduled ({schedule:?})");
     }
-    assert_eq!(schedule.last().copied(), Some(flag), "the int-13 height is the schedule's last ({schedule:?})");
+    assert!(schedule.contains(&flag), "int-13 stays on the shipped schedule ({schedule:?})");
+    assert_eq!(schedule.last().copied(), Some(17_400), "the G14 flag day is the schedule's last ({schedule:?})");
     let mut int12 = palw_t12_release_v6_params().fence_schedule_v1();
     int12.push(flag);
-    assert_eq!(schedule, int12, "the shipped schedule is the int-12 release's plus the flag day");
+    int12.push(17_400);
+    int12.sort_unstable();
+    int12.dedup();
+    assert_eq!(schedule, int12, "the shipped schedule is the int-12 release's plus int-13 and the G14 flag day");
     for daa in [0, 1, 749, 750, 5_300, H, flag - 1] {
         assert!(!shipped.palw_audit_1004_active_at(daa), "audit 1004 at {daa}");
         assert!(!shipped.palw_gen_range_twin_active_at(daa), "the range twin at {daa}");
@@ -166,7 +170,8 @@ fn the_list_is_tier_one_and_armed_nowhere_on_the_shipped_ruleset() {
         }
     }
     let armed_schedule = armed.fence_schedule_v1();
-    assert_eq!(armed_schedule.last(), Some(&H), "the int-13 height is the armed schedule's last ({armed_schedule:?})");
+    assert!(armed_schedule.contains(&H), "the test height is on the armed schedule ({armed_schedule:?})");
+    assert_eq!(armed_schedule.last(), Some(&17_400), "the G14 flag day stays the schedule's last ({armed_schedule:?})");
     assert_eq!(armed_schedule.iter().filter(|h| **h == H).count(), 1, "one height for the whole list");
 }
 
@@ -224,6 +229,9 @@ fn testnet12_ships_the_list_dormant_and_arming_it_moves_the_fingerprint_and_noth
         if LIST.contains(&name) {
             assert_eq!(was, None, "{name} is dormant on the int-12 baseline");
             assert_eq!(now.map(|f| f.daa_score()), PALW_T12_INT13_DAA, "{name} is armed at 15,500");
+        } else if PALW_T12_G14_17000_FENCES_V1.iter().any(|entry| entry.name == name) {
+            assert_eq!(was, None, "{name} is later than the int-12 baseline");
+            assert_eq!(now.map(|f| f.daa_score()), Some(17_400), "{name} arms at the G14 flag day");
         } else {
             assert_eq!(now, was, "{name}: the flag day moves only its own list");
         }

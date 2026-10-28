@@ -876,20 +876,18 @@ mod tests {
         };
         let producer = PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(Hash64::from_u64_word(7), 0));
         let claim = [9u8; 64];
-        assert_eq!(
-            palw_kernel_admission_preflight_v1(
-                PALW_KERNEL_COURT_ADMISSION_SCHEDULE_V1.as_ref(),
-                Some(0),
-                &claim,
-                &job,
-                100,
-                producer,
-                1,
-                0
-            ),
-            Ok(None),
-            "production: typed-missing, no admission"
-        );
+        let production = palw_kernel_admission_preflight_v1(
+            PALW_KERNEL_COURT_ADMISSION_SCHEDULE_V1.as_ref(),
+            Some(0),
+            &claim,
+            &job,
+            100,
+            producer,
+            1,
+            0,
+        )
+        .unwrap_err();
+        assert!(production.contains("InsufficientCapital"), "the pinned production schedule refuses short capital: {production}");
         let test = KernelCourtAdmissionScheduleV1::test_only_g14_estimate_v1();
         assert_eq!(
             palw_kernel_admission_preflight_v1(Some(&test), None, &claim, &job, 100, producer, 1, 0),

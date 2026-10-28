@@ -76,8 +76,13 @@ fn shared_context_query_ids_append_tags_and_have_complete_native_codec_coverage(
         let mut cut = NativeWireReaderV1::new(&bytes[..bytes.len() - 1], (bytes.len() - 1) as u64);
         assert!(Row::scan_native_wire_v1(&mut cut).is_err());
         let mut unsupported = bytes;
-        unsupported[1..3].copy_from_slice(&2u16.to_le_bytes());
-        assert!(borsh::from_slice::<Row>(&unsupported).unwrap().check(&key).is_err());
+        // Version 2 is a real shared-query encoding. A version this codec does not know is refused.
+        unsupported[1..3].copy_from_slice(&3u16.to_le_bytes());
+        let refused = match borsh::from_slice::<Row>(&unsupported) {
+            Ok(decoded) => decoded.check(&key).is_err(),
+            Err(_) => true,
+        };
+        assert!(refused, "an unsupported version is refused");
     }
     assert_eq!(borsh::to_vec(&Key::CourtService).unwrap(), vec![12]);
     assert_eq!(borsh::to_vec(&Key::CourtDutyClock(h(1))).unwrap()[0], 13);
