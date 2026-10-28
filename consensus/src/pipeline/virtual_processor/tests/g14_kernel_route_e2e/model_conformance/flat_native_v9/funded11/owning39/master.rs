@@ -456,8 +456,11 @@ fn mining_config_with(collateral_multiplier: u64, v3_budget: bool) -> (Config, P
     params.palw_independently_work_certified_v1 = Some(ForkActivation::new(0));
     if v3_budget {
         let fence = params.palw_bond_budget_v1.as_mut().expect("the owning39 world arms the budget");
-        // TEST-ONLY policy: the pinned V3 estimate with D2 rights slicing by rho (formula v2 refuses a budget without it). The
-        // production estimate itself is untouched.
+        // The public flag day is 17,400. This fixture spends the receipt around DAA 12,000, so the
+        // budget it prices has to be in force there. TEST-ONLY policy: the pinned V3 estimate with
+        // D2 rights slicing by rho (formula v2 refuses a budget without it). The production estimate
+        // itself is untouched.
+        fence.activation = ForkActivation::new(0);
         let mut policy = kaspa_consensus_core::palw_values_p4_v1::palw_bond_budget_policy_provisional_v1();
         policy.slice_rights_by_rho = true;
         fence.policy = policy;

@@ -1351,7 +1351,7 @@ fn past_seat_r_only_the_replays_can_end_a_verdict_with_valid() {
         "the verdict block's Valid exits, in order"
     );
     let fp_pass = block
-        .find_code(".fp_seat_replay_pass_v1(&session, duty, seat_r_duty, current_daa, pooled, &mut seat_replays)")
+        .find_code(".fp_seat_replay_pass_v1(session, duty, seat_r_duty, current_daa, pooled, &mut seat_replays)")
         .expect("the FP pass");
     let attempt_pass = block.find_code(".attempt_seat_replay_v1(").expect("the attempt pass");
     let attempt_args: String = block[attempt_pass..].chars().take_while(|c| *c != ')').filter(|c| !c.is_whitespace()).collect();

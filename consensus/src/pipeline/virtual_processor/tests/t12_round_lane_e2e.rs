@@ -192,6 +192,12 @@ pub(super) fn t12_with_harness_cards_over(
     }
     params.genesis.utxo_commitment = multiset.finalize();
     params.genesis.hash = kaspa_consensus_core::header::Header::from(&params.genesis).hash;
+    // The harness genesis is not the public one, so the public G14 records do not name it.
+    kaspa_consensus_core::config::params::palw_t12_arm_after_int13_at_v1(
+        &mut params,
+        kaspa_consensus_core::config::params::PALW_T12_G14_17000_FENCES_V1,
+        None,
+    );
 
     // The divergence is stated, not assumed: testnet-12 ships the lane at genesis.
     assert_eq!(shipped.evm_activation_daa_score, 0, "testnet-12 ships the EVM lane active from genesis");

@@ -4579,13 +4579,10 @@ pub(crate) mod tests {
             }
             let mut p =
                 crate::config::params::Params::from(crate::network::NetworkId::with_suffix(crate::network::NetworkType::Testnet, 12));
+            let expected =
+                p.palw_lifecycle_kind_fences_v1().with(PalwLifecycleKindFenceV1::SignedRegistrationV1, Some(ForkActivation::new(9)));
             p.palw_signed_registration_v1 = Some(ForkActivation::new(9));
-            assert_eq!(
-                p.palw_lifecycle_kind_fences_v1(),
-                PalwLifecycleKindFencesV1::default()
-                    .with(PalwLifecycleKindFenceV1::SignedRegistrationV1, Some(ForkActivation::new(9))),
-                "Params resolves each fence into its own slot"
-            );
+            assert_eq!(p.palw_lifecycle_kind_fences_v1(), expected, "Params resolves each fence into its own slot");
         }
 
         /// The landed half of a table row: does `fence` name a `Params` fence this tree has?
@@ -5564,7 +5561,7 @@ pub(crate) mod tests {
             // RFC-0006 GDN/router lane (tag 244, moved from 170 which G14 took first on integ): source pin from
             // `scripts/drills/gen_rfc06_gdn_wire_pin_v2.py MemoryRoutingV2 244` (the same generator reproduces tag 243's pin; the
             // consolidated test prints the authoritative value if this differs).
-            (244, 0xe3c3708bdefde0c0),
+            (244, 0x594db4a83d25950d),
             // lane GC-DUTY 2026-10-27: tag 245 landed in the base without a pin (Lead-approved allocation pass).
             (245, 0x46f5a3c46a89e44c),
             // R-D2-READY (tag 230, ADR-0188 B): the seat readiness root, owned by `palw_court_model_scope_v1`. Derived without a build
@@ -5603,7 +5600,7 @@ pub(crate) mod tests {
             (171, 0x68623b7dc7d30b55),
             // G14 lane r5-f02-wire: RFC-0029 shared court operation (178), under `palw_tir_public_conviction_v1`. Derived without a
             // build by `scripts/drills/a2u_new_kind_wire_pins.py` (2026-10-22); the Rust test stays the authority.
-            (178, 0x1d759cbe80301463),
+            (178, 0xaa08188bbaf86a88),
             // lane GC-DUTY 2026-10-27: tag 175 landed in the base without a pin (Lead-approved allocation pass).
             (175, 0xb12af2a47fb84b5e),
             (131, 0xf970df6a8bdc323c),

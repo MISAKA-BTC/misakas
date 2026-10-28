@@ -5,7 +5,9 @@
 
 #![allow(warnings)]
 use kaspa_consensus_core::Hash64;
-use kaspa_consensus_core::config::params::{Params, palw_t12_shipped_params};
+use kaspa_consensus_core::config::params::{
+    PALW_T12_G14_17000_FENCES_V1, Params, palw_t12_arm_after_int13_at_v1, palw_t12_shipped_params,
+};
 use kaspa_consensus_core::palw_mode_v2::{PalwConsensusMode, PalwConsensusParamsV2};
 use kaspa_consensus_core::palw_model_registry_v1::{
     PALW_REGISTRY_GLOBALS_V1, PalwModelRegistryFoldV1, PalwSeatReadinessRowV1, palw_genesis_model_works_v1,
@@ -284,7 +286,10 @@ fn review12_1_registration_burn_is_counted_once_by_seat_readiness() {
 /// honest registration fits in the block.
 #[test]
 fn review12_1_a_public_registration_replays_for_ever_and_the_fold_refuses_it_only_after_the_slot() {
-    let p = t12();
+    // The replay is at DAA 20,000, above the G14 flag day. This finding is the registration
+    // bound, so the G14 route (which a direct fold does not supply extras for) stays off.
+    let mut p = t12();
+    palw_t12_arm_after_int13_at_v1(&mut p, PALW_T12_G14_17000_FENCES_V1, None);
     let b = bundle_of(&p);
     let extras = t12_extras(&p, &b);
     let s0 = genesis_with(&b, &[(REGISTRANT, 51_642_979_663_480)], &extras);
@@ -355,7 +360,10 @@ fn review12_1_a_dormant_class_replay_burns_the_registrant_again() {
 /// bytes one floor bond leaves after it has retired and every delay has run out.
 #[test]
 fn review12_1_a_retired_floor_bond_row_is_permanent() {
-    let p = t12();
+    // The idle span runs far past the G14 flag day. The row's permanence is the subject, so the
+    // G14 route (which this direct fold does not supply extras for) stays off.
+    let mut p = t12();
+    palw_t12_arm_after_int13_at_v1(&mut p, PALW_T12_G14_17000_FENCES_V1, None);
     let b = bundle_of(&p);
     let extras = t12_extras(&p, &b);
     let floor = palw_bond_registration_floor_v1(b.state.min_collateral_sompi(), true);

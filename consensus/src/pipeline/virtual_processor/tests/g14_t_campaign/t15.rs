@@ -68,8 +68,16 @@ async fn t15_old_claims_keep_old_rules_across_the_fence_and_new_claims_take_the_
 fn t15_shipping_identity_unchanged_and_the_armed_ruleset_is_a_different_identity() {
     let shipped = palw_t12_shipped_params();
     assert!(shipped.palw_panel_free_v1.is_none(), "shipped testnet-12: palw_panel_free_v1 dormant");
-    assert!(shipped.palw_probabilistic_constraints_v1.is_none(), "shipped testnet-12: palw_probabilistic_constraints_v1 dormant");
-    assert!(shipped.palw_g14_route_required_v1.is_none(), "shipped testnet-12: palw_g14_route_required_v1 dormant");
+    assert_eq!(
+        shipped.palw_probabilistic_constraints_v1,
+        Some(ForkActivation::new(17_400)),
+        "shipped testnet-12: palw_probabilistic_constraints_v1 at the G14 flag day"
+    );
+    assert_eq!(
+        shipped.palw_g14_route_required_v1,
+        Some(ForkActivation::new(17_400)),
+        "shipped testnet-12: palw_g14_route_required_v1 at the G14 flag day"
+    );
     let routed = Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12));
     assert_eq!(routed.consensus_params_id(), Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12)).consensus_params_id());
     let (armed, ..) = kernel_config_with(Some(PalwPanelFreeFenceV1::interim_v1(ForkActivation::new(H), Vec::new())));

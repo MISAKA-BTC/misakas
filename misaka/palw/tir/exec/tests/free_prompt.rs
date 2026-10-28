@@ -434,9 +434,11 @@ fn tir_free_prompt_contexts_carry_the_registered_semantics_the_node_sets() {
 fn tir_free_prompt_builder_executes_a_non_default_class_under_its_registered_semantics() {
     use kaspa_consensus_core::palw_class_semantics_v1::PalwClassSemanticsV1;
     use kaspa_consensus_core::palw_fp_execution_v3::PalwFpClassFactsV3;
-    let mut pair = backends("semantics-builder").into_iter();
+    let mut pair = backends("semantics-builder-default").into_iter();
     let (name, default_backend) = pair.next().unwrap();
-    let (_, mut set_backend) = backends("semantics-builder").into_iter().next().unwrap();
+    // A second build of the same tag rewrites the first artifact in place, which the open
+    // backend then refuses. The two builds are the same class in different directories.
+    let (_, mut set_backend) = backends("semantics-builder-set").into_iter().next().unwrap();
     let mut semantics = PalwClassSemanticsV1::of_registration(
         default_backend.class_id(),
         default_backend.artifact_root(),

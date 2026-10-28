@@ -172,12 +172,13 @@ fn the_shipped_ruleset_arms_every_post_launch_fence_at_750_and_validates() {
     expected_schedule.extend(PALW_T12_INT11_RHO250_DAA);
     expected_schedule.extend(PALW_T12_INT11_RHO1000_DAA);
     expected_schedule.extend(PALW_T12_INT13_DAA);
+    expected_schedule.push(PALW_T12_G14_17000_DAA_V1);
     expected_schedule.sort_unstable();
     expected_schedule.dedup();
     assert_eq!(
         release.fence_schedule_v1(),
         expected_schedule,
-        "750, D1's 1,000, then the second, third, IR, DAA-3,600, int-11 and int-13 flag days"
+        "750, D1's 1,000, then the second, third, IR, DAA-3,600, int-11, int-13 and G14 flag days"
     );
     // The DAA-3,600 flag day's one fence: dormant below it, in force from it, on the shipped ruleset only; the
     // model court window rides no flag day (the coordinator's decision of 2026-10-01).

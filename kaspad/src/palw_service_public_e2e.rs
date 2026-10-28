@@ -153,6 +153,12 @@ pub(super) fn fixture_config_with(
     }
     params.genesis.utxo_commitment = hash.finalize();
     params.genesis.hash = kaspa_consensus_core::header::Header::from(&params.genesis).hash;
+    // Fixture keys rewrite genesis, so the public G14 records do not name this chain.
+    kaspa_consensus_core::config::params::palw_t12_arm_after_int13_at_v1(
+        &mut params,
+        kaspa_consensus_core::config::params::PALW_T12_G14_17000_FENCES_V1,
+        None,
+    );
     params.skip_proof_of_work = true;
     params.evm_activation_daa_score = u64::MAX;
     params.palw_model_evm = None;
@@ -167,6 +173,7 @@ pub(super) fn fixture_config_with(
         params.sync_palw_fp_decode_constraint_v1();
         params.palw_fp_constraint_v2 = Some(ForkActivation::new(0));
     }
+    params.sync_palw_g14_gates_v1();
     params.validate_palw_v2().expect("fixture keys and the ordinary decode-rules fence validate");
     params.palw_legacy_public_filer_v1 =
         Some(ForkActivation::new(if before_job_retention { if tiled { 1200 } else { 1060 } } else { 0 }));

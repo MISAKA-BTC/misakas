@@ -122,6 +122,7 @@ fn an_armed_fence_is_fingerprinted_some_only_and_collapses_from_never() {
     for (_, entry, _) in fences() {
         (entry.set)(&mut base, None);
     }
+    base.sync_palw_g14_gates_v1();
     base.validate_palw_v2().expect("the shipped testnet-12 without the RFC-0001 fences assembles");
     for (fence, entry, _) in fences() {
         let mut armed = base.clone();
@@ -161,6 +162,8 @@ fn a_fence_arms_over_its_prerequisites_and_is_refused_without_them_by_name() {
             // Version 12 is a prefix-state job: the fence it rides is armed (with its own prerequisites) below it.
             armed.palw_fp_prefix_state = Some(ForkActivation::new(at - 1));
         }
+        // Arming a route input moves the G14 mirror. The fold reads the mirror.
+        armed.sync_palw_g14_gates_v1();
         armed.validate_palw_v2().unwrap_or_else(|e| panic!("{fence} over testnet-12's prerequisites: {e}"));
         // Below a prerequisite, by name.
         for prereq in &prereqs {

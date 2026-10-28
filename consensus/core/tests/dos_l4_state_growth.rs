@@ -186,7 +186,14 @@ fn empty_block(
 /// 150 locks rooted.
 #[test]
 fn expired_locks_and_liabilities_are_pruned_by_the_fold() {
-    let p = t12();
+    // The sweep runs past the G14 flag day. This lane measures pruning, so the G14 route
+    // (which a direct fold does not supply extras for) stays off.
+    let mut p = t12();
+    kaspa_consensus_core::config::params::palw_t12_arm_after_int13_at_v1(
+        &mut p,
+        kaspa_consensus_core::config::params::PALW_T12_G14_17000_FENCES_V1,
+        None,
+    );
     let sp = state_params(&p);
     let mut state = grown_state(&sp, 50, 3, 8);
     let extras = lane_extras(true);
@@ -221,7 +228,14 @@ fn below_the_fence_the_rows_stay_as_they_always_did() {
 /// recent licence so the escape is closed); the next boundary past both drops them.
 #[test]
 fn a_row_inside_its_horizon_survives_the_boundary() {
-    let p = t12();
+    // The horizon sits above the G14 flag day. This lane measures the two clocks, so the G14
+    // route (which a direct fold does not supply extras for) stays off.
+    let mut p = t12();
+    kaspa_consensus_core::config::params::palw_t12_arm_after_int13_at_v1(
+        &mut p,
+        kaspa_consensus_core::config::params::PALW_T12_G14_17000_FENCES_V1,
+        None,
+    );
     let sp = state_params(&p);
     let wc = sp.window_court();
     let mut carriage = PalwStateCarriageV2::from_state(&PalwChainStateV2::genesis());

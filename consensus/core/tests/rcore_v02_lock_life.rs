@@ -81,6 +81,15 @@ fn armed(at: u64) -> Params {
     assert_eq!(p.palw_final_lock_life, None, "the launch ruleset leaves the fence dormant");
     p.palw_final_lock_life = Some(ForkActivation::new(at));
     p.sync_palw_final_lock_life();
+    // The launch ruleset keeps the G14 filer at 17,400. A lock life beside it needs full collateral
+    // at or below the later of the two.
+    if let Some(filer) = p.palw_legacy_public_filer_v1.filter(|f| *f != ForkActivation::never()) {
+        let later = at.max(filer.daa_score());
+        if p.palw_final_lock_full_collateral.is_none_or(|f| f == ForkActivation::never() || f.daa_score() > later) {
+            p.palw_final_lock_full_collateral = Some(ForkActivation::new(later));
+            p.sync_palw_final_lock_full_collateral();
+        }
+    }
     p.validate_palw_v2().expect("the armed copy is a runnable ruleset");
     p
 }

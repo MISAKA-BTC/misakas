@@ -16,9 +16,10 @@ use kaspa_consensus_core::config::drill::{
 };
 use kaspa_consensus_core::config::params::{
     PALW_T12_FULL_ACTIVATION_DAA, PALW_T12_FULL_ACTIVATION_FENCES_V1, PALW_T12_FULL_ACTIVATION_TARGET_DAA_V1,
-    PALW_T12_INT11_FLAG_DAY_DAA, PALW_T12_INT11_RHO100_DAA, PALW_T12_INT11_RHO250_DAA, PALW_T12_INT11_RHO1000_DAA, PALW_T12_INT13_DAA,
-    PALW_T12_INT13_FENCES_V1, Params, palw_t12_arm_after_int13_at_v1, palw_t12_arm_full_activation_at_v1, palw_t12_drill_params_v1,
-    palw_t12_release_v6_params, palw_t12_release_v7_params, palw_t12_shipped_params,
+    PALW_T12_G14_17000_FENCES_V1, PALW_T12_INT11_FLAG_DAY_DAA, PALW_T12_INT11_RHO100_DAA, PALW_T12_INT11_RHO250_DAA,
+    PALW_T12_INT11_RHO1000_DAA, PALW_T12_INT13_DAA, PALW_T12_INT13_FENCES_V1, Params, palw_t12_arm_after_int13_at_v1,
+    palw_t12_arm_full_activation_at_v1, palw_t12_drill_params_v1, palw_t12_release_v6_params, palw_t12_release_v7_params,
+    palw_t12_shipped_params,
 };
 
 /// The list's names, in the order its prerequisites need. Adding an entry is one line here, one line in the list, and the notes.
@@ -148,7 +149,8 @@ fn the_list_is_the_int13_list_then_the_g14_fences_in_prerequisite_order() {
     }
     for missing in MISSING_PREREQUISITES {
         assert!(index(missing).is_none(), "{missing} is a documented missing prerequisite, not an entry");
-        assert_eq!(fence_at(&shipped, missing), None, "{missing} is not in force on testnet-12 either");
+        let want = if *missing == "palw_model_bond_allocation_v1" { Some(17_400) } else { None };
+        assert_eq!(fence_at(&shipped, missing), want, "{missing} on the shipped ruleset");
     }
     // `palw_shard_court` is a genesis rule of the held regime on testnet-12: not on the list (moving it would move a genesis rule).
     assert!(index("palw_shard_court").is_none());
@@ -162,18 +164,26 @@ fn with_the_height_none_the_shipped_ruleset_is_the_fleets_int13_release() {
     assert_eq!(PALW_T12_FULL_ACTIVATION_DAA, None, "nothing armed until the records are pinned and the user approves");
     assert_eq!(PALW_T12_INT13_DAA, Some(15_500), "the public fleet's int-13 height (user, 2026-10-25)");
     let int13: Vec<&str> = PALW_T12_INT13_FENCES_V1.iter().map(|f| f.name).collect();
+    let g14: Vec<&str> = PALW_T12_G14_17000_FENCES_V1.iter().map(|f| f.name).collect();
     let shipped = palw_t12_shipped_params();
     for name in LIST {
-        let want = if int13.contains(&name) { Some(15_500) } else { None };
+        let want = if int13.contains(&name) {
+            Some(15_500)
+        } else if g14.contains(&name) {
+            Some(17_400)
+        } else {
+            None
+        };
         assert_eq!(fence_at(&shipped, name), want, "{name} on the shipped ruleset");
     }
-    assert_eq!(ids(&palw_t12_release_v7_params()), ids(&shipped), "the v7 baseline is the shipped (fleet) ruleset");
+    assert_ne!(ids(&palw_t12_release_v7_params()).0, ids(&shipped).0, "v7 is shipped with the G14 list taken off");
     assert_eq!(ids(&palw_t12_release_v6_params()), int12_ids(), "v6 is int-12's, byte for byte");
     assert_eq!(ids(&shipped).1, int12_ids().1, "a scheduled height is normalised out of the handshake identity");
-    // Dormant twice is dormant: the reverse-order clear of an already-dormant list moves nothing, and keeps 15,500.
     let mut again = shipped.clone();
-    palw_t12_arm_after_int13_at_v1(&mut again, PALW_T12_FULL_ACTIVATION_FENCES_V1, None);
-    assert_eq!(ids(&again), ids(&shipped));
+    palw_t12_arm_after_int13_at_v1(&mut again, PALW_T12_G14_17000_FENCES_V1, None);
+    assert_eq!(ids(&again), ids(&palw_t12_release_v7_params()), "clearing the G14 list is the v7 baseline");
+    palw_t12_arm_after_int13_at_v1(&mut again, PALW_T12_G14_17000_FENCES_V1, Some(17_400));
+    assert_eq!(ids(&again), ids(&shipped), "re-arming the G14 list restores the shipped ruleset");
 }
 
 #[test]
@@ -190,9 +200,15 @@ fn sixteen_thousand_is_used_by_no_other_list_or_schedule() {
     ] {
         assert_ne!(other, Some(target), "another list's height");
     }
+    let g14: Vec<&str> = PALW_T12_G14_17000_FENCES_V1.iter().map(|f| f.name).collect();
+    let int13: Vec<&str> = PALW_T12_INT13_FENCES_V1.iter().map(|f| f.name).collect();
     for p in [palw_t12_shipped_params(), palw_t12_drill_params_v1(&salt())] {
-        assert!(!p.fence_schedule_v1().contains(&target), "{:?}", p.fence_schedule_v1());
-        assert!(p.palw_fences_v1().iter().all(|(_, f)| f.map(|f| f.daa_score()) != Some(target)));
+        assert!(p.fence_schedule_v1().contains(&target), "the G14 flag day schedules 17,400: {:?}", p.fence_schedule_v1());
+        for (name, fence) in p.palw_fences_v1() {
+            if fence.map(|f| f.daa_score()) == Some(target) {
+                assert!(g14.contains(&name) && !int13.contains(&name), "{name} at 17,400 is a G14 fence");
+            }
+        }
     }
 }
 
@@ -217,7 +233,8 @@ fn armed_at_a_test_height_it_moves_the_params_and_schedule_ids_only_and_comes_ba
     assert_ne!(a.2, b.2, "the schedule names 17,000");
     assert!(armed.fence_schedule_v1().contains(&PALW_T12_FULL_ACTIVATION_TARGET_DAA_V1));
     palw_t12_arm_after_int13_at_v1(&mut armed, PALW_T12_FULL_ACTIVATION_FENCES_V1, None);
-    assert_eq!(ids(&armed), ids(&shipped), "dormant in reverse order is the shipped ruleset again");
+    palw_t12_arm_after_int13_at_v1(&mut armed, PALW_T12_G14_17000_FENCES_V1, Some(PALW_T12_FULL_ACTIVATION_TARGET_DAA_V1));
+    assert_eq!(ids(&armed), ids(&shipped), "the G14 list at 17,400 is the shipped ruleset again");
 }
 
 /// **Armed without its records, the list is refused.** The records each entry needs (the notes list them per fence): the G14
@@ -254,9 +271,16 @@ fn drill_with_the_earlier_flag_days_low() -> Params {
 fn the_drill_flag_refuses_untouched_until_the_records_exist() {
     let before = drill_with_the_earlier_flag_days_low();
     let int13: Vec<&str> = PALW_T12_INT13_FENCES_V1.iter().map(|f| f.name).collect();
+    let g14: Vec<&str> = PALW_T12_G14_17000_FENCES_V1.iter().map(|f| f.name).collect();
     for name in LIST {
-        // The drill genesis carries the shipped int-13 height (15,500); every other entry is dormant before the flag.
-        let want = if int13.contains(&name) { Some(15_500) } else { None };
+        // The drill copies the shipped ruleset: int-13 at 15,500, the rest of the G14 list at 17,400.
+        let want = if int13.contains(&name) {
+            Some(15_500)
+        } else if g14.contains(&name) {
+            Some(17_400)
+        } else {
+            None
+        };
         assert_eq!(fence_at(&before, name), want, "{name}: on the drill ruleset before the flag");
     }
     let mut p = before.clone();

@@ -590,7 +590,7 @@ fn the_tick_records_service_where_it_sees_it() {
     let block = &block[..block.find_code("let Some(verdict) = verdict else { continue };").unwrap()];
     let pre = source.find_code("if seat_r && duty.free_prompt && service.is_unserved(&duty.claim_id) {").expect("the pre-check");
     let budget =
-        source.find_code("self.replay_memory_budget_v1(&session, Some((duty.class_id, duty.artifact_root)))").expect("deferral");
+        source.find_code("self.replay_memory_budget_v1(session, Some((duty.class_id, duty.artifact_root)))").expect("deferral");
     let verdict = source.find_code("let verdict = 'verdict: {").unwrap();
     assert!(pre < budget && budget < verdict, "asked before a replay deferred for memory skips the verdict");
     assert!(

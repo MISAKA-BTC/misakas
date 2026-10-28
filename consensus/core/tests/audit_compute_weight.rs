@@ -193,7 +193,8 @@ fn audit_l1_a_new_root_on_a_genesis_graph_is_admitted_and_priced_as_the_graph() 
         println!("t12 shipped: {name:<34} {armed:?}");
     }
     assert!(p.palw_economic_payout.is_some() && p.palw_model_lines.is_some() && p.palw_artifact_root_ownership.is_some());
-    assert!(p.palw_bond_budget_v1.is_none() && p.palw_model_bond_allocation_v1.is_none(), "no bond cap on testnet-12");
+    assert_eq!(p.palw_bond_budget_v1.as_ref().map(|f| f.activation.daa_score()), Some(17_400));
+    assert_eq!(p.palw_model_bond_allocation_v1.as_ref().map(|f| f.activation.daa_score()), Some(17_400));
 
     let attacker = bond_key(0xA77AC);
     let state = t12_genesis_state(&p, &b, 1_000_000 * 100_000_000);

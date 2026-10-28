@@ -635,7 +635,10 @@ fn tn1_licensed_mode(
 ) -> (Lane, PalwChainStateV2, crate::palw_tir_public_claim_v1::PalwTirPublicClaimV1, u64) {
     use crate::palw_tir_public_carriage_v1::{PalwTirPublicControlActionV1 as A, PalwTirPublicControlTargetV1 as T};
     use crate::palw_tir_public_owned_v1::{PalwTirPublicOwnedActionV1 as Owned, PalwTirPublicWorkPhaseV1, PalwTirPublicWorkScopeV1};
-    let cost = crate::palw_tir_frame_cost_v1::palw_tir_frame_test_only_cost_v1();
+    let mut cost = crate::palw_tir_frame_cost_v1::palw_tir_frame_test_only_cost_v1();
+    // The court-service binding runs to accepted + DISPUTE_WINDOW. The test-only retention of 8
+    // leaves the signed custody short of that horizon.
+    cost.config.reorg_retention_daa = cost.config.reorg_retention_daa.max(crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA);
     let mut l = lane_with_mode(false, forge, Some(cost), privacy_mode);
     l.p = l.p.clone().with_panel_da_disclosure_from_daa(disclosure_from);
     // An accuser's room is a share of its collateral (the fixture params carry none): half, as the conviction fold tests use.
@@ -1235,7 +1238,10 @@ fn panelda_undisclosed_claim_defaults_without_conviction() {
 /// exactly as before (no ids, no accounting); a disclosure with no row is refused; and PublicDa writes no row past the fence.
 #[test]
 fn panelda_fence_boundary_is_byte_identical_below() {
-    let cost = crate::palw_tir_frame_cost_v1::palw_tir_frame_test_only_cost_v1();
+    let mut cost = crate::palw_tir_frame_cost_v1::palw_tir_frame_test_only_cost_v1();
+    // The court-service binding runs to accepted + DISPUTE_WINDOW. The test-only retention of 8
+    // leaves the signed custody short of that horizon.
+    cost.config.reorg_retention_daa = cost.config.reorg_retention_daa.max(crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA);
     let mut l = lane_with_mode(false, None, Some(cost), PANEL_DA);
     l.p = l.p.clone().with_panel_da_disclosure_from_daa(Some(AT_DAA + 1));
     let err = apply_derived(&l.state, &l.p, &at(), std::slice::from_ref(&l.object), &l.extras).expect_err("below the fence");

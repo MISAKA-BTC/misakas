@@ -26,7 +26,9 @@
 mod common;
 use common::*;
 
-use kaspa_consensus_core::config::params::{ForkActivation, palw_t12_launch_params_v1};
+use kaspa_consensus_core::config::params::{
+    ForkActivation, PALW_T12_G14_17000_FENCES_V1, palw_t12_arm_after_int13_at_v1, palw_t12_launch_params_v1,
+};
 use kaspa_consensus_core::palw_g14_gates_v1::*;
 use kaspa_consensus_core::palw_offence_v1::{
     PALW_PANEL_FALSE_VALID_VERSION_V1, PalwOffenceKindV1, PalwPanelContradictionV1, PalwPanelFalseValidEvidenceV1,
@@ -68,6 +70,10 @@ enum Rule {
 /// asserted to be refused by name.
 fn ruleset(rule: Rule) -> Params {
     let mut p = palw_t12_launch_params_v1();
+    // An isolated genesis skips the public arming-record pins. The G14 list stays off: this lane
+    // folds claims directly, and the public flag day would turn the route and the ingress cap on.
+    p.genesis = palw_isolated_g14_genesis_v1(&p.genesis, Hash64::from_u64_word(0x0613_0000_0000_0001)).expect("isolated");
+    palw_t12_arm_after_int13_at_v1(&mut p, PALW_T12_G14_17000_FENCES_V1, None);
     let at = Some(ForkActivation::new(0));
     p.palw_final_lock_life = at;
     p.sync_palw_final_lock_life();
@@ -236,6 +242,8 @@ fn lg14a_with_v02_lock_life_needs_the_full_collateral_split() {
     life_later.validate_palw_v2_with_arming_records_v1(&records(&life_later)).expect("the split with the life (testnet-12's 750)");
     // LG14-A without V02's life (testnet-12 as launched): no requirement.
     let mut launch = palw_t12_launch_params_v1();
+    launch.genesis = palw_isolated_g14_genesis_v1(&launch.genesis, Hash64::from_u64_word(0x0613_0000_0000_0002)).expect("isolated");
+    palw_t12_arm_after_int13_at_v1(&mut launch, PALW_T12_G14_17000_FENCES_V1, None);
     launch.palw_legacy_public_filer_v1 = Some(ForkActivation::new(0));
     launch.sync_palw_legacy_public_filer_v1();
     launch.sync_palw_g14_gates_v1();

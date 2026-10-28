@@ -163,7 +163,13 @@ fn d1_second_clock_is_not_waived_once_the_finals_retire() {
 /// (`v4`, duty gate on) and on the fold's retire gate.
 #[test]
 fn every_exit_is_released_on_the_daa_clock_after_two_court_windows_without_a_licence() {
-    let p = t12();
+    // E is past the G14 flag day. The retire fold is this lane's subject, so the G14 route stays off.
+    let mut p = t12();
+    kaspa_consensus_core::config::params::palw_t12_arm_after_int13_at_v1(
+        &mut p,
+        kaspa_consensus_core::config::params::PALW_T12_G14_17000_FENCES_V1,
+        None,
+    );
     let b = bundle(&p);
     let depth = PALW_T12_SETTLED_ANCHOR_DEPTH;
     let wc = b.state.window_court();

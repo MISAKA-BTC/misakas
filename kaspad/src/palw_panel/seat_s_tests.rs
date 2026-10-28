@@ -820,7 +820,7 @@ fn f4_the_pre_check_does_not_price_a_resuming_partial_seat_as_a_full_seat() {
     let source = source();
     let block = &source[source.find_code("for index in order {").expect("the duty loop")..];
     let check =
-        block.find_code("self.replay_memory_budget_v1(&session, Some((duty.class_id, duty.artifact_root)))").expect("the check");
+        block.find_code("self.replay_memory_budget_v1(session, Some((duty.class_id, duty.artifact_root)))").expect("the check");
     let guard = &block[..check];
     let guard = &guard[guard.rfind("if !(seat_r").expect("its guard")..];
     let squeezed: String = guard.chars().filter(|c| !c.is_whitespace()).collect();

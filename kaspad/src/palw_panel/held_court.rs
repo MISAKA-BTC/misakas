@@ -2440,7 +2440,7 @@ mod tests {
         );
         let pushed = production[route..].find_code("held_duties.push(duty.clone());").expect("routed") + route;
         let dense_resolve = production[route..]
-            .find_code("let mut backend = match self.resolve_backend_for_claim_v1(&session, duty.class_id, duty.artifact_root, Some(duty.claim_id))")
+            .find_code("let mut backend = match self.resolve_backend_for_claim_v1(session, duty.class_id, duty.artifact_root, Some(duty.claim_id))")
             .expect("the dense route's backend")
             + route;
         let dense = production.find_code("b.attn_site_evidence(").expect("the dense builder");

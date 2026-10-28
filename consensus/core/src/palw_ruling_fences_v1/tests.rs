@@ -98,11 +98,13 @@ fn every_shipped_ruleset_mirrors_nothing_so_every_rule_is_the_old_one() {
     let sp = shipped_sp();
     assert_eq!(sp.court_model_scope_from_daa(), None);
     assert_eq!(sp.public_evidence_reward_from_daa(), None);
-    assert_eq!(sp.claim_hard_deadline_v1(), None);
+    let x3 = sp.claim_hard_deadline_v1().expect("shipped testnet-12 arms X3 at 17,400");
+    assert_eq!(x3.from_daa, 17_400);
+    let below = claim(1_000, 11_000);
     let late = claim(u64::MAX / 2, u64::MAX / 2 + 10_000);
-    assert!(!palw_claim_x3_governs_v1(&sp, &late));
-    assert_eq!(palw_claim_hard_deadline_of_v1(&sp, &late), None);
-    assert_eq!(palw_claim_pursuit_may_start_v1(&sp, &late, u64::MAX), Ok(()));
+    assert!(!palw_claim_x3_governs_v1(&sp, &below));
+    assert_eq!(palw_claim_hard_deadline_of_v1(&sp, &below), None);
+    assert_eq!(palw_claim_pursuit_may_start_v1(&sp, &below, 1_000), Ok(()));
     assert_eq!(palw_public_evidence_reward_refusal_v1(&sp, u64::MAX, None), None);
     for kind in PALW_D2_RESTRICTED_UNITS_V1 {
         assert_eq!(palw_court_model_scope_admits_v1(&sp, &late, kind), Ok(()));
@@ -209,7 +211,7 @@ fn req_x3_6_retention_extends_to_the_hard_deadline_and_is_priced() {
     // Old claims and shipped rulesets: no obligation beyond the record's own.
     assert_eq!(palw_claim_x3_retention_daa_v1(&sp, &claim(FENCE - 1, FENCE + 50)), None);
     assert_eq!(palw_claim_retention_obligation_v1(&sp, &claim(FENCE - 1, FENCE + 50)), FENCE + 50);
-    assert_eq!(palw_claim_x3_retention_daa_v1(&shipped_sp(), &claim(u64::MAX / 2, 7)), None);
+    assert_eq!(palw_claim_x3_retention_daa_v1(&shipped_sp(), &claim(1_000, 7)), None);
     // Every pursuit X3 admits now runs inside retention: `start + B_remaining <= hard <= retention`.
     let c = claim(FENCE, FENCE + 50);
     let budget = palw_claim_pursuit_budget_v1(&sp, &p);

@@ -467,15 +467,15 @@ mod tests {
             .find_code("let proof_waited_last_tick = std::mem::replace(&mut (*readiness_waiting), false);")
             .expect("the reset");
         let first_read =
-            production.find_code("self.readiness_duties_for_tick(&session, current_daa, proof_waited_last_tick)").expect("M1's read");
+            production.find_code("self.readiness_duties_for_tick(session, current_daa, proof_waited_last_tick)").expect("M1's read");
         assert!(reset < first_read && first_read < licences, "the wait is reset each tick, before any proof is read");
         assert_eq!(
-            production.count_code("readiness_duties_for_tick(&session, current_daa, proof_waited_last_tick)"),
+            production.count_code("readiness_duties_for_tick(session, current_daa, proof_waited_last_tick)"),
             2,
             "both reads — M1's and the Own site's — are cued by last tick's wait"
         );
         assert!(
-            !production.contains_code("readiness_duties_for_tick(&session, current_daa, readiness_waiting)"),
+            !production.contains_code("readiness_duties_for_tick(session, current_daa, readiness_waiting)"),
             "no read is cued by the latch"
         );
         // Between the reset and the Licences site, the flag is set only where a proof of THIS tick waits: a

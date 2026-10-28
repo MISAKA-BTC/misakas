@@ -267,7 +267,7 @@ fn the_collector_follows_the_licences_and_sampled_precedes_the_memory_check() {
     let answers = duty_loop.find_code("break 'verdict Some(PalwReceiptVerdictV2::Sampled);").expect("the Sampled answer");
     assert!(due < memory && memory < verdict && verdict < answers, "decided before the memory check, answered first");
     assert!(
-        answers < duty_loop.find_code("if self.resolve_backend(&session, duty.class_id, duty.artifact_root).is_err() {").unwrap(),
+        answers < duty_loop.find_code("if self.resolve_backend(session, duty.class_id, duty.artifact_root).is_err() {").unwrap(),
         "ahead of every arm"
     );
 }

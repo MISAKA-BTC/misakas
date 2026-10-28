@@ -12010,6 +12010,8 @@ pub fn palw_t12_arm_int13_flag_day_at_v1(params: &mut Params, at: Option<u64>) {
 /// list moved it" twin).
 pub fn palw_t12_release_v6_params() -> Params {
     let mut params = palw_t12_shipped_params();
+    // G14 is later than int-12. Take it off before the int-13 list, or this baseline still carries 17,400.
+    palw_t12_arm_after_int13_at_v1(&mut params, PALW_T12_G14_17000_FENCES_V1, None);
     palw_t12_arm_int13_flag_day_at_v1(&mut params, None);
     params
 }
@@ -12019,6 +12021,7 @@ pub fn palw_t12_release_v6_params() -> Params {
 /// baseline the int-11 flag day is judged against (the fork-id comparison, the "only this list moved it" twin).
 pub fn palw_t12_release_v5_params() -> Params {
     let mut params = palw_t12_shipped_params();
+    palw_t12_arm_after_int13_at_v1(&mut params, PALW_T12_G14_17000_FENCES_V1, None);
     palw_t12_arm_int13_flag_day_at_v1(&mut params, None);
     palw_t12_arm_int11_flag_day_at_v1(&mut params, None);
     params
@@ -12031,6 +12034,7 @@ pub fn palw_t12_release_v5_params() -> Params {
 /// twin).
 pub fn palw_t12_release_v4_params() -> Params {
     let mut params = palw_t12_shipped_params();
+    palw_t12_arm_after_int13_at_v1(&mut params, PALW_T12_G14_17000_FENCES_V1, None);
     palw_t12_arm_int13_flag_day_at_v1(&mut params, None);
     palw_t12_arm_int11_flag_day_at_v1(&mut params, None);
     for fence in PALW_T12_POST_LAUNCH_FENCES_V4
@@ -12053,6 +12057,7 @@ pub fn palw_t12_release_v4_params() -> Params {
 /// baseline the IR flag day is judged against.
 pub fn palw_t12_release_v3_params() -> Params {
     let mut params = palw_t12_shipped_params();
+    palw_t12_arm_after_int13_at_v1(&mut params, PALW_T12_G14_17000_FENCES_V1, None);
     palw_t12_arm_int13_flag_day_at_v1(&mut params, None);
     palw_t12_arm_int11_flag_day_at_v1(&mut params, None);
     for fence in PALW_T12_DECODE_RULES_FENCES_V1
@@ -12075,6 +12080,7 @@ pub fn palw_t12_release_v3_params() -> Params {
 /// against.
 pub fn palw_t12_release_v2_params() -> Params {
     let mut params = palw_t12_shipped_params();
+    palw_t12_arm_after_int13_at_v1(&mut params, PALW_T12_G14_17000_FENCES_V1, None);
     palw_t12_arm_int13_flag_day_at_v1(&mut params, None);
     palw_t12_arm_int11_flag_day_at_v1(&mut params, None);
     for fence in PALW_T12_POST_LAUNCH_FENCES_V4
@@ -12099,6 +12105,7 @@ pub fn palw_t12_release_v2_params() -> Params {
 /// list's lanes arm ONE fence over. Equal to the shipped ruleset while the list's height is `None`.
 pub fn palw_t12_release_v1_params() -> Params {
     let mut params = palw_t12_shipped_params();
+    palw_t12_arm_after_int13_at_v1(&mut params, PALW_T12_G14_17000_FENCES_V1, None);
     palw_t12_arm_int13_flag_day_at_v1(&mut params, None);
     palw_t12_arm_int11_flag_day_at_v1(&mut params, None);
     for fence in PALW_T12_POST_LAUNCH_FENCES_V4

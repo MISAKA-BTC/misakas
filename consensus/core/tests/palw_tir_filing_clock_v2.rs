@@ -8,9 +8,10 @@ use kaspa_consensus_core::{
 
 #[test]
 fn clock_v2_changes_configured_fingerprints_but_is_not_a_shipped_or_reviewed_profile() {
-    for p in [MAINNET_PARAMS, DEVNET_PARAMS, SIMNET_PARAMS, TESTNET_PARAMS, palw_t12_shipped_params()] {
+    for p in [MAINNET_PARAMS, DEVNET_PARAMS, SIMNET_PARAMS, TESTNET_PARAMS] {
         assert!(p.palw_tir_frame_cost_v1.is_none());
     }
+    assert!(palw_t12_shipped_params().palw_tir_frame_cost_v1.is_some(), "testnet-12 schedules the G14 frame-cost estimate");
     let cost = palw_tir_frame_test_only_cost_v1();
     let mut v2 = cost;
     v2.clock.version = PALW_TIR_FRAME_CLOCK_VERSION_V2;

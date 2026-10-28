@@ -931,7 +931,8 @@ mod tests {
         let plan = crate::TirPlan::compile(&program).unwrap();
         let params = crate::TirParams::from_map(&plan, &params).unwrap();
         let prompt: Vec<u32> = (0..3).map(|i| i % program.token_bound).collect();
-        let job = test_common::job(&program, 3, 4, class_id, &prompt, PalwPromptIdsFormV1::Flat);
+        let mut job = test_common::job(&program, 3, 4, class_id, &prompt, PalwPromptIdsFormV1::Flat);
+        job.tokenizer_id = class.tokenizer_id;
         let runner = super::super::run::TirClassRunnerV1::new(&space, &plan, &params, class_id).unwrap();
         let mut leaves = Vec::new();
         let run = runner.run(&job, &prompt, 1 << 26, false, &mut |leaf| leaves.push(leaf.preimage.clone())).unwrap();

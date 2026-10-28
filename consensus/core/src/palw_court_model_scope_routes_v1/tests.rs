@@ -377,8 +377,7 @@ fn r_d2_cover_admission_gate_precedes_every_write_and_the_finalize_stays_the_exa
     let admit = sessions.find("crate::palw_court_model_scope_routes_v1::palw_d2_named_leaf_operands_admit_v1(").unwrap();
     let pursuit =
         sessions.find("crate::palw_ruling_fences_v1::palw_claim_pursuit_may_start_v1(builder.params, claim, ctx.daa_score)").unwrap();
-    let capacity =
-        sessions.find("super::palw_court_capacity_fold_v1::court_admission_v1(builder, ctx, claim_id, challenger_bond").unwrap();
+    let capacity = sessions.find("super::palw_court_capacity_fold_v1::court_ingress_admission_v1(").unwrap();
     assert!(governs < admit && admit < pursuit && pursuit < capacity, "the D2 operand gate is the first refusal, before any write");
     let (fx, leaf) = fused_fixture(None);
     let c = claim_record(&fx, FENCE);

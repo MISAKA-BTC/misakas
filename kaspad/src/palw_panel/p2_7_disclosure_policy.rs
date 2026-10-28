@@ -479,7 +479,7 @@ fn the_tick_answers_da_sessions_and_keeps_what_it_answers_from() {
         + court[read..].find_code("self.foreign_pinned.lock().unwrap().extend(disclosure_retain.iter().copied());").expect("pinned");
     let built = pinned
         + court[pinned..]
-            .find_code("self.rcore_da_answers_v1(&session, network_domain, &duties, flat_queued.contains(&claim)).await")
+            .find_code("self.rcore_da_answers_v1(session, network_domain, &duties, flat_queued.contains(&claim)).await")
             .expect("each claim's answers built");
     let queued = built + court[built..].find_code("court_outbox.push_pending((key.0, key.1, key.2, object));").expect("and queued");
     let seats = worker.find_code("let duties = session.palw_seat_duties_v2(vec![bond_key]);").expect("the seat's duties");

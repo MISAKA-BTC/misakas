@@ -109,6 +109,11 @@ fn the_mirror_follows_the_fence_and_moves_no_id() {
     // The fence-off twin takes R-core+ away, so it is built on the LAUNCH ruleset: the post-launch
     // release's fences (DAA 750) stand on R-core+ themselves.
     let mut never = kaspa_consensus_core::config::params::palw_t12_launch_params_v1();
+    kaspa_consensus_core::config::params::palw_t12_arm_after_int13_at_v1(
+        &mut never,
+        kaspa_consensus_core::config::params::PALW_T12_G14_17000_FENCES_V1,
+        None,
+    );
     never.palw_offence_attribution = Some(ForkActivation::never());
     never.palw_rcore_plus = None;
     never.palw_rcore_conservative_classes = &[];
