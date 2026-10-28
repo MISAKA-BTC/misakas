@@ -70,45 +70,49 @@ use misaka_palw_derive::{SOURCE_TREE_SHA256_HEX, ids::transformer_id, registry};
 /// either step, so no transformer's behaviour or bounds did. `7025691a…` is not kept resolvable:
 /// the only chain that ran it is the testnet-12 the regenesis replaces. `fa80f768…` is, because
 /// testnet-11's 13520042 release shipped it — see `transformer_id_prior_tree.rs`.
-const SOURCE_TREE: &str = "4ada6cd1a24e15cfd523e69bea02d343fbac70ffda3a9611002d0fa207712d9f";
+///
+/// **Moved 2026-10-28, from `4ada6cd1…`.** rustfmt of `src/` moved the source-tree hash and
+/// therefore every transformer id. The corpus goldens (`dsl_hash`, `artifact_hash`) did not move,
+/// and no manifest field but the tree did.
+const SOURCE_TREE: &str = "f4fff57719e5be81ef4f198a7429f1d78b87d56cdd5c316c0ed0246e2078a950";
 
 /// `(transformer name, transformer_id)` for every transformer this build registers.
 const PINNED: &[(&str, &str)] = &[
     (
         "cad/stl/v1",
-        "eed06cbf04b01f436967cdd95c5bcd99c2521306f80974136510cfc3e2387877cf4cc35a743f236ed9e22b50619039a0b186d2a131f99beb8e62da634d290b21",
+        "817a2d0ae3c5f6c4f037f544f1cbc5332997a4427043e8eb4a63b3a0a1c63b7a91e7d19ab588ecca01bd36ff94acd0c2ceb95e07aeda6c82d0fd17a7072dab3e",
     ),
     (
         "code/evm/v1",
-        "8f63266c65dbdb81f44d87493f519beec360f54911133fe1b7ca5c0619984b1d0f4c86e038ee5991a37d09aeefba076d685bf5270dd0fe615c218b93ca24bb67",
+        "90fb0270f3066fd8c2b8dc44ba0e1a810982344882ea5e52d4082fc0d1a2a97ffbe42194a84d72e60f265b8f984a29c3c07129ef496c9f0933d572eebd3e18ae",
     ),
     (
         "contract/evm/v1",
-        "9a90ea9f045b343ec8303414d810e399e0cb0552fd2518abc3bbd62dde4e0975ff4e844981ba4de84539e841bc0f7e1ad1f6c6ac91a9190b2767dd912356283c",
+        "a17d720ee90f0c7b7716b6c0639520dfdc4c4185b2268d2d453070fe2a6d576bd2b432441ecd2c8be96063265cfe66576ba997df58fa798b741ebecc86c55845",
     ),
     (
         "image/png/v1",
-        "115dd87223155e06fbefb748f34c5798705c9ea2ed005bc7ea4d12ed1d7f81291f1467f6abd4176083fc84ffda7bcc6a67895126bbda10dc84e100491e874dab",
+        "ca87e714454208da53af9fff9ea9bc855df3649fa7f0bcfa74c8d8b13d585c4c1bc9dcc3d8e594f7a40f364208bdb1a205c8632a41eb1622ad96f233ea7edf00",
     ),
     (
         "json/canonical/v1",
-        "1204b8d2690771427cb632369bdbef584f24503bdf778ecddcafd0519012fb957f6a736fd1ad7312455deb4c7a8e158402a087a575c8150d9579f609bf2aa2bb",
+        "c6aeaf81e7b1a6b833688f2af65ebd478156ff83a7ceec3401b83a7c54fa6a80d4b90c392a8ec798c33a0b502aacc2fae0e621a0a222cafa81f0fe88f98cde8b",
     ),
     (
         "map/mmap/v1",
-        "7fcabe3c56a74ce399ee472e50b5ff57bd1783dd26734dd59309d9fec15404b5f5ef51cac60dbec81d0cfbd857bf4e4f751de1e2e309a14804726662f33c3040",
+        "f84a4d287165948826bfb14e8ec4d982f2a5572fb5e75de0d23f9a3cc240ef0603e47abe29c2148ac2256baffb8d655e72738274e417a0173b0de1257d7b0355",
     ),
     (
         "music/smf/v1",
-        "90f5818727b4dae045835e4f19bb7173b2682b3a58f1374b29448157ac48ef1e1a8f09adbde5f9bda20c75b808cf7a1c6afac1e465f2625a04d66e7202812cee",
+        "199290f09692c7831e6b2e17a0b97ba355d3dcf96c904b90ede6f23e83232eeab2d46afa6025506aea054584c8d2931091133d1371b563bdd27acdd52d61fb46",
     ),
     (
         "scene/glb/v1",
-        "6d758210911d96d724170d65339ce153f1beff08d973fd33b0a9e816a4ce40c4b805b62dd106f0e949e42558b4e810feb95b38d9fd5f0d5e2f38f8e1df7baa7d",
+        "bab816eb1d1552c8d9c7e50b3d3e42c9f7c92dbb2aae1dbcd023ae85deaa9fbf5bb161cefed48e0eaffd842026dbb865ad26084ce9f5a44675075e2fa2c342e9",
     ),
     (
         "simulation/trace/v1",
-        "37ac660569b5eadddb30a4113e35caa031a3a81bf27b6c9a5b084b0b8fa76ccd2fd68dff36fc8a85c9027477900735914228f90d0d9d2827ec5bd5ce08076bb2",
+        "cbd711cbe07a7877843a1c6652a24df14c62aad7e0a1c26d7742173d6a2c642751cb6c9f0f480dfc6fecd0bee2303e754c8c7c06df293303f7f554b9d49340c0",
     ),
 ];
 
