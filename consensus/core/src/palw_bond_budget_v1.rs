@@ -818,6 +818,12 @@ impl Params {
     }
 
     pub fn validate_palw_reporter_income_v2(&self) -> Result<(), PalwModeV2Error> {
+        let from = self.palw_reporter_income_v2.filter(|at| *at != ForkActivation::never()).map(|at| at.daa_score());
+        if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode {
+            if bundle.state.reporter_income_from() != from {
+                return Err(PalwModeV2Error::Invalid("reporter income fence disagrees with its state mirror"));
+            }
+        }
         let Some(at) = self.palw_reporter_income_v2.filter(|at| *at != ForkActivation::never()) else { return Ok(()) };
         if !self
             .palw_bond_budget_v1
@@ -837,6 +843,12 @@ impl Params {
     }
 
     pub fn validate_palw_material_income_v3(&self) -> Result<(), PalwModeV2Error> {
+        let from = self.palw_material_income_v3.filter(|at| *at != ForkActivation::never()).map(|at| at.daa_score());
+        if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode {
+            if bundle.state.material_income_from() != from {
+                return Err(PalwModeV2Error::Invalid("material income fence disagrees with its state mirror"));
+            }
+        }
         let Some(at) = self.palw_material_income_v3.filter(|at| *at != ForkActivation::never()) else { return Ok(()) };
         if !self
             .palw_bond_budget_v1
@@ -5352,6 +5364,7 @@ mod tests {
             assert!(params.palw_fences_v1().iter().any(|(name, at)| *name == "palw_reporter_income_v2" && at.is_none()));
             let mut future = params.clone();
             future.palw_reporter_income_v2 = Some(ForkActivation::new(9_000_001));
+            future.sync_palw_bond_budget_v1();
             assert_ne!(params.consensus_params_id(), future.consensus_params_id());
             assert_ne!(params.consensus_schedule_id(), future.consensus_schedule_id());
             assert_eq!(params.consensus_identity_id(), future.consensus_identity_id());
@@ -5372,6 +5385,29 @@ mod tests {
             assert_eq!(params.consensus_identity_id(), never.consensus_identity_id());
             assert!(never.validate_palw_reporter_income_v2().is_ok());
         }
+    }
+
+    #[test]
+    fn dormant_income_fences_refuse_an_active_state_mirror() {
+        use crate::config::params::palw_t12_shipped_params;
+        use crate::palw_mode_v2::PalwConsensusMode;
+        let mut reporter = palw_t12_shipped_params();
+        let PalwConsensusMode::ConsensusV2(bundle) = &mut reporter.palw_consensus_mode else { panic!("T12 V2") };
+        bundle.state = bundle.state.clone().with_reporter_income_from(Some(17_400));
+        assert!(reporter.palw_reporter_income_v2.is_none());
+        let error = reporter.validate_palw_reporter_income_v2().unwrap_err();
+        assert!(error.to_string().contains("state mirror"));
+        reporter.sync_palw_bond_budget_v1();
+        reporter.validate_palw_reporter_income_v2().unwrap();
+
+        let mut material = palw_t12_shipped_params();
+        let PalwConsensusMode::ConsensusV2(bundle) = &mut material.palw_consensus_mode else { panic!("T12 V2") };
+        bundle.state = bundle.state.clone().with_material_income_from(Some(17_400));
+        assert!(material.palw_material_income_v3.is_none());
+        let error = material.validate_palw_material_income_v3().unwrap_err();
+        assert!(error.to_string().contains("state mirror"));
+        material.sync_palw_bond_budget_v1();
+        material.validate_palw_material_income_v3().unwrap();
     }
 
     #[test]

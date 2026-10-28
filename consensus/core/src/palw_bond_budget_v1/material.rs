@@ -430,6 +430,7 @@ mod tests {
             assert!(params.palw_fences_v1().iter().any(|(name, at)| *name == "palw_material_income_v3" && at.is_none()));
             let mut future = params.clone();
             future.palw_material_income_v3 = Some(ForkActivation::new(9_000_002));
+            future.sync_palw_bond_budget_v1();
             assert_ne!(params.consensus_params_id(), future.consensus_params_id());
             assert_ne!(params.consensus_schedule_id(), future.consensus_schedule_id());
             assert_eq!(params.consensus_identity_id(), future.consensus_identity_id());
