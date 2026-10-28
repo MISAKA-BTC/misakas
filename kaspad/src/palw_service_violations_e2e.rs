@@ -797,15 +797,14 @@ async fn g14v_lg14b_frontier_descent_convicts_step_lies_through_the_service() {
 }
 
 async fn g14v_lg14b_frontier_descent_body() {
-    let lines = run_cases_on(
-        vec![
-            ("matmul element (LG14-B)", Lie::Step(PalwStepOpKindV1::MatMulQuant), Expect::Convicted),
-            ("embedding gather (LG14-B)", Lie::StepFirst(PalwStepOpKindV1::EmbedLookup), Expect::Convicted),
-        ],
-        false,
-        true,
-        1_800,
-    )
-    .await;
-    assert_eq!(lines.len(), 2);
+    // One world per lie: both lying claims are the same producer's (card 0), so the first conviction forfeits the bond whole
+    // (ADR-0160 AG-2, `forfeit_bond_v1`) and voids the other live claim `AggregateForfeit` before its own descent ends — which case
+    // escapes then depends only on which attempt wins first. Each op's refutation through the service is asserted on its own.
+    for case in [
+        ("matmul element (LG14-B)", Lie::Step(PalwStepOpKindV1::MatMulQuant), Expect::Convicted),
+        ("embedding gather (LG14-B)", Lie::StepFirst(PalwStepOpKindV1::EmbedLookup), Expect::Convicted),
+    ] {
+        let lines = run_cases_on(vec![case], false, true, 1_800).await;
+        assert_eq!(lines.len(), 1);
+    }
 }
