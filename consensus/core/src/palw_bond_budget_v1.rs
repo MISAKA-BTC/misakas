@@ -95,6 +95,9 @@ pub const PALW_BUDGET_TABLE_REPORTER_INCOME_V1: u8 = 9;
 mod consumer;
 pub use consumer::*;
 
+mod activation;
+pub use activation::*;
+
 // RFC-0008: allocation/history invariance under relabelling, order swaps and splits (source controls).
 #[cfg(test)]
 mod invariance_tests_v1;
@@ -832,9 +835,7 @@ impl Params {
         {
             return Err(PalwModeV2Error::Invalid("palw_reporter_income_v2 requires palw_bond_budget_v1 at or below it"));
         }
-        Err(PalwModeV2Error::Invalid(
-            "palw_reporter_income_v2 cannot be armed: monetary schema v2 and legacy cash migration are dormant pending complete activation validation",
-        ))
+        self.validate_palw_income_record_v1(PalwIncomeSchemaV1::ReporterV2, at.daa_score(), PALW_INCOME_ARMING_RECORDS_V1)
     }
 
     pub fn palw_material_income_active_at(&self, daa: u64) -> bool {
@@ -858,9 +859,7 @@ impl Params {
         {
             return Err(PalwModeV2Error::Invalid("palw_material_income_v3 requires budget and reporter schema at or below it"));
         }
-        Err(PalwModeV2Error::Invalid(
-            "palw_material_income_v3 cannot be armed: complete signed material/TTL and all consumer lifecycle validation remain pending",
-        ))
+        self.validate_palw_income_record_v1(PalwIncomeSchemaV1::MaterialV3, at.daa_score(), PALW_INCOME_ARMING_RECORDS_V1)
     }
 
     /// Whether the model-bond allocation is in force at `daa_score` — never, in this binary (it needs the budget too).
