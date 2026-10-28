@@ -1,0 +1,491 @@
+$ cargo test --offline -p misaka-palw-kernel --test k2_adversarial
+[buildslot] slot-1 acquired at 16:04:03, 40 GB free
+
+running 7 tests
+test a_cheap_but_unsound_custom_suite_cannot_admit_a_class ... ok
+test a_weight_that_is_not_the_committed_one_is_unavailable_never_a_pass ... ok
+test a_swapped_expert_choice_is_caught_at_the_router ... ok
+test a_permuted_history_window_is_caught_at_its_append ... ok
+test a_quotient_rounded_the_other_way_is_convicted_and_its_honest_twin_passes ... ok
+test receipts_under_a_stale_anchor_are_refused_after_a_reorg_rebind ... ok
+test verdicts_are_identical_across_runs_scopes_and_a_byte_only_verifier ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.49s
+
+[buildslot] released slot-1 at 16:04:05 (exit 0)
+    Blocking waiting for file lock on artifact directory
+warning: unused import: `Read`
+ --> misaka/palw/tir/core/src/validate_v39.rs:5:45
+  |
+5 | use std::{collections::BTreeSet,io::{Cursor,Read}};
+  |                                             ^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `misaka-palw-tir` (lib) generated 1 warning
+warning: unused import: `bounded28::*`
+ --> misaka/palw/kernel/src/flat_inputs12/replay32.rs:6:41
+  |
+6 | use super::{composition32::*,court32::*,bounded28::*};
+  |                                         ^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused imports: `finish` and `keyed`
+  --> misaka/palw/kernel/src/flat_detect39.rs:14:20
+   |
+14 |     hash::{Digest, finish, keyed},
+   |                    ^^^^^^  ^^^^^
+
+warning: unused variable: `plan`
+  --> misaka/palw/kernel/src/flat_quota11/owning39/source.rs:28:14
+   |
+28 | fn admission(plan: &CheckedQuotaV39) -> Result<QuotaQuantitiesV11, String> {
+   |              ^^^^ help: if this is intentional, prefix it with an underscore: `_plan`
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unreachable pattern
+  --> misaka/palw/kernel/src/flat_quota11/stage14/bounded28.rs:67:229
+   |
+67 | ...misaka_palw_tir::program_v2::OutputDecl::Final{..}=>1,_=>return Err("stage28 output semantics".into())};
+   |                                                          ^ no value can reach this
+   |
+note: multiple earlier patterns match some of the same values
+  --> misaka/palw/kernel/src/flat_quota11/stage14/bounded28.rs:67:229
+   |
+67 | ...t {misaka_palw_tir::program_v2::OutputDecl::Rows{..}|misaka_palw_tir::program_v2::OutputDecl::Logits{..}=>job.job().positions as u64,misaka_palw_tir::program_v2::OutputDecl::Final{..}=>1,_=>r...
+   |       -----------------------------------------------------------------------------------------------------                             --------------------------------------------------    ^ collectively making this unreachable
+   |       |                                                                                                                                 |
+   |       |                                                                                                                                 matches some of the same values
+   |       matches some of the same values
+   = note: `#[warn(unreachable_patterns)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `into_parts` is never used
+   --> misaka/palw/kernel/src/flat_quota11/owning39.rs:542:19
+    |
+538 | impl CheckedSourceAdmissionV39 {
+    | ------------------------------ method in this implementation
+...
+542 |     pub(super) fn into_parts(self) -> (SubjectBindingV11, Digest, Digest, Digest, TrustedEpochV11) {
+    |                   ^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `check_stage_v14` is never used
+   --> misaka/palw/kernel/src/flat_replay25.rs:160:19
+    |
+134 | impl FlatReplaySessionV25 {
+    | ------------------------- method in this implementation
+...
+160 |     pub(crate) fn check_stage_v14(
+    |                   ^^^^^^^^^^^^^^^
+
+warning: `misaka-palw-kernel` (lib) generated 6 warnings (run `cargo fix --lib -p misaka-palw-kernel` to apply 3 suggestions)
+   Compiling misaka-palw-kernel v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/agent-aa4dfb62c6c3c943d/misaka/palw/kernel)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.31s
+     Running tests/k2_adversarial.rs (target-rc/debug/deps/k2_adversarial-68a5d0aa8b1cf992)
+$ cargo test --offline -p misaka-palw-kernel --test k2_ledger_route -- a_proof_resubmitted_after_a_restart_or_an_ibd_replay_is_a_duplicate
+[buildslot] slot-2 acquired at 16:04:04, 40 GB free
+
+running 1 test
+test a_proof_resubmitted_after_a_restart_or_an_ibd_replay_is_a_duplicate ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 21 filtered out; finished in 0.20s
+
+[buildslot] released slot-2 at 16:04:05 (exit 0)
+warning: unused import: `Read`
+ --> misaka/palw/tir/core/src/validate_v39.rs:5:45
+  |
+5 | use std::{collections::BTreeSet,io::{Cursor,Read}};
+  |                                             ^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `misaka-palw-tir` (lib) generated 1 warning
+warning: unused import: `bounded28::*`
+ --> misaka/palw/kernel/src/flat_inputs12/replay32.rs:6:41
+  |
+6 | use super::{composition32::*,court32::*,bounded28::*};
+  |                                         ^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused imports: `finish` and `keyed`
+  --> misaka/palw/kernel/src/flat_detect39.rs:14:20
+   |
+14 |     hash::{Digest, finish, keyed},
+   |                    ^^^^^^  ^^^^^
+
+warning: unused variable: `plan`
+  --> misaka/palw/kernel/src/flat_quota11/owning39/source.rs:28:14
+   |
+28 | fn admission(plan: &CheckedQuotaV39) -> Result<QuotaQuantitiesV11, String> {
+   |              ^^^^ help: if this is intentional, prefix it with an underscore: `_plan`
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unreachable pattern
+  --> misaka/palw/kernel/src/flat_quota11/stage14/bounded28.rs:67:229
+   |
+67 | ...misaka_palw_tir::program_v2::OutputDecl::Final{..}=>1,_=>return Err("stage28 output semantics".into())};
+   |                                                          ^ no value can reach this
+   |
+note: multiple earlier patterns match some of the same values
+  --> misaka/palw/kernel/src/flat_quota11/stage14/bounded28.rs:67:229
+   |
+67 | ...t {misaka_palw_tir::program_v2::OutputDecl::Rows{..}|misaka_palw_tir::program_v2::OutputDecl::Logits{..}=>job.job().positions as u64,misaka_palw_tir::program_v2::OutputDecl::Final{..}=>1,_=>r...
+   |       -----------------------------------------------------------------------------------------------------                             --------------------------------------------------    ^ collectively making this unreachable
+   |       |                                                                                                                                 |
+   |       |                                                                                                                                 matches some of the same values
+   |       matches some of the same values
+   = note: `#[warn(unreachable_patterns)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `into_parts` is never used
+   --> misaka/palw/kernel/src/flat_quota11/owning39.rs:542:19
+    |
+538 | impl CheckedSourceAdmissionV39 {
+    | ------------------------------ method in this implementation
+...
+542 |     pub(super) fn into_parts(self) -> (SubjectBindingV11, Digest, Digest, Digest, TrustedEpochV11) {
+    |                   ^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `check_stage_v14` is never used
+   --> misaka/palw/kernel/src/flat_replay25.rs:160:19
+    |
+134 | impl FlatReplaySessionV25 {
+    | ------------------------- method in this implementation
+...
+160 |     pub(crate) fn check_stage_v14(
+    |                   ^^^^^^^^^^^^^^^
+
+warning: `misaka-palw-kernel` (lib) generated 6 warnings (run `cargo fix --lib -p misaka-palw-kernel` to apply 3 suggestions)
+   Compiling misaka-palw-kernel v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/agent-aa4dfb62c6c3c943d/misaka/palw/kernel)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.80s
+     Running tests/k2_ledger_route.rs (target-rc/debug/deps/k2_ledger_route-18a2af6dcae645fe)
+$ cargo test --offline -p misaka-palw-kernel --test econ_seal_veto -- one_withheld_seal_vetoes_every_attempt_whose_window_contains_it
+[buildslot] slot-3 acquired at 16:04:04, 40 GB free
+
+running 1 test
+test one_withheld_seal_vetoes_every_attempt_whose_window_contains_it ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.19s
+
+[buildslot] released slot-3 at 16:04:06 (exit 0)
+    Blocking waiting for file lock on artifact directory
+warning: unused import: `Read`
+ --> misaka/palw/tir/core/src/validate_v39.rs:5:45
+  |
+5 | use std::{collections::BTreeSet,io::{Cursor,Read}};
+  |                                             ^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `misaka-palw-tir` (lib) generated 1 warning
+warning: unused import: `bounded28::*`
+ --> misaka/palw/kernel/src/flat_inputs12/replay32.rs:6:41
+  |
+6 | use super::{composition32::*,court32::*,bounded28::*};
+  |                                         ^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused imports: `finish` and `keyed`
+  --> misaka/palw/kernel/src/flat_detect39.rs:14:20
+   |
+14 |     hash::{Digest, finish, keyed},
+   |                    ^^^^^^  ^^^^^
+
+warning: unused variable: `plan`
+  --> misaka/palw/kernel/src/flat_quota11/owning39/source.rs:28:14
+   |
+28 | fn admission(plan: &CheckedQuotaV39) -> Result<QuotaQuantitiesV11, String> {
+   |              ^^^^ help: if this is intentional, prefix it with an underscore: `_plan`
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unreachable pattern
+  --> misaka/palw/kernel/src/flat_quota11/stage14/bounded28.rs:67:229
+   |
+67 | ...misaka_palw_tir::program_v2::OutputDecl::Final{..}=>1,_=>return Err("stage28 output semantics".into())};
+   |                                                          ^ no value can reach this
+   |
+note: multiple earlier patterns match some of the same values
+  --> misaka/palw/kernel/src/flat_quota11/stage14/bounded28.rs:67:229
+   |
+67 | ...t {misaka_palw_tir::program_v2::OutputDecl::Rows{..}|misaka_palw_tir::program_v2::OutputDecl::Logits{..}=>job.job().positions as u64,misaka_palw_tir::program_v2::OutputDecl::Final{..}=>1,_=>r...
+   |       -----------------------------------------------------------------------------------------------------                             --------------------------------------------------    ^ collectively making this unreachable
+   |       |                                                                                                                                 |
+   |       |                                                                                                                                 matches some of the same values
+   |       matches some of the same values
+   = note: `#[warn(unreachable_patterns)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `into_parts` is never used
+   --> misaka/palw/kernel/src/flat_quota11/owning39.rs:542:19
+    |
+538 | impl CheckedSourceAdmissionV39 {
+    | ------------------------------ method in this implementation
+...
+542 |     pub(super) fn into_parts(self) -> (SubjectBindingV11, Digest, Digest, Digest, TrustedEpochV11) {
+    |                   ^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `check_stage_v14` is never used
+   --> misaka/palw/kernel/src/flat_replay25.rs:160:19
+    |
+134 | impl FlatReplaySessionV25 {
+    | ------------------------- method in this implementation
+...
+160 |     pub(crate) fn check_stage_v14(
+    |                   ^^^^^^^^^^^^^^^
+
+warning: `misaka-palw-kernel` (lib) generated 6 warnings (run `cargo fix --lib -p misaka-palw-kernel` to apply 3 suggestions)
+   Compiling misaka-palw-kernel v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/agent-aa4dfb62c6c3c943d/misaka/palw/kernel)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.95s
+     Running tests/econ_seal_veto.rs (target-rc/debug/deps/econ_seal_veto-ac7b8b6c378e6c93)
+$ cargo test --offline -p misaka-palw-kernel --test k2_opv -- past_the_fence_a_withheld_seal
+[buildslot] slot-1 acquired at 16:04:05, 40 GB free
+
+running 1 test
+test past_the_fence_a_withheld_seal_is_kept_as_forfeited_and_the_beacon_read_lists_every_seal_in_seal_order ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 27 filtered out; finished in 0.13s
+
+[buildslot] released slot-1 at 16:04:07 (exit 0)
+    Blocking waiting for file lock on artifact directory
+warning: unused import: `Read`
+ --> misaka/palw/tir/core/src/validate_v39.rs:5:45
+  |
+5 | use std::{collections::BTreeSet,io::{Cursor,Read}};
+  |                                             ^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `misaka-palw-tir` (lib) generated 1 warning
+warning: unused import: `bounded28::*`
+ --> misaka/palw/kernel/src/flat_inputs12/replay32.rs:6:41
+  |
+6 | use super::{composition32::*,court32::*,bounded28::*};
+  |                                         ^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused imports: `finish` and `keyed`
+  --> misaka/palw/kernel/src/flat_detect39.rs:14:20
+   |
+14 |     hash::{Digest, finish, keyed},
+   |                    ^^^^^^  ^^^^^
+
+warning: unused variable: `plan`
+  --> misaka/palw/kernel/src/flat_quota11/owning39/source.rs:28:14
+   |
+28 | fn admission(plan: &CheckedQuotaV39) -> Result<QuotaQuantitiesV11, String> {
+   |              ^^^^ help: if this is intentional, prefix it with an underscore: `_plan`
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unreachable pattern
+  --> misaka/palw/kernel/src/flat_quota11/stage14/bounded28.rs:67:229
+   |
+67 | ...misaka_palw_tir::program_v2::OutputDecl::Final{..}=>1,_=>return Err("stage28 output semantics".into())};
+   |                                                          ^ no value can reach this
+   |
+note: multiple earlier patterns match some of the same values
+  --> misaka/palw/kernel/src/flat_quota11/stage14/bounded28.rs:67:229
+   |
+67 | ...t {misaka_palw_tir::program_v2::OutputDecl::Rows{..}|misaka_palw_tir::program_v2::OutputDecl::Logits{..}=>job.job().positions as u64,misaka_palw_tir::program_v2::OutputDecl::Final{..}=>1,_=>r...
+   |       -----------------------------------------------------------------------------------------------------                             --------------------------------------------------    ^ collectively making this unreachable
+   |       |                                                                                                                                 |
+   |       |                                                                                                                                 matches some of the same values
+   |       matches some of the same values
+   = note: `#[warn(unreachable_patterns)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `into_parts` is never used
+   --> misaka/palw/kernel/src/flat_quota11/owning39.rs:542:19
+    |
+538 | impl CheckedSourceAdmissionV39 {
+    | ------------------------------ method in this implementation
+...
+542 |     pub(super) fn into_parts(self) -> (SubjectBindingV11, Digest, Digest, Digest, TrustedEpochV11) {
+    |                   ^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `check_stage_v14` is never used
+   --> misaka/palw/kernel/src/flat_replay25.rs:160:19
+    |
+134 | impl FlatReplaySessionV25 {
+    | ------------------------- method in this implementation
+...
+160 |     pub(crate) fn check_stage_v14(
+    |                   ^^^^^^^^^^^^^^^
+
+warning: `misaka-palw-kernel` (lib) generated 6 warnings (run `cargo fix --lib -p misaka-palw-kernel` to apply 3 suggestions)
+   Compiling misaka-palw-kernel v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/agent-aa4dfb62c6c3c943d/misaka/palw/kernel)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.14s
+     Running tests/k2_opv.rs (target-rc/debug/deps/k2_opv-6868822fce545f9f)
+$ cargo test --offline -p misaka-palw-kernel --test adv_c4_route -- a_producer_and_every_panel_seat_colluding_lose
+[buildslot] slot-2 acquired at 16:04:05, 40 GB free
+
+running 1 test
+test a_producer_and_every_panel_seat_colluding_lose_to_one_ordinary_bond_with_a_fresh_verifier ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 27 filtered out; finished in 0.52s
+
+[buildslot] released slot-2 at 16:04:08 (exit 0)
+    Blocking waiting for file lock on artifact directory
+warning: unused import: `Read`
+ --> misaka/palw/tir/core/src/validate_v39.rs:5:45
+  |
+5 | use std::{collections::BTreeSet,io::{Cursor,Read}};
+  |                                             ^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `misaka-palw-tir` (lib) generated 1 warning
+warning: unused import: `bounded28::*`
+ --> misaka/palw/kernel/src/flat_inputs12/replay32.rs:6:41
+  |
+6 | use super::{composition32::*,court32::*,bounded28::*};
+  |                                         ^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused imports: `finish` and `keyed`
+  --> misaka/palw/kernel/src/flat_detect39.rs:14:20
+   |
+14 |     hash::{Digest, finish, keyed},
+   |                    ^^^^^^  ^^^^^
+
+warning: unused variable: `plan`
+  --> misaka/palw/kernel/src/flat_quota11/owning39/source.rs:28:14
+   |
+28 | fn admission(plan: &CheckedQuotaV39) -> Result<QuotaQuantitiesV11, String> {
+   |              ^^^^ help: if this is intentional, prefix it with an underscore: `_plan`
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unreachable pattern
+  --> misaka/palw/kernel/src/flat_quota11/stage14/bounded28.rs:67:229
+   |
+67 | ...misaka_palw_tir::program_v2::OutputDecl::Final{..}=>1,_=>return Err("stage28 output semantics".into())};
+   |                                                          ^ no value can reach this
+   |
+note: multiple earlier patterns match some of the same values
+  --> misaka/palw/kernel/src/flat_quota11/stage14/bounded28.rs:67:229
+   |
+67 | ...t {misaka_palw_tir::program_v2::OutputDecl::Rows{..}|misaka_palw_tir::program_v2::OutputDecl::Logits{..}=>job.job().positions as u64,misaka_palw_tir::program_v2::OutputDecl::Final{..}=>1,_=>r...
+   |       -----------------------------------------------------------------------------------------------------                             --------------------------------------------------    ^ collectively making this unreachable
+   |       |                                                                                                                                 |
+   |       |                                                                                                                                 matches some of the same values
+   |       matches some of the same values
+   = note: `#[warn(unreachable_patterns)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `into_parts` is never used
+   --> misaka/palw/kernel/src/flat_quota11/owning39.rs:542:19
+    |
+538 | impl CheckedSourceAdmissionV39 {
+    | ------------------------------ method in this implementation
+...
+542 |     pub(super) fn into_parts(self) -> (SubjectBindingV11, Digest, Digest, Digest, TrustedEpochV11) {
+    |                   ^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `check_stage_v14` is never used
+   --> misaka/palw/kernel/src/flat_replay25.rs:160:19
+    |
+134 | impl FlatReplaySessionV25 {
+    | ------------------------- method in this implementation
+...
+160 |     pub(crate) fn check_stage_v14(
+    |                   ^^^^^^^^^^^^^^^
+
+warning: `misaka-palw-kernel` (lib) generated 6 warnings (run `cargo fix --lib -p misaka-palw-kernel` to apply 3 suggestions)
+   Compiling misaka-palw-kernel v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/agent-aa4dfb62c6c3c943d/misaka/palw/kernel)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.17s
+     Running tests/adv_c4_route.rs (target-rc/debug/deps/adv_c4_route-5a46b931c1a86f8f)
+$ cargo test --offline -p misaka-palw-kernel --test k2_e2e -- a_challenge_drawn_before_the_evidence_was_bound_is_refused
+[buildslot] slot-3 acquired at 16:04:06, 40 GB free
+
+running 1 test
+test a_challenge_drawn_before_the_evidence_was_bound_is_refused ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 16 filtered out; finished in 0.06s
+
+[buildslot] released slot-3 at 16:04:08 (exit 0)
+    Blocking waiting for file lock on artifact directory
+warning: unused import: `Read`
+ --> misaka/palw/tir/core/src/validate_v39.rs:5:45
+  |
+5 | use std::{collections::BTreeSet,io::{Cursor,Read}};
+  |                                             ^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `misaka-palw-tir` (lib) generated 1 warning
+warning: unused import: `bounded28::*`
+ --> misaka/palw/kernel/src/flat_inputs12/replay32.rs:6:41
+  |
+6 | use super::{composition32::*,court32::*,bounded28::*};
+  |                                         ^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused imports: `finish` and `keyed`
+  --> misaka/palw/kernel/src/flat_detect39.rs:14:20
+   |
+14 |     hash::{Digest, finish, keyed},
+   |                    ^^^^^^  ^^^^^
+
+warning: unused variable: `plan`
+  --> misaka/palw/kernel/src/flat_quota11/owning39/source.rs:28:14
+   |
+28 | fn admission(plan: &CheckedQuotaV39) -> Result<QuotaQuantitiesV11, String> {
+   |              ^^^^ help: if this is intentional, prefix it with an underscore: `_plan`
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unreachable pattern
+  --> misaka/palw/kernel/src/flat_quota11/stage14/bounded28.rs:67:229
+   |
+67 | ...misaka_palw_tir::program_v2::OutputDecl::Final{..}=>1,_=>return Err("stage28 output semantics".into())};
+   |                                                          ^ no value can reach this
+   |
+note: multiple earlier patterns match some of the same values
+  --> misaka/palw/kernel/src/flat_quota11/stage14/bounded28.rs:67:229
+   |
+67 | ...t {misaka_palw_tir::program_v2::OutputDecl::Rows{..}|misaka_palw_tir::program_v2::OutputDecl::Logits{..}=>job.job().positions as u64,misaka_palw_tir::program_v2::OutputDecl::Final{..}=>1,_=>r...
+   |       -----------------------------------------------------------------------------------------------------                             --------------------------------------------------    ^ collectively making this unreachable
+   |       |                                                                                                                                 |
+   |       |                                                                                                                                 matches some of the same values
+   |       matches some of the same values
+   = note: `#[warn(unreachable_patterns)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `into_parts` is never used
+   --> misaka/palw/kernel/src/flat_quota11/owning39.rs:542:19
+    |
+538 | impl CheckedSourceAdmissionV39 {
+    | ------------------------------ method in this implementation
+...
+542 |     pub(super) fn into_parts(self) -> (SubjectBindingV11, Digest, Digest, Digest, TrustedEpochV11) {
+    |                   ^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `check_stage_v14` is never used
+   --> misaka/palw/kernel/src/flat_replay25.rs:160:19
+    |
+134 | impl FlatReplaySessionV25 {
+    | ------------------------- method in this implementation
+...
+160 |     pub(crate) fn check_stage_v14(
+    |                   ^^^^^^^^^^^^^^^
+
+warning: `misaka-palw-kernel` (lib) generated 6 warnings (run `cargo fix --lib -p misaka-palw-kernel` to apply 3 suggestions)
+   Compiling misaka-palw-kernel v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/agent-aa4dfb62c6c3c943d/misaka/palw/kernel)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.06s
+     Running tests/k2_e2e.rs (target-rc/debug/deps/k2_e2e-a31cbeb64115fcd5)

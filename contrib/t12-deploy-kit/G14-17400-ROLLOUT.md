@@ -1,7 +1,8 @@
 # testnet-12 G14 17,400 release — 配備手順・fence 後 runbook・判断材料
 
 2026-10-27/28 作成(lane DEPLOY-PREP、branch `claude/kit-17400`、base `claude/g14-rc-17400` @ 05ef4a741)。
-**この文書のどの手順もまだ実行していない。** live には読み取り(ssh の `systemctl show`・`/proc`・cgroup・launch script の閲覧、
+**配備実績は `docs/design/palw/integration/g14-17000/release-17400-2026-10-28.md` に記録する。**
+2026-10-28 の continuation で、最終 19 suite と re-arm gate 19 test が通過。期待 fingerprint は停止前の `.t-arm7.log` と今回の gate が一致した `73e67678…5bd5` に更新した。旧 0022568d… は以前の候補の値。公開先の切替はまだ実行していない。 live には読み取り(ssh の `systemctl show`・`/proc`・cgroup・launch script の閲覧、
 TCP 接続確認)しかしていない。実行は Lead がユーザー承認の後に行う。
 
 ## 0. 前提と時刻
@@ -10,7 +11,7 @@ TCP 接続確認)しかしていない。実行は Lead がユーザー承認の
 |---|---|
 | live release | `ddf5485d88df`、fp `ef379378…f15e`(= `UPGRADE_FROM_FP`) |
 | 候補 | `claude/g14-rc-17400` @ 05ef4a741 → ACT2 が re-arm と記録 pin(R-REARM gate 緑)した commit を build する |
-| 期待 `EXPECT_FP` | `0022568d4c52734a449c54eddf6e5afe8f7341afcafbe80d1977b9bd1cef7545`(**re-arm 後の build の IDENTITY で確定させる**。違えば止まる) |
+| 期待 `EXPECT_FP` | `73e67678a432effb4a982386d67383b95cf172babdde3e6f86c31cf3268d5bd5`(**re-arm 後の build の IDENTITY で確定させる**。違えば止まる) |
 | fence | `G14_FLAG_DAY_DAA=17400`(`PALW_T12_G14_17000_FLAG_DAY_DAA`) |
 | DAA 速度 | 10-27 20:14→21:14 CET で 16,699→16,720(≈21 DAA/h) |
 | **完了期限 DAA ≈17,150** | ≈ **10-28 17:30〜18:00 CET**(17,400 は ≈ 10-29 05:30 CET)。build は 10-28 10:00 CET 以降 |
@@ -50,7 +51,7 @@ miner・explorer の node。**kit は b6 を 17G に据え置いた**(DEC-RAM �
 | 順 | どこで | 何を | 次へ進む条件 |
 |---|---|---|---|
 | 0 | Mac | ACT2 re-arm commit を確認(R-REARM gate 緑、`G14_FLAG_DAY_DAA=17400` が example と core で一致) | — |
-| 1 | Mac | `CACHE= ./build-release-local.sh <re-arm commit>`(既定 `.cache`) | `.cache/<rev12>/IDENTITY` の `EXPECT_FP` が 0022568d…7545(違えば **中止**して ACT2 に確認) |
+| 1 | Mac | `CACHE= ./build-release-local.sh <re-arm commit>`(既定 `.cache`) | `.cache/<rev12>/IDENTITY` の `EXPECT_FP` が 73e67678…5bd5(違えば **中止**して ACT2 に確認) |
 | 2 | Mac | `fleet.env` を下書きから作り、REV・4 sha・EXPECT_FP を IDENTITY/SHA256SUMS から貼る | `distribute-from-mac.sh binaries` の identity_check が通る |
 | 3 | Mac | `./distribute-from-mac.sh kit` → `binaries` → `kernel-model <dir>/wide128-v1-7.palwkm`(Mac で `gen-wide128-palwkm` を実行、sha d071d3e2…) → `95111` | 各 host で sha256sum 一致 |
 | 4 | 3 host | `./install-<host>.sh stage`(kernel model を各 node の `palw-kernel-models/` に置く) | 全 launch script の `--check` OK |

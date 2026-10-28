@@ -1,0 +1,15 @@
+{
+  "kind": "misaka-arming-run/v1",
+  "run": "kaspad-lg14b_suite",
+  "command": "cargo test --offline -p kaspad --lib -- lg14b_",
+  "exitCode": 0,
+  "testsPassed": 17,
+  "testsFailed": 0,
+  "passed": true,
+  "estimate": false,
+  "sourceCommit": "da46131a41fe7c90ec263b0f26ab9b444e4c74a2",
+  "treeDirty": false,
+  "startedAt": 1793169569.503007,
+  "seconds": 1408,
+  "logSha256": "b50c2b2069b79400679ff6ad1410867ff2515236225d4555556ee5b3a91d3631"
+}

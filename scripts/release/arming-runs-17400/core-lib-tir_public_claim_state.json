@@ -1,0 +1,15 @@
+{
+  "kind": "misaka-arming-run/v1",
+  "run": "core-lib-tir_public_claim_state",
+  "command": "cargo test --offline -p kaspa-consensus-core --lib -- palw_tir_public_claim_v1 palw_tir_public_state_v1 palw_tir_public_source_v1",
+  "exitCode": 0,
+  "testsPassed": 33,
+  "testsFailed": 0,
+  "passed": true,
+  "estimate": false,
+  "sourceCommit": "da46131a41fe7c90ec263b0f26ab9b444e4c74a2",
+  "treeDirty": false,
+  "startedAt": 1793169569.503006,
+  "seconds": 240,
+  "logSha256": "c8ce86d200b9a5343e4d00c48f8aff24ec48ff73136b9a9bc4d15e9549039475"
+}

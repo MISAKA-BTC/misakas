@@ -1,0 +1,15 @@
+{
+  "kind": "misaka-arming-run/v1",
+  "run": "consensus-lg14a_restart",
+  "command": "cargo test --offline -p kaspa-consensus --lib -- lg14a_the_pursuit_survives_a_node_restart",
+  "exitCode": 0,
+  "testsPassed": 1,
+  "testsFailed": 0,
+  "passed": true,
+  "estimate": false,
+  "sourceCommit": "da46131a41fe7c90ec263b0f26ab9b444e4c74a2",
+  "treeDirty": false,
+  "startedAt": 1793169569.503007,
+  "seconds": 795,
+  "logSha256": "6c540965134ce50e9288ff016727ff25f9e333cb995907373be3f00d7c8ee30a"
+}

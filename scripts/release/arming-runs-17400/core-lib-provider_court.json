@@ -1,0 +1,15 @@
+{
+  "kind": "misaka-arming-run/v1",
+  "run": "core-lib-provider_court",
+  "command": "cargo test --offline -p kaspa-consensus-core --lib -- palw_provider_court_v1 palw_provider_court_fold_v1",
+  "exitCode": 0,
+  "testsPassed": 3,
+  "testsFailed": 0,
+  "passed": true,
+  "estimate": false,
+  "sourceCommit": "da46131a41fe7c90ec263b0f26ab9b444e4c74a2",
+  "treeDirty": false,
+  "startedAt": 1793169569.503006,
+  "seconds": 236,
+  "logSha256": "018b77c76c6ff511c7c48ecb011d2c5b4b6a11bbf21be6980fa7d1b47435c03f"
+}
