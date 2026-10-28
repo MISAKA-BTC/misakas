@@ -111,6 +111,7 @@
 - [ADR-0201 — archived closeの期限内実受付と責任解消](0201-archived-close-qualified-financial-discharge.md)
 - [ADR-0203 — 認証付き PALW state map と行単位アクセス](0203-authenticated-palw-state-map-and-row-access.md)
 - [ADR-0205 — decode 済みの回答は二度支払わない](0205-a-decoded-answer-is-not-paid-twice.md)
+- [ADR-0208 — 再利用 prefix の生成元 identity を明示する案](0208-authenticated-prefix-work-dependencies.md)
 
 ## EVM / wallet
 
@@ -136,6 +137,8 @@
 - [ADR-0176 — Bond bounds PALW claim capacity, blocks, rewards and Final weight](0176-bond-bounds-palw-production-rewards-and-final-weight.md)
 - [ADR-0178 — The fork choice heals a partition on bonded participation: one search over every tip, economic keys ](0178-fork-choice-heals-a-partition-on-bonded-participation.md)
 - [ADR-0193 — Panel の追及を支える Miner Account Bond: 最低10万と責任連動追加、過大拘束を避ける](0193-miner-account-bond-for-panel-incentives.md)
+- [ADR-0207 — 通常 verifier fee と有限 provider 契約の判断](0207-finite-fee-consent-and-provider-payment-bounds.md)
+- [ADR-0209 — genesis bond を廃止し、BASE 回復と通常 bond 登録で起動する](0209-genesis-bond-free-bootstrap.md)
 
 ## Governance / release scope
 

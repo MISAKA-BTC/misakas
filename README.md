@@ -18,10 +18,21 @@ Addresses keep the `misaka` prefix (`misaka…` mainnet, `misakatest…` testnet
 kaspad --testnet --netsuffix=12
 ```
 
-Verify the consensus params fingerprint **`5ee7fd8ee019968cf52929b844cf9ddfb1aad500842a89cf04bced8ba4edefb6`**, genesis
-`a27f8f44fe4d91a5…` and schedule id `1678e07359f6727e…`. Read the [launch note](docs/history/networks/testnet-12/t12-launch-2026-09-25.md) before relying on the
-chain — **never count blocks, blue-score depth or DAA as finality on testnet-12**; use finality depth or a `Final` PALW anchor.
-New consensus rules wait, dormant, for a single full-activation release ([readiness matrix](docs/design/palw/integration/activation-readiness-matrix.md)).
+The [published G14-only candidate](https://github.com/MISAKA-BTC/misakas/releases/tag/testnet12-g14-17400-655b6cf3a) is built from
+`655b6cf3a8f61ebdce920af867f6bedd87e717d6`, with G14 scheduled at **DAA 17,400**. Its fingerprint is
+**`73e67678a432effb4a982386d67383b95cf172babdde3e6f86c31cf3268d5bd5`**, genesis
+`a27f8f44fe4d91a5…`, and schedule id `fd42c16706195ec0a6fa63902e1bd612303136b342bd29424e28be22599a5f2e`.
+The Linux x86-64 binaries, SHA-256 sums and evidence are attached to that release.
+
+This is the verified G14 candidate, not completion of the ongoing full-feature implementation. The latest recorded fleet state is the
+old release after the IBM rollback; publication does not deploy it. See [build, evidence and deployment status](docs/design/palw/integration/g14-17000/release-17400-2026-10-28.md)
+and [full-feature implementation status](docs/design/palw/integration/g14-17000/full-activation-17400-readiness-2026-10-28.md).
+Read the [launch note](docs/history/networks/testnet-12/t12-launch-2026-09-25.md) before relying on the chain —
+**never count blocks, blue-score depth or DAA as finality on testnet-12**; use finality depth or a `Final` PALW anchor.
+
+New-genesis policy removes pre-registered genesis bonds. Participants wait for the intended public BASE recovery path and then fund
+ordinary bonds from BASE earnings or genesis UTXOs; implementation and startup verification remain separate. See
+[RFC-0041](docs/rfc/0041-genesis-bond-free-bootstrap.md).
 
 ## Quick start
 

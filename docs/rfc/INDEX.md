@@ -44,3 +44,6 @@
 | RFC-0036 | [認証付き PALW state map と行単位アクセス](0036-authenticated-palw-state-map-and-row-access.md) | 原文と後続改定を参照 |
 | RFC-0037 | [IBD の有界 authenticated row stream と世代番号付き保存](0037-ibd-bounded-row-stream-and-storage-generations.md) | 原文と後続改定を参照 |
 | RFC-0038 | [free-prompt の回答トークンを支払済み計算として記録する(FPA1 carriage)](0038-palw-fp-answer-accounting.md) | 原文と後続改定を参照 |
+| RFC-0039 | [通常 verifier の fee consent と provider の有限支払・保持契約](0039-finite-fee-consent-and-provider-payment-bounds.md) | 原文と後続改定を参照 |
+| RFC-0040 | [再利用 prefix の生成元を署名済み work identity で拘束する](0040-authenticated-prefix-work-dependencies.md) | 原文と後続改定を参照 |
+| RFC-0041 | [genesis bond を廃止し、公開の BASE 回復経路から立ち上げる](0041-genesis-bond-free-bootstrap.md) | 原文と後続改定を参照 |

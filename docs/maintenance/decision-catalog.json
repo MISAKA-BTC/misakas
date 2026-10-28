@@ -1610,6 +1610,30 @@
       "status": "原文と後続改定を参照"
     },
     {
+      "kind": "adr",
+      "number": "0207",
+      "path": "docs/adr/0207-finite-fee-consent-and-provider-payment-bounds.md",
+      "title": "ADR-0207 — 通常 verifier fee と有限 provider 契約の判断",
+      "topic": "Economics / budgets",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "adr",
+      "number": "0208",
+      "path": "docs/adr/0208-authenticated-prefix-work-dependencies.md",
+      "title": "ADR-0208 — 再利用 prefix の生成元 identity を明示する案",
+      "topic": "Consensus / architecture",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "adr",
+      "number": "0209",
+      "path": "docs/adr/0209-genesis-bond-free-bootstrap.md",
+      "title": "ADR-0209 — genesis bond を廃止し、BASE 回復と通常 bond 登録で起動する",
+      "topic": "Economics / budgets",
+      "status": "原文と後続改定を参照"
+    },
+    {
       "kind": "rfc",
       "number": "0001",
       "path": "docs/rfc/0001-palw-inference-surface-gaps.md",
@@ -1911,6 +1935,30 @@
       "path": "docs/rfc/0038-palw-fp-answer-accounting.md",
       "title": "RFC-0038 — free-prompt の回答トークンを支払済み計算として記録する(FPA1 carriage)",
       "topic": "Consensus / architecture",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "rfc",
+      "number": "0039",
+      "path": "docs/rfc/0039-finite-fee-consent-and-provider-payment-bounds.md",
+      "title": "RFC-0039 — 通常 verifier の fee consent と provider の有限支払・保持契約",
+      "topic": "Economics / budgets",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "rfc",
+      "number": "0040",
+      "path": "docs/rfc/0040-authenticated-prefix-work-dependencies.md",
+      "title": "RFC-0040 — 再利用 prefix の生成元を署名済み work identity で拘束する",
+      "topic": "Consensus / architecture",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "rfc",
+      "number": "0041",
+      "path": "docs/rfc/0041-genesis-bond-free-bootstrap.md",
+      "title": "RFC-0041 — genesis bond を廃止し、公開の BASE 回復経路から立ち上げる",
+      "topic": "Economics / budgets",
       "status": "原文と後続改定を参照"
     }
   ]

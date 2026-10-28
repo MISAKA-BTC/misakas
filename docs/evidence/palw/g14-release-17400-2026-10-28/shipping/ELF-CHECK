@@ -1,0 +1,4 @@
+kaspad            ELF 64-bit LSB pie executable, x86-64  interp /lib64/ld-linux-x86-64.so.2  NEEDED ld-linux-x86-64.so.2 libc.so.6 libm.so.6  max GLIBC_2.39
+misaka            ELF 64-bit LSB pie executable, x86-64  interp /lib64/ld-linux-x86-64.so.2  NEEDED ld-linux-x86-64.so.2 libc.so.6 libm.so.6  max GLIBC_2.39
+palw-class        ELF 64-bit LSB pie executable, x86-64  interp /lib64/ld-linux-x86-64.so.2  NEEDED libc.so.6 libm.so.6  max GLIBC_2.39
+misaka-dnsseeder  ELF 64-bit LSB pie executable, x86-64  interp /lib64/ld-linux-x86-64.so.2  NEEDED ld-linux-x86-64.so.2 libc.so.6 libm.so.6  max GLIBC_2.34
