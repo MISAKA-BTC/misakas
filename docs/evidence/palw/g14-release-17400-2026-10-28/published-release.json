@@ -1,0 +1,82 @@
+{
+  "assets": [
+    {
+      "apiUrl": "https://api.github.com/repos/MISAKA-BTC/misakas/releases/assets/684596805",
+      "contentType": "application/x-gtar",
+      "createdAt": "2026-10-28T10:17:07Z",
+      "digest": "sha256:f5d75bf5b98360f37e77242b326c6da4fdc278b5a553cf6035494865781f4806",
+      "downloadCount": 0,
+      "id": "RA_kwDOSqNJmM4ozh5F",
+      "label": "",
+      "name": "misaka-testnet-12-655b6cf3a8f6-linux-amd64.tar.gz",
+      "size": 133945242,
+      "state": "uploaded",
+      "updatedAt": "2026-10-28T10:17:16Z",
+      "url": "https://github.com/MISAKA-BTC/misakas/releases/download/testnet12-g14-17400-655b6cf3a/misaka-testnet-12-655b6cf3a8f6-linux-amd64.tar.gz"
+    },
+    {
+      "apiUrl": "https://api.github.com/repos/MISAKA-BTC/misakas/releases/assets/684596807",
+      "contentType": "application/octet-stream",
+      "createdAt": "2026-10-28T10:17:07Z",
+      "digest": "sha256:7c4052763a8d0a312c0abc19139c08e765a9d3d09ff269436d70137160727315",
+      "downloadCount": 0,
+      "id": "RA_kwDOSqNJmM4ozh5H",
+      "label": "",
+      "name": "misaka-testnet-12-655b6cf3a8f6-linux-amd64.tar.gz.sha256",
+      "size": 116,
+      "state": "uploaded",
+      "updatedAt": "2026-10-28T10:17:08Z",
+      "url": "https://github.com/MISAKA-BTC/misakas/releases/download/testnet12-g14-17400-655b6cf3a/misaka-testnet-12-655b6cf3a8f6-linux-amd64.tar.gz.sha256"
+    },
+    {
+      "apiUrl": "https://api.github.com/repos/MISAKA-BTC/misakas/releases/assets/684596809",
+      "contentType": "application/x-gtar",
+      "createdAt": "2026-10-28T10:17:08Z",
+      "digest": "sha256:0c1085aefe60f856ee1cfa4c82ff0c34680c4a67af5d2a5d13ad48b145ff58c7",
+      "downloadCount": 0,
+      "id": "RA_kwDOSqNJmM4ozh5J",
+      "label": "",
+      "name": "misaka-testnet12-g14-17400-evidence.tar.gz",
+      "size": 514235,
+      "state": "uploaded",
+      "updatedAt": "2026-10-28T10:17:08Z",
+      "url": "https://github.com/MISAKA-BTC/misakas/releases/download/testnet12-g14-17400-655b6cf3a/misaka-testnet12-g14-17400-evidence.tar.gz"
+    },
+    {
+      "apiUrl": "https://api.github.com/repos/MISAKA-BTC/misakas/releases/assets/684596818",
+      "contentType": "application/octet-stream",
+      "createdAt": "2026-10-28T10:17:08Z",
+      "digest": "sha256:8a6e92fbc46c8b5f3876e615ea8945b2c8297d07fcf2f19df90db15a7f8e1c56",
+      "downloadCount": 0,
+      "id": "RA_kwDOSqNJmM4ozh5S",
+      "label": "",
+      "name": "misaka-testnet12-g14-17400-evidence.tar.gz.sha256",
+      "size": 109,
+      "state": "uploaded",
+      "updatedAt": "2026-10-28T10:17:08Z",
+      "url": "https://github.com/MISAKA-BTC/misakas/releases/download/testnet12-g14-17400-655b6cf3a/misaka-testnet12-g14-17400-evidence.tar.gz.sha256"
+    },
+    {
+      "apiUrl": "https://api.github.com/repos/MISAKA-BTC/misakas/releases/assets/684596806",
+      "contentType": "application/json",
+      "createdAt": "2026-10-28T10:17:07Z",
+      "digest": "sha256:cc775b98344804ca2febe1094093377fa6295b7ba33f98dddf832c8c1ac78d9e",
+      "downloadCount": 0,
+      "id": "RA_kwDOSqNJmM4ozh5G",
+      "label": "",
+      "name": "release-evidence-summary.json",
+      "size": 12499,
+      "state": "uploaded",
+      "updatedAt": "2026-10-28T10:17:08Z",
+      "url": "https://github.com/MISAKA-BTC/misakas/releases/download/testnet12-g14-17400-655b6cf3a/release-evidence-summary.json"
+    }
+  ],
+  "isDraft": false,
+  "isPrerelease": true,
+  "publishedAt": "2026-10-28T10:17:43Z",
+  "tagName": "testnet12-g14-17400-655b6cf3a",
+  "targetCommitish": "655b6cf3a8f61ebdce920af867f6bedd87e717d6",
+  "url": "https://github.com/MISAKA-BTC/misakas/releases/tag/testnet12-g14-17400-655b6cf3a",
+  "publicationDocsCommit": "f38e4c8b939548f9a48a10a007b8e3a7cb76919c",
+  "verification": "All five GitHub asset SHA-256 digests and sizes match local files; remote tag resolves to the exact binary source commit. Publication does not deploy this package."
+}
