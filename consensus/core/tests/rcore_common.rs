@@ -60,18 +60,20 @@ pub struct Chain {
 
 impl Chain {
     pub fn new(mut p: Params) -> Self {
-        // These folds do not carry kernel-route extras. Keep a legacy filer or held-DA fence the
-        // caller armed, and leave the rest of the G14 list off.
-        let filer = p.palw_legacy_public_filer_v1;
-        let held = p.palw_legacy_held_da_v2;
-        kaspa_consensus_core::config::params::palw_t12_arm_after_int13_at_v1(
-            &mut p,
-            kaspa_consensus_core::config::params::PALW_T12_G14_17000_FENCES_V1,
-            None,
-        );
-        p.palw_legacy_public_filer_v1 = filer;
-        p.sync_palw_legacy_public_filer_v1();
-        p.palw_legacy_held_da_v2 = held;
+        // These folds do not carry kernel-route extras. Take off G14 fences that are still at the
+        // shipped flag day. A caller that moved one to its own height keeps that height.
+        let flag = kaspa_consensus_core::config::params::PALW_T12_G14_17000_DAA_V1;
+        let armed_at_flag: Vec<&'static str> = p
+            .palw_fences_v1()
+            .iter()
+            .filter(|(_, fence)| fence.is_some_and(|at| at.daa_score() == flag))
+            .map(|(name, _)| *name)
+            .collect();
+        for entry in kaspa_consensus_core::config::params::PALW_T12_G14_17000_FENCES_V1 {
+            if armed_at_flag.contains(&entry.name) {
+                (entry.set)(&mut p, None);
+            }
+        }
         let sp = bundle(&p).state.clone();
         let s = genesis_state(&p);
         Self { p, sp, s, daa: 1_000, room: false, attribution: false }

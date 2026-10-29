@@ -3653,7 +3653,9 @@ fn the_testnet_12_dns_set_is_mainnet_assumed_and_nobody_elses_moved() {
 
 #[test]
 fn staged_public_court_has_independent_dormant_schedule_and_block_clock() {
-    for p in [MAINNET_PARAMS, TESTNET_PARAMS, DEVNET_PARAMS, SIMNET_PARAMS, palw_rc_shipped_params(), palw_t12_shipped_params()] {
+    let t12 = palw_t12_shipped_params();
+    assert_eq!(t12.palw_staged_public_court_v1.map(|f| f.daa_score()), Some(17_400));
+    for p in [MAINNET_PARAMS, TESTNET_PARAMS, DEVNET_PARAMS, SIMNET_PARAMS, palw_rc_shipped_params()] {
         assert!(p.palw_staged_public_court_v1.is_none());
         assert!(!p.palw_staged_public_court_v1_active_at(u64::MAX));
         let mut future = p.clone();

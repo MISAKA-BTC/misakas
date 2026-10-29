@@ -193,6 +193,11 @@ fn the_release_list_arms_it_and_the_drill_moves_it() {
         (fence.set)(&mut armed, Some(ForkActivation::new(750)));
     }
     armed.validate_palw_v2().expect("the release's list at DAA 750 is a runnable testnet-12 ruleset");
+    kaspa_consensus_core::config::params::palw_t12_arm_after_int13_at_v1(
+        &mut armed,
+        kaspa_consensus_core::config::params::PALW_T12_G14_17000_FENCES_V1,
+        None,
+    );
     assert_eq!(
         format!("{armed:?}"),
         format!("{:?}", palw_t12_release_v1_params()),

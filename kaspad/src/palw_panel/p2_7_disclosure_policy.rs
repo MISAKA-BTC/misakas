@@ -484,7 +484,7 @@ fn the_tick_answers_da_sessions_and_keeps_what_it_answers_from() {
     let queued = built + court[built..].find_code("court_outbox.push_pending((key.0, key.1, key.2, object));").expect("and queued");
     let seats = worker.find_code("let duties = session.palw_seat_duties_v2(vec![bond_key]);").expect("the seat's duties");
     assert!(read < pinned && pinned < built && built < queued, "read, pin, build, queue");
-    let court_call = worker.find("self.court_progress_tick_v1(").expect("court stage");
+    let court_call = worker.find(".court_progress_tick_v1(").expect("court stage");
     assert!(court_call < seats, "court/DA progression precedes the seat duty read");
     let fp = &source[source.find_code("    async fn fp_seat_replay_pass_v1(").expect("the FP replay")..];
     let fp = &fp[..fp.find("\n    }\n").expect("its end")];

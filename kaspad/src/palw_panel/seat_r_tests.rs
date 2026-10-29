@@ -1357,7 +1357,7 @@ fn past_seat_r_only_the_replays_can_end_a_verdict_with_valid() {
     let attempt_args: String = block[attempt_pass..].chars().take_while(|c| *c != ')').filter(|c| !c.is_whitespace()).collect();
     assert_eq!(
         attempt_args.trim_end_matches(','),
-        ".attempt_seat_replay_v1(&session,duty,seat_r_duty,current_daa,resolved,&ctx,&prompt,&mutseat_replays",
+        ".attempt_seat_replay_v1(session,duty,seat_r_duty,current_daa,resolved,&ctx,&prompt,seat_replays",
         "the attempt pass reads the duty's SEAT-R view"
     );
     let fpm1 = block.find_code("palw_fp_material_decode_v1(").expect("the FPM1 arm");

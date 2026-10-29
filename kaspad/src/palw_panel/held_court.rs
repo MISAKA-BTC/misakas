@@ -2451,7 +2451,7 @@ mod tests {
         let dated =
             production[moves..].find_code("court_outbox.set_due(queued.key, queued.due);").expect("each with its due date") + moves;
         let started =
-            production.find_code("held_court::palw_held_start_builds_v1(&held_host, &mut held_court, current_daa);").expect("builds");
+            production.find_code("held_court::palw_held_start_builds_v1(&held_host, held_court, current_daa);").expect("builds");
         assert!(begin < route && route < pushed && pushed < dense_resolve && dense_resolve < dense, "routed before the dense builder");
         assert!(production[pushed..pushed + 120].contains_code("continue;"), "the held route ends the duty's iteration");
         assert!(dense < reads && reads < moves && moves < dated && dated < started, "read, move, date, build — after the loop");

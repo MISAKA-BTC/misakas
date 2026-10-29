@@ -48,7 +48,13 @@ fn fence() -> PalwModelTierFenceV1 {
 
 #[test]
 fn the_fence_is_dormant_some_only_and_refused_when_armed() {
-    for p in [MAINNET_PARAMS, TESTNET_PARAMS, t12()] {
+    let shipped = t12();
+    assert_eq!(
+        shipped.palw_model_tier_v1.as_ref().map(|f| f.activation.daa_score()),
+        Some(17_400),
+        "testnet-12 arms the tier at the G14 flag day"
+    );
+    for p in [MAINNET_PARAMS, TESTNET_PARAMS] {
         assert_eq!(p.palw_model_tier_v1, None, "None on every preset");
         assert_eq!(p.palw_model_tier_v1_from_daa(), None);
         p.validate_palw_model_tier_v1().unwrap();

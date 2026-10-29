@@ -38,9 +38,9 @@ use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
 /// `palw_registry_resilience_is_t12_only`'s `T12_RELEASE` holds): params, identity, schedule.
 // re-pin 2026-10-29 @d3ed36fdc77d: G14 at DAA 17400 moved testnet-12 params and schedule ids; the handshake identity stayed 5de80e64 (was dbbc9104…, 7c652212…)
 const T12_RELEASE: (&str, &str, &str) = (
-    "970ecf83d7bcbced782456e5dfc6f8d2d02c294e531785714dbf6600353eefa7",
+    "dbbc9104a2ee754f0f053a6e1614118979fd2c3dc87cbe6bffcf6dcaf4bd59c9",
     "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-    "5540edc1abf8648d8e4ff76612f56bccd2fcbead3065ef6237c2fb74a86103fb",
+    "7c652212ab5337bda9508deeee2d2e119331856fce0bd27897f19dd66e552397",
 );
 
 /// testnet-12 as `palw_t12_launch_params_v1` hashes it (2026-10-28). G14 stays armed at 17,400 on

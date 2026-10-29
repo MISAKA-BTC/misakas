@@ -213,16 +213,16 @@ const PINS: &[(&str, &str, &str, &str)] = &[
     (
         // re-pin 2026-10-29 @d3ed36fdc77d: G14 at DAA 17400 moved testnet-12 params and schedule ids; the handshake identity stayed 5de80e64 (was dbbc9104…, 7c652212…)
         "palw_t12_release_v1_params",
-        "970ecf83d7bcbced782456e5dfc6f8d2d02c294e531785714dbf6600353eefa7",
+        "dbbc9104a2ee754f0f053a6e1614118979fd2c3dc87cbe6bffcf6dcaf4bd59c9",
         "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-        "5540edc1abf8648d8e4ff76612f56bccd2fcbead3065ef6237c2fb74a86103fb",
+        "7c652212ab5337bda9508deeee2d2e119331856fce0bd27897f19dd66e552397",
     ),
     (
         // re-pin 2026-10-29 @d3ed36fdc77d: G14 at DAA 17400 moved testnet-12 params and schedule ids; the handshake identity stayed 5de80e64 (was 24e1aec3…, d263d7f2…)
         "palw_t12_release_v2_params",
-        "f8271af56b6ceead746d5b0317cdf11d6e8a26a667defe888c06ba946737a009",
+        "24e1aec3e9a102fa40d559cd28005ad5944c32caa485d685bed65c52e4c056ff",
         "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-        "de172bdee1263065e03c9fad0ceb82661522d7d07ba86c0bb40fbb5d9e5b1974",
+        "d263d7f2971f4e20b57b26d7b7428bd8f9346c3728bbb6927341d8b36b0c1c3a",
     ),
     (
         // re-pin 2026-10-29 @d3ed36fdc77d: G14 at DAA 17400 moved testnet-12 params and schedule ids; the handshake identity stayed 5de80e64 (was 770fb822…, 9410712f…)

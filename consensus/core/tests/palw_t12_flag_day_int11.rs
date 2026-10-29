@@ -235,7 +235,16 @@ fn testnet12_ships_the_list_armed_at_h_over_the_int10_release() {
         &mut int13,
         kaspa_consensus_core::config::params::PALW_T12_INT13_DAA,
     );
-    assert_eq!(ids(&palw_t12_shipped_params()), ids(&int13), "testnet-12 as shipped IS the int-12 release with the int-13 list armed");
+    kaspa_consensus_core::config::params::palw_t12_arm_after_int13_at_v1(
+        &mut int13,
+        kaspa_consensus_core::config::params::PALW_T12_G14_17000_FENCES_V1,
+        Some(ForkActivation::new(17_400)),
+    );
+    assert_eq!(
+        ids(&palw_t12_shipped_params()),
+        ids(&int13),
+        "testnet-12 as shipped IS the int-12 release with the int-13 list and the G14 flag day"
+    );
     let (bp, bi, bs) = ids(&baseline);
     let (sp, si, ss) = ids(&shipped);
     assert_ne!(sp, bp, "the ruleset names the fences");

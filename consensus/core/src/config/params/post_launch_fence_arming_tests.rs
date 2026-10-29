@@ -222,6 +222,7 @@ fn the_shipped_ruleset_arms_every_post_launch_fence_at_750_and_validates() {
             && Some(*height) != PALW_T12_INT11_RHO100_DAA
             && Some(*height) != PALW_T12_INT11_RHO250_DAA
             && Some(*height) != PALW_T12_INT11_RHO1000_DAA
+            && *height != PALW_T12_G14_17000_DAA_V1
     });
     assert_eq!(pre_flag_day.fence_schedule_v1(), pre_flag_schedule, "the pre-flag release omits only the later flag days' heights");
     assert_eq!(

@@ -1375,7 +1375,7 @@ mod tests {
                 .contains_code(".improve_carry_v1(improve, session, network_domain, bond, current_daa, &mut carrier_chain.book_with_funding(&mut funding))")
         );
         let verdict = &panel[panel.find_code("let verdict = 'verdict: {").expect("the verdict block")..];
-        let hook = verdict.find_code("self.improve_seat_step_v1(&mut improve, duty).await").expect("the seat's hook");
+        let hook = verdict.find_code("self.improve_seat_step_v1(improve, duty).await").expect("the seat's hook");
         let capable = verdict
             .find_code("self.resolve_backend(session, duty.class_id, duty.artifact_root).is_err()")
             .expect("the capability check");
