@@ -262,7 +262,7 @@ impl PalwEscrowSpendLocksV1 {
                     tx,
                     &amounts,
                     daa_score,
-                    kaspa_consensus_core::palw_funded_escrow_v1::palw_escrow_fee_schedule_v1(row),
+                    kaspa_consensus_core::palw_funded_escrow_v1::palw_escrow_fee_schedule_v1(row).as_ref(),
                 ) {
                     Err(_) => return Some(outpoint),
                     Ok(plan) => {
@@ -444,7 +444,7 @@ impl<'a> BondSpendFilter<'a> {
                     tx,
                     &amounts,
                     self.daa_score,
-                    kaspa_consensus_core::palw_funded_escrow_v1::palw_escrow_fee_schedule_v1(row),
+                    kaspa_consensus_core::palw_funded_escrow_v1::palw_escrow_fee_schedule_v1(row).as_ref(),
                 )
                 .ok()
             })
@@ -482,10 +482,15 @@ impl VirtualStateProcessor {
             return 0;
         }
         if tx.subnetwork_id == kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT {
-            let payload = if tx.payload.starts_with(b"FPA1") && self.palw_fp_answer_accounting_v1.is_some_and(|f| f.is_active(daa)) {
-                let Some(view) = kaspa_consensus_core::palw_fp_answer_accounting_v1::palw_fp_answer_envelope_view_v1(&tx.payload, u32::MAX as usize) else { return 0; };
+            let outer = if tx.payload.starts_with(b"FPR2") {
+                if !self.palw_state_params_v2.as_ref().is_some_and(|p| p.claim_local_settlement_active_at(daa)) { return 0; }
+                let Ok(inner) = kaspa_consensus_core::palw_claim_local_v1::prefix_v1::PalwPrefixDependencyEnvelopeV1::inner_view_v1(&tx.payload) else { return 0; };
+                inner
+            } else { tx.payload.as_slice() };
+            let payload = if outer.starts_with(b"FPA1") && self.palw_fp_answer_accounting_v1.is_some_and(|f| f.is_active(daa)) {
+                let Some(view) = kaspa_consensus_core::palw_fp_answer_accounting_v1::palw_fp_answer_envelope_view_v1(outer, u32::MAX as usize) else { return 0; };
                 view.inner
-            } else { &tx.payload };
+            } else { outer };
             // G14 item 1 (RFC-0035 A): a TFO1 carrier burns its literal TFP1's declared rent exactly as that TFP1 carrier would, so
             // the coordinator's native rent check (`prepare_paired_original_v1`) reads a burn that actually happened. Refused or
             // admitted, the rent is destroyed (the TFP1 rule); the funding output is untouched (it is an output, not fee).
@@ -779,7 +784,11 @@ impl VirtualStateProcessor {
                 // together with the bond burn, so RFC-0035 §7.1's one allocation of F holds (0 wherever no row exists).
                 let mut escrow_burned = 0u64;
                 if escrow_fence_active {
-                    if let Some(outpoint) = kaspa_consensus_core::palw_funded_escrow_v1::palw_tfo1_provisional_lock_v1(validated_tx.tx) {
+                    if let Some(outpoint) = kaspa_consensus_core::palw_funded_escrow_v1::palw_wrapped_tfo1_provisional_lock_v1(
+                        validated_tx.tx,
+                        self.palw_state_params_v2.as_ref().is_some_and(|p| p.claim_local_settlement_active_at(pov_daa_score)),
+                        self.palw_fp_answer_accounting_v1.is_some_and(|f| f.is_active(pov_daa_score)),
+                    ) {
                         new_provisional_escrows.push(outpoint);
                     }
                     // A rooted row's outpoint reaches acceptance only under a qualified plan (the filter refused the rest); the
@@ -793,7 +802,7 @@ impl VirtualStateProcessor {
                                     validated_tx.tx,
                                     &amounts,
                                     pov_daa_score,
-                                    kaspa_consensus_core::palw_funded_escrow_v1::palw_escrow_fee_schedule_v1(row),
+                                    kaspa_consensus_core::palw_funded_escrow_v1::palw_escrow_fee_schedule_v1(row).as_ref(),
                                 )
                                 .expect("the spend filter admitted only a qualified escrow spend over the same row and entries");
                                 // G14 r5: a partial settlement re-locks the escrow on its change-back output — provisionally for the
@@ -816,7 +825,11 @@ impl VirtualStateProcessor {
                         && validated_tx.tx.subnetwork_id == kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT
                         && kaspa_consensus_core::palw_fp_answer_accounting_v1::palw_fp_answer_envelope_view_v1(&validated_tx.tx.payload, u32::MAX as usize)
                             .is_some_and(|v| v.inner.starts_with(b"TFO1"));
-                    if accounting_funded || kaspa_consensus_core::palw_tir_funded_original_envelope_v1::is_funded_original_carrier_v1(validated_tx.tx) {
+                    let prefix_funded = self.palw_state_params_v2.as_ref().is_some_and(|p| p.claim_local_settlement_active_at(accepting_daa))
+                        && validated_tx.tx.payload.starts_with(b"FPR2")
+                        && kaspa_consensus_core::palw_funded_escrow_v1::palw_wrapped_tfo1_provisional_lock_v1(validated_tx.tx, true,
+                            self.palw_fp_answer_accounting_v1.is_some_and(|f| f.is_active(accepting_daa))).is_some();
+                    if prefix_funded || accounting_funded || kaspa_consensus_core::palw_tir_funded_original_envelope_v1::is_funded_original_carrier_v1(validated_tx.tx) {
                         let diagnostic = self.palw_funded_original_candidate_from_native_v1(state, accepting_daa, validated_tx);
                         // Full / selected-parent cached checks are not relabelled
                         // as each other. Both leave the funded installer CLOSED.

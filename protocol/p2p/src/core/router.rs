@@ -382,6 +382,9 @@ impl Router {
         if !prefix_history_message_bounded_v1(msg.payload.as_ref().expect("payload was just verified")) {
             return Err(ProtocolError::Other("public prefix history message exceeds its bounded wire envelope"));
         }
+        if !row_stream_generation_bounded_v1(msg.payload.as_ref().expect("payload was just verified")) {
+            return Err(ProtocolError::Other("PALW row stream generation is not one bounded current generation"));
+        }
         let msg_type: KaspadMessagePayloadType = msg.payload.as_ref().expect("payload was just verified").into();
         // Handle the special case of a reject message ending the connection
         if msg_type == KaspadMessagePayloadType::Reject {
@@ -471,6 +474,18 @@ impl Router {
     }
 }
 
+fn row_stream_generation_bounded_v1(payload: &KaspadMessagePayload) -> bool {
+    match payload {
+        KaspadMessagePayload::PruningPointPalwRowStream(message) => {
+            message.generation == kaspa_consensus_core::palw_row_stream_v1::PALW_ROW_STREAM_CURRENT_GENERATION_V1
+                && message.byte_len == message.generation_bytes.len() as u64
+                && message.generation_bytes.len() <= kaspa_consensus_core::palw_row_stream_v1::PALW_ROW_STREAM_MAX_GENERATION_BYTES_V1
+                && message.pruning_point_hash.as_ref().is_some_and(|hash| hash.bytes.len() == 64)
+        }
+        _ => true,
+    }
+}
+
 fn prefix_history_message_bounded_v1(payload: &KaspadMessagePayload) -> bool {
     match payload {
         KaspadMessagePayload::PalwPrefixHistoryRequest(request) => request.request.len() <= 512,
@@ -500,6 +515,26 @@ mod prefix_history_tests {
         assert!(!prefix_history_message_bounded_v1(&KaspadMessagePayload::PalwPrefixHistoryRequest(
             crate::pb::PalwPrefixHistoryRequestMessage { request: vec![0; 513] }
         )));
+    }
+
+    #[test]
+    fn a_row_stream_generation_must_be_the_one_current_bounded_generation() {
+        let ok = crate::pb::PruningPointPalwRowStreamMessage {
+            pruning_point_hash: Some(crate::pb::Hash { bytes: vec![1; 64] }),
+            generation: kaspa_consensus_core::palw_row_stream_v1::PALW_ROW_STREAM_CURRENT_GENERATION_V1,
+            byte_len: 4,
+            generation_bytes: vec![9; 4],
+        };
+        assert!(row_stream_generation_bounded_v1(&KaspadMessagePayload::PruningPointPalwRowStream(ok.clone())));
+        let mut history = ok.clone();
+        history.generation = 2;
+        assert!(!row_stream_generation_bounded_v1(&KaspadMessagePayload::PruningPointPalwRowStream(history)));
+        let mut truncated = ok.clone();
+        truncated.byte_len = 3;
+        assert!(!row_stream_generation_bounded_v1(&KaspadMessagePayload::PruningPointPalwRowStream(truncated)));
+        let mut unnamed = ok;
+        unnamed.pruning_point_hash = None;
+        assert!(!row_stream_generation_bounded_v1(&KaspadMessagePayload::PruningPointPalwRowStream(unnamed)));
     }
 }
 

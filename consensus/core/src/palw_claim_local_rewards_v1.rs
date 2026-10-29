@@ -104,8 +104,11 @@ pub(super) fn clear_hold_v1(builder: &mut TransitionBuilder<'_>, now: u64, id: H
     Ok(())
 }
 
+#[path = "palw_claim_local_prefix_rewards_v1.rs"]
+mod prefix_rewards;
+
 fn same_birth(a: &PalwClaimStateV2, b: &PalwClaimStateV2) -> bool {
-    a.accepted_daa == b.accepted_daa && a.accepted_blue_score == b.accepted_blue_score
+    a.accepted_daa == b.accepted_daa && a.accepted_blue_score == b.accepted_blue_score && a.accepted_block == b.accepted_block
 }
 fn cert_key(id: Hash64) -> [u8; 65] {
     let mut key = [0; 65];
@@ -294,6 +297,12 @@ pub(super) fn live_source(
         return Ok(RewardReadinessV1::Hold(c.trace_retention_daa.max(now)));
     };
     let mut decision = approval(params, id, c, cert_bytes(state.kernel_route.as_ref(), id))?;
+    if let Some(origin) = origin_for(state, params, id, c)? {
+        if let Some(reservation) = state.prefix_export_reservation_v1(&origin.accepting_point(), id)? {
+            if reservation.convicted_daa.is_some() { return Ok(RewardReadinessV1::Denied); }
+            if now <= reservation.material_until { decision = decision.join(RewardReadinessV1::Hold(reservation.material_until)); }
+        }
+    }
     if !retiring_self {
         let until = c.trace_retention_daa.max(final_daa.saturating_add(params.window_court()));
         if now <= until {
@@ -397,7 +406,7 @@ fn source(
     Ok(latest.map_or(RewardReadinessV1::Hold(now), |(_, decision)| decision))
 }
 
-fn origin_for(
+pub(super) fn origin_for(
     state: &PalwChainStateV2,
     params: &PalwStateParamsV2,
     id: Hash64,
@@ -429,8 +438,71 @@ fn inputs_known(
     Ok(match c.source {
         PalwClaimSourceV2::Attempt=>true,
         PalwClaimSourceV2::FreePrompt{..}=>origin.frame().accepted_objects.iter().any(|o|matches!(o,
-            PalwConsensusObjectV2::FreePromptCommitted{claim,consumed_prefix_state,..} if *claim==id && consumed_prefix_state.is_genesis())),
+            PalwConsensusObjectV2::FreePromptCommitted{claim,consumed_prefix_state,..} if *claim==id && consumed_prefix_state.is_genesis()))
+            || prefix_rewards::prefix_use(&origin)?.is_some(),
     })
+}
+
+pub(super) fn kernel_claim_row<'a>(state: &'a PalwChainStateV2, id: &Hash64) -> Option<&'a Vec<u8>> {
+    state.kernel_route.as_ref()?.rows.get(&(misaka_palw_kernel::rows::TABLE_CLAIMS_V1, id.as_byte_slice().to_vec()))
+}
+
+/// Committed dependency edges for one chain claim.
+///
+/// Prefix envelopes contribute a source chain claim only when the signed birth
+/// identity is still the live row and is not later than the consumer. A funded
+/// carrier that spends a stored winning-carrier transaction contributes that
+/// source claim. A bound execution root contributes its prefix claim and each
+/// slice's evidence claim, in the kernel namespace, only when that row is
+/// actually stored. Shared execution roots and model or bond identity are not edges.
+pub(super) fn dependency_inputs_v1(
+    state: &PalwChainStateV2,
+    id: Hash64,
+    claim: &PalwClaimStateV2,
+    origin: Option<&PalwClaimLocalAdmissionContextV1>,
+) -> Result<BTreeSet<PalwClaimLocalWorkRefV1>, PalwStateV2Error> {
+    let mut inputs = BTreeSet::new();
+    if let Some(origin) = origin {
+        if let Some(consumed) = prefix_rewards::prefix_use(origin)? {
+            let source = consumed.intent.source;
+            if source.source_claim != id
+                && let Some(row) = state.claims.get(&source.source_claim)
+                && row.accepted_block == source.accepted_block
+                && row.accepted_daa == source.accepted_daa
+                && row.accepted_blue_score == source.accepted_blue_score
+                && row.accepted_daa <= claim.accepted_daa
+                && row.accepted_blue_score <= claim.accepted_blue_score
+            {
+                inputs.insert(PalwClaimLocalWorkRefV1::ChainClaim { claim: source.source_claim });
+            }
+        }
+        for input in &origin.frame().inputs {
+            let PalwClaimLocalInputV1::ConsumedCarrier { consumer, source } = input else { continue };
+            if *consumer != id || *source == id {
+                continue;
+            }
+            if let Some(row) = state.claims.get(source)
+                && row.accepted_daa <= claim.accepted_daa
+                && row.accepted_blue_score <= claim.accepted_blue_score
+            {
+                inputs.insert(PalwClaimLocalWorkRefV1::ChainClaim { claim: *source });
+            }
+        }
+    }
+    if let Some(root) = state.exec_v2.roots.get(&id)
+        && !matches!(root.prefix, crate::palw_work_slice_v2::PalwWorkPrefixStageV2::Unbound)
+    {
+        let mut consider = |input: Hash64| {
+            if input != ZERO_HASH64 && kernel_claim_row(state, &input).is_some() {
+                inputs.insert(PalwClaimLocalWorkRefV1::KernelClaim { claim: input });
+            }
+        };
+        consider(root.prefix_claim);
+        for (_, slice) in state.exec_v2.slices.range((id, 0)..=(id, u32::MAX)) {
+            consider(slice.evidence_root);
+        }
+    }
+    Ok(inputs)
 }
 
 pub(super) fn reward_readiness_v1(
@@ -454,6 +526,18 @@ pub(super) fn reward_readiness_v1(
     }
     let mut result = live_source(state, params, now, id, target, retiring)?;
     let birth = origin.original_claim();
+    result = result.join(prefix_rewards::readiness(state, params, now, id, target, id, birth, retiring)?);
+    // The same committed edges the checkpoint stores. A source that only shares
+    // an execution root is still joined by the historical scan below.
+    for edge in dependency_inputs_v1(state, id, target, Some(&origin))? {
+        let PalwClaimLocalWorkRefV1::ChainClaim { claim: source_id } = edge else { continue };
+        if source_id == id {
+            continue;
+        }
+        let Some(born) = state.claims.get(&source_id) else { continue };
+        result = result.join(source(state, params, now, source_id, born, id, birth, retiring)?);
+        result = result.join(prefix_rewards::readiness(state, params, now, source_id, born, id, birth, retiring)?);
+    }
     // Sources visible at birth include legacy live claims. Older frames also
     // preserve already-retired sources and transient insert/void/remove runs.
     for (key, bytes) in frames(state) {
@@ -468,6 +552,7 @@ pub(super) fn reward_readiness_v1(
                 && c.accepted_blue_score <= birth.accepted_blue_score
             {
                 result = result.join(source(state, params, now, source_id, c, id, birth, retiring)?);
+                result = result.join(prefix_rewards::readiness(state, params, now, source_id, c, id, birth, retiring)?);
             }
             Ok(())
         };

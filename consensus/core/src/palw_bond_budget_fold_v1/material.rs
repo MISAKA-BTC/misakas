@@ -64,19 +64,21 @@ impl TransitionBuilder<'_> {
     // Only the issuer consumer can derive this exception, from the actual
     // allocation row and native claim. Other income on the same BASE root
     // must still pass the generic enrollment guard above.
-    pub(super) fn bind_issuer_material_income_root_v1(
-        &mut self,
-        now: u64,
-        root: Hash64,
-    ) -> Result<(), PalwStateV2Error> {
+    pub(super) fn bind_issuer_material_income_root_v1(&mut self, now: u64, root: Hash64) -> Result<(), PalwStateV2Error> {
         if !self.params.material_income_active_at(now) {
             return Ok(());
         }
-        let row = self.state.bond_budget.as_ref().and_then(|book| book.claim_row(&root)).copied()
+        let row = self
+            .state
+            .bond_budget
+            .as_ref()
+            .and_then(|book| book.claim_row(&root))
+            .copied()
             .ok_or_else(|| PalwStateV2Error::BondBudgetRefused("issuer allocation row absent".into()))?;
-        let floor_issuer = self.state.claim(&root).is_some_and(|claim| {
-            claim.bond == row.bond && native_floor_issuer_v1(self.params, Some(claim), row.origin)
-        });
+        let floor_issuer = self
+            .state
+            .claim(&root)
+            .is_some_and(|claim| claim.bond == row.bond && native_floor_issuer_v1(self.params, Some(claim), row.origin));
         self.bind_material_income_checked_v1(now, root, native_income_id_v1(root, &row.bond, 0), floor_issuer)
     }
 
@@ -90,9 +92,9 @@ impl TransitionBuilder<'_> {
             return Ok(());
         }
         let floor_seat = self.state.bond_budget.as_ref().and_then(|book| book.claim_row(&root)).is_some_and(|row| {
-            self.state.claim(&root).is_some_and(|claim| {
-                claim.bond == row.bond && native_floor_issuer_v1(self.params, Some(claim), row.origin)
-            })
+            self.state
+                .claim(&root)
+                .is_some_and(|claim| claim.bond == row.bond && native_floor_issuer_v1(self.params, Some(claim), row.origin))
         }) && self.state.panels.get(&root).is_some_and(|panel| panel.seats.iter().any(|seat| seat.bond == bond));
         self.bind_material_income_checked_v1(now, root, native_income_id_v1(root, &bond, 1), floor_seat)
     }
@@ -157,7 +159,7 @@ impl TransitionBuilder<'_> {
             })
             .collect();
         // RFC-0006 (RFC06-1): the boundary and every frozen old monetary row is a listed row of the op.
-        let old_rows = old.len().saturating_add(1);
+        let old_rows = old.len().saturating_add(queues.len()).saturating_add(1);
         self.bond_budget_op(super::PalwBudgetGrowthV1::rows(old_rows), |budget, _, j| {
             budget.activate_material_income_v3(j);
             let boundary = keyed64(b"misaka-palw/material-income/legacy-boundary/v1", &[&now.to_le_bytes()]);
@@ -217,6 +219,27 @@ impl TransitionBuilder<'_> {
         })?
         .expect("created budget")
         .map_err(|why| PalwStateV2Error::BondBudgetRefused(why.to_string()))?;
+        // Migrate actual native fee escrows, not inferred payouts or future income.
+        let mut fee_holds = Vec::new();
+        if let Some(route) = self.state.kernel_route.as_ref() {
+            for ((table, key), bytes) in &route.aux {
+                if *table != crate::palw_verifier_fee_consent_v1::TABLE {
+                    continue;
+                }
+                if key.first() == Some(&crate::palw_verifier_fee_consent_v1::HELD) {
+                    let row: crate::palw_verifier_fee_consent_v1::HeldVerifierFeeV1 = borsh::from_slice(bytes)
+                        .map_err(|_| PalwStateV2Error::CarriageInconsistent("fee migration malformed hold".into()))?;
+                    fee_holds.push((row.terms.claim, row.terms.verifier, row.terms.slot, row.amount));
+                } else if key.first() == Some(&crate::palw_paid_claim_trap_v1::PALW_PAID_CLAIM_TRAP_HELD_FEE_PREFIX_V1) {
+                    let row: crate::palw_paid_claim_trap_v1::PalwHeldCheckFeeRowV1 = borsh::from_slice(bytes)
+                        .map_err(|_| PalwStateV2Error::CarriageInconsistent("paid fee migration malformed hold".into()))?;
+                    fee_holds.push((row.claim, row.verifier, row.slot, row.fee));
+                }
+            }
+        }
+        for (claim, verifier, slot, amount) in fee_holds {
+            self.hold_verifier_fee_material_v1(now, claim, verifier, slot, amount)?;
+        }
         // Authenticate the known native held subjects. Unidentified old rights retain
         // their exact old IDs globally; they are never guessed from a matching address.
         let mut subjects = BTreeMap::new();
@@ -304,9 +327,11 @@ impl TransitionBuilder<'_> {
                             accepted_daa: promise.accepted_daa,
                             payment,
                         };
-                        self.bond_budget_op(super::PalwBudgetGrowthV1::point(), |budget, _, j| budget.put_material_income_v1(id, Some(row), j))?
-                            .expect("created material source engine")
-                            .map_err(|why| PalwStateV2Error::BondBudgetRefused(why.to_string()))?;
+                        self.bond_budget_op(super::PalwBudgetGrowthV1::point(), |budget, _, j| {
+                            budget.put_material_income_v1(id, Some(row), j)
+                        })?
+                        .expect("created material source engine")
+                        .map_err(|why| PalwStateV2Error::BondBudgetRefused(why.to_string()))?;
                     }
                 }
             }
@@ -392,6 +417,207 @@ impl TransitionBuilder<'_> {
                 }
                 self.disarm_deadline(root);
                 self.arm_retirement(root, &claim)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Fee-slot identity, shared by ordinary and paid-V2 consumers of the once-only leg.
+fn verifier_fee_material_id(claim: [u8; 64], verifier: [u8; 64], slot: u64) -> Hash64 {
+    keyed64(b"misaka-palw/material-income/verifier-fee/v1", &[&claim, &verifier, &slot.to_le_bytes()])
+}
+impl TransitionBuilder<'_> {
+    /// Call only after the native consumer actually debited this exact escrow.
+    /// Provenance only: no new money, quota, deadline or provider consent is created.
+    pub(in crate::palw_state_v2) fn hold_verifier_fee_material_v1(
+        &mut self,
+        now: u64,
+        claim: [u8; 64],
+        verifier: [u8; 64],
+        slot: u64,
+        amount: u64,
+    ) -> Result<(), PalwStateV2Error> {
+        if !self.params.material_income_active_at(now) || amount == 0 {
+            return Ok(());
+        }
+        let obligation = verifier_fee_material_id(claim, verifier, slot);
+        let id = material_pending_id_v1(obligation);
+        let row = PalwMaterialIncomeV1 {
+            root: Some(Hash64::from_bytes(claim)),
+            amount,
+            accepted_daa: now,
+            payment: PalwMaterialPaymentV1::HeldEscrow { obligation },
+        };
+        self.bond_budget_op(super::PalwBudgetGrowthV1::point(), |b, _, j| {
+            if b.material_income.contains_key(&id) {
+                return Err(PalwBudgetRefusalV1::Duplicate);
+            }
+            b.put_material_income_v1(id, Some(row), j)
+        })?
+        .ok_or_else(|| PalwStateV2Error::BondBudgetRefused("fee material engine missing".into()))?
+        .map_err(|e| PalwStateV2Error::BondBudgetRefused(e.to_string()))
+    }
+    /// `queue=None` cancels the hold (burn/refusal or an existing budget-backed
+    /// queue receipt). A raw payout uses Some only AFTER its actual queue write.
+    pub(in crate::palw_state_v2) fn finish_verifier_fee_material_v1(
+        &mut self,
+        now: u64,
+        claim: [u8; 64],
+        verifier: [u8; 64],
+        slot: u64,
+        amount: u64,
+        queue: Option<Hash64>,
+    ) -> Result<(), PalwStateV2Error> {
+        if !self.params.material_income_active_at(now) {
+            return Ok(());
+        }
+        let obligation = verifier_fee_material_id(claim, verifier, slot);
+        let id = material_pending_id_v1(obligation);
+        let held = self
+            .state
+            .bond_budget
+            .as_ref()
+            .and_then(|b| b.material_income.get(&id))
+            .copied()
+            .ok_or_else(|| PalwStateV2Error::BondBudgetRefused("fee material escrow missing".into()))?;
+        if held.payment != (PalwMaterialPaymentV1::HeldEscrow { obligation }) || amount > held.amount {
+            return Err(PalwStateV2Error::BondBudgetRefused("fee material differs from actual escrow".into()));
+        }
+        if let Some(queue) = queue {
+            let mut total = amount;
+            for m in self.state.bond_budget.as_ref().expect("held engine").material_income.values() {
+                let same_queue = match m.payment {
+                    PalwMaterialPaymentV1::Queued { income: None, queue: Some(q), paid_daa: None, .. } => q == queue,
+                    PalwMaterialPaymentV1::Queued { income: Some(income), paid_daa: None, .. } => self
+                        .state
+                        .bond_budget
+                        .as_ref()
+                        .and_then(|b| b.claim_row(&income))
+                        .is_some_and(|held| native_queued_income_id_v1(queue, &held.bond) == income),
+                    _ => false,
+                };
+                if same_queue && m.root.is_some() {
+                    total = total.checked_add(m.amount).ok_or(PalwStateV2Error::Overflow("raw fee queue receipts"))?;
+                }
+            }
+            if total > self.state.pending_payouts.get(&queue).map_or(0, |p| p.amount) {
+                return Err(PalwStateV2Error::BondBudgetRefused("fee material receipts exceed actual queue cash".into()));
+            }
+        }
+        self.bond_budget_op(super::PalwBudgetGrowthV1::point(), |b, _, j| {
+            if queue
+                .filter(|_| amount > 0)
+                .is_some_and(|q| b.material_income.contains_key(&material_queue_receipt_id_v1(obligation, q, now)))
+            {
+                return Err(PalwBudgetRefusalV1::Duplicate);
+            }
+            if now < held.accepted_daa {
+                return Err(PalwBudgetRefusalV1::Assignment("fee queue precedes escrow"));
+            }
+            b.put_material_income_v1(id, None, j)?;
+            if let Some(queue) = queue.filter(|_| amount > 0) {
+                let receipt = material_queue_receipt_id_v1(obligation, queue, now);
+                b.put_material_income_v1(
+                    receipt,
+                    Some(PalwMaterialIncomeV1 {
+                        amount,
+                        payment: PalwMaterialPaymentV1::Queued {
+                            income: None,
+                            queue: Some(queue),
+                            queued_daa: now,
+                            paid_daa: None,
+                            release_daa: None,
+                        },
+                        ..held
+                    }),
+                    j,
+                )?;
+            }
+            Ok::<(), PalwBudgetRefusalV1>(())
+        })?
+        .expect("held engine")
+        .map_err(|e| PalwStateV2Error::BondBudgetRefused(e.to_string()))
+    }
+}
+
+impl PalwChainStateV2 {
+    pub(crate) fn assert_fee_material_provenance_v1(&self) -> Result<(), PalwStateV2Error> {
+        let bad = |s: &str| PalwStateV2Error::CarriageInconsistent(s.into());
+        let Some(book) = self.bond_budget.as_ref().filter(|b| b.header.version >= PALW_BOND_BUDGET_STATE_VERSION_V3) else {
+            return Ok(());
+        };
+        let mut escrows = BTreeMap::new();
+        if let Some(route) = self.kernel_route.as_ref() {
+            for ((table, key), bytes) in &route.aux {
+                if *table != crate::palw_verifier_fee_consent_v1::TABLE {
+                    continue;
+                }
+                let (claim, verifier, slot, amount) = if key.first() == Some(&crate::palw_verifier_fee_consent_v1::HELD) {
+                    let held: crate::palw_verifier_fee_consent_v1::HeldVerifierFeeV1 =
+                        borsh::from_slice(bytes).map_err(|_| bad("malformed fee escrow"))?;
+                    if *key
+                        != crate::palw_verifier_fee_consent_v1::fee_key(
+                            crate::palw_verifier_fee_consent_v1::HELD,
+                            &held.terms.claim,
+                            &held.terms.verifier,
+                            held.terms.slot,
+                        )
+                    {
+                        return Err(bad("fee escrow key mismatch"));
+                    }
+                    (held.terms.claim, held.terms.verifier, held.terms.slot, held.amount)
+                } else if key.first() == Some(&crate::palw_paid_claim_trap_v1::PALW_PAID_CLAIM_TRAP_HELD_FEE_PREFIX_V1) {
+                    let held: crate::palw_paid_claim_trap_v1::PalwHeldCheckFeeRowV1 =
+                        borsh::from_slice(bytes).map_err(|_| bad("malformed paid fee escrow"))?;
+                    if *key != crate::palw_paid_claim_trap_v1::palw_paid_trap_held_fee_key_v1(&held.claim, &held.verifier, held.slot) {
+                        return Err(bad("paid fee escrow key mismatch"));
+                    }
+                    (held.claim, held.verifier, held.slot, held.fee)
+                } else {
+                    continue;
+                };
+                if amount > 0
+                    && escrows.insert(verifier_fee_material_id(claim, verifier, slot), (Hash64::from_bytes(claim), amount)).is_some()
+                {
+                    return Err(bad("duplicate native fee escrow identity"));
+                }
+            }
+        }
+        let mut cash = BTreeMap::<Hash64, u64>::new();
+        for row in book.material_income.values().filter(|m| m.root.is_some()) {
+            match row.payment {
+                PalwMaterialPaymentV1::HeldEscrow { obligation } => {
+                    if escrows.remove(&obligation) != row.root.map(|root| (root, row.amount)) {
+                        return Err(bad("fee material and native escrow differ"));
+                    }
+                }
+                PalwMaterialPaymentV1::Queued { income, queue, paid_daa: None, .. } => {
+                    let queue = match (income, queue) {
+                        (None, Some(q)) => q,
+                        (Some(id), None) => {
+                            let held = book.claim_row(&id).ok_or_else(|| bad("material queue budget missing"))?;
+                            let bond = self.bonds.get(&held.bond).ok_or_else(|| bad("material queue bond missing"))?;
+                            let q = crate::palw_kernel_route_v1::palw_kernel_payout_key_v1(&bond.payout_payload);
+                            if native_queued_income_id_v1(q, &held.bond) != id {
+                                continue;
+                            }
+                            q
+                        }
+                        _ => return Err(bad("material queue identity malformed")),
+                    };
+                    let total = cash.entry(queue).or_default();
+                    *total = total.checked_add(row.amount).ok_or_else(|| bad("material queue total overflow"))?;
+                }
+                _ => {}
+            }
+        }
+        if !escrows.is_empty() {
+            return Err(bad("native fee escrow lacks material provenance"));
+        }
+        for (q, total) in cash {
+            if total > self.pending_payouts.get(&q).map_or(0, |p| p.amount) {
+                return Err(bad("exact material receipts exceed actual queue cash"));
             }
         }
         Ok(())

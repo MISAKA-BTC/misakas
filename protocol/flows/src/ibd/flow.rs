@@ -1979,7 +1979,7 @@ impl IbdFlow {
         // and the only other writer — the pruning-point import — used to run after the commit
         // barrier. So the comparison had nothing to compare and fell through. Import here, into
         // STAGING, and the challenger becomes a real value.
-        if let Some((carriage, declarations)) = self.request_pruning_point_palw_state(pruning_point).await? {
+        if let Some((carriage, declarations)) = self.request_pruning_point_palw_state(&staging_session, pruning_point).await? {
             let import_session = staging_session.async_begin_pruning_point_import(pruning_point).await?;
             self.import_pruning_point_palw_state(&staging_session, import_session, carriage, declarations).await?;
         }
@@ -2580,7 +2580,7 @@ impl IbdFlow {
         // `is_utxo_stable = false` before it could learn it had to stop, and every retry deleted it
         // again against the same unservable peer.
         let palw_carriage = if pruning_point != self.ctx.config.genesis.hash {
-            self.request_pruning_point_palw_state(pruning_point).await?
+            self.request_pruning_point_palw_state(consensus, pruning_point).await?
         } else {
             None
         };
@@ -2852,6 +2852,7 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
     /// nothing, which is what a dormant lane needs.
     async fn request_pruning_point_palw_state(
         &mut self,
+        consensus: &ConsensusProxy,
         pruning_point: BlockHash,
     ) -> Result<
         Option<(kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2, Vec<(kaspa_consensus_core::Hash64, Vec<u8>)>)>,
@@ -2887,7 +2888,7 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
             ));
         }
         if self.router.properties().protocol_version >= crate::flow_context::PROTOCOL_VERSION_PALW_SNAPSHOT_CHUNKS {
-            return self.request_pruning_point_palw_chunks(pruning_point).await;
+            return self.request_pruning_point_palw_chunks(consensus, pruning_point).await;
         }
         let _snapshot_lease = crate::palw_snapshot_chunks::SnapshotSpill::new()
             .map_err(|why| ProtocolError::LocalNativeResourceUnavailable(format!("PALW snapshot spill/session: {why}")))?;

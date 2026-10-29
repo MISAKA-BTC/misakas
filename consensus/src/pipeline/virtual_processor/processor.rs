@@ -473,6 +473,7 @@ pub struct VirtualStateProcessor {
     /// `calculate_utxo_state_relatively`, so the two can never be half-written relative to each
     /// other. Empty on every shipped preset — the walk is gated on `ConsensusV2`.
     pub(super) palw_state_v2_store: Arc<RwLock<crate::model::stores::palw_state_v2::DbPalwStateV2Store>>,
+    palw_court_observations: parking_lot::Mutex<kaspa_consensus_core::palw_court_observation_v1::CourtObservationCacheV1>,
     /// The V2 state parameters, `Some` exactly when this network's mode is `ConsensusV2`. It is
     /// the ONE gate on the state walk: a network without a V2 bundle has no V2 state to keep, and
     /// a dead handle in a blue-work pipeline would be surface without semantics (ADR-0042
@@ -1222,6 +1223,7 @@ pub(super) struct PalwCarriedObjectV1 {
     /// Internal only: fee available for rent after mandatory bond burn, or the unpriced sentinel.
     pub(super) carrier_fee: u64,
     pub(super) fp_answer: Option<kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<Vec<u32>>>,
+    pub(super) prefix_dependency: Option<kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<kaspa_consensus_core::palw_claim_local_v1::prefix_v1::PalwPrefixDependencyEnvelopeV1>>,
     /// Original transaction-local companion, never borrowed from another carrier.
     pub(super) history_pledge: Option<kaspa_consensus_core::palw_history_custody_v1::PalwHistoryCustodyPledgeV1>,
     pub(super) tir_public_original: Option<kaspa_consensus_core::palw_tir_public_fp_envelope_v1::PalwTirPublicFpEnvelopeV1>,
@@ -1241,6 +1243,10 @@ pub(super) struct PalwCarriedObjectV1 {
     /// P2PKH-ML-DSA-87 output — nobody the chain could refund. `Some(carrier)` so a refusal of it is
     /// LOGGED as the burn it still is (the review: "nothing is logged"); `None` for everything else.
     pub(super) unrefundable: Option<TransactionId>,
+    /// The transaction this object was extracted from. `None` for a derived binding and for a test object handed in directly.
+    pub(super) winning_carrier: Option<TransactionId>,
+    /// Transaction ids this carrier's inputs spend. Empty for a derived binding and a test object.
+    pub(super) input_spends: Vec<kaspa_hashes::Hash64>,
 }
 
 /// P-B1: the object the acceptance filter is judging, as far as a refund is concerned — how many
@@ -1402,6 +1408,7 @@ impl VirtualStateProcessor {
             stake_bonds_store: storage.stake_bonds_store.clone(),
             palw_class_carriage_store: storage.palw_class_carriage_store.clone(),
             palw_state_v2_store: storage.palw_state_v2_store.clone(),
+            palw_court_observations: parking_lot::Mutex::new(Default::default()),
             palw_state_params_v2: match &params.palw_consensus_mode {
                 kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => Some(bundle.state.clone()),
                 _ => None,
@@ -2574,6 +2581,7 @@ impl VirtualStateProcessor {
                         // rule/state divergence, which no local handling makes safe — so the block
                         // is disqualified rather than skipped, and `palw_state` is moved only on
                         // success.
+                        let mut committed_court_observation = None;
                         let palw_v2_staged = match palw_state.as_mut() {
                             Some(state) => {
                                 // One block's paid whole-root work survives the acceptance walk,
@@ -2680,7 +2688,7 @@ impl VirtualStateProcessor {
                                 // its MSK in the sink** (the 2026-09-23 Position route matrix,
                                 // P-B1), so past `palw_audit_2026_09_23` the filter also names what
                                 // each such carrier is owed and the transition pays it back.
-                                let (objects, folded, carrier_refunds, tir_public_originals, tir_funded_originals, fp_answers) = self.palw_v2_accepted_objects_and_originals(
+                                let (objects, folded, carrier_refunds, tir_public_originals, tir_funded_originals, fp_answers, prefix_dependencies, carrier_input_spends) = self.palw_v2_accepted_objects_and_originals(
                                     state,
                                     state_params,
                                     &point,
@@ -2723,6 +2731,17 @@ impl VirtualStateProcessor {
                                                     current, adm_error
                                                 );
                                                 Some(envelope)
+                                            }
+                                            None if self.palw_base_coinbase_recovery_due_for_header_v1(&header, state)
+                                                && kaspa_consensus_core::config::params::palw_base_coinbase_recovery_missing_bond_v1(&adm_error) => {
+                                                // RFC-0041: the block stands and carries no claim. The child coinbase
+                                                // pays its declared worker share (`palw_v2_skipped_own_attempt_carve`
+                                                // returns 0). The placeholder outpoint is not registered.
+                                                info!(
+                                                    "Block {} stands as BASE coinbase recovery ({adm_error}): no claim, no bond, the existing idle-floor subsidy",
+                                                    current
+                                                );
+                                                None
                                             }
                                             None => {
                                                 info!(
@@ -2825,6 +2844,8 @@ impl VirtualStateProcessor {
                                     Some(envelope) => self.palw_attempt_keys_v1(Some(header.as_ref()), &envelope.attempt),
                                     None => (kaspa_hashes::Hash64::default(), kaspa_hashes::Hash64::default()),
                                 };
+                                // Telemetry is scoped to the synchronous authoritative fold, never acceptance rehearsals.
+                                let court_observation_guard = kaspa_consensus_core::palw_court_observation_v1::CourtObservationGuardV1::enter(current);
                                 match kaspa_consensus_core::palw_state_v2::apply_palw_transition_retained_v7(
                                     state,
                                     state_params,
@@ -2842,11 +2863,12 @@ impl VirtualStateProcessor {
                                     self.palw_da_court_at(point.daa_score),
                                     // ADR-0088 Decision 11 and ADR-0089 Decision 6, at this BLOCK's
                                     // DAA: the fences, and the actions this block's EVM step queued.
-                                    &*fp_answers.attach_v1({
+                                    &*prefix_dependencies.attach_v1(&fp_answers, {
                                         let mut extras = self.palw_transition_extras_for_objects(state, &point, &objects).into_legacy_extras();
                                         extras.history_custody_pledges = history_custody_pledges;
                                         extras.tir_public_originals = tir_public_originals;
                                         extras.tir_funded_originals = tir_funded_originals;
+                                        extras.carrier_input_spends = carrier_input_spends;
                                         extras.public_original_bindings = public_original_bindings;
                                         extras.producer_custody_delegations = producer_custody_delegations;
                                         if state_params.exec_v2_active_at(point.daa_score)
@@ -2904,6 +2926,10 @@ impl VirtualStateProcessor {
                                     })?,
                                 ) {
                                     Ok((next, delta, merged_skips)) => {
+                                        committed_court_observation = court_observation_guard.finish().map(|outcomes|
+                                            kaspa_consensus_core::palw_court_observation_v1::CommittedCourtObservationV1 {
+                                                block: current, post_state_root: next.state_root(), daa: point.daa_score, outcomes,
+                                            });
                                         // A skipped merged work is the block standing while a
                                         // piece of its anticone is refused — say which and why,
                                         // because a silent skip of real work is the defect class
@@ -3019,6 +3045,9 @@ impl VirtualStateProcessor {
                                 genesis_carriages: Vec::new(),
                             }),
                         )?;
+                        if let Some(observation) = committed_court_observation {
+                            self.palw_court_observations.lock().publish_after_commit(observation);
+                        }
                         // Count the number of UTXO-processed chain blocks
                         chain_block_counter += 1;
                     }
@@ -4097,6 +4126,7 @@ impl VirtualStateProcessor {
                 object,
                 carrier_fee: PALW_RENT_UNPRICED,
                 fp_answer: None,
+                prefix_dependency: None,
                 history_pledge: None,
                 tir_public_original: None,
                 funded_original: None,
@@ -4104,6 +4134,8 @@ impl VirtualStateProcessor {
                 custody_delegation: None,
                 refund: None,
                 unrefundable: None,
+                winning_carrier: None,
+                input_spends: Vec::new(),
             })
             .collect()
     }

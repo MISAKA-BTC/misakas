@@ -91,6 +91,8 @@ message KaspadMessage {
     // Bounded public accepted-history pull. Responses are addressed to the asker only.
     PalwPrefixHistoryRequestMessage palwPrefixHistoryRequest = 80;
     PalwPrefixHistoryRecordMessage palwPrefixHistoryRecord = 81;
+    // RFC-0037: one authenticated pruning-point row-stream generation on the existing IBD flow.
+    PruningPointPalwRowStreamMessage pruningPointPalwRowStream = 82;
   }
 }
 

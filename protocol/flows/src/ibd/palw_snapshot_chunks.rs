@@ -6,9 +6,10 @@ use crate::palw_snapshot_chunks::{
     park_interrupted_snapshot, take_interrupted_snapshot,
 };
 use kaspa_consensus_core::{BlockHash, Hash64};
+use kaspa_consensusmanager::ConsensusProxy;
 use kaspa_p2p_lib::{
     common::ProtocolError,
-    dequeue_with_timeout, make_message,
+    make_message,
     pb::{RequestPruningPointPalwStateMessage, kaspad_message::Payload},
 };
 use std::time::Duration;
@@ -31,7 +32,11 @@ fn snapshot_failure(why: NativeSnapshotDecodeErrorV1) -> ProtocolError {
 }
 
 impl IbdFlow {
-    pub(super) async fn request_pruning_point_palw_chunks(&mut self, point: BlockHash) -> Result<Option<Snapshot>, ProtocolError> {
+    pub(super) async fn request_pruning_point_palw_chunks(
+        &mut self,
+        consensus: &ConsensusProxy,
+        point: BlockHash,
+    ) -> Result<Option<Snapshot>, ProtocolError> {
         if self.router.properties().protocol_version < crate::flow_context::PROTOCOL_VERSION_PALW_SNAPSHOT_CHUNKS {
             return Err(ProtocolError::Other("PALW snapshot chunks were not negotiated"));
         }
@@ -57,7 +62,7 @@ impl IbdFlow {
         } else {
             None
         };
-        let result = self.receive_pruning_point_palw_chunks(point, &mut receiver, &mut spill, &nonce).await;
+        let result = self.receive_pruning_point_palw_chunks(consensus, point, &mut receiver, &mut spill, &nonce).await;
         if matches!(&result, Err(ProtocolError::Timeout(_)) | Err(ProtocolError::ConnectionClosed))
             && let Some(receiver) = receiver.take()
         {
@@ -68,6 +73,7 @@ impl IbdFlow {
 
     async fn receive_pruning_point_palw_chunks(
         &mut self,
+        consensus: &ConsensusProxy,
         point: BlockHash,
         receiver: &mut Option<SnapshotReceiver>,
         spill: &mut Option<SnapshotSpill>,
@@ -87,13 +93,38 @@ impl IbdFlow {
                         chunk_index: index,
                         snapshot_codec: if nonce.is_empty() { 0 } else { SNAPSHOT_CODEC_ZLIB_V1 },
                         snapshot_nonce: nonce.to_vec(),
+                        // The first reply may be one current row-stream generation. A resume does not ask again.
+                        row_stream_generation: if index == 0 && start_index == 0 {
+                            kaspa_consensus_core::palw_row_stream_v1::PALW_ROW_STREAM_CURRENT_GENERATION_V1
+                        } else {
+                            0
+                        },
                     }
                 ))
                 .await?;
             // A stalled continuation may be retried on another peer while the original
             // immutable receiver is still within its total 600-second lease.
             let timeout = Duration::from_secs(if index == 0 { 600 } else { 30 });
-            let msg = dequeue_with_timeout!(self.incoming_route, Payload::PruningPointPalwState, timeout)?;
+            let payload = match tokio::time::timeout(timeout, self.incoming_route.recv()).await {
+                Ok(Some(message)) => message.payload,
+                Ok(None) => return Err(ProtocolError::ConnectionClosed),
+                Err(_) => return Err(ProtocolError::Timeout(timeout)),
+            };
+            let msg = match payload {
+                Some(Payload::PruningPointPalwRowStream(row)) => {
+                    if index != 0 || start_index != 0 {
+                        return Err(ProtocolError::Other("duplicate or out-of-order PALW row stream generation"));
+                    }
+                    return self.accept_pruning_point_palw_row_stream(consensus, point, &row, None).await.map(Some);
+                }
+                Some(Payload::PruningPointPalwState(msg)) => msg,
+                other => {
+                    return Err(ProtocolError::UnexpectedMessage(
+                        "PruningPointPalwState or PruningPointPalwRowStream",
+                        other.as_ref().map(Into::into),
+                    ));
+                }
+            };
             if !msg.found {
                 return Err(ProtocolError::PruningSidecarUnavailable("PALW chunked state", point.to_string()));
             }

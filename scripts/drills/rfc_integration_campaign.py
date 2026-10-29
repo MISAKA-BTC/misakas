@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 import re
 import time
+import rfc06_native_router_observation as router_observations
 import rfc08_native_paid_observation as paid_observations
 import rfc08_native_paid_bootstrap_observation as bootstrap_observations
 
@@ -47,7 +48,7 @@ GATES = {
 }
 SOURCE_LEAVES = ('misaka-rfc-integration-campaign.py', 'rfc_integration_campaign.py', 'misaka-rfc12-multiprocess.py',
     'rfc12_owned_resources.py', 'rfc12_owned_fixture.py', 'misaka_wrpc_json.py', 'rfc12_kernel_consumers.py', 'rfc12_native_recovery_observation.py',
-    'rfc08_native_paid_observation.py', 'rfc08_native_paid_bootstrap_observation.py')
+    'rfc08_native_paid_observation.py', 'rfc08_native_paid_bootstrap_observation.py', 'rfc06_native_router_observation.py')
 BUILD_TOOLS = frozenset(('cargo', 'rustc', 'rustup', 'make', 'cmake', 'ninja', 'meson', 'git', 'rebase', 'reset'))
 IDENTIFIER = re.compile(r'[a-z0-9][a-z0-9._-]{0,95}\Z')
 
@@ -269,6 +270,8 @@ def validate_campaign(plan, drill):
                 require(isinstance(fact['expected']['producerBond'], str) and len(fact['expected']['producerBond']) <= 160, 'native producer scope absent')
                 require(type(fact['expected']['expectedConvicted']) is bool, 'expected conviction must be a predeclared boolean')
                 u64(fact['expected']['maximumRecordBytes'], 'maximumRecordBytes', 1)
+            if fact['kind'] == 'reader-router-court' and fact['expected']:
+                router_observations.validate_expected(fact['expected'])
             if fact['kind'] in paid_observations.PAID_KINDS:
                 enabled = paid_observations.claims(drill['nodes'][fact['role']]['argv'])
                 if enabled or fact['kind'].startswith('native-paid-'):
@@ -557,6 +560,12 @@ def make_campaign_drill(base):
             self.integrity('stage.after.' + name)
 
         def fact(self, requirement):
+            if requirement['kind'] == 'reader-router-court' and requirement['expected']:
+                try:
+                    observation = router_observations.observe(self, requirement, base.probe_context)
+                    return router_observations.fact(requirement, observation)
+                except (ValueError, OSError, KeyError, TypeError) as error:
+                    return unknown_fact(requirement, 'native router observation unavailable: ' + str(error))
             if requirement['kind'] in bootstrap_observations.KINDS:
                 try:
                     observed = bootstrap_observations.observe(self, requirement['role'], requirement['claimId'],

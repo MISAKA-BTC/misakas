@@ -619,3 +619,17 @@ fn source_bootstrap_economics_appends_actions_without_reusing_old_tags() {
         assert_eq!(borsh::from_slice::<A>(&bytes).unwrap(), *action);
     }
 }
+
+#[test]
+fn ordinary_verifier_fee_rows_have_exact_versioned_aux_codecs() {
+    use crate::palw_verifier_fee_consent_v1::*;
+    let terms=VerifierFeeConsentV1{version:1,network:[1;64],ruleset:[2;64],claim:[3;64],verifier:[4;64],slot:5,poster:[6;64],fee:17,liability_until:100,material_until:100,policy_digest:misaka_palw_kernel::verifier_fee_consent_v1::verifier_fee_policy_digest_v1(),nonce:0,clean:true};
+    let held=HeldVerifierFeeV1{terms,amount:17,convicted_daa:Some(90)};
+    let mut conviction_key=vec![6];conviction_key.extend_from_slice(&terms.claim);
+    for (key,bytes) in [(fee_key(CONSENT,&terms.claim,&terms.verifier,terms.slot),borsh::to_vec(&terms).unwrap()),(fee_key(HELD,&terms.claim,&terms.verifier,terms.slot),borsh::to_vec(&held).unwrap()),(conviction_key,borsh::to_vec(&90u64).unwrap())] {
+        let mut reader=NativeWireReaderV1::new(bytes.as_slice(),bytes.len() as u64);
+        super::wire_kernel_aux::scan_native_aux_row_v1(TABLE,&key,&mut reader).unwrap();assert_eq!(reader.remaining(),0);
+        let mut truncated=NativeWireReaderV1::new(&bytes[..bytes.len()-1],(bytes.len()-1) as u64);
+        assert!(super::wire_kernel_aux::scan_native_aux_row_v1(TABLE,&key,&mut truncated).is_err());
+    }
+}

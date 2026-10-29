@@ -103,6 +103,7 @@ pub(super) fn apply_memory_routing_v2(
                 artifact_root,
             };
             let binding_row = palw_router_binding_row_of_v2(&builder.state, &claim.class_id);
+            let court_started = crate::palw_court_observation_v1::start_v1(ctx.block);
             let verdict =
                 palw_memory_routing_verdict_v2(accusation, &actual, ladder, binding_row.as_ref(), claim.accepted_daa).map_err(|e| match e {
                     crate::palw_step_refute::memory_v2::PalwGdnCourtErrorV2::Resource(cause) => PalwStateV2Error::NativeResource(cause),
@@ -120,6 +121,13 @@ pub(super) fn apply_memory_routing_v2(
                     return Err(PalwStateV2Error::ShardCourt("consumer v2 must never invent an attention dissection".into()));
                 }
             }
+            let route = match &accusation.evidence {
+                crate::palw_memory_routing_v2::PalwMemoryRoutingEvidenceV2::GdnTransition { .. } => "GdnTransition",
+                crate::palw_memory_routing_v2::PalwMemoryRoutingEvidenceV2::GdnConvWindow { .. } => "GdnConvWindow",
+                crate::palw_memory_routing_v2::PalwMemoryRoutingEvidenceV2::RoutedStep { .. } => "RoutedStep",
+            };
+            crate::palw_court_observation_v1::record_v1(ctx.block, claim_id, claim.class_id, 244, route,
+                accusation.evidence.subject().1, verdict, accusation, court_started);
             Ok(())
         }
     }

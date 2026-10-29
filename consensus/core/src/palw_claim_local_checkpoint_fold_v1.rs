@@ -46,6 +46,99 @@ struct LiabilityStateV1 {
     birth_frames: Vec<Hash64>,
 }
 
+/// Kernel claims named by a bound execution root. A missing row is not a vertex.
+/// `accepted_blue_score` stays 0: the row stores no blue score, and 0 is not
+/// later than the consumer that already named the row. Returns the open kernel
+/// ids, in order, so the liability projection can bind them.
+fn attach_kernel_dependency_records_v1(
+    state: &PalwChainStateV2,
+    now: u64,
+    kernel_refs: &BTreeSet<Hash64>,
+    records: &mut BTreeMap<PalwClaimLocalWorkRefV1, PalwClaimLocalRecordV1>,
+    material: &mut BTreeMap<Hash64, Vec<u8>>,
+) -> Result<Vec<Hash64>, PalwStateV2Error> {
+    let mut pending: Vec<(Hash64, Vec<u8>, PalwClaimLocalRecordV1)> = Vec::new();
+    for id in kernel_refs {
+        let Some(raw) = rewards::kernel_claim_row(state, id) else { continue };
+        let row: misaka_palw_kernel::ledger::ClaimRowV1 =
+            borsh::from_slice(raw).map_err(|_| bad("malformed kernel dependency row"))?;
+        if row.committed_daa > now {
+            continue;
+        }
+        use crate::palw_exec_v2_verify::PalwSliceVerificationV1 as V;
+        let outcome = crate::palw_exec_v2_verify::palw_exec_v2_claim_outcome_v1(&row, now);
+        let voided = matches!(outcome, V::ProvenFalse | V::Defaulted);
+        let final_claim = matches!(outcome, V::Verified { .. });
+        let certified = final_claim
+            && state
+                .kernel_route
+                .as_ref()
+                .is_some_and(|route| crate::palw_exec_v2_verify::palw_exec_v2_selected_approval_v1(route, id));
+        let liability_closed = voided || (certified && row.liability_until.is_some_and(|until| now > until));
+        let work = PalwClaimLocalWorkRefV1::KernelClaim { claim: *id };
+        pending.push((
+            *id,
+            raw.clone(),
+            PalwClaimLocalRecordV1 {
+                work,
+                accepted_daa: row.committed_daa,
+                accepted_blue_score: 0,
+                accepting_block: kernel_anchor_v1(state, *id),
+                anchors: false,
+                inputs: BTreeSet::new(),
+                execution_root: kaspa_hashes::ZERO_HASH64,
+                reservations: BTreeSet::new(),
+                final_claim,
+                certified,
+                voided,
+                liability_closed,
+                material: BTreeSet::new(),
+            },
+        ));
+    }
+    for record in records.values_mut() {
+        let accepted_daa = record.accepted_daa;
+        let accepted_blue_score = record.accepted_blue_score;
+        record.inputs.retain(|input| match input {
+            PalwClaimLocalWorkRefV1::KernelClaim { claim } => pending.iter().any(|(id, _, kernel)| {
+                id == claim && kernel.accepted_daa <= accepted_daa && kernel.accepted_blue_score <= accepted_blue_score
+            }),
+            _ => true,
+        });
+    }
+    let mut open = Vec::new();
+    for (id, raw, mut record) in pending {
+        let referenced = records.values().any(|consumer| consumer.inputs.contains(&PalwClaimLocalWorkRefV1::KernelClaim { claim: id }));
+        if !referenced {
+            continue;
+        }
+        if !record.liability_closed {
+            let mid = palw_liability_material_id_v1(&raw);
+            record.material.insert(mid);
+            material.insert(mid, raw);
+            open.push(id);
+        }
+        records.insert(record.work, record);
+    }
+    Ok(open)
+}
+
+fn kernel_anchor_v1(state: &PalwChainStateV2, id: Hash64) -> Hash64 {
+    let mut best: Option<(u64, Hash64)> = None;
+    for (root_id, root) in &state.exec_v2.roots {
+        let named = root.prefix_claim == id
+            || state.exec_v2.slices.range((*root_id, 0)..=(*root_id, u32::MAX)).any(|(_, slice)| slice.evidence_root == id);
+        if !named {
+            continue;
+        }
+        let candidate = (root.opened_daa, root.anchor);
+        if best.is_none_or(|previous| candidate < previous) {
+            best = Some(candidate);
+        }
+    }
+    best.map(|(_, anchor)| anchor).unwrap_or(kaspa_hashes::ZERO_HASH64)
+}
+
 /// Expected checkpoint at `point` from `state` (which must already be the state AT `point`).
 /// `Ok(None)` below the fence. Errors only on corrupt retained rows or local capacity.
 pub(super) fn expected_claim_local_checkpoint_v1(
@@ -74,6 +167,7 @@ pub(super) fn expected_claim_local_checkpoint_v1(
     let mut records = BTreeMap::new();
     let mut material = BTreeMap::new();
     let mut liability = LiabilityStateV1 { open: Vec::new(), birth_frames: Vec::new() };
+    let mut kernel_refs: BTreeSet<Hash64> = BTreeSet::new();
     for (id, c) in &state.claims {
         let work = PalwClaimLocalWorkRefV1::ChainClaim { claim: *id };
         let voided = matches!(c.phase, PalwClaimPhaseV2::Voided { .. });
@@ -81,10 +175,11 @@ pub(super) fn expected_claim_local_checkpoint_v1(
         let certified = final_claim
             && rewards::approval(params, *id, c, rewards::cert_bytes(state.kernel_route.as_ref(), *id))?
                 == rewards::RewardReadinessV1::Ready;
-        // Own liability only (court / trace / EXEC windows, prosecution, native dependency). Shared
-        // execution roots are the checkpoint's dependency closure, not this flag.
+        // The irreversible checkpoint must use the same retained admission and historical
+        // dependency reader as monetary settlement. A live-only check loses retired sources
+        // and can treat missing provenance as an independently closed liability.
         let liability_closed = if final_claim {
-            rewards::live_source(state, params, now, *id, c, false)? == rewards::RewardReadinessV1::Ready
+            rewards::reward_readiness_v1(state, params, now, *id, false)? == rewards::RewardReadinessV1::Ready
         } else if voided {
             !state.unresolved.contains(&(c.accepted_blue_score, *id)) && !courts.contains_key(id)
         } else {
@@ -116,9 +211,25 @@ pub(super) fn expected_claim_local_checkpoint_v1(
                 accepted_blue_score: c.accepted_blue_score,
                 accepting_block: birth.unwrap_or(c.accepted_block),
                 anchors: matches!(c.source, PalwClaimSourceV2::Attempt),
-                // No transaction-output → claim consumption map exists yet; shared execution roots
-                // (the actual RFC §4.2 dependency the fold can prove) are carried by `execution_root`.
-                inputs: BTreeSet::new(),
+                // Committed edges only: a signed prefix source still live at its admitted
+                // birth, and a bound execution root's stored prefix / slice evidence rows.
+                // Shared execution roots stay on `execution_root`; they are not copied here.
+                inputs: {
+                    let origin = rewards::origin_for(state, params, *id, c)?;
+                    let mut inputs = rewards::dependency_inputs_v1(state, *id, c, origin.as_ref())?;
+                    drop(origin);
+                    inputs.retain(|input| match input {
+                        PalwClaimLocalWorkRefV1::KernelClaim { claim } => {
+                            kernel_refs.insert(*claim);
+                            true
+                        }
+                        PalwClaimLocalWorkRefV1::ChainClaim { claim: source } => {
+                            source != id && state.claims.contains_key(source)
+                        }
+                        _ => false,
+                    });
+                    inputs
+                },
                 execution_root: c.execution_root,
                 // Each claim's collateral reservation is its own; none is shared, so none links claims.
                 reservations: BTreeSet::new(),
@@ -130,7 +241,19 @@ pub(super) fn expected_claim_local_checkpoint_v1(
             },
         );
     }
-    let liability_state = if liability.open.is_empty() { Vec::new() } else { borsh::to_vec(&liability).expect("canonical liability") };
+    let open_kernels = attach_kernel_dependency_records_v1(state, now, &kernel_refs, &mut records, &mut material)?;
+    let mut liability_state = if liability.open.is_empty() { Vec::new() } else { borsh::to_vec(&liability).expect("canonical liability") };
+    if !open_kernels.is_empty() {
+        // Open kernel inputs must stay inside the bound projection. Absent any
+        // open chain claim, the suffix is the whole projection; otherwise it
+        // rides after the chain projection and does not rewrite it.
+        let suffix = borsh::to_vec(&open_kernels).expect("canonical kernel liability");
+        if liability_state.is_empty() {
+            liability_state = suffix;
+        } else {
+            liability_state.extend(suffix);
+        }
+    }
     Ok(Some(NativeRetainedV1::from_owner_reserved_v1(
         PalwClaimLocalCheckpointV1 { point: *point, records, liability_state, material },
         lease,
@@ -200,8 +323,14 @@ pub(super) fn write_claim_local_checkpoint_v1(
     if !builder.params.claim_local_settlement_active_at(ctx.daa_score) {
         return Ok(());
     }
-    // The state AT ctx: `last_point` is installed after this step, so judge with an explicit point.
-    let Some(checkpoint) = expected_claim_local_checkpoint_v1(&builder.state, builder.params, ctx)? else { return Ok(()) };
+    // All native changes and this point's retained frame have already executed,
+    // but LastPoint is journalled at the fold's final step. Historical readers
+    // must see the actual executed point while deriving this checkpoint. Restore
+    // the marker even on refusal; the normal LastPoint delta remains the owner.
+    let previous_point = builder.state.last_point.replace(*ctx);
+    let checkpoint = expected_claim_local_checkpoint_v1(&builder.state, builder.params, ctx);
+    builder.state.last_point = previous_point;
+    let Some(checkpoint) = checkpoint? else { return Ok(()) };
     // Self-check: the fold's own value must pass the same validation a reader applies.
     let mut raise = {
         let validated = checkpoint.validate(ctx, &checkpoint.records, &checkpoint.liability_state).map_err(checkpoint_err)?;
@@ -242,7 +371,12 @@ pub(super) fn write_claim_local_checkpoint_v1(
                 prior.records.get(dep).is_some_and(|r| r.liability_closed)
                     || matches!(dep, PalwClaimLocalWorkRefV1::ChainClaim { claim } if retired.contains_key(claim))
             });
-            if closed && raise.is_none_or(|(b, _)| *blue > b) {
+            // Retirement alone is not evidence that historical inputs settled. A source can
+            // have left the live checkpoint before this consumer; consult retained provenance
+            // with the retiring-self clock before making its frontier irreversible.
+            let sourced = rewards::reward_readiness_v1(parent, builder.params, ctx.daa_score, *id, true)?
+                == rewards::RewardReadinessV1::Ready;
+            if closed && sourced && raise.is_none_or(|(b, _)| *blue > b) {
                 raise = Some((*blue, *block));
             }
         }

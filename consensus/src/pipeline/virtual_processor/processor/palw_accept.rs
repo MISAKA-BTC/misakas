@@ -440,7 +440,7 @@ impl VirtualStateProcessor {
             .map(|(object, carrier_fee)| PalwCarriedObjectV1 {
                 object,
                 carrier_fee,
-                fp_answer: None,
+                fp_answer: None, prefix_dependency: None,
                 history_pledge: None,
                 tir_public_original: None,
                 funded_original: None,
@@ -448,6 +448,8 @@ impl VirtualStateProcessor {
                 custody_delegation: None,
                 refund: None,
                 unrefundable: None,
+                winning_carrier: None,
+                input_spends: Vec::new(),
             })
             .collect();
         self.palw_v2_accepted_objects(state, state_params, point, objects, block, None)
@@ -477,7 +479,7 @@ impl VirtualStateProcessor {
             .map(|(object, refund)| PalwCarriedObjectV1 {
                 object,
                 carrier_fee: PALW_RENT_UNPRICED,
-                fp_answer: None,
+                fp_answer: None, prefix_dependency: None,
                 history_pledge: None,
                 tir_public_original: None,
                 funded_original: None,
@@ -485,6 +487,8 @@ impl VirtualStateProcessor {
                 custody_delegation: None,
                 refund,
                 unrefundable: None,
+                winning_carrier: None,
+                input_spends: Vec::new(),
             })
             .collect();
         let (objects, state, refunds) =
@@ -535,7 +539,7 @@ impl VirtualStateProcessor {
         ),
         PalwLocalTransitionFaultV1,
     > {
-        let (accepted, folded, refunds, _, _, _) = self.palw_v2_accepted_objects_and_originals(
+        let (accepted, folded, refunds, _, _, _, _, _) = self.palw_v2_accepted_objects_and_originals(
             state,
             state_params,
             point,
@@ -576,6 +580,8 @@ impl VirtualStateProcessor {
                 kaspa_consensus_core::palw_funded_original_coordinator_v1::PalwFundedOriginalPairingV1,
             >,
             kaspa_consensus_core::palw_fp_answer_accounting_v1::PalwFpClaimAnswersV1,
+            kaspa_consensus_core::palw_claim_local_v1::prefix_v1::PalwPrefixDependenciesV1,
+            std::collections::BTreeMap<kaspa_hashes::Hash64, Vec<kaspa_hashes::Hash64>>,
         ),
         PalwLocalTransitionFaultV1,
     > {
@@ -620,12 +626,17 @@ impl VirtualStateProcessor {
                 kaspa_consensus_core::palw_funded_original_coordinator_v1::PalwFundedOriginalPairingV1,
             >,
             kaspa_consensus_core::palw_fp_answer_accounting_v1::PalwFpClaimAnswersV1,
+            kaspa_consensus_core::palw_claim_local_v1::prefix_v1::PalwPrefixDependenciesV1,
+            std::collections::BTreeMap<kaspa_hashes::Hash64, Vec<kaspa_hashes::Hash64>>,
         ),
         PalwLocalTransitionFaultV1,
     > {
+        let mut accepted_prefixes = kaspa_consensus_core::palw_claim_local_v1::prefix_v1::PalwPrefixDependenciesV1::default();
         let mut accepted_answers = kaspa_consensus_core::palw_fp_answer_accounting_v1::PalwFpClaimAnswersV1::default();
         let mut accepted_tir_originals = std::collections::BTreeMap::new();
         let mut accepted_funded_originals = std::collections::BTreeMap::new();
+        let mut accepted_carrier_spends: std::collections::BTreeMap<kaspa_hashes::Hash64, Vec<kaspa_hashes::Hash64>> =
+            std::collections::BTreeMap::new();
         // **RFC-0007 §I.6: watch the vertices go by** (past the fence only). Every vertex whose signature verifies under its seat's key
         // is remembered, taken by the fold or not, so a second root of one `(round, seat)` — which the fold drops as the round's second
         // vertex — becomes evidence for the node to carry. A vertex already seen is not verified again.
@@ -744,6 +755,8 @@ impl VirtualStateProcessor {
                         std::collections::BTreeMap::new(),
                         std::collections::BTreeMap::new(),
                         Default::default(),
+                        Default::default(),
+                        Default::default(),
                     ));
                 }
             }
@@ -841,6 +854,7 @@ impl VirtualStateProcessor {
                 object,
                 carrier_fee,
                 fp_answer,
+                prefix_dependency,
                 history_pledge,
                 tir_public_original,
                 funded_original,
@@ -848,13 +862,32 @@ impl VirtualStateProcessor {
                 custody_delegation,
                 refund,
                 unrefundable,
+                winning_carrier,
+                input_spends,
             } = carried;
+            let carrier_input_spends = {
+                let mut spends = std::collections::BTreeMap::new();
+                if let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::FreePromptCommitted { claim, .. } = &object
+                    && !input_spends.is_empty()
+                {
+                    spends.insert(*claim, input_spends.clone());
+                }
+                spends
+            };
             let mut fp_answers = kaspa_consensus_core::palw_fp_answer_accounting_v1::PalwFpClaimAnswersV1::default();
+            let mut prefix_dependencies = kaspa_consensus_core::palw_claim_local_v1::prefix_v1::PalwPrefixDependenciesV1::default();
+            if let Some(envelope) = prefix_dependency {
+                let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::FreePromptCommitted { claim, .. } = &object else { continue };
+                if !prefix_dependencies.insert_v1(*claim, envelope)? || !accepted_prefixes.compatible_v1(&prefix_dependencies) { continue; }
+            }
             if let Some(answer) = fp_answer {
                 // Only the authenticated object extracted from this exact carrier can own its answer.
                 let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::FreePromptCommitted { claim, decode_tokens_executed, .. } = &object else { continue; };
                 if answer.len() != *decode_tokens_executed as usize { continue; }
                 if !fp_answers.insert_v1(*claim, answer)? { continue; }
+                if let Some(carrier) = winning_carrier {
+                    fp_answers.note_carrier_v1(*claim, carrier);
+                }
             }
             if !accepted_answers.compatible_v1(&fp_answers) {
                 info!("Block {block}: a carrier supplied a conflicting answer for an already accepted claim");
@@ -1652,11 +1685,12 @@ impl VirtualStateProcessor {
                         self.palw_capability_bound_at(point.daa_score),
                         self.palw_uncertified_weightless_at(point.daa_score),
                         self.palw_da_court_at(point.daa_score),
-                        &*fp_answers.attach_v1(kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
+                        &*prefix_dependencies.attach_v1(&fp_answers, kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
                             own_attempt_class,
                             history_custody_pledges: history_custody_pledges.clone(),
                             tir_public_originals: tir_public_originals.clone(),
                             tir_funded_originals: tir_funded_originals.clone(),
+                            carrier_input_spends: carrier_input_spends.clone(),
                             public_original_bindings: public_original_bindings.clone(),
                             producer_custody_delegations: producer_custody_delegations.clone(),
                             model_classes_registered_in_block: model_classes_registered_in_block.clone(),
@@ -1908,11 +1942,12 @@ impl VirtualStateProcessor {
                             self.palw_capability_bound_at(point.daa_score),
                             self.palw_uncertified_weightless_at(point.daa_score),
                             self.palw_da_court_at(point.daa_score),
-                            &*fp_answers.attach_v1(kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
+                            &*prefix_dependencies.attach_v1(&fp_answers, kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
                                 own_attempt_class,
                                 history_custody_pledges: history_custody_pledges.clone(),
                                 tir_public_originals: tir_public_originals.clone(),
                                 tir_funded_originals: tir_funded_originals.clone(),
+                            carrier_input_spends: carrier_input_spends.clone(),
                                 public_original_bindings: public_original_bindings.clone(),
                                 producer_custody_delegations: producer_custody_delegations.clone(),
                                 model_classes_registered_in_block: model_classes_registered_in_block.clone(),
@@ -1933,10 +1968,11 @@ impl VirtualStateProcessor {
                             self.palw_capability_bound_at(point.daa_score),
                             self.palw_uncertified_weightless_at(point.daa_score),
                             self.palw_da_court_at(point.daa_score),
-                            &*fp_answers.attach_v1(kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
+                            &*prefix_dependencies.attach_v1(&fp_answers, kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
                                 history_custody_pledges: history_custody_pledges.clone(),
                                 tir_public_originals: tir_public_originals.clone(),
                                 tir_funded_originals: tir_funded_originals.clone(),
+                            carrier_input_spends: carrier_input_spends.clone(),
                                 public_original_bindings: public_original_bindings.clone(),
                                 producer_custody_delegations: producer_custody_delegations.clone(),
                                 model_classes_registered_in_block: model_classes_registered_in_block.clone(),
@@ -2025,8 +2061,14 @@ impl VirtualStateProcessor {
                                 }
                             }
                             accepted_answers.append_v1(fp_answers)?;
+                            accepted_prefixes.append_v1(prefix_dependencies)?;
                             accepted_tir_originals.extend(tir_public_originals);
                             accepted_funded_originals.extend(tir_funded_originals);
+                            if let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::FreePromptCommitted { claim, .. } = &object
+                                && !input_spends.is_empty()
+                            {
+                                accepted_carrier_spends.entry(*claim).or_default().extend(input_spends.iter().copied());
+                            }
                             accepted.push(object);
                         }
                         Err(kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeResource(why)) => return Err(why.into()),
@@ -2106,7 +2148,16 @@ impl VirtualStateProcessor {
         // defect ADR-0064 exists to remove. Only bond records are read out of it: every field of
         // one is a function of the objects and `daa_score`, never of the synthetic blue score the
         // rehearsal advances.
-        Ok((accepted, folded, refunds, accepted_tir_originals, accepted_funded_originals, accepted_answers))
+        Ok((
+            accepted,
+            folded,
+            refunds,
+            accepted_tir_originals,
+            accepted_funded_originals,
+            accepted_answers,
+            accepted_prefixes,
+            accepted_carrier_spends,
+        ))
     }
 
     /// The extras every production fold and every acceptance rehearsal carry (ADR-0088 D11,
@@ -2129,6 +2180,8 @@ impl VirtualStateProcessor {
             _ => None,
         };
         let mut extras = kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
+            // Base rule extras: transaction-local metadata is attached after accepted extraction.
+            prefix_dependencies_v1: Default::default(),
             native_court_rules_v1: self.palw_court_params_v2.map(|court| kaspa_consensus_core::palw_court_close_receipt_v1::NativeCourtRulesV1 {
                 network_domain:self.palw_network_domain_v2(),at:*point,court,
                 step_ladder:self.palw_court_step_ladder_at(daa_score,&court),
@@ -2180,6 +2233,8 @@ impl VirtualStateProcessor {
             // ingress of the `FPA1` carriage — an arming prerequisite (ADR-0205 draft); `validate_palw_v2` refuses arming until it is.
             fp_answer_accounting_active: self.palw_fp_answer_accounting_v1.is_some_and(|f| f.is_active(daa_score)),
             fp_claim_answers: Default::default(),
+            fp_winning_carriers: Default::default(),
+            carrier_input_spends: Default::default(),
             staged_float_constraint_active: self.palw_staged_float_constraint_v1.is_some_and(|f| f.is_active(daa_score)),
             history_custody_pledges: Default::default(),
             public_original_bindings: Default::default(),
@@ -2554,6 +2609,36 @@ impl VirtualStateProcessor {
             return Ok(Vec::new());
         };
         let mut txs = self.accepted_txs_from_acceptance_data(acceptance);
+        use kaspa_consensus_core::palw_claim_local_v1::prefix_v1::{PalwPrefixDependencyEnvelopeV1, PREFIX_DEPENDENCY_ENVELOPE_MAGIC_V1};
+        let prefix_armed = self.palw_state_params_v2.as_ref().is_some_and(|p| p.claim_local_settlement_active_at(block_daa));
+        // Keep literal funding carriers; only decoder views lose the outer provenance wrapper.
+        let _prefix_views = kaspa_consensus_core::palw_fp_answer_accounting_v1::palw_fp_answer_extraction_workspace_v1(&txs, prefix_armed)?;
+        let mut prefix_envelopes = std::collections::BTreeMap::new();
+        let mut prefix_carriers = std::collections::BTreeMap::new();
+        let prefix_map_bytes = txs.len().checked_mul(
+            kaspa_consensus_core::palw_native_resource_v1::btree_node_envelope_bytes_v1::<TransactionId, Transaction>()
+            + kaspa_consensus_core::palw_native_resource_v1::btree_node_envelope_bytes_v1::<TransactionId, kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<PalwPrefixDependencyEnvelopeV1>>()
+        ).ok_or_else(|| kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::overflow::<Transaction>("prefix ingress maps"))?;
+        let _prefix_maps = kaspa_consensus_core::palw_native_resource_v1::reserve_native_requests_v1(if prefix_armed {prefix_map_bytes as u64} else {0})?;
+        let mut prefix_fault = None;
+        txs.retain_mut(|tx| {
+            if tx.subnetwork_id != kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT || !tx.payload.starts_with(PREFIX_DEPENDENCY_ENVELOPE_MAGIC_V1) { return true; }
+            if !prefix_armed { return false; }
+            let envelope = match PalwPrefixDependencyEnvelopeV1::decode_v1(&tx.payload) {
+                Ok(value) => value,
+                Err(kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Decode(_)) => return false,
+                Err(kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Resource(error)) => { prefix_fault = Some(error); return false; }
+            };
+            prefix_carriers.insert(tx.id(), tx.clone());
+            // The view retains the actual transaction ID and outputs for accounting.
+            let inner_len = envelope.inner.len();
+            tx.payload.copy_within(8..8 + inner_len, 0);
+            tx.payload.truncate(inner_len);
+            prefix_envelopes.insert(tx.id(), envelope);
+            true
+        });
+        if let Some(error) = prefix_fault { return Err(error.into()); }
+
         let history_armed = self.palw_staged_public_court_v1.is_some_and(|fence| fence.is_active(block_daa));
         let tir_public_armed = self.palw_tir_public_conviction_v1.is_some_and(|fence| fence.is_active(block_daa));
         // AUDIT-8 (2026-10-27): the carrier's rent net of its bond burn (ab0d57199) is read only past
@@ -2580,7 +2665,10 @@ impl VirtualStateProcessor {
                 info!("[palw-funded-original] carrier {} refused: below the public original fence", tx.id());
                 return false;
             }
-            match if funded_answer {
+            match if let Some(original) = prefix_carriers.get(&tx.id()) {
+                let payload = answer_view.map_or(tx.payload.as_slice(), |view| view.inner);
+                kaspa_consensus_core::palw_funded_original_coordinator_v1::palw_funded_original_pairing_payload_v1(original, payload)
+            } else if funded_answer {
                 kaspa_consensus_core::palw_funded_original_coordinator_v1::palw_funded_original_answer_pairing_v1(tx)
             } else { kaspa_consensus_core::palw_funded_original_coordinator_v1::palw_funded_original_pairing_v1(tx) } {
                 Ok(pairing) => {
@@ -2952,7 +3040,7 @@ impl VirtualStateProcessor {
         self.palw_v2_derived_panel_bindings(state, block, block_daa)?
             .into_iter()
             // Nothing carried a derived binding, so nothing owes rent for it.
-            .map(|object| Ok(PalwCarriedObjectV1 { object, carrier_fee: PALW_RENT_UNPRICED, fp_answer: None, history_pledge: None, tir_public_original: None, funded_original: None, original_binding: None, custody_delegation: None, refund: None, unrefundable: None }))
+            .map(|object| Ok(PalwCarriedObjectV1 { object, carrier_fee: PALW_RENT_UNPRICED, fp_answer: None, prefix_dependency: None, history_pledge: None, tir_public_original: None, funded_original: None, original_binding: None, custody_delegation: None, refund: None, unrefundable: None, winning_carrier: None, input_spends: Vec::new() }))
             .chain(extraction.objects.into_iter().chain(evaluation.objects).filter_map(|carried| {
                 let fp_answer = if let Some(tx) = txs.iter().find(|tx| tx.id() == carried.carrier && tx.subnetwork_id == kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT && tx.payload.starts_with(b"FPA1")) {
                     if !answer_armed { return None; }
@@ -2967,15 +3055,22 @@ impl VirtualStateProcessor {
                     kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::FreePromptCommitted { claim, .. } => history_pledges.get(claim).cloned(),
                     _ => None,
                 };
+                let input_spends = txs
+                    .iter()
+                    .find(|tx| tx.id() == carried.carrier)
+                    .map(|tx| tx.inputs.iter().map(|input| input.previous_outpoint.transaction_id).collect())
+                    .unwrap_or_default();
                 Some(Ok(PalwCarriedObjectV1 {
                     carrier_fee: fee_of(carried.carrier, tir_public_carriers.contains_key(&carried.carrier)),
                     fp_answer,
+                    prefix_dependency: prefix_envelopes.remove(&carried.carrier),
                     history_pledge,
                     original_binding: original_bindings.get(&carried.carrier).cloned(),
                     tir_public_original: tir_public_carriers.get(&carried.carrier).cloned(),
                     funded_original: funded_carriers.get(&carried.carrier).cloned(),
                     custody_delegation: custody_delegations.get(&carried.carrier).cloned(),
-                    object: carried.object, refund: None, unrefundable: None,
+                    object: carried.object, refund: None, unrefundable: None, winning_carrier: Some(carried.carrier),
+                    input_spends,
                 }))
             }))
             .chain(lifecycle_objects.into_iter().map(|carried| {
@@ -2985,9 +3080,14 @@ impl VirtualStateProcessor {
                     kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::TirPublicControlV1 { .. }
                         | kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::TirPublicGrantReadyV1 { .. }
                 );
+                let input_spends = txs
+                    .iter()
+                    .find(|tx| tx.id() == carried.carrier)
+                    .map(|tx| tx.inputs.iter().map(|input| input.previous_outpoint.transaction_id).collect())
+                    .unwrap_or_default();
                 Ok(PalwCarriedObjectV1 {
                     carrier_fee: fee_of(carried.carrier, tir_route),
-                    fp_answer: None,
+                    fp_answer: None, prefix_dependency: None,
                     history_pledge: None,
                     tir_public_original: None,
                     funded_original: None,
@@ -2995,6 +3095,8 @@ impl VirtualStateProcessor {
                     custody_delegation: None,
                     refund,
                     unrefundable,
+                    winning_carrier: Some(carried.carrier),
+                    input_spends,
                     object: carried.object,
                 })
             }))
@@ -3581,4 +3683,33 @@ macro_rules! set_test_only_inclusion_premise_v1 {
     ($name:ident) => {
         $crate::pipeline::virtual_processor::processor::palw_accept::test_only_inclusion_premise::set_named_v1(stringify!($name), $name)
     };
+}
+
+
+impl VirtualStateProcessor {
+    /// Bounded local telemetry. It is never used to validate blocks or grant credit.
+    pub fn palw_memory_routing_outcome_v1(&self, block: BlockHash, claim: Hash64) -> Result<Option<String>, String> {
+        if self.statuses_store.read().get(block).ok() != Some(kaspa_consensus_core::blockstatus::BlockStatus::StatusUTXOValid) {
+            return Err("court observation requires a fully UTXO-validated block".into());
+        }
+        let before = self.lkg_virtual_state.load();
+        let sink = before.ghostdag_data.selected_parent;
+        if !self.reachability_service.try_is_chain_ancestor_of(block, sink).map_err(|e| e.to_string())? {
+            return Err("court observation block is no longer on the selected chain".into());
+        }
+        let header = self.headers_store.get_header(block).map_err(|e| e.to_string())?;
+        if kaspa_consensus_core::hashing::header::hash(&header) != block {
+            return Err("court observation block header identity differs".into());
+        }
+        if header.daa_score.saturating_add(PALW_STATE_PROOF_MAX_LAG_DAA) < before.daa_score {
+            return Err("court observation lies outside the bounded native observation window".into());
+        }
+        let root = self.palw_state_v2_store.read().state_root_of(block).map_err(|e| e.to_string())?;
+        let row = self.palw_court_observations.lock().read_current(block, claim, true, root);
+        let after = self.lkg_virtual_state.load();
+        if sink != after.ghostdag_data.selected_parent || before.daa_score != after.daa_score {
+            return Err("selected context changed during court observation; retry".into());
+        }
+        row.map(|row| row.json_at_sink_v1(sink)).transpose()
+    }
 }

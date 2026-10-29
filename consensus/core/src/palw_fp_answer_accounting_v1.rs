@@ -50,6 +50,11 @@ pub const PALW_FP_ANSWER_ROW_KEY_DOMAIN_V1: &[u8] = b"misaka-palw/fp/answer-row-
 pub const PALW_FP_ANSWER_NOT_ACCOUNTABLE_V1: &str =
     "past palw_fp_answer_accounting_v1 a free-prompt commitment carries its decoded answer ids, one per executed decode token";
 
+/// Kernel-route aux table: claim id → the transaction that settled that claim's answer.
+/// Written only while answer accounting is in force and a kernel route already exists.
+/// With no route the row is absent, and a seat binds the single same-claim carrier.
+pub const PALW_FP_WINNING_CARRIER_TABLE_V1: u8 = 167;
+
 /// **The key a claim's `prompt ‖ answer` row is filed under** in `fp_claim_prompts`, beside the prompt row (keyed by the claim id
 /// itself, which the TIR public frame looks up by name). A distinct key, so no reader of the prompt row ever meets the sequence.
 pub fn palw_fp_answer_row_key_v1(claim: &Hash64) -> Hash64 {

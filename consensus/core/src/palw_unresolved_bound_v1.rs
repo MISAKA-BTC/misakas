@@ -67,6 +67,50 @@ pub fn palw_unresolved_lag_bound_daa_v1(claim: &PalwClaimStateV2) -> u64 {
     palw_unresolved_bound_daa_v1(claim).saturating_sub(claim.accepted_daa)
 }
 
+/// Evidence needed to arm RFC-0023 stage 1 on one exact assembled ruleset.
+/// Digests name executed artifacts and independent review, never estimates.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwUnresolvedBoundRecordV1 {
+    pub network_domain: [u8; 64],
+    pub policy_root: [u8; 64],
+    pub activation_daa: u64,
+    pub lag_measurement: [u8; 32],
+    pub node_crossing_restart_replay: [u8; 32],
+    pub review: [u8; 32],
+}
+
+// No record is fabricated from the activation request. The release coordinator
+// pins evidence only after the matching harness and independent review finish.
+pub const PALW_UNRESOLVED_BOUND_RECORDS_V1: &[PalwUnresolvedBoundRecordV1] = &[];
+
+impl Params {
+    pub fn palw_unresolved_bound_policy_root_v1(&self) -> Option<[u8; 64]> {
+        let PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode else { return None };
+        Some(misaka_palw_kernel::hash::object_id(b"misaka-palw/rfc23/stage1-policy/v1", &bundle.state))
+    }
+
+    pub fn validate_palw_unresolved_bound_with_records_v1(
+        &self,
+        records: &[PalwUnresolvedBoundRecordV1],
+    ) -> Result<(), PalwModeV2Error> {
+        let Some(at) = self.palw_unresolved_bound_v1.filter(|f| *f != ForkActivation::never()) else { return Ok(()) };
+        let at = at.daa_score();
+        let network_domain = self.palw_rfc0608_network_domain_v1();
+        let policy_root = self.palw_unresolved_bound_policy_root_v1();
+        if !records.iter().any(|r| {
+            r.network_domain == network_domain && Some(r.policy_root) == policy_root && r.activation_daa == at
+                && r.lag_measurement != [0; 32] && r.node_crossing_restart_replay != [0; 32] && r.review != [0; 32]
+                && r.lag_measurement != r.node_crossing_restart_replay
+                && r.review != r.lag_measurement && r.review != r.node_crossing_restart_replay
+        }) {
+            return Err(PalwModeV2Error::Invalid(
+                "palw_unresolved_bound_v1 cannot be armed: no pinned steady-state lag measurement, node crossing/restart/replay and independent review for this exact network, height and state policy",
+            ));
+        }
+        Ok(())
+    }
+}
+
 impl Params {
     /// Mirror `palw_unresolved_bound_v1` into the V2 bundle's state params.
     pub fn sync_palw_unresolved_bound_v1(&mut self) {
@@ -89,12 +133,43 @@ impl Params {
                 "palw_unresolved_bound_v1 disagrees with the V2 bundle's mirror: mirror it with Params::sync_palw_unresolved_bound_v1",
             ));
         }
-        if armed.is_some() {
-            return Err(PalwModeV2Error::Invalid(
-                "palw_unresolved_bound_v1 (RFC-0023 stage 1) cannot be armed: its steady-state lag is unmeasured, no drill crosses \
-                 it and no activation decision exists",
-            ));
+        self.validate_palw_unresolved_bound_with_records_v1(PALW_UNRESOLVED_BOUND_RECORDS_V1)
+    }
+}
+
+#[cfg(test)]
+mod record_tests {
+    use super::*;
+    #[test]
+    fn stage1_record_binds_network_height_policy_and_distinct_executed_evidence() {
+        let mut p = crate::config::params::palw_t12_shipped_params();
+        p.palw_unresolved_bound_v1 = Some(ForkActivation::new(17_400));
+        p.sync_palw_unresolved_bound_v1();
+        assert!(p.validate_palw_unresolved_bound_v1().is_err());
+        let record = PalwUnresolvedBoundRecordV1 {
+            network_domain: p.palw_rfc0608_network_domain_v1(),
+            policy_root: p.palw_unresolved_bound_policy_root_v1().unwrap(),
+            activation_daa: 17_400,
+            lag_measurement: [1; 32],
+            node_crossing_restart_replay: [2; 32],
+            review: [3; 32],
+        };
+        // These are test-only gate inputs, never shipping evidence.
+        p.validate_palw_unresolved_bound_with_records_v1(&[record]).unwrap();
+        for bad in [
+            PalwUnresolvedBoundRecordV1 { network_domain: [0; 64], ..record },
+            PalwUnresolvedBoundRecordV1 { policy_root: [0; 64], ..record },
+            PalwUnresolvedBoundRecordV1 { activation_daa: 17_100, ..record },
+            PalwUnresolvedBoundRecordV1 { lag_measurement: [0; 32], ..record },
+            PalwUnresolvedBoundRecordV1 { node_crossing_restart_replay: [1; 32], ..record },
+            PalwUnresolvedBoundRecordV1 { review: [2; 32], ..record },
+        ] {
+            assert!(p.validate_palw_unresolved_bound_with_records_v1(&[bad]).is_err());
         }
-        Ok(())
+        if let PalwConsensusMode::ConsensusV2(bundle) = &mut p.palw_consensus_mode {
+            let changed = bundle.state.claim_retirement_daa().checked_add(1).unwrap();
+            bundle.state = bundle.state.clone().with_claim_retirement_daa(changed).unwrap();
+        }
+        assert!(p.validate_palw_unresolved_bound_with_records_v1(&[record]).is_err());
     }
 }

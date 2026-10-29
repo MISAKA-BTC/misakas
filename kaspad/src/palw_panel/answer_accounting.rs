@@ -19,8 +19,13 @@ pub(super) fn canonical_price_result_v1(
 }
 
 impl PalwPanelService {
-    /// A read failure/ambiguous winning carrier never becomes approval or an accusation.
+    /// A read failure, several same-claim carriers with no index, or a stale or conflicting index
+    /// never becomes approval or an accusation.
     /// The accepted TX body is borrowed through its store Arc, not cloned into a caller-adopted claim DTO.
+    ///
+    /// The settled carrier is the kernel-aux row written with the answer
+    /// (`PALW_FP_WINNING_CARRIER_TABLE_V1`, claim id → transaction id). Absent row: bind the
+    /// only same-claim carrier, and refuse several.
     pub(super) fn fp_accounting_answer_for_seat_v1(
         &self,
         session: &kaspa_consensusmanager::ConsensusProxy,
@@ -44,27 +49,70 @@ impl PalwPanelService {
         let backend = self
             .resolve_backend_for_claim_v1(session, duty.class_id, duty.artifact_root, Some(duty.claim_id))
             .map_err(|_| fail("accepted claim backend unavailable"))?;
-        check_accepted_accounting_carriers_v1(duty, &accepted, backend.as_ref(), |hash| {
+        let winning = session
+            .with_consensus_api_v1(|api| {
+                let route = api.palw_kernel_route_v1()?;
+                let bytes = route.aux.get(&(
+                    kaspa_consensus_core::palw_fp_answer_accounting_v1::PALW_FP_WINNING_CARRIER_TABLE_V1,
+                    duty.claim_id.as_bytes().to_vec(),
+                ))?;
+                Hash64::try_from(bytes.as_slice()).ok()
+            })
+            .map(|transaction_id| PalwFpWinningCarrierIndexV1 { claim_id: duty.claim_id, transaction_id });
+        check_accepted_accounting_carriers_v1(duty, &accepted, backend.as_ref(), winning, |hash| {
             session.with_consensus_api_v1(|api| api.get_block_body(hash)).map_err(|_| fail("accepted claim TX body unavailable"))
-        })
+        })?;
+        Ok(())
     }
 }
 
+/// The accepted transaction that settled one claim's answer.
+///
+/// The fold stores it in kernel aux table `PALW_FP_WINNING_CARRIER_TABLE_V1` when it writes the
+/// answer row and a kernel route exists. Accounting never picks a carrier this acceptance data
+/// does not contain, and never picks among several when that row is absent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct PalwFpWinningCarrierIndexV1 {
+    pub claim_id: Hash64,
+    /// Transaction id of the carrier that settled `claim_id`.
+    pub transaction_id: Hash64,
+}
+
 /// Shared by the live accepted-data reader and its controls; no material-pool input is accepted.
+///
+/// `winning` is the settled carrier for `duty.claim_id`. `None` binds the only same-claim carrier
+/// and refuses several. `Some` binds that transaction when it is accepted and carries this claim,
+/// and refuses a transaction this acceptance does not contain (stale) or an accepted transaction
+/// that is not this claim's carrier (conflicting). Other same-claim carriers are not candidates.
 fn check_accepted_accounting_carriers_v1(
     duty: &kaspa_consensus_core::palw_producer_v2::PalwSeatDutyV2,
     accepted: &kaspa_consensus_core::acceptance_data::AcceptanceData,
     backend: &dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
+    winning: Option<PalwFpWinningCarrierIndexV1>,
     mut read_body: impl FnMut(Hash64) -> Result<kaspa_consensus_core::block::BlockTransactionsV3, NativeDecodeErrorV1<&'static str>>,
-) -> Result<(), NativeDecodeErrorV1<&'static str>> {
+) -> Result<Hash64, NativeDecodeErrorV1<&'static str>> {
     let fail = NativeDecodeErrorV1::Decode;
-    let mut carrier = None;
+    if let Some(index) = winning {
+        if index.claim_id != duty.claim_id {
+            return Err(fail("conflicting accounting winning carrier index"));
+        }
+    }
+    let mut selected = None;
+    let mut indexed_present = false;
     for member in accepted.iter() {
         let body = read_body(member.block_hash)?;
         for entry in &member.accepted_transactions {
             let tx = body.get(entry.index_within_block as usize).ok_or_else(|| fail("accepted TX index out of body"))?;
             if tx.id() != entry.transaction_id || !tx.id_is_current() {
                 return Err(fail("accepted TX identity changed"));
+            }
+            if let Some(index) = winning {
+                if index.transaction_id == tx.id() {
+                    if indexed_present {
+                        return Err(fail("conflicting accounting winning carrier index"));
+                    }
+                    indexed_present = true;
+                }
             }
             if tx.subnetwork_id != kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT || !tx.payload.starts_with(b"FPA1")
             {
@@ -87,15 +135,36 @@ fn check_accepted_accounting_carriers_v1(
                 continue;
             }
             drop(original);
-            // No native winning-carrier index exists. Never silently choose one same-claim carrier over another.
-            if carrier.replace(tx.id()).is_some() {
-                return Err(fail("ambiguous accounting winning carrier; index unavailable"));
+            match winning {
+                // A different same-claim transaction is not a fallback for the indexed carrier.
+                Some(index) if index.transaction_id != tx.id() => continue,
+                Some(_) => {
+                    let bound = kaspa_consensus_core::palw_fp_answer_accounting_v1::palw_fp_answer_bind_duty_v1(tx, duty, backend)?;
+                    if selected.replace(bound).is_some() {
+                        return Err(fail("conflicting accounting winning carrier index"));
+                    }
+                }
+                None => {
+                    if selected.is_some() {
+                        return Err(fail("ambiguous accounting winning carrier; index unavailable"));
+                    }
+                    selected = Some(kaspa_consensus_core::palw_fp_answer_accounting_v1::palw_fp_answer_bind_duty_v1(tx, duty, backend)?);
+                }
             }
-            kaspa_consensus_core::palw_fp_answer_accounting_v1::palw_fp_answer_bind_duty_v1(tx, duty, backend)?;
         }
     }
-    carrier.ok_or_else(|| fail("accepted claim has no literal accounting carrier"))?;
-    Ok(())
+    match winning {
+        None => selected.ok_or_else(|| fail("accepted claim has no literal accounting carrier")),
+        Some(index) => {
+            if !indexed_present {
+                return Err(fail("stale accounting winning carrier index"));
+            }
+            match selected {
+                Some(id) if id == index.transaction_id => Ok(id),
+                _ => Err(fail("conflicting accounting winning carrier index")),
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -201,8 +270,11 @@ mod tests {
         let (backend, duty, tx, _ticket) = fixture();
         assert_eq!(palw_fp_answer_bind_duty_v1(&tx, &duty, &backend).unwrap(), tx.id());
         let accepted = acceptance(std::slice::from_ref(&tx));
-        let body = Arc::new(vec![tx]);
-        check_accepted_accounting_carriers_v1(&duty, &accepted, &backend, |_| Ok(body.clone().into())).unwrap();
+        let body = Arc::new(vec![tx.clone()]);
+        assert_eq!(
+            check_accepted_accounting_carriers_v1(&duty, &accepted, &backend, None, |_| Ok(body.clone().into())).unwrap(),
+            tx.id()
+        );
     }
     #[test]
     fn accounting_seat_rejects_changed_answer_job_pin_and_wrong_roots() {
@@ -230,20 +302,66 @@ mod tests {
         duplicate.outputs.push(TransactionOutput::new(1, ScriptPublicKey::default()));
         duplicate.finalize();
         assert_ne!(tx.id(), duplicate.id());
-        let body = Arc::new(vec![tx.clone(), duplicate]);
+        let body = Arc::new(vec![tx.clone(), duplicate.clone()]);
         let accepted = acceptance(&body);
         assert!(matches!(
-            check_accepted_accounting_carriers_v1(&duty, &accepted, &backend, |_| Ok(body.clone().into())),
+            check_accepted_accounting_carriers_v1(&duty, &accepted, &backend, None, |_| Ok(body.clone().into())),
             Err(NativeDecodeErrorV1::Decode("ambiguous accounting winning carrier; index unavailable"))
+        ));
+        let winning = |transaction_id| Some(PalwFpWinningCarrierIndexV1 { claim_id: duty.claim_id, transaction_id });
+        assert_eq!(
+            check_accepted_accounting_carriers_v1(&duty, &accepted, &backend, winning(tx.id()), |_| Ok(body.clone().into())).unwrap(),
+            tx.id()
+        );
+        assert_eq!(
+            check_accepted_accounting_carriers_v1(&duty, &accepted, &backend, winning(duplicate.id()), |_| Ok(body.clone().into()))
+                .unwrap(),
+            duplicate.id()
+        );
+        assert!(matches!(
+            check_accepted_accounting_carriers_v1(&duty, &accepted, &backend, winning(h(99)), |_| Ok(body.clone().into())),
+            Err(NativeDecodeErrorV1::Decode("stale accounting winning carrier index"))
+        ));
+        let noise = Transaction::new(0, vec![], vec![], 0, SUBNETWORK_ID_PALW_FP_COMMITMENT, 0, b"not-this-claim".to_vec());
+        let mixed = Arc::new(vec![tx.clone(), noise.clone()]);
+        let mixed_accepted = acceptance(&mixed);
+        assert!(matches!(
+            check_accepted_accounting_carriers_v1(&duty, &mixed_accepted, &backend, winning(noise.id()), |_| Ok(mixed.clone().into())),
+            Err(NativeDecodeErrorV1::Decode("conflicting accounting winning carrier index"))
+        ));
+        assert!(matches!(
+            check_accepted_accounting_carriers_v1(
+                &duty,
+                &accepted,
+                &backend,
+                Some(PalwFpWinningCarrierIndexV1 { claim_id: h(53), transaction_id: tx.id() }),
+                |_| Ok(body.clone().into()),
+            ),
+            Err(NativeDecodeErrorV1::Decode("conflicting accounting winning carrier index"))
+        ));
+        let settled = Arc::new(vec![tx.clone()]);
+        let settled_accepted = acceptance(&settled);
+        assert_eq!(
+            check_accepted_accounting_carriers_v1(&duty, &settled_accepted, &backend, winning(tx.id()), |_| {
+                Ok(settled.clone().into())
+            })
+            .unwrap(),
+            tx.id()
+        );
+        assert!(matches!(
+            check_accepted_accounting_carriers_v1(&duty, &settled_accepted, &backend, winning(duplicate.id()), |_| {
+                Ok(settled.clone().into())
+            }),
+            Err(NativeDecodeErrorV1::Decode("stale accounting winning carrier index"))
         ));
         let body = Arc::new(vec![tx]);
         let mut accepted = acceptance(&body);
         accepted[0].accepted_transactions[0].transaction_id = h(99);
-        assert!(check_accepted_accounting_carriers_v1(&duty, &accepted, &backend, |_| Ok(body.clone().into())).is_err());
+        assert!(check_accepted_accounting_carriers_v1(&duty, &accepted, &backend, None, |_| Ok(body.clone().into())).is_err());
         accepted[0].accepted_transactions[0].index_within_block = 8;
-        assert!(check_accepted_accounting_carriers_v1(&duty, &accepted, &backend, |_| Ok(body.clone().into())).is_err());
+        assert!(check_accepted_accounting_carriers_v1(&duty, &accepted, &backend, None, |_| Ok(body.clone().into())).is_err());
         assert!(
-            check_accepted_accounting_carriers_v1(&duty, &accepted, &backend, |_| Err(NativeDecodeErrorV1::Decode("missing body")))
+            check_accepted_accounting_carriers_v1(&duty, &accepted, &backend, None, |_| Err(NativeDecodeErrorV1::Decode("missing body")))
                 .is_err()
         );
     }
@@ -254,9 +372,9 @@ mod tests {
         let unrelated = Transaction::new(0, vec![], vec![], 0, SUBNETWORK_ID_PALW_FP_COMMITMENT, 0, wire.to_vec());
         let body = Arc::new(vec![unrelated, tx]);
         let accepted = acceptance(&body);
-        check_accepted_accounting_carriers_v1(&duty, &accepted, &backend, |_| Ok(body.clone().into())).unwrap();
+        check_accepted_accounting_carriers_v1(&duty, &accepted, &backend, None, |_| Ok(body.clone().into())).unwrap();
         let accepted = acceptance(&body[..1]);
-        assert!(check_accepted_accounting_carriers_v1(&duty, &accepted, &backend, |_| Ok(body.clone().into())).is_err());
+        assert!(check_accepted_accounting_carriers_v1(&duty, &accepted, &backend, None, |_| Ok(body.clone().into())).is_err());
     }
     #[test]
     fn accounting_seat_never_substitutes_legacy_served_answer_material() {
@@ -272,6 +390,6 @@ mod tests {
         let served = Transaction::new(0, vec![], vec![], 0, SUBNETWORK_ID_PALW_FP_COMMITMENT, 0, legacy);
         let body = Arc::new(vec![served]);
         let accepted = acceptance(&body);
-        assert!(check_accepted_accounting_carriers_v1(&duty, &accepted, &backend, |_| Ok(body.clone().into())).is_err());
+        assert!(check_accepted_accounting_carriers_v1(&duty, &accepted, &backend, None, |_| Ok(body.clone().into())).is_err());
     }
 }

@@ -1424,6 +1424,8 @@ impl KernelLedgerV1 {
             // RFC07/RFC08 economic contracts (inner 67–69): consumer-owned, each past its own dormant fence.
             KernelRouteObjectV1::AttestModelVerificationV1 { .. }
             | KernelRouteObjectV1::ConsentHorizonExtensionV1 { .. }
+            | KernelRouteObjectV1::ConsentVerifierFeeV1 { .. }
+            | KernelRouteObjectV1::WatchVerifierPoolV1 { .. }
             | KernelRouteObjectV1::SignMinimumPriceContractV1 { .. } => {
                 return Err(KernelRefusalV1::rule(
                     name,

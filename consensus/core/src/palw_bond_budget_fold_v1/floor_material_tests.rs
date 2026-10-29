@@ -329,3 +329,38 @@ fn dormant_material_preserves_historical_native_income_without_allocation_row() 
     assert_eq!(book.claim_row(&native_queued_income_id_v1(hash(10), &bond())).unwrap().consumed.reward_sompi, 40);
     assert!(book.material_income.is_empty());
 }
+
+#[test]
+fn fee_material_tracks_exact_coalesced_cash_until_real_drain_and_reverses() {
+    let (state, params)=inputs();
+    let extras=PalwTransitionExtrasV1::default();
+    let mut b=TransitionBuilder::new(&state,&params,false,false,false,false,&extras);
+    let claim=hash(6).as_bytes(); let verifier=hash(7).as_bytes();
+    let queue=crate::palw_kernel_route_v1::palw_kernel_payout_key_v1(&hash(5));
+    let checkpoint=b.try_checkpoint().unwrap();
+    b.hold_verifier_fee_material_v1(100,claim,verifier,0,17).unwrap();
+    b.hold_verifier_fee_material_v1(100,claim,verifier,1,23).unwrap();
+    assert!(b.hold_verifier_fee_material_v1(100,claim,verifier,0,17).is_err());
+    assert_eq!(b.state.bond_budget.as_ref().unwrap().material_hold_until_v1(hash(6),false),Some(u64::MAX));
+    assert!(b.finish_verifier_fee_material_v1(110,claim,verifier,0,18,Some(queue)).is_err());
+    assert!(b.finish_verifier_fee_material_v1(110,claim,verifier,0,17,Some(queue)).is_err(),"no actual queue cash");
+    b.add_kernel_payout(hash(5),17).unwrap();
+    b.finish_verifier_fee_material_v1(110,claim,verifier,0,17,Some(queue)).unwrap();
+    assert!(b.finish_verifier_fee_material_v1(110,claim,verifier,1,23,Some(queue)).is_err(),"coalesced receipt cannot spend first slot cash twice");
+    b.add_kernel_payout(hash(5),23).unwrap();
+    b.finish_verifier_fee_material_v1(110,claim,verifier,1,23,Some(queue)).unwrap();
+    b.state.assert_fee_material_provenance_v1().unwrap();
+    let encoded=borsh::to_vec(b.state.bond_budget.as_ref().unwrap()).unwrap();
+    let loaded:PalwBondBudgetStateV1=borsh::from_slice(&encoded).unwrap();
+    loaded.check_consistency().unwrap();
+    b.bond_budget_op(PalwBudgetGrowthV1::rows(2),|book,_,j|book.release_material_income_v1(10_000,j)).unwrap();
+    assert_eq!(b.state.bond_budget.as_ref().unwrap().material_hold_until_v1(hash(6),false),Some(u64::MAX),"elapsed time is not physical payment");
+    b.write_payout(queue,None).unwrap();
+    b.bond_budget_op(PalwBudgetGrowthV1::rows(2),|book,_,j|book.confirm_legacy_material_queue_v1(queue,10_000,100,j)).unwrap().unwrap().unwrap();
+    b.state.assert_fee_material_provenance_v1().unwrap();
+    assert_eq!(b.state.bond_budget.as_ref().unwrap().material_hold_until_v1(hash(6),false),Some(10_100));
+    b.bond_budget_op(PalwBudgetGrowthV1::rows(2),|book,_,j|book.confirm_legacy_material_queue_v1(queue,20_000,100,j)).unwrap().unwrap().unwrap();
+    assert_eq!(b.state.bond_budget.as_ref().unwrap().material_hold_until_v1(hash(6),false),Some(10_100),"a later queue cannot rebase payment");
+    b.restore(checkpoint);
+    assert_eq!(b.state.state_root(),state.state_root());
+}

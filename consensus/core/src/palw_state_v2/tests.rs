@@ -510,6 +510,38 @@ fn bond_of_pubkey_v2_keeps_finding_a_bond_after_it_retires_and_reports_the_statu
     assert!(retired.bond_of_pubkey_v2(&[8u8; 4]).is_none(), "an unregistered key holds no bond");
 }
 
+/// **RFC-0041:** a genesis with no bond recovers on the idle floor, then an ordinary
+/// `BondRegistered` is what may take work. The placeholder is not registered here.
+#[test]
+fn rfc0041_empty_genesis_recovers_until_an_ordinary_bond_may_take_work() {
+    use crate::config::params::{
+        palw_base_coinbase_recovery_due_v1, palw_base_coinbase_recovery_missing_bond_v1, palw_genesis_objects_have_no_bond_v1,
+    };
+    use crate::palw_state_v2::palw_bond_may_take_work_v2;
+
+    assert!(palw_genesis_objects_have_no_bond_v1(&[]));
+    let bare = PalwChainStateV2::genesis();
+    let admits = bare.floor_state_v1().admits_floor_at(1);
+    assert!(palw_base_coinbase_recovery_due_v1(true, bare.bonds_iter().next().is_none(), admits, true));
+    assert!(palw_base_coinbase_recovery_missing_bond_v1(
+        "the named executor bond abc does not exist at the candidate chain point"
+    ));
+    assert!(!palw_base_coinbase_recovery_missing_bond_v1("the lottery missed"));
+
+    let p = economy_params();
+    let (state, _) = apply_palw_transition_v2(
+        &bare,
+        &p,
+        &ctx(1, 10, 1),
+        &[bond_registration_with_collateral(1, 7, 21, 1_000_000)],
+        None,
+    )
+    .expect("an ordinary bond registers with no genesis bond ahead of it");
+    let (_, bond) = state.bonds_iter().next().expect("the registration is the live registry");
+    assert!(palw_bond_may_take_work_v2(bond, p.min_collateral_sompi()));
+    assert!(!palw_base_coinbase_recovery_due_v1(true, state.bonds_iter().next().is_none(), state.floor_state_v1().admits_floor_at(1), true));
+}
+
 /// **The reason the lookup above may not filter: one key, one bond, for the life of the chain.**
 ///
 /// `BondRegistered` refuses any pubkey already present in the registry
@@ -28604,6 +28636,7 @@ mod evm_market {
 
     fn extras(actions: Vec<PalwEvmMarketActionV1>) -> PalwTransitionExtrasV1 {
         PalwTransitionExtrasV1 {
+            prefix_dependencies_v1: Default::default(),
             selected_source_bootstrap_v1: None,
             selected_source_bootstrap_fault_v1: None,
             native_court_rules_v1: None,
@@ -28624,6 +28657,8 @@ mod evm_market {
             tir_container_identity_active: false,
             fp_answer_accounting_active: false,
             fp_claim_answers: Default::default(),
+            fp_winning_carriers: Default::default(),
+            carrier_input_spends: Default::default(),
             tir_designated_answers_active: false,
             tir_bounded_door_active: false,
             tir_bounded_door_from_daa: None,
@@ -28895,6 +28930,7 @@ mod evm_market {
         assert_eq!(st[0].escrow_sompi, 10 * MSK, "a refused buy's escrow is the refund the child pays");
         // Below the fence the same actions write nothing.
         let dormant = PalwTransitionExtrasV1 {
+            prefix_dependencies_v1: Default::default(),
             selected_source_bootstrap_v1: None,
             selected_source_bootstrap_fault_v1: None,
             native_court_rules_v1: None,
@@ -28915,6 +28951,8 @@ mod evm_market {
             tir_container_identity_active: false,
             fp_answer_accounting_active: false,
             fp_claim_answers: Default::default(),
+            fp_winning_carriers: Default::default(),
+            carrier_input_spends: Default::default(),
             tir_designated_answers_active: false,
             tir_bounded_door_active: false,
             tir_bounded_door_from_daa: None,

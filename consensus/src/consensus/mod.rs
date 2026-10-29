@@ -4160,6 +4160,14 @@ impl ConsensusApi for Consensus {
         })
     }
 
+    fn palw_memory_routing_outcome_v1(
+        &self,
+        block: BlockHash,
+        claim: kaspa_consensus_core::Hash64,
+    ) -> Result<Option<String>, String> {
+        self.virtual_processor.palw_memory_routing_outcome_v1(block, claim)
+    }
+
     fn palw_router_binding_v2(
         &self,
         class: kaspa_consensus_core::Hash64,

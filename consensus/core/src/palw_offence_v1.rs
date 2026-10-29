@@ -83,6 +83,9 @@ pub enum PalwOffenceKindV1 {
     /// decode the object and skips it (A-2); below `palw_tir_v1` the acceptance walk drops it by name
     /// (`palw_object_is_tir_v1`) and the fold refuses it.
     TirIdentityMismatch = 7,
+    /// RFC0040: an accepted, signed source export contradicts its source cache.
+    /// Producer-only; old base-execution verifier signatures do not cover it.
+    PrefixExportRefuted = 8,
 }
 
 impl PalwOffenceKindV1 {
@@ -108,7 +111,8 @@ impl PalwOffenceKindV1 {
             | Self::CourtExecutorGuilty
             | Self::PanelFalseValidV2
             | Self::ExecutorRefuted
-            | Self::TirIdentityMismatch => "this kind is filed",
+            | Self::TirIdentityMismatch
+            | Self::PrefixExportRefuted => "this kind is filed",
         }
     }
 }
@@ -391,7 +395,7 @@ pub fn palw_ledger_evidence_id_v1(kind: PalwOffenceKindV1, evidence: &[u8], name
         // Keyed per (seat, claim) by `palw_false_valid_offence_id_v2`, and kind 4 per claim by
         // `palw_executor_refuted_offence_id_v1` — never by the bytes: one false Valid, or one
         // refuted execution, is one offence whatever contradiction or wrapper a filer attaches.
-        PalwOffenceKindV1::PanelFalseValidV2 | PalwOffenceKindV1::ExecutorRefuted | PalwOffenceKindV1::TirIdentityMismatch => {
+        PalwOffenceKindV1::PanelFalseValidV2 | PalwOffenceKindV1::ExecutorRefuted | PalwOffenceKindV1::TirIdentityMismatch | PalwOffenceKindV1::PrefixExportRefuted => {
             Err(PalwOffenceVerifyError::AttributionDormant)
         }
         // Records the fold writes; never filed (the skeleton review's F1).
@@ -718,7 +722,7 @@ where
         // Never through this gate: past `palw_offence_attribution` the processor sends kind 3 to
         // `palw_check_panel_false_valid_v2` and kind 4 to `palw_check_executor_refuted_v1`, and
         // below it neither kind exists.
-        PalwOffenceKindV1::PanelFalseValidV2 | PalwOffenceKindV1::ExecutorRefuted | PalwOffenceKindV1::TirIdentityMismatch => {
+        PalwOffenceKindV1::PanelFalseValidV2 | PalwOffenceKindV1::ExecutorRefuted | PalwOffenceKindV1::TirIdentityMismatch | PalwOffenceKindV1::PrefixExportRefuted => {
             Err(PalwOffenceVerifyError::AttributionDormant)
         }
         // Records the fold writes; never filed (the skeleton review's F1).
@@ -1427,13 +1431,14 @@ mod tests {
             (6u8, PalwOffenceKindV1::CourtConviction),
             // RFC-0002 Phase F: appended after the fold's two records.
             (7u8, PalwOffenceKindV1::TirIdentityMismatch),
+            (8u8, PalwOffenceKindV1::PrefixExportRefuted),
         ];
         let accused = TransactionOutpoint { transaction_id: crate::tx::TransactionId::from_bytes([7u8; 64]), index: 1 };
         for (tag, kind) in pinned {
             assert_eq!(kind as u8, tag);
             assert_eq!(borsh::to_vec(&kind).unwrap(), vec![tag], "{kind:?}");
             assert_eq!(borsh::from_slice::<PalwOffenceKindV1>(&[tag]).unwrap(), kind);
-            let fold_only = !matches!(kind, PalwOffenceKindV1::ExecutorRefuted | PalwOffenceKindV1::TirIdentityMismatch);
+            let fold_only = !matches!(kind, PalwOffenceKindV1::ExecutorRefuted | PalwOffenceKindV1::TirIdentityMismatch | PalwOffenceKindV1::PrefixExportRefuted);
             assert_eq!(kind.is_fold_recorded_only_v1(), fold_only, "{kind:?}");
             let refused = |e: &PalwOffenceVerifyError| {
                 if fold_only {
@@ -1460,7 +1465,7 @@ mod tests {
                 "{kind:?}"
             );
         }
-        assert!(borsh::from_slice::<PalwOffenceKindV1>(&[8]).is_err(), "no ninth kind");
+        assert!(borsh::from_slice::<PalwOffenceKindV1>(&[9]).is_err(), "no tenth kind");
     }
 
     /// **Contradictions 9–13 are appended at their fixed discriminants, round-trip, and every V1

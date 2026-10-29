@@ -569,6 +569,9 @@ impl Params {
             self.palw_fork_choice_commitment_v1 = None;
         }
         // The verifier-pay fence, likewise.
+        if self.palw_verifier_watch_v1.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) {
+            self.palw_verifier_watch_v1 = None;
+        }
         if self.palw_verifier_pay_v1 == Some(ForkActivation::never()) {
             self.palw_verifier_pay_v1 = None;
         }
@@ -1229,6 +1232,7 @@ impl Params {
             palw_typed_roots_v1,
             palw_fork_choice_commitment_v1,
             palw_verifier_pay_v1,
+            palw_verifier_watch_v1,
             palw_model_refutation_seal_v1,
             palw_window_class_v37,
             palw_beacon_source_opt_in_v1,
@@ -1576,6 +1580,7 @@ impl Params {
             ("palw_typed_roots_v1", *palw_typed_roots_v1),
             ("palw_fork_choice_commitment_v1", *palw_fork_choice_commitment_v1),
             ("palw_verifier_pay_v1", *palw_verifier_pay_v1),
+            ("palw_verifier_watch_v1", palw_verifier_watch_v1.as_ref().map(|f|f.activation)),
             ("palw_model_refutation_seal_v1", *palw_model_refutation_seal_v1),
             ("palw_window_class_v37", *palw_window_class_v37),
             ("palw_beacon_source_opt_in_v1", palw_beacon_source_opt_in_v1.map(|f| f.activation)),
@@ -1968,6 +1973,11 @@ impl Params {
             h.write(at.daa_score().to_le_bytes());
         }
         // The verifier-pay fence, NAMED likewise.
+        if let Some(fence) = self.palw_verifier_watch_v1.as_ref() {
+            h.write(b"palw_verifier_watch_v1");
+            h.write(fence.activation.daa_score().to_le_bytes());
+            h.write(fence.policy.id().as_slice());
+        }
         if let Some(at) = self.palw_verifier_pay_v1 {
             h.write(b"palw_verifier_pay_v1");
             h.write(at.daa_score().to_le_bytes());
@@ -3012,6 +3022,7 @@ impl Params {
             palw_typed_roots_v1,
             palw_fork_choice_commitment_v1,
             palw_verifier_pay_v1,
+            palw_verifier_watch_v1,
             palw_model_refutation_seal_v1,
             palw_window_class_v37,
             palw_beacon_source_opt_in_v1,
@@ -3891,6 +3902,9 @@ impl Params {
             fork(activation, visit);
         }
         // The verifier-pay fence. Some-only.
+        if let Some(fence) = palw_verifier_watch_v1.as_mut() {
+            fork(&mut fence.activation, visit);
+        }
         if let Some(activation) = palw_verifier_pay_v1.as_mut() {
             fork(activation, visit);
         }
@@ -4615,6 +4629,7 @@ impl Params {
             palw_typed_roots_v1,
             palw_fork_choice_commitment_v1,
             palw_verifier_pay_v1,
+            palw_verifier_watch_v1,
             palw_model_refutation_seal_v1,
             palw_window_class_v37,
             palw_beacon_source_opt_in_v1,
@@ -5610,6 +5625,11 @@ impl Params {
             h.write(activation.daa_score().to_le_bytes());
         }
         // The verifier-pay fence, Some-only for the same reason.
+        if let Some(fence) = palw_verifier_watch_v1 {
+            h.write(b"palw_verifier_watch_v1");
+            h.write(fence.activation.daa_score().to_le_bytes());
+            h.write(fence.policy.id().as_slice());
+        }
         if let Some(activation) = palw_verifier_pay_v1 {
             h.write(b"palw_verifier_pay_v1");
             h.write(activation.daa_score().to_le_bytes());

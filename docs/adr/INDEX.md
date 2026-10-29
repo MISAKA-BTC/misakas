@@ -207,3 +207,6 @@
 | ADR-0204 | [IBD の有界 authenticated row stream と世代番号付き保存](0204-ibd-bounded-row-stream-and-storage-generations.md) | 原文と後続改定を参照 |
 | ADR-0205 | [decode 済みの回答は二度支払わない](0205-a-decoded-answer-is-not-paid-twice.md) | 原文と後続改定を参照 |
 | ADR-0206 | [PanelDa の G14 経路 — 期限付きの必須公開](0206-panel-da-mandatory-disclosure-g14-route.md) | 原文と後続改定を参照 |
+| ADR-0207 | [通常 verifier fee と有限 provider 契約の判断](0207-finite-fee-consent-and-provider-payment-bounds.md) | 原文と後続改定を参照 |
+| ADR-0208 | [再利用 prefix の生成元 identity を明示する案](0208-authenticated-prefix-work-dependencies.md) | 原文と後続改定を参照 |
+| ADR-0209 | [genesis bond を廃止し、BASE 回復と通常 bond 登録で起動する](0209-genesis-bond-free-bootstrap.md) | 原文と後続改定を参照 |

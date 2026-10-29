@@ -2,8 +2,10 @@
 //!
 //! This module supplies the deterministic checkpoint checks. Runtime admission must derive the
 //! records from committed inputs and reservations; a producer's list is never the authority.
-//! Integration status: dependency/checkpoint foundations and the dormant fence only. Runtime
-//! admission, reward/credit folding, native lifecycle, pruning and IBD are not connected yet.
+//! Integration status: checkpoint records, the reward reader and the dependency closure read the
+//! same retained provenance (committed claim, execution-root and prefix-envelope edges). Arming
+//! still waits on measured material-retention drills. Native lifecycle, pruning and IBD drills
+//! are not that measurement.
 //! Hashes below authenticate bytes only. Certification remains the selected validators' approval
 //! under Gate C's stated honest-fraction premise; no computation-validity proof is introduced.
 use crate::palw_state_v2::PalwBlockContextV2;
@@ -14,6 +16,13 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 #[path = "palw_claim_local_origins_v1.rs"]
 mod origins_v1;
 pub use origins_v1::*;
+
+#[path = "palw_claim_local_native_events_v1.rs"]
+mod native_events_v1;
+pub use native_events_v1::*;
+
+#[path = "palw_claim_local_prefix_v1.rs"]
+pub mod prefix_v1;
 
 pub const PALW_CLAIM_LOCAL_TABLE_V1: u8 = 144;
 
@@ -54,6 +63,14 @@ pub enum PalwClaimLocalInputV1 {
         public_job: Option<Box<crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3>>,
         eval: Option<Box<(crate::palw_improve_eval_v1::PalwEvalJobV1, crate::palw_improve_eval_v1::PalwEvalClaimTailV1)>>,
     },
+    /// RFC0040 appended tag: the same accepted carrier's signed provenance.
+    PrefixDependency {
+        claim: Hash64,
+        envelope: Box<prefix_v1::PalwPrefixDependencyEnvelopeV1>,
+    },
+    /// The consumer claim spent an output of the transaction that settled `source`.
+    /// The outpoint is not guessed: the source is the stored winning-carrier row.
+    ConsumedCarrier { consumer: Hash64, source: Hash64 },
 }
 
 /// Values in force at this fold point, retained independently of their IDs.
@@ -1010,8 +1027,10 @@ impl crate::config::params::Params {
             return Err(PalwModeV2Error::Invalid("claim-local settlement fence disagrees with its state mirror"));
         }
         if from.is_some() {
+            // Provenance is read from retained rows. What is still absent is the
+            // measured material-retention drill, which no code change can supply.
             return Err(PalwModeV2Error::Invalid(
-                "RFC-0023 stage 2 cannot arm: runtime integration is incomplete and material retention / transition drills are unmeasured",
+                "RFC-0023 stage 2 cannot arm: material retention / transition drills are unmeasured",
             ));
         }
         Ok(())

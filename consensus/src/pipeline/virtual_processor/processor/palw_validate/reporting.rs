@@ -64,6 +64,20 @@ impl VirtualStateProcessor {
                     }
                 }
                 Obj::ObjectiveOffence { kind, accused, evidence_id, evidence } => {
+                    if *kind == kaspa_consensus_core::palw_offence_v1::PalwOffenceKindV1::PrefixExportRefuted {
+                        if !state_params.claim_local_settlement_active_at(point.daa_score) {
+                            return Err("source export court below its claim-local fence".into());
+                        }
+                        if evidence.is_empty()
+                            || evidence.len() as u64 > kaspa_consensus_core::palw_offence_attribution_v1::PALW_OFFENCE_V2_MAX_EVIDENCE_BYTES
+                            || kaspa_consensus_core::palw_offence_v1::palw_offence_evidence_digest_v1(evidence) != *evidence_id {
+                            return Err("source export evidence byte bound or digest differs".into());
+                        }
+                        // Authoritative native decode and source court run in the ordered
+                        // rehearsal/canonical fold. Preserve Resource errors there instead
+                        // of reducing a local capacity failure to this String refusal.
+                        return Ok(());
+                    }
                     if let Some(reference) =
                         kaspa_consensus_core::palw_staged_court_state_v1::palw_staged_reference_v1(*kind, evidence)
                         && (!self.palw_staged_public_court_v1.is_some_and(|activation| activation.is_active(point.daa_score))
@@ -247,7 +261,7 @@ impl VirtualStateProcessor {
                             }
                             PalwOffenceKindV1::ExecutorEquivocation | PalwOffenceKindV1::CourtExecutorGuilty => {}
                             // Refused above; listed so a routing change that forgets them fails to compile.
-                            PalwOffenceKindV1::DaDefault | PalwOffenceKindV1::CourtConviction => {}
+                            PalwOffenceKindV1::DaDefault | PalwOffenceKindV1::CourtConviction | PalwOffenceKindV1::PrefixExportRefuted => {}
                         }
                     } else if matches!(
                         kind,

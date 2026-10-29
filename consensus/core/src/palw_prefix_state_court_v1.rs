@@ -115,9 +115,24 @@ pub fn palw_prefix_kv_state_root_v1(
     tiles: &[PalwPrefixKvTileV1],
     maximum_leaves: u64,
 ) -> Result<Hash64, &'static str> {
-    crate::palw_step_leg::verify_binding_v1(binding).map_err(|_| "the prefix binding is unverified")?;
     if prefix_tokens >= binding.job_context.declared_prefill_tokens {
         return Err("the named state is not a proper prompt prefix");
+    }
+    palw_prefix_kv_export_state_root_v1(binding, prefix_tokens, tiles, maximum_leaves)
+}
+
+/// RFC0040 source-export court: a source may export its complete prefill state.
+/// Unlike the consumer's proper-prefix court above, equality is meaningful here.
+/// Every cache position must still be inside the source's actual committed work.
+pub fn palw_prefix_kv_export_state_root_v1(
+    binding: &PalwStepBindingV2,
+    prefix_tokens: u32,
+    tiles: &[PalwPrefixKvTileV1],
+    maximum_leaves: u64,
+) -> Result<Hash64, &'static str> {
+    crate::palw_step_leg::verify_binding_v1(binding).map_err(|_| "the prefix binding is unverified")?;
+    if prefix_tokens > binding.job_context.declared_prefill_tokens {
+        return Err("the exported state exceeds the source's committed prefill work");
     }
     if crate::palw_step::step_leaf_count_capped_v1(&binding.shape_profile, &binding.job_context, maximum_leaves)
         .map_err(|_| "the prefix step count is not derivable")?
@@ -182,6 +197,10 @@ pub(crate) mod tests {
     use crate::palw_step_leg::{PalwStepMerkleTreeV1, binding_commitment_root_v1, step_tile_leaf_hash_ctx_v1};
 
     pub(crate) fn fixture(inherited: bool) -> (PalwStepBindingV2, Vec<PalwPrefixKvTileV1>, Hash64) {
+        fixture_tokens(inherited, 2)
+    }
+
+    fn fixture_tokens(inherited: bool, tokens: u32) -> (PalwStepBindingV2, Vec<PalwPrefixKvTileV1>, Hash64) {
         let mut b = crate::palw_attempt_rules_v1::floor_binding_for_tests_v1(&Hash64::from_u64_word(0xF17), PalwPromptIdsFormV1::Flat);
         b.job_context.declared_prefill_tokens = 4;
         b.job_context.exact_decode_tokens = 2;
@@ -192,7 +211,7 @@ pub(crate) mod tests {
         }
         b.step_leaf_count = crate::palw_step::step_leaf_count(&b.shape_profile, &b.job_context).unwrap();
         b.activation_leg_root = crate::palw_attempt_rules_v1::palw_int_activation_leg_root_v1(&b.job_context);
-        let plan = PalwPrefixKvPlanV1::of_profile(&b.shape_profile, 2).unwrap();
+        let plan = PalwPrefixKvPlanV1::of_profile(&b.shape_profile, tokens).unwrap();
         let mut hashes = vec![Hash64::default(); b.step_leaf_count as usize];
         let mut tiles = Vec::new();
         let mut digest = blake2b_simd::Params::new().hash_length(64).key(PALW_A16_PREFIX_KV_DIGEST_DOMAIN_V1).to_state();
@@ -216,8 +235,17 @@ pub(crate) mod tests {
         }
         b.committed_execution_root = binding_commitment_root_v1(&b);
         let digest = Hash64::from_bytes(digest.finalize().as_bytes().try_into().unwrap());
-        let expected = crate::palw_fp_prefix_v1::palw_fp_prefix_state_root_v1(&b.shape_profile.shape_profile_id(), 2, &digest);
+        let expected = crate::palw_fp_prefix_v1::palw_fp_prefix_state_root_v1(&b.shape_profile.shape_profile_id(), tokens, &digest);
         (b, tiles, expected)
+    }
+
+    #[test]
+    fn source_can_export_complete_prefill_without_reinterpreting_consumer_court() {
+        let (binding, tiles, root) = fixture_tokens(false, 4);
+        assert_eq!(palw_prefix_kv_export_state_root_v1(&binding, 4, &tiles, 1 << 32), Ok(root));
+        assert!(palw_prefix_kv_state_root_v1(&binding, 4, &tiles, 1 << 32).is_err());
+        assert!(palw_prefix_kv_export_state_root_v1(&binding, 5, &tiles, 1 << 32).is_err());
+        assert!(palw_prefix_kv_export_state_root_v1(&binding, 4, &tiles[..tiles.len()-1], 1 << 32).is_err());
     }
 
     #[test]

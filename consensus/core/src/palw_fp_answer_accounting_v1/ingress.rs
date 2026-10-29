@@ -72,6 +72,8 @@ pub struct PalwFpClaimAnswersV1 {
         crate::Hash64,
         (NativeRetainedV1<Vec<u32>>, Option<crate::palw_native_resource_v1::NativeDemandLeaseV1>),
     >,
+    /// First accepted carrier of each claim. A later identical answer does not replace it.
+    carriers: std::collections::BTreeMap<crate::Hash64, crate::Hash64>,
 }
 /// Scoped reservation for *only the answer overlay*. Existing extras fields keep their original admission contract;
 /// this is deliberately not a `NativeRetainedV1<Extras>` and has no ownership extraction API.
@@ -98,6 +100,10 @@ impl PalwFpClaimAnswersV1 {
         self.answers.insert(claim, (answer, lease));
         Ok(true)
     }
+    /// Record the transaction that carried this claim's accepted answer. The first id stays.
+    pub fn note_carrier_v1(&mut self, claim: crate::Hash64, carrier: crate::Hash64) {
+        self.carriers.entry(claim).or_insert(carrier);
+    }
     /// Move already constructed extras, then reserve the typed answer copies before insertion.
     /// The caller retains this owner across the full fold, rather than extracting a bare map.
     pub fn attach_v1(
@@ -114,10 +120,15 @@ impl PalwFpClaimAnswersV1 {
                 .ok_or_else(|| NativeCoverageV1::overflow::<Self>("FPA1 extras"))?;
             bytes = bytes.checked_add(row).ok_or_else(|| NativeCoverageV1::overflow::<Self>("FPA1 extras"))?;
         }
+        let carrier_row = crate::palw_native_resource_v1::btree_node_envelope_bytes_v1::<crate::Hash64, crate::Hash64>() as u64;
+        bytes = bytes
+            .checked_add(carrier_row.checked_mul(self.carriers.len() as u64).ok_or_else(|| NativeCoverageV1::overflow::<Self>("FPA1 carrier"))?)
+            .ok_or_else(|| NativeCoverageV1::overflow::<Self>("FPA1 carrier"))?;
         let lease = reserve_native_requests_v1(bytes)?;
         for (claim, (ids, _)) in &self.answers {
             extras.fp_claim_answers.insert(*claim, ids.to_vec());
         }
+        extras.fp_winning_carriers.clone_from(&self.carriers);
         Ok(PalwFpAnswerExtrasV1 { extras, _answer_lease: lease })
     }
     pub fn compatible_v1(&self, other: &Self) -> bool {
@@ -130,6 +141,9 @@ impl PalwFpClaimAnswersV1 {
         }
         for (claim, (answer, _membership)) in other.answers {
             self.insert_v1(claim, answer)?;
+        }
+        for (claim, carrier) in other.carriers {
+            self.carriers.entry(claim).or_insert(carrier);
         }
         Ok(true)
     }
@@ -244,12 +258,16 @@ mod tests {
         let mut answers = PalwFpClaimAnswersV1::default();
         let claim = crate::Hash64::from_u64_word(1);
         answers.insert_v1(claim, answer).unwrap();
+        let carrier = crate::Hash64::from_u64_word(9);
+        answers.note_carrier_v1(claim, carrier);
+        answers.note_carrier_v1(claim, crate::Hash64::from_u64_word(8));
         let first = answers.attach_v1(Default::default()).unwrap();
         let second = answers.attach_v1(Default::default()).unwrap();
         assert_ne!(first.fp_claim_answers[&claim].as_ptr(), second.fp_claim_answers[&claim].as_ptr());
         drop(answers);
         assert_eq!(first.fp_claim_answers[&claim], vec![7, 8]);
         assert!(!first.fp_claim_answers.contains_key(&crate::Hash64::from_u64_word(2)));
+        assert_eq!(first.fp_winning_carriers.get(&claim), Some(&carrier));
     }
     #[test]
     fn local_capacity_refusal_precedes_copy_and_owner_handoff_keeps_the_ticket() {

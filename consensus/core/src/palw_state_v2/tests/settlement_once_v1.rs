@@ -264,7 +264,7 @@ fn the_check_fee_quad_is_matched_exactly_and_never_as_a_producer_reward() {
 }
 
 #[test]
-fn a_verifiers_slot_fees_are_marked_once_per_slot_across_the_tick_and_the_object_arm() {
+fn fabricated_verifier_fee_events_without_a_rooted_draw_cannot_settle() {
     let p = armed();
     let extras = PalwTransitionExtrasV1::default();
     let mut parent = with_route(PalwChainStateV2::genesis());
@@ -277,24 +277,9 @@ fn a_verifiers_slot_fees_are_marked_once_per_slot_across_the_tick_and_the_object
     // The verifier holds two drawn slots of the claim: the kernel pays both in one batch, two distinct obligations.
     let mut batch = check_fee_quad(poster, verifier, 5, claim);
     batch.extend(check_fee_quad(poster, verifier, 5, claim));
-    super::super::palw_kernel_route_fold_v1::apply_settlements(&mut b, &batch, false, 100).unwrap();
-    let first = b.state.clone();
-    // RFC08-2: a drawn verifier's own liability horizon is undefined (RFC07-5), so past the fence its fee is refused, never
-    // defaulted: each slot's obligation is closed at zero and the poster's escrow is not debited.
-    assert_eq!(first.bonds[&bond_key(1)].collateral, 1_000);
-    for slot in 0..2 {
-        let o = PalwSettlementObligationV1::with_party(PalwSettlementLegV1::VerifierCheckFee, claim, verifier, slot);
-        let row = palw_settled_once_v1(&first, &o).expect("each slot has its own marker");
-        assert_eq!((row.consumer, row.amount), (PalwSettlementConsumerV1::KernelTick, 0));
-    }
-    assert_eq!(markers(&first), 2);
-    // The same batch again: past the fence the markers, not the kernel's per-slot paid flag, stop it.
-    super::super::palw_kernel_route_fold_v1::apply_settlements(&mut b, &batch, false, 101).unwrap();
-    assert_eq!(b.state, first, "the lenient repeat debits and pays nothing");
-    // A strict object arm naming the first slot again is refused (the object is dropped).
-    let one = check_fee_quad(poster, verifier, 5, claim);
-    assert!(super::super::palw_kernel_route_fold_v1::apply_settlements(&mut b, &one, true, 102).is_err());
-    assert_eq!(markers(&b.state), 2, "a refused repeat writes no marker");
+    let before=b.state.clone();
+    assert!(super::super::palw_kernel_route_fold_v1::apply_settlements(&mut b, &batch, false, 100).is_err());
+    assert_eq!(b.state,before,"fabricated check-fee events without a rooted claim/draw cannot spend or close an obligation");
 }
 
 #[test]

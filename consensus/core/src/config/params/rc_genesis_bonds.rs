@@ -2188,3 +2188,62 @@ pub const PALW_RC_GENESIS_BONDS: &[PalwRcGenesisBondCard] = &[
         ],
     },
 ];
+
+/// **RFC-0041 / ADR-0209.** Whether `objects` registers no genesis bond.
+///
+/// The static table above is unchanged. A seated preset's genesis objects still contain
+/// `BondRegistered`, so this is false there and every rule that consults it keeps today's behavior.
+/// A launch assembled with an empty bond list is the bond-free bootstrap.
+pub fn palw_genesis_objects_have_no_bond_v1(objects: &[crate::palw_state_v2::PalwConsensusObjectV2]) -> bool {
+    !objects.iter().any(|object| matches!(object, crate::palw_state_v2::PalwConsensusObjectV2::BondRegistered { .. }))
+}
+
+/// **The existing BASE coinbase recovery is due** (RFC-0041).
+///
+/// All four must hold. Any seated genesis, any bond already in the live registry, a floor that is
+/// not the idle fallback, or a class other than BASE leaves the payment and admission rules exactly
+/// as they are.
+///
+/// The clock is the floor's, not a new "mine for 30 minutes" mode and not the heartbeat lane.
+/// [`crate::palw_real_share_v1::PalwFloorStateV1::admits_floor_at`] is Idle. A chain that has never
+/// accepted REAL work starts Idle. After REAL work has landed, Idle returns only once
+/// [`crate::palw_real_share_v1::PALW_FLOOR_IDLE_SLOTS_V1`] slots of
+/// [`crate::palw_real_share_v1::PALW_REAL_SLOT_MS_V1`] (20 × 120_000 ms, the heartbeat recovery
+/// interval) have passed with no BLUE REAL attempt. Heartbeat blocks stay fee-only.
+///
+/// This does not mint a premine, does not arm `PALW_T12_FULL_ACTIVATION_DAA`, and does not register
+/// a bond. The paid output is the worker share of `calc_block_subsidy` the attempt block already
+/// declares.
+pub fn palw_base_coinbase_recovery_due_v1(
+    genesis_has_no_bond: bool,
+    live_registry_empty: bool,
+    floor_admits: bool,
+    is_base_class: bool,
+) -> bool {
+    genesis_has_no_bond && live_registry_empty && floor_admits && is_base_class
+}
+
+/// The admission failure a recovery block may stand through: the named executor bond is absent.
+/// A failed signature, lottery, or class check still disqualifies the block.
+pub fn palw_base_coinbase_recovery_missing_bond_v1(admission_error: &str) -> bool {
+    admission_error.starts_with("the named executor bond ")
+        && admission_error.ends_with("does not exist at the candidate chain point")
+}
+
+/// **Placeholder the BASE recovery attempt names.** Not a UTXO, not a genesis bond, not collateral.
+///
+/// The header can be signed under the producer's own key. Nothing in the transition writes a
+/// `BondRegistered` for this outpoint. The coinbase pays the miner's script, and the ordinary
+/// `--palw-register-bond` path spends a matured coinbase or an owned genesis UTXO later.
+pub fn palw_base_coinbase_recovery_bond_outpoint_v1() -> crate::tx::TransactionOutpoint {
+    let mut raw = [0u8; 64];
+    let tag = b"RFC-0041 base coinbase recovery; not a bond and not a premine";
+    raw[..tag.len()].copy_from_slice(tag);
+    crate::tx::TransactionOutpoint::new(crate::Hash64::from_bytes(raw), 0)
+}
+
+/// `<txid>:<index>` spelling of [`palw_base_coinbase_recovery_bond_outpoint_v1`].
+pub fn palw_base_coinbase_recovery_bond_label_v1() -> String {
+    let outpoint = palw_base_coinbase_recovery_bond_outpoint_v1();
+    format!("{}:{}", outpoint.transaction_id, outpoint.index)
+}

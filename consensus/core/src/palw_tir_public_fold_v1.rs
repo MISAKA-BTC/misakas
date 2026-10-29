@@ -70,16 +70,25 @@ fn palw_funded_original_candidate_inner_v1(
     use PalwFundedOriginalCandidateV1::{Invalid, Missing};
     use crate::palw_tir_funded_original_envelope_v1::{is_funded_original_carrier_v1, PalwTirFundedOriginalEnvelopeV1};
     let tx = validated.tx;
+    let prefix = tx.payload.starts_with(b"FPR2");
+    let outer = if prefix {
+        if !native_params.is_some_and(|p| p.claim_local_settlement_active_at(daa)) { return Invalid("FPR2 below source provenance fence"); }
+        match crate::palw_claim_local_v1::prefix_v1::PalwPrefixDependencyEnvelopeV1::inner_view_v1(&tx.payload) {
+            Ok(inner) => inner, Err(_) => return Invalid("FPR2 carrier framing"),
+        }
+    } else { tx.payload.as_slice() };
+    let accounting = accounting || (prefix && outer.starts_with(b"FPA1"));
     let payload = if accounting {
-        let Some(view) = crate::palw_fp_answer_accounting_v1::palw_fp_answer_envelope_view_v1(&tx.payload, u32::MAX as usize) else {
+        let Some(view) = crate::palw_fp_answer_accounting_v1::palw_fp_answer_envelope_view_v1(outer, u32::MAX as usize) else {
             return Invalid("accounting carrier framing");
         };
         if tx.subnetwork_id != crate::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT || !view.inner.starts_with(b"TFO1") {
             return Invalid("accounting carrier does not contain TFO1");
         }
         view.inner
-    } else { &tx.payload };
-    if (!accounting && !is_funded_original_carrier_v1(tx)) || !tx.id_is_current() {
+    } else { outer };
+    if (prefix && (tx.subnetwork_id != crate::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT || !payload.starts_with(b"TFO1")))
+        || (!prefix && !accounting && !is_funded_original_carrier_v1(tx)) || !tx.id_is_current() {
         return Invalid("carrier framing or stale actual transaction id");
     }
     if tx.inputs.len() != validated.entries.len() {

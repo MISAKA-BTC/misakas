@@ -272,6 +272,10 @@ pub use palw_model_eligibility_fold_v1::palw_eligibility_status_of_v1;
 mod palw_security_certification_fold_v1;
 #[path = "palw_claim_local_fold_v1.rs"]
 mod palw_claim_local_fold_v1;
+#[path = "palw_claim_local_prefix_reservation_v1.rs"]
+mod palw_claim_local_prefix_reservation_v1;
+#[path = "palw_claim_local_prefix_court_v1.rs"]
+mod palw_claim_local_prefix_court_v1;
 #[path = "palw_claim_local_rewards_v1.rs"]
 mod palw_claim_local_rewards_v1;
 // RFC-0023 stage 2: per-claim settlement read (dormant `palw_claim_local_settlement_v1`).
@@ -1978,6 +1982,10 @@ pub struct PalwStateParamsV2 {
     /// RFC-0008 `palw_settlement_once_v1` mirror (dormant; `None` everywhere).
     #[borsh(skip)]
     settlement_once_from_daa: Option<u64>,
+    #[borsh(skip)]
+    pub(crate) verifier_watch_v1: Option<(u64, crate::palw_verifier_watch_v1::PalwVerifierWatchPolicyV1)>,
+    #[borsh(skip)]
+    pub(crate) verifier_watch_maturity_v1: Option<(Option<crate::config::params::PalwBondMaturityV1>, Option<crate::config::params::ForkActivation>)>,
     /// RFC-0007 §4.1 `palw_paid_claim_trap_v1` mirror (dormant; `None` everywhere).
     #[borsh(skip)]
     paid_claim_trap_from_daa: Option<u64>,
@@ -2852,6 +2860,8 @@ pub fn palw_bond_committed_v1(
         .saturating_add(state.model_refutation_seal_reserved_v4(bond, now_daa))
         // DA16: the provider court's leases and challenge bonds.
         .saturating_add(state.provider_court_reserved(bond))
+        .saturating_add(state.prefix_export_reserved_at_v1(bond, now_daa))
+        .saturating_add(state.verifier_watch_reserved_at_v1(bond, now_daa))
 }
 
 /// **[`palw_bond_committed_v1`]'s per-lock term: does `lock` on `claim_id` still hold its seat's
@@ -4870,6 +4880,9 @@ pub enum PalwVoidReasonV2 {
     /// written (an unavailable prompt is not a computation error). Explicit Borsh number **140** (void-reason namespace; 140 is also an object tag and an aux table id elsewhere — AUDIT-2 m3); written only past
     /// `Params::palw_panel_da_disclosure_v1`.
     PanelDaDisclosureDefault = 140,
+    /// RFC0040: producer's signed source-export statement was refuted. This
+    /// does not contradict a verifier's earlier base-execution Valid signature.
+    PrefixExportFraud = 141,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
@@ -15442,6 +15455,7 @@ fn apply_palw_transition_v7_inner(
     // G14 r6: after every accusation this block opened or closed — the receipt pause rows follow `palw_accusation_pending_v1`.
     palw_receipt_pause_fold_v2::reconcile(&mut builder, ctx)?;
 
+    palw_claim_local_prefix_reservation_v1::sweep(&mut builder, ctx)?;
     palw_monetary_material_fold_v1::refresh(&mut builder, ctx)?;
     builder.rearm_material_retirements_v1(ctx.daa_score)?;
     palw_claim_local_fold_v1::retain_changed_claim_context_v1(
@@ -20268,6 +20282,8 @@ pub fn palw_model_refund_payout_key_v1(carrier: &crate::tx::TransactionId) -> Ha
 /// transition before the struct existed.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PalwTransitionExtrasV1 {
+    /// RFC0040 transaction-local provenance, populated only by native extraction.
+    pub prefix_dependencies_v1: BTreeMap<Hash64, crate::palw_claim_local_v1::prefix_v1::PalwPrefixDependencyEnvelopeV1>,
     /// Effective native v5 inputs at this block; never imported from a carrier.
     pub native_court_rules_v1: Option<crate::palw_court_close_receipt_v1::NativeCourtRulesV1>,
     /// Original stable network identity and forks fired at this accepting DAA.
@@ -20642,6 +20658,14 @@ pub struct PalwTransitionExtrasV1 {
     /// The decoded answer ids each free-prompt commitment of this block carried (`FPA1`), keyed by claim — native ingress only,
     /// never a carrier-declared map. Empty below `palw_fp_answer_accounting_v1`.
     pub fp_claim_answers: BTreeMap<Hash64, Vec<u32>>,
+    /// The transaction that settled each answered claim of this block. Empty below the fence,
+    /// and empty when the carrier id was not in hand. The fold copies a present id into kernel
+    /// aux table [`crate::palw_fp_answer_accounting_v1::PALW_FP_WINNING_CARRIER_TABLE_V1`].
+    pub fp_winning_carriers: BTreeMap<Hash64, Hash64>,
+    /// Consumer claim → transaction ids its carrier spent. The fold turns a spend of a stored
+    /// winning-carrier row into a claim dependency. Empty unless this block's accepted
+    /// free-prompt carrier had inputs. Not a state-root field.
+    pub carrier_input_spends: BTreeMap<Hash64, Vec<Hash64>>,
     /// `palw_tir_designated_answers_v1` at this block (ADR-0191 step B): a tag-245 event folds into the designated registry.
     /// `false` by `Default` and below the fence (every shipped preset). The processor sets it from `palw_tir_designated_answers_v1`.
     pub tir_designated_answers_active: bool,
@@ -26990,3 +27014,12 @@ pub(crate) use native_wire_carriage_v1::{
     restore_index_native_shape_v1, scan_budget_delta_row_v1, scan_carriage_native_wire_v1, scan_exec_delta_row_v1,
     scan_improvement_delta_row_v1, scan_vertex_delta_row_v1, transition_existing_index_shape_v1, transition_node_unit_v1,
 };
+
+#[path = "palw_verifier_fee_consent_fold_v1.rs"]
+mod palw_verifier_fee_consent_fold_v1;
+
+#[path = "palw_verifier_watch_fold_v1.rs"]
+mod palw_verifier_watch_fold_v1;
+
+#[path = "palw_verifier_watch_draw_v1.rs"]
+mod palw_verifier_watch_draw_v1;

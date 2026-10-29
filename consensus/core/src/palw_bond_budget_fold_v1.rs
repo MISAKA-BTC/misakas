@@ -2170,6 +2170,7 @@ pub(super) fn tick_bond_budget_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pal
     if builder.state.bond_budget.is_none() {
         builder.create_bond_budget_v1(ctx, &mirror)?;
     }
+    super::palw_verifier_watch_draw_v1::freeze_epoch(builder, ctx)?;
     let now = ctx.daa_score;
     if builder.params.reporter_income_active_at(now)
         && builder.state.bond_budget.as_ref().expect("created").header.version == PALW_BOND_BUDGET_STATE_VERSION_V1
@@ -2239,6 +2240,7 @@ pub(super) fn tick_bond_budget_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pal
             .map_err(|why| PalwStateV2Error::BondBudgetRefused(why.to_string()))?;
     }
     for queue in &drained {
+        super::palw_monetary_material_fold_v1::observe_payment(builder, ctx, Hash64::default(), *queue)?;
         builder
             .bond_budget_op(PalwBudgetGrowthV1::rows(material_rows_v1(builder)), |budget, _, j| {
                 budget.confirm_legacy_material_queue_v1(*queue, now, mirror.policy.window_daa, j)

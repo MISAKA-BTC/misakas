@@ -76,5 +76,118 @@ pub(super) fn requests(state: &PalwChainStateV2) -> Result<u64, NativeCoverageV1
         liability_bytes = add(liability_bytes, wire)?;
     }
     bytes(&mut q, liability_bytes)?;
+    // One retained copy of every historical frame and both of its carriages.
+    // Nested target/source/retirement readers reserve their own copies; the
+    // test quota allows four of those sets plus 32MiB of construction workspace.
+    // Malformed frame bytes are skipped here so capacity admission still happens
+    // before the fold reports the original inconsistency.
+    q.add_v1(retained_history_v1(state)?)?;
+    quote_kernel_dependency_rows_v1(state, &mut q)?;
     Ok(q.bytes_v1())
+}
+
+fn io_resource(error: std::io::Error) -> Option<NativeCoverageV1> {
+    match error.kind() {
+        std::io::ErrorKind::OutOfMemory => Some(overflow()),
+        std::io::ErrorKind::Unsupported | std::io::ErrorKind::TimedOut => Some(NativeCoverageV1::unsupported::<
+            crate::palw_claim_local_v1::PalwClaimLiabilityFrameV1,
+        >("checkpoint historical scan", &error.to_string())),
+        _ => None,
+    }
+}
+
+fn retained_history_v1(state: &PalwChainStateV2) -> Result<u64, NativeCoverageV1> {
+    use crate::palw_claim_local_v1::{PalwClaimLiabilityFrameV1, PalwClaimLocalInputV1, decode_claim_local_value_v1};
+    use crate::palw_native_resource_v1::{NativeDecodeErrorV1, preflight_native_carriage_v1, preflight_native_value_v1};
+    let mut total = 0u64;
+    let mut prefix_edges = 0u64;
+    for (_, bytes) in rewards::frames(state) {
+        let shape = match preflight_native_value_v1::<PalwClaimLiabilityFrameV1>(bytes.as_slice(), bytes.len() as u64) {
+            Ok(shape) => shape,
+            Err(error) => {
+                if let Some(fault) = io_resource(error) {
+                    return Err(fault);
+                }
+                continue;
+            }
+        };
+        total = add(total, shape.logical_requests_v1())?;
+        let frame = match decode_claim_local_value_v1::<PalwClaimLiabilityFrameV1>(bytes) {
+            Ok(frame) => frame,
+            Err(NativeDecodeErrorV1::Resource(fault)) => return Err(fault),
+            Err(NativeDecodeErrorV1::Decode(_)) => continue,
+        };
+        prefix_edges = add(
+            prefix_edges,
+            frame.inputs.iter().filter(|input| matches!(input, PalwClaimLocalInputV1::PrefixDependency { .. })).count() as u64,
+        )?;
+        for carriage in [&frame.prior_state, &frame.current_state] {
+            match preflight_native_carriage_v1(carriage.as_slice(), carriage.len() as u64) {
+                Ok(scan) => {
+                    let memory = match scan.memory_requests_v1() {
+                        Ok(memory) => memory,
+                        Err(error) => {
+                            if let Some(fault) = io_resource(error) {
+                                return Err(fault);
+                            }
+                            continue;
+                        }
+                    };
+                    total = add(total, memory)?;
+                }
+                Err(error) => {
+                    if let Some(fault) = io_resource(error) {
+                        return Err(fault);
+                    }
+                }
+            }
+        }
+    }
+    // Input-set nodes for prefix edges the checkpoint keeps when the source is live.
+    let node = std::mem::size_of::<BTreeNodeEnvelopeV1<crate::palw_claim_local_v1::PalwClaimLocalWorkRefV1, ()>>() as u64;
+    total = add(total, prefix_edges.checked_mul(node).ok_or_else(overflow)?)?;
+    Ok(total)
+}
+
+fn quote_kernel_dependency_rows_v1(state: &PalwChainStateV2, q: &mut TirNativeRequestsV1) -> Result<(), NativeCoverageV1> {
+    use crate::palw_claim_local_v1::PalwClaimLocalWorkRefV1;
+    use crate::palw_native_resource_v1::preflight_native_value_v1;
+    use std::collections::BTreeSet;
+    let Some(route) = state.kernel_route.as_ref() else { return Ok(()) };
+    let mut ids = BTreeSet::new();
+    for (id, root) in &state.exec_v2.roots {
+        if matches!(root.prefix, crate::palw_work_slice_v2::PalwWorkPrefixStageV2::Unbound) {
+            continue;
+        }
+        if root.prefix_claim != kaspa_hashes::ZERO_HASH64 {
+            ids.insert(root.prefix_claim);
+        }
+        for (_, slice) in state.exec_v2.slices.range((*id, 0)..=(*id, u32::MAX)) {
+            if slice.evidence_root != kaspa_hashes::ZERO_HASH64 {
+                ids.insert(slice.evidence_root);
+            }
+        }
+    }
+    if ids.is_empty() {
+        return Ok(());
+    }
+    q.exact_v1::<BTreeNodeEnvelopeV1<PalwClaimLocalWorkRefV1, crate::palw_claim_local_v1::PalwClaimLocalRecordV1>>(ids.len() as u64)?;
+    q.exact_v1::<BTreeNodeEnvelopeV1<PalwClaimLocalWorkRefV1, ()>>(ids.len() as u64)?;
+    for id in ids {
+        let Some(row) = route.rows.get(&(misaka_palw_kernel::rows::TABLE_CLAIMS_V1, id.as_byte_slice().to_vec())) else {
+            continue;
+        };
+        let shape = match preflight_native_value_v1::<misaka_palw_kernel::ledger::ClaimRowV1>(row.as_slice(), row.len() as u64) {
+            Ok(shape) => shape,
+            Err(error) => {
+                if let Some(fault) = io_resource(error) {
+                    return Err(fault);
+                }
+                continue;
+            }
+        };
+        q.add_v1(shape.logical_requests_v1())?;
+        bytes(q, row.len() as u64)?;
+    }
+    Ok(())
 }

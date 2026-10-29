@@ -30,8 +30,18 @@ fn versioned_gdn_carrier_reaches_real_fold_and_existing_delta_reversal() {
             memory_routing_court: Some(PalwGdnCourtLimitsV2 { ladder: 1 << 26, max_close_bytes: limit }),
             ..held_extras()
         };
+        let observer = crate::palw_court_observation_v1::CourtObservationGuardV1::enter(ctx(4, 103, 4).block);
         let (after, delta) = held_apply(&state, &p, &ctx(4, 103, 4), std::slice::from_ref(&object), None, &extras)
             .expect("the actual deterministic GDN terminal reaches settlement");
+        let observed = observer.finish().expect("bounded successful native fold");
+        assert_eq!(observed.len(), 1);
+        assert_eq!(observed[0].claim_id, claim_id);
+        assert_eq!(observed[0].object_tag, 243);
+        assert!(observed[0].adjudication_and_settlement_micros.is_some());
+        assert_eq!(observed[0].route, "GdnStep");
+        assert_eq!(observed[0].verdict, if wrong { "ExecutorGuilty" } else { "FalseAccusation" });
+        let unobserved = held_apply(&state, &p, &ctx(4, 103, 4), std::slice::from_ref(&object), None, &extras).unwrap().0;
+        assert_eq!(after.state_root(), unobserved.state_root(), "telemetry does not change consensus state");
         if wrong {
             assert!(matches!(
                 after.claim(&claim_id).unwrap().phase,
@@ -48,6 +58,17 @@ fn versioned_gdn_carrier_reaches_real_fold_and_existing_delta_reversal() {
         }
         assert_eq!(revert_delta_v2(&after, &delta, &p).unwrap().state_root(), state.state_root());
         assert_eq!(apply_delta_v2(&state, &delta, &p).unwrap().state_root(), after.state_root());
+        // A successful inner court can still be reverted by its enclosing batch.
+        // The builder restores telemetry with the exact same checkpoint as state.
+        let observer = crate::palw_court_observation_v1::CourtObservationGuardV1::enter(ctx(4, 103, 4).block);
+        let mut builder = TransitionBuilder::new(&state, &p, false, false, false, true, &extras);
+        let saved = builder.try_checkpoint().unwrap();
+        apply_object(&mut builder, &ctx(4, 103, 4), &object).unwrap();
+        assert!(crate::palw_court_observation_v1::checkpoint_v1().unwrap().1 > 0);
+        builder.restore(saved);
+        assert_eq!(builder.state.state_root(), state.state_root());
+        assert!(observer.finish().unwrap().is_empty(), "a restored successful inner verdict is not observable");
+        drop(builder);
         extras.memory_routing_court.as_mut().unwrap().max_close_bytes = limit - 1;
         assert!(held_apply(&state, &p, &ctx(4, 103, 4), &[object], None, &extras).is_err());
     }

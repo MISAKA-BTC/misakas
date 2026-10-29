@@ -19,6 +19,8 @@ pub enum PalwClaimLocalWorkRefV1 {
     KernelClaim { claim: Hash64 },
     ExecSession { root: Hash64 },
     ExecSlice { root: Hash64, index: u32 },
+    /// Actual successful terminal journal event; original session birth is unchanged.
+    ExecSettlement { root: Hash64, block: Hash64 },
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PalwClaimLocalExecDependencyV1 {
@@ -107,6 +109,6 @@ impl PalwClaimLiabilityFrameV1 {
     }
 }
 
-native_enum!(PalwClaimLocalWorkRefV1; ChainClaim {claim}, KernelClaim {claim}, ExecSession {root}, ExecSlice {root,index});
+native_enum!(PalwClaimLocalWorkRefV1; ChainClaim {claim}, KernelClaim {claim}, ExecSession {root}, ExecSlice {root,index}, ExecSettlement {root,block});
 native_struct!(PalwClaimLocalExecDependencyV1; consumer, input);
 native_struct!(PalwClaimLocalExecOriginsV1; point, edges, unbound_roots);

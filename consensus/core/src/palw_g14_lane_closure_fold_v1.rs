@@ -32,6 +32,7 @@ pub(super) fn lock_kernel_signer_v1(
     claim_reward: u64,
     quorum: u8,
 ) -> Result<bool, PalwStateV2Error> {
+    super::palw_verifier_fee_consent_fold_v1::clean_receipt_gate(builder, claim, seat, ctx.daa_score)?;
     let key = palw_kernel_signer_lock_key_v1(&palw_kernel_bond_id_v1(seat), claim);
     let Some(route) = builder.state.kernel_route.as_ref() else { return Ok(false) };
     if route.aux.contains_key(&(PALW_G14_LANE_CLOSURE_TABLE_V1, key.clone())) {

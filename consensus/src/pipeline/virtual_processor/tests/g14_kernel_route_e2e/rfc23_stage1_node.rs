@@ -6,18 +6,25 @@
 use super::*;
 
 fn stage1_config() -> (Config, PalwConsensusParamsV2, Premine, Premine) {
+    rfc23_config(false)
+}
+
+fn rfc23_config(stage2: bool) -> (Config, PalwConsensusParamsV2, Premine, Premine) {
     let (cfg, bundle, premine, floats) = kernel_config();
     let mut params = cfg.params.clone();
     params.palw_model_eligibility_v1 = Some(ForkActivation::new(0));
     params.palw_independently_work_certified_v1 = Some(ForkActivation::new(0));
     params.palw_unresolved_bound_v1 = Some(ForkActivation::new(20));
+    params.palw_claim_local_settlement_v1 = stage2.then_some(ForkActivation::new(20));
     let mut tmp = params.clone();
     tmp.palw_consensus_mode = kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle);
     tmp.sync_palw_rfc0018_v1();
     tmp.sync_palw_unresolved_bound_v1();
+    tmp.sync_palw_claim_local_settlement_v1();
     let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = tmp.palw_consensus_mode else { unreachable!() };
     params.sync_palw_rfc0018_v1();
     params.sync_palw_unresolved_bound_v1();
+    params.sync_palw_claim_local_settlement_v1();
     assert_eq!(bundle.state.unresolved_bound_from_daa(), Some(20), "the stage-1 mirror is on the bundle");
     (Config::new(params), bundle, premine, floats)
 }
@@ -54,4 +61,40 @@ async fn rfc23s1_node_restart_and_genesis_replay_agree_on_the_resolved_prefix_ac
     net.assert_same(&replay, "RFC-0023 stage 1: a genesis replay across the fence");
     let other = net.on_chain(replay);
     assert_eq!(resolved_through(&other), prefix, "the same resolved prefix on the replaying node");
+}
+
+
+/// Node-level checkpoint persistence, not the full outsider-conviction campaign.
+#[tokio::test]
+async fn rfc23s2_node_checkpoint_survives_restart_and_genesis_replay_across_the_fence() {
+    use kaspa_database::{create_temp_db, prelude::ConnBuilder};
+    use kaspa_consensus_core::palw_claim_local_v1::{PalwClaimLocalCheckpointV1, PALW_CLAIM_LOCAL_TABLE_V1};
+    use kaspa_consensus_core::palw_state_v2::palw_claim_local_checkpoint_key_v1;
+    kaspa_core::log::try_init_logger("warn");
+    let (_db_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+    let (sender, receiver) = async_channel::unbounded();
+    let mut net = Net::over_cfg(rfc23_config(true), |c| TestConsensus::with_db(db.clone(), c, sender));
+    net._keep.push(Box::new(receiver));
+    let ttpb = net.ttpb();
+    for target in [8u64, 24, 40] {
+        net.beat_to(target).await;
+        let _ = net.chain.attempt(1, ttpb, Vec::new(), &|_| true).await;
+    }
+    net.beat_to(160).await;
+    let read_checkpoint = |net: &Net| {
+        let state = net.chain.tip_state().1;
+        let route = state.kernel_route_state_v1().expect("active kernel route");
+        route.aux_row::<PalwClaimLocalCheckpointV1>(PALW_CLAIM_LOCAL_TABLE_V1, &palw_claim_local_checkpoint_key_v1())
+            .expect("the real node wrote its claim-local checkpoint")
+    };
+    let checkpoint = read_checkpoint(&net);
+    assert!(checkpoint.point.daa_score >= 20);
+    assert!(!checkpoint.records.is_empty(), "actual admitted claims must be represented");
+    let (sink, root) = (net.chain.sink(), net.chain.tip_state().1.state_root());
+    let net = net.restart(db.clone());
+    assert_eq!((net.chain.sink(), net.chain.tip_state().1.state_root()), (sink, root));
+    assert_eq!(read_checkpoint(&net), checkpoint);
+    let replay = net.replay().await;
+    net.assert_same(&replay, "RFC23 stage2 checkpoint: replay across activation");
+    assert_eq!(read_checkpoint(&net.on_chain(replay)), checkpoint);
 }

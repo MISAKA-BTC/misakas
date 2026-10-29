@@ -26,14 +26,16 @@ fn apply_object_with_pair_v1(builder: &mut TransitionBuilder<'_>, ctx: &PalwBloc
     palw_court_capacity_fold_v1::charge_court_op_v1(builder, ctx, object)?;
     let paired = matches!(object, PalwConsensusObjectV2::FreePromptCommitted { claim, .. }
         if builder.extras.tir_public_originals.contains_key(claim));
-    if !paired {
+    let prefix_paired = matches!(object, PalwConsensusObjectV2::FreePromptCommitted { claim, .. }
+        if builder.extras.prefix_dependencies_v1.contains_key(claim));
+    if !paired && !prefix_paired {
         return apply_object_inner(builder, ctx, object);
     }
     // A prospective original is ONE native object. Failure after the ordinary
     // FP reservation/budget writes cannot leave an accepted unprotected claim.
     // `checkpoint()` is test-only on the integration line; production rollback goes through the native resource reservation.
     let saved = builder.try_checkpoint()?;
-    let result = match palw_tir_public_fold_v1::check_paired_original_v1(builder, object) {
+    let result = match if paired { palw_tir_public_fold_v1::check_paired_original_v1(builder, object) } else { Ok(()) } {
         Ok(()) => apply_object_inner(builder, ctx, object),
         Err(why) => Err(why),
     };
@@ -678,6 +680,7 @@ fn apply_object_inner(
                 class_id: claim.class_id,
                 artifact_root,
             };
+            let court_started = crate::palw_court_observation_v1::start_v1(ctx.block);
             let verdict = crate::palw_gdn_court_v2::palw_gdn_court_verdict_v2(accusation, &actual, ladder).map_err(|e| match e {
                 crate::palw_step_refute::memory_v2::PalwGdnCourtErrorV2::Resource(cause) => PalwStateV2Error::NativeResource(cause),
                 other => PalwStateV2Error::ShardCourt(other.to_string()),
@@ -694,6 +697,8 @@ fn apply_object_inner(
                     return Err(PalwStateV2Error::ShardCourt("GDN terminal must never invent an attention dissection".into()));
                 }
             }
+            crate::palw_court_observation_v1::record_v1(ctx.block, claim_id, claim.class_id, 243, "GdnStep",
+                accusation.leaf_index, verdict, accusation.as_ref(), court_started);
         }
         // RFC-0006 consumer v2 (tag 244): the router binding and the checkpoint / routed accusations.
         PalwConsensusObjectV2::MemoryRoutingV2 { object } => {
@@ -3583,6 +3588,10 @@ fn apply_object_inner(
             public_job,
             eval,
         } => {
+            crate::palw_claim_local_v1::prefix_v1::check_admission_v1(
+                &builder.state, builder.params, ctx, object,
+                builder.extras.prefix_dependencies_v1.get(claim_id),
+            )?;
             if builder.state.claims.contains_key(claim_id) {
                 return Err(PalwStateV2Error::DuplicateClaim(*claim_id));
             }
@@ -4064,6 +4073,7 @@ fn apply_object_inner(
             if let Some(plan) = budget_plan {
                 builder.commit_bond_budget_v1(ctx, *claim_id, plan)?;
             }
+            super::palw_claim_local_prefix_reservation_v1::admit(builder, ctx, *claim_id)?;
             if let Some(ticket) = probation_ticket {
                 super::palw_model_eligibility_fold_v1::eligibility_probation_commit_v1(builder, ctx, claim_id, ticket)?;
             }
@@ -4101,6 +4111,13 @@ fn apply_object_inner(
                         (*class_id, *bond, crate::palw_fp_answer_accounting_v1::palw_fp_answer_row_key_v1(claim_id)),
                         Some(answer_row),
                     )?;
+                    if let Some(carrier) = builder.extras.fp_winning_carriers.get(claim_id) {
+                        builder.write_kernel_row_encoded_v1(
+                            crate::palw_fp_answer_accounting_v1::PALW_FP_WINNING_CARRIER_TABLE_V1,
+                            claim_id.as_byte_slice(),
+                            Some(carrier),
+                        )?;
+                    }
                 }
             }
             // ADR-0088 Decision 3's recorded gap: a free-prompt claim names no root, so it is

@@ -727,7 +727,8 @@ pub mod palw_state_auth_map_v1;
 pub mod palw_state_proof_v1;
 /// RFC-0036 (Proposed): parent-root-pinned row reads and change-set writes, a bounded cache, and the full-state adapter (dormant).
 pub mod palw_state_row_access_v1;
-/// RFC-0037 / ADR-0204 (Proposed, node-local, dormant): incremental verification of a PALW row stream against the committed root.
+/// RFC-0037 / ADR-0204 (Proposed): incremental verification of one PALW row-stream generation against the committed root.
+/// IBD decodes `PruningPointPalwRowStream` through this verifier before the existing import. Consensus rules are unchanged.
 pub mod palw_row_stream_v1;
 pub mod palw_state_v2;
 /// MISAKA PALW step function v1 (ADR-0030): the frozen operator taxonomy, the shape-profile
@@ -1051,6 +1052,7 @@ pub mod palw_window_class_v37;
 pub mod palw_material_release_recovery_v2;
 /// RFC07 R7-ECON / RFC08 R8-WINDOW / R8-ECON signed economic contracts (inner 67–69, aux 125–127; 2026-10-15). Dormant.
 pub mod palw_econ_contracts_v1;
+pub mod palw_monetary_material_fee_v2;
 pub mod palw_monetary_material_v1;
 
 /// Codex (2026-10-15): versioned native compact admission V4 (aux 138; renumbered from 135, which is RFC-0016's telemetry).
@@ -1193,3 +1195,9 @@ pub mod palw_paid_bootstrap_source_v6;
 pub mod palw_paid_claim_observation_v6;
 
 pub mod palw_exec_origin_coverage_v1;
+
+pub mod palw_court_observation_v1;
+
+pub mod palw_verifier_fee_consent_v1;
+
+pub mod palw_verifier_watch_v1;

@@ -4668,6 +4668,9 @@ impl<'a> TransitionBuilder<'a> {
                 crate::palw_offence_v1::PalwOffenceVerifyError::KindNotFileable(kind.not_fileable_reason_v1()).to_string(),
             ));
         }
+        if kind == PalwOffenceKindV1::PrefixExportRefuted {
+            return self.consume_prefix_export_refuted_v1(ctx, accused, evidence_id, evidence, evidence_budget);
+        }
         if let Some(reference) = crate::palw_staged_court_state_v1::palw_staged_reference_v1(kind, evidence) {
             if self.extras.staged_public_court.is_none() {
                 return Err(PalwStateV2Error::ObjectiveOffenceDormant);
@@ -4707,7 +4710,7 @@ impl<'a> TransitionBuilder<'a> {
                 }
                 PalwOffenceKindV1::ExecutorEquivocation | PalwOffenceKindV1::CourtExecutorGuilty => {}
                 // Refused above; listed so a routing change that forgets them fails to compile.
-                PalwOffenceKindV1::DaDefault | PalwOffenceKindV1::CourtConviction => {}
+                PalwOffenceKindV1::DaDefault | PalwOffenceKindV1::CourtConviction | PalwOffenceKindV1::PrefixExportRefuted => {}
             }
         } else if matches!(
             kind,
@@ -4854,7 +4857,7 @@ impl<'a> TransitionBuilder<'a> {
             // `consume_executor_refuted_v1` past the fence, refused as dormant below it. An `Err`,
             // never `unreachable!`, so a routing change that forgot this arm refuses the object
             // instead of panicking the node.
-            PalwOffenceKindV1::PanelFalseValidV2 | PalwOffenceKindV1::ExecutorRefuted | PalwOffenceKindV1::TirIdentityMismatch => {
+            PalwOffenceKindV1::PanelFalseValidV2 | PalwOffenceKindV1::ExecutorRefuted | PalwOffenceKindV1::TirIdentityMismatch | PalwOffenceKindV1::PrefixExportRefuted => {
                 return Err(PalwStateV2Error::ObjectiveOffenceRefused(
                     offence_id,
                     crate::palw_offence_v1::PalwOffenceVerifyError::AttributionDormant.to_string(),
@@ -9121,22 +9124,23 @@ impl<'a> TransitionBuilder<'a> {
     /// leave fingerprints in the root — which is why this is a full clone rather than an undo
     /// log: an `apply_*` that grows a new mid-write failure mode cannot corrupt a clone.
     #[cfg(test)]
-    pub(super) fn checkpoint(&self) -> (PalwChainStateV2, usize) {
-        (self.state.clone(), self.entries.len())
+    pub(super) fn checkpoint(&self) -> (PalwChainStateV2, usize, crate::palw_court_observation_v1::CourtObservationCheckpointV1) {
+        (self.state.clone(), self.entries.len(), crate::palw_court_observation_v1::checkpoint_v1())
     }
 
     /// The aggregate construction owner retains this exact state copy until
     /// rollback or the final output ownership split. A local refusal occurs
     /// before Clone, never as a semantic rejection of the carried work.
-    pub(super) fn try_checkpoint(&mut self) -> Result<(PalwChainStateV2, usize), PalwStateV2Error> {
+    pub(super) fn try_checkpoint(&mut self) -> Result<(PalwChainStateV2, usize, crate::palw_court_observation_v1::CourtObservationCheckpointV1), PalwStateV2Error> {
         let requests =
             crate::palw_native_resource_v1::native_value_requests_v1(&self.state).map_err(PalwStateV2Error::NativeResource)?;
         self.native_reservation.grow_v1(requests).map_err(PalwStateV2Error::NativeResource)?;
-        Ok((self.state.clone(), self.entries.len()))
+        Ok((self.state.clone(), self.entries.len(), crate::palw_court_observation_v1::checkpoint_v1()))
     }
-    pub(super) fn restore(&mut self, checkpoint: (PalwChainStateV2, usize)) {
+    pub(super) fn restore(&mut self, checkpoint: (PalwChainStateV2, usize, crate::palw_court_observation_v1::CourtObservationCheckpointV1)) {
         self.state = checkpoint.0;
         self.entries.truncate(checkpoint.1);
+        crate::palw_court_observation_v1::restore_v1(checkpoint.2);
         // The caches describe the state just replaced; the next reader rebuilds them from the
         // restored one (audit #13b).
         *self.inflight_index.get_mut() = None;
@@ -9413,7 +9417,7 @@ impl<'a> TransitionBuilder<'a> {
         let escrow_forfeit = match reason {
             // A court default is charged exactly as a proven fraud (ADR-0152 F2 residual): only the
             // reason it is recorded under differs, so kind 3 cannot read it as a proof.
-            PalwVoidReasonV2::CourtFraud | PalwVoidReasonV2::CourtDefault | PalwVoidReasonV2::CourtHeldVerdict => true,
+            PalwVoidReasonV2::CourtFraud | PalwVoidReasonV2::CourtDefault | PalwVoidReasonV2::CourtHeldVerdict | PalwVoidReasonV2::PrefixExportFraud => true,
             PalwVoidReasonV2::ProducerWithholding | PalwVoidReasonV2::ReceiptTimeout => self.extras.audit_2026_09_23_active,
             // ADR-0152 v3.1 S0′ (v22 skeleton): both are a second failed panel and are charged as the
             // second `ReceiptTimeout` is. M4's Q-5 gate writes 6 (`sweep_deadlines`); S-5 writes 5
@@ -9459,7 +9463,7 @@ impl<'a> TransitionBuilder<'a> {
                 // challenger could be paid for, and nothing a seat can be convicted by). A held
                 // dissection's verdict (ADR-0152 §4-ter F3 (B), `CourtHeldVerdict`) is the producer's
                 // and is charged as `CourtFraud` is.
-                PalwVoidReasonV2::CourtFraud | PalwVoidReasonV2::CourtDefault | PalwVoidReasonV2::CourtHeldVerdict => {
+                PalwVoidReasonV2::CourtFraud | PalwVoidReasonV2::CourtDefault | PalwVoidReasonV2::CourtHeldVerdict | PalwVoidReasonV2::PrefixExportFraud => {
                     palw_rcore_s1s2_action_v1(c0, g)
                 }
                 PalwVoidReasonV2::ProducerWithholding => {
@@ -10221,6 +10225,7 @@ impl<'a> TransitionBuilder<'a> {
                     | PalwVoidReasonV2::CourtDefault
                     | PalwVoidReasonV2::CourtHeldVerdict
                     | PalwVoidReasonV2::AggregateForfeit
+                    | PalwVoidReasonV2::PrefixExportFraud
             );
             self.da_release_all_v1(id, convicted, voided_daa)?;
         }

@@ -1,6 +1,6 @@
 // RFC-0032 A / ADR-0199 material intake (lane material-intake, 2026-10-22).
 // Verified-half original/world fixture with an installed shared context; the
-// storage schedule is the test-only injection (production is typed-missing).
+// storage schedule is the pinned estimate once the fence is active; a test thread may inject another.
 
 fn material_intake_world(fx: &PalwTirPublicFrameFixtureV1)
     -> (PalwChainStateV2, PalwStateParamsV2, PalwTransitionExtrasV1, Hash64, Hash64) {
@@ -28,7 +28,7 @@ fn material_intake_world(fx: &PalwTirPublicFrameFixtureV1)
 
 fn material_test_schedule() -> crate::palw_court_shared_material_intake_v1::MaterialIntakeScheduleV1 {
     let s = crate::palw_court_shared_material_intake_v1::MaterialIntakeScheduleV1 {
-        // audit B-09 (fix-b): a non-zero storage fee refuses the intake until V5 adopts its payer; the lane fixtures run fee-free.
+        // Lane fixtures stay fee-free. A positive rate is the submitter debit covered below.
         sompi_per_byte: 0,
         draft_ttl_daa: 100,
         cover: crate::palw_tir_public_source_v1::parameter_cover_v1::OriginalParameterCoverBudgetV1 {
@@ -278,10 +278,13 @@ fn material_intake_refuses_corrupt_parts_overbudget_and_dormant_fence() {
     let begin = MaterialActionV1::Begin { total_bytes: body.len() as u64,
         body_hash: crate::palw_tir_public_owned_v1::palw_tir_public_body_hash_v1(&body) };
     assert!(material_intake(&mut d, &at(frame, 1), &sign(target, begin.clone())).is_err());
-    let mut s = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
     set_material_intake_test_schedule_v1(None);
-    assert!(material_intake(&mut s, &at(frame, 1), &sign(target, begin.clone())).is_err(), "typed-missing schedule refuses");
-    assert_eq!(s.state.state_root(), before);
+    assert_eq!(
+        material_intake_schedule_at_fence_v1(true).unwrap(),
+        crate::palw_g14_values_v1::PALW_G14_MATERIAL_INTAKE_ESTIMATE_V1,
+        "an active fence uses the pinned estimate when the test injects nothing"
+    );
+    assert!(material_intake_schedule_at_fence_v1(false).is_err(), "below the fence the schedule stays missing");
     let schedule = material_test_schedule();
 
     let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
@@ -392,13 +395,13 @@ fn material_intake_incomplete_drafts_expire_and_release_reservation() {
     crate::palw_court_shared_material_intake_v1::set_material_intake_test_schedule_v1(None);
 }
 
-/// **fix-b B-09 regression**: a non-zero storage fee (no adopted payer) refuses the Begin and writes nothing — never a fee that is
-/// accounted in `charged_sompi` but never debited.
+/// A positive storage fee is taken from the authenticated submitter before the draft is recorded.
+/// A bond that cannot cover that fee refuses the Begin and writes nothing.
 #[test]
-fn fix_b09_a_nonzero_material_fee_refuses_the_intake() {
+fn a_positive_material_storage_fee_is_debited_from_the_submitter() {
     use crate::palw_court_shared_material_intake_v1::*;
-    use super::super::palw_court_shared_material_intake_fold_v1::material_intake;
     use crate::palw_tir_court_v1::PalwTirEvidenceStoreV1;
+    use super::super::palw_court_shared_material_intake_fold_v1::material_intake;
     let fx = crate::palw_tir_public_claim_v1::palw_tir_public_history_frame_fixture_v1();
     let frame = &fx.frame;
     let (mut state, params, extras, claim, scope) = material_intake_world(&fx);
@@ -410,18 +413,29 @@ fn fix_b09_a_nonzero_material_fee_refuses_the_intake() {
     let leaf = required_parameter_leaves_v1(&state, claim, schedule.cover).unwrap()[0];
     let body = borsh::to_vec(&fx.execution.param_opening(leaf).unwrap()).unwrap();
     let target = MaterialTargetV1::Parameter { leaf };
-    let begin = MaterialActionV1::Begin { total_bytes: body.len() as u64,
-        body_hash: crate::palw_tir_public_owned_v1::palw_tir_public_body_hash_v1(&body) };
+    let body_hash = crate::palw_tir_public_owned_v1::palw_tir_public_body_hash_v1(&body);
+    let begin = MaterialActionV1::Begin { total_bytes: body.len() as u64, body_hash };
     schedule.sompi_per_byte = 1;
     set_material_intake_test_schedule_v1(Some(schedule));
-    let before = state.state_root();
+    let fee = body.len() as u64;
+    let before = state.bond(&who).unwrap().collateral;
+    assert!(before >= fee);
     let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
-    let err = material_intake(&mut b, &at(frame, 1), &material_signed(&kp, net, claim, scope, target, who, begin.clone())).unwrap_err();
-    assert!(format!("{err:?}").contains("no adopted payer"), "{err:?}");
-    assert_eq!(b.state.state_root(), before);
-    // Fee-free: admitted, nothing owed.
-    set_material_intake_test_schedule_v1(Some(material_test_schedule()));
-    material_intake(&mut b, &at(frame, 1), &material_signed(&kp, net, claim, scope, target, who, begin)).unwrap();
+    material_intake(&mut b, &at(frame, 1), &material_signed(&kp, net, claim, scope, target, who, begin.clone())).unwrap();
+    let bond = b.state.bond(&who).unwrap();
+    assert_eq!(bond.collateral, before - fee);
+    assert_eq!(bond.slashed, fee);
+    let Some(Row::CourtMaterialLedger(ledger)) = b.state.staged_court_row_v1(&Key::CourtMaterialLedger(claim, who)) else { panic!() };
+    assert_eq!(ledger.charged_sompi, fee);
+    let draft = material_draft_id_v1(claim, target, who, body.len() as u64, body_hash).unwrap();
+    assert!(b.state.staged_court_row_v1(&Key::CourtMaterialDraft(claim, draft)).is_some());
+    state.bonds.get_mut(&who).unwrap().collateral = fee - 1;
+    let root = state.state_root();
+    let mut short = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+    let err = material_intake(&mut short, &at(frame, 1), &material_signed(&kp, net, claim, scope, target, who, begin)).unwrap_err();
+    assert!(format!("{err:?}").contains("exceeds the submitter bond"), "{err:?}");
+    assert_eq!(short.state.state_root(), root);
+    assert_eq!(short.state.bond(&who).unwrap().collateral, fee - 1);
     set_material_intake_test_schedule_v1(None);
 }
 

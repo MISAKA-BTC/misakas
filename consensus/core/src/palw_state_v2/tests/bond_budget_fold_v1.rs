@@ -1482,3 +1482,88 @@ fn paid_consumer_v4_exhaustion_preserves_accepted_court_and_refuses_late_new_ses
     assert!(settled.claim(&id).unwrap().phase.is_terminal());
     assert_eq!(settled.paid_consumer_terms_v1(&id), Some(terms));
 }
+
+/// Budget integration boundary: authenticated source metadata is supplied by
+/// the preceding RFC0040 admission checks; this test does not replace them.
+#[test]
+fn rfc40_export_reservation_survives_source_terminal_and_releases_only_after_material() {
+    use crate::palw_claim_local_v1::prefix_v1::*;
+    let base = armed_with(test_policy(1), None);
+    let keys = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([71; 32]);
+    let producer_key = keys.verification_key.as_ref().to_vec();
+    let mut registrations = register_class_and_bond();
+    for object in &mut registrations {
+        if let PalwConsensusObjectV2::BondRegistered { collateral, pubkey, .. } = object {
+            *collateral = 10_000;
+            *pubkey = producer_key.clone();
+        }
+    }
+    let (registered, _) = apply(&PalwChainStateV2::genesis(), &base, &ctx(1, 100, 1), &registrations, None);
+    let point = ctx(2, 101, 2);
+    let id = h64(0xFC);
+    let mut commit = fp_commit(0xFC, 20, 1);
+    if let PalwConsensusObjectV2::FreePromptCommitted { executor_pubkey, .. } = &mut commit {
+        *executor_pubkey = producer_key.clone();
+    }
+    let (source, _) = apply(&registered, &base, &point, &[commit], None);
+    let mut p = base.with_claim_local_settlement_from_daa(Some(101));
+    p.econ_contracts_v1.horizon_extension = Some((101, crate::palw_econ_contracts_v1::PalwHorizonExtensionPolicyV1::unapproved_probe_v1()));
+    let mut extras = PalwTransitionExtrasV1 {
+        kernel_route: Some(crate::palw_kernel_route_v1::PalwKernelRouteExtrasV1 {
+            network_domain: h64(99), ruleset_digest: h64(98), chain_genesis: h64(97), ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let intent = PalwPrefixExportIntentV1 {
+        version: 1, network: h64(99), source_namespace: 1, source_nonce: h64(9), base_commitment: id,
+        producer_key_id: crate::mldsa87_primitives::mldsa87_key_id(&producer_key), ordinal: 0,
+        prefix: crate::palw_freeprompt_v3::PalwFpPrefixStateV1 { state_root: h64(7), prefix_tokens: 2, class_id: h64(1) },
+        liability_until: 300, material_until: 400,
+    };
+    let signature = libcrux_ml_dsa::ml_dsa_87::sign(
+        &keys.signing_key, intent.id_v1().as_byte_slice(), PREFIX_EXPORT_CONTEXT_V1, [72; 32],
+    ).unwrap().as_ref().to_vec();
+    extras.prefix_dependencies_v1.insert(id, PalwPrefixDependencyEnvelopeV1 {
+        inner: vec![1],
+        exports: vec![PalwSignedPrefixExportV1 { intent: intent.clone(), signature: vec![0; signature.len()] }],
+        consumed: None,
+    });
+    let mut refused = TransitionBuilder::new(&source, &p, false, false, false, false, &extras);
+    assert!(super::super::palw_claim_local_prefix_reservation_v1::admit(&mut refused, &point, id).is_err());
+    drop(refused);
+    extras.prefix_dependencies_v1.insert(id, PalwPrefixDependencyEnvelopeV1 {
+        inner: vec![1],
+        exports: vec![PalwSignedPrefixExportV1 { intent, signature }],
+        consumed: None,
+    });
+    let mut builder = TransitionBuilder::new(&source, &p, false, false, false, false, &extras);
+    let producer = source.claims.get(&id).unwrap().bond;
+    let committed_before = builder.committed_at(&producer, point.daa_score);
+    super::super::palw_claim_local_prefix_reservation_v1::admit(&mut builder, &point, id).unwrap();
+    let reservation = builder.state.prefix_export_reservation_v1(&point, id).unwrap().unwrap();
+    assert_ne!(reservation.budget_id, id);
+    assert!(reservation.liability_sompi > 0);
+    assert_eq!(builder.state.prefix_export_reserved_at_checked_v1(&producer, 101).unwrap(), reservation.liability_sompi);
+    assert_eq!(builder.committed_at(&producer, 101), committed_before + reservation.liability_sompi,
+        "withdrawal and every ordinary work gate must see the extra source principal");
+    assert_eq!(builder.state.prefix_export_reserved_at_v1(&producer, 400), reservation.liability_sompi);
+    assert_eq!(builder.state.prefix_export_reserved_at_v1(&producer, 401), 0);
+
+    builder.bond_budget_op(super::super::palw_bond_budget_fold_v1::PalwBudgetGrowthV1::point(), |budget, _, journal| {
+        budget.close_at(&id, None, journal);
+    }).unwrap();
+    let budget = builder.state.bond_budget.as_ref().unwrap();
+    assert!(!budget.claim_row(&id).unwrap().open);
+    let export = budget.claim_row(&reservation.budget_id).unwrap();
+    assert!(export.open, "Final of the source cannot release its distinct export obligation");
+    assert_eq!(export.reserved.reward_sompi, 0);
+    assert_eq!(export.reserved.final_weight, 0);
+    super::super::palw_claim_local_prefix_reservation_v1::sweep(&mut builder, &ctx(3, 400, 3)).unwrap();
+    assert!(builder.state.bond_budget.as_ref().unwrap().claim_row(&reservation.budget_id).unwrap().open);
+    super::super::palw_claim_local_prefix_reservation_v1::sweep(&mut builder, &ctx(4, 401, 4)).unwrap();
+    if let Some(row) = builder.state.bond_budget.as_ref().unwrap().claim_row(&reservation.budget_id) {
+        assert!(!row.open);
+        assert!(!row.live, "synthetic export reservation has no later ordinary retirement hook");
+        assert!(row.in_window, "only the budget rolling window may retain a released row");
+    }
+}

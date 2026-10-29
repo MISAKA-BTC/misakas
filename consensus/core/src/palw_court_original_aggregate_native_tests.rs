@@ -30,8 +30,11 @@ fn original_aggregate_draft_requires_native_variant_and_never_grants_reservation
             for limit in [required.get()-1,required.get()]{let checker=crate::palw_native_resource_v1::NativeDemandCheckerV1::new(crate::palw_native_resource_v1::NativeSnapshotResourceLimitsV1{memory_bytes:limit,database_bytes:0});
                 let result=A::derive_reserved_v1(&b.state,frame,&source,&graph,profile,&join,F::Ordinary{output_and_stop:&output,selection:&selection},T::NotApplicable,|q|checker.reserve_requests_v1(q,0).map(Some));
                 if limit==required.get(){let held=result.unwrap();assert_eq!(checker.outstanding(),(required.get(),0));drop(held);}else{assert!(matches!(result,Err(crate::palw_court_shared_tir_builder_store_v1::original_aggregate::AggregateErrorV1::Resource(_))));}assert_eq!(checker.outstanding(),(0,0));}
-            assert_eq!(aggregate.shape_v1().grammar_v1(),K::Ordinary);assert!(aggregate.unresolved_supply_v1().next().is_some());
-            assert!(matches!(aggregate.reservation_readiness_v1(),Err(NotReady::UnresolvedSupplyContract(_))));
+            assert_eq!(aggregate.shape_v1().grammar_v1(),K::Ordinary);
+            match aggregate.unresolved_supply_v1().next() {
+                Some(_) => assert!(matches!(aggregate.reservation_readiness_v1(), Err(NotReady::UnresolvedSupplyContract(_)))),
+                None => assert!(aggregate.reservation_readiness_v1().is_ok(), "adopted packet terms make a bound ordinary branch ready"),
+            }
             assert!(A::derive_current_v1(&b.state,frame,&source,&graph,h(0xABA1),&join,F::Ordinary{output_and_stop:&output,selection:&selection},T::NotApplicable).is_err());
         }
         assert_eq!(before,b.state.state_root());

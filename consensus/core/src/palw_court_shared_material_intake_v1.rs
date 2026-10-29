@@ -15,9 +15,11 @@
 //!   registered opening width, the prompt's native form and the complete-ID
 //!   body). A declared size is never authority: it is checked against the
 //!   per-target native bound and against the submitter's per-claim budget.
-//! * Funding of storage belongs to the unadopted fee schedule. Production
-//!   resolution is always typed-missing ([`MaterialIntakeMissingV1::Schedule`]),
-//!   so no intake folds on any network. Tests inject a schedule.
+//! * Storage is priced by [`material_intake_schedule_v1`]: the pinned V5 estimate
+//!   while the material-intake fence (`palw_staged_tir_route_v1`) is active. The
+//!   fold debits that fee from the submitter bond before it records
+//!   `charged_sompi` or writes the draft. Below the fence the fold refuses and
+//!   charges nothing. A test may inject another schedule.
 //!
 //! Authentication is data identity only (existing Merkle commitments/openings),
 //! never a computation proof, a duty completion, a custody grant or a credit.
@@ -56,11 +58,13 @@ pub fn material_draft_id_v1(claim: Hash64, target: MaterialTargetV1, submitter: 
 }
 
 // ---------------------------------------------------------------------------
-// The unadopted storage fee schedule (typed-missing in production).
+// Storage fee schedule. The pinned estimate is in force only while the
+// material-intake fence is active; below it the fold refuses (typed-missing).
 // ---------------------------------------------------------------------------
 
-/// Values the intake needs that are NOT adopted: storage price, draft TTL and
-/// the explicit exploration budget of the original's input cover.
+/// Storage price, draft TTL, and the explicit exploration budget of the
+/// original's input cover. The payer is the intake submitter (the bond that
+/// signed the step), debited by the fold.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MaterialIntakeScheduleV1 {
     pub sompi_per_byte: u64,
@@ -76,14 +80,30 @@ pub enum MaterialIntakeMissingV1 {
 thread_local! {
     static TEST_SCHEDULE: std::cell::Cell<Option<MaterialIntakeScheduleV1>> = const { std::cell::Cell::new(None) };
 }
-/// TEST ONLY: per-thread injection; no non-test build can reach a value.
+/// TEST ONLY: per-thread injection. Absent from every non-test build.
 #[cfg(test)]
 pub(crate) fn set_material_intake_test_schedule_v1(schedule: Option<MaterialIntakeScheduleV1>) {
     TEST_SCHEDULE.with(|c| c.set(schedule));
 }
-/// Production: **V5 — USER-APPROVED 2026-10-26 (estimate used as is; 「目安の値をそのまま使う」承認). Review condition: replace by measurement.** Basis: lane VAL [`crate::palw_g14_values_v1::PALW_G14_MATERIAL_INTAKE_ESTIMATE_V1`].
-/// A test may still inject its own schedule per thread.
+/// Production schedule while the material-intake fence is active
+/// (`palw_staged_tir_route_v1` / `extras.staged_tir_route_active`).
+///
+/// **V5 — USER-APPROVED 2026-10-26 (estimate used as is; 「目安の値をそのまま使う」承認). Review condition: replace by measurement.** Basis: lane VAL [`crate::palw_g14_values_v1::PALW_G14_MATERIAL_INTAKE_ESTIMATE_V1`] (payer = submitter). A test may still inject its own schedule per thread.
+///
+/// Called with the fence active, this is that pinned estimate (a test thread may
+/// inject another). [`material_intake_schedule_at_fence_v1`] returns
+/// [`MaterialIntakeMissingV1::Schedule`] below the fence, and the fold then
+/// refuses without debiting. Injection does not arm the fence.
 pub fn material_intake_schedule_v1() -> Result<MaterialIntakeScheduleV1, MaterialIntakeMissingV1> {
+    material_intake_schedule_at_fence_v1(true)
+}
+
+/// [`material_intake_schedule_v1`] gated by the material-intake fence.
+/// Below the fence the schedule stays typed-missing ([`MaterialIntakeMissingV1::Schedule`]).
+pub fn material_intake_schedule_at_fence_v1(fence_active: bool) -> Result<MaterialIntakeScheduleV1, MaterialIntakeMissingV1> {
+    if !fence_active {
+        return Err(MaterialIntakeMissingV1::Schedule);
+    }
     #[cfg(test)]
     if let Some(schedule) = TEST_SCHEDULE.with(|c| c.get()) {
         return Ok(schedule);
@@ -607,7 +627,10 @@ mod tests {
     #[test]
     fn material_schedule_is_the_approved_estimate_unless_injected() {
         set_material_intake_test_schedule_v1(None);
-        assert_eq!(material_intake_schedule_v1(), Ok(crate::palw_g14_values_v1::PALW_G14_MATERIAL_INTAKE_ESTIMATE_V1));
+        let pinned = crate::palw_g14_values_v1::PALW_G14_MATERIAL_INTAKE_ESTIMATE_V1;
+        assert_eq!(material_intake_schedule_v1(), Ok(pinned));
+        assert_eq!(material_intake_schedule_at_fence_v1(true), Ok(pinned));
+        assert_eq!(material_intake_schedule_at_fence_v1(false), Err(MaterialIntakeMissingV1::Schedule));
     }
     #[test]
     fn material_ids_bind_claim_target_and_literal_submitter() {

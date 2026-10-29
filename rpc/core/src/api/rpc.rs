@@ -1128,6 +1128,19 @@ pub trait RpcApi: Sync + Send + AnySync {
         Ok(GetPalwRouterBindingV2Response::default())
     }
 
+    /// Read-only committed native court observation, never a computation proof.
+    async fn get_palw_memory_routing_outcome_v1(&self, request: GetPalwMemoryRoutingOutcomeV1Request) -> RpcResult<GetPalwMemoryRoutingOutcomeV1Response> {
+        self.get_palw_memory_routing_outcome_v1_call(None, request).await
+    }
+    async fn get_palw_memory_routing_outcome_v1_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwMemoryRoutingOutcomeV1Request,
+    ) -> RpcResult<GetPalwMemoryRoutingOutcomeV1Response> {
+        let _ = (connection, request);
+        Ok(GetPalwMemoryRoutingOutcomeV1Response::default())
+    }
+
     /// **RFC-0012 acceptance (op 247): one paid claim at the tip** — enrollment, the round's seats/quorum/receipts and Final.
     /// Read-only and never an approval. A node built before op 247 answers the default (`available` false).
     async fn get_palw_paid_claim(&self, request: GetPalwPaidClaimRequest) -> RpcResult<GetPalwPaidClaimResponse> {

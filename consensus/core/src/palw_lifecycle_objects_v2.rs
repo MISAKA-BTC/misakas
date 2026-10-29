@@ -2006,11 +2006,13 @@ pub enum PalwKernelInnerFenceV1 {
     ModelEligibilityV1,
     /// `Params::palw_elastic_final_capacity_v1` (RFC-0016 V8): a verifier's capacity attestation (inner 76).
     ElasticCapacityV1,
+    /// ADR-0207 ordinary verifier fee consent (inner 77).
+    SettlementOnceV1,
 }
 
 impl PalwKernelInnerFenceV1 {
     /// Every inner-kind fence.
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 18] = [
         Self::PanelFreeV1,
         Self::TypedRootsV1,
         Self::PanelFreeAndTypedRootsV1,
@@ -2028,6 +2030,7 @@ impl PalwKernelInnerFenceV1 {
         Self::BeaconBootstrapV1,
         Self::ModelEligibilityV1,
         Self::ElasticCapacityV1,
+        Self::SettlementOnceV1,
     ];
 
     /// The `Params` field the fence is resolved from.
@@ -2049,6 +2052,7 @@ impl PalwKernelInnerFenceV1 {
             Self::BeaconBootstrapV1 => "palw_beacon_bootstrap_v1",
             Self::ModelEligibilityV1 => "palw_model_eligibility_v1",
             Self::ElasticCapacityV1 => "palw_elastic_final_capacity_v1",
+            Self::SettlementOnceV1 => "palw_settlement_once_v1",
         }
     }
 }
@@ -2134,6 +2138,8 @@ pub fn palw_kernel_route_inner_fence_v1(object: &misaka_palw_kernel::route::Kern
         K::BootstrapExactV1 { .. } => Some(PalwKernelInnerFenceV1::BeaconBootstrapV1),
         K::CommitEligibilityExamV1 { .. } | K::AttestEligibilityExamV1 { .. } => Some(PalwKernelInnerFenceV1::ModelEligibilityV1),
         K::AttestCapacityV1 { .. } => Some(PalwKernelInnerFenceV1::ElasticCapacityV1),
+        K::ConsentVerifierFeeV1 { .. } => Some(PalwKernelInnerFenceV1::SettlementOnceV1),
+        K::WatchVerifierPoolV1 { .. } => Some(PalwKernelInnerFenceV1::VerifierPayV1),
         K::FundBeaconSourceFee { .. } | K::FundPanelBeaconSourceFeeV2 { .. } | K::OptInPaidBeaconSource { .. } => {
             Some(PalwKernelInnerFenceV1::BeaconSourceFeeV1)
         }
@@ -2219,6 +2225,8 @@ pub const PALW_KERNEL_ROUTE_INNER_KINDS_V1: &[(u8, &str, Option<PalwKernelInnerF
     (75, "AttestEligibilityExamV1", Some(PalwKernelInnerFenceV1::ModelEligibilityV1)),
     // RFC-0016 V8 (2026-10-17, audit 16-A): a verifier's capacity attestation.
     (76, "AttestCapacityV1", Some(PalwKernelInnerFenceV1::ElasticCapacityV1)),
+    (77, "ConsentVerifierFeeV1", Some(PalwKernelInnerFenceV1::SettlementOnceV1)),
+    (78, "WatchVerifierPoolV1", Some(PalwKernelInnerFenceV1::VerifierPayV1)),
 ];
 
 // The rows above are for inner kinds the live tree has. In-flight lanes join the table with the fence their row of
@@ -2437,6 +2445,10 @@ const fn a2_row(slot: PalwA2SlotV1, fence: &'static str, owner: &'static str, la
 /// written). The Lead allocates; A2U keeps the table; a lane fills its row's code at merge, and the reconciliation tests hold it to the
 /// row.
 pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
+    a2_row(PalwA2SlotV1::KernelNested { what: "MonetaryMaterialActionV1 EnrollFeeV2(9)/ReplaceFeeV2(10): dual signed finite fee only, V1 service unchanged" },
+        "palw_settlement_once_v1", "RFC0039 adopted provider fee horizon", true),
+    a2_row(PalwA2SlotV1::StateEncoding { what: "kernel route aux191 key132 exact enrollment/provider fee consent and refund physical receipt" },
+        "palw_settlement_once_v1", "RFC0039 finite provider fee state", true),
     a2_row(
         PalwA2SlotV1::KernelNested {
             what: "PalwMonetaryMaterialActionV1::RecoveryV2 (7), Enroll/Replace/Acknowledge/RetireProviderStream; ChallengeCurrentV4 (8)",

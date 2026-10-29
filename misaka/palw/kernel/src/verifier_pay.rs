@@ -212,6 +212,16 @@ impl KernelLedgerV1 {
         }
     }
 
+    /// Authenticated native draw closure (unavailable beacon, no selected slots,
+    /// or expired original window). Returns only the unused poster reservation.
+    pub fn cancel_undrawn_check_fee_v1(&mut self, claim: &Digest) -> Result<Vec<LedgerEventV1>, KernelRefusalV1> {
+        let rule = |why:&str|KernelRefusalV1::rule("CancelUndrawnCheckFee",why);
+        if self.verifier_pay_in_force().is_none() { return Err(rule("verifier pay inactive")); }
+        if self.verifier_pay.contains_key(&(VERIFIER_PAY_DRAW_V1,*claim)) { return Err(rule("cannot cancel an actual draw")); }
+        let job=self.claims.get(claim).ok_or_else(||rule("claim absent"))?.job_id;
+        let mut out=Vec::new();self.return_check_fee_escrow_v1(&job,&mut out);Ok(out)
+    }
+
     /// **The post-commit draw for `claim` landed** (the consumer's call with OPVB's v3 `ClaimVerification` draw; `slots` empty: the
     /// claim is not checked). The job's fee escrow becomes the claim's: `check_fee` per drawn slot, the rest returned to the poster.
     pub fn assign_drawn_v1(&mut self, claim: &Digest, slots: &[Digest]) -> Result<Vec<LedgerEventV1>, KernelRefusalV1> {
@@ -281,6 +291,18 @@ impl KernelLedgerV1 {
         let mut out = Vec::new();
         self.settle_draw_slots_v1(claim, Some(verifier), true, &mut out);
         Ok(out)
+    }
+
+    /// ADR-0207: fund exactly one explicitly consenting Clean slot in full.
+    /// The native consumer detaches the same amount into a held fee row atomically.
+    pub fn fund_consented_slot_v1(&mut self,claim:&Digest,verifier:&Digest,slot:u64,expected_fee:u64)->Result<(),&'static str>{
+        let index=usize::try_from(slot).map_err(|_|"fee slot index overflow")?;
+        let Some(VerifierPayRowV1::Draw{poster,fee,slots,deadline_daa,..})=self.verifier_pay.get_mut(&(VERIFIER_PAY_DRAW_V1,*claim)) else{return Err("missing consenting fee draw")};
+        if self.daa>*deadline_daa || *fee!=expected_fee || slots.get(index)!=Some(&(*verifier,false)){return Err("consenting fee slot mismatch or expired");}
+        let bond=self.bonds.get_mut(poster).ok_or("consenting fee poster missing")?;
+        if bond.collateral<*fee || bond.reserved<*fee{return Err("consenting fee must be fully funded before Clean acceptance");}
+        bond.collateral-=*fee;bond.reserved-=*fee;slots[index].1=true;
+        Ok(())
     }
 
     /// Pay (`pay`) or return the fee of the unpaid slots of `claim`'s draw held by `only` (every unpaid slot with `None`).

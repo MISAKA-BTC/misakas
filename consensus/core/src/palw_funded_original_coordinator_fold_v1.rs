@@ -7,8 +7,9 @@
 // already succeeded there (`PreparedOriginalFrameV1` → geometry → requirements → actor catalog → source graph), from the rooted
 // state at THIS point of the block (not a parent snapshot), and from the actual carrier transaction (`PalwFundedOriginalPairingV1`).
 // No caller flag, profile hash or self-signed manifest is policy: the payer's signed profile ids must EQUAL the schedule's, and the
-// schedule has no production value (typed-missing), so in every production build this refuses with the typed reason and the
-// checkpoint leaves FP / frame / escrow deltas empty. The carrier remains an ordinary transaction; its funding output is the payer's
+// schedule has no production value below `tir_public_conviction_active` (typed-missing), so below that fence this refuses with the
+// typed reason and the checkpoint leaves FP / frame / escrow deltas empty. Past the fence the pinned estimate is the schedule.
+// The carrier remains an ordinary transaction; its funding output is the payer's
 // own P2PKH and is spendable by the payer after the mergeset (the provisional lock is same-mergeset only).
 //
 // Install happens after the ordinary FP writes, inside the same checkpoint: the frame/preparation (`install_native_v1`, the
@@ -151,10 +152,25 @@ pub(super) fn admit_original_v1(
     }
 }
 
-/// **The coordinator's checks — reads only; nothing is written.** Order: pairing/literal → schedule (typed-missing in production)
-/// → native geometry and requirements (budgets from the schedule) → actor catalog (current authority, re-signed source pledge) and
-/// each missing role contract → source graph (service namespace) → native expected scope → existing TFO1 inspection of the actual
-/// carrier + payer signature (`prepare_funding_v1`) → derived hard deadline → fresh row and its uniqueness.
+/// Seat and relay payouts for an admitted escrow. The seat is the first drawn panel bond with a payout payload; if the panel
+/// names none, the producer's payout. The relay is the producer's payout when it differs, otherwise that same payload. Both are
+/// rooted bond payouts, not new amounts. `None` when no payout is recorded.
+fn funded_settlement_payees_v1(b: &TransitionBuilder<'_>, frame: &Frame) -> Option<(Hash64, Hash64)> {
+    let payout = |key: &PalwBondKeyV2| {
+        b.state.bond(key).map(|bond| bond.payout_payload).filter(|payload| *payload != Hash64::default())
+    };
+    let seat = frame.custody_v1().drawn_panel_v1().iter().find_map(payout);
+    let producer = payout(&frame.custody_v1().pledge_v1().producer);
+    let seat = seat.or(producer)?;
+    let relay = producer.filter(|payload| *payload != seat).unwrap_or(seat);
+    Some((seat, relay))
+}
+
+/// **The coordinator's checks — reads only; nothing is written.** Order: pairing/literal → schedule (the pinned estimate past
+/// `tir_public_conviction_active`, typed-missing below it) → native geometry and requirements (budgets from the schedule) → actor
+/// catalog (current authority, re-signed source pledge) and each missing role contract → source graph (service namespace) → native
+/// expected scope → existing TFO1 inspection of the actual carrier + payer signature (`prepare_funding_v1`) → derived hard deadline
+/// → fresh row and its uniqueness.
 pub(super) fn coordinate_funded_original_v1(
     b: &TransitionBuilder<'_>,
     ctx: &PalwBlockContextV2,
@@ -290,7 +306,7 @@ pub(super) fn coordinate_funded_original_v1(
     )
     .map_err(|_| Invalid("payer consent does not cover the native scope, amount, horizon or interval"))?;
     let terms = &funding.consent().terms;
-    let row = crate::palw_funded_escrow_v1::PalwFundedEscrowRowV1::fresh_v1(
+    let mut row = crate::palw_funded_escrow_v1::PalwFundedEscrowRowV1::fresh_v1(
         terms.id_v1(),
         claim,
         funding.actual().outpoint(),
@@ -300,10 +316,23 @@ pub(super) fn coordinate_funded_original_v1(
         ctx.daa_score,
         hard,
         // Lane r5: the liability opens at admission and closes only when `funded_liability_resolved_v1` holds
-        // (`close_resolved_funded_liabilities_v1`, once per block). Payee paths stay refused (`SettlementScheduleMissing`).
+        // (`close_resolved_funded_liabilities_v1`, once per block). Payee paths resolve only once this row records the fee and
+        // the seat and relay payouts, which happens only while the conviction fence is active.
         true,
     )
     .map_err(|_| Invalid("escrow row shape"))?;
+    // The escrow settlement resolver has no fence argument of its own. Record the admitting schedule's fee and the rooted
+    // payouts only while the same conviction fence that resolved the schedule is active, and only when the fee fits the escrow.
+    if b.extras.tir_public_conviction_active {
+        if let Some((seat_payee, relay_payee)) = funded_settlement_payees_v1(b, frame) {
+            let fee = schedule.fee_sompi();
+            if fee > 0 && fee <= row.amount_sompi {
+                row.fee_sompi = fee;
+                row.seat_payee = seat_payee;
+                row.relay_payee = relay_payee;
+            }
+        }
+    }
     // Capacity: one row per contract and per outpoint (also re-checked by the writer).
     if b.state.funded_escrows_v1().contains_key(&row.contract_id)
         || b.state.funded_escrows_v1().values().any(|other| other.funding_outpoint == row.funding_outpoint)

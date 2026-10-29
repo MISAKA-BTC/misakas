@@ -160,6 +160,26 @@ impl VirtualStateProcessor {
                     if state_params.monetary_material_at_v1(point.daa_score).is_none() {
                         return Err("monetary material action is dormant".into());
                     }
+                    {
+                        use kaspa_consensus_core::palw_monetary_material_v1::{PalwMonetaryMaterialActionV1 as A,PalwMonetaryMaterialReplacementV1};
+                        let wrapped=match action.as_ref(){
+                            A::EnrollFeeV2(f)=>Some((f.as_ref(),240,f.enrollment.payload())),
+                            A::ReplaceFeeV2{previous,sequence,enrollment:f}=>Some((f.as_ref(),241,
+                                PalwMonetaryMaterialReplacementV1{root:f.enrollment.terms.root,previous:*previous,sequence:*sequence,enrollment:f.enrollment.clone()}.payload())),
+                            _=>None,
+                        };
+                        if let Some((fee,service_tag,service_payload))=wrapped {
+                            if fee.ruleset==kaspa_consensus_core::Hash64::default()
+                                || state.kernel_route().is_none_or(|r|r.header.policy.ruleset_digest!=fee.ruleset.as_bytes())
+                                || !state_params.settlement_once_active_at(point.daa_score) || *signer!=fee.enrollment.terms.sponsor
+                                || fee.provider_fee_signatures.len()!=fee.enrollment.offers.len(){return Err("finite provider fee activation/signers differ".into());}
+                            let payload=fee.fee_payload();
+                            for (offer,signature) in fee.enrollment.offers.iter().zip(&fee.provider_fee_signatures) {
+                                self.palw_provider_court_signature_ok(state,point.daa_score,service_tag,&offer.provider,&service_payload,&offer.signature)?;
+                                self.palw_provider_court_signature_ok(state,point.daa_score,242,&offer.provider,&payload,signature)?;
+                            }
+                        }
+                    }
                     if let kaspa_consensus_core::palw_monetary_material_v1::PalwMonetaryMaterialActionV1::Release {
                         root,
                         consent,

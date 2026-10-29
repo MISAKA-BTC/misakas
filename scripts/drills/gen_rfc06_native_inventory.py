@@ -44,6 +44,7 @@ def module_of(base,crate,file):
     if crate=='misaka_palw_panel':module=''
     if module in {'lib','mod'}:module=''
     elif module.endswith('::mod'):module=module[:-5]
+    if crate=='crate' and module=='palw_claim_local_prefix_v1':module='palw_claim_local_v1::prefix_v1'
     return module
 # A private `mod child;` re-exported by `pub use child::*;` publishes its pub items at the PARENT path (e.g. the kernel's
 # `flat_quota11::{sharded,protected}`): the computed file path would name a private module the generated code cannot reach.
@@ -75,11 +76,7 @@ for base,crate in CRATES:
 for base,crate in [(CORE,'crate'),(ROOT/'misaka/palw/panel/src','misaka_palw_panel'),(ROOT/'misaka/palw/kernel/src','misaka_palw_kernel'),(ROOT/'misaka/palw/gen/src','misaka_palw_gen'),(ROOT/'misaka/palw/tir/core/src','misaka_palw_tir'),(ROOT/'misaka/palw/challenge/src','misaka_palw_challenge')]:
  for file in base.rglob('*.rs'):
     if 'tests' in file.parts or file.name=='generated.rs':continue
-    raw=clean(file.read_text()); relative=file.relative_to(base).with_suffix('')
-    module='::'.join(relative.parts)
-    if crate=='misaka_palw_panel':module=''
-    if module in {'lib','mod'}:module=''
-    elif module.endswith('::mod'):module=module[:-5]
+    raw=clean(file.read_text()); module=module_of(base,crate,file)
     for a in re.finditer(r'(?:pub(?:\([^)]*\))?\s+)?type\s+(\w+)\s*=\s*([^;]+);',raw):
         apath='::'.join(x for x in [crate,module,a.group(1)] if x)
         aliases[apath]=(a.group(2),dict(path=apath,module=module))
@@ -99,7 +96,7 @@ for base,crate in [(CORE,'crate'),(ROOT/'misaka/palw/panel/src','misaka_palw_pan
 primitive={'u8','u16','u32','u64','u128','usize','i8','i16','i32','i64','i128','isize','bool','f32','f64','String','Hash64','BlockHash','TransactionId','Hash','Hash32','Digest','()'}
 # `PalwSharedCourtV1<T>` (G14) is a generic Arc newtype whose Borsh layout is T's: a container with hand-written visitors.
 containers={'Vec','Option','Box','Arc','BTreeMap','BTreeSet','HashMap','HashSet','VecDeque','IndexMap','IndexSet','SmallVec','Cow','PalwSharedCourtV1','NativeRetainedV1'}
-queue=['crate::palw_claim_local_v1::PalwClaimLocalPolicyContextV1','crate::palw_freeprompt_v3::PalwReceiptSpendUnsignedV3','crate::header::Header','crate::palw_attempt_material_v3::PalwAttemptMaterialEnvelopeV3','crate::palw_material_session_enrollment_v4::PalwNativeRecoverySessionQuoteV4','crate::palw_material_capacity_v1::PalwKernelMaterialBundleV1','crate::palw_material_capacity_v1::PalwSegmentedMaterialBundleV1','misaka_palw_kernel::public::PositionResponseV1','misaka_palw_kernel::seg_da::SegPartResponseV1',
+queue=['crate::palw_claim_local_v1::prefix_v1::PalwPrefixExportRefutationV1','crate::palw_claim_local_v1::prefix_v1::PalwPrefixExportReservationV1','crate::palw_claim_local_v1::PalwClaimLocalPolicyContextV1','crate::palw_freeprompt_v3::PalwReceiptSpendUnsignedV3','crate::header::Header','crate::palw_attempt_material_v3::PalwAttemptMaterialEnvelopeV3','crate::palw_material_session_enrollment_v4::PalwNativeRecoverySessionQuoteV4','crate::palw_material_capacity_v1::PalwKernelMaterialBundleV1','crate::palw_material_capacity_v1::PalwSegmentedMaterialBundleV1','misaka_palw_kernel::public::PositionResponseV1','misaka_palw_kernel::seg_da::SegPartResponseV1',
        'crate::palw_prospective_kernel_material_v4::PalwProspectiveKernelMaterialRequestV4','crate::palw_prospective_kernel_material_v4::PalwProspectiveKernelMaterialIntentV4','crate::palw_prospective_kernel_material_v4::PalwProspectiveKernelBundleV4','crate::palw_prospective_kernel_material_v4::PalwTypedKernelMaterialBundleV4',
        'crate::palw_kernel_parameter_material_v4::PalwKernelSegmentedPartV4','crate::palw_kernel_parameter_material_v4::PalwKernelParameterRowV4','crate::palw_kernel_parameter_material_v4::PalwKernelParameterOpeningV4',
        'crate::palw_kernel_material_context_v4::PalwProspectiveKernelMaterialContextV4',
@@ -131,7 +128,7 @@ queue=['crate::palw_claim_local_v1::PalwClaimLocalPolicyContextV1','crate::palw_
        'crate::palw_state_v2::PalwStateDeltaV2','crate::palw_native_settlement_v1::NativeDeltaEvidenceV1','crate::palw_fork_choice_commitment_v1::PalwForkChoiceDeltaV1',
        'crate::palw_material_capacity_v1::PalwHeldMaterialBundleV1',
        # Field types of the hand-written Panel containers (PermissionlessPanelStateV1/PanelCandidatesV1 are manual).
-       'misaka_palw_panel::ClaimRecordV3','misaka_palw_panel::BondIdV1','misaka_palw_panel::EpochSourceSetV1','misaka_palw_panel::SeatCandidateV1','misaka_palw_kernel::state::ClassRecordV1','misaka_palw_kernel::state::PipelineClassRecordV1','misaka_palw_kernel::flat_candidate7::FlatCandidateViewV7','misaka_palw_kernel::flat_candidate9::FlatCandidateViewV9','crate::palw_claim_challenge_v2::PalwPaidClaimIndexV3','crate::palw_monetary_material_v1::PalwMonetaryMaterialRowV1','crate::palw_panel_source_fee_v2::PalwPanelSourceFeeAuthorityV2','crate::palw_claim_challenge_v2::PalwPaidClaimAuthorityV2','crate::palw_claim_challenge_v2::PalwPaidClaimLockV2','crate::palw_claim_challenge_v2::PalwPaidClaimFinalV2','crate::palw_claim_challenge_v2::PalwPaidClaimEvidenceV3','crate::palw_claim_interactive_v3::PalwPaidClaimRoundV3','misaka_palw_kernel::claim_paid_v2::PaidClaimClassV2','misaka_palw_kernel::claim_paid_v2::PaidClaimJobV2','misaka_palw_kernel::claim_paid_v2::PaidClaimReceiptV2','misaka_palw_challenge::approval_scope::LifetimeCounterV3','misaka_palw_challenge::approval_scope::LifetimeReviewScopeV3','crate::palw_kernel_route_v1::KernelAssignmentV1','crate::palw_kernel_route_v1::PalwKernelChunkGroupV1','misaka_palw_kernel::receipt::PalwConstraintReceiptV1','crate::palw_onboarding_v1::ArtifactBindingRowV1','crate::palw_onboarding_v1::KernelBindingRowV1','crate::palw_onboarding_v1::ConformanceRowV1','crate::palw_onboarding_v1::ConformanceAttemptRowV1','crate::palw_conformance_evidence_v1::ConformanceEvidencePostV1','crate::palw_beacon_source_fee_v1::PalwBeaconSourceCostBoundsV1','crate::palw_panel_source_snapshot_v1::PalwPanelSourceSnapshotV1','crate::palw_state_v2::PalwClassAdmissionCarriageV2','crate::palw_state_v2::PalwStateCarriageV2','crate::palw_state_v2::PalwChainStateV2','misaka_palw_kernel::ledger::KernelLedgerV1',
+       'misaka_palw_panel::ClaimRecordV3','misaka_palw_panel::BondIdV1','misaka_palw_panel::EpochSourceSetV1','misaka_palw_panel::SeatCandidateV1','misaka_palw_kernel::state::ClassRecordV1','misaka_palw_kernel::state::PipelineClassRecordV1','misaka_palw_kernel::flat_candidate7::FlatCandidateViewV7','misaka_palw_kernel::flat_candidate9::FlatCandidateViewV9','crate::palw_claim_challenge_v2::PalwPaidClaimIndexV3','crate::palw_monetary_material_fee_v2::PalwMaterialFeeRowV2','crate::palw_monetary_material_v1::PalwMonetaryMaterialRowV1','crate::palw_panel_source_fee_v2::PalwPanelSourceFeeAuthorityV2','crate::palw_claim_challenge_v2::PalwPaidClaimAuthorityV2','crate::palw_claim_challenge_v2::PalwPaidClaimLockV2','crate::palw_claim_challenge_v2::PalwPaidClaimFinalV2','crate::palw_claim_challenge_v2::PalwPaidClaimEvidenceV3','crate::palw_claim_interactive_v3::PalwPaidClaimRoundV3','misaka_palw_kernel::claim_paid_v2::PaidClaimClassV2','misaka_palw_kernel::claim_paid_v2::PaidClaimJobV2','misaka_palw_kernel::claim_paid_v2::PaidClaimReceiptV2','misaka_palw_challenge::approval_scope::LifetimeCounterV3','misaka_palw_challenge::approval_scope::LifetimeReviewScopeV3','crate::palw_kernel_route_v1::KernelAssignmentV1','crate::palw_kernel_route_v1::PalwKernelChunkGroupV1','misaka_palw_kernel::receipt::PalwConstraintReceiptV1','crate::palw_onboarding_v1::ArtifactBindingRowV1','crate::palw_onboarding_v1::KernelBindingRowV1','crate::palw_onboarding_v1::ConformanceRowV1','crate::palw_onboarding_v1::ConformanceAttemptRowV1','crate::palw_conformance_evidence_v1::ConformanceEvidencePostV1','crate::palw_beacon_source_fee_v1::PalwBeaconSourceCostBoundsV1','crate::palw_panel_source_snapshot_v1::PalwPanelSourceSnapshotV1','crate::palw_state_v2::PalwClassAdmissionCarriageV2','crate::palw_state_v2::PalwStateCarriageV2','crate::palw_state_v2::PalwChainStateV2','misaka_palw_kernel::ledger::KernelLedgerV1',
        'crate::palw_panel_lifetime_v2::PalwPanelAuthorizationRowV2','crate::palw_panel_lifetime_v2::PalwPanelConsentCaptureV2','crate::palw_panel_lifetime_v2::PalwPanelLifetimeEnrollmentV2',
        'misaka_palw_kernel::panel_lifetime_v2::PanelLifetimeAuthorizationV2','misaka_palw_kernel::panel_lifetime_v2::PanelConsumerLifetimeTermsV2',
        'crate::palw_econ_contracts_v1::PalwModelVerificationTallyV1','crate::palw_econ_contracts_v1::PalwHorizonExtensionRowV1','crate::palw_econ_contracts_v1::PalwMinimumPriceRowV1',
@@ -153,6 +150,10 @@ queue=['crate::palw_claim_local_v1::PalwClaimLocalPolicyContextV1','crate::palw_
        # RFC-0007 §4.1 T6 (2026-10-16): the paid-claim trap rows of kernel route aux 142 (dormant fence).
        'crate::palw_paid_claim_trap_v1::PalwPaidClaimConvictionRowV1','crate::palw_paid_claim_trap_v1::PalwHeldCheckFeeRowV1',
        'crate::palw_paid_claim_trap_v1::PalwPaidTrapCommitmentRowV1',
+       # ADR-0207: authenticated ordinary verifier consent and actual funded fee hold (aux 142).
+       'crate::palw_verifier_fee_consent_v1::HeldVerifierFeeV1',
+       'crate::palw_verifier_watch_v1::PalwVerifierWatchRowV1',
+       'crate::palw_verifier_watch_v1::PalwFrozenWatcherPoolV1','crate::palw_verifier_watch_v1::PalwWatcherClaimContextV1',
        # G14 lane closure (2026-10-16): kernel route aux 143 (dormant).
        'crate::palw_g14_lane_closure_v1::PalwKernelSignerLockRowV1','crate::palw_g14_lane_closure_v1::PalwServedMaterialRowV1',
        # RFC08 08-B (2026-10-18): held native fees, kernel route aux 144 (dormant).

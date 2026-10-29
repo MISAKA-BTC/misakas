@@ -95,7 +95,9 @@ pub(super) fn apply_paid_claim_v2(
     o: &PaidClaimObjectV2,
 ) -> Result<(), PalwStateV2Error> {
     let checkpoint = b.try_checkpoint()?;
-    let result = apply_inner(b, ctx, signer, o);
+    let result = apply_inner(b, ctx, signer, o).and_then(|()| {
+        match o { PaidClaimObjectV2::Lock{enrollment}|PaidClaimObjectV2::LockApprovedBootstrapV6{enrollment} => super::palw_verifier_fee_consent_fold_v1::bind_paid_draw(b,ctx,enrollment), _=>Ok(()) }
+    });
     if result.is_err() {
         b.restore(checkpoint);
     }

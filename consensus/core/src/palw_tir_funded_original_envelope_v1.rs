@@ -122,10 +122,14 @@ impl PalwTirFundedOriginalEnvelopeV1 {
     /// outside the signed terms; there is no funding-txid self-reference.
     pub fn inspect_carrier_v1<'a>(&self, tx: &'a Transaction) -> Result<ActualCarrierFundingV1<'a>, String> {
         let literal = self.encode_v1()?;
-        let payload = if tx.payload.starts_with(b"FPA1") {
-            crate::palw_fp_answer_accounting_v1::palw_fp_answer_envelope_view_v1(&tx.payload, u32::MAX as usize)
+        let outer = if tx.payload.starts_with(b"FPR2") {
+            crate::palw_claim_local_v1::prefix_v1::PalwPrefixDependencyEnvelopeV1::inner_view_v1(&tx.payload)
+                .map_err(|_| "invalid FPR2 funded carrier")?
+        } else { tx.payload.as_slice() };
+        let payload = if outer.starts_with(b"FPA1") {
+            crate::palw_fp_answer_accounting_v1::palw_fp_answer_envelope_view_v1(outer, u32::MAX as usize)
                 .ok_or("invalid FPA1 funded carrier")?.inner
-        } else { &tx.payload };
+        } else { outer };
         // Inspect the actual outer TX: its signed input scope and funding output are never projected.
         if tx.subnetwork_id != crate::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT || payload != literal {
             return Err("TFO1 is not paired to this literal original carrier".into());

@@ -5,7 +5,8 @@
 **misakas** is a post-quantum, **PQ-only** fork of [rusty-kaspa](https://github.com/kaspanet/rusty-kaspa). It replaces Kaspa's
 secp256k1/Schnorr transaction authorization with **ML-DSA-87** (FIPS 204, NIST category 5) and makes every non-PQ path
 unrepresentable at the consensus, mempool and wallet layers. Blocks are produced by **PALW** (proof of AI work): bonded producers run
-registered models, and a claim is paid only once it reaches `Final` under objective, publicly checkable rules. It is an independent
+registered models. At the G14 fence, payment requires both `Final` and claim-level `SecurityCertified` approval
+from selected validators under the stated honest-fraction assumption; local replay alone does not authorize credit. It is an independent
 network with its own genesis and is not compatible with Kaspa or any prior kaspa-pq chain state.
 
 The native token is **Misaka**, ticker **BILI** ([ADR-0174](docs/adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)).
@@ -18,10 +19,15 @@ Addresses keep the `misaka` prefix (`misaka…` mainnet, `misakatest…` testnet
 kaspad --testnet --netsuffix=12
 ```
 
-Verify the consensus params fingerprint **`5ee7fd8ee019968cf52929b844cf9ddfb1aad500842a89cf04bced8ba4edefb6`**, genesis
-`a27f8f44fe4d91a5…` and schedule id `1678e07359f6727e…`. Read the [launch note](docs/history/networks/testnet-12/t12-launch-2026-09-25.md) before relying on the
-chain — **never count blocks, blue-score depth or DAA as finality on testnet-12**; use finality depth or a `Final` PALW anchor.
-New consensus rules wait, dormant, for a single full-activation release ([readiness matrix](docs/design/palw/integration/activation-readiness-matrix.md)).
+The planned release is **withheld pending full-activation readiness**. The requested target is DAA **17,400**,
+including previously dormant features. The earlier G14-only DAA 17,400 candidate is not the final published release.
+See the [readiness and remaining implementation work](docs/design/palw/integration/g14-17000/full-activation-17400-readiness-2026-10-28.md)
+and [deployment status](docs/design/palw/integration/g14-17000/release-17400-2026-10-28.md).
+No new network fingerprint is advertised here until deployment and fleet verification are complete.
+
+Read the [launch note](docs/history/networks/testnet-12/t12-launch-2026-09-25.md) before relying on the chain —
+**never count blocks, blue-score depth or DAA as finality on testnet-12**; use finality depth or a `Final` PALW anchor.
+Claim-level credit authorization remains a separate requirement.
 
 ## Quick start
 

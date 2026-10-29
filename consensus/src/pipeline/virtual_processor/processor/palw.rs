@@ -4134,6 +4134,30 @@ impl VirtualStateProcessor {
         self.native_base_withheld_at(block, paying_daa, recorded.saturating_add(skipped))
     }
 
+    /// **RFC-0041:** the idle-floor BASE coinbase is payable on this header.
+    ///
+    /// [`crate::config::params::palw_base_coinbase_recovery_due_v1`]. False unless the genesis
+    /// registered no bond, the live registry is still empty, the floor admits, and the attempt is
+    /// the base class. Heartbeat headers do not decode as attempts, so they stay fee-only.
+    pub(super) fn palw_base_coinbase_recovery_due_for_header_v1(
+        &self,
+        header: &Header,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+    ) -> bool {
+        let Some(state_params) = self.palw_state_params_v2.as_ref() else {
+            return false;
+        };
+        let Ok(envelope) = kaspa_consensus_core::palw_attempt_material_v3::native_attempt_base_v3(&header.palw_commitment) else {
+            return false;
+        };
+        kaspa_consensus_core::config::params::palw_base_coinbase_recovery_due_v1(
+            kaspa_consensus_core::config::params::palw_genesis_objects_have_no_bond_v1(&self.palw_genesis_objects_v2),
+            state.bonds_iter().next().is_none(),
+            state.floor_state_v1().admits_floor_at(header.daa_score),
+            envelope.attempt.class_id == state_params.base_class_id(),
+        )
+    }
+
     /// The carve of `block`'s own attempt where the fold skipped it — see
     /// [`Self::palw_v2_escrow_withheld_at`]. Zero below `palw_audit_2026_09_23` (at the block's own
     /// DAA, the height its fold resolved the fence at), for a block that carries no attempt, and for
@@ -4161,6 +4185,13 @@ impl VirtualStateProcessor {
         };
         let own = kaspa_consensus_core::palw_attempt_v2::attempt_id_v2(&envelope.attempt);
         if state.claim(&own).is_some_and(|claim| claim.accepted_block == block) {
+            return 0;
+        }
+        // RFC-0041: while the genesis bond set and the live registry are both empty and the floor
+        // is the idle fallback, this BASE block's worker share is the existing coinbase, not a
+        // skipped-attempt burn. A seated registry, a registered bond, or a non-idle floor keeps
+        // the withhold below. No claim is recorded and no bond is written.
+        if self.palw_base_coinbase_recovery_due_for_header_v1(&header, state) {
             return 0;
         }
         state_params.worker_carve_at(
@@ -7104,6 +7135,9 @@ impl VirtualStateProcessor {
                 kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::ModelEligibilityV1 => {
                     "an eligibility exam object is refused: palw_model_eligibility_v1 is not in force at this block (RFC-0017)".into()
                 }
+                kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::SettlementOnceV1 => {
+                    "ordinary verifier fee consent is refused: palw_settlement_once_v1 is not in force".into()
+                }
                 kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::ElasticCapacityV1 => {
                     "a capacity attestation is refused: palw_elastic_final_capacity_v1 is not in force at this block (RFC-0016)".into()
                 }
@@ -7189,6 +7223,9 @@ impl VirtualStateProcessor {
                 self.palw_state_params_v2.as_ref().is_some_and(|p| p.model_eligibility_v1_at(daa_score).is_some())
             }
             // RFC-0016 V8 (inner 76): the mirrored dormant elastic-capacity fence.
+            kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::SettlementOnceV1 => {
+                self.palw_state_params_v2.as_ref().is_some_and(|p| p.settlement_once_active_at(daa_score))
+            }
             kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::ElasticCapacityV1 => {
                 self.palw_state_params_v2.as_ref().is_some_and(|p| p.rfc0016_capacity_active_at(daa_score))
             }

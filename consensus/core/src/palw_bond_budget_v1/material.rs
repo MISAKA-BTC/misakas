@@ -25,6 +25,10 @@ pub enum PalwMaterialPaymentV1 {
     UnprovenPhysicalPayment {
         until: u64,
     },
+    /// Already debited, exact native fee escrow; creates no budget quota.
+    HeldEscrow {
+        obligation: Hash64,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -54,6 +58,7 @@ impl PalwMaterialIncomeV1 {
     pub fn valid(&self) -> bool {
         match self.payment {
             PalwMaterialPaymentV1::Pending { .. } => self.amount > 0,
+            PalwMaterialPaymentV1::HeldEscrow { .. } => self.root.is_some() && self.amount > 0,
             PalwMaterialPaymentV1::Queued { income, queue, queued_daa, paid_daa, release_daa } => {
                 self.amount > 0
                     && queued_daa >= self.accepted_daa
@@ -79,7 +84,10 @@ pub fn material_pending_id_v1(income: Hash64) -> Hash64 {
 /// Canonical exact original-entitlement link; a recipient's aggregate queue ID
 /// alone cannot identify one source fee within a coalesced payment.
 pub fn material_queue_receipt_id_v1(income: Hash64, queued: Hash64, now: u64) -> Hash64 {
-    keyed64(b"misaka-palw/material-income/queue/v1", &[material_pending_id_v1(income).as_byte_slice(),queued.as_byte_slice(),&now.to_le_bytes()])
+    keyed64(
+        b"misaka-palw/material-income/queue/v1",
+        &[material_pending_id_v1(income).as_byte_slice(), queued.as_byte_slice(), &now.to_le_bytes()],
+    )
 }
 
 impl PalwBondBudgetStateV1 {
@@ -256,8 +264,8 @@ impl PalwBondBudgetStateV1 {
         Ok(plan)
     }
 
-    /// Old raw queues have no authenticated budget recipient/root. They keep only old claims,
-    /// and only until that exact queue physically drains + W. No later queue can extend them.
+    /// Exact raw-queue receipts (legacy or escrow) release only on physical drain + W.
+    /// A later coalesced queue never rebases an already confirmed receipt.
     pub fn confirm_legacy_material_queue_v1(
         &mut self,
         queue: Hash64,
@@ -266,7 +274,7 @@ impl PalwBondBudgetStateV1 {
         j: &mut Vec<PalwBudgetWriteV1>,
     ) -> Result<(), PalwBudgetRefusalV1> {
         let until = now.checked_add(w).ok_or(PalwBudgetRefusalV1::Overflow)?;
-        let ids: Vec<_> = self.material_roots.get(&None).into_iter().flatten().copied().collect();
+        let ids: Vec<_> = self.material_income.keys().copied().collect();
         let mut plan = Vec::new();
         for id in ids {
             let mut row = self.material_income[&id];
@@ -317,6 +325,11 @@ impl PalwBondBudgetStateV1 {
         for (id, row) in &self.material_income {
             if !row.valid() {
                 return Err("invalid material income provenance");
+            }
+            if let PalwMaterialPaymentV1::HeldEscrow { obligation } = row.payment
+                && *id != material_pending_id_v1(obligation)
+            {
+                return Err("held escrow material identity differs");
             }
             if let PalwMaterialPaymentV1::Pending { income } = row.payment {
                 let held = self

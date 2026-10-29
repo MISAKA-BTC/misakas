@@ -114,6 +114,8 @@ pub(crate) fn scan_native_aux_row_v1<R:Read>(table:u8,key:&[u8],frame:&mut Nativ
 161=>return Err(wire::wire_bad("unallocated rejected-response marker namespace")),
 // RFC-0018 (2026-10-15): SecurityCertified rows (aux 136, 65-byte keys: prefix ‖ 64-byte id).
 144 if key_bytes==65 && prefix==b'F'=>crate::palw_claim_local_v1::PalwClaimLiabilityFrameV1::scan_native_wire_v1(frame)?,
+144 if key_bytes==65 && prefix==b'E'=>crate::palw_claim_local_v1::prefix_v1::PalwPrefixExportReservationV1::scan_native_wire_v1(frame)?,
+144 if key_bytes==73 && prefix==b'X'=><u8 as NativeWireScanV1>::scan_native_wire_v1(frame)?,
 144 if key_bytes==65 && prefix==b'R'=>crate::palw_claim_local_v1::PalwClaimLocalRewardHoldV1::scan_native_wire_v1(frame)?,
 // RFC-0023 stage 2 (2026-10-22): the single claim-local checkpoint row, key 'C' followed by 64 zero bytes.
 144 if key_bytes==65 && prefix==b'C' && k[1..].iter().all(|b|*b==0)=>crate::palw_claim_local_v1::PalwClaimLocalCheckpointV1::scan_native_wire_v1(frame)?,
@@ -467,6 +469,13 @@ pub(crate) fn scan_native_aux_row_v1<R:Read>(table:u8,key:&[u8],frame:&mut Nativ
 142 if key_bytes==65 && prefix==crate::palw_paid_claim_trap_v1::PALW_PAID_CLAIM_TRAP_CONVICTION_PREFIX_V1=>crate::palw_paid_claim_trap_v1::PalwPaidClaimConvictionRowV1::scan_native_wire_v1(frame)?,
 142 if key_bytes==137 && prefix==crate::palw_paid_claim_trap_v1::PALW_PAID_CLAIM_TRAP_HELD_FEE_PREFIX_V1=>crate::palw_paid_claim_trap_v1::PalwHeldCheckFeeRowV1::scan_native_wire_v1(frame)?,
 142 if key_bytes==65 && prefix==crate::palw_paid_claim_trap_v1::PALW_PAID_CLAIM_TRAP_COMMITMENT_PREFIX_V1=>crate::palw_paid_claim_trap_v1::PalwPaidTrapCommitmentRowV1::scan_native_wire_v1(frame)?,
+142 if key_bytes==137 && prefix==4=>misaka_palw_kernel::verifier_fee_consent_v1::VerifierFeeConsentV1::scan_native_wire_v1(frame)?,
+142 if key_bytes==137 && prefix==5=>crate::palw_verifier_fee_consent_v1::HeldVerifierFeeV1::scan_native_wire_v1(frame)?,
+142 if key_bytes==65 && prefix==6=><u64 as NativeWireScanV1>::scan_native_wire_v1(frame)?,
+142 if key_bytes==65 && prefix==7=>crate::palw_verifier_watch_v1::PalwVerifierWatchRowV1::scan_native_wire_v1(frame)?,
+142 if key_bytes==73 && prefix==8=><u8 as NativeWireScanV1>::scan_native_wire_v1(frame)?,
+142 if key_bytes==65 && prefix==9=>crate::palw_verifier_watch_v1::PalwFrozenWatcherPoolV1::scan_native_wire_v1(frame)?,
+142 if key_bytes==65 && prefix==10=>crate::palw_verifier_watch_v1::PalwWatcherClaimContextV1::scan_native_wire_v1(frame)?,
 142=>return Err(wire::wire_bad("unallocated paid-claim trap row namespace")),
 143 if key_bytes==129 && prefix==crate::palw_g14_lane_closure_v1::PALW_KERNEL_SIGNER_LOCK_PREFIX_V1=>crate::palw_g14_lane_closure_v1::PalwKernelSignerLockRowV1::scan_native_wire_v1(frame)?,
 143 if key_bytes==129 && prefix==crate::palw_g14_lane_closure_v1::PALW_NATIVE_ATTESTOR_LOCK_PREFIX_V1=>crate::palw_g14_lane_closure_v1::PalwKernelSignerLockRowV1::scan_native_wire_v1(frame)?,
@@ -501,7 +510,11 @@ pub(crate) fn scan_native_aux_row_v1<R:Read>(table:u8,key:&[u8],frame:&mut Nativ
 149 if key_bytes==65 && prefix==2=>crate::palw_paid_bootstrap_source_v6::PalwPaidBootstrapLockV6::scan_native_wire_v1(frame)?,
 149=>return Err(wire::wire_bad("unallocated paid bootstrap source V6 row namespace")),
 150=>crate::palw_kernel_court_admission_v1::KernelCourtCapitalRowV1::scan_native_wire_v1(frame)?,
+191 if key_bytes==132=>crate::palw_monetary_material_fee_v2::PalwMaterialFeeRowV2::scan_native_wire_v1(frame)?,
+191=>return Err(wire::wire_bad("unallocated finite provider fee V2 row namespace")),
 145=>return Err(wire::wire_bad("unallocated receipt pause row namespace")),
+167 if key_bytes==64=><crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(frame)?,
+167=>return Err(wire::wire_bad("unallocated winning-carrier row namespace")),
  _=>return Err(std::io::Error::new(std::io::ErrorKind::Unsupported,NativeCoverageV1::unsupported::<crate::palw_kernel_route_v1::PalwKernelRouteStateV1>(&format!("native aux table {table}"),"nested row codec is not in the explicit supported shape inventory"))),})}
 
 /// The longest aux key any fold writes is far below this; a longer key is malformed, never truncated.

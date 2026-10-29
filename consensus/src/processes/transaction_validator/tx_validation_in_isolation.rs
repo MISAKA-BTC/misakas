@@ -29,12 +29,17 @@ impl TransactionValidator {
         let invalid = || TxRuleError::InvalidPalwFpPayload(kaspa_consensus_core::palw_freeprompt_v3::PalwFpV3Error::PayloadUndecodable);
         if tx.subnetwork_id != SUBNETWORK_ID_PALW_FP_COMMITMENT { return Ok(Cow::Borrowed(&tx.payload)); }
         let active = |fence: Option<ForkActivation>| fence.is_some_and(|f| daa.is_none_or(|at| f.is_active(at)));
-        let accounting = tx.payload.starts_with(b"FPA1");
+        let outer = if tx.payload.starts_with(b"FPR2") {
+            if !active(self.palw_prefix_dependency_fence) { return Err(invalid()); }
+            kaspa_consensus_core::palw_claim_local_v1::prefix_v1::PalwPrefixDependencyEnvelopeV1::inner_view_v1(&tx.payload)
+                .map_err(|_| invalid())?
+        } else { tx.payload.as_slice() };
+        let accounting = outer.starts_with(b"FPA1");
         let payload = if accounting {
             if !active(self.palw_fp_answer_accounting_fence) { return Err(invalid()); }
-            kaspa_consensus_core::palw_fp_answer_accounting_v1::palw_fp_answer_envelope_view_v1(&tx.payload, u32::MAX as usize)
+            kaspa_consensus_core::palw_fp_answer_accounting_v1::palw_fp_answer_envelope_view_v1(outer, u32::MAX as usize)
                 .ok_or_else(invalid)?.inner
-        } else { &tx.payload };
+        } else { outer };
         if payload.starts_with(b"TFP1") {
             if !active(self.palw_tir_public_conviction_fence) { return Err(invalid()); }
             let env = kaspa_consensus_core::palw_tir_public_fp_envelope_v1::PalwTirPublicFpEnvelopeV1::decode_v1(payload).map_err(|_| invalid())?;
@@ -45,7 +50,7 @@ impl TransactionValidator {
             let env = kaspa_consensus_core::palw_history_custody_v1::PalwHistoryFpEnvelopeV1::decode_v1(payload).map_err(|_| invalid())?;
             return Ok(Cow::Owned(env.original_payload));
         }
-        if accounting && payload.starts_with(b"TFO1") {
+        if (accounting || tx.payload.starts_with(b"FPR2")) && payload.starts_with(b"TFO1") {
             if !active(self.palw_tir_public_conviction_fence) { return Err(invalid()); }
             let env = kaspa_consensus_core::palw_tir_funded_original_envelope_v1::PalwTirFundedOriginalEnvelopeV1::decode_v1(payload).map_err(|_| invalid())?;
             return Ok(Cow::Owned(env.original_v1().map_err(|_| invalid())?.original_payload));

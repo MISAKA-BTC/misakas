@@ -172,6 +172,8 @@ impl PalwStateParamsV2 {
             reporter_income_from_daa: None,
             material_income_from_daa: None,
             settlement_once_from_daa: None,
+            verifier_watch_v1: None,
+            verifier_watch_maturity_v1: None,
             paid_claim_trap_from_daa: None,
             native_liability_horizon_from_daa: None,
             monetary_material: None,

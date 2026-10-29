@@ -1897,6 +1897,11 @@ pub trait ConsensusApi: Send + Sync {
         Ok(None)
     }
 
+    /// Node-local outcome observed in an authoritative committed block; unavailable after restart/eviction.
+    fn palw_memory_routing_outcome_v1(&self, _block: BlockHash, _claim: crate::Hash64) -> Result<Option<String>, String> {
+        Ok(None)
+    }
+
     /// **RFC-0006 consumer v2 (op 245): a class's immutable per-reader router binding** (kernel-route aux 139) at the virtual tip:
     /// `(now_daa, armed, Some((bound_from_daa, the row's borsh bytes)))`, `None` for the row where the class declared none. `Ok(None)`
     /// off ConsensusV2 or with no PALW tip.

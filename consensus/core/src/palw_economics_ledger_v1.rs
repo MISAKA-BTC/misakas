@@ -344,6 +344,7 @@ pub fn palw_void_reason_name_v1(reason: &PalwVoidReasonV2) -> &'static str {
         PalwVoidReasonV2::BindTimeout => "bind_timeout",
         PalwVoidReasonV2::ReceiptTimeout => "receipt_timeout",
         PalwVoidReasonV2::CourtFraud => "court_fraud",
+        PalwVoidReasonV2::PrefixExportFraud => "prefix_export_fraud",
         PalwVoidReasonV2::ProducerWithholding => "producer_withholding",
         PalwVoidReasonV2::NoCapablePanel => "no_capable_panel",
         // ADR-0152 v22 skeleton: declared, written by nobody yet.

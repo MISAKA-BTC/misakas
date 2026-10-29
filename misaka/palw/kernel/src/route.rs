@@ -140,6 +140,10 @@ pub const TAG_BOOTSTRAP_EXACT_V1: u8 = 73;
 pub const TAG_COMMIT_ELIGIBILITY_EXAM_V1: u8 = 74;
 pub const TAG_ATTEST_ELIGIBILITY_EXAM_V1: u8 = 75;
 pub const TAG_ATTEST_CAPACITY_V1: u8 = 76;
+/// ADR-0207 ordinary verifier Clean/fee consent; native consumer owned.
+pub const TAG_CONSENT_VERIFIER_FEE_V1: u8 = 77;
+/// M*-49 prospective watcher stake reservation; separate from outer242 provider actions.
+pub const TAG_WATCH_VERIFIER_POOL_V1: u8 = 78;
 /// version, tag, verifier, claim.
 pub const MAX_ATTEST_DRAWN_CHECK_BYTES_V1: usize = 1 + 1 + 64 + 64;
 pub const MAX_FUND_PANEL_BEACON_SOURCE_FEE_BYTES_V2: usize = 288;
@@ -752,6 +756,9 @@ pub enum KernelRouteObjectV1 {
     AttestCapacityV1 {
         attestation: crate::capacity_attestation_v1::CapacityAttestationV1,
     } = 76,
+    /// Explicit finite fee consent and Clean attestation, authenticated by its verifier.
+    ConsentVerifierFeeV1 { terms: crate::verifier_fee_consent_v1::VerifierFeeConsentV1 } = 77,
+    WatchVerifierPoolV1 { terms: crate::verifier_watch_v1::VerifierWatchTermsV1 } = 78,
 }
 
 /// The digest of a filed proof's exact bytes: `H("misaka-palw/kernel/proof-digest/v1"; borsh(proof))`.
@@ -945,6 +952,8 @@ impl KernelRouteObjectV1 {
             Self::CommitEligibilityExamV1 { .. } => TAG_COMMIT_ELIGIBILITY_EXAM_V1,
             Self::AttestEligibilityExamV1 { .. } => TAG_ATTEST_ELIGIBILITY_EXAM_V1,
             Self::AttestCapacityV1 { .. } => TAG_ATTEST_CAPACITY_V1,
+            Self::ConsentVerifierFeeV1 { .. } => TAG_CONSENT_VERIFIER_FEE_V1,
+            Self::WatchVerifierPoolV1 { .. } => TAG_WATCH_VERIFIER_POOL_V1,
             Self::OptInPaidBeaconSource { .. } => TAG_OPT_IN_PAID_BEACON_SOURCE_V1,
             Self::FundedExecutionV11 { .. } => TAG_FUNDED_EXECUTION_V11,
             Self::StageExecutionV14 { .. } => TAG_STAGE_EXECUTION_V14,
@@ -1225,6 +1234,8 @@ pub const fn name_of_tag(tag: u8) -> &'static str {
         TAG_COMMIT_ELIGIBILITY_EXAM_V1 => "CommitEligibilityExamV1",
         TAG_ATTEST_ELIGIBILITY_EXAM_V1 => "AttestEligibilityExamV1",
         TAG_ATTEST_CAPACITY_V1 => "AttestCapacityV1",
+        TAG_CONSENT_VERIFIER_FEE_V1 => "ConsentVerifierFeeV1",
+        TAG_WATCH_VERIFIER_POOL_V1 => "WatchVerifierPoolV1",
         TAG_OPT_IN_PAID_BEACON_SOURCE_V1 => "OptInPaidBeaconSource",
         TAG_FUNDED_EXECUTION_V11 => "FundedExecutionV11",
         TAG_STAGE_EXECUTION_V14 => "StageExecutionV14",
@@ -1302,6 +1313,8 @@ pub const fn max_encoded_bytes_of_tag(tag: u8) -> Option<usize> {
             crate::model_eligibility_v1::MAX_ELIGIBILITY_OBJECT_BYTES_V1
         }
         TAG_ATTEST_CAPACITY_V1 => crate::capacity_attestation_v1::MAX_CAPACITY_ATTESTATION_OBJECT_BYTES_V1,
+        TAG_CONSENT_VERIFIER_FEE_V1 => crate::verifier_fee_consent_v1::MAX_VERIFIER_FEE_CONSENT_OBJECT_BYTES_V1,
+        TAG_WATCH_VERIFIER_POOL_V1 => 512,
         TAG_OPT_IN_PAID_BEACON_SOURCE_V1 => MAX_OPT_IN_PAID_BEACON_SOURCE_BYTES_V1,
         TAG_FUNDED_EXECUTION_V11 => MAX_FUNDED_EXECUTION_BYTES_V11,
         TAG_STAGE_EXECUTION_V14 => MAX_STAGE_SOURCE_BYTES_V39,
@@ -1514,8 +1527,8 @@ mod tests {
         // 73: N3's BootstrapExact contribution (2026-10-15 round 3). 72 is unallocated. 74–75: RFC-0017's eligibility exam.
         // 76: RFC-0016 V8's capacity attestation (2026-10-17, audit 16-A).
         assert!(max_encoded_bytes_of_tag(72).is_none(), "72 is not allocated");
-        assert!(max_encoded_bytes_of_tag(77).is_none(), "77 is not allocated");
-        for tag in (22..=37).chain(39..=71).chain(73..=76) {
+        assert!(max_encoded_bytes_of_tag(79).is_none(), "79 is not allocated");
+        for tag in (22..=37).chain(39..=71).chain(73..=78) {
             assert!(max_encoded_bytes_of_tag(tag).is_some());
         }
         for o in [

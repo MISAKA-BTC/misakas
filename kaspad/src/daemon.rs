@@ -1554,7 +1554,23 @@ Do you confirm? (y/n)";
         // produce" — was unreachable whenever the flag was present. The sibling panel wiring gates
         // on `palw_court.is_some()`, which is what makes this a lost invariant and not a style.
         let base_class_id = palw_configured_producer_class(args, &config).or(base_class_id);
-        match (base_class_id, &args.palw_producer_key, &args.palw_producer_bond, &palw_producer_pay_address) {
+        // RFC-0041: with no genesis bond and no --palw-producer-bond, the base-class producer names
+        // a placeholder outpoint. It is not registered. The coinbase pays the pay address; the
+        // ordinary registration spends that matured output or an owned genesis UTXO.
+        let genesis_bond_free = palw_bundle.as_ref().is_some_and(|bundle| {
+            kaspa_consensus_core::config::params::palw_genesis_objects_have_no_bond_v1(&bundle.genesis_objects)
+        });
+        let producer_bond = args.palw_producer_bond.clone().or_else(|| {
+            genesis_bond_free.then(kaspa_consensus_core::config::params::palw_base_coinbase_recovery_bond_label_v1)
+        });
+        if args.palw_producer_bond.is_none() && producer_bond.is_some() {
+            info!(
+                "PALW genesis registers no bond: the base-class producer mines the existing idle-floor coinbase. \
+                 Its attempt outpoint is not a bond and not a premine. --palw-register-bond spends a matured \
+                 coinbase or a genesis UTXO this key owns; PALW starts once that ordinary bond is active."
+            );
+        }
+        match (base_class_id, &args.palw_producer_key, &producer_bond, &palw_producer_pay_address) {
             (Some(class_id), Some(key_path), Some(bond), Some(pay_address)) => {
                 Some(Arc::new(crate::palw_producer::PalwProducerService::new(
                     crate::palw_producer::PalwProducerConfig {

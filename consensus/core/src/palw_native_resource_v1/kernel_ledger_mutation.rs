@@ -230,6 +230,26 @@ impl ReservedKernelLedgerV1 {
         Ok(out)
     }
 
+    /// Authenticated native draw: quote the one fixed row, its slots and returned release events.
+    pub fn assign_drawn_reserved_v1(&mut self,claim:&[u8;64],slots:&[[u8;64]])->Result<Result<Vec<LedgerEventV1>,misaka_palw_kernel::route::KernelRefusalV1>,NativeCoverageV1>{
+        let mut q=TirNativeRequestsV1::new();
+        q.vec_v1::<([u8;64],bool)>(slots.len() as u64)?;
+        q.vec_v1::<LedgerEventV1>(PALW_KERNEL_LEDGER_EVENTS_PER_ROW_CEILING_V1)?;
+        q.add_v1(widest_member_bytes_v1())?;
+        self.grow_v1(q.bytes_v1())?;
+        Ok(self.ledger.assign_drawn_v1(claim,slots))
+    }
+
+    pub fn cancel_undrawn_check_fee_reserved_v1(&mut self,claim:&[u8;64])->Result<Result<Vec<LedgerEventV1>,misaka_palw_kernel::route::KernelRefusalV1>,NativeCoverageV1>{
+        let mut q=TirNativeRequestsV1::new();q.vec_v1::<LedgerEventV1>(1)?;self.grow_v1(q.bytes_v1())?;
+        Ok(self.ledger.cancel_undrawn_check_fee_v1(claim))
+    }
+
+    /// Fixed-size ADR-0207 slot mutation: no allocation, insertion or returned event vector.
+    pub fn fund_consented_slot_reserved_v1(&mut self,claim:&[u8;64],verifier:&[u8;64],slot:u64,fee:u64)->Result<(),&'static str>{
+        self.ledger.fund_consented_slot_v1(claim,verifier,slot,fee)
+    }
+
     /// **The closing tick**: events for every live claim and demand it may visit, and the structural membership ceiling.
     pub fn tick_reserved_v1(&mut self) -> Result<Vec<LedgerEventV1>, NativeCoverageV1> {
         let mut admitted_events = None;

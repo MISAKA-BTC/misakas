@@ -104,6 +104,11 @@ pub fn sign_econ_contract_object_v1(
     // The `network` field each contract carries is checked by the node against the kernel route's own network domain.
     let parties: Vec<[u8; 64]> = match object {
         KernelRouteObjectV1::AttestDrawnCheckV1 { verifier, .. } => vec![*verifier],
+        KernelRouteObjectV1::WatchVerifierPoolV1 { terms } => { terms.validate()?; vec![terms.watcher] }
+        KernelRouteObjectV1::ConsentVerifierFeeV1 { terms } => {
+            terms.validate()?;
+            vec![terms.verifier]
+        }
         KernelRouteObjectV1::AttestModelVerificationV1 { attestation } => {
             attestation.validate()?;
             vec![attestation.verifier]
@@ -142,4 +147,18 @@ pub fn sign_econ_contract_object_v1(
         kaspa_consensus_core::palw_kernel_route_v1::PALW_KERNEL_ROUTE_OBJECT_MLDSA87_CONTEXT_V1,
     )?;
     Ok(PalwConsensusObjectV2::KernelRouteV1 { bytes, signer: bond, signature })
+}
+
+/// ADR-0207: explicit immutable consent, signed using `sign_econ_contract_object_v1`.
+/// Values must come from the authenticated original claim and draw; this builder never invents deadlines.
+pub fn prepare_verifier_fee_consent_v1(terms: misaka_palw_kernel::verifier_fee_consent_v1::VerifierFeeConsentV1) -> Result<KernelRouteObjectV1, String> {
+    terms.validate().map_err(str::to_string)?;
+    Ok(KernelRouteObjectV1::ConsentVerifierFeeV1 { terms })
+}
+
+/// The signer explicitly opts into a finite future epoch pool; no model review or credit is created.
+pub fn prepare_verifier_watch_v1(terms: misaka_palw_kernel::verifier_watch_v1::VerifierWatchTermsV1)
+    -> Result<KernelRouteObjectV1, String> {
+    terms.validate()?;
+    Ok(KernelRouteObjectV1::WatchVerifierPoolV1 { terms })
 }

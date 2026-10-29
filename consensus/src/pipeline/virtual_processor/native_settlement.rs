@@ -17,9 +17,11 @@
 //!
 //! **Evidence.** REAL work comes from the `Final` transitions in each chain block's PALW delta, free-prompt
 //! work from the slice spends in them, and a conviction after `Final` retracts what it had counted
-//! ([`native_delta_evidence_v1`]). The sink's claims are consulted only for the lifecycle question (is every
+//! ([`native_delta_evidence_v1`]). A native39 receipt quantum is the same kind of evidence: its work is the
+//! receipt's `price.quantum_mac`, its anchor is the block that carried the spend, and a mining conviction
+//! retracts that receipt only. The sink's claims are consulted only for the lifecycle question (is every
 //! claim at or before the effect resolved) and for the operator behind a bond. A claim leaves PALW state at
-//! `terminal + claim_retirement`; its work stays counted.
+//! `terminal + claim_retirement`; its work stays counted. A native39 obligation never looks up a legacy claim.
 //!
 //! **Readiness (RFC-0012 D1).** [`VirtualStateProcessor::native_evaluate`] returns the snapshot AND the material it was weighed from
 //! (or the reason nothing was weighed); [`VirtualStateProcessor::native_safe_readiness`] turns that into the structured explanation
@@ -44,7 +46,7 @@ use kaspa_consensus_core::{
     palw_native_settlement_v1::{
         MatureUsefulWorkV1, NativeDeltaEvidenceV1, NativeEffectV1, NativeFactRulesV1, NativePrefixV1, NativeSettlementSnapshotV1,
         SettlementStopV1, SkippedEvidenceV1, certify_native_prefix_v1, native_delta_evidence_v1, native_effective_retention_v1,
-        native_facts_and_skips_v1, native_open_from_v1, native_open_sessions_v1,
+        native_facts_and_skips_with_native39_v1, native_open_from_v1, native_open_sessions_v1,
     },
     palw_state_v2::{PalwChainStateV2, PalwClaimPhaseV2},
 };
@@ -515,6 +517,7 @@ impl VirtualStateProcessor {
             Err(_) => return stopped(result, gap(HistoryGapV1::NativeCapacityUnavailable, Some(sink))),
         };
         let voided: BTreeSet<Hash64> = rows.iter().flat_map(|r| r.evidence().voided.iter().copied()).collect();
+        let native39_revoked: BTreeSet<Hash64> = rows.iter().flat_map(|r| r.evidence().native39_revoked.iter().copied()).collect();
         let open_sessions = native_open_sessions_v1(&state);
         let claims_with_open_disputes: BTreeSet<Hash64> = open_sessions.iter().map(|(claim, _)| *claim).collect();
         let rules = NativeFactRulesV1 {
@@ -527,7 +530,8 @@ impl VirtualStateProcessor {
         let mut facts: Vec<MatureUsefulWorkV1> = Vec::new();
         let mut skipped = SkippedEvidenceV1::default();
         for row in rows.iter().filter(|r| r.hash != pruning) {
-            let (block_facts, block_skipped) = native_facts_and_skips_v1(&rules, row.evidence(), &voided, (row.daa, row.blue));
+            let (block_facts, block_skipped) =
+                native_facts_and_skips_with_native39_v1(&rules, row.evidence(), &voided, &native39_revoked, (row.daa, row.blue));
             facts.extend(block_facts);
             skipped.add(&block_skipped);
         }

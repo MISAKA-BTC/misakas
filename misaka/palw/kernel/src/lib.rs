@@ -242,3 +242,7 @@ pub mod flat_trace39;
 pub mod flat_invocation39;
 
 pub mod claim_paid_bootstrap_source_v6;
+
+pub mod verifier_fee_consent_v1;
+
+pub mod verifier_watch_v1;

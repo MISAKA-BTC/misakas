@@ -2447,6 +2447,11 @@ pub fn palw_check_panel_false_valid_blame_v2(
                  of the execution",
             ));
         }
+        if state.palw_void_binds_claim_v1(&target.claim_id, PalwVoidReasonV2::PrefixExportFraud, voided_daa) {
+            return Err(PalwOffenceVerifyError::ContradictionNotAdmitted(
+                "a source export conviction does not contradict an earlier base-execution Valid signature",
+            ));
+        }
         if !state.palw_void_binds_claim_v1(&target.claim_id, reason, voided_daa) {
             return Err(PalwOffenceVerifyError::PanelFalseValidWorkMismatch);
         }
@@ -2706,6 +2711,15 @@ pub fn palw_filed_offence_commit_key_v1(
         K::TirIdentityMismatch => {
             let payload: PalwTirIdentityEvidenceV1 = borsh::from_slice(evidence).ok()?;
             Some(palw_tir_identity_offence_id_v1(accused, &payload.claim_id))
+        }
+        K::PrefixExportRefuted => {
+            // Fixed-width leading identity only; no untrusted tile Vec allocation
+            // in this prediction helper. The authoritative court checks the rest.
+            if evidence.first().copied() != Some(1) { return None; }
+            let identity = borsh::from_slice::<crate::palw_claim_local_v1::prefix_v1::PalwPrefixExportIdentityV1>(
+                evidence.get(1..209)?,
+            ).ok()?;
+            Some(crate::palw_claim_local_v1::prefix_v1::prefix_export_offence_id_v1(accused, &identity))
         }
         K::PanelFalseValid | K::CourtExecutorGuilty | K::DaDefault | K::CourtConviction => None,
     }
@@ -3397,6 +3411,15 @@ pub(crate) mod tests {
     /// **The admission table**: which contradiction may convict a `Valid` signer, refused by
     /// name where it cannot be tied to this claim's execution — `ProducerWithholding` among them
     /// (F2 review, F-2).
+    #[test]
+    fn rfc40_source_export_conviction_does_not_create_old_verifier_liability() {
+        let state = live_state(voided(55, PalwVoidReasonV2::PrefixExportFraud), h64(0xE0), h64(0xAF));
+        let accusation = evidence(full(1), PalwPanelContradictionV1::CourtFraud { voided_daa: 55 });
+        assert!(matches!(judge(&state, &accusation), Err(E::ContradictionNotAdmitted(_))));
+        let actual_execution_fraud = live_state(voided(55, PalwVoidReasonV2::CourtFraud), h64(0xE0), h64(0xAF));
+        assert!(judge(&actual_execution_fraud, &accusation).is_ok());
+    }
+
     #[test]
     fn the_admission_table() {
         use crate::palw_step_leg::{PalwStepEvidenceV1, PalwStepRefutationV1};

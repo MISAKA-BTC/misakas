@@ -368,6 +368,7 @@ pub(crate) fn own_claim_events_at_v1(
                     R::WorkSliceProvenFalse => "work_slice_proven_false",
                     R::WorkSliceDefaulted => "work_slice_defaulted",
                     R::PanelDaDisclosureDefault => "panel_da_disclosure_default",
+                    R::PrefixExportFraud => "prefix_export_fraud",
                 };
                 ("VOIDED", *voided_daa, format!(" reason={why}"))
             }
@@ -8473,6 +8474,14 @@ impl PalwPanelService {
                 .map(|a| a.to_string())
                 .unwrap_or_else(|_| "this node's pay address".to_string())
         );
+        if let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) =
+            &self.consensus_config.params.palw_consensus_mode
+            && kaspa_consensus_core::config::params::palw_genesis_objects_have_no_bond_v1(&bundle.genesis_objects)
+        {
+            info!(
+                "[{PALW_PANEL}] genesis registers no bond. Funding is a matured BASE coinbase (the idle-floor subsidy, spendable after coinbase maturity) or a genesis UTXO this pay address already owns. Neither one registers a bond until this worker submits BondRegistered."
+            );
+        }
 
         // **An unchanged refusal is a different fact from a fresh one, and reprinting it verbatim
         // hides which of the two an operator is reading.**

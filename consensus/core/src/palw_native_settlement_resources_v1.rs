@@ -8,7 +8,9 @@ use crate::{
         NativeCoverageV1, NativeDemandLeaseV1, NativeHeapV1, native_logical_admission_enabled_v1,
         native_resource_admission_enabled_v1, preflight_native_value_v1, reserve_native_requests_v1, typed::BTreeNodeEnvelopeV1,
     },
-    palw_native_settlement_v1::{MatureUsefulWorkV1, NativeDeltaEvidenceV1, NativeEffectV1, SettlementEvidenceV1, SettlementStopV1},
+    palw_native_settlement_v1::{
+        MatureUsefulWorkV1, Native39QuantumV1, NativeDeltaEvidenceV1, NativeEffectV1, SettlementEvidenceV1, SettlementStopV1,
+    },
     palw_state_v2::{PalwChainStateV2, PalwClaimSourceV2, PalwClaimStateV2, PalwDeltaEntryV2, PalwStateDeltaV2},
     palw_work_slice_v2::PalwExecV2RewardRowV1,
 };
@@ -65,6 +67,7 @@ pub fn reserve_native_settlement_row_v1<Row>(
         bound = bound.add::<Row>(slots::<crate::Hash64>(1, path), path);
     }
     let (mut claims, mut free, mut voided, mut rewards) = (0usize, 0usize, 0usize, 0usize);
+    let (mut native39_receipts, mut native39_quanta, mut native39_revoked) = (0usize, 0usize, 0usize);
     if let Some(delta) = delta {
         // A row whose delta yields evidence keeps it boxed (a row without evidence keeps none); charged for every delta row.
         bound = bound.add::<Row>(slots::<crate::palw_native_settlement_v1::NativeDeltaEvidenceV1>(1, path), path);
@@ -91,6 +94,20 @@ pub fn reserve_native_settlement_row_v1<Row>(
                         .map_err(|e| NativeCoverageV1::unsupported::<PalwExecV2RewardRowV1>(path, &e.to_string()))?;
                     bound = bound.add::<Row>(NativeCoverageV1::Bounded { bytes: shape.logical_requests_v1() }, path);
                 }
+                PalwDeltaEntryV2::KernelRouteRow { table, key, new: Some(bytes), .. } => {
+                    let mining = *table == crate::palw_native_mining_v39::MINING_TABLE_V39
+                        && key.len() == 66
+                        && key.first().copied() == Some(39);
+                    if mining && key.get(1).copied() == Some(crate::palw_native_mining_v39::MINING_RECEIPT_KIND_V39) {
+                        native39_receipts = native39_receipts.checked_add(1).ok_or_else(|| NativeCoverageV1::overflow::<Row>(path))?;
+                        let bytes = u64::try_from(bytes.len()).map_err(|_| NativeCoverageV1::overflow::<Row>(path))?;
+                        bound = bound.add::<Row>(NativeCoverageV1::Bounded { bytes }, path);
+                    } else if mining && key.get(1).copied() == Some(crate::palw_native_mining_v39::MINING_CONVICTED_KIND_V39) {
+                        native39_revoked = native39_revoked.checked_add(1).ok_or_else(|| NativeCoverageV1::overflow::<Row>(path))?;
+                    } else if *table == crate::palw_settlement_once_v1::PALW_SETTLEMENT_ONCE_TABLE_V1 && key.len() == 64 {
+                        native39_quanta = native39_quanta.checked_add(1).ok_or_else(|| NativeCoverageV1::overflow::<Row>(path))?;
+                    }
+                }
                 _ => {}
             }
         }
@@ -99,7 +116,13 @@ pub fn reserve_native_settlement_row_v1<Row>(
         .add::<Row>(vec_slots::<(Hash64, PalwClaimStateV2)>(claims, path), path)
         .add::<Row>(vec_slots::<(Hash64, PalwClaimStateV2, Vec<u32>)>(free, path), path)
         .add::<Row>(vec_slots::<Hash64>(voided, path), path)
-        .add::<Row>(slots::<BTreeNodeEnvelopeV1<Hash64, u64>>(rewards, path), path);
+        .add::<Row>(slots::<BTreeNodeEnvelopeV1<Hash64, u64>>(rewards, path), path)
+        .add::<Row>(vec_slots::<Native39QuantumV1>(native39_quanta, path), path)
+        .add::<Row>(vec_slots::<Hash64>(native39_revoked, path), path)
+        .add::<Row>(
+            slots::<BTreeNodeEnvelopeV1<Hash64, crate::palw_native_mining_v39::NativeMiningReceiptRecordV39>>(native39_receipts, path),
+            path,
+        );
     reserve(bound)
 }
 
@@ -140,7 +163,7 @@ pub fn reserve_native_settlement_sweep_v1<'a, Memo>(
         return Ok(None);
     }
     let path = "native settlement sweep";
-    let (mut facts, mut voided) = (extra_facts, 0usize);
+    let (mut facts, mut voided, mut native39_revoked) = (extra_facts, 0usize, 0usize);
     for row in evidence {
         facts = facts
             .checked_add(row.finalized_attempts.len())
@@ -148,7 +171,13 @@ pub fn reserve_native_settlement_sweep_v1<'a, Memo>(
         for (_, _, fresh) in &row.fp_spends {
             facts = facts.checked_add(fresh.len()).ok_or_else(|| NativeCoverageV1::overflow::<NativeDeltaEvidenceV1>(path))?;
         }
+        facts = facts
+            .checked_add(row.native39_quanta.len())
+            .ok_or_else(|| NativeCoverageV1::overflow::<NativeDeltaEvidenceV1>(path))?;
         voided = voided.checked_add(row.voided.len()).ok_or_else(|| NativeCoverageV1::overflow::<NativeDeltaEvidenceV1>(path))?;
+        native39_revoked = native39_revoked
+            .checked_add(row.native39_revoked.len())
+            .ok_or_else(|| NativeCoverageV1::overflow::<NativeDeltaEvidenceV1>(path))?;
     }
     let sessions = state
         .da_sessions_iter()
@@ -158,6 +187,7 @@ pub fn reserve_native_settlement_sweep_v1<'a, Memo>(
     let bound = slots::<Memo>(1, path)
         .add::<PalwChainStateV2>(slots::<u8>(40, path), path)
         .add::<PalwChainStateV2>(slots::<BTreeNodeEnvelopeV1<Hash64, ()>>(voided, path), path)
+        .add::<PalwChainStateV2>(slots::<BTreeNodeEnvelopeV1<Hash64, ()>>(native39_revoked, path), path)
         .add::<PalwChainStateV2>(vec_slots::<(Hash64, u64)>(sessions, path), path)
         .add::<PalwChainStateV2>(slots::<BTreeNodeEnvelopeV1<Hash64, ()>>(sessions, path), path)
         // Output facts and a block's temporary fact Vec coexist during extend.

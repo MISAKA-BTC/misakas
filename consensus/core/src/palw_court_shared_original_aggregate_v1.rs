@@ -1,4 +1,5 @@
-//! Immutable original-wide dependency draft. Never reservable/admitted authority.
+//! Immutable original-wide dependency draft. Readiness names adopted packet and
+//! funding pins a caller can reserve against. It does not admit, escrow, or arm a fence.
 use super::{numerical_material_join::{NumericalMaterialJoinV1 as Numeric,UnresolvedSupplyV1 as NumericSupply},
     output_terminal::{NativeOutputDutyV1 as Output,OutputDutyScopeV1},selection_terminal::NativeSelectionUniverseV1 as Selection,
     constraint_family::{ConstraintUniverseV1 as Constraint,ConstraintSemanticSupplyV1},prefix_family::NativePrefixFamilyV1 as Prefix,
@@ -56,12 +57,79 @@ pub(crate) enum TokenizerOwnersV1<'a>{NotApplicable,Required(&'a Held<Tokenizer<
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 pub(crate) enum UnresolvedSupplyContractV1 {
     Numerical(NumericSupply),Constraint(ConstraintSemanticSupplyV1),Tokenizer(UnresolvedTokenizerSupplyV1),
-    /// Existing graph descriptors are not actual adopted allbranch packet terms,
-    /// service reservation, execution fee, source custody or financial funding.
+    /// Graph descriptors are not packet or funding terms. Present only when the
+    /// adopted `palw_g14_values_v1` pins are not the terms in force.
     NativeAllBranchPacketAndFundingTerms,
 }
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
-pub(crate) enum AggregateNotReadyV1 {UnresolvedSupplyContract(UnresolvedSupplyContractV1),UnsupportedNativeGrammar(UnsupportedNativeGrammarV1)}
+pub(crate) enum AggregateNotReadyV1 {UnresolvedSupplyContract(UnresolvedSupplyContractV1),UnsupportedNativeGrammar(UnsupportedNativeGrammarV1),ForeignBinding}
+/// Adopted all-branch packet and funding pins. Callers reserve against these
+/// terms; this value does not write a book row, collect funds, or arm a fence.
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+pub(crate) struct OriginalReservationReadyV1 {
+    pub service_profile:crate::palw_court_service_binding_v1::CourtServiceProfileV1,
+    pub source_packet_cost:crate::palw_court_service_v1::ServiceCost,
+    pub packet_bytes:u64,
+    pub follow_up_branches_per_turn:u64,
+    pub packet_carriage_sompi:u64,
+    pub fee_sompi:u64,
+    pub capital_per_turn_sompi:u64,
+    pub capital_per_source_node_sompi:u64,
+    pub capital_floor_sompi:u64,
+    pub heap_bytes_per_branch:u64,
+    pub retention_bytes_per_branch:u64,
+}
+impl OriginalReservationReadyV1 {
+    /// Schedule a caller passes to all-branch admission, built from these terms.
+    pub(crate) fn funded_admission_schedule_v1(self)->Result<crate::palw_funded_original_admission_v1::FundedAdmissionScheduleV1,&'static str>{
+        crate::palw_funded_original_admission_v1::FundedAdmissionScheduleV1::new_v1(
+            self.service_profile,self.source_packet_cost,self.capital_per_turn_sompi,self.capital_per_source_node_sompi,self.heap_bytes_per_branch,self.retention_bytes_per_branch)
+    }
+    fn adopted_v1()->Option<Self>{
+        use crate::palw_g14_values_v1 as g;
+        let pinned=crate::palw_court_service_binding_v1::PALW_COURT_SERVICE_PROFILE_V1?;
+        let kernel=crate::palw_kernel_court_admission_v1::PALW_KERNEL_COURT_ADMISSION_SCHEDULE_V1?;
+        let ready=Self{
+            service_profile:g::PALW_G14_COURT_SERVICE_PROFILE_ESTIMATE_V1,
+            source_packet_cost:g::PALW_G14_SOURCE_PACKET_COST_V1,
+            packet_bytes:g::PALW_G14_PACKET_BYTES_V1,
+            follow_up_branches_per_turn:g::PALW_G14_FOLLOW_UP_BRANCHES_PER_TURN_ESTIMATE_V1,
+            packet_carriage_sompi:g::PALW_G14_PACKET_CARRIAGE_SOMPI_V1,
+            fee_sompi:g::PALW_G14_FUNDED_FEE_SOMPI_V1,
+            capital_per_turn_sompi:g::PALW_G14_CAPITAL_PER_TURN_SOMPI_V1,
+            capital_per_source_node_sompi:g::PALW_G14_CAPITAL_PER_SOURCE_NODE_SOMPI_V1,
+            capital_floor_sompi:g::PALW_G14_FUNDED_CAPITAL_FLOOR_SOMPI_V1,
+            heap_bytes_per_branch:g::PALW_G14_HEAP_BYTES_PER_BRANCH_V1,
+            retention_bytes_per_branch:g::PALW_G14_RETENTION_BYTES_PER_BRANCH_V1,
+        };
+        if ready.service_profile!=pinned||kernel.profile!=ready.service_profile||kernel.follow_up_branches_per_turn!=ready.follow_up_branches_per_turn
+            ||kernel.capital_per_packet_sompi!=ready.capital_per_turn_sompi||kernel.version!=1||!ready.pins_match_g14_v1(){return None;}
+        ready.funded_admission_schedule_v1().ok()?;
+        Some(ready)
+    }
+    fn pins_match_g14_v1(self)->bool{
+        use crate::palw_g14_values_v1 as g;
+        let budget=g::PALW_G14_PACKET_BYTES_V1.checked_mul(g::PALW_G14_SERVICE_BUDGET_PACKETS_PER_DAA_V1);
+        let carriage=g::PALW_G14_PACKET_BYTES_V1.checked_mul(g::PALW_G14_CARRIAGE_SOMPI_PER_BYTE_V1);
+        self.service_profile==g::PALW_G14_COURT_SERVICE_PROFILE_ESTIMATE_V1
+            &&self.packet_bytes==g::PALW_G14_PACKET_BYTES_V1
+            &&self.service_profile.packet_cost.bytes==self.packet_bytes
+            &&self.service_profile.packets_per_signer==g::PALW_G14_PACKETS_PER_SIGNER_V1
+            &&self.service_profile.service_span_daa==g::PALW_G14_SERVICE_SPAN_DAA_V1
+            &&budget.is_some_and(|bytes|self.service_profile.budget.bytes==bytes)
+            &&self.source_packet_cost==g::PALW_G14_SOURCE_PACKET_COST_V1
+            &&self.follow_up_branches_per_turn==g::PALW_G14_FOLLOW_UP_BRANCHES_PER_TURN_ESTIMATE_V1
+            &&self.follow_up_branches_per_turn>0
+            &&carriage.is_some_and(|sompi|self.packet_carriage_sompi==sompi)
+            &&self.packet_carriage_sompi==g::PALW_G14_PACKET_CARRIAGE_SOMPI_V1
+            &&self.fee_sompi==g::PALW_G14_FUNDED_FEE_SOMPI_V1&&self.fee_sompi>0
+            &&self.capital_per_turn_sompi==g::PALW_G14_CAPITAL_PER_TURN_SOMPI_V1&&self.capital_per_turn_sompi>0
+            &&self.capital_per_source_node_sompi==g::PALW_G14_CAPITAL_PER_SOURCE_NODE_SOMPI_V1&&self.capital_per_source_node_sompi>0
+            &&self.capital_floor_sompi==g::PALW_G14_FUNDED_CAPITAL_FLOOR_SOMPI_V1
+            &&self.heap_bytes_per_branch==g::PALW_G14_HEAP_BYTES_PER_BRANCH_V1&&self.heap_bytes_per_branch>0
+            &&self.retention_bytes_per_branch==g::PALW_G14_RETENTION_BYTES_PER_BRANCH_V1&&self.retention_bytes_per_branch>0
+    }
+}
 pub(crate) struct OriginalAggregateDraftV1<'a>{shape:OriginalFamilyShapeV1,numeric:&'a Held<Numeric<'a>>,families:OriginalFamilyOwnersV1<'a>,tokenizer:TokenizerOwnersV1<'a>}
 impl<'a> OriginalAggregateDraftV1<'a>{
     /// Postclaim retained-state constructor. It CANNOT stand in for pre-original
@@ -111,14 +179,45 @@ impl<'a> OriginalAggregateDraftV1<'a>{
     }
     pub(crate) fn shape_v1(&self)->OriginalFamilyShapeV1{self.shape}
     pub(crate) fn unresolved_supply_v1(&self)->impl Iterator<Item=UnresolvedSupplyContractV1>+'_ {
-        let constraint=match &self.families{OriginalFamilyOwnersV1::Constraint{constraint}=>Some(UnresolvedSupplyContractV1::Constraint(constraint.semantic_supply_v1())),_=>None};
-        let tokenizer=match &self.tokenizer{TokenizerOwnersV1::Required(t)=>Some(UnresolvedSupplyContractV1::Tokenizer(t.unresolved_supply_v1())),_=>None};
-        self.numeric.unresolved_v1().map(UnresolvedSupplyContractV1::Numerical).chain(constraint).chain(tokenizer).chain(std::iter::once(UnresolvedSupplyContractV1::NativeAllBranchPacketAndFundingTerms))
+        let constraint=match &self.families{
+            OriginalFamilyOwnersV1::Constraint{constraint}=>match constraint.semantic_supply_v1(){
+                supply@(ConstraintSemanticSupplyV1::UnresolvedTableSupply{..}|ConstraintSemanticSupplyV1::UnresolvedEogOnlySupply{..})=>Some(UnresolvedSupplyContractV1::Constraint(supply)),
+            },
+            _=>None,
+        };
+        let tokenizer=match (&self.tokenizer,self.shape.tokenizer){
+            (TokenizerOwnersV1::Required(t),TokenizerApplicabilityV1::Required)=>Some(UnresolvedSupplyContractV1::Tokenizer(t.unresolved_supply_v1())),
+            _=>None,
+        };
+        let packet=OriginalReservationReadyV1::adopted_v1().is_none().then_some(UnresolvedSupplyContractV1::NativeAllBranchPacketAndFundingTerms);
+        self.numeric.unresolved_v1().map(UnresolvedSupplyContractV1::Numerical).chain(constraint).chain(tokenizer).chain(packet)
     }
-    /// An inventory is not a service/escrow capability. There is deliberately no
-    /// success variant or conversion to a fully reservable/admitted original.
-    pub(crate) fn reservation_readiness_v1(&self)->Result<std::convert::Infallible,AggregateNotReadyV1>{
+    /// `Ok` when every present family supply is satisfied, grammar is not Prefix,
+    /// bindings agree, and packet/funding terms are the adopted g14 pins.
+    /// Does not install a reservation.
+    pub(crate) fn reservation_readiness_v1(&self)->Result<OriginalReservationReadyV1,AggregateNotReadyV1>{
         if self.shape.grammar==OriginalGrammarV1::Prefix{return Err(AggregateNotReadyV1::UnsupportedNativeGrammar(UnsupportedNativeGrammarV1::PrefixGeneratedSelectionAndStop));}
-        Err(AggregateNotReadyV1::UnresolvedSupplyContract(self.unresolved_supply_v1().next().expect("native allbranch terms always unresolved")))
+        if !self.families_bound_v1(){return Err(AggregateNotReadyV1::ForeignBinding);}
+        if let Some(supply)=self.unresolved_supply_v1().next(){return Err(AggregateNotReadyV1::UnresolvedSupplyContract(supply));}
+        match OriginalReservationReadyV1::adopted_v1(){
+            Some(ready)=>Ok(ready),
+            None=>Err(AggregateNotReadyV1::UnresolvedSupplyContract(UnresolvedSupplyContractV1::NativeAllBranchPacketAndFundingTerms)),
+        }
+    }
+    fn families_bound_v1(&self)->bool{
+        let expected=self.numeric.aggregate_binding_v1();
+        let families=match (&self.families,self.shape.grammar){
+            (OriginalFamilyOwnersV1::Ordinary{output_and_stop,selection},OriginalGrammarV1::Ordinary)=>
+                output_and_stop.aggregate_binding_v1()==expected&&selection.aggregate_binding_v1()==expected&&output_and_stop.scope_v1()==OutputDutyScopeV1::OriginalOutputAndNativeRegularStopOnly,
+            (OriginalFamilyOwnersV1::Constraint{constraint},OriginalGrammarV1::Constraint)=>constraint.aggregate_binding_v1()==expected,
+            (OriginalFamilyOwnersV1::Prefix{output,prefix},OriginalGrammarV1::Prefix)=>output.aggregate_binding_v1()==expected&&prefix.aggregate_binding_v1()==expected,
+            _=>false,
+        };
+        let tokenizer=match (&self.tokenizer,self.shape.tokenizer){
+            (TokenizerOwnersV1::NotApplicable,TokenizerApplicabilityV1::NotApplicable)=>true,
+            (TokenizerOwnersV1::Required(t),TokenizerApplicabilityV1::Required)=>{let b=t.aggregate_binding_v1();b.0==expected.0&&b.1==expected.1},
+            _=>false,
+        };
+        families&&tokenizer
     }
 }

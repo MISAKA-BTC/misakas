@@ -111,6 +111,32 @@ pub struct MatureUsefulWorkV1 {
     pub work: u128,
 }
 
+/// One native39 receipt quantum that became an issuance obligation in this block.
+///
+/// The receipt already names the quantities. Nothing here converts them into a new unit:
+/// `work` is `price.quantum_mac` (one quantum of `price.credited_mac`), `issuance` is the
+/// obligation's sompi carve, and the anchor is the block that carried the spend.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Native39QuantumV1 {
+    pub receipt_id: Hash64,
+    pub claim: Hash64,
+    pub quantum: u32,
+    /// Canonical work identity: `price.work`.
+    pub work_id: Hash64,
+    /// Canonical work quantity of this quantum: `price.quantum_mac`.
+    pub work: u128,
+    /// Sompi carve on the `NativeReceiptSpend` issuance debit. Not work.
+    pub issuance: u64,
+    pub operator: Hash64,
+    /// Derived economic class of `receipt.model` (`native_mining_economic_class_v39`).
+    pub class: Hash64,
+    pub anchor: Hash64,
+    pub anchor_blue: u64,
+    pub anchor_daa: u64,
+    pub established_daa: u64,
+    pub expires: u64,
+}
+
 /// What one selected-chain block's PALW transition contributes to native-settlement evidence — a pure
 /// function of that block's delta, so it can be computed once per block hash and cached.
 ///
@@ -134,7 +160,14 @@ pub struct NativeDeltaEvidenceV1 {
     /// **RFC-0018 §7 (Gate C, adopted 2026-10-15)**: claims whose certification row (kernel-route aux 136) turned
     /// `SecurityCertified` in this block. Past the fence THIS — not the `Final` transition — is what native settlement takes as
     /// mature useful work, so no DNS-free settlement finality ever rests on an uncertified claim. Empty below the fence.
+    /// A `'V'` mining certification is not listed here: that subject is not a legacy claim.
     pub certified_claims: Vec<Hash64>,
+    /// Native39 receipt quanta whose issuance obligation was written in this block.
+    pub native39_quanta: Vec<Native39QuantumV1>,
+    /// Native39 receipt ids whose fraud conviction was finalized in this block.
+    pub native39_revoked: Vec<Hash64>,
+    /// Native39 issuance obligations whose receipt was not in this block. Not a zero payment.
+    pub native39_missing_receipts: u64,
 }
 
 /// The evidence of a block that finalized, spent, voided or certified nothing: what a cached chain row without evidence reads (the row
@@ -145,6 +178,9 @@ pub static NATIVE_DELTA_EVIDENCE_EMPTY_V1: NativeDeltaEvidenceV1 = NativeDeltaEv
     fp_spends: Vec::new(),
     voided: Vec::new(),
     certified_claims: Vec::new(),
+    native39_quanta: Vec::new(),
+    native39_revoked: Vec::new(),
+    native39_missing_receipts: 0,
 };
 
 impl NativeDeltaEvidenceV1 {
@@ -154,7 +190,13 @@ impl NativeDeltaEvidenceV1 {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.finalized_attempts.is_empty() && self.fp_spends.is_empty() && self.voided.is_empty() && self.certified_claims.is_empty()
+        self.finalized_attempts.is_empty()
+            && self.fp_spends.is_empty()
+            && self.voided.is_empty()
+            && self.certified_claims.is_empty()
+            && self.native39_quanta.is_empty()
+            && self.native39_revoked.is_empty()
+            && self.native39_missing_receipts == 0
     }
 }
 
@@ -172,9 +214,14 @@ pub fn native_delta_evidence_v1(delta: &PalwStateDeltaV2) -> NativeDeltaEvidence
             *until = (*until).max(row.liability_until);
         }
         // RFC-0018: a certification row that now certifies, where it did not before.
-        if let PalwDeltaEntryV2::KernelRouteRow { table, old, new: Some(bytes), .. } = entry
+        if let PalwDeltaEntryV2::KernelRouteRow { table, key, old, new: Some(bytes), .. } = entry
             && *table == crate::palw_security_certification_v1::PALW_SECURITY_CERTIFICATION_TABLE_V1
         {
+            // A `'V'` row certifies a native39 mining claim. That id is not a `PalwClaimStateV2`.
+            // Its settlement evidence is the receipt quantum below, never a legacy claim lookup.
+            if key.first().copied() == Some(crate::palw_security_certification_v1::CERTIFICATION_NATIVE_MINING_PREFIX_V39) {
+                continue;
+            }
             let certifies = |bytes: &[u8]| {
                 borsh::from_slice::<crate::palw_security_certification_v1::PalwClaimCertificationRowV1>(bytes)
                     .ok()
@@ -211,7 +258,91 @@ pub fn native_delta_evidence_v1(delta: &PalwStateDeltaV2) -> NativeDeltaEvidence
             _ => {}
         }
     }
+    native39_evidence_v1(delta, &mut out);
     out
+}
+
+/// Receipt fields already on a native39 spend: issuance (the obligation's sompi carve), weight
+/// (`price.quantum_mac`, the receipt's existing per-quantum work), and the carrying block as anchor.
+/// A conviction retracts that receipt's id. It is not written into `voided`, so it cannot match a
+/// legacy claim. An obligation with no receipt in this delta is a refusal, not work of zero.
+fn native39_evidence_v1(delta: &PalwStateDeltaV2, out: &mut NativeDeltaEvidenceV1) {
+    use crate::palw_native_mining_v39::{
+        MINING_CONVICTED_KIND_V39, MINING_RECEIPT_KIND_V39, MINING_TABLE_V39, NativeMiningConvictionV39, NativeMiningReceiptRecordV39,
+        native_mining_economic_class_v39, native_mining_receipt_id_v39,
+    };
+    use crate::palw_settlement_once_v1::{
+        PALW_SETTLEMENT_ONCE_TABLE_V1, PalwSettlementDebitV1, PalwSettlementLegV1, PalwSettlementOnceRowV1,
+    };
+    let mut receipts: BTreeMap<Hash64, NativeMiningReceiptRecordV39> = BTreeMap::new();
+    for entry in &delta.entries {
+        let PalwDeltaEntryV2::KernelRouteRow { table, key, old, new, .. } = entry else {
+            continue;
+        };
+        if *table == MINING_TABLE_V39 && key.len() == 66 && key[0] == 39 && key[1] == MINING_CONVICTED_KIND_V39 && old.is_none() {
+            let Some(bytes) = new else { continue };
+            let Ok(tomb) = borsh::from_slice::<NativeMiningConvictionV39>(bytes) else { continue };
+            if tomb.version == 39 && tomb.claim != [0; 64] {
+                out.native39_revoked.push(Hash64::from_bytes(native_mining_receipt_id_v39(tomb.claim)));
+            }
+            continue;
+        }
+        if *table == MINING_TABLE_V39 && key.len() == 66 && key[0] == 39 && key[1] == MINING_RECEIPT_KIND_V39 {
+            let Some(bytes) = new else { continue };
+            let Ok((root, receipt)) = borsh::from_slice::<([u8; 64], NativeMiningReceiptRecordV39)>(bytes) else {
+                continue;
+            };
+            if receipt.version == 39 && receipt.root() == root && receipt.id != [0; 64] {
+                receipts.insert(Hash64::from_bytes(receipt.id), receipt);
+            }
+        }
+    }
+    for entry in &delta.entries {
+        let PalwDeltaEntryV2::KernelRouteRow { table, key, old, new: Some(bytes), .. } = entry else {
+            continue;
+        };
+        if *table != PALW_SETTLEMENT_ONCE_TABLE_V1 || old.is_some() || key.len() != 64 {
+            continue;
+        }
+        let Ok(row) = borsh::from_slice::<PalwSettlementOnceRowV1>(bytes) else { continue };
+        if row.validate_v1(key).is_err() || row.obligation.leg != PalwSettlementLegV1::NativeReceiptSpend {
+            continue;
+        }
+        let PalwSettlementDebitV1::Issuance { carve } = row.debit else { continue };
+        let Some(receipt) = receipts.get(&Hash64::from_bytes(row.obligation.subject)) else {
+            out.native39_missing_receipts = out.native39_missing_receipts.saturating_add(1);
+            continue;
+        };
+        let Some(quantum) = u32::try_from(row.obligation.ordinal).ok() else {
+            out.native39_missing_receipts = out.native39_missing_receipts.saturating_add(1);
+            continue;
+        };
+        let authentic = receipt.price.version == 39
+            && receipt.price.quantum_mac > 0
+            && receipt.price.work != [0; 64]
+            && receipt.operator != [0; 64]
+            && (quantum as u64) < receipt.price.quanta
+            && receipt.is_spent(quantum);
+        if !authentic {
+            out.native39_missing_receipts = out.native39_missing_receipts.saturating_add(1);
+            continue;
+        }
+        out.native39_quanta.push(Native39QuantumV1 {
+            receipt_id: Hash64::from_bytes(receipt.id),
+            claim: Hash64::from_bytes(receipt.claim),
+            quantum,
+            work_id: Hash64::from_bytes(receipt.price.work),
+            work: u128::from(receipt.price.quantum_mac),
+            issuance: carve,
+            operator: Hash64::from_bytes(receipt.operator),
+            class: Hash64::from_bytes(native_mining_economic_class_v39(receipt.model)),
+            anchor: delta.point.block,
+            anchor_blue: delta.point.blue_score,
+            anchor_daa: delta.point.daa_score,
+            established_daa: receipt.established_daa,
+            expires: receipt.expires,
+        });
+    }
 }
 
 /// The sink-state facts the conversion from claim records to evidence needs.
@@ -277,6 +408,67 @@ pub fn native_facts_of_block_v1(
     native_facts_and_skips_v1(rules, evidence, voided, accepting).0
 }
 
+/// [`native_facts_and_skips_v1`] plus the native39 receipt revocations gathered from the whole selected chain.
+/// A legacy `voided` claim id does not retract a native39 quantum, and a native39 conviction does not enter `voided`.
+pub fn native_facts_and_skips_with_native39_v1(
+    rules: &NativeFactRulesV1<'_>,
+    evidence: &NativeDeltaEvidenceV1,
+    voided: &BTreeSet<Hash64>,
+    native39_revoked: &BTreeSet<Hash64>,
+    accepting: (u64, u64),
+) -> (Vec<MatureUsefulWorkV1>, SkippedEvidenceV1) {
+    let (mut facts, mut skipped) = native_facts_and_skips_v1(rules, evidence, voided, accepting);
+    skipped.missing_receipt = skipped.missing_receipt.saturating_add(evidence.native39_missing_receipts);
+    let certification = rules.params.rfc0018_v1().map(|m| m.certification).filter(|c| c.validate().is_ok());
+    let base = rules.params.base_class_id();
+    let retirement = rules.params.claim_retirement_daa();
+    for quantum in &evidence.native39_quanta {
+        // The legacy `voided` set is claim ids. A native39 conviction names the receipt and nothing else.
+        if native39_revoked.contains(&quantum.receipt_id) || evidence.native39_revoked.contains(&quantum.receipt_id) {
+            skipped.voided = skipped.voided.saturating_add(1);
+            continue;
+        }
+        let Some(certification) = certification else {
+            skipped.unpriced = skipped.unpriced.saturating_add(1);
+            continue;
+        };
+        let tail = certification.lifetime_daa().saturating_add(certification.prosecution_window_daa);
+        if crate::palw_native_receipt_v39::native_mining_accusation_pending_v39(&rules.state, &quantum.claim) {
+            skipped.open_da = skipped.open_da.saturating_add(1);
+            continue;
+        }
+        if quantum.class == base {
+            skipped.base_class = skipped.base_class.saturating_add(1);
+            continue;
+        }
+        if quantum.work == 0 {
+            skipped.unpriced = skipped.unpriced.saturating_add(1);
+            continue;
+        }
+        // `established >= admitted`, and `expires` is `established + receipt_lifetime`, so this is at least
+        // `palw_native_mining_liability_until_v39` (admission + certification life + receipt life + prosecution).
+        let liability = quantum.expires.saturating_add(tail);
+        let matured_daa = quantum
+            .anchor_daa
+            .saturating_add(rules.quantum_maturity_daa)
+            .max(quantum.established_daa.saturating_add(retirement))
+            .max(liability);
+        facts.push(MatureUsefulWorkV1 {
+            identity: fp_slice_identity(&quantum.work_id, quantum.quantum),
+            anchor: quantum.anchor,
+            operator: quantum.operator,
+            class: quantum.class,
+            anchor_blue: quantum.anchor_blue,
+            accepted_blue: quantum.anchor_blue,
+            anchor_daa: quantum.anchor_daa,
+            accepted_daa: quantum.anchor_daa,
+            matured_daa,
+            work: quantum.work,
+        });
+    }
+    (facts, skipped)
+}
+
 /// What [`native_facts_of_block_v1`] left out, counted per claim record in the block's evidence (a free-prompt record that
 /// spent several quanta is one record). Nothing here is evidence and nothing here moves a certificate: it exists so a reader
 /// can see that evidence was seen and NOT counted, and why — in particular `bond_not_held`, the retention gap of the bond
@@ -299,6 +491,9 @@ pub struct SkippedEvidenceV1 {
     /// certification, if it comes, is the evidence (`certified_claims`).
     #[serde(default)]
     pub uncertified: u64,
+    /// A native39 issuance obligation whose receipt was not in the spend delta. Not counted as zero work.
+    #[serde(default)]
+    pub missing_receipt: u64,
 }
 
 impl SkippedEvidenceV1 {
@@ -309,6 +504,7 @@ impl SkippedEvidenceV1 {
             .saturating_add(self.unpriced)
             .saturating_add(self.bond_not_held)
             .saturating_add(self.uncertified)
+            .saturating_add(self.missing_receipt)
     }
     pub fn add(&mut self, other: &SkippedEvidenceV1) {
         self.voided = self.voided.saturating_add(other.voided);
@@ -317,11 +513,13 @@ impl SkippedEvidenceV1 {
         self.unpriced = self.unpriced.saturating_add(other.unpriced);
         self.bond_not_held = self.bond_not_held.saturating_add(other.bond_not_held);
         self.uncertified = self.uncertified.saturating_add(other.uncertified);
+        self.missing_receipt = self.missing_receipt.saturating_add(other.missing_receipt);
     }
 }
 
-/// [`native_facts_of_block_v1`] with the accounting of what it skipped. The ONE implementation of the conversion: the plain
-/// function is this one with the counters dropped.
+/// [`native_facts_of_block_v1`] with the accounting of what it skipped. The legacy conversion lives here.
+/// Native39 receipt quanta are added by [`native_facts_and_skips_with_native39_v1`], which calls this and does not
+/// look up a legacy claim for those obligations.
 pub fn native_facts_and_skips_v1(
     rules: &NativeFactRulesV1<'_>,
     evidence: &NativeDeltaEvidenceV1,
@@ -1135,5 +1333,182 @@ mod tests {
         assert!(!legacy_dns_evidence_allowed_v1(r, &tx(99), 111));
         assert!(!legacy_dns_evidence_allowed_v1(r, &tx(100), 100));
         assert!(legacy_dns_evidence_allowed_v1(r, &tx(100), 99), "history below the fence uses the old validator");
+    }
+
+    /// Native39 settlement reads the receipt quantum. W is `price.quantum_mac`, the anchor is the
+    /// carrying block, and a missing receipt is a refusal. A conviction clears that receipt once
+    /// and does not put its claim id on the legacy void list.
+    #[test]
+    fn rfc0012_native39_receipt_quantum_is_work_and_fraud_clears_only_that_receipt() {
+        use crate::palw_native_mining_v39::{
+            MINING_CONVICTED_KIND_V39, MINING_RECEIPT_KIND_V39, MINING_TABLE_V39, NativeMiningConvictionV39, NativeMiningPriceV39,
+            NativeMiningReceiptRecordV39, native_mining_economic_class_v39, native_mining_receipt_id_v39,
+        };
+        use crate::palw_native_receipt_v39::native_mining_row_key_v39;
+        use crate::palw_security_certification_v1::{
+            PALW_SECURITY_CERTIFICATION_TABLE_V1, PalwCertificationOutcomeV1, PalwClaimCertificationRowV1,
+            PalwSecurityCertificationPolicyV1, certification_claim_key_v1, certification_native_key_v39,
+        };
+        use crate::palw_settlement_once_v1::{
+            PALW_SETTLEMENT_ONCE_ROW_VERSION_V1, PALW_SETTLEMENT_ONCE_TABLE_V1, PalwSettlementConsumerV1, PalwSettlementDebitV1,
+            PalwSettlementLegV1, PalwSettlementObligationV1, PalwSettlementOnceRowV1,
+        };
+        use crate::palw_state_v2::{PalwBlockContextV2, PalwBondKeyV2, PalwChainStateV2, PalwDeltaEntryV2, PalwStateDeltaV2, PalwStateParamsV2};
+        use crate::tx::TransactionOutpoint;
+        let claim = [9u8; 64];
+        let receipt_id = native_mining_receipt_id_v39(claim);
+        let mut spent = vec![0u8; 1];
+        spent[0] |= 1;
+        let receipt = NativeMiningReceiptRecordV39 {
+            version: 39,
+            id: receipt_id,
+            claim,
+            model: [3; 64],
+            master: [4; 64],
+            producer: PalwBondKeyV2(TransactionOutpoint::new(h(8), 0)),
+            operator: [6; 64],
+            approval: [7; 64],
+            price: NativeMiningPriceV39 {
+                version: 39,
+                model: [3; 64],
+                master: [4; 64],
+                work: [5; 64],
+                credited_mac: 200,
+                quantum_mac: 100,
+                quanta: 2,
+                reserved_exposure: 1,
+            },
+            established_daa: 10,
+            expires: 50,
+            spent_quanta: 1,
+            spent,
+        };
+        let root = receipt.root();
+        let obligation = PalwSettlementObligationV1::with_party(PalwSettlementLegV1::NativeReceiptSpend, receipt_id, [0; 64], 0);
+        let marker = PalwSettlementOnceRowV1 {
+            version: PALW_SETTLEMENT_ONCE_ROW_VERSION_V1,
+            obligation,
+            consumer: PalwSettlementConsumerV1::ReceiptBlock,
+            amount: 80,
+            debit: PalwSettlementDebitV1::Issuance { carve: 80 },
+            settled_daa: 20,
+        };
+        let missing = PalwSettlementObligationV1::with_party(PalwSettlementLegV1::NativeReceiptSpend, [1; 64], [0; 64], 0);
+        let missing_marker = PalwSettlementOnceRowV1 {
+            version: PALW_SETTLEMENT_ONCE_ROW_VERSION_V1,
+            obligation: missing,
+            consumer: PalwSettlementConsumerV1::ReceiptBlock,
+            amount: 1,
+            debit: PalwSettlementDebitV1::Issuance { carve: 1 },
+            settled_daa: 20,
+        };
+        let legacy_row = PalwClaimCertificationRowV1 {
+            claim: [8; 64],
+            class_id: [1; 64],
+            producer_bond: [1; 64],
+            producer_principal: [1; 64],
+            attempt: true,
+            final_daa: 1,
+            committed_daa: 1,
+            committed_span: 1,
+            anchor: Some((1, [2; 64])),
+            draws: vec![],
+            drawn_daa: 1,
+            deadline_daa: 1,
+            attestations: vec![],
+            held_reward: 0,
+            payout_payload: [0; 64],
+            outcome: Some((PalwCertificationOutcomeV1::Certified, 1)),
+        };
+        let mining_row = PalwClaimCertificationRowV1 { claim, ..legacy_row.clone() };
+        let row = |table, key, bytes| PalwDeltaEntryV2::KernelRouteRow { table, key, old: None, new: Some(bytes) };
+        let spend = PalwStateDeltaV2 {
+            point: PalwBlockContextV2 { block: h(9), daa_score: 20, blue_score: 21, subsidy: 0 },
+            entries: vec![
+                row(MINING_TABLE_V39, native_mining_row_key_v39(MINING_RECEIPT_KIND_V39, &receipt.id), borsh::to_vec(&(root, &receipt)).unwrap()),
+                row(PALW_SETTLEMENT_ONCE_TABLE_V1, obligation.id_v1().to_vec(), borsh::to_vec(&marker).unwrap()),
+                row(PALW_SETTLEMENT_ONCE_TABLE_V1, missing.id_v1().to_vec(), borsh::to_vec(&missing_marker).unwrap()),
+                row(PALW_SECURITY_CERTIFICATION_TABLE_V1, certification_claim_key_v1(&[4; 64]), borsh::to_vec(&legacy_row).unwrap()),
+                row(PALW_SECURITY_CERTIFICATION_TABLE_V1, certification_native_key_v39(&[4; 64]), borsh::to_vec(&mining_row).unwrap()),
+            ],
+        };
+        let evidence = native_delta_evidence_v1(&spend);
+        assert_eq!(evidence.certified_claims, vec![Hash64::from_bytes([8; 64])], "a 'V' id is not a legacy claim");
+        assert!(evidence.voided.is_empty());
+        assert_eq!(evidence.native39_missing_receipts, 1);
+        assert_eq!(evidence.native39_quanta.len(), 1);
+        let quantum = evidence.native39_quanta[0];
+        assert_eq!(quantum.work, 100, "W is price.quantum_mac, not the 200 MAC total and not the 80 sompi carve");
+        assert_eq!(quantum.issuance, 80);
+        assert_eq!(quantum.anchor, h(9));
+        assert_eq!(quantum.anchor_daa, 20);
+        assert_eq!(quantum.anchor_blue, 21);
+        assert_eq!(quantum.operator, Hash64::from_bytes([6; 64]));
+        assert_eq!(quantum.class, Hash64::from_bytes(native_mining_economic_class_v39([3; 64])));
+        let state = PalwChainStateV2::genesis();
+        let cert = PalwSecurityCertificationPolicyV1::design_unapproved_v1(1);
+        assert!(cert.validate().is_ok());
+        let params = PalwStateParamsV2::new(100, 1, 1, 1, 500, 1_000, h(1), 4, 1_000, 100, 1_000, 0)
+            .unwrap()
+            .with_claim_retirement_daa(30)
+            .unwrap()
+            .with_rfc0018_v1(Some(crate::palw_rfc0018_v1::PalwRfc0018MirrorV1 {
+                certification: cert,
+                ..crate::palw_rfc0018_v1::PalwRfc0018MirrorV1::default()
+            }));
+        let open = BTreeSet::new();
+        let rules = NativeFactRulesV1 {
+            state: &state,
+            params: &params,
+            canonical_work_daa: Some(0),
+            quantum_maturity_daa: 7,
+            claims_with_open_disputes: &open,
+        };
+        let mut legacy_voids = BTreeSet::new();
+        legacy_voids.insert(Hash64::from_bytes(claim));
+        legacy_voids.insert(Hash64::from_bytes(receipt_id));
+        legacy_voids.insert(h(42));
+        let (facts, skipped) = native_facts_and_skips_with_native39_v1(&rules, &evidence, &legacy_voids, &BTreeSet::new(), (20, 21));
+        assert_eq!(facts.len(), 1);
+        assert!(facts.iter().all(|fact| fact.work > 0));
+        assert_eq!(facts[0].work, 100);
+        assert_eq!(facts[0].anchor, h(9));
+        assert_eq!(facts[0].operator, quantum.operator);
+        assert_eq!(facts[0].class, quantum.class);
+        assert_eq!(facts[0].identity, fp_slice_identity(&Hash64::from_bytes([5; 64]), 0));
+        assert_eq!(
+            facts[0].matured_daa,
+            20u64.saturating_add(7).max(10u64.saturating_add(30)).max(50u64.saturating_add(cert.lifetime_daa()).saturating_add(cert.prosecution_window_daa))
+        );
+        assert_eq!(skipped.missing_receipt, 1);
+        assert_eq!(skipped.voided, 0, "a legacy void id does not clear the native39 quantum");
+        let revoked = BTreeSet::from([Hash64::from_bytes(receipt_id)]);
+        let (cleared, skipped) = native_facts_and_skips_with_native39_v1(&rules, &evidence, &legacy_voids, &revoked, (20, 21));
+        assert!(cleared.is_empty());
+        assert_eq!(skipped.voided, 1);
+        let conviction = native_delta_evidence_v1(&PalwStateDeltaV2 {
+            point: PalwBlockContextV2 { block: h(11), daa_score: 30, blue_score: 31, subsidy: 0 },
+            entries: vec![row(
+                MINING_TABLE_V39,
+                native_mining_row_key_v39(MINING_CONVICTED_KIND_V39, &claim),
+                borsh::to_vec(&NativeMiningConvictionV39 {
+                    version: 39,
+                    claim,
+                    stage: 1,
+                    proof: [8; 64],
+                    established: 30,
+                    collected: 1,
+                    finder: None,
+                    finder_credit: 0,
+                    revoked_weight: 5,
+                    attestors_charged: 0,
+                })
+                .unwrap(),
+            )],
+        });
+        assert!(conviction.voided.is_empty());
+        assert!(!conviction.voided.contains(&Hash64::from_bytes(claim)));
+        assert!(!conviction.voided.contains(&h(42)));
+        assert_eq!(conviction.native39_revoked, vec![Hash64::from_bytes(receipt_id)]);
     }
 }

@@ -1,8 +1,10 @@
 //! **RFC-0037 / ADR-0204 (both Proposed — not adopted): a bounded, authenticated row stream of the PALW pruning-point
 //! state, verified incrementally against the header-committed root.**
 //!
-//! Node-local verifier only. Nothing here is wired to a P2P message, nothing changes what a header commits, and the
-//! state-root format is untouched: the stream is checked against the SAME flat commitment the chain already makes
+//! IBD decodes one `PruningPointPalwRowStream` generation and feeds those bytes through
+//! [`palw_accept_row_stream_generation_v1`] before the existing pruning-point import. A stream this verifier refuses
+//! is not imported. Nothing here changes what a header commits, and the state-root format is untouched: the stream
+//! is checked against the SAME flat commitment the chain already makes
 //! (ADR-0043 §2, [`crate::palw_state_proof_v1`]):
 //!
 //! ```text
@@ -46,6 +48,14 @@ pub const PALW_ROW_SPILL_COLLECTION_V1: u8 = b'C';
 pub const PALW_ROW_SPILL_ROW_V1: u8 = b'R';
 pub const PALW_ROW_SPILL_END_V1: u8 = b'E';
 
+/// One current pruning-point generation. A peer cannot name another generation or a history range.
+pub const PALW_ROW_STREAM_CURRENT_GENERATION_V1: u64 = 1;
+/// Same total as the existing IBD spill and `PALW_PRUNING_STATE_MAX_BYTES` (384 MiB).
+pub const PALW_ROW_STREAM_MAX_GENERATION_BYTES_V1: usize = 384 << 20;
+pub const PALW_ROW_STREAM_GENERATION_MAGIC_V1: u32 = 0x3752_5357;
+pub const PALW_ROW_STREAM_GENERATION_VERSION_V1: u16 = 1;
+const PALW_ROW_STREAM_MAX_LABEL_BYTES_V1: usize = 1024;
+
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum PalwRowStreamErrorV1 {
     #[error("preimage of {len} bytes exceeds {max}")]
@@ -76,6 +86,46 @@ pub enum PalwRowStreamErrorV1 {
     WholeState(String),
     #[error("collection {0:?}: a row does not decode under its rooting rule: {1}")]
     Projection(Vec<u8>, String),
+    #[error("generation {0} was already accepted")]
+    DuplicateGeneration(u64),
+    #[error("row stream generation is truncated")]
+    TruncatedGeneration,
+    #[error("generation {got} is not the single current generation {current}")]
+    UnexpectedGeneration { got: u64, current: u64 },
+    #[error("generation of {len} bytes exceeds {max}")]
+    GenerationTooLarge { len: usize, max: usize },
+}
+
+/// One collection inside a row-stream generation.
+pub struct PalwRowStreamCollectionV1 {
+    pub label: Vec<u8>,
+    pub offset: u64,
+    pub rows: Vec<(Vec<u8>, Vec<u8>)>,
+}
+
+/// The verifier accepted this generation. [`Self::import_suffix`] is the existing snapshot envelope, and it is
+/// only available after [`palw_accept_row_stream_generation_v1`] returns `Ok`.
+pub struct PalwAcceptedRowStreamGenerationV1<W> {
+    generation: u64,
+    verified: PalwRowStreamVerifiedV1<W>,
+    import_suffix: Vec<u8>,
+}
+
+impl<W> PalwAcceptedRowStreamGenerationV1<W> {
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+    pub fn import_suffix(&self) -> &[u8] {
+        &self.import_suffix
+    }
+    /// Run the caller's whole-state check. IBD uses this only after the verifier has accepted the stream, then
+    /// hands the suffix to the existing pruning-point import.
+    pub fn into_whole_state(
+        self,
+        check: impl FnOnce(&mut W, &[u8], Hash64) -> Result<(), String>,
+    ) -> Result<PalwWholeStateVerifiedV1<W>, PalwRowStreamErrorV1> {
+        self.verified.whole_state_checked(check)
+    }
 }
 
 /// A collection whose root hashes a PROJECTION of each record (e.g. `gen_classes` / `tir_classes`, rooted over
@@ -449,5 +499,241 @@ pub fn palw_read_row_spill_v1(mut r: impl std::io::Read) -> std::io::Result<Vec<
             return Err(Error::new(ErrorKind::InvalidData, "spill: collection not closed"));
         }
         out.push((label, rows));
+    }
+}
+
+fn push_u16(out: &mut Vec<u8>, value: u16) {
+    out.extend_from_slice(&value.to_le_bytes());
+}
+fn push_u32(out: &mut Vec<u8>, value: u32) {
+    out.extend_from_slice(&value.to_le_bytes());
+}
+fn push_u64(out: &mut Vec<u8>, value: u64) {
+    out.extend_from_slice(&value.to_le_bytes());
+}
+
+fn generation_frame_len(preimage: &[u8], collections: &[PalwRowStreamCollectionV1], suffix: &[u8]) -> Option<usize> {
+    let mut total = 4usize + 2 + 8 + 8 + 4 + preimage.len() + 4 + 1 + 8 + suffix.len();
+    for collection in collections {
+        total = total.checked_add(4)?.checked_add(collection.label.len())?.checked_add(16)?;
+        for (key, value) in &collection.rows {
+            total = total.checked_add(8)?.checked_add(key.len())?.checked_add(value.len())?;
+        }
+    }
+    Some(total)
+}
+
+/// Encode one current generation. The suffix is the existing snapshot envelope the IBD import decodes after the
+/// verifier accepts the stream.
+pub fn encode_row_stream_generation_v1(
+    preimage: &[u8],
+    collections: &[PalwRowStreamCollectionV1],
+    import_suffix: &[u8],
+) -> Result<Vec<u8>, PalwRowStreamErrorV1> {
+    if preimage.len() > PALW_ROW_STREAM_MAX_PREIMAGE_BYTES_V1 {
+        return Err(PalwRowStreamErrorV1::PreimageTooLarge { len: preimage.len(), max: PALW_ROW_STREAM_MAX_PREIMAGE_BYTES_V1 });
+    }
+    let len = generation_frame_len(preimage, collections, import_suffix).filter(|len| *len <= PALW_ROW_STREAM_MAX_GENERATION_BYTES_V1).ok_or(
+        PalwRowStreamErrorV1::GenerationTooLarge {
+            len: usize::MAX,
+            max: PALW_ROW_STREAM_MAX_GENERATION_BYTES_V1,
+        },
+    )?;
+    let mut stream = Vec::new();
+    push_u32(&mut stream, preimage.len() as u32);
+    stream.extend_from_slice(preimage);
+    push_u32(&mut stream, collections.len() as u32);
+    for collection in collections {
+        if collection.label.len() > PALW_ROW_STREAM_MAX_LABEL_BYTES_V1 {
+            return Err(PalwRowStreamErrorV1::TruncatedGeneration);
+        }
+        push_u32(&mut stream, collection.label.len() as u32);
+        stream.extend_from_slice(&collection.label);
+        push_u64(&mut stream, collection.rows.len() as u64);
+        push_u64(&mut stream, collection.offset);
+        for (key, value) in &collection.rows {
+            if key.len() > u32::MAX as usize || value.len() > u32::MAX as usize {
+                return Err(PalwRowStreamErrorV1::GenerationTooLarge { len, max: PALW_ROW_STREAM_MAX_GENERATION_BYTES_V1 });
+            }
+            push_u32(&mut stream, key.len() as u32);
+            stream.extend_from_slice(key);
+            push_u32(&mut stream, value.len() as u32);
+            stream.extend_from_slice(value);
+        }
+    }
+    stream.push(PALW_ROW_SPILL_END_V1);
+    let mut out = Vec::with_capacity(len);
+    push_u32(&mut out, PALW_ROW_STREAM_GENERATION_MAGIC_V1);
+    push_u16(&mut out, PALW_ROW_STREAM_GENERATION_VERSION_V1);
+    push_u64(&mut out, PALW_ROW_STREAM_CURRENT_GENERATION_V1);
+    push_u64(&mut out, stream.len() as u64);
+    out.extend_from_slice(&stream);
+    push_u64(&mut out, import_suffix.len() as u64);
+    out.extend_from_slice(import_suffix);
+    if out.len() != len {
+        return Err(PalwRowStreamErrorV1::TruncatedGeneration);
+    }
+    Ok(out)
+}
+
+fn read_exact<'a>(input: &mut &'a [u8], len: usize) -> Result<&'a [u8], PalwRowStreamErrorV1> {
+    if input.len() < len {
+        return Err(PalwRowStreamErrorV1::TruncatedGeneration);
+    }
+    let (head, tail) = input.split_at(len);
+    *input = tail;
+    Ok(head)
+}
+fn read_u8(input: &mut &[u8]) -> Result<u8, PalwRowStreamErrorV1> {
+    Ok(read_exact(input, 1)?[0])
+}
+fn read_u16(input: &mut &[u8]) -> Result<u16, PalwRowStreamErrorV1> {
+    let bytes = read_exact(input, 2)?;
+    Ok(u16::from_le_bytes(bytes.try_into().unwrap()))
+}
+fn read_u32(input: &mut &[u8]) -> Result<u32, PalwRowStreamErrorV1> {
+    let bytes = read_exact(input, 4)?;
+    Ok(u32::from_le_bytes(bytes.try_into().unwrap()))
+}
+fn read_u64(input: &mut &[u8]) -> Result<u64, PalwRowStreamErrorV1> {
+    let bytes = read_exact(input, 8)?;
+    Ok(u64::from_le_bytes(bytes.try_into().unwrap()))
+}
+
+/// Decode one generation and run it through [`PalwRowStreamVerifierV1`].
+///
+/// `expected_root` is the witness header's root, never a value taken from the peer. `already_imported` refuses a
+/// second copy of the same generation. A short frame, a generation id other than [`PALW_ROW_STREAM_CURRENT_GENERATION_V1`],
+/// or any verifier error returns `Err` and does not yield an import suffix.
+pub fn palw_accept_row_stream_generation_v1<W: Write>(
+    expected_root: Hash64,
+    bytes: &[u8],
+    sink: W,
+    max_bytes: u64,
+    already_imported: Option<u64>,
+) -> Result<PalwAcceptedRowStreamGenerationV1<W>, PalwRowStreamErrorV1> {
+    let cap = (PALW_ROW_STREAM_MAX_GENERATION_BYTES_V1 as u64).min(max_bytes);
+    if bytes.len() as u64 > cap {
+        return Err(PalwRowStreamErrorV1::GenerationTooLarge { len: bytes.len(), max: cap as usize });
+    }
+    let mut rest = bytes;
+    if read_u32(&mut rest)? != PALW_ROW_STREAM_GENERATION_MAGIC_V1 || read_u16(&mut rest)? != PALW_ROW_STREAM_GENERATION_VERSION_V1 {
+        return Err(PalwRowStreamErrorV1::TruncatedGeneration);
+    }
+    let generation = read_u64(&mut rest)?;
+    if generation != PALW_ROW_STREAM_CURRENT_GENERATION_V1 {
+        return Err(PalwRowStreamErrorV1::UnexpectedGeneration { got: generation, current: PALW_ROW_STREAM_CURRENT_GENERATION_V1 });
+    }
+    if already_imported == Some(generation) {
+        return Err(PalwRowStreamErrorV1::DuplicateGeneration(generation));
+    }
+    let stream_len = usize::try_from(read_u64(&mut rest)?).map_err(|_| PalwRowStreamErrorV1::TruncatedGeneration)?;
+    let mut stream = read_exact(&mut rest, stream_len)?;
+    let preimage_len = usize::try_from(read_u32(&mut stream)?).map_err(|_| PalwRowStreamErrorV1::TruncatedGeneration)?;
+    if preimage_len > PALW_ROW_STREAM_MAX_PREIMAGE_BYTES_V1 {
+        return Err(PalwRowStreamErrorV1::PreimageTooLarge { len: preimage_len, max: PALW_ROW_STREAM_MAX_PREIMAGE_BYTES_V1 });
+    }
+    let preimage = read_exact(&mut stream, preimage_len)?.to_vec();
+    let collection_count = read_u32(&mut stream)?;
+    if collection_count as usize > preimage.len() / 64 {
+        return Err(PalwRowStreamErrorV1::TruncatedGeneration);
+    }
+    let mut verifier = PalwRowStreamVerifierV1::new(expected_root, preimage, sink, cap)?;
+    for _ in 0..collection_count {
+        let label_len = usize::try_from(read_u32(&mut stream)?).map_err(|_| PalwRowStreamErrorV1::TruncatedGeneration)?;
+        if label_len > PALW_ROW_STREAM_MAX_LABEL_BYTES_V1 {
+            return Err(PalwRowStreamErrorV1::TruncatedGeneration);
+        }
+        let label = read_exact(&mut stream, label_len)?.to_vec();
+        let rows = read_u64(&mut stream)?;
+        let offset = usize::try_from(read_u64(&mut stream)?).map_err(|_| PalwRowStreamErrorV1::BadOffset {
+            label: label.clone(),
+            offset: usize::MAX,
+        })?;
+        if rows.saturating_mul(8) > stream.len() as u64 {
+            return Err(PalwRowStreamErrorV1::TruncatedGeneration);
+        }
+        verifier.begin_collection(&label, rows, offset)?;
+        for _ in 0..rows {
+            let key_len = usize::try_from(read_u32(&mut stream)?).map_err(|_| PalwRowStreamErrorV1::TruncatedGeneration)?;
+            let key = read_exact(&mut stream, key_len)?.to_vec();
+            let value_len = usize::try_from(read_u32(&mut stream)?).map_err(|_| PalwRowStreamErrorV1::TruncatedGeneration)?;
+            let value = read_exact(&mut stream, value_len)?.to_vec();
+            verifier.row(&key, &value)?;
+        }
+        verifier.end_collection()?;
+    }
+    if read_u8(&mut stream)? != PALW_ROW_SPILL_END_V1 || !stream.is_empty() {
+        return Err(PalwRowStreamErrorV1::TruncatedGeneration);
+    }
+    let suffix_len = usize::try_from(read_u64(&mut rest)?).map_err(|_| PalwRowStreamErrorV1::TruncatedGeneration)?;
+    if suffix_len != rest.len() {
+        return Err(PalwRowStreamErrorV1::TruncatedGeneration);
+    }
+    let verified = verifier.finish()?;
+    Ok(PalwAcceptedRowStreamGenerationV1 { generation, verified, import_suffix: rest.to_vec() })
+}
+
+#[cfg(test)]
+mod generation_tests {
+    use super::*;
+    use crate::palw_state_v2::{palw_collection_root_of_entries_v1, palw_state_root_of_preimage_v1};
+
+    fn sample() -> (Hash64, Vec<u8>, PalwRowStreamCollectionV1) {
+        let rows = vec![(b"k".to_vec(), b"value".to_vec())];
+        let root = palw_collection_root_of_entries_v1(b"bonds", rows.len(), rows.iter().cloned());
+        let mut preimage = vec![9, 8, 7];
+        let offset = preimage.len() as u64;
+        preimage.extend_from_slice(root.as_byte_slice());
+        let state = palw_state_root_of_preimage_v1(&preimage);
+        (state, preimage, PalwRowStreamCollectionV1 { label: b"bonds".to_vec(), offset, rows })
+    }
+
+    #[test]
+    fn a_matching_generation_reaches_whole_state_and_keeps_the_import_suffix() {
+        let (root, preimage, collection) = sample();
+        let suffix = b"existing-snapshot-envelope".to_vec();
+        let bytes = encode_row_stream_generation_v1(&preimage, &[collection], &suffix).unwrap();
+        let accepted = palw_accept_row_stream_generation_v1(root, &bytes, Vec::<u8>::new(), bytes.len() as u64, None).unwrap();
+        assert_eq!(accepted.generation(), PALW_ROW_STREAM_CURRENT_GENERATION_V1);
+        assert_eq!(accepted.import_suffix(), suffix.as_slice());
+        let evidence = accepted.into_whole_state(|_, preimage, root| {
+            if palw_state_root_of_preimage_v1(preimage) == root { Ok(()) } else { Err("preimage".into()) }
+        });
+        assert!(evidence.is_ok());
+    }
+
+    #[test]
+    fn a_stream_the_verifier_refuses_does_not_yield_an_import_suffix() {
+        let (root, preimage, mut collection) = sample();
+        collection.rows[0].1[0] ^= 1;
+        let bytes = encode_row_stream_generation_v1(&preimage, &[collection], b"suffix").unwrap();
+        let refused = palw_accept_row_stream_generation_v1(root, &bytes, Vec::<u8>::new(), u64::MAX, None);
+        assert!(matches!(refused, Err(PalwRowStreamErrorV1::CollectionMismatch(_))));
+    }
+
+    #[test]
+    fn duplicate_truncated_and_non_current_generations_are_refused() {
+        let (root, preimage, collection) = sample();
+        let bytes = encode_row_stream_generation_v1(&preimage, &[collection], b"suffix").unwrap();
+        assert!(matches!(
+            palw_accept_row_stream_generation_v1(root, &bytes, Vec::<u8>::new(), u64::MAX, Some(PALW_ROW_STREAM_CURRENT_GENERATION_V1)),
+            Err(PalwRowStreamErrorV1::DuplicateGeneration(_))
+        ));
+        assert!(matches!(
+            palw_accept_row_stream_generation_v1(root, &bytes[..bytes.len() - 1], Vec::<u8>::new(), u64::MAX, None),
+            Err(PalwRowStreamErrorV1::TruncatedGeneration)
+        ));
+        let mut other = bytes.clone();
+        assert_eq!(other[6], 1, "generation id is the first byte after the 4-byte magic and 2-byte version");
+        other[6] = 2;
+        assert!(matches!(
+            palw_accept_row_stream_generation_v1(root, &other, Vec::<u8>::new(), u64::MAX, None),
+            Err(PalwRowStreamErrorV1::UnexpectedGeneration { .. })
+        ));
+        assert!(matches!(
+            palw_accept_row_stream_generation_v1(root, &bytes, Vec::<u8>::new(), 8, None),
+            Err(PalwRowStreamErrorV1::GenerationTooLarge { .. })
+        ));
     }
 }

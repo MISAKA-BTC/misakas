@@ -3420,6 +3420,8 @@ impl PalwChainStateV2 {
         self.assert_beacon_bootstrap_consistency_v1(params)?;
         self.assert_source_bootstrap_consistency_v1(params)?;
         self.assert_source_verifier_economics_consistency_v2(params)?;
+        self.assert_verifier_watch_consistency_v1(params)?;
+        self.assert_verifier_watch_draw_consistency_v1(params)?;
         self.assert_panel_source_fee_consistency_v2()?;
         // Lane BUDGET: the bond budget's own invariants (windows = Σ in-window reservations, open counts, releases, consumption within
         // reservation) — a carriage decodes whatever its tail holds, so an import is refused on a bent engine.

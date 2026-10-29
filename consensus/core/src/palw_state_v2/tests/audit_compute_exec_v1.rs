@@ -183,3 +183,34 @@ fn audit_cx01_live_under_the_decode_rules_a_rung_of_a_paid_answer_is_credited_ag
         .expect("a rung with a new tail applies");
     assert_eq!(tail.claim(&h64(0xC3)).unwrap().pwu, priced(&p, leaves(31, 5) - prefill(31)));
 }
+
+/// **RFC-0038:** the answer fold records one settled carrier. A second transaction id for the
+/// same claim is not what the index stores, so a later reader does not choose between them.
+#[test]
+fn rfc0038_answer_fold_indexes_the_settled_carrier_and_not_another_same_claim_tx() {
+    use crate::palw_fp_answer_accounting_v1::PALW_FP_WINNING_CARRIER_TABLE_V1;
+    let (p, mut chain, _class, armed) = published();
+    chain.kernel_route = Some(crate::palw_kernel_route_v1::PalwKernelRouteStateV1::new(
+        crate::palw_kernel_route_v1::palw_kernel_route_policy_v1(h64(1), h64(2)),
+        None,
+        misaka_palw_kernel::rows::LedgerScalarsV1 { daa: 1, burned: 0 },
+    ));
+    let prompt: Vec<u32> = (0..8).collect();
+    let answer: Vec<u32> = (500..524).collect();
+    let settled = h64(0x5E77);
+    let other = h64(0x07EE);
+    let mut fenced = answered(&armed, &[(0xC0, &answer)]);
+    fenced.fp_winning_carriers.insert(h64(0xC0), settled);
+    let (state, _) =
+        apply_derived(&chain, &p, &ctx(4, 103, 4), &[derived_commit(0xC0, &prompt, 24, leaves(8, 24))], &fenced).expect("C0 applies");
+    let raw = state
+        .kernel_route
+        .as_ref()
+        .unwrap()
+        .aux
+        .get(&(PALW_FP_WINNING_CARRIER_TABLE_V1, h64(0xC0).as_byte_slice().to_vec()))
+        .expect("the settled carrier is indexed");
+    let stored = crate::Hash64::try_from(raw.as_slice()).expect("the row is the carrier id");
+    assert_eq!(stored, settled);
+    assert_ne!(stored, other);
+}

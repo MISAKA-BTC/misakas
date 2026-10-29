@@ -177,6 +177,17 @@ impl RequestPruningPointPalwStateFlow {
                     continue;
                 }
             };
+            if msg.row_stream_generation > kaspa_consensus_core::palw_row_stream_v1::PALW_ROW_STREAM_CURRENT_GENERATION_V1 {
+                // One current generation only. A larger id is a history request and is not served.
+                debug!("[palw-sidecar] refusing row-stream generation {}: only the current generation is served", msg.row_stream_generation);
+                let refused = if msg.chunked {
+                    PruningPointPalwStateMessage { chunked: true, ..Default::default() }
+                } else {
+                    PruningPointPalwStateMessage { found: false, palw_state: vec![], class_carriages: vec![], ..Default::default() }
+                };
+                self.router.enqueue(make_message!(Payload::PruningPointPalwState, refused)).await?;
+                continue;
+            }
             if msg.chunked {
                 self.serve_chunked(msg).await?;
                 continue;

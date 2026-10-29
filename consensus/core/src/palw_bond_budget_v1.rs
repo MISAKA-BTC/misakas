@@ -5719,3 +5719,68 @@ mod tests {
 // Read-only native allocation inventory; no state/root/codec field is added.
 #[path = "palw_native_resource_v1/private/palw_bond_budget_v1.rs"]
 mod native_resource_inventory_v1;
+
+impl PalwBondBudgetStateV1 {
+    /// An already debited verifier escrow may be smaller than its drawn maximum.
+    /// Keep the entire original R reservation until physical payment + W; never
+    /// increase the cash amount or relax the existing exact source-fee API.
+    /// Ordinary verifier compensation whose actual timely conviction/default
+    /// has already been authenticated by the native fold, with no Clean claim
+    /// carrying liability. Its fee may mature before the alternative Clean H;
+    /// the originally reserved full R remains charged through real payment + W.
+    pub(crate) fn queue_terminal_verifier_income_v1(
+        &mut self, policy: &PalwBondBudgetPolicyV1, income_id: &Hash64,
+        now: u64, collected: u64, queue_id: Hash64,
+        j: &mut Vec<PalwBudgetWriteV1>,
+    ) -> Result<(), PalwBudgetRefusalV1> {
+        let row = self.claims.get(income_id)
+            .filter(|r| r.origin == PalwBudgetOriginV1::SourceFee && r.live && r.in_window && !r.open)
+            .ok_or(PalwBudgetRefusalV1::NotOpen)?;
+        if collected == 0 || collected > row.reserved.reward_sompi || row.consumed.reward_sompi != 0 {
+            return Err(PalwBudgetRefusalV1::Assignment("terminal verifier cash exceeds unconsumed drawn R"));
+        }
+        self.pay_native_income_inner_v1(policy, income_id, now, collected, Some(queue_id), true, j)
+    }
+
+    pub fn queue_collected_source_income_v1(
+        &mut self, policy: &PalwBondBudgetPolicyV1, income_id: &Hash64,
+        liability_until: u64, now: u64, collected: u64, queue_id: Hash64,
+        j: &mut Vec<PalwBudgetWriteV1>,
+    ) -> Result<(), PalwBudgetRefusalV1> {
+        let row=self.claims.get(income_id).filter(|r|r.origin==PalwBudgetOriginV1::SourceFee && r.live && r.in_window && !r.open)
+            .ok_or(PalwBudgetRefusalV1::NotOpen)?;
+        if now<=liability_until || collected==0 || collected>row.reserved.reward_sompi || row.consumed.reward_sompi!=0 {
+            return Err(PalwBudgetRefusalV1::Assignment("collected source cash exceeds its reserved maximum or is not mature"));
+        }
+        self.pay_native_income_inner_v1(policy,income_id,now,collected,Some(queue_id),true,j)
+    }
+}
+
+#[cfg(test)]
+mod collected_verifier_fee_tests {
+    use super::*;
+    #[test]
+    fn collected_fee_queue_never_exceeds_reserved_r_and_preserves_unused_cap_until_real_payment() {
+        let mut p=PalwBondBudgetPolicyV1::unapproved_probe_v1();
+        p.capital_unit_sompi=1_000;p.rho=1;p.reward_per_unit_sompi=100;p.claims_per_unit=2;
+        p.max_open_claims_per_bond=10;p.window_daa=100;
+        let bond=PalwBondKeyV2(crate::tx::TransactionOutpoint::new(Default::default(),0));
+        let id=Hash64::from_u64_word(91);let queue=Hash64::from_u64_word(92);
+        let mut b=PalwBondBudgetStateV1::new(100,&p);let mut j=Vec::new();
+        b.reserve_source_income_v1(&p,1_000,id,bond,100,200,17,&mut j).unwrap();
+        let before=b.clone();let n=j.len();
+        assert!(b.queue_collected_source_income_v1(&p,&id,200,201,18,queue,&mut j).is_err());
+        assert_eq!(b,before);assert_eq!(j.len(),n);
+        assert!(b.queue_collected_source_income_v1(&p,&id,200,200,9,queue,&mut j).is_err());
+        b.queue_collected_source_income_v1(&p,&id,200,201,9,queue,&mut j).unwrap();
+        let held=b.claim_row(&queue).unwrap();
+        assert_eq!(held.reserved.reward_sompi,17);
+        assert_eq!(held.consumed.reward_sompi,9);
+        assert!(b.queue_collected_source_income_v1(&p,&id,200,202,9,queue,&mut j).is_err());
+        b.release_due(10_000,&mut j);
+        assert!(b.claim_row(&queue).unwrap().live,"time cannot release unpaid cash R");
+        b.confirm_native_income_payment_v1(&p,&queue,10_000,&mut j).unwrap();
+        assert_eq!(b.claim_row(&queue).unwrap().reuse_not_before,10_100);
+        b.check_consistency().unwrap();
+    }
+}

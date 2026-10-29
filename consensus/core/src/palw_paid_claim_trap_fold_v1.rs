@@ -31,14 +31,16 @@ use crate::palw_claim_challenge_v2::{PAID_CLAIM_LOCKS_V2, PAID_CLAIM_RECEIPTS_V2
 use crate::palw_kernel_route_v1::{PalwKernelRouteStateV1, palw_kernel_bond_id_v1};
 use crate::palw_mesh_v1::PalwTrapRevealedV1;
 use crate::palw_paid_claim_trap_v1::{
-    PALW_PAID_CLAIM_TRAP_COMMIT_DEPOSIT_SOMPI_V1, PALW_PAID_CLAIM_TRAP_COMMITMENT_PREFIX_V1, PALW_PAID_CLAIM_TRAP_CONVICTION_PREFIX_V1,
-    PALW_PAID_CLAIM_TRAP_HELD_FEE_PREFIX_V1, PALW_PAID_CLAIM_TRAP_RELEASES_PER_BLOCK_V1, PALW_PAID_CLAIM_TRAP_ROW_VERSION_V1,
-    PALW_PAID_CLAIM_TRAP_SIGNER_LIABILITY_SOMPI_V1, PALW_PAID_CLAIM_TRAP_TABLE_V1, PalwHeldCheckFeeRowV1, PalwPaidClaimConvictionRowV1,
-    PalwPaidTrapClaimV1, PalwPaidTrapCommitInputV1, PalwPaidTrapCommitmentRowV1, PalwPaidTrapRevealInputV1,
-    palw_paid_trap_commit_admits_v1, palw_paid_trap_commitment_key_v1, palw_paid_trap_conviction_key_v1, palw_paid_trap_counts_v1,
-    palw_paid_trap_forfeit_v1, palw_paid_trap_held_fee_key_v1, palw_paid_trap_reveal_admits_v1,
+    PALW_PAID_CLAIM_TRAP_COMMIT_DEPOSIT_SOMPI_V1, PALW_PAID_CLAIM_TRAP_COMMITMENT_PREFIX_V1,
+    PALW_PAID_CLAIM_TRAP_CONVICTION_PREFIX_V1, PALW_PAID_CLAIM_TRAP_HELD_FEE_PREFIX_V1, PALW_PAID_CLAIM_TRAP_RELEASES_PER_BLOCK_V1,
+    PALW_PAID_CLAIM_TRAP_ROW_VERSION_V1, PALW_PAID_CLAIM_TRAP_SIGNER_LIABILITY_SOMPI_V1, PALW_PAID_CLAIM_TRAP_TABLE_V1,
+    PalwHeldCheckFeeRowV1, PalwPaidClaimConvictionRowV1, PalwPaidTrapClaimV1, PalwPaidTrapCommitInputV1, PalwPaidTrapCommitmentRowV1,
+    PalwPaidTrapRevealInputV1, palw_paid_trap_commit_admits_v1, palw_paid_trap_commitment_key_v1, palw_paid_trap_conviction_key_v1,
+    palw_paid_trap_counts_v1, palw_paid_trap_forfeit_v1, palw_paid_trap_held_fee_key_v1, palw_paid_trap_reveal_admits_v1,
 };
-use crate::palw_settlement_once_v1::{PalwSettlementConsumerV1, PalwSettlementDebitV1, PalwSettlementLegV1, PalwSettlementObligationV1};
+use crate::palw_settlement_once_v1::{
+    PalwSettlementConsumerV1, PalwSettlementDebitV1, PalwSettlementLegV1, PalwSettlementObligationV1,
+};
 
 fn refused(why: impl ToString) -> PalwStateV2Error {
     PalwStateV2Error::MeshRefused(why.to_string())
@@ -80,9 +82,9 @@ pub(super) fn paid_trap_lock_admits_v1(
 /// `(enrollment, signer)`) exists, decodes, names this enrollment and signer, and is complete (round 0, the non-interactive form).
 pub(super) fn clean_receipt_signer_v1(route: &PalwKernelRouteStateV1, enrollment: &[u8; 64], signer: &[u8; 64]) -> bool {
     let id = misaka_palw_kernel::hash::object_id(PAID_CLAIM_RECEIPT_DOMAIN_V2, &(*enrollment, *signer));
-    route
-        .aux_row::<misaka_palw_kernel::claim_paid_v2::PaidClaimReceiptV2>(PAID_CLAIM_RECEIPTS_V2, &id)
-        .is_some_and(|receipt| receipt.complete && receipt.round == 0 && receipt.enrollment == *enrollment && receipt.signer == *signer)
+    route.aux_row::<misaka_palw_kernel::claim_paid_v2::PaidClaimReceiptV2>(PAID_CLAIM_RECEIPTS_V2, &id).is_some_and(|receipt| {
+        receipt.complete && receipt.round == 0 && receipt.enrollment == *enrollment && receipt.signer == *signer
+    })
 }
 
 /// **The lock seats of a paid claim that signed a Clean receipt**, in seat order (each seat once). An interactive (staged) paid
@@ -159,11 +161,17 @@ impl PalwChainStateV2 {
     /// Native lookup: malformed present rows and capacity never select mesh
     /// fallback. The Option-only method above is a historical read wrapper.
     pub fn paid_trap_target_checked_v1(
-        &self, params: &PalwStateParamsV2, claim: &Hash64, daa: u64,
+        &self,
+        params: &PalwStateParamsV2,
+        claim: &Hash64,
+        daa: u64,
     ) -> Result<Option<PalwPaidTrapClaimV1>, PalwStateV2Error> {
-        if !params.paid_claim_trap_active_at(daa) { return Ok(None); }
+        if !params.paid_claim_trap_active_at(daa) {
+            return Ok(None);
+        }
         let Some(route) = self.kernel_route.as_ref() else { return Ok(None) };
-        route.paid_claim_authority_for_base_checked_v1(&claim.as_bytes())
+        route
+            .paid_claim_authority_for_base_checked_v1(&claim.as_bytes())
             .map(|a| a.map(|a| PalwPaidTrapClaimV1::of(&a)))
             .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))
     }
@@ -171,7 +179,12 @@ impl PalwChainStateV2 {
     /// **The stateful half of a `TrapRevealed`'s admission, for the acceptance walk and the fold alike**: a paid-claim trap past the
     /// fence ([`Self::paid_trap_revealed_admissible_v1`]), otherwise exactly the mesh's rule (`mesh_trap_revealed_admissible_v2`,
     /// with lane PA's rule where `palw_audit_1004_v1` is in force). The ML-DSA signature stays the walk's.
-    pub fn trap_revealed_admissible_v3(&self, params: &PalwStateParamsV2, reveal: &PalwTrapRevealedV1, daa: u64) -> Result<(), String> {
+    pub fn trap_revealed_admissible_v3(
+        &self,
+        params: &PalwStateParamsV2,
+        reveal: &PalwTrapRevealedV1,
+        daa: u64,
+    ) -> Result<(), String> {
         match self.paid_trap_target_checked_v1(params, &reveal.claim, daa).map_err(|why| why.to_string())? {
             Some(paid) => self.paid_trap_revealed_admissible_v1(&paid, reveal, daa).map_err(str::to_string),
             None => self.mesh_trap_revealed_admissible_v2(reveal, daa, params.audit_1004_active_at(daa)).map_err(|e| e.to_string()),
@@ -180,7 +193,12 @@ impl PalwChainStateV2 {
 
     /// **A paid-claim trap's reveal** ([`palw_paid_trap_reveal_admits_v1`] over the state): the fault's evidence is the kernel
     /// claim row's own conviction (the court's deterministic FileProof/FileDemand check), never anything the reveal carries.
-    pub fn paid_trap_revealed_admissible_v1(&self, paid: &PalwPaidTrapClaimV1, reveal: &PalwTrapRevealedV1, daa: u64) -> Result<(), &'static str> {
+    pub fn paid_trap_revealed_admissible_v1(
+        &self,
+        paid: &PalwPaidTrapClaimV1,
+        reveal: &PalwTrapRevealedV1,
+        daa: u64,
+    ) -> Result<(), &'static str> {
         let convicted =
             self.kernel_route.as_ref().and_then(|route| route.kernel_claim_row_v1(&reveal.claim)).is_some_and(|row| row.convicted);
         palw_paid_trap_reveal_admits_v1(&self.paid_trap_reveal_input_v1(paid, reveal, daa, convicted))
@@ -222,7 +240,11 @@ impl PalwChainStateV2 {
 /// **The seat a trap's bounty pays**: the accuser the court recorded at the paid claim's conviction (aux 142), when it is one of
 /// the claim's drawn lock seats and not the setter (a setter convicting its own trap earns nothing). `None` otherwise — a
 /// conviction filed by anybody else stands, unpaid by the trap.
-pub(super) fn trap_bounty_seat_v1(route: &PalwKernelRouteStateV1, paid: &PalwPaidTrapClaimV1, setter: &PalwBondKeyV2) -> Option<PalwBondKeyV2> {
+pub(super) fn trap_bounty_seat_v1(
+    route: &PalwKernelRouteStateV1,
+    paid: &PalwPaidTrapClaimV1,
+    setter: &PalwBondKeyV2,
+) -> Option<PalwBondKeyV2> {
     let conviction = route
         .aux_row::<PalwPaidClaimConvictionRowV1>(PALW_PAID_CLAIM_TRAP_TABLE_V1, &palw_paid_trap_conviction_key_v1(&paid.base_claim))
         .filter(|row| row.version == PALW_PAID_CLAIM_TRAP_ROW_VERSION_V1 && row.base_claim == paid.base_claim)?;
@@ -322,7 +344,8 @@ pub(super) fn on_paid_claim_convictions_v1(
     if let Some(route) = builder.state.kernel_route.as_ref() {
         for event in events {
             if let misaka_palw_kernel::ledger::LedgerEventV1::Convicted { claim, .. } = event {
-                route.paid_claim_authority_for_base_checked_v1(claim)
+                route
+                    .paid_claim_authority_for_base_checked_v1(claim)
                     .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?;
             }
         }
@@ -330,9 +353,13 @@ pub(super) fn on_paid_claim_convictions_v1(
     for event in events {
         let misaka_palw_kernel::ledger::LedgerEventV1::Convicted { claim, accuser, .. } = event else { continue };
         let Some(route) = builder.state.kernel_route.as_ref() else { return Ok(()) };
-        let Some(paid) = route.paid_claim_authority_for_base_checked_v1(claim)
+        let Some(paid) = route
+            .paid_claim_authority_for_base_checked_v1(claim)
             .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?
-            .map(|a| PalwPaidTrapClaimV1::of(&a)) else { continue };
+            .map(|a| PalwPaidTrapClaimV1::of(&a))
+        else {
+            continue;
+        };
         let key = palw_paid_trap_conviction_key_v1(claim);
         if route.aux.contains_key(&(PALW_PAID_CLAIM_TRAP_TABLE_V1, key.clone())) {
             continue; // recorded once
@@ -361,9 +388,13 @@ pub(super) fn check_fee_hold_until_v1(builder: &TransitionBuilder<'_>, claim: &[
 }
 
 pub(super) fn check_fee_hold_until_checked_v1(
-    builder: &TransitionBuilder<'_>, claim: &[u8; 64], now: u64,
+    builder: &TransitionBuilder<'_>,
+    claim: &[u8; 64],
+    now: u64,
 ) -> Result<Option<u64>, PalwStateV2Error> {
-    builder.state.paid_trap_target_checked_v1(builder.params, &Hash64::from_bytes(*claim), now)
+    builder
+        .state
+        .paid_trap_target_checked_v1(builder.params, &Hash64::from_bytes(*claim), now)
         .map(|paid| paid.map(|paid| paid.reveal_end()))
 }
 
@@ -387,8 +418,47 @@ pub(super) fn check_fee_hold_admits_v1(
     Ok(!builder.state.kernel_route.as_ref().is_some_and(|route| route.aux.contains_key(&(PALW_PAID_CLAIM_TRAP_TABLE_V1, key))))
 }
 
+/// Admission of the funded fee reuses the immutable draw reservation; a late
+/// fate event cannot manufacture R or use the producer's income identity.
+pub(super) fn validate_held_check_fee_income_v1(
+    builder: &TransitionBuilder<'_>,
+    row: &PalwHeldCheckFeeRowV1,
+    now: u64,
+) -> Result<(), PalwStateV2Error> {
+    if !builder.params.bond_budget_active_at(now) || row.fee == 0 {
+        return Ok(());
+    }
+    let bond = builder
+        .state
+        .kernel_route
+        .as_ref()
+        .and_then(|r| r.bond_key_of(&row.verifier))
+        .ok_or_else(|| refused("paid fee verifier absent"))?;
+    let context = crate::palw_verifier_fee_consent_v1::verifier_fee_income_context_v1(row.claim, row.verifier, row.slot);
+    let income = super::palw_bond_budget_fold_v1::source_income_id_v1(context, Hash64::from_bytes(row.claim), &bond);
+    let reserve = builder
+        .state
+        .bond_budget
+        .as_ref()
+        .and_then(|b| b.claim_row(&income))
+        .ok_or_else(|| refused("paid fee has no drawn-slot R reservation"))?;
+    if reserve.origin != crate::palw_bond_budget_v1::PalwBudgetOriginV1::SourceFee
+        || !reserve.live
+        || !reserve.in_window
+        || reserve.open
+        || reserve.reserved.reward_sompi < row.fee
+        || reserve.consumed.reward_sompi != 0
+    {
+        return Err(refused("paid fee exceeds unconsumed drawn-slot R"));
+    }
+    Ok(())
+}
+
 /// Write a held check fee (its `fee` is what the poster's escrow actually gave up). A zero fee holds nothing.
-pub(super) fn write_held_check_fee_v1(builder: &mut TransitionBuilder<'_>, row: &PalwHeldCheckFeeRowV1) -> Result<(), PalwStateV2Error> {
+pub(super) fn write_held_check_fee_v1(
+    builder: &mut TransitionBuilder<'_>,
+    row: &PalwHeldCheckFeeRowV1,
+) -> Result<(), PalwStateV2Error> {
     if row.fee == 0 {
         return Ok(());
     }
@@ -406,29 +476,76 @@ pub(super) fn release_held_check_fee_v1(
     convicted_clean_signer: bool,
     now: u64,
 ) -> Result<(), PalwStateV2Error> {
-    let key = palw_paid_trap_held_fee_key_v1(&row.claim, &row.verifier, row.slot);
-    builder.write_kernel_row_encoded_v1::<PalwHeldCheckFeeRowV1>(PALW_PAID_CLAIM_TRAP_TABLE_V1, &key, None)?;
-    let (_, kept) = if convicted_clean_signer { palw_paid_trap_forfeit_v1(row.fee) } else { (0, row.fee) };
-    let once = builder.settle_once_liable_v1(
-        now,
-        PalwSettlementObligationV1::with_party(PalwSettlementLegV1::VerifierCheckFee, row.claim, row.verifier, row.slot),
-        PalwSettlementConsumerV1::PaidClaimTrap,
-        kept,
-        PalwSettlementDebitV1::Escrow { poster: row.poster, amount: row.fee },
-        PalwLegLiabilityV1::VerifierCheck { claim: row.claim, fee: row.fee, horizon: row.release_after_daa },
-    );
-    let Ok(once) = local_capacity_or_v1(once)? else { return Ok(()) };
-    if !once.pays() || kept == 0 {
-        return Ok(());
+    let checkpoint = builder.try_checkpoint()?;
+    let result = (|| {
+        let (_, kept) = if convicted_clean_signer { palw_paid_trap_forfeit_v1(row.fee) } else { (0, row.fee) };
+        let bond = builder
+            .state
+            .kernel_route
+            .as_ref()
+            .and_then(|r| r.bond_key_of(&row.verifier))
+            .ok_or_else(|| refused("paid check fee recipient missing"))?;
+        let payload = builder.state.bonds.get(&bond).ok_or_else(|| refused("paid check fee payout missing"))?.payout_payload;
+        let context = crate::palw_verifier_fee_consent_v1::verifier_fee_income_context_v1(row.claim, row.verifier, row.slot);
+        let income = super::palw_bond_budget_fold_v1::source_income_id_v1(context, Hash64::from_bytes(row.claim), &bond);
+        let mirror = builder.bond_budget_mirror_at(now);
+        if mirror.is_some() && row.fee > 0 {
+            let reserved = builder
+                .state
+                .bond_budget
+                .as_ref()
+                .and_then(|b| b.claim_row(&income))
+                .ok_or_else(|| refused("paid verifier fee lacks its original drawn-slot R reservation"))?;
+            if reserved.origin != crate::palw_bond_budget_v1::PalwBudgetOriginV1::SourceFee
+                || !reserved.live
+                || reserved.reserved.reward_sompi < row.fee
+                || reserved.consumed.reward_sompi != 0
+            {
+                return Err(refused("paid verifier escrow differs from drawn-slot R reservation"));
+            }
+        }
+        let once = builder.settle_once_liable_v1(
+            now,
+            PalwSettlementObligationV1::with_party(PalwSettlementLegV1::VerifierCheckFee, row.claim, row.verifier, row.slot),
+            PalwSettlementConsumerV1::PaidClaimTrap,
+            kept,
+            PalwSettlementDebitV1::Escrow { poster: row.poster, amount: row.fee },
+            PalwLegLiabilityV1::VerifierCheck { claim: row.claim, fee: row.fee, horizon: row.release_after_daa },
+        )?;
+        let paid = if once.pays() { kept } else { 0 };
+        let queue = crate::palw_kernel_route_v1::palw_kernel_payout_key_v1(&payload);
+        if let Some(mirror) = mirror
+            && row.fee > 0
+        {
+            let queued = super::palw_bond_budget_fold_v1::native_queued_income_id_v1(queue, &bond);
+            builder
+                .bond_budget_op(super::palw_bond_budget_fold_v1::PalwBudgetGrowthV1::point(), |book, _, j| {
+                    if paid > 0 {
+                        book.queue_collected_source_income_v1(&mirror.policy, &income, row.release_after_daa, now, paid, queued, j)
+                    } else {
+                        book.cancel_source_income_v1(&income, j)
+                    }
+                })?
+                .ok_or_else(|| refused("paid verifier fee budget engine missing"))?
+                .map_err(refused)?;
+        }
+        if paid > 0 {
+            builder.add_kernel_payout(payload, paid)?;
+        }
+        if row.fee > 0 {
+            builder.finish_verifier_fee_material_v1(now, row.claim, row.verifier, row.slot, paid, (paid > 0).then_some(queue))?;
+        }
+        builder.write_kernel_row_encoded_v1::<PalwHeldCheckFeeRowV1>(
+            PALW_PAID_CLAIM_TRAP_TABLE_V1,
+            &palw_paid_trap_held_fee_key_v1(&row.claim, &row.verifier, row.slot),
+            None,
+        )?;
+        Ok(())
+    })();
+    if result.is_err() {
+        builder.restore(checkpoint);
     }
-    let Some(bond) = builder.state.kernel_route.as_ref().and_then(|route| route.bond_key_of(&row.verifier)) else { return Ok(()) };
-    let Some(payload) = builder.state.bonds.get(&bond).map(|record| record.payout_payload) else { return Ok(()) };
-    // The same R/F accounting the kernel's `FinalReward` arm does for a check fee, then the payout row.
-    if local_capacity_or_v1(builder.consume_kernel_final_reward_v1(&row.claim, bond, payload, now, kept))?.is_err() {
-        return Ok(());
-    }
-    let _ = local_capacity_or_v1(builder.add_kernel_payout(payload, kept))?;
-    Ok(())
+    result
 }
 
 /// **The closing tick's sweep** (before the ledger's own tick; a no-op below the fence): held check fees whose reveal window has
@@ -441,7 +558,8 @@ pub(super) fn release_held_check_fees_v1(builder: &mut TransitionBuilder<'_>, no
     }
     let Some(route) = builder.state.kernel_route.as_ref() else { return Ok(()) };
     let table = PALW_PAID_CLAIM_TRAP_TABLE_V1;
-    let held_range = (table, vec![PALW_PAID_CLAIM_TRAP_HELD_FEE_PREFIX_V1])..(table, vec![PALW_PAID_CLAIM_TRAP_HELD_FEE_PREFIX_V1 + 1]);
+    let held_range =
+        (table, vec![PALW_PAID_CLAIM_TRAP_HELD_FEE_PREFIX_V1])..(table, vec![PALW_PAID_CLAIM_TRAP_HELD_FEE_PREFIX_V1 + 1]);
     let mut due: Vec<(PalwHeldCheckFeeRowV1, bool)> = Vec::new();
     for ((_, key), bytes) in route.aux.range(held_range) {
         if due.len() >= PALW_PAID_CLAIM_TRAP_RELEASES_PER_BLOCK_V1 {
@@ -461,12 +579,15 @@ pub(super) fn release_held_check_fees_v1(builder: &mut TransitionBuilder<'_>, no
         let clean = if kernel.convicted {
             // A persisted held fee is already a paid obligation. Missing
             // authority here is corruption, never an ordinary unpaid claim.
-            let authority = route.paid_claim_authority_for_base_checked_v1(&row.claim)
+            let authority = route
+                .paid_claim_authority_for_base_checked_v1(&row.claim)
                 .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, refused))?
                 .ok_or_else(|| refused("held paid check fee has no base enrollment authority"))?;
             let paid = PalwPaidTrapClaimV1::of(&authority);
             !paid.interactive && clean_receipt_signer_v1(route, &paid.enrollment, &row.verifier)
-        } else { false };
+        } else {
+            false
+        };
         due.push((row, clean));
     }
     let commitment_range =
@@ -483,9 +604,7 @@ pub(super) fn release_held_check_fees_v1(builder: &mut TransitionBuilder<'_>, no
     let stale: Vec<Vec<u8>> = route
         .aux
         .range(conviction_range)
-        .filter(|(_, bytes)| {
-            borsh::from_slice::<PalwPaidClaimConvictionRowV1>(bytes).map_or(true, |row| row.forget_after_daa < now)
-        })
+        .filter(|(_, bytes)| borsh::from_slice::<PalwPaidClaimConvictionRowV1>(bytes).map_or(true, |row| row.forget_after_daa < now))
         .map(|((_, key), _)| key.clone())
         .take(PALW_PAID_CLAIM_TRAP_RELEASES_PER_BLOCK_V1)
         .collect();

@@ -6603,3 +6603,16 @@ try_from!(item: &protowire::GetPalwTirOriginalQuoteResponseMessage, RpcResult<ka
         plan_hex: item.plan_hex.clone(),
     }
 });
+
+from!(item: &kaspa_rpc_core::GetPalwMemoryRoutingOutcomeV1Request, protowire::GetPalwMemoryRoutingOutcomeV1RequestMessage, {
+    Self { block_hash: item.block_hash.clone(), claim_id: item.claim_id.clone() }
+});
+try_from!(item: &protowire::GetPalwMemoryRoutingOutcomeV1RequestMessage, kaspa_rpc_core::GetPalwMemoryRoutingOutcomeV1Request, {
+    Self { block_hash: item.block_hash.clone(), claim_id: item.claim_id.clone() }
+});
+from!(item: RpcResult<&kaspa_rpc_core::GetPalwMemoryRoutingOutcomeV1Response>, protowire::GetPalwMemoryRoutingOutcomeV1ResponseMessage, {
+    Self { available: item.available, observation_json: item.observation_json.clone(), reason: item.reason.clone(), error: None }
+});
+try_from!(item: &protowire::GetPalwMemoryRoutingOutcomeV1ResponseMessage, RpcResult<kaspa_rpc_core::GetPalwMemoryRoutingOutcomeV1Response>, {
+    Self { available: item.available, observation_json: item.observation_json.clone(), reason: item.reason.clone() }
+});

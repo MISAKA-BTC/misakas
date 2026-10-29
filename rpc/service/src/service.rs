@@ -512,6 +512,7 @@ fn palw_claim_phase_named(phase: &kaspa_consensus_core::palw_state_v2::PalwClaim
                 R::WorkSliceDefaulted => "work_slice_defaulted",
                 // ADR-0206: a PanelDa prompt not disclosed by its deadline (a default, not a conviction).
                 R::PanelDaDisclosureDefault => "panel_da_disclosure_default",
+                R::PrefixExportFraud => "prefix_export_fraud",
             };
             ("voided".to_string(), reason.to_string(), *voided_daa)
         }
@@ -3759,6 +3760,25 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                 bytes: page.bytes,
             }),
         }
+    }
+
+    async fn get_palw_memory_routing_outcome_v1_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetPalwMemoryRoutingOutcomeV1Request,
+    ) -> RpcResult<GetPalwMemoryRoutingOutcomeV1Response> {
+        if request.block_hash.len() != 128 || request.claim_id.len() != 128 {
+            return Err(RpcError::General("court outcome block and claim must be exact 128-hex identities".into()));
+        }
+        let block = parse_hash64(&request.block_hash, "blockHash")?;
+        let claim = parse_hash64(&request.claim_id, "claimId")?;
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let result = session.spawn_blocking(move |c| c.palw_memory_routing_outcome_v1(block, claim)).await;
+        Ok(match result {
+            Ok(Some(observation_json)) => GetPalwMemoryRoutingOutcomeV1Response { available: true, observation_json, reason: String::new() },
+            Ok(None) => GetPalwMemoryRoutingOutcomeV1Response { reason: "native committed outcome not retained (restart/eviction/unobserved); UNKNOWN".into(), ..Default::default() },
+            Err(reason) => GetPalwMemoryRoutingOutcomeV1Response { reason, ..Default::default() },
+        })
     }
 
     async fn get_palw_router_binding_v2_call(

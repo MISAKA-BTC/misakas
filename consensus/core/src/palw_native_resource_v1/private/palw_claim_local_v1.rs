@@ -48,16 +48,20 @@ impl NativeWireScanV1 for PalwClaimLocalWorkRefV1 {
 native_struct!(PalwClaimLiabilityFrameV1; point, network_identity, fired_forks, policy, claims, native_changes, prior_state, current_state, accepted_objects, origin_headers, inputs);
 native_enum!(PalwClaimLocalInputV1;
     Attempt { block, execution_key, envelope }, ReceiptSpend { block, spend },
-    History { claim, pledge }, PublicBinding { claim, header }, CustodyDelegation { claim, delegation }, TirOriginal { claim, envelope }, FreePromptNative { claim, job_pin, public_job, eval });
+    History { claim, pledge }, PublicBinding { claim, header }, CustodyDelegation { claim, delegation }, TirOriginal { claim, envelope }, FreePromptNative { claim, job_pin, public_job, eval }, PrefixDependency { claim, envelope },
+    ConsumedCarrier { consumer, source });
 
 impl NativeWireScanV1 for PalwClaimLocalInputV1 {
     fn scan_native_wire_v1<R: Read>(reader: &mut NativeWireReaderV1<R>) -> io::Result<NativeWireShapeV1> {
         reader.step()?;
         let tag = reader.byte()?;
-        if tag > 6 {
+        if tag > 8 {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "unknown liability input kind"));
         }
         let mut sum = <Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?;
+        if tag == 8 {
+            return sum.merge(<Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?);
+        }
         let payload = match tag {
             0 => {
                 sum = sum.merge(<Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
@@ -82,6 +86,11 @@ impl NativeWireScanV1 for PalwClaimLocalInputV1 {
                     )?,
                 )?;
                 <Option<Box<(crate::palw_improve_eval_v1::PalwEvalJobV1, crate::palw_improve_eval_v1::PalwEvalClaimTailV1)>> as NativeWireScanV1>::scan_native_wire_v1(reader)?
+            }
+            7 => {
+                <Box<crate::palw_claim_local_v1::prefix_v1::PalwPrefixDependencyEnvelopeV1> as NativeWireScanV1>::scan_native_wire_v1(
+                    reader,
+                )?
             }
             _ => unreachable!(),
         };

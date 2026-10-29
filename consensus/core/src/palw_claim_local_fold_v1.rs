@@ -4,6 +4,34 @@ use super::*;
 use crate::palw_claim_local_v1::*;
 
 impl PalwChainStateV2 {
+    pub(crate) fn claim_local_prefix_source_point_v1(
+        &self,
+        source: &crate::palw_claim_local_v1::prefix_v1::PalwPrefixExportIdentityV1,
+    ) -> Result<PalwBlockContextV2, PalwStateV2Error> {
+        let bad = || PalwStateV2Error::CarriageInconsistent("RFC0040 source birth is absent or differs".into());
+        let key = palw_claim_liability_frame_key_v1(source.accepted_block);
+        let bytes = self
+            .kernel_route
+            .as_ref()
+            .and_then(|route| {
+                route.aux.iter().find_map(|((table, stored_key), value)| {
+                    (*table == PALW_CLAIM_LOCAL_TABLE_V1 && stored_key.as_slice() == key).then_some(value)
+                })
+            })
+            .ok_or_else(bad)?;
+        let frame = palw_decode_claim_liability_frame_v1(bytes).map_err(|error| match error {
+            crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(error) => PalwStateV2Error::NativeResource(error),
+            crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(_) => bad(),
+        })?;
+        let point = frame.point;
+        if point.block != source.accepted_block
+            || point.daa_score != source.accepted_daa
+            || point.blue_score != source.accepted_blue_score
+        {
+            return Err(bad());
+        }
+        Ok(point)
+    }
     /// Read a claim's admission fact from its actual accepting point. A later
     /// changed-claim frame never substitutes for the birth or for migration data.
     /// The state/root must already be authenticated by the normal node path.
@@ -132,6 +160,57 @@ impl PalwChainStateV2 {
                 }
                 continue;
             }
+            if key.first() == Some(&b'E') {
+                let row = decode_claim_local_value_v1::<prefix_v1::PalwPrefixExportReservationV1>(bytes).map_err(|e| match e {
+                    crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(e) => PalwStateV2Error::NativeResource(e),
+                    crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(_) => {
+                        PalwStateV2Error::CarriageInconsistent("malformed prefix reservation".into())
+                    }
+                })?;
+                if key.len() != 65
+                    || key[1..] != *row.budget_id.as_byte_slice()
+                    || self.prefix_export_reservation_v1(&row.point, row.source_claim)?.as_ref() != Some(&*row)
+                {
+                    return Err(PalwStateV2Error::CarriageInconsistent("prefix reservation identity differs".into()));
+                }
+                let origin = self
+                    .claim_local_admission_context_v1(params, &row.point, row.source_claim)?
+                    .ok_or_else(|| PalwStateV2Error::CarriageInconsistent("prefix reservation lost source birth material".into()))?;
+                if origin.original_claim().bond != row.bond {
+                    return Err(PalwStateV2Error::CarriageInconsistent("prefix reservation changed source bond".into()));
+                }
+                let expiry = super::palw_claim_local_prefix_reservation_v1::expiry_key(row.material_until, row.budget_id);
+                let indexed = route
+                    .aux
+                    .iter()
+                    .any(|((t, k), v)| *t == PALW_CLAIM_LOCAL_TABLE_V1 && k.as_slice() == expiry && v.as_slice() == [1]);
+                if indexed != self.last_point.is_some_and(|p| p.daa_score <= row.material_until) {
+                    return Err(PalwStateV2Error::CarriageInconsistent("prefix reservation expiry index disagrees".into()));
+                }
+                continue;
+            }
+            if key.first() == Some(&b'X') {
+                if key.len() != 73 || bytes.as_slice() != [1] {
+                    return Err(PalwStateV2Error::CarriageInconsistent("prefix expiry index differs".into()));
+                }
+                let id = Hash64::from_bytes(key[9..].try_into().expect("fixed index id"));
+                let row_key = super::palw_claim_local_prefix_reservation_v1::row_key(id);
+                let value = route
+                    .aux
+                    .iter()
+                    .find_map(|((t, k), v)| (*t == PALW_CLAIM_LOCAL_TABLE_V1 && k.as_slice() == row_key).then_some(v))
+                    .ok_or_else(|| PalwStateV2Error::CarriageInconsistent("prefix expiry has no reservation".into()))?;
+                let row = decode_claim_local_value_v1::<prefix_v1::PalwPrefixExportReservationV1>(value).map_err(|e| match e {
+                    crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(e) => PalwStateV2Error::NativeResource(e),
+                    crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(_) => {
+                        PalwStateV2Error::CarriageInconsistent("bad prefix expiry reservation".into())
+                    }
+                })?;
+                if key.as_slice() != super::palw_claim_local_prefix_reservation_v1::expiry_key(row.material_until, row.budget_id) {
+                    return Err(PalwStateV2Error::CarriageInconsistent("prefix expiry changed original deadline".into()));
+                }
+                continue;
+            }
             if key.first() == Some(&b'R') {
                 if key.len() != 65 {
                     return Err(PalwStateV2Error::CarriageInconsistent("bad reward hold key".into()));
@@ -173,6 +252,52 @@ impl PalwChainStateV2 {
         }
         Ok(())
     }
+}
+
+/// Source claims whose settled carrier transaction is spent by `spent` (consumer claim, spent txid).
+///
+/// The index is the winning-carrier aux row already stored on `parent`. A txid that names more
+/// than one claim is skipped. This block's own new rows are not visible yet, and a claim does not
+/// depend on itself.
+pub(super) fn consumed_carrier_edges_v1(
+    parent: &PalwChainStateV2,
+    spent: impl IntoIterator<Item = (Hash64, Hash64)>,
+) -> BTreeSet<(Hash64, Hash64)> {
+    use crate::palw_fp_answer_accounting_v1::PALW_FP_WINNING_CARRIER_TABLE_V1;
+    let Some(route) = parent.kernel_route.as_ref() else {
+        return BTreeSet::new();
+    };
+    let mut by_txid: BTreeMap<Hash64, Option<Hash64>> = BTreeMap::new();
+    for ((table, key), value) in &route.aux {
+        if *table != PALW_FP_WINNING_CARRIER_TABLE_V1 || key.len() != 64 || value.len() != 64 {
+            continue;
+        }
+        let Ok(key_bytes) = <[u8; 64]>::try_from(key.as_slice()) else { continue };
+        let Ok(txid_bytes) = <[u8; 64]>::try_from(value.as_slice()) else { continue };
+        let source = Hash64::from_bytes(key_bytes);
+        let txid = Hash64::from_bytes(txid_bytes);
+        by_txid.entry(txid).and_modify(|known| *known = None).or_insert(Some(source));
+    }
+    let mut edges = BTreeSet::new();
+    for (consumer, txid) in spent {
+        let Some(Some(source)) = by_txid.get(&txid).copied() else { continue };
+        if source != consumer && parent.claims.contains_key(&source) {
+            edges.insert((consumer, source));
+        }
+    }
+    edges
+}
+
+/// Funded-original inputs and ordinary free-prompt carrier inputs, in one list.
+pub(super) fn carrier_spend_pairs_v1(extras: &crate::palw_state_v2::PalwTransitionExtrasV1) -> Vec<(Hash64, Hash64)> {
+    extras
+        .tir_funded_originals
+        .iter()
+        .flat_map(|(claim, pairing)| {
+            pairing.carrier().inputs.iter().map(move |input| (*claim, input.previous_outpoint.transaction_id))
+        })
+        .chain(extras.carrier_input_spends.iter().flat_map(|(claim, txids)| txids.iter().map(move |txid| (*claim, *txid))))
+        .collect()
 }
 
 /// Freeze the state at actual claim/certification or native row changes. A stuck A does not
@@ -300,6 +425,7 @@ pub(super) fn retain_changed_claim_context_v1(
     // Preserve the actual presented attempt/spend metadata and transaction-local
     // original envelopes. A post-pruning verifier must not reconstruct these
     // from a digest or from a current/replaced service contract.
+    let consumed = consumed_carrier_edges_v1(parent, carrier_spend_pairs_v1(&builder.extras));
     let fp_count =
         accepted_objects.iter().filter(|object| matches!(object, PalwConsensusObjectV2::FreePromptCommitted { .. })).count();
     let local_count = builder
@@ -312,6 +438,8 @@ pub(super) fn retain_changed_claim_context_v1(
         .and_then(|n| n.checked_add(merged_work.len()))
         .and_then(|n| n.checked_add(1))
         .and_then(|n| n.checked_add(fp_count))
+        .and_then(|n| n.checked_add(builder.extras.prefix_dependencies_v1.len()))
+        .and_then(|n| n.checked_add(consumed.len()))
         .ok_or(PalwStateV2Error::Overflow("liability inputs"))?;
     if builder.native_writers_tracking_v1() {
         let mut q = native_writers::NativeWriteQuoteV1::new("claim-local input carriage copies");
@@ -319,7 +447,11 @@ pub(super) fn retain_changed_claim_context_v1(
         q.copy(&builder.extras.history_custody_pledges)?
             .copy(&builder.extras.public_original_bindings)?
             .copy(&builder.extras.producer_custody_delegations)?
-            .copy(&builder.extras.tir_public_originals)?;
+            .copy(&builder.extras.tir_public_originals)?
+            .copy(&builder.extras.prefix_dependencies_v1)?;
+        q.exact::<crate::palw_claim_local_v1::prefix_v1::PalwPrefixDependencyEnvelopeV1>(
+            builder.extras.prefix_dependencies_v1.len() as u64
+        )?;
         for object in accepted_objects {
             if let PalwConsensusObjectV2::FreePromptCommitted { public_job, eval, .. } = object {
                 q.copy(public_job)?;
@@ -354,6 +486,11 @@ pub(super) fn retain_changed_claim_context_v1(
             PalwBlockWorkV3::None => {}
         }
     }
+    for (claim, envelope) in &builder.extras.prefix_dependencies_v1 {
+        if accepted_objects.iter().any(|o| matches!(o, PalwConsensusObjectV2::FreePromptCommitted { claim: id, .. } if id == claim)) {
+            inputs.push(PalwClaimLocalInputV1::PrefixDependency { claim: *claim, envelope: Box::new(envelope.clone()) });
+        }
+    }
     for (claim, pledge) in &builder.extras.history_custody_pledges {
         inputs.push(PalwClaimLocalInputV1::History { claim: *claim, pledge: Box::new(pledge.clone()) });
     }
@@ -365,6 +502,9 @@ pub(super) fn retain_changed_claim_context_v1(
     }
     for (claim, envelope) in &builder.extras.tir_public_originals {
         inputs.push(PalwClaimLocalInputV1::TirOriginal { claim: *claim, envelope: Box::new(envelope.clone()) });
+    }
+    for (consumer, source) in &consumed {
+        inputs.push(PalwClaimLocalInputV1::ConsumedCarrier { consumer: *consumer, source: *source });
     }
     for object in accepted_objects {
         if let PalwConsensusObjectV2::FreePromptCommitted { claim, job_pin, public_job, eval, .. } = object {

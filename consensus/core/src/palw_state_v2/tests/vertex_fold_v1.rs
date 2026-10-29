@@ -410,7 +410,7 @@ fn held_leaves_make_a_da_certificate_and_attesters_are_charged_on_a_default() {
     let extras = vx();
     let mut builder = TransitionBuilder::new(&s, &p, true, false, false, false, &extras);
     super::super::palw_vertex_fold_v1::charge_held_attesters_v1(&mut builder, &claim, &attesters).expect("the charge");
-    let (charged, _) = builder.checkpoint();
+    let (charged, _, _) = builder.checkpoint();
     for seat in &attesters {
         let before = s.bond(seat).unwrap().collateral;
         let exposure =

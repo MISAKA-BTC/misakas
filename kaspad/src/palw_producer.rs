@@ -35,8 +35,9 @@
 //!
 //! Loaded with `load_validator_seed`, the same hardened path the validator uses: owner-only perms
 //! at creation, no symlinks, fail closed. This service generates no key — an operator makes one
-//! with `misaka-cli`, registers the verification key in the genesis card, and points this at the
-//! seed.
+//! with `misaka-cli` and points this at the seed. A chain with no genesis bond mines the idle-floor
+//! coinbase under a placeholder outpoint. `--palw-register-bond` spends a matured coinbase or an
+//! owned genesis UTXO. Once that ordinary bond is Active, the loop leaves the placeholder.
 
 use std::sync::Arc;
 
@@ -560,6 +561,57 @@ pub(crate) fn palw_producer_ready_v1(
     Ok(())
 }
 
+/// **RFC-0041:** mine the base class while this node is on the placeholder recovery outpoint,
+/// the named bond is not registered, and the floor is not refusing as non-idle.
+///
+/// The chain pays the existing coinbase only when the live registry is empty as well
+/// (`palw_base_coinbase_recovery_due_v1`). This function does not register the placeholder.
+pub(crate) fn palw_base_coinbase_recovery_draws_v1(
+    bond_label: &str,
+    facts: &PalwProducerFactsV2,
+    hold: &PalwProducerHoldV1,
+) -> bool {
+    use kaspa_consensus_core::palw_producer_v2::PALW_NOT_READY_BOND_UNKNOWN_V2;
+    use kaspa_consensus_core::palw_real_share_v1::palw_is_floor_not_idle_refusal_v1;
+    if bond_label != kaspa_consensus_core::config::params::palw_base_coinbase_recovery_bond_label_v1() || !facts.is_base_class {
+        return false;
+    }
+    if facts.class_admission_refusal.as_deref().is_some_and(palw_is_floor_not_idle_refusal_v1) {
+        return false;
+    }
+    let draw = *hold == PalwProducerHoldV1::NotReady(PALW_NOT_READY_BOND_UNKNOWN_V2);
+    if draw {
+        static SAID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if !SAID.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            info!(
+                "[{PALW_PRODUCER}] BASE coinbase recovery: the named outpoint is not a bond. Mining the base class for the \
+                 existing idle-floor coinbase. Register with --palw-register-bond once a matured coinbase or a genesis UTXO \
+                 can fund it; this placeholder is never registered."
+            );
+        }
+    }
+    draw
+}
+
+/// **RFC-0041:** leave the recovery placeholder once this key's ordinary bond is Active.
+///
+/// The placeholder is not collateral and is never registered. A retiring row is not a producer
+/// bond. Any outpoint other than the placeholder is already an ordinary bond and is left alone.
+pub(crate) fn palw_adopt_ordinary_bond_v1(
+    current: TransactionOutpoint,
+    registered: Option<(TransactionOutpoint, kaspa_consensus_core::palw_state_v2::PalwBondStatusV2)>,
+) -> Option<TransactionOutpoint> {
+    use kaspa_consensus_core::config::params::palw_base_coinbase_recovery_bond_outpoint_v1;
+    use kaspa_consensus_core::palw_state_v2::PalwBondStatusV2;
+    if current != palw_base_coinbase_recovery_bond_outpoint_v1() {
+        return None;
+    }
+    match registered {
+        Some((outpoint, PalwBondStatusV2::Active)) if outpoint != current => Some(outpoint),
+        _ => None,
+    }
+}
+
 /// **Lane bind-deadlock (`Params::palw_anchor_at_ceiling`): does this hold give way to anchor duty?**
 /// Exactly when the only thing between the bond and an attempt is its exposure ceiling
 /// ([`PALW_NOT_READY_EXPOSURE_FULL_V2`], the last question `ready_to_produce_v3` asks, so every other
@@ -984,7 +1036,7 @@ impl PalwProducerService {
     }
 
     pub async fn worker(self: &Arc<Self>) {
-        let (Some(bond), Some(miner_data)) = (self.bond, self.miner_data.clone()) else {
+        let (Some(mut bond), Some(miner_data)) = (self.bond, self.miner_data.clone()) else {
             info!("[{PALW_PRODUCER}] not producing (see the startup warning above)");
             return;
         };
@@ -1082,6 +1134,23 @@ impl PalwProducerService {
                         "[{PALW_PRODUCER}] the sink is older than the sync window (a fresh chain always is) and --enable-unsynced-mining is set: producing anyway, with peers connected and participation open"
                     );
                 }
+            }
+            // RFC-0041: genesis registers no bond. Recovery mines under the placeholder until
+            // `--palw-register-bond` lands an ordinary Active bond for this key. From that block
+            // the placeholder would be a missing bond on a non-empty registry, and the chain
+            // disqualifies it. Production continues on the registered outpoint.
+            if let Some(adopted) = palw_adopt_ordinary_bond_v1(
+                bond,
+                session.palw_bond_of_pubkey_v2(&self.verification_key()).map(|(key, status)| (key.0, status)),
+            ) {
+                info!(
+                    "[{PALW_PRODUCER}] ordinary bond {}:{} is active. Recovery mining stops; PALW uses this bond.",
+                    adopted.transaction_id, adopted.index
+                );
+                bond = adopted;
+                let label = format!("{}:{}", bond.transaction_id, bond.index);
+                self.flow_context.update_palw_runtime(|r| r.producer_bond = label);
+                last_hold = None;
             }
             let Some(mut facts) = session.palw_producer_facts_v2(self.config.class_id, Some(bond)) else {
                 let detail = format!("this network has no ConsensusV2 facts for class {} — nothing to produce", self.config.class_id);
@@ -1253,6 +1322,9 @@ impl PalwProducerService {
                 );
                 anchor_duty_wait.fired(facts.daa_score);
             } else if let Err(hold) = ready {
+                // RFC-0041: a bond-free genesis mines the base class anyway. The chain pays the
+                // existing idle-floor coinbase and does not register the placeholder outpoint.
+                if !palw_base_coinbase_recovery_draws_v1(&self.config.bond, &facts, &hold) {
                 // **The reason alone is not a diagnosis.** "this class's epoch budget is already
                 // spent" is what a class that exhausted its cap says AND what a class that was
                 // never granted one says, and those are opposite problems: the first resolves at
@@ -1273,6 +1345,7 @@ impl PalwProducerService {
                     break;
                 }
                 continue;
+                }
             }
             // **F2: the share with this producer's unmerged attempts counted** — the tip's count is
             // the fold's, and the attempts of blocks still riding the DAG's side are not in it yet.
@@ -3052,6 +3125,27 @@ mod p6_tests {
 
     fn outpoint(n: u64) -> TransactionOutpoint {
         TransactionOutpoint { transaction_id: TransactionId::from_u64_word(n), index: 0 }
+    }
+
+    #[test]
+    fn recovery_adopts_an_active_ordinary_bond_and_not_a_retiring_one() {
+        use kaspa_consensus_core::config::params::palw_base_coinbase_recovery_bond_outpoint_v1;
+        use kaspa_consensus_core::palw_state_v2::PalwBondStatusV2;
+        let placeholder = palw_base_coinbase_recovery_bond_outpoint_v1();
+        let ordinary = outpoint(9);
+        assert_eq!(
+            super::palw_adopt_ordinary_bond_v1(placeholder, Some((ordinary, PalwBondStatusV2::Active))),
+            Some(ordinary)
+        );
+        assert_eq!(
+            super::palw_adopt_ordinary_bond_v1(
+                placeholder,
+                Some((ordinary, PalwBondStatusV2::Retiring { since_daa: 1, settled_at_since: 0 })),
+            ),
+            None
+        );
+        assert_eq!(super::palw_adopt_ordinary_bond_v1(placeholder, None), None);
+        assert_eq!(super::palw_adopt_ordinary_bond_v1(ordinary, Some((ordinary, PalwBondStatusV2::Active))), None);
     }
 
     fn bond_registered(n: u64, key: [u8; 4], operator: u8, collateral: u64) -> PalwConsensusObjectV2 {

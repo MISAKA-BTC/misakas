@@ -469,7 +469,25 @@ fn rfc23s2_checkpoint_resource_owner_child() {
     let mut frame_key = vec![0; 65];
     frame_key[0] = b'F';
     malformed.kernel_route.as_mut().unwrap().aux.insert((crate::palw_claim_local_v1::PALW_CLAIM_LOCAL_TABLE_V1, frame_key), vec![0]);
-    let memory = 32 << 20;
+    // The new historical reader holds authenticated birth frames while it
+    // inspects their prior/current carriages. Size the fixture's available room
+    // from those exact typed preflights, not their smaller encoded byte lengths.
+    // Four complete sets bound the nested target/source/retirement readers;
+    // the existing 32 MiB remains construction/small-row workspace. No network
+    // or production capacity is changed by this test-only local quota.
+    let mut historical = 0u64;
+    for (_, bytes) in super::super::palw_claim_local_rewards_v1::frames(&s) {
+        let shape = crate::palw_native_resource_v1::preflight_native_value_v1::<crate::palw_claim_local_v1::PalwClaimLiabilityFrameV1>(
+            bytes.as_slice(), bytes.len() as u64,
+        ).unwrap();
+        historical = historical.checked_add(shape.logical_requests_v1()).unwrap();
+        let frame = crate::palw_claim_local_v1::decode_claim_local_value_v1::<crate::palw_claim_local_v1::PalwClaimLiabilityFrameV1>(bytes).unwrap();
+        for carriage in [&frame.prior_state, &frame.current_state] {
+            let shape = crate::palw_native_resource_v1::preflight_native_carriage_v1(carriage.as_slice(), carriage.len() as u64).unwrap();
+            historical = historical.checked_add(shape.memory_requests_v1().unwrap()).unwrap();
+        }
+    }
+    let memory = (32u64 << 20).checked_add(historical.checked_mul(4).unwrap()).unwrap();
     arm_native_logical_limits_v1(Some(NativeSnapshotResourceLimitsV1 { memory_bytes: memory, database_bytes: 0 }));
     let blocker = reserve_native_requests_v1(memory).unwrap();
     let build = || super::super::palw_claim_local_checkpoint_fold_v1::expected_claim_local_checkpoint_v1(&s, &p, &point);
@@ -513,4 +531,65 @@ fn rfc23s2_checkpoint_admits_before_build_and_retains_until_drop() {
         String::from_utf8_lossy(&child.stderr),
     );
     assert!(String::from_utf8_lossy(&child.stdout).contains("1 passed"), "the child must actually run its resource test");
+}
+
+
+#[test]
+fn rfc23s2_checkpoint_missing_birth_material_never_closes_an_independent_claim() {
+    use crate::palw_claim_local_v1::*;
+    let (p, mut s, [_, b, _]) = world(false);
+    let point = ctx(10, 1001, 10);
+    let work = PalwClaimLocalWorkRefV1::ChainClaim { claim: b };
+    let before = super::super::palw_claim_local_checkpoint_fold_v1::expected_claim_local_checkpoint_v1(&s, &p, &point)
+        .unwrap().unwrap();
+    assert!(before.records[&work].liability_closed);
+    drop(before);
+    // A checkpoint reader cannot infer admission facts from the remaining live row.
+    let key = palw_claim_liability_frame_key_v1(ctx(3, 101, 3).block);
+    assert!(s.kernel_route.as_mut().unwrap().aux.remove(&(PALW_CLAIM_LOCAL_TABLE_V1, key.to_vec())).is_some());
+    let after = super::super::palw_claim_local_checkpoint_fold_v1::expected_claim_local_checkpoint_v1(&s, &p, &point)
+        .unwrap().unwrap();
+    assert!(!after.records[&work].liability_closed, "missing birth material holds credit; it never supplies an irreversible anchor");
+}
+
+#[test]
+fn rfc23s2_spending_a_settled_carrier_output_depends_on_that_claim() {
+    use crate::palw_claim_local_v1::*;
+    use crate::palw_fp_answer_accounting_v1::PALW_FP_WINNING_CARRIER_TABLE_V1;
+    let (p, mut s, [a, b, _]) = world(false);
+    let carrier = h64(0xCA11);
+    s.kernel_route.as_mut().unwrap().aux.insert(
+        (PALW_FP_WINNING_CARRIER_TABLE_V1, a.as_byte_slice().to_vec()),
+        borsh::to_vec(&carrier).unwrap(),
+    );
+    let mut extras = crate::palw_state_v2::PalwTransitionExtrasV1::default();
+    extras.carrier_input_spends.insert(b, vec![carrier, h64(0x0)]);
+    extras.carrier_input_spends.insert(a, vec![carrier]);
+    let edges = super::super::palw_claim_local_fold_v1::consumed_carrier_edges_v1(
+        &s,
+        super::super::palw_claim_local_fold_v1::carrier_spend_pairs_v1(&extras),
+    );
+    assert_eq!(edges, [(b, a)].into());
+    let born = s.claims.get(&b).unwrap().clone();
+    let key = palw_claim_liability_frame_key_v1(born.accepted_block);
+    let raw = s.kernel_route.as_ref().unwrap().aux.get(&(PALW_CLAIM_LOCAL_TABLE_V1, key.to_vec())).unwrap().clone();
+    let (mut frame, lease) = palw_decode_claim_liability_frame_v1(&raw).unwrap().into_parts_v1();
+    frame.inputs.push(PalwClaimLocalInputV1::ConsumedCarrier { consumer: b, source: a });
+    s.kernel_route.as_mut().unwrap().aux.insert((PALW_CLAIM_LOCAL_TABLE_V1, key.to_vec()), borsh::to_vec(&frame).unwrap());
+    drop(lease);
+    let origin = super::super::palw_claim_local_rewards_v1::origin_for(&s, &p, b, &born).unwrap().unwrap();
+    let deps = super::super::palw_claim_local_rewards_v1::dependency_inputs_v1(&s, b, &born, Some(&origin)).unwrap();
+    assert!(deps.contains(&PalwClaimLocalWorkRefV1::ChainClaim { claim: a }));
+    let readiness = super::super::palw_claim_local_rewards_v1::reward_readiness_v1;
+    let before = readiness(&s, &p, 200, b, false).unwrap();
+    assert_ne!(before, super::super::palw_claim_local_rewards_v1::RewardReadinessV1::Denied);
+    let original = s.claims.get(&a).unwrap().phase.clone();
+    s.claims.get_mut(&a).unwrap().phase = PalwClaimPhaseV2::Voided { voided_daa: 200, reason: PalwVoidReasonV2::CourtFraud };
+    assert_eq!(
+        readiness(&s, &p, 200, b, false).unwrap(),
+        super::super::palw_claim_local_rewards_v1::RewardReadinessV1::Denied,
+        "voiding the spent carrier's claim cancels the consumer reward"
+    );
+    s.claims.get_mut(&a).unwrap().phase = original;
+    assert_eq!(readiness(&s, &p, 200, b, false).unwrap(), before, "restoring the source claim restores the consumer reward");
 }

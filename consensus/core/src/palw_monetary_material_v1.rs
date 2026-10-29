@@ -10,6 +10,9 @@ use crate::{
 };
 use borsh::{BorshDeserialize, BorshSerialize};
 
+pub use crate::palw_monetary_material_fee_v2 as fee_v2;
+pub use fee_v2::{PalwMaterialFeeEnrollmentV2, PalwMaterialFeeRowV2, PalwMaterialFeeStatusV2};
+
 pub const PALW_MONETARY_MATERIAL_TABLE_V1: u8 = 120;
 pub const PALW_MONETARY_MATERIAL_ENROLL_TAG_V1: u8 = 240;
 pub const PALW_MONETARY_MATERIAL_REPLACE_TAG_V1: u8 = 241;
@@ -239,6 +242,13 @@ pub enum PalwMonetaryMaterialActionV1 {
         stage: u8,
         position: u32,
         valid_until_daa: u64,
+    },
+    /// Atomic new fee-only contract; original service terms are not reinterpreted.
+    EnrollFeeV2(Box<PalwMaterialFeeEnrollmentV2>),
+    ReplaceFeeV2 {
+        previous: Hash64,
+        sequence: u64,
+        enrollment: Box<PalwMaterialFeeEnrollmentV2>,
     },
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -496,7 +506,9 @@ impl PalwChainStateV2 {
                 self.monetary_material_rows_v1().into_iter().find(|r| r.native_binding.as_ref().is_some_and(|b| b.claim == root))
             })
             .ok_or_else(|| {
-                crate::palw_state_v2::PalwStateV2Error::ExecV2Refused("new paid material has no explicit signed monetary covenant".into())
+                crate::palw_state_v2::PalwStateV2Error::ExecV2Refused(
+                    "new paid material has no explicit signed monetary covenant".into(),
+                )
             })?;
         if row.terms.policy != policy.id()
             || (!row.root_seen && accepted_daa > row.terms.enrollment_until_daa)
@@ -561,8 +573,42 @@ impl PalwChainStateV2 {
         params: &PalwStateParamsV2,
     ) -> Result<(), crate::palw_state_v2::PalwStateV2Error> {
         use crate::palw_state_v2::PalwStateV2Error;
+        self.assert_fee_material_provenance_v1()?;
         let bad = |s: &str| PalwStateV2Error::CarriageInconsistent(format!("monetary material: {s}"));
         let Some(route) = self.kernel_route() else { return Ok(()) };
+        for ((table, key), bytes) in &route.aux {
+            if *table != fee_v2::TABLE {
+                continue;
+            }
+            let fee: PalwMaterialFeeRowV2 = borsh::from_slice(bytes).map_err(|_| bad("malformed finite fee row"))?;
+            let owner = self.monetary_material_row_v1(fee.root).ok_or_else(|| bad("orphan finite fee"))?;
+            let provider = owner
+                .providers
+                .iter()
+                .find(|p| p.provider == fee.provider && p.fee_context == fee.enrollment)
+                .ok_or_else(|| bad("finite fee has no exact provider generation"))?;
+            if fee.ruleset == Hash64::default()
+                || fee.ruleset.as_bytes() != route.header.policy.ruleset_digest
+                || *key != fee_v2::fee_key(fee.enrollment, fee.provider)
+                || fee.version != 2
+                || !params.settlement_once_active_at(fee.accepted_daa)
+                || fee.sponsor != owner.terms.sponsor
+                || fee.horizon != owner.terms.enrollment_until_daa
+                || fee.amount != provider.prepaid_fee_sompi
+                || fee.accepted_daa != provider.fee_accepted_daa
+                || fee.defaulted_daa.is_some_and(|at| at < fee.accepted_daa || at > fee.horizon)
+                || fee.defaulted_daa.is_some() && !provider.charged
+                || matches!(fee.status, PalwMaterialFeeStatusV2::Held) == provider.fee_queued
+                || match fee.status {
+                    PalwMaterialFeeStatusV2::Held => false,
+                    PalwMaterialFeeStatusV2::ProviderQueued => fee.defaulted_daa.is_some(),
+                    PalwMaterialFeeStatusV2::RefundQueued { .. } => fee.defaulted_daa.is_none() || provider.fee_paid,
+                    PalwMaterialFeeStatusV2::RefundPaid { daa } => provider.fee_paid || fee.defaulted_daa.is_none_or(|at| at > daa),
+                }
+            {
+                return Err(bad("finite fee identity or lifecycle mismatch"));
+            }
+        }
         let mut count = 0usize;
         for ((table, key), bytes) in &route.aux {
             if *table != PALW_MONETARY_MATERIAL_TABLE_V1 {
@@ -621,6 +667,13 @@ impl PalwChainStateV2 {
                     || material.root.is_none_or(|r| !self.monetary_material_scope_v1(&row).contains(&r))
                 {
                     return Err(bad("queued entitlement preimage or root was substituted"));
+                }
+            }
+            for provider in &row.providers {
+                if params.settlement_once_active_at(provider.fee_accepted_daa)
+                    && self.material_fee_row_v2(provider.fee_context, provider.provider).is_none()
+                {
+                    return Err(bad("new provider fee missing atomic signed consent"));
                 }
             }
             let distinct: std::collections::BTreeSet<_> = row.providers.iter().map(|p| p.provider).collect();

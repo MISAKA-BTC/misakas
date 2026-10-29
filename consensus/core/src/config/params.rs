@@ -3080,6 +3080,8 @@ pub struct Params {
     /// default's demander share is held to the liability horizon. **Dormant**: `None` on every preset, Some-only hashed, collapsed from
     /// `Some(never())`, refused when armed ([`Self::validate_palw_verifier_pay_v1`]).
     pub palw_verifier_pay_v1: Option<ForkActivation>,
+    /// Explicit M*-49 watcher pool/draw policy; no shipped default values.
+    pub palw_verifier_watch_v1: Option<crate::palw_verifier_watch_v1::PalwVerifierWatchFenceV1>,
     /// **RFC-0002 P0: protected candidate refutations** ([`crate::palw_model_refutation_seal_v4`], lane RFC02-T): past this height
     /// a refutation of a candidate statement (model artifact binding v2, model vector v2, flat model vector v3) is admitted only as
     /// the reveal of the signer's own mature seal (kernel inner 36 / 37), and the frozen unsealed refutations (inner 23 / 27 / 32)
@@ -6273,6 +6275,7 @@ impl Params {
             palw_typed_roots_v1: self.palw_typed_roots_v1,
             palw_fork_choice_commitment_v1: self.palw_fork_choice_commitment_v1,
             palw_verifier_pay_v1: self.palw_verifier_pay_v1,
+            palw_verifier_watch_v1: self.palw_verifier_watch_v1.clone(),
             palw_model_refutation_seal_v1: self.palw_model_refutation_seal_v1,
             palw_window_class_v37: self.palw_window_class_v37,
             palw_beacon_source_opt_in_v1: self.palw_beacon_source_opt_in_v1,
@@ -7452,6 +7455,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_typed_roots_v1: None,
     palw_fork_choice_commitment_v1: None,
     palw_verifier_pay_v1: None,
+    palw_verifier_watch_v1: None,
     palw_model_refutation_seal_v1: None,
     palw_window_class_v37: None,
     palw_beacon_source_opt_in_v1: None,
@@ -7827,6 +7831,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_typed_roots_v1: None,
     palw_fork_choice_commitment_v1: None,
     palw_verifier_pay_v1: None,
+    palw_verifier_watch_v1: None,
     palw_model_refutation_seal_v1: None,
     palw_window_class_v37: None,
     palw_beacon_source_opt_in_v1: None,
@@ -8184,6 +8189,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_typed_roots_v1: None,
     palw_fork_choice_commitment_v1: None,
     palw_verifier_pay_v1: None,
+    palw_verifier_watch_v1: None,
     palw_model_refutation_seal_v1: None,
     palw_window_class_v37: None,
     palw_beacon_source_opt_in_v1: None,
@@ -13742,6 +13748,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_typed_roots_v1: None,
     palw_fork_choice_commitment_v1: None,
     palw_verifier_pay_v1: None,
+    palw_verifier_watch_v1: None,
     palw_model_refutation_seal_v1: None,
     palw_window_class_v37: None,
     palw_beacon_source_opt_in_v1: None,

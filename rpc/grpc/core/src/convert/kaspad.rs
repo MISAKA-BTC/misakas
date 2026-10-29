@@ -115,6 +115,7 @@ pub mod kaspad_request_convert {
     impl_into_kaspad_request!(GetPalwRewardVesting);
     impl_into_kaspad_request!(GetPalwStagedPreclaimQuote);
     impl_into_kaspad_request!(GetPalwRouterBindingV2);
+    impl_into_kaspad_request!(GetPalwMemoryRoutingOutcomeV1);
     impl_into_kaspad_request!(GetPalwPaidClaim);
     impl_into_kaspad_request!(GetPalwAcceptanceReads);
     impl_into_kaspad_request!(GetPalwRfc0016Report);
@@ -329,6 +330,7 @@ pub mod kaspad_response_convert {
     impl_into_kaspad_response!(GetPalwRewardVesting);
     impl_into_kaspad_response!(GetPalwStagedPreclaimQuote);
     impl_into_kaspad_response!(GetPalwRouterBindingV2);
+    impl_into_kaspad_response!(GetPalwMemoryRoutingOutcomeV1);
     impl_into_kaspad_response!(GetPalwPaidClaim);
     impl_into_kaspad_response!(GetPalwAcceptanceReads);
     impl_into_kaspad_response!(GetPalwRfc0016Report);

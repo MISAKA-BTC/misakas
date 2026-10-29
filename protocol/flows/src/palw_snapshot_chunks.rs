@@ -381,6 +381,13 @@ fn serialize_envelope<W: Write>(
     declarations.serialize(writer)
 }
 
+pub(crate) fn decode_snapshot_envelope(bytes: &[u8]) -> io::Result<Snapshot> {
+    if bytes.is_empty() || bytes.len() as u64 > crate::palw_gossip::PALW_PRUNING_STATE_MAX_BYTES as u64 {
+        return Err(invalid("snapshot exceeds existing total byte cap"));
+    }
+    decode_snapshot(&mut io::Cursor::new(bytes), bytes.len() as u64, false)
+}
+
 fn decode_snapshot(reader: &mut impl Read, total: u64, complete_material: bool) -> io::Result<Snapshot> {
     if u16::deserialize_reader(reader)? != SNAPSHOT_FORMAT {
         return Err(invalid("unknown snapshot framing version"));
