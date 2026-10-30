@@ -484,7 +484,7 @@ mod tests {
         let tick = &production[reset..licences];
         assert_eq!(tick.count_code("(*readiness_waiting) = true;"), 1, "a proof with no slot");
         let declined = "(*readiness_waiting) =\n                            \
-                        !self.carry_on_readiness_lane_v1(&session, &duty, current_daa, &mut readiness_lane, &main).await;";
+                        !self.carry_on_readiness_lane_v1(session, &duty, current_daa, readiness_lane, &main).await;";
         assert_eq!(tick.count_code(declined), 1, "a failed replacement whose proof the lane refused too");
         assert_eq!(
             tick.count_code("(*readiness_waiting) ="),

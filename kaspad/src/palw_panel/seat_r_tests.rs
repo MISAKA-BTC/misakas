@@ -1611,7 +1611,7 @@ fn past_seat_r_only_the_replays_can_end_a_verdict_with_valid() {
     assert!(filing.contains_code("let forms = palw_seat_receipt_forms_v1(v2_at, seat_r, valid, seat_r_duty.role, mask);"));
     assert!(filing.contains_code("own_receipts.insert(duty.claim_id, (carried, deadline));"));
     assert!(
-        source.contains_code("if !seat_duty_is_due_until_v1(duty, &answered, current_daa, deadline) {"),
+        source.contains_code("due: seat_duty_is_due_until_v1(duty, &answered, current_daa, view.deadline),"),
         "due until the loop's deadline"
     );
     // The roles read the outsider; the V1 door is offered its quorum past the fence only.

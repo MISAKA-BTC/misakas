@@ -15120,8 +15120,8 @@ fn every_held_court_acceptance_arm_reads_the_claims_class_ladder() {
 #[test]
 fn the_one_move_acceptance_arm_derives_the_bound_verdict_at_the_fence() {
     let source = kaspa_consensus_core::palw_source_guard_v1::palw_processor_source_v1();
-    let at = source.find("Obj::ShardCourtAccused {").expect("the arm");
-    let end = at + source[at..].find("\n                Obj::").expect("the next arm");
+    let at = source.find("Obj::ShardCourtAccused { accusation } => {").expect("the arm");
+    let end = at + source[at..].find("\n            Obj::").expect("the next arm");
     let arm = &source[at..end];
     assert!(arm.contains("palw_shard_court_verdict_at_v2("), "the fenced verdict");
     assert!(arm.contains("self.palw_audit_2026_09_23_at(point.daa_score)"), "at the block's own fence");
@@ -15137,11 +15137,11 @@ fn the_one_move_acceptance_arm_derives_the_bound_verdict_at_the_fence() {
 #[test]
 fn the_one_move_acceptance_arm_refuses_an_unanswerable_held_class_where_the_fold_does() {
     let source = kaspa_consensus_core::palw_source_guard_v1::palw_processor_source_v1();
-    let at = source.find("Obj::ShardCourtAccused {").expect("the arm");
-    let end = at + source[at..].find("\n                Obj::").expect("the next arm");
+    let at = source.find("Obj::ShardCourtAccused { accusation } => {").expect("the arm");
+    let end = at + source[at..].find("\n            Obj::").expect("the next arm");
     let arm = &source[at..end];
     let refusal = arm.find("state.held_claim_is_unanswerable_v2(state_params, claim)").expect("the mirror is read");
-    let guard = &arm[refusal.saturating_sub(160)..refusal];
+    let guard = &arm[refusal.saturating_sub(250)..refusal];
     assert!(
         guard.contains("if self.palw_offence_attribution_at(point.daa_score)") && guard.contains("NeedsDissection)"),
         "at the fence"
@@ -17339,11 +17339,12 @@ fn the_processor_gates_the_evaluation_courts_objects_below_palw_improvement_v1()
         source.contains("palw_object_is_eval_v1(&object) && !self.palw_improvement_at(point.daa_score)"),
         "the acceptance walk drops an evaluation court object by name below the fence"
     );
-    // The CourtClosed proof filter, the close gate and the one-move accusation's gate.
+    // The CourtClosed proof filter, close gate, one-move accusation and dissection close.
     let gates = source.matches("proof.is_eval_v1() && !self.palw_improvement_at(point.daa_score)").count();
-    assert_eq!(gates, 3, "the close filter, the close gate and the accusation's gate");
+    assert_eq!(gates, 4, "the close filter, close gate, accusation and dissection close gates");
     // The evaluation root claim: the fence, the k-ary court, the responder's signature, the arity and the finalize.
-    let start = source.find("Obj::CourtEvalRootClaimed {").expect("the evaluation root claim's arm");
+    let start =
+        source.find("Obj::CourtEvalRootClaimed { session_id, root, arity, signature } => {").expect("the evaluation root claim's arm");
     let rest = &source[start..];
     let end = rest.find("Obj::CourtTirDissected {").expect("the arm ends where F7's round begins");
     let arm = &rest[..end];

@@ -221,8 +221,14 @@ pub(super) fn t12_with_harness_cards_over(
     assert!(config.params.palw_audit_2026_09_23.is_some_and(|f| f.is_active(0)), "the 2026-09-23 audit fence is armed from genesis");
     assert_eq!(config.params.target_time_per_block(), shipped.target_time_per_block());
     let PalwConsensusMode::ConsensusV2(bundle) = &config.params.palw_consensus_mode else { unreachable!() };
-    let PalwConsensusMode::ConsensusV2(shipped_bundle) = &shipped.palw_consensus_mode else { unreachable!() };
-    assert_eq!(bundle.state, shipped_bundle.state, "every window as shipped");
+    let mut expected = shipped.clone();
+    kaspa_consensus_core::config::params::palw_t12_arm_after_int13_at_v1(
+        &mut expected,
+        kaspa_consensus_core::config::params::PALW_T12_G14_17000_FENCES_V1,
+        None,
+    );
+    let PalwConsensusMode::ConsensusV2(shipped_bundle) = &expected.palw_consensus_mode else { unreachable!() };
+    assert_eq!(bundle.state, shipped_bundle.state, "every window as shipped with the public-genesis G14 fences removed");
     assert_eq!(bundle.panel, shipped_bundle.panel, "the panel as shipped");
     let bundle = bundle.clone();
     (config, bundle, utxos, floats)
