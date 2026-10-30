@@ -185,6 +185,19 @@ fn check_baseline(mode: &str, v1_file: &str, v2_file: &str) {
     let update = std::env::var_os("PALW_GOLDEN_UPDATE").is_some();
     let v1 = load_golden(v1_file);
     let mut v2 = load_golden(v2_file);
+    // `std` uses the host libm. The original artifact pins were recorded on Apple
+    // silicon; these three query-temperature tables differ on the Linux CI host.
+    // Pin its measured bytes too, while keeping every program and the portable
+    // libm-v1 baseline identical on both platforms.
+    let platform_file = "lowering_v2_std_linux_x86_64_gnu.json";
+    let mut original_artifacts = BTreeMap::new();
+    if mode == "std" && misaka_palw_tir_lower::detmath::platform() == "linux-x86_64-gnu" {
+        for (name, digest) in load_golden(platform_file) {
+            let row = v2.get_mut(&name).expect("a platform override names an existing fixture");
+            original_artifacts.insert(name, row["artifact"].clone());
+            row["artifact"] = digest;
+        }
+    }
     let mut got: BTreeMap<String, Value> = BTreeMap::new();
     let mut failed = Vec::new();
     for root in ["tests/fixtures/hf", "tests/fixtures/hf-quant", "tests/fixtures/gguf"] {
@@ -225,7 +238,17 @@ fn check_baseline(mode: &str, v1_file: &str, v2_file: &str) {
             v2.insert(k.clone(), v.clone());
         }
         std::fs::create_dir_all(golden_path(v2_file).parent().expect("dir")).expect("mkdir");
-        std::fs::write(golden_path(v2_file), serde_json::to_string_pretty(&v2).expect("json") + "\n").expect("write golden");
+        let mut baseline = v2.clone();
+        if !original_artifacts.is_empty() {
+            let mut platform = BTreeMap::new();
+            for (name, original) in &original_artifacts {
+                platform.insert(name.clone(), v2[name]["artifact"].clone());
+                baseline.get_mut(name).unwrap()["artifact"] = original.clone();
+            }
+            std::fs::write(golden_path(platform_file), serde_json::to_string_pretty(&platform).expect("json") + "\n")
+                .expect("write platform golden");
+        }
+        std::fs::write(golden_path(v2_file), serde_json::to_string_pretty(&baseline).expect("json") + "\n").expect("write golden");
         eprintln!("[{mode}] wrote {} rows to {}", v2.len(), golden_path(v2_file).display());
     }
     // Version 1: the program of every recorded row is unchanged (its artifact moved on purpose).

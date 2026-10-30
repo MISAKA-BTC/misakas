@@ -43,6 +43,20 @@ use std::path::{Path, PathBuf};
 /// classified by a human as "executes" or "converts", and adding one without touching this list
 /// fails the completeness check below.
 const CONSENSUS_PATH: &[&str] = &[
+    // Capture admission, public byte projection and native court evidence preserve
+    // the integer execution's bytes without introducing another arithmetic path.
+    "src/cancel.rs",
+    "src/flat_public_source.rs",
+    "src/gdn_capture_owner_v3.rs",
+    "src/gdn_court_error_v3.rs",
+    "src/gdn_court_v2.rs",
+    "src/gdn_evidence_v2.rs",
+    "src/gdn_inventory_openings_v2.rs",
+    "src/gdn_leaf_leg_owner_v3.rs",
+    "src/gdn_predecessor_evidence_v3.rs",
+    "src/gdn_witness_copy_owner_v4.rs",
+    "src/routing_court_v2.rs",
+    "src/step_tile_hasher.rs",
     // A-held: the held-attention site evidence and its windowed builder (integer only).
     "src/attn_held.rs",
     "src/lib.rs",
@@ -146,6 +160,10 @@ const STATES_THE_ARITHMETIC: &[&str] = &[
 /// Off the execution path, each with the reason it is off it. Present so that the union of this
 /// list and [`CONSENSUS_PATH`] can be compared against what is actually on disk.
 const EXEMPT: &[(&str, &str)] = &[
+    ("src/bin/qwen25-window-compare.rs", "offline comparison against the float reference; reports fidelity and timings"),
+    ("src/bin/qwen36-window-compare.rs", "offline comparison against the float reference; reports fidelity and timings"),
+    ("src/remote_gguf.rs", "offline conversion input: ranged checkpoint reader, no execution"),
+    ("src/float_public_source.rs", "Float32 class public source; not PALW-BASE-0 integer arithmetic"),
     ("src/convert.rs", "offline PTQ: float in, (multiplier, shift) out, frozen at registration"),
     ("src/gguf.rs", "offline checkpoint reader: the file it decodes is float, and it never executes"),
     ("src/bin/qwen25-convert.rs", "offline PTQ driver"),
@@ -327,7 +345,8 @@ struct Finding {
 fn has_raw_string(source: &str) -> bool {
     let b = source.as_bytes();
     for i in 0..b.len() {
-        if b[i] != b'r' || (i > 0 && is_ident_char(b[i - 1])) {
+        let byte_prefix = i > 0 && b[i - 1] == b'b' && (i < 2 || !is_ident_char(b[i - 2]));
+        if b[i] != b'r' || (i > 0 && is_ident_char(b[i - 1]) && !byte_prefix) {
             continue;
         }
         let after_hashes = source[i + 1..].trim_start_matches('#');
@@ -349,12 +368,6 @@ fn scan(path: &Path, label: &str) -> (Vec<Finding>, usize, usize) {
     // A raw string would flip `in_string` without a matching close and silently blind the scan
     // from there to the end of the file. Refusing is the only honest answer available here: the
     // alternative is a green result that means nothing.
-    assert!(
-        !has_raw_string(&source),
-        "{label} contains a raw string, which `code_only` does not track — it would desync the \
-         string state for the rest of the file and scan real code as prose (or skip it). Teach \
-         `code_only` raw strings before adding a file that uses one."
-    );
     let mut findings = Vec::new();
     let mut scanned = 0usize;
     let mut in_string = false;
@@ -392,6 +405,11 @@ fn scan(path: &Path, label: &str) -> (Vec<Finding>, usize, usize) {
             continue;
         }
         let code = code_only(raw, &mut in_string);
+        assert!(
+            !has_raw_string(&code),
+            "{label}:{} contains a raw string outside a skipped test module; teach code_only to track it",
+            index + 1
+        );
         let reason = if has_float_type(&code) {
             Some("an IEEE-754 type (ADR-0040 Decision A)")
         } else if LIBM_CALLS.iter().any(|c| code.contains(c)) {
@@ -484,6 +502,9 @@ fn every_source_file_is_classified() {
 /// ignored for noise or trusted while blind.
 #[test]
 fn the_detectors_separate_float_from_things_that_look_like_it() {
+    assert!(has_raw_string(&code_only_line("let x = r#\"raw\"#;")));
+    assert!(has_raw_string(&code_only_line("let x = br#\"raw\"#;")));
+    assert!(!has_raw_string(&code_only_line("let x = \"an error\"; // r#\"comment\"#")));
     assert!(has_float_type("let x = 1 as f32;"));
     assert!(has_float_type("fn f(v: f64) -> f64"));
     assert!(!has_float_type("let h: Hash64 = ...;"));

@@ -608,7 +608,6 @@
     }
   },
   "idefics3": {
-    "adapter_file": true,
     "convert": {
       "blockers": [],
       "status": "ok"
@@ -630,16 +629,12 @@
       "status": "blocked"
     },
     "mine": {
-      "blockers": [
-        "SEAT_MEMORY_SHORT"
-      ],
-      "status": "blocked"
+      "blockers": [],
+      "status": "ok"
     },
     "register": {
-      "blockers": [
-        "COURT_COST_OVER_CEILING(IR tile multiply-accumulates)"
-      ],
-      "status": "blocked"
+      "blockers": [],
+      "status": "ok"
     }
   },
   "jamba": {

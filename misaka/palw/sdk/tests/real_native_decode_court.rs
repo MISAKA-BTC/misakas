@@ -104,7 +104,13 @@ fn recorded_real_32_position_trace_convicts_substituted_delivery_from_public_wit
     let program = misaka_palw_tir::TirProgramV1::decode_canonical(&bundle.program_bytes).unwrap();
     let d = misaka_palw_kernel::descriptor::k2_tir_v4_descriptor();
     let root = misaka_palw_kernel::public::program_root_v1(&bundle.program_bytes);
-    assert_eq!(bundle.plan, misaka_palw_kernel::plan::plan_for_tir_program_v1(&d, &program, root, 32).unwrap());
+    // Preserve the recorded evidence and its historical cost estimate. Current
+    // element/decode court sizing changes only the two worst-filing bounds.
+    assert_eq!((bundle.plan.budgets.worst_court_bytes, bundle.plan.budgets.worst_court_work), (629_606, 473_589_248));
+    let mut current = bundle.plan.clone();
+    current.budgets.worst_court_bytes = 776_366;
+    current.budgets.worst_court_work = 278_696_960;
+    assert_eq!(current, misaka_palw_kernel::plan::plan_for_tir_program_v1(&d, &program, root, 32).unwrap());
     assert_eq!(bundle.params.by_instance.len(), 1636);
     let params: misaka_palw_kernel::trace::ParamCommitmentsV1 = borsh::from_slice(include_bytes!(concat!(
         env!("CARGO_MANIFEST_DIR"),

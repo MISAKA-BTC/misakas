@@ -39,7 +39,9 @@ fn tmp(tag: &str) -> std::path::PathBuf {
 
 #[test]
 fn the_streamed_writer_writes_the_patched_files_bytes_and_packs_to_its_root() {
-    let a = qwen36_dev_fixture(4, 4);
+    // Cross the production 1 MiB minimum segment size so both transports must
+    // emit several segments under the same container rules.
+    let a = qwen36_dev_fixture(16, 128);
     let plan: Vec<(String, usize)> = a.tensor_names().iter().map(|n| (n.to_string(), a.tensor(n).expect("present").len())).collect();
     let placeholders = a.params_map().clone();
     // "Measured" parameters: every row's bytes changed, widths kept (what the calibration patches in at the end).
@@ -103,7 +105,7 @@ fn the_streamed_writer_writes_the_patched_files_bytes_and_packs_to_its_root() {
         family: family::NONE,
         out_dir: out.to_path_buf(),
         stem: "Q36-PALW".into(),
-        segment_bytes: 1 << 16,
+        segment_bytes: misaka_palw_tir_artifact::palwart_v3::PALWART_MIN_SEGMENT_BYTES_V3,
         license_files: Vec::new(),
         calibration_files: Vec::new(),
         provenance: serde_json::json!({}),

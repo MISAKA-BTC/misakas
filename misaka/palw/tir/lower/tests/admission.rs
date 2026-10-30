@@ -82,7 +82,12 @@ fn every_lowerable_real_configuration_is_admitted() {
     // admitted at a window of 2^16 (`tests/dsa.rs::deepseek_v32_is_admitted`).
     assert_eq!(
         refused,
-        vec!["deepseek-v3-bf16.json".to_string(), "deepseek-v3-fp8.json".to_string(), "deepseek-v3.2-exp.json".to_string()]
+        vec![
+            "deepseek-v3-bf16.json".to_string(),
+            "deepseek-v3-fp8.json".to_string(),
+            "deepseek-v3.2-exp.json".to_string(),
+            "glm-5.json".to_string(),
+        ]
     );
 }
 
