@@ -213,13 +213,25 @@ impl Monitor {
         let mut packets = 0;
         let mut seals = 0;
         let mut rendering = 0;
+        let mut bundle_controls = 0;
         for carrier in carriers {
             if let PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement } = carrier
                 && movement.claim == claim
                 && movement.reserver == owner
             {
-                assert_eq!(movement.phase, PalwConstraintStreamPhaseV1::Tokenizer);
                 movement.check().unwrap();
+                if matches!(
+                    movement.action,
+                    PalwConstraintStreamActionV1::BundleOpen { .. }
+                        | PalwConstraintStreamActionV1::ActivateStage { .. }
+                        | PalwConstraintStreamActionV1::InventoryPart { .. }
+                        | PalwConstraintStreamActionV1::InventoryFinish
+                ) {
+                    bundle_controls += 1;
+                    continue;
+                }
+                assert_eq!(movement.seed_id, reference.seed_id, "every tokenizer continuation names the exact convicted family seed");
+                assert_eq!(movement.phase, PalwConstraintStreamPhaseV1::Tokenizer);
                 match &movement.action {
                     PalwConstraintStreamActionV1::TokenizerPacket(packet) => {
                         assert!(packet.bytes.len() <= 65536 && packet.proofs.len() <= 64);
@@ -232,6 +244,7 @@ impl Monitor {
                 }
             }
         }
+        assert!(bundle_controls > 0, "the admitted required-family bundle uses its own signed control seed");
         assert!(packets > 16 && rendering > 0);
         assert_eq!(seals, 1);
         assert!(carriers.iter().any(|o| matches!(o, PalwConsensusObjectV2::DisputeReservedV1 { reservation, .. } if reservation.claim == claim && reservation.reserver == owner)));

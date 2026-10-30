@@ -1,6 +1,8 @@
 //! Actual producer answer worker and independent public verifier recovery. The producer alone
 //! receives its real retained capture; the verifier starts and restarts with an empty retention
 //! directory and obtains signed material exclusively from accepted public carriers.
+//! Constraint-fraud producers are adversarial: their signed public answers are scripted
+//! through ordinary H1/PQ; the independent verifier still restarts/reorgs its real service.
 use super::*;
 #[path = "palw_service_network_e2e.rs"]
 mod network;
@@ -84,6 +86,7 @@ pub(super) struct RecoveryRun {
     pruned_round: Option<(usize, u8)>,
     pruned_numbered_before: Option<(u8, u64)>,
     honest: bool,
+    faulty: bool,
     job_only_recovery: Option<(std::path::PathBuf, Vec<u8>)>,
     mode: RecoveryMode,
     premine: Vec<Funding>,
@@ -228,6 +231,7 @@ impl RecoveryRun {
             pruned_round: None,
             pruned_numbered_before: None,
             honest,
+            faulty: case.constraint_fault().is_some() || case.native_prefix(),
             job_only_recovery,
             mode,
             premine: premine.to_vec(),
@@ -372,6 +376,13 @@ impl RecoveryRun {
         let progress = chain.tc.palw_legacy_answer_progress_v2((claim, PalwLegacyHeldUnitV2::FpJob, chain.bonds[0])).unwrap();
         let partial = progress.as_ref().is_some_and(|p| p.received != 0 && p.next_index().is_some());
         self.after_accepted_carrier(chain, claim).await;
+        if self.faulty
+            && self.mode == RecoveryMode::Reorg
+            && !self.reorged
+            && chain.view(claim).record.as_ref().is_some_and(|r| r.live.contains_key(&self.verifier_bond))
+        {
+            self.reorg_fraud_reservation(chain, claim).await;
+        }
         if self.verifier_paused()
             && view.unit_was_answered_v1(&PalwDaUnitV1::LegacyHeldV2(PalwLegacyHeldUnitV2::PromptIds { chunk: 0 }))
             && !view.sessions.iter().any(|(bond, _)| *bond == self.verifier_bond)
@@ -574,12 +585,75 @@ impl RecoveryRun {
         eprintln!("[service-recovery] actual selected-chain reorg rolled accepted multipart bitmap back at DAA {}", chain.daa());
     }
 
+    async fn reorg_fraud_reservation(&mut self, chain: &mut Chain, claim: Hash64) {
+        let part = chain
+            .history
+            .iter()
+            .position(|block| {
+                block.transactions.iter().any(|tx| {
+                    borsh::from_slice::<PalwLifecycleTxPayloadV2>(&tx.payload).is_ok_and(|payload| {
+                        matches!(payload.object,
+                PalwConsensusObjectV2::DisputeReservedV1 { reservation, .. }
+                if reservation.claim == claim && reservation.reserver == self.verifier_bond)
+                    })
+                })
+            })
+            .expect("the verifier's fraud reservation was actually carried");
+        assert!(part > 0);
+        let fork = chain.history[part - 1].hash();
+        let old_sink = chain.tc.get_sink();
+        let old_work = chain.tc.get_header(old_sink).unwrap().blue_work;
+        let mut branch = Chain::new(chain.config.clone(), chain.bundle.clone(), &self.premine);
+        for block in &chain.history[..part] {
+            branch
+                .tc
+                .validate_and_insert_block(block.clone())
+                .virtual_state_task
+                .await
+                .expect("the independent fork validates public history");
+            branch.history.push(block.clone());
+        }
+        assert_eq!(branch.tc.get_sink(), fork);
+        branch.time = chain.history[part - 1].header.timestamp;
+        branch.nonce = chain.nonce.saturating_add(1000);
+        let fork_daa = branch.daa();
+        let count = branch.history.len();
+        while branch.tc.get_header(branch.tc.get_sink()).unwrap().blue_work <= old_work {
+            branch.heartbeat(vec![]).await;
+            assert!(
+                branch.daa().saturating_sub(fork_daa) <= kaspa_consensus_core::palw_fork_authority_v2::PALW_REORG_SHALLOW_TIE_DAA_V1,
+                "the fork must remain inside the shipped shallow economic-tie window"
+            );
+        }
+        assert!(!branch.view(claim).record.as_ref().is_some_and(|r| r.live.contains_key(&self.verifier_bond)));
+        let added = branch.history[count..].to_vec();
+        for block in added {
+            chain
+                .tc
+                .validate_and_insert_block(block.clone())
+                .virtual_state_task
+                .await
+                .expect("the live node validates the competing fork");
+            chain.history.push(block);
+        }
+        assert_eq!(chain.tc.get_sink(), branch.tc.get_sink(), "the heavier admissible fork actually becomes selected");
+        assert_ne!(chain.tc.get_sink(), old_sink);
+        assert!(
+            !chain.view(claim).record.as_ref().is_some_and(|r| r.live.contains_key(&self.verifier_bond)),
+            "the selected-chain switch rolls back the verifier's accepted fraud reservation"
+        );
+        chain.time = chain.time.max(branch.time);
+        chain.nonce = chain.nonce.max(branch.nonce);
+        self.reorged = true;
+        eprintln!("[service-recovery] actual selected-chain reorg rolled the accepted fraud reservation back at DAA {}", chain.daa());
+    }
+
     pub(super) async fn finish(&mut self, chain: &Chain, claim: Hash64, service_start: usize) {
         assert_eq!(self.verifier_config.public_claims, vec![claim], "actual recovery uses the bounded native exact-target read");
         if self.mode == RecoveryMode::Restart {
             assert!(self.verifier_restarted, "the test must actually restart the public service while its case is live");
         } else if self.mode == RecoveryMode::Reorg {
-            assert!(self.reorged, "a real selected-chain switch must roll back the accepted partial assembly");
+            assert!(self.reorged, "a real selected-chain switch must roll back the accepted recovery checkpoint");
             assert!(!self.verifier_restarted, "the public verifier must continue across the real reorg without losing its book");
         }
         if self.honest {
@@ -675,6 +749,9 @@ impl RecoveryRun {
                 assert!(self.mode != RecoveryMode::PrunedRound, "the pruning fixture must actually prune a carried input");
                 assert_multipart_transport(chain, claim, service_start);
             }
+        } else if self.faulty {
+            let view = chain.view(claim);
+            assert!(view.executor_refuted && !view.da_defaulted, "recovery must preserve the exact fraud conviction");
         } else {
             assert!(chain.view(claim).da_defaulted);
         }

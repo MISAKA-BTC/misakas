@@ -480,6 +480,10 @@ fn start_verifier(chain: &Chain, bond: PalwBondKeyV2, funding: &Funding) -> Veri
 /// the first observation).
 fn convicted(chain: &Chain, claim: Hash64) -> bool {
     let Some(view) = chain.tc.palw_legacy_dispute_v1(claim) else { return false };
+    convicted_view(&view)
+}
+
+fn convicted_view(view: &kaspa_consensus_core::palw_state_v2::PalwLegacyDisputeViewV1) -> bool {
     view.executor_refuted
         || view.court_convicted
         || matches!(
@@ -492,8 +496,7 @@ fn convicted(chain: &Chain, claim: Hash64) -> bool {
 }
 
 /// Whether the chain recorded the objective DA default of `claim` (withholding, never a fraud verdict).
-fn defaulted(chain: &Chain, claim: Hash64) -> bool {
-    let Some(view) = chain.tc.palw_legacy_dispute_v1(claim) else { return false };
+fn defaulted_view(view: &kaspa_consensus_core::palw_state_v2::PalwLegacyDisputeViewV1) -> bool {
     view.da_defaulted || matches!(view.phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::ProducerWithholding, .. })
 }
 
@@ -586,7 +589,7 @@ async fn run_cases_on(cases: Vec<(&'static str, Lie, Expect)>, post_final: bool,
             let Some(view) = chain.tc.palw_legacy_dispute_v1(p.claim) else {
                 assert!(
                     done_at.contains_key(&p.claim) || p.expect == Expect::Honest,
-                    "{}: the claim left the state unconvicted",
+                    "{}: the claim left state before its conviction was observed",
                     p.name
                 );
                 continue;
@@ -595,12 +598,13 @@ async fn run_cases_on(cases: Vec<(&'static str, Lie, Expect)>, post_final: bool,
                 let seen = sessions.entry(p.claim).or_default();
                 *seen = (*seen).max(row.sessions_opened);
             }
-            let objective = convicted(&chain, p.claim) || (p.expect == Expect::Withholding && defaulted(&chain, p.claim));
+            let is_convicted = convicted_view(&view);
+            let objective = is_convicted || (p.expect == Expect::Withholding && defaulted_view(&view));
             if objective && !done_at.contains_key(&p.claim) {
                 eprintln!(
                     "[g14v] {}: {} at DAA {} — executor_refuted {} court_convicted {} phase {:?}; verifier carriers so far {carried:?}",
                     p.name,
-                    if convicted(&chain, p.claim) { "CONVICTED" } else { "DA DEFAULT" },
+                    if is_convicted { "CONVICTED" } else { "DA DEFAULT" },
                     chain.daa(),
                     view.executor_refuted,
                     view.court_convicted,
@@ -609,10 +613,12 @@ async fn run_cases_on(cases: Vec<(&'static str, Lie, Expect)>, post_final: bool,
                 done_at.insert(p.claim, chain.daa());
             }
         }
-        for _ in 0..3 {
-            pool_heartbeat(&mut chain, &verifier.manager, &verifier.pool).await;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        // The service works on a wall-clock tick. Racing thousands of empty
+        // blocks ahead retires later cases before that tick can reserve them.
+        // Advance the real chain at the worker cadence, retaining every native
+        // response clock, retirement rule and positively observed verdict.
+        pool_heartbeat(&mut chain, &verifier.manager, &verifier.pool).await;
+        tokio::time::sleep(Duration::from_secs(2)).await;
     }
     // Honest claims: a few more beats; nothing may be filed against them.
     for _ in 0..30 {
