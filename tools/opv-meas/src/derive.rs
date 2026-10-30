@@ -512,7 +512,7 @@ mod tests {
     /// The committed inputs (the numbers `opv-measurements.md` §4 quotes) run through the same code the tables came from.
     #[test]
     fn the_committed_inputs_reproduce_the_tables_the_note_quotes() {
-        let dir = format!("{}/../../docs/design/palw/opv-measurements-data/derive", env!("CARGO_MANIFEST_DIR"));
+        let dir = format!("{}/../../docs/evidence/palw/opv-measurements-data/derive", env!("CARGO_MANIFEST_DIR"));
         let run_file = |f: &str| run(&["derive".into(), "--in".into(), format!("{dir}/{f}")]).expect("derive");
         let one = run_file("in-v2-one-verifier.json");
         assert_eq!(one["reporter_return_permille"], 490);

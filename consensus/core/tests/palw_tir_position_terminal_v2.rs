@@ -331,16 +331,24 @@ fn a_two_level_lookahead_and_one_choice_path_equal_the_old_two_rounds() {
             extra.frontier.push(extra.frontier[0].clone());
             assert!(phase.expand_lookahead_v2(&extra, CAP).is_err());
             if let Some(r) = msg.frontier[0][0].partials.iter().position(|v| !v.is_empty()) {
-                // One value raised: the reconstructed parents no longer fold to the disputed claim.
+                // Raise the row throughout the frontier so every reduction level
+                // changes, including maxima in another group.
                 let mut altered = msg.clone();
-                altered.frontier[0][0].partials[r][0] += 1;
+                for group in &mut altered.frontier {
+                    for child in group {
+                        for value in &mut child.partials[r] {
+                            *value += 1;
+                        }
+                    }
+                }
                 assert!(phase.expand_lookahead_v2(&altered, CAP).is_err());
             }
-            // A choice path against another disclosure than the pending one is refused.
+            // An unsupported disclosure version is refused while a valid one is pending.
+            // Version 3 is now the supported position-lookahead form.
             let mut pending = phase.clone();
             pending.apply_lookahead_disclosure_v2(&msg, CAP, 5, W).unwrap();
             let mut other = msg.clone();
-            other.version = 3;
+            other.version = u16::MAX;
             let p =
                 PalwTirChoicePathV2 { version: PALW_TIR_LOOKAHEAD_OBJECT_VERSION_V2, session_id: SESSION, round: 0, path: vec![0, 0] };
             assert!(pending.apply_choice_path_v2(&other, &p, CAP, 5, W).is_err());

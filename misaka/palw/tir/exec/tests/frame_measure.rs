@@ -796,6 +796,7 @@ fn tir_frame_operations_on_a_real_class() {
 /// Run: `MISAKA_TIR_FRAME_MEASURE_PALWTIR=<file> MISAKA_DOOR_BREAKDOWN_OUT=<json> cargo test --release -p misaka-palw-tir-exec
 ///  --features node --test frame_measure door_breakdown_on_a_real_class -- --nocapture`
 #[test]
+#[ignore = "analysis of an external real checkpoint; set MISAKA_TIR_FRAME_MEASURE_PALWTIR and run with --ignored"]
 fn door_breakdown_on_a_real_class() {
     use kaspa_consensus_core::palw_tir_frame_cost_v1 as fc;
     use kaspa_consensus_core::palw_tir_public_owned_v1::{PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1, request_body_bound_v1};
