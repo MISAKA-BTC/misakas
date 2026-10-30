@@ -73,6 +73,10 @@ fn g14_close_config(full: bool) -> (Config, PalwConsensusParamsV2, Premine, Prem
     params.palw_legacy_public_filer_v1 = at;
     params.sync_palw_legacy_public_filer_v1();
     params.palw_legacy_held_da_v2 = at;
+    // As in the parent LG14 harness, exercise shallow reorgs under the strict-win
+    // rule. The shipped activation is later than these isolated fixture blocks;
+    // the legacy economic tie instead depends on random block hashes.
+    params.palw_reorg_strict_economic_win = at;
     params.palw_g14_route_required_v1 = at;
     if full {
         params.palw_court_capacity_v1 = Some(

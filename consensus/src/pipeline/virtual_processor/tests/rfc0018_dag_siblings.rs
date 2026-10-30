@@ -3,8 +3,8 @@
 //!
 //! The chain is testnet-12 as launched (the harness cards). Every genesis model row that is not the floor is planted `Active` on eight
 //! ready seats (`t12_real_share`'s plant), so three classes are open: the floor and the two model rows. Three cards each build an
-//! attempt of a DIFFERENT class on the SAME virtual (three templates before any is inserted), the three land as siblings, and the next
-//! heartbeat merges them — one is the selected parent, the others are merged blue or red (k = 1).
+//! attempt of a DIFFERENT class on the SAME virtual (three templates before any is inserted), the three land as siblings, and the next bounded
+//! heartbeats merge them — all become selected-chain ancestors, merged blue or red (k = 1).
 //!
 //! * `…all_retained_and_each_recorded…` — every sibling is in the merging block's past (selected parent, blue or red) and every claim
 //!   is in the state with its own bond, class and carrying block (attribution is per claim, never per round or per parent).
@@ -19,6 +19,7 @@
 use super::OnetimeTxSelector;
 use super::t12_round_lane_e2e::{T12Chain, card_payout_spk, stamp_harness_time, t12_genesis_chain, t12_with_harness_cards};
 use crate::consensus::test_consensus::TestConsensus;
+use crate::model::services::reachability::ReachabilityService;
 use crate::model::stores::ghostdag::GhostdagStoreReader;
 use kaspa_consensus_core::BlockHash;
 use kaspa_consensus_core::api::ConsensusApi;
@@ -245,8 +246,9 @@ struct Sibling {
     class: Hash64,
 }
 
-/// Three models × three miners from the same parents, inserted in `order`, merged by one heartbeat. Returns the siblings and the merger.
-async fn three_models_from_the_same_parents(rig: &mut Rig) -> (Vec<Sibling>, Block) {
+/// Three models × three miners from the same parents, joined through ordinary
+/// templates. Parent selection may merge two first; carry every join block to peers.
+async fn three_models_from_the_same_parents(rig: &mut Rig) -> (Vec<Sibling>, Vec<Block>) {
     let mut built = Vec::new();
     for (card, class) in [(1usize, rig.classes[0]), (2, rig.classes[1]), (3, rig.classes[2])] {
         let (block, claim) = rig.build_of(class, card);
@@ -257,15 +259,24 @@ async fn three_models_from_the_same_parents(rig: &mut Rig) -> (Vec<Sibling>, Blo
     for s in &built {
         rig.insert(&s.block).await;
     }
-    let merger = rig.c.heartbeat(1_000, Vec::new()).await;
-    (built, merger)
+    let mut joins = Vec::new();
+    for _ in 0..built.len() {
+        let merger = rig.c.heartbeat(1_000, Vec::new()).await;
+        let complete = built.iter().all(|sibling| {
+            rig.c.ctx.consensus.services.reachability_service.is_dag_ancestor_of(sibling.block.header.hash, merger.header.hash)
+        });
+        joins.push(merger);
+        if complete {
+            return (built, joins);
+        }
+    }
+    panic!("ordinary templates must join every retained sibling within the three-block fixture bound");
 }
 
 fn assert_retained_and_attributed(tag: &str, rig: &Rig, siblings: &[Sibling], merger: BlockHash) {
-    let gd = rig.c.vp().ghostdag_store.get_data(merger).unwrap();
     for s in siblings {
         let hash = s.block.header.hash;
-        let merged = gd.selected_parent == hash || gd.mergeset_blues.contains(&hash) || gd.mergeset_reds.contains(&hash);
+        let merged = rig.c.ctx.consensus.services.reachability_service.is_dag_ancestor_of(hash, merger);
         if !merged {
             let merger_header = rig.c.ctx.consensus.get_header(merger).unwrap();
             eprintln!(
@@ -295,8 +306,8 @@ fn assert_retained_and_attributed(tag: &str, rig: &Rig, siblings: &[Sibling], me
 async fn run_all_retained(sibling_fence: bool) {
     let tag = if sibling_fence { "sibling fence" } else { "launched" };
     let mut rig = Rig::new(parts(sibling_fence)).await;
-    let (siblings, merger) = three_models_from_the_same_parents(&mut rig).await;
-    assert_retained_and_attributed(tag, &rig, &siblings, merger.header.hash);
+    let (siblings, joins) = three_models_from_the_same_parents(&mut rig).await;
+    assert_retained_and_attributed(tag, &rig, &siblings, joins.last().unwrap().header.hash);
 }
 
 /// The same blocks, delivered to fresh nodes in EVERY permutation of the three siblings' arrival (3! = 6), give the same sink,
@@ -306,7 +317,8 @@ async fn run_arrival_order(sibling_fence: bool) {
     let tag = if sibling_fence { "sibling fence" } else { "launched" };
     let mut a = Rig::new(parts(sibling_fence)).await;
     let start = a.c.sink();
-    let (siblings, merger) = three_models_from_the_same_parents(&mut a).await;
+    let (siblings, joins) = three_models_from_the_same_parents(&mut a).await;
+    let merger = joins.last().unwrap();
     let (ga, sa) = (a.c.vp().ghostdag_store.get_data(merger.header.hash).unwrap(), a.c.tip_state().1);
     for order in [[0usize, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]] {
         let mut b = Rig::replica(parts(sibling_fence), &a).await;
@@ -315,7 +327,9 @@ async fn run_arrival_order(sibling_fence: bool) {
         for i in order {
             b.insert(&siblings[i].block).await;
         }
-        b.insert(&merger).await;
+        for join in &joins {
+            b.insert(join).await;
+        }
         let tag = format!("{tag}, arrival {order:?}");
         assert_eq!(a.c.sink(), b.c.sink(), "{tag}: one sink");
         let gb = b.c.vp().ghostdag_store.get_data(merger.header.hash).unwrap();
