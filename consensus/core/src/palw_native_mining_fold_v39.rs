@@ -71,7 +71,7 @@ fn granted_weight_v39(state: &PalwChainStateV2, receipt: &Digest) -> Result<u128
 pub(super) fn live_safe_weight_v39(state: &PalwChainStateV2) -> Result<u128, PalwStateV2Error> {
     let Some(route) = state.kernel_route.as_ref() else { return Ok(0) };
     let mut total = 0u128;
-    for ((table, key), _) in &route.aux {
+    for (table, key) in route.aux.keys() {
         if *table != TABLE || !key.starts_with(&[39, MINING_RECEIPT_KIND_V39]) {
             continue;
         }
