@@ -9,7 +9,7 @@
 #![allow(warnings)]
 use kaspa_consensus_core::config::params::{
     DEVNET_PARAMS, ForkActivation, MAINNET_PARAMS, Params, SIMNET_PARAMS, TESTNET_PARAMS, TESTNET11_PARAMS, devnet_shipped_params,
-    mainnet_shipped_params, palw_rc_shipped_params, palw_t12_shipped_params,
+    mainnet_shipped_params, palw_rc_shipped_params, palw_t12_release_v6_params, palw_t12_shipped_params,
 };
 use kaspa_consensus_core::network::{NetworkId, NetworkType};
 
@@ -49,12 +49,14 @@ fn set(p: &mut Params, name: &str, at: Option<ForkActivation>) {
 #[test]
 fn every_shipped_ruleset_leaves_the_three_ruling_fences_dormant() {
     for (what, p) in rulesets() {
+        let t12 = p.net == NetworkId::with_suffix(NetworkType::Testnet, 12);
         for name in FENCES {
-            assert!(p.palw_fences_v1().contains(&(name, None)), "{what}: {name} is in the registry and dormant");
+            let expected = if t12 && name == "palw_claim_hard_deadline_v1" { Some(ForkActivation::new(17_400)) } else { None };
+            assert!(p.palw_fences_v1().contains(&(name, expected)), "{what}: {name} has its declared schedule");
         }
         assert!(!p.palw_court_model_scope_v1_active_at(u64::MAX - 1), "{what}");
         assert!(!p.palw_public_evidence_reward_v1_active_at(u64::MAX - 1), "{what}");
-        assert!(!p.palw_claim_hard_deadline_v1_active_at(u64::MAX - 1), "{what}");
+        assert_eq!(p.palw_claim_hard_deadline_v1_active_at(u64::MAX - 1), t12, "{what}");
         p.validate_palw_2026_10_12_ruling_fences_v1().unwrap_or_else(|e| panic!("{what}: nothing to refuse: {e:?}"));
     }
 }
@@ -63,7 +65,7 @@ fn every_shipped_ruleset_leaves_the_three_ruling_fences_dormant() {
 fn a_dormant_ruling_fence_moves_no_params_id_and_never_collapses_to_none() {
     // `consensus_params_id` normalises `Some(never())` to `None` (as for every fence); the schedule id is taken over the
     // presets as they are built, which never write `Some(never())` for these fences.
-    let base = palw_t12_shipped_params();
+    let base = palw_t12_release_v6_params();
     let params_id = base.consensus_params_id();
     for name in FENCES {
         let mut never = base.clone();

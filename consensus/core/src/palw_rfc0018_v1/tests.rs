@@ -4,7 +4,7 @@
 //! devnet) is RFC-0018 §10's real-process list (`scripts/drills/rfc0018_*.py`).
 
 use super::*;
-use crate::config::params::{MAINNET_PARAMS, TESTNET_PARAMS, palw_t12_shipped_params};
+use crate::config::params::{MAINNET_PARAMS, TESTNET_PARAMS, palw_t12_release_v6_params, palw_t12_shipped_params};
 use crate::palw_state_v2::{PalwClaimPhaseV2, PalwVoidReasonV2, palw_claim_template_v1};
 use crate::tx::TransactionOutpoint;
 
@@ -60,7 +60,10 @@ const NAMES: [&str; 5] = [
 
 #[test]
 fn rfc18_fences_are_dormant_on_every_preset_and_named_in_the_exhaustive_list() {
-    for p in [MAINNET_PARAMS, TESTNET_PARAMS, palw_t12_shipped_params()] {
+    let shipped = palw_t12_shipped_params();
+    assert_eq!(shipped.palw_independently_work_certified_v1, Some(ForkActivation::new(17_400)));
+    assert!(shipped.palw_rfc0018_expected_mirror_v1().is_some());
+    for p in [MAINNET_PARAMS, TESTNET_PARAMS, palw_t12_release_v6_params()] {
         assert_eq!(p.palw_dag_sibling_attribution_v1, None);
         assert_eq!(p.palw_panel_anchor_permissionless_v1, None);
         assert_eq!(p.palw_rule_e_participation_v2, None);
@@ -185,7 +188,7 @@ fn certify(state: &mut PalwChainStateV2, claim: &Hash64, outcome: Option<PalwCer
 
 #[test]
 fn rfc18_gate_c_is_the_identity_below_its_fence_and_on_every_shipped_network() {
-    let shipped = t12_state_params();
+    let shipped = t12_state_params().with_rfc0018_v1(None);
     let armed = with_mirror(PalwGateCRuleV1::SecurityCertifiedV1);
     let state = PalwChainStateV2::genesis();
     for phase in [
@@ -1174,7 +1177,8 @@ fn gatec_decouple_rfc18_record_gate_is_exact_and_well_formed() {
 
 #[test]
 fn gatec_decouple_shipped_presets_identity_and_validation_unchanged() {
-    for p in [MAINNET_PARAMS, TESTNET_PARAMS, palw_t12_shipped_params()] {
+    palw_t12_shipped_params().validate_palw_rfc0018_v1().unwrap();
+    for p in [MAINNET_PARAMS, TESTNET_PARAMS, palw_t12_release_v6_params()] {
         for f in PalwRfc0018GatedFenceV1::ALL {
             assert_eq!(f.armed(&p), None);
         }

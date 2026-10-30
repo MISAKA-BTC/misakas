@@ -298,7 +298,9 @@ fn the_allocation_clips_reward_only_on_the_real_fold() {
     assert!(off.iter().all(|r| *r == carve), "off: the carve {carve}: {off:?}");
     assert!(even.iter().all(|r| *r <= carve / 2 + 1), "even: at most half the realized carve: {even:?} of {carve}");
     assert!(even.iter().any(|r| *r > 0));
-    assert!(none.iter().all(|r| *r == 0), "unassigned: Σ A = 0, nothing: {none:?}");
+    // ADR-0177 (2026-10-28), option (b): the zero-signal bootstrap
+    // leaves claim rewards unclipped until an allocation can be formed.
+    assert_eq!(none, off, "Σ A = 0 uses the adopted bootstrap carve");
     assert_eq!((w_off, w_even), (w_none, w_none), "the allocation never moves weight");
 }
 

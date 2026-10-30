@@ -7961,7 +7961,7 @@ fn rfcgap_c_ingress_claim_admission_bounds_in_flight_claims_in_the_attempt_fold(
     use crate::palw_court_paid_ingress_v1::{PalwCourtIngressScheduleV1, set_palw_court_ingress_test_schedule_v1};
     for (armed, schedule, fifth_recorded) in [
         (true, Some(PalwCourtIngressScheduleV1 { fee_sompi_per_session: 5 }), false),
-        (true, None, true),
+        (true, None, false), // no override: the production ingress schedule is now pinned
         (false, Some(PalwCourtIngressScheduleV1 { fee_sompi_per_session: 5 }), true),
     ] {
         set_palw_court_ingress_test_schedule_v1(schedule);
@@ -26600,7 +26600,11 @@ mod model_market_virtual {
                 let path = entry.path();
                 let name = entry.file_name().to_string_lossy().to_string();
                 if path.is_dir() {
-                    if !matches!(name.as_str(), "target" | ".git" | "node_modules" | "vendor") {
+                    // Inspect this checkout's sources, not nested agent checkouts
+                    // or alternative Cargo build directories on a contributor's machine.
+                    if !matches!(name.as_str(), "target" | ".git" | ".claude" | ".codex" | "node_modules" | "vendor")
+                        && !name.starts_with("target-")
+                    {
                         stack.push(path);
                     }
                     continue;
@@ -26658,7 +26662,7 @@ mod model_market_virtual {
         }
         // …and the chain walk folds a block's objects, its EVM actions and its refunds with them.
         for line in [
-            "let mut extras = self.palw_transition_extras_for_objects(state, &point, &objects).into_legacy_extras();",
+            "self.palw_transition_extras_for_objects(state, &point, &objects).into_legacy_extras();",
             "extras.evm_actions = staged.result.market_actions.clone();",
             "extras.carrier_market_refunds = carrier_refunds;",
         ] {
@@ -27950,7 +27954,11 @@ mod model_lines {
                 let path = entry.path();
                 let name = entry.file_name().to_string_lossy().to_string();
                 if path.is_dir() {
-                    if !matches!(name.as_str(), "target" | ".git" | "node_modules" | "vendor") {
+                    // Inspect this checkout's sources, not nested agent checkouts
+                    // or alternative Cargo build directories on a contributor's machine.
+                    if !matches!(name.as_str(), "target" | ".git" | ".claude" | ".codex" | "node_modules" | "vendor")
+                        && !name.starts_with("target-")
+                    {
                         stack.push(path);
                     }
                     continue;
@@ -29644,8 +29652,11 @@ fn f2_licensed_false_execution(
     let posted = required.max(p.min_collateral_sompi() as u128).max(if p.rcore_plus_active_at(100) {
         // A real R-core panel seat must qualify at its panel floor and have its
         // work half fund the lock. Additional ordinary collateral, not a gate bypass.
-        u128::from(crate::palw_panel_economy_v1::palw_panel_collateral_floor_v1(p.min_collateral_sompi()))
-            .max(required.checked_mul(2).unwrap())
+        u128::from(crate::palw_panel_economy_v1::palw_panel_collateral_floor_at_v1(
+            p.min_collateral_sompi(),
+            p.legacy_public_filer_active_at(100),
+        ))
+        .max(required.checked_mul(2).unwrap())
     } else {
         0
     }) as u64;

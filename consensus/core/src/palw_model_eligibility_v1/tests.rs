@@ -91,7 +91,7 @@ fn req_elig_7_the_fence_is_dormant_everywhere_and_refused_when_armed() {
 /// U-2 before the generic "cannot be armed".
 #[test]
 fn u2_the_fence_needs_gate_c_at_or_below_it() {
-    let mut p = t12();
+    let mut p = crate::config::params::palw_t12_release_v6_params();
     p.palw_model_eligibility_v1 = Some(ForkActivation::new(FENCE));
     p.sync_palw_model_eligibility_v1();
     let PalwModeV2Error::Invalid(why) = p.validate_palw_model_eligibility_v1().unwrap_err() else { panic!("Invalid") };

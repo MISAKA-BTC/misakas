@@ -133,7 +133,9 @@ fn no_consensus_boundary_names_the_typed_identities() {
             if p.extension().and_then(|x| x.to_str()) != Some("rs") {
                 continue;
             }
-            if p.file_name().and_then(|x| x.to_str()) == Some("palw_class_identity_v1.rs") {
+            // The later container-identity module defines distinct newtypes with
+            // overlapping names; it does not use this audit's class-identity types.
+            if matches!(p.file_name().and_then(|x| x.to_str()), Some("palw_class_identity_v1.rs" | "palw_artifact_identity_v1.rs")) {
                 continue;
             }
             let src = std::fs::read_to_string(&p).unwrap_or_default();

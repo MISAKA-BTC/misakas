@@ -243,7 +243,9 @@ fn the_typed_identities_reach_neither_consensus_crate() {
                     continue;
                 }
                 files += 1;
-                if p.file_name().and_then(|x| x.to_str()) == Some("palw_class_identity_v1.rs") {
+                // Separate newtype definitions are not uses of the audited types.
+                if matches!(p.file_name().and_then(|x| x.to_str()), Some("palw_class_identity_v1.rs" | "palw_artifact_identity_v1.rs"))
+                {
                     continue;
                 }
                 let src = std::fs::read_to_string(&p).unwrap_or_default();

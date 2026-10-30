@@ -76,6 +76,19 @@ fn fixture(
     let material = builder.finish().unwrap();
     binding.step_leaf_count = material.leaf_count;
     binding.step_merkle_root = material.merkle_root;
+    // The replacement profile's history cadence can differ from the skeleton's.
+    // This local router court never opens checkpoints, but its binding must still
+    // commit the canonical count rather than inheriting the skeleton's zero.
+    binding.checkpoint_count = crate::palw_context_ladder::palw_checkpoint_count_v1(
+        &binding.shape_profile,
+        &binding.job_context,
+        binding.checkpoint_profile.checkpoint_interval,
+    );
+    binding.checkpoint_merkle_root = if binding.checkpoint_count == 0 {
+        leg::checkpoint_empty_root_v2(&binding.job_context.context_hash())
+    } else {
+        Hash64::from_u64_word(0xCC)
+    };
     crate::palw_step_refute::tests::rebind_committed_root(&mut binding);
     let target = PalwStepCoordinateV1 { call_index: 0, node_slot: (first + 6) as u32, position: 0, tile_index: 0 };
     (binding, declaration, material.leaf_hashes, captured, target)

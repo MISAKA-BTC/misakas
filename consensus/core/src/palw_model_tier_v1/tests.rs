@@ -65,6 +65,7 @@ fn the_fence_is_dormant_some_only_and_refused_when_armed() {
     }
     let mut p = t12();
     p.palw_model_tier_v1 = Some(PalwModelTierFenceV1::at(ForkActivation::never()));
+    p.sync_palw_model_tier_v1();
     p.validate_palw_model_tier_v1().unwrap();
     assert_eq!(p.palw_model_tier_v1_from_daa(), None, "never() is not a height");
     p.palw_model_tier_v1 = Some(fence());

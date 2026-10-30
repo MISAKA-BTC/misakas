@@ -4956,9 +4956,12 @@ pub(crate) mod tests {
         /// **Arming an owning fence needs the audit fence declared** — below it isolation could only refuse the kind's bytes.
         #[test]
         fn an_owning_fence_needs_the_audit_fence_declared() {
-            let mut p =
-                crate::config::params::Params::from(crate::network::NetworkId::with_suffix(crate::network::NetworkType::Testnet, 12));
-            assert_eq!(p.palw_lifecycle_kind_fences_v1(), PalwLifecycleKindFencesV1::default(), "testnet-12 arms no owning fence");
+            let mut p = crate::config::params::palw_t12_release_v6_params();
+            assert_eq!(
+                p.palw_lifecycle_kind_fences_v1(),
+                PalwLifecycleKindFencesV1::default(),
+                "the pre-G14 release arms no owning fence"
+            );
             p.validate_palw_lifecycle_kind_fences_v1().expect("nothing armed");
             p.palw_probabilistic_constraints_v1 = Some(ForkActivation::new(5_000));
             assert!(p.palw_audit_2026_09_11.is_some(), "testnet-12 declares the audit fence");

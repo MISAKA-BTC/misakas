@@ -46,6 +46,7 @@ fn the_offence_attribution_fence_is_genesis_only_and_rides_its_four_fences() {
     }
     let refused_with = |edit: &dyn Fn(&mut Params), needle: &str| {
         let mut p = t12.clone();
+        palw_t12_arm_after_int13_at_v1(&mut p, PALW_T12_G14_17000_FENCES_V1, None);
         // int-12: the RFC-0007 fences ride the 5,300 list and need `palw_objective_offence`; take them away first, so the
         // edit below meets the attribution fence's own refusal (the release's list is not what this test asks about).
         p.palw_capped_onboarding_v1 = None;

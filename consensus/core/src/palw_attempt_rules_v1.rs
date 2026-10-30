@@ -1026,24 +1026,18 @@ mod tests {
     /// change to either side fails here and must be made to both.
     #[test]
     fn t12_030_the_processors_attribution_calls_are_the_shared_gates() {
-        let processor = crate::palw_source_guard_v1::palw_processor_source_v1();
+        let processor: String =
+            crate::palw_source_guard_v1::palw_processor_source_v1().chars().filter(|c| !c.is_whitespace()).collect();
         let arm = &processor[processor
-            .find("kaspa_consensus_core::palw_class_admission_v2::verify_class_admission_v9(\n                        bundle,")
+            .find("kaspa_consensus_core::palw_class_admission_v2::verify_class_admission_v9(bundle,")
             .expect("the ClassRegistered arm's gate")..];
-        let arm = &arm[..arm.find("Obj::ClassFrozen { .. }").expect("the next class-registration arm")];
+        let arm = &arm[..arm.find("Obj::ClassFrozen{..}").expect("the next class-registration arm")];
         let held = arm
-            .find(
-                "kaspa_consensus_core::palw_class_admission_v2::palw_held_class_is_attributable_v2(\n                        \
-                 &carriage.profile,\n                        self.palw_offence_attribution_at(point.daa_score),\n                        self.palw_memory_routing_court_v2_at(point.daa_score),\n                    )",
-            )
-            .expect("the held check, with the fence at the block");
-        let fence = arm.find("if self.palw_offence_attribution_at(point.daa_score) {").expect("the attribution check is fenced");
+            .find("kaspa_consensus_core::palw_class_admission_v2::palw_held_class_is_attributable_v2(&carriage.profile,self.palw_offence_attribution_at(point.daa_score),self.palw_memory_routing_court_v2_at(point.daa_score),)")
+            .expect("the held check, with both fences at the block");
+        let fence = arm.find("ifself.palw_offence_attribution_at(point.daa_score){").expect("the attribution check is fenced");
         let class = arm
-            .find(
-                "kaspa_consensus_core::palw_attempt_rules_v1::palw_attributable_class_v1(\n                            \
-                 &carriage.profile,\n                            &carriage.canonical,\n                            false,\n                            \
-                 self.palw_prompt_ids_form_at(point.daa_score),\n                        )",
-            )
+            .find("kaspa_consensus_core::palw_attempt_rules_v1::palw_attributable_class_v1(&carriage.profile,&carriage.canonical,false,self.palw_prompt_ids_form_at(point.daa_score),)")
             .expect("the attribution check, with is_base false and the form at the block");
         assert!(held < fence && fence < class, "held first, then the fenced attribution check");
         assert_eq!(arm.matches("palw_attributable_class_v1(").count(), 1, "one call");

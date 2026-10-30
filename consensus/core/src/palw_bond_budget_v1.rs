@@ -1731,7 +1731,7 @@ impl PalwBondBudgetStateV1 {
         self.bonds.get(bond).map(|row| row.open_final_weight).unwrap_or(0)
     }
 
-    /// **Allocation bootstrap (lane GC-DUTY option (b), pending the user's choice):** no allocation epoch yet, or `Σ_j A_j = 0`
+    /// **Allocation bootstrap (ADR-0177, user decision 2026-10-28, option (b)):** no allocation epoch yet, or `Σ_j A_j = 0`
     /// (no model holds any seasoned miner or claim-bound verifier capital). While it holds, `P_m` limits neither a claim's block
     /// opportunity nor its reward (the pre-fence rule: the bond's own Q/B/R/F still bind), so REAL is never stopped by an empty
     /// allocation (ADR-0176 2026-10-15); the claims admitted meanwhile record their model and seed `S_m` at the next roll, from
@@ -5347,6 +5347,8 @@ mod tests {
         let PalwModeV2Error::Invalid(why) = malformed.validate_palw_bond_budget_v1().unwrap_err() else { panic!("Invalid") };
         assert!(why.contains("policy is invalid"), "a malformed policy is named before the arming refusal: {why}");
         let mut alone = palw_t12_shipped_params();
+        alone.palw_bond_budget_v1 = None;
+        alone.sync_palw_bond_budget_v1();
         alone.palw_model_bond_allocation_v1 = Some(PalwModelBondAllocationFenceV1::at(ForkActivation::new(9_000_000)));
         let PalwModeV2Error::Invalid(why) = alone.validate_palw_model_bond_allocation_v1().unwrap_err() else { panic!("Invalid") };
         assert!(why.contains("requires palw_bond_budget_v1"), "{why}");

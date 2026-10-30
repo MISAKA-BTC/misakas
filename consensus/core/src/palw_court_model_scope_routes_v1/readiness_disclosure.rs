@@ -451,7 +451,7 @@ mod tests {
             palw_d2_disclosure_open_v1(&reg, &demand(rk, 0), NonZeroU32::new(3), None, 20),
             Err(PalwD2DisclosureRefusalV1::FeeScheduleUnadopted)
         );
-        assert!(!palw_d2_disclosure_supply_premise_v1(), "no court service profile is pinned: an unanswered demand holds");
+        assert!(palw_d2_disclosure_supply_premise_v1(), "the adopted court service profile supplies the default premise");
     }
 
     /// V7 (decided 2026-10-22, lane P3): the shipped cap and fee admit a record and a demand that pays exactly the adopted fee; a

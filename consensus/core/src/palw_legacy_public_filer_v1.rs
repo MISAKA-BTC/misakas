@@ -1354,8 +1354,7 @@ mod tests {
     /// **The fence moves the params and schedule ids only when armed** (Some-only), and `Some(never())` is absence.
     #[test]
     fn the_fence_is_hashed_some_only() {
-        use crate::config::params::palw_t12_shipped_params;
-        let t12 = palw_t12_shipped_params();
+        let t12 = crate::config::params::palw_t12_release_v6_params();
         let ids = |p: &Params| (p.consensus_params_id(), p.consensus_identity_id(), p.consensus_schedule_id());
         let mut never = t12.clone();
         never.palw_legacy_public_filer_v1 = Some(ForkActivation::never());

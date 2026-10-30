@@ -175,9 +175,14 @@ fn rfc0010_observation_distinguishes_a_dormant_engine_from_release_support() {
     let observation = panel_v3_observation_v1(&state, &bundle.state, &[h(1)], 0);
     assert!(!observation.overview.active);
     assert!(!observation.release.activation_supported);
-    assert!(observation.release.approved_beacon_schemes.is_empty());
+    let schemes: Vec<_> = kaspa_consensus_core::palw_panel_beacon_v1::approved_panel_beacon_policies_v1()
+        .iter()
+        .map(kaspa_consensus_core::palw_panel_beacon_v1::panel_beacon_scheme_of_v1)
+        .collect();
+    assert_eq!(schemes.len(), 1, "the approved beacon registry is separate from panel engine activation");
+    assert_eq!(observation.release.approved_beacon_schemes, schemes);
     assert_eq!(observation.unknown, vec![h(1)]);
     let json = serde_json::to_value(observation).unwrap();
     assert_eq!(json["release"]["activationSupported"], false);
-    assert_eq!(json["release"]["approvedBeaconSchemes"], serde_json::json!([]));
+    assert_eq!(json["release"]["approvedBeaconSchemes"], serde_json::to_value(schemes).unwrap());
 }
