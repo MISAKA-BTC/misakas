@@ -197,17 +197,38 @@ impl Monitor {
         }
         assert!(bundle_controls > 0, "the claim's required-family bundle is carried through its own control seed");
         assert!(demands > 0 && answers >= demands, "signed automatic custodian answers fulfilled every demanded original leaf");
-        assert!(
-            carriers.iter().any(|object| matches!(object,
-                PalwConsensusObjectV2::MaterialDisclosedV2 { claim: c, unit, discloser, .. }
-                    if *c == claim && *unit == kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1::Event { row: 0, tile: 0 }
-                        && *discloser == chain.view(claim).producer
-            )),
-            "the actual producer service discloses the public authenticated binding before opening the typed court"
+        let original = chain
+            .history
+            .iter()
+            .flat_map(|block| &block.transactions)
+            .find_map(|tx| {
+                kaspa_consensus_core::palw_history_custody_v1::PalwHistoryFpEnvelopeV1::decode_v1(&tx.payload)
+                    .ok()
+                    .filter(|envelope| envelope.pledge.claim == claim)
+            })
+            .expect("the producer carried the authenticated original binding in the accepted HFP1 claim");
+        let payload = original.original_fp_v1().unwrap();
+        assert_eq!(payload.claim_id(), claim);
+        assert_eq!(original.pledge.producer, chain.view(claim).producer);
+        assert_eq!(
+            original.original_binding,
+            kaspa_consensus_core::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1::Legacy(
+                kaspa_consensus_core::palw_public_binding_v1::PalwPublicLegacyBindingHeaderV1::of_binding_v1(&seed.binding)
+            ),
+            "the public court uses the exact original binding, without a redundant DA disclosure"
         );
         let view = chain.view(claim);
-        let record = view.record.expect("owner's actual reservation remains auditable");
-        assert!(!record.live.contains_key(&owner), "objective conviction releases the owner reservation");
-        assert!(record.closed.contains(&owner));
+        let state = chain.tc.palw_state_v2_store.read().load_tip(&chain.bundle.state).unwrap().unwrap().1;
+        assert!(
+            matches!(
+                reference.resolve_fault_v1(&state, view.execution_root).unwrap(),
+                kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedFaultV1::Prefix(_)
+            ),
+            "the paid owner certificate remains auditable after ordinary reservation release"
+        );
+        assert!(
+            state.legacy_dispute_reservation_v1(&claim, &owner).is_none(),
+            "objective conviction releases the ordinary owner reservation"
+        );
     }
 }
