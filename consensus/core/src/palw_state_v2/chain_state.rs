@@ -3850,6 +3850,30 @@ impl PalwChainStateV2 {
             exposure == self.reserved_exposure
         };
         if !exposure_matches {
+            // Opt-in debug diagnostics only: keep the comparison and refusal unchanged.
+            // Visit each key once without allocating another ledger; never dump whole maps.
+            #[cfg(debug_assertions)]
+            if std::env::var_os("MISAKA_EXPOSURE_DIAGNOSTICS").as_deref() == Some(std::ffi::OsStr::new("1")) {
+                let keys = exposure.keys().chain(self.reserved_exposure.keys().filter(|bond| !exposure.contains_key(*bond)));
+                for bond in keys.filter(|bond| exposure.get(*bond) != self.reserved_exposure.get(*bond)).take(4) {
+                    let (mut live, mut finalized, mut voided) = (0usize, 0usize, 0usize);
+                    for claim in self.claims.values().filter(|claim| claim.bond == *bond) {
+                        match &claim.phase {
+                            PalwClaimPhaseV2::Final { .. } => finalized += 1,
+                            PalwClaimPhaseV2::Voided { .. } => voided += 1,
+                            _ => live += 1,
+                        }
+                    }
+                    let seat_duties = self.panel_duties.values().filter(|row| row.seats.contains_key(bond)).count();
+                    eprintln!(
+                        "[exposure-diagnostic] bond={bond:?} derived={:?} stored={:?} last_daa={:?} \
+                         producer_claims_live={live} final={finalized} voided={voided} seat_duties={seat_duties}",
+                        exposure.get(bond),
+                        self.reserved_exposure.get(bond),
+                        self.last_point.as_ref().map(|point| point.daa_score),
+                    );
+                }
+            }
             return Err(PalwStateV2Error::CarriageInconsistent(
                 "reserved_exposure differs from the native duties it summarizes".into(),
             ));
@@ -4135,7 +4159,7 @@ impl PalwChainStateV2 {
                 continue;
             }
             // Lane LG14-A: a claim a live dispute reservation holds owes none (DL-1's reservation row; empty below the fence).
-            if self.palw_legacy_dispute_holds_v1(id) || self.court_service_holds_retirement_v1(id, claim) {
+            if self.palw_legacy_dispute_holds_v1(id) {
                 continue;
             }
             // RFC-0010: the engine clocks a claim it tracks until the claim is licensed (it owes no V2 deadline).
@@ -4604,9 +4628,6 @@ impl PalwChainStateV2 {
         }
         let mut expected: BTreeSet<(u64, Hash64)> = BTreeSet::new();
         for (id, claim) in &self.claims {
-            if self.court_service_holds_retirement_v1(id, claim) {
-                continue;
-            }
             let open_courts = self.open_courts_by_claim.get(id).copied().unwrap_or(0);
             match claim.phase {
                 PalwClaimPhaseV2::Provisional => {

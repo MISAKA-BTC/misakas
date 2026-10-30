@@ -1356,15 +1356,24 @@ impl TransitionBuilder<'_> {
             };
             if let Some(service) = service {
                 // Do not re-date unrelated claims midway through an accepting block. G14 lane r6-d1-release (user decision D1): a
-                // bound claim keeps its normal (pre-Final / Final) deadline — DL-1 arms it — and only a TERMINAL bound claim owes
-                // none (its retirement waits for the release, which re-arms it).
+                // bound claim keeps its normal (pre-Final / Final) deadline — DL-1 arms it. A terminal binding holds retirement,
+                // while its exact operational collateral-release deadline remains armed.
                 let held_terminal: Vec<Hash64> = service
                     .claims
                     .keys()
                     .filter(|claim| self.state.claims.get(*claim).is_some_and(|c| c.phase.is_terminal()))
                     .copied()
                     .collect();
-                self.state.deadlines.retain(|(_, claim)| !held_terminal.contains(claim));
+                for claim in held_terminal {
+                    let operational = self
+                        .state
+                        .claims
+                        .get(&claim)
+                        .map(|row| super::terminal_operational_release_at_v1(row, self.params, None))
+                        .transpose()?
+                        .flatten();
+                    self.state.deadlines.retain(|(deadline, id)| *id != claim || operational == Some(*deadline));
+                }
             }
         }
         if old != new {

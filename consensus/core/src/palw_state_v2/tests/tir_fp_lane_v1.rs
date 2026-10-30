@@ -1257,3 +1257,87 @@ fn panelda_fence_boundary_is_byte_identical_below() {
         apply_derived(&public.state, &p, &at(), std::slice::from_ref(&public.object), &public.extras).expect("PublicDa folds");
     assert!(s.panel_da_disclosure_v1(&public.claim).is_none(), "PublicDa writes no row");
 }
+
+/// A real TFP1 original's service binding holds its retirement, not the ordinary
+/// abandon collateral's release. The only extra harness policy is a ten-DAA hold
+/// selected before admission (the lane already has a fifty-DAA retirement).
+/// No claim phase, exposure entry, duty, or binding is installed by hand here.
+#[test]
+fn tir_fp_service_binding_retains_retirement_but_releases_abandon_hold() {
+    for rcore in [false, true] {
+        tir_fp_service_binding_abandon_hold_case(rcore);
+    }
+}
+
+fn tir_fp_service_binding_abandon_hold_case(rcore: bool) {
+    let mut l = lane(false);
+    // The reusable lane installs an active class directly but omits its share-table
+    // row (its earlier tests never cold-restore). Complete that pre-admission fixture
+    // through the canonical weightless-grant arithmetic: no cadence is reassigned.
+    l.state.class_shares = granted_share_table_v2(&l.p, &l.state.class_shares, l.class_id, 0).unwrap();
+    l.p.fp_abandon_hold_daa = 10;
+    if rcore {
+        // Cover canonical DL-1 as well as the legacy deadline reconstruction, before admission.
+        l.p = l.p.clone().with_rcore_plus_mirrors(Some(0), 12_900, Vec::new());
+    }
+    assert!(l.p.claim_retirement_daa > l.p.fp_abandon_hold_daa);
+    let producer = bond_key(PRODUCER);
+    let (accepted, _) = apply_derived(&l.state, &l.p, &at(), std::slice::from_ref(&l.object), &l.extras)
+        .expect("the signed TFP1 original is admitted normally");
+    assert!(accepted.court_service_holds_claim_v1(&l.claim), "ordinary original admission installed its service binding");
+    let held = accepted.reserved_exposure(&producer);
+    assert!(held > 0, "the admitted claim actually reserves collateral");
+    let claim = accepted.claim(&l.claim).unwrap();
+    let bind_deadline = palw_provisional_bind_deadline_v1(&accepted, &l.p, &l.claim, claim).unwrap();
+    let voided_daa = bind_deadline + 1;
+    let (voided, _) = apply_derived(&accepted, &l.p, &tn1_ctx(voided_daa), &[], &l.extras)
+        .expect("the missing panel takes the real bind-timeout transition");
+    assert!(matches!(
+        voided.claim(&l.claim).unwrap().phase,
+        PalwClaimPhaseV2::Voided { voided_daa: at, reason: PalwVoidReasonV2::BindTimeout } if at == voided_daa
+    ));
+    assert_eq!(voided.reserved_exposure(&producer), held, "void does not prematurely return abandon collateral");
+    assert!(voided.court_service_holds_retirement_v1(&l.claim, voided.claim(&l.claim).unwrap()));
+    let release_at = voided_daa + l.p.fp_abandon_hold_daa;
+    assert!(
+        voided.deadlines.contains(&(release_at, l.claim)),
+        "a held service binding must not suppress the operational collateral-release deadline: \
+         rcore={rcore} phase={:?} source={:?} release_at={release_at} actual_deadlines_first4={:?} \
+         operational={:?} last_point={:?} legacy_dispute_hold={} da_open_sessions={:?}",
+        voided.claim(&l.claim).unwrap().phase,
+        voided.claim(&l.claim).unwrap().source,
+        voided.deadlines.iter().take(4).collect::<Vec<_>>(),
+        super::super::terminal_operational_release_at_v1(voided.claim(&l.claim).unwrap(), &l.p, None),
+        voided.last_point,
+        voided.palw_legacy_dispute_holds_v1(&l.claim),
+        voided.da_claims.get(&l.claim).map(|row| row.open_sessions()),
+    );
+
+    let (boundary, _) =
+        apply_derived(&voided, &l.p, &tn1_ctx(release_at), &[], &l.extras).expect("the exact inclusive hold boundary still folds");
+    assert_eq!(boundary.reserved_exposure(&producer), held, "the boundary block still owes the whole hold");
+    assert!(boundary.deadlines.contains(&(release_at, l.claim)), "the inclusive sweep has not fired yet");
+    let (released, delta) = apply_derived(&boundary, &l.p, &tn1_ctx(release_at + 1), &[], &l.extras)
+        .expect("the next block returns the expired operational hold");
+    assert_eq!(released.reserved_exposure(&producer), 0, "the expired hold is released exactly once");
+    assert!(released.claim(&l.claim).is_some(), "release is not retirement");
+    assert!(released.court_service_holds_claim_v1(&l.claim), "the still-unresolved service binding remains");
+    assert!(released.court_service_holds_retirement_v1(&l.claim, released.claim(&l.claim).unwrap()));
+    assert!(!released.deadlines.iter().any(|(_, claim)| *claim == l.claim), "retirement remains held after operational release");
+    assert_eq!(revert_delta_v2(&released, &delta, &l.p).unwrap().state_root(), boundary.state_root());
+
+    for state in [&voided, &boundary, &released] {
+        let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(state)).unwrap();
+        let restored = borsh::from_slice::<PalwStateCarriageV2>(&bytes)
+            .unwrap()
+            .into_state_v3(&l.p, Some(state.state_root()), false, Some(0))
+            .expect("the same valid held/released state survives a cold carriage restore");
+        assert_eq!(restored.state_root(), state.state_root());
+    }
+    let after_retirement = voided_daa + l.p.claim_retirement_daa + 1;
+    let (retained, _) = apply_derived(&released, &l.p, &tn1_ctx(after_retirement), &[], &l.extras)
+        .expect("the binding retains liability after the ordinary retirement age");
+    assert!(retained.claim(&l.claim).is_some());
+    assert!(retained.court_service_holds_claim_v1(&l.claim));
+    assert_eq!(retained.reserved_exposure(&producer), 0, "retirement retention must not re-lock released collateral");
+}

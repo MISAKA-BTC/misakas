@@ -348,8 +348,10 @@ pub(super) fn sweep_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlo
         if !claim.phase.is_terminal() && builder.state.palw_v2_expiry_held_v1(builder.params, &claim_id, &claim) {
             continue;
         }
-        // G14 lane r6-d1-release (D1): only a terminal bound claim's retirement is held (DL-1 arms nothing else away).
-        if builder.state.court_service_holds_retirement_v1(&claim_id, &claim) {
+        // The binding holds retirement, while the exact operational hold-release deadline still fires.
+        if builder.state.court_service_holds_retirement_v1(&claim_id, &claim)
+            && super::terminal_operational_release_at_v1(&claim, builder.params, None)? != Some(deadline)
+        {
             continue;
         }
         match claim.phase {

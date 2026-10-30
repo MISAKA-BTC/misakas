@@ -9257,7 +9257,8 @@ impl<'a> TransitionBuilder<'a> {
         // Lane LG14-A: DL-1's dispute-reservation row, at the same primitive — a claim a live reservation holds owes none.
         // G14 lane r6-d1-release (D1): the service binding holds only a terminal claim's retirement (DL-1's same row).
         if self.state.palw_legacy_dispute_holds_v1(&claim)
-            || self.state.claims.get(&claim).is_some_and(|c| self.state.court_service_holds_retirement_v1(&claim, c))
+            || (operational != Some(deadline)
+                && self.state.claims.get(&claim).is_some_and(|c| self.state.court_service_holds_retirement_v1(&claim, c)))
         {
             return Ok(());
         }
