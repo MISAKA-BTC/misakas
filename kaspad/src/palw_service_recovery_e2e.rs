@@ -460,7 +460,14 @@ impl RecoveryRun {
             eprintln!("[service-recovery] pruned actual input carrier and restarted empty public book at DAA {}", chain.daa());
         }
         let waiting_for_binding = view.sessions.iter().any(|(_, s)| s.units.contains(&PalwDaUnitV1::Event { row: 0, tile: 0 }));
-        if self.mode == RecoveryMode::Restart && !self.verifier_restarted && (partial || (!self.honest && waiting_for_binding)) {
+        let prefix_pending = matches!(
+            chain.tc.palw_staged_owned_progress_v1((claim, self.verifier_bond)).unwrap().and_then(|row| row.cursor),
+            Some(kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedOwnedCursorV1::PublicPrefix { pending: Some(_), .. })
+        );
+        if self.mode == RecoveryMode::Restart
+            && !self.verifier_restarted
+            && (partial || (!self.honest && waiting_for_binding) || prefix_pending)
+        {
             verifier.finish().await;
             let restarted = launch(
                 self.verifier_config.clone(),
@@ -479,10 +486,16 @@ impl RecoveryRun {
                 vec![claim],
                 "the explicit operator target survives an empty-cache service restart"
             );
-            assert!(
-                std::fs::read_dir(&self.verifier_config.retention_dir).unwrap().next().is_none(),
-                "verifier starts with an empty retention directory and never receives producer capture"
-            );
+            if prefix_pending {
+                // Accepted public history pages may already exist. The restarted
+                // verifier retains only that public journal, never producer capture.
+                public_prefix::assert_no_producer_capture(&self.verifier_config.retention_dir, claim);
+            } else {
+                assert!(
+                    std::fs::read_dir(&self.verifier_config.retention_dir).unwrap().next().is_none(),
+                    "verifier starts with an empty retention directory and never receives producer capture"
+                );
+            }
             eprintln!("[service-recovery] public verifier restarted with empty capture cache at DAA {}", chain.daa());
         }
     }

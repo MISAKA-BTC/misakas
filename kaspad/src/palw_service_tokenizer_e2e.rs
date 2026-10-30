@@ -112,8 +112,17 @@ impl Monitor {
         let Some(progress) = chain.tc.palw_staged_owned_progress_v1((claim, owner)).unwrap() else { return };
         assert_eq!((progress.claim, progress.reserver), (claim, owner));
         assert!(progress.now_daa <= chain.daa(), "the monitor uses an accepted native snapshot clock");
-        let Some(PalwStagedOwnedCursorV1::Tokenizer { offset, tokenizer_sealed, completed, .. }) = progress.cursor else { return };
-        let accepted_seed = (progress.seed_id.expect("an owned row pins its literal signed seed"), progress.reserved_daa);
+        // A false signed length is already refuted by the bundle's authenticated
+        // whole-file EOF. Key-work needs the subsequent owned Tokenizer stage.
+        let (offset, tokenizer_sealed, completed, seed_id) = if self.signed_length != self.actual_length {
+            let Some(bundle) = progress.bundle.as_ref() else { return };
+            let Some((offset, _, sealed, fault)) = bundle.inventory else { return };
+            (offset, sealed, sealed.then_some(fault), bundle.bundle_id)
+        } else {
+            let Some(PalwStagedOwnedCursorV1::Tokenizer { offset, tokenizer_sealed, completed, .. }) = progress.cursor else { return };
+            (offset, tokenizer_sealed, completed, progress.seed_id.expect("an owned row pins its literal signed seed"))
+        };
+        let accepted_seed = (seed_id, progress.reserved_daa);
         if let Some(previous) = self.seed {
             assert_eq!(accepted_seed, previous, "restart resumes the same ordinary reservation and signed seed");
         }
@@ -177,6 +186,37 @@ impl Monitor {
         };
         assert_eq!((reference.claim, reference.reserver), (claim, owner));
         assert_eq!((reference.seed_id, reference.reserved_daa), self.seed.unwrap());
+        if self.signed_length != self.actual_length {
+            let state = chain.tc.palw_state_v2_store.read().load_tip(&chain.bundle.state).unwrap().unwrap().1;
+            assert!(matches!(
+                reference.resolve_fault_v1(&state, chain.view(claim).execution_root).unwrap(),
+                kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedFaultV1::Tokenizer(_)
+            ));
+            let semantics = chain.view(claim).registered_semantics.unwrap();
+            assert_eq!(
+                (semantics.raw_tokenizer_bytes, semantics.tokenizer_key_events),
+                (Some(self.signed_length), Some(self.signed_keys))
+            );
+            let mut parts = 0;
+            let mut finishes = 0;
+            for carrier in carriers {
+                if let PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement } = carrier
+                    && (movement.claim, movement.reserver) == (claim, owner)
+                {
+                    movement.check().unwrap();
+                    assert_eq!(movement.seed_id, reference.seed_id, "EOF fault remains on its exact original bundle");
+                    match movement.action {
+                        PalwConstraintStreamActionV1::BundleOpen { .. } => {}
+                        PalwConstraintStreamActionV1::InventoryPart { .. } => parts += 1,
+                        PalwConstraintStreamActionV1::InventoryFinish => finishes += 1,
+                        _ => panic!("false length is settled at authenticated inventory EOF before any family activation"),
+                    }
+                }
+            }
+            assert!(parts > 16, "the restart spans actual accepted multipart raw transport");
+            assert_eq!(finishes, 1);
+            return;
+        }
         let seeds: Vec<_> = carriers
             .iter()
             .filter_map(|o| match o {

@@ -252,7 +252,7 @@ impl TiledFixture {
             kaspa_consensus_core::palw_step_refute::PalwTraceEventDisclosureV1,
         >,
     ) {
-        self.produce_for_card(chain, 0, Some(fault))
+        self.produce_for_card(chain, 0, Some(fault), true)
     }
 
     pub(super) fn produce_for_card(
@@ -260,6 +260,7 @@ impl TiledFixture {
         chain: &Chain,
         card: usize,
         fault: Option<u8>,
+        constraint: bool,
     ) -> (
         kaspa_consensus_core::palw_backend::PalwExecutionOutcomeV1,
         kaspa_consensus_core::palw_step_refute::PalwTraceEventDisclosureV1,
@@ -318,7 +319,7 @@ impl TiledFixture {
             job.tail =
                 Some(PalwFpJobTailV1::Prefix(PalwFpPrefixStateV1 { state_root: Hash64::from_u64_word(0xBAD17), ..true_prefix }));
             assert!(backend.verify_prefix_state_v1(&job, &ids).is_err(), "the actual holder rejects the false named prefix");
-        } else {
+        } else if constraint {
             // Use the same DFA as the flat fixture, with the actual tokenizer-derived table.
             selection_constraint_job_with_table(&mut job, self.table.clone());
         }
@@ -336,7 +337,7 @@ impl TiledFixture {
         let rows = retained.logits_rows();
         let mut generated = retained.generated_token_ids().to_vec();
         assert_eq!(generated.len(), 4);
-        if !prefix_fault {
+        if !prefix_fault && constraint {
             assert!(generated.iter().all(|id| *id == 0 || *id == PALW_LOGITS_TILE_LANES as u32));
         }
         generated[2] = match fault {

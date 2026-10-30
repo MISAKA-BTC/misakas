@@ -842,7 +842,9 @@ impl PublicCase {
         matches!(self, Self::TiledPublicPrefixInitial | Self::TiledPublicPrefixInherited)
     }
     fn constraint(self) -> bool {
-        self.staged_tokenizer() || self.large_constraint() || self.constraint_fault().is_some()
+        // Metadata-only tokenizer cases use ordinary FP jobs: a preceding
+        // Constraint stage would require an unrelated producer source service.
+        self.large_constraint() || self.constraint_fault().is_some()
     }
     fn exact_fault(self) -> bool {
         self.staged_tokenizer()
@@ -1551,7 +1553,8 @@ async fn fresh_public_service_with_recovery_inner(case: PublicCase, recovery_mod
     let mut prefix_answers = std::collections::BTreeMap::new();
     let foreign = (case != PublicCase::Withholding).then(|| {
         if let Some(fixture) = &tiled {
-            let (outcome, event, job, events) = fixture.produce_for_card(&chain, 0, case.prefix_fault().or(case.constraint_fault()));
+            let (outcome, event, job, events) =
+                fixture.produce_for_card(&chain, 0, case.prefix_fault().or(case.constraint_fault()), case.constraint());
             if case.prefix_fault().is_some() && !case.native_prefix() {
                 let (commitment, ids) = job.as_ref().unwrap();
                 prefix_answers = fixture.prefix_kernel_answers(&chain, commitment, ids);
@@ -1889,9 +1892,13 @@ async fn fresh_public_service_with_recovery_inner(case: PublicCase, recovery_mod
         );
         assert!(
             std::time::Instant::now() < deadline,
-            "service made no objective progress: phase {:?}, native cursor {:?}",
+            "service made no objective progress: phase {:?}, reservation {:?}, native cursor {:?}, honest replay {}",
             chain.view(claim).phase,
-            chain.tc.palw_staged_owned_progress_v1((claim, bond)).map(|row| row.and_then(|row| row.cursor))
+            chain.tc.palw_legacy_dispute_reservation_check_v1(
+                kaspa_consensus_core::palw_legacy_public_filer_v1::palw_fraud_filer_reservation_v1(&chain.view(claim), bond)
+            ),
+            chain.tc.palw_staged_owned_progress_v1((claim, bond)).map(|row| row.and_then(|row| row.cursor)),
+            service.fraud_filer_honest_replays.lock().unwrap().contains(&claim)
         );
         let (pending, _) = pool.clone().get_all_transactions(TransactionQuery::TransactionsOnly).await;
         if let Some(recovery) = recovery.as_mut() {
@@ -2688,7 +2695,27 @@ async fn fresh_public_service_with_recovery_inner(case: PublicCase, recovery_mod
                         public_prefix::assert_no_producer_capture(&service.config.retention_dir, claim);
                     } else if let Some(monitor) = tokenizer_monitor.as_ref() {
                         assert_eq!(all_seats.len(), 5, "the complete registered class Panel is convicted and collected");
-                        assert!(consumed.amount > 0 && consumed.collected > 0, "the staged court collects the producer leg");
+                        if consumed.amount == 0 {
+                            // Kind 3 applies this claim's producer S2 charge as
+                            // well as its accused seat's charge. If it lands first,
+                            // kind 4 records the same fault without charging twice.
+                            let prior = all_seats.iter().find_map(|seat| {
+                                let key =
+                                    kaspa_consensus_core::palw_offence_attribution_v1::palw_false_valid_offence_id_v2(&seat.0, &claim);
+                                chain.tc.palw_reporter_filing_read_v1(key, Hash64::default(), bond, None).unwrap().consumed.filter(
+                                    |prior| {
+                                        prior.accepted_daa <= consumed.accepted_daa
+                                            && prior.claim_id == claim
+                                            && prior.amount > 0
+                                            && prior.collected > 0
+                                    },
+                                )
+                            });
+                            assert!(prior.is_some(), "the same-claim FalseValid conviction charged the producer first");
+                            assert_eq!(consumed.collected, 0, "the duplicate leg never charges twice");
+                        } else {
+                            assert!(consumed.collected > 0, "the staged court collects the producer leg");
+                        }
                         monitor.assert_conviction(&chain, claim, bond, &evidence, &carriers);
                     } else if let Some(fault) = case.prefix_fault() {
                         let kaspa_consensus_core::palw_offence_v1::PalwPanelContradictionV1::PrefixStateMismatch {
@@ -2791,7 +2818,10 @@ async fn fresh_public_service_with_recovery_inner(case: PublicCase, recovery_mod
                             );
                         }
                     }
-                    assert!(reserved && demanded);
+                    assert!(reserved);
+                    if !case.staged_tokenizer() {
+                        assert!(demanded, "the legacy exact court acquired its demanded binding");
+                    }
                     assert!(chain.tc.palw_fraud_filer_status_v1(bond).unwrap().live.iter().all(|r| r.claim_id != claim));
                     eprintln!(
                         "[service-public] exact {case:?} conviction plus all {} Valid signer sanctions/reveals at DAA {}, producer collateral {} -> {}, kind4 consumed {} additional amount {}",
