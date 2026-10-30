@@ -1471,13 +1471,13 @@ async fn tn1_node_with(forged: bool, declared: bool, producer_kind: Tn1ProducerV
     let mut ready_at = chain.daa();
     let deadline = std::time::Instant::now() + Duration::from_secs(7_200);
     // The producer's first framed claim (lane FPSEL: or the rail's one claim).
-    let mut rail_reader = None;
+    let mut colluder_reader = None;
     let claim = if rail.is_some() {
         step_ready(&node, &mut chain, &mut floats, &fixture, &mut ready_at).await;
         let (claim, original) = rail_tfp1_claim_v1(&mut chain, &fixture, &mut rail_float, &provider, forged.then_some(5)).await;
         if forged {
             let header = chain.tc.palw_tir_public_frame_v1(claim).unwrap().unwrap().header;
-            rail_reader = Some(
+            colluder_reader = Some(
                 fixture
                     .backend(&chain)
                     .open_tir_public_capture_v1(
@@ -1502,6 +1502,41 @@ async fn tn1_node_with(forged: bool, declared: bool, producer_kind: Tn1ProducerV
     };
     let provider_down = matches!(rail, Some((_, false)));
     let frame = chain.tc.palw_tir_public_frame_v1(claim).unwrap().unwrap();
+    if forged && rail.is_none() {
+        // These scripted seats lie about the computation, not availability. They
+        // signed the producer's actual forged original and must answer its
+        // authenticated custody requests too. The producer's real service still
+        // answers for card 0; the outside verifier remains entirely autonomous.
+        let original_path = crate::palw_producer::palw_retained_material_path(&dirs.path().join("producer/retention"), &claim);
+        let original_bytes = std::fs::read(&original_path).expect("the service retained its accepted forged FPC1 original");
+        let network_form = chain.config.params.palw_prompt_ids_form_v1();
+        let form = chain
+            .tc
+            .palw_registered_class_carriage_v1(fixture.class_id)
+            .map(|(profile, _)| kaspa_consensus_core::palw_prompt_ids_v1::palw_prompt_ids_form_of_class_v1(network_form, &profile))
+            .unwrap_or(network_form);
+        let original = kaspa_consensus_core::palw_freeprompt_v3::palw_fp_capture_decode_v1(&original_bytes, form)
+            .expect("the actual retained original has its authenticated prompt material");
+        chain
+            .tc
+            .palw_tir_public_read_v1(&mut |state| {
+                let accepted = kaspa_consensus_core::palw_tir_public_claim_v1::palw_tir_public_claim_v1(state, claim)
+                    .expect("the accepted forged frame");
+                assert_eq!(original.material.job, accepted.original_v1().job, "colluders supply exactly the accepted job");
+                Ok(())
+            })
+            .unwrap();
+        colluder_reader = Some(
+            fixture
+                .backend(&chain)
+                .open_tir_public_capture_v1(
+                    &frame.header,
+                    std::sync::Arc::new(RailOriginal(original.capture)),
+                    &dirs.path().join("colluder-responses"),
+                )
+                .expect("colluders reopen the actual service's forged capture against its accepted header"),
+        );
+    }
     eprintln!("[service-tir-frame] piece 3: framed claim {claim} accepted at DAA {}: {frame:?}", chain.daa());
     if declared {
         let context = &frame.header.job_context;
@@ -1642,8 +1677,12 @@ async fn tn1_node_with(forged: bool, declared: bool, producer_kind: Tn1ProducerV
         );
         tokio::time::sleep(Duration::from_secs(pace)).await;
         step_ready(&node, &mut chain, &mut floats, &fixture, &mut ready_at).await;
-        if let Some(reader) = rail_reader.as_deref_mut() {
-            rail_colluders_answer(&mut chain, &mut floats, claim, reader).await;
+        if let Some(reader) = colluder_reader.as_deref_mut() {
+            // The node-less rail has no producer responder; its existing path
+            // supplies every signer. Service-forged supplies only the drawn
+            // colluders, leaving card 0 to the real producer service.
+            let scripted_cards = rail.is_none().then_some(colluders.as_slice());
+            rail_colluders_answer(&mut chain, &mut floats, claim, reader, scripted_cards).await;
         }
     }
     loop {
@@ -1654,8 +1693,12 @@ async fn tn1_node_with(forged: bool, declared: bool, producer_kind: Tn1ProducerV
             tokio::time::sleep(Duration::from_secs(2)).await;
         }
         step_ready(&node, &mut chain, &mut floats, &fixture, &mut ready_at).await;
-        if let Some(reader) = rail_reader.as_deref_mut() {
-            rail_colluders_answer(&mut chain, &mut floats, claim, reader).await;
+        if let Some(reader) = colluder_reader.as_deref_mut() {
+            // The node-less rail has no producer responder; its existing path
+            // supplies every signer. Service-forged supplies only the drawn
+            // colluders, leaving card 0 to the real producer service.
+            let scripted_cards = rail.is_none().then_some(colluders.as_slice());
+            rail_colluders_answer(&mut chain, &mut floats, claim, reader, scripted_cards).await;
         }
         let view = chain.view(claim);
         match &view.phase {
@@ -1867,6 +1910,7 @@ async fn rail_colluders_answer(
     floats: &mut [Funding],
     claim: Hash64,
     reader: &mut dyn kaspa_consensus_core::palw_backend::PalwTirPublicCaptureReaderV1,
+    scripted_cards: Option<&[usize]>,
 ) {
     use kaspa_consensus_core::palw_tir_public_carriage_v1::{
         PALW_TIR_PUBLIC_CONTROL_CONTEXT_V1, PalwTirPublicControlActionV1, PalwTirPublicControlTargetV1, PalwTirPublicControlV1,
@@ -1907,6 +1951,9 @@ async fn rail_colluders_answer(
                 }
                 for signer in row.owned.response_custodians_v1() {
                     let card = chain.bonds.iter().position(|bond| bond == signer).unwrap();
+                    if scripted_cards.is_some_and(|cards| card == 0 || !cards.contains(&card)) {
+                        continue;
+                    }
                     let action = match p.slots.get(signer) {
                         None => A::Begin {
                             demand_id: p.demand_id,
