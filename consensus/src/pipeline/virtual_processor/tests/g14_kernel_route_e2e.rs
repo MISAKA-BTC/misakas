@@ -180,6 +180,15 @@ fn with_opv_budget(params: &mut kaspa_consensus_core::config::params::Params, bu
     if !params.arm_palw_opv_mechanics_budget_v1() {
         return bundle;
     }
+    // This fixture seeds actual native floor claims, whose Final weights use
+    // the live scale. Quote the existing live-scale per-capital F rate on the
+    // mechanics policy's capital unit, rather than its one-unit placeholder.
+    let policy = &mut params.palw_bond_budget_v1.as_mut().unwrap().policy;
+    policy.final_weight_per_unit =
+        (u128::from(kaspa_consensus_core::palw_values_p4_v1::PALW_BOND_BUDGET_FINAL_WEIGHT_PER_UNIT_PROVISIONAL_V1)
+            * u128::from(policy.capital_unit_sompi)
+            / u128::from(kaspa_consensus_core::palw_values_p4_v1::PALW_BOND_BUDGET_CAPITAL_UNIT_PROVISIONAL_SOMPI_V1)) as u64;
+    params.sync_palw_bond_budget_v1();
     let mut tmp = params.clone();
     tmp.palw_consensus_mode = kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle);
     tmp.sync_palw_bond_budget_v1();

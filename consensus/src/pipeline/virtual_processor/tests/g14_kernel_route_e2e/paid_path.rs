@@ -450,13 +450,19 @@ impl Net {
         );
         let payers: Vec<usize> = (0..self.chain.bonds.len()).filter(|c| !sealers.contains(c)).take(k as usize).collect();
         let mut jobs = Vec::new();
+        let contexts: Vec<_> = all_terms.iter().map(|terms| terms.source.context).collect();
         for (i, payer) in payers.iter().enumerate() {
             let job = KernelJobV1 {
                 class_binding_id: source_class,
                 prompt: vec![5, 11, 2],
                 max_new_tokens: 3,
                 decode: DecodeRuleV1::Greedy,
-                nonce: [nonce.wrapping_add(i as u8); 64],
+                // Separate sessions can reuse the caller's small byte counter.
+                // Bind each source job to its actual funded target contexts.
+                nonce: misaka_palw_kernel::hash::object_id(
+                    b"MISAKA/TEST/PAID-SOURCE-JOB",
+                    &borsh::to_vec(&(nonce, i as u64, &contexts)).unwrap(),
+                ),
             };
             let o = self.route(*payer, &K::PostJob { job: job.clone() });
             self.send(vec![(*payer, o)]).await;

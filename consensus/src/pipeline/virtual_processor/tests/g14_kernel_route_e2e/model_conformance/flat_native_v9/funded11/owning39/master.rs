@@ -463,6 +463,17 @@ fn mining_config_with(collateral_multiplier: u64, v3_budget: bool) -> (Config, P
         fence.activation = ForkActivation::new(0);
         let mut policy = kaspa_consensus_core::palw_values_p4_v1::palw_bond_budget_policy_provisional_v1();
         policy.slice_rights_by_rho = true;
+        // TEST emission: this four-quantum fixture must fit the policy's per-claim
+        // R ceiling. The public block subsidy exceeds that ceiling even for one
+        // quantum, so extra collateral alone cannot make the receipt spendable.
+        // Bound the entire block subsidy, hence also its worker carve, by R/4;
+        // preserve every budget ceiling, export check and collateral rule.
+        let (reward_ceiling, _) =
+            kaspa_consensus_core::palw_bond_budget_v1::palw_bond_budget_claim_ceilings_v1(&policy).expect("rights slicing");
+        let quanta = params.palw_native_mining_v39.as_ref().unwrap().policy.maximum_quanta_per_receipt;
+        params.deflationary_phase_daa_score = u64::MAX;
+        params.pre_deflationary_phase_base_subsidy = reward_ceiling / quanta;
+        assert!(params.pre_deflationary_phase_base_subsidy > 0);
         fence.policy = policy;
         params.palw_bond_formula_v2 =
             Some(kaspa_consensus_core::palw_bond_formula_v2::PalwBondFormulaFenceV2::at(ForkActivation::new(0)));

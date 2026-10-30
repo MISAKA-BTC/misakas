@@ -269,6 +269,9 @@ async fn real_attempt_inner(cw: &mut Cw, card: usize, class: Hash64, nonce: u64,
     if !enrolled && ((custody && session.as_ref().is_some_and(|row| row.is_none())) || (required_at_header && !custody)) {
         return None;
     }
+    if required_at_header {
+        assert!(session.as_ref().is_some_and(|row| row.is_some()), "the fresh prior session must admit this native attempt");
+    }
     // PAV3 prices the custody-bound execution (session, consent, roster; never signatures), so the lottery is drawn over the
     // provisional envelope before any provider is asked.
     let ready_for = |attempt: &PalwAttemptUnsignedV2| {
@@ -322,15 +325,33 @@ async fn real_attempt_inner(cw: &mut Cw, card: usize, class: Hash64, nonce: u64,
     t.block.header.finalize();
     let block = t.block.to_immutable();
     let hash = block.header.hash;
+    let before_attempt = cw.net.chain.tip_state().1;
     cw.net
         .chain
         .ctx
         .consensus
-        .validate_and_insert_block(block)
+        .validate_and_insert_block(block.clone())
         .virtual_state_task
         .await
         .unwrap_or_else(|e| panic!("the REAL attempt on the onboarded class was refused: {e}"));
-    assert_eq!(cw.net.chain.sink(), hash, "the attempt is the sink");
+    if cw.net.chain.sink() != hash {
+        let params = cw.net.chain.vp().palw_state_params_v2.clone().unwrap();
+        let header = &block.header;
+        let envelope = kaspa_consensus_core::palw_attempt_material_v3::native_attempt_base_v3(&header.palw_commitment).unwrap();
+        let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+            block: hash,
+            daa_score: header.daa_score,
+            blue_score: header.blue_score,
+            subsidy: cw.net.chain.vp().coinbase_manager.calc_block_subsidy(header.daa_score),
+        };
+        let reason = cw
+            .net
+            .chain
+            .vp()
+            .palw_v2_fold_attempt_for_tests(&before_attempt, &params, &point, &[], &envelope, header)
+            .map(|(_, _, skipped)| skipped);
+        panic!("the REAL attempt is not the sink; its parent-state fold reports {reason:?}");
+    }
     let state = cw.net.chain.tip_state().1;
     let row = state.claim(&claim).unwrap_or_else(|| panic!("the fold took no claim of the onboarded class (block {hash})"));
     assert!(matches!(row.phase, PalwClaimPhaseV2::Provisional), "a fresh REAL claim: {:?}", row.phase);
@@ -366,7 +387,11 @@ async fn enroll_native_session(cw: &mut Cw, card: usize, class: Hash64, nonce: u
     assert_eq!(providers.len(), 2, "two independent provider operators");
     let daa = cw.net.daa();
     let until = daa + policy.max_enrollment_daa / 2;
-    let root = Hash64::from_u64_word(0x5E55_0000_0000_0000 ^ nonce);
+    // A scenario can produce multiple attempts with the same header nonce.
+    // Every one needs a distinct one-claim session; reusing its enrollment root
+    // leaves only the already consumed row after the first Final.
+    let session_nonce = nonce ^ daa.rotate_left(32);
+    let root = Hash64::from_u64_word(0x5E55_0000_0000_0000 ^ session_nonce);
     let mut enrollment = PalwMonetaryMaterialEnrollmentV1 {
         terms: PalwMonetaryMaterialTermsV1 {
             version: 1,
@@ -374,7 +399,7 @@ async fn enroll_native_session(cw: &mut Cw, card: usize, class: Hash64, nonce: u
             dependencies: Vec::new(),
             exec_plan_root: None,
             sponsor: executor,
-            nonce: Hash64::from_u64_word(0x5E55_1000_0000_0000 ^ nonce),
+            nonce: Hash64::from_u64_word(0x5E55_1000_0000_0000 ^ session_nonce),
             policy: policy.id(),
             max_material_bytes: policy.max_bytes_per_contract,
             material_manifest: None,
@@ -1347,7 +1372,27 @@ async fn admit_class_without_seam(cw: &mut Cw) {
             eprintln!("[x8-no-seam] span {span} at DAA {}: {:?}", cw.net.daa(), facts.class_admission_refusal);
             native_final::ready_native_seats(cw).await;
             let ttpb = cw.net.config.params.target_time_per_block();
-            cw.net.chain.attempt(REGISTRANT, ttpb, Vec::new(), &|_| true).await;
+            let (_, before_seed) = cw.net.chain.tip_state();
+            let (seed_block, seed_claim) = cw.net.chain.attempt(REGISTRANT, ttpb, Vec::new(), &|_| true).await;
+            if cw.net.chain.tip_state().1.claim(&seed_claim).is_none() {
+                let header = &seed_block.header;
+                let envelope = kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2::decode_wire(&header.palw_commitment)
+                    .expect("the floor attempt envelope");
+                let params = cw.net.chain.vp().palw_state_params_v2.clone().unwrap();
+                let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+                    block: header.hash,
+                    daa_score: header.daa_score,
+                    blue_score: header.blue_score,
+                    subsidy: cw.net.chain.vp().coinbase_manager.calc_block_subsidy(header.daa_score),
+                };
+                let reason = cw
+                    .net
+                    .chain
+                    .vp()
+                    .palw_v2_fold_attempt_for_tests(&before_seed, &params, &point, &[], &envelope, header)
+                    .map(|(_, _, skipped)| skipped);
+                panic!("the floor seed attempt must enter the PALW fold: {reason:?}");
+            }
             last_span = Some(span);
         }
         let next = cw.net.daa() + 1;

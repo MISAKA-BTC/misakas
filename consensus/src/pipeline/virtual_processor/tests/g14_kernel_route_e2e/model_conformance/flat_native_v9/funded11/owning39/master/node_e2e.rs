@@ -82,28 +82,33 @@ async fn insert(chain: &T12Chain, block: MutableBlock) -> (Block, Result<(), Str
     (block, verdict.map(|_| ()).map_err(|e| e.to_string()))
 }
 
-/// Every block in `upto`'s past in an order a peer can take them (selected chain, each chain block after its mergeset).
+/// Every block in `upto`'s complete parent past, including red side branches,
+/// with each parent emitted before its children. A selected spine plus each
+/// mergeset's local ordering does not order parents across different mergesets.
 fn past_in_order(chain: &T12Chain, upto: BlockHash) -> Vec<Block> {
-    let vp = chain.vp();
     let genesis = chain.config.params.genesis.hash;
-    let mut spine = Vec::new();
-    let mut at = upto;
-    while at != genesis {
-        spine.push(at);
-        at = vp.ghostdag_store.get_selected_parent(at).expect("a chain block has a selected parent");
-    }
-    spine.reverse();
-    let mut seen = std::collections::HashSet::new();
+    let mut emitted = std::collections::HashSet::from([genesis]);
+    let mut pending = vec![(upto, false)];
     let mut out = Vec::new();
-    for hash in spine {
-        let data = vp.ghostdag_store.get_data(hash).expect("ghostdag");
-        for merged in data.consensus_ordered_mergeset_without_selected_parent(vp.ghostdag_store.as_ref()) {
-            if merged != genesis && seen.insert(merged) {
-                out.push(chain.ctx.consensus.get_block(merged).expect("the node holds its past"));
-            }
+    while let Some((hash, parents_visited)) = pending.pop() {
+        if emitted.contains(&hash) {
+            continue;
         }
-        if seen.insert(hash) {
-            out.push(chain.ctx.consensus.get_block(hash).expect("the node holds its chain"));
+        let block = chain.ctx.consensus.get_block(hash).expect("the node holds its complete past");
+        if parents_visited {
+            assert!(
+                block.header.parents_by_level.raw().iter().flat_map(|(_, parents)| parents).all(|parent| emitted.contains(parent)),
+                "every replayed block follows all its parents"
+            );
+            emitted.insert(hash);
+            out.push(block);
+        } else {
+            pending.push((hash, true));
+            for parent in block.header.parents_by_level.raw().iter().flat_map(|(_, parents)| parents).rev() {
+                if !emitted.contains(parent) {
+                    pending.push((*parent, false));
+                }
+            }
         }
     }
     out
@@ -566,8 +571,16 @@ async fn rfc02_native39_node_e2e_register_fund_final_gate_c_pnr9_coinbase_spend_
     let fork = net.chain.sink();
     let sim_at_fork = net.chain.ctx.simulated_time;
     let (_, at_fork) = net.chain.tip_state();
-    let r1 = pnr9_block(&net.chain, net.domain, producer, bond, receipt, 0, 0x3901, tagged_spk(0xA1));
-    rehearse_pnr9(&net.chain, &r1).unwrap_or_else(|e| panic!("the node's receipt-block gate refuses A's PNR9 block: {e}"));
+    // PNR9 authenticates the producer's chosen header payout; unlike PFS4 it
+    // carries no separate builder-fee authorization or automatic payout split.
+    let r1 = pnr9_block(&net.chain, net.domain, producer, bond, receipt, 0, 0x3901, leg_spk.clone());
+    rehearse_pnr9(&net.chain, &r1).unwrap_or_else(|e| {
+        let budget_id = kaspa_consensus_core::palw_native_receipt_v39::native_mining_budget_id_v39(&claim.id);
+        panic!(
+            "the node's receipt-block gate refuses A's PNR9 block: {e}; reservation {:?}",
+            at_fork.bond_budget().and_then(|budget| budget.claim_row(&budget_id))
+        )
+    });
     let (r1, v) = insert(&net.chain, r1).await;
     v.unwrap_or_else(|e| panic!("the PNR9 receipt block is accepted: {e}"));
     eprintln!("[n39] 5. PNR9 {} inserted: {}", r1.header.hash, status_line(&net.chain, r1.header.hash));
@@ -608,7 +621,7 @@ async fn rfc02_native39_node_e2e_register_fund_final_gate_c_pnr9_coinbase_spend_
     let mut branch = Vec::new();
     let mut b_mergers = Vec::new();
     for (q, nonce) in [(0u32, 0xB0u64), (1, 0xB1)] {
-        let r = pnr9_block(&b, net.domain, producer, bond, receipt, q, nonce, tagged_spk(0xB0 + q as u64));
+        let r = pnr9_block(&b, net.domain, producer, bond, receipt, q, nonce, leg_spk.clone());
         rehearse_pnr9(&b, &r).unwrap_or_else(|e| panic!("the node's receipt-block gate refuses B's PNR9 block for quantum {q}: {e}"));
         let (r, v) = insert(&b, r).await;
         v.unwrap_or_else(|e| panic!("B's PNR9 block for quantum {q} is accepted: {e}"));
