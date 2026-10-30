@@ -1894,8 +1894,9 @@ async fn fresh_public_service_with_recovery_inner(case: PublicCase, recovery_mod
     };
     let deadline = std::time::Instant::now() + Duration::from_secs(360 + extra_seconds);
     chain.wall_deadline = Some(deadline);
-    let one_block_per_tick =
-        case.staged_tokenizer() || case.native_prefix() || recovery_mode == Some(recovery::RecoveryMode::NetworkVerifier);
+    let one_block_per_tick = case.staged_tokenizer()
+        || case.native_prefix()
+        || matches!(recovery_mode, Some(recovery::RecoveryMode::Network | recovery::RecoveryMode::NetworkVerifier));
     let service_start = chain.history.len();
     let mut next_da_progress = chain.daa() + 100;
     let mut reserved = false;
