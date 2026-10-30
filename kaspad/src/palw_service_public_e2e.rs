@@ -1448,7 +1448,7 @@ async fn fresh_public_service_with_recovery_inner(case: PublicCase, recovery_mod
     // the outside verifier and its restart/reorg still run the actual service.
     let automatic_producer = automatic_recovery && case.constraint_fault().is_none();
     kaspa_core::log::try_init_logger("warn,kaspad_lib::palw_panel=info,kaspad_lib::palw_panel::palw_fraud_filer=debug");
-    let (mut config, bundle, premine, mut floats) = fixture_config_with(
+    let (mut config, mut bundle, premine, mut floats) = fixture_config_with(
         case == PublicCase::ForeignFpJob || case.prefix_fault().is_some(),
         case.pruned_fp() || case.native_prefix() || case == PublicCase::HonestFpV3Job,
         case.unretained_fp(),
@@ -1469,6 +1469,22 @@ async fn fresh_public_service_with_recovery_inner(case: PublicCase, recovery_mod
         config.params.palw_fp_prefix_inherit = Some(ForkActivation::new(0));
         config.params.validate_palw_fp_prefix_state_v1().unwrap();
         config.params.validate_palw_fp_prefix_inherit_v1().unwrap();
+    }
+    if recovery_mode == Some(recovery::RecoveryMode::NetworkVerifier) && case.da_default() {
+        // An isolated short disclosure budget for the withheld-binding socket
+        // case. Twenty-four native DAA leave ample time for its bounded binding
+        // answer, but fit in the normal near-sync window's elapsed clock slots.
+        // The actual default, signatures, native cadence and lead cap remain
+        // enforced; no shipped network's disclosure window changes.
+        bundle.state = bundle
+            .state
+            .clone()
+            .with_test_only_lattice_windows_v1(24, bundle.state.window_court())
+            .expect("positive isolated socket disclosure budget");
+        config.params.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+        config.params.sync_palw_rcore_plus();
+        let PalwConsensusMode::ConsensusV2(updated) = &config.params.palw_consensus_mode else { unreachable!() };
+        bundle = updated.clone();
     }
     if recovery_mode == Some(recovery::RecoveryMode::Reorg) {
         // Exercise the shipped shallow economic-tie rule, as the actual LG14-A reorg
@@ -1858,7 +1874,12 @@ async fn fresh_public_service_with_recovery_inner(case: PublicCase, recovery_mod
     // The staged fixtures follow real worker ticks instead of racing empty DAA.
     // Budget the finite source walk plus the existing 360 s for replay/reporting;
     // this wall-clock bound does not change any on-chain deadline or retry rule.
-    let extra_seconds = if case.native_prefix() {
+    let extra_seconds = if recovery_mode == Some(recovery::RecoveryMode::NetworkVerifier) && !case.da_default() {
+        // After the elapsed near-sync slots are consumed, further ordinary
+        // heartbeat slots require real wall time. Budget another such window
+        // instead of disabling the native lead cap or transaction-relay gate.
+        chain.config.expected_difficulty_window_duration_in_milliseconds() / 4 / 1_000
+    } else if case.native_prefix() {
         let fixture = tiled.as_ref().unwrap();
         let tiles =
             kaspa_consensus_core::palw_prefix_state_court_v1::PalwPrefixKvPlanV1::of_profile(&fixture.profile, 2).unwrap().tile_count;
@@ -1873,6 +1894,8 @@ async fn fresh_public_service_with_recovery_inner(case: PublicCase, recovery_mod
     };
     let deadline = std::time::Instant::now() + Duration::from_secs(360 + extra_seconds);
     chain.wall_deadline = Some(deadline);
+    let one_block_per_tick =
+        case.staged_tokenizer() || case.native_prefix() || recovery_mode == Some(recovery::RecoveryMode::NetworkVerifier);
     let service_start = chain.history.len();
     let mut next_da_progress = chain.daa() + 100;
     let mut reserved = false;
@@ -2904,9 +2927,12 @@ async fn fresh_public_service_with_recovery_inner(case: PublicCase, recovery_mod
             );
             break;
         }
-        if case.staged_tokenizer() || case.native_prefix() {
+        if one_block_per_tick {
             // One real block per worker tick: fifty empty blocks per pass can
             // expire a prepaid acquisition while its next signed part is built.
+            // A socket receiver also needs time to relay that part's request;
+            // empty bursts exhaust its elapsed native clock slots and hit the
+            // real lead cap before the next worker transaction can arrive.
             pool_heartbeat_observed(&mut chain, &manager, &pool, claim, &mut recovery, &mut running).await;
         } else if recovery.as_ref().is_some_and(|recovery| recovery.recovering_pruned_round()) {
             // One actual native/template block per pass while the real restarted
@@ -2926,12 +2952,7 @@ async fn fresh_public_service_with_recovery_inner(case: PublicCase, recovery_mod
             // producing before the target reserves, including while another claim is pursued.
             pool_heartbeat_observed(&mut chain, &manager, &pool, claim, &mut recovery, &mut running).await;
         }
-        tokio::time::sleep(if case.staged_tokenizer() || case.native_prefix() {
-            Duration::from_secs(2)
-        } else {
-            Duration::from_millis(100)
-        })
-        .await;
+        tokio::time::sleep(if one_block_per_tick { Duration::from_secs(2) } else { Duration::from_millis(100) }).await;
     }
     if let Some(recovery) = recovery.as_mut() {
         recovery.finish(&chain, claim, service_start).await;

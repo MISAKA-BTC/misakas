@@ -2133,6 +2133,17 @@ impl PalwStateParamsV2 {
         self.window_court
     }
 
+    /// Isolated clock/court harnesses choose explicit bounded lattice budgets.
+    /// Presets and activation records do not use this test-only builder.
+    pub fn with_test_only_lattice_windows_v1(mut self, window_challenge: u64, window_court: u64) -> Result<Self, PalwStateV2Error> {
+        if window_challenge == 0 || window_court == 0 {
+            return Err(PalwStateV2Error::InvalidParams("every lattice window must be at least one DAA unit"));
+        }
+        self.window_challenge = window_challenge;
+        self.window_court = window_court;
+        Ok(self)
+    }
+
     /// **Lane V02 (post-launch): the mirror's setter** — written by `Params::sync_palw_final_lock_life`
     /// and by nothing else, so the copy cannot drift from `Params::palw_final_lock_life`. `None` where
     /// the fence is not armed.

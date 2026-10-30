@@ -162,7 +162,7 @@ impl RecoveryRun {
     ) -> Self {
         if mode == RecoveryMode::NetworkVerifier {
             // Use already elapsed normal clock slots inside the real near-sync window.
-            // Keep the original native cadence, lead cap, deadline and admission checks.
+            // Keep native cadence, lead cap, on-chain deadlines and admission checks.
             let threshold = chain.config.expected_difficulty_window_duration_in_milliseconds() / 4;
             let margin = 2 * kaspa_consensus_core::palw_heartbeat_v1::HEARTBEAT_RECOVERY_INTERVAL_MS;
             assert!(threshold > margin, "the native near-sync history must leave elapsed protocol slots");

@@ -1007,9 +1007,11 @@ async fn spend_one_quantum(chain: &mut Chain, card: usize, claim: Hash64) -> Opt
         kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V3_MLDSA87_SPEND_CONTEXT,
     );
     template.block.header.palw_commitment =
-        borsh::to_vec(&kaspa_consensus_core::palw_freeprompt_v3::PalwReceiptSpendEnvelopeV3 { spend, signature }).unwrap();
+        kaspa_consensus_core::palw_freeprompt_v3::PalwReceiptSpendEnvelopeV3 { spend, signature }.encode();
     template.block.header.finalize();
     let block = chain.insert(template.block).await;
+    // The following block folds the receipt and carries its coinbase payment.
+    chain.heartbeat(Vec::new()).await;
     Some(block.hash())
 }
 
@@ -1295,18 +1297,38 @@ async fn tn1_node_with(forged: bool, declared: bool, producer_kind: Tn1ProducerV
     };
     kaspa_core::log::try_init_logger(&std::env::var("TN1_LOG").unwrap_or_else(|_| "warn,kaspad_lib::palw_panel=info".into()));
     let (mut config, mut bundle, premine, mut floats) = tir_frame_config();
-    if forged {
-        // HARNESS ONLY: bind the colluding panel before the short preparation door closes.
-        // The external service still discovers, acquires and convicts the claim itself.
-        bundle.panel =
-            kaspa_consensus_core::palw_panel_v2::PalwPanelParamsV2::new(bundle.panel.seat_count(), bundle.panel.quorum(), 1).unwrap();
-        let mut params = config.params.clone();
-        params.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
-        config = Config::new(params);
-    }
+    // HARNESS ONLY: the test-only frame clock has a short preparation door.
+    // Draw the real panel before it closes for both the honest services and
+    // the scripted colluders; every ordinary seat approval is still required.
+    bundle.panel =
+        kaspa_consensus_core::palw_panel_v2::PalwPanelParamsV2::new(bundle.panel.seat_count(), bundle.panel.quorum(), 1).unwrap();
+    let mut params = config.params.clone();
+    params.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+    config = Config::new(params);
     if declared {
         let mut params = config.params.clone();
         params.palw_class_semantics_v1 = Some(ForkActivation::new(0));
+        // This isolated 02-B case also buys the complete tokenizer court. Its
+        // original table is not size-authenticated before that court, so the
+        // quote must cover the format's full table ceiling, not our tiny file.
+        // The shipped 3,120-DAA horizon correctly refuses that allocation.
+        let table_moves = (kaspa_consensus_core::palw_fp_constraint_job_v1::PALW_TOKEN_TABLE_MAX_FILE_BYTES_V1 as u64)
+            .div_ceil(u64::from(kaspa_consensus_core::palw_public_token_table_v1::PALW_PUBLIC_TABLE_PART_BYTES_V1))
+            + 2;
+        bundle.state = bundle
+            .state
+            .clone()
+            .with_test_only_lattice_windows_v1(
+                bundle.state.window_challenge(),
+                bundle.state.window_court().checked_add(table_moves).unwrap(),
+            )
+            .expect("the isolated full-table court has a positive finite budget");
+        params.palw_tir_frame_cost_v1.as_mut().unwrap().clock.maximum_door_daa =
+            bundle.state.window_challenge_at(0).checked_add(bundle.state.window_court()).unwrap();
+        params.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+        params.sync_palw_rcore_plus();
+        let PalwConsensusMode::ConsensusV2(updated) = &params.palw_consensus_mode else { unreachable!() };
+        bundle = updated.clone();
         config = Config::new(params);
     }
     let mut chain = Chain::new(config, bundle, &premine);
@@ -1496,12 +1518,40 @@ async fn tn1_node_with(forged: bool, declared: bool, producer_kind: Tn1ProducerV
             })
             .unwrap();
         let original = original.unwrap();
-        assert!(chain.tc.palw_tir_public_original_quote_v1(original.clone(), frame.header.clone()).unwrap().is_some());
+        // An original quote is prospective: the live node correctly refuses to
+        // attach a second allocation to this already accepted claim. Replay the
+        // public prefix before its carrier for both sides of the 02-B check.
+        let carrier = chain
+            .history
+            .iter()
+            .position(|block| {
+                block.transactions.iter().any(|tx| {
+                    kaspa_consensus_core::palw_tir_public_fp_envelope_v1::PalwTirPublicFpEnvelopeV1::decode_v1(&tx.payload)
+                        .is_ok_and(|envelope| envelope.pledge.claim == claim)
+                })
+            })
+            .expect("the original frame's public carrier");
+        let prospective = Chain::new(chain.config.clone(), chain.bundle.clone(), &premine);
+        for block in &chain.history[..carrier] {
+            prospective
+                .tc
+                .validate_and_insert_block(block.clone())
+                .virtual_state_task
+                .await
+                .expect("the prospective peer validates the real public prefix");
+        }
+        let (_, quote) = prospective
+            .tc
+            .palw_tir_public_original_quote_v1(original.clone(), frame.header.clone())
+            .unwrap()
+            .expect("02-B: the exact registered original has a complete prospective quote");
+        assert_eq!(quote.source_id, frame.source_id);
+        assert!(quote.semantic.is_some(), "02-B includes the paid semantic court");
         let mut wrong = frame.header.clone();
         wrong.job_context.runtime_manifest_hash = Hash64::from_u64_word(0xBAD02B);
         assert!(
-            chain.tc.palw_tir_public_original_quote_v1(original, wrong).is_err(),
-            "02-B: changing only the registered manifest must refuse the frame"
+            prospective.tc.palw_tir_public_original_quote_v1(original, wrong).is_err(),
+            "02-B: changing only the registered manifest must refuse the frame on the same prospective snapshot"
         );
     }
     // The colluding Panel prepares inside the frame's preparation window (harness-scripted adversary).
@@ -1532,6 +1582,20 @@ async fn tn1_node_with(forged: bool, declared: bool, producer_kind: Tn1ProducerV
         colluders = colluders_license(&node, &mut chain, &mut floats, &fixture, &mut ready_at, claim, drawn).await;
         assert!(!colluders.is_empty(), "a forged claim must be licensed before conviction to exercise seat slash");
     }
+    // The honest Panel is drawn at the anchor after the claim's anchor delay.
+    if !forged {
+        let slot = chain.view(claim).accepted_daa + chain.bundle.panel.anchor_delay();
+        while chain.daa() + 2 < slot {
+            step_ready(&node, &mut chain, &mut floats, &fixture, &mut ready_at).await;
+        }
+        // Fresh readiness right before the draw (the harness's, see above).
+        fixture.refresh_readiness(&mut chain, &mut floats).await;
+        ready_at = chain.daa();
+        while chain.daa() < slot {
+            step_ready(&node, &mut chain, &mut floats, &fixture, &mut ready_at).await;
+        }
+        anchor_block(&mut chain).await;
+    }
     // **The harness's clock against the services' wall clock**: a block here takes ~60 ms, a service's replay and open take seconds,
     // and the frame's owner-open door is a few DAA under the TEST-ONLY clock (a real network's DAA is a heartbeat). Through the
     // open door the harness paces one DAA per 4 s, so the outside service's open lands inside it as it would on a network.
@@ -1558,27 +1622,22 @@ async fn tn1_node_with(forged: bool, declared: bool, producer_kind: Tn1ProducerV
         })
         .unwrap();
     while chain.daa() <= open_until {
-        // An owner may pursue only from the preparation door on (`owner_may_pursue_v1`): the slow pace covers the owner's window.
-        let pace = if chain.daa() + 1 >= preparation_until { 90 } else { 4 };
+        // Honest services need accepted WorkDebit/Ready moves before the
+        // preparation deadline. Fast templates must not outrun their workers;
+        // the actual licensed phase is the barrier, not a guessed replay time.
+        let phase = chain.view(claim).phase;
+        let preparing = !forged && !matches!(&phase, PalwClaimPhaseV2::ReceiptLicensed { .. } | PalwClaimPhaseV2::Final { .. });
+        // The slow pace also covers the outside owner's window after preparation.
+        let pace = if preparing || chain.daa() + 1 >= preparation_until { 90 } else { 4 };
+        eprintln!(
+            "[service-tir-frame] owner window DAA {}, preparation until {preparation_until}, {phase:?}, pace {pace}s",
+            chain.daa()
+        );
         tokio::time::sleep(Duration::from_secs(pace)).await;
         step_ready(&node, &mut chain, &mut floats, &fixture, &mut ready_at).await;
         if let Some(reader) = rail_reader.as_deref_mut() {
             rail_colluders_answer(&mut chain, &mut floats, claim, reader).await;
         }
-    }
-    // The honest Panel is drawn at the anchor after the claim's anchor delay.
-    if !forged {
-        let slot = chain.view(claim).accepted_daa + chain.bundle.panel.anchor_delay();
-        while chain.daa() + 2 < slot {
-            step_ready(&node, &mut chain, &mut floats, &fixture, &mut ready_at).await;
-        }
-        // Fresh readiness right before the draw (the harness's, see above).
-        fixture.refresh_readiness(&mut chain, &mut floats).await;
-        ready_at = chain.daa();
-        while chain.daa() < slot {
-            step_ready(&node, &mut chain, &mut floats, &fixture, &mut ready_at).await;
-        }
-        anchor_block(&mut chain).await;
     }
     loop {
         assert!(std::time::Instant::now() < deadline, "no outcome: {:?}", chain.view(claim));
@@ -1959,11 +2018,14 @@ async fn rail_tfp1_claim_v1(
         Some(leaf) => backend.execute_free_prompt_with_injected_fault(&job, &prompt, leaf).expect("the forged run"),
     };
     let shape = backend.capture_shape(&run.outcome.material).expect("a TIR capture shape");
+    // The provider publishes before inclusion. Cover the folding child's
+    // trace-retention floor, rather than the earlier quote snapshot's floor.
+    let landing_margin = params.palw_tir_frame_cost_v1.unwrap().config.prices.inclusion_margin_daa;
     let commitment = kaspa_consensus_core::palw_fp_execution_v3::palw_fp_commitment_from_context_v3(
         &job,
         &shape.job_context,
         &run,
-        chain.daa() + facts.min_trace_retention_daa,
+        chain.daa() + facts.min_trace_retention_daa + landing_margin,
     )
     .expect("the run assembles into a commitment");
     let header = backend.public_execution_binding_header_v1(&run.outcome.material).expect("the TIR backend exports its header");

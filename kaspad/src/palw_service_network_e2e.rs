@@ -201,9 +201,35 @@ impl NetworkRun {
 
     pub(super) async fn finish(&mut self, chain: &Chain, claim: Hash64, service_start: usize, material_answered: bool) {
         self.relay(chain).await;
-        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        // Accelerated empty heartbeats can spend the real H2 peer allowance.
+        // A skipped final tip has no later descendant to fetch it as an orphan
+        // root. Announce it again after an ordinary allowance refill, through
+        // the same socket and unchanged relay admission rules.
+        let refill = Duration::from_millis(kaspa_p2p_flows::palw_heartbeat_relay::PALW_HEARTBEAT_INV_REFILL_MS);
+        let deadline = std::time::Instant::now() + Duration::from_secs(30) + 2 * refill;
+        let mut next_announcement = std::time::Instant::now() + refill;
         while self.receiver.tc.get_sink() != chain.tc.get_sink() {
-            assert!(std::time::Instant::now() < deadline, "socket relay never validated the complete public suffix");
+            let now = std::time::Instant::now();
+            assert!(
+                now < deadline,
+                "socket relay never validated the complete public suffix: receiver DAA {}, source DAA {}",
+                self.receiver.daa(),
+                chain.daa()
+            );
+            if now >= next_announcement {
+                self.primary
+                    .broadcast(
+                        pb::KaspadMessage {
+                            payload: Some(pb::kaspad_message::Payload::InvRelayBlock(pb::InvRelayBlockMessage {
+                                hash: Some(chain.tc.get_sink().into()),
+                            })),
+                            ..Default::default()
+                        },
+                        None,
+                    )
+                    .await;
+                next_announcement = now + refill;
+            }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
         if !material_answered {
