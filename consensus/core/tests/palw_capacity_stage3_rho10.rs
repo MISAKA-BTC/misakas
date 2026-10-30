@@ -66,7 +66,8 @@ fn fence_at(p: &Params, name: &str) -> Option<u64> {
 /// shipped here (the DAA-1,300 release: this build arms none of them), and the baseline a flag-day
 /// build that lists them is judged against.
 fn release() -> Params {
-    let mut p = palw_t12_shipped_params();
+    // This historical capacity baseline predates int-13 and G14.
+    let mut p = palw_t12_release_v6_params();
     // The int-11 flag day (H = 5,300: the ρ steps 25 / 100 / 250 / 1000, F-EM, F-M1, F-K, L_ver and the RFC lanes) is set back to
     // dormant first: this suite judges the capacity package against the release below it.
     kaspa_consensus_core::config::params::palw_t12_arm_int11_flag_day_at_v1(&mut p, None);

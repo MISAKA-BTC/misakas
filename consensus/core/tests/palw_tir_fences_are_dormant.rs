@@ -227,9 +227,9 @@ const PINS: &[(&str, &str, &str, &str)] = &[
     (
         // re-pin 2026-10-29 @d3ed36fdc77d: G14 at DAA 17400 moved testnet-12 params and schedule ids; the handshake identity stayed 5de80e64 (was 770fb822…, 9410712f…)
         "palw_t12_release_v3_params",
-        "6d21887536b8b3953d23471975c52f5c3de616db19f9de523ff2ac0751d346a6",
+        "770fb822f6e82c72e31d0c37375400a29047b9430b666018d4a8937d14a95fb9",
         "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-        "87bb1893f531a73def768abde6590a37a8e0304f80edd865bf4601afbc587b5a",
+        "9410712f252cbb8aede7f1e337dc5f46c30f5c01914d0b8f2f714a26e69f1906",
     ),
     (
         // re-pin 2026-10-29 @d3ed36fdc77d: G14 at DAA 17400 moved testnet-12 params and schedule ids; the handshake identity stayed 5de80e64 (was 31b913ef…, 9410712f…)

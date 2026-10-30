@@ -34,6 +34,9 @@ fn coupled_params() -> Params {
     p.palw_fork_choice_rule_e_v1 = Some(ForkActivation::new(AT));
     p.palw_staged_public_court_v1 = Some(ForkActivation::new(AT));
     p.palw_verifier_pay_v1 = Some(ForkActivation::new(AT));
+    // Optional rewarded families are enabled explicitly by each gate case.
+    p.palw_staged_tir_route_v1 = None;
+    p.palw_staged_float_constraint_v1 = None;
     p
 }
 

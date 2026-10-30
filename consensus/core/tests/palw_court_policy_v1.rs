@@ -42,6 +42,7 @@ fn readiness_record_cannot_bypass_unfinished_outsider_path() {
     for fence in [PalwG14GatedFenceV1::TirPublicConvictionV1, PalwG14GatedFenceV1::LegacyPublicFilerV1] {
         let mut p = palw_t12_shipped_params();
         p.validate_palw_court_policy_completeness_v1(fence).unwrap();
+        p.palw_court_outsider_lane_v1 = None;
         match fence {
             PalwG14GatedFenceV1::TirPublicConvictionV1 => p.palw_tir_public_conviction_v1 = Some(ForkActivation::new(20_000)),
             _ => p.palw_legacy_public_filer_v1 = Some(ForkActivation::new(20_000)),
@@ -59,7 +60,10 @@ fn readiness_record_cannot_bypass_unfinished_outsider_path() {
         palw_g14_arming_record_form_v1(&record).unwrap();
         let error = p.validate_palw_g14_fence_record_in_v1(fence, &[record]).unwrap_err();
         assert!(format!("{error:?}").contains("OneOutsiderCapacityIncomplete"));
-        assert!(format!("{error:?}").contains("ServiceOpportunityIncomplete"));
+        assert!(
+            !format!("{error:?}").contains("ServiceOpportunityIncomplete"),
+            "the separately adopted court service profile is already complete"
+        );
     }
 }
 
@@ -91,6 +95,7 @@ fn court_f02_completeness_gate_clears_each_half_on_its_own_evidence() {
     let fence = PalwG14GatedFenceV1::TirPublicConvictionV1;
     let mut p = palw_t12_shipped_params();
     p.palw_tir_public_conviction_v1 = Some(ForkActivation::new(20_000));
+    p.palw_court_outsider_lane_v1 = None;
     // V1 (service profile) and V4 (paid ingress) are pinned from the user-approved estimates (2026-10-26): F02 clears; F03 still
     // needs the court-owner outsider lane in force at or below the fence.
     let lane_missing = format!("{:?}", p.validate_palw_court_policy_completeness_v1(fence).unwrap_err());
