@@ -338,7 +338,7 @@ fn armable_g14_fences_refuse_without_a_measured_record() {
     assert!(
         PALW_G14_ARMING_RECORDS_V1
             .iter()
-            .all(|r| r.activation_daa == 17_400 && r.genesis == kaspa_consensus_core::config::genesis::PALW_T12_GENESIS.hash),
+            .all(|r| r.activation_daa == 18_400 && r.genesis == kaspa_consensus_core::config::genesis::PALW_T12_GENESIS.hash),
         "no record is pinned in this binary"
     );
     let t12 = palw_t12_shipped_params();
@@ -605,8 +605,8 @@ fn legacy_route_claim_without_a_g14_path_earns_nothing_past_14000() {
     let s3 = fold_sp(&r.p, &fp_armed, &r.s, &ctx(3, FENCE - 1, 3, 0), &[commit], PalwBlockWorkV3::None, Hash64::default())
         .expect("admitted before the fence");
     assert!(s3.claim(&h(0xB1)).is_some());
-    // Below every fence the gate answers nothing. Shipped testnet-12 arms the route at DAA 17,400.
-    assert_eq!(sp_of(&palw_t12_shipped_params()).g14_route_required_v1().map(|m| m.from_daa), Some(17_400));
+    // Below every fence the gate answers nothing. Shipped testnet-12 arms the route at DAA 18,400.
+    assert_eq!(sp_of(&palw_t12_shipped_params()).g14_route_required_v1().map(|m| m.from_daa), Some(18_400));
     assert_eq!(palw_g14_route_attempt_refusal_v1(&sp_of(&p), u64::MAX), None);
     // Params-level: the fence at DAA 14,000 mirrors 14,000 and reads the route fences' resolved heights.
     let mut t12 = palw_t12_shipped_params();
@@ -619,17 +619,17 @@ fn legacy_route_claim_without_a_g14_path_earns_nothing_past_14000() {
         mirror,
         PalwG14RouteMirrorV1 {
             from_daa: RELEASE,
-            legacy_filer_from: Some(17_400),
-            legacy_held_da_from: Some(17_400),
-            staged_court_from: Some(17_400),
-            tir_conviction_from: Some(17_400),
-            court_capacity_from: Some(17_400),
-            kernel_panel_one_from: Some(17_400),
-            gate_c_from: Some(17_400),
+            legacy_filer_from: Some(18_400),
+            legacy_held_da_from: Some(18_400),
+            staged_court_from: Some(18_400),
+            tir_conviction_from: Some(18_400),
+            court_capacity_from: Some(18_400),
+            kernel_panel_one_from: Some(18_400),
+            gate_c_from: Some(18_400),
             tokenizer_match_from,
-            panel_da_disclosure_from: Some(17_400),
+            panel_da_disclosure_from: Some(18_400),
         },
-        "the G14 routes are armed at 17,400; the tokenizer binding is testnet-12's own"
+        "the G14 routes are armed at 18,400; the tokenizer binding is testnet-12's own"
     );
     assert!(palw_g14_route_attempt_refusal_v1(&sp_of(&t12), RELEASE).is_some());
     assert!(palw_g14_route_attempt_refusal_v1(&sp_of(&t12), RELEASE - 1).is_none());
@@ -1008,6 +1008,7 @@ fn g14_genesis_from_block_zero_only_families_with_an_armed_route_earn() {
 /// The ruleset testnet-12 LAUNCHED on (`post_launch_fence_arming_tests::T12_LAUNCH_IDS`, the lib's pin): adding the two dormant fences
 /// (Some-only in every hash) must leave it — and every shipped preset's validation — exactly as it was.
 #[test]
+// re-pin 2026-10-30 @64535b7bf7e8: User selected DAA18400 for the unpublished G14 schedule on 2026-10-30; preserve the current main CI fixes (was 0fb64448…, 3299840c…)
 fn testnet12_identity_did_not_move() {
     let launch = palw_t12_launch_params_v1();
     assert_eq!(
@@ -1017,18 +1018,18 @@ fn testnet12_identity_did_not_move() {
             launch.consensus_schedule_id().to_string()
         ),
         (
-            "0fb6444822f57e424a6617a013f502d29d8fd8acddd33cae43066c0d84041ef5".to_string(),
+            "322104e40468fc3382ed325e2faf0c86846e11df52d3d6c99806d596fb2d663b".to_string(),
             "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5".to_string(),
-            "3299840cfad1ec9eb3a2c63c0a2355e7759c9dedc4799b5eeb9e1f51dc9f2ece".to_string(),
+            "a96d6caf49dbdf82e3dff89d23e9d97795460a7ba1122e9389c2959c04a90234".to_string(),
         )
     );
     let t12 = palw_t12_shipped_params();
     t12.validate_palw_v2().expect("testnet-12 as shipped validates");
-    let armed = Some(kaspa_consensus_core::config::params::ForkActivation::new(17_400));
+    let armed = Some(kaspa_consensus_core::config::params::ForkActivation::new(18_400));
     assert_eq!(t12.palw_g14_route_required_v1, armed);
     assert_eq!(t12.palw_reward_liability_horizon_v1, None);
     let PalwConsensusMode::ConsensusV2(b) = &t12.palw_consensus_mode else { panic!("V2") };
-    assert_eq!(b.state.g14_route_required_v1().map(|m| m.from_daa), Some(17_400));
+    assert_eq!(b.state.g14_route_required_v1().map(|m| m.from_daa), Some(18_400));
     assert_eq!(b.state.reward_liability_horizon_from_daa(), None);
     eprintln!(
         "[t12 ids] params {} identity {} schedule {}",

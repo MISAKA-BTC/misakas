@@ -266,8 +266,8 @@ fn the_kit_names_the_full_activation_height_the_preset_arms() {
     let core_g14 = kaspa_consensus_core::config::params::PALW_T12_G14_17000_FLAG_DAY_DAA.map(|at| at.to_string()).unwrap_or_default();
     assert_eq!(g14, core_g14, "{FLEET}: G14_FLAG_DAY_DAA is the preset's");
     assert_eq!(
-        p.fence_schedule_v1().contains(&17_400),
+        p.fence_schedule_v1().contains(&18_400),
         kaspa_consensus_core::config::params::PALW_T12_G14_17000_FLAG_DAY_DAA.is_some(),
-        "17,400 is scheduled exactly when the G14 flag day is armed"
+        "18,400 is scheduled exactly when the G14 flag day is armed"
     );
 }

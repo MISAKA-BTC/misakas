@@ -51,7 +51,7 @@ fn every_shipped_ruleset_leaves_the_three_ruling_fences_dormant() {
     for (what, p) in rulesets() {
         let t12 = p.net == NetworkId::with_suffix(NetworkType::Testnet, 12);
         for name in FENCES {
-            let expected = if t12 && name == "palw_claim_hard_deadline_v1" { Some(ForkActivation::new(17_400)) } else { None };
+            let expected = if t12 && name == "palw_claim_hard_deadline_v1" { Some(ForkActivation::new(18_400)) } else { None };
             assert!(p.palw_fences_v1().contains(&(name, expected)), "{what}: {name} has its declared schedule");
         }
         assert!(!p.palw_court_model_scope_v1_active_at(u64::MAX - 1), "{what}");

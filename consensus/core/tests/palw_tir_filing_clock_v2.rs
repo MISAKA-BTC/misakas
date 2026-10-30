@@ -25,7 +25,7 @@ fn clock_v2_changes_configured_fingerprints_but_is_not_a_shipped_or_reviewed_pro
     assert!(
         PALW_TIR_FRAME_COST_RECORDS_V1
             .iter()
-            .all(|r| r.activation_daa == 17_400 && r.genesis == kaspa_consensus_core::config::genesis::PALW_T12_GENESIS.hash)
+            .all(|r| r.activation_daa == 18_400 && r.genesis == kaspa_consensus_core::config::genesis::PALW_T12_GENESIS.hash)
     );
     assert_eq!(
         palw_tir_frame_cost_record_admits_v1(Hash64::from_u64_word(1), 16_000, Some(&v2), PALW_TIR_FRAME_COST_RECORDS_V1),

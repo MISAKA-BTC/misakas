@@ -272,7 +272,7 @@ pub const PALW_T12_FULL_ACTIVATION_FENCES_V1: &[PalwPostLaunchFenceV1] = &[
 pub const PALW_T12_FULL_ACTIVATION_DAA: Option<u64> = None;
 
 /// The intended height, for tests and the notes only — NEVER read by the preset.
-pub const PALW_T12_FULL_ACTIVATION_TARGET_DAA_V1: u64 = 17_400; // the value is 17,400 (user moved the flag day 17,000 -> 16,600 -> 17,400, 2026-10-27; Gate C S/V duty); the name is kept
+pub const PALW_T12_FULL_ACTIVATION_TARGET_DAA_V1: u64 = 18_400; // User target 2026-10-30; FULL remains None pending its own readiness gates.
 
 /// **The full-activation flag day, armed** — the list at [`PALW_T12_FULL_ACTIVATION_DAA`] on the ASSEMBLED ruleset, after the int-13
 /// flag day; a no-op while the height is `None` (it leaves the list exactly as the earlier lists set it — in particular it does not clear
@@ -290,8 +290,8 @@ pub(super) fn palw_t12_arm_full_activation_v1(params: &mut Params) {
 
 /// **The G14 17,000 flag day's height on the shipped testnet-12 preset — ARMED** (user decision 2026-10-27). One constant the preset
 /// and the kit (`G14_FLAG_DAY_DAA` in `contrib/t12-deploy-kit/fleet.env.example`, pinned by `t12_deploy_kit_constants`) share.
-// Re-armed 2026-10-28 after all 19 required suites passed on da46131a4. The generated records retain
-// the exact source and run digests; the existing user decisions/waivers remain explicit.
+// Height-only rebind to 18,400, user 2026-10-30. Historical passing suites remain bound to da46131a4.
+// Those historical digests are not latest-candidate PASS evidence; current validation is separate.
 pub const PALW_T12_G14_17000_FLAG_DAY_DAA: Option<u64> = Some(PALW_T12_G14_17000_DAA_V1);
 
 /// Is `fence` one of the int-13 list's entries while that list has its own height ([`PALW_T12_INT13_DAA`], DAA 15,500 on the public
@@ -487,7 +487,9 @@ pub const PALW_T12_G14_COURT_CAPACITY_ESTIMATE_ENTRY: PalwPostLaunchFenceV1 = Pa
 };
 
 /// The height [`PALW_T12_G14_17000_FENCES_V1`] is meant for — read by tests and the arming report only, NEVER by the preset.
-pub const PALW_T12_G14_17000_DAA_V1: u64 = 17_400; // the value is 17,400 (user moved the flag day 17,000 -> 16,600 -> 17,400, 2026-10-27; Gate C S/V duty); the name is kept
+pub const PALW_T12_G14_18400_DAA_V1: u64 = 18_400;
+/// Historical public name retained; unpublished G14 moved to 18,400 by user decision 2026-10-30.
+pub const PALW_T12_G14_17000_DAA_V1: u64 = PALW_T12_G14_18400_DAA_V1;
 
 /// **One list at `at`** (`None`: dormant, set in reverse) — the body shared by the full list and the slice, for drills and tests.
 pub fn palw_t12_arm_fence_list_at_v1(params: &mut Params, list: &[PalwPostLaunchFenceV1], at: Option<u64>) {

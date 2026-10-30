@@ -5313,9 +5313,9 @@ mod tests {
             DEVNET_PARAMS, MAINNET_PARAMS, SIMNET_PARAMS, TESTNET_PARAMS, palw_rc_shipped_params, palw_t12_shipped_params,
         };
         let t12 = palw_t12_shipped_params();
-        assert_eq!(t12.palw_bond_budget_v1.as_ref().map(|f| f.activation.daa_score()), Some(17_400));
-        assert_eq!(t12.palw_model_bond_allocation_v1.as_ref().map(|f| f.activation.daa_score()), Some(17_400));
-        assert!(!t12.palw_bond_budget_active_at(17_399) && t12.palw_bond_budget_active_at(17_400));
+        assert_eq!(t12.palw_bond_budget_v1.as_ref().map(|f| f.activation.daa_score()), Some(18_400));
+        assert_eq!(t12.palw_model_bond_allocation_v1.as_ref().map(|f| f.activation.daa_score()), Some(18_400));
+        assert!(!t12.palw_bond_budget_active_at(18_399) && t12.palw_bond_budget_active_at(18_400));
         for p in [MAINNET_PARAMS, TESTNET_PARAMS, DEVNET_PARAMS, SIMNET_PARAMS, palw_rc_shipped_params()] {
             assert!(p.palw_bond_budget_v1.is_none() && p.palw_model_bond_allocation_v1.is_none());
             assert!(!p.palw_bond_budget_active_at(u64::MAX) && !p.palw_model_bond_allocation_active_at(u64::MAX));

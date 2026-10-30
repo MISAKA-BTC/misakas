@@ -276,7 +276,7 @@ mod tests {
         let PalwModeV2Error::Invalid(why) = bad.validate_palw_model_bond_allocation_v1().unwrap_err() else { panic!("Invalid") };
         assert!(why.contains("policy is invalid"), "{why}");
         // The shipped t12 preset is untouched.
-        assert_eq!(palw_t12_shipped_params().palw_model_bond_allocation_v1.as_ref().map(|f| f.activation.daa_score()), Some(17_400));
+        assert_eq!(palw_t12_shipped_params().palw_model_bond_allocation_v1.as_ref().map(|f| f.activation.daa_score()), Some(18_400));
     }
 
     #[test]

@@ -848,7 +848,7 @@ pub struct PalwRfc0018ArmingRecordV1 {
 /// **The pinned records — EMPTY.** Every RFC-0018 fence armed at a real height is refused (the old `ARMABLE = false`).
 // Lane ACT2 (2026-10-27): testnet-12 DAA 17,000 only, every slot a typed waiver (crate::palw_arming_waiver_v1).
 pub const PALW_RFC0018_ARMING_RECORDS_V1: &[PalwRfc0018ArmingRecordV1] =
-    crate::palw_t12_17000_records_v1::PALW_T12_17000_RFC0018_RECORDS_V1;
+    crate::palw_t12_18400_records_v1::PALW_T12_18400_RFC0018_RECORDS_V1;
 
 /// Does `records` authorize arming `fence` at `activation_daa` on the network `genesis`? The first record naming exactly this
 /// (fence, network, height) decides; its form must hold. `Err` carries the refusal text.

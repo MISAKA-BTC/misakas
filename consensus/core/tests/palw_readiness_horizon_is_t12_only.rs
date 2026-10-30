@@ -58,11 +58,11 @@ const BEFORE_THE_HORIZON: &[(&str, &str, &str, &str)] = &[
 /// Re-pinned 2026-09-25 (`rcore/exec-maturity-120`): testnet-12's 120-DAA execution-quantum maturity
 /// (`palw_exec_maturity_is_t12_only`) is in this twin — and so are c6ffd812's mainnet values, which the
 /// merge `2004c588` left un-re-pinned here. Previous: `fd7353c0…` / `a7fe561c…` / `28d866f1…`.
-// re-pin 2026-10-29 @d3ed36fdc77d: G14 at DAA 17400 moved testnet-12 params and schedule ids; the handshake identity stayed 5de80e64 (was 715b7894…, dc74b91d…)
+// re-pin 2026-10-30 @64535b7bf7e8: User selected DAA18400 for the unpublished G14 schedule on 2026-10-30; preserve the current main CI fixes (was 3fe0aa51…, cded0ece…)
 const T12_BEFORE_THE_HORIZON: (&str, &str, &str) = (
-    "3fe0aa51461fa5677ef5cf778a02679cc8b0defa7b0978ff240c9a773ca2e922",
+    "721e64ecd175eb835a2fdee512a77da0b05fd5dc0e3c2d091a4032e754862bb3",
     "9f267fb1794c366a70a9b9008773bc470f8d0ab03ebb0ca26e9a28eaacb70ab4",
-    "cded0eceffea657128e8ba363fbf05f3cbf0afe8e6b5a3aa085ffedf424e54bc",
+    "dda19d1a851d7e44b139d3ea45f4fff8e0f213616d849076f0cdc9b043a955d1",
 );
 
 /// testnet-12 with the horizon, on the same tree (at `3e9ae4ba`, before the pool and int-3 merges:
@@ -72,11 +72,11 @@ const T12_BEFORE_THE_HORIZON: (&str, &str, &str) = (
 /// (= `palw_exec_maturity_is_t12_only`'s `T12_WITH_THE_MATURITY`; at `2004c588` they were `2790d7ce…` /
 /// `1fd06c99…` / `e0af0218…`, which this pin never caught up with). Previous: `4d38b3f1…` / `2477a803…` /
 /// `06dd5566…`.
-// re-pin 2026-10-29 @d3ed36fdc77d: G14 at DAA 17400 moved testnet-12 params and schedule ids; the handshake identity stayed 5de80e64 (was 5ee7fd8e…, 1678e073…)
+// re-pin 2026-10-30 @64535b7bf7e8: User selected DAA18400 for the unpublished G14 schedule on 2026-10-30; preserve the current main CI fixes (was 73e67678…, fd42c167…)
 const T12_WITH_THE_HORIZON: (&str, &str, &str) = (
-    "73e67678a432effb4a982386d67383b95cf172babdde3e6f86c31cf3268d5bd5",
+    "3e6da238306cfdb7e71599d5ef8fb314f1b3ff33a50673af1321f3da9cfa5b94",
     "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-    "fd42c16706195ec0a6fa63902e1bd612303136b342bd29424e28be22599a5f2e",
+    "b4706ae535fc2c9e4f0a0fe1b6cb0456025f3e00c1b8aba5cde02191f46f9194",
 );
 
 fn shipped(name: &str) -> Params {

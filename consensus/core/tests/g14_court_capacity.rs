@@ -122,7 +122,7 @@ fn arm_split(
     court_at: u64,
     measured: Option<PalwCourtMeasurementV1>,
 ) -> (Params, Vec<PalwG14ArmingRecordV1>) {
-    // Shipped and launch already arm this list at 17,400. The fixture records only the filer and,
+    // Shipped and launch already arm this list at 18,400. The fixture records only the filer and,
     // when measured, court capacity, so those entries go back to dormant first.
     palw_t12_arm_after_int13_at_v1(&mut p, PALW_T12_G14_17000_FENCES_V1, None);
     p.palw_legacy_public_filer_v1 = Some(ForkActivation::new(filer_at));
@@ -1572,6 +1572,7 @@ fn g07r2_a_court_demanding_claim_promises_the_retention_its_guarantee_needs() {
 // ---- testnet-12's identity -------------------------------------------------------------------------------------------------------
 
 #[test]
+// re-pin 2026-10-30 @64535b7bf7e8: User selected DAA18400 for the unpublished G14 schedule on 2026-10-30; preserve the current main CI fixes (was 0fb64448…, 3299840c…)
 fn testnet12_identity_did_not_move() {
     let launch = palw_t12_launch_params_v1();
     assert_eq!(
@@ -1581,17 +1582,17 @@ fn testnet12_identity_did_not_move() {
             launch.consensus_schedule_id().to_string()
         ),
         (
-            "0fb6444822f57e424a6617a013f502d29d8fd8acddd33cae43066c0d84041ef5".to_string(),
+            "322104e40468fc3382ed325e2faf0c86846e11df52d3d6c99806d596fb2d663b".to_string(),
             "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5".to_string(),
-            "3299840cfad1ec9eb3a2c63c0a2355e7759c9dedc4799b5eeb9e1f51dc9f2ece".to_string(),
+            "a96d6caf49dbdf82e3dff89d23e9d97795460a7ba1122e9389c2959c04a90234".to_string(),
         )
     );
     let t12 = palw_t12_shipped_params();
     let (params, identity, schedule) =
         (t12.consensus_params_id().to_string(), t12.consensus_identity_id().to_string(), t12.consensus_schedule_id().to_string());
     eprintln!("[t12 ids] params {params} identity {identity} schedule {schedule}");
-    assert!(params.starts_with("73e67678") && identity.starts_with("5de80e64") && schedule.starts_with("fd42c167"));
+    assert!(params.starts_with("3e6da238") && identity.starts_with("5de80e64") && schedule.starts_with("b4706ae5"));
     t12.validate_palw_v2().expect("testnet-12 as shipped validates");
-    assert_eq!(t12.palw_court_capacity_v1.as_ref().map(|f| f.activation), Some(ForkActivation::new(17_400)));
-    assert_eq!(bundle(&t12).state.court_capacity_v1().map(|m| m.from_daa), Some(17_400));
+    assert_eq!(t12.palw_court_capacity_v1.as_ref().map(|f| f.activation), Some(ForkActivation::new(18_400)));
+    assert_eq!(bundle(&t12).state.court_capacity_v1().map(|m| m.from_daa), Some(18_400));
 }

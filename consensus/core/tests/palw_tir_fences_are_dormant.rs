@@ -160,11 +160,11 @@ const PINS: &[(&str, &str, &str, &str)] = &[
         "5a1d8d5679e0e8d7e9022255668fd5d4b3e4c8a6c367acf3882c6a3d480d8b64",
     ),
     (
-        // re-pin 2026-10-29 @d3ed36fdc77d: G14 at DAA 17400 moved testnet-12 params and schedule ids; the handshake identity stayed 5de80e64 (was 770fb822…, 9410712f…)
+        // re-pin 2026-10-30 @64535b7bf7e8: User selected DAA18400 for the unpublished G14 schedule on 2026-10-30; preserve the current main CI fixes (was 6d218875…, 87bb1893…)
         "from(testnet-12) − IR flag day",
-        "6d21887536b8b3953d23471975c52f5c3de616db19f9de523ff2ac0751d346a6",
+        "17e9935343fcc32363316ba14638fcd9ce9ce9f7e93a9997137197c0be3a821a",
         "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-        "87bb1893f531a73def768abde6590a37a8e0304f80edd865bf4601afbc587b5a",
+        "61278dafa0163ff10d4dcaabbae8780453c0236b850e4845dcb879c7bdef03f8",
     ),
     (
         "from(devnet)",
@@ -197,18 +197,18 @@ const PINS: &[(&str, &str, &str, &str)] = &[
         "5a1d8d5679e0e8d7e9022255668fd5d4b3e4c8a6c367acf3882c6a3d480d8b64",
     ),
     (
-        // re-pin 2026-10-29 @d3ed36fdc77d: G14 at DAA 17400 moved testnet-12 params and schedule ids; the handshake identity stayed 5de80e64 (was 770fb822…, 9410712f…)
+        // re-pin 2026-10-30 @64535b7bf7e8: User selected DAA18400 for the unpublished G14 schedule on 2026-10-30; preserve the current main CI fixes (was 6d218875…, 87bb1893…)
         "palw_t12_shipped_params − IR flag day",
-        "6d21887536b8b3953d23471975c52f5c3de616db19f9de523ff2ac0751d346a6",
+        "17e9935343fcc32363316ba14638fcd9ce9ce9f7e93a9997137197c0be3a821a",
         "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-        "87bb1893f531a73def768abde6590a37a8e0304f80edd865bf4601afbc587b5a",
+        "61278dafa0163ff10d4dcaabbae8780453c0236b850e4845dcb879c7bdef03f8",
     ),
     (
-        // re-pin 2026-10-29 @d3ed36fdc77d: G14 at DAA 17400 moved testnet-12 params and schedule ids; the handshake identity stayed 5de80e64 (was b8564b88…, 93da24cc…)
+        // re-pin 2026-10-30 @64535b7bf7e8: User selected DAA18400 for the unpublished G14 schedule on 2026-10-30; preserve the current main CI fixes (was 0fb64448…, 3299840c…)
         "palw_t12_launch_params_v1",
-        "0fb6444822f57e424a6617a013f502d29d8fd8acddd33cae43066c0d84041ef5",
+        "322104e40468fc3382ed325e2faf0c86846e11df52d3d6c99806d596fb2d663b",
         "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-        "3299840cfad1ec9eb3a2c63c0a2355e7759c9dedc4799b5eeb9e1f51dc9f2ece",
+        "a96d6caf49dbdf82e3dff89d23e9d97795460a7ba1122e9389c2959c04a90234",
     ),
     (
         // re-pin 2026-10-29 @d3ed36fdc77d: G14 at DAA 17400 moved testnet-12 params and schedule ids; the handshake identity stayed 5de80e64 (was dbbc9104…, 7c652212…)
@@ -232,11 +232,11 @@ const PINS: &[(&str, &str, &str, &str)] = &[
         "9410712f252cbb8aede7f1e337dc5f46c30f5c01914d0b8f2f714a26e69f1906",
     ),
     (
-        // re-pin 2026-10-29 @d3ed36fdc77d: G14 at DAA 17400 moved testnet-12 params and schedule ids; the handshake identity stayed 5de80e64 (was 31b913ef…, 9410712f…)
+        // re-pin 2026-10-30 @64535b7bf7e8: User selected DAA18400 for the unpublished G14 schedule on 2026-10-30; preserve the current main CI fixes (was 37e8b4bd…, 87bb1893…)
         "palw_t12_drill_params_v1 − IR flag day",
-        "37e8b4bdf3103b3c079ac15342eeb7b606ce5ea227d5cc4e640f02b6d3df08dd",
+        "aee83ae9e311d61aa96d789a5fef214bf6191c439ecf9b81f426d94f53315a77",
         "2254a5ae75cc1ed6fa70cc6f9a57281e7ab36aa8f80a820a545b81dad21549c6",
-        "87bb1893f531a73def768abde6590a37a8e0304f80edd865bf4601afbc587b5a",
+        "61278dafa0163ff10d4dcaabbae8780453c0236b850e4845dcb879c7bdef03f8",
     ),
 ];
 

@@ -36,11 +36,11 @@ fn ids(p: &Params) -> (String, String, String) {
 ///
 /// **Re-pinned 2026-09-25 for the lead cap** (`palw_clock_lead_cap`, armed from genesis on testnet-12,
 /// hashed Some-only into all three ids). Previous: `58c04756…` / `6388b87b…` / `2c2f7c0e…`.
-// re-pin 2026-10-29 @d3ed36fdc77d: G14 at DAA 17400 moved testnet-12 params and schedule ids; the handshake identity stayed 5de80e64 (was b272e2f5…, 11ce9af4…)
+// re-pin 2026-10-30 @64535b7bf7e8: User selected DAA18400 for the unpublished G14 schedule on 2026-10-30; preserve the current main CI fixes (was 7e5c3920…, d6d3287d…)
 const T12_AT_THE_PARENT_WITHOUT_THE_ATTRIBUTION: (&str, &str, &str) = (
-    "7e5c39206c85ca8c107e76d05c646b4426bfc621db97c2710e740acc68aad44f",
+    "d11a2f69957a9758873d77f632571160482fbd2c3403acc5ff992bf159a09cd0",
     "e36ebef71a24c0ee234a0db62506caff6a58461f6cce7ba48a6cf6be809c9035",
-    "d6d3287d5fcbb3aa3ca34c394140f0441b4d0f7154244aedb235fbc384135068",
+    "7502175e521d50244b5e1264e3e911d564904887f7ce727d9b2526b4ea6e811e",
 );
 
 /// **The ledger is the only thing this change moved on testnet-12.** Take it away (and the

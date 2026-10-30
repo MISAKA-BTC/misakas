@@ -98,8 +98,8 @@ fn every_shipped_ruleset_mirrors_nothing_so_every_rule_is_the_old_one() {
     let sp = shipped_sp();
     assert_eq!(sp.court_model_scope_from_daa(), None);
     assert_eq!(sp.public_evidence_reward_from_daa(), None);
-    let x3 = sp.claim_hard_deadline_v1().expect("shipped testnet-12 arms X3 at 17,400");
-    assert_eq!(x3.from_daa, 17_400);
+    let x3 = sp.claim_hard_deadline_v1().expect("shipped testnet-12 arms X3 at 18,400");
+    assert_eq!(x3.from_daa, 18_400);
     let below = claim(1_000, 11_000);
     let late = claim(u64::MAX / 2, u64::MAX / 2 + 10_000);
     assert!(!palw_claim_x3_governs_v1(&sp, &below));
@@ -601,7 +601,7 @@ fn d2_and_x3_are_refused_without_a_record_and_admitted_exactly_at_the_records_ne
     assert!(
         crate::palw_g14_gates_v1::PALW_G14_ARMING_RECORDS_V1
             .iter()
-            .all(|r| r.activation_daa == 17_400 && r.genesis == crate::config::genesis::PALW_T12_GENESIS.hash)
+            .all(|r| r.activation_daa == 18_400 && r.genesis == crate::config::genesis::PALW_T12_GENESIS.hash)
     );
     assert!(p.validate_palw_2026_10_12_ruling_fences_v1().is_err());
     // A record of the wrong form (zero review digest) is refused even when it names the right network and height.

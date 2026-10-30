@@ -112,28 +112,28 @@ fn g14_17000_list_keeps_everything_below_17000() {
             .palw_fences_v1()
             .iter()
             .filter_map(|(n, f)| f.map(|f| (*n, f.daa_score())))
-            .filter(|(_, h)| *h < 17_400)
+            .filter(|(_, h)| *h < 18_400)
             .map(|(n, h)| format!("{n}@{h}"))
             .collect();
         f.sort();
         f
     };
-    let sched = |q: &Params| q.fence_schedule_v1().into_iter().filter(|h| *h < 17_400).collect::<Vec<u64>>();
+    let sched = |q: &Params| q.fence_schedule_v1().into_iter().filter(|h| *h < 18_400).collect::<Vec<u64>>();
     assert_eq!(p.consensus_identity_id(), base.consensus_identity_id(), "handshake identity moved");
-    for daa in FORK_ID_DAAS {
+    for daa in FORK_ID_DAAS.into_iter().chain([17_400, 18_399]) {
         // `next` announces the upcoming fence (17,000 vs none) by design (ADR-0072 SA-2): a peer may differ there. `fired` may not.
         assert_eq!(fork_id_v1(&p, daa).fired, fork_id_v1(&base, daa).fired, "fired fork id at {daa} moved");
     }
-    assert_eq!(sched(&p), sched(&base), "schedule below 17,000 moved");
-    assert_eq!(below(&p), below(&base), "a fence below 17,000 moved");
-    assert!(p.fence_schedule_v1().contains(&17_400), "the list is not at 17,000");
+    assert_eq!(sched(&p), sched(&base), "schedule below 18,400 moved");
+    assert_eq!(below(&p), below(&base), "a fence below 18,400 moved");
+    assert!(p.fence_schedule_v1().contains(&18_400), "the list is not at 18,400");
     println!(
-        "FLEETDIAG g14-17000 armed: schedule_id armed={} shipped={}; fork_id@17000 armed={:?} shipped={:?}",
+        "FLEETDIAG g14-18400 armed: schedule_id armed={} shipped={}; fork_id@18400 armed={:?} shipped={:?}",
         p.consensus_schedule_id(),
         base.consensus_schedule_id(),
-        fork_id_v1(&p, 17_400),
-        fork_id_v1(&base, 17_400)
+        fork_id_v1(&p, 18_400),
+        fork_id_v1(&base, 18_400)
     );
-    // The fingerprint the preset will print once PALW_T12_G14_17000_FLAG_DAY_DAA = Some(17_400) (the kit's EXPECT_FP then).
+    // The fingerprint the preset will print once PALW_T12_G14_17000_FLAG_DAY_DAA = Some(18_400) (the kit's EXPECT_FP then).
     println!("FLEETDIAG armed EXPECT_FP={}", p.consensus_params_id());
 }

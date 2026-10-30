@@ -20,7 +20,7 @@ fn the_17000_list_covers_the_slice_six_families_and_panel_da() {
     }
     let shipped = palw_t12_shipped_params();
     let live: Vec<&str> =
-        shipped.palw_fences_v1().iter().filter(|(_, f)| f.is_some_and(|f| f.daa_score() < 17_400)).map(|(n, _)| *n).collect();
+        shipped.palw_fences_v1().iter().filter(|(_, f)| f.is_some_and(|f| f.daa_score() < 18_400)).map(|(n, _)| *n).collect();
     // Each family fence is either on the list or already in force on testnet-12 below 17,000 (`palw_fp_tokenizer_match` @5,300,
     // `palw_panel_da` @0) — never both (re-arming a live fence would fork below 17,000).
     for fam in FAMILIES.into_iter().chain([F::FpPanelDaDisclosure]) {
@@ -75,7 +75,7 @@ fn list_every_refusal_at_17000() {
 
 #[test]
 /// **DEPLOY GATE (E2E-K, 2026-10-28): the re-armed preset passes startup validation.** The shipped testnet-12 params with the G14
-/// list at 17,400 (what `PALW_T12_G14_17000_FLAG_DAY_DAA = Some(17_400)` assembles) must pass `validate_palw_v2()` — the check the
+/// list at 18,400 (what `PALW_T12_G14_17000_FLAG_DAY_DAA = Some(18_400)` assembles) must pass `validate_palw_v2()` — the check the
 /// preset assembly and `ConfigBuilder::build` run at node startup — with the binary's PINNED records: every gated fence of the list
 /// has its record (G14, kernel route, RFC-0018 / Gate C, model tier) and the TIR frame cost record names a real source commit.
 /// RED until the final evidence run is pinned; the flag day is not re-armed until it is green.
@@ -202,17 +202,17 @@ fn every_pinned_waiver_fits_its_slot_and_is_never_a_run() {
     }
 }
 
-/// **Every pinned waiver is bound to the flag day (17,400)**: the same waiver at any other height is refused, never a run.
+/// **Every pinned waiver is bound to the flag day (18,400)**: the same waiver at any other height is refused, never a run.
 #[test]
 fn waiver_height_binds_flag_day() {
     use kaspa_consensus_core::palw_g14_gates_v1::PALW_G14_ARMING_RECORDS_V1;
     let at = PALW_T12_G14_17000_DAA_V1;
-    assert_eq!(at, 17_400);
+    assert_eq!(at, 18_400);
     for w in PALW_ARMING_WAIVERS_V1 {
         assert_eq!(w.activation_daa, at, "{} slot {} is pinned at another height", w.fence, w.requirement);
         let text = requirement_text(w.fence, w.requirement);
         let d = w.digest();
-        for other in [16_600, 17_000, at - 1, at + 1] {
+        for other in [16_600, 17_000, 17_400, at - 1, at + 1] {
             let there = palw_arming_evidence_kind_v1(w.fence, w.genesis, other, w.requirement, text, &d, PALW_ARMING_WAIVERS_V1);
             assert!(there.is_err(), "{} slot {} at {other} must be refused, got {there:?}", w.fence, w.requirement);
         }
@@ -224,7 +224,7 @@ fn waiver(kind: PalwArmingWaiverKindV1, value: &'static str) -> PalwArmingWaiver
     PalwArmingWaiverV1 {
         fence: "palw_court_capacity_v1",
         genesis: palw_t12_shipped_params().genesis.hash,
-        activation_daa: 17_400,
+        activation_daa: 18_400,
         requirement: 1,
         kind,
         value,
@@ -352,4 +352,62 @@ fn waiver_cannot_satisfy_requirement_passed() {
         named(&mut p, name);
     }
     assert_eq!(p.validate_palw_v2_with_arming_records_v1(&records), Ok(()), "the approved estimate is accepted");
+}
+
+/// The old unpublished height must not fire this list. The activation is one
+/// exact boundary; int-13's already-running entries keep their own history.
+#[test]
+fn unpublished_g14_moves_only_its_boundary_to_18400() {
+    use kaspa_consensus_core::config::params::{PALW_T12_G14_18400_DAA_V1, palw_t12_fence_held_by_int13_v1};
+    let p = palw_t12_shipped_params();
+    assert_eq!(PALW_T12_G14_18400_DAA_V1, 18_400);
+    assert_eq!(PALW_T12_G14_17000_DAA_V1, PALW_T12_G14_18400_DAA_V1);
+    let fences = p.palw_fences_v1();
+    for entry in PALW_T12_G14_17000_FENCES_V1 {
+        if entry.name == "palw_tir_frame_cost_v1" {
+            // This list also installs an approved value, not an independent
+            // activation fence. Its readiness record binds the actual public
+            // conviction fence whose boundary is checked by the loop below.
+            let cost = kaspa_consensus_core::palw_g14_values_v1::PALW_G14_TIR_FRAME_COST_ESTIMATE_V1;
+            assert_eq!(p.palw_tir_frame_cost_v1, Some(cost));
+            assert!(
+                kaspa_consensus_core::palw_tir_frame_cost_v1::PALW_TIR_FRAME_COST_RECORDS_V1
+                    .iter()
+                    .any(|r| r.genesis == p.genesis.hash && r.activation_daa == 18_400 && r.cost == cost)
+            );
+            continue;
+        }
+        let at = fences
+            .iter()
+            .find(|(name, _)| *name == entry.name)
+            .and_then(|(_, at)| *at)
+            .unwrap_or_else(|| panic!("{} must have an actual activation", entry.name));
+        if palw_t12_fence_held_by_int13_v1(entry) {
+            assert_eq!(at.daa_score(), 15_500);
+            continue;
+        }
+        assert_eq!(at.daa_score(), 18_400, "{}", entry.name);
+        assert!(!at.is_active(17_400), "{} fired at unpublished predecessor", entry.name);
+        assert!(!at.is_active(18_399), "{} fired early", entry.name);
+        assert!(at.is_active(18_400) && at.is_active(18_401), "{} misses its actual boundary", entry.name);
+    }
+    assert!(!p.fence_schedule_v1().contains(&17_400));
+    p.validate_palw_v2().expect("all existing startup guards remain enabled");
+}
+
+#[test]
+fn moving_existing_g14_does_not_pretend_unfinished_additional_fences_are_enabled() {
+    let p = palw_t12_shipped_params();
+    assert_eq!(kaspa_consensus_core::config::params::PALW_T12_FULL_ACTIVATION_DAA, None);
+    assert!(
+        p.palw_fences_v1().iter().all(|(name, at)| *name != "palw_court_family_supplier_v1" || at.is_none()),
+        "the isolated release adds no RFC42 fence or implementation"
+    );
+    assert!(p.palw_claim_local_settlement_v1.is_none());
+    assert!(p.palw_unresolved_bound_v1.is_none());
+    assert!(p.palw_native_execution_v39.is_none() && p.palw_native_mining_v39.is_none());
+    assert!(p.palw_selected_source_bootstrap_v1.is_none() && p.palw_paid_bootstrap_source_v6.is_none());
+    assert!(p.palw_settlement_once_v1.is_none());
+    assert!(p.palw_reporter_income_v2.is_none() && p.palw_material_income_v3.is_none());
+    assert!(p.palw_fp_answer_accounting_v1.is_none());
 }

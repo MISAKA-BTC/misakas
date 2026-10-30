@@ -20,8 +20,8 @@ kaspad --testnet --netsuffix=12
 
 The [published G14-only candidate](https://github.com/MISAKA-BTC/misakas/releases/tag/testnet12-g14-17400-655b6cf3a) is built from
 `655b6cf3a8f61ebdce920af867f6bedd87e717d6`, with G14 scheduled at **DAA 17,400**. Its fingerprint is
-**`73e67678a432effb4a982386d67383b95cf172babdde3e6f86c31cf3268d5bd5`**, genesis
-`a27f8f44fe4d91a5…`, and schedule id `fd42c16706195ec0a6fa63902e1bd612303136b342bd29424e28be22599a5f2e`.
+**`3e6da238306cfdb7e71599d5ef8fb314f1b3ff33a50673af1321f3da9cfa5b94`**, genesis
+`a27f8f44fe4d91a5…`, and schedule id `b4706ae535fc2c9e4f0a0fe1b6cb0456025f3e00c1b8aba5cde02191f46f9194`.
 The Linux x86-64 binaries, SHA-256 sums and evidence are attached to that release.
 
 This is the verified G14 candidate, not completion of the ongoing full-feature implementation. The latest recorded fleet state is the

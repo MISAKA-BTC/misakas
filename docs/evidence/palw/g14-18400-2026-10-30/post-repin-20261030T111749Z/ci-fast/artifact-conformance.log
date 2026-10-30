@@ -1,0 +1,11 @@
+  refused  midi: header declares 2 tracks, file has 1
+             -> the header declares 2 tracks and the file has 1
+  refused  midi: end-of-track short of the chunk end
+             -> end-of-track lands at 26, the chunk ends at 27
+  refused  glb: declared total length is 4 bytes over
+             -> header says 188 bytes, the file is 184
+  refused  stl: count says 3, file holds 1
+             -> file is 134 bytes, not 84 + 50 x 3 = 234
+  refused  glb: alpha 0.5 with the OPAQUE default — conformant, and renders solid
+             -> material 0 (half-transparent blue) has baseColorFactor alpha 0.5 and alphaMode OPAQUE: OPAQUE means the alpha channel is IGNORED (glTF 2.0 SS3.9.4), so this renders solid
+selftest: every injury refused by name

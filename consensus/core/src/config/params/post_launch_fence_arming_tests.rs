@@ -3,12 +3,12 @@
 use super::*;
 
 /// `palw_t12_launch_params_v1`: shipped params with the post-launch lists dormant. G14 at DAA
-/// 17,400 stays armed there, so this is that constructor's hash (2026-10-28), not the 2026-09-25
+/// 18,400 stays armed there, so this is that constructor's hash (height rebind 2026-10-30), not the 2026-09-25
 /// launch bytes. Identity is still the launch identity.
 const T12_LAUNCH_IDS: (&str, &str, &str) = (
-    "0fb6444822f57e424a6617a013f502d29d8fd8acddd33cae43066c0d84041ef5",
+    "322104e40468fc3382ed325e2faf0c86846e11df52d3d6c99806d596fb2d663b",
     "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-    "3299840cfad1ec9eb3a2c63c0a2355e7759c9dedc4799b5eeb9e1f51dc9f2ece",
+    "a96d6caf49dbdf82e3dff89d23e9d97795460a7ba1122e9389c2959c04a90234",
 );
 
 fn entry(name: &str) -> &'static PalwPostLaunchFenceV1 {

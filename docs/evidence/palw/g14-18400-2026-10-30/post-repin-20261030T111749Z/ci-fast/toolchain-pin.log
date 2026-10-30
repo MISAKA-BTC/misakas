@@ -1,0 +1,25 @@
+== PIN: the compiler every job installs ==
+  rust-toolchain.toml pins channel 1.93.0
+  .github/workflows/ci.yaml:139: toolchain: ${{ env.RUST_CHANNEL }}  OK
+  .github/workflows/ci.yaml:209: toolchain: ${{ env.RUST_CHANNEL }}  OK
+  .github/workflows/ci.yaml:351: toolchain: ${{ env.RUST_CHANNEL }}  OK
+  .github/workflows/ci.yaml:476: toolchain: ${{ env.RUST_CHANNEL }}  OK
+  .github/workflows/ci.yaml:564: toolchain: ${{ env.RUST_CHANNEL }}  OK
+  .github/workflows/ci.yaml:608: toolchain: ${{ env.RUST_CHANNEL }}  OK
+  .github/workflows/ci.yaml:646: toolchain: ${{ env.RUST_CHANNEL }}  OK
+  .github/workflows/ci.yaml:713: toolchain: ${{ env.RUST_CHANNEL }}  OK
+  .github/workflows/ci.yaml:802: toolchain: ${{ env.RUST_CHANNEL }}  OK
+  .github/workflows/ci.yaml:893: toolchain: ${{ env.RUST_CHANNEL }}  OK
+  .github/workflows/ci.yaml:957: toolchain: ${{ env.RUST_CHANNEL }}  OK
+  .github/workflows/deploy.yaml:66: toolchain: ${{ env.RUST_CHANNEL }}  OK
+  .github/workflows/deploy.yaml:343: toolchain: ${{ env.RUST_CHANNEL }}  OK
+  .github/workflows/deploy.yaml:372: toolchain: ${{ env.RUST_CHANNEL }}  OK
+  checked 3 workflow file(s), 14 toolchain step(s)
+  container images: 5 `FROM rust:` base(s) under docker/, 0 on 1.93.0
+    docker/Dockerfile.kaspa-wallet:3  rust:1.90  -- base is 1.90; the toml still forces 1.93.0 inside the container, but `cargo chef cook` runs before the toml is copied, so the cached dependency layer is built by 1.90 and rebuilt
+    docker/Dockerfile.kaspad:3  rust:1.90  -- base is 1.90; the toml still forces 1.93.0 inside the container, but `cargo chef cook` runs before the toml is copied, so the cached dependency layer is built by 1.90 and rebuilt
+    docker/Dockerfile.rothschild:3  rust:1.90  -- base is 1.90; the toml still forces 1.93.0 inside the container, but `cargo chef cook` runs before the toml is copied, so the cached dependency layer is built by 1.90 and rebuilt
+    docker/Dockerfile.simpa:3  rust:1.90  -- base is 1.90; the toml still forces 1.93.0 inside the container, but `cargo chef cook` runs before the toml is copied, so the cached dependency layer is built by 1.90 and rebuilt
+    docker/Dockerfile.stratum-bridge:3  rust:1.90  -- base is 1.90; the toml still forces 1.93.0 inside the container, but `cargo chef cook` runs before the toml is copied, so the cached dependency layer is built by 1.90 and rebuilt
+  (not a violation: this check governs .github/workflows only)
+PIN OK: 14 toolchain step(s) in 3 workflow file(s) all install 1.93.0

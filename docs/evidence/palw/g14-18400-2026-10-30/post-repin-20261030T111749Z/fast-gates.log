@@ -1,0 +1,64 @@
+ci-gates: /Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/g14-18400-deploy
+ci-gates: toolchain rustc 1.93.0 (254b59607 2026-01-19)
+ci-gates: gates -> toolchain-pin workflow-parity artifact-conformance artifact-stranger artifact-roundtrip artifact-thirdparty
+
+=== gate toolchain-pin        [Toolchain pin]  rust-toolchain.toml exists, and no workflow job installs a floating toolchain
+    $ gate_toolchain_pin
+    evidence: 1 of 1 required pattern(s) found in the log
+      rust-toolchain.toml pins channel 1.93.0
+      checked 3 workflow file(s), 14 toolchain step(s)
+    PIN OK: 14 toolchain step(s) in 3 workflow file(s) all install 1.93.0
+    -> ok  (log: docs/evidence/palw/g14-18400-2026-10-30/post-repin-20261030T111749Z/ci-fast/toolchain-pin.log)
+
+=== gate workflow-parity      [Gates (parity)]  every build gate below is spelled the same way in ci.yaml
+    $ gate_workflow_parity
+    evidence: 1 of 1 required pattern(s) found in the log
+      checked 14 build gate(s) and 25 ci.yaml judgment(s) against .github/workflows/ci.yaml
+    PARITY OK: 14 build gate(s) spelled identically in ci.yaml, and all 25 judgment(s) ci.yaml makes are either offered by the script or excused by name
+    -> ok  (log: docs/evidence/palw/g14-18400-2026-10-30/post-repin-20261030T111749Z/ci-fast/workflow-parity.log)
+
+=== gate artifact-conformance [Derived artifacts]  the format checker refuses five specific injuries BY NAME
+    $ gate_artifact_conformance
+    evidence: 6 of 6 required pattern(s) found in the log
+      refused  midi: header declares 2 tracks, file has 1
+      refused  midi: end-of-track short of the chunk end
+      refused  glb: declared total length is 4 bytes over
+      refused  stl: count says 3, file holds 1
+      refused  glb: alpha 0.5 with the OPAQUE default — conformant, and renders solid
+    selftest: every injury refused by name
+    -> ok  (log: docs/evidence/palw/g14-18400-2026-10-30/post-repin-20261030T111749Z/ci-fast/artifact-conformance.log)
+
+=== gate artifact-stranger    [Derived artifacts]  the Python re-derivation agrees with the shipped Rust's own oracles
+    $ gate_artifact_stranger
+    evidence: 6 of 6 required pattern(s) found in the log
+    -> ok  (log: docs/evidence/palw/g14-18400-2026-10-30/post-repin-20261030T111749Z/ci-fast/artifact-stranger.log)
+
+=== gate artifact-roundtrip   [Derived artifacts]  artifacts re-derived in Python are then opened by the format checker
+    $ gate_artifact_roundtrip
+    evidence: 4 of 4 required pattern(s) found in the log
+    covered kinds: 1 MIDI, 1 STL, 0 GLB (the stranger does not implement scene/glb/v1)
+      OK   stranger-e55f61bc90a57f44.artifact.mid      269 B  format 1, 3 track(s), 96 ppq, 20 note-on(s)
+      OK   stranger-5565f116d1627f5d.artifact.stl    4,684 B  92 triangle(s), 0 degenerate, exact 84+50n layout
+    -> ok  (log: docs/evidence/palw/g14-18400-2026-10-30/post-repin-20261030T111749Z/ci-fast/artifact-roundtrip.log)
+
+=== gate artifact-thirdparty  [Derived artifacts]  foreign parsers (mido, numpy-stl) agree with the DSL about MEANING
+    $ gate_artifact_thirdparty
+    evidence: 5 of 5 required pattern(s) found in the log
+    interpreter: python3 (3.9.6)
+    interpreter: /Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/g14-18400-deploy/target/ci-gates/thirdparty-venv/bin/python (provisioned)
+    libraries: mido 1.3.3 / numpy-stl 3.2.0
+    AGREE stranger-5565f116d1627f5d.artifact.stl       numpy-stl: {"triangles": 92, "volume": "not checked: only `extrude` has a closed form here"}
+    AGREE stranger-e55f61bc90a57f44.artifact.mid       mido: {"format": 1, "tracks": 3, "ppq": 96, "note_ons": 20, "seconds": 9.6}
+    2 agreed, 0 disagreed, 0 unchecked
+    -> ok  (log: docs/evidence/palw/g14-18400-2026-10-30/post-repin-20261030T111749Z/ci-fast/artifact-thirdparty.log)
+
+===============================================================
+ci-gates summary (6 passed, 0 FAILED)
+  toolchain-pin          ok
+  workflow-parity        ok
+  artifact-conformance   ok
+  artifact-stranger      ok
+  artifact-roundtrip     ok
+  artifact-thirdparty    ok
+===============================================================
+ci-gates: GREEN -- 6 gate(s) passed, and 6 were selected.

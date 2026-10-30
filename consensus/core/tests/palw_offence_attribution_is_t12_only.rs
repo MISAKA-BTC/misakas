@@ -86,11 +86,11 @@ const BEFORE_THE_ATTRIBUTION: &[(&str, &str, &str, &str)] = &[
 /// HIGH): armed from genesis on testnet-12 and hashed Some-only into all three ids;
 /// `palw_clock_lead_cap_is_t12_only` pins that taking it away returns testnet-12's previous ids.
 /// Previous: `05173205…` / `df02039d…` / `beeaa0a8…`.
-// re-pin 2026-10-29 @d3ed36fdc77d: G14 at DAA 17400 moved testnet-12 params and schedule ids; the handshake identity stayed 5de80e64 (was b09de8cf…, b7500a13…)
+// re-pin 2026-10-30 @64535b7bf7e8: User selected DAA18400 for the unpublished G14 schedule on 2026-10-30; preserve the current main CI fixes (was 05e77c24…, e8090e8b…)
 const T12_BEFORE_THE_ATTRIBUTION: (&str, &str, &str) = (
-    "05e77c24b7c06d9951748687527510d969f14af58101dfad9f9e0a2638940dfc",
+    "88a30d08798d7b030d2088648fd3f894f6c2a585d072e467b93af5e10da0df2c",
     "7be7b92fd3583a6d288ebcd417d3f2cee9ab7d86f13967c19ee28c9aec08c62f",
-    "e8090e8bf6a61ce108d44a748d4b5b42a60ebb324c2abe74baad5d20d00e941d",
+    "bb2a4742a1c042d4b3d22a6c2c0c96c20be7d90f7ef19d2b57310563ba0ee7e5",
 );
 
 /// testnet-12 with this fence AND `palw_class_verify_deadline` taken away — the depth re-derived
@@ -105,11 +105,11 @@ const T12_BEFORE_THE_ATTRIBUTION: (&str, &str, &str) = (
 ///
 /// **Re-pinned 2026-09-25 with [`T12_BEFORE_THE_ATTRIBUTION`], for the lead cap**
 /// (`palw_clock_lead_cap`). Previous: `2343195d…` / `1e06025d…` / `b08b25bd…`.
-// re-pin 2026-10-29 @d3ed36fdc77d: G14 at DAA 17400 moved testnet-12 params and schedule ids; the handshake identity stayed 5de80e64 (was ca795cfd…, d414fa7a…)
+// re-pin 2026-10-30 @64535b7bf7e8: User selected DAA18400 for the unpublished G14 schedule on 2026-10-30; preserve the current main CI fixes (was 0dedee88…, c859f523…)
 const T12_BEFORE_THE_ATTRIBUTION_AND_THE_DEADLINE: (&str, &str, &str) = (
-    "0dedee88b5b33d46ad7fc98248f759497d451d6abf1a72bb83ff1714c0432c18",
+    "2cc9c900ed74603cd6ee5483a02dd96cccd7c0a024eedb8f75b3bf6f198f051e",
     "0d7ca2bade522865cc0c3f464262b90834064de57ad1c984ecdbf11b3cab9c8c",
-    "c859f5232fd65d5b4a3fb54118b2e42b6219e57e61cd44e50b426cd96d460fef",
+    "310125bbd6758c970a1309490c0b8e25e0ccf7f365be7b00c3de0393a9b6b989",
 );
 
 fn shipped(name: &str) -> Params {

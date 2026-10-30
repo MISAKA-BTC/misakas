@@ -39,11 +39,11 @@ use kaspa_consensus_core::fork_id_v1::{evaluate_fork_id_v1, fork_id_gate_fences_
 /// `PALW_T12_POST_LAUNCH_FENCES_V1` (this one among them) at DAA 750, re-pinned by `scripts/release/t12-repin.sh`
 /// with it (the launch release was `b8564b88…` / `5de80e64…` / `93da24cc…`, which
 /// `palw_t12_launch_params_v1()` still hashes to): params, identity, schedule.
-// re-pin 2026-10-29 @d3ed36fdc77d: G14 at DAA 17400 moved testnet-12 params and schedule ids; the handshake identity stayed 5de80e64 (was 5ee7fd8e…, 1678e073…)
+// re-pin 2026-10-30 @64535b7bf7e8: User selected DAA18400 for the unpublished G14 schedule on 2026-10-30; preserve the current main CI fixes (was 73e67678…, fd42c167…)
 const T12_RELEASE: (&str, &str, &str) = (
-    "73e67678a432effb4a982386d67383b95cf172babdde3e6f86c31cf3268d5bd5",
+    "3e6da238306cfdb7e71599d5ef8fb314f1b3ff33a50673af1321f3da9cfa5b94",
     "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-    "fd42c16706195ec0a6fa63902e1bd612303136b342bd29424e28be22599a5f2e",
+    "b4706ae535fc2c9e4f0a0fe1b6cb0456025f3e00c1b8aba5cde02191f46f9194",
 );
 
 /// The post-launch release's height (DAA 750) and two more an operator might pick. Never 1,000 —

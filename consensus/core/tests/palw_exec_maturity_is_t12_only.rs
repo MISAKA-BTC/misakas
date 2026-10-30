@@ -68,20 +68,20 @@ const UNMOVED: &[(&str, &str, &str, &str)] = &[
 /// `palw_offence_attribution_is_t12_only`, `evm_bridge_ledger_is_t12_only` and
 /// `t12_mainnet_values_moved_only_these` hold unchanged with it taken away — so nothing else moved).
 /// The re-pin (`scripts/release/t12_repin.py`, `maturity.*`) moves it with every other twin.
-// re-pin 2026-10-29 @d3ed36fdc77d: G14 at DAA 17400 moved testnet-12 params and schedule ids; the handshake identity stayed 5de80e64 (was 199d11f3…, 47f346f0…)
+// re-pin 2026-10-30 @64535b7bf7e8: User selected DAA18400 for the unpublished G14 schedule on 2026-10-30; preserve the current main CI fixes (was 4bcf0e45…, 684f43a7…)
 const T12_WITHOUT_THE_MATURITY: (&str, &str, &str) = (
-    "4bcf0e454d1913b6541dc08b6e8a76446b6013a1649a5ca6dbfb84bb88c22c15",
+    "3be11627f5162fbe83ad836e742dc7cff19119a1296a068dd05d1c344e3f72d7",
     "e4add02e255f61615fbe0195a08ea893614bc4a234f4c635a0706d9e3b3d7b53",
-    "684f43a7e10e670fcc9b92ccabe3aa2b51b09e686363f8d4e55d4f3ff66a631b",
+    "a80e4aaf0d8dee128122b1ea3a957629814561cfd61a2c2f3d2f71db01594e99",
 );
 
 /// testnet-12 with the 120-DAA maturity: the shipped preset's full ids (= `palw_readiness_horizon_is_t12_only`'s
 /// `T12_WITH_THE_HORIZON`). Taken from this test's own output.
-// re-pin 2026-10-29 @d3ed36fdc77d: G14 at DAA 17400 moved testnet-12 params and schedule ids; the handshake identity stayed 5de80e64 (was 5ee7fd8e…, 1678e073…)
+// re-pin 2026-10-30 @64535b7bf7e8: User selected DAA18400 for the unpublished G14 schedule on 2026-10-30; preserve the current main CI fixes (was 73e67678…, fd42c167…)
 const T12_WITH_THE_MATURITY: (&str, &str, &str) = (
-    "73e67678a432effb4a982386d67383b95cf172babdde3e6f86c31cf3268d5bd5",
+    "3e6da238306cfdb7e71599d5ef8fb314f1b3ff33a50673af1321f3da9cfa5b94",
     "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-    "fd42c16706195ec0a6fa63902e1bd612303136b342bd29424e28be22599a5f2e",
+    "b4706ae535fc2c9e4f0a0fe1b6cb0456025f3e00c1b8aba5cde02191f46f9194",
 );
 
 fn shipped(name: &str) -> Params {

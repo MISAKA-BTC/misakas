@@ -139,10 +139,10 @@ fn the_list_is_tier_one_and_armed_nowhere_on_the_shipped_ruleset() {
         assert!(schedule.contains(&earlier), "{earlier}: an earlier flag day, still scheduled ({schedule:?})");
     }
     assert!(schedule.contains(&flag), "int-13 stays on the shipped schedule ({schedule:?})");
-    assert_eq!(schedule.last().copied(), Some(17_400), "the G14 flag day is the schedule's last ({schedule:?})");
+    assert_eq!(schedule.last().copied(), Some(18_400), "the G14 flag day is the schedule's last ({schedule:?})");
     let mut int12 = palw_t12_release_v6_params().fence_schedule_v1();
     int12.push(flag);
-    int12.push(17_400);
+    int12.push(18_400);
     int12.sort_unstable();
     int12.dedup();
     assert_eq!(schedule, int12, "the shipped schedule is the int-12 release's plus int-13 and the G14 flag day");
@@ -171,7 +171,7 @@ fn the_list_is_tier_one_and_armed_nowhere_on_the_shipped_ruleset() {
     }
     let armed_schedule = armed.fence_schedule_v1();
     assert!(armed_schedule.contains(&H), "the test height is on the armed schedule ({armed_schedule:?})");
-    assert_eq!(armed_schedule.last(), Some(&17_400), "the G14 flag day stays the schedule's last ({armed_schedule:?})");
+    assert_eq!(armed_schedule.last(), Some(&18_400), "the G14 flag day stays the schedule's last ({armed_schedule:?})");
     assert_eq!(armed_schedule.iter().filter(|h| **h == H).count(), 1, "one height for the whole list");
 }
 
@@ -231,7 +231,7 @@ fn testnet12_ships_the_list_dormant_and_arming_it_moves_the_fingerprint_and_noth
             assert_eq!(now.map(|f| f.daa_score()), PALW_T12_INT13_DAA, "{name} is armed at 15,500");
         } else if PALW_T12_G14_17000_FENCES_V1.iter().any(|entry| entry.name == name) {
             assert_eq!(was, None, "{name} is later than the int-12 baseline");
-            assert_eq!(now.map(|f| f.daa_score()), Some(17_400), "{name} arms at the G14 flag day");
+            assert_eq!(now.map(|f| f.daa_score()), Some(18_400), "{name} arms at the G14 flag day");
         } else {
             assert_eq!(now, was, "{name}: the flag day moves only its own list");
         }

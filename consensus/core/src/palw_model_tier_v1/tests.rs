@@ -51,7 +51,7 @@ fn the_fence_is_dormant_some_only_and_refused_when_armed() {
     let shipped = t12();
     assert_eq!(
         shipped.palw_model_tier_v1.as_ref().map(|f| f.activation.daa_score()),
-        Some(17_400),
+        Some(18_400),
         "testnet-12 arms the tier at the G14 flag day"
     );
     for p in [MAINNET_PARAMS, TESTNET_PARAMS] {
@@ -411,7 +411,7 @@ fn rfcgap_b_tier_arm_record_gate_is_exact_and_the_pinned_list_is_empty() {
     assert!(
         PALW_MODEL_TIER_ARMING_RECORDS_V1
             .iter()
-            .all(|r| r.activation_daa == 17_400 && r.genesis == crate::config::genesis::PALW_T12_GENESIS.hash)
+            .all(|r| r.activation_daa == 18_400 && r.genesis == crate::config::genesis::PALW_T12_GENESIS.hash)
     );
     assert_eq!(PALW_MODEL_TIER_ARMING_REQUIREMENTS_V1.len(), 8);
     static EVIDENCE: [[u8; 32]; 8] = [[1; 32], [2; 32], [3; 32], [4; 32], [5; 32], [6; 32], [7; 32], [8; 32]];

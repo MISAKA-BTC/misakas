@@ -1,0 +1,42 @@
+== PARITY: every build gate is spelled the same way in ci.yaml, both directions ==
+  -- gates the script offers, looked up in ci.yaml --
+  fmt              `cargo fmt --all -- --check`  found in ci.yaml
+  clippy           `cargo clippy --tests --benches --examples -- -D warnings`  found in ci.yaml
+  pq_guard         `bash scripts/ci/pq-ci-guard.sh`  found in ci.yaml
+  check            `cargo check --tests --benches`  found in ci.yaml
+  nextest          `cargo nextest run --partition "hash:${NEXTEST_SHARD:-1/1}"`  found in ci.yaml
+  derive_suite     `cargo test -p misaka-palw-derive`  found in ci.yaml
+  doctest          `cargo test --doc`  found in ci.yaml
+  hashes_no_asm    `cargo nextest run -p kaspa-hashes --features=no-asm --benches`  found in ci.yaml
+  doc              `cargo doc --no-deps`  found in ci.yaml
+  build_devnet_prealloc `cargo build --features devnet-prealloc --tests --benches`  found in ci.yaml
+  check_evm_send   `cargo check --locked -p misaka-cli --bin misaka --features evm-send`  found in ci.yaml
+  doctest_hashes_no_asm `cargo test --doc -p kaspa-hashes --features=no-asm`  found in ci.yaml
+  example_kip10    `cargo run -p kaspa-txscript --example kip-10 --features legacy-secp256k1`  found in ci.yaml
+  context_vectors  `cargo test --release -p misaka-palw-base0 --lib -- --ignored context_vector`  found in ci.yaml
+  -- judgments ci.yaml makes, looked up in the script --
+    excused  `bash scripts/ci-gates.sh --group fast`
+               this IS the script; a gate that runs the runner would recurse
+    excused  `bash scripts/ci/ci-gates-selftest.sh`
+               it rewrites tracked files and restores them with `git checkout -- .` -- safe on an ephemeral CI checkout, a trap on a laptop, so it refuses on a dirty tree and stays out of the pre-push command. Run it deliberately: `bash scripts/ci/ci-gates-selftest.sh`
+    excused  `cargo build --bin kaspad --bin rothschild --bin kaspa-wallet --bin stratum-bridge --release --target x86_64-unknown-linux-musl`
+               Build Linux Release -- runs after `source musl-toolchain/build.sh`, a cross toolchain this script does not build
+    excused  `cargo build --locked --release -p misaka-cli --bin misaka`
+               Check (x86_64-pc-windows-msvc)/release smoke -- a --release artifact for a `--help` run, not a verdict; `check-evm-send` compiles the same crate in debug
+    excused  `cargo build --locked --target x86_64-pc-windows-msvc -p kaspad --bin kaspad -p misaka-cli --bin misaka`
+               Check (x86_64-pc-windows-msvc) -- same runner, and it builds the exes the --help smoke opens
+    excused  `cargo build -p misaka-cli --bin misaka --release --target x86_64-unknown-linux-musl`
+               Build Linux Release -- same musl cross toolchain
+    excused  `cargo check --locked --tests --benches --target x86_64-pc-windows-msvc`
+               Check (x86_64-pc-windows-msvc) -- needs windows-latest, not a runner a contributor has
+    excused  `cargo check -p kaspa-addresses --no-default-features --target thumbv7em-none-eabi`
+               Check no_std -- the job installs the target with `rustup target add`; this script does not silently add targets to a contributor's toolchain
+    excused  `cargo clippy -p kaspa-wallet-cli-wasm --target wasm32-unknown-unknown`
+               Check WASM32 -- needs `rustup target add wasm32-unknown-unknown`
+    excused  `cargo clippy -p kaspa-wasm --target wasm32-unknown-unknown`
+               Check WASM32 -- needs `rustup target add wasm32-unknown-unknown`
+    excused  `cargo clippy -p kaspa-wrpc-wasm --target wasm32-unknown-unknown`
+               Check WASM32 -- needs `rustup target add wasm32-unknown-unknown`
+    25 judgment(s) in ci.yaml: 14 offered by the script, 11 excused by name, 0 unrunnable
+  checked 14 build gate(s) and 25 ci.yaml judgment(s) against .github/workflows/ci.yaml
+PARITY OK: 14 build gate(s) spelled identically in ci.yaml, and all 25 judgment(s) ci.yaml makes are either offered by the script or excused by name

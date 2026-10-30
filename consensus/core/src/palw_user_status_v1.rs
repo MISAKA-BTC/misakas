@@ -319,7 +319,7 @@ pub fn palw_arming_json_v1(params: &PalwStateParamsV2, now: u64) -> Value {
         })
         .collect();
     let mut by_fence: std::collections::BTreeMap<&str, (u64, usize, usize, usize)> = Default::default();
-    for w in crate::palw_t12_17000_records_v1::PALW_T12_17000_WAIVERS_V1 {
+    for w in crate::palw_t12_18400_records_v1::PALW_T12_18400_WAIVERS_V1 {
         let e = by_fence.entry(w.fence).or_insert((w.activation_daa, 0, 0, 0));
         e.1 += 1;
         match w.kind {

@@ -712,7 +712,7 @@ mod tests {
     fn anchor_identity_rejects_a_different_fence_schedule() {
         let network = NetworkId::with_suffix(NetworkType::Testnet, 12);
         let params = Params::from(network);
-        assert_eq!(params.fence_schedule_v1(), vec![750, 1000, 1300, 1700, 2000, 3600, 5300, 5395, 5490, 5585, 15500, 17400]);
+        assert_eq!(params.fence_schedule_v1(), vec![750, 1000, 1300, 1700, 2000, 3600, 5300, 5395, 5490, 5585, 15500, 18400]);
         let expected = AnchorIdentity::from_params(&params);
         let mut peer = Version::new(
             None,

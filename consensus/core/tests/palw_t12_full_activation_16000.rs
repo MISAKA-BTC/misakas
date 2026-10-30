@@ -149,7 +149,7 @@ fn the_list_is_the_int13_list_then_the_g14_fences_in_prerequisite_order() {
     }
     for missing in MISSING_PREREQUISITES {
         assert!(index(missing).is_none(), "{missing} is a documented missing prerequisite, not an entry");
-        let want = if *missing == "palw_model_bond_allocation_v1" { Some(17_400) } else { None };
+        let want = if *missing == "palw_model_bond_allocation_v1" { Some(18_400) } else { None };
         assert_eq!(fence_at(&shipped, missing), want, "{missing} on the shipped ruleset");
     }
     // `palw_shard_court` is a genesis rule of the held regime on testnet-12: not on the list (moving it would move a genesis rule).
@@ -170,7 +170,7 @@ fn with_the_height_none_the_shipped_ruleset_is_the_fleets_int13_release() {
         let want = if int13.contains(&name) {
             Some(15_500)
         } else if g14.contains(&name) {
-            Some(17_400)
+            Some(18_400)
         } else {
             None
         };
@@ -182,14 +182,14 @@ fn with_the_height_none_the_shipped_ruleset_is_the_fleets_int13_release() {
     let mut again = shipped.clone();
     palw_t12_arm_after_int13_at_v1(&mut again, PALW_T12_G14_17000_FENCES_V1, None);
     assert_eq!(ids(&again), ids(&palw_t12_release_v7_params()), "clearing the G14 list is the v7 baseline");
-    palw_t12_arm_after_int13_at_v1(&mut again, PALW_T12_G14_17000_FENCES_V1, Some(17_400));
+    palw_t12_arm_after_int13_at_v1(&mut again, PALW_T12_G14_17000_FENCES_V1, Some(18_400));
     assert_eq!(ids(&again), ids(&shipped), "re-arming the G14 list restores the shipped ruleset");
 }
 
 #[test]
 fn sixteen_thousand_is_used_by_no_other_list_or_schedule() {
     let target = PALW_T12_FULL_ACTIVATION_TARGET_DAA_V1;
-    assert_eq!(target, 17_400);
+    assert_eq!(target, 18_400);
     assert!(!OTHER_HEIGHTS.contains(&target));
     for other in [
         PALW_T12_INT11_FLAG_DAY_DAA,
@@ -203,10 +203,10 @@ fn sixteen_thousand_is_used_by_no_other_list_or_schedule() {
     let g14: Vec<&str> = PALW_T12_G14_17000_FENCES_V1.iter().map(|f| f.name).collect();
     let int13: Vec<&str> = PALW_T12_INT13_FENCES_V1.iter().map(|f| f.name).collect();
     for p in [palw_t12_shipped_params(), palw_t12_drill_params_v1(&salt())] {
-        assert!(p.fence_schedule_v1().contains(&target), "the G14 flag day schedules 17,400: {:?}", p.fence_schedule_v1());
+        assert!(p.fence_schedule_v1().contains(&target), "the G14 flag day schedules 18,400: {:?}", p.fence_schedule_v1());
         for (name, fence) in p.palw_fences_v1() {
             if fence.map(|f| f.daa_score()) == Some(target) {
-                assert!(g14.contains(&name) && !int13.contains(&name), "{name} at 17,400 is a G14 fence");
+                assert!(g14.contains(&name) && !int13.contains(&name), "{name} at 18,400 is a G14 fence");
             }
         }
     }
@@ -234,7 +234,7 @@ fn armed_at_a_test_height_it_moves_the_params_and_schedule_ids_only_and_comes_ba
     assert!(armed.fence_schedule_v1().contains(&PALW_T12_FULL_ACTIVATION_TARGET_DAA_V1));
     palw_t12_arm_after_int13_at_v1(&mut armed, PALW_T12_FULL_ACTIVATION_FENCES_V1, None);
     palw_t12_arm_after_int13_at_v1(&mut armed, PALW_T12_G14_17000_FENCES_V1, Some(PALW_T12_FULL_ACTIVATION_TARGET_DAA_V1));
-    assert_eq!(ids(&armed), ids(&shipped), "the G14 list at 17,400 is the shipped ruleset again");
+    assert_eq!(ids(&armed), ids(&shipped), "the G14 list at 18,400 is the shipped ruleset again");
 }
 
 /// **Armed without its records, the list is refused.** The records each entry needs (the notes list them per fence): the G14
@@ -273,11 +273,11 @@ fn the_drill_flag_refuses_untouched_until_the_records_exist() {
     let int13: Vec<&str> = PALW_T12_INT13_FENCES_V1.iter().map(|f| f.name).collect();
     let g14: Vec<&str> = PALW_T12_G14_17000_FENCES_V1.iter().map(|f| f.name).collect();
     for name in LIST {
-        // The drill copies the shipped ruleset: int-13 at 15,500, the rest of the G14 list at 17,400.
+        // The drill copies the shipped ruleset: int-13 at 15,500, the rest of the G14 list at 18,400.
         let want = if int13.contains(&name) {
             Some(15_500)
         } else if g14.contains(&name) {
-            Some(17_400)
+            Some(18_400)
         } else {
             None
         };

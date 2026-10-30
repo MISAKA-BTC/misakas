@@ -1178,14 +1178,14 @@ mod tests {
             palw_t12_shipped_params,
         };
         for (name, p) in [("testnet-12", palw_t12_shipped_params()), ("testnet-12 launch", palw_t12_launch_params_v1())] {
-            assert_eq!(p.palw_legacy_public_filer_v1, Some(ForkActivation::new(17_400)), "{name}: G14 flag day");
-            assert!(p.palw_legacy_public_filer_active_at(17_400), "{name}");
-            p.validate_palw_legacy_public_filer_v1().expect("the pinned record admits 17,400");
+            assert_eq!(p.palw_legacy_public_filer_v1, Some(ForkActivation::new(18_400)), "{name}: G14 flag day");
+            assert!(p.palw_legacy_public_filer_active_at(18_400), "{name}");
+            p.validate_palw_legacy_public_filer_v1().expect("the pinned record admits 18,400");
             assert!(
                 p.palw_fences_v1()
                     .iter()
-                    .any(|(fence, at)| *fence == "palw_legacy_public_filer_v1" && *at == Some(ForkActivation::new(17_400))),
-                "{name}: listed at 17,400"
+                    .any(|(fence, at)| *fence == "palw_legacy_public_filer_v1" && *at == Some(ForkActivation::new(18_400))),
+                "{name}: listed at 18,400"
             );
         }
         for (name, p) in

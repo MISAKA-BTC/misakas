@@ -39,11 +39,11 @@ use kaspa_consensus_core::fork_id_v1::{
 /// release `0e8ec984e` was `b8564b88…` / `5de80e64…` / `93da24cc…`, which `palw_t12_launch_params_v1()`
 /// still hashes to): params, identity, schedule — the same pins `palw_clock_lead_cap_is_t12_only`'s
 /// `T12_WITH_THE_CAP` holds.
-// re-pin 2026-10-29 @d3ed36fdc77d: G14 at DAA 17400 moved testnet-12 params and schedule ids; the handshake identity stayed 5de80e64 (was 5ee7fd8e…, 1678e073…)
+// re-pin 2026-10-30 @64535b7bf7e8: User selected DAA18400 for the unpublished G14 schedule on 2026-10-30; preserve the current main CI fixes (was 73e67678…, fd42c167…)
 const T12_RELEASED: (&str, &str, &str) = (
-    "73e67678a432effb4a982386d67383b95cf172babdde3e6f86c31cf3268d5bd5",
+    "3e6da238306cfdb7e71599d5ef8fb314f1b3ff33a50673af1321f3da9cfa5b94",
     "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-    "fd42c16706195ec0a6fa63902e1bd612303136b342bd29424e28be22599a5f2e",
+    "b4706ae535fc2c9e4f0a0fe1b6cb0456025f3e00c1b8aba5cde02191f46f9194",
 );
 
 /// An illustrative flag-day height. The operator picks one common, independent height for every
@@ -95,7 +95,7 @@ fn the_same_chain_fence_is_dormant_on_every_other_preset_and_t12_arms_it_at_750(
     assert_eq!((t12.0.as_str(), t12.1.as_str(), t12.2.as_str()), T12_RELEASED, "testnet-12 is the released ruleset, to the id");
     assert_eq!(
         palw_t12_launch_params_v1().fence_schedule_v1(),
-        vec![PALW_T12_BOND_MATURITY_WINDOW_DAA, 17_400],
+        vec![PALW_T12_BOND_MATURITY_WINDOW_DAA, 18_400],
         "the launched testnet-12 schedules the bond-maturity window and the G14 flag day"
     );
 }
@@ -161,10 +161,10 @@ fn an_armed_build_peers_with_the_launched_build_until_the_height() {
     let shipped = palw_t12_launch_params_v1();
     let maturity = PALW_T12_BOND_MATURITY_WINDOW_DAA;
     assert!(fork_id_gate_armed_v1(&shipped), "the launched testnet-12's gate is armed by the maturity window");
-    assert_eq!(fork_id_gate_fences_v1(&shipped), vec![maturity, 17_400]);
+    assert_eq!(fork_id_gate_fences_v1(&shipped), vec![maturity, 18_400]);
     for h in [maturity / 2, maturity - 1, maturity + 1, H] {
         let armed = armed_at(ForkActivation::new(h));
-        let mut schedule = vec![h, maturity, 17_400];
+        let mut schedule = vec![h, maturity, 18_400];
         schedule.sort_unstable();
         schedule.dedup();
         assert_eq!(armed.fence_schedule_v1(), schedule, "F1 at {h}: the armed schedule");
@@ -216,8 +216,8 @@ fn an_armed_build_peers_with_the_launched_build_until_the_height() {
             assert_eq!(rejudged_from_below, None, "F1 at {h}: a connection made below 1,000 is not re-judged at {h}");
             // The launched schedule's next fence after 1,000 is the G14 flag day. A fence past that
             // day is invisible to a handshake taken at 1,000; the handshake that carries it is one
-            // taken at 17,400.
-            let met_at = if h > 17_400 { 17_400 } else { maturity };
+            // taken at 18,400.
+            let met_at = if h > 18_400 { 18_400 } else { maturity };
             let lm = fork_id_v1(&shipped, met_at);
             assert_eq!(
                 fork_id_refusal_height_v1(&armed, met_at, lm.fired.as_bytes().as_slice(), lm.next),
@@ -241,7 +241,7 @@ fn an_armed_build_peers_with_the_launched_build_until_the_height() {
     }
     // A build armed at another height is a different schedule, refused from the lower of the two.
     let elsewhere = armed_at(ForkActivation::new(H + 100));
-    let peer = fork_id_v1(&elsewhere, 17_400);
+    let peer = fork_id_v1(&elsewhere, 18_400);
     assert!(!evaluate_fork_id_v1(&armed, H - 1, peer.fired.as_bytes().as_slice(), peer.next).refuses());
     assert_eq!(
         evaluate_fork_id_v1(&armed, H, peer.fired.as_bytes().as_slice(), peer.next),

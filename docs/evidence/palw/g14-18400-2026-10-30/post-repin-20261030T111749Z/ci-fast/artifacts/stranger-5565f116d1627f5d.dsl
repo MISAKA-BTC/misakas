@@ -1,0 +1,1 @@
+{"frac_bits":0,"sketches":{},"solid":{"a":{"max":[8,8,8],"min":[0,0,0],"op":"box"},"b":{"max":[6,6,12],"min":[2,2,4],"op":"box"},"op":"difference"},"v":1}

@@ -1,0 +1,19 @@
+PASS — no-new-regressions
+{
+  "mode": "no-new-regressions",
+  "passed": true,
+  "markdown_files": 1310,
+  "targets": {
+    "ok": 9202,
+    "outside-package-unchecked": 245,
+    "external-unchecked": 240,
+    "missing-doc-file": 43
+  },
+  "primary_documents": {
+    "adr": 204,
+    "rfc": 41
+  },
+  "known_issue_occurrences": 43,
+  "new_issue_occurrences": 0
+}
+NOTE: baseline missing references remain; PASS is not a clean strict audit.

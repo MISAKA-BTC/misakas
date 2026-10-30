@@ -61,7 +61,7 @@ const NAMES: [&str; 5] = [
 #[test]
 fn rfc18_fences_are_dormant_on_every_preset_and_named_in_the_exhaustive_list() {
     let shipped = palw_t12_shipped_params();
-    assert_eq!(shipped.palw_independently_work_certified_v1, Some(ForkActivation::new(17_400)));
+    assert_eq!(shipped.palw_independently_work_certified_v1, Some(ForkActivation::new(18_400)));
     assert!(shipped.palw_rfc0018_expected_mirror_v1().is_some());
     for p in [MAINNET_PARAMS, TESTNET_PARAMS, palw_t12_release_v6_params()] {
         assert_eq!(p.palw_dag_sibling_attribution_v1, None);
@@ -1167,7 +1167,7 @@ fn gatec_decouple_rfc18_record_gate_is_exact_and_well_formed() {
     assert!(
         PALW_RFC0018_ARMING_RECORDS_V1
             .iter()
-            .all(|r| r.activation_daa == 17_400 && r.genesis == crate::config::genesis::PALW_T12_GENESIS.hash)
+            .all(|r| r.activation_daa == 18_400 && r.genesis == crate::config::genesis::PALW_T12_GENESIS.hash)
     );
     for f in PalwRfc0018GatedFenceV1::ALL {
         assert!(NAMES.contains(&f.name()));

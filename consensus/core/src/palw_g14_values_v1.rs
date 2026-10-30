@@ -523,7 +523,7 @@ mod tests {
         assert!(
             PALW_TIR_FRAME_COST_RECORDS_V1
                 .iter()
-                .all(|r| r.activation_daa == 17_400 && r.genesis == crate::config::genesis::PALW_T12_GENESIS.hash)
+                .all(|r| r.activation_daa == 18_400 && r.genesis == crate::config::genesis::PALW_T12_GENESIS.hash)
         );
         assert_eq!(
             palw_tir_frame_cost_record_admits_v1(h(9), 17_000, Some(&cost), PALW_TIR_FRAME_COST_RECORDS_V1),

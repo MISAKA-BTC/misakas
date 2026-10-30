@@ -547,13 +547,14 @@ def registry() -> list[Pin]:
                     "release_v1.testnet-12",
                     (f"{RETROLIFE}::the_retro_life_is_dormant_on_every_preset_and_testnet12_is_the_daa750_release",))
     # Lane F2 (the floor-refusal retry, second flag day): the DAA-750 release it is armed over, testnet-12 as
-    # launched (history), and every other preset at the release (testnet-10 / simnet as history).
+    # launched by its current constructor (which keeps G14 scheduled), and every other preset at the release
+    # (testnet-10 / simnet stay fixed historical values).
     floor2_tests = (f"{FLOOR2}::every_shipped_id_is_the_release_ones",)
     pins += _triple("floor2.T12_RELEASE", "t12", FLOOR2, "const T12_RELEASE: (&str, &str, &str) = (", "release_v1.testnet-12",
                     floor2_tests)
-    pins += [Pin(key=f"floor2.T12_LAUNCH.{what}", scope="history", file=FLOOR2,
-                 anchors=[re.escape("const T12_LAUNCH: (&str, &str, &str) = (")], nth=i_, length=64, until=r"^\);", value=None,
-                 tests=floor2_tests)
+    pins += [Pin(key=f"floor2.T12_LAUNCH.{what}", scope="t12", file=FLOOR2,
+                 anchors=[re.escape("const T12_LAUNCH: (&str, &str, &str) = (")], nth=i_, length=64, until=r"^\);",
+                 value=f"tirdorm.palw_t12_launch_params_v1.{what}", tests=floor2_tests)
              for i_, what in enumerate(["params_id", "identity_id", "schedule_id"])]
     floor2_others = "const OTHERS_AT_THE_RELEASE: &[(&str, &str, &str, &str)] = &["
     pins += _rows("floor2.OTHERS_AT_THE_RELEASE", _net_scope, FLOOR2, floor2_others, _shipped, floor2_tests)
@@ -750,6 +751,12 @@ def registry() -> list[Pin]:
                     lambda c: c["from.testnet-12.params_id"][:16], fmt="token", length=16, comment=None))
     # RFC-0002 Phase F: every ruleset's ids as the IR dormancy pins hold them.
     pins += _tirdorm()
+    # This constructor keeps the current G14 schedule; its copied unit-test
+    # triple is not an immutable historical release identifier.
+    pins += _triple("post_launch.T12_LAUNCH_IDS", "t12",
+                    "consensus/core/src/config/params/post_launch_fence_arming_tests.rs",
+                    "const T12_LAUNCH_IDS: (&str, &str, &str) = (", "tirdorm.palw_t12_launch_params_v1",
+                    ("lib::config::params::post_launch_fence_arming_tests",))
     # The same launch triple, copied into the G14 close tests. The dormancy pin above is the source;
     # these copies have to be registry entries or the unregistered-literal scan blocks --apply.
     for stem in ("g14_close_gates", "g14_close_legacy", "g14_court_capacity"):

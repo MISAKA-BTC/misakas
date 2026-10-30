@@ -1362,3 +1362,6 @@
 - [testing/testnet10-update-2026-08-10.md](../testing/testnet10-update-2026-08-10.md)
 - [testing/vps-regression-fixture.md](../testing/vps-regression-fixture.md)
 
+
+- [design/palw/integration/g14-17000/release-18400-2026-10-30.md](../design/palw/integration/g14-17000/release-18400-2026-10-30.md)
+- [evidence/palw/g14-18400-2026-10-30/README.md](../evidence/palw/g14-18400-2026-10-30/README.md)

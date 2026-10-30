@@ -1,0 +1,35 @@
+{
+  "scope": "isolated-main 18400 record regeneration and actual deploy placeholder refusal only",
+  "passed": true,
+  "testCount": 2,
+  "command": [
+    "/Applications/Xcode.app/Contents/Developer/usr/bin/python3",
+    "-m",
+    "unittest",
+    "discover",
+    "-s",
+    "scripts/release",
+    "-p",
+    "test_gen_t12_18400_records.py",
+    "-v"
+  ],
+  "baseCommit": "64535b7bf7e8d33ba1c08c277e9d335d4dc6a04c",
+  "logSha256": "079f564977cc7acebbc483b2b1088559c4ff41ca132ce138d3fe4812567506ff",
+  "sourceFilesSha256": {
+    "scripts/release/gen_t12_18400_records.py": "d0d5930c04a2d5e35a9cf6493256eb81cdd145c31643d2caea98e60d7dd47338",
+    "scripts/release/test_gen_t12_18400_records.py": "63948bdecc0e72945af44cc957d45835c7088249895a0e4af9e4040599d72292",
+    "scripts/release/gen_t12_17000_records.py": "a906aad1f744ddff9b1f588db0f41b2848944d06e9f1936da8debcf7cec7a280",
+    "scripts/release/pin_arming_record.py": "94bfdbdaafe49b826bfdfd44b47e416c24972c331ef79f1623b620183da608cf",
+    "consensus/core/src/palw_t12_17000_records_v1.rs": "82edc485407781ace98a87d8a1af23a4119d63984113ba10a9ff3a53201e46f1",
+    "consensus/core/src/palw_t12_18400_records_v1.rs": "6f0b3b1e116ddf358bbc7ba4ebc76435b0c515c34adb33469ac663bbb479f6df",
+    "contrib/t12-deploy-kit/fleet.env.example": "e665871619a049ea108bd82d20daa6644b5c721974583c567822f211c4e4872b",
+    "contrib/t12-deploy-kit/lib.sh": "d7c1ae239430396b1b9c4669e735d5c03a6282127b6ceb5f108aec5ffd00a5b0",
+    "contrib/t12-deploy-kit/pinner-lib.sh": "fae8926d0babd200e7fb87d5837a685277c5716afd2efa76a1f5c9536e72bfb4"
+  },
+  "notEvidenceFor": [
+    "Rust startup/boundary success",
+    "latest whole candidate",
+    "new additional fences",
+    "deployment"
+  ]
+}

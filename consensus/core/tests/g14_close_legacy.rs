@@ -82,7 +82,7 @@ fn full_collateral_beside_lock_life(p: &mut Params, filer_at: u64) {
 /// `p` with LG14-A (and, with `held`, LG14-B; with `route`, option (b)) armed at `at`, every mirror synced, and the records the
 /// arming needs. The ruleset is asserted to pass the whole validation with them and to be refused without them.
 fn arm_legacy(mut p: Params, at: u64, held: bool, route: bool) -> (Params, Vec<PalwG14ArmingRecordV1>) {
-    // Shipped and launch already arm this list at 17,400. The fixture records only the fences it
+    // Shipped and launch already arm this list at 18,400. The fixture records only the fences it
     // sets below, so those entries go back to dormant first. Each entry syncs its own mirror.
     palw_t12_arm_after_int13_at_v1(&mut p, PALW_T12_G14_17000_FENCES_V1, None);
     let fence = Some(ForkActivation::new(at));
@@ -171,16 +171,16 @@ fn lg14_arming_needs_a_record_naming_the_network_and_height() {
     assert!(
         PALW_G14_ARMING_RECORDS_V1
             .iter()
-            .all(|r| r.activation_daa == 17_400 && r.genesis == kaspa_consensus_core::config::genesis::PALW_T12_GENESIS.hash),
-        "every pinned record is testnet-12 at 17,400"
+            .all(|r| r.activation_daa == 18_400 && r.genesis == kaspa_consensus_core::config::genesis::PALW_T12_GENESIS.hash),
+        "every pinned record is testnet-12 at 18,400"
     );
     let t12 = palw_t12_shipped_params();
     t12.validate_palw_v2().expect("testnet-12 as shipped validates");
-    // Both gated fences are listed and measured, and testnet-12 arms them at 17,400 behind those records.
+    // Both gated fences are listed and measured, and testnet-12 arms them at 18,400 behind those records.
     for fence in [PalwG14GatedFenceV1::LegacyPublicFilerV1, PalwG14GatedFenceV1::LegacyHeldDaV2] {
         assert!(PalwG14GatedFenceV1::ALL.contains(&fence), "{fence:?} is a gated fence");
         assert!(fence.needs_measured_value(), "{fence:?}: the hard-deadline envelope / descent budget are measurements");
-        assert_eq!(fence.armed(&t12), Some(ForkActivation::new(17_400)), "{fence:?}: armed at 17,400 on testnet-12");
+        assert_eq!(fence.armed(&t12), Some(ForkActivation::new(18_400)), "{fence:?}: armed at 18,400 on testnet-12");
     }
     assert_eq!(PalwG14GatedFenceV1::LegacyPublicFilerV1.requirements(), PALW_LEGACY_FILER_ARMING_REQUIREMENTS_V1);
     assert_eq!(PalwG14GatedFenceV1::LegacyHeldDaV2.requirements(), PALW_LEGACY_HELD_DA_ARMING_REQUIREMENTS_V1);
@@ -916,6 +916,7 @@ fn g14_close_legacy_from_genesis() {
 /// **testnet-12's identity does not move**: its launch ids are the pinned ones, its shipped ids keep their prefixes (appendix B), every
 /// shipped preset leaves both legacy fences dormant, and testnet-12 as shipped validates.
 #[test]
+// re-pin 2026-10-30 @64535b7bf7e8: User selected DAA18400 for the unpublished G14 schedule on 2026-10-30; preserve the current main CI fixes (was 0fb64448…, 3299840c…)
 fn testnet12_identity_did_not_move() {
     let launch = palw_t12_launch_params_v1();
     assert_eq!(
@@ -925,22 +926,22 @@ fn testnet12_identity_did_not_move() {
             launch.consensus_schedule_id().to_string()
         ),
         (
-            "0fb6444822f57e424a6617a013f502d29d8fd8acddd33cae43066c0d84041ef5".to_string(),
+            "322104e40468fc3382ed325e2faf0c86846e11df52d3d6c99806d596fb2d663b".to_string(),
             "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5".to_string(),
-            "3299840cfad1ec9eb3a2c63c0a2355e7759c9dedc4799b5eeb9e1f51dc9f2ece".to_string(),
+            "a96d6caf49dbdf82e3dff89d23e9d97795460a7ba1122e9389c2959c04a90234".to_string(),
         )
     );
     let t12 = palw_t12_shipped_params();
     let (params, identity, schedule) =
         (t12.consensus_params_id().to_string(), t12.consensus_identity_id().to_string(), t12.consensus_schedule_id().to_string());
     eprintln!("[t12 ids] params {params} identity {identity} schedule {schedule}");
-    assert!(params.starts_with("73e67678") && identity.starts_with("5de80e64") && schedule.starts_with("fd42c167"));
+    assert!(params.starts_with("3e6da238") && identity.starts_with("5de80e64") && schedule.starts_with("b4706ae5"));
     t12.validate_palw_v2().expect("testnet-12 as shipped validates");
     for p in [launch, t12] {
-        let armed = Some(ForkActivation::new(17_400));
+        let armed = Some(ForkActivation::new(18_400));
         assert_eq!((p.palw_legacy_public_filer_v1, p.palw_legacy_held_da_v2), (armed, armed));
         let PalwConsensusMode::ConsensusV2(b) = &p.palw_consensus_mode else { panic!("V2") };
-        assert_eq!(b.state.legacy_public_filer_from_daa(), Some(17_400));
-        assert_eq!(b.state.g14_route_required_v1().map(|m| m.from_daa), Some(17_400));
+        assert_eq!(b.state.legacy_public_filer_from_daa(), Some(18_400));
+        assert_eq!(b.state.g14_route_required_v1().map(|m| m.from_daa), Some(18_400));
     }
 }
