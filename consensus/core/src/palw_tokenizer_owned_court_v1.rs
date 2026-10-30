@@ -126,10 +126,13 @@ impl PalwOwnedTokenizerCourtV1 {
         {
             return Err("tokenizer seed exceeds its immutable claim resource envelope".into());
         }
-        let mut terms = claim_terms;
-        terms.plan = plan;
+        if !claim_terms.plan.covers_v1(plan) {
+            return Err("native tokenizer work exceeds a dimension of its frozen allocation".into());
+        }
+        let terms = claim_terms;
         terms.check_holds(material_until, producer_exit_after, panel_exit_after)?;
-        let funding = plan.rent_sompi.checked_add(plan.deposit_sompi).ok_or("tokenizer funding overflows")?;
+        let funding_plan = terms.plan;
+        let funding = funding_plan.rent_sompi.checked_add(funding_plan.deposit_sompi).ok_or("tokenizer funding overflows")?;
         if available_capital < funding {
             return Err("tokenizer owner has not funded complete admitted work".into());
         }
@@ -158,8 +161,8 @@ impl PalwOwnedTokenizerCourtV1 {
             reserver: seed.reserver,
             reserved_daa: seed.reserved_daa,
             terms,
-            rent_paid: plan.rent_sompi,
-            deposit_locked: plan.deposit_sompi,
+            rent_paid: funding_plan.rent_sompi,
+            deposit_locked: funding_plan.deposit_sompi,
             moves_used: 1,
             carrier_bytes_used: borsh::to_vec(seed).map_err(|e| e.to_string())?.len() as u64,
             seed_id,
@@ -184,6 +187,38 @@ impl PalwOwnedTokenizerCourtV1 {
         producer_exit_after: u64,
         panel_exit_after: &[u64],
         binding: &crate::palw_step_leg::PalwStepBindingV2,
+    ) -> Result<Self, String> {
+        Self::admit_with_allocation_v1(
+            seed,
+            actual_job,
+            target,
+            claim_terms,
+            prices,
+            now,
+            available_capital,
+            carrier_maximum,
+            material_until,
+            producer_exit_after,
+            panel_exit_after,
+            binding,
+            false,
+        )
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub fn admit_with_allocation_v1(
+        seed: &PalwConstraintStreamSeedV1,
+        actual_job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+        target: &crate::palw_offence_attribution_v1::PalwOffenceTargetV1,
+        claim_terms: PalwRenderingClaimTermsV1,
+        prices: PalwRenderingResourcePricesV1,
+        now: u64,
+        available_capital: u64,
+        carrier_maximum: u64,
+        material_until: u64,
+        producer_exit_after: u64,
+        panel_exit_after: &[u64],
+        binding: &crate::palw_step_leg::PalwStepBindingV2,
+        preserve_allocation: bool,
     ) -> Result<Self, String> {
         seed.check(carrier_maximum)?;
         if seed.resolved_binding_v1(target.class_id, Some(&binding.shape_profile))? != *binding {
@@ -226,10 +261,16 @@ impl PalwOwnedTokenizerCourtV1 {
         {
             return Err("tokenizer seed exceeds its immutable claim resource envelope".into());
         }
+        if preserve_allocation && !claim_terms.plan.covers_v1(plan) {
+            return Err("tokenizer work exceeds a dimension of its frozen allocation".into());
+        }
         let mut terms = claim_terms;
-        terms.plan = plan;
+        if !preserve_allocation {
+            terms.plan = plan;
+        }
         terms.check_holds(material_until, producer_exit_after, panel_exit_after)?;
-        let funding = plan.rent_sompi.checked_add(plan.deposit_sompi).ok_or("tokenizer funding overflows")?;
+        let funding_plan = terms.plan;
+        let funding = funding_plan.rent_sompi.checked_add(funding_plan.deposit_sompi).ok_or("tokenizer funding overflows")?;
         if available_capital < funding {
             return Err("tokenizer owner has not funded complete admitted work".into());
         }
@@ -260,8 +301,8 @@ impl PalwOwnedTokenizerCourtV1 {
             reserver: seed.reserver,
             reserved_daa: seed.reserved_daa,
             terms,
-            rent_paid: plan.rent_sompi,
-            deposit_locked: plan.deposit_sompi,
+            rent_paid: funding_plan.rent_sompi,
+            deposit_locked: funding_plan.deposit_sompi,
             moves_used: 1,
             carrier_bytes_used: borsh::to_vec(seed).map_err(|e| e.to_string())?.len() as u64,
             seed_id,
@@ -373,7 +414,7 @@ pub(crate) mod tests {
     use crate::palw_tokenizer_table_stream_v1::PalwTokenizerStreamPacketV1;
     use crate::tx::{TransactionId, TransactionOutpoint};
     pub(crate) fn admitted_case(fault: bool, bound: u64) -> (PalwOwnedTokenizerCourtV1, Vec<u8>, Vec<u8>) {
-        admitted_case_with_profile(fault, bound, 0, 0, false)
+        admitted_case_with_profile(fault, bound, 0, 0, false, false)
     }
     fn admitted_case_with_lengths(
         fault: bool,
@@ -381,7 +422,7 @@ pub(crate) mod tests {
         signed_delta: i64,
         operand_delta: i64,
     ) -> (PalwOwnedTokenizerCourtV1, Vec<u8>, Vec<u8>) {
-        admitted_case_with_profile(fault, bound, signed_delta, operand_delta, false)
+        admitted_case_with_profile(fault, bound, signed_delta, operand_delta, false, false)
     }
     fn admitted_case_with_profile(
         fault: bool,
@@ -389,6 +430,7 @@ pub(crate) mod tests {
         signed_delta: i64,
         operand_delta: i64,
         reference: bool,
+        preserve_allocation: bool,
     ) -> (PalwOwnedTokenizerCourtV1, Vec<u8>, Vec<u8>) {
         let raw = br#"{"model":{"vocab":{"a":0,"b":1},"merges":[]}}"#;
         let (mut target, binding, job, raw, opening) =
@@ -443,11 +485,20 @@ pub(crate) mod tests {
             .court_envelope(seed.binding.shape_profile.vocab_size, config.prices)
             .unwrap();
         let original_terms = PalwRenderingClaimTermsV1::derive(100, declared_plan, 100, 100, 10).unwrap();
-        let terms = original_terms.extend_paid_work_v1(100, plan).unwrap();
+        let mut terms = original_terms.extend_paid_work_v1(100, plan).unwrap();
+        if preserve_allocation {
+            let wider = PalwTokenizerResourcePlanV1::derive_with_key_bound(operand_length * 2, bound, config.prices)
+                .unwrap()
+                .court_envelope(full_binding.shape_profile.vocab_size, config.prices)
+                .unwrap();
+            terms = PalwRenderingClaimTermsV1::derive(100, plan.cover(wider), 100, 100, 10).unwrap();
+            assert_ne!(terms.plan, plan);
+        }
         assert_eq!((terms.accepted_daa, terms.open_until_daa), (original_terms.accepted_daa, original_terms.open_until_daa));
-        let funding = plan.rent_sompi + plan.deposit_sompi;
+        let funding_plan = if preserve_allocation { terms.plan } else { plan };
+        let funding = funding_plan.rent_sompi + funding_plan.deposit_sompi;
         let admit = |seed: &PalwConstraintStreamSeedV1, capital, material, panels: &[u64]| {
-            PalwOwnedTokenizerCourtV1::admit_with_resolved_binding_v1(
+            PalwOwnedTokenizerCourtV1::admit_with_allocation_v1(
                 seed,
                 &job,
                 &target,
@@ -460,6 +511,7 @@ pub(crate) mod tests {
                 terms.bond_exit_after_daa,
                 panels,
                 &full_binding,
+                preserve_allocation,
             )
         };
         assert!(admit(&seed, funding - 1, terms.material_until_daa, &[terms.bond_exit_after_daa; 5]).is_err());
@@ -477,7 +529,20 @@ pub(crate) mod tests {
         assert!(admit(&false_bound, funding, terms.material_until_daa, &[terms.bond_exit_after_daa; 5]).is_err());
         let row = admit(&seed, funding, terms.material_until_daa, &[terms.bond_exit_after_daa; 5]).unwrap();
         assert!(row.certificate().is_err());
+        if preserve_allocation {
+            assert_eq!(row.terms, terms, "the accepted bundle's complete allocation remains literal");
+            assert_eq!((row.rent_paid, row.deposit_locked), (terms.plan.rent_sompi, terms.plan.deposit_sompi));
+        }
         (row, raw, bytes)
+    }
+    #[test]
+    fn tokenizer_admission_preserves_every_dimension_of_a_wider_paid_bundle_allocation() {
+        for bound in [1, 64] {
+            for retained in [false, true] {
+                let (row, _, _) = admitted_case_with_profile(false, bound, 0, 0, retained, true);
+                row.check().unwrap();
+            }
+        }
     }
     pub(crate) fn movement(row: &PalwOwnedTokenizerCourtV1, action: PalwConstraintStreamActionV1) -> PalwConstraintStreamMoveV1 {
         PalwConstraintStreamMoveV1 {
@@ -531,7 +596,7 @@ pub(crate) mod tests {
     fn compact_registered_profile_preserves_signed_tokenizer_seed_to_authenticated_eof() {
         for fault in [false, true] {
             let (mut full, raw, table) = admitted_case(fault, 64);
-            let (mut compact, compact_raw, compact_table) = admitted_case_with_profile(fault, 64, 0, 0, true);
+            let (mut compact, compact_raw, compact_table) = admitted_case_with_profile(fault, 64, 0, 0, true, false);
             assert_eq!(raw, compact_raw);
             assert_eq!(table, compact_table);
             assert_ne!(full.seed_id(), compact.seed_id());

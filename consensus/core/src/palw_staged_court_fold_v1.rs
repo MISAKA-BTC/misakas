@@ -1866,9 +1866,13 @@ pub(super) fn open(
         if bundle.is_none() {
             b.check_accuser_room(seed.reserver, u128::from(plan.deposit_sompi), "staged tokenizer court", ctx.daa_score)?;
         }
-        let funded = plan.rent_sompi.checked_add(plan.deposit_sompi).ok_or(PalwStateV2Error::Overflow("staged tokenizer funding"))?;
+        let funding_plan = if bundle.is_some() { extended_terms.plan } else { plan };
+        let funded = funding_plan
+            .rent_sompi
+            .checked_add(funding_plan.deposit_sompi)
+            .ok_or(PalwStateV2Error::Overflow("staged tokenizer funding"))?;
         let exits = vec![extended_terms.bond_exit_after_daa; contract.panel.len()];
-        let row = crate::palw_tokenizer_owned_court_v1::PalwOwnedTokenizerCourtV1::admit_with_resolved_binding_v1(
+        let row = crate::palw_tokenizer_owned_court_v1::PalwOwnedTokenizerCourtV1::admit_with_allocation_v1(
             seed,
             &original.job,
             &target,
@@ -1881,6 +1885,7 @@ pub(super) fn open(
             extended_terms.bond_exit_after_daa,
             &exits,
             &binding,
+            bundle.is_some(),
         )
         .map_err(|e| stage_refused(seed.claim, e))?;
         // Fee validation already burned the full declared carrier rent; the paid row reserves
