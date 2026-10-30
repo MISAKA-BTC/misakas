@@ -1442,9 +1442,24 @@ async fn tn1_node_with(forged: bool, declared: bool, producer_kind: Tn1ProducerV
     let mut ready_at = chain.daa();
     let deadline = std::time::Instant::now() + Duration::from_secs(7_200);
     // The producer's first framed claim (lane FPSEL: or the rail's one claim).
+    let mut rail_reader = None;
     let claim = if rail.is_some() {
         step_ready(&node, &mut chain, &mut floats, &fixture, &mut ready_at).await;
-        rail_tfp1_claim_v1(&mut chain, &fixture, &mut rail_float, &provider, forged.then_some(5)).await
+        let (claim, original) = rail_tfp1_claim_v1(&mut chain, &fixture, &mut rail_float, &provider, forged.then_some(5)).await;
+        if forged {
+            let header = chain.tc.palw_tir_public_frame_v1(claim).unwrap().unwrap().header;
+            rail_reader = Some(
+                fixture
+                    .backend(&chain)
+                    .open_tir_public_capture_v1(
+                        &header,
+                        std::sync::Arc::new(RailOriginal(original)),
+                        &dirs.path().join("rail-responses"),
+                    )
+                    .expect("the rail reopens its own original"),
+            );
+        }
+        claim
     } else {
         loop {
             assert!(std::time::Instant::now() < deadline, "the producer service carried no TFP1 claim");
@@ -1547,6 +1562,9 @@ async fn tn1_node_with(forged: bool, declared: bool, producer_kind: Tn1ProducerV
         let pace = if chain.daa() + 1 >= preparation_until { 90 } else { 4 };
         tokio::time::sleep(Duration::from_secs(pace)).await;
         step_ready(&node, &mut chain, &mut floats, &fixture, &mut ready_at).await;
+        if let Some(reader) = rail_reader.as_deref_mut() {
+            rail_colluders_answer(&mut chain, &mut floats, claim, reader).await;
+        }
     }
     // The honest Panel is drawn at the anchor after the claim's anchor delay.
     if !forged {
@@ -1570,6 +1588,9 @@ async fn tn1_node_with(forged: bool, declared: bool, producer_kind: Tn1ProducerV
             tokio::time::sleep(Duration::from_secs(2)).await;
         }
         step_ready(&node, &mut chain, &mut floats, &fixture, &mut ready_at).await;
+        if let Some(reader) = rail_reader.as_deref_mut() {
+            rail_colluders_answer(&mut chain, &mut floats, claim, reader).await;
+        }
         let view = chain.view(claim);
         match &view.phase {
             PalwClaimPhaseV2::Final { .. } => {
@@ -1757,13 +1778,125 @@ enum Tn1ProducerV1 {
 /// the decode rules), executed by the class's backend (as the fp-worker), its TIR header, the node's frame quote, the pledges and
 /// the TFP1 carrier, then the FPC1 original published to `provider`. `fault_leaf`: the producer lies at that step leaf (the cone
 /// forgery the producer drill uses), every root re-derived from the corrupted capture.
+/// The node-less rail has no honest producer daemon to answer a forged run.
+/// Its colluding signers publish their own capture's authenticated units through
+/// ordinary public carriers. The outside service still localizes and files alone.
+struct RailOriginal(Vec<u8>);
+impl kaspa_consensus_core::palw_backend::PalwOriginalCaptureReaderV1 for RailOriginal {
+    fn len_v1(&self) -> u64 {
+        self.0.len() as u64
+    }
+    fn read_v1(&self, offset: u64, count: u32) -> Result<Vec<u8>, String> {
+        if count > 16_384 {
+            return Err("unbounded rail original read".into());
+        }
+        let start = usize::try_from(offset).map_err(|_| "rail offset overflow")?;
+        let end = start.checked_add(count as usize).ok_or("rail range overflow")?;
+        self.0.get(start..end).map(|bytes| bytes.to_vec()).ok_or("short rail original".into())
+    }
+}
+
+async fn rail_colluders_answer(
+    chain: &mut Chain,
+    floats: &mut [Funding],
+    claim: Hash64,
+    reader: &mut dyn kaspa_consensus_core::palw_backend::PalwTirPublicCaptureReaderV1,
+) {
+    use kaspa_consensus_core::palw_tir_public_carriage_v1::{
+        PALW_TIR_PUBLIC_CONTROL_CONTEXT_V1, PalwTirPublicControlActionV1, PalwTirPublicControlTargetV1, PalwTirPublicControlV1,
+    };
+    use kaspa_consensus_core::palw_tir_public_owned_v1::{
+        PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1, PalwTirPublicOwnedActionV1 as A, palw_tir_public_body_hash_v1,
+    };
+    use kaspa_consensus_core::palw_tir_public_source_v1::{PALW_TIR_PUBLIC_IDS_PER_CHUNK_V1, PalwTirPublicRequestV1};
+    let mut items = Vec::new();
+    chain
+        .tc
+        .palw_tir_public_read_v1(&mut |state| {
+            let frame = kaspa_consensus_core::palw_tir_public_claim_v1::palw_tir_public_claim_v1(state, claim).unwrap();
+            let record = state.tir_class_v1(&frame.original_v1().job.class_id).unwrap();
+            let layout =
+                kaspa_consensus_core::palw_staged_court_state_v1::palw_staged_tir_layout_v1(state, frame.original_v1().job.class_id)
+                    .unwrap();
+            let source = frame.source_v1(record, layout, frame.descriptor_v1().maximum_leaves)?;
+            for (owner, allocation) in state.staged_tir_acquisitions_of_v1(&claim) {
+                let row = state.staged_tir_acquisition_v1(claim, owner, allocation).unwrap();
+                let Some(p) = row.owned.active_v1().filter(|p| !p.collected) else { continue };
+                let requests = match p.request {
+                    PalwTirPublicRequestV1::Ids { offset: 0 } => (0..source.decode_count_v1())
+                        .step_by(PALW_TIR_PUBLIC_IDS_PER_CHUNK_V1 as usize)
+                        .map(|offset| PalwTirPublicRequestV1::Ids { offset })
+                        .collect::<Vec<_>>(),
+                    request => vec![request],
+                };
+                let mut body = Vec::new();
+                for request in requests {
+                    let response = (0..65_536)
+                        .find_map(|_| reader.poll_v1(&request).transpose())
+                        .transpose()?
+                        .ok_or("rail capture preparation did not finish")?;
+                    let bytes = borsh::to_vec(&response).map_err(|e| e.to_string())?;
+                    source.decode_response_v1(&request, &bytes)?;
+                    body.extend(bytes);
+                }
+                for signer in row.owned.response_custodians_v1() {
+                    let card = chain.bonds.iter().position(|bond| bond == signer).unwrap();
+                    let action = match p.slots.get(signer) {
+                        None => A::Begin {
+                            demand_id: p.demand_id,
+                            answerer: *signer,
+                            total_bytes: body.len() as u64,
+                            body_hash: palw_tir_public_body_hash_v1(&body),
+                        },
+                        Some(slot) if slot.finished.is_some() => continue,
+                        Some(slot) if slot.accepted_offset < slot.total_bytes => {
+                            let start = slot.accepted_offset as usize;
+                            let end = start.saturating_add(PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1).min(body.len());
+                            A::Part {
+                                demand_id: p.demand_id,
+                                answerer: *signer,
+                                offset: slot.accepted_offset,
+                                bytes: body[start..end].to_vec(),
+                            }
+                        }
+                        Some(_) => A::Finish { demand_id: p.demand_id, answerer: *signer },
+                    };
+                    let contract = row.owned.contract_v1();
+                    let mut control = PalwTirPublicControlV1 {
+                        version: 1,
+                        claim,
+                        allocation_id: contract.bundle_id,
+                        source_id: contract.source_id,
+                        target: PalwTirPublicControlTargetV1::Acquisition { owner, reserved_daa: contract.reserved_daa },
+                        expected_turn: p.turn,
+                        declared_rent_sompi: 0,
+                        signer: *signer,
+                        action: PalwTirPublicControlActionV1::Acquisition(action),
+                        signature: Vec::new(),
+                    };
+                    control.signature = signed(
+                        card,
+                        control.signing_message_v1(chain.network_domain)?.as_byte_slice(),
+                        PALW_TIR_PUBLIC_CONTROL_CONTEXT_V1,
+                    );
+                    items.push((card, PalwConsensusObjectV2::TirPublicControlV1 { control: Box::new(control) }));
+                }
+            }
+            Ok(())
+        })
+        .unwrap();
+    if !items.is_empty() {
+        send_batch(chain, floats, items).await;
+    }
+}
+
 async fn rail_tfp1_claim_v1(
     chain: &mut Chain,
     fixture: &TirFixture,
     funding: &mut Funding,
     provider: &std::path::Path,
     fault_leaf: Option<u64>,
-) -> Hash64 {
+) -> (Hash64, Vec<u8>) {
     use kaspa_consensus_core::palw_freeprompt_v3::{
         PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_PROMPT_MODE_USER, PALW_FP_V3_VERSION, PalwFreePromptJobV3, fp_canonical_anchor_v1,
         fp_claim_id_v3, palw_fp_capture_encode_v1,
@@ -1939,7 +2072,7 @@ async fn rail_tfp1_claim_v1(
         material.len(),
         provider.display()
     );
-    claim
+    (claim, run.outcome.material)
 }
 
 /// **lane FPSEL, rail (with a node), honest**: the rail's TFP1 claim, its original from the provider, licensed by the seats' actual
