@@ -3873,8 +3873,18 @@ impl PalwChainStateV2 {
                 "registration_exposure differs from the live registrations it summarizes".into(),
             ));
         }
-        let safe = safe.checked_add(self.retired_safe_weight).ok_or(PalwStateV2Error::Overflow("consistency safe"))?;
-        let safe_ceiling = safe_ceiling.checked_add(self.retired_safe_weight).ok_or(PalwStateV2Error::Overflow("consistency safe"))?;
+        // Native39 spends credit safe_weight outside the legacy claim table.
+        // Include their actual clipped grants; collection moves those grants to
+        // retired_safe_weight and conviction removes the live receipt entirely.
+        let native = super::palw_native_mining_fold_v39::live_safe_weight_v39(self)?;
+        let safe = safe
+            .checked_add(native)
+            .and_then(|s| s.checked_add(self.retired_safe_weight))
+            .ok_or(PalwStateV2Error::Overflow("consistency safe"))?;
+        let safe_ceiling = safe_ceiling
+            .checked_add(native)
+            .and_then(|s| s.checked_add(self.retired_safe_weight))
+            .ok_or(PalwStateV2Error::Overflow("consistency safe"))?;
         // **Dormant, this is the equality it has always been.** With Decision 7 off,
         // `palw_claim_safe_contribution_v2` is the identity on `pwu`, so `safe == safe_ceiling`
         // and the test below is `safe == self.safe_weight` — every state this check used to accept

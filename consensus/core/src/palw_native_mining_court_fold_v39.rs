@@ -630,6 +630,7 @@ mod tests {
         let mut tb = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
         let c = claim(4_000);
         world(&mut tb, &c);
+        assert_eq!(super::super::super::palw_native_mining_fold_v39::live_safe_weight_v39(&tb.state).unwrap(), 300);
         let hash = c.claim_hash();
         assert!(crate::palw_security_certification_v1::palw_native_mining_security_certified_v39(&tb.state, &hash), "the premise");
         assert_eq!(tb.state.kernel_route.as_ref().unwrap().signer_locks_of_v1(&bond(3)), 600, "the lock is in the committed ledger");
@@ -643,6 +644,7 @@ mod tests {
         let r = tb.state.kernel_route.as_ref().unwrap();
         assert!(!r.aux.contains_key(&(MINING, mk(MINING_RECEIPT_KIND_V39, &native_mining_receipt_id_v39(c.id)))));
         assert_eq!(tb.state.safe_weight, 700);
+        assert_eq!(super::super::super::palw_native_mining_fold_v39::live_safe_weight_v39(&tb.state).unwrap(), 0);
         let closed = super::super::super::palw_native_mining_fold_v39::claim(r, &c.id).unwrap();
         assert_eq!(closed.closed, Some((40, false)));
         assert!(!crate::palw_security_certification_v1::palw_native_mining_security_certified_v39(&tb.state, &hash));
@@ -657,6 +659,24 @@ mod tests {
     }
 
     /// T-N13 for the mining court: a producer drained below its exposure is still convicted; only what it holds is collected.
+    #[test]
+    fn native39_receipt_retirement_preserves_the_restart_weight_identity() {
+        use super::super::super::palw_native_mining_fold_v39::{live_safe_weight_v39, retire_receipt_weight_v39};
+        let (state, params, extras) = (state(), params(), extras());
+        let mut tb = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+        let c = claim(4_000);
+        world(&mut tb, &c);
+        let before = live_safe_weight_v39(&tb.state).unwrap() + tb.state.retired_safe_weight;
+        assert_eq!(before, 300);
+        let safe = tb.state.safe_weight;
+        retire_receipt_weight_v39(&mut tb, &native_mining_receipt_id_v39(c.id)).unwrap();
+        assert_eq!(live_safe_weight_v39(&tb.state).unwrap(), 0);
+        assert_eq!(tb.state.retired_safe_weight, before);
+        assert_eq!(tb.state.safe_weight, safe, "collection never removes already earned safe weight");
+        retire_receipt_weight_v39(&mut tb, &native_mining_receipt_id_v39(c.id)).unwrap();
+        assert_eq!(tb.state.retired_safe_weight, before, "a collected grant is never counted twice");
+    }
+
     #[test]
     fn g14n2_a_mining_conviction_is_not_refused_for_short_collateral() {
         let (mut state, params, extras) = (state(), params(), extras());

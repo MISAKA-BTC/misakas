@@ -57,6 +57,51 @@ fn route<'b>(builder: &'b TransitionBuilder<'_>) -> Result<&'b PalwKernelRouteSt
     builder.state.kernel_route.as_ref().ok_or_else(|| bad("mining39 kernel route absent"))
 }
 
+/// The receipt's actual budget-granted weight, not its unclipped nominal quanta.
+fn granted_weight_v39(state: &PalwChainStateV2, receipt: &Digest) -> Result<u128, PalwStateV2Error> {
+    let Some(raw) = state.kernel_route.as_ref().and_then(|r| r.aux.get(&(TABLE, k(MINING_RECEIPT_GRANTED_KIND_V39, receipt)))) else {
+        return Ok(0);
+    };
+    borsh::from_slice(raw)
+        .map_err(|_| PalwStateV2Error::CarriageInconsistent("native39 receipt granted weight does not decode".into()))
+}
+
+/// Re-derive live native receipt contributions when loading a durable tip.
+/// Conviction removes the receipt, so its revoked grant is no longer counted.
+pub(super) fn live_safe_weight_v39(state: &PalwChainStateV2) -> Result<u128, PalwStateV2Error> {
+    let Some(route) = state.kernel_route.as_ref() else { return Ok(0) };
+    let mut total = 0u128;
+    for ((table, key), _) in &route.aux {
+        if *table != TABLE || !key.starts_with(&[39, MINING_RECEIPT_KIND_V39]) {
+            continue;
+        }
+        let id: Digest = key[2..]
+            .try_into()
+            .map_err(|_| PalwStateV2Error::CarriageInconsistent("native39 receipt key has the wrong shape".into()))?;
+        if native_mining_receipt_view_v39(state, &Hash64::from_bytes(id)).is_none() {
+            return Err(PalwStateV2Error::CarriageInconsistent("native39 receipt does not bind its recorded claim".into()));
+        }
+        total = total.checked_add(granted_weight_v39(state, &id)?).ok_or(PalwStateV2Error::Overflow("native39 safe weight"))?;
+    }
+    Ok(total)
+}
+
+/// Collection changes the name of the contribution, never its safe-weight total.
+pub(super) fn retire_receipt_weight_v39(builder: &mut TransitionBuilder<'_>, receipt: &Digest) -> Result<(), PalwStateV2Error> {
+    let amount = granted_weight_v39(&builder.state, receipt)?;
+    let old = builder.state.retired_safe_weight;
+    let new = old.checked_add(amount).ok_or(PalwStateV2Error::Overflow("retired native39 safe weight"))?;
+    if amount > 0 {
+        builder.reserve_journal_slots_v1(2, "native39 receipt weight retirement")?;
+    }
+    builder.write_kernel_row(TABLE, k(MINING_RECEIPT_GRANTED_KIND_V39, receipt), None)?;
+    if amount > 0 {
+        builder.state.retired_safe_weight = new;
+        builder.entries.push(PalwDeltaEntryV2::RetiredWeight { old, new });
+    }
+    Ok(())
+}
+
 /// The ONE call site of a native model's tier (user decisions 2026-10-15, rounds 4–5): ADR-0179's `palw_model_tier_v1` and its
 /// coefficient, consumed for reporting only — the budget engine applies it once in `A_m`, never here and never per block. A v39
 /// mining model id is neither a registered class nor a model line, so the tier function reads it as `Registered` (0.3 past the
@@ -635,7 +680,7 @@ fn collect(
     super::palw_native_job_fold_v39::release_mining_holds_v39(builder, &c)?;
     super::palw_security_certification_fold_v1::release_native_attestor_locks_v39(builder, &c.claim_hash())?;
     if let Some(rc) = &receipt {
-        builder.write_kernel_row(TABLE, k(MINING_RECEIPT_GRANTED_KIND_V39, &rc.id), None)?;
+        retire_receipt_weight_v39(builder, &rc.id)?;
     }
     // A permanent tombstone keeps the claim id (and its used Master stages) from ever being re-credited.
     builder.write_kernel_row(TABLE, k(MINING_COLLECTED_KIND_V39, &c.id), Some(b(&(c.root(), c.closed, ctx.daa_score))))?;
