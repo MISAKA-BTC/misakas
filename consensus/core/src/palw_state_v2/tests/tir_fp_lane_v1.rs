@@ -266,6 +266,12 @@ fn lane_with_mode(
         .expect("the frame route admits a tiled greedy original");
     let mut pledge =
         crate::palw_tir_public_custody_v1::PalwTirPublicCustodyPledgeV1::for_plan_v1(&original, &plan, AT_DAA).expect("the pledge");
+    assert!(
+        pledge.material_until_daa
+            >= pledge.accept_until_daa + crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA + plan.terms.material_until_daa
+                - plan.terms.collect_until_daa,
+        "the producer signs custody through F02 without extending the allocation's owner idle grace"
+    );
     pledge.signature = sign(pledge.id_v1(), crate::palw_tir_public_custody_v1::PALW_TIR_SOURCE_PLEDGE_CONTEXT_V1);
     let envelope =
         PalwTirPublicFpEnvelopeV1::new_v1(borsh::to_vec(&payload).unwrap(), header, pledge, plan.terms.plan.rent_sompi).expect("TFP1");
@@ -635,10 +641,8 @@ fn tn1_licensed_mode(
 ) -> (Lane, PalwChainStateV2, crate::palw_tir_public_claim_v1::PalwTirPublicClaimV1, u64) {
     use crate::palw_tir_public_carriage_v1::{PalwTirPublicControlActionV1 as A, PalwTirPublicControlTargetV1 as T};
     use crate::palw_tir_public_owned_v1::{PalwTirPublicOwnedActionV1 as Owned, PalwTirPublicWorkPhaseV1, PalwTirPublicWorkScopeV1};
-    let mut cost = crate::palw_tir_frame_cost_v1::palw_tir_frame_test_only_cost_v1();
-    // The court-service binding runs to accepted + DISPUTE_WINDOW. The test-only retention of 8
-    // leaves the signed custody short of that horizon.
-    cost.config.reorg_retention_daa = cost.config.reorg_retention_daa.max(crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA);
+    // The signed producer pledge covers F02 independently of native owner idle grace.
+    let cost = crate::palw_tir_frame_cost_v1::palw_tir_frame_test_only_cost_v1();
     let mut l = lane_with_mode(false, forge, Some(cost), privacy_mode);
     l.p = l.p.clone().with_panel_da_disclosure_from_daa(disclosure_from);
     // An accuser's room is a share of its collateral (the fixture params carry none): half, as the conviction fold tests use.
@@ -1238,10 +1242,8 @@ fn panelda_undisclosed_claim_defaults_without_conviction() {
 /// exactly as before (no ids, no accounting); a disclosure with no row is refused; and PublicDa writes no row past the fence.
 #[test]
 fn panelda_fence_boundary_is_byte_identical_below() {
-    let mut cost = crate::palw_tir_frame_cost_v1::palw_tir_frame_test_only_cost_v1();
-    // The court-service binding runs to accepted + DISPUTE_WINDOW. The test-only retention of 8
-    // leaves the signed custody short of that horizon.
-    cost.config.reorg_retention_daa = cost.config.reorg_retention_daa.max(crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA);
+    // The signed producer pledge covers F02 independently of native owner idle grace.
+    let cost = crate::palw_tir_frame_cost_v1::palw_tir_frame_test_only_cost_v1();
     let mut l = lane_with_mode(false, None, Some(cost), PANEL_DA);
     l.p = l.p.clone().with_panel_da_disclosure_from_daa(Some(AT_DAA + 1));
     let err = apply_derived(&l.state, &l.p, &at(), std::slice::from_ref(&l.object), &l.extras).expect_err("below the fence");

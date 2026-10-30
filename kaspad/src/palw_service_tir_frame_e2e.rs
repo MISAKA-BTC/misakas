@@ -34,11 +34,8 @@ pub(super) fn tir_frame_config() -> (Config, PalwConsensusParamsV2, Vec<Funding>
     // TEST-ONLY 2-DAA acquisition leaves it one DAA. 4 DAA keeps the frame's collect door (which the licence waits out) inside the
     // receipt window (bind + 600).
     cost.config.acquisition_daa = 4;
-    // Lane FPSEL fix 2026-10-27: past the F02 profile pin every TIR original installs a court service binding whose packets run to
-    // `a + DISPUTE_WINDOW_DAA`, and the frame's signed custody (`collect + retention`) must cover it; the TEST-ONLY retention 8 made
-    // every original (canonical or rail) be dropped as "service material horizon exceeds signed TIR custody".
-    cost.config.reorg_retention_daa =
-        cost.config.reorg_retention_daa.max(kaspa_consensus_core::palw_court_policy_v1::DISPUTE_WINDOW_DAA);
+    // The producer's signed pledge covers the F02 hard deadline independently
+    // of the native reorg-retention interval and owner idle grace.
     p.palw_tir_frame_cost_v1 = Some(cost);
     // **HARNESS ONLY: a work target at this tiny class's scale.** `W₀ = escrow · 10⁹ / rate`: at testnet-12's 9 MSK a G it is
     // ~3.6·10^11 CCU and the ~7·10^4-CCU IR class draws (and its quanta win) at ~2·10^-7 — so its probes could only be ground, never

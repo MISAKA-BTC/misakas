@@ -133,7 +133,18 @@ impl PalwTirPublicCustodyPledgeV1 {
     ) -> Result<Self, String> {
         let t = plan.terms;
         let open_span = t.open_until_daa.checked_sub(t.accepted_daa).ok_or("quoted open door precedes its acceptance")?;
-        let material_span = t.material_until_daa.checked_sub(t.accepted_daa).ok_or("quoted material horizon precedes acceptance")?;
+        let mut material_span =
+            t.material_until_daa.checked_sub(t.accepted_daa).ok_or("quoted material horizon precedes acceptance")?;
+        // With the pinned F02 service profile the producer also promises custody
+        // through the original hard deadline plus the existing native retention.
+        // Sign that longer promise here; changing reorg_retention_daa instead
+        // would also lengthen owner idle grace and the allocation's queue bound.
+        if crate::palw_court_service_binding_v1::PALW_COURT_SERVICE_PROFILE_V1.is_some() {
+            let retention = t.material_until_daa.checked_sub(t.collect_until_daa).ok_or("quoted retention precedes collection")?;
+            let service_span =
+                crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA.checked_add(retention).ok_or("service custody span overflows")?;
+            material_span = material_span.max(service_span);
+        }
         let accept_until_daa = now_daa.checked_add(open_span.max(1)).ok_or("pledge acceptance door overflows")?;
         let material_until_daa = accept_until_daa.checked_add(material_span).ok_or("pledge material horizon overflows")?;
         if crate::palw_freeprompt_v3::fp_claim_id_v3(original) != plan.original_claim {
