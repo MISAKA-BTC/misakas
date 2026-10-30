@@ -275,15 +275,19 @@ pub(super) fn request_v1(
         return Err("reservation already owns another typed court".into());
     };
     if let Some(fault) = completed {
-        if pending.is_some() || *cursor != PalwPrefixFamilyCursorV1::Complete {
+        if pending.is_none() && *cursor == PalwPrefixFamilyCursorV1::Complete {
+            return Ok(PrefixScheduleV1::Finished(fault.then_some(PalwStagedCertificateRefV1 {
+                claim: progress.claim,
+                reserver: progress.reserver,
+                reserved_daa: progress.reserved_daa,
+                seed_id,
+            })));
+        }
+        // An active protected acquisition has no certificate: its projection is
+        // Some(false), not an Honest terminal verdict. Keep waiting/collecting it.
+        if *fault {
             return Err("prefix completion has unfulfilled public continuation".into());
         }
-        return Ok(PrefixScheduleV1::Finished(fault.then_some(PalwStagedCertificateRefV1 {
-            claim: progress.claim,
-            reserver: progress.reserver,
-            reserved_daa: progress.reserved_daa,
-            seed_id,
-        })));
     }
     let action = if let Some(pending) = pending {
         if progress.now_daa < pending.deadline_daa {
@@ -670,7 +674,16 @@ mod tests {
     #[test]
     fn responder_uses_accepted_literal_slot_and_original_leaf_across_restart() {
         let backend = super::super::seat_s_tests::floor_backend();
-        let (job, ids) = super::super::seat_s_tests::floor_fp_job(&backend);
+        let (mut job, ids) = super::super::seat_s_tests::floor_fp_job(&backend);
+        job.version = kaspa_consensus_core::palw_fp_prefix_v1::PALW_FP_PREFIX_VERSION;
+        job.decode = Some(kaspa_consensus_core::palw_decode_pipeline_v4::DecodeConfigV4::NOOP);
+        job.tail = Some(kaspa_consensus_core::palw_freeprompt_v3::PalwFpJobTailV1::Prefix(
+            kaspa_consensus_core::palw_freeprompt_v3::PalwFpPrefixStateV1 {
+                class_id: job.class_id,
+                prefix_tokens: 1,
+                state_root: Hash64::from_u64_word(0xBAD17),
+            },
+        ));
         let run = backend.execute_free_prompt(&job, &ids.iter().map(|n| *n as usize).collect::<Vec<_>>()).unwrap();
         let witness = backend.refutation_for_free_prompt_index(&run.outcome.material, 0, &ids).unwrap();
         let binding = witness.binding;
@@ -736,5 +749,46 @@ mod tests {
         assert_eq!(pending.authenticated_answer().unwrap().1, tile.preimage.values_le);
         progress.now_daa = 200;
         assert!(answer_v1(&progress, bond(1), &binding, &tile).is_err(), "deadline is not silently extended");
+        let mut semantics = kaspa_consensus_core::palw_class_semantics_v1::PalwClassSemanticsV1::of_registration(
+            job.class_id,
+            Hash64::from_u64_word(0xA018),
+            &binding.job_context,
+            0,
+        );
+        semantics.prefix_state_relation =
+            Some(kaspa_consensus_core::palw_class_semantics_v1::PalwPrefixStateRelationV1::Base0Int8KvV1);
+        let target = PalwOffenceTargetV1 {
+            claim_id: progress.claim,
+            class_id: job.class_id,
+            artifact_root: semantics.artifact_root,
+            executor_bond: PalwBondKeyV2(job.executor_bond),
+            execution_root: binding.committed_execution_root,
+            trace_root: binding.full_logits_trace_root,
+            output_root: run.outcome.output_root,
+            lane: Some(kaspa_consensus_core::palw_offence_attribution_v1::PalwClaimSourceKindV1::FreePrompt),
+            segment_count: Some(1),
+            phase: None,
+            job_identity: kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_of_context_v1(&binding.job_context),
+            registered_semantics: Some(semantics),
+        };
+        if let Some(PalwStagedOwnedCursorV1::PublicPrefix { completed, .. }) = &mut progress.cursor {
+            *completed = Some(false);
+        }
+        progress.now_daa = 100;
+        assert!(
+            matches!(request_v1(&target, &binding, &job, &progress, 1 << 40, None).unwrap(), PrefixScheduleV1::Wait),
+            "an accepted partial acquisition with no certificate remains pending"
+        );
+        progress.now_daa = 200;
+        assert!(
+            matches!(
+                request_v1(&target, &binding, &job, &progress, 1 << 40, None).unwrap(),
+                PrefixScheduleV1::Move(PalwConstraintStreamMoveV1 {
+                    action: PalwConstraintStreamActionV1::PrefixPublicCollect { .. },
+                    ..
+                })
+            ),
+            "the same pending acquisition still reaches its literal collection clock"
+        );
     }
 }
