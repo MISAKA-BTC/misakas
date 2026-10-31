@@ -1,0 +1,61 @@
+{
+  "reviewed_execution_base_commit": "425372a751affa65ba868e51045517c7c71c7a42",
+  "scope": "Node DATA arithmetic adapter for an A2 update that already includes source due, plus explicit logical NoOp owner boundary.",
+  "actions": {
+    "source_code_edited": false,
+    "builds_run": false,
+    "tests_rerun": false,
+    "git_commits_created": false,
+    "only_this_evidence_json_written": true
+  },
+  "findings": [],
+  "changed_source_sha256": {
+    "misaka/palw/positive-accounting-node/src/dues.rs": "0f3f234a040451c7ba72a9b607f4e78ba32b9de6048183b2954eb120c8df677e",
+    "misaka/palw/positive-accounting-node/src/dues/tests.rs": "8a65e986230dbbc5854dd2bb6242ae51c6faa0a7166e54b8a720564863d91bb3"
+  },
+  "reviewed_invariants": [
+    "SourceDueUpdate is public constructible DATA with no new authorization, serialization, key, domain or native capability.",
+    "The adapter projects only the proposed fee back to the old case fee, then independently invokes prepare_source_due; it compares the complete resulting AggregateUsage and optional shared SourceFeeDeltaIntent with the claimed update.",
+    "Already-accounted due 12 remains 12; proposed fee 24, altered provider/scope/amount or missing claimed delta is rejected. Some zero-fee delta remains distinct from None.",
+    "Existing first receipts remain immutable. The logical NoOp fixture retains every usage counter, first receipt and None fee delta; the generic increased-meter fixture is explicitly limited to DATA for a distinct newly authenticated one-shot opportunity."
+  ],
+  "execution_evidence": {
+    "node-all": {
+      "metadata": "node-all-result.json",
+      "metadata_sha256": "4eb2b0373c3b844b6b558cbd15b1135fb67e7e9d87a6939a8b496912808f1c90",
+      "raw_log": "node-all.log",
+      "raw_log_sha256": "9199bd510a03ba2fadf3c1e0031b3fc03c5890edc2a2aa9f42c0900daf96e039",
+      "exit_code": 0,
+      "all_recorded_source_hashes_match_current": true,
+      "matched_source_count": 14,
+      "source_unchanged_during_run": true,
+      "passed": 46,
+      "failed": 0,
+      "module_pass_counts": {
+        "dues": 9,
+        "native_funds": 15,
+        "native": 15,
+        "rows": 7
+      },
+      "both_new_regressions_passed": true
+    },
+    "node-clippy": {
+      "metadata": "node-clippy-result.json",
+      "metadata_sha256": "6deb8b39819b8f36f0a9807bf30cb5b7454d88e6e8525dd38375dce7f532e567",
+      "raw_log": "node-clippy.log",
+      "raw_log_sha256": "2317329934439348f097adaa8519727d4f845a432b25103a4be39e886b5f1b91",
+      "exit_code": 0,
+      "all_recorded_source_hashes_match_current": true,
+      "matched_source_count": 14,
+      "source_unchanged_during_run": true,
+      "raw_warnings_found": false
+    }
+  },
+  "limits": [
+    "Root performed both recorded executions. The independent reviewer only read source and raw logs and verified their hashes; no additional build or test was run.",
+    "The fixtures do not execute actual A2/A4 authentication, literal validation, one-shot opportunity assignment, canonical history append rules or a logical copy transported across different native carriers.",
+    "Logical NoOp classification must occur only after authenticating and checking the same op3/op4 literals; this calculator cannot establish that classification or freshness from caller-supplied usage.",
+    "Actual first receipt, canonical provider/rate, accepted prefix, current root/import generation, funding/leases and atomic native writer remain A2/A4/native owner responsibilities.",
+    "No-default node tests and Clippy exclude default-feature TIR execution and do not demonstrate native restart/restore, UTXO locking or end-to-end payment."
+  ]
+}

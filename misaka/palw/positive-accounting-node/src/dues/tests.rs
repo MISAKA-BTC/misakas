@@ -189,8 +189,11 @@ fn first_source_due_preserves_meters_and_does_not_pay_or_erase_ended_service() {
 }
 
 #[test]
-fn duplicate_receipt_never_adds_due_and_cannot_replace_first_provider_or_response() {
+fn distinct_one_shot_opportunity_data_preserves_meters_without_reopening_receipt_due() {
     let (r, c, f, receipt, terms) = fixture();
+    // Generic arithmetic DATA for a distinct new one-shot opportunity only.
+    // This unsigned fixture does not authorize such an opportunity. A logical
+    // op3/op4 copy must instead use the unchanged usage in the NoOp test below.
     let usage = AggregateUsage { transmitted_bytes: 10, ..c.usage };
     let p = prepare_source_due(&r, &c, &f, usage, &receipt, Some(&receipt), terms).unwrap();
     assert_eq!(p.fee_delta, None);
@@ -203,6 +206,61 @@ fn duplicate_receipt_never_adds_due_and_cannot_replace_first_provider_or_respons
     ] {
         assert_eq!(prepare_source_due(&r, &c, &f, usage, &changed, Some(&receipt), terms), Err(SourceDueError::ReceiptConflict));
     }
+}
+
+#[test]
+fn logical_noop_data_preserves_every_usage_counter_and_existing_receipt() {
+    let (r, mut c, f, receipt, terms) = fixture();
+    c.usage = AggregateUsage {
+        rounds: 1,
+        unique_source_bytes: 10,
+        transmitted_bytes: 20,
+        additional_work: 3,
+        retained_bytes: 20,
+        fee: 2,
+        witness_attempts: 1,
+    };
+    let p = recheck_source_due_update(
+        &r,
+        &c,
+        &f,
+        SourceDueUpdate { next_usage: c.usage, receipt: &receipt, existing: Some(&receipt), terms, claimed_delta: None },
+    )
+    .unwrap();
+    assert_eq!(p.expected_usage, c.usage);
+    assert_eq!(p.next_usage, c.usage);
+    assert_eq!(p.fee_delta, None);
+    assert_eq!(p.expected_receipt, Some(receipt));
+    assert_eq!(p.next_receipt, receipt);
+    // Authentication/literal classification and no history append are A2/A4
+    // owner checks, not facts established by these unchanged arithmetic DTOs.
+}
+
+#[test]
+fn already_incremented_update_is_recomputed_once_and_requires_exact_delta() {
+    let (r, c, f, receipt, terms) = fixture();
+    let source_usage = AggregateUsage { transmitted_bytes: 10, additional_work: 1, ..c.usage };
+    let expected = prepare_source_due(&r, &c, &f, source_usage, &receipt, None, terms).unwrap();
+    assert_eq!(expected.next_usage.fee, 12);
+    let claimed = expected.fee_delta.unwrap();
+    let recheck = |usage, delta| {
+        recheck_source_due_update(
+            &r,
+            &c,
+            &f,
+            SourceDueUpdate { next_usage: usage, receipt: &receipt, existing: None, terms, claimed_delta: delta },
+        )
+    };
+    assert_eq!(recheck(expected.next_usage, Some(claimed)), Ok(expected.clone()));
+    assert_eq!(recheck(AggregateUsage { fee: 24, ..expected.next_usage }, Some(claimed)), Err(SourceDueError::UpdateMismatch));
+    for changed in [
+        SourceFeeDeltaIntent { provider: PrincipalId(d(99)), ..claimed },
+        SourceFeeDeltaIntent { funding_scope: FundingScopeId(d(99)), ..claimed },
+        SourceFeeDeltaIntent { amount: claimed.amount + 1, ..claimed },
+    ] {
+        assert_eq!(recheck(expected.next_usage, Some(changed)), Err(SourceDueError::UpdateMismatch));
+    }
+    assert_eq!(recheck(expected.next_usage, None), Err(SourceDueError::UpdateMismatch));
 }
 
 #[test]
