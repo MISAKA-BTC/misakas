@@ -118,6 +118,16 @@ fn no_saved_pass_or_union_summary_can_exceed_its_own_plan() {
     assert_eq!(NativeRowValue::new(NativeRowBody::SourceUnion(u)), Err(ContractError::Range));
     assert_eq!(NativeRowValue::decode(&[0; MAX_NATIVE_KEY_BYTES + 1], &[]), Err(ContractError::Budget));
     assert_eq!(NativeRowValue::decode(&[], &vec![0; MAX_NATIVE_ROW_BYTES + 1]), Err(ContractError::Budget));
+    let packet = PacketReceiptRow {
+        witness: WitnessId(d(1)),
+        first_relation: 0,
+        frame: EvidencePartId(d(2)),
+        author: PrincipalId(d(3)),
+        signed_bytes: (wire::EVIDENCE_HEADER_BYTES + SIGNATURE_BYTES) as u64,
+        origin: origin(),
+    };
+    // A receipt for a checked r1 relation must include its inner TIR framing.
+    assert_eq!(NativeRowValue::new(NativeRowBody::PacketReceipt(packet)), Err(ContractError::Range));
 }
 #[test]
 fn balances_require_conservation_and_checked_arithmetic() {
