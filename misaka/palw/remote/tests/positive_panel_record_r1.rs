@@ -15,7 +15,7 @@ use misaka_palw_positive_contract::{
 use misaka_palw_remote::{bundle::DetachedSigner, positive_panel::SignedPanelWitnessR1};
 use misaka_palw_tir_exec::node::{
     positive_check::CheckOutcome,
-    positive_contract::{AdapterError, CheckContext, PreparedCheck, TirNodeChecker},
+    positive_contract::{CheckContext, PreparedCheck, TirNodeChecker, record::RecordDeliveryError},
     positive_panel::TirPanelBuilder,
 };
 
@@ -58,7 +58,7 @@ fn receive_record(
     signed: &SignedPanelWitnessR1,
     bytes: &[u8],
     cap: u64,
-) -> Result<CheckContext, AdapterError> {
+) -> Result<CheckContext, RecordDeliveryError> {
     prepared.authenticate_record(signed.witness().clone(), bytes, cap, signed.author_key(), signed.signature())
 }
 
