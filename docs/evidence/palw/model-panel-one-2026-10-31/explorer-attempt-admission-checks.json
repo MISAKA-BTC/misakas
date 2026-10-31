@@ -40,7 +40,7 @@
   "originalUserBeforeSha256": "c8be6a918b6a008e92c0a280c96e235d7fd16b944fb9e67dcda455623783fc7c",
   "liveCandidate": {
     "beforeSha256": "e08a95eef65dab68c549177916352ef71d9b0a9c7b2018921ec4a9f13c5850c1",
-    "candidateSha256": "3d2aa7f71936fefd365b731a58a51e5e66809dfc87e9e0fa5d87645886a08c41",
+    "candidateSha256": "13176ce4caae3ff41ef34973605ced825809e1f680eb8b7379387e4c6d59ea3b",
     "beforePath": "/tmp/misaka-chain-20261031/explorer-live-claim-join-before.js",
     "candidatePath": "/tmp/misaka-chain-20261031/explorer-live-claim-join-candidate.js",
     "downloadHeadersPath": "/tmp/misaka-chain-20261031/explorer-live-claim-join-before.headers",
@@ -57,5 +57,31 @@
     "preserved": "existing live static catalog, current protocol note/lifecycle, coldFill/updateRecent, body hydration, arrival ordering, algo10 counter and prior round classification",
     "deploymentGuard": "Abort if current public/app.js hash differs from beforeSha256; parent review/backup/atomic deployment only"
   },
-  "cacheIdentity": "block+class+executor+candidate claim+isFreePrompt; different FP claims sharing one carrier have isolated states"
+  "cacheIdentity": "block+class+executor+candidate claim+isFreePrompt; different FP claims sharing one carrier have isolated states",
+  "localMergeCandidateSha256": "6c599167c0c6957405a49963908e7724b7f75b5a01b733ccb36b567aa950b56b",
+  "candidateColdWalkCorrection": {
+    "sourceRevision": "3c998c366",
+    "checkedUtc": "2026-10-31T17:45:29.281169+00:00",
+    "productionSourceChanged": false,
+    "deploymentPerformed": false,
+    "mainCandidateTests": {
+      "passed": 12,
+      "failed": 0,
+      "log": "explorer-candidate-coldwalk-main-tests.log"
+    },
+    "liveCandidateTests": {
+      "passed": 16,
+      "failed": 0,
+      "log": "explorer-candidate-coldwalk-live-tests.log"
+    },
+    "coldInitializationFragmentTests": {
+      "passed": 4,
+      "failed": 0,
+      "log": "explorer-candidate-coldwalk-tests.log",
+      "scope": "executes the actual cold-initialization block with controlled RPC/walker; includes pre-correction regression control, not a full browser E2E"
+    },
+    "allOtherCandidateBytesPreserved": true,
+    "correctionRecord": "explorer-candidate-coldwalk-correction.json",
+    "oldLiveCandidateSha256": "3d2aa7f71936fefd365b731a58a51e5e66809dfc87e9e0fa5d87645886a08c41"
+  }
 }

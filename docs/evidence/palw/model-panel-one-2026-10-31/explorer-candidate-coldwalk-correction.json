@@ -1,0 +1,24 @@
+{
+  "explorer-claim-join-user-candidate.js": {
+    "beforeSha256": "863a6497cf3553018f0da425783b542a04065f003f85bbb5be8bcded9dab9d5d",
+    "afterSha256": "6c599167c0c6957405a49963908e7724b7f75b5a01b733ccb36b567aa950b56b",
+    "backup": "/tmp/misaka-chain-20261031/explorer-claim-join-user-candidate-before-coldwalk-correction.js",
+    "onlyChanges": [
+      "refreshLlmInner cold-anchor block copied exactly from shipped source 3c998c366",
+      "restore composite cache-key explanation comment"
+    ],
+    "allOtherBytesPreserved": true,
+    "exactShippedColdWalk": "  if (!llmCursor){\n    const dag = await rpc(\"getBlockDagInfo\");\n    // Use verboseData.selectedParentHash, not a non-existent header.parents field.\n    llmCursor = await recentChainAnchor(dag,12);\n  }"
+  },
+  "explorer-live-claim-join-candidate.js": {
+    "beforeSha256": "3d2aa7f71936fefd365b731a58a51e5e66809dfc87e9e0fa5d87645886a08c41",
+    "afterSha256": "13176ce4caae3ff41ef34973605ced825809e1f680eb8b7379387e4c6d59ea3b",
+    "backup": "/tmp/misaka-chain-20261031/explorer-live-claim-join-candidate-before-coldwalk-correction.js",
+    "onlyChanges": [
+      "refreshLlmInner cold-anchor block copied exactly from shipped source 3c998c366",
+      "restore composite cache-key explanation comment"
+    ],
+    "allOtherBytesPreserved": true,
+    "exactShippedColdWalk": "  if (!llmCursor){\n    const dag = await rpc(\"getBlockDagInfo\");\n    // Use verboseData.selectedParentHash, not a non-existent header.parents field.\n    llmCursor = await recentChainAnchor(dag,12);\n  }"
+  }
+}

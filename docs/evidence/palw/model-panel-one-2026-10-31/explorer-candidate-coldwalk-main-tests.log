@@ -1,0 +1,20 @@
+✔ an exact admitted one-seat Final is joined without increasing execution round counts (3.183208ms)
+✔ the actually received 481352 header is never admitted from its presence or a blue flag (1.081584ms)
+✔ class, executor, block and claimed identity mismatches cannot borrow another admission (1.38425ms)
+✔ found=false, truncated/retired row absence and unavailable RPC remain unknown and retryable (2.809167ms)
+✔ a feed candidate may be confirmed only by a matching found detail response (1.961417ms)
+✔ PAV3 metadata reads the unchanged base attempt at the correct offset (1.137917ms)
+✔ an unavailable operator RPC cannot supply stray rows as admitted claims (1.106625ms)
+✔ two free-prompt claims sharing a carrier cannot share cached admission or phase (1.5225ms)
+✔ only the explicit whole-claim all-model single-seat arming record enables the new view (1.519ms)
+✔ active G14 renders class facts with ready=0 and withBond=false without asserting mining or certification (1.960542ms)
+✔ inactive or unknown arming preserves the legacy readiness hold renderer (2.079708ms)
+✔ active policy does not fabricate class availability from an unavailable producer-facts read (0.554292ms)
+ℹ tests 12
+ℹ suites 0
+ℹ pass 12
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 107.333084

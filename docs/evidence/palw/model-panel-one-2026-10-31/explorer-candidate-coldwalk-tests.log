@@ -1,0 +1,12 @@
+✔ shipped source executes the selected-parent walker on cold LLM initialization (3.024375ms)
+✔ main-preserving candidate executes the selected-parent walker on cold LLM initialization (1.091834ms)
+✔ live-preserving candidate executes the selected-parent walker on cold LLM initialization (1.495625ms)
+✔ the pre-correction main candidate demonstrates the missed helper contract (1.953417ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 4
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 99.692916
