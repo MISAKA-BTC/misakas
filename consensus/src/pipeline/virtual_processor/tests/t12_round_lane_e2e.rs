@@ -198,6 +198,8 @@ pub(super) fn t12_with_harness_cards_over(
         kaspa_consensus_core::config::params::PALW_T12_G14_17000_FENCES_V1,
         None,
     );
+    params.palw_model_panel_one_v1 = None;
+    params.sync_palw_g14_gates_v1();
 
     // The divergence is stated, not assumed: testnet-12 ships the lane at genesis.
     assert_eq!(shipped.evm_activation_daa_score, 0, "testnet-12 ships the EVM lane active from genesis");
@@ -227,6 +229,8 @@ pub(super) fn t12_with_harness_cards_over(
         kaspa_consensus_core::config::params::PALW_T12_G14_17000_FENCES_V1,
         None,
     );
+    expected.palw_model_panel_one_v1 = None;
+    expected.sync_palw_g14_gates_v1();
     let PalwConsensusMode::ConsensusV2(shipped_bundle) = &expected.palw_consensus_mode else { unreachable!() };
     assert_eq!(bundle.state, shipped_bundle.state, "every window as shipped with the public-genesis G14 fences removed");
     assert_eq!(bundle.panel, shipped_bundle.panel, "the panel as shipped");

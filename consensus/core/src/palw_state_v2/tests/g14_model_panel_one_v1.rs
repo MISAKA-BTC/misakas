@@ -154,7 +154,55 @@ fn model_ids_do_not_select_a_different_panel_route() {
     if let PalwConsensusObjectV2::ClassRegistered { slash_value_per_pwu, .. } = &mut entrant {
         *slash_value_per_pwu = 5;
     }
-    let s = apply_round(&s, &p, &ctx(2, 101, 2), &[entrant], &lane()).unwrap();
+    let mut s = apply_round(&s, &p, &ctx(2, 101, 2), &[entrant], &lane()).unwrap();
+    // A standing historical Held row with zero ready copies cannot revive a
+    // model-level review or possession floor on the new claim route.
+    use crate::palw_model_registry_v1::{
+        PALW_REGISTRY_GLOBALS_V1, PalwModelLifecycleRowV1, PalwModelLifecycleV1, PalwModelRegistryFoldV1, PalwModelWorkV1,
+        palw_derive_profile_v1,
+    };
+    let work = PalwModelWorkV1 {
+        verification_ccu: 1_000_000,
+        economic_ccu_per_claim: 800_000,
+        artifact_bytes: 1 << 30,
+        working_set_bytes: 1 << 30,
+        ops_supported: true,
+    };
+    let profile = palw_derive_profile_v1(&work, &PALW_REGISTRY_GLOBALS_V1, false);
+    assert!(profile.required_ready_seats >= 5);
+    s.model_lifecycles.insert(
+        h64(2),
+        PalwModelLifecycleRowV1 {
+            state: PalwModelLifecycleV1::Held,
+            work,
+            profile,
+            since_span: 101,
+            probes_passed: 0,
+            probes_failed: 0,
+            probes_passed_this_span: 0,
+            probes_failed_this_span: 0,
+            ready_seats: 0,
+            inflight_claims: 0,
+            utilization_permille: 0,
+            admission_milli: 0,
+            cap_utilization_permille: 0,
+            priced_share_permille: 0,
+        },
+    );
+    let read = PalwTransitionExtrasV1 {
+        model_registry: Some(PalwModelRegistryFoldV1 {
+            globals: PALW_REGISTRY_GLOBALS_V1,
+            span_daa: 1,
+            genesis_works: Default::default(),
+            grace_until_daa: 0,
+            admission_audit_period_daa: None,
+            readiness_v2_active: false,
+            bond_maturity: None,
+        }),
+        ..lane()
+    };
+    assert!(palw_class_admits_claim_v1(&s, &p, &read, &h64(2), 102).is_ok());
+    assert!(palw_class_admits_claim_v1(&s, &p.clone().with_model_panel_one_from_daa(None), &read, &h64(2), 102).is_err());
     let other = attempt_for_class(5, 1, h64(2), bond_key(1), vec![7; 4], op_id(21), h64(0xA1));
     let other_id = attempt_id_v2(&other.attempt);
     let (s, _) = fold_round(&s, &p, &ctx(3, 102, 3), &[], Some((&other, h64(0x102))), &lane()).unwrap();

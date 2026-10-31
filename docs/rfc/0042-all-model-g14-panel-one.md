@@ -16,7 +16,7 @@ genesis / 年次フォーク指定は 1.0、後発登録は登録時から審査
 ## 移行境界と履歴
 
 別の fence `palw_model_panel_one_v1` を使用する。既に発火した kernel slice の DAA 18,400 を全モデル移行の高さに読み替えない。
-有効化高さは候補の検証後に設定し、params / schedule identity、fork visitor、state params の mirror に含める。
+t12 の配備候補は DAA **18,560**。params / schedule identity、fork visitor、state params の mirror に含める。mainnet 等の fence は無効のまま。
 
 経路を選ぶ基準は claim の **最初の acceptance DAA**。再抽選、receipt、Final、再起動、reorg、pruned restore の高さでは切り替えない。
 境界前の claim とその責任記録は従来の席数・scope・経済条件を維持する。
@@ -62,4 +62,4 @@ claim ごとの Gate C の抽選・承認条件、公開訴追期間、court、D
 
 ## 実装検証の記録
 
-[2026-10-31 の検証記録](../evidence/palw/model-panel-one-2026-10-31/README.md): 関連回帰 123 件と EVM を含む全 target の型検査に成功。配備・有効化は未実施。
+[2026-10-31 の検証記録](../evidence/palw/model-panel-one-2026-10-31/README.md): 関連回帰 283 件と EVM を含む全 target の型検査に成功。配備・有効化は未実施。

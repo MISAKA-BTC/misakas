@@ -216,13 +216,29 @@ mod tests {
 
     #[test]
     fn a_future_migration_keeps_the_live_handshake_and_kernel_policy_identity() {
-        let old = crate::config::params::palw_t12_shipped_params();
+        let old = crate::config::params::palw_t12_pre_model_panel_one_params_v1();
+        assert_eq!(old.consensus_params_id().to_string(), "3e6da238306cfdb7e71599d5ef8fb314f1b3ff33a50673af1321f3da9cfa5b94");
         let mut scheduled = old.clone();
         scheduled.palw_model_panel_one_v1 = Some(ForkActivation::new(20_000));
         scheduled.sync_palw_g14_gates_v1();
         assert_eq!(old.consensus_identity_id(), scheduled.consensus_identity_id());
         assert_ne!(old.consensus_params_id(), scheduled.consensus_params_id());
         assert_ne!(old.consensus_schedule_id(), scheduled.consensus_schedule_id());
+    }
+
+    #[test]
+    fn public_migration_activates_at_its_separate_future_boundary() {
+        let p = crate::config::params::palw_t12_shipped_params();
+        p.validate_palw_model_panel_one_v1().unwrap();
+        let PalwConsensusMode::ConsensusV2(bundle) = &p.palw_consensus_mode else { unreachable!() };
+        assert!(!bundle.state.model_panel_one_governs_v1(18_559));
+        assert!(bundle.state.model_panel_one_governs_v1(18_560));
+        eprintln!(
+            "all-model release params={} schedule={} identity={}",
+            p.consensus_params_id(),
+            p.consensus_schedule_id(),
+            p.consensus_identity_id()
+        );
     }
 
     #[test]

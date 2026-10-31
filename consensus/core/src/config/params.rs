@@ -10994,6 +10994,19 @@ pub fn palw_t12_shipped_params() -> Params {
     palw_t12_public_params_over_v1(palw_t12_base_params())
 }
 
+/// All-model producer migration, separately scheduled after the kernel slice.
+/// This height does not reinterpret claims accepted under the DAA-18,400 rules.
+pub const PALW_T12_MODEL_PANEL_ONE_FENCE_DAA_V1: u64 = 18_560;
+
+/// The live DAA-18,400 ruleset before the all-model migration, for historical
+/// replay identities and fixtures that deliberately disarm its prerequisites.
+pub fn palw_t12_pre_model_panel_one_params_v1() -> Params {
+    let mut params = palw_t12_shipped_params();
+    params.palw_model_panel_one_v1 = None;
+    params.sync_palw_g14_gates_v1();
+    params
+}
+
 /// **testnet-12 as it LAUNCHED** (`0e8ec984e`; params `b8564b88…`, identity `5de80e64…`, schedule
 /// `93da24cc…`): [`palw_t12_shipped_params`] with every fence of [`PALW_T12_POST_LAUNCH_FENCES_V1`] set
 /// back to dormant, each through its own `set` (mirrors included). The ruleset a node that has not
@@ -11002,7 +11015,7 @@ pub fn palw_t12_shipped_params() -> Params {
 /// post-launch lanes' tests arm ONE fence over, so each lane's test keeps judging its own fence
 /// against the build it replaces.
 pub fn palw_t12_launch_params_v1() -> Params {
-    let mut params = palw_t12_shipped_params();
+    let mut params = palw_t12_pre_model_panel_one_params_v1();
     palw_t12_arm_int13_flag_day_at_v1(&mut params, None);
     palw_t12_arm_int11_flag_day_at_v1(&mut params, None);
     // The second flag day's list first (its fences ride the DAA-750 ones' prerequisites), then the
@@ -12019,7 +12032,7 @@ pub fn palw_t12_arm_int13_flag_day_at_v1(params: &mut Params, at: Option<u64>) {
 /// `5ee7fd8e…`, schedule `1678e073…`), and the baseline the int-13 flag day is judged against (the fork-id comparison, the "only this
 /// list moved it" twin).
 pub fn palw_t12_release_v6_params() -> Params {
-    let mut params = palw_t12_shipped_params();
+    let mut params = palw_t12_pre_model_panel_one_params_v1();
     // G14 is later than int-12. Take it off before the int-13 list, or this baseline still carries 17,400.
     palw_t12_arm_after_int13_at_v1(&mut params, PALW_T12_G14_17000_FENCES_V1, None);
     palw_t12_arm_int13_flag_day_at_v1(&mut params, None);
@@ -12030,7 +12043,7 @@ pub fn palw_t12_release_v6_params() -> Params {
 /// entry) and the int-13 flag day set back to dormant: the ruleset a node that has not taken the int-11 release runs, int-10's, and the
 /// baseline the int-11 flag day is judged against (the fork-id comparison, the "only this list moved it" twin).
 pub fn palw_t12_release_v5_params() -> Params {
-    let mut params = palw_t12_shipped_params();
+    let mut params = palw_t12_pre_model_panel_one_params_v1();
     palw_t12_arm_after_int13_at_v1(&mut params, PALW_T12_G14_17000_FENCES_V1, None);
     palw_t12_arm_int13_flag_day_at_v1(&mut params, None);
     palw_t12_arm_int11_flag_day_at_v1(&mut params, None);
@@ -12043,7 +12056,7 @@ pub fn palw_t12_release_v5_params() -> Params {
 /// baseline the DAA-3,600 flag day is judged against (the fork-id comparison, the "only this fence moved it"
 /// twin).
 pub fn palw_t12_release_v4_params() -> Params {
-    let mut params = palw_t12_shipped_params();
+    let mut params = palw_t12_pre_model_panel_one_params_v1();
     palw_t12_arm_after_int13_at_v1(&mut params, PALW_T12_G14_17000_FENCES_V1, None);
     palw_t12_arm_int13_flag_day_at_v1(&mut params, None);
     palw_t12_arm_int11_flag_day_at_v1(&mut params, None);
@@ -12066,7 +12079,7 @@ pub fn palw_t12_release_v4_params() -> Params {
 /// node that has not taken the IR release runs (int-7's, params `770fb822…`, schedule `9410712f…`), and the
 /// baseline the IR flag day is judged against.
 pub fn palw_t12_release_v3_params() -> Params {
-    let mut params = palw_t12_shipped_params();
+    let mut params = palw_t12_pre_model_panel_one_params_v1();
     palw_t12_arm_after_int13_at_v1(&mut params, PALW_T12_G14_17000_FENCES_V1, None);
     palw_t12_arm_int13_flag_day_at_v1(&mut params, None);
     palw_t12_arm_int11_flag_day_at_v1(&mut params, None);
@@ -12089,7 +12102,7 @@ pub fn palw_t12_release_v3_params() -> Params {
 /// that has not taken the third flag day's release runs, and the baseline the capacity package is judged
 /// against.
 pub fn palw_t12_release_v2_params() -> Params {
-    let mut params = palw_t12_shipped_params();
+    let mut params = palw_t12_pre_model_panel_one_params_v1();
     palw_t12_arm_after_int13_at_v1(&mut params, PALW_T12_G14_17000_FENCES_V1, None);
     palw_t12_arm_int13_flag_day_at_v1(&mut params, None);
     palw_t12_arm_int11_flag_day_at_v1(&mut params, None);
@@ -12114,7 +12127,7 @@ pub fn palw_t12_release_v2_params() -> Params {
 /// ruleset a node that has not taken the second flag day's release runs, and the baseline that
 /// list's lanes arm ONE fence over. Equal to the shipped ruleset while the list's height is `None`.
 pub fn palw_t12_release_v1_params() -> Params {
-    let mut params = palw_t12_shipped_params();
+    let mut params = palw_t12_pre_model_panel_one_params_v1();
     palw_t12_arm_after_int13_at_v1(&mut params, PALW_T12_G14_17000_FENCES_V1, None);
     palw_t12_arm_int13_flag_day_at_v1(&mut params, None);
     palw_t12_arm_int11_flag_day_at_v1(&mut params, None);
@@ -12198,6 +12211,9 @@ fn palw_t12_params_with_registry_v1(
     // entries plus every G14 / RFC fence of the full-activation release — at `PALW_T12_FULL_ACTIVATION_DAA` (target 16,000), after the
     // int-13 flag day; dormant while the height is `None` (it is: no arming record is pinned and the user has not approved).
     full_activation_v1::palw_t12_arm_full_activation_v1(&mut params);
+    // RFC-0042 / ADR-0210: the all-model route is a separate future fork.
+    params.palw_model_panel_one_v1 = Some(ForkActivation::new(PALW_T12_MODEL_PANEL_ONE_FENCE_DAA_V1));
+    params.sync_palw_g14_gates_v1();
     // **`palw_rc_arm_phase1` is NOT called here, and that is deliberate.** Its whole body is
     // "arm this if the preset left it dormant", and `palw_t12_arm_every_rule_from_genesis` has
     // already armed everything — so routing through it could only either change nothing or

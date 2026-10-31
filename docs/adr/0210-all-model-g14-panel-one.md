@@ -21,4 +21,4 @@ Specification: [RFC-0042](../rfc/0042-all-model-g14-panel-one.md)。
 
 ## 実装検証の記録
 
-[2026-10-31 の検証記録](../evidence/palw/model-panel-one-2026-10-31/README.md): 関連回帰 123 件と EVM を含む全 target の型検査に成功。配備・有効化は未実施。
+[2026-10-31 の検証記録](../evidence/palw/model-panel-one-2026-10-31/README.md): 関連回帰 283 件と EVM を含む全 target の型検査に成功。配備・有効化は未実施。

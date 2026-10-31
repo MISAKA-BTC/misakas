@@ -34,7 +34,7 @@ fn the_2026_09_23_audit_fence_is_armed_at_genesis_or_not_at_all() {
 /// collapses to `None` so it cannot write bytes a build without the field never writes.
 #[test]
 fn the_offence_attribution_fence_is_genesis_only_and_rides_its_four_fences() {
-    let t12 = Params::from(crate::network::NetworkId::with_suffix(crate::network::NetworkType::Testnet, 12));
+    let t12 = palw_t12_pre_model_panel_one_params_v1();
     assert_eq!(t12.palw_offence_attribution, Some(ForkActivation::always()), "testnet-12 arms it from genesis");
     assert!(t12.palw_offence_attribution_active_at(0));
     t12.validate_palw_v2().expect("testnet-12 validates with the fence");

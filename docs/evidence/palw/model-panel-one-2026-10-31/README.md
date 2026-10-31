@@ -1,6 +1,6 @@
 # 全モデル G14 Panel=1 — 2026-10-31 検証記録
 
-状態: 実装・ローカル検証済み。**配備・有効化は未実施**。移行 fence は現在 `None`。
+状態: 実装・ローカル検証済み。**配備・有効化は未実施**。t12 の移行 fence 候補は DAA **18,560**。mainnet 等は無効のまま。
 [RFC-0042](../../../rfc/0042-all-model-g14-panel-one.md) / [ADR-0210](../../../adr/0210-all-model-g14-panel-one.md)。
 
 ## 配備候補の基点
@@ -8,6 +8,16 @@
 稼働中の `2ca68baee2c9` に実装を重ねる。main の `6e31509bb` に含まれる別件の terminal service / operational release 修正は持ち込まない。
 過去の状態遷移を変更したバイナリへ同時更新しないためであり、その修正自体の採否の変更ではない。
 元の main 基点の実装はローカル branch `codex/g14-model-panel-one-main-base` に保存した。
+
+## t12 の配備候補
+
+ユーザー指定の全モデル移行を段階配備するため、稼働チェーンの先に DAA 18,560 を設定した。数値は配備上の境界であり、過去の kernel fence 18,400 は変更しない。
+
+- params: `ee8ec945ba47dd384711156adb8d06aa76f7039dca10b2c187e056b9f327a328`
+- schedule: `825a2d3f62d0a04531b68eac001daf7ec51b2a18b1c5b76bc4859c67149a97b9`
+- handshake / kernel policy: `5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5`（変更なし）
+
+既存 release の constructor は新しい fence を明示的に解除し、既存 identity を保存する。境界前後、manifest と schedule、Held かつ ready=0 のモデルを含む全経路の [release-regression.log](release-regression.log) は **283 passed / 0 failed**。
 
 ## 実行結果
 
