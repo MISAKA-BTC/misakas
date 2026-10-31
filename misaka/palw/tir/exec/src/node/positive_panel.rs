@@ -20,13 +20,14 @@ use kaspa_consensus_core::{
     palw_v2::PalwJobContextV2,
 };
 use misaka_palw_positive_contract::{
-    CONTRACT_REVISION, CONTRACT_VERSION,
+    CONTRACT_REVISION, CONTRACT_VERSION, ContractError,
     identity::{Digest, PUBKEY_BYTES, PrincipalId, SIGNATURE_BYTES},
     messages::{
         AdmissionContext, CheckProfile, ClaimForm, CoverageCursor, CoverageDescriptor, MinerResultCommit, PanelWitnessCommit,
         coverage_plan_id,
     },
     ports::PanelBuilder,
+    record::{self, RecordHeader},
     tir,
     wire::{EVIDENCE_HEADER_BYTES, EvidenceFrame, EvidenceHeader},
 };
@@ -194,6 +195,29 @@ impl PanelCapture {
     pub fn admission(&self) -> &PanelAdmission {
         &self.admission
     }
+    /// Encode only the retained roots and unchanged generated IDs using A0's
+    /// primitive record codec. This carries data identity for independent Node
+    /// checking; it establishes neither arithmetic correctness nor credit.
+    /// Dense local persistence remains the separate `encode_recorded` format.
+    pub fn encode_execution_record(&self, max_record_bytes: u64) -> Result<Vec<u8>, ContractError> {
+        let binding = &self.capture.binding;
+        record::encode_record(
+            RecordHeader {
+                version: CONTRACT_VERSION,
+                revision: CONTRACT_REVISION,
+                result: self.admission.result.id(),
+                artifact: digest(binding.artifact_root),
+                full_logits_trace_root: digest(binding.full_logits_trace_root),
+                step_leaf_count: binding.step_leaf_count,
+                step_merkle_root: digest(binding.step_merkle_root),
+                committed_execution_root: digest(binding.committed_execution_root),
+            },
+            &self.capture.generated,
+            self.admission.result.decode,
+            max_record_bytes,
+        )
+    }
+
     pub fn encode_recorded(&self, max_bytes: u64) -> Result<Vec<u8>, String> {
         let length = borsh::object_length(&self.capture).map_err(err)?.checked_add(8).ok_or("A3 capture length overflow")?;
         if length as u64 > max_bytes.min(self.admission.limits.max_capture_bytes) {
