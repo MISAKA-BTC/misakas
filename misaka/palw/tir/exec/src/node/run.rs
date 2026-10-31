@@ -159,6 +159,9 @@ fn lanes_typed<T: Elem>(v: &[T], out: &mut Vec<u8>) {
 
 impl<'a> TirClassRunnerV1<'a> {
     pub fn new(space: &'a PalwTirStepSpaceV1, plan: &'a TirPlan, params: &'a TirParams<'a>, class_id: Hash64) -> Result<Self, String> {
+        if plan.program.wide_logits_q24() || space.program.wide_logits_q24() {
+            return Err("wide Q24 requires the explicit V2 runner".into());
+        }
         if space.program != plan.program {
             return Err("the step space and the plan are of different programs".into());
         }
@@ -458,7 +461,7 @@ impl<'a> TirClassRunnerV1<'a> {
                     }
                 };
                 if let Some(observe) = observer.as_mut() {
-                    step(&mut ObservedSink { inner: &mut sink, observer: &mut **observe, position: a })?;
+                    step(&mut ObservedSink::new(&mut sink, &mut **observe, a))?;
                 } else {
                     step(&mut sink)?;
                 }
@@ -709,10 +712,15 @@ impl Emitter {
 
 /// Adds fallible every-node observation only to the observed route. The inner
 /// legacy commit sink still sees each original committed node exactly once.
-struct ObservedSink<'a, 'o> {
+pub(crate) struct ObservedSink<'a, 'o> {
     inner: &'a mut dyn StepSink,
     observer: &'o mut dyn TirRunObserverV1,
     position: u32,
+}
+impl<'a, 'o> ObservedSink<'a, 'o> {
+    pub(crate) fn new(inner: &'a mut dyn StepSink, observer: &'o mut dyn TirRunObserverV1, position: u32) -> Self {
+        Self { inner, observer, position }
+    }
 }
 impl StepSink for ObservedSink<'_, '_> {
     fn every_node(&self) -> bool {

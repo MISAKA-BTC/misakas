@@ -238,6 +238,9 @@ fn written_instances(space: &PalwTirStepSpaceV1, occ: &Range<usize>) -> (Vec<usi
 
 /// **Verify one cell** on the CPU (the module doc). Pure given its inputs: the same request, the same verdict, on any build.
 pub fn verify_cell_v1(req: &TirCellRequestV1<'_>) -> TirCellVerdictV1 {
+    if req.plan.program.wide_logits_q24() || req.space.program.wide_logits_q24() {
+        return TirCellVerdictV1::Refused("V1 cell verifier refuses wide Q24".into());
+    }
     let mut exec = match TirExecutor::new_cell(req.plan, req.params, req.cell.occ.clone()) {
         Ok(e) => e,
         Err(e) => return TirCellVerdictV1::Refused(e.to_string()),
@@ -252,6 +255,9 @@ pub fn verify_cell_v1(req: &TirCellRequestV1<'_>) -> TirCellVerdictV1 {
 /// **Verify one cell over any stepper** — the one verifier. `stepper` is at position 0 with the cell's instances initial (a
 /// device builds it from the cell's occurrences' params), or resumable ([`TirCellStepperV1::resume`]).
 pub fn verify_cell_stepping_v1(req: &TirCellRequestV1<'_>, exec: &mut dyn TirCellStepperV1) -> TirCellVerdictV1 {
+    if req.plan.program.wide_logits_q24() || req.space.program.wide_logits_q24() {
+        return TirCellVerdictV1::Refused("V1 cell verifier refuses wide Q24".into());
+    }
     let (space, ctx, cell) = (req.space, req.ctx, req.cell);
     let job = match space.job_shape(ctx) {
         Ok(job) => job,
