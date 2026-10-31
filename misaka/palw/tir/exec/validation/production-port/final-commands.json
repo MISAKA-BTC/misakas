@@ -1,0 +1,40 @@
+[
+  {
+    "name": "core-check-final",
+    "command": [
+      "cargo",
+      "check",
+      "-p",
+      "kaspa-consensus-core",
+      "--lib",
+      "--offline",
+      "--config",
+      "profile.dev.package.kaspa-consensus-core.opt-level=0"
+    ],
+    "exit_code": 0,
+    "log": "/tmp/misaka-a1-production-core-check-final-2026-10-31.log"
+  },
+  {
+    "name": "node-clippy",
+    "command": [
+      "cargo",
+      "clippy",
+      "-p",
+      "misaka-palw-tir-exec",
+      "--features",
+      "positive-contract",
+      "--lib",
+      "--test",
+      "positive_production_port",
+      "--no-deps",
+      "--offline",
+      "--config",
+      "profile.dev.package.kaspa-consensus-core.opt-level=0",
+      "--",
+      "-D",
+      "warnings"
+    ],
+    "exit_code": 0,
+    "log": "/tmp/misaka-a1-production-node-clippy-2026-10-31.log"
+  }
+]

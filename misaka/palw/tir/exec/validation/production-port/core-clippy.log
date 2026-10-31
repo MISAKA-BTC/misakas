@@ -1,0 +1,71 @@
+   Compiling kaspa-utils v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a1/MISAKA-testnet/utils)
+   Compiling kaspa-hashes v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a1/MISAKA-testnet/crypto/hashes)
+    Checking misaka-palw-challenge v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a1/MISAKA-testnet/misaka/palw/challenge)
+    Checking misaka-palw-gen v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a1/MISAKA-testnet/misaka/palw/gen)
+    Checking misaka-palw-tir v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a1/MISAKA-testnet/misaka/palw/tir/core)
+    Checking kaspa-core v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a1/MISAKA-testnet/core)
+    Checking misaka-palw-positive-contract v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a1/MISAKA-testnet/misaka/palw/positive-contract)
+    Checking kaspa-addresses v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a1/MISAKA-testnet/crypto/addresses)
+    Checking kaspa-txscript-errors v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a1/MISAKA-testnet/crypto/txscript/errors)
+    Checking kaspa-math v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a1/MISAKA-testnet/math)
+    Checking misaka-palw-kernel v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a1/MISAKA-testnet/misaka/palw/kernel)
+    Checking kaspa-muhash v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a1/MISAKA-testnet/crypto/muhash)
+    Checking kaspa-merkle v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a1/MISAKA-testnet/crypto/merkle)
+    Checking misaka-palw-panel v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a1/MISAKA-testnet/misaka/palw/panel)
+    Checking kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a1/MISAKA-testnet/consensus/core)
+error: using `clone` on type `PalwPanelParamsV2` which implements the `Copy` trait
+  --> consensus/core/src/palw_model_panel_one_v1.rs:92:54
+   |
+92 |         PalwModelClaimRouteV1::HistoricalPanel => Ok(historical.clone()),
+   |                                                      ^^^^^^^^^^^^^^^^^^ help: try dereferencing it: `*historical`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.93.0/index.html#clone_on_copy
+   = note: `-D clippy::clone-on-copy` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::clone_on_copy)]`
+
+error: this boolean expression can be simplified
+    --> consensus/core/src/palw_state_v2/chain_state.rs:3728:20
+     |
+3728 |                   if tagged_one && !one
+     |  ____________________^
+3729 | |                     || one && rcore.licence_door.is_some() && !tagged_one
+3730 | |                     || one
+3731 | |                         && matches!(claim.phase, PalwClaimPhaseV2::ReceiptLicensed { .. } | PalwClaimPhaseV2::Final { .. })
+3732 | |                         && !tagged_one
+     | |______________________________________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.93.0/index.html#nonminimal_bool
+     = note: `-D clippy::nonminimal-bool` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::nonminimal_bool)]`
+help: try
+     |
+3728 -                 if tagged_one && !one
+3729 -                     || one && rcore.licence_door.is_some() && !tagged_one
+3730 -                     || one
+3731 -                         && matches!(claim.phase, PalwClaimPhaseV2::ReceiptLicensed { .. } | PalwClaimPhaseV2::Final { .. })
+3732 -                         && !tagged_one
+3728 +                 if !(tagged_one && one || !tagged_one && !one || !tagged_one && rcore.licence_door.is_none() && !matches!(claim.phase, PalwClaimPhaseV2::ReceiptLicensed { .. } | PalwClaimPhaseV2::Final { .. }))
+     |
+3728 -                 if tagged_one && !one
+3729 -                     || one && rcore.licence_door.is_some() && !tagged_one
+3730 -                     || one
+3731 -                         && matches!(claim.phase, PalwClaimPhaseV2::ReceiptLicensed { .. } | PalwClaimPhaseV2::Final { .. })
+3732 -                         && !tagged_one
+3728 +                 if !(tagged_one && one || !tagged_one && !one || one && rcore.licence_door.is_none() && !matches!(claim.phase, PalwClaimPhaseV2::ReceiptLicensed { .. } | PalwClaimPhaseV2::Final { .. }))
+     |
+3728 -                 if tagged_one && !one
+3729 -                     || one && rcore.licence_door.is_some() && !tagged_one
+3730 -                     || one
+3731 -                         && matches!(claim.phase, PalwClaimPhaseV2::ReceiptLicensed { .. } | PalwClaimPhaseV2::Final { .. })
+3732 -                         && !tagged_one
+3728 +                 if (matches!(claim.phase, PalwClaimPhaseV2::ReceiptLicensed { .. } | PalwClaimPhaseV2::Final { .. }) || rcore.licence_door.is_some() || !one) && (one || tagged_one) && (!one || !tagged_one)
+     |
+3728 -                 if tagged_one && !one
+3729 -                     || one && rcore.licence_door.is_some() && !tagged_one
+3730 -                     || one
+3731 -                         && matches!(claim.phase, PalwClaimPhaseV2::ReceiptLicensed { .. } | PalwClaimPhaseV2::Final { .. })
+3732 -                         && !tagged_one
+3728 +                 if (matches!(claim.phase, PalwClaimPhaseV2::ReceiptLicensed { .. } | PalwClaimPhaseV2::Final { .. }) || rcore.licence_door.is_some() || tagged_one) && (one || tagged_one) && (!one || !tagged_one)
+     |
+
+error: could not compile `kaspa-consensus-core` (lib) due to 2 previous errors
