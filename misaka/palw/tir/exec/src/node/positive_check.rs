@@ -5,6 +5,11 @@
 //! Hash membership authenticates values; every canonical cone is also evaluated.
 //! A rejected Panel candidate never constitutes a Miner conviction.
 
+/// Experimental pure geometry/work plan for original sparse programs. This
+/// module allocates no derivation/wire ID and never changes the active checker.
+#[doc(hidden)]
+pub mod expanded_plan;
+
 use kaspa_consensus_core::{
     Hash64,
     palw_attempt_rules_v1::palw_attempt_output_root_v1,
