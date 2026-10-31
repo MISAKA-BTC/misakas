@@ -23,6 +23,7 @@ pub mod palw_native_readiness_v1;
 // Pure bounded Positive checker; no mapped artifacts or model runtime.
 pub mod palw_positive_check_v2;
 pub mod palw_positive_common_replay_v2;
+pub mod palw_positive_common_source_replay_v2;
 pub mod palw_positive_contract_v2;
 pub mod palw_positive_court_v2;
 pub mod palw_positive_journal_chain_v2;
