@@ -1,0 +1,90 @@
+{
+  "date": "2026-10-31",
+  "branch": "codex/positive-court-a1",
+  "candidate_commit": "8e3c2e481dcfba1031a5e40fa8ab231be08127bc",
+  "expanded_plan_commit": "05c47201d239eb192d54db61e7551017bbc5e85e",
+  "primitive_record_commit": "8e3c2e481dcfba1031a5e40fa8ab231be08127bc",
+  "common_record_import_commit": "e03a0942787fc3e9e3ce48c93b22f9d74c1f1a08",
+  "runs": [
+    {
+      "name": "integration",
+      "log": "integration-final.log",
+      "passed": 36,
+      "failed": 0
+    },
+    {
+      "name": "overflow-unit",
+      "log": "overflow-unit-final.log",
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "name": "shared-record-codec",
+      "log": "common-record-final.log",
+      "passed": 6,
+      "failed": 0
+    }
+  ],
+  "total_passed": 43,
+  "total_failed": 0,
+  "build_environment": {
+    "CARGO_TARGET_DIR": "/Users/wata/.cache/misaka-positive-a1-port-target",
+    "CARGO_INCREMENTAL": "0",
+    "CARGO_PROFILE_DEV_DEBUG": "0",
+    "cargo_config": "profile.dev.package.kaspa-consensus-core.opt-level=0"
+  },
+  "package_clippy": {
+    "passed": true,
+    "scope": "executor library, positive_expanded_plan and positive_record test targets; --features positive-contract --no-deps -- -D warnings",
+    "log": "package-clippy.log"
+  },
+  "docs": {
+    "mode": "no-new-regressions",
+    "passed": true,
+    "known_missing": 43,
+    "new_occurrences": 0,
+    "log": "docs-check.log"
+  },
+  "scope": {
+    "expanded_plan_geometry_only": true,
+    "source_factory_implemented": false,
+    "expanded_derivation_assigned": false,
+    "source_only_payload_assigned": false,
+    "native_activation": false,
+    "total_node_rss_qualified": false,
+    "primitive_record_delivery_refusal_consumes_attempt": false
+  },
+  "source_sha256": {
+    "misaka/palw/tir/exec/src/node/positive_check.rs": "d9e57592fdb4436806918a73cebbaf78ecd29581c3b1873cb01a9ad7185738ce",
+    "misaka/palw/tir/exec/src/node/positive_check/expanded_plan.rs": "568f51c502696cd12f4dd7e087214f48370e5eccdc8a035a32406dc12c6ad756",
+    "misaka/palw/tir/exec/src/node/positive_contract.rs": "7b608c2592dec00f956afd2b4c0b27bcf8c6d69e958a84dccc96853514f0d19e",
+    "misaka/palw/tir/exec/src/node/positive_contract/record.rs": "cad4c67b72498cd5351a60fd35c0d19696b3bad9dcbf4dcfd9d8518a9e97755f",
+    "misaka/palw/tir/exec/tests/positive_expanded_plan.rs": "5c67570187cfde65a38c337e0498b06b89334cc4de81260a4019cb2c88c52801",
+    "misaka/palw/tir/exec/tests/positive_record.rs": "af837dfd6d18c06ad2402ac2a7015709cc508f1343d717f63ab65f1fd8cd3b49",
+    "misaka/palw/tir/exec/Cargo.toml": "90039d68f73d1810af7c4e863df0bfd69cbaae9668591baa061b5106a7527926",
+    "misaka/palw/positive-contract/src/lib.rs": "3a1552c74b4f7e12142283fef4454fcc7d7896e85fc58343e88b6cd33a84e478",
+    "misaka/palw/positive-contract/src/record.rs": "43b885cec90f6928d01d87cc2d72eb84ec0f3b42500c8ec7f79ab89ff828cb05",
+    "misaka/palw/positive-contract/tests/execution_record.rs": "7d019a65c29ebd6883e68067e29ab3d004b658c659d059afcf1693ea309902ec",
+    "misaka/palw/positive-contract/Cargo.toml": "16ae4b261062e692618fc4e5db75491af9bf12a817872db1a272b97f619dcac5",
+    "Cargo.lock": "15ff7d34ed13b4a37194ab79c5ba57e12aed3cb362fdd140aa432b7d499569b5"
+  },
+  "evidence_sha256": {
+    "common-record-final.log": "7d028cf7bcf90fba056383f93adb25ea8f1eb8d47622abcc5144e23f3f161def",
+    "docs-check.log": "d5c2e8049f9b12f200d58f69ea6a9abc18c0734c57510e402f5e1688770586ba",
+    "expanded-plan-final.log": "389e413c90cacc62b35f6a7711d9db099b597cc4a0a8eb58071cd5e62e99815e",
+    "initial-overflow-unit.log": "29d7e7bf7de75b908fd0ff9539777d71749719cffd8aed433a66994096f0978d",
+    "initial-plan-and-regression.log": "39d22d47898e50bfe2845328745f29c8acc4860997a66c5bf139f7bdbb7a59b9",
+    "initial-plan-clippy.log": "077a093bb4f5e95a1cc436826e4c9f4c4ffd9cdf3f7b0622c3a83ca176568e80",
+    "integration-final.log": "1765316cd1302dd6e191019e3994e2f868b83ea85a3f01aaaa397a083e7a515c",
+    "overflow-unit-final.log": "dc32131bbc444448bd9bb8fb74eb8dbea2eb5e001c4ca8ea1cb83bf6d4cb3b39",
+    "own-stale-cache-cleanup.json": "3c6a3e7dc682fb495a5b5b9c05c351a0a535e98bd9d1b5091be95b74434d651f",
+    "package-clippy.log": "c14fd58399ba18be2e1b54479d1ebaf25cf7ac8bf5a462d635e6709ad06b904c",
+    "record-first-pass.log": "e4849faf56ea6bb55a2541386bf26c0636880a8baf468adc421d51edb484f9a0"
+  },
+  "notes": [
+    "Earlier intermediate runs are preserved but are not added to the final 43-test count.",
+    "Raw logs are unchanged, including trailing blank lines.",
+    "Dependency-inclusive Clippy has two unchanged consensus-core findings documented in the previous handoff.",
+    "Cache cleanup removed only obsolete artifacts inside the A1-owned target directory; the JSON manifest preserves removed file hashes."
+  ]
+}

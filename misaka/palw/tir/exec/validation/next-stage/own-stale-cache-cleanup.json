@@ -1,0 +1,41 @@
+{
+  "scope": "only obsolete variants in A1 port cache; current artifacts, raw logs and all other task caches retained",
+  "files": [
+    {
+      "path": "/Users/wata/.cache/misaka-positive-a1-port-target/debug/deps/positive_contract-e37197ac04b789c5",
+      "bytes": 23247376,
+      "sha256": "af5e83b68ea13a253d5c49c24f63c66ddfbefc45c6d929e3938681c4c3628756"
+    },
+    {
+      "path": "/Users/wata/.cache/misaka-positive-a1-port-target/debug/deps/positive_check-d135aee86e4f3a93",
+      "bytes": 22088096,
+      "sha256": "870cdcb630a68ec81f9846263fa23e67a4d77103ff6357d54f2eac707e2926a3"
+    },
+    {
+      "path": "/Users/wata/.cache/misaka-positive-a1-port-target/debug/deps/positive_check_hardening-f05b4df90a6525bc",
+      "bytes": 21906256,
+      "sha256": "53d27b8817d0247292264dfa90923d1dd1b980c1225ef319afe55878314416a4"
+    },
+    {
+      "path": "/Users/wata/.cache/misaka-positive-a1-port-target/debug/deps/court-cb1163157e5c363e",
+      "bytes": 22764784,
+      "sha256": "4cb61931b625245ec577b8dae0d934fa745f984ebfc12b0888d754504a11f4d8"
+    },
+    {
+      "path": "/Users/wata/.cache/misaka-positive-a1-port-target/debug/deps/libmisaka_palw_tir_exec-a06a849285d21b1d.rlib",
+      "bytes": 40172280,
+      "sha256": "3cd6947f498ca6acd4227aa6afd44b46bf56818f8b43aa3e8806d5b93828d26d"
+    },
+    {
+      "path": "/Users/wata/.cache/misaka-positive-a1-port-target/debug/deps/libmisaka_palw_tir_exec-65692fbb3ed82548.rlib",
+      "bytes": 39691288,
+      "sha256": "9690fc5a41f7919eb6f9666c6bfcab8689fd76fccfa2912af28b298601b26f67"
+    },
+    {
+      "path": "/Users/wata/.cache/misaka-positive-a1-port-target/debug/deps/libmisaka_palw_tir_exec-609cd8444c9b230e.rlib",
+      "bytes": 39530400,
+      "sha256": "6f32d470b28dbd7fb2eb74559d12047258f948992cb262f7799f65c5395af82b"
+    }
+  ],
+  "logical_bytes_removed": 209400480
+}
