@@ -307,3 +307,56 @@ fn legacy_i8_i16_and_idx_outputs_keep_old_factory_bytes_and_four_byte_wire_lanes
         }
     }
 }
+
+#[test]
+fn fixed_program_format_ceiling_bounds_actual_and_declared_bytes_independently() {
+    let (class, artifact) = fixture(TirTraceProfileV2::TiledI64Q24, false, 8);
+    let row = build(&class, artifact);
+    let id = row.facts.class_id;
+    let exact = TirRowProfileLimitsV2 { max_program_bytes: row.program.len(), max_dissected_points: row.dissected.len() };
+    assert!(ResolvedTirRowProfileV2::resolve(id, artifact, &row, exact).is_ok());
+    let generous = TirRowProfileLimitsV2 { max_program_bytes: MAX_PROGRAM_BYTES + 1, ..limits() };
+    let mut actual_over = row.clone();
+    actual_over.program = Arc::new(vec![0xff; MAX_PROGRAM_BYTES + 1]);
+    assert!(actual_over.program_bytes as usize <= MAX_PROGRAM_BYTES);
+    actual_over.version = 99;
+    assert!(matches!(ResolvedTirRowProfileV2::resolve(id, artifact, &actual_over, generous), Err(TirRowProfileErrorV2::Budget)));
+    let mut declared_over = row;
+    declared_over.program_bytes = (MAX_PROGRAM_BYTES + 1) as u32;
+    assert!(declared_over.program.len() <= MAX_PROGRAM_BYTES);
+    declared_over.version = 99;
+    assert!(matches!(ResolvedTirRowProfileV2::resolve(id, artifact, &declared_over, generous), Err(TirRowProfileErrorV2::Budget)));
+}
+
+#[test]
+fn rehashed_noncanonical_and_invalid_wide_programs_reach_structural_parser() {
+    let (class, artifact) = fixture(TirTraceProfileV2::TiledI64Q24, false, 8);
+    let row = build(&class, artifact);
+    let assert_program_error = |bytes: Vec<u8>| {
+        let mut changed_class = class.clone();
+        changed_class.program = bytes;
+        let mut changed_row = row.clone();
+        changed_row.program = Arc::new(changed_class.program.clone());
+        changed_row.program_bytes = changed_class.program.len() as u32;
+        changed_row.graph_ir_root = changed_class.graph_ir_root();
+        changed_row.facts.class_id = changed_class.class_id(&artifact);
+        // The canonical byte digest and independently supplied key agree with
+        // this altered payload. Rejection must come from parsing/validation.
+        changed_row.check_program_v1().unwrap();
+        assert!(matches!(
+            ResolvedTirRowProfileV2::resolve(changed_row.facts.class_id, artifact, &changed_row, limits()),
+            Err(TirRowProfileErrorV2::Program(_))
+        ));
+    };
+    let mut trailing = class.program.clone();
+    trailing.push(0);
+    assert_program_error(trailing);
+    let mut truncated = class.program.clone();
+    truncated.pop();
+    assert_program_error(truncated);
+    for dtype in [DType::I128, DType::I32] {
+        let mut invalid = class.decode_program().unwrap();
+        invalid.blocks[invalid.schedule.post as usize].nodes[invalid.logits as usize].out.dtype = dtype;
+        assert_program_error(invalid.encode());
+    }
+}
