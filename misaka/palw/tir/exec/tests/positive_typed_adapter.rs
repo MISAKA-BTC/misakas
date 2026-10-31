@@ -364,6 +364,7 @@ fn original_sparse_capture_reconstructs_every_legacy_preimage_opening_range_and_
                     step_space: runner.space,
                 },
                 adapter_limits(),
+                stages(),
             )
             .unwrap();
             let mut leaves = Vec::new();
@@ -432,6 +433,7 @@ fn range_admissible_class_fixture_streams_actual_a1_full_relation_materials() {
                     step_space: runner.space,
                 },
                 adapter_limits(),
+                stages(),
             )
             .unwrap();
             let prepared = signed.preparation(f);
@@ -577,6 +579,7 @@ fn author_signed_altered_wide_claim_is_rejected_by_actual_source_recomputation()
                 step_space: runner.space,
             },
             adapter_limits(),
+            stages(),
         )
         .unwrap();
         let prepared = signed.preparation(f);
@@ -675,7 +678,8 @@ fn independent_expected_identity_and_simultaneous_backing_caps_fail_closed() {
                     rooted: &signed.rooted,
                     step_space: runner.space
                 },
-                cap
+                cap,
+                stages(),
             )
             .err(),
             Some(TypedAdapterError::Budget)
@@ -693,7 +697,8 @@ fn independent_expected_identity_and_simultaneous_backing_caps_fail_closed() {
                     rooted: &signed.rooted,
                     step_space: runner.space
                 },
-                adapter_limits()
+                adapter_limits(),
+                stages(),
             )
             .err(),
             Some(TypedAdapterError::Binding)
@@ -729,7 +734,8 @@ fn independent_expected_identity_and_simultaneous_backing_caps_fail_closed() {
                     rooted: &disjoint_rooted,
                     step_space: runner.space
                 },
-                adapter_limits()
+                adapter_limits(),
+                stages(),
             )
             .err(),
             Some(TypedAdapterError::Binding)
@@ -747,7 +753,8 @@ fn independent_expected_identity_and_simultaneous_backing_caps_fail_closed() {
                     rooted: &signed.rooted,
                     step_space: runner.space
                 },
-                adapter_limits()
+                adapter_limits(),
+                stages(),
             )
             .err(),
             Some(TypedAdapterError::Binding)
@@ -765,7 +772,8 @@ fn independent_expected_identity_and_simultaneous_backing_caps_fail_closed() {
                     rooted: &rooted,
                     step_space: runner.space
                 },
-                adapter_limits()
+                adapter_limits(),
+                stages(),
             )
             .err(),
             Some(TypedAdapterError::Binding)
@@ -781,7 +789,8 @@ fn independent_expected_identity_and_simultaneous_backing_caps_fail_closed() {
                     rooted: &signed.rooted,
                     step_space: runner.space
                 },
-                adapter_limits()
+                adapter_limits(),
+                stages(),
             )
             .err(),
             Some(TypedAdapterError::Binding)
@@ -800,7 +809,8 @@ fn independent_expected_identity_and_simultaneous_backing_caps_fail_closed() {
                     rooted: &signed.rooted,
                     step_space: &other_space
                 },
-                adapter_limits()
+                adapter_limits(),
+                stages(),
             )
             .err(),
             Some(TypedAdapterError::Binding)
@@ -828,7 +838,8 @@ fn independent_expected_identity_and_simultaneous_backing_caps_fail_closed() {
                     rooted: &signed.rooted,
                     step_space: runner.space
                 },
-                adapter_limits()
+                adapter_limits(),
+                stages(),
             )
             .err(),
             Some(TypedAdapterError::Binding)
@@ -850,7 +861,8 @@ fn independent_expected_identity_and_simultaneous_backing_caps_fail_closed() {
                     rooted: &signed.rooted,
                     step_space: runner.space
                 },
-                adapter_limits()
+                adapter_limits(),
+                stages(),
             )
             .err(),
             Some(TypedAdapterError::Binding)
@@ -884,6 +896,7 @@ fn legacy_hash_path_corruption_and_failed_proof_attempts_do_not_reset_session_me
                 step_space: runner.space,
             },
             adapter_limits(),
+            stages(),
         )
         .unwrap();
         let preimage = adapter.legacy_preimage(0).unwrap();
@@ -912,6 +925,7 @@ fn legacy_hash_path_corruption_and_failed_proof_attempts_do_not_reset_session_me
                 step_space: runner.space,
             },
             cap,
+            stages(),
         )
         .unwrap();
         assert_eq!(limited.legacy_opening(u64::MAX), Err(TypedAdapterError::Geometry));
@@ -948,7 +962,13 @@ fn live_material_backing_is_reserved_during_claim_export_and_released_without_me
             panic!("first relation must be the original gather");
         };
         assert!(matches!(f.program.blocks[*block as usize].nodes[*node as usize].prim, Prim::Gather { .. }));
-        let quote = quote_typed_adapter(&capture, &f.class, &f.job, prepared.plan(), stages(), adapter_limits()).unwrap();
+        let isolated_claim_stages = StageReservations {
+            retained_preparation_bytes: 0,
+            source_auth_bytes: 0,
+            evaluator_bytes: 0,
+            signature_workspace_bytes: 0,
+        };
+        let quote = quote_typed_adapter(&capture, &f.class, &f.job, prepared.plan(), isolated_claim_stages, adapter_limits()).unwrap();
         let source = full_limits().source;
         let runtime_scratch = source
             .max_material_bytes
@@ -957,8 +977,6 @@ fn live_material_backing_is_reserved_during_claim_export_and_released_without_me
             .checked_add(source.max_auth_storage_bytes)
             .unwrap()
             .checked_add(source.max_workspace_bytes)
-            .unwrap()
-            .checked_add(source.max_target_bytes)
             .unwrap();
         let mut cap = adapter_limits();
         cap.max_additional_heap_bytes = quote
@@ -982,28 +1000,19 @@ fn live_material_backing_is_reserved_during_claim_export_and_released_without_me
                 step_space: runner.space,
             },
             cap,
+            isolated_claim_stages,
         )
         .unwrap();
         assert_eq!(adapter.meter().claim_bytes, 0); // No all-claims allocation precedes this check.
         let base = sources(inventory, positive_typed_adapter_common::PROMPT, &adapter.binding().unwrap(), capture.run());
         let material = adapter.material(&prepared, first.index, 0, &base, &rules(), source).unwrap();
         assert!(material.as_borrowed().operands.preimages.is_empty());
-        // This isolated export adds no external integration stages. Even the
-        // outer claims Vec must reserve its headers against LIVE source scratch
-        // before its allocation; no per-relation buffer is reached on refusal.
-        let isolated_claim_stages = StageReservations {
-            retained_preparation_bytes: 0,
-            source_auth_bytes: 0,
-            evaluator_bytes: 0,
-            signature_workspace_bytes: 0,
-        };
+        // The complete future export quote includes live material, so this
+        // isolated call fails before even charging the outer Vec headers.
         let before_headers = adapter.meter();
         assert_eq!(adapter.all_claims(prepared.plan(), isolated_claim_stages), Err(TypedAdapterError::Budget));
         let after_headers = adapter.meter();
-        assert_eq!(
-            after_headers.claim_bytes - before_headers.claim_bytes,
-            prepared.plan().summary().relations * std::mem::size_of::<Vec<i128>>() as u64
-        );
+        assert_eq!(after_headers.claim_bytes, before_headers.claim_bytes);
         assert_eq!(after_headers.material_bytes, before_headers.material_bytes);
         let before = adapter.meter();
         assert_eq!(adapter.expanded_claim(prepared.plan(), first.index), Err(TypedAdapterError::Budget));
@@ -1051,6 +1060,7 @@ fn original_sparse_declaration_without_static_range_guarantee_stays_unverified_a
                 step_space: runner.space,
             },
             adapter_limits(),
+            stages(),
         )
         .unwrap();
         let prepared = signed.preparation(f);
@@ -1093,5 +1103,142 @@ fn original_sparse_declaration_without_static_range_guarantee_stays_unverified_a
         signed.authenticate();
         assert_eq!(runner.plan.program.encode(), f.encoded_program);
         assert_eq!(f.class.program, f.encoded_program);
+    });
+}
+
+#[test]
+fn external_stage_reservations_and_live_material_are_additive_and_cannot_be_lowered_by_claims() {
+    positive_typed_adapter_common::with_fixture(|f, runner, inventory| {
+        let signed = SignedMiner::new(f);
+        let authenticated = signed.authenticate();
+        let capture = capture_typed_prototype(
+            runner,
+            &f.class,
+            f.artifact,
+            &f.job,
+            f.job.context_hash(),
+            positive_typed_adapter_common::PROMPT,
+            capture_limits(),
+        )
+        .unwrap();
+        let prepared = signed.preparation(f);
+        let first = prepared.plan().relation_at(0).unwrap();
+        assert_eq!(first.legacy_frontier, 0);
+        let ExpandedRelationKind::RecomputeNode { block, node, .. } = &first.kind else {
+            panic!("first relation must be the original gather");
+        };
+        assert!(matches!(f.program.blocks[*block as usize].nodes[*node as usize].prim, Prim::Gather { .. }));
+        let external = stages();
+        assert!(external.retained_preparation_bytes > 0);
+        assert!(external.source_auth_bytes > 0);
+        assert!(external.evaluator_bytes > 0);
+        assert!(external.signature_workspace_bytes > 0);
+        let zero = StageReservations {
+            retained_preparation_bytes: 0,
+            source_auth_bytes: 0,
+            evaluator_bytes: 0,
+            signature_workspace_bytes: 0,
+        };
+        let cold_quote = quote_typed_adapter(&capture, &f.class, &f.job, prepared.plan(), external, adapter_limits()).unwrap();
+        let source = full_limits().source;
+        // Runtime source material, authentication, and evaluator storage coexist
+        // with all four caller-owned external buffers. Target storage is already
+        // included in the evaluator envelope.
+        let live_backing = source
+            .max_material_bytes
+            .checked_mul(2)
+            .unwrap()
+            .checked_add(source.max_auth_storage_bytes)
+            .unwrap()
+            .checked_add(source.max_workspace_bytes)
+            .unwrap();
+        let exact_combined = cold_quote.additional_peak_bytes.checked_add(live_backing).unwrap();
+        let mut one_short = adapter_limits();
+        one_short.max_additional_heap_bytes = exact_combined.checked_sub(1).unwrap();
+        assert!(cold_quote.additional_peak_bytes < one_short.max_additional_heap_bytes);
+
+        // A cold export fits the smaller cap. Passing zeros cannot withdraw the
+        // constructor's nonzero external reservations.
+        {
+            let cold = TypedCaptureAdapter::prepare(
+                &capture,
+                TypedAdapterExpected {
+                    registered: &f.class,
+                    artifact: f.artifact,
+                    job: &f.job,
+                    result: &authenticated,
+                    rooted: &signed.rooted,
+                    step_space: runner.space,
+                },
+                one_short,
+                external,
+            )
+            .unwrap();
+            let claims = cold.all_claims(prepared.plan(), zero).unwrap();
+            assert_eq!(claims.len() as u64, prepared.plan().summary().relations);
+            assert_eq!(claims[first.index as usize], oracle_claim(f, &first));
+        }
+
+        {
+            let adapter = TypedCaptureAdapter::prepare(
+                &capture,
+                TypedAdapterExpected {
+                    registered: &f.class,
+                    artifact: f.artifact,
+                    job: &f.job,
+                    result: &authenticated,
+                    rooted: &signed.rooted,
+                    step_space: runner.space,
+                },
+                one_short,
+                external,
+            )
+            .unwrap();
+            let base = sources(inventory, positive_typed_adapter_common::PROMPT, &adapter.binding().unwrap(), capture.run());
+            // Live material alone also fits. The combination is one byte short,
+            // and must refuse before charging or allocating the outer claims Vec.
+            let material = adapter.material(&prepared, first.index, 0, &base, &rules(), source).unwrap();
+            assert!(material.as_borrowed().operands.preimages.is_empty());
+            let before = adapter.meter();
+            assert_eq!(adapter.all_claims(prepared.plan(), zero), Err(TypedAdapterError::Budget));
+            let refused = adapter.meter();
+            assert_eq!(refused.claim_bytes, before.claim_bytes);
+            assert_eq!(refused.material_bytes, before.material_bytes);
+            drop(material);
+            assert_eq!(adapter.meter(), refused);
+            let claims = adapter.all_claims(prepared.plan(), zero).unwrap();
+            assert_eq!(claims[first.index as usize], oracle_claim(f, &first));
+            assert!(adapter.meter().claim_bytes > refused.claim_bytes);
+            assert_eq!(adapter.meter().material_bytes, refused.material_bytes);
+        }
+
+        // The exact public cold quote plus the simultaneous runtime envelopes
+        // permits the same combined operation, with the same external owners.
+        let mut exact = adapter_limits();
+        exact.max_additional_heap_bytes = exact_combined;
+        let adapter = TypedCaptureAdapter::prepare(
+            &capture,
+            TypedAdapterExpected {
+                registered: &f.class,
+                artifact: f.artifact,
+                job: &f.job,
+                result: &authenticated,
+                rooted: &signed.rooted,
+                step_space: runner.space,
+            },
+            exact,
+            external,
+        )
+        .unwrap();
+        let base = sources(inventory, positive_typed_adapter_common::PROMPT, &adapter.binding().unwrap(), capture.run());
+        let material = adapter.material(&prepared, first.index, 0, &base, &rules(), source).unwrap();
+        let before = adapter.meter();
+        let claims = adapter.all_claims(prepared.plan(), zero).unwrap();
+        assert_eq!(claims[first.index as usize], oracle_claim(f, &first));
+        let exported = adapter.meter();
+        assert!(exported.claim_bytes > before.claim_bytes);
+        assert_eq!(exported.material_bytes, before.material_bytes);
+        drop(material);
+        assert_eq!(adapter.meter(), exported);
     });
 }

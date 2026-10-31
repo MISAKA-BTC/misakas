@@ -41,12 +41,37 @@ pub struct TypedAdapterLimits {
 /// default. A zero dimension is only appropriate when that stage is absent.
 /// Values are caller declarations, not verified allocations or guarantees about
 /// cryptographic scratch, native admission, allocator overhead or process RSS.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct StageReservations {
     pub retained_preparation_bytes: u64,
     pub source_auth_bytes: u64,
     pub evaluator_bytes: u64,
     pub signature_workspace_bytes: u64,
+}
+
+impl StageReservations {
+    /// Keep each SAME named owner's largest envelope across successive calls.
+    /// A later zero/smaller declaration cannot release its earlier reservation.
+    /// Independent owners in one dimension must be pre-summed by the caller;
+    /// this operation provides no proof that unrelated buffers share backing.
+    pub(crate) fn joined(self, other: Self) -> Self {
+        Self {
+            retained_preparation_bytes: self.retained_preparation_bytes.max(other.retained_preparation_bytes),
+            source_auth_bytes: self.source_auth_bytes.max(other.source_auth_bytes),
+            evaluator_bytes: self.evaluator_bytes.max(other.evaluator_bytes),
+            signature_workspace_bytes: self.signature_workspace_bytes.max(other.signature_workspace_bytes),
+        }
+    }
+}
+
+/// Current single material stage. `material_bytes` reserves both material
+/// buffers (2 * the body cap); evaluator_bytes already includes target/index
+/// results in A1's workspace quote, so those are not counted a second time.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct LiveMaterialStage {
+    pub(crate) material_bytes: u64,
+    pub(crate) source_auth_bytes: u64,
+    pub(crate) evaluator_bytes: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -62,6 +87,8 @@ pub struct TypedAdapterQuote {
     /// Conservative temporary program/layout/context identity buffers, admitted
     /// before encoding or hashing and separately from retained binding clones.
     pub input_auth_scratch_bytes: u64,
+    /// All four persistent owner envelopes PLUS all three live-stage buffers.
+    /// Equal dimension names do not establish shared allocation or ownership.
     pub external_stage_bytes: u64,
     /// Additional adapter/stage backing while the original capture stays live.
     pub additional_peak_bytes: u64,
@@ -75,6 +102,23 @@ fn add(a: u64, b: u64) -> Result<u64, Error> {
 fn mul(a: u64, b: u64) -> Result<u64, Error> {
     a.checked_mul(b).ok_or(Error::Budget)
 }
+/// Persistent source/evaluation buffers may coexist independently of the live
+/// material stage. Add both: no allocation-aliasing proof permits a maximum.
+/// This validates arithmetic only; owner declarations are not RSS guarantees.
+pub(crate) fn stage_backing(stages: StageReservations, live: LiveMaterialStage) -> Result<u64, Error> {
+    [
+        stages.retained_preparation_bytes,
+        stages.signature_workspace_bytes,
+        stages.source_auth_bytes,
+        stages.evaluator_bytes,
+        live.material_bytes,
+        live.source_auth_bytes,
+        live.evaluator_bytes,
+    ]
+    .into_iter()
+    .try_fold(0, add)
+}
+
 fn count(value: usize) -> Result<u64, Error> {
     u64::try_from(value).map_err(|_| Error::Budget)
 }
@@ -92,6 +136,27 @@ fn buffer_backing(buffer: &Buf) -> Result<u64, Error> {
     }
 }
 
+fn input_auth_backing(registered: &PalwTirClassV1) -> Result<u64, Error> {
+    add(
+        add(mul(MAX_PROGRAM_BYTES as u64, 2)?, 8192)?,
+        mul(add(count(registered.layout.commit_tiles.len())?, count(registered.layout.state_tiles.len())?)?, 8)?,
+    )
+}
+fn binding_backing(registered: &PalwTirClassV1, job: &PalwJobContextV2) -> Result<u64, Error> {
+    let mut bytes = size_of::<PalwTirStepBindingV1>() as u64;
+    bytes = add(bytes, count(registered.program.len())?)?;
+    bytes = add(bytes, backing::<u32>(registered.layout.commit_tiles.len())?)?;
+    bytes = add(bytes, backing::<u32>(registered.layout.state_tiles.len())?)?;
+    bytes = add(bytes, count(job.network_id.len())?)?;
+    add(mul(bytes, 2)?, mul(u64::from(job.exact_decode_tokens), 4)?)
+}
+
+/// Same metadata envelope used by both cold quotes and runtime admission:
+/// temporary identity buffers + TWO original bindings + generated-ID clone.
+pub(crate) fn metadata_backing(registered: &PalwTirClassV1, job: &PalwJobContextV2) -> Result<u64, Error> {
+    add(input_auth_backing(registered)?, binding_backing(registered, job)?)
+}
+
 /// Quotes ALL original target claims at once: A1's local freeze interface owns
 /// `Vec<Vec<i128>>`, so retaining native values does not eliminate this second
 /// representation. Streaming one temporary tile alone is not that interface.
@@ -99,6 +164,9 @@ fn claims_backing(relations: u64, target_lanes: u64) -> Result<u64, Error> {
     add(mul(target_lanes, 16)?, mul(relations, size_of::<Vec<i128>>() as u64)?)
 }
 
+/// Cold-material quote: no adapter material slot is live. Runtime code uses
+/// `quote_with_live` with its persisted owner-envelope maxima and current slot.
+/// This is logical backing arithmetic, not a physical process/RSS guarantee.
 /// No new wire/record digest is assigned. The quote does not authenticate peer
 /// records. The immutable capture's execution pin must match the independently
 /// resolved job which also derived `plan`; the constructor rechecks these facts.
@@ -117,6 +185,23 @@ pub fn quote_typed_adapter(
     plan: &ExpandedPlan,
     stages: StageReservations,
     limits: TypedAdapterLimits,
+) -> Result<TypedAdapterQuote, Error> {
+    quote_with_live(capture, registered, job, plan, stages, limits, LiveMaterialStage::default())
+}
+
+/// Runtime variant: include the existing material stage and explicit retained
+/// owner envelopes in the same checked arithmetic as the cold public quote.
+/// No source authentication, evaluation, signature or physical allocation is
+/// performed or certified here.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn quote_with_live(
+    capture: &PrototypeTypedCapture,
+    registered: &PalwTirClassV1,
+    job: &PalwJobContextV2,
+    plan: &ExpandedPlan,
+    stages: StageReservations,
+    limits: TypedAdapterLimits,
+    live: LiveMaterialStage,
 ) -> Result<TypedAdapterQuote, Error> {
     if registered.version != PALW_TIR_CLASS_VERSION_V1
         || registered.layout.version != PALW_TIR_LAYOUT_VERSION_V1
@@ -150,22 +235,31 @@ pub fn quote_typed_adapter(
         return Err(Error::Budget);
     }
 
-    let input_auth_scratch_bytes = add(
-        add(mul(MAX_PROGRAM_BYTES as u64, 2)?, 8192)?,
-        mul(add(count(registered.layout.commit_tiles.len())?, count(registered.layout.state_tiles.len())?)?, 8)?,
-    )?;
+    // These owners may already coexist when this runtime quote is requested.
+    // Admit their COMBINED backing before any identity encoding or hashing;
+    // separate per-component caps would permit the sum to exceed the ceiling.
+    let records = count(capture.entries().len())?;
+    if records > limits.max_index_records {
+        return Err(Error::Budget);
+    }
+    let index_bytes = mul(records, size_of::<(RecordKey, usize)>() as u64)?;
+    if index_bytes > limits.max_index_bytes {
+        return Err(Error::Budget);
+    }
+    let external_stage_bytes = stage_backing(stages, live)?;
+    let prehash_backing = add(index_bytes, add(metadata_backing(registered, job)?, external_stage_bytes)?)?;
+    if prehash_backing > limits.max_additional_heap_bytes {
+        return Err(Error::Budget);
+    }
+
+    let input_auth_scratch_bytes = input_auth_backing(registered)?;
     if input_auth_scratch_bytes > limits.max_additional_heap_bytes {
         return Err(Error::Budget);
     }
 
     // Cap the fresh metadata backing before comparing encodings/hashing. Job
     // tokenizer remains independent of the registration tokenizer in class_id.
-    let mut binding_clone_bytes = size_of::<PalwTirStepBindingV1>() as u64;
-    binding_clone_bytes = add(binding_clone_bytes, count(registered.program.len())?)?;
-    binding_clone_bytes = add(binding_clone_bytes, backing::<u32>(registered.layout.commit_tiles.len())?)?;
-    binding_clone_bytes = add(binding_clone_bytes, backing::<u32>(registered.layout.state_tiles.len())?)?;
-    binding_clone_bytes = add(binding_clone_bytes, count(job.network_id.len())?)?;
-    binding_clone_bytes = add(mul(binding_clone_bytes, 2)?, mul(u64::from(job.exact_decode_tokens), 4)?)?;
+    let binding_clone_bytes = binding_backing(registered, job)?;
     if binding_clone_bytes > limits.max_additional_heap_bytes {
         return Err(Error::Budget);
     }
@@ -181,7 +275,6 @@ pub fn quote_typed_adapter(
 
     let summary = plan.summary();
     let run = capture.run();
-    let records = count(capture.entries().len())?;
     if records != capture.summary().records
         || summary.positions != capture.summary().positions
         || summary.node_instances != capture.summary().node_records
@@ -195,10 +288,6 @@ pub fn quote_typed_adapter(
         return Err(Error::Geometry);
     }
     if records > limits.max_index_records || run.leaf_count == 0 || run.leaf_count > limits.max_legacy_leaves {
-        return Err(Error::Budget);
-    }
-    let index_bytes = mul(records, size_of::<(RecordKey, usize)>() as u64)?;
-    if index_bytes > limits.max_index_bytes {
         return Err(Error::Budget);
     }
     let all_claims_bytes = claims_backing(summary.relations, summary.target_lanes)?;
@@ -244,10 +333,6 @@ pub fn quote_typed_adapter(
     }
     run_retained_bytes = add(run_retained_bytes, backing::<u32>(run.generated.capacity())?)?;
 
-    let external_stage_bytes = add(
-        add(stages.retained_preparation_bytes, stages.source_auth_bytes)?,
-        add(stages.evaluator_bytes, stages.signature_workspace_bytes)?,
-    )?;
     let additional_peak_bytes = [
         index_bytes,
         all_claims_bytes,
@@ -289,6 +374,51 @@ mod tests {
         assert!(claims_backing(1, u64::MAX).is_err());
         assert!(add(u64::MAX, 1).is_err());
         assert!(mul(u64::MAX, 16).is_err());
+    }
+
+    #[test]
+    fn independent_live_buffers_add_to_persistent_owner_envelopes_and_overflow_refuses() {
+        let declared = StageReservations {
+            retained_preparation_bytes: 100,
+            source_auth_bytes: 200,
+            evaluator_bytes: 300,
+            signature_workspace_bytes: 400,
+        };
+        let later = StageReservations {
+            retained_preparation_bytes: 90,
+            source_auth_bytes: 250,
+            evaluator_bytes: 200,
+            signature_workspace_bytes: 450,
+        };
+        let joined = declared.joined(later);
+        assert_eq!(
+            joined,
+            StageReservations {
+                retained_preparation_bytes: 100,
+                source_auth_bytes: 250,
+                evaluator_bytes: 300,
+                signature_workspace_bytes: 450,
+            }
+        );
+        let live = LiveMaterialStage { material_bytes: 500, source_auth_bytes: 220, evaluator_bytes: 350 };
+        // Each persistent named owner keeps its maximum across calls, but the
+        // independently allocated live auth/evaluator buffers are additional.
+        // A1's live evaluator workspace includes its own target storage once.
+        assert_eq!(stage_backing(joined, live).unwrap(), 100 + 450 + 250 + 300 + 500 + 220 + 350);
+        assert_eq!(stage_backing(joined, LiveMaterialStage::default()).unwrap(), 100 + 450 + 250 + 300);
+        let independent = StageReservations {
+            retained_preparation_bytes: 0,
+            source_auth_bytes: 100,
+            evaluator_bytes: 100,
+            signature_workspace_bytes: 0,
+        };
+        let independent_live = LiveMaterialStage { material_bytes: 0, source_auth_bytes: 100, evaluator_bytes: 100 };
+        // The former component-wise max would claim 200, although four
+        // independent 100-byte buffers are simultaneously retained.
+        assert_eq!(stage_backing(independent, independent_live).unwrap(), 400);
+        let overflow = StageReservations { retained_preparation_bytes: u64::MAX, ..declared };
+        assert!(stage_backing(overflow, LiveMaterialStage::default()).is_err());
+        assert!(stage_backing(declared, LiveMaterialStage { material_bytes: u64::MAX, ..live }).is_err());
     }
 
     #[test]

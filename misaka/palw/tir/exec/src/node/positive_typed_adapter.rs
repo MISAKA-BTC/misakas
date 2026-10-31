@@ -4,6 +4,7 @@ mod budget;
 mod legacy;
 use super::positive_typed_capture::{PrototypeTypedCapture, TypedRecord, TypedRecordKind};
 use crate::{Elem, with_slice};
+use budget::{LiveMaterialStage, metadata_backing, quote_with_live, stage_backing};
 pub use budget::{StageReservations, TypedAdapterLimits, TypedAdapterQuote, quote_typed_adapter};
 use kaspa_consensus_core::{
     Hash64,
@@ -89,7 +90,8 @@ pub struct TypedCaptureAdapter<'a> {
     pub(crate) limits: TypedAdapterLimits,
     pub(crate) meter: RefCell<TypedAdapterMeter>,
     live_material: Cell<bool>,
-    live_material_scratch: Cell<u64>,
+    live_material_stage: Cell<LiveMaterialStage>,
+    stages: Cell<StageReservations>,
 }
 fn digest(h: Hash64) -> Digest {
     Digest(h.as_bytes())
@@ -109,10 +111,15 @@ fn key(r: &TypedRecord) -> RecordKey {
     }
 }
 impl<'a> TypedCaptureAdapter<'a> {
+    /// Persist simultaneous external-owner envelopes for the whole adapter
+    /// session. They are additive to the adapter's live material slot; caller
+    /// declarations do not verify actual allocations. Later claim exports can
+    /// increase these envelopes, but cannot release or replace them.
     pub fn prepare(
         capture: &'a PrototypeTypedCapture,
         expected: TypedAdapterExpected<'a>,
         limits: TypedAdapterLimits,
+        stages: StageReservations,
     ) -> Result<Self, Error> {
         let class = expected.registered;
         let job = expected.job;
@@ -125,11 +132,10 @@ impl<'a> TypedCaptureAdapter<'a> {
         {
             return Err(Error::Binding);
         }
-        let auth_scratch = add(
-            2 * MAX_PROGRAM_BYTES as u64 + 8192,
-            mul((class.layout.commit_tiles.len() + class.layout.state_tiles.len()) as u64, 8)?,
-        )?;
-        if auth_scratch > limits.max_additional_heap_bytes {
+        // Admit every persistent owner before identity hashing or index allocation.
+        let index_bytes = mul(capture.entries().len() as u64, size_of::<(RecordKey, usize)>() as u64)?;
+        let base = add(index_bytes, metadata_backing(class, job)?)?;
+        if add(base, stage_backing(stages, LiveMaterialStage::default())?)? > limits.max_additional_heap_bytes {
             return Err(Error::Budget);
         }
         expected.rooted.check(ClaimForm::PositiveResultV2, result).map_err(|_| Error::Binding)?;
@@ -198,25 +204,22 @@ impl<'a> TypedCaptureAdapter<'a> {
             limits,
             meter: RefCell::new(TypedAdapterMeter { lookup_visits: visits, ..Default::default() }),
             live_material: Cell::new(false),
-            live_material_scratch: Cell::new(0),
+            live_material_stage: Cell::new(LiveMaterialStage::default()),
+            stages: Cell::new(stages),
         })
     }
     pub fn meter(&self) -> TypedAdapterMeter {
         *self.meter.borrow()
     }
     fn ensure_backing(&self, scratch: u64) -> Result<(), Error> {
+        self.ensure_backing_with(self.stages.get(), self.live_material_stage.get(), scratch)
+    }
+    fn ensure_backing_with(&self, stages: StageReservations, material: LiveMaterialStage, scratch: u64) -> Result<(), Error> {
         // Count all exported claims conservatively as still live. A fresh
         // builder move cannot make returned buffers disappear from the quote.
         let index = mul(self.index.capacity() as u64, size_of::<(RecordKey, usize)>() as u64)?;
-        let class = self.expected.registered;
-        let layout = (class.layout.commit_tiles.len() + class.layout.state_tiles.len()) as u64;
-        let auth = add(2 * MAX_PROGRAM_BYTES as u64 + 8192, mul(layout, 8)?)?;
-        let one_binding = add(
-            size_of::<PalwTirStepBindingV1>() as u64,
-            add(class.program.len() as u64, add(mul(layout, 4)?, self.expected.job.network_id.len() as u64)?)?,
-        )?;
-        let metadata = add(auth, add(mul(one_binding, 2)?, mul(u64::from(self.expected.job.exact_decode_tokens), 4)?)?)?;
-        let live = add(add(index, self.meter.borrow().claim_bytes)?, add(metadata, add(self.live_material_scratch.get(), scratch)?)?)?;
+        let metadata = metadata_backing(self.expected.registered, self.expected.job)?;
+        let live = add(add(index, self.meter.borrow().claim_bytes)?, add(metadata, add(stage_backing(stages, material)?, scratch)?)?)?;
         if live > self.limits.max_additional_heap_bytes {
             return Err(Error::Budget);
         }
@@ -266,7 +269,9 @@ impl<'a> TypedCaptureAdapter<'a> {
         }
         self.match_plan(prep.plan())
     }
-    /// One fresh original binding; its clone backing is part of the quote.
+    /// One fresh original binding; its active clone backing is part of the
+    /// quote. Additional retained exports/copies require caller reservations;
+    /// this interface does not track arbitrary caller-owned binding lifetimes.
     pub fn binding(&self) -> Result<PalwTirStepBindingV1, Error> {
         self.ensure_backing(0)?;
         Ok(PalwTirStepBindingV1 {
@@ -329,7 +334,18 @@ impl<'a> TypedCaptureAdapter<'a> {
     }
     pub fn all_claims(&self, plan: &ExpandedPlan, stages: StageReservations) -> Result<Vec<Vec<i128>>, Error> {
         self.match_plan(plan)?;
-        let quote = quote_typed_adapter(self.capture, self.expected.registered, self.expected.job, plan, stages, self.limits)?;
+        let stages = self.stages.get().joined(stages);
+        self.ensure_backing_with(stages, self.live_material_stage.get(), 0)?;
+        self.stages.set(stages);
+        let quote = quote_with_live(
+            self.capture,
+            self.expected.registered,
+            self.expected.job,
+            plan,
+            stages,
+            self.limits,
+            self.live_material_stage.get(),
+        )?;
         if add(quote.additional_peak_bytes, self.meter.borrow().claim_bytes)? > self.limits.max_additional_heap_bytes {
             return Err(Error::Budget);
         }
@@ -374,16 +390,18 @@ impl<'a> TypedCaptureAdapter<'a> {
             return Err(Error::Budget);
         }
         self.charge(AdapterCharge::MaterialBytes, limits.max_material_bytes)?;
-        let scratch = add(
-            add(mul(limits.max_material_bytes, 2)?, limits.max_auth_storage_bytes)?,
-            add(limits.max_workspace_bytes, limits.max_target_bytes)?,
-        )?;
-        self.ensure_backing(scratch)?;
+        let stage = LiveMaterialStage {
+            material_bytes: mul(limits.max_material_bytes, 2)?,
+            source_auth_bytes: limits.max_auth_storage_bytes,
+            // A1 workspace already includes target indices and results.
+            evaluator_bytes: limits.max_workspace_bytes,
+        };
+        self.ensure_backing_with(self.stages.get(), stage, 0)?;
         let binding = self.binding()?;
         let store = self.store(source);
         self.live_material.set(true);
-        self.live_material_scratch.set(scratch);
-        let mut slot = BuildingMaterialSlot { flag: &self.live_material, bytes: &self.live_material_scratch, transferred: false };
+        self.live_material_stage.set(stage);
+        let mut slot = BuildingMaterialSlot { flag: &self.live_material, stage: &self.live_material_stage, transferred: false };
         let material = match relation.kind {
             ExpandedRelationKind::Legacy(leaf) => build_source_only_legacy_v1(&binding, &leaf, &store, rules, limits),
             ExpandedRelationKind::RecomputeNode { ctx, node, first_lane, lane_count, .. } => {
@@ -398,14 +416,14 @@ impl<'a> TypedCaptureAdapter<'a> {
 
 struct BuildingMaterialSlot<'a> {
     flag: &'a Cell<bool>,
-    bytes: &'a Cell<u64>,
+    stage: &'a Cell<LiveMaterialStage>,
     transferred: bool,
 }
 impl Drop for BuildingMaterialSlot<'_> {
     fn drop(&mut self) {
         if !self.transferred {
             self.flag.set(false);
-            self.bytes.set(0);
+            self.stage.set(LiveMaterialStage::default());
         }
     }
 }
@@ -424,7 +442,7 @@ impl TypedAdapterMaterial<'_, '_> {
 impl Drop for TypedAdapterMaterial<'_, '_> {
     fn drop(&mut self) {
         self.adapter.live_material.set(false);
-        self.adapter.live_material_scratch.set(0);
+        self.adapter.live_material_stage.set(LiveMaterialStage::default());
     }
 }
 

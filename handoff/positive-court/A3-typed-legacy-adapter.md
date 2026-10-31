@@ -8,7 +8,7 @@ separately; their historical counts are not added to this increment.
 
 ## Binding and A1 interface
 
-`TypedCaptureAdapter::prepare(capture, TypedAdapterExpected, limits)` borrows the
+`TypedCaptureAdapter::prepare(capture, TypedAdapterExpected, limits, stages)` borrows the
 immutable capture and independently expected registration, artifact, job,
 authenticated original Miner Result, rooted admission inputs and step space.
 It joins both identity chains: expected class ID must equal the job/capture's
@@ -71,9 +71,24 @@ It explicitly adds the caller's non-default preparation, source authentication,
 evaluator and signature reservations. These are logical backing reservations,
 not measured allocator/RSS or ML-DSA workspace guarantees.
 
+`prepare` requires and persists all four external stage reservations, and checks
+index + metadata + these stages before identity hashing or index allocation.
+Later `all_claims` declarations can only increase each same owner's envelope;
+independent owners must be pre-summed by the caller. Smaller declarations and
+material Drop cannot release these persistent reservations. Every runtime check
+uses the same additive stage inventory: all four persistent external components
++ live material's two body buffers + live source-auth storage + live evaluator
+workspace. Even identically named external/live components may own independent
+buffers, so they are added; no alias optimization is assumed. A1's evaluator
+workspace already includes target indices/results, counted once within that
+live component.
+
+Before exporting all claims, the combined quote includes this entire live stage,
+all future claim headers/lanes, prior cumulative exported claims, index, metadata,
+tile and path scratch. Failure happens before reserving/charging the outer Vec.
 All owned claim exports are cumulatively charged before allocation, including
-outer vector headers. Every subsequent allocation includes a live material's
-reservation. `TypedAdapterMaterial` owns a single staging slot, with no Clone or
+outer vector headers. Every subsequent allocation includes this same persistent
+and live stage inventory. `TypedAdapterMaterial` owns a single staging slot, with no Clone or
 owned-buffer extraction. A second build while it is retained refuses. Drop (or
 failed construction) releases only backing; spent work counters stay charged.
 The slot is claimed before invoking external provider code, preventing recursive
