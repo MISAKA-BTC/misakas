@@ -6363,6 +6363,7 @@ dependencies = [
  "misaka-palw-kernel",
  "misaka-palw-tir",
  "misaka-palw-tir-artifact",
+ "misaka-palw-tir-exec",
  "misaka-palw-tir-sketch",
  "serde",
  "serde_json",

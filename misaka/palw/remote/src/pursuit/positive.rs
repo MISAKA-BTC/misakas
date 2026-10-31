@@ -11,6 +11,9 @@ use kaspa_consensus_core::{
 };
 use misaka_palw_kernel::ledger::OutsiderFindingV1;
 
+pub mod sources;
+pub mod submission;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PositiveGoalV2 {
     ReexecuteAndBuild,
@@ -96,16 +99,19 @@ pub fn plan_positive_pursuit_v2(
     if admission.check_result(result).is_err() {
         return S::Refused { why: "result is outside admitted ruleset/scope" };
     }
+    if result.version != 2 || !result.sampling.is_greedy() {
+        return S::Refused { why: "unsupported result version or sampling" };
+    }
     if current_branch != admission.branch {
         return S::RevalidateBranch;
     }
-    if now >= deadline {
-        return S::EndedUnverified;
-    }
-    if max_parts_per_send == 0 {
-        return S::Refused { why: "zero submission allowance" };
-    }
     let Some(node) = node else {
+        if now >= deadline {
+            return S::EndedUnverified;
+        }
+        if max_parts_per_send == 0 {
+            return S::Refused { why: "zero submission allowance" };
+        }
         return match stage {
             PanelBuildStageV2::NoReplay => S::ReplayOnce,
             PanelBuildStageV2::ReplayRecorded { capture } => S::BuildFromRecorded { capture },
@@ -125,6 +131,12 @@ pub fn plan_positive_pursuit_v2(
         (_, WitnessStatusV2::Rejected) => return S::WitnessRejected,
         (_, WitnessStatusV2::Incomplete) => return S::EndedUnverified,
         _ => {}
+    }
+    if now >= deadline {
+        return S::EndedUnverified;
+    }
+    if max_parts_per_send == 0 {
+        return S::Refused { why: "zero submission allowance" };
     }
     let PanelBuildStageV2::WitnessSigned { witness, parts } = stage else {
         return S::Refused { why: "reconstruct the admitted signed witness before resuming" };
