@@ -3117,13 +3117,22 @@ pub fn validate_receipt_quorum_v2_with_economy<V>(
 where
     V: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
 {
+    let original = state.claim(claim_id).ok_or(PalwPanelV2Error::MissingClaim(*claim_id))?;
+    let effective =
+        crate::palw_model_panel_one_v1::model_claim_panel_v1(state_params.model_panel_one_from_daa(), original.accepted_daa, params)?;
+    let params = &effective;
+    if state_params.model_panel_one_governs_v1(original.accepted_daa) && state.panel(claim_id).is_none_or(|p| p.seats.len() != 1) {
+        return Err(PalwPanelV2Error::PanelMismatch);
+    }
     if panel_economy {
         let claim = state.claim(claim_id).ok_or(PalwPanelV2Error::MissingClaim(*claim_id))?;
         if matches!(claim.phase, PalwClaimPhaseV2::ReceiptLicensed { .. }) {
             return validate_supplementary_receipts_v1(state, state_params, ctx, network_domain, claim_id, receipts, verify_mldsa87);
         }
     }
-    let outsider = palw_panel_outsider_bond_v1(state, claim_id, independence_daa);
+    let outsider = (!state_params.model_panel_one_governs_v1(original.accepted_daa))
+        .then(|| palw_panel_outsider_bond_v1(state, claim_id, independence_daa))
+        .flatten();
     receipt_quorum_over_seats_v2(
         state,
         state_params,
@@ -3133,7 +3142,9 @@ where
         "ReceiptQuorum",
         || {
             let panel = state.panel(claim_id).ok_or(PalwPanelV2Error::NoPanel(*claim_id))?;
-            if crate::palw_shard_licensing_v1::palw_claim_licenses_by_parts_v1(state, claim_id, params.seat_count).is_some() {
+            if !state_params.model_panel_one_governs_v1(original.accepted_daa)
+                && crate::palw_shard_licensing_v1::palw_claim_licenses_by_parts_v1(state, claim_id, params.seat_count).is_some()
+            {
                 return Err(PalwPanelV2Error::LicensedByParts(*claim_id));
             }
             Ok(panel.seats.clone())
@@ -3201,6 +3212,15 @@ where
     let outsider = palw_panel_outsider_bond_v1(state, claim_id, independence_daa);
     let mut outsider_valid = false;
     let claim = state.claim(claim_id).ok_or(PalwPanelV2Error::MissingClaim(*claim_id))?;
+    let model_one = state_params.model_panel_one_governs_v1(claim.accepted_daa);
+    let effective =
+        crate::palw_model_panel_one_v1::model_claim_panel_v1(state_params.model_panel_one_from_daa(), claim.accepted_daa, params)?;
+    let params = &effective;
+    let attestations = if model_one { 1 } else { PALW_VERIFICATION_V2_ATTESTATIONS_PER_SEGMENT };
+    if model_one && state.panel(claim_id).is_none_or(|p| p.seats.len() != 1) {
+        return Err(PalwPanelV2Error::PanelMismatch);
+    }
+
     let PalwClaimPhaseV2::PanelBound { bound_daa } = claim.phase else {
         return Err(PalwPanelV2Error::WrongPhase { claim: *claim_id, edge: "ReceiptCoverageV2" });
     };
@@ -3213,7 +3233,7 @@ where
         ))
         .ok_or(PalwPanelV2Error::ReceiptOutsideWindow { seat: claim.bond, why: "the receipt deadline overflows the DAA score" })?;
     let panel = state.panel(claim_id).ok_or(PalwPanelV2Error::NoPanel(*claim_id))?;
-    if crate::palw_shard_licensing_v1::palw_claim_licenses_by_parts_v1(state, claim_id, params.seat_count()).is_some() {
+    if !model_one && crate::palw_shard_licensing_v1::palw_claim_licenses_by_parts_v1(state, claim_id, params.seat_count()).is_some() {
         return Err(PalwPanelV2Error::LicensedByParts(*claim_id));
     }
     let seats = panel.seats.clone();
@@ -3315,11 +3335,12 @@ where
     }
     if valid >= params.quorum() {
         let coverage = palw_coverage_v2(assignment.segments, &valid_masks);
-        if let Some((segment, have)) = coverage.short(PALW_VERIFICATION_V2_ATTESTATIONS_PER_SEGMENT) {
-            return Err(PalwPanelV2Error::CoverageShort { segment, have, need: PALW_VERIFICATION_V2_ATTESTATIONS_PER_SEGMENT });
+        if let Some((segment, have)) = coverage.short(attestations) {
+            return Err(PalwPanelV2Error::CoverageShort { segment, have, need: attestations });
         }
         // ADR-0147: coverage by the class's own seats is still the class's own seats.
         if let Some(seat) = outsider
+            && !model_one
             && !outsider_valid
         {
             return Err(PalwPanelV2Error::OutsiderHasNotAnswered { claim: *claim_id, seat });

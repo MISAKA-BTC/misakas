@@ -194,6 +194,7 @@ impl PalwStateParamsV2 {
             reward_liability_horizon_from_daa: None,
             court_outsider_lane_from_daa: None,
             kernel_route_panel_one_from_daa: None,
+            model_panel_one_from_daa: None,
             kernel_panel_one_test_only_external_gain_bound_v1: None,
             kernel_court_admission_test_only_v1: None,
             court_clock_v2_from_daa: None,
@@ -775,6 +776,21 @@ impl PalwStateParamsV2 {
     }
 
     /// **Kernel route Panel=1 seat policy mirror** (`Params::palw_kernel_route_panel_one_v1`, lane g14p/kernel-route U02), written by
+    /// Mirror of the separately versioned all-model G14 migration.
+    pub fn with_model_panel_one_from_daa(mut self, from_daa: Option<u64>) -> Self {
+        self.model_panel_one_from_daa = from_daa;
+        self
+    }
+
+    pub fn model_panel_one_from_daa(&self) -> Option<u64> {
+        self.model_panel_one_from_daa
+    }
+
+    pub fn model_panel_one_governs_v1(&self, accepted_daa: u64) -> bool {
+        crate::palw_model_panel_one_v1::model_claim_route_v1(self.model_panel_one_from_daa, accepted_daa)
+            == crate::palw_model_panel_one_v1::PalwModelClaimRouteV1::G14PanelOne
+    }
+
     /// `Params::sync_palw_g14_gates_v1` (and by fixtures).
     pub fn with_kernel_route_panel_one_from_daa(mut self, from_daa: Option<u64>) -> Self {
         self.kernel_route_panel_one_from_daa = from_daa;
@@ -1032,7 +1048,9 @@ impl PalwStateParamsV2 {
     /// the claim's ACCEPTANCE (never at a later binder or retry block) and R-core+ is (the V3 fold prices its seats on the one
     /// R-core+ ledger). `false`: the historical lane-A lattice, byte for byte. `false` on every shipped preset.
     pub fn panel_v3_rule_at(&self, accepted_daa: u64) -> bool {
-        self.panel_v3.is_some_and(|mirror| accepted_daa >= mirror.from_daa) && self.rcore_plus_active_at(accepted_daa)
+        !self.model_panel_one_governs_v1(accepted_daa)
+            && self.panel_v3.is_some_and(|mirror| accepted_daa >= mirror.from_daa)
+            && self.rcore_plus_active_at(accepted_daa)
     }
 
     /// `Params::palw_anchor_window_v1`'s height, if the network arms it (the mirror).

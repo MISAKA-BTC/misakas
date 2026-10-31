@@ -1797,6 +1797,7 @@ impl PalwPanelService {
             // before the fence keeps the receipt path to its licence or its void). A role that files no V3 form files no leaf either,
             // and a `Valid` leaf attests exactly the seat's assigned mask, which is all the chain takes of it.
             if let Some(fence) = vertex_fence
+                && !duty.model_panel_one
                 && duty.bound_daa >= fence
             {
                 if forms.segments.is_none() {

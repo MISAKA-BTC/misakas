@@ -5480,7 +5480,8 @@ impl VirtualStateProcessor {
         // **ADR-0100 Decision 4: a claim drawn per shard gets its next ready PART**, one shard a
         // call, by the same greedy rule as the whole licence below and checked by the same
         // function the chain will check it with, at the same point.
-        if self.palw_shard_licensing_at(point.daa_score)
+        if !state.claim(&claim).is_some_and(|c| state_params.model_panel_one_governs_v1(c.accepted_daa))
+            && self.palw_shard_licensing_at(point.daa_score)
             && let Some(plan) = kaspa_consensus_core::palw_shard_licensing_v1::palw_claim_licenses_by_parts_v1(
                 state,
                 &claim,
@@ -5985,6 +5986,9 @@ impl VirtualStateProcessor {
         claim: kaspa_hashes::Hash64,
         candidates: &[kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV3],
     ) -> Option<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
+        if state.claim(&claim).is_some_and(|c| state_params.model_panel_one_governs_v1(c.accepted_daa)) {
+            return None;
+        }
         // RFC-0007's path rule: a claim that licenses by tally takes no receipt-path object, so none is offered for it.
         if kaspa_consensus_core::palw_vertex_v1::palw_vertex_claim_licenses_by_tally_v1(state, state_params, point.daa_score, &claim) {
             return None;
@@ -10909,6 +10913,9 @@ impl VirtualStateProcessor {
         claim: &kaspa_consensus_core::palw_state_v2::PalwClaimStateV2,
     ) -> Result<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2, Option<String>> {
         use kaspa_consensus_core::palw_state_v2::PalwClaimPhaseV2;
+        if self.palw_state_params_v2.as_ref().is_some_and(|p| p.model_panel_one_governs_v1(claim.accepted_daa)) {
+            return Err(None); // The G14 post-commit fold owns this assignment.
+        }
         if !matches!(claim.phase, PalwClaimPhaseV2::Provisional) {
             return Err(None);
         }

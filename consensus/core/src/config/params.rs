@@ -2465,6 +2465,8 @@ pub struct Params {
     /// 3-of-3 ([`crate::palw_kernel_route_v1::PALW_KERNEL_ROUTE_INTERIM_SEATS_V1`]). Hashed Some-only. Needs
     /// `palw_probabilistic_constraints_v1` at or below it (validation); mirrored by `Params::sync_palw_g14_gates_v1`.
     pub palw_kernel_route_panel_one_v1: Option<ForkActivation>,
+    /// All-model G14 single-seat migration; original claim acceptance selects its route.
+    pub palw_model_panel_one_v1: Option<ForkActivation>,
     /// **G14 U06/U07 court clock v2 (DORMANT, lane g14p/court-clock; RFC-0026 §2-3, RFC-0014 2026-10-19 §B/§D, ADR-0198 A).** A claim
     /// whose ORIGINAL acceptance is at/after this height has every court clock derived from that acceptance (`a + 3,120` normal,
     /// `a + 10,000` once disputed — one rooted extension); older claims keep the old clock (T15). `None` on every shipped preset;
@@ -5130,6 +5132,10 @@ impl Params {
     }
 
     /// Kernel route Panel=1 seat policy fence (dormant: `None` on every shipped preset; `never()` reads as `None`).
+    pub fn palw_model_panel_one_v1_fence(&self) -> Option<ForkActivation> {
+        self.palw_model_panel_one_v1.filter(|f| *f != ForkActivation::never())
+    }
+
     pub fn palw_kernel_route_panel_one_v1_fence(&self) -> Option<ForkActivation> {
         self.palw_kernel_route_panel_one_v1.filter(|f| *f != ForkActivation::never())
     }
@@ -6215,6 +6221,7 @@ impl Params {
             palw_court_outsider_lane_v1: self.palw_court_outsider_lane_v1,
             palw_state_row_map_v1: self.palw_state_row_map_v1,
             palw_kernel_route_panel_one_v1: self.palw_kernel_route_panel_one_v1,
+            palw_model_panel_one_v1: self.palw_model_panel_one_v1,
             palw_court_clock_v2: self.palw_court_clock_v2,
             palw_panel_da_disclosure_v1: self.palw_panel_da_disclosure_v1,
             palw_staged_float_constraint_v1: self.palw_staged_float_constraint_v1,
@@ -7398,6 +7405,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_court_outsider_lane_v1: None,
     palw_state_row_map_v1: None,
     palw_kernel_route_panel_one_v1: None,
+    palw_model_panel_one_v1: None,
     palw_court_clock_v2: None,
     palw_panel_da_disclosure_v1: None,
     palw_staged_float_constraint_v1: None,
@@ -7773,6 +7781,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_court_outsider_lane_v1: None,
     palw_state_row_map_v1: None,
     palw_kernel_route_panel_one_v1: None,
+    palw_model_panel_one_v1: None,
     palw_court_clock_v2: None,
     palw_panel_da_disclosure_v1: None,
     palw_staged_float_constraint_v1: None,
@@ -8130,6 +8139,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_court_outsider_lane_v1: None,
     palw_state_row_map_v1: None,
     palw_kernel_route_panel_one_v1: None,
+    palw_model_panel_one_v1: None,
     palw_court_clock_v2: None,
     palw_panel_da_disclosure_v1: None,
     palw_staged_float_constraint_v1: None,
@@ -13694,6 +13704,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_court_outsider_lane_v1: None,
     palw_state_row_map_v1: None,
     palw_kernel_route_panel_one_v1: None,
+    palw_model_panel_one_v1: None,
     palw_court_clock_v2: None,
     palw_panel_da_disclosure_v1: None,
     palw_staged_float_constraint_v1: None,

@@ -126,6 +126,7 @@ fn rebind(b: &mut PalwStepBindingV2) {
 
 fn duty(claim: u64, bound_daa: u64, anchor: u64) -> PalwSeatDutyV2 {
     PalwSeatDutyV2 {
+        model_panel_one: false,
         accepted_block: h(1),
         claim_id: h(claim),
         class_id: h(2),

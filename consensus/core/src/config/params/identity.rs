@@ -648,6 +648,9 @@ impl Params {
         if self.palw_kernel_route_panel_one_v1 == Some(ForkActivation::never()) {
             self.palw_kernel_route_panel_one_v1 = None;
         }
+        if self.palw_model_panel_one_v1 == Some(ForkActivation::never()) {
+            self.palw_model_panel_one_v1 = None;
+        }
         if self.palw_tir_bounded_door_v1 == Some(ForkActivation::never()) {
             self.palw_tir_bounded_door_v1 = None;
         }
@@ -1173,6 +1176,7 @@ impl Params {
             palw_court_outsider_lane_v1,
             palw_state_row_map_v1,
             palw_kernel_route_panel_one_v1,
+            palw_model_panel_one_v1,
             palw_court_clock_v2,
             palw_panel_da_disclosure_v1,
             palw_staged_float_constraint_v1,
@@ -1635,6 +1639,7 @@ impl Params {
             ("palw_court_outsider_lane_v1", *palw_court_outsider_lane_v1),
             ("palw_state_row_map_v1", *palw_state_row_map_v1),
             ("palw_kernel_route_panel_one_v1", *palw_kernel_route_panel_one_v1),
+            ("palw_model_panel_one_v1", *palw_model_panel_one_v1),
             ("palw_court_clock_v2", *palw_court_clock_v2),
             ("palw_panel_da_disclosure_v1", *palw_panel_da_disclosure_v1),
             ("palw_fp_prefix_inherit", *palw_fp_prefix_inherit),
@@ -2057,6 +2062,10 @@ impl Params {
         }
         if let Some(at) = self.palw_kernel_route_panel_one_v1 {
             h.write(b"palw_kernel_route_panel_one_v1");
+            h.write(at.daa_score().to_le_bytes());
+        }
+        if let Some(at) = self.palw_model_panel_one_v1 {
+            h.write(b"palw_model_panel_one_v1");
             h.write(at.daa_score().to_le_bytes());
         }
         if let Some(at) = self.palw_court_clock_v2.filter(|f| *f != ForkActivation::never()) {
@@ -2956,6 +2965,7 @@ impl Params {
             palw_court_outsider_lane_v1,
             palw_state_row_map_v1: _,
             palw_kernel_route_panel_one_v1,
+            palw_model_panel_one_v1,
             palw_court_clock_v2,
             palw_panel_da_disclosure_v1,
             palw_staged_float_constraint_v1,
@@ -3971,6 +3981,9 @@ impl Params {
         if let Some(at) = palw_kernel_route_panel_one_v1.as_mut() {
             fork(at, visit);
         }
+        if let Some(at) = palw_model_panel_one_v1.as_mut() {
+            fork(at, visit);
+        }
         if let Some(at) = palw_tir_bounded_door_v1.as_mut() {
             fork(at, visit);
         }
@@ -4559,6 +4572,7 @@ impl Params {
             palw_court_outsider_lane_v1,
             palw_state_row_map_v1,
             palw_kernel_route_panel_one_v1,
+            palw_model_panel_one_v1,
             palw_court_clock_v2,
             palw_panel_da_disclosure_v1,
             palw_staged_float_constraint_v1,
@@ -5315,6 +5329,10 @@ impl Params {
         }
         if let Some(at) = palw_kernel_route_panel_one_v1 {
             h.write(b"palw_kernel_route_panel_one_v1");
+            h.write(at.daa_score().to_le_bytes());
+        }
+        if let Some(at) = palw_model_panel_one_v1 {
+            h.write(b"palw_model_panel_one_v1");
             h.write(at.daa_score().to_le_bytes());
         }
         if let Some(at) = palw_court_clock_v2.filter(|f| *f != ForkActivation::never()) {

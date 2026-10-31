@@ -179,6 +179,9 @@ pub fn palw_claim_lifecycle_json_v1(
             "version": PALW_USER_STATUS_VERSION_V1,
             "kind": "palwClaimLifecycle",
             "route": "chain",
+            "verificationRoute": if params.model_panel_one_governs_v1(claim.accepted_daa) { "g14ModelPanelOne" } else { "historicalPanel" },
+            "panelSeatCount": state.panel(claim_id).map(|p| p.seats.len()),
+            "approvalBasis": claim.rcore.basis_k,
             "nowDaa": now,
             "claimId": claim_id.to_string(),
             "classId": claim.class_id.to_string(),
@@ -307,17 +310,27 @@ const G14_FAMILIES: &[(PalwG14RouteFamilyV1, &str)] = &[
 /// Gate C's height and policy, and the pinned arming records and typed waivers this binary carries (grouped by fence).
 pub fn palw_arming_json_v1(params: &PalwStateParamsV2, now: u64) -> Value {
     let mirror = params.g14_route_required_v1();
-    let families: Vec<Value> = G14_FAMILIES
+    let mut families: Vec<Value> = G14_FAMILIES
         .iter()
         .map(|(f, name)| {
             json!({
                 "family": name,
                 "fences": crate::palw_g14_gates_v1::palw_g14_route_family_fences_v1(*f),
                 "armed": mirror.map(|m| m.route_armed(*f, now, false)),
+                "newClaims": !params.model_panel_one_governs_v1(now) || !matches!(f, PalwG14RouteFamilyV1::LegacyPanelAttempt | PalwG14RouteFamilyV1::LegacyFusedLeaf),
                 "armedFramed": mirror.map(|m| m.route_armed(*f, now, true)),
             })
         })
         .collect();
+    families.push(json!({
+        "family": "g14ModelPanelOne",
+        "fromDaa": params.model_panel_one_from_daa(),
+        "armed": params.model_panel_one_governs_v1(now) && crate::palw_g14_gates_v1::palw_g14_route_attempt_refusal_v1(params, now).is_none(),
+        "allModels": true,
+        "seatCount": 1,
+        "scope": "whole-claim",
+        "modelReviewRequired": false,
+    }));
     let mut by_fence: std::collections::BTreeMap<&str, (u64, usize, usize, usize)> = Default::default();
     for w in crate::palw_t12_18400_records_v1::PALW_T12_18400_WAIVERS_V1 {
         let e = by_fence.entry(w.fence).or_insert((w.activation_daa, 0, 0, 0));
@@ -578,6 +591,11 @@ mod tests {
         let doc = palw_arming_json_v1(&params, 10);
         assert!(doc["gateC"].is_null() && doc["g14RouteRequired"].is_null(), "no fence: nothing armed");
         assert_eq!(doc["kind"], "palwArming");
-        assert_eq!(doc["routeFamilies"].as_array().unwrap().len(), G14_FAMILIES.len());
+        assert_eq!(doc["routeFamilies"].as_array().unwrap().len(), G14_FAMILIES.len() + 1);
+        let model_one = doc["routeFamilies"].as_array().unwrap().last().unwrap();
+        assert_eq!(model_one["family"], "g14ModelPanelOne");
+        assert_eq!(model_one["armed"], false);
+        assert_eq!(model_one["seatCount"], 1);
+        assert_eq!(model_one["modelReviewRequired"], false);
     }
 }

@@ -321,7 +321,12 @@ pub fn palw_panel_network_view_v1(
     schedule: PalwVerificationScheduleV1,
 ) -> PalwPanelNetworkViewV1 {
     let verification = schedule.at(tip_daa);
-    let geometry = verification.panel_geometry();
+    let model_one = params.model_panel_one_governs_v1(tip_daa);
+    let geometry = if model_one {
+        PalwPanelGeometryV1 { panel_size: 1, receipt_quorum: 1, full_seats_per_panel: 1, partial_seats_per_panel: 0, segment_count: 1 }
+    } else {
+        verification.panel_geometry()
+    };
     let floor = params.min_collateral_sompi();
     // The age the registry judges a row by now (the readiness-age sweep, 2026-09-24), so a seat's
     // `expires` here is the moment the registry stops counting it.
@@ -443,9 +448,7 @@ pub fn palw_panel_network_view_v1(
                     readiness_by_bond_class.get(&(*bond_key, *parent)).is_some_and(|r| r.fresh && r.not_ready_reason.is_empty())
                 })
             });
-            let eligible = ready
-                && (declared || registry.active)
-                && ancestry_ready
+            let eligible = (model_one || (ready && (declared || registry.active) && ancestry_ready))
                 && matches!(bond.status, PalwBondStatusV2::Active)
                 && palw_bond_may_take_work_v2(bond, floor);
             seats.push(PalwPanelSeatViewV1 {
@@ -459,7 +462,7 @@ pub fn palw_panel_network_view_v1(
                 collateral_available: free,
                 collateral_locked: held,
                 assigned: assigned_by_class.get(&(*bond_key, class.class_id)).copied().unwrap_or(0),
-                hold: if ready { None } else { hold },
+                hold: if model_one || ready { None } else { hold },
             });
         }
     }
@@ -476,10 +479,14 @@ pub fn palw_panel_network_view_v1(
         classes.push(PalwClassPanelViewV1 {
             class_id: class.class_id,
             model_name: palw_class_model_name_v1(class.class_id),
-            registry_state: row.map(|r| palw_lifecycle_state_name_v1(&r.state).to_string()).unwrap_or_else(|| "Legacy".to_string()),
+            registry_state: if model_one {
+                "G14PanelOne".to_string()
+            } else {
+                row.map(|r| palw_lifecycle_state_name_v1(&r.state).to_string()).unwrap_or_else(|| "Legacy".to_string())
+            },
             bonded_seats: bonded,
             ready_seats: class.ready_seats_now,
-            required_ready_seats: row.map(|r| r.profile.required_ready_seats).unwrap_or(0),
+            required_ready_seats: if model_one { 0 } else { row.map(|r| r.profile.required_ready_seats).unwrap_or(0) },
             selected_panel_seats: selected_by_class.get(&class.class_id).map(|s| s.len() as u32).unwrap_or(0),
             valid_receipt_seats: valid_by_class.get(&class.class_id).copied().unwrap_or(0),
             geometry,

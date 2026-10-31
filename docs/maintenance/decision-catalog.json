@@ -1634,6 +1634,14 @@
       "status": "原文と後続改定を参照"
     },
     {
+      "kind": "adr",
+      "number": "0210",
+      "path": "docs/adr/0210-all-model-g14-panel-one.md",
+      "title": "ADR-0210 — 全モデルの新規 producer claim を G14 の 1 席経路へ移す",
+      "topic": "Models / execution / onboarding",
+      "status": "原文と後続改定を参照"
+    },
+    {
       "kind": "rfc",
       "number": "0001",
       "path": "docs/rfc/0001-palw-inference-surface-gaps.md",
@@ -1959,6 +1967,14 @@
       "path": "docs/rfc/0041-genesis-bond-free-bootstrap.md",
       "title": "RFC-0041 — genesis bond を廃止し、公開の BASE 回復経路から立ち上げる",
       "topic": "Economics / budgets",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "rfc",
+      "number": "0042",
+      "path": "docs/rfc/0042-all-model-g14-panel-one.md",
+      "title": "RFC-0042 — 全モデルの producer を G14 Panel=1 に統一する",
+      "topic": "Models / execution / onboarding",
       "status": "原文と後続改定を参照"
     }
   ]

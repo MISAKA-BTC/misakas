@@ -1336,6 +1336,9 @@ mod tests {
 /// that had to fetch them separately could be handed a different pair than the chain holds.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PalwSeatDutyV2 {
+    /// Claim-local G14 full-scope route, derived from original acceptance.
+    /// A duty on this route signs receipts and never publishes a legacy tally leaf.
+    pub model_panel_one: bool,
     /// **The block this claim was accepted on** — the anchor's only unforgeable input.
     ///
     /// A party judging somebody else's material derives the job anchor from this block's pre-PoW
@@ -2728,6 +2731,7 @@ pub fn palw_seat_duties_v2(state: &PalwChainStateV2, state_params: &PalwStatePar
                 });
             }
             out.push(PalwSeatDutyV2 {
+                model_panel_one: state_params.model_panel_one_governs_v1(claim.accepted_daa),
                 panel_anchor: panel.anchor,
                 seat_index: seat_index as u8,
                 panel_seat_count: panel.seats.len() as u16,
