@@ -57,3 +57,7 @@ coreのDB dev依存をビルドする場合だけ、互換native RocksDB archive
 ResultAdmissionのpeer literal basisはNodeが再導出した前検査capabilityのbasisと完全照合してから保存する。peer digestを任意の料金表のauthorityにしない。op4 responseはaccepted request.kindとnative prompt formから既存raw Borsh ArtifactOpening/PromptIdsOpening/Flat Vec<u32>を選択し、indexは既存openingに従う（Flat=0）。新enum/tree/料金台帳を作らず、A2のsealed native source read/completionとの接続で認証する。
 
 Witness recordにはA0 `d284f5902`のborrowed header/generated codecが割り当てられた。full class/job/programはnative登録から再構築してA1へ渡す。record破損はcoordinatorを開く前の搬送拒否であり、Witness拒否やattempt消費へ自動転換しない。
+
+## 確定sourceと検証
+
+ready source commitは`d746fe4550a5dd1c2fabc1925c08a82d9879aea6`。通常Cargoの198件、source hash、合格範囲は[VALIDATION-A4](VALIDATION-A4.md)を参照。
