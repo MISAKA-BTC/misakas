@@ -57,6 +57,15 @@ impl PalwDecodeViewV1 {
         maximum_leaves: u64,
     ) -> Result<Self, String> {
         record.check_program_v1().map_err(str::to_string)?;
+        // Cheap deny-only guard on the rooted program: in canonical TirProgramV1 Borsh,
+        // logits_scheme_id is the final [u8;64] field. This is not a parser, profile
+        // authenticator or acceptance classifier. Keep every legacy narrow interpretation;
+        // the known wide identity must never reach the flat/Int32 fallback below.
+        if header.job_context.trace_scheme_id == Hash64::from_bytes(misaka_palw_tir::program::LOGITS_I64_Q24_SCHEME_V2)
+            || record.program.ends_with(&misaka_palw_tir::program::LOGITS_I64_Q24_SCHEME_V2)
+        {
+            return Err("wide Q24 requires an explicit V2 decode view; V1 lanes are Int32".into());
+        }
         crate::palw_slash::check_job_context_shape(&header.job_context).map_err(|e| e.to_string())?;
         let class_id = record.facts.class_id;
         if header.version != crate::palw_tir_step_v1::PALW_TIR_STEP_BINDING_VERSION_V1
@@ -174,5 +183,103 @@ mod tests {
         other_class.facts.class_id = Hash64::from_u64_word(0x71D);
         assert!(PalwDecodeViewV1::from_tir_header_v1(&header, &other_class, 1 << 20).is_err());
         assert!(PalwDecodeViewV1::from_tir_header_v1(&header, &record, 39).is_err(), "the class ladder bounds the step space");
+    }
+    // Actual canonical program fixtures, with a coherent public header. DATA only.
+    fn profile_fixture(
+        dtype: misaka_palw_tir::DType,
+    ) -> (crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1, crate::palw_tir_admission_v1::PalwTirClassRecordV1) {
+        use misaka_palw_tir::{DType, Node, Prim, Ref};
+        let original = crate::palw_tir_court_v1::test_support::tiny_execution(None);
+        let mut class = original.binding.class;
+        class.layout.max_context = 64;
+        let mut program = class.decode_program().unwrap();
+        let post = &mut program.blocks[program.schedule.post as usize];
+        let mut output = post.nodes[program.logits as usize].out.clone();
+        output.dtype = dtype;
+        post.nodes.push(Node { prim: Prim::Cast, inputs: vec![Ref::Node(program.logits)], out: output, commit: true });
+        program.logits = (post.nodes.len() - 1) as u16;
+        class.layout.commit_tiles.push(4);
+        if dtype == DType::I64 {
+            program.logits_scheme_id = misaka_palw_tir::program::LOGITS_I64_Q24_SCHEME_V2;
+        }
+        class.program = program.encode();
+        let (record, context) = if dtype == DType::I64 {
+            let profile = crate::palw_tir_class_record_v2::ProfiledTirClassRecordV2::build(
+                &class,
+                original.binding.artifact_root,
+                crate::palw_tir_class_record_v2::TirClassRecordProfileLimitsV2 {
+                    max_program_bytes: 1 << 20,
+                    max_layout_entries: 8192,
+                },
+            )
+            .unwrap();
+            let context = profile.ctx().unwrap();
+            (profile.into_storage_row(), context)
+        } else {
+            let (record, _) = crate::palw_tir_admission_v1::palw_tir_class_record_v1(&class, &original.binding.artifact_root).unwrap();
+            let context = crate::palw_tir_attempt_v1::palw_tir_job_context_v1(&record.facts, (7, 2));
+            (record, context)
+        };
+        let mut header = crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1 {
+            version: crate::palw_tir_step_v1::PALW_TIR_STEP_BINDING_VERSION_V1,
+            job_context: context,
+            artifact_root: original.binding.artifact_root,
+            full_logits_trace_root: Hash64::from_u64_word(5),
+            step_leaf_count: 40,
+            step_merkle_root: Hash64::from_u64_word(6),
+            committed_execution_root: Hash64::default(),
+        };
+        header.job_context.tokenizer_id = record.tokenizer_id;
+        refresh_execution_root(&mut header, &record);
+        (header, record)
+    }
+    fn refresh_execution_root(
+        header: &mut crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        record: &crate::palw_tir_admission_v1::PalwTirClassRecordV1,
+    ) {
+        header.committed_execution_root = crate::palw_tir_step_v1::palw_tir_execution_root_v1(
+            &header.job_context.context_hash(),
+            &header.full_logits_trace_root,
+            &record.facts.class_id,
+            header.step_leaf_count,
+            &header.step_merkle_root,
+        );
+    }
+
+    #[test]
+    fn deny_only_program_suffix_tracks_the_actual_canonical_schema_field() {
+        for dtype in
+            [misaka_palw_tir::DType::I8, misaka_palw_tir::DType::I16, misaka_palw_tir::DType::I32, misaka_palw_tir::DType::I64]
+        {
+            let (_, record) = profile_fixture(dtype);
+            let decoded = misaka_palw_tir::TirProgramV1::decode_canonical(&record.program).unwrap();
+            let encoded = decoded.encode();
+            assert_eq!(&encoded[encoded.len() - decoded.logits_scheme_id.len()..], &decoded.logits_scheme_id);
+            assert_eq!(encoded.ends_with(&misaka_palw_tir::program::LOGITS_I64_Q24_SCHEME_V2), dtype == misaka_palw_tir::DType::I64);
+        }
+    }
+
+    #[test]
+    fn v1_decode_rejects_wide_program_even_with_a_coherent_lying_old_header() {
+        let (mut header, record) = profile_fixture(misaka_palw_tir::DType::I64);
+        assert!(!record.facts.tiled);
+        assert!(PalwDecodeViewV1::from_tir_header_v1(&header, &record, 1 << 20).unwrap_err().contains("explicit V2 decode view"));
+        header.job_context.trace_scheme_id = crate::palw_step_refute::flat_logits_scheme_id_v1();
+        refresh_execution_root(&mut header, &record);
+        assert!(PalwDecodeViewV1::from_tir_header_v1(&header, &record, 1 << 20).unwrap_err().contains("explicit V2 decode view"));
+    }
+
+    #[test]
+    fn v1_narrow_decode_is_unchanged_and_rejects_a_wide_header_scheme() {
+        for dtype in [misaka_palw_tir::DType::I8, misaka_palw_tir::DType::I16, misaka_palw_tir::DType::I32] {
+            let (mut header, record) = profile_fixture(dtype);
+            let view = PalwDecodeViewV1::from_tir_header_v1(&header, &record, 1 << 20).unwrap();
+            assert_eq!(view.lane, PalwStepLaneV1::Int32);
+            assert_eq!(view.logits_scheme_id, crate::palw_step_refute::tiled_logits_scheme_id_v1());
+            assert_eq!(view.job_context, header.job_context);
+            header.job_context.trace_scheme_id = Hash64::from_bytes(misaka_palw_tir::program::LOGITS_I64_Q24_SCHEME_V2);
+            refresh_execution_root(&mut header, &record);
+            assert!(PalwDecodeViewV1::from_tir_header_v1(&header, &record, 1 << 20).unwrap_err().contains("explicit V2 decode view"));
+        }
     }
 }

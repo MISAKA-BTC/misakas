@@ -96,6 +96,8 @@ impl<'s, 'l> PositiveTirMetadataV2<'s, 'l> {
     /// includes the transaction Merkle root, so using that same carrier's block
     /// would introduce a Result -> TxID -> header -> job -> Result cycle. The
     /// existing producer avoids that cycle with a post-PoW header commitment.
+    /// For wide programs the caller must additionally reserve bounded program decode/copy and
+    /// full-record derivation work within `limits`; these local caps are not an allocator lease.
     pub fn derive_attempt(
         &self,
         native_origin: &Header,
@@ -110,6 +112,32 @@ impl<'s, 'l> PositiveTirMetadataV2<'s, 'l> {
         if canonical.0 > self.limits.max_prompt_tokens || facts.max_context.checked_add(1).is_none() {
             return Err(PositiveMetadataErrorV2::Budget);
         }
+        // Deny-only discriminator for the known wide identity in an already rooted canonical
+        // V1 program: logits_scheme_id is its final [u8;64] field. This suffix is NOT profile
+        // authentication or acceptance; wide derivation below still checks the entire record.
+        // Keep legacy derivation exact for every old committable output, including I8/I16.
+        let profile = if self.registered.program.ends_with(&misaka_palw_tir::program::LOGITS_I64_Q24_SCHEME_V2) {
+            validate_parts(facts.class_id, self.class, self.registered, self.layout, self.limits)?;
+            let limits = crate::palw_tir_class_record_v2::TirClassRecordProfileLimitsV2 {
+                max_program_bytes: usize::try_from(self.limits.max_program_bytes).map_err(|_| PositiveMetadataErrorV2::Budget)?,
+                max_layout_entries: usize::try_from(self.limits.max_layout_entries).map_err(|_| PositiveMetadataErrorV2::Budget)?,
+            };
+            Some(
+                crate::palw_tir_class_record_v2::ProfiledTirClassRecordV2::resolve_record(
+                    facts.class_id,
+                    self.registered,
+                    self.layout,
+                    self.class.artifact_root,
+                    limits,
+                )
+                .map_err(|e| match e {
+                    crate::palw_tir_class_record_v2::TirClassRecordProfileErrorV2::Budget => PositiveMetadataErrorV2::Budget,
+                    _ => PositiveMetadataErrorV2::ClassBinding,
+                })?,
+            )
+        } else {
+            None
+        };
         let anchor = crate::palw_attempt_v2::palw_job_anchor_v1(
             native_network_domain,
             crate::hashing::header::pre_pow_hash_64(native_origin),
@@ -117,9 +145,11 @@ impl<'s, 'l> PositiveTirMetadataV2<'s, 'l> {
             &native_producer_bond.0,
             crate::palw_attempt_v2::palw_nonce_bucket_v1(native_origin.nonce),
         );
-        let (context, prompt) =
-            crate::palw_tir_attempt_v1::palw_tir_attempt_job_for_anchor_of_v1(facts, &anchor, canonical, native_prompt_form)
-                .ok_or(PositiveMetadataErrorV2::Prompt)?;
+        let (context, prompt) = match profile {
+            Some(profile) => profile.job_for_anchor(&anchor, native_prompt_form),
+            None => crate::palw_tir_attempt_v1::palw_tir_attempt_job_for_anchor_of_v1(facts, &anchor, canonical, native_prompt_form),
+        }
+        .ok_or(PositiveMetadataErrorV2::Prompt)?;
         let context = crate::palw_attempt_v2::palw_attempt_job_v1(context, native_prefill_draw);
         Ok(PositiveAttemptMetadataV2 { context, prompt })
     }
@@ -327,5 +357,147 @@ mod tests {
             restricted.derive_attempt(&header, network, &bond, PalwPromptIdsFormV1::Flat, true),
             Err(PositiveMetadataErrorV2::Budget)
         ));
+    }
+    // DATA fixtures only: no registration/admission or native accepted capability is created.
+    fn output_profile_fixture(
+        dtype: misaka_palw_tir::DType,
+    ) -> (Hash64, PalwClassStateV2, PalwTirClassRecordV1, PalwTirLayoutV1, PositiveMetadataLimitsV2) {
+        use misaka_palw_tir::{DType, Node, Prim, Ref};
+        let (_, class, record, layout, mut limits) = fixture();
+        let mut definition = crate::palw_tir_class_v1::PalwTirClassV1 {
+            version: 1,
+            program: record.program.as_ref().clone(),
+            layout,
+            tokenizer_id: record.tokenizer_id,
+        };
+        let mut program = definition.decode_program().unwrap();
+        let post = &mut program.blocks[program.schedule.post as usize];
+        let mut output = post.nodes[program.logits as usize].out.clone();
+        output.dtype = dtype;
+        post.nodes.push(Node { prim: Prim::Cast, inputs: vec![Ref::Node(program.logits)], out: output, commit: true });
+        program.logits = (post.nodes.len() - 1) as u16;
+        definition.layout.commit_tiles.push(4);
+        if dtype == DType::I64 {
+            program.logits_scheme_id = misaka_palw_tir::program::LOGITS_I64_Q24_SCHEME_V2;
+            definition.layout.max_context = 2048;
+            limits.max_prompt_tokens = 4096;
+        }
+        definition.program = program.encode();
+        let record = if dtype == DType::I64 {
+            crate::palw_tir_class_record_v2::ProfiledTirClassRecordV2::build(
+                &definition,
+                class.artifact_root,
+                crate::palw_tir_class_record_v2::TirClassRecordProfileLimitsV2 {
+                    max_program_bytes: limits.max_program_bytes as usize,
+                    max_layout_entries: limits.max_layout_entries as usize,
+                },
+            )
+            .unwrap()
+            .into_storage_row()
+        } else {
+            crate::palw_tir_admission_v1::palw_tir_class_record_v1(&definition, &class.artifact_root).unwrap().0
+        };
+        (definition.class_id(&class.artifact_root), class, record, definition.layout, limits)
+    }
+
+    #[test]
+    fn explicit_wide_attempt_preserves_full_original_job_and_only_changes_the_trace_profile() {
+        let (_, class, record, layout, limits) = output_profile_fixture(misaka_palw_tir::DType::I64);
+        assert!(!record.facts.tiled, "the old bool is not a tiled-family classifier");
+        let metadata = PositiveTirMetadataV2 { class: &class, registered: &record, semantics: None, layout: &layout, limits };
+        let header: Header = (&crate::config::genesis::GENESIS).into();
+        let network = Hash64::from_bytes([2; 64]);
+        let bond = PalwBondKeyV2(crate::tx::TransactionOutpoint::new(crate::TransactionId::from_bytes([3; 64]), 1));
+        let anchor = crate::palw_attempt_v2::palw_job_anchor_v1(
+            network,
+            crate::hashing::header::pre_pow_hash_64(&header),
+            record.facts.class_id,
+            &bond.0,
+            crate::palw_attempt_v2::palw_nonce_bucket_v1(header.nonce),
+        );
+        for form in [PalwPromptIdsFormV1::Flat, PalwPromptIdsFormV1::MerkleV1] {
+            let (mut expected, ids) =
+                crate::palw_tir_attempt_v1::palw_tir_attempt_job_for_anchor_of_v1(&record.facts, &anchor, (255, 2), form).unwrap();
+            assert_ne!(expected.trace_scheme_id.as_bytes(), misaka_palw_tir::program::LOGITS_I64_Q24_SCHEME_V2);
+            expected.trace_scheme_id = Hash64::from_bytes(misaka_palw_tir::program::LOGITS_I64_Q24_SCHEME_V2);
+            for draw in [false, true] {
+                let derived = metadata.derive_attempt(&header, network, &bond, form, draw).unwrap();
+                assert_eq!(derived.context(), &crate::palw_attempt_v2::palw_attempt_job_v1(expected.clone(), draw));
+                assert_eq!(derived.prompt(), ids);
+                assert_eq!(derived.context().max_context_tokens, 2049);
+                assert_eq!(derived.context().shape_profile_id, record.facts.class_id);
+                assert_eq!(derived.context().tokenizer_id, Hash64::default());
+                assert_eq!(derived.context().cu_ruleset_id, Hash64::default());
+            }
+        }
+    }
+
+    #[test]
+    fn old_committable_i8_i16_attempts_retain_exact_legacy_contexts() {
+        for dtype in [misaka_palw_tir::DType::I8, misaka_palw_tir::DType::I16] {
+            let (_, class, record, layout, limits) = output_profile_fixture(dtype);
+            let metadata = PositiveTirMetadataV2 { class: &class, registered: &record, semantics: None, layout: &layout, limits };
+            let header: Header = (&crate::config::genesis::GENESIS).into();
+            let network = Hash64::from_bytes([2; 64]);
+            let bond = PalwBondKeyV2(crate::tx::TransactionOutpoint::new(crate::TransactionId::from_bytes([3; 64]), 1));
+            let anchor = crate::palw_attempt_v2::palw_job_anchor_v1(
+                network,
+                crate::hashing::header::pre_pow_hash_64(&header),
+                record.facts.class_id,
+                &bond.0,
+                crate::palw_attempt_v2::palw_nonce_bucket_v1(header.nonce),
+            );
+            for form in [PalwPromptIdsFormV1::Flat, PalwPromptIdsFormV1::MerkleV1] {
+                let expected =
+                    crate::palw_tir_attempt_v1::palw_tir_attempt_job_for_anchor_of_v1(&record.facts, &anchor, (7, 2), form).unwrap();
+                let actual = metadata.derive_attempt(&header, network, &bond, form, true).unwrap();
+                assert_eq!(actual.context(), &crate::palw_attempt_v2::palw_attempt_job_v1(expected.0, true));
+                assert_eq!(actual.prompt(), expected.1);
+            }
+        }
+    }
+
+    #[test]
+    fn wide_job_derivation_rechecks_all_row_fields_and_rejects_substitutions_and_caps() {
+        let (id, class, record, layout, limits) = output_profile_fixture(misaka_palw_tir::DType::I64);
+        let header: Header = (&crate::config::genesis::GENESIS).into();
+        let network = Hash64::from_bytes([2; 64]);
+        let bond = PalwBondKeyV2(crate::tx::TransactionOutpoint::new(crate::TransactionId::from_bytes([3; 64]), 1));
+        let derive = |class: &PalwClassStateV2, row: &PalwTirClassRecordV1, layout: &PalwTirLayoutV1, limits| {
+            PositiveTirMetadataV2 { class, registered: row, semantics: None, layout, limits }.derive_attempt(
+                &header,
+                network,
+                &bond,
+                PalwPromptIdsFormV1::Flat,
+                false,
+            )
+        };
+        // Each forged cached field still passes the former hash/layout-only metadata check.
+        // Full V2 row derivation must independently refuse it before generating expected jobs.
+        let mut substitutions = vec![record.clone(); 5];
+        substitutions[0].facts.token_bound += 1;
+        substitutions[1].facts.tiled = true;
+        substitutions[2].facts.held = true;
+        substitutions[3].logits_vocab += 1;
+        substitutions[4].dissected.clear();
+        // Ensure a nontrivial row change even if this fixture has no history-reducing cone.
+        substitutions[4].dissected.push((255, 65535));
+        for changed in substitutions {
+            validate_parts(id, &class, &changed, &layout, limits).unwrap();
+            assert!(matches!(derive(&class, &changed, &layout, limits), Err(PositiveMetadataErrorV2::ClassBinding)));
+        }
+        let foreign = PalwClassStateV2 { artifact_root: Hash64::from_bytes([9; 64]), ..class.clone() };
+        assert!(matches!(derive(&foreign, &record, &layout, limits), Err(PositiveMetadataErrorV2::ClassBinding)));
+        let mut changed_layout = layout.clone();
+        changed_layout.checkpoint_interval += 1;
+        assert!(matches!(derive(&class, &record, &changed_layout, limits), Err(PositiveMetadataErrorV2::Layout)));
+        let mut changed = record.clone();
+        std::sync::Arc::make_mut(&mut changed.program)[0] ^= 1;
+        assert!(matches!(derive(&class, &changed, &layout, limits), Err(PositiveMetadataErrorV2::Program)));
+        // Bounds win before hashing the deliberately corrupted program.
+        let restricted = PositiveMetadataLimitsV2 { max_program_bytes: record.program_bytes - 1, ..limits };
+        assert!(matches!(derive(&class, &changed, &layout, restricted), Err(PositiveMetadataErrorV2::Budget)));
+        let restricted = PositiveMetadataLimitsV2 { max_prompt_tokens: 254, ..limits };
+        assert!(matches!(derive(&class, &record, &layout, restricted), Err(PositiveMetadataErrorV2::Budget)));
     }
 }
