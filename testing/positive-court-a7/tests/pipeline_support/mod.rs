@@ -14,7 +14,7 @@ use misaka_palw_positive_accounting_node::tir::TirCreditView;
 use misaka_palw_positive_contract::{
     identity::*,
     messages::*,
-    ports::{NodeChecker, PanelBuilder},
+    ports::{CreditUse, NodeChecker, PanelBuilder},
 };
 use misaka_palw_remote::miner::positive_v2::{
     InferenceLimitsV2,
@@ -220,24 +220,110 @@ pub fn a1_complete(packet: &Packet, trusted: &Trusted) -> (CoverageDescriptor, C
     (descriptor, TirNodeChecker.finish(&context, progress).unwrap())
 }
 
-/// A configured test owner of simulated A4/Gate C/economic facts. Native
+/// Explicit private oracle for existing per-use rights. It does not infer a
+/// right from PositivePassed, approval, readiness, fees, or accounting balances.
+pub trait FixtureEntitlements {
+    fn authorize(&self, binding: &CreditBinding, usage: CreditUse) -> Result<(), CreditDenial>;
+}
+
+/// Simulated existing primary origin/contract rights, individually pinned to
+/// the exact result binding. This is an independent test oracle, not native
+/// origin resolution and not an All entitlement supplied by the gate.
+pub struct ExistingPrimaryRightsFixture {
+    reward: CreditBinding,
+    work_receipt: CreditBinding,
+    dag_weight: CreditBinding,
+    rule_e: CreditBinding,
+    settlement: CreditBinding,
+    prefix_reuse: CreditBinding,
+    dependency: CreditBinding,
+}
+impl FixtureEntitlements for ExistingPrimaryRightsFixture {
+    fn authorize(&self, binding: &CreditBinding, usage: CreditUse) -> Result<(), CreditDenial> {
+        let entitled = match usage {
+            CreditUse::Reward => self.reward,
+            CreditUse::WorkReceipt => self.work_receipt,
+            CreditUse::DagWeight => self.dag_weight,
+            CreditUse::RuleE => self.rule_e,
+            CreditUse::Settlement => self.settlement,
+            CreditUse::PrefixReuse => self.prefix_reuse,
+            CreditUse::Dependency => self.dependency,
+            CreditUse::WorkerPayment => return Err(CreditDenial::Entitlement { claim: binding.claim, usage }),
+        };
+        if *binding == entitled { Ok(()) } else { Err(CreditDenial::Entitlement { claim: binding.claim, usage }) }
+    }
+}
+
+/// Separate existing paid-worker contract rights. Payment/readiness never
+/// grants mining, receipt, weight, capital or reuse entitlements. Source-service
+/// fees/refunds have separate predicates and are not successful-worker credit.
+pub struct PaidWorkerRightsFixture {
+    worker_payment: CreditBinding,
+    settlement: CreditBinding,
+}
+impl FixtureEntitlements for PaidWorkerRightsFixture {
+    fn authorize(&self, binding: &CreditBinding, usage: CreditUse) -> Result<(), CreditDenial> {
+        let entitled = match usage {
+            CreditUse::WorkerPayment => self.worker_payment,
+            CreditUse::Settlement => self.settlement,
+            CreditUse::Reward
+            | CreditUse::WorkReceipt
+            | CreditUse::DagWeight
+            | CreditUse::RuleE
+            | CreditUse::PrefixReuse
+            | CreditUse::Dependency => return Err(CreditDenial::Entitlement { claim: binding.claim, usage }),
+        };
+        if *binding == entitled { Ok(()) } else { Err(CreditDenial::Entitlement { claim: binding.claim, usage }) }
+    }
+}
+
+/// A configured test owner of simulated A4/Gate C/economic prerequisites.
+/// Existing use-specific rights are a separate immutable oracle. Native
 /// registry, drawn approval and funding adapters are absent and stay absent.
-pub struct PrivateEconomicFixture {
+pub struct PrivateEconomicFixture<E> {
     pub scope: Cell<ChainScope>,
     pub facts: Cell<RootedCreditFacts>,
     declared_empty_dependencies: Digest,
+    entitlements: E,
 }
-impl PrivateEconomicFixture {
-    pub fn new(result: &MinerResultCommit, descriptor: CoverageDescriptor) -> Self {
+fn fixture_binding(result: &MinerResultCommit) -> CreditBinding {
+    CreditBinding {
+        scope: result.scope,
+        claim: result.claim_id(),
+        case: result.case_id(),
+        result: result.id(),
+        output: result.output,
+        dependencies: result.dependencies,
+    }
+}
+impl PrivateEconomicFixture<ExistingPrimaryRightsFixture> {
+    pub fn with_existing_primary_entitlements(result: &MinerResultCommit, descriptor: CoverageDescriptor) -> Self {
+        let binding = fixture_binding(result);
+        Self::with_entitlements(
+            result,
+            descriptor,
+            ExistingPrimaryRightsFixture {
+                reward: binding,
+                work_receipt: binding,
+                dag_weight: binding,
+                rule_e: binding,
+                settlement: binding,
+                prefix_reuse: binding,
+                dependency: binding,
+            },
+        )
+    }
+}
+impl PrivateEconomicFixture<PaidWorkerRightsFixture> {
+    pub fn with_existing_paid_worker_entitlements(result: &MinerResultCommit, descriptor: CoverageDescriptor) -> Self {
+        let binding = fixture_binding(result);
+        Self::with_entitlements(result, descriptor, PaidWorkerRightsFixture { worker_payment: binding, settlement: binding })
+    }
+}
+impl<E> PrivateEconomicFixture<E> {
+    fn with_entitlements(result: &MinerResultCommit, descriptor: CoverageDescriptor, entitlements: E) -> Self {
         assert_eq!(result.dependencies, d(h(5)));
-        let binding = CreditBinding {
-            scope: result.scope,
-            claim: result.claim_id(),
-            case: result.case_id(),
-            result: result.id(),
-            output: result.output,
-            dependencies: result.dependencies,
-        };
+        let binding = fixture_binding(result);
         Self {
             scope: Cell::new(result.scope),
             facts: Cell::new(RootedCreditFacts {
@@ -251,6 +337,7 @@ impl PrivateEconomicFixture {
                 carrier_and_funding: EconomicReadiness::Held,
             }),
             declared_empty_dependencies: result.dependencies,
+            entitlements,
         }
     }
     pub fn set_fixture_ready(&self) {
@@ -260,25 +347,49 @@ impl PrivateEconomicFixture {
         facts.carrier_and_funding = EconomicReadiness::Ready;
         self.facts.set(facts);
     }
-}
-impl RootedCreditView for PrivateEconomicFixture {
-    fn scope(&self) -> ChainScope {
-        self.scope.get()
-    }
-    fn claim(&self, claim: ClaimId) -> Result<RootedCreditFacts, CreditDenial> {
+    fn rooted_claim(&self, claim: ClaimId) -> Result<RootedCreditFacts, CreditDenial> {
         let facts = self.facts.get();
         if facts.binding.claim == claim { Ok(facts) } else { Err(CreditDenial::MissingClaim(claim)) }
     }
-    fn checked_dependencies(&self, claim: ClaimId) -> Result<&[CreditBinding], CreditDenial> {
-        let facts = self.claim(claim)?;
+    fn dependencies(&self, claim: ClaimId) -> Result<&[CreditBinding], CreditDenial> {
+        let facts = self.rooted_claim(claim)?;
         if facts.binding.dependencies != self.declared_empty_dependencies {
             return Err(CreditDenial::MissingDependencyBinding(claim));
         }
         Ok(&[])
     }
 }
+impl<E: FixtureEntitlements> RootedCreditView for PrivateEconomicFixture<E> {
+    fn scope(&self) -> ChainScope {
+        self.scope.get()
+    }
+    fn claim(&self, claim: ClaimId) -> Result<RootedCreditFacts, CreditDenial> {
+        self.rooted_claim(claim)
+    }
+    fn checked_dependencies(&self, claim: ClaimId) -> Result<&[CreditBinding], CreditDenial> {
+        self.dependencies(claim)
+    }
+    fn authorize_entitlement(&self, binding: &CreditBinding, usage: CreditUse) -> Result<(), CreditDenial> {
+        self.entitlements.authorize(binding, usage)
+    }
+}
 
-pub fn assert_private_consumers(view: &TirCreditView<'_, PrivateEconomicFixture>, claim: ClaimId, allowed: bool) {
+/// Deliberately omits authorize_entitlement while retaining the same explicit
+/// economic prerequisites. TirCreditView must forward the default denial.
+pub struct MissingEntitlementPort<'a, E>(pub &'a PrivateEconomicFixture<E>);
+impl<E> RootedCreditView for MissingEntitlementPort<'_, E> {
+    fn scope(&self) -> ChainScope {
+        self.0.scope.get()
+    }
+    fn claim(&self, claim: ClaimId) -> Result<RootedCreditFacts, CreditDenial> {
+        self.0.rooted_claim(claim)
+    }
+    fn checked_dependencies(&self, claim: ClaimId) -> Result<&[CreditBinding], CreditDenial> {
+        self.0.dependencies(claim)
+    }
+}
+
+pub fn assert_primary_consumers<V: RootedCreditView>(view: &TirCreditView<'_, V>, claim: ClaimId, allowed: bool) {
     let gate = PositiveCreditGate::new(view, CreditLimits { max_claims: 8, max_edges: 8 }).unwrap();
     let consumers = CreditConsumers::new(&gate);
     assert_eq!(consumers.inference_reward(&claim).is_ok(), allowed);
@@ -288,4 +399,7 @@ pub fn assert_private_consumers(view: &TirCreditView<'_, PrivateEconomicFixture>
     assert_eq!(consumers.settlement(&claim).is_ok(), allowed);
     assert_eq!(consumers.prefix_reuse(&claim).is_ok(), allowed);
     assert_eq!(consumers.dependent_claim(&claim).is_ok(), allowed);
+    // Existing primary origin has no paid-worker contract entitlement, even
+    // after the seven primary uses pass. Never route this purpose to Settlement.
+    assert!(consumers.worker_payment(&claim).is_err());
 }

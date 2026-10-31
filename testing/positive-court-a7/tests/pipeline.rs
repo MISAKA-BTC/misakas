@@ -5,16 +5,29 @@ mod pipeline_support;
 mod support;
 
 use misaka_palw_positive_accounting::credit::{
-    ALL_CREDIT_USES, CreditDenial, CreditLimits, EconomicReadiness, FraudState, GateCApproval, PositiveCreditGate,
+    ALL_CREDIT_USES, CreditDenial, CreditLimits, EconomicReadiness, FraudState, GateCApproval, PositiveCreditGate, RootedCreditView,
     UnavailableNativeCredit, consumers::CreditConsumers,
 };
 use misaka_palw_positive_accounting_node::tir::{TerminalEffect, TirCreditView};
 use misaka_palw_positive_contract::{
     messages::ClaimStatus,
-    ports::{CreditGate, NodeChecker},
+    ports::{CreditGate, CreditUse, NodeChecker},
 };
 use misaka_palw_tir_exec::node::{positive_check::CheckOutcome, positive_contract::TirNodeChecker};
 use pipeline_support::*;
+
+// Literal contract inventory: new API uses must be deliberately classified.
+// This array is not computed from the implementation's ALL_CREDIT_USES.
+const EXPECTED_CREDIT_USES: [CreditUse; 8] = [
+    CreditUse::Reward,
+    CreditUse::WorkReceipt,
+    CreditUse::DagWeight,
+    CreditUse::RuleE,
+    CreditUse::Settlement,
+    CreditUse::PrefixReuse,
+    CreditUse::Dependency,
+    CreditUse::WorkerPayment,
+];
 
 #[test]
 fn bound_a2_rejects_parameters_that_do_not_open_to_the_fixed_registration() {
@@ -87,13 +100,13 @@ fn committed_a2_a3_a1_and_a5_connect_with_independent_expected_tokens() {
         assert_eq!(packet.miner_sig, a2.signature.as_slice());
         let (descriptor, terminal) = a1_complete(&packet, &trusted);
         assert_eq!(terminal.outcome(), CheckOutcome::Matched);
-        let economic = PrivateEconomicFixture::new(&a2.result, descriptor);
+        let economic = PrivateEconomicFixture::with_existing_primary_entitlements(&a2.result, descriptor);
         economic.set_fixture_ready();
         let mut view = TirCreditView::new(&economic, 1).unwrap();
-        assert_private_consumers(&view, a2.result.claim_id(), false);
+        assert_primary_consumers(&view, a2.result.claim_id(), false);
         let authenticated = a2.result.authenticate(&a2.key, &a2.signature).unwrap();
         assert_eq!(view.record_checked(&authenticated, terminal), Ok(TerminalEffect::Recorded));
-        assert_private_consumers(&view, a2.result.claim_id(), true);
+        assert_primary_consumers(&view, a2.result.claim_id(), true);
         // A passing local/private policy view never manufactures a native row.
         let native = CreditConsumers::new(&UnavailableNativeCredit);
         assert!(native.inference_reward(&a2.result.claim_id()).is_err());
@@ -103,6 +116,7 @@ fn committed_a2_a3_a1_and_a5_connect_with_independent_expected_tokens() {
         assert!(native.settlement(&a2.result.claim_id()).is_err());
         assert!(native.prefix_reuse(&a2.result.claim_id()).is_err());
         assert!(native.dependent_claim(&a2.result.claim_id()).is_err());
+        assert!(native.worker_payment(&a2.result.claim_id()).is_err());
         assert!(misaka_palw_positive_contract::require_native_activation().is_err());
     }
 }
@@ -113,12 +127,12 @@ fn checked_math_does_not_replace_gate_c_funding_maturity_or_current_fraud_state(
     let a2 = a2_result(&trusted, false, 1, false);
     let packet = a3_packet(&trusted, &a2, false, 1);
     let (descriptor, terminal) = a1_complete(&packet, &trusted);
-    let economic = PrivateEconomicFixture::new(&a2.result, descriptor);
+    let economic = PrivateEconomicFixture::with_existing_primary_entitlements(&a2.result, descriptor);
     let mut view = TirCreditView::new(&economic, 1).unwrap();
     view.record_checked(&a2.result.authenticate(&a2.key, &a2.signature).unwrap(), terminal).unwrap();
     let claim = a2.result.claim_id();
     for stage in 0..3 {
-        assert_private_consumers(&view, claim, false);
+        assert_primary_consumers(&view, claim, false);
         let mut facts = economic.facts.get();
         match stage {
             0 => facts.gate_c = GateCApproval::Approved(facts.binding),
@@ -128,23 +142,23 @@ fn checked_math_does_not_replace_gate_c_funding_maturity_or_current_fraud_state(
         }
         economic.facts.set(facts);
     }
-    assert_private_consumers(&view, claim, true);
+    assert_primary_consumers(&view, claim, true);
     let mut facts = economic.facts.get();
     facts.fraud = FraudState::AcceptedPending;
     economic.facts.set(facts);
-    assert_private_consumers(&view, claim, false);
+    assert_primary_consumers(&view, claim, false);
     facts.fraud = FraudState::Clear;
     facts.gate_c = GateCApproval::Pending;
     economic.facts.set(facts);
     let gate = PositiveCreditGate::new(&view, CreditLimits { max_claims: 8, max_edges: 8 }).unwrap();
-    for usage in ALL_CREDIT_USES {
+    for usage in EXPECTED_CREDIT_USES {
         assert_eq!(gate.authorize(&claim, usage).err(), Some(CreditDenial::GateC(claim)));
     }
     economic.set_fixture_ready();
     let mut other_scope = economic.scope.get();
     other_scope.branch = support::d(support::h(555));
     economic.scope.set(other_scope);
-    assert_private_consumers(&view, claim, false);
+    assert_primary_consumers(&view, claim, false);
 }
 
 #[test]
@@ -156,13 +170,13 @@ fn a2_signed_wrong_output_is_checked_mismatch_and_never_private_credit() {
     let packet = a3_packet(&trusted, &a2, false, 1);
     let (descriptor, terminal) = a1_complete(&packet, &trusted);
     assert_eq!(terminal.outcome(), CheckOutcome::OutputMismatch);
-    let economic = PrivateEconomicFixture::new(&a2.result, descriptor);
+    let economic = PrivateEconomicFixture::with_existing_primary_entitlements(&a2.result, descriptor);
     economic.set_fixture_ready();
     let mut view = TirCreditView::new(&economic, 1).unwrap();
     view.record_checked(&a2.result.authenticate(&a2.key, &a2.signature).unwrap(), terminal).unwrap();
-    assert_private_consumers(&view, a2.result.claim_id(), false);
+    assert_primary_consumers(&view, a2.result.claim_id(), false);
     let gate = PositiveCreditGate::new(&view, CreditLimits { max_claims: 8, max_edges: 8 }).unwrap();
-    for usage in ALL_CREDIT_USES {
+    for usage in EXPECTED_CREDIT_USES {
         assert_eq!(gate.authorize(&a2.result.claim_id(), usage).err(), Some(CreditDenial::PositiveNotPassed(a2.result.claim_id())));
     }
 }
@@ -179,16 +193,97 @@ fn missing_last_a3_frame_cannot_produce_a5_terminal_authority() {
         TirNodeChecker.check_authenticated_part(&context, &mut progress, packet.authenticated(bytes).unwrap()).unwrap();
     }
     assert!(TirNodeChecker.finish(&context, progress).is_err());
-    let economic = PrivateEconomicFixture::new(&a2.result, descriptor);
+    let economic = PrivateEconomicFixture::with_existing_primary_entitlements(&a2.result, descriptor);
     economic.set_fixture_ready();
     assert_eq!(economic.facts.get().status, ClaimStatus::PositivePassed); // deliberately untrusted saved flag
     let view = TirCreditView::new(&economic, 1).unwrap();
-    assert_private_consumers(&view, a2.result.claim_id(), false);
+    assert_primary_consumers(&view, a2.result.claim_id(), false);
     let gate = PositiveCreditGate::new(&view, CreditLimits { max_claims: 8, max_edges: 8 }).unwrap();
-    for usage in ALL_CREDIT_USES {
+    for usage in EXPECTED_CREDIT_USES {
         assert_eq!(
             gate.authorize(&a2.result.claim_id(), usage).err(),
             Some(CreditDenial::MissingLocalVerification(a2.result.claim_id()))
         );
     }
+}
+
+#[test]
+fn paid_success_has_only_existing_worker_payment_and_settlement_after_real_checked_execution() {
+    let trusted = support::registration(false, 1, 7);
+    let a2 = a2_result(&trusted, false, 1, false);
+    let packet = a3_packet(&trusted, &a2, false, 1);
+    let (descriptor, terminal) = a1_complete(&packet, &trusted);
+    assert_eq!(terminal.outcome(), CheckOutcome::Matched);
+    let economic = PrivateEconomicFixture::with_existing_paid_worker_entitlements(&a2.result, descriptor);
+    economic.set_fixture_ready();
+    let mut view = TirCreditView::new(&economic, 1).unwrap();
+    view.record_checked(&a2.result.authenticate(&a2.key, &a2.signature).unwrap(), terminal).unwrap();
+    let claim = a2.result.claim_id();
+    let gate = PositiveCreditGate::new(&view, CreditLimits { max_claims: 8, max_edges: 8 }).unwrap();
+    let consumers = CreditConsumers::new(&gate);
+    // Literal contract expectations, independent of the fixture's policy code.
+    let binding = economic.facts.get().binding;
+    let paid = consumers.worker_payment(&claim).unwrap();
+    assert_eq!(paid.usage(), CreditUse::WorkerPayment);
+    assert_eq!(paid.binding(), binding);
+    let settled = consumers.settlement(&claim).unwrap();
+    assert_eq!(settled.usage(), CreditUse::Settlement);
+    assert_eq!(settled.binding(), binding);
+    assert!(consumers.inference_reward(&claim).is_err());
+    assert!(consumers.work_receipt(&claim).is_err());
+    assert_eq!(consumers.dag_weight(&claim, 31), 0);
+    assert_eq!(consumers.rule_e_capital(&claim, 47), 0);
+    assert!(consumers.prefix_reuse(&claim).is_err());
+    assert!(consumers.dependent_claim(&claim).is_err());
+    for usage in [
+        CreditUse::Reward,
+        CreditUse::WorkReceipt,
+        CreditUse::DagWeight,
+        CreditUse::RuleE,
+        CreditUse::PrefixReuse,
+        CreditUse::Dependency,
+    ] {
+        assert_eq!(gate.authorize(&claim, usage).err(), Some(CreditDenial::Entitlement { claim, usage }));
+    }
+    // Every binding component remains independently pinned by the existing
+    // entitlement oracle, even when the claimant still names the same claim.
+    for dimension in 0..6 {
+        let mut foreign = binding;
+        match dimension {
+            0 => foreign.scope.branch = support::d(support::h(901)),
+            1 => foreign.claim = misaka_palw_positive_contract::identity::ClaimId(support::d(support::h(902))),
+            2 => foreign.case = misaka_palw_positive_contract::identity::CaseId(support::d(support::h(903))),
+            3 => foreign.result = misaka_palw_positive_contract::identity::ResultId(support::d(support::h(904))),
+            4 => foreign.output = support::d(support::h(905)),
+            5 => foreign.dependencies = support::d(support::h(906)),
+            _ => unreachable!(),
+        }
+        for usage in [CreditUse::WorkerPayment, CreditUse::Settlement] {
+            assert_eq!(
+                economic.authorize_entitlement(&foreign, usage),
+                Err(CreditDenial::Entitlement { claim: foreign.claim, usage })
+            );
+        }
+    }
+}
+
+#[test]
+fn omitted_existing_entitlement_port_denies_even_after_real_checked_execution_and_all_prerequisites() {
+    let trusted = support::registration(false, 1, 7);
+    let a2 = a2_result(&trusted, false, 1, false);
+    let packet = a3_packet(&trusted, &a2, false, 1);
+    let (descriptor, terminal) = a1_complete(&packet, &trusted);
+    assert_eq!(terminal.outcome(), CheckOutcome::Matched);
+    let economic = PrivateEconomicFixture::with_existing_primary_entitlements(&a2.result, descriptor);
+    economic.set_fixture_ready();
+    let missing = MissingEntitlementPort(&economic);
+    let mut view = TirCreditView::new(&missing, 1).unwrap();
+    view.record_checked(&a2.result.authenticate(&a2.key, &a2.signature).unwrap(), terminal).unwrap();
+    let claim = a2.result.claim_id();
+    let gate = PositiveCreditGate::new(&view, CreditLimits { max_claims: 8, max_edges: 8 }).unwrap();
+    assert_eq!(ALL_CREDIT_USES, EXPECTED_CREDIT_USES);
+    for usage in EXPECTED_CREDIT_USES {
+        assert_eq!(gate.authorize(&claim, usage).err(), Some(CreditDenial::Entitlement { claim, usage }));
+    }
+    assert_primary_consumers(&view, claim, false);
 }
