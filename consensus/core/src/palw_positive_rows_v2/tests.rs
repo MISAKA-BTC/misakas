@@ -47,6 +47,12 @@ pub(super) fn coverage() -> CoverageRow {
     }
 }
 pub(super) fn signed_bundle() -> (ClaimIndexRow, ResultRow, CaseRow, FundingRow, WitnessRow, CoverageRow) {
+    signed_bundle_for_relations(10)
+}
+
+/// Real signatures over a chosen literal relation count. Large counts are
+/// hostile DTO fixtures, not admitted execution profiles or native quotes.
+pub(super) fn signed_bundle_for_relations(mandatory: u64) -> (ClaimIndexRow, ResultRow, CaseRow, FundingRow, WitnessRow, CoverageRow) {
     use libcrux_ml_dsa::ml_dsa_87::*;
     use misaka_palw_positive_contract::funding::*;
     let json: serde_json::Value =
@@ -70,8 +76,8 @@ pub(super) fn signed_bundle() -> (ClaimIndexRow, ResultRow, CaseRow, FundingRow,
         provider_delegations: d(34),
         budget: AggregateBudget {
             rounds: 2,
-            unique_source_bytes: 4096,
-            transmitted_bytes: 8192,
+            unique_source_bytes: 8192,
+            transmitted_bytes: 16384,
             additional_work: 8,
             retained_bytes: 4096,
             retention_until: 60,
@@ -84,7 +90,7 @@ pub(super) fn signed_bundle() -> (ClaimIndexRow, ResultRow, CaseRow, FundingRow,
     let basis = FundingPlanBasis {
         profile: CheckProfile::ExactStreamV1,
         derivation: d(35),
-        mandatory_relations: 10,
+        mandatory_relations: mandatory,
         source_catalog: service.source_catalog,
         resource_quote: d(36),
         policy,
@@ -134,7 +140,7 @@ pub(super) fn signed_bundle() -> (ClaimIndexRow, ResultRow, CaseRow, FundingRow,
         liability: material(),
         last_settlement: Some(material()),
     };
-    let plan = coverage_plan_id(&r, basis.profile, basis.derivation, 10).unwrap();
+    let plan = coverage_plan_id(&r, basis.profile, basis.derivation, mandatory).unwrap();
     let w = PanelWitnessCommit {
         version: 2,
         revision: 1,
@@ -167,7 +173,7 @@ pub(super) fn signed_bundle() -> (ClaimIndexRow, ResultRow, CaseRow, FundingRow,
             result: r.id(),
             plan,
             profile: basis.profile,
-            mandatory_relations: 10,
+            mandatory_relations: mandatory,
             reserved_elements: 100,
             reserved_terms: 200,
             max_part_bytes: 10000,
@@ -176,38 +182,57 @@ pub(super) fn signed_bundle() -> (ClaimIndexRow, ResultRow, CaseRow, FundingRow,
         miner_data: MinerDataStatus::Pending,
         witness_status: WitnessStatus::Complete,
         positive_witness: Some(w.id()),
-        usage: AggregateUsage { witness_attempts: 1, ..AggregateUsage::default() },
+        usage: AggregateUsage {
+            unique_source_bytes: 4096,
+            transmitted_bytes: 4096,
+            additional_work: 1,
+            witness_attempts: 1,
+            ..AggregateUsage::default()
+        },
         reservation: material(),
         liability: material(),
         maturity_daa: 100,
         unresolved_fraud: 0,
-        last_event: origin_at(10),
+        last_event: origin_at(19),
     };
     let coverage = CoverageRow {
         witness: w.id(),
         case: r.case_id(),
         result: r.id(),
         plan,
-        mandatory_relations: 10,
-        next_relation: 10,
-        frame_bytes: 1000,
-        signatures: 10,
+        mandatory_relations: mandatory,
+        next_relation: mandatory,
+        frame_bytes: 1373u64.checked_mul(mandatory).unwrap_or(u64::MAX),
+        signatures: mandatory,
         elements: 100,
         terms: 200,
         state: CoverageState::Matched,
-        last_event: origin_at(7),
+        last_event: origin_at(16),
     };
     (ClaimIndexRow { claim: r.claim_id(), result: r.id(), case: r.case_id() }, result, case, funding, witness, coverage)
+}
+
+pub(super) fn row_kind(body: &NativeRowBody) -> u8 {
+    match body {
+        NativeRowBody::Result(_) => 0,
+        NativeRowBody::ClaimIndex(_) => 1,
+        NativeRowBody::Case(_) => 2,
+        NativeRowBody::Witness(_) => 3,
+        NativeRowBody::Coverage(_) => 4,
+        NativeRowBody::SourceUnion(_) => 5,
+        NativeRowBody::ServiceReceipt(_) => 6,
+        NativeRowBody::Funding(_) => 7,
+        NativeRowBody::PacketReceipt(_) => 8,
+        NativeRowBody::JournalHead(_) => 9,
+    }
 }
 
 pub(super) fn all_rows() -> Vec<NativeRowValue> {
     let (index, result, case, funding, witness, coverage) = signed_bundle();
     let source = case.service.source_catalog;
-    // Result admission(5), witness(6), packet/check(7), source duty(8),
-    // response/settlement(9), Finish(10). Initial sequence 1 is tested with a
-    // separate admission-only bundle, not this completed-case cache snapshot.
-    let journal = JournalHeadRow { case: case.case, sequence: 6, previous: d(95), head: d(96), history: material_at(10) };
-    [
+    // Ten successful, signed one-relation events, with distinct accepted
+    // positions and frame identities. A Matched cache never replaces them.
+    let mut bodies = vec![
         NativeRowBody::Result(result.clone()),
         NativeRowBody::ClaimIndex(index),
         NativeRowBody::Case(case),
@@ -220,7 +245,7 @@ pub(super) fn all_rows() -> Vec<NativeRowValue> {
             source_units: 9,
             requested_units: 5,
             completed_units: 1,
-            union: material_at(8),
+            union: material_at(17),
         }),
         NativeRowBody::ServiceReceipt(ServiceReceiptRow {
             case: case.case,
@@ -228,27 +253,33 @@ pub(super) fn all_rows() -> Vec<NativeRowValue> {
             source,
             unit: 4,
             result: result.result.id(),
-            duty: material_at(8),
-            response: material_at(9),
+            duty: material_at(17),
+            response: material_at(18),
             provider: PrincipalId(d(66)),
             bytes: 4096,
             additional_work: 1,
-            settlement: Some(material_at(9)),
+            settlement: Some(material_at(18)),
         }),
         NativeRowBody::Funding(funding),
-        NativeRowBody::PacketReceipt(PacketReceiptRow {
+        NativeRowBody::JournalHead(JournalHeadRow {
+            case: case.case,
+            sequence: 15,
+            previous: d(95),
+            head: d(96),
+            history: material_at(19),
+        }),
+    ];
+    for first_relation in 0..10 {
+        bodies.push(NativeRowBody::PacketReceipt(PacketReceiptRow {
             witness: witness.witness.id(),
-            first_relation: 0,
-            frame: EvidencePartId(d(77)),
+            first_relation,
+            frame: EvidencePartId(d(77 + first_relation as u8)),
             author: witness.witness.author,
             signed_bytes: 6000,
-            origin: origin_at(7),
-        }),
-        NativeRowBody::JournalHead(journal),
-    ]
-    .into_iter()
-    .map(|body| NativeRowValue::new(body).unwrap())
-    .collect()
+            origin: origin_at(7 + first_relation as u32),
+        }));
+    }
+    bodies.into_iter().map(|body| NativeRowValue::new(body).unwrap()).collect()
 }
 pub(super) fn encoded_rows(rows: &[NativeRowValue]) -> Vec<(u8, Vec<u8>, Vec<u8>)> {
     rows.iter().map(|row| (151, row.body.key().encode(), row.encode().unwrap())).collect()
@@ -259,12 +290,15 @@ fn encoded_map(rows: &[NativeRowValue]) -> BTreeMap<(u8, Vec<u8>), Vec<u8>> {
 #[test]
 fn all_ten_native_row_kinds_roundtrip_with_canonical_typed_keys_and_real_signatures() {
     let rows = all_rows();
-    assert_eq!(rows.len(), 10);
-    for (kind, row) in rows.iter().enumerate() {
+    assert_eq!(rows.len(), 19);
+    let mut kinds = 0u16;
+    for row in &rows {
+        let kind = row_kind(&row.body);
+        kinds |= 1 << kind;
         let key = row.body.key().encode();
         let value = row.encode().unwrap();
-        assert_eq!(key[4], kind as u8);
-        assert_eq!(value[4], kind as u8);
+        assert_eq!(key[4], kind);
+        assert_eq!(value[4], kind);
         assert_eq!(NativeRowValue::decode(&key, &value), Ok(row.clone()));
         let mut bad_key = key.clone();
         bad_key[0] = 1;
@@ -289,6 +323,7 @@ fn all_ten_native_row_kinds_roundtrip_with_canonical_typed_keys_and_real_signatu
         assert_eq!(NativeRowValue::decode(&key, &tail), Err(ContractError::NonCanonical));
         assert!(NativeRowValue::decode(&key, &value[..value.len() - 1]).is_err());
     }
+    assert_eq!(kinds, 0b11_1111_1111, "all ten allocated native row kinds remain covered");
     let (index, result, case, funding, witness, coverage) = signed_bundle();
     validate_bundle(&index, &result, &case, &funding).unwrap();
     validate_witness_bundle(&result, &case, &witness, &coverage).unwrap();
@@ -316,7 +351,7 @@ fn fixed_enum_memory_is_charged_per_short_row_and_exact_limits_are_enforced() {
     };
     use std::mem::size_of;
     let rows = all_rows();
-    let index = &rows[1];
+    let index = rows.iter().find(|row| matches!(&row.body, NativeRowBody::ClaimIndex(_))).unwrap();
     let key = index.body.key().encode();
     let bytes = index.encode().unwrap();
     let retained = size_of::<NativeRowValue>() as u64;
@@ -390,7 +425,7 @@ fn key_aware_preflight_rejects_hostile_enum_option_lengths_and_every_truncated_p
         wrong_version[0] ^= 1;
         assert!(scan_row(&wrong_version, &bytes).is_err());
     }
-    let index = &rows[1];
+    let index = rows.iter().find(|row| matches!(&row.body, NativeRowBody::ClaimIndex(_))).unwrap();
     let key = index.body.key().encode();
     let bytes = index.encode().unwrap();
     for len in 0..bytes.len() {
@@ -429,7 +464,7 @@ fn key_aware_preflight_rejects_hostile_enum_option_lengths_and_every_truncated_p
 fn native_route_scanner_rejects_duplicate_and_unsorted_positive_keys_before_collection() {
     use crate::palw_kernel_route_v1::PalwKernelRouteStateV1;
     use crate::palw_native_resource_v1::preflight_native_value_v1;
-    let row = all_rows().remove(1);
+    let row = all_rows().into_iter().find(|row| matches!(&row.body, NativeRowBody::ClaimIndex(_))).unwrap();
     let first = ((151u8, row.body.key().encode()), row.encode().unwrap());
     let other = NativeRowValue::new(NativeRowBody::ClaimIndex(ClaimIndexRow {
         claim: ClaimId(d(201)),
@@ -471,7 +506,7 @@ fn typed_restore_rejects_duplicate_orphan_rows_and_missing_atomic_journal_head()
     let map = encoded_map(&rows);
     validate_positive_aux_restore_v2(&map).unwrap();
     let mut duplicate = encoded_rows(&rows);
-    duplicate.push(duplicate[1].clone());
+    duplicate.push(duplicate.first().unwrap().clone());
     assert!(validate_positive_aux_uncollected_v2(&duplicate).is_err());
     let mut route = empty_route();
     route.aux = map.clone();
@@ -499,7 +534,7 @@ fn typed_restore_rejects_duplicate_orphan_rows_and_missing_atomic_journal_head()
     assert!(refusal.contains("inconsistent Positive aux rows"), "{refusal}");
     assert!(refusal.contains("MissingRequiredRow"), "{refusal}");
     let mut ordered: Vec<_> = map.iter().map(|((table, key), value)| (*table, key.clone(), value.clone())).collect();
-    ordered.push(ordered[1].clone());
+    ordered.push(ordered.first().unwrap().clone());
     assert!(
         crate::palw_kernel_route_v1::PalwKernelRouteStateV1::from_served_rows_v1(
             &borsh::to_vec(&route.header).unwrap(),
@@ -549,13 +584,19 @@ fn semantic_corruption_does_not_become_a_missing_row_or_a_smaller_resource_quote
         assert!(validate_positive_aux_restore_v2(&map).is_err());
     }
     let mut bad_signature = rows.clone();
-    if let NativeRowBody::Result(r) = &mut bad_signature[0].body {
+    if let Some(r) = bad_signature.iter_mut().find_map(|row| match &mut row.body {
+        NativeRowBody::Result(result) => Some(result),
+        _ => None,
+    }) {
         r.miner_signature[0] ^= 1;
     }
     let map = encoded_map(&bad_signature);
     assert!(validate_positive_aux_restore_v2(&map).is_err(), "shape-valid signatures must still be reauthenticated");
     let mut wrong_plan = rows.clone();
-    if let NativeRowBody::Coverage(c) = &mut wrong_plan[4].body {
+    if let Some(c) = wrong_plan.iter_mut().find_map(|row| match &mut row.body {
+        NativeRowBody::Coverage(coverage) => Some(coverage),
+        _ => None,
+    }) {
         c.plan = PlanId(d(199));
     }
     assert!(validate_positive_aux_restore_v2(&encoded_map(&wrong_plan)).is_err());

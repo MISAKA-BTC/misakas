@@ -5,6 +5,11 @@ may enforce stricter bounded/semantic subsets. Allocation proof never supplies
 semantic authority. Adapters spell codecs with version tails/variable lanes.
 """
 PINNED = {
+# A6 2026-10-31: owner-local wire_kernel_aux adapter preserves derived
+# header/rows/aux field order and skipped ledger_cache. The manual decoder caps
+# aux151 key/value before allocation and rejects duplicate aux keys; the shape
+# adapter additionally checks literal VALUE identity and Positive key order.
+'crate::palw_kernel_route_v1::PalwKernelRouteStateV1': ('adapter','e341c97eb511a52c27cad7cb94085c46c42015fef9f17955d8d1bf64f321f782'),
 # Claude 2026-10-22: shared request intent: derived order; signature length exactly ML-DSA-87.
 'crate::palw_court_shared_tir_frontier_v1::SignedSharedRequestV1': ('reviewed-field-layout','c76f9fe8b93578271a6c2f148f69f24fc02db910960bdb2afb99a2f312bd4703'),
 # Claude 2026-10-22: tag 178 shared op: derived enum framing (u8 variant, fields in order, u32-length vecs); every bound checked before allocation.

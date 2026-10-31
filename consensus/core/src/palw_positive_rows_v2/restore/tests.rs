@@ -1,4 +1,4 @@
-use super::super::tests::{all_rows, d, encoded_rows, material, origin};
+use super::super::tests::{all_rows, d, encoded_rows, material, origin, row_kind};
 use super::*;
 
 fn rows_map(rows: &[NativeRowValue]) -> PositiveAuxRowsV2 {
@@ -17,7 +17,7 @@ fn update(rows: &mut [NativeRowValue], mut modify: impl FnMut(&mut NativeRowBody
 fn complete_signed_bundle_restores_only_a_structural_diagnostic() {
     let rows = all_rows();
     let report = check(&rows).unwrap();
-    assert_eq!(report.rows, 10);
+    assert_eq!(report.rows, 19);
     assert_eq!(report.cases, 1);
     assert_eq!(report.witnesses, 1);
     assert_eq!(report.signature_checks, 3);
@@ -32,16 +32,20 @@ fn complete_signed_bundle_restores_only_a_structural_diagnostic() {
 #[test]
 fn every_admission_row_and_positive_witness_link_is_required() {
     let all = all_rows();
-    for kind in [0, 1, 2, 3, 4, 5, 6, 7, 9] {
+    for kind in 0..10 {
         let mut rows = all.clone();
-        rows.remove(kind);
+        rows.retain(|row| row_kind(&row.body) != kind);
         assert!(check(&rows).is_err(), "removing kind {kind} must not leave a valid native bundle");
     }
-    // No individual PacketReceipt is required merely by a saved Matched cache.
-    // The native accepted-history replay must recover actual signed frames.
-    let mut no_packets = all;
-    no_packets.remove(8);
-    assert!(check(&no_packets).is_ok());
+    // A full cursor requires all literal success receipts; Matched is not a
+    // substitute for the canonical prefix. Omitting just one is also invalid.
+    let mut no_packets = all.clone();
+    no_packets.retain(|row| !matches!(&row.body, NativeRowBody::PacketReceipt(_)));
+    assert!(check(&no_packets).is_err());
+    let mut missing_one = all;
+    let first = missing_one.iter().position(|row| matches!(&row.body, NativeRowBody::PacketReceipt(_))).unwrap();
+    missing_one.remove(first);
+    assert!(check(&missing_one).is_err());
 }
 
 #[test]
@@ -71,7 +75,7 @@ fn duplicate_and_malformed_rows_are_rejected_before_typed_vec_collection() {
 fn orphan_rows_of_all_reference_kinds_are_rejected() {
     for kind in 1..10 {
         let mut rows = all_rows();
-        let mut orphan = rows[kind].clone();
+        let mut orphan = rows.iter().find(|row| row_kind(&row.body) == kind).unwrap().clone();
         match &mut orphan.body {
             NativeRowBody::ClaimIndex(r) => r.claim = ClaimId(d(91)),
             NativeRowBody::Case(r) => {
@@ -190,7 +194,7 @@ fn union_summaries_must_equal_retained_canonical_once_only_receipts() {
     });
     assert!(check(&rows).is_err());
     let mut rows = all_rows();
-    rows.remove(6);
+    rows.retain(|row| !matches!(&row.body, NativeRowBody::ServiceReceipt(_)));
     update(&mut rows, |body| {
         if let NativeRowBody::SourceUnion(r) = body {
             r.completed_units = 0;
@@ -198,15 +202,19 @@ fn union_summaries_must_equal_retained_canonical_once_only_receipts() {
     });
     assert!(check(&rows).is_ok());
     let mut rows = all_rows();
-    let mut receipt = rows[6].clone();
+    let mut receipt = rows.iter().find(|row| matches!(&row.body, NativeRowBody::ServiceReceipt(_))).unwrap().clone();
     if let NativeRowBody::ServiceReceipt(r) = &mut receipt.body {
         r.unit = 8;
     }
     rows.push(receipt);
-    update(&mut rows, |body| {
-        if let NativeRowBody::SourceUnion(r) = body {
-            r.completed_units = 2;
+    update(&mut rows, |body| match body {
+        NativeRowBody::SourceUnion(r) => r.completed_units = 2,
+        NativeRowBody::Case(c) => {
+            c.usage.unique_source_bytes = 8192;
+            c.usage.transmitted_bytes = 8192;
+            c.usage.additional_work = 2;
         }
+        _ => (),
     });
     assert!(check(&rows).is_ok());
 }
@@ -230,8 +238,8 @@ fn packet_author_and_canonical_relation_bound_are_checked() {
 }
 
 fn add_panel_attempt(rows: &mut Vec<NativeRowValue>, attempt: u32) {
-    let mut witness = rows[3].clone();
-    let mut coverage = rows[4].clone();
+    let mut witness = rows.iter().find(|row| matches!(&row.body, NativeRowBody::Witness(_))).unwrap().clone();
+    let mut coverage = rows.iter().find(|row| matches!(&row.body, NativeRowBody::Coverage(_))).unwrap().clone();
     let NativeRowBody::Witness(w) = &mut witness.body else { unreachable!() };
     let key = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([4; 32]);
     w.witness.author = principal(key.verification_key.as_ref());
@@ -241,6 +249,13 @@ fn add_panel_attempt(rows: &mut Vec<NativeRowValue>, attempt: u32) {
         *libcrux_ml_dsa::ml_dsa_87::sign(&key.signing_key, &w.witness.id().0.0, WITNESS_SIGN_CONTEXT, [0; 32]).unwrap().as_ref();
     if let NativeRowBody::Coverage(c) = &mut coverage.body {
         c.witness = w.witness.id();
+        c.next_relation = 0;
+        c.frame_bytes = 0;
+        c.signatures = 0;
+        c.elements = 0;
+        c.terms = 0;
+        c.state = CoverageState::Checking;
+        c.last_event = w.origin;
     }
     rows.push(witness);
     rows.push(coverage);
