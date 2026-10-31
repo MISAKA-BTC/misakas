@@ -171,6 +171,7 @@ fn origin(
     registered: &PalwTirClassV1,
     artifact: Hash64,
     job: &PalwJobContextV2,
+    expected_execution: Hash64,
     limits: TypedCaptureLimits,
 ) -> Result<TypedCaptureOrigin, TypedCaptureError> {
     // Bound foreign typed DTOs before encoding/hashing any dynamic fields.
@@ -185,7 +186,6 @@ fn origin(
         || job.declared_prefill_tokens == 0
         || job.exact_decode_tokens == 0
         || job.declared_prefill_tokens.checked_add(job.exact_decode_tokens).is_none_or(|n| n > job.max_context_tokens)
-        || job.tokenizer_id != registered.tokenizer_id
     {
         return Err(TypedCaptureError::Binding);
     }
@@ -212,7 +212,14 @@ fn origin(
         // by this experiment. Do not run it through old i32 selection/roots.
         return Err(TypedCaptureError::UnsupportedOutputProfile);
     }
-    Ok(TypedCaptureOrigin { class: runner.class_id, artifact, execution: job.context_hash() })
+    // Registration tokenizer is authenticated inside class_id. The canonical
+    // job tokenizer may be zero and remains literal in its independently pinned
+    // context; copying the registration tokenizer would change this identity.
+    let execution = job.context_hash();
+    if execution != expected_execution {
+        return Err(TypedCaptureError::Binding);
+    }
+    Ok(TypedCaptureOrigin { class: runner.class_id, artifact, execution })
 }
 
 fn input_auth_heap(registered: &PalwTirClassV1, job: &PalwJobContextV2) -> Result<u64, TypedCaptureError> {
@@ -321,9 +328,10 @@ pub fn quote_typed_prototype(
     registered: &PalwTirClassV1,
     artifact: Hash64,
     job: &PalwJobContextV2,
+    expected_execution: Hash64,
     limits: TypedCaptureLimits,
 ) -> Result<TypedCaptureSummary, TypedCaptureError> {
-    origin(runner, registered, artifact, job, limits)?;
+    origin(runner, registered, artifact, job, expected_execution, limits)?;
     let mut s = TypedCaptureSummary::default();
     let mut shapes = 0u64;
     let (positions, visits) = geometry(runner, job, limits, |e| {
@@ -483,16 +491,19 @@ impl TirRunObserverV1 for Collector<'_> {
 /// This local prototype explicitly accepts Flat committed prompt IDs only.
 /// Merkle prompt delivery and the adopted wide-output profile need their own
 /// already assigned adapters; neither is inferred or silently reinterpreted.
+/// `expected_execution` must come from the independently resolved expected job,
+/// not from an untrusted delivery's context hash.
 pub fn capture_typed_prototype<'a>(
     runner: &'a TirClassRunnerV1<'a>,
     registered: &PalwTirClassV1,
     artifact: Hash64,
     job: &PalwJobContextV2,
+    expected_execution: Hash64,
     prompt: &[u32],
     limits: TypedCaptureLimits,
 ) -> Result<PrototypeTypedCapture, TypedCaptureError> {
-    let origin = origin(runner, registered, artifact, job, limits)?;
-    let summary = quote_typed_prototype(runner, registered, artifact, job, limits)?;
+    let origin = origin(runner, registered, artifact, job, expected_execution, limits)?;
+    let summary = quote_typed_prototype(runner, registered, artifact, job, expected_execution, limits)?;
     if prompt.len() != job.declared_prefill_tokens as usize
         || prompt.iter().any(|id| *id >= runner.plan.program.token_bound)
         || !prompt_token_ids_match_v1(PalwPromptIdsFormV1::Flat, prompt, &job.prompt_token_ids_hash)

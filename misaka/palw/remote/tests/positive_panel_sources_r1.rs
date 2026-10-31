@@ -136,6 +136,12 @@ impl Drop for TempPath {
 #[test]
 fn actual_a2_fallback_sources_rebuild_cold_panel_artifact_and_replay() {
     with_fixture(false, |f, _, inventory| {
+        let expected_job = f.job.clone();
+        let expected_execution = expected_job.context_hash();
+        assert_eq!(expected_job.tokenizer_id, kaspa_consensus_core::Hash64::default());
+        assert_ne!(f.class.tokenizer_id, expected_job.tokenizer_id);
+        assert_eq!(f.result.tokenizer, digest(expected_job.tokenizer_id));
+        assert_eq!(f.rooted.expected_execution, digest(expected_execution));
         let mut result = f.result.clone();
         let (contract, signature) = contract(&mut result);
         let mut cache = PanelSourceCacheR1::new(
@@ -249,6 +255,8 @@ fn actual_a2_fallback_sources_rebuild_cold_panel_artifact_and_replay() {
         let builder = TirPanelBuilder::new(&cold_runner, &artifact);
         let capture = builder.replay_and_capture(&admitted).unwrap();
         assert_eq!(capture.generated(), EXPECTED);
+        assert_eq!(capture.binding().job_context, expected_job);
+        assert_eq!(f.job.context_hash(), expected_execution);
         // The SAME reconstructed candidate crosses the real A1 NodeChecker
         // port. No Node-side model or inference executor is supplied here.
         let plan = capture.admission().plan();
@@ -311,6 +319,32 @@ fn actual_a2_fallback_sources_rebuild_cold_panel_artifact_and_replay() {
         assert!(signed_bytes >= checked_parts * SIGNATURE_BYTES as u64);
         let terminal = checker.finish(&context, progress).unwrap();
         assert_eq!(terminal.outcome(), misaka_palw_tir_exec::node::positive_check::CheckOutcome::Matched);
+        assert_eq!(f.job, expected_job);
+    });
+}
+
+#[test]
+fn source_cache_cannot_replace_registered_tokenizer_with_canonical_job_marker() {
+    with_fixture(false, |f, _, _| {
+        let mut result = f.result.clone();
+        let (terms, signature) = contract(&mut result);
+        let mut false_class = f.class.clone();
+        false_class.tokenizer_id = f.job.tokenizer_id;
+        assert_ne!(false_class.class_id(&f.artifact), f.job.shape_profile_id);
+        assert!(
+            PanelSourceCacheR1::new(
+                &f.rooted,
+                result,
+                terms,
+                false_class,
+                PalwPromptIdsFormV1::Flat,
+                &f.key,
+                &signature,
+                cache_limits(),
+                1,
+            )
+            .is_err()
+        );
     });
 }
 

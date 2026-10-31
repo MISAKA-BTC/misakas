@@ -118,10 +118,11 @@ impl PanelSourceCacheR1 {
         let class = normalized_class;
         if class.class_id(&Hash64::from_bytes(result.artifact.0)).as_bytes() != result.registered_class.0
             || class.graph_ir_root().as_bytes() != result.program.0
-            || class.tokenizer_id.as_bytes() != result.tokenizer.0
         {
             return Err(PanelSourceErrorR1::Binding);
         }
+        // The registered tokenizer is part of class_id; Result.tokenizer is
+        // independently pinned by the actual expected job, which may use zero.
         let program = class.decode_program().map_err(|_| PanelSourceErrorR1::Binding)?;
         // The inventory index expands per-layer instance lists. Bound that
         // metadata before construction using the conservative all-layers count.

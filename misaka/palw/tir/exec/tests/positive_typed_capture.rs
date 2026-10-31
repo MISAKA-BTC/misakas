@@ -184,8 +184,9 @@ fn typed_prototype_preserves_sparse_registration_and_all_native_payloads_includi
     for window in [1, 3] {
         with_window_fixture(window, |f, runner, _| {
             let original = runner.run(&f.job, PROMPT, LEAF_CAP, true, &mut |_| {}).unwrap();
-            let quote = quote_typed_prototype(runner, &f.class, f.artifact, &f.job, limits()).unwrap();
-            let capture = capture_typed_prototype(runner, &f.class, f.artifact, &f.job, PROMPT, limits()).unwrap();
+            let quote = quote_typed_prototype(runner, &f.class, f.artifact, &f.job, f.job.context_hash(), limits()).unwrap();
+            let capture =
+                capture_typed_prototype(runner, &f.class, f.artifact, &f.job, f.job.context_hash(), PROMPT, limits()).unwrap();
             let expected = expected_records(f);
             assert_eq!(capture.run(), &original);
             assert_eq!(capture.entries().len(), expected.len());
@@ -236,7 +237,7 @@ fn typed_prototype_preserves_sparse_registration_and_all_native_payloads_includi
 #[test]
 fn copied_capture_omission_reorder_coordinate_and_type_truncation_are_rejected() {
     with_fixture(|f, runner, _| {
-        let capture = capture_typed_prototype(runner, &f.class, f.artifact, &f.job, PROMPT, limits()).unwrap();
+        let capture = capture_typed_prototype(runner, &f.class, f.artifact, &f.job, f.job.context_hash(), PROMPT, limits()).unwrap();
         let original = capture.entries();
         let wide = original
             .iter()
@@ -290,7 +291,8 @@ fn copied_capture_omission_reorder_coordinate_and_type_truncation_are_rejected()
         assert!(capture.validate_local_copy(capture.origin(), original, &wrong_generated).is_err());
         let mut other_job = f.job.clone();
         other_job.job_id = kaspa_consensus_core::Hash64::from_u64_word(999);
-        let other = capture_typed_prototype(runner, &f.class, f.artifact, &other_job, PROMPT, limits()).unwrap();
+        let other =
+            capture_typed_prototype(runner, &f.class, f.artifact, &other_job, other_job.context_hash(), PROMPT, limits()).unwrap();
         assert!(capture.validate_local_copy(other.origin(), original, EXPECTED_GENERATED).is_err());
     });
 }
@@ -298,7 +300,7 @@ fn copied_capture_omission_reorder_coordinate_and_type_truncation_are_rejected()
 #[test]
 fn independent_quote_refuses_each_capture_dimension_below_required_bound() {
     with_fixture(|f, runner, _| {
-        let quote = quote_typed_prototype(runner, &f.class, f.artifact, &f.job, limits()).unwrap();
+        let quote = quote_typed_prototype(runner, &f.class, f.artifact, &f.job, f.job.context_hash(), limits()).unwrap();
         let original = runner.run(&f.job, PROMPT, LEAF_CAP, true, &mut |_| {}).unwrap();
         for dimension in 0..8 {
             let mut cap = limits();
@@ -312,9 +314,12 @@ fn independent_quote_refuses_each_capture_dimension_below_required_bound() {
                 6 => cap.max_local_storage_bytes = quote.local_storage_bytes - 1,
                 _ => cap.max_legacy_leaves = original.leaf_count - 1,
             }
-            assert_eq!(quote_typed_prototype(runner, &f.class, f.artifact, &f.job, cap).err(), Some(TypedCaptureError::Budget));
             assert_eq!(
-                capture_typed_prototype(runner, &f.class, f.artifact, &f.job, PROMPT, cap).err(),
+                quote_typed_prototype(runner, &f.class, f.artifact, &f.job, f.job.context_hash(), cap).err(),
+                Some(TypedCaptureError::Budget)
+            );
+            assert_eq!(
+                capture_typed_prototype(runner, &f.class, f.artifact, &f.job, f.job.context_hash(), PROMPT, cap).err(),
                 Some(TypedCaptureError::Budget)
             );
         }
@@ -324,7 +329,10 @@ fn independent_quote_refuses_each_capture_dimension_below_required_bound() {
         foreign.program[0] ^= 1;
         // Input-authentication scratch is refused before even a mismatching
         // program is re-encoded/hashed, not after its identity comparison.
-        assert_eq!(quote_typed_prototype(runner, &foreign, f.artifact, &f.job, cap).err(), Some(TypedCaptureError::Budget));
+        assert_eq!(
+            quote_typed_prototype(runner, &foreign, f.artifact, &f.job, f.job.context_hash(), cap).err(),
+            Some(TypedCaptureError::Budget)
+        );
     });
 }
 
@@ -361,7 +369,7 @@ fn panel_source_replay_uses_ordinary_settings_without_inherited_selector_or_dril
             .with_selector(std::sync::Arc::new(|_, _, _| 3))
             .with_boundary_lie(Some(TirBoundaryLieV1 { position: 0, boundary: 1 }));
         let original = runner.run(&f.job, PROMPT, LEAF_CAP, true, &mut |_| {}).unwrap();
-        let capture = capture_typed_prototype(&altered, &f.class, f.artifact, &f.job, PROMPT, limits()).unwrap();
+        let capture = capture_typed_prototype(&altered, &f.class, f.artifact, &f.job, f.job.context_hash(), PROMPT, limits()).unwrap();
         assert_eq!(capture.run(), &original);
         assert_eq!(capture.run().generated, EXPECTED_GENERATED);
     });
@@ -379,12 +387,12 @@ fn original_context_and_flat_prompt_binding_refuse_corrupted_source_metadata() {
                 3 => job.trace_scheme_id = kaspa_consensus_core::Hash64::from_u64_word(999),
                 _ => job.max_context_tokens = 4, // P+D=5; equality with last position count is insufficient.
             }
-            assert!(quote_typed_prototype(runner, &f.class, f.artifact, &job, limits()).is_err());
-            assert!(capture_typed_prototype(runner, &f.class, f.artifact, &job, PROMPT, limits()).is_err());
+            assert!(quote_typed_prototype(runner, &f.class, f.artifact, &job, f.job.context_hash(), limits()).is_err());
+            assert!(capture_typed_prototype(runner, &f.class, f.artifact, &job, f.job.context_hash(), PROMPT, limits()).is_err());
         }
         // Same number of IDs cannot silently replace the input whose Flat
         // commitment the unchanged context names.
-        assert!(capture_typed_prototype(runner, &f.class, f.artifact, &f.job, &[1, 1], limits()).is_err());
+        assert!(capture_typed_prototype(runner, &f.class, f.artifact, &f.job, f.job.context_hash(), &[1, 1], limits()).is_err());
         // Even when the commitment agrees, token_bound is an independent limit.
         let mut job = f.job.clone();
         let out_of_range = [f.program.token_bound, 1];
@@ -393,9 +401,69 @@ fn original_context_and_flat_prompt_binding_refuse_corrupted_source_metadata() {
             &out_of_range,
         )
         .unwrap();
-        assert!(capture_typed_prototype(runner, &f.class, f.artifact, &job, &out_of_range, limits()).is_err());
+        assert!(capture_typed_prototype(runner, &f.class, f.artifact, &job, job.context_hash(), &out_of_range, limits()).is_err());
         assert_eq!(f.class.program, f.encoded_program);
         assert_eq!(runner.plan.program.encode(), f.encoded_program);
+    });
+}
+
+#[test]
+fn canonical_zero_job_tokenizer_is_independent_of_registration_and_expected_context_stays_fixed() {
+    use kaspa_consensus_core::Hash64;
+    with_fixture(|f, runner, _| {
+        let expected_job = f.job.clone();
+        let expected_execution = expected_job.context_hash();
+        let registered = f.class.clone();
+        assert_eq!(expected_job.tokenizer_id, Hash64::default());
+        assert_ne!(registered.tokenizer_id, expected_job.tokenizer_id);
+        let ordinary = runner.run(&expected_job, PROMPT, LEAF_CAP, true, &mut |_| {}).unwrap();
+        let capture =
+            capture_typed_prototype(runner, &registered, f.artifact, &expected_job, expected_execution, PROMPT, limits()).unwrap();
+        assert_eq!(capture.origin().execution, expected_execution);
+        assert_eq!(capture.run(), &ordinary);
+        assert_eq!(expected_job, f.job);
+        assert_eq!(registered, f.class);
+
+        for field in 0..6 {
+            let mut delivered = expected_job.clone();
+            match field {
+                0 => delivered.tokenizer_id = registered.tokenizer_id,
+                1 => delivered.prompt_token_ids_hash = Hash64::from_u64_word(901),
+                2 => delivered.execution_seed[0] ^= 1,
+                3 => delivered.shape_profile_id = Hash64::from_u64_word(902),
+                4 => delivered.job_id = Hash64::from_u64_word(903),
+                _ => delivered.max_context_tokens += 1,
+            }
+            assert_eq!(
+                quote_typed_prototype(runner, &registered, f.artifact, &delivered, expected_execution, limits()).err(),
+                Some(TypedCaptureError::Binding)
+            );
+            assert_eq!(
+                capture_typed_prototype(runner, &registered, f.artifact, &delivered, expected_execution, PROMPT, limits()).err(),
+                Some(TypedCaptureError::Binding)
+            );
+        }
+        // Even a coherent different input/seed/tokenizer packet is not the
+        // independently expected native job. Do not derive its own expected pin.
+        let mut delivered = expected_job.clone();
+        delivered.tokenizer_id = registered.tokenizer_id;
+        delivered.execution_seed[0] ^= 1;
+        let foreign_prompt = [1, 1];
+        delivered.prompt_token_ids_hash = kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_commitment_v1(
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            &foreign_prompt,
+        )
+        .unwrap();
+        assert!(
+            capture_typed_prototype(runner, &registered, f.artifact, &delivered, expected_execution, &foreign_prompt, limits())
+                .is_err()
+        );
+        let mut false_registration = registered.clone();
+        false_registration.tokenizer_id = expected_job.tokenizer_id;
+        assert!(quote_typed_prototype(runner, &false_registration, f.artifact, &expected_job, expected_execution, limits()).is_err());
+        capture.validate_local_copy(capture.origin(), capture.entries(), EXPECTED_GENERATED).unwrap();
+        assert_eq!(f.job.context_hash(), expected_execution);
+        assert_eq!(f.class, registered);
     });
 }
 
