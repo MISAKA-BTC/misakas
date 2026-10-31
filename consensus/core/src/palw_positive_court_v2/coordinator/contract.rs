@@ -307,14 +307,14 @@ impl<C: CourtCheckerV2, V: CarrierVerifierV2> ContractCourtV2<C, V> {
         {
             return Err(CourtErrorV2::Contract(ContractError::Identity));
         }
-        if let Some(current) = &self.candidate {
-            if current.status == WitnessStatus::Checking {
-                return if current.witness == witness && current.plan == plan && self.checker.same_context(&current.context, &context) {
-                    Ok(CandidateOpenV2::AlreadyActive)
-                } else {
-                    Err(CourtErrorV2::Contract(ContractError::Identity))
-                };
-            }
+        if let Some(current) = &self.candidate
+            && current.status == WitnessStatus::Checking
+        {
+            return if current.witness == witness && current.plan == plan && self.checker.same_context(&current.context, &context) {
+                Ok(CandidateOpenV2::AlreadyActive)
+            } else {
+                Err(CourtErrorV2::Contract(ContractError::Identity))
+            };
         }
         if self.attempts >= self.limits.max_attempts {
             return Err(CourtErrorV2::Budget);

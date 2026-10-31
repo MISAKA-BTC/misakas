@@ -433,7 +433,7 @@ impl Reader<'_> {
 /// backend; cached Matched/usage/union summaries cannot mint any authority here.
 pub fn validate_positive_aux_restore_v2(aux: &PositiveAuxRowsV2) -> Result<PositiveRestoreReportV2, PositiveRowErrorV2> {
     let first = aux.range((Included((KERNEL_AUX_TABLE, Vec::new())), Unbounded)).next();
-    if !first.is_some_and(|((table, _), _)| *table == KERNEL_AUX_TABLE) {
+    if first.is_none_or(|((table, _), _)| *table != KERNEL_AUX_TABLE) {
         return Ok(PositiveRestoreReportV2::default());
     }
     validate_positive_aux_present_v2(aux)

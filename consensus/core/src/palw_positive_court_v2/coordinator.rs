@@ -296,14 +296,14 @@ impl PositiveCoordinatorV2 {
         if !signature.verifies(key, &witness.id(), WITNESS_CONTEXT) {
             return Err(ErrorV2::Authentication);
         }
-        if let Some((author, current)) = &self.current {
-            if current.statuses().1 == WitnessStatusV2::Checking {
-                return if *author == panel && current.witness() == &witness {
-                    Ok(CandidateEffectV2::AlreadyActive)
-                } else {
-                    Err(ErrorV2::Order)
-                };
-            }
+        if let Some((author, current)) = &self.current
+            && current.statuses().1 == WitnessStatusV2::Checking
+        {
+            return if *author == panel && current.witness() == &witness {
+                Ok(CandidateEffectV2::AlreadyActive)
+            } else {
+                Err(ErrorV2::Order)
+            };
         }
         if self.meter.attempts >= self.limits.max_attempts {
             return Err(ErrorV2::Budget);

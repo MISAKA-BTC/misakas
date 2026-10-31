@@ -777,11 +777,11 @@ fn merge(previous: &[(u64, u64)], added: (u64, u64)) -> Vec<(u64, u64)> {
     ranges.sort_unstable();
     let mut out: Vec<(u64, u64)> = Vec::with_capacity(ranges.len());
     for (first, end) in ranges {
-        if let Some(last) = out.last_mut() {
-            if first <= last.1 {
-                last.1 = last.1.max(end);
-                continue;
-            }
+        if let Some(last) = out.last_mut()
+            && first <= last.1
+        {
+            last.1 = last.1.max(end);
+            continue;
         }
         out.push((first, end));
     }
