@@ -3899,6 +3899,7 @@ dependencies = [
  "misaka-palw-gen",
  "misaka-palw-kernel",
  "misaka-palw-panel",
+ "misaka-palw-positive-contract",
  "misaka-palw-tir",
  "misaka-palw-tir-sketch",
  "rand 0.8.6",
@@ -6312,6 +6313,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "misaka-palw-positive-accounting"
+version = "1.1.0"
+dependencies = [
+ "misaka-palw-positive-contract",
+]
+
+[[package]]
+name = "misaka-palw-positive-accounting-node"
+version = "1.1.0"
+dependencies = [
+ "borsh",
+ "kaspa-consensus-core",
+ "kaspa-hashes",
+ "libcrux-ml-dsa",
+ "misaka-palw-kernel",
+ "misaka-palw-positive-accounting",
+ "misaka-palw-positive-contract",
+ "misaka-palw-tir",
+ "misaka-palw-tir-exec",
+]
+
+[[package]]
 name = "misaka-palw-positive-contract"
 version = "1.1.0"
 dependencies = [
@@ -6480,7 +6503,9 @@ dependencies = [
  "cc",
  "kaspa-consensus-core",
  "libc",
+ "libcrux-ml-dsa",
  "misaka-palw-base0",
+ "misaka-palw-positive-contract",
  "misaka-palw-tir",
  "misaka-palw-tir-artifact",
  "rand 0.8.6",

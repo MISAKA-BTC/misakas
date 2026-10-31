@@ -1,0 +1,57 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index 8fdb2a96d..c758ac043 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -6311,6 +6311,13 @@ dependencies = [
+  "thiserror 1.0.64",
+ ]
+ 
++[[package]]
++name = "misaka-palw-positive-accounting"
++version = "1.1.0"
++dependencies = [
++ "misaka-palw-positive-contract",
++]
++
+ [[package]]
+ name = "misaka-palw-positive-contract"
+ version = "1.1.0"
+@@ -6371,8 +6378,10 @@ dependencies = [
+  "misaka-endpoints",
+  "misaka-palw-challenge",
+  "misaka-palw-kernel",
++ "misaka-palw-positive-contract",
+  "misaka-palw-tir",
+  "misaka-palw-tir-artifact",
++ "misaka-palw-tir-exec",
+  "misaka-palw-tir-sketch",
+  "serde",
+  "serde_json",
+diff --git a/Cargo.toml b/Cargo.toml
+index 4cbbd64fe..456550465 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -59,6 +59,7 @@ members = [
+     "misaka/palw/gen",
+     "misaka/palw/panel",
+     "misaka/palw/positive-contract",
++    "misaka/palw/positive-accounting",
+     "simpa",
+     "wasm",
+     "wasm/core",
+@@ -184,6 +185,7 @@ default-members = [
+     "misaka/palw/gen",
+     "misaka/palw/panel",
+     "misaka/palw/positive-contract",
++    "misaka/palw/positive-accounting",
+     "simpa",
+     "wasm",
+     "wasm/core",
+@@ -327,6 +329,7 @@ misaka-palw-tir = { path = "misaka/palw/tir/core" }
+ misaka-palw-gen = { path = "misaka/palw/gen" }
+ misaka-palw-panel = { path = "misaka/palw/panel" }
+ misaka-palw-positive-contract = { path = "misaka/palw/positive-contract" }
++misaka-palw-positive-accounting = { path = "misaka/palw/positive-accounting" }
+ kaspa-alloc = { version = "1.1.0", path = "utils/alloc" }
+ misaka-endpoints = { version = "1.1.0", path = "misaka/endpoints" }
+ misaka-palw = { version = "1.1.0", path = "misaka/palw/core" }

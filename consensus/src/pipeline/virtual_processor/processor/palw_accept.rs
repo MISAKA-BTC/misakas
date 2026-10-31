@@ -2617,6 +2617,15 @@ impl VirtualStateProcessor {
             return Ok(Vec::new());
         };
         let mut txs = self.accepted_txs_from_acceptance_data(acceptance);
+        // New Positive bodies are opaque below their own fence: reject the raw tag before any body, source, funding or resource preparation.
+        txs.retain(|tx| {
+            tx.subnetwork_id != kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE
+                || !kaspa_consensus_core::palw_lifecycle_objects_v2::palw_positive_lifecycle_unjudged_v2(
+                    &tx.payload,
+                    &self.palw_lifecycle_kind_fences,
+                    block_daa,
+                )
+        });
         let history_armed = self.palw_staged_public_court_v1.is_some_and(|fence| fence.is_active(block_daa));
         let tir_public_armed = self.palw_tir_public_conviction_v1.is_some_and(|fence| fence.is_active(block_daa));
         // AUDIT-8 (2026-10-27): the carrier's rent net of its bond burn (ab0d57199) is read only past
@@ -2964,7 +2973,11 @@ impl VirtualStateProcessor {
         // the two walks are independent pure functions of the same accepted set, so a fixed
         // concatenation is a deterministic order every node reproduces, and it keeps a change to
         // one walk from reordering the other's objects.
-        let lifecycle = kaspa_consensus_core::palw_lifecycle_objects_v2::palw_lifecycle_objects_from_accepted_txs_v2(&txs);
+        let lifecycle = kaspa_consensus_core::palw_lifecycle_objects_v2::palw_lifecycle_objects_from_accepted_txs_in_context_v2(
+            &txs,
+            &self.palw_lifecycle_kind_fences,
+            block_daa,
+        );
         for (carrier, reason) in &lifecycle.skipped {
             info!("[palw-lifecycle] carrier {carrier} produced no object: {reason}");
         }

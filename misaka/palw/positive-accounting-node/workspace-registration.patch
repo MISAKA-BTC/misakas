@@ -1,0 +1,52 @@
+diff --git a/Cargo.toml b/Cargo.toml
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -60,6 +60,7 @@
+     "misaka/palw/panel",
+     "misaka/palw/positive-contract",
+     "misaka/palw/positive-accounting",
++    "misaka/palw/positive-accounting-node",
+     "simpa",
+     "wasm",
+     "wasm/core",
+@@ -186,6 +187,7 @@
+     "misaka/palw/panel",
+     "misaka/palw/positive-contract",
+     "misaka/palw/positive-accounting",
++    "misaka/palw/positive-accounting-node",
+     "simpa",
+     "wasm",
+     "wasm/core",
+@@ -330,6 +332,7 @@
+ misaka-palw-panel = { path = "misaka/palw/panel" }
+ misaka-palw-positive-contract = { path = "misaka/palw/positive-contract" }
+ misaka-palw-positive-accounting = { path = "misaka/palw/positive-accounting" }
++misaka-palw-positive-accounting-node = { path = "misaka/palw/positive-accounting-node" }
+ kaspa-alloc = { version = "1.1.0", path = "utils/alloc" }
+ misaka-endpoints = { version = "1.1.0", path = "misaka/endpoints" }
+ misaka-palw = { version = "1.1.0", path = "misaka/palw/core" }
+diff --git a/Cargo.lock b/Cargo.lock
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -6319,6 +6319,21 @@
+ ]
+ 
+ [[package]]
++name = "misaka-palw-positive-accounting-node"
++version = "1.1.0"
++dependencies = [
++ "borsh",
++ "kaspa-consensus-core",
++ "kaspa-hashes",
++ "libcrux-ml-dsa",
++ "misaka-palw-kernel",
++ "misaka-palw-positive-accounting",
++ "misaka-palw-positive-contract",
++ "misaka-palw-tir",
++ "misaka-palw-tir-exec",
++]
++
++[[package]]
+ name = "misaka-palw-positive-contract"
+ version = "1.1.0"
+ dependencies = [

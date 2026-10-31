@@ -1,0 +1,49 @@
+{
+  "checks": [
+    {
+      "check": "registered-node-full",
+      "record": "registered-node-full-result.json",
+      "passed_groups": [
+        22,
+        0
+      ],
+      "passed_total": 22
+    },
+    {
+      "check": "a1-court-regression",
+      "record": "a1-court-regression-result.json",
+      "passed_groups": [
+        7,
+        13,
+        2,
+        13
+      ],
+      "passed_total": 35
+    },
+    {
+      "check": "common-contract",
+      "passed_total": 24,
+      "record": "../independent-phase3/common-contract-result.json",
+      "reused_by_source_equality": true
+    },
+    {
+      "check": "leaf-all",
+      "passed_total": 40,
+      "record": "../independent-phase3/leaf-all-result.json",
+      "reused_by_source_equality": true
+    },
+    {
+      "check": "leaf-clippy",
+      "record": "../independent-phase3/leaf-clippy-result.json",
+      "reused_by_source_equality": true
+    },
+    {
+      "check": "node-full-clippy",
+      "record": "../independent-phase3-rev2/node-full-clippy-result.json",
+      "metadata_only_change": true
+    }
+  ],
+  "native_admission_and_locks": "not implemented or granted by these checks",
+  "source_manifest": "tested-source-manifest.json",
+  "prior_capacity_failure": "../independent-phase3/a1-court-regression-result.json"
+}

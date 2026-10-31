@@ -1,0 +1,27 @@
+{
+  "date": "2026-10-31",
+  "candidate_commit": "729d513ec22b3060308c898d8780f014177374ee",
+  "common_contract": "a85152edc",
+  "common_tir_annex": "d615f62b6",
+  "feature": "positive-contract",
+  "core_test_optimization": 0,
+  "native_activation": "unchanged/closed",
+  "files": {
+    "Cargo.toml": "7b26aaa66e011be4e2f7795436f637f3b8d56568f54ac907eec7cf894b39e266",
+    "Cargo.lock": "15ff7d34ed13b4a37194ab79c5ba57e12aed3cb362fdd140aa432b7d499569b5",
+    "misaka/palw/tir/exec/Cargo.toml": "90039d68f73d1810af7c4e863df0bfd69cbaae9668591baa061b5106a7527926",
+    "misaka/palw/tir/exec/src/node/mod.rs": "ce14a5608e8eeb077266b623f11748662f2031468e89711ad0bbb25d9db03420",
+    "misaka/palw/tir/exec/src/node/positive_check.rs": "51053e8003a490e6085f7b6b7cc7e890d9548464cd6680fe52f93c17a7f4ed90",
+    "misaka/palw/tir/exec/src/node/positive_contract.rs": "8303e228f710d485899a40bff67fa4db823b6a91d1f0a2e657cbe2faa9a430a9",
+    "misaka/palw/tir/exec/tests/positive_check.rs": "a9fee58570e9a10709ce685e0ddac62c09f36592c0be8fa63a6663e8c26f8004",
+    "misaka/palw/tir/exec/tests/positive_check_hardening.rs": "f753a6150d941b51a40a1abf2a9bc0825434c7622d4411882749559ee5eb157f",
+    "misaka/palw/tir/exec/tests/positive_contract.rs": "e56306c1c0962a190376dde5da4262e9fde761f9ed132b24e46842764f0c3c3f",
+    "misaka/palw/positive-contract/src/identity.rs": "c983c6fc73096be1cd869667eea8fe7723fb46d217db9090cdf6adfabd6bb2e6",
+    "misaka/palw/positive-contract/src/lib.rs": "15865f2ed315051cd450d34061ac5015e0d45d3ee396b053279bf0b69ec50463",
+    "misaka/palw/positive-contract/src/messages.rs": "68b06aa73de26da938333697cf02b4cf832046369598ae83c94a4cf18a3f840b",
+    "misaka/palw/positive-contract/src/ports.rs": "c56e73687408918654d1eab4e893fc2105bf6627e9e8b21ab6361024e202b6e4",
+    "misaka/palw/positive-contract/src/tir.rs": "d43d1d1d051997a5f2bdb760313cb3c670f867dc138e84c2e6a7ed72b0ab59b0",
+    "misaka/palw/positive-contract/src/wire.rs": "c8737515c35305facb5d12ba6866b09a7a94a1efb6c2500f0d46b8b42ee82b79"
+  },
+  "packet_auth_annex": "5901eff3f"
+}

@@ -1,0 +1,36 @@
+{
+  "status": "PREPARED_NOT_INTEGRATION_TESTED",
+  "required_upstream_pair": [
+    "1b8e4e5c98469e0a723a3fc62794c976dcf6b756",
+    "fd9d4c5d7a07efb791a82bb6b9717a4ff657136b"
+  ],
+  "upstream_parent": "1b8e4e5c98469e0a723a3fc62794c976dcf6b756",
+  "checked_api": "misaka/palw/remote/src/positive_miner_v2.rs",
+  "checked_api_sha256": "8ca77186eea71b7a23f07a34d458d19f57c6092aef8a0c36a3c572446ad42cd7",
+  "fixture": "misaka/palw/remote/tests/positive_panel_sources_r1.rs",
+  "patch_sha256": "23415e2c492785bba861c7d9c10064ab3e2e0d51c9c6cd6124bcab8172f97402",
+  "process_limit_fields": [
+    "max_units_per_request",
+    "max_tracked_units",
+    "max_provider_reads",
+    "max_status_checks",
+    "max_prepared_bytes"
+  ],
+  "matched_literals": 2,
+  "finite_max_status_checks": 64,
+  "preserves_cache_import_meter_equality": true,
+  "actual_complete_requery_counts_only_status_checks": true,
+  "foreign_request_has_zero_status_checks": true,
+  "checks": [
+    "immutable commit and parent relationship verified",
+    "each fixture ProcessLimits literal matches exact upstream field set",
+    "rustfmt syntax/format check passed",
+    "git diff --check passed",
+    "prepared patch applies cleanly to source base; base source restored pending A2 acceptance"
+  ],
+  "full_build_run": false,
+  "integration_test_run_against_fd9": false,
+  "reason": "A0 independent audit/acceptance pending; low host disk and concurrent SDK build; no heavy build authorized.",
+  "prepared_fixture_sha256": "3a81e741376ae670d164f2826a728dbfe2b93291943058c92aac16f0bdd95daf",
+  "prepared_against_commit": "f870b9da4256094b633be213ff85da99c64f463a"
+}

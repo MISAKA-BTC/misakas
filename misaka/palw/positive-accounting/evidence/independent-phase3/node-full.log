@@ -1,0 +1,39 @@
+   Compiling misaka-palw-positive-contract v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a5/MISAKA-testnet/misaka/palw/positive-contract)
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a5/MISAKA-testnet/consensus/core)
+   Compiling misaka-palw-positive-accounting v1.1.0 (/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/misaka-positive-accounting-node.bcDaxK/misaka-palw-positive-accounting)
+   Compiling misaka-palw-tir-exec v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a5/MISAKA-testnet/misaka/palw/tir/exec)
+   Compiling misaka-palw-positive-accounting-node v1.1.0 (/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/misaka-positive-accounting-node.bcDaxK/misaka-palw-positive-accounting-node)
+    Finished `test` profile [unoptimized] target(s) in 1m 27s
+     Running unittests /Users/wata/.codex/worktrees/positive-court-a5/MISAKA-testnet/misaka/palw/positive-accounting-node/src/lib.rs (/Users/wata/.cache/misaka-positive-accounting-node-target/debug/deps/misaka_palw_positive_accounting_node-e00baa6249798c63)
+
+running 21 tests
+test native::tests::hard_deadline_payer_return_cannot_silently_waive_an_earned_service_fee ... ok
+test native::tests::actual_native_engine_checks_a_source_fee_and_exact_continuation ... ok
+test native::tests::an_old_projection_cannot_reenter_the_native_checker_after_payment_or_rollback ... ok
+test native::tests::changing_outputs_without_refreshing_the_actual_transaction_identity_is_rejected ... ok
+test native::tests::changed_legacy_operands_cannot_rewrite_the_private_engine_calculation ... ok
+test native::tests::empty_fee_timeout_uses_only_the_existing_deadline_return_path ... ok
+test native::tests::actual_payer_signatures_reject_substitution_even_after_acyclic_links_are_recomputed ... ok
+test native::tests::unknown_or_malformed_recipient_keys_and_unbounded_due_counts_are_refused ... ok
+test native::tests::late_lower_source_unit_preserves_the_real_native_paid_prefix ... ok
+test native::tests::actual_carrier_value_refund_index_and_admission_expiry_are_checked_again ... ok
+test native::tests::unverified_closure_pays_only_delivered_service_then_burn_and_refund ... ok
+test native::tests::capital_bearing_funding_and_different_resource_quotes_are_explicitly_refused ... ok
+test native::tests::real_acyclic_payer_signature_and_actual_output_preflight_are_distinct_from_native_admission ... ok
+test tir::tests::private_result_witness_and_request_frames_do_not_enter_legacy_native_ingress ... ok
+test tir::tests::a_valid_terminal_cannot_be_rebound_to_another_signed_result ... ok
+test native::tests::full_planned_source_ceiling_and_court_ceiling_use_different_signed_caps ... ok
+test tir::tests::actual_a1_checked_terminal_reaches_all_consumers_only_with_all_existing_conditions ... ok
+test tir::tests::reorg_or_new_process_requires_current_scope_and_actual_rechecked_coverage ... ok
+test tir::tests::real_output_mismatch_is_not_credit_even_if_a_saved_row_falsely_says_passed ... ok
+test tir::tests::repeated_real_terminal_does_not_create_another_credit_record_or_skip_rooted_plan_binding ... ok
+test tir::tests::signed_evidence_packets_authenticate_before_checking_and_charge_the_complete_signed_frame ... ok
+
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.44s
+
+   Doc-tests misaka_palw_positive_accounting_node
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

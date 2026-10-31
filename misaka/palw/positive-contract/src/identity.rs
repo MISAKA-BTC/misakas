@@ -21,7 +21,7 @@ macro_rules! identifier {
         pub struct $name(pub Digest);
     )*};
 }
-identifier!(ClaimId, CaseId, ResultId, WitnessId, RequestId, PrincipalId, PlanId);
+identifier!(ClaimId, CaseId, ResultId, WitnessId, RequestId, PrincipalId, PlanId, EvidencePartId, FundingScopeId, FundingConsentId);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct ChainScope {
@@ -35,6 +35,8 @@ pub const SIGNATURE_BYTES: usize = 4627;
 pub const RESULT_SIGN_CONTEXT: &[u8] = b"misaka/positive/result/v2/r1";
 pub const WITNESS_SIGN_CONTEXT: &[u8] = b"misaka/positive/witness/v2/r1";
 pub const REQUEST_SIGN_CONTEXT: &[u8] = b"misaka/positive/request/v2/r1";
+pub const EVIDENCE_SIGN_CONTEXT: &[u8] = b"misaka/positive/evidence-part/v2/r1";
+pub const FUNDING_SIGN_CONTEXT: &[u8] = b"misaka/positive/funding-consent/v2/r1";
 
 pub fn principal(key: &[u8; PUBKEY_BYTES]) -> PrincipalId {
     // Existing MISAKA ML-DSA-87 key identity: unkeyed BLAKE2b-512.

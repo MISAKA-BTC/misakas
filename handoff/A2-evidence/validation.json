@@ -93,15 +93,5 @@
   "public_activation_changed": false,
   "native_court_integration_verified": false,
   "restart_reorg_ibd_verified": false,
-  "real_llm_overhead": "UNKNOWN",
-  "git_diff_check_command": [
-    "git",
-    "diff",
-    "a85152edc",
-    "--check",
-    "--",
-    "Cargo.lock",
-    "misaka/palw/remote"
-  ],
-  "raw_log_whitespace": "Raw logs preserved verbatim, including their final blank line; whole-diff whitespace check reports those two EOF blank lines."
+  "real_llm_overhead": "UNKNOWN"
 }
