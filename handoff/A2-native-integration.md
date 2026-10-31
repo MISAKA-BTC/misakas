@@ -30,10 +30,18 @@ Prepared updates retain touched source/unit coordinates even when they write no 
 
 `Case.usage.fee` is only finite source-service dues, bounded by `Service.budget.fee`. Reserve worst-case fresh-unit fees before admitting a request, accrue once at the first valid unit response, and pass `SourceFeeIntentV2` to A5. The once-only payment coordinate is the existing ServiceReceipt key. This cache never moves funds or writes a paid flag.
 
+## Retry and recovery semantics
+
+After authenticating each actual delivery, matching an already known complete RequestId or an already completed authenticated unit is a logical NoOp. It retains no new source event and changes no Case, usage, first receipt/provider/due or cache revision. Full current-row CAS still applies. A distinct RequestId remains a meaningful event, including a fully overlapping range. Creating a newly charged opportunity requires a separately adopted rooted native rule; a different carrier or relay is insufficient.
+
+`SourceFeeIntentV2` directly aliases A0's shared seven-field `funding::SourceFeeDeltaIntent`, including `receipt_key`. Registered tokenizer identity is authenticated independently from the canonical attempt job/result tokenizer; the existing canonical zero job tokenizer is supported without altering registered class identity.
+
+Raw journal `open` and explicit-tail-repair now take a mutable fresh responder and restore its complete protected meter before returning any usable journal. The local instance seal additionally prevents attaching that journal to another fresh live responder. This changes no wire, anchor DB or checkpoint schema.
+
 ## Validation in progress
 
-Candidate `3d764a0c1`: remote 246 passed/one existing ignored, focused source 25 passed, default-off 176 passed/one existing ignored. Each recorded run kept the exact source hashes unchanged. The real subprocess checks hold stdin open, verify the paused child is alive and require SIGKILL signal 9.
+Candidate `f4becc743`: remote 248 passed/one existing ignored, focused source 25 passed (273 unique passed), default-off 176 passed/one existing ignored, and client metadata check passed with seven expected dead-code warnings for the unconnected native callsite. Each recorded run kept source hashes unchanged. Raw logs/reports are preserved under `stage-f4becc743`. The real subprocess checks hold stdin open, verify the paused child is alive and require SIGKILL signal 9.
 
-A further independent raw-journal fixture exposed equal Complete-only status counters merging across two fresh responder instances. The provider-failure variant was already rejected by the monotone meter guard. A local instance seal now binds each file journal to its creating/resuming live responder; this changes no wire, anchor DB or checkpoint schema. Before-fix reproduction failed as expected, and both post-fix controls passed. The final full suite/client checks for this additional fix are being recorded; previous-stage raw logs remain preserved separately.
+The next candidate adds logical-NoOp flood/authentication tests, canonical tokenizer fixtures and raw strict/repair reopen meter regressions. These additional changes are awaiting the next recorded full run. Earlier successful runs do not establish this candidate's result.
 
 Real model cold/warm overhead and actual mempool/template/heartbeat source admission, native funds, independent-node replay, canonical reorg and IBD remain unmeasured/unverified until the actual owner connections above run on this same candidate.

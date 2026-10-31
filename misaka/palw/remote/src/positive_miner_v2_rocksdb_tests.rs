@@ -207,6 +207,68 @@ fn raw_journal_does_not_merge_equal_complete_status_meters_from_fresh_sessions()
 }
 
 #[test]
+fn raw_reopen_restores_complete_only_status_spend_before_a_fresh_session_can_read() {
+    // Pre-fix static finding: raw open rebound the journal's session while
+    // leaving the fresh meter at zero. Its next status increment could equal
+    // the protected meter and pass monotonic persistence. No pre-fix runtime
+    // result is asserted here. Exercise both public raw reopen entry points.
+    for mode in ["strict", "repair-empty", "repair-unknown"] {
+        let dir = TempScope::new();
+        let f = Fixture::new();
+        let provider = UnavailableCountingProvider { reads: Cell::new(0) };
+        let providers: [&dyn StoredProviderV2; 1] = [&provider];
+        let status_reads = Cell::new(0);
+        let duty = CountingCompleteDuty { inner: f.duty(), status_reads: &status_reads };
+        let mut limits = process_limits();
+        limits.max_status_checks = 1;
+        let mut first =
+            MinerResponderV2::new(&f.admission, f.result.clone(), f.contract, 1, &f.key, &f.signature, &providers, limits).unwrap();
+        let db = RocksAnchorDbV2::create(&dir.db(), db_limits()).unwrap();
+        let anchors = db.bind(&first).unwrap();
+        let mut journal = FilePreparationJournalV2::create(&dir.journal(), &first, journal_limits(), anchors).unwrap();
+        assert!(first.respond_recorded(&duty, &mut journal).unwrap().units.is_empty());
+        let spent = first.meter();
+        assert_eq!(spent.status_checks, 1);
+        assert_eq!(spent.rounds, 0);
+        assert_eq!(spent.provider_reads, 0);
+        assert_eq!(spent.prepared_bytes, 0);
+        assert_eq!(spent.unique_source_bytes, 0);
+        assert!(first.prepared.is_empty());
+        let protected = journal.anchor();
+        let protected_bytes = std::fs::metadata(dir.journal()).unwrap().len();
+        drop(journal);
+        if mode == "repair-unknown" {
+            let mut suffix = OpenOptions::new().append(true).open(dir.journal()).unwrap();
+            suffix.write_all(b"unknown unanchored bytes, never a quota discount").unwrap();
+            suffix.sync_all().unwrap();
+        }
+        let mut fresh =
+            MinerResponderV2::new(&f.admission, f.result.clone(), f.contract, 1, &f.key, &f.signature, &providers, limits).unwrap();
+        assert_eq!(fresh.meter(), PreparationMeterV2::default());
+        let anchors = db.bind(&fresh).unwrap();
+        let mut reopened = if mode == "strict" {
+            FilePreparationJournalV2::open(&dir.journal(), &mut fresh, journal_limits(), anchors)
+        } else {
+            FilePreparationJournalV2::open_discarding_unanchored_tail(&dir.journal(), &mut fresh, journal_limits(), anchors)
+        }
+        .unwrap();
+        // Raw open itself restores every meter, including a status-only spend
+        // whose prepared union is empty; no Durable wrapper restores it later.
+        assert_eq!(fresh.meter(), spent, "{mode}");
+        assert!(fresh.prepared.is_empty());
+        assert_eq!(reopened.anchor(), protected);
+        assert_eq!(std::fs::metadata(dir.journal()).unwrap().len(), protected_bytes);
+        assert!(matches!(fresh.respond_recorded(&duty, &mut reopened), Err(MinerErrorV2::Budget)), "{mode}");
+        assert_eq!(status_reads.get(), 1, "{mode}: raw reopen allowed a second physical status read");
+        assert_eq!(provider.reads.get(), 0, "{mode}: Complete triggered provider I/O");
+        assert_eq!(fresh.meter(), spent);
+        assert_eq!(reopened.anchor(), protected);
+        assert_eq!(std::fs::metadata(dir.journal()).unwrap().len(), protected_bytes);
+        assert_eq!(read_case(&db.owner.db, &case_key(&f.result)).unwrap().unwrap().current, Some(protected));
+    }
+}
+
+#[test]
 fn same_case_cannot_rebind_result_service_or_process_limits() {
     let dir = TempScope::new();
     let f = Fixture::new();
