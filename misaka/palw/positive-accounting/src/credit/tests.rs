@@ -16,6 +16,12 @@ struct Row {
     facts: RootedCreditFacts,
     coverage: Option<CheckedCoverage>,
     dependencies: Option<Vec<CreditBinding>>,
+    entitlements: FixtureEntitlements,
+}
+#[derive(Clone, Copy)]
+enum FixtureEntitlements {
+    All,
+    Only(&'static [CreditUse]),
 }
 struct View(BTreeMap<ClaimId, Row>);
 impl RootedCreditView for View {
@@ -30,6 +36,17 @@ impl RootedCreditView for View {
     }
     fn checked_dependencies(&self, claim: ClaimId) -> Result<&[CreditBinding], CreditDenial> {
         self.0.get(&claim).and_then(|r| r.dependencies.as_deref()).ok_or(CreditDenial::MissingDependencyBinding(claim))
+    }
+    fn authorize_entitlement(&self, binding: &CreditBinding, usage: CreditUse) -> Result<(), CreditDenial> {
+        let row = self.0.get(&binding.claim).ok_or(CreditDenial::MissingClaim(binding.claim))?;
+        if row.facts.binding != *binding {
+            return Err(CreditDenial::Binding(binding.claim));
+        }
+        match row.entitlements {
+            FixtureEntitlements::All => Ok(()),
+            FixtureEntitlements::Only(uses) if uses.contains(&usage) => Ok(()),
+            FixtureEntitlements::Only(_) => Err(CreditDenial::Entitlement { claim: binding.claim, usage }),
+        }
     }
 }
 fn ready(n: u8, parents: &[u8]) -> Row {
@@ -54,6 +71,7 @@ fn ready(n: u8, parents: &[u8]) -> Row {
             status: ClaimStatus::PositivePassed,
         }),
         dependencies: Some(parents.iter().copied().map(super::tests::binding).collect()),
+        entitlements: FixtureEntitlements::All,
     }
 }
 fn view() -> View {
@@ -79,6 +97,55 @@ fn all_consumers_share_the_current_predicate_and_preserve_the_exact_weight() {
     }
     assert_eq!(gate(&v).credited_weight(id(10), u128::MAX), u128::MAX);
     denied(&v, id(11), CreditDenial::MissingClaim(id(11)));
+}
+
+#[test]
+fn ready_paid_settlement_entitlement_does_not_grant_weight_receipts_or_rule_e() {
+    let mut v = view();
+    // Private fixture for an existing settlement-only entitlement. The full
+    // coverage, drawn approval and economic readiness supplied by ready() stay
+    // intact; none can manufacture a different existing right.
+    v.0.get_mut(&id(10)).unwrap().entitlements = FixtureEntitlements::Only(&[CreditUse::Settlement]);
+    for usage in ALL_CREDIT_USES {
+        if usage == CreditUse::Settlement {
+            assert!(gate(&v).authorize(&id(10), usage).is_ok());
+        } else {
+            assert_eq!(gate(&v).authorize(&id(10), usage).err(), Some(CreditDenial::Entitlement { claim: id(10), usage }));
+        }
+    }
+    let gate = gate(&v);
+    let consumers = consumers::CreditConsumers::new(&gate);
+    assert_eq!(consumers.dag_weight(&id(10), u128::MAX), 0);
+    assert_eq!(consumers.rule_e_capital(&id(10), u128::MAX), 0);
+    assert!(consumers.work_receipt(&id(10)).is_err());
+    assert!(consumers.settlement(&id(10)).is_ok());
+}
+
+/// Deliberately omits the entitlement port, while retaining every other ready
+/// fact. The default must reject all uses, not infer rights from readiness.
+struct MissingEntitlement(View);
+impl RootedCreditView for MissingEntitlement {
+    fn scope(&self) -> ChainScope {
+        self.0.scope()
+    }
+    fn claim(&self, claim: ClaimId) -> Result<RootedCreditFacts, CreditDenial> {
+        self.0.claim(claim)
+    }
+    fn checked_coverage(&self, claim: ClaimId) -> Result<CheckedCoverage, CreditDenial> {
+        self.0.checked_coverage(claim)
+    }
+    fn checked_dependencies(&self, claim: ClaimId) -> Result<&[CreditBinding], CreditDenial> {
+        self.0.checked_dependencies(claim)
+    }
+}
+
+#[test]
+fn missing_existing_entitlement_rejects_all_seven_ready_credit_uses() {
+    let view = MissingEntitlement(view());
+    let gate = PositiveCreditGate::new(&view, CreditLimits { max_claims: 10, max_edges: 10 }).unwrap();
+    for usage in ALL_CREDIT_USES {
+        assert_eq!(gate.authorize(&id(10), usage).err(), Some(CreditDenial::Entitlement { claim: id(10), usage }));
+    }
 }
 
 #[test]
@@ -251,6 +318,9 @@ impl RootedCreditView for LineageFixture {
     }
     fn checked_dependencies(&self, claim: ClaimId) -> Result<&[CreditBinding], CreditDenial> {
         self.claims.checked_dependencies(claim)
+    }
+    fn authorize_entitlement(&self, binding: &CreditBinding, usage: CreditUse) -> Result<(), CreditDenial> {
+        self.claims.authorize_entitlement(binding, usage)
     }
 }
 fn lineage_fixture() -> LineageFixture {

@@ -73,6 +73,11 @@ A1 `50473e607` のauthor-authenticated packet wrapperも採用し、実terminal�
 ## 全native readerの具体的な未完了条件
 
 全readerは上記native bindingがあるPositive armから**同じ**A5 gateを呼ぶ必要がある。
+共通Positive必要条件は用途別の**既存entitlementとのAND**であり、既存条件を置き換えない。
+`authorize_entitlement(binding, usage)` はdefault拒否。native ownerはactual origin・paid/mining契約から解決し、
+rootは要求用途、祖先はDependencyを照合する。poster-funded paid FinalのB/F/R=0を維持し、
+Positive/PだけでDagWeight/WorkReceipt/Rule Eを作らない。TIR adapterも同じportへ委譲する。
+privatefixtureのAll/集合はnative権利resolverではない。反例・実A1経路の結果はphase9 evidenceに保存した。
 現在はnative新claim入口がないため、下記を接続済みと宣言していない。
 
 | 用途 | 入口 | 未完了条件 |

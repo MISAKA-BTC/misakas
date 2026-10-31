@@ -1,4 +1,4 @@
-//! One bounded predicate for rewards, DAG weight, receipts, settlement and reuse.
+//! Shared bounded Positive prerequisites AND existing use-specific entitlement.
 //! The view must be derived from the current executed state. Public DTOs and
 //! saved `PositivePassed` flags cannot implement the missing native adapter.
 
@@ -94,6 +94,7 @@ pub enum CreditDenial {
     Fraud(ClaimId),
     MaturityOrLiability(ClaimId),
     CarrierOrFunding(ClaimId),
+    Entitlement { claim: ClaimId, usage: CreditUse },
     Budget,
 }
 
@@ -115,6 +116,17 @@ pub trait RootedCreditView {
     /// single-anchor private contract and rejects every scope mismatch.
     fn validate_scope(&self, binding: &CreditBinding) -> Result<(), CreditDenial> {
         if binding.scope == self.scope() { Ok(()) } else { Err(CreditDenial::Scope(binding.claim)) }
+    }
+
+    /// Resolve the EXISTING entitlement for this exact binding and use from
+    /// the current view's actual origin, paid/mining contract and conditions.
+    /// PositivePassed, drawn approval and funding readiness are prerequisites;
+    /// they do not create reward, weight, receipt, capital or reuse rights.
+    /// Ancestors are queried for Dependency, not the root's requested use.
+    /// A missing adapter refuses every use. Private fixture All/sets cannot
+    /// substitute for native origin/contract resolution.
+    fn authorize_entitlement(&self, binding: &CreditBinding, usage: CreditUse) -> Result<(), CreditDenial> {
+        Err(CreditDenial::Entitlement { claim: binding.claim, usage })
     }
 
     fn checked_coverage(&self, claim: ClaimId) -> Result<CheckedCoverage, CreditDenial> {
@@ -164,9 +176,11 @@ impl<'a, V: RootedCreditView> PositiveCreditGate<'a, V> {
         Ok(Self { view, limits })
     }
 
-    /// All sites use the same predicate, including the all-ancestor dependency
-    /// rule. No cached child-ready flag survives a changed parent view.
-    fn check(&self, root: ClaimId) -> Result<CreditBinding, CreditDenial> {
+    /// All sites share Positive prerequisites and the all-ancestor rule, while
+    /// retaining the root's existing use-specific entitlement. Each ancestor
+    /// needs its own existing Dependency entitlement. No child-ready flag
+    /// survives a changed parent view or underlying contract entitlement.
+    fn check(&self, root: ClaimId, usage: CreditUse) -> Result<CreditBinding, CreditDenial> {
         #[derive(Clone, Copy)]
         enum Visit {
             Enter(ClaimId, Option<CreditBinding>),
@@ -224,6 +238,7 @@ impl<'a, V: RootedCreditView> PositiveCreditGate<'a, V> {
             if facts.carrier_and_funding != EconomicReadiness::Ready {
                 return Err(CreditDenial::CarrierOrFunding(id));
             }
+            self.view.authorize_entitlement(&facts.binding, if id == root { usage } else { CreditUse::Dependency })?;
             let dependencies = self.view.checked_dependencies(id)?;
             edges = edges.checked_add(dependencies.len() as u64).ok_or(CreditDenial::Budget)?;
             if edges > self.limits.max_edges {
@@ -264,7 +279,7 @@ impl<'a, V: RootedCreditView> CreditGate for PositiveCreditGate<'a, V> {
             | CreditUse::PrefixReuse
             | CreditUse::Dependency => {}
         }
-        Ok(CreditAuthorization { _view: self.view, binding: self.check(*claim)?, usage })
+        Ok(CreditAuthorization { _view: self.view, binding: self.check(*claim, usage)?, usage })
     }
 }
 

@@ -192,6 +192,17 @@ native overrideは `NativePositiveClaim` の実origin/lineage/policyを検証し
 現在のlineageから親originが消えた場合は子もholdし、無関係なclaimは進行できる。
 単にcallerが渡したanchor一覧をnative authorityへ昇格させる実装にはしない。
 
+### 用途別の既存entitlement
+
+A5の共通Positive必要条件は既存の用途別権利とANDである。
+`RootedCreditView::authorize_entitlement(&CreditBinding, CreditUse)` の既定値はtyped denial。
+native ownerは現在のactual origin・paid/mining契約からその用途の権利を解決する。
+rootには要求用途、全祖先にはDependencyの既存権利を照合する。親へのedge固有export条件を省略しない。
+`TirCreditView` は元のtrusted viewへ委譲し、local terminal/署名/P承認から権利を生成しない。
+poster-funded paid FinalのB/F/R=0を維持し、Settlement許可をDagWeight/WorkReceipt/Rule E等へ昇格させない。
+既存8 native ownerのDATA readが実装されても、このentitlement resolverを省略してはならない。
+新wire/domain/policyや、peerの自己申告flagは追加しない。
+
 ### local-checked capability
 
 保存されたCoverage cursor/Case.PositivePassedはauthorityではない。

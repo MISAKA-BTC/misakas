@@ -12,7 +12,7 @@ native の信用認証と資金受付は、未接続の間は必ず拒否する�
 | `src/credit.rs` | 現viewに対する共通信用判定、全祖先の走査、循環・別branch・別result・不完全coverageの拒否 |
 | `src/credit/consumers.rs` | 推論報酬・receipt・DAG weight・Rule E・決済・prefix・依存の全7用途の同一gate入口 |
 | `src/fees.rs` | 有限なprivate会計参照実装。実原資を模した明示的初期残高、hold、適格サービスの一回精算、返金、契約burn、原子的受付とrollback |
-| `src/credit/tests.rs` | 全7用途の同一判定、未検証祖先、独立claim、diamond、循環、binding差替え、上限 |
+| `src/credit/tests.rs` | 全7用途の共通必要条件と用途別既存権利、未検証祖先、独立claim、diamond、循環、binding差替え、上限 |
 | `src/fees/tests.rs` | 支払・返金の重複、Panel交代、未検証終了、失敗の原子性、rollback、古い準備・別storeのtoken拒否 |
 | `tests/` | 独立到達/循環oracle・独立算術oracle・consumer用途転送の全列挙試験 |
 | `../positive-accounting-node/` | 実A1terminalを所有するviewと、実Transactionを既存escrow engineへ渡すnode adapter |
@@ -30,18 +30,26 @@ native の信用認証と資金受付は、未接続の間は必ず拒否する�
 2. A1が導出して受付時に固定したplan・必須relation数と、A1/A4によるローカル検査の完了結果。
 3. 現Gate Cの抽選検証者承認、適格fraudの状態、既存の満期・責任・carrier・資金条件。
 4. 署名された依存commitmentから認証した正規の親一覧。空一覧も認証する。再利用stateのexport identity/root/位置/model/tokenizer/layoutの照合は、このadapterの責任。
+5. `authorize_entitlement(binding, usage)` による用途別の既存権利。actual origin・paid/mining契約と現在条件から解決し、未実装の既定portは全用途を拒否する。
 
-全祖先について同じ条件を評価する。未検証Aに依存するCはholdし、独立Bは進行できる。
+全祖先についてPositiveの共通必要条件を評価し、rootは要求された用途、祖先はDependencyの既存権利を確認する。
+祖先へrootのReward/DagWeight権利を要求せず、edgeごとのexport条件も従来どおり認証する。
+未検証AやDependency権利のないAに依存するCはholdし、独立Bは進行できる。
 scopeはclaim別の固定ancestry anchorとして `validate_scope` で検証し、current tipとの単純一致へ置換しない。
 祖先の取消し・未解決告発・view変更は次の読取りへ直接反映し、子の保存済みready flagを使わない。
 祖先数・edge数には明示的上限があり、超過時に走査を省略して許可することはない。
+
+PositivePassed・全coverage・P承認・資金Readyは既存権利の追加必要条件であり、新しい権利を作らない。
+Kernel/Native39のposter-funded paid FinalがB/F/R=0なら、Positive/PだけでDagWeight・WorkReceipt・Rule Eを与えない。
+Settlementの許可を他用途へ転用しない。私設fixtureのAll/用途集合は明示的な試験入力であり、native resolverではない。
 
 公開DTOの `PositivePassed`、任意のGate C boolean、旧claim IDの認証rowだけでは許可しない。
 Gate Cの正直な割合の前提は既存規則のまま維持する。モデルの階層・登録モデルの審査をこの判定へ加えない。
 `CreditAuthorization` はviewを借用する内部型であり、constructor・deserialize・native支払権限を持たない。
 leafの `UnavailableNativeCredit` は、全用途を `MissingNativeResultBinding` として拒否する。
 node crateの `TirCreditView` は実A1terminal・署名済み新result・A0 canonical selector/planを照合する。
-そのviewに渡すGate C/資金/依存のrooted native解決は別の条件であり、単なるlocal matchでは埋めない。
+用途別entitlementは元のtrusted viewへ委譲する。そのviewに渡すGate C/資金/依存/既存権利のrooted native解決は
+別の条件であり、単なるlocal matchでは埋めない。
 
 A0 `327393e8e` のaux151 valueとcore `PositiveRowsV2::read/bundle`を使う `PositiveCreditRows` も接続した。
 実stateのrow欠落、malformed value/key、cross-row link、Miner/payer/Witness署名の失敗を区別し、
