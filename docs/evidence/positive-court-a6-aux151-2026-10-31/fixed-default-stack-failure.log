@@ -1,0 +1,5 @@
+
+running 1 test
+test palw_native_resource_v1::restore::tests::direct_restore_success_keeps_native_owner_and_default_off_state_parity ... 
+thread 'palw_native_resource_v1::restore::tests::direct_restore_success_keeps_native_owner_and_default_off_state_parity' (2848727) has overflowed its stack
+fatal runtime error: stack overflow, aborting

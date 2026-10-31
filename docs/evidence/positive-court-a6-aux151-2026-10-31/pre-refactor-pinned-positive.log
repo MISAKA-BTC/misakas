@@ -1,0 +1,20 @@
+
+running 15 tests
+test palw_positive_rows_v2::restore::tests::complete_signed_bundle_restores_only_a_structural_diagnostic ... ok
+test palw_positive_rows_v2::restore::tests::duplicate_and_malformed_rows_are_rejected_before_typed_vec_collection ... ok
+test palw_positive_rows_v2::restore::tests::every_admission_row_and_positive_witness_link_is_required ... ok
+test palw_positive_rows_v2::restore::tests::native_initial_journal_is_required_and_uses_its_own_sequence_convention ... ok
+test palw_positive_rows_v2::restore::tests::packet_author_and_canonical_relation_bound_are_checked ... ok
+test palw_positive_rows_v2::restore::tests::panel_key_replacement_cannot_reuse_global_attempt_ordinal ... ok
+test palw_positive_rows_v2::restore::tests::orphan_rows_of_all_reference_kinds_are_rejected ... ok
+test palw_positive_rows_v2::restore::tests::saved_pass_cannot_point_to_foreign_witness_and_signature_failure_is_not_absence ... ok
+test palw_positive_rows_v2::tests::all_ten_native_row_kinds_roundtrip_with_canonical_typed_keys_and_real_signatures ... ok
+test palw_positive_rows_v2::tests::fixed_enum_memory_is_charged_per_short_row_and_exact_limits_are_enforced ... ok
+test palw_positive_rows_v2::restore::tests::union_summaries_must_equal_retained_canonical_once_only_receipts ... ok
+test palw_positive_rows_v2::tests::key_aware_preflight_rejects_hostile_enum_option_lengths_and_every_truncated_prefix ... ok
+test palw_positive_rows_v2::tests::native_route_scanner_rejects_duplicate_and_unsorted_positive_keys_before_collection ... ok
+test palw_positive_rows_v2::tests::semantic_corruption_does_not_become_a_missing_row_or_a_smaller_resource_quote ... ok
+test palw_positive_rows_v2::tests::typed_restore_rejects_duplicate_orphan_rows_and_missing_atomic_journal_head ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 5392 filtered out; finished in 2.25s
+

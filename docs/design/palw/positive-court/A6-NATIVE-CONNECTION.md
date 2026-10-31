@@ -56,3 +56,18 @@ native reorg undoの中で、`PositiveRecoveryStore::rollback(case, transaction)
 ## 完了状態の区別
 
 A6のNode-local adapter、実RocksDB・実TIR・実process終了・二つの独立DB間importの検証と、native合意経路での受理・実UTXO精算・全Node同期は別である。後者のdispatcher/具体authority/schemaが未接続な間、Gate Cやnative activationを成功にしない。
+
+## 2026-10-31 aux151 接続追補
+
+A0 の正規 VALUE schema (`327393e8e`) を取り込み、`NativeWireScanV1`、`NativeHeapV1`、native carriage consistency と `from_served_rows_v1` へ登録した。従来の「native schema がない」という記述は本追補で更新する。public preset・carrier dispatcher・実 UTXO/funding 授権は引き続き別の接続責務である。
+
+- aux は **151**、共通 key は最大142 bytes、VALUE は最大16,384 bytes。10 kind の version/revision、enum/Option tag、key/value kind・ID、余剰・切詰めを検査する。新しい ID は割り当てない。P 認証 row は A0 所有の別 table136 であり aux151 に混ぜない。
+- wire scanner は固定 buffer を使い、BTreeMap へ集約する前に Positive key の重複・逆順を拒否する。直接 Borsh decode でも重複 aux key と aux151 の上限・局所整合を拒否する。
+- 短い ClaimIndex も `size_of::<NativeRowValue>()` に加え、固定 decode workspace と attempt-index の node envelope を全 entry に課金する。raw Vec の費用と別に計上し、不正 row に割引を与えない。共有 hash は同一 Borsh stream を逐次入力し、preflight のための Vec を作らない。
+- 復元では全10 kind の双方向参照、元 admission DAA における Miner/payer/Panel 署名、coverage/plan、case+attempt 一意性、資料三状態、receipt literal 数と union completed 数、PacketReceipt author/range を検査する。初期 Result/ClaimIndex/Case/Funding と JournalHead は同時に必要であり、head 欠落は拒否する。
+- native JournalHead は ResultAdmission を含む初期 sequence=1、previous=ZERO。初期 history origin は Result.origin、全 sequence の history origin は Case.last_event と一致する。private archive の初期 records=0 と alias しない。sequence>1 の previous/head/history digest の preimage・正規 domain・accepted prefix は、実 native history backend が別途再構築する。構造整合と root membership だけで履歴再実行成功や credit を認めない。
+- 復元は `O(N log N)`、全 Union/Receipt の prefix 走査は合計1回ずつ、補助 index は Witness 数以下。署名再認証は Case 当たり2回、Witness 当たり1回。report は計数 DTO であり、実 native budget/receipt/credit capability ではない。
+
+A6 の `PositiveRecoveryStore::rollback` は選択履歴と関連 native 行の transaction undo に用いる。A2 の local spent I/O budget は branch/reorg で巻き戻さない別寿命の永続領域に置き、この undo の RelatedRow に含めない。chain request/accepted-response の undo と local traffic の消費を同一視しない。
+
+検証と残る境界は [A6-AUX151-VALIDATION.md](A6-AUX151-VALIDATION.md) を参照。
