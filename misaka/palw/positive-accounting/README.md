@@ -1,7 +1,8 @@
 # A5: Positive Court の信用・会計・依存関係
 
 2026-10-31。A0 common contract **version 2 / revision 1** に対する先行実装。
-`CreditGate` と `AtomicCourtStore` の接続口を実装した。**実Court・native money engine・全consumerへの接続完了ではない。**
+`CreditGate` と `AtomicCourtStore` の接続口を実装した。後続のnode crateで、実A1検査terminalと既存escrow精算checkerへの接続まで検証した。
+**native新claim受付・全consumer・永続化の接続完了ではない。**
 native の信用認証と資金受付は、未接続の間は必ず拒否する。ネットワーク設定・wire tag・署名domain・既存IDの意味は追加・変更しない。
 
 ## 変更範囲
@@ -9,9 +10,12 @@ native の信用認証と資金受付は、未接続の間は必ず拒否する�
 | ファイル | 内容 |
 | --- | --- |
 | `src/credit.rs` | 現viewに対する共通信用判定、全祖先の走査、循環・別branch・別result・不完全coverageの拒否 |
+| `src/credit/consumers.rs` | 推論報酬・receipt・DAG weight・Rule E・決済・prefix・依存の全7用途の同一gate入口 |
 | `src/fees.rs` | 有限なprivate会計参照実装。実原資を模した明示的初期残高、hold、適格サービスの一回精算、返金、契約burn、原子的受付とrollback |
 | `src/credit/tests.rs` | 全7用途の同一判定、未検証祖先、独立claim、diamond、循環、binding差替え、上限 |
 | `src/fees/tests.rs` | 支払・返金の重複、Panel交代、未検証終了、失敗の原子性、rollback、古い準備・別storeのtoken拒否 |
+| `tests/` | 独立到達/循環oracle・独立算術oracle・consumer用途転送の全列挙試験 |
+| `../positive-accounting-node/` | 実A1terminalを所有するviewと、実Transactionを既存escrow engineへ渡すnode adapter |
 | `../../../scripts/ci/positive-accounting-ci.sh` | A0所有のworkspace登録を変更せず実行できる、root lockfileを使う検証入口 |
 
 元checkoutの未コミット変更は移動・削除していない。A5 branch はA0の正式共通契約commit
@@ -34,6 +38,8 @@ native の信用認証と資金受付は、未接続の間は必ず拒否する�
 Gate Cの正直な割合の前提は既存規則のまま維持する。モデルの階層・登録モデルの審査をこの判定へ加えない。
 `CreditAuthorization` はviewを借用する内部型であり、constructor・deserialize・native支払権限を持たない。
 実際のnative adapterは `UnavailableNativeCredit` で、全用途を `MissingNativeResultBinding` として拒否する。
+node crateの `TirCreditView` は実A1terminal・署名済み新result・A0 canonical selector/planを照合する。
+そのviewに渡すGate C/資金/依存のrooted native解決は別の条件であり、単なるlocal matchでは埋めない。
 
 ## 料金・原子性の接続
 
@@ -69,6 +75,11 @@ owner tokenで別storeへの流用を拒否する。会計側はMinerの計算�
 nativeのA6実装は既存の資源計上とmoney engineを使い、変更rowを同じjournalへ保存する必要がある。
 このbookのundoをそのままIBD/snapshot形式として採用しない。実Nodeでの性能・永続化は未検証。
 
+既存money engineとの接続用に `settlement_projection` を追加した。private-field projectionには現在世代と実支払順序を保持し、
+遅れて小さい番号のunitを払っても、既存escrow scheduleが消費済みのprefixを書き換えない。
+node bridgeは `validate_projection` でowner/世代/現在planを再検査し、実Transactionのcached IDと出力・返金・burn・継続escrowを
+既存 `palw_escrow_qualified_spend_v1` で検査する。新funding consentとnative rowの生成権限は付与しない。
+
 ## 全consumerの調査表
 
 以下は既存入口の一覧であり、**新Positive経路の接続済みカバレッジ表ではない**。
@@ -99,16 +110,23 @@ rootedな新claimのrow/有効化契約が未割当なので、この変更で�
 scripts/ci/positive-accounting-ci.sh
 ```
 
-scriptは一時manifestを作り、repoのlockfileと同じA0契約を使ってA5だけを検証する。
-一時manifestは終了時に削除する。A0のworkspace登録後は通常の `cargo test -p misaka-palw-positive-accounting --locked` でも実行できる。
-workspace登録用の最小差分は `workspace-registration.patch` に用意した。A0が統合時に適用する。
+scriptは一時manifestを作り、repoのlockfileと同じA0契約を使ってA5を検証する。独立integration testsも自動登録する。
+一時manifestは終了時に削除する。leafはA0 `4dede1aff` でworkspace登録済みなので、
+通常の `cargo test -p misaka-palw-positive-accounting --locked` でも実行できる。
+元の `workspace-registration.patch` は適用済みの提案履歴。node crateの追加登録差分は同crateに置いた。
 
-実行済み: A5の29単体試験とA0共通契約の13試験、全成功。
+初期実行済み: A5の29単体試験とA0共通契約の13試験、全成功。
 raw logは `evidence/a5-unit-tests.log` と `evidence/a0-contract-tests.log`、
 対象sourceのSHA-256・base commit・コマンド・終了codeは `evidence/validation.json` に保存した。
 認証済みnative資金、実Court裁定、旧G14全回帰、実process、
 再起動/reorg/IBD、実測性能は未検証。単体試験内の権威adapterはsynthetic fixtureであり、
 実Courtへ接続できたという評価に加算しない。仮のnative成功処理はない。
+
+並列実装段階ではleaf単体32件・独立oracle/consumer試験5件、実A1terminal経路6件・既存escrow engine経路9件が成功。
+後続の同一candidate検証ログは `evidence/independent-phase2/` に追加し、初期ログを上書きしない。
+新funding consentを旧FundingTermsへ直接結ぶとresult/service/funding/claimの循環identityになるため、
+実UTXO受付は未接続として維持する。共有API/ID・全native readerの具体要求は
+`../../../handoff/positive-court/A5-to-A0.md` にまとめた。
 
 | 引継ぎ先 | 必要な変更 |
 | --- | --- |

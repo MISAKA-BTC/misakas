@@ -4,6 +4,8 @@
 
 この文書と `misaka/palw/positive-contract/` を担当間の基準とする。A0が共通型・署名domain・識別子・framing・port・旧新切替を管理する。A1〜A7が各自で型や成功条件を再定義しない。ここで定めるのは私設interchange r1であり、native tag、公開profile、activation heightの割当ではない。独立レビューと各実装の統合は別の状態である。
 
+追加接続仕様: [TIR interchange](TIR-INTERCHANGE-R1.md) / [native・funding契約](NATIVE-CONTRACT-R1.md)。既存r1 field順・署名domainは保持し、新しい外側の認証・署名scopeを明示する。
+
 ## 1. 基準と変更管理
 
 - workspace: `codex/positive-court-a0`。初期baseは `a5800d2dd5d334e89f7a1ddb6e956aedcbf4adf5`。

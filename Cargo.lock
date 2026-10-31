@@ -6319,6 +6319,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "misaka-palw-positive-accounting-node"
+version = "1.1.0"
+dependencies = [
+ "borsh",
+ "kaspa-consensus-core",
+ "kaspa-hashes",
+ "libcrux-ml-dsa",
+ "misaka-palw-kernel",
+ "misaka-palw-positive-accounting",
+ "misaka-palw-positive-contract",
+ "misaka-palw-tir",
+ "misaka-palw-tir-exec",
+]
+
+[[package]]
 name = "misaka-palw-positive-contract"
 version = "1.1.0"
 dependencies = [

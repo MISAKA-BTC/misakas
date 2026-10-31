@@ -470,3 +470,33 @@ fn out_of_order_rollback_or_expired_admission_cannot_change_balances() {
     assert_eq!(s.reserved_resources(), 4);
     assert!(s.conserved());
 }
+
+#[test]
+fn native_projection_preserves_paid_prefix_when_a_lower_source_unit_arrives_later() {
+    let a = authority();
+    let mut s = store(&a);
+    let admitted = admit(&mut s, 10);
+    delivered(&a, data(1), 2);
+    pay(&mut s, &admitted, data(1));
+    delivered(&a, data(0), 2);
+    let next = s.prepare_service(&admitted, data(0)).unwrap();
+    let projection = s.settlement_projection(&admitted, &next).unwrap();
+    assert_eq!(projection.payments().iter().map(|(key, _)| *key).collect::<Vec<_>>(), vec![data(1), data(0)]);
+    assert_eq!(projection.before().paid_unique_service, 10);
+    assert_eq!(projection.after().paid_unique_service, 20);
+    assert_eq!(projection.after().remaining, 80);
+    assert!(projection.after().conserved());
+    s.apply_transition(&admitted, next).unwrap();
+}
+
+#[test]
+fn a_native_projection_cannot_be_created_from_a_stale_prepare_after_rollback() {
+    let a = authority();
+    let mut s = store(&a);
+    let admitted = admit(&mut s, 10);
+    delivered(&a, data(0), 2);
+    let stale = s.prepare_service(&admitted, data(0)).unwrap();
+    let undo = pay(&mut s, &admitted, data(0));
+    s.rollback(undo).unwrap();
+    assert_eq!(s.settlement_projection(&admitted, &stale).err(), Some(AccountingError::StalePreparation));
+}
