@@ -87,6 +87,8 @@ workflow-serializer.workspace = true
 workflow-wasm.workspace = true
 
 [dev-dependencies]
+# Court receipt/recovery tests use the real private book, never a runtime dependency.
+misaka-palw-positive-accounting.workspace = true
 criterion.workspace = true
 # DA16: the sketch's fixture weights for the public-material tests (an artifact, its inventory, its kernel commitments).
 misaka-palw-tir-sketch = { path = "../../misaka/palw/tir/sketch" }
