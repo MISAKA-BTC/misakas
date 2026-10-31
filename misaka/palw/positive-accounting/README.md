@@ -16,6 +16,7 @@ native の信用認証と資金受付は、未接続の間は必ず拒否する�
 | `src/fees/tests.rs` | 支払・返金の重複、Panel交代、未検証終了、失敗の原子性、rollback、古い準備・別storeのtoken拒否 |
 | `tests/` | 独立到達/循環oracle・独立算術oracle・consumer用途転送の全列挙試験 |
 | `../positive-accounting-node/` | 実A1terminalを所有するviewと、実Transactionを既存escrow engineへ渡すnode adapter |
+| `../positive-accounting-node/src/rows.rs` | 実coreのaux151 typed read/bundleへ接続したdata-only信用入力read。欠落・破損・link・署名失敗とnative owner未実装を区別 |
 | `../../../scripts/ci/positive-accounting-ci.sh` | A0所有のworkspace登録を変更せず実行できる、root lockfileを使う検証入口 |
 
 元checkoutの未コミット変更は移動・削除していない。A5 branch はA0の正式共通契約commit
@@ -38,9 +39,17 @@ scopeはclaim別の固定ancestry anchorとして `validate_scope` で検証し�
 公開DTOの `PositivePassed`、任意のGate C boolean、旧claim IDの認証rowだけでは許可しない。
 Gate Cの正直な割合の前提は既存規則のまま維持する。モデルの階層・登録モデルの審査をこの判定へ加えない。
 `CreditAuthorization` はviewを借用する内部型であり、constructor・deserialize・native支払権限を持たない。
-実際のnative adapterは `UnavailableNativeCredit` で、全用途を `MissingNativeResultBinding` として拒否する。
+leafの `UnavailableNativeCredit` は、全用途を `MissingNativeResultBinding` として拒否する。
 node crateの `TirCreditView` は実A1terminal・署名済み新result・A0 canonical selector/planを照合する。
 そのviewに渡すGate C/資金/依存のrooted native解決は別の条件であり、単なるlocal matchでは埋めない。
+
+A0 `327393e8e` のaux151 valueとcore `PositiveRowsV2::read/bundle`を使う `PositiveCreditRows` も接続した。
+実stateのrow欠落、malformed value/key、cross-row link、Miner/payer/Witness署名の失敗を区別し、
+成功時も `SignedCreditInputs` というdata-only結果に留める。`NativeRowCreditGate` は同じ境界を全7用途で読み、
+後述の8 native ownerが未実装のため認可型は `Infallible` のまま拒否する。旧S/K/Vの認証へfallbackしない。
+必要ownerはaccepted origin、accepted prefix/import世代、登録期待値、local replay、live funding/capital、
+依存/export、現在Court/資源、実P draw Certifiedである。
+A0 `069d54007` のP statement DTO認証は実抽選の`Certified`ではなく、`PublicCheckCertified`も代用しない。
 
 ## 料金・原子性の接続
 
@@ -87,7 +96,8 @@ node bridgeは `validate_projection` でowner/世代/現在planを再検査し�
 ## 全consumerの調査表
 
 以下は既存入口の一覧であり、**新Positive経路の接続済みカバレッジ表ではない**。
-native namespaceはA0で予約済みだがvalue/live decoder/rooted readが未完成なので、この変更では既存readerを変更していない。
+namespace・固定row value・data-only typed readerはA0で確定済みだが、live decoderとnative authority ownerは未完成なので、
+この変更では既存native consumerのreaderを変更していない。
 各入口を新経路へ接続する際は、次の用途で同じ `CreditGate` を読み、旧claimの挙動を変えないこと。
 基準 `a5800d2dd` のcore/consensus内をGate C・certification predicateで検索すると、コメント/設定を含め116箇所あった。
 
@@ -134,10 +144,12 @@ raw logは `evidence/a5-unit-tests.log` と `evidence/a0-contract-tests.log`、
 その後、非循環FundingScopeは共有契約として確定し、native API提案・固定anchor検証・実署名/actual output検査へ進んだ。
 最新の候補別ログは `evidence/independent-phase3*`、row/readerの具体提案は
 `../../../handoff/positive-court/A5-native-credit-api.md` を参照する。初期・phase2の原記録は変更していない。
+後続の `evidence/phase4-native-rows/README.md` は、A0採用rowを実coreから読む7試験とlib clippy成功、
+共通row試験の対象commitの違い、data-only境界を記録する。phase3の旧候補の結果と合算してnative全体完成とはしない。
 
 | 引継ぎ先 | 必要な変更 |
 | --- | --- |
-| A0 | namespaceとworkspace登録は完了。新claimのrow value/P getter/live decoder、rooted binding、有効化条件、必要なmoney legを確定 |
+| A0 | namespace/workspace/aux151型/P statement DTOは確定。P value/getter・実draw/native owner・live decoder・有効化条件・必要なmoney legを完成 |
 | A1/A4 | `checked_coverage` と全必須planのbinding、実サービス受理・実証拠作者・現在status・終了可能性を接続 |
 | A5（統合段階） | 上表の全native consumerと既存money engineに同じpredicate/精算計画を接続 |
 | A6 | 同一transaction内のnative資金・資源・case・責任・支払markerをjournal化し、復元時にローカル計算履歴を再検査 |

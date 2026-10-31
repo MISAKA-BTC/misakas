@@ -1,0 +1,13 @@
+{
+  "command": [
+    "cargo",
+    "test",
+    "--offline",
+    "--locked",
+    "-p",
+    "misaka-palw-positive-contract"
+  ],
+  "exit_code": 0,
+  "base_commit": "e4e01019d160fa013b5910808d733fedbeb05662",
+  "raw_log": "common-native-rows.log"
+}

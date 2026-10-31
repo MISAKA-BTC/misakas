@@ -1,27 +1,61 @@
 # A5 → A0: native信用rowと読取APIの最小提案
 
-基準: A0 native契約 `42a60b840`、[NATIVE-CONTRACT-R1.md](../../docs/design/palw/positive-court/NATIVE-CONTRACT-R1.md)。
-2026-10-31。以下は**A0による採用待ちの型・field提案**であり、共通codecの確定・native受付成功・有効化の宣言ではない。
+初版の基準: A0 native契約 `42a60b840`、[NATIVE-CONTRACT-R1.md](../../docs/design/palw/positive-court/NATIVE-CONTRACT-R1.md)。
+2026-10-31更新。aux151型・`AcceptedOrigin`・core typed readerはA0 `327393e8e` で採用済み、
+P statement DTO/署名scopeは `069d54007` で採用済みである。
+現在のvalue正本は [rows.rs](../../misaka/palw/positive-contract/src/rows.rs)、P DTO正本は
+[certification.rs](../../misaka/palw/positive-contract/src/certification.rs)。
+以下のfield提案表は採用前の要求履歴として残す。private native owner、実P value/getter/fold、old/new handleは未完成であり、
+署名済みdataのread成功をnative受付・実抽選`Certified`・信用・有効化の完成とは扱わない。
 既に予約された `native::LIFECYCLE_OBJECT_TAG`、`KERNEL_AUX_TABLE`、`NativeRowKey`、
 `CERTIFICATION_SUBJECT_PREFIX`、`certification_subject`、`ruleset_id`だけを使う。新しい番号・key kind・署名domain・hash domainは割り当てない。
 
+### 採用済みFundingRowの三勘定を集計private bookへ潰さない
+
+`rows::FundingRow` のvalue正本はfee/capital/surplusを別の `BalanceLeg` とする。
+native constructorは `fee.initial = basis.required_fee`、`capital.initial = basis.required_capital`、
+`surplus.initial = actual_output - fee.initial - capital.initial` をchecked arithmeticで導出する。
+`fee.initial <= consent.max_fees` と全初期額 `initial_locked <= consent.max_locked` は別の上限である。
+private `HoldTotals` や `PayerSignedFeeOnlyOutput.amount()` はこのrowへの代入済み値でもnative資金capabilityでもない。
+
+説明用に `actual_output=100 / required_fee=27 / required_capital=0` とすると、正規分割は **27 / 0 / 73** になる。
+source10・明示burn2を精算し、正規返還条件が成立した未検証終了の集計返金88は、
+**fee.refunded=15 + surplus.refunded=73** であり、fee legへ88を記入してはいけない。
+private bookのinitial100をfee.initialへコピーすることも不可。これは説明例で、fee値の採用ではない。
+capitalありは現A5 fee-only adapterでは明示unsupportedであり、capital・surplusの解放条件はnative ownerが別々に解決する。
+
+全予定source unitの料金合計は `Service.budget.fee`、全Courtサービスと契約burnはpayerの `max_fees` と
+正規quote由来の必要feeで照合する。`Case.usage.fee` はMiner資料契約の消費量で、全Court支払の合計を代入しない。
+実outputの余剰をfee capへ含めてnative fee額と混同しない。現private集計への保守的な拒否や署名preflightを、
+余剰付きcanonical native rowの受理まで完了したと扱わない。
+
+native接続では、全三勘定・現在outpoint・`last_settlement`・実provider/recipientを含む正規dues・
+source receiptの一回払い参照・source/資源/責任予算・journal head・実UTXO差分を同じtransactionで更新し、
+reorgで同じbefore-imageから戻す。単なる `BalanceLeg.validate()`、receiptの `Some(settlement)`、
+保存されたjournal参照は、実eventの受理・現在lock・一回精算を認可しない。
+新P attestationの署名成功も、この資金/精算ownerを代替しない。
+
 ## 1. 採用後にそのまま実装する境界
 
-A0に必要な決定は、次の四つである。
+A0への要求の現在地は次のとおり。
 
-1. §2のaux151 value型と、A6のbounded scanner/NativeHeap/restore検査への同時登録。
-2. §3のP subject value型・typed getterと、実抽選`Certified`だけを返す決定capability。
+1. aux151 value型は採用・data-only readまで実装済み。A6のbounded scanner/NativeHeap/restore検査への登録は残る。
+2. P statement DTOは採用済み。§3のP subject value型・typed getterと、実抽選`Certified`だけを返す決定capabilityは残る。
 3. §4のResult/Caseのaccepted origin・現在lineage・accepted-prefixを照合する読取session。
 4. §5のold/newを区別した読取handleを、全consumerの新形式armへ渡すこと。
 
-A5は採用された型を直接読んで `RootedCreditView` / `CreditGate` を実装する。
+A5は採用された型を実core `PositiveRowsV2::read/bundle`で読むdata-only bridgeを実装済みである。
+`PositiveCreditRows::resolve`は `SignedCreditInputs` を返し、Caseのpositive_witnessがあればWitness/Coverageも共通validatorで照合する。
+`NativeRowCreditGate`は全7用途で同じ欠落/破損/link/署名失敗を返し、data確認後も8 native ownerをtyped missingとして拒否する。
+origin/prefix、登録期待値、local replay、live funding/capital、依存/export、現在Court/資源、実P drawのcapabilityが揃えば、
+ここからnative `RootedCreditView` / `CreditGate` へ接続する。
 既存の公開`RootedCreditFacts`や任意`RootedCreditView`実装からnative支払権限を生成するadapterは作らない。
 row decode、origin、local replay、資金、抽選のいずれかが未接続なら、対応する理由を返して拒否する。
 
 ## 2. aux151 value: A5読取りに必要な具体field
 
-全valueは `(version, revision, body)` とし、keyのversion/revision・kindとvalue型を一致させる案。
-下表の順序はfield順の提案で、A0が採用時にBorsh順序・上限・vectorを確定する。
+採用後の全valueは `(version, revision, body)`。正確なfield順序・上限はA0 `rows.rs` が唯一の正本である。
+下表の順序・仮称は採用前のA5要求履歴であり、codec仕様として使わない。
 Result/Case/Coverageに以下のA5必須fieldを持たせ、A4/A6が必要な残りの進捗・予算を同じ型へ統合する。
 この表だけでCourt全状態schemaが完成したとは扱わない。
 
@@ -87,7 +121,10 @@ outcome / decided_at
 
 `accepted_positive_attestations`はA0の新P subject bodyを実認証した参照である。
 旧`Reproduced`や旧trace transcriptの意味を黙って「公開Positive検査済み」へ変更しない。
-新attestation body/署名scopeが未採用ならP決定capabilityも未実装のままとする。
+新attestation body/署名scopeはA0 `069d54007` で採用済み。
+`PositiveCourtAttestationV2::authenticate`は期待されたliteral statementと署名を認証するだけであり、
+実draw membership、現在origin、期限、担保、承認位置、`Certified` outcomeを生成しない。
+これらnative ownerが未実装の間、P決定capabilityも未実装のままとする。
 
 native P-readerはnative certification foldから返るprivate-fieldの `DrawCertified` associated capabilityを要求する。
 これには現在sessionのResult/Case/subject、実draw、採用policy、承認位置、異議/責任windowを結び付ける。
@@ -195,7 +232,7 @@ RPC/SDK表示も同じtyped handleと判定理由を使う。PositivePassed、Dr
 | 既存API/位置 | 利用範囲・必要な差分 |
 | --- | --- |
 | `PalwChainStateV2::{kernel_route_state_v1,state_root,last_point}` (`palw_state_v2/chain_state.rs`) | 同じ現stateからrowとpointを読む。import/accepted-prefix/ancestryのcapabilityはこれだけでは得られない |
-| `PalwKernelRouteStateV1::aux_row<T>` (`palw_kernel_route_v1.rs`) | 生の参考読取りのみ。decode失敗と欠落を共にNoneへ落とすためnative信用readへそのまま使わず、A6のbounded typed `Result<Option<Row>, DecodeError>` getterを追加 |
+| `PalwKernelRouteStateV1::aux_row<T>` (`palw_kernel_route_v1.rs`) | decode失敗と欠落を共にNoneへ落とす旧API。新aux151は実装済み `PositiveRowsV2::read` のtyped Resultを使い、欠落と破損を分離する。A6 scanner/restore/NativeHeapへの登録は残る |
 | `preflight_native_value_v1` / `NativeWireScanV1` / NativeHeap | key/valueをallocation前に検査し、所有rowのleaseを取る。A6がaux151とP-rowをscanner/restoreへ接続 |
 | `reachability_service.try_is_chain_ancestor_of`、selected-chain store (`virtual_processor/processor.rs`) | VPで実anchor lineageを解決。store/importの不明・エラーはUnavailable。callerのcanonical boolを入口へ流さない |
 | VPのpruning/import statusとepoch照合 (`processor/routed_material_v2.rs`) | 同じimport世代でのrooted read/refreshの既存パターン。Positive用accepted-prefix検査と結合 |
@@ -208,9 +245,11 @@ RPC/SDK表示も同じtyped handleと判定理由を使う。PositivePassed、Dr
 
 ## 7. 型採用直後の最小実装手順
 
-1. A0がvalue型・P key getter・old/new handleを採用し、A6がtyped read/restore scannerを同時に登録。
-2. A5が専用native reader moduleを追加し、ClaimIndex→Result→Case→Witness/Coverage→Funding→P decisionの
-   checked readsを実装。writerはA4/A6既存one-writerに残す。shared module登録はA0が行う。
+1. value型はA0採用済み。P value/getter・old/new handleの採用と、A6のtyped scanner/restore登録が残る。
+2. **DATA read部分は実装済み**。node `rows::PositiveCreditRows` が実coreのClaimIndex→Result/Case/Funding bundleと
+   Witness/Coverageを読み、欠落・malformed・link・auth失敗を区別する。data成功からnative ownerを作らず、
+   全7用途は `NativeRowCreditGate` で同じmissingを返す。実P decision/current-view/readinessとの合成は残る。
+   writerはA4/A6既存one-writerに残し、shared module登録はA0が行う。
 3. node側で実A1 terminal/A6 replayとnative sessionを合成し、`validate_scope`と既存leaf gateへ接続。
 4. 各consumerにtyped old/new dispatchを追加。Positive armだけがこのgateを呼び、旧armの回帰を維持。
 5. 同一candidateで、別固定anchor依存の成功、親origin除去、P以外のrow借用、PublicCheckCertified、
