@@ -6505,6 +6505,7 @@ dependencies = [
  "libc",
  "libcrux-ml-dsa",
  "misaka-palw-base0",
+ "misaka-palw-positive-accounting",
  "misaka-palw-positive-contract",
  "misaka-palw-tir",
  "misaka-palw-tir-artifact",

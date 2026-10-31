@@ -38,8 +38,8 @@ misaka-palw-base0 = { workspace = true, optional = true }
 [features]
 # The fused unit-row kernels on the GPU (macOS): bit-identical to the CPU kernels, behind a node flag.
 metal = []
-node = ["dep:kaspa-consensus-core", "dep:misaka-palw-tir-artifact", "dep:libc", "dep:borsh", "dep:blake2b_simd", "dep:tempfile"]
-positive-contract = ["node", "dep:misaka-palw-positive-contract"]
+node = ["dep:kaspa-consensus-core", "dep:misaka-palw-tir-artifact", "dep:misaka-palw-positive-contract", "dep:libc", "dep:borsh", "dep:blake2b_simd", "dep:tempfile"]
+positive-contract = ["node"]
 positive-panel = ["positive-contract"]
 legacy-bench = ["node", "dep:misaka-palw-base0"]
 
@@ -49,6 +49,7 @@ legacy-bench = ["node", "dep:misaka-palw-base0"]
 cc.workspace = true
 
 [dev-dependencies]
+misaka-palw-positive-accounting.workspace = true
 # The golden vectors carry each primitive as its canonical Borsh encoding.
 borsh.workspace = true
 rand.workspace = true
