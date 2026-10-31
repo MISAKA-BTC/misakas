@@ -1596,15 +1596,16 @@ impl FlowContext {
         self.partition_watch.lock().forget_peer(peer);
     }
 
-    /// **LIVE-R1: start a verified resync.** The node (whose data directory the daemon has just moved
-    /// aside) stays out of participation — the partition hold — until long-lived outbound peers confirm
-    /// the chain it synced (`PartitionWatch::resync_verdict`); then `reporter` is called once and the hold
-    /// is released. Never started by the node itself.
+    /// **LIVE-R1: start or resume an operator-requested resync's confirmation hold.** An initial
+    /// resync moves the old data directory aside; a pending report restores the hold after a restart
+    /// without moving the partial database. Participation stays held until long-lived outbound peers
+    /// confirm the chain (`PartitionWatch::resync_verdict`); then `reporter` is called once. A new
+    /// resync is never initiated by network input.
     pub fn begin_verified_resync(&self, reporter: ResyncReporter) {
         *self.verified_resync.lock() = Some(reporter);
         self.chain_participation().set_partition_hold(true);
         warn!(
-            "VERIFIED RESYNC: syncing from an empty data directory; this node will not mine, attest or report synced until \
+            "VERIFIED RESYNC: peer confirmation pending for this data directory; this node will not mine, attest or report synced until \
              at least {} long-lived outbound peers confirm the chain it synced.",
             crate::flowcontext::partition_watch::RESYNC_MIN_CONFIRMING_PEERS
         );
