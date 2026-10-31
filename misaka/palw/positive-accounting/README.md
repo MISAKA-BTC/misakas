@@ -31,6 +31,7 @@ native の信用認証と資金受付は、未接続の間は必ず拒否する�
 4. 署名された依存commitmentから認証した正規の親一覧。空一覧も認証する。再利用stateのexport identity/root/位置/model/tokenizer/layoutの照合は、このadapterの責任。
 
 全祖先について同じ条件を評価する。未検証Aに依存するCはholdし、独立Bは進行できる。
+scopeはclaim別の固定ancestry anchorとして `validate_scope` で検証し、current tipとの単純一致へ置換しない。
 祖先の取消し・未解決告発・view変更は次の読取りへ直接反映し、子の保存済みready flagを使わない。
 祖先数・edge数には明示的上限があり、超過時に走査を省略して許可することはない。
 
@@ -79,11 +80,14 @@ nativeのA6実装は既存の資源計上とmoney engineを使い、変更rowを
 遅れて小さい番号のunitを払っても、既存escrow scheduleが消費済みのprefixを書き換えない。
 node bridgeは `validate_projection` でowner/世代/現在planを再検査し、実Transactionのcached IDと出力・返金・burn・継続escrowを
 既存 `palw_escrow_qualified_spend_v1` で検査する。新funding consentとnative rowの生成権限は付与しない。
+新FundingScopeはA0 `42a60b840` の実payer署名とactual own-output preflightへ接続した。
+全予定source料金とCourt全体料金を別capで制限し、capital-bearingをfee-only bookへ混入させない。
+旧FundingTerms ID/claimを新namespaceへ転用せず、policy/schedule resolverとnative lockは未完成として拒否する。
 
 ## 全consumerの調査表
 
 以下は既存入口の一覧であり、**新Positive経路の接続済みカバレッジ表ではない**。
-rootedな新claimのrow/有効化契約が未割当なので、この変更では既存readerを変更していない。
+native namespaceはA0で予約済みだがvalue/live decoder/rooted readが未完成なので、この変更では既存readerを変更していない。
 各入口を新経路へ接続する際は、次の用途で同じ `CreditGate` を読み、旧claimの挙動を変えないこと。
 基準 `a5800d2dd` のcore/consensus内をGate C・certification predicateで検索すると、コメント/設定を含め116箇所あった。
 
@@ -113,7 +117,7 @@ scripts/ci/positive-accounting-ci.sh
 scriptは一時manifestを作り、repoのlockfileと同じA0契約を使ってA5を検証する。独立integration testsも自動登録する。
 一時manifestは終了時に削除する。leafはA0 `4dede1aff` でworkspace登録済みなので、
 通常の `cargo test -p misaka-palw-positive-accounting --locked` でも実行できる。
-元の `workspace-registration.patch` は適用済みの提案履歴。node crateの追加登録差分は同crateに置いた。
+元の `workspace-registration.patch` は適用済みの提案履歴。nodeもA0 `1eecf492a` / `6aeb4c42c` で登録済み。
 
 初期実行済み: A5の29単体試験とA0共通契約の13試験、全成功。
 raw logは `evidence/a5-unit-tests.log` と `evidence/a0-contract-tests.log`、
@@ -127,10 +131,13 @@ raw logは `evidence/a5-unit-tests.log` と `evidence/a0-contract-tests.log`、
 新funding consentを旧FundingTermsへ直接結ぶとresult/service/funding/claimの循環identityになるため、
 実UTXO受付は未接続として維持する。共有API/ID・全native readerの具体要求は
 `../../../handoff/positive-court/A5-to-A0.md` にまとめた。
+その後、非循環FundingScopeは共有契約として確定し、native API提案・固定anchor検証・実署名/actual output検査へ進んだ。
+最新の候補別ログは `evidence/independent-phase3*`、row/readerの具体提案は
+`../../../handoff/positive-court/A5-native-credit-api.md` を参照する。初期・phase2の原記録は変更していない。
 
 | 引継ぎ先 | 必要な変更 |
 | --- | --- |
-| A0 | common r1の正式commitを採用し、A5 crateをworkspaceへ登録。新claimのrooted binding、有効化条件、必要なmoney leg割当を確定 |
+| A0 | namespaceとworkspace登録は完了。新claimのrow value/P getter/live decoder、rooted binding、有効化条件、必要なmoney legを確定 |
 | A1/A4 | `checked_coverage` と全必須planのbinding、実サービス受理・実証拠作者・現在status・終了可能性を接続 |
 | A5（統合段階） | 上表の全native consumerと既存money engineに同じpredicate/精算計画を接続 |
 | A6 | 同一transaction内のnative資金・資源・case・責任・支払markerをjournal化し、復元時にローカル計算履歴を再検査 |

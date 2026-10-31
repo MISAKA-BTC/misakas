@@ -152,6 +152,17 @@ pub struct ServicePayment {
     pub amount: u64,
 }
 
+/// Read-only ceilings of the WHOLE admitted schedule, across every source unit
+/// and Panel. Delivered-only projections are insufficient for funding consent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FeeScheduleCeilings {
+    pub payer: PrincipalId,
+    pub fee_cap: u64,
+    pub fee_hold: u64,
+    pub source_fees: u64,
+    pub all_fees_and_burn: u64,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct CaseAccount {
     contract: ResolvedAdmission,
@@ -524,6 +535,25 @@ impl<A: AccountingAuthority> PrivateAccountingStore<A> {
             return Err(AccountingError::StalePreparation);
         }
         Ok(())
+    }
+    pub fn schedule_ceilings(&self, projection: &FeeSettlementProjection) -> Result<FeeScheduleCeilings, AccountingError> {
+        self.validate_projection(projection)?;
+        let contract = &self.case(projection.intent)?.contract;
+        let mut source_fees = 0u64;
+        let mut all_fees_and_burn = contract.contractual_burn;
+        for (key, terms) in &contract.services {
+            all_fees_and_burn = all_fees_and_burn.checked_add(terms.amount).ok_or(AccountingError::Overflow)?;
+            if matches!(key, ServiceKey::Source { .. }) {
+                source_fees = source_fees.checked_add(terms.amount).ok_or(AccountingError::Overflow)?;
+            }
+        }
+        Ok(FeeScheduleCeilings {
+            payer: contract.payer,
+            fee_cap: contract.fee_cap,
+            fee_hold: contract.hold,
+            source_fees,
+            all_fees_and_burn,
+        })
     }
     fn install(&mut self, candidate: Book) -> Result<AccountingUndo, AccountingError> {
         if !self.conserved_book(&candidate) {
