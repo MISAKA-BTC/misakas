@@ -8,22 +8,24 @@
 
 use kaspa_consensus_core::{
     Hash64,
-    mldsa87_primitives::{MLDSA87_PUBKEY_LEN, mldsa87_key_id},
+    mldsa87_primitives::{MLDSA87_PUBKEY_LEN, mldsa87_key_id, p2pkh_mldsa87_payload},
+    palw_court_original_escrow_v1::{ActualCarrierFundingV1, FundingRefusalV1, FundingTermsV1, inspect_transaction_v1},
     palw_funded_escrow_v1::{
         PalwEscrowDueKindV1, PalwEscrowDueV1, PalwEscrowFeeScheduleV1, PalwEscrowRefusalV1, PalwEscrowSpendPlanV1,
         PalwFundedEscrowRowV1, palw_escrow_qualified_spend_v1,
     },
-    palw_state_v2::PalwChainStateV2,
-    tx::Transaction,
+    tx::{Transaction, TransactionOutpoint},
 };
 use misaka_palw_positive_accounting::fees::{AccountingAuthority, AccountingError, FeeSettlementProjection, PrivateAccountingStore};
 use misaka_palw_positive_contract::{
-    identity::{Digest, PrincipalId, ResultId},
+    ContractError,
+    funding::AuthenticatedFunding,
+    identity::{Digest, FundingConsentId, FundingScopeId, PrincipalId, ResultId},
     messages::AuthenticatedResult,
 };
 use std::collections::BTreeMap;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ExistingEscrowFeeError {
     Accounting(AccountingError),
     TransactionIdentity,
@@ -33,9 +35,111 @@ pub enum ExistingEscrowFeeError {
     RecipientKey,
     LiabilityStillOpen,
     Budget,
-    MissingRootedEscrow,
-    RootedEscrowChanged,
+    LegacyTerms(FundingRefusalV1),
     Escrow(PalwEscrowRefusalV1),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FeeOnlyFundingError {
+    Contract(ContractError),
+    Accounting(AccountingError),
+    Carrier(FundingRefusalV1),
+    ResultBinding,
+    IntentBinding,
+    UnsupportedCapital,
+    PayerFeeCap,
+    MinerSourceFeeCap,
+    QuotedFeeCeiling,
+    Output,
+}
+
+/// Payer-signature and literal own-output preflight ONLY. In particular, the
+/// policy/schedule hashes in FundingPlanBasis do not resolve their canonical
+/// preimages or authorize arbitrary prices. Rooted policy/schedule derivation,
+/// actual UTXO/input authorization and the atomic reservation remain required.
+/// No constructor or serialization can promote this to native admission.
+pub struct PayerSignedFeeOnlyOutput<'a> {
+    actual: ActualCarrierFundingV1<'a>,
+    consent: FundingConsentId,
+    scope: FundingScopeId,
+    result: ResultId,
+}
+impl PayerSignedFeeOnlyOutput<'_> {
+    pub fn outpoint(&self) -> TransactionOutpoint {
+        self.actual.outpoint()
+    }
+    pub fn amount(&self) -> u64 {
+        self.actual.output().value
+    }
+    pub fn consent(&self) -> FundingConsentId {
+        self.consent
+    }
+    pub fn scope(&self) -> FundingScopeId {
+        self.scope
+    }
+    pub fn result(&self) -> ResultId {
+        self.result
+    }
+    pub fn require_native_admission(&self) -> Result<std::convert::Infallible, ContractError> {
+        misaka_palw_positive_contract::require_native_activation()
+    }
+}
+
+/// Authenticate the acyclic A0 funding links and check the actual carrier's own
+/// output, using the WHOLE admitted source/court schedule rather than just the
+/// units already delivered. This initial adapter is strictly fee-only; capital
+/// must not be silently counted as a fee hold or automatically refunded.
+pub fn inspect_signed_fee_only_funding<'a, A: AccountingAuthority>(
+    accounting: &PrivateAccountingStore<A>,
+    result: &AuthenticatedResult<'_>,
+    funding: &AuthenticatedFunding<'_>,
+    projection: &FeeSettlementProjection,
+    carrier: &'a Transaction,
+    now: u64,
+) -> Result<PayerSignedFeeOnlyOutput<'a>, FeeOnlyFundingError> {
+    let consent = funding.consent();
+    let service = funding.service();
+    let basis = funding.basis();
+    consent.validate(funding.result(), service, basis, now).map_err(FeeOnlyFundingError::Contract)?;
+    if funding.result() != result.commit() {
+        return Err(FeeOnlyFundingError::ResultBinding);
+    }
+    if basis.required_capital != 0 {
+        return Err(FeeOnlyFundingError::UnsupportedCapital);
+    }
+    let intent = projection.intent();
+    if intent.scope != result.commit().scope
+        || intent.case != result.commit().case_id()
+        || intent.result != result.commit().id()
+        || intent.funding_consent != consent.id().0
+        || intent.resource_quote != basis.resource_quote
+        || intent.expiry > consent.admission_expiry
+        || now >= intent.expiry
+    {
+        return Err(FeeOnlyFundingError::IntentBinding);
+    }
+    let ceilings = accounting.schedule_ceilings(projection).map_err(FeeOnlyFundingError::Accounting)?;
+    if ceilings.payer != consent.payer
+        || ceilings.fee_cap > consent.max_fees
+        || ceilings.fee_hold > consent.max_locked
+        || ceilings.all_fees_and_burn > consent.max_fees
+    {
+        return Err(FeeOnlyFundingError::PayerFeeCap);
+    }
+    if ceilings.source_fees > service.budget.fee {
+        return Err(FeeOnlyFundingError::MinerSourceFeeCap);
+    }
+    if ceilings.all_fees_and_burn > basis.required_fee || ceilings.fee_hold < basis.required_fee {
+        return Err(FeeOnlyFundingError::QuotedFeeCeiling);
+    }
+    let actual = inspect_transaction_v1(carrier, consent.funding_output_index).map_err(FeeOnlyFundingError::Carrier)?;
+    if actual.output().value != ceilings.fee_hold
+        || actual.output().value > consent.max_locked
+        || p2pkh_mldsa87_payload(&actual.output().script_public_key) != Some(h(consent.refund_payload))
+    {
+        return Err(FeeOnlyFundingError::Output);
+    }
+    Ok(PayerSignedFeeOnlyOutput { actual, consent: consent.id(), scope: consent.scope, result: result.commit().id() })
 }
 
 /// A principal ID is an unkeyed public-key identity; it is NEVER an address
@@ -79,24 +183,16 @@ impl ExistingEscrowFeeCheck {
     pub fn plan(&self) -> &PalwEscrowSpendPlanV1 {
         &self.plan
     }
-
-    /// A6 must recheck the exact currently rooted BEFORE row at commit time;
-    /// copying a row into this private checker never establishes that it exists.
-    pub fn recheck_rooted_before(&self, state: &PalwChainStateV2) -> Result<(), ExistingEscrowFeeError> {
-        let current = state.funded_escrows_v1().get(&self.plan.old.contract_id).ok_or(ExistingEscrowFeeError::MissingRootedEscrow)?;
-        if *current != self.plan.old {
-            return Err(ExistingEscrowFeeError::RootedEscrowChanged);
-        }
-        Ok(())
-    }
 }
 
 fn h(digest: Digest) -> Hash64 {
     Hash64::from_bytes(digest.0)
 }
 
-/// Connect a current A5 projection to the existing money engine. No second
-/// integer settlement implementation or new settlement-leg ID is introduced.
+/// Run a current A5 projection through the existing money-engine calculator.
+/// Its old FundingTerms ID/claim namespace remains LITERAL and SEPARATE from
+/// the new FundingConsent ID/result. This is not a mapping that lets a Positive
+/// claim spend a legacy escrow. No rooted-row authorization is returned here.
 /// The fee schedule is cumulative in ACTUAL prior settlement order, so a late
 /// lower-numbered source unit cannot rewrite an already consumed prefix.
 #[allow(clippy::too_many_arguments)]
@@ -104,6 +200,7 @@ pub fn check_existing_escrow_fee_spend<A: AccountingAuthority>(
     accounting: &PrivateAccountingStore<A>,
     result: &AuthenticatedResult<'_>,
     projection: &FeeSettlementProjection,
+    legacy_terms: &FundingTermsV1,
     escrow: &PalwFundedEscrowRowV1,
     recipients: &FeeRecipientKeys,
     transaction: &Transaction,
@@ -120,11 +217,17 @@ pub fn check_existing_escrow_fee_spend<A: AccountingAuthority>(
     if intent.scope != result.scope || intent.case != result.case_id() || intent.result != result.id() {
         return Err(ExistingEscrowFeeError::ResultBinding);
     }
-    // New result-derived claim IDs must be explicit. A legacy row's claim can
-    // never be borrowed merely because the producer supplied its identifier.
-    if escrow.claim != h(result.claim_id().0)
-        || escrow.contract_id != h(intent.funding_consent)
+    legacy_terms.check_v1().map_err(ExistingEscrowFeeError::LegacyTerms)?;
+    // Do not place a new consent ID into a field defined as old terms.id().
+    // These comparisons validate calculator operands, not native admission.
+    if escrow.claim != legacy_terms.claim
+        || escrow.contract_id != legacy_terms.id_v1()
+        || escrow.amount_sompi != legacy_terms.funding_amount_sompi
+        || escrow.payer_key_id != legacy_terms.payer_key_id
+        || escrow.refund_payload != legacy_terms.refund_payload
         || escrow.payer_key_id != h(projection.payer().0)
+        || escrow.accepted_daa < legacy_terms.accept_from_daa
+        || escrow.accepted_daa > legacy_terms.accept_until_daa
         || daa < escrow.accepted_daa
     {
         return Err(ExistingEscrowFeeError::EscrowBinding);

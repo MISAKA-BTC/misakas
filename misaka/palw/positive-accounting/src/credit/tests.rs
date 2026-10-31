@@ -219,3 +219,95 @@ fn the_production_native_port_remains_unconditionally_closed() {
         assert_eq!(UnavailableNativeCredit.authorize(&id(10), usage), Err(CreditDenial::MissingNativeResultBinding));
     }
 }
+
+/// Synthetic lineage fixture only. The production override must obtain these
+/// facts from native Result/Case rows, accepted-prefix state and ancestry
+/// service capabilities; this private set is not a native admission adapter.
+struct LineageFixture {
+    claims: View,
+    admitted_scopes: BTreeMap<ClaimId, ChainScope>,
+    retained_origins: std::collections::BTreeSet<Digest>,
+}
+impl RootedCreditView for LineageFixture {
+    fn scope(&self) -> ChainScope {
+        scope()
+    }
+    fn claim(&self, claim: ClaimId) -> Result<RootedCreditFacts, CreditDenial> {
+        self.claims.claim(claim)
+    }
+    fn validate_scope(&self, binding: &CreditBinding) -> Result<(), CreditDenial> {
+        let admitted = self.admitted_scopes.get(&binding.claim).ok_or(CreditDenial::MissingClaim(binding.claim))?;
+        if binding.scope != *admitted
+            || binding.scope.network != scope().network
+            || binding.scope.ruleset != scope().ruleset
+            || !self.retained_origins.contains(&admitted.branch)
+        {
+            return Err(CreditDenial::Scope(binding.claim));
+        }
+        Ok(())
+    }
+    fn checked_coverage(&self, claim: ClaimId) -> Result<CheckedCoverage, CreditDenial> {
+        self.claims.checked_coverage(claim)
+    }
+    fn checked_dependencies(&self, claim: ClaimId) -> Result<&[CreditBinding], CreditDenial> {
+        self.claims.checked_dependencies(claim)
+    }
+}
+fn lineage_fixture() -> LineageFixture {
+    let mut claims = View(BTreeMap::from([(id(10), ready(10, &[])), (id(11), ready(11, &[])), (id(12), ready(12, &[]))]));
+    for (claim, row) in &mut claims.0 {
+        row.facts.binding.scope.branch = claim.0;
+        row.facts.gate_c = GateCApproval::Approved(row.facts.binding);
+        row.coverage.as_mut().unwrap().binding = row.facts.binding;
+    }
+    let parent = claims.0.get(&id(10)).unwrap().facts.binding;
+    claims.0.get_mut(&id(12)).unwrap().dependencies = Some(vec![parent]);
+    let admitted_scopes = claims.0.iter().map(|(id, row)| (*id, row.facts.binding.scope)).collect();
+    LineageFixture { claims, admitted_scopes, retained_origins: [d(10), d(11), d(12)].into_iter().collect() }
+}
+
+#[test]
+fn fixed_admission_anchors_can_differ_across_a_valid_dependency_lineage() {
+    let view = lineage_fixture();
+    let gate = PositiveCreditGate::new(&view, CreditLimits { max_claims: 10, max_edges: 10 }).unwrap();
+    for usage in ALL_CREDIT_USES {
+        assert!(gate.authorize(&id(12), usage).is_ok());
+        assert!(gate.authorize(&id(11), usage).is_ok());
+    }
+    assert_eq!(gate.credited_weight(id(12), 101), 101);
+}
+
+#[test]
+fn removing_a_parent_admission_origin_holds_its_child_and_preserves_independent_credit() {
+    let mut view = lineage_fixture();
+    // Retain stale child/parent rows deliberately: the current native scope
+    // check must refuse the removed origin before any child consumer credits it.
+    view.retained_origins.remove(&d(10));
+    let gate = PositiveCreditGate::new(&view, CreditLimits { max_claims: 10, max_edges: 10 }).unwrap();
+    for usage in ALL_CREDIT_USES {
+        assert_eq!(gate.authorize(&id(12), usage).err(), Some(CreditDenial::Scope(id(10))));
+        assert!(gate.authorize(&id(11), usage).is_ok());
+    }
+    assert_eq!(gate.credited_weight(id(12), 101), 0);
+}
+
+#[test]
+fn lineage_membership_never_waives_the_admitted_network_or_ruleset_binding() {
+    for field in 0..2 {
+        let mut view = lineage_fixture();
+        let row = view.claims.0.get_mut(&id(10)).unwrap();
+        if field == 0 {
+            row.facts.binding.scope.network = d(200);
+        } else {
+            row.facts.binding.scope.ruleset = d(200);
+        }
+        row.facts.gate_c = GateCApproval::Approved(row.facts.binding);
+        row.coverage.as_mut().unwrap().binding = row.facts.binding;
+        let parent = row.facts.binding;
+        view.claims.0.get_mut(&id(12)).unwrap().dependencies = Some(vec![parent]);
+        let gate = PositiveCreditGate::new(&view, CreditLimits { max_claims: 10, max_edges: 10 }).unwrap();
+        for usage in ALL_CREDIT_USES {
+            assert_eq!(gate.authorize(&id(12), usage).err(), Some(CreditDenial::Scope(id(10))));
+        }
+    }
+}
