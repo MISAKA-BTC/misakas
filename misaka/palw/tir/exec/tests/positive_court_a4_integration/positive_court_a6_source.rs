@@ -11,6 +11,7 @@ use kaspa_consensus_core::{
     },
     palw_tir_admission_v1::palw_tir_class_record_v1,
 };
+use misaka_palw_positive_contract::rows::AggregateUsage;
 
 fn geometry(s: &Scenario) -> TirSourceGeometryV2 {
     let binding = &s.f.binding;
