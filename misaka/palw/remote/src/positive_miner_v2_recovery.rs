@@ -251,6 +251,8 @@ impl PreparationJournalV2 for EphemeralPreparationJournalV2 {
 ///
 /// `None` is accepted only for a genuinely new case. Every successful persist
 /// commits this anchor AFTER journal fsync and BEFORE the associated effect.
+/// All advances for the case must be made by its lease-holding journal writer;
+/// the protected owner must not concurrently advance/reassign this namespace.
 pub trait ProtectedAnchorStoreV2 {
     fn load(&self) -> Result<Option<JournalAnchorV2>, MinerErrorV2>;
     fn commit(&mut self, expected: Option<JournalAnchorV2>, next: JournalAnchorV2) -> Result<(), MinerErrorV2>;
@@ -308,19 +310,48 @@ impl<A: ProtectedAnchorStoreV2> FilePreparationJournalV2<A> {
         })
     }
 
+    /// Resume only if the file ends at the exact protected anchor. Checksum-
+    /// valid records beyond it are untrusted and cannot discount future work.
     pub fn open<D>(
         path: &Path,
         responder: &MinerResponderV2<'_, D>,
         limits: JournalLimitsV2,
-        mut anchors: A,
+        anchors: A,
+    ) -> Result<Self, MinerErrorV2> {
+        Self::open_prefix(path, responder, limits, anchors, false)
+    }
+
+    /// Explicit crash-window repair. Discard bytes AFTER the exact protected
+    /// prefix, durably, without interpreting them or changing the anchor. A
+    /// missing/corrupt protected prefix is never repaired from untrusted data.
+    pub fn open_discarding_unanchored_tail<D>(
+        path: &Path,
+        responder: &MinerResponderV2<'_, D>,
+        limits: JournalLimitsV2,
+        anchors: A,
+    ) -> Result<Self, MinerErrorV2> {
+        Self::open_prefix(path, responder, limits, anchors, true)
+    }
+
+    fn open_prefix<D>(
+        path: &Path,
+        responder: &MinerResponderV2<'_, D>,
+        limits: JournalLimitsV2,
+        anchors: A,
+        discard_tail: bool,
     ) -> Result<Self, MinerErrorV2> {
         check_journal_limits(limits)?;
-        let trusted_anchor = anchors.load()?.ok_or_else(|| journal_error("protected case anchor is missing"))?;
         let mut file = secure_options().open(path).map_err(io_error)?;
         require_regular(&file)?;
         lock_exclusive(&file)?;
+        // A previous writer may commit and release its lease while this open
+        // is starting. Load the protected boundary only AFTER owning the lease.
+        let trusted_anchor = anchors.load()?.ok_or_else(|| journal_error("protected case anchor is missing"))?;
+        if trusted_anchor.sequence > limits.max_records {
+            return Err(MinerErrorV2::Budget);
+        }
         let bytes = file.metadata().map_err(io_error)?.len();
-        if bytes < HEADER_BYTES as u64 || bytes > limits.max_bytes {
+        if bytes < HEADER_BYTES as u64 || (!discard_tail && bytes > limits.max_bytes) {
             return Err(MinerErrorV2::Budget);
         }
         let mut header = [0u8; HEADER_BYTES];
@@ -336,10 +367,9 @@ impl<A: ProtectedAnchorStoreV2> FilePreparationJournalV2<A> {
             return Err(MinerErrorV2::Binding);
         }
         let mut anchor = JournalAnchorV2 { sequence: 0, hash: head_hash };
-        let mut saw_trusted = anchor == trusted_anchor;
         let mut consumed = HEADER_BYTES as u64;
-        while consumed < bytes {
-            if anchor.sequence >= limits.max_records || bytes - consumed < RECORD_OVERHEAD_BYTES {
+        while anchor.sequence < trusted_anchor.sequence {
+            if consumed > bytes || bytes - consumed < RECORD_OVERHEAD_BYTES {
                 return Err(MinerErrorV2::Budget);
             }
             let mut prefix = [0u8; RECORD_PREFIX_BYTES];
@@ -354,6 +384,7 @@ impl<A: ProtectedAnchorStoreV2> FilePreparationJournalV2<A> {
                 || payload_len < STATE_FIXED_BYTES
                 || payload_len > max_payload
                 || record_len > bytes - consumed
+                || consumed.checked_add(record_len).filter(|n| *n <= limits.max_bytes).is_none()
             {
                 return Err(journal_error("truncated, reordered or oversized journal record"));
             }
@@ -368,20 +399,26 @@ impl<A: ProtectedAnchorStoreV2> FilePreparationJournalV2<A> {
             }
             state.apply_delta(&payload)?;
             anchor = JournalAnchorV2 { sequence, hash: expected };
-            if anchor == trusted_anchor {
-                saw_trusted = true;
-            }
             consumed = consumed.checked_add(record_len).ok_or(MinerErrorV2::Budget)?;
         }
-        if !saw_trusted {
+        if anchor != trusted_anchor {
             return Err(journal_error("journal is older than or different from trusted anchor"));
         }
         state.validate()?;
-        file.seek(SeekFrom::End(0)).map_err(io_error)?;
-        if anchor != trusted_anchor {
-            anchors.commit(Some(trusted_anchor), anchor)?;
+        if consumed != bytes {
+            if !discard_tail {
+                return Err(journal_error("unanchored journal tail requires explicit discard"));
+            }
+            // This namespace is advanced only by the lease-holding writer.
+            // Recheck before destructive repair; never promote a tail's hash.
+            if anchors.load()? != Some(trusted_anchor) {
+                return Err(journal_error("protected anchor changed during repair"));
+            }
+            file.set_len(consumed).map_err(io_error)?;
+            file.sync_all().map_err(io_error)?;
         }
-        Ok(Self { anchors, committed_anchor: anchor, file, state, anchor, limits, bytes, poisoned: false })
+        file.seek(SeekFrom::End(0)).map_err(io_error)?;
+        Ok(Self { anchors, committed_anchor: anchor, file, state, anchor, limits, bytes: consumed, poisoned: false })
     }
 
     pub fn anchor(&self) -> JournalAnchorV2 {
@@ -479,6 +516,19 @@ impl<'p, D: CanonicalDataDutyV2, A: ProtectedAnchorStoreV2> DurableMinerResponde
     }
     pub fn resume(path: &Path, mut fresh: MinerResponderV2<'p, D>, limits: JournalLimitsV2, anchors: A) -> Result<Self, MinerErrorV2> {
         let journal = FilePreparationJournalV2::open(path, &fresh, limits, anchors)?;
+        journal.state.restore(&mut fresh)?;
+        Ok(Self { inner: fresh, journal })
+    }
+    /// Explicit recovery of the fsync-before-protected-CAS crash window.
+    /// Discarded preparation had no permitted effect: persist must protect its
+    /// anchor before returning to the provider/status/response path.
+    pub fn resume_discarding_unanchored_tail(
+        path: &Path,
+        mut fresh: MinerResponderV2<'p, D>,
+        limits: JournalLimitsV2,
+        anchors: A,
+    ) -> Result<Self, MinerErrorV2> {
+        let journal = FilePreparationJournalV2::open_discarding_unanchored_tail(path, &fresh, limits, anchors)?;
         journal.state.restore(&mut fresh)?;
         Ok(Self { inner: fresh, journal })
     }
@@ -769,7 +819,7 @@ mod tests {
     }
 
     #[test]
-    fn failed_protected_anchor_commit_poison_prevents_provider_io_and_tail_is_conservative() {
+    fn failed_protected_anchor_commit_requires_explicit_discard_and_preserves_protected_prefix() {
         let f = Fixture::new();
         let providers: [&dyn StoredProviderV2; 1] = [&f.provider];
         let case = TempCase::new();
@@ -785,14 +835,24 @@ mod tests {
         assert_eq!(anchors.load().unwrap().unwrap().sequence, 2);
         drop(live);
         anchors.0.borrow_mut().fail_at = None;
-        let mut recovered =
+        assert!(
             DurableMinerResponderV2::resume(&case.path(), f.responder(&providers, limits()), journal_limits(), anchors.clone())
-                .unwrap();
-        // Uncertain pre-I/O work is retained, never refunded by a restart.
-        assert_eq!(recovered.meter().provider_reads, 1);
-        assert_eq!(anchors.load().unwrap().unwrap().sequence, 3);
+                .is_err()
+        );
+        let mut recovered = DurableMinerResponderV2::resume_discarding_unanchored_tail(
+            &case.path(),
+            f.responder(&providers, limits()),
+            journal_limits(),
+            anchors.clone(),
+        )
+        .unwrap();
+        // The failed CAS preceded provider I/O. Keep protected seq2, discard
+        // the unprotected reservation, and charge the actual retry normally.
+        assert_eq!(recovered.meter().provider_reads, 0);
+        assert_eq!(recovered.meter().status_checks, 1);
+        assert_eq!(anchors.load().unwrap().unwrap().sequence, 2);
         recovered.respond(&duty).unwrap();
-        assert_eq!(recovered.meter().provider_reads, 2);
+        assert_eq!(recovered.meter().provider_reads, 1);
     }
 
     #[test]
@@ -1055,3 +1115,7 @@ mod tests {
         assert!(recovered.status.success(), "{}", String::from_utf8_lossy(&recovered.stderr));
     }
 }
+
+#[cfg(all(test, unix))]
+#[path = "positive_miner_v2_recovery_tail_tests.rs"]
+mod tail_tests;
