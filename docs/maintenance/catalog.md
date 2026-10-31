@@ -507,6 +507,7 @@
 - [design/palw/positive-court/NATIVE-JOURNAL-R1.md](../design/palw/positive-court/NATIVE-JOURNAL-R1.md)
 - [design/palw/positive-court/POLICY-DELTA.md](../design/palw/positive-court/POLICY-DELTA.md)
 - [design/palw/positive-court/REVISION-R2.md](../design/palw/positive-court/REVISION-R2.md)
+- [design/palw/positive-court/ROLE-RESERVATION-R1.md](../design/palw/positive-court/ROLE-RESERVATION-R1.md)
 - [design/palw/positive-court/SOURCE-AUDIT.md](../design/palw/positive-court/SOURCE-AUDIT.md)
 - [design/palw/positive-court/TIR-INTERCHANGE-R1.md](../design/palw/positive-court/TIR-INTERCHANGE-R1.md)
 - [design/palw/positive-court/VALIDATION-A0.md](../design/palw/positive-court/VALIDATION-A0.md)

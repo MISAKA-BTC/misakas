@@ -65,6 +65,8 @@ feeの範囲は区別する：`Service.budget.fee`はMinerへの有限資料サ�
 
 ## 4. 実資金と原子的受付
 
+役割別の残予約とMinerの履行機会は [役割別予約の接続条件](ROLE-RESERVATION-R1.md) に従って保護する。共有Case counterへの投影は、Panel/Nodeの作業をMinerの義務へ移す授権ではない。sourceのwire/work/retention残予約をCourtが消費し尽くす実装をnative接続済みと扱わない。
+
 native acceptor（`palw_state_v2` / VirtualProcessor）だけが、次を保持する非公開・単回消費の準備capabilityを作る。
 
 1. 実ValidatedTransaction、composed UTXO entries、現在selected parent/state root/accepted-prefix位置・世代・DAA。
@@ -73,7 +75,7 @@ native acceptor（`palw_state_v2` / VirtualProcessor）だけが、次を保持�
 4. 新payer consentの署名・terms・実funding output、必要fee/capital、返金/recipient条件。
 5. 元と次のjournal head、行・資金・責任のundo。
 
-commit時にも現在view・時刻・funds・capacityを再確認し、case/予約/coin lock/一回払いmarker/責任/journalを同じfold checkpoint・PALW delta・UTXO `WriteBatch`で確定する。kernel route headerがなければ明示的に拒否し、writerのno-opを受付成功にしない。公開setterを別crateへ作ってone-writerを迂回しない。
+commit時にも現在view・時刻・funds・capacityを再確認し、case/予約/coin lock/一回払いmarker/責任/journalを同じfold checkpoint・PALW delta・UTXO `WriteBatch`で確定する。必要なnative guard・backing保護・実leaseをwrite結果まで保持し、喪失時はwriter排他内の全再resolve/CASとprepared失効でTOCTOU/ABAを防ぐ。詳細とhistorical replay/readonly再結合は [役割別予約の接続条件](ROLE-RESERVATION-R1.md) に従う。kernel route headerがなければ明示的に拒否し、writerのno-opを受付成功にしない。公開setterを別crateへ作ってone-writerを迂回しない。
 
 既存のfunding preflightやpayer自身へのP2PKH出力だけではlockにならない。新Positive funded rowを既存escrow lock view・mempool/blockの同一拒否predicate・same-mergeset暫定lock・qualified spendへversion付きで接続する。aux FundingRefだけ設置して実coinを再利用可能にしない。旧`PalwFundedEscrowRowV1.contract_id`の意味は変更しない。
 
