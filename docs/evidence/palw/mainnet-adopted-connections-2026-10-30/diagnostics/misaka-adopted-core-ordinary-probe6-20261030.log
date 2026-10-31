@@ -1,0 +1,15 @@
+
+running 1 test
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::family_supplier_ordinary_native_original_and_financial_transitions ... 
+thread 'palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::family_supplier_ordinary_native_original_and_financial_transitions' (672488) panicked at consensus/core/src/palw_tir_public_claim_v1.rs:882:27:
+fixture requires a real native generic arithmetic quote: Incomplete { source_id: 3120c1a879b49ff998ce95fc28bd0da6b04c70aff86ab46fa4f13132c6ccaf1a2bc34823bad92955cd2acfcd75e512697a7ac3761011acc34708112d188e5028, missing: [DoorBeyondLiabilityHorizon { required: 77093, allowed: 3120 }] }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::family_supplier_ordinary_native_original_and_financial_transitions
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 5364 filtered out; finished in 0.19s
+

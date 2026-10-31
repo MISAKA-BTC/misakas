@@ -175,6 +175,27 @@ impl<T: Clone + NativeHeapV1> NativeRetainedV1<T> {
         self.try_clone_v1()
     }
 }
+impl NativeRetainedV1<crate::palw_state_v2::PalwStateCarriageV2> {
+    /// Consume a reserved typed carriage and keep its existing ownership until
+    /// restoration and the canonical row-inventory check both finish. `check`
+    /// may reuse the restoration root workspace, not allocate an unbounded job.
+    pub fn try_restore_checked_v1(
+        self,
+        point: crate::BlockHash,
+        params: &crate::palw_state_v2::PalwStateParamsV2,
+        expected_root: Option<crate::Hash64>,
+        uncertified_weightless: bool,
+        canonical_work_daa: Option<u64>,
+        check: impl FnOnce(&crate::palw_state_v2::PalwChainStateV2) -> Result<(), crate::palw_state_v2::PalwStateV2Error>,
+    ) -> Result<super::NativeChainStateV1, NativeStateMutationErrorV1> {
+        let Self { value, _lease } = self;
+        let restored = super::restore::restore_checked_v1(point, value, params, expected_root,
+            uncertified_weightless, canonical_work_daa, check);
+        drop(_lease);
+        restored
+    }
+}
+
 fn enabled() -> bool {
     native_logical_admission_enabled_v1() || native_resource_admission_enabled_v1()
 }

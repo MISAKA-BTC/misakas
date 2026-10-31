@@ -83,22 +83,27 @@ fn world_at(all: bool, first: u64) -> (PalwStateParamsV2, PalwChainStateV2, [Has
     world_with(all, first, p)
 }
 fn world_with(all: bool, first: u64, p: PalwStateParamsV2) -> (PalwStateParamsV2, PalwChainStateV2, [Hash64; 3]) {
+    world_with_roots(all, first, p, [600, 601, 600])
+}
+fn world_with_roots<const N: usize>(
+    all: bool, first: u64, p: PalwStateParamsV2, roots: [u64; N],
+) -> (PalwStateParamsV2, PalwChainStateV2, [Hash64; N]) {
     let mut objects = register_class_and_bond();
     objects.push(seat_bond_reg(2, 1000));
     let (mut s, _) = step(&PalwChainStateV2::genesis(), &p, 1, first - 1, &objects, None, &extra());
-    let mut ids = [ZERO_HASH64; 3];
-    for i in 0..3 {
+    let mut ids = [ZERO_HASH64; N];
+    for i in 0..N {
         let mut e = attempt(40, i as u64 + 1);
-        e.attempt.execution_root = h64(if i == 1 { 601 } else { 600 });
+        e.attempt.execution_root = h64(roots[i]);
         e.attempt.trace_retention_daa = 1000;
         ids[i] = attempt_id_v2(&e.attempt);
         s = step(&s, &p, i as u64 + 2, first + i as u64, &[], Some(&e), &extra()).0;
         assert!(s.claim(&ids[i]).is_some());
     }
     let chosen: Vec<_> = ids.iter().enumerate().filter(|(i, _)| all || *i > 0).map(|(_, id)| *id).collect();
-    s = step(&s, &p, 5, 103, &chosen.iter().copied().map(bind).collect::<Vec<_>>(), None, &extra()).0;
-    s = step(&s, &p, 6, 104, &chosen.iter().copied().map(license).collect::<Vec<_>>(), None, &extra()).0;
-    s = step(&s, &p, 7, 125, &[], None, &extra()).0;
+    s = step(&s, &p, N as u64 + 2, 103, &chosen.iter().copied().map(bind).collect::<Vec<_>>(), None, &extra()).0;
+    s = step(&s, &p, N as u64 + 3, 104, &chosen.iter().copied().map(license).collect::<Vec<_>>(), None, &extra()).0;
+    s = step(&s, &p, N as u64 + 4, 125, &[], None, &extra()).0;
     let mut x = extra();
     for id in chosen {
         assert!(matches!(s.claim(&id).unwrap().phase, PalwClaimPhaseV2::Final { .. }));
@@ -117,8 +122,8 @@ fn world_with(all: bool, first: u64, p: PalwStateParamsV2) -> (PalwStateParamsV2
         k.extend_from_slice(&palw_certification_id_v1(&id));
         x.exec_v2_test_kernel_rows.push((PALW_SECURITY_CERTIFICATION_TABLE_V1, k, Some(borsh::to_vec(&r).unwrap())));
     }
-    s = step(&s, &p, 8, 126, &[], None, &x).0;
-    s = step(&s, &p, 9, 128, &[], None, &extra()).0;
+    s = step(&s, &p, N as u64 + 5, 126, &[], None, &x).0;
+    s = step(&s, &p, N as u64 + 6, 128, &[], None, &extra()).0;
     for id in ids.iter().skip(if all { 0 } else { 1 }) {
         assert!(row(&s, *id).outcome.unwrap().0.certifies());
         if p.claim_local_settlement_active_at(first) {
@@ -341,9 +346,46 @@ fn rfc23s2_claim_local_settlement_read_settles_independent_b_while_a_is_unresolv
 // ---- RFC-0023 stage 2: the fold-derived checkpoint and its consumers (lane rfc23-stage2) ----------------------------------
 
 fn checkpoint_bytes(s: &PalwChainStateV2) -> Option<Vec<u8>> {
+    super::super::palw_claim_local_checkpoint_snapshot_v2(s).unwrap().map(|cp|borsh::to_vec(&*cp).unwrap())
+}
+
+#[test]
+fn rfc23s2_reference_descriptor_heartbeat_does_not_copy_immutable_material(){
     use crate::palw_claim_local_v1::PALW_CLAIM_LOCAL_TABLE_V1;
-    let key = super::super::palw_claim_local_checkpoint_key_v1();
-    s.kernel_route.as_ref()?.aux.get(&(PALW_CLAIM_LOCAL_TABLE_V1, key.to_vec())).cloned()
+    let (p,state,_)=world(false);
+    let before=super::super::palw_claim_local_checkpoint_snapshot_v2(&state).unwrap().unwrap();
+    let (next,delta)=step(&state,&p,99,129,&[],None,&extra());
+    let after=super::super::palw_claim_local_checkpoint_snapshot_v2(&next).unwrap().unwrap();
+    assert_eq!(before.material,after.material,"heartbeat has no new provenance/material event");
+    assert_ne!(before.point,after.point);
+    let descriptor=super::super::palw_claim_descriptor_key_v2();
+    assert!(delta.entries.iter().any(|entry|matches!(entry,PalwDeltaEntryV2::KernelRouteRow{table,key,..}if *table==PALW_CLAIM_LOCAL_TABLE_V1&&key.as_slice()==descriptor)));
+    assert!(!delta.entries.iter().any(|entry|matches!(entry,PalwDeltaEntryV2::KernelRouteRow{table,key,..}if *table==PALW_CLAIM_LOCAL_TABLE_V1&&key.first().is_some_and(|p|matches!(*p,b'M'|b'Q')))),
+        "point advancement must not journal old/new copies of unchanged material");
+}
+
+#[test]
+fn rfc23s2_reference_descriptor_missing_same_snapshot_blob_is_not_material(){
+    let (_p,mut state,_)=world(false);
+    let key=(crate::palw_claim_local_v1::PALW_CLAIM_LOCAL_TABLE_V1,super::super::palw_claim_descriptor_key_v2().to_vec());
+    let descriptor:super::super::PalwClaimDescriptorV2=borsh::from_slice(&state.kernel_route.as_ref().unwrap().aux[&key]).unwrap();
+    let id=descriptor.liability.expect("actual unresolved liability blob");
+    let mut blob_key=vec![super::super::PALW_CLAIM_BLOB_PREFIX_V2];blob_key.extend_from_slice(id.as_byte_slice());
+    state.kernel_route.as_mut().unwrap().aux.remove(&(key.0,blob_key));
+    assert!(matches!(super::super::palw_claim_local_checkpoint_snapshot_v2(&state),Err(PalwStateV2Error::CarriageInconsistent(_))),
+        "a valid descriptor/root is not availability of its missing literal data");
+}
+
+#[test]
+fn rfc23s2_reference_descriptor_retains_legacy_flat_v1_read_compatibility(){
+    use crate::palw_claim_local_v1::PALW_CLAIM_LOCAL_TABLE_V1;
+    let (p,mut state,_)=world(false);
+    let logical=super::super::palw_claim_local_checkpoint_snapshot_v2(&state).unwrap().unwrap();
+    state.kernel_route.as_mut().unwrap().aux.retain(|(t,k),_|*t!=PALW_CLAIM_LOCAL_TABLE_V1||!k.first().is_some_and(|p|super::super::palw_claim_local_descriptor_v2::is_prefix(*p)));
+    state.kernel_route.as_mut().unwrap().aux.insert((PALW_CLAIM_LOCAL_TABLE_V1,super::super::palw_claim_local_checkpoint_key_v1().to_vec()),borsh::to_vec(&*logical).unwrap());
+    let recovered=super::super::palw_claim_local_checkpoint_snapshot_v2(&state).unwrap().unwrap();
+    assert_eq!(*recovered,*logical,"V1 C bytes retain their original meaning");
+    state.assert_internal_consistency(&p).unwrap();
 }
 
 #[test]
@@ -441,12 +483,18 @@ fn rfc23s2_checkpoint_pruned_import_reproduces_and_refuses_a_forged_row() {
     assert_eq!(n1.state_root(), n2.state_root());
     // A row that disguises unresolved A as closed is refused by the recomputation check.
     let mut forged = s.clone();
-    let key = (PALW_CLAIM_LOCAL_TABLE_V1, super::super::palw_claim_local_checkpoint_key_v1().to_vec());
-    let mut cp = (*palw_decode_claim_checkpoint_v1(&forged.kernel_route.as_ref().unwrap().aux[&key]).unwrap()).clone();
-    let ra = cp.records.get_mut(&PalwClaimLocalWorkRefV1::ChainClaim { claim: a }).unwrap();
+    let key = (PALW_CLAIM_LOCAL_TABLE_V1, super::super::palw_claim_descriptor_key_v2().to_vec());
+    let mut cp = (*super::super::palw_claim_local_checkpoint_snapshot_v2(&forged).unwrap().unwrap()).clone();
+    let work=PalwClaimLocalWorkRefV1::ChainClaim{claim:a};
+    let ra = cp.records.get_mut(&work).unwrap();
     ra.voided = true;
     ra.liability_closed = true;
-    forged.kernel_route.as_mut().unwrap().aux.insert(key.clone(), borsh::to_vec(&cp).unwrap());
+    let mut record_key=vec![super::super::PALW_CLAIM_RECORD_PREFIX_V2];record_key.extend(borsh::to_vec(&work).unwrap());
+    forged.kernel_route.as_mut().unwrap().aux.insert((PALW_CLAIM_LOCAL_TABLE_V1,record_key),borsh::to_vec(&super::super::PalwClaimRecordRowV2{version:2,record:ra.clone()}).unwrap());
+    // Even a self-consistent physical descriptor is not computation/closure authority.
+    let mut descriptor:super::super::PalwClaimDescriptorV2=borsh::from_slice(&forged.kernel_route.as_ref().unwrap().aux[&key]).unwrap();
+    (descriptor.records_root,descriptor.records_count)=super::super::palw_claim_local_descriptor_v2::root(&forged,super::super::PALW_CLAIM_RECORD_PREFIX_V2);
+    forged.kernel_route.as_mut().unwrap().aux.insert(key.clone(),borsh::to_vec(&descriptor).unwrap());
     assert!(forged.assert_internal_consistency(&p).is_err(), "a stored row is never its own authority");
     // And a missing row past the fence is refused, not read as "nothing open".
     let mut missing = s.clone();
@@ -570,6 +618,11 @@ fn rfc23s2_spending_a_settled_carrier_output_depends_on_that_claim() {
         super::super::palw_claim_local_fold_v1::carrier_spend_pairs_v1(&extras),
     );
     assert_eq!(edges, [(b, a)].into());
+    let mut retired = s.clone();
+    retired.claims.remove(&a);
+    assert_eq!(super::super::palw_claim_local_fold_v1::consumed_carrier_edges_v1(
+        &retired, [(b, carrier)],
+    ), [(b, a)].into(), "retirement must not erase a committed carrier dependency at new admission");
     let born = s.claims.get(&b).unwrap().clone();
     let key = palw_claim_liability_frame_key_v1(born.accepted_block);
     let raw = s.kernel_route.as_ref().unwrap().aux.get(&(PALW_CLAIM_LOCAL_TABLE_V1, key.to_vec())).unwrap().clone();
@@ -592,4 +645,299 @@ fn rfc23s2_spending_a_settled_carrier_output_depends_on_that_claim() {
     );
     s.claims.get_mut(&a).unwrap().phase = original;
     assert_eq!(readiness(&s, &p, 200, b, false).unwrap(), before, "restoring the source claim restores the consumer reward");
+}
+
+
+#[test]
+fn rfc23s2_checkpoint_retired_conviction_denies_consumer_credit_without_rewriting_approval() {
+    use crate::palw_claim_local_v1::*;
+    let (p, s, [a, b, c]) = world(false);
+    let x = extra();
+    let mut builder = TransitionBuilder::new(&s, &p, false, false, false, false, &x);
+    let source = builder.state.claim(&a).unwrap().clone();
+    // Existing conviction/retirement writer seams; admission of a public
+    // refutation and the retirement clock are covered by their own tests.
+    builder.void_and_slash_at(a, &source, 129, PalwVoidReasonV2::CourtFraud, None).unwrap();
+    let terminal = builder.state.claim(&a).unwrap().clone();
+    builder.retire_claim(a, &terminal).unwrap();
+    let point = ctx(10, 129, 10);
+    super::super::palw_claim_local_fold_v1::retain_changed_claim_context_v1(
+        &mut builder, &s, &point, &[], PalwBlockWorkV3::None, &[], ZERO_HASH64,
+    ).unwrap();
+    builder.state.set_last_point_for_tests(Some(point));
+    assert!(!builder.state.claims.contains_key(&a));
+    assert_eq!(
+        super::super::palw_claim_local_rewards_v1::reward_readiness_v1(&builder.state, &p, 129, c, false).unwrap(),
+        super::super::palw_claim_local_rewards_v1::RewardReadinessV1::Denied,
+    );
+    let checkpoint = super::super::palw_claim_local_checkpoint_fold_v1::expected_claim_local_checkpoint_v1(
+        &builder.state, &p, &point,
+    ).unwrap().unwrap();
+    let validated = checkpoint.validate(&point, &checkpoint.records, &checkpoint.liability_state).unwrap();
+    let consumer = PalwClaimLocalWorkRefV1::ChainClaim { claim: c };
+    assert!(!validated.credit_eligible(consumer), "retiring the convicted source must not restore its consumer's credit");
+    assert!(!validated.irreversible_eligible(consumer));
+    assert!(validated.credit_eligible(PalwClaimLocalWorkRefV1::ChainClaim { claim: b }), "independent B retains credit");
+    assert!(row(&builder.state, c).outcome.unwrap().0.certifies(), "raw selected-verifier approval is unchanged");
+}
+
+
+#[test]
+fn rfc23s2_carrier_dependency_closure_survives_source_retirement_and_keeps_independent_credit() {
+    use crate::palw_claim_local_v1::*;
+    use super::super::palw_claim_local_rewards_v1::{RewardReadinessV1, reward_readiness_v1};
+    let (p, mut s, [a, b, c, d]) = world_with_roots(false, 100, rules(), [600, 601, 602, 603]);
+    // Retain two actual carrier-spend edges at their consumer birth points. The
+    // carrier-index extraction is covered separately; these frames exercise the
+    // historical reader, including its production carriage authentication.
+    for (consumer, source) in [(b, a), (c, b)] {
+        let born = s.claims.get(&consumer).unwrap();
+        let key = palw_claim_liability_frame_key_v1(born.accepted_block);
+        let raw = s.kernel_route.as_ref().unwrap().aux.get(&(PALW_CLAIM_LOCAL_TABLE_V1, key.to_vec())).unwrap();
+        let (mut frame, lease) = palw_decode_claim_liability_frame_v1(raw).unwrap().into_parts_v1();
+        frame.inputs.push(PalwClaimLocalInputV1::ConsumedCarrier { consumer, source });
+        s.kernel_route.as_mut().unwrap().aux.insert((PALW_CLAIM_LOCAL_TABLE_V1, key.to_vec()), borsh::to_vec(&frame).unwrap());
+        drop(lease);
+    }
+    assert!(matches!(reward_readiness_v1(&s, &p, 1001, c, false).unwrap(), RewardReadinessV1::Hold(_)),
+        "C must follow B's carrier dependency to unresolved A despite three distinct execution roots");
+    assert_eq!(reward_readiness_v1(&s, &p, 1001, d, false).unwrap(), RewardReadinessV1::Ready);
+    let x = extra();
+    let mut builder = TransitionBuilder::new(&s, &p, false, false, false, false, &x);
+    let source = builder.state.claim(&a).unwrap().clone();
+    builder.void_and_slash_at(a, &source, 129, PalwVoidReasonV2::CourtFraud, None).unwrap();
+    let terminal = builder.state.claim(&a).unwrap().clone();
+    builder.retire_claim(a, &terminal).unwrap();
+    let point = ctx(11, 129, 11);
+    super::super::palw_claim_local_fold_v1::retain_changed_claim_context_v1(
+        &mut builder, &s, &point, &[], PalwBlockWorkV3::None, &[], ZERO_HASH64,
+    ).unwrap();
+    builder.state.set_last_point_for_tests(Some(point));
+    let after_source = builder.state.bond(&bond_key(1)).unwrap().collateral;
+    assert_eq!(reward_readiness_v1(&builder.state, &p, 1001, c, false).unwrap(), RewardReadinessV1::Denied,
+        "the A→B→C chain still denies C after A's live vertex retires");
+    assert_eq!(reward_readiness_v1(&builder.state, &p, 1001, d, false).unwrap(), RewardReadinessV1::Ready);
+    assert_eq!(builder.state.bond(&bond_key(1)).unwrap().collateral, after_source, "dependency reads never slash consumers");
+    let checkpoint = super::super::palw_claim_local_checkpoint_fold_v1::expected_claim_local_checkpoint_v1(
+        &builder.state, &p, &point,
+    ).unwrap().unwrap();
+    let validated = checkpoint.validate(&point, &checkpoint.records, &checkpoint.liability_state).unwrap();
+    assert!(!validated.credit_eligible(PalwClaimLocalWorkRefV1::ChainClaim { claim: c }));
+    assert!(validated.credit_eligible(PalwClaimLocalWorkRefV1::ChainClaim { claim: d }));
+}
+
+#[test]
+fn rfc37_nested_kernel_generation_exports_the_exact_committed_state() {
+    let (_p,s,_) = world(false);
+    let mut wire=Vec::new();
+    let len=crate::palw_direct_row_export_v1::write_direct_row_generation_v1(&s,b"native-envelope",&mut wire).unwrap();
+    assert_eq!(wire.len() as u64,len);
+    let accepted=crate::palw_row_stream_v1::palw_accept_row_stream_generation_v1(
+        s.state_root(),&wire,std::io::sink(),len,None,
+    ).unwrap();
+    assert_eq!(accepted.import_suffix(),b"native-envelope");
+}
+
+#[test]
+fn rfc23s2_owned_native_lifecycle_preserves_open_a_and_blocks_dependent_c_credit(){
+    use crate::palw_claim_local_v1::PalwClaimLocalWorkRefV1 as W;
+    let (p,mut state,[a,b,c])=world(false);
+    let point=*state.last_point().unwrap();
+    let root=state.state_root();
+    let mut view=super::super::palw_claim_local_owned_checkpoint_v1(&state,&p,&point).unwrap().unwrap();
+    assert!(view.lifecycle_preserved_through_v1(point.blue_score),"actual open A material permits shared data lifecycle preservation");
+    assert!(!view.credit_eligible_v1(W::ChainClaim{claim:a}));
+    assert!(!view.credit_eligible_v1(W::ChainClaim{claim:c}),"C's own selected approval cannot bypass its actual shared execution dependency on A");
+    assert!(view.credit_eligible_v1(W::ChainClaim{claim:b}),"independent B retains reversible credit");
+    assert_eq!(state.state_root(),root);
+    drop(view);
+    let birth=state.claim(&a).unwrap().clone();
+    let key=crate::palw_claim_local_v1::palw_claim_liability_frame_key_v1(birth.accepted_block);
+    state.kernel_route.as_mut().unwrap().aux.remove(&(crate::palw_claim_local_v1::PALW_CLAIM_LOCAL_TABLE_V1,key.to_vec())).unwrap();
+    assert!(super::super::palw_claim_local_owned_checkpoint_v1(&state,&p,&point).is_err(),
+        "claim metadata and a remaining commitment cannot mint an EVM lifecycle capability after actual admission material is lost");
+}
+
+#[test]
+fn rfc23s2_legacy_actual_journal_source_survives_retirement_and_closes_at_first_maturity_block(){
+    // Focused core lifecycle regression. Header execution identities and the
+    // existing named-validator draw seam are supplied at their public fold
+    // boundaries. No accepted claim, work id, approval or source row is patched.
+    // This is not the actual multi-node producer/admission campaign.
+    use crate::palw_native_settlement_v1::{PalwDnsRetirementV1,PalwSettlementPolicyV1};
+    use crate::palw_native39_settlement_checkpoint_v1::Native39SettlementFoldV1;
+    use crate::config::params::ForkActivation;
+    let mut p=rules();p.base_class_id=h64(900);let ruleset=kaspa_hashes::Hash::from_bytes([29;32]);
+    let mut x=extra();x.audit_2026_09_23_active=true;x.canonical_work_daa=Some(0);
+    x.native_fact_ruleset=Some(ruleset);x.native_fact_quantum_maturity_daa=Some(7);
+    x.native39_settlement_checkpoint=Some(Native39SettlementFoldV1{retirement:PalwDnsRetirementV1{
+        activation:ForkActivation::new(0),settlement:PalwSettlementPolicyV1{settled_anchor_depth:2,unique_mature_work:u128::MAX,max_operator_permille:1000,max_class_permille:1000},legacy_evidence_horizon_daa:1},
+        ruleset,evm_activation_daa:u64::MAX,fork_choice_commitment:None});
+    let run=|s:&PalwChainStateV2,n:u64,daa:u64,objects:&[PalwConsensusObjectV2],env:Option<&PalwAttemptEnvelopeV2>,extras:&PalwTransitionExtrasV1|{
+        let point=PalwBlockContextV2{subsidy:1000,..ctx(n,daa,n)};
+        let work=env.map_or(PalwBlockWorkV3::None,PalwBlockWorkV3::Attempt);
+        let (next,delta,skips)=apply_palw_transition_v7(s,&p,None,&point,objects,work,&[],h64(91000+n),false,false,false,false,extras).unwrap();
+        assert!(skips.is_empty());assert_eq!(apply_delta_v2(s,&delta,&p).unwrap().state_root(),next.state_root());
+        assert_eq!(revert_delta_v2(&next,&delta,&p).unwrap().state_root(),s.state_root());next
+    };
+    let mut registrations=register_class_and_bond();
+    let mut floor=registrations[0].clone();
+    if let PalwConsensusObjectV2::ClassRegistered{class_id,artifact_root,..}=&mut floor{*class_id=p.base_class_id;*artifact_root=h64(901)}else{unreachable!()}
+    if let PalwConsensusObjectV2::ClassRegistered{share_permille,..}=&mut registrations[0]{*share_permille=500}else{unreachable!()}
+    registrations.insert(0,floor); // Genuine BASE first; later500 grant proportionally funds the nonBASE class.
+    registrations.push(seat_bond_reg(2,1000));
+    let mut state=run(&PalwChainStateV2::genesis(),1,99,&registrations,None,&x);
+    let mut a=attempt(40,1);a.attempt.execution_root=h64(800);a.attempt.trace_retention_daa=1000;
+    let id=attempt_id_v2(&a.attempt);
+    state=run(&state,2,100,&[],Some(&a),&x);
+    assert_eq!(state.claim(&id).unwrap().work_id,Some(h64(91002)));
+    state=run(&state,3,103,&[bind(id)],None,&x);
+    state=run(&state,4,104,&[license(id)],None,&x);
+    state=run(&state,5,125,&[],None,&x);
+    let source=state.kernel_route.as_ref().unwrap().aux.iter().find(|((t,_),_)|*t==LEGACY_PENDING_FACT_TABLE_V1).expect("actual Final journal captured pending canonical source");
+    let source=super::super::palw_legacy_pending_facts_v1::decode(&source.1).unwrap();
+    assert_eq!(source.claim_id,id);assert_eq!(source.fact.work,40);assert_eq!(source.material_until_daa,Some(1000));
+    assert!(crate::palw_native_closed_facts_v1::read_native_closed_facts_v1(&state).unwrap().is_empty());
+    let mut cert=row(&state,id);cert.anchor=Some((1,[7;64]));cert.draws=vec![crate::palw_kernel_route_v1::palw_kernel_bond_id_v1(&bond_key(2))];
+    cert.drawn_daa=126;cert.deadline_daa=127;
+    cert.attestations=vec![crate::palw_model_eligibility_v1::PalwEligibilityAttestationRowV1{verifier:cert.draws[0],verdict:crate::palw_model_eligibility_v1::PalwEligibilityVerdictV1::Reproduced,transcript:[9;64],attested_daa:126}];
+    let mut draw=x.clone();let mut cert_key=vec![CERTIFICATION_CLAIM_PREFIX_V1];cert_key.extend_from_slice(&palw_certification_id_v1(&id));
+    draw.exec_v2_test_kernel_rows.push((PALW_SECURITY_CERTIFICATION_TABLE_V1,cert_key,Some(borsh::to_vec(&cert).unwrap())));
+    state=run(&state,6,126,&[],None,&draw);state=run(&state,7,128,&[],None,&x);
+    state=run(&state,8,148,&[],None,&x);assert!(state.claim(&id).is_none(),"actual original retires before trace maturity");
+    let carriage=PalwStateCarriageV2::from_state(&state);
+    let encoded=borsh::to_vec(&carriage).unwrap();
+    crate::palw_native_resource_v1::preflight_native_carriage_v1(encoded.as_slice(),encoded.len() as u64).expect("typed196 source cold-restore inventory");
+    let mut malformed=carriage.clone();
+    let route=malformed.kernel_route.as_mut().unwrap();
+    let (key,body)=route.aux.iter().find(|((t,_),_)|*t==LEGACY_PENDING_FACT_TABLE_V1).map(|(k,v)|(k.clone(),v.clone())).unwrap();
+    route.aux.remove(&key);route.aux.insert((key.0,key.1[..127].to_vec()),body);
+    let malformed=borsh::to_vec(&malformed).unwrap();
+    assert!(crate::palw_native_resource_v1::preflight_native_carriage_v1(malformed.as_slice(),malformed.len() as u64).is_err(),"196 key is exactly128 bytes");
+    state=carriage.into_state_v3(&p,Some(state.state_root()),false,Some(0)).unwrap();
+    state=run(&state,9,999,&[],None,&x);
+    assert!(crate::palw_native_closed_facts_v1::read_native_closed_facts_v1(&state).unwrap().is_empty());
+    // Another actual acceptance makes this very block's frame newer than the
+    // parent's LastPoint. Promotion must validate under the current fold point.
+    let mut pending=attempt(40,77);pending.attempt.execution_root=h64(801);pending.attempt.trace_retention_daa=2000;
+    state=run(&state,10,1000,&[],Some(&pending),&x);
+    let closed=crate::palw_native_closed_facts_v1::read_native_closed_facts_v1(&state).unwrap();
+    let (_,fact)=closed.iter().find(|(_,f)|f.origin.subject==id).expect("first actual maturity block promotes retired source");
+    assert_eq!(fact.closed_at.daa_score,1000);assert_eq!(fact.fact.work,40);
+    assert_eq!(fact.origin.ruleset,ruleset);assert_eq!(fact.origin.work,h64(91002));
+    assert!(!state.kernel_route.as_ref().unwrap().aux.keys().any(|(t,_)|*t==LEGACY_PENDING_FACT_TABLE_V1),"closed195 decision releases heavy source");
+}
+
+#[test]
+fn rfc23s2_actual_carrier_after_old_source_frame_collection_uses_compact_standing(){
+    // Core ingress/lifecycle regression with the existing graph-pricing and
+    // named-draw fixture seams, not a multi-node producer/admission claim.
+    use super::super::palw_claim_local_compact_sources_v1 as compact;
+    use crate::palw_claim_local_v1::*;
+    use crate::palw_fp_answer_accounting_v1::PALW_FP_WINNING_CARRIER_TABLE_V1;
+    let (base_params,base,class,_)=derived_work_chain();
+    let p=base_params.with_claim_retirement_daa(1).unwrap().with_claim_local_settlement_from_daa(Some(110)).with_rfc0018_v1(rules().rfc0018_v1().cloned());
+    let mut x=extra();x.fp_derived_work_daa=Some(0);x.native_fact_ruleset=Some(kaspa_hashes::Hash::from_bytes([39;32]));
+    let mut state=step(&base,&p,3,102,&[lane_certification(class)],None,&x).0;
+    let id=h64(0xFC);let carrier=h64(0xCAFC);let prompt:Vec<u32>=(0..8).collect();
+    let work=crate::palw_step::step_leaf_count_of_tokens_capped_v1(&derived_profile(),8,2,1<<26).unwrap();
+    let mut object=derived_commit(0xFC,&prompt,2,work);
+    if let PalwConsensusObjectV2::FreePromptCommitted{trace_retention_daa,..}=&mut object{*trace_retention_daa=1000}else{unreachable!()}
+    let mut ingress=x.clone();ingress.fp_answer_accounting_active=true;ingress.fp_claim_answers.insert(id,vec![17,18]);ingress.fp_winning_carriers.insert(id,carrier);
+    state=step(&state,&p,4,110,&[object],None,&ingress).0;
+    assert_eq!(state.kernel_route.as_ref().unwrap().aux[&(PALW_FP_WINNING_CARRIER_TABLE_V1,id.as_byte_slice().to_vec())],borsh::to_vec(&carrier).unwrap());
+    state=step(&state,&p,5,111,&[bind(id)],None,&x).0;
+    state=step(&state,&p,6,112,&[license(id)],None,&x).0;
+    state=step(&state,&p,7,133,&[],None,&x).0;
+    let mut cert=row(&state,id);cert.anchor=Some((1,[7;64]));cert.draws=vec![crate::palw_kernel_route_v1::palw_kernel_bond_id_v1(&bond_key(2))];cert.drawn_daa=134;cert.deadline_daa=135;
+    cert.attestations=vec![crate::palw_model_eligibility_v1::PalwEligibilityAttestationRowV1{verifier:cert.draws[0],verdict:crate::palw_model_eligibility_v1::PalwEligibilityVerdictV1::Reproduced,transcript:[9;64],attested_daa:134}];
+    let mut draw=x.clone();let mut key=vec![CERTIFICATION_CLAIM_PREFIX_V1];key.extend_from_slice(&palw_certification_id_v1(&id));draw.exec_v2_test_kernel_rows.push((PALW_SECURITY_CERTIFICATION_TABLE_V1,key,Some(borsh::to_vec(&cert).unwrap())));
+    state=step(&state,&p,8,134,&[],None,&draw).0;state=step(&state,&p,9,136,&[],None,&x).0;
+    state=step(&state,&p,10,156,&[],None,&x).0;assert!(state.claim(&id).is_none());
+    assert!(compact::read(&state,id).unwrap().is_some());
+    let birth_key=(PALW_CLAIM_LOCAL_TABLE_V1,palw_claim_liability_frame_key_v1(h64(4)).to_vec());
+    assert!(state.kernel_route.as_ref().unwrap().aux.contains_key(&birth_key),"full source retained during actual trace duty");
+    state=step(&state,&p,11,1001,&[],None,&x).0;
+    assert!(!state.kernel_route.as_ref().unwrap().aux.contains_key(&birth_key),"ended full birth frame collected");
+    state=PalwStateCarriageV2::from_state(&state).into_state_v3(&p,Some(state.state_root()),false,None).unwrap();
+    let consumer=h64(0xFD);let next_prompt:Vec<u32>=(30..38).collect();
+    let mut object=derived_commit(0xFD,&next_prompt,2,work);
+    if let PalwConsensusObjectV2::FreePromptCommitted{trace_retention_daa,execution_root,..}=&mut object{*trace_retention_daa=2000;*execution_root=h64(0xAFD)}else{unreachable!()}
+    let mut next=x.clone();next.fp_answer_accounting_active=true;next.fp_claim_answers.insert(consumer,vec![41,42]);next.fp_winning_carriers.insert(consumer,h64(0xCAFD));next.carrier_input_spends.insert(consumer,vec![carrier]);
+    state=step(&state,&p,12,1002,&[object],None,&next).0;
+    let origin=super::super::palw_claim_local_rewards_v1::origin_for(&state,&p,consumer,state.claim(&consumer).unwrap()).unwrap().unwrap();
+    assert!(origin.frame().inputs.contains(&PalwClaimLocalInputV1::ConsumedCarrier{consumer,source:id}),"actual input inventory records the old winning carrier");
+    assert_eq!(compact::carrier(&state,&origin,id).unwrap(),Some(super::super::palw_claim_local_rewards_v1::RewardReadinessV1::Ready));
+    assert!(state.kernel_route.as_ref().unwrap().aux.contains_key(&(PALW_CLAIM_LOCAL_TABLE_V1,palw_claim_liability_frame_key_v1(h64(12)).to_vec())),"live consumer keeps complete original frame");
+}
+
+#[test]
+fn rfc23s2_compact_frame_capacity_refusal_child(){
+    if std::env::var("MISAKA_COMPACT_FRAME_CAPACITY").ok().as_deref()!=Some("1"){return}
+    use crate::palw_native_resource_v1::{NativeSnapshotResourceLimitsV1,arm_native_logical_limits_v1,reserve_native_requests_v1};
+    let (p,state,_)=world(false);let mut x=extra();x.native_fact_ruleset=Some(kaspa_hashes::Hash::from_bytes([41;32]));
+    let mut b=TransitionBuilder::new(&state,&p,false,false,false,false,&x);let before=b.state.state_root();let entries=b.entries.len();let point=ctx(10,148,10);
+    let memory=1<<20;arm_native_logical_limits_v1(Some(NativeSnapshotResourceLimitsV1{memory_bytes:memory,database_bytes:0}));
+    let blocker=reserve_native_requests_v1(memory).unwrap();
+    assert!(matches!(super::super::palw_claim_local_compact_sources_v1::compact_and_collect_v1(&mut b,&point),Err(PalwStateV2Error::NativeResource(_))));
+    assert_eq!(b.entries.len(),entries);assert_eq!(b.state.last_point,state.last_point,"failed local construction restores actual point marker");
+    drop(blocker);assert_eq!(b.state.state_root(),before);
+}
+#[test]
+fn rfc23s2_compact_frame_capacity_refusal_is_local_and_rolls_back(){
+    let out=std::process::Command::new(std::env::current_exe().unwrap()).args(["--exact","palw_state_v2::tests::claim_local_rewards_v1::rfc23s2_compact_frame_capacity_refusal_child","--nocapture"]).env("MISAKA_COMPACT_FRAME_CAPACITY","1").output().unwrap();
+    assert!(out.status.success(),"{} {}",String::from_utf8_lossy(&out.stdout),String::from_utf8_lossy(&out.stderr));
+    assert!(String::from_utf8_lossy(&out.stdout).contains("1 passed"));
+}
+
+/// Fault fixture only: malformed committed metadata must not become a guessed
+/// eligible/ineligible bond; local allocation failure must remain distinguishable.
+#[test]
+fn native_common_capital_panel_checked_capacity_child(){
+    if std::env::var("MISAKA_CHECKED_PANEL_CAPITAL").ok().as_deref()!=Some("1"){return}
+    use crate::palw_native_resource_v1::{NativeSnapshotResourceLimitsV1,arm_native_logical_limits_v1,reserve_native_requests_v1};
+    use crate::palw_native_budget_binding_v1::{NATIVE_BUDGET_BINDING_TABLE_V1,native_budget_binding_producer_key_v1};
+    use crate::palw_panel_v2::{PalwPanelValidLockV1,PalwRcoreSeatFilterV1,PalwStakeDrawCensusV1,PalwSw8DrawPointV1,PalwPanelDrawPolicyV1};
+    let (p,mut state,_)=world(false);
+    let bond=bond_key(2);
+    state.kernel_route.as_mut().unwrap().aux.insert((NATIVE_BUDGET_BINDING_TABLE_V1,native_budget_binding_producer_key_v1(&bond,h64(123))),vec![0]);
+    let lock=PalwPanelValidLockV1{required:1,now_daa:128,settled_anchor_depth:None,window_court:p.window_court(),
+        rcore:Some(PalwRcoreSeatFilterV1{eligibility:1,ceiling_permille:500,resolved_locks_off_ceiling:false,
+            accuser_reserve:0,held_charge_floor:None,gain_scale:crate::palw_weight_cap_v1::PalwCapacityGainScaleV1::of(&p)})};
+    let point=PalwSw8DrawPointV1{max_slot:u64::MAX,draw_daa:128,policy:PalwPanelDrawPolicyV1::default(),bond_maturity_window:None,
+        settled_anchor_depth:None,capability_proof:false,shard_licensing:false};
+    let x=extra();let builder=TransitionBuilder::new(&state,&p,false,false,false,false,&x);
+    let memory=1<<20;
+    arm_native_logical_limits_v1(Some(NativeSnapshotResourceLimitsV1{memory_bytes:memory,database_bytes:0}));
+    let blocker=reserve_native_requests_v1(memory).unwrap();
+    assert!(matches!(palw_bond_collateral_is_locked_checked_v7(&state,&p,&bond,state.bond(&bond).unwrap(),128,p.withdrawal_delay_daa(),None,true),Err(PalwStateV2Error::NativeResource(_))));
+    assert!(matches!(builder.open_conviction_v1(&[bond],128),Err(PalwStateV2Error::NativeResource(_))));
+    assert!(matches!(lock.admits_checked_v2(&state,&bond),Err(PalwStateV2Error::NativeResource(_))));
+    assert!(matches!(lock.room_checked_v2(&state,&bond),Err(PalwStateV2Error::NativeResource(_))));
+    assert!(matches!(PalwStakeDrawCensusV1::new_checked_v2(&state,1,1,&point,None,Some(lock.frame_v1())),Err(PalwStateV2Error::NativeResource(_))));
+    drop(blocker);
+    assert!(matches!(lock.admits_checked_v2(&state,&bond),Err(PalwStateV2Error::CarriageInconsistent(_))),"committed malformed source is a typed error, not ordinary bond exclusion");
+}
+#[test]
+fn native_common_capital_panel_capacity_is_not_candidate_exclusion(){
+    let out=std::process::Command::new(std::env::current_exe().unwrap()).args(["--exact","palw_state_v2::tests::claim_local_rewards_v1::native_common_capital_panel_checked_capacity_child","--nocapture"])
+        .env("MISAKA_CHECKED_PANEL_CAPITAL","1").output().unwrap();
+    assert!(out.status.success(),"{} {}",String::from_utf8_lossy(&out.stdout),String::from_utf8_lossy(&out.stderr));
+    assert!(String::from_utf8_lossy(&out.stdout).contains("1 passed"));
+}
+
+#[test]
+fn rfc23s2_frame_collection_keeps_actual_live_dependency_birth_material(){
+    let (p,state,[a,_,c])=world(false);
+    let mut x=extra();x.native_fact_ruleset=Some(kaspa_hashes::Hash::from_bytes([45;32]));
+    let mut b=TransitionBuilder::new(&state,&p,false,false,false,false,&x);let point=*state.last_point().unwrap();
+    super::super::palw_claim_local_compact_sources_v1::compact_and_collect_v1(&mut b,&point).unwrap();
+    for id in [a,c]{
+        let born=b.state.claim(&id).unwrap();
+        let original=super::super::palw_claim_local_rewards_v1::origin_for(&b.state,&p,id,born).unwrap().expect("actual live liability birth survives collection");
+        assert_eq!(original.original_claim().execution_root,born.execution_root);
+    }
+    assert!(matches!(super::super::palw_claim_local_rewards_v1::reward_readiness_v1(&b.state,&p,1001,c,false).unwrap(),super::super::palw_claim_local_rewards_v1::RewardReadinessV1::Hold(_)),"collection cannot turn unresolved A's dependent C into ready credit");
+    let restored=PalwStateCarriageV2::from_state(&b.state).into_state_v3(&p,Some(b.state.state_root()),false,None).unwrap();
+    assert_eq!(restored.state_root(),b.state.state_root());
 }

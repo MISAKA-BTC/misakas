@@ -12,6 +12,7 @@ mod evm_view_projection_hook_v2;
 mod utxo_set_override;
 
 use kaspa_consensus_core::Hash64;
+use crate::pipeline::virtual_processor::PalwWeighFaultV2;
 
 use crate::{
     config::Config,
@@ -1358,6 +1359,10 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_fp_spendable_v3_impl(bond)
     }
 
+    fn palw_locked_bond_outpoints_checked_v3(&self)->Result<Vec<kaspa_consensus_core::tx::TransactionOutpoint>,kaspa_consensus_core::palw_state_v2::PalwStateV2Error>{
+        self.virtual_processor.palw_locked_bond_outpoints_checked_v3_impl()
+    }
+
     fn palw_locked_bond_outpoints_v2(&self) -> Vec<kaspa_consensus_core::tx::TransactionOutpoint> {
         self.virtual_processor.palw_locked_bond_outpoints_v2_impl()
     }
@@ -2118,18 +2123,25 @@ impl ConsensusApi for Consensus {
         checkpoint: BlockHash,
         request: &kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwProspectiveKernelMaterialRequestV4,
     ) -> Result<kaspa_consensus_core::palw_kernel_material_enrollment_v4::PalwKernelMaterialIngressOwnedV4, String> {
+        self.palw_kernel_material_ingress_checked_v4(checkpoint, request).map_err(|error|error.to_string())
+    }
+    fn palw_kernel_material_ingress_checked_v4(
+        &self,
+        checkpoint: BlockHash,
+        request: &kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwProspectiveKernelMaterialRequestV4,
+    ) -> Result<kaspa_consensus_core::palw_kernel_material_enrollment_v4::PalwKernelMaterialIngressOwnedV4, kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4> {
         let before = self.lkg_virtual_state.load();
         let now = self.get_virtual_daa_score();
-        let (generation, stable) = self.virtual_processor.pruning_import_status().map_err(|e| e.to_string())?;
+        let (generation, stable) = self.virtual_processor.pruning_import_status().map_err(|_| kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::store_unreadable_v4())?;
         if !stable || generation.active.is_some() {
-            return Err("kernel ingress import incomplete".into());
+            return Err(kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::history_unavailable_v4());
         }
         if !self.services.reachability_service.has_reachability_data(checkpoint)
             || !self.services.reachability_service.is_chain_ancestor_of(checkpoint, before.ghostdag_data.selected_parent)
         {
             return Err("kernel ingress checkpoint is not on own accepted chain".into());
         }
-        let daa = self.headers_store.get_daa_score(checkpoint).map_err(|e| e.to_string())?;
+        let daa = self.headers_store.get_daa_score(checkpoint).map_err(|_| kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::store_unreadable_v4())?;
         if daa > now || now - daa > kaspa_consensus_core::palw_prospective_kernel_material_v4::PALW_KERNEL_INGRESS_CHECKPOINT_WINDOW_V4
         {
             return Err("kernel ingress checkpoint outside bounded native window".into());
@@ -2137,17 +2149,21 @@ impl ConsensusApi for Consensus {
         let state = self
             .virtual_processor
             .palw_candidate_state_v2_checked(checkpoint)
-            .map_err(|e| format!("kernel ingress native state unavailable: {e:?}"))?;
-        let prepared = self.virtual_processor.palw_kernel_material_ingress_v4_impl(&state, checkpoint, now, request)?;
+            .map_err(|error|match error {
+                PalwWeighFaultV2::NativeCapacityUnavailable=>kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::capacity_unavailable_v4(),
+                PalwWeighFaultV2::StoreUnreadable=>kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::store_unreadable_v4(),
+                PalwWeighFaultV2::NoOpinion=>kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::history_unavailable_v4(),
+            })?;
+        let prepared = self.virtual_processor.palw_kernel_material_ingress_checked_v4_impl(&state, checkpoint, now, request)?;
         let after = self.lkg_virtual_state.load();
-        let (generation_after, stable_after) = self.virtual_processor.pruning_import_status().map_err(|e| e.to_string())?;
+        let (generation_after, stable_after) = self.virtual_processor.pruning_import_status().map_err(|_| kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::store_unreadable_v4())?;
         if !stable_after
             || generation_after.active.is_some()
             || generation.epoch != generation_after.epoch
             || before.ghostdag_data.selected_parent != after.ghostdag_data.selected_parent
             || now != self.get_virtual_daa_score()
         {
-            return Err("kernel ingress changed native tip/clock/import generation".into());
+            return Err(kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::history_unavailable_v4());
         }
         Ok(prepared)
     }
@@ -2267,26 +2283,38 @@ impl ConsensusApi for Consensus {
         bundle: &kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwProspectiveKernelBundleV4,
         intent: &kaspa_consensus_core::palw_kernel_material_replacement_v4::PalwKernelMaterialReplacementIntentV4,
     ) -> Result<kaspa_consensus_core::palw_kernel_material_replacement_v4::PalwKernelMaterialReplacementOwnedV4, String> {
+        self.palw_kernel_material_replacement_checked_v4(context, bundle, intent).map_err(|error|error.to_string())
+    }
+    fn palw_kernel_material_replacement_checked_v4(
+        &self,
+        context: &kaspa_consensus_core::palw_kernel_material_context_v4::PalwProspectiveKernelMaterialContextV4,
+        bundle: &kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwProspectiveKernelBundleV4,
+        intent: &kaspa_consensus_core::palw_kernel_material_replacement_v4::PalwKernelMaterialReplacementIntentV4,
+    ) -> Result<kaspa_consensus_core::palw_kernel_material_replacement_v4::PalwKernelMaterialReplacementOwnedV4, kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4> {
         let before = self.lkg_virtual_state.load();
         let now = self.get_virtual_daa_score();
-        let (generation, stable) = self.virtual_processor.pruning_import_status().map_err(|e| e.to_string())?;
+        let (generation, stable) = self.virtual_processor.pruning_import_status().map_err(|_| kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::store_unreadable_v4())?;
         if !stable || generation.active.is_some() {
-            return Err("replacement native import incomplete".into());
+            return Err(kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::history_unavailable_v4());
         }
         let state = self
             .virtual_processor
             .palw_candidate_state_v2_checked(before.ghostdag_data.selected_parent)
-            .map_err(|e| format!("replacement native state unavailable: {e:?}"))?;
-        let quote = self.virtual_processor.palw_kernel_material_replacement_v4_impl(&state, now, context, bundle, intent)?;
+            .map_err(|error|match error {
+                PalwWeighFaultV2::NativeCapacityUnavailable=>kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::capacity_unavailable_v4(),
+                PalwWeighFaultV2::StoreUnreadable=>kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::store_unreadable_v4(),
+                PalwWeighFaultV2::NoOpinion=>kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::history_unavailable_v4(),
+            })?;
+        let quote = self.virtual_processor.palw_kernel_material_replacement_checked_v4_impl(&state, now, context, bundle, intent)?;
         let after = self.lkg_virtual_state.load();
-        let (end, stable) = self.virtual_processor.pruning_import_status().map_err(|e| e.to_string())?;
+        let (end, stable) = self.virtual_processor.pruning_import_status().map_err(|_| kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::store_unreadable_v4())?;
         if !stable
             || end.active.is_some()
             || end.epoch != generation.epoch
             || before.ghostdag_data.selected_parent != after.ghostdag_data.selected_parent
             || now != self.get_virtual_daa_score()
         {
-            return Err("replacement native point/clock/import changed".into());
+            return Err(kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::history_unavailable_v4());
         }
         Ok(quote)
     }
@@ -2436,14 +2464,29 @@ impl ConsensusApi for Consensus {
         >,
         String,
     > {
+        self.palw_native_recovery_session_quote_checked_v4(checkpoint, daa, class, executor, providers).map_err(|error|error.to_string())
+    }
+    fn palw_native_recovery_session_quote_checked_v4(
+        &self,
+        checkpoint: Option<BlockHash>,
+        daa: u64,
+        class: kaspa_hashes::Hash64,
+        executor: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        providers: Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>,
+    ) -> Result<
+        kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<
+            kaspa_consensus_core::palw_material_session_enrollment_v4::PalwNativeRecoverySessionQuoteV4,
+        >,
+        kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4,
+    > {
         let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.config.params.palw_consensus_mode
         else {
             return Err("recovery enrollment quote needs ConsensusV2".into());
         };
         let before = self.lkg_virtual_state.load();
-        let (generation, stable) = self.virtual_processor.pruning_import_status().map_err(|e| e.to_string())?;
+        let (generation, stable) = self.virtual_processor.pruning_import_status().map_err(|_| kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::store_unreadable_v4())?;
         if !stable || generation.active.is_some() {
-            return Err("recovery quote import incomplete".into());
+            return Err(kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::history_unavailable_v4());
         }
         let point = checkpoint.unwrap_or(before.ghostdag_data.selected_parent);
         if !self.services.reachability_service.has_reachability_data(point)
@@ -2451,21 +2494,25 @@ impl ConsensusApi for Consensus {
         {
             return Err("recovery checkpoint not on current accepted chain".into());
         }
-        let point_daa = self.headers_store.get_daa_score(point).map_err(|e| e.to_string())?;
+        let point_daa = self.headers_store.get_daa_score(point).map_err(|_| kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::store_unreadable_v4())?;
         if daa < point_daa || point_daa.saturating_add(600) < daa {
             return Err("recovery quote checkpoint/DAA exceeds bounded window".into());
         }
         let state = self
             .virtual_processor
             .palw_candidate_state_v2_checked(point)
-            .map_err(|e| format!("recovery quote state unavailable: {e:?}"))?;
-        state.assert_monetary_material_consistency_v1(&bundle.state).map_err(|e| e.to_string())?;
-        state.assert_material_release_recovery_consistency_v2(&bundle.state).map_err(|e| e.to_string())?;
+            .map_err(|error|match error {
+                PalwWeighFaultV2::NativeCapacityUnavailable=>kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::capacity_unavailable_v4(),
+                PalwWeighFaultV2::StoreUnreadable=>kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::store_unreadable_v4(),
+                PalwWeighFaultV2::NoOpinion=>kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::history_unavailable_v4(),
+            })?;
+        state.assert_monetary_material_consistency_v1(&bundle.state).map_err(kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::from)?;
+        state.assert_material_release_recovery_consistency_v2(&bundle.state).map_err(kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::from)?;
         let network = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
             self.config.params.net.to_string().as_bytes(),
             Some(self.config.params.genesis.hash),
         );
-        let quote = kaspa_consensus_core::palw_material_session_enrollment_v4::native_recovery_session_quote_v4(
+        let quote = kaspa_consensus_core::palw_material_session_enrollment_v4::native_recovery_session_quote_checked_v4(
             &state,
             &bundle.state,
             point,
@@ -2476,13 +2523,13 @@ impl ConsensusApi for Consensus {
             &providers,
         )?;
         let after = self.lkg_virtual_state.load();
-        let (generation_after, stable_after) = self.virtual_processor.pruning_import_status().map_err(|e| e.to_string())?;
+        let (generation_after, stable_after) = self.virtual_processor.pruning_import_status().map_err(|_| kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::store_unreadable_v4())?;
         if !stable_after
             || generation_after.active.is_some()
             || generation.epoch != generation_after.epoch
             || before.ghostdag_data.selected_parent != after.ghostdag_data.selected_parent
         {
-            return Err("recovery quote changed tip/import generation".into());
+            return Err(kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::history_unavailable_v4());
         }
         Ok(quote)
     }
@@ -4620,6 +4667,40 @@ impl ConsensusApi for Consensus {
         complete: bool,
     ) -> Result<Vec<(kaspa_hashes::Hash64, Vec<u8>)>, String> {
         self.virtual_processor.palw_class_carriages_for_snapshot_v1_impl(snapshot, complete)
+    }
+
+    fn palw_rooted_family_table_v1(
+        &self, claim: kaspa_hashes::Hash64,
+    ) -> Result<Option<kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<kaspa_consensus_core::palw_court_rooted_semantic_v1::RootedSemanticTableV1>>,
+                kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
+        self.virtual_processor.palw_rooted_family_table_v1_impl(claim)
+    }
+
+    fn palw_rooted_tokenizer_raw_v1(
+        &self, claim: kaspa_hashes::Hash64,
+    ) -> Result<Option<kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<Vec<u8>>>,
+                kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
+        self.virtual_processor.palw_rooted_tokenizer_raw_v1_impl(claim)
+    }
+
+    fn write_pruning_point_palw_row_generation_v1(
+        &self, point: BlockHash, suffix: &mut dyn std::io::Read, suffix_len: u64,
+        writer: &mut dyn std::io::Write,
+    ) -> std::io::Result<Option<u64>> {
+        self.virtual_processor.write_pruning_point_palw_row_generation_v1_impl(point, suffix, suffix_len, writer)
+    }
+
+    fn pruning_point_palw_row_witness_root_v1(&self, point: BlockHash) -> Option<kaspa_hashes::Hash64> {
+        self.virtual_processor.pruning_point_palw_row_witness_root_v1_impl(point)
+    }
+
+    fn palw_validate_row_stream_snapshot_v1(
+        &self,
+        point: BlockHash,
+        snapshot: &kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2,
+        inventory: &kaspa_consensus_core::palw_row_stream_v1::PalwRowInventoryV1,
+    ) -> Result<(), kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
+        self.virtual_processor.palw_validate_row_stream_snapshot_v1_impl(point, snapshot, inventory)
     }
 
     fn palw_validate_snapshot_declarations_v1(

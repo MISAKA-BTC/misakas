@@ -42,6 +42,9 @@ pub const PALW_TIR_FRAME_CLOCK_VERSION_V1: u16 = 1;
 /// Proposed opt-in clock for the node's accepted-offset witness pipeline.
 /// V1 keeps its exact old derivation; no preset or reviewed record selects V2.
 pub const PALW_TIR_FRAME_CLOCK_VERSION_V2: u16 = 2;
+/// New family supplier contract only: native response-turn idle grace is
+/// separate from the unchanged material/reorg retention horizon.
+pub const PALW_TIR_FRAME_CLOCK_FAMILY_VERSION_V3: u16 = 3;
 
 /// WorkDebits on a preparer's serial path per pass: ONE debit carries the whole pass (the fold counts grants, not slices; the
 /// preparer's own lane bounds its cumulative work). Then its Ready.
@@ -93,7 +96,7 @@ impl PalwTirFrameClockV1 {
         Ok(sum(&[product(moves, self.control_bytes)?, body])?.div_ceil(self.parallel_bytes_per_daa))
     }
     pub fn check_v1(&self) -> Result<(), String> {
-        if !matches!(self.version, PALW_TIR_FRAME_CLOCK_VERSION_V1 | PALW_TIR_FRAME_CLOCK_VERSION_V2)
+        if !matches!(self.version, PALW_TIR_FRAME_CLOCK_VERSION_V1 | PALW_TIR_FRAME_CLOCK_VERSION_V2 | PALW_TIR_FRAME_CLOCK_FAMILY_VERSION_V3)
             || self.action_parser_steps == 0
             || self.frame_passes_per_check == 0
             || self.control_bytes == 0
@@ -165,7 +168,7 @@ pub struct PalwTirFrameCostRecordV1 {
 
 /// **The pinned frame cost records — EMPTY.** No real network's frame is priced or clocked until a reviewed change pins one.
 // Lane ACT2 (2026-10-27): testnet-12 DAA 17,000 only, every slot a typed waiver (crate::palw_arming_waiver_v1).
-pub const PALW_TIR_FRAME_COST_RECORDS_V1: &[PalwTirFrameCostRecordV1] = crate::palw_t12_17000_records_v1::PALW_T12_17000_FRAME_COST_RECORDS_V1;
+pub const PALW_TIR_FRAME_COST_RECORDS_V1: &[PalwTirFrameCostRecordV1] = crate::palw_t12_18400_records_v1::PALW_T12_18400_FRAME_COST_RECORDS_V1;
 
 /// Why a frame cost record does not price a network.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -464,10 +467,20 @@ pub fn tir_public_owner_queue_wait_v1(
     clock: &PalwTirFrameClockV1,
 ) -> Result<u64, String> {
     clock.check_v1()?;
-    let k = PALW_TIR_FRAME_CONCURRENT_OWNERS_V1;
-    // The court-capacity lane's own rules (single source): its idle grace and its tenure.
+    // The historical lane retains its original material-retention grace.
     let grace = crate::palw_tir_public_owned_v1::palw_tir_owner_idle_grace_v1(config);
-    let tenure = crate::palw_tir_public_claim_v1::palw_tir_owner_tenure_of_window_v1(open_window, grace);
+    tir_public_owner_queue_wait_with_grace_v3(open_window,config,clock,grace,0)
+}
+/// Explicit family owner policy; the opaque native acquisition plan supplies
+/// the exact same response-turn bound the runtime owner row reads.
+pub fn tir_public_owner_queue_wait_family_v3(open_window:u64,plan:&crate::palw_tir_public_owned_v1::PalwTirPublicOwnedPlanV1)->Result<u64,String>{
+    if plan.clock.version!=PALW_TIR_FRAME_CLOCK_FAMILY_VERSION_V3{return Err("family owner queue requires its versioned native plan".into());}
+    tir_public_owner_queue_wait_with_grace_v3(open_window,&plan.config,&plan.clock,plan.owner_idle_grace_family_v3()?,plan.owner_tenure_family_v3()?)
+}
+fn tir_public_owner_queue_wait_with_grace_v3(open_window:u64,_config:&PalwStagedPublicCourtConfigV1,clock:&PalwTirFrameClockV1,grace:u64,minimum_tenure:u64)->Result<u64,String>{
+    clock.check_v1()?;
+    let k=PALW_TIR_FRAME_CONCURRENT_OWNERS_V1;
+    let tenure = crate::palw_tir_public_claim_v1::palw_tir_owner_tenure_of_window_v1(open_window, grace).max(minimum_tenure);
     let ahead = product(open_window, clock.parallel_bytes_per_daa / clock.control_bytes)?;
     product(sum(&[ahead, 1])?.div_ceil(k), tenure)
 }
@@ -630,7 +643,7 @@ pub fn tir_public_filing_daa_v1(
     // here. Original maximum_door still rejects a frame that no longer fits.
     let serial = match clock.version {
         PALW_TIR_FRAME_CLOCK_VERSION_V1 => 2,
-        PALW_TIR_FRAME_CLOCK_VERSION_V2 if witness_moves > 0 => witness_moves.max(2),
+        PALW_TIR_FRAME_CLOCK_VERSION_V2 | PALW_TIR_FRAME_CLOCK_FAMILY_VERSION_V3 if witness_moves > 0 => witness_moves.max(2),
         _ => return Err("sequential filing needs at least one carried move".into()),
     };
     sum(&[product(serial, config.prices.inclusion_margin_daa)?, clock.inclusion_daa_v1(witness_moves, parts)?])
@@ -664,6 +677,19 @@ mod tests {
             palw_tir_frame_cost_record_admits_v1(Hash64::from_u64_word(1), 16_000, Some(&v2), PALW_TIR_FRAME_COST_RECORDS_V1),
             Err(PalwTirFrameCostRefusalV1::NoRecord)
         );
+    }
+
+    #[test]
+    fn family_clock_v3_keeps_sequential_filing_v2_and_material_retention() {
+        let mut cost=crate::palw_g14_values_v1::PALW_G14_TIR_FRAME_COST_ESTIMATE_V1;
+        let retention=cost.config.reorg_retention_daa;
+        cost.clock.version=PALW_TIR_FRAME_CLOCK_VERSION_V2;
+        let expected=tir_public_filing_daa_v1(24,&cost.config,&cost.clock).unwrap();
+        cost.clock.version=PALW_TIR_FRAME_CLOCK_FAMILY_VERSION_V3;
+        assert_eq!(tir_public_filing_daa_v1(24,&cost.config,&cost.clock).unwrap(),expected);
+        assert!(tir_public_filing_daa_v1(0,&cost.config,&cost.clock).is_err());
+        assert_eq!(cost.config.reorg_retention_daa,retention);
+        assert_eq!(cost.clock.maximum_door_daa,3_120);
     }
 
     #[test]

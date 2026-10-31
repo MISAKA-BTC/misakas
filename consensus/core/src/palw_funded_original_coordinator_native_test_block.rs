@@ -18,7 +18,7 @@
             // Lane r5: the (test) court service profile the all-branch reservation runs under; the book is opened under it.
             let service_profile = crate::palw_court_service_binding_v1::CourtServiceProfileV1 {
                 version: 1,
-                budget: crate::palw_court_service_v1::ServiceCost { bytes: 1 << 40, work: 1 << 40, io: 1 << 20, controls: 1 << 20 },
+                budget: crate::palw_court_service_v1::ServiceCost { bytes: 1 << 40, work: 1 << 40, io: 1 << 20, controls: if prefix {1} else {1 << 20} },
                 packet_cost: crate::palw_court_service_v1::ServiceCost { bytes: 1, work: 1, io: 0, controls: 1 },
                 packets_per_signer: 2,
                 service_span_daa: 100,

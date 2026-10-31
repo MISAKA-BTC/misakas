@@ -458,6 +458,8 @@ impl NativeHeapV1 for crate::palw_funded_original_coordinator_v1::PalwFundedOrig
             .add::<Self>(allocation::<u8>(env.original_envelope.capacity(), path), path)
             .add::<Self>(allocation::<u8>(env.payer_pubkey.capacity(), path), path)
             .add::<Self>(allocation::<u8>(env.funding.signature.capacity(), path), path);
+        heap=heap.add::<Self>(allocation::<crate::palw_court_family_supplier_v1::SignedFamilySupplierV1>(self.suppliers_v2().len(),path),path);
+        for supplier in self.suppliers_v2(){ heap=heap.add::<Self>(supplier.native_heap_v1(path),path); }
         for input in &tx.inputs {
             heap = heap.add::<Self>(allocation::<u8>(input.signature_script.capacity(), path), path);
         }

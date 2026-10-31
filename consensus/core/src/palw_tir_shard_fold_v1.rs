@@ -317,7 +317,7 @@ pub(super) fn apply_part_v1(
         // each later shard's price is an increment that needs its own room.
         let held = builder.state.slashable_locks.contains_key(&(*bond, claim_id));
         let owed = if held { price } else { price.saturating_sub(palw_seat_duty_of_v1(&builder.state, &claim_id, bond)) };
-        if owed > builder.gate_room(bond, now, PalwRcoreGateV1::Work) {
+        if owed > builder.gate_room(bond, now, PalwRcoreGateV1::Work)? {
             return Ok(());
         }
     }

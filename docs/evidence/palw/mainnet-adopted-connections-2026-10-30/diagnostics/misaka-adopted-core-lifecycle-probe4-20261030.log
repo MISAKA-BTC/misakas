@@ -1,0 +1,15 @@
+
+running 1 test
+test palw_state_v2::tests::claim_local_rewards_v1::rfc23s2_legacy_actual_journal_source_survives_retirement_and_closes_at_first_maturity_block ... 
+thread 'palw_state_v2::tests::claim_local_rewards_v1::rfc23s2_legacy_actual_journal_source_survives_retirement_and_closes_at_first_maturity_block' (647155) panicked at consensus/core/src/palw_state_v2/tests/claim_local_rewards_v1.rs:736:136:
+called `Result::unwrap()` on an `Err` value: FirstClassMustBeTheBase { class_id: 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000, base: 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000008403000000000000 }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    palw_state_v2::tests::claim_local_rewards_v1::rfc23s2_legacy_actual_journal_source_survives_retirement_and_closes_at_first_maturity_block
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 5364 filtered out; finished in 0.03s
+

@@ -3148,6 +3148,31 @@ mod p6_tests {
         assert_eq!(super::palw_adopt_ordinary_bond_v1(ordinary, Some((ordinary, PalwBondStatusV2::Active))), None);
     }
 
+    #[test]
+    fn recovery_draws_the_base_class_only_while_the_placeholder_bond_is_unknown() {
+        use kaspa_consensus_core::config::params::palw_base_coinbase_recovery_bond_label_v1;
+        use kaspa_consensus_core::palw_producer_v2::PALW_NOT_READY_BOND_UNKNOWN_V2;
+        let state = state(AMPLE, 0, true);
+        let p = params(1, true);
+        let mut facts = facts(&state, &p, 1);
+        assert!(facts.is_base_class);
+        let unknown = PalwProducerHoldV1::NotReady(PALW_NOT_READY_BOND_UNKNOWN_V2);
+        let label = palw_base_coinbase_recovery_bond_label_v1();
+        assert!(super::palw_base_coinbase_recovery_draws_v1(&label, &facts, &unknown));
+        assert!(!super::palw_base_coinbase_recovery_draws_v1("9:0", &facts, &unknown));
+        facts.is_base_class = false;
+        assert!(!super::palw_base_coinbase_recovery_draws_v1(&label, &facts, &unknown));
+        facts.is_base_class = true;
+        facts.class_admission_refusal = Some("idle-only fallback".into());
+        assert!(!super::palw_base_coinbase_recovery_draws_v1(&label, &facts, &unknown));
+        facts.class_admission_refusal = None;
+        assert!(!super::palw_base_coinbase_recovery_draws_v1(
+            &label,
+            &facts,
+            &PalwProducerHoldV1::NotReady("the bond is retiring"),
+        ));
+    }
+
     fn bond_registered(n: u64, key: [u8; 4], operator: u8, collateral: u64) -> PalwConsensusObjectV2 {
         PalwConsensusObjectV2::BondRegistered {
             bond: PalwBondKeyV2(outpoint(n)),

@@ -153,6 +153,12 @@ impl PalwChainStateV2 {
             if *table != PALW_CLAIM_LOCAL_TABLE_V1 {
                 continue;
             }
+            if key.first().is_some_and(|p|super::palw_claim_local_descriptor_v2::is_prefix(*p)){
+                // The resolved descriptor has already checked every normalized
+                // root, key, body identity and reference against this snapshot.
+                super::palw_claim_local_descriptor_v2::validate_key(key)?;
+                continue
+            }
             if key.first() == Some(&b'C') {
                 // RFC-0023 stage 2 checkpoint: judged whole below, against a recomputation.
                 if key.as_slice() != super::palw_claim_local_checkpoint_fold_v1::palw_claim_local_checkpoint_key_v1() {
@@ -233,6 +239,48 @@ impl PalwChainStateV2 {
                 }
                 continue;
             }
+            if key.first()==Some(&super::PALW_COMPACT_KERNEL_ORIGIN_PREFIX_V1){
+                if key.len()!=65{return Err(PalwStateV2Error::CarriageInconsistent("bad compact kernel origin key".into()))}
+                let id=Hash64::from_bytes(key[1..].try_into().expect("compact kernel key"));
+                let row=super::palw_claim_local_kernel_origins_v1::read(self,id)?.ok_or_else(||PalwStateV2Error::CarriageInconsistent("compact kernel origin disappeared".into()))?;
+                if !params.claim_local_settlement_active_at(row.birth.daa_score){return Err(PalwStateV2Error::CarriageInconsistent("compact kernel origin precedes actual stage2 fence".into()))}
+                continue
+            }
+            if key.first()==Some(&super::PALW_COMPACT_CLAIM_SOURCE_PREFIX_V1){
+                if key.len()!=65{return Err(PalwStateV2Error::CarriageInconsistent("bad compact source key".into()))}
+                let id=Hash64::from_bytes(key[1..].try_into().expect("fixed compact key"));
+                let row=super::palw_claim_local_compact_sources_v1::read(self,id)?.ok_or_else(||PalwStateV2Error::CarriageInconsistent("compact source disappeared".into()))?;
+                if self.last_point.is_none_or(|p|row.closed_at.daa_score>p.daa_score||row.closed_at.blue_score>p.blue_score)
+                    ||!params.claim_local_settlement_active_at(row.birth.daa_score)
+                    ||(row.permitted&&(!matches!(row.terminal_phase,PalwClaimPhaseV2::Final{..})
+                        ||super::palw_claim_local_rewards_v1::approval(params,id,&row.original,Some(&row.approval))?!=super::palw_claim_local_rewards_v1::RewardReadinessV1::Ready)){
+                    return Err(PalwStateV2Error::CarriageInconsistent("compact source closure/selected approval context differs".into()))
+                }
+                continue
+            }
+            // Aux144 is shared with native held-fee/material duty rows. They
+            // have explicit typed codecs and identities; they are not F frames.
+            if key.len()==66&&key[0]==crate::palw_native_liability_hold_v1::PALW_NATIVE_HELD_FEE_PREFIX_V1{
+                let row=super::palw_claim_local_rewards_v1::decoded::<crate::palw_native_liability_hold_v1::PalwNativeHeldFeeRowV1>(bytes)?;
+                if row.version!=1||key[1]!=row.family||key[2..]!=row.job||row.horizon_daa<row.final_daa{return Err(PalwStateV2Error::CarriageInconsistent("native held fee key/horizon differs".into()))}continue
+            }
+            if key.len()==66&&key[0]==super::palw_native_post_final_duty_v1::PALW_NATIVE_POST_FINAL_DUTY_PREFIX_V1{
+                let row=super::palw_claim_local_rewards_v1::decoded::<crate::palw_native_post_final_duty_row_v1::PalwNativePostFinalDutyRowV1>(bytes)?;
+                if row.version!=1||key[1]!=row.family||key[2..]!=row.job{return Err(PalwStateV2Error::CarriageInconsistent("native post-Final duty key differs".into()))}continue
+            }
+            if key.len()==74&&key[0]==crate::palw_native_liability_hold_v1::PALW_NATIVE_HELD_FEE_HORIZON_PREFIX_V1{
+                let value=super::palw_claim_local_rewards_v1::decoded::<u8>(bytes)?;
+                let horizon=u64::from_be_bytes(key[1..9].try_into().expect("fixed horizon key"));
+                let mut held=[0;66];held[0]=crate::palw_native_liability_hold_v1::PALW_NATIVE_HELD_FEE_PREFIX_V1;held[1]=key[9];held[2..].copy_from_slice(&key[10..]);
+                let Some(raw)=route.aux.iter().find(|((t,k),_)|*t==PALW_CLAIM_LOCAL_TABLE_V1&&k.as_slice()==held).map(|(_,v)|v)else{return Err(PalwStateV2Error::CarriageInconsistent("native fee horizon lost held row".into()))};
+                let row=super::palw_claim_local_rewards_v1::decoded::<crate::palw_native_liability_hold_v1::PalwNativeHeldFeeRowV1>(raw)?;
+                if *value!=1||row.horizon_daa!=horizon{return Err(PalwStateV2Error::CarriageInconsistent("native fee horizon index differs".into()))}continue
+            }
+            if key.len()==130&&key[0]==super::palw_native_post_final_duty_v1::PALW_NATIVE_POST_FINAL_MATERIAL_PREFIX_V1{
+                let row=super::palw_claim_local_rewards_v1::decoded::<crate::palw_native_post_final_duty_row_v1::PalwNativePostFinalMaterialRowV1>(bytes)?;
+                if row.version!=1||key[1]!=row.family||key[2..66]!=row.job||key[66..]!=row.commitment{return Err(PalwStateV2Error::CarriageInconsistent("native post-Final material key differs".into()))}continue
+            }
+            if key.len()!=65||key[0]!=b'F'{return Err(PalwStateV2Error::CarriageInconsistent("unallocated claim-local/native144 row namespace".into()))}
             let frame = palw_decode_claim_liability_frame_v1(bytes).map_err(|why| match why {
                 crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(why) => PalwStateV2Error::NativeResource(why),
                 crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(why) => {
@@ -281,7 +329,7 @@ pub(super) fn consumed_carrier_edges_v1(
     let mut edges = BTreeSet::new();
     for (consumer, txid) in spent {
         let Some(Some(source)) = by_txid.get(&txid).copied() else { continue };
-        if source != consumer && parent.claims.contains_key(&source) {
+        if source != consumer {
             edges.insert((consumer, source));
         }
     }
@@ -311,7 +359,30 @@ pub(super) fn retain_changed_claim_context_v1(
     merged_work: &[PalwMergedWorkV1<'_>],
     own_execution_key: Hash64,
 ) -> Result<(), PalwStateV2Error> {
-    if !builder.params.claim_local_settlement_active_at(ctx.daa_score) {
+    retain_changed_claim_context_inner_v1(builder,parent,ctx,accepted_objects,block_work,merged_work,own_execution_key,false)
+}
+
+/// Pure archive/journal fixture, with no checkpoint eligibility or activation.
+/// The recorded policy remains the actual below-fence policy used by the fold.
+#[cfg(test)]
+pub(super) fn retain_changed_claim_projection_fixture_v1(
+    builder:&mut TransitionBuilder<'_>,parent:&PalwChainStateV2,ctx:&PalwBlockContextV2,
+    accepted_objects:&[PalwConsensusObjectV2],
+)->Result<(),PalwStateV2Error>{
+    retain_changed_claim_context_inner_v1(builder,parent,ctx,accepted_objects,PalwBlockWorkV3::None,&[],Hash64::default(),true)
+}
+
+fn retain_changed_claim_context_inner_v1(
+    builder: &mut TransitionBuilder<'_>,
+    parent: &PalwChainStateV2,
+    ctx: &PalwBlockContextV2,
+    accepted_objects: &[PalwConsensusObjectV2],
+    block_work: PalwBlockWorkV3<'_>,
+    merged_work: &[PalwMergedWorkV1<'_>],
+    own_execution_key: Hash64,
+    projection_fixture:bool,
+) -> Result<(), PalwStateV2Error> {
+    if !projection_fixture && !builder.params.claim_local_settlement_active_at(ctx.daa_score) {
         return Ok(());
     }
     let (network_identity, fired_forks) = builder

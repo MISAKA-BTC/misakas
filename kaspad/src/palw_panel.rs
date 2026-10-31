@@ -5888,7 +5888,10 @@ impl PalwPanelService {
         let script = self.fee_script(session)?;
         let pov_daa = session.get_virtual_daa_score();
         let spend_maturity = self.consensus_config.params.coinbase_spend_maturity();
-        let locked: HashSet<TransactionOutpoint> = session.palw_locked_bond_outpoints_v2().into_iter().collect();
+        let locked: HashSet<TransactionOutpoint> = match session.palw_locked_bond_outpoints_checked_v3(){
+            Ok(locked)=>locked.into_iter().collect(),
+            Err(why)=>{kaspa_core::warn!("PALW funding waits for own collateral state: {why}");return None;}
+        };
         let usable = |outpoint: &TransactionOutpoint, entry: &UtxoEntry| {
             palw_fee_funding_usable_v1(outpoint, entry, pov_daa, spend_maturity, self.bond, &locked)
         };
@@ -6452,7 +6455,10 @@ impl PalwPanelService {
         // duties, accusations or unmatured rows stand.
         let pov_daa = session.get_virtual_daa_score();
         let spend_maturity = self.consensus_config.params.coinbase_spend_maturity();
-        let locked: HashSet<TransactionOutpoint> = session.palw_locked_bond_outpoints_v2().into_iter().collect();
+        let locked: HashSet<TransactionOutpoint> = match session.palw_locked_bond_outpoints_checked_v3(){
+            Ok(locked)=>locked.into_iter().collect(),
+            Err(why)=>{kaspa_core::warn!("PALW funding waits for own collateral state: {why}");return None;}
+        };
         let usable = |outpoint: &TransactionOutpoint, entry: &UtxoEntry| {
             palw_fee_funding_usable_v1(outpoint, entry, pov_daa, spend_maturity, self.bond, &locked)
         };
@@ -10739,6 +10745,7 @@ fn palw_drill_collusion_allows_v1(tx: &Transaction) -> Result<(), &'static str> 
 
 fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
     match object {
+        PalwConsensusObjectV2::CourtFamilyMaterialV1 { .. } => "CourtFamilyMaterialV1",
         PalwConsensusObjectV2::ReceiptLicensed { .. } => "ReceiptLicensed",
         PalwConsensusObjectV2::ProducerDefaulted { .. } => "ProducerDefaulted",
         PalwConsensusObjectV2::BondRegistered { .. } => "BondRegistered",

@@ -43,6 +43,14 @@ impl From<io::Error> for NativeSnapshotDecodeErrorV1 {
     }
 }
 
+fn row_failure_v1(error:kaspa_consensus_core::palw_row_stream_v1::PalwRowStreamErrorV1)->NativeSnapshotDecodeErrorV1 {
+    match error {
+        kaspa_consensus_core::palw_row_stream_v1::PalwRowStreamErrorV1::NativeResource(e)=>NativeSnapshotDecodeErrorV1::Capacity(e),
+        kaspa_consensus_core::palw_row_stream_v1::PalwRowStreamErrorV1::Sink(e)=>NativeSnapshotDecodeErrorV1::LocalStorage(io::Error::other(e)),
+        other=>NativeSnapshotDecodeErrorV1::Encoding(io::Error::new(io::ErrorKind::InvalidData,other.to_string())),
+    }
+}
+
 pub(crate) const CHUNK_BYTES: usize = 4 << 20;
 const COMPRESSION_INPUT_BYTES: usize = 64 << 10;
 pub(crate) const SESSION_TTL: Duration = Duration::from_secs(600);
@@ -54,11 +62,14 @@ const GLOBAL_SESSIONS: usize = 2;
 /// bound is 424,900,000 bytes; this profile leaves 111,970,912 bytes above it.
 pub(crate) const DECODED_SNAPSHOT_MAX_BYTES: u64 = 512 << 20;
 pub(crate) const SNAPSHOT_CODEC_ZLIB_V1: u32 = 1;
+pub(crate) const SNAPSHOT_CODEC_ROWS_V1: u32 = 2;
 pub(crate) fn compression_request_nonce(protocol: u32, codec: u32, nonce: &[u8]) -> io::Result<Option<[u8; 32]>> {
     if codec == 0 && nonce.is_empty() {
         return Ok(None);
     }
-    if protocol < crate::flow_context::PROTOCOL_VERSION_PALW_SNAPSHOT_COMPRESSED || codec != SNAPSHOT_CODEC_ZLIB_V1 {
+    let negotiated = (codec == SNAPSHOT_CODEC_ZLIB_V1 && protocol >= crate::flow_context::PROTOCOL_VERSION_PALW_SNAPSHOT_COMPRESSED)
+        || (codec == SNAPSHOT_CODEC_ROWS_V1 && crate::flow_context::palw_row_stream_negotiated_v1(protocol));
+    if !negotiated {
         return Err(invalid("snapshot compression was not negotiated"));
     }
     let nonce: [u8; 32] = nonce.try_into().map_err(|_| invalid("snapshot nonce width differs"))?;
@@ -70,6 +81,7 @@ pub(crate) fn compression_request_nonce(protocol: u32, codec: u32, nonce: &[u8])
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct SnapshotCompressionV1 {
+    pub codec: u32,
     pub nonce: [u8; 32],
     pub decoded: u64,
 }
@@ -78,17 +90,18 @@ impl SnapshotCompressionV1 {
         if codec == 0 && nonce.is_empty() && decoded == 0 {
             return Ok(None);
         }
-        if codec != SNAPSHOT_CODEC_ZLIB_V1 || decoded == 0 || decoded > DECODED_SNAPSHOT_MAX_BYTES {
+        let cap = if codec == SNAPSHOT_CODEC_ROWS_V1 { crate::palw_gossip::PALW_PRUNING_STATE_MAX_BYTES as u64 } else { DECODED_SNAPSHOT_MAX_BYTES };
+        if ![SNAPSHOT_CODEC_ZLIB_V1, SNAPSHOT_CODEC_ROWS_V1].contains(&codec) || decoded == 0 || decoded > cap {
             return Err(invalid("snapshot compression codec/canonical length differs"));
         }
         let nonce: [u8; 32] = nonce.try_into().map_err(|_| invalid("snapshot nonce width differs"))?;
         if nonce == [0; 32] {
             return Err(invalid("snapshot nonce is empty"));
         }
-        Ok(Some(Self { nonce, decoded }))
+        Ok(Some(Self { codec, nonce, decoded }))
     }
     fn bind(&self, hash: &mut MerkleBranchHash64) {
-        hash.write(SNAPSHOT_CODEC_ZLIB_V1.to_le_bytes());
+        hash.write(self.codec.to_le_bytes());
         hash.write(self.nonce);
         hash.write(self.decoded.to_le_bytes());
     }
@@ -388,6 +401,49 @@ pub(crate) fn decode_snapshot_envelope(bytes: &[u8]) -> io::Result<Snapshot> {
     decode_snapshot(&mut io::Cursor::new(bytes), bytes.len() as u64, false)
 }
 
+/// The row transport must reserve the same typed native reconstruction as protocol 107.
+/// Its authenticated bytes remain staging data until the consensus import checks the
+/// complete state and declarations. The caller retains the returned lease through import.
+pub(crate) fn decode_row_snapshot_with_native_lease_v1(
+    point: Hash64,
+    bytes: &[u8],
+) -> Result<(Snapshot, Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>), NativeSnapshotDecodeErrorV1> {
+    use kaspa_consensus_core::palw_native_resource_v1::*;
+    decode_row_snapshot_with_admission_v1(
+        point,
+        bytes,
+        native_logical_admission_enabled_v1() || native_resource_admission_enabled_v1(),
+        reserve_native_wire_v1,
+    )
+}
+
+fn decode_row_snapshot_with_admission_v1(
+    point: Hash64,
+    bytes: &[u8],
+    enabled: bool,
+    reserve: impl FnOnce(
+        Hash64,
+        &kaspa_consensus_core::palw_native_resource_v1::NativeWirePreflightV1,
+    ) -> Result<
+        Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>,
+        kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1,
+    >,
+) -> Result<(Snapshot, Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>), NativeSnapshotDecodeErrorV1> {
+    if bytes.is_empty() || bytes.len() > crate::palw_gossip::PALW_PRUNING_STATE_MAX_BYTES {
+        return Err(invalid("row snapshot exceeds existing total byte cap").into());
+    }
+    // Structural preflight is mandatory even on an uncapped node. A hostile suffix
+    // has not passed the header-root import gate yet and must not drive Borsh allocation.
+    let shape = kaspa_consensus_core::palw_native_resource_v1::preflight_native_snapshot_v1(bytes, bytes.len() as u64)?;
+    let lease = if enabled {
+        reserve(point, &shape).map_err(NativeSnapshotDecodeErrorV1::Capacity)?
+    } else {
+        None
+    };
+    let snapshot = decode_snapshot(&mut io::Cursor::new(bytes), bytes.len() as u64, true)?;
+    Ok((snapshot, lease))
+}
+
 fn decode_snapshot(reader: &mut impl Read, total: u64, complete_material: bool) -> io::Result<Snapshot> {
     if u16::deserialize_reader(reader)? != SNAPSHOT_FORMAT {
         return Err(invalid("unknown snapshot framing version"));
@@ -468,7 +524,7 @@ impl SnapshotSender {
     ) -> io::Result<Self> {
         let mut buffered = BufWriter::with_capacity(CHUNK_BYTES, &mut spill.file);
         let mut writer = BoundedHashWriter { file: &mut buffered, hash: stream_hasher_profile(point, profile), total: 0 };
-        if profile.is_some() {
+        if profile.is_some_and(|p| p.codec == SNAPSHOT_CODEC_ZLIB_V1) {
             let mut encoder = flate2::write::ZlibEncoder::new(&mut writer, flate2::Compression::fast());
             // Borsh emits millions of small fields for a native 100k snapshot.
             // Aggregate them before deflate, using fixed bounded scratch. Do
@@ -526,6 +582,47 @@ impl SnapshotSender {
             Some(profile),
         )
     }
+    pub(crate) fn encode_row_snapshot(
+        mut spill: SnapshotSpill, point: Hash64, carriage: &PalwStateCarriageV2,
+        declarations: &[(Hash64,Vec<u8>)], nonce: [u8;32], api: &dyn kaspa_consensus_core::api::ConsensusApi,
+    ) -> io::Result<Self> {
+        let mut suffix = Self::encode_snapshot(SnapshotSpill::new()?,point,carriage,declarations)?;
+        let total = {
+            let mut buffer=BufWriter::with_capacity(COMPRESSION_INPUT_BYTES,&mut spill.file);
+            let mut bounded=BoundedHashWriter { file:&mut buffer, hash:stream_hasher(point), total:0 };
+            suffix.spill.file.seek(SeekFrom::Start(0))?;
+            let written = api.write_pruning_point_palw_row_generation_v1(point,&mut suffix.spill.file,suffix.total,&mut bounded)?
+                .ok_or_else(||io::Error::new(io::ErrorKind::NotFound,"pruning snapshot changed before row export"))?;
+            bounded.flush()?;
+            if written!=bounded.total { return Err(invalid("row export byte count differs")); }
+            written
+        };
+        drop(suffix);
+        let profile=SnapshotCompressionV1::from_wire(SNAPSHOT_CODEC_ROWS_V1,&nonce,total)?.unwrap();
+        spill.file.seek(SeekFrom::Start(0))?;
+        let _lease=kaspa_consensus_core::palw_native_resource_v1::reserve_native_requests_v1(COMPRESSION_INPUT_BYTES as u64)
+            .map_err(|e|io::Error::new(io::ErrorKind::OutOfMemory,e.to_string()))?;
+        let mut hash=stream_hasher_profile(point,Some(profile));
+        let mut bytes=[0u8;COMPRESSION_INPUT_BYTES];
+        loop { let n=spill.file.read(&mut bytes)?;if n==0 {break;} hash.write(&bytes[..n]); }
+        if spill.expired() { return Err(io::Error::new(io::ErrorKind::TimedOut,"row export lease expired")); }
+        Ok(Self { spill,point,root:hash.finalize(),total,count:chunk_count(total),next:0,profile:Some(profile) })
+    }
+    /// Shared production chunk encoder, also exercised over the real P2P router.
+    pub(crate) fn reply_message(&mut self,point:Hash64,root:Option<Hash64>,index:u32)->Result<(kaspa_p2p_lib::pb::PruningPointPalwStateMessage,Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>),NativeSnapshotDecodeErrorV1>{
+        self.check_chunk_request_v1(point,root,index)?;
+        let bytes_len=(self.total-index as u64*CHUNK_BYTES as u64).min(CHUNK_BYTES as u64);
+        let lease=kaspa_consensus_core::palw_native_resource_v1::reserve_native_requests_v1(bytes_len+std::mem::size_of::<Vec<u8>>() as u64)
+            .map_err(NativeSnapshotDecodeErrorV1::Capacity)?;
+        let bytes=self.chunk(point,root,index)?;
+        Ok((kaspa_p2p_lib::pb::PruningPointPalwStateMessage {
+            found:true,chunked:true,pruning_point_hash:Some(point.into()),snapshot_root:self.root.as_byte_slice().to_vec(),
+            chunk_index:index,chunk_count:self.count,total_bytes:self.total,
+            chunk_hash:chunk_hash_profile(point,self.root,self.total,self.count,index,&bytes,self.profile).as_byte_slice().to_vec(),
+            palw_state:bytes,snapshot_codec:self.profile.map_or(0,|p|p.codec),decoded_bytes:self.profile.map_or(0,|p|p.decoded),
+            snapshot_nonce:self.profile.map_or_else(Vec::new,|p|p.nonce.to_vec()),..Default::default()
+        },lease))
+    }
     pub(crate) fn expired(&self) -> bool {
         self.spill.expired()
     }
@@ -542,26 +639,26 @@ impl SnapshotSender {
         self.next = index;
         Ok(())
     }
-    pub(crate) fn chunk(&mut self, point: Hash64, root: Option<Hash64>, index: u32) -> io::Result<Vec<u8>> {
-        if self.expired()
-            || point != self.point
-            || index != self.next
-            || index >= self.count
-            || (index == 0 && root.is_some())
-            || (index > 0 && root != Some(self.root))
-        {
-            return Err(invalid("snapshot point/root/order/session changed"));
+    fn check_chunk_request_v1(&self,point:Hash64,root:Option<Hash64>,index:u32)->Result<(),NativeSnapshotDecodeErrorV1>{
+        if self.expired(){return Err(io::Error::new(io::ErrorKind::TimedOut,"snapshot sender lease expired").into());}
+        if point!=self.point || index!=self.next || index>=self.count || (index==0&&root.is_some()) || (index>0&&root!=Some(self.root)) {
+            return Err(invalid("snapshot point/root/order/session changed").into());
         }
+        Ok(())
+    }
+    pub(crate) fn chunk(&mut self, point: Hash64, root: Option<Hash64>, index: u32) -> Result<Vec<u8>,NativeSnapshotDecodeErrorV1> {
+        self.check_chunk_request_v1(point,root,index)?;
         let offset = index as u64 * CHUNK_BYTES as u64;
         let mut bytes = vec![0; (self.total - offset).min(CHUNK_BYTES as u64) as usize];
-        self.spill.file.seek(SeekFrom::Start(offset))?;
-        self.spill.file.read_exact(&mut bytes)?;
+        self.spill.file.seek(SeekFrom::Start(offset)).map_err(NativeSnapshotDecodeErrorV1::LocalStorage)?;
+        self.spill.file.read_exact(&mut bytes).map_err(NativeSnapshotDecodeErrorV1::LocalStorage)?;
         self.next += 1;
         Ok(bytes)
     }
 }
 
 pub(crate) struct SnapshotReceiver {
+    row_progress: Option<kaspa_consensus_core::palw_row_stream_v1::PalwRowGenerationProgressV1>,
     spill: SnapshotSpill,
     point: Hash64,
     root: Hash64,
@@ -577,7 +674,7 @@ impl SnapshotReceiver {
         if total == 0 || total > crate::palw_gossip::PALW_PRUNING_STATE_MAX_BYTES as u64 || count != chunk_count(total) {
             return Err(invalid("snapshot total/count exceeds policy"));
         }
-        Ok(Self { spill, point, root, total, count, next: 0, received: 0, hash: stream_hasher(point), profile: None })
+        Ok(Self { spill, point, root, total, count, next: 0, received: 0, hash: stream_hasher(point), profile: None, row_progress: None })
     }
     pub(crate) fn new_compressed(
         spill: SnapshotSpill,
@@ -587,11 +684,18 @@ impl SnapshotReceiver {
         count: u32,
         profile: SnapshotCompressionV1,
     ) -> io::Result<Self> {
-        SnapshotCompressionV1::from_wire(SNAPSHOT_CODEC_ZLIB_V1, &profile.nonce, profile.decoded)?;
+        SnapshotCompressionV1::from_wire(profile.codec, &profile.nonce, profile.decoded)?;
+        if profile.codec == SNAPSHOT_CODEC_ROWS_V1 && profile.decoded != total { return Err(invalid("row generation total/profile length differs")); }
         let mut state = Self::new(spill, point, root, total, count)?;
         state.profile = Some(profile);
         state.hash = stream_hasher_profile(point, Some(profile));
         Ok(state)
+    }
+    pub(crate) fn row_expected_root(&self)->Option<Hash64>{ self.row_progress.as_ref().map(|p|p.expected_root()) }
+    pub(crate) fn enable_row_verification(&mut self, expected:Hash64)->Result<(),NativeSnapshotDecodeErrorV1>{
+        if !self.profile.is_some_and(|p|p.codec==SNAPSHOT_CODEC_ROWS_V1) || self.received!=0 {return Err(invalid("row verification initialized outside a new row stream").into());}
+        self.row_progress=Some(kaspa_consensus_core::palw_row_stream_v1::PalwRowGenerationProgressV1::new(expected,self.total).map_err(row_failure_v1)?);
+        Ok(())
     }
     pub(crate) fn profile(&self) -> Option<SnapshotCompressionV1> {
         self.profile
@@ -622,10 +726,33 @@ impl SnapshotReceiver {
         {
             return Err(invalid("invalid snapshot chunk identity/order/size/hash").into());
         }
+        self.spill.file.seek(SeekFrom::Start(self.received)).map_err(NativeSnapshotDecodeErrorV1::LocalStorage)?;
         self.spill.file.write_all(bytes).map_err(NativeSnapshotDecodeErrorV1::LocalStorage)?;
         self.hash.write(bytes);
         self.received += bytes.len() as u64;
         self.next += 1;
+        if self.row_progress.is_some() {
+            let _scratch=kaspa_consensus_core::palw_native_resource_v1::reserve_native_requests_v1(COMPRESSION_INPUT_BYTES as u64)
+                .map_err(NativeSnapshotDecodeErrorV1::Capacity)?;
+            let result={
+                let progress=self.row_progress.as_mut().unwrap();
+                let mut reader=BufReader::with_capacity(COMPRESSION_INPUT_BYTES,&mut self.spill.file);
+                progress.advance(&mut reader,self.received)
+            };
+            if let Err(error)=result {
+                if !matches!(&error,kaspa_consensus_core::palw_row_stream_v1::PalwRowStreamErrorV1::NativeResource(_)
+                    |kaspa_consensus_core::palw_row_stream_v1::PalwRowStreamErrorV1::Sink(_)) {
+                    // An early semantic error is attributable to the peer only
+                    // after the spill matches the authenticated received prefix.
+                    self.verify_local_prefix_v1()?;
+                }
+                return Err(row_failure_v1(error));
+            }
+            if self.received==self.total && self.row_progress.as_ref().unwrap().suffix().is_none(){
+                self.verify_local_prefix_v1()?;
+                return Err(invalid("row generation ended before its collection inventory").into());
+            }
+        }
         Ok(())
     }
     pub(crate) fn point(&self) -> Hash64 {
@@ -656,6 +783,9 @@ impl SnapshotReceiver {
         if !self.complete() || self.hash.clone().finalize() != self.root {
             return Err(invalid("snapshot EOF/stream hash mismatch").into());
         }
+        self.verify_local_prefix_v1()
+    }
+    fn verify_local_prefix_v1(&mut self)->Result<(),NativeSnapshotDecodeErrorV1>{
         let _buffer_lease = kaspa_consensus_core::palw_native_resource_v1::reserve_native_requests_v1(
             (COMPRESSION_INPUT_BYTES + std::mem::size_of::<MerkleBranchHash64>()) as u64,
         )
@@ -673,15 +803,41 @@ impl SnapshotReceiver {
             total = total
                 .checked_add(count as u64)
                 .ok_or_else(|| NativeSnapshotDecodeErrorV1::LocalStorage(invalid("local spill size overflow")))?;
-            if total > self.total {
+            if total > self.received {
                 return Err(NativeSnapshotDecodeErrorV1::LocalStorage(invalid("local spill grew after authenticated transfer")));
             }
             hash.write(&bytes[..count]);
         }
-        if total != self.total || hash.finalize() != self.root {
+        if total != self.received || hash.finalize() != self.hash.clone().finalize() {
             return Err(NativeSnapshotDecodeErrorV1::LocalStorage(invalid("local spill differs from authenticated transfer bytes")));
         }
         Ok(())
+    }
+    pub(crate) fn decode_row_generation_with_native_lease(
+        mut self, expected_root:Hash64,
+    ) -> Result<(Snapshot,Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>,kaspa_consensus_core::palw_row_stream_v1::PalwRowInventoryV1),NativeSnapshotDecodeErrorV1> {
+        use kaspa_consensus_core::palw_native_resource_v1::*;
+        if !self.profile.is_some_and(|p|p.codec==SNAPSHOT_CODEC_ROWS_V1 && p.decoded==self.total) {
+            return Err(invalid("row generation profile absent").into());
+        }
+        self.verify_local_spill_v1()?;
+        self.spill.file.seek(SeekFrom::Start(0)).map_err(NativeSnapshotDecodeErrorV1::LocalStorage)?;
+        let suffix=if let Some(progress)=self.row_progress.take() {
+            if progress.expected_root()!=expected_root{return Err(invalid("row witness changed during transfer").into());}
+            progress.suffix().ok_or_else(||invalid("row generation did not finish its verified collection inventory"))?
+        } else {
+            kaspa_consensus_core::palw_row_stream_v1::palw_verify_row_generation_reader_v1(expected_root,&mut self.spill.file,self.total).map_err(row_failure_v1)?
+        };
+        self.spill.file.seek(SeekFrom::Start(suffix.offset)).map_err(NativeSnapshotDecodeErrorV1::LocalStorage)?;
+        let _scratch=reserve_native_requests_v1(COMPRESSION_INPUT_BYTES as u64).map_err(NativeSnapshotDecodeErrorV1::Capacity)?;
+        let shape=preflight_native_snapshot_v1(&mut BufReader::with_capacity(COMPRESSION_INPUT_BYTES,&mut self.spill.file).take(suffix.length),suffix.length)?;
+        let lease=if native_logical_admission_enabled_v1() || native_resource_admission_enabled_v1() {
+            reserve_native_wire_v1(self.point,&shape).map_err(NativeSnapshotDecodeErrorV1::Capacity)?
+        } else { None };
+        self.spill.file.seek(SeekFrom::Start(suffix.offset)).map_err(NativeSnapshotDecodeErrorV1::LocalStorage)?;
+        let snapshot=decode_snapshot(&mut BufReader::with_capacity(COMPRESSION_INPUT_BYTES,&mut self.spill.file).take(suffix.length),suffix.length,true)?;
+        if self.spill.expired(){return Err(io::Error::new(io::ErrorKind::TimedOut,"row import staging lease expired").into());}
+        Ok((snapshot,lease,suffix.inventory))
     }
     pub(crate) fn decode_snapshot_with_native_lease(
         self,
@@ -732,6 +888,7 @@ impl SnapshotReceiver {
         Ok((snapshot, lease))
     }
     pub(crate) fn decode_snapshot(self) -> io::Result<Snapshot> {
+        if self.profile.is_some_and(|p|p.codec==SNAPSHOT_CODEC_ROWS_V1) { return Err(invalid("row generation requires the selected-child root verifier")); }
         if self.profile.is_some() {
             return self.decode_compressed_snapshot();
         }
@@ -888,6 +1045,60 @@ mod tests {
         receiver
     }
     #[test]
+    fn row_snapshot_reserves_typed_shape_before_decode_and_preserves_capacity_failure() {
+        use kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1;
+        let carriage = native_carriage();
+        let raw = borsh::to_vec(&SnapshotEnvelope { carriage: &carriage, declarations: &[] }).unwrap();
+        let refused = decode_row_snapshot_with_admission_v1(h(1), &raw, true, |point, shape| {
+            assert_eq!(point, h(1));
+            assert!(shape.memory_requests_v1().unwrap() > 0);
+            Err(NativeCoverageV1::unsupported::<PalwStateCarriageV2>("row test", "local capacity"))
+        });
+        assert!(matches!(refused, Err(NativeSnapshotDecodeErrorV1::Capacity(_))));
+        let ((restored, declarations), _) = decode_row_snapshot_with_admission_v1(h(1), &raw, true, |_, _| Ok(None)).unwrap();
+        assert_eq!(borsh::to_vec(&restored).unwrap(), borsh::to_vec(&carriage).unwrap());
+        assert!(declarations.is_empty());
+        let mut malformed = raw;
+        malformed[2..10].copy_from_slice(&u64::MAX.to_le_bytes());
+        assert!(matches!(
+            decode_row_snapshot_with_admission_v1(h(1), &malformed, true, |_, _| panic!("malformed framing must fail before admission")),
+            Err(NativeSnapshotDecodeErrorV1::Encoding(_))
+        ));
+    }
+
+    #[test]
+    fn rfc37_early_row_failure_checks_the_owned_disk_prefix_before_blaming_peer() {
+        use kaspa_consensus_core::{palw_row_stream_v1::*,palw_state_v2::{palw_collection_root_of_entries_v1,palw_state_root_of_preimage_v1}};
+        let rows=vec![(vec![1],vec![7u8;5<<20])];let label=b"disk-prefix-control";
+        let root=palw_collection_root_of_entries_v1(label,1,rows.clone().into_iter());
+        let wire=encode_row_stream_generation_v1(root.as_byte_slice(),&[PalwRowStreamCollectionV1{label:label.to_vec(),offset:0,rows}],b"unused-suffix").unwrap();
+        let profile=SnapshotCompressionV1{codec:SNAPSHOT_CODEC_ROWS_V1,nonce:[57;32],decoded:wire.len() as u64};
+        let mut hasher=stream_hasher_profile(h(1),Some(profile));hasher.write(&wire);let stream=hasher.finalize();
+        let budget=Arc::new(Semaphore::new(2));
+        let mut receiver=SnapshotReceiver::new_compressed(lease(&budget),h(1),stream,wire.len() as u64,chunk_count(wire.len() as u64),profile).unwrap();
+        receiver.enable_row_verification(palw_state_root_of_preimage_v1(root.as_byte_slice())).unwrap();
+        for (index,bytes) in wire.chunks(CHUNK_BYTES).enumerate(){
+            let result=receiver.accept(h(1),stream,wire.len() as u64,chunk_count(wire.len() as u64),index as u32,
+                chunk_hash_profile(h(1),stream,wire.len() as u64,chunk_count(wire.len() as u64),index as u32,bytes,Some(profile)),bytes);
+            if index==0 {
+                result.unwrap();
+                let at=wire.windows(1024).position(|v|v==[7u8;1024]).unwrap();
+                receiver.spill.file.seek(SeekFrom::Start(at as u64)).unwrap();receiver.spill.file.write_all(&[8]).unwrap();
+            }else{
+                assert!(matches!(result,Err(NativeSnapshotDecodeErrorV1::LocalStorage(_))),"disk changed a correct peer's retained row bytes");
+            }
+        }
+    }
+    #[test]
+    fn row_snapshot_never_filters_unknown_or_duplicate_declarations() {
+        let carriage = native_carriage();
+        for declarations in [vec![(h(8), vec![1])], vec![(h(7), vec![1]), (h(7), vec![2])]] {
+            let raw = borsh::to_vec(&SnapshotEnvelope { carriage: &carriage, declarations: &declarations }).unwrap();
+            assert!(decode_row_snapshot_with_admission_v1(h(1), &raw, false, |_, _| panic!("admission disabled")).is_err());
+        }
+    }
+
+    #[test]
     fn compressed_native_snapshot_keeps_canonical_state_and_complete_declarations() {
         let budget = Arc::new(Semaphore::new(2));
         let carriage = native_carriage();
@@ -928,7 +1139,7 @@ mod tests {
         // encoding error, not a capacity refusal), and this test is about the capacity cause.
         let declarations = Vec::new();
         let raw = borsh::to_vec(&SnapshotEnvelope { carriage: &carriage, declarations: &declarations }).unwrap();
-        let profile = SnapshotCompressionV1 { nonce: [7; 32], decoded: raw.len() as u64 };
+        let profile = SnapshotCompressionV1 { codec: SNAPSHOT_CODEC_ZLIB_V1, nonce: [7; 32], decoded: raw.len() as u64 };
         let failure = NativeCoverageV1::unsupported::<SnapshotReceiver>("actual local request", "quota exhausted");
         let result = receive_compressed_raw(&budget, &zlib(&raw), profile).decode_snapshot_with_admission_v1(true, |point, _| {
             assert_eq!(point, h(1));
@@ -957,7 +1168,7 @@ mod tests {
         let carriage = native_carriage();
         let raw = borsh::to_vec(&SnapshotEnvelope { carriage: &carriage, declarations: &[] }).unwrap();
         let stream = zlib(&raw);
-        let profile = SnapshotCompressionV1 { nonce: [9; 32], decoded: raw.len() as u64 };
+        let profile = SnapshotCompressionV1 { codec: SNAPSHOT_CODEC_ZLIB_V1, nonce: [9; 32], decoded: raw.len() as u64 };
         for truncate in [true, false] {
             let mut receiver = receive_compressed_raw(&budget, &stream, profile);
             if truncate {
@@ -986,7 +1197,7 @@ mod tests {
         let carriage = native_carriage();
         for declarations in [vec![(h(7), vec![1]), (h(7), vec![2])], vec![(h(9), vec![3])]] {
             let raw = borsh::to_vec(&SnapshotEnvelope { carriage: &carriage, declarations: &declarations }).unwrap();
-            let profile = SnapshotCompressionV1 { nonce: [1; 32], decoded: raw.len() as u64 };
+            let profile = SnapshotCompressionV1 { codec: SNAPSHOT_CODEC_ZLIB_V1, nonce: [1; 32], decoded: raw.len() as u64 };
             assert!(receive_compressed_raw(&budget, &zlib(&raw), profile).decode_snapshot().is_err());
             assert_eq!(budget.available_permits(), 1);
         }
@@ -997,7 +1208,7 @@ mod tests {
         let budget = Arc::new(Semaphore::new(1));
         let carriage = native_carriage();
         let raw = borsh::to_vec(&SnapshotEnvelope { carriage: &carriage, declarations: &[] }).unwrap();
-        let profile = SnapshotCompressionV1 { nonce: [9; 32], decoded: raw.len() as u64 };
+        let profile = SnapshotCompressionV1 { codec: SNAPSHOT_CODEC_ZLIB_V1, nonce: [9; 32], decoded: raw.len() as u64 };
         let mut receiver = receive_compressed_raw(&budget, &zlib(&raw), profile);
         receiver.spill.created = Instant::now() - SESSION_TTL - Duration::from_secs(1);
         let result = receiver.decode_snapshot_with_admission_v1(true, |_, _| {
@@ -1051,7 +1262,7 @@ mod tests {
         let declarations = vec![(h(7), vec![0x81; 131073])];
         let envelope = SnapshotEnvelope { carriage: &carriage, declarations: &declarations };
         let canonical = borsh::to_vec(&envelope).unwrap();
-        let profile = SnapshotCompressionV1 { nonce: [1; 32], decoded: canonical.len() as u64 };
+        let profile = SnapshotCompressionV1 { codec: SNAPSHOT_CODEC_ZLIB_V1, nonce: [1; 32], decoded: canonical.len() as u64 };
         let mut old = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
         envelope.serialize(&mut old).unwrap();
         let old = old.finish().unwrap();
@@ -1083,13 +1294,16 @@ mod tests {
         for nonce in [&[][..], &[1; 31][..], &[0; 32][..], &[1; 33][..]] {
             assert!(compression_request_nonce(107, 1, nonce).is_err());
         }
-        assert!(SnapshotCompressionV1::from_wire(2, &[1; 32], 128).is_err());
+        assert!(SnapshotCompressionV1::from_wire(3, &[1; 32], 128).is_err());
+        assert_eq!(compression_request_nonce(109,2,&[1;32]).unwrap(),Some([1;32]));
+        assert!(compression_request_nonce(108,2,&[1;32]).is_err());
+        assert!(SnapshotCompressionV1::from_wire(2,&[1;32],(crate::palw_gossip::PALW_PRUNING_STATE_MAX_BYTES as u64)+1).is_err());
         assert!(SnapshotCompressionV1::from_wire(1, &[1; 32], 0).is_err());
         assert!(SnapshotCompressionV1::from_wire(1, &[1; 32], DECODED_SNAPSHOT_MAX_BYTES + 1).is_err());
         assert!(SnapshotCompressionV1::from_wire(0, &[], 1).is_err());
         assert!(snapshot_payload_size(424_900_000, []).is_err(), "106 cap must not be raised");
         assert!(snapshot_payload_size_with_cap(424_900_000, [], DECODED_SNAPSHOT_MAX_BYTES).is_ok());
-        let profile = SnapshotCompressionV1 { nonce: [1; 32], decoded: 128 };
+        let profile = SnapshotCompressionV1 { codec: SNAPSHOT_CODEC_ZLIB_V1, nonce: [1; 32], decoded: 128 };
         let budget = Arc::new(Semaphore::new(1));
         let total = crate::palw_gossip::PALW_PRUNING_STATE_MAX_BYTES as u64 + 1;
         assert!(SnapshotReceiver::new_compressed(lease(&budget), h(1), h(2), total, chunk_count(total), profile).is_err());
@@ -1101,7 +1315,7 @@ mod tests {
         let carriage = native_carriage();
         let raw = borsh::to_vec(&SnapshotEnvelope { carriage: &carriage, declarations: &[] }).unwrap();
         let good = zlib(&raw);
-        let profile = SnapshotCompressionV1 { nonce: [1; 32], decoded: raw.len() as u64 };
+        let profile = SnapshotCompressionV1 { codec: SNAPSHOT_CODEC_ZLIB_V1, nonce: [1; 32], decoded: raw.len() as u64 };
         let mut corrupt_crc = good.clone();
         *corrupt_crc.last_mut().unwrap() ^= 1;
         let mut trailing = good.clone();
@@ -1133,8 +1347,8 @@ mod tests {
     }
     #[test]
     fn compressed_hashes_bind_point_nonce_codec_length_and_resume_identity() {
-        let profile = SnapshotCompressionV1 { nonce: [1; 32], decoded: 128 };
-        let altered_nonce = SnapshotCompressionV1 { nonce: [2; 32], ..profile };
+        let profile = SnapshotCompressionV1 { codec: SNAPSHOT_CODEC_ZLIB_V1, nonce: [1; 32], decoded: 128 };
+        let altered_nonce = SnapshotCompressionV1 { codec: SNAPSHOT_CODEC_ZLIB_V1, nonce: [2; 32], ..profile };
         let altered_size = SnapshotCompressionV1 { decoded: 129, ..profile };
         let raw = vec![0x38; CHUNK_BYTES + 1];
         let count = chunk_count(raw.len() as u64);
@@ -1567,3 +1781,7 @@ mod tests {
         assert_eq!(budget.available_permits(), 1);
     }
 }
+
+#[cfg(test)]
+#[path="palw_row_stream_peer_tests.rs"]
+mod row_stream_peer_tests;

@@ -36,7 +36,12 @@ use crate::palw_state_v2::{PALW_STATE_V2_DOMAIN_COLLECTION, palw_state_root_of_p
 use std::collections::BTreeSet;
 use std::io::Write;
 
+mod progress;
+pub use progress::PalwRowGenerationProgressV1;
+mod reader;
+pub use reader::{PalwRowSuffixV1, palw_verify_row_generation_reader_v1};
 mod spill_reader;
+mod projection;
 pub use spill_reader::{PalwRowSpillEventV1, PalwRowSpillLimitsV1, palw_visit_row_spill_v1};
 
 /// Upper bound on the preimage a peer may send (it is every collection's 64-byte root plus small scalar blocks; the
@@ -58,6 +63,8 @@ const PALW_ROW_STREAM_MAX_LABEL_BYTES_V1: usize = 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum PalwRowStreamErrorV1 {
+    #[error("local nested row capacity: {0}")]
+    NativeResource(crate::palw_native_resource_v1::NativeCoverageV1),
     #[error("preimage of {len} bytes exceeds {max}")]
     PreimageTooLarge { len: usize, max: usize },
     #[error("the preimage does not hash to the expected state root {0}")]
@@ -105,18 +112,18 @@ pub struct PalwRowStreamCollectionV1 {
 
 /// The verifier accepted this generation. [`Self::import_suffix`] is the existing snapshot envelope, and it is
 /// only available after [`palw_accept_row_stream_generation_v1`] returns `Ok`.
-pub struct PalwAcceptedRowStreamGenerationV1<W> {
+pub struct PalwAcceptedRowStreamGenerationV1<'a, W> {
     generation: u64,
     verified: PalwRowStreamVerifiedV1<W>,
-    import_suffix: Vec<u8>,
+    import_suffix: &'a [u8],
 }
 
-impl<W> PalwAcceptedRowStreamGenerationV1<W> {
+impl<W> PalwAcceptedRowStreamGenerationV1<'_, W> {
     pub fn generation(&self) -> u64 {
         self.generation
     }
     pub fn import_suffix(&self) -> &[u8] {
-        &self.import_suffix
+        self.import_suffix
     }
     /// Run the caller's whole-state check. IBD uses this only after the verifier has accepted the stream, then
     /// hands the suffix to the existing pruning-point import.
@@ -178,7 +185,15 @@ fn is_non_standard(label: &[u8]) -> bool {
     label == crate::palw_native_audit_proof_v32::NATIVE_AUX_LABEL_V32 || label == crate::palw_native_audit_proof_v32::NATIVE_PAYOUT_LABEL_V32
 }
 
+fn nested_error(label: &[u8], error: crate::palw_nested_row_stream_v1::NestedError) -> PalwRowStreamErrorV1 {
+    match error {
+        crate::palw_nested_row_stream_v1::NestedError::Resource(error) => PalwRowStreamErrorV1::NativeResource(error),
+        crate::palw_nested_row_stream_v1::NestedError::Decode(why) => PalwRowStreamErrorV1::Projection(label.to_vec(), why),
+    }
+}
+
 enum Rooter {
+    Nested(crate::palw_nested_row_stream_v1::NestedRooter),
     Standard(PalwCollectionRootStreamV1),
     Buffered { declared: u64, rows: Vec<(Vec<u8>, Vec<u8>)> },
 }
@@ -290,8 +305,14 @@ impl<W: Write> PalwRowStreamVerifierV1<W> {
         header.extend_from_slice(label);
         header.extend_from_slice(&rows.to_le_bytes());
         self.sink_write(&header)?;
-        let rooter = if is_non_standard(label) {
-            Rooter::Buffered { declared: rows, rows: Vec::new() }
+        let rooter = if let Some(nested) = crate::palw_nested_row_stream_v1::NestedRooter::new(label, rows) {
+            Rooter::Nested(nested)
+        } else if label == crate::palw_native_audit_proof_v32::NATIVE_PAYOUT_LABEL_V32 {
+            // This opening aliases the ordinary payout table. Hash it directly
+            // under the canonical label instead of buffering a peer's whole table.
+            Rooter::Standard(PalwCollectionRootStreamV1::new(b"pending_payouts", rows))
+        } else if label == crate::palw_native_audit_proof_v32::NATIVE_PAYOUT_LABEL_V32 {
+            Rooter::Standard(PalwCollectionRootStreamV1::new(b"pending_payouts", rows))
         } else {
             Rooter::Standard(PalwCollectionRootStreamV1::new(label, rows))
         };
@@ -323,6 +344,7 @@ impl<W: Write> PalwRowStreamVerifierV1<W> {
             }
         };
         match &mut open.rooter {
+            Rooter::Nested(nested) => nested.row(key, rooted).map_err(|e| nested_error(&open.label, e))?,
             Rooter::Standard(h) => h.row(key, rooted)?,
             Rooter::Buffered { declared, rows } => {
                 if rows.len() as u64 == *declared {
@@ -353,6 +375,10 @@ impl<W: Write> PalwRowStreamVerifierV1<W> {
         }
         let open = self.open.take().ok_or(PalwRowStreamErrorV1::NoOpenCollection)?;
         let (root, rows) = match open.rooter {
+            Rooter::Nested(nested) => {
+                let rows = nested.row_count();
+                (nested.finish().map_err(|e| nested_error(&open.label, e))?, rows)
+            }
             Rooter::Standard(h) => {
                 let rows = h.seen;
                 (h.finish()?, rows)
@@ -385,7 +411,15 @@ impl<W: Write> PalwRowStreamVerifierV1<W> {
             return Err(PalwRowStreamErrorV1::CollectionAlreadyOpen);
         }
         self.sink.flush().map_err(|e| PalwRowStreamErrorV1::Sink(e.to_string()))?;
+        let mut inventory_rows:Vec<_>=self.done.iter().zip(self.used.iter()).collect();
+        inventory_rows.sort_unstable_by_key(|(_,offset)|**offset);
+        let mut inventory=inventory_hasher(inventory_rows.len() as u64);
+        for ((label,rows),offset) in &inventory_rows { inventory_entry(&mut inventory,label,**offset as u64,*rows); }
+        let inventory=PalwRowInventoryV1{state_root:self.expected_root,count:inventory_rows.len() as u64,
+            commitment:Hash64::from_bytes(inventory.finalize().as_bytes().try_into().unwrap())};
+        drop(inventory_rows);
         Ok(PalwRowStreamVerifiedV1 {
+            inventory,
             root: self.expected_root,
             preimage: self.preimage,
             sink: self.sink,
@@ -395,8 +429,42 @@ impl<W: Write> PalwRowStreamVerifierV1<W> {
     }
 }
 
+/// Opaque authenticated inventory. It binds every observed label/offset/count
+/// independently of the native envelope suffix. Only completed verification
+/// mints this value; consumers compare it with the restored canonical state.
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+pub struct PalwRowInventoryV1 {
+    state_root: Hash64,
+    count: u64,
+    commitment: Hash64,
+}
+fn inventory_hasher(count:u64)->blake2b_simd::State {
+    let mut h=blake2b_simd::Params::new().hash_length(64).key(b"misaka-palw/row-inventory/v1").to_state();
+    h.update(&count.to_le_bytes());h
+}
+fn inventory_entry(h:&mut blake2b_simd::State,label:&[u8],offset:u64,rows:u64){
+    h.update(&(label.len() as u32).to_le_bytes());h.update(label);h.update(&offset.to_le_bytes());h.update(&rows.to_le_bytes());
+}
+impl PalwRowInventoryV1 {
+    pub fn state_root(&self)->Hash64 {self.state_root}
+    pub fn collection_count(&self)->u64 {self.count}
+    /// Use only after the ordinary typed state/root/consistency import gate.
+    pub fn matches_state(&self,state:&crate::palw_state_v2::PalwChainStateV2)->std::io::Result<bool>{
+        let mut count=0u64;
+        state.visit_direct_state_root_collections_v1(|_,_,_,_|{count+=1;Ok(())})?;
+        if count!=self.count {return Ok(false);}
+        let mut hash=inventory_hasher(count);
+        let (preimage,_)=state.visit_direct_state_root_collections_v1(|label,offset,rows,_|{
+            inventory_entry(&mut hash,label,offset as u64,rows);Ok(())
+        })?;
+        Ok(palw_state_root_of_preimage_v1(&preimage)==self.state_root
+            && hash.finalize().as_bytes()==self.commitment.as_byte_slice())
+    }
+}
+
 /// Every streamed collection matched the committed root. Not evidence by itself — see the module docs.
 pub struct PalwRowStreamVerifiedV1<W> {
+    inventory: PalwRowInventoryV1,
     root: Hash64,
     preimage: Vec<u8>,
     sink: W,
@@ -405,6 +473,7 @@ pub struct PalwRowStreamVerifiedV1<W> {
 }
 
 impl<W> PalwRowStreamVerifiedV1<W> {
+    pub fn inventory(&self)->PalwRowInventoryV1 {self.inventory}
     pub fn root(&self) -> Hash64 {
         self.root
     }
@@ -605,13 +674,13 @@ fn read_u64(input: &mut &[u8]) -> Result<u64, PalwRowStreamErrorV1> {
 /// `expected_root` is the witness header's root, never a value taken from the peer. `already_imported` refuses a
 /// second copy of the same generation. A short frame, a generation id other than [`PALW_ROW_STREAM_CURRENT_GENERATION_V1`],
 /// or any verifier error returns `Err` and does not yield an import suffix.
-pub fn palw_accept_row_stream_generation_v1<W: Write>(
+pub fn palw_accept_row_stream_generation_v1<'a, W: Write>(
     expected_root: Hash64,
-    bytes: &[u8],
+    bytes: &'a [u8],
     sink: W,
     max_bytes: u64,
     already_imported: Option<u64>,
-) -> Result<PalwAcceptedRowStreamGenerationV1<W>, PalwRowStreamErrorV1> {
+) -> Result<PalwAcceptedRowStreamGenerationV1<'a, W>, PalwRowStreamErrorV1> {
     let cap = (PALW_ROW_STREAM_MAX_GENERATION_BYTES_V1 as u64).min(max_bytes);
     if bytes.len() as u64 > cap {
         return Err(PalwRowStreamErrorV1::GenerationTooLarge { len: bytes.len(), max: cap as usize });
@@ -653,13 +722,16 @@ pub fn palw_accept_row_stream_generation_v1<W: Write>(
         if rows.saturating_mul(8) > stream.len() as u64 {
             return Err(PalwRowStreamErrorV1::TruncatedGeneration);
         }
-        verifier.begin_collection(&label, rows, offset)?;
+        match projection::for_label(&label) {
+            Some(project) => verifier.begin_projected_collection(&label, rows, offset, project)?,
+            None => verifier.begin_collection(&label, rows, offset)?,
+        }
         for _ in 0..rows {
             let key_len = usize::try_from(read_u32(&mut stream)?).map_err(|_| PalwRowStreamErrorV1::TruncatedGeneration)?;
-            let key = read_exact(&mut stream, key_len)?.to_vec();
+            let key = read_exact(&mut stream, key_len)?;
             let value_len = usize::try_from(read_u32(&mut stream)?).map_err(|_| PalwRowStreamErrorV1::TruncatedGeneration)?;
-            let value = read_exact(&mut stream, value_len)?.to_vec();
-            verifier.row(&key, &value)?;
+            let value = read_exact(&mut stream, value_len)?;
+            verifier.row(key, value)?;
         }
         verifier.end_collection()?;
     }
@@ -671,7 +743,7 @@ pub fn palw_accept_row_stream_generation_v1<W: Write>(
         return Err(PalwRowStreamErrorV1::TruncatedGeneration);
     }
     let verified = verifier.finish()?;
-    Ok(PalwAcceptedRowStreamGenerationV1 { generation, verified, import_suffix: rest.to_vec() })
+    Ok(PalwAcceptedRowStreamGenerationV1 { generation, verified, import_suffix: rest })
 }
 
 #[cfg(test)]
@@ -697,6 +769,7 @@ mod generation_tests {
         let accepted = palw_accept_row_stream_generation_v1(root, &bytes, Vec::<u8>::new(), bytes.len() as u64, None).unwrap();
         assert_eq!(accepted.generation(), PALW_ROW_STREAM_CURRENT_GENERATION_V1);
         assert_eq!(accepted.import_suffix(), suffix.as_slice());
+        assert_eq!(accepted.import_suffix().as_ptr(), bytes[bytes.len() - suffix.len()..].as_ptr(), "the native envelope is borrowed, never copied before admission");
         let evidence = accepted.into_whole_state(|_, preimage, root| {
             if palw_state_root_of_preimage_v1(preimage) == root { Ok(()) } else { Err("preimage".into()) }
         });
@@ -710,6 +783,18 @@ mod generation_tests {
         let bytes = encode_row_stream_generation_v1(&preimage, &[collection], b"suffix").unwrap();
         let refused = palw_accept_row_stream_generation_v1(root, &bytes, Vec::<u8>::new(), u64::MAX, None);
         assert!(matches!(refused, Err(PalwRowStreamErrorV1::CollectionMismatch(_))));
+    }
+
+    #[test]
+    fn native_payout_generation_keeps_the_existing_canonical_payout_root() {
+        let label = crate::palw_native_audit_proof_v32::NATIVE_PAYOUT_LABEL_V32;
+        let rows = vec![(vec![1], vec![9; 8192]), (vec![2], vec![8; 8192])];
+        let root = PalwCollectionOpeningV1 { label: label.to_vec(), rows: rows.clone() }.root();
+        let preimage = root.as_byte_slice().to_vec();
+        let bytes = encode_row_stream_generation_v1(&preimage,
+            &[PalwRowStreamCollectionV1 { label: label.to_vec(), offset: 0, rows }], b"staging").unwrap();
+        assert!(palw_accept_row_stream_generation_v1(palw_state_root_of_preimage_v1(&preimage), &bytes,
+            std::io::sink(), bytes.len() as u64, None).is_ok());
     }
 
     #[test]

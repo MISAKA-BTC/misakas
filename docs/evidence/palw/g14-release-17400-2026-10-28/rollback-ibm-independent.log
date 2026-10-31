@@ -1,0 +1,54 @@
+active
+/root/t12-rel/ddf5485d88df/bin/kaspad
+c60d2872565210389f72fb169da31616a1b5238d07d426633aa8d2a3d3e881e6  /proc/2065856/exe
+NRestarts=0
+active
+/root/t12-rel/ddf5485d88df/bin/kaspad
+c60d2872565210389f72fb169da31616a1b5238d07d426633aa8d2a3d3e881e6  /proc/2067712/exe
+NRestarts=0
+active
+/root/t12-rel/ddf5485d88df/bin/kaspad
+c60d2872565210389f72fb169da31616a1b5238d07d426633aa8d2a3d3e881e6  /proc/2069462/exe
+NRestarts=0
+  node 1.1.0 net=testnet-12 synced=True utxoindex=True daa=16989 blocks=16989
+  fingerprint ef379378f09bf33f… OK
+  genesis a27f8f44fe4d91a5… present; pruning point a27f8f44fe4d91a5… (= genesis)
+  peers 12: {'ip': '127.0.0.1', 'port': 34666}, {'ip': '127.0.0.1', 'port': 59402}, {'ip': '169.58.13.16', 'port': 26311}, {'ip': '169.58.232.113', 'port': 26311}, {'ip': '169.58.232.113', 'port': 54846}, {'ip': '169.58.39.220', 'port': 49406}, {'ip': '169.58.39.220', 'port': 52132}, {'ip': '5.104.81.23', 'port': 49608} …
+  lanes: 600 blocks (DAA 16702..16989): attempt=40 receipt=0 exec-priced-attempt=0 heartbeat=560 other=0 | merged round blocks=4883 merged attempts=104
+  producer drawing: 
+  producer class ebf44d0aa09ff7d1 bond 2669:0 produced=0 receipts=0 panel=True submitter=True
+  memory share 10.25 GiB, reserved 6.01, live 11.00 (min(MemAvailable, cgroup max − current) − 1 GiB), available 4.21, bounded=True
+  memory holders: producer of class ebf44d0aa09ff7d1310a7855ab4005c275cdce557e32c269b0f3a984ea80ca73ad1ea0c9b1c0539c8ae04abb5fe24399e67e05bb0895a3dee82253e772246d01 job 01e0d1e2856c79ee1558fdcc8d5ec20a0f313653687bd96fa
+  verification: mem_available_mib=12287 cgroup_naive_mib=12401 cgroup_credited_mib=13471 lazyfree_mib=1070 host_load_milli=2771 pinned_mib=3496 pinned_files=2 run_cap=64 run_last=64 run_narrowed=1 capacity_run_min=0 capacity_narrow_classes=0 host_ledger=on host_nodes=3 host_pinner=1 host_reserved_mib=13161 host_reserving=2 host_pinned_mib=3496 host_pinned_files=2 seat_duties=2 seat_oldest_wait_daa=32 seat_receipts_1h=0 sched_needed=2 sched_backup=0 sched_satisfied=0 slots=2 running=2 overdue=0 detached=1 load_limited=false tick_last_s=0.2 tick_max20_s=0.9 tick_slowest=duty-sweep:0.2 vertex_fence=5300 vertex_pending=0 vertex_sealed_waiting=0 vertex_sealed=0 vertex_sent=0 vertex_landed=0 vertex_expired=0 vert
+  WARNING: this seat's oldest duty has waited 32 DAA for its panel's quorum (healthy: 2-6)
+  pinned class artifacts: 3496 MiB in 2 file(s) (resident once on the host, not reserved per replay)
+  prefill run: cap 64, last 64, narrowed 1 reservation(s) since start
+  host ledger: 3 node(s) and 1 pinner, 13161 MiB reserved by 2, 3496 MiB pinned in 2 distinct file(s)
+  RESULT: OK
+  node 1.1.0 net=testnet-12 synced=True utxoindex=True daa=16989 blocks=16989
+  fingerprint ef379378f09bf33f… OK
+  genesis a27f8f44fe4d91a5… present; pruning point a27f8f44fe4d91a5… (= genesis)
+  peers 11: {'ip': '127.0.0.1', 'port': 26311}, {'ip': '127.0.0.1', 'port': 33850}, {'ip': '169.58.13.16', 'port': 26311}, {'ip': '169.58.232.113', 'port': 26311}, {'ip': '169.58.232.113', 'port': 41590}, {'ip': '169.58.39.220', 'port': 26311}, {'ip': '169.58.39.220', 'port': 51564}, {'ip': '5.104.81.23', 'port': 33040} …
+  lanes: 600 blocks (DAA 16702..16989): attempt=40 receipt=0 exec-priced-attempt=0 heartbeat=560 other=0 | merged round blocks=4883 merged attempts=104
+  producer holding: the model registry admits no new claim of this class now [class=f1c5635c6e47e96e7af864789c94523335dc56584af297cb8cc19021c228b897bee1a50145597e45f8ca2727349bf4aa
+  producer class f1c5635c6e47e96e bond 2669:1 produced=0 receipts=0 panel=True submitter=True
+  memory share 8.00 GiB, reserved 6.84, live 9.09 (min(MemAvailable, cgroup max − current) − 1 GiB), available 1.13, bounded=True
+  memory holders: full-seat of class ebf44d0aa09ff7d1310a7855ab4005c275cdce557e32c269b0f3a984ea80ca73ad1ea0c9b1c0539c8ae04abb5fe24399e67e05bb0895a3dee82253e772246d01 job c8931572bbb2910c9f013875b89f3c5d734b71cf93b0d93d
+  verification: mem_available_mib=12545 cgroup_naive_mib=8653 cgroup_credited_mib=10330 lazyfree_mib=1676 host_load_milli=2790 pinned_mib=3496 pinned_files=2 run_cap=64 run_last=64 run_narrowed=0 capacity_run_min=0 capacity_narrow_classes=0 host_ledger=on host_nodes=3 host_pinner=1 host_reserved_mib=13161 host_reserving=2 host_pinned_mib=3496 host_pinned_files=2 seat_duties=7 seat_oldest_wait_daa=25 seat_receipts_1h=0 sched_needed=7 sched_backup=0 sched_satisfied=0 slots=2 running=2 overdue=0 detached=2 load_limited=false tick_last_s=0.4 tick_max20_s=1.3 tick_slowest=duty-sweep:0.4 vertex_fence=5300 vertex_pending=0 vertex_sealed_waiting=0 vertex_sealed=0 vertex_sent=0 vertex_landed=0 vertex_expired=0 verte
+  NOTE: the kernel's max−current is 8653 MiB but 1677 MiB of the cgroup is freed memory it will take back; the ledger counts it as headroom (the 10-01 b6 reading)
+  pinned class artifacts: 3496 MiB in 2 file(s) (resident once on the host, not reserved per replay)
+  prefill run: cap 64, last 64, narrowed 0 reservation(s) since start
+  host ledger: 3 node(s) and 1 pinner, 13161 MiB reserved by 2, 3496 MiB pinned in 2 distinct file(s)
+  RESULT: OK
+  node 1.1.0 net=testnet-12 synced=True utxoindex=True daa=16988 blocks=16988
+  fingerprint ef379378f09bf33f… OK
+  genesis a27f8f44fe4d91a5… present; pruning point a27f8f44fe4d91a5… (= genesis)
+  peers 7: {'ip': '127.0.0.1', 'port': 26311}, {'ip': '127.0.0.1', 'port': 26321}, {'ip': '169.58.13.16', 'port': 26311}, {'ip': '169.58.232.113', 'port': 26311}, {'ip': '169.58.39.220', 'port': 26311}, {'ip': '169.58.39.220', 'port': 26321}, {'ip': '95.111.236.186', 'port': 26311}
+  lanes: 600 blocks (DAA 16701..16988): attempt=40 receipt=0 exec-priced-attempt=0 heartbeat=560 other=0 | merged round blocks=4883 merged attempts=104
+  producer off: 
+  producer class  bond  produced=0 receipts=0 panel=True submitter=True
+  memory share 0.00 GiB, reserved 0.00, live 0.00 (min(MemAvailable, cgroup max − current) − 1 GiB), available 0.00, bounded=False
+  verification: seat_duties=15 seat_oldest_wait_daa=39 seat_receipts_1h=0 sched_needed=15 sched_backup=0 sched_satisfied=0 slots=2 running=0 overdue=0 detached=0 load_limited=false  vertex_fence=5300 vertex_pending=0 vertex_sealed_waiting=0 vertex_sealed=0 vertex_sent=0 vertex_landed=0 vertex_expired=0 vertex_leaves=0 vertex_last_round=16979 vertex_tip_rounds=2685 vertex_tip_tallies=15 vertex_tip_held=52 witness_fence=5300 audit_fence=5300 capped_fence=5300 mesh_audits_started=0 mesh_audits_matched=0 mesh_audits_mismatched=0 mesh_audits_failed=0 mesh_audits_skipped=0 mesh_audits_running=0 mesh_tip_witness_profiles=0 mesh_tip_audit_rows=0 mesh_tip_traps_open=0 mesh_tip_capped_claims=0 mesh_tip_own_audits=0 t
+  WARNING: this seat's oldest duty has waited 39 DAA for its panel's quorum (healthy: 2-6)
+  RESULT: OK
+active

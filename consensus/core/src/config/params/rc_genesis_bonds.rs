@@ -2223,6 +2223,36 @@ pub fn palw_base_coinbase_recovery_due_v1(
     genesis_has_no_bond && live_registry_empty && floor_admits && is_base_class
 }
 
+/// RFC-0041's initial no-PALW wait, measured by consensus header timestamps rather than DAA.
+pub const PALW_BASE_COINBASE_RECOVERY_WAIT_MS_V1: u64 = 30 * 60 * 1_000;
+
+/// A fresh bond-free chain must wait thirty minutes from genesis before earning the BASE
+/// recovery subsidy. The floor starts Idle, so its ordinary idle predicate alone cannot establish
+/// that this wait elapsed. Overflow has no admissible timestamp; it must not shorten the wait.
+pub fn palw_base_coinbase_recovery_wait_elapsed_v1(genesis_timestamp: u64, header_timestamp: u64) -> bool {
+    genesis_timestamp.checked_add(PALW_BASE_COINBASE_RECOVERY_WAIT_MS_V1).is_some_and(|earliest| header_timestamp >= earliest)
+}
+
+#[cfg(test)]
+mod bond_free_recovery_clock_tests {
+    use super::*;
+
+    #[test]
+    fn rfc0041_recovery_wait_uses_genesis_timestamp_and_fails_closed_on_overflow() {
+        let genesis = 1_800_000_000_000;
+        let first = genesis + PALW_BASE_COINBASE_RECOVERY_WAIT_MS_V1;
+        assert!(!palw_base_coinbase_recovery_wait_elapsed_v1(genesis, genesis));
+        assert!(!palw_base_coinbase_recovery_wait_elapsed_v1(genesis, first - 1));
+        assert!(palw_base_coinbase_recovery_wait_elapsed_v1(genesis, first));
+        assert!(palw_base_coinbase_recovery_wait_elapsed_v1(genesis, first + 1));
+        assert!(!palw_base_coinbase_recovery_wait_elapsed_v1(genesis, genesis - 1));
+        assert!(!palw_base_coinbase_recovery_wait_elapsed_v1(u64::MAX, u64::MAX));
+        let last_genesis = u64::MAX - PALW_BASE_COINBASE_RECOVERY_WAIT_MS_V1;
+        assert!(palw_base_coinbase_recovery_wait_elapsed_v1(last_genesis, u64::MAX));
+        assert!(!palw_base_coinbase_recovery_wait_elapsed_v1(last_genesis + 1, u64::MAX));
+    }
+}
+
 /// The admission failure a recovery block may stand through: the named executor bond is absent.
 /// A failed signature, lottery, or class check still disqualifies the block.
 pub fn palw_base_coinbase_recovery_missing_bond_v1(admission_error: &str) -> bool {

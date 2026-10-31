@@ -117,7 +117,8 @@ impl PalwChainStateV2 {
         }
         // ---- class: live rows, or an archived body bound to its header ----
         let mut budget = r.remaining;
-        let class = super::super::palw_native_source_fold_v39::restore_audited_class(rows, &p, h.original.class, &mut budget, archive)?;
+        let class =
+            super::super::palw_native_source_fold_v39::restore_audited_class(rows, &p, h.original.class, &mut budget, archive)?;
         r.remaining = budget;
         if class.root() != h.original.class || class.source().root() != h.original.source || h.class_bytes != 262 {
             return Err("audit39 original class/source identity differs".into());
@@ -171,7 +172,8 @@ impl PalwChainStateV2 {
         {
             return Err("audit39 original producer consent relation differs".into());
         }
-        let tomb: (Digest, Digest, Digest) = decode(&r.need(TABLE, k(20, &consent.root()), 256, "consumed consent")?, "consumed consent")?;
+        let tomb: (Digest, Digest, Digest) =
+            decode(&r.need(TABLE, k(20, &consent.root()), 256, "consumed consent")?, "consumed consent")?;
         if tomb != (job, h.original.root(), consent.root()) {
             return Err("audit39 once-consumed consent tombstone differs".into());
         }

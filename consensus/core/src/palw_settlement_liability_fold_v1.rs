@@ -740,7 +740,7 @@ impl TransitionBuilder<'_> {
     /// The signed fee is the whole tranche: R, K, collateral, lock, hard deadline and retention.
     /// No separate forfeiture rate. Inside H the at-once amount is that same signed fee, which is
     /// what a timely refund moves; after H the predicate allows the same whole fee.
-    fn signed_fee_tranche_v1(
+    pub(super) fn signed_fee_tranche_v1(
         &self,
         amount: u64,
         moving: u64,

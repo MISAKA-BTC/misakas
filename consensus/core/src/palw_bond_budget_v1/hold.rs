@@ -258,7 +258,11 @@ pub fn palw_bond_hold_burst_caps_v1(policy: &PalwBondBudgetPolicyV1, hold: &Palw
 /// the reward and block dimensions stayed at 1.2 claims' worth, so the second claim the burst allows was refused by them. Income rows
 /// and Round-rights draws are continuous amounts and keep the prorated caps; both write the same burst view, so a claim's rights are
 /// in the view an income row reads (one principal, never used twice).
-pub fn palw_bond_hold_claim_burst_caps_v1(policy: &PalwBondBudgetPolicyV1, hold: &PalwBondHoldPolicyV1, capital: u64) -> PalwBudgetVectorV1 {
+pub fn palw_bond_hold_claim_burst_caps_v1(
+    policy: &PalwBondBudgetPolicyV1,
+    hold: &PalwBondHoldPolicyV1,
+    capital: u64,
+) -> PalwBudgetVectorV1 {
     let daily = palw_bond_hold_daily_caps_v1(policy, capital);
     let prorated = palw_bond_hold_burst_caps_v1(policy, hold, capital);
     if daily.claims == 0 {
@@ -376,7 +380,8 @@ impl PalwBondBudgetStateV1 {
         let Some(hold) = policy.hold.as_ref() else { return Ok(()) };
         let row = self.bonds.get(bond).copied().unwrap_or_default();
         // The terminal claims whose liability has not ended (the formula's liability view; empty below `palw_bond_formula_v2`).
-        let kept = self.bonds.get(&palw_bond_hold_shadow_bond_v1(PalwHoldViewV1::Liability, bond)).map_or(0, |r| r.open_liability_sompi);
+        let kept =
+            self.bonds.get(&palw_bond_hold_shadow_bond_v1(PalwHoldViewV1::Liability, bond)).map_or(0, |r| r.open_liability_sompi);
         let open = row
             .open_liability_sompi
             .checked_add(kept)

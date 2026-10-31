@@ -1,0 +1,110 @@
+[08:46:19] b0 (misaka-t12-node0): back to its pre-upgrade unit (/root/t12-rel/ddf5485d88df/launch/b0.sh), appdir untouched
+[08:46:19]   stopping misaka-t12-node0 (SIGINT, up to 180 s)
+[08:49:23]   b0 fingerprint OK, main process /root/t12-rel/ddf5485d88df/bin/kaspad
+[08:49:23]   b0: waiting ≤ 600s for synced, ≥ 1 peer
+[08:49:54]   b0 synced: fp=OK genesis=OK facts=- synced=true peers=5 daa=16985 blocks=16985 ready=-
+[08:50:14] b1 (misaka-t12-node1): back to its pre-upgrade unit (/root/t12-rel/ddf5485d88df/launch/b1.sh), appdir untouched
+[08:50:14]   stopping misaka-t12-node1 (SIGINT, up to 180 s)
+[08:53:12]   b1 fingerprint OK, main process /root/t12-rel/ddf5485d88df/bin/kaspad
+[08:53:12]   b1: waiting ≤ 600s for synced, ≥ 1 peer
+[08:53:33]   b1 synced: fp=OK genesis=OK facts=- synced=true peers=5 daa=16986 blocks=16986 ready=-
+[08:53:53] b3 (misaka-t12-seat3): back to its pre-upgrade unit (/root/t12-rel/ddf5485d88df/launch/b3.sh), appdir untouched
+[08:53:53]   stopping misaka-t12-seat3 (SIGINT, up to 180 s)
+[08:57:09]   b3 fingerprint OK, main process /root/t12-rel/ddf5485d88df/bin/kaspad
+[08:57:09]   b3: waiting ≤ 600s for synced, ≥ 1 peer
+[08:57:40]   b3 synced: fp=OK genesis=OK facts=- synced=true peers=7 daa=16988 blocks=16988 ready=-
+[08:58:00] pinner: back to its pre-upgrade unit
+[08:58:06] upgrade-rollback done (3 node(s) put back); chain data was never moved
+[08:58:07] == pinner misaka-palw-pinner: active running · holding 2 of 2 file(s), 3.41 GiB · 54 MiB charged to its cgroup
+[08:58:07]    host ledger /run/misaka-palw: nodes 3, pinner 1, 8 reservation(s) of 13161 MiB, 2 distinct pinned file(s) of 3496 MiB (as written; a gone process's lines leave at the next grant)
+[08:58:07] == b0 misaka-t12-node0: 0 active running 
+  node 1.1.0 net=testnet-12 synced=True utxoindex=True daa=16989 blocks=16989
+  fingerprint ef379378f09bf33f… OK
+  genesis a27f8f44fe4d91a5… present; pruning point a27f8f44fe4d91a5… (= genesis)
+  peers 12: {'ip': '127.0.0.1', 'port': 34666}, {'ip': '127.0.0.1', 'port': 59402}, {'ip': '169.58.13.16', 'port': 26311}, {'ip': '169.58.232.113', 'port': 26311}, {'ip': '169.58.232.113', 'port': 54846}, {'ip': '169.58.39.220', 'port': 49406}, {'ip': '169.58.39.220', 'port': 52132}, {'ip': '5.104.81.23', 'port': 49608} …
+  lanes: 600 blocks (DAA 16701..16988): attempt=40 receipt=0 exec-priced-attempt=0 heartbeat=560 other=0 | merged round blocks=4883 merged attempts=104
+  producer drawing: 
+  producer class ebf44d0aa09ff7d1 bond 2669:0 produced=0 receipts=0 panel=True submitter=True
+  memory share 10.25 GiB, reserved 6.01, live 11.71 (min(MemAvailable, cgroup max − current) − 1 GiB), available 4.21, bounded=True
+  memory holders: producer of class ebf44d0aa09ff7d1310a7855ab4005c275cdce557e32c269b0f3a984ea80ca73ad1ea0c9b1c0539c8ae04abb5fe24399e67e05bb0895a3dee82253e772246d01 job 01e0d1e2856c79ee1558fdcc8d5ec20a0f313653687bd96fa
+  verification: mem_available_mib=13010 cgroup_naive_mib=12089 cgroup_credited_mib=13265 lazyfree_mib=1176 host_load_milli=2775 pinned_mib=3496 pinned_files=2 run_cap=64 run_last=64 run_narrowed=1 capacity_run_min=0 capacity_narrow_classes=0 host_ledger=on host_nodes=3 host_pinner=1 host_reserved_mib=13161 host_reserving=2 host_pinned_mib=3496 host_pinned_files=2 seat_duties=2 seat_oldest_wait_daa=32 seat_receipts_1h=0 sched_needed=2 sched_backup=0 sched_satisfied=0 slots=2 running=2 overdue=0 detached=1 load_limited=false tick_last_s=0.5 tick_max20_s=1.5 tick_slowest=duty-sweep:0.3 vertex_fence=5300 vertex_pending=0 vertex_sealed_waiting=0 vertex_sealed=0 vertex_sent=0 vertex_landed=0 vertex_expired=0 vert
+  WARNING: this seat's oldest duty has waited 32 DAA for its panel's quorum (healthy: 2-6)
+  pinned class artifacts: 3496 MiB in 2 file(s) (resident once on the host, not reserved per replay)
+  prefill run: cap 64, last 64, narrowed 1 reservation(s) since start
+  host ledger: 3 node(s) and 1 pinner, 13161 MiB reserved by 2, 3496 MiB pinned in 2 distinct file(s)
+  genesis bonds: 9 seats; all eight on 5e0d5f1b37a71288…:0..7
+  class ebf44d0aa09ff7d1… registered (Active)
+  class 74c67e63 state=Prefetching ready=0/now 0 of 7 inflight=0 — ready 0 < 7 required (seats prove possession to be counted)
+  class 7d7e3d05 state=Candidate ready=0/now 0 of 7 inflight=0 — candidate: registered, and not admitted — no seat outside the registrant's own identity has proved it is ready
+  class b4a2ba78 state=Candidate ready=0/now 0 of 7 inflight=0 — candidate: registered, and not admitted — no seat outside the registrant's own identity has proved it is ready
+  class ebf44d0a state=Active ready=9/now 9 of 7 inflight=61 — admitting in full
+  class f1c5635c state=Active ready=0/now 0 of 7 inflight=0 — base class: always active, never gated
+  class f7e45711 state=Probation { probes_passed: 0 } ready=8/now 8 of 7 inflight=0 — probing: 0/10 finals passed, 0 failed since entry
+  RESULT: OK
+[08:58:07]   cgroup: memory.max 20480 MiB, current 8154 MiB (anon 6526, file/page cache 1593), process RSS 13595 MiB
+[08:58:08]   cgroup: freed-not-yet-reclaimed (MADV_FREE) 1718 MiB; ledger headroom without that credit 11301 MiB, with it 13019 MiB
+      1 [WARN ] [palw-panel] replay of claim 207734b52760c9f9ce223d4ac33c0e23c49e5f4da01a0e0e904fc2553064949a42cf60a82896c204e0bfb042226b2e9513cd2f7e7c20a78c2b5220ce188f281b deferred: a replay needs 0.07 GiB 
+      1 [INFO ] [palw-producer] no class manifest beside /root/palw-class/smollm2-1.7b-instruct.class.palwtir: this node will DERIVE each registered root it is asked about                  (streamed, but 135 
+      1 [INFO ] [palw-producer] class manifest for /root/palw-class/qwen25-1.5b-a16-8k.palwart: 1 class(es) with their inventory roots, digest f4af38d91cb4d012189051742a98322ba9a20c9e62bbc9383b0d2c03727d0e5db
+      1 [INFO ] [palw-panel] no class manifest beside /root/palw-class/smollm2-1.7b-instruct.class.palwtir: this node will DERIVE each registered root it is asked about                  (streamed, but 135 s a
+      1 [INFO ] [palw-panel] class manifest for /root/palw-class/qwen25-1.5b-a16-8k.palwart: 1 class(es) with their inventory roots, digest f4af38d91cb4d012189051742a98322ba9a20c9e62bbc9383b0d2c03727d0e5dbb72
+      1 [INFO ] [palw-lane-watch] counting the selected chain's last 600 blocks by lane every 60 s; an ERROR while the newest 30 carry no PALW work
+[08:58:08] == b1 misaka-t12-node1: 0 active running 
+  node 1.1.0 net=testnet-12 synced=True utxoindex=True daa=16989 blocks=16989
+  fingerprint ef379378f09bf33f… OK
+  genesis a27f8f44fe4d91a5… present; pruning point a27f8f44fe4d91a5… (= genesis)
+  peers 11: {'ip': '127.0.0.1', 'port': 26311}, {'ip': '127.0.0.1', 'port': 33850}, {'ip': '169.58.13.16', 'port': 26311}, {'ip': '169.58.232.113', 'port': 26311}, {'ip': '169.58.232.113', 'port': 41590}, {'ip': '169.58.39.220', 'port': 26311}, {'ip': '169.58.39.220', 'port': 51564}, {'ip': '5.104.81.23', 'port': 33040} …
+  lanes: 600 blocks (DAA 16701..16988): attempt=40 receipt=0 exec-priced-attempt=0 heartbeat=560 other=0 | merged round blocks=4883 merged attempts=104
+  producer holding: the model registry admits no new claim of this class now [class=f1c5635c6e47e96e7af864789c94523335dc56584af297cb8cc19021c228b897bee1a50145597e45f8ca2727349bf4aa
+  producer class f1c5635c6e47e96e bond 2669:1 produced=0 receipts=0 panel=True submitter=True
+  memory share 8.00 GiB, reserved 6.84, live 9.06 (min(MemAvailable, cgroup max − current) − 1 GiB), available 1.13, bounded=True
+  memory holders: full-seat of class ebf44d0aa09ff7d1310a7855ab4005c275cdce557e32c269b0f3a984ea80ca73ad1ea0c9b1c0539c8ae04abb5fe24399e67e05bb0895a3dee82253e772246d01 job c8931572bbb2910c9f013875b89f3c5d734b71cf93b0d93d
+  verification: mem_available_mib=13476 cgroup_naive_mib=9067 cgroup_credited_mib=10297 lazyfree_mib=1229 host_load_milli=2677 pinned_mib=3496 pinned_files=2 run_cap=64 run_last=64 run_narrowed=0 capacity_run_min=0 capacity_narrow_classes=0 host_ledger=on host_nodes=3 host_pinner=1 host_reserved_mib=13161 host_reserving=2 host_pinned_mib=3496 host_pinned_files=2 seat_duties=7 seat_oldest_wait_daa=25 seat_receipts_1h=0 sched_needed=7 sched_backup=0 sched_satisfied=0 slots=2 running=2 overdue=0 detached=2 load_limited=false tick_last_s=0.5 tick_max20_s=1.3 tick_slowest=duty-sweep:0.5 vertex_fence=5300 vertex_pending=0 vertex_sealed_waiting=0 vertex_sealed=0 vertex_sent=0 vertex_landed=0 vertex_expired=0 verte
+  NOTE: the kernel's max−current is 9067 MiB but 1230 MiB of the cgroup is freed memory it will take back; the ledger counts it as headroom (the 10-01 b6 reading)
+  pinned class artifacts: 3496 MiB in 2 file(s) (resident once on the host, not reserved per replay)
+  prefill run: cap 64, last 64, narrowed 0 reservation(s) since start
+  host ledger: 3 node(s) and 1 pinner, 13161 MiB reserved by 2, 3496 MiB pinned in 2 distinct file(s)
+  genesis bonds: 9 seats; all eight on 5e0d5f1b37a71288…:0..7
+  class ebf44d0aa09ff7d1… registered (Active)
+  class 74c67e63 state=Prefetching ready=0/now 0 of 7 inflight=0 — ready 0 < 7 required (seats prove possession to be counted)
+  class 7d7e3d05 state=Candidate ready=0/now 0 of 7 inflight=0 — candidate: registered, and not admitted — no seat outside the registrant's own identity has proved it is ready
+  class b4a2ba78 state=Candidate ready=0/now 0 of 7 inflight=0 — candidate: registered, and not admitted — no seat outside the registrant's own identity has proved it is ready
+  class ebf44d0a state=Active ready=9/now 9 of 7 inflight=61 — admitting in full
+  class f1c5635c state=Active ready=0/now 0 of 7 inflight=0 — base class: always active, never gated
+  class f7e45711 state=Probation { probes_passed: 0 } ready=8/now 8 of 7 inflight=0 — probing: 0/10 finals passed, 0 failed since entry
+  RESULT: OK
+[08:58:09]   cgroup: memory.max 16384 MiB, current 7976 MiB (anon 6492, file/page cache 1452), process RSS 13561 MiB
+[08:58:09]   cgroup: freed-not-yet-reclaimed (MADV_FREE) 1087 MiB; ledger headroom without that credit 7383 MiB, with it 8470 MiB
+      3 [WARN ] [palw-panel] replay of claim 8af0ed788316b9beb6b92e1984fbd30b8d14d476f1279c69b2c57b9e4603b73fb6aa098e3495951261f29a9f5a86c6407225ea502c59cb2863aec27aad408f5e deferred: a replay needs 0.07 GiB 
+      1 [WARN ] [palw-panel] replay of claim d976961ecdd10cc53245791084f7840ba58a12fb56605e9a22d9654bd3c24cc519b67a0524747b6902c4010d42eaab19d468abbfd00a05091b279c0356dbd087 deferred: a replay needs 0.07 GiB 
+      1 [WARN ] [palw-panel] replay of claim d21260a61acf21c0c9a25d40268c80f0349d6cef59589f536ea1c25cd1c5170bfd663591ad5c2ca20ad6f93b7165d1b6d887e46a16a595796e56c18ed91cd640 deferred: a replay needs 0.07 GiB 
+      1 [WARN ] [palw-panel] replay of claim 1c7b0d91707c643fbfcd7387f9d59a461244d74f464f651962045653ea9aee84e3e78fda92c574abcb0916430770a72d9d45f04896bb51dff8b4fe68acca9ad8 deferred: a replay needs 0.07 GiB 
+      1 [INFO ] [palw-producer] no class manifest beside /root/palw-class/smollm2-1.7b-instruct.class.palwtir: this node will DERIVE each registered root it is asked about                  (streamed, but 135 
+      1 [INFO ] [palw-producer] class manifest for /root/palw-class/qwen25-1.5b-a16-8k.palwart: 1 class(es) with their inventory roots, digest f4af38d91cb4d012189051742a98322ba9a20c9e62bbc9383b0d2c03727d0e5db
+[08:58:10] == b3 misaka-t12-seat3: 0 active running 
+  node 1.1.0 net=testnet-12 synced=True utxoindex=True daa=16988 blocks=16988
+  fingerprint ef379378f09bf33f… OK
+  genesis a27f8f44fe4d91a5… present; pruning point a27f8f44fe4d91a5… (= genesis)
+  peers 7: {'ip': '127.0.0.1', 'port': 26311}, {'ip': '127.0.0.1', 'port': 26321}, {'ip': '169.58.13.16', 'port': 26311}, {'ip': '169.58.232.113', 'port': 26311}, {'ip': '169.58.39.220', 'port': 26311}, {'ip': '169.58.39.220', 'port': 26321}, {'ip': '95.111.236.186', 'port': 26311}
+  lanes: 600 blocks (DAA 16700..16987): attempt=39 receipt=0 exec-priced-attempt=0 heartbeat=561 other=0 | merged round blocks=5003 merged attempts=105
+  producer off: 
+  producer class  bond  produced=0 receipts=0 panel=True submitter=True
+  memory share 0.00 GiB, reserved 0.00, live 0.00 (min(MemAvailable, cgroup max − current) − 1 GiB), available 0.00, bounded=False
+  verification: seat_duties=15 seat_oldest_wait_daa=39 seat_receipts_1h=0 sched_needed=15 sched_backup=0 sched_satisfied=0 slots=2 running=0 overdue=0 detached=0 load_limited=false  vertex_fence=5300 vertex_pending=0 vertex_sealed_waiting=0 vertex_sealed=0 vertex_sent=0 vertex_landed=0 vertex_expired=0 vertex_leaves=0 vertex_last_round=16979 vertex_tip_rounds=2685 vertex_tip_tallies=15 vertex_tip_held=52 witness_fence=5300 audit_fence=5300 capped_fence=5300 mesh_audits_started=0 mesh_audits_matched=0 mesh_audits_mismatched=0 mesh_audits_failed=0 mesh_audits_skipped=0 mesh_audits_running=0 mesh_tip_witness_profiles=0 mesh_tip_audit_rows=0 mesh_tip_traps_open=0 mesh_tip_capped_claims=0 mesh_tip_own_audits=0 t
+  WARNING: this seat's oldest duty has waited 39 DAA for its panel's quorum (healthy: 2-6)
+  genesis bonds: 9 seats; all eight on 5e0d5f1b37a71288…:0..7
+  class ebf44d0aa09ff7d1… registered (Active)
+  class 74c67e63 state=Prefetching ready=0/now 0 of 7 inflight=0 — ready 0 < 7 required (seats prove possession to be counted)
+  class 7d7e3d05 state=Candidate ready=0/now 0 of 7 inflight=0 — candidate: registered, and not admitted — no seat outside the registrant's own identity has proved it is ready
+  class b4a2ba78 state=Candidate ready=0/now 0 of 7 inflight=0 — candidate: registered, and not admitted — no seat outside the registrant's own identity has proved it is ready
+  class ebf44d0a state=Active ready=9/now 9 of 7 inflight=60 — admitting in full
+  class f1c5635c state=Active ready=0/now 0 of 7 inflight=0 — base class: always active, never gated
+  class f7e45711 state=Probation { probes_passed: 0 } ready=8/now 8 of 7 inflight=0 — probing: 0/10 finals passed, 0 failed since entry
+  RESULT: OK
+[08:58:10]   cgroup: memory.max 9216 MiB, current 1492 MiB (anon 1046, file/page cache 424), process RSS 8112 MiB
+[08:58:10]   cgroup: freed-not-yet-reclaimed (MADV_FREE) 174 MiB; ledger headroom without that credit 6699 MiB, with it 6873 MiB
+      6 [WARN ] [palw-panel] replay of claim bb79add5a3b934eee6ef94609bde999dc11ade011284d4ec745f001d77286c64079ac73ce30a3bb37210ae8e43f2f5294f1aa30c8a40059f72cc1766de75ec81 deferred: a replay needs 0.07 GiB 
+      2 [INFO ] [palw-panel] no class manifest beside /root/palw-class/smollm2-1.7b-instruct.class.palwtir: this node will DERIVE each registered root it is asked about                  (streamed, but 135 s a
+      2 [INFO ] [palw-panel] class manifest for /root/palw-class/qwen25-1.5b-a16-8k.palwart: 1 class(es) with their inventory roots, digest f4af38d91cb4d012189051742a98322ba9a20c9e62bbc9383b0d2c03727d0e5dbb72
+      2 [INFO ] [palw-lane-watch] counting the selected chain's last 600 blocks by lane every 60 s; an ERROR while the newest 30 carry no PALW work
+      1 [WARN ] [palw-panel] replay of claim 14b300db0703893295e0395597077dee847b4530b91b4da624c0626b9d2ebbfc811a6bb571b0bff2b43653370b381b39b1f9c0704d24b52003870671aaf4aee7 deferred: a replay needs 0.07 GiB 

@@ -2,7 +2,7 @@
 //! mutation; native import verifies the completed carriage under the pruning header.
 use super::IbdFlow;
 use crate::palw_snapshot_chunks::{
-    NativeSnapshotDecodeErrorV1, SNAPSHOT_CODEC_ZLIB_V1, Snapshot, SnapshotCompressionV1, SnapshotReceiver, SnapshotSpill,
+    NativeSnapshotDecodeErrorV1, SNAPSHOT_CODEC_ZLIB_V1, SNAPSHOT_CODEC_ROWS_V1, Snapshot, SnapshotCompressionV1, SnapshotReceiver, SnapshotSpill,
     park_interrupted_snapshot, take_interrupted_snapshot,
 };
 use kaspa_consensus_core::{BlockHash, Hash64};
@@ -18,7 +18,7 @@ fn hash(bytes: &[u8]) -> Result<Hash64, ProtocolError> {
     Ok(Hash64::from_bytes(bytes.try_into().map_err(|_| ProtocolError::Other("invalid PALW snapshot hash width"))?))
 }
 
-fn snapshot_failure(why: NativeSnapshotDecodeErrorV1) -> ProtocolError {
+pub(super) fn snapshot_failure(why: NativeSnapshotDecodeErrorV1) -> ProtocolError {
     match why {
         NativeSnapshotDecodeErrorV1::Capacity(unavailable) => ProtocolError::LocalNativeCapacityUnavailable(unavailable),
         NativeSnapshotDecodeErrorV1::LocalStorage(why) => {
@@ -28,6 +28,27 @@ fn snapshot_failure(why: NativeSnapshotDecodeErrorV1) -> ProtocolError {
             kaspa_core::warn!("[palw-sidecar] structural snapshot decode refused: {why}");
             ProtocolError::Other("PALW snapshot stream hash/Borsh/EOF failed")
         }
+    }
+}
+
+fn row_fallback_allowed_v1(codec:u32,result:&Result<Option<Snapshot>,ProtocolError>)->bool {
+    codec==SNAPSHOT_CODEC_ROWS_V1 && matches!(result,Err(ProtocolError::PruningSidecarUnavailable("PALW chunked state",_)))
+}
+fn fallback_nonce_v1(previous:&[u8])->Vec<u8>{
+    loop{let nonce=rand::random::<[u8;32]>();if nonce!=[0;32] && nonce.as_slice()!=previous{return nonce.to_vec();}}
+}
+#[cfg(test)]
+mod row_fallback_tests {
+    use super::*;
+    #[test]
+    fn rfc37_fallback_is_once_for_explicit_unavailability_and_never_authentication_failure(){
+        let unavailable=Err(ProtocolError::PruningSidecarUnavailable("PALW chunked state","point".into()));
+        assert!(row_fallback_allowed_v1(SNAPSHOT_CODEC_ROWS_V1,&unavailable));
+        assert!(!row_fallback_allowed_v1(SNAPSHOT_CODEC_ZLIB_V1,&unavailable));
+        for error in [ProtocolError::Other("bad row root"),ProtocolError::ConnectionClosed,ProtocolError::LocalNativeResourceUnavailable("capacity".into())]{
+            assert!(!row_fallback_allowed_v1(SNAPSHOT_CODEC_ROWS_V1,&Err(error)));
+        }
+        let nonce=fallback_nonce_v1(&[7;32]);assert_eq!(nonce.len(),32);assert_ne!(nonce,[7;32]);assert_ne!(nonce,[0;32]);
     }
 }
 
@@ -42,9 +63,15 @@ impl IbdFlow {
         }
         let mut receiver = take_interrupted_snapshot(point);
         let compressed = self.router.properties().protocol_version >= crate::flow_context::PROTOCOL_VERSION_PALW_SNAPSHOT_COMPRESSED;
+        let expected_row_root=if crate::flow_context::palw_row_stream_negotiated_v1(self.router.properties().protocol_version) {
+            consensus.clone().spawn_blocking(move |api|api.pruning_point_palw_row_witness_root_v1(point)).await
+        } else {None};
+        // A negotiated109 peer may still have a non-flat witness mode. Preserve
+        // the existing107 import rather than interpreting another header root.
+        let codec=if expected_row_root.is_some(){SNAPSHOT_CODEC_ROWS_V1}else if compressed{SNAPSHOT_CODEC_ZLIB_V1}else{0};
         // Negotiated peer changes may require a fresh transfer. A parked stream's
         // raw/compressed identity is never reinterpreted under another version.
-        if receiver.as_ref().is_some_and(|state| state.profile().is_some() != compressed) {
+        if receiver.as_ref().is_some_and(|state| state.profile().map_or(0,|p|p.codec) != codec || state.row_expected_root()!=expected_row_root) {
             receiver = None;
         }
         let nonce = if compressed {
@@ -62,7 +89,16 @@ impl IbdFlow {
         } else {
             None
         };
-        let result = self.receive_pruning_point_palw_chunks(consensus, point, &mut receiver, &mut spill, &nonce).await;
+        let mut result = self.receive_pruning_point_palw_chunks(consensus, point, &mut receiver, &mut spill, &nonce, codec, expected_row_root).await;
+        if row_fallback_allowed_v1(codec,&result) {
+            // The row generation may exceed its unchanged384MiB cap while
+            // the existing compressed carriage still fits. Start one fresh107
+            // transfer on this peer; never reinterpret a partial row stream.
+            drop(receiver.take());drop(spill.take());
+            spill=Some(SnapshotSpill::new().map_err(|why|ProtocolError::LocalNativeResourceUnavailable(format!("PALW fallback spill/session: {why}")))?);
+            let fresh=fallback_nonce_v1(&nonce);
+            result=self.receive_pruning_point_palw_chunks(consensus,point,&mut receiver,&mut spill,&fresh,SNAPSHOT_CODEC_ZLIB_V1,None).await;
+        }
         if matches!(&result, Err(ProtocolError::Timeout(_)) | Err(ProtocolError::ConnectionClosed))
             && let Some(receiver) = receiver.take()
         {
@@ -78,6 +114,8 @@ impl IbdFlow {
         receiver: &mut Option<SnapshotReceiver>,
         spill: &mut Option<SnapshotSpill>,
         nonce: &[u8],
+        codec: u32,
+        expected_row_root: Option<Hash64>,
     ) -> Result<Option<Snapshot>, ProtocolError> {
         let mut root = receiver.as_ref().map(SnapshotReceiver::root);
         let start_index = receiver.as_ref().map_or(0, SnapshotReceiver::next_index);
@@ -91,14 +129,9 @@ impl IbdFlow {
                         chunked: true,
                         snapshot_root: root.map(|h: Hash64| h.as_byte_slice().to_vec()).unwrap_or_default(),
                         chunk_index: index,
-                        snapshot_codec: if nonce.is_empty() { 0 } else { SNAPSHOT_CODEC_ZLIB_V1 },
+                        snapshot_codec: codec,
                         snapshot_nonce: nonce.to_vec(),
-                        // The first reply may be one current row-stream generation. A resume does not ask again.
-                        row_stream_generation: if index == 0 && start_index == 0 {
-                            kaspa_consensus_core::palw_row_stream_v1::PALW_ROW_STREAM_CURRENT_GENERATION_V1
-                        } else {
-                            0
-                        },
+                        row_stream_generation: if codec == SNAPSHOT_CODEC_ROWS_V1 { 1 } else { 0 },
                     }
                 ))
                 .await?;
@@ -111,11 +144,8 @@ impl IbdFlow {
                 Err(_) => return Err(ProtocolError::Timeout(timeout)),
             };
             let msg = match payload {
-                Some(Payload::PruningPointPalwRowStream(row)) => {
-                    if index != 0 || start_index != 0 {
-                        return Err(ProtocolError::Other("duplicate or out-of-order PALW row stream generation"));
-                    }
-                    return self.accept_pruning_point_palw_row_stream(consensus, point, &row, None).await.map(Some);
+                Some(Payload::PruningPointPalwRowStream(_)) => {
+                    return Err(ProtocolError::Other("row generations require bounded codec2 chunk replies"));
                 }
                 Some(Payload::PruningPointPalwState(msg)) => msg,
                 other => {
@@ -142,11 +172,11 @@ impl IbdFlow {
             let profile = SnapshotCompressionV1::from_wire(msg.snapshot_codec, &msg.snapshot_nonce, msg.decoded_bytes)
                 .map_err(|_| ProtocolError::Other("invalid PALW snapshot compression profile"))?;
             let expects_compression = !nonce.is_empty();
-            if profile.is_some() != expects_compression || profile.is_some_and(|p| p.nonce.as_slice() != nonce) {
+            if profile.is_some() != expects_compression || profile.is_some_and(|p| p.nonce.as_slice() != nonce || p.codec != codec) {
                 return Err(ProtocolError::Other("PALW snapshot mode/nonce changed from negotiated request"));
             }
             if root.is_none() {
-                let state = match profile {
+                let mut state = match profile {
                     Some(profile) => SnapshotReceiver::new_compressed(
                         spill.take().unwrap(),
                         point,
@@ -158,30 +188,44 @@ impl IbdFlow {
                     None => SnapshotReceiver::new(spill.take().unwrap(), point, reply_root, msg.total_bytes, msg.chunk_count),
                 }
                 .map_err(|_| ProtocolError::Other("PALW snapshot total/count exceeds existing policy"))?;
+                if let Some(expected)=expected_row_root { state.enable_row_verification(expected).map_err(snapshot_failure)?; }
                 *receiver = Some(state);
                 root = Some(reply_root);
             }
-            let state = receiver.as_mut().unwrap();
-            if state.profile() != profile {
+            if receiver.as_ref().unwrap().profile() != profile {
                 return Err(ProtocolError::Other("PALW snapshot compression profile changed during stream"));
             }
-            state
-                .accept(point, reply_root, msg.total_bytes, msg.chunk_count, index, chunk_hash, &msg.palw_state)
+            let mut state=receiver.take().unwrap();
+            let bytes=msg.palw_state;
+            let state=kaspa_consensusmanager::spawn_blocking(move || {
+                state.accept(point,reply_root,msg.total_bytes,msg.chunk_count,index,chunk_hash,&bytes)?;
+                Ok::<_,NativeSnapshotDecodeErrorV1>(state)
+            }).await.map_err(|why|ProtocolError::LocalNativeResourceUnavailable(format!("PALW chunk verification worker stopped: {why}")))?
                 .map_err(snapshot_failure)?;
-            if state.complete() {
-                break;
-            }
+            let complete=state.complete();
+            *receiver=Some(state);
+            if complete { break; }
         }
         let receiver = receiver.take().ok_or(ProtocolError::Other("empty PALW chunked snapshot"))?;
         if !receiver.complete() {
             return Err(ProtocolError::Other("PALW chunked snapshot ended early"));
         }
-        let (snapshot, native_lease) = kaspa_consensusmanager::spawn_blocking(move || receiver.decode_snapshot_with_native_lease())
-            .await
-            // A cancelled/panicked local worker has not judged the authenticated
-            // bytes. Keep this retryable without charging or rejecting a peer.
+        let expected_root = expected_row_root;
+        let (snapshot, native_lease, inventory) = kaspa_consensusmanager::spawn_blocking(move || match expected_root {
+            Some(root)=>receiver.decode_row_generation_with_native_lease(root).map(|(snapshot,lease,inventory)|(snapshot,lease,Some(inventory))),
+            None=>receiver.decode_snapshot_with_native_lease().map(|(snapshot,lease)|(snapshot,lease,None)),
+        }).await
             .map_err(|why| ProtocolError::LocalNativeResourceUnavailable(format!("PALW snapshot decoding worker stopped: {why}")))?
             .map_err(snapshot_failure)?;
+        let (snapshot,native_lease)=if let Some(inventory)=inventory {
+            consensus.clone().spawn_blocking(move |api| {
+                api.palw_validate_row_stream_snapshot_v1(point,&snapshot.0,&inventory)?;
+                Ok::<_,kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1<String>>((snapshot,native_lease))
+            }).await.map_err(|error|match error {
+                kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Resource(why)=>ProtocolError::LocalNativeCapacityUnavailable(why),
+                kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Decode(why)=>ProtocolError::OtherOwned(format!("PALW row inventory differs from complete native state: {why}")),
+            })?
+        } else {(snapshot,native_lease)};
         self.native_palw_receive_lease_v1 = native_lease;
         // Declarations were length checked and filtered during streaming decode. Native
         // import/adoption still validates the consensus state and each declaration's profile.

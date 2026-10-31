@@ -20,6 +20,21 @@ fn context() -> TestContext {
         .build();
     TestContext::new(TestConsensus::new(&config))
 }
+/// Real configured genesis classes have canonical builtin declarations. The
+/// corruption-only fixture above deliberately uses synthetic class IDs and
+/// cannot be a complete class-material serving fixture.
+fn rfc37_context() -> TestContext {
+    let authentic = kaspa_consensus_core::config::params::palw_t12_launch_params_v1();
+    assert!(matches!(authentic.palw_consensus_mode, PalwConsensusMode::ConsensusV2(_)));
+    let config = ConfigBuilder::new(authentic)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            *p = p.clone().with_palw_v2_cadence();
+        })
+        .build();
+    TestContext::new(TestConsensus::new(&config))
+}
+
 struct RestoreRow {
     db: std::sync::Arc<kaspa_database::prelude::DB>,
     key: DbKey,
@@ -158,4 +173,71 @@ async fn pruning_snapshot_readiness_missing_active_tip_is_context_not_inactive_s
     assert!(vp.palw_state_v2_store.read().has_delta(point).unwrap());
     assert!(vp.block_transactions_store.get(point).is_ok());
     drop(restore);
+}
+
+fn row_suffix_v1(snapshot:&kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2,declarations:&[(kaspa_hashes::Hash64,Vec<u8>)])->Vec<u8>{
+    let state=borsh::to_vec(snapshot).unwrap();
+    let mut suffix=1u16.to_le_bytes().to_vec();suffix.extend_from_slice(&(state.len() as u64).to_le_bytes());
+    suffix.extend_from_slice(&state);suffix.extend_from_slice(&borsh::to_vec(declarations).unwrap());suffix
+}
+
+#[tokio::test]
+async fn rfc37_store_bridge_pins_source_and_suffix_before_any_output(){
+    let mut ctx=rfc37_context();let mut points=Vec::new();
+    for _ in 0..3 {ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();points.push(ctx.consensus.get_sink());}
+    let point=points[1];let vp=ctx.consensus.virtual_processor();vp.capture_pruning_point_palw_state(point).unwrap();
+    let snapshot=ctx.consensus.pruning_point_palw_state_shared_v1(point).unwrap();
+    let declarations=ctx.consensus.palw_class_carriages_for_snapshot_v1(&snapshot,true).unwrap();
+    let suffix=row_suffix_v1(&snapshot,&declarations);
+    let before=vp.palw_state_v2_store.read().tip_record().unwrap().unwrap();
+    // Force the bridge to reconstruct from the captured DB record, not an Arc
+    // cached by the serving API immediately before it.
+    let cold=vp.palw_state_v2_store.read().clone_with_new_cache(CachePolicy::Empty);
+    *vp.palw_state_v2_store.write()=cold;
+    let mut output=Vec::new();
+    assert_eq!(ctx.consensus.write_pruning_point_palw_row_generation_v1(points[0],&mut std::io::Cursor::new(&suffix),suffix.len() as u64,&mut output).unwrap(),None);
+    assert!(output.is_empty(),"a different captured point never starts a generation");
+    let mut changed=suffix.clone();changed[10]^=1;
+    assert!(ctx.consensus.write_pruning_point_palw_row_generation_v1(point,&mut std::io::Cursor::new(&changed),changed.len() as u64,&mut output).is_err());
+    assert!(output.is_empty(),"a mixed source/native suffix is refused before output");
+    let length=ctx.consensus.write_pruning_point_palw_row_generation_v1(point,&mut std::io::Cursor::new(&suffix),suffix.len() as u64,&mut output).unwrap().unwrap();
+    assert_eq!(length,output.len() as u64);
+    assert_eq!(vp.palw_state_v2_store.read().tip_record().unwrap().unwrap().state_root,before.state_root,"export cannot modify the live tip");
+}
+
+#[tokio::test]
+async fn rfc37_actual_snapshot_bridge_inventory_validation_and_native_import_agree(){
+    use borsh::BorshDeserialize;
+    use std::io::Read;
+    use kaspa_consensus_core::{palw_native_resource_v1::NativeDecodeErrorV1,palw_row_stream_v1::*,palw_state_v2::PalwStateCarriageV2};
+    let mut ctx=rfc37_context();let mut points=Vec::new();
+    for _ in 0..3 {ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();points.push(ctx.consensus.get_sink());}
+    let point=points[1];let vp=ctx.consensus.virtual_processor();vp.capture_pruning_point_palw_state(point).unwrap();
+    let snapshot=ctx.consensus.pruning_point_palw_state_shared_v1(point).unwrap();
+    let declarations=ctx.consensus.palw_class_carriages_for_snapshot_v1(&snapshot,true).unwrap();
+    let suffix=row_suffix_v1(&snapshot,&declarations);
+    let root=ctx.consensus.pruning_point_palw_row_witness_root_v1(point).expect("the exact selected-chain child witnesses this flat state");
+    assert_eq!(root,vp.palw_state_v2_store.read().pruning_snapshot_record().unwrap().unwrap().state_root);
+    let mut output=Vec::new();
+    let length=ctx.consensus.write_pruning_point_palw_row_generation_v1(point,&mut std::io::Cursor::new(&suffix),suffix.len() as u64,&mut output).unwrap().unwrap();
+    let parsed=palw_verify_row_generation_reader_v1(root,&mut std::io::Cursor::new(&output),length).unwrap();
+    kaspa_consensus_core::palw_native_resource_v1::preflight_native_snapshot_v1(&output[parsed.offset as usize..],parsed.length).unwrap();
+    let mut cursor=std::io::Cursor::new(&output[parsed.offset as usize..]);
+    assert_eq!(u16::deserialize_reader(&mut cursor).unwrap(),1);
+    let n=u64::deserialize_reader(&mut cursor).unwrap();
+    let restored=PalwStateCarriageV2::deserialize_reader(&mut (&mut cursor).take(n)).unwrap();
+    let restored_declarations=Vec::<(kaspa_hashes::Hash64,Vec<u8>)>::deserialize_reader(&mut cursor).unwrap();
+    assert_eq!(restored,**snapshot);assert_eq!(restored_declarations,declarations);
+    ctx.consensus.palw_validate_row_stream_snapshot_v1(point,&restored,&parsed.inventory).unwrap();
+    let preimage_len=u32::from_le_bytes(output[22..26].try_into().unwrap()) as usize;
+    let omitted=encode_row_stream_generation_v1(&output[26..26+preimage_len],&[],&suffix).unwrap();
+    let omitted=palw_verify_row_generation_reader_v1(root,&mut std::io::Cursor::new(&omitted),omitted.len() as u64).unwrap();
+    assert!(matches!(ctx.consensus.palw_validate_row_stream_snapshot_v1(point,&restored,&omitted.inventory),Err(NativeDecodeErrorV1::Decode(_))),
+        "a correct native suffix cannot hide omitted stream collections");
+    // Use the existing history authority before the ordinary atomic import;
+    // row validation on its own did not authorize replacing the live tip.
+    ctx.consensus.import_pruning_points(vec![ctx.consensus.get_header(ctx.consensus.params().genesis.hash).unwrap(),ctx.consensus.get_header(point).unwrap()]).unwrap();
+    vp.palw_state_v2_store.write().delete_tip_for_tests().unwrap();
+    vp.import_pruning_point_palw_snapshot(point,restored,Some((restored_declarations,true))).unwrap();
+    assert_eq!(vp.palw_state_v2_store.read().tip_record().unwrap().unwrap().state_root,root);
 }

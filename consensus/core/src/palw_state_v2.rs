@@ -180,7 +180,33 @@ mod palw_native_master_fold_v39;
 // `palw_native_mining_v39` (absent on every preset, refused when armed).
 #[path = "palw_native_mining_fold_v39.rs"]
 mod palw_native_mining_fold_v39;
+#[path="palw_native_budget_binding_fold_v1.rs"]
+mod palw_native_budget_binding_fold_v1;
+/// Material-resolved checkpoint read from this exact authenticated state.
+/// Eligibility consumers must use the validated owned checkpoint API.
+pub fn palw_claim_local_checkpoint_snapshot_v2(state:&PalwChainStateV2)->Result<Option<crate::palw_native_resource_v1::NativeRetainedV1<crate::palw_claim_local_v1::PalwClaimLocalCheckpointV1>>,PalwStateV2Error>{
+    palw_claim_local_checkpoint_fold_v1::stored_claim_local_checkpoint_v1(state)
+}
+#[path = "palw_claim_local_descriptor_v2.rs"]
+mod palw_claim_local_descriptor_v2;
+pub(crate) use palw_claim_local_descriptor_v2::{PalwClaimDescriptorV2,PalwClaimRecordRowV2,PalwClaimMaterialReferenceV2,PalwClaimMaterialBlobV2};
+pub use palw_claim_local_descriptor_v2::{palw_claim_descriptor_key_v2,PALW_CLAIM_DESCRIPTOR_PREFIX_V2,PALW_CLAIM_RECORD_PREFIX_V2,PALW_CLAIM_REFERENCE_PREFIX_V2,PALW_CLAIM_BLOB_PREFIX_V2};
+#[path = "palw_claim_local_kernel_origins_v1.rs"]
+mod palw_claim_local_kernel_origins_v1;
+pub(crate) use palw_claim_local_kernel_origins_v1::PalwClosedKernelOriginV1;
+pub use palw_claim_local_kernel_origins_v1::PALW_COMPACT_KERNEL_ORIGIN_PREFIX_V1;
+#[path = "palw_claim_local_compact_sources_v1.rs"]
+mod palw_claim_local_compact_sources_v1;
+pub(crate) use palw_claim_local_compact_sources_v1::PalwClosedClaimSourceV1;
+pub use palw_claim_local_compact_sources_v1::{PALW_COMPACT_CLAIM_SOURCE_PREFIX_V1,validate_compact_sources_context_v1};
+#[path = "palw_legacy_pending_facts_v1.rs"]
+mod palw_legacy_pending_facts_v1;
+pub use palw_legacy_pending_facts_v1::{LEGACY_PENDING_FACT_TABLE_V1,palw_validate_legacy_pending_fact_context_v1};
+pub(crate) use palw_legacy_pending_facts_v1::LegacyPendingFactV1;
+#[path = "palw_native_closed_facts_fold_v1.rs"]
+mod palw_native_closed_facts_fold_v1;
 pub use palw_native_mining_fold_v39::palw_native_mining_model_view_v39;
+pub use crate::palw_native_closed_facts_v1::validate_fact_archives_context_v1;
 #[path = "palw_native_source_fold_v39.rs"]
 mod palw_native_source_fold_v39;
 pub use palw_native_source_fold_v39::native_consent_hold_expiry_v39;
@@ -216,12 +242,17 @@ pub(crate) mod palw_native_post_final_duty_v1;
 #[path = "palw_court_shared_material_intake_fold_v1.rs"]
 #[cfg_attr(not(test), allow(dead_code))] // `expire_material_drafts` is test/sweep-only
 mod palw_court_shared_material_intake_fold_v1;
+#[path = "palw_court_family_supplier_fold_v1.rs"]
+pub(crate) mod palw_court_family_supplier_fold_v1;
+pub use palw_court_family_supplier_fold_v1::{palw_family_supplier_terms_quote_v1,family_supplier_profiles_v1};
+#[path = "palw_court_family_material_fold_v1.rs"]
+pub(crate) mod palw_court_family_material_fold_v1;
 #[path = "palw_tir_public_fold_v1.rs"]
 mod palw_tir_public_fold_v1;
 pub use palw_tir_public_fold_v1::{
     PalwFundedOriginalCandidateV1, palw_funded_original_candidate_v1, palw_funded_original_answer_candidate_v1,
     PALW_G03_FRAMELESS_TIR_ORIGINAL_CODE_V1, palw_tir_public_conviction_preflight_v1, palw_tir_public_staged_conviction_preflight_v2, palw_tir_public_original_quote_v1,
-    palw_tir_public_preclaim_quote_v1,
+    palw_tir_public_preclaim_quote_v1, PalwFamilyOriginalNativeQuoteV2, palw_family_original_native_quote_v2,
 };
 #[path = "palw_terminal_carriage_fold_v1.rs"]
 mod palw_terminal_carriage_fold_v1;
@@ -279,13 +310,13 @@ mod palw_claim_local_prefix_court_v1;
 #[path = "palw_claim_local_rewards_v1.rs"]
 mod palw_claim_local_rewards_v1;
 // RFC-0023 stage 2: per-claim settlement read (dormant `palw_claim_local_settlement_v1`).
-pub use palw_claim_local_rewards_v1::{PalwClaimLocalSettlementV1, palw_claim_local_settlement_v1};
+pub use palw_claim_local_rewards_v1::{PalwClaimLocalSettlementV1, palw_claim_local_settlement_v1, palw_claim_local_recorded_settlement_v1};
 // RFC-0023 stage 2 (§4.1/§4.5): the fold-derived claim-local checkpoint row and its irreversible frontier (same dormant fence).
 #[path = "palw_claim_local_checkpoint_fold_v1.rs"]
 mod palw_claim_local_checkpoint_fold_v1;
 pub use palw_claim_local_checkpoint_fold_v1::{
     PalwClaimLocalCheckpointStatusV1, palw_claim_local_checkpoint_key_v1, palw_claim_local_checkpoint_status_v1,
-    palw_claim_local_irreversible_anchors_v1,
+    palw_claim_local_irreversible_anchors_v1, palw_claim_local_native39_frontier_eligible_v1, palw_claim_local_native_frontier_records_v1, PalwClaimLocalNativeFrontierRecordV1, palw_claim_local_owned_checkpoint_v1,
 };
 // RFC-0008: the once-only settlement registry (dormant `palw_settlement_once_v1`; kernel route aux 140) — every settlement consumer
 // checks and writes its exact obligation's marker in the same transition before any value moves.
@@ -1983,6 +2014,8 @@ pub struct PalwStateParamsV2 {
     #[borsh(skip)]
     settlement_once_from_daa: Option<u64>,
     #[borsh(skip)]
+    family_supplier_from_daa: Option<u64>,
+    #[borsh(skip)]
     pub(crate) verifier_watch_v1: Option<(u64, crate::palw_verifier_watch_v1::PalwVerifierWatchPolicyV1)>,
     #[borsh(skip)]
     pub(crate) verifier_watch_maturity_v1: Option<(Option<crate::config::params::PalwBondMaturityV1>, Option<crate::config::params::ForkActivation>)>,
@@ -2818,7 +2851,7 @@ pub fn palw_seat_duty_of_v1(state: &PalwChainStateV2, claim_id: &Hash64, bond: &
 /// `escaped_depth` is the depth AFTER the liveness escape ([`palw_second_clock_depth_v1`]); callers
 /// holding the raw depth use [`palw_bond_committed_raw_v1`]. Saturating. Cost
 /// `O(log n + locks_of(bond))`.
-pub fn palw_bond_committed_v1(
+fn palw_bond_committed_legacy_v1(
     state: &PalwChainStateV2,
     bond: &PalwBondKeyV2,
     now_daa: u64,
@@ -2862,6 +2895,26 @@ pub fn palw_bond_committed_v1(
         .saturating_add(state.provider_court_reserved(bond))
         .saturating_add(state.prefix_export_reserved_at_v1(bond, now_daa))
         .saturating_add(state.verifier_watch_reserved_at_v1(bond, now_daa))
+        .saturating_add(state.family_supplier_collateral_reserved_v1(bond, now_daa))
+}
+
+/// Checked shared collateral, including the exact native budget liability not
+/// already counted by the source's original reservation. Admission must retain
+/// resource failures rather than reinterpret them as insufficient collateral.
+pub fn palw_bond_committed_checked_v2(
+    state: &PalwChainStateV2, bond: &PalwBondKeyV2, now_daa: u64,
+    escaped_depth: Option<u64>, window_court: u64,
+) -> Result<u128, PalwStateV2Error> {
+    let legacy = palw_bond_committed_legacy_v1(state, bond, now_daa, escaped_depth, window_court);
+    let native = crate::palw_native_budget_binding_v1::native_budget_excess_for_bond_v1(state, bond, now_daa)?;
+    Ok(legacy.saturating_add(native))
+}
+/// Conservative compatibility view. Consensus admission uses the checked API.
+pub fn palw_bond_committed_v1(
+    state: &PalwChainStateV2, bond: &PalwBondKeyV2, now_daa: u64,
+    escaped_depth: Option<u64>, window_court: u64,
+) -> u128 {
+    palw_bond_committed_checked_v2(state, bond, now_daa, escaped_depth, window_court).unwrap_or(u128::MAX)
 }
 
 /// **[`palw_bond_committed_v1`]'s per-lock term: does `lock` on `claim_id` still hold its seat's
@@ -3013,6 +3066,14 @@ pub fn palw_final_lock_retro_expiry_v1(
 /// [`palw_bond_committed_v1`] from the second clock's RAW depth: the escape is computed here, from
 /// the state's anchor ring and `params.window_court()`, exactly as the fold's
 /// `second_clock_depth` and the processor's `palw_second_clock_depth_at` compute it.
+pub fn palw_bond_committed_raw_checked_v2(
+    state: &PalwChainStateV2, params: &PalwStateParamsV2,
+    bond: &PalwBondKeyV2, now_daa: u64, raw_depth: Option<u64>,
+) -> Result<u128, PalwStateV2Error> {
+    let escaped = palw_second_clock_depth_v1(raw_depth, &state.recent_anchor_daas, now_daa, params.window_court());
+    palw_bond_committed_checked_v2(state, bond, now_daa, escaped, params.window_court())
+}
+
 pub fn palw_bond_committed_raw_v1(
     state: &PalwChainStateV2,
     params: &PalwStateParamsV2,
@@ -3493,6 +3554,35 @@ pub fn palw_bond_collateral_is_locked_v6(
     raw_depth: Option<u64>,
     duty_gate: bool,
 ) -> bool {
+    palw_bond_collateral_is_locked_checked_v7(state, params, key, bond, now_daa, withdrawal_delay_daa, raw_depth, duty_gate).unwrap_or(true)
+}
+
+/// Actual exit/conviction gate: native finite duties are held on every legacy cohort.
+/// Local capacity and malformed committed bindings are never an unlocked bond.
+pub fn palw_bond_collateral_is_locked_checked_v7(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    key: &PalwBondKeyV2,
+    bond: &PalwBondStateV2,
+    now_daa: u64,
+    withdrawal_delay_daa: u64,
+    raw_depth: Option<u64>,
+    duty_gate: bool,
+) -> Result<bool, PalwStateV2Error> {
+    if crate::palw_native_budget_binding_v1::native_budget_held_for_bond_v1(state,key,now_daa)?>0{return Ok(true)}
+    Ok(palw_bond_collateral_is_locked_legacy_v6(state, params, key, bond, now_daa, withdrawal_delay_daa, raw_depth, duty_gate))
+}
+
+fn palw_bond_collateral_is_locked_legacy_v6(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    key: &PalwBondKeyV2,
+    bond: &PalwBondStateV2,
+    now_daa: u64,
+    withdrawal_delay_daa: u64,
+    raw_depth: Option<u64>,
+    duty_gate: bool,
+) -> bool {
     let rcore = params.rcore_plus_active_at(now_daa);
     debug_assert!(
         !rcore || withdrawal_delay_daa == params.withdrawal_delay_daa(),
@@ -3505,7 +3595,7 @@ pub fn palw_bond_collateral_is_locked_v6(
         // (review L5), so its seat stays locked until the claim ends.
         || (rcore
             && duty_gate
-            && palw_bond_committed_v1(state, key, now_daa, escaped, window_court) > state.registration_exposure(key))
+            && palw_bond_committed_legacy_v1(state, key, now_daa, escaped, window_court) > state.registration_exposure(key))
         || (rcore && palw_bond_has_open_court_v1(state, key))
         || (rcore && palw_bond_is_payee_of_unmatured_row_v1(state, params, key, now_daa, raw_depth))
         // EXEC forces vesting even below R-core+; its actual payees keep their collectible collateral.
@@ -5222,10 +5312,10 @@ impl PalwHeldForfeitV1 {
 
 /// **ADR-0152 §3.6 / R-2 (S-4): one conviction's opening** — `(bond, C₀, locked)` for every bond it
 /// may charge ([`TransitionBuilder::open_conviction_v1`]).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug)]
 struct PalwConvictionV1 {
     now_daa: u64,
-    bonds: Vec<(PalwBondKeyV2, u64, bool)>,
+    bonds: crate::palw_native_resource_v1::NativeRetainedV1<Vec<(PalwBondKeyV2, u64, bool)>>,
 }
 
 impl PalwConvictionV1 {
@@ -7738,6 +7828,10 @@ pub enum PalwConsensusObjectV2 {
     RoutedMaterialAnsweredV2 {
         answer: Box<crate::palw_routed_material_v2::PalwRoutedMaterialAnswerV2>,
     } = 247,
+    /// RFC-0042 authenticated nonexclusive family material, new dedicated fence.
+    CourtFamilyMaterialV1 {
+        control: Box<crate::palw_court_family_material_v1::SignedFamilyMaterialV1>,
+    } = 250,
 }
 
 /// **Is this object an onboarding object (tags 104–107, 109)** — a variant an older build cannot decode and skips (A-2)? Below
@@ -14932,7 +15026,7 @@ fn apply_palw_transition_v7_inner(
     let thin_at_draw: BTreeSet<Hash64> = match extras.sw8_anchor_delay {
         Some(anchor_delay) if extras.sw8_draw.is_some() && builder.params.floor_refusal_retry_active_at(ctx.daa_score) => {
             let reach = extras.sw8_anchor_reach.map_or(ctx.daa_score, |reach| reach.min(ctx.daa_score));
-            palw_sw8_thin_draws_v1(&builder.state, builder.params, extras, ctx.daa_score, anchor_delay, reach)
+            palw_sw8_thin_draws_v1(&builder.state, builder.params, extras, ctx.daa_score, anchor_delay, reach)?
         }
         _ => BTreeSet::new(),
     };
@@ -15204,6 +15298,7 @@ fn apply_palw_transition_v7_inner(
                             ..Default::default()
                         },
                     ) {
+                        Err(crate::palw_admission_v2::PalwAdmissionV2Error::CollateralState(error)) => return Err(error),
                         Err(refused) => Some(refused.to_string()),
                         Ok(_) => {
                             let checkpoint = builder.try_checkpoint()?;
@@ -15418,6 +15513,7 @@ fn apply_palw_transition_v7_inner(
         builder.state.safe_frontier_blue_score = blue_score;
         builder.state.safe_frontier = block;
     }
+    palw_native_mining_fold_v39::tick_native39_frontier_v1(&mut builder,parent,ctx,resolved_through)?;
     let new_frontier = (builder.state.safe_frontier_blue_score, builder.state.safe_frontier);
     debug_assert!(
         new_frontier.0 >= old_frontier.0 || builder.params.rfc0018_v1().is_some_and(|mirror| mirror.gate_c_at(ctx.daa_score)),
@@ -15458,12 +15554,21 @@ fn apply_palw_transition_v7_inner(
     palw_claim_local_prefix_reservation_v1::sweep(&mut builder, ctx)?;
     palw_monetary_material_fold_v1::refresh(&mut builder, ctx)?;
     builder.rearm_material_retirements_v1(ctx.daa_score)?;
+    palw_legacy_pending_facts_v1::capture_legacy_sources_v1(&mut builder,parent,ctx)?;
+    // Compact work already covered by the authenticated prior archive retires
+    // before the current native frame/checkpoint is captured. New archive GC is
+    // intentionally deferred until the next transition.
+    palw_native_closed_facts_fold_v1::sweep_native_closed_facts_v1(&mut builder)?;
     palw_claim_local_fold_v1::retain_changed_claim_context_v1(
         &mut builder, parent, ctx, accepted_objects, block_work, merged_work, own_execution_key,
     )?;
+    palw_claim_local_compact_sources_v1::compact_and_collect_v1(&mut builder,ctx)?;
     // RFC-0023 stage 2: past `palw_claim_local_settlement_v1` the checkpoint row is written and the frontier raised to its
     // irreversible frontier (one value for fork choice, settlement and pruning's input). A no-op below the fence.
     palw_claim_local_checkpoint_fold_v1::write_claim_local_checkpoint_v1(&mut builder, parent, ctx)?;
+    palw_legacy_pending_facts_v1::promote_legacy_sources_v1(&mut builder,ctx)?;
+    palw_native_closed_facts_fold_v1::promote_native39_closed_facts_v1(&mut builder,parent,ctx)?;
+    palw_native_mining_fold_v39::write_native39_settlement_checkpoint_v1(&mut builder,parent,ctx)?;
     let new_frontier = (builder.state.safe_frontier_blue_score, builder.state.safe_frontier);
     // Weight / frontier / position entries, exactly once, at the end.
     if (parent.safe_weight, parent.bounded_immature) != (builder.state.safe_weight, builder.state.bounded_immature) {
@@ -18139,11 +18244,11 @@ pub fn palw_sw8_thin_draws_v1(
     now_daa: u64,
     anchor_delay: u64,
     reach: u64,
-) -> BTreeSet<Hash64> {
+) -> Result<BTreeSet<Hash64>, PalwStateV2Error> {
     let mut thin = BTreeSet::new();
-    let Some(draw) = extras.sw8_draw.as_ref() else { return thin };
+    let Some(draw) = extras.sw8_draw.as_ref() else { return Ok(thin) };
     if !params.floor_refusal_retry_active_at(now_daa) {
-        return thin;
+        return Ok(thin);
     }
     let frame = palw_panel_valid_lock_frame_v1(state, params, extras, now_daa);
     let mut censuses: Vec<Option<crate::palw_panel_v2::PalwStakeDrawCensusV1<'_>>> = draw.points.iter().map(|_| None).collect();
@@ -18153,7 +18258,7 @@ pub fn palw_sw8_thin_draws_v1(
             continue;
         }
         let Some((index, point)) = draw.point_of(claim.bind_base_daa().saturating_add(anchor_delay)) else { continue };
-        let census = censuses[index].get_or_insert_with(|| {
+        if censuses[index].is_none() {
             let window = palw_bond_maturity_window_on_state_v1(
                 state,
                 Some(params.window_court()),
@@ -18161,7 +18266,7 @@ pub fn palw_sw8_thin_draws_v1(
                 point.bond_maturity_window,
                 point.settled_anchor_depth,
             );
-            crate::palw_panel_v2::PalwStakeDrawCensusV1::new(
+            let census = crate::palw_panel_v2::PalwStakeDrawCensusV1::new_checked_v2(
                 state,
                 draw.seat_count,
                 params.min_collateral_sompi(),
@@ -18169,13 +18274,16 @@ pub fn palw_sw8_thin_draws_v1(
                 crate::palw_panel_v2::palw_seat_maturity_floor_v1(point.draw_daa, window),
                 frame,
             )
-        });
+            ?;
+            censuses[index] = Some(census);
+        }
+        let census = censuses[index].as_mut().expect("checked census installed");
         let lock = palw_panel_valid_lock_v1(state, params, extras, &claim_id, claim, now_daa, draw.seat_count as usize);
         if census.refuses_at_every_seed(&claim_id, lock.as_ref()) {
             thin.insert(claim_id);
         }
     }
-    thin
+    Ok(thin)
 }
 
 /// **ADR-0152 SW-8 (M4): the claims `state` holds `Provisional` whose anchor slot
@@ -18648,7 +18756,7 @@ fn apply_receipt_licensed_v2(
     }
     let inner: Vec<crate::palw_panel_v2::PalwSeatReceiptV2> = receipts.iter().map(|r| r.receipt.clone()).collect();
     if builder.extras.audit_2026_09_23_active
-        && !builder.receipt_set_is_backed(*claim_id, &claim, &inner, ctx.daa_score, PalwLicenceDoorV1::Coverage)
+        && !builder.receipt_set_is_backed(*claim_id, &claim, &inner, ctx.daa_score, PalwLicenceDoorV1::Coverage)?
     {
         return Ok(());
     }
@@ -18913,7 +19021,7 @@ fn apply_class_registration_v1(
             // `committed + accuser + declared ≤ C`; below it, the claim ledger as before.
             let backing = if builder.params.rcore_plus_active_at(ctx.daa_score) {
                 builder
-                    .committed_at(&carriage_bond, ctx.daa_score)
+                    .committed_at(&carriage_bond, ctx.daa_score)?
                     .saturating_add(builder.read().accuser_ledger_v1(&carriage_bond, ctx.daa_score))
             } else {
                 builder
@@ -19266,6 +19374,7 @@ fn palw_fold_kind_in_force_v1(builder: &TransitionBuilder<'_>, ctx: &PalwBlockCo
         }
         // G14: the TIR / greedy Float32 staged routes ride inside the staged court's kinds, in force where both fences are.
         K::Fence(F::StagedTirRouteV1) => builder.extras.staged_public_court.is_some() && builder.extras.staged_tir_route_active,
+        K::Fence(F::CourtFamilySupplierV1) => builder.extras.family_supplier_active&&builder.params.family_supplier_active_at(ctx.daa_score),
         K::Fence(F::TirPublicConvictionV1) => {
             builder.extras.tir_public_allocation_rules_v1.is_some() && builder.extras.tir_public_network_domain_v1.is_some()
         }
@@ -20325,6 +20434,11 @@ pub struct PalwTransitionExtrasV1 {
     /// still realizable inside the gap and carries a tenth of margin. `None` by `Default` and on
     /// every preset but testnet-12, and then nothing below changes.
     pub economic_safety: Option<PalwEconomicSafetyFoldV1>,
+    /// Immutable RFC-0012 policy for deterministic native archival handoff.
+    pub native39_settlement_checkpoint: Option<crate::palw_native39_settlement_checkpoint_v1::Native39SettlementFoldV1>,
+    /// Actual immutable network identity for closed archival credit decisions.
+    pub native_fact_ruleset: Option<crate::Hash>,
+    pub native_fact_quantum_maturity_daa: Option<u64>,
     /// **ADR-0145: `Params::palw_canonical_work_daa()` — the fence's HEIGHT, not a yes/no at this
     /// block.** Past it the weight, exposure and work-price paths read the work the chain DERIVED
     /// from the class's graph instead of the step-leaf count its registrant declared.
@@ -20630,6 +20744,9 @@ pub struct PalwTransitionExtrasV1 {
     /// is ALSO in [`Self::tir_public_originals`] (its literal TFP1) and is admitted ONLY through the funded-original coordinator; a
     /// refusal leaves the carrier an ordinary transaction. Empty below `palw_tir_public_conviction_v1` (`Default`: byte-identical).
     pub tir_funded_originals: BTreeMap<Hash64, crate::palw_funded_original_coordinator_v1::PalwFundedOriginalPairingV1>,
+    /// Producer quote-only native authentication results. Admission independently
+    /// checks the literal TFO2 witness; a byte count cannot construct this type.
+    pub family_original_table_inventories_v2: BTreeMap<Hash64, crate::palw_court_family_material_v1::CheckedFamilyTableInventoryV1>,
     /// **TEST ONLY — the unadopted funded-original schedule injected for the coordinator's success path.** Absent from every
     /// non-test build; production resolution is always typed-missing.
     #[cfg(test)]
@@ -20655,6 +20772,7 @@ pub struct PalwTransitionExtrasV1 {
     /// must carry its answer ([`Self::fp_claim_answers`]), is credited only past the positions a paid row of its class already
     /// computed, and records `prompt ‖ answer`. `false` by `Default` and below the fence (every shipped preset): byte-identical.
     pub fp_answer_accounting_active: bool,
+    pub family_supplier_active: bool,
     /// The decoded answer ids each free-prompt commitment of this block carried (`FPA1`), keyed by claim — native ingress only,
     /// never a carrier-declared map. Empty below `palw_fp_answer_accounting_v1`.
     pub fp_claim_answers: BTreeMap<Hash64, Vec<u32>>,
@@ -22034,7 +22152,10 @@ fn attach_riders_v1(
             ..Default::default()
         };
         crate::palw_admission_v2::check_palw_attempt_admission_v2(&builder.state, params, admission, &ctx_r, envelope, fences)
-            .map_err(|refused| PalwStateV2Error::CapacityRiders(format!("rider {index}: {refused}")))?;
+            .map_err(|refused| match refused {
+                crate::palw_admission_v2::PalwAdmissionV2Error::CollateralState(error) => error,
+                other => PalwStateV2Error::CapacityRiders(format!("rider {index}: {other}")),
+            })?;
         let anchor = m::palw_rider_job_anchor_v1(lead_id, index);
         let execution_key = crate::palw_attempt_v2::execution_commitment_v3(attempt, anchor);
         apply_attempt(
@@ -22333,7 +22454,7 @@ fn apply_attempt(
         // block's DAA and escaped depth (own commitments, registration, every `max(duty, live lock)`)
         // and the new claim's commitment — the numbers admission and the producer's facts read.
         let backed = if builder.params.rcore_plus_active_at(ctx.daa_score) {
-            builder.committed_at(&claim.bond, ctx.daa_score)
+            builder.committed_at(&claim.bond, ctx.daa_score)?
         } else {
             builder
                 .state
@@ -22346,7 +22467,7 @@ fn apply_attempt(
         // Past the fence the ceiling is the one invariant's (review M1): the 500‰ ceiling, and
         // never past `collateral − accuser` — `backed + room`.
         let ceiling = if builder.params.rcore_plus_active_at(ctx.daa_score) {
-            backed.saturating_add(builder.gate_room(&claim.bond, ctx.daa_score, PalwRcoreGateV1::Work))
+            backed.saturating_add(builder.gate_room(&claim.bond, ctx.daa_score, PalwRcoreGateV1::Work)?)
         } else {
             (bond_record.collateral as u128)
                 .checked_mul(builder.params.fp_max_exposure_ratio_permille as u128)

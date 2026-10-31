@@ -48,7 +48,7 @@ pub fn palw_fp_answer_envelope_view_v1(payload: &[u8], max_answer: usize) -> Opt
         crate::palw_tir_public_fp_envelope_v1::PALW_TIR_PUBLIC_FP_ENVELOPE_MAX_BYTES_V1
     } else if inner.starts_with(b"HFP1") {
         crate::palw_history_custody_v1::PALW_HISTORY_FP_ENVELOPE_MAX_BYTES_V1
-    } else if inner.starts_with(b"TFO1") {
+    } else if (inner.starts_with(b"TFO1") || inner.starts_with(b"TFO2")) {
         crate::palw_tir_funded_original_envelope_v1::PALW_TIR_FUNDED_ORIGINAL_MAX_BYTES_V1
     } else {
         crate::palw_freeprompt_v3::PALW_FP_COMMITMENT_TX_MAX_BYTES
@@ -122,7 +122,11 @@ impl PalwFpClaimAnswersV1 {
         }
         let carrier_row = crate::palw_native_resource_v1::btree_node_envelope_bytes_v1::<crate::Hash64, crate::Hash64>() as u64;
         bytes = bytes
-            .checked_add(carrier_row.checked_mul(self.carriers.len() as u64).ok_or_else(|| NativeCoverageV1::overflow::<Self>("FPA1 carrier"))?)
+            .checked_add(
+                carrier_row
+                    .checked_mul(self.carriers.len() as u64)
+                    .ok_or_else(|| NativeCoverageV1::overflow::<Self>("FPA1 carrier"))?,
+            )
             .ok_or_else(|| NativeCoverageV1::overflow::<Self>("FPA1 carrier"))?;
         let lease = reserve_native_requests_v1(bytes)?;
         for (claim, (ids, _)) in &self.answers {
@@ -239,6 +243,7 @@ mod tests {
             (b"TFP1", crate::palw_tir_public_fp_envelope_v1::PALW_TIR_PUBLIC_FP_ENVELOPE_MAX_BYTES_V1),
             (b"HFP1", crate::palw_history_custody_v1::PALW_HISTORY_FP_ENVELOPE_MAX_BYTES_V1),
             (b"TFO1", crate::palw_tir_funded_original_envelope_v1::PALW_TIR_FUNDED_ORIGINAL_MAX_BYTES_V1),
+            (b"TFO2", crate::palw_tir_funded_original_envelope_v1::PALW_TIR_FUNDED_ORIGINAL_MAX_BYTES_V1),
         ] {
             let mut inner = vec![0; cap];
             inner[..4].copy_from_slice(magic);

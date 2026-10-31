@@ -34,7 +34,7 @@ fn charge(
 ) -> Result<Option<u128>, PalwStateV2Error> {
     let fee = route_ledger_policy_v1(builder)?.dismissal_fee_v1(work) as u128;
     let collateral = builder.state.bonds.get(signer).map(|b| b.collateral as u128).unwrap_or(0);
-    if collateral.saturating_sub(builder.committed_at(signer, ctx.daa_score)) < fee {
+    if collateral.saturating_sub(builder.committed_at(signer, ctx.daa_score)?) < fee {
         return Err(refused("model artifact actor has insufficient free collateral for a dismissal"));
     }
     Ok(charge_route_budget_v1(builder, ctx, work, court)?.then_some(fee))
@@ -88,7 +88,7 @@ pub(super) fn bind(
         return Ok(());
     }
     let collateral = builder.state.bonds.get(signer).map(|b| b.collateral as u128).unwrap_or(0);
-    if collateral.saturating_sub(builder.committed_at(signer, ctx.daa_score)) < PALW_ONBOARDING_BINDING_RESERVATION_SOMPI_V1 as u128 {
+    if collateral.saturating_sub(builder.committed_at(signer, ctx.daa_score)?) < PALW_ONBOARDING_BINDING_RESERVATION_SOMPI_V1 as u128 {
         builder.slash_bond(*signer, fee)?;
         return Ok(());
     }

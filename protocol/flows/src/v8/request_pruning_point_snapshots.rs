@@ -177,7 +177,9 @@ impl RequestPruningPointPalwStateFlow {
                     continue;
                 }
             };
-            if msg.row_stream_generation > kaspa_consensus_core::palw_row_stream_v1::PALW_ROW_STREAM_CURRENT_GENERATION_V1 {
+            if msg.row_stream_generation > kaspa_consensus_core::palw_row_stream_v1::PALW_ROW_STREAM_CURRENT_GENERATION_V1
+                || (msg.row_stream_generation != 0
+                    && !crate::flow_context::palw_row_stream_negotiated_v1(self.router.properties().protocol_version)) {
                 // One current generation only. A larger id is a history request and is not served.
                 debug!("[palw-sidecar] refusing row-stream generation {}: only the current generation is served", msg.row_stream_generation);
                 let refused = if msg.chunked {
@@ -319,11 +321,15 @@ impl RequestPruningPointPalwStateFlow {
         }
     }
     async fn serve_chunked(&mut self, msg: RequestPruningPointPalwStateMessage) -> Result<(), ProtocolError> {
-        use crate::palw_snapshot_chunks::{SNAPSHOT_CODEC_ZLIB_V1, SnapshotSender, SnapshotSpill, chunk_hash_profile};
+        use crate::palw_snapshot_chunks::{SNAPSHOT_CODEC_ROWS_V1, SnapshotSender, SnapshotSpill};
         if self.router.properties().protocol_version < crate::flow_context::PROTOCOL_VERSION_PALW_SNAPSHOT_CHUNKS {
             return Err(ProtocolError::Other("PALW snapshot chunks require negotiated protocol 106"));
         }
+        if (msg.row_stream_generation == 1) != (msg.snapshot_codec == SNAPSHOT_CODEC_ROWS_V1) {
+            return Err(ProtocolError::Other("row generation requires protocol109 codec2"));
+        }
         let pp = req_pruning_point(msg.pruning_point_hash)?;
+        let codec = msg.snapshot_codec;
         let nonce = crate::palw_snapshot_chunks::compression_request_nonce(
             self.router.properties().protocol_version,
             msg.snapshot_codec,
@@ -369,6 +375,7 @@ impl RequestPruningPointPalwStateFlow {
                         let declarations =
                             c.palw_class_carriages_for_snapshot_v1(&carriage, nonce.is_some()).map_err(std::io::Error::other)?;
                         match nonce {
+                            Some(nonce) if codec == SNAPSHOT_CODEC_ROWS_V1 => SnapshotSender::encode_row_snapshot(spill,pp,&carriage,&declarations,nonce,c),
                             Some(nonce) => SnapshotSender::encode_snapshot_compressed(spill, pp, &carriage, &declarations, nonce),
                             None => SnapshotSender::encode_snapshot(spill, pp, &carriage, &declarations),
                         }
@@ -394,29 +401,15 @@ impl RequestPruningPointPalwStateFlow {
             self.chunks = Some(sender);
         }
         let sender = self.chunks.as_mut().unwrap();
-        if sender.profile.map(|p| p.nonce) != nonce {
+        if sender.profile.map(|p| p.nonce) != nonce || sender.profile.map_or(0,|p|p.codec) != codec {
             return Err(ProtocolError::Other("PALW snapshot nonce/codec changed during stream"));
         }
-        let bytes = sender
-            .chunk(pp, root, msg.chunk_index)
-            .map_err(|_| ProtocolError::Other("invalid PALW snapshot point/root/order/expiry"))?;
-        let reply = PruningPointPalwStateMessage {
-            found: true,
-            chunked: true,
-            pruning_point_hash: Some(pp.into()),
-            snapshot_root: sender.root.as_byte_slice().to_vec(),
-            chunk_index: msg.chunk_index,
-            chunk_count: sender.count,
-            total_bytes: sender.total,
-            chunk_hash: chunk_hash_profile(pp, sender.root, sender.total, sender.count, msg.chunk_index, &bytes, sender.profile)
-                .as_byte_slice()
-                .to_vec(),
-            palw_state: bytes,
-            snapshot_codec: sender.profile.map_or(0, |_| SNAPSHOT_CODEC_ZLIB_V1),
-            decoded_bytes: sender.profile.map_or(0, |p| p.decoded),
-            snapshot_nonce: sender.profile.map_or_else(Vec::new, |p| p.nonce.to_vec()),
-            ..Default::default()
-        };
+        let (reply,_chunk_lease) = sender.reply_message(pp,root,msg.chunk_index)
+            .map_err(|why| match why {
+                crate::palw_snapshot_chunks::NativeSnapshotDecodeErrorV1::Capacity(why)=>ProtocolError::LocalNativeCapacityUnavailable(why),
+                crate::palw_snapshot_chunks::NativeSnapshotDecodeErrorV1::LocalStorage(why)=>ProtocolError::LocalNativeResourceUnavailable(format!("PALW snapshot sender spill: {why}")),
+                crate::palw_snapshot_chunks::NativeSnapshotDecodeErrorV1::Encoding(_)=>ProtocolError::Other("invalid PALW snapshot point/root/order"),
+            })?;
         if sender.next_index() == sender.count {
             self.chunks = None;
         }

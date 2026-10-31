@@ -296,6 +296,22 @@ pub(super) fn release(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContex
             .and_then(|r| r.bond_key_of(&payee))
             .ok_or_else(|| refused("fee payee bond missing"))?;
         let payload = builder.state.bonds.get(&bond).ok_or_else(|| refused("fee payout missing"))?.payout_payload;
+        if row.amount > 0 {
+            let queue = crate::palw_kernel_route_v1::palw_kernel_payout_key_v1(&payload);
+            let pending = builder.state.pending_payouts.get(&queue);
+            // A mature fee is still an entitlement when the physical queue has
+            // no room. Retain its hold, material and once marker until a later
+            // tick can queue the entire amount, just as for provider fees.
+            if pending.is_none()
+                && (builder.state.pending_payouts.len() >= PALW_V2_MAX_PENDING_PAYOUTS
+                    || builder.state.pending_payouts.len() >= PALW_V2_MAX_PAYOUTS_PER_BLOCK)
+            {
+                continue;
+            }
+            if pending.map_or(0, |p| p.amount).checked_add(row.amount).is_none() {
+                continue;
+            }
+        }
         match builder.ordinary_verifier_fee_terms_v1(row.terms.claim, row.terms.verifier, row.terms.slot, now, row.amount) {
             Ok(None) => {}
             Ok(Some(terms)) => {

@@ -83,6 +83,7 @@ pub(super) fn requests(state: &PalwChainStateV2) -> Result<u64, NativeCoverageV1
     // before the fold reports the original inconsistency.
     q.add_v1(retained_history_v1(state)?)?;
     quote_kernel_dependency_rows_v1(state, &mut q)?;
+    quote_native_vertices_v1(state,&mut q)?;
     Ok(q.bytes_v1())
 }
 
@@ -150,44 +151,84 @@ fn retained_history_v1(state: &PalwChainStateV2) -> Result<u64, NativeCoverageV1
 }
 
 fn quote_kernel_dependency_rows_v1(state: &PalwChainStateV2, q: &mut TirNativeRequestsV1) -> Result<(), NativeCoverageV1> {
-    use crate::palw_claim_local_v1::PalwClaimLocalWorkRefV1;
     use crate::palw_native_resource_v1::preflight_native_value_v1;
-    use std::collections::BTreeSet;
-    let Some(route) = state.kernel_route.as_ref() else { return Ok(()) };
-    let mut ids = BTreeSet::new();
-    for (id, root) in &state.exec_v2.roots {
-        if matches!(root.prefix, crate::palw_work_slice_v2::PalwWorkPrefixStageV2::Unbound) {
-            continue;
-        }
-        if root.prefix_claim != kaspa_hashes::ZERO_HASH64 {
-            ids.insert(root.prefix_claim);
-        }
-        for (_, slice) in state.exec_v2.slices.range((*id, 0)..=(*id, u32::MAX)) {
-            if slice.evidence_root != kaspa_hashes::ZERO_HASH64 {
-                ids.insert(slice.evidence_root);
-            }
+    let Some(route)=state.kernel_route.as_ref() else{return Ok(())};
+    let count=route.rows.keys().filter(|(t,_)|*t==misaka_palw_kernel::rows::TABLE_CLAIMS_V1).count() as u64;
+    q.exact_v1::<BTreeNodeEnvelopeV1<Hash64,()>>(count)?;
+    growing::<(Hash64,Vec<u8>,PalwClaimLocalRecordV1)>(q,count)?;
+    q.exact_v1::<BTreeNodeEnvelopeV1<PalwClaimLocalWorkRefV1,PalwClaimLocalRecordV1>>(count)?;
+    q.exact_v1::<BTreeNodeEnvelopeV1<PalwClaimLocalWorkRefV1,()>>(count)?;
+    for ((table,_),row) in &route.rows{if *table!=misaka_palw_kernel::rows::TABLE_CLAIMS_V1{continue}
+        match preflight_native_value_v1::<misaka_palw_kernel::ledger::ClaimRowV1>(row.as_slice(),row.len() as u64){
+            Ok(shape)=>{q.add_v1(shape.logical_requests_v1())?;bytes(q,row.len() as u64)?;},
+            Err(error)=>{if let Some(e)=io_resource(error){return Err(e)}},
         }
     }
-    if ids.is_empty() {
-        return Ok(());
+    Ok(())
+}
+
+fn quote_native_vertices_v1(state:&PalwChainStateV2,q:&mut TirNativeRequestsV1)->Result<(),NativeCoverageV1>{
+    use crate::palw_claim_local_v1::{PalwClaimLiabilityFrameV1,decode_claim_local_value_v1,PalwClaimLocalNativeEventV1};
+    let mut events=0u64;let mut frame_bytes=0u64;let mut frames=0u64;
+    for (_,bytes) in rewards::frames(state){
+        frames=add(frames,1)?;frame_bytes=add(frame_bytes,bytes.len() as u64)?;
+        match decode_claim_local_value_v1::<PalwClaimLiabilityFrameV1>(bytes){
+            Ok(frame)=>events=add(events,frame.native_changes.len() as u64)?,
+            Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(e))=>return Err(e),
+            Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(_))=>{},
+        }
     }
-    q.exact_v1::<BTreeNodeEnvelopeV1<PalwClaimLocalWorkRefV1, crate::palw_claim_local_v1::PalwClaimLocalRecordV1>>(ids.len() as u64)?;
-    q.exact_v1::<BTreeNodeEnvelopeV1<PalwClaimLocalWorkRefV1, ()>>(ids.len() as u64)?;
-    for id in ids {
-        let Some(row) = route.rows.get(&(misaka_palw_kernel::rows::TABLE_CLAIMS_V1, id.as_byte_slice().to_vec())) else {
-            continue;
-        };
-        let shape = match preflight_native_value_v1::<misaka_palw_kernel::ledger::ClaimRowV1>(row.as_slice(), row.len() as u64) {
-            Ok(shape) => shape,
-            Err(error) => {
-                if let Some(fault) = io_resource(error) {
-                    return Err(fault);
+    let kernels=state.kernel_route.as_ref().map_or(0,|r|r.rows.keys().filter(|(t,_)|*t==misaka_palw_kernel::rows::TABLE_CLAIMS_V1).count()) as u64;
+    let anchors=match crate::palw_native39_frontier_v1::native39_frontier_anchors_v1(state){
+        Ok(rows)=>rows,
+        Err(PalwStateV2Error::NativeResource(e))=>return Err(e),
+        // Preserve the constructor's later semantic error for corrupt bytes.
+        Err(_)=>crate::palw_native_resource_v1::NativeRetainedV1::from_owner_reserved_v1(Vec::new(),None),
+    };
+    let sealed=state.kernel_route.as_ref().map_or(0,|r|r.aux.keys().filter(|(table,_)|*table==crate::palw_native_closed_facts_v1::NATIVE_CLOSED_FACTS_TABLE_V1).count()) as u64;
+    let native=add(add(state.exec_v2.roots.len() as u64,state.exec_v2.slices.len() as u64)?,add(add(kernels,events)?,add(anchors.len() as u64,sealed)?)?)?;
+    for (_,anchor) in anchors.iter(){
+        bytes(q,encoded(anchor)?)?;
+        if let Some(route)=&state.kernel_route{
+            use crate::palw_native_mining_v39::*;
+            for (kind,id) in [(MINING_CLAIM_KIND_V39,anchor.claim),(MINING_RECEIPT_KIND_V39,anchor.receipt)]{
+                let key=crate::palw_native_receipt_v39::native_mining_row_key_v39(kind,&id.as_bytes());
+                if let Some(raw)=route.aux.get(&(MINING_TABLE_V39,key)){
+                    bytes(q,raw.len() as u64)?;
+                    let shape=if kind==MINING_CLAIM_KIND_V39{
+                        crate::palw_native_resource_v1::preflight_native_value_v1::<(misaka_palw_kernel::hash::Digest,NativeMiningClaimRecordV39)>(raw.as_slice(),raw.len() as u64)
+                    }else{
+                        crate::palw_native_resource_v1::preflight_native_value_v1::<(misaka_palw_kernel::hash::Digest,NativeMiningReceiptRecordV39)>(raw.as_slice(),raw.len() as u64)
+                    };
+                    match shape{Ok(shape)=>q.add_v1(shape.logical_requests_v1())?,Err(error)=>{if let Some(e)=io_resource(error){return Err(e)}}}
                 }
-                continue;
             }
-        };
-        q.add_v1(shape.logical_requests_v1())?;
-        bytes(q, row.len() as u64)?;
+        }
     }
+    q.exact_v1::<BTreeNodeEnvelopeV1<Hash64,(u64,usize,crate::palw_native_resource_v1::NativeRetainedV1<(misaka_palw_kernel::hash::Digest,crate::palw_native_mining_v39::NativeMiningClaimRecordV39)>)>>(native)?;
+    q.exact_v1::<BTreeNodeEnvelopeV1<Hash64,u64>>(events)?;
+    q.exact_v1::<BTreeNodeEnvelopeV1<PalwClaimLocalWorkRefV1,super::native_checkpoint::Birth<'static>>>(native)?;
+    q.exact_v1::<BTreeNodeEnvelopeV1<PalwClaimLocalWorkRefV1,(PalwClaimLocalNativeEventV1,&'static Vec<u8>)>>(events)?;
+    q.exact_v1::<Option<crate::palw_native_resource_v1::NativeDemandLeaseV1>>(frames.max(4).checked_mul(3).ok_or_else(overflow)?)?;
+    q.exact_v1::<BTreeNodeEnvelopeV1<PalwClaimLocalWorkRefV1,PalwClaimLocalRecordV1>>(native)?;
+    let edges=native.checked_mul(add(state.exec_v2.slices.len() as u64,4)?).ok_or_else(overflow)?;
+    q.exact_v1::<BTreeNodeEnvelopeV1<PalwClaimLocalWorkRefV1,()>>(edges)?;
+    q.exact_v1::<BTreeNodeEnvelopeV1<Hash64,()>>(add(state.claims.len() as u64,native.checked_mul(add(frames,5)?).ok_or_else(overflow)?)?)?;
+    q.exact_v1::<BTreeNodeEnvelopeV1<Hash64,Vec<u8>>>(add(frames,native.checked_mul(3).ok_or_else(overflow)?)?)?;
+    // Distinct frame bodies are retained once. Include a simultaneous duplicate
+    // at a dedup boundary, without multiplying bytes by native vertex count.
+    q.exact_v1::<u8>(frame_bytes.checked_mul(2).ok_or_else(overflow)?)?;
+    if let Some(route)=&state.kernel_route{
+        for ((table,key),raw) in &route.aux{
+            if *table==crate::palw_native_mining_v39::MINING_TABLE_V39&&key.starts_with(&[39,crate::palw_native_mining_v39::MINING_CLAIM_KIND_V39]){
+                bytes(q,raw.len() as u64)?;
+                match crate::palw_native_resource_v1::preflight_native_value_v1::<(misaka_palw_kernel::hash::Digest,crate::palw_native_mining_v39::NativeMiningClaimRecordV39)>(raw.as_slice(),raw.len() as u64){
+                    Ok(shape)=>q.add_v1(shape.logical_requests_v1())?,Err(error)=>{if let Some(e)=io_resource(error){return Err(e)}}
+                }
+            }
+        }
+    }
+    for (id,root) in &state.exec_v2.roots{bytes(q,encoded(&(*id,root))?)?;}
+    for ((id,index),slice) in &state.exec_v2.slices{bytes(q,encoded(&(*id,*index,slice))?)?;}
     Ok(())
 }

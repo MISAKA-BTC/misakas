@@ -1,0 +1,17 @@
+
+running 12 tests
+test palw_row_stream_v1::generation_tests::a_stream_the_verifier_refuses_does_not_yield_an_import_suffix ... ok
+test palw_row_stream_v1::generation_tests::a_matching_generation_reaches_whole_state_and_keeps_the_import_suffix ... ok
+test palw_row_stream_v1::generation_tests::duplicate_truncated_and_non_current_generations_are_refused ... ok
+test palw_row_stream_v1::generation_tests::native_payout_generation_keeps_the_existing_canonical_payout_root ... ok
+test palw_row_stream_v1::projection::tests::generation_projects_full_gen_record_without_reconstructing_its_class ... ok
+test palw_row_stream_v1::spill_reader::tests::actual_verifier_spill_visits_identical_rows_and_exact_budget ... ok
+test palw_row_stream_v1::projection::tests::generation_projects_full_tir_record_without_allocating_its_program ... ok
+test palw_row_stream_v1::spill_reader::tests::declared_count_and_callback_errors_stop_before_row_consumption ... ok
+test palw_row_stream_v1::spill_reader::tests::every_field_and_collection_limit_is_enforced ... ok
+test palw_row_stream_v1::spill_reader::tests::impossible_offset_is_refused_without_panicking ... ok
+test palw_row_stream_v1::spill_reader::tests::oversized_length_refuses_before_reading_or_allocating_body ... ok
+test palw_row_stream_v1::spill_reader::tests::total_budget_refuses_field_body_before_reading_it ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 5328 filtered out; finished in 0.00s
+

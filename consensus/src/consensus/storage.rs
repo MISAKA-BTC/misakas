@@ -352,7 +352,8 @@ impl ConsensusStorage {
                 // ADR-0145's basis rides the store for the same reason, and it is a HEIGHT rather
                 // than a fence because every site that reads it compares it against a CLAIM's own
                 // `accepted_daa`, never against a block's.
-                .with_canonical_work_daa(params.palw_canonical_work_daa());
+                .with_canonical_work_daa(params.palw_canonical_work_daa())
+                .with_native39_frontier_context_v1(params);
             if let Err(err) = store.reindex_if_stale() {
                 panic!("[palw-state-v2-store] durable record-layout initialization failed; refusing consensus startup: {err}");
             }

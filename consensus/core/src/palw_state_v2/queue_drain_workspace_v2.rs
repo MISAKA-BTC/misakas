@@ -43,6 +43,7 @@ pub(in crate::palw_state_v2) fn drain_consumed_queues_v2(
     // Dedicated checker fee/refund ACK reads only this exact consumed prefix;
     // principal refunds do not depend on an R engine being active.
     palw_source_verifier_economics_fold_v2::acknowledge_consumed_prefix(builder, ctx)?;
+    palw_court_family_supplier_fold_v1::acknowledge_family_fee_payments_v1(builder,ctx)?;
     // ADR-0089 D6: the parent's list was consumed by THIS block's EVM step,
     // before this block can enqueue its own settlements. Preserve key order.
     let mut settlements = keys::<u32>(builder.state.evm_settlements.len())?;

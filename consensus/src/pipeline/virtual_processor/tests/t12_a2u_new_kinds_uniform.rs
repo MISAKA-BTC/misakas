@@ -145,6 +145,10 @@ fn arm_objective_offence_at_or_below(params: &mut Params, at: ForkActivation) {
 fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
     for fence in PalwLifecycleKindFenceV1::ALL {
         match fence {
+            PalwLifecycleKindFenceV1::CourtFamilySupplierV1 => {
+                params.palw_court_family_supplier_v1 = Some(at);
+                params.sync_palw_court_family_supplier_v1();
+            }
             PalwLifecycleKindFenceV1::ExecPayloadV2 => {
                 params.palw_exec_payload_v2 = Some(at);
                 params.sync_palw_exec_payload_v2();

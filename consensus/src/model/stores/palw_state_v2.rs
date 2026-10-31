@@ -156,6 +156,9 @@ pub struct DbPalwStateV2Store {
     /// node unable to load its own tip, and every peer refused the snapshot with it. `None` on
     /// every shipped preset, which is byte-for-byte the behaviour before the field existed.
     canonical_work_daa: Option<u64>,
+    /// Full network context is node-local; it never changes the carriage codec.
+    native39_frontier_context: Option<(Arc<PalwStateParamsV2>, u64)>,
+    native39_checkpoint_params: Option<Arc<kaspa_consensus_core::config::params::Params>>,
     /// **The materialized tip, keyed on the tip row it was decoded from** (audit M-7).
     ///
     /// `load_tip` is a full re-materialization: borsh-decode the whole carriage,
@@ -236,6 +239,8 @@ impl DbPalwStateV2Store {
             schema: CachedDbItem::new(db, DatabaseStorePrefixes::PalwStateV2Schema.into()),
             uncertified_weightless: None,
             canonical_work_daa: None,
+            native39_frontier_context: None,
+            native39_checkpoint_params: None,
             tip_cache: Arc::new(parking_lot::Mutex::new(None)),
             tip_bytes_decoded: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             pruning_snapshot_cache: Arc::new(parking_lot::Mutex::new(None)),
@@ -269,6 +274,47 @@ impl DbPalwStateV2Store {
         self
     }
 
+    pub fn with_native39_frontier_context_v1(mut self, params: &kaspa_consensus_core::config::params::Params) -> Self {
+        // Context changes invalidate shared decoded caches without making each
+        // unauthenticated cache hit scan the state again.
+        self.tip_cache = Arc::new(parking_lot::Mutex::new(None));
+        self.pruning_snapshot_cache = Arc::new(parking_lot::Mutex::new(None));
+        self.native39_checkpoint_params = Some(Arc::new(params.clone()));
+        self.native39_frontier_context = match &params.palw_consensus_mode {
+            kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) =>
+                Some((Arc::new(bundle.state.clone()), params.palw_exec_quantum_maturity_v1())),
+            _ => None,
+        };
+        self
+    }
+
+    fn check_native39_frontier_context_v1(&self, state: &PalwChainStateV2) -> StoreResult<()> {
+        use kaspa_consensus_core::palw_native39_frontier_v1 as native;
+        if !state.kernel_route_state_v1().is_some_and(|r| r.aux.keys().any(|(table, key)| {
+            *table == native::NATIVE39_FRONTIER_TABLE_V1
+                || *table == kaspa_consensus_core::palw_native39_settlement_checkpoint_v1::NATIVE39_SETTLEMENT_CHECKPOINT_TABLE_V1
+                || *table == kaspa_consensus_core::palw_native_closed_facts_v1::NATIVE_CLOSED_FACTS_TABLE_V1
+                || *table == kaspa_consensus_core::palw_state_v2::LEGACY_PENDING_FACT_TABLE_V1
+                || (*table == kaspa_consensus_core::palw_claim_local_v1::PALW_CLAIM_LOCAL_TABLE_V1 && key.len() == 65
+                    && key.first().is_some_and(|prefix|
+                        *prefix == kaspa_consensus_core::palw_state_v2::PALW_COMPACT_CLAIM_SOURCE_PREFIX_V1
+                        || *prefix == kaspa_consensus_core::palw_state_v2::PALW_COMPACT_KERNEL_ORIGIN_PREFIX_V1))
+        })) { return Ok(()); }
+        let Some((params, maturity)) = self.native39_frontier_context.as_ref() else {
+            return Err(StoreError::LocalResourceUnavailable("native39 frontier network context is not configured".into()));
+        };
+        let full = self.native39_checkpoint_params.as_ref().ok_or_else(||
+            StoreError::LocalResourceUnavailable("native39 archival checkpoint network context is not configured".into()))?;
+        native::validate_native39_frontier_context_v1(state, params, *maturity)
+            .and_then(|()| kaspa_consensus_core::palw_native39_settlement_checkpoint_v1::validate_native39_settlement_checkpoint_context_v1(state, full))
+            .and_then(|()| kaspa_consensus_core::palw_state_v2::validate_fact_archives_context_v1(state, full))
+            .map_err(|why| match why {
+            kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeResource(resource) =>
+                StoreError::LocalResourceUnavailable(resource.to_string()),
+            other => StoreError::DataInconsistency(other.to_string()),
+        })
+    }
+
     /// The rule in force at the chain point a decoded snapshot stands at. A carriage with no
     /// `last_point` is a genesis state, which holds no claims and so is priced identically either
     /// way.
@@ -278,9 +324,12 @@ impl DbPalwStateV2Store {
     }
 
     pub fn clone_with_new_cache(&self, cache_policy: CachePolicy) -> Self {
-        Self::new(Arc::clone(&self.db), cache_policy)
+        let mut out = Self::new(Arc::clone(&self.db), cache_policy)
             .with_uncertified_weightless(self.uncertified_weightless)
-            .with_canonical_work_daa(self.canonical_work_daa)
+            .with_canonical_work_daa(self.canonical_work_daa);
+        out.native39_frontier_context = self.native39_frontier_context.clone();
+        out.native39_checkpoint_params = self.native39_checkpoint_params.clone();
+        out
     }
 
     /// If the stored schema is not this build's, retire derived rows, tip and
@@ -496,6 +545,7 @@ impl DbPalwStateV2Store {
         block: BlockHash,
         state: &PalwChainStateV2,
     ) -> StoreResult<NativeStoreWriteTicketV1> {
+        self.check_native39_frontier_context_v1(state)?;
         let lease = kaspa_consensus_core::palw_native_resource_v1::reserve_native_install_in_database_v1(
             block,
             state,
@@ -642,6 +692,7 @@ impl DbPalwStateV2Store {
         block: BlockHash,
         state: &PalwChainStateV2,
     ) -> StoreResult<NativeStoreWriteTicketV1> {
+        self.check_native39_frontier_context_v1(state)?;
         let lease = kaspa_consensus_core::palw_native_resource_v1::reserve_native_install_in_database_v1(
             block,
             state,
@@ -787,6 +838,59 @@ impl DbPalwStateV2Store {
         .map(Option::flatten)
     }
 
+    /// RFC-0037 serving bridge. Bind the row source and native suffix to one
+    /// pinned snapshot record, so a re-capture cannot mix two state versions.
+    /// State bytes are compared in fixed scratch before any generation output.
+    pub fn write_pruning_snapshot_row_generation_v1(
+        &self,
+        params: &PalwStateParamsV2,
+        point: BlockHash,
+        suffix: &mut dyn std::io::Read,
+        suffix_len: u64,
+        writer: &mut dyn std::io::Write,
+    ) -> std::io::Result<Option<u64>> {
+        use std::io::{self, Read};
+        if self.pruning_snapshot_key().map_err(io::Error::other)?.map(|(block, _)| block) != Some(point) {
+            return Ok(None);
+        }
+        if suffix_len > kaspa_consensus_core::palw_row_stream_v1::PALW_ROW_STREAM_MAX_GENERATION_BYTES_V1 as u64 {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "native suffix exceeds row stream policy"));
+        }
+        self.with_pinned_tip_v1(true, |record| {
+            if record.block != point { return Ok(Ok(None)); }
+            let state_bytes = record.carriage_borsh.len() as u64;
+            if state_bytes.checked_add(14).is_none_or(|minimum| suffix_len < minimum) {
+                return Ok(Err(io::Error::new(io::ErrorKind::InvalidData, "native row suffix is truncated")));
+            }
+            let mut header = [0u8; 10];
+            if let Err(why) = suffix.read_exact(&mut header) { return Ok(Err(why)); }
+            if header[..2] != 1u16.to_le_bytes() || header[2..] != state_bytes.to_le_bytes() {
+                return Ok(Err(io::Error::new(io::ErrorKind::InvalidData, "row suffix does not name the captured native frame")));
+            }
+            let mut scratch = [0u8; 8192];
+            for expected in record.carriage_borsh.chunks(scratch.len()) {
+                if let Err(why) = suffix.read_exact(&mut scratch[..expected.len()]) { return Ok(Err(why)); }
+                if &scratch[..expected.len()] != expected {
+                    return Ok(Err(io::Error::new(io::ErrorKind::InvalidData, "row source and native suffix belong to different snapshots")));
+                }
+            }
+            // The same recorded root and point-policy restoration as every
+            // trusted snapshot load. Native decode ownership is retained below.
+            let state = self.materialize_native_fields_v1(record.block, record.state_root,
+                record.carriage_borsh, params, "row-stream snapshot")?;
+            let _root_scratch = kaspa_consensus_core::palw_native_resource_v1::reserve_native_root_workspace_v1(state_bytes)
+                .map_err(|why| StoreError::LocalResourceUnavailable(why.to_string()))?;
+            // Reconstitute the already-compared prefix from pinned bytes; only
+            // declarations remain unread. No full encoded suffix Vec is made.
+            let mut replay = io::Cursor::new(header).chain(io::Cursor::new(record.carriage_borsh)).chain(&mut *suffix);
+            Ok(kaspa_consensus_core::palw_direct_row_export_v1::write_row_generation_stream_v1(
+                &state, &mut replay, suffix_len, writer).map(Some))
+        }).map_err(|why| match why {
+            StoreError::LocalResourceUnavailable(message) => io::Error::new(io::ErrorKind::WouldBlock, message),
+            other => io::Error::other(other),
+        })?.unwrap_or(Ok(None))
+    }
+
     pub fn load_tip(&self, params: &PalwStateParamsV2) -> StoreResult<Option<(BlockHash, PalwChainStateV2)>> {
         self.load_tip_retained_v1(params)?
             .map(|(block, state)| {
@@ -868,7 +972,7 @@ impl DbPalwStateV2Store {
         if let Some(why) = kaspa_consensus_core::palw_state_v2::palw_carriage_version_refusal_v1(canonical) {
             return Err(StoreError::DataInconsistency(format!("palw v2 {label}: {why}")));
         }
-        retain_native_carriage_decode_classified_v1(block, canonical, || {
+        let restored = retain_native_carriage_decode_classified_v1(block, canonical, || {
             let carriage = borsh::from_slice::<PalwStateCarriageV2>(canonical)
                 .map_err(|why| format!("palw v2 {label} does not decode: {why}"))?;
             let armed = self.uncertified_weightless_at(&carriage);
@@ -881,7 +985,9 @@ impl DbPalwStateV2Store {
                 StoreError::LocalResourceUnavailable(e.to_string())
             }
             kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Decode(e) => StoreError::DataInconsistency(e),
-        })
+        })?;
+        self.check_native39_frontier_context_v1(&restored)?;
+        Ok(restored)
     }
 }
 

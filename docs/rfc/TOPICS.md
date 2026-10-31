@@ -63,4 +63,5 @@
 - [RFC-0031 — 共有courtのinitial notice境界](0031-shared-court-initial-notice-boundary.md)
 - [RFC-0032 — 共有courtの終端materialと非独占提出](0032-shared-court-terminal-material-and-nonblocking-ingress.md)
 - [RFC-0035 — shared court originalの実原資と役割別同意](0035-court-original-funded-contract-and-role-consent.md)
+- [RFC-0042 — Court全分岐の供給者同意・実原資・native予約](0042-court-family-supplier-consent-and-native-reservation.md)
 

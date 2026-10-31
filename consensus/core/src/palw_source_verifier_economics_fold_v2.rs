@@ -132,7 +132,7 @@ pub(super) fn fund(
         .checked_mul(u64::from(count))
         .filter(|n| *n > 0)
         .ok_or_else(|| bad("source prepaid amount overflow"))?;
-    if b.gate_room(&actor, ctx.daa_score, PalwRcoreGateV1::Work) < u128::from(prepaid) {
+    if b.gate_room(&actor, ctx.daa_score, PalwRcoreGateV1::Work)? < u128::from(prepaid) {
         return Err(bad("source funding lacks actual free collateral"));
     }
     if b.slash_bond(actor, u128::from(prepaid))? != prepaid {
@@ -233,7 +233,7 @@ pub(super) fn approve(
     if g.liabilities >= g.policy.maximum_liabilities {
         return Err(bad("source liability count cap"));
     }
-    if b.gate_room(&actor, ctx.daa_score, PalwRcoreGateV1::Work) < u128::from(g.policy.exposure_per_work_sompi) {
+    if b.gate_room(&actor, ctx.daa_score, PalwRcoreGateV1::Work)? < u128::from(g.policy.exposure_per_work_sompi) {
         return Err(bad("source checker collateral is committed elsewhere"));
     }
     let d = PalwSourceVerifierLiabilityV2 {

@@ -229,4 +229,5 @@
 - [ADR-0199 — 共有court終端materialと非独占提出方式](0199-shared-court-terminal-material-and-nonblocking-ingress.md)
 - [ADR-0202 — shared court originalの実原資と役割別同意](0202-court-original-funded-contract-and-role-consent.md)
 - [ADR-0206 — PanelDa の G14 経路 — 期限付きの必須公開](0206-panel-da-mandatory-disclosure-g14-route.md)
+- [ADR-0210 — Court全分岐の供給者契約と原子的native予約](0210-court-family-supplier-consent-and-native-reservation.md)
 

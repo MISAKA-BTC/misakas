@@ -56,7 +56,7 @@ pub(super) fn seal(
     }
     // Original capital: the deposit comes out of collateral nothing else has committed (an expired row in this slot no longer counts).
     let collateral = builder.state.bonds.get(signer).map(|b| b.collateral as u128).unwrap_or(0);
-    if collateral.saturating_sub(builder.committed_at(signer, daa)) < policy.seal_deposit as u128 {
+    if collateral.saturating_sub(builder.committed_at(signer, daa)?) < policy.seal_deposit as u128 {
         return Err(refused("the sealer's free collateral does not cover the seal deposit"));
     }
     let (Some(mature_daa), Some(expires_daa)) = (daa.checked_add(policy.claim_seal_delay_daa), daa.checked_add(policy.seal_ttl_daa))

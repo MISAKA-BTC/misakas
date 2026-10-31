@@ -83,6 +83,13 @@ fn shared_tokenizer_builder_uses_native_original_eof_and_rechecks_authenticated_
     };
     let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
     b.write_staged_row_v1(Key::CourtSharedContext(claim), Some(Row::CourtSharedContext(Box::new(c)))).unwrap();
+    crate::palw_court_rooted_semantic_v1::install_material_for_consumer_test_v1(&mut b.state,claim,
+        crate::palw_court_family_supplier_v1::FamilySupplierRoleV1::SemanticTable,
+        crate::palw_court_family_material_v1::FamilyMaterialTargetV1::SemanticTable,
+        crate::palw_fp_constraint_job_v1::palw_token_table_file_encode_v1(&table));
+    crate::palw_court_rooted_semantic_v1::install_material_for_consumer_test_v1(&mut b.state,claim,
+        crate::palw_court_family_supplier_v1::FamilySupplierRoleV1::TokenizerArtifact,
+        crate::palw_court_family_material_v1::FamilyMaterialTargetV1::TokenizerRaw,borsh::to_vec(&raw).unwrap());
     let store = Store::new(&b.state, claim, scope, &[], &[], None).unwrap();
     // Existing registered program, signed custody/semantic bundle and rooted EOF:
     // private retained all-ID data authentication, not funded original admission.
@@ -164,6 +171,10 @@ fn shared_tokenizer_builder_uses_native_original_eof_and_rechecks_authenticated_
     let all_bodies=all_encoded.iter().map(Vec::as_slice).collect::<Vec<_>>();
     let eog_encoded=borsh::to_vec(&table.eog_opening().unwrap()).unwrap();
     let retained=store.retain_semantic_material_v1(&b.state,claim,&all_bodies,&eog_encoded,&raw).unwrap();
+    let rooted_retained=store.retain_semantic_material_v1(&b.state,claim,&[],&[],&[]).unwrap();
+    assert_eq!(rooted_retained.counts_v1(),retained.counts_v1());
+    let rooted_evidence=store.build_tokenizer_terminal_retained_v1(&b.state,&params,&rules,&intent,&rooted_retained,proofs,budget).unwrap();
+    assert_eq!(rooted_evidence.recheck(&store,&b.state,&params,&rules,budget).unwrap(),evidence.recheck(&store,&b.state,&params,&rules,budget).unwrap());
     include!("palw_court_tokenizer_family_native_test_block.rs");
     let retained_evidence=store.build_tokenizer_terminal_retained_v1(&b.state,&params,&rules,&intent,&retained,proofs,budget).unwrap();
     assert_eq!(retained_evidence.recheck(&store,&b.state,&params,&rules,budget).unwrap(),

@@ -23,7 +23,7 @@ impl NativeWireScanV1 for PalwClaimLocalRowOwnerV1 {
     fn scan_native_wire_v1<R: Read>(reader: &mut NativeWireReaderV1<R>) -> io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 | 1 | 2 => Ok(NativeWireShapeV1::default()),
+            0 | 1 | 2 | 6 => Ok(NativeWireShapeV1::default()),
             _ => Err(io::Error::new(io::ErrorKind::InvalidData, "unknown liability row owner")),
         }
     }
@@ -37,8 +37,13 @@ impl NativeWireScanV1 for PalwClaimLocalWorkRefV1 {
     fn scan_native_wire_v1<R: Read>(reader: &mut NativeWireReaderV1<R>) -> io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 | 1 | 2 => <Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader),
+            0 | 1 | 2 | 6 => <Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader),
             3 => <Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?
+                .merge(<u32 as NativeWireScanV1>::scan_native_wire_v1(reader)?),
+            4 => <Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?
+                .merge(<Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?),
+            5 => <Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?
+                .merge(<Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?
                 .merge(<u32 as NativeWireScanV1>::scan_native_wire_v1(reader)?),
             _ => Err(io::Error::new(io::ErrorKind::InvalidData, "unknown claim-local work namespace")),
         }

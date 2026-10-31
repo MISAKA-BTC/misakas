@@ -17,6 +17,10 @@ pub(crate) mod palw_tir_corpus_fixture_v1;
 pub mod palw_mergeset_v1;
 pub mod palw_native_readiness_v1;
 pub mod palw_native_settlement_v1;
+pub mod palw_native39_frontier_v1;
+pub mod palw_native39_settlement_checkpoint_v1;
+pub mod palw_native_closed_facts_v1;
+pub mod palw_native_budget_binding_v1;
 pub mod palw_native_settlement_resources_v1;
 pub mod palw_panel_beacon_v1;
 pub mod palw_panel_source_snapshot_v1;
@@ -672,6 +676,8 @@ pub mod palw_ruling_fences_v1;
 pub mod palw_g14_gates_v1;
 pub mod palw_arming_waiver_v1;
 pub mod palw_t12_17000_records_v1;
+/// Active height-rebound G14 records; the 17000 module remains historical.
+pub mod palw_t12_18400_records_v1;
 /// Court capacity (audit G-07, user direction 2026-10-16): court admission through the LG14-A reservation, a deterministic per-block
 /// court budget, time-priced occupancy and a deadline-aware queue. Dormant behind `palw_court_capacity_v1` on every preset.
 pub mod palw_court_capacity_v1;
@@ -1180,6 +1186,11 @@ pub(crate) mod palw_court_shared_tir_builder_store_v1;
 pub mod palw_court_shared_material_intake_v1;
 
 pub mod palw_court_funding_preflight_v1;
+pub mod palw_court_family_supplier_v1;
+pub mod palw_tir_funded_original_envelope_v2;
+pub mod palw_court_family_material_v1;
+pub mod palw_court_rooted_semantic_v1;
+mod palw_court_rooted_numerical_material_v1;
 
 pub mod palw_court_numerical_geometry_v3;
 pub mod palw_material_challenge_checkpoint_v4;
@@ -1201,3 +1212,7 @@ pub mod palw_court_observation_v1;
 pub mod palw_verifier_fee_consent_v1;
 
 pub mod palw_verifier_watch_v1;
+
+pub mod palw_direct_row_export_v1;
+
+pub mod palw_nested_row_stream_v1;

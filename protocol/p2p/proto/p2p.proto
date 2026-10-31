@@ -471,11 +471,13 @@ message RequestPruningPointPalwStateMessage{
   bool chunked = 2;
   bytes snapshotRoot = 3;
   uint32 chunkIndex = 4;
-  // Protocol >=107 only: codec 1 is one zlib stream; nonce is requester-chosen 32 bytes.
+  // Protocol >=107: codec1 is zlib. Protocol>=109: codec2 is the RFC0037 row generation,
+  // transferred in the existing <=4MiB chunks. Nonce is requester-chosen 32 bytes.
   uint32 snapshotCodec = 5;
   bytes snapshotNonce = 6;
   // RFC-0037. Zero keeps the existing carriage request. 1 asks for the single current
-  // row-stream generation. Any other value is not a history range this node answers.
+  // row-stream generation under codec2/protocol109. Any other value is refused.
+  // The total generation is <=384MiB; it is never sent as one P2P message.
   uint64 rowStreamGeneration = 7;
 }
 

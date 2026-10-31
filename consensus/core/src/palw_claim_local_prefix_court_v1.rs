@@ -40,7 +40,7 @@ impl TransitionBuilder<'_> {
         let key = offence_id(accused, &payload.source);
         if self.state.consumed_offences.contains_key(&key) { return Ok(()); }
         let claim_id = payload.source.source_claim;
-        let conv = self.open_conviction_v1(&[accused], ctx.daa_score);
+        let conv = self.open_conviction_v1(&[accused], ctx.daa_score)?;
         let gains = self.claim_g_v1(&claim_id).map(|g| g.g()).unwrap_or(0);
         let live = self.claim_is_live_before_final_v1(&claim_id);
         let fp_first = self.post_final_fp_g_v1(&claim_id);

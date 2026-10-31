@@ -104,7 +104,11 @@ fn open_claim(
     Ok((c, policy, until))
 }
 
-fn independent(builder: &TransitionBuilder<'_>, signer: &PalwBondKeyV2, c: &NativeMiningClaimRecordV39) -> Result<Digest, PalwStateV2Error> {
+fn independent(
+    builder: &TransitionBuilder<'_>,
+    signer: &PalwBondKeyV2,
+    c: &NativeMiningClaimRecordV39,
+) -> Result<Digest, PalwStateV2Error> {
     let bond = builder.state.bonds.get(signer).ok_or_else(|| bad("mining39 accuser bond absent"))?;
     let operator = bond.operator_id.as_bytes();
     if !matches!(bond.status, PalwBondStatusV2::Active) || *signer == c.producer || operator == c.operator {
@@ -178,7 +182,7 @@ fn demand(
     let bond = r.header.policy.demand_bond.max(1);
     let record = builder.state.bonds.get(signer).unwrap();
     let payout = record.payout_payload;
-    if (record.collateral as u128).saturating_sub(builder.committed_at(signer, ctx.daa_score)) < bond as u128 {
+    if (record.collateral as u128).saturating_sub(builder.committed_at(signer, ctx.daa_score)?) < bond as u128 {
         return Err(bad("mining39 accusation demand bond unavailable"));
     }
     if !prepay(builder, ctx, signer, p, h.source_bytes as u64 + h.consent_bytes as u64 + h.post_bytes as u64, w.body.len(), 65536)? {
@@ -251,7 +255,8 @@ fn answer(
     let index = u16::from_le_bytes(w.body[68..70].try_into().unwrap());
     let part = &w.body[70..];
     let parts = total.div_ceil(MINING_ACCUSATION_PART_BYTES_V39 as u32);
-    let expected = (total as usize - (index as usize * MINING_ACCUSATION_PART_BYTES_V39).min(total as usize)).min(MINING_ACCUSATION_PART_BYTES_V39);
+    let expected = (total as usize - (index as usize * MINING_ACCUSATION_PART_BYTES_V39).min(total as usize))
+        .min(MINING_ACCUSATION_PART_BYTES_V39);
     let c = super::super::palw_native_mining_fold_v39::claim(r, &d.claim)?;
     if d.settled
         // audit A-3: a convicted claim's open demand is refunded to its accuser (`default`), never paid to the convicted producer.
@@ -349,15 +354,48 @@ pub(super) fn convict(
 ) -> Result<(), PalwStateV2Error> {
     let now = ctx.daa_score;
     let hash = c.claim_hash();
-    // 1. The producer's exposure: what its bond still holds of the reserved price.
+    if native_mining_convicted_v39(&builder.state, &hash) {
+        return Err(bad("mining39 claim is already convicted"));
+    }
+    // The PWU price is a minimum, not a ceiling on the native reward liability.
+    // Use only this claim's actually held producer reservation, before closing
+    // it; historical sources with no held budget retain their old PWU floor.
+    let mut exposure = c.price.reserved_exposure;
+    if let Some(budget) = builder.state.bond_budget() {
+        let id = native_mining_budget_id_v39(&c.id);
+        if let Some(row) = budget.claim_row(&id) {
+            use crate::palw_bond_budget_v1::{
+                PalwBudgetOriginV1, PalwHoldViewV1, palw_bond_hold_shadow_bond_v1, palw_bond_hold_shadow_claim_v1,
+            };
+            if row.bond != c.producer
+                || row.origin != PalwBudgetOriginV1::FreePrompt
+                || row.accepted_daa != c.admitted_daa
+                || !row.live
+            {
+                return Err(bad("mining39 conviction budget row differs from actual source/producer"));
+            }
+            let kept = budget.claim_row(&palw_bond_hold_shadow_claim_v1(PalwHoldViewV1::Liability, &id)).is_some_and(|held| {
+                held.open
+                    && held.in_window
+                    && held.bond == palw_bond_hold_shadow_bond_v1(PalwHoldViewV1::Liability, &c.producer)
+                    && held.liability_sompi == row.liability_sompi
+                    && held.reuse_not_before > now
+            });
+            if row.open || kept {
+                exposure = exposure.max(row.liability_sompi);
+            }
+        }
+    }
     let collectible = crate::palw_g14_lane_closure_v1::palw_native_producer_collectible_v1(
         builder.state.bonds.get(&c.producer).map(|b| b.collateral),
-        u64::try_from(c.price.reserved_exposure).unwrap_or(u64::MAX),
+        u64::try_from(exposure).unwrap_or(u64::MAX),
     );
     let collected = if collectible == 0 { 0 } else { builder.slash_bond(c.producer, collectible as u128)? };
     let finder_credit = match finder {
-        Some(_) => (u128::from(collected) * u128::from(crate::palw_g14_lane_closure_v1::PALW_NATIVE_FINDER_SHARE_CAP_PERMILLE_V1)
-            / 1000) as u64,
+        Some(_) => {
+            (u128::from(collected) * u128::from(crate::palw_g14_lane_closure_v1::PALW_NATIVE_FINDER_SHARE_CAP_PERMILLE_V1) / 1000)
+                as u64
+        }
         None => 0,
     };
     if let (Some((bond, _)), true) = (finder, finder_credit > 0) {
@@ -372,7 +410,8 @@ pub(super) fn convict(
     let revoked: u128 = mread(r, MINING_RECEIPT_GRANTED_KIND_V39, &receipt_id, 32).unwrap_or(0);
     builder.state.safe_weight = builder.state.safe_weight.saturating_sub(revoked);
     let mut m = super::super::palw_native_mining_fold_v39::model(builder.state.kernel_route.as_ref().unwrap(), &c.model)?;
-    let mut seat = super::super::palw_native_mining_fold_v39::seat(builder.state.kernel_route.as_ref().unwrap(), &c.model, &c.producer);
+    let mut seat =
+        super::super::palw_native_mining_fold_v39::seat(builder.state.kernel_route.as_ref().unwrap(), &c.model, &c.producer);
     let mut closed = c.clone();
     if had_receipt {
         builder.write_kernel_row(MINING, mk(MINING_RECEIPT_KIND_V39, &receipt_id), None)?;
@@ -430,9 +469,8 @@ pub(super) fn release_holds(builder: &mut TransitionBuilder<'_>, c: &NativeMinin
 
 /// **Collection 53's guard:** a component whose material a live, accusable mining claim relies on is not collected.
 pub(super) fn job_held(r: &PalwKernelRouteStateV1, job: &Digest, now: u64) -> bool {
-    mread::<(Digest, u64)>(r, MINING_JOB_HOLD_KIND_V39, job, 128).is_some_and(|(claim, until)| {
-        now <= until && r.aux.contains_key(&(MINING, mk(MINING_CLAIM_KIND_V39, &claim)))
-    })
+    mread::<(Digest, u64)>(r, MINING_JOB_HOLD_KIND_V39, job, 128)
+        .is_some_and(|(claim, until)| now <= until && r.aux.contains_key(&(MINING, mk(MINING_CLAIM_KIND_V39, &claim))))
 }
 
 #[cfg(test)]
@@ -554,8 +592,12 @@ mod tests {
             spent_quanta: 3,
             spent: vec![0b0111],
         };
-        tb.write_kernel_row(MINING, mk(MINING_RECEIPT_KIND_V39, &receipt.id), Some(borsh::to_vec(&(receipt.root(), &receipt)).unwrap()))
-            .unwrap();
+        tb.write_kernel_row(
+            MINING,
+            mk(MINING_RECEIPT_KIND_V39, &receipt.id),
+            Some(borsh::to_vec(&(receipt.root(), &receipt)).unwrap()),
+        )
+        .unwrap();
         tb.write_kernel_row(MINING, mk(MINING_RECEIPT_GRANTED_KIND_V39, &receipt.id), Some(super::b(&300u128))).unwrap();
         tb.state.safe_weight = 1_000;
         let attest = |n: u64| PalwEligibilityAttestationRowV1 {
@@ -614,6 +656,173 @@ mod tests {
     }
 
     #[test]
+    fn native39_collection_cannot_retire_a_pending_accusation_or_its_material() {
+        for kind in [0u8, 1] {
+            let (state, params, extras) = (state(), params(), extras());
+            let mut tb = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+            let mut c = claim(4_000);
+            if kind == 0 {
+                c.closed = Some((20, false));
+            }
+            world(&mut tb, &c);
+            let receipt = native_mining_receipt_id_v39(c.id);
+            if kind == 0 {
+                tb.write_kernel_row(MINING, mk(MINING_RECEIPT_KIND_V39, &receipt), None).unwrap();
+            }
+            tb.write_kernel_row(
+                MINING,
+                mk(MINING_ACCUSATION_COUNT_KIND_V39, &c.id),
+                Some(super::b(&NativeMiningAccusationCountsV39 { demands: 1, open: 1 })),
+            )
+            .unwrap();
+            let p = crate::palw_native_execution_v39::PalwNativeExecutionFenceV39::unapproved_probe_at(
+                crate::config::params::ForkActivation::always(),
+                [1; 64],
+            )
+            .policies;
+            let body =
+                borsh::to_vec(&NativeMiningSubjectWireV39 { version: 39, kind, id: if kind == 0 { c.id } else { receipt } }).unwrap();
+            let before = (tb.state.state_root(), tb.entries.len());
+            let error =
+                super::super::super::palw_native_mining_fold_v39::collect(&mut tb, &ctx(1_000_000), &bond(2), &p, &body).unwrap_err();
+            assert!(
+                error.to_string().contains("unresolved native accusation"),
+                "pending source must survive even after signed liability clock: {error}"
+            );
+            assert_eq!(
+                (tb.state.state_root(), tb.entries.len()),
+                before,
+                "refusal cannot charge fees, retire source, unlock collateral or erase accusation"
+            );
+        }
+    }
+
+    #[test]
+    fn native39_unreduced_paid_budget_remains_collectible_through_real_conviction() {
+        use crate::palw_bond_budget_v1::*;
+        let mut budget_policy = crate::palw_values_p4_v1::palw_bond_budget_policy_provisional_v1();
+        budget_policy.slice_rights_by_rho = true;
+        let capital = budget_policy.capital_unit_sompi * 100;
+        let params = params().with_worker_carve_permille(720).unwrap().with_bond_budget(Some(PalwBondBudgetMirrorV1 {
+            from_daa: 0,
+            policy: budget_policy.clone(),
+            allocation: None,
+        }));
+        let extras = extras();
+        let mut state = state();
+        state.bonds.get_mut(&bond(1)).unwrap().collateral = capital;
+        let mut tb = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+        let c = claim(4_000);
+        world(&mut tb, &c);
+        let mut accepted = ctx(c.admitted_daa);
+        accepted.subsidy = 444_562_014_000;
+        let carve = params.worker_carve_at(accepted.subsidy, None);
+        assert_eq!(carve, 320_084_650_080, "actual T12 month-0 worker carve");
+        let id = native_mining_budget_id_v39(&c.id);
+        let plan = tb
+            .plan_native_mining_budget_v39(
+                &accepted,
+                c.producer,
+                Hash64::from_bytes(c.model),
+                c.price.quanta,
+                1,
+                c.price.reserved_exposure,
+            )
+            .unwrap();
+        tb.commit_bond_budget_v1(&accepted, id, plan).unwrap();
+        let liability = tb.state.bond_budget().unwrap().claim_row(&id).unwrap().liability_sompi;
+        super::super::super::palw_native_budget_binding_fold_v1::install_native_budget_binding_v1(
+            &mut tb,
+            crate::palw_native_budget_binding_v1::NativeBudgetSourceV1::Mining39,
+            c.claim_hash(),
+            id,
+            c.producer,
+            c.admitted_daa,
+            0,
+        )
+        .unwrap();
+        assert_eq!(
+            crate::palw_native_budget_binding_v1::native_budget_excess_for_bond_v1(&tb.state, &c.producer, accepted.daa_score)
+                .unwrap(),
+            liability
+        );
+        crate::palw_native_budget_binding_v1::validate_native_budget_bindings_v1(&tb.state, accepted.daa_score).unwrap();
+        let binding = crate::palw_native_budget_binding_v1::native_budget_binding_v1(&tb.state, id).unwrap().unwrap();
+        let cold: crate::palw_native_budget_binding_v1::NativeBudgetBindingV1 =
+            borsh::from_slice(&borsh::to_vec(&*binding).unwrap()).unwrap();
+        assert_eq!(cold, *binding);
+        let producer_key = crate::palw_native_budget_binding_v1::native_budget_binding_producer_key_v1(&c.producer, id);
+        let mut corrupt = tb.state.clone();
+        corrupt.kernel_route.as_mut().unwrap().aux.remove(&(197, producer_key));
+        assert!(
+            crate::palw_native_budget_binding_v1::validate_native_budget_bindings_v1(&corrupt, accepted.daa_score).is_err(),
+            "primary without exact producer index is not free collateral"
+        );
+        assert!(liability > c.price.reserved_exposure);
+        let mut payment = ctx(30);
+        payment.subsidy = accepted.subsidy;
+        for q in 0..c.price.quanta {
+            tb.bond_budget_native_receipt_spend_v39(&payment, &id, c.producer, 1, q + 1 == c.price.quanta).unwrap();
+        }
+        let paid = tb.state.bond_budget().unwrap().claim_row(&id).unwrap();
+        assert_eq!(paid.consumed.reward_sompi, carve * c.price.quanta);
+        assert!(paid.open, "the last issued quantum does not close the source's accusation liability");
+        assert_eq!(tb.state.bond_budget().unwrap().bond_row(&c.producer).unwrap().open_liability_sompi, liability);
+        tb.write_kernel_row(
+            MINING,
+            mk(MINING_ACCUSATION_COUNT_KIND_V39, &c.id),
+            Some(super::b(&NativeMiningAccusationCountsV39 { demands: 1, open: 1 })),
+        )
+        .unwrap();
+        assert!(crate::palw_native_receipt_v39::native_mining_accusation_pending_v39(&tb.state, &c.claim_hash()));
+        // The generic period/hold clock may release rate capacity, but cannot
+        // erase an open native source's still-collectible liability.
+        let after_window = tb.state.bond_budget().unwrap().claim_row(&id).unwrap().reuse_not_before + 1;
+        super::super::super::palw_bond_budget_fold_v1::tick_bond_budget_v1(&mut tb, &ctx(after_window)).unwrap();
+        let retained = tb.state.bond_budget().unwrap().claim_row(&id).unwrap();
+        assert!(!retained.in_window && retained.open);
+        assert_eq!(
+            crate::palw_native_budget_binding_v1::native_budget_excess_for_bond_v1(&tb.state, &c.producer, after_window).unwrap(),
+            liability,
+            "window release cannot free pending source collateral"
+        );
+        assert!(
+            crate::palw_native_receipt_v39::native_mining_accusation_pending_v39(&tb.state, &c.claim_hash()),
+            "generic clock cannot erase an unanswered accepted accusation"
+        );
+        assert_eq!(tb.state.bond_budget().unwrap().bond_row(&c.producer).unwrap().open_liability_sompi, liability);
+        let conviction_at = after_window + 1;
+        convict(&mut tb, &ctx(conviction_at), &policy(), &c, 0, [0xA4; 64], Some((bond(2), h(2).as_bytes()))).unwrap();
+        let tomb: NativeMiningConvictionV39 =
+            mread(tb.state.kernel_route.as_ref().unwrap(), MINING_CONVICTED_KIND_V39, &c.id, 4096).unwrap();
+        assert_eq!(u128::from(tomb.collected), liability);
+        assert_eq!(tb.state.bonds[&c.producer].collateral, capital - tomb.collected);
+        assert_eq!(tomb.finder_credit, (u128::from(tomb.collected) * 490 / 1000) as u64);
+        assert!(
+            tomb.collected - tomb.finder_credit >= carve * c.price.quanta,
+            "actual net collection covers the exported native reward"
+        );
+        assert!(!tb.state.bond_budget().unwrap().claim_row(&id).unwrap().open);
+        assert!(!crate::palw_security_certification_v1::palw_native_mining_security_certified_v39(&tb.state, &c.claim_hash()));
+        let before =
+            (tb.state.state_root(), tb.entries.len(), tb.state.bonds[&c.producer].collateral, tb.state.pending_payouts.clone());
+        assert!(convict(&mut tb, &ctx(conviction_at + 1), &policy(), &c, 0, [0xA4; 64], Some((bond(2), h(2).as_bytes()))).is_err());
+        assert_eq!(
+            (tb.state.state_root(), tb.entries.len(), tb.state.bonds[&c.producer].collateral, tb.state.pending_payouts.clone()),
+            before,
+            "repeated closure cannot debit or reward twice"
+        );
+        tb.state.bond_budget().unwrap().check_consistency().unwrap();
+        crate::palw_native_budget_binding_v1::validate_native_budget_bindings_v1(&tb.state, conviction_at).unwrap();
+        tb.bond_budget_forget_v1(&id).unwrap();
+        super::super::super::palw_native_budget_binding_fold_v1::sweep_native_budget_bindings_v1(&mut tb, conviction_at).unwrap();
+        assert!(
+            crate::palw_native_budget_binding_v1::native_budget_binding_v1(&tb.state, id).unwrap().is_none(),
+            "collected exact native binding is finite once its existing window/shadow end"
+        );
+    }
+
+    #[test]
     fn g14n2_a_post_final_conviction_slashes_revokes_the_receipt_weight_and_certification_and_charges_attestors() {
         let (state, params, extras) = (state(), params(), extras());
         let mut tb = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
@@ -625,7 +834,8 @@ mod tests {
         convict(&mut tb, &ctx(40), &policy(), &c, 0, [0x99; 64], Some((bond(2), h(2).as_bytes()))).unwrap();
         // The producer's reserved exposure is collected; the finder is paid 490‰ of it; the rest is burned.
         assert_eq!(tb.state.bonds[&bond(1)].collateral, 6_000);
-        let finder = tb.state.pending_payouts.get(&Hash64::from_bytes(object_id(b"misaka-palw/native/g14-mining-finder/v39", &c.id))).unwrap();
+        let finder =
+            tb.state.pending_payouts.get(&Hash64::from_bytes(object_id(b"misaka-palw/native/g14-mining-finder/v39", &c.id))).unwrap();
         assert_eq!((finder.amount, finder.payload), (1_960, h(102)));
         // Receipt gone, its granted weight taken back, the claim closed without reward, the certification withdrawn.
         let r = tb.state.kernel_route.as_ref().unwrap();
@@ -668,8 +878,12 @@ mod tests {
         world(&mut tb, &c);
         let hash = c.claim_hash();
         assert!(!crate::palw_native_receipt_v39::native_mining_accusation_pending_v39(&tb.state, &hash));
-        tb.write_kernel_row(MINING, mk(MINING_ACCUSATION_COUNT_KIND_V39, &c.id), Some(super::b(&NativeMiningAccusationCountsV39 { demands: 1, open: 1 })))
-            .unwrap();
+        tb.write_kernel_row(
+            MINING,
+            mk(MINING_ACCUSATION_COUNT_KIND_V39, &c.id),
+            Some(super::b(&NativeMiningAccusationCountsV39 { demands: 1, open: 1 })),
+        )
+        .unwrap();
         assert!(crate::palw_native_receipt_v39::native_mining_accusation_pending_v39(&tb.state, &hash));
         // The certification verdict waits on a pending accusation, k positives in hand (RFC-0018's own verdict, veto = 0).
         let policy = PalwSecurityCertificationPolicyV1::design_unapproved_v1(100);
@@ -761,8 +975,12 @@ mod tests {
             settled: false,
         };
         tb.write_kernel_row(MINING, mk(MINING_ACCUSATION_DEMAND_KIND_V39, &id), Some(super::b(&d))).unwrap();
-        tb.write_kernel_row(MINING, mk(MINING_ACCUSATION_COUNT_KIND_V39, &c.id), Some(super::b(&NativeMiningAccusationCountsV39 { demands: 1, open: 1 })))
-            .unwrap();
+        tb.write_kernel_row(
+            MINING,
+            mk(MINING_ACCUSATION_COUNT_KIND_V39, &c.id),
+            Some(super::b(&NativeMiningAccusationCountsV39 { demands: 1, open: 1 })),
+        )
+        .unwrap();
         // Another finder's verified filing convicts the claim first (inside the demand's answer window).
         convict(&mut tb, &ctx(28), &policy(), &c, 0, [0x99; 64], Some((bond(2), h(2).as_bytes()))).unwrap();
         // The accuser then files its default once the deadline has passed.
@@ -775,13 +993,18 @@ mod tests {
         let defaulted = default(&mut tb, &ctx(31), &bond(3), &p, &wire);
         let refund_key = Hash64::from_bytes(object_id(b"misaka-palw/native/g14-mining-demand-refund/v39", &id));
         let refunded = tb.state.pending_payouts.get(&refund_key).map(|v| v.amount);
-        let row: NativeMiningDemandV39 = mread(tb.state.kernel_route.as_ref().unwrap(), MINING_ACCUSATION_DEMAND_KIND_V39, &id, 1 << 20).unwrap();
-        eprintln!("[verify-1 A-3] default after conviction: {defaulted:?}; demand settled {}; refund payout {refunded:?}", row.settled);
+        let row: NativeMiningDemandV39 =
+            mread(tb.state.kernel_route.as_ref().unwrap(), MINING_ACCUSATION_DEMAND_KIND_V39, &id, 1 << 20).unwrap();
+        eprintln!(
+            "[verify-1 A-3] default after conviction: {defaulted:?}; demand settled {}; refund payout {refunded:?}",
+            row.settled
+        );
         assert_eq!(refunded, Some(50), "A-3: the honest accuser's burned demand bond is never refunded after another path convicts");
         // Regression (fix): refunded once — the demand is settled and its open count released; a second default and a late answer
         // of the convicted claim are refused (the producer is never paid the accuser's bond).
         assert!(defaulted.is_ok() && row.settled);
-        let n: NativeMiningAccusationCountsV39 = mread(tb.state.kernel_route.as_ref().unwrap(), MINING_ACCUSATION_COUNT_KIND_V39, &c.id, 64).unwrap();
+        let n: NativeMiningAccusationCountsV39 =
+            mread(tb.state.kernel_route.as_ref().unwrap(), MINING_ACCUSATION_COUNT_KIND_V39, &c.id, 64).unwrap();
         assert_eq!((n.demands, n.open), (1, 0));
         assert!(default(&mut tb, &ctx(32), &bond(3), &p, &wire).is_err(), "refunded once");
         let mut late = id.to_vec();
@@ -789,6 +1012,9 @@ mod tests {
         late.extend_from_slice(&0u16.to_le_bytes());
         late.push(0);
         let answer_wire = NativeMiningAccusationWireV39 { version: 39, kind: 2, claim: c.id, stage: 0, body: late };
-        assert!(answer(&mut tb, &ctx(29), &c.producer, &p, &answer_wire).is_err(), "a convicted claim's demand is never answered for pay");
+        assert!(
+            answer(&mut tb, &ctx(29), &c.producer, &p, &answer_wire).is_err(),
+            "a convicted claim's demand is never answered for pay"
+        );
     }
 }

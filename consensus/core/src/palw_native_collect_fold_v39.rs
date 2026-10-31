@@ -318,7 +318,9 @@ pub(super) fn collect(
         &builder.state,
         crate::palw_native_liability_hold_v1::PALW_NATIVE_FAMILY_JOB_V39,
         &id,
-    ).is_some() {
+    )
+    .is_some()
+    {
         return Err(bad("native39 collection cannot erase a job with an unpaid held fee"));
     }
     let h = header(r, id)?;
@@ -554,6 +556,12 @@ pub(super) fn collect(
     }
     builder.write_kernel_row(TABLE, k(27, &id), None)?;
     builder.write_kernel_row(TABLE, k(COLLECTED, &id), Some(b(&(collected.root(), &collected))))?;
+    // The genuine settled job has passed its complete collection horizon.
+    // Preserve the engine's own period and liability-shadow clocks, while
+    // allowing this exact retired native source row to leave once they end.
+    let budget_id = super::super::palw_bond_budget_fold_v1::native_job_budget_id_v39(&id);
+    builder.bond_budget_close_v1(&budget_id, ctx.daa_score)?;
+    builder.bond_budget_forget_v1(&budget_id)?;
     builder.note_kernel_bond(&h.original.requester)?;
     builder.note_kernel_bond(&h.original.producer)?;
     Ok(())

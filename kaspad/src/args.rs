@@ -180,6 +180,9 @@ pub struct Args {
     /// empty one, and stay out of participation until long-lived outbound peers confirm the chain.
     #[serde(default)]
     pub palw_verified_resync: bool,
+    /// Negotiate RFC-0037 row-stream IBD (protocol 109). Explicit operator opt-in.
+    #[serde(default)]
+    pub palw_row_stream_ibd: bool,
     #[serde(rename = "outpeers")]
     pub outbound_target: usize,
     #[serde(rename = "maxinpeers")]
@@ -983,6 +986,7 @@ impl Default for Args {
             utxoindex: false,
             reset_db: false,
             palw_verified_resync: false,
+            palw_row_stream_ibd: false,
             outbound_target: 8,
             inbound_limit: 128,
             rpc_max_clients: 128,
@@ -1226,6 +1230,7 @@ impl Args {
         config.enable_unsynced_mining = self.enable_unsynced_mining;
         config.enable_mainnet_mining = self.enable_mainnet_mining;
         config.is_archival = self.archival;
+        config.palw_row_stream_ibd = self.palw_row_stream_ibd;
         // TODO: change to `config.enable_sanity_checks = self.sanity` when we reach stable versions
         config.enable_sanity_checks = true;
         config.user_agent_comments.clone_from(&self.user_agent_comments);
@@ -2028,6 +2033,7 @@ pub fn cli() -> Command {
                 .help("Max number of RPC clients for standard connections (default: 128)."),
         )
         .arg(arg!(--"reset-db" "Reset database before starting node. It's needed when switching between subnetworks.").env("KASPAD_RESET_DB"))
+        .arg(arg!(--"palw-row-stream-ibd" "Opt in to RFC-0037 protocol-109 row-stream IBD with capable peers; older peers keep their snapshot protocol."))
         .arg(arg!(--"palw-verified-resync" "Resync this node from the network's chain, verified: the data directory is moved aside (kept, never deleted), the node syncs from an empty one, and it does not mine, attest or report synced until at least two long-lived outbound peers confirm the synced chain. Writes palw-resync-report.json beside the data directory. The remedy for a PARTITION HOLD; never started automatically."))
         .arg(arg!(--"enable-unsynced-mining" "Allow the node to accept blocks from RPC while not synced (this flag is mainly used for testing)").env("KASPAD_ENABLE_UNSYNCED_MINING"))
         .arg(
@@ -4187,6 +4193,7 @@ impl Args {
             max_tracked_addresses: arg_match_unwrap_or::<usize>(&m, "max-tracked-addresses", defaults.max_tracked_addresses),
             reset_db: arg_match_unwrap_or::<bool>(&m, "reset-db", defaults.reset_db),
             palw_verified_resync: arg_match_unwrap_or::<bool>(&m, "palw-verified-resync", defaults.palw_verified_resync),
+            palw_row_stream_ibd: arg_match_unwrap_or::<bool>(&m, "palw-row-stream-ibd", defaults.palw_row_stream_ibd),
             enable_unsynced_mining: arg_match_unwrap_or::<bool>(&m, "enable-unsynced-mining", defaults.enable_unsynced_mining),
             enable_mainnet_mining: arg_match_unwrap_or::<bool>(&m, "enable-mainnet-mining", defaults.enable_mainnet_mining),
             trusted_checkpoint: m.get_one::<String>("trusted-checkpoint").cloned(),
@@ -4981,6 +4988,19 @@ mod profile_tests {
         assert_eq!(a.inbound_limit, default.inbound_limit);
         assert_eq!(a.rpc_max_clients, default.rpc_max_clients);
         assert_eq!(a.min_disk_free_percent, 0);
+    }
+
+    #[test]
+    fn rfc37_row_stream_cli_is_explicit_and_reaches_node_config() {
+        let plain = parse(&[]);
+        let mut config = Config::new(plain.network().into());
+        plain.apply_to_config(&mut config);
+        assert!(!plain.palw_row_stream_ibd);
+        assert!(!config.palw_row_stream_ibd);
+        let enabled = parse(&["--palw-row-stream-ibd"]);
+        enabled.apply_to_config(&mut config);
+        assert!(enabled.palw_row_stream_ibd);
+        assert!(config.palw_row_stream_ibd);
     }
 
     #[test]

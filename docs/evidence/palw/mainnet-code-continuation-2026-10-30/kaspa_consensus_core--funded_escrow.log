@@ -1,0 +1,25 @@
+
+running 19 tests
+[verify-1 A-2] B on A's outputs: Err(test palw_funded_escrow_v1::tests::funded_escrow_conservation_violations_are_refused ... ok
+EscrowNotFirstInput); booked paid 300, payee received 300; continued rows share one outpoint: false
+test palw_funded_escrow_v1::tests::funded_escrow_hard_deadline_is_derived_from_x3_or_refused ... ok
+test palw_funded_escrow_v1::tests::audit_a_two_escrow_inputs_alias_one_set_of_due_outputs ... ok
+test palw_funded_escrow_v1::tests::funded_escrow_liability_resolves_on_verdict_discharge_or_hard_deadline_only ... ok
+test palw_funded_escrow_v1::tests::funded_escrow_payer_return_after_hard_deadline_is_the_only_path_now ... ok
+test palw_funded_escrow_v1::tests::funded_escrow_payer_return_must_return_exactly_and_not_fund_others ... ok
+test palw_funded_escrow_v1::tests::funded_escrow_provisional_lock_names_only_a_paired_tfo1_own_output ... ok
+test palw_funded_escrow_v1::tests::funded_escrow_relay_presignature_survives_relay_inputs_and_change ... ok
+test palw_funded_escrow_v1::tests::funded_escrow_relay_template_binds_contract_outpoint_and_rule ... ok
+test palw_funded_escrow_v1::tests::funded_escrow_rows_retire_only_settled_and_past_retention ... ok
+test palw_funded_escrow_v1::tests::funded_escrow_settlement_pays_burns_continues_and_returns_once ... ok
+test palw_funded_escrow_v1::tests::funded_escrow_transitions_are_install_or_settle_only ... ok
+test palw_funded_escrow_v1::tests::funded_escrow_settlement_refuses_wrong_payees_prefixes_and_overdraws ... ok
+test palw_state_v2::funded_escrow::tests::funded_escrow_rows_round_trip_the_carriage ... ok
+test palw_state_v2::funded_escrow::tests::funded_escrow_every_path_reverts_to_its_parent_row ... ok
+test palw_state_v2::funded_escrow::tests::funded_escrow_settlement_reverts_to_the_locked_row ... ok
+test palw_state_v2::funded_escrow::tests::funded_escrow_sweep_holds_live_and_pursued_claims ... ok
+test palw_state_v2::funded_escrow::tests::r5_funded_liability_closes_only_at_resolution_and_reverts ... ok
+test palw_state_v2::funded_escrow::tests::r6_d1_funded_admission_reserves_court_capacity_under_the_fence ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 5321 filtered out; finished in 0.01s
+

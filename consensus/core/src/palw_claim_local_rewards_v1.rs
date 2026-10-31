@@ -26,7 +26,7 @@ impl RewardReadinessV1 {
 fn bad(why: &str) -> PalwStateV2Error {
     PalwStateV2Error::CarriageInconsistent(why.into())
 }
-fn decoded<T: borsh::BorshDeserialize + borsh::BorshSerialize + crate::palw_native_resource_v1::NativeWireScanV1>(
+pub(super) fn decoded<T: borsh::BorshDeserialize + borsh::BorshSerialize + crate::palw_native_resource_v1::NativeWireScanV1>(
     bytes: &[u8],
 ) -> Result<NativeRetainedV1<T>, PalwStateV2Error> {
     crate::palw_claim_local_v1::decode_claim_local_value_v1(bytes).map_err(|e| match e {
@@ -34,7 +34,7 @@ fn decoded<T: borsh::BorshDeserialize + borsh::BorshSerialize + crate::palw_nati
         NativeDecodeErrorV1::Decode(e) => bad(&format!("claim-local reward metadata: {e}")),
     })
 }
-fn frame_read<T>(
+pub(super) fn frame_read<T>(
     f: &PalwClaimLiabilityFrameV1,
     inspect: impl FnOnce(&PalwStateCarriageV2, &PalwStateCarriageV2) -> Result<T, PalwStateV2Error>,
 ) -> Result<T, PalwStateV2Error> {
@@ -158,7 +158,7 @@ pub(super) fn approval(
 
 /// Fund the existing EXEC horizon reader's variable ClaimRow decodes and its
 /// Borsh key buffers before calling it. A missing historical input is not guilt.
-fn prepare_exec_reader(
+pub(super) fn prepare_exec_reader(
     state: &PalwChainStateV2,
     id: Hash64,
 ) -> Result<(bool, Option<crate::palw_native_resource_v1::NativeDemandLeaseV1>), PalwStateV2Error> {
@@ -325,7 +325,7 @@ pub(super) fn live_source(
     }
     Ok(decision)
 }
-fn source(
+pub(super) fn source(
     state: &PalwChainStateV2,
     params: &PalwStateParamsV2,
     now: u64,
@@ -347,6 +347,7 @@ fn source(
         }
         return live_source(state, params, now, id, live, retiring && id == target && same_birth(born, target_birth));
     }
+    if let Some(decision)=super::palw_claim_local_compact_sources_v1::recorded(state,id,born)?{return Ok(decision)}
     // Never infer a successful retirement just from boundary carriages: the
     // claim may have been convicted and removed in the same transition.
     let mut latest = None;
@@ -381,7 +382,7 @@ fn source(
                 RewardReadinessV1::Hold(u64::MAX)
             } else {
                 frame_read(&f, |prior, _| {
-                    if prior.exec_v2.roots.contains_key(&id) || prior.exec_v2_rewards.contains_key(&id) {
+                    if !retired_exec_source_closed_v1(prior,params,id,&old,now)?{
                         return Ok(RewardReadinessV1::Hold(u64::MAX));
                     }
                     let wanted = cert_key(id);
@@ -518,26 +519,18 @@ pub(super) fn reward_readiness_v1(
     let Some(target) = state.claims.get(&id) else {
         return Ok(RewardReadinessV1::Denied);
     };
+    recorded_reward_readiness_v1(state,params,now,id,target,retiring)
+}
+fn recorded_reward_readiness_v1(state:&PalwChainStateV2,params:&PalwStateParamsV2,now:u64,id:Hash64,target:&PalwClaimStateV2,retiring:bool)
+    ->Result<RewardReadinessV1,PalwStateV2Error>{
     let Some(origin) = origin_for(state, params, id, target)? else {
         return Ok(RewardReadinessV1::Hold(u64::MAX));
     };
     if !inputs_known(state, params, id, target)? {
         return Ok(RewardReadinessV1::Hold(u64::MAX));
     }
-    let mut result = live_source(state, params, now, id, target, retiring)?;
     let birth = origin.original_claim();
-    result = result.join(prefix_rewards::readiness(state, params, now, id, target, id, birth, retiring)?);
-    // The same committed edges the checkpoint stores. A source that only shares
-    // an execution root is still joined by the historical scan below.
-    for edge in dependency_inputs_v1(state, id, target, Some(&origin))? {
-        let PalwClaimLocalWorkRefV1::ChainClaim { claim: source_id } = edge else { continue };
-        if source_id == id {
-            continue;
-        }
-        let Some(born) = state.claims.get(&source_id) else { continue };
-        result = result.join(source(state, params, now, source_id, born, id, birth, retiring)?);
-        result = result.join(prefix_rewards::readiness(state, params, now, source_id, born, id, birth, retiring)?);
-    }
+    let mut result = carrier_dependencies::readiness(state, params, now, id, target, id, birth, retiring)?;
     // Sources visible at birth include legacy live claims. Older frames also
     // preserve already-retired sources and transient insert/void/remove runs.
     for (key, bytes) in frames(state) {
@@ -552,7 +545,7 @@ pub(super) fn reward_readiness_v1(
                 && c.accepted_blue_score <= birth.accepted_blue_score
             {
                 result = result.join(source(state, params, now, source_id, c, id, birth, retiring)?);
-                result = result.join(prefix_rewards::readiness(state, params, now, source_id, c, id, birth, retiring)?);
+                result = result.join(carrier_dependencies::readiness(state, params, now, source_id, c, id, birth, retiring)?);
             }
             Ok(())
         };
@@ -575,6 +568,7 @@ pub(super) fn reward_readiness_v1(
             }
         }
     }
+    result=result.join(super::palw_claim_local_compact_sources_v1::shared_root(state,birth)?);
     Ok(result)
 }
 
@@ -624,4 +618,61 @@ pub fn palw_claim_local_settlement_v1(
         RewardReadinessV1::Hold(until_daa) => PalwClaimLocalSettlementV1::Held { until_daa },
         RewardReadinessV1::Denied => PalwClaimLocalSettlementV1::Denied,
     })
+}
+
+
+#[path = "palw_claim_local_carrier_rewards_v1.rs"]
+mod carrier_dependencies;
+
+/// Historical native evidence is resolved against its real accepting birth and
+/// retirement journal. Absence from the live registry never implies success.
+pub fn palw_claim_local_recorded_settlement_v1(state:&PalwChainStateV2,params:&PalwStateParamsV2,claim:Hash64,recorded:&PalwClaimStateV2,now:u64)
+    ->Result<PalwClaimLocalSettlementV1,PalwStateV2Error>{
+    if !params.claim_local_settlement_active_at(now){return Ok(PalwClaimLocalSettlementV1::Dormant)}
+    Ok(match recorded_reward_readiness_v1(state,params,now,claim,recorded,false)?{
+        RewardReadinessV1::Ready=>PalwClaimLocalSettlementV1::Settled,
+        RewardReadinessV1::Hold(until_daa)=>PalwClaimLocalSettlementV1::Held{until_daa},
+        RewardReadinessV1::Denied=>PalwClaimLocalSettlementV1::Denied,
+    })
+}
+
+/// Authenticate a retired EXEC source against the actual retirement journal's
+/// retained native snapshot. Missing roots/evidence do not stand for a completed
+/// execution; optimistic Final or matching replay never replaces selected OPV
+/// approval. The ordinary no-EXEC source keeps its existing path.
+pub(super) fn retired_exec_source_closed_v1(prior:&PalwStateCarriageV2,params:&PalwStateParamsV2,id:Hash64,terminal:&PalwClaimStateV2,now:u64)->Result<bool,PalwStateV2Error>{
+    use crate::palw_work_slice_v2::{PalwWorkRootPhaseV2 as Phase,PalwWorkPrefixStageV2 as Prefix,PalwWorkSliceStageV2 as Slice};
+    let Some(root)=prior.exec_v2.roots.get(&id)else{return Ok(!prior.exec_v2_rewards.contains_key(&id))};
+    let settled=match root.phase{Phase::Settled{settled_daa}=>settled_daa,_=>return Ok(false)};
+    if !matches!(terminal.phase,PalwClaimPhaseV2::Final{final_daa} if final_daa==settled)||!matches!(root.prefix,Prefix::Verified{..})
+        ||root.root_bond!=terminal.bond||root.class_id!=terminal.class_id||root.anchor!=terminal.accepted_block
+        ||root.canonical_job_id!=terminal.job_identity||root.pending!=0||root.next_index!=root.slice_count()
+        ||root.accepted_work!=root.slice_work_total()||root.verified_work!=root.accepted_work{return Ok(false)}
+    let Some(route)=&prior.kernel_route else{return Ok(false)};
+    let floor=super::palw_kernel_route_fold_v1::exec_liability_floor_v1(root.expiry_daa,params.window_court(),&route.header.policy)?;
+    if now<=floor||prior.exec_v2_rewards.get(&id).is_some_and(|r|now<=r.liability_until){return Ok(false)}
+    let mut count=0u32;
+    for ((_,index),slice)in prior.exec_v2.slices.range((id,0)..=(id,u32::MAX)){
+        if *index!=count||slice.accepted_daa>settled||!matches!(slice.stage,Slice::Verified{verified_daa,..} if verified_daa<=settled){return Ok(false)}count=count.checked_add(1).ok_or(PalwStateV2Error::Overflow("retired EXEC slice inventory"))?;
+    }
+    if count!=root.slice_count(){return Ok(false)}
+    let _keys=crate::palw_native_resource_v1::reserve_native_requests_v1(512).map_err(PalwStateV2Error::NativeResource)?;
+    for claim in std::iter::once(root.prefix_claim).chain(prior.exec_v2.slices.range((id,0)..=(id,u32::MAX)).map(|(_,s)|s.evidence_root)){
+        let Some(raw)=route.rows.iter().find(|((t,k),_)|*t==misaka_palw_kernel::rows::TABLE_CLAIMS_V1&&k.as_slice()==claim.as_byte_slice()).map(|(_,r)|r)else{return Ok(false)};
+        let row=decoded::<misaka_palw_kernel::ledger::ClaimRowV1>(raw)?;
+        if row.liability_until.is_none_or(|until|now<=until)||!matches!(crate::palw_exec_v2_verify::palw_exec_v2_claim_outcome_v1(&row,now),crate::palw_exec_v2_verify::PalwSliceVerificationV1::Verified{final_daa} if final_daa<=settled){return Ok(false)}
+        // Require an actual selected-approval source. The legacy non-OPV
+        // compatibility branch of the general gate cannot close this archive.
+        let authority=match route.paid_claim_authority_for_base_checked_v1(&claim.as_bytes()){
+            Ok(Some(a))=>a,Ok(None)=>return Ok(false),
+            Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(r))=>return Err(PalwStateV2Error::NativeResource(r)),
+            Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(_))=>return Ok(false),
+        };
+        if authority.class.base_class!=row.class_binding_id||authority.job.base_job!=row.job_id
+            ||authority.enrollment.producer!=row.producer||authority.authorized_daa!=row.committed_daa
+            ||authority.enrollment.class!=authority.class.id()||authority.enrollment.job!=authority.job.id()
+            ||authority.enrollment.lifetime.liability_until!=row.liability_until.expect("checked source horizon")
+            ||!crate::palw_exec_v2_verify::palw_exec_v2_credit_approval_v1(route,&claim){return Ok(false)}
+    }
+    Ok(true)
 }

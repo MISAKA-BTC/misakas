@@ -450,12 +450,37 @@ fn ordinary_verifier_fee_deadline_refund_late_verdict_and_replay_conserve_escrow
         }
         fee_fold::write_hold(&mut b, &row).unwrap();
         let held = b.state.clone();
+        let recipient = if conviction == Some(100) { h64(21) } else { h64(22) };
+        if fee > 0 {
+            let checkpoint = b.try_checkpoint().unwrap();
+            for n in 0..PALW_V2_MAX_PAYOUTS_PER_BLOCK {
+                let payload = h64(100 + n as u64);
+                let queue = crate::palw_kernel_route_v1::palw_kernel_payout_key_v1(&payload);
+                b.write_payout(queue, Some(PalwPayoutV2 { payload, amount: 1 })).unwrap();
+            }
+            let congested = b.state.clone();
+            fee_fold::release(&mut b, &ctx(101, 101, 101)).unwrap();
+            assert_eq!(b.state, congested, "a full queue must retain fee escrow and its unconsumed obligation");
+            // Coalescing is allowed even when every new-recipient slot is full.
+            let queue = crate::palw_kernel_route_v1::palw_kernel_payout_key_v1(&recipient);
+            b.write_payout(queue, Some(PalwPayoutV2 { payload: recipient, amount: u64::MAX })).unwrap();
+            let overflow = b.state.clone();
+            fee_fold::release(&mut b, &ctx(101, 101, 101)).unwrap();
+            assert_eq!(b.state, overflow, "a saturated recipient must retain the entire fee");
+            b.write_payout(queue, Some(PalwPayoutV2 { payload: recipient, amount: 1 })).unwrap();
+            fee_fold::release(&mut b, &ctx(101, 101, 101)).unwrap();
+            assert_eq!(b.state.pending_payouts[&queue].amount, 1 + fee);
+            let queued = b.state.clone();
+            fee_fold::release(&mut b, &ctx(102, 102, 102)).unwrap();
+            assert_eq!(b.state, queued, "coalesced payout is queued only once");
+            b.restore(checkpoint);
+            assert_eq!(b.state, held, "reorg restores held fee and queue together");
+        }
         fee_fold::release(&mut b, &ctx(100, 100, 100)).unwrap();
         assert_eq!(b.state, held, "inclusive fee deadline");
         fee_fold::release(&mut b, &ctx(101, 101, 101)).unwrap();
         let obligation = PalwSettlementObligationV1::with_party(PalwSettlementLegV1::VerifierCheckFee, [9; 64], verifier, 3);
         assert_eq!(palw_settled_once_v1(&b.state, &obligation).unwrap().amount, fee);
-        let recipient = if conviction == Some(100) { h64(21) } else { h64(22) };
         assert_eq!(b.state.pending_payouts.values().map(|v| v.amount).sum::<u64>(), fee);
         assert!(fee == 0 || b.state.pending_payouts.values().any(|v| v.payload == recipient && v.amount == fee));
         let paid = b.state.clone();

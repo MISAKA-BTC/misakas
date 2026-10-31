@@ -3250,7 +3250,7 @@ async fn palw_v2_a_live_bonds_collateral_outpoint_is_locked() {
     // EVERY Active bond's collateral is locked at every score — the panel's seats included, since
     // a seat that could spend its stake out from under a claim is a seat with nothing at risk.
     for daa in [0, 1, 1_000_000, u64::MAX] {
-        let locked = vp.palw_v2_locked_bond_outpoints(&state, daa);
+        let locked = vp.palw_v2_locked_bond_outpoints(&state, daa).unwrap();
         for outpoint in &registered {
             assert!(locked.contains(outpoint), "an Active bond's collateral must be locked at daa {daa}");
         }
@@ -3262,7 +3262,7 @@ async fn palw_v2_a_live_bonds_collateral_outpoint_is_locked() {
     let plain_consensus = TestConsensus::new(&plain);
     let _lt = plain_consensus.init();
     assert!(
-        plain_consensus.virtual_processor().palw_v2_locked_bond_outpoints(&state, 0).is_empty(),
+        plain_consensus.virtual_processor().palw_v2_locked_bond_outpoints(&state, 0).unwrap().is_empty(),
         "no bundle, no bond policy, nothing locked — every shipped preset is unchanged"
     );
 }
@@ -17620,6 +17620,7 @@ mod rfc12_reserve_settlement;
 mod carrier_bond_rent_conservation;
 
 mod funded_original_native_candidate;
+mod family_supplier_node_candidate;
 
 mod pruning_snapshot_readiness_v1;
 
@@ -17627,3 +17628,6 @@ mod evm_asof_owned_v2;
 
 #[cfg(feature = "evm")]
 mod evm_view_vertical_v2;
+
+#[path = "tests/native_bond_exit_capacity_v3.rs"]
+mod native_bond_exit_capacity_v3;

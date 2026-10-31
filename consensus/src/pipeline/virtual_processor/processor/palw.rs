@@ -6,6 +6,24 @@ use super::*;
 mod source_bootstrap_v1;
 #[path = "routed_material_v2.rs"]
 mod routed_material_v2;
+#[path = "row_stream_v1.rs"]
+mod row_stream_v1;
+#[path = "rooted_family_material_v1.rs"]
+mod rooted_family_material_v1;
+#[path = "native_checkpoint_headers_v1.rs"]
+mod native_checkpoint_headers_v1;
+
+/// Exit decisions read this node's authenticated parent state. A failed local
+/// collateral read is never evidence that a spend or its peer is invalid.
+fn bond_exit_state_error_v1(error:kaspa_consensus_core::palw_state_v2::PalwStateV2Error)->PalwLocalTransitionFaultV1{
+    use kaspa_consensus_core::{palw_state_v2::PalwStateV2Error as E,palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1 as C};
+    match error{E::NativeResource(why)=>PalwLocalTransitionFaultV1::Resource(why),E::NativeContextUnavailable(why)=>PalwLocalTransitionFaultV1::Context(why),_=>PalwLocalTransitionFaultV1::Context(C::StoreUnreadable)}
+}
+pub(super) fn bond_exit_store_error_v1(error:kaspa_database::prelude::StoreError)->PalwLocalTransitionFaultV1{
+    use kaspa_database::prelude::StoreError as E;
+    use kaspa_consensus_core::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1 as C;
+    match error{E::LocalResourceUnavailable(why)=>PalwLocalTransitionFaultV1::Resource(kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<kaspa_consensus_core::palw_state_v2::PalwChainStateV2>("bond exit own reader",&why)),E::KeyNotFound(_)=>PalwLocalTransitionFaultV1::Context(C::HistoryUnavailable),_=>PalwLocalTransitionFaultV1::Context(C::StoreUnreadable)}
+}
 
 // Capacity/context failures are retry, never a semantic conviction refusal.
 fn tir_conviction_preflight_outcome_v2(
@@ -502,26 +520,26 @@ impl VirtualStateProcessor {
     /// the chain walk and the template read (`palw_v2_locked_bond_outpoints`,
     /// `palw_v2_bond_burn_obligations`), so the mempool refuses exactly the spends every block skips.
     /// `None` when the network has no V2 registry or the registry has no tip yet.
-    pub(super) fn palw_mempool_bond_gate(&self, now_daa: u64) -> Option<Arc<PalwMempoolBondGate>> {
-        let params = self.palw_state_params_v2.as_ref()?;
-        let (tip, state) = self.palw_v2_reader_state(params).ok().flatten()?;
+    pub(in crate::pipeline::virtual_processor) fn palw_mempool_bond_gate(&self, now_daa: u64) -> Result<Option<Arc<PalwMempoolBondGate>>,PalwLocalTransitionFaultV1> {
+        let Some(params)=self.palw_state_params_v2.as_ref()else{return Ok(None)};
+        let Some((tip,state))=self.palw_v2_reader_state(params).map_err(bond_exit_store_error_v1)?else{return Err(PalwLocalTransitionFaultV1::Context(kaspa_consensus_core::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1::HistoryUnavailable))};
         let mut cache = self.palw_mempool_locked_cache.lock();
         if let Some((cached_tip, cached_daa, gate)) = cache.as_ref()
             && *cached_tip == tip
             && *cached_daa == now_daa
         {
-            return Some(gate.clone());
+            return Ok(Some(gate.clone()));
         }
         let gate = Arc::new(PalwMempoolBondGate {
-            locked: self.palw_v2_locked_bond_outpoints(&state, now_daa),
-            burns: self.palw_v2_bond_burn_obligations(&state, now_daa),
+            locked: self.palw_v2_locked_bond_outpoints(&state, now_daa)?,
+            burns: self.palw_v2_bond_burn_obligations(&state, now_daa)?,
             escrow: super::super::utxo_validation::PalwEscrowSpendLocksV1 {
                 rows: self.palw_escrow_locked_rows_v1(&state, now_daa),
                 provisional: Default::default(),
             },
         });
         *cache = Some((tip, now_daa, gate.clone()));
-        Some(gate)
+        Ok(Some(gate))
     }
 
     /// Resolves a chain block's accepted transactions from its acceptance data
@@ -1581,6 +1599,69 @@ impl VirtualStateProcessor {
         )
         .map_err(|e| e.to_string())?;
         Ok(plan.map(|plan| (point.daa_score, plan)))
+    }
+
+    /// A new-family producer's original allocation at its explicit prospective
+    /// singleton admission point. The historical v1 quote keeps quoting the
+    /// accepted point. A producer must obtain this native allocation before
+    /// signing its source/history pledges, then obtain the funded-family quote.
+    pub fn palw_family_original_allocation_quote_v2_impl(
+        &self,
+        point: kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        original: kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
+        header: kaspa_consensus_core::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        semantic_table: Option<&[u8]>,
+    ) -> Result<kaspa_consensus_core::palw_tir_public_allocation_v1::PalwTirPublicAllocationPlanV1, String> {
+        kaspa_consensus_core::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1::Tir(header.clone()).check_wire_v1()?;
+        if borsh::object_length(&original).map_err(|e| e.to_string())?
+            > kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_COMMITMENT_TX_MAX_BYTES
+        {
+            return Err("family original allocation exceeds the bounded FP descriptor".into());
+        }
+        let params = self.palw_state_params_v2.as_ref().ok_or("PALW V2 state parameters unavailable")?;
+        if !params.family_supplier_active_at(point.daa_score) {
+            return Err("new-family original allocation fence is dormant".into());
+        }
+        let (_, state) = self.palw_v2_reader_state(params).map_err(|e| e.to_string())?
+            .ok_or("PALW V2 accepted snapshot unavailable")?;
+        if state.last_point().is_some_and(|last| point.daa_score < last.daa_score || point.blue_score <= last.blue_score) {
+            return Err("family original allocation point must follow the accepted snapshot clock".into());
+        }
+        let mut extras = self.palw_transition_extras_for(&point).into_legacy_extras();
+        if let Some(bytes)=semantic_table {
+            let sem=state.class_semantics_v1(&original.job.class_id).ok_or("family allocation immutable semantics absent")?;
+            let record=state.tir_class_v1(&original.job.class_id).ok_or("family allocation registered class absent")?;
+            let table=kaspa_consensus_core::palw_court_family_material_v1::prepare_family_table_inventory_v1(bytes,sem,record.logits_vocab).map_err(|e|e.to_string())?;
+            extras.family_original_table_inventories_v2.insert(kaspa_consensus_core::palw_freeprompt_v3::fp_claim_id_v3(&original),table);
+        }
+        kaspa_consensus_core::palw_state_v2::palw_tir_public_original_quote_v1(
+            &state, params, &extras, point.daa_score, &original, &header,
+        ).map_err(|e| e.to_string())?.ok_or_else(|| "native original allocation is unavailable at the prospective point".into())
+    }
+
+    /// Native builder quote for the new family contract at one explicit
+    /// prospective admission point. This is a price/scope quote, never an
+    /// acceptance result: the real carrier must still pass all input, signature,
+    /// capacity and singleton-clock checks at that point.
+    pub fn palw_family_original_native_quote_v2_impl(
+        &self,
+        point:kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        object:kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+        envelope:kaspa_consensus_core::palw_tir_public_fp_envelope_v1::PalwTirPublicFpEnvelopeV1,
+        semantic_table:Option<&[u8]>,
+    )->Result<kaspa_consensus_core::palw_state_v2::PalwFamilyOriginalNativeQuoteV2,String>{
+        let params=self.palw_state_params_v2.as_ref().ok_or("PALW V2 state parameters unavailable")?;
+        let (_,state)=self.palw_v2_reader_state(params).map_err(|e|e.to_string())?.ok_or("PALW V2 accepted snapshot unavailable")?;
+        if state.last_point().is_some_and(|last|point.daa_score<last.daa_score||point.blue_score<=last.blue_score){
+            return Err("family quote prospective point must follow the accepted snapshot clock".into());
+        }
+        envelope.matches_object_v1(&object)?;
+        let claim=envelope.original_fp_v1()?.claim_id();
+        let mut extras=self.palw_transition_extras_for_objects(&state,&point,std::slice::from_ref(&object)).into_legacy_extras();
+        if let Some(history)=&envelope.history_pledge{extras.history_custody_pledges.insert(history.claim,history.clone());}
+        extras.tir_public_originals.insert(claim,envelope);
+        kaspa_consensus_core::palw_state_v2::palw_family_original_native_quote_v2(&state,params,&point,&extras,&object,semantic_table)
+            .map_err(|e|e.to_string())
     }
 
     pub fn palw_staged_tir_prefix_leaf_index_v1_impl(
@@ -3965,6 +4046,22 @@ impl VirtualStateProcessor {
     /// The locked-collateral set at the node's own virtual DAA, for the wallet's input selector
     /// (audit3 H3). Reads the materialized tip, so it answers the same question
     /// `palw_v2_locked_bond_outpoints` answers on the block path — one predicate, two callers.
+    /// Authoritative wallet/funding answer. Active registry state that could
+    /// not be read is unavailable, never an empty must-not-spend set.
+    pub fn palw_locked_bond_outpoints_checked_v3_impl(&self)->Result<Vec<TransactionOutpoint>,kaspa_consensus_core::palw_state_v2::PalwStateV2Error>{
+        self.palw_locked_bond_outpoints_checked_v3_at(self.lkg_virtual_state.load().daa_score)
+    }
+    fn palw_locked_bond_outpoints_checked_v3_at(&self,now_daa:u64)->Result<Vec<TransactionOutpoint>,kaspa_consensus_core::palw_state_v2::PalwStateV2Error>{
+        let Some(params)=self.palw_state_params_v2.as_ref()else{return Ok(Vec::new())};
+        let Some((_,state))=self.palw_v2_reader_state(params).map_err(|e|bond_exit_store_error_v1(e).into_state_error_v1())?else{
+            return Err(kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeContextUnavailable(kaspa_consensus_core::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1::HistoryUnavailable));
+        };
+        let mut out:Vec<_>=self.palw_v2_locked_bond_outpoints(&state,now_daa).map_err(PalwLocalTransitionFaultV1::into_state_error_v1)?.into_iter().collect();
+        out.sort_by(|a,b|(a.transaction_id,a.index).cmp(&(b.transaction_id,b.index)));
+        Ok(out)
+    }
+    /// Historical diagnostic compatibility only. Funding and wallet callers
+    /// must use the checked answer, which can represent unavailable own state.
     pub fn palw_locked_bond_outpoints_v2_impl(&self) -> Vec<TransactionOutpoint> {
         self.palw_locked_bond_outpoints_v2_at(self.lkg_virtual_state.load().daa_score)
     }
@@ -3981,7 +4078,7 @@ impl VirtualStateProcessor {
         let Ok(Some((_, state))) = self.palw_v2_reader_state(state_params) else {
             return Vec::new();
         };
-        let mut out: Vec<TransactionOutpoint> = self.palw_v2_locked_bond_outpoints(&state, now_daa).into_iter().collect();
+        let mut out: Vec<TransactionOutpoint> = self.palw_v2_locked_bond_outpoints(&state, now_daa).unwrap_or_else(|_|state.bonds_iter().map(|(key,_)|key.0).collect()).into_iter().collect();
         // Deterministic order, so two nodes answering the same question give the same answer and a
         // paging caller cannot be handed a shuffled set.
         out.sort_by(|a, b| (a.transaction_id, a.index).cmp(&(b.transaction_id, b.index)));
@@ -3992,9 +4089,9 @@ impl VirtualStateProcessor {
         &self,
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
         now_daa: u64,
-    ) -> std::collections::HashSet<TransactionOutpoint> {
+    ) -> Result<std::collections::HashSet<TransactionOutpoint>,PalwLocalTransitionFaultV1> {
         let Some(_bond_params) = self.palw_bond_params_v2.as_ref() else {
-            return Default::default();
+            return Ok(Default::default());
         };
         // Both clocks, after the liveness escape; past the fence the gate also reads what the bond
         // still stands behind — its reservations and its live slashable locks (2026-09-24 DoS
@@ -4002,11 +4099,9 @@ impl VirtualStateProcessor {
         // RFC-0015 §8.3.3 / §13.2 (2026-10-15): on a network with an OPV policy a bond's live duties (its OPV reservation to the
         // liability horizon, its budget window to `d + W` and liability hold) hold its collateral even below the audit fence.
         let duty_gate = self.palw_audit_2026_09_23_at(now_daa) || self.palw_kernel_opv_fence().is_some();
-        state
-            .bonds_iter()
-            .filter(|(key, record)| self.palw_v2_bond_is_locked(state, key, record, now_daa, duty_gate))
-            .map(|(key, _)| key.0)
-            .collect()
+        let mut out=std::collections::HashSet::new();
+        for(key,record)in state.bonds_iter(){if self.palw_v2_bond_is_locked(state,key,record,now_daa,duty_gate)?{out.insert(key.0);}}
+        Ok(out)
     }
 
     /// **The one withdrawal gate both UTXO sites read** (ADR-0152 B-3, S-SPEC §3.10, §9 P3):
@@ -4023,10 +4118,10 @@ impl VirtualStateProcessor {
         record: &kaspa_consensus_core::palw_state_v2::PalwBondStateV2,
         now_daa: u64,
         duty_gate: bool,
-    ) -> bool {
+    ) -> Result<bool,PalwLocalTransitionFaultV1> {
         let delay = self.palw_bond_withdrawal_delay_at(now_daa);
         match self.palw_state_params_v2.as_ref() {
-            Some(params) => kaspa_consensus_core::palw_state_v2::palw_bond_collateral_is_locked_v6(
+            Some(params) => kaspa_consensus_core::palw_state_v2::palw_bond_collateral_is_locked_checked_v7(
                 state,
                 params,
                 key,
@@ -4035,8 +4130,8 @@ impl VirtualStateProcessor {
                 delay,
                 self.palw_settled_anchor_depth_at(now_daa),
                 duty_gate,
-            ),
-            None => kaspa_consensus_core::palw_state_v2::palw_bond_collateral_is_locked_v5(
+            ).map_err(bond_exit_state_error_v1),
+            None => Ok(kaspa_consensus_core::palw_state_v2::palw_bond_collateral_is_locked_v5(
                 state,
                 key,
                 record,
@@ -4045,7 +4140,7 @@ impl VirtualStateProcessor {
                 self.palw_second_clock_depth_at(state, now_daa),
                 duty_gate,
                 u64::MAX,
-            ),
+            )),
         }
     }
 
@@ -4150,12 +4245,41 @@ impl VirtualStateProcessor {
         let Ok(envelope) = kaspa_consensus_core::palw_attempt_material_v3::native_attempt_base_v3(&header.palw_commitment) else {
             return false;
         };
+        // The floor begins Idle even at genesis. DAA can advance through heartbeats (or remain
+        // stopped), so neither Idle nor a DAA threshold substitutes for RFC-0041's initial wait.
+        if !kaspa_consensus_core::config::params::palw_base_coinbase_recovery_wait_elapsed_v1(self.genesis.timestamp, header.timestamp)
+        {
+            return false;
+        }
         kaspa_consensus_core::config::params::palw_base_coinbase_recovery_due_v1(
             kaspa_consensus_core::config::params::palw_genesis_objects_have_no_bond_v1(&self.palw_genesis_objects_v2),
             state.bonds_iter().next().is_none(),
             state.floor_state_v1().admits_floor_at(header.daa_score),
             envelope.attempt.class_id == state_params.base_class_id(),
         )
+    }
+
+    /// Additional non-bond admission for a recovery, against its candidate's parent state.
+    /// Do not reprice an already accepted block against a later coinbase state's retarget.
+    pub(super) fn palw_base_coinbase_recovery_admission_v1(
+        &self,
+        header: &Header,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+    ) -> bool {
+        if !self.palw_base_coinbase_recovery_due_for_header_v1(header, state) {
+            return false;
+        }
+        let Some(state_params) = self.palw_state_params_v2.as_ref() else { return false };
+        let Ok(envelope) = kaspa_consensus_core::palw_attempt_material_v3::native_attempt_base_v3(&header.palw_commitment)
+        else { return false };
+        kaspa_consensus_core::palw_admission_v2::check_palw_base_recovery_work_v1(
+            state,
+            state_params,
+            &envelope.attempt,
+            header.daa_score,
+            self.palw_execution_anchor_v1(header, &envelope.attempt),
+            self.palw_epoch_budget_fences_at(header.daa_score),
+        ).is_ok()
     }
 
     /// The carve of `block`'s own attempt where the fold skipped it — see
@@ -4361,8 +4485,13 @@ impl VirtualStateProcessor {
         {
             return Ok(Some((sink, Arc::clone(state))));
         }
+        // Read the pruning boundary before taking the PALW store lock: pruning
+        // writes acquire these locks in that order as well.
+        let pruning = self.pruning_point_store.read().pruning_point()?;
+        let boundary_blue = self.headers_store.get_blue_score(pruning)?;
         let store = self.palw_state_v2_store.read();
         let Some((tip_block, tip_state)) = store.load_tip_cached(params)? else { return Ok(None) };
+        self.validate_reader_native_checkpoint_v1(&tip_state, params, boundary_blue)?;
         if tip_block == sink {
             // The common case: the store's own cache holds it; keep no second copy.
             *self.palw_reader_snapshot.lock() = None;
@@ -4383,6 +4512,7 @@ impl VirtualStateProcessor {
             &added,
         ) {
             Ok(state) => {
+                self.validate_reader_native_checkpoint_v1(&state, params, boundary_blue)?;
                 let state = Arc::new(state);
                 *self.palw_reader_snapshot.lock() = Some((sink, Arc::clone(&state)));
                 Ok(Some((sink, state)))
@@ -4722,20 +4852,22 @@ impl VirtualStateProcessor {
         &self,
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
         now_daa: u64,
-    ) -> std::collections::HashMap<TransactionOutpoint, u64> {
+    ) -> Result<std::collections::HashMap<TransactionOutpoint, u64>,PalwLocalTransitionFaultV1> {
         let Some(_bond_params) = self.palw_bond_params_v2.as_ref() else {
-            return Default::default();
+            return Ok(Default::default());
         };
         // The same predicate as the lock beside it — see `palw_v2_locked_bond_outpoints`.
         // RFC-0015 §8.3.3 / §13.2 (2026-10-15): on a network with an OPV policy a bond's live duties (its OPV reservation to the
         // liability horizon, its budget window to `d + W` and liability hold) hold its collateral even below the audit fence.
         let duty_gate = self.palw_audit_2026_09_23_at(now_daa) || self.palw_kernel_opv_fence().is_some();
-        state
-            .bonds_iter()
-            .filter(|(key, record)| !self.palw_v2_bond_is_locked(state, key, record, now_daa, duty_gate))
-            .map(|(key, record)| (key.0, kaspa_consensus_core::palw_state_v2::palw_bond_burn_obligation_v2(record)))
-            .filter(|(_, owed)| *owed > 0)
-            .collect()
+        let mut out=std::collections::HashMap::new();
+        for(key,record)in state.bonds_iter(){
+            if !self.palw_v2_bond_is_locked(state,key,record,now_daa,duty_gate)?{
+                let owed=kaspa_consensus_core::palw_state_v2::palw_bond_burn_obligation_v2(record);
+                if owed>0{out.insert(key.0,owed);}
+            }
+        }
+        Ok(out)
     }
 
     /// **The PALW payouts a block's coinbase mints: the first [`PALW_V2_MAX_PAYOUTS_PER_BLOCK`] rows
@@ -10153,7 +10285,7 @@ impl VirtualStateProcessor {
                 fences
             },
         )
-        .map_err(|e| e.to_string())?;
+        .map_err(PalwAttemptAdmissionFaultV1::from)?;
         Ok(Some(envelope))
     }
 
@@ -10620,7 +10752,7 @@ impl VirtualStateProcessor {
         });
         let mut out = Vec::new();
         for (claim_id, claim) in state.claims_iter() {
-            if let Ok(object) = self.palw_v2_derive_panel_binding_v1(
+            match self.palw_v2_derive_panel_binding_v1(
                 state,
                 block,
                 block_daa,
@@ -10630,7 +10762,9 @@ impl VirtualStateProcessor {
                 claim_id,
                 claim,
             ) {
-                out.push(object);
+                Ok(object)=>out.push(object),
+                Err(PalwPanelBindingFaultV1::Refused(_))=>{},
+                Err(PalwPanelBindingFaultV1::Local(why))=>return Err(why),
             }
         }
         Ok(out)
@@ -10755,14 +10889,16 @@ impl VirtualStateProcessor {
         // 2e′ verdict, asked here of the same function on the same pre-object base with the same extras
         // (empty below `palw_floor_refusal_retry` and wherever the block carries no draw points), so the
         // line below says which way a refused claim went.
-        let floor_retries = kaspa_consensus_core::palw_state_v2::palw_sw8_thin_draws_v1(
-            &folded,
-            state_params,
-            &extras,
-            block_daa,
-            anchor_delay,
-            reach.min(block_daa),
-        );
+        let floor_retries = match kaspa_consensus_core::palw_state_v2::palw_sw8_thin_draws_v1(
+            &folded, state_params, &extras, block_daa, anchor_delay, reach.min(block_daa),
+        ) {
+            Ok(retries) => retries,
+            Err(kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeResource(why)) => return Err(why.into()),
+            Err(kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeContextUnavailable(why)) => {
+                return Err(PalwLocalTransitionFaultV1::Context(why));
+            }
+            Err(_) => return Ok(Vec::new()),
+        };
         let mut out = Vec::new();
         // RFC-0018 §5.2: past the permissionless anchor a block anchors only the claims a contribution of ANOTHER bond reaches — the
         // per-claim predicate step 4c asks, on the same committed contributions.
@@ -10795,7 +10931,7 @@ impl VirtualStateProcessor {
                 // the claim now voids `BindTimeout` at the end of this block (step 4c) and an operator
                 // should see why. Past lane F2's fence a draw that refused for eligibility at every seed
                 // is re-anchored instead, and the line says so.
-                Err(Some(why)) => {
+                Err(PalwPanelBindingFaultV1::Refused(Some(why))) => {
                     if floor_retries.contains(&claim_id) {
                         info!(
                             "Block {block}: claim {claim_id}'s panel is not bound — its draw refused in its anchor block ({why}), \
@@ -10815,7 +10951,8 @@ impl VirtualStateProcessor {
                     }
                     continue;
                 }
-                Err(None) => continue,
+                Err(PalwPanelBindingFaultV1::Refused(None)) => continue,
+                Err(PalwPanelBindingFaultV1::Local(why))=>return Err(why),
             };
             // Finding 5: under SW-8 this block is the claim's one chance to bind, so a derived
             // binding the gate or the fold refuses is reported as the draw's refusal is — the claim
@@ -10879,10 +11016,10 @@ impl VirtualStateProcessor {
     /// share (the parent-state one below `palw_rcore_plus`, the one-state one past it), so the two
     /// cannot differ in anything but the state they read.
     ///
-    /// `Err(None)`: nothing to bind here (not `Provisional`, no anchor yet, or — under the stake
-    /// draw — this block is not the claim's anchor block). `Err(Some(why))`: the claim's anchor block
-    /// is this one and its draw refused (`why`); only the stake draw reports it, since below it the
-    /// claim simply tries again at the next block.
+    /// `Refused(None)`: nothing to bind here (not `Provisional`, no anchor yet, or — under the stake
+    /// draw — this block is not the claim's anchor block). `Refused(Some(why))`: the claim's anchor
+    /// block is this one and its draw refused; only the stake draw reports that refusal.
+    /// Local collateral capacity/context failures abort preparation on either draw policy.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn palw_v2_derive_panel_binding_v1(
         &self,
@@ -10894,19 +11031,19 @@ impl VirtualStateProcessor {
         min_collateral: u64,
         claim_id: &kaspa_hashes::Hash64,
         claim: &kaspa_consensus_core::palw_state_v2::PalwClaimStateV2,
-    ) -> Result<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2, Option<String>> {
+    ) -> Result<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2, PalwPanelBindingFaultV1> {
         use kaspa_consensus_core::palw_state_v2::PalwClaimPhaseV2;
         if !matches!(claim.phase, PalwClaimPhaseV2::Provisional) {
-            return Err(None);
+            return Err(PalwPanelBindingFaultV1::Refused(None));
         }
         // The anchor is the first chain block at or past `accepted_daa + anchor_delay`. Until
         // one exists the claim simply waits — that delay is what stops a producer from
         // mining until it likes its own jury.
         // Same base as the validator's, for the same reason — see the sibling call site.
         // RFC-0010: through the versioned door — a V3-rule claim has no lane-A anchor (and the list this binder walks never offers one).
-        let Some(state_params) = self.palw_state_params_v2.as_ref() else { return Err(None) };
+        let Some(state_params) = self.palw_state_params_v2.as_ref() else { return Err(PalwPanelBindingFaultV1::Refused(None)) };
         let Some(anchor) = self.palw_v2_anchor_fact_for_claim_v1(block, claim, state_params, panel_params) else {
-            return Err(None);
+            return Err(PalwPanelBindingFaultV1::Refused(None));
         };
         // C-02 (deep fence) and ADR-0124 (the panel economy): the whole draw policy, from the
         // same anchor as the acceptance layer's sibling call — so this assembler builds the
@@ -10915,7 +11052,7 @@ impl VirtualStateProcessor {
         // **ADR-0152 SW-8: under the stake draw a panel binds only in its own anchor block**
         // (`validate_panel_bound_v2_with_policy` refuses any other), so no later block draws it again.
         if policy.stake.is_some() && anchor.anchor_block != block {
-            return Err(None);
+            return Err(PalwPanelBindingFaultV1::Refused(None));
         }
         if let Some(state_params) = self.palw_state_params_v2.as_ref() {
             policy.valid_lock = Self::palw_panel_valid_lock_of_v1(
@@ -10982,7 +11119,7 @@ impl VirtualStateProcessor {
                 policy,
             ),
         };
-        let seats = drawn.map_err(|why| policy.stake.map(|_| why.to_string()))?;
+        let seats = drawn.map_err(|why|PalwPanelBindingFaultV1::from_panel_error_v1(why,policy.stake.is_some()))?;
         // ADR-0147: nothing to ask here. The outsider is IN the derived panel — the draw policy
         // carries the fence — and the acceptance layer demands that panel exactly, so a node
         // proposes only what its own fold will take. The identity test that stood here

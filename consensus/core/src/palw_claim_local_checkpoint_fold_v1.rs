@@ -25,6 +25,8 @@ use borsh::BorshDeserialize;
 
 #[path = "palw_claim_local_checkpoint_resources_v1.rs"]
 mod resources;
+#[path = "palw_claim_local_native_checkpoint_v1.rs"]
+mod native_checkpoint;
 
 /// The single checkpoint row's key: prefix `'C'`, zero tail (one row per state; the point is inside).
 pub fn palw_claim_local_checkpoint_key_v1() -> [u8; 65] {
@@ -46,10 +48,10 @@ struct LiabilityStateV1 {
     birth_frames: Vec<Hash64>,
 }
 
-/// Kernel claims named by a bound execution root. A missing row is not a vertex.
-/// `accepted_blue_score` stays 0: the row stores no blue score, and 0 is not
-/// later than the consumer that already named the row. Returns the open kernel
-/// ids, in order, so the liability projection can bind them.
+/// Construct kernel claim records before binding their actual retained admission
+/// points in `native_checkpoint::attach`. The temporary zero context cannot be
+/// exported: a missing authenticated birth makes the complete builder fail.
+/// Returns the open kernel ids for the liability projection.
 fn attach_kernel_dependency_records_v1(
     state: &PalwChainStateV2,
     now: u64,
@@ -74,7 +76,7 @@ fn attach_kernel_dependency_records_v1(
                 .kernel_route
                 .as_ref()
                 .is_some_and(|route| crate::palw_exec_v2_verify::palw_exec_v2_selected_approval_v1(route, id));
-        let liability_closed = voided || (certified && row.liability_until.is_some_and(|until| now > until));
+        let liability_closed = (voided || certified) && row.liability_until.is_some_and(|until| now > until);
         let work = PalwClaimLocalWorkRefV1::KernelClaim { claim: *id };
         pending.push((
             *id,
@@ -108,10 +110,7 @@ fn attach_kernel_dependency_records_v1(
     }
     let mut open = Vec::new();
     for (id, raw, mut record) in pending {
-        let referenced = records.values().any(|consumer| consumer.inputs.contains(&PalwClaimLocalWorkRefV1::KernelClaim { claim: id }));
-        if !referenced {
-            continue;
-        }
+
         if !record.liability_closed {
             let mid = palw_liability_material_id_v1(&raw);
             record.material.insert(mid);
@@ -172,14 +171,23 @@ pub(super) fn expected_claim_local_checkpoint_v1(
         let work = PalwClaimLocalWorkRefV1::ChainClaim { claim: *id };
         let voided = matches!(c.phase, PalwClaimPhaseV2::Voided { .. });
         let final_claim = matches!(c.phase, PalwClaimPhaseV2::Final { .. });
+        let readiness = if final_claim {
+            Some(rewards::reward_readiness_v1(state, params, now, *id, false)?)
+        } else {
+            None
+        };
         let certified = final_claim
             && rewards::approval(params, *id, c, rewards::cert_bytes(state.kernel_route.as_ref(), *id))?
-                == rewards::RewardReadinessV1::Ready;
+                == rewards::RewardReadinessV1::Ready
+            // Retired dependencies no longer have a graph vertex. Their retained
+            // history can still deny this claim's credit, without changing its
+            // raw Gate C approval or attributing fraud to the consumer.
+            && readiness != Some(rewards::RewardReadinessV1::Denied);
         // The irreversible checkpoint must use the same retained admission and historical
         // dependency reader as monetary settlement. A live-only check loses retired sources
         // and can treat missing provenance as an independently closed liability.
         let liability_closed = if final_claim {
-            rewards::reward_readiness_v1(state, params, now, *id, false)? == rewards::RewardReadinessV1::Ready
+            readiness == Some(rewards::RewardReadinessV1::Ready)
         } else if voided {
             !state.unresolved.contains(&(c.accepted_blue_score, *id)) && !courts.contains_key(id)
         } else {
@@ -241,7 +249,15 @@ pub(super) fn expected_claim_local_checkpoint_v1(
             },
         );
     }
+    if let Some(route)=&state.kernel_route{
+        for ((table,key),_) in &route.rows{if *table==misaka_palw_kernel::rows::TABLE_CLAIMS_V1{
+            let raw:misaka_palw_kernel::hash::Digest=borsh::from_slice(key).map_err(|_|bad("checkpoint kernel claim key"))?;
+            kernel_refs.insert(Hash64::from_bytes(raw));
+        }}
+    }
+    let native_context=native_checkpoint::context(state)?;
     let open_kernels = attach_kernel_dependency_records_v1(state, now, &kernel_refs, &mut records, &mut material)?;
+    native_checkpoint::attach(state,params,now,&native_context,&mut records,&mut material)?;
     let mut liability_state = if liability.open.is_empty() { Vec::new() } else { borsh::to_vec(&liability).expect("canonical liability") };
     if !open_kernels.is_empty() {
         // Open kernel inputs must stay inside the bound projection. Absent any
@@ -264,6 +280,7 @@ pub(super) fn expected_claim_local_checkpoint_v1(
 pub(super) fn stored_claim_local_checkpoint_v1(
     state: &PalwChainStateV2,
 ) -> Result<Option<crate::palw_native_resource_v1::NativeRetainedV1<PalwClaimLocalCheckpointV1>>, PalwStateV2Error> {
+    if let Some(checkpoint)=super::palw_claim_local_descriptor_v2::load(state)?{return Ok(Some(checkpoint))}
     let key = palw_claim_local_checkpoint_key_v1();
     let Some(bytes) = state.kernel_route.as_ref().and_then(|r| r.aux.get(&(PALW_CLAIM_LOCAL_TABLE_V1, key.to_vec()))) else {
         return Ok(None);
@@ -338,6 +355,7 @@ pub(super) fn write_claim_local_checkpoint_v1(
             PalwClaimLocalWorkRefV1::ChainClaim { claim } => {
                 builder.state.claims.get(&claim).map(|c| (c.accepted_blue_score, c.accepted_block))
             }
+            PalwClaimLocalWorkRefV1::NativeMining39 { .. } => Some((r.accepted_blue_score,r.accepting_block)),
             _ => None,
         })
     };
@@ -382,7 +400,7 @@ pub(super) fn write_claim_local_checkpoint_v1(
         }
     }
     super::palw_kernel_route_fold_v1::ensure_route_header(builder, ctx)?;
-    builder.write_kernel_row_encoded_v1(PALW_CLAIM_LOCAL_TABLE_V1, &palw_claim_local_checkpoint_key_v1(), Some(&checkpoint))?;
+    super::palw_claim_local_descriptor_v2::write(builder,&checkpoint)?;
     // RFC-0023 §4.3/§4.5: past the fence fork choice, settlement and the pruning input read ONE frontier,
     // and it moves only on irreversible claim-local credit: the parent's frontier, raised by this block's
     // irreversible anchor. The shared-prefix / Gate C value computed earlier in this block is superseded
@@ -452,4 +470,58 @@ pub struct PalwClaimLocalCheckpointStatusV1 {
     pub liability_closed: bool,
     /// DAA of the checkpoint's irreversible frontier (effects at or below it are settled).
     pub settled_through_daa: Option<u64>,
+}
+
+/// Native39's claim-local frontier consumer. Caller anchors are compared with
+/// their committed precise work quantum before any checkpoint capability exists.
+pub fn palw_claim_local_native39_frontier_eligible_v1(
+    state:&PalwChainStateV2,params:&PalwStateParamsV2,point:&PalwBlockContextV2,claim:Hash64,
+    anchor:&crate::palw_native39_frontier_v1::Native39FrontierAnchorV1,
+)->Result<bool,PalwStateV2Error>{
+    if !params.claim_local_settlement_active_at(point.daa_score)||anchor.claim!=claim{return Ok(false)}
+    let anchors=crate::palw_native39_frontier_v1::native39_frontier_anchors_v1(state)?;
+    if !anchors.iter().any(|(_,stored)|stored==anchor){return Ok(false)}
+    let Some(checkpoint)=expected_claim_local_checkpoint_v1(state,params,point)?else{return Ok(false)};
+    let validated=checkpoint.validate(point,&checkpoint.records,&checkpoint.liability_state).map_err(checkpoint_err)?;
+    Ok(validated.irreversible_eligible(PalwClaimLocalWorkRefV1::NativeMining39{claim,work:anchor.work,quantum:anchor.quantum}))
+}
+
+/// Namespaced native work retained at this exact checkpoint. A Rule E caller
+/// applies its own DAG/IBD exclusivity predicate to the real accepting point.
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+pub struct PalwClaimLocalNativeFrontierRecordV1{
+    pub work:PalwClaimLocalWorkRefV1,pub accepting_block:Hash64,pub accepted_blue_score:u64,pub accepted_daa:u64,pub irreversible:bool,
+}
+pub fn palw_claim_local_native_frontier_records_v1(state:&PalwChainStateV2,params:&PalwStateParamsV2)
+    ->Result<NativeRetainedV1<Vec<PalwClaimLocalNativeFrontierRecordV1>>,PalwStateV2Error>{
+    use crate::palw_native_resource_v1::TirNativeRequestsV1;
+    let Some(point)=state.last_point else{return Ok(NativeRetainedV1::from_owner_reserved_v1(Vec::new(),None))};
+    let Some(checkpoint)=expected_claim_local_checkpoint_v1(state,params,&point)?else{return Ok(NativeRetainedV1::from_owner_reserved_v1(Vec::new(),None))};
+    let validated=checkpoint.validate(&point,&checkpoint.records,&checkpoint.liability_state).map_err(checkpoint_err)?;
+    let count=checkpoint.records.keys().filter(|w|matches!(w,PalwClaimLocalWorkRefV1::NativeMining39{..})).count();
+    let mut q=TirNativeRequestsV1::new();q.exact_v1::<PalwClaimLocalNativeFrontierRecordV1>(count as u64).map_err(PalwStateV2Error::NativeResource)?;
+    let lease=reserve_native_requests_v1(q.bytes_v1()).map_err(PalwStateV2Error::NativeResource)?;
+    let mut out=Vec::new();out.try_reserve_exact(count).map_err(|_|PalwStateV2Error::NativeResource(crate::palw_native_resource_v1::NativeCoverageV1::unsupported::<PalwClaimLocalNativeFrontierRecordV1>("native Rule E records","allocation refused")))?;
+    for r in checkpoint.records.values(){if !matches!(r.work,PalwClaimLocalWorkRefV1::NativeMining39{..}){continue}
+        out.push(PalwClaimLocalNativeFrontierRecordV1{work:r.work,accepting_block:r.accepting_block,accepted_blue_score:r.accepted_blue_score,accepted_daa:r.accepted_daa,
+            irreversible:r.anchors&&validated.irreversible_eligible(r.work)});
+    }
+    Ok(NativeRetainedV1::from_owner_reserved_v1(out,lease))
+}
+
+/// Rebuild from actual current state and retain both material and graph demand
+/// until the native settlement reader has finished/cache retirement occurs.
+pub fn palw_claim_local_owned_checkpoint_v1(state:&PalwChainStateV2,params:&PalwStateParamsV2,point:&PalwBlockContextV2)
+    ->Result<Option<crate::palw_claim_local_v1::PalwOwnedValidatedClaimCheckpointV1>,PalwStateV2Error>{
+    if params.claim_local_settlement_active_at(point.daa_score){
+        if state.last_point()!=Some(point){return Err(bad("native checkpoint consumer point differs from actual retained state"))}
+        // A row/commitment is not the original admission material. The general
+        // checkpoint may describe missing provenance as held; an EVM lifecycle
+        // capability must refuse rather than assert that loss is preserved.
+        for (id,claim) in &state.claims{
+            if rewards::origin_for(state,params,*id,claim)?.is_none(){return Err(bad("native lifecycle checkpoint lost original admission material"))}
+        }
+    }
+    expected_claim_local_checkpoint_v1(state,params,point)?.map(crate::palw_claim_local_v1::PalwOwnedValidatedClaimCheckpointV1::from_expected_native_v1)
+        .transpose().map_err(checkpoint_err)
 }

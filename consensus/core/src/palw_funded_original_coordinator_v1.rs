@@ -251,6 +251,8 @@ pub struct PalwFundedOriginalPairingV1 {
     envelope: PalwTirFundedOriginalEnvelopeV1,
     claim: Hash64,
     outpoint: TransactionOutpoint,
+    suppliers: Vec<crate::palw_court_family_supplier_v1::SignedFamilySupplierV1>,
+    semantic_table: Option<Vec<u8>>,
 }
 
 impl PalwFundedOriginalPairingV1 {
@@ -259,6 +261,15 @@ impl PalwFundedOriginalPairingV1 {
     }
     pub fn envelope(&self) -> &PalwTirFundedOriginalEnvelopeV1 {
         &self.envelope
+    }
+    pub fn suppliers_v2(&self) -> &[crate::palw_court_family_supplier_v1::SignedFamilySupplierV1] {
+        &self.suppliers
+    }
+    pub(crate) fn semantic_table_owned_v2(&self) -> Option<&Vec<u8>> {
+        self.semantic_table.as_ref()
+    }
+    pub fn semantic_table_v2(&self) -> Option<&[u8]> {
+        self.semantic_table.as_deref()
     }
     /// The literal original's claim the payer's terms bind.
     pub fn claim(&self) -> Hash64 {
@@ -288,12 +299,18 @@ pub fn palw_funded_original_answer_pairing_v1(tx: &Transaction) -> Result<PalwFu
     palw_funded_original_pairing_payload_v1(tx, view.inner)
 }
 pub fn palw_funded_original_pairing_payload_v1(tx: &Transaction, payload: &[u8]) -> Result<PalwFundedOriginalPairingV1, String> {
-    let envelope = PalwTirFundedOriginalEnvelopeV1::decode_v1(payload)?;
+    let (suppliers, semantic_table) = if payload.starts_with(crate::palw_tir_funded_original_envelope_v2::MAGIC) {
+        let decoded = crate::palw_tir_funded_original_envelope_v2::PalwTirFundedOriginalEnvelopeV2::decode_v2(payload)?;
+        (decoded.suppliers, decoded.semantic_table)
+    } else {
+        (Vec::new(), None)
+    };
+    let envelope = crate::palw_tir_funded_original_envelope_v2::decode_funded_original_base_v2(payload)?;
     let original = envelope.original_v1()?;
     let claim = original.original_fp_v1()?.claim_id();
     if claim != envelope.funding.terms.claim || original.pledge.claim != claim {
         return Err("TFO1 terms, pledge and literal original name different claims".into());
     }
     let outpoint = envelope.inspect_carrier_v1(tx)?.outpoint();
-    Ok(PalwFundedOriginalPairingV1 { carrier: tx.clone(), envelope, claim, outpoint })
+    Ok(PalwFundedOriginalPairingV1 { carrier: tx.clone(), envelope, claim, outpoint, suppliers, semantic_table })
 }

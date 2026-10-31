@@ -464,6 +464,13 @@ pub trait ConsensusApi: Send + Sync {
     /// that exists to skip it — and the collateral sits at the producer's own pay address by
     /// construction, usually as the largest output there, so largest-first selection put it at
     /// input 0 of the next `wallet send`. Empty on every network that is not `ConsensusV2`.
+    /// Authoritative must-not-spend set. Implementations without an own checked
+    /// registry reader must report unavailable rather than grant an empty set.
+    fn palw_locked_bond_outpoints_checked_v3(&self)->Result<Vec<crate::tx::TransactionOutpoint>,crate::palw_state_v2::PalwStateV2Error>{
+        Err(crate::palw_state_v2::PalwStateV2Error::NativeContextUnavailable(crate::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1::HistoryUnavailable))
+    }
+    /// Historical diagnostic-only compatibility; do not use to authorize funding.
+    #[deprecated(note="diagnostic-only compatibility; funding must use palw_locked_bond_outpoints_checked_v3")]
     fn palw_locked_bond_outpoints_v2(&self) -> Vec<crate::tx::TransactionOutpoint> {
         Vec::new()
     }
@@ -714,6 +721,14 @@ pub trait ConsensusApi: Send + Sync {
     ) -> Result<bool, String> {
         Err("own-node exact accepted kernel material admission unavailable".into())
     }
+    /// Classified own-node preparation; never an admission/payment authority.
+    fn palw_kernel_material_ingress_checked_v4(
+        &self,
+        _checkpoint: BlockHash,
+        _request: &crate::palw_prospective_kernel_material_v4::PalwProspectiveKernelMaterialRequestV4,
+    ) -> Result<crate::palw_kernel_material_enrollment_v4::PalwKernelMaterialIngressOwnedV4, crate::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4> {
+        Err(crate::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::history_unavailable_v4())
+    }
     fn palw_kernel_material_ingress_v4(
         &self,
         _checkpoint: BlockHash,
@@ -757,6 +772,15 @@ pub trait ConsensusApi: Send + Sync {
             "current native material generation authority unavailable".into(),
         ))
     }
+    /// Classified own-node preparation; never an admission/payment authority.
+    fn palw_kernel_material_replacement_checked_v4(
+        &self,
+        _context: &crate::palw_kernel_material_context_v4::PalwProspectiveKernelMaterialContextV4,
+        _bundle: &crate::palw_prospective_kernel_material_v4::PalwProspectiveKernelBundleV4,
+        _intent: &crate::palw_kernel_material_replacement_v4::PalwKernelMaterialReplacementIntentV4,
+    ) -> Result<crate::palw_kernel_material_replacement_v4::PalwKernelMaterialReplacementOwnedV4, crate::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4> {
+        Err(crate::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::history_unavailable_v4())
+    }
     fn palw_kernel_material_replacement_v4(
         &self,
         _context: &crate::palw_kernel_material_context_v4::PalwProspectiveKernelMaterialContextV4,
@@ -781,6 +805,20 @@ pub trait ConsensusApi: Send + Sync {
         String,
     > {
         Err("own native material query authority unavailable".into())
+    }
+    /// Classified own-node preparation; never an admission/payment authority.
+    fn palw_native_recovery_session_quote_checked_v4(
+        &self,
+        _checkpoint: Option<BlockHash>,
+        _daa: u64,
+        _class: Hash64,
+        _executor: crate::palw_state_v2::PalwBondKeyV2,
+        _providers: Vec<crate::palw_state_v2::PalwBondKeyV2>,
+    ) -> Result<
+        crate::palw_native_resource_v1::NativeRetainedV1<crate::palw_material_session_enrollment_v4::PalwNativeRecoverySessionQuoteV4>,
+        crate::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4,
+    > {
+        Err(crate::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::history_unavailable_v4())
     }
     fn palw_native_recovery_session_quote_v4(
         &self,
@@ -2492,6 +2530,62 @@ pub trait ConsensusApi: Send + Sync {
         self.pruning_point_palw_state(point)
             .and_then(|v| crate::palw_native_resource_v1::NativeRetainedV1::retain_existing_v1(v).ok())
             .map(std::sync::Arc::new)
+    }
+
+    /// Authenticated RFC-0042 material from the current committed claim state.
+    /// The owner retains its native allocation lease; a table is data identity,
+    /// not permission to skip the ordinary signed court and adjudication gates.
+    fn palw_rooted_family_table_v1(
+        &self, _claim: crate::Hash64,
+    ) -> Result<Option<crate::palw_native_resource_v1::NativeRetainedV1<crate::palw_court_rooted_semantic_v1::RootedSemanticTableV1>>,
+                crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
+        Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(
+            crate::palw_native_resource_v1::NativeCoverageV1::unsupported::<crate::palw_state_v2::PalwChainStateV2>(
+                "rooted semantic material reader", "consensus backend has no rooted family material reader")))
+    }
+
+    fn palw_rooted_tokenizer_raw_v1(
+        &self, _claim: crate::Hash64,
+    ) -> Result<Option<crate::palw_native_resource_v1::NativeRetainedV1<Vec<u8>>>,
+                crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
+        Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(
+            crate::palw_native_resource_v1::NativeCoverageV1::unsupported::<crate::palw_state_v2::PalwChainStateV2>(
+                "rooted tokenizer material reader", "consensus backend has no rooted family material reader")))
+    }
+
+    /// Snapshot-bound material, with explicit negotiated complete coverage.
+    /// RFC-0037 source export. The suffix must be the same captured snapshot's
+    /// native envelope; implementations pin and compare its state bytes before
+    /// emitting a generation. The caller owns bounded staging storage.
+    fn write_pruning_point_palw_row_generation_v1(
+        &self,
+        _point: crate::BlockHash,
+        _suffix: &mut dyn std::io::Read,
+        _suffix_len: u64,
+        _writer: &mut dyn std::io::Write,
+    ) -> std::io::Result<Option<u64>> {
+        Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "consensus has no native row-stream exporter"))
+    }
+
+    /// The identical selected-chain-child authority used by the full import.
+    /// None is local unavailability/unsupported header commitment, never a root
+    /// advertised by the serving peer or a header download-order hint.
+    fn pruning_point_palw_row_witness_root_v1(&self, _point: crate::BlockHash) -> Option<crate::Hash64> {
+        None
+    }
+
+    /// Reconstruct and validate without installing. This also rejects a stream
+    /// omitting collections even if its complete native suffix has a valid root.
+    fn palw_validate_row_stream_snapshot_v1(
+        &self,
+        _point: crate::BlockHash,
+        _snapshot: &crate::palw_state_v2::PalwStateCarriageV2,
+        _inventory: &crate::palw_row_stream_v1::PalwRowInventoryV1,
+    ) -> Result<(), crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
+        Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(
+            crate::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
+                "row-stream snapshot validation", "consensus has no full row inventory validator"),
+        ))
     }
 
     /// Snapshot-bound material, with explicit negotiated complete coverage.

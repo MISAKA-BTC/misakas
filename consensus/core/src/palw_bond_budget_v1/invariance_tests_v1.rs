@@ -93,9 +93,10 @@ fn operator_relabelling_permutes_the_answers_and_nothing_else() {
     assert_eq!(original.bond_row(&bond(2)), relabelled.bond_row(&bond(1)));
     assert_eq!(original.bond_row(&bond(3)), relabelled.bond_row(&bond(3)));
     let total = |s: &PalwBondBudgetStateV1| {
-        [1, 2, 3].iter().filter_map(|b| s.bond_row(&bond(*b)).map(|row| row.window)).fold(PalwBudgetVectorV1::ZERO, |a, w| {
-            a.checked_add(w).unwrap()
-        })
+        [1, 2, 3]
+            .iter()
+            .filter_map(|b| s.bond_row(&bond(*b)).map(|row| row.window))
+            .fold(PalwBudgetVectorV1::ZERO, |a, w| a.checked_add(w).unwrap())
     };
     assert_eq!(total(&original), total(&relabelled));
 }

@@ -140,6 +140,8 @@ pub(super) fn prepare_block_objects_v1(
     //     below `palw_permissionless_panel_v1`.
     palw_panel_v3_fold_v1::advance_v1(builder, parent, ctx)?;
     palw_monetary_material_fold_v1::tick(builder, ctx)?;
+    palw_court_family_supplier_fold_v1::tick_family_suppliers_v1(builder,ctx)?;
+    palw_court_family_material_fold_v1::sweep_family_material_v1(builder,ctx)?;
 
     Ok(())
 }

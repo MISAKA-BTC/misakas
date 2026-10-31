@@ -1,0 +1,15 @@
+
+running 1 test
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::family_supplier_ordinary_native_original_and_financial_transitions ... 
+thread 'palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::family_supplier_ordinary_native_original_and_financial_transitions' (661180) panicked at consensus/core/src/palw_tir_public_claim_v1.rs:883:13:
+fixture requires a real native generic arithmetic quote
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::family_supplier_ordinary_native_original_and_financial_transitions
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 5364 filtered out; finished in 0.21s
+

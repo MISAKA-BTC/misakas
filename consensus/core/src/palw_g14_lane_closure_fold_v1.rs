@@ -43,7 +43,7 @@ pub(super) fn lock_kernel_signer_v1(
     if !matches!(record.status, PalwBondStatusV2::Active) {
         return Ok(false);
     }
-    let free = u128::from(record.collateral).saturating_sub(builder.committed_at(seat, ctx.daa_score));
+    let free = u128::from(record.collateral).saturating_sub(builder.committed_at(seat, ctx.daa_score)?);
     if free < u128::from(amount) {
         return Ok(false);
     }
@@ -185,7 +185,7 @@ pub(super) fn charge_exec_root_signers_on_proven_false_v1(
     if covering.is_empty() {
         return Ok(());
     }
-    let conv = builder.open_conviction_v1(&covering, now_daa);
+    let conv = builder.open_conviction_v1(&covering, now_daa)?;
     let g = builder.claim_g_v1(&root_id).map(|gains| gains.g()).unwrap_or(0);
     builder.charge_covering_signers_v1(&conv, root_id, &covering, g)
 }

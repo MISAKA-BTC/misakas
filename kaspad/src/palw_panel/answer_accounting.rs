@@ -51,19 +51,27 @@ impl PalwPanelService {
             .map_err(|_| fail("accepted claim backend unavailable"))?;
         let winning = session
             .with_consensus_api_v1(|api| {
-                let route = api.palw_kernel_route_v1()?;
-                let bytes = route.aux.get(&(
+                let route = api.palw_kernel_route_v1();
+                let bytes = route.as_ref().and_then(|route| route.aux.get(&(
                     kaspa_consensus_core::palw_fp_answer_accounting_v1::PALW_FP_WINNING_CARRIER_TABLE_V1,
                     duty.claim_id.as_bytes().to_vec(),
-                ))?;
-                Hash64::try_from(bytes.as_slice()).ok()
-            })
+                )));
+                decode_winning_carrier_v1(bytes.map(Vec::as_slice))
+            })?
             .map(|transaction_id| PalwFpWinningCarrierIndexV1 { claim_id: duty.claim_id, transaction_id });
         check_accepted_accounting_carriers_v1(duty, &accepted, backend.as_ref(), winning, |hash| {
             session.with_consensus_api_v1(|api| api.get_block_body(hash)).map_err(|_| fail("accepted claim TX body unavailable"))
         })?;
         Ok(())
     }
+}
+
+/// A malformed retained index is a failed read, never permission to fall back
+/// to whichever carrier is the only one in the current acceptance data.
+fn decode_winning_carrier_v1(bytes: Option<&[u8]>) -> Result<Option<Hash64>, NativeDecodeErrorV1<&'static str>> {
+    bytes.map(|bytes| Hash64::try_from(bytes)
+        .map_err(|_| NativeDecodeErrorV1::Decode("malformed accounting winning carrier index")))
+        .transpose()
 }
 
 /// The accepted transaction that settled one claim's answer.
@@ -179,6 +187,16 @@ mod tests {
         subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT,
         tx::{ScriptPublicKey, TransactionOutput},
     };
+    #[test]
+    fn accounting_seat_malformed_winner_index_never_becomes_an_absent_index() {
+        assert_eq!(decode_winning_carrier_v1(None).unwrap(), None);
+        let txid = h(87);
+        assert_eq!(decode_winning_carrier_v1(Some(txid.as_byte_slice())).unwrap(), Some(txid));
+        for len in [0, 63, 65, 128] {
+            assert!(matches!(decode_winning_carrier_v1(Some(&vec![0; len])),
+                Err(NativeDecodeErrorV1::Decode("malformed accounting winning carrier index"))));
+        }
+    }
     #[test]
     fn accounting_canonical_quote_preserves_success_and_defers_only_native_faults() {
         use kaspa_consensus_core::{

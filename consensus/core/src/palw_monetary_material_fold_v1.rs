@@ -180,14 +180,14 @@ fn check_enrollment(
             .ok_or_else(|| refused("provider material capacity overflows"))?;
         if held.len() >= p.max_contracts_per_provider as usize
             || bytes > p.max_bytes_per_provider
-            || u128::from(provider.collateral).saturating_sub(builder.committed_at(&offer.provider, ctx.daa_score))
+            || u128::from(provider.collateral).saturating_sub(builder.committed_at(&offer.provider, ctx.daa_score)?)
                 < u128::from(offer.collateral_sompi)
         {
             return Err(refused("provider has no unused bytes/contracts/collateral capacity"));
         }
         fees = fees.checked_add(offer.prepaid_fee_sompi).ok_or_else(|| refused("material prepaid fee overflows"))?;
     }
-    if u128::from(sponsor.collateral).saturating_sub(builder.committed_at(&t.sponsor, ctx.daa_score)) < u128::from(fees) {
+    if u128::from(sponsor.collateral).saturating_sub(builder.committed_at(&t.sponsor, ctx.daa_score)?) < u128::from(fees) {
         return Err(refused("material service must be prepaid from sponsor-owned free collateral"));
     }
     sponsor.slashed.checked_add(fees).ok_or_else(|| refused("material escrow cumulative debit overflows"))?;
@@ -515,7 +515,7 @@ fn action_inner_v4(
             {
                 return Err(refused("segmented unit is outside its canonical position/part layout"));
             }
-            if u128::from(challenger.collateral).saturating_sub(builder.committed_at(signer, ctx.daa_score))
+            if u128::from(challenger.collateral).saturating_sub(builder.committed_at(signer, ctx.daa_score)?)
                 < u128::from(crate::palw_provider_court_v1::PALW_PROVIDER_CHALLENGE_BOND_SOMPI_V1)
             {
                 return Err(refused("segmented material challenger is unfunded"));
@@ -607,7 +607,7 @@ fn action_inner_v4(
                 builder.extras.prompt_ids_form_v1(),
             )
             .map_err(|e| refused(e.to_string()))?;
-            if u128::from(challenger.collateral).saturating_sub(builder.committed_at(signer, ctx.daa_score))
+            if u128::from(challenger.collateral).saturating_sub(builder.committed_at(signer, ctx.daa_score)?)
                 < u128::from(crate::palw_provider_court_v1::PALW_PROVIDER_CHALLENGE_BOND_SOMPI_V1)
             {
                 return Err(refused("native material challenger is unfunded"));
@@ -705,7 +705,7 @@ fn action_inner_v4(
                 return Err(refused("material challenge is replayed, foreign, stale or outside court capacity"));
             }
             let bond = crate::palw_provider_court_v1::PALW_PROVIDER_CHALLENGE_BOND_SOMPI_V1;
-            if u128::from(challenger.collateral).saturating_sub(builder.committed_at(signer, ctx.daa_score)) < u128::from(bond) {
+            if u128::from(challenger.collateral).saturating_sub(builder.committed_at(signer, ctx.daa_score)?) < u128::from(bond) {
                 return Err(refused("material challenger is unfunded"));
             }
             let claim = builder
@@ -1707,6 +1707,24 @@ mod tests {
             enroll_fee_v2(&mut b, &ctx(2), &fee, None, &e.terms.sponsor).unwrap();
             let funded = b.state.clone();
             if default_at.is_none() {
+                let saved = b.try_checkpoint().unwrap();
+                let payload = b.state.bond(&bond(2)).unwrap().payout_payload;
+                let queue = crate::palw_kernel_route_v1::palw_kernel_payout_key_v1(&payload);
+                b.write_payout(queue, Some(PalwPayoutV2 { payload, amount: u64::MAX })).unwrap();
+                tick(&mut b, &ctx(101)).unwrap();
+                assert_eq!(b.state.material_fee_row_v2(e.id(), bond(2)).unwrap().status, PalwMaterialFeeStatusV2::Held);
+                assert!(!b.state.monetary_material_row_v1(e.terms.root).unwrap().providers[0].fee_queued);
+                assert_eq!(b.state.pending_payouts[&queue].amount, u64::MAX);
+                b.write_payout(queue, None).unwrap();
+                tick(&mut b, &ctx(102)).unwrap();
+                assert_eq!(b.state.pending_payouts[&queue].amount, 7);
+                assert_eq!(b.state.material_fee_row_v2(e.id(), bond(2)).unwrap().status, PalwMaterialFeeStatusV2::ProviderQueued);
+                tick(&mut b, &ctx(103)).unwrap();
+                assert_eq!(b.state.pending_payouts[&queue].amount, 7, "deferred fee queues only once after recovery");
+                b.restore(saved);
+                assert_eq!(b.state, funded);
+            }
+            if default_at.is_none() {
                 let mut row = b.state.monetary_material_row_v1(e.terms.root).unwrap();
                 row.challenges.push(PalwMonetaryMaterialChallengeV1 {
                     provider: bond(2),
@@ -2147,12 +2165,17 @@ fn settle_fee_v2(
     {
         return Ok(());
     }
-    b.state
+    if b.state
         .pending_payouts
         .get(&queue)
         .map_or(0, |r| r.amount)
         .checked_add(fee.amount)
-        .ok_or_else(|| refused("provider fee cash queue overflow"))?;
+        .is_none()
+    {
+        // Existing cash for this recipient can drain in later blocks. Keep the
+        // whole fee held and its obligation unconsumed until it fits.
+        return Ok(());
+    }
     // Pay and refund both use the signed fee-only tranche. The service bond stays a separate leg.
     match b.material_provider_fee_terms_v1(fee.enrollment, fee.provider, ctx.daa_score, fee.amount) {
         Ok(None) => {}

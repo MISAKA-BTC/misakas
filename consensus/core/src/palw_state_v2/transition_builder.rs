@@ -327,7 +327,7 @@ impl<'a> TransitionBuilder<'a> {
         edge: &'static str,
         now_daa: u64,
     ) -> Result<(), PalwStateV2Error> {
-        let room = self.gate_room(&bond, now_daa, PalwRcoreGateV1::Accuser);
+        let room = self.gate_room(&bond, now_daa, PalwRcoreGateV1::Accuser)?;
         if amount > room {
             let collateral = self.state.bonds.get(&bond).map(|record| record.collateral as u128).unwrap_or(0);
             return Err(PalwStateV2Error::AccusationExposureCeiling {
@@ -3196,7 +3196,7 @@ impl<'a> TransitionBuilder<'a> {
             // The producer answered to EOF: no void, no producer record, no session release.
             let g = self.claim_g_v1(&claim_id).map(|g| g.g()).unwrap_or(0);
             let covering: Vec<PalwBondKeyV2> = covering.into_iter().collect();
-            let conv = self.open_conviction_v1(&covering, ctx.daa_score);
+            let conv = self.open_conviction_v1(&covering, ctx.daa_score)?;
             return self.charge_covering_signers_v1(&conv, claim_id, &covering, g);
         }
         let offence = palw_da_offence_id_v1(&producer.0, &claim_id);
@@ -3234,7 +3234,7 @@ impl<'a> TransitionBuilder<'a> {
         let offence_id = palw_da_offence_id_v1(&charge.producer.0, &claim_id);
         let mut opened = vec![charge.producer];
         opened.extend(charge.covering.iter().copied());
-        let conv = self.open_conviction_v1(&opened, now);
+        let conv = self.open_conviction_v1(&opened, now)?;
         let fp_first = self.post_final_fp_g_v1(&claim_id);
         // 1. S4 on each covering signer, lock first.
         self.charge_covering_signers_v1(&conv, claim_id, &charge.covering, charge.g)?;
@@ -3346,11 +3346,13 @@ impl<'a> TransitionBuilder<'a> {
     /// DA lattice included). Taken before any leg runs — in particular before a kind 3 or a DA-7 S4
     /// deletes the signer's lock, which v6 reads (digest §11 #9), and before any debit, so `C₀` is
     /// never a post-debit collateral (#10). A bond named twice is opened once.
-    pub(super) fn open_conviction_v1(&self, bonds: &[PalwBondKeyV2], now_daa: u64) -> PalwConvictionV1 {
+    pub(super) fn open_conviction_v1(&self, bonds: &[PalwBondKeyV2], now_daa: u64) -> Result<PalwConvictionV1,PalwStateV2Error> {
         let raw_depth = self.read().settled_anchor_depth();
         // RFC-0015 §8.3.3 (2026-10-15): the same duty gate as the processor's bond lock — also on every network with an OPV policy.
         let duty_gate =
             self.extras.audit_2026_09_23_active || self.extras.kernel_route.as_ref().is_some_and(|route| route.opv.is_some());
+        let bytes=(bonds.len() as u64).checked_mul(std::mem::size_of::<(PalwBondKeyV2,u64,bool)>() as u64).ok_or(PalwStateV2Error::Overflow("conviction opening inventory"))?;
+        let lease=crate::palw_native_resource_v1::reserve_native_requests_v1(bytes).map_err(PalwStateV2Error::NativeResource)?;
         let mut opened: Vec<(PalwBondKeyV2, u64, bool)> = Vec::with_capacity(bonds.len());
         for bond in bonds {
             if opened.iter().any(|(seen, _, _)| seen == bond) {
@@ -3359,7 +3361,7 @@ impl<'a> TransitionBuilder<'a> {
             let (c0, locked) = match self.state.bonds.get(bond) {
                 Some(record) => (
                     record.collateral,
-                    palw_bond_collateral_is_locked_v6(
+                    palw_bond_collateral_is_locked_checked_v7(
                         &self.state,
                         self.params,
                         bond,
@@ -3368,13 +3370,13 @@ impl<'a> TransitionBuilder<'a> {
                         self.params.withdrawal_delay_daa(),
                         raw_depth,
                         duty_gate,
-                    ),
+                    )?,
                 ),
                 None => (0, false),
             };
             opened.push((*bond, c0, locked));
         }
-        PalwConvictionV1 { now_daa, bonds: opened }
+        Ok(PalwConvictionV1 { now_daa, bonds: crate::palw_native_resource_v1::NativeRetainedV1::from_owner_reserved_v1(opened,lease) })
     }
 
     /// **R-2: what a conviction collected from `counted`** — Σ over the bonds it opened with their
@@ -3778,7 +3780,7 @@ impl<'a> TransitionBuilder<'a> {
             return Ok(());
         }
         let producer = claim.bond;
-        let conv = self.open_conviction_v1(&[producer], now);
+        let conv = self.open_conviction_v1(&[producer], now)?;
         let g = self.claim_g_v1(&claim_id).map(|gains| gains.g()).unwrap_or(0);
         let live = self.claim_is_live_before_final_v1(&claim_id);
         let fp_first = self.post_final_fp_g_v1(&claim_id);
@@ -3862,19 +3864,19 @@ impl<'a> TransitionBuilder<'a> {
 
     /// **ADR-0152 A-1 on this fold's clocks**: [`palw_bond_committed_v1`] at `now_daa` and the
     /// escaped depth every lock of this fold is read at.
-    pub(super) fn committed_at(&self, bond: &PalwBondKeyV2, now_daa: u64) -> u128 {
-        palw_bond_committed_v1(&self.state, bond, now_daa, self.second_clock_depth(now_daa), self.params.window_court)
+    pub(super) fn committed_at(&self, bond: &PalwBondKeyV2, now_daa: u64) -> Result<u128, PalwStateV2Error> {
+        palw_bond_committed_checked_v2(&self.state, bond, now_daa, self.second_clock_depth(now_daa), self.params.window_court)
     }
 
     /// **The one invariant's room on this fold's clocks** ([`palw_rcore_gate_room_of_v1`], the S
     /// review's M1): a work gate's room is the 500‰ ceiling less `committed` and never past
     /// `collateral − committed − accuser`; an accuser gate's is the free half less the accuser ledger.
-    pub(super) fn gate_room(&self, bond: &PalwBondKeyV2, now_daa: u64, gate: PalwRcoreGateV1) -> u128 {
-        let Some(record) = self.state.bonds.get(bond) else { return 0 };
-        palw_rcore_gate_room_split_of_v1(
+    pub(super) fn gate_room(&self, bond: &PalwBondKeyV2, now_daa: u64, gate: PalwRcoreGateV1) -> Result<u128, PalwStateV2Error> {
+        let Some(record) = self.state.bonds.get(bond) else { return Ok(0) };
+        Ok(palw_rcore_gate_room_split_of_v1(
             record.collateral,
             self.params.fp_max_exposure_ratio_permille,
-            self.committed_at(bond, now_daa),
+            self.committed_at(bond, now_daa)?,
             // Lane V02: past `palw_final_lock_full_collateral` (at this gate's DAA) the resolved locks
             // leave the work ceiling and stay in the 100% term; 0 below it.
             palw_bond_off_ceiling_v1(&self.state, self.params, bond, now_daa, self.second_clock_depth(now_daa)),
@@ -3883,7 +3885,7 @@ impl<'a> TransitionBuilder<'a> {
             // ADR-0152 §4-ter C4 (the review's F7): a held session at its charge, not its `reserved`.
             self.read().accuser_ledger_v1(bond, now_daa),
             gate,
-        )
+        ))
     }
 
     /// **ADR-0152 §4-ter C4: what a held dissection's losing challenger is charged, before the
@@ -3922,7 +3924,7 @@ impl<'a> TransitionBuilder<'a> {
         claim: &PalwClaimStateV2,
         carried: &[(crate::palw_panel_v2::PalwSeatReceiptV2, Option<crate::palw_verification_v2::PalwSegmentMaskV2>)],
         now_daa: u64,
-    ) -> PalwRcoreBackedSetV1 {
+    ) -> Result<PalwRcoreBackedSetV1, PalwStateV2Error> {
         let seats: Vec<PalwBondKeyV2> =
             self.state.panels.get(&claim_id).map(|panel| panel.seats.iter().map(|seat| seat.bond).collect()).unwrap_or_default();
         let segments = crate::palw_verification_v2::palw_segment_count_v2(seats.len().min(u16::MAX as usize) as u16);
@@ -3941,17 +3943,16 @@ impl<'a> TransitionBuilder<'a> {
         };
         // ADR-0160 lane liab (AG-3): a frozen seat's `Valid` backs nothing (the map is empty below
         // `Params::palw_capacity_aggregate_liability`).
-        let backed_at = |lock: u128| -> Vec<(PalwBondKeyV2, crate::palw_verification_v2::PalwSegmentMaskV2)> {
-            valid
-                .iter()
-                .filter(|(bond, _)| {
-                    !crate::palw_aggregate_liability_v1::palw_bond_is_frozen_v1(&self.state, bond)
-                        && (self.state.slashable_locks.contains_key(&(*bond, claim_id))
-                            || lock.saturating_sub(palw_seat_duty_of_v1(&self.state, &claim_id, bond))
-                                <= self.gate_room(bond, now_daa, PalwRcoreGateV1::Work))
-                })
-                .copied()
-                .collect()
+        let backed_at = |lock: u128| -> Result<Vec<(PalwBondKeyV2, crate::palw_verification_v2::PalwSegmentMaskV2)>, PalwStateV2Error> {
+            let mut backed = Vec::new();
+            for (bond, mask) in &valid {
+                if crate::palw_aggregate_liability_v1::palw_bond_is_frozen_v1(&self.state, bond) { continue; }
+                if self.state.slashable_locks.contains_key(&(*bond, claim_id))
+                    || lock.saturating_sub(palw_seat_duty_of_v1(&self.state, &claim_id, bond))
+                        <= self.gate_room(bond, now_daa, PalwRcoreGateV1::Work)?
+                { backed.push((*bond, *mask)); }
+            }
+            Ok(backed)
         };
         // `G_res` and `s` are read ONCE, and every price of this set is computed from them (the value
         // the licence records: the S-4 review's G freeze) — `PalwFoldReadV1::rcore_lock`, spelled
@@ -3968,12 +3969,12 @@ impl<'a> TransitionBuilder<'a> {
             )
         };
         let first = recount(&valid).max(PALW_RCORE_FINAL_BASIS_K_V1);
-        let mut backed = backed_at(lock_at(first));
+        let mut backed = backed_at(lock_at(first))?;
         if recount(&backed).max(PALW_RCORE_FINAL_BASIS_K_V1) < first {
-            backed = backed_at(lock_at(PALW_RCORE_FINAL_BASIS_K_V1));
+            backed = backed_at(lock_at(PALW_RCORE_FINAL_BASIS_K_V1))?;
         }
         let basis_k = recount(&backed);
-        PalwRcoreBackedSetV1 { lock: lock_at(basis_k), basis_k, segments, backed, g_res }
+        Ok(PalwRcoreBackedSetV1 { lock: lock_at(basis_k), basis_k, segments, backed, g_res })
     }
 
     /// **ADR-0152 S-SPEC §3.4: one licence past `palw_rcore_plus`, through any of the three doors.**
@@ -4002,7 +4003,7 @@ impl<'a> TransitionBuilder<'a> {
             &palw_seat_verdicts_of_v2(&all),
             self.extras.admission_independence_daa,
         )?;
-        let set = self.rcore_backed_set(claim_id, claim, carried, now_daa);
+        let set = self.rcore_backed_set(claim_id, claim, carried, now_daa)?;
         let reads: Vec<(crate::palw_panel_v2::PalwSeatReceiptV2, Option<crate::palw_verification_v2::PalwSegmentMaskV2>)> = carried
             .iter()
             .filter(|(receipt, _)| {
@@ -4332,10 +4333,10 @@ impl<'a> TransitionBuilder<'a> {
         Ok(())
     }
 
-    pub(super) fn slashable_available(&self, bond: &PalwBondKeyV2, now_daa: u64) -> u128 {
+    pub(super) fn slashable_available(&self, bond: &PalwBondKeyV2, now_daa: u64) -> Result<u128, PalwStateV2Error> {
         // Their one expression (`palw_slashable_available_v1`, route-matrix #3), under the per-lock
         // liveness and the escaped depth of the 2026-09-24 DoS audit, so the draw and the bind agree.
-        self.state.palw_slashable_available_v1(bond, now_daa, self.second_clock_depth(now_daa), self.params.window_court)
+        self.state.palw_slashable_available_checked_v2(bond, now_daa, self.second_clock_depth(now_daa), self.params.window_court)
     }
 
     /// [`palw_false_valid_lock_slashable_v1`] on this fold's inputs (the escaped depth the bind reads).
@@ -4370,7 +4371,7 @@ impl<'a> TransitionBuilder<'a> {
         if self.state.slashable_locks.contains_key(&(seat, claim_id)) {
             return Ok(());
         }
-        let available = self.slashable_available(&seat, now_daa);
+        let available = self.slashable_available(&seat, now_daa)?;
         if available < required {
             return Err(PalwStateV2Error::SeatValidLockRefused { seat, claim: claim_id, required, available });
         }
@@ -4416,16 +4417,18 @@ impl<'a> TransitionBuilder<'a> {
         receipts: &[crate::palw_panel_v2::PalwSeatReceiptV2],
         now_daa: u64,
         door: PalwLicenceDoorV1,
-    ) -> bool {
+    ) -> Result<bool, PalwStateV2Error> {
         if !self.extras.objective_offence_at(now_daa) {
-            return true;
+            return Ok(true);
         }
         let prices = self.door_lock_prices(claim_id, claim, door);
-        receipts.iter().all(|receipt| {
-            !matches!(receipt.verdict, crate::palw_panel_v2::PalwReceiptVerdictV2::Valid)
-                || self.state.slashable_locks.contains_key(&(receipt.seat_bond, claim_id))
-                || self.slashable_available(&receipt.seat_bond, now_daa) >= prices.of(&receipt.seat_bond)
-        })
+        for receipt in receipts {
+            if matches!(receipt.verdict, crate::palw_panel_v2::PalwReceiptVerdictV2::Valid)
+                && !self.state.slashable_locks.contains_key(&(receipt.seat_bond, claim_id))
+                && self.slashable_available(&receipt.seat_bond, now_daa)? < prices.of(&receipt.seat_bond)
+            { return Ok(false); }
+        }
+        Ok(true)
     }
 
     /// Every `Valid` signer of `receipts` locks the price of the `door` they license through
@@ -4477,7 +4480,7 @@ impl<'a> TransitionBuilder<'a> {
                 // map is empty below the fence).
                 let may_work = self.state.bonds.get(seat).is_some_and(|record| palw_bond_may_take_work_v2(record, floor))
                     && !crate::palw_aggregate_liability_v1::palw_bond_is_frozen_v1(&self.state, seat);
-                let room = self.gate_room(seat, now_daa, PalwRcoreGateV1::Work);
+                let room = self.gate_room(seat, now_daa, PalwRcoreGateV1::Work)?;
                 if !may_work || room < prices.eligibility {
                     return Err(PalwStateV2Error::SeatValidLockRefused {
                         seat: *seat,
@@ -4491,7 +4494,7 @@ impl<'a> TransitionBuilder<'a> {
         }
         let required = self.panel_valid_lock_required(claim);
         for seat in seats {
-            let available = self.slashable_available(&seat.bond, now_daa);
+            let available = self.slashable_available(&seat.bond, now_daa)?;
             if available < required {
                 return Err(PalwStateV2Error::SeatValidLockRefused { seat: seat.bond, claim: claim_id, required, available });
             }
@@ -4923,7 +4926,7 @@ impl<'a> TransitionBuilder<'a> {
         let class_id = borsh::from_slice::<crate::palw_carriage::PalwEquivocationCarriageV1>(evidence)
             .map(|carriage| carriage.certificate.job_context.shape_profile_id)
             .unwrap_or_default();
-        let conv = self.open_conviction_v1(&[accused], now);
+        let conv = self.open_conviction_v1(&[accused], now)?;
         let nominal = palw_rcore_eq_cap_v1(conv.c0(&accused), self.read().eq_cap_basis_v1(ctx, &class_id));
         self.slash_bond(accused, nominal)?;
         self.close_conviction_v1(
@@ -5148,7 +5151,7 @@ impl<'a> TransitionBuilder<'a> {
                     .into(),
             ));
         }
-        let conv = self.open_conviction_v1(&[accused, producer], now);
+        let conv = self.open_conviction_v1(&[accused, producer], now)?;
         let gains = self.claim_g_v1(&claim_id).unwrap_or_default();
         let live = self.claim_is_live_before_final_v1(&claim_id);
         let fp_first = self.post_final_fp_g_v1(&claim_id);
@@ -5504,7 +5507,7 @@ impl<'a> TransitionBuilder<'a> {
         // debit; the reward on the consumed evidence (`X` = 0: the producer's own tiers).
         if self.params.rcore_plus_active_at(ctx.daa_score) {
             let now = ctx.daa_score;
-            let conv = self.open_conviction_v1(&[accused], now);
+            let conv = self.open_conviction_v1(&[accused], now)?;
             let g = self.claim_g_v1(&claim_id).map(|gains| gains.g()).unwrap_or(0);
             let live = self.claim_is_live_before_final_v1(&claim_id);
             let fp_first = self.post_final_fp_g_v1(&claim_id);
@@ -5605,7 +5608,7 @@ impl<'a> TransitionBuilder<'a> {
             return Ok(());
         }
         let now = ctx.daa_score;
-        let conv = self.open_conviction_v1(&[accused], now);
+        let conv = self.open_conviction_v1(&[accused], now)?;
         let g = self.claim_g_v1(&claim_id).map(|gains| gains.g()).unwrap_or(0);
         let live = self.claim_is_live_before_final_v1(&claim_id);
         let fp_first = self.post_final_fp_g_v1(&claim_id);
@@ -8301,7 +8304,7 @@ impl<'a> TransitionBuilder<'a> {
             for receipt in receipts {
                 let seat = receipt.seat_bond;
                 let top_up = lock.saturating_sub(palw_seat_duty_of_v1(&self.state, &claim_id, &seat));
-                let room = self.gate_room(&seat, ctx.daa_score, PalwRcoreGateV1::Work);
+                let room = self.gate_room(&seat, ctx.daa_score, PalwRcoreGateV1::Work)?;
                 if !self.state.slashable_locks.contains_key(&(seat, claim_id)) && room < top_up {
                     return Err(PalwStateV2Error::SeatValidLockRefused { seat, claim: claim_id, required: top_up, available: room });
                 }
@@ -8528,18 +8531,27 @@ impl<'a> TransitionBuilder<'a> {
         // prerequisite of the fence, so past it this always prices.
         let locks = self.extras.objective_offence_at(now);
         // ADR-0160 lane liab (AG-3): and never from a frozen seat (the map is empty below the fence).
-        let backs = |builder: &Self, seat: &PalwBondKeyV2, price: u128| {
-            !crate::palw_aggregate_liability_v1::palw_bond_is_frozen_v1(&builder.state, seat)
-                && (!locks || builder.slashable_available(seat, now) >= price)
+        let backs = |builder: &Self, seat: &PalwBondKeyV2, price: u128| -> Result<bool, PalwStateV2Error> {
+            Ok(!crate::palw_aggregate_liability_v1::palw_bond_is_frozen_v1(&builder.state, seat)
+                && (!locks || builder.slashable_available(seat, now)? >= price))
+        };
+        let retain_backed = |set: &mut Vec<(usize, &crate::palw_panel_v2::PalwSeatReceiptV3)>, price: u128| -> Result<(), PalwStateV2Error> {
+            let mut write = 0;
+            for read in 0..set.len() {
+                let entry = set[read];
+                if backs(self, &entry.1.receipt.seat_bond, price)? { set[write] = entry; write += 1; }
+            }
+            set.truncate(write);
+            Ok(())
         };
         let k0 = recount(&valid);
         let first = self.read().rcore_lock_required_v1(claim, k0);
         let mut backed = valid.clone();
-        backed.retain(|(_, signed)| backs(self, &signed.receipt.seat_bond, first));
+        retain_backed(&mut backed, first)?;
         let mut k = recount(&backed);
         if k.max(PALW_RCORE_FINAL_BASIS_K_V1) < k0.max(PALW_RCORE_FINAL_BASIS_K_V1) {
             let second = self.read().rcore_lock_required_v1(claim, k);
-            backed.retain(|(_, signed)| backs(self, &signed.receipt.seat_bond, second));
+            retain_backed(&mut backed, second)?;
             k = recount(&backed);
         }
         let price = self.read().rcore_lock_required_v1(claim, k);

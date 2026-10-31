@@ -479,7 +479,7 @@ fn row_stream_generation_bounded_v1(payload: &KaspadMessagePayload) -> bool {
         KaspadMessagePayload::PruningPointPalwRowStream(message) => {
             message.generation == kaspa_consensus_core::palw_row_stream_v1::PALW_ROW_STREAM_CURRENT_GENERATION_V1
                 && message.byte_len == message.generation_bytes.len() as u64
-                && message.generation_bytes.len() <= kaspa_consensus_core::palw_row_stream_v1::PALW_ROW_STREAM_MAX_GENERATION_BYTES_V1
+                && message.generation_bytes.len() <= 4 << 20
                 && message.pruning_point_hash.as_ref().is_some_and(|hash| hash.bytes.len() == 64)
         }
         _ => true,

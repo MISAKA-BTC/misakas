@@ -698,6 +698,7 @@ impl Params {
             self.palw_public_evidence_reward_v1 = None;
         }
         // Compute-claim audit CX-01/CX-02's answer accounting, likewise.
+        if self.palw_court_family_supplier_v1 == Some(ForkActivation::never()) { self.palw_court_family_supplier_v1 = None; }
         if self.palw_fp_answer_accounting_v1 == Some(ForkActivation::never()) {
             self.palw_fp_answer_accounting_v1 = None;
         }
@@ -1265,6 +1266,7 @@ impl Params {
             palw_court_model_scope_v1,
             palw_public_evidence_reward_v1,
             palw_fp_answer_accounting_v1,
+            palw_court_family_supplier_v1,
             palw_claim_hard_deadline_v1,
             palw_cell_coverage_closure_v1,
             palw_g14_route_required_v1,
@@ -1613,6 +1615,7 @@ impl Params {
             ("palw_court_model_scope_v1", *palw_court_model_scope_v1),
             ("palw_public_evidence_reward_v1", *palw_public_evidence_reward_v1),
             ("palw_fp_answer_accounting_v1", *palw_fp_answer_accounting_v1),
+            ("palw_court_family_supplier_v1", *palw_court_family_supplier_v1),
             ("palw_claim_hard_deadline_v1", palw_claim_hard_deadline_v1.as_ref().map(|f| f.activation)),
             ("palw_cell_coverage_closure_v1", *palw_cell_coverage_closure_v1),
             ("palw_g14_route_required_v1", *palw_g14_route_required_v1),
@@ -2200,6 +2203,7 @@ impl Params {
             h.write(at.daa_score().to_le_bytes());
         }
         // Compute-claim audit CX-01/CX-02's answer accounting, NAMED likewise. Some-only.
+        if let Some(at) = self.palw_court_family_supplier_v1.filter(|f| *f != ForkActivation::never()) { h.write(b"palw_court_family_supplier_v1"); h.write(at.daa_score().to_le_bytes()); for profile in crate::palw_state_v2::family_supplier_profiles_v1().expect("fixed native family profiles"){h.write(profile.as_byte_slice());} }
         if let Some(at) = self.palw_fp_answer_accounting_v1.filter(|f| *f != ForkActivation::never()) {
             h.write(b"palw_fp_answer_accounting_v1");
             h.write(at.daa_score().to_le_bytes());
@@ -3055,6 +3059,7 @@ impl Params {
             palw_court_model_scope_v1,
             palw_public_evidence_reward_v1,
             palw_fp_answer_accounting_v1,
+            palw_court_family_supplier_v1,
             palw_claim_hard_deadline_v1,
             palw_cell_coverage_closure_v1,
             palw_g14_route_required_v1,
@@ -4031,6 +4036,7 @@ impl Params {
         if let Some(activation) = palw_public_evidence_reward_v1.as_mut() {
             fork(activation, visit);
         }
+        if let Some(activation) = palw_court_family_supplier_v1.as_mut().filter(|f| **f != ForkActivation::never()) { fork(activation, visit); }
         if let Some(activation) = palw_fp_answer_accounting_v1.as_mut() {
             fork(activation, visit);
         }
@@ -4662,6 +4668,7 @@ impl Params {
             palw_court_model_scope_v1,
             palw_public_evidence_reward_v1,
             palw_fp_answer_accounting_v1,
+            palw_court_family_supplier_v1,
             palw_claim_hard_deadline_v1,
             palw_cell_coverage_closure_v1,
             palw_g14_route_required_v1,
@@ -5785,6 +5792,7 @@ impl Params {
             h.write(b"palw_public_evidence_reward_v1");
             h.write(activation.daa_score().to_le_bytes());
         }
+        if let Some(activation) = palw_court_family_supplier_v1.filter(|f| *f != ForkActivation::never()) { h.write(b"palw_court_family_supplier_v1"); h.write(activation.daa_score().to_le_bytes()); for profile in crate::palw_state_v2::family_supplier_profiles_v1().expect("fixed native family profiles"){h.write(profile.as_byte_slice());} }
         if let Some(activation) = palw_fp_answer_accounting_v1.filter(|f| *f != ForkActivation::never()) {
             h.write(b"palw_fp_answer_accounting_v1");
             h.write(activation.daa_score().to_le_bytes());

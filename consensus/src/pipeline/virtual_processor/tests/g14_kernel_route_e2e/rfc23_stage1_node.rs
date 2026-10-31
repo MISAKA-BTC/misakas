@@ -83,9 +83,8 @@ async fn rfc23s2_node_checkpoint_survives_restart_and_genesis_replay_across_the_
     net.beat_to(160).await;
     let read_checkpoint = |net: &Net| {
         let state = net.chain.tip_state().1;
-        let route = state.kernel_route_state_v1().expect("active kernel route");
-        route.aux_row::<PalwClaimLocalCheckpointV1>(PALW_CLAIM_LOCAL_TABLE_V1, &palw_claim_local_checkpoint_key_v1())
-            .expect("the real node wrote its claim-local checkpoint")
+        (*kaspa_consensus_core::palw_state_v2::palw_claim_local_checkpoint_snapshot_v2(&state).unwrap()
+            .expect("the real node wrote a complete resolved claim-local checkpoint")).clone()
     };
     let checkpoint = read_checkpoint(&net);
     assert!(checkpoint.point.daa_score >= 20);

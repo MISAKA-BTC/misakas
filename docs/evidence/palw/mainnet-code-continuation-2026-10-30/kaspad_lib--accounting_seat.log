@@ -1,0 +1,11 @@
+
+running 6 tests
+test palw_panel::answer_accounting::tests::accounting_seat_malformed_winner_index_never_becomes_an_absent_index ... ok
+test palw_panel::answer_accounting::tests::accounting_seat_never_substitutes_legacy_served_answer_material ... ok
+test palw_panel::answer_accounting::tests::accounting_seat_refuses_ambiguous_carriers_and_stale_accepted_indices ... ok
+test palw_panel::answer_accounting::tests::accounting_seat_rejects_changed_answer_job_pin_and_wrong_roots ... ok
+test palw_panel::answer_accounting::tests::accounting_seat_skips_unrelated_undecodable_original_before_target ... ok
+test palw_panel::answer_accounting::tests::accounting_seat_uses_actual_accepted_carrier_and_own_backend_context ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 1008 filtered out; finished in 0.98s
+

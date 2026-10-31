@@ -407,6 +407,34 @@ impl VirtualStateProcessor {
         ).map(|(objects, ..)| objects.len())
     }
 
+    /// The stored-transaction ingress and admission boundary, without constructing
+    /// `PalwCarriedObjectV1` in a fixture. The caller supplies the real UTXO walk's
+    /// acceptance entries and fee maps; extraction reads literal transactions from
+    /// this node's block-body store. This wrapper supplies neither signatures nor
+    /// admission facts and does not assert that the containing block was selected.
+    #[cfg(test)]
+    pub(in crate::pipeline::virtual_processor) fn palw_v2_fold_stored_accepted_transactions_for_tests(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        acceptance: &AcceptanceData,
+        raw_fees: &std::collections::HashMap<TransactionId, u64>,
+        rent_fees: &std::collections::HashMap<TransactionId, u64>,
+    ) -> Result<(
+        Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>,
+        kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1,
+        usize,
+    ), PalwLocalTransitionFaultV1> {
+        let params = self.palw_state_params_v2.as_ref().expect("PALW V2 test network");
+        let carried = self.palw_v2_objects_of_block(
+            acceptance, state, point.block, point.daa_score, raw_fees, rent_fees,
+        )?;
+        let (objects, folded, _, _, funded, _, _, _) = self.palw_v2_accepted_objects_and_originals(
+            state, params, point, carried, point.block, None, &[], &[],
+        )?;
+        Ok((objects, folded, funded.len()))
+    }
+
     /// The same filter, with the state it folded to — ADR-0064's half. The bootstrap lookup reads
     /// bonds out of THIS, so a test that only saw the accepted objects could not tell the fixed
     /// behaviour ("the registry the transition will have") from the one it replaced ("the first
@@ -1910,12 +1938,13 @@ impl VirtualStateProcessor {
             // These are NEW paid allocations, independent of the old optional
             // certification-rent fence. The actual outer UTXO fee must cover the
             // original full plan or this owner's own acquisition/work contract.
-            match self.palw_tir_public_minimum_rent_v1(&folded, state_params, point, &object, &tir_public_originals) {
+            match self.palw_tir_public_minimum_rent_v1(&folded, state_params, point, &object, &tir_public_originals, &tir_funded_originals) {
                 Ok(Some(owed)) if carrier_fee == PALW_RENT_UNPRICED || carrier_fee < owed => {
                     info!("Block {block}: a TIR public allocation was dropped: carrier rent available after bond burn {carrier_fee} is not a paid allocation of {owed}");
                     continue;
                 }
-                Err(why) => {
+                Err(kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Resource(why)) => return Err(why.into()),
+                Err(kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Decode(why)) => {
                     info!("Block {block}: a TIR public allocation was dropped before admission: {why}");
                     continue;
                 }
@@ -2232,6 +2261,8 @@ impl VirtualStateProcessor {
             // Compute-claim audit CX-01/CX-02: the answer accounting's own fence. Its answers (`fp_claim_answers`) are filled by native
             // ingress of the `FPA1` carriage — an arming prerequisite (ADR-0205 draft); `validate_palw_v2` refuses arming until it is.
             fp_answer_accounting_active: self.palw_fp_answer_accounting_v1.is_some_and(|f| f.is_active(daa_score)),
+            family_supplier_active: self.palw_court_family_supplier_v1.is_some_and(|f| f.is_active(daa_score)),
+            family_original_table_inventories_v2: Default::default(),
             fp_claim_answers: Default::default(),
             fp_winning_carriers: Default::default(),
             carrier_input_spends: Default::default(),
@@ -2299,6 +2330,10 @@ impl VirtualStateProcessor {
                     maturity_daa: self.palw_exec_quantum_maturity_daa,
                 }
             }),
+            native_fact_ruleset:Some(self.palw_native_ruleset_id),
+            native_fact_quantum_maturity_daa:Some(self.palw_exec_quantum_maturity_daa),
+            native39_settlement_checkpoint:self.palw_dns_retirement.filter(|f|f.activation.is_active(daa_score)).map(|retirement|
+                kaspa_consensus_core::palw_native39_settlement_checkpoint_v1::Native39SettlementFoldV1{retirement,ruleset:self.palw_native_ruleset_id,evm_activation_daa:self.evm_activation_daa_score,fork_choice_commitment:self.palw_fork_choice_commitment_v1}),
             round_permit_uses: Vec::new(),
             round_fee_incomes: Vec::new(),
             funded_escrow_settlements: Vec::new(),
@@ -2522,41 +2557,51 @@ impl VirtualStateProcessor {
         point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
         object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
         originals: &std::collections::BTreeMap<kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_tir_public_fp_envelope_v1::PalwTirPublicFpEnvelopeV1>,
-    ) -> Result<Option<u64>, String> {
+        funded: &std::collections::BTreeMap<kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_funded_original_coordinator_v1::PalwFundedOriginalPairingV1>,
+    ) -> Result<Option<u64>, kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
+        use kaspa_consensus_core::palw_native_resource_v1::{NativeDecodeErrorV1 as E, NativeRetainedV1};
         if !self.palw_tir_public_conviction_v1.is_some_and(|f| f.is_active(point.daa_score)) {
-            if !originals.is_empty() { return Err("original TIR rent is below its owning fence".into()); }
+            if !originals.is_empty() { return Err(E::Decode("original TIR rent is below its owning fence".into())); }
             return Ok(None);
         }
         if let Some(envelope) = originals.values().next() {
-            if originals.len() != 1 { return Err("one FP carrier cannot fund multiple original TIR allocations".into()); }
+            if originals.len() != 1 { return Err(E::Decode("one FP carrier cannot fund multiple original TIR allocations".into())); }
             let mut extras = self.palw_transition_extras_for_objects(state, point, std::slice::from_ref(object)).into_legacy_extras();
-            extras.tir_public_originals = originals.clone();
+            let (original_copy,_original_ticket)=NativeRetainedV1::try_from_clone_v1(originals).map_err(E::Resource)?.into_parts_v1();
+            extras.tir_public_originals = original_copy;
+            // Keep the same actual literal TFO2 pairing through rent preflight;
+            // exact table geometry cannot be inferred from its TFP1 view.
+            let (funded_copy,_funded_ticket)=NativeRetainedV1::try_from_clone_v1(funded).map_err(E::Resource)?.into_parts_v1();
+            extras.tir_funded_originals = funded_copy;
             // G14 R4: a frame with a semantic stage is quoted with its own TFP1-carried history pledge (the fold checks it the same way).
             if let Some(history) = &envelope.history_pledge {
                 extras.history_custody_pledges.insert(history.claim, history.clone());
             }
             let plan = kaspa_consensus_core::palw_state_v2::palw_tir_public_preclaim_quote_v1(
                 state, params, point, &extras, object, envelope,
-            ).map_err(|e| e.to_string())?;
+            ).map_err(|e|match e {
+                kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeResource(r)=>E::Resource(r),
+                e=>E::Decode(e.to_string()),
+            })?;
             return Ok(Some(plan.terms.plan.rent_sompi));
         }
         if let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::TirPublicControlV1 { control } = object {
             use kaspa_consensus_core::palw_tir_public_carriage_v1::{PalwTirPublicControlActionV1 as A, PalwTirPublicControlTargetV1 as T};
             if matches!((&control.target, &control.action), (T::OwnerOpen { .. }, A::Open)) {
                 let frame = kaspa_consensus_core::palw_tir_public_claim_v1::palw_tir_public_claim_v1(state, control.claim)
-                    .ok_or("owner Open has no paid original TIR frame")?;
+                    .ok_or_else(||E::Decode("owner Open has no paid original TIR frame".into()))?;
                 if frame.plan_v1().allocation_id != control.allocation_id || frame.plan_v1().source_id != control.source_id {
-                    return Err("owner rent substitutes the original allocation or source".into());
+                    return Err(E::Decode("owner rent substitutes the original allocation or source".into()));
                 }
-                return Ok(Some(frame.plan_v1().owner_terms_v1()?.plan.rent_sompi));
+                return Ok(Some(frame.plan_v1().owner_terms_v1().map_err(E::Decode)?.plan.rent_sompi));
             }
             if matches!((&control.target, &control.action), (T::Conviction, A::Convict(_)))
                 || matches!((&control.target, &control.action), (T::ConvictionWitness, A::WitnessPart(part)) if part.offset == 0)
             {
                 let frame = kaspa_consensus_core::palw_tir_public_claim_v1::palw_tir_public_claim_v1(state, control.claim)
-                    .ok_or("public conviction has no paid original TIR frame")?;
+                    .ok_or_else(||E::Decode("public conviction has no paid original TIR frame".into()))?;
                 if frame.plan_v1().allocation_id != control.allocation_id || frame.plan_v1().source_id != control.source_id {
-                    return Err("conviction rent substitutes the original allocation or source".into());
+                    return Err(E::Decode("conviction rent substitutes the original allocation or source".into()));
                 }
                 return Ok(Some(frame.conviction_rent_v1()));
             }
@@ -2657,7 +2702,7 @@ impl VirtualStateProcessor {
             let accounting = tx.subnetwork_id == kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT && tx.payload.starts_with(b"FPA1");
             let answer_view = accounting.then(|| kaspa_consensus_core::palw_fp_answer_accounting_v1::palw_fp_answer_envelope_view_v1(&tx.payload, u32::MAX as usize)).flatten();
             if accounting && (!answer_armed || answer_view.is_none()) { return false; }
-            let funded_answer = answer_view.is_some_and(|view| view.inner.starts_with(b"TFO1"));
+            let funded_answer = answer_view.is_some_and(|view| (view.inner.starts_with(b"TFO1") || view.inner.starts_with(b"TFO2")));
             if !funded_answer && !kaspa_consensus_core::palw_tir_funded_original_envelope_v1::is_funded_original_carrier_v1(tx) {
                 return true;
             }
@@ -3526,15 +3571,24 @@ impl VirtualStateProcessor {
         now: u64,
         request: &kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwProspectiveKernelMaterialRequestV4,
     ) -> Result<kaspa_consensus_core::palw_kernel_material_enrollment_v4::PalwKernelMaterialIngressOwnedV4, String> {
+        self.palw_kernel_material_ingress_checked_v4_impl(state, checkpoint, now, request).map_err(|error|error.to_string())
+    }
+    pub(crate) fn palw_kernel_material_ingress_checked_v4_impl(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        checkpoint: BlockHash,
+        now: u64,
+        request: &kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwProspectiveKernelMaterialRequestV4,
+    ) -> Result<kaspa_consensus_core::palw_kernel_material_enrollment_v4::PalwKernelMaterialIngressOwnedV4, kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4> {
         let params = self.palw_state_params_v2.as_ref().ok_or("kernel ingress state policy absent")?;
         if params.material_release_recovery_at_v2(now).is_none() {
             return Err("kernel ingress requires new signed recovery fence".into());
         }
         let policy = params.monetary_material_at_v1(now).ok_or("kernel ingress monetary fence dormant")?;
-        state.assert_monetary_material_consistency_v1(params).map_err(|e| e.to_string())?;
-        state.assert_material_release_recovery_consistency_v2(params).map_err(|e| e.to_string())?;
+        state.assert_monetary_material_consistency_v1(params).map_err(kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::from)?;
+        state.assert_material_release_recovery_consistency_v2(params).map_err(kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::from)?;
         let raw_depth = self.palw_settled_anchor_depth_at(now);
-        let verified = kaspa_consensus_core::palw_prospective_kernel_material_v4::prospective_kernel_material_v4(
+        let verified = kaspa_consensus_core::palw_prospective_kernel_material_v4::prospective_kernel_material_checked_v4(
             state,
             params,
             checkpoint,
@@ -3544,7 +3598,7 @@ impl VirtualStateProcessor {
             policy.max_bytes_per_contract,
             kaspa_consensus_core::palw_attempt_material_v3::verify_ready_signature_v3,
         )?;
-        kaspa_consensus_core::palw_kernel_material_enrollment_v4::kernel_material_enrollment_v4(
+        kaspa_consensus_core::palw_kernel_material_enrollment_v4::kernel_material_enrollment_checked_v4(
             state, params, now, raw_depth, request, verified,
         )
     }
@@ -3588,10 +3642,20 @@ impl VirtualStateProcessor {
         bundle: &kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwProspectiveKernelBundleV4,
         intent: &kaspa_consensus_core::palw_kernel_material_replacement_v4::PalwKernelMaterialReplacementIntentV4,
     ) -> Result<kaspa_consensus_core::palw_kernel_material_replacement_v4::PalwKernelMaterialReplacementOwnedV4, String> {
+        self.palw_kernel_material_replacement_checked_v4_impl(state, now, context, bundle, intent).map_err(|error|error.to_string())
+    }
+    pub(crate) fn palw_kernel_material_replacement_checked_v4_impl(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        now: u64,
+        context: &kaspa_consensus_core::palw_kernel_material_context_v4::PalwProspectiveKernelMaterialContextV4,
+        bundle: &kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwProspectiveKernelBundleV4,
+        intent: &kaspa_consensus_core::palw_kernel_material_replacement_v4::PalwKernelMaterialReplacementIntentV4,
+    ) -> Result<kaspa_consensus_core::palw_kernel_material_replacement_v4::PalwKernelMaterialReplacementOwnedV4, kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4> {
         let params = self.palw_state_params_v2.as_ref().ok_or("replacement native policy unavailable")?;
-        state.assert_monetary_material_consistency_v1(params).map_err(|e| e.to_string())?;
-        state.assert_material_release_recovery_consistency_v2(params).map_err(|e| e.to_string())?;
-        kaspa_consensus_core::palw_kernel_material_replacement_v4::kernel_material_replacement_v4(
+        state.assert_monetary_material_consistency_v1(params).map_err(kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::from)?;
+        state.assert_material_release_recovery_consistency_v2(params).map_err(kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::from)?;
+        kaspa_consensus_core::palw_kernel_material_replacement_v4::kernel_material_replacement_checked_v4(
             state,
             params,
             now,

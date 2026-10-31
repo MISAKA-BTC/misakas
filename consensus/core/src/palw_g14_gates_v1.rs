@@ -332,7 +332,7 @@ pub struct PalwG14ArmingRecordV1 {
 
 /// **The pinned records — EMPTY.** Every gated fence armed at a real height on a real network is refused.
 // Lane ACT2 (2026-10-27): testnet-12 DAA 17,000 only, every slot a typed waiver (crate::palw_arming_waiver_v1).
-pub const PALW_G14_ARMING_RECORDS_V1: &[PalwG14ArmingRecordV1] = crate::palw_t12_17000_records_v1::PALW_T12_17000_G14_RECORDS_V1;
+pub const PALW_G14_ARMING_RECORDS_V1: &[PalwG14ArmingRecordV1] = crate::palw_t12_18400_records_v1::PALW_T12_18400_G14_RECORDS_V1;
 
 /// Why a record does not authorize an arming.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

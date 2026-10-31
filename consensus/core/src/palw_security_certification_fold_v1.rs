@@ -388,7 +388,7 @@ fn native_attestor_lock_v39(
         .reserved_exposure;
     let amount = palw_kernel_signer_lock_amount_v1(u64::try_from(exposure).unwrap_or(u64::MAX), mirror.certification.k.min(255) as u8);
     let record = builder.state.bonds.get(signer).ok_or(PalwStateV2Error::MissingBond(*signer))?;
-    if (record.collateral as u128).saturating_sub(builder.committed_at(signer, ctx.daa_score)) < amount as u128 {
+    if (record.collateral as u128).saturating_sub(builder.committed_at(signer, ctx.daa_score)?) < amount as u128 {
         return Err(refuse("the attestor cannot back its lock on the native mining claim (G-N2)"));
     }
     let key = palw_native_attestor_lock_key_v1(&palw_kernel_bond_id_v1(signer), &claim.as_bytes());
@@ -419,7 +419,7 @@ fn attestor_lock_v1(
         return Ok(());
     }
     let record = builder.state.bonds.get(signer).ok_or(PalwStateV2Error::MissingBond(*signer))?;
-    if (record.collateral as u128).saturating_sub(builder.committed_at(signer, ctx.daa_score)) < amount as u128 {
+    if (record.collateral as u128).saturating_sub(builder.committed_at(signer, ctx.daa_score)?) < amount as u128 {
         return Err(refuse("the attestor cannot back its Gate C liability lock (GC-DUTY)"));
     }
     let key = palw_native_attestor_lock_key_v1(&palw_kernel_bond_id_v1(signer), claim);

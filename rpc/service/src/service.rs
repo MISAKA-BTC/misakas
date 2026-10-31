@@ -4314,15 +4314,15 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         // built from two chain points costs — see `fp_decode_rules_armed` below.
         let session = self.consensus_manager.consensus().unguarded_session();
         let (locked_outpoints, facts, class_profile) = session
-            .spawn_blocking(move |c| {
-                let locked = c.palw_locked_bond_outpoints_v2();
+            .spawn_blocking(move |c| -> Result<_,kaspa_consensus_core::palw_state_v2::PalwStateV2Error> {
+                let locked = c.palw_locked_bond_outpoints_checked_v3()?;
                 let facts = class_id.and_then(|class_id| c.palw_producer_facts_v2(class_id, bond));
                 // ADR-0118 Decision 3: the class's registered profile says which form its jobs
                 // commit their prompt ids in (a held class: Merkle on every network).
                 let class_profile = class_id.and_then(|class_id| c.palw_registered_class_carriage_v1(class_id)).map(|(p, _)| p);
-                (locked, facts, class_profile)
+                Ok((locked, facts, class_profile))
             })
-            .await;
+            .await.map_err(|e|RpcError::General(format!("native collateral state unavailable: {e}")))?;
         // Consensus-locked collateral AND this node's own reserved funding outpoints, in one list
         // (audit3 H3 + H12). A wallet that reads only the first spends the panel's fee outpoint.
         let locked_bond_outpoints: Vec<String> = locked_outpoints

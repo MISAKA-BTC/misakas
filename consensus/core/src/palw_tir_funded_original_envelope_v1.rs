@@ -27,8 +27,8 @@ pub struct PalwTirFundedOriginalEnvelopeV1 {
 /// activation fence. A truncated TFO1 framing cannot fall back to legacy FP.
 pub fn is_funded_original_carrier_v1(tx: &Transaction) -> bool {
     tx.subnetwork_id == crate::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT
-        && (tx.payload.starts_with(PALW_TIR_FUNDED_ORIGINAL_MAGIC_V1)
-            || (!tx.payload.is_empty() && PALW_TIR_FUNDED_ORIGINAL_MAGIC_V1.starts_with(&tx.payload)))
+        && ([PALW_TIR_FUNDED_ORIGINAL_MAGIC_V1, crate::palw_tir_funded_original_envelope_v2::MAGIC].iter().any(|magic|
+            tx.payload.starts_with(*magic) || (!tx.payload.is_empty() && magic.starts_with(&tx.payload))))
 }
 fn invalid(why: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, why.into())
@@ -130,6 +130,10 @@ impl PalwTirFundedOriginalEnvelopeV1 {
             crate::palw_fp_answer_accounting_v1::palw_fp_answer_envelope_view_v1(outer, u32::MAX as usize)
                 .ok_or("invalid FPA1 funded carrier")?.inner
         } else { outer };
+        let family = if payload.starts_with(crate::palw_tir_funded_original_envelope_v2::MAGIC) {
+            Some(crate::palw_tir_funded_original_envelope_v2::PalwTirFundedOriginalEnvelopeV2::decode_v2(payload)?)
+        } else { None };
+        let payload = family.as_ref().map_or(payload, |e| e.funded_original.as_slice());
         // Inspect the actual outer TX: its signed input scope and funding output are never projected.
         if tx.subnetwork_id != crate::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT || payload != literal {
             return Err("TFO1 is not paired to this literal original carrier".into());
@@ -330,6 +334,18 @@ mod tests {
     }
     #[test]
     fn actual_own_output_and_once_only_fee_are_bound_to_the_identical_carrier() {
+        // RFC38's wrapper is independently activated from RFC40. Its exact
+        // funding output remains provisionally locked without Prefix support.
+        {
+            let e=envelope();
+            let mut tx=carrier(&e);
+            tx.payload=crate::palw_fp_answer_accounting_v1::palw_fp_answer_envelope_encode_v1(&tx.payload,&[1]);
+            tx.finalize();
+            let expected=TransactionOutpoint::new(tx.id(),e.funding.terms.funding_output_index);
+            assert_eq!(crate::palw_funded_escrow_v1::palw_wrapped_tfo1_provisional_lock_v1(&tx,false,true),Some(expected));
+            assert_eq!(crate::palw_funded_escrow_v1::palw_wrapped_tfo1_provisional_lock_v1(&tx,false,false),None);
+        }
+
         let e = envelope();
         let tx = carrier(&e);
         let entry = UtxoEntry::new(1011, ScriptPublicKey::default(), 1, false);

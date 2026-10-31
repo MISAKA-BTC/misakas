@@ -348,6 +348,7 @@ impl Params {
         self.validate_palw_fp_prefix_state_v1()?;
         // **palw_fp_answer_accounting_v1** (`crate::palw_fp_answer_accounting_v1`, compute-claim audit CX-01/CX-02).
         self.validate_palw_fp_answer_accounting_v1()?;
+        self.validate_palw_court_family_supplier_v1()?;
         // **palw_fp_tokenizer_match** (`crate::palw_fp_tokenizer_v1`).
         self.validate_palw_fp_tokenizer_match_v1()?;
         // **palw_fp_constraint_v2** (`crate::palw_fp_constraint_v2`).
@@ -1887,7 +1888,10 @@ impl Params {
                     .iter()
                     .filter(|o| matches!(o, crate::palw_state_v2::PalwConsensusObjectV2::BondRegistered { .. }))
                     .count();
-                if registered < crate::palw_fp_devnet_v3::palw_v2_maturity_armable_bonds_v1() {
+                // RFC-0041: a new genesis with no seats bootstraps through public recovery
+                // and ordinary registration. It has no genesis jury whose spare capacity could
+                // be lost. Every arriving bond still serves the ordinary maturity window.
+                if registered != 0 && registered < crate::palw_fp_devnet_v3::palw_v2_maturity_armable_bonds_v1() {
                     return Err(PalwModeV2Error::Invalid(
                         "palw_bond_maturity is armed on a genesis whose bond registry has no spare seat: D1 makes a \
                          replacement bond unseatable for a full window, so one departure would leave every claim unable \

@@ -1089,3 +1089,24 @@ mod local_capacity_classification_tests {
         }
     }
 }
+
+/// Owned counterpart of the checked checkpoint reader for native settlement.
+/// No decoder/Clone/serialization or public constructor can mint this capability.
+/// Mutable graph reads serialize use of the retained workspace reservation.
+pub struct PalwOwnedValidatedClaimCheckpointV1 {
+    checkpoint:crate::palw_native_resource_v1::NativeRetainedV1<PalwClaimLocalCheckpointV1>,
+    _workspace:Option<crate::palw_native_resource_v1::NativeDemandLeaseV1>,
+}
+impl PalwOwnedValidatedClaimCheckpointV1 {
+    pub(crate) fn from_expected_native_v1(checkpoint:crate::palw_native_resource_v1::NativeRetainedV1<PalwClaimLocalCheckpointV1>)
+        ->Result<Self,PalwClaimCheckpointErrorV1>{
+        let workspace={let checked=checkpoint.validate(&checkpoint.point,&checkpoint.records,&checkpoint.liability_state)?;checked._workspace};
+        Ok(Self{checkpoint,_workspace:workspace})
+    }
+    pub fn contains_v1(&self,work:PalwClaimLocalWorkRefV1)->bool{self.checkpoint.records.contains_key(&work)}
+    pub fn credit_eligible_v1(&mut self,work:PalwClaimLocalWorkRefV1)->bool{self.checkpoint.credit_eligible(work)}
+    pub fn irreversible_eligible_v1(&mut self,work:PalwClaimLocalWorkRefV1)->bool{self.checkpoint.irreversible_eligible(work)}
+    pub fn lifecycle_preserved_through_v1(&self,blue:u64)->bool{
+        PalwValidatedClaimCheckpointV1{checkpoint:&self.checkpoint,_workspace:None}.lifecycle_preserved_through(blue)
+    }
+}

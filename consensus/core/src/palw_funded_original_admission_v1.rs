@@ -22,7 +22,9 @@
 use crate::{
     Hash64,
     palw_court_policy_v1::DISPUTE_WINDOW_DAA,
-    palw_court_service_binding_v1::{CourtServiceBindingRefusalV1, CourtServiceProfileV1, court_service_binding_candidate_v1, court_service_packets_v1},
+    palw_court_service_binding_v1::{
+        CourtServiceBindingRefusalV1, CourtServiceProfileV1, court_service_binding_candidate_v1, court_service_packets_v1,
+    },
     palw_court_service_state_v2::CourtServiceStateV2,
     palw_court_service_v1::{ServiceAssessment, ServiceCost, ServicePacket},
     palw_court_source_material_graph_v3::NativeSourceMaterialGraphV3,
@@ -54,7 +56,14 @@ impl FundedAdmissionScheduleV1 {
         heap_bytes_per_branch: u64,
         retention_bytes_per_branch: u64,
     ) -> Self {
-        Self { service, source_packet_cost, capital_per_turn_sompi, capital_per_source_node_sompi, heap_bytes_per_branch, retention_bytes_per_branch }
+        Self {
+            service,
+            source_packet_cost,
+            capital_per_turn_sompi,
+            capital_per_source_node_sompi,
+            heap_bytes_per_branch,
+            retention_bytes_per_branch,
+        }
     }
     /// **Production constructor (lane VAL, 2026-10-26)**: refuses an invalid service profile (zero budget, `controls != 1`, a packet
     /// larger than one DAA's budget, intervals reaching `a + 10,000`), a source packet larger than the budget, zero capital and
@@ -86,7 +95,14 @@ impl FundedAdmissionScheduleV1 {
         if !(1..=MAX_BRANCH_BYTES).contains(&heap_bytes_per_branch) || !(1..=MAX_BRANCH_BYTES).contains(&retention_bytes_per_branch) {
             return Err("funded admission: holdings per branch must be in 1..=1 GiB");
         }
-        Ok(Self { service, source_packet_cost, capital_per_turn_sompi, capital_per_source_node_sompi, heap_bytes_per_branch, retention_bytes_per_branch })
+        Ok(Self {
+            service,
+            source_packet_cost,
+            capital_per_turn_sompi,
+            capital_per_source_node_sompi,
+            heap_bytes_per_branch,
+            retention_bytes_per_branch,
+        })
     }
     pub fn service_profile(&self) -> CourtServiceProfileV1 {
         self.service
@@ -102,6 +118,8 @@ pub enum FundedBranchV1 {
     SourceNode { logical: Hash64 },
     /// The original's retention / heap holding.
     Retention,
+    /// New family-contract projection only; never reuses a legacy holding ID.
+    RetentionSegmentV2 { ordinal: u64 },
 }
 
 /// Deterministic resource demand reserved with the claim (never measured runtime).
@@ -136,6 +154,8 @@ pub struct FundedAdmissionDerivationV1 {
     pub signer_packets: Vec<ServicePacket>,
     pub source_packets: Vec<ServicePacket>,
     pub retention_packet: ServicePacket,
+    /// Empty for unchanged historical V1 contracts.
+    pub retention_tail_v2: Vec<ServicePacket>,
     pub resources: FundedResourceDemandV1,
     /// Checked Σ of per-branch capital.
     pub capital_sompi: u64,
@@ -193,7 +213,8 @@ pub fn derive_funded_admission_v1(
     let hard = accepted_daa.checked_add(DISPUTE_WINDOW_DAA).ok_or(R::Overflow)?;
     let first = accepted_daa.checked_add(1).ok_or(R::Overflow)?;
     // (1) Liable signer × turn: court-f02's canonical packets (same order: signer canonical order, then turn).
-    let signer_packets = court_service_packets_v1(claim, allocation, source, accepted_daa, signers, &schedule.service).map_err(R::Binding)?;
+    let signer_packets =
+        court_service_packets_v1(claim, allocation, source, accepted_daa, signers, &schedule.service).map_err(R::Binding)?;
     let mut branches = Vec::new();
     {
         let mut it = signer_packets.iter();
@@ -240,7 +261,89 @@ pub fn derive_funded_admission_v1(
     if branches.iter().map(|(_, id)| *id).collect::<BTreeSet<_>>().len() != branches.len() {
         return Err(R::BranchMismatch);
     }
-    Ok(FundedAdmissionDerivationV1 { branches, signer_packets, source_packets, retention_packet, resources: r, capital_sompi, hard_daa: hard })
+    Ok(FundedAdmissionDerivationV1 {
+        branches,
+        signer_packets,
+        source_packets,
+        retention_packet,
+        retention_tail_v2: Vec::new(),
+        resources: r,
+        capital_sompi,
+        hard_daa: hard,
+    })
+}
+
+/// New-contract-only projection. The old derivation is byte/ID identical; its
+/// total retained-resource estimate is partitioned under the unchanged per-DAA
+/// byte ceiling. These resource reservations are not supplier response duties.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn derive_funded_admission_family_v2(
+    claim: Hash64,
+    allocation: Hash64,
+    source: Hash64,
+    accepted_daa: u64,
+    signers: &BTreeSet<PalwBondKeyV2>,
+    graph: &NativeSourceMaterialGraphV3,
+    schedule: &FundedAdmissionScheduleV1,
+) -> Result<
+    (FundedAdmissionDerivationV1, Option<crate::palw_native_resource_v1::NativeDemandLeaseV1>),
+    crate::palw_native_resource_v1::NativeDecodeErrorV1<FundedAdmissionRefusalV1>,
+> {
+    use crate::palw_native_resource_v1::{NativeDecodeErrorV1 as E, TirNativeRequestsV1};
+    let source_count = graph.nodes_v3().count() as u64;
+    let signer_count = mul(signers.len() as u64, schedule.service.packets_per_signer).map_err(E::Decode)?;
+    let branches = add(source_count, signer_count).map_err(E::Decode)?;
+    let total = mul(branches, add(schedule.heap_bytes_per_branch, schedule.retention_bytes_per_branch).map_err(E::Decode)?)
+        .map_err(E::Decode)?;
+    let limit = schedule.service.budget.bytes;
+    if total == 0 || limit == 0 {
+        return Err(E::Decode(FundedAdmissionRefusalV1::ScheduleInvalid));
+    }
+    let count = total.div_ceil(limit);
+    if count > DISPUTE_WINDOW_DAA {
+        return Err(E::Decode(FundedAdmissionRefusalV1::ScheduleInvalid));
+    }
+    let universe = add(branches, count).map_err(E::Decode)?;
+    // Reserve the legacy arrays and uniqueness workspace BEFORE invoking their
+    // shared builder, together with the new segment projection. The returned
+    // owner holds this lease throughout quote/admission/install.
+    let mut q = TirNativeRequestsV1::new();
+    q.vec_v1::<ServicePacket>(add(universe, 1).map_err(E::Decode)?).map_err(E::Resource)?;
+    q.vec_v1::<(FundedBranchV1, [u8; 64])>(add(universe, 1).map_err(E::Decode)?).map_err(E::Resource)?;
+    q.exact_v1::<crate::palw_native_resource_v1::BTreeNodeEnvelopeV1<[u8; 64], ()>>(add(universe, 1).map_err(E::Decode)?)
+        .map_err(E::Resource)?;
+    let lease = crate::palw_native_resource_v1::reserve_native_requests_v1(q.bytes_v1()).map_err(E::Resource)?;
+    let mut d = derive_funded_admission_v1(claim, allocation, source, accepted_daa, signers, graph, schedule).map_err(E::Decode)?;
+    if add(d.resources.heap_bytes, d.resources.retention_bytes).map_err(E::Decode)? != total {
+        return Err(E::Decode(FundedAdmissionRefusalV1::BranchMismatch));
+    }
+    d.branches.retain(|(branch, _)| !matches!(branch, FundedBranchV1::Retention));
+    d.retention_tail_v2 = Vec::with_capacity(usize::try_from(count - 1).map_err(|_| E::Decode(FundedAdmissionRefusalV1::Overflow))?);
+    for ordinal in 0..count {
+        let mut identity = [0u8; 200];
+        identity[..64].copy_from_slice(claim.as_byte_slice());
+        identity[64..128].copy_from_slice(allocation.as_byte_slice());
+        identity[128..192].copy_from_slice(source.as_byte_slice());
+        identity[192..].copy_from_slice(&ordinal.to_le_bytes());
+        let id = keyed(b"misaka-palw/funded-retention-segment/v2", &identity);
+        let consumed = ordinal.checked_mul(limit).ok_or(E::Decode(FundedAdmissionRefusalV1::Overflow))?;
+        let packet = ServicePacket {
+            id,
+            release_daa: d.retention_packet.release_daa,
+            service_before: d.hard_daa,
+            cost: ServiceCost { bytes: (total - consumed).min(limit), work: 1, io: 0, controls: 1 },
+        };
+        d.branches.push((FundedBranchV1::RetentionSegmentV2 { ordinal }, id));
+        if ordinal == 0 {
+            d.retention_packet = packet;
+        } else {
+            d.retention_tail_v2.push(packet);
+        }
+    }
+    d.resources.cpu_work = add(d.resources.cpu_work, count - 1).map_err(E::Decode)?;
+    d.capital_sompi =
+        add(d.capital_sompi, mul(count, schedule.capital_per_source_node_sompi).map_err(E::Decode)?).map_err(E::Decode)?;
+    Ok((d, lease))
 }
 
 /// **The escrow amount the payer must have signed for** (RFC-0035 §7.1 one fee allocation). `capital` = max(schedule floor,
@@ -269,16 +372,21 @@ pub fn funded_admission_book_candidate_v1(
 ) -> Result<(CourtServiceStateV2, CourtServiceStateV2), FundedAdmissionRefusalV1> {
     use FundedAdmissionRefusalV1 as R;
     let after_signer =
-        court_service_binding_candidate_v1(existing, claim, allocation, source, accepted_daa, signers, &schedule.service).map_err(R::Binding)?;
+        court_service_binding_candidate_v1(existing, claim, allocation, source, accepted_daa, signers, &schedule.service)
+            .map_err(R::Binding)?;
     let mut full = after_signer.clone();
     let projection = graph.bind_projection_v3(derivation.source_packets.clone()).map_err(R::SourceGraph)?;
     projection.reserve_v3(&mut full.book, derivation.hard_daa).map_err(R::SourceGraph)?;
     full.book
         .reserve(std::slice::from_ref(&derivation.retention_packet), derivation.hard_daa)
         .map_err(|e| R::Binding(CourtServiceBindingRefusalV1::Reservation(e)))?;
+    full.book
+        .reserve(&derivation.retention_tail_v2, derivation.hard_daa)
+        .map_err(|e| R::Binding(CourtServiceBindingRefusalV1::Reservation(e)))?;
     let binding = full.claims.get_mut(&claim).ok_or(R::BranchMismatch)?;
     binding.packet_ids.extend(derivation.source_packets.iter().map(|p| p.id));
     binding.packet_ids.insert(derivation.retention_packet.id);
+    binding.packet_ids.extend(derivation.retention_tail_v2.iter().map(|p| p.id));
     if binding.packet_ids != derivation.packet_ids() || binding.packet_ids.len() as u64 != derivation.branch_count() {
         return Err(R::BranchMismatch);
     }

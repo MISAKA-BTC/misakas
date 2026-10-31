@@ -83,7 +83,7 @@ pub(super) fn admit(builder: &mut TransitionBuilder<'_>, point: &PalwBlockContex
     }
     // Budget accounting alone does not reserve the common PALW principal.
     // All work/withdrawal gates share committed_at, which includes existing E rows.
-    if liability_sompi > builder.gate_room(&claim.bond, point.daa_score, PalwRcoreGateV1::Work) {
+    if liability_sompi > builder.gate_room(&claim.bond, point.daa_score, PalwRcoreGateV1::Work)? {
         return Err(bad("prefix export exceeds uncommitted producer collateral"));
     }
     let budget_id = reservation_id(point, id);

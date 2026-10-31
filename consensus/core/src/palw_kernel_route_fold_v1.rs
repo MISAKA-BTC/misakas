@@ -302,15 +302,15 @@ impl TransitionBuilder<'_> {
 
     /// **The collateral the kernel is told a bond has**: the real collateral net of every non-kernel reservation, never below the
     /// kernel's own reservation and never above the collateral (module doc).
-    fn kernel_synced_collateral(&self, bond: &PalwBondKeyV2, now_daa: u64) -> u64 {
-        let Some(record) = self.state.bonds.get(bond) else { return 0 };
+    fn kernel_synced_collateral(&self, bond: &PalwBondKeyV2, now_daa: u64) -> Result<u64, PalwStateV2Error> {
+        let Some(record) = self.state.bonds.get(bond) else { return Ok(0) };
         // The LEDGER's own reservation: a chunk group's deposit (also the route's, also in `committed`) is outside the ledger, so the
         // ledger is synced net of it like any other non-kernel reservation and never lends it to a claim.
         let kernel = self.state.kernel_route.as_ref().map(|k| k.ledger_reserved_of(bond) as u128).unwrap_or(0);
-        let committed = self.committed_at(bond, now_daa);
+        let committed = self.committed_at(bond, now_daa)?;
         let non_kernel = committed.saturating_sub(kernel);
         let free = (record.collateral as u128).saturating_sub(non_kernel);
-        u64::try_from(free.max(kernel).min(record.collateral as u128)).expect("bounded by a u64 collateral")
+        Ok(u64::try_from(free.max(kernel).min(record.collateral as u128)).expect("bounded by a u64 collateral"))
     }
 
     /// Record that the route has seen `bond` (its kernel digest maps back to it).
@@ -1066,7 +1066,7 @@ pub(super) fn finish_exec_rewards_v1(
     let ids: Vec<_> = ledger.bonds.keys().copied().collect();
     for id in ids {
         if let Some(key) = builder.state.kernel_route.as_ref().and_then(|r| r.bond_key_of(&id)) {
-            ledger.try_sync_bond_v1(id, builder.kernel_synced_collateral(&key, daa)).map_err(PalwStateV2Error::NativeResource)?;
+            ledger.try_sync_bond_v1(id, builder.kernel_synced_collateral(&key, daa)?).map_err(PalwStateV2Error::NativeResource)?;
         }
     }
     let mut events = Vec::new();
@@ -1744,7 +1744,7 @@ pub(super) fn kernel_court_admissions_v1(
             })
             .sum::<u128>()
             .saturating_add(out.iter().map(|a| a.capital).sum::<u128>());
-        let free = collateral.saturating_sub(builder.committed_at(signer, ctx.daa_score)).saturating_sub(pending);
+        let free = collateral.saturating_sub(builder.committed_at(signer, ctx.daa_score)?).saturating_sub(pending);
         let existing = out.last().map(|a| &a.book).or(builder.state.court_service_state_v1());
         match crate::palw_kernel_court_admission_v1::kernel_court_admission_candidate_v1(
             existing,
@@ -2254,7 +2254,7 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
         palw_source_order_admits_v1(live, &new).map_err(|why| refused(why.reason()))?;
     }
     let kid = palw_kernel_bond_id_v1(signer);
-    ledger.try_sync_bond_v1(kid, builder.kernel_synced_collateral(signer, ctx.daa_score)).map_err(PalwStateV2Error::NativeResource)?;
+    ledger.try_sync_bond_v1(kid, builder.kernel_synced_collateral(signer, ctx.daa_score)?).map_err(PalwStateV2Error::NativeResource)?;
     // The other bond a slash can land on is the producer of the claim the object names: its collateral is brought up to date too, so
     // an earlier object of this block (or another lane's slash) can never leave the ledger believing the bond holds more than it does.
     if let KernelRouteObjectV1::FileProof { claim, .. }
@@ -2264,7 +2264,7 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
         && let Some(key) = builder.state.kernel_route.as_ref().and_then(|k| k.bond_key_of(&producer))
     {
         ledger
-            .try_sync_bond_v1(producer, builder.kernel_synced_collateral(&key, ctx.daa_score))
+            .try_sync_bond_v1(producer, builder.kernel_synced_collateral(&key, ctx.daa_score)?)
             .map_err(PalwStateV2Error::NativeResource)?;
     }
     // DA16 / ADR-0177 D2: past `palw_provider_court_v1` a demand names a claim-specific unit or nothing, within its requester's tally.
@@ -2779,7 +2779,7 @@ pub(super) fn tick_kernel_route_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pa
     for kid in held {
         if let Some(key) = builder.state.kernel_route.as_ref().and_then(|k| k.bond_key_of(&kid)) {
             ledger
-                .try_sync_bond_v1(kid, builder.kernel_synced_collateral(&key, ctx.daa_score))
+                .try_sync_bond_v1(kid, builder.kernel_synced_collateral(&key, ctx.daa_score)?)
                 .map_err(PalwStateV2Error::NativeResource)?;
         }
     }
@@ -3031,7 +3031,7 @@ pub(super) fn apply_kernel_route_chunk_v1(
             };
             let deposit = PALW_KERNEL_CHUNK_DEPOSIT_PER_PART_SOMPI_V1.saturating_mul(u64::from(chunk.count));
             let collateral = builder.state.bonds.get(&chunk.opener).map(|b| b.collateral as u128).unwrap_or(0);
-            if collateral.saturating_sub(builder.committed_at(&chunk.opener, ctx.daa_score)) < deposit as u128 {
+            if collateral.saturating_sub(builder.committed_at(&chunk.opener, ctx.daa_score)?) < deposit as u128 {
                 return Err(refused("the opener's free collateral does not cover the kernel chunk group's deposit"));
             }
             PalwKernelChunkGroupV1 {

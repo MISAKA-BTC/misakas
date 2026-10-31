@@ -93,6 +93,14 @@ fn material_intake_partial_bodies_coexist_first_complete_wins_and_reorg_reverts(
     let net = extras.tir_public_network_domain_v1.unwrap();
     let leaves = required_parameter_leaves_v1(&state, claim, schedule.cover).unwrap();
     let leaf = *leaves.first().expect("history original reads parameters");
+    let program = class_program_v1(&state, claim).unwrap();
+    let input_demand = input_material_demand_v1(&program, &leaves,
+        frame.plan_v1().owner_work.rules.prompt_form, frame.header_v1().job_context.declared_prefill_tokens).unwrap();
+    let parameter_bytes: u64 = leaves.iter().map(|leaf| borsh::to_vec(&fx.execution.param_opening(*leaf).unwrap()).unwrap().len() as u64).sum();
+    assert_eq!(input_demand.parameter_targets, leaves.len() as u64);
+    assert!(input_demand.parameter_bytes >= parameter_bytes, "native demand must cover every actual parameter body");
+    assert!(input_material_demand_v1(&program, &[leaf, leaf],
+        frame.plan_v1().owner_work.rules.prompt_form, frame.header_v1().job_context.declared_prefill_tokens).is_err());
     let body = borsh::to_vec(&fx.execution.param_opening(leaf).unwrap()).unwrap();
     let target = MaterialTargetV1::Parameter { leaf };
     let before = state.state_root();

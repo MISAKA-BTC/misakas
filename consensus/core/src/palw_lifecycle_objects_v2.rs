@@ -631,6 +631,14 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         }
         // RFC-0032 A material intake (tag 255): signed, and a Part inside the one-part bound. Authentication against the original,
         // the per-target bound and the per-submitter budget are the fold's (`material_intake`).
+        PalwConsensusObjectV2::CourtFamilyMaterialV1 { control } => {
+            if control.version!=1||control.signature.len()!=crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN {
+                return Err("family material version/signature shape");
+            }
+            if let crate::palw_court_family_material_v1::FamilyMaterialActionV1::Part{bytes,..}=&control.action
+                &&(bytes.is_empty()||bytes.len()>crate::palw_court_family_material_v1::FAMILY_MATERIAL_PART_BYTES_V1){return Err("family material part bound");}
+            Ok(())
+        }
         PalwConsensusObjectV2::MaterialIntakeV1 { intake } => {
             if intake.signature.is_empty() {
                 return Err("a material intake step must carry its submitter's signature");
@@ -1309,11 +1317,12 @@ pub enum PalwLifecycleKindFenceV1 {
     SelectedSourceBootstrapV1 = 21,
     /// `Params::palw_panel_da_disclosure_v1` — ADR-0206's PanelDa disclosure (tag 233). Local activation-table slot (not wire).
     PanelDaDisclosureV1 = 22,
+    CourtFamilySupplierV1 = 23,
 }
 
 impl PalwLifecycleKindFenceV1 {
     /// Every owning fence, in declaration order (index = discriminant).
-    pub const ALL: [Self; 23] = [
+    pub const ALL: [Self; 24] = [
         Self::ProbabilisticConstraintsV1,
         Self::SignedRegistrationV1,
         Self::PermissionlessPanelV1,
@@ -1337,6 +1346,7 @@ impl PalwLifecycleKindFenceV1 {
         Self::TirBoundedDoorV1,
         Self::SelectedSourceBootstrapV1,
         Self::PanelDaDisclosureV1,
+        Self::CourtFamilySupplierV1,
     ];
 
     /// The `Params` field the fence is resolved from.
@@ -1358,6 +1368,7 @@ impl PalwLifecycleKindFenceV1 {
             Self::MemoryRoutingCourtV2 => "palw_memory_routing_court_v2",
             Self::SelectedSourceBootstrapV1 => "palw_selected_source_bootstrap_v1",
             Self::StagedTirRouteV1 => "palw_staged_tir_route_v1",
+            Self::CourtFamilySupplierV1 => "palw_court_family_supplier_v1",
             Self::StagedFloatConstraintV1 => "palw_staged_float_constraint_v1",
             Self::TirPublicConvictionV1 => "palw_tir_public_conviction_v1",
             Self::TirContainerIdentityV1 => "palw_tir_container_identity_v1",
@@ -1602,6 +1613,7 @@ pub fn palw_lifecycle_kind_owner_v1(object: &PalwConsensusObjectV2) -> PalwLifec
         O::SeatReadinessDemandedV1 { .. } | O::SeatReadinessAnsweredV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::CourtModelScopeV1),
         // RFC-0032 A material intake (tag 255): the shared TIR court's own fence (G-10), no new fence.
         O::MaterialIntakeV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::StagedTirRouteV1),
+        O::CourtFamilyMaterialV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::CourtFamilySupplierV1),
         // ADR-0206 (lane g14-fam-panelda): the PanelDa disclosure (tag 233), dormant behind its own fence.
         O::PanelDaPromptDisclosedV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::PanelDaDisclosureV1),
         // RFC-0024 §4/§5 (lane r5-p2-terminal): the position terminal and the lookahead moves (tags 201-204).
@@ -1767,6 +1779,7 @@ pub const PALW_LIFECYCLE_NEW_KINDS_V1: &[(u8, &str, PalwLifecycleKindFenceV1)] =
     (231, "SeatReadinessDemandedV1", PalwLifecycleKindFenceV1::CourtModelScopeV1),
     (232, "SeatReadinessAnsweredV1", PalwLifecycleKindFenceV1::CourtModelScopeV1),
     (255, "MaterialIntakeV1", PalwLifecycleKindFenceV1::StagedTirRouteV1),
+    (250, "CourtFamilyMaterialV1", PalwLifecycleKindFenceV1::CourtFamilySupplierV1),
     (233, "PanelDaPromptDisclosedV1", PalwLifecycleKindFenceV1::PanelDaDisclosureV1),
     (201, "TirPositionDissectedV2", PalwLifecycleKindFenceV1::TirBoundedDoorV1),
     (202, "TirPositionClosedV2", PalwLifecycleKindFenceV1::TirBoundedDoorV1),
@@ -1874,6 +1887,7 @@ impl crate::config::params::Params {
                         self.palw_monetary_material_v1.as_ref().map(|f| f.activation),
                     ),
                     // In force where BOTH the route's and the staged court's fences are (the route's rows are the court's).
+                    PalwLifecycleKindFenceV1::CourtFamilySupplierV1 => self.palw_court_family_supplier_v1,
                     PalwLifecycleKindFenceV1::StagedTirRouteV1 => {
                         Self::palw_later_of_v1(self.palw_staged_tir_route_v1_fence(), self.palw_staged_public_court_v1)
                     }

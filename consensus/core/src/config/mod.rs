@@ -42,6 +42,10 @@ pub struct Config {
     /// Indicates whether this node is an archival node
     pub is_archival: bool,
 
+    /// Operator opt-in to RFC-0037 protocol-109 row-stream IBD. Node-local;
+    /// neither a consensus rule nor part of Params/fork fingerprints.
+    pub palw_row_stream_ibd: bool,
+
     /// Enable various sanity checks which might be compute-intensive (mostly performed during pruning)
     pub enable_sanity_checks: bool,
 
@@ -209,6 +213,7 @@ impl Config {
             perf,
             process_genesis: true,
             is_archival: false,
+            palw_row_stream_ibd: false,
             enable_sanity_checks: false,
             trusted_checkpoint: None,
             ibd_checkpoints: Vec::new(),

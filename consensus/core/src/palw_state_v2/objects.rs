@@ -846,6 +846,12 @@ fn apply_object_inner(
         PalwConsensusObjectV2::MaterialIntakeV1 { intake } => {
             super::palw_court_shared_material_intake_fold_v1::material_intake(builder, ctx, intake)?;
         }
+        PalwConsensusObjectV2::CourtFamilyMaterialV1 { control } => {
+            if !builder.params.family_supplier_active_at(ctx.daa_score)||!builder.extras.family_supplier_active {
+                return Err(PalwStateV2Error::CarriageInconsistent("family material dedicated fence dormant".into()));
+            }
+            super::palw_court_family_material_fold_v1::apply_family_material_v1(builder,ctx,control)?;
+        }
         // Lane g14-fam-panelda (tag 233, ADR-0206): below `palw_panel_da_disclosure_v1` the acceptance gate drops it unjudged (A-2);
         // the fold re-checks the fence.
         PalwConsensusObjectV2::PanelDaPromptDisclosedV1 { claim, prompt_token_ids } => {
@@ -1394,7 +1400,7 @@ fn apply_object_inner(
                     // every lock on the claim, so the parts that landed first are carried too.
                     let door = PalwLicenceDoorV1::ShardPart { quorum_per_shard: params.quorum_per_shard };
                     if builder.extras.audit_2026_09_23_active
-                        && !builder.receipt_set_is_backed(claim_id, &claim, &part.receipts, ctx.daa_score, door)
+                        && !builder.receipt_set_is_backed(claim_id, &claim, &part.receipts, ctx.daa_score, door)?
                     {
                         return Ok(());
                     }
@@ -1523,7 +1529,7 @@ fn apply_object_inner(
                 // declaration's 100% check extends to (capability exposure is non-slashable
                 // standing, priced against the whole collateral as before).
                 let already = if builder.params.rcore_plus_active_at(ctx.daa_score) {
-                    builder.committed_at(bond, ctx.daa_score).saturating_add(builder.read().accuser_ledger_v1(bond, ctx.daa_score))
+                    builder.committed_at(bond, ctx.daa_score)?.saturating_add(builder.read().accuser_ledger_v1(bond, ctx.daa_score))
                 } else {
                     builder
                         .state
@@ -2268,7 +2274,7 @@ fn apply_object_inner(
                 // them is refuted by the record. It pays what it tried to take: the same `reserved`
                 // the producer would have lost.
                 if builder.extras.audit_2026_09_23_active
-                    && !builder.receipt_set_is_backed(*claim_id, &claim, receipts, ctx.daa_score, PalwLicenceDoorV1::Quorum)
+                    && !builder.receipt_set_is_backed(*claim_id, &claim, receipts, ctx.daa_score, PalwLicenceDoorV1::Quorum)?
                 {
                     return Ok(());
                 }
@@ -2835,7 +2841,7 @@ fn apply_object_inner(
             // Audit #6: the full-replay seat is the whole colluding set of this door, so it must be
             // able to post the whole gain; if it cannot, the set is inert and the other doors stay open.
             if builder.extras.audit_2026_09_23_active
-                && !builder.receipt_set_is_backed(*claim_id, &claim, &inner, ctx.daa_score, PalwLicenceDoorV1::Optimistic)
+                && !builder.receipt_set_is_backed(*claim_id, &claim, &inner, ctx.daa_score, PalwLicenceDoorV1::Optimistic)?
             {
                 return Ok(());
             }
@@ -3927,7 +3933,7 @@ fn apply_object_inner(
             // ADR-0152 SR-7: past `palw_rcore_plus` the one committed ledger, with capability
             // exposure kept as this lane's own gate term (inside `committed` it would pin exit).
             let own = if builder.params.rcore_plus_active_at(ctx.daa_score) {
-                builder.committed_at(bond, ctx.daa_score)
+                builder.committed_at(bond, ctx.daa_score)?
             } else {
                 builder
                     .state
@@ -3938,7 +3944,7 @@ fn apply_object_inner(
             let backed = own.checked_add(declared).ok_or(PalwStateV2Error::Overflow("total exposure"))?;
             // Past the fence the one invariant's room (review M1) holds the declared term too.
             let ceiling = if builder.params.rcore_plus_active_at(ctx.daa_score) {
-                own.saturating_add(builder.gate_room(bond, ctx.daa_score, PalwRcoreGateV1::Work))
+                own.saturating_add(builder.gate_room(bond, ctx.daa_score, PalwRcoreGateV1::Work)?)
             } else {
                 (bond_record.collateral as u128)
                     .checked_mul(builder.params.fp_max_exposure_ratio_permille as u128)

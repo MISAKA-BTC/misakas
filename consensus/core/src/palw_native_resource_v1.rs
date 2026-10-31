@@ -10,6 +10,14 @@ mod restore;
 mod restore_workspace;
 mod retained;
 pub use restore::restore_native_carriage_v1;
+/// Reserve the existing audited root serialization scratch for a trusted
+/// canonical frame length. This does not authorize unknown typed decoding.
+pub fn reserve_native_root_workspace_v1(
+    canonical_bytes: u64,
+) -> Result<Option<NativeDemandLeaseV1>, NativeCoverageV1> {
+    let requests = restore_workspace::native_restore_root_workspace_requests_v1(canonical_bytes)?;
+    reserve_native_requests_v1(requests)
+}
 pub(crate) use retained::value_requests_v1 as native_value_requests_v1;
 mod transition;
 pub use retained::{

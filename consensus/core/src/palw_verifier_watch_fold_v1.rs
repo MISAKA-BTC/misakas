@@ -50,7 +50,7 @@ fn admit(
     }
     let bond = builder.state.bonds.get(signer).ok_or_else(|| bad("watcher bond absent"))?;
     if !matches!(bond.status, PalwBondStatusV2::Active)
-        || builder.gate_room(signer, point.daa_score, PalwRcoreGateV1::Work) < u128::from(terms.stake)
+        || builder.gate_room(signer, point.daa_score, PalwRcoreGateV1::Work)? < u128::from(terms.stake)
     {
         return Err(bad("watcher stake is not free native capital"));
     }

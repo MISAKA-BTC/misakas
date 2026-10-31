@@ -418,7 +418,7 @@ pub(super) fn apply_shared_bottom_conviction_v1(
         }
     }
     if !credited.is_empty() {
-        let conv = b.open_conviction_v1(&credited, ctx.daa_score);
+        let conv = b.open_conviction_v1(&credited, ctx.daa_score)?;
         let g = b.claim_g_v1(&claim_id).map(|gains| gains.g()).unwrap_or(0);
         b.charge_covering_signers_v1(&conv, claim_id, &credited, g)?;
     }

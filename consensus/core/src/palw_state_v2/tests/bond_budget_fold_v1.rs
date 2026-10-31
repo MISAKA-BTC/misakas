@@ -1538,13 +1538,13 @@ fn rfc40_export_reservation_survives_source_terminal_and_releases_only_after_mat
     });
     let mut builder = TransitionBuilder::new(&source, &p, false, false, false, false, &extras);
     let producer = source.claims.get(&id).unwrap().bond;
-    let committed_before = builder.committed_at(&producer, point.daa_score);
+    let committed_before = builder.committed_at(&producer, point.daa_score).unwrap();
     super::super::palw_claim_local_prefix_reservation_v1::admit(&mut builder, &point, id).unwrap();
     let reservation = builder.state.prefix_export_reservation_v1(&point, id).unwrap().unwrap();
     assert_ne!(reservation.budget_id, id);
     assert!(reservation.liability_sompi > 0);
     assert_eq!(builder.state.prefix_export_reserved_at_checked_v1(&producer, 101).unwrap(), reservation.liability_sompi);
-    assert_eq!(builder.committed_at(&producer, 101), committed_before + reservation.liability_sompi,
+    assert_eq!(builder.committed_at(&producer, 101).unwrap(), committed_before + reservation.liability_sompi,
         "withdrawal and every ordinary work gate must see the extra source principal");
     assert_eq!(builder.state.prefix_export_reserved_at_v1(&producer, 400), reservation.liability_sompi);
     assert_eq!(builder.state.prefix_export_reserved_at_v1(&producer, 401), 0);
@@ -1565,5 +1565,97 @@ fn rfc40_export_reservation_survives_source_terminal_and_releases_only_after_mat
         assert!(!row.open);
         assert!(!row.live, "synthetic export reservation has no later ordinary retirement hook");
         assert!(row.in_window, "only the budget rolling window may retain a released row");
+    }
+}
+
+#[test]
+fn rfc37_budget_generation_roundtrips_an_actual_paid_consumer_fold_snapshot() {
+    let p = finite_consumer_params(100);
+    let steps = walk(&p);
+    let state = &steps[1].0;
+    let budget = state.bond_budget().unwrap();
+    assert_eq!(budget.header.version, PALW_BOND_BUDGET_STATE_VERSION_V4);
+    assert!(!budget.claims.is_empty() && !budget.bonds.is_empty() && !budget.consumer_contracts.is_empty());
+    let suffix = carriage_bytes(state);
+    let mut wire = Vec::new();
+    let len = crate::palw_direct_row_export_v1::write_row_generation_v1(state, &suffix, &mut wire).unwrap();
+    let accepted = crate::palw_row_stream_v1::palw_accept_row_stream_generation_v1(
+        state.state_root(), &wire, std::io::sink(), len, None,
+    ).unwrap();
+    let carriage: PalwStateCarriageV2 = borsh::from_slice(accepted.import_suffix()).unwrap();
+    let restored = carriage.into_state(&p, Some(state.state_root())).unwrap();
+    assert_eq!(restored, *state, "the ordinary whole-state import remains the final authority");
+}
+
+#[test]
+fn rfc37_budget_all_tables_and_income_tails_match_frozen_header_grammar() {
+    let p = finite_consumer_params(100);
+    let mut state = walk(&p)[1].0.clone();
+    // A codec inventory fixture: start from an actual admitted paid consumer,
+    // then populate every optional table to cover all export/rooting branches.
+    // These synthetic rows are not a valid fold or a whole-state import claim.
+    let budget = state.bond_budget.as_mut().unwrap();
+    budget.assignments.insert(bond_key(1), PalwCapitalAssignmentRowV1::default());
+    budget.models.insert(h64(0xD4), PalwModelBudgetRowV1::default());
+    budget.liability_releases.insert((400, bond_key(1)));
+    budget.releases.insert((500, h64(0xDB)));
+    budget.reporter_income.insert(h64(0xD5), PalwReporterIncomeBindingV1 {
+        recipient: Some(bond_key(1)), payload: h64(0xD6), maximum: 37, accepted_daa: 100,
+        awarded_daa: Some(101), queue: Some(h64(0xD7)), paid_daa: None, historical_boundary: None,
+    });
+    budget.material_income.insert(h64(0xD8), PalwMaterialIncomeV1 {
+        root: Some(h64(0xD9)), amount: 41, accepted_daa: 100,
+        payment: PalwMaterialPaymentV1::HeldEscrow { obligation: h64(0xDA) },
+    });
+    assert!(!budget.releases.is_empty() && !budget.claims.is_empty() && !budget.bonds.is_empty());
+    assert!(!budget.assignments.is_empty() && !budget.models.is_empty() && !budget.liability_releases.is_empty());
+    let tail_bytes = [
+        borsh::to_vec(budget.reporter_income.values().next().unwrap()).unwrap(),
+        borsh::to_vec(budget.material_income.values().next().unwrap()).unwrap(),
+        borsh::to_vec(budget.consumer_contracts.values().next().unwrap()).unwrap(),
+    ];
+    // An independent spelling of the historical V1..V4 header grammar. Do not
+    // use the new shared header factory to generate its own expected result.
+    let collection = |label: &[u8], rows: Vec<(Vec<u8>,Vec<u8>)>| {
+        palw_collection_root_of_entries_v1(label, rows.len(), rows.into_iter())
+    };
+    let income = collection(b"bond_budget_reporter_income/v1", budget.reporter_income.iter()
+        .map(|(k,v)| (borsh::to_vec(k).unwrap(), borsh::to_vec(v).unwrap())).collect());
+    let material = collection(b"bond_budget_material_income/v1", budget.material_income.iter()
+        .map(|(k,v)| (borsh::to_vec(k).unwrap(), borsh::to_vec(v).unwrap())).collect());
+    let consumer = collection(b"bond_budget_consumer_contract/v1", budget.consumer_contracts.iter()
+        .map(|(k,v)| (borsh::to_vec(k).unwrap(), borsh::to_vec(v).unwrap())).collect());
+    for version in 1..=4 {
+        let budget = state.bond_budget.as_mut().unwrap();
+        budget.header.version = version;
+        let mut expected = blake2b_simd::Params::new().hash_length(64).key(b"misaka-palw/bond-budget/header/v1").to_state();
+        let mut part = |bytes: &[u8]| { expected.update(&(bytes.len() as u64).to_le_bytes()); expected.update(bytes); };
+        part(&borsh::to_vec(&budget.header).unwrap());
+        if version >= 2 { part(b"reporter_income/v1"); part(income.as_byte_slice()); }
+        if version >= 3 { part(b"material_income/v1"); part(material.as_byte_slice()); }
+        if version >= 4 { part(b"consumer_contract/v1"); part(consumer.as_byte_slice()); }
+        assert_eq!(budget.root_parts().0.as_byte_slice(), expected.finalize().as_bytes());
+        let mut seen = BTreeSet::new();
+        state.visit_direct_state_root_collections_v1(|label, _, rows, _| {
+            if label.starts_with(b"bond_budget_") || label == crate::palw_nested_row_stream_v1::BUDGET_HEADER {
+                assert!(rows > 0, "the fixture exercises a nonempty table"); seen.insert(label.to_vec());
+            }
+            Ok(())
+        }).unwrap();
+        assert_eq!(seen.len(), 7, "six direct tables plus the nested header");
+        let mut wire = Vec::new();
+        let len = crate::palw_direct_row_export_v1::write_row_generation_v1(&state, b"codec-fixture", &mut wire).unwrap();
+        crate::palw_row_stream_v1::palw_accept_row_stream_generation_v1(
+            state.state_root(), &wire, std::io::sink(), len, None,
+        ).unwrap();
+        if version == 4 {
+            for tail in &tail_bytes {
+                let at = wire.windows(tail.len()).position(|bytes| bytes == tail).unwrap();
+                let mut corrupt = wire.clone(); corrupt[at + tail.len() - 1] ^= 1;
+                assert!(crate::palw_row_stream_v1::palw_accept_row_stream_generation_v1(
+                    state.state_root(), &corrupt, std::io::sink(), len, None,
+                ).is_err(), "changing any nested income/contract tail must change the committed header");
+            }
+        }
     }
 }

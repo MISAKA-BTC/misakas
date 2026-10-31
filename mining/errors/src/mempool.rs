@@ -6,6 +6,10 @@ use thiserror::Error;
 
 #[derive(Error, Debug, Clone, PartialEq, Eq)]
 pub enum RuleError {
+    #[error("local native capacity unavailable: {0}")]
+    LocalNativeCapacityUnavailable(kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1),
+    #[error("local native context unavailable: {0}")]
+    LocalNativeStateContextUnavailable(kaspa_consensus_core::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1),
     /// A consensus transaction rule error
     ///
     /// Note that following variants are converted:
@@ -111,6 +115,8 @@ impl From<NonStandardError> for RuleError {
 impl From<TxRuleError> for RuleError {
     fn from(item: TxRuleError) -> Self {
         match item {
+            TxRuleError::LocalNativeCapacityUnavailable(why) => Self::LocalNativeCapacityUnavailable(why),
+            TxRuleError::LocalNativeStateContextUnavailable(why) => Self::LocalNativeStateContextUnavailable(why),
             TxRuleError::ImmatureCoinbaseSpend(_, _, _, _, _) => RuleError::RejectImmatureSpend(item),
             TxRuleError::MissingTxOutpoints => RuleError::RejectMissingOutpoint,
             _ => RuleError::RejectTxRule(item),
@@ -184,3 +190,9 @@ impl NonStandardError {
 }
 
 pub type NonStandardResult<T> = std::result::Result<T, NonStandardError>;
+
+impl RuleError {
+    pub fn is_local_native_retry_v1(&self) -> bool {
+        matches!(self, Self::LocalNativeCapacityUnavailable(_) | Self::LocalNativeStateContextUnavailable(_))
+    }
+}

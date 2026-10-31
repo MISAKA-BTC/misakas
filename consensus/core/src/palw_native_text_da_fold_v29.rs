@@ -190,7 +190,7 @@ pub(super) fn request(
     let ledger = super::super::palw_kernel_route_fold_v1::route_ledger_policy_v1(builder)?;
     let amount = ledger.demand_bond.max(1);
     let fee = ledger.job_fee.max(1);
-    if (bond.collateral as u128).saturating_sub(builder.committed_at(signer, ctx.daa_score)) < (amount as u128 + fee as u128) {
+    if (bond.collateral as u128).saturating_sub(builder.committed_at(signer, ctx.daa_score)?) < (amount as u128 + fee as u128) {
         return Err(refused("text29 original request actual fee/obligation unavailable"));
     }
     let deadline =

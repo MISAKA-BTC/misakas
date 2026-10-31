@@ -80,6 +80,9 @@ use kaspa_muhash::MuHash;
 use libcrux_ml_dsa::ml_dsa_87::MLDSA87KeyPair;
 use std::sync::Arc;
 
+#[path = "rfc0041_bond_free_bootstrap.rs"]
+mod bond_free_bootstrap;
+
 const T12_GENESIS_CARDS: usize = 8;
 
 #[path = "t12_real_attempt.rs"]

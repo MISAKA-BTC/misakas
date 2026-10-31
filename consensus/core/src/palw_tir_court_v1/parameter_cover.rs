@@ -50,7 +50,7 @@ pub fn derive_parameter_cover_v1(binding: &PalwTirStepBindingV1, leaf: u64,
         BindingOutcome::Convicted(v)=>return Err(format!("the binding itself convicts ({:?})",v.fault)),
     };
     let prepared=PreparedParameterCoverV1::new(verified,binding.job_context.clone())?;
-    prepared.named(leaf,budget)?.ok_or("parameter cover needs a dissected commit leaf".into())
+    prepared.named(leaf,budget)?.ok_or_else(|| "parameter cover needs a dissected commit leaf".into())
 }
 
 /// Exact external boundaries reached by the conservative named-root walk.
@@ -213,7 +213,7 @@ struct Walk<'a,'sink> {
     edges: u64, seen: BTreeSet<(u32, u16, u16, usize)>, pending: Vec<(u32, u16, u16, usize)>, leaves: BTreeSet<u32>,
 }
 fn count(shape: &[usize]) -> Result<usize, CoverErrorV1> {
-    shape.iter().try_fold(1usize, |a,b| a.checked_mul(*b).ok_or("cover shape overflow".into()))
+    shape.iter().try_fold(1usize, |a,b| a.checked_mul(*b).ok_or_else(|| "cover shape overflow".into()))
 }
 fn coords(mut index: usize, shape: &[usize]) -> Result<Vec<usize>, CoverErrorV1> {
     if index >= count(shape)? { return Err("cover index outside shape".into()); }
@@ -225,7 +225,7 @@ fn index(c: &[usize], shape: &[usize]) -> Result<usize, CoverErrorV1> {
     if c.len()!=shape.len() { return Err("cover coordinate rank".into()); }
     c.iter().zip(shape).try_fold(0usize, |a,(v,n)| {
         if v>=n { return Err("cover coordinate outside shape".into()); }
-        a.checked_mul(*n).and_then(|x|x.checked_add(*v)).ok_or("cover coordinate overflow".into())
+        a.checked_mul(*n).and_then(|x|x.checked_add(*v)).ok_or_else(|| "cover coordinate overflow".into())
     })
 }
 fn broadcast(c: &[usize], shape: &[usize]) -> Result<usize,CoverErrorV1> {

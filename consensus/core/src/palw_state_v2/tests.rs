@@ -28656,6 +28656,11 @@ mod evm_market {
             kernel_court_admission_v1: None,
             tir_container_identity_active: false,
             fp_answer_accounting_active: false,
+            family_supplier_active: false,
+            native39_settlement_checkpoint: None,
+            native_fact_ruleset: None,
+            native_fact_quantum_maturity_daa: None,
+            family_original_table_inventories_v2: Default::default(),
             fp_claim_answers: Default::default(),
             fp_winning_carriers: Default::default(),
             carrier_input_spends: Default::default(),
@@ -28950,6 +28955,11 @@ mod evm_market {
             kernel_court_admission_v1: None,
             tir_container_identity_active: false,
             fp_answer_accounting_active: false,
+            family_supplier_active: false,
+            native39_settlement_checkpoint: None,
+            native_fact_ruleset: None,
+            native_fact_quantum_maturity_daa: None,
+            family_original_table_inventories_v2: Default::default(),
             fp_claim_answers: Default::default(),
             fp_winning_carriers: Default::default(),
             carrier_input_spends: Default::default(),
@@ -32185,6 +32195,7 @@ mod rcore_s1_api {
                         let v5 =
                             palw_bond_collateral_is_locked_v5(&s, key, record, now, delay, escaped, duty_gate, dormant.window_court());
                         let v6 = palw_bond_collateral_is_locked_v6(&s, &dormant, key, record, now, delay, raw, duty_gate);
+                        assert_eq!(palw_bond_collateral_is_locked_checked_v7(&s,&dormant,key,record,now,delay,raw,duty_gate).unwrap(),v6,"checked exit preserves legacy without native197");
                         assert_eq!(v6, v5, "below the fence: {key:?} now={now} raw={raw:?} gate={duty_gate}");
                         let v6_armed = palw_bond_collateral_is_locked_v6(&s, &armed, key, record, now, delay, raw, duty_gate);
                         assert_eq!(v6_armed, v5, "past it with no court and no row: {key:?}");
@@ -33899,7 +33910,7 @@ mod s4_conviction_funnel {
         let at = ctx(2, 200, 2);
         let extras = PalwTransitionExtrasV1::default();
         let mut b = TransitionBuilder::new(&s, &p, false, false, false, false, &extras);
-        let conv = b.open_conviction_v1(&[producer], 200);
+        let conv = b.open_conviction_v1(&[producer], 200).unwrap();
         assert_eq!(conv.c0(&producer), 1_000_000);
         let fp_first = b.post_final_fp_g_v1(&fp);
         assert_eq!(fp_first, Some(50_000), "G_fp = g_res + escrowed_reward");

@@ -658,14 +658,13 @@ pub fn palw_tfo1_provisional_lock_v1(tx: &Transaction) -> Option<TransactionOutp
     if !is_funded_original_carrier_v1(tx) {
         return None;
     }
-    let envelope = PalwTirFundedOriginalEnvelopeV1::decode_v1(&tx.payload).ok()?;
+    let envelope = crate::palw_tir_funded_original_envelope_v2::decode_funded_original_base_v2(&tx.payload).ok()?;
     envelope.inspect_carrier_v1(tx).ok().map(|facts| facts.outpoint())
 }
 
 /// Native caller resolves both wrapper fences. Funding always inspects the
 /// literal outer transaction's signed input scope and output, never a view.
 pub fn palw_wrapped_tfo1_provisional_lock_v1(tx: &Transaction, prefix_active: bool, answer_active: bool) -> Option<TransactionOutpoint> {
-    if !prefix_active { return palw_tfo1_provisional_lock_v1(tx); }
     if tx.subnetwork_id != crate::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT { return None; }
     let payload = if tx.payload.starts_with(b"FPR2") {
         if !prefix_active { return None; }
@@ -675,7 +674,7 @@ pub fn palw_wrapped_tfo1_provisional_lock_v1(tx: &Transaction, prefix_active: bo
         if !answer_active { return None; }
         crate::palw_fp_answer_accounting_v1::palw_fp_answer_envelope_view_v1(payload, u32::MAX as usize)?.inner
     } else { payload };
-    let envelope = crate::palw_tir_funded_original_envelope_v1::PalwTirFundedOriginalEnvelopeV1::decode_v1(payload).ok()?;
+    let envelope = crate::palw_tir_funded_original_envelope_v2::decode_funded_original_base_v2(payload).ok()?;
     envelope.inspect_carrier_v1(tx).ok().map(|facts| facts.outpoint())
 }
 
