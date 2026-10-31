@@ -86,6 +86,7 @@ pub enum MinerErrorV2 {
     Closed,
     Binding,
     Signer(String),
+    Journal(String),
 }
 impl From<ContractError> for MinerErrorV2 {
     fn from(error: ContractError) -> Self {
@@ -215,6 +216,8 @@ pub struct ProcessLimitsV2 {
     pub max_units_per_request: u64,
     pub max_tracked_units: u64,
     pub max_provider_reads: u64,
+    /// Cumulative canonical status lookups, including already completed units.
+    pub max_status_checks: u64,
     pub max_prepared_bytes: u64,
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -225,6 +228,7 @@ pub struct PreparationMeterV2 {
     /// meters actual outer framing/carriers in its native transmission ledger.
     pub prepared_bytes: u64,
     pub provider_reads: u64,
+    pub status_checks: u64,
     pub additional_work: u64,
 }
 
@@ -240,6 +244,7 @@ pub struct MinerResponderV2<'p, D> {
     // Canonical unit identity excludes Panel/nonce and absorbs overlapping ranges.
     prepared: BTreeMap<(SourceKind, Digest, u64), u64>,
     duty: PhantomData<D>,
+    poisoned: bool,
 }
 impl<'p, D: CanonicalDataDutyV2> MinerResponderV2<'p, D> {
     #[allow(clippy::too_many_arguments)]
@@ -259,6 +264,7 @@ impl<'p, D: CanonicalDataDutyV2> MinerResponderV2<'p, D> {
         if limits.max_units_per_request == 0
             || limits.max_tracked_units == 0
             || limits.max_provider_reads == 0
+            || limits.max_status_checks == 0
             || limits.max_prepared_bytes == 0
         {
             return Err(MinerErrorV2::Budget);
@@ -271,6 +277,7 @@ impl<'p, D: CanonicalDataDutyV2> MinerResponderV2<'p, D> {
             meter: PreparationMeterV2::default(),
             prepared: BTreeMap::new(),
             duty: PhantomData,
+            poisoned: false,
         })
     }
     pub fn meter(&self) -> PreparationMeterV2 {
@@ -284,6 +291,33 @@ impl<D: CanonicalDataDutyV2> MinerSource for MinerResponderV2<'_, D> {
     type Error = MinerErrorV2;
 
     fn respond(&mut self, duty: &D) -> Result<PreparedDataV2, MinerErrorV2> {
+        self.respond_recorded(duty, &mut recovery::EphemeralPreparationJournalV2)
+    }
+}
+
+impl<D: CanonicalDataDutyV2> MinerResponderV2<'_, D> {
+    fn record(
+        &mut self,
+        journal: &mut impl recovery::PreparationJournalV2,
+        added: Option<((SourceKind, Digest, u64), u64)>,
+    ) -> Result<(), MinerErrorV2> {
+        if let Err(error) = journal.persist(self, added) {
+            self.poisoned = true;
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    /// Record every spent preparation/control budget before source I/O or
+    /// releasing response bytes. A failed persist poisons this live session.
+    pub fn respond_recorded(
+        &mut self,
+        duty: &D,
+        journal: &mut impl recovery::PreparationJournalV2,
+    ) -> Result<PreparedDataV2, MinerErrorV2> {
+        if self.poisoned {
+            return Err(MinerErrorV2::Closed);
+        }
         let request = duty.request();
         if request.case != self.result.case_id() || request.contract != self.result.service_contract {
             return Err(MinerErrorV2::Binding);
@@ -312,50 +346,32 @@ impl<D: CanonicalDataDutyV2> MinerSource for MinerResponderV2<'_, D> {
         let mut pending = Vec::new();
         let mut fresh = 0u64;
         for index in request.first..request.end {
+            if self.meter.status_checks >= self.limits.max_status_checks {
+                return Err(MinerErrorV2::Budget);
+            }
+            self.meter.status_checks += 1;
+            self.record(journal, None)?;
             match duty.status(index)? {
                 MinerDataStatus::Complete => continue,
                 MinerDataStatus::NotRequested => return Err(MinerErrorV2::Binding),
                 MinerDataStatus::Pending => {}
             }
+            let next_fresh = fresh + u64::from(!self.prepared.contains_key(&(request.kind, request.source, index)));
+            // Check the candidate allocation at each step, before growing the
+            // pending vector. A huge request cannot hide behind a tiny consent.
+            self.preflight(&bounds, signed, pending.len() as u64 + 1, next_fresh)?;
+            fresh = next_fresh;
             pending.push(index);
-            if !self.prepared.contains_key(&(request.kind, request.source, index)) {
-                fresh += 1;
-            }
         }
         if pending.is_empty() {
             return Ok(PreparedDataV2 { request: *request, units: Vec::new() });
         }
-        let rounds = self.meter.rounds.checked_add(u64::from(fresh > 0)).ok_or(MinerErrorV2::Budget)?;
-        let unique_ceiling = fresh
-            .checked_mul(bounds.max_unit_bytes)
-            .and_then(|n| self.meter.unique_source_bytes.checked_add(n))
-            .ok_or(MinerErrorV2::Budget)?;
-        let wire_ceiling = (pending.len() as u64)
-            .checked_mul(bounds.max_unit_bytes)
-            .and_then(|n| self.meter.prepared_bytes.checked_add(n))
-            .ok_or(MinerErrorV2::Budget)?;
-        if rounds > bounds.budget.rounds.min(signed.rounds)
-            || unique_ceiling > bounds.budget.unique_source_bytes.min(signed.unique_source_bytes)
-            || wire_ceiling > bounds.budget.transmitted_bytes.min(signed.transmitted_bytes)
-            || wire_ceiling > self.limits.max_prepared_bytes
-            || (self.prepared.len() as u64).checked_add(fresh).filter(|n| *n <= self.limits.max_tracked_units).is_none()
-            || (pending.len() as u64)
-                .checked_mul(bounds.max_unit_bytes)
-                .filter(|n| *n <= bounds.budget.retained_bytes.min(signed.retained_bytes))
-                .is_none()
-            || self.meter.provider_reads >= self.limits.max_provider_reads
-            || (pending.len() as u64)
-                .checked_mul(bounds.work_per_read)
-                .and_then(|n| self.meter.additional_work.checked_add(n))
-                .filter(|n| *n <= bounds.budget.additional_work.min(signed.additional_work))
-                .is_none()
-        {
-            return Err(MinerErrorV2::Budget);
-        }
+        let rounds = self.preflight(&bounds, signed, pending.len() as u64, fresh)?;
         let mut response = Vec::new();
         // Count a round before I/O, including failure, so an unavailable source
         // does not create an unbounded retry loophole for a fresh range.
         self.meter.rounds = rounds;
+        self.record(journal, None)?;
         for index in pending {
             let mut found = false;
             for provider in self.providers {
@@ -368,6 +384,7 @@ impl<D: CanonicalDataDutyV2> MinerSource for MinerResponderV2<'_, D> {
                 }
                 self.meter.additional_work = work;
                 self.meter.provider_reads += 1;
+                self.record(journal, None)?;
                 let Ok(unit) = provider.unit(request.kind, request.source, index) else { continue };
                 // Reject oversized fields before any serialization/hash walk.
                 if !unit.bounded(bounds.max_unit_bytes) {
@@ -378,11 +395,15 @@ impl<D: CanonicalDataDutyV2> MinerSource for MinerResponderV2<'_, D> {
                     continue;
                 }
                 let key = (request.kind, request.source, index);
-                if let std::collections::btree_map::Entry::Vacant(entry) = self.prepared.entry(key) {
+                let added = if let std::collections::btree_map::Entry::Vacant(entry) = self.prepared.entry(key) {
                     entry.insert(data_bytes);
                     self.meter.unique_source_bytes += data_bytes;
-                }
+                    Some((key, data_bytes))
+                } else {
+                    None
+                };
                 self.meter.prepared_bytes += wire_bytes;
+                self.record(journal, added)?;
                 response.push((index, unit.clone()));
                 found = true;
                 break;
@@ -393,8 +414,49 @@ impl<D: CanonicalDataDutyV2> MinerSource for MinerResponderV2<'_, D> {
         }
         Ok(PreparedDataV2 { request: *request, units: response })
     }
+    fn preflight(&self, bounds: &DutyBoundsV2, signed: AggregateBudget, pending: u64, fresh: u64) -> Result<u64, MinerErrorV2> {
+        let rounds = self.meter.rounds.checked_add(u64::from(fresh > 0)).ok_or(MinerErrorV2::Budget)?;
+        let unique_ceiling = fresh
+            .checked_mul(bounds.max_unit_bytes)
+            .and_then(|n| self.meter.unique_source_bytes.checked_add(n))
+            .ok_or(MinerErrorV2::Budget)?;
+        let wire_ceiling = pending
+            .checked_mul(bounds.max_unit_bytes)
+            .and_then(|n| self.meter.prepared_bytes.checked_add(n))
+            .ok_or(MinerErrorV2::Budget)?;
+        if rounds > bounds.budget.rounds.min(signed.rounds)
+            || unique_ceiling > bounds.budget.unique_source_bytes.min(signed.unique_source_bytes)
+            || wire_ceiling > bounds.budget.transmitted_bytes.min(signed.transmitted_bytes)
+            || wire_ceiling > self.limits.max_prepared_bytes
+            || (self.prepared.len() as u64).checked_add(fresh).filter(|n| *n <= self.limits.max_tracked_units).is_none()
+            || pending
+                .checked_mul(bounds.max_unit_bytes)
+                .filter(|n| *n <= bounds.budget.retained_bytes.min(signed.retained_bytes))
+                .is_none()
+            || self.meter.provider_reads >= self.limits.max_provider_reads
+            || pending
+                .checked_mul(bounds.work_per_read)
+                .and_then(|n| self.meter.additional_work.checked_add(n))
+                .filter(|n| *n <= bounds.budget.additional_work.min(signed.additional_work))
+                .is_none()
+        {
+            return Err(MinerErrorV2::Budget);
+        }
+        Ok(rounds)
+    }
 }
 
 #[cfg(test)]
 #[path = "positive_miner_v2_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "positive_miner_v2_adversarial_tests.rs"]
+mod adversarial_tests;
+#[path = "positive_miner_v2_recovery.rs"]
+pub mod recovery;
+#[path = "positive_miner_v2_store.rs"]
+pub mod store;
+
+#[path = "positive_miner_v2_inference.rs"]
+pub mod inference;

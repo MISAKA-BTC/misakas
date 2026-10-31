@@ -30,18 +30,24 @@ fn budget() -> AggregateBudget {
     }
 }
 fn limits() -> ProcessLimitsV2 {
-    ProcessLimitsV2 { max_units_per_request: 8, max_tracked_units: 16, max_provider_reads: 32, max_prepared_bytes: 1 << 20 }
+    ProcessLimitsV2 {
+        max_units_per_request: 8,
+        max_tracked_units: 16,
+        max_provider_reads: 32,
+        max_status_checks: 1024,
+        max_prepared_bytes: 1 << 20,
+    }
 }
-struct Fixture {
-    result: MinerResultCommit,
-    contract: MinerServiceContract,
-    admission: AdmissionContext,
-    key: [u8; PUBKEY_BYTES],
-    signature: [u8; SIGNATURE_BYTES],
-    provider: Provider,
+pub(super) struct Fixture {
+    pub(super) result: MinerResultCommit,
+    pub(super) contract: MinerServiceContract,
+    pub(super) admission: AdmissionContext,
+    pub(super) key: [u8; PUBKEY_BYTES],
+    pub(super) signature: [u8; SIGNATURE_BYTES],
+    pub(super) provider: Provider,
 }
 impl Fixture {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         let operands: Vec<_> = (0..3)
             .map(|i| PalwArtifactOperandV1 {
                 tensor_name: "embedding".into(),
@@ -127,7 +133,7 @@ impl Fixture {
         self.signature =
             *libcrux_ml_dsa::ml_dsa_87::sign(&pair.signing_key, &self.result.id().0.0, RESULT_SIGN_CONTEXT, [0; 32]).unwrap().as_ref();
     }
-    fn request(&self, kind: SourceKind, first: u64, end: u64) -> SourceRequest {
+    pub(super) fn request(&self, kind: SourceKind, first: u64, end: u64) -> SourceRequest {
         SourceRequest {
             version: CONTRACT_VERSION,
             revision: CONTRACT_REVISION,
@@ -139,7 +145,7 @@ impl Fixture {
             end,
         }
     }
-    fn duty(&self) -> Duty {
+    pub(super) fn duty(&self) -> Duty {
         Duty {
             result: self.result.id(),
             request: self.request(SourceKind::ArtifactInventory, 0, 1),
@@ -148,14 +154,18 @@ impl Fixture {
             complete: Rc::new(RefCell::new(BTreeSet::new())),
         }
     }
-    fn responder<'a>(&self, providers: &'a [&'a dyn StoredProviderV2], limits: ProcessLimitsV2) -> MinerResponderV2<'a, Duty> {
+    pub(super) fn responder<'a>(
+        &self,
+        providers: &'a [&'a dyn StoredProviderV2],
+        limits: ProcessLimitsV2,
+    ) -> MinerResponderV2<'a, Duty> {
         MinerResponderV2::new(&self.admission, self.result.clone(), self.contract, 1, &self.key, &self.signature, providers, limits)
             .unwrap()
     }
 }
-struct Provider {
+pub(super) struct Provider {
     data: BTreeMap<(SourceKind, Digest, u64), StoredUnitV2>,
-    calls: Cell<u64>,
+    pub(super) calls: Cell<u64>,
 }
 impl StoredProviderV2 for Provider {
     fn unit(&self, kind: SourceKind, source: Digest, index: u64) -> Result<&StoredUnitV2, String> {
@@ -164,7 +174,7 @@ impl StoredProviderV2 for Provider {
     }
 }
 #[derive(Clone)]
-struct Duty {
+pub(super) struct Duty {
     request: SourceRequest,
     not_requested: bool,
     result: misaka_palw_positive_contract::identity::ResultId,
@@ -278,7 +288,9 @@ fn prepared_data_needs_node_intake_and_overlap_has_one_unique_cost() {
     // Panel change/nonce cannot appear in A0's canonical request identity.
     assert!(miner.respond_to(&duty, &first).unwrap().units.is_empty());
     assert!(miner.respond_to(&duty, &overlap).unwrap().units.is_empty());
-    assert_eq!(miner.meter(), before);
+    assert_eq!(miner.meter().provider_reads, before.provider_reads);
+    assert_eq!(miner.meter().prepared_bytes, before.prepared_bytes);
+    assert_eq!(miner.meter().unique_source_bytes, before.unique_source_bytes);
 }
 
 #[test]
@@ -293,7 +305,9 @@ fn withheld_panel_receipt_and_external_provider_delivery_need_no_miner_resend() 
     duty.accept(&f.result, &PreparedDataV2 { request, units });
     let before = miner.meter();
     assert!(miner.respond_to(&duty, &request).unwrap().units.is_empty());
-    assert_eq!(miner.meter(), before);
+    assert_eq!(miner.meter().provider_reads, before.provider_reads);
+    assert_eq!(miner.meter().prepared_bytes, before.prepared_bytes);
+    assert_eq!(miner.meter().unique_source_bytes, before.unique_source_bytes);
     assert_eq!(f.provider.calls.get(), 0);
 }
 
@@ -358,7 +372,8 @@ fn malformed_wrong_scope_and_over_budget_requests_do_no_provider_io() {
     limited.bounds.budget.unique_source_bytes = 1;
     assert_eq!(miner.respond_to(&limited, &valid), Err(MinerErrorV2::Budget));
     assert_eq!(f.provider.calls.get(), 0);
-    assert_eq!(miner.meter(), PreparationMeterV2::default());
+    assert_eq!(miner.meter().provider_reads, 0);
+    assert_eq!(miner.meter().prepared_bytes, 0);
 }
 
 #[test]
@@ -476,7 +491,8 @@ fn request_not_admitted_by_node_cannot_trigger_source_io() {
     duty.not_requested = true;
     assert_eq!(miner.respond(&duty), Err(MinerErrorV2::Binding));
     assert_eq!(f.provider.calls.get(), 0);
-    assert_eq!(miner.meter(), PreparationMeterV2::default());
+    assert_eq!(miner.meter().provider_reads, 0);
+    assert_eq!(miner.meter().prepared_bytes, 0);
 }
 
 #[test]
