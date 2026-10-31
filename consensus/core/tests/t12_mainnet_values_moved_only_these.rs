@@ -41,11 +41,11 @@ fn at_the_parent(mut p: Params) -> Params {
 
 /// `palw_offence_attribution_is_t12_only`'s `T12_BEFORE_THE_ATTRIBUTION` at `8270cf03` (testnet-12
 /// with the attribution fence taken away), before this change moved it.
-// re-pin 2026-10-30 @64535b7bf7e8: User selected DAA18400 for the unpublished G14 schedule on 2026-10-30; preserve the current main CI fixes (was d15e80d7…, 7df51396…)
+// re-pin 2026-10-31 @612b72dd2828: Stage the user-requested all-model G14 one-seat migration at DAA 18600; preserve historical release identities (was 396ba2c6…, 3f258e13…)
 const PARENT_WITHOUT_THE_ATTRIBUTION: (&str, &str, &str) = (
-    "396ba2c678b99de2e9afe5071c6288cddfac109d5ab46ba99f04b76bb913fe64",
+    "ce2ad41e28546373b90a664f8420421555eb9c93fe4e5b857ae59bb6b21a38c7",
     "df8d548dea8dc91bf12a34c6ba2f79d81c0736fb40212012080e4cce35cd5cfe",
-    "3f258e13da0c13843bf7af3e19c3c3e6cef756baa6dd9d64d69c428a0d1d99d2",
+    "821ef65e2be1c60bff8a36773df4bf2211eaa278c13e936735fe93a7ce6882b4",
 );
 
 #[test]

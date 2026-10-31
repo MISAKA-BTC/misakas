@@ -227,12 +227,23 @@ fn the_kit_names_the_int13_flag_day_height_the_preset_arms() {
     }
     let schedule = p.fence_schedule_v1();
     assert!(!schedule.contains(&9_000), "the cancelled 9,000 is not on the public schedule: {schedule:?}");
-    // The int-13 flag day, then the G14 17,000 flag day (lane ACT2, user decision 2026-10-27) as the last height.
+    // Preserve int-13 / kernel G14; the separate all-model migration is the next height.
     assert!(schedule.contains(&PALW_T12_INT13_DAA.unwrap()), "{schedule:?}");
     assert_eq!(
         schedule.last().copied(),
-        kaspa_consensus_core::config::params::PALW_T12_G14_17000_FLAG_DAY_DAA.or(PALW_T12_INT13_DAA),
-        "the schedule ends at the G14 flag day (or int-13 while it is dormant): {schedule:?}"
+        Some(PALW_T12_MODEL_PANEL_ONE_FENCE_DAA_V1),
+        "the schedule ends at the all-model G14 migration: {schedule:?}"
+    );
+}
+
+#[test]
+fn the_kit_names_the_all_model_single_seat_migration() {
+    const FLEET: &str = "contrib/t12-deploy-kit/fleet.env.example";
+    let fleet = repo_file(FLEET);
+    assert_eq!(shell_value(FLEET, &fleet, "MODEL_PANEL_ONE_FLAG_DAY_DAA"), PALW_T12_MODEL_PANEL_ONE_FENCE_DAA_V1.to_string());
+    assert_eq!(
+        palw_t12_shipped_params().palw_model_panel_one_v1_fence().map(|f| f.daa_score()),
+        Some(PALW_T12_MODEL_PANEL_ONE_FENCE_DAA_V1)
     );
 }
 

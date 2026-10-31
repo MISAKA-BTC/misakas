@@ -122,6 +122,8 @@ fn arm_split(
     court_at: u64,
     measured: Option<PalwCourtMeasurementV1>,
 ) -> (Params, Vec<PalwG14ArmingRecordV1>) {
+    // This fixture intentionally removes dependencies of the later model route.
+    p.palw_model_panel_one_v1 = None;
     // Shipped and launch already arm this list at 18,400. The fixture records only the filer and,
     // when measured, court capacity, so those entries go back to dormant first.
     palw_t12_arm_after_int13_at_v1(&mut p, PALW_T12_G14_17000_FENCES_V1, None);
@@ -526,6 +528,7 @@ fn court_capacity_arming_needs_a_measured_record() {
         Some(PalwCourtCapacityFenceV1::measured_at(ForkActivation::new(RELEASE + 1), test_measurement()).unwrap());
     assert!(unsynced.validate_palw_court_capacity_in_v1(&records).is_err());
     let mut never = t12.clone();
+    never.palw_model_panel_one_v1 = None;
     never.palw_court_capacity_v1 = Some(PalwCourtCapacityFenceV1::placeholder_at(ForkActivation::never()));
     never.sync_palw_court_capacity_v1();
     never.sync_palw_g14_gates_v1();
@@ -1591,7 +1594,7 @@ fn testnet12_identity_did_not_move() {
     let (params, identity, schedule) =
         (t12.consensus_params_id().to_string(), t12.consensus_identity_id().to_string(), t12.consensus_schedule_id().to_string());
     eprintln!("[t12 ids] params {params} identity {identity} schedule {schedule}");
-    assert!(params.starts_with("3e6da238") && identity.starts_with("5de80e64") && schedule.starts_with("b4706ae5"));
+    assert!(params.starts_with("3d33cad2") && identity.starts_with("5de80e64") && schedule.starts_with("f55a7039"));
     t12.validate_palw_v2().expect("testnet-12 as shipped validates");
     assert_eq!(t12.palw_court_capacity_v1.as_ref().map(|f| f.activation), Some(ForkActivation::new(18_400)));
     assert_eq!(bundle(&t12).state.court_capacity_v1().map(|m| m.from_daa), Some(18_400));

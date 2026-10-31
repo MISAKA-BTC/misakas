@@ -242,6 +242,13 @@ mod tests {
     }
 
     #[test]
+    fn historical_int13_release_does_not_inherit_the_new_fork() {
+        let historical = crate::config::params::palw_t12_release_v7_params();
+        assert!(historical.palw_model_panel_one_v1_fence().is_none());
+        historical.validate_palw_v2().unwrap();
+    }
+
+    #[test]
     fn one_signer_carries_the_whole_lock_and_duplicate_basis_cannot_reduce_it() {
         let old = model_claim_seat_lock_v1(Some(100), 99, 10_000, 1_000, 50, 2);
         let one = model_claim_seat_lock_v1(Some(100), 100, 10_000, 1_000, 50, 1);

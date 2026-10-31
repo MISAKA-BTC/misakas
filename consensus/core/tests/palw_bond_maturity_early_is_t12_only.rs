@@ -56,11 +56,11 @@ use kaspa_consensus_core::palw_panel_v2::{
 /// release `0e8ec984e` was `b8564b88…` / `5de80e64…` / `93da24cc…`, which `palw_t12_launch_params_v1()`
 /// still hashes to): params, identity, schedule — the same pins `palw_clock_lead_cap_is_t12_only`'s
 /// `T12_WITH_THE_CAP` holds.
-// re-pin 2026-10-30 @64535b7bf7e8: User selected DAA18400 for the unpublished G14 schedule on 2026-10-30; preserve the current main CI fixes (was 73e67678…, fd42c167…)
+// re-pin 2026-10-31 @612b72dd2828: Stage the user-requested all-model G14 one-seat migration at DAA 18600; preserve historical release identities (was 3e6da238…, b4706ae5…)
 const T12_RELEASE: (&str, &str, &str) = (
-    "3e6da238306cfdb7e71599d5ef8fb314f1b3ff33a50673af1321f3da9cfa5b94",
+    "3d33cad25caeada14dd729bf622c122b6832e94d50891d5a0662ca2c8aadc350",
     "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-    "b4706ae535fc2c9e4f0a0fe1b6cb0456025f3e00c1b8aba5cde02191f46f9194",
+    "f55a70399992d223d92b61c35f38012919024ef291edb5722026d66640a17508",
 );
 
 /// Heights the fence may take on testnet-12: the processor tests' low height, the release's 500, and

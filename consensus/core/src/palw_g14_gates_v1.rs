@@ -1228,7 +1228,9 @@ pub const PALW_G14_GENESIS_TEST_ISOLATION_V1: u64 = 0x0614_6E45_5E15_0001;
 /// no approved value exists, only an unmeasured candidate), and every fence whose own lane refuses it (Gate C, kernel route, EXEC,
 /// native, rule E). Never a network: its genesis is isolated, and only such a genesis skips the record pins.
 pub fn palw_g14_genesis_test_params_v1() -> Params {
-    let mut p = crate::config::params::palw_t12_shipped_params();
+    // This isolated fixture measures the original G14 families, including
+    // deliberately missing dependencies. It does not opt into a later route.
+    let mut p = crate::config::params::palw_t12_pre_model_panel_one_params_v1();
     p.genesis = palw_isolated_g14_genesis_v1(&p.genesis, Hash64::from_u64_word(PALW_G14_GENESIS_TEST_ISOLATION_V1))
         .expect("the t12 genesis payload is bounded");
     let at = Some(ForkActivation::new(0));

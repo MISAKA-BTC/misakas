@@ -503,7 +503,7 @@ pub fn palw_t12_arm_fence_list_at_v1(params: &mut Params, list: &[PalwPostLaunch
 /// baseline the full-activation flag day is judged against (the fork-id comparison, the "only this list moved it" twin). While both the
 /// int-13 height and this list's height are `None`, it equals [`palw_t12_release_v6_params`] (int-12, `5ee7fd8e…`), byte for byte.
 pub fn palw_t12_release_v7_params() -> Params {
-    let mut params = palw_t12_shipped_params();
+    let mut params = palw_t12_pre_model_panel_one_params_v1();
     // The int-13 entries stay at PALW_T12_INT13_DAA (15,500): this baseline is the public fleet's ruleset.
     palw_t12_arm_after_int13_at_v1(&mut params, PALW_T12_FULL_ACTIVATION_FENCES_V1, None);
     // The G14 17,000 list too (its value entries — allocation, frame cost — are not on the full list).

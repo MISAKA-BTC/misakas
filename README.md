@@ -18,15 +18,13 @@ Addresses keep the `misaka` prefix (`misaka…` mainnet, `misakatest…` testnet
 kaspad --testnet --netsuffix=12
 ```
 
-The [published G14-only candidate](https://github.com/MISAKA-BTC/misakas/releases/tag/testnet12-g14-17400-655b6cf3a) is built from
-`655b6cf3a8f61ebdce920af867f6bedd87e717d6`, with G14 scheduled at **DAA 17,400**. Its fingerprint is
-**`3e6da238306cfdb7e71599d5ef8fb314f1b3ff33a50673af1321f3da9cfa5b94`**, genesis
-`a27f8f44fe4d91a5…`, and schedule id `b4706ae535fc2c9e4f0a0fe1b6cb0456025f3e00c1b8aba5cde02191f46f9194`.
-The Linux x86-64 binaries, SHA-256 sums and evidence are attached to that release.
+The all-model G14 Panel=1 candidate in this checkout schedules its separate migration at **DAA 18,600**. Its fingerprint is
+**`3d33cad25caeada14dd729bf622c122b6832e94d50891d5a0662ca2c8aadc350`**, genesis
+`a27f8f44fe4d91a5…`, and schedule id `f55a70399992d223d92b61c35f38012919024ef291edb5722026d66640a17508`.
 
-This is the verified G14 candidate, not completion of the ongoing full-feature implementation. The latest recorded fleet state is the
-old release after the IBM rollback; publication does not deploy it. See [build, evidence and deployment status](docs/design/palw/integration/g14-17000/release-17400-2026-10-28.md)
-and [full-feature implementation status](docs/design/palw/integration/g14-17000/full-activation-17400-readiness-2026-10-28.md).
+This candidate is under Linux build and deployment validation. Code and local tests do not establish live activation,
+Final or SecurityCertified. See [the migration and validation record](docs/evidence/palw/model-panel-one-2026-10-31/README.md),
+[RFC-0042](docs/rfc/0042-all-model-g14-panel-one.md) and the [retained earlier G14 release record](docs/design/palw/integration/g14-17000/release-17400-2026-10-28.md).
 Read the [launch note](docs/history/networks/testnet-12/t12-launch-2026-09-25.md) before relying on the chain —
 **never count blocks, blue-score depth or DAA as finality on testnet-12**; use finality depth or a `Final` PALW anchor.
 

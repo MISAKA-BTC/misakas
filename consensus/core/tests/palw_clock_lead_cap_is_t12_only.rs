@@ -60,19 +60,19 @@ const SIMNET_IDS: (&str, &str, &str) = (
 
 /// testnet-12 at `befb59dfe` (the mainnet-values commit's own pins: `1870bc1f…` / `6e193d30…` /
 /// `79563f51…`) — what testnet-12 is with the cap taken away: the cap is the only thing that moved it.
-// re-pin 2026-10-30 @64535b7bf7e8: User selected DAA18400 for the unpublished G14 schedule on 2026-10-30; preserve the current main CI fixes (was 22d8d77e…, d69f9957…)
+// re-pin 2026-10-31 @612b72dd2828: Stage the user-requested all-model G14 one-seat migration at DAA 18600; preserve historical release identities (was 42ea6b4d…, 5a498472…)
 const T12_BEFORE_THE_CAP: (&str, &str, &str) = (
-    "42ea6b4d7fa3a51d9bd8b835d33c4d1cbc73316411063814ab787d816aa18a61",
+    "1003130d897db6e18b16ec9f7c9cbe1296df4128eda42005669d9201a9586423",
     "50990e0f0b634856aeae49eb38ffa38cfa991571be196d27c17befaefe805ec2",
-    "5a49847263e15fbe6df010f0b744eeac6c6468e7b3d598ec7b9e386766ce9e4b",
+    "6fcb297c8a3f19c7fcf36fd745ae2d469e981ced5d3c1b0003bf94bcc126111a",
 );
 
 /// testnet-12 as this change ships it — the ids a testnet-12 node on this build announces.
-// re-pin 2026-10-30 @64535b7bf7e8: User selected DAA18400 for the unpublished G14 schedule on 2026-10-30; preserve the current main CI fixes (was 73e67678…, fd42c167…)
+// re-pin 2026-10-31 @612b72dd2828: Stage the user-requested all-model G14 one-seat migration at DAA 18600; preserve historical release identities (was 3e6da238…, b4706ae5…)
 const T12_WITH_THE_CAP: (&str, &str, &str) = (
-    "3e6da238306cfdb7e71599d5ef8fb314f1b3ff33a50673af1321f3da9cfa5b94",
+    "3d33cad25caeada14dd729bf622c122b6832e94d50891d5a0662ca2c8aadc350",
     "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-    "b4706ae535fc2c9e4f0a0fe1b6cb0456025f3e00c1b8aba5cde02191f46f9194",
+    "f55a70399992d223d92b61c35f38012919024ef291edb5722026d66640a17508",
 );
 
 fn shipped(name: &str) -> Params {

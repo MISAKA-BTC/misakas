@@ -66,3 +66,8 @@ CARGO_BUILD_JOBS=2 cargo test -p kaspa-consensus-core --lib \
 
 この記録の unit fixture は claim / ledger の境界を試す小さい構成であり、1.5B・8K の実計算、Linux release 実行、fleet の切り替え、実際の公開 TIR court の全手順、実運用の検出率・応答率を測った結果ではない。
 Linux 用ビルドと配備検証は別途記録する。これらの pass を配備完了や `SecurityCertified` と読み替えない。
+
+## 追加のrelease整合性検査
+
+[SDK cache identity](18600-sdk-cache-test.log)は1件成功。[旧int13 constructor](historical-v7-test.log)は新fenceを引き継がず、過去のparamsのvalidationが成功。旧G14 isolated sandboxも同じ歴史基準を使う。
+既存のrelease re-pin toolでRustから値を再算出し、現行t12/copyの64 pinsを更新した。26件のhistoryは更新せず、mainnet・testnet-11・v22 goldenは不変。新規fenceを意図的に持たない旧経路の負のfixtureを明示化し、新経路の必須依存guard自体は維持した。元ログ・fleetの旧identity記録は保存した。

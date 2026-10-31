@@ -160,11 +160,11 @@ const PINS: &[(&str, &str, &str, &str)] = &[
         "5a1d8d5679e0e8d7e9022255668fd5d4b3e4c8a6c367acf3882c6a3d480d8b64",
     ),
     (
-        // re-pin 2026-10-30 @64535b7bf7e8: User selected DAA18400 for the unpublished G14 schedule on 2026-10-30; preserve the current main CI fixes (was 6d218875…, 87bb1893…)
+        // re-pin 2026-10-31 @612b72dd2828: Stage the user-requested all-model G14 one-seat migration at DAA 18600; preserve historical release identities (was 17e99353…, 61278daf…)
         "from(testnet-12) − IR flag day",
-        "17e9935343fcc32363316ba14638fcd9ce9ce9f7e93a9997137197c0be3a821a",
+        "d093d1194236ea5bd560fc092e3b9b3b08c085525536159fee77f9324b455f0c",
         "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-        "61278dafa0163ff10d4dcaabbae8780453c0236b850e4845dcb879c7bdef03f8",
+        "67c126f5f4fcb4ee5c659541fdf1a8a516db390aaa55292fe5084c302b2a687c",
     ),
     (
         "from(devnet)",
@@ -197,11 +197,11 @@ const PINS: &[(&str, &str, &str, &str)] = &[
         "5a1d8d5679e0e8d7e9022255668fd5d4b3e4c8a6c367acf3882c6a3d480d8b64",
     ),
     (
-        // re-pin 2026-10-30 @64535b7bf7e8: User selected DAA18400 for the unpublished G14 schedule on 2026-10-30; preserve the current main CI fixes (was 6d218875…, 87bb1893…)
+        // re-pin 2026-10-31 @612b72dd2828: Stage the user-requested all-model G14 one-seat migration at DAA 18600; preserve historical release identities (was 17e99353…, 61278daf…)
         "palw_t12_shipped_params − IR flag day",
-        "17e9935343fcc32363316ba14638fcd9ce9ce9f7e93a9997137197c0be3a821a",
+        "d093d1194236ea5bd560fc092e3b9b3b08c085525536159fee77f9324b455f0c",
         "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-        "61278dafa0163ff10d4dcaabbae8780453c0236b850e4845dcb879c7bdef03f8",
+        "67c126f5f4fcb4ee5c659541fdf1a8a516db390aaa55292fe5084c302b2a687c",
     ),
     (
         // re-pin 2026-10-30 @64535b7bf7e8: User selected DAA18400 for the unpublished G14 schedule on 2026-10-30; preserve the current main CI fixes (was 0fb64448…, 3299840c…)
@@ -232,11 +232,11 @@ const PINS: &[(&str, &str, &str, &str)] = &[
         "9410712f252cbb8aede7f1e337dc5f46c30f5c01914d0b8f2f714a26e69f1906",
     ),
     (
-        // re-pin 2026-10-30 @64535b7bf7e8: User selected DAA18400 for the unpublished G14 schedule on 2026-10-30; preserve the current main CI fixes (was 37e8b4bd…, 87bb1893…)
+        // re-pin 2026-10-31 @612b72dd2828: Stage the user-requested all-model G14 one-seat migration at DAA 18600; preserve historical release identities (was aee83ae9…, 61278daf…)
         "palw_t12_drill_params_v1 − IR flag day",
-        "aee83ae9e311d61aa96d789a5fef214bf6191c439ecf9b81f426d94f53315a77",
+        "b922235d0b96eb2e57b872a25f25385491794aa3bd23dea53b9084611e788085",
         "2254a5ae75cc1ed6fa70cc6f9a57281e7ab36aa8f80a820a545b81dad21549c6",
-        "61278dafa0163ff10d4dcaabbae8780453c0236b850e4845dcb879c7bdef03f8",
+        "67c126f5f4fcb4ee5c659541fdf1a8a516db390aaa55292fe5084c302b2a687c",
     ),
 ];
 

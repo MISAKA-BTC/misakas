@@ -379,18 +379,18 @@ gate 全体は未達**: item 1（T57 の規則欠と一部の cell）、2、4、
 
 ## 3. testnet-12 の identity（§5 の tool が書く）
 
-**出荷 commit（64535b7b ＋ 再 pin）の値** — `scripts/release/t12-repin.sh` が build から計算した値（`consensus/core/tests/t12_repin_values.rs` の
+**612b72dd での暫定値（出荷値ではない）** — `scripts/release/t12-repin.sh` が build から計算した値（`consensus/core/tests/t12_repin_values.rs` の
 `REPIN` 行。node が起動ログに出すのと同じ関数: fingerprint は `Params::from(testnet-12).consensus_params_id()`、genesis は premine から
 再計算した utxo commitment・merkle root・header hash）。下の block は §5 の `--apply` が書き換え（`# re-pin` 行が理由）、太字の表示も
 tool が書く（`--apply` は計算した commit に、出荷 commit での `--apply --shipping` は「出荷 commit（<commit> ＋ 再 pin）の値」に）。
 release build の probe（§4 step 10〜11 の `IDENTITY`）がこれと一致しなければ止める。
 
 ```
-# re-pin 2026-10-30 @64535b7bf7e8: User selected DAA18400 for the unpublished G14 schedule on 2026-10-30; preserve the current main CI fixes (was 73e67678…, fd42c167…)
-EXPECT_FP=3e6da238306cfdb7e71599d5ef8fb314f1b3ff33a50673af1321f3da9cfa5b94
+# re-pin 2026-10-31 @612b72dd2828: Stage the user-requested all-model G14 one-seat migration at DAA 18600; preserve historical release identities (was 3e6da238…, b4706ae5…)
+EXPECT_FP=3d33cad25caeada14dd729bf622c122b6832e94d50891d5a0662ca2c8aadc350
 EXPECT_GENESIS=a27f8f44fe4d91a5bed940be9dbd6d260ccb95cc00d948b1c08ddb6bd1a5f02542a6cf35c7a4d959ba4863ac1557861671763e5cc22937c697870283a8ca1f23
 PREMINE_TXID=5e0d5f1b37a71288cc0eb24acc10d2f4973dd3475569f274f03cc64a2233d035099d386e24c91d48427c30a895664dea979abedc90a7788fad170379e55e2669
-# schedule id b4706ae535fc2c9e4f0a0fe1b6cb0456025f3e00c1b8aba5cde02191f46f9194（fence schedule "750, 1000"）
+# schedule id f55a70399992d223d92b61c35f38012919024ef291edb5722026d66640a17508（fence schedule "750, 1000"）
 # rule manifest digest 9def81a1c56c02d5d1f9d24c5ddbe78d6f7598b31928ab6f388a2a074f14b4d4d4cf8c2245666bc13b9c91688c106efe428e8643075b68b40c4820adb4201d8d
 ```
 
