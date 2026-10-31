@@ -1,0 +1,16 @@
+   Compiling misaka-palw-tir-exec v1.1.0 (/Users/wata/.codex/worktrees/a3-panel-positive-court/MISAKA-testnet/misaka/palw/tir/exec)
+    Finished `test` profile [unoptimized] target(s) in 8.51s
+     Running tests/positive_typed_adapter.rs (/Users/wata/.cache/misaka-positive-a3-target/debug/deps/positive_typed_adapter-985284a67a55320c)
+
+running 6 tests
+test legacy_hash_path_corruption_and_failed_proof_attempts_do_not_reset_session_meter ... ok
+test live_material_backing_is_reserved_during_claim_export_and_released_without_meter_reset ... ok
+test original_sparse_capture_reconstructs_every_legacy_preimage_opening_range_and_expanded_lane ... ok
+test independent_expected_identity_and_simultaneous_backing_caps_fail_closed ... ok
+test author_signed_altered_wide_claim_is_rejected_by_actual_source_recomputation ... ok
+typed-adapter window=1: relations=361 capture=22984 index=4944 claims=21272 external_stage_envelope=1410334720 additional_peak=1410906658 total_live=1410931886 built_material_bytes=211268 peak_material_bytes=1308 peak_logical_auth_storage_bytes=45093888 meter=TypedAdapterMeter { lookup_visits: 6804105, proof_attempts: 415, proof_leaf_reads: 13695, hash_work: 33568, claim_bytes: 21272, material_bytes: 6056574976 }
+typed-adapter window=3: relations=370 capture=23044 index=4944 claims=22448 external_stage_envelope=1410334720 additional_peak=1410907402 total_live=1410932306 built_material_bytes=229954 peak_material_bytes=1498 peak_logical_auth_storage_bytes=45095312 meter=TypedAdapterMeter { lookup_visits: 7366053, proof_attempts: 523, proof_leaf_reads: 14121, hash_work: 35240, claim_bytes: 22448, material_bytes: 6207569920 }
+test newly_registered_range_admissible_capture_streams_actual_a1_full_relation_materials ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.49s
+
