@@ -50,6 +50,9 @@ pub(in crate::pipeline::virtual_processor) struct NativePrefixStampV2 {
 }
 /// No public fields, Clone, Deserialize or DTO conversion. Keeping the actual
 /// admitted block body also retains its allocation owner; no deep tx copy.
+/// Production capture requires a real native RAM lease before Full validation
+/// or retained-entry allocation. `_lease: None` is only for private structural
+/// tests, which make no validation, resource or admission claim.
 pub(in crate::pipeline::virtual_processor) struct OwnedPositiveCarrierV2 {
     session: Session,
     body: BlockTransactionsV3,
@@ -86,6 +89,16 @@ pub(in crate::pipeline::virtual_processor) struct PositiveCarrierCompanionsV2 {
     session: Option<Session>,
     carriers: Vec<OwnedPositiveCarrierV2>,
     resource_fault: Option<NativeCoverageV1>,
+}
+/// An unarmed reservation is not capacity approval for this active native
+/// consumer. This conversion never creates a ticket or arms a global checker.
+fn require_positive_carrier_lease_v2(lease: Option<NativeDemandLeaseV1>) -> Result<NativeDemandLeaseV1, NativeCoverageV1> {
+    lease.ok_or_else(|| {
+        NativeCoverageV1::unsupported::<PositiveCarrierCompanionsV2>(
+            "positive carrier provenance",
+            "required native capacity lease is not armed",
+        )
+    })
 }
 impl PositiveCarrierCompanionsV2 {
     pub(super) fn capture(
@@ -124,7 +137,7 @@ impl PositiveCarrierCompanionsV2 {
             self.resource_fault = Some(NativeCoverageV1::overflow::<Self>("positive carrier provenance"));
             return;
         };
-        let lease = match reserve_native_requests_v1(bytes) {
+        let lease = match reserve_native_requests_v1(bytes).and_then(require_positive_carrier_lease_v2) {
             Ok(lease) => lease,
             Err(e) => {
                 self.resource_fault = Some(e);
@@ -166,7 +179,7 @@ impl PositiveCarrierCompanionsV2 {
             prefix,
             carrier_block: actual_carrier_block,
             index_within_block: index,
-            _lease: lease,
+            _lease: Some(lease),
         });
     }
     pub(in crate::pipeline::virtual_processor) fn take_resource_fault(&mut self) -> Option<NativeCoverageV1> {
@@ -283,6 +296,22 @@ mod tests {
             vec![],
         );
         (tx, View(HashMap::from([(outpoint, entry.clone())])), entry)
+    }
+    #[test]
+    fn unarmed_reservation_is_missing_capacity_not_permission_to_capture() {
+        // reserve_native_requests_v1 returns Ok(None) when both checkers are
+        // unarmed. Exercise that exact result without changing process-global
+        // OnceLocks or fabricating a successful native ticket.
+        let reservation: Result<Option<NativeDemandLeaseV1>, NativeCoverageV1> = Ok(None);
+        let refusal = reservation.and_then(require_positive_carrier_lease_v2);
+        assert!(matches!(
+            refusal,
+            Err(NativeCoverageV1::Unsupported { component, reason, .. })
+                if component == "positive carrier provenance" && reason == "required native capacity lease is not armed"
+        ));
+        let fault = NativeCoverageV1::overflow::<PositiveCarrierCompanionsV2>("native reservation");
+        let refused: Result<Option<NativeDemandLeaseV1>, NativeCoverageV1> = Err(fault.clone());
+        assert_eq!(refused.and_then(require_positive_carrier_lease_v2).err(), Some(fault));
     }
     #[test]
     fn public_validated_dto_cannot_substitute_actual_current_entries_fee_or_outputs() {
