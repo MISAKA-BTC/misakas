@@ -45,7 +45,7 @@ restart/reorg/IBDでは、使用済み量だけでなく、未完了duty・役�
 
 各raw eventは、そのevent直前のhistorical accepted-prefixのguard下で、役割・provider委任・duty・cutoff・実event時計・予約・policy/料金authorityを再認証する。admission時のverifierや現在tipの役割を全履歴へ使い回さない。その履歴検査と、最終current head/root/epoch/generation・actual時計・資金の照合は別段階である。復旧は [native journalのreadonly再結合](NATIVE-JOURNAL-R1.md) に従い、live admission/prepare/funding commitを再呼出しせず、真正なreadonly receiptを再結合する。
 
-source・historical・current native guardとpruning/backing保護、実leaseは、それぞれ必要な認証・quote・prepare・stageからDB write結果まで保持する。guardを失った場合はwriter排他内で全期待値を再resolveし、selected parent/root/prefix/generation/Case epoch/old head/役割/policy/未完予約/actual DAAをCASする。変化があればprepared capabilityを失効させる。同じroot/headへ戻るABAや、再確認直後にguardを解放してからwriteする経路を認めない。physical leaseは再起動時に再取得し、出力と抽出partsの必要寿命まで保持する。IBD・pruning・資料欠損の扱いはRFC-0044 §17の履歴・未検証・pending義務・料金・reorg/archive保持条件に従う。
+各eventのhistorical-step guardは、そのeventの全検査中cursorをpinし、検査終了後に解放して次eventへ進む。全再生からreadonly再結合・DB write結果までは、別のaccepted-prefix/current-view guard、source・pruning/backing保護と実leaseを必要な範囲で保持する。live単event writerも、認証・quote・prepare・stageからwrite結果まで必要なview保護を継続する。guardを失った場合はwriter排他内で全期待値を再resolveし、selected parent/root/prefix/generation/Case epoch/old head/役割/policy/未完予約/actual DAAをCASする。変化があればprepared capabilityを失効させる。同じroot/headへ戻るABAや、再確認直後に必要なview保護を解放してからwriteする経路を認めない。physical leaseは再起動時に再取得し、出力と抽出partsの必要寿命まで保持する。IBD・pruning・資料欠損の扱いはRFC-0044 §17の履歴・未検証・pending義務・料金・reorg/archive保持条件に従う。
 
 ## 実装完了と区別する範囲
 

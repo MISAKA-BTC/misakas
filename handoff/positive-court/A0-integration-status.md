@@ -5,13 +5,13 @@
 | 担当 | A0へ統合した範囲 | 未完了・保留 |
 | --- | --- | --- |
 | A0 | v2/r1共通型、frame作者認証、非循環funding scope、176/151/P、固定row `327393e8e`、無効のtyped fence、P所見 `069d54007`、record `d284f5902`、source read interface `49c86968c` | native live event・writer、実資金lock、P実draw、全consumer・復旧との結合 |
-| A1 | pure core exact検査器、署名/費用、ExpandedPlan・source-only FullRelation `d657007ce`、canonical tokenizerとborrow API | typed→FullRelation adapter、wide最終出力、native期待値と全資源予約、実LLM範囲/性能 |
+| A1 | pure core exact検査器、署名/費用、ExpandedPlan・source-only FullRelation `d657007ce`、canonical tokenizerとborrow API | wide最終出力のFullRelation接続、native期待値と全資源予約、実LLM範囲/性能 |
 | A2 | 通常推論・有限原資料応答、session seal、protected raw reopen meter復元、logical NoOp/fullCAS、common journal bridge `a87e7f789` | actual native duty/read factory、qualified paid receipt更新、実money owner |
-| A3 | r1 Panel/record/G14 cold資料、one-pass typed capture `da941bb55`、canonical tokenizer `dbe95bacc` | 逐次typed→legacy opening/FullRelation adapter検証、実LLMの範囲/peak/性能 |
+| A3 | r1 Panel/record/G14 cold資料、one-pass typed capture・canonical tokenizer、typed→legacy opening/ExpandedPlan adapter、同時保持予約修正 `b401bc5e2` | wide V2実行とcapture/IPC、実LLMの範囲/peak/性能 |
 | A4 | Court/coordinator/body0..7、future-frame課金前拒否、actual Full carrier保持・RAM lease必須化、readonly復旧receipt | actual176 one-writer、canonical job/role/profile/schedule、実資金lockとP |
 | A5 | 独立entitlement照合、旧7用途維持＋第8 WorkerPayment、first-source fee照合、readonly private会計receipt | 全native consumerと実coin lock/一回払い/安全返金・責任floor、P実承認 |
 | A6 | aux151 scanner/restore、shared journal/実A1 local replay、caller-batch material store/actualdata reader `6e25d7631`、実SourceLedger/global差分/fee隔離 `3773083f9` | production NativeReplayEnvironment・actual roles/資金/lease、kind1 qualified spend、P2P/IBD/GC/T12 |
-| A7 | 独立fixture/runner、future-copy反例、8用途fixture、A4 R5証拠監査。production79c3をA7自身のtreeへ独立固定 | guard準備後の同candidate全対象回帰、native/実LLM/複数Node性能。過去候補件数を合算しない |
+| A7 | 独立fixture/runner、future-copy反例、8用途fixture、A4 R5証拠監査。production79c3＋test-only fixture修正の固定候補で667件成功、原失敗と証拠を保持 | 最新wide統合候補の回帰、native/実LLM/複数Node性能。過去候補件数を合算しない |
 
 共通契約はrow段階29件、P所見後35件、record後41件とClippy成功を別snapshotに保存した。core/test sourceとconsensus libraryの型検査、fence専用8件も成功。各担当の別候補での成功と区別する。frame署名は作者の認証、FundingConsent署名は支払条件への同意だけである。row/cursor保存やP所見認証がnative権限を生成することはない。新Pは全LLMで実抽選の`Certified`のみを認め、`PublicCheckCertified`・旧S/K/V・local replay単独を流用しない。
 
@@ -38,3 +38,8 @@ A7へ`79c3f9bca`固定sourceでの独立回帰開始を依頼した。A6の実So
 
 
 `b3da72953`まで: explicit wide data primitives・profile resolver・旧record/StepSpace/bindingの未対応wide拒否を統合。stage2はprofile11/source2/data5の18件が同sourceで成功、Core strict Clippyは等価style整理後に成功。A7の79正式runはA5旧fixture6件失敗の原本を保持、`7463c2f69`のtest-only修正をA0 `b3da72953`へ統合しA7再実行を依頼した。owner55件は16MiB stackの別候補。A3 adapter `01b5fed24`は同時保持予約の不足が見つかり保留し、persistent予約とlive materialの保守的合算を修正中。P/native actual job/roles/money/全consumer/復旧・IBDと実LLM性能は未完了。新assignment RFC/ADR案の明示採択は未受領。
+
+
+2026-11-01追記（A0 `ab2d12ea8` 時点）: A3の同時保持予約修正済みadapter、A1の明示wide Step APIとmixed Fixed/Hist回帰を統合した。ownerのA3 42件／A1 11件は各sourceの範囲であり、Root同候補の全経路成功へ加算しない。lowerer final r2はRootで31件成功し、旧goldenとresident/streamed変換、wide数値・独立3way fixtureを含む対象sourceは試験前後不変だった。SDK幅pinとprofiled schema1 class-record wrapperは統合し、Root結合試験を実行中。実学習済みモデルの登録完了実績ではない。
+
+A7の旧79c3正式失敗（661成功/6失敗）と、test-only fixture修正後の固定候補 `c2e422625`（667成功/0失敗、role worker ignored 1、16MiB test stack）を別の原記録として取り込んだ。これは現在のwide/SDK/A3統合候補の結果ではない。source役割別の残予約保護は [接続条件](../../docs/design/palw/positive-court/ROLE-RESERVATION-R1.md) に具体化し、A4/A6がread-only reviewした。既存source replay53件はこのnative保護の実装実績ではなく、actual mapper/残予約ownerは引き続き未供給。
