@@ -3,7 +3,7 @@ diff --git a/testing/positive-court-a7/tests/pipeline.rs b/testing/positive-cour
 +++ b/testing/positive-court-a7/tests/pipeline.rs
 @@ -5,16 +5,29 @@
  mod support;
- 
+
  use misaka_palw_positive_accounting::credit::{
 -    ALL_CREDIT_USES, CreditDenial, CreditLimits, EconomicReadiness, FraudState, GateCApproval, PositiveCreditGate,
 +    ALL_CREDIT_USES, CreditDenial, CreditLimits, EconomicReadiness, FraudState, GateCApproval, PositiveCreditGate, RootedCreditView,
@@ -30,7 +30,7 @@ diff --git a/testing/positive-court-a7/tests/pipeline.rs b/testing/positive-cour
 +    CreditUse::Dependency,
 +    CreditUse::WorkerPayment,
 +];
- 
+
  #[test]
  fn bound_a2_rejects_parameters_that_do_not_open_to_the_fixed_registration() {
 @@ -87,13 +100,13 @@
@@ -99,7 +99,7 @@ diff --git a/testing/positive-court-a7/tests/pipeline.rs b/testing/positive-cour
 -    assert_private_consumers(&view, claim, false);
 +    assert_primary_consumers(&view, claim, false);
  }
- 
+
  #[test]
 @@ -156,13 +170,13 @@
      let packet = a3_packet(&trusted, &a2, false, 1);
@@ -236,7 +236,7 @@ diff --git a/testing/positive-court-a7/tests/pipeline_support/mod.rs b/testing/p
 @@ -220,24 +220,110 @@
      (descriptor, TirNodeChecker.finish(&context, progress).unwrap())
  }
- 
+
 -/// A configured test owner of simulated A4/Gate C/economic facts. Native
 +/// Explicit private oracle for existing per-use rights. It does not infer a
 +/// right from PositivePassed, approval, readiness, fees, or accounting balances.
