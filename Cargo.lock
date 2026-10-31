@@ -6468,6 +6468,7 @@ dependencies = [
  "cc",
  "kaspa-consensus-core",
  "libc",
+ "libcrux-ml-dsa",
  "misaka-palw-base0",
  "misaka-palw-tir",
  "misaka-palw-tir-artifact",
