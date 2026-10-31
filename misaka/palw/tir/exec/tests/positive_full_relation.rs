@@ -23,7 +23,10 @@ use kaspa_consensus_core::{
         source_only::{OwnedTirSourceOnlyMaterialV1, TirSourceOnlyLimitsV1, build_source_only_legacy_v1, build_source_only_node_v1},
         tir_logits_event_disclosure_v1,
     },
-    palw_tir_step_v1::{PALW_TIR_STEP_BINDING_VERSION_V1, PalwTirLeafKindV1, PalwTirStepBindingV1, PalwTirStepSpaceV1},
+    palw_tir_step_v1::{
+        PALW_TIR_STEP_BINDING_VERSION_V1, PalwTirLeafKindV1, PalwTirStepBindingV1, PalwTirStepSpaceV1, palw_tir_execution_root_v1,
+        verify_tir_binding_v1,
+    },
 };
 use misaka_palw_positive_contract::{identity::*, messages::*, tir::greedy_selector_id};
 use misaka_palw_tir::{
@@ -314,6 +317,9 @@ impl Oracle {
 }
 
 fn fixture(program: TirProgramV1, map: MapParams, prompt: Vec<u32>, decode: u32) -> Fixture {
+    fixture_with_job_tokenizer(program, map, prompt, decode, Hash64::from_u64_word(18))
+}
+fn fixture_with_job_tokenizer(program: TirProgramV1, map: MapParams, prompt: Vec<u32>, decode: u32, job_tokenizer: Hash64) -> Fixture {
     let program = node_common::tiled(program);
     misaka_palw_tir::interval::analyze_ranges(&program).expect("fixture must satisfy original TIR range admission");
     let original = program.encode();
@@ -331,7 +337,9 @@ fn fixture(program: TirProgramV1, map: MapParams, prompt: Vec<u32>, decode: u32)
     let class_id = class.class_id(&artifact);
     let space = PalwTirStepSpaceV1::new(&class).unwrap();
     let mut job = node_common::job(&program, prompt.len() as u32, decode, class_id, &prompt, PalwPromptIdsFormV1::Flat);
-    job.tokenizer_id = class.tokenizer_id;
+    // Set the immutable native job before execution, tree construction and
+    // source carriage. The registration's tokenizer metadata is left intact.
+    job.tokenizer_id = job_tokenizer;
     let runner = TirClassRunnerV1::new(&space, &plan, &params, class_id).unwrap();
     let mut leaves = Vec::new();
     let run = runner.run(&job, &prompt, limits().plan.max_legacy_leaves, true, &mut |l| leaves.push(l.preimage.clone())).unwrap();
@@ -440,6 +448,9 @@ fn fixture(program: TirProgramV1, map: MapParams, prompt: Vec<u32>, decode: u32)
     Fixture { class, binding, generated: run.generated, claims, parts, genuine_first_step }
 }
 fn wide_fixture() -> Fixture {
+    wide_fixture_with_job_tokenizer(Hash64::from_u64_word(18))
+}
+fn wide_fixture_with_job_tokenizer(job_tokenizer: Hash64) -> Fixture {
     let mut p = ProgramBuilder::new(4, 1 << 18);
     let embed = p.param("embed", DType::I8, &[4, 2], false);
     let scale = p.konst(DType::I64, &[2], &[1 << 32, 1 << 32]);
@@ -460,7 +471,7 @@ fn wide_fixture() -> Fixture {
     let program = p.finish(pre, vec![], post, logits);
     let mut map = MapParams::default();
     map.tensors.insert((0, None), Tensor::new(DType::I8, vec![4, 2], vec![2, 3, 2, 3, 2, 3, 2, 3]).unwrap());
-    fixture(program, map, vec![0, 1], 2)
+    fixture_with_job_tokenizer(program, map, vec![0, 1], 2, job_tokenizer)
 }
 fn rounding_fixture() -> Fixture {
     let mut p = ProgramBuilder::new(4, 1 << 18);
@@ -851,4 +862,110 @@ fn separately_signed_miner_output_is_compared_only_after_the_final_full_relation
     assert_eq!(checker.progress().checked_rows, 2);
     assert_eq!(checker.progress().outcome, CheckOutcome::Checking);
     assert_eq!(checker.finish(), Ok(CheckOutcome::OutputMismatch));
+}
+
+#[test]
+fn canonical_zero_job_tokenizer_capture_and_full_check_preserve_nonzero_registration_metadata() {
+    let f = wide_fixture_with_job_tokenizer(Hash64::from_u64_word(0));
+    assert_eq!(f.class.tokenizer_id, Hash64::from_u64_word(18));
+    assert_eq!(f.binding.class, f.class);
+    assert_eq!(f.binding.job_context.tokenizer_id, Hash64::from_u64_word(0));
+    assert_eq!(f.result().tokenizer, native(Hash64::from_u64_word(0)));
+    assert_eq!(f.result().registered_class, native(f.class.class_id(&f.binding.artifact_root)));
+    let original_class = f.class.clone();
+    let original_job = f.binding.job_context.clone();
+    // These parts were captured and authenticated with tokenizer0 from the
+    // start, rather than relabeling an old nonzero-context capture afterward.
+    for part in &f.parts {
+        if let Some(PalwTirTraceEventDisclosureV1::Tiled { binding, .. }) = part.legacy.as_ref().and_then(|v| v.trace.as_ref()) {
+            assert_eq!(binding.class, original_class);
+            assert_eq!(binding.job_context, original_job);
+        }
+    }
+    let mut checker = f.checker(f.claims.clone(), limits());
+    finish_all(&f, &mut checker, 0);
+    assert_eq!(f.class, original_class);
+    assert_eq!(f.binding.job_context, original_job);
+}
+
+#[test]
+fn canonical_tokenizer_support_does_not_allow_class_job_or_panel_binding_substitution() {
+    let f = wide_fixture_with_job_tokenizer(Hash64::from_u64_word(0));
+    let result = f.result();
+    let rooted = AdmissionContext {
+        scope: result.scope,
+        expected_job: result.job,
+        expected_execution: result.execution,
+        expected_miner: result.miner,
+        expected_input: result.input,
+        registered_class: result.registered_class,
+        artifact: result.artifact,
+        program: result.program,
+        tokenizer: result.tokenizer,
+        execution_rules: result.execution_rules,
+        selector: result.selector,
+        required_form: ClaimForm::PositiveResultV2,
+    };
+    let key = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([91; 32]);
+    let signature: [u8; SIGNATURE_BYTES] =
+        *libcrux_ml_dsa::ml_dsa_87::sign(&key.signing_key, &result.id().0.0, RESULT_SIGN_CONTEXT, [0; 32]).unwrap().as_ref();
+    let mut foreign_class = f.class.clone();
+    foreign_class.tokenizer_id = Hash64::from_u64_word(999);
+    let mut foreign_job = f.binding.job_context.clone();
+    foreign_job.tokenizer_id = foreign_class.tokenizer_id;
+    foreign_job.shape_profile_id = foreign_class.class_id(&f.binding.artifact_root);
+    assert!(matches!(
+        FullRelationPreparation::authenticate(
+            &rooted,
+            &foreign_class,
+            f.binding.artifact_root,
+            &foreign_job,
+            PalwPromptIdsFormV1::Flat,
+            limits(),
+            domains(),
+            result.clone(),
+            &miner_key(),
+            &signature
+        ),
+        Err(FullRelationError::Binding)
+    ));
+    let mut changed_job = f.binding.job_context.clone();
+    changed_job.tokenizer_id = Hash64::from_u64_word(999);
+    assert_ne!(changed_job.context_hash(), f.binding.job_context.context_hash());
+    assert!(matches!(
+        FullRelationPreparation::authenticate(
+            &rooted,
+            &f.class,
+            f.binding.artifact_root,
+            &changed_job,
+            PalwPromptIdsFormV1::Flat,
+            limits(),
+            domains(),
+            result,
+            &miner_key(),
+            &signature
+        ),
+        Err(FullRelationError::Binding)
+    ));
+    let prepared = f.prepare(limits());
+    for change_class in [false, true] {
+        let mut rewritten = f.binding.clone();
+        rewritten.job_context.tokenizer_id = Hash64::from_u64_word(999);
+        if change_class {
+            rewritten.class = foreign_class.clone();
+            rewritten.job_context.shape_profile_id = rewritten.class.class_id(&rewritten.artifact_root);
+        }
+        rewritten.committed_execution_root = palw_tir_execution_root_v1(
+            &rewritten.job_context.context_hash(),
+            &rewritten.full_logits_trace_root,
+            &rewritten.class.class_id(&rewritten.artifact_root),
+            rewritten.step_leaf_count,
+            &rewritten.step_merkle_root,
+        );
+        verify_tir_binding_v1(&rewritten, limits().plan.max_legacy_leaves).unwrap();
+        assert!(matches!(
+            prepared.freeze_record(rewritten, f.generated.clone(), principal(&panel_key()), f.claims.clone()),
+            Err(FullRelationError::Binding)
+        ));
+    }
 }
