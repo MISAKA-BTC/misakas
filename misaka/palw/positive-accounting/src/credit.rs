@@ -102,8 +102,20 @@ pub enum CreditDenial {
 /// the expected export/state identity, position, model, tokenizer and layout.
 /// An empty list must be authenticated too. No method takes an approval boolean.
 pub trait RootedCreditView {
+    /// Default scope for private single-anchor views. A native view's branch is
+    /// a fixed admission ancestry anchor, never its changing current tip.
     fn scope(&self) -> ChainScope;
     fn claim(&self, claim: ClaimId) -> Result<RootedCreditFacts, CreditDenial>;
+
+    /// Validate this claim's own immutable scope against the CURRENT rooted
+    /// view. Native implementations must resolve its admitted Result/Case and
+    /// accepted origin, policy/ruleset and actual lineage membership. Ancestors
+    /// may have distinct fixed anchors on that lineage. A supplied anchor list
+    /// or boolean is not native authority. The default preserves the strict
+    /// single-anchor private contract and rejects every scope mismatch.
+    fn validate_scope(&self, binding: &CreditBinding) -> Result<(), CreditDenial> {
+        if binding.scope == self.scope() { Ok(()) } else { Err(CreditDenial::Scope(binding.claim)) }
+    }
 
     fn checked_coverage(&self, claim: ClaimId) -> Result<CheckedCoverage, CreditDenial> {
         Err(CreditDenial::MissingLocalVerification(claim))
@@ -177,9 +189,7 @@ impl<'a, V: RootedCreditView> PositiveCreditGate<'a, V> {
             if facts.binding.claim != id || expected.is_some_and(|binding| binding != facts.binding) {
                 return Err(CreditDenial::Binding(id));
             }
-            if facts.binding.scope != self.view.scope() {
-                return Err(CreditDenial::Scope(id));
-            }
+            self.view.validate_scope(&facts.binding)?;
             match seen.get(&id) {
                 Some(false) => return Err(CreditDenial::DependencyCycle(id)),
                 Some(true) => continue,

@@ -13,6 +13,20 @@
 
 namespace予約だけでaux151を任意bytesとして受理しない。A6は`wire_kernel_aux.rs`へ正規key/value型のbounded scanner・NativeHeap・復元整合性を接続する。未知key、孤立Witness/Case、誤ID、別schema、上限超過を拒否する。
 
+### 1.1 固定row valueと読取境界
+
+`positive-contract/src/rows.rs`がaux151のvalue正本である。valueもBorsh `(2u16,1u16,NativeRowBody)`、variant 0–9は上記key kindと同順。全fieldは固定長または固定長の`Option`で、可変長collectionを含まない。keyは142 bytes、valueは16,384 bytesのcodec上限を先に検査する。この上限は資源quote・公開profileの承認ではない。key/version/kind/identityの不一致、未知variant、余剰・不足byteは拒否する。
+
+`AcceptedOrigin`は順に`accepting_block / carrier_block / carrier_transaction`（実native aliasと同じ64 bytesずつ）、`accepted_tx_ordinal / event_ordinal`（u32）、`accepted_daa / accepted_blue_score`（u64）。計216 bytesである。`Hash`の旧32-byte型へ切り詰めない。実foldが受理したoriginかどうかは別に検査する。row自身のpost-state rootをvalueへ入れない。
+
+Result/Witness/Fundingはliteral commitと2,592-byte公開鍵・4,627-byte署名を保存する。可変record、生成token、依存一覧、役割割当、予約、資料union、有限duty、原資料応答、精算、journal履歴は`AcceptedMaterial { origin, digest }`から正規preimageを解決する。参照hash一致だけで受理・計算一致・支払済みと見なさない。資料unionの区間集合は正規要求履歴から復元し、summaryだけを既提供discountの根拠にしない。
+
+CaseはResult、literal Service、全CoverageDescriptor、claim/Miner資料/Panelの三状態、positive witness、全Panel合計usage、予約・責任参照を別々に保持する。Coverageはcursor・署名/bytes/演算費のcacheであり、A1 terminalを代替しない。資料義務はPositive一致後も残り得る。Fundingはfee/capital/surplusの各legを分離し、各legの支払・返金・burn・残額のchecked conservationと、全初期額・実outpoint参照を検査する。残額の保存だけではrecipient・schedule・支払条件を認可しない。
+
+coreの`palw_positive_rows_v2::PositiveRowsV2::read`は実stateのaux151を読み、`Result<Option<NativeRowValue>, PositiveRowErrorV2>`を返す。kernel route欠落、row欠落、破損を区別する。`bundle`はResult/ClaimIndex/Case/Fundingの全linkと元の受付DAAでのMiner/payer署名を照合する。既存consentの受付期限を過ぎても、その理由で現在のcoin lockを消さない。署名・row読取成功はnative admission、登録期待値、現在lineage、live UTXO、local replay、P抽選承認のcapabilityではない。
+
+この段階ではlive decoder・writer・aux151 native scanner/restoreへの登録は未接続である。A6は型付きscannerと重複key拒否を接続し、native ownerは全cross-row整合性と認証済みhistoryを検査してから受理する。BTreeMapのlast-wins decodeに重複rowを任せない。
+
 ## 2. 安定したscope
 
 `ChainScope.branch`は、そのcaseに割り当てた**祖先anchor**であり、刻々変わる現在tipではない。native viewは現在のlineageにanchorが存在すること、branch固有のResult/Case rowが存在すること、同じaccepted-prefix/state世代であることを確認する。reorgで消えたcaseのsaved Passを移植しない。

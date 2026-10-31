@@ -1,0 +1,77 @@
+{
+  "command": [
+    "cargo",
+    "test",
+    "--locked",
+    "-p",
+    "misaka-palw-tir-exec",
+    "--features",
+    "node",
+    "--test",
+    "positive_check",
+    "--test",
+    "court"
+  ],
+  "environment_overrides": {
+    "CARGO_TARGET_DIR": "/Users/wata/.cache/misaka-positive-a1-target",
+    "CARGO_INCREMENTAL": "0",
+    "CARGO_PROFILE_DEV_DEBUG": "0",
+    "RUST_MIN_STACK": "67108864"
+  },
+  "cwd": "/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet",
+  "head": "52c6214111ba97136bf3736028d98cf0846f1ee9",
+  "status": " M misaka/palw/positive-contract/src/lib.rs\n M misaka/palw/tir/exec/src/node/mod.rs\n?? docs/design/palw/positive-court/tir-vectors-r1.json\n?? misaka/palw/positive-contract/src/tir.rs\n?? misaka/palw/positive-contract/tests/tir_contract.rs\n",
+  "source_files": [
+    {
+      "path": "Cargo.toml",
+      "bytes": 23092,
+      "sha256": "7b26aaa66e011be4e2f7795436f637f3b8d56568f54ac907eec7cf894b39e266"
+    },
+    {
+      "path": "Cargo.lock",
+      "bytes": 245722,
+      "sha256": "fa88abca9860a279e6bc7eeb61eb6e9b28a0def5856402cb4d7fe0601fbf2fed"
+    },
+    {
+      "path": ".cargo/config.toml",
+      "bytes": 1783,
+      "sha256": "4803ef93c0ff535fdbb87b93548efc2ddfbc4770e255a8452b04c6fe9cecb80f"
+    },
+    {
+      "path": "consensus/core/src/lib.rs",
+      "bytes": 66804,
+      "sha256": "ea23f4108144877c56a9b5e7340d9d34da3362c0ea0b92e40711d933e2a07004"
+    },
+    {
+      "path": "misaka/palw/tir/exec/Cargo.toml",
+      "bytes": 2608,
+      "sha256": "1080a27fc4483711254a0d6ef3435e28828e453c0c29825a94967ef6d23abacf"
+    },
+    {
+      "path": "misaka/palw/tir/exec/src/node/mod.rs",
+      "bytes": 3832,
+      "sha256": "b9d2d5e72fc750af0460e9814e194def1a1e5edc4549ae84ba01a5b0d1fd4c5a"
+    },
+    {
+      "path": "misaka/palw/tir/exec/src/node/positive_check.rs",
+      "bytes": 16110,
+      "sha256": "b24c959e378c0c48f7cf0654d607df5e929416ad38999473cd2ef1d6ef90eb78"
+    },
+    {
+      "path": "misaka/palw/tir/exec/tests/positive_check.rs",
+      "bytes": 16135,
+      "sha256": "55c1f927ca8429a8f14b3e9241e4802a9ba34a8ddd260f100587e876988f9b44"
+    },
+    {
+      "path": "misaka/palw/tir/exec/tests/court.rs",
+      "bytes": 29639,
+      "sha256": "28e1e4b3876a93adf7546111532d95fe2dc81ba360b89073f538ab8c719b6ffd"
+    }
+  ],
+  "started_utc": "20261031T114816.963192Z",
+  "log": "/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/a1-court-20261031T114816.log",
+  "cargo_pid": 37653,
+  "exit_code": 0,
+  "elapsed_seconds": 351.68216658299997,
+  "finished_utc": "2026-10-31T11:54:06.735328+00:00"
+}

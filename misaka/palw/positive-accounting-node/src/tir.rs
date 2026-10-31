@@ -64,9 +64,7 @@ impl<'a, S: RootedCreditView> TirCreditView<'a, S> {
         let plan = terminal.descriptor();
         let canonical_plan = coverage_plan_id(result, CheckProfile::ExactStreamV1, exact_derivation_id(), plan.mandatory_relations)
             .map_err(|_| CreditDenial::IncompleteCoverage(claim))?;
-        if binding.scope != self.rooted.scope() {
-            return Err(CreditDenial::Scope(claim));
-        }
+        self.rooted.validate_scope(&binding)?;
         if facts.binding != binding
             || terminal.result() != binding.result
             || plan.result != binding.result
@@ -114,10 +112,15 @@ impl<S: RootedCreditView> RootedCreditView for TirCreditView<'_, S> {
         self.rooted.claim(claim)
     }
 
+    fn validate_scope(&self, binding: &CreditBinding) -> Result<(), CreditDenial> {
+        self.rooted.validate_scope(binding)
+    }
+
     fn checked_coverage(&self, claim: ClaimId) -> Result<CheckedCoverage, CreditDenial> {
         let checked = self.terminals.get(&claim).ok_or(CreditDenial::MissingLocalVerification(claim))?;
         let facts = self.rooted.claim(claim)?;
-        if checked.binding != facts.binding || checked.binding.scope != self.rooted.scope() {
+        self.rooted.validate_scope(&checked.binding)?;
+        if checked.binding != facts.binding {
             return Err(CreditDenial::Binding(claim));
         }
         if checked.terminal.outcome() != CheckOutcome::Matched {

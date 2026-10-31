@@ -559,3 +559,63 @@ fn repeated_real_terminal_does_not_create_another_credit_record_or_skip_rooted_p
     assert_eq!(view.record_checked(&authenticated, third_terminal), Err(CreditDenial::Binding(result.claim_id())));
     assert_eq!(view.recorded_terminals(), 1);
 }
+
+#[test]
+fn signed_evidence_packets_authenticate_before_checking_and_charge_the_complete_signed_frame() {
+    use misaka_palw_positive_contract::ContractError;
+    let f = fixture();
+    let result = f.correct_result();
+    let (context, witness) = f.context(&result, limits());
+    let descriptor = TirNodeChecker.derive_plan(&context).unwrap();
+    let frames = f.frames(&witness, descriptor);
+    let signer = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([92; 32]);
+    let public_key = panel_key();
+    let mut progress = context.start().unwrap();
+    let mut signed_bytes = 0u64;
+    let quote = context.signed_transport_quote().unwrap();
+    assert_eq!(quote.max_packet_bytes, descriptor.max_part_bytes + SIGNATURE_BYTES as u64);
+
+    for bytes in &frames {
+        let frame = EvidenceFrame::decode(bytes, descriptor.max_part_bytes).unwrap();
+        let signed_size = frame.signed_wire_bytes();
+        assert_eq!(signed_size, frame.wire_bytes() + SIGNATURE_BYTES as u64);
+        let signature =
+            *libcrux_ml_dsa::ml_dsa_87::sign(&signer.signing_key, &frame.id().0.0, EVIDENCE_SIGN_CONTEXT, [0; 32]).unwrap().as_ref();
+        let before = progress.snapshot();
+        let before_wire = progress.charged_wire_bytes();
+        let before_signature = progress.charged_signature_bytes();
+        let before_transport = progress.charged_transport_bytes().unwrap();
+
+        let mut bad_signature = signature;
+        bad_signature[0] ^= 1;
+        let rejected = frame
+            .authenticate(&witness, &public_key, &bad_signature, signed_size)
+            .map(|authenticated| TirNodeChecker.check_authenticated_part(&context, &mut progress, authenticated));
+        assert!(matches!(rejected, Err(ContractError::Signature)));
+        assert_eq!(progress.snapshot(), before);
+        assert_eq!(progress.charged_wire_bytes(), before_wire);
+        assert_eq!(progress.charged_signature_bytes(), before_signature);
+        assert_eq!(progress.charged_transport_bytes().unwrap(), before_transport);
+
+        let over_budget = frame
+            .authenticate(&witness, &public_key, &signature, signed_size - 1)
+            .map(|authenticated| TirNodeChecker.check_authenticated_part(&context, &mut progress, authenticated));
+        assert!(matches!(over_budget, Err(ContractError::Budget)));
+        assert_eq!(progress.snapshot(), before);
+        assert_eq!(progress.charged_wire_bytes(), before_wire);
+        assert_eq!(progress.charged_signature_bytes(), before_signature);
+        assert_eq!(progress.charged_transport_bytes().unwrap(), before_transport);
+
+        let authenticated = frame.authenticate(&witness, &public_key, &signature, signed_size).unwrap();
+        assert_eq!(authenticated.author(), witness.author);
+        assert_eq!(authenticated.id(), frame.id());
+        assert_eq!(authenticated.frame().header(), frame.header());
+        TirNodeChecker.check_authenticated_part(&context, &mut progress, authenticated).unwrap();
+        signed_bytes += signed_size;
+    }
+    assert_eq!(progress.snapshot().next_leaf, descriptor.mandatory_relations);
+    assert_eq!(progress.charged_signature_bytes(), frames.len() as u64 * SIGNATURE_BYTES as u64);
+    assert_eq!(signed_bytes, progress.charged_transport_bytes().unwrap());
+    assert!(progress.charged_transport_bytes().unwrap() <= quote.total_packet_bytes);
+    assert_eq!(TirNodeChecker.finish(&context, progress).unwrap().outcome(), CheckOutcome::Matched);
+}
