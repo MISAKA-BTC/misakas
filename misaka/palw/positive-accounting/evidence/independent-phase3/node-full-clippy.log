@@ -1,0 +1,6 @@
+    Checking misaka-palw-positive-contract v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a5/MISAKA-testnet/misaka/palw/positive-contract)
+    Checking kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a5/MISAKA-testnet/consensus/core)
+    Checking misaka-palw-positive-accounting v1.1.0 (/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/misaka-positive-accounting-node.nVmOiX/misaka-palw-positive-accounting)
+    Checking misaka-palw-tir-exec v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a5/MISAKA-testnet/misaka/palw/tir/exec)
+    Checking misaka-palw-positive-accounting-node v1.1.0 (/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/misaka-positive-accounting-node.nVmOiX/misaka-palw-positive-accounting-node)
+    Finished `dev` profile [unoptimized] target(s) in 44.54s
