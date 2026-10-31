@@ -1,0 +1,450 @@
+    Finished `test` profile [unoptimized] target(s) in 0.19s
+     Running unittests src/lib.rs (target/a4-fresh/debug/deps/misaka_palw_positive_accounting-a78f4c03e86ed9fc)
+
+running 29 tests
+test credit::tests::dependency_work_and_stack_growth_are_bounded_without_truncating_ancestors ... ok
+test credit::tests::all_consumers_share_the_current_predicate_and_preserve_the_exact_weight ... ok
+test credit::tests::diamond_checks_every_expected_export_binding_even_for_an_already_visited_parent ... ok
+test credit::tests::every_nonpassed_outcome_is_uncredited_including_panel_failure_and_timeout ... ok
+test credit::tests::the_production_native_port_remains_unconditionally_closed ... ok
+test credit::tests::cycles_missing_bindings_and_noncanonical_parent_lists_are_rejected ... ok
+test credit::tests::positive_pass_does_not_replace_gate_c_or_economic_and_fraud_conditions ... ok
+test credit::tests::neither_saved_pass_nor_drawn_approval_replaces_local_full_coverage ... ok
+test credit::tests::input_branch_ruleset_output_and_plan_substitution_fail_closed ... ok
+test fees::tests::a_pending_source_duty_cannot_be_closed_by_positive_completion_alone ... ok
+test credit::tests::unverified_or_revoked_ancestor_holds_only_its_descendants ... ok
+test fees::tests::a_stale_positive_delivery_cannot_pay_completion_for_a_current_nonpassed_claim ... ok
+test fees::tests::changes_between_prepare_and_commit_are_rechecked_with_no_partial_mutation ... ok
+test fees::tests::account_and_tombstone_capacity_fail_closed_without_evicting_payment_markers ... ok
+test fees::tests::closure_settles_delivered_data_and_carriage_before_refunding_the_remainder ... ok
+test fees::tests::completing_panel_gets_one_scope_fee_without_mining_or_gate_c_credit ... ok
+test fees::tests::failed_capacity_funding_or_consent_leaves_no_case_or_debit ... ok
+test fees::tests::delivered_service_is_paid_once_when_the_claim_ends_unverified ... ok
+test fees::tests::failed_recipient_or_unknown_unit_never_charges_the_payer ... ok
+test fees::tests::fee_cap_full_schedule_burn_and_expiry_are_checked_before_admission ... ok
+test fees::tests::native_funding_has_no_placeholder_success_path ... ok
+test fees::tests::out_of_order_rollback_or_expired_admission_cannot_change_balances ... ok
+test fees::tests::preparation_is_read_only_and_identical_admission_is_one_hold ... ok
+test fees::tests::payment_refund_burn_reservation_and_dedupe_rollback_together ... ok
+test fees::tests::recipient_overflow_during_closure_cannot_leave_an_earlier_payment_or_refund ... ok
+test fees::tests::resource_and_payer_reservations_are_shared_across_cases_and_never_reset_by_retry ... ok
+test fees::tests::rollback_prevents_aba_reuse_of_an_old_prepared_payment ... ok
+test fees::tests::source_delivery_panel_abandonment_and_bad_witness_do_not_earn_completion_fee ... ok
+test fees::tests::tokens_and_undo_cannot_be_moved_between_identically_funded_stores ... ok
+
+test result: ok. 29 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/a4-fresh/debug/deps/misaka_palw_positive_contract-a39d79176e534abc)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/certification.rs (target/a4-fresh/debug/deps/certification-265d607a088050d0)
+
+running 6 tests
+test fixed_codec_rejects_versions_unknown_verdicts_cuts_and_trailing_bytes ... ok
+test fixed_body_matches_independent_field_order_and_id_hash ... ok
+test full_result_output_and_conditions_cannot_borrow_another_subject_vote ... ok
+test native_expectations_pin_all_identity_draw_and_material_fields ... ok
+test every_fixed_field_is_in_the_statement_id ... ok
+test actor_and_new_role_signature_are_required_for_each_literal_verdict ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.32s
+
+     Running tests/contracts.rs (target/a4-fresh/debug/deps/contracts-8185f426e3ac8f6b)
+
+running 14 tests
+test admission_scope_pins_weights_class_and_prevents_legacy_fallback ... ok
+test canonical_source_request_has_no_panel_nonce_or_trace_generation_variant ... ok
+test coverage_identity_binds_the_derivation_rules_and_complete_relation_count ... ok
+test panel_ownership_and_attempt_are_signed_without_resetting_case ... ok
+test identities_keep_result_case_claim_and_witness_distinct ... ok
+test signed_finite_service_consent_is_distinct_from_funding_or_completion ... ok
+test evidence_is_borrowed_bounded_exactly_framed_and_canonically_ordered ... ok
+test independent_python_byte_and_id_vectors_match_the_shared_contract ... ok
+test zero_decode_overflow_and_context_overrun_are_rejected ... ok
+test fixed_commit_codecs_reject_truncation_trailing_bytes_and_old_wire ... ok
+test every_signed_execution_field_changes_identity ... ok
+test source_request_signature_binds_requester_but_canonical_identity_deduplicates ... ok
+test actual_mldsa_authenticates_actor_and_role_not_arithmetic ... ok
+test relay_cannot_supply_malformed_arithmetic_as_an_honest_panel_packet ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+     Running tests/execution_record.rs (target/a4-fresh/debug/deps/execution_record-0c846fbd06b29fca)
+
+running 6 tests
+test fixed_record_has_no_class_program_job_or_second_dtype_and_preserves_u32_ids ... ok
+test framing_and_binding_do_not_assert_arithmetic_or_terminal_correctness ... ok
+test truncation_trailing_bytes_budget_and_hostile_counts_are_rejected_without_token_allocation ... ok
+test record_result_artifact_execution_and_decode_bindings_cannot_be_substituted ... ok
+test independent_python_struct_pack_vector_matches_every_record_byte ... ok
+test unknown_magic_and_contract_versions_are_not_old_capture_fallbacks ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/funding.rs (target/a4-fresh/debug/deps/funding-7ca5ce9bb4010c92)
+
+running 5 tests
+test consent_service_result_can_be_constructed_once_without_a_hash_fixedpoint ... ok
+test amount_overflow_zero_plan_and_exclusive_admission_expiry_fail_closed ... ok
+test independent_python_projection_and_final_links_match ... ok
+test full_execution_source_service_and_plan_projection_are_bound ... ok
+test real_payer_signature_cannot_be_reused_for_changed_terms_or_actor ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+     Running tests/native_namespace.rs (target/a4-fresh/debug/deps/native_namespace-b87866f978301536)
+
+running 2 tests
+test fixed_native_keys_are_versioned_distinct_and_bounded ... ok
+test central_object_reservation_does_not_overlap_an_existing_range ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/native_rows.rs (target/a4-fresh/debug/deps/native_rows-9e3f4079f3e67303)
+
+running 5 tests
+test balances_require_conservation_and_checked_arithmetic ... ok
+test no_saved_pass_or_union_summary_can_exceed_its_own_plan ... ok
+test fixed_rows_roundtrip_and_do_not_conflate_corruption_with_absence ... ok
+test large_signed_rows_and_all_optional_references_fit_the_fixed_codec ... ok
+test signed_bundles_bind_origin_plan_consent_and_do_not_require_panel_ack ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+
+     Running tests/tir_contract.rs (target/a4-fresh/debug/deps/tir_contract-8820cb1dacd584b0)
+
+running 3 tests
+test current_frame_limit_covers_both_wrappers_and_exactly_one_relation ... ok
+test cone_and_trace_are_borrowed_exact_existing_g14_payloads ... ok
+test independent_python_vectors_pin_tir_annex_domains ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests misaka_palw_positive_accounting
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests misaka_palw_positive_contract
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Compiling misaka-palw-tir-exec v1.1.0 (/Users/wata/.codex/worktrees/a4-g14-court/MISAKA-testnet/misaka/palw/tir/exec)
+    Finished `test` profile [unoptimized] target(s) in 5.05s
+     Running tests/positive_check.rs (target/a4-fresh/debug/deps/positive_check-85f2de30568f38e6)
+
+running 13 tests
+test sparse_legacy_commitments_do_not_authorize_full_coverage ... ok
+test stochastic_selection_is_unsupported_instead_of_a_miner_refutation ... ok
+test budgets_overflow_heap_caps_and_malformed_vectors_fail_closed ... ok
+test output_mismatch_is_reported_only_after_complete_arithmetic ... ok
+test merkle_authenticated_arithmetic_lie_rejects_only_the_panel_candidate ... ok
+test missing_logits_bridge_and_forged_losing_lane_are_rejected ... ok
+test omitted_final_leaf_duplicate_and_reordering_cannot_complete ... ok
+test unauthenticated_model_material_cannot_replace_the_registered_inventory ... ok
+test wrong_model_input_count_and_empty_schedule_are_rejected ... ok
+test later_logits_tile_cannot_reuse_another_tile_or_rows_trace_opening ... ok
+test cold_node_checks_all_leaves_history_and_every_output_row ... ok
+test ragged_second_logits_tile_is_required_and_global_ties_choose_the_first_lane ... ok
+test valid_alternative_model_and_input_openings_cannot_be_spliced_into_the_admitted_job ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+
+     Running tests/positive_check_hardening.rs (target/a4-fresh/debug/deps/positive_check_hardening-b14f608ec31e7be7)
+
+running 2 tests
+test plan_derivation_refuses_inherited_and_malformed_contexts_before_reservation ... ok
+test honest_material_over_the_evaluation_allowance_ends_unverified_without_panel_blame ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/positive_contract.rs (target/a4-fresh/debug/deps/positive_contract-bf72bb0fe272cb85)
+
+running 13 tests
+test a_signed_alternate_selector_cannot_replace_the_rooted_greedy_rule ... ok
+test an_omitted_terminal_part_remains_incomplete_through_the_shared_port ... ok
+test bounded_outer_frames_do_not_authorize_malformed_inner_length_prefixes ... ok
+test signed_false_generated_ids_cannot_become_a_miner_output_mismatch ... ok
+test foreign_frame_identity_does_not_poison_the_target_candidates_progress ... ok
+test author_signed_malformed_material_charges_the_panel_packet_and_rejects_only_its_witness ... ok
+test signed_transport_reservation_includes_every_signature_and_refuses_aggregate_overflow ... ok
+test admission_reserves_every_outer_header_and_both_payload_length_prefixes ... ok
+test identical_public_ids_do_not_allow_progress_to_switch_local_resource_limits ... ok
+test signed_role_commits_and_framed_parts_reach_only_a_checked_terminal_fact ... ok
+test bad_actor_signatures_and_signed_false_witness_metadata_are_rejected ... ok
+test author_authenticated_frames_can_be_relayed_and_charge_all_packet_signatures ... ok
+test unauthenticated_or_foreign_packets_cannot_poison_an_honest_panel_candidate ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.50s
+
+     Running tests/positive_court_a4_admission.rs (target/a4-fresh/debug/deps/positive_court_a4_admission-1112e6678279dad4)
+
+running 9 tests
+test tests::native_unassigned_store_error_is_preserved_instead_of_successful_admission ... ok
+test tests::changed_real_store_funding_terms_fail_atomically_without_a_court_row ... ok
+test tests::prepare_is_not_admission_and_identical_retries_take_exactly_one_hold ... ok
+test tests::stale_checked_transition_cannot_cross_undo_and_restore_in_same_branch ... ok
+test tests::forged_signature_wrong_root_and_foreign_prepare_never_reach_an_admitted_case ... ok
+test tests::checked_store_transition_and_undo_preserve_source_of_authority ... ok
+test tests::same_case_different_signed_output_cannot_create_another_admission_or_budget ... ok
+test tests::funding_or_resource_rejection_never_publishes_separate_a4_state ... ok
+test tests::root_generation_branch_clock_and_changed_obligations_are_revalidated_before_commit ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+
+     Running tests/positive_court_a4_integration.rs (target/a4-fresh/debug/deps/positive_court_a4_integration-efe28f99ecd02873)
+
+running 19 tests
+test accepted_packet_receipts_require_the_full_plan_capacity_before_spending_an_attempt ... ok
+test admitted_fact_bridge::real_checked_terminal_binds_real_private_admission_and_closes_its_hold_once ... ok
+test authenticated_noncanonical_relation_count_is_charged_without_advancing_coverage ... ok
+test a_context_for_another_signed_witness_cannot_be_opened_under_the_same_result_and_plan ... ok
+test authenticated_bad_panel_material_does_not_refute_miner_or_reset_attempt_and_wire_budgets ... ok
+test accepted_packet_replays_are_receipt_bound_and_never_spend_budget_or_mint_coverage ... ok
+test candidate_authority_requires_a_finite_usable_signed_packet_limit ... ok
+test honest_material_with_insufficient_inner_evaluation_allowance_stays_unverified ... ok
+test actual_checker_finishes_signed_result_only_after_all_required_relations ... ok
+test signed_result_cannot_replace_rooted_input_even_with_its_own_valid_signature ... ok
+test exclusive_deadline_rejects_final_frame_before_any_success_fact ... ok
+test admitted_fact_bridge::timely_bound_fact_can_close_after_normal_generation_advance_and_service_expiry ... ok
+test admitted_fact_bridge::first_binding_after_funding_cutoff_uses_independent_current_court_deadline ... ok
+test unauthenticated_self_consistent_bad_material_cannot_poison_or_charge_an_honest_candidate ... ok
+test self_signed_unassigned_prover_cannot_spend_attempts_or_replace_the_active_candidate ... ok
+test fresh_common_court_replays_actual_authenticated_history_and_reconstructs_all_counters ... ok
+test replay_on_another_branch_or_after_the_current_cutoff_cannot_reuse_the_old_success ... ok
+test admitted_fact_bridge::bound_transition_checks_current_scope_resolution_and_store_epoch_after_undo ... ok
+test admitted_fact_bridge::foreign_receipt_case_result_branch_reverse_generation_or_missing_case_cannot_bind_fact ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.19s
+
+     Running tests/positive_court_a4_native.rs (target/a4-fresh/debug/deps/positive_court_a4_native-6850359f43cfdbf6)
+
+running 18 tests
+test atomic_funding_tests::native_result_body_uses_rooted_keys_and_rejects_other_kinds_or_versions ... ok
+test body_preflight_refuses_unknown_version_kind_truncation_and_trailing_bytes ... ok
+test all_local_body_operations_roundtrip_without_becoming_native_admission ... ok
+test atomic_funding_tests::funding_atomic_rejects_foreign_capability_and_preserves_native_unassigned_error ... ok
+test admission_expiry_is_exclusive_but_does_not_turn_into_a_payer_authorized_refund ... ok
+test atomic_funding_tests::funding_atomic_prepare_is_read_only_and_actual_store_idempotence_preserves_one_fee_hold ... ok
+test atomic_funding_tests::native_body_preflight_prepares_the_same_atomic_store_and_rechecks_actual_output ... ok
+test nested_opaque_length_prefixes_cannot_allocate_or_bypass_body_and_heap_caps ... ok
+test literal_payer_and_miner_signatures_bind_acyclic_final_links_without_a_lock_claim ... ok
+test result_signature_count_and_exact_relation_count_are_independently_bounded ... ok
+test atomic_funding_tests::funding_atomic_rejects_different_root_quote_or_consent_intent_before_admission ... ok
+test p_subject_attestation_body_is_bounded_and_its_literal_signature_is_not_draw_approval ... ok
+test atomic_funding_tests::native_body_peer_basis_must_equal_every_independently_derived_field ... ok
+test fully_resigned_peer_policy_quote_or_schedule_cannot_replace_the_rooted_basis ... ok
+test funding_prepare_is_bound_to_current_root_quote_output_and_coordinator_owner ... ok
+test atomic_funding_tests::funding_atomic_rechecks_generation_quote_actual_output_expiry_and_real_store_terms ... ok
+test payer_authorization_cannot_be_forged_repurposed_or_detached_from_the_final_result ... ok
+test source_fee_court_fee_capital_actual_output_and_checked_add_are_separate_bounds ... ok
+
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.99s
+
+     Running tests/positive_court_a4_record_ingress.rs (target/a4-fresh/debug/deps/positive_court_a4_record_ingress-57078b8a7caab31b)
+
+running 4 tests
+test direct_dto_construction_cannot_skip_outer_versions_operation_expected_result_or_bounds ... ok
+test decoded_roots_and_token_values_still_require_the_independent_a1_semantic_checker ... ok
+test checked_record_keeps_the_original_body_and_tokens_borrowed_without_role_authority ... ok
+test record_identity_decode_and_hostile_length_tampering_refuse_the_delivery ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/positive_expanded_plan.rs (target/a4-fresh/debug/deps/positive_expanded_plan-2aa6589ead26a92e)
+
+running 4 tests
+test original_matmul_and_reduction_work_is_counted_at_every_executed_position ... ok
+test original_sparse_i64_i128_and_output_unused_lanes_are_all_enumerated ... ok
+test expanded_geometry_rejects_wrong_identity_zero_jobs_and_every_finite_reservation_cap ... ok
+test dynamic_history_reused_layers_and_fixed_history_leaves_preserve_all_geometry ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/positive_production_port.rs (target/a4-fresh/debug/deps/positive_production_port-66d7348797f6d24c)
+
+running 3 tests
+test both_public_paths_implement_the_same_nodechecker_port_with_identical_opaque_types ... ok
+test pure_plan_and_diagnostic_types_are_identical_across_the_production_boundary ... ok
+test record_cap_and_error_values_cross_compatibility_paths_without_conversion ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/positive_record.rs (target/a4-fresh/debug/deps/positive_record-206d828caf90cd91)
+
+running 4 tests
+test primitive_only_record_reconstructs_trusted_binding_then_signed_parts_are_checked ... ok
+test generated_storage_and_encoded_record_caps_are_checked_without_consuming_prepared_state ... ok
+test failed_panel_authentication_during_delivery_does_not_poison_a_valid_retry ... ok
+test corrupt_record_delivery_does_not_consume_the_prepared_witness_or_touch_prior_progress ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.83s
+
+   Compiling misaka-palw-tir-exec v1.1.0 (/Users/wata/.codex/worktrees/a4-g14-court/MISAKA-testnet/misaka/palw/tir/exec)
+   Compiling misaka-palw-tir-sketch v1.1.0 (/Users/wata/.codex/worktrees/a4-g14-court/MISAKA-testnet/misaka/palw/tir/sketch)
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/a4-g14-court/MISAKA-testnet/consensus/core)
+    Finished `test` profile [unoptimized] target(s) in 2m 01s
+     Running unittests src/lib.rs (target/a4-fresh/debug/deps/kaspa_consensus_core-5b3fb8e6accaaca6)
+
+running 53 tests
+test palw_positive_court_v2::coordinator::capacity::tests::duplicate_and_conflicting_reservations_and_release_cannot_mint_capacity ... ok
+test palw_positive_court_v2::coordinator::capacity::tests::overflow_and_each_resource_dimension_fail_before_mutation ... ok
+test palw_positive_court_v2::coordinator::capacity::tests::positive_exhaustion_preserves_fraud_capacity_and_failed_reservation_is_atomic ... ok
+test palw_positive_court_v2::coordinator::admission::tests::checked_store_transition_and_undo_preserve_source_of_authority ... ok
+test palw_positive_court_v2::coordinator::capacity::tests::staging_can_be_discarded_if_funds_or_journal_fail ... ok
+test palw_positive_court_v2::coordinator::admission::tests::changed_real_store_funding_terms_fail_atomically_without_a_court_row ... ok
+test palw_positive_court_v2::coordinator::admission::tests::native_unassigned_store_error_is_preserved_instead_of_successful_admission ... ok
+test palw_positive_court_v2::coordinator::admission::tests::forged_signature_wrong_root_and_foreign_prepare_never_reach_an_admitted_case ... ok
+test palw_positive_court_v2::coordinator::admission::tests::prepare_is_not_admission_and_identical_retries_take_exactly_one_hold ... ok
+test palw_positive_court_v2::coordinator::admission::tests::same_case_different_signed_output_cannot_create_another_admission_or_budget ... ok
+test palw_positive_court_v2::coordinator::admission::tests::stale_checked_transition_cannot_cross_undo_and_restore_in_same_branch ... ok
+test palw_positive_court_v2::coordinator::admission::tests::funding_or_resource_rejection_never_publishes_separate_a4_state ... ok
+test palw_positive_court_v2::coordinator::funding::tests::native_result_body_uses_rooted_keys_and_rejects_other_kinds_or_versions ... ok
+test palw_positive_court_v2::coordinator::funding::tests::funding_atomic_rejects_foreign_capability_and_preserves_native_unassigned_error ... ok
+test palw_positive_court_v2::coordinator::funding::tests::funding_atomic_prepare_is_read_only_and_actual_store_idempotence_preserves_one_fee_hold ... ok
+test palw_positive_court_v2::coordinator::funding::tests::native_body_preflight_prepares_the_same_atomic_store_and_rechecks_actual_output ... ok
+test palw_positive_court_v2::coordinator::admission::tests::root_generation_branch_clock_and_changed_obligations_are_revalidated_before_commit ... ok
+test palw_positive_court_v2::coordinator::recovery::tests::discarded_buffer_and_duplicate_packet_quota_cannot_be_refilled_by_restart ... ok
+test palw_positive_court_v2::coordinator::recovery::tests::old_private_archive_layout_is_unchanged_and_new_event_scans_are_bounded ... ok
+test palw_positive_court_v2::coordinator::recovery::tests::pending_horizons_and_missing_archive_prevent_pruning ... ok
+test palw_positive_court_v2::coordinator::recovery::tests::discard_and_checked_part_acknowledgement_are_reconstructed_without_rechecking ... ok
+test palw_positive_court_v2::coordinator::recovery::tests::a0_recovery_port_uses_resolved_head_and_bounded_archive_reader ... ok
+test palw_positive_court_v2::coordinator::funding::tests::funding_atomic_rejects_different_root_quote_or_consent_intent_before_admission ... ok
+test palw_positive_court_v2::coordinator::recovery::tests::downtime_expires_pending_duties_without_extending_deadline_or_double_refund ... ok
+test palw_positive_court_v2::coordinator::funding::tests::native_body_peer_basis_must_equal_every_independently_derived_field ... ok
+test palw_positive_court_v2::coordinator::recovery::tests::full_history_rechecks_computation_even_after_deadline_and_reorg_removes_all_effects ... ok
+test palw_positive_court_v2::coordinator::recovery::tests::restart_preserves_all_panel_budgets_paid_once_and_resource_reservations ... ok
+test palw_positive_court_v2::coordinator::recovery::tests::real_generation_restart_and_indeterminate_write_fail_closed ... ok
+test palw_positive_court_v2::coordinator::tests::all_attempt_resources_must_be_reserved_before_first_candidate ... ok
+test palw_positive_court_v2::coordinator::recovery::tests::signed_malformed_candidate_consumes_attempt_across_restart ... ok
+test palw_positive_court_v2::coordinator::recovery::tests::forged_finish_flag_only_snapshot_missing_material_and_unselected_origins_never_pass ... ok
+test palw_positive_court_v2::coordinator::recovery::tests::transport_configuration_partial_buffer_and_charged_failures_replay_together ... ok
+test palw_positive_court_v2::coordinator::tests::corrupt_unsigned_transport_preserves_candidate_and_forged_payload_still_hits_node_checker ... ok
+test palw_positive_court_v2::coordinator::recovery::tests::transport_must_be_configured_by_an_authenticated_journal_event_not_admission_state ... ok
+test palw_positive_court_v2::coordinator::tests::fragmented_material_checks_full_coverage_with_relay_retry_and_no_miner_witness ... ok
+test palw_positive_court_v2::coordinator::tests::fragment_gaps_conflicts_wrong_scope_and_overflow_never_advance_coverage ... ok
+test palw_positive_court_v2::coordinator::tests::candidate_replacement_keeps_transport_consumption_and_miner_delivery_completion ... ok
+test palw_positive_court_v2::coordinator::recovery::tests::rejected_candidate_and_partial_batch_failure_survive_restart_and_panel_handoff ... ok
+test palw_positive_court_v2::coordinator::tests::deadline_refunds_pending_source_even_if_computation_already_passed ... ok
+test palw_positive_court_v2::coordinator::tests::no_second_active_candidate_or_stale_ordinal_can_reset_the_case ... ok
+test palw_positive_court_v2::coordinator::tests::partial_delivery_is_not_coverage_and_exclusive_cutoff_is_enforced_without_sweep ... ok
+test palw_positive_court_v2::coordinator::tests::node_pass_does_not_forgive_pending_source_duties_and_direct_reply_still_works ... ok
+test palw_positive_court_v2::coordinator::tests::miner_data_completion_survives_panel_rejection_and_key_change ... ok
+test palw_positive_court_v2::coordinator::tests::transmission_byte_cap_includes_envelope_and_failed_retry_does_not_overflow_meter ... ok
+test palw_positive_court_v2::coordinator::tests::panel_abandonment_after_miner_reply_ends_unverified_without_miner_fraud ... ok
+test palw_positive_court_v2::coordinator::tests::transport_identity_binds_position_trace_presence_and_witness_and_closed_cases_cannot_reserve ... ok
+test palw_positive_court_v2::coordinator::tests::transport_budget_counts_duplicates_and_discard_does_not_reset_it ... ok
+test palw_positive_court_v2::coordinator::tests::transport_requires_additional_reservation_and_cannot_be_reconfigured ... ok
+test palw_positive_court_v2::coordinator::tests::signed_malformed_admission_consumes_attempt_but_does_not_convict_miner ... ok
+test palw_positive_court_v2::coordinator::tests::warm_panel_completes_without_any_miner_data_request ... ok
+test palw_positive_court_v2::coordinator::funding::tests::funding_atomic_rechecks_generation_quote_actual_output_expiry_and_real_store_terms ... ok
+test palw_positive_court_v2::coordinator::tests::replaying_authenticated_prefix_rebuilds_service_and_attempt_budgets ... ok
+test palw_positive_court_v2::coordinator::recovery::tests::archive_limits_and_allocation_preflight_reject_bad_lengths_and_suffixes ... ok
+
+test result: ok. 53 passed; 0 failed; 0 ignored; 0 measured; 5339 filtered out; finished in 1.98s
+
+    Finished `test` profile [unoptimized] target(s) in 0.32s
+     Running unittests src/lib.rs (target/a4-fresh/debug/deps/kaspa_consensus_core-5b3fb8e6accaaca6)
+
+running 27 tests
+test palw_court_shared_frontier_budget_v1::tests::f03b2_packets_charge_size_and_never_refuse_it ... ok
+test palw_court_shared_material_intake_v1::tests::prompt_tile_bound_covers_ragged_tile ... ok
+test palw_court_shared_material_intake_v1::tests::material_schedule_is_the_approved_estimate_unless_injected ... ok
+test palw_court_shared_material_intake_v1::tests::material_ids_bind_claim_target_and_literal_submitter ... ok
+test palw_court_shared_material_intake_v1::tests::material_part_wire_is_bounded ... ok
+test palw_court_shared_tir_builder_store_v1::constraint_terminal::tests::semantic_intent_binds_domain_scope_material_selection_and_filer ... ok
+test palw_court_shared_op_carriage_v1::tests::r5_f02_wire_shared_op_borsh_round_trips_every_variant ... ok
+test palw_court_shared_op_carriage_v1::tests::r5_f02_wire_shared_op_object_tag_is_178_and_round_trips ... ok
+test palw_court_shared_op_carriage_v1::tests::r5_f02_wire_shared_op_boundary_decode ... ok
+test palw_court_shared_op_carriage_v1::tests::r5_f02_wire_shared_op_authority_refuses_an_absent_bond ... ok
+test palw_court_shared_tir_builder_store_v1::prompt_material_tests::flat_prompt_checks_count_commitment_and_native_form ... ok
+test palw_court_shared_frontier_budget_v1::tests::f03b2_overlapping_choices_serve_the_outsider_oversized_choice_within_deadline ... ok
+test palw_court_shared_tir_builder_store_v1::semantic_material::tests::semantic_table_only_owner_quota_has_no_raw_or_eof_obligation ... ok
+test palw_court_shared_tir_builder_store_v1::semantic_material::tests::semantic_material_retained_all_id_authentication_and_quota_release ... ok
+test palw_court_shared_tir_builder_store_v1::semantic_material::tests::semantic_material_rejects_missing_duplicate_tampered_and_range_invalid_eog ... ok
+test palw_court_shared_tir_response_v1::tests::court_tir_shared_data_response_codec_bounds_signature_before_allocation ... ok
+test palw_court_shared_tir_builder_store_v1::prompt_material_tests::merkle_prompt_checks_ragged_tiles_order_count_and_commitment ... ok
+test palw_court_shared_tir_stream_v1::tests::court_tir_shared_stream_geometry_retains_existing_part_ceiling ... ok
+test palw_court_shared_tir_stream_v1::tests::court_tir_shared_stream_codec_rejects_lengths_before_reading_allocated_payload ... ok
+test palw_court_shared_tir_stream_v1::tests::court_tir_shared_stream_slot_does_not_multiply_with_declarations ... ok
+test palw_court_shared_tir_builder_store_v1::constraint_terminal::tests::borrowed_material_replays_nonempty_native_constraint_fixture_and_rejects_corruption ... ok
+test palw_court_shared_tir_frontier_v1::tests::court_tir_shared_frontier_signed_intent_decoder_bounds_signature_before_allocation ... ok
+test palw_court_shared_tir_response_v1::tests::r5_court_response_uses_the_current_key_retiring_answers_and_a_relay_carries_it ... ok
+test palw_court_shared_tir_response_v1::tests::court_tir_shared_data_response_real_signatures_bind_query_block_and_data ... ok
+test palw_court_shared_tir_frontier_v1::tests::court_tir_shared_frontier_never_promotes_provisional_ids_to_public_data ... ok
+test palw_court_shared_tir_frontier_v1::tests::court_tir_shared_frontier_real_signatures_coalesce_without_exclusive_choices ... ok
+test palw_court_shared_tir_stream_v1::tests::court_tir_shared_stream_real_signature_binds_every_control_field ... ok
+
+test result: ok. 27 passed; 0 failed; 0 ignored; 0 measured; 5365 filtered out; finished in 0.41s
+
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/a4-g14-court/MISAKA-testnet/consensus/core)
+    Finished `test` profile [unoptimized] target(s) in 1m 17s
+     Running tests/positive_court_fence_v2.rs (target/a4-fresh/debug/deps/positive_court_fence_v2-9165ad2e0150c97e)
+
+running 8 tests
+test checks::positive2_ruleset_binds_only_the_fired_fork_and_current_policy ... ok
+test checks::positive2_rejects_unsupported_ids_zero_unbounded_overflow_and_inconsistent_caps ... ok
+test checks::positive2_policy_root_matches_independent_python_fixed_schema_vector ... ok
+test checks::positive2_raw_tag_is_opaque_before_decode_signature_resources_or_funding ... ok
+test checks::positive2_never_collapses_the_whole_profile_but_raw_diagnostics_commit_it ... ok
+test checks::positive2_scheduled_profile_preserves_pre_fork_peer_identity_and_is_not_a_public_permit ... ok
+test checks::positive2_released_presets_are_absent_and_none_writes_no_fingerprint_field ... ok
+test checks::positive2_all_profile_fields_are_committed ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/positive_source_v2.rs (target/a4-fresh/debug/deps/positive_source_v2-cd4948d3a0edb2e1)
+
+running 24 tests
+test geometry::bounded_index_preflight_checks_instance_multiplication_before_expansion ... ok
+test geometry::actual_inventory_opening_and_ragged_prompt_tile_fit_hand_calculated_bounds ... ok
+test geometry::empty_artifact_inventory_never_creates_a_source_request ... ok
+test geometry::flat_input_is_one_full_vec_and_held_override_uses_existing_prompt_form_rule ... ok
+test geometry::independent_source_ledger::independent_all_actual_g14_bodies_replay_with_raw_and_wire_dimensions_separate ... ok
+test geometry::independent_source_ledger::independent_flat_g14_is_one_whole_prompt_and_cannot_cross_merkle_or_held_forms ... ok
+test geometry::forged_registered_job_and_source_metadata_are_refused ... ok
+test geometry::independent_source_ledger::independent_case_refresh_rejects_fee_usage_that_overbooks_a_pending_unit_reservation ... ok
+test geometry::independent_source_ledger::independent_exact_budget_boundaries_pass_but_source_summaries_cannot_restore_discounts ... ok
+test geometry::independent_source_ledger::independent_opaque_g14_lengths_and_trailing_material_cannot_allocate_or_authenticate ... ok
+test geometry::independent_source_ledger::independent_case_refresh_preserves_shared_usage_and_invalidates_prepared_rows ... ok
+test geometry::independent_source_ledger::independent_first_receipt_names_the_op4_request_while_unit_completion_and_fee_remain_shared ... ok
+test geometry::independent_source_ledger::independent_real_opening_does_not_transfer_between_cases_sources_or_ranges ... ok
+test geometry::independent_source_ledger::independent_identical_ranges_from_other_panels_preserve_first_duty_and_once_only_receipt ... ok
+test geometry::row_pieces_and_tensor_names_are_counted_in_existing_g14_borsh_width ... ok
+test geometry::independent_source_ledger::independent_canonical_history_omission_and_exclusive_clock_are_refused_atomically ... ok
+test geometry::independent_source_ledger::independent_prepared_updates_cannot_cross_cache_instances_or_older_revisions ... ok
+test geometry::independent_source_ledger::independent_fresh_fee_reservation_is_atomic_and_first_receipt_creates_only_one_due ... ok
+test geometry::independent_source_ledger::independent_overlapping_panels_share_units_and_literal_prior_request_receipts ... ok
+test geometry::independent_source_ledger::independent_every_locally_owned_budget_dimension_rejects_without_partial_request_state ... ok
+test geometry::independent_source_ledger::independent_response_cannot_replace_a_reserved_fee_amount_schedule_or_funding_scope ... ok
+test geometry::independent_source_ledger::independent_missing_native_ports_do_not_become_successful_prepared_obligations ... ok
+test geometry::independent_source_ledger::independent_malformed_accepted_opaque_responses_do_not_publish_receipts_or_costs ... ok
+test geometry::independent_source_ledger::independent_native_source_history_refuses_noncanonical_origins_even_with_matching_test_context ... ok
+
+test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.32s
+
+PASS — no-new-regressions
+{
+  "mode": "no-new-regressions",
+  "passed": true,
+  "markdown_files": 1335,
+  "targets": {
+    "ok": 9335,
+    "outside-package-unchecked": 245,
+    "external-unchecked": 240,
+    "missing-doc-file": 43
+  },
+  "primary_documents": {
+    "adr": 206,
+    "rfc": 43
+  },
+  "known_issue_occurrences": 43,
+  "new_issue_occurrences": 0
+}
+NOTE: baseline missing references remain; PASS is not a clean strict audit.

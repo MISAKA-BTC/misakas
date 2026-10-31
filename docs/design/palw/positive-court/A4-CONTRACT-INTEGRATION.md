@@ -23,9 +23,9 @@ A5 `56ef2750a`、A6 `32287dc73` / `30cfbdeda`を選択統合した。shared modu
 
 ## 資源と認証
 
-A1のframe capは外284＋内16 bytesを含む。A4は全relation×frame cap×全試行に加え、署名4627 bytes/packetを最悪予約し、認証済み再送も実消費へ加算する。ingressが公開鍵本体を毎packet搬送するなら2592 bytesも別途必要である。現在のprocess authorizationはrooted key解決を前提とする。native transactionのheader/包含/保存/undo費用はこのprivate packetサイズに含まない。
+A1のframe capは外284＋内16 bytesを含む。A4は全relation×frame cap×全試行に加え、署名4627 bytes/packetを最悪予約し、既に受理した同一canonical frameのrelay再送は課金しない。新しい署名済み不正packetの消費は保持する。ingressが公開鍵本体を毎packet搬送するなら2592 bytesも別途必要である。現在のprocess authorizationはrooted key解決を前提とする。native transactionのheader/包含/保存/undo費用はこのprivate packetサイズに含まない。
 
-同時に保持するouter frame、直近再送ACK、A1 inner heap/interpreterのpeakはnativeのNode-derived quoteに含める必要がある。これらの定数やunit fixtureの実行は実LLMの容量認定ではない。
+同時に保持するouter frame、bounded accepted-frame receipt index、A1 inner heap/interpreterのpeakはnativeのNode-derived quoteに含める必要がある。これらの定数やunit fixtureの実行は実LLMの容量認定ではない。
 
 ## 検証方法
 
@@ -54,10 +54,14 @@ coreのDB dev依存をビルドする場合だけ、互換native RocksDB archive
 
 これらを未実装のまま公開claimを受付・決済可能にする変更は本branchにない。旧Fraud Courtと既存claimの裁定・信用条件を新形式へ読み替えない。
 
-ResultAdmissionのpeer literal basisはNodeが再導出した前検査capabilityのbasisと完全照合してから保存する。peer digestを任意の料金表のauthorityにしない。op4 responseはaccepted request.kindとnative prompt formから既存raw Borsh ArtifactOpening/PromptIdsOpening/Flat Vec<u32>を選択し、indexは既存openingに従う（Flat=0）。新enum/tree/料金台帳を作らず、A2のsealed native source read/completionとの接続で認証する。
+ResultAdmissionのpeer literal basisは`check_native_admission` / `prepare_native_atomic`でNodeが再導出した前検査capabilityのbasisと完全照合してから準備する。peer digestを任意の料金表のauthorityにしない。op4 responseはaccepted request.kindとnative prompt formから既存raw Borsh ArtifactOpening/PromptIdsOpening/Flat Vec<u32>を選択し、indexは既存openingに従う（Flat=0）。新enum/tree/料金台帳を作らず、A2のsealed native source read/completionとの接続で認証する。
 
-Witness recordにはA0 `d284f5902`のborrowed header/generated codecが割り当てられた。full class/job/programはnative登録から再構築してA1へ渡す。record破損はcoordinatorを開く前の搬送拒否であり、Witness拒否やattempt消費へ自動転換しない。
+Witness recordにはA0 `d284f5902`のborrowed header/generated codecが割り当てられ、`record_ingress::preflight_witness_record_v2`が外body版本・操作・rooted Resultとのbindingを候補変更前に照合する。full class/job/programはnative登録から再構築してA1へ渡す。record破損はcoordinatorを開く前の搬送拒否であり、Witness拒否やattempt消費へ自動転換しない。
 
 ## 確定sourceと検証
 
-ready source commitは`d746fe4550a5dd1c2fabc1925c08a82d9879aea6`。通常Cargoの198件、source hash、合格範囲は[VALIDATION-A4](VALIDATION-A4.md)を参照。
+初回検証sourceは`d746fe4550a5dd1c2fabc1925c08a82d9879aea6`。通常Cargoの198件、source hash、合格範囲は[VALIDATION-A4](VALIDATION-A4.md)を参照。その後のA0/A7独立レビューで候補open前のrooted権限確認と既受理packet再送の非課金に不足が判明したため、同commit単独をnative統合readyとはしない。修正と追加検証を後続source・証拠へ分離する。
+
+A1実検査器は`3b26100c0`のpure core実装へ一元移動し、`core::palw_positive_check_v2` / `palw_positive_contract_v2`とexec旧pathを同一型で公開する。A4薄adapterは`coordinator::tir_checker`を正本としexec側はreexportのみ。A2 `f8c79c92f`の有限source台帳・既存G14 geometry・private typed writerを選択統合した。A0のtyped dormant fenceとraw176 predecode境界は公開presetを変えず取り込んだ。
+
+独立レビュー修正後のsourceは`d2047d64d0db68dee44c92a4a8c8025eedf0d458`、同一sourceの271件成功は[VALIDATION-A4-R2](VALIDATION-A4-R2.md)を参照。required候補認可・全opaque context照合・bounded accepted-frame ID indexと無課金再送を実装し、終了時indexを解放する。native役割/notice/料金表/leaseはA0の後続契約を待ち、成功を代用しない。

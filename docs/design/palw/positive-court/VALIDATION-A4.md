@@ -2,6 +2,8 @@
 
 2026-10-31。対象source commit: `d746fe4550a5dd1c2fabc1925c08a82d9879aea6`。実装APIは[A4接続記録](A4-CONTRACT-INTEGRATION.md)、body schemaは[176 body案](A4-NATIVE-BODY-R1.md)。
 
+このsourceに対する後日のA0/A7レビューで、候補openの権限確認と既受理packet再送課金に不足を検出した。以下は当時の試験結果であり、同commit単独のnative統合承認ではない。修正後の結果は別source・証拠として記録する。
+
 通常CargoでA4専用のfresh targetからRust sourceをビルドし、同じsource候補に対して下記すべてが成功した。旧外部Rust rlibを使う初回harnessの成功を合算していない。
 
 | 検証 | PASS | FAIL |
