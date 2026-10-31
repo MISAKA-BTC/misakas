@@ -39,6 +39,8 @@ CARGO_BUILD_JOBS=2 cargo test -p kaspa-consensus-core --lib \
 [node-check.log](node-check.log): 稼働中の基点上で `cargo check -p kaspad --features evm --all-targets` **成功**。
 文書検査は新規不備 0、既知の未解決参照 43。baseline は変更していない。
 
+移行高さを設定した候補でも [release-node-check.log](release-node-check.log) の全 target 型検査に成功。ローカル main は `c4810c02d` に fast-forward し、作業中の Explorer・文書編集は保持した。公開リモート main の更新とは区別する。
+
 ## 確認した境界
 
 - commit 自身の anchor では抽選しない。1 個の独立 bond から 1 席を割り当てる。commit 後に登録した bond はその抽選に入れない。
