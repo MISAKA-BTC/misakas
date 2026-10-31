@@ -498,6 +498,7 @@ fn native_route_scanner_rejects_duplicate_and_unsorted_positive_keys_before_coll
     canonical.reverse();
     let reversed = encode(canonical);
     assert!(preflight_native_value_v1::<PalwKernelRouteStateV1>(&reversed[..], reversed.len() as u64).is_err());
+    assert!(borsh::from_slice::<PalwKernelRouteStateV1>(&reversed).is_err(), "direct decoder must reject descending Positive keys");
 }
 #[test]
 fn typed_restore_rejects_duplicate_orphan_rows_and_missing_atomic_journal_head() {
