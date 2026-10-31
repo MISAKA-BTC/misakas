@@ -573,7 +573,7 @@ fn candidate_authority_requires_a_finite_usable_signed_packet_limit() {
 }
 
 #[test]
-fn authenticated_noncanonical_relation_count_is_charged_without_advancing_coverage() {
+fn authenticated_noncanonical_relation_count_is_refused_before_case_charging() {
     let f = fixture();
     let (result, service) = court_result(&f, false);
     let mut court = court(result.clone(), service);
@@ -582,10 +582,13 @@ fn authenticated_noncanonical_relation_count_is_charged_without_advancing_covera
     let mut header = canonical.header();
     header.relation_count = 2;
     let malformed = EvidenceFrame::new(header, canonical.payload(), descriptor.max_part_bytes).unwrap();
-    let billed = malformed.signed_wire_bytes();
+    let before = (court.attempts(), court.cursor(), court.charged_wire_bytes(), court.charged_elements(), court.charged_terms());
     let signature = carrier_signature(&malformed);
     assert!(court.submit_frame(malformed, &signature, 3).is_err());
-    assert_eq!(court.charged_wire_bytes(), billed);
+    assert_eq!(
+        (court.attempts(), court.cursor(), court.charged_wire_bytes(), court.charged_elements(), court.charged_terms()),
+        before
+    );
     assert_eq!(court.cursor(), 0);
     assert_eq!(court.attempts(), 1);
     assert_eq!(court.status(), ClaimStatus::Pending);
@@ -594,8 +597,64 @@ fn authenticated_noncanonical_relation_count_is_charged_without_advancing_covera
     for bytes in &frames {
         send(&mut court, bytes, descriptor.max_part_bytes, 4);
     }
-    assert_eq!(court.charged_wire_bytes(), billed + frames.iter().map(|p| signed_bytes(p)).sum::<u64>());
+    assert_eq!(court.charged_wire_bytes(), frames.iter().map(|p| signed_bytes(p)).sum::<u64>());
     assert_eq!(court.finish(5).unwrap().terminal_kind(), TerminalKindV2::PositivePassed);
+}
+
+#[test]
+fn repeated_authenticated_future_relation_cannot_exhaust_the_case_and_is_usable_later() {
+    let f = fixture();
+    let (result, service) = court_result(&f, false);
+    let mut court = court(result.clone(), service);
+    let (_, descriptor, frames) = open(&mut court, &f, &result, 0);
+    assert!(frames.len() > 2);
+    let future = EvidenceFrame::decode(&frames[1], descriptor.max_part_bytes).unwrap();
+    let signature = carrier_signature(&future);
+    let before = (
+        court.last_attempt(),
+        court.attempts(),
+        court.cursor(),
+        court.charged_wire_bytes(),
+        court.charged_elements(),
+        court.charged_terms(),
+        court.reserved_receipt_bytes(),
+    );
+    for now in 3..=7 {
+        let future = EvidenceFrame::decode(&frames[1], descriptor.max_part_bytes).unwrap();
+        assert!(court.submit_frame(future, &signature, now).is_err());
+        assert_eq!(
+            (
+                court.last_attempt(),
+                court.attempts(),
+                court.cursor(),
+                court.charged_wire_bytes(),
+                court.charged_elements(),
+                court.charged_terms(),
+                court.reserved_receipt_bytes(),
+            ),
+            before
+        );
+        assert_eq!(court.status(), ClaimStatus::Pending);
+        assert_eq!(court.witness_status(), Some(WitnessStatus::Checking));
+    }
+    // Rejected deliveries cannot commit their supplied clock either. The last
+    // committed native time remains the opening at two, so an explicit trusted
+    // sweep at that same time must still succeed after those refused packets.
+    court.expire(2).unwrap();
+    // Refusing delivery did not accept, consume or permanently blacklist this
+    // exact signed packet. Once relation zero is checked, the same bytes and
+    // same signature can supply the next required relation exactly once.
+    send(&mut court, &frames[0], descriptor.max_part_bytes, 8);
+    let future = EvidenceFrame::decode(&frames[1], descriptor.max_part_bytes).unwrap();
+    court.submit_frame(future, &signature, 9).unwrap();
+    assert_eq!(court.cursor(), 2);
+    assert_eq!(court.charged_wire_bytes(), signed_bytes(&frames[0]) + signed_bytes(&frames[1]));
+    assert_eq!(court.attempts(), 1);
+    for bytes in &frames[2..] {
+        send(&mut court, bytes, descriptor.max_part_bytes, 10);
+    }
+    assert_eq!(court.charged_wire_bytes(), frames.iter().map(|p| signed_bytes(p)).sum::<u64>());
+    assert_eq!(court.finish(11).unwrap().terminal_kind(), TerminalKindV2::PositivePassed);
 }
 
 #[test]
