@@ -13,9 +13,11 @@ intent in `c2e93ec49`; A4's actual native transaction remains required.
   A5 must recheck that complete update rather than increment its fee again.
 - A2/A4 must classify logical duplicate op3/op4 only AFTER actual rooted
   authentication and literal checks and BEFORE Case charging or history append.
-  Copying the same RequestId/signed literal op3, or an already accepted unit's
-  identical literal op4, into a different carrier changes no history, retained
-  bytes, work, transmitted bytes, fee or other usage. Carrier identity is not
+  Under A0 checkpoint `f6c7d9f4d` / `NATIVE-JOURNAL-R1.md`, the same canonical
+  RequestId or an authenticated response for an already accepted source/unit
+  is idempotent even when its carrier or valid opening representation differs.
+  It changes no Case history, retained bytes, work, transmitted bytes, fee or
+  other usage and preserves the first receipt/provider. Carrier identity is not
   new consent. Only an actually reallocated one-shot opportunity can authorize
   a distinct chargeable operation. New/different authored semantic failures or
   retries are not blanket fee exempt.
@@ -64,6 +66,11 @@ authenticated one-shot opportunity; it does not authorize that opportunity.
 Logical NoOp classification remains A2/A4-owned and cannot be inferred from
 receipt existence or an A5 caller flag. An op3 NoOp needs no receipt/due call;
 an op4 NoOp emits no source fee intent and must retain the entire old usage.
+Do not use equality against a new carrier's incoming receipt DTO to classify
+that NoOp. A2/A4 first authenticate the response/unit, retain the canonical first
+receipt, and skip the due call or recheck old usage plus that retained receipt
+with no delta. The calculator's immutable-receipt check rejects replacement;
+it does not decide whether a different opening is valid source authentication.
 
 `check_source_quote(result, case, funding, whole_schedule_ceilings)` checks the
 WHOLE source schedule against the signed source budget, and all Court fees and
