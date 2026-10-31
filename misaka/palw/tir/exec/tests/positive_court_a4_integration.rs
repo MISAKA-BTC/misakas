@@ -1378,3 +1378,5 @@ fn honest_material_with_insufficient_inner_evaluation_allowance_stays_unverified
     assert!(court.charged_terms() > 0);
     assert!(court.finish(4).is_err());
 }
+#[path = "positive_court_a4_integration/positive_court_a6_journal.rs"]
+mod a6_journal_replay;
