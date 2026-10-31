@@ -384,6 +384,11 @@ pub struct FullRelationChecker {
     next_lane: u64,
 }
 impl FullRelationChecker {
+    /// Borrow retained preparation for material construction. This grants no
+    /// mutable progress access or additional native authority.
+    pub fn preparation(&self) -> &FullRelationPreparation {
+        &self.prepared
+    }
     pub fn progress(&self) -> FullRelationProgress {
         self.progress
     }
