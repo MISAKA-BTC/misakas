@@ -109,7 +109,6 @@ pub fn with_fixture(wrong_result: bool, body: impl FnOnce(&Fixture, &TirClassRun
     let registered_class = class.class_id(&artifact);
     let mut job = node_common::job(&program, 1, 3, registered_class, PROMPT, PalwPromptIdsFormV1::Flat);
     job.job_id = Hash64::from_u64_word(4);
-    job.tokenizer_id = class.tokenizer_id;
     job.cu_ruleset_id = Hash64::from_u64_word(9);
     let pair = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([61; 32]);
     let key: [u8; PUBKEY_BYTES] = *pair.verification_key.as_ref();
@@ -122,7 +121,9 @@ pub fn with_fixture(wrong_result: bool, body: impl FnOnce(&Fixture, &TirClassRun
         registered_class: digest(registered_class),
         artifact: digest(artifact),
         program: digest(class.graph_ir_root()),
-        tokenizer: digest(class.tokenizer_id),
+        // The actual job context retains its tokenizer marker independently
+        // from the nonzero registration tokenizer pinned inside the class ID.
+        tokenizer: digest(job.tokenizer_id),
         execution_rules: digest(job.cu_ruleset_id),
         selector: tir::greedy_selector_id(),
         required_form: ClaimForm::PositiveResultV2,

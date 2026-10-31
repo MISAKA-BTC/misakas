@@ -219,8 +219,7 @@ pub fn with_window_fixture(window: u32, body: impl FnOnce(&Fixture, &TirClassRun
         layout: node_common::layout(&program, 3, 2, window.min(2), 16),
         tokenizer_id: Hash64::from_u64_word(18),
     };
-    let mut job = node_common::job(&program, 2, 3, class.class_id(&artifact), PROMPT, PalwPromptIdsFormV1::Flat);
-    job.tokenizer_id = class.tokenizer_id;
+    let job = node_common::job(&program, 2, 3, class.class_id(&artifact), PROMPT, PalwPromptIdsFormV1::Flat);
     let (nodes, steps) = reference(&program, &params);
     let encoded_program = program.encode();
     let f = Fixture { program: program.clone(), params, class, artifact, job, nodes, steps, encoded_program };

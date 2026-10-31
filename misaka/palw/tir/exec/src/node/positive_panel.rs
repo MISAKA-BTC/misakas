@@ -108,7 +108,6 @@ impl PanelAdmission {
             || result.program != digest(class.graph_ir_root())
             || result.input != digest(job.prompt_token_ids_hash)
             || result.tokenizer != digest(job.tokenizer_id)
-            || class.tokenizer_id != job.tokenizer_id
             || result.execution_rules != digest(job.cu_ruleset_id)
             || result.generation_seed != job.execution_seed
             || result.temperature_q24 != 0
@@ -121,6 +120,8 @@ impl PanelAdmission {
         {
             return Err("A3 Panel result differs from rooted TIR registration/job/input".into());
         }
+        // Class metadata (including its tokenizer) is pinned by class_id above.
+        // Job/Result keep the actual expected-context tokenizer, including zero.
         limits.check.max_part_bytes = tir::raw_part_budget(limits.max_frame_bytes).map_err(err)?;
         let artifact = Hash64::from_bytes(rooted.artifact.0);
         let coverage = CoveragePlan::derive(class, artifact, job, form, limits.check).map_err(err)?;

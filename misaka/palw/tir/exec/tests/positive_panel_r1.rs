@@ -2,7 +2,7 @@
 //! A3/A1 joint fixture uses A0's actual r1 identities and private framing.
 mod positive_panel_r1_common;
 use kaspa_consensus_core::{
-    palw_attempt_rules_v1::palw_attempt_output_root_v1, palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    Hash64, palw_attempt_rules_v1::palw_attempt_output_root_v1, palw_prompt_ids_v1::PalwPromptIdsFormV1,
     palw_tir_court_v1::PalwTirConeRefutationV1,
 };
 use misaka_palw_positive_contract::{
@@ -314,5 +314,145 @@ fn recorded_capture_takeover_keeps_witness_and_resumes_from_rechecked_prefix() {
             check_frame(&mut restarted, &descriptor, &witness, &mut cursor, &bytes).unwrap();
         }
         assert_eq!(restarted.finish(), Ok(CheckOutcome::Matched));
+    });
+}
+
+#[test]
+fn zero_job_tokenizer_and_nonzero_registered_tokenizer_preserve_actual_r1_context() {
+    with_fixture(false, |f, runner, inventory| {
+        let canonical_job = f.job.clone();
+        let registered_class = f.class.clone();
+        assert_eq!(canonical_job.tokenizer_id, Hash64::from_u64_word(0));
+        assert_eq!(registered_class.tokenizer_id, Hash64::from_u64_word(18));
+        assert_ne!(canonical_job.tokenizer_id, registered_class.tokenizer_id);
+        assert_eq!(f.rooted.tokenizer, digest(canonical_job.tokenizer_id));
+        assert_eq!(f.result.tokenizer, digest(canonical_job.tokenizer_id));
+        assert_eq!(f.rooted.registered_class, digest(registered_class.class_id(&f.artifact)));
+        assert_eq!(f.result.registered_class, digest(registered_class.class_id(&f.artifact)));
+        let direct = runner.run(&canonical_job, PROMPT, check_limits().max_leaves, true, &mut |_| {}).unwrap();
+        let admitted = f.admit().unwrap();
+        let descriptor = admitted.plan();
+        let builder = TirPanelBuilder::new(runner, inventory);
+        let capture = builder.replay_and_capture(&admitted).unwrap();
+        assert_eq!(capture.generated(), EXPECTED);
+        assert_eq!(capture.generated(), direct.generated);
+        assert_eq!(capture.binding().job_context, canonical_job);
+        assert_eq!(capture.binding().class, registered_class);
+        assert_eq!(capture.binding().artifact_root, f.artifact);
+        assert_eq!(capture.binding().full_logits_trace_root, direct.trace_root);
+        assert_eq!(capture.binding().step_leaf_count, direct.leaf_count);
+        assert_eq!(capture.binding().step_merkle_root, direct.step_merkle_root);
+        assert_eq!(capture.binding().committed_execution_root, direct.execution_root);
+        assert_eq!(digest(direct.output_root), f.result.output);
+        let witness = builder.commit(&capture, &descriptor, witness_author(), 0).unwrap();
+        assert_eq!(witness.provenance, tir::provenance_id(&f.result));
+        let mut checker = f.checker(capture.binding().clone(), capture.generated().to_vec());
+        let mut cursor = CoverageCursor { plan: descriptor.plan, next_relation: 0 };
+        let prepared = builder.prepare_parts(&capture).unwrap();
+        for index in 0..descriptor.mandatory_relations {
+            let part = prepared.build_part(CoverageCursor { plan: descriptor.plan, next_relation: index }).unwrap();
+            let bytes = part.frame(&witness, &descriptor).unwrap().encode(FRAME_CAP).unwrap();
+            check_frame(&mut checker, &descriptor, &witness, &mut cursor, &bytes).unwrap();
+        }
+        assert_eq!(checker.finish(), Ok(CheckOutcome::Matched));
+        assert_eq!(f.job, canonical_job);
+        assert_eq!(capture.binding().job_context, canonical_job);
+        assert_eq!(f.class, registered_class);
+    });
+}
+
+#[test]
+fn tokenizer_fix_preserves_independent_rooted_class_and_job_rejection() {
+    with_fixture(false, |f, _, _| {
+        let canonical_job = f.job.clone();
+        let original_result = f.result.clone();
+        let rooted = f.rooted;
+        let mut altered_class = f.class.clone();
+        altered_class.tokenizer_id = Hash64::from_u64_word(99);
+        assert_ne!(digest(altered_class.class_id(&f.artifact)), rooted.registered_class);
+        assert!(
+            PanelAdmission::authenticate(
+                &original_result,
+                rooted,
+                &altered_class,
+                &canonical_job,
+                PROMPT,
+                PalwPromptIdsFormV1::Flat,
+                &f.key,
+                &f.signature,
+                panel_limits(),
+            )
+            .is_err()
+        );
+        for field in 0..5 {
+            let mut altered_job = canonical_job.clone();
+            let prompt: &[u32] = match field {
+                0 => {
+                    altered_job.tokenizer_id = f.class.tokenizer_id;
+                    PROMPT
+                }
+                1 => {
+                    altered_job.prompt_token_ids_hash =
+                        kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_commitment_v1(PalwPromptIdsFormV1::Flat, &[1])
+                            .unwrap();
+                    &[1]
+                }
+                2 => {
+                    altered_job.execution_seed[0] ^= 1;
+                    PROMPT
+                }
+                3 => {
+                    altered_job.shape_profile_id = Hash64::from_u64_word(101);
+                    PROMPT
+                }
+                _ => {
+                    altered_job.max_context_tokens += 1;
+                    PROMPT
+                }
+            };
+            assert!(
+                PanelAdmission::authenticate(
+                    &original_result,
+                    rooted,
+                    &f.class,
+                    &altered_job,
+                    prompt,
+                    PalwPromptIdsFormV1::Flat,
+                    &f.key,
+                    &f.signature,
+                    panel_limits(),
+                )
+                .is_err(),
+                "altered canonical job field {field} was accepted"
+            );
+        }
+        // A genuine Miner signature cannot replace the actual job tokenizer
+        // with the independently registered class tokenizer.
+        let mut copied_registration_tokenizer = original_result.clone();
+        copied_registration_tokenizer.tokenizer = digest(f.class.tokenizer_id);
+        assert_ne!(copied_registration_tokenizer.tokenizer, rooted.tokenizer);
+        let pair = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([61; 32]);
+        let signature =
+            *libcrux_ml_dsa::ml_dsa_87::sign(&pair.signing_key, &copied_registration_tokenizer.id().0.0, RESULT_SIGN_CONTEXT, [0; 32])
+                .unwrap()
+                .as_ref();
+        copied_registration_tokenizer.authenticate(&f.key, &signature).unwrap();
+        assert!(
+            PanelAdmission::authenticate(
+                &copied_registration_tokenizer,
+                rooted,
+                &f.class,
+                &canonical_job,
+                PROMPT,
+                PalwPromptIdsFormV1::Flat,
+                &f.key,
+                &signature,
+                panel_limits(),
+            )
+            .is_err()
+        );
+        assert_eq!(f.job, canonical_job);
+        assert_eq!(f.result, original_result);
+        assert_eq!(f.rooted, rooted);
     });
 }

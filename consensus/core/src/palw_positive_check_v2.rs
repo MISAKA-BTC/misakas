@@ -110,7 +110,9 @@ impl CoveragePlan {
         {
             return Err(CheckError::Binding);
         }
-        if registered.class_id(&artifact) != job.shape_profile_id || registered.tokenizer_id != job.tokenizer_id {
+        // The registration tokenizer is inside class_id, independently of the
+        // actual job-context tokenizer (canonical TIR contexts may use zero).
+        if registered.class_id(&artifact) != job.shape_profile_id {
             return Err(CheckError::Binding);
         }
         let space = PalwTirStepSpaceV1::new(registered).map_err(|_| CheckError::Binding)?;
