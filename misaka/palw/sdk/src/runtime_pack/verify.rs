@@ -242,6 +242,7 @@ pub fn verify(opts: &VerifyOpts, log: &dyn Fn(String)) -> Result<VerifyReport, S
                 req.max_window = pack.profile.max_window;
                 req.gdn_core_wide = pack.profile.gdn_core_wide;
                 req.linear_weight_bits = pack.profile.linear_weight_bits;
+                req.logits_bits = pack.profile.logits_bits;
                 req.context = pack.profile.context;
                 req.math = MathMode::parse(&pack.converter.math.mode).ok_or("the pack's math mode")?;
                 req.quant_formats = supplied.clone();
@@ -422,6 +423,7 @@ fn frontend_check(acc: &mut Acc, pack: &RuntimePackV1, model: &Path, dir: &Path,
         max_window: pack.profile.max_window,
         gdn_core_wide: pack.profile.gdn_core_wide,
         linear_weight_bits: pack.profile.linear_weight_bits,
+        logits_bits: pack.profile.logits_bits,
         ..Default::default()
     };
     if let Some(m) = MathMode::parse(&pack.converter.math.mode) {
@@ -434,6 +436,10 @@ fn frontend_check(acc: &mut Acc, pack: &RuntimePackV1, model: &Path, dir: &Path,
             return None;
         }
     };
+    if let Err(e) = validate_program_logits_profile_v2(&o.prepared.lowered.program, pack.profile.logits_bits) {
+        acc.fail("frontend", e);
+        return None;
+    }
     let f = &o.frontend;
     let mut ok = cmp(acc, "frontend", "spec digest", &f.spec_digest, &pack.frontend.spec_digest);
     ok &= cmp(acc, "frontend", "level", &f.level.to_string(), &pack.frontend.level);
@@ -481,6 +487,19 @@ fn frontend_check(acc: &mut Acc, pack: &RuntimePackV1, model: &Path, dir: &Path,
 }
 
 fn artifact_check(acc: &mut Acc, pack: &RuntimePackV1, art: &Path) {
+    // Check even without a model/rebuild: changing the profile pin cannot relabel the same artifact.
+    let c = match misaka_palw_tir_artifact::PalwTirContainerV1::open(art) {
+        Ok(c) => c,
+        Err(e) => {
+            acc.fail("artifact", e.to_string());
+            return;
+        }
+    };
+    if let Err(e) = validate_program_logits_profile_v2(&c.program, pack.profile.logits_bits) {
+        acc.fail("artifact", e);
+        return;
+    }
+    drop(c);
     let m = match PalwTirManifestV1::derive_streamed(art) {
         Ok(m) => m,
         Err(e) => {

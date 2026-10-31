@@ -171,6 +171,13 @@ fn is_legacy_linear_bits(bits: &u8) -> bool {
     *bits == 8
 }
 
+fn legacy_logits_bits() -> u8 {
+    32
+}
+fn is_legacy_logits_bits(bits: &u8) -> bool {
+    *bits == 32
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProfileSection {
@@ -183,6 +190,9 @@ pub struct ProfileSection {
     /// Explicit decoder main-weight profile; absent means the legacy 8-bit profile.
     #[serde(default = "legacy_linear_bits", skip_serializing_if = "is_legacy_linear_bits")]
     pub linear_weight_bits: u8,
+    /// Q24 output representation. Absent/32 preserves historical manifest JSON and artifact bytes.
+    #[serde(default = "legacy_logits_bits", skip_serializing_if = "is_legacy_logits_bits")]
+    pub logits_bits: u8,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context: Option<usize>,
     pub calibration: CalibrationRec,
@@ -517,6 +527,9 @@ impl RuntimePackV1 {
         {
             return Err("unknown converter.metadata_parsing_profile".into());
         }
+        if !matches!(self.profile.logits_bits, 32 | 64) {
+            return Err("profile.logits_bits must be 32 or 64".into());
+        }
         if !matches!(self.profile.linear_weight_bits, 8 | 16) {
             return Err("profile.linear_weight_bits must be 8 or 16".into());
         }
@@ -575,4 +588,21 @@ pub fn safe_name(p: &str) -> Result<(), String> {
         return Err(format!("`{p}` is not a relative file name inside the directory"));
     }
     Ok(())
+}
+
+/// Check the pack's representation pin against an already decoded program. This authenticates
+/// neither computation nor native admission. The caller owns program/storage preflight.
+pub(crate) fn validate_program_logits_profile_v2(program: &misaka_palw_tir::TirProgramV1, bits: u8) -> Result<(), String> {
+    use misaka_palw_tir::DType;
+    let output = program
+        .blocks
+        .get(usize::from(program.schedule.post))
+        .and_then(|block| block.nodes.get(usize::from(program.logits)))
+        .ok_or("the program has no final post logits node")?;
+    match bits {
+        32 if !program.wide_logits_q24() && output.out.dtype == DType::I32 => Ok(()),
+        64 if program.wide_logits_q24() && output.out.dtype == DType::I64 && output.commit => Ok(()),
+        32 | 64 => Err(format!("profile.logits_bits={bits} does not match the program's output dtype/scheme")),
+        _ => Err("profile.logits_bits must be 32 or 64".into()),
+    }
 }

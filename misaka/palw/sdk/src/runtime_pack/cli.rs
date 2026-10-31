@@ -16,7 +16,7 @@ USAGE:
     palw-class pack build  --model <hf dir | .gguf> --out <artifact.palwtir> --pack <dir>
                            (--calib <tokens.json> [--calib-seqs N] [--positions N] | --stats-in <stats.json> [--calib <tokens.json>: the sequences they were measured on])
                            [--name <name>] [--repo <id>] [--revision <rev>] [--context N]
-                           [--headroom16 F] [--headroom32 F] [--headroom-resid F] [--max-window N] [--gdn-core-wide]
+                           [--headroom16 F] [--headroom32 F] [--headroom-resid F] [--max-window N] [--gdn-core-wide] [--logits-bits 32|64]
                            [--math libm-v1|std] [--quant-format <file>]... [--adapter <file>] [--tokenizer <file>]
                            [--hf-reference <audit dir | logits.json | hf-reference.json>]
                            [--slope-min F] [--slope-max F] [--corr-min F] [--top1-min F] [--kl-max F] [--allow-out-of-tolerance]
@@ -266,6 +266,10 @@ pub fn run(args: &[String]) -> Result<i32, String> {
             req.max_window = num(&mut args, "--max-window")?;
             req.gdn_core_wide = take_bool(&mut args, "--gdn-core-wide");
             req.linear_weight_bits = num(&mut args, "--linear-weight-bits")?.unwrap_or(8);
+            req.logits_bits = num(&mut args, "--logits-bits")?.unwrap_or(32);
+            if !matches!(req.logits_bits, 32 | 64) {
+                return Err("--logits-bits must be 32 or 64".into());
+            }
             if let Some(m) = take_flag(&mut args, "--math") {
                 req.math = MathMode::parse(&m).ok_or_else(|| format!("--math {m}: libm-v1 or std"))?;
             }
