@@ -1,0 +1,29 @@
+{
+  "source_commit": "0c7c2bcf33dcc87a3148875343bc576757259c51",
+  "source_tree": "b1f25e2e7bc4cedd6eebf1b2b8bf0897ebbc1607",
+  "command": "env -u ROCKSDB_STATIC ROCKSDB_LIB_DIR=/Users/wata/Downloads/MISAKA-testnet/target/debug/build/librocksdb-sys-9df4609b486b51c3/out CARGO_TARGET_DIR=target/a4-fresh scripts/ci/positive-court-a4-ci.sh",
+  "exit_code": 0,
+  "passed": 295,
+  "failed": 0,
+  "consensus_tests_typecheck_exit_code": 0,
+  "raw_log_sha256": "c4e537f860fb1535027a4ea6ee52d02a8936c38706801dbf51bf2eae35628936",
+  "counts": {
+    "common": 42,
+    "actual_private_accounting": 33,
+    "Node_A1_A4": 93,
+    "core_coordinator": 55,
+    "legacy_shared": 27,
+    "fence": 8,
+    "source": 25,
+    "predecode": 3,
+    "metadata": 5,
+    "native_provenance_structural_tests": 4
+  },
+  "notes": [
+    "No tests imply live176 admission/coin lock/actual DB reopen/IBD success",
+    "No native concrete recovery store or Full-active T12 success supplied; realA5 PRIVATE book used for recovery tests",
+    "Normal Cargo source build; native RocksDB archive only reused",
+    "A2 logical source relay fix4da761423 is a later source and not tested by this run",
+    "Repeated core/Node public-API drivers contribute to total; historical test counts are not aggregated"
+  ]
+}

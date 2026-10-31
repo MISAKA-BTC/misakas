@@ -16,6 +16,8 @@
 
 [原ログ](../../../evidence/positive-court-a4-integration-2026-10-31/review-r2/ci.log)と[実行command・commit/tree・変更source SHA256](../../../evidence/positive-court-a4-integration-2026-10-31/review-r2/validation.json)を保存した。文書検査は新規欠落0、既知43。初回の再実行では移動前テストの旧`encode_payload`参照がcompileに失敗し、A1の正本テストとA0 `ExactPart`へ更新した後に全対象を再実行した。途中ログは診断用targetに保持する。
 
+この後のA7レビューで未受付future frameの反復課金を検出し、`488317d3e`で受付順序確認を課金前へ移した。この271件のsourceだけをその追加問題の修正証拠とはしない。
+
 ## 修正した境界
 
 - 候補openにrequired rooted prover認可を追加し、自己署名だけでattemptや既存候補を変更できなくした。opaque context全体・plan・資源確保・checker開始が成功するまで時計を含むCourt状態を変更しない。Gate Cの事後drawをopen条件へ流用しない。

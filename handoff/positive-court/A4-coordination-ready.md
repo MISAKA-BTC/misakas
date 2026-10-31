@@ -1,21 +1,44 @@
-最新: P1/P2修正ee06d8173＋テスト更新d2047d64dを同一sourceで通常Cargo検証し271 PASS/0 FAIL。VALIDATION-A4-R2.mdとreview-r2/証拠を参照。以下のd746記述は初回履歴です。native actual writerはA0の新notice/role/profileとA2追加CASの統合を続行中です。
+# A4 共通Court — 引継ぎ
 
-現在状況: d746fe455は初回検証候補であり、A0/A7のP1（open前認可）・P2（既受理packet再送）レビュー修正を適用するまで統合ready扱いを保留します。198件成功はその候補の履歴として保存済みです。
+Workspace: `/Users/wata/.codex/worktrees/a4-g14-court/MISAKA-testnet`。Branch: `codex/positive-court-a4`。
 
-A4のready source commitは d746fe4550a5dd1c2fabc1925c08a82d9879aea6（codex/positive-court-a4）です。最終検証証拠は後続commitへ分離します。最新native/funding/attestation helperを同commitに含むため、A0は必要なA4固有差分だけ選択できます。
+現在のsourceは`c1292bc08`。A0/A1/A2/A5/A6と直接調整し、A4実装・受付/資金前検査・独立反例・native入力引継ぎ・readonly復旧を並列で進めた。新job授権のRFC/ADRはA0で未採択であり、actual176 one-writer・実coin lock・native完全履歴・T12/reopen/IBDの完成は主張しない。公開presetはNone。
 
-176 bodyの正本は consensus/core/src/palw_positive_court_v2/coordinator/native_body.rs と docs/design/palw/positive-court/A4-NATIVE-BODY-R1.md。PositiveNativeBodyV2 / PositiveNativeOperationV2、scan_native_body_v2 / decode_native_body_v2 / encode_native_body_v2。local kind0..7はResultAdmission、WitnessCommit、ExactFrame、SourceRequest、SourceResponse、Finish、Expire、PositiveCourtAttestation。0..6を保持して7を追加済み。鍵はnative registration/bondから解決しbodyに含めません。内側record/G14 responseはbounded opaque Vec、配列署名は4627 bytes固定。Finish/Expireにpeer clock/Passedはありません。
+## 実装したAPI
 
-Courtはcore::palw_positive_court_v2::coordinator::contract::ContractCourtV2<C,V>。CはNodeChecker/CourtCheckerV2、Node側production adapterはmisaka_palw_tir_exec::node::positive_court_adapter::TirCourtCheckerV2です。Vはcarrier::PanelSignatureVerifierV2<R>でA0 evidence署名を実使用し、Rooted author/duty/current scope/clockをRで必須解決します。signed-frame全4627 bytes overheadを予算へ追加。認証済みcheck failureのattempt/wire消費をnative journalでrollbackしないことが必要です。
+- `coordinator::contract::ContractCourtV2<C,V>`。actual A1 checkerはcore一元実装。`tir_checker::TirCourtCheckerV2`が薄い委譲を行い、exec旧pathは同一型reexport。
+- `carrier::PanelSignatureVerifierV2<R>`。candidate open前にも現在rooted prover/opportunity/author/resourceの認可を必須にする。Gate C事後drawをopen資格へ代用しない。
+- `admission::AtomicAdmissionCoordinatorV2<S,V>`。new intakeと既存caseの`resolve_committed`を分離。実store receiptとactual checked factをscope/case/resultへbindする。
+- `funding::FundingPreflightCoordinatorV2`。`check_native_admission` / `prepare_native_atomic`でpeer basisと独立quoteの全fieldを照合。実UTXO/lockを前検査だけで生成しない。
+- `record_ingress::preflight_witness_record_v2`。外版本/操作/rooted Resultとborrowed A0 recordを候補変更前に照合。class/jobからのactual A1再構成・全関係検査は別途必須。
+- `native_body`。version2/revision1、local operations0..7。ResultAdmission、WitnessCommit、ExactFrame、SourceRequest、SourceResponse、Finish、Expire、PositiveCourtAttestation。原本は`A4-NATIVE-BODY-R1.md`。keysはrooted stateから解決し、clock/Passedをpeer fieldにしない。
+- `CommittedCourtRecoveryStoreV2` / coordinator `recover_committed_case`。現在のactual storeが既存case receiptをreadonlyで返すrequired port。署名・scope・immutable links・現在rootを再検査しfresh coordinator ownerへbind。new prepare/commit/新受付期限を使わず、hold/epoch/journal/undoを増やさない。native具体implは未供給。
 
-原子的受付はadmission::AtomicAdmissionCoordinatorV2<S,V>。CourtAdmissionViewV2::{resolve,resolve_committed}でNEW受付と既存Case/anchor/Court期限を分離し、実AtomicCourtStoreを呼びます。Fundingはfunding::FundingPreflightCoordinatorV2::{check,revalidate,prepare_atomic,commit_atomic}でNode由来quoteとactual carrier output額をcommit直前にも再照合します。SignatureCheckedFundingPreflightV2だけではUTXO lockを作れません。AdmittedCheckedFactV2は実store receiptと実A1終端をscope/case/resultへ結合します。
+## 重要な修正と選択commit
 
-未接続の具体根拠は、nativeのValidatedTransaction/composed UTXO/current accepted-prefixと同一DB batchを持つAtomicCourtStore、rooted payer/role/prover/draw/duty/currentview resolver、A2 source diff＋A5 money＋A6 journalを適用するstate_v2 one-writerです。private整数holdや4KiB木を代用せず、未割当portは拒否を維持します。SourceResponseは既存G143形式をnative request.kind/prompt formから選ぶ方針です。
+- `ee06d8173`: candidate認可/context/plan/start/heap確保をmutation前へ。全accepted frame IDを64×関係数の予約済みindexで保持し、既知packetは認可/署名確認後の無課金ACK。
+- `488317d3e`: future/order/header条件をCase課金前へ移動。未来frameのコピーは無課金・journal非append、後で同じ署名を正順受理可能。current relationの不正算術は費用保持。
+- `1ae6c23cd`: 旧private prototypeは自己完結するnarrow-only。Wide WIPの3symbol依存を除き未対応は明示拒否。RFC43 snapshotを全importしない。
+- `c578682a9`: actual UTXO first passのFull factoryからowned provenanceを採取し、実entries/fee/body owner/session/origin/ordinalをphase twoへ保持。通常UTXO適用は一度のみ。後段Court consumerは未接続。
+- `f5fcf628b` / `946bf2dee`: raw Borsh各doorでactive176 bounded preflight、別用途readerはraw176除外。global enum/KindFence ALLは未変更。
+- `786c00227`: native予約のOk(None)をFull前にtyped capacity faultとして拒否。real leaseを保持する。A0のallocation-free identity hashと共通source due DATAを選択取込。
+- `0c7c2bcf3`: readonly recovery API、A5 genuine getter425の14行＋4試験、actual book/actual A1再bind試験。
+- `c1292bc08`: A2 `4da761423`のcore6filesを選択取込。op3/op4 logical relayはusage/history/fee/Caseを変えず、`changes_case()==false`。旧union/receiptのliteral CASは維持。source dueは共通7fieldへ統一。
 
-同じsource commitに対する通常Cargoで、共通契約30、A5 private会計29、Node結合62、core Court/recovery50、旧G14 shared27の計198件がPASSしました。証拠は docs/design/palw/positive-court/VALIDATION-A4.md と docs/evidence/positive-court-a4-integration-2026-10-31/ に保存済みです。これはnative実UTXO/T12Chain成功ではありません。公開activation変更なし。
+A0/A1/A2/A5の既取込ファイルは重複cherry-pickせず、上記A4固有差分を選択する。
 
-後続取込: A0 rows/record b1c03b92e、dormant fence aa9dd6d66/e1a788dac/a874827f3、A1 purecore/A2 source選択取込63fbb6d66、body funding/record preflight/core薄adapter27016a9ef。新funding helperはpeer basis全fieldを独立quoteへ照合、record helperは外版本/expected Resultとのborrowed codec照合を候補変更前に行います。A1実検査器はcore一元実装で、exec旧pathは同一型reexportです。
+## native実装に残る供給点
 
-実native resolverの調査結果: class/artifact/program/tokenizer/layoutは既存class登録から独立解決できます。一方、新176 Resultと既存registered job/input/context/seed/expected Minerの正規対応、新PositiveのProver/Source claim-duty割当、adopted service/funding schedule preimagesが未供給です。旧FP claim/job、kernel interim Panel、source bootstrap checker cohort、Gate C事後drawを新役割へ代入しません。A0へcanonical型/APIの確定を依頼済みで、欠落は拒否を維持します。
+1. 新Resultとcanonical registered job/input/context/seed/expected Minerの正規対応。旧header・旧FP job・kernel interim Panel・source checker cohortを新授権へ流用しない。
+2. 実current accepted-prefix、branch/anchor、generation/Case epoch、rooted roles/opportunities、有限profile/schedule preimage、全試行/全一時heap/保持/復旧lease。
+3. A5 new-version protected outpoint、共通mempool/block predicate、same-mergeset provisional locksとqualified spend。旧TFO1/TFP1のcontract IDへ新Scope IDを入れない。
+4. A2source＋A5money＋A6complete case journalを同じTransitionBuilder checkpointとKernelRouteRow old/new deltaへ入れるactual one-writer。per-block canonical delta/UTXOdiff/acceptanceは既存caller WriteBatchへ。virtual tip/UTXO set materializationは別の既存replay段階。
+5. 全Case eventのactual accepted material保持/再生、支払イベントからのreceipt typed refresh、現在row/funding/lease/epochからのnative readonly復旧receipt。A6 private archiveはlocal cacheに限定しrawRelatedRowでUTXOを書かない。
 
-保存境界: native aux151のCourt/Source/Funding/JournalHeadは既存KernelRouteRow(old/new) deltaとtypedstoreからper-block UTXOdiff/acceptanceと同じcaller WriteBatchへ入れる方針です。実virtual UTXO setとtip materializationは別の既存replay段階であり、一つのbatchで全tipが同時更新されるとは称しません。A6 private archiveはlocal cacheで、raw RelatedRowへUTXO keyを流してtypedstore/cacheを迂回しません。
+kernel header欠落は明示拒否。認証済みでCase状態/費用を変えたsemantic failureはその費用とraw eventを確定し、Errだけを見て全rollbackしない。完全NoOpとtransport拒否はCase journalへappendしない。ordinary TX fee/historyはnative層で独立。
+
+## 検証
+
+`d2047d64d`の271件は後日のfuture-frame指摘前の履歴。`488317d3e`は284件、`0c7c2bcf3`は295件とconsensus全tests型検査が成功。各候補を合算せず原ログとcommit/treeを`docs/evidence/positive-court-a4-integration-2026-10-31/`へ保存する。最新`c1292bc085cbfc1ca24a8ac0a962ab1096a88f23`は同source通常Cargoで300 PASS/0 FAIL、consensus全tests型検査成功、文書新規欠落0・既知43。`docs/design/palw/positive-court/VALIDATION-A4-R5.md`と`final-r5/`の原ログ・commit/tree・118source SHAを参照。
+
+再実行は`scripts/ci/positive-court-a4-ci.sh`。通常CargoのRust source build。既存互換native RocksDB archiveのみ任意で再使用し、consensus Rust rlibを代用しない。重複するcore/Node公開API driverを件数に含む。構造unitやprivate book成功はactual native受付/UTXO lock/T12/reopen/IBDの代用ではない。

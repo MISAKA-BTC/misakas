@@ -1,0 +1,18 @@
+{
+  "source_commit": "c1292bc085cbfc1ca24a8ac0a962ab1096a88f23",
+  "reviewer": "/root/independent_validation",
+  "method": "read-only independent code audit; Cargo execution belongs to root CI",
+  "reviewed": [
+    "Full validation factory and one-time ordinary UTXO application",
+    "owned provenance/session/origin/ordinal and typed resource failure propagation",
+    "raw176 allocation-free predecode before generic Borsh and old sink refusal preservation",
+    "canonical source old-row CAS and logical NoOp budgets/history",
+    "readonly recovery signature/context/root checks and real private book no-write/undoNone",
+    "mandatory real RAM lease; no global checker arming; streaming same-byte identities"
+  ],
+  "new_major_findings": [],
+  "limitations": [
+    "No production NativeSourceContext/AtomicCourtStore/recovery/credit authority supplied by this review",
+    "No live176 T12/reopen/IBD success inferred from structural or private-book tests"
+  ]
+}
