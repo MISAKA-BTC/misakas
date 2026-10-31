@@ -1,0 +1,42 @@
+   Compiling misaka-palw-tir-exec v1.1.0 (/Users/wata/.codex/worktrees/a3-panel-positive-court/MISAKA-testnet/misaka/palw/tir/exec)
+    Finished `test` profile [unoptimized] target(s) in 10.48s
+     Running tests/capture_codec.rs (/Users/wata/.cache/misaka-positive-a3-target/debug/deps/capture_codec-3aaa65e22925c2a1)
+
+running 4 tests
+test every_capture_vector_refuses_a_truncated_hostile_length_before_allocation ... ok
+test framed_capture_preserves_dense_fold_and_false_value_wire_bytes ... ok
+test framed_capture_keeps_strict_eof_and_refuses_truncated_frames ... ok
+test nested_empty_rows_cannot_amplify_beyond_the_real_consumer_reservation ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/run_wide_q24_v2.rs (/Users/wata/.cache/misaka-positive-a3-target/debug/deps/run_wide_q24_v2-b7b0acdbdd74363d)
+
+running 7 tests
+
+thread 'legacy_v1_cpu_process_and_ipc_entry_points_refuse_wide_before_execution_or_serialization' (3578227) panicked at misaka/palw/tir/exec/src/cellstep.rs:75:9:
+V1 cell logits cannot read wide Q24; an explicit V2 cell API is required
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test malformed_mixed_profiles_and_unpinned_inputs_fail_closed_without_execution ... ok
+test legacy_v1_cpu_process_and_ipc_entry_points_refuse_wide_before_execution_or_serialization ... ok
+test exact_quote_limits_fit_and_each_one_below_refuses_before_callbacks ... ok
+test observer_refusal_stops_before_its_leaf_and_any_later_state_or_output ... ok
+test paired_legacy_nodes_fixed_and_history_keep_exact_four_byte_preimages ... ok
+test borrowed_wide_observer_reports_each_executed_node_state_and_output_once ... ok
+test explicit_wide_run_preserves_original_context_and_exact_extreme_rows_with_canonical_roots ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/wide_capture_v2.rs (/Users/wata/.cache/misaka-positive-a3-target/debug/deps/wide_capture_v2-3fc56f2ab05111d1)
+
+running 7 tests
+test authentication_refuses_minimum_work_before_scanning_malformed_row_widths ... ok
+test build_copy_encode_decode_and_authentication_charge_every_simultaneous_owner_at_exact_caps ... ok
+test dense_data_requires_full_canonical_geometry_even_when_altered_roots_are_self_consistent ... ok
+test bounded_false_ids_and_values_remain_data_evidence_without_selection_or_arithmetic_credit ... ok
+test independent_expected_binding_and_pre_admitted_geometry_cannot_be_replaced_by_delivery ... ok
+test literal_wide_borsh_schema_preserves_i64_endpoints_and_old_v1_capture_grammar ... ok
+test every_peer_vector_length_truncation_eof_and_empty_row_amplification_is_bounded ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
