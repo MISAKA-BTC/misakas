@@ -6648,13 +6648,16 @@ impl VirtualStateProcessor {
         if tx.subnetwork_id != kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE {
             return None;
         }
-        let object =
-            kaspa_consensus_core::palw_lifecycle_objects_v2::palw_lifecycle_objects_from_accepted_txs_v2(std::slice::from_ref(tx))
-                .objects
-                .into_iter()
-                .next()
-                .filter(|carried| self.palw_lifecycle_kind_fences.kind_in_force_at(&carried.object, virtual_daa_score))
-                .map(|carried| carried.object)?;
+        let object = kaspa_consensus_core::palw_lifecycle_objects_v2::palw_lifecycle_objects_from_accepted_txs_in_context_v2(
+            std::slice::from_ref(tx),
+            &self.palw_lifecycle_kind_fences,
+            virtual_daa_score,
+        )
+        .objects
+        .into_iter()
+        .next()
+        .filter(|carried| self.palw_lifecycle_kind_fences.kind_in_force_at(&carried.object, virtual_daa_score))
+        .map(|carried| carried.object)?;
         if !matches!(object, Obj::KernelRouteV1 { .. } | Obj::KernelConstraintReceiptV1 { .. }) {
             return None;
         }

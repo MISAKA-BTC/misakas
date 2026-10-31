@@ -543,22 +543,26 @@ impl VirtualStateProcessor {
     pub(super) fn palw_collectible_transaction_fee_v1(&self, tx: &Transaction, fee: u64, bond_burned: u64, daa: u64) -> u64 {
         let rent_active = self.palw_certification_rent_at(daa) || self.palw_model_lines_active_at(daa);
         let rent = if rent_active && tx.subnetwork_id == SUBNETWORK_ID_PALW_LIFECYCLE {
-            kaspa_consensus_core::palw_lifecycle_objects_v2::palw_lifecycle_objects_from_accepted_txs_v2(std::slice::from_ref(tx))
-                .objects
-                .first()
-                .filter(|carried| self.palw_lifecycle_kind_fences.kind_in_force_at(&carried.object, daa))
-                .map(|carried| {
-                    // LG14-A: the canonical FP proof appended to contradiction 13 is priced past the public-filer fence, read at the
-                    // same DAA by the acceptance walk and here.
-                    kaspa_consensus_core::palw_state_v2::palw_object_rent_ceiling_v3(
-                        &carried.object,
-                        self.palw_offence_attribution_at(daa),
-                        self.palw_state_params_v2.as_ref().is_some_and(|params| params.capacity_batch_active_at(daa)),
-                        self.palw_legacy_public_filer_at(daa),
-                    )
-                })
-                .unwrap_or(0)
-                .min(fee)
+            kaspa_consensus_core::palw_lifecycle_objects_v2::palw_lifecycle_objects_from_accepted_txs_in_context_v2(
+                std::slice::from_ref(tx),
+                &self.palw_lifecycle_kind_fences,
+                daa,
+            )
+            .objects
+            .first()
+            .filter(|carried| self.palw_lifecycle_kind_fences.kind_in_force_at(&carried.object, daa))
+            .map(|carried| {
+                // LG14-A: the canonical FP proof appended to contradiction 13 is priced past the public-filer fence, read at the
+                // same DAA by the acceptance walk and here.
+                kaspa_consensus_core::palw_state_v2::palw_object_rent_ceiling_v3(
+                    &carried.object,
+                    self.palw_offence_attribution_at(daa),
+                    self.palw_state_params_v2.as_ref().is_some_and(|params| params.capacity_batch_active_at(daa)),
+                    self.palw_legacy_public_filer_at(daa),
+                )
+            })
+            .unwrap_or(0)
+            .min(fee)
         } else {
             0
         };
