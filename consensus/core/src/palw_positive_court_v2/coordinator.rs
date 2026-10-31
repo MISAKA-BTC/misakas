@@ -16,6 +16,9 @@ use crate::{
 };
 use std::collections::BTreeMap;
 
+#[path = "coordinator_recovery.rs"]
+pub mod recovery;
+
 pub const SOURCE_REQUEST_CONTEXT: &[u8] = b"misaka/positive-court/source-request/v2";
 
 /// Constructed by the trusted private admission adapter, never decoded from a
