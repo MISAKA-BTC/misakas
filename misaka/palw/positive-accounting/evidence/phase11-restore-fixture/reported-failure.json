@@ -1,0 +1,40 @@
+{
+  "kind": "upstream A7 execution, not rerun by A5",
+  "production": "79c3f9bcae0fde86940fd65cbcbfa2018a72cc21",
+  "reported_a7_head": "7dd56d8cd1e31b684a97e35c6650eff1b04fab80",
+  "original_log": "/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/testing/positive-court-a7/evidence/a0-79c3-regression-2026-11-01/05.log",
+  "original_log_sha256": "acc9ab497282ac4b044833f27a9fc173d4672471422cfe9ab6d301dbf7376a09",
+  "original_run": "/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/testing/positive-court-a7/evidence/a0-79c3-regression-2026-11-01/run.json",
+  "original_run_sha256": "a50f6639f23692643944aafdf0ba246db01846da4bd100d664f7c004e65de3c0",
+  "reported_passed": 49,
+  "reported_failed": 6,
+  "failure_before_reader": "dto_state carriage.into_state().unwrap() rejects invalid snapshot",
+  "source_comparison": {
+    "consensus/core/src/palw_positive_rows_v2.rs": {
+      "production_sha256": "90438779f3981c8ba6841549d29feaea16146412e2bb6decd5caf4cc032b64ce",
+      "a7_recorded_sha256": "90438779f3981c8ba6841549d29feaea16146412e2bb6decd5caf4cc032b64ce",
+      "matches": true
+    },
+    "consensus/core/src/palw_positive_rows_v2/restore.rs": {
+      "production_sha256": "b3ef8844df59818a7bae37ed383cc8bb29bdc741cc76d09cb0bd0683579696ec",
+      "a7_recorded_sha256": "b3ef8844df59818a7bae37ed383cc8bb29bdc741cc76d09cb0bd0683579696ec",
+      "matches": true
+    },
+    "consensus/core/src/palw_state_v2/chain_state.rs": {
+      "production_sha256": "c34081912aaca1d4d76454b41bdca9acb11ff71962c04d79a09b4cf19eeae536",
+      "a7_recorded_sha256": "c34081912aaca1d4d76454b41bdca9acb11ff71962c04d79a09b4cf19eeae536",
+      "matches": true
+    },
+    "consensus/core/src/palw_kernel_route_v1.rs": {
+      "production_sha256": "bf1a6bb9bf6567b2d7f3b61ce8441280de027ff248ca1ef84e48d2c2a803e848",
+      "a7_recorded_sha256": "bf1a6bb9bf6567b2d7f3b61ce8441280de027ff248ca1ef84e48d2c2a803e848",
+      "matches": true
+    },
+    "misaka/palw/positive-accounting-node/src/rows/tests.rs": {
+      "production_sha256": "3cce030a5737981560043a8ace736fdc15b6fa295b4bb37c3a5fcac5f60fa2db",
+      "a7_recorded_sha256": "3cce030a5737981560043a8ace736fdc15b6fa295b4bb37c3a5fcac5f60fa2db",
+      "matches": true
+    }
+  },
+  "original_result": "FAILED_OR_INCOMPLETE"
+}

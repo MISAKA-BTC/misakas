@@ -1,0 +1,94 @@
+{
+  "reviewed_execution_base_commit": "79c3f9bcae0fde86940fd65cbcbfa2018a72cc21",
+  "scope": "Correct obsolete row-test fixture assumptions for the exact A0 strict restore candidate; production validation is unchanged.",
+  "actions": {
+    "source_review_read_only": true,
+    "builds_run": false,
+    "tests_rerun": false,
+    "source_code_edited": false,
+    "cache_operations_performed": false,
+    "git_commits_created": false,
+    "only_this_evidence_json_written": true
+  },
+  "findings": [],
+  "source_diff": {
+    "tracked_changes_from_production": [
+      "misaka/palw/positive-accounting-node/src/rows/tests.rs"
+    ],
+    "only_fixture_test_source_changed": true,
+    "production_core_and_node_sources_unchanged": true,
+    "fixture_sha256": "d020883d7dcc6ebffd9de5a79812771e70f8bb42a88080e303a4c70a3686b128"
+  },
+  "reported_upstream_failure": {
+    "record": "reported-failure.json",
+    "record_sha256": "4f09f44995d96ec9f4ffb9bc0fdc5ad877263f0887038d7e7703cb9e6fdc8cda",
+    "original_result": "FAILED_OR_INCOMPLETE",
+    "reported_a7_head": "7dd56d8cd1e31b684a97e35c6650eff1b04fab80",
+    "reported_passed": 49,
+    "reported_failed": 6,
+    "copied_raw_log": "reported-failure-05.log",
+    "copied_and_original_log_sha256": "acc9ab497282ac4b044833f27a9fc173d4672471422cfe9ab6d301dbf7376a09",
+    "original_run_sha256": "a50f6639f23692643944aafdf0ba246db01846da4bd100d664f7c004e65de3c0",
+    "five_critical_sources_match_original_manifest_and_production_snapshot": true,
+    "rerun_by_this_reviewer_or_claimed_as_a_local_failure": false,
+    "diagnosis": "All six failures occurred at dto_state carriage.into_state unwrap, before the credit reader. Strict restore rejects partial/corrupt snapshots and the old nominally-valid fixture lacked required journal/packet rows and coherent attempt/status/event/meter data. BTreeMap already provides canonical key order."
+  },
+  "reviewed_fixture_checks": [
+    "The valid DATA fixture contains 17 rows: six signed bundle/cache rows, one journal head and ten PacketReceipt rows for the complete relation prefix 0..9. Actual restore report asserts rows/cases/witnesses/signature checks = 17/1/1/3.",
+    "MinerDataStatus::NotRequested matches no source union. Witness attempt zero is below usage.witness_attempts one. The same accepting block retains identical clocks and orders result event 5, witness 6, packets 7..16 and coverage/case last event 16.",
+    "Journal sequence 12 accounts for result admission, witness and ten parts; history origin equals the case last event. Journal head/history digest meanings are not equated.",
+    "Each packet accounts for 300 unsigned header bytes plus 4627 signature bytes; Coverage stores 3000 unsigned bytes and ten signatures. These structural counters are not checked mathematical packet preimages.",
+    "Miner, payer and Panel signatures are real fixture signatures verified by production restore. The restored complete DATA bundle still denies all eight native credit uses because native owners are missing.",
+    "Orphan, malformed, wrong-version/key, bad signature/plan and missing witness/coverage/journal/packet fixtures are rejected by both actual strict carriage restore and its lower-level validator; real codecs/shared validators preserve diagnostics without an unchecked native-state setter."
+  ],
+  "execution_evidence": {
+    "node-full": {
+      "metadata": "node-full-result.json",
+      "metadata_sha256": "f2581c45010d7a69f6b73d610a6b8981a6c5acd7af7113af1ee3e82066687e56",
+      "raw_log": "node-full.log",
+      "raw_log_sha256": "ccdc610582ee126f6a67a83fea1a8c0ca169a027696f0a83fc020132c23408e9",
+      "exit_code": 0,
+      "source_unchanged_during_run": true,
+      "all_recorded_source_hashes_match_current": true,
+      "matched_source_count": 21,
+      "passed": 55,
+      "doc_tests": 0,
+      "module_pass_counts": {
+        "dues": 9,
+        "native_funds": 15,
+        "native": 15,
+        "rows": 7,
+        "tir": 9
+      },
+      "default_features_enabled": true
+    },
+    "node-clippy": {
+      "metadata": "node-clippy-result.json",
+      "metadata_sha256": "7dcb362776b25def0e8f0dc6ee20c069a20f61f04bc207c3c569a049fb51e047",
+      "raw_log": "node-clippy.log",
+      "raw_log_sha256": "7f6167a42d620e8799f94a892bee77d72734905ab12d90e32e1b1ac4f947e92a",
+      "exit_code": 0,
+      "source_unchanged_during_run": true,
+      "all_recorded_source_hashes_match_current": true,
+      "matched_source_count": 21,
+      "raw_warnings_found": false
+    }
+  },
+  "cleanup_record_review": {
+    "record": "own-cache-cleanup.json",
+    "record_sha256": "9d94100ff40d033b06e47993f06581bb4cfc59a98005c346c2e3b8dfe925f36a",
+    "reported_removed_artifacts": 17,
+    "reported_bytes": 3259660668,
+    "all_recorded_paths_inside_a5_owned_disposable_target": true,
+    "process_stoppage_and_removal_are_root_reported_not_independently_observed": true,
+    "reviewer_did_not_touch_any_cache": true
+  },
+  "limits": [
+    "The original A7 failure is upstream evidence and remains preserved as FAILED_OR_INCOMPLETE; the corrected local candidate is a separate successful execution, not a relabeling or rerun of that original failure.",
+    "This is a correction of fixture assumptions, not a production consensus bug fix or a relaxation of native validation.",
+    "Structural links and three literal signatures establish DTO consistency/authentication only; accepted ancestry, packet preimages/A1 arithmetic replay, current locks/funds/resources and drawn-P approval remain native owner responsibilities.",
+    "Only exact production79c3 plus the single test-file correction was validated. Current f862 and later wide/A6 candidates were not tested here and are not covered by these results.",
+    "Default-node and lint results are specific to this candidate and scope; they must not be combined with other candidates as a native end-to-end success count.",
+    "Root performed the recorded builds/tests and its own-cache cleanup. This reviewer only inspected source, records and raw hashes and performed no build, cache use, code edit or commit."
+  ]
+}
