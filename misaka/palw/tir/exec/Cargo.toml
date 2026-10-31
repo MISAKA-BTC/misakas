@@ -39,6 +39,8 @@ misaka-palw-base0 = { workspace = true, optional = true }
 # The fused unit-row kernels on the GPU (macOS): bit-identical to the CPU kernels, behind a node flag.
 metal = []
 node = ["dep:kaspa-consensus-core", "dep:misaka-palw-tir-artifact", "dep:misaka-palw-positive-contract", "dep:libc", "dep:borsh", "dep:blake2b_simd", "dep:tempfile"]
+# Compatibility name for callers of the shared pure Positive checker.
+positive-contract = ["node"]
 legacy-bench = ["node", "dep:misaka-palw-base0"]
 
 # The Metal bridge is compiled by the build script on macOS (feature `metal`); a build script cannot be feature-gated, so the compiler
