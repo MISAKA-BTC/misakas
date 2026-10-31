@@ -1199,3 +1199,8 @@ pub mod palw_paid_bootstrap_source_v6;
 pub mod palw_paid_claim_observation_v6;
 
 pub mod palw_exec_origin_coverage_v1;
+
+pub mod palw_logits_q24_v2;
+
+/// Isolated Positive Court R2 prototype; no native activation.
+pub mod palw_positive_court_v2;

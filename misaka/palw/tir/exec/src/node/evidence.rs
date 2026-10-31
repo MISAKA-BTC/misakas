@@ -360,6 +360,20 @@ impl<'a> TirEvidenceV1<'a> {
         })
     }
 
+    /// Dense wide capture: the arithmetic court consumes authenticated IDs and v2 step leaves.
+    pub fn dense_wide_q24_v2(
+        runner:&'a TirClassRunnerV1<'a>, capture:&'a super::wide_q24::TirWideCaptureV2,
+        params:&'a dyn TirParamOpenerV1, form:PalwPromptIdsFormV1, cap:u64,
+    )->Result<Self,String>{
+        capture.authenticate(cap)?;
+        let prompt_root=kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_commitment_v1(form,&capture.prompt).map_err(|e|e.to_string())?;
+        if capture.prompt.len() != capture.binding.job_context.declared_prefill_tokens as usize || prompt_root != capture.binding.job_context.prompt_token_ids_hash { return Err("wide capture prompt identity".into()); }
+        let root=kaspa_consensus_core::palw_logits_q24_v2::rows_root(&capture.binding.job_context,&capture.logits_rows).ok_or("wide row roots")?;
+        let mut store=Self::dense(runner,&capture.binding,&capture.prompt,&[],&capture.generated,&capture.leaves,params,form,cap)?;
+        store.trace=TirTraceV1::Summary {rows_root:root,generated:&capture.generated,pins:&[]};
+        Ok(store)
+    }
+
     /// Sparse public evidence: the requested ranges and their Merkle siblings, with
     /// no N-leaf allocation or prefix replay. Missing units remain unavailable.
     #[allow(clippy::too_many_arguments)]
@@ -1070,7 +1084,7 @@ impl PalwTirEvidenceStoreV1 for TirEvidenceV1<'_> {
                     generated_token_ids: generated.to_vec(),
                 }))
             }
-            (TirTraceV1::Summary { rows_root, generated, .. }, s) if s == tiled_logits_scheme_id_v1() => {
+            (TirTraceV1::Summary { rows_root, generated, .. }, s) if s == tiled_logits_scheme_id_v1() || self.runner.space.program.wide_logits_q24() => {
                 self.admit_copy((generated.len() as u64).checked_mul(8)?.checked_add(256)?)?;
                 Some(PalwDecodeTokenPinV1::TiledV1(PalwTiledDecodeTokensV1 { rows_root, generated_token_ids: generated.to_vec() }))
             }

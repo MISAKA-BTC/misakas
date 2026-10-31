@@ -435,6 +435,7 @@ pub fn serve_cell_requests_v1(reader: &mut dyn Read, writer: &mut dyn Write, dev
 
 fn open_session(program: &[u8], occ: (u32, u32), params: &[CellParamBlobV1]) -> Result<(TirPlan, TirParams<'static>), String> {
     let program = TirProgramV1::decode_canonical(program).map_err(|e| format!("the program: {e}"))?;
+    if program.wide_logits_q24() { return Err("legacy cell IPC refuses wide Q24".into()); }
     let plan = TirPlan::compile(&program).map_err(|e| format!("the plan: {e}"))?;
     if occ.0 >= occ.1 || occ.1 as usize > plan.occurrences.len() {
         return Err(format!("a cell of occurrences {occ:?} of {}", plan.occurrences.len()));
@@ -612,6 +613,7 @@ impl TirDeviceV1 for TirProcessDeviceV1 {
         params: &'a TirParams<'a>,
         occ: Range<usize>,
     ) -> Result<Box<dyn TirCellStepperV1 + 'a>, String> {
+        if plan.program.wide_logits_q24() { return Err("legacy device IPC refuses wide Q24".into()); }
         if self.poisoned() {
             return Err("the device helper is out of service (an error or a mirror difference)".to_string());
         }

@@ -73,7 +73,19 @@ impl Reader<'_> {
     }
 }
 
+struct Decoded<T> { binding: PalwTirStepBindingV1, prompt:Vec<u32>, logits_rows:Vec<Vec<T>>, generated:Vec<u32>, leaves:Vec<PalwStepTileLeafV1> }
 fn decode_with_limit(body: &[u8], limit: usize) -> Result<TirCaptureV1, String> {
+    let c = decode_inner::<i32>(body,limit)?;
+    if c.binding.class.decode_program().is_ok_and(|p|p.wide_logits_q24()) { return Err("legacy capture refuses wide Q24".into()); }
+    Ok(TirCaptureV1 {binding:c.binding,prompt:c.prompt,logits_rows:c.logits_rows,generated:c.generated,leaves:c.leaves})
+}
+pub(super) fn decode_wide(body: &[u8], frame: usize) -> Result<super::wide_q24::TirWideCaptureV2,String> {
+    let limit=frame.checked_mul(2).and_then(|n|n.checked_add(DECODE_FIXED_HEADROOM)).ok_or("wide capture allocation bound")?;
+    let c=decode_inner::<i64>(body,limit)?;
+    if !c.binding.class.decode_program().map_err(|e|e.to_string())?.wide_logits_q24() {return Err("wide capture needs wide profile".into());}
+    Ok(super::wide_q24::TirWideCaptureV2 {binding:c.binding,prompt:c.prompt,logits_rows:c.logits_rows,generated:c.generated,leaves:c.leaves})
+}
+fn decode_inner<T:BorshDeserialize>(body: &[u8], limit: usize) -> Result<Decoded<T>, String> {
     let mut r = Reader {
         remaining: body,
         storage_left: limit.checked_sub(std::mem::size_of::<TirCaptureV1>()).ok_or("capture allocation bound is too small")?,
@@ -125,9 +137,9 @@ fn decode_with_limit(body: &[u8], limit: usize) -> Result<TirCaptureV1, String> 
     };
     let prompt = r.words::<u32>()?;
     let row_count = r.length(4)?;
-    let mut logits_rows = r.reserve::<Vec<i32>>(row_count)?;
+    let mut logits_rows = r.reserve::<Vec<T>>(row_count)?;
     for _ in 0..row_count {
-        logits_rows.push(r.words::<i32>()?);
+        logits_rows.push(r.words::<T>()?);
     }
     let generated = r.words::<u32>()?;
     // u16 version, four coordinate u32s, value_count u32 and values Vec length u32.
@@ -144,5 +156,5 @@ fn decode_with_limit(body: &[u8], limit: usize) -> Result<TirCaptureV1, String> 
     if !r.remaining.is_empty() {
         return Err("trailing bytes after the IR capture".into());
     }
-    Ok(TirCaptureV1 { binding, prompt, logits_rows, generated, leaves })
+    Ok(Decoded { binding, prompt, logits_rows, generated, leaves })
 }
