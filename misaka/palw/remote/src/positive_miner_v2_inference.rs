@@ -2,6 +2,7 @@
 //! Registration data and the admission context come from the caller's rooted
 //! job state. Parameter authentication below establishes DATA IDENTITY only.
 use super::*;
+use kaspa_consensus_core::{Hash64, palw_prompt_ids_v1::prompt_token_ids_match_v1};
 use kaspa_consensus_core::{
     palw_artifact::{PalwArtifactMerkleFrontierV1, artifact_leaf_parts_v1},
     palw_attempt_rules_v1::palw_attempt_output_root_v1,
