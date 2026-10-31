@@ -45,3 +45,5 @@ accepted-data readerは実selected-chain readguard、header再hashとclock、Acc
 full native restart／実資金精算／T12／Node間P2P・IBD／公開activationは成功としていない。新job authority・未対応Assignment codec・actual native environmentやqualified spend接続が無ければ拒否を維持する。既存NumericalManifestのgenerator PIN不一致は別baselineであり、全generator roundtrip成功とは扱わない。
 
 A0から追加依頼された実A2 SourceLedgerを使うExternalState結合は後続候補で検証する。本38件の成功をその新候補へ流用・合算しない。物理RSS/30GB footprintや検出率・参加率を仮定なしに保証しない。暗号学的なモデル計算証明を用いず、モデル二階層の凍結とclaim単位のGate Cを維持する。
+
+後続実装・owner境界は [Source replay handoff](A6-SOURCE-REPLAY-HANDOFF.md) に記録する。
