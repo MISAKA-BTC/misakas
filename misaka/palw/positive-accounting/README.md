@@ -55,6 +55,11 @@ A0 `069d54007` のP statement DTO認証は実抽選の`Certified`ではなく、
 
 `PrivateAccountingStore<A>` は A0 の `AtomicCourtStore` を実装する。
 これは有限なprivate参照bookであり、既存money engineを置換する実装ではない。
+既存caseのreceiptは `recover_committed_case(intent)` でread-onlyに再取得できる。
+保存済みintentの全fieldとstore ownerへ結び付け、unknown/不一致を拒否する。
+new admissionのprepare/commit・authority・expiry再評価をせず、資金/資源/head/epochを変えない。
+返るreceiptの `admission_undo` はNoneである。A4は別途current root/generationと署名Resultを検証して再bindする。
+これはprivate bookのgetterであり、native復旧・永続化・現在funding/leaseの検証を成立させない。
 `AccountingAuthority` のnative実装では、A0/A4/A6が同じrooted viewで以下を解決する必要がある。
 
 - `admission`: 署名済みpayer consent、実資金、料金上限・全schedule・返金/burn条件、全資源quote、intentとの完全一致。
