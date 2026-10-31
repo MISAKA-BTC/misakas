@@ -90,6 +90,9 @@ impl CourtUsageDeltaV2 {
 /// bytes/attempts and the complete `source_delta` supplied to the mapper are
 /// already accounted for and MUST NOT be included again. No successful Default
 /// or automatic elements/terms-to-work conversion is supplied.
+/// AggregateUsage.fee is source-service-only: only the real source ledger's
+/// first receipt increases it. Court/control/Panel fees require their separate
+/// qualified owner and are not mapped into this source-service budget.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct NativeUsageChargeV2 {
     pub extra_transmitted_bytes: u64,
@@ -97,10 +100,9 @@ pub struct NativeUsageChargeV2 {
     /// Actual canonical retained bytes under native policy. Court receipt Vec
     /// capacity is workspace and must NEVER be treated as canonical retention.
     pub retained_bytes: u64,
-    pub fee: u64,
 }
 pub trait NativeCommonUsagePolicyV2 {
-    /// Required rooted policy/fee/work mapper, re-resolved for this historical
+    /// Required rooted policy/work mapper, re-resolved for this historical
     /// guarded step. Returning a rate from test data is not native authority.
     fn map_usage_delta(
         &self,
@@ -417,7 +419,6 @@ fn add_usage(
     usage.witness_attempts = usage.witness_attempts.checked_add(court.attempts).ok_or(CommonSourceReplayErrorV2::Budget)?;
     usage.additional_work = add(usage.additional_work, charge.additional_work)?;
     usage.retained_bytes = add(usage.retained_bytes, charge.retained_bytes)?;
-    usage.fee = add(usage.fee, charge.fee)?;
     Ok(usage)
 }
 #[cfg(test)]
@@ -439,9 +440,9 @@ mod tests {
     fn only_delta_is_added_and_receipt_capacity_is_not_retention() {
         let delta = CourtUsageDeltaV2::between(Some(court(100, 1)), court(140, 2)).unwrap();
         let usage = add_usage(
-            AggregateUsage { transmitted_bytes: 900, witness_attempts: 1, ..AggregateUsage::default() },
+            AggregateUsage { transmitted_bytes: 900, witness_attempts: 1, fee: 3, ..AggregateUsage::default() },
             delta,
-            NativeUsageChargeV2 { extra_transmitted_bytes: 7, additional_work: 5, retained_bytes: 11, fee: 3 },
+            NativeUsageChargeV2 { extra_transmitted_bytes: 7, additional_work: 5, retained_bytes: 11 },
         )
         .unwrap();
         assert_eq!(usage.transmitted_bytes, 947);
@@ -449,6 +450,18 @@ mod tests {
         assert_eq!(usage.retained_bytes, 11);
         assert_eq!(usage.additional_work, 5);
         assert_eq!(usage.fee, 3);
+        // Another Court/control step adds its own wire/work/retention, while
+        // the existing first-source-receipt due remains unchanged.
+        let next = add_usage(
+            usage,
+            CourtUsageDeltaV2 { signed_wire_bytes: 13, attempts: 0, elements: 2, terms: 4 },
+            NativeUsageChargeV2 { extra_transmitted_bytes: 2, additional_work: 9, retained_bytes: 17 },
+        )
+        .unwrap();
+        assert_eq!(next.fee, 3);
+        assert_eq!(next.transmitted_bytes, 962);
+        assert_eq!(next.additional_work, 14);
+        assert_eq!(next.retained_bytes, 28);
         assert_eq!(delta.elements, 0);
         assert_eq!(delta.terms, 0);
     }
@@ -460,7 +473,7 @@ mod tests {
             add_usage(
                 AggregateUsage { transmitted_bytes: u64::MAX, ..AggregateUsage::default() },
                 CourtUsageDeltaV2 { signed_wire_bytes: 1, attempts: 0, elements: 0, terms: 0 },
-                NativeUsageChargeV2 { extra_transmitted_bytes: 0, additional_work: 0, retained_bytes: 0, fee: 0 },
+                NativeUsageChargeV2 { extra_transmitted_bytes: 0, additional_work: 0, retained_bytes: 0 },
             )
             .is_err()
         );
