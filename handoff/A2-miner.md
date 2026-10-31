@@ -1,45 +1,45 @@
-# A2 — Miner lightweight path
+# A2 — Miner lightweight path: integration handoff
 
 Workspace: `/Users/wata/.codex/worktrees/positive-court-a2-miner/MISAKA-testnet`
 Branch: `codex/positive-court-a2-miner`
-Initial base: `a5800d2dd5d334e89f7a1ddb6e956aedcbf4adf5`
-Common base: A0 commit `a85152edc`, `misaka-palw-positive-contract`, version 2 / revision 1.
 
-## Implemented responsibility
+Common contract: A0 `a85152edc`, version 2 / revision 1, plus the authoritative TIR annex `d615f62b6` (locally cherry-picked as `f69a2b168`). A1 dependency `52c621411` is locally `3bfaf692b`. The earlier A2 contribution is `90b93ac4e`; it is already available to A0 under its selected integration commit. For the parallel completion, integrate only the new A2 commit after these common prerequisites.
 
-`misaka/palw/remote/src/positive_miner_v2.rs` is exported from the existing Miner entry point as `misaka_palw_remote::miner::positive_v2`, behind the default-off Cargo feature `positive-miner`. This is a local process build option; it is not a native activation fence.
+## Delivered A2 implementation
 
-- `infer_tokens_v2`: ordinary fixed-length greedy `TirExecutor` inference using `NoSink`; retains generated IDs, normal inference state, and no Positive trace/capture/evidence tree. Both i32 and i64 logits use the first maximal lane. Input and position bounds precede execution.
-- `sign_result_v2`: signs the complete A0 `MinerResultCommit` with A0's existing r1 context. Checks admitted scope/class, finite `MinerServiceContract`, signer identity, returned signature, and deadline. No new wire tag or signature domain.
-- `MinerResponderV2<D>` implements A0 `MinerSource`. `respond` receives only an authenticated canonical duty, whose exact `SourceRequest` cannot be independently substituted. `D: CanonicalDataDutyV2` is the explicit A4 integration port; there is no permissive native duty implementation.
-- Existing G14 artifact inventory openings, tiled prompt openings, and whole flat prompts are authenticated before cloning an outbound response. No alternate 4-KiB source tree is introduced. `StoredProviderV2` reads already stored data/openings and receives no signing key.
-- All Panels share one case session and canonical unit union. Already Node-accepted direct/provider units require no provider reads or re-preparation. Overlap does not recharge unique data. An explicit retry of a still-pending unit spends preparation bytes, provider reads, and read/hash work again.
-- Local request/metadata/provider-read/body-byte limits and the Miner's signed aggregate caps bound preparation. Oversized fields are refused before serialization/hash walks. Failed reads and bad providers consume the finite read/work budget. An unsuccessful batch preserves consumed counters; it cannot silently reset them.
+The default-off `positive-miner` Cargo feature exports `misaka_palw_remote::miner::positive_v2`. This is a process build option; no native wire tag, public preset, activation height or credit reader changes.
 
-A prepared response is neither Node-accepted delivery nor inference checking, payment, credit, a Miner default, or a Court verdict. Provider failure and Panel abandonment cannot be converted into Miner computation fraud by this module.
+- **Inference through signed result:** `inference::AuthenticatedTirParamsV2::authenticate` authenticates immutable in-memory parameters once against the existing G14 inventory root. It uses a streaming frontier and at most one canonical 32-KiB row piece, never a full evidence tree. It privately recompiles the bounded program because a caller's public `TirPlan` fields can be modified. Conservative byte/leaf/compiled-node/instance caps precede metadata expansion. Externally row-served parameters are explicitly unsupported in this initial adapter.
+- **Binding:** `inference::infer_and_sign_tir_result_v2` checks the rooted `AdmissionContext`, class/program/artifact/tokenizer, canonical job/context hash, input, CU rules, seed, counts and A0's single greedy selector. Input/context/layout limits precede hashing. It runs ordinary `NoSink` inference, derives the existing G14 output commitment from generated IDs, and signs A0's result. It does not build, sign or endorse a Panel witness.
+- **Actual stored provider:** `store::FileStoredProviderV2` explicitly loads existing G14 artifact openings, tiled prompt openings or flat IDs into an immutable bounded cache. Fixed generated filenames, directory FD, `openat` with no-follow/nonblocking flags, regular-file checks, pre-allocation decoder bounds and identity authentication protect file reads. Failed attempts consume finite read budgets. Serving a borrowed cached unit performs no hidden disk read, full-tree rebuild or inference. File-backed loading is currently Unix-only; other platforms reject it.
+- **Bounded aggregate response:** `MinerResponderV2<D>` implements A0 `MinerSource`. The exact request is held by `D: CanonicalDataDutyV2`; it cannot be supplied separately. All Panels use one case's unit union and meters. Per-step preflight prevents a large pending-vector allocation before signed/local caps. `ProcessLimitsV2::max_status_checks` and `PreparationMeterV2::status_checks` also bound cumulative lookups for already completed units. This is a new required LOCAL field; it does not change A0's wire schema.
+- **Durable response:** standard restart-safe service uses `recovery::DurableMinerResponderV2::{create,resume}`, which wraps the raw process session. Raw `MinerResponderV2::new`/`respond` remain ephemeral process APIs. Every status read, provider read and released response body is preceded by recording its spent budget. The journal uses O(log N) single-entry union updates and fixed-size meter records, instead of copying the entire map on every request.
+- **Write-ahead protection:** the file is fsynced, then a required `ProtectedAnchorStoreV2` compare-and-commit succeeds, before the next effect. File/protected-store failure poisons the live session. Resume requires that protected capability, authenticates result/contract/case/scope/process limits, rejects rollback/corruption/truncation and restores the full local meter/union. Concurrent processes are excluded by an actual kernel lease. Journal bytes/records have separate finite process caps.
 
-## Integration required from other owners
+A prepared response is not canonical delivery, Node computation checking, a payment or credit. No A2 API produces a Court verdict or Miner default. Provider failure, Panel abandonment and withheld private ACKs cannot create Miner computation fraud here. The journal contains preparation costs and unit identities; it never restores a Node-accepted delivery flag or a saved Passed capability.
 
-- **A0:** review/merge the small existing-Miner export and remote dependencies. The shared crate and workspace registration are consumed unchanged from A0. Do not alias the earlier `palw_positive_court_v2` prototype domains/4-KiB service ledger to r1.
-- **A4:** implement `CanonicalDataDutyV2` over current rooted admission/request state: exact result/case/contract/source catalog, request authentication and Panel scope, canonical unit geometry, resource/funding consent, exclusive cutoff and service opportunity, current branch, and per-unit acceptance. Feed each returned existing G14 unit through actual native intake. It must measure all outer framing/carrier/retry bytes, update the single all-Panel union, and account for actual fees. A peer-supplied DTO or private ACK cannot construct this capability. No native duty adapter is supplied here.
-- **A3:** bind the admitted TIR job/registered plan and generated output to the r1 result, collect source units via the A4 duty, and build its own witness. A2 never generates or endorses that witness. The inference and signing APIs are separate until that admitted-job bridge exists.
-- **A6:** retain/replay the preparation meter and unit union with the canonical case journal before continuing after restart/reorg. `new` starts a process session; it is not a recovery constructor and must not reset a live case's budgets.
-- **A7:** run the actual integrated candidate (warm/cold, withheld ACK, false witness, Panel abandonment, cross-process providers and restarts). The in-memory A4 fixture in A2's tests is not production admission, a native atomic transaction, or an independent A7 result.
+## Independent review and verification
 
-## Validation scope
+Three subagents implemented file providers/inference tests, durable preparation, and independent adversarial review. Review found and fixed: pending allocation before budget rejection; unbounded completed-unit control queries; trusting mutable compiled-plan fields; oversized metadata processing; quadratic journal copying; nonregular journal paths; and a protected-anchor window before effects. Program-size checking now uses a bounded counting serializer that stops at the codec cap.
 
-Tests use real ML-DSA signatures, existing G14 Merkle/opening authentication and a small real `TirExecutor` program. The canonical A4 duty in those tests is explicitly an in-memory fixture. No RPC/native carrier or complete Miner→Panel→Node court is claimed.
+The current candidate passes **219 remote library tests**, with **1 pre-existing ignored test** (`l2::tests::l2fc_cost_per_view`). This includes **43 A2 tests**: the earlier 14, 3 independent attacks, 6 stored-provider tests, 10 bound-inference tests, and 10 recovery tests (including the child helper). Feature-off regression passes **176 tests**, with the same 1 ignored. A0 contract tests pass **13 + 3**. Normal non-test build checking and formatting/source whitespace checks are recorded with raw results in `A2-evidence/parallel-2026-10-31/validation.json`.
 
-Raw logs and final command/result record: `handoff/A2-evidence/`.
-Real LLM cold/warm CPU/GPU/upload/RSS/retention overhead: **UNKNOWN** (not measured).
-Public-network activation: **unchanged / disabled**. No consensus reward, Gate C, court status, fee settlement or network preset is modified.
+The process recovery acceptance test starts a child using an actual G14 opening file and the durable responder, restarts it in another process, rejects a concurrent lease, sends SIGKILL and verifies reopening/recovery. Its duty and protected anchor owner are explicitly test fixtures, not native admission or A6 consensus storage.
 
-## Completed checks
+The feature-off regression exposed an existing test-only readiness race: its parent could read an empty SIGKILL signal file between create and write. `monetary_material_publication_tests.rs::wait_for_kill` now publishes that completed signal by atomic rename. Production publication/custody logic is unchanged. The original failure log is retained separately. A new inference fixture also explicitly represents noncommitted intermediate nodes rather than assuming carry-out nodes were uncommitted.
 
-- Feature `positive-miner`: **190 passed, 0 failed, 1 existing ignored**, including **14 A2 tests**.
-- Default-off build: **176 passed, 0 failed, 1 existing ignored**.
-- Existing ignored test: `l2::tests::l2fc_cost_per_view`.
-- Rustfmt on both new source files and `git diff --check`: **PASS**.
-- Exact reproducible commands, tested source digests and raw logs: `A2-evidence/validation.json`, `A2-evidence/with-positive-miner.log`, `A2-evidence/default-off.log`.
+Earlier logs/source digests in `A2-evidence/` remain unchanged and refer to the earlier candidate. Real LLM cold/warm CPU/GPU/upload/RSS/retention overhead remains **UNKNOWN**; small test runtimes are not qualified production-profile measurements. Ordinary inference heap/time remains the existing executor/admission responsibility; local preparation/journal/file-load caps are not physical RSS measurements.
 
-The integration commit should cherry-pick only A2's contribution on top of A0 `a85152edc`. No changes to the shared A0 contract are required by this contribution. The native/durability integrations listed above remain owned by A4/A6 and are unverified here.
+## Concrete integration responsibilities
+
+**A0:** merge the new A2 contribution, preserving the common contract/annex and default-off feature. No new shared domain, identifier, signature format or native tag is requested. New child modules are registered only below the existing Miner-owned entry point.
+
+**A3:** use `infer_and_sign_tir_result_v2`/A0 result fields directly. Obtain raw source units using authenticated A4 duties; construct and sign the Panel's own witness. A2 has no witness-generation API. A warm Panel needs no Miner source requests.
+
+**A4:** supply a concrete `CanonicalDataDutyV2` whose `request()` is authenticated, canonical and immutable; `authorize(result)` resolves exact current result/case/contract/branch, source catalog and canonical geometry, Panel/actor scope, exclusive cutoffs, funded/reserved service opportunity and aggregate budgets; `status(index)` reads actual Node-accepted provider/direct responses. Data DTOs and private ACKs cannot implement native authority. Feed prepared existing G14 units through real native intake, charge all outer carrier/framing/retry bytes and actual fees, and keep the single all-Panel canonical union. The current A4 branch still has no concrete r1 source-duty/native adapter; A2 does not manufacture one.
+
+**A6/application owner:** implement `ProtectedAnchorStoreV2` over the protected per-case state with a durable, linearizable compare-and-commit. It must never return an older anchor or silently create an empty store for a live case. The journal requires that capability; no production success implementation is supplied. Couple its scope/generation with canonical branch, funds, reservations and accepted-response state through A6's transaction/undo logic. Local spent I/O is preserved conservatively; an A2 journal is not native reorg/IBD state and does not certify computation.
+
+**A7:** validate the SAME integrated candidate across actual A3/A4/A5/A6/native sources, signed notices, carrier fallback, restart/reorg/IBD and real LLM profiles. A2's fixture-based source duty and anchor owner cannot be counted as that native integration.
+
+Production success stubs: **none**. Public activation: **unchanged / disabled**. Native admission, real coin holds/fees, canonical r1 source completion, full Miner→Panel→Node Court and native A6/IBD are not claimed complete by this A2 contribution.

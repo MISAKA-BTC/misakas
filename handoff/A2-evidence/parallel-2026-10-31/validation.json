@@ -1,0 +1,206 @@
+{
+  "schema": "misaka.positive.a2-parallel-validation.v1",
+  "initial_a2_commit": "90b93ac4e",
+  "common_contract_commit": "a85152edc",
+  "tir_annex_commit": "d615f62b6",
+  "candidate_parent": "f69a2b1681800e7f7d9cc9c47816057ace8aebd6",
+  "contract_version": 2,
+  "contract_revision": 1,
+  "rustc": "rustc 1.93.0 (254b59607 2026-01-19)",
+  "runs": [
+    {
+      "name": "with-positive-miner",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "misaka-palw-remote",
+        "--lib",
+        "--features",
+        "positive-miner",
+        "--config",
+        "profile.dev.debug=0",
+        "--config",
+        "profile.test.debug=0",
+        "--config",
+        "profile.dev.incremental=false",
+        "--config",
+        "profile.test.incremental=false",
+        "--target-dir",
+        "/tmp/misaka-a2-target",
+        "-j",
+        "2"
+      ],
+      "exit_code": 0,
+      "passed": 219,
+      "failed": 0,
+      "ignored": 1
+    },
+    {
+      "name": "default-off",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "misaka-palw-remote",
+        "--lib",
+        "--no-default-features",
+        "--config",
+        "profile.dev.debug=0",
+        "--config",
+        "profile.test.debug=0",
+        "--config",
+        "profile.dev.incremental=false",
+        "--config",
+        "profile.test.incremental=false",
+        "--target-dir",
+        "/tmp/misaka-a2-target",
+        "-j",
+        "2"
+      ],
+      "exit_code": 0,
+      "passed": 176,
+      "failed": 0,
+      "ignored": 1
+    },
+    {
+      "name": "common-contract",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "misaka-palw-positive-contract",
+        "--config",
+        "profile.dev.debug=0",
+        "--config",
+        "profile.test.debug=0",
+        "--config",
+        "profile.dev.incremental=false",
+        "--config",
+        "profile.test.incremental=false",
+        "--target-dir",
+        "/tmp/misaka-a2-target",
+        "-j",
+        "2"
+      ],
+      "exit_code": 0,
+      "passed": 16,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "name": "production-check",
+      "command": [
+        "cargo",
+        "check",
+        "-p",
+        "misaka-palw-remote",
+        "--lib",
+        "--features",
+        "positive-miner",
+        "--config",
+        "profile.dev.debug=0",
+        "--config",
+        "profile.test.debug=0",
+        "--config",
+        "profile.dev.incremental=false",
+        "--config",
+        "profile.test.incremental=false",
+        "--target-dir",
+        "/tmp/misaka-a2-target",
+        "-j",
+        "2"
+      ],
+      "exit_code": 0,
+      "warnings": 0
+    }
+  ],
+  "a2_tests": 43,
+  "new_tests_this_contribution": 29,
+  "recovery_targeted": {
+    "passed": 10,
+    "failed": 0,
+    "ignored": 0
+  },
+  "independent_adversarial_tests": 3,
+  "subagents": [
+    "stored_providers",
+    "durable_responder",
+    "independent_audit"
+  ],
+  "rustfmt_exit_code": 0,
+  "source_whitespace_exit_code": 0,
+  "raw_logs_preserved_verbatim": true,
+  "raw_log_whitespace": "Terminal blank lines intentionally preserved; source/handoff whitespace check excludes logs.",
+  "source_snapshot": [
+    {
+      "path": "misaka/palw/remote/src/positive_miner_v2.rs",
+      "sha256": "626ce8ce8c76021922c1a841d4e2d011f7f557b035a419541b3eed1bcb9d72f0"
+    },
+    {
+      "path": "misaka/palw/remote/src/positive_miner_v2_tests.rs",
+      "sha256": "bd983084f41d294abc78461d775b338416a449ab2fd8fc159e24ea7470dc1bf3"
+    },
+    {
+      "path": "misaka/palw/remote/src/positive_miner_v2_adversarial_tests.rs",
+      "sha256": "58cd988e7ca3149a4671ccd1e02b548aec6cd3480596570df27abe6bc1818ded"
+    },
+    {
+      "path": "misaka/palw/remote/src/positive_miner_v2_inference.rs",
+      "sha256": "b84a78a9037cdeafdadd35bfadce4c592df69b1c2cd447b785d68e2ac7d82379"
+    },
+    {
+      "path": "misaka/palw/remote/src/positive_miner_v2_inference_tests.rs",
+      "sha256": "6f97cc608430a7be52e3ab792914046539596c299e3b854e1eda3ac85ba13f3f"
+    },
+    {
+      "path": "misaka/palw/remote/src/positive_miner_v2_recovery.rs",
+      "sha256": "c6bdb3b2d515931eaa53893bbe5ebdd9d9792a73031af3b9b740e7f85e7a29bf"
+    },
+    {
+      "path": "misaka/palw/remote/src/positive_miner_v2_store.rs",
+      "sha256": "6a258fd25078596cc4f56379bfa56b66dd195d96c2f0fb69d66f45be1a6b8f90"
+    },
+    {
+      "path": "misaka/palw/remote/src/monetary_material_publication_tests.rs",
+      "sha256": "bd143659998478d95bd1529d28b0baf2ee9923d9dfc078dc25069a8345b71872"
+    }
+  ],
+  "evidence_files": [
+    {
+      "path": "with-positive-miner.log",
+      "sha256": "274608200e33029cb2bb8b2e5149d7a1e3fba4cab7c0c239f436bb9d21805e79"
+    },
+    {
+      "path": "default-off.log",
+      "sha256": "8bc76441a146a038a37223dda20ee5d4e11a10ddec0360e0f8b4eaefd41645f2"
+    },
+    {
+      "path": "contract.log",
+      "sha256": "1d9f3adab090977b1f25709f20c5cf2fb7db67a9ca6b098f529e22a812458d2b"
+    },
+    {
+      "path": "check.log",
+      "sha256": "c85eab40c6f9dda75fd6a7ebb1d2d09cb874c1f3dc83e0dabcef66f08d7031d9"
+    },
+    {
+      "path": "recovery-targeted.log",
+      "sha256": "c0793329b2b20f060ea59ca0e114a97237035419667b11f8d209bf7095e175ca"
+    },
+    {
+      "path": "failure-inference-fixture.log",
+      "sha256": "e72118b382463a98aaf6ff8fa10e19a5310a1299d75c7cb0d7de2d2b4daa3c99"
+    },
+    {
+      "path": "failure-legacy-signal.log",
+      "sha256": "3f974c723fc6075dbc0bffdf1aa2a8105f7705c8a6f2136b3797ffcda5fc27e6"
+    }
+  ],
+  "native_r1_source_duty_implemented": false,
+  "native_protected_anchor_store_implemented": false,
+  "native_admission_funds_court_ibd_verified": false,
+  "real_llm_overhead": "UNKNOWN",
+  "public_activation_changed": false,
+  "recovery_scope": "A2 process journal with required external protected CAS; fixture duty/anchor owner, actual file provider/subprocess restart/lease/SIGKILL; no native completion or credit authority",
+  "baseline_fixture_fix": "Publish existing SIGKILL readiness signal with atomic rename; production monetary publication unchanged."
+}
