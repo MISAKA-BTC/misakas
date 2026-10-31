@@ -1,0 +1,62 @@
+    Checking num-traits v0.2.19
+    Checking rustix v0.38.37
+    Checking chrono v0.4.38
+    Checking polling v3.7.3
+   Compiling kaspa-utils v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a1/MISAKA-testnet/utils)
+    Checking async-io v2.3.4
+    Checking async-global-executor v2.4.1
+    Checking async-std v1.13.0
+    Checking workflow-core v0.18.0
+    Checking workflow-wasm v0.18.0
+   Compiling kaspa-hashes v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a1/MISAKA-testnet/crypto/hashes)
+    Checking ordered-float v2.10.1
+    Checking misaka-palw-tir v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a1/MISAKA-testnet/misaka/palw/tir/core)
+    Checking serde-value v0.7.0
+    Checking libz-sys v1.1.31
+    Checking bzip2-sys v0.1.11+1.0.8
+    Checking zstd-sys v2.1.2+zstd.1.5.7
+    Checking lz4-sys v1.11.1+lz4-1.10.0
+   Compiling misaka-palw-tir-exec v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a1/MISAKA-testnet/misaka/palw/tir/exec)
+    Checking half v2.4.1
+    Checking anstyle v1.0.8
+    Checking ciborium-io v0.2.2
+    Checking clap_lex v0.7.6
+    Checking regex-syntax v0.8.5
+    Checking log4rs v1.4.0
+    Checking regex-automata v0.4.8
+    Checking clap_builder v4.5.51
+    Checking ciborium-ll v0.2.2
+    Checking librocksdb-sys v0.17.3+10.4.2
+    Checking misaka-palw-positive-contract v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a1/MISAKA-testnet/misaka/palw/positive-contract)
+    Checking misaka-palw-gen v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a1/MISAKA-testnet/misaka/palw/gen)
+    Checking misaka-palw-challenge v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a1/MISAKA-testnet/misaka/palw/challenge)
+    Checking itertools v0.10.5
+    Checking cast v0.3.0
+    Checking same-file v1.0.6
+    Checking criterion-plot v0.5.0
+    Checking walkdir v2.5.0
+    Checking misaka-palw-kernel v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a1/MISAKA-testnet/misaka/palw/kernel)
+    Checking kaspa-math v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a1/MISAKA-testnet/math)
+    Checking kaspa-core v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a1/MISAKA-testnet/core)
+    Checking rocksdb v0.24.0
+    Checking clap v4.5.51
+    Checking ciborium v0.2.2
+    Checking regex v1.11.0
+    Checking kaspa-muhash v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a1/MISAKA-testnet/crypto/muhash)
+    Checking kaspa-merkle v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a1/MISAKA-testnet/crypto/merkle)
+    Checking misaka-palw-panel v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a1/MISAKA-testnet/misaka/palw/panel)
+    Checking kaspa-addresses v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a1/MISAKA-testnet/crypto/addresses)
+    Checking tempfile v3.13.0
+    Checking kaspa-txscript-errors v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a1/MISAKA-testnet/crypto/txscript/errors)
+    Checking tinytemplate v1.2.1
+    Checking bincode v1.3.3
+    Checking is-terminal v0.4.13
+    Checking anes v0.1.6
+    Checking oorandom v11.1.4
+    Checking criterion v0.5.1
+    Checking wasm-bindgen-test v0.3.50
+    Checking kaspa-database v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a1/MISAKA-testnet/database)
+    Checking misaka-palw-tir-sketch v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a1/MISAKA-testnet/misaka/palw/tir/sketch)
+    Checking misaka-palw-positive-accounting v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a1/MISAKA-testnet/misaka/palw/positive-accounting)
+    Checking kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a1/MISAKA-testnet/consensus/core)
+    Finished `dev` profile [unoptimized] target(s) in 1m 13s

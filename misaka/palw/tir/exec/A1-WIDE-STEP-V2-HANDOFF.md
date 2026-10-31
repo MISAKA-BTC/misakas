@@ -90,5 +90,16 @@ focused fixtureは新規のrange-valid synthetic programで、4-byte pre／中�
 超えるI64最終leafを混在させる。native chainへ登録済みという意味ではない。
 manual little-endian bytesと既存hash／Merkle preimageを独立に組み立て、canonical geometry、
 旧narrow互換、偽造leaf／ProgramInfo／context／binding、混在幅を検査する。
-現時点ではsourceとfixtureを具体化した段階で、buildはA7専有cacheの調整待ち。
-実行した場合の対象source・command・原log・件数は別scopeで記録し、Rootの既存件数へ加算しない。
+A0から専用移譲された既存targetで通常Cargo compileを実行し、新step test 5件と既存wide
+primitive test 5件の**計10件が成功・失敗0件**。Core libraryと両test targetのstrict Clippyも
+`--no-deps -- -D warnings` で成功した。Rootの過去件数や他scopeへ加算しない。
+
+初回は、新testの「別program由来ProgramInfo」が実際には同内容だったため4/5成功・1失敗。
+内容が等しいmetadataを受け入れるCore実装は変更せず、windowを実際に改ざんして差異を
+確認するtestへ修正した。初回compile／失敗logと最終成功logを分けて保存する。
+
+source commitは `41a00f590`、test前提修正は `b048ce4e1`。
+`validation/wide-step-v2/` に対象command、原log、source／2つの実test binary／使用archiveの
+SHA-256を保存する。指定済みRocksDB archiveを使用し、C++再build、Rust rlibの手動流用、
+新large target作成は行わなかった。archive hash前後一致と実行中source不変を確認した。
+A7の共有A1cacheは使用せず、A0の専用targetは検証終了後に解放した。
