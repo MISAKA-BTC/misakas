@@ -1,0 +1,171 @@
+{
+  "revision": "RFC0042-R2",
+  "status": "Draft; no runtime changes",
+  "files": [
+    {
+      "path": "README.md",
+      "sha256": "c63f97ecbe71f2f6ea6623d7245474fdd9d99be5a074c7bd033047ac75d52769",
+      "bytes": 3410
+    },
+    {
+      "path": "VALIDATION.md",
+      "sha256": "c523b85d2138f6f94df594bb538d8d8d67d3bdb8d51d773f97b952771fb0cdca",
+      "bytes": 3192
+    },
+    {
+      "path": "docs/adr/0210-positive-court-without-model-prepossession.md",
+      "sha256": "d2c822f987ca15c53b823337de1224ad820ec13e78b6e829332d2960724c908f",
+      "bytes": 5067
+    },
+    {
+      "path": "docs/adr/INDEX.md",
+      "sha256": "1e2df9790b9e27fa9e88b8f16fd5935da2374d9b9e6591ae1f053032c71f747d",
+      "bytes": 36585
+    },
+    {
+      "path": "docs/adr/TOPICS.md",
+      "sha256": "789f7c4062b03283b1ce723e5911f7f6424a8e9746f005544a9897de059179f6",
+      "bytes": 29951
+    },
+    {
+      "path": "docs/design/palw/positive-court/IMPLEMENTATION-ALIGNMENT.md",
+      "sha256": "9992a26659398b81132e4cd6c85c5e959b2f1efa30bc36ecf0a8601f40233a82",
+      "bytes": 13659
+    },
+    {
+      "path": "docs/design/palw/positive-court/INTEGRATION.md",
+      "sha256": "d33533a366b277bebb679a7e5e2b8676433b0596ee59f1a54d011e5e33ecfcd7",
+      "bytes": 5005
+    },
+    {
+      "path": "docs/design/palw/positive-court/MEASUREMENT.md",
+      "sha256": "28da16a8684cee675b2e7181415aa3396e696dee94e6d6e4e6b0936237e43418",
+      "bytes": 3035
+    },
+    {
+      "path": "docs/design/palw/positive-court/POLICY-DELTA.md",
+      "sha256": "1c62d798b1a48d362bd1791b8a3a91889be78b0e3226d3946730a0d9c3d7ee1d",
+      "bytes": 5281
+    },
+    {
+      "path": "docs/design/palw/positive-court/REVISION-R2.md",
+      "sha256": "c28d3e65e2000ecd16117f3c6b87b70a9764df47ce97dac23755979974acdece",
+      "bytes": 2139
+    },
+    {
+      "path": "docs/design/palw/positive-court/SOURCE-AUDIT.md",
+      "sha256": "08fd2e45c954c96a3321acc8e2f212974001a9066a99d08b694a4afa063b9a41",
+      "bytes": 34167
+    },
+    {
+      "path": "docs/design/palw/positive-court/measurement-record.template.json",
+      "sha256": "9ad8ecc323d19ea5fd379decdd2fbd5752ebf0e42ce1ccc07aa0a913a549e2de",
+      "bytes": 1365
+    },
+    {
+      "path": "docs/design/palw/positive-court/source-manifest-r2.json",
+      "sha256": "87ccabe69693358b5a96162ca3a06bc13f5a894137e3be99d55e5a5411cfb988",
+      "bytes": 1423
+    },
+    {
+      "path": "docs/design/palw/positive-court/source-manifest.json",
+      "sha256": "0131fe84beb0c44e19bbcbfc3cee40df9b940e28cba5991c2e05009f0e537d34",
+      "bytes": 6550
+    },
+    {
+      "path": "docs/maintenance/catalog.md",
+      "sha256": "fb282fb1d9c210e2186bf523e9a14b6f946e8dd77d7508e070b25e5c29a71f9d",
+      "bytes": 163734
+    },
+    {
+      "path": "docs/maintenance/decision-catalog.json",
+      "sha256": "48452ac05acbb7862db155039aeff8f6fce2c4b8a849dd434fd18c7cc5c2fb7d",
+      "bytes": 83198
+    },
+    {
+      "path": "docs/maintenance/numbering.md",
+      "sha256": "bc009845f56122a442e4ef9574ced9ceb994d854f5dd25b2c64f3c45767d3d3b",
+      "bytes": 4396
+    },
+    {
+      "path": "docs/rfc/0042-positive-court-full-coverage.md",
+      "sha256": "7ce0ae8201962bd08b9c2965d11db5b3faa556520c4b8f18f38bc7db27f55718",
+      "bytes": 67072
+    },
+    {
+      "path": "docs/rfc/INDEX.md",
+      "sha256": "1a21dc5a20152d266e8ebfbf83c07340b6cb70b61cdcbdec849888abbe4ab8f6",
+      "bytes": 8015
+    },
+    {
+      "path": "docs/rfc/TOPICS.md",
+      "sha256": "d8e1d43a87d440579a65834888e601ea499c522993e98c410e49caf7b87ae310",
+      "bytes": 6538
+    },
+    {
+      "path": "evidence/baseline-docs.json",
+      "sha256": "10397b208cc0e9bc9547ec63ed24119452146a918a70593df0e22e78d550adff",
+      "bytes": 635
+    },
+    {
+      "path": "evidence/baseline-docs.log",
+      "sha256": "5516cb65bacafc58706dd150bb1bfbb3344b613953662252a174a76fcb975ace",
+      "bytes": 438
+    },
+    {
+      "path": "evidence/fresh-apply-tests.log",
+      "sha256": "7769b6d6a7f0150cd37974e23053e6323f6a9847d5801cec7a9642848f5405e7",
+      "bytes": 4945
+    },
+    {
+      "path": "evidence/reference-tests.log",
+      "sha256": "58a73689a78b687fbf67d35bb4711f8ae569610e5df4f85c7bd035e17d2771a4",
+      "bytes": 4945
+    },
+    {
+      "path": "evidence/validated-r1-tests.log",
+      "sha256": "7769b6d6a7f0150cd37974e23053e6323f6a9847d5801cec7a9642848f5405e7",
+      "bytes": 4945
+    },
+    {
+      "path": "evidence/validated-r2-docs.json",
+      "sha256": "c0f5d239b5b4470ad8eb836fc278125f708e740975b7a86cdd76c8a517631243",
+      "bytes": 635
+    },
+    {
+      "path": "evidence/validated-r2-docs.log",
+      "sha256": "0a017d586ea1905cf596b2eb54a53097e27cf6494ab03e967b99c251dc288a5f",
+      "bytes": 438
+    },
+    {
+      "path": "evidence/validation-summary.json",
+      "sha256": "7e5925f5af4783b00397613da762dc64139e07d4b8ecbbef0a2d713e8a3f5e87",
+      "bytes": 4036
+    },
+    {
+      "path": "rfc042-r2-from-upload.patch",
+      "sha256": "9795dceb56f45e7b304e6f8deb547c9ece320e1d69280fae3437cad8d1c6731f",
+      "bytes": 190848
+    },
+    {
+      "path": "rfc042-r2.patch",
+      "sha256": "a73ad1cb2e3eeed1bcb45b81ffec34e99726380f0c3a97f1af65c7c19d4ba9ea",
+      "bytes": 167754
+    },
+    {
+      "path": "tools/positive_court/interactive_reference.py",
+      "sha256": "f2f89eb59839cbf0522abbe139e425b2a82383e8688fbf135683234f9f1e88fe",
+      "bytes": 11149
+    },
+    {
+      "path": "tools/positive_court/primitives.py",
+      "sha256": "45d65c0f7540339b38266fc804bde0b6d205c0d6d311a1008d1c1412238246c7",
+      "bytes": 3570
+    },
+    {
+      "path": "tools/positive_court/test_interactive_reference.py",
+      "sha256": "00ba6e78ff3190297d3f4523d6f168bc21f02ed7103fb0edfffc6cf0671d2703",
+      "bytes": 14315
+    }
+  ]
+}
