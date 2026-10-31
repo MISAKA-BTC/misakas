@@ -158,6 +158,19 @@ impl Params {
     }
 }
 
+// The public-boundary regression suite is registered by the dedicated
+// tests/positive_court_fence_v2.rs target, without compiling the full unit suite.
+
 #[cfg(test)]
-#[path = "positive_court_v2_tests.rs"]
-mod tests;
+mod private_visitor_tests {
+    use super::*;
+    #[test]
+    fn positive2_private_fork_visitor_changes_only_activation() {
+        let mut params = super::super::TESTNET_PARAMS;
+        params.palw_positive_court_v2 = Some(PositiveCourtFenceV2::unapproved_probe_at(ForkActivation::new(1000)));
+        let before = params.palw_positive_court_v2.as_ref().unwrap().policy.clone();
+        params.for_each_fence(&mut |daa| *daa = 2000);
+        assert_eq!(params.palw_positive_court_v2.as_ref().unwrap().activation, ForkActivation::new(2000));
+        assert_eq!(params.palw_positive_court_v2.as_ref().unwrap().policy, before);
+    }
+}

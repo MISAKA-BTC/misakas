@@ -93,13 +93,8 @@ fn positive2_scheduled_profile_preserves_pre_fork_peer_identity_and_is_not_a_pub
 }
 
 #[test]
-fn positive2_fork_visitor_changes_only_activation_and_all_profile_fields_are_committed() {
-    let mut p = TESTNET_PARAMS;
-    p.palw_positive_court_v2 = Some(fence(1000));
-    let before = p.palw_positive_court_v2.as_ref().unwrap().policy.clone();
-    p.for_each_fence(&mut |daa| *daa = 2000);
-    assert_eq!(p.palw_positive_court_v2.as_ref().unwrap().activation, ForkActivation::new(2000));
-    assert_eq!(p.palw_positive_court_v2.as_ref().unwrap().policy, before);
+fn positive2_all_profile_fields_are_committed() {
+    let before = policy();
     for field in 0..18 {
         let mut changed = before.clone();
         match field {
