@@ -1,0 +1,468 @@
+{
+  "status": "PASS_SOURCE_PROTOTYPE_AND_SELECTED_REGRESSIONS",
+  "source_commit": "94e18252f965d593e71b24f528cda05ccb29ac5e",
+  "source_tree": "755a71444f17034c05946ac75b7af6f556ecba94",
+  "base_commit": "f6c7d9f4d0ddb189c70aa0084a9563d039369252",
+  "started_utc": "2026-10-31T14:59:50.901615+00:00",
+  "build_settings": {
+    "CARGO_TARGET_DIR": "/Users/wata/.cache/misaka-positive-a3-target",
+    "CARGO_BUILD_JOBS": "2",
+    "CARGO_PROFILE_DEV_DEBUG": "0",
+    "CARGO_INCREMENTAL": "0"
+  },
+  "checks": [
+    {
+      "name": "typed-capture",
+      "command": [
+        "cargo",
+        "--config",
+        "profile.dev.package.kaspa-consensus-core.opt-level=0",
+        "test",
+        "--locked",
+        "-p",
+        "misaka-palw-tir-exec",
+        "--features",
+        "positive-panel",
+        "--test",
+        "positive_typed_capture",
+        "--",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 12.47,
+      "log": "typed-capture.log",
+      "log_sha256": "090b98f0332a6d780fc867dc10611bc7c2b1914e6cb3373f4f4a3ee2ab321681",
+      "test_results": [
+        {
+          "passed": 8,
+          "failed": 0,
+          "ignored": 0
+        }
+      ],
+      "passed": 8,
+      "failed": 0,
+      "raw_summary_passed": 8,
+      "top_level_test_results": [
+        {
+          "passed": 8,
+          "failed": 0,
+          "ignored": 0
+        }
+      ]
+    },
+    {
+      "name": "runner-r1-regression",
+      "command": [
+        "cargo",
+        "--config",
+        "profile.dev.package.kaspa-consensus-core.opt-level=0",
+        "test",
+        "--locked",
+        "-p",
+        "misaka-palw-tir-exec",
+        "--features",
+        "positive-panel",
+        "--test",
+        "positive_panel_r1",
+        "--test",
+        "node_leg",
+        "--test",
+        "capture_codec",
+        "--test",
+        "court"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 205.138,
+      "log": "runner-r1-regression.log",
+      "log_sha256": "e89c555bd5037b0530b5e054800e043e6f1b27a12105c0597bbf534c71f2a98d",
+      "test_results": [
+        {
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 7,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 5,
+          "failed": 0,
+          "ignored": 0
+        }
+      ],
+      "passed": 19,
+      "failed": 0,
+      "raw_summary_passed": 19,
+      "top_level_test_results": [
+        {
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 7,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 5,
+          "failed": 0,
+          "ignored": 0
+        }
+      ]
+    },
+    {
+      "name": "executor-unit",
+      "command": [
+        "cargo",
+        "--config",
+        "profile.dev.package.kaspa-consensus-core.opt-level=0",
+        "test",
+        "--locked",
+        "-p",
+        "misaka-palw-tir-exec",
+        "--features",
+        "positive-panel",
+        "--lib"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 52.198,
+      "log": "executor-unit.log",
+      "log_sha256": "853f4f770c56e6e7d28d254dbc8eaf4ed62dbe1eee014aea1b8402ad87239d41",
+      "test_results": [
+        {
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 32,
+          "failed": 0,
+          "ignored": 0
+        }
+      ],
+      "passed": 32,
+      "failed": 0,
+      "raw_summary_passed": 34,
+      "top_level_test_results": [
+        {
+          "passed": 32,
+          "failed": 0,
+          "ignored": 0
+        }
+      ]
+    },
+    {
+      "name": "record-r1-regression",
+      "command": [
+        "cargo",
+        "--config",
+        "profile.dev.package.kaspa-consensus-core.opt-level=0",
+        "test",
+        "--locked",
+        "-p",
+        "misaka-palw-remote",
+        "--features",
+        "positive-panel",
+        "--test",
+        "positive_panel_record_r1"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 15.461,
+      "log": "record-r1-regression.log",
+      "log_sha256": "7eb973919f54809d62975045ab26dc10764b37f5776613e91fb13809781cafcc",
+      "test_results": [
+        {
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0
+        }
+      ],
+      "passed": 3,
+      "failed": 0,
+      "raw_summary_passed": 3,
+      "top_level_test_results": [
+        {
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0
+        }
+      ]
+    },
+    {
+      "name": "clippy",
+      "command": [
+        "cargo",
+        "--config",
+        "profile.dev.package.kaspa-consensus-core.opt-level=0",
+        "clippy",
+        "--locked",
+        "-p",
+        "misaka-palw-tir-exec",
+        "--features",
+        "positive-panel",
+        "--lib",
+        "--no-deps",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 72.313,
+      "log": "clippy.log",
+      "log_sha256": "25f931cb2d5b31a07d1cd11ae0570afa2028df6fa3dbeba110ee43fe594f8255",
+      "test_results": [],
+      "passed": 0,
+      "failed": 0,
+      "raw_summary_passed": 0,
+      "top_level_test_results": []
+    },
+    {
+      "name": "docs-check",
+      "command": [
+        "python3",
+        "docs/maintenance/check_docs.py"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 2.772,
+      "log": "docs-check.log",
+      "log_sha256": "34bf1085a3e1d88fedbf298f1b9ce2bd4ef8d4a92e298bf3b8a2e5b5a8bd260e",
+      "test_results": [],
+      "passed": 0,
+      "failed": 0,
+      "raw_summary_passed": 0,
+      "top_level_test_results": []
+    }
+  ],
+  "test_binaries": [
+    {
+      "path": "/Users/wata/.cache/misaka-positive-a3-target/debug/deps/positive_typed_capture-46ee2b8528e6a716",
+      "sha256": "79699990f4ec81f4b007e67a6d94bf694af9220d0c5528a511f48e5ced8854f2",
+      "bytes": 21081408
+    },
+    {
+      "path": "/Users/wata/.cache/misaka-positive-a3-target/debug/deps/capture_codec-3aaa65e22925c2a1",
+      "sha256": "069f4bd7811e49cae6317bc8f69f5bc973c1127747b5923fe1a8d2cd12098e81",
+      "bytes": 19996240
+    },
+    {
+      "path": "/Users/wata/.cache/misaka-positive-a3-target/debug/deps/court-5d027367372d8d09",
+      "sha256": "db09cabe550f7c58a01d49974b99474555b9f41f41b49d0c6122809983faad8d",
+      "bytes": 22797664
+    },
+    {
+      "path": "/Users/wata/.cache/misaka-positive-a3-target/debug/deps/node_leg-3f1f1be9cbb099b3",
+      "sha256": "5a7f4d9f1b7be1114cee7982d78a60d162648029848a35a97b51ae5b2c9ce072",
+      "bytes": 23195264
+    },
+    {
+      "path": "/Users/wata/.cache/misaka-positive-a3-target/debug/deps/positive_panel_r1-e920f88cef0955ef",
+      "sha256": "66d1b9c24ebe1ad9e1e6a2b750d34039cef8b367ffa8d3c7f88219419fcee808",
+      "bytes": 23500160
+    },
+    {
+      "path": "/Users/wata/.cache/misaka-positive-a3-target/debug/deps/misaka_palw_tir_exec-8c179d3e50f2280b",
+      "sha256": "f649c9bdc59b1eed5abf8dabace0c396eaffaa0914ea0a0506f0d9974b24a5cf",
+      "bytes": 25302368
+    },
+    {
+      "path": "/Users/wata/.cache/misaka-positive-a3-target/debug/deps/positive_panel_record_r1-bc2a1fc867bfe448",
+      "sha256": "dc146b0687b7db404abb99c44049de25ddf3b4e1f67c2afdee8c8e1bfae81c34",
+      "bytes": 23530288
+    }
+  ],
+  "passed": 62,
+  "failed": 0,
+  "completed_utc": "2026-10-31T15:05:51.340314+00:00",
+  "raw_summary_total_passed": 64,
+  "count_policy": "Only the final outer test summary per Cargo-launched binary section is counted. Two nested executor-unit child summaries repeat parent test identities and are retained in raw test_results but excluded from totals.",
+  "small_fixture_measurements": [
+    {
+      "window": 1,
+      "positions": 4,
+      "records": 174,
+      "nodes": 147,
+      "fixed": 12,
+      "appended_rows": 12,
+      "outputs": 3,
+      "lanes": 696,
+      "payload_bytes": 4464,
+      "input_auth_heap_bytes": 565712,
+      "peak_capture_heap_bytes": 598032,
+      "local_storage_bytes": 17388,
+      "geometry_visits": 584
+    },
+    {
+      "window": 3,
+      "positions": 4,
+      "records": 174,
+      "nodes": 147,
+      "fixed": 12,
+      "appended_rows": 12,
+      "outputs": 3,
+      "lanes": 756,
+      "payload_bytes": 4704,
+      "input_auth_heap_bytes": 565712,
+      "peak_capture_heap_bytes": 598272,
+      "local_storage_bytes": 17628,
+      "geometry_visits": 605
+    }
+  ],
+  "source_files": [
+    {
+      "path": "misaka/palw/tir/exec/src/exec.rs",
+      "sha256": "54a2a7beeef3381c6d6c944fae9b9b00810228515987a079bf34fdfdc8b2d1b1"
+    },
+    {
+      "path": "misaka/palw/tir/exec/src/node/run.rs",
+      "sha256": "f0d4f1ebf9461bad546ed7a148c9ae2d0aa00206a63e0e656c7a48778ba8d0cf"
+    },
+    {
+      "path": "misaka/palw/tir/exec/src/node/mod.rs",
+      "sha256": "08a62e92e15ce7665140e5a5642606d0d24eaa973fdcc3683eaaa7c05d982d62"
+    },
+    {
+      "path": "misaka/palw/tir/exec/src/node/positive_typed_capture.rs",
+      "sha256": "1a86adcda3fee3f358595996e25323bd29f13bf6df2cb0193a914b183529cd3f"
+    },
+    {
+      "path": "misaka/palw/tir/exec/tests/positive_typed_capture.rs",
+      "sha256": "f95a3a6847dc2f277a8d32f5f015f690aa1239f5f0c6d38f7aba64893c60c1fc"
+    },
+    {
+      "path": "misaka/palw/tir/exec/tests/positive_typed_capture_common/mod.rs",
+      "sha256": "f1657509cae1b15ce9017ee75c51baca3a38d1d4d4e93e75b5f39fbf290109f6"
+    },
+    {
+      "path": "scripts/ci/a3-typed-capture-prototype-ci.sh",
+      "sha256": "27a698262e6522c72cf420aa8199a27eec11fd87369ccf4656962305cd8ad173"
+    },
+    {
+      "path": "handoff/positive-court/A3-typed-capture-prototype.md",
+      "sha256": "7d57f4edef213f28f9749c7bd155936813004dcfec58b8f6e2123cb91bfd0aa3"
+    },
+    {
+      "path": "Cargo.lock",
+      "sha256": "82ba353a60d3d95369045d3fce6aff7eb9d4bf2f928dbcb59ee1a654ef52c613"
+    }
+  ],
+  "preflight_checks": [
+    {
+      "name": "builder-preflight",
+      "source_state": "uncommitted/mutable preflight; not final candidate evidence",
+      "exit_code": 0,
+      "included_in_total": false,
+      "log": "builder-preflight.log",
+      "log_sha256": "a8ef401dda0ede60ae5a6d9e3e080dfac3f94dcd0fa87d488bc57d36cebfaf47"
+    },
+    {
+      "name": "typed-first-compile-error",
+      "source_state": "uncommitted/mutable preflight; not final candidate evidence",
+      "exit_code": 101,
+      "included_in_total": false,
+      "log": "typed-first-compile-error.log",
+      "log_sha256": "c4be45cb529c4f2e8aad7ac5b4d484b96bed5ad6132423a997866b5049ab6ae8"
+    },
+    {
+      "name": "typed-second",
+      "source_state": "uncommitted/mutable preflight; not final candidate evidence",
+      "exit_code": 0,
+      "included_in_total": false,
+      "log": "typed-second.log",
+      "log_sha256": "7b90807d047407c24f60ea63bfa4897f35073c4c900179330c80d1040cbe7755"
+    },
+    {
+      "name": "typed-third",
+      "source_state": "uncommitted/mutable preflight; not final candidate evidence",
+      "exit_code": 0,
+      "included_in_total": false,
+      "log": "typed-third.log",
+      "log_sha256": "45fff8510bb4528dd75306bd9d5fc9d92445dd9619457e4e76806f80d044698d"
+    },
+    {
+      "name": "clippy-preflight",
+      "source_state": "uncommitted/mutable preflight; not final candidate evidence",
+      "exit_code": 0,
+      "included_in_total": false,
+      "log": "clippy-preflight.log",
+      "log_sha256": "1ddcca6215ea3e34971c2a5b910961a70bdc895a81969a75125c5655a0f6cb29"
+    }
+  ],
+  "preflight_note": "The initial test fixture failed to compile due to moving a program borrowed by inventory. The fixture was corrected before the frozen source commit. All authoritative checks completed successfully on the frozen source; preflight runs are excluded.",
+  "scope": {
+    "prototype_new_tests": 8,
+    "runner_r1_regression_tests": 19,
+    "executor_parent_unit_tests": 32,
+    "original_primitive_record_regression_tests": 3,
+    "new_public_wire_domain_or_id": false,
+    "extra_commitment_assigned": false,
+    "real_llm_tested": false,
+    "actual_native_acceptance_tested": false,
+    "physical_disk_spool_or_io_tested": false,
+    "activation_changed": false,
+    "historical_counts_added": false
+  },
+  "reviews": [
+    "Parallel observer and original sparse/wide fixture implementations; root integration and tests.",
+    "Independent read-only review found geometry visits/input hashing/prompt scratch gaps; all fixed before source freeze.",
+    "Independent final review of 94e18252f found no material blocker within the explicitly limited source-only prototype."
+  ],
+  "final_qa": [
+    {
+      "name": "docs-after-results-document",
+      "command": [
+        "python3",
+        "docs/maintenance/check_docs.py"
+      ],
+      "exit_code": 0,
+      "log": "docs-check-final.log",
+      "log_sha256": "34bf1085a3e1d88fedbf298f1b9ce2bd4ef8d4a92e298bf3b8a2e5b5a8bd260e",
+      "known_issue_occurrences": 43,
+      "new_issue_occurrences": 0
+    },
+    {
+      "name": "rustfmt-changed-Rust-files",
+      "outcome": "PASS"
+    },
+    {
+      "name": "CI-shell-syntax",
+      "command": [
+        "bash",
+        "-n",
+        "scripts/ci/a3-typed-capture-prototype-ci.sh"
+      ],
+      "outcome": "PASS"
+    },
+    {
+      "name": "source-unchanged-from-tested-commit",
+      "command": [
+        "git",
+        "diff",
+        "--exit-code",
+        "94e18252f965d593e71b24f528cda05ccb29ac5e",
+        "--",
+        "misaka/palw/tir/exec",
+        "scripts/ci/a3-typed-capture-prototype-ci.sh"
+      ],
+      "outcome": "PASS"
+    }
+  ],
+  "integrity_verification": "All source, required/preflight/final-doc raw-log and seven current binary SHA256 values matched before evidence commit."
+}
