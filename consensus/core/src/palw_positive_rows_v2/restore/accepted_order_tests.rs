@@ -53,7 +53,7 @@ fn after_origin(rows: &mut [NativeRowValue], pair: usize) -> &mut AcceptedOrigin
 #[test]
 fn real_signed_restore_requires_strict_result_witness_packet_and_duty_response_order() {
     let baseline = ordered_rows();
-    assert_eq!(check(&baseline).unwrap().rows, 10);
+    assert_eq!(check(&baseline).unwrap().rows, baseline.len() as u64);
     // Event ordinals restart in the next accepted transaction.
     let mut next_transactions = baseline.clone();
     let in_tx = |tx| AcceptedOrigin { accepted_tx_ordinal: tx, event_ordinal: 0, ..origin() };
@@ -170,12 +170,13 @@ fn progressed_coverage_may_finish_with_a_packet_but_cannot_precede_any_retained_
         assert!(check(&rows).is_err(), "progressed coverage variant {variant}");
     }
     let mut rows = baseline.clone();
-    let mut later = rows.iter().find(|r| matches!(r.body, NativeRowBody::PacketReceipt(_))).unwrap().clone();
-    if let NativeRowBody::PacketReceipt(r) = &mut later.body {
-        r.first_relation = 1;
-        r.origin = event(31);
+    for row in &mut rows {
+        if let NativeRowBody::PacketReceipt(r) = &mut row.body {
+            if r.first_relation == 1 {
+                r.origin = event(31);
+            }
+        }
     }
-    rows.push(later);
     assert!(check(&rows).is_err(), "a second later packet cannot be hidden by the first packet");
     for row in &mut rows {
         if let NativeRowBody::Coverage(r) = &mut row.body {

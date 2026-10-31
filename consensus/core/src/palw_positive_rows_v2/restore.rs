@@ -188,6 +188,33 @@ impl Reader<'_> {
         }
         Ok(())
     }
+    #[inline(never)]
+    fn case_receipt_usage(&mut self, case: &CaseRow) -> Result<(), PositiveRowErrorV2> {
+        let mut prefix =
+            NativeRowKey::ServiceReceipt { case: case.case, kind: SourceKind::ArtifactInventory, source: Digest([0; 64]), unit: 0 }
+                .encode();
+        prefix.truncate(prefix.len() - 73); // kind, source and unit follow the case.
+        let (mut raw_bytes, mut work) = (0u64, 0u64);
+        let aux = self.aux;
+        for ((table, key), value) in aux.range((Included((KERNEL_AUX_TABLE, prefix.clone())), Unbounded)) {
+            if *table != KERNEL_AUX_TABLE || !key.starts_with(&prefix) {
+                break;
+            }
+            add(&mut self.report.reference_reads, 1)?;
+            let NativeRowBody::ServiceReceipt(receipt) = self.decode(key, value)? else {
+                return Err(PositiveRowErrorV2::WrongRowKind);
+            };
+            add(&mut raw_bytes, receipt.bytes)?;
+            add(&mut work, receipt.additional_work)?;
+        }
+        // These are lower bounds only: failed/retried work and wire traffic
+        // still cost resources but create no canonical success receipt.
+        if case.usage.unique_source_bytes < raw_bytes || case.usage.additional_work < work || case.usage.transmitted_bytes < raw_bytes
+        {
+            return inconsistent();
+        }
+        Ok(())
+    }
     fn union_receipts(&mut self, union: &SourceUnionRow) -> Result<(), PositiveRowErrorV2> {
         let mut prefix = NativeRowKey::ServiceReceipt { case: union.case, kind: union.kind, source: union.source, unit: 0 }.encode();
         prefix.truncate(prefix.len() - 8);
@@ -266,6 +293,7 @@ impl Reader<'_> {
         add(&mut self.report.signature_checks, 2)?;
         self.journal_links(&head, row, &result)?;
         self.case_union_status(row)?;
+        self.case_receipt_usage(row)?;
         if let Some(id) = row.positive_witness {
             let witness = self.witness(id)?;
             let coverage = self.coverage(id)?;
@@ -311,15 +339,14 @@ impl Reader<'_> {
             return inconsistent();
         }
         same_block_event_order_v2(&witness.origin, &row.last_event, false)?;
-        if row.next_relation > 0 {
-            self.coverage_packet_order(row)?;
-        }
+        self.coverage_packet_order(row)?;
         Ok(())
     }
     #[inline(never)]
     fn coverage_packet_order(&mut self, coverage: &CoverageRow) -> Result<(), PositiveRowErrorV2> {
         let mut prefix = NativeRowKey::PacketReceipt { witness: coverage.witness, first_relation: 0 }.encode();
         prefix.truncate(prefix.len() - 8);
+        let (mut packets, mut frame_bytes) = (0u64, 0u64);
         let aux = self.aux;
         // Each Coverage owns a disjoint fixed witness prefix. Across the
         // restore, each literal packet is visited once more, without a decoded
@@ -332,11 +359,22 @@ impl Reader<'_> {
             let NativeRowBody::PacketReceipt(packet) = self.decode(key, value)? else {
                 return Err(PositiveRowErrorV2::WrongRowKind);
             };
+            if packet.first_relation >= coverage.next_relation {
+                return inconsistent();
+            }
+            add(&mut packets, 1)?;
+            add(&mut frame_bytes, packet.signed_bytes.checked_sub(SIGNATURE_BYTES as u64).ok_or(ContractError::Range)?)?;
             same_block_event_order_v2(&packet.origin, &coverage.last_event, false)?;
         }
-        // Missing packet/history preimages and inter-block ordering remain the
-        // canonical accepted-history backend's responsibility, not a cursor
-        // or this local ordinal check's authorization.
+        // Map keys are unique and key/value identity is checked by decode.
+        // Count==next with every first<next proves the finite prefix has no
+        // gaps, without iterating the advertised cursor or sorting LE keys by
+        // their encoded order. Failed/retried packets may raise the meters.
+        if packets != coverage.next_relation || frame_bytes > coverage.frame_bytes || packets > coverage.signatures {
+            return inconsistent();
+        }
+        // Packet preimages and inter-block order still need canonical history;
+        // receipt completeness and a cached cursor grant no authorization.
         Ok(())
     }
     #[inline(never)]
@@ -419,5 +457,7 @@ fn validate_positive_aux_present_v2(aux: &PositiveAuxRowsV2) -> Result<PositiveR
 
 #[cfg(test)]
 mod accepted_order_tests;
+#[cfg(test)]
+mod counter_tests;
 #[cfg(test)]
 mod tests;
