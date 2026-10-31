@@ -200,6 +200,8 @@ pub struct PreparedSourceUpdateV2 {
     expected_case: Option<CaseRow>,
     case_row: Option<CaseRow>,
     next_miner_data: MinerDataStatus,
+    touched_source: SourceKey,
+    touched_unit: Option<UnitKey>,
 }
 enum SourceChange {
     None,
@@ -336,7 +338,16 @@ impl NativeSourceLedgerV2 {
         }
         let retained = self.history.prepare(event.material, SourceHistoryKindV2::Request, event.native_body, self.limits)?;
         if retained.is_none() {
-            return Ok(self.prepared(SourceEffectV2::AlreadyApplied, self.usage, None, None, None, SourceChange::None));
+            return Ok(self.prepared(
+                SourceEffectV2::AlreadyApplied,
+                self.usage,
+                None,
+                None,
+                None,
+                SourceChange::None,
+                (event.request.kind, event.request.source),
+                None,
+            ));
         }
         let id = event.request.id();
         let existing_record = self.requests.get(&id);
@@ -410,6 +421,8 @@ impl NativeSourceLedgerV2 {
             None,
             retained,
             SourceChange::Request { record, intervals, reservations },
+            key,
+            None,
         ))
     }
     pub fn prepare_response(
@@ -448,7 +461,16 @@ impl NativeSourceLedgerV2 {
         }
         let retained = self.history.prepare(event.material, SourceHistoryKindV2::Response, event.native_body, self.limits)?;
         if retained.is_none() {
-            return Ok(self.prepared(SourceEffectV2::AlreadyApplied, self.usage, None, None, None, SourceChange::None));
+            return Ok(self.prepared(
+                SourceEffectV2::AlreadyApplied,
+                self.usage,
+                None,
+                None,
+                None,
+                SourceChange::None,
+                (key.0, key.1),
+                Some(key),
+            ));
         }
         let mut usage = self.event_usage(cost, event.native_body.len() as u64)?;
         let mut union = self.source_union(key.0, key.1).ok_or(SourceErrorV2::MissingRequest)?;
@@ -480,7 +502,7 @@ impl NativeSourceLedgerV2 {
             })
         };
         let effect = if receipt.is_some() { SourceEffectV2::Responded } else { SourceEffectV2::AlreadyComplete };
-        Ok(self.prepared(effect, usage, Some(union), receipt, retained, SourceChange::Response))
+        Ok(self.prepared(effect, usage, Some(union), receipt, retained, SourceChange::Response, (key.0, key.1), Some(key)))
     }
     /// Pure cache application only. A4 must NOT use this as native acceptance.
     pub fn apply(&mut self, update: PreparedSourceUpdateV2) -> Result<(), SourceErrorV2> {
@@ -599,6 +621,8 @@ impl NativeSourceLedgerV2 {
         receipt: Option<ServiceReceiptRow>,
         retained: Option<SourceHistoryEntryV2>,
         change: SourceChange,
+        touched_source: SourceKey,
+        touched_unit: Option<UnitKey>,
     ) -> PreparedSourceUpdateV2 {
         let next_miner_data = self.next_miner_data(union.as_ref());
         let case_row = self.case_basis.map(|mut case| {
@@ -642,6 +666,8 @@ impl NativeSourceLedgerV2 {
             expected_case: self.case_basis,
             case_row,
             next_miner_data,
+            touched_source,
+            touched_unit,
         }
     }
     fn next_miner_data(&self, union: Option<&SourceUnionRow>) -> MinerDataStatus {
@@ -672,6 +698,16 @@ impl NativeSourceLedgerV2 {
     }
 }
 impl PreparedSourceUpdateV2 {
+    /// Coordinates to compare against actual native rows even when this
+    /// proposal emits no row (AlreadyApplied or AlreadyComplete).
+    pub fn touched_source(&self) -> (SourceKind, Digest) {
+        self.touched_source
+    }
+    /// Every op4 retains its canonical unit coordinates independently of
+    /// whether fulfillment/payment was already recorded.
+    pub fn touched_unit(&self) -> Option<(SourceKind, Digest, u64)> {
+        self.touched_unit
+    }
     pub fn expected_usage(&self) -> AggregateUsage {
         self.expected_usage
     }

@@ -2,8 +2,8 @@
 //! admission, selected-history, role, funding or reservation capabilities.
 use super::*;
 use kaspa_consensus_core::palw_positive_source_v2::{
-    NativeSourceContextV2, NativeSourceLedgerV2, SourceErrorV2, SourceEventCostV2, SourceLimitsV2, SourceMissingPortV2,
-    SourceRequestEventV2, SourceResponseEventV2, SourceServiceFeeV2, history::NativeSourceHistoryV2,
+    NativeSourceContextV2, NativeSourceLedgerV2, SourceEffectV2, SourceErrorV2, SourceEventCostV2, SourceLimitsV2,
+    SourceMissingPortV2, SourceRequestEventV2, SourceResponseEventV2, SourceServiceFeeV2, history::NativeSourceHistoryV2,
 };
 use misaka_palw_positive_contract::{
     identity::{FundingScopeId, PUBKEY_BYTES, PlanId, REQUEST_SIGN_CONTEXT, RequestId, ResultId, SIGNATURE_BYTES, principal},
@@ -844,4 +844,49 @@ fn independent_first_receipt_names_the_op4_request_while_unit_completion_and_fee
     }
     assert_eq!(usage_tuple(&replay), usage_tuple(&ledger));
     assert_eq!(replay.receipt(a.kind, a.source, 1), Some(&receipt));
+}
+
+#[test]
+fn independent_no_output_updates_still_identify_every_native_row_that_requires_cas() {
+    let (f, values, geometry, mut ledger, mut context) = ledger_fixture(service_budget());
+    let request = f.request(SourceKind::ArtifactInventory, 0, 1);
+    let source = (request.kind, request.source);
+    let unit = (request.kind, request.source, 0);
+    context.add_request(request, 71);
+    let update = ledger.prepare_request(&geometry, &context, context.requests[0].event()).unwrap();
+    assert_eq!(update.touched_source(), source);
+    assert_eq!(update.touched_unit(), None);
+    ledger.apply(update).unwrap();
+    let update = ledger.prepare_request(&geometry, &context, context.requests[0].event()).unwrap();
+    assert_eq!(update.effect(), SourceEffectV2::AlreadyApplied);
+    assert!(update.union().is_none());
+    assert!(update.receipt().is_none());
+    assert_eq!(update.touched_source(), source);
+    assert_eq!(update.touched_unit(), None);
+    ledger.apply(update).unwrap();
+    let raw = borsh::to_vec(&open_artifact_leaf_v1(&values, 0).unwrap()).unwrap();
+    context.add_response(request, f.result.miner, &raw);
+    let update = ledger.prepare_response(&geometry, &context, context.responses[0].event()).unwrap();
+    assert_eq!(update.touched_source(), source);
+    assert_eq!(update.touched_unit(), Some(unit));
+    ledger.apply(update).unwrap();
+    let before = usage_tuple(&ledger);
+    let update = ledger.prepare_response(&geometry, &context, context.responses[0].event()).unwrap();
+    assert_eq!(update.effect(), SourceEffectV2::AlreadyApplied);
+    assert!(update.union().is_none());
+    assert!(update.receipt().is_none());
+    assert_eq!(update.touched_source(), source);
+    assert_eq!(update.touched_unit(), Some(unit));
+    ledger.apply(update).unwrap();
+    assert_eq!(usage_tuple(&ledger), before);
+    context.add_response(request, f.result.miner, &raw);
+    let update = ledger.prepare_response(&geometry, &context, context.responses[1].event()).unwrap();
+    assert_eq!(update.effect(), SourceEffectV2::AlreadyComplete);
+    assert!(update.receipt().is_none());
+    assert!(update.fee_intent().is_none());
+    assert_eq!(update.touched_source(), source);
+    assert_eq!(update.touched_unit(), Some(unit));
+    ledger.apply(update).unwrap();
+    assert_eq!(ledger.usage().fee, 3);
+    assert_eq!(ledger.source_union(request.kind, request.source).unwrap().completed_units, 1);
 }
