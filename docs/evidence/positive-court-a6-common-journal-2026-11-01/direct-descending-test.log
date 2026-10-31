@@ -1,0 +1,6 @@
+
+running 1 test
+test palw_positive_rows_v2::tests::native_route_scanner_rejects_duplicate_and_unsorted_positive_keys_before_collection ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5430 filtered out; finished in 0.12s
+

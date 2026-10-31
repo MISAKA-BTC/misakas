@@ -1,0 +1,58 @@
+   Compiling kaspa-utils v1.1.0 (/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/utils)
+   Compiling kaspa-hashes v1.1.0 (/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/crypto/hashes)
+   Compiling kaspa-math v1.1.0 (/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/math)
+   Compiling misaka-palw-panel v1.1.0 (/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/misaka/palw/panel)
+   Compiling kaspa-muhash v1.1.0 (/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/crypto/muhash)
+   Compiling kaspa-merkle v1.1.0 (/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/crypto/merkle)
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/consensus/core)
+   Compiling kaspa-database v1.1.0 (/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/database)
+   Compiling kaspa-txscript v1.1.0 (/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/crypto/txscript)
+   Compiling kaspa-notify v1.1.0 (/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/notify)
+   Compiling kaspa-consensus-notify v1.1.0 (/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/consensus/notify)
+   Compiling kaspa-mining-errors v1.1.0 (/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/mining/errors)
+   Compiling kaspa-index-core v1.1.0 (/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/indexes/core)
+   Compiling kaspa-consensus-client v1.1.0 (/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/consensus/client)
+   Compiling kaspa-consensus-wasm v1.1.0 (/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/consensus/wasm)
+   Compiling kaspa-consensusmanager v1.1.0 (/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/components/consensusmanager)
+   Compiling kaspa-rpc-core v1.1.0 (/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/rpc/core)
+   Compiling kaspa-p2p-lib v1.1.0 (/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/protocol/p2p)
+   Compiling kaspa-addressmanager v1.1.0 (/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/components/addressmanager)
+   Compiling kaspa-connectionmanager v1.1.0 (/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/components/connectionmanager)
+   Compiling kaspa-p2p-mining v1.1.0 (/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/protocol/mining)
+   Compiling kaspa-mining v1.1.0 (/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/mining)
+   Compiling kaspa-pow v1.1.0 (/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/consensus/pow)
+   Compiling kaspa-p2p-flows v1.1.0 (/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/protocol/flows)
+   Compiling kaspa-grpc-core v1.1.0 (/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/rpc/grpc/core)
+   Compiling kaspa-utxoindex v1.1.0 (/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/indexes/utxoindex)
+   Compiling misaka-palw-tir-exec v1.1.0 (/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/misaka/palw/tir/exec)
+   Compiling kaspa-rpc-service v1.1.0 (/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/rpc/service)
+   Compiling kaspa-pq-validator-core v1.1.0 (/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/misaka/pq/validator-core)
+   Compiling misaka-palw-base0 v1.1.0 (/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/misaka/palw/base0)
+   Compiling misaka-palw-tir-lower v1.1.0 (/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/misaka/palw/tir/lower)
+   Compiling kaspa-grpc-client v1.1.0 (/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/rpc/grpc/client)
+   Compiling misaka-endpoints v1.1.0 (/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/misaka/endpoints)
+   Compiling misaka-palw-remote v1.1.0 (/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/misaka/palw/remote)
+   Compiling kaspa-wrpc-server v1.1.0 (/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/rpc/wrpc/server)
+   Compiling misaka-palw-sdk v1.1.0 (/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/misaka/palw/sdk)
+   Compiling kaspa-grpc-server v1.1.0 (/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/rpc/grpc/server)
+   Compiling misaka-palw-tir-sketch v1.1.0 (/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/misaka/palw/tir/sketch)
+   Compiling kaspa-wrpc-client v1.1.0 (/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/rpc/wrpc/client)
+   Compiling kaspa-consensus v1.1.0 (/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/consensus)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4m 04s
+     Running unittests src/lib.rs (/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/kaspa_consensus-cdd71196065befc6)
+
+running 11 tests
+test model::stores::palw_state_v2::positive_journal::tests::coalesced_and_intermediate_rows_and_existing_old_head_are_supported ... ok
+test model::stores::palw_state_v2::positive_journal::tests::append_requires_literal_selected_predecessor_and_keeps_batch_on_failure ... ok
+test model::stores::palw_state_v2::positive_journal::tests::explicit_capacity_refusal_is_separate_and_never_mutates_batch ... ok
+test model::stores::palw_state_v2::positive_journal::tests::every_stage_error_preserves_existing_caller_batch_bytes ... ok
+test model::stores::palw_state_v2::positive_journal::tests::raw_pinned_reader_is_bounded_but_chain_owns_corruption_and_identity_checks ... ok
+test processes::palw_positive_journal_v2::tests::canonical_compare_stream_checks_truncation_trailing_and_cached_fields ... ok
+test processes::palw_positive_journal_v2::tests::merkle_workspace_checks_actual_typed_slots_and_overflow ... ok
+test model::stores::palw_state_v2::positive_journal::tests::real_db_batch_atomicity_reopen_and_reindex_retain_inactive_raw_records ... ok
+test processes::palw_positive_journal_v2::tests::real_db_exact_accepted_ordinal_includes_coinbase_and_raw_eof_is_strict ... ok
+test processes::palw_positive_journal_v2::tests::real_db_bad_merkle_and_stale_id_never_reach_callback ... ok
+test processes::palw_positive_journal_v2::tests::real_db_missing_selected_point_or_body_never_uses_an_empty_fallback ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 1234 filtered out; finished in 0.05s
+
