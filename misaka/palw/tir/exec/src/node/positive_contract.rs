@@ -18,10 +18,27 @@ use misaka_palw_positive_contract::{
     },
     ports::{NodeChecker, require_next},
     tir::{EXACT_PART_HEADER_BYTES, decode_frame, exact_derivation_id, greedy_selector_id, provenance_id, raw_part_budget},
-    wire::{EVIDENCE_HEADER_BYTES, EvidenceFrame},
+    wire::{AuthenticatedEvidenceFrame, EVIDENCE_HEADER_BYTES, EvidenceFrame},
 };
 
 pub const PART_OVERHEAD: u64 = (EVIDENCE_HEADER_BYTES + EXACT_PART_HEADER_BYTES) as u64;
+
+/// Transport quote only; A4 reserves native wrapper/transaction overhead too.
+/// Existing frame limits remain unsigned and are never silently reinterpreted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SignedTransportQuote {
+    pub max_packet_bytes: u64,
+    pub unsigned_frame_bytes: u64,
+    pub signature_bytes: u64,
+    pub total_packet_bytes: u64,
+}
+fn signed_quote(count: u64, frame_cap: u64) -> Result<SignedTransportQuote, AdapterError> {
+    let max_packet_bytes = frame_cap.checked_add(SIGNATURE_BYTES as u64).ok_or(CheckError::Budget)?;
+    let unsigned_frame_bytes = count.checked_mul(frame_cap).ok_or(CheckError::Budget)?;
+    let signature_bytes = count.checked_mul(SIGNATURE_BYTES as u64).ok_or(CheckError::Budget)?;
+    let total_packet_bytes = unsigned_frame_bytes.checked_add(signature_bytes).ok_or(CheckError::Budget)?;
+    Ok(SignedTransportQuote { max_packet_bytes, unsigned_frame_bytes, signature_bytes, total_packet_bytes })
+}
 fn digest(hash: Hash64) -> Digest {
     Digest(hash.as_bytes())
 }
@@ -122,6 +139,9 @@ impl PreparedCheck {
         // Both checked during construction and bounded by max_total_bytes.
         self.plan.leaf_count() * self.limits.max_part_bytes
     }
+    pub fn signed_transport_quote(&self) -> Result<SignedTransportQuote, AdapterError> {
+        signed_quote(self.plan.leaf_count(), self.limits.max_part_bytes)
+    }
     #[allow(clippy::too_many_arguments)]
     pub fn authenticate_witness(
         self,
@@ -171,10 +191,14 @@ pub struct CheckContext {
     identity: ContextIdentity,
 }
 impl CheckContext {
+    pub fn signed_transport_quote(&self) -> Result<SignedTransportQuote, AdapterError> {
+        signed_quote(self.identity.descriptor.mandatory_relations, self.identity.limits.max_part_bytes)
+    }
     pub fn start(&self) -> Result<ContractProgress, AdapterError> {
         Ok(ContractProgress {
             identity: self.identity.clone(),
             wire_bytes: 0,
+            signature_bytes: 0,
             failure: None,
             checker: ExactChecker::begin_greedy(
                 self.plan.clone(),
@@ -191,6 +215,7 @@ pub struct ContractProgress {
     identity: ContextIdentity,
     checker: ExactChecker,
     wire_bytes: u64,
+    signature_bytes: u64,
     failure: Option<CheckOutcome>,
 }
 impl ContractProgress {
@@ -203,6 +228,12 @@ impl ContractProgress {
     }
     pub fn charged_wire_bytes(&self) -> u64 {
         self.wire_bytes
+    }
+    pub fn charged_signature_bytes(&self) -> u64 {
+        self.signature_bytes
+    }
+    pub fn charged_transport_bytes(&self) -> Result<u64, AdapterError> {
+        self.wire_bytes.checked_add(self.signature_bytes).ok_or(CheckError::Budget.into())
     }
 }
 /// A checked local fact, not a Gate C/payment/native verdict authority.
@@ -229,6 +260,54 @@ impl CheckedTerminal {
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct TirNodeChecker;
+impl TirNodeChecker {
+    /// Failed signature/foreign scope leaves the candidate and counters intact.
+    /// A4 still owns current drawn membership, admission and duty authorization.
+    pub fn check_signed_part(
+        &self,
+        context: &CheckContext,
+        progress: &mut ContractProgress,
+        frame: EvidenceFrame<'_>,
+        key: &[u8; PUBKEY_BYTES],
+        signature: &[u8; SIGNATURE_BYTES],
+    ) -> Result<(), AdapterError> {
+        let quote = context.signed_transport_quote()?;
+        let authenticated = frame.authenticate(&context.witness, key, signature, quote.max_packet_bytes)?;
+        self.check_authenticated_part(context, progress, authenticated)
+    }
+    pub fn check_authenticated_part(
+        &self,
+        context: &CheckContext,
+        progress: &mut ContractProgress,
+        part: AuthenticatedEvidenceFrame<'_>,
+    ) -> Result<(), AdapterError> {
+        if context.identity != progress.identity || part.author() != context.witness.author {
+            return Err(ContractError::Identity.into());
+        }
+        if progress.failure.is_some() {
+            return Err(AdapterError::Closed);
+        }
+        let frame = part.frame();
+        require_next(
+            &context.identity.descriptor,
+            CoverageCursor { plan: context.identity.descriptor.plan, next_relation: progress.checker.progress().next_leaf },
+            &context.witness,
+            &frame,
+        )?;
+        if frame.header().relation_count != 1 {
+            return Err(ContractError::NonCanonical.into());
+        }
+        let quote = context.signed_transport_quote()?;
+        // Author-authenticated same-scope attempts pay the signature even if
+        // inner material fails. A4 owns aggregate retries and ingress refusals.
+        progress.signature_bytes = progress
+            .signature_bytes
+            .checked_add(SIGNATURE_BYTES as u64)
+            .filter(|n| *n <= quote.signature_bytes)
+            .ok_or(CheckError::Budget)?;
+        self.check_part(context, progress, frame)
+    }
+}
 impl NodeChecker for TirNodeChecker {
     type Context = CheckContext;
     type Progress = ContractProgress;
@@ -243,6 +322,8 @@ impl NodeChecker for TirNodeChecker {
         progress: &mut ContractProgress,
         part: EvidenceFrame<'_>,
     ) -> Result<(), AdapterError> {
+        // Trusted A4/court port only. Untrusted packet ingress must use the
+        // author-authenticating helpers above before candidate attribution.
         if context.identity != progress.identity {
             return Err(ContractError::Identity.into());
         }
