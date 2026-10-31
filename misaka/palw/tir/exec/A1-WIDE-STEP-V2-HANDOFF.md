@@ -107,3 +107,22 @@ source commitは `41a00f590`、test前提修正は `b048ce4e1`。
 SHA-256を保存する。指定済みRocksDB archiveを使用し、C++再build、Rust rlibの手動流用、
 新large target作成は行わなかった。archive hash前後一致と実行中source不変を確認した。
 A7の共有A1cacheは使用せず、A0の専用targetは検証終了後に解放した。
+
+## Payload名の正確化とFixed／Hist混在回帰
+
+後続source `9a3e952e9` で上限名を `maximum_leaf_payload_bytes_v2` とし、lane payloadだけの
+保守的上界であることを明示した。serialized header 26 bytes、decoded DTO、opening、署名、
+hash／Merkle scratchをnative callerが別予約する契約を維持する。
+
+第6testはC=3、h_tile=2、W=3、P=2／D=6の新規structural fixture。位置別leaf数を独立に
+`[2,6,7,7,6,8,6]` と列挙し、計42葉のcanonical index／count／bindingを照合した。
+6つのwide最終leafはversion 2・8-byte、Fixed checkpoint 2葉とHist tile 3葉を含む
+全非logits leafは旧version 1・4-byte preimageと一致する。全leafでBorsh長が26＋payload、
+4つのI64 laneで32＋26＝58 bytesであることも確認した。演算成立、実LLM実行、native受付の
+検証ではなく、data geometry／encoding／identityの回帰である。
+
+この新候補はstep 6件＋既存wide primitive 5件の**計11件成功・失敗0件**。Core libraryと
+両targetのstrict Clippyも成功した。前回10件や初回失敗rawはそのまま保存し、合算しない。
+今回は専用移譲された既存 `/Users/wata/.cache/misaka-positive-a1-target` を使い、Root own
+cache／A0 targetは使わなかった。原log／command／source・2 binary・archive SHAは
+`validation/wide-step-v2-payload-state/` に別記し、cacheは終了後に解放した。
