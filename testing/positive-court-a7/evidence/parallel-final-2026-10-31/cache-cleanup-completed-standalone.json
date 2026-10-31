@@ -1,0 +1,15 @@
+{
+  "scope": "A7 own unused library build cache; no test executable or evidence removed",
+  "removed": [
+    {
+      "path": "/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/target/debug/deps/libkaspa_consensus_core-8d23c7aaac2eb958.rlib",
+      "bytes": 359432688,
+      "reason": "standalone A7 tests completed; all remaining commands use root workspace profile; static test binaries retained"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/target/debug/deps/libkaspa_consensus_core-8d23c7aaac2eb958.rmeta",
+      "bytes": 115576283,
+      "reason": "standalone A7 tests completed; all remaining commands use root workspace profile; static test binaries retained"
+    }
+  ]
+}

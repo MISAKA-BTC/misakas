@@ -102,7 +102,7 @@ def main():
             ['cargo','test','-p','misaka-palw-remote','--offline','--locked','--features','positive-panel','--lib','miner::positive_v2'],
             ['cargo','test','-p','misaka-palw-remote','--offline','--locked','--features','positive-panel','--test','positive_panel_r1','--test','positive_panel_sources_r1'],
             ['cargo','test','-p','misaka-palw-tir-exec','--offline','--locked','--features','positive-panel','--test','positive_panel_r1','--test','positive_contract','--test','positive_check_hardening','--test','positive_check','--test','court','--test','node_leg','--test','capture_codec'],
-            ['cargo','test','-p','kaspa-consensus-core','--offline','--locked','--lib','positive_court_v2_tests'],
+            ['cargo','test','-p','kaspa-consensus-core','--offline','--locked','--lib','config::params::positive_court_v2::tests::'],
             ['cargo','test','-p','kaspa-consensus-core','--offline','--locked','--test','palw_tir_v1_fence'],
         ]
     for i, command in enumerate(commands):
