@@ -19,7 +19,7 @@ use misaka_palw_tir_exec::{
     },
 };
 
-pub const ROWS: [[i128; 4]; 4] = [[4, 2, -3, 1], [-1, 7, 3, 2], [6, 6, 1, -2], [-8, -2, -3, -1]];
+pub const ROWS: [[i128; 4]; 4] = [[4, 2, -3, 1], [-1, 7, 3, 2], [5, 6, 3, -2], [-8, -2, -3, -1]];
 pub fn h(n: u64) -> Hash64 {
     Hash64::from_u64_word(n)
 }
@@ -299,6 +299,11 @@ pub fn frame(r: &MinerResultCommit, w: &PanelWitnessCommit, i: u64, payload: &[u
     .unwrap()
 }
 pub fn panel(t: &Trusted, r: MinerResultCommit, alternate: bool, prompt: u32, forged_eval: bool) -> Packet {
+    if !forged_eval {
+        return panel_a3(t, r, alternate, prompt);
+    }
+    // The malicious candidate is assembled independently from A3, so A3 and
+    // A1 cannot share a generator bug that silently makes this attack honest.
     let p = program();
     let plan = TirPlan::compile(&p).unwrap();
     let honest_map = map(alternate);
@@ -395,6 +400,70 @@ pub fn panel(t: &Trusted, r: MinerResultCommit, alternate: bool, prompt: u32, fo
         frame_signatures: vec![],
     };
     packet.resign_and_reframe();
+    packet
+}
+
+fn panel_a3(t: &Trusted, r: MinerResultCommit, alternate: bool, prompt: u32) -> Packet {
+    use misaka_palw_positive_contract::ports::PanelBuilder;
+    use misaka_palw_tir_exec::node::positive_panel::{PanelAdmission, PanelLimits, TirPanelBuilder};
+    let p = program();
+    let plan = TirPlan::compile(&p).unwrap();
+    let m = map(alternate);
+    let params = TirParams::from_map(&plan, &m).unwrap();
+    let source = TirParamsSourceV1(&params);
+    let inventory = TirHeldInventoryV1::build(&p, &source).unwrap();
+    let space = PalwTirStepSpaceV1::new(&t.class).unwrap();
+    let runner = TirClassRunnerV1::new(&space, &plan, &params, t.class.class_id(&t.artifact)).unwrap();
+    let (miner_key, miner_sig) = sign(51, r.id().0, RESULT_SIGN_CONTEXT);
+    let admission = PanelAdmission::authenticate(
+        &r,
+        t.admission(),
+        &t.class,
+        &t.job,
+        &[prompt],
+        PalwPromptIdsFormV1::Flat,
+        miner_key.as_slice().try_into().unwrap(),
+        miner_sig.as_slice().try_into().unwrap(),
+        PanelLimits {
+            check: limits(),
+            max_frame_bytes: limits().max_part_bytes,
+            max_total_frame_bytes: limits().max_total_bytes,
+            max_capture_bytes: 16 << 20,
+        },
+    )
+    .unwrap();
+    let builder = TirPanelBuilder::new(&runner, &inventory);
+    let capture = builder.replay_and_capture(&admission).unwrap();
+    let descriptor = admission.plan();
+    let panel_key = sign(61, Digest([0; 64]), WITNESS_SIGN_CONTEXT).0;
+    let author = principal(panel_key.as_slice().try_into().unwrap());
+    let witness = builder.commit(&capture, &descriptor, author, 0).unwrap();
+    let prepared = builder.prepare_parts(&capture).unwrap();
+    let frames = (0..descriptor.mandatory_relations)
+        .map(|next_relation| {
+            let part = prepared.build_part(CoverageCursor { plan: descriptor.plan, next_relation }).unwrap();
+            part.frame(&witness, &descriptor).unwrap().encode(descriptor.max_part_bytes).unwrap()
+        })
+        .collect();
+    let panel_sig = sign(61, witness.id().0, WITNESS_SIGN_CONTEXT).1;
+    let mut packet = Packet {
+        result: r,
+        witness,
+        binding: capture.binding().clone(),
+        generated: capture.generated().to_vec(),
+        miner_key,
+        miner_sig,
+        panel_key,
+        panel_sig,
+        frames,
+        frame_signatures: vec![],
+    };
+    // Sign A3's exact bytes as-is. Rebuilding a frame or rewriting the witness
+    // here could hide an A3 interchange bug from the independent receiver.
+    packet.frame_signatures = vec![vec![]; packet.frames.len()];
+    for i in 0..packet.frames.len() {
+        packet.resign_frame(i);
+    }
     packet
 }
 pub fn fixture(alternate: bool, prompt: u32, job: u64) -> (Trusted, Packet) {

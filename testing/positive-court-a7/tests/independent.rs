@@ -8,6 +8,9 @@ use support::*;
 #[test]
 fn scalar_oracle_checks_every_logit_and_output_without_tir_evaluation() {
     assert_eq!(oracle(false, 1).0, [2, 0, 0]);
+    let (tied_ids, tied_rows) = oracle(false, 2);
+    assert_eq!(tied_rows[0][0], tied_rows[0][2]);
+    assert_eq!(tied_ids[0], 0, "winning ties must choose the lowest index");
     for prompt in 0..4 {
         let (t, p) = fixture(false, prompt, 7);
         let (ids, rows) = oracle(false, prompt);
@@ -341,7 +344,7 @@ fn separate_processes_recover_checked_frames_and_reject_a_whole_foreign_packet()
     assert_eq!(reports[8]["detail"]["status"], "RejectedForeignScope");
     let report = serde_json::json!({"schema":"a7-r1-all-node-i32-v1","profile":"warm-4x4-3-decode","reports":reports,
         "a2_miner_adapter_connected":false,
-        "activation_allowed":false,"real_llm":false,"cold_model":false,"native_network":false,"a3_builder_port_connected":false,
+        "activation_allowed":false,"real_llm":false,"cold_model":false,"native_network":false,"a3_builder_port_connected":true,
         "recovery":"test-frame replay only; not A6 atomic/native persistence"});
     if let Some(dir) = std::env::var_os("PC_A7_REPORT_DIR") {
         let output = std::path::PathBuf::from(dir);

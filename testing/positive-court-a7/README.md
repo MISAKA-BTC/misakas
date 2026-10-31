@@ -2,7 +2,9 @@
 
 Workspace: `codex/positive-court-a7`, based on A0 `4dede1aff` plus the A1
 `ef8e4e87d` / `b3a61454c` adapters and A0 author-frame authentication
-`5901eff3f`. A7 owns only this test crate and runner.
+`5901eff3f`, followed by A3 `b699358de` / `84d95e372`. A7 owns only this test
+crate and runner. A0's later `42a60b840` namespace/funding additions are not part
+of this pinned candidate and are not included in its PASS.
 No shared production module, native activation, model tier, or model-review rule
 is changed by A7. Computation is checked directly; cryptography authenticates data
 and authors only.
@@ -54,6 +56,15 @@ commit i32 program**. Its scalar oracle uses plain multiplication and strict
 comparison, independent of the TIR executor, Panel evidence builder and Node
 checker. Every logit and output token is compared. For input 1 the expected
 sequence is `[2,0,0]`. The initial joint profile does not claim wide/sparse support.
+The third embedding row has equally winning logits at indices 0 and 2, so the
+independent oracle also checks the required lowest-index tie break.
+
+Normal fixtures and the Panel subprocess now call A3's actual `PanelAdmission`
+and `TirPanelBuilder` through the common `PanelBuilder` port. A7 signs A3's exact
+witness and frames without rebuilding them, then A1 receives them through
+`PreparedCheck` / `TirNodeChecker`. The false-arithmetic attack remains an
+independently assembled A7 adversarial candidate; it does not rely on A3's
+generator to decide what is false.
 
 Other tests cover each corrupted leaf, every incomplete prefix, author/domain
 substitution, false arithmetic signed by all actors, a valid full computation
@@ -84,8 +95,9 @@ process-lifetime counters; stage timings include fixture, codec and signing work
 These scopes cannot be subtracted to claim a certified Miner overhead ratio.
 The fixture initializer's artifact-index preparation and trusted-metadata read
 are outside the role-stage timer. The baseline also includes local plan/params
-setup; it is not a pure inference kernel benchmark. Neither A2's actual Miner
-adapter nor A3's actual PanelBuilder is called by this warm fixture.
+setup; it is not a pure inference kernel benchmark. A2's actual Miner adapter is
+not called by this warm fixture. A3's local PanelBuilder port is connected; its
+remote provider/delivery path remains outside this process test.
 One warm 4x4 sample is **not** a real LLM, cold/provider, minimum-hardware,
 concurrency, p95/p99, storage-retention or native-network measurement.
 
@@ -93,7 +105,7 @@ The test-only prefix journal replays checked frames in a new process. It is not
 A6's atomic service/request/attempt/funding journal, power-loss durability,
 reorg, pruning or IBD. Missing those integrations stays unverified.
 
-Remaining evidence: A3's actual `PanelBuilder` connection; A2 provider/cold data
+Remaining evidence: A3 remote provider/delivery; A2 actual adapter/provider/cold data
 delivery and signed duties; A4 rooted draw/carrier/deadline/funding admission;
 A5 current Gate C and every actual reward/DAG/settlement/dependency read; A6 atomic
 recovery; real LLM and concurrent-network limits and explicit production caps.

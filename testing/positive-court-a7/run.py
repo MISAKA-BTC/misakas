@@ -39,7 +39,7 @@ def main():
         'started_utc':datetime.now(timezone.utc).isoformat(), 'host':{'platform':platform.platform(),'cpus':os.cpu_count()},
         'rustc':capture('rustc','-Vv'),'cargo':capture('cargo','-V'),'build_env':build_env,'source_sha256':source,
         'cargo_lock_sha256':{str(path.relative_to(ROOT)):sha(path) for path in [ROOT/'Cargo.lock',LOCAL/'Cargo.lock'] if path.exists()},
-        'activation_allowed':False,'unverified':['A3 PanelBuilder port connection','real LLM','cold/provider delivery','native network/carrier',
+        'activation_allowed':False,'unverified':['A2 actual Miner adapter and source duties','A3 remote delivery/provider path','real LLM','cold/provider delivery','native network/carrier',
             'native Gate C/reward/DAG/settlement reads','A6 atomic service/attempt/fund/crash/reorg/IBD recovery','approved caps/p95/p99/concurrency'], 'commands':[]}
     commands = [
         [sys.executable,'-m','unittest','discover','-s','testing/positive-court-a7','-p','test_process_control.py','-v'],
@@ -50,7 +50,7 @@ def main():
         commands += [
             ['cargo','test','-p','misaka-palw-positive-contract','--offline','--locked'],
             ['cargo','test','-p','misaka-palw-positive-accounting','--offline','--locked'],
-            ['cargo','test','-p','misaka-palw-tir-exec','--offline','--locked','--features','positive-contract','--test','positive_contract','--test','positive_check_hardening','--test','positive_check','--test','court','--test','node_leg','--test','capture_codec'],
+            ['cargo','test','-p','misaka-palw-tir-exec','--offline','--locked','--features','positive-panel','--test','positive_panel_r1','--test','positive_contract','--test','positive_check_hardening','--test','positive_check','--test','court','--test','node_leg','--test','capture_codec'],
             ['cargo','test','-p','kaspa-consensus-core','--offline','--locked','--test','palw_tir_v1_fence'],
         ]
     for i, command in enumerate(commands):
