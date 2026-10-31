@@ -1,0 +1,20 @@
+{
+  "parent_commit": "196d274b12e920d5aeb681b0e4c185cc8d92ade2",
+  "files": {
+    "consensus/core/src/palw_positive_check_v2.rs": {
+      "old_sha256": "8da9b5339184d63c789919bcb464c910a1ff09e6f1ebe5813727a7bba9a0f086",
+      "new_sha256": "f57c4b07e7e3a6915252ca3de24eba9fed945e62d659cee6ed24992a7d0dd33c",
+      "only_additive_module_or_private_getter": true
+    },
+    "consensus/core/src/palw_tir_court_v1.rs": {
+      "old_sha256": "7980ab7dad3503472358ed612a74d5dafe44d636af9ce7049cd7ecd8555e08c0",
+      "new_sha256": "8ea36af84ca1f7e3af96145a30a51e382573692691820ea83ce70a5af55f94b0",
+      "only_additive_module_or_private_getter": true
+    },
+    "consensus/core/src/palw_positive_check_v2/expanded_plan.rs": {
+      "old_sha256": "e36b5ed32db0c91c5a938fb3703662197ee26c2c1512a0ab36192b6a209104f3",
+      "new_sha256": "e02a8d76c1df64c9eba4f9ccc784c8d7e0777f0a697b01151f2e1b0e215ee64c",
+      "only_additive_module_or_private_getter": true
+    }
+  }
+}

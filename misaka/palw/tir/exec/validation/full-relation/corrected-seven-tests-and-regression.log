@@ -1,0 +1,89 @@
+    Finished `test` profile [unoptimized] target(s) in 0.26s
+     Running tests/positive_check.rs (/Users/wata/.cache/misaka-positive-a1-port-target/debug/deps/positive_check-db193c4d29f756bb)
+
+running 13 tests
+test budgets_overflow_heap_caps_and_malformed_vectors_fail_closed ... ok
+test sparse_legacy_commitments_do_not_authorize_full_coverage ... ok
+test stochastic_selection_is_unsupported_instead_of_a_miner_refutation ... ok
+test unauthenticated_model_material_cannot_replace_the_registered_inventory ... ok
+test merkle_authenticated_arithmetic_lie_rejects_only_the_panel_candidate ... ok
+test missing_logits_bridge_and_forged_losing_lane_are_rejected ... ok
+test omitted_final_leaf_duplicate_and_reordering_cannot_complete ... ok
+test output_mismatch_is_reported_only_after_complete_arithmetic ... ok
+test wrong_model_input_count_and_empty_schedule_are_rejected ... ok
+test cold_node_checks_all_leaves_history_and_every_output_row ... ok
+test later_logits_tile_cannot_reuse_another_tile_or_rows_trace_opening ... ok
+test ragged_second_logits_tile_is_required_and_global_ties_choose_the_first_lane ... ok
+test valid_alternative_model_and_input_openings_cannot_be_spliced_into_the_admitted_job ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+
+     Running tests/positive_check_hardening.rs (/Users/wata/.cache/misaka-positive-a1-port-target/debug/deps/positive_check_hardening-913788b8f70aa996)
+
+running 2 tests
+test plan_derivation_refuses_inherited_and_malformed_contexts_before_reservation ... ok
+test honest_material_over_the_evaluation_allowance_ends_unverified_without_panel_blame ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/positive_contract.rs (/Users/wata/.cache/misaka-positive-a1-port-target/debug/deps/positive_contract-38eccc006db5e1e3)
+
+running 13 tests
+test a_signed_alternate_selector_cannot_replace_the_rooted_greedy_rule ... ok
+test foreign_frame_identity_does_not_poison_the_target_candidates_progress ... ok
+test an_omitted_terminal_part_remains_incomplete_through_the_shared_port ... ok
+test signed_false_generated_ids_cannot_become_a_miner_output_mismatch ... ok
+test bounded_outer_frames_do_not_authorize_malformed_inner_length_prefixes ... ok
+test author_signed_malformed_material_charges_the_panel_packet_and_rejects_only_its_witness ... ok
+test admission_reserves_every_outer_header_and_both_payload_length_prefixes ... ok
+test signed_transport_reservation_includes_every_signature_and_refuses_aggregate_overflow ... ok
+test identical_public_ids_do_not_allow_progress_to_switch_local_resource_limits ... ok
+test signed_role_commits_and_framed_parts_reach_only_a_checked_terminal_fact ... ok
+test bad_actor_signatures_and_signed_false_witness_metadata_are_rejected ... ok
+test author_authenticated_frames_can_be_relayed_and_charge_all_packet_signatures ... ok
+test unauthenticated_or_foreign_packets_cannot_poison_an_honest_panel_candidate ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.49s
+
+     Running tests/positive_expanded_plan.rs (/Users/wata/.cache/misaka-positive-a1-port-target/debug/deps/positive_expanded_plan-0fd8027cd1fb5720)
+
+running 4 tests
+test original_matmul_and_reduction_work_is_counted_at_every_executed_position ... ok
+test original_sparse_i64_i128_and_output_unused_lanes_are_all_enumerated ... ok
+test expanded_geometry_rejects_wrong_identity_zero_jobs_and_every_finite_reservation_cap ... ok
+test dynamic_history_reused_layers_and_fixed_history_leaves_preserve_all_geometry ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/positive_full_relation.rs (/Users/wata/.cache/misaka-positive-a1-port-target/debug/deps/positive_full_relation-7717ad2acd90b7e3)
+
+running 7 tests
+test a_signed_lie_in_an_output_unused_i128_lane_is_rejected_without_rewriting_legacy_roots ... ok
+test original_sparse_wide_program_checks_every_relation_and_only_then_completes ... ok
+test repeated_unsigned_delivery_failure_spends_geometry_budget_without_advancing_coverage ... ok
+test exact_signed_rounding_and_lowest_lane_greedy_rules_cannot_be_replaced_by_floor_rounding ... ok
+test record_memory_and_evaluation_budgets_never_become_arithmetic_faults ... ok
+test original_fixed_replay_history_and_signed_checkpoint_claims_are_all_checked ... ok
+test unsigned_missing_tampered_unused_and_future_sources_remain_retryable_deliveries ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.50s
+
+     Running tests/positive_production_port.rs (/Users/wata/.cache/misaka-positive-a1-port-target/debug/deps/positive_production_port-5fb339498018843e)
+
+running 3 tests
+test both_public_paths_implement_the_same_nodechecker_port_with_identical_opaque_types ... ok
+test pure_plan_and_diagnostic_types_are_identical_across_the_production_boundary ... ok
+test record_cap_and_error_values_cross_compatibility_paths_without_conversion ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/positive_record.rs (/Users/wata/.cache/misaka-positive-a1-port-target/debug/deps/positive_record-202393b760861858)
+
+running 4 tests
+test primitive_only_record_reconstructs_trusted_binding_then_signed_parts_are_checked ... ok
+test generated_storage_and_encoded_record_caps_are_checked_without_consuming_prepared_state ... ok
+test failed_panel_authentication_during_delivery_does_not_poison_a_valid_retry ... ok
+test corrupt_record_delivery_does_not_consume_the_prepared_witness_or_touch_prior_progress ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.85s
+
