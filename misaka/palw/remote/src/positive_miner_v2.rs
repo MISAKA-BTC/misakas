@@ -3,13 +3,12 @@
 //! witness builder, reconstructs a trace, accepts a Panel ACK or grants credit.
 use std::{collections::BTreeMap, marker::PhantomData};
 
+use kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1;
+#[cfg(test)]
 use kaspa_consensus_core::{
     Hash64,
     palw_artifact::{PalwArtifactOpeningV1, verify_artifact_opening_v1},
-    palw_prompt_ids_v1::{
-        PALW_PROMPT_IDS_TILE_LEN, PalwPromptIdsFormV1, PalwPromptIdsOpeningV1, prompt_ids_tile_count_v1, prompt_token_ids_match_v1,
-        verify_prompt_ids_opening_v1,
-    },
+    palw_prompt_ids_v1::{PalwPromptIdsOpeningV1, verify_prompt_ids_opening_v1},
 };
 use misaka_palw_positive_contract::{
     ContractError,
@@ -117,57 +116,16 @@ pub fn sign_result_v2(
     Ok((result, signature))
 }
 
-/// Existing G14 data types; this enum is a process DTO, without a wire codec.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum StoredUnitV2 {
-    Artifact(PalwArtifactOpeningV1),
-    Input(PalwPromptIdsOpeningV1),
-    /// Existing whole-prompt G14 input under the legacy flat commitment.
-    FlatInput(Vec<u32>),
-}
-impl StoredUnitV2 {
-    fn bounded(&self, max: u64) -> bool {
-        match self {
-            Self::Artifact(unit) => {
-                unit.operand.bytes.len() as u64 <= max && unit.operand.tensor_name.len() as u64 <= max && unit.path.len() <= 32
-            }
-            Self::Input(unit) => unit.tile_ids.len() <= PALW_PROMPT_IDS_TILE_LEN as usize && unit.opening.siblings.len() <= 32,
-            Self::FlatInput(ids) => (ids.len() as u64).checked_mul(4).is_some_and(|n| n <= max),
-        }
-    }
-    fn sizes(&self) -> Result<(u64, u64), MinerErrorV2> {
-        match self {
-            Self::FlatInput(ids) => Ok((ids.len() as u64 * 4, 4 + ids.len() as u64 * 4)),
-            Self::Artifact(unit) => {
-                Ok((unit.operand.bytes.len() as u64, borsh::object_length(unit).map_err(|_| MinerErrorV2::Binding)? as u64))
-            }
-            Self::Input(unit) => {
-                Ok((unit.tile_ids.len() as u64 * 4, borsh::object_length(unit).map_err(|_| MinerErrorV2::Binding)? as u64))
-            }
-        }
-    }
-    fn authenticates(&self, result: &MinerResultCommit, request: &SourceRequest, index: u64, units: u64) -> bool {
-        match (self, request.kind) {
-            (Self::Artifact(unit), SourceKind::ArtifactInventory) => {
-                request.source == result.artifact
-                    && u64::from(unit.leaf_index) == index
-                    && u64::from(unit.leaf_count) == units
-                    && verify_artifact_opening_v1(unit, Hash64::from_bytes(request.source.0)).is_ok()
-            }
-            (Self::Input(unit), SourceKind::Input) => {
-                request.source == result.input
-                    && u64::from(unit.tile_index) == index
-                    && prompt_ids_tile_count_v1(u64::from(result.prefill)) == Some(units)
-                    && verify_prompt_ids_opening_v1(&Hash64::from_bytes(request.source.0), result.prefill, unit).is_ok()
-            }
-            (Self::FlatInput(ids), SourceKind::Input) => {
-                request.source == result.input
-                    && units == 1
-                    && index == 0
-                    && ids.len() == result.prefill as usize
-                    && prompt_token_ids_match_v1(PalwPromptIdsFormV1::Flat, ids, &Hash64::from_bytes(request.source.0))
-            }
-            _ => false,
+// The same process-only wrapper is used by the native source ledger. It
+// carries existing G14 values without adding a network enum tag.
+pub use kaspa_consensus_core::palw_positive_source_geometry_v2::StoredUnitV2;
+impl From<kaspa_consensus_core::palw_positive_source_geometry_v2::PositiveSourceGeometryErrorV2> for MinerErrorV2 {
+    fn from(value: kaspa_consensus_core::palw_positive_source_geometry_v2::PositiveSourceGeometryErrorV2) -> Self {
+        use kaspa_consensus_core::palw_positive_source_geometry_v2::PositiveSourceGeometryErrorV2 as Error;
+        match value {
+            Error::Contract(error) => Self::Contract(error),
+            Error::Binding => Self::Binding,
+            Error::Budget => Self::Budget,
         }
     }
 }
@@ -181,7 +139,7 @@ pub trait StoredProviderV2 {
 
 /// A4's capability supplies these finite bounds from the accepted, signed
 /// service contract, including retention and fees. A2 creates no financial hold.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DutyBoundsV2 {
     pub source_units: u64,
     pub max_unit_bytes: u64,
@@ -192,15 +150,40 @@ pub struct DutyBoundsV2 {
     pub cutoff: u64,
 }
 
+/// Canonical per-unit source geometry. `data_bytes` is the exact raw data
+/// width, while `body_bytes` bounds the existing G14 body including openings.
+/// This process DTO creates no native request, reservation or completion.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SourceUnitBoundsV2 {
+    pub data_bytes: u64,
+    pub body_bytes: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct PreparationRangeUpperV2 {
+    pending: u64,
+    fresh: u64,
+    fresh_data_bytes: u64,
+    body_bytes: u64,
+}
+
 /// Connection to A4's authenticated canonical duty. A peer DTO is not a duty.
 /// `authorize` must check result/case/contract/source/range, current branch,
 /// actor scope, reserved service opportunity, fees and exclusive clocks from
 /// rooted state. `status` must see provider/direct submissions without Panel ACKs.
-/// No production implementation is installed until A4 has that native state.
+/// `authorize` is called again before response release: a native adapter must
+/// reject a view which became stale during status checks or provider I/O.
 pub trait CanonicalDataDutyV2 {
     fn request(&self) -> &SourceRequest;
     fn authorize(&self, result: &MinerResultCommit) -> Result<DutyBoundsV2, MinerErrorV2>;
     fn status(&self, index: u64) -> Result<MinerDataStatus, MinerErrorV2>;
+    /// One bounded, read-only geometry lookup for a pending unit. Native
+    /// adapters MUST supply Some from their immutable admitted G14 geometry.
+    /// None preserves the conservative max-body-for-both-axes path for older
+    /// local adapters; it cannot reduce a signed or process budget.
+    fn unit_bounds(&self, _index: u64) -> Result<Option<SourceUnitBoundsV2>, MinerErrorV2> {
+        Ok(None)
+    }
 }
 
 /// Local preparation only; neither this value nor a transport receipt records
@@ -217,6 +200,7 @@ pub struct ProcessLimitsV2 {
     pub max_tracked_units: u64,
     pub max_provider_reads: u64,
     /// Cumulative canonical status lookups, including already completed units.
+    /// At most one pending-unit geometry lookup is paired with each lookup.
     pub max_status_checks: u64,
     pub max_prepared_bytes: u64,
 }
@@ -233,8 +217,9 @@ pub struct PreparationMeterV2 {
 }
 
 /// Keep ONE session per admitted case, across all Panel identities and attempts.
-/// A6 must retain/replay the meter and union with the canonical case journal on
-/// restart/reorg. A freshly constructed local session is not recovery authority.
+/// Retain its protected LOCAL meter/union across restart and native reorg.
+/// A6 restores canonical receipt/fee history separately; native chain undo must
+/// never undo already spent local I/O. A fresh session is not recovery authority.
 pub struct MinerResponderV2<'p, D> {
     result: MinerResultCommit,
     contract: MinerServiceContract,
@@ -344,7 +329,7 @@ impl<D: CanonicalDataDutyV2> MinerResponderV2<'_, D> {
         // Check every unit and reserve a conservative full response before I/O.
         // Already accepted provider/direct units are absent from the reply.
         let mut pending = Vec::new();
-        let mut fresh = 0u64;
+        let mut quote = PreparationRangeUpperV2::default();
         for index in request.first..request.end {
             if self.meter.status_checks >= self.limits.max_status_checks {
                 return Err(MinerErrorV2::Budget);
@@ -356,23 +341,41 @@ impl<D: CanonicalDataDutyV2> MinerResponderV2<'_, D> {
                 MinerDataStatus::NotRequested => return Err(MinerErrorV2::Binding),
                 MinerDataStatus::Pending => {}
             }
-            let next_fresh = fresh + u64::from(!self.prepared.contains_key(&(request.kind, request.source, index)));
-            // Check the candidate allocation at each step, before growing the
-            // pending vector. A huge request cannot hide behind a tiny consent.
-            self.preflight(&bounds, signed, pending.len() as u64 + 1, next_fresh)?;
-            fresh = next_fresh;
-            pending.push(index);
+            let exact = duty.unit_bounds(index)?;
+            let unit_bounds =
+                exact.unwrap_or(SourceUnitBoundsV2 { data_bytes: bounds.max_unit_bytes, body_bytes: bounds.max_unit_bytes });
+            if unit_bounds.body_bytes == 0
+                || unit_bounds.body_bytes > bounds.max_unit_bytes
+                || unit_bounds.data_bytes > unit_bounds.body_bytes
+            {
+                return Err(MinerErrorV2::Binding);
+            }
+            let old = self.prepared.get(&(request.kind, request.source, index));
+            if exact.is_some() && old.is_some_and(|bytes| *bytes != unit_bounds.data_bytes) {
+                return Err(MinerErrorV2::Binding);
+            }
+            quote.pending = quote.pending.checked_add(1).ok_or(MinerErrorV2::Budget)?;
+            if old.is_none() {
+                quote.fresh = quote.fresh.checked_add(1).ok_or(MinerErrorV2::Budget)?;
+                quote.fresh_data_bytes = quote.fresh_data_bytes.checked_add(unit_bounds.data_bytes).ok_or(MinerErrorV2::Budget)?;
+            }
+            quote.body_bytes = quote.body_bytes.checked_add(unit_bounds.body_bytes).ok_or(MinerErrorV2::Budget)?;
+            // Check each candidate allocation before growing the pending vector.
+            // Raw-data union and complete body bytes are separate budget axes.
+            self.preflight(&bounds, signed, quote)?;
+            pending.push((index, unit_bounds, exact.is_some()));
         }
         if pending.is_empty() {
+            self.revalidate_duty(duty, bounds)?;
             return Ok(PreparedDataV2 { request: *request, units: Vec::new() });
         }
-        let rounds = self.preflight(&bounds, signed, pending.len() as u64, fresh)?;
+        let rounds = self.preflight(&bounds, signed, quote)?;
         let mut response = Vec::new();
         // Count a round before I/O, including failure, so an unavailable source
         // does not create an unbounded retry loophole for a fresh range.
         self.meter.rounds = rounds;
         self.record(journal, None)?;
-        for index in pending {
+        for (index, unit_bounds, exact_data) in pending {
             let mut found = false;
             for provider in self.providers {
                 if self.meter.provider_reads >= self.limits.max_provider_reads {
@@ -387,11 +390,15 @@ impl<D: CanonicalDataDutyV2> MinerResponderV2<'_, D> {
                 self.record(journal, None)?;
                 let Ok(unit) = provider.unit(request.kind, request.source, index) else { continue };
                 // Reject oversized fields before any serialization/hash walk.
-                if !unit.bounded(bounds.max_unit_bytes) {
+                if !unit.bounded(unit_bounds.body_bytes) {
                     continue;
                 }
                 let (data_bytes, wire_bytes) = unit.sizes()?;
-                if wire_bytes > bounds.max_unit_bytes || !unit.authenticates(&self.result, request, index, bounds.source_units) {
+                if wire_bytes > unit_bounds.body_bytes
+                    || data_bytes > unit_bounds.data_bytes
+                    || (exact_data && data_bytes != unit_bounds.data_bytes)
+                    || !unit.authenticates(&self.result, request, index, bounds.source_units)
+                {
                     continue;
                 }
                 let key = (request.kind, request.source, index);
@@ -418,29 +425,35 @@ impl<D: CanonicalDataDutyV2> MinerResponderV2<'_, D> {
                 return Err(MinerErrorV2::Unavailable);
             }
         }
+        self.revalidate_duty(duty, bounds)?;
         Ok(PreparedDataV2 { request: *request, units: response })
     }
-    fn preflight(&self, bounds: &DutyBoundsV2, signed: AggregateBudget, pending: u64, fresh: u64) -> Result<u64, MinerErrorV2> {
-        let rounds = self.meter.rounds.checked_add(u64::from(fresh > 0)).ok_or(MinerErrorV2::Budget)?;
-        let unique_ceiling = fresh
-            .checked_mul(bounds.max_unit_bytes)
-            .and_then(|n| self.meter.unique_source_bytes.checked_add(n))
-            .ok_or(MinerErrorV2::Budget)?;
-        let wire_ceiling = pending
-            .checked_mul(bounds.max_unit_bytes)
-            .and_then(|n| self.meter.prepared_bytes.checked_add(n))
-            .ok_or(MinerErrorV2::Budget)?;
+    fn revalidate_duty(&self, duty: &D, admitted: DutyBoundsV2) -> Result<(), MinerErrorV2> {
+        let current = duty.authorize(&self.result)?;
+        // Only an advancing clock may differ. A changed reservation, geometry
+        // or service budget requires a newly resolved duty, never a peer update.
+        if current.now < admitted.now || (DutyBoundsV2 { now: admitted.now, ..current }) != admitted {
+            return Err(MinerErrorV2::Binding);
+        }
+        if current.now >= current.cutoff {
+            return Err(MinerErrorV2::Closed);
+        }
+        self.contract.validate(&self.result, current.now)?;
+        Ok(())
+    }
+    fn preflight(&self, bounds: &DutyBoundsV2, signed: AggregateBudget, quote: PreparationRangeUpperV2) -> Result<u64, MinerErrorV2> {
+        let rounds = self.meter.rounds.checked_add(u64::from(quote.fresh > 0)).ok_or(MinerErrorV2::Budget)?;
+        let unique_ceiling = self.meter.unique_source_bytes.checked_add(quote.fresh_data_bytes).ok_or(MinerErrorV2::Budget)?;
+        let wire_ceiling = self.meter.prepared_bytes.checked_add(quote.body_bytes).ok_or(MinerErrorV2::Budget)?;
         if rounds > bounds.budget.rounds.min(signed.rounds)
             || unique_ceiling > bounds.budget.unique_source_bytes.min(signed.unique_source_bytes)
             || wire_ceiling > bounds.budget.transmitted_bytes.min(signed.transmitted_bytes)
             || wire_ceiling > self.limits.max_prepared_bytes
-            || (self.prepared.len() as u64).checked_add(fresh).filter(|n| *n <= self.limits.max_tracked_units).is_none()
-            || pending
-                .checked_mul(bounds.max_unit_bytes)
-                .filter(|n| *n <= bounds.budget.retained_bytes.min(signed.retained_bytes))
-                .is_none()
+            || (self.prepared.len() as u64).checked_add(quote.fresh).filter(|n| *n <= self.limits.max_tracked_units).is_none()
+            || quote.body_bytes > bounds.budget.retained_bytes.min(signed.retained_bytes)
             || self.meter.provider_reads >= self.limits.max_provider_reads
-            || pending
+            || quote
+                .pending
                 .checked_mul(bounds.work_per_read)
                 .and_then(|n| self.meter.additional_work.checked_add(n))
                 .filter(|n| *n <= bounds.budget.additional_work.min(signed.additional_work))
@@ -457,6 +470,10 @@ impl<D: CanonicalDataDutyV2> MinerResponderV2<'_, D> {
 mod tests;
 
 #[cfg(test)]
+#[path = "positive_miner_v2_unit_bounds_tests.rs"]
+mod unit_bounds_tests;
+
+#[cfg(test)]
 #[path = "positive_miner_v2_adversarial_tests.rs"]
 mod adversarial_tests;
 #[path = "positive_miner_v2_recovery.rs"]
@@ -466,3 +483,13 @@ pub mod store;
 
 #[path = "positive_miner_v2_inference.rs"]
 pub mod inference;
+
+#[path = "positive_miner_v2_g14.rs"]
+pub mod g14;
+
+#[path = "positive_miner_v2_geometry.rs"]
+pub mod geometry;
+
+#[cfg(feature = "positive-miner-rocksdb")]
+#[path = "positive_miner_v2_rocksdb.rs"]
+pub mod rocksdb;

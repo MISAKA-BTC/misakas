@@ -4,9 +4,11 @@
 //!
 //! Integrity hashes identify local records only. A trusted external anchor is
 //! required on resume to detect replacement with an older complete journal.
-//! The native owner must save that anchor with its own case generation/branch.
+//! Anchors bind the signed case/scope permanently in a protected LOCAL store.
+//! Already spent I/O is not undone when native receipt/funding state reorgs.
 
 use super::*;
+use kaspa_consensus_core::palw_prompt_ids_v1::prompt_ids_tile_count_v1;
 use std::{
     fs::{File, OpenOptions},
     io::{Read, Seek, SeekFrom, Write},
@@ -253,6 +255,8 @@ impl PreparationJournalV2 for EphemeralPreparationJournalV2 {
 /// commits this anchor AFTER journal fsync and BEFORE the associated effect.
 /// All advances for the case must be made by its lease-holding journal writer;
 /// the protected owner must not concurrently advance/reassign this namespace.
+/// The lease must exclude a SECOND journal path for the same case as well:
+/// serialized/idempotent CAS alone permits two identical writers to repeat I/O.
 pub trait ProtectedAnchorStoreV2 {
     fn load(&self) -> Result<Option<JournalAnchorV2>, MinerErrorV2>;
     fn commit(&mut self, expected: Option<JournalAnchorV2>, next: JournalAnchorV2) -> Result<(), MinerErrorV2>;

@@ -7,6 +7,68 @@ use misaka_palw_positive_contract::{
 };
 use std::cell::Cell;
 
+struct MovingViewDuty {
+    inner: super::tests::Duty,
+    authorizations: Cell<u32>,
+    change: u8,
+}
+impl CanonicalDataDutyV2 for MovingViewDuty {
+    fn request(&self) -> &SourceRequest {
+        self.inner.request()
+    }
+    fn authorize(&self, result: &MinerResultCommit) -> Result<DutyBoundsV2, MinerErrorV2> {
+        let mut bounds = self.inner.authorize(result)?;
+        let calls = self.authorizations.get();
+        self.authorizations.set(calls + 1);
+        if calls > 0 {
+            match self.change {
+                0 => return Err(MinerErrorV2::Closed), // reorg invalidated the pinned view
+                1 => bounds.now = bounds.cutoff,       // exclusive deadline while reading
+                2 => bounds.budget.fee += 1,           // substituted reservation
+                3 => bounds.now = 0,                   // clock rollback
+                _ => unreachable!(),
+            }
+        }
+        Ok(bounds)
+    }
+    fn status(&self, index: u64) -> Result<MinerDataStatus, MinerErrorV2> {
+        self.inner.status(index)
+    }
+}
+
+#[test]
+fn changed_native_view_cannot_release_response_or_refund_local_read_cost() {
+    let f = super::tests::Fixture::new();
+    let providers: [&dyn StoredProviderV2; 1] = [&f.provider];
+    for change in 0..4 {
+        let duty = MovingViewDuty { inner: f.duty(), authorizations: Cell::new(0), change };
+        let mut responder = MinerResponderV2::<MovingViewDuty>::new(
+            &f.admission,
+            f.result.clone(),
+            f.contract,
+            1,
+            &f.key,
+            &f.signature,
+            &providers,
+            ProcessLimitsV2 {
+                max_units_per_request: 8,
+                max_tracked_units: 8,
+                max_provider_reads: 8,
+                max_status_checks: 8,
+                max_prepared_bytes: 1 << 20,
+            },
+        )
+        .unwrap();
+        assert!(responder.respond(&duty).is_err());
+        assert_eq!(duty.authorizations.get(), 2);
+        // Work happened before the view change was observed. No response is
+        // released, but those irreversible preparation costs stay charged.
+        assert_eq!(responder.meter().provider_reads, 1);
+        assert_eq!(responder.meter().unique_source_bytes, 16);
+        assert_eq!(responder.meter().rounds, 1);
+    }
+}
+
 fn digest(n: u8) -> Digest {
     Digest([n; 64])
 }
