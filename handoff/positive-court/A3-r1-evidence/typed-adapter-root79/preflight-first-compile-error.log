@@ -1,0 +1,26 @@
+   Compiling misaka-palw-tir-exec v1.1.0 (/Users/wata/.codex/worktrees/a3-panel-positive-court/MISAKA-testnet/misaka/palw/tir/exec)
+error[E0308]: arguments to this function are incorrect
+   --> misaka/palw/tir/exec/tests/positive_typed_adapter.rs:383:21
+    |
+383 |                     step_merkle_range_siblings_v1(&original.leaf_hashes, first, count).unwrap()
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^                        -----  ----- expected `usize`, found `u64`
+    |                                                                          |
+    |                                                                          expected `usize`, found `u64`
+    |
+note: function defined here
+   --> /Users/wata/.codex/worktrees/a3-panel-positive-court/MISAKA-testnet/consensus/core/src/palw_step_leg.rs:821:8
+    |
+821 | pub fn step_merkle_range_siblings_v1(
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: you can convert a `u64` to a `usize` and panic if the converted value doesn't fit
+    |
+383 |                     step_merkle_range_siblings_v1(&original.leaf_hashes, first.try_into().unwrap(), count).unwrap()
+    |                                                                               ++++++++++++++++++++
+help: you can convert a `u64` to a `usize` and panic if the converted value doesn't fit
+    |
+383 |                     step_merkle_range_siblings_v1(&original.leaf_hashes, first, count.try_into().unwrap()).unwrap()
+    |                                                                                      ++++++++++++++++++++
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `misaka-palw-tir-exec` (test "positive_typed_adapter") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
