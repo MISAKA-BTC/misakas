@@ -2484,7 +2484,30 @@ impl VirtualStateProcessor {
                     // Native integration tests exercise its synchronous entry with
                     // real validated inputs; ordinary production processing adds
                     // no unfunded decode/signature/graph work.
+                    let positive_point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+                        block: current,
+                        daa_score: header.daa_score,
+                        blue_score: header.blue_score,
+                        subsidy: self.coinbase_manager.calc_block_subsidy(header.daa_score),
+                    };
+                    if palw_state.is_some() && self.palw_lifecycle_kind_fences.positive_court_reserved_active_at_v2(pov_daa_score) {
+                        ctx.positive_accepting_point = Some(positive_point);
+                    }
                     self.calculate_utxo_state(&mut ctx, &selected_parent_utxo_view, &*bond_view, pov_daa_score);
+                    if let Some(fault) = ctx.positive_native_carriers.take_resource_fault() {
+                        return Err(fault.into());
+                    }
+                    // Retain actual UTXO provenance through the PALW phase. Its
+                    // native Court consumer is UNASSIGNED: no admission, lock,
+                    // row mutation or credit is created by this handoff.
+                    let _positive_native_phase_two = std::mem::take(&mut ctx.positive_native_carriers)
+                        .into_phase_two(&ctx.mergeset_acceptance_data, &ctx.accepted_tx_ids, positive_point, ctx.selected_parent())
+                        .map_err(|why| {
+                            kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
+                                "Positive carrier phase-two provenance",
+                                &format!("{why:?}"),
+                            )
+                        })?;
                     // ADR-0125: one line a chain block that merges the lane — what an operator (and the
                     // devnet drill) reads to see permits granted and the transactions they carried. The
                     // native (payment) transactions are counted apart from PALW carriers and the first

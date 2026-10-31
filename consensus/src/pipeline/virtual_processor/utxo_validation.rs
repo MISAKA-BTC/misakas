@@ -1,3 +1,6 @@
+#[path = "positive_native_context_v2.rs"]
+pub(super) mod positive_native_context_v2;
+
 use super::VirtualStateProcessor;
 use crate::{
     errors::{
@@ -97,6 +100,10 @@ pub(super) struct UtxoProcessingContext<'a> {
     pub multiset_hash: MuHash,
     pub mergeset_diff: UtxoDiff,
     pub accepted_tx_ids: Vec<TransactionId>,
+    /// Actual accepting block only, set by the owning chain walk. No virtual,
+    /// mempool or selected-parent snapshot may manufacture this provenance.
+    pub positive_accepting_point: Option<kaspa_consensus_core::palw_state_v2::PalwBlockContextV2>,
+    pub positive_native_carriers: positive_native_context_v2::PositiveCarrierCompanionsV2,
     pub mergeset_acceptance_data: Vec<MergesetBlockAcceptanceData>,
     pub mergeset_rewards: BlockHashMap<BlockRewardData>,
     pub pruning_sample_from_pov: Option<BlockHash>,
@@ -322,6 +329,8 @@ impl<'a> UtxoProcessingContext<'a> {
             ghostdag_data,
             multiset_hash: selected_parent_multiset_hash,
             mergeset_diff: UtxoDiff::default(),
+            positive_accepting_point: None,
+            positive_native_carriers: Default::default(),
             accepted_tx_ids: Vec::with_capacity(1), // We expect at least the selected parent coinbase tx
             mergeset_rewards: BlockHashMap::with_capacity(mergeset_size),
             mergeset_acceptance_data: Vec::with_capacity(mergeset_size),
@@ -806,7 +815,45 @@ impl VirtualStateProcessor {
             // applied after this merged block, so the filter borrowed above is not mutated while it is read.
             let escrow_fence_active = self.palw_tir_public_conviction_v1.is_some_and(|f| f.is_active(pov_daa_score));
             let mut new_provisional_escrows: Vec<TransactionOutpoint> = Vec::new();
-            for (validated_tx, _) in validated_transactions.iter() {
+            for (validated_tx, original_index) in validated_transactions.iter() {
+                // The Full-script seal is provenance only. Each borrow ends
+                // before the ordinary acceptance code mutates this prefix.
+                // Failed extra validation leaves the ordinary UTXO path intact.
+                if let Some(point) = ctx.positive_accepting_point
+                    && validated_tx.tx.subnetwork_id == SUBNETWORK_ID_PALW_LIFECYCLE
+                    && kaspa_consensus_core::palw_lifecycle_objects_v2::palw_positive_lifecycle_payload_v2(&validated_tx.tx.payload)
+                    && self.palw_lifecycle_kind_fences.positive_court_reserved_active_at_v2(point.daa_score)
+                {
+                    let prefix = positive_native_context_v2::NativePrefixStampV2 {
+                        accepting: point,
+                        selected_parent: ctx.selected_parent(),
+                        accepted_transactions: ctx.accepted_tx_ids.len() as u64,
+                        last_accepted_transaction: ctx.accepted_tx_ids.last().copied(),
+                    };
+                    let current = selected_parent_utxo_view.compose(&ctx.mergeset_diff);
+                    let locked = !ctx.palw_escrow_locks.is_empty();
+                    let filter = (bond_gate_view.is_some()
+                        || !ctx.palw_v2_locked_bonds.is_empty()
+                        || !ctx.palw_v2_bond_burns.is_empty()
+                        || locked)
+                        .then_some(BondSpendFilter {
+                            bond_view: bond_gate_view.as_ref(),
+                            daa_score: point.daa_score,
+                            palw_locked: &ctx.palw_v2_locked_bonds,
+                            palw_burns: &ctx.palw_v2_bond_burns,
+                            escrow: locked.then_some(&ctx.palw_escrow_locks),
+                        });
+                    ctx.positive_native_carriers.capture(
+                        self,
+                        &transactions_owner,
+                        *original_index,
+                        merged_block,
+                        prefix,
+                        validated_tx,
+                        &current,
+                        filter,
+                    );
+                }
                 // G14 r5: what a qualified escrow settlement destroys (its scheduled burns) — withheld from the collectible fee
                 // together with the bond burn, so RFC-0035 §7.1's one allocation of F holds (0 wherever no row exists).
                 let mut escrow_burned = 0u64;
