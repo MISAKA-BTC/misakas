@@ -1,7 +1,7 @@
 //! A2's process adapter for the A0 Positive Court contract. No native activation.
 //! Miner signs a result and reads stored G14 source units. No method executes a
 //! witness builder, reconstructs a trace, accepts a Panel ACK or grants credit.
-use std::{collections::BTreeMap, marker::PhantomData};
+use std::{collections::BTreeMap, marker::PhantomData, sync::Arc};
 
 use kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1;
 #[cfg(test)]
@@ -221,6 +221,9 @@ pub struct PreparationMeterV2 {
 /// A6 restores canonical receipt/fee history separately; native chain undo must
 /// never undo already spent local I/O. A fresh session is not recovery authority.
 pub struct MinerResponderV2<'p, D> {
+    // Local instance identity only. A journal must not merge equal checkpoints
+    // from separately constructed sessions, even while one case lease is held.
+    session: Arc<()>,
     result: MinerResultCommit,
     contract: MinerServiceContract,
     providers: &'p [&'p dyn StoredProviderV2],
@@ -255,6 +258,7 @@ impl<'p, D: CanonicalDataDutyV2> MinerResponderV2<'p, D> {
             return Err(MinerErrorV2::Budget);
         }
         Ok(Self {
+            session: Arc::new(()),
             result,
             contract,
             providers,

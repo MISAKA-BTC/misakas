@@ -1,0 +1,7 @@
+{
+  "path": "/Users/wata/.codex/worktrees/rfc14-g14-completion/MISAKA-testnet/target/release/build/librocksdb-sys-865d89ee7dbf2b2a/out/librocksdb.a",
+  "bytes": 23048496,
+  "sha256": "6eae541967b2cb5345ace55eadb34b2c490e91acfd8a4e2da5822a60f91af3a2",
+  "dependency": "librocksdb-sys 0.17.3+10.4.2; rocksdb 0.24.0",
+  "scope": "Read-only existing native library reused to avoid another C++ build; Rust adapters and real DB/process tests are compiled/executed from the candidate."
+}
