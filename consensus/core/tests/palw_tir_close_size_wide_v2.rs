@@ -20,6 +20,8 @@ use kaspa_consensus_core::{
     },
     palw_v2::{PALW_V2_MAX_NETWORK_ID_BYTES, PalwJobContextV2},
 };
+use kaspa_consensus_core::{palw_tir_close_range_v1 as range_v1, palw_tir_close_size_v1 as size_v1};
+use misaka_palw_tir::demand::DemandContext;
 use misaka_palw_tir::{DType, Ref, TensorType, TirProgramV1, builder::ProgramBuilder, program::LOGITS_I64_Q24_SCHEME_V2};
 
 type Sizer = fn(&PalwTirStepSpaceV2, &PalwJobContextV2, &PalwTirCloseSizingV2) -> Result<PalwTirCloseBoundsV2, String>;
@@ -505,6 +507,207 @@ fn wide_constant_lane_bound_keeps_eight_bytes_without_repricing_legacy_frames() 
         // disputed lanes grow from 16 to 32 B. No wide Court success asserted.
         for bound in bounds.bounds() {
             assert_eq!(bound.close_bytes, 1563 + 4 * 8);
+        }
+    }
+}
+
+fn assert_width_refusal<T>(result: Result<T, String>, expected: &str) {
+    let error = match result {
+        Ok(_) => panic!("a mutated wide program escaped a legacy sizing entrance"),
+        Err(error) => error,
+    };
+    assert!(error.contains(expected), "wrong refusal: {error}");
+    assert_ne!(error, PALW_TIR_CLOSE_SIZING_OVER_CAP_V1);
+}
+
+fn empty_gen_price() -> size_v1::PalwGenClosePricingV1 {
+    size_v1::PalwGenClosePricingV1 { stage_depths: vec![], image_tiles: vec![], name_extra: 0, frame: 0, root_frame: 0 }
+}
+
+// All requests deliberately have an impossible occurrence/target and no work
+// budget. The width guard must refuse before either can be interpreted. This
+// is an attack on public mutable V1 data, not a valid V1 model or native case.
+fn assert_all_legacy_entrances_refuse(
+    space: &PalwTirStepSpaceV1,
+    job: &PalwJobContextV2,
+    inventory: &PalwTirInventoryIndexV1,
+    expected: &str,
+) {
+    let limits = PalwTirCloseSizingV1 { form: PalwTirParamFormV1::Multiproof, court: true, cap: 0, stop_above: None };
+    let model = size_v1::PalwGenTwinStageV1::default();
+    let request = size_v1::PalwTirCloseRequestV1 {
+        ctx: DemandContext { pos: u32::MAX, occurrence: u16::MAX },
+        target: u16::MAX,
+        elements: &[usize::MAX],
+        supplied: &[],
+        range: None,
+        both: true,
+    };
+    let ranges = range_v1::PalwTirRangesV1::single(usize::MAX - 1, usize::MAX);
+    let range_request = range_v1::PalwTirCloseRangeRequestV1 {
+        ctx: request.ctx,
+        target: request.target,
+        ranges: &ranges,
+        supplied: &[],
+        range: None,
+        both: true,
+    };
+    let mut cache = range_v1::PalwTirRangeCacheV1::default();
+    let sentinel = vec![(7u8, 8u16, 9u64)];
+    let mut trace = sentinel.clone();
+    assert_width_refusal(size_v1::PalwTirClosePriceV1::new(space, inventory, job, limits.form), expected);
+    // No stage depth exists. A width refusal must still precede that error.
+    assert_width_refusal(size_v1::PalwTirClosePriceV1::generative(space, inventory, usize::MAX, 0, empty_gen_price()), expected);
+    assert_width_refusal(size_v1::palw_tir_close_reads_v1(space, job, inventory, &request, 0), expected);
+    assert_width_refusal(size_v1::palw_tir_close_reads_split_v1(space, job, inventory, &request, 0, true, true), expected);
+    assert_width_refusal(size_v1::palw_gen_close_reads_v1(space, job, inventory, &request, 0, &model), expected);
+    assert_width_refusal(range_v1::palw_tir_close_reads_range_v1(space, job, inventory, &range_request, 0), expected);
+    assert_width_refusal(
+        range_v1::palw_tir_close_reads_range_split_v1(space, job, inventory, &mut cache, &range_request, 0, true, true),
+        expected,
+    );
+    assert_width_refusal(
+        range_v1::palw_tir_close_reads_range_split_gen_v1(
+            space,
+            job,
+            inventory,
+            &mut cache,
+            &range_request,
+            0,
+            true,
+            true,
+            Some(&model),
+        ),
+        expected,
+    );
+    assert_width_refusal(size_v1::palw_tir_worst_closes_v1(space, inventory, job, &limits), expected);
+    assert_width_refusal(size_v1::palw_tir_worst_closes_work_v1(space, inventory, job, &limits), expected);
+    assert_width_refusal(size_v1::palw_tir_worst_closes_trace_v1(space, inventory, job, &limits, &mut trace), expected);
+    assert_width_refusal(range_v1::palw_tir_worst_closes_range_work_v1(space, inventory, job, &limits), expected);
+    assert_width_refusal(range_v1::palw_tir_worst_closes_range_trace_v1(space, inventory, job, &limits, &mut trace), expected);
+    assert_width_refusal(
+        size_v1::palw_gen_worst_closes_v1(space, inventory, job, &limits, usize::MAX, 0, &model, empty_gen_price()),
+        expected,
+    );
+    assert_width_refusal(
+        range_v1::palw_gen_worst_closes_range_v1(space, inventory, job, &limits, usize::MAX, 0, &model, empty_gen_price()),
+        expected,
+    );
+    assert_eq!(trace, sentinel, "a refused width must not append a partial sizing trace");
+}
+
+#[test]
+fn mutating_a_public_legacy_space_to_known_wide_cannot_reach_any_four_byte_sizer() {
+    let (class, job) = fixture(constant_program(false), 4);
+    let mut space = PalwTirStepSpaceV1::new(&class).unwrap();
+    let inventory = PalwTirInventoryIndexV1::new(&space.program).unwrap();
+    // Its private geometry and public validation metadata remain those of the
+    // genuine narrow space. The replaced program is independently valid wide.
+    space.program = mixed_program(false);
+    assert_all_legacy_entrances_refuse(&space, &job, &inventory, "wide Q24 requires explicit v2 close sizing");
+}
+
+#[test]
+fn raw_non_four_byte_commits_or_final_logits_are_not_relabelled_as_unknown_scheme_support() {
+    let (class, job) = fixture(constant_program(false), 4);
+    let original = PalwTirStepSpaceV1::new(&class).unwrap();
+    let inventory = PalwTirInventoryIndexV1::new(&original.program).unwrap();
+    for dtype in [DType::I64, DType::I128] {
+        for unknown_scheme in [false, true] {
+            for final_only in [false, true] {
+                let mut space = original.clone();
+                if unknown_scheme {
+                    space.program.logits_scheme_id = [0xa5; 64];
+                }
+                let (block, node) = if final_only {
+                    (space.program.schedule.post as usize, space.program.logits as usize)
+                } else {
+                    (space.program.schedule.pre as usize, 0)
+                };
+                space.program.blocks[block].nodes[node].out.dtype = dtype;
+                // Isolate the final-node branch from the committed-node branch.
+                if final_only {
+                    space.program.blocks[block].nodes[node].commit = false;
+                }
+                assert_all_legacy_entrances_refuse(
+                    &space,
+                    &job,
+                    &inventory,
+                    "non-four-byte committed or final lanes cannot use legacy close sizing",
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn a_narrow_unknown_scheme_does_not_silently_change_legacy_synthetic_geometry_or_prices() {
+    let (class, job) = fixture(constant_program(false), 4);
+    let original = PalwTirStepSpaceV1::new(&class).unwrap();
+    let inventory = PalwTirInventoryIndexV1::new(&original.program).unwrap();
+    let mut changed = original.clone();
+    changed.program.logits_scheme_id = [0xa5; 64];
+    // This is the already supported sizing-only synthetic input; no NF parse,
+    // scheme reassignment, constructor/admission or arithmetic success claimed.
+    let limits = PalwTirCloseSizingV1 { form: PalwTirParamFormV1::Multiproof, court: true, cap: 1 << 20, stop_above: None };
+    assert_eq!(
+        size_v1::palw_tir_worst_closes_work_v1(&changed, &inventory, &job, &limits).unwrap(),
+        size_v1::palw_tir_worst_closes_work_v1(&original, &inventory, &job, &limits).unwrap()
+    );
+    assert_eq!(
+        range_v1::palw_tir_worst_closes_range_work_v1(&changed, &inventory, &job, &limits).unwrap(),
+        range_v1::palw_tir_worst_closes_range_work_v1(&original, &inventory, &job, &limits).unwrap()
+    );
+    let price = PalwTirClosePriceV1::new(&changed, &inventory, &job, limits.form).unwrap();
+    assert_eq!(price.frame(4), 1579);
+    let request = size_v1::PalwTirCloseRequestV1 {
+        ctx: DemandContext { pos: 1, occurrence: 1 },
+        target: 0,
+        elements: &[0, 1, 2, 3],
+        supplied: &[],
+        range: None,
+        both: false,
+    };
+    assert_eq!(
+        size_v1::palw_tir_close_reads_v1(&changed, &job, &inventory, &request, 45).unwrap(),
+        size_v1::palw_tir_close_reads_v1(&original, &job, &inventory, &request, 45).unwrap()
+    );
+    let mut gen_price = empty_gen_price();
+    gen_price.stage_depths = vec![3];
+    gen_price.frame = 100;
+    let gen_price = PalwTirClosePriceV1::generative(&changed, &inventory, 0, 0, gen_price).unwrap();
+    assert_eq!(gen_price.frame(4), 116);
+}
+
+#[test]
+fn all_four_legacy_committable_dtypes_keep_four_byte_leaf_encoding_and_prices() {
+    for dtype in [DType::I8, DType::I16, DType::I32, DType::Idx] {
+        let mut p = ProgramBuilder::new(4, 1 << 18);
+        let values = p.konst(DType::I32, &[4], &[1, 2, 3, 4]);
+        let mut pre = p.block("pre", vec![]);
+        let value = pre.cast(values, dtype);
+        pre.commit(value);
+        let pre = pre.finish(&[]);
+        let mut post = p.block("post", vec![]);
+        let value = post.cast(values, dtype);
+        post.commit(value);
+        let Ref::Node(logits) = value else { unreachable!() };
+        let post = post.finish(&[]);
+        let mut program = p.finish(pre, vec![], post, logits);
+        program.logits_scheme_id = tiled_logits_scheme_id_v1().as_bytes();
+        misaka_palw_tir::validate::validate(&program).unwrap();
+        let (class, job) = fixture(program, 4);
+        let space = PalwTirStepSpaceV1::new(&class).unwrap();
+        let inventory = PalwTirInventoryIndexV1::new(&space.program).unwrap();
+        let price = PalwTirClosePriceV1::new(&space, &inventory, &job, PalwTirParamFormV1::Multiproof).unwrap();
+        assert_eq!(price.frame(4), 1579);
+        for index in 0..5 {
+            let leaf = space.leaf_at(&job, index).unwrap();
+            assert_eq!(leaf.dtype, dtype);
+            let encoded = palw_tir_leaf_preimage_v1(&leaf, &[1, 2, 3, 4]).unwrap();
+            assert_eq!(encoded.version, 1);
+            assert_eq!(encoded.values_le, [1i32, 2, 3, 4].into_iter().flat_map(i32::to_le_bytes).collect::<Vec<_>>());
+            assert_eq!(borsh::to_vec(&encoded).unwrap().len(), 42);
         }
     }
 }

@@ -1164,6 +1164,7 @@ impl<'a> PalwTirClosePriceV1<'a> {
         class_inventory_leaves: u32,
         pricing: PalwGenClosePricingV1,
     ) -> Result<Self, String> {
+        CloseGeometry::from_v1(space).require_legacy_width()?;
         let depth = *pricing.stage_depths.get(stage).ok_or("a stage with no step tree depth")?;
         Ok(Self {
             space: CloseGeometry::from_v1(space),
