@@ -40,10 +40,19 @@ source read API`49c86968c`は[core library typecheck](../../../evidence/positive
 
 ## pure core移植・Court・構造restoreの選択統合
 
-A6の割当前scanner試験追加・逐次hash変更後、共通契約は**44件PASS**、Clippy `-D warnings`成功。対象sourceは実行中不変。[commands/env/source/result](../../../evidence/positive-court-a0-2026-10-31/integration/post-restore-common-20261031.json)、[test log](../../../evidence/positive-court-a0-2026-10-31/integration/post-restore-common-20261031-0.log)、[Clippy log](../../../evidence/positive-court-a0-2026-10-31/integration/post-restore-common-20261031-1.log)。codec・identity・固定rowの試験であり、native履歴認証や実資金lockの成功ではない。
+A6の割当前scanner試験追加・逐次hash変更後、共通契約は**42件PASS**、Clippy `-D warnings`成功。対象sourceは実行中不変。[commands/env/source/result](../../../evidence/positive-court-a0-2026-10-31/integration/post-restore-common-20261031.json)、[test log](../../../evidence/positive-court-a0-2026-10-31/integration/post-restore-common-20261031-0.log)、[Clippy log](../../../evidence/positive-court-a0-2026-10-31/integration/post-restore-common-20261031-1.log)。codec・identity・固定rowの試験であり、native履歴認証や実資金lockの成功ではない。
 
 A1 pure checkerのcore移植とA4 owned Court追加直後の[core型検査](../../../evidence/positive-court-a0-2026-10-31/integration/core-court-restore-typecheck-20261031.json)は**exit101**。opaque identity比較の欠落1件、旧private prototypeの未統合wide API参照3件を検出した。`96a6826e4`で比較を追加し、`d028330f8`でprototypeの対応範囲をi32へ明示限定した。採択済みwide設計を撤回した変更ではなく、未統合実装への暗黙依存を除く選択統合の修正である。修正後の[core library型検査](../../../evidence/positive-court-a0-2026-10-31/integration/core-court-restore-typecheck-r2-20261031.json)は**exit0**、全core/shared対象source不変。[失敗原log](../../../evidence/positive-court-a0-2026-10-31/integration/core-court-restore-typecheck-20261031.log)と[再検査log](../../../evidence/positive-court-a0-2026-10-31/integration/core-court-restore-typecheck-r2-20261031.log)を別々に保持する。これは後続のdirect decoder変更や実テスト実行を含まない。
 
 A4の271件、A6の30件、A3の148件、A7の243件は、それぞれownerの固定候補・条件に対する履歴であり、このA0候補の合計件数ではない。A7の独立追跡で、未受付future frameの正規署名コピーがCase wireを反復消費する残件を確認した。[静的反例と範囲](../../../../handoff/positive-court/A7-A4-fix-review-815b7ca1c.md)を参照。A4修正488の必要2ファイルを`17990b173`へ統合し、順序/現在relation受付をCase課金前へ移した。反復futureコピー無課金と後続正順受理の反例テストも追加したが、この記録時点では新runtime結果は未確認。無認証/将来位置の搬送拒否と、現在relationのauthored算術失敗に対する費用保持を区別する。
 
 A5 readonly private receipt復旧`c8d7238dd`を加えたleaf会計は**44件PASS**、Clippy成功、対象source不変。[commands/source/result](../../../evidence/positive-court-a0-2026-10-31/integration/private-recovery-accounting-20261031.json)、[test log](../../../evidence/positive-court-a0-2026-10-31/integration/private-recovery-accounting-20261031-0.log)、[Clippy log](../../../evidence/positive-court-a0-2026-10-31/integration/private-recovery-accounting-20261031-1.log)。期限後の既存receipt読取、全intent照合、foreign store拒否、undo権限を増やさないこと等を含む。private bookの成功をnative再起動や実資金復旧の成功にしない。
+
+
+## 2026-11-01 件数訂正と共有journal・用途別会計
+
+以前の共通契約44件という報告は、1つの割当検査内の複数probeを独立テストとして数えた集計誤りだった。原ログのCargo summaryは42件であり、この文書の説明を訂正した。private会計の当時44件は正しい。[監査記録](../../../evidence/positive-court-a0-2026-10-31/integration/test-count-audit-20261101.json)を追加し、過去の原ログ・snapshot・digestは変更していない。
+
+`0d678c8be` の同一sourceに対し共通契約**51件PASS**、private会計**53件PASS**、両crateのClippy `-D warnings`成功。[commands/source/result](../../../evidence/positive-court-a0-2026-10-31/integration/journal-and-eight-purpose-leaf-20261101.json)、[共通契約log](../../../evidence/positive-court-a0-2026-10-31/integration/journal-and-eight-purpose-leaf-20261101-0.log)、[会計log](../../../evidence/positive-court-a0-2026-10-31/integration/journal-and-eight-purpose-leaf-20261101-1.log)、[Clippy log](../../../evidence/positive-court-a0-2026-10-31/integration/journal-and-eight-purpose-leaf-20261101-2.log)。borrowed journal codec/連鎖の固定形式と、既存7用途を維持して末尾に追加したWorkerPaymentの独立entitlementを含む。sourceは前後不変。native再生・実資金・P抽選・公開有効化の合格件数として合算しない。
+
+先行`5871a5b86`時点のconsensus全test source型検査も成功した。[source/result](../../../evidence/positive-court-a0-2026-10-31/integration/native-provenance-typecheck-20261031.json)、[原log](../../../evidence/positive-court-a0-2026-10-31/integration/native-provenance-typecheck-20261031.log)。Full carrier provenance・raw decode前の上限検査・readonly metadataを含むが、後続のRAM lease強制・source復旧・journal候補の型検査やnative実行成功を代替しない。

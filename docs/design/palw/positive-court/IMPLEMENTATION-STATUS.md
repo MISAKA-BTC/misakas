@@ -19,4 +19,6 @@
 
 ## 検証記録
 
-初期A0契約13テストの記録を保持し、row追加後29件、P所見後35件、primitive record後41件、A6の割当前検査追加後44件の共通契約成功を別snapshotで保存した。Clippy、typed fence専用8件、当時のcore/test source・consensus libraryの型検査も成功。A4追加直後のcore型検査失敗は未統合wide参照とopaque identity比較の欠落によるもので、修正と原ログを区別して保存する。[検証記録](VALIDATION-A0.md)を参照。ZIP記載の42 Python参照テストは入力資料の検証であり、このRust contractやnative runtimeの完成を保証しない。実LLM性能の測定値はまだない。公開網有効化も行っていない。
+初期A0契約13テストの記録を保持し、row追加後29件、P所見後35件、primitive record後41件、A6の割当前検査追加後42件（旧報告44件を原ログから訂正）の共通契約成功を別snapshotで保存した。Clippy、typed fence専用8件、当時のcore/test source・consensus libraryの型検査も成功。A4追加直後のcore型検査失敗は未統合wide参照とopaque identity比較の欠落によるもので、修正と原ログを区別して保存する。[検証記録](VALIDATION-A0.md)を参照。ZIP記載の42 Python参照テストは入力資料の検証であり、このRust contractやnative runtimeの完成を保証しない。実LLM性能の測定値はまだない。公開網有効化も行っていない。
+
+2026-11-01追記: `0d678c8be` の共有journal codec追加後は共通契約51件、用途別entitlementとWorkerPaymentを分離したprivate会計53件、および両crateのClippyが成功した。旧共通件数の訂正根拠と今回の原ログは [検証記録](VALIDATION-A0.md) に保存した。Full carrier保持・RAM lease必須化・sourceのlogical NoOpとraw journal reopen meter復元・readonly Court復旧receiptを選択統合したが、actual native writer・資金lock・P抽選・全consumer・IBDは未完成である。最初のnative assignment経路は [RFC案](../integration/positive-native-assignment-rfc-draft-2026-10-31.md) / [ADR案](../integration/positive-native-assignment-adr-draft-2026-10-31.md) のレビュー済み段階で、明示採択待ち。

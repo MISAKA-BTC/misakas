@@ -19,9 +19,12 @@
 | `native-source-read-port-typecheck-20261031` | source read API core typecheck成功、source同一。production native duty成功ではない |
 | `a2-protected-tail-readonly-review` | 修正fd9の独立コード/証拠hash照合。再buildではない |
 | `receipt-semantics-common` | fa1のreceipt byte/work範囲後41 PASS・Clippy成功。後続patchとは別 |
-| `post-restore-common-20261031` | A6 preflight追加後44 PASS・Clippy成功、対象source不変 |
+| `post-restore-common-20261031` | A6 preflight追加後42 PASS（旧説明44を訂正）・Clippy成功、対象source不変 |
 | `core-court-restore-typecheck-20261031` | A4選択統合直後、opaque identity不足と未統合wide参照4件でexit101。原log保持 |
 | `core-court-restore-typecheck-r2-20261031` | 上記修正後のcore --lib型検査exit0、対象source不変。後続patchやruntime成功を含まない |
 | `private-recovery-accounting-20261031` | private readonly復旧receipt追加後のleaf会計44 PASS・Clippy成功、source不変。native復旧権限ではない |
 
 公開有効化、実UTXO lock、Pの実抽選、全consumer、native restart/reorg/IBD、実LLM資格は未確認。fixtureのlocal duty/storeや署名DTOをnative権限へ変換しない。debug/stack等の実行条件も各JSONを参照し、本番性能・stack/RSS保証に使わない。
+
+
+2026-11-01: [test-count-audit-20261101.json](test-count-audit-20261101.json)に原ログからの件数訂正を保存。旧raw/snapshotは変更していない。`journal-and-eight-purpose-leaf-20261101.json`は`0d678c8be`の共通51件・private会計53件とClippy成功を記録する。`native-provenance-typecheck-20261031.json`は先行`5871a5b86`のみの型検査。各候補の範囲をnative完成や総合件数へ合算しない。
