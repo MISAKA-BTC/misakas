@@ -1,6 +1,6 @@
 # A6 — Positive Court の保存・復旧
 
-2026-10-31。branch `codex/rfc42-a6-recovery`。共通の基準は既存試作を固定した `c4749c861072bd118a1238276a2ab17e383dd2e1`。その前のbaseは `a5800d2dd5d334e89f7a1ddb6e956aedcbf4adf5`。
+2026-10-31。branch `codex/rfc42-a6-recovery`。共通の基準は既存試作を固定した `c4749c861072bd118a1238276a2ab17e383dd2e1`。A0共通契約 `a85152edc`（v2/r1）をmergeした。その前のbaseは `a5800d2dd5d334e89f7a1ddb6e956aedcbf4adf5`。
 
 ## 実装範囲
 
@@ -31,7 +31,7 @@ reorg時は選択されたprefixのarchiveとheadを使いfresh admissionへ再�
 
 ## A0・A4・A5 への接続
 
-- A0の `misaka-palw-positive-contract::ports::Recovery` は調査した。新contractのresult/witness/domainと既存private試作の型をaliasしない。本commitは旧private coordinatorに対する復旧実装。新contractを使うnative adapterは未接続。
+- A0の `misaka-palw-positive-contract::ports::Recovery` を `RecoveryAdapterV2<C>` で実装した。`RecoveryContextV2` がtrusted anchorからfresh admission/headを解決し、全eventのoriginを認証する。実際に共通port経由でreplayする試験を追加した。新contractのresult/witness/domainと既存private試作の型をaliasしない。このadapterの復元先はprivate coordinatorであり、新contractを使うnative ingress/DB adapterは未接続。
 - A4所有の `coordinator.rs` への差分は専用recovery moduleの宣言3行だけ。統合時にA0/A4のmodule登録と合わせる。
 - native `AtomicCourtStore` の一つのDB transactionがcase・資源予約・funding/obligation・journal headを選択する必要がある。生成ファイルは事前prepareできるが、headの選択だけ別取引にしない。旧headのまま孤立したgenerationは信用を持たない。
 - A5のnative料金・返金・credit利用には既存engineの一回限り精算とundoを接続する。ここで再計算した私設meterをnative入金と解釈しない。
@@ -40,6 +40,6 @@ reorg時は選択されたprefixのarchiveとheadを使いfresh admissionへ再�
 
 ## 検証
 
-実行結果は同じディレクトリのA6 validation記録へ保存する。復旧試験では実際のML-DSA署名、Merkle opening、既存TIR courtを使う。模擬の永続化失敗はcommit acknowledgement喪失のfail-closed動作を確認するためであり、実native資金取引の障害試験ではない。
+実行結果は同じディレクトリの [VALIDATION-A6.md](VALIDATION-A6.md)へ保存する。復旧試験では実際のML-DSA署名、Merkle opening、既存TIR courtを使う。模擬の永続化失敗はcommit acknowledgement喪失のfail-closed動作を確認するためであり、実native資金取引の障害試験ではない。
 
 有効化設定は変更なし。新native wire、public preset、Gate Cの許可経路は追加していない。
