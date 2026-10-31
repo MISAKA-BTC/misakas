@@ -893,6 +893,7 @@
 - [evidence/palw/measurements/palw-shard-plan-2026-09-10.md](../evidence/palw/measurements/palw-shard-plan-2026-09-10.md)
 - [evidence/palw/measurements/palw-stage0-fleet-replay-bench-2026-08-16.md](../evidence/palw/measurements/palw-stage0-fleet-replay-bench-2026-08-16.md)
 - [evidence/palw/measurements/pesg-d-conviction-probability.md](../evidence/palw/measurements/pesg-d-conviction-probability.md)
+- [evidence/palw/model-panel-one-2026-10-31/README.md](../evidence/palw/model-panel-one-2026-10-31/README.md)
 - [evidence/palw/refactor-2026-10-21/worker-projection/README.md](../evidence/palw/refactor-2026-10-21/worker-projection/README.md)
 - [evidence/palw/rfc-gaps-2026-10-22/a.md](../evidence/palw/rfc-gaps-2026-10-22/a.md)
 - [evidence/palw/rfc-gaps-2026-10-22/b.md](../evidence/palw/rfc-gaps-2026-10-22/b.md)

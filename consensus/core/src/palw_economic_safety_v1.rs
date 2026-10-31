@@ -466,6 +466,7 @@ mod tests {
         assert_eq!(tag(PalwLicenceDoorTagV1::Optimistic), vec![2]);
         assert_eq!(tag(PalwLicenceDoorTagV1::ShardPart { quorum_per_shard: 0x0302 }), vec![3, 0x02, 0x03]);
         for (door, stored) in [
+            (PalwLicenceDoorV1::G14PanelOne, PalwLicenceDoorTagV1::G14PanelOne),
             (PalwLicenceDoorV1::Quorum, PalwLicenceDoorTagV1::Quorum),
             (PalwLicenceDoorV1::Coverage, PalwLicenceDoorTagV1::Coverage),
             (PalwLicenceDoorV1::Optimistic, PalwLicenceDoorTagV1::Optimistic),
@@ -475,6 +476,6 @@ mod tests {
             let bytes = tag(stored);
             assert_eq!(borsh::from_slice::<PalwLicenceDoorTagV1>(&bytes).unwrap(), stored);
         }
-        assert!(borsh::from_slice::<PalwLicenceDoorTagV1>(&[4]).is_err(), "no fifth door");
+        assert!(borsh::from_slice::<PalwLicenceDoorTagV1>(&[5]).is_err(), "no sixth door");
     }
 }

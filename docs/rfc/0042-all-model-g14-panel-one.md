@@ -59,3 +59,7 @@ claim ごとの Gate C の抽選・承認条件、公開訴追期間、court、D
 - 同じ候補の binary / params identity を fleet で確認して段階配備し、同期と新経路の実処理を確認する。
 
 この文書の追加や局所テストだけでは、上記の検証・稼働完了を意味しない。
+
+## 実装検証の記録
+
+[2026-10-31 の検証記録](../evidence/palw/model-panel-one-2026-10-31/README.md): 関連回帰 123 件と EVM を含む全 target の型検査に成功。配備・有効化は未実施。

@@ -215,6 +215,17 @@ mod tests {
     }
 
     #[test]
+    fn a_future_migration_keeps_the_live_handshake_and_kernel_policy_identity() {
+        let old = crate::config::params::palw_t12_shipped_params();
+        let mut scheduled = old.clone();
+        scheduled.palw_model_panel_one_v1 = Some(ForkActivation::new(20_000));
+        scheduled.sync_palw_g14_gates_v1();
+        assert_eq!(old.consensus_identity_id(), scheduled.consensus_identity_id());
+        assert_ne!(old.consensus_params_id(), scheduled.consensus_params_id());
+        assert_ne!(old.consensus_schedule_id(), scheduled.consensus_schedule_id());
+    }
+
+    #[test]
     fn one_signer_carries_the_whole_lock_and_duplicate_basis_cannot_reduce_it() {
         let old = model_claim_seat_lock_v1(Some(100), 99, 10_000, 1_000, 50, 2);
         let one = model_claim_seat_lock_v1(Some(100), 100, 10_000, 1_000, 50, 1);

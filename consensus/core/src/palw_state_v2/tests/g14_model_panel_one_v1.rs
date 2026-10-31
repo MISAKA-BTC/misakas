@@ -302,3 +302,38 @@ fn the_single_scope_approval_authenticates_the_real_seat_signature_and_context()
             .to_vec();
     assert!(matches!(check(&receipt), Err(PalwPanelV2Error::ReceiptSignatureInvalid)));
 }
+
+#[test]
+fn historical_and_migrated_claims_keep_their_own_geometry_in_the_same_fold() {
+    let p = policy();
+    let mut objects = register_class_and_bond();
+    if let PalwConsensusObjectV2::BondRegistered { collateral, .. } = &mut objects[1] {
+        *collateral = 10_000;
+    }
+    objects.extend((2..=6).map(|n| seat_bond_reg(n, 10_000)));
+    let s = apply_round(&PalwChainStateV2::genesis(), &p, &ctx(1, 98, 1), &objects, &lane()).unwrap();
+    let old = attempt(40, 1);
+    let old_id = attempt_id_v2(&old.attempt);
+    let (s, _) = fold_round(&s, &p, &ctx(2, 100, 2), &[], Some((&old, h64(0x100))), &lane()).unwrap();
+    let new = attempt(40, 2);
+    let new_id = attempt_id_v2(&new.attempt);
+    let (s, _) = fold_round(&s, &p, &ctx(3, 101, 3), &[], Some((&new, h64(0x101))), &lane()).unwrap();
+    let old_bind = PalwConsensusObjectV2::PanelBound { claim: old_id, anchor: h64(77), seats: (2..=6).map(seat_n).collect() };
+    let next = attempt(1, 3);
+    let (s, _) = fold_round(&s, &p, &ctx(4, 102, 4), &[old_bind], Some((&next, h64(0x102))), &lane()).unwrap();
+    assert_eq!(s.panel(&old_id).unwrap().seats.len(), 5);
+    assert_eq!(s.panel(&new_id).unwrap().seats.len(), 1);
+    let new_seat = s.panel(&new_id).unwrap().seats[0].bond;
+    let objects = [
+        PalwConsensusObjectV2::ReceiptLicensed {
+            claim: old_id,
+            receipts: (2..=4).map(|n| receipt_at(old_id, bond_key(n), true, 103)).collect(),
+        },
+        PalwConsensusObjectV2::ReceiptLicensed { claim: new_id, receipts: vec![receipt_at(new_id, new_seat, true, 103)] },
+    ];
+    let s = apply_round(&s, &p, &ctx(5, 103, 5), &objects, &lane()).unwrap();
+    assert_eq!(s.claim(&old_id).unwrap().rcore.licence_door, Some(PalwLicenceDoorTagV1::Quorum));
+    assert_eq!(s.claim(&old_id).unwrap().rcore.basis_k, 3);
+    assert_eq!(s.claim(&new_id).unwrap().rcore.licence_door, Some(PalwLicenceDoorTagV1::G14PanelOne));
+    assert_eq!(s.claim(&new_id).unwrap().rcore.basis_k, 1);
+}
