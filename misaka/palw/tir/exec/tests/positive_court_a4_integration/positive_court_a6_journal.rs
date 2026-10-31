@@ -80,9 +80,21 @@ struct Scenario {
 }
 impl Scenario {
     fn new(mismatch: bool) -> Self {
+        Self::with_source_policy(mismatch, false)
+    }
+    fn with_source_policy(mismatch: bool, source_policy: bool) -> Self {
         let f = fixture();
         let mut result = if mismatch { f.result(d(99)) } else { f.correct_result() };
         let mut service = service(&result);
+        if source_policy {
+            // LOCAL fixture policy only, no newly allocated protocol catalog
+            // codec/domain. Pin existing roots and independently counted units
+            // before the real payer/Result signatures are constructed below.
+            let program = f.binding.class.decode_program().unwrap();
+            let units = kaspa_consensus_core::palw_tir_court_v1::PalwTirInventoryIndexV1::new(&program).unwrap().leaf_count();
+            let catalog = borsh::to_vec(&(f.binding.artifact_root, f.binding.job_context.prompt_token_ids_hash, units, 1u32)).unwrap();
+            service.source_catalog = Digest(blake2b_simd::Params::new().hash_length(64).hash(&catalog).as_bytes().try_into().unwrap());
+        }
         let basis = FundingPlanBasis {
             profile: CheckProfile::ExactStreamV1,
             derivation: d(61),
@@ -168,6 +180,9 @@ impl Scenario {
         Journal::new(self, bodies.iter().map(|b| (CaseJournalEventKind::NativeBody, b.clone())).collect(), true)
     }
 }
+
+#[path = "positive_court_a6_source.rs"]
+mod real_source_replay;
 
 struct Journal {
     pin: CaseJournalPinV2,
