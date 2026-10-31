@@ -6,6 +6,8 @@ pub mod identity;
 pub mod messages;
 pub mod native;
 pub mod ports;
+pub mod rows;
+pub mod tir;
 pub mod wire;
 
 pub const CONTRACT_VERSION: u16 = 2;
