@@ -842,7 +842,7 @@ mod judge_cache_key_tests {
         let tag = ruleset_tag(&Some("testnet-12".to_string()));
         let net = chain::PreflightNetwork::parse("testnet-12").expect("testnet-12");
         assert_eq!(tag, format!("{}|{}", net.params.consensus_params_id(), net.params.consensus_schedule_id()));
-        assert!(tag.starts_with("3d33cad25caeada1"), "{tag}");
+        assert!(tag.starts_with("edf472294c89dab0"), "{tag}");
         assert_eq!(ruleset_tag(&None), "no-network");
         assert_eq!(ruleset_tag(&Some("testnet-12".to_string())), tag, "memoised");
     }

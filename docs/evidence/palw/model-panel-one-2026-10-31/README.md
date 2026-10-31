@@ -102,3 +102,26 @@ node producerの追加点検で、authoritative producer factsとは別の`regis
 [18,640 node型検査](18640-node-check.log): `kaspad --features evm --all-targets`成功。
 [registry RPC回帰](registry-rpc-tests.log): 8 passed。
 Linux build対象sourceは`8cac52ec4ed15fb4ea982d46235a5c3b5f78e4cc`で固定し、build中にsourceを変更しない。
+
+## Remote main integration and Linux artifact (2026-10-31)
+
+The remote main at `5ba94e47e` is merged without rewriting history. Its test-only
+TIR material-supplier fixes (`da97d6a4a`, `d5fbc11f0`) are retained. The unfenced
+operational collateral-release change in `6e31509bb` is deliberately deferred:
+it changes historical fold/reconstruction semantics and was never deployed to
+the public `2ca68baee` fleet. Its associated new semantic test is deferred with
+that change. This merge retains the already-tested G14 source behavior instead;
+a future collateral-release fix requires its own activation and historical-state
+compatibility verification. This is an explicit integration decision, not a
+claim that the underlying collateral-release issue is resolved.
+
+The production Linux x86_64 artifact was built from immutable source
+`8cac52ec4ed15fb4ea982d46235a5c3b5f78e4cc`, with the standard release profile
+and `pq-only,evm` features. It is 155,485,528 bytes; SHA-256:
+`e6d638a4f2a9fa32b6072c32ad5ce929f015efa189b721ceee2be5a9aa52e83e`.
+The 18,640 fence, `edf47229…` params and `4024a6e7…` schedule are the current
+release identities. Earlier 18,560/18,600 candidate metadata above is historical.
+The release manifest and SDK cache-key assertion are corrected to the 18,640
+identities. Test and release-metadata integration changes do not constitute a
+rebuild of that immutable binary. Fleet installation and actual model-claim Final
+must be recorded separately after observation.
