@@ -291,3 +291,55 @@ SHA-256 values for the production files inspected in this addendum:
 c5599378993fc1824cd4b72bfac984b0b20bc5adb3d600ea10f2d3ee453de0ea  consensus/core/src/palw_positive_source_v2_history.rs
 053c48438c917014c7c7af6865aa63cb64696bf6ddbee90d6df7f42a0e0b4811  consensus/core/src/palw_positive_source_apply_v2.rs
 ```
+
+## A6 source-journal helper static addendum — 2026-11-01
+
+The source implementation agent reviewed the working-tree helper
+`consensus/core/src/palw_positive_source_v2_journal.rs` after its allocation
+correction. HEAD was `6817f430788cb08220489cb722854e1b4d1a2df9`, which imports
+the A6 shared journal codec from stable A6 commit `5c30f499c`. The helper and its
+parent-module changes were not committed at this inspection; the SHA-256
+values below identify the actual source snapshot. This addendum is static
+inspection only. No Cargo command or runtime test was executed by this agent,
+and no source or test file was changed during this follow-up. Root owns the
+same-candidate compilation and execution evidence.
+
+The inspected helper binds an existing source event to a borrowed shared
+case-journal record. It requires an already bound Case, rejects sequence 1,
+and compares scope, Case/Result identities, NativeBody kind, exact op3/op4
+prefix, full literal body and complete accepted origin. Source material must
+retain event ordinal zero and the actual carrier TxId identity. The shared
+full-record journal history digest cannot replace that source material.
+Preparation then runs the existing request signature or concrete G14
+authentication, geometry, context, schedule and budget checks. A proposal with
+`changes_case() == false` is refused as a new journal event, after those
+checks; it does not replace the first receipt or create another fee due.
+
+The initial framing check recomputed `MinerResultCommit::case_id()` and
+`id()`. The shared identity helper serializes into a temporary Vec, contrary
+to the framing method's allocation-free description. The inspected correction
+obtains the mandatory `case_basis` and compares its already validated
+`case`/`result` fields instead. The framing check now uses borrowed data and a
+fixed five-byte prefix without those hash/Vec regenerations. Existing source
+preparation still performs its own bounded allocations and hashing; this fix
+does not make the complete preparation path allocation-free.
+
+No additional concrete blocking issue was found in this helper's data-only
+scope. It returns a pure prepared cache update; it does not authenticate a
+native historical guard, publish a source duty, append the complete case
+journal, install native rows, move funds or grant credit. The A6/native parent
+must precharge all source/private-heap, geometry and resolver work before
+calling it, authenticate the complete canonical prefix and material preimages,
+merge interleaved global Case usage, and perform final current-view/row CAS
+inside the combined native transaction. Those responsibilities remain outside
+this helper and were not validated by this inspection.
+
+SHA-256 values for the inspected helper and supporting source snapshot:
+
+```text
+a56f922f0cd6f3b8e7e9ce072b8f19ddcdec31cd79f66706f287ed0e36d77fa2  consensus/core/src/palw_positive_source_v2_journal.rs
+20bfda01abf453b1991af04b843a6c0a5c72a953d83e3fe7c4a7e8f77e0661f0  consensus/core/src/palw_positive_source_v2.rs
+c5599378993fc1824cd4b72bfac984b0b20bc5adb3d600ea10f2d3ee453de0ea  consensus/core/src/palw_positive_source_v2_history.rs
+```
+
+Root validation note, 2026-11-01: the source-journal helper reviewed above was committed byte-identically in `b4499397f`. The subsequent fixed-source runner reports record remote library 251 passed/one existing ignored, focused source/geometry 37 passed, shared case-journal 9 passed, default-off library 176 passed/one existing ignored and client metadata exit zero (seven dead-code warnings for the unconnected private callsite). These are parent-run command results, not agent-executed tests or actual native authority. Source/log digests were rechecked against the current files before this note.
