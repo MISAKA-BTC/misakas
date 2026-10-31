@@ -790,6 +790,8 @@ pub mod palw_tir_class_v1;
 pub mod palw_tir_close_range_v1;
 /// RFC-0002 Phase F step F7 (PALW-TIR-38): the carried size of every terminal close of an IR class — the court's own read set, priced as carried.
 pub mod palw_tir_close_size_v1;
+/// Explicit local eight-byte upper bounds for wide-Q24 TIR closes; no native activation.
+pub mod palw_tir_close_size_v2;
 /// RFC-0002 Phase F step F5: the IR court — one committed leaf adjudicated by demand evaluation of its cone, PALW-TIR-33, logits consistency and the decode-token door.
 pub mod palw_tir_court_v1;
 /// RFC-0002 Phase F step F7: the generic history dissection of an IR class — every reduction over H of the disputed cone, folded exactly.

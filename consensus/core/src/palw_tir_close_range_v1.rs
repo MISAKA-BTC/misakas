@@ -46,12 +46,13 @@ use std::rc::Rc;
 use crate::palw_step::PalwStepCoordinateV1;
 use crate::palw_tir_artifact_v1::PALW_TIR_ROW_PIECE_BYTES_V1;
 use crate::palw_tir_close_size_v1::{
-    HistPattern, PALW_TIR_CLOSE_SIZING_OVER_CAP_V1, PalwGenClosePricingV1, PalwGenTwinInputV1, PalwGenTwinStageV1,
-    PalwTirCloseBoundV1, PalwTirClosePriceV1, PalwTirCloseReadsV1, PalwTirCloseSizingV1, element_count, leaf_cost_of, reaches_hist,
-    size_of_reads, step_preimage_bytes, step_runs, strides,
+    ClosePriceDriver, HistPattern, LegacyClosePriceDriver, PALW_TIR_CLOSE_SIZING_OVER_CAP_V1, PalwGenClosePricingV1,
+    PalwGenTwinInputV1, PalwGenTwinStageV1, PalwTirCloseBoundV1, PalwTirClosePriceV1, PalwTirCloseReadsV1, PalwTirCloseSizingV1,
+    WideClosePriceDriver, element_count, leaf_cost_of_geometry, reaches_hist, size_of_reads, step_runs, strides,
 };
+use crate::palw_tir_close_size_v2::CloseGeometry;
 use crate::palw_tir_court_v1::PalwTirInventoryIndexV1;
-use crate::palw_tir_step_v1::{PalwTirJobShapeV1, PalwTirStepSpaceV1};
+use crate::palw_tir_step_v1::{PalwTirJobShapeV1, PalwTirStepSpaceV1, PalwTirStepSpaceV2};
 use crate::palw_v2::PalwJobContextV2;
 use misaka_palw_tir::demand::{DemandContext, carry_in_node_v1, hist_row_node_v1, history_length_v1, state_writer_v1};
 use misaka_palw_tir::program::StateKind;
@@ -324,7 +325,7 @@ struct RCtx {
 struct RangeTwin<'a> {
     /// A pipeline stage's reading of its inputs and its `post`-written states (RFC-0003 PALW-GEN-20); `None` for an IR class.
     gen_stage: Option<&'a PalwGenTwinStageV1>,
-    space: &'a PalwTirStepSpaceV1,
+    space: CloseGeometry<'a>,
     job_ctx: &'a PalwJobContextV2,
     job: PalwTirJobShapeV1,
     inventory: &'a PalwTirInventoryIndexV1,
@@ -357,8 +358,16 @@ struct RangeTwin<'a> {
 
 impl RangeTwin<'_> {
     fn tick(&mut self, n: u64) -> Result<(), String> {
-        self.work = self.work.saturating_add(n);
-        if self.work > self.cap { Err(PALW_TIR_CLOSE_SIZING_OVER_CAP_V1.to_string()) } else { Ok(()) }
+        self.work = match self.space {
+            CloseGeometry::Legacy(_) => self.work.saturating_add(n),
+            CloseGeometry::Wide { .. } => self.work.checked_add(n).ok_or_else(|| PALW_TIR_CLOSE_SIZING_OVER_CAP_V1.to_string())?,
+        };
+        if self.work > self.cap {
+            return Err(PALW_TIR_CLOSE_SIZING_OVER_CAP_V1.to_string());
+        }
+        // Wide range expansion has a finite local allocation ceiling even when
+        // the caller supplied an effectively unbounded work cap. Legacy is no-op.
+        self.space.guard_allocation(self.work)
     }
 
     fn block_of(&self, occurrence: u16) -> Result<(u8, Option<u16>), String> {
@@ -371,25 +380,28 @@ impl RangeTwin<'_> {
             return Ok(());
         }
         let (block, layer) = self.block_of(key.occurrence)?;
-        let h = history_length_v1(&self.space.info, block, key.pos).ok_or("the program's info does not cover the block")?;
+        let h = history_length_v1(self.space.info(), block, key.pos).ok_or("the program's info does not cover the block")?;
         self.tick(1)?;
         let shapes = match self.cache.shapes.get(&(block, h)) {
             Some(s) => s.clone(),
             None => {
-                let b = &self.space.program.blocks[block as usize];
+                let b = &self.space.program().blocks[block as usize];
+                self.space.guard_allocation(b.nodes.len() as u64)?;
                 self.tick(b.nodes.len() as u64)?;
                 let s: Shapes = Rc::new(b.nodes.iter().map(|n| n.out.resolve(h)).collect());
+                self.space.guard_allocation((self.cache.shapes.len() as u64).saturating_add(1))?;
                 self.cache.shapes.insert((block, h), s.clone());
                 s
             }
         };
+        self.space.guard_allocation((self.ctxs.len() as u64).saturating_add(1))?;
         self.ctxs.insert(k, RCtx { block, layer, h, shapes, demand: BTreeMap::new() });
         Ok(())
     }
 
     fn is_leaf(&self, key: DemandContext, node: u16) -> bool {
         let Ok((block, _)) = self.block_of(key.occurrence) else { return false };
-        let committed = self.space.program.blocks[block as usize].nodes.get(node as usize).is_some_and(|n| n.commit);
+        let committed = self.space.program().blocks[block as usize].nodes.get(node as usize).is_some_and(|n| n.commit);
         let in_target = key == self.target;
         (committed && !(in_target && node == self.target_node)) || (in_target && self.supplied.contains(&node))
     }
@@ -398,10 +410,13 @@ impl RangeTwin<'_> {
         if self.in_hist { &mut self.hist } else { &mut self.reads }
     }
 
-    fn push_demand(&mut self, key: DemandContext, node: u16, ranges: Vec<(usize, usize)>) {
+    fn push_demand(&mut self, key: DemandContext, node: u16, ranges: Vec<(usize, usize)>) -> Result<(), String> {
         let k = (key.pos, key.occurrence);
+        let existing = self.ctxs.get(&k).expect("live").demand.get(&node).map_or(0, Vec::len);
+        self.space.guard_allocation((existing as u64).saturating_add(ranges.len() as u64))?;
         self.ctxs.get_mut(&k).expect("live").demand.entry(node).or_default().extend(ranges);
         self.pending.insert(k);
+        Ok(())
     }
 
     /// Step leaves `coord(t)` for tiles `t0..=t1` (once each), tile `t` of `values(t)` lanes;
@@ -463,8 +478,8 @@ impl RangeTwin<'_> {
         let tile_len = self.space.commit_tile_len(block, node).ok_or_else(|| format!("node {node} is not a commit point"))? as usize;
         let (call_index, position) = self.job.call_position(key.pos);
         let slot = self.space.node_slot(key.occurrence as usize, node).ok_or("no such slot")?;
-        let h = history_length_v1(&self.space.info, block, key.pos).ok_or("no block info")?;
-        let out = &self.space.program.blocks[block as usize].nodes[node as usize].out;
+        let h = history_length_v1(self.space.info(), block, key.pos).ok_or("no block info")?;
+        let out = &self.space.program().blocks[block as usize].nodes[node as usize].out;
         let count = element_count(&out.resolve(h));
         let has_h = out.has_h();
         let coord = |t: u64| PalwStepCoordinateV1 { call_index, node_slot: slot, position, tile_index: t as u32 };
@@ -538,7 +553,7 @@ impl RangeTwin<'_> {
         if !self.params_seen.insert((param, layer, a, b)) {
             return Ok(());
         }
-        let d = self.space.program.params.get(param as usize).ok_or("no such param")?;
+        let d = self.space.program().params.get(param as usize).ok_or("no such param")?;
         let w = d.dtype.width() as u64;
         let (first_byte, last_byte) = ((a as u64).saturating_mul(w), ((b - 1) as u64).saturating_mul(w));
         let first =
@@ -562,7 +577,7 @@ impl RangeTwin<'_> {
             }
             return Ok(());
         }
-        let c = self.space.layout.checkpoint_interval.max(1);
+        let c = self.space.layout().checkpoint_interval.max(1);
         let mut at = pos;
         loop {
             self.tick(1)?;
@@ -580,7 +595,7 @@ impl RangeTwin<'_> {
                 }
                 return Ok(());
             }
-            match state_writer_v1(&self.space.program, state, layer) {
+            match state_writer_v1(self.space.program(), state, layer) {
                 Some((occ, w)) => {
                     let key = DemandContext { pos: at - 1, occurrence: occ };
                     self.ctx(key)?;
@@ -589,7 +604,7 @@ impl RangeTwin<'_> {
                             self.leaf_read(key, w, a, b)?;
                         }
                     } else {
-                        self.push_demand(key, w, ranges.ranges().to_vec());
+                        self.push_demand(key, w, ranges.ranges().to_vec())?;
                     }
                     return Ok(());
                 }
@@ -620,7 +635,7 @@ impl RangeTwin<'_> {
             return Ok(());
         }
         self.tick(1)?;
-        let h_tile = self.space.layout.h_tile.max(1);
+        let h_tile = self.space.layout().h_tile.max(1);
         let tile_start = row_pos - row_pos % h_tile;
         let tile_end = tile_start + (h_tile - 1);
         let complete = tile_end < pos;
@@ -655,7 +670,7 @@ impl RangeTwin<'_> {
                 Some(x) => *x,
                 None => {
                     let (key, node) =
-                        hist_row_node_v1(&self.space.program, state, layer, 0).ok_or("a history that appends nothing")?;
+                        hist_row_node_v1(self.space.program(), state, layer, 0).ok_or("a history that appends nothing")?;
                     self.hist_nodes.insert((state, layer), (key.occurrence, node));
                     (key.occurrence, node)
                 }
@@ -664,8 +679,8 @@ impl RangeTwin<'_> {
             if self.pattern.is_some() {
                 let (block, _) = self.block_of(occurrence)?;
                 let tile_len = self.space.commit_tile_len(block, node).ok_or("a history row that is no commit point")? as usize;
-                let h = history_length_v1(&self.space.info, block, row_pos).ok_or("no block info")?;
-                let count = element_count(&self.space.program.blocks[block as usize].nodes[node as usize].out.resolve(h));
+                let h = history_length_v1(self.space.info(), block, row_pos).ok_or("no block info")?;
+                let count = element_count(&self.space.program().blocks[block as usize].nodes[node as usize].out.resolve(h));
                 self.tick(((b - 1) / tile_len - a / tile_len + 1) as u64)?;
                 if let Some(pattern) = self.pattern.as_mut() {
                     for tile in a / tile_len..=(b - 1) / tile_len {
@@ -690,7 +705,7 @@ impl RangeTwin<'_> {
         if ranges.is_empty() || self.skips(key, r) {
             return Ok(());
         }
-        let program = &self.space.program;
+        let program = self.space.program();
         match r {
             Ref::Node(j) => {
                 if self.is_leaf(key, j) {
@@ -698,7 +713,7 @@ impl RangeTwin<'_> {
                         self.leaf_read(key, j, a, b)?;
                     }
                 } else {
-                    self.push_demand(key, j, ranges);
+                    self.push_demand(key, j, ranges)?;
                 }
                 Ok(())
             }
@@ -738,7 +753,7 @@ impl RangeTwin<'_> {
     }
 
     fn operand_shape(&self, key: DemandContext, r: Ref) -> Result<Vec<usize>, String> {
-        let p = &self.space.program;
+        let p = self.space.program();
         let st = &self.ctxs[&(key.pos, key.occurrence)];
         Ok(match r {
             Ref::Node(j) => st.shapes.get(j as usize).ok_or("no such node")?.clone(),
@@ -759,6 +774,10 @@ impl RangeTwin<'_> {
 
     /// The boxes of `ranges` in shape `out`, each counted as a step.
     fn boxes(&mut self, ranges: &[(usize, usize)], out: &[usize]) -> Result<Vec<Bx>, String> {
+        // A range cuts into at most 2*rank-1 boxes. Check before allocating
+        // or expanding, whereas the exact work charge below stays unchanged.
+        self.space
+            .guard_allocation((ranges.len() as u64).saturating_mul(out.len().saturating_mul(2).saturating_sub(1).max(1) as u64))?;
         let mut bxs = Vec::with_capacity(ranges.len());
         for &(a, b) in ranges {
             boxes_of(a, b, out, &mut bxs);
@@ -804,7 +823,7 @@ impl RangeTwin<'_> {
         };
         let out = &shapes[node as usize];
         let rank = out.len();
-        let n = &space.program.blocks[block as usize].nodes[node as usize];
+        let n = &space.program().blocks[block as usize].nodes[node as usize];
         let inputs = &n.inputs;
         match n.prim {
             Prim::Reshape
@@ -883,7 +902,7 @@ impl RangeTwin<'_> {
                 match inputs[0] {
                     Ref::Const(_) => Ok(()),
                     Ref::Param(pj) if a == 0 && dsh.len() >= 2 && self.input_of(pj).is_none() => {
-                        let d = &space.program.params[pj as usize];
+                        let d = &space.program().params[pj as usize];
                         let layer = if d.per_layer { layer } else { None };
                         let width = d.dtype.width() as u64;
                         let row_sh = &dsh[1..];
@@ -902,6 +921,8 @@ impl RangeTwin<'_> {
                                     w0 as u64 * width / PALW_TIR_ROW_PIECE_BYTES_V1,
                                     (w1 as u64 - 1) * width / PALW_TIR_ROW_PIECE_BYTES_V1,
                                 );
+                                space
+                                    .guard_allocation((pieces.len() as u64).saturating_add(p1.saturating_sub(p0).saturating_add(1)))?;
                                 pieces.extend(p0..=p1);
                             }
                             // Each index element of the box names a row of its own.
@@ -1006,7 +1027,7 @@ impl RangeTwin<'_> {
                 })
             }
             Prim::HistAppend { state } => {
-                let s = space.program.states.get(state as usize).ok_or("no such state")?;
+                let s = space.program().states.get(state as usize).ok_or("no such state")?;
                 let StateKind::Hist { .. } = s.kind else { return Err("HistAppend on a Fixed state".into()) };
                 let row_len: usize = s.shape.iter().map(|d| *d as usize).product();
                 if row_len == 0 {
@@ -1039,6 +1060,7 @@ impl RangeTwin<'_> {
         while let Some(k) = self.pending.pop_last() {
             let key = DemandContext { pos: k.0, occurrence: k.1 };
             while let Some((node, raw)) = self.ctxs.get_mut(&k).expect("live").demand.pop_last() {
+                self.space.guard_allocation(raw.len() as u64)?;
                 let ranges = PalwTirRangesV1::from_ranges(raw);
                 self.tick(1)?;
                 if self.is_leaf(key, node) {
@@ -1096,9 +1118,37 @@ pub fn palw_tir_close_reads_range_split_gen_v1(
     pattern: bool,
     gen_stage: Option<&PalwGenTwinStageV1>,
 ) -> Result<PalwTirRangeSplitV1, String> {
+    close_reads_range_split_geometry(
+        CloseGeometry::from_v1(space),
+        job_ctx,
+        inventory,
+        cache,
+        request,
+        cap,
+        hist_only,
+        pattern,
+        gen_stage,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn close_reads_range_split_geometry(
+    space: CloseGeometry<'_>,
+    job_ctx: &PalwJobContextV2,
+    inventory: &PalwTirInventoryIndexV1,
+    cache: &mut PalwTirRangeCacheV1,
+    request: &PalwTirCloseRangeRequestV1<'_>,
+    cap: u64,
+    hist_only: bool,
+    pattern: bool,
+    gen_stage: Option<&PalwGenTwinStageV1>,
+) -> Result<PalwTirRangeSplitV1, String> {
     let job = space.job_shape(job_ctx).map_err(|e| e.to_string())?;
     let (block, _) = space.occurrences().get(request.ctx.occurrence as usize).copied().ok_or("no such occurrence")?;
-    let leaf_cost = leaf_cost_of(space);
+    let leaf_cost = leaf_cost_of_geometry(space);
+    space.guard_allocation(request.supplied.len() as u64)?;
+    space.guard_allocation(request.ranges.ranges().len() as u64)?;
+    space.guard_allocation(space.program().blocks[block as usize].nodes.len() as u64)?;
     let mut twin = RangeTwin {
         gen_stage,
         space,
@@ -1120,7 +1170,7 @@ pub fn palw_tir_close_reads_range_split_gen_v1(
         placed: HashSet::new(),
         params_seen: HashSet::new(),
         hist_only,
-        reaches_hist: if hist_only { reaches_hist(&space.program.blocks[block as usize], request.target) } else { Vec::new() },
+        reaches_hist: if hist_only { reaches_hist(&space.program().blocks[block as usize], request.target) } else { Vec::new() },
         hist_nodes: HashMap::new(),
         pattern: pattern.then(HistPattern::default),
         leaf_cost,
@@ -1130,7 +1180,7 @@ pub fn palw_tir_close_reads_range_split_gen_v1(
     // A request's setup: its seed, and (history-only) the block's reach.
     twin.tick(
         32 + request.ranges.ranges().len() as u64
-            + if hist_only { space.program.blocks[block as usize].nodes.len() as u64 } else { 0 },
+            + if hist_only { space.program().blocks[block as usize].nodes.len() as u64 } else { 0 },
     )?;
     twin.ctx(request.ctx)?;
     {
@@ -1144,7 +1194,7 @@ pub fn palw_tir_close_reads_range_split_gen_v1(
     }
     if !request.ranges.is_empty() {
         // The target is computed even when committed: seed it, then run.
-        twin.push_demand(request.ctx, request.target, request.ranges.ranges().to_vec());
+        twin.push_demand(request.ctx, request.target, request.ranges.ranges().to_vec())?;
     }
     twin.run()?;
     let supplied = std::mem::take(&mut twin.supplied_out).into_iter().map(|(n, v)| (n, PalwTirRangesV1::from_ranges(v))).collect();
@@ -1189,7 +1239,15 @@ pub fn palw_tir_worst_closes_range_work_v1(
     sizing: &PalwTirCloseSizingV1,
 ) -> Result<(Vec<PalwTirCloseBoundV1>, u64), String> {
     let price = PalwTirClosePriceV1::new(space, inventory, job_ctx, sizing.form)?;
-    worst_closes_range_priced(space, inventory, job_ctx, sizing, price, None, None)
+    worst_closes_range_priced(
+        CloseGeometry::from_v1(space),
+        inventory,
+        job_ctx,
+        sizing,
+        LegacyClosePriceDriver::from_price(price),
+        None,
+        None,
+    )
 }
 
 /// **Diagnostics only** (RFC-0011 §4.A, `cap_exceeded_at`): [`palw_tir_worst_closes_range_work_v1`], recording after each commit
@@ -1202,7 +1260,15 @@ pub fn palw_tir_worst_closes_range_trace_v1(
     trace: &mut Vec<(u8, u16, u64)>,
 ) -> Result<(Vec<PalwTirCloseBoundV1>, u64), String> {
     let price = PalwTirClosePriceV1::new(space, inventory, job_ctx, sizing.form)?;
-    worst_closes_range_priced(space, inventory, job_ctx, sizing, price, None, Some(trace))
+    worst_closes_range_priced(
+        CloseGeometry::from_v1(space),
+        inventory,
+        job_ctx,
+        sizing,
+        LegacyClosePriceDriver::from_price(price),
+        None,
+        Some(trace),
+    )
 }
 
 /// **[`crate::palw_tir_close_size_v1::palw_gen_worst_closes_v1`] by the range twin** (RFC-0003 PALW-GEN-20 under
@@ -1220,22 +1286,55 @@ pub fn palw_gen_worst_closes_range_v1(
     pricing: PalwGenClosePricingV1,
 ) -> Result<(Vec<PalwTirCloseBoundV1>, u64), String> {
     let price = PalwTirClosePriceV1::generative(space, inventory, stage, class_inventory_leaves, pricing)?;
-    worst_closes_range_priced(space, inventory, job_ctx, sizing, price, Some(model), None)
+    worst_closes_range_priced(
+        CloseGeometry::from_v1(space),
+        inventory,
+        job_ctx,
+        sizing,
+        LegacyClosePriceDriver::from_price(price),
+        Some(model),
+        None,
+    )
 }
 
-fn worst_closes_range_priced(
-    space: &PalwTirStepSpaceV1,
+/// Private V2 connection: explicit validated wide geometry and fixed eight-byte
+/// upper-bound pricing. No GEN/composite route or V1 conversion is exposed.
+pub(crate) fn palw_tir_worst_closes_range_work_wide_v2(
+    space: &PalwTirStepSpaceV2,
     inventory: &PalwTirInventoryIndexV1,
     job_ctx: &PalwJobContextV2,
     sizing: &PalwTirCloseSizingV1,
-    price: PalwTirClosePriceV1<'_>,
+) -> Result<(Vec<PalwTirCloseBoundV1>, u64), String> {
+    let price = WideClosePriceDriver::new(space, inventory, job_ctx, sizing.form)?.with_allocation_cap(sizing.cap);
+    worst_closes_range_priced(
+        CloseGeometry::from_v2(space).with_allocation_cap(sizing.cap),
+        inventory,
+        job_ctx,
+        sizing,
+        price,
+        None,
+        None,
+    )
+}
+
+fn priced_range_elements<P: ClosePriceDriver>(price: &P, shape: &[usize]) -> Result<usize, String> {
+    let count = shape.iter().try_fold(1, |n, dim| price.mul(n, *dim as u64))?;
+    usize::try_from(count).map_err(|_| "close shape element count overflows".into())
+}
+
+fn worst_closes_range_priced<P: ClosePriceDriver>(
+    space: CloseGeometry<'_>,
+    inventory: &PalwTirInventoryIndexV1,
+    job_ctx: &PalwJobContextV2,
+    sizing: &PalwTirCloseSizingV1,
+    price: P,
     gen_stage: Option<&PalwGenTwinStageV1>,
     mut trace: Option<&mut Vec<(u8, u16, u64)>>,
 ) -> Result<(Vec<PalwTirCloseBoundV1>, u64), String> {
-    let program = &space.program;
+    let program = space.program();
     let job = space.job_shape(job_ctx).map_err(|e| e.to_string())?;
     let p_max = job.positions.checked_sub(1).ok_or("a job with no position")?;
-    let c = space.layout.checkpoint_interval.max(1);
+    let c = space.layout().checkpoint_interval.max(1);
     let has_fixed = !space.fixed_instances().is_empty();
     // The position of `[lo, p_max]` whose replay is the longest: the largest `≡ C − 1 (mod C)`, or
     // the last one where none is (the replay then grows to the end).
@@ -1246,13 +1345,13 @@ fn worst_closes_range_priced(
         let p = p_max - ((p_max + 1) % c);
         if p >= lo { p } else { p_max }
     };
-    let h_tile = space.layout.h_tile.max(1) as usize;
+    let h_tile = space.layout().h_tile.max(1) as usize;
     let depth = price.depth();
     // The misalignment allowance of a part read at one alignment (the dissected bound's): one more
     // step leaf per run.
-    let slack = |reads: &PalwTirCloseReadsV1| {
+    let slack = |reads: &PalwTirCloseReadsV1| -> Result<u64, String> {
         let widest = reads.steps.values().chain(reads.loose_steps.iter()).copied().max().unwrap_or(0);
-        step_runs(reads) * (step_preimage_bytes(widest) + 4 + 2 * 64 * depth)
+        price.mul(step_runs(reads), price.add(price.add(price.step_preimage_bytes(widest)?, 4)?, price.mul(128, depth)?)?)
     };
     // The work left, shared by the twin's reads and the counting outside them.
     let budget = Cell::new(sizing.cap);
@@ -1265,6 +1364,7 @@ fn worst_closes_range_priced(
         Ok(())
     };
     let cache = RefCell::new(PalwTirRangeCacheV1::default());
+    price.guard_allocation(space.occurrences().len())?;
     let occurrences: Vec<(u8, Option<u16>)> = space.occurrences().to_vec();
     // One occurrence per block kind and predecessor: `pre`, the first two layers, `post`.
     let mut chosen: Vec<u16> = Vec::new();
@@ -1274,7 +1374,7 @@ fn worst_closes_range_priced(
         }
     }
     // A leaf priced as a run of its own.
-    let lone = |values: u32| step_preimage_bytes(values) + 4 + 64 * depth;
+    let lone = |values: u32| price.add(price.add(price.step_preimage_bytes(values)?, 4)?, price.mul(64, depth)?);
     let mut out = Vec::new();
     for (bi, block) in program.blocks.iter().enumerate() {
         for (ni, node) in block.nodes.iter().enumerate() {
@@ -1292,20 +1392,21 @@ fn worst_closes_range_priced(
             let has_h = h_axes == 1;
             let h_axis = node.out.shape.iter().position(|d| d.is_h());
             let inner = match h_axis {
-                Some(a) => node.out.resolve(1)[a + 1..].iter().product::<usize>().max(1),
+                Some(a) => priced_range_elements(&price, &node.out.resolve(1)[a + 1..])?.max(1),
                 None => 1,
             };
-            let h_at = |pos: u32| history_length_v1(&space.info, bi8, pos).unwrap_or(1);
-            let count_at = |pos: u32| element_count(&node.out.resolve(h_at(pos)));
+            let h_at = |pos: u32| history_length_v1(space.info(), bi8, pos).unwrap_or(1);
+            let count_at = |pos: u32| priced_range_elements(&price, &node.out.resolve(h_at(pos)));
             // Every tile of `pos`, `(first element, length)`: its elements are made one tile at a time.
             let tiles_at = |pos: u32| {
-                let count = count_at(pos);
-                (0..count).step_by(tile_len).map(move |first| (first, tile_len.min(count - first)))
+                let count = count_at(pos)?;
+                Ok::<_, String>((0..count).step_by(tile_len).map(move |first| (first, tile_len.min(count - first))))
             };
             // The first position at which a tile spans at most two row-parts.
             let mut p_late = 0u32;
             if has_h {
-                while p_late <= p_max && h_at(p_late) * inner < tile_len {
+                while p_late <= p_max && price.mul(h_at(p_late) as u64, inner as u64)? < tile_len as u64 {
+                    space.guard_allocation(u64::from(p_late) + 1)?;
                     p_late += 1;
                 }
             }
@@ -1330,7 +1431,7 @@ fn worst_closes_range_priced(
                         range,
                         both,
                     };
-                    let split = palw_tir_close_reads_range_split_gen_v1(
+                    let split = close_reads_range_split_geometry(
                         space,
                         job_ctx,
                         inventory,
@@ -1351,29 +1452,36 @@ fn worst_closes_range_priced(
                         (split.reads, split.hist, split.supplied)
                     }};
                 }
-                let row =
-                    |h: usize, o: usize, from: usize, to: usize| PalwTirRangesV1::single((o * h + from) * inner, (o * h + to) * inner);
+                let row = |h: usize, o: usize, from: usize, to: usize| -> Result<PalwTirRangesV1, String> {
+                    let base = price.mul(o as u64, h as u64)?;
+                    let first = usize::try_from(price.mul(price.add(base, from as u64)?, inner as u64)?)
+                        .map_err(|_| "range row index overflows")?;
+                    let end = usize::try_from(price.mul(price.add(base, to as u64)?, inner as u64)?)
+                        .map_err(|_| "range row index overflows")?;
+                    Ok(PalwTirRangesV1::single(first, end))
+                };
                 if local {
                     let pl = rep_from(p_late);
                     let h = h_at(pl);
                     let a = h_axis.expect("has H");
-                    let outer: usize = node.out.resolve(h)[..a].iter().product::<usize>().max(1);
+                    let outer = priced_range_elements(&price, &node.out.resolve(h)[..a])?.max(1);
                     let t_len = (tile_len.div_ceil(inner) + 1).min(h);
+                    price.guard_allocation(outer)?;
                     let mut ends = Vec::with_capacity(outer);
                     let mut starts = Vec::with_capacity(outer);
                     let mut tiles_cost = Vec::with_capacity(outer);
                     let mut commits_cost = Vec::with_capacity(outer);
                     let mut patterns = Vec::with_capacity(outer);
                     for o in 0..outer {
-                        ends.push(read!(pl, &row(h, o, h - t_len, h), &[], ni16, None, false).0);
-                        starts.push(read!(pl, &row(h, o, 0, t_len), &[], ni16, None, false).0);
+                        ends.push(read!(pl, &row(h, o, h - t_len, h)?, &[], ni16, None, false).0);
+                        starts.push(read!(pl, &row(h, o, 0, t_len)?, &[], ni16, None, false).0);
                         let pattern = if h >= 2 {
-                            twin(pl, &row(h, o, h - 2, h - 1), &[], ni16, None, true, true, true)?.pattern
+                            twin(pl, &row(h, o, h - 2, h - 1)?, &[], ni16, None, true, true, true)?.pattern
                         } else {
                             HistPattern::default()
                         };
-                        tiles_cost.push(pattern.tiles.values().map(|v| lone(*v)).sum::<u64>());
-                        commits_cost.push(pattern.commits.values().map(|v| lone(*v)).sum::<u64>());
+                        tiles_cost.push(pattern.tiles.values().try_fold(0, |sum, v| price.add(sum, lone(*v)?))?);
+                        commits_cost.push(pattern.commits.values().try_fold(0, |sum, v| price.add(sum, lone(*v)?))?);
                         patterns.push(pattern);
                     }
                     let mut outside_of: BTreeMap<(usize, usize), u64> = BTreeMap::new();
@@ -1383,73 +1491,82 @@ fn worst_closes_range_priced(
                         }
                         let mut u = PalwTirCloseReadsV1::default();
                         for o in lo..=hi {
-                            charge(16 + size_of_reads(&ends[o]) + size_of_reads(&starts[o]))?;
+                            charge(price.add(price.add(16, size_of_reads(&ends[o]))?, size_of_reads(&starts[o]))?)?;
                             u.merge(&ends[o]);
                             u.merge(&starts[o]);
                         }
-                        let units = price.units(&u, false) + price.h_allowance(&u);
+                        let units = price.add(price.units(&u, false)?, price.h_allowance(&u)?)?;
                         outside_of.insert((lo, hi), units);
                         Ok(units)
                     };
                     for p in 0..p_late.min(p_max + 1) {
                         let hp = h_at(p);
-                        let row_len = hp * inner;
-                        let count = count_at(p);
+                        let row_len = usize::try_from(price.mul(hp as u64, inner as u64)?).map_err(|_| "row length overflows")?;
+                        let count = count_at(p)?;
                         for first in (0..count).step_by(tile_len) {
-                            let last = (first + tile_len).min(count) - 1;
+                            let last = usize::try_from(price.add(first as u64, tile_len as u64)?)
+                                .map_err(|_| "tile index overflows")?
+                                .min(count)
+                                - 1;
                             let (o_lo, o_hi) = (first / row_len, last / row_len);
                             let mut tiles: BTreeSet<(u32, usize, u64)> = BTreeSet::new();
                             let mut commits: BTreeSet<(u32, u16, u16, u32)> = BTreeSet::new();
                             let mut hist_cost = 0u64;
-                            charge(16 + (o_hi - o_lo + 1) as u64)?;
+                            charge(price.add(16, (o_hi - o_lo + 1) as u64)?)?;
                             for (o, pattern) in patterns.iter().enumerate().take(o_hi + 1).skip(o_lo) {
                                 let t_lo = if o == o_lo { (first % row_len) / inner } else { 0 };
                                 let t_hi = if o == o_hi { (last % row_len) / inner + 1 } else { hp };
                                 let rows = t_hi.min(hp.saturating_sub(1)).saturating_sub(t_lo) as u64;
-                                charge(rows * (1 + (pattern.tiles.len() + pattern.commits.len()) as u64))?;
+                                charge(price.mul(
+                                    rows,
+                                    price.add(1, price.add(pattern.tiles.len() as u64, pattern.commits.len() as u64)?)?,
+                                )?)?;
                                 for t in t_lo..t_hi.min(hp.saturating_sub(1)) {
                                     let row_pos = (p as usize + 1 - hp + t) as u32;
                                     let group = row_pos / h_tile as u32;
                                     if (group as usize + 1) * h_tile - 1 < p as usize {
                                         for ((k, sub), v) in &pattern.tiles {
                                             if tiles.insert((group, *k, *sub)) {
-                                                hist_cost += lone(*v);
+                                                hist_cost = price.add(hist_cost, lone(*v)?)?;
                                             }
                                         }
                                     } else {
                                         for ((oc, n, tile), v) in &pattern.commits {
                                             if commits.insert((row_pos, *oc, *n, *tile)) {
-                                                hist_cost += lone(*v);
+                                                hist_cost = price.add(hist_cost, lone(*v)?)?;
                                             }
                                         }
                                     }
                                 }
                             }
-                            let close = price.frame((last + 1 - first) as u32) + outside(o_lo, o_hi)? + hist_cost;
+                            let close =
+                                price.add(price.add(price.frame((last + 1 - first) as u32)?, outside(o_lo, o_hi)?)?, hist_cost)?;
                             worst.close_bytes = worst.close_bytes.max(close);
                         }
                     }
                     let groups = (t_len.saturating_sub(1)).div_ceil(h_tile) + 1;
-                    let part = |o: usize| t_len as u64 * commits_cost[o] + groups as u64 * tiles_cost[o];
+                    let part =
+                        |o: usize| price.add(price.mul(t_len as u64, commits_cost[o])?, price.mul(groups as u64, tiles_cost[o])?);
                     let mut late = 0u64;
                     for o in 0..outer {
-                        late = late.max(outside(o, o)? + part(o));
+                        late = late.max(price.add(outside(o, o)?, part(o)?)?);
                         if o + 1 < outer {
-                            late = late.max(outside(o, o + 1)? + part(o) + part(o + 1));
+                            late = late.max(price.add(price.add(outside(o, o + 1)?, part(o)?)?, part(o + 1)?)?);
                         }
                     }
-                    worst.close_bytes = worst.close_bytes.max(price.frame(tile_len as u32) + late);
+                    worst.close_bytes = worst.close_bytes.max(price.add(price.frame(tile_len as u32)?, late)?);
                     continue;
                 }
                 // Every tile's whole close, exactly, at `pos` (with the alignment allowance where the
                 // position stands for others).
                 let whole_at = |pos: u32, allowance: bool| -> Result<u64, String> {
                     let mut worst = 0u64;
-                    for (first, len) in tiles_at(pos) {
-                        let (mut reads, hist, _) = read!(pos, &PalwTirRangesV1::single(first, first + len), &[], ni16, None, false);
+                    for (first, len) in tiles_at(pos)? {
+                        let end = usize::try_from(price.add(first as u64, len as u64)?).map_err(|_| "tile index overflows")?;
+                        let (mut reads, hist, _) = read!(pos, &PalwTirRangesV1::single(first, end), &[], ni16, None, false);
                         reads.merge(&hist);
-                        let extra = if allowance { price.h_allowance(&reads) } else { 0 };
-                        worst = worst.max(price.close(&reads, len as u32) + extra);
+                        let extra = if allowance { price.h_allowance(&reads)? } else { 0 };
+                        worst = worst.max(price.add(price.close(&reads, len as u32)?, extra)?);
                     }
                     Ok(worst)
                 };
@@ -1469,23 +1586,24 @@ fn worst_closes_range_priced(
                     let pl = rep_from(p_late);
                     let h = h_at(pl);
                     let a = h_axis.expect("has H");
-                    let outer: usize = node.out.resolve(h)[..a].iter().product::<usize>().max(1);
+                    let outer = priced_range_elements(&price, &node.out.resolve(h)[..a])?.max(1);
                     let t_len = (tile_len.div_ceil(inner) + 1).min(h);
+                    price.guard_allocation(outer)?;
                     let mut ends = Vec::with_capacity(outer);
                     let mut starts = Vec::with_capacity(outer);
                     for o in 0..outer {
-                        ends.push(read!(pl, &row(h, o, h - t_len, h), &[], ni16, None, false).0);
-                        starts.push(read!(pl, &row(h, o, 0, t_len), &[], ni16, None, false).0);
+                        ends.push(read!(pl, &row(h, o, h - t_len, h)?, &[], ni16, None, false).0);
+                        starts.push(read!(pl, &row(h, o, 0, t_len)?, &[], ni16, None, false).0);
                     }
                     let mut outside = 0u64;
                     for o in 0..outer {
                         for part in [&ends[o], &starts[o]] {
-                            outside = outside.max(price.units(part, false) + price.h_allowance(part));
+                            outside = outside.max(price.add(price.units(part, false)?, price.h_allowance(part)?)?);
                         }
                         if o + 1 < outer {
                             let mut pair = ends[o].clone();
                             pair.merge(&starts[o + 1]);
-                            outside = outside.max(price.units(&pair, false) + price.h_allowance(&pair));
+                            outside = outside.max(price.add(price.units(&pair, false)?, price.h_allowance(&pair)?)?);
                         }
                     }
                     // Through the history rows: every `T`-window of every row at every alignment of the
@@ -1498,11 +1616,12 @@ fn worst_closes_range_priced(
                             if start >= end {
                                 continue;
                             }
-                            let hist = twin(pl, &row(h, o, start, end), &[], ni16, None, true, true, false)?.hist;
-                            history = history.max(price.units(&hist, true));
+                            let hist = twin(pl, &row(h, o, start, end)?, &[], ni16, None, true, true, false)?.hist;
+                            history = history.max(price.units(&hist, true)?);
                         }
                     }
-                    worst.close_bytes = worst.close_bytes.max(price.frame(tile_len as u32) + outside + 2 * history);
+                    worst.close_bytes =
+                        worst.close_bytes.max(price.add(price.add(price.frame(tile_len as u32)?, outside)?, price.mul(2, history)?)?);
                     continue;
                 }
                 // Position 0: the history is one row, the dissection has no rounds, and the whole close
@@ -1515,6 +1634,7 @@ fn worst_closes_range_priced(
                 }
                 positions.insert(rep_from(1));
                 if has_h {
+                    space.guard_allocation(p_late.min(p_max + 1) as u64)?;
                     positions.extend(1..p_late.min(p_max + 1));
                     if p_late <= p_max {
                         positions.insert(rep_from(p_late.max(1)));
@@ -1525,8 +1645,9 @@ fn worst_closes_range_priced(
                     let parts = if late_h { 2 } else { 1 };
                     let mut root_worst = 0u64;
                     let mut bottom_worst = 0u64;
-                    for (first, len) in tiles_at(pos) {
-                        let tile = PalwTirRangesV1::single(first, first + len);
+                    for (first, len) in tiles_at(pos)? {
+                        let end = usize::try_from(price.add(first as u64, len as u64)?).map_err(|_| "tile index overflows")?;
+                        let tile = PalwTirRangesV1::single(first, end);
                         let supplied: Vec<u16> = reductions.iter().copied().filter(|r| *r != ni16).collect();
                         let (mut finalize, hist, finalize_supplied) = read!(pos, &tile, &supplied, ni16, None, false);
                         finalize.merge(&hist);
@@ -1544,7 +1665,7 @@ fn worst_closes_range_priced(
                             for (n, es) in &closure {
                                 let seen = probed.entry(*n).or_default();
                                 let new = es.minus(seen);
-                                charge(1 + es.ranges().len() as u64 + seen.ranges().len() as u64)?;
+                                charge(price.add(price.add(1, es.ranges().len() as u64)?, seen.ranges().len() as u64)?)?;
                                 if !new.is_empty() {
                                     *seen = seen.union(&new);
                                     pending.insert(*n, new);
@@ -1558,18 +1679,19 @@ fn worst_closes_range_priced(
                                 let (mut probe, hist, probe_supplied) = read!(pos, &es, &others, r, Some((0, 1)), false);
                                 probe.merge(&hist);
                                 for (n, e2) in probe_supplied {
-                                    charge(1 + e2.ranges().len() as u64)?;
+                                    charge(price.add(1, e2.ranges().len() as u64)?)?;
                                     let merged = closure.remove(&n).unwrap_or_default().union(&e2);
                                     closure.insert(n, merged);
                                 }
-                                charge(1 + size_of_reads(&probe))?;
+                                charge(price.add(1, size_of_reads(&probe))?)?;
                                 root_reads.merge(&probe);
                             }
                         }
-                        let values: u64 = closure.values().map(|s| s.elements()).sum();
+                        let values = price.sum(closure.values().map(|s| s.elements()))?;
                         root_reads.supplied.clear();
-                        let root_units = price.units(&root_reads, false) + if late_h { slack(&root_reads) } else { 0 };
-                        root_worst = root_worst.max(root_units * parts + values * parts * 20);
+                        let root_units = price.add(price.units(&root_reads, false)?, if late_h { slack(&root_reads)? } else { 0 })?;
+                        root_worst =
+                            root_worst.max(price.add(price.mul(root_units, parts)?, price.mul(price.mul(values, parts)?, 20)?)?);
                         // The bottom: every reduction over the first and the last history tile, in
                         // both-mode — the two together bound any tile at any position.
                         let h = h_at(pos);
@@ -1583,18 +1705,19 @@ fn worst_closes_range_priced(
                                 let Some(es) = closure.get(r).filter(|s| !s.is_empty()) else { continue };
                                 let others: Vec<u16> = reductions.iter().copied().filter(|x| x != r).collect();
                                 let (part, hist, _) = read!(pos, es, &others, *r, Some((from, to)), true);
-                                charge(2 + size_of_reads(&part) + size_of_reads(&hist))?;
+                                charge(price.add(price.add(2, size_of_reads(&part))?, size_of_reads(&hist))?)?;
                                 reads.merge(&part);
                                 reads.merge(&hist);
                             }
                             reads.supplied.clear();
-                            bottom += price.units(&reads, false) + if late_h { slack(&reads) } else { 0 };
+                            bottom =
+                                price.add(bottom, price.add(price.units(&reads, false)?, if late_h { slack(&reads)? } else { 0 })?)?;
                         }
-                        bottom_worst = bottom_worst.max(bottom * parts);
+                        bottom_worst = bottom_worst.max(price.mul(bottom, parts)?);
                     }
                     worst.root_claim_bytes =
-                        worst.root_claim_bytes.max(price.root_frame(tile_len as u32, reductions.len()) + root_worst);
-                    worst.close_bytes = worst.close_bytes.max(price.frame(tile_len as u32) + bottom_worst);
+                        worst.root_claim_bytes.max(price.add(price.root_frame(tile_len as u32, reductions.len())?, root_worst)?);
+                    worst.close_bytes = worst.close_bytes.max(price.add(price.frame(tile_len as u32)?, bottom_worst)?);
                 }
             }
             let past = sizing
@@ -1635,7 +1758,7 @@ fn worst_closes_range_priced(
             };
             for first in (0..count).step_by(lanes.max(1)) {
                 let last = (first + lanes).min(count);
-                charge(16 + (last - first) as u64)?;
+                charge(price.add(16, (last - first) as u64)?)?;
                 let ranges = PalwTirRangesV1::single(first, last);
                 let request = PalwTirCloseRangeRequestV1 {
                     ctx: DemandContext { pos, occurrence: occ },
@@ -1645,7 +1768,7 @@ fn worst_closes_range_priced(
                     range: None,
                     both: false,
                 };
-                let split = palw_tir_close_reads_range_split_gen_v1(
+                let split = close_reads_range_split_geometry(
                     space,
                     job_ctx,
                     inventory,
@@ -1659,7 +1782,7 @@ fn worst_closes_range_priced(
                 budget.set(budget.get().saturating_sub(split.work));
                 let mut reads = split.reads;
                 reads.merge(&split.hist);
-                bound.close_bytes = bound.close_bytes.max(price.close(&reads, (last - first) as u32));
+                bound.close_bytes = bound.close_bytes.max(price.close(&reads, (last - first) as u32)?);
             }
             out.push(bound);
             if sizing.stop_above.is_some_and(|(close, _)| out.last().is_some_and(|b| b.close_bytes > close)) {
