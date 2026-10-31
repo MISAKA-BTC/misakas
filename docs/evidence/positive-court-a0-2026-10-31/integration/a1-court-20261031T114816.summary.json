@@ -1,0 +1,70 @@
+{
+  "finished_utc": "2026-10-31T11:54:22.197575+00:00",
+  "starting_head": "52c6214111ba97136bf3736028d98cf0846f1ee9",
+  "finishing_head": "ed89573a0b3cf2cb72b3b11219ece6211db17322",
+  "exit_code": 0,
+  "elapsed_seconds": 351.68216658299997,
+  "test_results": [
+    "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 139.11s",
+    "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s"
+  ],
+  "source_integrity": [
+    {
+      "path": "Cargo.toml",
+      "before_sha256": "7b26aaa66e011be4e2f7795436f637f3b8d56568f54ac907eec7cf894b39e266",
+      "after_sha256": "6dcdafab4ceb15936b5cced571d315c04348ca8052025de73e2b513b48a9266f",
+      "unchanged": false
+    },
+    {
+      "path": "Cargo.lock",
+      "before_sha256": "fa88abca9860a279e6bc7eeb61eb6e9b28a0def5856402cb4d7fe0601fbf2fed",
+      "after_sha256": "3c5d1bbacd1e3aeb0cf16ccf21c96f0d9ead9d4e5672ae4710717530786a7606",
+      "unchanged": false
+    },
+    {
+      "path": ".cargo/config.toml",
+      "before_sha256": "4803ef93c0ff535fdbb87b93548efc2ddfbc4770e255a8452b04c6fe9cecb80f",
+      "after_sha256": "4803ef93c0ff535fdbb87b93548efc2ddfbc4770e255a8452b04c6fe9cecb80f",
+      "unchanged": true
+    },
+    {
+      "path": "consensus/core/src/lib.rs",
+      "before_sha256": "ea23f4108144877c56a9b5e7340d9d34da3362c0ea0b92e40711d933e2a07004",
+      "after_sha256": "ea23f4108144877c56a9b5e7340d9d34da3362c0ea0b92e40711d933e2a07004",
+      "unchanged": true
+    },
+    {
+      "path": "misaka/palw/tir/exec/Cargo.toml",
+      "before_sha256": "1080a27fc4483711254a0d6ef3435e28828e453c0c29825a94967ef6d23abacf",
+      "after_sha256": "1080a27fc4483711254a0d6ef3435e28828e453c0c29825a94967ef6d23abacf",
+      "unchanged": true
+    },
+    {
+      "path": "misaka/palw/tir/exec/src/node/mod.rs",
+      "before_sha256": "b9d2d5e72fc750af0460e9814e194def1a1e5edc4549ae84ba01a5b0d1fd4c5a",
+      "after_sha256": "b9d2d5e72fc750af0460e9814e194def1a1e5edc4549ae84ba01a5b0d1fd4c5a",
+      "unchanged": true
+    },
+    {
+      "path": "misaka/palw/tir/exec/src/node/positive_check.rs",
+      "before_sha256": "b24c959e378c0c48f7cf0654d607df5e929416ad38999473cd2ef1d6ef90eb78",
+      "after_sha256": "b24c959e378c0c48f7cf0654d607df5e929416ad38999473cd2ef1d6ef90eb78",
+      "unchanged": true
+    },
+    {
+      "path": "misaka/palw/tir/exec/tests/positive_check.rs",
+      "before_sha256": "55c1f927ca8429a8f14b3e9241e4802a9ba34a8ddd260f100587e876988f9b44",
+      "after_sha256": "55c1f927ca8429a8f14b3e9241e4802a9ba34a8ddd260f100587e876988f9b44",
+      "unchanged": true
+    },
+    {
+      "path": "misaka/palw/tir/exec/tests/court.rs",
+      "before_sha256": "28e1e4b3876a93adf7546111532d95fe2dc81ba360b89073f538ab8c719b6ffd",
+      "after_sha256": "28e1e4b3876a93adf7546111532d95fe2dc81ba360b89073f538ab8c719b6ffd",
+      "unchanged": true
+    }
+  ],
+  "all_recorded_sources_unchanged": false,
+  "log_sha256": "7e565485b16214cc4cc84d27aadbe037d961c931e178935304d501c85e0b0d35",
+  "limitation": "A1 tests compile identical checker via path; module export was compiled, but A0 NodeChecker/PanelBuilder adapter and native integration are not tested by these suites."
+}
