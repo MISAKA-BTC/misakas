@@ -1,0 +1,71 @@
+{
+  "time_utc": "2026-10-31T11:38:41.622847+00:00",
+  "base_commit": "a5800d2dd5d334e89f7a1ddb6e956aedcbf4adf5",
+  "branch": "codex/positive-court-a0",
+  "checks": [
+    {
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "misaka-palw-positive-contract",
+        "--offline"
+      ],
+      "exit_code": 0,
+      "log": "docs/evidence/positive-court-a0-2026-10-31/tests.log"
+    },
+    {
+      "command": [
+        "cargo",
+        "clippy",
+        "-p",
+        "misaka-palw-positive-contract",
+        "--all-targets",
+        "--offline",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0,
+      "log": "docs/evidence/positive-court-a0-2026-10-31/clippy.log"
+    }
+  ],
+  "files": [
+    {
+      "path": "Cargo.toml",
+      "sha256": "7b26aaa66e011be4e2f7795436f637f3b8d56568f54ac907eec7cf894b39e266"
+    },
+    {
+      "path": "Cargo.lock",
+      "sha256": "fa88abca9860a279e6bc7eeb61eb6e9b28a0def5856402cb4d7fe0601fbf2fed"
+    },
+    {
+      "path": "misaka/palw/positive-contract/src/identity.rs",
+      "sha256": "90336c4e70a9b09e6142f37af579609fb2575d223882f0d0916e31398f01b9ca"
+    },
+    {
+      "path": "misaka/palw/positive-contract/src/lib.rs",
+      "sha256": "26bd42107a54d2e48ededf8eb4066d65a6a5d0eaef659fa932c01aa81f5cc1ad"
+    },
+    {
+      "path": "misaka/palw/positive-contract/src/messages.rs",
+      "sha256": "68b06aa73de26da938333697cf02b4cf832046369598ae83c94a4cf18a3f840b"
+    },
+    {
+      "path": "misaka/palw/positive-contract/src/ports.rs",
+      "sha256": "c56e73687408918654d1eab4e893fc2105bf6627e9e8b21ab6361024e202b6e4"
+    },
+    {
+      "path": "misaka/palw/positive-contract/src/wire.rs",
+      "sha256": "d3c7ab58dfaea482243cbe06a0f6fdbc136ffc5c74ee659c7d1c2d3c67226555"
+    },
+    {
+      "path": "misaka/palw/positive-contract/tests/contracts.rs",
+      "sha256": "ee052f27289f9087b58cda678a65e327bc919a8b6c69e880911481438768493c"
+    },
+    {
+      "path": "misaka/palw/positive-contract/Cargo.toml",
+      "sha256": "16ae4b261062e692618fc4e5db75491af9bf12a817872db1a272b97f619dcac5"
+    }
+  ]
+}

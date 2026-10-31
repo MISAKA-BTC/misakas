@@ -64,4 +64,5 @@
 - [RFC-0031 — 共有courtのinitial notice境界](0031-shared-court-initial-notice-boundary.md)
 - [RFC-0032 — 共有courtの終端materialと非独占提出](0032-shared-court-terminal-material-and-nonblocking-ingress.md)
 - [RFC-0035 — shared court originalの実原資と役割別同意](0035-court-original-funded-contract-and-role-consent.md)
+- [RFC-0044 — Positive Court：Panelによる正常計算証拠の生成・提出と、Minerの上限付き対話応答](0044-positive-court-full-coverage.md)
 
