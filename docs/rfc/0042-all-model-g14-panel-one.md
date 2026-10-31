@@ -16,7 +16,7 @@ genesis / 年次フォーク指定は 1.0、後発登録は登録時から審査
 ## 移行境界と履歴
 
 別の fence `palw_model_panel_one_v1` を使用する。既に発火した kernel slice の DAA 18,400 を全モデル移行の高さに読み替えない。
-t12 の配備候補は DAA **18,560**。params / schedule identity、fork visitor、state params の mirror に含める。mainnet 等の fence は無効のまま。
+t12 の配備候補は DAA **18,600**。params / schedule identity、fork visitor、state params の mirror に含める。mainnet 等の fence は無効のまま。
 
 経路を選ぶ基準は claim の **最初の acceptance DAA**。再抽選、receipt、Final、再起動、reorg、pruned restore の高さでは切り替えない。
 境界前の claim とその責任記録は従来の席数・scope・経済条件を維持する。
@@ -34,6 +34,7 @@ producer 自身、同じ operator / 公開鍵、資格・担保を満たさな�
 コピーを取得できない、実行できない、データがない場合は承認を与えない。
 
 割当は fold が一度だけ決め、実際の担保を予約する。抽選対象の bond は commit 時点までに登録されているものに限る。空の eligible pool は claim 単位の非 fraud 終了とし、旧 5 席経路へ戻さない。
+固定済みの ORIGINAL custody が新しい panel を受け入れられない再抽選は `PanelUnavailable` で非 fraud 終了し、producer を slash しない。旧 custodian の保持契約は書き換えず、次のブロックを無効にしない。
 既存の署名認証を通る whole-claim receipt、または 1 席が担当する全 scope の receipt だけを認める。
 部分 scope、`Sampled`、S2 単独 licence、同一署名の重複を全 scope の承認に数えない。
 

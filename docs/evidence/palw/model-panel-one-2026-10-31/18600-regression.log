@@ -1,0 +1,360 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.99s
+     Running unittests src/lib.rs (/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/g14-18400-deploy/target/ci-gates/debug/deps/kaspa_consensus_core-e242d74f72be430d)
+
+running 302 tests
+PROBE   7100  palw_fp_da_pins
+PROBE   7100  palw_shard_court
+PROBE   7100  palw_held_context
+PROBE   7100  palw_audit_2026_09_11_deep
+PROBE   7101  dns_bft_gate
+PROBE   7101  palw_model_registry
+PROBE   7101  palw_economic_payout
+PROBE   7101  palw_work_target
+PROBE   7101  palw_short_challenge_window
+PROBE   7101  palw_panel_economy
+PROBE   7101  palw_work_priced_reward
+PROBE   7101  palw_execution_lane
+PROBE   7101  palw_overlay_carve
+PROBE   7200  palw_verification_v2
+PROBE   7200  palw_readiness_v2
+PROBE   7300  palw_execution_lane_span_short
+PROBE   7301  palw_compute_overlay_retired
+PROBE   7780  palw_single_lottery
+PROBE   7780  palw_anchor_clock
+PROBE   7780  palw_clock_cursor
+PROBE   7800  palw_execution_quanta
+PROBE   8100  palw_seat_gate_possession
+PROBE   8160  palw_class_receipt_window
+PROBE   8500  palw_objective_offence
+PROBE   8600  palw_verification_s3
+PROBE   8700  palw_verification_s2
+test config::params::adr0142_release_probe::the_flag_day_carries_what_the_announcement_says_it_carries ... ok
+test config::params::consensus_params_id_tests::a_card_certifies_the_free_prompt_lane_of_what_it_registers_and_the_rc_set_does_not ... ok
+test config::params::consensus_params_id_tests::a_card_with_two_rows_sharing_an_operator_is_refused_at_genesis ... ok
+test config::params::consensus_params_id_tests::a_bond_maturity_fence_armed_inside_its_own_window_is_refused ... ok
+test config::params::consensus_params_id_tests::a_carded_mainnet_arms_every_fence_testnet_11_arms ... ok
+test config::params::consensus_params_id_tests::a_carded_mainnet_can_pay_its_own_validator_floor_inside_one_coinbase ... ok
+test config::params::consensus_params_id_tests::a_carded_mainnet_runs_the_v2_dag_shape_and_names_what_still_differs ... ok
+test config::params::consensus_params_id_tests::a_carded_registry_still_draws_a_full_panel_with_the_capability_fence_armed ... ok
+test config::params::consensus_params_id_tests::a_catalog_class_this_ruleset_cannot_describe_is_not_refused_here ... ok
+test config::params::consensus_params_id_tests::a_different_rule_set_gets_a_different_fingerprint ... ok
+test config::params::consensus_params_id_tests::a_dormant_rent_fence_is_absent_from_the_schedule_walk ... ok
+test config::params::consensus_params_id_tests::a_dense_card_arms_the_anchored_root_and_the_dissectable_fence_from_genesis ... ok
+test config::params::consensus_params_id_tests::a_fork_activation_height_is_part_of_the_rules ... ok
+test config::params::consensus_params_id_tests::a_fence_whose_rule_this_build_cannot_reach_is_refused_at_assembly ... ok
+test config::params::consensus_params_id_tests::a_genesis_active_fence_is_not_normalised_away ... ok
+test config::params::consensus_params_id_tests::a_half_filled_mainnet_card_is_refused_by_name ... ok
+test config::params::consensus_params_id_tests::a_mainnet_equivalent_genesis_actually_enables_palw ... ok
+test config::params::consensus_params_id_tests::a_fused_genesis_row_is_refused_while_the_kary_court_is_dormant ... ok
+test config::params::consensus_params_id_tests::a_materialized_release_cut_keeps_the_identity_it_had ... ok
+test config::params::consensus_params_id_tests::a_palw_fence_is_validated_before_a_node_runs_it ... ok
+test config::params::consensus_params_id_tests::a_mainnet_equivalent_genesis_carries_the_certification_rules ... ok
+test config::params::consensus_params_id_tests::a_rule_this_network_can_run_is_in_the_fingerprint_and_not_in_the_handshake ... ok
+test config::params::consensus_params_id_tests::a_v2_genesis_minted_above_the_ambient_target_is_refused ... ok
+test config::params::consensus_params_id_tests::a_scheduled_da_court_needs_no_state_version_move_and_a_genesis_one_would ... ok
+test config::params::consensus_params_id_tests::a_v2_network_is_refused_for_each_half_of_a_ten_bps_cadence ... ok
+test config::params::consensus_params_id_tests::absent_schedule_and_ramp_fences_do_not_move_the_fingerprint ... ok
+test config::params::consensus_params_id_tests::adding_the_commitment_fence_does_not_move_any_shipped_fingerprint ... ok
+test config::params::consensus_params_id_tests::adr0124_the_panel_economy_and_the_work_price_are_scheduled_on_testnet_11_and_stated_on_a_card ... ok
+test config::params::consensus_params_id_tests::adr0130_the_exposure_floor_is_hashed_some_only_and_scheduled_like_a_fence ... ok
+test config::params::consensus_params_id_tests::adr0130_the_seat_exposure_floor_is_dormant_everywhere_and_refused_where_it_cannot_floor ... ok
+test config::params::consensus_params_id_tests::an_absent_dns_overlay_is_not_an_empty_one ... ok
+test config::params::consensus_params_id_tests::an_absent_fork_choice_fence_does_not_move_the_fingerprint ... ok
+test config::params::consensus_params_id_tests::an_armed_beacon_fold_may_not_undercut_the_amendments_floor ... ok
+test config::params::consensus_params_id_tests::an_armed_kary_court_derives_its_shape_at_assembly ... ok
+test config::params::consensus_params_id_tests::an_armed_kary_court_refuses_a_ruleset_that_froze_another_arity ... ok
+test config::params::consensus_params_id_tests::an_empty_bond_registry_still_yields_a_consensus_v2_network ... ok
+test config::params::consensus_params_id_tests::an_overlay_rule_change_is_caught ... ok
+test config::params::consensus_params_id_tests::a_value_beside_a_scheduled_fence_is_reported_and_the_rollout_still_rolls ... ok
+test config::params::consensus_params_id_tests::arming_bond_maturity_needs_a_registry_with_a_spare_seat ... ok
+test config::params::consensus_params_id_tests::arming_the_removed_inactivity_leak_is_refused_at_startup ... ok
+test config::params::consensus_params_id_tests::arming_the_da_court_over_an_undisclosable_class_refuses_to_assemble ... ok
+test config::params::consensus_params_id_tests::arming_the_removed_token_overlay_is_refused_at_startup ... ok
+test config::params::consensus_params_id_tests::arming_the_removed_vlt_voting_weight_is_refused_at_startup ... ok
+test config::params::consensus_params_id_tests::deci_bps_constants_match_formulas ... ok
+test config::params::consensus_params_id_tests::every_assembled_v2_ruleset_is_minted_at_its_ambient_target ... ok
+test config::params::consensus_params_id_tests::devnet_genesis_bonds_are_public_seeds_that_seat_a_producing_chain ... ok
+test config::params::consensus_params_id_tests::every_shipped_genesis_bond_is_paid_at_its_own_keys_address ... ok
+test config::params::consensus_params_id_tests::every_shipped_preset_is_distinguishable ... ok
+test config::params::consensus_params_id_tests::g14_semantics_and_commitment_scope_have_independent_dormant_rule_fences ... ok
+test config::params::consensus_params_id_tests::identical_params_agree ... ok
+test config::params::consensus_params_id_tests::immutable_models_have_an_independent_dormant_fence_and_commit_scheduled_rules ... ok
+test config::params::consensus_params_id_tests::imposing_the_v2_mint_moves_no_live_preset ... ok
+test config::params::consensus_params_id_tests::no_evm_window_exists_below_all_three_model_fences ... ok
+test config::params::consensus_params_id_tests::production_dns_windows_state_decades_at_the_v2_cadence_until_rescaled ... ok
+test config::params::consensus_params_id_tests::scheduling_a_fence_moves_the_params_id_but_not_the_identity ... ok
+test config::params::consensus_params_id_tests::scheduling_any_fence_leaves_the_identity_alone ... ok
+test config::params::consensus_params_id_tests::every_fence_the_visitor_reaches_moves_the_fingerprint ... ok
+test config::params::consensus_params_id_tests::scheduling_the_da_court_moves_the_fingerprint_and_leaves_the_identity_alone ... ok
+test config::params::consensus_params_id_tests::shipped_presets_have_pinned_fingerprints ... ok
+test config::params::consensus_params_id_tests::testnet_12s_registry_is_seven_carried_cards_and_one_new_key ... ok
+test config::params::consensus_params_id_tests::testnet_vlt_windows_preserve_production_wall_clock ... ok
+test config::params::consensus_params_id_tests::the_2026_09_23_audit_fence_is_armed_at_genesis_or_not_at_all ... ok
+test config::params::consensus_params_id_tests::staged_public_court_has_independent_dormant_schedule_and_block_clock ... ok
+test config::params::consensus_params_id_tests::the_active_stake_gate_is_the_product_of_the_two_floors ... ok
+test config::params::consensus_params_id_tests::the_anchored_root_fence_is_dormant_visible_when_armed_and_needs_the_kary_court ... ok
+test config::params::consensus_params_id_tests::the_attempt_header_pins_fence_is_dormant_on_every_shipped_preset_and_visible_the_moment_it_is_not ... ok
+test config::params::consensus_params_id_tests::the_attempt_work_fence_and_the_width_bound_follow_the_fence_discipline ... ok
+test config::params::consensus_params_id_tests::the_beacon_fold_width_is_in_the_fingerprint_and_not_in_the_fence_visitor ... ok
+test config::params::consensus_params_id_tests::the_2026_09_23_audit_fence_is_armed_on_testnet_12_and_nowhere_else ... ok
+test config::params::consensus_params_id_tests::the_benefits_fence_is_inside_the_fingerprint_and_outside_the_identity ... ok
+test config::params::consensus_params_id_tests::the_bft_gate_is_hashed_some_only_and_a_scheduled_gate_stays_a_schedule ... ok
+test config::params::consensus_params_id_tests::the_bond_maturity_window_is_in_the_fingerprint_and_not_in_the_fence_visitor ... ok
+test config::params::consensus_params_id_tests::the_bootstrap_fence_separates_networks_only_when_it_is_in_force ... ok
+test config::params::consensus_params_id_tests::the_bft_gate_refuses_at_startup_what_it_could_not_count ... ok
+test config::params::consensus_params_id_tests::the_canonical_work_fence_is_dormant_and_visible_the_moment_it_is_not ... ok
+test config::params::consensus_params_id_tests::the_capability_bound_fence_separates_networks_only_when_it_is_in_force ... ok
+test config::params::consensus_params_id_tests::the_certification_rent_fence_separates_networks_only_when_it_is_in_force ... ok
+test config::params::consensus_params_id_tests::the_capability_bound_needs_a_v2_network_to_mean_anything ... ok
+test config::params::consensus_params_id_tests::the_chunk_cap_charge_fence_separates_networks_only_when_it_is_in_force ... ok
+test config::params::consensus_params_id_tests::the_class_registering_assembly_can_be_spelled_for_any_base_not_only_the_rc ... ok
+test config::params::consensus_params_id_tests::the_complete_context_set_is_carded_and_leaves_every_live_network_where_it_was ... ok
+test config::params::consensus_params_id_tests::the_court_ladder_fence_is_dormant_on_every_shipped_preset_and_costs_nothing_while_it_is ... ok
+test config::params::consensus_params_id_tests::the_da_court_fence_is_dormant_on_every_shipped_preset_and_costs_nothing_while_it_is ... ok
+test config::params::consensus_params_id_tests::the_da_court_phase_fits_the_pruning_horizon_at_every_preset_that_has_a_lattice ... ok
+test config::params::consensus_params_id_tests::the_class_verify_deadline_fence_is_genesis_only_over_its_prerequisites ... ok
+test config::params::consensus_params_id_tests::the_dissectable_fused_fence_is_dormant_visible_when_armed_and_judges_genesis_from_genesis ... ok
+test config::params::consensus_params_id_tests::the_encoding_cannot_be_confused_by_concatenation ... ok
+test config::params::consensus_params_id_tests::the_decode_rules_fence_arms_over_the_derivation_with_its_mirror ... ok
+test config::params::consensus_params_id_tests::the_fp_decode_constraint_fence_is_dormant_and_visible_the_moment_it_is_not ... ok
+test config::params::consensus_params_id_tests::the_fence_table_names_every_palw_fence_on_params ... ok
+test config::params::consensus_params_id_tests::the_fp_decode_rules_fence_is_dormant_and_visible_the_moment_it_is_not ... ok
+test config::params::consensus_params_id_tests::the_fp_derived_work_fence_is_dormant_and_visible_the_moment_it_is_not ... ok
+test config::params::consensus_params_id_tests::the_free_prompt_da_pin_fence_is_dormant_on_every_shipped_preset_and_visible_the_moment_it_is_not ... ok
+test config::params::consensus_params_id_tests::the_frontier_provenance_fence_separates_networks_only_when_it_is_in_force ... ok
+test config::params::consensus_params_id_tests::the_heartbeat_fence_is_armable_and_is_not_a_rebuild ... ok
+test config::params::consensus_params_id_tests::the_held_context_fence_is_dormant_and_arms_only_over_v4_with_its_courts_and_tiled_ids ... ok
+test config::params::consensus_params_id_tests::the_heartbeat_transparent_fence_is_dormant_scheduled_or_a_rule_and_never_hides ... ok
+test config::params::consensus_params_id_tests::the_kary_court_fence_is_dormant_and_visible_the_moment_it_is_not ... ok
+test config::params::consensus_params_id_tests::the_mainnet_base_can_state_the_court_the_dense_tier_needs ... ok
+test config::params::consensus_params_id_tests::the_model_evm_fence_is_dormant_and_needs_the_market_and_an_active_lane ... ok
+test config::params::consensus_params_id_tests::the_model_lines_fence_is_dormant_on_every_shipped_preset_and_costs_nothing_while_it_is ... ok
+test config::params::consensus_params_id_tests::the_model_market_fence_is_dormant_on_every_shipped_preset_and_costs_nothing_while_it_is ... ok
+test config::params::consensus_params_id_tests::the_mainnet_card_states_testnet_12_s_carve_and_escrows_3_200_85_msk_a_claim ... ok
+test config::params::consensus_params_id_tests::the_palw_state_version_moves_the_identity_and_not_only_the_params_id ... ok
+test config::params::consensus_params_id_tests::the_offence_attribution_fence_is_genesis_only_and_rides_its_four_fences ... ok
+test config::params::consensus_params_id_tests::the_priced_rows_fence_separates_networks_only_when_it_is_in_force ... ok
+test config::params::consensus_params_id_tests::the_prompt_ids_merkle_fence_answers_only_under_consensus_v2 ... ok
+test config::params::consensus_params_id_tests::the_prompt_ids_merkle_fence_is_dormant_and_visible_the_moment_it_is_not ... ok
+test config::params::consensus_params_id_tests::the_prefill_draw_fence_is_dormant_and_named_when_armed ... ok
+test config::params::consensus_params_id_tests::the_rc_ruleset_arms_the_unavailable_abstains_rule_from_genesis ... ok
+test config::params::consensus_params_id_tests::the_prompt_ids_merkle_fence_is_genesis_only_and_named_in_the_ruleset_id ... ok
+test config::params::consensus_params_id_tests::the_receipt_rows_fence_is_stated_on_a_card_and_needs_the_first_fence ... ok
+test config::params::consensus_params_id_tests::the_scheduling_fixtures_are_on_the_side_of_the_line_they_claim ... ok
+test config::params::consensus_params_id_tests::the_shard_court_arms_only_over_a_bundle_that_commits_to_its_signing_context ... ok
+test config::params::consensus_params_id_tests::the_refutation_ladder_is_the_rulesets_only_past_the_court_ladder_fence ... ok
+test config::params::consensus_params_id_tests::the_shard_court_fence_is_dormant_and_visible_the_moment_it_is_not ... ok
+test config::params::consensus_params_id_tests::the_shard_licensing_fence_is_dormant_and_arms_only_over_v3_with_the_court ... ok
+test config::params::consensus_params_id_tests::the_shipped_genesis_can_seat_a_panel_for_every_class_it_registers ... ok
+test config::params::consensus_params_id_tests::the_t12_c7_list_is_the_2m_row ... ok
+test config::params::consensus_params_id_tests::the_share_growth_final_fence_is_dormant_everywhere_and_refused_where_it_cannot_read_the_epochs_finals ... ok
+test config::params::consensus_params_id_tests::the_token_lift_fence_is_dormant_visible_when_armed_and_its_kernel_is_outside_the_catalog_root ... ok
+test config::params::consensus_params_id_tests::the_two_minute_cadence_is_a_fixed_point_of_the_live_testnet_table ... ok
+test config::params::consensus_params_id_tests::the_unavailable_abstains_fence_separates_networks_only_when_it_is_in_force ... ok
+test config::params::consensus_params_id_tests::the_testnet_12_dns_set_is_mainnet_assumed_and_nobody_elses_moved ... ok
+test config::params::consensus_params_id_tests::the_uncertified_weightless_fence_separates_networks_only_when_it_is_in_force ... ok
+test config::params::consensus_params_id_tests::the_v2_median_time_window_and_the_timestamp_tolerance_describe_one_clock ... ok
+test config::params::consensus_params_id_tests::the_v2_pruning_depth_is_the_derivation_on_every_preset_that_schedules_the_court ... ok
+test config::params::consensus_params_id_tests::the_withdrawal_delay_in_force_outlasts_the_data_availability_court ... ok
+test config::params::consensus_params_id_tests::turning_off_any_genesis_active_fence_moves_the_identity ... ok
+test config::params::consensus_params_id_tests::two_minute_bps_constants_match_formulas ... ok
+test config::params::consensus_params_id_tests::unbonding_outlasts_many_finality_windows ... ok
+test config::params::fingerprint_probe::the_palw_rc_network_id_builds_params_instead_of_aborting ... ok
+const                 : 3de9ba33581b12b8478a1d476a4e58889ed21ddb91dc24cc00706f49dd5b5b97
+Params::from(net)     : 0d9cf361e02dea6d9e873014ff5e414c2e8e6879e8d705cde6c924a3a3f8dd88
+Params::from(id{10})  : 0d9cf361e02dea6d9e873014ff5e414c2e8e6879e8d705cde6c924a3a3f8dd88
+TESTNET_PARAMS.net    : NetworkId { network_type: Testnet, suffix: Some(10) }
+test config::params::fingerprint_probe::the_pinned_testnet_fingerprint_is_the_one_a_node_announces ... ok
+test config::params::funded_execution_fence_tests::height_and_every_policy_namespace_are_committed_and_only_activation_is_visited ... ok
+test config::params::funded_execution_fence_tests::native_final_policy_is_separate_and_all_values_leave_with_its_fence ... ok
+test config::params::funded_execution_fence_tests::presets_are_absent_and_never_normalizes_the_entire_peer_identity ... ok
+test config::params::funded_execution_fence_tests::stage28_does_not_grant_old14_and_preserves_future_peer_compatibility ... ok
+test config::params::funded_execution_fence_tests::stage_contract_is_independent_and_never_collapses_its_entire_policy ... ok
+test config::params::consensus_params_id_tests::the_virtual_reserve_fence_is_dormant_everywhere_and_moves_no_id_while_it_is ... ok
+test config::params::palw_execution_lane_stage_tests::a_span_keeps_the_width_in_force_where_it_opens ... ok
+test config::params::palw_execution_lane_stage_tests::a_short_span_is_a_scheduled_fence_and_keeps_the_identity ... ok
+test config::params::palw_execution_lane_stage_tests::a_widening_is_a_scheduled_fence_and_its_width_is_reported_with_it ... ok
+test config::params::palw_model_registry_fence_tests::adr0132_the_economic_payout_fence_is_dormant_everywhere_arms_by_height_and_is_refused_alone ... ok
+test config::params::palw_model_registry_fence_tests::adr0132_the_single_lottery_fence_is_dormant_everywhere_arms_by_height_and_needs_the_work_target ... ok
+test config::params::palw_model_registry_fence_tests::adr0135_the_registry_fence_is_dormant_everywhere_and_arms_by_height ... ok
+test config::params::palw_model_registry_fence_tests::adr0137_the_work_target_fence_is_dormant_everywhere_arms_by_height_and_is_refused_alone ... ok
+test config::params::palw_model_registry_fence_tests::t11_daa_6000_is_the_compatibility_boundary_and_6001_the_one_palw_upgrade_flag_day ... ok
+test config::params::palw_execution_lane_stage_tests::an_unrunnable_stage_table_refuses_to_start ... ok
+test config::params::palw_overlay_carve_tests::adr0134_the_compute_overlay_retires_at_its_own_height ... ok
+test config::params::palw_overlay_carve_tests::palw_t12_genesis_claim_escrow_is_the_cards ... ok
+test config::params::palw_overlay_carve_tests::the_carve_is_refused_beside_an_armed_escrow_backing_gate ... ok
+test config::params::palw_overlay_carve_tests::the_carve_is_resolved_at_the_lower_score_so_it_always_fits_the_payers_base ... ok
+test config::params::palw_overlay_carve_tests::an_overlay_carve_that_cannot_fit_refuses_to_start ... ok
+test config::params::palw_overlay_carve_tests::the_split_is_lowered_from_the_height_and_still_sums_to_the_subsidy ... ok
+test config::params::palw_overlay_carve_tests::the_overlay_carve_is_hashed_some_only_and_scheduled_like_a_fence ... ok
+test config::params::post_launch_fence_arming_tests::the_anchor_at_ceiling_fence_needs_the_operator_anchor_at_or_below_it ... ok
+test config::params::post_launch_fence_arming_tests::the_schedule_id_names_the_two_strict_win_fences_on_testnet12_only ... ok
+
+thread 'config::params::post_launch_fence_arming_tests::an_entry_set_after_pass_2_is_armed_at_the_release_height_by_the_assembly' (2073194) panicked at consensus/core/src/config/params.rs:11183:69:
+palw_operator_anchor is set on an ASSEMBLED ConsensusV2 ruleset: its operators are the genesis registry's bonds (arm the post-launch list in palw_t12_params_with_registry_v1, after the assembly)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+testnet-12 armed at 750: ("3d33cad25caeada14dd729bf622c122b6832e94d50891d5a0662ca2c8aadc350", "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5", "f55a70399992d223d92b61c35f38012919024ef291edb5722026d66640a17508"); launch release: ("322104e40468fc3382ed325e2faf0c86846e11df52d3d6c99806d596fb2d663b", "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5", "a96d6caf49dbdf82e3dff89d23e9d97795460a7ba1122e9389c2959c04a90234")
+
+thread 'config::params::post_launch_fence_arming_tests::an_entry_set_after_pass_2_is_armed_at_the_release_height_by_the_assembly' (2073194) panicked at consensus/core/src/config/params.rs:12167:25:
+the testnet-12 genesis card does not assemble: invalid V2 bundle: palw_anchor_at_ceiling is armed without palw_operator_anchor (lane A) at or below it: the binder is an operator's own attempt at its bond's exposure ceiling, judged by lane A's operator predicate — below lane A any bonded attempt at its ceiling would bind the claims due at it
+test config::params::post_launch_fence_arming_tests::an_entry_set_after_pass_2_is_armed_at_the_release_height_by_the_assembly ... ok
+test palw_economic_safety_v1::tests::a_permit_is_priced_at_fees_not_at_a_subsidy ... ok
+test palw_economic_safety_v1::tests::maturity_and_recoverable_rights_move_together ... ok
+test palw_economic_safety_v1::tests::on_the_capped_mint_the_short_maturity_moves_no_figure ... ok
+test palw_economic_safety_v1::tests::the_priced_gain_is_covered_with_a_real_margin ... ok
+test palw_economic_safety_v1::tests::the_shipped_inequality_held_by_two_sompi ... ok
+test palw_economic_safety_v1::tests::the_short_maturity_prices_every_quantum ... ok
+test palw_economic_safety_v1::tests::the_stored_licence_door_tags_are_pinned_and_mirror_the_fold_doors ... ok
+test palw_model_panel_one_v1::tests::a_future_migration_keeps_the_live_handshake_and_kernel_policy_identity ... ok
+test palw_model_panel_one_v1::tests::dormant_migration_preserves_each_historical_panel ... ok
+test palw_model_panel_one_v1::tests::one_signer_carries_the_whole_lock_and_duplicate_basis_cannot_reduce_it ... ok
+test palw_model_panel_one_v1::tests::original_acceptance_controls_panels_across_the_migration ... ok
+all-model release params=3d33cad25caeada14dd729bf622c122b6832e94d50891d5a0662ca2c8aadc350 schedule=f55a70399992d223d92b61c35f38012919024ef291edb5722026d66640a17508 identity=5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5
+test palw_model_panel_one_v1::tests::public_migration_activates_at_its_separate_future_boundary ... ok
+test palw_model_panel_one_v1::tests::single_seat_migration_cannot_be_armed_without_public_court_and_gate_c ... ok
+test config::params::post_launch_fence_arming_tests::the_shipped_ruleset_arms_every_post_launch_fence_at_750_and_validates ... ok
+test palw_panel_v2::tests::a_bond_that_cannot_run_the_class_is_not_drawn_to_judge_it ... ok
+test palw_panel_v2::tests::a_bond_that_declared_but_never_produced_is_not_drawn_for_a_registrant_class ... ok
+test palw_panel_v2::tests::a_bond_with_nothing_left_to_lose_may_not_take_work ... ok
+test palw_panel_v2::tests::a_claim_whose_own_operator_has_left_can_still_seat_a_panel ... ok
+test palw_panel_v2::tests::a_class_needs_seat_count_plus_one_distinct_operators ... ok
+test palw_panel_v2::tests::a_receipt_outside_its_window_is_not_a_discharge_of_the_duty ... ok
+test palw_panel_v2::tests::a_seat_may_plead_incapable_except_on_the_floor ... ok
+test palw_panel_v2::tests::a_shard_part_is_validated_over_its_shards_seats_and_the_whole_door_is_shut ... ok
+test palw_model_panel_one_v1::tests::t12_can_arm_the_migration_only_with_its_synchronized_mirror ... ok
+test palw_panel_v2::tests::adr0124_the_economy_draws_by_floor_and_headroom_and_one_ticket_a_bond ... ok
+test palw_panel_v2::tests::a_stratified_draw_seats_each_shard_from_the_bonds_that_hold_it ... ok
+test palw_panel_v2::tests::adr0130_a_bond_that_cannot_reserve_the_floor_is_not_drawn_and_too_few_operators_refuse ... ok
+test palw_panel_v2::tests::adr0130_below_the_economy_the_draw_is_the_per_bond_sortition_and_past_it_the_per_bond_panel_is_refused ... ok
+test palw_panel_v2::tests::adr0133_v2_a_licence_by_coverage_is_v1_for_full_masks_and_needs_two_attestations_a_segment ... ok
+test palw_panel_v2::tests::adr0130_an_operator_draws_one_entry_however_many_bonds_it_holds ... ok
+test palw_panel_v2::tests::adr0152_stake_draw::f2_floor_refusal_retry::f2_a_claim_that_held_a_panel_is_not_retried ... ok
+test palw_panel_v2::tests::adr0152_stake_draw::f2_floor_refusal_retry::f2_a_floor_refusal_re_anchors_and_binds_at_a_later_slot_once_room_frees ... ok
+test palw_panel_v2::tests::adr0152_stake_draw::f2_floor_refusal_retry::f2_below_the_fence_the_fold_is_the_shipped_one ... ok
+test palw_panel_v2::tests::adr0152_stake_draw::f2_floor_refusal_retry::f2_repeated_refusals_void_only_at_the_backstop_with_todays_label ... ok
+test palw_panel_v2::tests::adr0152_stake_draw::build_equals_accept_and_each_draw_refuses_the_others_panel ... ok
+[f2 cost] 129 bonds: census build 278µs, census + 64 verdicts 21.437958ms; 64 chain draws 62.1225ms
+test palw_panel_v2::tests::adr0152_stake_draw::f2_floor_refusal_retry::f2_the_census_costs_one_walk_per_anchor_block ... ok
+test palw_panel_v2::tests::adr0152_stake_draw::f2_floor_refusal_retry::f2_the_verdict_reads_the_pre_object_base_not_what_the_anchor_block_carries ... ok
+test palw_panel_v2::tests::adr0152_stake_draw::m4::t89_a_redraw_binds_only_in_the_redraw_s_anchor_block ... ok
+test palw_panel_v2::tests::adr0152_stake_draw::m4::t89_a_reorg_across_the_bind_re_derives_on_the_new_chain ... ok
+test palw_panel_v2::tests::adr0152_stake_draw::m4::t89_the_valid_lock_filter_excludes_a_bond_build_accept_fold ... ok
+census vs draw: 101 refused at every seed, 60 drawable, 4 outsider-judged drawable
+test palw_panel_v2::tests::adr0152_stake_draw::f2_floor_refusal_retry::f2_the_census_answers_the_draws_question_at_every_seed ... ok
+test palw_panel_v2::tests::adr0152_stake_draw::m4::t91_ready_eff_counts_ready_operators_over_capped_weights ... ok
+test palw_panel_v2::tests::adr0152_stake_draw::m4::t93_nothing_after_the_anchor_moves_the_panel ... ok
+test palw_panel_v2::tests::adr0152_stake_draw::m4::t89_two_claims_in_one_block_the_second_sees_the_first_s_duties ... ok
+test palw_panel_v2::tests::adr0152_stake_draw::m4::t94_a_refused_draw_binds_nothing_and_the_claim_voids_bind_timeout_without_forfeit ... ok
+test palw_panel_v2::tests::adr0152_stake_draw::m4::t94_a_genesis_executor_keeps_the_one_saturated_seat_tolerance ... ok
+test palw_panel_v2::tests::adr0152_stake_draw::panel_seed_2026_09_25::the_gate_demands_the_seed_and_the_fold_stores_it ... ok
+test palw_panel_v2::tests::adr0152_stake_draw::panel_seed_2026_09_25::the_seed_is_the_execution_and_the_claim_never_the_identity ... ok
+test palw_panel_v2::tests::adr0152_stake_draw::pl_e_a_seat_with_no_successes_is_drawn_at_half_weight ... ok
+test palw_panel_v2::tests::adr0152_stake_draw::sw10_the_outsider_floor_and_the_refusal_order ... ok
+test palw_panel_v2::tests::adr0152_stake_draw::sw5_the_outsider_is_the_smallest_stake_outsider_key ... ok
+test palw_panel_v2::tests::adr0152_stake_draw::sw9_ready_eff_over_capped_weights ... ok
+test palw_panel_v2::tests::adr0152_stake_draw::t85_the_integer_log_the_key_order_and_the_cap ... ok
+test palw_panel_v2::tests::adr0152_stake_draw::panel_seed_2026_09_25::execution_keyed_panels_keep_the_draw_s_law ... ok
+test palw_panel_v2::tests::adr0152_stake_draw::t87_the_weight_sums_eligible_bonds_and_keys_are_the_operators_own ... ok
+test palw_panel_v2::tests::adr0152_stake_draw::t86_the_draw_is_successive_sampling_and_s1_is_untouched ... ok
+test palw_panel_v2::tests::adr0152_stake_draw::t88_stake_some_replaces_the_lottery_whatever_weighted_says ... ok
+T92: 400 short draws refused together; 224 stake-floor refusals where the lottery bound
+test palw_panel_v2::tests::adr0152_stake_draw::t92_liveness_is_the_lotterys_and_a_95_percent_operator_sits_once ... ok
+test palw_panel_v2::tests::adr0152_stake_draw::t93_another_bonds_commitments_move_no_key ... ok
+test palw_panel_v2::tests::adr0152_stake_draw::t94_the_class_base_keeps_seats_the_valid_lock_refuses ... ok
+test palw_panel_v2::tests::adr0152_stake_draw::t94_the_eligible_stake_floor ... ok
+test palw_panel_v2::tests::adr0152_stake_draw::t94_under_the_one_ledger_filter_free_stake_decides_whether_and_posted_stake_how_often ... ok
+test palw_panel_v2::tests::adr_0065_d1_a_fresh_bond_may_not_take_a_seat_until_it_has_stood ... ok
+test palw_panel_v2::tests::an_unavailable_receipt_must_name_an_obligation_the_producer_had ... ok
+test palw_panel_v2::tests::c02_stake_weighting_favours_higher_collateral_seats_past_the_deep_fence ... ok
+test palw_panel_v2::tests::c02_weighted_draw_is_a_full_deterministic_panel_and_weighted_false_is_the_legacy_draw ... ok
+test palw_panel_v2::tests::palw_v2_executor_excluded_from_own_panel ... ok
+test palw_panel_v2::tests::panel_bound_acceptance_checks_slot_window_and_exact_seats ... ok
+test palw_panel_v2::tests::params_refuse_shapes_that_cannot_judge ... ok
+test palw_panel_v2::tests::rcore_m4_sampled_is_borsh_index_3_and_message_tag_4 ... ok
+test palw_panel_v2::tests::receipt_quorum_licenses_and_unavailable_quorum_defaults_the_producer ... ok
+test palw_panel_v2::tests::route_matrix_3_a_bond_that_cannot_post_the_valid_lock_is_not_drawn ... ok
+test palw_panel_v2::tests::the_draw_is_a_function_of_the_anchor_and_fails_closed_when_thin ... ok
+test palw_panel_v2::tests::the_licence_candidate_order_is_full_seat_then_outsider_then_valid_then_the_rest ... ok
+test palw_panel_v2::tests::the_licence_selection_drops_a_poisoned_receipt_and_a_repeated_seat ... ok
+test palw_panel_v2::tests::the_licence_selection_offers_exactly_what_the_doors_accept_in_every_arrival_order ... ok
+test palw_panel_v2::tests::the_licence_selection_prices_each_valid_at_its_door_with_the_lock_ledger_armed ... ok
+test palw_panel_v2::tests::the_optimistic_selection_falls_back_past_a_rider_the_fold_refuses ... ok
+test palw_panel_v2::tests::the_provenance_fast_path_never_skips_a_reachable_quorum ... ok
+test palw_panel_v2::tests::the_receipt_pool_reads_only_bound_panels_and_registered_keys ... ok
+test palw_panel_v2::tests::the_seatable_counter_agrees_with_the_draw_it_warns_about ... ok
+test palw_panel_v2::tests::the_seatable_counter_dedups_operators_and_respects_maturity ... ok
+test palw_panel_v2::tests::the_shipped_panel_tolerates_two_minted_bonds_without_scanning ... ok
+test palw_panel_v2::tests::the_shipped_registry_draws_under_an_armed_maturity_fence_even_after_a_seat_leaves ... ok
+test palw_panel_v2::tests::the_shipped_registry_still_draws_a_full_panel_with_the_capability_fence_armed ... ok
+test palw_panel_v2::tests::the_shortfall_limiter_reports_at_the_start_and_survives_a_reorg ... ok
+test palw_panel_v2::tests::the_two_verdicts_are_two_messages_and_every_field_is_signed ... ok
+test palw_panel_v2::tests::the_v2_panel_domains_are_distinct ... ok
+test palw_panel_v2::tests::verifier_greedy_assembler_drops_a_late_full_seat ... ok
+test palw_state_v2::tests::g14_model_panel_one_v1::a_bond_registered_after_the_commit_cannot_grind_into_its_draw ... ok
+test palw_state_v2::tests::g14_model_panel_one_v1::full_scope_signature_and_unique_seat_are_mandatory ... ok
+test palw_state_v2::tests::g14_model_panel_one_v1::historical_and_migrated_claims_keep_their_own_geometry_in_the_same_fold ... ok
+test palw_state_v2::tests::g14_model_panel_one_v1::model_ids_do_not_select_a_different_panel_route ... ok
+test palw_state_v2::tests::g14_model_panel_one_v1::no_independent_verifier_is_a_nonfraud_outcome_without_legacy_retry ... ok
+test palw_state_v2::tests::g14_model_panel_one_v1::post_commit_assignment_and_full_receipt_survive_restore_and_reorg ... ok
+test palw_state_v2::tests::g14_model_panel_one_v1::single_seat_final_does_not_replace_gate_c ... ok
+test palw_state_v2::tests::g14_model_panel_one_v1::the_only_false_valid_signer_pays_its_full_lock_before_and_after_final ... ok
+test palw_state_v2::tests::g14_model_panel_one_v1::the_single_scope_approval_authenticates_the_real_seat_signature_and_context ... ok
+test palw_state_v2::tests::rcore_m4_sampled_and_v3_door::q5_a_court_clearing_on_an_s2_licence_keeps_the_gate ... ok
+test palw_state_v2::tests::rcore_m4_sampled_and_v3_door::sr10_acceptance_and_the_fold_refuse_the_same_sets ... ok
+test palw_state_v2::tests::rcore_m4_sampled_and_v3_door::sr10_an_unbacked_valid_moves_nothing_and_the_rest_lands ... ok
+test palw_state_v2::tests::rcore_m4_sampled_and_v3_door::sr10_an_unbacked_valid_that_drops_the_recount_to_2_re_tests_the_rest_at_lock_2 ... ok
+test palw_state_v2::tests::rcore_m4_sampled_and_v3_door::sr10_fence_off_twin_the_door_is_closed_below_the_fence ... ok
+test palw_state_v2::tests::rcore_m4_sampled_and_v3_door::sr1b_the_v3_flip_moves_the_escrow_term_off_the_producer_ledger ... ok
+test palw_state_v2::tests::rcore_m4_sampled_and_v3_door::t70_a_sampled_outsider_does_not_satisfy_the_veto ... ok
+test palw_state_v2::tests::rcore_m4_sampled_and_v3_door::t70_a_sampled_seat_is_credited_takes_no_lock_and_is_never_dissent_slashed ... ok
+test palw_state_v2::tests::rcore_m4_sampled_and_v3_door::t70_below_the_fence_sampled_is_refused_by_the_acceptance_layer_and_the_fold ... ok
+test palw_state_v2::tests::rcore_m4_sampled_and_v3_door::t70_past_the_fence_sampled_counts_in_no_quorum_and_no_coverage ... ok
+test palw_state_v2::tests::rcore_m4_sampled_and_v3_door::t70_the_fourth_answer_is_appended_and_mapped ... ok
+test palw_state_v2::tests::rcore_m4_sampled_and_v3_door::t71_a_mixed_set_with_a_v2_full_replay_valid ... ok
+test palw_state_v2::tests::rcore_m4_sampled_and_v3_door::t71_the_recount_through_the_v3_door ... ok
+test palw_state_v2::tests::rcore_m4_sampled_and_v3_door::t74_v3_a_completing_set_at_l_plus_60_reaches_the_sr1b_seam_and_at_l_plus_61_does_not ... ok
+test palw_state_v2::tests::tir_fp_lane_v1::audit_fixcd_c01_an_active_registrant_keeps_binding_priority_and_an_inactive_one_opens_it ... ok
+test palw_state_v2::tests::tir_fp_lane_v1::audit_fixcd_c04_a_tir_class_semantic_statement_names_its_registered_tokenizer ... ok
+test palw_state_v2::tests::tir_fp_lane_v1::audit_v3_c01_a_tir_class_without_a_registrant_is_unrewardable_forever_past_the_container_fence ... ok
+test palw_state_v2::tests::tir_fp_lane_v1::model_panel_one_tir_original_assignment_and_receipt_timeout ... ok
+T88 corpus digest 76bb846d28e5007f9224ed883ae6252deea8233ecadfda3b2c60aff428c1062a: 2016 panels, 1392 refusals
+test palw_panel_v2::tests::adr0152_stake_draw::t88_stake_none_is_todays_draw_byte_for_byte ... ok
+[T-N1] test-only clock: accepted 102 preparation_until +8 open_until +11 stream_until +453 collect_until +461 material +469
+test palw_state_v2::tests::tir_fp_lane_v1::panelda_fence_boundary_is_byte_identical_below ... ok
+[T-N1] test-only clock: accepted 102 preparation_until +8 open_until +11 stream_until +453 collect_until +461 material +469
+[T-N1] forged: demand opened 111 respond_until 140 (turn span 29)
+test palw_state_v2::tests::tir_fp_lane_v1::panelda_honest_disclosed_claim_reaches_final_and_payment ... ok
+test palw_state_v2::tests::tir_fp_lane_v1::panelda_forged_claim_all_colluding_is_convicted_by_one_outsider_after_disclosure ... ok
+[T-N1] test-only clock: accepted 102 preparation_until +8 open_until +11 stream_until +453 collect_until +461 material +469
+[T-N1] test-only clock: accepted 102 preparation_until +8 open_until +11 stream_until +453 collect_until +461 material +469
+test palw_state_v2::tests::tir_fp_lane_v1::panelda_undisclosed_claim_defaults_without_conviction ... ok
+[T-N1] test-only clock: accepted 102 preparation_until +8 open_until +11 stream_until +453 collect_until +461 material +469
+[T-N1] forged: demand opened 111 respond_until 140 (turn span 29)
+test palw_state_v2::tests::tir_fp_lane_v1::t_n1_a_forged_ir_fp_claim_is_convicted_by_one_outside_owner_and_never_paid ... ok
+test palw_state_v2::tests::tir_fp_lane_v1::tir_attempt_lane_past_the_container_fence_takes_only_a_class_bound_to_its_palwart3_container ... ok
+test palw_state_v2::tests::tir_fp_lane_v1::tir_catalog_tier_reaches_a_class_through_its_bound_container_root_only ... ok
+[T-N1] honest: licensed 107 floor 563 collect_until 563 horizon 627
+test palw_state_v2::tests::tir_fp_lane_v1::t_n1_an_honest_ir_fp_claim_reaches_final_and_payment_inside_the_liability_horizon ... ok
+test palw_state_v2::tests::tir_fp_lane_v1::tir_fp_lane_is_closed_below_the_fence_and_frameless_past_it ... ok
+test palw_state_v2::tests::tir_fp_lane_v1::tir_fp_lane_is_authenticated_by_one_covering_family_on_a_gated_network ... ok
+test palw_state_v2::tests::tir_fp_lane_v1::tir_fp_lane_past_the_container_fence_takes_only_a_class_bound_to_its_palwart3_container ... ok
+test palw_tir_fp_lane_v1::tests::tir_fp_class_refuses_a_layout_the_record_does_not_bind ... ok
+test palw_tir_fp_lane_v1::tests::tir_fp_lane_is_covered_by_one_certified_family ... ok
+test palw_tir_fp_lane_v1::tests::tir_fp_leaves_are_the_captures_own_and_the_credit_is_the_new_positions ... ok
+test palw_user_status_v1::tests::arming_reads_without_any_fence ... ok
+test palw_user_status_v1::tests::void_codes_match_the_rpc_spelling ... ok
+test palw_vertex_v1::tests::a_compact_reference_names_one_claim_or_none ... ok
+test palw_vertex_v1::tests::a_malformed_vertex_is_refused_by_name ... ok
+test palw_vertex_v1::tests::a_tally_knows_who_answered ... ok
+test palw_vertex_v1::tests::an_honest_vertex_is_well_formed_and_its_leaves_are_in_the_strict_order ... ok
+test palw_vertex_v1::tests::domains_are_unique_across_all_palw_families ... ok
+test palw_vertex_v1::tests::part_iii_reproduces_the_rfc_tables ... ok
+test palw_vertex_v1::tests::the_root_is_order_and_length_sensitive ... ok
+test palw_vertex_v1::tests::the_signed_message_binds_every_field ... ok
+test palw_vertex_v1::tests::the_watch_catches_a_seat_that_signed_a_round_twice ... ok
+test palw_weight_cap_v1::tests::the_cap_and_the_budget_are_the_adrs_numbers ... ok
+test palw_weight_cap_v1::tests::the_shallow_tie_depth_is_a_slot_race ... ok
+test palw_state_v2::tests::tir_fp_lane_v1::tir_fp_lane_prices_and_accepts_a_framed_ir_claim_with_every_fence_at_genesis ... ok
+
+test result: ok. 302 passed; 0 failed; 0 ignored; 0 measured; 5004 filtered out; finished in 16.43s
+

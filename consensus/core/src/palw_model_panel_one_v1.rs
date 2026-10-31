@@ -231,8 +231,8 @@ mod tests {
         let p = crate::config::params::palw_t12_shipped_params();
         p.validate_palw_model_panel_one_v1().unwrap();
         let PalwConsensusMode::ConsensusV2(bundle) = &p.palw_consensus_mode else { unreachable!() };
-        assert!(!bundle.state.model_panel_one_governs_v1(18_559));
-        assert!(bundle.state.model_panel_one_governs_v1(18_560));
+        assert!(!bundle.state.model_panel_one_governs_v1(18_599));
+        assert!(bundle.state.model_panel_one_governs_v1(18_600));
         eprintln!(
             "all-model release params={} schedule={} identity={}",
             p.consensus_params_id(),

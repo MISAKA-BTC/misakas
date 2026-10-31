@@ -1,0 +1,11 @@
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/g14-producer-panel-one/MISAKA-testnet/consensus/core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 05s
+     Running unittests src/lib.rs (/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/g14-18400-deploy/target/ci-gates/debug/deps/kaspa_consensus_core-e242d74f72be430d)
+
+running 2 tests
+all-model release params=3d33cad25caeada14dd729bf622c122b6832e94d50891d5a0662ca2c8aadc350 schedule=f55a70399992d223d92b61c35f38012919024ef291edb5722026d66640a17508 identity=5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5
+test palw_model_panel_one_v1::tests::public_migration_activates_at_its_separate_future_boundary ... ok
+test palw_state_v2::tests::tir_fp_lane_v1::model_panel_one_tir_original_assignment_and_receipt_timeout ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 5304 filtered out; finished in 0.23s
+

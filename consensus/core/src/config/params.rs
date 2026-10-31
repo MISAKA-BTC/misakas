@@ -10996,7 +10996,7 @@ pub fn palw_t12_shipped_params() -> Params {
 
 /// All-model producer migration, separately scheduled after the kernel slice.
 /// This height does not reinterpret claims accepted under the DAA-18,400 rules.
-pub const PALW_T12_MODEL_PANEL_ONE_FENCE_DAA_V1: u64 = 18_560;
+pub const PALW_T12_MODEL_PANEL_ONE_FENCE_DAA_V1: u64 = 18_600;
 
 /// The live DAA-18,400 ruleset before the all-model migration, for historical
 /// replay identities and fixtures that deliberately disarm its prerequisites.

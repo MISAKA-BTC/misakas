@@ -1,0 +1,19 @@
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/g14-producer-panel-one/MISAKA-testnet/consensus/core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 54.63s
+     Running unittests src/lib.rs (/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/g14-18400-deploy/target/ci-gates/debug/deps/kaspa_consensus_core-e242d74f72be430d)
+
+running 1 test
+
+thread 'palw_state_v2::tests::tir_fp_lane_v1::model_panel_one_tir_original_assignment_and_receipt_timeout' (2054618) panicked at consensus/core/src/palw_state_v2/tests/tir_fp_lane_v1.rs:1293:10:
+immutable original custody never wedges the next block: CarriageInconsistent("original TIR source cannot inherit a redrawn Panel")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test palw_state_v2::tests::tir_fp_lane_v1::model_panel_one_tir_original_assignment_and_receipt_timeout ... FAILED
+
+failures:
+
+failures:
+    palw_state_v2::tests::tir_fp_lane_v1::model_panel_one_tir_original_assignment_and_receipt_timeout
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 5305 filtered out; finished in 0.22s
+
+error: test failed, to rerun pass `-p kaspa-consensus-core --lib`

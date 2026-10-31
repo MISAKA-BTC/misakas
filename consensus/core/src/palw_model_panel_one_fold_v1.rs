@@ -39,6 +39,17 @@ pub(super) fn bind_due_v1(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCo
         {
             continue;
         }
+        // An ORIGINAL custody contract freezes its first native panel. A
+        // receipt timeout cannot retarget that paid contract to a fresh panel.
+        // End this unavailable claim without treating silence as fraud; never
+        // let a per-claim redraw invalidate every subsequent chain block.
+        if crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(&builder.state, id)
+            .is_some_and(|frame| frame.original_custody_v1().panel_v1().is_some())
+        {
+            let claim = claim.clone();
+            builder.void_claim(id, &claim, ctx.daa_score, PalwVoidReasonV2::PanelUnavailable)?;
+            continue;
+        }
         let Some(seed) = model_panel_one_seed_v1(&builder.state, &id, claim.bind_base_daa(), span_daa) else { continue };
         let lock = palw_panel_valid_lock_v1(&builder.state, builder.params, builder.extras, &id, claim, ctx.daa_score, 1);
         let policy = PalwPanelDrawPolicyV1 {

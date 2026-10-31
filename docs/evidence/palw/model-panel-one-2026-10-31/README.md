@@ -1,6 +1,6 @@
 # 全モデル G14 Panel=1 — 2026-10-31 検証記録
 
-状態: 実装・ローカル検証済み。**配備・有効化は未実施**。t12 の移行 fence 候補は DAA **18,560**。mainnet 等は無効のまま。
+状態: 実装・ローカル検証済み。**配備・有効化は未実施**。t12 の移行 fence 候補は DAA **18,600**。mainnet 等は無効のまま。
 [RFC-0042](../../../rfc/0042-all-model-g14-panel-one.md) / [ADR-0210](../../../adr/0210-all-model-g14-panel-one.md)。
 
 ## 配備候補の基点
@@ -9,7 +9,19 @@
 過去の状態遷移を変更したバイナリへ同時更新しないためであり、その修正自体の採否の変更ではない。
 元の main 基点の実装はローカル branch `codex/g14-model-panel-one-main-base` に保存した。
 
-## t12 の配備候補
+## 現在のt12配備候補
+
+未配備だった18,560候補を撤回し、DAA **18,600**へ延期した。Linuxビルド中に追加したnative TIR ORIGINAL回帰で、1席の初回割当後、無応答からの再抽選が固定済みcustody契約と衝突して後続block全体を拒否する不具合を再現した。
+[再現ログ](tir-original-redraw-reproduction.log) / [修正後ログ](tir-original-redraw-fixed.log)。再抽選先へ契約を移さず、当該claimをPanelUnavailableで非fraud終了する。producer collateral不変、元custody保持、delta revert、cold restoreを確認した。
+
+- params: `3d33cad25caeada14dd729bf622c122b6832e94d50891d5a0662ca2c8aadc350`
+- schedule: `f55a70399992d223d92b61c35f38012919024ef291edb5722026d66640a17508`
+- handshake / kernel policy: `5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5`（変更なし）
+
+[18600-regression.log](18600-regression.log): **302 passed / 0 failed**。TIRの既存公開court・PanelDa・Final/支払・虚偽承認の回帰も含む。
+[18600-node-check.log](18600-node-check.log): P2P応答分離とpending resync再開を取り込んだ候補で、`cargo check -p kaspad --features evm --all-targets`成功。Linux releaseビルド・配備・実モデル運用は未確認。
+
+## 最初の未配備候補（撤回）
 
 ユーザー指定の全モデル移行を段階配備するため、稼働チェーンの先に DAA 18,560 を設定した。数値は配備上の境界であり、過去の kernel fence 18,400 は変更しない。
 
