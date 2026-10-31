@@ -68,3 +68,11 @@ A4は`canonical_leaf_count × full_frame_cap`を全候補・全試行で予約�
 - A7: 同じcandidateで、全員共謀・偽Panel・最終工程省略・自己整合した別model/inputを試す。subprocess timeout時はprocess groupを停止し、子の終了後にlog/hashを確定する。
 
 独立Pythonから作った追加の [vector](tir-vectors-r1.json) をRustと照合する。元のr1 vector・過去の実行ログは書き換えない。
+
+## Panel作者によるpacket認証
+
+Native受付では、署名していないrelayの不正なproofで正直なWitnessを拒否しない。`EvidenceFrame::id()`はcanonical frame全体をstream hashし、Panel作者は`EVIDENCE_SIGN_CONTEXT`（`misaka/positive/evidence-part/v2/r1`）でその64-byte IDにML-DSA-87署名する。A4はrooted Witnessのauthor keyを解決し、`EvidenceFrame::authenticate`を通したpacketだけをNodeCheckerへ渡す。戻り値`AuthenticatedEvidenceFrame`は作者認証のみで、native受付・drawn membership・計算合格・支払の権限ではない。
+
+署名済みpacketは別relayが同一bytesで搬送でき、relay自身の署名へ置換しない。case/result/witness/plan/位置/payloadの変更は署名を無効にする。未認証packetはdeliveryだけを拒否し、候補のattempt・Miner責任・料金を変更しない。NodeのLocalResourceLimit、古いview、Incompleteも算術不正にしない。
+
+この作者署名は4627 bytes追加される。`signed_wire_bytes()`はunsigned EvidenceFrame＋署名の長さで、native eventのversion/tag/length、carrier transaction等は別途加算する。前述の300 bytesはunsigned EvidenceFrameとinner codecのoverheadであり、署名を含まない。A4のquoteは署名検査CPU・全署名bytesも全parts/全試行で予約する。未計測の実LLM費用が許容されるという主張はしない。
