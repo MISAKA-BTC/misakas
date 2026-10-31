@@ -1,0 +1,42 @@
+{
+  "command": [
+    "cargo",
+    "clippy",
+    "--offline",
+    "--locked",
+    "--config",
+    "profile.dev.package.kaspa-consensus-core.opt-level=0",
+    "-p",
+    "misaka-palw-positive-accounting-node",
+    "--no-default-features",
+    "--all-targets",
+    "--no-deps",
+    "--",
+    "-D",
+    "warnings"
+  ],
+  "environment": {
+    "CARGO_TARGET_DIR": "/Users/wata/.cache/misaka-positive-accounting-node-target",
+    "CARGO_INCREMENTAL": "0",
+    "CARGO_PROFILE_DEV_DEBUG": "0",
+    "CARGO_PROFILE_TEST_DEBUG": "0",
+    "CARGO_BUILD_JOBS": "2"
+  },
+  "base_commit": "c0d21e2f10061dea5261ee56b1e654354950d874",
+  "source_sha256": {
+    "misaka/palw/positive-accounting-node/src/dues.rs": "c3db139200395acff2aac6c307e61b7aade16b870502b426e1ea23916c2e7f91",
+    "misaka/palw/positive-accounting-node/src/dues/tests.rs": "8d2c5d8c25fac2f1b6c667cc5c173701d85250c90f1e896e9a06b82f62877b7f",
+    "misaka/palw/positive-accounting-node/src/lib.rs": "62657713cd3311968ca27ffc5bbefdd768593e5fb387451478f3005ee5d47c49",
+    "misaka/palw/positive-accounting-node/src/native.rs": "27011bd251f0496a26d4279e56682dbdc5f03b82697034e402aec3d11b41277c",
+    "misaka/palw/positive-accounting-node/src/native/tests.rs": "f96ea0bec32adfbed4d9d8c1ae6ef7fb11866277829bd5df192ae3e3db1ffcc6",
+    "misaka/palw/positive-accounting-node/src/native_funds.rs": "53800ab7889605d141407e588e9d51d384f023ca483c1c4506ef54fe2e1fdb0a",
+    "misaka/palw/positive-accounting-node/src/native_funds/tests.rs": "ce6f998ee72d35c7737b207e0a0818db6cccf4ec7eeb182bf998bdd8ce31b99c",
+    "misaka/palw/positive-accounting-node/src/rows.rs": "a78a2a6aa0148874ee0f6a354b1c24b8f11a7d1cb1ce855a41dc6e1b3b035807",
+    "misaka/palw/positive-accounting-node/src/rows/tests.rs": "3cce030a5737981560043a8ace736fdc15b6fa295b4bb37c3a5fcac5f60fa2db",
+    "misaka/palw/positive-accounting-node/src/tir.rs": "c09507b31356a1c3384d3fce6a28a22abdc31b972d11be872e0803117ae210a3",
+    "misaka/palw/positive-accounting-node/src/tir_tests.rs": "14b8840d1db8f3d04180eb993236a878ed1d05298806cf10ec8e88b7e1d0ed29"
+  },
+  "raw_log": "node-all-targets-clippy-initial.log",
+  "scope": "node no-default all targets DATA adapters",
+  "exit_code": 0
+}

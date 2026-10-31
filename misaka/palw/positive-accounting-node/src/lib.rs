@@ -5,6 +5,7 @@
 
 pub mod dues;
 pub mod native;
+pub mod native_funds;
 pub mod rows;
 #[cfg(feature = "tir-checker")]
 pub mod tir;

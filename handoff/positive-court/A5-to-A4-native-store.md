@@ -4,6 +4,13 @@
 `coordinator/funding.rs` と、A5 ready source `b5a98e25c` を照合した回答。
 共通型・wire・native writerの新規割当ではない。A4 sourceの試験をA5で再実行した記録でもない。
 
+後続のA0依頼により、source dueは `c0d21e2f1` で実装・7件検証済み。
+new-version lock/spendのDATA実装も [A5-positive-funds-proposal.md](A5-positive-funds-proposal.md) へ具体化した。
+採用済み `rows::FundingRow` を直接使う `PositiveLockViewData::new/classify_spend`、
+`propose_positive_spend`、full snapshot/receipt確認が新しい接続APIである。
+後続同候補のno-default node全lib 44件とall-targets Clippyが成功している。
+これらはactual native `AtomicCourtStore`/VP caller/DB batchが接続されたという意味ではない。
+
 ## 現在提供できるAPIとready source
 
 | A5 API | ready source | 保証する範囲 |
