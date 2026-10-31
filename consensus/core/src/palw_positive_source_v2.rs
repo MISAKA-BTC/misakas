@@ -14,6 +14,8 @@ use misaka_palw_positive_contract::{
 use std::{collections::BTreeMap, sync::Arc};
 #[path = "palw_positive_source_v2_history.rs"]
 pub mod history;
+#[path = "palw_positive_source_v2_journal.rs"]
+mod journal;
 use history::{NativeSourceHistoryV2, SourceHistoryEntryV2, SourceHistoryKindV2};
 
 type SourceKey = (SourceKind, Digest);
