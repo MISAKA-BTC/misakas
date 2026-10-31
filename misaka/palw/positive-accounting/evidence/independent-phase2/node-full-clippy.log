@@ -1,0 +1,31 @@
+    Checking serde_json v1.0.151
+    Checking rustix v0.38.37
+    Checking wasm-bindgen v0.2.100
+    Checking js-sys v0.3.77
+    Checking polling v3.7.3
+    Checking async-io v2.3.4
+    Checking workflow-log v0.18.0
+    Checking async-global-executor v2.4.1
+    Checking async-std v1.13.0
+    Checking kaspa-utils v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a5/MISAKA-testnet/utils)
+    Checking web-sys v0.3.77
+    Checking serde-wasm-bindgen v0.6.5
+    Checking wasm-bindgen-futures v0.4.50
+    Checking log4rs v1.4.0
+    Checking kaspa-core v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a5/MISAKA-testnet/core)
+    Checking misaka-palw-tir-artifact v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a5/MISAKA-testnet/misaka/palw/tir/artifact)
+    Checking tempfile v3.13.0
+    Checking misaka-palw-positive-accounting v1.1.0 (/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/misaka-positive-accounting-node.SXGK4M/misaka-palw-positive-accounting)
+    Checking workflow-panic-hook v0.18.0
+    Checking workflow-core v0.18.0
+    Checking workflow-wasm v0.18.0
+    Checking kaspa-hashes v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a5/MISAKA-testnet/crypto/hashes)
+    Checking kaspa-addresses v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a5/MISAKA-testnet/crypto/addresses)
+    Checking kaspa-math v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a5/MISAKA-testnet/math)
+    Checking misaka-palw-panel v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a5/MISAKA-testnet/misaka/palw/panel)
+    Checking kaspa-merkle v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a5/MISAKA-testnet/crypto/merkle)
+    Checking kaspa-muhash v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a5/MISAKA-testnet/crypto/muhash)
+    Checking kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a5/MISAKA-testnet/consensus/core)
+    Checking misaka-palw-tir-exec v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a5/MISAKA-testnet/misaka/palw/tir/exec)
+    Checking misaka-palw-positive-accounting-node v1.1.0 (/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/misaka-positive-accounting-node.SXGK4M/misaka-palw-positive-accounting-node)
+    Finished `dev` profile [unoptimized] target(s) in 51.27s

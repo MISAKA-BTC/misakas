@@ -28,9 +28,7 @@ diff --git a/Cargo.toml b/Cargo.toml
 diff --git a/Cargo.lock b/Cargo.lock
 --- a/Cargo.lock
 +++ b/Cargo.lock
-@@ -6319,6 +6319,21 @@
- ]
- 
+@@ -6321,4 +6321,19 @@
  [[package]]
 +name = "misaka-palw-positive-accounting-node"
 +version = "1.1.0"

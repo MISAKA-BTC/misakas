@@ -1,0 +1,34 @@
+   Compiling hax-lib v0.3.7
+   Compiling libcrux-platform v0.0.3
+   Compiling borsh v1.5.1
+   Compiling libcrux-secrets v0.0.6
+   Compiling libcrux-traits v0.0.8
+   Compiling libcrux-intrinsics v0.0.8
+   Compiling libcrux-sha3 v0.0.10
+   Compiling libcrux-ml-dsa v0.0.10
+   Compiling misaka-palw-positive-contract v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a5/MISAKA-testnet/misaka/palw/positive-contract)
+   Compiling misaka-palw-positive-accounting v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a5/MISAKA-testnet/misaka/palw/positive-accounting)
+    Finished `test` profile [unoptimized] target(s) in 2.20s
+     Running tests/independent_consumer_routes.rs (/Users/wata/.cache/misaka-positive-accounting-node-target/debug/deps/independent_consumer_routes-9b9419fc7af19cfe)
+
+running 1 test
+test each_consumer_forwards_the_same_claim_and_its_own_credit_use_on_every_read ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/independent_credit_graph.rs (/Users/wata/.cache/misaka-positive-accounting-node-target/debug/deps/independent_credit_graph-985e3c1a19032fb4)
+
+running 2 tests
+test the_first_node_over_the_cap_is_not_silently_treated_as_an_approved_leaf ... ok
+test all_three_vertex_graphs_and_readiness_sets_match_the_independent_oracle ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s
+
+     Running tests/independent_fee_conservation.rs (/Users/wata/.cache/misaka-positive-accounting-node-target/debug/deps/independent_fee_conservation-efa0f9285d838186)
+
+running 2 tests
+test a_free_unit_keeps_its_dedupe_position_without_creating_a_native_value_due ... ok
+test every_delivery_subset_payment_order_and_retry_conserves_and_reverses_exact_value ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+

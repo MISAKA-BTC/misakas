@@ -1,0 +1,18 @@
+   Compiling syn v2.0.110
+    Checking libc v0.2.186
+    Checking libcrux-platform v0.0.3
+    Checking blake2b_simd v1.0.2
+   Compiling hax-lib-macros v0.3.7
+   Compiling syn_derive v0.1.8
+    Checking hax-lib v0.3.7
+   Compiling borsh-derive v1.5.1
+    Checking libcrux-secrets v0.0.6
+    Checking libcrux-traits v0.0.8
+    Checking libcrux-intrinsics v0.0.8
+    Checking libcrux-sha3 v0.0.10
+   Compiling libcrux-macros v0.0.3
+    Checking borsh v1.5.1
+    Checking libcrux-ml-dsa v0.0.10
+    Checking misaka-palw-positive-contract v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a5/MISAKA-testnet/misaka/palw/positive-contract)
+    Checking misaka-palw-positive-accounting v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a5/MISAKA-testnet/misaka/palw/positive-accounting)
+    Finished `dev` profile [unoptimized] target(s) in 4.46s
