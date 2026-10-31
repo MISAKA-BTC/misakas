@@ -236,3 +236,58 @@ cb53d36e492ca30d111aa8d59bdc8693f424ddc584c2419e1c4e931ea4639612  misaka/palw/re
 fb137300c4db51f20a588bf32f664147a923611759003dd751ade283b9093b93  consensus/core/src/palw_positive_source_geometry_v2/independent_source_ledger.rs
 53d8b269bf3c55b746120f11a3edb9636b12617b98e9d039ec5efcca17428b16  misaka/palw/remote/src/positive_miner_v2_rocksdb_tests.rs
 ```
+
+## Read-only logical NoOp addendum — candidate 4da761423
+
+The source implementation agent performed this static follow-up inspection of
+`4da761423bd3f317052e30f2b5dfde7cd38917f7`. This is a read-only review, not
+an additional independent test-author review or runtime validation. The three
+production files below were clean in the working tree and their SHA-256 values
+matched the files read directly from that commit. No production changes or
+Cargo commands were made during this inspection. Root owns runtime validation;
+earlier candidate/runtime evidence remains historical and is not a pass claim
+for this candidate.
+
+The inspection checked the following NoOp boundaries:
+
+- An existing canonical RequestId with an identical complete SourceRequest is
+  classified only after concrete geometry, literal op3 framing, requester/key
+  binding, request signature, actual-context history/authorization and cutoff
+  checks. Changing the carrier, author or signature alone does not create a
+  charged request or replace its first retained literal.
+- An existing canonical unit receipt is classified only after op4 framing,
+  concrete G14 opening/source/unit authentication, actual-context provider and
+  history authorization, cutoff checks and immutable service-schedule quote
+  comparison. A different authenticated opening, provider or overlapping
+  request cannot create another unit receipt, fee intent or source charge.
+- Both classifications invoke history identity/order checks before returning.
+  TxId/material digest equality, event ordinal zero, exact retained-origin body
+  identity and new-origin block/clock/ordinal ordering remain checked. A known
+  exact historical delivery can replay idempotently. The actual context still
+  owns canonical full-history completeness and accepted-origin authentication;
+  these local ordering checks cannot establish those facts.
+- NoOp classification precedes history capacity checks and body retention.
+  It emits no meaningful retained event and `changes_case()` is false. Cache
+  application preserves revision, history length/bytes, every usage dimension,
+  pending fees, first receipt and Case row. Meaningful requests with different
+  semantic RequestIds remain subject to the normal finite budgets.
+- Touched source/unit coordinates survive no-output proposals. The private
+  writer checks the full expected Case and signed Result/service bundle, then
+  exact old union and (for every op4) full old receipt before its
+  `!changes_case()` return. The NoOp exit therefore does not bypass old-row CAS
+  and produces no native row delta or case-journal event.
+
+No new concrete blocking finding was identified within this static scope.
+Actual native source ingress/current-view authorization, sealed source-view
+publication, complete A6 accepted-case history, A5 money/settlement and their
+combined outer native transaction remain unconnected in this candidate. A
+successful pure context, cache NoOp or dormant private helper does not establish
+a successful native source flow or permit claiming Complete from payment.
+
+SHA-256 values for the production files inspected in this addendum:
+
+```text
+74eb0e5999b6fa586cbbc2e62de86f011720f283bff9ef43a7fc95bf036d5201  consensus/core/src/palw_positive_source_v2.rs
+c5599378993fc1824cd4b72bfac984b0b20bc5adb3d600ea10f2d3ee453de0ea  consensus/core/src/palw_positive_source_v2_history.rs
+053c48438c917014c7c7af6865aa63cb64696bf6ddbee90d6df7f42a0e0b4811  consensus/core/src/palw_positive_source_apply_v2.rs
+```

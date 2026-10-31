@@ -22,6 +22,20 @@ The actual `ConsensusApi::palw_positive_source_duty_v2` implementation and its p
 
 A6 must persist/replay the COMPLETE case journal with its protected native head, not just these source records or the latest TxID. Reorg rolls back native rows/dues; it must not roll back the separate local spent-I/O DB. No native activation or public policy was added.
 
+### A6 common replay boundary review — static only
+
+Inspected draft: `/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/consensus/core/src/palw_positive_common_replay_v2.rs`. This was a read-only API/code review; no integration execution or Cargo run was performed. Its `apply_external_event` supplies each record and Court before/after snapshots, which can support correct interleaving once the actual native ports exist.
+
+`ExternalState` must retain a fresh source ledger, a reconstructed global Case row, and separate funding/settlement shadows. Initialize from the actual initial admission under its historical guard, rather than loading saved usage. For Court events, derive checked deltas of cumulative attempts/wire/elements/terms, map them through the actual canonical usage policy, and add each charge once to global usage. Elements/terms reserve candidate work; the per-attempt cursor is not a cumulative Case counter. Then refresh the source ledger from that reconstructed Case row. For source events, prepare/apply against this global baseline and adopt the prepared next usage; do not add the Court's cumulative totals again or overwrite global usage with source-only counters. Missing policy must fail closed: neither replay-resource quotes nor allocator-derived `reserved_receipt_bytes` establish canonical Case charges, and frame/carrier bytes must not be counted twice. Charged checker errors retain their actual before/after cost effects.
+
+Source history is the meaningful op3/op4 projection of the complete Case journal. Logical NoOps are excluded; a source prepare with `changes_case() == false` cannot become a new Case-journal event. Other Court operations and qualified native transactions still require their own reconstructed effects and exact committed-effect checks.
+
+A kind1 source-fee payment moves the actual Funding balances and annotates the literal first receipt with its accepted settlement. It does not accrue the already recorded source due a second time, replace its provider, reset pending reservations, or create Complete. A2 currently has no settlement annotation refresh: `refresh_case_usage` cannot synchronize `ServiceReceipt.settlement`. The actual A5/A6 owner must supply a same-view verified full-receipt overlay/expected-row capability for strict native CAS; a saved paid flag or an arbitrary cache refresh is insufficient.
+
+Keep historical committed state and current read-derived state separate. The draft's final `court.expire(now)` has no new accepted carrier origin, so it cannot itself rewrite accepted Case usage, `last_event`, or the journal. Final validation must reconcile the historical rows and current clock/freshness independently.
+
+Still required are typed failures for absent historical/current accepted-prefix and generation authority; complete Case-history/source-projection resolution; rooted class/job/catalog and role keys; canonical Case-usage policy and committed-effect reconciliation; live funding/reservation/immutable fee schedule; qualified settlement history and full-receipt synchronization; and the atomic native source+money+UTXO+journal publisher. The draft's generic environment callbacks do not implement those owners. Public local replay success remains insufficient to mint a native duty or admitted credit.
+
 ## Receipt / fee semantics agreed with A0
 
 `ServiceReceiptRow.bytes` is exact raw data, not opening/carrier bytes. Its `duty` identifies the literal accepted op3 referenced by its op4 response. A receipt from request A also completes an overlapping request B for that unit. Settlement may remain `None`; data completion and payment are separate.
@@ -38,10 +52,10 @@ After authenticating each actual delivery, matching an already known complete Re
 
 Raw journal `open` and explicit-tail-repair now take a mutable fresh responder and restore its complete protected meter before returning any usable journal. The local instance seal additionally prevents attaching that journal to another fresh live responder. This changes no wire, anchor DB or checkpoint schema.
 
-## Validation in progress
+## Recorded validation
 
 Candidate `f4becc743`: remote 248 passed/one existing ignored, focused source 25 passed (273 unique passed), default-off 176 passed/one existing ignored, and client metadata check passed with seven expected dead-code warnings for the unconnected native callsite. Each recorded run kept source hashes unchanged. Raw logs/reports are preserved under `stage-f4becc743`. The real subprocess checks hold stdin open, verify the paused child is alive and require SIGKILL signal 9.
 
-The next candidate adds logical-NoOp flood/authentication tests, canonical tokenizer fixtures and raw strict/repair reopen meter regressions. These additional changes are awaiting the next recorded full run. Earlier successful runs do not establish this candidate's result.
+Candidate `4da761423` adds logical-NoOp flood/authentication tests, canonical tokenizer fixtures and raw strict/repair reopen meter regressions. Its fixed-source remote run passed 251 library tests (one existing ignored) and 30 focused source/geometry tests, totaling 281 unique passed tests. The child process prints its own one-test success inside the library log and is not counted twice. Source hashes were unchanged, exit code was zero, and the raw log SHA-256 is `121243e15ec22ad11a1332aff18426654a7236548ebebc1eb719ce82ddca6ae4`. The fixed-source default-off run also passed 176 library tests (one existing ignored). The `positive-miner-client` kaspad library metadata check passed, with seven dead-code warnings for the node-private adapter that still lacks its actual native callsite. All three recorded runs have identical source hashes before/after and exit code zero. Current reports and raw logs are adjacent under `handoff/A2-evidence/native-2026-10-31/`.
 
 Real model cold/warm overhead and actual mempool/template/heartbeat source admission, native funds, independent-node replay, canonical reorg and IBD remain unmeasured/unverified until the actual owner connections above run on this same candidate.
