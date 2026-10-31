@@ -1,0 +1,471 @@
+{
+  "status": "PASS_ROLE_SUITES",
+  "source_commit": "4b8cc795de8a7016510e8e83d1e750e393c1a028",
+  "source_tree": "21eab9232d611f81c85a6ecf0da5915c12fea80a",
+  "base_commit": "d284f59022ee6000ce2736920831183fa63b7c7a",
+  "started_utc": "2026-10-31T13:07:09.421159+00:00",
+  "build_settings": {
+    "CARGO_TARGET_DIR": "/Users/wata/.cache/misaka-positive-a3-target",
+    "CARGO_BUILD_JOBS": "2",
+    "CARGO_PROFILE_DEV_DEBUG": "0",
+    "CARGO_INCREMENTAL": "0"
+  },
+  "required_checks": [
+    {
+      "name": "common-contract",
+      "command": [
+        "cargo",
+        "--config",
+        "profile.dev.package.kaspa-consensus-core.opt-level=0",
+        "test",
+        "--locked",
+        "-p",
+        "misaka-palw-positive-contract"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 6.206,
+      "log": "common-contract.log",
+      "log_sha256": "e598e454af08f3ded5d6417a2b0a5cb892b3dead0901773074915123bc27e3a4",
+      "test_results": [
+        {
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 6,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 14,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 6,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 5,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 5,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0
+        }
+      ],
+      "passed": 41,
+      "failed": 0
+    },
+    {
+      "name": "a1-a3-exec",
+      "command": [
+        "cargo",
+        "--config",
+        "profile.dev.package.kaspa-consensus-core.opt-level=0",
+        "test",
+        "--locked",
+        "-p",
+        "misaka-palw-tir-exec",
+        "--features",
+        "positive-panel",
+        "--test",
+        "positive_check",
+        "--test",
+        "positive_check_hardening",
+        "--test",
+        "positive_contract",
+        "--test",
+        "positive_panel_r1",
+        "--test",
+        "positive_record"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 17.624,
+      "log": "a1-a3-exec.log",
+      "log_sha256": "187883287dcbf173c8cb42c32675c304343c87d4b65a448652a5a5d2202020c9",
+      "test_results": [
+        {
+          "passed": 13,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 13,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 5,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0
+        }
+      ],
+      "passed": 37,
+      "failed": 0
+    },
+    {
+      "name": "remote-integration",
+      "command": [
+        "cargo",
+        "--config",
+        "profile.dev.package.kaspa-consensus-core.opt-level=0",
+        "test",
+        "--locked",
+        "-p",
+        "misaka-palw-remote",
+        "--features",
+        "positive-panel",
+        "--test",
+        "positive_panel_r1",
+        "--test",
+        "positive_panel_sources_r1",
+        "--test",
+        "positive_panel_record_r1"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 20.111,
+      "log": "remote-integration.log",
+      "log_sha256": "2ddf0bcacddc1a5f91e920cf0e3ced04c70b00e2b858e76840740c20112a9d46",
+      "test_results": [
+        {
+          "passed": 5,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 6,
+          "failed": 0,
+          "ignored": 0
+        }
+      ],
+      "passed": 14,
+      "failed": 0
+    },
+    {
+      "name": "source-guards",
+      "command": [
+        "cargo",
+        "--config",
+        "profile.dev.package.kaspa-consensus-core.opt-level=0",
+        "test",
+        "--locked",
+        "-p",
+        "misaka-palw-remote",
+        "--features",
+        "positive-panel",
+        "--lib",
+        "positive_panel_sources::"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 10.719,
+      "log": "source-guards.log",
+      "log_sha256": "b2e20094a67303141afa926fd66de3e3e60ee9157e31946c50bc480dbd1dae3f",
+      "test_results": [
+        {
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0
+        }
+      ],
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "name": "a2-regression",
+      "command": [
+        "cargo",
+        "--config",
+        "profile.dev.package.kaspa-consensus-core.opt-level=0",
+        "test",
+        "--locked",
+        "-p",
+        "misaka-palw-remote",
+        "--features",
+        "positive-panel",
+        "--lib",
+        "miner::positive_v2"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 1.663,
+      "log": "a2-regression.log",
+      "log_sha256": "79d876291c83f5f22d95ef2bf98ffff684f1c6794405d5fed511ed49f6774417",
+      "test_results": [
+        {
+          "passed": 51,
+          "failed": 0,
+          "ignored": 0
+        }
+      ],
+      "passed": 51,
+      "failed": 0
+    },
+    {
+      "name": "legacy-feature-off",
+      "command": [
+        "cargo",
+        "--config",
+        "profile.dev.package.kaspa-consensus-core.opt-level=0",
+        "test",
+        "--locked",
+        "-p",
+        "misaka-palw-remote",
+        "--lib",
+        "pursuit::"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 118.41,
+      "log": "legacy-feature-off.log",
+      "log_sha256": "47f90f332d7b1671b2f0c549e38d6ac66cb0eafd7f1d93f91435a9c45654522d",
+      "test_results": [
+        {
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0
+        }
+      ],
+      "passed": 4,
+      "failed": 0
+    }
+  ],
+  "test_binaries": [
+    {
+      "path": "/Users/wata/.cache/misaka-positive-a3-target/debug/deps/misaka_palw_positive_contract-a39d79176e534abc",
+      "sha256": "8511a2291568229d6d00cc131fccacc67a1b119df06cdf0015e25c7aff223bdd",
+      "bytes": 883648
+    },
+    {
+      "path": "/Users/wata/.cache/misaka-positive-a3-target/debug/deps/certification-265d607a088050d0",
+      "sha256": "51ff51bba059a55a5814561ccd8997286c98a5e9d83714c65a8ddf84f9ec56d9",
+      "bytes": 2254592
+    },
+    {
+      "path": "/Users/wata/.cache/misaka-positive-a3-target/debug/deps/contracts-8185f426e3ac8f6b",
+      "sha256": "3e4eb84a330fa5812362220e0580da94f12a90bc61941c3cd48c9a90db03165b",
+      "bytes": 2517360
+    },
+    {
+      "path": "/Users/wata/.cache/misaka-positive-a3-target/debug/deps/execution_record-0c846fbd06b29fca",
+      "sha256": "5cdfa32dd98edd9494112bd8349bd994a530a3595ffa5dcf9873e6623618df4d",
+      "bytes": 1330288
+    },
+    {
+      "path": "/Users/wata/.cache/misaka-positive-a3-target/debug/deps/funding-7ca5ce9bb4010c92",
+      "sha256": "f58e704c25ec7fdd79f83146577a7dc32a7737177148927259d5f1652ab52138",
+      "bytes": 2438928
+    },
+    {
+      "path": "/Users/wata/.cache/misaka-positive-a3-target/debug/deps/native_namespace-b87866f978301536",
+      "sha256": "14affe2b65d3fd6ba9e29b54280af49c7de53632e64e9e2ad8a2439de4e13e9b",
+      "bytes": 1421760
+    },
+    {
+      "path": "/Users/wata/.cache/misaka-positive-a3-target/debug/deps/native_rows-9e3f4079f3e67303",
+      "sha256": "ed6bebaf7d3921b404548b1f515543c8bba87167883afaffb9fa4a6e1fc5c73d",
+      "bytes": 2680608
+    },
+    {
+      "path": "/Users/wata/.cache/misaka-positive-a3-target/debug/deps/tir_contract-8820cb1dacd584b0",
+      "sha256": "cabaac81f1fd5ce29f7b4fc2e59c39987b9cc352d9116e8688d83025b3e0b26b",
+      "bytes": 1246560
+    },
+    {
+      "path": "/Users/wata/.cache/misaka-positive-a3-target/debug/deps/positive_check-86f857e0947782c2",
+      "sha256": "245187ba781751f02314f45b78d6c52f3eb9c1de28803af602fef9f1c2372287",
+      "bytes": 22091760
+    },
+    {
+      "path": "/Users/wata/.cache/misaka-positive-a3-target/debug/deps/positive_check_hardening-d86ab8a0721e5148",
+      "sha256": "9c82178593ca4bf4cf00eb203f8f9ebc2df96d58baac2814790fdb55594c05ba",
+      "bytes": 21909872
+    },
+    {
+      "path": "/Users/wata/.cache/misaka-positive-a3-target/debug/deps/positive_contract-ddaf46aa01129dd9",
+      "sha256": "daede500c011d01091707cdc5c2baa27a1fdac4f81989fd955e3e8f364786c02",
+      "bytes": 23296096
+    },
+    {
+      "path": "/Users/wata/.cache/misaka-positive-a3-target/debug/deps/positive_panel_r1-4938cec0b778d250",
+      "sha256": "34947452fdcb38027b1653d92b4dc5b5bed1b447c521fb92e134d95a3ee925ab",
+      "bytes": 23470752
+    },
+    {
+      "path": "/Users/wata/.cache/misaka-positive-a3-target/debug/deps/positive_record-cadd2559f221660b",
+      "sha256": "af328eb4d978ae5190c075e15ae4c085182836c8fe44b5cda3b0fb86390b4f47",
+      "bytes": 23301456
+    },
+    {
+      "path": "/Users/wata/.cache/misaka-positive-a3-target/debug/deps/positive_panel_r1-79a64246e192c9c3",
+      "sha256": "ea175e14943d6f365c466a44d1bb17544fefe92efa56115f832141cc4750df29",
+      "bytes": 23522128
+    },
+    {
+      "path": "/Users/wata/.cache/misaka-positive-a3-target/debug/deps/positive_panel_record_r1-bc2a1fc867bfe448",
+      "sha256": "a018774d9e2b4fe0ee26b40c6a5ec763646729837a12805d897ebe2ec3800016",
+      "bytes": 23496560
+    },
+    {
+      "path": "/Users/wata/.cache/misaka-positive-a3-target/debug/deps/positive_panel_sources_r1-7bd9de6aee8ea30b",
+      "sha256": "749a66b1daa57671bbc53c5ca3a0c1e8a3532cfe99c57977dc30064ac935102a",
+      "bytes": 25687360
+    },
+    {
+      "path": "/Users/wata/.cache/misaka-positive-a3-target/debug/deps/misaka_palw_remote-f7dd6a33cd668a8f",
+      "sha256": "3da48dab0e3e3cec637af10fac32d039dce1db028825ea2ae2e3d8d57a86b7e6",
+      "bytes": 159292272
+    },
+    {
+      "path": "/Users/wata/.cache/misaka-positive-a3-target/debug/deps/misaka_palw_remote-ac9b867d2cf50d08",
+      "sha256": "102c6526086404b640c8dd7356675c339fb0734957cfd4a3ded198f731c54512",
+      "bytes": 141529360
+    }
+  ],
+  "passed": 148,
+  "failed": 0,
+  "completed_utc": "2026-10-31T13:10:04.426241+00:00",
+  "source_files": [
+    {
+      "path": "Cargo.lock",
+      "sha256": "1ba42066b943c830ee40200f4a0ac56faec54ae4922bcd57974298e01f46be81"
+    },
+    {
+      "path": "scripts/ci/a3-panel-r1-ci.sh",
+      "sha256": "345767fbe52fa4c3871a767ca16cd6e41d0541d7763c8b2d699600060897b970"
+    },
+    {
+      "path": "misaka/palw/positive-contract/src/record.rs",
+      "sha256": "43b885cec90f6928d01d87cc2d72eb84ec0f3b42500c8ec7f79ab89ff828cb05"
+    },
+    {
+      "path": "misaka/palw/tir/exec/src/node/positive_panel.rs",
+      "sha256": "ac2eea2fed15d3f474bc0aa1d3ab0cdc10eddcb8006edff5565fd9bc423c12f7"
+    },
+    {
+      "path": "misaka/palw/tir/exec/src/node/positive_contract.rs",
+      "sha256": "7b608c2592dec00f956afd2b4c0b27bcf8c6d69e958a84dccc96853514f0d19e"
+    },
+    {
+      "path": "misaka/palw/tir/exec/src/node/positive_contract/record.rs",
+      "sha256": "cad4c67b72498cd5351a60fd35c0d19696b3bad9dcbf4dcfd9d8518a9e97755f"
+    },
+    {
+      "path": "misaka/palw/tir/exec/tests/positive_record.rs",
+      "sha256": "af837dfd6d18c06ad2402ac2a7015709cc508f1343d717f63ab65f1fd8cd3b49"
+    },
+    {
+      "path": "misaka/palw/tir/exec/tests/positive_panel_r1_common/mod.rs",
+      "sha256": "28720ba3d41252a9a16f063cd9deb93d91772a9f87aa1daf99288a940020f8ee"
+    },
+    {
+      "path": "misaka/palw/remote/tests/positive_panel_record_r1.rs",
+      "sha256": "3473bea4c563b9fefd53d71f01e09ad22977b7b91786d7a53b9301239fa36c51"
+    },
+    {
+      "path": "misaka/palw/remote/tests/positive_panel_sources_r1.rs",
+      "sha256": "3a81e741376ae670d164f2826a728dbfe2b93291943058c92aac16f0bdd95daf"
+    }
+  ],
+  "source_changes": {
+    "a3_capture_and_tests": "7ce181a55",
+    "a1_helper_upstream": "8e3c2e481dcfba1031a5e40fa8ab231be08127bc",
+    "a1_helper_local_cherry_pick": "95aef2a9c",
+    "a3_stable_api_and_ci": "4b8cc795de8a7016510e8e83d1e750e393c1a028",
+    "expanded_plan_included": false
+  },
+  "preflight_checks": [
+    {
+      "name": "builder-before-A1-helper",
+      "source_commit": "7ce181a554da60228428cea1f53851e2b6649d1e",
+      "source_tree": "c2fc3901e7aeb57258297d6f193516fa4d0d3ecb",
+      "command": [
+        "cargo",
+        "--config",
+        "profile.dev.package.kaspa-consensus-core.opt-level=0",
+        "test",
+        "--locked",
+        "-p",
+        "misaka-palw-tir-exec",
+        "--features",
+        "positive-panel",
+        "--test",
+        "positive_panel_r1"
+      ],
+      "exit_code": 0,
+      "passed": 5,
+      "included_in_final_total": false,
+      "log": "builder-preflight.log",
+      "log_sha256": "d2d702c0715502ebdaf91b4143221e7c10198a37c934b92add68abb98f7a7dd7"
+    }
+  ],
+  "limitations": [
+    "Private role/checker evidence only; no native admission, UTXO lock, fee/payment, Gate C or consensus credit.",
+    "No native ProtectedAnchorStoreV2 implementation is installed by this increment.",
+    "A retry reuses PreparedCheck and the signed witness attempt; these tests do not create or roll back native A4 attempt state.",
+    "RecordLimits bounds transport and newly decoded generated Vec storage only, not all process/RSS workspace.",
+    "No public preset or activation change."
+  ],
+  "auxiliary_checks": [
+    {
+      "name": "documentation-no-new-regressions",
+      "command": [
+        "python3",
+        "docs/maintenance/check_docs.py"
+      ],
+      "outcome": "PASS",
+      "known_issue_occurrences": 43,
+      "new_issue_occurrences": 0,
+      "log": "docs-check.log",
+      "log_sha256": "38ca52631310d0b3d4d1afac2b99a1e7ccc5d8a6b36da16de6f9df8b3f8a797a"
+    },
+    {
+      "name": "rustfmt-changed-files",
+      "outcome": "PASS",
+      "files": [
+        "misaka/palw/tir/exec/src/node/positive_panel.rs",
+        "misaka/palw/remote/tests/positive_panel_record_r1.rs",
+        "misaka/palw/tir/exec/src/node/positive_contract.rs",
+        "misaka/palw/tir/exec/src/node/positive_contract/record.rs",
+        "misaka/palw/tir/exec/tests/positive_record.rs"
+      ]
+    },
+    {
+      "name": "CI-shell-syntax-and-source-diff",
+      "outcome": "PASS"
+    }
+  ],
+  "integrity_verification": "All recorded raw log, source file and 18 current test binary SHA256 values verified before evidence commit."
+}
