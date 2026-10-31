@@ -1,0 +1,29 @@
+{
+  "source_commit": "488317d3e10efbc8c8d7831b5a018f693e5cf156",
+  "source_tree": "eec02a66dd569227fb95c316cdb6ae675ca491c3",
+  "command": "env -u ROCKSDB_STATIC ROCKSDB_LIB_DIR=/Users/wata/Downloads/MISAKA-testnet/target/debug/build/librocksdb-sys-9df4609b486b51c3/out CARGO_TARGET_DIR=target/a4-fresh scripts/ci/positive-court-a4-ci.sh",
+  "exit_code": 0,
+  "passed": 284,
+  "failed": 0,
+  "consensus_tests_typecheck_exit_code": 0,
+  "raw_log_sha256": "96813854e8142f4653c14b4ed1c8870103add7f78245c68af4e5e7c6886f8a51",
+  "counts": {
+    "common": 41,
+    "private_accounting": 29,
+    "Node_A1_A4": 90,
+    "core_coordinator": 53,
+    "legacy_shared": 27,
+    "fence": 8,
+    "source": 25,
+    "predecode": 3,
+    "metadata": 5,
+    "native_provenance_structural_tests": 3
+  },
+  "notes": [
+    "Ordinary Cargo builds source; native RocksDB archive only reused",
+    "Native provenance tests are structural/current-entry/phase-two counterexamples, not an active 176 T12 admission test",
+    "Native Court consumer/real coin lock/complete journal still missing; public presets stay None",
+    "Source was then followed by planned required-lease and readonly-recovery patches; this log does not test those patches",
+    "Repeated public API drivers contribute to test count"
+  ]
+}

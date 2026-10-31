@@ -2,6 +2,8 @@
 
 2026-10-31。branch `codex/positive-court-a4`。初回実装の履歴は[A4-HANDOFF](A4-HANDOFF.md)。本記録がその後のA4状態を示す。
 
+現在の実装は、共通Court、署名付き証拠、原子的受付port、native bodyの前検査、実Full検証由来の入力引継ぎ、既存受付receiptのreadonly復旧までである。actual176 one-writerと実coin lockは未接続。A0は新job授権のRFC/ADRを未採択としており、旧job/headerの流用・仮の成功で埋めない。公開presetはNoneを維持する。
+
 ## 基準と実装境界
 
 共通契約はA0 `a85152edc`、TIR annex `d615f62b6`、Panel evidence認証 `5901eff3f`、native/funding `42a60b840`、P所見 `069d54007`。A1の確定checker `40cbcb559`に、A1作業treeのport/hardeningをsource snapshotとして取り込み、A0共有のderivation/selector/provenance/16-byte payloadへ接続した。旧prototypeのID・署名domainを新DTOへaliasしていない。
@@ -65,3 +67,15 @@ Witness recordにはA0 `d284f5902`のborrowed header/generated codecが割り当
 A1実検査器は`3b26100c0`のpure core実装へ一元移動し、`core::palw_positive_check_v2` / `palw_positive_contract_v2`とexec旧pathを同一型で公開する。A4薄adapterは`coordinator::tir_checker`を正本としexec側はreexportのみ。A2 `f8c79c92f`の有限source台帳・既存G14 geometry・private typed writerを選択統合した。A0のtyped dormant fenceとraw176 predecode境界は公開presetを変えず取り込んだ。
 
 独立レビュー修正後のsourceは`d2047d64d0db68dee44c92a4a8c8025eedf0d458`、同一sourceの271件成功は[VALIDATION-A4-R2](VALIDATION-A4-R2.md)を参照。required候補認可・全opaque context照合・bounded accepted-frame ID indexと無課金再送を実装し、終了時indexを解放する。native役割/notice/料金表/leaseはA0の後続契約を待ち、成功を代用しない。
+
+## 後続のnative入力と復旧
+
+`c578682a9`は実UTXO first passのFull validatorを自ら呼ぶprivate factoryから、元BlockTransactionsV3のallocation owner、実input entries/fee、accepting point、selected parent、carrier block/index、accepted ordinal、processing-sessionを保持する。通常UTXO適用は既存経路の一度だけであり、phase twoへのtransportはCourt/lock/creditを生成しない。`f5fcf628b`はactive176のallocation前bounded scanと別用途readerのraw176除外を追加した。両者の型検査と構造反例をnative受付成功と混同しない。
+
+`488317d3e`はauthと既知receipt照合の後、current relation/header/countをCase課金前に検査する。future packetのコピーでwire予算を消費できず、同じ署名済packetを後で正順に受理できる。必要なcurrent relationの不正算術資料は従来どおり費用を保持する。
+
+`786c00227`はnative RAM予約のOk(None)をcapacity未供給としてFull前に拒否する。グローバルcheckerを勝手に有効化せず、実leaseを保持できないcaptureはtyped local resource faultとなる。
+
+`0c7c2bcf3`は`CommittedCourtRecoveryStoreV2`と`AtomicAdmissionCoordinatorV2::recover_committed_case`を追加した。実Result署名・現在scope/Case/Result・`resolve_committed`・全intent/serviceリンク・store read前後のrootを照合し、現在coordinator所有のopaque receiptを返す。新規prepare/commitや新受付期限は呼ばず、残高・予約・epoch・journalを変えない。A5のactual private book getterを使い、実A1 factとの再bindと反例を検証する。native具体storeはactual rows/history/funding/lease/Case epochを解決するまで未供給であり、generic成功をnative復旧と呼ばない。
+
+最終共通Court候補`c1292bc085cbfc1ca24a8ac0a962ab1096a88f23`の同source300件とconsensus全tests型検査は[VALIDATION-A4-R5](VALIDATION-A4-R5.md)を参照。A2 `4da761423`のlogical source relay修正も同候補に含む。actual native受付の未完了範囲は同記録で区別する。
