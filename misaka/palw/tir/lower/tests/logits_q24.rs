@@ -10,6 +10,7 @@
 //! * a model whose calibrated logits pass 120 natural-log units is refused, not clipped.
 
 #![allow(warnings)]
+mod common;
 use misaka_palw_tir_lower::float_ref::ParamStore;
 use misaka_palw_tir_lower::float_ref::stream::Resident;
 use misaka_palw_tir_lower::lower::{LOGITS_Q24_REFUSE_AT, LowerOpts, materialise};
@@ -129,8 +130,127 @@ fn a_model_whose_calibrated_logits_pass_the_bound_is_refused() {
     let calib = fidelity::random_sequences(prep.hl.vocab, 6, 32, 7);
     let stats = fidelity::calibrate(&prep.hl, &loader, &calib, &quiet).expect("calibrate");
     match materialise(&prep.lowered, &prep.hl, &loader, &stats, &QuantPolicy::default(), &quiet) {
-        Err(LowerError::NotLowerable(m)) => assert!(m.contains("LOGITS_Q24_V1") && m.contains("128"), "{m}"),
+        Err(LowerError::NotLowerable(m)) => {
+            assert!(m.contains("LOGITS_Q24_V1") && m.contains("128"), "{m}");
+            assert!(m.contains("Trained checkpoints can exceed"), "{m}");
+            assert!(!m.contains("trained model\'s are far below"), "{m}");
+        }
         other => panic!("expected a NOT_LOWERABLE refusal, got {:?}", other.map(|m| m.logits_scale)),
     }
+    // The separately selected wide storage profile retains Q24 units and the large values.
+    let wide = misaka_palw_tir_lower::lower::lower(&prep.hl, &LowerOpts { logits_bits: 64, ..Default::default() }).unwrap();
+    assert_eq!(wide.program.blocks[wide.program.schedule.post as usize].nodes[wide.program.logits as usize].out.dtype, misaka_palw_tir::DType::I64);
+    let material = materialise(&wide, &prep.hl, &loader, &stats, &QuantPolicy::default(), &quiet).unwrap();
+    assert_eq!(material.logits_scale, Q24);
+    let values = fidelity::int_logits(&wide.program, &material.params, &calib[0], material.logits_scale, &|_| {}).unwrap();
+    assert!(values.iter().flatten().any(|x| x.abs() > 128.0), "wide output must not clip or wrap at the legacy boundary");
+    assert!(wide.program.wide_logits_q24());
+    assert_eq!(wide.program.token_bound, prep.lowered.program.token_bound);
+    assert_eq!(wide.program.history_bound, prep.lowered.program.history_bound);
+    assert_eq!(wide.program.states, prep.lowered.program.states);
+    // Every logits lane and every committed intermediate agree across the
+    // independent decoder/evaluator, reference evaluator and typed executor.
+    // This does not use the unavailable native wide StepSpace/Court APIs.
+    assert_eq!(common::three_ways(&wide.program, &material.params, &calib[..1]).unwrap(), calib[0].len());
+    // Same source, no logit rescale: compare the large natural-unit values to
+    // the float HL run within this fixture's quantisation error. This is a
+    // numeric regression, not a trained-model or all-input fidelity claim.
+    let floats = fidelity::float_logits(&prep.hl, &loader, &calib[..1], &quiet).unwrap();
+    let magnitude = rms(floats[0].iter().flatten().map(|v| f64::from(*v)));
+    let error = rms(values.iter().zip(&floats[0]).flat_map(|(a,b)| a.iter().zip(b).map(|(a,b)| *a-f64::from(*b))));
+    assert!(error <= 0.06 * magnitude + 0.01, "wide Q24 must retain natural units: rms {error}, magnitude {magnitude}");
+    // Exercise the actual checkpoint's row-range loader, with both one-row
+    // deferral and whole-occurrence production. Every parameter byte must
+    // match the resident recipe, with exactly one complete delivery per key.
+    let streaming = misaka_palw_tir_lower::float_ref::stream::Streamed::new(&prep.hl, &prep.binding, &ck);
+    for options in [
+        misaka_palw_tir_lower::lower::StreamOpts { defer_min_elems: 0, block_elems: 1 },
+        misaka_palw_tir_lower::lower::StreamOpts { defer_min_elems: usize::MAX, block_elems: 8 },
+    ] {
+        let mut sink = CompareParameters::new(&material.params);
+        let report = misaka_palw_tir_lower::lower::materialise_stream(
+            &wide, &prep.hl, &streaming, &stats, &QuantPolicy::default(), &options, &mut sink, &quiet,
+        ).unwrap();
+        assert_eq!(report.logits_scale, Q24);
+        assert_eq!(report.resid_scale, material.resid_scale);
+        assert_eq!(report.quant_inexact, material.quant_inexact);
+        assert_eq!(report.stats.instances, material.params.tensors.len());
+        assert!(sink.current.is_none());
+        assert_eq!(sink.seen.len(), material.params.tensors.len());
+        if options.defer_min_elems == 0 { assert!(report.stats.by_blocks > 0, "row-range production was not exercised"); }
+    }
     assert!(LOGITS_Q24_REFUSE_AT < 128.0);
+}
+
+
+// A streaming byte consumer, comparing actual produced tensors instead of
+// reconstructing expected quantisation arithmetic in the test.
+struct CompareParameters<'a> {
+    expected: &'a misaka_palw_tir_lower::lower::IntParams,
+    seen: std::collections::BTreeSet<(u16, Option<u16>)>,
+    current: Option<(Vec<u8>, usize)>,
+}
+impl<'a> CompareParameters<'a> {
+    fn new(expected: &'a misaka_palw_tir_lower::lower::IntParams) -> Self {
+        Self { expected, seen: Default::default(), current: None }
+    }
+}
+impl misaka_palw_tir_lower::lower::TensorSink for CompareParameters<'_> {
+    fn begin(&mut self, param: u16, layer: Option<u16>, bytes: u64) -> Result<(), LowerError> {
+        assert!(self.current.is_none(), "previous tensor did not end");
+        assert!(self.seen.insert((param, layer)), "tensor delivered twice");
+        let expected = self.expected.tensors.get(&(param, layer)).expect("unexpected tensor").le_bytes();
+        assert_eq!(bytes, u64::try_from(expected.len()).unwrap());
+        self.current = Some((expected, 0));
+        Ok(())
+    }
+    fn push(&mut self, bytes: &[u8]) -> Result<(), LowerError> {
+        let (expected, offset) = self.current.as_mut().expect("push outside tensor");
+        let end = offset.checked_add(bytes.len()).unwrap();
+        assert_eq!(expected.get(*offset..end).expect("excess tensor bytes"), bytes);
+        *offset = end;
+        Ok(())
+    }
+    fn end(&mut self) -> Result<(), LowerError> {
+        let (expected, got) = self.current.take().expect("end outside tensor");
+        assert_eq!(got, expected.len(), "missing tensor bytes");
+        Ok(())
+    }
+}
+
+#[test]
+fn explicit_i32_is_the_legacy_recipe_and_parameter_bytes() {
+    for name in ["llama", "gpt2"] {
+        let dir = fixture(name);
+        let cfg = std::fs::read_to_string(dir.join("config.json")).unwrap();
+        let default = fidelity::prepare(&cfg, &LowerOpts::default()).unwrap();
+        let explicit = fidelity::prepare(&cfg, &LowerOpts { logits_bits: 32, ..Default::default() }).unwrap();
+        assert_eq!(default.lowered.program.encode(), explicit.lowered.program.encode(), "{name}: default IR changed");
+        assert!(!explicit.lowered.program.wide_logits_q24());
+        let checkpoint = Checkpoint::open(&dir).unwrap();
+        let (params, _) = ParamStore::from_source(&default.hl, &default.binding, &checkpoint).unwrap();
+        let loader = Resident(Arc::new(params));
+        let quiet = |_: usize, _: usize| {};
+        let max_len = default.spec.embedding.positions.as_ref().map_or(16, |p| 16.min(p.rows-p.offset));
+        let sequences = fidelity::random_sequences(default.hl.vocab, 2, max_len, 11);
+        let stats = fidelity::calibrate(&default.hl, &loader, &sequences, &quiet).unwrap();
+        let a = materialise(&default.lowered, &default.hl, &loader, &stats, &QuantPolicy::default(), &quiet).unwrap();
+        let b = materialise(&explicit.lowered, &explicit.hl, &loader, &stats, &QuantPolicy::default(), &quiet).unwrap();
+        assert_eq!(a.logits_scale, Q24);
+        assert_eq!(a.params.tensors, b.params.tensors, "{name}: legacy tensor bytes changed");
+    }
+}
+
+#[test]
+fn unsupported_widths_are_rejected_before_conversion_io() {
+    let cfg = std::fs::read_to_string(fixture("llama").join("config.json")).unwrap();
+    let prep = fidelity::prepare(&cfg, &LowerOpts::default()).unwrap();
+    for width in [0, 8, 16, 48, 128] {
+        let opts = LowerOpts { logits_bits: width, ..Default::default() };
+        assert!(misaka_palw_tir_lower::lower::lower(&prep.hl, &opts).err().expect("invalid width accepted").to_string().contains("logits_bits"));
+        let mut request = misaka_palw_tir_lower::convert::ConvertRequest::new("not-opened-invalid-profile", "not-created-invalid-profile");
+        request.logits_bits = width;
+        let error = misaka_palw_tir_lower::convert::convert_model(&request, &|_| {}).unwrap_err();
+        assert!(error.to_string().contains("logits_bits"), "profile validation must precede source IO: {error}");
+    }
 }
