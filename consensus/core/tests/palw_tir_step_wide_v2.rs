@@ -178,7 +178,7 @@ fn original_wide_program_has_mixed_width_geometry_and_independent_hash_roots() {
     assert_eq!(space.info(), from_program.info());
     assert_eq!(space.leaf_count_capped(&job, 7).unwrap(), 7);
     assert!(space.leaf_count_capped(&job, 6).is_err());
-    assert_eq!(space.maximum_leaf_bytes_v2(&job).unwrap(), 32);
+    assert_eq!(space.maximum_leaf_payload_bytes_v2(&job).unwrap(), 32);
     let expected = [
         (0, 0, 0, 0, DType::I8),
         (1, 0, 1, 0, DType::I8),
@@ -435,4 +435,146 @@ fn explicit_v2_validator_keeps_binding_v1_and_rejects_identity_root_and_count_ch
         bad_count.step_merkle_root,
     );
     assert!(verify_tir_binding_v2(&bad_count, 8).is_err());
+}
+
+#[test]
+fn fixed_checkpoints_and_windowed_history_keep_legacy_lanes_beside_wide_final_logits() {
+    let mut p = ProgramBuilder::new(4, 1 << 18);
+    let embed = p.param("embed", DType::I8, &[4, 4], false);
+    let scale = p.konst(DType::I64, &[4], &[1 << 32, 1 << 33, 1 << 34, 1 << 35]);
+    let fixed = p.fixed_state("last_row", DType::I8, &[4], -128, 127, false);
+    let hist = p.hist_state("rows", DType::I8, &[4], 3, false);
+    let mut pre = p.block("pre", vec![]);
+    let row = pre.gather(embed, Ref::Input(0), 0, 0); // slot 0, committed carry
+    pre.state_write(fixed, row); // slot 1, original uncommitted state write
+    let window = pre.hist_append(hist, row); // slot 2, H=min(a+1,3)
+    let window = pre.cast(window, DType::I32); // slot 3, H tiles of four lanes
+    pre.commit(window);
+    let pre = pre.finish(&[row]);
+    let mut post = p.block("post", vec![TensorType::fixed(DType::I8, &[4])]);
+    let narrow = post.cast(Ref::CarryIn(0), DType::I32); // slot 4
+    post.commit(narrow);
+    let logits = post.mul(narrow, scale, DType::I64); // slot 5
+    post.commit(logits);
+    let Ref::Node(logits) = logits else { unreachable!() };
+    let post = post.finish(&[]);
+    let mut program = p.finish(pre, vec![], post, logits);
+    program.logits_scheme_id = LOGITS_I64_Q24_SCHEME_V2;
+    misaka_palw_tir::interval::analyze_ranges(&program).unwrap();
+    let (mut class, artifact, mut job) = fixture(true);
+    class.program = program.encode();
+    class.layout.commit_tiles = vec![4; 4];
+    class.layout.state_tiles = vec![4; 2];
+    class.layout.checkpoint_interval = 3;
+    class.layout.h_tile = 2;
+    job.shape_profile_id = class.class_id(&artifact);
+    job.exact_decode_tokens = 6;
+    let original = class.clone();
+    let space = PalwTirStepSpaceV2::new(&class).unwrap();
+    assert_eq!(space.program_slots(), 6);
+    assert_eq!(space.fixed_instances().len(), 1);
+    assert_eq!(space.hist_instances().len(), 1);
+    assert_eq!(space.leaf_count_capped(&job, 42).unwrap(), 42);
+    assert!(space.leaf_count_capped(&job, 41).is_err());
+    // Seven positions: pre row + H window tiles; two post leaves from a=1;
+    // one Fixed tile at a=2,5; one two-row Hist tile at a=1,3,5.
+    let counts = [2, 6, 7, 7, 6, 8, 6];
+    let starts = [0, 2, 8, 15, 22, 28, 36];
+    let shape = space.job_shape(&job).unwrap();
+    let mut expected = vec![];
+    for a in 0..7u32 {
+        expected.push((a, 0, 0, DType::I8, 4));
+        for tile in 0..(a + 1).min(3) {
+            expected.push((a, 3, tile, DType::I32, 4));
+        }
+        if a >= 1 {
+            expected.push((a, 4, 0, DType::I32, 4));
+            expected.push((a, 5, 0, DType::I64, 4));
+        }
+        if (a + 1) % 3 == 0 {
+            expected.push((a, 6, 0, DType::I8, 4));
+        }
+        if (a + 1) % 2 == 0 {
+            expected.push((a, 7, 0, DType::I8, 8));
+        }
+        assert_eq!(space.leaves_at_position(&shape, a), counts[a as usize]);
+        assert_eq!(space.running_total(&shape, a), starts[a as usize]);
+        let leaves = space.leaves_of_position(&job, a);
+        assert_eq!(leaves.len() as u64, counts[a as usize]);
+        assert_eq!(leaves[0].index, starts[a as usize] as u64);
+    }
+    assert_eq!(expected.len(), 42);
+    let class_id = class.class_id(&artifact);
+    let mut builder = PalwTirStepLegBuilderV2::new(&space, &job, class_id, 42).unwrap();
+    let mut hashes = vec![];
+    let (mut fixed_count, mut hist_count, mut wide_count) = (0, 0, 0);
+    for (index, &(position, slot, tile, dtype, count)) in expected.iter().enumerate() {
+        let leaf = space.leaf_at(&job, index as u64).unwrap();
+        assert_eq!(
+            (leaf.position, leaf.coord.node_slot, leaf.coord.tile_index, leaf.dtype, leaf.value_count),
+            (position, slot, tile, dtype, count)
+        );
+        assert_eq!(leaf.index, index as u64);
+        assert_eq!(space.leaf_index(&job, &leaf.coord), Some(index as u64));
+        assert_eq!((leaf.coord.call_index, leaf.coord.position), if position < 2 { (0, position) } else { (position - 1, 0) });
+        match leaf.kind {
+            PalwTirLeafKindV1::State { instance, state, layer, first_element } => {
+                fixed_count += 1;
+                assert_eq!((slot, instance, state, layer, first_element), (6, 0, fixed, None, 0));
+                assert!([2, 5].contains(&position));
+            }
+            PalwTirLeafKindV1::HistTile { instance, state, layer, first_lane, row_lanes, first_position } => {
+                hist_count += 1;
+                assert_eq!((slot, instance, state, layer, first_lane, row_lanes), (7, 0, hist, None, 0, 4));
+                assert_eq!(first_position, position - 1);
+                assert!([1, 3, 5].contains(&position));
+            }
+            PalwTirLeafKindV1::Commit { first_element, .. } => {
+                assert_eq!(first_element, u64::from(tile) * 4);
+            }
+        }
+        // Structural data only; these do not claim to execute the model.
+        let lanes: Vec<_> =
+            (0..count).map(|i| if dtype == DType::I64 { (i128::from(i) - 2) << 35 } else { i128::from(i) - 4 }).collect();
+        let preimage = palw_tir_leaf_preimage_v2(&space, &job, &leaf, &lanes).unwrap();
+        if slot == 5 {
+            wide_count += 1;
+            assert_eq!(preimage.version, 2);
+            assert_eq!(preimage.values_le.len(), 32);
+            assert_eq!(borsh::to_vec(&preimage).unwrap().len(), 58);
+        } else {
+            assert_eq!(preimage.version, 1);
+            assert_eq!(preimage.values_le.len(), count as usize * 4);
+            assert_eq!(preimage, palw_tir_leaf_preimage_v1(&leaf, &lanes).unwrap());
+            if slot == 6 || slot == 7 {
+                assert_eq!(&preimage.values_le[..4], &[252, 255, 255, 255]);
+            }
+        }
+        // Existing Borsh DTO: u16 version + four u32 coordinates + u32 count
+        // + u32 Vec length. This is payload accounting, not a new wire constant.
+        assert_eq!(borsh::to_vec(&preimage).unwrap().len(), 26 + preimage.values_le.len());
+        assert_eq!(palw_tir_leaf_values_v2(&space, &job, &leaf, &preimage).unwrap(), lanes);
+        hashes.push(manual_leaf_hash(job.context_hash(), class_id, &preimage));
+        assert_eq!(builder.push(&lanes).unwrap(), leaf);
+    }
+    assert_eq!((fixed_count, hist_count, wide_count), (2, 3, 6));
+    assert!(space.leaf_at(&job, 42).is_none());
+    let (step_leaf_count, step_merkle_root) = builder.finish().unwrap();
+    assert_eq!(step_leaf_count, 42);
+    assert_eq!(step_merkle_root, manual_tree(&hashes));
+    let trace = Hash64::from_u64_word(73);
+    let binding = PalwTirStepBindingV1 {
+        version: 1,
+        job_context: job.clone(),
+        class: class.clone(),
+        artifact_root: artifact,
+        full_logits_trace_root: trace,
+        step_leaf_count,
+        step_merkle_root,
+        committed_execution_root: manual_execution(job.context_hash(), trace, class_id, step_leaf_count, step_merkle_root),
+    };
+    let verified = verify_tir_binding_v2(&binding, 42).unwrap();
+    assert_eq!(verified.context_hash(), job.context_hash());
+    assert_eq!(verified.class_id(), class_id);
+    assert_eq!(class, original);
 }
