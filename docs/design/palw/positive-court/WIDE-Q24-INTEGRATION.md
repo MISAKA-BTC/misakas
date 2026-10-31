@@ -11,9 +11,19 @@
 ## A0に残る実装
 
 - `50339b43a`でadopted schemeと最終post logitsだけのi64 commitを識別するstructural foundationを統合。独立static review後、新7件と既存golden3件・golden_v2の11件、対象Clippyが成功した。[source/原log](../../../evidence/positive-court-a0-2026-10-31/integration/wide-structural-and-goldens-20261101.json)、[レビュー/Clippy](../../../evidence/positive-court-a0-2026-10-31/integration/wide-structural-review-and-clippy-20261101.json)。native admissionの既存scheme whitelistは変更していない。
-- 別domainのデータroot/openingとi128 Q48の選択primitiveを`82146b3b9 / 74aac75f8`へ統合した。profile/旧入口11件・source料金2件・wide data/selection5件が同sourceで成功し、Core libraryのstrict Clippyも等価cleanup後に成功。[stage2記録](../../../evidence/positive-court-a0-2026-10-31/integration/profile-wide-stage2-review-20261101.json)。8-byte step leaf、実行・capture・cell・Court・資料費用の全経路接続はまだ必要。
+- 別domainのデータroot/openingとi128 Q48の選択primitiveを`82146b3b9 / 74aac75f8`へ統合した。profile/旧入口11件・source料金2件・wide data/selection5件が同sourceで成功し、Core libraryのstrict Clippyも等価cleanup後に成功。[stage2記録](../../../evidence/positive-court-a0-2026-10-31/integration/profile-wide-stage2-review-20261101.json)。明示V2 Step leafとCPU producerは後続で統合した。capture・cell・Court・資料費用の全経路接続はまだ必要。
 - `f862774d3`で登録program由来の明示profile resolverを追加。旧factsの74-byte保存形式を維持し、旧class record/StepSpace/binding入口は未対応wideを拒否する。canonical tokenizer/CUのゼロ、元の最大context、anchor由来prompt/seed/full jobを維持する。factsだけを読むnative callerへの接続は別途必要。
 - A1の全範囲検査とA3の一回のPanel再計算・証拠生成への接続。現FullRelation経路の最終logitsはi32限定で、i64をcastして受理しない。
 - 同一候補での実checkpoint、元の最大文脈長、role別費用、cold/warm、複数Node・再起動の確認。
 
 未接続consumerは拒否を維持する。元checkoutの広い未コミット差分、公開preset、既存の生成物pinや他作業の変更を一括コピーしない。実native job/role/資金/P/全consumer接続も別に必要であり、構造認識や登録成功をclaimの信用認証へ読み替えない。
+
+## 追加統合と検証の範囲（2026-11-01）
+
+- lowerer明示32/64指定と独立ref2のfinal i64認識はRoot `a19f6d19d` の31件で成功。旧goldenとresident/streamed変換、Q24単位・旧境界を超える値・独立3way fixtureを含む。[原記録](../../../evidence/positive-court-a0-2026-10-31/integration/wide-lowerer-20261101.json)。実学習済みcheckpointの登録試験ではない。
+- schema1 recordのfull-layout wrapper `5d14e927c` とSDK pin `d6dc6f11b`、A1 V2 Step最終修正を統合。fixtureのcarry shape誤りをtest-only `017bff082` で直した後、record6件とStep/data11件は標準test stackで成功。[結合記録](../../../evidence/positive-court-a0-2026-10-31/integration/wide-sdk-record-joined-fixed-20261101.json)にはSDK標準stackの停止も保持し、全体PASSにしない。
+- 同じSDK binaryは明示16MiB test stackで16件成功した。[原記録](../../../evidence/positive-court-a0-2026-10-31/integration/wide-sdk-runtime-pack-explicit-stack-20261101.json)。追加4件の標準stack個別実行は3件成功・1件停止。backtraceはtestnet-12 Params生成中の既存`apply_object_inner`のstack probeを指す。[切り分け](../../../evidence/positive-court-a0-2026-10-31/integration/sdk-standard-stack-diagnosis-20261101.json)。未最適化coreの結果であり、標準stack問題の解消・本番最小環境の認定ではない。
+- `9689b3369` の明示wide CPU runnerはA1 canonical leafを用い、旧state/intermediateは4B、final i64だけ8Bとする。one-pass borrowed observer、checked logical quote、result寿命のhost leaseを保持する。owner固定sourceの49件・Clippy成功を取り込み、Root結合確認は別途実行中。capture2/Hello2は次のincrementで、実LLM・RSS・native資格は含まない。
+- `afc37f144` はwide metadataを認証済みclass/artifact/layoutからfull record照合して導出し、V1 decodeのflat/Int32 fallbackへ既知wide program/headerが入ることを拒否する。旧I8/I16を含むnarrow経路は維持し、新しいauthorityを発行しない。この追加のRoot試験は実行中。
+
+全範囲Node checkerの最終wide出力接続、8B上界の全Court sizing、DA/decode reader、private court2の全経路の受付、P/資金/全consumerと実trained cohort再現は未完了。guardやdata APIの追加だけでfenceを有効化しない。

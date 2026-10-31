@@ -43,3 +43,6 @@ A7へ`79c3f9bca`固定sourceでの独立回帰開始を依頼した。A6の実So
 2026-11-01追記（A0 `ab2d12ea8` 時点）: A3の同時保持予約修正済みadapter、A1の明示wide Step APIとmixed Fixed/Hist回帰を統合した。ownerのA3 42件／A1 11件は各sourceの範囲であり、Root同候補の全経路成功へ加算しない。lowerer final r2はRootで31件成功し、旧goldenとresident/streamed変換、wide数値・独立3way fixtureを含む対象sourceは試験前後不変だった。SDK幅pinとprofiled schema1 class-record wrapperは統合し、Root結合試験を実行中。実学習済みモデルの登録完了実績ではない。
 
 A7の旧79c3正式失敗（661成功/6失敗）と、test-only fixture修正後の固定候補 `c2e422625`（667成功/0失敗、role worker ignored 1、16MiB test stack）を別の原記録として取り込んだ。これは現在のwide/SDK/A3統合候補の結果ではない。source役割別の残予約保護は [接続条件](../../docs/design/palw/positive-court/ROLE-RESERVATION-R1.md) に具体化し、A4/A6がread-only reviewした。既存source replay53件はこのnative保護の実装実績ではなく、actual mapper/残予約ownerは引き続き未供給。
+
+
+Root `afc37f144` まで: A3 explicit wide CPU producer（owner49件・Clippy、Root alias `9689b3369` / evidence `f03fc56d3`）とmetadata/full-layout join・V1 decode拒否を統合。Root `017bff082` ではrecord6件とStep/data11件が標準stackで成功し、SDK全16件は同じbinary・明示16MiB stackで成功。SDK標準stackの全suite停止と追加4件中1件停止は原本を保持し、LLDBでshipped Params生成中の既存apply_object_innerのstack probeへ局所化した。標準stackを直したとは扱わない。現在のnewrun/metadata/decode合成sourceは別のRoot試験中。A1 row-only metadata view、A3 capture2/Hello2、A4 explicit8B sizing、A0 reviewerのwide source-only checkerを並行作業中。新nativeAssignment案の採択回答は引き続き未受領。
