@@ -1,0 +1,13 @@
+{
+  "checkedUtc": "2026-10-31T17:29:22.363Z",
+  "publicRpc": "wss://misakascan.com/kaspa",
+  "daa": 18734,
+  "actualPreviouslyRefusedBlock": "48135274990f64bfdf3448339361a713331f7c4d0a3b871ff2a43a331cd0cdab4889a112dd1e84fa975cf81716da1a642dcf5406acd62cd1635e9019ece9605f",
+  "state": {
+    "ts": 1793467762118,
+    "accepted": false,
+    "reason": "Not found in this node's current claim state; not yet admitted, retired or unavailable history."
+  },
+  "verification": "Patched join against live getPalwClaims/getPalwFreePromptClaim plus getBlockDagInfo; frontend not deployed; no positive live acceptance/Final asserted",
+  "candidateClaim": "aafbaf3ef4dcfe415c3ebf4ae16ecbb619d8bc23b6ce684cc28b950bdc44d2677f928f096f513481f248c3c66082a8eec4a290808f40ff37a87c812f671883cc"
+}

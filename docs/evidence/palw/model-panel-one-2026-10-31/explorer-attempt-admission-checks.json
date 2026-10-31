@@ -1,0 +1,61 @@
+{
+  "baseRevision": "dfcc8155853144b5910d23270f580cc93006deb3",
+  "sourceSha256": {
+    "contrib/misakascan-t12/app.js": "daf06f08d39ec252932ef1927310d29c947c29e056095d46f17427d3f98f32b7",
+    "tools/palw-jobs-export/src/main.rs": "0116971dd29c2c349e9b0b03cb3d6e3e1578fa0786f2273232992ff7b50b3ff7",
+    "contrib/misakascan-t12/test/attempt-admission.test.mjs": "852a41c7ef2549cb629e30e8b2d7e293794cc12fb615c66b3639b5368034ba1a"
+  },
+  "uiTests": {
+    "passed": 16,
+    "failed": 0,
+    "command": "node --test contrib/misakascan-t12/test/attempt-admission.test.mjs contrib/misakascan-t12/test/model-one-cards.test.mjs contrib/misakascan-t12/test/classification.test.mjs",
+    "groups": {
+      "newAdmissionAndNativeWire": 8,
+      "existingG14Cards": 4,
+      "isolatedExistingClassification": 4
+    }
+  },
+  "syntaxCheck": "node --check contrib/misakascan-t12/app.js PASS",
+  "rust": {
+    "format": "rustfmt edition2024 PASS",
+    "metadataTypecheck": {
+      "result": "PASS",
+      "exitCode": 0,
+      "scope": "exporter main plus both cfg(test) unit functions, using existing warm rlibs; no linking or dependency rebuild",
+      "coreRlib": "libkaspa_consensus_core-a7d0ae047d72a564.rlib",
+      "base0Rlib": "libmisaka_palw_base0-74f51afb923c1a71.rlib",
+      "jsonRlib": "libserde_json-be13b721d178c12f.rlib",
+      "command": "rustc --edition=2024 --test tools/palw-jobs-export/src/main.rs --emit=metadata -C debuginfo=0 --crate-name misaka_jobs_export_metadata --extern kaspa_consensus_core=<warm deps>/libkaspa_consensus_core-a7d0ae047d72a564.rlib --extern misaka_palw_base0=<warm deps>/libmisaka_palw_base0-74f51afb923c1a71.rlib --extern serde_json=<warm deps>/libserde_json-be13b721d178c12f.rlib -L dependency=<warm deps> -o /tmp/misaka-chain-20261031/jobs-export-metadata.rmeta"
+    },
+    "unitRuntime": "not run locally",
+    "cliSmoke": "pending remote immutable build",
+    "cargoAttempt": "stopped only own process group74042 with SIGINT/exit130 when feature variants began compiling under low disk space; no other process/cache deleted"
+  },
+  "productionServicesChanged": false,
+  "frontendDeployed": false,
+  "positiveLiveAdmission": "pending",
+  "originalUserDirtyUi": "not edited; parent must merge path locally, never replace entire file",
+  "localMergeCandidate": "/tmp/misaka-chain-20261031/explorer-claim-join-user-candidate.js",
+  "localCandidateTests": "12/12 PASS: new admission8+cards4; existing original user policy/lifecycle text retained at two merge conflicts",
+  "originalUserBeforeSha256": "c8be6a918b6a008e92c0a280c96e235d7fd16b944fb9e67dcda455623783fc7c",
+  "liveCandidate": {
+    "beforeSha256": "e08a95eef65dab68c549177916352ef71d9b0a9c7b2018921ec4a9f13c5850c1",
+    "candidateSha256": "3d2aa7f71936fefd365b731a58a51e5e66809dfc87e9e0fa5d87645886a08c41",
+    "beforePath": "/tmp/misaka-chain-20261031/explorer-live-claim-join-before.js",
+    "candidatePath": "/tmp/misaka-chain-20261031/explorer-live-claim-join-candidate.js",
+    "downloadHeadersPath": "/tmp/misaka-chain-20261031/explorer-live-claim-join-before.headers",
+    "tests": {
+      "passed": 16,
+      "failed": 0,
+      "groups": {
+        "newAdmissionAndNativeWire": 8,
+        "existingG14Cards": 4,
+        "liveBaselinePreservation": 4
+      }
+    },
+    "mergeConflictsResolved": 5,
+    "preserved": "existing live static catalog, current protocol note/lifecycle, coldFill/updateRecent, body hydration, arrival ordering, algo10 counter and prior round classification",
+    "deploymentGuard": "Abort if current public/app.js hash differs from beforeSha256; parent review/backup/atomic deployment only"
+  },
+  "cacheIdentity": "block+class+executor+candidate claim+isFreePrompt; different FP claims sharing one carrier have isolated states"
+}

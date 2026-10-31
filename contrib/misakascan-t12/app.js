@@ -1020,7 +1020,7 @@ async function scanClaimsOf(bond){
   const c = scanClaimCache.get(bond);
   if (c && Date.now() - c.ts < 20000) return c.rows;
   const r = await palwRead("getPalwClaims", { bond, role: "executor", includeTerminal: true, limit: 200 });
-  const rows = (r && !r.__unsupported && !r.__error && Array.isArray(r.claims)) ? r.claims : null;
+  const rows = (r && r.available === true && !r.__unsupported && !r.__error && Array.isArray(r.claims)) ? r.claims : null;
   scanClaimCache.set(bond, { ts: Date.now(), rows });
   return rows;
 }
@@ -3539,7 +3539,7 @@ function fmtDur(sec){ sec=Math.max(0,Math.floor(sec)); const m=Math.floor(sec/60
    carries (magic "PAV2" + borsh), and the lifecycle objects that ride 0x4b-subnetwork
    transactions (PanelBound / ReceiptLicensed / ProducerDefaulted / Court*). Decoders mirror
    consensus/core/src/palw_attempt_v2.rs and palw_state_v2.rs field-for-field. The page renders
-   the record; approval itself is the chain's 3-of-5 signed receipt quorum. */
+   the record; approval itself follows the claim's route-required signed receipts. */
 // Two different numbers, never interchangeable.
 // PANEL_DRAW / PANEL_QUORUM: a claim already admitted draws 5 bonded seats and needs 3 Valid
 // receipts (ReceiptLicensed). Below 3 holders a licensed claim cannot form and the block defaults.
@@ -3693,8 +3693,10 @@ class LlmRd {
 function llmDecodeAttempt(raw){
   try {
     const b = llmBytes(raw);
-    if (!(b[0]===0x50 && b[1]===0x41 && b[2]===0x56 && b[3]===0x32)) return null;   // "PAV2"
-    const r = new LlmRd(b.subarray(4)); const a = {};
+    const native = b[3] === 0x33; // PAV3 wraps the unchanged base envelope after version:u16.
+    if (!(b[0]===0x50 && b[1]===0x41 && b[2]===0x56 && (b[3]===0x32 || native))) return null;
+    if (native && (b[4] !== 3 || b[5] !== 0)) return null;
+    const r = new LlmRd(b.subarray(native ? 6 : 4)); const a = {};
     a.version = r.u16(); r.h64(); r.h64();                    // network_domain, challenge
     a.classId = r.h64(); a.bondTx = r.h64(); a.bondIx = r.u32();
     r.vec();                                                  // executor_pubkey
@@ -3783,37 +3785,29 @@ function renderLlm(){
   viewFor(__g).innerHTML = `
     <div class="crumbs"><a href="#/">Home</a> › LLM Jobs</div>
     <h1 class="page">LLM Jobs <span class="dim" style="font-size:13px;font-weight:400">(submitted inference · who verified it · who approved it)</span></h1>
-    <div class="note">A model block on this network carries a <b>verified LLM inference claim</b> (PoW algo-6).
-      The claim and the block are separate identities: a class can win multiple blocks during its epoch budget,
-      and when the chain/feed reports the same claim on more than one block this page keeps that relationship visible.
-      Heartbeat blocks have neither a model nor a claim. Every claim is judged, not trusted: a panel of five bonded
-      seats is drawn on-chain, each seat re-derives the committed execution and files a <b>signed receipt</b>, and a
-      claim is approved only when <b>3 of 5</b> receipts agree (<code>ReceiptLicensed</code>). This page renders that
-      record straight from the chain — the judgement itself is the network's, never this site's.</div>
+    <div class="note">A model attempt header commits to an inference claim (algo-6).
+      A decoded header is a submission; its acceptance and phase are read separately from the node's claim state.
+      Claim and block are separate identities, so multiple block records may refer to one claim.
+      An enabled G14 whole-claim route draws one bonded verifier; historical claims retain their original panel.
+      Approval requires the claim's route-specific signed receipts. Final, court liability and SecurityCertified
+      are separate; neither a block's presence nor this page grants verification or payment credit.</div>
     <h2 class="sec">Execution classes</h2>
     <div id="llmWeight"></div>
     <div id="llmClasses" class="cards"><div class="loading">Loading class facts…</div></div>
     <div id="llmClaimLinks"></div>
     <h2 class="sec">Verifier seats — who can verify what</h2>
-    <div class="note"><b>Two counts, not one.</b> A claim already admitted draws <b>5</b> of these bonded
-      seats and needs <b>3 matching receipts</b> (<code>ReceiptLicensed</code>) — that is the panel, never
-      the admission bar. A class is minable only after the registry sees <b><code>requiredReadySeats</code></b>
-      possession proofs on chain via <code>SeatReadinessProved</code>. That number is <b>derived per class</b>
-      (ADR-0135): at least <b>7</b> (5 panel seats + 2 spare), and more for a class whose canonical job is
-      heavy at the target utilization. Each class's live registry state and ready count are shown
-      below, including models registered after this explorer was deployed.
-      Prefetching admits nothing, even if five operators have the file. The table below reads
-      registered classes and bonded seats from this node on every refresh. <b>Ready</b> means a fresh
-      possession proof; <b>eligible</b> also means the seat has collateral room to serve a panel.
-      Each class links to its panel and claims. The floor is derived and is not readiness-gated.</div>
+    <div class="note">The node reports registered classes, bonded seats and historical readiness below.
+      These possession records do not gate new claims on an enabled G14 ModelOne route.
+      A selected seat must still obtain the model and material and check the whole claim before signing.
+      Historical claims keep their original panel and readiness rules. See each claim's actual assignment and phase.</div>
     <div id="llmSeatMatrix" class="tblscroll"></div>
     <h2 class="sec">The lifecycle a claim walks</h2>
     <div class="palw-flow" style="margin-bottom:6px">
       <div class="palw-stage ok"><span class="n">1</span><div class="t">Submitted</div><div class="d">A producer runs the class's model and mines the block with the execution committed in its header (roots over trace, output and execution).</div></div>
-      <div class="palw-stage ok"><span class="n">2</span><div class="t">Panel bound</div><div class="d">Five bonded seats are drawn on-chain (<code>PanelBound</code>) — the producer cannot pick its judges.</div></div>
+      <div class="palw-stage ok"><span class="n">2</span><div class="t">Panel bound</div><div class="d">The claim route draws its bonded seat(s) on-chain; the producer cannot pick its judges.</div></div>
       <div class="palw-stage ok"><span class="n">3</span><div class="t">Verified</div><div class="d">Each seat re-derives the job from the served material and signs a receipt: <b>Valid</b>, <b>Unavailable</b> or <b>Incapable</b>.</div></div>
-      <div class="palw-stage ok"><span class="n">4</span><div class="t">Approved</div><div class="d"><code>ReceiptLicensed</code> carries the 3-of-5 quorum of signed receipts; a withholding producer gets <code>ProducerDefaulted</code> and is slashed.</div></div>
-      <div class="palw-stage wait"><span class="n">5</span><div class="t">Final</div><div class="d">A licensed claim can still be disputed in court; unchallenged through its challenge window (120 DAA on testnet-12, about 4 hours), it becomes <b>Final</b> and its weight counts.</div></div>
+      <div class="palw-stage ok"><span class="n">4</span><div class="t">Approved</div><div class="d"><code>ReceiptLicensed</code> carries the route-required signed receipts; a withholding producer gets <code>ProducerDefaulted</code> and is slashed.</div></div>
+      <div class="palw-stage wait"><span class="n">5</span><div class="t">Final</div><div class="d">The node reports <b>Final</b> after the applicable claim window. Court liability and Gate C / SecurityCertified remain separate; Final alone grants no settlement credit.</div></div>
     </div>
     <div class="sec-row"><h2 class="sec">Submitted LLM work</h2><span class="sec-more dim" id="llmSubCount"></span></div>
     <div class="note" style="margin-top:4px">The <b>input</b> of an attempt-lane job is not chosen by anyone: it is a
@@ -4087,7 +4081,7 @@ async function refreshLlmInner(){
   for (const [claim, row] of llmFpJobs){
     if (llmSeenClaims.has(claim)) continue;
     llmSeenClaims.add(claim);
-    const cls = classes.find(c => c.id === row.classId || c.id === row.class || c.name === row.class);
+    const cls = classes.find(c => c.id === row.class_id || c.id === row.classId || c.id === row.class || c.name === row.class);
     llmTotalSubs++;
     llmSubs.push({ block: row.block || "", ts: Number(row.ts||0), daa: Number(row.daa||0) || null, chain: null,
                    classId: cls ? cls.id : "", pwu: row.work_leaves || null, bondTx: "", bondIx: 0, execRoot: "", claim, fp: true, feedOnly: true });
@@ -4095,23 +4089,16 @@ async function refreshLlmInner(){
   for (const [blockHash, row] of llmJobs){
     if (llmSeenBlocks.has(blockHash)) continue;
     llmSeenBlocks.add(blockHash);
-    const cls = classes.find(c => c.id === row.classId || c.id === row.class || c.name === row.class);
+    const cls = classes.find(c => c.id === row.class_id || c.id === row.classId || c.id === row.class || c.name === row.class);
     llmTotalSubs++;
     llmSubs.push({ block: blockHash, ts: Number(row.ts||0), daa: Number(row.daa||0) || null,
-                   chain: null, classId: cls ? cls.id : "", pwu: null,
-                   bondTx: "", bondIx: 0, execRoot: "", feedOnly: true });
+                   chain: null, classId: cls ? cls.id : (row.class_id || row.classId || ""), pwu: row.pwu ?? null,
+                   bondTx: "", bondIx: 0, execRoot: row.execution_root || "", claim: row.claim || "", feedOnly: true });
   }
   if (!llmCursor){
     const dag = await rpc("getBlockDagInfo");
-    let hash = dag.sink, hops = 0;
-    // Walk selected parents back ~24 chain blocks; each hop is one cheap header fetch.
-    while (hops < 24){
-      let b; try { b = await rpc("getBlock", { hash, includeTransactions:false }, 8000); } catch { break; }
-      const parent = (b.block||b).header && ((b.block||b).header.selectedParentHash || ((b.block||b).header.parents||[[]])[0][0]);
-      if (!parent) break;
-      hash = parent; hops++;
-    }
-    llmCursor = hash;
+    // Use verboseData.selectedParentHash, not a non-existent header.parents field.
+    llmCursor = await recentChainAnchor(dag,12);
   }
   const chainSeen = [];   // chain blocks met this refresh, in arrival order — the overlap anchor pool
   for (let page=0; page<4; page++){
@@ -4165,6 +4152,7 @@ async function refreshLlmInner(){
   }
   llmEvents.sort((a,b)=>b.ts-a.ts); llmEvents = llmEvents.slice(0,400);
   paintLlm();
+  if (llmSubs.length) refreshLlmAdmissions(llmSubs).then(()=>paintLlm()).catch(()=>{});
 }
 
 // **Who made this block, and who checked it** — answered from the block's OWN header wherever it
@@ -4196,9 +4184,9 @@ function bondCell(tx, ix){
 /// verdict on whether the work was judged — never this page's arithmetic.
 const PALW_PHASE = {
   provisional:     { label:"Provisional",      judged:false, meaning:"submitted; no panel has judged it yet" },
-  panel_bound:     { label:"Panel bound",      judged:false, meaning:"five bonded seats have been drawn \u2014 judgement is in flight" },
-  receipt_licensed:{ label:"Approved",         judged:true,  meaning:"3 of 5 drawn seats signed matching receipts; still challengeable in court" },
-  final:           { label:"Final",            judged:true,  meaning:"licensed and unchallenged through the window \u2014 no longer disputable" },
+  panel_bound:     { label:"Panel bound",      judged:false, meaning:"the route-selected bonded seats have been drawn; judgement is in flight" },
+  receipt_licensed:{ label:"Approved",         judged:true,  meaning:"the route-required receipts licensed this claim; court and certification rules still apply" },
+  final:           { label:"Final",            judged:true,  meaning:"procedurally Final; applicable G14 liability and SecurityCertified rules remain separate" },
   voided:          { label:"Voided",           judged:false, meaning:"the chain decided this work did not happen as claimed" },
 };
 function palwPhase(raw){
@@ -4252,7 +4240,7 @@ function blockProductionSection(hd, feedRow){
   return `<h2 class="sec">How this block was produced <span class="dim" style="font-size:13px">— read from this block's own header</span></h2>
     <div class="kv">${rows.map(r=>`<div class="row"><div class="key">${r[0]}</div><div class="val">${r[1]}</div></div>`).join("")}</div>
     <h2 class="sec">Who verified it</h2>
-    <div id="blkVerify" data-claim="${esc(claim||"")}"><div class="spin">Asking the chain…</div></div>`;
+    <div id="blkVerify" data-claim="${esc(claim||"")}" data-class="${esc(att.classId)}" data-bond="${esc(att.bondTx + ':' + att.bondIx)}"><div class="spin">Asking the chain…</div></div>`;
 }
 
 /// The verification half, filled in after paint: the phase is the node's own state (one request,
@@ -4261,20 +4249,27 @@ function blockProductionSection(hd, feedRow){
 async function fillBlockVerification(blockHash){
   const box = document.getElementById("blkVerify");
   if (!box) return;
-  const claim = box.getAttribute("data-claim");
+  let claim = box.getAttribute("data-claim");
+  const bond = box.getAttribute("data-bond") || "";
+  const ix = bond.lastIndexOf(":");
+  const row = { block:blockHash, claim, classId:box.getAttribute("data-class"), bondTx:bond.slice(0,ix), bondIx:Number(bond.slice(ix+1)) };
+  let claims = null;
+  try { claims = bond ? await scanClaimsOf(bond) : null; } catch { /* unknown */ }
+  const admission = llmAdmissionState(row, claims, null);
+  if (admission.accepted) claim = admission.claimId;
   if (!claim){
-    box.innerHTML = `<div class="note">This block's claim id is not in the decoded feed yet, so its panel cannot be
-      looked up here. The verification record for every claim is on the <a href="#/llm">LLM Jobs</a> page under
-      <b>Verification &amp; approvals</b>; a claim is approved when 3 of its 5 drawn seats file matching receipts.</div>`;
+    box.innerHTML = `<div class="note">Claim acceptance is unconfirmed: this node's bounded claim view has no exact
+      accepting block, class and executor match. The claim may not be admitted yet, may be retired, or may be outside
+      this query's history. A decoded header alone does not establish acceptance, panel approval or Final.</div>`;
     return;
   }
   let r = null;
   try { r = await rpc("getPalwFreePromptClaim", { claimId: claim }, 12000); } catch {}
-  if (!r || !r.found){
-    box.innerHTML = `<div class="note">The node this page reads does not hold claim
-      <span class="hash">${esc(short(claim,10))}</span> in its state — it may have been pruned from the claim map,
-      or this vantage is behind. The claim id is the chain's; the panel record for it is on the
-      <a href="#/llm">LLM Jobs</a> page.</div>`;
+  if (!r || !r.found || !llmAdmissionMatches({ ...row, claim }, r)){
+    box.innerHTML = `<div class="note">Acceptance of candidate claim
+      <span class="hash">${esc(short(claim,10))}</span> could not be confirmed for this exact block, class and executor.
+      The current claim view may be unavailable, behind, retired, or report another accepting block.
+      This does not establish rejection, approval or Final.</div>`;
     return;
   }
   const ph = palwPhase(r.phase);
@@ -4333,9 +4328,98 @@ async function fillBlockVerification(blockHash){
 function llmSeatList(seats){
   return seats.map(s=>`<span class="mono" title="bond ${esc(s.bond.tx)}:${s.bond.ix}">${esc(short(s.bond.tx,4))}:${s.bond.ix}</span>`).join(", ");
 }
+// A decoded envelope is a submission, not evidence that its claim was admitted.
+// Match the accepting block, class AND executor against the node's current state.
+// The composite key keeps distinct claims sharing one carrier block separate.
+const llmAdmissionByBlock = new Map();
+let llmAdmissionsBusy = false;
+function llmSubmissionIdentity(row){
+  const job = row.fp ? llmFpJobs.get(row.claim) : llmJobs.get(row.block);
+  return {
+    block: String(row.block || "").toLowerCase(),
+    classId: String(row.classId || (job && (job.class_id || job.classId)) || "").toLowerCase(),
+    bond: String(row.bondTx ? row.bondTx + ":" + row.bondIx : (job && job.executor_bond) || "").toLowerCase(),
+    claimId: String(row.claim || (job && job.claim) || "").toLowerCase(),
+  };
+}
+function llmAdmissionKey(row){
+  const id = llmSubmissionIdentity(row);
+  return JSON.stringify([id.block,id.classId,id.bond,id.claimId,!!row.fp]);
+}
+function llmAdmissionMatches(row, claim){
+  const id = llmSubmissionIdentity(row);
+  return !!claim && /^[0-9a-f]{128}$/.test(String(claim.claimId || "")) &&
+    !!id.block && !!id.classId && !!id.bond && Number(claim.acceptedDaa) > 0 &&
+    String(claim.acceptedBlock || "").toLowerCase() === id.block &&
+    String(claim.classId || "").toLowerCase() === id.classId &&
+    String(claim.executorBond || "").toLowerCase() === id.bond &&
+    (!id.claimId || String(claim.claimId).toLowerCase() === id.claimId) &&
+    (claim.isFreePrompt == null || claim.isFreePrompt === !!row.fp);
+}
+function llmAdmissionState(row, claims, detail){
+  const matches = (claims || []).filter(c => llmAdmissionMatches(row, c));
+  if (detail && !detail.__unsupported && !detail.__error && detail.found === true && llmAdmissionMatches(row, detail)) matches.push(detail);
+  const ids = new Set(matches.map(c => c.claimId));
+  if (ids.size === 1){
+    const c = matches[0];
+    return { accepted:true, claimId:c.claimId, phase:c.phase, acceptedDaa:c.acceptedDaa,
+      acceptedBlock:c.acceptedBlock, executorBond:c.executorBond, seats:Array.isArray(c.seats) ? c.seats.length : null };
+  }
+  return { accepted:false, reason: detail && detail.found === false
+    ? "Not found in this node's current claim state; not yet admitted, retired or unavailable history."
+    : "Acceptance unconfirmed: the current bounded claim view has no exact block/class/executor match." };
+}
+async function refreshLlmAdmissions(rows){
+  if (llmAdmissionsBusy) return;
+  llmAdmissionsBusy = true;
+  try {
+  // Bound each poll; a missing/retired row or RPC error never means rejection.
+  const selected = rows.filter(r=>!llmIsFloor(r.classId)).slice(0,60).concat(rows.filter(r=>llmIsFloor(r.classId)).slice(0,10));
+  const byBond = new Map();
+  for (const row of selected){
+    const old = llmAdmissionByBlock.get(llmAdmissionKey(row));
+    if (old && Date.now() - old.ts < 15000) continue;
+    const id = llmSubmissionIdentity(row);
+    if (id.bond && !byBond.has(id.bond)) byBond.set(id.bond, null);
+  }
+  const bonds = Array.from(byBond.keys()).slice(0,12);
+  let bondNext = 0;
+  async function bondWorker(){ while (bondNext < bonds.length){
+    const bond = bonds[bondNext++];
+    try { byBond.set(bond, await scanClaimsOf(bond)); } catch { /* unknown, retried next poll */ }
+  }}
+  await Promise.all(Array.from({length:Math.min(4,bonds.length)},bondWorker));
+  let next = 0;
+  async function worker(){ while (next < selected.length){
+    const row = selected[next++], old = llmAdmissionByBlock.get(llmAdmissionKey(row));
+    if (old && Date.now() - old.ts < 15000) continue;
+    const id = llmSubmissionIdentity(row), claims = byBond.get(id.bond);
+    let state = llmAdmissionState(row, claims, null);
+    if (!state.accepted && /^[0-9a-f]{128}$/.test(id.claimId)){
+      let detail = null;
+      try { detail = await palwRead("getPalwFreePromptClaim", { claimId:id.claimId }); } catch { /* unknown */ }
+      state = llmAdmissionState(row, claims, detail);
+    }
+    llmAdmissionByBlock.set(llmAdmissionKey(row), { ts:Date.now(), ...state });
+  }}
+  await Promise.all(Array.from({length:Math.min(4,selected.length)},worker));
+  if (llmAdmissionByBlock.size > 2000){
+    const keep = new Set(rows.map(llmAdmissionKey));
+    for (const key of llmAdmissionByBlock.keys()) if (!keep.has(key)) llmAdmissionByBlock.delete(key);
+  }
+  } finally { llmAdmissionsBusy = false; }
+}
+function llmAdmissionCell(row){
+  const state = llmAdmissionByBlock.get(llmAdmissionKey(row));
+  if (!state || !state.accepted) return `<span class="dim" title="${esc(state && state.reason || "Claim state has not been queried yet.")}">acceptance unconfirmed</span>`;
+  const phase = palwPhase(state.phase);
+  return `<span class="pill ${state.phase === "voided" ? "red" : "chain"}" title="Exact accepting block, class and executor matched the node's claim state at DAA ${num(state.acceptedDaa)}; Final is separate from SecurityCertified">Accepted · ${esc(phase.label)}</span>${state.seats == null ? "" : ` <span class="dim">${num(state.seats)} seat(s)</span>`}`;
+}
 // The block header names the execution; the claim id arrives from the decoded job feed (or from
 // the free-prompt transaction). Keep the lookup in one place for all claim/block projections.
 function llmClaimForRow(row){
+  const admission = llmAdmissionByBlock.get(llmAdmissionKey(row));
+  if (admission && admission.accepted) return admission.claimId;
   if (row.claim) return row.claim;
   const job = row.fp ? llmFpJobs.get(row.claim) : llmJobs.get(row.block);
   return job && job.claim ? job.claim : null;
@@ -4346,7 +4430,7 @@ function paintLlm(){
               : llmFilter==="floor" ? llmSubs.filter(r=> llmIsFloor(r.classId))
               : llmSubs.filter(r=>!llmIsFloor(r.classId));
   const sc = document.getElementById("llmSubCount");
-  if (sc) sc.textContent = `${num(llmTotalSubs)} on chain · ${num(modelCount)} from LLM model classes`;
+  if (sc) sc.textContent = `${num(llmTotalSubs)} decoded submissions · ${num(modelCount)} from model classes · ${num(llmSubs.filter(r=>llmAdmissionByBlock.get(llmAdmissionKey(r))?.accepted).length)} matched to current claim state`;
   const claimGroups = new Map();
   for (const row of llmSubs){
     const claim = llmClaimForRow(row);
@@ -4359,14 +4443,14 @@ function paintLlm(){
   if (rel){
     const groups = Array.from(claimGroups.values()).sort((a,b)=>Number(b.rows[0]?.ts||0)-Number(a.rows[0]?.ts||0));
     rel.innerHTML = `<h2 class="sec">Claim ↔ blocks</h2>
-      <div class="note">Claims are the inference identity; blocks are the accepted or merged block records that carry it.
+      <div class="note">Claims are the inference identity; decoded blocks carry a candidate identity. Acceptance below requires an exact block/class/executor match in the node claim state.
         A class may win multiple blocks in its epoch budget. This table groups every decoded block by claim, so a
         repeated claim is visible as <b>one claim → multiple blocks</b>. Rows whose claim feed has not arrived yet
         remain visible in the submissions table with their block identity.</div>` +
-      (groups.length ? `<div class="tblscroll"><table class="tbl"><thead><tr><th>Claim</th><th>Class</th><th class="num">Blocks</th><th>Block records</th></tr></thead><tbody>${groups.slice(0,60).map(g=>{
+      (groups.length ? `<div class="tblscroll"><table class="tbl"><thead><tr><th>Claim</th><th>Class</th><th class="num">Blocks</th><th>Block records · claim state</th></tr></thead><tbody>${groups.slice(0,60).map(g=>{
         const first = g.rows[0];
         const cls = LLM_CLASS_BY_ID[first.classId] ? llmClassName(first.classId) : short(first.classId,6);
-        return `<tr><td class="hash" title="${esc(g.claim)}">${esc(short(g.claim,10))}</td><td>${esc(cls)}</td><td class="num"><b>${g.rows.length}</b></td><td>${g.rows.map(x=>linkBlock(x.block)).join(" · ")}</td></tr>`;
+        return `<tr><td class="hash" title="${esc(g.claim)}">${esc(short(g.claim,10))}</td><td>${esc(cls)}</td><td class="num"><b>${g.rows.length}</b></td><td>${g.rows.map(x=>linkBlock(x.block) + " " + llmAdmissionCell(x)).join(" · ")}</td></tr>`;
       }).join("")}</tbody></table></div>`
       : `<div class="note">No claim↔block links have been decoded in the current window yet. The block rows remain visible while the job feed catches up.</div>`);
   }
@@ -4380,7 +4464,7 @@ function paintLlm(){
              <b>All classes</b> for the full stream.</div>`
           : `<div class="spin">No submissions decoded yet…</div>`) :
     `<div class="tblscroll"><table class="tbl"><thead><tr>
-      <th>Age</th><th>Block</th><th>Claim</th><th>Class</th><th class="num">pwu claimed</th><th>Input</th><th>Output</th><th>Type</th>
+      <th>Age</th><th>Block</th><th>Claim</th><th>Class</th><th class="num">pwu claimed</th><th>Input</th><th>Output</th><th>Type</th><th>Claim state</th>
     </tr></thead><tbody>${shown.slice(0,30).map(r=>{
       const job = r.fp ? llmFpJobs.get(r.claim) : llmJobs.get(r.block);
       const claim = llmClaimForRow(r);
@@ -4398,6 +4482,9 @@ function paintLlm(){
       } else if (llmIsFloor(r.classId)){
         inCell  = '<span class="dim">deterministic integer job (no tokens)</span>';
         outCell = '<span class="dim">—</span>';
+      } else if (job && job.prompt_derived === false){
+        inCell = '<span class="dim">prompt unavailable for this profile</span>';
+        outCell = llmDisclosedCell(job.disclosed) || llmOutCell(null, null);
       } else if (job){
         // The attempt lane's INPUT stays: it is not anybody's words but a draw the block itself
         // fixes, and any reader recomputes it from the anchor. Its OUTPUT does not: that lives in
@@ -4416,7 +4503,7 @@ function paintLlm(){
         <td class="num">${r.pwu==null?'<span class="dim">—</span>':num(r.pwu)}</td>
         <td>${inCell}</td>
         <td>${outCell}</td>
-        <td class="nowrap">${r.fp?'<span class="pill blue" title="free-prompt lane (ADR-0044): a prompt somebody typed, committed by its executor as a claim">free-prompt</span>':(llmIsFloor(r.classId)?'<span class="pill" title="the deterministic integer floor: no model, no tokens">floor</span>':'<span class="pill" title="attempt lane: the prompt is derived from the block anchor — a lottery ticket nobody chose">attempt</span>')} ${r.chain==null?'':r.chain?'<span class="pill chain">chain</span>':'<span class="pill red">merged</span>'}</td></tr>`;}).join("")}
+        <td class="nowrap">${r.fp?'<span class="pill blue" title="free-prompt lane (ADR-0044): a prompt somebody typed, committed by its executor as a claim">free-prompt</span>':(llmIsFloor(r.classId)?'<span class="pill" title="the deterministic integer floor: no model, no tokens">floor</span>':'<span class="pill" title="attempt lane: the prompt is derived from the block anchor — a lottery ticket nobody chose">attempt</span>')} ${r.chain==null?'':r.chain?'<span class="pill chain">chain</span>':'<span class="pill red">merged</span>'}</td><td>${llmAdmissionCell(r)}</td></tr>`;}).join("")}
     </tbody></table></div>`;
   }
   const ec = document.getElementById("llmEvCount");
@@ -4427,7 +4514,7 @@ function paintLlm(){
       let pill = '<span class="pill std">'+esc(e.kind)+'</span>', what = "";
       if (e.kind === "PanelBound"){
         pill = '<span class="pill blue">Panel bound</span>';
-        what = `5-seat panel drawn for claim — seats ${llmSeatList(e.seats||[])}`;
+        what = `${(e.seats||[]).length}-seat historical panel binding — seats ${llmSeatList(e.seats||[])}`;
       } else if (e.kind === "ReceiptLicensed"){
         pill = '<span class="pill chain">Approved ✓</span>';
         const v = (e.receipts||[]).reduce((m,r)=>{ m[r.verdict]=(m[r.verdict]||0)+1; return m; },{});
@@ -4465,8 +4552,7 @@ function paintLlm(){
         <td>${linkBlock(e.block)}</td></tr>`;
     };
     ew.innerHTML = !llmEvents.length ? `<div class="note">No lifecycle objects in the recent window yet — the
-      panel seats may still be collecting receipts (a <code>ReceiptLicensed</code> carrier lands once a 3-of-5
-      quorum stands; on testnet-12 the first floor licences were expected about 40–50 minutes after launch).
+      panel seats may still be collecting receipts (a <code>ReceiptLicensed</code> carrier lands once the claim's route-required receipts are accepted; on testnet-12 the first floor licences were expected about 40–50 minutes after launch).
       This page sweeps only the most recent blocks. Panel <i>bindings</i> are derived by every node from state
       and never ride a transaction, so they are deliberately absent here.</div>` :
     `<div class="tblscroll"><table class="tbl"><thead><tr>
