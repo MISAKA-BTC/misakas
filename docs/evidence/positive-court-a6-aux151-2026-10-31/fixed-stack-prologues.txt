@@ -1,0 +1,68 @@
+
+/tmp/misaka-a6-aux151-final-test-bin:	file format mach-o arm64
+
+Disassembly of section __TEXT,__text:
+
+0000000102071a5c <__ZN20kaspa_consensus_core21palw_positive_rows_v27restore32validate_positive_aux_present_v217ha1079c38e38eeed6E>:
+102071a5c: a9be6ffc    	stp	x28, x27, [sp, #-0x20]!
+102071a60: a9017bfd    	stp	x29, x30, [sp, #0x10]
+102071a64: 910043fd    	add	x29, sp, #0x10
+102071a68: d14027e9    	sub	x9, sp, #0x9, lsl #12   ; =0x9000
+102071a6c: d14007ff    	sub	sp, sp, #0x1, lsl #12   ; =0x1000
+102071a70: f90003ff    	str	xzr, [sp]
+102071a74: eb2963ff    	cmp	sp, x9
+102071a78: 54ffffa1    	b.ne	0x102071a6c <__ZN20kaspa_consensus_core21palw_positive_rows_v27restore32validate_positive_aux_present_v217ha1079c38e38eeed6E+0x10>
+102071a7c: d11103ff    	sub	sp, sp, #0x440
+102071a80: f90003ff    	str	xzr, [sp]
+102071a84: d10187a9    	sub	x9, x29, #0x61
+102071a88: f9005fe9    	str	x9, [sp, #0xb8]
+102071a8c: 91400be9    	add	x9, sp, #0x2, lsl #12   ; =0x2000
+102071a90: 911d0129    	add	x9, x9, #0x740
+102071a94: f90063e9    	str	x9, [sp, #0xc0]
+102071a98: 910983e9    	add	x9, sp, #0x260
+
+
+/tmp/misaka-a6-aux151-final-test-bin:	file format mach-o arm64
+
+Disassembly of section __TEXT,__text:
+
+0000000102071e70 <__ZN20kaspa_consensus_core21palw_positive_rows_v27restore32validate_positive_aux_restore_v217h5bd2829c85bd1d17E>:
+102071e70: d106c3ff    	sub	sp, sp, #0x1b0
+102071e74: a9196ffc    	stp	x28, x27, [sp, #0x190]
+102071e78: a91a7bfd    	stp	x29, x30, [sp, #0x1a0]
+102071e7c: 910683fd    	add	x29, sp, #0x1a0
+102071e80: d102c3a9    	sub	x9, x29, #0xb0
+102071e84: f9000fe9    	str	x9, [sp, #0x18]
+102071e88: f9000be8    	str	x8, [sp, #0x10]
+102071e8c: f9001be0    	str	x0, [sp, #0x30]
+102071e90: d10243a8    	sub	x8, x29, #0x90
+102071e94: 95409ae6    	bl	0x107098a2c <__ZN5alloc3vec12Vec$LT$T$GT$3new17h241e50f5a0280464E>
+102071e98: f9400fe8    	ldr	x8, [sp, #0x18]
+102071e9c: d102c3a9    	sub	x9, x29, #0xb0
+102071ea0: 528012ea    	mov	w10, #0x97              ; =151
+102071ea4: 381503aa    	sturb	w10, [x29, #-0xb0]
+102071ea8: 3dc00900    	ldr	q0, [x8, #0x20]
+102071eac: 3c808120    	stur	q0, [x9, #0x8]
+
+
+/tmp/misaka-a6-aux151-final-test-bin:	file format mach-o arm64
+
+Disassembly of section __TEXT,__text:
+
+0000000102073034 <__ZN20kaspa_consensus_core21palw_positive_rows_v27restore6Reader17validate_case_row17h72c38618a22a61a3E>:
+102073034: a9be6ffc    	stp	x28, x27, [sp, #-0x20]!
+102073038: a9017bfd    	stp	x29, x30, [sp, #0x10]
+10207303c: 910043fd    	add	x29, sp, #0x10
+102073040: d1406fe9    	sub	x9, sp, #0x1b, lsl #12  ; =0x1b000
+102073044: d14007ff    	sub	sp, sp, #0x1, lsl #12   ; =0x1000
+102073048: f90003ff    	str	xzr, [sp]
+10207304c: eb2963ff    	cmp	sp, x9
+102073050: 54ffffa1    	b.ne	0x102073044 <__ZN20kaspa_consensus_core21palw_positive_rows_v27restore6Reader17validate_case_row17h72c38618a22a61a3E+0x10>
+102073054: d13543ff    	sub	sp, sp, #0xd50
+102073058: f90003ff    	str	xzr, [sp]
+10207305c: 91406fe8    	add	x8, sp, #0x1b, lsl #12  ; =0x1b000
+102073060: 911a8108    	add	x8, x8, #0x6a0
+102073064: f90073e8    	str	x8, [sp, #0xe0]
+102073068: 91404be8    	add	x8, sp, #0x12, lsl #12  ; =0x12000
+10207306c: 910b6108    	add	x8, x8, #0x2d8
+102073070: f90077e8    	str	x8, [sp, #0xe8]

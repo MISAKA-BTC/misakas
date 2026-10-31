@@ -1,0 +1,16 @@
+[
+  {
+    "original_raw_path": "/tmp/misaka-a6-aux151-final-typecheck.log",
+    "compressed_copy": "cargo-metadata-rocksdb-failure.log.gz",
+    "raw_bytes": 244923,
+    "raw_sha256": "937156b9907e91b82c26008f00dff210696e69245665eeb03527f98fd25ea6f1",
+    "status": "failed; not counted as typecheck success"
+  },
+  {
+    "original_raw_path": "/tmp/misaka-a6-aux151-final-direct-metadata.log",
+    "compressed_copy": "direct-metadata-missing-cargo-env.log.gz",
+    "raw_bytes": 14751119,
+    "raw_sha256": "445d12b4eeb419991a7a96dc022bc99055a4b26787a495164d9587a261f54130",
+    "status": "Cargo environment missing; interrupted; not a successful check"
+  }
+]

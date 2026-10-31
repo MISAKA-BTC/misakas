@@ -1,0 +1,106 @@
+{
+  "code_commit": "d2bdb174c",
+  "branch": "codex/rfc42-a6-recovery",
+  "files": [
+    {
+      "path": "consensus/core/Cargo.toml",
+      "bytes": 4655,
+      "sha256": "58d9ee8c24fc635981b93990e7a65325438497ddc52439fdd9fd07494c5d4760"
+    },
+    {
+      "path": "consensus/core/src/palw_kernel_route_v1.rs",
+      "bytes": 132629,
+      "sha256": "f4a65206d0c8695138e4748ba161f74243fba9c8fa4da2ba7ead81b0db85cf2b"
+    },
+    {
+      "path": "consensus/core/src/palw_native_resource_v1.rs",
+      "bytes": 6903,
+      "sha256": "e54c2be552dd7af00b18579ac0a7c003cf0b48bfad7b7d8b0f6bb74d5e8f92c3"
+    },
+    {
+      "path": "consensus/core/src/palw_native_resource_v1/generated.rs",
+      "bytes": 231555,
+      "sha256": "3429af96b83d9c5de77eba77aca75dfb603741217de5ec988d610a3ebdf6019c"
+    },
+    {
+      "path": "consensus/core/src/palw_native_resource_v1/positive_rows.rs",
+      "bytes": 15631,
+      "sha256": "966a4d0a6344a368bd188520367cc04c6f90f95e0e3634799eaa573243098059"
+    },
+    {
+      "path": "consensus/core/src/palw_native_resource_v1/restore_workspace.rs",
+      "bytes": 8713,
+      "sha256": "862325aa1e51bd8f8b41d1d98304f89a06f9e1ab6cb3f32b52a780ad21072ba7"
+    },
+    {
+      "path": "consensus/core/src/palw_native_resource_v1/wire_kernel_aux.rs",
+      "bytes": 82815,
+      "sha256": "9fa8ac9a9bee3b05a58ab32e9d8cb2d1d6052a611a38373af92666c64843be34"
+    },
+    {
+      "path": "consensus/core/src/palw_positive_rows_v2.rs",
+      "bytes": 3932,
+      "sha256": "90438779f3981c8ba6841549d29feaea16146412e2bb6decd5caf4cc032b64ce"
+    },
+    {
+      "path": "consensus/core/src/palw_positive_rows_v2/restore.rs",
+      "bytes": 16224,
+      "sha256": "f892527f9a229daf42d2a8ea535c509f40d51672cf52f0aaad5ec51321901f1e"
+    },
+    {
+      "path": "consensus/core/src/palw_positive_rows_v2/restore/tests.rs",
+      "bytes": 8984,
+      "sha256": "8db6370df8748e7000a8fe4a2cc175fb0dee25751c81a73c3cdba022d12691f8"
+    },
+    {
+      "path": "consensus/core/src/palw_positive_rows_v2/tests.rs",
+      "bytes": 24050,
+      "sha256": "2da94fca3a5d4bfcbd3065cbad105bf3b36b1f134153d1834047c64272905906"
+    },
+    {
+      "path": "consensus/core/src/palw_state_v2/chain_state.rs",
+      "bytes": 272791,
+      "sha256": "c34081912aaca1d4d76454b41bdca9acb11ff71962c04d79a09b4cf19eeae536"
+    },
+    {
+      "path": "misaka/palw/positive-contract/src/funding.rs",
+      "bytes": 5171,
+      "sha256": "dc546c3c871db0c7706c7a9d0b4078c424a6ba75eb9472d4f08c382996f210fd"
+    },
+    {
+      "path": "misaka/palw/positive-contract/src/identity.rs",
+      "bytes": 2695,
+      "sha256": "b7e4f78c6f4a4912d75f39d56dbde19124a1bc3c754abb3b7448ee3e26ec4cc1"
+    },
+    {
+      "path": "misaka/palw/positive-contract/src/native.rs",
+      "bytes": 2224,
+      "sha256": "1bab234dce4bb6b0bad63b91cac9f097c9c24d87c961fff19f5627b34302a7e8"
+    },
+    {
+      "path": "misaka/palw/positive-contract/src/rows.rs",
+      "bytes": 18953,
+      "sha256": "917cf67e5ef6f0e75ac36c1d1e9cebbbe81e3bf67722b57f6236467bd2dfef89"
+    },
+    {
+      "path": "misaka/palw/positive-contract/src/tir.rs",
+      "bytes": 5123,
+      "sha256": "d43d1d1d051997a5f2bdb760313cb3c670f867dc138e84c2e6a7ed72b0ab59b0"
+    },
+    {
+      "path": "misaka/palw/positive-contract/tests/native_preflight_alloc.rs",
+      "bytes": 4181,
+      "sha256": "696d64ddc4c4d4b02c6f76ab8fb26277135cdf7463cb43d85242768a318920a1"
+    },
+    {
+      "path": "scripts/drills/gen_rfc06_native_inventory.py",
+      "bytes": 26975,
+      "sha256": "24aa9f7fefaa6fd8345961d7b346c74ae8daf271511a45c97c96f631464bc2c0"
+    },
+    {
+      "path": "scripts/drills/gen_rfc06_native_wire.py",
+      "bytes": 61329,
+      "sha256": "e1a8eeb9ce88b59612259e3eb9d003710f8d47f66823f6d242ee3ce3e1afbe54"
+    }
+  ]
+}

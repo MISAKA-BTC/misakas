@@ -1,0 +1,54 @@
+
+running 25 tests
+test palw_kernel_route_v1::projection_capacity_tests::malformed_scope_keeps_its_semantic_verdict_with_or_without_a_cache ... ok
+test palw_kernel_route_v1::projection_capacity_tests::native_projection_reinjects_current_scope_after_cache_fill_and_reversion ... ok
+test palw_kernel_route_v1::projection_capacity_tests::projection_capacity_worker ... ok
+test palw_kernel_route_v1::selected_approval_tests::approved_paid_claim_exports_an_event_that_follows_the_settlement_predicate ... ok
+test palw_kernel_route_v1::selected_approval_tests::bootstrap_locked_claim_exports_its_event_but_earns_no_exec_credit ... ok
+test palw_kernel_route_v1::selected_approval_tests::bootstrap_seed_is_per_claim_and_the_probe_policy_has_none ... ok
+test palw_kernel_route_v1::selected_approval_tests::bootstrap_window_closes_at_the_first_approved_paid_final ... ok
+test palw_kernel_route_v1::selected_approval_tests::none_a_paid_claim_over_a_panel_licensed_class_exports_none_and_does_not_fail_the_read ... ok
+test palw_kernel_route_v1::selected_approval_tests::none_gate_admits_only_a_paid_claim_with_its_canonical_final_and_a_positive_quorum ... ok
+test palw_kernel_route_v1::selected_approval_tests::none_timeout_panel_licensed_and_unapproved_paid_claims_export_no_event ... ok
+test palw_kernel_route_v1::selected_approval_tests::panel_record_is_emitted_only_for_a_panel_licensed_final_and_never_as_a_beacon_event ... ok
+test palw_kernel_route_v1::tests::a_pipeline_claims_record_header_has_a_wire_form ... ok
+test palw_kernel_route_v1::tests::authenticated_scope_policy_survives_public_snapshot_cache_and_reverts_with_its_aux_row ... ok
+test palw_kernel_route_v1::tests::e1_self_posting_self_accusing_producer_loses_at_least_gain_over_detection ... ok
+
+running 1 test
+test palw_kernel_route_v1::projection_capacity_tests::projection_capacity_worker ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5406 filtered out; finished in 0.00s
+
+test palw_kernel_route_v1::tests::g14b_a_maximal_respond_rides_the_chunk_lane_in_the_chunks_the_kernel_counts ... ok
+test palw_kernel_route_v1::tests::lane_seed_panel_one_seed_needs_a_post_commit_anchor ... ok
+test palw_kernel_route_v1::tests::palw_kernel_route_detection_loss_covers_gain_at_90_percent ... ok
+test palw_kernel_route_v1::tests::palw_kernel_route_the_interim_reporter_share_is_adr_0032s_49_percent ... ok
+test palw_kernel_route_v1::tests::the_interim_opv_policy_validates_against_the_interim_ledger_policy_and_roots_like_its_ledger ... ok
+test palw_kernel_route_v1::tests::the_interim_policy_validates_and_the_bond_digest_separates_indices ... ok
+test palw_kernel_route_v1::tests::the_route_template_carries_k2_tir_v4_and_the_cache_is_never_state ... ok
+test palw_kernel_route_v1::tests::the_routes_chunk_lane_assembles_only_coherent_groups_and_bounds_them_by_their_target ... ok
+test palw_kernel_route_v1::tests::the_tail_and_tables_are_the_allocated_ones ... ok
+test palw_kernel_route_v1::tests::the_unarmed_typed_roots_fence_leaves_the_schedule_config_root_and_root_unchanged ... ok
+
+running 1 test
+test palw_kernel_route_v1::projection_capacity_tests::projection_capacity_worker ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5406 filtered out; finished in 0.00s
+
+
+running 1 test
+test palw_kernel_route_v1::projection_capacity_tests::projection_capacity_worker ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5406 filtered out; finished in 0.00s
+
+
+running 1 test
+test palw_kernel_route_v1::projection_capacity_tests::projection_capacity_worker ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5406 filtered out; finished in 0.00s
+
+test palw_kernel_route_v1::projection_capacity_tests::local_projection_capacity_is_retryable_for_cold_and_warm_ledgers ... ok
+
+test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 5382 filtered out; finished in 0.12s
+
