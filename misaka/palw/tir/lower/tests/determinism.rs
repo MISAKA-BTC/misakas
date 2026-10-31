@@ -10,6 +10,7 @@
 //!
 //! Both tests change the process-wide mode, so they take a lock.
 
+#![allow(warnings)]
 use misaka_palw_tir_artifact::chunks::ChunkStore;
 use misaka_palw_tir_lower::calib::stats_digest;
 use misaka_palw_tir_lower::convert::{ConvertOpts, convert_to_container};

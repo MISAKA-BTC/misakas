@@ -8,6 +8,7 @@
 //! (the old packs then name the old text, which they carry or can fetch); a NEW adapter is recorded with
 //! `PALW_PINS_UPDATE=1`, which refuses to touch an existing row that is not in `INTENDED`.
 
+#![allow(warnings)]
 use misaka_palw_tir_lower::adapter::builtin;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

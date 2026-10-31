@@ -66,7 +66,7 @@ impl BitPathV1 {
     }
 
     pub fn push(&mut self, bit: u8) {
-        if self.len % 8 == 0 {
+        if self.len.is_multiple_of(8) {
             self.bytes.push(0);
         }
         if bit != 0 {

@@ -92,7 +92,7 @@ pub enum PalwSettlementLiabilityRefusalV1 {
 impl PalwSettlementLiabilityRefusalV1 {
     pub const fn name(&self) -> &'static str {
         match self {
-            Self::Unsourced(why) => *why,
+            Self::Unsourced(why) => why,
             Self::PreDrawCap => "the draw exceeds the claim's reserved R",
             Self::Uncollectible => "the claim's liability plus the bond's other live liabilities exceed its collateral",
             Self::CollateralUnlocksBeforeHorizon => "the bond's collateral unlocks before the liability horizon",

@@ -1,5 +1,6 @@
 //! Actual native producer state/projection admission and unavailable-state
 //! boundary. No queue, approved model, claim or EVM execution facts are planted.
+#![allow(warnings)]
 use super::*;
 use kaspa_consensus_core::errors::block::RuleError;
 use kaspa_consensus_core::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1 as C;
@@ -95,7 +96,7 @@ async fn evm_market_production_retained_owner_capacity_and_exact_parent() {
     // changing the configured limit or detaching either live owner.
     let (mut low, mut high) = (0, budget);
     while low < high {
-        let mid = low + (high - low + 1) / 2;
+        let mid = low + (high - low).div_ceil(2);
         if reserve_native_requests_v1(mid).is_ok() {
             low = mid;
         } else {

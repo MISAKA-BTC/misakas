@@ -1,5 +1,4 @@
 //! **`qwen25_a16_backend`'s `prefix_cache_serving` module**, moved out of `qwen25_a16_backend.rs` (2026-10-12, a behaviour-preserving split: the module path and every item in it are unchanged; only the file moved).
-#![cfg(test)]
 
 use super::*;
 use crate::artifact::{Base0ShapeV1, LN_THETA_10000_GEN_Q};
@@ -187,7 +186,7 @@ fn a_prefix_state_is_the_same_cached_or_recomputed_and_a_wrong_one_is_refused() 
 
 /// The objective prefix court's digest matches the actual A16 engine's cache, for both
 /// ordinary and inherited receipts. The proof reads only committed public output tiles;
-/// its tree is reconstructed here by the producer-side fixture, not supplied as trusted state.
+/// its tree is reconstructed here from retained tiles or a replay matching the retained root.
 #[test]
 fn public_prefix_court_reconstructs_the_actual_a16_cache_and_refutes_a_false_named_root() {
     use kaspa_consensus_core::palw_freeprompt_v3::{PalwFpJobTailV1, PalwFpPrefixStateV1};
@@ -239,7 +238,8 @@ fn public_prefix_court_reconstructs_the_actual_a16_cache_and_refutes_a_false_nam
             let run = producer.execute_free_prompt(&j, &ids).unwrap();
             let retained = crate::produce::base0_material_decode_any_v1(&run.outcome.material).unwrap();
             let binding = retained.binding();
-            let raw = retained.tiles().expect("the non-held dense fixture retains public step tiles");
+            let step_tiles = producer.tiles_from_material_v1(&retained).expect("replay reproduces the retained execution root");
+            let raw = &step_tiles.tiles;
             let by_index: std::collections::BTreeMap<_, _> = raw.iter().map(|(index, tile)| (*index, tile)).collect();
             let mut hashes = vec![Hash64::default(); binding.step_leaf_count as usize];
             for (index, tile) in raw {

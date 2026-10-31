@@ -3,7 +3,7 @@
 //! kernel's machine word (the kernel's flag, answered by the CPU) — and the deliberately broken variant, which must still be caught
 //! with the GPU path in front of it. Only with `--features metal` on macOS.
 #![cfg(all(feature = "metal", target_os = "macos"))]
-
+#![allow(warnings)]
 use misaka_palw_tir::builder::ProgramBuilder;
 use misaka_palw_tir::program::{HISTORY_BOUND_V1_SMALL, INPUT_TOKEN, TirProgramV1};
 use misaka_palw_tir::{DType, Interpreter, MapParams, Ref, RunState, Tensor, TensorType};

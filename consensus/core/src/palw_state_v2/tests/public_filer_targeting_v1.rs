@@ -1,4 +1,5 @@
 //! Exact outside-verifier discovery through the same public claim and reservation predicates.
+#![allow(warnings)]
 use super::*;
 use crate::palw_legacy_public_filer_v1::*;
 

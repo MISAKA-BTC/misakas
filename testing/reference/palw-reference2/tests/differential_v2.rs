@@ -12,6 +12,7 @@
 //! RNE f64→f32 / f32→f16 narrowing, and per-width canonical NaNs (`0x7FC00000` /
 //! `0x7FF8000000000000` / `0x7E00`). The f16→f32 direction is EXHAUSTIVE (all 65 536 inputs).
 
+#![allow(warnings)]
 use kaspa_consensus_core::palw_reference::{
     PALW_REFERENCE_CANONICAL_NAN16_V2, PALW_REFERENCE_CANONICAL_NAN64_V2, ref_div_v2, ref_f16_to_f32_v2, ref_f32_to_f16_v2,
     ref_fma_v2, ref_narrow_f64_to_f32_v2, ref_sqrt_v2, ref_widen_f32_to_f64_v2, ref64_add_v2, ref64_div_v2, ref64_fma_v2,

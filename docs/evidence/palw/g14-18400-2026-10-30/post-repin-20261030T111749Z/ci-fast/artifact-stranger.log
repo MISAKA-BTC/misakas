@@ -1,0 +1,32 @@
+== oracle 1: the source-tree hash and the transformer id pins ==
+  source_tree_sha256  f4fff57719e5be81ef4f198a7429f1d78b87d56cdd5c316c0ed0246e2078a950  MATCHES the pin
+  cad/stl/v1     817a2d0ae3c5f6c4f037f544f1cbc533…  MATCHES the pin
+  music/smf/v1   199290f09692c7831e6b2e17a0b97ba3…  MATCHES the pin
+== oracle 2: the corpus goldens (dsl_hash, artifact_hash, artifact_bytes) ==
+  01-extrude-l-bracket.json                    SKIPPED (outside the subset): cad op 'extrude' is outside this verifier's implemented subset
+  02-extrude-collinear-vertex.json             SKIPPED (outside the subset): cad op 'extrude' is outside this verifier's implemented subset
+  03-revolve-quarter-turns.json                SKIPPED (outside the subset): cad op 'revolve' is outside this verifier's implemented subset
+  04-revolve-twelve-rational-directions.json   SKIPPED (outside the subset): cad op 'revolve' is outside this verifier's implemented subset
+  05-boolean-box-with-a-notch.json                4684 B  dsl_hash+artifact_hash MATCH
+  06-boolean-union-of-an-intersection.json        7284 B  dsl_hash+artifact_hash MATCH
+  07-box.json                                      684 B  dsl_hash+artifact_hash MATCH
+  90-over-max-dsl-bytes.json                   refused with the SAME reason as the shipped tree
+  91-over-max-steps.json                       SKIPPED (outside the subset): cad op 'extrude' is outside this verifier's implemented subset
+  92-over-max-artifact-bytes.json              SKIPPED (outside the subset): cad op 'revolve' is outside this verifier's implemented subset
+  01-single-note.json                               82 B  dsl_hash+artifact_hash MATCH
+  02-two-track-chords.json                         269 B  dsl_hash+artifact_hash MATCH
+  03-overlapping-melody.json                       157 B  dsl_hash+artifact_hash MATCH
+  04-many-notes.json                             17711 B  dsl_hash+artifact_hash MATCH
+  05-large-deltas.json                             257 B  dsl_hash+artifact_hash MATCH
+== oracle 3: nothing in the corpus derives that the golden does not name ==
+  cad/stl/v1     every corpus file has a golden entry (10)
+  music/smf/v1   every corpus file has a golden entry (5)
+== oracle 4: the `verify` path itself, round-tripped and then tampered with ==
+  cad/stl/v1     a well-formed chain read verifies: consistent
+  cad/stl/v1     a tampered artifact_hash is caught: MISMATCH (exit 2)
+  music/smf/v1   a well-formed chain read verifies: consistent
+  music/smf/v1   a tampered artifact_hash is caught: MISMATCH (exit 2)
+
+SELFTEST PASSED — 21 checks, and every one agrees with the shipped Rust.
+This file is an independent recomputation path: nothing above links, imports or shells
+out to `misaka-palw-derive`, and every hash is rebuilt from ADR-0078's own preimages.

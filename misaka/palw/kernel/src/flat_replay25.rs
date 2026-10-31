@@ -157,16 +157,6 @@ impl FlatReplaySessionV25 {
     ) -> FlatReplayResultV25 {
         self.check_mode(c, declared, public, artifact, tokens, false)
     }
-    pub(crate) fn check_stage_v14(
-        &mut self,
-        c: &FlatContextV25<'_>,
-        declared: &FlatReplayEnvelopeV25,
-        public: &dyn FlatPublicReadsV25,
-        artifact: &dyn Fn(u16, Option<u16>) -> Option<Tensor>,
-        tokens: &[u32],
-    ) -> FlatReplayResultV25 {
-        self.check_mode(c, declared, public, artifact, tokens, true)
-    }
     fn check_mode(
         &mut self,
         c: &FlatContextV25<'_>,

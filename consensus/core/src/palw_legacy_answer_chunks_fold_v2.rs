@@ -44,7 +44,11 @@ impl PalwChainStateV2 {
 }
 
 impl TransitionBuilder<'_> {
-    fn write_legacy_answer_v2(&mut self, key: PalwLegacyAnswerKeyV2, new: Option<PalwPendingLegacyAnswerV2>) -> Result<(), PalwStateV2Error> {
+    fn write_legacy_answer_v2(
+        &mut self,
+        key: PalwLegacyAnswerKeyV2,
+        new: Option<PalwPendingLegacyAnswerV2>,
+    ) -> Result<(), PalwStateV2Error> {
         self.reserve_map_row_v1(&key, &new, |s| &s.legacy_answers, false, "native legacy_answers writer")?;
         let old = match &new {
             Some(row) => self.state.legacy_answers.insert(key, row.clone()),

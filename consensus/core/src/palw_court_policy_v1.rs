@@ -58,9 +58,7 @@ impl CourtClockBounds {
 /// same-DAA causal ordering, signature, funds and all-branch reservation. This
 /// does not create a notice, reset an original, extend hard or authorize default.
 /// Both original boundaries must be representable; no saturating fallback.
-pub fn shared_initial_notice_daa_in_window_v1(original_acceptance: u64, notice_daa: u64)
-    -> Result<bool, CourtPolicyError>
-{
+pub fn shared_initial_notice_daa_in_window_v1(original_acceptance: u64, notice_daa: u64) -> Result<bool, CourtPolicyError> {
     let end = original_acceptance.checked_add(NOTICE_WINDOW_DAA).ok_or(CourtPolicyError::Overflow)?;
     original_acceptance.checked_add(DISPUTE_WINDOW_DAA).ok_or(CourtPolicyError::Overflow)?;
     Ok(original_acceptance <= notice_daa && notice_daa <= end)

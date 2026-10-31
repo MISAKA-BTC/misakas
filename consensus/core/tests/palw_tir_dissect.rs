@@ -13,6 +13,7 @@
 //!   reduction's proven interval, when it claims an element the tile does not read, and when it does
 //!   not finalize to the committed tile.
 
+#![allow(warnings)]
 #[path = "palw_tir_fixture_common.rs"]
 mod fixture;
 use fixture::*;

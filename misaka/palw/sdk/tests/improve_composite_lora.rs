@@ -15,6 +15,7 @@
 //! * a candidate that recalibrates a parent scale, reorders the parent's params, names a parent
 //!   tensor, changes the tokenizer, or splits anywhere but the parent's params is refused by name.
 
+#![allow(warnings)]
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

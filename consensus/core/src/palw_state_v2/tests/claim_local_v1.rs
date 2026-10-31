@@ -1,5 +1,6 @@
 //! Original context through the production fold and actual cold carriage codec.
 //! This tests ledger context retention, not the remaining node G14 acceptance drill.
+#![allow(warnings)]
 use super::*;
 use crate::palw_claim_local_v1::*;
 

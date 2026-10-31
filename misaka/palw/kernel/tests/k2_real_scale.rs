@@ -5,6 +5,7 @@
 //! Every block goes through `KernelLedgerV1::apply_block`; the outsider is built from the ledger's public view
 //! (`seg_claim_view_v1`), the public artifact and whatever material is served — never the producer's objects.
 
+#![allow(warnings)]
 mod common;
 
 use common::ledger_world::policy;

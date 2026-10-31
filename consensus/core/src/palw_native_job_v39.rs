@@ -390,6 +390,7 @@ impl NativeJobBookV39 {
         }
         Ok(())
     }
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn commit(
         &mut self,
         class: &CheckedNativeClassV39,
@@ -422,7 +423,7 @@ impl NativeJobBookV39 {
             || claim.input_binding != input_binding
             || input_binding == [0; 64]
             || claim.segment_roots.len() != misaka_palw_kernel::seg::segment_count_v1(claim.positions) as usize
-            || claim.segment_roots.iter().any(|r| *r == [0; 64])
+            || claim.segment_roots.contains(&[0; 64])
         {
             return Err("native39 Commit changes original producer/maximum/actual EOS/input/trace claim".into());
         }
@@ -1461,7 +1462,10 @@ mod g14_lane_closure_tests {
         assert_eq!((s.producer_credit, s.requester_credit, s.actual_slash, s.finder_credit), (0, 100, 1_000, 490));
         assert!(b.convict_after_final(400, 400, [0x51; 64], 1_000, finder_operator).is_err(), "once");
         assert!(final_book().convict_after_final(401, 400, [0x51; 64], 1_000, finder_operator).is_err(), "past the horizon");
-        assert!(final_book().convict_after_final(300, 400, [0x51; 64], 1_000, [0x17; 64]).is_err(), "the producer's operator is no finder");
+        assert!(
+            final_book().convict_after_final(300, 400, [0x51; 64], 1_000, [0x17; 64]).is_err(),
+            "the producer's operator is no finder"
+        );
         assert!(challengeable(1_000, 490).convict_after_final(40, 400, [0x51; 64], 1_000, finder_operator).is_err(), "not a Final");
     }
 }

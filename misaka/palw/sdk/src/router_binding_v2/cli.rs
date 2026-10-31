@@ -28,7 +28,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
     if args[0] == "court-expectation" {
         return court_expectation_command(&args[1..]);
     }
-    if args[0] != "sign" || (args.len() - 1) % 2 != 0 {
+    if args[0] != "sign" || !(args.len() - 1).is_multiple_of(2) {
         return Err(USAGE.into());
     }
     let mut options = BTreeMap::new();

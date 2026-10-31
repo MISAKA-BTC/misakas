@@ -1,6 +1,7 @@
 //! Collect genuine public native32 anchor openings and bounded full block
 //! provenance from one independently configured node. Raw RPC flags remain
 //! observations; this command never asserts A6/A8 or UTXO redemption.
+#![allow(warnings)]
 use kaspa_consensus_core::{
     Hash64,
     header::Header,
@@ -33,6 +34,7 @@ fn run() -> Result<(), String> {
     let operator = get("--operator-id")?;
     let database = get("--node-database-id")?;
     let out = PathBuf::from(get("--out")?);
+    #[allow(clippy::drop_non_drop)]
     drop(get);
     // Owning ruleset: an isolated calibration34 snapshot (all three pins together),
     // or — with none of them — the shipped preset named by --network.
@@ -42,7 +44,9 @@ fn run() -> Result<(), String> {
         .remove("--own-params-snapshot-root")
         .map(|v| v.parse::<Hash64>().map_err(|e| format!("own snapshot root: {e}")))
         .transpose()?;
-    if [owning_params_sha.is_some(), owning_params_file.is_some(), owning_params_root.is_some()].iter().filter(|v| **v).count() % 3 != 0 {
+    if [owning_params_sha.is_some(), owning_params_file.is_some(), owning_params_root.is_some()].iter().filter(|v| **v).count() % 3
+        != 0
+    {
         return Err("--own-params-snapshot34, --own-params-snapshot-root and --own-params-sha256 go together".into());
     }
     let redemption = match args.remove("--redemption").as_deref() {
@@ -53,10 +57,12 @@ fn run() -> Result<(), String> {
     // Optional spend35: the payee's own spending transaction (local file) plus the
     // chain block that accepted it; acceptance ids come from the node and are
     // authenticated later by palw-class against the pinned headers only.
-    let spend_chain = args.remove("--spend-chain-block").map(|v| v.parse::<Hash64>().map_err(|e| format!("spend chain: {e}"))).transpose()?;
+    let spend_chain =
+        args.remove("--spend-chain-block").map(|v| v.parse::<Hash64>().map_err(|e| format!("spend chain: {e}"))).transpose()?;
     let spend_tx = args.remove("--spend-tx-json").map(PathBuf::from);
     // delivery33's post-payment anchor: the own-chain child of the payment block.
-    let post_pin = args.remove("--pinned-post-header").map(|v| v.parse::<Hash64>().map_err(|e| format!("post header: {e}"))).transpose()?;
+    let post_pin =
+        args.remove("--pinned-post-header").map(|v| v.parse::<Hash64>().map_err(|e| format!("post header: {e}"))).transpose()?;
     if post_pin.is_some() && !redemption {
         return Err("--pinned-post-header requires --redemption true".into());
     }
@@ -279,10 +285,11 @@ fn run() -> Result<(), String> {
                 .await
                 .map_err(|_| "spend selected-parent timeout".to_string())?
                 .map_err(|e| e.to_string())?;
-            let chain = tokio::time::timeout(Duration::from_secs(timeout), client.get_virtual_chain_from_block(parent_hash, true, None))
-                .await
-                .map_err(|_| "spend acceptance timeout".to_string())?
-                .map_err(|e| e.to_string())?;
+            let chain =
+                tokio::time::timeout(Duration::from_secs(timeout), client.get_virtual_chain_from_block(parent_hash, true, None))
+                    .await
+                    .map_err(|_| "spend acceptance timeout".to_string())?
+                    .map_err(|e| e.to_string())?;
             let accepted = chain
                 .accepted_transaction_ids
                 .into_iter()
@@ -299,7 +306,13 @@ fn run() -> Result<(), String> {
             accepted,
             spend,
         )?;
-        keep(&out, "spend-chain-header.json", &serde_json::to_vec(&chain_header).map_err(|e| e.to_string())?, &mut total, &mut evidence)?;
+        keep(
+            &out,
+            "spend-chain-header.json",
+            &serde_json::to_vec(&chain_header).map_err(|e| e.to_string())?,
+            &mut total,
+            &mut evidence,
+        )?;
         keep(
             &out,
             "spend-selected-parent-header.json",
@@ -307,7 +320,13 @@ fn run() -> Result<(), String> {
             &mut total,
             &mut evidence,
         )?;
-        keep(&out, "native-accepted-spend35.json", &serde_json::to_vec(&proof).map_err(|e| e.to_string())?, &mut total, &mut evidence)?;
+        keep(
+            &out,
+            "native-accepted-spend35.json",
+            &serde_json::to_vec(&proof).map_err(|e| e.to_string())?,
+            &mut total,
+            &mut evidence,
+        )?;
     }
     keep(&out, "aux-proof32.borsh", &aux, &mut total, &mut evidence)?;
     keep(&out, "payout-proof32.borsh", &payouts, &mut total, &mut evidence)?;

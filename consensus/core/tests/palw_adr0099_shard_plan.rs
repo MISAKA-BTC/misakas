@@ -4,6 +4,7 @@
 //! derived from the tree's own profiles and pinned as LIMITATIONS where they are pinned. The
 //! generator is `misaka-palw-base0 --bin palw-shard-plan`.
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{devnet_shipped_params, palw_rc_shipped_params};
 use kaspa_consensus_core::palw_class_admission_v2::palw_admission_shape_at_v1;
 use kaspa_consensus_core::palw_context_ladder::{palw_a16_context_row_profile_v5, palw_qwen36_context_row_profile_v5};

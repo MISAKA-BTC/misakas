@@ -7,6 +7,7 @@
 //! projection folded in grouped value-head order, `ssm_alpha`/`ssm_beta` unrotated (as in the real file), and the declaration
 //! beside them. The reader applies the declared transform as an activation-side op (`Op::BlockLinear`), never folding it into the
 //! weights, so a stored weight stays the class's integers; the two files must compute the same function.
+#![allow(warnings)]
 use misaka_palw_tir_lower::LowerError;
 use misaka_palw_tir_lower::float_ref::stream::Resident;
 use misaka_palw_tir_lower::float_ref::{ParamStore, Session};

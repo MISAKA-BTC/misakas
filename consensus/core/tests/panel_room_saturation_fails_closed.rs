@@ -10,6 +10,7 @@
 //!
 //! Run: cargo test -p kaspa-consensus-core --test panel_room_saturation_fails_closed
 
+#![allow(warnings)]
 use kaspa_consensus_core::palw_model_registry_v1::PALW_REGISTRY_GLOBALS_V1 as G;
 use kaspa_consensus_core::palw_work_target_v1::{palw_panel_capacity_by_rate_v1 as capacity, palw_panel_demand_term_v1 as term};
 

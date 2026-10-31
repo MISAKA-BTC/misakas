@@ -9,6 +9,7 @@
 //! and what a user is SHOWN do not. (A sampled V3 job is not admitted by the chain; the engine runs
 //! it here only to prove Decision 11's key is the same under both versions.)
 
+#![allow(warnings)]
 mod common;
 
 use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;

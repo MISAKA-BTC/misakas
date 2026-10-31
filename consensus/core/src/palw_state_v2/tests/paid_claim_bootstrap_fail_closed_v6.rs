@@ -1,5 +1,6 @@
 //! Actual atomic Lock regression; source-row controls are private projected
 //! monetary inputs, not a paid source campaign or evidence of source independence.
+#![allow(warnings)]
 use super::*;
 use crate::palw_beacon_source_fee_v1::{
     PALW_BEACON_SOURCE_TABLE_COST_BOUNDS_V5 as COST, PALW_BEACON_SOURCE_TABLE_FEE_TARGETS_V5 as FEE, PalwBeaconSourceCostBoundsV1,

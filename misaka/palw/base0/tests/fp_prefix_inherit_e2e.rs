@@ -6,6 +6,7 @@
 //! second claim's committed leaf at that index is the one the lie is refuted against; and a version-11 claim over the same prefix
 //! (a version-2 context) commits job-bound leaves, unchanged.
 
+#![allow(warnings)]
 mod common;
 
 use kaspa_consensus_core::Hash64;

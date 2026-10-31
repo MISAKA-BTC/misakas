@@ -465,14 +465,7 @@ impl LoopbackNativeProviderV3 {
         let local_daa = Some(self.consensus_manager.consensus().unguarded_session().get_virtual_daa_score());
         {
             let mut replay = self.replay.lock().map_err(|_| "replay guard poisoned")?;
-            provider_transport_verify_request_v1(
-                request,
-                purpose,
-                &self.transport,
-                now_unix_ms(),
-                local_daa,
-                &mut replay,
-            )?;
+            provider_transport_verify_request_v1(request, purpose, &self.transport, now_unix_ms(), local_daa, &mut replay)?;
         }
         kaspa_consensus_core::palw_native_resource_v1::preflight_native_value_v1::<PalwNativeReadyRequestV3>(
             &request.body[..],
@@ -1441,7 +1434,11 @@ impl MonetaryMaterialGcOracleV1 for ConsensusGcOracleV3<'_> {
     ) -> Result<bool, String> {
         let session = self.0.consensus().unguarded_session_blocking();
         misaka_palw_remote::monetary_material_gc::native_v4::native_material_release_finalized_v4(
-            &*session, root, consent, tail, release_block,
+            &*session,
+            root,
+            consent,
+            tail,
+            release_block,
         )
     }
 }

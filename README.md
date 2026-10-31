@@ -19,15 +19,14 @@ Addresses keep the `misaka` prefix (`misaka…` mainnet, `misakatest…` testnet
 kaspad --testnet --netsuffix=12
 ```
 
-The planned release is **withheld pending full-activation readiness**. The requested target is DAA **17,400**,
-including previously dormant features. The earlier G14-only DAA 17,400 candidate is not the final published release.
-See the [readiness and remaining implementation work](docs/design/palw/integration/g14-17000/full-activation-17400-readiness-2026-10-28.md)
-and [deployment status](docs/design/palw/integration/g14-17000/release-17400-2026-10-28.md).
-No new network fingerprint is advertised here until deployment and fleet verification are complete.
+The full-feature implementation is being integrated and is **not yet complete**. Completion requires executable normal paths, a coherent whole-candidate build, and the required tests. See the [implementation plan](docs/design/palw/integration/g14-17000/full-implementation-completion-2026-10-31.md) and [historical readiness record](docs/design/palw/integration/g14-17000/full-activation-17400-readiness-2026-10-28.md).
+
+The [published G14-only candidate](https://github.com/MISAKA-BTC/misakas/releases/tag/testnet12-g14-17400-655b6cf3a) is a separate, older artifact. The current G14 schedule is DAA **18,400**; full activation remains `None`. This working branch does not claim a new public deployment or advertise a verified full-candidate fingerprint.
 
 Read the [launch note](docs/history/networks/testnet-12/t12-launch-2026-09-25.md) before relying on the chain —
-**never count blocks, blue-score depth or DAA as finality on testnet-12**; use finality depth or a `Final` PALW anchor.
-Claim-level credit authorization remains a separate requirement.
+**never count blocks, blue-score depth or DAA as finality on testnet-12**; use finality depth or a `Final` PALW anchor. Claim-level credit authorization remains a separate requirement.
+
+The adopted zero-genesis-bond startup path is described in [RFC-0041](docs/rfc/0041-genesis-bond-free-bootstrap.md); its final same-candidate validation is part of the implementation goal.
 
 ## Quick start
 

@@ -21,6 +21,7 @@
 //! is a V1 `ReceiptLicensed` of three full V2 `Valid`s — the full-replay seat and two partial seats
 //! — carried through the gate, the walk and the fold, so two partial seats are left to supplement.
 //! No block is mined.
+#![allow(warnings)]
 use super::TestContext;
 use crate::consensus::test_consensus::TestConsensus;
 use crate::pipeline::virtual_processor::VirtualStateProcessor;

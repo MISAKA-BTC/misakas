@@ -25,6 +25,7 @@
 //!
 //! Run: cargo test -p kaspa-consensus-core --test palw_offence_attribution_t11_verdicts -- --nocapture --test-threads=2
 
+#![allow(warnings)]
 #[path = "dos_l5_common.rs"]
 mod common;
 use common::*;

@@ -13,6 +13,7 @@
 //!   job's `input_root`: every commit point recomputes from them, a missing tile fails `Missing`, and a
 //!   forged tile is refused before any lane of it is read.
 
+#![allow(warnings)]
 use kaspa_consensus_core::palw_gen_court_v1::*;
 use kaspa_consensus_core::palw_step_leg::PalwStepFaultV1;
 use misaka_palw_gen::OutputSpecV1;

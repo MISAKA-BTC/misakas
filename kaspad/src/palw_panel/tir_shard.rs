@@ -1854,7 +1854,11 @@ impl super::PalwPanelService {
                 }
                 continue;
             };
-            let Some(Ok(tir)) = self.resolve_tir_registered_for_claim_v1(session, duty.class_id, duty.artifact_root, Some(duty.claim_id)) else { continue };
+            let Some(Ok(tir)) =
+                self.resolve_tir_registered_for_claim_v1(session, duty.class_id, duty.artifact_root, Some(duty.claim_id))
+            else {
+                continue;
+            };
             let (s_l, s_p) = plans
                 .iter()
                 .find(|(c, _)| *c == duty.class_id)
@@ -2022,7 +2026,10 @@ impl super::PalwPanelService {
         let claim = duty.claim_id;
         let ladder = crate::palw_producer::palw_tir_da_answerable_leaves_v1(&self.consensus_config.params, current_daa);
         if let std::collections::hash_map::Entry::Vacant(e) = books.run_pursuits.entry(claim) {
-            let Ok(backend) = self.resolve_backend_for_claim_v1(session, duty.class_id, duty.artifact_root, Some(duty.claim_id)) else { return };
+            let Ok(backend) = self.resolve_backend_for_claim_v1(session, duty.class_id, duty.artifact_root, Some(duty.claim_id))
+            else {
+                return;
+            };
             let Some((ctx, prompt)) = self.attempt_job_for_claim(
                 session,
                 backend.as_ref(),

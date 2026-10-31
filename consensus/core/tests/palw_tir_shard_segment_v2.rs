@@ -13,6 +13,7 @@
 //!
 //! Run: `cargo test -p kaspa-consensus-core --test palw_tir_shard_segment_v2`
 
+#![allow(warnings)]
 #[path = "palw_tir_fixture_common.rs"]
 #[allow(unused)]
 mod fixture;

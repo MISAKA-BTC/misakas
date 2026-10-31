@@ -15,6 +15,7 @@
 //! `palw_shard_licensing`, over any context root but V5, with mirrors that disagree, and a C7 list
 //! that is non-empty without the fence or names a class that is not a testnet-12 genesis held row.
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{
     ForkActivation, OverrideParams, PALW_T12_RCORE_CONSERVATIVE_CLASSES, Params, devnet_shipped_params, mainnet_shipped_params,
     palw_rc_shipped_params, palw_t12_genesis_held_class_ids_v1, palw_t12_shipped_params, palw_v2_bond_withdrawal_delay_at_v1,
@@ -319,6 +320,11 @@ fn the_fence_off_twin_validates_and_the_fence_moves_only_testnet12() {
     // R-core+ themselves, so the twin that takes R-core+ away is the launch ruleset's.
     let t12 = kaspa_consensus_core::config::params::palw_t12_launch_params_v1();
     let mut twin = t12.clone();
+    kaspa_consensus_core::config::params::palw_t12_arm_after_int13_at_v1(
+        &mut twin,
+        kaspa_consensus_core::config::params::PALW_T12_G14_17000_FENCES_V1,
+        None,
+    );
     twin.palw_rcore_plus = None;
     twin.palw_rcore_conservative_classes = &[];
     twin.sync_palw_rcore_plus();

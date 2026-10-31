@@ -17,6 +17,7 @@
 //! The fidelity of the integer class to the float model is held to the fixture's HF output (cosine); that
 //! is a statement about the lowering, not about validity — the chain never reads it.
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::palw_t12_shipped_params;
 use kaspa_consensus_core::palw_court_v2::PalwCourtVerdictProofV2;
 use kaspa_consensus_core::palw_freeprompt_v3::{PALW_FP_PRIVACY_PANEL_DA, PALW_FP_PROMPT_MODE_USER};

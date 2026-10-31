@@ -2,10 +2,10 @@
 //! A fixed old manifest TTL cannot delete these bytes. Every reopen rechecks
 //! full codec coverage; GC requires the native finalized accepted-release API.
 use kaspa_consensus_core::{
+    Hash64,
     palw_material_capacity_v1::{PalwHeldMaterialBundleV1, PalwMaterialManifestV1, PalwMonetaryMaterialProviderStoreV1},
     palw_monetary_material_v1::{PalwMonetaryMaterialActionV1, PalwMonetaryMaterialEnrollmentV1},
     palw_state_v2::PalwBondKeyV2,
-    Hash64,
 };
 use std::{
     fs::{self, File, OpenOptions},
@@ -105,9 +105,9 @@ impl DurableMonetaryMaterialProviderV1 {
         // leaves a successfully prepared provider unable to restore its bytes.
         // Match the unsigned financial identity; provider signatures may be
         // added only after publication and are authenticated by native ingress.
-        let kaspa_consensus_core::palw_material_release_recovery_v2::PalwMaterialRecoveryActionV2::FundedEnroll {
-            monetary, ..
-        } = capsule else {
+        let kaspa_consensus_core::palw_material_release_recovery_v2::PalwMaterialRecoveryActionV2::FundedEnroll { monetary, .. } =
+            capsule
+        else {
             return Err("prospective publication requires its initial funded enrollment capsule".into());
         };
         if context.request != material.request_id()
@@ -115,8 +115,7 @@ impl DurableMonetaryMaterialProviderV1 {
             || monetary.terms != enrollment.terms
             || monetary.offers.len() != enrollment.offers.len()
             || monetary.offers.iter().zip(&enrollment.offers).any(|(a, b)| {
-                (a.provider, a.collateral_sompi, a.prepaid_fee_sompi)
-                    != (b.provider, b.collateral_sompi, b.prepaid_fee_sompi)
+                (a.provider, a.collateral_sompi, a.prepaid_fee_sompi) != (b.provider, b.collateral_sompi, b.prepaid_fee_sompi)
             })
         {
             return Err("prospective publication substitutes native request/context/financial consent".into());
@@ -510,6 +509,7 @@ impl DurableMonetaryMaterialProviderV1 {
     // Only a denied initial native authority lookup permits trying another
     // retained generation. In particular, local allocation / replay / assembly
     // refusals must not turn into a successful fallback under another consent.
+    #[allow(dead_code)]
     fn answer_current_generation_with_v4<T>(
         &self,
         preferred: Hash64,
@@ -519,7 +519,10 @@ impl DurableMonetaryMaterialProviderV1 {
         authority: impl FnMut(
             Hash64,
             &kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialScopeV1,
-        ) -> Result<(), kaspa_consensus_core::palw_kernel_material_enrollment_v4::PalwMaterialGenerationAuthorityErrorV4>,
+        ) -> Result<
+            (),
+            kaspa_consensus_core::palw_kernel_material_enrollment_v4::PalwMaterialGenerationAuthorityErrorV4,
+        >,
         build: impl FnMut(Hash64, &kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialScopeV1) -> Result<T, String>,
     ) -> Result<T, String> {
         self.answer_current_generation_classified_v4(preferred, root, dependency, exact, authority, build).map_err(|e| e.to_string())
@@ -537,7 +540,10 @@ impl DurableMonetaryMaterialProviderV1 {
         mut authority: impl FnMut(
             Hash64,
             &kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialScopeV1,
-        ) -> Result<(), kaspa_consensus_core::palw_kernel_material_enrollment_v4::PalwMaterialGenerationAuthorityErrorV4>,
+        ) -> Result<
+            (),
+            kaspa_consensus_core::palw_kernel_material_enrollment_v4::PalwMaterialGenerationAuthorityErrorV4,
+        >,
         mut build: impl FnMut(Hash64, &kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialScopeV1) -> Result<T, String>,
     ) -> Result<T, MaterialAnswerErrorV4> {
         use kaspa_consensus_core::palw_kernel_material_enrollment_v4::PalwMaterialGenerationAuthorityErrorV4 as A;
@@ -660,8 +666,16 @@ impl DurableMonetaryMaterialProviderV1 {
                 fs::remove_file(entry.path()).map_err(|e| e.to_string())?;
             }
         }
-        let opened =
-            Self { _lease: lease, file: file.to_path_buf(), max_contract_bytes, total_capacity, store, contexts, expiry_cursor: None, publication_uncertain: false };
+        let opened = Self {
+            _lease: lease,
+            file: file.to_path_buf(),
+            max_contract_bytes,
+            total_capacity,
+            store,
+            contexts,
+            expiry_cursor: None,
+            publication_uncertain: false,
+        };
         opened.sweep_routed_authorities_v2().map_err(|e| e.to_string())?;
         Ok(opened)
     }
@@ -687,7 +701,7 @@ impl DurableMonetaryMaterialProviderV1 {
         // answer may rely on the old in-memory generation.
         let mut output = OpenOptions::new().write(true).create_new(true).open(&temporary).map_err(|e| e.to_string())?;
         let result = (|| {
-            output.write_all(&encoded)?;
+            output.write_all(encoded)?;
             output.sync_all()?;
             #[cfg(test)]
             publication_checkpoint_v4(1)?;
@@ -937,7 +951,7 @@ fn load_routed_authority_v2(
 > {
     use kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialCapacityErrorV1 as E;
     use kaspa_consensus_core::palw_native_resource_v1::{
-        reserve_native_requests_v1, retain_native_value_decode_classified_v1, NativeDecodeErrorV1,
+        NativeDecodeErrorV1, reserve_native_requests_v1, retain_native_value_decode_classified_v1,
     };
     let source = File::open(routed_authority_path_v2(file, claim)).map_err(|e| E::Authentication(e.to_string()))?;
     let n = source.metadata().map_err(|e| E::Authentication(e.to_string()))?.len();

@@ -3,6 +3,7 @@
 //! `from_wire` admits them, and the recurrence's own preconditions (`decay`, `beta` in `[0, ONE]`,
 //! state multipliers `≤ 2^30`, write shifts in `[−62, 20]`).
 
+#![allow(warnings)]
 mod common;
 
 use common::*;

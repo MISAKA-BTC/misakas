@@ -579,4 +579,3 @@ mod duty_book_tests {
         assert!(telemetry.detection_take_duty_v1(h(8), h(2), 1, 1, 11), "another class has its own cap");
     }
 }
-

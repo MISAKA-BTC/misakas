@@ -2,6 +2,7 @@
 //! runs and reproduces; every structural rule refuses by name; job facts outside their domains are
 //! refused at run time.
 
+#![allow(warnings)]
 mod v2common;
 
 use misaka_palw_tir::pipeline::*;

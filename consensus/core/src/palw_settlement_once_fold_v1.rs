@@ -81,10 +81,13 @@ impl TransitionBuilder<'_> {
             q.exact::<u8>(id.len() as u64)?;
             self.admit_native_write_v1(q)?;
         }
-        let Some(bytes) = self.state.kernel_route.as_ref().and_then(|route| route.aux.get(&(PALW_SETTLEMENT_ONCE_TABLE_V1, id.to_vec()))) else {
+        let Some(bytes) =
+            self.state.kernel_route.as_ref().and_then(|route| route.aux.get(&(PALW_SETTLEMENT_ONCE_TABLE_V1, id.to_vec())))
+        else {
             return Ok(None);
         };
-        let row: PalwSettlementOnceRowV1 = borsh::from_slice(bytes).map_err(|_| refused("an undecodable settlement-once marker (fail closed)"))?;
+        let row: PalwSettlementOnceRowV1 =
+            borsh::from_slice(bytes).map_err(|_| refused("an undecodable settlement-once marker (fail closed)"))?;
         row.validate_v1(&id).map_err(refused)?;
         Ok(Some(row))
     }
@@ -92,7 +95,10 @@ impl TransitionBuilder<'_> {
 
 /// The settled marker of `obligation` in `state`, if any (source controls read the journal through this).
 #[cfg(test)]
-pub(super) fn palw_settled_once_v1(state: &PalwChainStateV2, obligation: &PalwSettlementObligationV1) -> Option<PalwSettlementOnceRowV1> {
+pub(super) fn palw_settled_once_v1(
+    state: &PalwChainStateV2,
+    obligation: &PalwSettlementObligationV1,
+) -> Option<PalwSettlementOnceRowV1> {
     let id = obligation.id_v1();
     let bytes = state.kernel_route.as_ref()?.aux.get(&(PALW_SETTLEMENT_ONCE_TABLE_V1, id.to_vec()))?;
     borsh::from_slice::<PalwSettlementOnceRowV1>(bytes).ok().filter(|row| row.validate_v1(&id).is_ok())
@@ -117,7 +123,8 @@ pub(super) fn kernel_producer_reward_at_v1(
     let claim = pay.claim?;
     settlement(index + 1).filter(|s| s.kind == K::ReleaseJobEscrow && s.claim == Some(claim) && s.bond == pay.bond)?;
     let reward = settlement(index + 2).filter(|s| s.kind == K::FinalReward && s.claim == Some(claim) && s.amount == pay.amount)?;
-    let check_fee = matches!(events.get(index + 3), Some(E::CheckFeePaid { claim: c, verifier, .. }) if *c == claim && *verifier == reward.bond);
+    let check_fee =
+        matches!(events.get(index + 3), Some(E::CheckFeePaid { claim: c, verifier, .. }) if *c == claim && *verifier == reward.bond);
     (!check_fee).then_some((claim, pay.bond, reward.bond, pay.amount))
 }
 

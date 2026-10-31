@@ -8,6 +8,7 @@
 //! The lowering and the float references are untouched, so everything `tests/encdec.rs` proves about the five
 //! families holds for any family these files describe.
 
+#![allow(warnings)]
 use misaka_palw_tir_lower::hf_schema::{AdapterChoice, AdapterSource, Level, ReadOptions, TensorIndex, read_encdec};
 use misaka_palw_tir_lower::lower::encdec::{EncDecSpec, parse_encdec};
 use misaka_palw_tir_lower::model::{FeatureStatus, ReportResult, analyze};

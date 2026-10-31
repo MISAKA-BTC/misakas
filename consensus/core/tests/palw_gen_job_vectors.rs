@@ -5,6 +5,7 @@
 //! says; every non-canonical encoding is refused by name and rewritten by nobody; the canonical seed is
 //! the first half of the keyed digest of the anchor.
 
+#![allow(warnings)]
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::palw_gen_job_v1::*;
 use kaspa_consensus_core::palw_gen_v1::PalwGenProfileV1;

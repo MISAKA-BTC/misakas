@@ -29,8 +29,8 @@ pub use log_index::*;
 
 /// ADR-0089: the contract between the fold and the EVM's window and hand.
 pub mod model_market;
-pub mod view_owned_v2;
 mod state_diff;
+pub mod view_owned_v2;
 pub use state_diff::*;
 
 use crate::tx::{ScriptPublicKey, TransactionOutpoint};

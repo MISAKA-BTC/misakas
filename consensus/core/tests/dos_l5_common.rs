@@ -9,7 +9,7 @@
 //! `model_registry`, `economic_payout`, `work_target`. They are left `None` here, which is stated in
 //! every test that could be affected.
 #![allow(dead_code)]
-
+#![allow(warnings)]
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::params::Params;
 use kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN;

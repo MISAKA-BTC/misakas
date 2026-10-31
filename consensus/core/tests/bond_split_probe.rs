@@ -26,6 +26,7 @@
 //!
 //! Run: cargo test -p kaspa-consensus-core --test bond_split_probe -- --nocapture
 
+#![allow(warnings)]
 use kaspa_consensus_core::TransactionId;
 use kaspa_consensus_core::config::params::Params;
 use kaspa_consensus_core::network::{NetworkId, NetworkType};

@@ -4,6 +4,7 @@
 //! The resource drill is ignored by default: it generates 100k distinct valid ML-DSA keys and
 //! funded collateral, and requires a dedicated runner with RAM/disk measurement. No throughput,
 //! pricing or RAM threshold is approved by this fixture. Block-feed replay is not pruned P2P.
+#![allow(warnings)]
 use super::*;
 use kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk;
 use kaspa_consensus_core::muhash::MuHashExtensions;

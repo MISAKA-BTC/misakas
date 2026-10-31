@@ -10,6 +10,7 @@
 //! histories of windows 1, 2, 3, 5 and `history_bound`, attention contracting `H`, per-layer and
 //! global states and params, range-extreme operands (so that many steps fail, and must fail alike).
 
+#![allow(warnings)]
 mod common;
 mod exec_common;
 

@@ -76,6 +76,19 @@ fn fixture(
     let material = builder.finish().unwrap();
     binding.step_leaf_count = material.leaf_count;
     binding.step_merkle_root = material.merkle_root;
+    // The replacement profile's history cadence can differ from the skeleton's.
+    // This local router court never opens checkpoints, but its binding must still
+    // commit the canonical count rather than inheriting the skeleton's zero.
+    binding.checkpoint_count = crate::palw_context_ladder::palw_checkpoint_count_v1(
+        &binding.shape_profile,
+        &binding.job_context,
+        binding.checkpoint_profile.checkpoint_interval,
+    );
+    binding.checkpoint_merkle_root = if binding.checkpoint_count == 0 {
+        leg::checkpoint_empty_root_v2(&binding.job_context.context_hash())
+    } else {
+        Hash64::from_u64_word(0xCC)
+    };
     crate::palw_step_refute::tests::rebind_committed_root(&mut binding);
     let target = PalwStepCoordinateV1 { call_index: 0, node_slot: (first + 6) as u32, position: 0, tile_index: 0 };
     (binding, declaration, material.leaf_hashes, captured, target)
@@ -90,7 +103,7 @@ fn real_capture_selects_its_own_router_and_reaches_direct_arithmetic() {
         if wrong {
             assert!(verdict.is_ok());
         } else {
-            assert!(matches!(verdict, Err(PalwRoutingCourtErrorV2::Evidence(PalwStepRefuteError::NoFaultFound))));
+            assert!(matches!(verdict, Err(PalwRoutingCourtErrorV2::Evidence(PalwStepRefuteError::NoFaultFound))), "{verdict:?}");
         }
         // A different router does not become a second interpretation of the
         // authenticated explicit combine ref, even with identical row bytes.
@@ -99,10 +112,9 @@ fn real_capture_selects_its_own_router_and_reaches_direct_arithmetic() {
         assert!(check_routed_step_refutation_v2(&owner, binding.committed_execution_root, &foreign, &NoWeights, 1 << 26).is_err());
         let mut altered = (*owner).clone();
         altered.step.inputs[0].preimages[0].values_le[0] ^= 1;
-        assert!(matches!(
-            check_routed_step_refutation_v2(&altered, binding.committed_execution_root, &declaration, &NoWeights, 1 << 26),
-            Err(_)
-        ));
+        assert!(
+            check_routed_step_refutation_v2(&altered, binding.committed_execution_root, &declaration, &NoWeights, 1 << 26).is_err()
+        );
         let gathered = routed_leaf_evidence_from_capture_v2(&binding, target, &declaration, &hashes, &tiles, &[], 1 << 26).unwrap();
         assert!(gathered.artifact_openings.is_empty(), "Kimi combine requests no model parameter rows");
     }

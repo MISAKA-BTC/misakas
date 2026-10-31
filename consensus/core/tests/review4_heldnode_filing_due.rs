@@ -21,6 +21,7 @@
 //! that `Final`. kaspad's `the_seats_court_filings_are_dated_in_the_priority_lane` checks the node's own
 //! function against the same params.
 
+#![allow(warnings)]
 #[path = "rcore_common.rs"]
 mod common;
 use common::*;

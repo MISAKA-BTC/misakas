@@ -15,6 +15,7 @@
 //! weights, gathered when it is a function of the token, the position or a history of tokens,
 //! pinned otherwise, with the reasons.
 
+#![allow(warnings)]
 #[path = "../../core/tests/common/mod.rs"]
 mod tircommon;
 

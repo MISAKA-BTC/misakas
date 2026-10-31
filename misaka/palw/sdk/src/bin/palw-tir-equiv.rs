@@ -25,6 +25,7 @@
 //!
 //! Exit status: 0 equal everywhere, 2 a difference (the first ones printed), 1 usage or I/O.
 
+#![allow(warnings)]
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::params::Params;
 use kaspa_consensus_core::network::NetworkId;

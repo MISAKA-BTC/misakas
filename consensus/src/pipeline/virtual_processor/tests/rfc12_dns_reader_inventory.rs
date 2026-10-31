@@ -10,6 +10,7 @@
 //!
 //! What this checks is textual: a gate that is present but wrong is not caught here — `rfc12_zero_dns_matrix` drives the
 //! behaviour. Source scan only; nothing about the live network is read.
+#![allow(warnings)]
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -187,7 +188,7 @@ fn hits_and_bodies() -> (Vec<Hit>, BTreeMap<String, String>) {
                         file: file.clone(),
                         line: n + 1,
                         func: current.clone().unwrap_or_default(),
-                        token: *token,
+                        token,
                         text: line.trim().to_string(),
                     });
                 }
@@ -238,7 +239,8 @@ fn rfc12_every_dns_authority_read_is_inventoried_and_gated_by_the_retirement() {
         if let Why::OnlyCalledFrom(callers) = why {
             for h in hits.iter().filter(|h| h.token.trim_end_matches('(') == *f) {
                 if !callers.iter().any(|c| *c == h.func) {
-                    problems.push(format!("`{f}` is called from `{}` at {}:{}, outside its inventory callers", h.func, h.file, h.line));
+                    problems
+                        .push(format!("`{f}` is called from `{}` at {}:{}, outside its inventory callers", h.func, h.file, h.line));
                 }
             }
         }

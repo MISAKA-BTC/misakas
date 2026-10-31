@@ -11,6 +11,7 @@
 //! And a seat that derives the task from the claim's own job and tail (what the extractor hands the fold)
 //! replays it to the claim's roots.
 
+#![allow(warnings)]
 use std::borrow::Cow;
 
 use kaspa_consensus_core::Hash64;

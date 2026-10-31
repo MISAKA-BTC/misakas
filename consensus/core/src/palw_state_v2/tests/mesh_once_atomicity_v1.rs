@@ -1,5 +1,6 @@
 //! Artificial overflow-parent controls at the actual pre-object mesh sweep.
 //! This is not evidence that a lawful native history can create this balance.
+#![allow(warnings)]
 use super::*;
 use crate::palw_mesh_v1::{PalwAuditAssignmentV1, PalwAuditOutcomeV1, PalwAuditRowV1};
 

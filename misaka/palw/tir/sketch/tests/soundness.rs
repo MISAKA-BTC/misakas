@@ -15,6 +15,7 @@
 //! * each node is checked over the moduli its refined interval needs, and a node checked over one
 //!   too few lets an error of exactly that prime through.
 
+#![allow(warnings)]
 use std::collections::BTreeSet;
 
 use misaka_palw_tir::{DType, Prim, Tensor};

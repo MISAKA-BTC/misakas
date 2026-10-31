@@ -31,6 +31,7 @@
 //!   context (an instance's own fields in the job) — each re-run or re-committed by the producer,
 //!   each convicted by kind 4.
 
+#![allow(warnings)]
 use super::*;
 use kaspa_consensus_core::palw_attempt_rules_v1::{PalwAttemptRulesV1, palw_attempt_rules_of_params_v1};
 use kaspa_consensus_core::palw_backend::{PalwClaimRootsV1, PalwExecutionOutcomeV1, PalwMaterialVerdictV1};

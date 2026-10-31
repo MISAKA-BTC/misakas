@@ -343,26 +343,28 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         // (tag 113, C4 F-C4R3-03): a chunk of the route's own lane carries its opener's signature and one carrier's worth of a part.
         PalwConsensusObjectV2::KernelRouteChunkV1 { chunk, signature } => {
             if signature.is_empty() {
-                Err("a kernel route chunk must carry its opener's signature — unsigned, anyone could open a group as any bond")
-            } else if {
-                // Native targets 6/7 own their paid protected lane: up to 64 fragments of
-                // 32 KiB (`palw_kernel_chunks_v1`, the funded/stage folds); all others keep 16.
-                let native = matches!(
-                    chunk.target,
-                    crate::palw_kernel_route_v1::PalwKernelChunkTargetV1::FundedProofV11 { .. }
-                        | crate::palw_kernel_route_v1::PalwKernelChunkTargetV1::StageProofV14 { .. }
+                return Err(
+                    "a kernel route chunk must carry its opener's signature — unsigned, anyone could open a group as any bond",
                 );
-                let (count_cap, byte_cap) = if native {
-                    (64u8, misaka_palw_kernel::flat_quota11::PROTECTED_FRAGMENT_BYTES_V11 as usize)
-                } else {
-                    (crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_COUNT, crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES)
-                };
-                chunk.count == 0
-                    || chunk.count > count_cap
-                    || chunk.index >= chunk.count
-                    || chunk.bytes.is_empty()
-                    || chunk.bytes.len() > byte_cap
-            } {
+            }
+            // Native targets 6/7 own their paid protected lane: up to 64 fragments of
+            // 32 KiB (`palw_kernel_chunks_v1`, the funded/stage folds); all others keep 16.
+            let native = matches!(
+                chunk.target,
+                crate::palw_kernel_route_v1::PalwKernelChunkTargetV1::FundedProofV11 { .. }
+                    | crate::palw_kernel_route_v1::PalwKernelChunkTargetV1::StageProofV14 { .. }
+            );
+            let (count_cap, byte_cap) = if native {
+                (64u8, misaka_palw_kernel::flat_quota11::PROTECTED_FRAGMENT_BYTES_V11 as usize)
+            } else {
+                (crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_COUNT, crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES)
+            };
+            if chunk.count == 0
+                || chunk.count > count_cap
+                || chunk.index >= chunk.count
+                || chunk.bytes.is_empty()
+                || chunk.bytes.len() > byte_cap
+            {
                 Err("a kernel route chunk's index, count or part is out of range")
             } else {
                 Ok(())
@@ -2514,7 +2516,12 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         "RFC-0024 position terminal and lookahead moves (dormant; witness and frontier bounds unadopted)",
         true,
     ),
-    a2_row(PalwA2SlotV1::ObjectTags { lo: 245, hi: 245 }, "palw_tir_designated_answers_v1", "ADR-0191 designated-custodian event", true),
+    a2_row(
+        PalwA2SlotV1::ObjectTags { lo: 245, hi: 245 },
+        "palw_tir_designated_answers_v1",
+        "ADR-0191 designated-custodian event",
+        true,
+    ),
     a2_row(PalwA2SlotV1::ObjectTags { lo: 255, hi: 255 }, "palw_staged_tir_route_v1", "staged TIR shared material intake", true),
     a2_row(PalwA2SlotV1::ObjectTags { lo: 175, hi: 175 }, "palw_tir_container_identity_v1", "G14 TIR class container binding", true),
     a2_row(PalwA2SlotV1::ObjectTags { lo: 246, hi: 246 }, "palw_selected_source_bootstrap_v1", "RFC07 selected source approval", true),
@@ -2830,7 +2837,9 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         true,
     ),
     a2_row(
-        PalwA2SlotV1::StateEncoding { what: "kernel route aux 141 class registration origins (one row per class registered past the fence)" },
+        PalwA2SlotV1::StateEncoding {
+            what: "kernel route aux 141 class registration origins (one row per class registered past the fence)",
+        },
         "palw_class_registration_origin_v1",
         "RFC06-8 registering block and admission digest of each class",
         true,
@@ -4276,14 +4285,18 @@ pub(crate) mod tests {
                 },
                 245 => PalwConsensusObjectV2::TirDesignatedEventV1 {
                     event: crate::palw_tir_designated_answers_v1::PalwTirDesignatedEventV1::Answer {
-                        key: crate::palw_tir_designated_answers_v1::PalwTirRequestKeyV1 { claim: [0; 32], root: [0; 32], coordinates: 0 },
+                        key: crate::palw_tir_designated_answers_v1::PalwTirRequestKeyV1 {
+                            claim: [0; 32],
+                            root: [0; 32],
+                            coordinates: 0,
+                        },
                         custodian: [0; 32],
                         body: [0; 32],
                         at_daa: 0,
                     },
                 },
                 _ => minimal_decode(&[tag]).unwrap_or_else(|| {
-                panic!("kind {tag} decodes from no near-zero body; give it a hand-built sample in the A2U sweeps instead")
+                    panic!("kind {tag} decodes from no near-zero body; give it a hand-built sample in the A2U sweeps instead")
                 }),
             };
             assert_eq!(borsh::to_vec(&object).unwrap()[0], tag);
@@ -4592,13 +4605,10 @@ pub(crate) mod tests {
             }
             let mut p =
                 crate::config::params::Params::from(crate::network::NetworkId::with_suffix(crate::network::NetworkType::Testnet, 12));
+            let expected =
+                p.palw_lifecycle_kind_fences_v1().with(PalwLifecycleKindFenceV1::SignedRegistrationV1, Some(ForkActivation::new(9)));
             p.palw_signed_registration_v1 = Some(ForkActivation::new(9));
-            assert_eq!(
-                p.palw_lifecycle_kind_fences_v1(),
-                PalwLifecycleKindFencesV1::default()
-                    .with(PalwLifecycleKindFenceV1::SignedRegistrationV1, Some(ForkActivation::new(9))),
-                "Params resolves each fence into its own slot"
-            );
+            assert_eq!(p.palw_lifecycle_kind_fences_v1(), expected, "Params resolves each fence into its own slot");
         }
 
         /// The landed half of a table row: does `fence` name a `Params` fence this tree has?
@@ -4972,9 +4982,12 @@ pub(crate) mod tests {
         /// **Arming an owning fence needs the audit fence declared** — below it isolation could only refuse the kind's bytes.
         #[test]
         fn an_owning_fence_needs_the_audit_fence_declared() {
-            let mut p =
-                crate::config::params::Params::from(crate::network::NetworkId::with_suffix(crate::network::NetworkType::Testnet, 12));
-            assert_eq!(p.palw_lifecycle_kind_fences_v1(), PalwLifecycleKindFencesV1::default(), "testnet-12 arms no owning fence");
+            let mut p = crate::config::params::palw_t12_release_v6_params();
+            assert_eq!(
+                p.palw_lifecycle_kind_fences_v1(),
+                PalwLifecycleKindFencesV1::default(),
+                "the pre-G14 release arms no owning fence"
+            );
             p.validate_palw_lifecycle_kind_fences_v1().expect("nothing armed");
             p.palw_probabilistic_constraints_v1 = Some(ForkActivation::new(5_000));
             assert!(p.palw_audit_2026_09_11.is_some(), "testnet-12 declares the audit fence");
@@ -5577,7 +5590,7 @@ pub(crate) mod tests {
             // RFC-0006 GDN/router lane (tag 244, moved from 170 which G14 took first on integ): source pin from
             // `scripts/drills/gen_rfc06_gdn_wire_pin_v2.py MemoryRoutingV2 244` (the same generator reproduces tag 243's pin; the
             // consolidated test prints the authoritative value if this differs).
-            (244, 0xe3c3708bdefde0c0),
+            (244, 0x594db4a83d25950d),
             // lane GC-DUTY 2026-10-27: tag 245 landed in the base without a pin (Lead-approved allocation pass).
             (245, 0x46f5a3c46a89e44c),
             // R-D2-READY (tag 230, ADR-0188 B): the seat readiness root, owned by `palw_court_model_scope_v1`. Derived without a build
@@ -5616,7 +5629,7 @@ pub(crate) mod tests {
             (171, 0x68623b7dc7d30b55),
             // G14 lane r5-f02-wire: RFC-0029 shared court operation (178), under `palw_tir_public_conviction_v1`. Derived without a
             // build by `scripts/drills/a2u_new_kind_wire_pins.py` (2026-10-22); the Rust test stays the authority.
-            (178, 0x1d759cbe80301463),
+            (178, 0xaa08188bbaf86a88),
             // lane GC-DUTY 2026-10-27: tag 175 landed in the base without a pin (Lead-approved allocation pass).
             (175, 0xb12af2a47fb84b5e),
             (131, 0xf970df6a8bdc323c),
@@ -5776,9 +5789,16 @@ pub(crate) mod tests {
             super::palw_lifecycle_kind_owner_v1(&begin),
             super::PalwLifecycleKindOwnerV1::Fence(super::PalwLifecycleKindFenceV1::StagedTirRouteV1)
         );
-        assert!(super::PALW_LIFECYCLE_NEW_KINDS_V1.contains(&(255, "MaterialIntakeV1", super::PalwLifecycleKindFenceV1::StagedTirRouteV1)));
+        assert!(super::PALW_LIFECYCLE_NEW_KINDS_V1.contains(&(
+            255,
+            "MaterialIntakeV1",
+            super::PalwLifecycleKindFenceV1::StagedTirRouteV1
+        )));
         super::palw_lifecycle_object_may_ride_v2(&begin).expect("a signed Begin rides");
-        assert!(super::palw_lifecycle_object_may_ride_v2(&step(MaterialActionV1::Finish { draft_id: Default::default() }, vec![])).is_err());
+        assert!(
+            super::palw_lifecycle_object_may_ride_v2(&step(MaterialActionV1::Finish { draft_id: Default::default() }, vec![]))
+                .is_err()
+        );
         let part = |n: usize| step(MaterialActionV1::Part { draft_id: Default::default(), offset: 0, bytes: vec![7; n] }, vec![1; 4]);
         super::palw_lifecycle_object_may_ride_v2(&part(16_384)).expect("one full part rides");
         assert!(super::palw_lifecycle_object_may_ride_v2(&part(0)).is_err());

@@ -520,9 +520,8 @@ mod tests {
         let window = borsh::to_vec(&window).unwrap();
         let block = leaf.block.to_string();
         let root = Hash64::from_u64_word(4).to_string();
-        let read = |proofs: &[Vec<u8>]| committed_entry_from_wire_v2(
-            &block, &bytes, &root, Some(5), &window, proofs, &[bond],
-        );
+        let read = |proofs: &[Vec<u8>]| committed_entry_from_wire_v2(&block, &bytes, &root, Some(5), &window, proofs, &[bond]);
+        #[allow(clippy::cloned_ref_to_slice_refs)]
         let decoded = read(&[proof.clone()]).unwrap();
         assert!(decoded.registry.is_empty());
         assert_eq!(decoded.registry_v2[0].0, bond);

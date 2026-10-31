@@ -8,6 +8,7 @@
 //!
 //! Run: `cargo test -p kaspa-consensus-core --test palw_held_close_chunks_fence`
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::drill::{
     PALW_DRILL_SALT_LEN_V1, PalwDrillSaltV1, palw_drill_held_close_chunks_at_v1, palw_drill_tir_fence_at_v1,
 };

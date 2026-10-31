@@ -1,5 +1,6 @@
 //! Signed, prepaid source fees through the ledger and its money-moving consumer.
 //! Fixture prices are not measured profit or an approved source/security policy.
+#![allow(warnings)]
 mod common;
 use common::chain::{T, test_salt};
 use common::ledger_world::*;

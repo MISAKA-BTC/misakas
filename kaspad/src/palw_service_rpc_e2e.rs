@@ -30,7 +30,7 @@ pub(super) async fn verify_socket_evidence(
     let perf = Arc::new(kaspa_perf_monitor::builder::Builder::new().with_tick_service(tick).build());
     let config = Arc::new(chain.config.clone());
     let core = Arc::new(kaspa_rpc_service::service::RpcCoreService::new(
-        manager,
+        manager.clone(),
         notify.notifier(),
         None,
         flow.mining_manager().clone(),
@@ -164,11 +164,27 @@ pub(super) async fn verify_socket_evidence(
     assert_eq!(parts.len(), 2);
     eprintln!("[service-network] actual socket gRPC authenticated the pinned claim and signed multipart carriers");
     client.disconnect().await.unwrap();
-    server.stop().await.unwrap();
     // Notifier joins drain upstream collectors before closing their own listeners.
     _notification_sender.close();
     notify.clone().signal_exit();
     core.clone().signal_exit();
     tokio::time::timeout(Duration::from_secs(10), notify_task).await.unwrap().unwrap();
     tokio::time::timeout(Duration::from_secs(10), core_task).await.unwrap().unwrap();
+    // gRPC's notifier can join only after RPC core closes its listeners.
+    // Stopping it first times out its join before its subscriber is closed.
+    server.stop().await.unwrap();
+    drop(client);
+    drop(server);
+    drop(core);
+    // Subscriber joins signal completion before their task drops its converter.
+    // Keep this manager alive until those final owners release it, then drop it
+    // here while the receiver still owns its test consensus and strict DB guard.
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while Arc::strong_count(&manager) != 1 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("all stopped gRPC handlers and notification converters release their consensus manager");
+    drop(manager);
 }

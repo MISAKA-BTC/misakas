@@ -71,8 +71,8 @@ impl TransitionBuilder<'_> {
     /// hard deadline, the original frame's material horizon, every duty clock of the claim and every packet of its binding decided.
     fn funded_liability_strictly_resolved_v1(&self, row: &PalwFundedEscrowRowV1, daa: u64) -> bool {
         use crate::palw_funded_original_admission_v1::{FundedLiabilityViewV1, funded_liability_resolved_v1};
-        let material_until_daa =
-            crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(&self.state, row.claim).map(|frame| frame.plan_v1().terms.material_until_daa);
+        let material_until_daa = crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(&self.state, row.claim)
+            .map(|frame| frame.plan_v1().terms.material_until_daa);
         let clocks = self
             .state
             .court_duty_clocks_for_claim_v1(row.claim)
@@ -83,7 +83,13 @@ impl TransitionBuilder<'_> {
             Some((service, binding)) => binding.packet_ids.iter().map(|id| service.book.assess(id)).collect(),
             None => Vec::new(),
         };
-        funded_liability_resolved_v1(&FundedLiabilityViewV1 { daa, hard_deadline_daa: row.hard_deadline_daa, material_until_daa, clocks, packets })
+        funded_liability_resolved_v1(&FundedLiabilityViewV1 {
+            daa,
+            hard_deadline_daa: row.hard_deadline_daa,
+            material_until_daa,
+            clocks,
+            packets,
+        })
     }
 
     /// **Settle (or continue) a row from a qualified spend the processor accepted.** The fact's `old` must be exactly the rooted
@@ -131,8 +137,12 @@ impl TransitionBuilder<'_> {
         let mut cleared = row;
         cleared.liability_open = false;
         self.write_funded_escrow_v1(contract_id, Some(cleared))?;
-        let reservation_open =
-            self.state.bond_budget.as_ref().and_then(|budget| budget.claim_row(&row.claim)).is_some_and(|reservation| reservation.open);
+        let reservation_open = self
+            .state
+            .bond_budget
+            .as_ref()
+            .and_then(|budget| budget.claim_row(&row.claim))
+            .is_some_and(|reservation| reservation.open);
         if reservation_open {
             self.bond_budget_close_v1(&row.claim, now)?;
         }
@@ -191,10 +201,14 @@ mod tests {
         kaspa_hashes::blake2b_512_address_payload(&[9u8; crate::mldsa87_primitives::MLDSA87_PUBKEY_LEN])
     }
     fn row() -> PalwFundedEscrowRowV1 {
-        PalwFundedEscrowRowV1::fresh_v1(h(1), h(2), TransactionOutpoint::new(h(77), 1), 1_000, h(3), payload(), 100, 10_100, false).unwrap()
+        PalwFundedEscrowRowV1::fresh_v1(h(1), h(2), TransactionOutpoint::new(h(77), 1), 1_000, h(3), payload(), 100, 10_100, false)
+            .unwrap()
     }
     fn delta(entries: Vec<PalwDeltaEntryV2>) -> PalwStateDeltaV2 {
-        PalwStateDeltaV2 { point: PalwBlockContextV2 { block: BlockHash::from_u64_word(1), daa_score: 10_200, blue_score: 1, subsidy: 0 }, entries }
+        PalwStateDeltaV2 {
+            point: PalwBlockContextV2 { block: BlockHash::from_u64_word(1), daa_score: 10_200, blue_score: 1, subsidy: 0 },
+            entries,
+        }
     }
 
     /// **Reorg/undo restores the row and with it the lock**: install, then settle; reverting the settlement's delta brings the
@@ -244,7 +258,9 @@ mod tests {
     fn r5_funded_liability_closes_only_at_resolution_and_reverts() {
         let p = params();
         let extras = PalwTransitionExtrasV1::default();
-        let open = PalwFundedEscrowRowV1::fresh_v1(h(1), h(2), TransactionOutpoint::new(h(77), 1), 1_000, h(3), payload(), 100, 10_100, true).unwrap();
+        let open =
+            PalwFundedEscrowRowV1::fresh_v1(h(1), h(2), TransactionOutpoint::new(h(77), 1), 1_000, h(3), payload(), 100, 10_100, true)
+                .unwrap();
         let parent = PalwChainStateV2::genesis();
         let mut b = TransitionBuilder::new(&parent, &p, false, false, false, false, &extras);
         b.install_funded_escrow_v1(open).unwrap();
@@ -280,7 +296,9 @@ mod tests {
         use super::super::palw_court_capacity_fold_v1::{check_funded_court_reserve_v1, palw_funded_court_reserve_claims_v1};
         let base = params();
         let policy = crate::palw_court_capacity_v1::palw_court_capacity_placeholder_policy_v1();
-        let armed = base.clone().with_court_capacity_v1(Some(crate::palw_court_capacity_v1::PalwCourtCapacityMirrorV1 { from_daa: 0, policy }));
+        let armed = base
+            .clone()
+            .with_court_capacity_v1(Some(crate::palw_court_capacity_v1::PalwCourtCapacityMirrorV1 { from_daa: 0, policy }));
         let cap = policy.admission_claims_per_bucket(armed.turn_deadline_daa());
         let zero_claim = |accepted: u64, retention: u64| {
             use borsh::BorshDeserialize;
@@ -293,8 +311,18 @@ mod tests {
         let mut state = PalwChainStateV2::genesis();
         let fund = |state: &mut PalwChainStateV2, i: u64, open: bool| {
             state.claims.insert(h(1_000 + i), zero_claim(100, 50_000));
-            let row = PalwFundedEscrowRowV1::fresh_v1(h(2_000 + i), h(1_000 + i), TransactionOutpoint::new(h(3_000 + i), 0), 1_000, h(3),
-                payload(), 100, 10_100, open).unwrap();
+            let row = PalwFundedEscrowRowV1::fresh_v1(
+                h(2_000 + i),
+                h(1_000 + i),
+                TransactionOutpoint::new(h(3_000 + i), 0),
+                1_000,
+                h(3),
+                payload(),
+                100,
+                10_100,
+                open,
+            )
+            .unwrap();
             state.funded_escrows.insert(h(2_000 + i), row);
         };
         // A closed liability holds no reserve.
@@ -310,7 +338,9 @@ mod tests {
         assert!(matches!(full, PalwStateV2Error::CourtClaimAdmissionFull { admitted, cap: c, .. } if admitted == cap && c == cap));
         // Dormant below the fence: nothing is reserved or refused.
         check_funded_court_reserve_v1(&state, &base, h(1_000 + cap), 100).unwrap();
-        let later = base.clone().with_court_capacity_v1(Some(crate::palw_court_capacity_v1::PalwCourtCapacityMirrorV1 { from_daa: 101, policy }));
+        let later = base
+            .clone()
+            .with_court_capacity_v1(Some(crate::palw_court_capacity_v1::PalwCourtCapacityMirrorV1 { from_daa: 101, policy }));
         check_funded_court_reserve_v1(&state, &later, h(1_000 + cap), 100).unwrap();
     }
 
@@ -335,7 +365,8 @@ mod tests {
     // ---- G14 r5 (lane r5-escrow-settlement): continuation, liability clearing and retirement under revert ----
 
     fn open_row() -> PalwFundedEscrowRowV1 {
-        PalwFundedEscrowRowV1::fresh_v1(h(1), h(2), TransactionOutpoint::new(h(77), 1), 1_000, h(3), payload(), 100, 10_100, true).unwrap()
+        PalwFundedEscrowRowV1::fresh_v1(h(1), h(2), TransactionOutpoint::new(h(77), 1), 1_000, h(3), payload(), 100, 10_100, true)
+            .unwrap()
     }
     fn payee(n: u8) -> crate::tx::ScriptPublicKey {
         crate::mldsa87_primitives::p2pkh_mldsa87_spk(
@@ -446,7 +477,10 @@ mod tests {
         assert!(u1.funded_escrows_v1()[&h(1)].liability_open, "the liability reopens with the undo");
         let u0 = revert_delta_v2(&u1, &d1, &p).unwrap();
         assert_eq!((u0.funded_escrows_v1(), u0.state_root()), (s0.funded_escrows_v1(), s0.state_root()));
-        assert!(palw_escrow_rows_by_outpoint_v1(u0.funded_escrows_v1()).contains_key(&open_row().funding_outpoint), "original lock back");
+        assert!(
+            palw_escrow_rows_by_outpoint_v1(u0.funded_escrows_v1()).contains_key(&open_row().funding_outpoint),
+            "original lock back"
+        );
 
         // Pruned IBD: every intermediate state's carriage reproduces the same rows and root.
         for state in [&s0, &s1, &s2, &s3, &s4] {

@@ -2,6 +2,7 @@
 //! consumer-injected `palw_verifier_pay_v1` terms (readiness §3f). Every block runs through the shared `Consumer`, whose book must
 //! equal the ledger after every block (escrow, fee, burn and payouts conserve exactly).
 
+#![allow(warnings)]
 mod common;
 
 use common::chain::T;

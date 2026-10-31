@@ -1,5 +1,6 @@
 //! AUDIT LANE A2 (part 3) — the two independent ceilings on one bond, and the dead credit lane.
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::Params;
 use kaspa_consensus_core::config::premine::PALW_T12_GENESIS_BOND_COLLATERAL_SOMPI;
 use kaspa_consensus_core::network::{NetworkId, NetworkType};

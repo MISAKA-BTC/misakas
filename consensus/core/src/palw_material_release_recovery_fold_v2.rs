@@ -6,7 +6,11 @@ fn refused(s: impl Into<String>) -> PalwStateV2Error {
     PalwStateV2Error::ExecV2Refused(s.into())
 }
 fn write(b: &mut TransitionBuilder<'_>, root: Hash64, row: Option<&PalwMaterialRecoveryRowV2>) -> Result<(), PalwStateV2Error> {
-    b.write_kernel_row(PALW_MATERIAL_RELEASE_RECOVERY_TABLE_V2, root.as_byte_slice().to_vec(), row.map(|r| borsh::to_vec(r).unwrap()))?;
+    b.write_kernel_row(
+        PALW_MATERIAL_RELEASE_RECOVERY_TABLE_V2,
+        root.as_byte_slice().to_vec(),
+        row.map(|r| borsh::to_vec(r).unwrap()),
+    )?;
     Ok(())
 }
 fn provider_keys(signatures: &[PalwMaterialRecoverySignatureV2]) -> Vec<PalwBondKeyV2> {

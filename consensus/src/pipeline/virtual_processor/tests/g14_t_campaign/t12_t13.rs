@@ -118,7 +118,9 @@ async fn t12_hard_boundary_concentration_at_10000_daa_every_duty_funded() {
         }
     }
     #[cfg(not(feature = "g14-t-campaign-intended-api"))]
-    blocked_on!("no funded original is admitted and no escrow settlement schedule exists on a node (V2, V3 typed-missing); the X3 hard deadline needs its arming record (V10); intended palw_funded_original_v1 / palw_original_escrow_outcome_v1 do not exist");
+    blocked_on!(
+        "no funded original is admitted and no escrow settlement schedule exists on a node (V2, V3 typed-missing); the X3 hard deadline needs its arming record (V10); intended palw_funded_original_v1 / palw_original_escrow_outcome_v1 do not exist"
+    );
 }
 
 /// **T13: the oldest claim loses service; an independent claim still progresses; unresolved evidence and bonds stay held without a
@@ -137,9 +139,7 @@ async fn t13_oldest_claim_loses_service_independent_claim_progresses_and_nothing
     w.cover(&a.id).await;
     let b_producer = (0..cards(&w)).find(|c| *c != 0 && *c != 1 && !seats_a.contains(c)).expect("an independent producer");
     let (b, seats_b) = covered_claim(&mut w, b_producer, false).await;
-    let outsider = (0..cards(&w))
-        .find(|c| ![0, 1, b_producer].contains(c) && !seats_a.contains(c))
-        .expect("an outsider");
+    let outsider = (0..cards(&w)).find(|c| ![0, 1, b_producer].contains(c) && !seats_a.contains(c)).expect("an outsider");
     let a_before = w.net.collateral(0);
     let b_before = w.net.collateral(b_producer);
 

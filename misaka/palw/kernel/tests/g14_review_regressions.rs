@@ -1,4 +1,5 @@
 //! Independent regressions from the G14 review: resource bounds and shared progress under metadata saturation.
+#![allow(warnings)]
 mod common;
 
 use common::chain::T;

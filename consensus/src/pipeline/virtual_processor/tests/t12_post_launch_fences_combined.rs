@@ -31,6 +31,7 @@
 //!    floor state is never written and the carriage carries nothing (a chain that never saw REAL work
 //!    roots exactly as one without the rule: step 4 compares roots below `H`, step 5 the whole chain) —
 //!    and an attempt-lane block is a tick source beside the heartbeat, with the clock still running.
+#![allow(warnings)]
 use super::t12_round_lane_e2e::{T12Chain, t12_genesis_chain, t12_with_harness_cards};
 use crate::model::stores::ghostdag::GhostdagStoreReader;
 use kaspa_consensus_core::BlockHash;

@@ -198,7 +198,8 @@ pub mod fs {
             &chunks,
         );
         manifest.validate_shape(&ManifestLimits::default()).map_err(|e| format!("the evidence manifest is not admissible: {e}"))?;
-        publish(root, &claim.to_string(), &manifest, &chunks).map_err(|e| format!("cannot write the evidence to {}: {e}", root.display()))?;
+        publish(root, &claim.to_string(), &manifest, &chunks)
+            .map_err(|e| format!("cannot write the evidence to {}: {e}", root.display()))?;
         Ok((manifest, chunks.len()))
     }
 

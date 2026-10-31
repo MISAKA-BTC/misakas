@@ -13,6 +13,7 @@
 //! longer ships; they are re-targeted at the held hybrid a registrant can register on t12
 //! (`qwen36_held_registration_v1` at n_ctx 512, the row t12 runs).
 
+#![allow(warnings)]
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::params::{Params, palw_t12_shipped_params};
 use kaspa_consensus_core::palw_class_admission_v2::{PalwClassAdmissionError, palw_admission_shape_at_v1, verify_class_admission_v9};

@@ -1,3 +1,4 @@
+#![allow(warnings)]
 use super::rpc_core_mock::RpcCoreMock;
 use crate::{adaptor::Adaptor, manager::Manager};
 use kaspa_core::info;

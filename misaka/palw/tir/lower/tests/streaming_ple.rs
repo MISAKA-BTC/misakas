@@ -4,6 +4,7 @@
 //! bytes are the whole conversion's (`tests/streaming_convert.rs` holds the byte equality over every fixture; this file
 //! holds that the PLE tables really went by blocks, and how much was ever resident).
 
+#![allow(warnings)]
 use misaka_palw_tir_lower::float_ref::stream::Streamed;
 use misaka_palw_tir_lower::lower::{LowerOpts, RowKind, StreamOpts, TensorSink, materialise_stream};
 use misaka_palw_tir_lower::quant::QuantPolicy;

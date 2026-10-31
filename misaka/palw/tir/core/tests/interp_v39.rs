@@ -1,4 +1,5 @@
 //! Unexecuted source regressions. These fixtures are not checkpoint or Final evidence.
+#![allow(warnings)]
 use misaka_palw_tir::{
     ConeEnv, DType, Prim, Ref, RunState, Schedule, StateDecl, StateKind, Tensor, TirError, TirErrorKind, TirResult,
     interp_v2::MapInputs,

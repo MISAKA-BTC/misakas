@@ -23,6 +23,7 @@
 //! * H  — dense: honest logits beside a lying head tile (the drill's corruption at a head leaf).
 //! * X  — an extra decode row appended, id and all, the trace re-rooted.
 
+#![allow(warnings)]
 use std::sync::Arc;
 
 use kaspa_consensus_core::palw_attempt_v2::palw_attempt_job_v1;

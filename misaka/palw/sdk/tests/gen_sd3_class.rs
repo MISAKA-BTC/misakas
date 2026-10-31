@@ -10,6 +10,7 @@
 //! the noise: forged noise), at the denoiser's first carry (the leaf whose cone reads the stage edge: forged edge), a
 //! forged output digest (the output close), and a lane outside its node's proven interval (PALW-TIR-33, G21).
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{ForkActivation, Params, palw_t12_shipped_params};
 use kaspa_consensus_core::palw_court_v2::{PalwCourtV2Error, PalwCourtVerdictProofV2, palw_gen_close_verdict_for_row_v1};
 use kaspa_consensus_core::palw_freeprompt_v3::{PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_PROMPT_MODE_USER};

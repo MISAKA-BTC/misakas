@@ -94,8 +94,7 @@ pub fn produce_program_work_from_ledger_v3(
     )
     .map_err(|e| Refusal::new("BOOTSTRAP_EVIDENCE", e))?;
     let claim = KernelClaimV1 { job_id: base_job, producer_bond: producer, generated, evidence_root: evidence.root() };
-    let mut material = PaidClaimMaterialWireV2::default();
-    material.tokens = stream;
+    let mut material = PaidClaimMaterialWireV2 { tokens: stream, ..Default::default() };
     for (position, occurrences) in trace.values.iter().enumerate() {
         for (occurrence, nodes) in occurrences.iter().enumerate() {
             for (node, value) in nodes.iter().enumerate() {

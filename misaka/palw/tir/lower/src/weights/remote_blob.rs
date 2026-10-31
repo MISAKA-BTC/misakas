@@ -24,6 +24,9 @@ use std::sync::{Arc, Mutex};
 /// Random access to a file's bytes: a local file, or a verified remote one.
 pub trait ByteSourceV1: Send + Sync + std::fmt::Debug {
     fn len(&self) -> u64;
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
     fn read_at(&self, buf: &mut [u8], offset: u64) -> std::io::Result<()>;
     /// The conversion has read everything it will: a verifying source completes its check here.
     fn finish(&self) -> Result<()> {

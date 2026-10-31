@@ -1,4 +1,5 @@
 //! Dormant width step exercised through the real header/template pipeline and proof replay.
+#![allow(warnings)]
 use super::*;
 use crate::model::stores::ghostdag::GhostdagStoreReader;
 use kaspa_consensus_core::{config::params::ForkActivation, palw_rfc0018_v1::PalwDagWidthScheduleFenceV1};

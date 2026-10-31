@@ -10,6 +10,7 @@
 //! admits the class at a context the shipped geometry ceiling refuses — refusing it by name where
 //! the fence, the tiled ids or `PanelDa` are missing.
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{
     ForkActivation, Params, devnet_shipped_params, palw_held_context_mint_v1, palw_rc_shipped_params,
 };

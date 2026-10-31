@@ -26,6 +26,7 @@
 //!    honestly from it — passes the downstream cell and is found by the upstream cell that computes it.
 //! 5. **Report** the fraction of the weights and of the committed trace a cell touched.
 
+#![allow(warnings)]
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;

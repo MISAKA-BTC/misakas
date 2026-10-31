@@ -18,6 +18,7 @@
 //!
 //! The fixture is the lowerer's (`diffusion::fixture::build_sd3_tiny`); a checkout without it skips with a line saying so.
 
+#![allow(warnings)]
 use misaka_palw_tir::interp::{MapParams, RunState as RefState};
 use misaka_palw_tir::interp_v2::{InputProvider, InterpreterV2};
 use misaka_palw_tir::pipeline::{Binding, PipelineJob, RandomSource, StageJobFacts, TirPipelineV1, run_pipeline, stage_job_facts};

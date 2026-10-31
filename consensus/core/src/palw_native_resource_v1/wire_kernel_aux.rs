@@ -1,35 +1,56 @@
 //! Exact native aux codecs; no opaque row size stands for nested decoded demand.
 use super::*;
-use std::{io::Read,mem::size_of,collections::BTreeMap};
+use std::{collections::BTreeMap, io::Read, mem::size_of};
 impl NativeWireScanV1 for crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
- fn scan_native_wire_v1<R:Read>(reader:&mut NativeWireReaderV1<R>)->std::io::Result<NativeWireShapeV1> {
-  let mut sum=crate::palw_kernel_route_v1::PalwKernelRouteHeaderV1::scan_native_wire_v1(reader)?;
-  // The persisted ledger rows are native byte Vecs. State root/restore hashes
-  // them directly; later full ledger class/program expansion is a separate
-  // consumer operation, never inferred from their encoded row length here.
-  sum=sum.merge(BTreeMap::<(u8,Vec<u8>),Vec<u8>>::scan_native_wire_v1(reader)?)?;
-  let count=reader.word()? as u64;
-  for _ in 0..count {
-   let table=reader.byte()?;let key_bytes=reader.word()? as u64;
-   if key_bytes>reader.remaining() {return Err(wire::wire_bad("native aux key exceeds frame"));}
-   if key_bytes>NATIVE_AUX_KEY_MAX_BYTES_V1 {return Err(wire::wire_bad("native aux key exceeds the audited aux key bound"));}
-   let mut key=[0u8;NATIVE_AUX_KEY_MAX_BYTES_V1 as usize];reader.step()?;reader.read_exact(&mut key[..key_bytes as usize])?;
-   sum=sum.allocation(key_bytes.checked_mul(2).ok_or_else(||wire::wire_bad("native aux key allocation overflow"))?,1)?;
-   let row_bytes=reader.word()? as u64;
-   if row_bytes>reader.remaining() {return Err(wire::wire_bad("native aux row exceeds frame"));}
-   let mut frame=NativeWireReaderV1::new((&mut *reader).take(row_bytes),row_bytes);
-   let shape=scan_native_aux_row_v1(table,&key[..key_bytes as usize],&mut frame)?;
-   if frame.remaining()!=0 {return Err(wire::wire_bad("native aux row codec has trailing/mismatched bytes"));}
-   sum=sum.merge(shape.allocation(row_bytes.checked_mul(2).ok_or_else(||wire::wire_bad("native aux byte allocation overflow"))?,1)?)?;
-  }
-  sum=sum.allocation(count.checked_mul(2).ok_or_else(||wire::wire_bad("native aux Vec overflow"))?,size_of::<((u8,Vec<u8>),Vec<u8>)>())?;
-  sum=sum.allocation(count,size_of::<typed::BTreeNodeEnvelopeV1<(u8,Vec<u8>),Vec<u8>>>())?;
-  // Restore consistency builds per-job and per-producer counters from the
-  // actual aux rows. The total row count bounds both fixed-key scratch maps.
-  sum=sum.allocation(count.checked_mul(2).ok_or_else(||wire::wire_bad("native aux scratch count overflow"))?,size_of::<typed::BTreeNodeEnvelopeV1<[u8;64],u32>>())?;
-  sum.outer_entries=count;sum.collection_entries=sum.collection_entries.checked_add(count).ok_or_else(||wire::wire_bad("native aux count overflow"))?;
-  Ok(sum)
- }
+    fn scan_native_wire_v1<R: Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
+        let mut sum = crate::palw_kernel_route_v1::PalwKernelRouteHeaderV1::scan_native_wire_v1(reader)?;
+        // The persisted ledger rows are native byte Vecs. State root/restore hashes
+        // them directly; later full ledger class/program expansion is a separate
+        // consumer operation, never inferred from their encoded row length here.
+        sum = sum.merge(BTreeMap::<(u8, Vec<u8>), Vec<u8>>::scan_native_wire_v1(reader)?)?;
+        let count = reader.word()? as u64;
+        for _ in 0..count {
+            let table = reader.byte()?;
+            let key_bytes = reader.word()? as u64;
+            if key_bytes > reader.remaining() {
+                return Err(wire::wire_bad("native aux key exceeds frame"));
+            }
+            if key_bytes > NATIVE_AUX_KEY_MAX_BYTES_V1 {
+                return Err(wire::wire_bad("native aux key exceeds the audited aux key bound"));
+            }
+            let mut key = [0u8; NATIVE_AUX_KEY_MAX_BYTES_V1 as usize];
+            reader.step()?;
+            reader.read_exact(&mut key[..key_bytes as usize])?;
+            sum = sum.allocation(key_bytes.checked_mul(2).ok_or_else(|| wire::wire_bad("native aux key allocation overflow"))?, 1)?;
+            let row_bytes = reader.word()? as u64;
+            if row_bytes > reader.remaining() {
+                return Err(wire::wire_bad("native aux row exceeds frame"));
+            }
+            let mut frame = NativeWireReaderV1::new((&mut *reader).take(row_bytes), row_bytes);
+            let shape = scan_native_aux_row_v1(table, &key[..key_bytes as usize], &mut frame)?;
+            if frame.remaining() != 0 {
+                return Err(wire::wire_bad("native aux row codec has trailing/mismatched bytes"));
+            }
+            sum = sum.merge(
+                shape.allocation(row_bytes.checked_mul(2).ok_or_else(|| wire::wire_bad("native aux byte allocation overflow"))?, 1)?,
+            )?;
+        }
+        sum = sum.allocation(
+            count.checked_mul(2).ok_or_else(|| wire::wire_bad("native aux Vec overflow"))?,
+            size_of::<((u8, Vec<u8>), Vec<u8>)>(),
+        )?;
+        sum = sum.allocation(count, size_of::<typed::BTreeNodeEnvelopeV1<(u8, Vec<u8>), Vec<u8>>>())?;
+        // Restore consistency builds per-job and per-producer counters from the
+        // actual aux rows. The total row count bounds both fixed-key scratch maps.
+        sum = sum.allocation(
+            count.checked_mul(2).ok_or_else(|| wire::wire_bad("native aux scratch count overflow"))?,
+            size_of::<typed::BTreeNodeEnvelopeV1<[u8; 64], u32>>(),
+        )?;
+        sum.outer_entries = count;
+        sum.collection_entries =
+            sum.collection_entries.checked_add(count).ok_or_else(|| wire::wire_bad("native aux count overflow"))?;
+        Ok(sum)
+    }
 }
 
 /// One aux row's exact codec, dispatched on its table and FULL key (`k`) and, where two family layouts share a key shape, its row

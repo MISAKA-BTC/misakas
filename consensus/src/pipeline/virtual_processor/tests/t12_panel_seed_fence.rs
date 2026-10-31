@@ -23,6 +23,7 @@
 //! armed node building its own chain** keys C and X on the execution,
 //! and **the seed is chain data**: a second armed node fed that chain reaches the same sink, the same
 //! state root and the same stored seeds and seats.
+#![allow(warnings)]
 use super::t12_round_lane_e2e::{T12Chain, t12_genesis_chain, t12_with_harness_cards};
 use crate::model::stores::ghostdag::GhostdagStoreReader;
 use kaspa_consensus_core::BlockHash;

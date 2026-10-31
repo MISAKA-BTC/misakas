@@ -113,7 +113,12 @@ pub const PALW_ACCEPTANCE_CAPACITY_MAP_V1: &[(&str, &[PalwCapacityClassV1])] = &
     ),
     (
         "kernel material provider ingress (240/242) and replacement",
-        &[PalwCapacityClassV1::RawMaterial, PalwCapacityClassV1::Metadata, PalwCapacityClassV1::TypedRam, PalwCapacityClassV1::DbHistory],
+        &[
+            PalwCapacityClassV1::RawMaterial,
+            PalwCapacityClassV1::Metadata,
+            PalwCapacityClassV1::TypedRam,
+            PalwCapacityClassV1::DbHistory,
+        ],
     ),
     (
         "material query/answer and checker retrieval",

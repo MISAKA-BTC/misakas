@@ -518,7 +518,9 @@ impl MiningManager {
         let immutable_template = if bypass_cache_for_attestation {
             cache_lock.clear();
             None
-        } else { cache_lock.get_immutable_cached_template() };
+        } else {
+            cache_lock.get_immutable_cached_template()
+        };
 
         // We first try and use a cached template if not expired
         if let Some(immutable_template) = immutable_template {

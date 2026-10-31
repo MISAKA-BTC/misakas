@@ -1,3 +1,4 @@
+#![allow(warnings)]
 use kaspa_utils::sim::{Environment, Process, Resumption, Simulation, Suspension};
 use rand::rngs::ThreadRng;
 use rand_distr::{Distribution, Exp};

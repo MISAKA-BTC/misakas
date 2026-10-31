@@ -57,7 +57,9 @@ async fn t08_distinct_court_signer_under_current_duty_authority_and_relay() {
         assert!(w.net.ledger().served.contains_key(&(lie.id, 0, lie.at.0)), "the delegate answered under current authority");
     }
     #[cfg(not(feature = "g14-t-campaign-intended-api"))]
-    blocked_on!("a designated court-signer key / duty delegation is NOT implemented (r5-clock-deps-relay notes 4: needs a versioned bond record, RFC-0026 6 separate spec); K::DelegateDuty does not exist. The merged authority is palw_court_current_signer_key_v2 (the bond's CURRENT own key), which the route-part relay test t08_miner_offline_third_party_relay_carries_the_current_duty_signature exercises");
+    blocked_on!(
+        "a designated court-signer key / duty delegation is NOT implemented (r5-clock-deps-relay notes 4: needs a versioned bond record, RFC-0026 6 separate spec); K::DelegateDuty does not exist. The merged authority is palw_court_current_signer_key_v2 (the bond's CURRENT own key), which the route-part relay test t08_miner_offline_third_party_relay_carries_the_current_duty_signature exercises"
+    );
 }
 
 /// **T09 (route part): several claims share ONE bond; the aggregate reservation is funded and settled claim by claim.** Card 0 commits
@@ -118,5 +120,7 @@ async fn t09_shortest_signed_dependency_leases_and_shared_bond_aggregate_reserva
         assert!(short >= state.palw_funded_original_v1(&a.id).unwrap().latest_lawful_response_daa());
     }
     #[cfg(not(feature = "g14-t-campaign-intended-api"))]
-    blocked_on!("the aggregate funded reservation needs an admitted funded original (palw_funded_original_schedule_v1 typed-missing, V2); signed dependency leases are not state fields (r5-clock-deps-relay notes 3 OPEN); intended palw_bond_aggregate_reservation_v1 / palw_dependency_leases_v1 do not exist");
+    blocked_on!(
+        "the aggregate funded reservation needs an admitted funded original (palw_funded_original_schedule_v1 typed-missing, V2); signed dependency leases are not state fields (r5-clock-deps-relay notes 3 OPEN); intended palw_bond_aggregate_reservation_v1 / palw_dependency_leases_v1 do not exist"
+    );
 }

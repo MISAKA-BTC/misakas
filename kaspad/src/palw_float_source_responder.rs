@@ -143,12 +143,12 @@ impl PalwPanelService {
                             8 << 20,
                         )
                         .map_err(|e| e.to_string())?;
-                    let (reader,memory): (Box<dyn PalwFloatPublicSourceReaderV1>,_) = if sidecar.is_file() {
+                    let (reader, memory): (Box<dyn PalwFloatPublicSourceReaderV1>, _) = if sidecar.is_file() {
                         tokio::task::spawn_blocking(move || {
                             let source =
                                 Arc::new(misaka_palw_base0::flat_public_source::Base0OriginalCaptureFileV1::open_v1(&sidecar)?);
                             kaspa_consensus_core::palw_float_constraint_source_v1::PalwFloatPublicSidecarReaderV1::open_v1(source)
-                                .map(|reader| (Box::new(reader) as Box<dyn PalwFloatPublicSourceReaderV1>,memory))
+                                .map(|reader| (Box::new(reader) as Box<dyn PalwFloatPublicSourceReaderV1>, memory))
                         })
                         .await
                         .map_err(|e| format!("Float32 sidecar reader failed: {e}"))??
@@ -175,8 +175,15 @@ impl PalwPanelService {
                         .await
                         .map_err(|e| format!("Float32 reader factory failed: {e}"))??
                     };
-                    book.readers
-                        .insert(id, ReaderV1 { claim, owner, reader: super::response_presign::OwnedSourceReaderV1::new(reader,memory).map_err(|why|why.to_string())? });
+                    book.readers.insert(
+                        id,
+                        ReaderV1 {
+                            claim,
+                            owner,
+                            reader: super::response_presign::OwnedSourceReaderV1::new(reader, memory)
+                                .map_err(|why| why.to_string())?,
+                        },
+                    );
                 }
                 let slot = book.readers.get(&id).ok_or("Float32 source reader disappeared")?;
                 if (slot.claim, slot.owner) != (claim, owner) {
@@ -185,15 +192,15 @@ impl PalwPanelService {
                 let reader = slot.reader.clone();
                 // Shared native contexts clone only their Arc; retain the whole
                 // original identity for the last read after the blocking poll.
-                let expected=progress.clone();
+                let expected = progress.clone();
                 let clock = progress.now_daa;
                 let deadline = source.response_deadline_v1(&signer).ok_or("Float32 source has no response deadline")?;
                 let bundle_id = source.bundle_id;
-                let (answer,read) = tokio::task::spawn_blocking(move || {
-                    let read=read;
+                let (answer, read) = tokio::task::spawn_blocking(move || {
+                    let read = read;
                     let mut reader = reader.reader.lock().map_err(|_| "Float32 reader lock poisoned")?;
-                    let answer=crate::palw_flat_public_source::float_answer_v1(&progress.session, signer, clock, reader.as_mut())?;
-                    Ok::<_,String>((answer,read))
+                    let answer = crate::palw_flat_public_source::float_answer_v1(&progress.session, signer, clock, reader.as_mut())?;
+                    Ok::<_, String>((answer, read))
                 })
                 .await
                 .map_err(|e| format!("Float32 source poll failed: {e}"))??;
@@ -210,19 +217,28 @@ impl PalwPanelService {
                 };
                 // Keep the admitted snapshot workspace alive through the fresh
                 // own read, signature and queue handoff. No await follows it.
-                let presign_read=read;
-                let Some(signature)=super::response_presign::sign_current_v1(
-                    session.palw_staged_float_source_v1((claim,owner)),
-                    |fresh|super::response_presign::float_current_v1(&expected,fresh,&movement,signer),
-                    ||self.sign(&movement.signing_message(),PALW_CONSTRAINT_STREAM_CONTEXT_V1),
-                )? else {return Ok(())};
-                movement.signature=signature;
+                let presign_read = read;
+                let Some(signature) = super::response_presign::sign_current_v1(
+                    session.palw_staged_float_source_v1((claim, owner)),
+                    |fresh| super::response_presign::float_current_v1(&expected, fresh, &movement, signer),
+                    || self.sign(&movement.signing_message(), PALW_CONSTRAINT_STREAM_CONTEXT_V1),
+                )?
+                else {
+                    return Ok(());
+                };
+                movement.signature = signature;
                 movement.check()?;
-                let object=PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement: Box::new(movement) };
-                court_outbox.try_push_source_response(
-                    key,&object,deadline.saturating_sub(1),
-                    super::court_outbox::SourceResponseSnapshotV1::Float(expected),presign_read,None,
-                ).map_err(|why|why.to_string())?;
+                let object = PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement: Box::new(movement) };
+                court_outbox
+                    .try_push_source_response(
+                        key,
+                        &object,
+                        deadline.saturating_sub(1),
+                        super::court_outbox::SourceResponseSnapshotV1::Float(expected),
+                        presign_read,
+                        None,
+                    )
+                    .map_err(|why| why.to_string())?;
                 court_outbox.mark_submitted(key, clock);
                 Ok::<(), String>(())
             }

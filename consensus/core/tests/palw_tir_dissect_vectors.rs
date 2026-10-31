@@ -5,6 +5,7 @@
 //! semantics and is reviewed as one. Each case is also checked against the court: the finalize
 //! reproduces the committed tile, the cut folds to the totals, and the bottom finds no fault.
 
+#![allow(warnings)]
 #[path = "palw_tir_fixture_common.rs"]
 mod fixture;
 use fixture::*;

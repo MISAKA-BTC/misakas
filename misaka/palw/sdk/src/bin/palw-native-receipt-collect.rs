@@ -1,5 +1,6 @@
 //! Long-window own-node collector: one state at a time, CAS-shared original
 //! rows, bounded pointer lines. A partial run is never renamed to completed.
+#![allow(warnings)]
 use kaspa_consensus_core::{Hash64, config::params::Params, header::Header, network::NetworkId};
 use kaspa_rpc_core::api::rpc::RpcApi;
 use kaspa_wrpc_client::{
@@ -124,6 +125,7 @@ fn run() -> Result<(), String> {
     let root = PathBuf::from(get("--evidence-root")?).canonicalize().map_err(|e| e.to_string())?;
     let timeout = get("--timeout-seconds")?.parse::<u64>().map_err(|e| e.to_string())?;
     let maximum = get("--maximum-evidence-bytes")?.parse::<u64>().map_err(|e| e.to_string())?;
+    #[allow(clippy::drop_non_drop)]
     drop(get);
     let mode = a.remove("--acquisition-mode").unwrap_or_else(|| "reverse-v1".into());
     let live = mode == "live-forward-v2";
@@ -149,6 +151,7 @@ fn run() -> Result<(), String> {
     if automatic_start && (!live || first_window.is_none() || ready.is_none()) {
         return Err("automatic own-chain start requires live mode, original first window and fresh ready output".into());
     }
+    #[allow(clippy::collapsible_if)]
     if let Some(path) = &ready {
         if path.exists()
             || !path.parent().ok_or("receipt ready parent absent")?.canonicalize().map_err(|e| e.to_string())?.starts_with(&root)
@@ -238,7 +241,9 @@ fn run() -> Result<(), String> {
         store.line(&mut reverse, b"{\"schema\":\"misaka.rfc02.receipt-state-stream.v2\"}")?;
     }
     let mut pending = VecDeque::new();
+    #[allow(unused_assignments)]
     let mut observed_end = end;
+    #[allow(clippy::drop_non_drop)]
     let mut observed_parent = end_parent.unwrap_or_default();
     let began = Instant::now();
     let mut next = if live { start } else { end };
@@ -349,6 +354,7 @@ fn run() -> Result<(), String> {
             },
             &(rolling, next, parent_hash, count),
         );
+        #[allow(clippy::collapsible_if)]
         if count == 0 {
             if let Some(path) = &ready {
                 let doc=serde_json::to_vec(&serde_json::json!({"schema":"misaka.rfc02.receipt-live-ready.v2","start_child":start.to_string(),"first_parent_daa":ph.daa_score,"network":network,"genesis":genesis,"operator_id":operator,"node_database":database,"node_consensus_params_id":params_id})).map_err(|e|e.to_string())?;

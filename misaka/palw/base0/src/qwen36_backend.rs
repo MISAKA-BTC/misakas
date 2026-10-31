@@ -1405,9 +1405,7 @@ impl Qwen36Backend {
     /// GDN parameter tensor openings under the unchanged complete artifact root.
     /// Other weight rows are streamed and discarded, rather than copied or opened.
     /// The existing court determines which per-head parameter slice it reads.
-    pub fn gdn_inventory_openings_v2(
-        &self,
-    ) -> Result<(crate::GdnInventoryOpeningsV2, kaspa_hashes::Hash64), String> {
+    pub fn gdn_inventory_openings_v2(&self) -> Result<(crate::GdnInventoryOpeningsV2, kaspa_hashes::Hash64), String> {
         let profile = self.profile.as_ref().ok_or_else(|| "this backend serves no registered profile".to_string())?;
         crate::gdn_inventory_openings_v2::qwen36_gdn_inventory_openings_streamed_v2(&self.artifact, profile)
     }
@@ -2699,7 +2697,7 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
             return Err(E::Substitution);
         }
         let heap = retained.native_heap_v1("V2 dense material actual capture");
-        let source_heap = heap.bytes().ok_or_else(|| E::LocalResource(heap))?;
+        let source_heap = heap.bytes().ok_or(E::LocalResource(heap))?;
         let mut q = PalwMaterialConstructionRequestsV2::new();
         q.add_v1(source_heap).map_err(E::LocalResource)?;
         q.vec_v1::<Hash64>(binding.step_leaf_count).map_err(E::LocalResource)?;
@@ -2751,7 +2749,7 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
                         other => E::Authentication(other.to_string()),
                     })?;
                     let h = routed.native_heap_v1("V2 routed unit handoff");
-                    q.add_v1(h.bytes().ok_or_else(|| E::LocalResource(h))?).map_err(E::LocalResource)?;
+                    q.add_v1(h.bytes().ok_or(E::LocalResource(h))?).map_err(E::LocalResource)?;
                     q.vec_v1::<PalwHeldMaterialUnitV2>(1).map_err(E::LocalResource)?;
                     return construct_material_unit_v2(q, || {
                         let (routed, owner) = routed.into_parts_v1();
@@ -2847,7 +2845,8 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         self.bind_native_routing_plan_v2(authority)
     }
     fn bind_native_routing_work_v2(
-        &mut self, authority: std::sync::Arc<kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkAuthorityV2>,
+        &mut self,
+        authority: std::sync::Arc<kaspa_consensus_core::palw_reader_router_v2::PalwNativeRoutingWorkAuthorityV2>,
     ) -> Result<(), kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialCapacityErrorV1> {
         self.bind_native_work_plan_v2(authority)
     }

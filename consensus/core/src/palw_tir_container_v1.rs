@@ -221,7 +221,10 @@ pub fn check_tir_container_binding_v1(
 }
 
 /// **The container a TIR class is bound to**, if its registrant bound one (the state's staged row).
-pub fn palw_tir_bound_container_v1(state: &crate::palw_state_v2::PalwChainStateV2, class_id: Hash64) -> Option<&PalwTirContainerRowV1> {
+pub fn palw_tir_bound_container_v1(
+    state: &crate::palw_state_v2::PalwChainStateV2,
+    class_id: Hash64,
+) -> Option<&PalwTirContainerRowV1> {
     use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1, PalwStagedCourtRowV1};
     match state.staged_court_row_v1(&PalwStagedCourtKeyV1::TirContainer(class_id)) {
         Some(PalwStagedCourtRowV1::TirContainer(row)) => Some(row.as_ref()),

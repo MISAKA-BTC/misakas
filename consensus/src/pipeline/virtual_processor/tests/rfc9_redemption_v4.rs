@@ -15,6 +15,7 @@
 //!   lane's round permits;
 //! * V3 is unchanged: a V3 spend of the same claim is paid exactly as before (no split), and a V3 and a V4 spend of one quantum are one double spend.
 
+#![allow(warnings)]
 use super::*;
 use crate::model::stores::ghostdag::{GhostdagData, HashKTypeMap};
 use kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for;
@@ -322,7 +323,11 @@ impl Rig {
     }
 
     fn unentitled(&self, state: &PalwChainStateV2, gd: &GhostdagData) -> BlockHashSet {
-        self.ctx.consensus.virtual_processor().palw_v2_unentitled_blues_checked_v1(state, gd, &BlockHashSet::default(), &self.point()).expect("the merged pay set resolves")
+        self.ctx
+            .consensus
+            .virtual_processor()
+            .palw_v2_unentitled_blues_checked_v1(state, gd, &BlockHashSet::default(), &self.point())
+            .expect("the merged pay set resolves")
     }
 
     fn payouts(

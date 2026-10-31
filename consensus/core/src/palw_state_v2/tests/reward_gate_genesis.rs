@@ -1,4 +1,5 @@
 //! The BASE_FLOOR exemption must hold in registration as well as activation.
+#![allow(warnings)]
 use super::*;
 use crate::palw_kernel_route_v1::{PalwKernelOpvExtrasV1, PalwKernelRouteExtrasV1, PalwRewardGateTermsV1};
 use crate::palw_panel_free_v1::PalwPanelFreeFenceV1;

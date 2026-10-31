@@ -1,5 +1,4 @@
 //! **`palw_panel`'s `p2_7_disclosure_policy` module**, moved out of `palw_panel.rs` (2026-10-12, a behaviour-preserving split: the module path and every item in it are unchanged; only the file moved).
-#![cfg(test)]
 
 //! **ADR-0152 X7 (Phase 2, P2-7): when the node answers a disclosure duty, what it answers from,
 //! and how its queue keys an answer.** The duty list and the answer object are consensus-core's
@@ -476,16 +475,16 @@ fn the_tick_answers_da_sessions_and_keeps_what_it_answers_from() {
     let court = include_str!("court_progress.rs");
     let worker = include_str!("../palw_panel.rs");
     let read = court.find_code("let disclosure = session.palw_disclosure_duties_v1(vec![bond_key]);").expect("the duty read");
-    let pinned =
-        read + court[read..].find_code("self.foreign_pinned.lock().unwrap().extend(disclosure_retain.iter().copied());").expect("pinned");
+    let pinned = read
+        + court[read..].find_code("self.foreign_pinned.lock().unwrap().extend(disclosure_retain.iter().copied());").expect("pinned");
     let built = pinned
         + court[pinned..]
-            .find_code("self.rcore_da_answers_v1(&session, network_domain, &duties, flat_queued.contains(&claim)).await")
+            .find_code("self.rcore_da_answers_v1(session, network_domain, &duties, flat_queued.contains(&claim)).await")
             .expect("each claim's answers built");
     let queued = built + court[built..].find_code("court_outbox.push_pending((key.0, key.1, key.2, object));").expect("and queued");
     let seats = worker.find_code("let duties = session.palw_seat_duties_v2(vec![bond_key]);").expect("the seat's duties");
     assert!(read < pinned && pinned < built && built < queued, "read, pin, build, queue");
-    let court_call = worker.find("self.court_progress_tick_v1(").expect("court stage");
+    let court_call = worker.find(".court_progress_tick_v1(").expect("court stage");
     assert!(court_call < seats, "court/DA progression precedes the seat duty read");
     let fp = &source[source.find_code("    async fn fp_seat_replay_pass_v1(").expect("the FP replay")..];
     let fp = &fp[..fp.find("\n    }\n").expect("its end")];

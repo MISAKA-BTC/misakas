@@ -34,8 +34,7 @@ pub enum PanelOneCensorshipRefusalV1 {
 pub fn panel_one_censorship_cost_v1(policy: &LedgerPolicyV1, worst_court_work: u64) -> u128 {
     let by_work = (policy.max_court_work_per_block as u128).div_ceil(worst_court_work.max(1) as u128);
     let runs = (policy.max_adjudications_per_block as u128).min(by_work).max(1);
-    let exposure =
-        policy.check_window_daa as u128 + policy.challenge_window_daa as u128 + policy.liability_daa as u128;
+    let exposure = policy.check_window_daa as u128 + policy.challenge_window_daa as u128 + policy.liability_daa as u128;
     runs.saturating_mul(policy.dismissal_fee_v1(worst_court_work) as u128).saturating_mul(exposure)
 }
 
@@ -154,7 +153,10 @@ mod tests {
 
     #[test]
     fn f03k2_missing_bound_is_refused_typed_not_zero() {
-        assert_eq!(panel_one_censorship_check_v1(&policy(), 1 << 20, None), Err(PanelOneCensorshipRefusalV1::ExternalGainBoundMissing));
+        assert_eq!(
+            panel_one_censorship_check_v1(&policy(), 1 << 20, None),
+            Err(PanelOneCensorshipRefusalV1::ExternalGainBoundMissing)
+        );
     }
 
     #[test]

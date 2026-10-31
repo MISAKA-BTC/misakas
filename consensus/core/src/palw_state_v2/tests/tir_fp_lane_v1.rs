@@ -6,6 +6,7 @@
 //! production verifier) over the plan the producer's pre-signing quote (`palw_tir_public_original_quote_v1`) returned. Every fence
 //! the lane reads is armed at DAA 0 (derived work, canonical work, the TIR public frame). Not covered here: the carrier
 //! transaction's fee and burn, the mempool, the template and the processor's extraction walk (the node E2E's).
+#![allow(warnings)]
 use super::*;
 use crate::palw_fp_execution_v3::{PalwFpClassFactsV3, PalwFpRunFactsV3, palw_fp_job_context_v3, palw_fp_job_pin_v1};
 use crate::palw_freeprompt_v3::{PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT, PALW_FP_V3_VERSION, PalwFpCommitmentTxPayloadV3};
@@ -45,11 +46,7 @@ fn lane(certify: bool) -> Lane {
 /// [`lane`] whose producer commits a run forged at `forge` (`(leaf, lane)`: one lane of one committed leaf moved — a commitment
 /// the program did not compute), its frame priced and clocked by `cost` (`None`: the staged `network_v1` template with the TEST-ONLY
 /// clock, as before).
-fn lane_with(
-    certify: bool,
-    forge: Option<(usize, usize)>,
-    cost: Option<crate::palw_tir_frame_cost_v1::PalwTirFrameCostV1>,
-) -> Lane {
+fn lane_with(certify: bool, forge: Option<(usize, usize)>, cost: Option<crate::palw_tir_frame_cost_v1::PalwTirFrameCostV1>) -> Lane {
     lane_with_mode(certify, forge, cost, crate::palw_freeprompt_v3::PALW_FP_PRIVACY_PUBLIC_DA)
 }
 
@@ -269,6 +266,12 @@ fn lane_with_mode(
         .expect("the frame route admits a tiled greedy original");
     let mut pledge =
         crate::palw_tir_public_custody_v1::PalwTirPublicCustodyPledgeV1::for_plan_v1(&original, &plan, AT_DAA).expect("the pledge");
+    assert!(
+        pledge.material_until_daa
+            >= pledge.accept_until_daa + crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA + plan.terms.material_until_daa
+                - plan.terms.collect_until_daa,
+        "the producer signs custody through F02 without extending the allocation's owner idle grace"
+    );
     pledge.signature = sign(pledge.id_v1(), crate::palw_tir_public_custody_v1::PALW_TIR_SOURCE_PLEDGE_CONTEXT_V1);
     let envelope =
         PalwTirPublicFpEnvelopeV1::new_v1(borsh::to_vec(&payload).unwrap(), header, pledge, plan.terms.plan.rent_sompi).expect("TFP1");
@@ -292,7 +295,7 @@ fn tir_fp_lane_prices_and_accepts_a_framed_ir_claim_with_every_fence_at_genesis(
             daa_score: AT_DAA,
             receipt_rights: None,
             tir_free_prompt_active: true,
-        panel_da_deferred_prompt: false,
+            panel_da_deferred_prompt: false,
         },
         &l.claim,
         &l.class_id,
@@ -309,7 +312,8 @@ fn tir_fp_lane_prices_and_accepts_a_framed_ir_claim_with_every_fence_at_genesis(
     assert_eq!(price.derived_work.map(|w| w.total_leaves), Some(l.leaves), "the derived leaves are the capture's");
 
     let root = l.state.state_root();
-    let (next, delta) = apply_derived(&l.state, &l.p, &at(), std::slice::from_ref(&l.object), &l.extras).expect("the framed IR claim folds");
+    let (next, delta) =
+        apply_derived(&l.state, &l.p, &at(), std::slice::from_ref(&l.object), &l.extras).expect("the framed IR claim folds");
     let claim = next.claim(&l.claim).expect("the claim exists");
     assert!(matches!(claim.source, PalwClaimSourceV2::FreePrompt { quanta, .. } if quanta == price.quanta));
     assert_eq!(claim.pwu, price.pwu, "the fold wrote the price it quotes");
@@ -373,7 +377,8 @@ fn tir_fp_lane_past_the_container_fence_takes_only_a_class_bound_to_its_palwart3
         PalwStateV2Error::ClassNotRewardable { code, .. } if code == PALW_TIR_UNBOUND_CONTAINER_CODE_V1
     ));
     // The registrant binds the class; again is nothing; another container is refused.
-    let (bound_state, bound_delta) = apply_derived(&l.state, &l.p, &at(), std::slice::from_ref(&bound), &past).expect("the binding folds");
+    let (bound_state, bound_delta) =
+        apply_derived(&l.state, &l.p, &at(), std::slice::from_ref(&bound), &past).expect("the binding folds");
     // Restart / IBD: the stored delta replayed on the parent rebuilds the same row and root; reorg: reverting it removes the row.
     let replayed = apply_delta_v2(&l.state, &bound_delta, &l.p).expect("the stored delta replays");
     assert_eq!(replayed.state_root(), bound_state.state_root(), "replaying the stored delta restores the bound container");
@@ -406,7 +411,9 @@ fn tir_fp_lane_past_the_container_fence_takes_only_a_class_bound_to_its_palwart3
             &past
         )
         .unwrap_err(),
-        PalwStateV2Error::ImmutableModelUpdate("the bound container's inner inventory root is not the class's registered artifact root")
+        PalwStateV2Error::ImmutableModelUpdate(
+            "the bound container's inner inventory root is not the class's registered artifact root"
+        )
     );
     // Bound (the binding and the original in one block): the same original is admitted.
     let (admitted, _) =
@@ -503,9 +510,7 @@ fn tir_attempt_lane_past_the_container_fence_takes_only_a_class_bound_to_its_pal
     l.state.set_class_for_tests(l.class_id, class);
     let record = l.state.tir_class_v1(&l.class_id).unwrap().clone();
     let artifact_root = l.state.class(&l.class_id).unwrap().artifact_root;
-    let unbound = |r: &Result<(), PalwStateV2Error>| {
-        matches!(r, Err(PalwStateV2Error::ClassNotRewardable { code, .. }) if *code == PALW_TIR_UNBOUND_CONTAINER_CODE_V1)
-    };
+    let unbound = |r: &Result<(), PalwStateV2Error>| matches!(r, Err(PalwStateV2Error::ClassNotRewardable { code, .. }) if *code == PALW_TIR_UNBOUND_CONTAINER_CODE_V1);
     let below = palw_class_admits_claim_v1(&l.state, &l.p, &l.extras, &l.class_id, AT_DAA);
     assert!(!unbound(&below), "below the fence the attempt door does not ask for a container: {below:?}");
     let mut past = l.extras.clone();
@@ -524,7 +529,6 @@ fn tir_attempt_lane_past_the_container_fence_takes_only_a_class_bound_to_its_pal
         "and the rest of the door answers as it does below the fence"
     );
 }
-
 
 /// **The lane's authentication on a gated network**: an IR class passes the free-prompt certification gate past the fence only
 /// when one certified family covers every primitive its program reaches; below the fence the gate is the legacy one.
@@ -623,7 +627,9 @@ fn tn1_sign(
 /// The world past the claim's acceptance: the framed claim folded at `AT_DAA`, then the producer's preparation (ONE WorkDebit for the
 /// pass — the batched debit of audit §10 — and its Ready), then a Panel of one seat bound and the claim licensed. Returns the lane,
 /// the state, the frame and the next free DAA.
-fn tn1_licensed(forge: Option<(usize, usize)>) -> (Lane, PalwChainStateV2, crate::palw_tir_public_claim_v1::PalwTirPublicClaimV1, u64) {
+fn tn1_licensed(
+    forge: Option<(usize, usize)>,
+) -> (Lane, PalwChainStateV2, crate::palw_tir_public_claim_v1::PalwTirPublicClaimV1, u64) {
     tn1_licensed_mode(forge, crate::palw_freeprompt_v3::PALW_FP_PRIVACY_PUBLIC_DA, None)
 }
 
@@ -635,19 +641,19 @@ fn tn1_licensed_mode(
 ) -> (Lane, PalwChainStateV2, crate::palw_tir_public_claim_v1::PalwTirPublicClaimV1, u64) {
     use crate::palw_tir_public_carriage_v1::{PalwTirPublicControlActionV1 as A, PalwTirPublicControlTargetV1 as T};
     use crate::palw_tir_public_owned_v1::{PalwTirPublicOwnedActionV1 as Owned, PalwTirPublicWorkPhaseV1, PalwTirPublicWorkScopeV1};
+    // The signed producer pledge covers F02 independently of native owner idle grace.
     let cost = crate::palw_tir_frame_cost_v1::palw_tir_frame_test_only_cost_v1();
     let mut l = lane_with_mode(false, forge, Some(cost), privacy_mode);
     l.p = l.p.clone().with_panel_da_disclosure_from_daa(disclosure_from);
     // An accuser's room is a share of its collateral (the fixture params carry none): half, as the conviction fold tests use.
     // R-core+ in force from genesis, as on testnet-12 (`palw_t12_arm_every_rule_from_genesis`): the conviction tiers, the
     // `CourtConviction` record and the exit-lock lattice a collectible debit needs.
-    l.p = l
-        .p
-        .clone()
-        .with_fp_exposure_ceiling(500)
-        .expect("a representable exposure ratio")
-        .with_escrow_backed_exposure_from_daa(Some(0))
-        .with_rcore_plus_mirrors(Some(0), 12_900, Vec::new());
+    l.p =
+        l.p.clone()
+            .with_fp_exposure_ceiling(500)
+            .expect("a representable exposure ratio")
+            .with_escrow_backed_exposure_from_daa(Some(0))
+            .with_rcore_plus_mirrors(Some(0), 12_900, Vec::new());
     // ADR-0152 v2 F2 as testnet-12 arms it at genesis: the claim records its job identity (the free-prompt job pin), the identity a
     // public conviction is judged against (`original_job_matches_v1`); without it no arithmetic refutation can name the claim.
     l.extras.offence_attribution_active = true;
@@ -685,13 +691,18 @@ fn tn1_licensed_mode(
     for (n, kp) in seat_kps.iter().enumerate() {
         tn1_bond(&mut s, SEAT + n as u64, kp.verification_key.as_ref().to_vec());
     }
-    let seats: Vec<PalwPanelSeatV2> = (0..5).map(|n| PalwPanelSeatV2 { bond: bond_key(SEAT + n), operator_id: op_id(SEAT + n) }).collect();
+    let seats: Vec<PalwPanelSeatV2> =
+        (0..5).map(|n| PalwPanelSeatV2 { bond: bond_key(SEAT + n), operator_id: op_id(SEAT + n) }).collect();
     let preparation = T::Preparation { original_accepted_daa: terms.accepted_daa };
     let debit_of = |s: &PalwChainStateV2, actor: PalwBondKeyV2| {
         let mut book = crate::palw_tir_public_state_v1::palw_tir_public_work_book_v1(s, key, actor, maximum).expect("a duty");
         let snapshot = crate::palw_tir_public_state_v1::palw_tir_public_preparation_snapshot_v1(s, key, maximum).unwrap().unwrap();
         let lane = &snapshot.row.preparation.work_v1().allocation;
-        assert_eq!(snapshot.row.preparation.contract_v1().plan.maximum_slices_per_actor, lane.maximum_restarts + 1, "one debit a pass");
+        assert_eq!(
+            snapshot.row.preparation.contract_v1().plan.maximum_slices_per_actor,
+            lane.maximum_restarts + 1,
+            "one debit a pass"
+        );
         let work = crate::palw_tir_frame_cost_v1::tir_public_pass_budget_v1(lane.per_actor, lane.maximum_restarts + 1).unwrap();
         let scope = PalwTirPublicWorkScopeV1 {
             claim: plan.original_claim,
@@ -738,7 +749,16 @@ fn tn1_licensed_mode(
         manifest_digest: h64(0xD1),
         retained_bytes: 1,
     };
-    let mut objects = vec![tn1_control(&l.keypair, domain, &frame, producer, preparation, A::Preparation(Owned::PreparationReady { descriptor }), 0, 0)];
+    let mut objects = vec![tn1_control(
+        &l.keypair,
+        domain,
+        &frame,
+        producer,
+        preparation,
+        A::Preparation(Owned::PreparationReady { descriptor }),
+        0,
+        0,
+    )];
     for (n, kp) in seat_kps.iter().enumerate() {
         let seat = bond_key(SEAT + n as u64);
         let (debit, _) = debit_of(&s, seat);
@@ -755,7 +775,8 @@ fn tn1_licensed_mode(
         let sign = |message: &[u8], context: &[u8]| {
             libcrux_ml_dsa::ml_dsa_87::sign(&kp.signing_key, message, context, [0x5E; 32]).unwrap().as_ref().to_vec()
         };
-        let message = crate::palw_panel_v2::palw_receipt_message_v2(domain, l.claim, crate::palw_panel_v2::PalwReceiptVerdictV2::Valid, daa);
+        let message =
+            crate::palw_panel_v2::palw_receipt_message_v2(domain, l.claim, crate::palw_panel_v2::PalwReceiptVerdictV2::Valid, daa);
         let receipt = crate::palw_panel_v2::PalwSeatReceiptV2 {
             claim: l.claim,
             verdict: crate::palw_panel_v2::PalwReceiptVerdictV2::Valid,
@@ -884,7 +905,8 @@ fn tn1_forged_flow(privacy_mode: u8) {
     let panel_da = privacy_mode == crate::palw_freeprompt_v3::PALW_FP_PRIVACY_PANEL_DA;
     let (l, mut s, frame, mut daa) = tn1_licensed_mode(Some((FORGED, 1)), privacy_mode, panel_da.then_some(0));
     if panel_da {
-        let disclose = PalwConsensusObjectV2::PanelDaPromptDisclosedV1 { claim: l.claim, prompt_token_ids: l.execution.prompt.clone() };
+        let disclose =
+            PalwConsensusObjectV2::PanelDaPromptDisclosedV1 { claim: l.claim, prompt_token_ids: l.execution.prompt.clone() };
         s = apply_derived(&s, &l.p, &tn1_ctx(daa), &[disclose], &l.extras).expect("the producer discloses inside its deadline").0;
         daa += 1;
         let row = s.panel_da_disclosure_v1(&l.claim).expect("the public row");
@@ -938,7 +960,12 @@ fn tn1_forged_flow(privacy_mode: u8) {
         _ => None,
     };
     let p = pending(&demanded).expect("an open demand");
-    eprintln!("[T-N1] forged: demand opened {} respond_until {} (turn span {})", p.opened_daa, p.respond_until_daa, p.respond_until_daa - p.opened_daa);
+    eprintln!(
+        "[T-N1] forged: demand opened {} respond_until {} (turn span {})",
+        p.opened_daa,
+        p.respond_until_daa,
+        p.respond_until_daa - p.opened_daa
+    );
 
     // ---- the producer answers from its committed material (it must, or it is defaulted) ----
     let body = borsh::to_vec(&crate::palw_tir_public_source_v1::PalwTirPublicResponseV1::StepLeaf {
@@ -1004,7 +1031,9 @@ fn tn1_forged_flow(privacy_mode: u8) {
     for n in 0..3 {
         let seat = bond_key(SEAT + n);
         assert!(
-            convicted.consumed_offences.contains_key(&crate::palw_offence_attribution_v1::palw_false_valid_offence_id_v2(&seat.0, &l.claim)),
+            convicted
+                .consumed_offences
+                .contains_key(&crate::palw_offence_attribution_v1::palw_false_valid_offence_id_v2(&seat.0, &l.claim)),
             "the Valid seat {n}'s false-Valid offence is consumed"
         );
         assert!(!convicted.slashable_locks.contains_key(&(seat, l.claim)), "its lock on the claim is taken");
@@ -1026,8 +1055,14 @@ fn tn1_forged_flow(privacy_mode: u8) {
     .unwrap();
     tn1_sign(&outsider_kp, domain, &mut again);
     assert!(
-        apply_derived(&convicted, &l.p, &tn1_ctx(daa + 1), &[PalwConsensusObjectV2::TirPublicControlV1 { control: Box::new(again) }], &l.extras)
-            .is_err(),
+        apply_derived(
+            &convicted,
+            &l.p,
+            &tn1_ctx(daa + 1),
+            &[PalwConsensusObjectV2::TirPublicControlV1 { control: Box::new(again) }],
+            &l.extras
+        )
+        .is_err(),
         "no second conviction of the same offence"
     );
     // Past every floor: never Final, never paid, no weight.
@@ -1122,8 +1157,8 @@ fn audit_fixcd_c04_a_tir_class_semantic_statement_names_its_registered_tokenizer
         apply_derived(&l.state, &l.p, &at(), &[declare(declaration(other))], &on).map(|_| ()).unwrap_err(),
         PalwStateV2Error::ImmutableModelUpdate("a TIR class's semantic tokenizer must be its registered TIR record's tokenizer")
     );
-    let (declared, _) =
-        apply_derived(&l.state, &l.p, &at(), &[declare(declaration(record.tokenizer_id))], &on).expect("the registered tokenizer folds");
+    let (declared, _) = apply_derived(&l.state, &l.p, &at(), &[declare(declaration(record.tokenizer_id))], &on)
+        .expect("the registered tokenizer folds");
     assert_eq!(declared.class_semantics_v1(&l.class_id).map(|s| s.tokenizer_id), Some(record.tokenizer_id));
 }
 
@@ -1207,6 +1242,7 @@ fn panelda_undisclosed_claim_defaults_without_conviction() {
 /// exactly as before (no ids, no accounting); a disclosure with no row is refused; and PublicDa writes no row past the fence.
 #[test]
 fn panelda_fence_boundary_is_byte_identical_below() {
+    // The signed producer pledge covers F02 independently of native owner idle grace.
     let cost = crate::palw_tir_frame_cost_v1::palw_tir_frame_test_only_cost_v1();
     let mut l = lane_with_mode(false, None, Some(cost), PANEL_DA);
     l.p = l.p.clone().with_panel_da_disclosure_from_daa(Some(AT_DAA + 1));
@@ -1217,6 +1253,91 @@ fn panelda_fence_boundary_is_byte_identical_below() {
     assert!(apply_derived(&l.state, &armed, &at(), &[disclose], &l.extras).is_err(), "no row: refused");
     let public = lane_with_mode(false, None, Some(cost), crate::palw_freeprompt_v3::PALW_FP_PRIVACY_PUBLIC_DA);
     let p = public.p.clone().with_panel_da_disclosure_from_daa(Some(0));
-    let (s, _) = apply_derived(&public.state, &p, &at(), std::slice::from_ref(&public.object), &public.extras).expect("PublicDa folds");
+    let (s, _) =
+        apply_derived(&public.state, &p, &at(), std::slice::from_ref(&public.object), &public.extras).expect("PublicDa folds");
     assert!(s.panel_da_disclosure_v1(&public.claim).is_none(), "PublicDa writes no row");
+}
+
+/// A real TFP1 original's service binding holds its retirement, not the ordinary
+/// abandon collateral's release. The only extra harness policy is a ten-DAA hold
+/// selected before admission (the lane already has a fifty-DAA retirement).
+/// No claim phase, exposure entry, duty, or binding is installed by hand here.
+#[test]
+fn tir_fp_service_binding_retains_retirement_but_releases_abandon_hold() {
+    for rcore in [false, true] {
+        tir_fp_service_binding_abandon_hold_case(rcore);
+    }
+}
+
+fn tir_fp_service_binding_abandon_hold_case(rcore: bool) {
+    let mut l = lane(false);
+    // The reusable lane installs an active class directly but omits its share-table
+    // row (its earlier tests never cold-restore). Complete that pre-admission fixture
+    // through the canonical weightless-grant arithmetic: no cadence is reassigned.
+    l.state.class_shares = granted_share_table_v2(&l.p, &l.state.class_shares, l.class_id, 0).unwrap();
+    l.p.fp_abandon_hold_daa = 10;
+    if rcore {
+        // Cover canonical DL-1 as well as the legacy deadline reconstruction, before admission.
+        l.p = l.p.clone().with_rcore_plus_mirrors(Some(0), 12_900, Vec::new());
+    }
+    assert!(l.p.claim_retirement_daa > l.p.fp_abandon_hold_daa);
+    let producer = bond_key(PRODUCER);
+    let (accepted, _) = apply_derived(&l.state, &l.p, &at(), std::slice::from_ref(&l.object), &l.extras)
+        .expect("the signed TFP1 original is admitted normally");
+    assert!(accepted.court_service_holds_claim_v1(&l.claim), "ordinary original admission installed its service binding");
+    let held = accepted.reserved_exposure(&producer);
+    assert!(held > 0, "the admitted claim actually reserves collateral");
+    let claim = accepted.claim(&l.claim).unwrap();
+    let bind_deadline = palw_provisional_bind_deadline_v1(&accepted, &l.p, &l.claim, claim).unwrap();
+    let voided_daa = bind_deadline + 1;
+    let (voided, _) = apply_derived(&accepted, &l.p, &tn1_ctx(voided_daa), &[], &l.extras)
+        .expect("the missing panel takes the real bind-timeout transition");
+    assert!(matches!(
+        voided.claim(&l.claim).unwrap().phase,
+        PalwClaimPhaseV2::Voided { voided_daa: at, reason: PalwVoidReasonV2::BindTimeout } if at == voided_daa
+    ));
+    assert_eq!(voided.reserved_exposure(&producer), held, "void does not prematurely return abandon collateral");
+    assert!(voided.court_service_holds_retirement_v1(&l.claim, voided.claim(&l.claim).unwrap()));
+    let release_at = voided_daa + l.p.fp_abandon_hold_daa;
+    assert!(
+        voided.deadlines.contains(&(release_at, l.claim)),
+        "a held service binding must not suppress the operational collateral-release deadline: \
+         rcore={rcore} phase={:?} source={:?} release_at={release_at} actual_deadlines_first4={:?} \
+         operational={:?} last_point={:?} legacy_dispute_hold={} da_open_sessions={:?}",
+        voided.claim(&l.claim).unwrap().phase,
+        voided.claim(&l.claim).unwrap().source,
+        voided.deadlines.iter().take(4).collect::<Vec<_>>(),
+        super::super::terminal_operational_release_at_v1(voided.claim(&l.claim).unwrap(), &l.p, None),
+        voided.last_point,
+        voided.palw_legacy_dispute_holds_v1(&l.claim),
+        voided.da_claims.get(&l.claim).map(|row| row.open_sessions()),
+    );
+
+    let (boundary, _) =
+        apply_derived(&voided, &l.p, &tn1_ctx(release_at), &[], &l.extras).expect("the exact inclusive hold boundary still folds");
+    assert_eq!(boundary.reserved_exposure(&producer), held, "the boundary block still owes the whole hold");
+    assert!(boundary.deadlines.contains(&(release_at, l.claim)), "the inclusive sweep has not fired yet");
+    let (released, delta) = apply_derived(&boundary, &l.p, &tn1_ctx(release_at + 1), &[], &l.extras)
+        .expect("the next block returns the expired operational hold");
+    assert_eq!(released.reserved_exposure(&producer), 0, "the expired hold is released exactly once");
+    assert!(released.claim(&l.claim).is_some(), "release is not retirement");
+    assert!(released.court_service_holds_claim_v1(&l.claim), "the still-unresolved service binding remains");
+    assert!(released.court_service_holds_retirement_v1(&l.claim, released.claim(&l.claim).unwrap()));
+    assert!(!released.deadlines.iter().any(|(_, claim)| *claim == l.claim), "retirement remains held after operational release");
+    assert_eq!(revert_delta_v2(&released, &delta, &l.p).unwrap().state_root(), boundary.state_root());
+
+    for state in [&voided, &boundary, &released] {
+        let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(state)).unwrap();
+        let restored = borsh::from_slice::<PalwStateCarriageV2>(&bytes)
+            .unwrap()
+            .into_state_v3(&l.p, Some(state.state_root()), false, Some(0))
+            .expect("the same valid held/released state survives a cold carriage restore");
+        assert_eq!(restored.state_root(), state.state_root());
+    }
+    let after_retirement = voided_daa + l.p.claim_retirement_daa + 1;
+    let (retained, _) = apply_derived(&released, &l.p, &tn1_ctx(after_retirement), &[], &l.extras)
+        .expect("the binding retains liability after the ordinary retirement age");
+    assert!(retained.claim(&l.claim).is_some());
+    assert!(retained.court_service_holds_claim_v1(&l.claim));
+    assert_eq!(retained.reserved_exposure(&producer), 0, "retirement retention must not re-lock released collateral");
 }

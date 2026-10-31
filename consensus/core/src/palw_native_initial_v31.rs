@@ -145,10 +145,10 @@ impl crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
         if now > h.start.expires_daa {
             return None;
         }
-        if let Some(i) = index {
-            if i >= h.start.count || h.has_part(i) || h.attempts[i as usize] >= 2 {
-                return None;
-            }
+        if let Some(i) = index
+            && (i >= h.start.count || h.has_part(i) || h.attempts[i as usize] >= 2)
+        {
+            return None;
         }
         Some(h.owner)
     }

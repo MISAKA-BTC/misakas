@@ -19,6 +19,7 @@
 //!   mirror unsynced, and where claims retire inside the hold;
 //! * it is an entry of `PALW_T12_CAPACITY_FENCES_V1`, never of the DAA-750 list (rcore/cap-s1).
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{
     ForkActivation, MAINNET_PARAMS, PALW_T12_CAPACITY_FENCES_V1, PALW_T12_POST_LAUNCH_FENCE_DAA, PALW_T12_POST_LAUNCH_FENCES_V1,
     Params, SIMNET_PARAMS, TESTNET_PARAMS, devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params,
@@ -29,7 +30,7 @@ use kaspa_consensus_core::fork_id_v1::{evaluate_fork_id_v1, fork_id_gate_fences_
 /// testnet-12 as THIS build ships it — the DAA-1,300 release (rcore/int-5), every capacity
 /// fence dormant: params, identity, schedule — the same triple `palw_operator_anchor_is_t12_only::
 /// T12_RELEASE` pins.
-// re-pin 2026-09-27 @b2bf20a78b0d: third post-launch flag day: capacity tests judge their fence against the DAA-1,300 release (release_v2) (was cbe9152f…, f78b02ad…)
+// re-pin 2026-10-29 @d3ed36fdc77d: G14 at DAA 17400 moved testnet-12 params and schedule ids; the handshake identity stayed 5de80e64 (was 24e1aec3…, d263d7f2…)
 const T12_RELEASE: (&str, &str, &str) = (
     "24e1aec3e9a102fa40d559cd28005ad5944c32caa485d685bed65c52e4c056ff",
     "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",

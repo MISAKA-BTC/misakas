@@ -10,6 +10,7 @@
 //! program agrees with the float reference (top-1, KL); and the same weights through the W8 path
 //! (re-quantised per row) are measured beside it.
 
+#![allow(warnings)]
 use misaka_palw_tir::interval::analyze_ranges;
 use misaka_palw_tir_lower::fidelity::{self, Metrics};
 use misaka_palw_tir_lower::float_ref::stream::Resident;

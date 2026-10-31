@@ -3,6 +3,7 @@
 //! receipts reused across a reorg rebind, and verdicts that are identical across independent runs, scopes and a byte-only
 //! verifier (node / SDK / IBD agreement).
 
+#![allow(warnings)]
 mod common;
 
 use common::*;

@@ -219,7 +219,6 @@ pub fn fold(l: &mut KernelLedgerV1, b: &LedgerBlockV1, mut book: Option<&mut Boo
     out
 }
 
-
 /// **Flip every byte of `obj`'s encoding** (three variants each) and apply the result to `base` through the strict decoder:
 /// no panic, a refusal leaves the root byte-identical. Cheap enough for a minimal ledger (the base is cloned back only after an
 /// applied mutant). Returns `(applied, refused, panics: Vec<(offset, message)>)`.

@@ -19,6 +19,7 @@
 //!    a stale runner beside a new library cannot silently execute under someone else's ceiling;
 //! 7. the runner takes no arguments and answers a malformed job with a frame, not a crash.
 
+#![allow(warnings)]
 use kaspa_hashes::Hash64;
 use misaka_palw::host_security::{
     ConfinementBackend, PALW_CONFINEMENT_ENV, confinement_backend_available, confinement_backend_in_force,

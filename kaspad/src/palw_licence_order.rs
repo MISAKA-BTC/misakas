@@ -440,11 +440,13 @@ mod tests {
     fn the_collector_walks_the_oldest_first_order() {
         use crate::palw_panel::readiness_memory_and_stuck_carrier_tests::CodeNeedleV1 as _;
         let production = production_panel();
-        let licences = production.find_code("slots.at(PalwCarrierSiteV1::Licences, carrier_chain.inflight());").expect("the Licences site");
+        let licences =
+            production.find_code("slots.at(PalwCarrierSiteV1::Licences, carrier_chain.inflight());").expect("the Licences site");
         let walk = &production[licences..];
         let walk = &walk[..walk.find_code("for claim in claims {").expect("the collector's walk")];
         assert!(
-            walk.contains_code("crate::palw_licence_order::palw_licence_claim_order_v1(receipt_pool_v2.claim_ids(), &receipt_facts, |claim| {"
+            walk.contains_code(
+                "crate::palw_licence_order::palw_licence_claim_order_v1(receipt_pool_v2.claim_ids(), receipt_facts, |claim| {"
             ),
             "the licences are offered oldest bind first, not in id order"
         );
@@ -459,19 +461,21 @@ mod tests {
     fn the_proof_wait_is_not_a_latch() {
         use crate::palw_panel::readiness_memory_and_stuck_carrier_tests::CodeNeedleV1 as _;
         let production = production_panel();
-        let licences = production.find_code("slots.at(PalwCarrierSiteV1::Licences, carrier_chain.inflight());").expect("the Licences site");
-        let reset =
-            production.find_code("let proof_waited_last_tick = std::mem::replace(&mut (*readiness_waiting), false);").expect("the reset");
+        let licences =
+            production.find_code("slots.at(PalwCarrierSiteV1::Licences, carrier_chain.inflight());").expect("the Licences site");
+        let reset = production
+            .find_code("let proof_waited_last_tick = std::mem::replace(&mut (*readiness_waiting), false);")
+            .expect("the reset");
         let first_read =
-            production.find_code("self.readiness_duties_for_tick(&session, current_daa, proof_waited_last_tick)").expect("M1's read");
+            production.find_code("self.readiness_duties_for_tick(session, current_daa, proof_waited_last_tick)").expect("M1's read");
         assert!(reset < first_read && first_read < licences, "the wait is reset each tick, before any proof is read");
         assert_eq!(
-            production.count_code("readiness_duties_for_tick(&session, current_daa, proof_waited_last_tick)"),
+            production.count_code("readiness_duties_for_tick(session, current_daa, proof_waited_last_tick)"),
             2,
             "both reads — M1's and the Own site's — are cued by last tick's wait"
         );
         assert!(
-            !production.contains_code("readiness_duties_for_tick(&session, current_daa, readiness_waiting)"),
+            !production.contains_code("readiness_duties_for_tick(session, current_daa, readiness_waiting)"),
             "no read is cued by the latch"
         );
         // Between the reset and the Licences site, the flag is set only where a proof of THIS tick waits: a
@@ -480,7 +484,7 @@ mod tests {
         let tick = &production[reset..licences];
         assert_eq!(tick.count_code("(*readiness_waiting) = true;"), 1, "a proof with no slot");
         let declined = "(*readiness_waiting) =\n                            \
-                        !self.carry_on_readiness_lane_v1(&session, &duty, current_daa, &mut readiness_lane, &main).await;";
+                        !self.carry_on_readiness_lane_v1(session, &duty, current_daa, readiness_lane, &main).await;";
         assert_eq!(tick.count_code(declined), 1, "a failed replacement whose proof the lane refused too");
         assert_eq!(
             tick.count_code("(*readiness_waiting) ="),

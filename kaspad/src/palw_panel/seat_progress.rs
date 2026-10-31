@@ -70,9 +70,9 @@ impl PalwPanelService {
             answered,
             first_seen,
             replayed,
-            mut seat_replays,
+            seat_replays,
             receipts_filed_at,
-            mut seat_resumes,
+            seat_resumes,
             service,
             replay_refuted,
             evidence_kept,
@@ -80,23 +80,23 @@ impl PalwPanelService {
             s3_samplings,
             s3_sampled,
             requested,
-            mut requested_intervals,
+            requested_intervals,
             own_receipts,
             vertex_book,
             vertex_equivocated,
-            mut court_outbox,
-            mut reporter_filer,
-            mut accused,
+            court_outbox,
+            reporter_filer,
+            accused,
             own_receipt_class,
             accusations,
             false_valid,
-            mut improve,
+            improve,
         } = books;
 
         for index in order {
             let (duty, seat_r_duty) = (&duties[index], seat_r_duties[index]);
             let deadline = seat_r_duty.deadline;
-            if !seat_duty_is_due_until_v1(duty, &answered, current_daa, deadline) {
+            if !seat_duty_is_due_until_v1(duty, answered, current_daa, deadline) {
                 continue;
             }
             first_seen.entry(duty.claim_id).or_insert(current_daa.max(duty.bound_daa));
@@ -150,7 +150,7 @@ impl PalwPanelService {
                 && !self.seat_found_fault_v1(&duty.claim_id)
             {
                 let pooled = pool_books.material.map().get(&duty.claim_id).map(|v| v.as_slice()).unwrap_or(&[]);
-                match self.seat_s3_sampling_start_v1(&session, duty, network_domain, pooled) {
+                match self.seat_s3_sampling_start_v1(session, duty, network_domain, pooled) {
                     Ok(Some(running)) => {
                         s3_samplings.insert(duty_key, running);
                         continue;
@@ -174,7 +174,7 @@ impl PalwPanelService {
             if !(seat_r && (seat_replays.holds_claim(&duty.claim_id) || seat_r_duty.role == PalwSeatRRoleV1::PartialResumes))
                 && !sampled_now
                 && !colluding
-                && let Err(why) = self.replay_memory_budget_v1(&session, Some((duty.class_id, duty.artifact_root)))
+                && let Err(why) = self.replay_memory_budget_v1(session, Some((duty.class_id, duty.artifact_root)))
             {
                 crate::palw_backends::note_throttled_v1("panel-replay-budget", || {
                     format!("[{PALW_PANEL}] replay of claim {} deferred: {why}", duty.claim_id)
@@ -228,7 +228,7 @@ impl PalwPanelService {
                 // signed accusation of withholding from a seat that could not have judged the
                 // data had it arrived. Zero deliveries and zero capability must answer the
                 // same thing.
-                if self.resolve_backend(&session, duty.class_id, duty.artifact_root).is_err() {
+                if self.resolve_backend(session, duty.class_id, duty.artifact_root).is_err() {
                     break 'verdict Some(PalwReceiptVerdictV2::Incapable);
                 }
                 // **RFC-0004 (A10): an evaluation claim** — a free-prompt claim with no quanta — is replayed
@@ -236,7 +236,7 @@ impl PalwPanelService {
                 // and reference, the policy's parameters), never from material an executor serves: it has
                 // none to withhold, so no arm below may file `Unavailable` against it. A matching replay
                 // licenses `Valid`; a difference is the court's question and files nothing.
-                match self.improve_seat_step_v1(&mut improve, duty).await {
+                match self.improve_seat_step_v1(improve, duty).await {
                     improve::PalwImproveSeatStepV1::NotEvaluation => {}
                     improve::PalwImproveSeatStepV1::Valid => {
                         debug_assert!(palw_seat_arm_licenses_v1(seat_r, PalwSeatArmV1::EvaluationReplay));
@@ -340,13 +340,13 @@ impl PalwPanelService {
                         let pooled = pool_books.material.map().get(&duty.claim_id).map(|v| v.as_slice()).unwrap_or(&[]);
                         let pass = self
                             .gen_tensor_seat_pass_v1(
-                                &session,
+                                session,
                                 std::sync::Arc::new(tensor),
                                 duty,
                                 seat_r_duty,
                                 current_daa,
                                 pooled,
-                                &mut seat_replays,
+                                seat_replays,
                             )
                             .await;
                         if pass.served {
@@ -380,11 +380,11 @@ impl PalwPanelService {
                                     service.note_unserved(duty.claim_id, current_daa);
                                     if palw_seat_material_wait_ends_v1(seat_r, duty.bound_daa, deadline, current_daa, || {
                                         Self::palw_licence_stands_v1(
-                                            &session,
+                                            session,
                                             duty.claim_id,
-                                            &receipt_pool_v2,
-                                            &receipt_pool_v3,
-                                            &receipt_facts,
+                                            receipt_pool_v2,
+                                            receipt_pool_v3,
+                                            receipt_facts,
                                         )
                                     }) {
                                         break 'verdict Some(PalwReceiptVerdictV2::Unavailable {
@@ -406,16 +406,19 @@ impl PalwPanelService {
                     // try, it waits out the material wait (N-5).
                     if seat_r && seat_r_duty.role == PalwSeatRRoleV1::PartialResumes {
                         let held = pool_books.material.map().get(&duty.claim_id).map(|v| v.to_vec()).unwrap_or_default();
-                        let job = self.resolve_backend_for_claim_v1(&session, duty.class_id, duty.artifact_root, Some(duty.claim_id)).ok().and_then(|resolved| {
-                            let (material, ctx) = self.fp_seat_job_v1(resolved.as_ref(), duty, &held)?;
-                            let form = self.class_prompt_ids_form(material.job.class_id);
-                            let prompt = Self::fp_prompt_for_job(
-                                kaspa_consensus_core::palw_backend::PalwExecutionOpsV1::new(resolved.as_ref()),
-                                &material,
-                                form,
-                            )?;
-                            Some((ctx, prompt.iter().map(|t| *t as usize).collect::<Vec<usize>>()))
-                        });
+                        let job = self
+                            .resolve_backend_for_claim_v1(session, duty.class_id, duty.artifact_root, Some(duty.claim_id))
+                            .ok()
+                            .and_then(|resolved| {
+                                let (material, ctx) = self.fp_seat_job_v1(resolved.as_ref(), duty, &held)?;
+                                let form = self.class_prompt_ids_form(material.job.class_id);
+                                let prompt = Self::fp_prompt_for_job(
+                                    kaspa_consensus_core::palw_backend::PalwExecutionOpsV1::new(resolved.as_ref()),
+                                    &material,
+                                    form,
+                                )?;
+                                Some((ctx, prompt.iter().map(|t| *t as usize).collect::<Vec<usize>>()))
+                            });
                         // N-5 / P2-6: the step's word on service is noted as it is read
                         // (`PalwSeatServiceV1::resumed`) — the `Unavailable` below still files at the
                         // wait, and accuses only for a seat that holds nothing (the P2-6 review, HIGH
@@ -424,7 +427,7 @@ impl PalwPanelService {
                         let step = match job {
                             Some((ctx, prompt)) => {
                                 self.seat_s4_resume_v1(
-                                    &session,
+                                    session,
                                     duty,
                                     seat_r_duty,
                                     current_daa,
@@ -432,9 +435,9 @@ impl PalwPanelService {
                                     &ctx,
                                     &prompt,
                                     pool_books.intervals.resume_mut(),
-                                    &mut requested_intervals,
-                                    &mut seat_replays,
-                                    &mut seat_resumes,
+                                    requested_intervals,
+                                    seat_replays,
+                                    seat_resumes,
                                 )
                                 .await
                             }
@@ -468,11 +471,11 @@ impl PalwPanelService {
                             PalwSeatResumeStepV1::Starved { served: false, .. } => {
                                 if palw_seat_material_wait_ends_v1(seat_r, duty.bound_daa, deadline, current_daa, || {
                                     Self::palw_licence_stands_v1(
-                                        &session,
+                                        session,
                                         duty.claim_id,
-                                        &receipt_pool_v2,
-                                        &receipt_pool_v3,
-                                        &receipt_facts,
+                                        receipt_pool_v2,
+                                        receipt_pool_v3,
+                                        receipt_facts,
                                     )
                                 }) {
                                     break 'verdict Some(PalwReceiptVerdictV2::Unavailable {
@@ -494,8 +497,7 @@ impl PalwPanelService {
                         let pooled = pool_books.material.map().get(&duty.claim_id).map(|v| v.as_slice()).unwrap_or(&[]);
                         // A job of the claim's replays, ran, or refuted it: served (N-5, the P2-6
                         // review's HIGH); `NoVerdict` is read below.
-                        let pass =
-                            self.fp_seat_replay_pass_v1(&session, duty, seat_r_duty, current_daa, pooled, &mut seat_replays).await;
+                        let pass = self.fp_seat_replay_pass_v1(session, duty, seat_r_duty, current_daa, pooled, seat_replays).await;
                         if palw_seat_replay_served_v1(&pass.0) {
                             service.note_served(duty.claim_id);
                         }
@@ -539,11 +541,11 @@ impl PalwPanelService {
                                     service.note_unserved(duty.claim_id, current_daa);
                                     if palw_seat_material_wait_ends_v1(seat_r, duty.bound_daa, deadline, current_daa, || {
                                         Self::palw_licence_stands_v1(
-                                            &session,
+                                            session,
                                             duty.claim_id,
-                                            &receipt_pool_v2,
-                                            &receipt_pool_v3,
-                                            &receipt_facts,
+                                            receipt_pool_v2,
+                                            receipt_pool_v3,
+                                            receipt_facts,
                                         )
                                     }) {
                                         break 'verdict Some(PalwReceiptVerdictV2::Unavailable {
@@ -564,7 +566,8 @@ impl PalwPanelService {
                     // when the class, the executor or this build cannot do either.
                     let held = pool_books.material.map().get(&duty.claim_id).map(|v| v.to_vec()).unwrap_or_default();
                     if let Some(material) = self.fp_job_material_for_claim(&duty.claim_id, duty.class_id, &duty.executor_bond, &held)
-                        && let Ok(resolved) = self.resolve_backend_for_claim_v1(&session, duty.class_id, duty.artifact_root, Some(duty.claim_id))
+                        && let Ok(resolved) =
+                            self.resolve_backend_for_claim_v1(session, duty.class_id, duty.artifact_root, Some(duty.claim_id))
                         && let Some(prompt_ids) = Self::fp_prompt_for_job(
                             kaspa_consensus_core::palw_backend::PalwExecutionOpsV1::new(resolved.as_ref()),
                             &material,
@@ -591,7 +594,7 @@ impl PalwPanelService {
                                         network_domain,
                                         &held,
                                         pool_books.intervals.map(),
-                                        &mut requested_intervals,
+                                        requested_intervals,
                                     )
                                     .await
                                 {
@@ -656,7 +659,7 @@ impl PalwPanelService {
                                 .fp_job_context_for_executed_v1(&material.job, output_ids.len().min(u32::MAX as usize) as u32)
                             && let Some(verdict) = self
                                 .interval_seat_outcome_v1(
-                                    &session,
+                                    session,
                                     duty,
                                     network_domain,
                                     current_daa,
@@ -739,7 +742,9 @@ impl PalwPanelService {
                                 warn!("[{PALW_PANEL}] claim {}: the served prompt is not this claim's ({why})", duty.claim_id);
                                 continue;
                             }
-                            let Ok(backend) = self.resolve_backend_for_claim_v1(&session, duty.class_id, duty.artifact_root, Some(duty.claim_id)) else {
+                            let Ok(backend) =
+                                self.resolve_backend_for_claim_v1(session, duty.class_id, duty.artifact_root, Some(duty.claim_id))
+                            else {
                                 break 'verdict Some(PalwReceiptVerdictV2::Incapable);
                             };
                             let roots = PalwClaimRootsV1 {
@@ -761,8 +766,8 @@ impl PalwPanelService {
                             if fp_verdict != PalwMaterialVerdictV1::Matches {
                                 // P2-8, J1 auto: the claim's committed execution under another job?
                                 self.j1_auto_probe_v1(
-                                    &session,
-                                    &mut reporter_filer,
+                                    session,
+                                    reporter_filer,
                                     duty,
                                     deadline,
                                     current_daa,
@@ -841,7 +846,7 @@ impl PalwPanelService {
                                 duty.artifact_root,
                                 &payload.capture,
                                 ladder,
-                                |id| self.chain_carriage_v1(&session, id),
+                                |id| self.chain_carriage_v1(session, id),
                             ) {
                                 Ok(need) => need,
                                 Err(why) => {
@@ -873,7 +878,7 @@ impl PalwPanelService {
                                             duty.artifact_root,
                                             &payload.capture,
                                             ladder,
-                                            |id| self.chain_carriage_v1(&session, id),
+                                            |id| self.chain_carriage_v1(session, id),
                                         )
                                         .unwrap_or_else(|_| need.clone())
                                 },
@@ -1048,10 +1053,10 @@ impl PalwPanelService {
                                         self.config.telemetry.detection_watch(duty.class_id, duty.claim_id);
                                     }
                                     self.capture_arm_files_v1(
-                                        &session,
-                                        &mut reporter_filer,
-                                        &mut accused,
-                                        &mut court_outbox,
+                                        session,
+                                        reporter_filer,
+                                        accused,
+                                        court_outbox,
                                         duty,
                                         leaf,
                                         bond_key,
@@ -1118,7 +1123,9 @@ impl PalwPanelService {
                             warn!("[{PALW_PANEL}] claim {}: the served prompt is not this claim's ({why})", duty.claim_id);
                             continue;
                         }
-                        let Ok(backend) = self.resolve_backend_for_claim_v1(&session, duty.class_id, duty.artifact_root, Some(duty.claim_id)) else {
+                        let Ok(backend) =
+                            self.resolve_backend_for_claim_v1(session, duty.class_id, duty.artifact_root, Some(duty.claim_id))
+                        else {
                             break 'verdict Some(PalwReceiptVerdictV2::Incapable);
                         };
                         let Some(prompt_ids) = Self::fp_prompt_for_job(
@@ -1201,11 +1208,13 @@ impl PalwPanelService {
                         // toward neither side of the quorum. The chain refuses it for the liveness
                         // floor, where no node can truthfully claim it, so filing it there would
                         // only waste a fee.
-                        let Ok(backend) = self.resolve_backend_for_claim_v1(&session, duty.class_id, duty.artifact_root, Some(duty.claim_id)) else {
+                        let Ok(backend) =
+                            self.resolve_backend_for_claim_v1(session, duty.class_id, duty.artifact_root, Some(duty.claim_id))
+                        else {
                             break 'verdict Some(PalwReceiptVerdictV2::Incapable);
                         };
                         let Some(anchor) = self.job_anchor_for_claim(
-                            &session,
+                            session,
                             backend.as_ref(),
                             network_domain,
                             duty.accepted_block,
@@ -1218,7 +1227,7 @@ impl PalwPanelService {
                             execution_root: duty.execution_root,
                             trace_root: duty.trace_root,
                             anchor,
-                            attempt_draw: self.attempt_draw_for_claim(&session, duty.accepted_block),
+                            attempt_draw: self.attempt_draw_for_claim(session, duty.accepted_block),
                             output_root: Some(duty.output_root),
                             job_pin: duty.fp_job_pin_v1(),
                         };
@@ -1232,8 +1241,8 @@ impl PalwPanelService {
                         if arm == PalwMaterialArmV1::Nothing {
                             // P2-8, J1 auto: the claim's committed execution under another job?
                             self.j1_auto_probe_v1(
-                                &session,
-                                &mut reporter_filer,
+                                session,
+                                reporter_filer,
                                 duty,
                                 deadline,
                                 current_daa,
@@ -1269,9 +1278,10 @@ impl PalwPanelService {
                         && let Some(bytes) = self.retained_capture(&duty.claim_id).or_else(|| {
                             std::fs::read(self.config.retention_dir.join("foreign").join(format!("{}.material", duty.claim_id))).ok()
                         })
-                        && let Ok(backend) = self.resolve_backend_for_claim_v1(&session, duty.class_id, duty.artifact_root, Some(duty.claim_id))
+                        && let Ok(backend) =
+                            self.resolve_backend_for_claim_v1(session, duty.class_id, duty.artifact_root, Some(duty.claim_id))
                         && let Some(anchor) = self.job_anchor_for_claim(
-                            &session,
+                            session,
                             backend.as_ref(),
                             network_domain,
                             duty.accepted_block,
@@ -1288,7 +1298,7 @@ impl PalwPanelService {
                                 execution_root: duty.execution_root,
                                 trace_root: duty.trace_root,
                                 anchor,
-                                attempt_draw: self.attempt_draw_for_claim(&session, duty.accepted_block),
+                                attempt_draw: self.attempt_draw_for_claim(session, duty.accepted_block),
                                 output_root: Some(duty.output_root),
                                 job_pin: duty.fp_job_pin_v1(),
                             },
@@ -1313,9 +1323,10 @@ impl PalwPanelService {
                 // free-prompt lane. `None` falls through to the pull and the half-window
                 // exactly as before.
                 if !duty.free_prompt
-                    && let Ok(resolved) = self.resolve_backend_for_claim_v1(&session, duty.class_id, duty.artifact_root, Some(duty.claim_id))
+                    && let Ok(resolved) =
+                        self.resolve_backend_for_claim_v1(session, duty.class_id, duty.artifact_root, Some(duty.claim_id))
                     && let Some((ctx, prompt)) = self.attempt_job_for_claim(
-                        &session,
+                        session,
                         resolved.as_ref(),
                         network_domain,
                         duty.accepted_block,
@@ -1352,7 +1363,7 @@ impl PalwPanelService {
                             service.note_served(duty.claim_id);
                             match self
                                 .seat_s4_resume_v1(
-                                    &session,
+                                    session,
                                     duty,
                                     seat_r_duty,
                                     current_daa,
@@ -1360,9 +1371,9 @@ impl PalwPanelService {
                                     &ctx,
                                     &prompt,
                                     pool_books.intervals.resume_mut(),
-                                    &mut requested_intervals,
-                                    &mut seat_replays,
-                                    &mut seat_resumes,
+                                    requested_intervals,
+                                    seat_replays,
+                                    seat_resumes,
                                 )
                                 .await
                             {
@@ -1378,11 +1389,11 @@ impl PalwPanelService {
                                 PalwSeatResumeStepV1::Starved { served: false, .. } => {
                                     if palw_seat_material_wait_ends_v1(seat_r, duty.bound_daa, deadline, current_daa, || {
                                         Self::palw_licence_stands_v1(
-                                            &session,
+                                            session,
                                             duty.claim_id,
-                                            &receipt_pool_v2,
-                                            &receipt_pool_v3,
-                                            &receipt_facts,
+                                            receipt_pool_v2,
+                                            receipt_pool_v3,
+                                            receipt_facts,
                                         )
                                     }) {
                                         break 'verdict Some(PalwReceiptVerdictV2::Unavailable {
@@ -1398,16 +1409,7 @@ impl PalwPanelService {
                             resolved
                         } else {
                             match self
-                                .attempt_seat_replay_v1(
-                                    &session,
-                                    duty,
-                                    seat_r_duty,
-                                    current_daa,
-                                    resolved,
-                                    &ctx,
-                                    &prompt,
-                                    &mut seat_replays,
-                                )
+                                .attempt_seat_replay_v1(session, duty, seat_r_duty, current_daa, resolved, &ctx, &prompt, seat_replays)
                                 .await
                             {
                                 (PalwSeatReplayStepV1::Licensed, _) => {
@@ -1444,7 +1446,7 @@ impl PalwPanelService {
                                     network_domain,
                                     pool_books.material.map().get(&duty.claim_id).map(|v| v.as_slice()).unwrap_or(&[]),
                                     pool_books.intervals.map(),
-                                    &mut requested_intervals,
+                                    requested_intervals,
                                 )
                                 .await
                             {
@@ -1490,14 +1492,13 @@ impl PalwPanelService {
                         // At the widest prefill run the ledger grants, on this duty's own instance —
                         // the one offloaded below (int-10.2 A2).
                         let mut resolved = resolved;
-                        let routing_owner =
-                            match self.bind_native_routing_replay_v2(&session, resolved.as_mut(), duty.claim_id, &ctx) {
-                                Ok(owner) => owner,
-                                Err(why) => {
-                                    warn!("[{PALW_PANEL}] claim {}: native routed replay held: {why}", duty.claim_id);
-                                    break 'verdict None;
-                                }
-                            };
+                        let routing_owner = match self.bind_native_routing_replay_v2(session, resolved.as_mut(), duty.claim_id, &ctx) {
+                            Ok(owner) => owner,
+                            Err(why) => {
+                                warn!("[{PALW_PANEL}] claim {}: native routed replay held: {why}", duty.claim_id);
+                                break 'verdict None;
+                            }
+                        };
                         let backends = self.backends();
                         let reserved = match self.reserve_replay_at_widest_run_v1(
                             "full-seat",
@@ -1511,7 +1512,7 @@ impl PalwPanelService {
                                     duty.artifact_root,
                                     Some(&ctx),
                                     FULL_SEAT_V1,
-                                    |id| self.chain_carriage_v1(&session, id),
+                                    |id| self.chain_carriage_v1(session, id),
                                 )
                             },
                         ) {
@@ -1531,7 +1532,7 @@ impl PalwPanelService {
                             b.execute_for_verdict(&ctx_for_blocking, &prompt_for_blocking)
                         })
                         .await;
-                        if let Err(why) = self.refresh_native_routing_replay_v2(&session, routing_owner.as_ref()) {
+                        if let Err(why) = self.refresh_native_routing_replay_v2(session, routing_owner.as_ref()) {
                             warn!("[{PALW_PANEL}] claim {}: replay context changed: {why}", duty.claim_id);
                             break 'verdict None;
                         }
@@ -1588,7 +1589,7 @@ impl PalwPanelService {
                         self.attempt_committed_output_ids_v1(kaspa_consensus_core::palw_backend::PalwMaterialOpsV1::new(resolved.as_ref()), duty, &ctx, anchor, &prompt_ids, &held)
                         && let Some(verdict) = self
                             .interval_seat_outcome_v1(
-                                &session,
+                                session,
                                 duty,
                                 network_domain,
                                 current_daa,
@@ -1678,7 +1679,7 @@ impl PalwPanelService {
                     }
                 }
                 if palw_seat_material_wait_ends_v1(seat_r, duty.bound_daa, deadline, current_daa, || {
-                    Self::palw_licence_stands_v1(&session, duty.claim_id, &receipt_pool_v2, &receipt_pool_v3, &receipt_facts)
+                    Self::palw_licence_stands_v1(session, duty.claim_id, receipt_pool_v2, receipt_pool_v3, receipt_facts)
                 }) {
                     break 'verdict Some(PalwReceiptVerdictV2::Unavailable {
                         chunk_index: 0,
@@ -1695,18 +1696,25 @@ impl PalwPanelService {
             let Some(verdict) = verdict else { continue };
             // RFC38: every approving form, including Sampled and the vertex path, checks the actual accepted transaction.
             // A legacy served answer/replay is not a substitute for this carriage binding.
-            if matches!(verdict, PalwReceiptVerdictV2::Valid | PalwReceiptVerdictV2::Sampled) {
-                if let Err(why) = self.fp_accounting_answer_for_seat_v1(&session, duty) {
-                    match why {
-                        kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Resource(why) => {
-                            crate::palw_backends::note_throttled_v1("panel-accounting-capacity", || format!("[{PALW_PANEL}] claim {} accounting check deferred by local capacity: {why}", duty.claim_id));
-                        }
-                        kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Decode(why) => {
-                            crate::palw_backends::note_throttled_v1("panel-accounting-unbound", || format!("[{PALW_PANEL}] claim {} accounting answer unbound ({why}); no approving receipt/vertex filed", duty.claim_id));
-                        }
+            if matches!(verdict, PalwReceiptVerdictV2::Valid | PalwReceiptVerdictV2::Sampled)
+                && let Err(why) = self.fp_accounting_answer_for_seat_v1(session, duty)
+            {
+                match why {
+                    kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Resource(why) => {
+                        crate::palw_backends::note_throttled_v1("panel-accounting-capacity", || {
+                            format!("[{PALW_PANEL}] claim {} accounting check deferred by local capacity: {why}", duty.claim_id)
+                        });
                     }
-                    continue;
+                    kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Decode(why) => {
+                        crate::palw_backends::note_throttled_v1("panel-accounting-unbound", || {
+                            format!(
+                                "[{PALW_PANEL}] claim {} accounting answer unbound ({why}); no approving receipt/vertex filed",
+                                duty.claim_id
+                            )
+                        });
+                    }
                 }
+                continue;
             }
 
             // **SEAT-R, enforced where the receipt is signed**: past the fence a `Valid` that no
@@ -1772,7 +1780,12 @@ impl PalwPanelService {
                     f != kaspa_consensus_core::config::params::ForkActivation::never() && f.is_active(session.get_virtual_daa_score())
                 });
                 if let Err(why) = seat_resumes.refresh_routing_with_v2(
-                    duty.claim_id, duty.panel_seat_count.max(1), mask, &mut seat_replays, active, true,
+                    duty.claim_id,
+                    duty.panel_seat_count.max(1),
+                    mask,
+                    seat_replays,
+                    active,
+                    true,
                     |claim, job| session.palw_native_routing_claim_authority_v2(claim, job),
                 ) {
                     warn!("[{PALW_PANEL}] claim {}: native segment publication waits: {why}", duty.claim_id);
@@ -1967,7 +1980,7 @@ impl PalwPanelService {
                 bond_key,
                 current_daa,
                 &|message, context| Self::sign_hedged(&kp.signing_key, message, context),
-                &|round| vertex::palw_vertex_state_write_v1(&vertex_state_path, round),
+                &|round| vertex::palw_vertex_state_write_v1(vertex_state_path, round),
             );
             if let Some(round) = sealed {
                 info!(

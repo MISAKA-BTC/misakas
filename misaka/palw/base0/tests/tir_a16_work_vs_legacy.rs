@@ -17,6 +17,7 @@
 //! H-sized elementwise ops in the IR), and the KV bytes ×0.5 (the IR reads the history's declared
 //! i16 rows; the legacy term assumes 4-byte cache elements for a cache that is not f16).
 
+#![allow(warnings)]
 use kaspa_consensus_core::palw_canonical_work_v1::{
     PalwCanonicalClassDescriptorV1, PalwCanonicalExecutionFactsV1, palw_canonical_work_v1,
 };

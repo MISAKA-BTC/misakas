@@ -17,6 +17,7 @@
 //! The Qwen geometries are the MEASURED ones from `palw_qwen25_profile`, not a sketch: the second
 //! class's graph is that module's and this binary only prices it.
 
+#![allow(warnings)]
 use kaspa_consensus_core::palw_attn_court_v1::palw_attn_court_admits_row_v1;
 use kaspa_consensus_core::palw_base0_profile::{
     PALW_RC_BASE0_CANONICAL, PALW_RC_BASE0_GEOMETRY, PALW_RC_BASE0_WORST_CASE, PalwBase0GeometryV1, base0_profile_v1,

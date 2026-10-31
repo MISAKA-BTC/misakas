@@ -4,6 +4,7 @@
 //!
 //! Unverified source (2026-10-15): written, not built and not run. Every policy here is a TEST value
 //! ([`PalwModelEligibilityPolicyV1::design_unapproved_v1`] at a 10-DAA day, fee 10 sompi), not a proposal.
+#![allow(warnings)]
 use super::*;
 use crate::palw_kernel_route_v1::palw_kernel_bond_id_v1;
 use crate::palw_model_eligibility_v1::*;

@@ -828,8 +828,7 @@ impl DbEvmLogIndexStore {
     ) -> impl Iterator<Item = Result<LogPostingLoc, StoreError>> + '_ {
         self.access.bucket_iterator(log_posting_bucket(kind, selector)).map(|member| {
             let member = member?;
-            decode_log_posting_loc(&member)
-                .ok_or_else(|| StoreError::DataInconsistency("malformed EVM log posting member".into()))
+            decode_log_posting_loc(&member).ok_or_else(|| StoreError::DataInconsistency("malformed EVM log posting member".into()))
         })
     }
 }

@@ -10,6 +10,7 @@
 //! The fixtures are the lowerer's tiny encoder–decoders (`tests/fixtures/hf-encdec`) and a flan-t5-small-shaped header-only checkpoint
 //! made here from the model's configuration and the tensor names of the T5 family.
 
+#![allow(warnings)]
 use misaka_palw_sdk::preflight::{Blocker, Depth, Options, Report, StageStatus, run};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};

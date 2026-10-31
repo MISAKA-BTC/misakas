@@ -15,6 +15,7 @@
 //! not uniform-and-hope: every case sweeps signs explicitly, small ranges are exhaustive, and the
 //! boundary tables include the extremes of every type involved.
 
+#![allow(warnings)]
 use kaspa_consensus_core::palw_base0 as spec;
 use misaka_palw_base0_ref2 as ref2;
 

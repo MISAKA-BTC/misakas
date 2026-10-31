@@ -13,6 +13,7 @@
 //! before deployment — is the reachable-state half of ADR-0151 §5: a reorg, a restart, IBD, the DAA
 //! before a receipt deadline, several classes at their caps at once, and a seat dropping out. **A
 //! green predicate is not a wedge search.**
+#![allow(warnings)]
 use kaspa_consensus::processes::difficulty::palw_lane_advances_daa_v1;
 use kaspa_consensus_core::config::params::{ForkActivation, Params, palw_clock_advances_without_a_claim_v1};
 use kaspa_consensus_core::network::{NetworkId, NetworkType};

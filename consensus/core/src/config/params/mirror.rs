@@ -15,6 +15,8 @@ impl Params {
         if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut self.palw_consensus_mode {
             bundle.state = bundle.state.clone().with_capacity_escrow_from_daa(from_daa);
         }
+        // Rewriting the bundle must not leave the G14 route mirror behind the fences.
+        self.sync_palw_g14_gates_v1();
     }
 
     /// ADR-0132 §7.6: arms (or clears) the short challenge window's fence AND the V2 bundle's copy
@@ -220,6 +222,7 @@ impl Params {
         if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut self.palw_consensus_mode {
             bundle.state = bundle.state.clone().with_capacity_weight_cap_from_daa(from_daa);
         }
+        self.sync_palw_g14_gates_v1();
     }
 
     /// **ADR-0164: the fold's mirror of F-EM, F-M1 and F-K** — their heights on the `#[borsh(skip)]` copy of `PalwStateParamsV2`.
@@ -236,6 +239,7 @@ impl Params {
         if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut self.palw_consensus_mode {
             bundle.state = bundle.state.clone().with_capacity_s567_mirror(emission, riders, breaker);
         }
+        self.sync_palw_g14_gates_v1();
     }
 
     /// **The fold's mirror of the verification term** (int-11): its height on the `#[borsh(skip)]` copy of
@@ -297,6 +301,7 @@ impl Params {
                 .with_capacity_stage2_mirrors(audit, operators, slots)
                 .with_capacity_network_mirror(network, anchor_delay);
         }
+        self.sync_palw_g14_gates_v1();
     }
 
     /// **The fold's mirrors of F-B and F-R** (ADR-0160 §6.2): the `#[borsh(skip)]` copies on
@@ -311,6 +316,7 @@ impl Params {
         if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut self.palw_consensus_mode {
             bundle.state = bundle.state.clone().with_capacity_verify_mirrors(room, batch);
         }
+        self.sync_palw_g14_gates_v1();
     }
 
     /// **F-L's mirror** (ADR-0160 lane liab): the `#[borsh(skip)]` copy on `PalwStateParamsV2` the fold
@@ -323,5 +329,6 @@ impl Params {
         if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut self.palw_consensus_mode {
             bundle.state = bundle.state.clone().with_capacity_liability(value);
         }
+        self.sync_palw_g14_gates_v1();
     }
 }

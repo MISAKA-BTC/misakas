@@ -23,6 +23,7 @@ pub(in crate::palw_panel::palw_service_public_e2e) async fn import_public_carria
     premine: &[Funding],
     claim: Hash64,
 ) {
+    let expected_public_job = chain.view(claim).public_fp_job;
     let point = chain.tc.get_sink();
     chain.tc.virtual_processor().capture_pruning_point_palw_state(point).expect("exact PALW snapshot capture succeeds");
     let wire =
@@ -121,7 +122,7 @@ pub(in crate::palw_panel::palw_service_public_e2e) async fn import_public_carria
         wire
     );
     assert!(matches!(fresh.view(claim).phase, PalwClaimPhaseV2::ReceiptLicensed { .. }));
-    assert!(fresh.view(claim).public_fp_job.is_none());
+    assert_eq!(fresh.view(claim).public_fp_job, expected_public_job, "the import preserves the source's rooted public job retention");
     fresh.tc.validate_and_insert_block(child).virtual_state_task.await.expect("the first body folds from the imported state");
     assert_eq!(fresh.tc.get_sink(), chain.tc.get_sink());
     assert_eq!(
@@ -135,9 +136,17 @@ pub(in crate::palw_panel::palw_service_public_e2e) async fn import_public_carria
         .iter()
         .find(|b| {
             b.transactions.iter().any(|t| {
-                t.subnetwork_id == kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT
-                    && borsh::from_slice::<kaspa_consensus_core::palw_freeprompt_v3::PalwFpCommitmentTxPayloadV3>(&t.payload)
-                        .is_ok_and(|p| p.claim_id() == claim)
+                if t.subnetwork_id != kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT {
+                    return false;
+                }
+                use kaspa_consensus_core::palw_history_custody_v1::{PALW_HISTORY_FP_ENVELOPE_MAGIC_V1, PalwHistoryFpEnvelopeV1};
+                let payload = if t.payload.starts_with(PALW_HISTORY_FP_ENVELOPE_MAGIC_V1) {
+                    PalwHistoryFpEnvelopeV1::decode_v1(&t.payload).and_then(|envelope| envelope.original_fp_v1())
+                } else {
+                    borsh::from_slice::<kaspa_consensus_core::palw_freeprompt_v3::PalwFpCommitmentTxPayloadV3>(&t.payload)
+                        .map_err(|error| error.to_string())
+                };
+                payload.is_ok_and(|payload| payload.claim_id() == claim)
             })
         })
         .unwrap()
@@ -146,14 +155,18 @@ pub(in crate::palw_panel::palw_service_public_e2e) async fn import_public_carria
     fresh.tc.acceptance_data_store.delete(candidate.job.accepted_block).unwrap();
     assert!(fresh.tc.get_block(original).is_err());
     assert!(fresh.tc.get_block_acceptance_data(candidate.job.accepted_block).is_err());
-    assert!(
-        crate::palw_panel::palw_fraud_filer::palw_fraud_filer_fp_payload_v1(
-            fresh.tc.as_ref().as_ref(),
-            &candidate,
-            fresh.network_domain
-        )
-        .is_err()
+    let payload = crate::palw_panel::palw_fraud_filer::palw_fraud_filer_fp_payload_v1(
+        fresh.tc.as_ref().as_ref(),
+        &candidate,
+        fresh.network_domain,
     );
+    if expected_public_job.is_some() {
+        // A staged original pins its public job in rooted state even after the
+        // historical transaction and acceptance rows are unavailable.
+        assert!(payload.is_ok(), "the staged original remains publicly resolvable from the imported rooted job");
+    } else {
+        assert!(payload.is_err(), "an unretained original still requires reacquisition");
+    }
     eprintln!("[service-pruned] authenticated native carriage restored an absent tip/delta prefix at DAA {}", fresh.daa());
     std::mem::swap(chain, &mut fresh);
 }

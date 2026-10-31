@@ -48,8 +48,14 @@ impl Palw {
             Ok(r) => r,
             Err(usage) => {
                 tprintln!(ctx, "{usage}");
-                tprintln!(ctx, "balance: `details`; register a bond: `misaka bond register`; post a kernel job, open a court or reserve");
-                tprintln!(ctx, "a dispute: `misaka palw build --help` (builders write a file; `misaka palw submit-object` dry-runs it)");
+                tprintln!(
+                    ctx,
+                    "balance: `details`; register a bond: `misaka bond register`; post a kernel job, open a court or reserve"
+                );
+                tprintln!(
+                    ctx,
+                    "a dispute: `misaka palw build --help` (builders write a file; `misaka palw submit-object` dry-runs it)"
+                );
                 return Ok(());
             }
         };

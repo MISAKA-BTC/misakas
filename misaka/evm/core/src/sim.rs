@@ -106,11 +106,18 @@ pub(crate) fn market_handlers_for_env_v2(env: &EthCallEnv) -> Result<Option<crat
     }
     let market = if env.market_fences.evm_active {
         match &env.palw_view_owned_v2 {
-            Some(view) => Some(crate::model_market::MarketHandlers::new_retained_v2(view.clone(), env.market_fences, env.chain_id_for_holders)
-                .map_err(EvmExecError::NativeResource)?),
-            None => env.palw_view.as_ref().map(|view| crate::model_market::MarketHandlers::new(view.clone(), env.market_fences, env.chain_id_for_holders)),
+            Some(view) => Some(
+                crate::model_market::MarketHandlers::new_retained_v2(view.clone(), env.market_fences, env.chain_id_for_holders)
+                    .map_err(EvmExecError::NativeResource)?,
+            ),
+            None => env
+                .palw_view
+                .as_ref()
+                .map(|view| crate::model_market::MarketHandlers::new(view.clone(), env.market_fences, env.chain_id_for_holders)),
         }
-    } else { None };
+    } else {
+        None
+    };
     Ok(market)
 }
 

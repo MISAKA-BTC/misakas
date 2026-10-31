@@ -5,6 +5,7 @@
 //! than `2^40` MACs at a `2^18` window. `tile_len` 64 and `h_chunk` 64 are the inputs (a layout
 //! declares its own; admission's success does not depend on either for these programs).
 
+#![allow(warnings)]
 use misaka_palw_tir::admit::{TirAdmitInputsV1, TirCeilingsV1, tir_admit_program_v1};
 use misaka_palw_tir_lower::lower::{LowerOpts, lower};
 use std::path::Path;
@@ -81,7 +82,12 @@ fn every_lowerable_real_configuration_is_admitted() {
     // admitted at a window of 2^16 (`tests/dsa.rs::deepseek_v32_is_admitted`).
     assert_eq!(
         refused,
-        vec!["deepseek-v3-bf16.json".to_string(), "deepseek-v3-fp8.json".to_string(), "deepseek-v3.2-exp.json".to_string()]
+        vec![
+            "deepseek-v3-bf16.json".to_string(),
+            "deepseek-v3-fp8.json".to_string(),
+            "deepseek-v3.2-exp.json".to_string(),
+            "glm-5.json".to_string(),
+        ]
     );
 }
 

@@ -31,6 +31,7 @@
 //!
 //! Run: cargo test -p kaspa-consensus-core --test t12_run_ahead_burst_vs_readiness -- --nocapture
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{ForkActivation, Params};
 use kaspa_consensus_core::network::{NetworkId, NetworkType};
 use kaspa_consensus_core::palw_clock_cursor_v1::PALW_CLOCK_LEAD_CAP_MS;

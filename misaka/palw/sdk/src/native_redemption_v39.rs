@@ -6,12 +6,16 @@
 //! delivery — the bracketing states of the paying block and its real coinbase
 //! leaf must be supplied; a spend is proved only by acceptance in a pinned
 //! chain block (spend35). Nothing here says PASS or grants any right.
-use crate::native_audit_io_v39::{AnchoredNativeAuxStreamV39, read_native_aux_stream_anchored_v39, read_native_payout_stream_anchored_v39};
+use crate::native_audit_io_v39::{
+    AnchoredNativeAuxStreamV39, read_native_aux_stream_anchored_v39, read_native_payout_stream_anchored_v39,
+};
 use kaspa_consensus_core::{
     Hash64,
     config::params::Params,
     palw_native_execution_v39::NativeOriginalSourceArchiveV39,
-    palw_native_redemption_v33::{NativePayoutStatusV39, derive_native_redemption_v39, native_payout_status_v39, verify_native_coinbase_v33},
+    palw_native_redemption_v33::{
+        NativePayoutStatusV39, derive_native_redemption_v39, native_payout_status_v39, verify_native_coinbase_v33,
+    },
     palw_state_v2::PalwChainStateV2,
 };
 use misaka_palw_kernel::hash::Digest;
@@ -74,7 +78,8 @@ pub fn audit_native_redemption_v39(
     let job: Digest = spec.job.as_bytes();
     let fin = open_point_v39(root, &spec.final_point, params)?;
     let final_audit = PalwChainStateV2::native_job_audit_from_stream_v39(fin.auxiliary(), fin.anchor(), params, job, archive)?;
-    let payouts = read_native_payout_stream_anchored_v39(root, &root.join(&spec.final_point.dir).join("payouts-stream39.jsonl"), &fin)?;
+    let payouts =
+        read_native_payout_stream_anchored_v39(root, &root.join(&spec.final_point.dir).join("payouts-stream39.jsonl"), &fin)?;
     let status = native_payout_status_v39(&final_audit, &payouts.verified_rows()?)?;
     let mut report = serde_json::json!({
         "schema": "misaka.palw.native-redemption-audit.v39",
@@ -92,7 +97,8 @@ pub fn audit_native_redemption_v39(
         report["named_status"] = "NOT_SETTLED".into();
         return Ok(report);
     }
-    let (Some(bp), Some(ap), Some(cb), Some(index)) = (&spec.before_point, &spec.after_point, &spec.coinbase_proof, spec.output_index) else {
+    let (Some(bp), Some(ap), Some(cb), Some(index)) = (&spec.before_point, &spec.after_point, &spec.coinbase_proof, spec.output_index)
+    else {
         report["named_status"] = match status {
             NativePayoutStatusV39::Pending { .. } => "PENDING_PAYOUT",
             _ => "DELIVERY_WITNESS_REQUIRED",

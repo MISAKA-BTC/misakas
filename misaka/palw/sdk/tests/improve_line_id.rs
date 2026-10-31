@@ -3,6 +3,7 @@
 //! the name (`model_line_id_v1`) — all known before the first block. This pins the derivation the harness mirrors, against values the
 //! harness's own implementation produced.
 
+#![allow(warnings)]
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::palw_model_lines_v1::model_line_id_v1;
 use kaspa_consensus_core::palw_state_v2::PalwBondKeyV2;

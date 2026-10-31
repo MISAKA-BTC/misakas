@@ -22,7 +22,7 @@
 #![allow(non_snake_case)]
 // the real-shape config is one large `json!` literal
 #![recursion_limit = "1024"]
-
+#![allow(warnings)]
 mod common;
 
 use misaka_palw_tir::{Interpreter, Prim, RunState};

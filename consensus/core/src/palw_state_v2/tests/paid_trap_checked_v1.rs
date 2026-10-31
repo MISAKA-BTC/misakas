@@ -1,5 +1,6 @@
 //! Checked paid-trap lookup over the real native paid-claim fixture. The
 //! fixture's full authority/index codec is used, without introducing new policy.
+#![allow(warnings)]
 use super::*;
 use crate::palw_mesh_v1::PalwTrapRevealedV1;
 use crate::palw_state_v2::palw_paid_claim_trap_fold_v1::{check_fee_hold_until_checked_v1, on_paid_claim_convictions_v1};

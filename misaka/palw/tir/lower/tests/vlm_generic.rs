@@ -4,6 +4,7 @@
 //! Fixtures are REAL configurations and safetensors HEADERS (no weight byte: each shard file is cut after its JSON header), fetched by
 //! HTTP range from pinned revisions — `tests/fixtures/vlm-generic/<repo>/fixture.json` records the repository, revision and header
 //! digests. The class such a read registers is text-only (partial-task coverage of the repository), never the full VLM.
+#![allow(warnings)]
 use misaka_palw_tir_lower::hf_schema::{AdapterChoice, AdapterSource, HeaderSource, ReadOptions, TensorIndex, read_model};
 use misaka_palw_tir_lower::spec::{ArchSpec, Mixer};
 use misaka_palw_tir_lower::{LowerError, hf_weights, hl, weights};

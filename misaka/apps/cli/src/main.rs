@@ -41,7 +41,6 @@ mod palw_capacity_shadow;
 mod palw_claim;
 mod palw_court;
 mod palw_da;
-mod palw_panel_da;
 mod palw_derived;
 /// ADR-0127 Decision 3: `palw settlement` — settled, and how deep in settled PALW anchors.
 mod palw_economics;
@@ -49,6 +48,7 @@ mod palw_economics;
 mod palw_extension;
 mod palw_fp;
 mod palw_gen;
+mod palw_job;
 /// ADR-0088 Decision 12: `palw line-… / version-… / proposal-… / evaluate` — the model registry.
 mod palw_line;
 /// RFC-0008 PAV3 (2026-10-15 round 3): `palw material-session draft|sign|seal` — a prospective native session enrollment.
@@ -56,6 +56,7 @@ mod palw_material_session;
 mod palw_model;
 mod palw_model_ops;
 mod palw_panel;
+mod palw_panel_da;
 /// RFC-0010: `palw panel-v3` — the permissionless Panel's observation of a claim (op 220).
 mod palw_panel_v3;
 mod palw_registry;
@@ -63,7 +64,6 @@ mod palw_service;
 mod palw_settlement;
 mod palw_shard_court;
 mod palw_shard_licensing;
-mod palw_job;
 mod palw_status;
 mod palw_user;
 mod palw_verify_context;

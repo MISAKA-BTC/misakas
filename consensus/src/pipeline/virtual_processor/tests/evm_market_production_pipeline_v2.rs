@@ -1,5 +1,6 @@
 //! Real signed deposit/order/F002 pipeline and cold reopen. No filled market,
 //! mature-work mapping, model examination or Safe/Finalized result is supplied.
+#![allow(warnings)]
 use super::*;
 #[tokio::test]
 async fn evm_market_production_actual_settlements_withdraw_once_and_cold_reopen() {

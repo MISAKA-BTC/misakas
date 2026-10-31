@@ -18,6 +18,7 @@
 //! carriage, and a dormant network (fence `None`) is pinned to the root it had BEFORE the ring
 //! existed.
 
+#![allow(warnings)]
 use kaspa_consensus_core::palw_attempt_v2::{PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2, attempt_id_v2};
 use kaspa_consensus_core::palw_panel_v2::{PalwReceiptVerdictV2, PalwSeatReceiptV2, palw_settled_anchor_floor_daa_v1};
 use kaspa_consensus_core::palw_state_v2::{

@@ -6,6 +6,7 @@
 //!
 //! These are tiny models: an admitted fixture shows the FEATURE is registrable under the shipped rules, not that a released DSA
 //! model is (every public DSA checkpoint is ≥ 321 B parameters, far past the per-position ceilings — a resource route, not FR-09).
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::palw_t12_shipped_params;
 use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
 use kaspa_consensus_core::palw_tir_attempt_v1::{PalwTirJobFactsV1, palw_tir_attempt_canonical_v1, palw_tir_job_context_v1};

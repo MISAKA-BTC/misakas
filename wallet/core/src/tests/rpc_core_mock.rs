@@ -1,3 +1,4 @@
+#![allow(warnings)]
 use crate::imports::*;
 
 use async_channel::{Receiver, unbounded};

@@ -21,6 +21,7 @@
 //! The Python-independent half is lane E's: its generator is a second implementation, and these tests are the
 //! day the first one reads the second's numbers back.
 
+#![allow(warnings)]
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::params::ForkActivation;
 use kaspa_consensus_core::palw_gen_class_v1::{

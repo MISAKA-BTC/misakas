@@ -23,6 +23,7 @@
 //!
 //! Run: cargo test -p kaspa-consensus-core --test palw_capacity_escrow_at_licence -- --nocapture
 
+#![allow(warnings)]
 #[path = "rcore_common.rs"]
 mod common;
 use common::*;

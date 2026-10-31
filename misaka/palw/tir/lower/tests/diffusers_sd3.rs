@@ -18,6 +18,7 @@
 //! writes `requests/case_*.json` (the integer run's noise and sigma table); then for each, from this crate directory,
 //! `python tools/gen_diffusers_sd3_fixture.py reference requests/case_K.json reference/case_K.json`.
 
+#![allow(warnings)]
 use misaka_palw_tir::pipeline::{PipelineJob, RandomSource, run_pipeline};
 use misaka_palw_tir::program_v2::RandomDist;
 use misaka_palw_tir::{DType, Tensor};

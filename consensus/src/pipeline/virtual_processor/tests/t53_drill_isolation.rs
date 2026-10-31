@@ -20,6 +20,7 @@
 //! * **coinbases**: at the same blue score, a drill paying a drill-only script and public testnet-12
 //!   mint different coinbase txids — while two chains paying the SAME script mint the same one, which
 //!   is the hazard drill-only keys exist for.
+#![allow(warnings)]
 use super::t12_round_lane_e2e::t12_with_harness_cards;
 use super::{OnetimeTxSelector, TestContext};
 use crate::consensus::test_consensus::TestConsensus;

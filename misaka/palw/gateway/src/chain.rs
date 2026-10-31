@@ -502,7 +502,8 @@ impl RpcChainSource {
         // else, and the caller falls back to its own estimate.
         let answer = client
             .get_palw_free_prompt_price(kaspa_rpc_core::GetPalwFreePromptPriceRequest {
-                accounting_payload: vec![], answer_token_ids: vec![],
+                accounting_payload: vec![],
+                answer_token_ids: vec![],
                 class_id: self.class_id.clone(),
                 prompt_token_ids: prompt_token_ids.to_vec(),
                 prompt_tokens,

@@ -1181,9 +1181,8 @@ pub fn palw_gen_check_dissect_position_bottom_with_v1(
     if narrowing.tile() != phase || phase.terminal_range() != Some(narrowing.tile_range()) {
         return Err(R::Unadjudicable("the position narrowing is not this phase's terminal tile".into()));
     }
-    let range = narrowing
-        .terminal_position_range()
-        .ok_or(R::Unadjudicable("the terminal tile has not narrowed to one position".into()))?;
+    let range =
+        narrowing.terminal_position_range().ok_or(R::Unadjudicable("the terminal tile has not narrowed to one position".into()))?;
     palw_gen_check_dissect_bottom_range_with_v1(case, close, phase, range, narrowing.claim(), params, limits)
 }
 

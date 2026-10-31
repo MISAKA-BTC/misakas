@@ -11,6 +11,7 @@
 //! * an **honest responder** is acquitted at the bottom; a responder whose totals lie — the lie hidden in the first or the
 //!   last tile, so every fold checks — is convicted where the dissection narrows it.
 
+#![allow(warnings)]
 #[path = "palw_tir_fixture_common.rs"]
 mod common;
 

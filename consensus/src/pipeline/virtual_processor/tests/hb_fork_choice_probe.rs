@@ -25,6 +25,7 @@
 //! stamps), PoW is skipped (the heartbeat's 2^24 is a price, not a rule this probe exercises) and the
 //! class lottery is ground by the harness exactly as `T12Chain::attempt` grinds it — on a live chain
 //! each such draw is an inference.
+#![allow(warnings)]
 use super::t12_round_lane_e2e::{
     T12Chain, card_payout_spk, sign_spend, stamp_harness_time, t12_genesis_chain, t12_with_harness_cards,
 };
@@ -1280,7 +1281,11 @@ async fn hb_regression_below_the_fence_the_armed_build_is_the_launched_build() {
     let (config, bundle, premine, floats) = t12_with_harness_cards();
     let scheduled = with_same_chain(&config, Some(1_000_000));
     let mut twin = t12_genesis_chain(&scheduled, &bundle, &premine, &floats);
-    assert_eq!(launched.arrival.len(), blocks_in_topological_order(&launched.duel.victim).len(), "the arrival order is every block the victim holds");
+    assert_eq!(
+        launched.arrival.len(),
+        blocks_in_topological_order(&launched.duel.victim).len(),
+        "the arrival order is every block the victim holds"
+    );
     let compared = replay_in_order("scheduled twin", &launched.duel.victim, &mut twin, &launched.arrival).await;
     let x_out = TransactionOutpoint::new(launched.duel.x.id(), 0);
     let y_out = TransactionOutpoint::new(launched.duel.y.id(), 0);
@@ -2963,7 +2968,9 @@ mod sink_order_probe {
     /// A fresh node on the duel's own ruleset.
     fn fresh_node(d: &Duel) -> T12Chain {
         let (_, _, premine, floats) = t12_with_harness_cards();
-        let PalwConsensusMode::ConsensusV2(bundle) = &d.config.params.palw_consensus_mode else { unreachable!("testnet-12 is ConsensusV2") };
+        let PalwConsensusMode::ConsensusV2(bundle) = &d.config.params.palw_consensus_mode else {
+            unreachable!("testnet-12 is ConsensusV2")
+        };
         t12_genesis_chain(&d.config, bundle, &premine, &floats)
     }
 
@@ -3051,13 +3058,12 @@ mod sink_order_probe {
     impl Tally {
         fn print(&self, label: &str) {
             eprintln!(
-                "[sink-order {label}] {} samples: {} split ({:.1} %): all-economic tie {} / economic keys differ {}; deeper side {} chain steps from the fork (0..6+): {:?}; healed by the next block {} / 2nd {} / 3rd {} / not in 3: {}; own beats not adopted by their miner: {}",
+                "[sink-order {label}] {} samples: {} split ({:.1} %): all-economic tie {} / economic keys differ {}; deeper side  chain steps from the fork (0..6+): {:?}; healed by the next block {} / 2nd {} / 3rd {} / not in 3: {}; own beats not adopted by their miner: {}",
                 self.samples,
                 self.split,
                 100.0 * self.split as f64 / self.samples.max(1) as f64,
                 self.tie,
                 self.econ,
-                "",
                 self.depth,
                 self.healed[0],
                 self.healed[1],
@@ -3146,7 +3152,12 @@ mod sink_order_probe {
         kaspa_core::log::try_init_logger("warn");
         let attack = absorb_on(make(), label, shape.0, shape.1, shape.2, true).await;
         let dag = blocks_in_topological_order(&attack.duel.victim);
-        eprintln!("[sink-order {label}] attack DAG of {} blocks ({} private); double spent: {}", dag.len(), attack.private.len(), attack.double_spent());
+        eprintln!(
+            "[sink-order {label}] attack DAG of {} blocks ({} private); double spent: {}",
+            dag.len(),
+            attack.private.len(),
+            attack.double_spent()
+        );
         let private: HashSet<BlockHash> = attack.private.iter().map(|b| b.header.hash).collect();
         let mut t = Tally::default();
         for _ in 0..samples_from_env() {

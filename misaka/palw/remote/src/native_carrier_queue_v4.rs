@@ -521,14 +521,17 @@ mod tests {
         let id = purpose.id();
         let first = release(h(1), h(4));
         queue.insert(id, purpose, &first).unwrap();
-        let carrier = |object: &PalwConsensusObjectV2, funding| Transaction::new(
-            0,
-            vec![kaspa_consensus_core::tx::TransactionInput::new(
-                TransactionOutpoint::new(h(funding), 0), vec![1], 0, 1,
-            )],
-            vec![], 0, kaspa_consensus_core::subnets::SUBNETWORK_ID_NATIVE, 0,
-            borsh::to_vec(&(kaspa_consensus_core::palw_lifecycle_objects_v2::PALW_LIFECYCLE_TX_VERSION_V2, object)).unwrap(),
-        );
+        let carrier = |object: &PalwConsensusObjectV2, funding| {
+            Transaction::new(
+                0,
+                vec![kaspa_consensus_core::tx::TransactionInput::new(TransactionOutpoint::new(h(funding), 0), vec![1], 0, 1)],
+                vec![],
+                0,
+                kaspa_consensus_core::subnets::SUBNETWORK_ID_NATIVE,
+                0,
+                borsh::to_vec(&(kaspa_consensus_core::palw_lifecycle_objects_v2::PALW_LIFECYCLE_TX_VERSION_V2, object)).unwrap(),
+            )
+        };
         let tx = carrier(&first, 20);
         queue.record_submitted(id, &tx).unwrap();
         let snapshot = fs::read(&file).unwrap();
@@ -543,8 +546,9 @@ mod tests {
         // The existing explicit release-only replacement changes the signed
         // proposal after a reorg. It remains the sole reset route for this slot.
         let second = release(h(1), h(5));
-        queue.replace_release_proposal(id,
-            NativeCarrierPurposeV4::Release { root: h(1), consent: h(2), tail: h(5) }, &second).unwrap();
+        queue
+            .replace_release_proposal(id, NativeCarrierPurposeV4::Release { root: h(1), consent: h(2), tail: h(5) }, &second)
+            .unwrap();
         assert!(queue.get(&id).unwrap().submitted_transaction.is_none());
         let next_tx = carrier(&second, 22);
         queue.record_submitted(id, &next_tx).unwrap();

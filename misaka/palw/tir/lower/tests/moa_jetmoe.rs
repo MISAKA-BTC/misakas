@@ -2,6 +2,7 @@
 //! MLP experts, the shared tiled K/V, the `[D]` biases), the court reproduces every node of the lowered program. The integer-versus-float
 //! numbers are `tests/fidelity_tiny.rs::jetmoe`; the three implementations' identity is `tests/three_way.rs` (every fixture).
 
+#![allow(warnings)]
 mod common;
 
 use misaka_palw_tir_lower::fidelity;

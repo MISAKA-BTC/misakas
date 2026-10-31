@@ -7,6 +7,7 @@
 //! `review12_1_economic.rs` / `dos_l2_registration.rs` registration) — and the testnet-11 card for
 //! the twin. Idle epochs are empty blocks half an epoch apart, so every closed epoch is folded once.
 
+#![allow(warnings)]
 use super::*;
 use crate::config::params::{Params, palw_rc_shipped_params, palw_t12_shipped_params};
 use crate::palw_mode_v2::{PalwConsensusMode, PalwConsensusParamsV2};

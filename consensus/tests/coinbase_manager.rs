@@ -1,6 +1,7 @@
 //! Run the actual coinbase manager's unit controls without compiling the
 //! virtual processor's entire unit-test module. This does not test block
 //! acceptance, PALW native settlement, or selected-verifier approval.
+#![allow(warnings)]
 pub use kaspa_consensus::{model, params};
 
 #[path = "../src/constants/mod.rs"]
@@ -263,31 +264,32 @@ impl BorrowedCoinbaseFixture {
     fn compare(&self, actual: &kaspa_consensus_core::tx::Transaction) -> coinbase_manager::CoinbaseComparisonV2 {
         self.compare_with_miner(actual, kaspa_consensus_core::coinbase::MinerData::new(self.miner_script.clone(), &[])).unwrap()
     }
-    fn compare_with_miner<'a>(
+    fn compare_with_miner(
         &self,
         actual: &kaspa_consensus_core::tx::Transaction,
-        miner: kaspa_consensus_core::coinbase::MinerData<&'a [u8]>,
-    ) -> Result<coinbase_manager::CoinbaseComparisonV2,
-        kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1<kaspa_consensus_core::errors::coinbase::CoinbaseError>> {
-        self.manager
-            .compare_coinbase_transaction_v2(
-                actual,
-                1,
-                self.own_subsidy,
-                miner,
-                &self.ghostdag,
-                &self.rewards,
-                &self.non_daa,
-                self.extra.iter(),
-                self.carve.as_ref(),
-                (1, 1),
-                self.escrow,
-                &self.unentitled,
-                self.pay_reds,
-                &self.withheld,
-                &self.rounds,
-                &self.receipts,
-            )
+        miner: kaspa_consensus_core::coinbase::MinerData<&[u8]>,
+    ) -> Result<
+        coinbase_manager::CoinbaseComparisonV2,
+        kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1<kaspa_consensus_core::errors::coinbase::CoinbaseError>,
+    > {
+        self.manager.compare_coinbase_transaction_v2(
+            actual,
+            1,
+            self.own_subsidy,
+            miner,
+            &self.ghostdag,
+            &self.rewards,
+            &self.non_daa,
+            self.extra.iter(),
+            self.carve.as_ref(),
+            (1, 1),
+            self.escrow,
+            &self.unentitled,
+            self.pay_reds,
+            &self.withheld,
+            &self.rounds,
+            &self.receipts,
+        )
     }
 }
 
@@ -418,9 +420,12 @@ fn coinbase_round_comparison_capacity_child() {
         return;
     }
     use kaspa_consensus_core::{
-        Hash64, blockhash::BlockHashes, coinbase::{BlockRewardData, MinerData},
-        palw_native_resource_v1::{NativeDecodeErrorV1, NativeSnapshotResourceLimitsV1,
-            arm_native_logical_limits_v1, reserve_native_requests_v1},
+        Hash64,
+        blockhash::BlockHashes,
+        coinbase::{BlockRewardData, MinerData},
+        palw_native_resource_v1::{
+            NativeDecodeErrorV1, NativeSnapshotResourceLimitsV1, arm_native_logical_limits_v1, reserve_native_requests_v1,
+        },
     };
     let mut fixture = BorrowedCoinbaseFixture::new(8);
     let round = Hash64::from_u64_word(2);
@@ -447,22 +452,33 @@ fn coinbase_round_comparison_capacity_child() {
 fn round_comparison_retries_after_native_capacity_refusal() {
     let out = std::process::Command::new(std::env::current_exe().unwrap())
         .args(["--exact", "coinbase_round_comparison_capacity_child", "--nocapture"])
-        .env("MISAKA_COINBASE_ROUND_CAPACITY", "1").output().unwrap();
+        .env("MISAKA_COINBASE_ROUND_CAPACITY", "1")
+        .output()
+        .unwrap();
     assert!(out.status.success(), "{} {}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
     assert!(String::from_utf8_lossy(&out.stdout).contains("1 passed"));
 }
 
 #[test]
 fn coinbase_payload_decode_reservation_matches_inline_and_spilling_scripts() {
-    use kaspa_consensus_core::{coinbase::{CoinbaseData, MinerData}, tx::{ScriptPublicKey, ScriptVec}};
+    use kaspa_consensus_core::{
+        coinbase::{CoinbaseData, MinerData},
+        tx::{ScriptPublicKey, ScriptVec},
+    };
     let network = &params::MAINNET_PARAMS;
     let manager = coinbase_manager::CoinbaseManager::new(
-        255, 1000, network.deflationary_phase_daa_score, network.pre_deflationary_phase_base_subsidy,
+        255,
+        1000,
+        network.deflationary_phase_daa_score,
+        network.pre_deflationary_phase_base_subsidy,
         network.target_time_per_block_history(),
     );
     for len in [0, 35, 36, 64, 67, 150, 255] {
-        let data = CoinbaseData { blue_score: 12, subsidy: 34,
-            miner_data: MinerData::new(ScriptPublicKey::new(2, ScriptVec::from_slice(&vec![7; len])), &[1, 2][..]) };
+        let data = CoinbaseData {
+            blue_score: 12,
+            subsidy: 34,
+            miner_data: MinerData::new(ScriptPublicKey::new(2, ScriptVec::from_slice(&vec![7; len])), &[1, 2][..]),
+        };
         let payload = manager.serialize_coinbase_payload(&data).unwrap();
         let _lease = manager.reserve_coinbase_payload_decode_v2(&payload).unwrap();
         let (decoded, allocated) = allocation_counter::requested(|| manager.deserialize_coinbase_payload(&payload).unwrap());
@@ -480,8 +496,9 @@ fn coinbase_payload_decode_capacity_child() {
     }
     use kaspa_consensus_core::{
         errors::coinbase::CoinbaseError,
-        palw_native_resource_v1::{NativeDecodeErrorV1, NativeSnapshotResourceLimitsV1,
-            arm_native_logical_limits_v1, reserve_native_requests_v1},
+        palw_native_resource_v1::{
+            NativeDecodeErrorV1, NativeSnapshotResourceLimitsV1, arm_native_logical_limits_v1, reserve_native_requests_v1,
+        },
     };
     let fixture = BorrowedCoinbaseFixture::new(8);
     let expected = fixture.build();
@@ -490,12 +507,19 @@ fn coinbase_payload_decode_capacity_child() {
     arm_native_logical_limits_v1(Some(NativeSnapshotResourceLimitsV1 { memory_bytes: memory, database_bytes: 0 }));
     let blocker = reserve_native_requests_v1(memory).unwrap();
     assert!(matches!(fixture.manager.reserve_coinbase_payload_decode_v2(&expected.payload), Err(NativeDecodeErrorV1::Resource(_))));
-    assert!(matches!(fixture.manager.reserve_coinbase_payload_decode_v2(&[]),
-        Err(NativeDecodeErrorV1::Decode(CoinbaseError::PayloadLenBelowMin(..)))), "malformed input is not capacity refusal");
+    assert!(
+        matches!(
+            fixture.manager.reserve_coinbase_payload_decode_v2(&[]),
+            Err(NativeDecodeErrorV1::Decode(CoinbaseError::PayloadLenBelowMin(..)))
+        ),
+        "malformed input is not capacity refusal"
+    );
     drop(blocker);
     for mismatch in [false, true] {
         let mut actual = expected.clone();
-        if mismatch { actual.outputs[0].value += 1; }
+        if mismatch {
+            actual.outputs[0].value += 1;
+        }
         let lease = fixture.manager.reserve_coinbase_payload_decode_v2(&actual.payload).unwrap();
         let data = fixture.manager.deserialize_coinbase_payload(&actual.payload).unwrap();
         assert!(reserve_native_requests_v1(memory).is_err(), "the decoder's input script keeps its reservation through comparison");
@@ -510,7 +534,9 @@ fn coinbase_payload_decode_capacity_child() {
 fn received_coinbase_payload_retries_after_decode_capacity_refusal() {
     let out = std::process::Command::new(std::env::current_exe().unwrap())
         .args(["--exact", "coinbase_payload_decode_capacity_child", "--nocapture"])
-        .env("MISAKA_COINBASE_DECODE_CAPACITY", "1").output().unwrap();
+        .env("MISAKA_COINBASE_DECODE_CAPACITY", "1")
+        .output()
+        .unwrap();
     assert!(out.status.success(), "{} {}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
     assert!(String::from_utf8_lossy(&out.stdout).contains("1 passed"));
 }

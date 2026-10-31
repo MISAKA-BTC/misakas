@@ -191,7 +191,7 @@ impl Qwen36Backend {
         let plan = &native_plan.plan;
         let interval = self.checkpoint_interval().ok_or(E::Incomplete)?;
         let source = material.native_heap_v1("Q36 V2 folded material source");
-        let source_bytes = source.bytes().ok_or_else(|| E::LocalResource(source))?;
+        let source_bytes = source.bytes().ok_or(E::LocalResource(source))?;
         let mut preparation = PalwMaterialConstructionRequestsV2::new();
         preparation.add_v1(source_bytes.checked_mul(4).ok_or(E::Capacity)?).map_err(E::LocalResource)?;
         preparation.vec_v1::<(u128, u128, u128)>(u64::from(b.shape_profile.global_node_count())).map_err(E::LocalResource)?;

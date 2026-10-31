@@ -19,6 +19,7 @@
 //! * a section whose parent is not held, a tampered adapter root, a parent root the file does not
 //!   have, and a section opened at another `P` are each refused.
 
+#![allow(warnings)]
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 

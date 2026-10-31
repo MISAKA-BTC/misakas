@@ -7,8 +7,10 @@ mod market_owned_v2;
 #[cfg(feature = "evm")]
 pub(super) use market_owned_v2::EvmChainContextFaultV2;
 #[cfg(not(feature = "evm"))]
-pub(crate) enum EvmChainContextFaultV2 { Invalid(String), Local(PalwLocalTransitionFaultV1) }
-
+pub(crate) enum EvmChainContextFaultV2 {
+    Invalid(String),
+    Local(PalwLocalTransitionFaultV1),
+}
 
 impl VirtualStateProcessor {
     /// kaspa-pq EVM Lane v0.4 (§2.3): the lazy chain-context EVM step for one
@@ -28,9 +30,7 @@ impl VirtualStateProcessor {
         palw_state: Option<&kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1>,
     ) -> Result<Option<crate::processes::evm::EvmStaged>, EvmChainContextFaultV2> {
         use crate::model::stores::evm::EvmPayloadStoreReader; // EvmHeaderStoreReader is in module scope
-        use crate::processes::evm::{
-            apply_evm_bridge_effects, evm_validate, evm_validate_chained, validate_evm_deposit_claims,
-        };
+        use crate::processes::evm::{apply_evm_bridge_effects, evm_validate, evm_validate_chained, validate_evm_deposit_claims};
         if header.daa_score < self.evm_activation_daa_score {
             return Ok(None);
         }
@@ -78,26 +78,23 @@ impl VirtualStateProcessor {
         let mut seed_prevalidated = false;
         // Round authority belongs to this actual native context. The worker
         // cannot derive it from an absent (or cached) EVM header's gas limit.
-        let user_gas_cap =
-            kaspa_consensus_core::evm::evm_user_gas_cap_v1(self.palw_execution_lane_at(header.daa_score).map(|_| {
-                ctx.palw_round_verdicts
-                    .as_ref()
-                    .map(|v| kaspa_consensus_core::evm::evm_distinct_permitted_rounds_v1(&v.uses))
-                    .unwrap_or(0)
-            }));
+        let user_gas_cap = kaspa_consensus_core::evm::evm_user_gas_cap_v1(self.palw_execution_lane_at(header.daa_score).map(|_| {
+            ctx.palw_round_verdicts.as_ref().map(|v| kaspa_consensus_core::evm::evm_distinct_permitted_rounds_v1(&v.uses)).unwrap_or(0)
+        }));
         // O12: a pipelined run pre-executed this block's acceptance on the
         // worker (same pure function, same inputs — see EvmPipeline). Consume
         // its result; fall back to inline execution when the pipeline ended.
         // ADR-0089: the pipeline pre-executed without the window; past the fence its result is
         // consumed and discarded, and the block is executed inline with the market inputs.
         let pipelined = pipeline.and_then(|p| p.recv(current)).filter(|result| {
-            !market_fences.evm_active && match result {
-                Ok(staged) => staged.result.header.gas_limit == user_gas_cap,
-                // An error carries no executed gas-limit identity: the worker
-                // used a cached header or the historical base fallback. Redo
-                // inline before classifying it under this actual context.
-                Err(_) => false,
-            }
+            !market_fences.evm_active
+                && match result {
+                    Ok(staged) => staged.result.header.gas_limit == user_gas_cap,
+                    // An error carries no executed gas-limit identity: the worker
+                    // used a cached header or the historical base fallback. Redo
+                    // inline before classifying it under this actual context.
+                    Err(_) => false,
+                }
         });
         let staged = match pipelined {
             Some(Ok(staged)) => Some(staged),
@@ -298,7 +295,8 @@ impl VirtualStateProcessor {
         // and all (the PALW tip is the template's selected parent for a fresh template).
         let template_selected_parent = virtual_state.ghostdag_data.selected_parent;
         let market_fences = self.palw_evm_market_fences_at(header.daa_score);
-        let template_palw_state = self.evm_template_parent_owned_v2(template_selected_parent, header.daa_score)
+        let template_palw_state = self
+            .evm_template_parent_owned_v2(template_selected_parent, header.daa_score)
             .map_err(PalwLocalTransitionFaultV1::into_rule_error_v1)?;
         // ADR-0139: the template's accepted-user-gas cap is what validation will compute for it —
         // one round budget per DISTINCT permitted round among the round blocks the template merges.
@@ -310,7 +308,8 @@ impl VirtualStateProcessor {
                 .unwrap_or(0)
         }));
 
-        let market_context = self.evm_market_context_owned_v2(template_palw_state.as_ref(), template_selected_parent, header.daa_score)
+        let market_context = self
+            .evm_market_context_owned_v2(template_palw_state.as_ref(), template_selected_parent, header.daa_score)
             .map_err(PalwLocalTransitionFaultV1::into_rule_error_v1)?;
         let expected_settlements = market_context.as_ref().map(|c| c.settlements.as_slice()).unwrap_or(&[]);
         let market = kaspa_evm::EvmMarketInput {
@@ -769,7 +768,9 @@ impl VirtualStateProcessor {
                 miner_data: miner_data.clone(),
             })
             .map_err(|why| match why {
-                kaspa_consensus_core::errors::coinbase::CoinbaseError::LocalNativeCapacityUnavailable(why) => RuleError::LocalNativeCapacityUnavailable(why),
+                kaspa_consensus_core::errors::coinbase::CoinbaseError::LocalNativeCapacityUnavailable(why) => {
+                    RuleError::LocalNativeCapacityUnavailable(why)
+                }
                 why => RuleError::BadCoinbasePayload(why),
             })?;
         let allocation = template.take_coinbase_allocation_v2();
@@ -822,6 +823,7 @@ impl VirtualStateProcessor {
             calculated_fees,
             Vec::new(),
             Vec::new(),
-        ).with_coinbase_allocation_v2(allocation))
+        )
+        .with_coinbase_allocation_v2(allocation))
     }
 }

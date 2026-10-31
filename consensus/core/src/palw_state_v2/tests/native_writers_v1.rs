@@ -2,6 +2,7 @@
 //! group, deadline index, encoded vertex/improvement rows, kernel-route rows and the lenient-consumer capacity guard.
 //! SOURCE ONLY — written, never compiled or executed in this lane. They assert ordering properties (refusal before any state or
 //! journal change; flags-off byte parity), not capacity numbers.
+#![allow(warnings)]
 use super::*;
 use crate::palw_native_resource_v1::{NativeDemandCheckerV1, NativeSnapshotResourceLimitsV1, NativeTransitionReservationV1};
 
@@ -18,7 +19,9 @@ fn ordinary_registration_keeps_routing_profile_without_certification_or_price_in
     assert!(parent.kernel_route().is_none());
     let extras = PalwTransitionExtrasV1 {
         kernel_route: Some(crate::palw_kernel_route_v1::PalwKernelRouteExtrasV1 {
-            network_domain: h64(1), ruleset_digest: h64(2), ..Default::default()
+            network_domain: h64(1),
+            ruleset_digest: h64(2),
+            ..Default::default()
         }),
         ..Default::default()
     };
@@ -29,15 +32,14 @@ fn ordinary_registration_keeps_routing_profile_without_certification_or_price_in
     if let PalwConsensusObjectV2::ClassRegistered { slash_value_per_pwu, .. } = &mut object {
         *slash_value_per_pwu = parent.class(&h64(1)).unwrap().slash_value_per_pwu;
     }
-    let (child, delta) = apply_palw_transition_v2_with_extras(
-        &parent, &p, &ctx(2, 101, 2), &[object], None, false, false, false, false, &extras,
-    ).unwrap();
+    let (child, delta) =
+        apply_palw_transition_v2_with_extras(&parent, &p, &ctx(2, 101, 2), &[object], None, false, false, false, false, &extras)
+            .unwrap();
     assert_eq!(&*child.reader_router_profile_v2(class).unwrap().unwrap(), &profile);
     assert!(child.fp_work_profile_of(&class).is_none(), "registration must not populate the price/deadline index");
     assert!(!child.fp_certified_classes.contains_key(&class), "graph identity is not model approval");
     let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&child)).unwrap();
-    let restored = borsh::from_slice::<PalwStateCarriageV2>(&bytes).unwrap()
-        .into_state(&p, Some(child.state_root())).unwrap();
+    let restored = borsh::from_slice::<PalwStateCarriageV2>(&bytes).unwrap().into_state(&p, Some(child.state_root())).unwrap();
     assert_eq!(restored, child, "native snapshot restore retains the registered graph");
     assert_eq!(&*restored.reader_router_profile_v2(class).unwrap().unwrap(), &profile);
     assert_eq!(apply_delta_v2(&parent, &delta, &p).unwrap(), child);
@@ -57,9 +59,7 @@ fn reader_router_consumer_propagates_late_writer_capacity_refusal() {
     // Measure the concrete request of this write, not a policy or model-wide limit.
     // One byte below it passes the consumer's earlier reservations but refuses
     // the last reservation inside write_kernel_row, whose Result was discarded.
-    let checker = NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 {
-        memory_bytes: u64::MAX, database_bytes: 0,
-    });
+    let checker = NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 { memory_bytes: u64::MAX, database_bytes: 0 });
     let mut builder = TransitionBuilder::new(&parent, &p, false, false, false, false, &extras);
     builder.native_reservation = NativeTransitionReservationV1::for_checker_v1(&checker);
     builder.write_reader_router_cell_v2(&[7; 64], Some(&11u64)).unwrap();
@@ -69,15 +69,10 @@ fn reader_router_consumer_propagates_late_writer_capacity_refusal() {
     drop(builder);
     assert_eq!(checker.outstanding(), (0, 0));
 
-    let checker = NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 {
-        memory_bytes: required - 1, database_bytes: 0,
-    });
+    let checker = NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 { memory_bytes: required - 1, database_bytes: 0 });
     let mut builder = TransitionBuilder::new(&parent, &p, false, false, false, false, &extras);
     builder.native_reservation = NativeTransitionReservationV1::for_checker_v1(&checker);
-    assert!(matches!(
-        builder.write_reader_router_cell_v2(&[7; 64], Some(&11u64)),
-        Err(PalwStateV2Error::NativeResource(_))
-    ));
+    assert!(matches!(builder.write_reader_router_cell_v2(&[7; 64], Some(&11u64)), Err(PalwStateV2Error::NativeResource(_))));
     assert!(checker.outstanding().0 > 0, "earlier reservations were admitted");
     assert_eq!(builder.state, parent);
     assert!(builder.entries.is_empty());

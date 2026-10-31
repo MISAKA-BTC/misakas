@@ -4,6 +4,7 @@
 //! the channel-wise decay reduces to the head-wise one when its channels agree, differs when they do not, the spec reads the hub's spellings
 //! and refuses what it does not model by name.
 
+#![allow(warnings)]
 use misaka_palw_tir_lower::float_ref::gated_delta;
 use misaka_palw_tir_lower::spec::{HeadMap, Mixer};
 use misaka_palw_tir_lower::{hl, parse_config_str};

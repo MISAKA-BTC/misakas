@@ -4,6 +4,7 @@
 //! convicted by the public court holding only the commitments. All 25 TIR v1 primitives are exercised; had any not been, the list
 //! `MISSING_PRIM_TAGS` would name it as a gap.
 
+#![allow(warnings)]
 mod common;
 
 use std::collections::{BTreeMap, BTreeSet};

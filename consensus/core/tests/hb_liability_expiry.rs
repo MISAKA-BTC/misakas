@@ -3,6 +3,7 @@
 //! Every number below is read out of the shipped testnet-12 `Params` at this commit and out of the
 //! production functions the fold itself calls. Nothing is a fixture.
 
+#![allow(warnings)]
 use std::collections::BTreeMap;
 
 use kaspa_consensus_core::Hash64;

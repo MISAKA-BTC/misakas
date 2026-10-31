@@ -202,7 +202,7 @@ pub fn produce_native_work_with_resident_v3(
                 param_commitments: class.param_commitments[p].clone(),
                 network_domain: class.network_domain,
                 ruleset_digest: class.ruleset_digest,
-                bounds: class.bounds.clone(),
+                bounds: class.bounds,
                 liability_daa: 0,
                 court_scope: None,
             };

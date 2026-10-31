@@ -4,6 +4,7 @@
 //! integer program (the three-way equality is the court's job), and that each flag is a different function. The
 //! equality with the transformers classes is the corpus lane's fixtures (`afmoe`, `laguna`, `mimo_v2_flash`).
 
+#![allow(warnings)]
 use misaka_palw_tir_lower::fidelity::{self, prepare_spec};
 use misaka_palw_tir_lower::float_ref::stream::Resident;
 use misaka_palw_tir_lower::float_ref::{ParamStore, Session};

@@ -365,7 +365,8 @@ impl PalwChainStateV2 {
         use crate::palw_native_audit_v27::*;
         // Text29 Finals live under their own namespaced keys in the same tables;
         // they are extracted by the Text29 fold's own independent row reader.
-        if !rows.contains_key(&(EXECUTION_JOB_TABLE_V11, key(&id))) && rows.contains_key(&(EXECUTION_JOB_TABLE_V11, key(&(29u8, 0u8, id))))
+        if !rows.contains_key(&(EXECUTION_JOB_TABLE_V11, key(&id)))
+            && rows.contains_key(&(EXECUTION_JOB_TABLE_V11, key(&(29u8, 0u8, id))))
         {
             let record = super::text29::audit_record_from_rows_v29(
                 rows,

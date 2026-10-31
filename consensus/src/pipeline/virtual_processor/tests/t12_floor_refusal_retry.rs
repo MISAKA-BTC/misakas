@@ -22,6 +22,7 @@
 //!   nothing; card 5's attempt block at the new slot is its anchor — with the locks still standing the
 //!   processor re-bases it again, and with them lapsed the processor's own derivation (anchor walk,
 //!   draw, gate, fold) binds a full jury there, and the bound claim keeps its one redraw.
+#![allow(warnings)]
 use super::t12_round_lane_e2e::{T12Chain, t12_genesis_chain, t12_with_harness_cards};
 use crate::model::stores::headers::HeaderStoreReader;
 use kaspa_consensus_core::BlockHash;

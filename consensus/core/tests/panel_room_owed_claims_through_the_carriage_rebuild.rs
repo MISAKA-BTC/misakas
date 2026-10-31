@@ -18,7 +18,7 @@
 //!
 //! Run: cargo test -p kaspa-consensus-core --test panel_room_owed_claims_through_the_carriage_rebuild
 #![allow(dead_code)]
-
+#![allow(warnings)]
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::params::{PALW_T12_SETTLED_ANCHOR_DEPTH, Params};
 use kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN;

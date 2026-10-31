@@ -8,6 +8,7 @@
 //! so everything measured is the fixed per-object overhead an attacker's refused object costs the node.
 //!
 //! Run: `cargo test --release -p kaspa-consensus-core liveness_lifecycle_v1 -- --nocapture`
+#![allow(warnings)]
 use super::*;
 use std::time::Instant;
 
@@ -79,12 +80,7 @@ fn liveness_lifecycle_v1_per_object_rehearsal_and_empty_fold_scale_with_state_ro
     // independently of the state size.
     let (n0, o0, f0) = rows[0];
     let (n2, o2, f2) = rows[2];
-    eprintln!(
-        "growth N {n0}->{n2} ({}x): per-object x{:.1}, empty fold x{:.1}",
-        n2 / n0,
-        o2 / o0.max(1.0),
-        f2 / f0.max(1.0)
-    );
+    eprintln!("growth N {n0}->{n2} ({}x): per-object x{:.1}, empty fold x{:.1}", n2 / n0, o2 / o0.max(1.0), f2 / f0.max(1.0));
     assert!(o2 / o0.max(1.0) > 10.0, "per-object rehearsal cost grows linearly with the state's rows");
 }
 
@@ -153,7 +149,8 @@ fn studio_t3_lifecycle_rehearsal_clone_fold_vs_claim_rows() {
     }
     // Growth order: least-squares slope of log(median) on log(N) per probe over N >= 1k (1.0 = linear); N=262 is t12 today.
     for (name, pick) in [("per_object", 0usize), ("clone", 1), ("empty_fold", 2)] {
-        let pts: Vec<(f64, f64)> = rows.iter().filter(|r| r.0 >= 1_000.0).map(|r| (r.0.ln(), [r.1, r.2, r.3][pick].max(1e-3).ln())).collect();
+        let pts: Vec<(f64, f64)> =
+            rows.iter().filter(|r| r.0 >= 1_000.0).map(|r| (r.0.ln(), [r.1, r.2, r.3][pick].max(1e-3).ln())).collect();
         let k = pts.len() as f64;
         let (sx, sy) = pts.iter().fold((0.0, 0.0), |a, p| (a.0 + p.0, a.1 + p.1));
         let (mx, my) = (sx / k, sy / k);

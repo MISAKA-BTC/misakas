@@ -358,7 +358,9 @@ impl StateLayer0 {
             .flatten(),
             palw_spend_native_v39: (header.pow_algo_id == POW_ALGO_ID_PALW_RECEIPT_V3
                 && kaspa_consensus_core::palw_native_receipt_v39::palw_native_receipt_carriage_is_v39(&header.palw_commitment))
-            .then(|| kaspa_consensus_core::palw_native_receipt_v39::PalwNativeReceiptSpendEnvelopeV39::decode(&header.palw_commitment).ok())
+            .then(|| {
+                kaspa_consensus_core::palw_native_receipt_v39::PalwNativeReceiptSpendEnvelopeV39::decode(&header.palw_commitment).ok()
+            })
             .flatten(),
             pre_pow_hash_64,
             network_id: network_id.to_vec(),

@@ -99,17 +99,19 @@ pub fn run_q36_differential_v40(
     let mut equal = 0usize;
     let mut first_mismatch = None;
     for (position, token) in tokens.iter().enumerate() {
-        let (expected, probe) =
-            engine.forward_token_probed(&mut cache, *token as usize, position).map_err(|e| format!("{e:?}"))?;
-        let actual = interpreter
-            .step_with_observer(&parameters, &provider, &mut state, *token, &mut |_| Ok(()))
-            .map_err(|e| e.to_string())?;
+        let (expected, probe) = engine.forward_token_probed(&mut cache, *token as usize, position).map_err(|e| format!("{e:?}"))?;
+        let actual =
+            interpreter.step_with_observer(&parameters, &provider, &mut state, *token, &mut |_| Ok(())).map_err(|e| e.to_string())?;
         probes.push(object_id(b"misaka-palw/sdk/q36-runtime-probe-row/v40", &probe));
         rows.push(object_id(b"misaka-palw/sdk/q36-runtime-logit-row/v40", &expected));
         let mismatch = if actual.data.len() != expected.len() {
             Some((position, expected.len().min(actual.data.len()), expected.len() as i128, actual.data.len() as i128))
         } else {
-            expected.iter().zip(&actual.data).position(|(e, a)| *e as i128 != *a).map(|lane| (position, lane, expected[lane] as i128, actual.data[lane]))
+            expected
+                .iter()
+                .zip(&actual.data)
+                .position(|(e, a)| *e as i128 != *a)
+                .map(|lane| (position, lane, expected[lane] as i128, actual.data[lane]))
         };
         if let Some(m) = mismatch {
             first_mismatch = Some(m);

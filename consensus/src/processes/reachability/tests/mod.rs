@@ -1,6 +1,7 @@
 //!
 //! Test utils for reachability
 //!
+#![allow(warnings)]
 use super::{inquirer::*, tree::*};
 use crate::{
     model::stores::{

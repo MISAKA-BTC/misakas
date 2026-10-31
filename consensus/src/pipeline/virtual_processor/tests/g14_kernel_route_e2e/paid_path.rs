@@ -135,8 +135,10 @@ impl Net {
         let bundle =
             kaspa_consensus_core::palw_material_capacity_v1::PalwKernelMaterialBundleV1 { claim: Hash64::from_bytes(base), positions };
         let scope = bundle.verify(&admitted, u64::MAX).unwrap_or_else(|e| panic!("the complete served material verifies: {e:?}"));
-        let manifest =
-            kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialManifestV1 { root: Hash64::from_bytes(base), scopes: vec![scope] };
+        let manifest = kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialManifestV1 {
+            root: Hash64::from_bytes(base),
+            scopes: vec![scope],
+        };
         let bytes = manifest.scopes[0].bytes + 4_096;
         let policy = self.config.params.palw_monetary_material_v1.as_ref().expect("the covenant fence").policy.clone();
         let state = self.chain.tip_state().1;
@@ -290,7 +292,8 @@ impl Net {
         for (base, enrollment) in claims {
             let route = self.api().unwrap();
             let lock: PalwPaidClaimLockV2 = route.aux_row(PAID_CLAIM_LOCKS_V2, &borsh::to_vec(enrollment).unwrap()).expect("the lock");
-            let authority: PalwPaidClaimAuthorityV2 = route.paid_claim_authority_for_base_unchecked_v2(base).expect("the paid authority");
+            let authority: PalwPaidClaimAuthorityV2 =
+                route.paid_claim_authority_for_base_unchecked_v2(base).expect("the paid authority");
             for seat in &lock.seats {
                 let card = self.bond_card(seat);
                 let receipt = PaidClaimReceiptV2 {
@@ -440,16 +443,26 @@ impl Net {
             .filter(|c| !excluded.contains(c) && !barred.contains(&self.kid(*c)))
             .take(k as usize)
             .collect();
-        assert_eq!(sealers.len(), k as usize, "enough bonds that are no target's producer, no payer and no live source target's producer");
+        assert_eq!(
+            sealers.len(),
+            k as usize,
+            "enough bonds that are no target's producer, no payer and no live source target's producer"
+        );
         let payers: Vec<usize> = (0..self.chain.bonds.len()).filter(|c| !sealers.contains(c)).take(k as usize).collect();
         let mut jobs = Vec::new();
+        let contexts: Vec<_> = all_terms.iter().map(|terms| terms.source.context).collect();
         for (i, payer) in payers.iter().enumerate() {
             let job = KernelJobV1 {
                 class_binding_id: source_class,
                 prompt: vec![5, 11, 2],
                 max_new_tokens: 3,
                 decode: DecodeRuleV1::Greedy,
-                nonce: [nonce.wrapping_add(i as u8); 64],
+                // Separate sessions can reuse the caller's small byte counter.
+                // Bind each source job to its actual funded target contexts.
+                nonce: misaka_palw_kernel::hash::object_id(
+                    b"MISAKA/TEST/PAID-SOURCE-JOB",
+                    &borsh::to_vec(&(nonce, i as u64, &contexts)).unwrap(),
+                ),
             };
             let o = self.route(*payer, &K::PostJob { job: job.clone() });
             self.send(vec![(*payer, o)]).await;
@@ -536,10 +549,14 @@ impl Net {
         let authority: PalwPaidClaimAuthorityV2 = route.paid_claim_authority_for_base_unchecked_v2(&base).expect("the paid authority");
         let fee = fee_policy.minimum_fee_for(&authority.source_target).expect("the frozen source target's fee floor");
         let k = authority.class.source_policy.work_count_k;
-        let fund = misaka_palw_sdk::claim_paid_v2::paid_claim_funding_object_v2(&route, enrollment, self.kid(sponsor), fee, k, &fee_policy)
-            .unwrap_or_else(|e| panic!("the payer funds the future sources: {e:?}"));
+        let fund =
+            misaka_palw_sdk::claim_paid_v2::paid_claim_funding_object_v2(&route, enrollment, self.kid(sponsor), fee, k, &fee_policy)
+                .unwrap_or_else(|e| panic!("the payer funds the future sources: {e:?}"));
         let o = self.route(sponsor, &fund);
         self.send(vec![(sponsor, o)]).await;
-        assert!(self.ledger().beacon_source_fees.contains_key(&authority.source_target.terms.context), "the future source fee is funded");
+        assert!(
+            self.ledger().beacon_source_fees.contains_key(&authority.source_target.terms.context),
+            "the future source fee is funded"
+        );
     }
 }

@@ -3,7 +3,7 @@
 //! initial native contract from actual state. No wire, paid receipt, old move
 //! equivalence, retention certificate or whole-original completion follows.
 use super::{PalwTokenizerStreamPacketV1 as Packet, PalwTokenizerTableStreamV1 as Court};
-use crate::{palw_json_key_set_v1::PalwJsonKeyCompactProofV1 as Proof, Hash64};
+use crate::{Hash64, palw_json_key_set_v1::PalwJsonKeyCompactProofV1 as Proof};
 #[derive(Clone, Copy)]
 pub(crate) struct Material<'a> {
     pub(crate) raw: &'a [u8],
@@ -70,6 +70,7 @@ fn native<T>(r: Result<T, String>) -> Result<T, Refusal> {
 /// scratch and input ownership must be admitted separately by the native caller.
 /// Greedy packet packing uses the exact existing grammar's 65536 raw bytes,
 /// 64 proofs and 90000 Borsh bytes. These are not new total-original limits.
+#[allow(clippy::field_reassign_with_default)]
 pub(crate) fn build(base: &Court, input: Material<'_>, budget: Budget) -> Result<Finding, Refusal> {
     native(base.check())?;
     if base.tokenizer_offset() != 0

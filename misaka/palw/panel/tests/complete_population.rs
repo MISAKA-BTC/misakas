@@ -1,5 +1,6 @@
 //! Experimental complete-population mechanics. Fixture entropy/eligibility are not a
 //! certified source, actual native population or an activation/RAM/latency approval.
+#![allow(warnings)]
 use kaspa_hashes::Hash64;
 use misaka_palw_panel::*;
 use std::collections::{BTreeMap, BTreeSet};

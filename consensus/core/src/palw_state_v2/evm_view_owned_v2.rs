@@ -166,7 +166,7 @@ impl PalwChainStateV2 {
         let count = self
             .model_lines
             .iter()
-            .filter(|(_, line)| line.class_id == *class_id && !line.retired_daa.is_some_and(|d| daa >= d))
+            .filter(|(_, line)| line.class_id == *class_id && line.retired_daa.is_none_or(|d| daa < d))
             .map(|(line, _)| self.model_versions.range((*line, 0)..=(*line, u32::MAX)).filter(|(_, v)| v.in_force_at(daa)).count())
             .sum::<usize>();
         let mut roots = Vec::with_capacity(count + usize::from(founding));

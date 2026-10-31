@@ -2,6 +2,7 @@
 //! `admit` per claim) is the same code, in the same order, as the reference `fold` — and the keyed decomposition (cursor + rows)
 //! a state store journals reproduces the committed root. Fixtures mirror `replay.rs`.
 
+#![allow(warnings)]
 use kaspa_hashes::Hash64;
 use misaka_palw_panel::*;
 use std::collections::{BTreeMap, BTreeSet};

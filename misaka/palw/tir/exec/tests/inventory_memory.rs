@@ -1,5 +1,6 @@
 //! Lazy mapped/resident inventory construction uses lasting host admission, with retry.
 #![cfg(feature = "node")]
+#![allow(warnings)]
 mod node_common;
 
 use kaspa_consensus_core::{Hash64, palw_artifact::verify_artifact_opening_v1};

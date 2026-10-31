@@ -1,6 +1,7 @@
 //! The shared challenge contract: policy refusals, beacon source rules, seed separation, samplers, transcripts, lifecycle and
 //! conformance evidence — each rule exercised by the attack it exists for.
 
+#![allow(warnings)]
 use std::collections::BTreeSet;
 
 use misaka_palw_challenge::beacon::VerifiedWorkBeaconV1;
@@ -102,7 +103,11 @@ fn the_policy_refuses_every_unknown_algorithm_missing_value_and_mismatched_trans
     }
     let mut p = policy();
     p.interactive_mode = InteractiveModeV1::StagedBeacon;
-    assert_eq!(p.validate(), Err(PolicyRefusalV1::TranscriptMode), "staged direct audit rounds require their exact approved randomness transform");
+    assert_eq!(
+        p.validate(),
+        Err(PolicyRefusalV1::TranscriptMode),
+        "staged direct audit rounds require their exact approved randomness transform"
+    );
     p.transcript_transform_id = ImplementedV1::transcript_staged_beacon();
     p.validate().unwrap();
 }

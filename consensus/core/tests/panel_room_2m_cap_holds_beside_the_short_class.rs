@@ -14,6 +14,7 @@
 //!
 //! Run: cargo test -p kaspa-consensus-core --test panel_room_2m_cap_holds_beside_the_short_class
 
+#![allow(warnings)]
 #[path = "panel_room_common.rs"]
 mod room;
 use room::*;

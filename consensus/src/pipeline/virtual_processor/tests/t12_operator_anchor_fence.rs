@@ -36,6 +36,7 @@
 //! DISPLACED attempt's seed, with the draw's clock at its DAA and the seats it drew while it was the
 //! chain — displacement moves the binding one block and buys no draw, and cannot hold a claim off its
 //! anchor. A fourth shows such a merging block anchors only the slots the merged attempt reached.
+#![allow(warnings)]
 use super::t12_round_lane_e2e::{T12Chain, t12_genesis_chain, t12_with_harness_cards};
 use crate::model::stores::ghostdag::GhostdagStoreReader;
 use kaspa_consensus_core::BlockHash;

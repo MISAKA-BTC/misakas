@@ -3,6 +3,7 @@
 //! `docs/design/palw/tir/hf-coverage.md`). Each must parse to the expected spec, build an HL
 //! program, and bind every param to an HF tensor name — or be refused with the expected reason.
 
+#![allow(warnings)]
 use misaka_palw_tir_lower::hl::{self, HlProgram, Op};
 use misaka_palw_tir_lower::spec::*;
 use misaka_palw_tir_lower::{LowerError, hf_weights, parse_config_str};

@@ -14,6 +14,7 @@
 //! alone, a resident mixture's batch reads its routed rows once rather than once per member, and a LoRA
 //! candidate served from its adapter section over its held parent steps together with the parent.
 
+#![allow(warnings)]
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

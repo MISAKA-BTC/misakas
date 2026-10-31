@@ -15,6 +15,7 @@
 //! (default 24 layers, ≈ 270 MB), `TIR_BUDGET_MIB` (default 32); a 2 GB-disk run is
 //! `TIR_BUDGET_LAYERS=100 TIR_BUDGET_MIB=48`.
 
+#![allow(warnings)]
 use misaka_palw_tir_artifact::PalwTirContainerV1;
 use misaka_palw_tir_artifact::chunks::{ChunkStore, write_container_v1_chunked};
 use misaka_palw_tir_lower::fidelity;

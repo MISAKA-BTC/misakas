@@ -5,6 +5,7 @@
 //! registered, it is the first of its `(seat, round)` on the chain, and **its one ML-DSA-87 signature verifies under the seat bond's
 //! registered key**. An equivocation is admitted only with BOTH signatures valid under the seat's key. What a leaf does is the fold's
 //! (`palw_vertex_fold_v1`), where the state is in hand — and a leaf that does not count is ignored, never refused.
+#![allow(warnings)]
 use super::t12_round_lane_e2e::{t12_genesis_chain, t12_with_harness_cards};
 use crate::consensus::test_consensus::TestConsensus;
 use kaspa_consensus_core::config::ConfigBuilder;

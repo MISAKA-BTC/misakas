@@ -9,7 +9,8 @@ use kaspa_consensus_core::{
     config::params::Params,
     header::Header,
     palw_native_spend_v35::{
-        CheckedNativeAcceptedSpendV35, NATIVE_SPEND_MAX_ACCEPTED_IDS_V35, NativeAcceptedSpendProofV35, verify_native_accepted_spend_v35,
+        CheckedNativeAcceptedSpendV35, NATIVE_SPEND_MAX_ACCEPTED_IDS_V35, NativeAcceptedSpendProofV35,
+        verify_native_accepted_spend_v35,
     },
 };
 

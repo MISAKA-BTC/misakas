@@ -12,6 +12,7 @@
 //! | `t12_rfc0016_zero_rights_heartbeat_keeps_the_cadence` | H1 (cadence with every right at zero), H3 (rights never move the clock) |
 //! | `t12_rfc0016_heartbeat_is_not_tightened_and_earns_nothing` | H2 (ADR-0140 C1/C3/C4 under V+) |
 //! | `t12_rfc0016_a_second_node_and_a_reorg_reach_the_same_state` | A8, H4 (IBD block by block, reorg) |
+#![allow(warnings)]
 use super::t12_round_lane_e2e::{T12Chain, t12_genesis_chain, t12_with_harness_cards};
 use crate::model::stores::ghostdag::GhostdagStoreReader;
 use kaspa_consensus_core::BlockHash;

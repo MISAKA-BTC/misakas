@@ -15,6 +15,7 @@
 //!
 //! Run (ignored by default; needs the checkpoints):
 //! `G14_CKPT_ROOT=/Users/wata/Downloads/MISAKA-wt-b/hf-ckpt [G14_ONLY=<name>] [G14_CONTEXTS=1024,512,...] cargo test --offline -p misaka-palw-sdk --test g14_registration_fixture -- --ignored --nocapture`
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{ForkActivation, Params, palw_t12_launch_params_v1};
 use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
 use kaspa_consensus_core::palw_tir_class_v1::{PALW_TIR_CLASS_VERSION_V1, PalwTirClassV1};

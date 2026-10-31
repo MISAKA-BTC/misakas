@@ -478,10 +478,12 @@ impl PalwTokenizerJsonStreamV1 {
         self.pending
     }
     /// Identity already authenticated by native seal/finish; no caller flag.
-    pub(crate) fn sealed_artifact_binding_v1(&self)->Result<(Hash64,u64),String>{
+    pub(crate) fn sealed_artifact_binding_v1(&self) -> Result<(Hash64, u64), String> {
         self.check()?;
-        if !self.sealed||self.offset!=self.length||self.pending.is_some()||self.hash.finish()!=self.tokenizer{return Err("parser artifact binding before authenticated exact EOF".into());}
-        Ok((self.tokenizer,self.length))
+        if !self.sealed || self.offset != self.length || self.pending.is_some() || self.hash.finish() != self.tokenizer {
+            return Err("parser artifact binding before authenticated exact EOF".into());
+        }
+        Ok((self.tokenizer, self.length))
     }
     pub fn key_set_root(&self) -> Hash64 {
         self.keys.root()
@@ -1075,20 +1077,23 @@ pub(crate) mod tests {
             br#"{"model":{"type":"BPE","vocab":{"a":0,"b":"#,
             br#"{"added_tokens":[{"id":0,"content":"x"},{"id":0}],"model":{}}"#,
             br#"{"model":{"type":"BPE","vocab":{"\\":0,"\u0061":1},"merges":[]}}"#,
-            b"", b"0", b"{\"\"", b"{\"\":0}",
+            b"",
+            b"0",
+            b"{\"\"",
+            b"{\"\":0}",
         ];
         for raw in cases {
             for chunk in [1, 2, 7, 65_536] {
                 let context = Hash64::from_u64_word(0xB017);
-                let mut stream = PalwTokenizerJsonStreamV1::new(
-                    context, palw_tokenizer_raw_commitment_v1(raw), raw.len() as u64, 0,
-                );
+                let mut stream = PalwTokenizerJsonStreamV1::new(context, palw_tokenizer_raw_commitment_v1(raw), raw.len() as u64, 0);
                 let mut book = Book::new();
                 loop {
                     if stream.pending_key().is_some() {
                         book.satisfy(&mut stream);
-                        assert!(stream.key_events() <= stream.offset() / 2,
-                            "distinct consumed syntax pairs: raw={raw:?}, chunk={chunk}");
+                        assert!(
+                            stream.key_events() <= stream.offset() / 2,
+                            "distinct consumed syntax pairs: raw={raw:?}, chunk={chunk}"
+                        );
                         assert!(stream.key_events() <= palw_tokenizer_key_event_byte_bound_v1(raw.len() as u64));
                     } else if stream.offset() < raw.len() as u64 {
                         let at = stream.offset();
@@ -1409,12 +1414,11 @@ pub(crate) mod tests {
 #[path = "palw_native_resource_v1/private/palw_tokenizer_json_stream_v1.rs"]
 mod native_resource_inventory_v1;
 
-
 /// Owner-local parser growth bound, derived from the existing grammar, not a protocol cap.
 /// Includes one parser inline value, the bounded Frame stack, and both String Vecs.
 pub(crate) fn producer_parser_requests_v1() -> Result<u64, crate::palw_native_resource_v1::NativeCoverageV1> {
     use crate::palw_native_resource_v1::TirNativeRequestsV1;
-    let mut q=TirNativeRequestsV1::new();
+    let mut q = TirNativeRequestsV1::new();
     q.exact_v1::<PalwTokenizerJsonStreamV1>(1)?;
     q.vec_v1::<Frame>(MAX_DEPTH as u64)?;
     q.vec_v1::<u8>(16)?;

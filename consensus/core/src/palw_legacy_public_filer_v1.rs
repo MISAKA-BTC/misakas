@@ -1174,15 +1174,23 @@ mod tests {
     #[test]
     fn the_fence_is_dormant_on_every_preset_and_refused_when_armed() {
         use crate::config::params::{
-            devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params, palw_t12_launch_params_v1, palw_t12_shipped_params,
+            ForkActivation, devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params, palw_t12_launch_params_v1,
+            palw_t12_shipped_params,
         };
-        for (name, p) in [
-            ("testnet-12", palw_t12_shipped_params()),
-            ("testnet-12 launch", palw_t12_launch_params_v1()),
-            ("testnet-11", palw_rc_shipped_params()),
-            ("devnet", devnet_shipped_params()),
-            ("mainnet", mainnet_shipped_params()),
-        ] {
+        for (name, p) in [("testnet-12", palw_t12_shipped_params()), ("testnet-12 launch", palw_t12_launch_params_v1())] {
+            assert_eq!(p.palw_legacy_public_filer_v1, Some(ForkActivation::new(18_400)), "{name}: G14 flag day");
+            assert!(p.palw_legacy_public_filer_active_at(18_400), "{name}");
+            p.validate_palw_legacy_public_filer_v1().expect("the pinned record admits 18,400");
+            assert!(
+                p.palw_fences_v1()
+                    .iter()
+                    .any(|(fence, at)| *fence == "palw_legacy_public_filer_v1" && *at == Some(ForkActivation::new(18_400))),
+                "{name}: listed at 18,400"
+            );
+        }
+        for (name, p) in
+            [("testnet-11", palw_rc_shipped_params()), ("devnet", devnet_shipped_params()), ("mainnet", mainnet_shipped_params())]
+        {
             assert_eq!(p.palw_legacy_public_filer_v1, None, "{name}: dormant");
             assert!(!p.palw_legacy_public_filer_active_at(u64::MAX), "{name}: never in force");
             p.validate_palw_legacy_public_filer_v1().expect("dormant passes");
@@ -1208,6 +1216,8 @@ mod tests {
         );
         let mut never = palw_t12_shipped_params();
         never.palw_legacy_public_filer_v1 = Some(ForkActivation::never());
+        never.sync_palw_legacy_public_filer_v1();
+        never.sync_palw_g14_gates_v1();
         assert!(!never.palw_legacy_public_filer_active_at(u64::MAX));
         never.validate_palw_legacy_public_filer_v1().expect("never() is dormant");
         let mut early = palw_t12_shipped_params();
@@ -1344,8 +1354,7 @@ mod tests {
     /// **The fence moves the params and schedule ids only when armed** (Some-only), and `Some(never())` is absence.
     #[test]
     fn the_fence_is_hashed_some_only() {
-        use crate::config::params::palw_t12_shipped_params;
-        let t12 = palw_t12_shipped_params();
+        let t12 = crate::config::params::palw_t12_release_v6_params();
         let ids = |p: &Params| (p.consensus_params_id(), p.consensus_identity_id(), p.consensus_schedule_id());
         let mut never = t12.clone();
         never.palw_legacy_public_filer_v1 = Some(ForkActivation::never());

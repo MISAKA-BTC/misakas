@@ -11,6 +11,7 @@
 //!
 //! Run: `cargo test -p kaspa-consensus-core --test palw_tir_h7`
 
+#![allow(warnings)]
 use kaspa_consensus_core::palw_tir_dissect_v1::{palw_tir_dissect_value_bound_v1, palw_tir_dissect_value_bound_v2};
 use kaspa_consensus_core::palw_tir_fence2_v1::PalwTirDemandRulesV1;
 use misaka_palw_tir::admit::{TirAdmitInputsV1, TirCeilingsV1, tir_admit_v1, tir_admit_with_rules_v1};

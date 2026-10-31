@@ -12,6 +12,7 @@
 //! whose `shape_profile_id` appears nowhere in this repository. If the admission gate admits it,
 //! the gate is reading the carriage and not a catalogue.
 
+#![allow(warnings)]
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::params::palw_rc_shipped_params;
 use kaspa_consensus_core::palw_class_admission_v2::{PalwKaryCourtV1, verify_class_admission_v8};

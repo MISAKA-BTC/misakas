@@ -47,6 +47,7 @@
 //! `MISAKA_PALW_TOKENIZER`) because the gateway spawns the worker with only the mode flags — the
 //! same shape as `palw-worker`'s pinned-model env.
 
+#![allow(warnings)]
 use kaspa_consensus_core::palw_freeprompt_v3::{
     PALW_FP_WORKER_MODE_JOB_V3, PALW_FP_WORKER_MODE_MANIFEST_V3, PALW_FP_WORKER_MODE_SERVE_V3,
 };

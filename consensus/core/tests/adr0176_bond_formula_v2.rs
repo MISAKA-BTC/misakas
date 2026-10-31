@@ -17,6 +17,7 @@
 //!
 //! Run (validation phase): `cargo test -p kaspa-consensus-core --test adr0176_bond_formula_v2`
 
+#![allow(warnings)]
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::params::{ForkActivation, Params};
 use kaspa_consensus_core::palw_bond_budget_v1::*;

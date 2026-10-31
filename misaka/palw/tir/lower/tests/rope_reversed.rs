@@ -5,6 +5,7 @@
 //! No transformers: the tiny `llama` config with seeded synthetic weights. Equality with nanochat's reference is the
 //! corpus lane's fixture; this file pins what is local to the crate.
 
+#![allow(warnings)]
 use misaka_palw_tir_lower::fidelity::prepare_spec;
 use misaka_palw_tir_lower::float_ref::{ParamStore, Session};
 use misaka_palw_tir_lower::lower::LowerOpts;

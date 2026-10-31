@@ -99,14 +99,15 @@ pub enum KernelCourtAdmissionRefusalV1 {
     AlreadyBound,
     Reservation(ServiceRefusal),
     /// The producer's free collateral cannot hold the court capital of every branch.
-    InsufficientCapital { required: u128, free: u128 },
+    InsufficientCapital {
+        required: u128,
+        free: u128,
+    },
     Inconsistent,
 }
 
 fn keyed(key: &[u8], bytes: &[u8]) -> Hash64 {
-    Hash64::from_bytes(
-        blake2b_simd::Params::new().hash_length(64).key(key).hash(bytes).as_bytes().try_into().expect("64-byte digest"),
-    )
+    Hash64::from_bytes(blake2b_simd::Params::new().hash_length(64).key(key).hash(bytes).as_bytes().try_into().expect("64-byte digest"))
 }
 
 /// Packet identity of `(signer, turn, branch)`; branch 0 is exactly [`court_service_packet_id_v1`].
@@ -262,23 +263,19 @@ pub fn kernel_court_admission_candidate_v1(
         },
     };
     book.book.reserve(&packets, hard).map_err(R::Reservation)?;
-    book.claims.insert(claim, ServiceClaimBinding {
+    book.claims.insert(
         claim,
-        allocation_id: allocation,
-        source_id: source,
-        original_accepted_daa: accepted_daa,
-        hard_deadline_daa: hard,
-        packet_ids: packets.iter().map(|p| p.id).collect(),
-    });
+        ServiceClaimBinding {
+            claim,
+            allocation_id: allocation,
+            source_id: source,
+            original_accepted_daa: accepted_daa,
+            hard_deadline_daa: hard,
+            packet_ids: packets.iter().map(|p| p.id).collect(),
+        },
+    );
     book.check_live_v1().map_err(|_| R::Inconsistent)?;
-    Ok(KernelCourtAdmissionV1 {
-        book,
-        claim,
-        payer,
-        capital,
-        hard_deadline_daa: hard,
-        packets: packets.len(),
-    })
+    Ok(KernelCourtAdmissionV1 { book, claim, payer, capital, hard_deadline_daa: hard, packets: packets.len() })
 }
 
 #[cfg(test)]
@@ -383,6 +380,9 @@ mod tests {
         assert_eq!(kernel_court_packets_v1(h(1), h(2), h(3), 5, &signers(), &s), Err(KernelCourtAdmissionRefusalV1::ScheduleInvalid));
         let mut s = KernelCourtAdmissionScheduleV1::test_only_g14_estimate_v1();
         s.profile.service_span_daa = DISPUTE_WINDOW_DAA;
-        assert_eq!(kernel_court_packets_v1(h(1), h(2), h(3), 5, &signers(), &s), Err(KernelCourtAdmissionRefusalV1::ProfileExceedsHard));
+        assert_eq!(
+            kernel_court_packets_v1(h(1), h(2), h(3), 5, &signers(), &s),
+            Err(KernelCourtAdmissionRefusalV1::ProfileExceedsHard)
+        );
     }
 }

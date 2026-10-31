@@ -1,5 +1,6 @@
 //! Actual native post-block state reads. No supplied claim or Final facts,
 //! model examination, EVM execution or public/RPC certification is asserted.
+#![allow(warnings)]
 use super::*;
 use crate::{
     model::stores::{

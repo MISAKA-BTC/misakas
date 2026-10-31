@@ -10,6 +10,7 @@
 //! the day a real checkpoint from a real quantiser, with the library's dequantised tensors, is added to the corpus, its vectors are
 //! compared to the same decoder these pins hold fixed. `UPDATE_PINS=1` rewrites the file (review the diff).
 
+#![allow(warnings)]
 use blake2b_simd::Params;
 use misaka_palw_tir_lower::fidelity;
 use misaka_palw_tir_lower::float_ref::ParamStore;

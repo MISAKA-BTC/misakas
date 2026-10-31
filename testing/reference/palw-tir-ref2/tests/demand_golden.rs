@@ -7,6 +7,7 @@
 //! `hist_row` from the committed node the row is, `param` from `params`, and `state` from the file's
 //! (or the case's own) `states`, every other `(p, j, l)` answering `Replay`. Anything else is refused.
 
+#![allow(warnings)]
 mod common;
 
 use std::collections::BTreeMap;

@@ -3,6 +3,7 @@
 //! The pure predicate's every term is pinned in `palw_settlement_liability_v1`'s own tests; these pin the WIRING: dormancy below
 //! the fence, the old ruleset for a claim accepted before it, an unsourced term refusing (never defaulted) with a zero-amount
 //! marker that closes the obligation, and a leg with no liable claim passing by name.
+#![allow(warnings)]
 use super::super::palw_settlement_liability_fold_v1::PalwLegLiabilityV1;
 use super::super::palw_settlement_once_fold_v1::{PalwSettleOnceV1, palw_settled_once_v1};
 use super::*;
@@ -673,5 +674,227 @@ fn verifier_draw_zero_cash_and_refund_cancel_original_r_but_funded_hold_survives
         super::super::palw_verifier_fee_consent_fold_v1::reconcile_closed_draws(&mut setup,&after).unwrap();
         assert_eq!(setup.state.bond_budget.as_ref().unwrap().claim_row(&income).is_some_and(|r|r.live),held);
         assert!(setup.state.pending_payouts.is_empty(),"slot closure cannot mint a fee");
+    }
+}
+
+/// Verified-half native route test: real ML-DSA consent authentication followed
+/// by the production byte decoder and fee fold over an explicit rooted draw and
+/// healthy material prestate. It does not assert network claim certification.
+#[test]
+fn signed_ordinary_consent_converts_reserved_fee_without_reusing_other_principal() {
+    use crate::palw_kernel_route_v1::*;
+    use crate::palw_monetary_material_v1::*;
+    use crate::palw_ruling_fences_v1::{PalwClaimHardDeadlineFenceV1, PalwClaimHardDeadlineMirrorV1};
+    use crate::palw_verifier_fee_consent_v1::*;
+    use misaka_palw_kernel::{evidence::*, job::KernelClaimV1, ledger::*, lifecycle::*, route::KernelRouteObjectV1, verifier_pay::*};
+    let policy = PalwClaimHardDeadlineFenceV1::unapproved_probe_at(crate::config::params::ForkActivation::new(0)).policy;
+    let p = params()
+        .with_settlement_once_from(Some(0))
+        .with_claim_hard_deadline_v1(Some(PalwClaimHardDeadlineMirrorV1 { from_daa: 0, policy }));
+    let hard = super::super::palw_settlement_liability_fold_v1::kernel_claim_signed_hard_deadline_v1(&p, 60, None).unwrap();
+    let extras = PalwTransitionExtrasV1 {
+        kernel_route: Some(PalwKernelRouteExtrasV1 { network_domain: h64(1), ruleset_digest: h64(2), ..Default::default() }),
+        ..Default::default()
+    };
+    let kp = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([0x39; 32]);
+    let mut parent = with_route(PalwChainStateV2::genesis());
+    for id in 1..=4 {
+        parent.bonds.insert(
+            bond_key(id),
+            PalwBondStateV2 {
+                pubkey: kp.verification_key.as_ref().to_vec(),
+                operator_id: h64(id),
+                collateral: 1000,
+                slashed: 0,
+                status: PalwBondStatusV2::Active,
+                registered_daa: 0,
+                payout_payload: h64(id + 20),
+                capable_classes: Default::default(),
+            },
+        );
+    }
+    let (mut parent, poster, verifier) = {
+        let mut b = TransitionBuilder::new(&parent, &p, false, false, false, false, &extras);
+        let poster = b.note_kernel_bond(&bond_key(1)).unwrap();
+        let verifier = b.note_kernel_bond(&bond_key(2)).unwrap();
+        (b.state.clone(), poster, verifier)
+    };
+    let claim = [7; 64];
+    let mut ledger = parent.kernel_route.as_ref().unwrap().ledger_checked_v1().unwrap();
+    let l = ledger.preview_mut_v1();
+    l.daa = 90;
+    l.bonds.insert(poster, BondRowV1 { collateral: 1000, reserved: 1000, exit_requested: None });
+    let header = EvidenceHeaderV1 {
+        network_domain: [1; 64],
+        ruleset_digest: [2; 64],
+        class_binding_id: [6; 64],
+        program_root: [0; 64],
+        artifact_root: [0; 64],
+        plan_root: [0; 64],
+    };
+    l.claims.insert(
+        claim,
+        ClaimRowV1 {
+            producer: poster,
+            class_binding_id: [6; 64],
+            job_id: [5; 64],
+            body: ClaimBodyV1::Program {
+                claim: KernelClaimV1 { job_id: [5; 64], producer_bond: poster, generated: vec![1], evidence_root: [0; 64] },
+                evidence: VerificationEvidenceV1 {
+                    version: 1,
+                    header,
+                    job_input_root: [0; 64],
+                    positions: 1,
+                    initial_state_root: [0; 64],
+                    final_state_root: [0; 64],
+                    trace_root: [0; 64],
+                    output_root: [0; 64],
+                    segments: Vec::new(),
+                    suite: SuiteParamsV1 {
+                        descriptor_digest: [0; 64],
+                        checker_suite_id: 0,
+                        challenge_policy_id: 0,
+                        repetitions: 0,
+                        target_bits: 0,
+                        field_bits: 0,
+                    },
+                },
+                commitments: Vec::new(),
+            },
+            committed_daa: 60,
+            life: ClaimLifecycleV1 {
+                policy: LifecyclePolicyV1 { check_window_daa: 30, challenge_window_daa: 30 },
+                state: ClaimStateV1::Final { final_daa: 90 },
+                retention_met: true,
+                final_hold_until: 120,
+            },
+            reserved: 50,
+            liability_until: Some(400),
+            convicted: false,
+            rewarded: true,
+            sealed_daa: 12,
+        },
+    );
+    l.verifier_pay.insert(
+        (VERIFIER_PAY_DRAW_V1, claim),
+        VerifierPayRowV1::Draw { job: [5; 64], poster, fee: 17, slots: vec![(verifier, false)], deadline_daa: hard },
+    );
+    parent.kernel_route.as_mut().unwrap().rows = ledger.to_rows();
+    let material = PalwMonetaryMaterialRowV1 {
+        terms: PalwMonetaryMaterialTermsV1 {
+            version: 1,
+            root: Hash64::from_bytes(claim),
+            dependencies: vec![],
+            exec_plan_root: None,
+            sponsor: bond_key(1),
+            nonce: h64(101),
+            policy: h64(102),
+            max_material_bytes: 100,
+            material_manifest: None,
+            native_session: None,
+            window_daa: 50,
+            enrollment_until_daa: 100,
+            payment_relative_until_finality: true,
+        },
+        consent: h64(103),
+        sequence: 0,
+        accepted_daa: 12,
+        root_seen: true,
+        native_binding: None,
+        providers: [3, 4]
+            .map(|id| PalwMonetaryMaterialProviderV1 {
+                provider: bond_key(id),
+                collateral_sompi: 100,
+                prepaid_fee_sompi: 10,
+                charged: false,
+                fee_income: h64(id),
+                fee_context: h64(id + 10),
+                fee_accepted_daa: 12,
+                fee_queued: false,
+                fee_paid: false,
+            })
+            .to_vec(),
+        challenges: vec![],
+        last_tail_until: None,
+        tail_block: None,
+        tail_blue_score: None,
+        last_payment: None,
+        payment_history_root: h64(0),
+        service_fee_count: 0,
+        service_fee_total_sompi: 0,
+        service_fee_paid_sompi: 0,
+        service_fee_history_root: h64(0),
+        queued_entitlements: Default::default(),
+    };
+    parent
+        .kernel_route
+        .as_mut()
+        .unwrap()
+        .aux
+        .insert((PALW_MONETARY_MATERIAL_TABLE_V1, claim.to_vec()), borsh::to_vec(&material).unwrap());
+    let terms = VerifierFeeConsentV1 {
+        version: 1,
+        network: h64(1).as_bytes(),
+        ruleset: h64(2).as_bytes(),
+        claim,
+        verifier,
+        slot: 0,
+        poster,
+        fee: 17,
+        liability_until: hard,
+        material_until: hard,
+        policy_digest: misaka_palw_kernel::verifier_fee_consent_v1::verifier_fee_policy_digest_v1(),
+        nonce: 0,
+        clean: true,
+    };
+    let bytes = KernelRouteObjectV1::ConsentVerifierFeeV1 { terms }.encode();
+    let message = palw_kernel_route_message_v1(h64(1), &bond_key(2), &bytes);
+    let signature = libcrux_ml_dsa::ml_dsa_87::sign(
+        &kp.signing_key,
+        message.as_byte_slice(),
+        PALW_KERNEL_ROUTE_OBJECT_MLDSA87_CONTEXT_V1,
+        [0x40; 32],
+    )
+    .unwrap();
+    libcrux_ml_dsa::ml_dsa_87::verify(
+        &kp.verification_key,
+        message.as_byte_slice(),
+        PALW_KERNEL_ROUTE_OBJECT_MLDSA87_CONTEXT_V1,
+        &signature,
+    )
+    .unwrap();
+    for unrelated in [0, 1] {
+        let mut source = parent.clone();
+        // Explicit independent registration reservation is the cross-role seam;
+        // the draw escrow remains exactly the same authenticated 1000 in both cases.
+        if unrelated != 0 {
+            source.registration_exposure.insert(bond_key(1), unrelated);
+        }
+        let mut b = TransitionBuilder::new(&source, &p, false, false, false, false, &extras);
+        assert_eq!(source.kernel_route.as_ref().unwrap().ledger_reserved_of(&bond_key(1)), 1000);
+        assert_eq!(b.committed_at(&bond_key(1), 90).unwrap(), 1000 + unrelated);
+        let root = b.state.state_root();
+        let journal = borsh::to_vec(&b.entries).unwrap();
+        let result =
+            super::super::palw_kernel_route_fold_v1::apply_kernel_route_object_v1(&mut b, &ctx(90, 90, 90), &bytes, &bond_key(2));
+        if unrelated != 0 {
+            let err = result.unwrap_err();
+            assert!(format!("{err:?}").contains("other reserved principal"), "{err:?}");
+            assert_eq!(b.state.state_root(), root);
+            assert_eq!(borsh::to_vec(&b.entries).unwrap(), journal);
+        } else {
+            result.unwrap();
+            assert_eq!(b.state.bond(&bond_key(1)).unwrap().collateral, 983);
+            assert_eq!(b.committed_at(&bond_key(1), 90).unwrap(), 983);
+            let key = fee_key(HELD, &claim, &verifier, 0);
+            let held: HeldVerifierFeeV1 = borsh::from_slice(&b.state.kernel_route.as_ref().unwrap().aux[&(TABLE, key)]).unwrap();
+            assert_eq!(held.amount, 17);
+            let paid_root = b.state.state_root();
+            assert!(
+                super::super::palw_kernel_route_fold_v1::apply_kernel_route_object_v1(&mut b, &ctx(90, 90, 90), &bytes, &bond_key(2))
+                    .is_err()
+            );
+            assert_eq!(b.state.state_root(), paid_root, "same signed slot cannot debit twice");
+        }
     }
 }

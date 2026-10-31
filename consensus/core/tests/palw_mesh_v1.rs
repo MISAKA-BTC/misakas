@@ -3,6 +3,7 @@
 //!
 //! Run: `cargo test -p kaspa-consensus-core --test palw_mesh_v1`
 
+#![allow(warnings)]
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::palw_mesh_v1::*;
 use kaspa_consensus_core::palw_state_v2::PalwBondKeyV2;

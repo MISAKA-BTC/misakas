@@ -20,6 +20,7 @@
 //! `MISAKA_PALW_ARTIFACT` names one. The second is the one that would catch a converter whose
 //! header stopped matching what this build believes it writes.
 
+#![allow(warnings)]
 use kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2;
 use misaka_palw_base0::classes::*;
 

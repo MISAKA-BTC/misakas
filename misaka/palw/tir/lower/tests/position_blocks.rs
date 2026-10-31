@@ -10,6 +10,7 @@
 //! logit equal the layer-major run as it was before (two full sequences, position by position), verbatim below; and with the
 //! carries **spilled to disk** (RFC-0020 §6) they equal it too.
 
+#![allow(warnings)]
 use misaka_palw_tir_lower::calib::{stats_digest_hex, stats_to_json};
 use misaka_palw_tir_lower::fidelity;
 use misaka_palw_tir_lower::float_ref::stream::{KeepLogits, OccParams, Resident, SpillCfg, run_layer_major_keep, set_carry_spill};

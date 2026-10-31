@@ -95,7 +95,7 @@ pub fn routed_unit_from_fold_v2<K: Base0FpIntervalKernelsV1>(
         .ok_or(E::Capacity)?;
     let mut q = PalwMaterialConstructionRequestsV2::new();
     let binding_heap = b.native_heap_v1("routed fold binding copy");
-    q.add_v1(binding_heap.bytes().ok_or_else(|| E::LocalResource(binding_heap))?).map_err(E::LocalResource)?;
+    q.add_v1(binding_heap.bytes().ok_or(E::LocalResource(binding_heap))?).map_err(E::LocalResource)?;
     // One needed-index list, its unique block list, indexed retained tiles,
     // indexed block vectors, current replay block and fold/proof scratch.
     q.vec_v1::<u64>(count.checked_mul(3).ok_or(E::Capacity)?).map_err(E::LocalResource)?;
@@ -118,7 +118,7 @@ pub fn routed_unit_from_fold_v2<K: Base0FpIntervalKernelsV1>(
     // the actual source fields. The source owner itself remains independently
     // retained by the caller throughout complete-bundle construction.
     let source_heap = material.native_heap_v1("routed fold resume fields");
-    q.add_v1(source_heap.bytes().ok_or_else(|| E::LocalResource(source_heap))?.checked_mul(3).ok_or(E::Capacity)?)
+    q.add_v1(source_heap.bytes().ok_or(E::LocalResource(source_heap))?.checked_mul(3).ok_or(E::Capacity)?)
         .map_err(E::LocalResource)?;
     q.vec_v1::<u8>((borsh::object_length(&b.shape_profile).map_err(|_| E::Capacity)? as u64).max(1024)).map_err(E::LocalResource)?;
     q.vec_v1::<u8>((754 + b.job_context.network_id.len() as u64).max(1024)).map_err(E::LocalResource)?;

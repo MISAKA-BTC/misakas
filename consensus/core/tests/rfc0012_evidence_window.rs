@@ -11,6 +11,7 @@
 //!
 //! A claim is therefore retired before its trace retention can lapse unless it spent (almost) every
 //! window it was given. The numbers are printed so the record can quote them.
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{palw_t12_launch_params_v1, palw_t12_shipped_params};
 use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
 use kaspa_consensus_core::palw_producer_v2::palw_min_trace_retention_daa_v1;

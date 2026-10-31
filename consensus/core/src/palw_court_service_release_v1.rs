@@ -23,11 +23,7 @@
 //! The row also carries the per-packet causal predecessors of every live binding ([`CourtServiceRowV3::causal`]), so the canonical
 //! recovery sweep keeps causal order (a source packet is never rescheduled at or after a packet that depends on it): risk (a) of
 //! court-f02 / r5-original-admission.
-use crate::{
-    Hash64,
-    palw_court_service_state_v2::CourtServiceStateV2,
-    palw_court_service_v1::ServiceAssessment,
-};
+use crate::{Hash64, palw_court_service_state_v2::CourtServiceStateV2, palw_court_service_v1::ServiceAssessment};
 use borsh::{BorshDeserialize, BorshSerialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -109,7 +105,8 @@ impl CourtServiceRowV3 {
             if claim != &record.claim || self.state.claims.contains_key(claim) {
                 return Err("released service record names a live or another claim".into());
             }
-            if record.original_accepted_daa.checked_add(crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA) != Some(record.hard_deadline_daa)
+            if record.original_accepted_daa.checked_add(crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA)
+                != Some(record.hard_deadline_daa)
                 || record.released_daa < record.hard_deadline_daa
                 || record.served.checked_add(record.missing) != Some(record.packets)
                 || record.packets == 0

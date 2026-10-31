@@ -3,8 +3,8 @@
 //! the candidate is ready to ship. This tracks the implementation-only goal; shipping evidence remains separate.
 //! No preset, record or validation gate is changed.
 use kaspa_consensus_core::config::params::{
-    ForkActivation, PALW_T12_FULL_ACTIVATION_FENCES_V1, PALW_T12_G14_17000_FENCES_V1,
-    Params, palw_t12_arm_after_int13_at_v1, palw_t12_shipped_params,
+    ForkActivation, PALW_T12_FULL_ACTIVATION_FENCES_V1, PALW_T12_G14_17000_FENCES_V1, Params, palw_t12_arm_after_int13_at_v1,
+    palw_t12_shipped_params,
 };
 
 fn candidate() -> Params {

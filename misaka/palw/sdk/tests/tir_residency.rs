@@ -9,6 +9,7 @@
 //! job computes the same capture every way, byte for byte; the routed and gathered paths really ran;
 //! nothing was mapped and nothing served by rows was read whole.
 
+#![allow(warnings)]
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 

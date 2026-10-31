@@ -13,6 +13,7 @@
 //!
 //! Run: `cargo test -p kaspa-consensus-core --test palw_tir_select_credit`
 
+#![allow(warnings)]
 use kaspa_consensus_core::palw_canonical_work_v1::{PalwCanonicalExecutionFactsV1, PalwCanonicalWorkVectorV1};
 use kaspa_consensus_core::palw_tir_work_v1::{palw_tir_select_arm_regions_v1, palw_tir_work_shape_with_v1};
 use misaka_palw_tir::builder::ProgramBuilder;

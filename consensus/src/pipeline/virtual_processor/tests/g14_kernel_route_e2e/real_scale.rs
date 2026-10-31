@@ -1854,4 +1854,3 @@ async fn g14r2_a_segmented_kernel_claim_meets_its_policys_full_plan() {
     let (committed, _) = run(kernel_detection_policy(class, collateral)).await;
     assert!(!committed, "collateral below the deterrence bound: dropped");
 }
-

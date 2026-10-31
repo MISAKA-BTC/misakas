@@ -1,5 +1,6 @@
 //! Stored scheduling-book fixture over a natively folded registry/claim. The
 //! explicit placeholder mirror is not a production policy adoption/campaign.
+#![allow(warnings)]
 use super::*;
 use crate::palw_court_capacity_v1::*;
 use crate::palw_legacy_public_filer_v1::{PalwDisputeClaimV1, PalwDisputeReservationRowV1};

@@ -25,6 +25,7 @@
 //!   unready the processor re-bases it again, and with the class's seats ready (V2 rows, rebuilt
 //!   through the carriage) the processor's OWN derivation — anchor walk, draw, gate, fold — binds it
 //!   there, and the bound claim keeps its one redraw.
+#![allow(warnings)]
 use super::t12_round_lane_e2e::{T12Chain, t12_genesis_chain, t12_with_harness_cards};
 use crate::model::stores::headers::HeaderStoreReader;
 use kaspa_consensus_core::BlockHash;

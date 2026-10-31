@@ -32,6 +32,7 @@
 //!
 //! Run: cargo test -p kaspa-consensus-core --test panel_room_step3_objects_cannot_refuse_the_own_attempt
 
+#![allow(warnings)]
 #[path = "panel_room_common.rs"]
 mod room;
 use room::*;

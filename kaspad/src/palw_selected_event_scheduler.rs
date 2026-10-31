@@ -1,13 +1,13 @@
 //! Owner/response decisions from authenticated prospective source snapshots. A missing
 //! local operand is pending; a late native collection is the only silence decision.
+#[cfg(test)]
+use kaspa_consensus_core::palw_state_v2::PalwBondKeyV2;
 use kaspa_consensus_core::{
     Hash64,
     palw_selected_event_source_v1::{
         PALW_SELECTED_EVENT_MAX_REQUESTS_V1, PalwSelectedEventCoordinateV1, PalwSelectedEventDemandV1, PalwSelectedEventSessionV1,
     },
 };
-#[cfg(test)]
-use kaspa_consensus_core::palw_state_v2::PalwBondKeyV2;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum SelectedEventScheduleV1 {

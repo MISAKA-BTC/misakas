@@ -1,6 +1,7 @@
 //! Admission (`tir_admit_v1`, 04b §10.3 with §7 and §8): this crate's reading of the text against
 //! the first implementation, as a black box.
 
+#![allow(warnings)]
 mod common;
 
 use common::bridge::*;

@@ -25,11 +25,7 @@ static FILE_TABLES_V1: std::sync::OnceLock<FileTablesV1> = std::sync::OnceLock::
 pub(crate) fn register_file_table_v1(path: &Path) -> Result<(Hash64, u32), String> {
     let table = FileTableV1::open_v1(path)?;
     let (root, vocab) = (table.root, table.vocab);
-    FILE_TABLES_V1
-        .get_or_init(Default::default)
-        .write()
-        .unwrap_or_else(|e| e.into_inner())
-        .insert((root, table.tokenizer), table);
+    FILE_TABLES_V1.get_or_init(Default::default).write().unwrap_or_else(|e| e.into_inner()).insert((root, table.tokenizer), table);
     Ok((root, vocab))
 }
 
@@ -37,7 +33,9 @@ pub(crate) fn register_file_table_v1(path: &Path) -> Result<(Hash64, u32), Strin
 /// bounded file-backed holding of the same original root and tokenizer. Either one authenticates
 /// every rendering at its original leaf EOF before use; the lookup itself is not authority.
 pub(crate) fn public_table_v1(root: &Hash64, tokenizer: &Hash64) -> Option<Arc<dyn PalwPublicTokenTableSourceV1>> {
-    if let Some(table) = kaspa_consensus_core::palw_fp_constraint_job_v1::palw_token_tables_v1().for_root_and_tokenizer(root, tokenizer) {
+    if let Some(table) =
+        kaspa_consensus_core::palw_fp_constraint_job_v1::palw_token_tables_v1().for_root_and_tokenizer(root, tokenizer)
+    {
         return Some(table as Arc<dyn PalwPublicTokenTableSourceV1>);
     }
     let held = FILE_TABLES_V1.get()?.read().unwrap_or_else(|e| e.into_inner()).get(&(*root, *tokenizer)).cloned()?;

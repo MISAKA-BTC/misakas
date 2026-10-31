@@ -5,7 +5,7 @@
 //! whose weights differ from the executor's by one value.
 
 #![cfg(feature = "node")]
-
+#![allow(warnings)]
 mod node_common;
 
 use std::path::{Path, PathBuf};

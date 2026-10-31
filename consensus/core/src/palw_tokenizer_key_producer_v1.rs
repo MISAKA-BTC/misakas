@@ -3,8 +3,8 @@
 use super::*;
 use crate::palw_json_key_set_v1::producer::ProducerTree;
 use crate::palw_native_resource_v1::{
-    NativeCoverageV1, NativeDecodeErrorV1, NativeRetainedV1, TirNativeRequestsV1,
-    btree_node_envelope_bytes_v1, reserve_native_requests_v1,
+    NativeCoverageV1, NativeDecodeErrorV1, NativeRetainedV1, TirNativeRequestsV1, btree_node_envelope_bytes_v1,
+    reserve_native_requests_v1,
 };
 
 type Error = NativeDecodeErrorV1<String>;
@@ -18,8 +18,8 @@ pub(crate) struct Budget {
 }
 #[derive(Debug)]
 pub(crate) struct Generated {
-    artifact_binding:(Hash64,u64),
-    signed_key_bound:u64,
+    artifact_binding: (Hash64, u64),
+    signed_key_bound: u64,
     proofs: Vec<PalwJsonKeyCompactProofV1>,
     root: Hash64,
     pub(crate) hash_calls: u64,
@@ -28,8 +28,12 @@ pub(crate) struct Generated {
     pub(crate) raw_packet_calls: u64,
 }
 impl Generated {
-    pub(crate) fn artifact_binding_v1(&self)->(Hash64,u64){self.artifact_binding}
-    pub(crate) fn key_work_bound_v1(&self)->u64{self.signed_key_bound}
+    pub(crate) fn artifact_binding_v1(&self) -> (Hash64, u64) {
+        self.artifact_binding
+    }
+    pub(crate) fn key_work_bound_v1(&self) -> u64 {
+        self.signed_key_bound
+    }
     pub(crate) fn proofs(&self) -> &[PalwJsonKeyCompactProofV1] {
         &self.proofs
     }
@@ -38,20 +42,13 @@ impl Generated {
     }
 }
 fn resource(why: &'static str) -> Error {
-    NativeDecodeErrorV1::Resource(NativeCoverageV1::unsupported::<Generated>(
-        "tokenizer data proof producer",
-        why,
-    ))
+    NativeDecodeErrorV1::Resource(NativeCoverageV1::unsupported::<Generated>("tokenizer data proof producer", why))
 }
 fn decode(e: impl ToString) -> Error {
     NativeDecodeErrorV1::Decode(e.to_string())
 }
 
-pub(crate) fn generate(
-    base: &PalwTokenizerTableStreamV1,
-    raw: &[u8],
-    budget: Budget,
-) -> Result<NativeRetainedV1<Generated>, Error> {
+pub(crate) fn generate(base: &PalwTokenizerTableStreamV1, raw: &[u8], budget: Budget) -> Result<NativeRetainedV1<Generated>, Error> {
     generate_reserved(base, raw, budget, reserve_native_requests_v1)
 }
 /// Same production construction path, injectable only by owner-local tests.
@@ -62,12 +59,7 @@ pub(super) fn generate_reserved<R>(
     reserve: R,
 ) -> Result<NativeRetainedV1<Generated>, Error>
 where
-    R: FnOnce(
-        u64,
-    ) -> Result<
-        Option<crate::palw_native_resource_v1::NativeDemandLeaseV1>,
-        NativeCoverageV1,
-    >,
+    R: FnOnce(u64) -> Result<Option<crate::palw_native_resource_v1::NativeDemandLeaseV1>, NativeCoverageV1>,
 {
     base.check().map_err(decode)?;
     if base.tokenizer_offset() != 0
@@ -77,23 +69,16 @@ where
         || base.rendering_offset() != 0
         || raw.len() as u64 != base.operand_raw_length
     {
-        return Err(decode(
-            "key production requires pristine actual native Court and exact operand length",
-        ));
+        return Err(decode("key production requires pristine actual native Court and exact operand length"));
     }
-    let eof = crate::palw_tokenizer_json_stream_v1::palw_tokenizer_key_event_byte_bound_v1(
-        raw.len() as u64,
-    );
+    let eof = crate::palw_tokenizer_json_stream_v1::palw_tokenizer_key_event_byte_bound_v1(raw.len() as u64);
     let p = eof.min(base.signed_key_bound);
-    let nodes = p
-        .checked_mul(513)
-        .ok_or_else(|| resource("sparse node cardinality overflow"))?;
+    let nodes = p.checked_mul(513).ok_or_else(|| resource("sparse node cardinality overflow"))?;
     if p > budget.max_proofs || nodes > budget.max_nodes {
         return Err(resource("local proof/node budget exhausted"));
     }
     let mut q = TirNativeRequestsV1::new();
-    q.exact_v1::<Generated>(1)
-        .map_err(NativeDecodeErrorV1::Resource)?;
+    q.exact_v1::<Generated>(1).map_err(NativeDecodeErrorV1::Resource)?;
     // Court clone plus packet rollback parser; stacks/lex bounded in their owning module.
     q.add_v1(
         crate::palw_tokenizer_json_stream_v1::producer_parser_requests_v1()
@@ -102,21 +87,14 @@ where
             .ok_or_else(|| resource("parser clone request overflow"))?,
     )
     .map_err(NativeDecodeErrorV1::Resource)?;
-    q.exact_v1::<PalwTokenizerTableStreamV1>(1)
-        .map_err(NativeDecodeErrorV1::Resource)?;
-    q.vec_v1::<PalwJsonKeyCompactProofV1>(p)
-        .map_err(NativeDecodeErrorV1::Resource)?;
+    q.exact_v1::<PalwTokenizerTableStreamV1>(1).map_err(NativeDecodeErrorV1::Resource)?;
+    q.vec_v1::<PalwJsonKeyCompactProofV1>(p).map_err(NativeDecodeErrorV1::Resource)?;
     let mut siblings = TirNativeRequestsV1::new();
-    siblings
-        .vec_v1::<Hash64>(512)
-        .map_err(NativeDecodeErrorV1::Resource)?;
+    siblings.vec_v1::<Hash64>(512).map_err(NativeDecodeErrorV1::Resource)?;
     q.add_v1(
         siblings
             .bytes_v1()
-            .checked_mul(
-                p.checked_add(3)
-                    .ok_or_else(|| resource("proof count overflow"))?,
-            )
+            .checked_mul(p.checked_add(3).ok_or_else(|| resource("proof count overflow"))?)
             .ok_or_else(|| resource("proof heap overflow"))?,
     )
     .map_err(NativeDecodeErrorV1::Resource)?;
@@ -126,11 +104,9 @@ where
             .ok_or_else(|| resource("sparse map request overflow"))?,
     )
     .map_err(NativeDecodeErrorV1::Resource)?;
-    q.vec_v1::<PalwJsonKeyCompactProofV1>(1)
-        .map_err(NativeDecodeErrorV1::Resource)?;
+    q.vec_v1::<PalwJsonKeyCompactProofV1>(1).map_err(NativeDecodeErrorV1::Resource)?;
     // Actual packet codec scratch is <=90000; a raw atom contains one byte.
-    q.vec_v1::<u8>(90000)
-        .map_err(NativeDecodeErrorV1::Resource)?;
+    q.vec_v1::<u8>(90000).map_err(NativeDecodeErrorV1::Resource)?;
     q.vec_v1::<u8>(1).map_err(NativeDecodeErrorV1::Resource)?;
     let requests = q.bytes_v1();
     if requests > budget.max_requests {
@@ -144,9 +120,7 @@ where
     }
     let mut proofs = Vec::new();
     proofs
-        .try_reserve_exact(
-            usize::try_from(p).map_err(|_| resource("proof address-space overflow"))?,
-        )
+        .try_reserve_exact(usize::try_from(p).map_err(|_| resource("proof address-space overflow"))?)
         .map_err(|_| resource("proof vector allocation refused"))?;
     let mut raw_calls = 0u64;
     loop {
@@ -162,11 +136,7 @@ where
             let before = c.parser.key_insertions();
             c.packet(
                 c.context,
-                &PalwTokenizerStreamPacketV1 {
-                    offset: c.tokenizer_offset(),
-                    bytes: Vec::new(),
-                    proofs: vec![proof.clone()],
-                },
+                &PalwTokenizerStreamPacketV1 { offset: c.tokenizer_offset(), bytes: Vec::new(), proofs: vec![proof.clone()] },
             )
             .map_err(decode)?;
             if c.parser.key_insertions() != before {
@@ -180,8 +150,7 @@ where
             }
             proofs.push(proof);
         } else {
-            let at =
-                usize::try_from(c.tokenizer_offset()).map_err(|_| decode("raw offset overflow"))?;
+            let at = usize::try_from(c.tokenizer_offset()).map_err(|_| decode("raw offset overflow"))?;
             if at == raw.len() {
                 break;
             }
@@ -190,26 +159,17 @@ where
             }
             // One-byte construction atoms avoid an independently duplicated parser pause grammar.
             // The terminal builder separately repacks into its existing maximal mixed packets.
-            c.packet(
-                c.context,
-                &PalwTokenizerStreamPacketV1 {
-                    offset: at as u64,
-                    bytes: vec![raw[at]],
-                    proofs: Vec::new(),
-                },
-            )
-            .map_err(decode)?;
-            raw_calls = raw_calls
-                .checked_add(1)
-                .ok_or_else(|| resource("raw packet count overflow"))?;
+            c.packet(c.context, &PalwTokenizerStreamPacketV1 { offset: at as u64, bytes: vec![raw[at]], proofs: Vec::new() })
+                .map_err(decode)?;
+            raw_calls = raw_calls.checked_add(1).ok_or_else(|| resource("raw packet count overflow"))?;
         }
     }
     c.seal_tokenizer(c.context).map_err(decode)?;
     // Flat EOF authentication is mandatory even after duplicate/overrun/invalid JSON.
     let _authenticated_json_verdict = c.parser.finish().map_err(decode)?;
     let result = Generated {
-        artifact_binding:c.parser.sealed_artifact_binding_v1().map_err(decode)?,
-        signed_key_bound:c.signed_key_bound,
+        artifact_binding: c.parser.sealed_artifact_binding_v1().map_err(decode)?,
+        signed_key_bound: c.signed_key_bound,
         native_proof_calls: proofs.len() as u64,
         proofs,
         root: tree.root(),

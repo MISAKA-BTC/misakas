@@ -2,6 +2,7 @@
 //! answer checked against the CPU executor's — and runs the golden programs' cells through it, equal to the CPU stepper's value for
 //! value; a helper that cannot open a device is a refusal, never a different answer.
 
+#![allow(warnings)]
 mod common;
 
 use std::collections::BTreeMap;

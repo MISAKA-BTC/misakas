@@ -6296,7 +6296,7 @@ impl Params {
             palw_native_liability_horizon_v1: self.palw_native_liability_horizon_v1,
             palw_panel_lifetime_v2: self.palw_panel_lifetime_v2,
             palw_claim_challenge_v2: self.palw_claim_challenge_v2,
-            palw_claim_compact_v4: self.palw_claim_compact_v4.clone(),
+            palw_claim_compact_v4: self.palw_claim_compact_v4,
             palw_monetary_material_v1: self.palw_monetary_material_v1.clone(),
             palw_material_release_recovery_v2: self.palw_material_release_recovery_v2.clone(),
             palw_model_verification_gate_v1: self.palw_model_verification_gate_v1,
@@ -11021,6 +11021,9 @@ pub fn palw_t12_launch_params_v1() -> Params {
     {
         (fence.set)(&mut params, None);
     }
+    // Disarming a route fence moves the G14 mirror's inputs. The fold reads the mirror, so write it
+    // again or validate_palw_v2 refuses the ruleset.
+    params.sync_palw_g14_gates_v1();
     params
 }
 
@@ -11945,6 +11948,7 @@ pub fn palw_t12_arm_int11_flag_day_at_v1(params: &mut Params, at: Option<u64>) {
             }
         }
     }
+    params.sync_palw_g14_gates_v1();
 }
 
 /// **testnet-12's int-13 list — the code-change-only fences that wait on a height** (written for the coordinator's brief of 2026-10-08, a
@@ -12009,6 +12013,7 @@ pub fn palw_t12_arm_int13_flag_day_at_v1(params: &mut Params, at: Option<u64>) {
             }
         }
     }
+    params.sync_palw_g14_gates_v1();
 }
 
 /// **testnet-12 as its int-12 release (the DAA-5,300 flag day, `rcore/int-12`) ships it** — [`palw_t12_shipped_params`] with the int-13
@@ -12017,6 +12022,8 @@ pub fn palw_t12_arm_int13_flag_day_at_v1(params: &mut Params, at: Option<u64>) {
 /// list moved it" twin).
 pub fn palw_t12_release_v6_params() -> Params {
     let mut params = palw_t12_shipped_params();
+    // G14 is later than int-12. Take it off before the int-13 list, or this baseline still carries 17,400.
+    palw_t12_arm_after_int13_at_v1(&mut params, PALW_T12_G14_17000_FENCES_V1, None);
     palw_t12_arm_int13_flag_day_at_v1(&mut params, None);
     params
 }
@@ -12026,6 +12033,7 @@ pub fn palw_t12_release_v6_params() -> Params {
 /// baseline the int-11 flag day is judged against (the fork-id comparison, the "only this list moved it" twin).
 pub fn palw_t12_release_v5_params() -> Params {
     let mut params = palw_t12_shipped_params();
+    palw_t12_arm_after_int13_at_v1(&mut params, PALW_T12_G14_17000_FENCES_V1, None);
     palw_t12_arm_int13_flag_day_at_v1(&mut params, None);
     palw_t12_arm_int11_flag_day_at_v1(&mut params, None);
     params
@@ -12038,6 +12046,7 @@ pub fn palw_t12_release_v5_params() -> Params {
 /// twin).
 pub fn palw_t12_release_v4_params() -> Params {
     let mut params = palw_t12_shipped_params();
+    palw_t12_arm_after_int13_at_v1(&mut params, PALW_T12_G14_17000_FENCES_V1, None);
     palw_t12_arm_int13_flag_day_at_v1(&mut params, None);
     palw_t12_arm_int11_flag_day_at_v1(&mut params, None);
     for fence in PALW_T12_POST_LAUNCH_FENCES_V4
@@ -12048,6 +12057,9 @@ pub fn palw_t12_release_v4_params() -> Params {
     {
         (fence.set)(&mut params, None);
     }
+    // Disarming a route fence moves the G14 mirror's inputs. The fold reads the mirror, so write it
+    // again or validate_palw_v2 refuses the ruleset.
+    params.sync_palw_g14_gates_v1();
     params
 }
 
@@ -12057,6 +12069,7 @@ pub fn palw_t12_release_v4_params() -> Params {
 /// baseline the IR flag day is judged against.
 pub fn palw_t12_release_v3_params() -> Params {
     let mut params = palw_t12_shipped_params();
+    palw_t12_arm_after_int13_at_v1(&mut params, PALW_T12_G14_17000_FENCES_V1, None);
     palw_t12_arm_int13_flag_day_at_v1(&mut params, None);
     palw_t12_arm_int11_flag_day_at_v1(&mut params, None);
     for fence in PALW_T12_DECODE_RULES_FENCES_V1
@@ -12067,6 +12080,9 @@ pub fn palw_t12_release_v3_params() -> Params {
     {
         (fence.set)(&mut params, None);
     }
+    // Disarming a route fence moves the G14 mirror's inputs. The fold reads the mirror, so write it
+    // again or validate_palw_v2 refuses the ruleset.
+    params.sync_palw_g14_gates_v1();
     params
 }
 
@@ -12076,6 +12092,7 @@ pub fn palw_t12_release_v3_params() -> Params {
 /// against.
 pub fn palw_t12_release_v2_params() -> Params {
     let mut params = palw_t12_shipped_params();
+    palw_t12_arm_after_int13_at_v1(&mut params, PALW_T12_G14_17000_FENCES_V1, None);
     palw_t12_arm_int13_flag_day_at_v1(&mut params, None);
     palw_t12_arm_int11_flag_day_at_v1(&mut params, None);
     for fence in PALW_T12_POST_LAUNCH_FENCES_V4
@@ -12088,6 +12105,9 @@ pub fn palw_t12_release_v2_params() -> Params {
     {
         (fence.set)(&mut params, None);
     }
+    // Disarming a route fence moves the G14 mirror's inputs. The fold reads the mirror, so write it
+    // again or validate_palw_v2 refuses the ruleset.
+    params.sync_palw_g14_gates_v1();
     params
 }
 
@@ -12097,6 +12117,7 @@ pub fn palw_t12_release_v2_params() -> Params {
 /// list's lanes arm ONE fence over. Equal to the shipped ruleset while the list's height is `None`.
 pub fn palw_t12_release_v1_params() -> Params {
     let mut params = palw_t12_shipped_params();
+    palw_t12_arm_after_int13_at_v1(&mut params, PALW_T12_G14_17000_FENCES_V1, None);
     palw_t12_arm_int13_flag_day_at_v1(&mut params, None);
     palw_t12_arm_int11_flag_day_at_v1(&mut params, None);
     for fence in PALW_T12_POST_LAUNCH_FENCES_V4
@@ -12110,6 +12131,9 @@ pub fn palw_t12_release_v1_params() -> Params {
     {
         (fence.set)(&mut params, None);
     }
+    // Disarming a route fence moves the G14 mirror's inputs. The fold reads the mirror, so write it
+    // again or validate_palw_v2 refuses the ruleset.
+    params.sync_palw_g14_gates_v1();
     params
 }
 

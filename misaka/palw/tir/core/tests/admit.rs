@@ -4,6 +4,7 @@
 //! of range, oversize, a history-mixing primitive, a bad divisor or shift, a dead node,
 //! non-canonical bytes, a cone or replay past its ceiling — is refused, by rule.
 
+#![allow(warnings)]
 mod common;
 
 use std::time::{Duration, Instant};

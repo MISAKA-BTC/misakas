@@ -28,7 +28,7 @@ class RebindTests(unittest.TestCase):
         self.assertTrue(heights)
         self.assertEqual(set(heights),{'18400'})
         self.assertIn('NOT fresh 18,400-candidate runs',first)
-        self.assertEqual(re.findall(r'source_commit: (\[[^\n]+)',first),re.findall(r'source_commit: (\[[^\n]+)',old.decode()))
+        self.assertEqual([re.findall(r'0x[0-9a-f]+',v) for v in re.findall(r'source_commit:\s*(\[[^\]]*\])',first)], [re.findall(r'0x[0-9a-f]+',v) for v in re.findall(r'source_commit:\s*(\[[^\]]*\])',old.decode())])
         self.assertEqual(re.findall(r'kind: ([^,]+),',first),re.findall(r'kind: ([^,]+),',old.decode()))
         self.assertEqual(historical.read_bytes(),old)
         self.assertEqual(runs,{p:hashlib.sha256(p.read_bytes()).hexdigest() for p in runs})

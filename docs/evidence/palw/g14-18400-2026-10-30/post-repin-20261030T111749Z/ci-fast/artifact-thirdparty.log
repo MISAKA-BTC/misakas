@@ -1,0 +1,7 @@
+interpreter: python3 (3.9.6)
+interpreter: /Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/g14-18400-deploy/target/ci-gates/thirdparty-venv/bin/python (provisioned)
+libraries: mido 1.3.3 / numpy-stl 3.2.0
+AGREE stranger-5565f116d1627f5d.artifact.stl       numpy-stl: {"triangles": 92, "volume": "not checked: only `extrude` has a closed form here"}
+AGREE stranger-e55f61bc90a57f44.artifact.mid       mido: {"format": 1, "tracks": 3, "ppq": 96, "note_ons": 20, "seconds": 9.6}
+
+2 agreed, 0 disagreed, 0 unchecked

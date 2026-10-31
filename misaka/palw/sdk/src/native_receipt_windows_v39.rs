@@ -264,12 +264,14 @@ impl ReceiptWindowContractV39 {
 /// Readonly complete shared queue projection. Decoded rows are accepted only
 /// after configured Queue30 policy + SAME shared physical22 totals agree.
 #[derive(Clone)]
+#[allow(dead_code)]
 struct CheckedQueueV39 {
     global: NativeQueueGlobalV30,
     physical: NativeCarriageGlobalV22,
     entries: BTreeMap<Digest, QueueOriginalV39>,
 }
 #[derive(Clone)]
+#[allow(dead_code)]
 struct QueueOriginalV39 {
     funding: Digest,
     queue: NativeQueueLeaseV30,
@@ -386,6 +388,7 @@ pub struct QueueObservationV39 {
 /// `AnchoredReceiptPointV39::derive` constructs it, from the authenticated
 /// stream and Core factories; JSON never becomes a point.
 #[derive(Clone)]
+#[allow(dead_code)]
 pub struct AnchoredReceiptPointV39 {
     child: Hash64,
     parent: Hash64,
@@ -473,15 +476,7 @@ impl AnchoredReceiptPointV39 {
             };
             masters.insert(intended.master, MasterObservationV39 { master: intended.master, record, components, aggregate });
         }
-        Ok(Self {
-            child: anchor.child(),
-            parent: anchor.parent(),
-            daa,
-            state: anchor.inner(),
-            auxiliary: rows.root(),
-            queue,
-            masters,
-        })
+        Ok(Self { child: anchor.child(), parent: anchor.parent(), daa, state: anchor.inner(), auxiliary: rows.root(), queue, masters })
     }
 }
 /// Bounded transcript accumulator. Every consecutive selected-parent state is
@@ -539,7 +534,11 @@ impl<'a> ReceiptAccumulatorV39<'a> {
                 for (a, b) in old.components.iter().zip(&new.components) {
                     if let Some(a) = a {
                         let b = b.as_ref().ok_or("receipt39 funded original component disappeared")?;
-                        if a.job != b.job || a.funding != b.funding || a.admitted != b.admitted || a.claim.is_some() && a.claim != b.claim {
+                        if a.job != b.job
+                            || a.funding != b.funding
+                            || a.admitted != b.admitted
+                            || a.claim.is_some() && a.claim != b.claim
+                        {
                             return Err("receipt39 original component Fund/claim changed".into());
                         }
                     }
@@ -605,6 +604,7 @@ impl<'a> ReceiptAccumulatorV39<'a> {
             for m in &w.intended {
                 let entry = members.entry(m.member.clone()).or_default();
                 entry.1 += 1;
+                #[allow(clippy::type_complexity)]
                 let status = (|| -> Result<(String, Option<(u64, BTreeSet<Hash64>)>), String> {
                     let Some(o) = self.masters_final.get(&m.master) else { return Ok(("NOT_REGISTERED".into(), None)) };
                     let mut last = 0u64;
@@ -673,7 +673,9 @@ impl<'a> ReceiptAccumulatorV39<'a> {
             .map(|member| {
                 let all = windows.iter().all(|w| {
                     w["per_member"].as_array().is_some_and(|a| {
-                        a.iter().any(|m| m["member"] == *member && m["met"].as_u64() == m["intended"].as_u64() && m["intended"].as_u64() > Some(0))
+                        a.iter().any(|m| {
+                            m["member"] == *member && m["met"].as_u64() == m["intended"].as_u64() && m["intended"].as_u64() > Some(0)
+                        })
                     })
                 });
                 serde_json::json!({"member": member, "both_windows": if all { "MET" } else { "NOT_MET" }})

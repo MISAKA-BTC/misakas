@@ -1,4 +1,5 @@
 //! Independent canonical TIR enters the same node-bound preflight without model/frontend data.
+#![allow(warnings)]
 use std::process::Command;
 
 fn run(path: &std::path::Path, positions: &str) -> std::process::Output {

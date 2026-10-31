@@ -1,6 +1,7 @@
 //! **RFC-0003 §II.2.1: the node's generative worker, seat and court halves** (`gen_worker`), on the
 //! golden toy VLM and on tir-lower's lowered tiny LLaVA (`rfc3/lower` 4c25416a5).
 
+#![allow(warnings)]
 use kaspa_consensus_core::palw_court_v2::PalwCourtVerdictProofV2;
 use kaspa_consensus_core::palw_decode_pipeline_v4::DecodeConfigV4;
 use kaspa_consensus_core::palw_decode_select_v2::PalwDecodeSamplingV2;

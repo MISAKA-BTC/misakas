@@ -17,9 +17,18 @@ pub const PALW_MATERIAL_RELEASE_RECOVERY_TABLE_V2: u8 = 137;
 /// table nor the int-12 wire ledger names them (`palw_lifecycle_kind_owner_v1` routes each to
 /// `PalwLifecycleKindFenceV1::MaterialReleaseRecoveryV2`; below it they ride unjudged as the monetary-material-only build reads them).
 pub const PALW_MATERIAL_RECOVERY_FORMS_V2: [(&str, crate::palw_lifecycle_objects_v2::PalwLifecycleKindFenceV1); 3] = [
-    ("MonetaryMaterialEnrolledV1 / MonetaryMaterialReplacedV1 with a TypedKernelV4 scope", crate::palw_lifecycle_objects_v2::PalwLifecycleKindFenceV1::MaterialReleaseRecoveryV2),
-    ("PalwMonetaryMaterialActionV1::RecoveryV2", crate::palw_lifecycle_objects_v2::PalwLifecycleKindFenceV1::MaterialReleaseRecoveryV2),
-    ("PalwMonetaryMaterialActionV1::ChallengeCurrentV4", crate::palw_lifecycle_objects_v2::PalwLifecycleKindFenceV1::MaterialReleaseRecoveryV2),
+    (
+        "MonetaryMaterialEnrolledV1 / MonetaryMaterialReplacedV1 with a TypedKernelV4 scope",
+        crate::palw_lifecycle_objects_v2::PalwLifecycleKindFenceV1::MaterialReleaseRecoveryV2,
+    ),
+    (
+        "PalwMonetaryMaterialActionV1::RecoveryV2",
+        crate::palw_lifecycle_objects_v2::PalwLifecycleKindFenceV1::MaterialReleaseRecoveryV2,
+    ),
+    (
+        "PalwMonetaryMaterialActionV1::ChallengeCurrentV4",
+        crate::palw_lifecycle_objects_v2::PalwLifecycleKindFenceV1::MaterialReleaseRecoveryV2,
+    ),
 ];
 pub const PALW_MATERIAL_RELEASE_RECOVERY_MAX_CONTRACTS_V2: u32 = 4096;
 pub const PALW_MATERIAL_RELEASE_RECOVERY_MAX_GENERATIONS_V2: u16 = 64;
@@ -306,15 +315,14 @@ impl PalwMaterialRecoveryRowV2 {
                 return Err("recovery generation is duplicate, unordered or excessive");
             }
         }
-        if let Self::Terminal(r) = self {
-            if r.final_consent != c.generations.last().unwrap().consent
+        if let Self::Terminal(r) = self
+            && (r.final_consent != c.generations.last().unwrap().consent
                 || r.tail_block == Hash64::default()
                 || r.release_block == Hash64::default()
                 || r.acknowledged.iter().any(|provider| !c.generations.iter().any(|g| g.providers.contains(provider)))
-                || c.generations.iter().all(|g| g.providers.iter().all(|provider| r.acknowledged.contains(provider)))
-            {
-                return Err("terminal receipt or acknowledgement set differs");
-            }
+                || c.generations.iter().all(|g| g.providers.iter().all(|provider| r.acknowledged.contains(provider))))
+        {
+            return Err("terminal receipt or acknowledgement set differs");
         }
         Ok(())
     }
@@ -692,13 +700,13 @@ pub fn material_provider_terminals_owned_v4(
                 continue;
             }
             let row = row_owned(bytes)?;
-            if let PalwMaterialRecoveryRowV2::Terminal(r) = &*row {
-                if matches(r) {
-                    count = count.checked_add(1).ok_or("terminal count overflow")?;
-                    len = len
-                        .checked_add(borsh::object_length(r).map_err(|e| e.to_string())? as u64)
-                        .ok_or("terminal output extent overflow")?;
-                }
+            if let PalwMaterialRecoveryRowV2::Terminal(r) = &*row
+                && matches(r)
+            {
+                count = count.checked_add(1).ok_or("terminal count overflow")?;
+                len = len
+                    .checked_add(borsh::object_length(r).map_err(|e| e.to_string())? as u64)
+                    .ok_or("terminal output extent overflow")?;
             }
         }
     }
@@ -712,10 +720,10 @@ pub fn material_provider_terminals_owned_v4(
                 continue;
             }
             let row = row_owned(bytes)?;
-            if let PalwMaterialRecoveryRowV2::Terminal(r) = &*row {
-                if matches(r) {
-                    borsh::to_writer(&mut encoded, r).map_err(|e| e.to_string())?;
-                }
+            if let PalwMaterialRecoveryRowV2::Terminal(r) = &*row
+                && matches(r)
+            {
+                borsh::to_writer(&mut encoded, r).map_err(|e| e.to_string())?;
             }
         }
     }

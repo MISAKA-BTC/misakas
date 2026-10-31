@@ -1,5 +1,6 @@
 //! Synthetic full-graph resource/replay/court contract. No checkpoint, native
 //! route, model-fidelity, network-load or ExecutionFinal claim.
+#![allow(warnings)]
 use misaka_palw_kernel::{
     element::SegClaimContextV1,
     flat_court5::{FlatFaultV5, FlatOperandV5, FlatSegContextV5, flat_profile_commitment_v5, flat_trace_profile_id_v5},

@@ -748,6 +748,7 @@ pub fn score_fidelity(reference: &[Vec<f32>], integer: &[Vec<i32>]) -> FidelityV
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::*;
 
@@ -904,7 +905,10 @@ pub fn reference_forward_windows_v1(
             let logits = (0..cfg.vocab)
                 .map(|token| {
                     let row = &bytes[token * d * 2..(token + 1) * d * 2];
-                    row.chunks_exact(2).zip(&n).map(|(c, b)| f32::from_bits(u32::from(u16::from_le_bytes([c[0], c[1]])) << 16) * b).sum()
+                    row.chunks_exact(2)
+                        .zip(&n)
+                        .map(|(c, b)| f32::from_bits(u32::from(u16::from_le_bytes([c[0], c[1]])) << 16) * b)
+                        .sum()
                 })
                 .collect();
             (pos, logits)

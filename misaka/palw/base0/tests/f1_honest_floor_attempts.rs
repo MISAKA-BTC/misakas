@@ -8,6 +8,7 @@
 //! to have: `IdentityNotDerivable`, a refusal, never a conviction. (The reviewer's probe asserted
 //! "J5 skipped" here, the F1 rule; F1-M's 3a holds model classes to J5.)
 
+#![allow(warnings)]
 mod common;
 
 use common::floor_backend;

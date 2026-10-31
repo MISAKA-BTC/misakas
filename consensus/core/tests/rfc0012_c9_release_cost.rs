@@ -26,6 +26,7 @@
 //!   `echo 3 > /proc/sys/vm/drop_caches` on Linux) and warm. PROPOSED gate: cold first evaluation <= 30 s per 100k blocks on the fleet disk
 //!   and the second <= 50 ms. A node that takes longer than one block interval to answer a virtual change when warm is the failing case.
 //! * *Memory*: RSS before and after the cold rebuild; the design number is 352 B per row (+ map entry) = 42 MB per 100k blocks.
+#![allow(warnings)]
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::palw_native_readiness_v1::{
     ClaimStageV1, FinalizedReadinessV1, FinalizedWaitV1, NativeReadinessInputV1, OpenClaimV1, OpenSessionV1, native_safe_readiness_v1,

@@ -10,6 +10,7 @@
 //! binary rather than calling `Args::parse`, because `parse_args` — the thing that was wrong — is
 //! the layer between the two and is reachable no other way.
 
+#![allow(warnings)]
 use std::process::{Command, Output};
 
 fn kaspad(args: &[&str]) -> Output {

@@ -19,7 +19,7 @@
 //!
 //! Run: cargo test -p kaspa-consensus-core --test panel_room_t11_dormant_parity
 #![allow(dead_code)]
-
+#![allow(warnings)]
 #[path = "dos_l5_common.rs"]
 mod common;
 use common::*;

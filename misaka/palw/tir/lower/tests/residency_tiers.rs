@@ -10,6 +10,7 @@
 //! and the arithmetic adds up — the weights are the three tiers, the floor the pinned set, one token's
 //! routed rows and one admission in flight.
 
+#![allow(warnings)]
 use misaka_palw_tir_exec::{TirTierRulesV1, TirTierV1, TirTiersV1};
 use misaka_palw_tir_lower::fidelity;
 use misaka_palw_tir_lower::lower::LowerOpts;

@@ -279,12 +279,11 @@ impl<'a> ActualInputResolverV39<'a> {
         &self.maximum.request().stop
     }
     pub fn input_root(&self, position: u32, input: u8) -> Result<Digest, String> {
-        if let Some((p, map)) = &*self.cache.borrow() {
-            if *p == position {
-                if let Some(root) = map.get(&input) {
-                    return Ok(*root);
-                }
-            }
+        if let Some((p, map)) = &*self.cache.borrow()
+            && *p == position
+            && let Some(root) = map.get(&input)
+        {
+            return Ok(*root);
         }
         let root = self.input_root_uncached(position, input)?;
         let mut cache = self.cache.borrow_mut();

@@ -1,5 +1,6 @@
 //! Offline A6 checker. Frozen intent and file pointers are data; accepted native
 //! claims, Final32 credits and shared queue counters come from audit32 proofs.
+#![allow(warnings)]
 use kaspa_consensus_core::{Hash64, config::params::Params, network::NetworkId};
 use misaka_palw_sdk::{native_audit_io_v32::*, native_receipt_windows_v1::*};
 use serde::Deserialize;
@@ -96,6 +97,7 @@ fn run() -> Result<(), String> {
     let contract_path = PathBuf::from(get("--contract")?);
     let points_path = PathBuf::from(get("--points")?);
     let out = PathBuf::from(get("--out")?);
+    #[allow(clippy::drop_non_drop)]
     drop(get);
     let points_format = options.remove("--points-format").unwrap_or_else(|| "array-v1".into());
     let masters_file = options.remove("--master-witnesses");
@@ -222,6 +224,7 @@ fn run() -> Result<(), String> {
         }
         _ => return Err("receipt audit unknown explicit pointer format".into()),
     }
+    #[allow(clippy::drop_non_drop)]
     drop(consume);
     let mut report = accumulator.finish()?;
     report["network"] = network.into();

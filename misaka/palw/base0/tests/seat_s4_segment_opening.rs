@@ -16,6 +16,7 @@
 //! job — and the self-consistent forgery `SC01` licensed (every served value the honest run's, the
 //! claim a lie) replays to `matches == false`. No refusal is ever `Valid`.
 
+#![allow(warnings)]
 mod common;
 
 use common::*;

@@ -225,7 +225,8 @@ pub fn kernel_consumer_ledger_v1(
     let mut ledger = route.ledger()?;
     ledger.preview_mut_v1().court_scope_policy =
         provider_court.map(|activation_daa| misaka_palw_kernel::court_scope::CourtScopePolicyV1 { activation_daa });
-    ledger.preview_mut_v1().verifier_pay_policy = verifier_pay.map(kaspa_consensus_core::palw_verifier_pay_v1::palw_verifier_pay_interim_policy_v1);
+    ledger.preview_mut_v1().verifier_pay_policy =
+        verifier_pay.map(kaspa_consensus_core::palw_verifier_pay_v1::palw_verifier_pay_interim_policy_v1);
     Ok(ledger)
 }
 
@@ -648,6 +649,31 @@ pub fn kernel_step_sends_v1(
     })
 }
 
+/// The kernel model file's magic (`--palw-kernel-model`, `misaka palw build file-proof --model`).
+pub const KERNEL_MODEL_FILE_MAGIC_V1: &[u8; 8] = b"PALWKM01";
+
+/// **Read a kernel model file** (`PALWKM01` + Borsh of `(layer, slot, tensor)` rows) — shared by the node's verifier and the CLI's
+/// outsider filer, so both replay a claim against the same tensors.
+pub fn kernel_model_read_v1(path: &std::path::Path) -> Result<misaka_palw_tir::MapParams, String> {
+    let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let body = bytes.strip_prefix(KERNEL_MODEL_FILE_MAGIC_V1.as_slice()).ok_or("not a kernel model file (PALWKM01)")?;
+    let rows: Vec<(u16, Option<u16>, misaka_palw_kernel::public::TensorWireV1)> =
+        borsh::from_slice(body).map_err(|e| format!("{}: {e}", path.display()))?;
+    let mut params = misaka_palw_tir::MapParams::default();
+    for (j, l, wire) in rows {
+        params.tensors.insert((j, l), wire.decode().map_err(|e| format!("{}: tensor ({j}, {l:?}): {e}", path.display()))?);
+    }
+    Ok(params)
+}
+
+/// The parameter-commitment roots a model opens to (v1/v2 single programs commit `of`, v4/v5 `of_v3`).
+pub fn kernel_model_roots_v1(params: &misaka_palw_tir::MapParams) -> [Digest; 2] {
+    [
+        misaka_palw_kernel::trace::ParamCommitmentsV1::of(params).root(),
+        misaka_palw_kernel::trace::ParamCommitmentsV1::of_v3(params).root(),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -737,26 +763,4 @@ mod tests {
         }
         assert!(!past_horizon("the accuser's free collateral does not cover the filing fee"));
     }
-}
-
-/// The kernel model file's magic (`--palw-kernel-model`, `misaka palw build file-proof --model`).
-pub const KERNEL_MODEL_FILE_MAGIC_V1: &[u8; 8] = b"PALWKM01";
-
-/// **Read a kernel model file** (`PALWKM01` + Borsh of `(layer, slot, tensor)` rows) — shared by the node's verifier and the CLI's
-/// outsider filer, so both replay a claim against the same tensors.
-pub fn kernel_model_read_v1(path: &std::path::Path) -> Result<misaka_palw_tir::MapParams, String> {
-    let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let body = bytes.strip_prefix(KERNEL_MODEL_FILE_MAGIC_V1.as_slice()).ok_or("not a kernel model file (PALWKM01)")?;
-    let rows: Vec<(u16, Option<u16>, misaka_palw_kernel::public::TensorWireV1)> =
-        borsh::from_slice(body).map_err(|e| format!("{}: {e}", path.display()))?;
-    let mut params = misaka_palw_tir::MapParams::default();
-    for (j, l, wire) in rows {
-        params.tensors.insert((j, l), wire.decode().map_err(|e| format!("{}: tensor ({j}, {l:?}): {e}", path.display()))?);
-    }
-    Ok(params)
-}
-
-/// The parameter-commitment roots a model opens to (v1/v2 single programs commit `of`, v4/v5 `of_v3`).
-pub fn kernel_model_roots_v1(params: &misaka_palw_tir::MapParams) -> [Digest; 2] {
-    [misaka_palw_kernel::trace::ParamCommitmentsV1::of(params).root(), misaka_palw_kernel::trace::ParamCommitmentsV1::of_v3(params).root()]
 }

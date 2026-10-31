@@ -49,6 +49,9 @@
 //! Functions in this module assume and enforce these invariants. Callers are expected
 //! to respect them as well.
 
+#![allow(dead_code)]
+#![cfg_attr(test, allow(warnings))]
+
 pub mod config;
 pub mod consensus;
 pub mod constants;

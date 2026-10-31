@@ -15,7 +15,7 @@
 //! licence. Both need 7 ready seats, and both open `Prefetching`; a test that needs a row admitting
 //! makes it `Active` through the carriage, as `dos_repro_3d` does.
 #![allow(dead_code)]
-
+#![allow(warnings)]
 #[path = "dos_l5_common.rs"]
 mod dos;
 pub use dos::*;

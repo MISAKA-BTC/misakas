@@ -7,6 +7,7 @@
 //! binding the built-in adapters produce: every `Src` of every fixture must survive `to_expr` →
 //! `parse_weight_expr` unchanged, which is what makes the surface *general* and not a list of special cases.
 
+#![allow(warnings)]
 use misaka_palw_tir_lower::hf_schema::{AdapterChoice, Level, ReadOptions, TensorIndex};
 use misaka_palw_tir_lower::model::{ReportResult, analyze};
 use misaka_palw_tir_lower::quantfmt::QuantRegistry;

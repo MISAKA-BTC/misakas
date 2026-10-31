@@ -244,7 +244,8 @@ impl Params {
         }
         // RFC08-2: the combined liability predicate reads the ADR-0176 reservation rows and X3's hard deadline of every claim
         // admitted under it — both fences must be in force no later than this one, or every new claim's terms are unsourced.
-        let at_or_below = |activation: ForkActivation| activation != ForkActivation::never() && activation.daa_score() <= at.daa_score();
+        let at_or_below =
+            |activation: ForkActivation| activation != ForkActivation::never() && activation.daa_score() <= at.daa_score();
         if !self.palw_bond_budget_v1.as_ref().is_some_and(|f| at_or_below(f.activation)) {
             return Err(PalwModeV2Error::Invalid("palw_settlement_once_v1 requires the ADR-0176 bond budget fence at or below it"));
         }

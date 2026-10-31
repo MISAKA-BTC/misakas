@@ -22,7 +22,10 @@ pub struct SourceGraphBudgetV3 {
 /// Checked metadata bound for local graph expansion only. This is neither a
 /// native heap lease nor a cost/profile/admission capability.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct SourceGraphExtentV3 { vertices: u64, edges: u64 }
+struct SourceGraphExtentV3 {
+    vertices: u64,
+    edges: u64,
+}
 fn graph_extent_from_transport_v3(
     t: crate::palw_court_tir_requests_v1::TirSharedDataTransportUpperV1,
     full_ids: bool,
@@ -30,16 +33,22 @@ fn graph_extent_from_transport_v3(
     let overflow = || "source graph metadata extent overflow".to_string();
     let stream_controls = t.streams.checked_mul(2).and_then(|n| n.checked_add(t.parts)).ok_or_else(overflow)?;
     let responses = t.queries.checked_mul(t.maximum_custodians).ok_or_else(overflow)?;
-    if t.fresh_responses != responses { return Err("source graph metadata response mismatch".into()); }
+    if t.fresh_responses != responses {
+        return Err("source graph metadata response mismatch".into());
+    }
     let vertices = t.queries.checked_add(responses).and_then(|n| n.checked_add(stream_controls)).ok_or_else(overflow)?;
-    if vertices != t.signed_controls { return Err("source graph metadata control mismatch".into()); }
+    if vertices != t.signed_controls {
+        return Err("source graph metadata control mismatch".into());
+    }
     // Every unit-stream Begin has its query parent. FullIds Begin has none.
     // Each response depends on ALL R finishes and its own query, not just the
     // response signer's Finish: the exact R-squared OR-frontier edge bound.
     let no_query_begins = if full_ids { t.maximum_custodians } else { 0 };
     let stream_edges = stream_controls.checked_sub(no_query_begins).ok_or_else(overflow)?;
-    let edges = responses.checked_mul(t.maximum_custodians.checked_add(1).ok_or_else(overflow)?)
-        .and_then(|n| n.checked_add(stream_edges)).ok_or_else(overflow)?;
+    let edges = responses
+        .checked_mul(t.maximum_custodians.checked_add(1).ok_or_else(overflow)?)
+        .and_then(|n| n.checked_add(stream_edges))
+        .ok_or_else(overflow)?;
     Ok(SourceGraphExtentV3 { vertices, edges })
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -109,10 +118,27 @@ pub struct NativeSourceMaterialGraphV3 {
 fn hash<T: BorshSerialize>(scope: Hash64, kind: &T) -> Result<Hash64, String> {
     crate::palw_court_shared_tir_stream_v1::stream_digest(b"misaka-palw/source-material-graph/v3", &(scope, kind))
 }
-fn source_graph_relative_scope_v3(frame:&PalwTirPublicClaimV1,source:&PalwTirPublicSourceV1,profile:Hash64,queries:u64,roles:u64)->Result<Hash64,String>{
-    crate::palw_court_shared_tir_stream_v1::stream_digest(b"misaka-palw/source-material-scope/v3",&(
-        3u16,frame.plan_v1().original_claim,source.source_id_v1(),frame.plan_v1().resource_plan_id,
-        frame.plan_v1().rules_id,profile,queries,roles,PART))
+fn source_graph_relative_scope_v3(
+    frame: &PalwTirPublicClaimV1,
+    source: &PalwTirPublicSourceV1,
+    profile: Hash64,
+    queries: u64,
+    roles: u64,
+) -> Result<Hash64, String> {
+    crate::palw_court_shared_tir_stream_v1::stream_digest(
+        b"misaka-palw/source-material-scope/v3",
+        &(
+            3u16,
+            frame.plan_v1().original_claim,
+            source.source_id_v1(),
+            frame.plan_v1().resource_plan_id,
+            frame.plan_v1().rules_id,
+            profile,
+            queries,
+            roles,
+            PART,
+        ),
+    )
 }
 
 /// Structural material-graph coverage for the EXACT Constraint tail only.
@@ -121,23 +147,19 @@ fn native_constraint_graph_tail_requests_v3(
     frame: &PalwTirPublicClaimV1,
 ) -> Result<u64, crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
     use crate::palw_freeprompt_v3::PalwFpJobTailV1;
-    use crate::palw_native_resource_v1::{
-        NativeCoverageV1, NativeDecodeErrorV1 as E, TirNativeRequestsV1, preflight_native_value_v1,
-    };
+    use crate::palw_native_resource_v1::{NativeCoverageV1, NativeDecodeErrorV1 as E, TirNativeRequestsV1, preflight_native_value_v1};
     let job = &frame.original_v1().job;
     let bytes = match &job.tail {
         None => return Ok(0),
-        Some(PalwFpJobTailV1::Prefix(_)) if job.version==crate::palw_fp_prefix_v1::PALW_FP_PREFIX_VERSION => {
+        Some(PalwFpJobTailV1::Prefix(_)) if job.version == crate::palw_fp_prefix_v1::PALW_FP_PREFIX_VERSION => {
             // Fixed Copy tail; existing normative shape check is allocation-free.
             // Prefix StepSpace/template ownership is the separate family owner.
-            crate::palw_fp_prefix_v1::palw_fp_prefix_shape_v1(job).map_err(|e|E::Decode(e.to_string()))?;
+            crate::palw_fp_prefix_v1::palw_fp_prefix_shape_v1(job).map_err(|e| E::Decode(e.to_string()))?;
             return Ok(0);
         }
         Some(PalwFpJobTailV1::Constraint(tail)) if job.is_constraint() => &tail.constraint,
         _ => {
-            return Err(E::Resource(NativeCoverageV1::unsupported::<
-                NativeSourceMaterialGraphV3,
-            >(
+            return Err(E::Resource(NativeCoverageV1::unsupported::<NativeSourceMaterialGraphV3>(
                 "native source graph frame parser",
                 "this carried job-tail parser inventory is unavailable",
             )));
@@ -151,44 +173,32 @@ fn native_constraint_graph_tail_requests_v3(
             crate::palw_fp_constraint_v2::PALW_CONSTRAINT_MAX_BYTES_V2
         }
         _ => {
-            return Err(E::Decode(
-                "source graph Constraint form is unknown/truncated".into(),
-            ));
+            return Err(E::Decode("source graph Constraint form is unknown/truncated".into()));
         }
     };
     if bytes.len() > max {
-        return Err(E::Decode(
-            "source graph Constraint exceeds its existing form byte limit".into(),
-        ));
+        return Err(E::Decode("source graph Constraint exceeds its existing form byte limit".into()));
     }
-    let parsed = preflight_native_value_v1::<
-        crate::palw_decode_constraint_v1::PalwDecodeConstraintV1,
-    >(bytes.as_slice(), bytes.len() as u64)
-    .map_err(|e| match e.kind() {
-        std::io::ErrorKind::OutOfMemory
-        | std::io::ErrorKind::TimedOut
-        | std::io::ErrorKind::Unsupported => E::Resource(NativeCoverageV1::unsupported::<
-            NativeSourceMaterialGraphV3,
-        >(
-            "native source graph Constraint scanner",
-            &e.to_string(),
-        )),
-        _ => E::Decode(e.to_string()),
-    })?;
+    let parsed =
+        preflight_native_value_v1::<crate::palw_decode_constraint_v1::PalwDecodeConstraintV1>(bytes.as_slice(), bytes.len() as u64)
+            .map_err(|e| match e.kind() {
+                std::io::ErrorKind::OutOfMemory | std::io::ErrorKind::TimedOut | std::io::ErrorKind::Unsupported => {
+                    E::Resource(NativeCoverageV1::unsupported::<NativeSourceMaterialGraphV3>(
+                        "native source graph Constraint scanner",
+                        &e.to_string(),
+                    ))
+                }
+                _ => E::Decode(e.to_string()),
+            })?;
     let mut q = TirNativeRequestsV1::new();
-    q.add_v1(parsed.logical_requests_v1())
-        .map_err(E::Resource)?;
+    q.add_v1(parsed.logical_requests_v1()).map_err(E::Resource)?;
     // Parsed frames/nodes/edges coexist with ONE canonical serialization from
     // validate_form/from_bytes_form. The next writer replaces the previous;
     // *2 covers Borsh growth from the existing 1024-byte starting buffer.
     let writer = (bytes.len() as u64)
         .max(1024)
         .checked_mul(2)
-        .ok_or_else(|| {
-            E::Resource(NativeCoverageV1::overflow::<NativeSourceMaterialGraphV3>(
-                "Constraint canonical writer",
-            ))
-        })?;
+        .ok_or_else(|| E::Resource(NativeCoverageV1::overflow::<NativeSourceMaterialGraphV3>("Constraint canonical writer")))?;
     q.exact_v1::<u8>(writer).map_err(E::Resource)?;
     Ok(q.bytes_v1())
 }
@@ -206,14 +216,9 @@ fn native_check_constraint_graph_tail_v3(
         // crossing the legacy enum's string-only Malformed boundary.
         let parsed: crate::palw_decode_constraint_v1::PalwDecodeConstraintV1 =
             borsh::from_slice(bytes).map_err(|e| match e.kind() {
-                std::io::ErrorKind::OutOfMemory
-                | std::io::ErrorKind::TimedOut
-                | std::io::ErrorKind::Unsupported => E::Resource(NativeCoverageV1::unsupported::<
-                    NativeSourceMaterialGraphV3,
-                >(
-                    "native Constraint decode",
-                    &e.to_string(),
-                )),
+                std::io::ErrorKind::OutOfMemory | std::io::ErrorKind::TimedOut | std::io::ErrorKind::Unsupported => E::Resource(
+                    NativeCoverageV1::unsupported::<NativeSourceMaterialGraphV3>("native Constraint decode", &e.to_string()),
+                ),
                 _ => E::Decode(e.to_string()),
             })?;
         let (version, nodes, max) = match parsed.version {
@@ -229,9 +234,7 @@ fn native_check_constraint_graph_tail_v3(
             ),
             _ => return Err(E::Decode("unknown Constraint form".into())),
         };
-        parsed
-            .validate_form(version, nodes, max)
-            .map_err(|e| E::Decode(e.to_string()))?;
+        parsed.validate_form(version, nodes, max).map_err(|e| E::Decode(e.to_string()))?;
         if parsed.to_bytes() != *bytes {
             return Err(E::Decode("noncanonical Constraint form".into()));
         }
@@ -241,49 +244,62 @@ fn native_check_constraint_graph_tail_v3(
 
 /// Frame validation has its own temporary plan clone and Borsh/FP hash
 /// writers. No Source/StepSpace reconstruction is performed by this owner.
-fn native_source_graph_prelude_v3(frame:&PalwTirPublicClaimV1,source:&PalwTirPublicSourceV1,profile:Hash64)
-    ->Result<u64,crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
-    use crate::palw_native_resource_v1::{NativeDecodeErrorV1 as E,NativeCoverageV1,NativeHeapV1,TirNativeRequestsV1};
-    let mut q=TirNativeRequestsV1::new();
+fn native_source_graph_prelude_v3(
+    frame: &PalwTirPublicClaimV1,
+    source: &PalwTirPublicSourceV1,
+    profile: Hash64,
+) -> Result<u64, crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
+    use crate::palw_native_resource_v1::{NativeCoverageV1, NativeDecodeErrorV1 as E, NativeHeapV1, TirNativeRequestsV1};
+    let mut q = TirNativeRequestsV1::new();
     q.add_v1(native_constraint_graph_tail_requests_v3(frame)?).map_err(E::Resource)?;
     // Full frame heap is a conservative bound on the actual plan-only clone
     // in accepted_id_v1, plus frame subobject clones during structural checks.
-    let clone=frame.native_heap_v1("source graph frame validation clone");
+    let clone = frame.native_heap_v1("source graph frame validation clone");
     q.add_v1(clone.bytes().ok_or(E::Resource(clone))?).map_err(E::Resource)?;
-    let f=borsh::object_length(frame).map_err(|e|E::Decode(e.to_string()))? as u64;
+    let f = borsh::object_length(frame).map_err(|e| E::Decode(e.to_string()))? as u64;
     // Exact field widths of set.scope_id. Values are borrowed actual scope
     // facts; no invented source/profile is authenticated by a size exemplar.
-    let p=frame.plan_v1();
-    let scope=borsh::object_length(&(1u16,p.original_claim,p.allocation_id,p.rules_id,profile,source.source_id_v1(),0u64))
-        .map_err(|e|E::Decode(e.to_string()))? as u64;
-    let writer=f.max(scope).max(1024).checked_mul(2).ok_or_else(||E::Resource(
-        NativeCoverageV1::overflow::<NativeSourceMaterialGraphV3>("source graph Borsh hash writer")))?;
+    let p = frame.plan_v1();
+    let scope = borsh::object_length(&(1u16, p.original_claim, p.allocation_id, p.rules_id, profile, source.source_id_v1(), 0u64))
+        .map_err(|e| E::Decode(e.to_string()))? as u64;
+    let writer = f
+        .max(scope)
+        .max(1024)
+        .checked_mul(2)
+        .ok_or_else(|| E::Resource(NativeCoverageV1::overflow::<NativeSourceMaterialGraphV3>("source graph Borsh hash writer")))?;
     // Claim/job/header/pledge/receipt/plan writers execute sequentially; each
     // serializes a frame subobject. scope_id is the other fixed tuple above.
     // node/relative/absolute hashes stream directly and allocate no Vec writer.
     q.exact_v1::<u8>(writer).map_err(E::Resource)?;
     Ok(q.bytes_v1())
 }
-fn native_source_graph_output_v3(extent:SourceGraphExtentV3,queries:u64,roles:u64)
-    ->Result<u64,crate::palw_native_resource_v1::NativeCoverageV1> {
-    use crate::palw_native_resource_v1::{NativeCoverageV1,TirNativeRequestsV1,NativeRetainedV1,btree_node_envelope_bytes_v1};
-    if std::mem::size_of::<usize>()!=8 {
-        return Err(NativeCoverageV1::unsupported::<NativeSourceMaterialGraphV3>("source graph BTree inventory","64-bit native BTree profile required"));
+fn native_source_graph_output_v3(
+    extent: SourceGraphExtentV3,
+    queries: u64,
+    roles: u64,
+) -> Result<u64, crate::palw_native_resource_v1::NativeCoverageV1> {
+    use crate::palw_native_resource_v1::{NativeCoverageV1, NativeRetainedV1, TirNativeRequestsV1, btree_node_envelope_bytes_v1};
+    if std::mem::size_of::<usize>() != 8 {
+        return Err(NativeCoverageV1::unsupported::<NativeSourceMaterialGraphV3>(
+            "source graph BTree inventory",
+            "64-bit native BTree profile required",
+        ));
     }
-    let mut q=TirNativeRequestsV1::new();
-    let overflow=||NativeCoverageV1::overflow::<NativeSourceMaterialGraphV3>("source graph native counts");
-    let mut tree=|entries:u64,width:usize|->Result<(),NativeCoverageV1> {
+    let mut q = TirNativeRequestsV1::new();
+    let overflow = || NativeCoverageV1::overflow::<NativeSourceMaterialGraphV3>("source graph native counts");
+    let mut tree = |entries: u64, width: usize| -> Result<(), NativeCoverageV1> {
         q.add_v1(entries.checked_mul(width as u64).ok_or_else(overflow)?)
     };
-    tree(extent.vertices,btree_node_envelope_bytes_v1::<Hash64,SourceMaterialNodeV3>())?;
-    tree(queries,btree_node_envelope_bytes_v1::<u64,Hash64>())?;
-    tree(extent.vertices,btree_node_envelope_bytes_v1::<Hash64,usize>())?; // check indegree
-    tree(extent.vertices,btree_node_envelope_bytes_v1::<Hash64,Vec<Hash64>>())?; // check children
+    tree(extent.vertices, btree_node_envelope_bytes_v1::<Hash64, SourceMaterialNodeV3>())?;
+    tree(queries, btree_node_envelope_bytes_v1::<u64, Hash64>())?;
+    tree(extent.vertices, btree_node_envelope_bytes_v1::<Hash64, usize>())?; // check indegree
+    tree(extent.vertices, btree_node_envelope_bytes_v1::<Hash64, Vec<Hash64>>())?; // check children
     // Variable parent/children Vecs each have independent minimum capacity.
     // This counts the aggregate E elements AND a one-item growth envelope per
     // possible nonempty Vec, not E as one monolithic flat array.
-    let mut minimum=TirNativeRequestsV1::new();minimum.vec_v1::<Hash64>(1)?;
-    let minimum_bytes=minimum.bytes_v1();
+    let mut minimum = TirNativeRequestsV1::new();
+    minimum.vec_v1::<Hash64>(1)?;
+    let minimum_bytes = minimum.bytes_v1();
     for _ in 0..2 {
         q.vec_v1::<Hash64>(extent.edges)?;
         q.add_v1(extent.vertices.checked_mul(minimum_bytes).ok_or_else(overflow)?)?;
@@ -295,54 +311,95 @@ fn native_source_graph_output_v3(extent:SourceGraphExtentV3,queries:u64,roles:u6
     Ok(q.bytes_v1())
 }
 
-
 /// Origin classification is attached at the local limit check, never parsed from a string.
 #[derive(Debug)]
-pub(crate) enum SourceGraphDeriveErrorV3 { Semantic(String), Local(&'static str) }
-impl From<String> for SourceGraphDeriveErrorV3 {fn from(s:String)->Self {Self::Semantic(s)}}
-impl From<&str> for SourceGraphDeriveErrorV3 {fn from(s:&str)->Self {Self::Semantic(s.into())}}
+pub(crate) enum SourceGraphDeriveErrorV3 {
+    Semantic(String),
+    Local(&'static str),
+}
+impl From<String> for SourceGraphDeriveErrorV3 {
+    fn from(s: String) -> Self {
+        Self::Semantic(s)
+    }
+}
+impl From<&str> for SourceGraphDeriveErrorV3 {
+    fn from(s: &str) -> Self {
+        Self::Semantic(s.into())
+    }
+}
 impl SourceGraphDeriveErrorV3 {
-    pub(crate) fn legacy(self)->String {match self {Self::Semantic(s)=>s,Self::Local(s)=>s.into()}}
-    pub(crate) fn native(self)->crate::palw_native_resource_v1::NativeDecodeErrorV1<String> {
-        use crate::palw_native_resource_v1::{NativeDecodeErrorV1 as E,NativeCoverageV1};
-        match self {Self::Semantic(s)=>E::Decode(s),Self::Local(s)=>E::Resource(NativeCoverageV1::unsupported::<NativeSourceMaterialGraphV3>("local source graph exploration",s))}
+    pub(crate) fn legacy(self) -> String {
+        match self {
+            Self::Semantic(s) => s,
+            Self::Local(s) => s.into(),
+        }
+    }
+    pub(crate) fn native(self) -> crate::palw_native_resource_v1::NativeDecodeErrorV1<String> {
+        use crate::palw_native_resource_v1::{NativeCoverageV1, NativeDecodeErrorV1 as E};
+        match self {
+            Self::Semantic(s) => E::Decode(s),
+            Self::Local(s) => {
+                E::Resource(NativeCoverageV1::unsupported::<NativeSourceMaterialGraphV3>("local source graph exploration", s))
+            }
+        }
     }
 }
 impl NativeSourceMaterialGraphV3 {
     /// Explicit allocation owner only. Retains construction/index scratch
     /// conservatively through graph lifetime; no paid/native profile or complete
     /// original is certified. Old budgets, graph IDs and old derive remain.
-    pub fn derive_native_v3(frame:&PalwTirPublicClaimV1,
-        source:&crate::palw_native_resource_v1::NativeRetainedV1<PalwTirPublicSourceV1>,profile:Hash64,budget:SourceGraphBudgetV3)
-        ->Result<crate::palw_native_resource_v1::NativeRetainedV1<Self>,crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
-        Self::derive_native_reserved_v3(frame,source,profile,budget,crate::palw_native_resource_v1::reserve_native_requests_v1)
+    pub fn derive_native_v3(
+        frame: &PalwTirPublicClaimV1,
+        source: &crate::palw_native_resource_v1::NativeRetainedV1<PalwTirPublicSourceV1>,
+        profile: Hash64,
+        budget: SourceGraphBudgetV3,
+    ) -> Result<crate::palw_native_resource_v1::NativeRetainedV1<Self>, crate::palw_native_resource_v1::NativeDecodeErrorV1<String>>
+    {
+        Self::derive_native_reserved_v3(frame, source, profile, budget, crate::palw_native_resource_v1::reserve_native_requests_v1)
     }
-    fn derive_native_reserved_v3<R>(frame:&PalwTirPublicClaimV1,
-        source:&crate::palw_native_resource_v1::NativeRetainedV1<PalwTirPublicSourceV1>,profile:Hash64,budget:SourceGraphBudgetV3,reserve:R)
-        ->Result<crate::palw_native_resource_v1::NativeRetainedV1<Self>,crate::palw_native_resource_v1::NativeDecodeErrorV1<String>>
-        where R:FnOnce(u64)->Result<Option<crate::palw_native_resource_v1::NativeDemandLeaseV1>,crate::palw_native_resource_v1::NativeCoverageV1> {
-        use crate::palw_native_resource_v1::{NativeDecodeErrorV1 as E,NativeRetainedV1};
-        let prelude=native_source_graph_prelude_v3(frame,source,profile)?;
-        let mut lease=reserve(prelude).map_err(E::Resource)?;
+    fn derive_native_reserved_v3<R>(
+        frame: &PalwTirPublicClaimV1,
+        source: &crate::palw_native_resource_v1::NativeRetainedV1<PalwTirPublicSourceV1>,
+        profile: Hash64,
+        budget: SourceGraphBudgetV3,
+        reserve: R,
+    ) -> Result<crate::palw_native_resource_v1::NativeRetainedV1<Self>, crate::palw_native_resource_v1::NativeDecodeErrorV1<String>>
+    where
+        R: FnOnce(
+            u64,
+        ) -> Result<
+            Option<crate::palw_native_resource_v1::NativeDemandLeaseV1>,
+            crate::palw_native_resource_v1::NativeCoverageV1,
+        >,
+    {
+        use crate::palw_native_resource_v1::{NativeDecodeErrorV1 as E, NativeRetainedV1};
+        let prelude = native_source_graph_prelude_v3(frame, source, profile)?;
+        let mut lease = reserve(prelude).map_err(E::Resource)?;
         native_check_constraint_graph_tail_v3(frame)?;
         frame.check_structure_v1(&frame.key_v1()).map_err(E::Decode)?;
-        let set=TirSharedRequestSetV1::new(frame,source,profile).map_err(E::Decode)?;
-        let roles=frame.custody_v1().pledge_v1().maximum_custodians;
-        if roles==0 {return Err(E::Decode("source graph query/role budget exhausted".into()));}
-        if set.len()>budget.max_queries || roles>budget.max_roles {
+        let set = TirSharedRequestSetV1::new(frame, source, profile).map_err(E::Decode)?;
+        let roles = frame.custody_v1().pledge_v1().maximum_custodians;
+        if roles == 0 {
+            return Err(E::Decode("source graph query/role budget exhausted".into()));
+        }
+        if set.len() > budget.max_queries || roles > budget.max_roles {
             return Err(SourceGraphDeriveErrorV3::Local("source graph query/role budget exhausted").native());
         }
-        let upper=set.signed_data_transport_upper().map_err(E::Decode)?;
-        let extent=graph_extent_from_transport_v3(upper,set.has_full_ids_stream_v3()).map_err(E::Decode)?;
-        if extent.vertices>budget.max_vertices || extent.edges>budget.max_edges {
-            return Err(SourceGraphDeriveErrorV3::Local("source graph metadata vertex/edge budget exhausted before expansion").native());
+        let upper = set.signed_data_transport_upper().map_err(E::Decode)?;
+        let extent = graph_extent_from_transport_v3(upper, set.has_full_ids_stream_v3()).map_err(E::Decode)?;
+        if extent.vertices > budget.max_vertices || extent.edges > budget.max_edges {
+            return Err(
+                SourceGraphDeriveErrorV3::Local("source graph metadata vertex/edge budget exhausted before expansion").native()
+            );
         }
-        let output=native_source_graph_output_v3(extent,set.len(),roles).map_err(E::Resource)?;
-        if let Some(ticket)=lease.as_mut() {ticket.grow_memory_v1(output).map_err(E::Resource)?;}
+        let output = native_source_graph_output_v3(extent, set.len(), roles).map_err(E::Resource)?;
+        if let Some(ticket) = lease.as_mut() {
+            ticket.grow_memory_v1(output).map_err(E::Resource)?;
+        }
         // All shape/query maps and predecessor/check indices are now covered.
         // Stream/control hashes use fixed request descriptors and streaming sink.
-        let graph=Self::derive_typed_v3(frame,source,profile,budget).map_err(SourceGraphDeriveErrorV3::native)?;
-        Ok(NativeRetainedV1::from_owner_reserved_v1(graph,lease))
+        let graph = Self::derive_typed_v3(frame, source, profile, budget).map_err(SourceGraphDeriveErrorV3::native)?;
+        Ok(NativeRetainedV1::from_owner_reserved_v1(graph, lease))
     }
 
     /// `frame` and `source` must be resolved from the native original by the
@@ -355,14 +412,20 @@ impl NativeSourceMaterialGraphV3 {
         profile: Hash64,
         budget: SourceGraphBudgetV3,
     ) -> Result<Self, String> {
-        Self::derive_typed_v3(frame,source,profile,budget).map_err(SourceGraphDeriveErrorV3::legacy)
+        Self::derive_typed_v3(frame, source, profile, budget).map_err(SourceGraphDeriveErrorV3::legacy)
     }
-    fn derive_typed_v3(frame:&PalwTirPublicClaimV1,source:&PalwTirPublicSourceV1,profile:Hash64,budget:SourceGraphBudgetV3)
-        ->Result<Self,SourceGraphDeriveErrorV3> {
+    fn derive_typed_v3(
+        frame: &PalwTirPublicClaimV1,
+        source: &PalwTirPublicSourceV1,
+        profile: Hash64,
+        budget: SourceGraphBudgetV3,
+    ) -> Result<Self, SourceGraphDeriveErrorV3> {
         frame.check_structure_v1(&frame.key_v1())?;
         let set = TirSharedRequestSetV1::new(frame, source, profile)?;
         let roles = frame.custody_v1().pledge_v1().maximum_custodians;
-        if roles==0 {return Err("source graph query/role budget exhausted".into());}
+        if roles == 0 {
+            return Err("source graph query/role budget exhausted".into());
+        }
         if set.len() > budget.max_queries || roles > budget.max_roles {
             return Err(SourceGraphDeriveErrorV3::Local("source graph query/role budget exhausted"));
         }
@@ -375,7 +438,7 @@ impl NativeSourceMaterialGraphV3 {
         if extent.vertices > budget.max_vertices || extent.edges > budget.max_edges {
             return Err(SourceGraphDeriveErrorV3::Local("source graph metadata vertex/edge budget exhausted before expansion"));
         }
-        let relative_scope = source_graph_relative_scope_v3(frame,source,profile,set.len(),roles)?;
+        let relative_scope = source_graph_relative_scope_v3(frame, source, profile, set.len(), roles)?;
         let accepted_daa = frame.plan_v1().terms.accepted_daa;
         let hard_daa =
             accepted_daa.checked_add(crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA).ok_or("source graph original hard overflow")?;
@@ -442,7 +505,8 @@ impl NativeSourceMaterialGraphV3 {
         if parents.windows(2).any(|w| w[0] == w[1]) {
             return Err("duplicate source allocation parent".into());
         }
-        let edges = self.edges.checked_add(parents.len() as u64).ok_or(SourceGraphDeriveErrorV3::Local("source graph edge overflow"))?;
+        let edges =
+            self.edges.checked_add(parents.len() as u64).ok_or(SourceGraphDeriveErrorV3::Local("source graph edge overflow"))?;
         if edges > b.max_edges {
             return Err(SourceGraphDeriveErrorV3::Local("source graph edge budget exhausted"));
         }
@@ -521,15 +585,27 @@ impl NativeSourceMaterialGraphV3 {
     /// Rebind an immutable native-derived graph to the exact original frame and
     /// source without treating its namespace as an adopted service policy body.
     /// Caller admits frame identity hashing scratch separately.
-    pub(crate) fn check_frame_binding_v3(&self,frame:&PalwTirPublicClaimV1,source:&PalwTirPublicSourceV1,profile:Hash64)->Result<(),String>{
-        let set=TirSharedRequestSetV1::new(frame,source,profile)?;
-        let p=frame.plan_v1();let roles=frame.custody_v1().pledge_v1().maximum_custodians;
-        let scope=source_graph_relative_scope_v3(frame,source,profile,set.len(),roles)?;
-        let hard=p.terms.accepted_daa.checked_add(crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA).ok_or("source graph original hard overflow")?;
-        if (self.scope,self.absolute_scope,self.source,self.claim,self.accepted_daa,self.hard_daa,self.queries,self.roles)
-            !=(scope,set.scope_id()?,source.source_id_v1(),p.original_claim,p.terms.accepted_daa,hard,set.len(),roles){
+    pub(crate) fn check_frame_binding_v3(
+        &self,
+        frame: &PalwTirPublicClaimV1,
+        source: &PalwTirPublicSourceV1,
+        profile: Hash64,
+    ) -> Result<(), String> {
+        let set = TirSharedRequestSetV1::new(frame, source, profile)?;
+        let p = frame.plan_v1();
+        let roles = frame.custody_v1().pledge_v1().maximum_custodians;
+        let scope = source_graph_relative_scope_v3(frame, source, profile, set.len(), roles)?;
+        let hard = p
+            .terms
+            .accepted_daa
+            .checked_add(crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA)
+            .ok_or("source graph original hard overflow")?;
+        if (self.scope, self.absolute_scope, self.source, self.claim, self.accepted_daa, self.hard_daa, self.queries, self.roles)
+            != (scope, set.scope_id()?, source.source_id_v1(), p.original_claim, p.terms.accepted_daa, hard, set.len(), roles)
+        {
             return Err("source graph belongs to another frame/source/profile/allocation".into());
-        }Ok(())
+        }
+        Ok(())
     }
     pub fn coverage_v3(&self) -> SourceGraphCoverageV3 {
         SourceGraphCoverageV3::SourceMaterialOnly
@@ -559,10 +635,16 @@ impl NativeSourceMaterialGraphV3 {
     }
     /// Read the SAME existing logical Finish identity generated by insert().
     /// Does not allocate a new index or issue a material-completion receipt.
-    pub fn finish_node_v3(&self,target:SourceMaterialTargetV3,role:u64)->Result<Option<&SourceMaterialNodeV3>,String>{
-        if role>=self.roles||matches!(target,SourceMaterialTargetV3::Unit(n) if n>=self.queries){return Err("source Finish target/role outside native graph".into());}
-        let kind=SourceMaterialNodeKindV3::Finish{target,role};let id=hash(self.scope,&kind)?;
-        match self.nodes.get(&id){Some(node) if node.kind!=kind=>Err("source Finish identity/kind mismatch".into()),node=>Ok(node)}
+    pub fn finish_node_v3(&self, target: SourceMaterialTargetV3, role: u64) -> Result<Option<&SourceMaterialNodeV3>, String> {
+        if role >= self.roles || matches!(target,SourceMaterialTargetV3::Unit(n) if n>=self.queries) {
+            return Err("source Finish target/role outside native graph".into());
+        }
+        let kind = SourceMaterialNodeKindV3::Finish { target, role };
+        let id = hash(self.scope, &kind)?;
+        match self.nodes.get(&id) {
+            Some(node) if node.kind != kind => Err("source Finish identity/kind mismatch".into()),
+            node => Ok(node),
+        }
     }
     /// Absolute allocation identity cannot be borrowed by another accepting
     /// instance even when its source and relative grammar are identical.
@@ -718,58 +800,86 @@ mod tests {
     }
     #[test]
     fn native_source_graph_owner_keeps_exact_nodes_and_releases_growth_on_refusal() {
-        use crate::palw_native_resource_v1::{NativeDecodeErrorV1 as E,NativeDemandCheckerV1,NativeSnapshotResourceLimitsV1};
-        let profile=Hash64::from_u64_word(71);
-        for f in [fixture(),crate::palw_tir_public_claim_v1::palw_tir_public_frame_fixture_two_tile_v1()] {
-            let original=f.frame.original_v1();
-            let source=PalwTirPublicSourceV1::new_native_v1(&f.record,&f.layout,f.frame.header_v1(),
-                original.execution_root,original.trace_root,f.rules.maximum_leaves).unwrap();
-            let old=NativeSourceMaterialGraphV3::derive_v3(&f.frame,&source,profile,B).unwrap();
-            let set=TirSharedRequestSetV1::new(&f.frame,&source,profile).unwrap();
-            let extent=graph_extent_from_transport_v3(set.signed_data_transport_upper().unwrap(),set.has_full_ids_stream_v3()).unwrap();
-            let prelude=native_source_graph_prelude_v3(&f.frame,&source,profile).unwrap();
-            let output=native_source_graph_output_v3(extent,set.len(),old.roles).unwrap();
-            let total=prelude.checked_add(output).unwrap();
-            for quota in [prelude-1,total-1,total] {
-                let checker=NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 {memory_bytes:quota,database_bytes:0});
-                let result=NativeSourceMaterialGraphV3::derive_native_reserved_v3(&f.frame,&source,profile,B,
-                    |bytes|checker.reserve_requests_v1(bytes,0).map(Some));
-                if quota==total {
-                    let graph=result.unwrap();
-                    assert_eq!(graph.nodes,old.nodes);
-                    assert_eq!(graph.scope,old.scope);
-                    assert_eq!(graph.absolute_scope,old.absolute_scope);
-                    assert_eq!(graph.edges,old.edges);
-                    assert_eq!(checker.outstanding(),(total,0));
+        use crate::palw_native_resource_v1::{NativeDecodeErrorV1 as E, NativeDemandCheckerV1, NativeSnapshotResourceLimitsV1};
+        let profile = Hash64::from_u64_word(71);
+        for f in [fixture(), crate::palw_tir_public_claim_v1::palw_tir_public_frame_fixture_two_tile_v1()] {
+            let original = f.frame.original_v1();
+            let source = PalwTirPublicSourceV1::new_native_v1(
+                &f.record,
+                &f.layout,
+                f.frame.header_v1(),
+                original.execution_root,
+                original.trace_root,
+                f.rules.maximum_leaves,
+            )
+            .unwrap();
+            let old = NativeSourceMaterialGraphV3::derive_v3(&f.frame, &source, profile, B).unwrap();
+            let set = TirSharedRequestSetV1::new(&f.frame, &source, profile).unwrap();
+            let extent =
+                graph_extent_from_transport_v3(set.signed_data_transport_upper().unwrap(), set.has_full_ids_stream_v3()).unwrap();
+            let prelude = native_source_graph_prelude_v3(&f.frame, &source, profile).unwrap();
+            let output = native_source_graph_output_v3(extent, set.len(), old.roles).unwrap();
+            let total = prelude.checked_add(output).unwrap();
+            for quota in [prelude - 1, total - 1, total] {
+                let checker = NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 { memory_bytes: quota, database_bytes: 0 });
+                let result = NativeSourceMaterialGraphV3::derive_native_reserved_v3(&f.frame, &source, profile, B, |bytes| {
+                    checker.reserve_requests_v1(bytes, 0).map(Some)
+                });
+                if quota == total {
+                    let graph = result.unwrap();
+                    assert_eq!(graph.nodes, old.nodes);
+                    assert_eq!(graph.scope, old.scope);
+                    assert_eq!(graph.absolute_scope, old.absolute_scope);
+                    assert_eq!(graph.edges, old.edges);
+                    assert_eq!(checker.outstanding(), (total, 0));
                     drop(graph);
-                } else {assert!(matches!(result,Err(E::Resource(_))));}
-                assert_eq!(checker.outstanding(),(0,0));
+                } else {
+                    assert!(matches!(result, Err(E::Resource(_))));
+                }
+                assert_eq!(checker.outstanding(), (0, 0));
             }
-            assert!(matches!(NativeSourceMaterialGraphV3::derive_native_v3(&f.frame,&source,profile,
-                SourceGraphBudgetV3 {max_edges:extent.edges-1,..B}),Err(E::Resource(_))));
-            for small in [SourceGraphBudgetV3{max_queries:0,..B},SourceGraphBudgetV3{max_roles:old.roles-1,..B},
-                SourceGraphBudgetV3{max_vertices:0,..B},SourceGraphBudgetV3{max_edges:0,..B}] {
-                assert!(NativeSourceMaterialGraphV3::derive_v3(&f.frame,&source,profile,small).is_err());
-                assert!(matches!(NativeSourceMaterialGraphV3::derive_native_v3(&f.frame,&source,profile,small),Err(E::Resource(_))));
+            assert!(matches!(
+                NativeSourceMaterialGraphV3::derive_native_v3(
+                    &f.frame,
+                    &source,
+                    profile,
+                    SourceGraphBudgetV3 { max_edges: extent.edges - 1, ..B }
+                ),
+                Err(E::Resource(_))
+            ));
+            for small in [
+                SourceGraphBudgetV3 { max_queries: 0, ..B },
+                SourceGraphBudgetV3 { max_roles: old.roles - 1, ..B },
+                SourceGraphBudgetV3 { max_vertices: 0, ..B },
+                SourceGraphBudgetV3 { max_edges: 0, ..B },
+            ] {
+                assert!(NativeSourceMaterialGraphV3::derive_v3(&f.frame, &source, profile, small).is_err());
+                assert!(matches!(
+                    NativeSourceMaterialGraphV3::derive_native_v3(&f.frame, &source, profile, small),
+                    Err(E::Resource(_))
+                ));
             }
         }
-        assert!(native_source_graph_output_v3(SourceGraphExtentV3 {vertices:u64::MAX,edges:1},1,1).is_err());
-        assert!(native_source_graph_output_v3(SourceGraphExtentV3 {vertices:1,edges:u64::MAX},1,1).is_err());
+        assert!(native_source_graph_output_v3(SourceGraphExtentV3 { vertices: u64::MAX, edges: 1 }, 1, 1).is_err());
+        assert!(native_source_graph_output_v3(SourceGraphExtentV3 { vertices: 1, edges: u64::MAX }, 1, 1).is_err());
     }
     #[test]
     fn grouped_graph_extent_rejects_local_budget_before_expansion() {
         for f in [fixture(), crate::palw_tir_public_claim_v1::palw_tir_public_frame_fixture_two_tile_v1()] {
             let source = source(&f);
             let set = TirSharedRequestSetV1::new(&f.frame, &source, Hash64::from_u64_word(71)).unwrap();
-            let extent = graph_extent_from_transport_v3(set.signed_data_transport_upper().unwrap(),set.has_full_ids_stream_v3()).unwrap();
-            let exact_budget = SourceGraphBudgetV3 { max_vertices:extent.vertices,max_edges:extent.edges,..B };
-            let g = NativeSourceMaterialGraphV3::derive_v3(&f.frame,&source,Hash64::from_u64_word(71),exact_budget).unwrap();
+            let extent =
+                graph_extent_from_transport_v3(set.signed_data_transport_upper().unwrap(), set.has_full_ids_stream_v3()).unwrap();
+            let exact_budget = SourceGraphBudgetV3 { max_vertices: extent.vertices, max_edges: extent.edges, ..B };
+            let g = NativeSourceMaterialGraphV3::derive_v3(&f.frame, &source, Hash64::from_u64_word(71), exact_budget).unwrap();
             assert!(g.nodes.len() as u64 <= extent.vertices && g.edges <= extent.edges);
             assert!(extent.vertices > 0 && extent.edges > 0);
-            for small in [SourceGraphBudgetV3 {max_vertices:extent.vertices-1,..exact_budget},
-                          SourceGraphBudgetV3 {max_edges:extent.edges-1,..exact_budget}] {
-                let error=NativeSourceMaterialGraphV3::derive_v3(&f.frame,&source,Hash64::from_u64_word(71),small).unwrap_err();
-                assert_eq!(error,"source graph metadata vertex/edge budget exhausted before expansion");
+            for small in [
+                SourceGraphBudgetV3 { max_vertices: extent.vertices - 1, ..exact_budget },
+                SourceGraphBudgetV3 { max_edges: extent.edges - 1, ..exact_budget },
+            ] {
+                let error = NativeSourceMaterialGraphV3::derive_v3(&f.frame, &source, Hash64::from_u64_word(71), small).unwrap_err();
+                assert_eq!(error, "source graph metadata vertex/edge budget exhausted before expansion");
             }
         }
     }
@@ -778,12 +888,20 @@ mod tests {
         use crate::palw_court_tir_requests_v1::TirSharedDataTransportUpperV1 as T;
         // Arithmetic-only unit fixture, not an authenticated original/profile.
         // Q=2, R=3, one shared FullIds stream per role: V=2+6+9.
-        let t=T {queries:2,maximum_custodians:3,streams:3,parts:3,fresh_responses:6,signed_controls:17,..Default::default()};
-        assert_eq!(graph_extent_from_transport_v3(t,true).unwrap(),SourceGraphExtentV3 {vertices:17,edges:30});
-        assert_eq!(graph_extent_from_transport_v3(t,false).unwrap().edges,33);
-        assert!(graph_extent_from_transport_v3(T {maximum_custodians:u64::MAX,..t},true).is_err());
-        assert!(graph_extent_from_transport_v3(T {streams:u64::MAX,..t},true).is_err());
-        assert!(graph_extent_from_transport_v3(T {fresh_responses:5,..t},true).is_err());
+        let t = T {
+            queries: 2,
+            maximum_custodians: 3,
+            streams: 3,
+            parts: 3,
+            fresh_responses: 6,
+            signed_controls: 17,
+            ..Default::default()
+        };
+        assert_eq!(graph_extent_from_transport_v3(t, true).unwrap(), SourceGraphExtentV3 { vertices: 17, edges: 30 });
+        assert_eq!(graph_extent_from_transport_v3(t, false).unwrap().edges, 33);
+        assert!(graph_extent_from_transport_v3(T { maximum_custodians: u64::MAX, ..t }, true).is_err());
+        assert!(graph_extent_from_transport_v3(T { streams: u64::MAX, ..t }, true).is_err());
+        assert!(graph_extent_from_transport_v3(T { fresh_responses: 5, ..t }, true).is_err());
     }
     #[test]
     fn native_source_universe_and_all_role_streams_are_closed_without_owner_slots() {

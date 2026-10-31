@@ -14,6 +14,7 @@
 //! * every leaf's ADR-0176 D3 weight-allocation slot is version 0 (the fold's weights — `palw_bond_budget_v1` clips inside the fold), and the node's
 //!   DNS BFT gate facts are testnet-12's non-refusing state (the overlay outside `Active`, nothing confirmed — live t12 is in Bootstrap).
 
+#![allow(warnings)]
 use super::t12_round_lane_e2e::{t12_genesis_chain, t12_with_harness_cards};
 use kaspa_consensus_core::api::ConsensusApi;
 use kaspa_consensus_core::config::params::ForkActivation;

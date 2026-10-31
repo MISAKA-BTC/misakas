@@ -1,4 +1,5 @@
 //! Private proof and actor-owned chunk preparation; synthetic grammar only.
+#![allow(warnings)]
 use kaspa_consensus_core::{
     Hash64,
     palw_flat_model_vector_v7::FlatNativeSealRowV7,

@@ -1,6 +1,7 @@
 //! AUDIT LANE A1 — the registrant's canonical job decouples DECLARED leaves from DERIVED draw work.
 //! Run: cargo test -p kaspa-consensus-core --test audit_a1_deepest_job_decoupling -- --nocapture
 
+#![allow(warnings)]
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::palw_base0_profile::rc_job_context;
 use kaspa_consensus_core::palw_canonical_work_v1::{PalwCanonicalClassDescriptorV1, palw_canonical_draw_work_v1};

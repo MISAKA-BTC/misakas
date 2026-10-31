@@ -22,6 +22,7 @@
 //! than generated in this file, so that it survives the generator: `write_the_corpus` rebuilds it
 //! deliberately, and a corpus that changes is as much a decision as a rule that changes.
 
+#![allow(warnings)]
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 

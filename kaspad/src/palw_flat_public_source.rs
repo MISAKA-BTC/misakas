@@ -122,7 +122,12 @@ pub(crate) fn float_answer_v1(
 
 /// The Float32 twin of [`retain_v1`]: the backend projects its run's public f32 rows into the
 /// generic sidecar, or answers `false` (it retains none — every in-node backend today).
-pub(crate) fn retain_float_v1(dir: &Path, claim: Hash64, backend: &dyn PalwExecutionBackendV1, capture: &[u8]) -> Result<bool, String> {
+pub(crate) fn retain_float_v1(
+    dir: &Path,
+    claim: Hash64,
+    backend: &dyn PalwExecutionBackendV1,
+    capture: &[u8],
+) -> Result<bool, String> {
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let path = float_path_v1(dir, claim);
     let partial = path.with_extension("float-public.partial");
@@ -210,9 +215,10 @@ impl SharedClaimCacheGcV1 {
         }
         let directory = directory.to_path_buf();
         let irreversible = self.irreversible_daa;
-        let done = tokio::task::spawn_blocking(move || gc_shared_claim_v1(&directory, lease.claim, lease.material_until_daa, irreversible))
-            .await
-            .map_err(|e| format!("bounded shared cache GC worker failed: {e}"))??;
+        let done =
+            tokio::task::spawn_blocking(move || gc_shared_claim_v1(&directory, lease.claim, lease.material_until_daa, irreversible))
+                .await
+                .map_err(|e| format!("bounded shared cache GC worker failed: {e}"))??;
         if done {
             let accepted = session.clone().spawn_blocking(move |c| c.palw_shared_claim_cache_gc_ack_v1(lease)).await?;
             if !accepted {

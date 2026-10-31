@@ -4,6 +4,7 @@
 //! structurally distinct place, and a forged sibling. The in-crate sweep stops at n <= 1,000, so at
 //! level 12 it never exercises a whole-block digest next to a partial edge.
 
+#![allow(warnings)]
 use kaspa_consensus_core::palw_step_leg::{PALW_STEP_LEG_MAX_LEAVES, step_merkle_range_siblings_v1, step_merkle_root_v1};
 use kaspa_consensus_core::palw_verification_v2::palw_segment_leaf_range_v2;
 use kaspa_hashes::Hash64;

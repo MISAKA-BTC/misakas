@@ -15,9 +15,7 @@
 use super::*;
 use crate::config::params::palw_t12_shipped_params;
 use crate::palw_fork_authority_v2::PalwDeepReorgV2;
-use crate::palw_fork_choice_rule_e_v1::{
-    palw_rule_e_decide_v2, palw_rule_e_sides_above_fork_v1, palw_rule_e_sides_by_claim_set_v1,
-};
+use crate::palw_fork_choice_rule_e_v1::{palw_rule_e_decide_v2, palw_rule_e_sides_above_fork_v1, palw_rule_e_sides_by_claim_set_v1};
 use crate::palw_security_certification_v1::*;
 use crate::palw_state_v2::{
     PalwBondStateV2, PalwBondStatusV2, PalwClaimPhaseV2, PalwClaimSourceV2, PalwVoidReasonV2, palw_claim_template_v1,
@@ -193,7 +191,11 @@ fn rfc18_t0_no_frontier_no_weight_no_settled_anchor_no_reward_from_uncertified_c
     }
     assert_eq!(frontier_moves, 0, "safe_frontier: no adversary claim may stand as the frontier");
     // The only claim that certifies is the Free-Prompt Final (weight only through its spends — none here).
-    assert_eq!(safe_weight, s.adversary_claims.last().map(|(_, c)| c.pwu as u128).unwrap(), "safe_weight: only the certified FP record");
+    assert_eq!(
+        safe_weight,
+        s.adversary_claims.last().map(|(_, c)| c.pwu as u128).unwrap(),
+        "safe_weight: only the certified FP record"
+    );
     assert_eq!(provisional, 0, "bounded_immature / live_total: nothing provisional past the fence");
     assert_eq!(settled_anchor_ticks, 0, "settled anchors: no licence or Final site ticks for a governed claim");
     // Reward outflow: a held issuance-funded reward is named only by a certifying outcome; none of the adversary's attempts has one.
@@ -227,10 +229,17 @@ fn rfc18_t0_rule_e_participation_share_is_zero_and_the_honest_side_wins_every_pa
     let fork = fork_state();
     let pair = palw_rule_e_sides_above_fork_v1(&s.adversary, &s.honest, &fork, FORK_BLUE, &p, false, false, None).unwrap();
     let (adv, hon) = (pair.a, pair.b);
-    assert_eq!(adv.participation_capital_v2, 0, "rule-E participation share: the adversary's uncertified/voided attempts count nothing");
+    assert_eq!(
+        adv.participation_capital_v2, 0,
+        "rule-E participation share: the adversary's uncertified/voided attempts count nothing"
+    );
     assert_eq!(adv.participation, 0, "v1 participation reads the same Gate C mapping (no uncertified attempt is an attempt)");
     assert!(hon.participation_capital_v2 > 0);
-    assert_eq!((adv.economic().0, adv.economic().2 - adv.economic().1), (0, 0), "no frontier and no live weight in the adversary's exclusive past (its only safe weight is the certified FP record's spends: none)");
+    assert_eq!(
+        (adv.economic().0, adv.economic().2 - adv.economic().1),
+        (0, 0),
+        "no frontier and no live weight in the adversary's exclusive past (its only safe weight is the certified FP record's spends: none)"
+    );
     for (incumbent, challenger, expect) in [(&adv, &hon, PalwDeepReorgV2::Allow), (&hon, &adv, PalwDeepReorgV2::Refuse)] {
         let decision = palw_rule_e_decide_v2(incumbent, challenger, true, &pair, true, || false, || false);
         assert_eq!(decision, expect);

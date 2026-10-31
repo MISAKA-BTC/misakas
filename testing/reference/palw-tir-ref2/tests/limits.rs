@@ -3,6 +3,7 @@
 //! states what the text requires; this implementation must match the text and the first one must
 //! match this one.
 
+#![allow(warnings)]
 mod common;
 
 use common::bridge::*;

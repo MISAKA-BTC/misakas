@@ -36,6 +36,7 @@
 //!   claim.pwu            `palw_attempt_derived_pwu_v1(target, U2)` = attempts * U2     [MAC-eq]
 //!   W0                   `palw_work_floor_v1(escrow, rate)` = escrow * 1e9 / rate      [CCU]
 
+#![allow(warnings)]
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::params::palw_t12_shipped_params;
 use kaspa_consensus_core::palw_admission_v2::palw_attempt_derived_pwu_v1;

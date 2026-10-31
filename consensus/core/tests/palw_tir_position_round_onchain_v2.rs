@@ -11,6 +11,7 @@
 //! * A version-3 lookahead whose level-1 child is one tile carries that tile's position round: one disclosure + one path
 //!   reach exactly the phase the old round + choice + position round reach (B-01), and tampers are refused (B-03).
 
+#![allow(warnings)]
 #[path = "palw_tir_fixture_common.rs"]
 mod fixture;
 use fixture::*;
@@ -20,17 +21,17 @@ use kaspa_consensus_core::palw_bisect::{PalwBisectPartyV1, PalwBisectTurnV1};
 use kaspa_consensus_core::palw_state_v2::palw_tir_position_terminal_applies_with_v2;
 use kaspa_consensus_core::palw_step_refute::PalwStepRefuteError;
 use kaspa_consensus_core::palw_tir_court_v1::{
-    build_tir_dissect_bottom_v1, build_tir_dissect_position_bottom_v1, build_tir_dissect_position_round_v1, build_tir_dissect_round_v1,
-    build_tir_root_claim_v1, check_tir_dissect_bottom_v1, check_tir_dissect_position_bottom_v1,
+    build_tir_dissect_bottom_v1, build_tir_dissect_position_bottom_v1, build_tir_dissect_position_round_v1,
+    build_tir_dissect_round_v1, build_tir_root_claim_v1, check_tir_dissect_bottom_v1, check_tir_dissect_position_bottom_v1,
 };
 use kaspa_consensus_core::palw_tir_dissect_v1::{
-    PALW_TIR_DISSECT_OBJECT_VERSION_V1, PALW_TIR_LOOKAHEAD_OBJECT_VERSION_V2, PALW_TIR_LOOKAHEAD_POSITION_VERSION_V2, PalwTirChoicePathV2,
-    PalwTirDissectChoiceV1, PalwTirDissectPhaseV1, PalwTirDissectRoundV1, PalwTirDissectSiteV1, PalwTirLookaheadDisclosureV2,
-    palw_tir_dissect_site_v1,
+    PALW_TIR_DISSECT_OBJECT_VERSION_V1, PALW_TIR_LOOKAHEAD_OBJECT_VERSION_V2, PALW_TIR_LOOKAHEAD_POSITION_VERSION_V2,
+    PalwTirChoicePathV2, PalwTirDissectChoiceV1, PalwTirDissectPhaseV1, PalwTirDissectRoundV1, PalwTirDissectSiteV1,
+    PalwTirLookaheadDisclosureV2, palw_tir_dissect_site_v1,
 };
 use kaspa_consensus_core::palw_tir_position_terminal_v2::{
-    PALW_TIR_POSITION_OBJECT_VERSION_V2, PalwTirPositionChoiceV2, check_tir_position_dissection_v2, palw_tir_position_dissection_digest_v2,
-    palw_tir_position_dissection_for_v2, palw_tir_position_named_v2,
+    PALW_TIR_POSITION_OBJECT_VERSION_V2, PalwTirPositionChoiceV2, check_tir_position_dissection_v2,
+    palw_tir_position_dissection_digest_v2, palw_tir_position_dissection_for_v2, palw_tir_position_named_v2,
 };
 
 const SESSION: Hash64 = Hash64::from_bytes([0x6F; 64]);
@@ -119,7 +120,10 @@ fn a_new_claims_wide_terminal_owes_the_position_round_and_its_silence_is_the_res
                 assert_eq!(phase.terminal_range(), None);
                 assert_eq!(phase.whole_tile_terminal_range_v2(), None);
                 let whole = build_tir_dissect_bottom_v1(&x.binding, &terminal, &store, &RULES).expect("whole-tile bottom");
-                assert!(!matches!(check_tir_dissect_bottom_v1(&phase, &whole, leaf, &RULES), Err(PalwStepRefuteError::NoFaultFound) | Ok(_)));
+                assert!(!matches!(
+                    check_tir_dissect_bottom_v1(&phase, &whole, leaf, &RULES),
+                    Err(PalwStepRefuteError::NoFaultFound) | Ok(_)
+                ));
                 let any = PalwTirDissectRoundV1 { version: PALW_TIR_DISSECT_OBJECT_VERSION_V1, children: vec![] };
                 assert!(phase.clone().apply_round(&any, deadline, W).is_err(), "no tile round at one tile");
                 let la = PalwTirLookaheadDisclosureV2 { version: PALW_TIR_LOOKAHEAD_OBJECT_VERSION_V2, frontier: vec![] };
@@ -150,7 +154,10 @@ fn a_new_claims_wide_terminal_owes_the_position_round_and_its_silence_is_the_res
                 assert!(phase.clone().declare_no_show(50 + W + 1).is_err());
                 assert_eq!(phase.whole_tile_terminal_range_v2(), None);
                 assert_eq!(phase.terminal_range(), Some((from, to)));
-                assert!(!matches!(check_tir_dissect_bottom_v1(&phase, &whole, leaf, &RULES), Err(PalwStepRefuteError::NoFaultFound) | Ok(_)));
+                assert!(!matches!(
+                    check_tir_dissect_bottom_v1(&phase, &whole, leaf, &RULES),
+                    Err(PalwStepRefuteError::NoFaultFound) | Ok(_)
+                ));
 
                 // The position close names a position of the round ON CHAIN, and only of it.
                 let c = PalwTirPositionChoiceV2 {
@@ -162,7 +169,10 @@ fn a_new_claims_wide_terminal_owes_the_position_round_and_its_silence_is_the_res
                 };
                 let named = palw_tir_position_named_v2(&phase, &d, &c).expect("names the last position");
                 let bottom = build_tir_dissect_position_bottom_v1(&x.binding, &named, &store, &RULES).expect("position bottom");
-                assert_eq!(check_tir_dissect_position_bottom_v1(&phase, &named, &bottom, leaf, &RULES), Err(PalwStepRefuteError::NoFaultFound));
+                assert_eq!(
+                    check_tir_dissect_position_bottom_v1(&phase, &named, &bottom, leaf, &RULES),
+                    Err(PalwStepRefuteError::NoFaultFound)
+                );
                 // Another (still folding) round than the disclosed one is refused.
                 let mut other = honest.clone();
                 if other.children.len() >= 2 {
@@ -256,9 +266,18 @@ fn a_lookahead_ending_on_positions_equals_the_tile_choice_plus_the_position_roun
                 // New path: one disclosure, one choice path.
                 let mut new = phase.clone();
                 new.apply_lookahead_disclosure_v2(&msg, CAP, daa, W).unwrap();
-                let p = PalwTirChoicePathV2 { version: PALW_TIR_LOOKAHEAD_OBJECT_VERSION_V2, session_id: SESSION, round: phase.round(), path: vec![i as u8] };
+                let p = PalwTirChoicePathV2 {
+                    version: PALW_TIR_LOOKAHEAD_OBJECT_VERSION_V2,
+                    session_id: SESSION,
+                    round: phase.round(),
+                    path: vec![i as u8],
+                };
                 new.apply_choice_path_v2(&msg, &p, CAP, daa, W).unwrap();
-                assert_eq!(new, expected, "{} leaf {leaf} child {i}: lookahead to positions ≡ round + choice + position round", f.name);
+                assert_eq!(
+                    new, expected,
+                    "{} leaf {leaf} child {i}: lookahead to positions ≡ round + choice + position round",
+                    f.name
+                );
                 if position_round.is_some() {
                     assert!(new.disclosed_position_round_v2().is_some());
                     assert_eq!(new.whole_tile_terminal_range_v2(), None, "the whole-tile close is retired");

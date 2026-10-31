@@ -25,6 +25,7 @@
 //! commitments root, the evidence folds, and its reward R arrives after the reveal. A node e2e on a
 //! devnet preset is post-launch (the operator moved every drill and node launch after the t12 launch,
 //! 2026-09-24).
+#![allow(warnings)]
 use super::*;
 use kaspa_consensus_core::palw_false_valid_filing_v1::{
     PALW_FALSE_VALID_RECEIPTS_PER_SEAT_V1, PalwFalseValidFilingCheckV1 as Check, PalwFalseValidFilingV1, PalwFalseValidPolicyV1,

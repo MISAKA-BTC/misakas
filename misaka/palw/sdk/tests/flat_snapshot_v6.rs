@@ -1,4 +1,5 @@
 //! Local fixture roots are not chain membership or candidate admission evidence.
+#![allow(warnings)]
 use kaspa_consensus_core::{
     Hash64, palw_flat_model_seal_v6::*, palw_flat_model_vector_v3::*, palw_kernel_route_v1::*, palw_model_artifact_v2::*,
     palw_model_vector_v2::ModelVectorPostV2, palw_state_v2::PalwBondKeyV2, tx::TransactionOutpoint,

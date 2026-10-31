@@ -46,7 +46,12 @@ pub(super) fn shard(
     )
     .map_err(refused)
 }
-pub(super) fn write(builder: &mut TransitionBuilder<'_>, s: &DiscoveryShardV13, id: Digest, job: Digest) -> Result<(), PalwStateV2Error> {
+pub(super) fn write(
+    builder: &mut TransitionBuilder<'_>,
+    s: &DiscoveryShardV13,
+    id: Digest,
+    job: Digest,
+) -> Result<(), PalwStateV2Error> {
     let g = s.global_row();
     let a = s.actor_row();
     let j = s.subject_row();

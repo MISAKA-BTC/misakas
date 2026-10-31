@@ -7,6 +7,7 @@
 //! `FENCE_NOT_ARMED(palw_task_heads_v1)` at every height, the admission the profile would run recorded beside it
 //! (`HEAD_PROFILE_HYPOTHETICAL: …`), and the media-pipeline kernel route (K2-TIR-v3) reported, never merged.
 
+#![allow(warnings)]
 use misaka_palw_sdk::preflight::{Depth, Options, Report, StageStatus, run};
 use std::path::{Path, PathBuf};
 

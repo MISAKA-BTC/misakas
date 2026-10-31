@@ -11,6 +11,7 @@
 //! build before the field existed: `befb59dfe` (the mainnet-values commit this change was built on),
 //! whose numbers these are.
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{
     ForkActivation, Params, SIMNET_PARAMS, TESTNET_PARAMS, devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params,
     palw_t12_shipped_params,
@@ -59,19 +60,19 @@ const SIMNET_IDS: (&str, &str, &str) = (
 
 /// testnet-12 at `befb59dfe` (the mainnet-values commit's own pins: `1870bc1f…` / `6e193d30…` /
 /// `79563f51…`) — what testnet-12 is with the cap taken away: the cap is the only thing that moved it.
-// re-pin 2026-10-08 @42452229ee51: no DAA-9,000 flag day (user, 2026-10-08): the int-13 list is dormant; ids back to the int-12 release (was 2d4d50dd…, 75261e0b…)
+// re-pin 2026-10-30 @64535b7bf7e8: User selected DAA18400 for the unpublished G14 schedule on 2026-10-30; preserve the current main CI fixes (was 22d8d77e…, d69f9957…)
 const T12_BEFORE_THE_CAP: (&str, &str, &str) = (
-    "a928098725ed6533cdae313f39d5c32089720eeb1255a8d490ce1c06f4f47e19",
+    "42ea6b4d7fa3a51d9bd8b835d33c4d1cbc73316411063814ab787d816aa18a61",
     "50990e0f0b634856aeae49eb38ffa38cfa991571be196d27c17befaefe805ec2",
-    "250fe032e9a5ab2de3d5ad427427bc2707100269ace5c5803c7f4ee9764b975e",
+    "5a49847263e15fbe6df010f0b744eeac6c6468e7b3d598ec7b9e386766ce9e4b",
 );
 
 /// testnet-12 as this change ships it — the ids a testnet-12 node on this build announces.
-// re-pin 2026-10-08 @42452229ee51: no DAA-9,000 flag day (user, 2026-10-08): the int-13 list is dormant; ids back to the int-12 release (was 2e567642…, 5f5df817…)
+// re-pin 2026-10-30 @64535b7bf7e8: User selected DAA18400 for the unpublished G14 schedule on 2026-10-30; preserve the current main CI fixes (was 73e67678…, fd42c167…)
 const T12_WITH_THE_CAP: (&str, &str, &str) = (
-    "5ee7fd8ee019968cf52929b844cf9ddfb1aad500842a89cf04bced8ba4edefb6",
+    "3e6da238306cfdb7e71599d5ef8fb314f1b3ff33a50673af1321f3da9cfa5b94",
     "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-    "1678e07359f6727e96224041450a3b1d2aadcf8acd6bb6db0c277ff4d401c9b9",
+    "b4706ae535fc2c9e4f0a0fe1b6cb0456025f3e00c1b8aba5cde02191f46f9194",
 );
 
 fn shipped(name: &str) -> Params {

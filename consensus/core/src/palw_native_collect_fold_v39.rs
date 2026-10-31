@@ -546,10 +546,10 @@ pub(super) fn collect(
         builder.write_kernel_row(TABLE, k(40, pid), None)?;
     }
     let r = builder.state.kernel_route.as_ref().unwrap();
-    if let Ok(j) = commit_journal(r, &h) {
-        if j.attempt != 0 {
-            erase_pages(builder, id, j.attempt, j.count)?;
-        }
+    if let Ok(j) = commit_journal(r, &h)
+        && j.attempt != 0
+    {
+        erase_pages(builder, id, j.attempt, j.count)?;
     }
     for kind in [COMMIT_JOURNAL, OPENED, 36] {
         builder.write_kernel_row(TABLE, k(kind, &id), None)?;

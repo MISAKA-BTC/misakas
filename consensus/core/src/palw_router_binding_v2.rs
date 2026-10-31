@@ -123,14 +123,15 @@ fn fixed(out: &PalwStepOutLenV1) -> Option<u64> {
 fn reader_blocks_v2(profile: &PalwShapeProfileV3, reader: &crate::palw_step::PalwStepNodeV1) -> Option<u64> {
     let out = fixed(&reader.out_len)?;
     let name = reader.weight_name.as_str();
-    let block = if name.ends_with(".ffn_gate_exps.routed") || name.ends_with(".ffn_up_exps.routed") || name.ends_with(".ffn_expert_gated.a16")
-    {
-        u64::from(profile.ffn_dim)
-    } else if name.ends_with(".ffn_down_exps.routed") {
-        u64::from(profile.hidden_dim)
-    } else {
-        return None;
-    };
+    let block =
+        if name.ends_with(".ffn_gate_exps.routed") || name.ends_with(".ffn_up_exps.routed") || name.ends_with(".ffn_expert_gated.a16")
+        {
+            u64::from(profile.ffn_dim)
+        } else if name.ends_with(".ffn_down_exps.routed") {
+            u64::from(profile.hidden_dim)
+        } else {
+            return None;
+        };
     (block != 0 && out.is_multiple_of(block)).then(|| out / block)
 }
 

@@ -2,6 +2,7 @@
 //! must read a continuity-bound image; the ordinary step check refuses a substituted
 //! KV row, a reset, a skipped or an unshifted window. Authenticated-opening
 //! conviction runs on real trace openings in the consolidated validation phase.
+#![allow(warnings)]
 use misaka_palw_kernel::{
     flat_history8::{HistoryNodeV8, HistorySelectionPlanV8},
     flat_window37::*,

@@ -7,6 +7,7 @@
 //! ADR-0143 a root has exactly one owner", and it checks that closure with a `str::contains`
 //! over `config/params.rs`. These tests drive the real fold instead.
 
+#![allow(warnings)]
 use kaspa_consensus_core::palw_state_v2::{
     PalwBlockContextV2, PalwBondKeyV2, PalwChainStateV2, PalwConsensusObjectV2 as Obj, PalwPwuRuleV2, PalwStateParamsV2,
     PalwStateV2Error, PalwTransitionExtrasV1, apply_palw_transition_v2_with_extras,

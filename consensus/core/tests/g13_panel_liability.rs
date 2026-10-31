@@ -21,11 +21,14 @@
 //!
 //! Run: cargo test -p kaspa-consensus-core --test g13_panel_liability -j 4 -- --test-threads=2 --nocapture
 
+#![allow(warnings)]
 #[path = "rcore_common.rs"]
 mod common;
 use common::*;
 
-use kaspa_consensus_core::config::params::{ForkActivation, palw_t12_launch_params_v1};
+use kaspa_consensus_core::config::params::{
+    ForkActivation, PALW_T12_G14_17000_FENCES_V1, palw_t12_arm_after_int13_at_v1, palw_t12_launch_params_v1,
+};
 use kaspa_consensus_core::palw_g14_gates_v1::*;
 use kaspa_consensus_core::palw_offence_v1::{
     PALW_PANEL_FALSE_VALID_VERSION_V1, PalwOffenceKindV1, PalwPanelContradictionV1, PalwPanelFalseValidEvidenceV1,
@@ -67,6 +70,10 @@ enum Rule {
 /// asserted to be refused by name.
 fn ruleset(rule: Rule) -> Params {
     let mut p = palw_t12_launch_params_v1();
+    // An isolated genesis skips the public arming-record pins. The G14 list stays off: this lane
+    // folds claims directly, and the public flag day would turn the route and the ingress cap on.
+    p.genesis = palw_isolated_g14_genesis_v1(&p.genesis, Hash64::from_u64_word(0x0613_0000_0000_0001)).expect("isolated");
+    palw_t12_arm_after_int13_at_v1(&mut p, PALW_T12_G14_17000_FENCES_V1, None);
     let at = Some(ForkActivation::new(0));
     p.palw_final_lock_life = at;
     p.sync_palw_final_lock_life();
@@ -235,6 +242,8 @@ fn lg14a_with_v02_lock_life_needs_the_full_collateral_split() {
     life_later.validate_palw_v2_with_arming_records_v1(&records(&life_later)).expect("the split with the life (testnet-12's 750)");
     // LG14-A without V02's life (testnet-12 as launched): no requirement.
     let mut launch = palw_t12_launch_params_v1();
+    launch.genesis = palw_isolated_g14_genesis_v1(&launch.genesis, Hash64::from_u64_word(0x0613_0000_0000_0002)).expect("isolated");
+    palw_t12_arm_after_int13_at_v1(&mut launch, PALW_T12_G14_17000_FENCES_V1, None);
     launch.palw_legacy_public_filer_v1 = Some(ForkActivation::new(0));
     launch.sync_palw_legacy_public_filer_v1();
     launch.sync_palw_g14_gates_v1();
@@ -471,7 +480,11 @@ fn stream(rule: Rule, seat_collateral: Option<u64>, e: u128, cadence: u64, windo
         if drawable && rooms.iter().all(|r| *r >= e) {
             let id = c.floor_claim(seed);
             seed += 1;
-            c.step(&[PalwConsensusObjectV2::PanelBound { claim: id, anchor: h(0xAC_0000 + c.daa), seats: seats_of(&c.floor_seats()) }]);
+            c.step(&[PalwConsensusObjectV2::PanelBound {
+                claim: id,
+                anchor: h(0xAC_0000 + c.daa),
+                seats: seats_of(&c.floor_seats()),
+            }]);
             assert!(matches!(c.claim(&id).phase, PalwClaimPhaseV2::PanelBound { .. }), "room ≥ eligibility: the Panel binds");
             let bind_daa = c.daa;
             let receipts: Vec<_> = c.floor_seats().iter().map(|(k, _)| valid(id, *k, bind_daa)).collect();
@@ -611,7 +624,8 @@ fn capital_efficiency_against_the_old_rule() {
         assert!(of(Rule::New) >= of(Rule::NoSplit), "{level:?}: the split never takes fewer claims");
         assert!(of(Rule::Old) >= of(Rule::New), "{level:?}: the longer horizon never takes more claims");
     }
-    let genesis = |rule: Rule| rows.iter().find(|(c, r, _)| c.is_none() && *r == rule).map(|(_, _, run)| (run.bound, run.offered)).unwrap();
+    let genesis =
+        |rule: Rule| rows.iter().find(|(c, r, _)| c.is_none() && *r == rule).map(|(_, _, run)| (run.bound, run.offered)).unwrap();
     assert_eq!(genesis(Rule::New).0, genesis(Rule::New).1, "at genesis collateral every offered claim is taken");
     // **User decision 2026-10-17: the Panel floor under G-13's lock rule is 240,000 MSK** (`PALW_PANEL_FLOOR_UNDER_G13_SOMPI_V1`). It is
     // re-derived here from the measured per-claim values: the smallest seat that sustains the healthy per-seat rate under the new rule

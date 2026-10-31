@@ -66,7 +66,9 @@ impl TransitionBuilder<'_> {
         daa_score: u64,
     ) -> Result<(), PalwStateV2Error> {
         if !self.d2_court_active_v1(daa_score) {
-            return Err(PalwStateV2Error::ReadinessRootRefused("the readiness disclosure court is dormant (palw_court_model_scope_v1)"));
+            return Err(PalwStateV2Error::ReadinessRootRefused(
+                "the readiness disclosure court is dormant (palw_court_model_scope_v1)",
+            ));
         }
         let (key, entry) = dc::palw_d2_disclosure_open_v1(&self.state.d2_readiness, demand, cap, fees, daa_score).map_err(refused)?;
         let bond = self
@@ -81,9 +83,15 @@ impl TransitionBuilder<'_> {
     }
 
     /// **Tag 232**: the seat's answer — discloses, or convicts the root on a path its own root refutes.
-    pub(super) fn answer_d2_disclosure_v1(&mut self, answer: &dc::PalwD2DisclosureAnswerV1, daa_score: u64) -> Result<(), PalwStateV2Error> {
+    pub(super) fn answer_d2_disclosure_v1(
+        &mut self,
+        answer: &dc::PalwD2DisclosureAnswerV1,
+        daa_score: u64,
+    ) -> Result<(), PalwStateV2Error> {
         if !self.d2_court_active_v1(daa_score) {
-            return Err(PalwStateV2Error::ReadinessRootRefused("the readiness disclosure court is dormant (palw_court_model_scope_v1)"));
+            return Err(PalwStateV2Error::ReadinessRootRefused(
+                "the readiness disclosure court is dormant (palw_court_model_scope_v1)",
+            ));
         }
         for (key, entry) in dc::palw_d2_disclosure_answer_v1(&self.state.d2_readiness, answer, daa_score).map_err(refused)? {
             self.write_d2_readiness_v1(key, Some(entry))?;
@@ -103,8 +111,7 @@ impl TransitionBuilder<'_> {
         let writes = {
             let book = self.state.court_service_state_v1().map(|s| &s.book);
             let supplied = |case: &dc::PalwD2DisclosureCaseV1| {
-                supply_premise
-                    && book.is_some_and(|book| book.supply.range(case.opened_daa..=case.deadline_daa).next().is_some())
+                supply_premise && book.is_some_and(|book| book.supply.range(case.opened_daa..=case.deadline_daa).next().is_some())
             };
             dc::palw_d2_disclosure_sweep_with_supply_v1(&self.state.d2_readiness, daa_score, &supplied)
         };
@@ -132,7 +139,10 @@ mod tests {
         PalwBondKeyV2(crate::tx::TransactionOutpoint::new(h(n), 0))
     }
     fn delta(daa: u64, entries: Vec<PalwDeltaEntryV2>) -> PalwStateDeltaV2 {
-        PalwStateDeltaV2 { point: PalwBlockContextV2 { block: BlockHash::from_u64_word(daa), daa_score: daa, blue_score: 1, subsidy: 0 }, entries }
+        PalwStateDeltaV2 {
+            point: PalwBlockContextV2 { block: BlockHash::from_u64_word(daa), daa_score: daa, blue_score: 1, subsidy: 0 },
+            entries,
+        }
     }
     /// A genesis state with the seat (3) and a challenger (9), each a bond with free collateral.
     fn parent() -> PalwChainStateV2 {
@@ -193,7 +203,13 @@ mod tests {
         assert!(b.record_d2_readiness_root_v1(&root, cap, FENCE).is_err(), "once per seat and draw");
         let (s1, d1) = (b.state.clone(), delta(FENCE, b.entries.clone()));
 
-        let demand = dc::PalwD2DisclosureDemandV1 { root_key: rk, ordinal: 2, challenger: bond_key(9), fee_sompi: 7, valid_until_daa: FENCE + 5 };
+        let demand = dc::PalwD2DisclosureDemandV1 {
+            root_key: rk,
+            ordinal: 2,
+            challenger: bond_key(9),
+            fee_sompi: 7,
+            valid_until_daa: FENCE + 5,
+        };
         let mut b = TransitionBuilder::new(&s1, &p, false, false, false, false, &extras);
         assert!(b.open_d2_disclosure_v1(&demand, cap, None, FENCE + 1).is_err(), "unadopted fee schedule");
         let mut unfunded = demand;
@@ -246,7 +262,8 @@ mod tests {
         let rk = rr::palw_d2_readiness_root_key_v1(&root.context());
         let mut b = TransitionBuilder::new(&parent(), &p, false, false, false, false, &extras);
         b.record_d2_readiness_root_v1(&root, cap, FENCE).unwrap();
-        let demand = dc::PalwD2DisclosureDemandV1 { root_key: rk, ordinal: 0, challenger: bond_key(9), fee_sompi: 7, valid_until_daa: FENCE };
+        let demand =
+            dc::PalwD2DisclosureDemandV1 { root_key: rk, ordinal: 0, challenger: bond_key(9), fee_sompi: 7, valid_until_daa: FENCE };
         b.open_d2_disclosure_v1(&demand, cap, FEES, FENCE).unwrap();
         let plain = b.state.clone();
         let deadline = FENCE + dc::PALW_D2_DISCLOSURE_TURN_DAA_V1;
@@ -259,11 +276,18 @@ mod tests {
             book.reserve(&[ServicePacket { id: [0xD2; 64], release_daa: daa, service_before: daa + 1, cost }], daa + 10_000).unwrap();
             book.observe_block(daa, [1; 64], Default::default()).unwrap();
             let h = Hash64::from_u64_word(0xD2);
-            let svc = crate::palw_court_service_state_v2::CourtServiceStateV2 { version: 2, source_profile_id: h,
-                profile_id: crate::palw_court_service_state_v2::court_service_profile_id_v2(h), book, claims: Default::default() };
+            let svc = crate::palw_court_service_state_v2::CourtServiceStateV2 {
+                version: 2,
+                source_profile_id: h,
+                profile_id: crate::palw_court_service_state_v2::court_service_profile_id_v2(h),
+                book,
+                claims: Default::default(),
+            };
             let mut s = plain.clone();
-            s.staged_courts.insert(crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1::CourtService,
-                crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::CourtService(Box::new(svc).into()));
+            s.staged_courts.insert(
+                crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1::CourtService,
+                crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::CourtService(Box::new(svc).into()),
+            );
             s
         };
         let inside = supplied_at(FENCE + 1);
@@ -280,7 +304,11 @@ mod tests {
             let undone = revert_delta_v2(&swept, &delta(deadline + 1, b.entries.clone()), &p).unwrap();
             assert_eq!(undone.state_root(), open.state_root());
             let mut b = TransitionBuilder::new(&undone, &p, false, false, false, false, &extras);
-            let answer = dc::PalwD2DisclosureAnswerV1 { root_key: rk, ordinal: 0, path: rr::palw_d2_readiness_path_v1(&root.context(), &ds, 0) };
+            let answer = dc::PalwD2DisclosureAnswerV1 {
+                root_key: rk,
+                ordinal: 0,
+                path: rr::palw_d2_readiness_path_v1(&root.context(), &ds, 0),
+            };
             b.answer_d2_disclosure_v1(&answer, deadline).unwrap();
             assert!(matches!(
                 b.state.d2_readiness_v1().get(&dc::PalwD2ReadinessKeyV1::Case(rk, 0)),

@@ -92,7 +92,7 @@ pub fn compact_proof_binding_key_v4(enrollment: Digest, round: u32) -> Vec<u8> {
 impl crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
     pub fn paid_compact_contract_v4(&self, plan: &Digest) -> Result<PalwPaidCompactContractV4, String> {
         let row: PalwPaidCompactContractV4 =
-            self.aux_row(PAID_CLAIM_COMPACT_V4, &plan.to_vec()).ok_or("native compact registration missing")?;
+            self.aux_row(PAID_CLAIM_COMPACT_V4, plan.as_ref()).ok_or("native compact registration missing")?;
         if row.registration.id() != *plan {
             return Err("native compact registration key mismatch".into());
         }
@@ -210,7 +210,7 @@ impl crate::palw_state_v2::PalwChainStateV2 {
                 let round: crate::palw_claim_interactive_v3::PalwPaidClaimRoundV3 = route
                     .aux_row(
                         crate::palw_claim_challenge_v2::PAID_CLAIM_ROUNDS_V2,
-                        &misaka_palw_kernel::claim_interactive_v3::round_id_v3(binding.enrollment, binding.round).to_vec(),
+                        misaka_palw_kernel::claim_interactive_v3::round_id_v3(binding.enrollment, binding.round).as_ref(),
                     )
                     .ok_or_else(|| refuse("orphan compact proof binding".into()))?;
                 route.validate_paid_round_v4(&round, &a, &ledger).map_err(&refuse)?;

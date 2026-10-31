@@ -6,6 +6,7 @@
 //! scale, a swapped half or a misrouted head drops agreement to chance), not how well a trained
 //! model quantises — that is the real-checkpoint run's job.
 
+#![allow(warnings)]
 use misaka_palw_tir::interval::analyze_ranges;
 use misaka_palw_tir_lower::float_ref::ParamStore;
 use misaka_palw_tir_lower::float_ref::stream::Resident;

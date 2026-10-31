@@ -8,6 +8,7 @@
 //! Only heartbeats are mined here: on testnet-12 no lane `bits` prices exists, so the heartbeat is
 //! the clock, a slot takes two beats (the one stamped into the open slot and the one that merges it
 //! and steps), and everything this file asserts is a statement about those two blocks.
+#![allow(warnings)]
 use super::t12_round_lane_e2e::{stamp_harness_time, t12_with_harness_cards, t12_with_harness_cards_and_evm};
 use super::{OnetimeTxSelector, TestContext, new_miner_data};
 use crate::consensus::test_consensus::TestConsensus;
@@ -1417,11 +1418,7 @@ async fn t12_validation_clock_preserves_the_lead_cap_and_retry() {
 async fn t12_unarmed_chain_advances_past_daa_16000() {
     kaspa_core::log::try_init_logger("warn");
     let (mut ctx, _config) = t12_clock(true);
-    assert_eq!(
-        kaspa_consensus_core::config::params::PALW_T12_FULL_ACTIVATION_DAA,
-        None,
-        "this run is the unarmed ruleset"
-    );
+    assert_eq!(kaspa_consensus_core::config::params::PALW_T12_FULL_ACTIVATION_DAA, None, "this run is the unarmed ruleset");
     let stop = std::env::var("PALW_DRILL_DAA").ok().and_then(|s| s.parse::<u64>().ok()).unwrap_or(16_001);
     let started = std::time::Instant::now();
     let mut nonce = 1u64;

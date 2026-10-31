@@ -9,6 +9,7 @@
 //! of two (the shift), 32-bit divisors (the hardware division), wide and near-`2^63` divisors (the
 //! long division, and its `d ≥ 2^63` shortcut).
 
+#![allow(warnings)]
 mod common;
 
 use misaka_palw_tir::DType;

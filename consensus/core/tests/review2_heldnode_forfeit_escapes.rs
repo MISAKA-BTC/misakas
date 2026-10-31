@@ -18,6 +18,7 @@
 //! through the carriage the way the fold leaves them (the floor fixture carries no binding a
 //! `DefaultAccusedHeld` could name); kaspad's `held_court_e2e` plays both escapes through the node.
 
+#![allow(warnings)]
 #[path = "rcore_common.rs"]
 mod common;
 use common::*;

@@ -89,8 +89,13 @@ mod tests {
         Serializer::serialize(&request, &mut bytes).unwrap();
         let back = <GetPalwTirOriginalQuoteRequest as Deserializer>::deserialize(&mut &bytes[..]).unwrap();
         assert_eq!((back.commitment_hex, back.binding_hex), ("ab".to_string(), "cd".to_string()));
-        let response =
-            GetPalwTirOriginalQuoteResponse { available: true, quoted: true, refusal: String::new(), quote_daa: 17_001, plan_hex: "00ff".into() };
+        let response = GetPalwTirOriginalQuoteResponse {
+            available: true,
+            quoted: true,
+            refusal: String::new(),
+            quote_daa: 17_001,
+            plan_hex: "00ff".into(),
+        };
         let mut bytes = Vec::new();
         Serializer::serialize(&response, &mut bytes).unwrap();
         let back = <GetPalwTirOriginalQuoteResponse as Deserializer>::deserialize(&mut &bytes[..]).unwrap();

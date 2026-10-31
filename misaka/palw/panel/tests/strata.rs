@@ -4,6 +4,7 @@
 //! alternates never reused per stratum — and every rule is re-checked by the carriage's own validation. A flat claim is
 //! exactly what it was. Fixtures mirror `stages.rs` (the staged fold a production block runs).
 
+#![allow(warnings)]
 use kaspa_hashes::Hash64;
 use misaka_palw_panel::*;
 use std::collections::{BTreeMap, BTreeSet};

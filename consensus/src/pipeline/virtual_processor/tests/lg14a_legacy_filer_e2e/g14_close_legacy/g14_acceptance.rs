@@ -96,7 +96,8 @@ fn false_valid_filings(lg: &Lg, id: Hash64, evidence: &LeafEvidence, own_rows: &
             evidence.prompt_ids_opening.clone(),
         )
         .object_v2();
-        if let Some(PalwFalseValidFilingCheckV1::File { .. }) = lg.chain.ctx.consensus.palw_false_valid_filing_check_v1(object.clone()) {
+        if let Some(PalwFalseValidFilingCheckV1::File { .. }) = lg.chain.ctx.consensus.palw_false_valid_filing_check_v1(object.clone())
+        {
             filings.push((card, object));
         }
     }
@@ -509,7 +510,8 @@ async fn g14_accept_f_the_pursuit_window_and_the_payout_never_overlap() {
     assert!(state.vesting_row(&id).is_some_and(|r| r.matured_at.is_none()), "unmatured inside the window");
     assert!(state.pending_payout(&palw_vesting_payout_key_v1(&id)).is_none(), "nothing paid inside the window");
     let view = lg.view(id);
-    let check = lg.chain.ctx.consensus.palw_legacy_dispute_reservation_check_v1(palw_fraud_filer_reservation_v1(&view, lg.bond(NEWCOMER)));
+    let check =
+        lg.chain.ctx.consensus.palw_legacy_dispute_reservation_check_v1(palw_fraud_filer_reservation_v1(&view, lg.bond(NEWCOMER)));
     assert!(check.as_ref().is_some_and(|r| r.is_ok()), "just before the expiry the node still admits a reservation: {check:?}");
     // Past the window: retired, not pursuable, untouched; the payout (if any yet) comes only now.
     lg.beat_to(expiry + 2).await;
@@ -607,9 +609,9 @@ fn g14_cross_lg(at: u64) -> Lg {
     params.sync_palw_g14_gates_v1();
     let unisolated = params.validate_palw_v2().expect_err("unmarked genesis still refuses production arming");
     assert!(format!("{unisolated:?}").contains("no arm-readiness record"), "{unisolated:?}");
-    let incomplete = params.validate_palw_court_policy_completeness_v1(
-        kaspa_consensus_core::palw_g14_gates_v1::PalwG14GatedFenceV1::LegacyHeldDaV2,
-    ).expect_err("missing F02/F03 policy independently refuses an unmarked genesis");
+    let incomplete = params
+        .validate_palw_court_policy_completeness_v1(kaspa_consensus_core::palw_g14_gates_v1::PalwG14GatedFenceV1::LegacyHeldDaV2)
+        .expect_err("missing F02/F03 policy independently refuses an unmarked genesis");
     assert!(format!("{incomplete:?}").contains("OneOutsiderCapacityIncomplete"), "{incomplete:?}");
     params.genesis = palw_isolated_g14_genesis_v1(&params.genesis, Hash64::from_bytes([0x15; 64]))
         .expect("bounded isolated fence-boundary test genesis");

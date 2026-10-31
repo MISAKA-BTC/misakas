@@ -11,6 +11,7 @@
 //!   (`DecodeTokenMismatch`); across the toy image pipeline's stages a carried edge value outside
 //!   its upstream's interval is convicted by PALW-TIR-33; and evidence that fails convicts nobody.
 
+#![allow(warnings)]
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::palw_artifact::PalwArtifactOpeningV1;
 use kaspa_consensus_core::palw_decode_pipeline_v4::DecodeConfigV4;

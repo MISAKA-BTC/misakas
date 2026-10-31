@@ -5,8 +5,8 @@ use kaspa_consensus_core::{
     palw_freeprompt_v3::PalwFreePromptJobV3,
     palw_material_capacity_v1::PalwMaterialCapacityErrorV1 as MaterialFault,
     palw_native_resource_v1::reserve_native_requests_v1,
-    palw_routed_material_v2::PalwMaterialConstructionRequestsV2,
     palw_reader_router_v2::{PalwNativeRoutingWorkAuthorityV2 as Owner, PalwNativeRoutingWorkFaultV2 as Fault},
+    palw_routed_material_v2::PalwMaterialConstructionRequestsV2,
     palw_state_v2::PalwBondKeyV2,
     palw_v2::PalwJobContextV2,
 };

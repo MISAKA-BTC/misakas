@@ -9,8 +9,8 @@ use crate::{
         source14::CheckedStageClassV14,
     },
 };
-pub mod source26;
 pub mod bounded28;
+pub mod source26;
 
 pub struct CheckedStageQuotaV14 {
     class: Digest,
@@ -667,30 +667,21 @@ impl StageJobBookV14 {
                     && self.claim_root.is_none()
                     && self.producer_reserved == 0
                     && self.committed_daa.is_none()
-                    && self.challenge_end_daa.is_none() =>
-            {
-                ()
-            }
+                    && self.challenge_end_daa.is_none() => {}
             StageTerminalV14::Challengeable
                 if self.escrow_remaining == self.original_debit
                     && self.settlement.is_none()
                     && self.claim_root.is_some()
                     && self.producer_reserved != 0
                     && self.committed_daa.is_some()
-                    && self.challenge_end_daa.is_some() =>
-            {
-                ()
-            }
+                    && self.challenge_end_daa.is_some() => {}
             StageTerminalV14::Refunded
                 if self.escrow_remaining == 0
                     && self.settlement.is_none()
                     && self.claim_root.is_none()
                     && self.producer_reserved == 0
                     && self.committed_daa.is_none()
-                    && self.challenge_end_daa.is_none() =>
-            {
-                ()
-            }
+                    && self.challenge_end_daa.is_none() => {}
             StageTerminalV14::Convicted if self.escrow_remaining == 0 && self.producer_reserved == 0 => {
                 let s = self.settlement.as_ref().ok_or("stage conviction lacks original settlement")?;
                 s.check()?;

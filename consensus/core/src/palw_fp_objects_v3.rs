@@ -333,11 +333,19 @@ where
             }
         };
         match palw_fp_project_original_under_class_v1(
-            &payload,network_domain,freeprompt,panel_da_armed,&class_caps,
-            ruleset_caps_armed,held_armed,prompt_ids_form,decode_rules,&verify_mldsa87,
+            &payload,
+            network_domain,
+            freeprompt,
+            panel_da_armed,
+            &class_caps,
+            ruleset_caps_armed,
+            held_armed,
+            prompt_ids_form,
+            decode_rules,
+            &verify_mldsa87,
         ) {
-            Ok(object)=>out.objects.push(PalwConsensusObjectV3Carrier {carrier:id,object}),
-            Err(why)=>out.skipped.push((id,why)),
+            Ok(object) => out.objects.push(PalwConsensusObjectV3Carrier { carrier: id, object }),
+            Err(why) => out.skipped.push((id, why)),
         }
     }
     out
@@ -350,7 +358,7 @@ where
 /// A TFO carrier must stay on its dedicated path; never rewrite it as a legacy
 /// tx merely to reach this helper. The ordinary extractor remains its caller.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn palw_fp_project_original_under_class_v1<'a,V,C>(
+pub(crate) fn palw_fp_project_original_under_class_v1<'a, V, C>(
     payload: &PalwFpCommitmentTxPayloadV3,
     network_domain: Hash64,
     freeprompt: &PalwFreePromptParamsV3,
@@ -361,7 +369,7 @@ pub(crate) fn palw_fp_project_original_under_class_v1<'a,V,C>(
     prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
     decode_rules: crate::palw_freeprompt_v3::PalwFpDecodeRulesV1,
     verify_mldsa87: &V,
-) -> Result<PalwConsensusObjectV2,&'static str>
+) -> Result<PalwConsensusObjectV2, &'static str>
 where
     V: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
     C: Fn(&Hash64) -> PalwFpClassCapsV1<'a>,
@@ -377,16 +385,13 @@ where
     // **RFC-0001 §2.6 stage 2: a prefix-state claim (FP job version 11) is judged on its V4 stand-in** — every rule
     // below runs on the same payload at version 7 with no tail — and carries its state to the fold; every other payload
     // is its own view and names no state.
-    let (view, consumed_state) = match crate::palw_fp_prefix_v1::palw_fp_prefix_walk_view_v1(
-        &payload,
-        caps.prefix_state_armed,
-        caps.prefix_inherit_armed,
-    ) {
-        Ok(v) => v,
-        Err(why) => {
-            return Err(why);
-        }
-    };
+    let (view, consumed_state) =
+        match crate::palw_fp_prefix_v1::palw_fp_prefix_walk_view_v1(payload, caps.prefix_state_armed, caps.prefix_inherit_armed) {
+            Ok(v) => v,
+            Err(why) => {
+                return Err(why);
+            }
+        };
     // **RFC-0001 stage 2b admission: a version-12 claim only over a class whose leaves are inheritance-safe.**
     if payload.commitment.job.is_prefix_inherit() && !caps.prefix_inherit_class_safe {
         return Err(crate::palw_fp_prefix_v1::PALW_FP_PREFIX_INHERIT_CLASS_REFUSAL_V1);
@@ -396,7 +401,7 @@ where
     let constrained = payload.commitment.job.is_constraint();
     let view = if constrained {
         match crate::palw_fp_constraint_job_v1::palw_fp_constraint_walk_view_v1(
-            &payload,
+            payload,
             caps.constraint_armed,
             caps.constraint_v2_armed,
         ) {
@@ -409,9 +414,7 @@ where
         view
     };
     // **RFC-0001 §2.9: the job's tokenizer is its class's listed one** (a class that lists none is not asked).
-    if let Err(why) = caps.tokenizer.check(&payload.commitment.job.tokenizer_id) {
-        return Err(why);
-    }
+    caps.tokenizer.check(&payload.commitment.job.tokenizer_id)?;
     // RFC-0001 §A.4 at the ACCEPTING block: below `Params::palw_fp_decode_rules` a V3 job only,
     // from it a V4 job only — a V3 claim accepted before the fence stays what it was.
     if view
@@ -434,16 +437,18 @@ where
     // for one is skipped, by name — and skipped, not rejected, like every refusal in this walk. A
     // job with no V4 tail asks for nothing here, so below `palw_fp_decode_rules` nothing moves.
     if palw_fp_decode_controls_offered_v1(&payload.commitment.job, caps.logits_q24).is_err() {
-        return Err("a decode control in the class's logit unit (temperature, frequency/presence penalty, logit bias) on a class that does not commit Q24 logits");
+        return Err(
+            "a decode control in the class's logit unit (temperature, frequency/presence penalty, logit bias) on a class that does not commit Q24 logits",
+        );
     }
     // **ADR-0103 Decision 4: the ids never ride above one standard transaction.**
-    if held_armed && palw_fp_public_ids_exceed_one_transaction_v1(&payload) {
+    if held_armed && palw_fp_public_ids_exceed_one_transaction_v1(payload) {
         return Err("the held regime carries no prompt above one standard transaction: commit it under PanelDa");
     }
     // Who authored this commitment. Skipped rather than fatal, for the reason this whole walk
     // is total over whatever was accepted: rejecting a peer-supplied payload here would be a
     // remote denial of service wearing a consensus rule's clothes.
-    if payload.validate_signature_v3(&verify_mldsa87).is_err() {
+    if payload.validate_signature_v3(verify_mldsa87).is_err() {
         return Err("commitment signature does not verify under the carried key");
     }
     // **ADR-0145 §5: past the fence, the leaves are DERIVED here and a disagreement is
@@ -508,50 +513,50 @@ where
     // lives, and refuses sub-quantum work there with a readable reason.
     let commitment = &payload.commitment;
     Ok(PalwConsensusObjectV2::FreePromptCommitted {
-            // ADR-0152 v3.1 J-1 (F1): the commitment's job pin, which the claim records as its identity.
-            job_pin: crate::palw_fp_execution_v3::palw_fp_job_pin_v1(&payload.commitment),
-            public_job: Some(Box::new(payload.commitment.clone())),
-            eval: None,
-            claim: payload.claim_id(),
-            class_id: commitment.job.class_id,
-            bond: PalwBondKeyV2(commitment.job.executor_bond),
-            executor_pubkey: commitment.job.executor_pubkey.clone(),
-            work_leaves: commitment.work_leaves,
-            prompt_token_ids_hash: commitment.job.prompt_token_ids_hash,
-            // **ADR-0145 §5/§6: the two execution facts the walk used to drop.**
-            //
-            // `prompt_tokens` is the job's own, already checked equal to the carried list's
-            // length by `validate_stateless_under_ruleset_v3` above; the ids are the list
-            // itself, and they are empty under the two modes that carry none. Together with
-            // `decode_tokens_executed` they are the whole job context a leaf count reads
-            // (`palw_step::kv_aux_leaf_count` reads the same pair and nothing else), so past
-            // the derived-work fence the transition can recompute `work_leaves` instead of
-            // believing it — and recompute WHICH PREFIX of the prompt this bond has already
-            // been paid for, instead of asking the executor.
-            //
-            // Carried at every height. The object never leaves the node that built it and is
-            // hashed into nothing, so this is not a rule change; the rule is in the
-            // transition, behind the fence, where a height can be resolved.
-            prompt_tokens: commitment.job.prompt_tokens,
-            prompt_token_ids: payload.prompt_token_ids.clone(),
-            decode_tokens_executed: commitment.decode_tokens_executed,
-            trace_root: commitment.trace_root,
-            output_root: commitment.output_root,
-            // The DA obligations and the court binding travel WITH the claim: the panel and
-            // the court read them off the state record.
-            //
-            // Retention and chunk count drive the existing DA obligation. The original
-            // manifest root is retained only as authenticated public job metadata under
-            // LG14-A; it does not introduce a manifest-opening DA obligation.
-            execution_root: commitment.execution_root,
-            trace_chunk_count: commitment.trace_chunk_count,
-            trace_retention_daa: commitment.trace_retention_daa,
-            // ADR-0145 §6: a V3 payload that names no prefix-STATE is genesis. The object
-            // is hashed into nothing; the rule that prices KvReused sits in the transition
-            // past `palw_fp_derived_work`. A later payload version that carries the object
-            // is how Studio names a local cache on the wire.
-            consumed_prefix_state: consumed_state,
-        })
+        // ADR-0152 v3.1 J-1 (F1): the commitment's job pin, which the claim records as its identity.
+        job_pin: crate::palw_fp_execution_v3::palw_fp_job_pin_v1(&payload.commitment),
+        public_job: Some(Box::new(payload.commitment.clone())),
+        eval: None,
+        claim: payload.claim_id(),
+        class_id: commitment.job.class_id,
+        bond: PalwBondKeyV2(commitment.job.executor_bond),
+        executor_pubkey: commitment.job.executor_pubkey.clone(),
+        work_leaves: commitment.work_leaves,
+        prompt_token_ids_hash: commitment.job.prompt_token_ids_hash,
+        // **ADR-0145 §5/§6: the two execution facts the walk used to drop.**
+        //
+        // `prompt_tokens` is the job's own, already checked equal to the carried list's
+        // length by `validate_stateless_under_ruleset_v3` above; the ids are the list
+        // itself, and they are empty under the two modes that carry none. Together with
+        // `decode_tokens_executed` they are the whole job context a leaf count reads
+        // (`palw_step::kv_aux_leaf_count` reads the same pair and nothing else), so past
+        // the derived-work fence the transition can recompute `work_leaves` instead of
+        // believing it — and recompute WHICH PREFIX of the prompt this bond has already
+        // been paid for, instead of asking the executor.
+        //
+        // Carried at every height. The object never leaves the node that built it and is
+        // hashed into nothing, so this is not a rule change; the rule is in the
+        // transition, behind the fence, where a height can be resolved.
+        prompt_tokens: commitment.job.prompt_tokens,
+        prompt_token_ids: payload.prompt_token_ids.clone(),
+        decode_tokens_executed: commitment.decode_tokens_executed,
+        trace_root: commitment.trace_root,
+        output_root: commitment.output_root,
+        // The DA obligations and the court binding travel WITH the claim: the panel and
+        // the court read them off the state record.
+        //
+        // Retention and chunk count drive the existing DA obligation. The original
+        // manifest root is retained only as authenticated public job metadata under
+        // LG14-A; it does not introduce a manifest-opening DA obligation.
+        execution_root: commitment.execution_root,
+        trace_chunk_count: commitment.trace_chunk_count,
+        trace_retention_daa: commitment.trace_retention_daa,
+        // ADR-0145 §6: a V3 payload that names no prefix-STATE is genesis. The object
+        // is hashed into nothing; the rule that prices KvReused sits in the transition
+        // past `palw_fp_derived_work`. A later payload version that carries the object
+        // is how Studio names a local cache on the wire.
+        consumed_prefix_state: consumed_state,
+    })
 }
 
 /// **Do this carrier's ids ride past one standard transaction?** (ADR-0103 Decision 4.) Four bytes

@@ -986,12 +986,12 @@ pub fn compile_complete_frontend_v39(
         }
         // The calibrated original vision output and decoder image-row input must
         // denote the same integer unit; equal shape alone does not establish that.
-        if let FrontendCompilerV39::Decoder { profile } = &plan.stages[i].compiler {
-            if let Some(image) = &profile.image_rows {
-                let value: &serde_json::Value = &materialisation[image.upstream_stage as usize];
-                if value["output_scale"].as_f64() != Some(2f64.powi(-(image.q as i32))) {
-                    return Err("SOURCE39_VISION_DECODER_INTEGER_UNIT_DIFFERS".into());
-                }
+        if let FrontendCompilerV39::Decoder { profile } = &plan.stages[i].compiler
+            && let Some(image) = &profile.image_rows
+        {
+            let value: &serde_json::Value = &materialisation[image.upstream_stage as usize];
+            if value["output_scale"].as_f64() != Some(2f64.powi(-(image.q as i32))) {
+                return Err("SOURCE39_VISION_DECODER_INTEGER_UNIT_DIFFERS".into());
             }
         }
         std::fs::write(output.join(format!("stage-{i}.tir39")), &wire.program_bytes).map_err(|e| e.to_string())?;

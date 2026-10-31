@@ -24,6 +24,7 @@
 //!
 //! Run: `cargo test -p kaspa-consensus-core --test palw_t12_flag_day_3600`
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{
     ForkActivation, PALW_T12_MODEL_COURT_WINDOW_DAA, PALW_T12_MODEL_COURT_WINDOW_FENCES_V1, PALW_T12_POST_LAUNCH_FENCES_V1,
     PALW_T12_POST_LAUNCH_FENCES_V2, PALW_T12_POST_LAUNCH_FENCES_V3, PALW_T12_TIR_FENCE2_DAA, PALW_T12_TIR_FENCE2_FENCES_V1,

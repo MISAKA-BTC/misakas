@@ -8,6 +8,7 @@
 //! limitation it is, that testnet-11's frozen ladder and prompt cap bound what a held class can be
 //! admitted at there, which a network minted with the regime is not bound by.
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{
     ForkActivation, PALW_RC_AUDIT_FENCE_DAA, PALW_RC_HELD_FENCE_DAA, Params, palw_arm_held_regime_at_v1, palw_rc_shipped_params,
 };

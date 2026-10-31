@@ -256,7 +256,10 @@ impl TransitionBuilder<'_> {
     pub(super) fn write_legacy_dispute(&mut self, claim_id: Hash64, new: Option<PalwDisputeClaimV1>) -> Result<(), PalwStateV2Error> {
         self.reserve_map_row_v1(&claim_id, &new, |s| &s.legacy_disputes, false, "native legacy_disputes writer")?;
         self.reserve_index_members_v1::<(u64, Hash64), ()>(u64::from(new.is_some()), "native legacy_dispute_deadlines index")?;
-        self.reserve_index_members_v1::<(PalwBondKeyV2, Hash64), ()>(new.as_ref().map_or(0, |record| (record.live.len() + record.closed.len()) as u64), "native legacy_disputes_by_reserver index")?;
+        self.reserve_index_members_v1::<(PalwBondKeyV2, Hash64), ()>(
+            new.as_ref().map_or(0, |record| (record.live.len() + record.closed.len()) as u64),
+            "native legacy_disputes_by_reserver index",
+        )?;
         let old = match &new {
             Some(record) => self.state.legacy_disputes.insert(claim_id, record.clone()),
             None => self.state.legacy_disputes.remove(&claim_id),

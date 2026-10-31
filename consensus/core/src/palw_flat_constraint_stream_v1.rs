@@ -759,19 +759,22 @@ impl PalwFlatConstraintSourceSessionV1 {
             .as_ref()
             .unwrap_or(&self.template)
             .cursor_v1();
-        Ok(if cursor == PalwFlatConstraintCursorV1::Nominate && self.nomination.is_some() {
-            let (position, beat) = self.nomination.expect("checked");
-            let row = self.slots.get(signer).and_then(Option::as_ref).expect("authenticated EOF cursor");
-            if beat.is_none()
-                && row.authenticated_ids.as_ref().and_then(|ids| ids.get(position as usize)).is_none_or(|id| *id >= row.vocab)
+        Ok(
+            if cursor == PalwFlatConstraintCursorV1::Nominate
+                && let Some((position, beat)) = self.nomination
             {
-                PalwFlatConstraintCursorV1::Complete
+                let row = self.slots.get(signer).and_then(Option::as_ref).expect("authenticated EOF cursor");
+                if beat.is_none()
+                    && row.authenticated_ids.as_ref().and_then(|ids| ids.get(position as usize)).is_none_or(|id| *id >= row.vocab)
+                {
+                    PalwFlatConstraintCursorV1::Complete
+                } else {
+                    PalwFlatConstraintCursorV1::RowBegin { pass: 1, row: 0 }
+                }
             } else {
-                PalwFlatConstraintCursorV1::RowBegin { pass: 1, row: 0 }
-            }
-        } else {
-            cursor
-        })
+                cursor
+            },
+        )
     }
     pub fn answer_v1(&mut self, now: u64, answer: &PalwFlatConstraintSourceAnswerV1) -> Result<(), String> {
         if now < self.reserved_daa
@@ -792,14 +795,12 @@ impl PalwFlatConstraintSourceSessionV1 {
             row.movement_v1(self.source_id, &PalwFlatConstraintActionV1::Nominate { position, beat })?;
         }
         row.movement_v1(self.source_id, &answer.action)?;
-        if row.cursor_v1() == PalwFlatConstraintCursorV1::Nominate {
-            if let Some((position, beat)) = self.nomination {
-                if beat.is_none()
-                    && row.authenticated_ids.as_ref().and_then(|ids| ids.get(position as usize)).is_none_or(|id| *id >= row.vocab)
-                {
-                    row.movement_v1(self.source_id, &PalwFlatConstraintActionV1::Nominate { position, beat })?;
-                }
-            }
+        if row.cursor_v1() == PalwFlatConstraintCursorV1::Nominate
+            && let Some((position, beat)) = self.nomination
+            && beat.is_none()
+            && row.authenticated_ids.as_ref().and_then(|ids| ids.get(position as usize)).is_none_or(|id| *id >= row.vocab)
+        {
+            row.movement_v1(self.source_id, &PalwFlatConstraintActionV1::Nominate { position, beat })?;
         }
         if self.authenticated.is_none() && row.authenticated_generated_ids_v1().is_ok() {
             self.authenticated = Some(answer.answerer);
@@ -908,7 +909,7 @@ impl PalwFlatConstraintSourceSessionV1 {
                     if self.template.deferred && self.nomination.is_none() {
                         row.authenticated_ids.is_none()
                     } else {
-                        self.slot_cursor_v1(key).map_or(true, |cursor| cursor != PalwFlatConstraintCursorV1::Complete)
+                        self.slot_cursor_v1(key) != Ok(PalwFlatConstraintCursorV1::Complete)
                     }
                 })
             })
@@ -1392,7 +1393,7 @@ mod tests {
             };
             let make = |original: &PalwFreePromptCommitmentV3| {
                 PalwConstraintStreamCourtV1::new_from_flat_pin_with_original_stop_context_v1(
-                    fp_claim_id_v3(&original),
+                    fp_claim_id_v3(original),
                     owner,
                     10,
                     binding.committed_execution_root,

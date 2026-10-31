@@ -2,6 +2,7 @@
 //!
 //! Run: cargo test -p kaspa-consensus-core --test audit_agent_a_reward_flattening -- --nocapture
 
+#![allow(warnings)]
 use kaspa_consensus_core::palw_base0_profile::{PALW_RC_BASE0_CANONICAL, PALW_RC_BASE0_GEOMETRY, base0_profile_v1, rc_job_context};
 use kaspa_consensus_core::palw_economic_compute_v1::{
     PALW_ECONOMIC_COST_TABLE_V1, PALW_EXPECTED_ATTEMPTS_Q32_ONE_V1, palw_attempt_economic_compute_v1,

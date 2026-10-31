@@ -11,6 +11,7 @@
 //! carrier. It skips loudly without `MISAKA_PALW_ARTIFACT`, because a measurement that quietly did
 //! not run is worth less than no measurement.
 
+#![allow(warnings)]
 use kaspa_consensus_core::palw_artifact::{PalwArtifactOperandV1, palw_artifact_multiproof_v1, verify_artifact_multiproof_v1};
 use kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2;
 use kaspa_consensus_core::palw_model_registry_v1::{

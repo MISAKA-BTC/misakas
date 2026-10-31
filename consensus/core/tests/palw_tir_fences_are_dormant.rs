@@ -24,6 +24,7 @@
 //! If a Phase F change turns this file red, the change is not dormant. A change that ARMS a Phase F
 //! fence on a preset re-pins the moved row here, in the commit that arms it.
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::drill::{PALW_DRILL_SALT_LEN_V1, PalwDrillSaltV1};
 use kaspa_consensus_core::config::params::{
     DEVNET_PARAMS, ForkActivation, MAINNET_PARAMS, PALW_T12_INT11_FLAG_DAY_DAA, PALW_T12_INT13_DAA,
@@ -159,10 +160,11 @@ const PINS: &[(&str, &str, &str, &str)] = &[
         "5a1d8d5679e0e8d7e9022255668fd5d4b3e4c8a6c367acf3882c6a3d480d8b64",
     ),
     (
+        // re-pin 2026-10-30 @64535b7bf7e8: User selected DAA18400 for the unpublished G14 schedule on 2026-10-30; preserve the current main CI fixes (was 6d218875…, 87bb1893…)
         "from(testnet-12) − IR flag day",
-        "770fb822f6e82c72e31d0c37375400a29047b9430b666018d4a8937d14a95fb9",
+        "17e9935343fcc32363316ba14638fcd9ce9ce9f7e93a9997137197c0be3a821a",
         "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-        "9410712f252cbb8aede7f1e337dc5f46c30f5c01914d0b8f2f714a26e69f1906",
+        "61278dafa0163ff10d4dcaabbae8780453c0236b850e4845dcb879c7bdef03f8",
     ),
     (
         "from(devnet)",
@@ -195,40 +197,46 @@ const PINS: &[(&str, &str, &str, &str)] = &[
         "5a1d8d5679e0e8d7e9022255668fd5d4b3e4c8a6c367acf3882c6a3d480d8b64",
     ),
     (
+        // re-pin 2026-10-30 @64535b7bf7e8: User selected DAA18400 for the unpublished G14 schedule on 2026-10-30; preserve the current main CI fixes (was 6d218875…, 87bb1893…)
         "palw_t12_shipped_params − IR flag day",
-        "770fb822f6e82c72e31d0c37375400a29047b9430b666018d4a8937d14a95fb9",
+        "17e9935343fcc32363316ba14638fcd9ce9ce9f7e93a9997137197c0be3a821a",
         "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-        "9410712f252cbb8aede7f1e337dc5f46c30f5c01914d0b8f2f714a26e69f1906",
+        "61278dafa0163ff10d4dcaabbae8780453c0236b850e4845dcb879c7bdef03f8",
     ),
     (
+        // re-pin 2026-10-30 @64535b7bf7e8: User selected DAA18400 for the unpublished G14 schedule on 2026-10-30; preserve the current main CI fixes (was 0fb64448…, 3299840c…)
         "palw_t12_launch_params_v1",
-        "b8564b888e55bb5f797e708a3f65e7cd122065123a3ab09cbeb8d10c98715d8f",
+        "322104e40468fc3382ed325e2faf0c86846e11df52d3d6c99806d596fb2d663b",
         "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-        "93da24cc60f7a77e63c43106e96298d2979644a3fc0c3f82529c8849333127fd",
+        "a96d6caf49dbdf82e3dff89d23e9d97795460a7ba1122e9389c2959c04a90234",
     ),
     (
+        // re-pin 2026-10-29 @d3ed36fdc77d: G14 at DAA 17400 moved testnet-12 params and schedule ids; the handshake identity stayed 5de80e64 (was dbbc9104…, 7c652212…)
         "palw_t12_release_v1_params",
         "dbbc9104a2ee754f0f053a6e1614118979fd2c3dc87cbe6bffcf6dcaf4bd59c9",
         "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
         "7c652212ab5337bda9508deeee2d2e119331856fce0bd27897f19dd66e552397",
     ),
     (
+        // re-pin 2026-10-29 @d3ed36fdc77d: G14 at DAA 17400 moved testnet-12 params and schedule ids; the handshake identity stayed 5de80e64 (was 24e1aec3…, d263d7f2…)
         "palw_t12_release_v2_params",
         "24e1aec3e9a102fa40d559cd28005ad5944c32caa485d685bed65c52e4c056ff",
         "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
         "d263d7f2971f4e20b57b26d7b7428bd8f9346c3728bbb6927341d8b36b0c1c3a",
     ),
     (
+        // re-pin 2026-10-29 @d3ed36fdc77d: G14 at DAA 17400 moved testnet-12 params and schedule ids; the handshake identity stayed 5de80e64 (was 770fb822…, 9410712f…)
         "palw_t12_release_v3_params",
         "770fb822f6e82c72e31d0c37375400a29047b9430b666018d4a8937d14a95fb9",
         "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
         "9410712f252cbb8aede7f1e337dc5f46c30f5c01914d0b8f2f714a26e69f1906",
     ),
     (
+        // re-pin 2026-10-30 @64535b7bf7e8: User selected DAA18400 for the unpublished G14 schedule on 2026-10-30; preserve the current main CI fixes (was 37e8b4bd…, 87bb1893…)
         "palw_t12_drill_params_v1 − IR flag day",
-        "31b913ef15a1617472bc1764978763e530c021b116c98a77e6e5f6f47769faa4",
+        "aee83ae9e311d61aa96d789a5fef214bf6191c439ecf9b81f426d94f53315a77",
         "2254a5ae75cc1ed6fa70cc6f9a57281e7ab36aa8f80a820a545b81dad21549c6",
-        "9410712f252cbb8aede7f1e337dc5f46c30f5c01914d0b8f2f714a26e69f1906",
+        "61278dafa0163ff10d4dcaabbae8780453c0236b850e4845dcb879c7bdef03f8",
     ),
 ];
 

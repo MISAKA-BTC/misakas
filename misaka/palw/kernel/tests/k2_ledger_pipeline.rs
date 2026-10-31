@@ -3,6 +3,7 @@
 //! a stage, a false edge, a false draw of `R` and a substituted generated id; a borrowed trace or another seed is refused at
 //! inclusion; withheld stage positions are demanded and served on chain (stage inputs included).
 
+#![allow(warnings)]
 #[path = "../../tir/core/tests/v2common/mod.rs"]
 mod v2common;
 

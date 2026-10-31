@@ -7,6 +7,7 @@
 //! and answers, and the demand's message — and compared byte for byte with the files.
 //! `PIPELINE_DA_BLESS=1` rewrites them, which is a change of the semantics and is reviewed as one.
 
+#![allow(warnings)]
 use std::path::PathBuf;
 
 use kaspa_consensus_core::Hash64;

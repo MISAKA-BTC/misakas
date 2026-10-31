@@ -13,9 +13,9 @@ pub(crate) use recurrence_layout_owner::gdn_recurrence_section_retained_v3;
 use recurrence_layout_owner::{RecurrenceKindV3, recurrence_kind_v3};
 #[path = "predecessor_witness_owner_v3.rs"]
 mod predecessor_witness_owner;
-pub use predecessor_witness_owner::{PalwGdnPredecessorRequestV3, PalwGdnPredecessorOwnerV3,
-    PalwGdnPredecessorBuiltV3, gdn_predecessor_witness_request_v3};
-
+pub use predecessor_witness_owner::{
+    PalwGdnPredecessorBuiltV3, PalwGdnPredecessorOwnerV3, PalwGdnPredecessorRequestV3, gdn_predecessor_witness_request_v3,
+};
 
 /// **Where a class's checkpoint at `positions` keeps its recurrence half, and how many chunks the whole checkpoint has** —
 /// `(offset of the first recurrence chunk, total chunk count, held layout if the map is held)`. The one spelling the assembler and
@@ -71,24 +71,31 @@ pub(crate) fn gdn_selected_delta_chunks_v2(
     let geometry = PalwGdnStateGeometryV2::of(profile).map_err(evidence)?;
     let (offset, _, _) = gdn_recurrence_section_v2(profile, positions)?;
     let mut out = Vec::new();
-    visit_selected_delta_chunks_at_v3(&geometry, layer, head, offset, |flat| { out.push(flat); Ok(()) })?;
+    visit_selected_delta_chunks_at_v3(&geometry, layer, head, offset, |flat| {
+        out.push(flat);
+        Ok(())
+    })?;
     Ok(out)
 }
 
 /// The collector and retained predecessor builder share the native selection
 /// order without requiring a temporary selected-index Vec in the latter.
 pub(super) fn visit_selected_delta_chunks_at_v3(
-    geometry: &PalwGdnStateGeometryV2<'_>, layer: u16, head: Option<u32>, offset: u64,
+    geometry: &PalwGdnStateGeometryV2<'_>,
+    layer: u16,
+    head: Option<u32>,
+    offset: u64,
     mut visit: impl FnMut(u32) -> Result<(), PalwGdnCourtErrorV2>,
 ) -> Result<(), PalwGdnCourtErrorV2> {
-    if head.is_some_and(|h| h >= geometry.heads) { return Err(PalwStepRefuteError::Unadjudicable.into()); }
+    if head.is_some_and(|h| h >= geometry.heads) {
+        return Err(PalwStepRefuteError::Unadjudicable.into());
+    }
     let heads = head.map_or(0..geometry.heads, |h| h..h + 1);
     let blocks = geometry.v_dim.div_ceil(geometry.delta_rows_per_chunk);
     for h in heads {
         for block in 0..blocks {
             let local = geometry.delta_chunk_index(layer, h, block).ok_or(PalwStepRefuteError::Unadjudicable)?;
-            let flat = offset.checked_add(local).and_then(|i| u32::try_from(i).ok())
-                .ok_or(PalwStepRefuteError::Unadjudicable)?;
+            let flat = offset.checked_add(local).and_then(|i| u32::try_from(i).ok()).ok_or(PalwStepRefuteError::Unadjudicable)?;
             visit(flat)?;
         }
     }
@@ -302,8 +309,9 @@ pub fn gdn_refutation_from_leaves_v2(
         plan.add_v1(TirNativeRequestsV1::product_v1(positions, one.bytes_v1())?)?;
     }
     let mut lease = reserve_native_requests_v1(plan.bytes_v1())?;
-    let required = canonical_input_leaves_with_start_v2(p, ctx, target.node_slot, &target, program, false, Some(start.first_position), None)
-        .ok_or(PalwStepRefuteError::Unadjudicable)?;
+    let required =
+        canonical_input_leaves_with_start_v2(p, ctx, target.node_slot, &target, program, false, Some(start.first_position), None)
+            .ok_or(PalwStepRefuteError::Unadjudicable)?;
     let leaf_of = |want| {
         let mut found = tiles.iter().filter(|(i, _)| *i == want);
         let (_, leaf) = found.next().ok_or_else(|| evidence("capture is missing a canonical recurrence tile"))?;

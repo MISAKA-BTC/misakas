@@ -11,6 +11,7 @@
 //! row's lanes `lo..hi`, and its preimage IS those lanes. `palw_logits_head_v1` holds on each
 //! profile and the head tile never straddles a logits tile.
 
+#![allow(warnings)]
 mod common;
 
 use common::*;

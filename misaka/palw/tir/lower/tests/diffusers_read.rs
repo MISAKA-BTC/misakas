@@ -8,6 +8,7 @@
 //!   each naming registry capabilities that are `Missing`;
 //! * an unknown key of a supported class is refused, not ignored.
 
+#![allow(warnings)]
 use misaka_palw_tir_lower::diffusion::probe::{probe_sd3_transformer, probe_vae_decoder};
 use misaka_palw_tir_lower::hf_schema::{
     AdapterSource, DiffusersRoute, Level, ReadOptions, diffusers_class, is_diffusers, read_diffusers,

@@ -16,6 +16,7 @@
 //!    check its stop, all `Valid`;
 //! 5. **license** — a panel binds and a `Valid` quorum licenses the claim through the real fold.
 
+#![allow(warnings)]
 mod common;
 #[path = "../../../../consensus/core/tests/dos_l5_common.rs"]
 mod l5;

@@ -52,9 +52,9 @@ pub struct FlatStageClassWireV28 {
     pub lengths: Vec<u8>,
     pub max_positions: u32,
     pub policy: Digest,
-    pub component_manifest:Digest,
-    pub complete_source:Digest,
-    pub stage:u16,
+    pub component_manifest: Digest,
+    pub complete_source: Digest,
+    pub stage: u16,
 }
 pub struct CheckedStageClassV28 {
     wire: FlatStageClassWireV28,
@@ -62,7 +62,7 @@ pub struct CheckedStageClassV28 {
     template: FlatInputTemplateV12,
     maximum_scope: CheckedResourceScopeV25,
     maximum_resources: FlatResourceVectorV29,
-    source_restore_bytes:u64,
+    source_restore_bytes: u64,
     root: Digest,
 }
 impl CheckedStageClassV28 {
@@ -84,18 +84,41 @@ impl CheckedStageClassV28 {
     pub fn maximum_resources(&self) -> &FlatResourceVectorV29 {
         &self.maximum_resources
     }
-    pub fn source_restore_bytes(&self)->u64 {self.source_restore_bytes}
+    pub fn source_restore_bytes(&self) -> u64 {
+        self.source_restore_bytes
+    }
     /// Read-only native original bundle membership must already authenticate
     /// this complete canonical byte extent. The identity binds the immutable
     /// full component manifest; no caller-provided quota vector is accepted.
-    pub fn bind_complete_bundle(&mut self,bundle:&CheckedStageBundleV28)->Result<(),String>{
+    pub fn bind_complete_bundle(&mut self, bundle: &CheckedStageBundleV28) -> Result<(), String> {
         self.check_component_manifest(&bundle.manifest)?;
-        if self.wire.complete_source!=bundle.root||bundle.sources.get(self.wire.stage as usize).is_none_or(|s|*s!=self.source.id())||bundle.bytes>16<<20{return Err("stage28 complete original source bundle differs".into());}
-        self.source_restore_bytes=bundle.bytes;Ok(())
+        if self.wire.complete_source != bundle.root
+            || bundle.sources.get(self.wire.stage as usize).is_none_or(|s| *s != self.source.id())
+            || bundle.bytes > 16 << 20
+        {
+            return Err("stage28 complete original source bundle differs".into());
+        }
+        self.source_restore_bytes = bundle.bytes;
+        Ok(())
     }
-    pub fn check_component_manifest(&self,manifest:&crate::flat_component_source28::CheckedComponentManifestV28)->Result<(),String>{
-        let stage=manifest.manifest().stages.get(self.wire.stage as usize).ok_or("stage28 complete manifest stage absent")?;
-        if self.wire.component_manifest!=manifest.root()||stage.original_program!=crate::flat_component_source28::stage_program_root_v28(self.source.program())||stage.original_inventory!=self.source.inventory_root()||stage.input_declarations!=crate::flat_component_source28::stage_input_declarations_root_v28(self.source.program())||stage.output_declaration!=crate::flat_component_source28::stage_output_declaration_root_v28(self.source.program())||stage.original_context_max>self.source.program().history_bound||stage.original_context_max==0||stage.lowered_context_max!=stage.original_context_max||self.wire.max_positions>stage.original_context_max{return Err("stage28 class changes original complete component/source/IO/context manifest".into());}Ok(())
+    pub fn check_component_manifest(
+        &self,
+        manifest: &crate::flat_component_source28::CheckedComponentManifestV28,
+    ) -> Result<(), String> {
+        let stage = manifest.manifest().stages.get(self.wire.stage as usize).ok_or("stage28 complete manifest stage absent")?;
+        if self.wire.component_manifest != manifest.root()
+            || stage.original_program != crate::flat_component_source28::stage_program_root_v28(self.source.program())
+            || stage.original_inventory != self.source.inventory_root()
+            || stage.input_declarations != crate::flat_component_source28::stage_input_declarations_root_v28(self.source.program())
+            || stage.output_declaration != crate::flat_component_source28::stage_output_declaration_root_v28(self.source.program())
+            || stage.original_context_max > self.source.program().history_bound
+            || stage.original_context_max == 0
+            || stage.lowered_context_max != stage.original_context_max
+            || self.wire.max_positions > stage.original_context_max
+        {
+            return Err("stage28 class changes original complete component/source/IO/context manifest".into());
+        }
+        Ok(())
     }
     pub fn check_job(&self, job: &FlatStageJobV14) -> Result<CheckedStageJobV28, String> {
         let checked = derive_stage_job_v28(&self.template, &self.source, job)?;
@@ -124,7 +147,12 @@ impl FlatStageClassWireV28 {
         borsh::from_slice(raw).map_err(|_| "stage28 class bounded framing".into())
     }
     pub fn check(&self, source: &CheckedStageSourceV28) -> Result<CheckedStageClassV28, String> {
-        if self.version != 28 || self.source != source.id() || self.policy == [0; 64] || self.component_manifest==[0;64] || self.complete_source==[0;64] {
+        if self.version != 28
+            || self.source != source.id()
+            || self.policy == [0; 64]
+            || self.component_manifest == [0; 64]
+            || self.complete_source == [0; 64]
+        {
             return Err("stage28 class changes original source/policy".into());
         }
         let lengths = crate::flat_lengths7::FlatLengthTemplateV7::from_bytes(&self.lengths)?;
@@ -176,27 +204,67 @@ impl FlatStageClassWireV28 {
             template,
             maximum_scope: checked.maximum_scope,
             maximum_resources: checked.maximum,
-            source_restore_bytes:source.program().encode().len() as u64+borsh::to_vec(source.parameters()).map_err(|e|e.to_string())?.len() as u64+4096,
+            source_restore_bytes: source.program().encode().len() as u64
+                + borsh::to_vec(source.parameters()).map_err(|e| e.to_string())?.len() as u64
+                + 4096,
             root,
         })
     }
 }
-pub struct CheckedStageBundleV28 {manifest:crate::flat_component_source28::CheckedComponentManifestV28,sources:Vec<Digest>,root:Digest,bytes:u64}
+pub struct CheckedStageBundleV28 {
+    manifest: crate::flat_component_source28::CheckedComponentManifestV28,
+    sources: Vec<Digest>,
+    root: Digest,
+    bytes: u64,
+}
 impl CheckedStageBundleV28 {
-    pub fn root(&self)->Digest {self.root}
-    pub fn bytes(&self)->u64 {self.bytes}
-    pub fn manifest(&self)->&crate::flat_component_source28::CheckedComponentManifestV28 {&self.manifest}
+    pub fn root(&self) -> Digest {
+        self.root
+    }
+    pub fn bytes(&self) -> u64 {
+        self.bytes
+    }
+    pub fn manifest(&self) -> &crate::flat_component_source28::CheckedComponentManifestV28 {
+        &self.manifest
+    }
 }
 /// Immutable all-component source identity and exact canonical carrier extent,
 /// derived from checked original V2/real-PC sources, never raw quota digests.
-pub fn check_stage_bundle_v28(manifest:&crate::flat_component_source28::CompleteComponentManifestV28,sources:&[CheckedStageSourceV28])->Result<CheckedStageBundleV28,String>{
-    let programs=sources.iter().map(|s|s.program().clone()).collect::<Vec<_>>();let inventories=sources.iter().map(|s|s.inventory_root()).collect::<Vec<_>>();let contexts=manifest.stages.iter().map(|s|s.original_context_max).collect::<Vec<_>>();
-    let checked=crate::flat_component_source28::check_component_manifest_v28(manifest,&programs,&inventories,&contexts,&manifest.original_required_components,manifest.original_task_metadata,&manifest.inputs).map_err(|e|format!("{e:?}"))?;
-    let ids=sources.iter().map(|s|s.id()).collect::<Vec<_>>();let root=object_id(b"misaka-palw/kernel/stage-complete-real-source-bundle/v28",&(28u16,checked.root(),&ids));
-    let mut bytes=2u64+4+borsh::to_vec(manifest).map_err(|e|e.to_string())?.len() as u64+4;
-    for source in sources {let wire=super::source28::FlatStageSourceWireV28{version:28,program_bytes:source.program().encode(),inventory_root:source.inventory_root(),source_parameters:source.parameters().clone()};bytes=bytes.checked_add(4+borsh::to_vec(&wire).map_err(|e|e.to_string())?.len() as u64).ok_or("stage28 original source extent overflow")?;}
-    if bytes>16<<20{return Err("stage28 full original bundle exceeds bounded carrier".into());}
-    Ok(CheckedStageBundleV28{manifest:checked,sources:ids,root,bytes})
+pub fn check_stage_bundle_v28(
+    manifest: &crate::flat_component_source28::CompleteComponentManifestV28,
+    sources: &[CheckedStageSourceV28],
+) -> Result<CheckedStageBundleV28, String> {
+    let programs = sources.iter().map(|s| s.program().clone()).collect::<Vec<_>>();
+    let inventories = sources.iter().map(|s| s.inventory_root()).collect::<Vec<_>>();
+    let contexts = manifest.stages.iter().map(|s| s.original_context_max).collect::<Vec<_>>();
+    let checked = crate::flat_component_source28::check_component_manifest_v28(
+        manifest,
+        &programs,
+        &inventories,
+        &contexts,
+        &manifest.original_required_components,
+        manifest.original_task_metadata,
+        &manifest.inputs,
+    )
+    .map_err(|e| format!("{e:?}"))?;
+    let ids = sources.iter().map(|s| s.id()).collect::<Vec<_>>();
+    let root = object_id(b"misaka-palw/kernel/stage-complete-real-source-bundle/v28", &(28u16, checked.root(), &ids));
+    let mut bytes = 2u64 + 4 + borsh::to_vec(manifest).map_err(|e| e.to_string())?.len() as u64 + 4;
+    for source in sources {
+        let wire = super::source28::FlatStageSourceWireV28 {
+            version: 28,
+            program_bytes: source.program().encode(),
+            inventory_root: source.inventory_root(),
+            source_parameters: source.parameters().clone(),
+        };
+        bytes = bytes
+            .checked_add(4 + borsh::to_vec(&wire).map_err(|e| e.to_string())?.len() as u64)
+            .ok_or("stage28 original source extent overflow")?;
+    }
+    if bytes > 16 << 20 {
+        return Err("stage28 full original bundle exceeds bounded carrier".into());
+    }
+    Ok(CheckedStageBundleV28 { manifest: checked, sources: ids, root, bytes })
 }
 impl CheckedStageJobV28 {
     pub fn job(&self) -> &FlatStageJobV14 {
@@ -229,13 +297,22 @@ impl CheckedStageJobV28 {
     pub fn input_reference_bytes(&self) -> u128 {
         self.input_reference_bytes
     }
-    pub fn trace_geometry(&self,position:u32,occurrence:u16,node:u16)->Result<StageTraceGeometryV28,String>{
-        if position>=self.job.positions{return Err("stage28 trace position exceeds original actual extent".into());}
-        let program=self.program.v1_view();let p=crate::element::PreparedV1::without_scope(&program,None)?;
-        let block=p.w.occurrences.get(occurrence as usize).ok_or("stage28 trace occurrence absent")?.0;
-        let n=program.blocks[block as usize].nodes.get(node as usize).ok_or("stage28 trace node absent")?;
-        let shapes=p.shapes(position,occurrence,node);
-        Ok(StageTraceGeometryV28{dtype:n.out.dtype,shape:shapes.out,node_index:p.index(occurrence,node),node_count:p.node_count,positions:self.job.positions})
+    pub fn trace_geometry(&self, position: u32, occurrence: u16, node: u16) -> Result<StageTraceGeometryV28, String> {
+        if position >= self.job.positions {
+            return Err("stage28 trace position exceeds original actual extent".into());
+        }
+        let program = self.program.v1_view();
+        let p = crate::element::PreparedV1::without_scope(&program, None)?;
+        let block = p.w.occurrences.get(occurrence as usize).ok_or("stage28 trace occurrence absent")?.0;
+        let n = program.blocks[block as usize].nodes.get(node as usize).ok_or("stage28 trace node absent")?;
+        let shapes = p.shapes(position, occurrence, node);
+        Ok(StageTraceGeometryV28 {
+            dtype: n.out.dtype,
+            shape: shapes.out,
+            node_index: p.index(occurrence, node),
+            node_count: p.node_count,
+            positions: self.job.positions,
+        })
     }
     pub fn acquire(&self, provider: &dyn RawExternalInputsV12) -> Result<Vec<Tensor>, String> {
         let mut out = Vec::with_capacity(self.program.inputs.len());
@@ -259,9 +336,23 @@ impl CheckedStageJobV28 {
         Ok(out)
     }
 }
-pub struct StageTraceGeometryV28 {pub dtype:misaka_palw_tir::DType,pub shape:Vec<usize>,pub node_index:u64,pub node_count:u64,pub positions:u32}
-pub fn decode_stage_node_opening_v28(raw:&[u8])->Result<crate::seg::NodeOpeningV1,String>{
-    if raw.len()>16384{return Err("stage28 original node opening cap".into());}let mut r=std::io::Cursor::new(raw);let o=crate::flat_court4::read_node(&mut r).map_err(|e|e.to_string())?;if r.position() as usize!=raw.len(){return Err("stage28 node opening surplus bytes".into());}Ok(o)
+pub struct StageTraceGeometryV28 {
+    pub dtype: misaka_palw_tir::DType,
+    pub shape: Vec<usize>,
+    pub node_index: u64,
+    pub node_count: u64,
+    pub positions: u32,
+}
+pub fn decode_stage_node_opening_v28(raw: &[u8]) -> Result<crate::seg::NodeOpeningV1, String> {
+    if raw.len() > 16384 {
+        return Err("stage28 original node opening cap".into());
+    }
+    let mut r = std::io::Cursor::new(raw);
+    let o = crate::flat_court4::read_node(&mut r).map_err(|e| e.to_string())?;
+    if r.position() as usize != raw.len() {
+        return Err("stage28 node opening surplus bytes".into());
+    }
+    Ok(o)
 }
 pub fn stage_template_root_v28(template: &FlatInputTemplateV12, source: &CheckedStageSourceV28) -> Result<Digest, String> {
     if template.program != *source.program() || template.source_parameters != source.parameters().root() {
@@ -400,7 +491,22 @@ pub fn derive_stage_job_v28(
 
 /// New28 geometry includes zero-input causal terminal stages. Source/runtime
 /// authority for token, random and post-state semantics belongs to invocation32.
-fn shape_payload_v28(p:&TirProgramV2)->Result<(u128,u128),String>{
-    if p.inputs.len()>INPUT_COUNT_MAX_V12{return Err("stage28 input count exceeds cap".into());}
-    let(mut raw,mut expanded)=(0u128,0u128);for d in &p.inputs{let cells=d.shape.iter().try_fold(1u128,|a,n|a.checked_mul(*n as u128)).ok_or("stage28 input shape overflow")?;raw=raw.checked_add(cells.checked_mul(d.dtype.width() as u128).ok_or("stage28 input bytes overflow")?).ok_or("stage28 input sum overflow")?;expanded=expanded.checked_add(cells.checked_mul(16).ok_or("stage28 input expansion overflow")?).ok_or("stage28 input sum overflow")?;}if raw>INPUT_RAW_BYTES_MAX_V12||expanded>INPUT_REFERENCE_BYTES_MAX_V12{return Err("stage28 declared input extent exceeds original bounded geometry".into());}Ok((raw,expanded))
+fn shape_payload_v28(p: &TirProgramV2) -> Result<(u128, u128), String> {
+    if p.inputs.len() > INPUT_COUNT_MAX_V12 {
+        return Err("stage28 input count exceeds cap".into());
+    }
+    let (mut raw, mut expanded) = (0u128, 0u128);
+    for d in &p.inputs {
+        let cells = d.shape.iter().try_fold(1u128, |a, n| a.checked_mul(*n as u128)).ok_or("stage28 input shape overflow")?;
+        raw = raw
+            .checked_add(cells.checked_mul(d.dtype.width() as u128).ok_or("stage28 input bytes overflow")?)
+            .ok_or("stage28 input sum overflow")?;
+        expanded = expanded
+            .checked_add(cells.checked_mul(16).ok_or("stage28 input expansion overflow")?)
+            .ok_or("stage28 input sum overflow")?;
+    }
+    if raw > INPUT_RAW_BYTES_MAX_V12 || expanded > INPUT_REFERENCE_BYTES_MAX_V12 {
+        return Err("stage28 declared input extent exceeds original bounded geometry".into());
+    }
+    Ok((raw, expanded))
 }

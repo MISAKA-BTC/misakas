@@ -2,12 +2,7 @@
 //! producer archive; parameter/input trees are materialised once into a bounded
 //! local cache. Hash/Merkle openings authenticate identity, not correctness.
 use crate::{native_tensor_store_v39::DiskTensorV39, native_trace_archive_v39::DiskTraceArchiveV39};
-use misaka_palw_kernel::{
-    flat_detect39::PublicReadsV39,
-    flat_point39::CheckedPointContextV39,
-    flat_public39::*,
-    hash::object_id,
-};
+use misaka_palw_kernel::{flat_detect39::PublicReadsV39, flat_point39::CheckedPointContextV39, flat_public39::*, hash::object_id};
 use misaka_palw_tir::interp_v39::ParamSourceV39;
 use std::path::{Path, PathBuf};
 pub struct PublicDataV39<'a> {

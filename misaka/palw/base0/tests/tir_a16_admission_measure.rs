@@ -3,6 +3,7 @@
 //! `tir_admit_v1` with no per-tile ceiling: what each costs in the quantities the fence bounds.
 //! Printed as the measurement the ceilings are set from (`--nocapture`), and held against them.
 
+#![allow(warnings)]
 use kaspa_consensus_core::palw_qwen25_profile::{PalwQwen25GeometryV1, QWEN25_1_5B, QWEN25_3B};
 use kaspa_consensus_core::palw_tir_v1::PALW_T12_TIR_CEILINGS_V1;
 use misaka_palw_base0::artifact::Base0ShapeV1;

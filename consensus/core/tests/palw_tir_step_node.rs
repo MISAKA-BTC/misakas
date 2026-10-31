@@ -21,6 +21,7 @@
 //!
 //! Run: `cargo test -p kaspa-consensus-core --test palw_tir_step_node`
 
+#![allow(warnings)]
 use std::collections::{BTreeMap, BTreeSet};
 
 use kaspa_consensus_core::Hash64;

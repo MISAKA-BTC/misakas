@@ -1,5 +1,6 @@
 //! PALWQ361 original runtime vs Source39 mirror differential measurement.
 //! Writes a measurement record; never PASS. See native_q36_differential_v40.
+#![allow(warnings)]
 use sha2::{Digest as _, Sha256};
 use std::{collections::BTreeMap, io::Write, path::PathBuf};
 fn run() -> Result<(), String> {
@@ -19,6 +20,7 @@ fn run() -> Result<(), String> {
     let workspace = get("--workspace-bytes")?.parse::<u64>().map_err(|e| e.to_string())?;
     let reads = get("--max-read-elements")?.parse::<usize>().map_err(|e| e.to_string())?;
     let out = PathBuf::from(get("--out")?);
+    #[allow(clippy::drop_non_drop)]
     drop(get);
     if !a.is_empty() || out.exists() {
         return Err("q36 differential unknown option or existing output".into());
@@ -35,7 +37,8 @@ fn run() -> Result<(), String> {
     if <[u8; 32]>::from(hasher.finalize()) != artifact_sha {
         return Err("q36 differential original .palwq36 artifact pin differs".into());
     }
-    let report = misaka_palw_sdk::native_q36_differential_v40::run_q36_differential_v40(&artifact, &compiled, &tokens, workspace, reads)?;
+    let report =
+        misaka_palw_sdk::native_q36_differential_v40::run_q36_differential_v40(&artifact, &compiled, &tokens, workspace, reads)?;
     let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(&out).map_err(|e| e.to_string())?;
     f.write_all(&serde_json::to_vec_pretty(&report).map_err(|e| e.to_string())?).and_then(|_| f.sync_all()).map_err(|e| e.to_string())
 }

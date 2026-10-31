@@ -16,6 +16,7 @@
 //!
 //! Run: `cargo test --locked -p kaspa-consensus-core --test t12_repin_values -- --nocapture`
 
+#![allow(warnings)]
 use kaspa_addresses::{Address, Prefix, Version};
 use kaspa_consensus_core::block::Block;
 use kaspa_consensus_core::config::drill::{PALW_DRILL_SALT_LEN_V1, PalwDrillSaltV1, palw_t12_drill_genesis_block_v1};

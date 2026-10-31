@@ -15,7 +15,11 @@ enum Stage {
     Hold(&'static str),
     /// The pinned production premise in effect on the node build (F02, user-approved 4-DAA estimate 2026-10-26).
     Pinned(&'static str),
-    Missing { stage: &'static str, lane: &'static str, needs: &'static str },
+    Missing {
+        stage: &'static str,
+        lane: &'static str,
+        needs: &'static str,
+    },
     /// A native run (lane LEGACY 2026-10-27): the stage's own driver on the real processor.
     Native(&'static str, NativeCase),
     /// lane CERT: a stage driven by `canonical::cert` (Gate C armed with a TEST-ONLY certification policy).
@@ -66,7 +70,12 @@ const STAGES: &[Stage] = &[
         Start::PrunedImport,
         Outcome::ConvictedBeforeFinal,
     ),
-    Stage::Run("S3b lie after Final: outsider convicts, liability stands (IBD node)", Mode::Panel, Start::Ibd, Outcome::ConvictedAfterFinal),
+    Stage::Run(
+        "S3b lie after Final: outsider convicts, liability stands (IBD node)",
+        Mode::Panel,
+        Start::Ibd,
+        Outcome::ConvictedAfterFinal,
+    ),
     Stage::Native(
         "S3b' T05 on the native kernel route, Panel=1: Sybils occupy and refill the court with paid junk filings twice; a fresh outsider \
          convicts before Final (f03k::t05)",
@@ -95,7 +104,10 @@ const STAGES: &[Stage] = &[
         "S3c''' native, bound claim, pinned premise: a supplied unit fits the deadline -> the silent producer defaults",
         NativeCase::PremiseOpportunityDefaults,
     ),
-    Stage::Reorg("S4 honest: Final and its payment decided once across a reorg of the deciding block", Outcome::WrongChallengeDismissed),
+    Stage::Reorg(
+        "S4 honest: Final and its payment decided once across a reorg of the deciding block",
+        Outcome::WrongChallengeDismissed,
+    ),
     Stage::Reorg("S4 silence: the default decided once across a reorg of the deadline block", Outcome::DefaultOnWithheldMaterial),
 ];
 
@@ -115,7 +127,8 @@ async fn recarried_node(main: &Net, fork: kaspa_hashes::Hash64) -> Net {
         arrive(&b, blk, "a block up to the fork").await;
     }
     let ttpb = main.ttpb();
-    let a_blocks: Vec<Block> = chain_blocks(&main.chain, main.chain.sink()).into_iter().skip_while(|blk| blk.header.hash != fork).skip(1).collect();
+    let a_blocks: Vec<Block> =
+        chain_blocks(&main.chain, main.chain.sink()).into_iter().skip_while(|blk| blk.header.hash != fork).skip(1).collect();
     assert!(!a_blocks.is_empty(), "A has blocks above the fork");
     let mut b_blocks = Vec::new();
     for blk in &a_blocks {
@@ -441,7 +454,8 @@ async fn g14_spine_s1_s2_admission_reserves_and_blocks_supply() {
 async fn s3c_triple_prime_native(typed_missing: bool) {
     use crate::pipeline::virtual_processor::processor::palw_accept::test_only_inclusion_premise as premise;
     kaspa_core::log::try_init_logger("warn");
-    let _g = if typed_missing { premise::set_typed_missing_v1("TEST_ONLY_TYPED_MISSING_PREMISE") } else { premise::production_guard_v1() };
+    let _g =
+        if typed_missing { premise::set_typed_missing_v1("TEST_ONLY_TYPED_MISSING_PREMISE") } else { premise::production_guard_v1() };
     let mode = Mode::Panel;
     let mut w = admitted_world().await;
     let funding = newcomer_funding(&w.net);
@@ -477,7 +491,6 @@ async fn g14_spine_s3c_triple_prime_native_typed_missing_holds_a_bound_claim() {
 async fn g14_spine_s3c_triple_prime_native_opportunity_then_silence_defaults() {
     s3c_triple_prime_native(false).await;
 }
-
 
 /// **S3c' — satisfied by construction on the kernel route** (coordinator decision 2026-10-27: no change of kernel-route semantics
 /// before 19,000). A kernel duty's reserved unit is withheld only when a block's unreserved court operations spend reserved service
@@ -546,7 +559,8 @@ async fn adversarial_b_refusal(after_final: bool) {
     let mut w = admitted_world().await;
     let funding = newcomer_funding(&w.net);
     let policy = w.policy();
-    let gain = kaspa_consensus_core::palw_g14_values_v1::PALW_G14_KERNEL_PANEL_ONE_EXTERNAL_GAIN_BOUND_SOMPI_V1.expect("approved 500 MSK");
+    let gain =
+        kaspa_consensus_core::palw_g14_values_v1::PALW_G14_KERNEL_PANEL_ONE_EXTERNAL_GAIN_BOUND_SOMPI_V1.expect("approved 500 MSK");
     let (claim, _seats) = claimed(&mut w, Mode::Panel, 0, true).await;
     if after_final {
         let floor = final_floor(&w, Mode::Panel, &claim.id);
@@ -572,9 +586,15 @@ async fn adversarial_b_refusal(after_final: bool) {
         assert!(forfeited >= obtainable, "post-Final: forfeited {forfeited} >= 500/0.9 MSK {obtainable}");
     } else {
         let st = w.net.claim_state(&claim.id);
-        assert!(matches!(st, ClaimStateV1::Unavailable { producer_defaulted: true, .. }), "pre-Final: a DA default, never Final: {st:?}");
+        assert!(
+            matches!(st, ClaimStateV1::Unavailable { producer_defaulted: true, .. }),
+            "pre-Final: a DA default, never Final: {st:?}"
+        );
         // Gain obtainable before Final: 0 (the claim never reaches Final).
-        assert!(forfeited >= policy.default_penalty.min(policy.claim_collateral) && forfeited > 0, "pre-Final: the fixed penalty ({forfeited})");
+        assert!(
+            forfeited >= policy.default_penalty.min(policy.claim_collateral) && forfeited > 0,
+            "pre-Final: the fixed penalty ({forfeited})"
+        );
     }
 }
 

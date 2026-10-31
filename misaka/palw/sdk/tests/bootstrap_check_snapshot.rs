@@ -1,5 +1,6 @@
 //! Actual file/signature/root controls; the seeded typed program is a code
 //! fixture, not a trained model or multi-process useful-work acceptance.
+#![allow(warnings)]
 use kaspa_consensus_core::{
     palw_kernel_route_v1::{
         PALW_KERNEL_ROUTE_OBJECT_MLDSA87_CONTEXT_V1, PalwKernelRouteStateV1, palw_kernel_route_message_v1, palw_kernel_route_policy_v1,

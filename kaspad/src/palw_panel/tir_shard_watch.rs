@@ -179,7 +179,10 @@ impl super::super::PalwPanelService {
             {
                 continue;
             }
-            let tir = self.resolve_tir_registered_for_claim_v1(session, duty.class_id, duty.artifact_root, Some(duty.claim_id)).and_then(Result::ok).map(std::sync::Arc::new);
+            let tir = self
+                .resolve_tir_registered_for_claim_v1(session, duty.class_id, duty.artifact_root, Some(duty.claim_id))
+                .and_then(Result::ok)
+                .map(std::sync::Arc::new);
             let material = materials
                 .get(&duty.claim_id)
                 .and_then(|pool| {

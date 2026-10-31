@@ -1,5 +1,6 @@
 //! `palw-tir-check`'s report: verdicts, the weights check, and the refusal line.
 
+#![allow(warnings)]
 use misaka_palw_tir_lower::report::{self, WeightsArg};
 use std::path::Path;
 

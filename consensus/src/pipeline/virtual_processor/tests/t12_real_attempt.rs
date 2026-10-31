@@ -1,6 +1,7 @@
 //! Real floor executions for integration fixtures that issue positive verdicts.
 //! The older carriage-only helper intentionally uses synthetic roots; those
 //! roots must never receive an honest replay or Gate C attestation.
+#![allow(warnings)]
 use super::*;
 use kaspa_consensus_core::palw_attempt_v2::{
     PALW_ATTEMPT_V2_MLDSA87_CONTEXT, PALW_TICKET_NONCE_BUCKET_LOG2, PalwAttemptChainFactsV1, PalwAttemptEnvelopeV2,

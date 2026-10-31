@@ -16,6 +16,7 @@
 //! liability began, and — the liveness escape, fix #3 — on the DAA clock alone once no licence has
 //! landed for `2 × window_court`. Below the fence the counter still ticks at `Final`, byte for byte.
 
+#![allow(warnings)]
 use kaspa_consensus_core::palw_attempt_v2::{PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2, attempt_id_v2};
 use kaspa_consensus_core::palw_panel_v2::{PalwReceiptVerdictV2, PalwSeatReceiptV2};
 use kaspa_consensus_core::palw_state_v2::{

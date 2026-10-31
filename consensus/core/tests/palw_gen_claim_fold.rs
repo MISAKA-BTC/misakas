@@ -12,6 +12,7 @@
 //! * **the lifecycle**: from the claim's creation it is any claim of its class — a panel at the bind, receipts,
 //!   a licence that carries its outsider's `Valid`, `Final`, the retirement — and weighs nothing.
 
+#![allow(warnings)]
 #[path = "rcore_common.rs"]
 mod rcore;
 use rcore::*;

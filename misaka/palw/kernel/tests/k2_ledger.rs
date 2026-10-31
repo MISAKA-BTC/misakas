@@ -6,6 +6,7 @@
 //! answer to demands. It never sees the producer's trace, heap or private state, a Panel seat's capture, a court's internals or
 //! a served view: the producer's objects are dropped before the outsider is built.
 
+#![allow(warnings)]
 mod common;
 
 use common::chain::T;

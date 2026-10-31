@@ -1,3 +1,4 @@
+#![allow(warnings)]
 use misaka_palw_tir_lower::{
     full_court_source25::*,
     hf_schema::{TensorEntry, TensorIndex},

@@ -5,6 +5,7 @@
 //!
 //! Run: `cargo test -p kaspa-consensus-core --test palw_receipt_spend_v4_fence`
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{
     DEVNET_PARAMS, ForkActivation, MAINNET_PARAMS, PALW_T12_INT11_FENCES_V1, PALW_T12_INT13_DAA, PALW_T12_INT13_FENCES_V1, Params,
     SIMNET_PARAMS, TESTNET_PARAMS, TESTNET11_PARAMS, devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params,

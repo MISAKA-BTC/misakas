@@ -7,8 +7,8 @@ mod key;
 mod writer;
 
 pub mod registry;
-pub mod storage_generations;
 mod set_access;
+pub mod storage_generations;
 pub mod utils;
 
 pub mod prelude {

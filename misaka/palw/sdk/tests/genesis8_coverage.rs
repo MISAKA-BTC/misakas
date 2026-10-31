@@ -10,6 +10,7 @@
 //!
 //! Written, not run here: the validation lane compiles and runs it.
 
+#![allow(warnings)]
 use kaspa_consensus_core::palw_cell_coverage_v1::palw_tir_cell_coverage_v1;
 use misaka_palw_kernel::descriptor::k2_tir_v4_descriptor;
 use misaka_palw_sdk::preflight::{Options, model, source};
@@ -22,6 +23,7 @@ fn fixture(rel: &str) -> PathBuf {
 }
 
 /// The text decoder lowered shape-only from the headers at `ctx` positions, under the tiled logits scheme.
+#[allow(clippy::ptr_arg)]
 fn program(dir: &PathBuf, ctx: u32) -> Result<TirProgramV1, String> {
     let reg = misaka_palw_tir_lower::quantfmt::QuantRegistry::builtin();
     let src = source::open(dir, source::detect(dir)?, None, reg)?;

@@ -17,23 +17,22 @@ pub use state_root_owner::{PalwGdnStateRootRequestV3, gdn_state_root_request_v3}
 
 mod capture;
 pub use capture::{PalwGdnCaptureV2, gdn_refutation_from_capture_v2, gdn_refutation_from_leaves_v2};
-pub use capture::{PalwGdnPredecessorRequestV3, PalwGdnPredecessorOwnerV3,
-    PalwGdnPredecessorBuiltV3, gdn_predecessor_witness_request_v3};
-pub use transition::{PalwGdnTransitionBuiltV3, gdn_transition_refutation_with_accused_retained_v3};
+pub use capture::{
+    PalwGdnPredecessorBuiltV3, PalwGdnPredecessorOwnerV3, PalwGdnPredecessorRequestV3, gdn_predecessor_witness_request_v3,
+};
 pub use transition::gdn_check_transition_demands_borrowed_v3;
+pub use transition::{PalwGdnTransitionBuiltV3, gdn_transition_refutation_with_accused_retained_v3};
 // RFC-0006 consumer v2: the checkpoint's own two facts (delta transition, convolution window), the court that keeps an anchored
 // replay sound — see the module's docs. Public so the generated native scanners can name its wire types by their owner path.
 pub mod transition;
 pub use transition::{
     PALW_GDN_CHECKPOINT_EVIDENCE_VERSION_V2, PALW_GDN_CONV_WINDOW_EVIDENCE_KIND_V2, PALW_GDN_TRANSITION_EVIDENCE_KIND_V2,
-    PalwGdnCheckpointVerdictV2, PalwGdnConvWindowRefutationV2, PalwGdnMismatchV2, PalwGdnTransitionRefutationV2,
-    check_gdn_conv_window_refutation_v2, check_gdn_transition_refutation_v2, gdn_checkpoint_witness_from_disclosures_v2,
-    gdn_check_conv_demands_borrowed_v3,
-    PalwGdnConvAdmissionV3, PalwGdnConvOwnerV3, PalwGdnConvRefutationRequestsV3, PalwGdnConvRequiredRowV3,
-    gdn_conv_refutation_requests_v3, visit_gdn_conv_required_rows_v3,
-    gdn_conv_window_demands_v2, gdn_conv_window_refutation_from_capture_v2, gdn_conv_window_refutation_with_accused_v2,
-    gdn_conv_window_required_v2, gdn_transition_demands_v2, gdn_transition_refutation_from_capture_v2,
-    gdn_transition_refutation_with_accused_v2,
+    PalwGdnCheckpointVerdictV2, PalwGdnConvAdmissionV3, PalwGdnConvOwnerV3, PalwGdnConvRefutationRequestsV3, PalwGdnConvRequiredRowV3,
+    PalwGdnConvWindowRefutationV2, PalwGdnMismatchV2, PalwGdnTransitionRefutationV2, check_gdn_conv_window_refutation_v2,
+    check_gdn_transition_refutation_v2, gdn_check_conv_demands_borrowed_v3, gdn_checkpoint_witness_from_disclosures_v2,
+    gdn_conv_refutation_requests_v3, gdn_conv_window_demands_v2, gdn_conv_window_refutation_from_capture_v2,
+    gdn_conv_window_refutation_with_accused_v2, gdn_conv_window_required_v2, gdn_transition_demands_v2,
+    gdn_transition_refutation_from_capture_v2, gdn_transition_refutation_with_accused_v2, visit_gdn_conv_required_rows_v3,
 };
 
 pub const PALW_GDN_STEP_EVIDENCE_VERSION_V2: u16 = 2;

@@ -1,4 +1,5 @@
 //! SDK/CLI component verification. Synthetic proof codecs are not checkpoint or court evidence.
+#![allow(warnings)]
 use kaspa_consensus_core::{
     Hash64,
     palw_flat_model_seal_v6::*,

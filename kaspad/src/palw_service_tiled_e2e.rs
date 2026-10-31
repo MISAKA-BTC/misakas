@@ -252,7 +252,7 @@ impl TiledFixture {
             kaspa_consensus_core::palw_step_refute::PalwTraceEventDisclosureV1,
         >,
     ) {
-        self.produce_for_card(chain, 0, Some(fault))
+        self.produce_for_card(chain, 0, Some(fault), true)
     }
 
     pub(super) fn produce_for_card(
@@ -260,6 +260,7 @@ impl TiledFixture {
         chain: &Chain,
         card: usize,
         fault: Option<u8>,
+        constraint: bool,
     ) -> (
         kaspa_consensus_core::palw_backend::PalwExecutionOutcomeV1,
         kaspa_consensus_core::palw_step_refute::PalwTraceEventDisclosureV1,
@@ -318,7 +319,7 @@ impl TiledFixture {
             job.tail =
                 Some(PalwFpJobTailV1::Prefix(PalwFpPrefixStateV1 { state_root: Hash64::from_u64_word(0xBAD17), ..true_prefix }));
             assert!(backend.verify_prefix_state_v1(&job, &ids).is_err(), "the actual holder rejects the false named prefix");
-        } else {
+        } else if constraint {
             // Use the same DFA as the flat fixture, with the actual tokenizer-derived table.
             selection_constraint_job_with_table(&mut job, self.table.clone());
         }
@@ -336,7 +337,7 @@ impl TiledFixture {
         let rows = retained.logits_rows();
         let mut generated = retained.generated_token_ids().to_vec();
         assert_eq!(generated.len(), 4);
-        if !prefix_fault {
+        if !prefix_fault && constraint {
             assert!(generated.iter().all(|id| *id == 0 || *id == PALW_LOGITS_TILE_LANES as u32));
         }
         generated[2] = match fault {
@@ -585,9 +586,17 @@ pub(super) async fn carry_public_rpc_answer(
 ) {
     // `payer`: whose key funds the carrier (the object itself is signed separately). Under the automatic recovery runs the producer
     // service spends bond 0's float itself, so the harness pays from a spare card's float instead of re-spending it (lane FPCP).
-    let tx =
-        palw_carrier_fees::build_lifecycle_carrier_v2(&chain.config, key(payer), object, funding.0, &funding.1, &[], None, chain.daa())
-            .unwrap();
+    let tx = palw_carrier_fees::build_lifecycle_carrier_v2(
+        &chain.config,
+        key(payer),
+        object,
+        funding.0,
+        &funding.1,
+        &[],
+        None,
+        chain.daa(),
+    )
+    .unwrap();
     let session = manager.consensus().unguarded_session();
     flow.submit_rpc_transaction(&session, tx.clone(), kaspa_mining::mempool::tx::Orphan::Forbidden)
         .await

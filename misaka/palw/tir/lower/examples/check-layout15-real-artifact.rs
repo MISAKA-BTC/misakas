@@ -152,7 +152,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for t in &job.prompt {
         step(*t)?;
     }
-    drop(step);
     let mut generated = vec![];
     for i in 0..job.generated_count {
         let (_, values) = old.logits();

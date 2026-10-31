@@ -398,7 +398,11 @@ pub(super) fn answer(
         fee.earned += credit;
     }
     builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(12, &d.request.job), Some(bytes(&fee)))?;
-    builder.write_kernel_row(EXECUTION_SERVED_TABLE_V11, pending_key(native::source::unit_key(&d.request)), Some(body[68..].to_vec()))?;
+    builder.write_kernel_row(
+        EXECUTION_SERVED_TABLE_V11,
+        pending_key(native::source::unit_key(&d.request)),
+        Some(body[68..].to_vec()),
+    )?;
     d.settled = true;
     builder.write_kernel_row(EXECUTION_DEMAND_TABLE_V11, pending_key(d.id()), Some(bytes(&d)))?;
     builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(16, &d.request.job), Some(bytes(&closed_pursuit)))?;

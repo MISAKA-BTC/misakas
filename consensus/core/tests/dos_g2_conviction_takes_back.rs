@@ -15,6 +15,7 @@
 //!
 //! Run: cargo test -p kaspa-consensus-core --test dos_g2_conviction_takes_back -- --nocapture --test-threads=2
 
+#![allow(warnings)]
 #[path = "dos_l5_common.rs"]
 mod common;
 use common::*;

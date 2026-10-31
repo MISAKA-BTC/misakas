@@ -20,6 +20,7 @@
 //! (216,000 rounds at 1,200, 345,600 at 120) — so `max_fraud_gain`, every seat lock read from it
 //! and the genesis collateral a seat posts are the same figures at both maturities.
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{
     ForkActivation, OverrideParams, Params, devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params,
     palw_t12_shipped_params,
@@ -67,20 +68,20 @@ const UNMOVED: &[(&str, &str, &str, &str)] = &[
 /// `palw_offence_attribution_is_t12_only`, `evm_bridge_ledger_is_t12_only` and
 /// `t12_mainnet_values_moved_only_these` hold unchanged with it taken away — so nothing else moved).
 /// The re-pin (`scripts/release/t12_repin.py`, `maturity.*`) moves it with every other twin.
-// re-pin 2026-10-08 @42452229ee51: no DAA-9,000 flag day (user, 2026-10-08): the int-13 list is dormant; ids back to the int-12 release (was edde9c06…, bb8d0d4d…)
+// re-pin 2026-10-30 @64535b7bf7e8: User selected DAA18400 for the unpublished G14 schedule on 2026-10-30; preserve the current main CI fixes (was 4bcf0e45…, 684f43a7…)
 const T12_WITHOUT_THE_MATURITY: (&str, &str, &str) = (
-    "199d11f3b8d97d5029e2a7e94b4578891fb1058a20eb9ec8a3da8de1e3593ad9",
+    "3be11627f5162fbe83ad836e742dc7cff19119a1296a068dd05d1c344e3f72d7",
     "e4add02e255f61615fbe0195a08ea893614bc4a234f4c635a0706d9e3b3d7b53",
-    "47f346f0b9fa801432f65925cee09518409b9e52d931e376969a02eacc79b4d3",
+    "a80e4aaf0d8dee128122b1ea3a957629814561cfd61a2c2f3d2f71db01594e99",
 );
 
 /// testnet-12 with the 120-DAA maturity: the shipped preset's full ids (= `palw_readiness_horizon_is_t12_only`'s
 /// `T12_WITH_THE_HORIZON`). Taken from this test's own output.
-// re-pin 2026-10-08 @42452229ee51: no DAA-9,000 flag day (user, 2026-10-08): the int-13 list is dormant; ids back to the int-12 release (was 2e567642…, 5f5df817…)
+// re-pin 2026-10-30 @64535b7bf7e8: User selected DAA18400 for the unpublished G14 schedule on 2026-10-30; preserve the current main CI fixes (was 73e67678…, fd42c167…)
 const T12_WITH_THE_MATURITY: (&str, &str, &str) = (
-    "5ee7fd8ee019968cf52929b844cf9ddfb1aad500842a89cf04bced8ba4edefb6",
+    "3e6da238306cfdb7e71599d5ef8fb314f1b3ff33a50673af1321f3da9cfa5b94",
     "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-    "1678e07359f6727e96224041450a3b1d2aadcf8acd6bb6db0c277ff4d401c9b9",
+    "b4706ae535fc2c9e4f0a0fe1b6cb0456025f3e00c1b8aba5cde02191f46f9194",
 );
 
 fn shipped(name: &str) -> Params {

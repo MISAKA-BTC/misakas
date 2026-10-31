@@ -834,7 +834,6 @@ pub(super) fn release_mining_holds_v39(
 }
 #[path = "palw_native_job_audit_fold_v39.rs"]
 mod audit;
-pub(super) use audit::audit_policies_v39;
 
 #[path = "palw_native_protected_fold_v39.rs"]
 mod protected;

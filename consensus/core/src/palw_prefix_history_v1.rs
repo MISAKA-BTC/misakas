@@ -152,7 +152,7 @@ impl PalwPrefixHistoryRecordV1 {
         Ok(Self::encoded_head_v1(&encoded))
     }
     fn encoded_head_v1(encoded: &[u8]) -> Hash64 {
-        Hash64::from_bytes(blake2b_simd::Params::new().hash_length(64).key(DOMAIN).hash(&encoded).as_bytes().try_into().expect("64"))
+        Hash64::from_bytes(blake2b_simd::Params::new().hash_length(64).key(DOMAIN).hash(encoded).as_bytes().try_into().expect("64"))
     }
     /// Authenticate the bounded raw carrier against a native rooted request
     /// before a nested Borsh vector can allocate from peer-selected lengths.

@@ -10,6 +10,7 @@
 //!
 //! No dependency on `misaka-palw-base0`: the digest string is the only thing shared.
 
+#![allow(warnings)]
 mod common;
 
 use std::collections::BTreeSet;

@@ -679,8 +679,8 @@ impl PalwHistoryRecoveryV1 {
         {
             return Err("history recovery changes the frozen seed, work, custody or clocks".into());
         }
-        if let Some(demand) = &self.demand {
-            if Some(&demand.request) != self.remaining_request_v1().as_ref()
+        if let Some(demand) = &self.demand
+            && (Some(&demand.request) != self.remaining_request_v1().as_ref()
                 || demand.opened_daa < self.opened_daa
                 || demand.opened_daa >= demand.answer_until_daa
                 || demand.answer_until_daa > self.recovery_until_daa
@@ -690,23 +690,21 @@ impl PalwHistoryRecoveryV1 {
                         || buffer.total_bytes == 0
                         || buffer.total_bytes as usize > PALW_PREFIX_HISTORY_MAX_RECORD_BYTES_V1
                         || buffer.bytes.len() > buffer.total_bytes as usize
-                })
-            {
-                return Err("history demand or protected buffer differs from the accepted backwards cursor".into());
-            }
+                }))
+        {
+            return Err("history demand or protected buffer differs from the accepted backwards cursor".into());
         }
-        if let Some(default) = &self.default {
-            if self.demand.is_some()
+        if let Some(default) = &self.default
+            && (self.demand.is_some()
                 || Some(&default.request) != self.remaining_request_v1().as_ref()
                 || default.custodians != self.custodians
                 || default.opened_daa < self.opened_daa
                 || default.answer_until_daa.checked_sub(default.opened_daa) != Some(self.response_span_daa)
                 || default.answer_until_daa > self.recovery_until_daa
                 || default.collected_daa < default.answer_until_daa
-                || default.collected_daa >= self.collect_until_daa
-            {
-                return Err("history default is not the exact expired accepted demand".into());
-            }
+                || default.collected_daa >= self.collect_until_daa)
+        {
+            return Err("history default is not the exact expired accepted demand".into());
         }
         Ok(())
     }
@@ -718,10 +716,11 @@ impl PalwHistoryRecoveryV1 {
         if self.default.is_some() || now < self.opened_daa || now >= self.collect_until_daa {
             return Err("history recovery is terminal or outside its original paid window".into());
         }
-        if let Some(answerer) = action.answerer_v1() {
-            if !self.custodians.contains(&answerer) && answerer != self.initial.owner {
-                return Err("history answerer has no literal signed custody grant".into());
-            }
+        if let Some(answerer) = action.answerer_v1()
+            && !self.custodians.contains(&answerer)
+            && answerer != self.initial.owner
+        {
+            return Err("history answerer has no literal signed custody grant".into());
         }
         match action {
             PalwHistoryRecoveryActionV1::Demand => {
@@ -1052,8 +1051,13 @@ mod tests {
                 committed_execution_root: pledge.execution_root,
             },
         );
-        let envelope =
-            PalwHistoryFpEnvelopeV1 { version: 1, original_payload: vec![3, 0, 8], pledge, original_binding, custody_delegation: None };
+        let envelope = PalwHistoryFpEnvelopeV1 {
+            version: 1,
+            original_payload: vec![3, 0, 8],
+            pledge,
+            original_binding,
+            custody_delegation: None,
+        };
         let encoded = envelope.encode_v1().unwrap();
         assert_eq!(PalwHistoryFpEnvelopeV1::decode_v1(&encoded).unwrap(), envelope);
         assert!(envelope.original_fp_v1().is_err());
@@ -1077,7 +1081,11 @@ mod tests {
         let encoded2 = delegated.encode_v1().unwrap();
         assert_eq!(PalwHistoryFpEnvelopeV1::decode_v1(&encoded2).unwrap(), delegated);
         assert!(PalwHistoryFpEnvelopeV1 { version: 2, custody_delegation: None, ..envelope.clone() }.encode_v1().is_err());
-        assert!(PalwHistoryFpEnvelopeV1 { version: 1, custody_delegation: Some(delegation.clone()), ..envelope.clone() }.encode_v1().is_err());
+        assert!(
+            PalwHistoryFpEnvelopeV1 { version: 1, custody_delegation: Some(delegation.clone()), ..envelope.clone() }
+                .encode_v1()
+                .is_err()
+        );
         let short = PalwProducerCustodyDelegationV1 { valid_until_daa: envelope.pledge.material_until_daa - 1, ..delegation.clone() };
         assert!(PalwHistoryFpEnvelopeV1 { version: 2, custody_delegation: Some(short), ..envelope.clone() }.encode_v1().is_err());
         let foreign = PalwProducerCustodyDelegationV1 { producer: bond(78), ..delegation.clone() };
@@ -1105,23 +1113,32 @@ mod tests {
             custodian_signature: Vec::new(),
         };
         let sign = |kp: &libcrux_ml_dsa::ml_dsa_87::MLDSA87KeyPair, message: Hash64| {
-            libcrux_ml_dsa::ml_dsa_87::sign(&kp.signing_key, message.as_byte_slice(), PALW_PRODUCER_CUSTODY_DELEGATION_CONTEXT_V1, [0; 32])
-                .unwrap()
-                .as_ref()
-                .to_vec()
+            libcrux_ml_dsa::ml_dsa_87::sign(
+                &kp.signing_key,
+                message.as_byte_slice(),
+                PALW_PRODUCER_CUSTODY_DELEGATION_CONTEXT_V1,
+                [0; 32],
+            )
+            .unwrap()
+            .as_ref()
+            .to_vec()
         };
         delegation.producer_signature = sign(&producer, delegation.signing_message_v1());
         delegation.custodian_signature = sign(&custodian, delegation.signing_message_v1());
         let verify = crate::palw_constraint_stream_carriage_v1::palw_staged_verify_mldsa87_v1;
         delegation.validate_signatures_v1(producer.verification_key.as_ref(), custodian.verification_key.as_ref(), verify).unwrap();
-        assert!(delegation
-            .validate_signatures_v1(custodian.verification_key.as_ref(), producer.verification_key.as_ref(), verify)
-            .is_err(), "roles are not interchangeable");
+        assert!(
+            delegation
+                .validate_signatures_v1(custodian.verification_key.as_ref(), producer.verification_key.as_ref(), verify)
+                .is_err(),
+            "roles are not interchangeable"
+        );
         let mut stretched = delegation.clone();
         stretched.valid_until_daa += 1;
-        assert!(stretched
-            .validate_signatures_v1(producer.verification_key.as_ref(), custodian.verification_key.as_ref(), verify)
-            .is_err(), "a signed window cannot be extended");
+        assert!(
+            stretched.validate_signatures_v1(producer.verification_key.as_ref(), custodian.verification_key.as_ref(), verify).is_err(),
+            "a signed window cannot be extended"
+        );
     }
     #[test]
     fn history_parts_and_envelope_reject_declared_allocation_bombs_before_reading_body() {

@@ -14,6 +14,7 @@
 //! computed with token-type row 0 everywhere — the fixture's `logits` are transformers' with `token_type_ids` all zero, and the
 //! segment-aware logits (`logits_segments`) are recorded beside them for the pair-segment rule this lowering does not have yet.
 
+#![allow(warnings)]
 mod common;
 
 use misaka_palw_tir as tir;

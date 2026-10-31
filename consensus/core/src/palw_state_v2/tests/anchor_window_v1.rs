@@ -11,6 +11,7 @@
 //! And the rule that makes the fence safe to ship: **before its height every fold is byte-identical** — the same chain under a fence at a
 //! height it never reaches has the same state root at every block as the chain with no fence at all.
 
+#![allow(warnings)]
 use super::*;
 use crate::palw_execution_lane_v1::{PalwExecPermitUseV1, PalwExecSeedAnchorV1, palw_execution_span_seed_v1};
 

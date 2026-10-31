@@ -52,6 +52,7 @@
 //! chain 23,000 blocks long. The spends are of the cards' real genesis collateral outpoints,
 //! unsigned: every gate asked here stands before the script check, so the gate's own error — or the
 //! next check's — says which way it went.
+#![allow(warnings)]
 use super::t12_round_lane_e2e::{T12Chain, t12_genesis_chain, t12_with_harness_cards};
 use crate::pipeline::virtual_processor::utxo_validation::BondSpendFilter;
 use crate::processes::transaction_validator::tx_validation_in_utxo_context::TxValidationFlags;

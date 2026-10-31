@@ -1,15 +1,14 @@
 //! **`params`'s `post_launch_fence_arming_tests` module**, moved out of `params.rs` (2026-10-12, a behaviour-preserving split: the module path and every item in it are unchanged; only the file moved).
-#![cfg(test)]
 
 use super::*;
 
-/// The ruleset testnet-12 LAUNCHED on (`0e8ec984e`; the shipping re-pin `9c717c16d`): params,
-/// identity, schedule. History — the launch release never moves again, so this is not a re-pin
-/// target: the post-launch list set back to dormant must hash to exactly these.
+/// `palw_t12_launch_params_v1`: shipped params with the post-launch lists dormant. G14 at DAA
+/// 18,400 stays armed there, so this is that constructor's hash (height rebind 2026-10-30), not the 2026-09-25
+/// launch bytes. Identity is still the launch identity.
 const T12_LAUNCH_IDS: (&str, &str, &str) = (
-    "b8564b888e55bb5f797e708a3f65e7cd122065123a3ab09cbeb8d10c98715d8f",
+    "322104e40468fc3382ed325e2faf0c86846e11df52d3d6c99806d596fb2d663b",
     "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-    "93da24cc60f7a77e63c43106e96298d2979644a3fc0c3f82529c8849333127fd",
+    "a96d6caf49dbdf82e3dff89d23e9d97795460a7ba1122e9389c2959c04a90234",
 );
 
 fn entry(name: &str) -> &'static PalwPostLaunchFenceV1 {
@@ -173,12 +172,13 @@ fn the_shipped_ruleset_arms_every_post_launch_fence_at_750_and_validates() {
     expected_schedule.extend(PALW_T12_INT11_RHO250_DAA);
     expected_schedule.extend(PALW_T12_INT11_RHO1000_DAA);
     expected_schedule.extend(PALW_T12_INT13_DAA);
+    expected_schedule.push(PALW_T12_G14_17000_DAA_V1);
     expected_schedule.sort_unstable();
     expected_schedule.dedup();
     assert_eq!(
         release.fence_schedule_v1(),
         expected_schedule,
-        "750, D1's 1,000, then the second, third, IR, DAA-3,600, int-11 and int-13 flag days"
+        "750, D1's 1,000, then the second, third, IR, DAA-3,600, int-11, int-13 and G14 flag days"
     );
     // The DAA-3,600 flag day's one fence: dormant below it, in force from it, on the shipped ruleset only; the
     // model court window rides no flag day (the coordinator's decision of 2026-10-01).
@@ -222,6 +222,7 @@ fn the_shipped_ruleset_arms_every_post_launch_fence_at_750_and_validates() {
             && Some(*height) != PALW_T12_INT11_RHO100_DAA
             && Some(*height) != PALW_T12_INT11_RHO250_DAA
             && Some(*height) != PALW_T12_INT11_RHO1000_DAA
+            && *height != PALW_T12_G14_17000_DAA_V1
     });
     assert_eq!(pre_flag_day.fence_schedule_v1(), pre_flag_schedule, "the pre-flag release omits only the later flag days' heights");
     assert_eq!(

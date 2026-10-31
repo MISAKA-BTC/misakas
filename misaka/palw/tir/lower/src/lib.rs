@@ -56,7 +56,6 @@ pub mod artifact;
 pub mod calib;
 pub mod cfg;
 pub mod convert;
-pub mod full_court_source25;
 pub mod detmath;
 pub mod diffusion;
 /// RFC-0003 step 7: a bidirectional encoder as the pieces of a registered Embedding class.
@@ -67,18 +66,19 @@ pub mod fidelity;
 pub mod float_ref;
 /// Independent, bounded primitive/state templates; no ModelSpec or model-name dispatch.
 pub mod frontend_pack;
+pub mod full_court_source25;
 pub mod gguf;
 pub mod hf_config;
 pub mod hf_schema;
 pub mod hf_weights;
 pub mod hl;
-pub mod lora;
 pub mod layout_pass15;
+pub mod lora;
 pub mod lower;
 pub mod model;
+pub mod ngram;
 /// Genesis 8: a streaming conversion written straight into a `PALWART3` artifact.
 pub mod palwart_out;
-pub mod ngram;
 pub mod prequant;
 pub mod quant;
 pub mod quantfmt;

@@ -12,6 +12,7 @@
 //!    in step 3 must meet the cap (the reservation counts), so the hold cannot be bypassed by a
 //!    same-block commitment beside the own attempt.
 
+#![allow(warnings)]
 #[path = "panel_room_common.rs"]
 mod room;
 use room::*;

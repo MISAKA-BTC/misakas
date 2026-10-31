@@ -12,6 +12,7 @@
 //! All must admit, or refuse with the same code and the same numbers. The reader of the ladder clock (`PalwFitRegimeV1::Shipped`,
 //! the measured model before this change) is shown to differ, so the test would catch its return.
 
+#![allow(warnings)]
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::params::palw_t12_shipped_params;
 use kaspa_consensus_core::palw_base0_profile::rc_job_context;

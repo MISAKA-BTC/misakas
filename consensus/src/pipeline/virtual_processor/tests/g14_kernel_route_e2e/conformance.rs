@@ -245,7 +245,24 @@ impl Cw {
         let tensors = f.params.tensors.iter().map(|(k, t)| (*k, t.to_le_bytes())).collect();
         let ops = palw_tir_inventory_operands_v1(&f.program, &Tensors(tensors)).expect("the inventory");
         let cand = Fixture { program: f.program.clone(), params: f.params.clone(), plan: f.plan.clone(), pc: f.pc.clone() };
-        Cw { net, src, src_class, f, cand, v2_class, kernel_class, kernel_root, ops, jobs: 0, turn: 0, paid_class: None, collude_lies: false, unapproved: Vec::new(), paid_extras: false, no_seam: false }
+        Cw {
+            net,
+            src,
+            src_class,
+            f,
+            cand,
+            v2_class,
+            kernel_class,
+            kernel_root,
+            ops,
+            jobs: 0,
+            turn: 0,
+            paid_class: None,
+            collude_lies: false,
+            unapproved: Vec::new(),
+            paid_extras: false,
+            no_seam: false,
+        }
     }
 
     fn producer(&mut self) -> usize {
@@ -1091,9 +1108,43 @@ async fn g14_conformance_rows_survive_reorg_restart_and_pruned_import() {
 
     // ---- a real restart, then the window closes on the restarted node and on the importer alike ----
     let (sink, root) = (cw.net.chain.sink(), cw.net.chain.tip_state().1.state_root());
-    let Cw { net, src, src_class, f, cand, v2_class, kernel_class, kernel_root, ops, jobs, turn, paid_class, collude_lies, unapproved, paid_extras, no_seam } = cw;
+    let Cw {
+        net,
+        src,
+        src_class,
+        f,
+        cand,
+        v2_class,
+        kernel_class,
+        kernel_root,
+        ops,
+        jobs,
+        turn,
+        paid_class,
+        collude_lies,
+        unapproved,
+        paid_extras,
+        no_seam,
+    } = cw;
     let net = net.restart(db.clone());
-    let mut cw = Cw { net, src, src_class, f, cand, v2_class, kernel_class, kernel_root, ops, jobs, turn, paid_class, collude_lies, unapproved, paid_extras, no_seam };
+    let mut cw = Cw {
+        net,
+        src,
+        src_class,
+        f,
+        cand,
+        v2_class,
+        kernel_class,
+        kernel_root,
+        ops,
+        jobs,
+        turn,
+        paid_class,
+        collude_lies,
+        unapproved,
+        paid_extras,
+        no_seam,
+    };
     assert_eq!((cw.net.chain.sink(), cw.net.chain.tip_state().1.state_root()), (sink, root), "the same tip off disk");
     assert_eq!(cw.attempt().evidence, Some(posted), "the attempt row off disk");
     cw.net.beat_to(posted.window_end_daa + 1).await;

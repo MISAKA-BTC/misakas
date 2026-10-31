@@ -1,5 +1,4 @@
 //! **`palw_panel`'s `readiness_memory_and_stuck_carrier_tests` module**, moved out of `palw_panel.rs` (2026-10-12, a behaviour-preserving split: the module path and every item in it are unchanged; only the file moved).
-#![cfg(test)]
 
 use super::*;
 use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
@@ -47,7 +46,9 @@ impl CodeNeedleV1 for str {
         let mut offset = 0;
         let mut last = None;
         while let Some(span) = code_span_v1(rest, needle) {
-            if span.is_empty() { break; }
+            if span.is_empty() {
+                break;
+            }
             last = Some(offset + span.start);
             offset += span.end;
             rest = &rest[span.end..];
@@ -183,7 +184,8 @@ fn the_readiness_duty_asks_capacity_and_takes_its_bytes_from_the_proof_lane() {
     let duties = &duties[..duties.find("\n    }\n").expect("its end")];
     assert!(duties.contains_code("self.replay_memory_capacity_v1(session, Some((class.class_id, class.artifact_root)))"));
     assert!(!duties.contains_code("replay_memory_budget_v1("), "the moment's gate starved the drill's proofs");
-    let reserve = duties.find_code("self.reserve_readiness_proof_v1(class.class_id, span_now, streamed_need)").expect("the proof lane");
+    let reserve =
+        duties.find_code("self.reserve_readiness_proof_v1(class.class_id, span_now, streamed_need)").expect("the proof lane");
     let streamed = duties.find_code("backend.artifact_readiness_material_streamed_v1(").expect("the streamed walk");
     let vector = duties.find_code("backend.artifact_readiness_material(&draw)").expect("the vector, for a family that cannot stream");
     assert!(reserve < streamed && streamed < vector, "reserve, stream, and only then the vector");
@@ -193,7 +195,7 @@ fn the_readiness_duty_asks_capacity_and_takes_its_bytes_from_the_proof_lane() {
     let status = &status[..status.find("\n    }\n").expect("its end")];
     assert!(status.contains_code("self.replay_memory_capacity_v1(session, Some((class.class_id, class.artifact_root)))"));
     // The seat's REPLAY still asks the moment, and still reserves when it starts.
-    assert!(source.contains_code("self.replay_memory_budget_v1(&session, Some((duty.class_id, duty.artifact_root)))"));
+    assert!(source.contains_code("self.replay_memory_budget_v1(session, Some((duty.class_id, duty.artifact_root)))"));
     let backends = include_str!("../palw_backends.rs");
     assert!(backends.contains_code("fn serves_without_a_holding_v1("), "the derived floor is priced without a holding");
     // A vector build is priced at four vectors' worth of hashes plus the streamed figure.
@@ -311,10 +313,10 @@ fn the_tick_replaces_our_own_late_carrier_with_the_proof() {
         tick.find_code("let stuck_tip: Option<(kaspa_consensus_core::tx::TransactionId, u64)> = if held {").expect("the late tip");
     let escalated = tick.find_code("palw_readiness_replaces_carrier_v1(true, *late)").expect("the escalated site's test");
     let replace = tick
-        .find_code("self.replace_late_carrier_v1(&session, &duty, stuck, late, current_daa, &mut carrier_chain.book_with_funding(&mut funding))")
+        .find_code("self.replace_late_carrier_v1(session, &duty, stuck, late, current_daa, &mut carrier_chain.book_with_funding(&mut funding))")
         .expect("replace");
     let carry = tick
-        .find_code("self.carry_readiness_proof_v1(&session, &duty, current_daa, &mut carrier_chain.book_with_funding(&mut funding))")
+        .find_code("self.carry_readiness_proof_v1(session, &duty, current_daa, &mut carrier_chain.book_with_funding(&mut funding))")
         .expect("the carry");
     let own = tick.find_code("palw_readiness_replaces_carrier_v1(duty.escalates(), late)").expect("the Own site's test");
     assert!(
@@ -525,7 +527,7 @@ fn a_court_move_is_replaced_only_once_its_lane_re_plans_it() {
     let tick =
         &source[source.find_code("let mut held = carrier_chain.inflight() >= MAX_INFLIGHT_CARRIERS;").expect("the held tick")..];
     let site = tick
-        .find_code("if self.replace_late_carrier_v1(&session, &duty, stuck, late, current_daa, &mut carrier_chain.book_with_funding(&mut funding)).await {")
+        .find_code("if self.replace_late_carrier_v1(session, &duty, stuck, late, current_daa, &mut carrier_chain.book_with_funding(&mut funding)).await {")
         .expect("the escalated site's replacement");
     let site = &tick[site..];
     let site = &site[..site
@@ -533,7 +535,7 @@ fn a_court_move_is_replaced_only_once_its_lane_re_plans_it() {
         .expect("the next arm")];
     let declined = &site[site.find_code("} else {").expect("the declined arm")..];
     assert!(
-        declined.contains_code("!self.carry_on_readiness_lane_v1(&session, &duty, current_daa, &mut readiness_lane, &main).await;"),
+        declined.contains_code("!self.carry_on_readiness_lane_v1(session, &duty, current_daa, readiness_lane, &main).await;"),
         "a declined escalated replacement offers the lane: {declined}"
     );
 }
@@ -709,9 +711,9 @@ fn the_tick_offers_the_readiness_lane_where_the_main_slot_cannot_take_a_proof() 
     assert!(settle < held && held - settle < 1_500, "settled with the main chain, before the sites");
     let tick = &source[held..];
     let main_escalated =
-        tick.find_code("if self.carry_readiness_proof_v1(&session, &duty, current_daa, &mut carrier_chain.book_with_funding(&mut funding)).await {").unwrap();
+        tick.find_code("if self.carry_readiness_proof_v1(session, &duty, current_daa, &mut carrier_chain.book_with_funding(&mut funding)).await {").unwrap();
     let lane_escalated = tick
-        .find_code("if self.carry_on_readiness_lane_v1(&session, &duties[at], current_daa, &mut readiness_lane, &main).await {")
+        .find_code("if self.carry_on_readiness_lane_v1(session, &duties[at], current_daa, readiness_lane, &main).await {")
         .expect("the escalated site's lane");
     let priority = tick.find_code("slots.at(PalwCarrierSiteV1::PriorityFirst, carrier_chain.inflight());").unwrap();
     assert!(main_escalated < lane_escalated && lane_escalated < priority, "after the main slot's offer, before the court");
@@ -719,13 +721,13 @@ fn the_tick_offers_the_readiness_lane_where_the_main_slot_cannot_take_a_proof() 
     // audit, n1 x n2): the escalated duty it removed from the tick's list is offered to the lane on
     // the declined arm, and the proof waits only when the lane does not take it.
     let replace_escalated = tick
-        .find_code("if self.replace_late_carrier_v1(&session, &duty, stuck, late, current_daa, &mut carrier_chain.book_with_funding(&mut funding)).await {")
+        .find_code("if self.replace_late_carrier_v1(session, &duty, stuck, late, current_daa, &mut carrier_chain.book_with_funding(&mut funding)).await {")
         .expect("the escalated site's replacement");
     assert!(replace_escalated < main_escalated, "the escalated site's replacement comes first");
     let declined = &tick[replace_escalated..main_escalated];
     let declined = &declined[declined.find_code("} else {").expect("the declined arm")..];
     let lane_declined = declined
-            .find_code("(*readiness_waiting) =\n                            !self.carry_on_readiness_lane_v1(&session, &duty, current_daa, &mut readiness_lane, &main).await;")
+            .find_code("(*readiness_waiting) =\n                            !self.carry_on_readiness_lane_v1(session, &duty, current_daa, readiness_lane, &main).await;")
             .expect("the declined replacement offers the removed duty to the lane");
     assert!(declined[..lane_declined].contains_code("slots.rewind_v1(carrier_chain.inflight());"), "after the site is rewound");
     assert!(
@@ -735,7 +737,7 @@ fn the_tick_offers_the_readiness_lane_where_the_main_slot_cannot_take_a_proof() 
     );
     assert!(!declined.contains_code("(*readiness_waiting) = true;"), "the proof waits only when the lane refuses it too");
     let lane_own = tick
-        .find_code("&& self.carry_on_readiness_lane_v1(&session, &duty, current_daa, &mut readiness_lane, &main).await")
+        .find_code("&& self.carry_on_readiness_lane_v1(session, &duty, current_daa, readiness_lane, &main).await")
         .expect("the Own site's lane");
     let waits = tick.find_code("a possession proof for class {} waits for a carrier slot").unwrap();
     assert!(priority < lane_own && lane_own < waits, "before the proof waits");
@@ -774,18 +776,21 @@ fn the_tick_opens_a_stuck_carriers_slot_to_every_site_through_one_door() {
     assert!(stuck < open && open < escalated, "measured, opened, then the escalated site");
     let opened = &tick[open..escalated];
     for line in [
-        "self.open_stuck_carrier_v1(&session, stuck, late)",
+        "self.open_stuck_carrier_v1(session, stuck, late)",
         "funding = Some(opened);",
         "carrier_chain.set_inflight(0);",
         "held = false;",
     ] {
         assert!(opened.contains(line), "the opening: {line}");
     }
-    assert!(tick[..escalated].chars().filter(|c| !c.is_whitespace()).collect::<String>().ends_with("!stuck_opened&&"), "the escalated site defers to it");
+    assert!(
+        tick[..escalated].chars().filter(|c| !c.is_whitespace()).collect::<String>().ends_with("!stuck_opened&&"),
+        "the escalated site defers to it"
+    );
     let tail_at = tick.find_code("(*last_lane) = slots.finish(carrier_chain.inflight());").expect("the tail");
     let (sites, tail) = tick.split_at(tail_at);
     assert_eq!(
-        sites.count_code("self.submit_prepared_carrier_v1(&session, prepared_carrier)"),
+        sites.count_code("self.submit_prepared_carrier_v1(session, prepared_carrier)"),
         7,
         "the existing main sites and RFC-0018 receipt-lane site all use the shared submission door"
     );

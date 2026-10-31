@@ -180,8 +180,7 @@ impl TransactionValidator {
         if tx.subnetwork_id != kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT {
             return Ok(());
         }
-        if let Some(why) =
-            kaspa_consensus_core::palw_gen_claim_v1::palw_fp_gen_refusal_at_v1(payload, fence.is_active(ctx_daa_score))
+        if let Some(why) = kaspa_consensus_core::palw_gen_claim_v1::palw_fp_gen_refusal_at_v1(payload, fence.is_active(ctx_daa_score))
         {
             return Err(TxRuleError::PalwFpJobVersionAtHeight(why, ctx_daa_score));
         }

@@ -10,6 +10,7 @@
 //!
 //! Run: cargo test -p kaspa-consensus-core --test panel_room_held_reason_names_the_window_verdict
 
+#![allow(warnings)]
 use kaspa_consensus_core::palw_model_registry_v1::*;
 
 fn row(ready: u32, util: u32, window: u32) -> PalwModelLifecycleRowV1 {

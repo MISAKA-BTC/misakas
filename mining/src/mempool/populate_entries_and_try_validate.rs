@@ -105,7 +105,10 @@ mod chained_escrow_tests {
                 vec![],
             )
         };
-        assert_eq!(chained_escrow_spend_v1(&child(vec![TransactionOutpoint::new(Hash64::from_u64_word(9), 0), locked]), escrow_of), Some(locked));
+        assert_eq!(
+            chained_escrow_spend_v1(&child(vec![TransactionOutpoint::new(Hash64::from_u64_word(9), 0), locked]), escrow_of),
+            Some(locked)
+        );
         assert_eq!(chained_escrow_spend_v1(&child(vec![TransactionOutpoint::new(parent, 0)]), escrow_of), None);
         assert_eq!(chained_escrow_spend_v1(&child(vec![TransactionOutpoint::new(Hash64::from_u64_word(9), 1)]), escrow_of), None);
     }

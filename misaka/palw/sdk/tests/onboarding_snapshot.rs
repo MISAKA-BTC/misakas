@@ -1,4 +1,5 @@
 //! Public-page snapshot attacks and exact program/attempt binding, with generated weights.
+#![allow(warnings)]
 use kaspa_consensus_core::palw_kernel_route_v1::{PalwKernelRouteStateV1, palw_kernel_route_policy_v1};
 use kaspa_consensus_core::palw_onboarding_v1::{
     ConformanceAttemptRowV1, KernelBindingRowV1, PALW_ONBOARDING_TABLE_CONFORMANCE_ATTEMPTS_V1,

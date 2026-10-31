@@ -1,3 +1,4 @@
+#![allow(warnings)]
 use kaspa_hashes::Hash64;
 use misaka_palw_panel::{BondIdV1, ClaimSealV1, PanelSnapshotV1, panel_seed_v3};
 

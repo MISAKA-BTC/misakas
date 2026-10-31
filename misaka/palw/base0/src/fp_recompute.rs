@@ -162,11 +162,14 @@ pub trait Base0FpRecomputeKernelsV1 {
     /// Implementations without that boundary must refuse explicitly. This does
     /// not admit prefix execution or the serializer's returned chunks.
     fn state_chunks_snapshot_retained_v4(
-        &self, _profile: &PalwShapeProfileV3, _positions: u32,
+        &self,
+        _profile: &PalwShapeProfileV3,
+        _positions: u32,
     ) -> Result<Vec<Vec<u8>>, kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
         use kaspa_consensus_core::palw_native_resource_v1::{NativeCoverageV1, NativeDecodeErrorV1};
         Err(NativeDecodeErrorV1::Resource(NativeCoverageV1::unsupported::<Self>(
-            "GDN recurrence snapshot", "this kernel has no retained recurrence-snapshot implementation",
+            "GDN recurrence snapshot",
+            "this kernel has no retained recurrence-snapshot implementation",
         )))
     }
 }
@@ -597,7 +600,9 @@ impl Base0FpRecomputeKernelsV1 for Qwen36RecomputeKernelsV1<'_> {
     }
 
     fn state_chunks_snapshot_retained_v4(
-        &self, profile: &PalwShapeProfileV3, positions: u32,
+        &self,
+        profile: &PalwShapeProfileV3,
+        positions: u32,
     ) -> Result<Vec<Vec<u8>>, kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
         snapshot_retained::serialize_v4(self, profile, positions)
     }
@@ -607,8 +612,11 @@ impl Qwen36RecomputeKernelsV1<'_> {
     /// Raw and retained snapshot construction share the same serializer and map
     /// dispatch. Validation order and historical bytes stay in this one body.
     fn state_chunks_from_recurrence_v4(
-        &self, profile: &PalwShapeProfileV3, positions: u32,
-        layers: &[u16], states: &[crate::fp_capture::Base0GdnLayerStateV1],
+        &self,
+        profile: &PalwShapeProfileV3,
+        positions: u32,
+        layers: &[u16],
+        states: &[crate::fp_capture::Base0GdnLayerStateV1],
     ) -> Result<Vec<Vec<u8>>, Base0FpRecomputeError> {
         use kaspa_consensus_core::palw_state_chunk_map as map;
         let declared = profile.state_chunk_map_id;
@@ -728,7 +736,7 @@ impl Qwen36RecomputeKernelsV1<'_> {
             });
         }
         Err(Base0FpRecomputeError::Map(format!("this family serves no geometry for the map {declared}")))
-        }
+    }
 }
 
 /// **The floor's recompute kernels** (ADR-0086 Decision 2): the RC floor recomputes a checkpoint's

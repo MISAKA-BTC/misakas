@@ -15,6 +15,7 @@
 //! 4. The work charged is a function of the demanded set, not of the order it was asked in.
 //! 5. The refusals: each an error, never a panic or an invented value.
 
+#![allow(warnings)]
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 

@@ -14,6 +14,7 @@
 //!
 //! No tokenizer ships with a fixture, so the class commits to a placeholder tokenizer id (it is a hash the chain does not read here).
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::palw_t12_shipped_params;
 use kaspa_consensus_core::palw_gen_class_v1::*;
 use kaspa_consensus_core::palw_gen_v1::PalwGenProfileV1;

@@ -15,6 +15,7 @@
 //!   reduction's output chosen by a history-varying value (a `Gather`'s indices, a `Select`'s
 //!   condition), are refused by name; the same cone without the defect is admitted.
 
+#![allow(warnings)]
 #[path = "palw_tir_fixture_common.rs"]
 #[allow(unused)]
 mod fixture;

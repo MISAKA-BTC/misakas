@@ -717,7 +717,7 @@ impl Serializer for GetPalwStateProofResponse {
 impl Deserializer for GetPalwStateProofResponse {
     fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
         let version = load!(u16, reader)?;
-        if !matches!(version, 1 | 2 | 3) {
+        if !matches!(version, 1..=3) {
             return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "unknown readonly proof response version"));
         }
         Ok(Self {

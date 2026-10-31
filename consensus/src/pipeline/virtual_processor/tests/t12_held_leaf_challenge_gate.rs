@@ -5,6 +5,7 @@
 //! field of it, and when its shape is the court's (one to 32 chunks, one digest per chunk, an executor that is not
 //! the accuser). The claim, its class, the leaf's bound, the open sessions and the accuser's standing are the
 //! fold's (`palw_held_close_chunks`, `palw_held_close_fold_v1`), where the state is in hand.
+#![allow(warnings)]
 use super::t12_round_lane_e2e::{t12_genesis_chain, t12_with_harness_cards};
 use crate::consensus::test_consensus::TestConsensus;
 use kaspa_consensus_core::config::ConfigBuilder;

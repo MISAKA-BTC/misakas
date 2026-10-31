@@ -3,7 +3,10 @@
 //! atomic switch journal. Scaled-down caps: the logic, not the bytes, is tested.
 //!
 //! Design: docs/design/palw/storage/ibd-generations.md. RFC-0037 / ADR-0204 (Proposed).
-
+//!
+//! Native only: the generation store is RocksDB-backed, which has no wasm32 build.
+#![cfg(not(target_arch = "wasm32"))]
+#![allow(warnings)]
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::palw_row_stream_v1::*;
 use kaspa_consensus_core::palw_state_v2::{PalwChainStateV2, palw_collection_root_of_entries_v1, palw_state_root_of_preimage_v1};
@@ -73,7 +76,12 @@ fn stream(
 /// The whole-state step used by these tests: read the spill back and check a global invariant across collections
 /// (every claim names a class index that exists) — standing in for `restore_native_carriage_v1`'s full root
 /// recomputation and `assert_internal_consistency*`, which need a real typed state.
-fn whole_state(spill: &mut SpillFile, preimage: &[u8], root: Hash64, require: impl Fn(&[(Vec<u8>, Rows)]) -> bool) -> Result<(), String> {
+fn whole_state(
+    spill: &mut SpillFile,
+    preimage: &[u8],
+    root: Hash64,
+    require: impl Fn(&[(Vec<u8>, Rows)]) -> bool,
+) -> Result<(), String> {
     if palw_state_root_of_preimage_v1(preimage) != root {
         return Err("preimage".into());
     }
@@ -253,7 +261,8 @@ fn a_root_matching_stream_that_fails_the_whole_state_check_is_not_verified() {
 /// verified generation unless the rename happened, in which case the new verified one is active.
 #[test]
 fn a_crash_between_verification_and_switch_recovers_to_a_verified_generation() {
-    for (point, switched) in [(CrashPoint::VerifyAfterMarker, false), (CrashPoint::SwitchAfterJournalTmp, false), (CrashPoint::SwitchAfterJournal, true)]
+    for (point, switched) in
+        [(CrashPoint::VerifyAfterMarker, false), (CrashPoint::SwitchAfterJournalTmp, false), (CrashPoint::SwitchAfterJournal, true)]
     {
         let c = three();
         let cap = 32 << 10;

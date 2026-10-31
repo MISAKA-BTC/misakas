@@ -11,6 +11,7 @@
 //! That the range twin sizes every close of a pipeline exactly as the element twin is `palw_gen_close_price.rs`'s
 //! `the_generative_range_twin_sizes_every_close_exactly_as_the_element_twin`.
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{
     ForkActivation, PALW_T12_INT13_DAA, Params, palw_t12_arm_int13_flag_day_at_v1, palw_t12_release_v6_params, palw_t12_shipped_params,
 };

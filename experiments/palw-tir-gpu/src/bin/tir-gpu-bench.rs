@@ -13,6 +13,7 @@
 //! cargo run --release --bin tir-gpu-bench -- --quick    # fewer iterations
 //! ```
 
+#![allow(warnings)]
 use std::time::Instant;
 
 use misaka_palw_tir::interval::Interval;

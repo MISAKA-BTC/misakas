@@ -18,7 +18,7 @@ async fn execution11_native_unknown_seal_chunk64_drops_before_allocation_with_or
         let mut unsigned = signed.clone();
         let Obj::KernelRouteChunkV1 { signature, .. } = &mut unsigned else { unreachable!() };
         signature.clear();
-        let before = net.api().map(|r|r.aux).unwrap_or_default();
+        let before = net.api().map(|r| r.aux).unwrap_or_default();
         let collateral = net.collateral(7);
         // An unsigned chunk never reaches a block: the ride rule refuses it at the mempool
         // (anyone could otherwise open a group as any bond). Only the signed one is carried.
@@ -28,7 +28,7 @@ async fn execution11_native_unknown_seal_chunk64_drops_before_allocation_with_or
         net.funding[7] = saved;
         net.send(vec![(7, signed)]).await;
         let after = net.api();
-        let after_aux = after.as_ref().map(|r|r.aux.clone()).unwrap_or_default();
+        let after_aux = after.as_ref().map(|r| r.aux.clone()).unwrap_or_default();
         for table in [EXECUTION_QUOTA_TABLE_V11, EXECUTION_SEAL_TABLE_V11, EXECUTION_DEMAND_TABLE_V11] {
             assert_eq!(
                 before.iter().filter(|((t, _), _)| *t == table).collect::<Vec<_>>(),
@@ -37,7 +37,11 @@ async fn execution11_native_unknown_seal_chunk64_drops_before_allocation_with_or
             );
         }
         assert_eq!(net.collateral(7), collateral);
-        assert_eq!(after.as_ref().map(|r|r.chunk_groups_of_v1(&net.bond(7))).unwrap_or(0), 0, "native lane cannot fill the ordinary groups");
+        assert_eq!(
+            after.as_ref().map(|r| r.chunk_groups_of_v1(&net.bond(7))).unwrap_or(0),
+            0,
+            "native lane cannot fill the ordinary groups"
+        );
         let replay = net.replay().await;
         net.assert_same(&replay, "unknown native seal/ownfence rejected before quota, part allocation and signatures");
     }

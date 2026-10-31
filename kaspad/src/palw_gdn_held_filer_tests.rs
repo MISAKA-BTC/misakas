@@ -11,7 +11,9 @@ use kaspa_consensus_core::palw_context_ladder::{palw_checkpoint_leaf_carries_rec
 use kaspa_consensus_core::palw_held_da_v1::PalwHeldDisclosureCarriageV1;
 use kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1;
 use kaspa_consensus_core::palw_qwen36_profile::{PalwQwen36GeometryV1, qwen36_held_canonical_v1, qwen36_profile_v8};
-use kaspa_consensus_core::palw_step_leg::{PALW_STEP_LEG_MAX_LEAVES, binding_commitment_root_v1, checkpoint_leaf_hash_v2, step_opening_capped_v1};
+use kaspa_consensus_core::palw_step_leg::{
+    PALW_STEP_LEG_MAX_LEAVES, binding_commitment_root_v1, checkpoint_leaf_hash_v2, step_opening_capped_v1,
+};
 use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
 use misaka_palw_base0::qwen36_backend::Qwen36Backend;
 use std::sync::Arc;
@@ -102,9 +104,8 @@ fn world_with_fault_at_checkpoint(forge_head: u32, conv_window: bool, recurrence
     let drawn = palw_attempt_job_v1(canonical_context, true);
     assert_eq!(drawn.declared_prefill_tokens, canonical.0);
     assert_eq!(drawn.exact_decode_tokens, 1);
-    let drawn_positions = kaspa_consensus_core::palw_context_ladder::palw_job_footprint_v1(
-        drawn.declared_prefill_tokens, drawn.exact_decode_tokens,
-    );
+    let drawn_positions =
+        kaspa_consensus_core::palw_context_ladder::palw_job_footprint_v1(drawn.declared_prefill_tokens, drawn.exact_decode_tokens);
     assert!(drawn_positions < artifact.shape.max_position as u64);
     let out = backend.execute(&drawn, &prompt).expect("the honest attempt runs");
     // A held class carries no prompt ids in its material (PanelDa): the accuser has the job's public prompt.
@@ -117,10 +118,14 @@ fn world_with_fault_at_checkpoint(forge_head: u32, conv_window: bool, recurrence
     assert_eq!(honest.binding.job_context.declared_prefill_tokens, drawn.declared_prefill_tokens);
     assert_eq!(honest.binding.job_context.exact_decode_tokens, drawn.exact_decode_tokens);
     if recurrence_ordinal > 0 {
-        let recurrence_count = honest.checkpoint_leaves.iter().filter(|leaf| {
-            let positions = palw_checkpoint_positions_at_v1(&profile, &honest.binding.job_context, leaf.covered_decode_call);
-            palw_checkpoint_leaf_carries_recurrence_v1(&profile, positions)
-        }).count();
+        let recurrence_count = honest
+            .checkpoint_leaves
+            .iter()
+            .filter(|leaf| {
+                let positions = palw_checkpoint_positions_at_v1(&profile, &honest.binding.job_context, leaf.covered_decode_call);
+                palw_checkpoint_leaf_carries_recurrence_v1(&profile, positions)
+            })
+            .count();
         assert!(recurrence_count > recurrence_ordinal, "the real drawn capture must contain the requested nonfirst recurrence");
     }
     // The job's prompt commitment is under the form its attempt rules committed it with; the accuser reads it from the chain.
@@ -161,9 +166,11 @@ fn world_with_fault_at_checkpoint(forge_head: u32, conv_window: bool, recurrence
     )
     .expect("the honest state");
     state.chunks[first as usize][0] ^= 0x01;
-    let forged_root = misaka_palw_base0::fp_interval::base0_state_chunks_root_for_v1(&b.shape_profile, positions, &state.chunks).unwrap();
+    let forged_root =
+        misaka_palw_base0::fp_interval::base0_state_chunks_root_for_v1(&b.shape_profile, positions, &state.chunks).unwrap();
     let mut forged = honest.clone();
-    let (ctx_hash, profile_hash, map) = (ctx.context_hash(), forged.binding.checkpoint_profile.profile_hash(), forged.binding.state_chunk_map_id);
+    let (ctx_hash, profile_hash, map) =
+        (ctx.context_hash(), forged.binding.checkpoint_profile.profile_hash(), forged.binding.state_chunk_map_id);
     forged.checkpoint_leaves[index as usize].state_chunks_root = forged_root;
     for j in index as usize + 1..forged.checkpoint_leaves.len() {
         forged.checkpoint_leaves[j].prev_checkpoint_leaf_hash =
@@ -302,9 +309,20 @@ fn rfc06_held_gdn_filer_an_answering_producer_is_accused_and_the_court_convicts(
     let PalwMemoryRoutingObjectV2::Accused { accusation } = *object else { unreachable!() };
     assert_eq!((accusation.executor_bond, accusation.accuser_bond), (bond(1), bond(2)), "an outside bond accuses the producer");
     let PalwMemoryRoutingEvidenceV2::GdnTransition { refutation } = &accusation.evidence else { panic!("the transition route") };
-    let verdict = check_gdn_transition_refutation_v2(refutation, accusation.execution_root, w.shape_profile_id, &w.oracle, PALW_STEP_LEG_MAX_LEAVES)
-        .expect("the court's own terminal convicts");
-    println!("rfc06 held GDN filer: {} unit(s) demanded and answered, candidate {}, verdict {:?}", demanded.len(), case.at, verdict.mismatch);
+    let verdict = check_gdn_transition_refutation_v2(
+        refutation,
+        accusation.execution_root,
+        w.shape_profile_id,
+        &w.oracle,
+        PALW_STEP_LEG_MAX_LEAVES,
+    )
+    .expect("the court's own terminal convicts");
+    println!(
+        "rfc06 held GDN filer: {} unit(s) demanded and answered, candidate {}, verdict {:?}",
+        demanded.len(),
+        case.at,
+        verdict.mismatch
+    );
 }
 
 #[test]
@@ -345,8 +363,11 @@ impl PalwGdnHeldHostV1 for Host<'_> {
     fn accusable_claims(&self) -> Vec<PalwGdnHeldClaimV1> {
         vec![claim_of(&self.material, self.w)]
     }
-    fn material(&self, _: &PalwGdnHeldClaimV1) -> Result<kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<Base0GdnOwnedMaterialV2>, String> {
-        kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1::try_from_clone_v1(&self.material).map_err(|e|e.to_string())
+    fn material(
+        &self,
+        _: &PalwGdnHeldClaimV1,
+    ) -> Result<kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<Base0GdnOwnedMaterialV2>, String> {
+        kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1::try_from_clone_v1(&self.material).map_err(|e| e.to_string())
     }
     fn kernels(&self, _: &PalwGdnHeldClaimV1) -> Result<Box<dyn Base0FpRecomputeKernelsV1 + '_>, String> {
         Ok(Box::new(self.w.backend.gdn_recompute_kernels_v2()?))
@@ -372,7 +393,11 @@ impl PalwGdnHeldHostV1 for Host<'_> {
 }
 
 /// The tick as the node runs it: every object it returns is carried (lands on the chain); an answering producer answers each demand.
-fn tick_until_settled(w: &World, material: Base0GdnOwnedMaterialV2, answering: bool) -> (PalwGdnHeldBookV1, Vec<PalwConsensusObjectV2>) {
+fn tick_until_settled(
+    w: &World,
+    material: Base0GdnOwnedMaterialV2,
+    answering: bool,
+) -> (PalwGdnHeldBookV1, Vec<PalwConsensusObjectV2>) {
     let host = Host { w, material, chain: Default::default() };
     let claim = claim_of(&host.material, w);
     let mut book = PalwGdnHeldBookV1::default();
@@ -490,10 +515,17 @@ fn refused_next_candidate_preserves_the_current_candidate_and_answers_for_retry(
         .unwrap()
         .unwrap();
     let accuser = PalwGdnHeldAccuserV1 {
-        bond: bond(2), network_domain: Hash64::from_u64_word(0xD0), openings: &w.openings, oracle: &w.oracle, sign: &sign,
+        bond: bond(2),
+        network_domain: Hash64::from_u64_word(0xD0),
+        openings: &w.openings,
+        oracle: &w.oracle,
+        sign: &sign,
     };
-    assert!(matches!(palw_gdn_held_step_v1(&mut case, &w.forged.view(),
-        || w.backend.gdn_recompute_kernels_v2().unwrap(), &[], 100, 20, &accuser).unwrap(), PalwGdnHeldNextV1::Demand { .. }));
+    assert!(matches!(
+        palw_gdn_held_step_v1(&mut case, &w.forged.view(), || w.backend.gdn_recompute_kernels_v2().unwrap(), &[], 100, 20, &accuser)
+            .unwrap(),
+        PalwGdnHeldNextV1::Demand { .. }
+    ));
     let chain: Vec<_> = case.demands.iter().map(|unit| producer_answer(&w, &case.claim, *unit)).collect();
     note_answers_v1(&mut case, &w.forged.view(), &chain).unwrap();
     assert!(case.answers.iter().all(Option::is_some), "retain authenticated answers, not merely empty slots");

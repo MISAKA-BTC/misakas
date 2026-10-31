@@ -375,8 +375,8 @@ impl PalwCourtMeasurementV1 {
         let unit = *self.class_ns.iter().min().expect("four classes");
         let mut op_work = [0u64; PALW_COURT_OP_CLASSES_V1];
         let mut memory_per_byte = 1u64;
-        for class in 0..PALW_COURT_OP_CLASSES_V1 {
-            op_work[class] = self.class_ns[class].div_ceil(unit);
+        for (class, ns) in self.class_ns.iter().enumerate() {
+            op_work[class] = ns.div_ceil(unit);
             memory_per_byte = memory_per_byte.max(self.class_memory[class].div_ceil(self.class_bytes[class]));
         }
         let policy = PalwCourtCapacityPolicyV1 {
@@ -522,16 +522,17 @@ impl Params {
             // slot, a pinned `UserDecision` waiver for exactly this (fence, network, height, slot). Any other policy without a
             // measurement, the placeholder (above) and `policy.validate()` (above) keep refusing.
             if fence.policy == crate::palw_g14_values_v1::PALW_G14_COURT_CAPACITY_POLICY_ESTIMATE_V1 {
+                let genesis = self.palw_arming_record_genesis_v1();
                 let record = records.iter().find(|record| {
                     record.fence == crate::palw_g14_gates_v1::PalwG14GatedFenceV1::CourtCapacityV1
-                        && record.genesis == self.genesis.hash
+                        && record.genesis == genesis
                         && record.activation_daa == at
                 });
                 let approved = record.and_then(|r| r.evidence.get(PALW_COURT_MEASUREMENT_EVIDENCE_INDEX_V1)).is_some_and(|d| {
                     matches!(
                         crate::palw_arming_waiver_v1::palw_arming_evidence_kind_v1(
                             "palw_court_capacity_v1",
-                            self.genesis.hash,
+                            genesis,
                             at,
                             PALW_COURT_MEASUREMENT_EVIDENCE_INDEX_V1 as u16,
                             crate::palw_g14_gates_v1::PALW_COURT_CAPACITY_ARMING_REQUIREMENTS_V1[PALW_COURT_MEASUREMENT_EVIDENCE_INDEX_V1],
@@ -553,7 +554,7 @@ impl Params {
         };
         let record = records.iter().find(|record| {
             record.fence == crate::palw_g14_gates_v1::PalwG14GatedFenceV1::CourtCapacityV1
-                && record.genesis == self.genesis.hash
+                && record.genesis == self.palw_arming_record_genesis_v1()
                 && record.activation_daa == at
         });
         if record.and_then(|record| record.evidence.get(PALW_COURT_MEASUREMENT_EVIDENCE_INDEX_V1)) != Some(&measurement.digest()) {
@@ -736,10 +737,11 @@ pub fn palw_court_claim_budget_for_retention_v1(
     let held_da = params.g14_route_required_v1().and_then(|m| m.legacy_held_da_from).is_some_and(|from| accepted_daa >= from);
     let mut compellable = u32::from(crate::palw_legacy_public_filer_v1::PALW_DISPUTE_SESSIONS_PER_RESERVATION_V1);
     if held_da {
-        compellable = compellable.saturating_add(u32::from(crate::palw_legacy_parallel_v1::PALW_LEGACY_EXTRA_LANES_PER_RESERVATION_V1));
+        compellable =
+            compellable.saturating_add(u32::from(crate::palw_legacy_parallel_v1::PALW_LEGACY_EXTRA_LANES_PER_RESERVATION_V1));
     }
-    let unit_bytes =
-        (crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_COUNT as u64).saturating_mul(crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES as u64);
+    let unit_bytes = (crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_COUNT as u64)
+        .saturating_mul(crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES as u64);
     let turn = params.turn_deadline_daa();
     let hard = trace_retention_daa.saturating_sub(crate::palw_state_v2::palw_da_disclose_window_daa_v1(params));
     let lead = if fused {
@@ -793,4 +795,3 @@ pub fn palw_attempt_trace_retention_daa_v1(
     // RFC-0018 Gate C (user decision 2026-10-17): and through the latest certification and receipt lane (0 below its fence).
     base.saturating_add(crate::palw_rfc0018_v1::palw_gate_c_retention_extension_daa_v1(params, daa))
 }
-

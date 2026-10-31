@@ -19,6 +19,7 @@
 //!   implementation record states.
 //!
 //! **Each test states its expected result first.** `observe` records, after every block, what every reader would say.
+#![allow(warnings)]
 use super::t12_round_lane_e2e::{
     T12Chain, card_payout_spk, sign_spend, t12_genesis_chain, t12_genesis_chain_on, t12_reopened_chain, t12_with_harness_cards_and_evm,
 };
@@ -1640,6 +1641,10 @@ async fn rfc12_import_missing_context_header_is_an_error_not_a_panic() {
     let publication = a.vp().evm_heads_store.read().native_finalized_publication().unwrap();
     let heads = a.vp().evm_heads_store.read().get().unwrap();
     let missing = Hash64::from_u64_word(0x12_07c0_dead);
+    // Exercise the synchronous import guard with processors stopped. A live
+    // pruning worker also reads this deliberately invalid pointer and would
+    // race the import assertion while trying to advance the pruning UTXO set.
+    a.chain.ctx.consensus.shutdown(std::mem::take(&mut a.chain.ctx.join_handles));
     // Deliberately broken fixture context: a production proof must have installed this header.
     a.vp().pruning_point_store.write().set(missing, 1).unwrap();
     assert!(matches!(a.vp().import_pruning_point_evm_state(missing, header, state),

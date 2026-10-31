@@ -54,7 +54,7 @@ impl PalwKernelParameterSpecV4<'_> {
     /// tensor decode/opening allocation. Values are i128 in v2's frozen Borsh
     /// grammar, and dtype-width elements in v3's frozen custom grammar.
     pub fn maximum_unit_bytes(&self) -> Result<u64, String> {
-        let max_path = misaka_palw_kernel::merkle::depth(self.units()?) as u64;
+        let max_path = misaka_palw_kernel::merkle::depth(self.units()?);
         let option = if self.layer.is_some() { 3u64 } else { 1 };
         let outer = 2u64 + 2 + option + 8 + 1;
         let shape = (self.declaration.shape.len() as u64).checked_mul(8).ok_or("artifact shape bytes overflow")?;
@@ -92,7 +92,7 @@ fn specs<'a>(
         if declaration.per_layer != layer.is_some() {
             return Err("artifact parameter layer inconsistent".into());
         }
-        if declaration.shape.len() > misaka_palw_tir::types::MAX_RANK || declaration.shape.iter().any(|d| *d == 0) {
+        if declaration.shape.len() > misaka_palw_tir::types::MAX_RANK || declaration.shape.contains(&0) {
             return Err("artifact parameter shape invalid".into());
         }
         let elements = declaration

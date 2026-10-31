@@ -3,9 +3,9 @@
 //! registered program, and sum every eligible leaf. This inventory omits roots,
 //! terminal witnesses, signed envelopes, source/semantic work, repeated invalid
 //! ingress, CPU/IO, retention and funding. It grants no capacity or default right.
-use std::collections::BTreeMap;
-use crate::palw_attn_dissect::palw_attn_arity_is_legal_v1;
 use super::{PALW_TIR_DISSECT_MAX_REDUCTIONS, PALW_TIR_DISSECT_MAX_VALUES};
+use crate::palw_attn_dissect::palw_attn_arity_is_legal_v1;
+use std::collections::BTreeMap;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct NumericalTreeInventoryV1 {
@@ -26,16 +26,15 @@ pub struct NumericalTreeInventoryV1 {
 /// approximation. Equal-sized ranges are aggregated, so even u32::MAX tiles do
 /// not allocate or visit one record per tile. Zero tiles and illegal arities
 /// refuse. Reduction/value bounds are existing native caps, never enlarged here.
-pub fn numerical_tree_inventory_v1(
-    tiles: u32, arity: u8, reductions: usize, values_upper: u64,
-) -> Option<NumericalTreeInventoryV1> {
-    if tiles == 0 || !palw_attn_arity_is_legal_v1(arity)
+pub fn numerical_tree_inventory_v1(tiles: u32, arity: u8, reductions: usize, values_upper: u64) -> Option<NumericalTreeInventoryV1> {
+    if tiles == 0
+        || !palw_attn_arity_is_legal_v1(arity)
         || reductions > PALW_TIR_DISSECT_MAX_REDUCTIONS
-        || values_upper > PALW_TIR_DISSECT_MAX_VALUES as u64 {
+        || values_upper > PALW_TIR_DISSECT_MAX_VALUES as u64
+    {
         return None;
     }
-    let child_bytes = 4u64.checked_add(4u64.checked_mul(reductions as u64)?)?
-        .checked_add(16u64.checked_mul(values_upper)?)?;
+    let child_bytes = 4u64.checked_add(4u64.checked_mul(reductions as u64)?)?.checked_add(16u64.checked_mul(values_upper)?)?;
     let mut out = NumericalTreeInventoryV1::default();
     let mut level = BTreeMap::from([(u64::from(tiles), 1u64)]);
     let mut depth = 0u32;
@@ -56,8 +55,7 @@ pub fn numerical_tree_inventory_v1(
             let children = full.checked_add(u64::from(tail != 0))?;
             out.disclosures = out.disclosures.checked_add(multiplicity)?;
             out.child_claims = out.child_claims.checked_add(multiplicity.checked_mul(children)?)?;
-            out.disclosure_path_bytes = out.disclosure_path_bytes
-                .checked_add(multiplicity.checked_mul(u64::from(depth))?)?;
+            out.disclosure_path_bytes = out.disclosure_path_bytes.checked_add(multiplicity.checked_mul(u64::from(depth))?)?;
             let bytes = 6u64.checked_add(children.checked_mul(child_bytes)?)?;
             out.round_body_bytes_upper = out.round_body_bytes_upper.checked_add(multiplicity.checked_mul(bytes)?)?;
             out.max_round_body_bytes_upper = out.max_round_body_bytes_upper.max(bytes);
@@ -97,9 +95,10 @@ mod tests {
                     expected.disclosures += 1;
                     expected.child_claims += ranges.len() as u64;
                     expected.disclosure_path_bytes += u64::from(depth);
-                    let body = PalwTirDissectRoundV1 { version: 1, children: ranges.iter().map(|_| {
-                        PalwTirRangeClaimV1 { partials: vec![vec![0; 2], vec![0; 3]] }
-                    }).collect() };
+                    let body = PalwTirDissectRoundV1 {
+                        version: 1,
+                        children: ranges.iter().map(|_| PalwTirRangeClaimV1 { partials: vec![vec![0; 2], vec![0; 3]] }).collect(),
+                    };
                     let bytes = borsh::to_vec(&body).unwrap().len() as u64;
                     expected.round_body_bytes_upper += bytes;
                     expected.max_round_body_bytes_upper = expected.max_round_body_bytes_upper.max(bytes);

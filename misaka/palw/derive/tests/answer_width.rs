@@ -31,6 +31,7 @@
 //!   MISAKA_PALW_POW_FIXTURE=1 cargo test -p misaka-palw-derive --test answer_width -- --ignored --nocapture
 //! ```
 
+#![allow(warnings)]
 use kaspa_hashes::Hash64;
 use misaka_palw_derive::{ClaimBinding, derive_named, registry};
 use std::path::{Path, PathBuf};

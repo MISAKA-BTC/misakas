@@ -173,9 +173,10 @@ async fn g14_c4r3_without_the_route_fence_no_kernel_seat_is_locked_or_charged() 
         "no kernel class below the fence"
     );
     assert!(
-        route.as_ref().is_none_or(|api| !api.aux.keys().any(|(table, _)| {
-            *table == kaspa_consensus_core::palw_g14_lane_closure_v1::PALW_G14_LANE_CLOSURE_TABLE_V1
-        })),
+        route.as_ref().is_none_or(|api| !api
+            .aux
+            .keys()
+            .any(|(table, _)| { *table == kaspa_consensus_core::palw_g14_lane_closure_v1::PALW_G14_LANE_CLOSURE_TABLE_V1 })),
         "no signer lock exists below the fence"
     );
 }
@@ -672,4 +673,3 @@ async fn g14r2_a_plain_kernel_claim_meets_its_policys_full_plan() {
     let (committed, _) = run(narrow).await;
     assert!(!committed, "N above n_max: dropped");
 }
-

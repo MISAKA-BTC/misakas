@@ -12,6 +12,7 @@
 //!   P0a judges it — so no registration an old build can see is judged differently by a new one;
 //! * the court's slice reads the one derivation, and at 16/32 value head 20 slices key head 4.
 
+#![allow(warnings)]
 use kaspa_consensus_core::palw_context_ladder::{palw_class_ladder_rules_for_court_v1, palw_qwen36_context_row_profile_v8};
 use kaspa_consensus_core::palw_qwen36_profile::{
     PalwQwen36GeometryV1, QWEN36_35B_A3B, qwen36_geometry_artifact_eps, qwen36_profile_v7, qwen36_profile_v8,

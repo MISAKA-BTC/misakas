@@ -2,6 +2,7 @@
 //! any change to the calculator, or to a number the dossier quotes, fails here first. Plus a toy-field experiment that the
 //! single-modulus error model and the multi-modulus (CRT) alias argument hold with this crate's own sampler.
 
+#![allow(warnings)]
 use misaka_palw_challenge::composition::*;
 use misaka_palw_challenge::hash::h;
 use misaka_palw_challenge::seed::{ChallengeStreamV1, StreamKindV1, StreamLabelV1};

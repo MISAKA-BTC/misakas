@@ -1,6 +1,7 @@
 //! ADR-0191 step B: the designated-answer registry as a PALW state field. Tag 245 folds into it only when the fence's mirror
 //! (`PalwTransitionExtrasV1::tir_designated_answers_active`) is set; below it the event is a strict no-op and the state root is
 //! byte-identical to a block that carries no such event.
+#![allow(warnings)]
 use super::*;
 use crate::palw_tir_designated_answers_v1 as d;
 

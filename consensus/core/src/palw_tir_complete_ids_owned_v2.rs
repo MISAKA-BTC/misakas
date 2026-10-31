@@ -11,6 +11,7 @@ type Fault = NativeDecodeErrorV1<String>;
 fn overflow() -> Fault {
     Fault::Resource(NativeCoverageV1::overflow::<PalwTirPublicAuthenticatedIdsV1>("complete original IDs"))
 }
+#[allow(unused_doc_comments)]
 /// Test observations only: distinguish a real authentication-stage refusal from
 /// an earlier builder refusal without injecting data, authority or a fake error.
 #[cfg(test)]

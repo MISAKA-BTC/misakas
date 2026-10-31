@@ -89,6 +89,23 @@ fn apply_inner(
     if builder.state.bonds.get(&poster_bond).is_none_or(|b| b.collateral < terms.fee) {
         return Err(refused("consenting fee native escrow underfunded"));
     }
+    // This is a conversion of the already reserved draw fee, not a second
+    // charge against free principal. The kernel mutation below removes exactly
+    // `fee` from both collateral and reserved; all other native commitments must
+    // remain covered after the matching native debit.
+    let collateral = builder.state.bonds.get(&poster_bond).expect("checked native poster").collateral;
+    if terms.fee > 0 {
+        let reserved = ledger.bonds.get(&terms.poster).ok_or_else(|| refused("consenting fee rooted poster absent"))?.reserved;
+        if reserved < terms.fee || route.ledger_reserved_of(&poster_bond) != reserved {
+            return Err(refused("consenting fee is not covered by its rooted draw reservation"));
+        }
+        let committed = builder.committed_at(&poster_bond, now)?;
+        let residual =
+            committed.checked_sub(u128::from(terms.fee)).ok_or_else(|| refused("consenting fee native reservation mismatch"))?;
+        if u128::from(collateral - terms.fee) < residual {
+            return Err(refused("consenting fee would consume other reserved principal"));
+        }
+    }
     drop(ledger);
     builder.admit_ordinary_verifier_fee_v1(terms, now)?;
     let mut ledger = super::palw_kernel_route_fold_v1::load_ledger(builder, ctx)?;

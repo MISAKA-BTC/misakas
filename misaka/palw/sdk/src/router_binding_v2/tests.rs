@@ -42,7 +42,7 @@ fn carrier_uses_existing_tag_and_chain_signature_contract() {
     assert_eq!(carried, declaration);
     let verifies = |domain, declaration: &PalwRouterBindingDeclarationV2, context: &[u8]| {
         kaspa_txscript::verify_mldsa87_with_context(
-            &key.public_key(),
+            key.public_key(),
             palw_router_binding_message_v2(domain, declaration).as_byte_slice(),
             &signature,
             context,

@@ -5100,6 +5100,31 @@ mod tests;
 #[cfg(test)]
 mod the_rulesets_ladder;
 
+// ---------------------------------------------------------------------------------------------
+// RFC-0001 §A (FP Job V4): the executor's own replays feed its committed ids back
+// ---------------------------------------------------------------------------------------------
+
+/// **The committed answer of a retained capture** — the fold's or the dense material's ids, or
+/// `None` for bytes that are neither.
+pub fn base0_fp_capture_committed_ids_v1(capture: &[u8]) -> Option<Vec<u32>> {
+    match crate::produce::base0_material_decode_any_v1(capture).ok()? {
+        crate::produce::Base0RetentionV1::Folded(material) => Some(material.generated_token_ids),
+        crate::produce::Base0RetentionV1::Dense((_, _, _, generated, ..)) => Some(generated),
+    }
+}
+
+/// **Run an executor-side replay of `capture` with its own committed ids fed back**
+/// (`PalwFpReplayRuleV1::forced`). An executor opening its own retention (an interval, a segment
+/// checkpoint) re-derives leaves of the run it committed; for a V3 claim the committed ids are the
+/// shipped argmax, so this is byte-identical to re-selecting, and for a V4 claim it is the only
+/// replay that reproduces the capture — the executor's opening carries no decode config, and needs
+/// none, because it holds the answer. A seat never runs under this: it checks the selection.
+pub fn base0_fp_executor_replay_v1<R>(capture: &[u8], f: impl FnOnce() -> R) -> R {
+    let rule = base0_fp_capture_committed_ids_v1(capture)
+        .map(|ids| kaspa_consensus_core::palw_decode_pipeline_v4::PalwFpReplayRuleV1::forced(&ids));
+    kaspa_consensus_core::palw_decode_pipeline_v4::palw_fp_with_replay_rule_v1(rule, f)
+}
+
 /// A diagnostic, never part of the suite: decode a retained dense material named by
 /// `MISAKA_INSPECT_MATERIAL` and say whether its tiles reproduce the root its binding committed.
 #[cfg(test)]
@@ -5220,29 +5245,4 @@ mod inspect_material {
             range.siblings.len()
         );
     }
-}
-
-// ---------------------------------------------------------------------------------------------
-// RFC-0001 §A (FP Job V4): the executor's own replays feed its committed ids back
-// ---------------------------------------------------------------------------------------------
-
-/// **The committed answer of a retained capture** — the fold's or the dense material's ids, or
-/// `None` for bytes that are neither.
-pub fn base0_fp_capture_committed_ids_v1(capture: &[u8]) -> Option<Vec<u32>> {
-    match crate::produce::base0_material_decode_any_v1(capture).ok()? {
-        crate::produce::Base0RetentionV1::Folded(material) => Some(material.generated_token_ids),
-        crate::produce::Base0RetentionV1::Dense((_, _, _, generated, ..)) => Some(generated),
-    }
-}
-
-/// **Run an executor-side replay of `capture` with its own committed ids fed back**
-/// (`PalwFpReplayRuleV1::forced`). An executor opening its own retention (an interval, a segment
-/// checkpoint) re-derives leaves of the run it committed; for a V3 claim the committed ids are the
-/// shipped argmax, so this is byte-identical to re-selecting, and for a V4 claim it is the only
-/// replay that reproduces the capture — the executor's opening carries no decode config, and needs
-/// none, because it holds the answer. A seat never runs under this: it checks the selection.
-pub fn base0_fp_executor_replay_v1<R>(capture: &[u8], f: impl FnOnce() -> R) -> R {
-    let rule = base0_fp_capture_committed_ids_v1(capture)
-        .map(|ids| kaspa_consensus_core::palw_decode_pipeline_v4::PalwFpReplayRuleV1::forced(&ids));
-    kaspa_consensus_core::palw_decode_pipeline_v4::palw_fp_with_replay_rule_v1(rule, f)
 }

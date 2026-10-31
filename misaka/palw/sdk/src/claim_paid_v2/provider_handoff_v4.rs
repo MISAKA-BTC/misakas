@@ -273,7 +273,7 @@ pub fn build_kernel_provider_handoff_from_candidate_v4(
     let candidate = owned.ledger();
     let row = candidate.claims.get(&claim).ok_or_else(|| bad("actual candidate absent"))?;
     let mut ranges = [0u32; 256];
-    let count = typed_kernel_unit_ranges_v4(&candidate, &claim, |s, n| {
+    let count = typed_kernel_unit_ranges_v4(candidate, &claim, |s, n| {
         let at = &mut ranges[s as usize];
         if *at != 0 {
             return Err("duplicate complete unit namespace".into());
@@ -294,7 +294,7 @@ pub fn build_kernel_provider_handoff_from_candidate_v4(
         let stage = stage as u8;
         for position in 0..range {
             let bytes = if stage == PALW_KERNEL_PARAMETER_STAGE_V4 {
-                let (spec, at) = kernel_parameter_at_v4(&candidate, &claim, position).map_err(bad)?;
+                let (spec, at) = kernel_parameter_at_v4(candidate, &claim, position).map_err(bad)?;
                 let wire = material
                     .params
                     .get(&(spec.program, spec.parameter, spec.layer))
@@ -323,7 +323,7 @@ pub fn build_kernel_provider_handoff_from_candidate_v4(
                     opening,
                 })?
             } else if stage == PALW_KERNEL_SEGMENTED_PART_STAGE_V4 {
-                let (p, part) = kernel_segmented_at_v4(&candidate, &claim, position).map_err(bad)?;
+                let (p, part) = kernel_segmented_at_v4(candidate, &claim, position).map_err(bad)?;
                 let class = candidate.classes.get(&row.class_binding_id).ok_or_else(|| bad("segmented class absent"))?;
                 use misaka_palw_kernel::element::SegMaterialV1;
                 let values = material.position(p).ok_or_else(|| bad("segmented material absent"))?;
@@ -361,7 +361,7 @@ pub fn build_kernel_provider_handoff_from_candidate_v4(
                     misaka_palw_kernel::spec::SNAPSHOT_STAGE_BASE_V1
                 };
                 let (root, result) =
-                    retrieval(&candidate, row, stage.checked_sub(base).ok_or_else(|| bad("unknown native unit namespace"))?)?;
+                    retrieval(candidate, row, stage.checked_sub(base).ok_or_else(|| bad("unknown native unit namespace"))?)?;
                 if cached_snapshot.as_ref().is_none_or(|s| s.snapshot != root.snapshot) {
                     drop(cached_snapshot.take());
                     cached_snapshot = Some(snapshot(material, root)?);
@@ -440,7 +440,7 @@ impl kaspa_consensus_core::palw_native_resource_v1::NativeWireScanV1 for PaidCla
     fn scan_native_wire_v1<R: io::Read>(
         r: &mut kaspa_consensus_core::palw_native_resource_v1::NativeWireReaderV1<R>,
     ) -> io::Result<kaspa_consensus_core::palw_native_resource_v1::NativeWireShapeV1> {
-        use kaspa_consensus_core::palw_native_resource_v1::{NativeWireScanV1, NativeWireShapeV1};
+        use kaspa_consensus_core::palw_native_resource_v1::NativeWireShapeV1;
         use std::collections::BTreeMap;
         r.step()?;
         let mut shape = NativeWireShapeV1::default();
@@ -463,7 +463,6 @@ impl kaspa_consensus_core::palw_native_resource_v1::NativeWireScanV1 for super::
     fn scan_native_wire_v1<R: io::Read>(
         r: &mut kaspa_consensus_core::palw_native_resource_v1::NativeWireReaderV1<R>,
     ) -> io::Result<kaspa_consensus_core::palw_native_resource_v1::NativeWireShapeV1> {
-        use kaspa_consensus_core::palw_native_resource_v1::NativeWireScanV1;
         r.step()?;
         <(u16, Digest)>::scan_native_wire_v1(r)?
             .merge(SaltedCommitV1::scan_native_wire_v1(r)?)?

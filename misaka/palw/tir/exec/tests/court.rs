@@ -17,7 +17,7 @@
 //! * the logits-consistency accusation and the decode-token door acquit the honest run.
 
 #![cfg(feature = "node")]
-
+#![allow(warnings)]
 mod node_common;
 
 use std::collections::BTreeMap;

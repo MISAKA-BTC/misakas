@@ -27,6 +27,7 @@
 //!
 //! Run: `cargo test -p kaspa-consensus-core --test palw_t12_court_window_changes_no_admission -- --nocapture`
 
+#![allow(warnings)]
 #[path = "palw_tir_fixture_common.rs"]
 #[allow(unused)]
 mod fixture;

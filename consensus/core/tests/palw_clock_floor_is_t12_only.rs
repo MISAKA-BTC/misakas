@@ -8,6 +8,7 @@
 //! pinned to the numbers, taken from `0b14bf80` (the commit this change was built on) by running this
 //! file against it: if a change here moves them, the fence is not dormant where it must be.
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{
     ForkActivation, Params, devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params, palw_t12_shipped_params,
 };

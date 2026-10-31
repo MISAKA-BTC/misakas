@@ -2,6 +2,7 @@
 //! SG-01a): the last contributor, first-`k` capture, withholding, abandonment after the reveal, censorship of a reveal, early
 //! reveals, fork choice — and its accounting (`G = F`, `ε_src`).
 
+#![allow(warnings)]
 use std::collections::BTreeSet;
 
 use misaka_palw_challenge::hash::{Digest, object_id};

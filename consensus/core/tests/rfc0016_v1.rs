@@ -9,6 +9,7 @@
 //!
 //! Run (validation phase): `cargo test -p kaspa-consensus-core --test rfc0016_v1`
 
+#![allow(warnings)]
 use std::collections::{BTreeMap, BTreeSet};
 
 use kaspa_consensus_core::Hash64;

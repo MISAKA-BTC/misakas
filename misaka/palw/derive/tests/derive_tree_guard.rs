@@ -17,6 +17,7 @@
 //! (`misaka/palw/core/tests/host_security_tree_guard.rs`) already took: a blunt guard that fails on a
 //! new door is a review, and a review is what a new door needs.
 
+#![allow(warnings)]
 use std::path::{Path, PathBuf};
 
 fn crate_root() -> PathBuf {

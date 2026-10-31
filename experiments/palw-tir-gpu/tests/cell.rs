@@ -8,6 +8,7 @@
 //!
 //! The cut is every `(a, b)` of a 2-shard and a 3-shard layer partition with `pre` and `post` where the node puts them.
 
+#![allow(warnings)]
 mod common;
 
 use std::collections::BTreeMap;

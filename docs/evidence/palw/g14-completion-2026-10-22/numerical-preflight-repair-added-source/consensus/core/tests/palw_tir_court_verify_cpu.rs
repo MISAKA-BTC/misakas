@@ -18,6 +18,7 @@
 //! /usr/bin/time -l with the environment selector, separately for N=0 and N>0.
 //! No benchmark runs or timing claims are implied by adding this harness.
 
+#![allow(warnings)]
 #[path = "palw_tir_fixture_common.rs"]
 mod fixture;
 use fixture::*;

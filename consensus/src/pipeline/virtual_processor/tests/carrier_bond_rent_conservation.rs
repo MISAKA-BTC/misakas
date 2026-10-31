@@ -1,5 +1,6 @@
 //! Typed released/slashed bond fixture; real payer signature, UTXO validation, codec and PALW gate.
 //! This does not claim a mined released-bond end-to-end chain or a new fee policy.
+#![allow(warnings)]
 use super::super::utxo_validation::{
     BondSpendFilter, palw_carrier_rent_available_v1, palw_finality_collectible_fee_v1, palw_record_accepted_carrier_fees_v1,
 };

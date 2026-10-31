@@ -1,3 +1,4 @@
+#![allow(warnings)]
 use misaka_palw_kernel::flat_component_source28::*;
 use misaka_palw_tir::{
     DType, Ref,

@@ -4,6 +4,7 @@
 //!   (the un-upgraded binary); before it, the two stay peers. Presets leave the fork id untouched.
 //! * The per-block evidence arithmetic is O(N log N + F log F) (`certify_native_prefix_v1`), where the per-effect reference it
 //!   replaced is O(N x F). The timings are printed for the record; the only assertions are on how the cost SCALES.
+#![allow(warnings)]
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::params::{ForkActivation, Params, palw_t12_shipped_params};
 use kaspa_consensus_core::fork_id_v1::{evaluate_fork_id_v1, fork_id_v1};

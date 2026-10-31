@@ -12,6 +12,7 @@
 //! the decoy by H3's name, and that the old filter could not tell them apart (the regression's
 //! reason). kaspad's own test runs the node's candidate selection and eviction over both.
 
+#![allow(warnings)]
 use kaspa_consensus_core::palw_attn_responder_v1::PalwAttnHeldFilingV1;
 use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
 use kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1;

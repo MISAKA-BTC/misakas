@@ -15,6 +15,7 @@
 //!
 //! Run: cargo test -p kaspa-consensus-core --test rfc0012_native_evidence_fold -- --nocapture
 
+#![allow(warnings)]
 #[path = "dos_l5_common.rs"]
 mod common;
 use common::*;

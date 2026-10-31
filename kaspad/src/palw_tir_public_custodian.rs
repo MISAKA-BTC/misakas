@@ -31,8 +31,8 @@
 //! the largest profile, sweeping orphan `prepared-*` directories the journal never recorded, and re-sealing a corrupted capture.
 #![allow(dead_code)] // the panel loop calls the tick; the journal helpers are exercised by the tests below.
 use super::tir_public_owner::source_owned;
-use kaspa_consensus_core::palw_native_resource_v1::{NativeDecodeErrorV1, NativeRetainedV1};
 use crate::palw_panel::court_outbox::CourtOutboxV1;
+use kaspa_consensus_core::palw_native_resource_v1::{NativeDecodeErrorV1, NativeRetainedV1};
 
 use super::super::{COURT_MOVE_REPLAN_DAA, PalwPanelService};
 use super::tir_acquisition_driver::{
@@ -636,11 +636,16 @@ impl PalwPanelService {
                             CustodianOwnedV2::try_build(
                                 &crate::palw_memory_ledger::host_ledger_v1(),
                                 crate::palw_memory_ledger::PalwMemoryReservationKeyV1 {
-                                    role: "public-tir-custodian-capture", class_id: class, job: key.0,
-                                }, need.resident_ram_bytes, || {
-                                    std::fs::create_dir_all(&cache).map_err(|e|e.to_string())?;
+                                    role: "public-tir-custodian-capture",
+                                    class_id: class,
+                                    job: key.0,
+                                },
+                                need.resident_ram_bytes,
+                                || {
+                                    std::fs::create_dir_all(&cache).map_err(|e| e.to_string())?;
                                     backend.open_tir_public_capture_v1(&header, source, &cache)
-                                })
+                                },
+                            )
                         })
                         .await
                         .map_err(|e| format!("TIR custodian reader worker failed: {e}"))??;
@@ -664,7 +669,7 @@ impl PalwPanelService {
                             .map_err(|e| e.to_string())?;
                         let directory = self.config.retention_dir.join("tir-public-prepared");
                         let writer = reader.begin_prepared_v1(&directory, material_until_daa, now)?;
-                        case.writer = Some(CustodianOwnedV2::with_reservation(writer,memory));
+                        case.writer = Some(CustodianOwnedV2::with_reservation(writer, memory));
                     }
                     StepV1::Debit { key, action, original_accepted_daa, source_id, due: due_daa } => {
                         let queue = (key.0, PALW_TIR_PUBLIC_DEBIT_ROUND_V1, true);
@@ -723,8 +728,8 @@ impl PalwPanelService {
                             let borrowed = BorrowedPreparationSnapshotV1::from_native_v1(&snapshot);
                             let result = run_pass_slices_v1(
                                 &mut warm,
-                                reader.as_mut().map(|owned|owned.value.as_mut()),
-                                writer.as_mut().map(|owned|owned.value.as_mut()),
+                                reader.as_mut().map(|owned| owned.value.as_mut()),
+                                writer.as_mut().map(|owned| owned.value.as_mut()),
                                 PALW_TIR_PUBLIC_SLICES_PER_STEP_V1,
                                 &mut ledger,
                                 |ledger, reader, quote| prepare_claim_capture_slice_v1(&borrowed, reader, quote, ledger),
@@ -885,7 +890,7 @@ impl PalwPanelService {
             .map_err(|e| e.to_string())?;
         let until = entry.material_until_daa;
         let reopened = tokio::task::spawn_blocking(move || {
-            let _memory=_memory;
+            let _memory = _memory;
             backend
                 .reopen_tir_prepared_capture_v1(&header, &descriptor, &directory, until, now)
                 .map(|reader| reader.prepared_descriptor_v1() == Some(&descriptor))
@@ -1112,9 +1117,14 @@ impl PalwPanelService {
                             case.failed = true;
                             continue;
                         };
-                        let Some(source)=source_owned::defer_source_read_v2(&mut source_refusal,
+                        let Some(source) = source_owned::defer_source_read_v2(
+                            &mut source_refusal,
                             kaspa_consensus_core::palw_tir_public_state_v1::palw_tir_public_source_for_row_owned_v2(
-                                state,row,frame.descriptor_v1().maximum_leaves)) else {
+                                state,
+                                row,
+                                frame.descriptor_v1().maximum_leaves,
+                            ),
+                        ) else {
                             return Ok(());
                         };
                         steps.push(ResponseStepV1::Body {
@@ -1193,7 +1203,7 @@ impl PalwPanelService {
                         let header = source.header_v1().clone();
                         let reopen = backend.tir_prepared_capture_need_v1(&header, descriptor.retained_bytes)?.reopen_ram_bytes;
                         // The response material quote does not own the reopened reader.
-                        let ram=ram.checked_add(reopen).ok_or("TIR responder reopen + body RAM overflow")?;
+                        let ram = ram.checked_add(reopen).ok_or("TIR responder reopen + body RAM overflow")?;
                         let memory = crate::palw_memory_ledger::host_ledger_v1()
                             .reserve(
                                 crate::palw_memory_ledger::PalwMemoryReservationKeyV1 {
@@ -1206,14 +1216,14 @@ impl PalwPanelService {
                             .map_err(|e| e.to_string())?;
                         let directory = self.config.retention_dir.join("tir-public-prepared");
                         let body = source_owned::run_owned_source_v2(source, move |source| {
-                            let memory=memory;
+                            let memory = memory;
                             let mut reader =
                                 backend.reopen_tir_prepared_capture_v1(&header, &descriptor, &directory, material_until_daa, now)?;
                             if reader.prepared_descriptor_v1() != Some(&descriptor) {
                                 return Err("the reopened capture is not the exact Ready descriptor".into());
                             }
                             response_body_v1(reader.as_mut(), source, request)
-                                .map(|body|CustodianOwnedV2::with_reservation(body,memory))
+                                .map(|body| CustodianOwnedV2::with_reservation(body, memory))
                         })
                         .await
                         .map_err(|e| format!("TIR responder body worker failed: {e}"))?;
@@ -1528,5 +1538,5 @@ mod tests {
 }
 
 #[cfg(test)]
-#[path="palw_tir_source_read_custodian_tests_v2.rs"]
+#[path = "palw_tir_source_read_custodian_tests_v2.rs"]
 mod source_read_owned_tests;

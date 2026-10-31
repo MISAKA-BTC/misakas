@@ -19,6 +19,7 @@
 //!
 //! Run: cargo test -p kaspa-consensus-core --test panel_room_cross_class_commitment_cannot_take_the_own_attempts_room
 
+#![allow(warnings)]
 #[path = "panel_room_common.rs"]
 mod room;
 use room::*;

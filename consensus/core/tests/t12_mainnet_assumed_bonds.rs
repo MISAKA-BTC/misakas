@@ -16,6 +16,7 @@
 //!   exactly one would need a producer floor in [6,401.91, 12,803.82) MSK. Pinned as measured, and
 //!   reported for the operator's decision.
 
+#![allow(warnings)]
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::params::{Params, palw_t12_shipped_params};
 use kaspa_consensus_core::constants::SOMPI_PER_KASPA;

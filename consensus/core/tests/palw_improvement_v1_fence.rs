@@ -18,6 +18,7 @@
 //! 2,000 and `palw_kary_court` below it) with the second IR fence, the generative fence and the decode
 //! rules armed at heights no fence uses — the improvement fence's prerequisites.
 
+#![allow(warnings)]
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::drill::{
     PALW_DRILL_SALT_LEN_V1, PalwDrillSaltV1, palw_drill_decode_rules_at_v1, palw_drill_gen_fence_at_v1, palw_drill_improve_fence_at_v1,

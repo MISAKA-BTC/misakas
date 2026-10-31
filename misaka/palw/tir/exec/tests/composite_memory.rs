@@ -1,5 +1,6 @@
 //! A composite's full-subtree temporary refold is distinct from its persistent tree.
 #![cfg(feature = "node")]
+#![allow(warnings)]
 mod node_common;
 mod residency_common;
 use node_common::tircommon;

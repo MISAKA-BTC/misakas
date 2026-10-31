@@ -1117,8 +1117,7 @@ pub(super) fn observe_payment(
                 && observation.amount == provider.prepaid_fee_sompi
             {
                 provider.fee_paid = true;
-                row.service_fee_paid_sompi =
-                    row.service_fee_paid_sompi.checked_add(u128::from(observation.amount)).unwrap_or(u128::MAX);
+                row.service_fee_paid_sompi = row.service_fee_paid_sompi.saturating_add(u128::from(observation.amount));
             }
             row.last_payment = Some(observation.clone());
             write(builder, row.terms.root, Some(&row))?;
@@ -1694,8 +1693,11 @@ mod tests {
             let params = params.with_settlement_once_from(Some(1));
             let extras = PalwTransitionExtrasV1 {
                 kernel_route: Some(crate::palw_kernel_route_v1::PalwKernelRouteExtrasV1 {
-                    network_domain: h(1), ruleset_digest: h(2), ..Default::default()
-                }), ..Default::default()
+                    network_domain: h(1),
+                    ruleset_digest: h(2),
+                    ..Default::default()
+                }),
+                ..Default::default()
             };
             let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
             assert!(enroll(&mut b, &ctx(2), &e).is_err(), "new cohort cannot use old prepaid fee");
@@ -2165,13 +2167,7 @@ fn settle_fee_v2(
     {
         return Ok(());
     }
-    if b.state
-        .pending_payouts
-        .get(&queue)
-        .map_or(0, |r| r.amount)
-        .checked_add(fee.amount)
-        .is_none()
-    {
+    if b.state.pending_payouts.get(&queue).map_or(0, |r| r.amount).checked_add(fee.amount).is_none() {
         // Existing cash for this recipient can drain in later blocks. Keep the
         // whole fee held and its obligation unconsumed until it fits.
         return Ok(());

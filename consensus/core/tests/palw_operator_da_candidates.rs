@@ -21,6 +21,7 @@
 //!
 //! Run: cargo test -p kaspa-consensus-core --test palw_operator_da_candidates
 
+#![allow(warnings)]
 #[path = "rcore_common.rs"]
 mod common;
 use common::*;

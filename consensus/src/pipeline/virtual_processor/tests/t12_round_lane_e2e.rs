@@ -56,6 +56,7 @@
 //! the harness carriage has always made them. Consensus never re-executes an attempt; the panel's
 //! receipts are what certify it, and here they are real ML-DSA-87 signatures by the seats the chain
 //! drew.
+#![allow(warnings)]
 use super::{OnetimeTxSelector, TestContext, new_miner_data};
 use crate::consensus::test_consensus::TestConsensus;
 use crate::model::stores::ghostdag::GhostdagStoreReader;
@@ -87,7 +88,6 @@ const T12_GENESIS_CARDS: usize = 8;
 
 #[path = "t12_real_attempt.rs"]
 mod real_attempt;
-pub(super) use real_attempt::RealAttemptV1;
 
 /// Card `i`'s harness key — row `i` of the registry fixture (row 0 is the harness identity).
 fn card_key(i: usize) -> &'static MLDSA87KeyPair {
@@ -195,6 +195,12 @@ pub(super) fn t12_with_harness_cards_over(
     }
     params.genesis.utxo_commitment = multiset.finalize();
     params.genesis.hash = kaspa_consensus_core::header::Header::from(&params.genesis).hash;
+    // The harness genesis is not the public one, so the public G14 records do not name it.
+    kaspa_consensus_core::config::params::palw_t12_arm_after_int13_at_v1(
+        &mut params,
+        kaspa_consensus_core::config::params::PALW_T12_G14_17000_FENCES_V1,
+        None,
+    );
 
     // The divergence is stated, not assumed: testnet-12 ships the lane at genesis.
     assert_eq!(shipped.evm_activation_daa_score, 0, "testnet-12 ships the EVM lane active from genesis");
@@ -218,8 +224,14 @@ pub(super) fn t12_with_harness_cards_over(
     assert!(config.params.palw_audit_2026_09_23.is_some_and(|f| f.is_active(0)), "the 2026-09-23 audit fence is armed from genesis");
     assert_eq!(config.params.target_time_per_block(), shipped.target_time_per_block());
     let PalwConsensusMode::ConsensusV2(bundle) = &config.params.palw_consensus_mode else { unreachable!() };
-    let PalwConsensusMode::ConsensusV2(shipped_bundle) = &shipped.palw_consensus_mode else { unreachable!() };
-    assert_eq!(bundle.state, shipped_bundle.state, "every window as shipped");
+    let mut expected = shipped.clone();
+    kaspa_consensus_core::config::params::palw_t12_arm_after_int13_at_v1(
+        &mut expected,
+        kaspa_consensus_core::config::params::PALW_T12_G14_17000_FENCES_V1,
+        None,
+    );
+    let PalwConsensusMode::ConsensusV2(shipped_bundle) = &expected.palw_consensus_mode else { unreachable!() };
+    assert_eq!(bundle.state, shipped_bundle.state, "every window as shipped with the public-genesis G14 fences removed");
     assert_eq!(bundle.panel, shipped_bundle.panel, "the panel as shipped");
     let bundle = bundle.clone();
     (config, bundle, utxos, floats)

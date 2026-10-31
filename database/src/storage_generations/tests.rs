@@ -186,7 +186,9 @@ fn the_losing_generation_is_cleaned_before_new_space_is_reserved() {
         assert!(store.generations_on_disk().unwrap().len() <= 2, "switch {i}");
         assert_eq!(budget.used(), 1_000);
         // A second concurrent staging reservation does not fit: no double-counting of free space.
-        assert!(StorageReservation::acquire(&(budget.clone() as Arc<dyn StorageReserver>), StoragePurpose::StagingGeneration, 1).is_err());
+        assert!(
+            StorageReservation::acquire(&(budget.clone() as Arc<dyn StorageReserver>), StoragePurpose::StagingGeneration, 1).is_err()
+        );
         write_state(&staging.path, &base(&i.to_string()));
         store.mark_verified(&staging, &marker("g")).unwrap();
         store.switch_to(staging).unwrap();
@@ -209,7 +211,8 @@ impl ToyChain {
     fn apply(gen_dir: &Path, block: &str, writes: &[(&str, &str)]) {
         let mut state = read_state(gen_dir);
         let mut undo = UndoLog::open(gen_dir.join("undo.log")).unwrap();
-        let old: String = writes.iter().map(|(k, _)| format!("{k}={}\n", state.get(*k).cloned().unwrap_or_else(|| "\u{0}".into()))).collect();
+        let old: String =
+            writes.iter().map(|(k, _)| format!("{k}={}\n", state.get(*k).cloned().unwrap_or_else(|| "\u{0}".into()))).collect();
         undo.append(block.as_bytes(), old.as_bytes()).unwrap();
         for (k, v) in writes {
             state.insert(k.to_string(), v.to_string());

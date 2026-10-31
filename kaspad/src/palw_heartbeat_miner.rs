@@ -607,9 +607,8 @@ impl PalwHeartbeatMinerService {
             template.block.header.timestamp,
             cursor_governs.then_some(earliest),
         );
-        let block: kaspa_consensus_core::block::Block = template
-            .into_immutable_v3()
-            .map_err(|e| format!("local coinbase export capacity unavailable: {e:?}"))?;
+        let block: kaspa_consensus_core::block::Block =
+            template.into_immutable_v3().map_err(|e| format!("local coinbase export capacity unavailable: {e:?}"))?;
         let hash = block.hash();
         // Counted only where H-1 binds (R-core+, genesis-armed), so the line never claims an
         // obligation a network does not have.

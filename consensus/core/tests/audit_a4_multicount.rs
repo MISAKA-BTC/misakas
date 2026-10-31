@@ -5,6 +5,7 @@
 //!
 //! Run: cargo test -p kaspa-consensus-core --test audit_a4_multicount -- --nocapture
 
+#![allow(warnings)]
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::params::{PalwEconomicPayoutV1, Params};
 use kaspa_consensus_core::network::{NetworkId, NetworkType};

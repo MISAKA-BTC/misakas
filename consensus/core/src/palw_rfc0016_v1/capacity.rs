@@ -468,8 +468,11 @@ pub fn palw_waterfill_resources_v1(
                 share = share.min(mul_div_floor((v.resources.da_bytes_per_span as u128).saturating_mul(RESOURCE_FP_V1), *w, da_use));
             }
             if court_use > 0 {
-                share =
-                    share.min(mul_div_floor((v.resources.court_permille_per_span as u128).saturating_mul(RESOURCE_FP_V1), *w, court_use));
+                share = share.min(mul_div_floor(
+                    (v.resources.court_permille_per_span as u128).saturating_mul(RESOURCE_FP_V1),
+                    *w,
+                    court_use,
+                ));
             }
             let slot = capacity.entry(*class).or_insert(0);
             *slot = slot.saturating_add(share);
@@ -649,20 +652,28 @@ mod tests {
     #[test]
     fn v8_supply_keeps_nonzero_da_and_court_bottlenecks() {
         let mut a = attestation(1, 1, 1_000);
-        a.capability =
-            PalwCapacityResourcesV1 { compute_ccu_per_span: 1_000, memory_bytes: 100, da_bytes_per_span: 50, court_permille_per_span: 3_000 };
+        a.capability = PalwCapacityResourcesV1 {
+            compute_ccu_per_span: 1_000,
+            memory_bytes: 100,
+            da_bytes_per_span: 50,
+            court_permille_per_span: 3_000,
+        };
         let load = PalwClaimLoadV1 { compute_ccu: 10, memory_bytes: 100, da_bytes: 10, court_permille: 1_000 };
         let joint_claims = palw_capacity_claims_per_span_v1(&a.capability, &load);
         assert_eq!(joint_claims, 3);
         let supply = palw_capacity_supply_from_attestations_v1(&[a], 500, |_| Some(load));
         let demand: BTreeMap<Hash64, u128> = [(h(1), 10 * load.compute_ccu)].into_iter().collect();
         let allocated = palw_waterfill_capacity_v1(&supply, &demand);
-        assert!(allocated[&h(1)] <= joint_claims * load.compute_ccu, "court/DA constraints disappeared in the attestation-to-supply conversion");
+        assert!(
+            allocated[&h(1)] <= joint_claims * load.compute_ccu,
+            "court/DA constraints disappeared in the attestation-to-supply conversion"
+        );
         assert_eq!(allocated[&h(1)], 30);
         assert!(!palw_capacity_fits_v1(allocated[&h(1)], demand[&h(1)]));
         assert!(palw_capacity_fits_v1(allocated[&h(1)], 3 * load.compute_ccu), "three claims still fit");
         // The exact multi-resource split agrees for one model.
-        let exact = palw_waterfill_resources_v1(&palw_capacity_resource_supply_from_attestations_v1(&[a], 500, |_| Some(load)), &demand);
+        let exact =
+            palw_waterfill_resources_v1(&palw_capacity_resource_supply_from_attestations_v1(&[a], 500, |_| Some(load)), &demand);
         assert_eq!(exact[&h(1)], 30);
     }
 
@@ -672,8 +683,12 @@ mod tests {
     fn g14_supply_carries_the_binding_minimum_compute100_da5_court3() {
         let load = PalwClaimLoadV1 { compute_ccu: 10, memory_bytes: 100, da_bytes: 10, court_permille: 1_000 };
         let mut a = attestation(1, 1, 1_000);
-        a.capability =
-            PalwCapacityResourcesV1 { compute_ccu_per_span: 1_000, memory_bytes: 100, da_bytes_per_span: 50, court_permille_per_span: 3_000 };
+        a.capability = PalwCapacityResourcesV1 {
+            compute_ccu_per_span: 1_000,
+            memory_bytes: 100,
+            da_bytes_per_span: 50,
+            court_permille_per_span: 3_000,
+        };
         assert_eq!(a.capability.compute_ccu_per_span / load.compute_ccu, 100, "compute alone: 100 claims");
         assert_eq!(a.capability.da_bytes_per_span / load.da_bytes, 5, "DA: 5 claims");
         assert_eq!(a.capability.court_permille_per_span / load.court_permille, 3, "court: 3 claims");
@@ -723,14 +738,29 @@ mod tests {
         assert_eq!(one(rich)[0].per_span, 10_000, "compute binds: 100 claims");
         assert_eq!(one(PalwCapacityResourcesV1 { da_bytes_per_span: 5_000, ..rich })[0].per_span, 500, "DA alone binds: 5 claims");
         assert_eq!(one(PalwCapacityResourcesV1 { court_permille_per_span: 1_500, ..rich })[0].per_span, 300, "court alone: 3 claims");
-        assert!(one(PalwCapacityResourcesV1 { memory_bytes: (1 << 20) - 1, ..rich }).is_empty(), "memory alone: the load does not fit");
+        assert!(
+            one(PalwCapacityResourcesV1 { memory_bytes: (1 << 20) - 1, ..rich }).is_empty(),
+            "memory alone: the load does not fit"
+        );
 
         // Two models on one verifier: A is DA-heavy, B court-heavy. The machine's DA and court are each spent once.
-        let machine =
-            PalwCapacityResourcesV1 { compute_ccu_per_span: 10_000, memory_bytes: 1 << 30, da_bytes_per_span: 10_000, court_permille_per_span: 10_000 };
+        let machine = PalwCapacityResourcesV1 {
+            compute_ccu_per_span: 10_000,
+            memory_bytes: 1 << 30,
+            da_bytes_per_span: 10_000,
+            court_permille_per_span: 10_000,
+        };
         let la = PalwClaimLoadV1 { compute_ccu: 100, memory_bytes: 1, da_bytes: 1_000, court_permille: 100 };
         let lb = PalwClaimLoadV1 { compute_ccu: 50, memory_bytes: 1, da_bytes: 100, court_permille: 2_000 };
-        let loads = |m: &Hash64| if *m == h(1) { Some(la) } else if *m == h(2) { Some(lb) } else { None };
+        let loads = |m: &Hash64| {
+            if *m == h(1) {
+                Some(la)
+            } else if *m == h(2) {
+                Some(lb)
+            } else {
+                None
+            }
+        };
         let mut a1 = attestation(1, 1, 10_000);
         a1.capability = machine;
         let mut a2 = attestation(2, 1, 10_000);

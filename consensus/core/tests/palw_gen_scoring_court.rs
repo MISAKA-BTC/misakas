@@ -14,6 +14,7 @@
 //! * **the decode door** holds every id a decode stage that is NOT the output stage selected, and
 //!   convicts an id the decode would not select.
 
+#![allow(warnings)]
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::palw_artifact::PalwArtifactOpeningV1;
 use kaspa_consensus_core::palw_decode_pipeline_v4::DecodeConfigV4;

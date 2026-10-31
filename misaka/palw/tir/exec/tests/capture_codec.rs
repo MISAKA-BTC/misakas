@@ -1,5 +1,6 @@
 //! Actual producer capture framing and allocation refusal; no model RSS certification.
 #![cfg(feature = "node")]
+#![allow(warnings)]
 mod node_common;
 
 use kaspa_consensus_core::Hash64;

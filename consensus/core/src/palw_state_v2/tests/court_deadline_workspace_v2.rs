@@ -1,4 +1,5 @@
 //! Actual admitted court/disclosure → timeout → native rearm consumer.
+#![allow(warnings)]
 use super::*;
 use crate::palw_native_resource_v1::{NativeDemandCheckerV1, NativeSnapshotResourceLimitsV1, NativeTransitionReservationV1};
 use std::sync::Arc;

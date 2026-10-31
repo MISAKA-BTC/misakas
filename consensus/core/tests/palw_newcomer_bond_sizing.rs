@@ -18,6 +18,7 @@
 //! A doc that prints numbers nobody re-derives goes stale silently; these are the numbers, and
 //! this test is why they can be trusted.
 
+#![allow(warnings)]
 use kaspa_consensus_core::constants::STORAGE_MASS_PARAMETER;
 use kaspa_consensus_core::mass::{UtxoCell, calc_storage_mass, utxo_plurality};
 use kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk;

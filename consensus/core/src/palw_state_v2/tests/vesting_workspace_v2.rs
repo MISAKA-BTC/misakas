@@ -1,4 +1,5 @@
 //! Actual maturity/planner/queue consumer; no activation or settlement policy change.
+#![allow(warnings)]
 use super::*;
 use crate::palw_native_resource_v1::{NativeDemandCheckerV1, NativeSnapshotResourceLimitsV1, NativeTransitionReservationV1};
 use crate::palw_vesting_v1::{PalwVestingNoteV1, PalwVestingRowV1};

@@ -9,9 +9,9 @@
 //! from the submitter bond in the same step that records `charged_sompi` and
 //! writes the draft. A zero fee debits nothing and records nothing owed.
 use super::*;
-use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as Key, PalwStagedCourtRowV1 as Row};
-use crate::palw_court_shared_tir_state_v1 as shared;
 use crate::palw_court_shared_material_intake_v1 as m;
+use crate::palw_court_shared_tir_state_v1 as shared;
+use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as Key, PalwStagedCourtRowV1 as Row};
 use crate::palw_tir_public_owned_v1::PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1 as PART;
 
 fn refused(s: impl Into<String>) -> PalwStateV2Error {
@@ -21,14 +21,21 @@ fn refused(s: impl Into<String>) -> PalwStateV2Error {
 /// Burn `fee` sompi from the intake submitter. Zero records nothing and writes
 /// no bond delta. A positive fee must leave the bond in full; [`TransitionBuilder::slash_bond`]
 /// is the same debit the other court fees use, and a clamp or a shortfall refuses.
-fn debit_submitter_storage_fee_v1(b: &mut TransitionBuilder<'_>, submitter: PalwBondKeyV2, fee: u64)
-    -> Result<(), PalwStateV2Error> {
+fn debit_submitter_storage_fee_v1(
+    b: &mut TransitionBuilder<'_>,
+    submitter: PalwBondKeyV2,
+    fee: u64,
+    now: u64,
+) -> Result<(), PalwStateV2Error> {
     if fee == 0 {
         return Ok(());
     }
     let collateral = b.state.bond(&submitter).ok_or(PalwStateV2Error::MissingBond(submitter))?.collateral;
     if collateral < fee {
         return Err(refused("material storage fee exceeds the submitter bond"));
+    }
+    if u128::from(collateral).saturating_sub(b.committed_at(&submitter, now)?) < u128::from(fee) {
+        return Err(refused("material storage fee exceeds the submitter free principal"));
     }
     let debited = b.slash_bond(submitter, u128::from(fee))?;
     if debited != fee {
@@ -51,8 +58,11 @@ pub(super) enum MaterialIntakeEffectV1 {
     AlreadyComplete,
 }
 
-pub(super) fn material_intake(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, s: &m::SignedMaterialIntakeV1)
-    -> Result<MaterialIntakeEffectV1, PalwStateV2Error> {
+pub(super) fn material_intake(
+    b: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    s: &m::SignedMaterialIntakeV1,
+) -> Result<MaterialIntakeEffectV1, PalwStateV2Error> {
     let saved = b.try_checkpoint()?;
     let result = material_intake_inner(b, ctx, s);
     if result.is_err() {
@@ -61,11 +71,12 @@ pub(super) fn material_intake(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockCont
     result
 }
 
-fn material_intake_inner(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, s: &m::SignedMaterialIntakeV1)
-    -> Result<MaterialIntakeEffectV1, PalwStateV2Error> {
-    // Below the material-intake fence the schedule is typed-missing: refuse
-    // before any price is applied or any bond is debited. Past the fence the
-    // pinned V5 estimate (or a test injection) is the schedule.
+fn material_intake_inner(
+    b: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    s: &m::SignedMaterialIntakeV1,
+) -> Result<MaterialIntakeEffectV1, PalwStateV2Error> {
+    // The active intake fence resolves the adopted V5 storage schedule.
     if !b.extras.staged_tir_route_active {
         return Err(refused("material intake is dormant below palw_staged_tir_route_v1"));
     }
@@ -115,18 +126,28 @@ fn material_intake_inner(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2
             let mut ledger = match b.state.staged_court_row_v1(&lkey) {
                 Some(Row::CourtMaterialLedger(l)) => (**l).clone(),
                 None => m::MaterialLedgerV1 {
-                    version: 1, claim: s.claim, submitter: s.submitter,
+                    version: 1,
+                    claim: s.claim,
+                    submitter: s.submitter,
                     budget_bytes: m::claim_budget_v1(&b.state, &c, &source, &program, &leaves).map_err(refused)?,
-                    reserved_bytes: 0, charged_sompi: 0, material_until_daa: c.material_until_daa,
+                    reserved_bytes: 0,
+                    charged_sompi: 0,
+                    material_until_daa: c.material_until_daa,
                 },
                 Some(_) => return Err(refused("material ledger key holds a foreign row")),
             };
-            ledger.reserved_bytes = ledger.reserved_bytes.checked_add(*total_bytes)
+            ledger.reserved_bytes = ledger
+                .reserved_bytes
+                .checked_add(*total_bytes)
                 .filter(|r| *r <= ledger.budget_bytes)
                 .ok_or_else(|| refused("material declaration exceeds the submitter's per-claim native budget"))?;
             let fee = schedule.sompi_per_byte.checked_mul(*total_bytes).ok_or_else(|| refused("material fee overflow"))?;
-            let expires_daa = ctx.daa_score.checked_add(schedule.draft_ttl_daa).ok_or_else(|| refused("material TTL overflow"))?
-                .min(c.hard_daa).min(c.material_until_daa);
+            let expires_daa = ctx
+                .daa_score
+                .checked_add(schedule.draft_ttl_daa)
+                .ok_or_else(|| refused("material TTL overflow"))?
+                .min(c.hard_daa)
+                .min(c.material_until_daa);
             if expires_daa <= ctx.daa_score {
                 return Err(refused("material draft would expire at once"));
             }
@@ -135,12 +156,23 @@ fn material_intake_inner(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2
             // moves and before the draft is written. A zero fee debits nothing and
             // adds nothing owed. A short bond, or a debit that is not exactly `fee`,
             // refuses: the checkpoint drops any partial slash, and nothing is recorded.
-            debit_submitter_storage_fee_v1(b, s.submitter, fee)?;
+            debit_submitter_storage_fee_v1(b, s.submitter, fee, ctx.daa_score)?;
             ledger.charged_sompi = ledger.charged_sompi.checked_add(fee).ok_or_else(|| refused("material fee overflow"))?;
             let draft = m::MaterialDraftV1 {
-                version: 1, claim: s.claim, scope_id: c.scope_id, target: s.target, submitter: s.submitter, draft_id,
-                total_bytes: *total_bytes, body_hash: *body_hash, begun_block: ctx.block, begun_daa: ctx.daa_score,
-                last_daa: ctx.daa_score, accepted_bytes: 0, head: Hash64::default(), expires_daa,
+                version: 1,
+                claim: s.claim,
+                scope_id: c.scope_id,
+                target: s.target,
+                submitter: s.submitter,
+                draft_id,
+                total_bytes: *total_bytes,
+                body_hash: *body_hash,
+                begun_block: ctx.block,
+                begun_daa: ctx.daa_score,
+                last_daa: ctx.daa_score,
+                accepted_bytes: 0,
+                head: Hash64::default(),
+                expires_daa,
                 material_until_daa: c.material_until_daa,
             };
             b.write_staged_row_v1(lkey, Some(Row::CourtMaterialLedger(Box::new(ledger))))?;
@@ -162,14 +194,26 @@ fn material_intake_inner(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2
             if complete {
                 return Err(refused("material target already complete; no further storage"));
             }
-            let end = crate::palw_court_shared_tir_stream_v1::check_shared_stream_part_v1(draft.total_bytes, draft.accepted_bytes,
-                *offset, bytes.len()).map_err(refused)?;
+            let end = crate::palw_court_shared_tir_stream_v1::check_shared_stream_part_v1(
+                draft.total_bytes,
+                draft.accepted_bytes,
+                *offset,
+                bytes.len(),
+            )
+            .map_err(refused)?;
             let mut q = crate::palw_native_resource_v1::TirNativeRequestsV1::new();
             q.exact_v1::<u8>(bytes.len() as u64).map_err(PalwStateV2Error::NativeResource)?;
-            let _raw = crate::palw_native_resource_v1::reserve_native_requests_v1(q.bytes_v1()).map_err(PalwStateV2Error::NativeResource)?;
+            let _raw =
+                crate::palw_native_resource_v1::reserve_native_requests_v1(q.bytes_v1()).map_err(PalwStateV2Error::NativeResource)?;
             let part = m::MaterialPartV1 {
-                version: 1, claim: s.claim, draft_id: *draft_id, offset: *offset, previous: draft.head,
-                bytes: bytes.clone(), daa: ctx.daa_score, expires_daa: draft.expires_daa,
+                version: 1,
+                claim: s.claim,
+                draft_id: *draft_id,
+                offset: *offset,
+                previous: draft.head,
+                bytes: bytes.clone(),
+                daa: ctx.daa_score,
+                expires_daa: draft.expires_daa,
             };
             draft.head = m::material_part_digest_v1(&part).map_err(refused)?;
             draft.accepted_bytes = end;
@@ -199,16 +243,25 @@ fn material_intake_inner(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2
                 }
                 target => {
                     let leaves = match target {
-                        m::MaterialTargetV1::Parameter { .. } =>
-                            Some(m::required_parameter_leaves_v1(&b.state, s.claim, schedule.cover).map_err(refused)?),
+                        m::MaterialTargetV1::Parameter { .. } => {
+                            Some(m::required_parameter_leaves_v1(&b.state, s.claim, schedule.cover).map_err(refused)?)
+                        }
                         _ => None,
                     };
                     m::decode_material_v1(&b.state, &c, &source, s.claim, target, &body, leaves.as_deref()).map_err(refused)?;
                     let target_id = target.id_v1(s.claim).map_err(refused)?;
                     let row = m::MaterialRowV1 {
-                        version: 1, claim: s.claim, scope_id: c.scope_id, target, target_id,
-                        digest: draft.body_hash, bytes: body, block: ctx.block, accepted_daa: ctx.daa_score,
-                        completed_by: s.submitter, material_until_daa: c.material_until_daa,
+                        version: 1,
+                        claim: s.claim,
+                        scope_id: c.scope_id,
+                        target,
+                        target_id,
+                        digest: draft.body_hash,
+                        bytes: body,
+                        block: ctx.block,
+                        accepted_daa: ctx.daa_score,
+                        completed_by: s.submitter,
+                        material_until_daa: c.material_until_daa,
                     };
                     b.write_staged_row_v1(Key::CourtMaterial(s.claim, target_id), Some(Row::CourtMaterial(Box::new(row).into())))?;
                 }
@@ -219,7 +272,11 @@ fn material_intake_inner(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2
     }
 }
 
-fn own_draft(b: &TransitionBuilder<'_>, s: &m::SignedMaterialIntakeV1, draft_id: Hash64) -> Result<m::MaterialDraftV1, PalwStateV2Error> {
+fn own_draft(
+    b: &TransitionBuilder<'_>,
+    s: &m::SignedMaterialIntakeV1,
+    draft_id: Hash64,
+) -> Result<m::MaterialDraftV1, PalwStateV2Error> {
     let Some(Row::CourtMaterialDraft(draft)) = b.state.staged_court_row_v1(&Key::CourtMaterialDraft(s.claim, draft_id)) else {
         return Err(refused("material draft missing"));
     };
@@ -255,10 +312,14 @@ pub(super) fn release_draft(b: &mut TransitionBuilder<'_>, draft: &m::MaterialDr
 }
 
 /// Bounded explicit expiry for one claim (the sweep also releases expired drafts).
-pub(super) fn expire_material_drafts(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, claim: Hash64)
-    -> Result<usize, PalwStateV2Error> {
+pub(super) fn expire_material_drafts(
+    b: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    claim: Hash64,
+) -> Result<usize, PalwStateV2Error> {
     let (lo, hi) = (Hash64::from_bytes([0u8; 64]), Hash64::from_bytes([0xffu8; 64]));
-    let expired: Vec<m::MaterialDraftV1> = b.state
+    let expired: Vec<m::MaterialDraftV1> = b
+        .state
         .staged_court_range_v1(&Key::CourtMaterialDraft(claim, lo), &Key::CourtMaterialDraft(claim, hi))
         .filter_map(|(_, row)| match row {
             Row::CourtMaterialDraft(d) if ctx.daa_score >= d.expires_daa => Some((**d).clone()),
@@ -277,8 +338,14 @@ impl TransitionBuilder<'_> {
     /// material and parts are immutable once written; a canonical row must
     /// re-authenticate; a draft can only advance its own cursor.
     pub(super) fn check_material_intake_write_v1(&mut self, key: &Key, new: Option<&Row>) -> Result<(), PalwStateV2Error> {
-        let ours = matches!(key, Key::CourtMaterialDraft(..) | Key::CourtMaterialPart(..) | Key::CourtMaterial(..) | Key::CourtMaterialLedger(..));
-        let ours_row = matches!(new, Some(Row::CourtMaterialDraft(_) | Row::CourtMaterialPart(_) | Row::CourtMaterial(_) | Row::CourtMaterialLedger(_)));
+        let ours = matches!(
+            key,
+            Key::CourtMaterialDraft(..) | Key::CourtMaterialPart(..) | Key::CourtMaterial(..) | Key::CourtMaterialLedger(..)
+        );
+        let ours_row = matches!(
+            new,
+            Some(Row::CourtMaterialDraft(_) | Row::CourtMaterialPart(_) | Row::CourtMaterial(_) | Row::CourtMaterialLedger(_))
+        );
         if !ours && !ours_row {
             return Ok(());
         }
@@ -296,7 +363,9 @@ impl TransitionBuilder<'_> {
             (Row::CourtMaterialDraft(d), Some(Row::CourtMaterialDraft(o))) => {
                 if (d.claim, d.target, d.submitter, d.total_bytes, d.body_hash, d.begun_daa, d.expires_daa)
                     != (o.claim, o.target, o.submitter, o.total_bytes, o.body_hash, o.begun_daa, o.expires_daa)
-                    || d.accepted_bytes < o.accepted_bytes || d.last_daa < o.last_daa {
+                    || d.accepted_bytes < o.accepted_bytes
+                    || d.last_daa < o.last_daa
+                {
                     return Err(refused("material draft cannot be replaced or rewound"));
                 }
                 d.check_context(&self.state).map_err(refused)
@@ -308,7 +377,9 @@ impl TransitionBuilder<'_> {
                 d.check_context(&self.state).map_err(refused)
             }
             (Row::CourtMaterialLedger(l), Some(Row::CourtMaterialLedger(o))) => {
-                if (l.budget_bytes, l.material_until_daa) != (o.budget_bytes, o.material_until_daa) || l.charged_sompi < o.charged_sompi {
+                if (l.budget_bytes, l.material_until_daa) != (o.budget_bytes, o.material_until_daa)
+                    || l.charged_sompi < o.charged_sompi
+                {
                     return Err(refused("material ledger budget is derived once and charges never shrink"));
                 }
                 Ok(())

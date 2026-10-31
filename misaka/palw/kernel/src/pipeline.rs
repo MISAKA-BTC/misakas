@@ -385,36 +385,59 @@ pub fn stage_input_v1(
 /// the frozen v1 helper retains its original API and semantics.
 #[allow(clippy::too_many_arguments)]
 pub fn stage_input_borrowed_v32<'a>(
-    p:&TirPipelineV1,programs:&[TirProgramV2],facts:&[StageJobFacts],job:&PipelineJob,
-    random:&dyn RandomSource,si:usize,k:u16,position:u32,
-    upstream:&dyn Fn(u8)->Option<&'a[Tensor]>,
-)->Result<Tensor,String>{
-    let st=p.stages.get(si).ok_or("invocation32 input stage absent")?;
-    let prog=programs.get(st.program as usize).ok_or("invocation32 input program absent")?;
-    let d=prog.inputs.get(k as usize).ok_or("invocation32 input absent")?;
-    let value=match (&d.source,binding_of(st,prog,k as usize)){
-        (InputSource::External{..},Some(Binding::StageRows{stage,drop,pad_to}))=>{
-            let rows=upstream(*stage).ok_or("invocation32 upstream rows absent")?;
-            let original=facts.get(*stage as usize).ok_or("invocation32 upstream facts absent")?;
-            if rows.len()!=original.trip as usize{return Err("invocation32 upstream certificate omits original output rows".into());}
-            let shape=d.shape.iter().map(|n|*n as usize).collect::<Vec<_>>();
-            let kept=rows.get((original.rows_from as usize).saturating_add(*drop as usize)..).unwrap_or(&[]);
-            if shape.is_empty()||shape[0]!=*pad_to as usize||kept.len()>*pad_to as usize{return Err("invocation32 rows exceed original input padding".into());}
-            let width=shape[1..].iter().try_fold(1usize,|n,d|n.checked_mul(*d).ok_or("invocation32 row extent overflow"))?;
-            let len=width.checked_mul(*pad_to as usize).ok_or("invocation32 input extent overflow")?;
-            let mut data=Vec::with_capacity(len);
-            for row in kept{if row.dtype!=d.dtype||row.shape!=shape[1..]||row.data.len()!=width{return Err("invocation32 upstream row type differs".into());}data.extend_from_slice(&row.data);}
-            data.resize(len,0);Tensor::new(d.dtype,shape,data).map_err(|e|e.to_string())?
-        },
-        (InputSource::External{..},Some(Binding::StageFinal{stage}))=>{
-            let values=upstream(*stage).ok_or("invocation32 upstream Final absent")?;
-            if values.len()!=1{return Err("invocation32 upstream Final certificate count differs".into());}
+    p: &TirPipelineV1,
+    programs: &[TirProgramV2],
+    facts: &[StageJobFacts],
+    job: &PipelineJob,
+    random: &dyn RandomSource,
+    si: usize,
+    k: u16,
+    position: u32,
+    upstream: &dyn Fn(u8) -> Option<&'a [Tensor]>,
+) -> Result<Tensor, String> {
+    let st = p.stages.get(si).ok_or("invocation32 input stage absent")?;
+    let prog = programs.get(st.program as usize).ok_or("invocation32 input program absent")?;
+    let d = prog.inputs.get(k as usize).ok_or("invocation32 input absent")?;
+    let value = match (&d.source, binding_of(st, prog, k as usize)) {
+        (InputSource::External { .. }, Some(Binding::StageRows { stage, drop, pad_to })) => {
+            let rows = upstream(*stage).ok_or("invocation32 upstream rows absent")?;
+            let original = facts.get(*stage as usize).ok_or("invocation32 upstream facts absent")?;
+            if rows.len() != original.trip as usize {
+                return Err("invocation32 upstream certificate omits original output rows".into());
+            }
+            let shape = d.shape.iter().map(|n| *n as usize).collect::<Vec<_>>();
+            let kept = rows.get((original.rows_from as usize).saturating_add(*drop as usize)..).unwrap_or(&[]);
+            if shape.is_empty() || shape[0] != *pad_to as usize || kept.len() > *pad_to as usize {
+                return Err("invocation32 rows exceed original input padding".into());
+            }
+            let width = shape[1..].iter().try_fold(1usize, |n, d| n.checked_mul(*d).ok_or("invocation32 row extent overflow"))?;
+            let len = width.checked_mul(*pad_to as usize).ok_or("invocation32 input extent overflow")?;
+            let mut data = Vec::with_capacity(len);
+            for row in kept {
+                if row.dtype != d.dtype || row.shape != shape[1..] || row.data.len() != width {
+                    return Err("invocation32 upstream row type differs".into());
+                }
+                data.extend_from_slice(&row.data);
+            }
+            data.resize(len, 0);
+            Tensor::new(d.dtype, shape, data).map_err(|e| e.to_string())?
+        }
+        (InputSource::External { .. }, Some(Binding::StageFinal { stage })) => {
+            let values = upstream(*stage).ok_or("invocation32 upstream Final absent")?;
+            if values.len() != 1 {
+                return Err("invocation32 upstream Final certificate count differs".into());
+            }
             values[0].clone()
-        },
-        _=>return stage_input_v1(p,programs,facts,job,random,si,k,position,&|_|None),
+        }
+        _ => return stage_input_v1(p, programs, facts, job, random, si, k, position, &|_| None),
     };
-    let(lo,hi)=d.interval();
-    if value.dtype!=d.dtype||value.shape!=d.shape.iter().map(|n|*n as usize).collect::<Vec<_>>()||value.data.iter().any(|v|*v<lo||*v>hi){return Err("invocation32 bound upstream value violates original input declaration".into());}
+    let (lo, hi) = d.interval();
+    if value.dtype != d.dtype
+        || value.shape != d.shape.iter().map(|n| *n as usize).collect::<Vec<_>>()
+        || value.data.iter().any(|v| *v < lo || *v > hi)
+    {
+        return Err("invocation32 bound upstream value violates original input declaration".into());
+    }
     Ok(value)
 }
 

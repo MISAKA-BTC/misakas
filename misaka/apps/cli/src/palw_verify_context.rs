@@ -71,7 +71,14 @@ fn host_facts(total_ms: u64) -> serde_json::Value {
     })
 }
 
+/// The process's peak resident set, from the kernel's own accounting (0 where `getrusage` does not exist).
+#[cfg(not(unix))]
+fn peak_rss_bytes() -> u64 {
+    0
+}
+
 /// The process's peak resident set, from the kernel's own accounting.
+#[cfg(unix)]
 fn peak_rss_bytes() -> u64 {
     // SAFETY: `getrusage` writes into the struct it is handed and reads nothing else.
     let mut usage: libc::rusage = unsafe { std::mem::zeroed() };

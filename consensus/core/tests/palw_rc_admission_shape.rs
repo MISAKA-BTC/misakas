@@ -13,6 +13,7 @@
 //! `admission_shape_tests` because that module arrived in `e5651de0` and belongs to the session
 //! writing it; two writers in one module is how a merge conflict is manufactured at a freeze.
 
+#![allow(warnings)]
 use kaspa_consensus_core::palw_class_admission_v2::palw_admission_shape_at_v1;
 use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
 

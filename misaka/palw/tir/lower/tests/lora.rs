@@ -12,6 +12,7 @@
 //! 4. the integer candidate is held against HF's merged logits, which is fidelity;
 //! 5. the extra cost is measured: params, bytes, MACs a position, and admission.
 
+#![allow(warnings)]
 use misaka_palw_tir_lower::float_ref::stream::Resident;
 use misaka_palw_tir_lower::float_ref::{ParamStore, Session, SiteStat};
 use misaka_palw_tir_lower::lower::{self, LowerOpts, materialise};

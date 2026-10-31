@@ -9,6 +9,7 @@
 //! its row's unit; and the integer program agrees with the float reference — beside the same
 //! weights through the W8 path.
 
+#![allow(warnings)]
 use misaka_palw_tir::interval::analyze_ranges;
 use misaka_palw_tir_lower::fidelity::{self, Metrics};
 use misaka_palw_tir_lower::float_ref::stream::Resident;

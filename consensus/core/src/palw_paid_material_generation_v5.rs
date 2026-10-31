@@ -84,126 +84,6 @@ fn row<T: NativeWireScanV1 + BorshDeserialize>(
     retain_native_value_decode_classified_v1(bytes, || borsh::from_slice::<T>(bytes).map_err(|e| e.to_string()))
 }
 
-#[cfg(test)]
-mod identity_controls {
-    use super::*;
-    use misaka_palw_kernel::{
-        claim_paid_v2::{PaidClaimLifetimeV2, PaidClaimObjectV2},
-        route::KernelRouteObjectV1,
-        spec::{SpecClaimV1, retrieval::RetrievalClaimV1},
-    };
-    fn fixture() -> (PalwBondKeyV2, PaidClaimEnrollmentV2, SaltedCommitV1) {
-        let actor = PalwBondKeyV2(crate::tx::TransactionOutpoint::new(Hash64::from_bytes([1; 64]), 2));
-        let commit = SaltedCommitV1::Spec {
-            claim: SpecClaimV1::Retrieval(RetrievalClaimV1 {
-                job_id: [3; 64],
-                producer_bond: palw_kernel_bond_id_v1(&actor),
-                result: vec![],
-            }),
-        };
-        let e = PaidClaimEnrollmentV2 {
-            version: 2,
-            class: [4; 64],
-            job: [5; 64],
-            base_claim: [6; 64],
-            producer: commit.producer(),
-            commit_root: [7; 64],
-            lifetime: PaidClaimLifetimeV2 {
-                committed_daa: 10,
-                checking_until: 20,
-                challenge_until: 30,
-                dispute_until: 40,
-                liability_until: 50,
-            },
-            accepted_until_daa: 12,
-            material_consent: [8; 64],
-            round: 0,
-            prior_transcript: [0; 64],
-        };
-        (actor, e, commit)
-    }
-    #[test]
-    fn streamed_original_is_exact_legacy_encoding_and_binds_network_actor_salt_and_enrollment() {
-        // Identity/codec controls only: the empty retrieval is not actual work
-        // or a native signed-admission/approval/settlement acceptance fixture.
-        let (actor, e, commit) = fixture();
-        let network = Hash64::from_bytes([9; 64]);
-        let salt = [10; 64];
-        let object = KernelRouteObjectV1::PaidClaimV2 {
-            object: PaidClaimObjectV2::Commit { enrollment: e.clone(), commit: commit.clone(), salt },
-        };
-        let bytes = object.encode();
-        assert_eq!(bytes[..3], [1, misaka_palw_kernel::route::TAG_PAID_CLAIM_V2, 2]);
-        let original = original_paid_commit_message_v5(network, &actor, &e, &commit, &salt).unwrap();
-        assert_eq!(original, crate::palw_kernel_route_v1::palw_kernel_route_message_v1(network, &actor, &bytes));
-        assert_ne!(original, original_paid_commit_message_v5(Hash64::from_bytes([11; 64]), &actor, &e, &commit, &salt).unwrap());
-        let other = PalwBondKeyV2(crate::tx::TransactionOutpoint::new(Hash64::from_bytes([1; 64]), 3));
-        assert_ne!(original, original_paid_commit_message_v5(network, &other, &e, &commit, &salt).unwrap());
-        assert_ne!(original, original_paid_commit_message_v5(network, &actor, &e, &commit, &[12; 64]).unwrap());
-        let mut substituted = e;
-        substituted.material_consent = [13; 64];
-        assert_ne!(original, original_paid_commit_message_v5(network, &actor, &substituted, &commit, &salt).unwrap());
-    }
-    #[test]
-    fn generation_wrapper_is_new_index_and_never_changes_the_original_draw_identity() {
-        let (_, e, commit) = fixture();
-        let id = e.id();
-        let mut generation = Generation {
-            version: 5,
-            enrollment: id,
-            root: e.base_claim,
-            initial_consent: e.material_consent,
-            recovery: [14; 64],
-            current_consent: [15; 64],
-            sequence: 1,
-        };
-        generation.validate(&e).unwrap();
-        let object = KernelRouteObjectV1::PaidClaimV2 {
-            object: PaidClaimObjectV2::CommitWithMaterialGenerationV5 {
-                enrollment: e.clone(),
-                commit,
-                salt: [10; 64],
-                generation,
-                original_signature: vec![16; 8],
-            },
-        };
-        assert_eq!(object.encode()[2], 15);
-        generation.current_consent = [17; 64];
-        generation.sequence = 2;
-        generation.validate(&e).unwrap();
-        assert_eq!(e.id(), id);
-        assert_eq!(borsh::to_vec(&generation).unwrap().len(), 330);
-        generation.initial_consent = [18; 64];
-        assert!(generation.validate(&e).is_err(), "arbitrary historic consent cannot become another draw");
-    }
-    #[test]
-    fn original_bootstrap_message_keeps_index16_policy_and_legacy_identity_separate() {
-        // Encoding control only: this synthetic work is not admitted native
-        // computation, source approval or a successful material replacement.
-        let (actor, enrollment, commit) = fixture();
-        let network = Hash64::from_bytes([9; 64]);
-        let salt = [10; 64];
-        let source_policy = [19; 64];
-        let original = KernelRouteObjectV1::PaidClaimV2 {
-            object: PaidClaimObjectV2::CommitWithApprovedBootstrapV6 {
-                enrollment: enrollment.clone(),
-                commit: commit.clone(),
-                salt,
-                source_policy,
-            },
-        };
-        let bytes = original.encode();
-        assert_eq!(bytes[2], 16);
-        let message = original_paid_bootstrap_commit_message_v7(network, &actor, &enrollment, &commit, &salt, &source_policy).unwrap();
-        assert_eq!(message, crate::palw_kernel_route_v1::palw_kernel_route_message_v1(network, &actor, &bytes));
-        assert_ne!(message, original_paid_commit_message_v5(network, &actor, &enrollment, &commit, &salt).unwrap());
-        assert_ne!(
-            message,
-            original_paid_bootstrap_commit_message_v7(network, &actor, &enrollment, &commit, &salt, &[20; 64]).unwrap()
-        );
-    }
-}
-
 /// Own-route metadata only. Native admission separately checks every fence and
 /// both signatures. A terminal/absent history is never reconstructed from WAL.
 pub fn paid_material_generation_from_route_v5(
@@ -415,4 +295,124 @@ pub fn validate_paid_material_generation_v7(
         return Err(E::Decode("V7 original V6 enrollment/source-policy signature differs".into()));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod identity_controls {
+    use super::*;
+    use misaka_palw_kernel::{
+        claim_paid_v2::{PaidClaimLifetimeV2, PaidClaimObjectV2},
+        route::KernelRouteObjectV1,
+        spec::{SpecClaimV1, retrieval::RetrievalClaimV1},
+    };
+    fn fixture() -> (PalwBondKeyV2, PaidClaimEnrollmentV2, SaltedCommitV1) {
+        let actor = PalwBondKeyV2(crate::tx::TransactionOutpoint::new(Hash64::from_bytes([1; 64]), 2));
+        let commit = SaltedCommitV1::Spec {
+            claim: SpecClaimV1::Retrieval(RetrievalClaimV1 {
+                job_id: [3; 64],
+                producer_bond: palw_kernel_bond_id_v1(&actor),
+                result: vec![],
+            }),
+        };
+        let e = PaidClaimEnrollmentV2 {
+            version: 2,
+            class: [4; 64],
+            job: [5; 64],
+            base_claim: [6; 64],
+            producer: commit.producer(),
+            commit_root: [7; 64],
+            lifetime: PaidClaimLifetimeV2 {
+                committed_daa: 10,
+                checking_until: 20,
+                challenge_until: 30,
+                dispute_until: 40,
+                liability_until: 50,
+            },
+            accepted_until_daa: 12,
+            material_consent: [8; 64],
+            round: 0,
+            prior_transcript: [0; 64],
+        };
+        (actor, e, commit)
+    }
+    #[test]
+    fn streamed_original_is_exact_legacy_encoding_and_binds_network_actor_salt_and_enrollment() {
+        // Identity/codec controls only: the empty retrieval is not actual work
+        // or a native signed-admission/approval/settlement acceptance fixture.
+        let (actor, e, commit) = fixture();
+        let network = Hash64::from_bytes([9; 64]);
+        let salt = [10; 64];
+        let object = KernelRouteObjectV1::PaidClaimV2 {
+            object: PaidClaimObjectV2::Commit { enrollment: e.clone(), commit: commit.clone(), salt },
+        };
+        let bytes = object.encode();
+        assert_eq!(bytes[..3], [1, misaka_palw_kernel::route::TAG_PAID_CLAIM_V2, 2]);
+        let original = original_paid_commit_message_v5(network, &actor, &e, &commit, &salt).unwrap();
+        assert_eq!(original, crate::palw_kernel_route_v1::palw_kernel_route_message_v1(network, &actor, &bytes));
+        assert_ne!(original, original_paid_commit_message_v5(Hash64::from_bytes([11; 64]), &actor, &e, &commit, &salt).unwrap());
+        let other = PalwBondKeyV2(crate::tx::TransactionOutpoint::new(Hash64::from_bytes([1; 64]), 3));
+        assert_ne!(original, original_paid_commit_message_v5(network, &other, &e, &commit, &salt).unwrap());
+        assert_ne!(original, original_paid_commit_message_v5(network, &actor, &e, &commit, &[12; 64]).unwrap());
+        let mut substituted = e;
+        substituted.material_consent = [13; 64];
+        assert_ne!(original, original_paid_commit_message_v5(network, &actor, &substituted, &commit, &salt).unwrap());
+    }
+    #[test]
+    fn generation_wrapper_is_new_index_and_never_changes_the_original_draw_identity() {
+        let (_, e, commit) = fixture();
+        let id = e.id();
+        let mut generation = Generation {
+            version: 5,
+            enrollment: id,
+            root: e.base_claim,
+            initial_consent: e.material_consent,
+            recovery: [14; 64],
+            current_consent: [15; 64],
+            sequence: 1,
+        };
+        generation.validate(&e).unwrap();
+        let object = KernelRouteObjectV1::PaidClaimV2 {
+            object: PaidClaimObjectV2::CommitWithMaterialGenerationV5 {
+                enrollment: e.clone(),
+                commit,
+                salt: [10; 64],
+                generation,
+                original_signature: vec![16; 8],
+            },
+        };
+        assert_eq!(object.encode()[2], 15);
+        generation.current_consent = [17; 64];
+        generation.sequence = 2;
+        generation.validate(&e).unwrap();
+        assert_eq!(e.id(), id);
+        assert_eq!(borsh::to_vec(&generation).unwrap().len(), 330);
+        generation.initial_consent = [18; 64];
+        assert!(generation.validate(&e).is_err(), "arbitrary historic consent cannot become another draw");
+    }
+    #[test]
+    fn original_bootstrap_message_keeps_index16_policy_and_legacy_identity_separate() {
+        // Encoding control only: this synthetic work is not admitted native
+        // computation, source approval or a successful material replacement.
+        let (actor, enrollment, commit) = fixture();
+        let network = Hash64::from_bytes([9; 64]);
+        let salt = [10; 64];
+        let source_policy = [19; 64];
+        let original = KernelRouteObjectV1::PaidClaimV2 {
+            object: PaidClaimObjectV2::CommitWithApprovedBootstrapV6 {
+                enrollment: enrollment.clone(),
+                commit: commit.clone(),
+                salt,
+                source_policy,
+            },
+        };
+        let bytes = original.encode();
+        assert_eq!(bytes[2], 16);
+        let message = original_paid_bootstrap_commit_message_v7(network, &actor, &enrollment, &commit, &salt, &source_policy).unwrap();
+        assert_eq!(message, crate::palw_kernel_route_v1::palw_kernel_route_message_v1(network, &actor, &bytes));
+        assert_ne!(message, original_paid_commit_message_v5(network, &actor, &enrollment, &commit, &salt).unwrap());
+        assert_ne!(
+            message,
+            original_paid_bootstrap_commit_message_v7(network, &actor, &enrollment, &commit, &salt, &[20; 64]).unwrap()
+        );
+    }
 }

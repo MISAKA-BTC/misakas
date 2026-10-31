@@ -132,7 +132,7 @@ impl TransactionsPool {
         let (native_packets, native_bytes) = config
             .native_queue_policy_v30
             .as_ref()
-            .map_or(((config.maximum_transaction_count as usize / 4).min(16_384), config.mempool_size_limit / 4), |p| {
+            .map_or(((config.maximum_transaction_count / 4).min(16_384), config.mempool_size_limit / 4), |p| {
                 (p.max_packets as usize, p.max_owned_bytes as usize)
             });
         let native_carriers = NativeCarrierIndexV22::new(native_packets, native_bytes);

@@ -1,5 +1,6 @@
 //! Actual DNS reserve slash/accrual and coinbase drip, including cold and DAG branches.
 //! Small private economics fixture, not the full RFC12 campaign.
+#![allow(warnings)]
 use super::*;
 use kaspa_database::prelude::{ConnBuilder, DB};
 use std::sync::Arc;

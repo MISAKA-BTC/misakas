@@ -9,6 +9,7 @@
 //!   most 4 dismissed filings on one claim — refused by name, free, before any court runs; no other bond's allowance is touched, so an
 //!   honest prosecutor still convicts.
 
+#![allow(warnings)]
 mod common;
 
 use common::chain::T;

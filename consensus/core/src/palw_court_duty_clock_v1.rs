@@ -1,8 +1,8 @@
 //! RFC-0028 isolated candidate: retained native prerequisite history, never
 //! permission to default. No production profile/admission installs the binding.
-use crate::{Hash64, BlockHash};
-use crate::palw_state_v2::{PalwBondKeyV2, PalwBlockContextV2, PalwChainStateV2};
 use crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1 as Key;
+use crate::palw_state_v2::{PalwBlockContextV2, PalwBondKeyV2, PalwChainStateV2};
+use crate::{BlockHash, Hash64};
 use borsh::{BorshDeserialize, BorshSerialize};
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -32,19 +32,29 @@ impl CourtDutyClockV1 {
         material_until_daa: u64,
     ) -> Result<Self, String> {
         let clock = Self {
-            version: 1, profile_id, duty_id: duty.id, claim: duty.claim,
-            allocation_id: duty.allocation_id, source_id: duty.source_id,
-            acquisition: duty.key, answerer: duty.answerer, demand_id: duty.demand_id,
-            turn: duty.turn, predecessor_block: ctx.block, predecessor_daa: ctx.daa_score,
+            version: 1,
+            profile_id,
+            duty_id: duty.id,
+            claim: duty.claim,
+            allocation_id: duty.allocation_id,
+            source_id: duty.source_id,
+            acquisition: duty.key,
+            answerer: duty.answerer,
+            demand_id: duty.demand_id,
+            turn: duty.turn,
+            predecessor_block: ctx.block,
+            predecessor_daa: ctx.daa_score,
             first_eligible_daa: ctx.daa_score.checked_add(1).ok_or("duty eligibility successor overflow")?,
-            response_deadline_daa: duty.respond_until_daa, original_hard_daa: duty.original_hard_daa,
+            response_deadline_daa: duty.respond_until_daa,
+            original_hard_daa: duty.original_hard_daa,
             material_until_daa,
         };
         clock.check(&Key::CourtDutyClock(duty.id))?;
         Ok(clock)
     }
     pub fn check(&self, key: &Key) -> Result<(), String> {
-        if self.version != 1 || *key != Key::CourtDutyClock(self.duty_id)
+        if self.version != 1
+            || *key != Key::CourtDutyClock(self.duty_id)
             || !matches!(self.acquisition, Key::TirAcquisition(claim, ..) if claim == self.claim)
             || self.predecessor_daa.checked_add(1) != Some(self.first_eligible_daa)
             || self.predecessor_daa >= self.response_deadline_daa
@@ -55,11 +65,15 @@ impl CourtDutyClockV1 {
         // Such a requirement would reject an otherwise legal latest response.
         Ok(())
     }
-    pub(crate) fn check_service_binding(&self, service: &crate::palw_court_service_state_v2::CourtServiceStateV2) -> Result<(), String> {
+    pub(crate) fn check_service_binding(
+        &self,
+        service: &crate::palw_court_service_state_v2::CourtServiceStateV2,
+    ) -> Result<(), String> {
         let binding = service.claims.get(&self.claim).ok_or("duty clock lost original binding")?;
         if service.profile_id != self.profile_id
             || (self.allocation_id, self.source_id, self.original_hard_daa)
-                != (binding.allocation_id, binding.source_id, binding.hard_deadline_daa) {
+                != (binding.allocation_id, binding.source_id, binding.hard_deadline_daa)
+        {
             return Err("duty clock substitutes service binding".into());
         }
         Ok(())
@@ -68,10 +82,12 @@ impl CourtDutyClockV1 {
         self.check(&Key::CourtDutyClock(self.duty_id))?;
         let service = state.court_service_state_v1().ok_or("duty clock lost service binding")?;
         self.check_service_binding(service)?;
-        let frame = crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(state, self.claim)
-            .ok_or("duty clock lost original frame")?;
+        let frame =
+            crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(state, self.claim).ok_or("duty clock lost original frame")?;
         let plan = frame.plan_v1();
-        let Some(crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::TirAcquisition(row)) = state.staged_court_row_v1(&self.acquisition) else {
+        let Some(crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::TirAcquisition(row)) =
+            state.staged_court_row_v1(&self.acquisition)
+        else {
             return Err("duty clock lost actual acquisition".into());
         };
         row.check_structure_v1(&self.acquisition)?;

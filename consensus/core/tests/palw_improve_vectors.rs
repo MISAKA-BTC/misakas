@@ -6,6 +6,7 @@
 //! parts, and the promotion rule over score tables — and compared byte for byte with the files. `IMPROVE_BLESS=1` rewrites them, which is a change of the semantics and is
 //! reviewed as one. (`transitions.json` and `pool.json` come from the fold's own suite.)
 
+#![allow(warnings)]
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 

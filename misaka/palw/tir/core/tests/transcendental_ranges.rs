@@ -12,6 +12,7 @@
 //! * `IntLn`: for `m ∈ [2^24, 2^25)` the series part `2·sum` is in `[0, LN2_Q)`, so
 //!   `IntLn(x) ∈ [s·LN2_Q, (s + 1)·LN2_Q)` with `s = floor(log2 x) − 24 ∈ [−24, 38]`.
 
+#![allow(warnings)]
 use misaka_palw_tir::arith::{LN2_Q, ONE, int_exp, int_ln, int_rsqrt};
 
 #[test]

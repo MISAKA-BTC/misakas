@@ -6,6 +6,7 @@
 //! The verdict is asked past the court window too: the test prints the gate's refusal for the class (the NEXT wall, with its numbers) and
 //! asserts every reader names the same one.
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::Params;
 use kaspa_consensus_core::network::{NetworkId, NetworkType};
 use kaspa_consensus_core::palw_base0_profile::rc_job_context;

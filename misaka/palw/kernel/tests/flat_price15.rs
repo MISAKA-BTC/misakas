@@ -1,5 +1,6 @@
 //! Candidate pricing only. No fixture grants node activation, a new court or
 //! real-checkpoint task/fidelity/Final/population coverage.
+#![allow(warnings)]
 use misaka_palw_kernel::{flat_point9::point_relation_scope_v9, flat_price15::*, merkle4::FlatLayoutV4};
 use misaka_palw_tir::{DType, Ref, builder::ProgramBuilder, program::HISTORY_BOUND_V1_SMALL};
 
@@ -13,7 +14,7 @@ fn every_contiguous_row_and_merged_tail_is_within_the_new_bound() {
             for row in 0..rows {
                 let first = layout.leaf_of((row * width) as u64).unwrap();
                 let last = layout.leaf_of(((row + 1) * width - 1) as u64).unwrap();
-                assert!(last - first + 1 <= bound, "{shape:?} row{row}:{}>{bound}", last - first + 1);
+                assert!(last - first < bound, "{shape:?} row{row}:{}>{bound}", last - first + 1);
             }
         }
     }

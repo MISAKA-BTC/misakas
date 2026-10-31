@@ -32,8 +32,9 @@ impl PalwBeaconSourceCostBoundsV1 {
         x3_policy: &crate::palw_ruling_fences_v1::PalwClaimHardDeadlinePolicyV1,
         extension: Option<&crate::palw_ruling_fences_v1::PalwX3RetentionExtensionV1>,
     ) -> Result<u64, String> {
-        let material = crate::palw_ruling_fences_v1::palw_x3_material_term_with_retention_v1(self.material_sompi, x3_policy, extension)
-            .map_err(str::to_owned)?;
+        let material =
+            crate::palw_ruling_fences_v1::palw_x3_material_term_with_retention_v1(self.material_sompi, x3_policy, extension)
+                .map_err(str::to_owned)?;
         self.minimum_gross_fee_with_material(terms, material)
     }
 
@@ -131,7 +132,8 @@ impl Params {
             return Ok(());
         };
         // Fees are charged on opt-in sources and on paid-claim targets: both armed at or below.
-        let at_or_below = |a: Option<ForkActivation>| a.is_some_and(|a| a != ForkActivation::never() && a.daa_score() <= f.activation.daa_score());
+        let at_or_below =
+            |a: Option<ForkActivation>| a.is_some_and(|a| a != ForkActivation::never() && a.daa_score() <= f.activation.daa_score());
         if !at_or_below(self.palw_beacon_source_opt_in_v1.map(|o| o.activation))
             || !at_or_below(self.palw_claim_challenge_v2.map(|c| c.activation))
         {
@@ -167,12 +169,15 @@ impl crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
                 let authority = self.paid_claim_source_authority_v3(context)?;
                 let sponsor = authority.sponsor.ok_or("paid claim sponsor consent missing")?;
                 let derived = BeaconSourceFeeTargetV1 {
-                    target: target.clone(), sponsor: crate::palw_kernel_route_v1::palw_kernel_bond_id_v1(&sponsor),
+                    target: target.clone(),
+                    sponsor: crate::palw_kernel_route_v1::palw_kernel_bond_id_v1(&sponsor),
                     minimum_fee: fence.policy.minimum_fee_for(target)?,
                     max_sources: fence.policy.max_funded_sources.min(target.terms.max_total),
                 };
                 if self.beacon_source_fee_target_v5(context)? != derived
-                    || self.beacon_source_cost_bounds_v5(context)? != fence.policy.cost_bounds.ok_or("paid claim cost scope missing")? {
+                    || self.beacon_source_cost_bounds_v5(context)?
+                        != fence.policy.cost_bounds.ok_or("paid claim cost scope missing")?
+                {
                     return Err("paid claim source sponsor/floor/cap/cost authority substituted".into());
                 }
                 inputs.targets.insert(*context, derived);

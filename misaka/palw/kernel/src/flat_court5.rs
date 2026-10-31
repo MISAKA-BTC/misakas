@@ -315,20 +315,24 @@ pub(crate) fn decode_bounds_program(
 }
 /// Dispatch all terminal court kinds under the explicitly bound v5 profile.
 pub fn verify_flat_fault_v5(c: &FlatSegContextV5<'_>, f: &FlatFaultV5) -> Result<FlatConvictionV5, DismissalV1> {
-    let pr=common::prepare(c)?;
-    verify_flat_fault_prepared_v32(c,f,&pr)
+    let pr = common::prepare(c)?;
+    verify_flat_fault_prepared_v32(c, f, &pr)
 }
-pub(crate) fn verify_flat_fault_prepared_v32(c:&FlatSegContextV5<'_>,f:&FlatFaultV5,pr:&crate::element::PreparedV1<'_>)->Result<FlatConvictionV5,DismissalV1>{
+pub(crate) fn verify_flat_fault_prepared_v32(
+    c: &FlatSegContextV5<'_>,
+    f: &FlatFaultV5,
+    pr: &crate::element::PreparedV1<'_>,
+) -> Result<FlatConvictionV5, DismissalV1> {
     f.check_structure().map_err(|_| na("malformed bounded flat-v5 fault"))?;
     let wire = common::size_with_limit(f, common::FLAT_FAULT_MAX_BYTES_V4 - 2).map_err(|_| na("oversized flat-v5 fault"))? + 2;
-    let b = fault_bounds_prepared(c, &pr, f)?;
+    let b = fault_bounds_prepared(c, pr, f)?;
     if wire > b.filing_bytes {
         return Err(na("fault exceeds derived court bound"));
     }
     match f {
         FlatFaultV5::Leaf(f) => common::verify_leaf_prepared(
             c,
-            &pr,
+            pr,
             f,
             common::size_with_limit(f, common::FLAT_FAULT_MAX_BYTES_V4).map_err(|_| na("oversized leaf"))?,
         )
@@ -338,9 +342,9 @@ pub(crate) fn verify_flat_fault_prepared_v32(c:&FlatSegContextV5<'_>,f:&FlatFaul
             node: v.node,
             kind: FlatConvictionKindV5::Leaf { leaf: v.leaf },
         }),
-        FlatFaultV5::Whole(f) => whole(c, &pr, f),
-        FlatFaultV5::Malformed(f) => malformed(c, &pr, f),
-        FlatFaultV5::Decode(f) => decode(c, &pr, f),
+        FlatFaultV5::Whole(f) => whole(c, pr, f),
+        FlatFaultV5::Malformed(f) => malformed(c, pr, f),
+        FlatFaultV5::Decode(f) => decode(c, pr, f),
     }
 }
 

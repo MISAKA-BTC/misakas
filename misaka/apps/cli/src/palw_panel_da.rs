@@ -13,8 +13,8 @@
 
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::palw_panel_da_disclosure_v1::palw_panel_da_disclosure_object_v1;
-use kaspa_rpc_core::{GetPalwFenceScheduleRequest, PALW_USER_VIEW_PANEL_DA_DISCLOSURE_V1};
 use kaspa_rpc_core::api::rpc::RpcApi;
+use kaspa_rpc_core::{GetPalwFenceScheduleRequest, PALW_USER_VIEW_PANEL_DA_DISCLOSURE_V1};
 use serde_json::Value;
 
 use crate::node::Ctx;
@@ -57,8 +57,11 @@ pub(crate) enum PanelDaCmd {
 
 /// Parse a file's prompt ids: decimal u32s separated by whitespace, commas or the brackets of a JSON array.
 pub(crate) fn parse_ids(text: &str) -> Result<Vec<u32>, CliError> {
-    let ids: Result<Vec<u32>, _> =
-        text.split(|c: char| c.is_whitespace() || c == ',' || c == '[' || c == ']').filter(|t| !t.is_empty()).map(str::parse).collect();
+    let ids: Result<Vec<u32>, _> = text
+        .split(|c: char| c.is_whitespace() || c == ',' || c == '[' || c == ']')
+        .filter(|t| !t.is_empty())
+        .map(str::parse)
+        .collect();
     let ids = ids.map_err(|_| CliError::new(exit::GENERIC, "--ids-file: every id must be a decimal u32".to_string()))?;
     if ids.is_empty() {
         return Err(CliError::new(exit::GENERIC, "--ids-file holds no ids".to_string()));

@@ -3,7 +3,7 @@
 //! These APIs do not infer full128 approval or native free collateral from RPC.
 use crate::runtime_pack::commit::Refusal;
 use kaspa_consensus_core::palw_claim_challenge_v2::{
-    PAID_CLAIM_CLASSES_V2, PAID_CLAIM_JOBS_V2, PAID_CLAIM_LOCKS_V2, PalwPaidClaimAuthorityV2, PalwPaidClaimLockV2,
+    PAID_CLAIM_CLASSES_V2, PAID_CLAIM_JOBS_V2, PalwPaidClaimAuthorityV2, PalwPaidClaimLockV2,
 };
 use kaspa_consensus_core::palw_kernel_route_v1::PalwKernelRouteStateV1;
 use kaspa_hashes::Hash64;
@@ -469,17 +469,17 @@ pub fn sign_paid_claim_object_v2(
 }
 
 pub mod all_target_bootstrap;
+/// RFC-0007: the explicit drawn-verifier assumption report of one paid claim (reporting only; never a credit path).
+pub mod assumptions_v1;
 pub mod cli;
 pub mod material_generation_v5;
 pub mod material_generation_v7;
+/// RFC-0006: every registered class's derived worst-case bounds, with time/cost left UNKNOWN until measured.
+pub mod model_bounds_v1;
 pub mod private_bootstrap;
 pub mod producer_resources;
 pub mod provider_actions_v4;
 pub mod provider_handoff_v4;
-/// RFC-0007: the explicit drawn-verifier assumption report of one paid claim (reporting only; never a credit path).
-pub mod assumptions_v1;
-/// RFC-0006: every registered class's derived worst-case bounds, with time/cost left UNKNOWN until measured.
-pub mod model_bounds_v1;
 pub mod provider_reader_v4;
 
 /// Portable public material for the all-target CLI verifier. Every value is

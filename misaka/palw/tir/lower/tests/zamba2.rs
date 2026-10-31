@@ -3,6 +3,7 @@
 //! corpus entry `zamba2`; here the properties that make it a feature: the shared weights are ONE set of integer tensors in the artifact, every depth keeps its own
 //! KV history and adapters, the program is the same on the three implementations, and the spec follows the config's tying.
 
+#![allow(warnings)]
 mod common;
 
 use common::three_ways;

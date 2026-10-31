@@ -185,11 +185,9 @@ pub fn palw_paid_trap_reveal_end_v1(lifetime: &misaka_palw_kernel::claim_paid_v2
 
 /// What one Clean signer of a convicted claim loses of one held fee: `(forfeited, kept)`.
 pub fn palw_paid_trap_forfeit_v1(fee: u64) -> (u64, u64) {
-    let forfeited = u64::try_from(
-        u128::from(fee) * u128::from(PALW_PAID_CLAIM_TRAP_CHECK_FEE_FORFEIT_PERMILLE_V1.min(1_000)) / 1_000,
-    )
-    .unwrap_or(fee)
-    .min(fee);
+    let forfeited = u64::try_from(u128::from(fee) * u128::from(PALW_PAID_CLAIM_TRAP_CHECK_FEE_FORFEIT_PERMILLE_V1.min(1_000)) / 1_000)
+        .unwrap_or(fee)
+        .min(fee);
     (forfeited, fee - forfeited)
 }
 
@@ -331,12 +329,15 @@ impl Params {
     /// it moves); then the measured-value gate over its UNKNOWN policy (records EMPTY: dormant).
     pub fn validate_palw_paid_claim_trap_v1(&self) -> Result<(), PalwModeV2Error> {
         let Some(at) = self.palw_paid_claim_trap_v1.filter(|at| *at != ForkActivation::never()) else { return Ok(()) };
-        let at_or_below = |a: Option<ForkActivation>| a.is_some_and(|a| a != ForkActivation::never() && a.daa_score() <= at.daa_score());
+        let at_or_below =
+            |a: Option<ForkActivation>| a.is_some_and(|a| a != ForkActivation::never() && a.daa_score() <= at.daa_score());
         if !at_or_below(self.palw_claim_challenge_v2.as_ref().map(|f| f.activation)) {
             return Err(PalwModeV2Error::Invalid("palw_paid_claim_trap_v1 requires palw_claim_challenge_v2 at or below it"));
         }
         if !at_or_below(self.palw_audit_mesh_v1) {
-            return Err(PalwModeV2Error::Invalid("palw_paid_claim_trap_v1 requires palw_audit_mesh_v1 (its reveal object) at or below it"));
+            return Err(PalwModeV2Error::Invalid(
+                "palw_paid_claim_trap_v1 requires palw_audit_mesh_v1 (its reveal object) at or below it",
+            ));
         }
         if !at_or_below(self.palw_settlement_once_v1) {
             return Err(PalwModeV2Error::Invalid("palw_paid_claim_trap_v1 requires palw_settlement_once_v1 at or below it"));
@@ -400,7 +401,10 @@ mod tests {
         assert!(palw_paid_trap_commit_admits_v1(&PalwPaidTrapCommitInputV1 { now: 100, ..commit() }).is_err(), "at the seal window");
         assert!(palw_paid_trap_commit_admits_v1(&PalwPaidTrapCommitInputV1 { locked: true, ..commit() }).is_err(), "after the lock");
         assert!(palw_paid_trap_commit_admits_v1(&PalwPaidTrapCommitInputV1 { committed: true, ..commit() }).is_err(), "a second one");
-        assert!(palw_paid_trap_commit_admits_v1(&PalwPaidTrapCommitInputV1 { signer: bond(2), ..commit() }).is_err(), "not the producer");
+        assert!(
+            palw_paid_trap_commit_admits_v1(&PalwPaidTrapCommitInputV1 { signer: bond(2), ..commit() }).is_err(),
+            "not the producer"
+        );
     }
 
     #[test]
@@ -489,7 +493,9 @@ mod tests {
         assert_eq!(palw_paid_trap_commitment_key_v1(&[1; 64]).len(), 65);
         assert_ne!(palw_paid_trap_commitment_key_v1(&[1; 64]), palw_paid_trap_conviction_key_v1(&[1; 64]));
         assert_eq!(palw_paid_trap_held_fee_key_v1(&[1; 64], &[2; 64], 3).len(), 137);
-        assert!(palw_paid_trap_held_fee_key_v1(&[1; 64], &[2; 64], 3).starts_with(&palw_paid_trap_held_fee_prefix_v1(&[1; 64], &[2; 64])));
+        assert!(
+            palw_paid_trap_held_fee_key_v1(&[1; 64], &[2; 64], 3).starts_with(&palw_paid_trap_held_fee_prefix_v1(&[1; 64], &[2; 64]))
+        );
     }
 
     #[test]

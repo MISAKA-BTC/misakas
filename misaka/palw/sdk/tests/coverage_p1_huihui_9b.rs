@@ -13,6 +13,7 @@
 //!
 //! Run: `COV_P1_DIR=<snapshot> [COV_P1_CONTEXTS=8192,512] [COV_P1_DAA=5585,9000] [COV_P1_SIZE=1]
 //! cargo test --offline -p misaka-palw-sdk --test coverage_p1_huihui_9b -- --ignored --nocapture`
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{Params, palw_t12_shipped_params};
 use kaspa_consensus_core::palw_mode_v2::{PalwConsensusMode, PalwConsensusParamsV2};
 use kaspa_consensus_core::palw_tir_attempt_v1::{

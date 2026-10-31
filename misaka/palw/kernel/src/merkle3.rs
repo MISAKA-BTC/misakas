@@ -875,16 +875,33 @@ mod native_streaming_codec_tests {
     #[test]
     fn streaming_values_match_the_original_dtype_width_codec() {
         for dtype in DType::ALL {
-            let mut values=vec![0,1];
-            if dtype.contains(-1) {values.push(-1);}
-            let leaf=LeafOpeningV3 {dtype:dtype.tag(),shape:vec![values.len() as u64],axis:AXIS_ROW,line:0,tile:0,values,siblings:vec![[9;64]],other_root:[7;64]};
-            let mut expected=Vec::new();
-            leaf.dtype.serialize(&mut expected).unwrap();leaf.shape.serialize(&mut expected).unwrap();
-            leaf.axis.serialize(&mut expected).unwrap();leaf.line.serialize(&mut expected).unwrap();leaf.tile.serialize(&mut expected).unwrap();
+            let mut values = vec![0, 1];
+            if dtype.contains(-1) {
+                values.push(-1);
+            }
+            let leaf = LeafOpeningV3 {
+                dtype: dtype.tag(),
+                shape: vec![values.len() as u64],
+                axis: AXIS_ROW,
+                line: 0,
+                tile: 0,
+                values,
+                siblings: vec![[9; 64]],
+                other_root: [7; 64],
+            };
+            let mut expected = Vec::new();
+            leaf.dtype.serialize(&mut expected).unwrap();
+            leaf.shape.serialize(&mut expected).unwrap();
+            leaf.axis.serialize(&mut expected).unwrap();
+            leaf.line.serialize(&mut expected).unwrap();
+            leaf.tile.serialize(&mut expected).unwrap();
             (leaf.values.len() as u32).serialize(&mut expected).unwrap();
-            for value in &leaf.values {dtype.encode_le(*value,&mut expected);}
-            leaf.siblings.serialize(&mut expected).unwrap();leaf.other_root.serialize(&mut expected).unwrap();
-            assert_eq!(borsh::to_vec(&leaf).unwrap(),expected);
+            for value in &leaf.values {
+                dtype.encode_le(*value, &mut expected);
+            }
+            leaf.siblings.serialize(&mut expected).unwrap();
+            leaf.other_root.serialize(&mut expected).unwrap();
+            assert_eq!(borsh::to_vec(&leaf).unwrap(), expected);
         }
     }
 }

@@ -1,3 +1,4 @@
+#![allow(warnings)]
 use misaka_palw_tir_artifact::metadata_v16::*;
 #[test]
 fn correctly_rounded_profile_is_explicit_and_preserves_ieee_bits() {

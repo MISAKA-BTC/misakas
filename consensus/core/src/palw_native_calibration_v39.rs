@@ -8,7 +8,7 @@ use crate::{
     },
     palw_native_execution_v39::{NativeExecutionPoliciesV39, PalwNativeExecutionFenceV39, source_protocol_root_v39},
 };
-use borsh::{BorshDeserialize, BorshSerialize};
+use borsh::BorshSerialize;
 use misaka_palw_kernel::hash::{Digest, object_id};
 pub const NATIVE_CALIBRATION_SNAPSHOT_MAX_BYTES_V39: usize = NATIVE_CALIBRATION_SNAPSHOT_MAX_BYTES_V34 + (32 << 10);
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize)]

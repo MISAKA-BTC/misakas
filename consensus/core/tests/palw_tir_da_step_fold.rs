@@ -27,6 +27,7 @@
 //!
 //! Run: `cargo test -p kaspa-consensus-core --test palw_tir_da_step_fold`
 
+#![allow(warnings)]
 #[path = "palw_tir_fixture_common.rs"]
 #[allow(unused)]
 mod fixture;
@@ -321,7 +322,7 @@ fn outside_tir_owner_reacquires_all_typed_units_on_original_clock_and_counter() 
     run.at(FENCE2, &[public_reserve(&run, claim)], None);
     let original = run.s.claim(&claim).unwrap().clone();
     let reservation = run.s.legacy_dispute_v1(&claim).unwrap().clone();
-    let original_row = reservation.live[&bond_key(OTHER)].clone();
+    let original_row = reservation.live[&bond_key(OTHER)];
     let count = honest.binding.step_leaf_count;
     let units = [
         PalwDaUnitV1::TirStepLeaf { index: count },

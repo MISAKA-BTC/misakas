@@ -1,4 +1,5 @@
 //! Generic artifact preparation publishes only a complete, layer-bound v3 parameter map.
+#![allow(warnings)]
 use misaka_palw_kernel::trace::ParamCommitmentsV1;
 use std::path::Path;
 use std::process::Command;

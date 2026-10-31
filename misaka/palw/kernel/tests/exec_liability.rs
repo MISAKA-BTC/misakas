@@ -1,4 +1,5 @@
 //! EXEC's consumer-frozen horizon must survive computation Final, default, restore and root fee settlement.
+#![allow(warnings)]
 mod common;
 use common::chain::T;
 use common::ledger_world::*;

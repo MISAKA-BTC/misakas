@@ -32,10 +32,10 @@ impl ActiveWriter {
 }
 impl Drop for ActiveWriter {
     fn drop(&mut self) {
-        if let Some(writers) = WRITERS.get() {
-            if let Ok(mut writers) = writers.lock() {
-                writers.remove(&self.0);
-            }
+        if let Some(writers) = WRITERS.get()
+            && let Ok(mut writers) = writers.lock()
+        {
+            writers.remove(&self.0);
         }
     }
 }

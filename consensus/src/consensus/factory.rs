@@ -329,8 +329,18 @@ impl Factory {
         // premine-aware genesis identity. (Multisig/P2SH is consensus-disabled in PQ-only.)
         set_genesis_utxo_commitment_from_config(&mut config);
         Self::from_prepared_config_v1(
-            management_db, config, db_root_dir, db_parallelism, notification_root, counters,
-            tx_script_cache_counters, fd_budget, mining_rules, rocksdb_preset, wal_dir, cache_budget,
+            management_db,
+            config,
+            db_root_dir,
+            db_parallelism,
+            notification_root,
+            counters,
+            tx_script_cache_counters,
+            fd_budget,
+            mining_rules,
+            rocksdb_preset,
+            wal_dir,
+            cache_budget,
         )
     }
 

@@ -5,6 +5,7 @@
 //! reference pipeline run; an honest claim passes; a lie inside a stage, in an edge, or in `R`'s draw is found and convicted by a
 //! court reading only public commitments; withheld upstream material is `Unavailable`.
 
+#![allow(warnings)]
 #[path = "../../tir/core/tests/v2common/mod.rs"]
 mod v2common;
 

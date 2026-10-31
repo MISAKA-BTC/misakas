@@ -1,6 +1,7 @@
 //! All executable corpus models reserve executor/tree storage before construction.
 //! Requested byte counts and guard lifetime are tested; RSS and fees are not certified.
 #![cfg(feature = "node")]
+#![allow(warnings)]
 mod node_common;
 
 use kaspa_consensus_core::{

@@ -18,6 +18,7 @@
 //!
 //! Run: cargo test -p kaspa-consensus-core --test rcore_whole_gain_and_buyback
 
+#![allow(warnings)]
 #[path = "rcore_common.rs"]
 mod common;
 use common::*;

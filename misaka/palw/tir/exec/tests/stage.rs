@@ -9,6 +9,7 @@
 //! while their pipelines run on their own threads, failing members and early stops included, each
 //! member's run the run it has alone.
 
+#![allow(warnings)]
 #[path = "../../core/tests/common/mod.rs"]
 mod tircommon;
 

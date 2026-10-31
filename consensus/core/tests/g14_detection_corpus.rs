@@ -18,6 +18,7 @@
 //! This is the policy's arithmetic and the seat contract on a fixture model. It is NOT a measurement of any genesis family's real
 //! kernels, bytes or CPU (the design note's §7 lists those as unmeasured).
 
+#![allow(warnings)]
 use std::collections::BTreeSet;
 
 use kaspa_consensus_core::palw_backend::{
@@ -103,10 +104,12 @@ type Row = [i32; VOC];
 /// quantisation is where implementations can differ.
 fn step(m: &Model, s: &State, token: u32, kernel: Kernel) -> (State, Row) {
     let mut next = *s;
+    #[allow(clippy::needless_range_loop)]
     for i in 0..HID {
         next[i] = next[i].wrapping_add(m.e[token as usize][i]);
     }
     let mut x = [0i32; HID];
+    #[allow(clippy::needless_range_loop)]
     for j in 0..HID {
         let acc: i64 = if kernel == Kernel::Equivalent {
             let mut a: i128 = i128::from(m.e[token as usize][j]) * 16;
@@ -116,6 +119,7 @@ fn step(m: &Model, s: &State, token: u32, kernel: Kernel) -> (State, Row) {
             a as i64
         } else {
             let mut a: i64 = 0;
+            #[allow(clippy::needless_range_loop)]
             for i in 0..HID {
                 a += i64::from(m.ws[j][i]) * i64::from(next[i] >> 4);
             }
@@ -132,8 +136,10 @@ fn step(m: &Model, s: &State, token: u32, kernel: Kernel) -> (State, Row) {
         x[j] = if kernel == Kernel::Wrapping { shifted as i16 as i32 } else { shifted.clamp(-32_768, 32_767) as i32 };
     }
     let mut row = [0i32; VOC];
+    #[allow(clippy::needless_range_loop)]
     for v in 0..VOC {
         let mut a: i64 = 0;
+        #[allow(clippy::needless_range_loop)]
         for j in 0..HID {
             a += i64::from(m.wo[v][j]) * i64::from(x[j]);
         }
@@ -392,7 +398,7 @@ impl PalwExecutionBackendV1 for ToySeat {
         let mut acc = record(o.j, &o.checkpoint, &o.rows);
         let mut idx = o.j as usize;
         for sib in &o.path {
-            acc = if idx % 2 == 0 { digest(&[b"node", &acc, sib]) } else { digest(&[b"node", sib, &acc]) };
+            acc = if idx.is_multiple_of(2) { digest(&[b"node", &acc, sib]) } else { digest(&[b"node", sib, &acc]) };
             idx /= 2;
         }
         if Hash64::from_bytes(acc) != claim.execution_root {
@@ -429,7 +435,7 @@ impl PalwExecutionBackendV1 for ToySeat {
 fn court_dismisses(m: &Model, t: &Trace, leaf: u64) -> bool {
     let reference = ToySeat::new(m, Kernel::Reference, &t.prompt, &t.outputs);
     let i = leaf as usize;
-    if i % WIDTH as usize == 0 && reference.own_states[i] != t.checkpoints[i / WIDTH as usize] {
+    if i.is_multiple_of(WIDTH as usize) && reference.own_states[i] != t.checkpoints[i / WIDTH as usize] {
         return false;
     }
     let (_, row) = step(m, &reference.own_states[i], consumed(&t.prompt, &t.outputs, i), Kernel::Reference);
@@ -608,9 +614,24 @@ fn every_fault_class_is_detected_at_its_analytic_rate_and_the_fault_set_at_the_t
             Event::Fault,
             Some((0, 1)),
         ),
-        ("other_job_rows_one_interval", Deviation { rows_from_other_job_interval: Some((20, 0xBEEF)), ..Default::default() }, Event::Fault, Some((1, 1))),
-        ("other_model_one_interval", Deviation { other_model_interval: Some((20, 0xD00D)), ..Default::default() }, Event::Fault, Some((1, 1))),
-        ("consistent_borrowed_trace", Deviation { computed_on_prompt: Some(0x0B0E), ..Default::default() }, Event::Fault, Some((N - 1, N))),
+        (
+            "other_job_rows_one_interval",
+            Deviation { rows_from_other_job_interval: Some((20, 0xBEEF)), ..Default::default() },
+            Event::Fault,
+            Some((1, 1)),
+        ),
+        (
+            "other_model_one_interval",
+            Deviation { other_model_interval: Some((20, 0xD00D)), ..Default::default() },
+            Event::Fault,
+            Some((1, 1)),
+        ),
+        (
+            "consistent_borrowed_trace",
+            Deviation { computed_on_prompt: Some(0x0B0E), ..Default::default() },
+            Event::Fault,
+            Some((N - 1, N)),
+        ),
     ];
     for (i, (name, dev, want, d_bounds)) in fault_classes.iter().enumerate() {
         let seed = 0x1000 + i as u64;
@@ -702,13 +723,18 @@ fn honest_claims_are_never_flagged_and_a_wrong_verifier_never_convicts() {
                 for j in 0..N {
                     if let PalwDetectionOutcomeV2::Fault { first_leaf_index, .. } = inspect(&seat, &c, &[j]) {
                         wrong_flags += 1;
-                        assert!(court_dismisses(&m, &c.trace, first_leaf_index), "a wrong verifier's finding convicted an honest claim");
+                        assert!(
+                            court_dismisses(&m, &c.trace, first_leaf_index),
+                            "a wrong verifier's finding convicted an honest claim"
+                        );
                     }
                 }
             }
             checked += 1;
         }
     }
-    eprintln!("corpus honest: {checked} claims × all intervals clean under 2 correct seats; {wrong_flags} local flags by wrong seats, all dismissed");
+    eprintln!(
+        "corpus honest: {checked} claims × all intervals clean under 2 correct seats; {wrong_flags} local flags by wrong seats, all dismissed"
+    );
     assert!(wrong_flags > 0, "the wrong verifiers must actually disagree somewhere, or this test proves nothing");
 }

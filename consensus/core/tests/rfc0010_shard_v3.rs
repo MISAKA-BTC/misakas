@@ -18,6 +18,7 @@
 //!
 //! Run: `cargo test -p kaspa-consensus-core --test rfc0010_shard_v3`
 
+#![allow(warnings)]
 #[path = "palw_tir_fixture_common.rs"]
 #[allow(unused)]
 mod fixture;

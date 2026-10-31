@@ -96,7 +96,11 @@ mod tests {
     fn f03b2_overlapping_choices_serve_the_outsider_oversized_choice_within_deadline() {
         let (a, w, c) = (1_000u64, 10_000u64, 1u64);
         let hard = a + w;
-        let coord = |i: u64| { let mut x = [0u8; 64]; x[..8].copy_from_slice(&i.to_be_bytes()); x };
+        let coord = |i: u64| {
+            let mut x = [0u8; 64];
+            x[..8].copy_from_slice(&i.to_be_bytes());
+            x
+        };
         let mut choices = Vec::new();
         for i in 1..200u64 {
             choices.push(SharedChoiceV1 { deadline_daa: a + 400 + 3 * i, coordinate: coord(i), packets: 2 });

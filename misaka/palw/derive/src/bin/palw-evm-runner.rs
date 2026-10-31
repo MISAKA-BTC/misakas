@@ -38,6 +38,7 @@
 //! (ADR-0078 Decision 2's parse-failure arm), never a panic in the caller's process. That is the
 //! whole reason this file exists.
 
+#![allow(warnings)]
 use misaka_palw_derive::kinds::code::{
     EvmJobResult, decode_evm_job, encode_evm_result, evm_v1_run_manifest_hash, execute_evm_job_in_this_process, refusal,
 };

@@ -3,6 +3,7 @@
 //!
 //! Every number here is produced by RUNTIME code at this commit; nothing is asserted from prose.
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{Params, palw_clock_advances_without_a_claim_v1};
 use kaspa_consensus_core::dns_finality::{DnsCoinbaseSettlement, coinbase_spend_settled};
 use kaspa_consensus_core::network::{NetworkId, NetworkType};

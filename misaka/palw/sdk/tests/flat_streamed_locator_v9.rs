@@ -1,5 +1,6 @@
 //! Bounded independent mapped execution and ordinary-only public acquisition.
 //! Synthetic controls do not count as checkpoint/Final/population coverage.
+#![allow(warnings)]
 use kaspa_consensus_core::palw_flat_model_vector_v9::FlatModelVectorViewV9;
 use misaka_palw_kernel::{
     flat_court5::{FlatHeaderV5, FlatOperandV5, flat_profile_commitment_v5, flat_trace_profile_id_v5},

@@ -21,6 +21,7 @@
 //!
 //! The rule itself is exercised on testnet-12's fold by `rcore_f2_lock_redate`.
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{
     ForkActivation, MAINNET_PARAMS, PALW_T12_POST_LAUNCH_FENCE_DAA, PALW_T12_POST_LAUNCH_FENCE_V2_DAA, Params, SIMNET_PARAMS,
     TESTNET_PARAMS, devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params, palw_t12_launch_params_v1,
@@ -31,6 +32,7 @@ use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
 
 /// testnet-12 as the fleet runs it — the DAA-750 post-launch release (`c3dbaee3c`): params, identity,
 /// schedule. `palw_final_lock_life_is_t12_only`'s `T12_RELEASE`; this fence, dormant, must not move it.
+// re-pin 2026-10-29 @d3ed36fdc77d: G14 at DAA 17400 moved testnet-12 params and schedule ids; the handshake identity stayed 5de80e64 (was dbbc9104…, 7c652212…)
 const T12_RELEASE: (&str, &str, &str) = (
     "dbbc9104a2ee754f0f053a6e1614118979fd2c3dc87cbe6bffcf6dcaf4bd59c9",
     "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
@@ -139,6 +141,8 @@ fn arming_the_retro_life_moves_the_params_and_schedule_ids_but_not_the_identity(
     let mut genesis = palw_t12_launch_params_v1();
     genesis.palw_final_lock_life = Some(ForkActivation::new(0));
     genesis.palw_final_lock_life_retro = Some(ForkActivation::new(0));
+    genesis.palw_final_lock_full_collateral = Some(ForkActivation::new(17_400));
+    genesis.sync_palw_final_lock_full_collateral();
     genesis.sync_palw_rcore_plus();
     genesis.validate_palw_v2().expect("a network may be born with the rule");
     assert_ne!(genesis.consensus_identity_id().to_string(), palw_t12_launch_params_v1().consensus_identity_id().to_string());

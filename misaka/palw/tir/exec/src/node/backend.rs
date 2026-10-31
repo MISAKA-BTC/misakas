@@ -329,12 +329,11 @@ impl TirBackendV1 {
             if let Some(mask) = mask.as_ref() {
                 return mask.select(mask.state_after(before).as_ref(), row, index, &sampling).0;
             }
-            if let Some(config) = pipeline.as_ref() {
-                if let Some(lane) =
+            if let Some(config) = pipeline.as_ref()
+                && let Some(lane) =
                     kaspa_consensus_core::palw_decode_pipeline_v4::decode_select_v4(config, &sampling, before, row, &|_| true)
-                {
-                    return lane as u32;
-                }
+            {
+                return lane as u32;
             }
             kaspa_consensus_core::palw_decode_select_v2::decode_token_select_v2(row, &sampling.seed, index, sampling.temperature_q)
                 as u32
@@ -2086,7 +2085,7 @@ impl TirBackendV1 {
         runs: &[kaspa_consensus_core::palw_tir_court_v1::PalwTirStepRunDisclosureV1],
         leaf_index: u64,
         rules: &PalwTirCourtRulesV1,
-        limits: kaspa_consensus_core::palw_tir_court_v1::PalwTirBuilderWorkLimitsV1,
+        _limits: kaspa_consensus_core::palw_tir_court_v1::PalwTirBuilderWorkLimitsV1,
         copy_budget_bytes: u64,
         probe: impl FnOnce(&TirEvidenceV1<'_>) -> R,
     ) -> Result<R, String> {

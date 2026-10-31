@@ -27,6 +27,7 @@
 //!   cargo test -p kaspa-consensus-core --test audit_repro_01_exec_quanta_mint_has_no_byte_bound_while \
 //!       -- --nocapture --test-threads=1
 
+#![allow(warnings)]
 use std::time::Instant;
 
 use kaspa_consensus_core::Hash64;

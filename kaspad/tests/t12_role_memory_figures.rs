@@ -32,6 +32,7 @@
 //! Nothing is asserted beyond the derivations deriving: this is the operator's worksheet, pinned to
 //! the code that reserves.
 
+#![allow(warnings)]
 use kaspa_consensus_core::palw_resource_profile_v1::{
     PalwCaptureRetentionV1, PalwResourceRoleV1, PalwRuntimeLimitsV1, PalwRuntimeProfileV1, palw_attempt_capture_folds_v1,
     palw_profile_max_tile_len_v1, palw_resource_profile_v1,

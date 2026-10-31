@@ -20,6 +20,7 @@
 //!
 //! Nothing here changes consensus code. Interim values are not production values.
 
+#![allow(warnings)]
 mod common;
 
 use common::chain::T;

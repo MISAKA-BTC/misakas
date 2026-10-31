@@ -18,6 +18,7 @@
 //! adjudicator is profile-generic (`palw_forged_output_tiled_fault_v1` reads the binding's tiled
 //! integer head, nothing of the width); T18m's 2M cell belongs to that flag day's gate.
 
+#![allow(warnings)]
 use super::*;
 
 /// An honest claim's own first token, "refuted" by its runner-up: the tiled pin of a lane that does

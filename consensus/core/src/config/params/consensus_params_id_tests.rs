@@ -1,5 +1,4 @@
 //! **`params`'s `consensus_params_id_tests` module**, moved out of `params.rs` (2026-10-12, a behaviour-preserving split: the module path and every item in it are unchanged; only the file moved).
-#![cfg(test)]
 
 use super::*;
 
@@ -47,6 +46,7 @@ fn the_offence_attribution_fence_is_genesis_only_and_rides_its_four_fences() {
     }
     let refused_with = |edit: &dyn Fn(&mut Params), needle: &str| {
         let mut p = t12.clone();
+        palw_t12_arm_after_int13_at_v1(&mut p, PALW_T12_G14_17000_FENCES_V1, None);
         // int-12: the RFC-0007 fences ride the 5,300 list and need `palw_objective_offence`; take them away first, so the
         // edit below meets the attribution fence's own refusal (the release's list is not what this test asks about).
         p.palw_capped_onboarding_v1 = None;
@@ -3654,7 +3654,9 @@ fn the_testnet_12_dns_set_is_mainnet_assumed_and_nobody_elses_moved() {
 
 #[test]
 fn staged_public_court_has_independent_dormant_schedule_and_block_clock() {
-    for p in [MAINNET_PARAMS, TESTNET_PARAMS, DEVNET_PARAMS, SIMNET_PARAMS, palw_rc_shipped_params(), palw_t12_shipped_params()] {
+    let t12 = palw_t12_shipped_params();
+    assert_eq!(t12.palw_staged_public_court_v1.map(|f| f.daa_score()), Some(18_400));
+    for p in [MAINNET_PARAMS, TESTNET_PARAMS, DEVNET_PARAMS, SIMNET_PARAMS, palw_rc_shipped_params()] {
         assert!(p.palw_staged_public_court_v1.is_none());
         assert!(!p.palw_staged_public_court_v1_active_at(u64::MAX));
         let mut future = p.clone();

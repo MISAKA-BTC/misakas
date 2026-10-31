@@ -6,6 +6,7 @@
 //! `tests/three_way.rs` (it walks every fixture). Here: the equality with the transformers class on the same weights, λ as a
 //! constant of the weights (the two `[1]` params of each layer), the court, and the refusals.
 
+#![allow(warnings)]
 mod common;
 
 use misaka_palw_tir_lower::fidelity;

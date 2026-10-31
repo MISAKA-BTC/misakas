@@ -26,6 +26,7 @@
 //! * it is an entry of the release's list, so the drill's `--palw-drill-fence-at` moves it with the
 //!   others and the release's arming validates with it.
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::drill::{PalwDrillSaltV1, palw_drill_post_launch_fences_at_v1};
 use kaspa_consensus_core::config::params::{
     ForkActivation, PALW_T12_POST_LAUNCH_FENCE_DAA, PALW_T12_POST_LAUNCH_FENCES_V1, Params, SIMNET_PARAMS, TESTNET_PARAMS,
@@ -38,11 +39,11 @@ use kaspa_consensus_core::fork_id_v1::{evaluate_fork_id_v1, fork_id_gate_fences_
 /// `PALW_T12_POST_LAUNCH_FENCES_V1` (this one among them) at DAA 750, re-pinned by `scripts/release/t12-repin.sh`
 /// with it (the launch release was `b8564b88…` / `5de80e64…` / `93da24cc…`, which
 /// `palw_t12_launch_params_v1()` still hashes to): params, identity, schedule.
-// re-pin 2026-10-08 @42452229ee51: no DAA-9,000 flag day (user, 2026-10-08): the int-13 list is dormant; ids back to the int-12 release (was 2e567642…, 5f5df817…)
+// re-pin 2026-10-30 @64535b7bf7e8: User selected DAA18400 for the unpublished G14 schedule on 2026-10-30; preserve the current main CI fixes (was 73e67678…, fd42c167…)
 const T12_RELEASE: (&str, &str, &str) = (
-    "5ee7fd8ee019968cf52929b844cf9ddfb1aad500842a89cf04bced8ba4edefb6",
+    "3e6da238306cfdb7e71599d5ef8fb314f1b3ff33a50673af1321f3da9cfa5b94",
     "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-    "1678e07359f6727e96224041450a3b1d2aadcf8acd6bb6db0c277ff4d401c9b9",
+    "b4706ae535fc2c9e4f0a0fe1b6cb0456025f3e00c1b8aba5cde02191f46f9194",
 );
 
 /// The post-launch release's height (DAA 750) and two more an operator might pick. Never 1,000 —
@@ -192,6 +193,11 @@ fn the_release_list_arms_it_and_the_drill_moves_it() {
         (fence.set)(&mut armed, Some(ForkActivation::new(750)));
     }
     armed.validate_palw_v2().expect("the release's list at DAA 750 is a runnable testnet-12 ruleset");
+    kaspa_consensus_core::config::params::palw_t12_arm_after_int13_at_v1(
+        &mut armed,
+        kaspa_consensus_core::config::params::PALW_T12_G14_17000_FENCES_V1,
+        None,
+    );
     assert_eq!(
         format!("{armed:?}"),
         format!("{:?}", palw_t12_release_v1_params()),

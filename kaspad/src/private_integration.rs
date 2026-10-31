@@ -34,8 +34,8 @@ pub mod g14_drill_factory;
 pub use bootstrap::export_private_complete_bootstrap_v1;
 mod claim_paid_bootstrap;
 mod paid_request;
-pub use paid_request::generate_private_paid_request_v4;
 pub use claim_paid_bootstrap::{PrivatePaidNativeRequestV4, PrivatePaidProgramRequestV3, export_private_paid_program_work_v3};
+pub use paid_request::generate_private_paid_request_v4;
 mod paid_claim_factory;
 pub use paid_claim_factory::private_paid_claim_params_v3;
 mod paid_v4_factory;
@@ -46,13 +46,13 @@ mod paid_v4_bootstrap;
 pub use paid_v4_bootstrap::{export_private_paid_bootstrap_v4, export_private_source_paid_bootstrap_v1};
 mod native_provider;
 pub use native_provider::PrivateNativeCustodySpecV3;
+mod exec_origin_coverage_bracket_v2;
+mod exec_origin_coverage_v1;
 mod kernel_paid_producer_v4;
 mod paid_claim_observation_v5;
 mod paid_claim_observation_v6;
 pub(crate) mod recovery_ack_carrier_v4;
 mod recovery_observation_v4;
-mod exec_origin_coverage_bracket_v2;
-mod exec_origin_coverage_v1;
 pub use kernel_paid_producer_v4::PrivateKernelPaidWorkSpecV4;
 mod kernel_paid_checker_v4;
 pub use kernel_paid_checker_v4::PrivateKernelPaidCheckSpecV4;
@@ -64,8 +64,8 @@ mod source_bootstrap_producer_v1;
 pub use source_bootstrap_producer_v1::PrivateSourceBootstrapProducerSpecV1;
 mod source_bootstrap_factory_v1;
 pub use source_bootstrap_factory_v1::{
-    private_source_bootstrap_paid_params_v1, private_source_bootstrap_paid_params_with_consumer_v6, private_source_bootstrap_params_v1,
-    private_source_verifier_economics_params_v2,
+    private_source_bootstrap_paid_params_v1, private_source_bootstrap_paid_params_with_consumer_v6,
+    private_source_bootstrap_params_v1, private_source_verifier_economics_params_v2,
 };
 mod paid_material_generation_export_v5;
 pub use paid_material_generation_export_v5::PrivatePaidMaterialGenerationExportSpecV5;
@@ -198,7 +198,9 @@ fn private_expected_retirement_v1(
 ) -> Result<kaspa_consensus_core::config::params::Params, String> {
     use kaspa_consensus_core::config::params::ForkActivation;
     match config.params.palw_dns_retirement.map(|r| r.activation) {
-        Some(activation) if activation != ForkActivation::new(1) => private_late_retirement_params_v1(expected, activation.daa_score()),
+        Some(activation) if activation != ForkActivation::new(1) => {
+            private_late_retirement_params_v1(expected, activation.daa_score())
+        }
         _ => Ok(expected),
     }
 }
@@ -323,9 +325,7 @@ pub fn private_g14_drill_params_v1(
 
 /// The G14 drill a running Config claims to be (option (b) armed is the drill's mark: no other private profile arms it), rebuilt from
 /// its salt, height, set and Panel so its records and ruleset id can be checked; `None` for every other profile.
-fn private_g14_drill_of_config_v1(
-    config: &Config,
-) -> Result<Option<self::g14_drill_factory::PrivateG14DrillV1>, String> {
+fn private_g14_drill_of_config_v1(config: &Config) -> Result<Option<self::g14_drill_factory::PrivateG14DrillV1>, String> {
     use self::g14_drill_factory::{PrivateG14DrillModeV1, PrivateG14DrillSetV1, private_g14_drill_v1};
     use kaspa_consensus_core::config::params::ForkActivation;
     let Some(at) = config.params.palw_g14_route_required_v1.filter(|f| *f != ForkActivation::never()) else { return Ok(None) };
@@ -453,11 +453,8 @@ pub fn private_probe_manifest(config: &Config) -> serde_json::Value {
             self::g14_drill_factory::PrivateG14DrillModeV1::Genesis => "genesis",
             self::g14_drill_factory::PrivateG14DrillModeV1::Cross { .. } => "cross",
         };
-        let records: Vec<serde_json::Value> = drill
-            .records
-            .iter()
-            .map(|r| serde_json::json!({"fence": r.fence.name(), "activationDaa": r.activation_daa}))
-            .collect();
+        let records: Vec<serde_json::Value> =
+            drill.records.iter().map(|r| serde_json::json!({"fence": r.fence.name(), "activationDaa": r.activation_daa})).collect();
         let flag_days = self::g14_drill_factory::PRIVATE_G14_DRILL_FLAG_DAYS_V1.to_vec();
         manifest["g14Drill"] = serde_json::json!({
             "version": 1,

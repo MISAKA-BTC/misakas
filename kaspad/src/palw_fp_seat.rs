@@ -310,10 +310,13 @@ pub fn palw_fp_seat_draw_under_policy_v2(
     counts: PalwFpChainCountsV1,
     context_leaves: Option<u64>,
     policy: &kaspa_consensus_core::palw_detection_policy_v1::PalwDetectionPolicyV1,
-) -> Result<(PalwFpSeatDrawV1, kaspa_consensus_core::palw_detection_policy_v1::PalwDetectionPlanV1), kaspa_consensus_core::palw_detection_policy_v1::PalwDetectionRefusalV1>
-{
+) -> Result<
+    (PalwFpSeatDrawV1, kaspa_consensus_core::palw_detection_policy_v1::PalwDetectionPlanV1),
+    kaspa_consensus_core::palw_detection_policy_v1::PalwDetectionRefusalV1,
+> {
     use kaspa_consensus_core::palw_detection_policy_v1::{
-        PalwDetectionCheckerV1, PalwDetectionClaimFactsV1, PalwDetectionDrawBindingV2, PalwDetectionRefusalV1, palw_detection_seat_rounds_v2,
+        PalwDetectionCheckerV1, PalwDetectionClaimFactsV1, PalwDetectionDrawBindingV2, PalwDetectionRefusalV1,
+        palw_detection_seat_rounds_v2,
     };
     let plan = policy.plan_v1(&PalwDetectionClaimFactsV1 {
         attempt_lane: !duty.free_prompt,

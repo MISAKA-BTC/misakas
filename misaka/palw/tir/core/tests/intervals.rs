@@ -7,6 +7,7 @@
 //! theirs can overflow on any weights, token or position), every committed value of a hostile-weight
 //! run lies inside its node's interval, and programs that CAN overflow are refused by name.
 
+#![allow(warnings)]
 mod common;
 
 use common::Lcg;

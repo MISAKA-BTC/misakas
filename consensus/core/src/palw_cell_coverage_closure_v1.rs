@@ -183,7 +183,7 @@ impl<'a> PalwCellClosureModeV1<'a> {
         accepted_daa: u64,
         router_binding: Option<&'a crate::palw_router_binding_v2::PalwRouterBindingRowV2>,
     ) -> Self {
-        if !cell_closure_from_daa.is_some_and(|from| accepted_daa >= from) {
+        if cell_closure_from_daa.is_none_or(|from| accepted_daa < from) {
             Self::Off
         } else if memory_routing_from_daa.is_some_and(|from| accepted_daa >= from) {
             Self::MemoryRoutingV2 { router_binding: router_binding.filter(|row| row.bound_from_daa <= accepted_daa) }
@@ -347,7 +347,7 @@ pub fn palw_cell_closure_court_convicts_v2(
     profile: &PalwShapeProfileV3,
     router_binding: Option<&crate::palw_router_binding_v2::PalwRouterBindingRowV2>,
 ) -> bool {
-    if !memory_routing_from_daa.is_some_and(|from| accepted_daa >= from) {
+    if memory_routing_from_daa.is_none_or(|from| accepted_daa < from) {
         return palw_cell_closure_court_convicts_v1(cell_closure_from_daa, accepted_daa, profile);
     }
     let binding = router_binding.filter(|row| row.bound_from_daa <= accepted_daa);
@@ -397,7 +397,7 @@ impl Params {
         if self.has_isolated_g14_genesis_v1() {
             return Ok(());
         }
-        match palw_cell_closure_arming_record_admits_v1(self.genesis.hash, at, records) {
+        match palw_cell_closure_arming_record_admits_v1(self.palw_arming_record_genesis_v1(), at, records) {
             Ok(()) => Ok(()),
             Err(crate::palw_g14_gates_v1::PalwG14ArmingRefusalV1::NoRecord) => Err(PalwModeV2Error::Invalid(
                 "palw_cell_coverage_closure_v1 cannot be armed: the closure rule (RFC-0006 R6-CELL round 4) is built, but no arm-readiness \

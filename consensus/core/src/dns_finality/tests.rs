@@ -1,5 +1,4 @@
 //! **`dns_finality`'s `tests` module**, moved out of `dns_finality.rs` (2026-10-12, a behaviour-preserving split: the module path and every item in it are unchanged; only the file moved).
-#![cfg(test)]
 
 use super::*;
 use crate::palw_state_v2::{PALW_V2_MAX_DEFERRED_VALIDATOR_PAYOUTS, PALW_V2_MAX_RESERVE_DRIP_PAYOUTS};

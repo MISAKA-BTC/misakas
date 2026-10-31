@@ -216,8 +216,11 @@ pub fn palw_hybrid_state_chunk_map_name_v3() -> String {
 /// `state_chunk_map_id` for a hybrid class whose attention half is [v3](tiled_kv_state_chunk_map_id_v3).
 pub fn hybrid_state_chunk_map_id_v3() -> Hash64 {
     crate::palw_step::state_chunk_map_id_parts_v1(&[
-        b"palw-hybrid-state/attn=", PALW_TILED_KV_STATE_CHUNK_MAP_NAME_V3.as_bytes(),
-        b"/gdn=", PALW_GDN_STATE_CHUNK_MAP_NAME_V2.as_bytes(), b"/v3",
+        b"palw-hybrid-state/attn=",
+        PALW_TILED_KV_STATE_CHUNK_MAP_NAME_V3.as_bytes(),
+        b"/gdn=",
+        PALW_GDN_STATE_CHUNK_MAP_NAME_V2.as_bytes(),
+        b"/v3",
     ])
 }
 
@@ -257,8 +260,11 @@ pub fn palw_hybrid_state_chunk_map_name_v4() -> String {
 /// `state_chunk_map_id` for a hybrid class under the held map.
 pub fn hybrid_state_chunk_map_id_v4() -> Hash64 {
     crate::palw_step::state_chunk_map_id_parts_v1(&[
-        b"palw-hybrid-state/attn=", PALW_TILED_KV_STATE_CHUNK_MAP_NAME_V4.as_bytes(),
-        b"/gdn=", PALW_GDN_STATE_CHUNK_MAP_NAME_V2.as_bytes(), b"/v4",
+        b"palw-hybrid-state/attn=",
+        PALW_TILED_KV_STATE_CHUNK_MAP_NAME_V4.as_bytes(),
+        b"/gdn=",
+        PALW_GDN_STATE_CHUNK_MAP_NAME_V2.as_bytes(),
+        b"/v4",
     ])
 }
 
@@ -278,8 +284,11 @@ pub fn palw_hybrid_state_chunk_map_name_v5() -> String {
 /// `state_chunk_map_id` for a version-3 hybrid class under the held map (P0a).
 pub fn hybrid_state_chunk_map_id_v5() -> Hash64 {
     crate::palw_step::state_chunk_map_id_parts_v1(&[
-        b"palw-hybrid-state/attn=", PALW_TILED_KV_STATE_CHUNK_MAP_NAME_V4.as_bytes(),
-        b"/gdn=", PALW_GDN_STATE_CHUNK_MAP_NAME_V3.as_bytes(), b"/v5",
+        b"palw-hybrid-state/attn=",
+        PALW_TILED_KV_STATE_CHUNK_MAP_NAME_V4.as_bytes(),
+        b"/gdn=",
+        PALW_GDN_STATE_CHUNK_MAP_NAME_V3.as_bytes(),
+        b"/v5",
     ])
 }
 
@@ -372,9 +381,7 @@ pub fn palw_class_step_ladder_v1(network_ladder: u64, profile: &PalwShapeProfile
 
 /// The actual layer order used by held native layout constructors and their
 /// allocation preflight; this does not construct or validate a layout.
-pub(crate) fn held_state_layer_indices_v4(
-    profile: &PalwShapeProfileV3, kind: PalwLayerKindV1,
-) -> impl Iterator<Item = u16> + '_ {
+pub(crate) fn held_state_layer_indices_v4(profile: &PalwShapeProfileV3, kind: PalwLayerKindV1) -> impl Iterator<Item = u16> + '_ {
     (0..profile.layer_count).filter(move |&layer| profile.layer_kind(layer) == kind)
 }
 
@@ -1134,8 +1141,11 @@ pub fn palw_hybrid_state_chunk_map_name_v1() -> String {
 /// `state_chunk_map_id` for a class with both kinds of layer.
 pub fn hybrid_state_chunk_map_id_v1() -> Hash64 {
     crate::palw_step::state_chunk_map_id_parts_v1(&[
-        b"palw-hybrid-state/attn=", PALW_INTEGER_KV_STATE_CHUNK_MAP_NAME_V2.as_bytes(),
-        b"/gdn=", PALW_GDN_STATE_CHUNK_MAP_NAME_V1.as_bytes(), b"/v1",
+        b"palw-hybrid-state/attn=",
+        PALW_INTEGER_KV_STATE_CHUNK_MAP_NAME_V2.as_bytes(),
+        b"/gdn=",
+        PALW_GDN_STATE_CHUNK_MAP_NAME_V1.as_bytes(),
+        b"/v1",
     ])
 }
 
@@ -1196,8 +1206,11 @@ pub fn palw_hybrid_state_chunk_map_name_v2() -> String {
 /// `state_chunk_map_id` for a hybrid class whose recurrence half is [v2](gdn_state_chunk_map_id_v2).
 pub fn hybrid_state_chunk_map_id_v2() -> Hash64 {
     crate::palw_step::state_chunk_map_id_parts_v1(&[
-        b"palw-hybrid-state/attn=", PALW_INTEGER_KV_STATE_CHUNK_MAP_NAME_V2.as_bytes(),
-        b"/gdn=", PALW_GDN_STATE_CHUNK_MAP_NAME_V2.as_bytes(), b"/v2",
+        b"palw-hybrid-state/attn=",
+        PALW_INTEGER_KV_STATE_CHUNK_MAP_NAME_V2.as_bytes(),
+        b"/gdn=",
+        PALW_GDN_STATE_CHUNK_MAP_NAME_V2.as_bytes(),
+        b"/v2",
     ])
 }
 

@@ -3,6 +3,7 @@
 //! directory) is exercised by every test that reads a file, and every hex value is computed by the
 //! build under test — nothing here is a literal a re-genesis would have to re-pin.
 
+#![allow(warnings)]
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 

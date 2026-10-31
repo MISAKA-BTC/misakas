@@ -328,10 +328,10 @@ impl Params {
             .palw_source_verifier_economics_v2
             .filter(|f| f.activation != ForkActivation::never())
             .map(|f| (f.activation.daa_score(), f.policy));
-        if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) = &self.palw_consensus_mode {
-            if b.state.selected_source_economics_v2 != mirror {
-                return Err(M::Invalid("source economics mirror differs"));
-            }
+        if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) = &self.palw_consensus_mode
+            && b.state.selected_source_economics_v2 != mirror
+        {
+            return Err(M::Invalid("source economics mirror differs"));
         }
         if let Some(f) = self.palw_source_verifier_economics_v2 {
             f.policy.validate().map_err(M::InvalidOwned)?;
@@ -546,12 +546,11 @@ impl PalwChainStateV2 {
             // native anchored epoch should have prepared its governor, deleting
             // the entire namespace must not turn its duties into a legacy epoch.
             let now = self.last_point().map_or(0, |p| p.daa_score);
-            if params.selected_source_economics_v2.as_ref().is_some_and(|(at, _)| now >= *at) {
-                if let Some(epoch) = self.source_bootstrap_epoch_v1()? {
-                    if govern_v2(params, &epoch, now).map_err(&native)?.is_some() {
-                        return Err(bad("active anchored epoch lacks economic governor"));
-                    }
-                }
+            if params.selected_source_economics_v2.as_ref().is_some_and(|(at, _)| now >= *at)
+                && let Some(epoch) = self.source_bootstrap_epoch_v1()?
+                && govern_v2(params, &epoch, now).map_err(&native)?.is_some()
+            {
+                return Err(bad("active anchored epoch lacks economic governor"));
             }
             return Ok(());
         }
@@ -657,10 +656,10 @@ impl PalwChainStateV2 {
                             return Err(bad("principal refund receipt substituted"));
                         }
                     }
-                    if let Some(at) = row.refund_acknowledged_daa {
-                        if at <= row.until_daa || at > now || row.refund_acknowledged_block == row.refund_queued_block {
-                            return Err(bad("refund ACK clock"));
-                        }
+                    if let Some(at) = row.refund_acknowledged_daa
+                        && (at <= row.until_daa || at > now || row.refund_acknowledged_block == row.refund_queued_block)
+                    {
+                        return Err(bad("refund ACK clock"));
                     }
                 }
                 (Some(2), 133) => {
@@ -893,10 +892,10 @@ impl PalwChainStateV2 {
             }
         }
         for (key, payout) in self.pending_payouts_iter() {
-            if let Some((payload, amount)) = queues.remove(key) {
-                if payout.payload != payload || payout.amount < amount {
-                    return Err(bad("source queue exceeds native payout"));
-                }
+            if let Some((payload, amount)) = queues.remove(key)
+                && (payout.payload != payload || payout.amount < amount)
+            {
+                return Err(bad("source queue exceeds native payout"));
             }
         }
         if !queues.is_empty() {
@@ -932,9 +931,7 @@ impl PalwChainStateV2 {
         })?;
         let lease = reserve_native_requests_v1(bytes).map_err(S::NativeResource)?;
         let g = read_v2::<PalwSourceVerifierEconomicsEpochV2, 1>(route, &[0])
-            .map_err(|why| {
-                crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, |why| S::CarriageInconsistent(why))
-            })?
+            .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, S::CarriageInconsistent))?
             .ok_or_else(|| S::CarriageInconsistent("source exposure has no governor".into()))?;
         if g.version != 2
             || g.policy.validate().is_err()
@@ -944,9 +941,8 @@ impl PalwChainStateV2 {
             return Err(S::CarriageInconsistent("source exposure governor invalid".into()));
         }
         for ((_, key), bytes) in rows() {
-            let h = decode_v2::<PalwSourceVerifierBondHoldV2>(bytes).map_err(|why| {
-                crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, |why| S::CarriageInconsistent(why))
-            })?;
+            let h = decode_v2::<PalwSourceVerifierBondHoldV2>(bytes)
+                .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, S::CarriageInconsistent))?;
             if key.as_slice() != actor_key_v2(3, &h.actor) || h.version != 2 || h.policy != g.policy.id() || h.until_daa != g.until_daa
             {
                 return Err(S::CarriageInconsistent("source exposure aggregate identity".into()));

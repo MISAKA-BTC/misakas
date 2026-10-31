@@ -83,6 +83,15 @@ pub(super) async fn ready_native_seats(cw: &mut Cw) {
         assert!(fold.readiness_row_is_fresh(row, cw.net.daa()));
         assert!(state.bond(&cw.net.bond(card)).unwrap().capable_classes.contains(&cw.v2_class));
     }
+    if cw.no_seam {
+        let registry = cw.net.chain.ctx.consensus.palw_model_registry_v1().expect("the native registry read");
+        let class = registry.classes.iter().find(|class| class.class_id == cw.v2_class).expect("the registered class");
+        assert_eq!(
+            class.ready_seats_now,
+            cw.net.chain.bonds.len() as u32,
+            "all fixture seats must qualify through the real readiness predicate: {registry:?}"
+        );
+    }
 }
 
 /// Anchor on an actual attempt, then carry the exact seats' signed native V3
@@ -133,7 +142,7 @@ async fn finalize_native_root(cw: &mut Cw, s: &Session) -> (u64, Obj) {
             cw.net.daa() < end,
             "native Final must be reachable before the signed root expiry: claim {:?}, root {:?}",
             cw.net.chain.tip_state().1.claim(&s.real.claim).map(|c| c.phase.clone()),
-            cw.net.chain.tip_state().1.exec_v2_root_v1(&s.real.claim).map(|r| r.phase.clone())
+            cw.net.chain.tip_state().1.exec_v2_root_v1(&s.real.claim).map(|r| r.phase)
         );
         cw.net.beat_to(cw.net.daa() + 1).await;
     }
@@ -180,34 +189,33 @@ async fn x8_g14_native_paid_material_rejects_one_daa_beyond_signed_exec_and_acce
         PALW_PROVIDER_COURT_MLDSA87_CONTEXT_V1, PALW_PROVIDER_LEASE_MIN_RESERVATION_SOMPI_V1, ProviderSubjectV1,
         palw_provider_court_message_v1,
     };
-    let mut cw = active_world_over_with_params(
-        VerificationModeV1::OptimisticPublicVerification,
-        |config| TestConsensus::new(config),
-        |params| {
-            let mut budget = PalwBondBudgetPolicyV1::unapproved_probe_v1();
-            budget.capital_unit_sompi = 100_000_000;
-            budget.claims_per_unit = 100;
-            budget.block_units_per_unit = 100_000_000;
-            budget.reward_per_unit_sompi = 100_000_000;
-            budget.final_weight_per_unit = 1_000_000_000;
-            params.palw_bond_budget_v1 = Some(PalwBondBudgetFenceV1 { activation: ForkActivation::new(1), policy: budget });
-            params.palw_reporter_income_v2 = Some(ForkActivation::new(1));
-            params.palw_material_income_v3 = Some(ForkActivation::new(1));
-            params.palw_paid_consumer_lifecycle_v1 = Some(PalwPaidConsumerLifecycleFenceV1 {
-                activation: ForkActivation::new(1),
-                policy: PalwPaidConsumerLifecyclePolicyV1 {
-                    version: 1,
-                    // Covers the class minimum path (bind + receipt + challenge, clock v2); the consumer rule refuses a shorter span.
-                    service_span_daa: 12_000,
-                    dispute_tail_daa: 3_000,
-                    material_tail_daa: 2_000,
-                },
-            });
-            params.palw_provider_court_v1 = Some(ForkActivation::new(1));
-            params.sync_palw_bond_budget_v1();
-            assert!(params.validate_palw_paid_consumer_lifecycle_v1().is_err());
-        },
-    )
+    let mut cw = active_world_over_with_params(VerificationModeV1::OptimisticPublicVerification, TestConsensus::new, |params| {
+        let mut budget = PalwBondBudgetPolicyV1::unapproved_probe_v1();
+        budget.capital_unit_sompi = 100_000_000;
+        budget.claims_per_unit = 100;
+        budget.block_units_per_unit = 100_000_000;
+        budget.reward_per_unit_sompi = 100_000_000;
+        budget.final_weight_per_unit = 1_000_000_000;
+        // The real admission audit needs multiple live seed attempts, just as
+        // the other mechanics worlds do; this test exercises provider terms.
+        budget.max_open_claims_per_bond = PalwBondBudgetPolicyV1::opv_mechanics_probe_v1().max_open_claims_per_bond;
+        params.palw_bond_budget_v1 = Some(PalwBondBudgetFenceV1 { activation: ForkActivation::new(1), policy: budget });
+        params.palw_reporter_income_v2 = Some(ForkActivation::new(1));
+        params.palw_material_income_v3 = Some(ForkActivation::new(1));
+        params.palw_paid_consumer_lifecycle_v1 = Some(PalwPaidConsumerLifecycleFenceV1 {
+            activation: ForkActivation::new(1),
+            policy: PalwPaidConsumerLifecyclePolicyV1 {
+                version: 1,
+                // Covers the class minimum path (bind + receipt + challenge, clock v2); the consumer rule refuses a shorter span.
+                service_span_daa: 12_000,
+                dispute_tail_daa: 3_000,
+                material_tail_daa: 2_000,
+            },
+        });
+        params.palw_provider_court_v1 = Some(ForkActivation::new(1));
+        params.sync_palw_bond_budget_v1();
+        assert!(params.validate_palw_paid_consumer_lifecycle_v1().is_err());
+    })
     .await;
     let class = cw.v2_class;
     // RFC08 08-C: no seam — the registry's own rules admit the class before its REAL attempt.
@@ -649,6 +657,11 @@ async fn x8_g14_native_happy_final_pays_all_positive_funds_once_and_keeps_each_q
             Some(u64::MAX),
             "every authenticated root/dependency retains material while positive cash has no physical payment clock"
         );
+        assert_eq!(
+            state.material_income_hold_without_covenant_v1(&cw.net.bundle.state, *subject),
+            Some(u64::MAX),
+            "the actual unpaid receipt funds independently keep material live"
+        );
         assert_eq!(cw.net.chain.ctx.consensus.palw_material_income_hold_until_v1(*subject), Some(u64::MAX));
     }
     // Supply the private depth1 with another genuine signed/assembled native
@@ -753,12 +766,16 @@ async fn x8_g14_native_happy_final_pays_all_positive_funds_once_and_keeps_each_q
     let latest = paid_rows.values().map(|row| row.reuse_not_before).max().unwrap();
     for subject in &material_subjects {
         assert_eq!(
-            paid.material_income_hold_until_v1(&cw.net.bundle.state, *subject),
+            paid.material_income_hold_without_covenant_v1(&cw.net.bundle.state, *subject),
             Some(latest),
             "root and every dependency use the last actual positive fund payment plus W"
         );
-        assert_eq!(cw.net.chain.ctx.consensus.palw_material_income_hold_until_v1(*subject), Some(latest));
+        assert_eq!(paid.monetary_material_hold_v1(*subject), Some(u64::MAX), "the signed provider covenant has not been released");
+        assert_eq!(cw.net.chain.ctx.consensus.palw_material_income_hold_until_v1(*subject), Some(u64::MAX));
     }
+    // PAV3 and paid kernel claims retain their independently signed covenants
+    // until explicit finalized release. Their MAX hold must not be mistaken for
+    // the root-exact receipt-income clock measured here.
     let material_receipts = paid.bond_budget().unwrap().material_income.clone();
     let sink = cw.net.chain.sink();
     let utxos = Net::utxos_of(&cw.net.chain);
@@ -769,15 +786,16 @@ async fn x8_g14_native_happy_final_pays_all_positive_funds_once_and_keeps_each_q
     assert_eq!(Net::utxos_of(&cw.net.chain), utxos);
     assert_eq!(cw.net.chain.tip_state().1.bond_budget().unwrap().material_income, material_receipts);
     for subject in &material_subjects {
-        assert_eq!(cw.net.chain.ctx.consensus.palw_material_income_hold_until_v1(*subject), Some(latest));
+        assert_eq!(cw.net.chain.tip_state().1.material_income_hold_without_covenant_v1(&cw.net.bundle.state, *subject), Some(latest));
+        assert_eq!(cw.net.chain.ctx.consensus.palw_material_income_hold_until_v1(*subject), Some(u64::MAX));
     }
     cw.net.send(vec![(REGISTRANT, licence)]).await;
     assert_eq!(cw.net.chain.tip_state().1.vesting_counters(), counters, "duplicate licence never creates/moves a second fund");
     native_payment_beat_to(&mut cw, latest - 1, "before last physical payment plus W").await;
     let state = cw.net.chain.tip_state().1;
     for subject in &material_subjects {
-        assert_eq!(state.material_income_hold_until_v1(&cw.net.bundle.state, *subject), Some(latest));
-        assert_eq!(cw.net.chain.ctx.consensus.palw_material_income_hold_until_v1(*subject), Some(latest));
+        assert_eq!(state.material_income_hold_without_covenant_v1(&cw.net.bundle.state, *subject), Some(latest));
+        assert_eq!(cw.net.chain.ctx.consensus.palw_material_income_hold_until_v1(*subject), Some(u64::MAX));
     }
     for (key, row) in &paid_rows {
         if row.reuse_not_before == latest {
@@ -788,11 +806,16 @@ async fn x8_g14_native_happy_final_pays_all_positive_funds_once_and_keeps_each_q
     let released = cw.net.chain.tip_state().1;
     for subject in &material_subjects {
         assert_eq!(
-            released.material_income_hold_until_v1(&cw.net.bundle.state, *subject),
+            released.material_income_hold_without_covenant_v1(&cw.net.bundle.state, *subject),
             None,
-            "other work of the same recipients cannot perpetually retain this root's material"
+            "other work of the same recipients cannot perpetually retain this root's receipt-income hold"
         );
-        assert_eq!(cw.net.chain.ctx.consensus.palw_material_income_hold_until_v1(*subject), None);
+        assert_eq!(
+            released.monetary_material_hold_v1(*subject),
+            Some(u64::MAX),
+            "receipt-window expiry never discharges an unreleased covenant"
+        );
+        assert_eq!(cw.net.chain.ctx.consensus.palw_material_income_hold_until_v1(*subject), Some(u64::MAX));
     }
     for (key, row) in &paid_rows {
         assert!(released.bond_budget_native_queue_income_v1(*key, &row.bond).is_none());

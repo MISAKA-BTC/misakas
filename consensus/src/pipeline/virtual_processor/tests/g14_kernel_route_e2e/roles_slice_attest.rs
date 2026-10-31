@@ -34,7 +34,11 @@ fn register_of(seed: u64) -> (K, ParamCommitmentsV1) {
 #[tokio::test]
 async fn roles_slice_root_is_attested_only_past_the_panel_one_fence() {
     let (reg7, pc7) = register_of(7);
-    assert_eq!(pc7.root(), kaspa_consensus_core::palw_kernel_route_v1::PALW_T12_KERNEL_SLICE_ATTESTED_ROOT_V1, "the pinned root is wide128_v1(7)'s");
+    assert_eq!(
+        pc7.root(),
+        kaspa_consensus_core::palw_kernel_route_v1::PALW_T12_KERNEL_SLICE_ATTESTED_ROOT_V1,
+        "the pinned root is wide128_v1(7)'s"
+    );
     let mut net = Net::over_cfg(config_panel_one_at(H), TestConsensus::new);
     assert!(net.daa() + 3 < H, "the world starts below the fence");
 

@@ -15,6 +15,7 @@
 //!
 //! Run: cargo test --release -p kaspa-consensus-core --test audit_compute_weight -- --nocapture
 
+#![allow(warnings)]
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::params::{Params, palw_t12_shipped_params};
 use kaspa_consensus_core::palw_mode_v2::{PalwConsensusMode, PalwConsensusParamsV2};
@@ -176,7 +177,6 @@ fn t12_genesis_state(p: &Params, b: &PalwConsensusParamsV2, collateral: u64) -> 
     state
 }
 
-
 #[test]
 fn audit_l1_a_new_root_on_a_genesis_graph_is_admitted_and_priced_as_the_graph() {
     let p = t12();
@@ -193,7 +193,8 @@ fn audit_l1_a_new_root_on_a_genesis_graph_is_admitted_and_priced_as_the_graph() 
         println!("t12 shipped: {name:<34} {armed:?}");
     }
     assert!(p.palw_economic_payout.is_some() && p.palw_model_lines.is_some() && p.palw_artifact_root_ownership.is_some());
-    assert!(p.palw_bond_budget_v1.is_none() && p.palw_model_bond_allocation_v1.is_none(), "no bond cap on testnet-12");
+    assert_eq!(p.palw_bond_budget_v1.as_ref().map(|f| f.activation.daa_score()), Some(18_400));
+    assert_eq!(p.palw_model_bond_allocation_v1.as_ref().map(|f| f.activation.daa_score()), Some(18_400));
 
     let attacker = bond_key(0xA77AC);
     let state = t12_genesis_state(&p, &b, 1_000_000 * 100_000_000);

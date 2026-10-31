@@ -1,5 +1,6 @@
 //! Isolated opt-in courts; synthetic full semantic/authentication tests plus real program metadata.
 //! No tests grant native execution or Final eligibility.
+#![allow(warnings)]
 use misaka_palw_kernel::{
     element::SegClaimContextV1,
     flat_court5::{FlatOperandV5, FlatSegContextV5, flat_profile_commitment_v5, flat_trace_profile_id_v5},

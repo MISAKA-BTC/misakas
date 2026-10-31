@@ -42,7 +42,11 @@ fn actual_direct_replay_filing_convicts_but_dismissal_cannot_authorize_publicati
     latest.begin_block_v1(5).unwrap();
     latest.try_sync_bond_v1(palw_kernel_bond_id_v1(&checker), 1000).unwrap();
     let events = latest.apply_object_reserved_v1(&action, &AuthV1 { signer_bond: palw_kernel_bond_id_v1(&checker) }).unwrap().unwrap();
-    assert!(events.iter().any(|event| matches!(event, LedgerEventV1::Convicted { claim: found, .. } if found.as_slice() == claim.as_slice())));
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, LedgerEventV1::Convicted { claim: found, .. } if found.as_slice() == claim.as_slice()))
+    );
     assert!(!convicts(&latest, &action, 1000, 5).unwrap(), "latest duplicate cannot reuse an earlier conviction preview");
     assert_eq!(ledger.root(), root, "preview cannot mutate native observation");
 }

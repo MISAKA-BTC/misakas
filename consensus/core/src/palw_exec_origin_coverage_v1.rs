@@ -96,14 +96,18 @@ fn census_from_origins_checked<E, I: Iterator<Item = (Hash64, Hash64)>>(
     let lease = if request == 0 { None } else { reserve_native_requests_v1(request).map_err(NativeDecodeErrorV1::Resource)? };
     let cap = PALW_EXEC_ORIGIN_HEADER_MAX_BYTES_V1 as u64;
     let mut census = PalwExecOriginCoverageV1 { cap_bytes: cap, ..Default::default() };
-    census
-        .oversized
-        .try_reserve_exact(capacity)
-        .map_err(|e| NativeDecodeErrorV1::Resource(NativeCoverageV1::unsupported::<PalwExecOriginCoverageOwnedV1>("historical oversized list", &e.to_string())))?;
-    census
-        .unavailable
-        .try_reserve_exact(capacity)
-        .map_err(|e| NativeDecodeErrorV1::Resource(NativeCoverageV1::unsupported::<PalwExecOriginCoverageOwnedV1>("historical unavailable list", &e.to_string())))?;
+    census.oversized.try_reserve_exact(capacity).map_err(|e| {
+        NativeDecodeErrorV1::Resource(NativeCoverageV1::unsupported::<PalwExecOriginCoverageOwnedV1>(
+            "historical oversized list",
+            &e.to_string(),
+        ))
+    })?;
+    census.unavailable.try_reserve_exact(capacity).map_err(|e| {
+        NativeDecodeErrorV1::Resource(NativeCoverageV1::unsupported::<PalwExecOriginCoverageOwnedV1>(
+            "historical unavailable list",
+            &e.to_string(),
+        ))
+    })?;
     for (id, block) in origins() {
         census.eligible += 1;
         match header_bytes(block).map_err(NativeDecodeErrorV1::Decode)? {
@@ -150,7 +154,11 @@ mod tests {
     #[test]
     fn historical_read_fault_aborts_instead_of_becoming_unavailable() {
         #[derive(Debug, PartialEq)]
-        enum Fault { Capacity, Corrupt, Storage }
+        enum Fault {
+            Capacity,
+            Corrupt,
+            Storage,
+        }
         for fault in [Fault::Capacity, Fault::Corrupt, Fault::Storage] {
             let mut fault = Some(fault);
             let mut calls = 0;

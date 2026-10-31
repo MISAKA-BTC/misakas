@@ -6,6 +6,7 @@
 //! assembles the anchored step evidence from that capture (`Qwen36Backend::gdn_step_evidence_v2`: the served tiles, the leg rebuilt
 //! from the served leaves, the predecessor checkpoint recomputed by the accuser and authenticated against the committed leaf), and
 //! the consensus court (`memory_v2::check_gdn_step_refutation_v2`) answers `NoFaultFound` on it — never an evidence refusal.
+#![allow(warnings)]
 mod common;
 
 use common::*;

@@ -22,6 +22,7 @@
 //!   `palw_t12_launch_params_v1` (which still hashes to the launch release's ids), moved on a salted
 //!   drill by `palw_drill_post_launch_fences_v2_at_v1` and on no other chain.
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::drill::{
     PalwDrillSaltV1, palw_drill_post_launch_fences_at_v1, palw_drill_post_launch_fences_v2_at_v1,
 };
@@ -35,17 +36,19 @@ use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
 
 /// testnet-12 as THIS build ships it — the DAA-750 post-launch release (the same pins
 /// `palw_registry_resilience_is_t12_only`'s `T12_RELEASE` holds): params, identity, schedule.
+// re-pin 2026-10-29 @d3ed36fdc77d: G14 at DAA 17400 moved testnet-12 params and schedule ids; the handshake identity stayed 5de80e64 (was dbbc9104…, 7c652212…)
 const T12_RELEASE: (&str, &str, &str) = (
     "dbbc9104a2ee754f0f053a6e1614118979fd2c3dc87cbe6bffcf6dcaf4bd59c9",
     "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
     "7c652212ab5337bda9508deeee2d2e119331856fce0bd27897f19dd66e552397",
 );
 
-/// testnet-12 as it LAUNCHED (`0e8ec984e`): both post-launch lists dormant.
+/// testnet-12 as `palw_t12_launch_params_v1` hashes it (height rebind 2026-10-30). G14 stays armed at 18,400 on
+/// that constructor, so the params and schedule ids moved; the identity did not.
 const T12_LAUNCH: (&str, &str, &str) = (
-    "b8564b888e55bb5f797e708a3f65e7cd122065123a3ab09cbeb8d10c98715d8f",
+    "322104e40468fc3382ed325e2faf0c86846e11df52d3d6c99806d596fb2d663b",
     "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-    "93da24cc60f7a77e63c43106e96298d2979644a3fc0c3f82529c8849333127fd",
+    "a96d6caf49dbdf82e3dff89d23e9d97795460a7ba1122e9389c2959c04a90234",
 );
 
 /// Every other preset at the release, as `palw_registry_resilience_is_t12_only` pins them.

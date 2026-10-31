@@ -6,6 +6,7 @@
 //! carries an admission carriage) by name, and below it — and on every network that does not arm it — the same object is not
 //! refused for this reason.
 
+#![allow(warnings)]
 #[path = "rcore_common.rs"]
 mod rcore;
 use rcore::*;

@@ -54,12 +54,22 @@ impl PalwTirPublicCustodyPledgeV1 {
     /// that commitment's executor key — as [`crate::palw_history_custody_v1::PalwHistoryCustodyPledgeV1`]'s screen. The source,
     /// the recomputed complete native plan and the custodian upper are checked by the fold
     /// ([`Self::authenticate_original_object_v1`], through the custody contract), which alone has the class state.
-    pub fn authenticate_transaction_local_v1<F>(&self, object: &crate::palw_state_v2::PalwConsensusObjectV2, verify: F) -> Result<(), String>
+    pub fn authenticate_transaction_local_v1<F>(
+        &self,
+        object: &crate::palw_state_v2::PalwConsensusObjectV2,
+        verify: F,
+    ) -> Result<(), String>
     where
         F: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
     {
-        let crate::palw_state_v2::PalwConsensusObjectV2::FreePromptCommitted { claim, bond, execution_root, job_pin, executor_pubkey, .. } =
-            object
+        let crate::palw_state_v2::PalwConsensusObjectV2::FreePromptCommitted {
+            claim,
+            bond,
+            execution_root,
+            job_pin,
+            executor_pubkey,
+            ..
+        } = object
         else {
             return Err("TIR source pledge is not transaction-paired with an original FP commitment".into());
         };
@@ -123,7 +133,18 @@ impl PalwTirPublicCustodyPledgeV1 {
     ) -> Result<Self, String> {
         let t = plan.terms;
         let open_span = t.open_until_daa.checked_sub(t.accepted_daa).ok_or("quoted open door precedes its acceptance")?;
-        let material_span = t.material_until_daa.checked_sub(t.accepted_daa).ok_or("quoted material horizon precedes acceptance")?;
+        let mut material_span =
+            t.material_until_daa.checked_sub(t.accepted_daa).ok_or("quoted material horizon precedes acceptance")?;
+        // With the pinned F02 service profile the producer also promises custody
+        // through the original hard deadline plus the existing native retention.
+        // Sign that longer promise here; changing reorg_retention_daa instead
+        // would also lengthen owner idle grace and the allocation's queue bound.
+        if crate::palw_court_service_binding_v1::PALW_COURT_SERVICE_PROFILE_V1.is_some() {
+            let retention = t.material_until_daa.checked_sub(t.collect_until_daa).ok_or("quoted retention precedes collection")?;
+            let service_span =
+                crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA.checked_add(retention).ok_or("service custody span overflows")?;
+            material_span = material_span.max(service_span);
+        }
         let accept_until_daa = now_daa.checked_add(open_span.max(1)).ok_or("pledge acceptance door overflows")?;
         let material_until_daa = accept_until_daa.checked_add(material_span).ok_or("pledge material horizon overflows")?;
         if crate::palw_freeprompt_v3::fp_claim_id_v3(original) != plan.original_claim {

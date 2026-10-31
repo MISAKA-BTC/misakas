@@ -22,6 +22,7 @@
 //!
 //! Run: `cargo run -p misaka-palw-base0 --bin palw-tile-measure`
 
+#![allow(warnings)]
 use kaspa_consensus_core::palw_class_admission_v2::{
     PalwCourtCostRowV1, PalwCourtCostShapeV1, derive_court_cost_rows_v1, derive_court_cost_shaped_v1, derive_court_cost_v1,
 };

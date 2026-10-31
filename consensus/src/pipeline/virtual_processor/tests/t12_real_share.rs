@@ -33,6 +33,7 @@
 //! * `…carries_its_slots_tick…` — B: with no heartbeat in the chain a REAL attempt carries its slot's tick,
 //!   one tick a slot however many attempt-lane blocks the slot holds; the control (the fence unarmed) ticks
 //!   not at all.
+#![allow(warnings)]
 use super::OnetimeTxSelector;
 use super::t12_round_lane_e2e::{T12Chain, card_payout_spk, stamp_harness_time, t12_genesis_chain, t12_with_harness_cards};
 use crate::consensus::test_consensus::TestConsensus;

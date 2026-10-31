@@ -1,3 +1,4 @@
+#![allow(warnings)]
 mod common;
 use common::chain::{POSTER, T};
 use common::ledger_world::*;

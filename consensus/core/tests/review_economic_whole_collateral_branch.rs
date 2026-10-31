@@ -16,7 +16,7 @@
 //! PRE-FENCE DEFECT RECORD. The contradiction is now the EXECUTOR's equivocation (its bond, its
 //! registered key), which the review's other fix requires.
 #![allow(dead_code)]
-
+#![allow(warnings)]
 #[path = "dos_l5_common.rs"]
 mod common;
 use common::*;

@@ -80,9 +80,7 @@ pub struct PalwExecOriginV1 {
 /// One legacy native clock proof fits the existing assembled-object carriage budget, including its tag/key/length.
 pub const PALW_EXEC_ORIGIN_HEADER_MAX_BYTES_V1: usize = crate::palw_state_v2::PALW_OBJECT_CHUNK_SLOT_MASS as usize - 69;
 
-pub use crate::palw_exec_origin_coverage_v1::{
-    PalwExecOriginCoverageOwnedV1, PalwExecOriginCoverageV1, palw_exec_origin_coverage_v1,
-};
+pub use crate::palw_exec_origin_coverage_v1::{PalwExecOriginCoverageOwnedV1, PalwExecOriginCoverageV1, palw_exec_origin_coverage_v1};
 
 /// Self-authenticating provenance, not a new execution authorization: the full header must hash to the claim's carrying block.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, borsh::BorshSerialize)]

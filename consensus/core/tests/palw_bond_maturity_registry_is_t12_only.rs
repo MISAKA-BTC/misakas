@@ -16,6 +16,7 @@
 //!   chain fold the SAME state root at every step across the fence, and each class's lifecycle state
 //!   is the release's with the newcomer's rows too (8k does not drop to `Held`).
 
+#![allow(warnings)]
 #[path = "rcore_common.rs"]
 mod common;
 use common::*;

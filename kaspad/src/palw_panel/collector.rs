@@ -61,7 +61,7 @@ impl PalwPanelService {
             vertex_fence,
         } = read;
         let CollectorRefsV1 {
-            mut shard_books,
+            shard_books,
             submitted,
             submit_attempts,
             v1_sent,
@@ -71,17 +71,17 @@ impl PalwPanelService {
             supplementary_v3_submitted,
             supplementary_idle,
             licence_idle,
-            mut court_outbox,
-            mut challenged,
+            court_outbox,
+            challenged,
             carrier_chain,
             registration,
-            mut readiness_lane,
+            readiness_lane,
             receipt_lanes,
             readiness_waiting,
             last_lane,
             held_before,
             canonical_last_daa,
-            mut improve,
+            improve,
         } = books;
         if self.config.fee_outpoint.is_some() {
             // Resolve the fee UTXO ONCE per tick and then CHAIN it: the change of a carrier
@@ -105,7 +105,7 @@ impl PalwPanelService {
             // — and dropped the moment a submission is refused, because that is the signal that
             // the chain we were extending is not one the mempool will accept.
             if carrier_chain.funding().is_none() {
-                carrier_chain.set_funding(self.resolve_fee_funding(&session, palw_fee_funding_floor_v1()).await);
+                carrier_chain.set_funding(self.resolve_fee_funding(session, palw_fee_funding_floor_v1()).await);
                 carrier_chain.set_inflight(0);
             } else if let Some((tip, _)) = carrier_chain.funding().clone() {
                 if session.get_virtual_utxo_entry(tip).is_some() {
@@ -125,7 +125,7 @@ impl PalwPanelService {
                             tip.index,
                             palw_fee_funding_floor_v1()
                         );
-                        carrier_chain.set_funding(self.resolve_fee_funding(&session, palw_fee_funding_floor_v1()).await);
+                        carrier_chain.set_funding(self.resolve_fee_funding(session, palw_fee_funding_floor_v1()).await);
                     }
                 } else if !self
                     .flow_context
@@ -263,7 +263,7 @@ impl PalwPanelService {
             // ahead of it (`ReadinessEscalated`: one a tick, never two slots running). Elsewhere
             // they are read at the Own site, where they always were.
             let mut readiness = if self.consensus_config.params.palw_rcore_plus_active_at(current_daa) {
-                Some(self.readiness_duties_for_tick(&session, current_daa, proof_waited_last_tick).await)
+                Some(self.readiness_duties_for_tick(session, current_daa, proof_waited_last_tick).await)
             } else {
                 None
             };
@@ -279,7 +279,7 @@ impl PalwPanelService {
             // sends nothing leaves the stuck carrier holding the slot, as before.
             let stuck_opened = match stuck_tip {
                 Some((stuck, late)) if palw_stuck_carrier_opens_slot_v1(late) => {
-                    match self.open_stuck_carrier_v1(&session, stuck, late).await {
+                    match self.open_stuck_carrier_v1(session, stuck, late).await {
                         Some(opened) => {
                             funding = Some(opened);
                             carrier_chain.set_inflight(0);
@@ -316,7 +316,7 @@ impl PalwPanelService {
                 let duty = duties.remove(at);
                 if self
                     .replace_late_carrier_v1(
-                        &session,
+                        session,
                         &duty,
                         stuck,
                         late,
@@ -345,8 +345,7 @@ impl PalwPanelService {
                         .chain(receipt_lanes.values().filter_map(|l| l.funding.as_ref()))
                         .map(|(outpoint, _)| *outpoint)
                         .collect();
-                    (*readiness_waiting) =
-                        !self.carry_on_readiness_lane_v1(&session, &duty, current_daa, &mut readiness_lane, &main).await;
+                    (*readiness_waiting) = !self.carry_on_readiness_lane_v1(session, &duty, current_daa, readiness_lane, &main).await;
                 }
             } else if slots.offers(PalwCarrierSiteV1::ReadinessEscalated, carrier_chain.inflight())
                 && funding.is_some()
@@ -354,9 +353,7 @@ impl PalwPanelService {
                 && let Some(at) = crate::palw_readiness_escalation::palw_escalated_readiness_pick_v1(duties)
             {
                 let duty = duties.remove(at);
-                if self
-                    .carry_readiness_proof_v1(&session, &duty, current_daa, &mut carrier_chain.book_with_funding(&mut funding))
-                    .await
+                if self.carry_readiness_proof_v1(session, &duty, current_daa, &mut carrier_chain.book_with_funding(&mut funding)).await
                 {
                     (*readiness_waiting) = false;
                 }
@@ -371,7 +368,7 @@ impl PalwPanelService {
                     .chain(receipt_lanes.values().filter_map(|l| l.funding.as_ref()))
                     .map(|(outpoint, _)| *outpoint)
                     .collect();
-                if self.carry_on_readiness_lane_v1(&session, &duties[at], current_daa, &mut readiness_lane, &main).await {
+                if self.carry_on_readiness_lane_v1(session, &duties[at], current_daa, readiness_lane, &main).await {
                     duties.remove(at);
                     (*readiness_waiting) = false;
                 }
@@ -382,11 +379,11 @@ impl PalwPanelService {
             slots.at(PalwCarrierSiteV1::PriorityFirst, carrier_chain.inflight());
             if slots.offers(PalwCarrierSiteV1::PriorityFirst, carrier_chain.inflight()) {
                 self.carry_priority_v1(
-                    &session,
+                    session,
                     current_daa,
-                    &mut court_outbox,
+                    court_outbox,
                     &mut carrier_chain.book_with_funding(&mut funding),
-                    &mut challenged,
+                    challenged,
                 )
                 .await;
             }
@@ -410,41 +407,41 @@ impl PalwPanelService {
                 && let Some((funding_outpoint, funding_entry)) = funding.clone()
             {
                 (*canonical_last_daa) = current_daa;
-                match self.build_canonical_claim(&session, network_domain, bond, current_daa, funding_outpoint, &funding_entry).await {
+                match self.build_canonical_claim(session, network_domain, bond, current_daa, funding_outpoint, &funding_entry).await {
                     Ok((tx, claim_id, material, _answer_wire_and_signing_lease, routing_work)) => {
-                        if let Err(why)=crate::palw_native_routing_work_v2::refresh_v2(&session,routing_work.as_ref()) {
+                        if let Err(why) = crate::palw_native_routing_work_v2::refresh_v2(session, routing_work.as_ref()) {
                             warn!("[{PALW_PANEL}] canonical native routing publication deferred: {why}");
                         } else {
-                        // The accounting wire/signing reservation follows the actual outer TX through submission.
-                        let prepared_carrier = PreparedCarrierV1::new(tx, 0, current_daa);
-                        let txid = prepared_carrier.id();
-                        match self.submit_prepared_direct_v1(&session, prepared_carrier).await {
-                            Ok(sent_carrier) => {
-                                info!("[{PALW_PANEL}] committed canonical claim {claim_id} in tx {txid}");
-                                // The answer beside the question, retained under the claim id
-                                // (the resolver serves it) and broadcast to the seats.
-                                self.retain_own_material(&claim_id, &material);
-                                // DRILL (ADR-0111): the answer envelope, never the capture — the
-                                // width at which no seat holds one and every seat judges by
-                                // intervals, so a named leaf's evidence must come from here.
-                                let served = if self.config.drill_answer_only {
-                                    self.derive_answer_envelope_v1(&material).unwrap_or(material)
-                                } else {
-                                    material
-                                };
-                                self.flow_context.broadcast_palw_material(claim_id, served).await;
-                                sent_carrier.record_change(
-                                    &mut carrier_chain.book_with_funding(&mut funding),
-                                    CarrierInFlightUpdateV1::Increment,
-                                    |next| self.persist_fee_outpoint(next),
-                                );
-                            }
-                            Err(e) => {
-                                warn!("[{PALW_PANEL}] the mempool refused the canonical claim: {e}");
-                                funding = None;
+                            // The accounting wire/signing reservation follows the actual outer TX through submission.
+                            let prepared_carrier = PreparedCarrierV1::new(tx, 0, current_daa);
+                            let txid = prepared_carrier.id();
+                            match self.submit_prepared_direct_v1(session, prepared_carrier).await {
+                                Ok(sent_carrier) => {
+                                    info!("[{PALW_PANEL}] committed canonical claim {claim_id} in tx {txid}");
+                                    // The answer beside the question, retained under the claim id
+                                    // (the resolver serves it) and broadcast to the seats.
+                                    self.retain_own_material(&claim_id, &material);
+                                    // DRILL (ADR-0111): the answer envelope, never the capture — the
+                                    // width at which no seat holds one and every seat judges by
+                                    // intervals, so a named leaf's evidence must come from here.
+                                    let served = if self.config.drill_answer_only {
+                                        self.derive_answer_envelope_v1(&material).unwrap_or(material)
+                                    } else {
+                                        material
+                                    };
+                                    self.flow_context.broadcast_palw_material(claim_id, served).await;
+                                    sent_carrier.record_change(
+                                        &mut carrier_chain.book_with_funding(&mut funding),
+                                        CarrierInFlightUpdateV1::Increment,
+                                        |next| self.persist_fee_outpoint(next),
+                                    );
+                                }
+                                Err(e) => {
+                                    warn!("[{PALW_PANEL}] the mempool refused the canonical claim: {e}");
+                                    funding = None;
+                                }
                             }
                         }
-                    }
                     }
                     Err(e) => warn!("[{PALW_PANEL}] cannot build a canonical claim: {e}"),
                 }
@@ -455,8 +452,8 @@ impl PalwPanelService {
             if slots.offers(PalwCarrierSiteV1::Own, carrier_chain.inflight()) && !stuck_opened && funding.is_some() {
                 let _ = self
                     .improve_carry_v1(
-                        &mut improve,
-                        &session,
+                        improve,
+                        session,
                         network_domain,
                         bond,
                         current_daa,
@@ -514,7 +511,7 @@ impl PalwPanelService {
                         _ => true,
                     };
                     if refresh {
-                        match self.build_class_registration(&session).await {
+                        match self.build_class_registration(session).await {
                             Ok(object) => registration.replace_object(object),
                             Err(e) => warn!("[{PALW_PANEL}] cannot refresh the class registration at submit: {e}"),
                         }
@@ -539,7 +536,7 @@ impl PalwPanelService {
                         Ok(tx) => {
                             let prepared_carrier = PreparedCarrierV1::new(tx, 0, current_daa);
                             let txid = prepared_carrier.id();
-                            match self.submit_prepared_carrier_v1(&session, prepared_carrier).await {
+                            match self.submit_prepared_carrier_v1(session, prepared_carrier).await {
                                 Ok(sent_carrier) => {
                                     info!("[{PALW_PANEL}] submitted the class registration in tx {txid}");
                                     registration.record_submission(txid, current_daa);
@@ -563,7 +560,7 @@ impl PalwPanelService {
             // — read here, or before the court queue past R-core+ (M1, above).
             let duties = match readiness.take() {
                 Some(duties) => duties,
-                None => self.readiness_duties_for_tick(&session, current_daa, proof_waited_last_tick).await,
+                None => self.readiness_duties_for_tick(session, current_daa, proof_waited_last_tick).await,
             };
             for duty in duties {
                 // **A due proof behind a LOST carrier of ours replaces it** (the pre-t12 drill of
@@ -578,7 +575,7 @@ impl PalwPanelService {
                     tip_replaced = true;
                     if self
                         .replace_late_carrier_v1(
-                            &session,
+                            session,
                             &duty,
                             stuck,
                             late,
@@ -601,7 +598,7 @@ impl PalwPanelService {
                         .map(|(outpoint, _)| *outpoint)
                         .collect();
                     if self.consensus_config.params.palw_rcore_plus_active_at(current_daa)
-                        && self.carry_on_readiness_lane_v1(&session, &duty, current_daa, &mut readiness_lane, &main).await
+                        && self.carry_on_readiness_lane_v1(session, &duty, current_daa, readiness_lane, &main).await
                     {
                         (*readiness_waiting) = false;
                         continue;
@@ -617,9 +614,7 @@ impl PalwPanelService {
                     });
                     break;
                 }
-                if self
-                    .carry_readiness_proof_v1(&session, &duty, current_daa, &mut carrier_chain.book_with_funding(&mut funding))
-                    .await
+                if self.carry_readiness_proof_v1(session, &duty, current_daa, &mut carrier_chain.book_with_funding(&mut funding)).await
                 {
                     (*readiness_waiting) = false;
                 }
@@ -637,16 +632,16 @@ impl PalwPanelService {
             // them, carried 64 lower ids. Past `bound + window_receipt` such a claim redraws with
             // the same id and its second timeout slashes an honest producer.
             let claims: Vec<Hash64> =
-                crate::palw_licence_order::palw_licence_claim_order_v1(receipt_pool_v2.claim_ids(), &receipt_facts, |claim| {
+                crate::palw_licence_order::palw_licence_claim_order_v1(receipt_pool_v2.claim_ids(), receipt_facts, |claim| {
                     std::hash::BuildHasher::hash_one(licence_spread, claim)
                 });
-            if let (queued, Some((oldest, bound_daa))) = crate::palw_licence_order::palw_licence_queue_head_v1(&claims, &receipt_facts)
+            if let (queued, Some((oldest, bound_daa))) = crate::palw_licence_order::palw_licence_queue_head_v1(&claims, receipt_facts)
                 && current_daa.saturating_sub(bound_daa) > crate::palw_licence_order::PALW_LICENCE_BACKLOG_WARN_DAA
             {
                 crate::palw_backends::note_throttled_v1("licence-backlog", || {
                     let (valid, seats) = crate::palw_licence_order::palw_licence_valid_seats_v1(
-                        &receipt_pool_v2.candidates(&oldest, &receipt_facts),
-                        &receipt_pool_v3.candidates(&oldest, &receipt_facts),
+                        &receipt_pool_v2.candidates(&oldest, receipt_facts),
+                        &receipt_pool_v3.candidates(&oldest, receipt_facts),
                         receipt_facts.panel(&oldest),
                     );
                     format!(
@@ -681,8 +676,8 @@ impl PalwPanelService {
                 }
                 // Own receipts first, then what was heard of the tip panel's seats — the
                 // assembler judges every one.
-                let pool = receipt_pool_v2.candidates(&claim, &receipt_facts);
-                let v3 = receipt_pool_v3.candidates(&claim, &receipt_facts);
+                let pool = receipt_pool_v2.candidates(&claim, receipt_facts);
+                let v3 = receipt_pool_v3.candidates(&claim, receipt_facts);
                 let licence_fingerprint = palw_supplementary_candidates_fingerprint_v1(&v3, &pool);
                 if palw_licence_idle_v1(licence_idle.get(&claim), licence_fingerprint, current_daa) {
                     continue;
@@ -714,7 +709,7 @@ impl PalwPanelService {
                 match self.prepare_lifecycle_carrier_v1(&object, funding_outpoint, &funding_entry, current_daa) {
                     Ok(prepared_carrier) => {
                         let txid = prepared_carrier.id();
-                        match self.submit_prepared_carrier_v1(&session, prepared_carrier).await {
+                        match self.submit_prepared_carrier_v1(session, prepared_carrier).await {
                             Ok(sent_carrier) => {
                                 info!(
                                     "[{PALW_PANEL}] submitted {} for claim {claim} in tx {txid}{}",
@@ -795,8 +790,8 @@ impl PalwPanelService {
                     {
                         continue;
                     }
-                    let v3 = receipt_pool_v3.candidates(&claim, &receipt_facts);
-                    let v2 = receipt_pool_v2.candidates(&claim, &receipt_facts);
+                    let v3 = receipt_pool_v3.candidates(&claim, receipt_facts);
+                    let v2 = receipt_pool_v2.candidates(&claim, receipt_facts);
                     if v3.is_empty() && v2.is_empty() {
                         continue;
                     }
@@ -823,7 +818,7 @@ impl PalwPanelService {
                     match self.prepare_lifecycle_carrier_v1(&offer.object, funding_outpoint, &funding_entry, current_daa) {
                         Ok(prepared_carrier) => {
                             let txid = prepared_carrier.id();
-                            match self.submit_prepared_carrier_v1(&session, prepared_carrier).await {
+                            match self.submit_prepared_carrier_v1(session, prepared_carrier).await {
                                 Ok(sent_carrier) => {
                                     info!(
                                         "[{PALW_PANEL}] submitted a {} supplementary set for claim {claim} in tx {txid} — {} seat(s) \
@@ -862,12 +857,12 @@ impl PalwPanelService {
             // that never armed the fence (no plan, no part, no V4 receipt) or in shadow mode.
             if self.consensus_config.params.palw_tir_shard_active_at(current_daa) && !self.config.tir_shard_shadow {
                 let mut offers: Vec<(String, PalwConsensusObjectV2, Option<Hash64>)> = shard_books
-                    .parts_to_offer(&session, current_daa)
+                    .parts_to_offer(session, current_daa)
                     .into_iter()
                     .map(|(claim, object)| (format!("a layer-shard licensing part of claim {claim}"), object, Some(claim)))
                     .collect();
                 offers.extend(
-                    self.tir_shard_objects_v1(&session, bond_key, network_domain, current_daa, &mut shard_books)
+                    self.tir_shard_objects_v1(session, bond_key, network_domain, current_daa, shard_books)
                         .await
                         .into_iter()
                         .map(|(what, object)| (what, object, None)),
@@ -877,7 +872,7 @@ impl PalwPanelService {
                         break;
                     }
                     if self
-                        .carry_object_v1(&session, &object, &what, current_daa, &mut carrier_chain.book_with_funding(&mut funding))
+                        .carry_object_v1(session, &object, &what, current_daa, &mut carrier_chain.book_with_funding(&mut funding))
                         .await
                         && let Some(claim) = part_of
                     {
@@ -891,11 +886,11 @@ impl PalwPanelService {
             slots.at(PalwCarrierSiteV1::PriorityAfterLicences, carrier_chain.inflight());
             if slots.offers(PalwCarrierSiteV1::PriorityAfterLicences, carrier_chain.inflight()) {
                 self.carry_priority_v1(
-                    &session,
+                    session,
                     current_daa,
-                    &mut court_outbox,
+                    court_outbox,
                     &mut carrier_chain.book_with_funding(&mut funding),
-                    &mut challenged,
+                    challenged,
                 )
                 .await;
             }
@@ -930,7 +925,7 @@ impl PalwPanelService {
                     match self.prepare_lifecycle_carrier_v1(&object, funding_outpoint, &funding_entry, current_daa) {
                         Ok(prepared_carrier) => {
                             let txid = prepared_carrier.id();
-                            match self.submit_prepared_carrier_v1(&session, prepared_carrier).await {
+                            match self.submit_prepared_carrier_v1(session, prepared_carrier).await {
                                 Ok(sent_carrier) => {
                                     info!(
                                         "[{PALW_PANEL}] submitted this seat's vertex of round {} ({} leaves) in tx {txid} (RFC-0007)",
@@ -989,7 +984,7 @@ impl PalwPanelService {
                         match self.prepare_lifecycle_carrier_v1(&object, funding_outpoint, &funding_entry, current_daa) {
                             Ok(prepared_carrier) => {
                                 let txid = prepared_carrier.id();
-                                match self.submit_prepared_carrier_v1(&session, prepared_carrier).await {
+                                match self.submit_prepared_carrier_v1(session, prepared_carrier).await {
                                     Ok(sent_carrier) => {
                                         info!(
                                             "[{PALW_PANEL}] submitted this seat's trap {} in tx {txid} (RFC-0007 Part IV.1)",
@@ -1048,7 +1043,7 @@ impl PalwPanelService {
                         if lane.unfunded_at == Some(current_daa) {
                             continue;
                         }
-                        lane.funding = self.resolve_readiness_lane_funding_v1(&session, &held).await;
+                        lane.funding = self.resolve_readiness_lane_funding_v1(session, &held).await;
                         if lane.funding.is_none() {
                             lane.unfunded_at = Some(current_daa);
                             continue;
@@ -1059,7 +1054,7 @@ impl PalwPanelService {
                     match self.prepare_lifecycle_carrier_v1(&object, lane_outpoint, &lane_entry, current_daa) {
                         Ok(prepared_carrier) => {
                             let txid = prepared_carrier.id();
-                            match self.submit_prepared_carrier_v1(&session, prepared_carrier).await {
+                            match self.submit_prepared_carrier_v1(session, prepared_carrier).await {
                                 Ok(sent_carrier) => {
                                     info!(
                                         "[{PALW_PANEL}] submitted this seat's own receipt for claim {claim} on class {class}'s lane in tx {txid}"
@@ -1086,7 +1081,7 @@ impl PalwPanelService {
                 match self.prepare_lifecycle_carrier_v1(&object, funding_outpoint, &funding_entry, current_daa) {
                     Ok(prepared_carrier) => {
                         let txid = prepared_carrier.id();
-                        match self.submit_prepared_carrier_v1(&session, prepared_carrier).await {
+                        match self.submit_prepared_carrier_v1(session, prepared_carrier).await {
                             Ok(sent_carrier) => {
                                 info!(
                                     "[{PALW_PANEL}] submitted this seat's own receipt for claim {claim} (supplementary) in tx {txid}"

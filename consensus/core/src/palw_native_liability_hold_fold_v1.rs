@@ -45,9 +45,19 @@ pub(super) fn held_native_fee_v1(state: &PalwChainStateV2, family: u8, job: &[u8
 /// while the row exists the producer is still liable (accusable to H, a post-Final conviction collects its signed reserve), so the
 /// family's reader keeps that reserve committed until the fee is released (at H) or refunded (conviction). No row exists below the
 /// `palw_native_liability_horizon_v1` fence, so the readers are unchanged there.
-pub(super) fn native_fee_held_for_v1(r: &crate::palw_kernel_route_v1::PalwKernelRouteStateV1, family: u8, job: &[u8; 64], producer: &PalwBondKeyV2) -> bool {
+pub(super) fn native_fee_held_for_v1(
+    r: &crate::palw_kernel_route_v1::PalwKernelRouteStateV1,
+    family: u8,
+    job: &[u8; 64],
+    producer: &PalwBondKeyV2,
+) -> bool {
     r.aux_row::<PalwNativeHeldFeeRowV1>(PALW_NATIVE_LIABILITY_HOLD_TABLE_V1, &palw_native_held_fee_key_v1(family, job)).is_some_and(
-        |row| row.version == PALW_NATIVE_LIABILITY_HOLD_ROW_VERSION_V1 && row.family == family && row.job == *job && row.producer == *producer,
+        |row| {
+            row.version == PALW_NATIVE_LIABILITY_HOLD_ROW_VERSION_V1
+                && row.family == family
+                && row.job == *job
+                && row.producer == *producer
+        },
     )
 }
 
@@ -206,8 +216,7 @@ pub(super) fn release_held_native_fees_v1(
     // Each release queues exactly one payout row: reserve the room first (the other payout writers' ceiling).
     let room = PALW_V2_MAX_PENDING_PAYOUTS.saturating_sub(builder.state.pending_payouts.len());
     let cap = PALW_NATIVE_LIABILITY_RELEASES_PER_BLOCK_V1.min(room);
-    let range =
-        (table, vec![PALW_NATIVE_HELD_FEE_HORIZON_PREFIX_V1])..(table, vec![PALW_NATIVE_HELD_FEE_HORIZON_PREFIX_V1 + 1]);
+    let range = (table, vec![PALW_NATIVE_HELD_FEE_HORIZON_PREFIX_V1])..(table, vec![PALW_NATIVE_HELD_FEE_HORIZON_PREFIX_V1 + 1]);
     let mut due: Vec<PalwNativeHeldFeeRowV1> = Vec::new();
     for ((_, index), _) in route.aux.range(range) {
         if due.len() >= cap {

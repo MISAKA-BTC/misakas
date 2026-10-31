@@ -1772,7 +1772,7 @@ impl PalwBondBudgetStateV1 {
         self.bonds.get(bond).map(|row| row.open_final_weight).unwrap_or(0)
     }
 
-    /// **Allocation bootstrap (lane GC-DUTY option (b), pending the user's choice):** no allocation epoch yet, or `Σ_j A_j = 0`
+    /// **Allocation bootstrap (ADR-0177, user decision 2026-10-28, option (b)):** no allocation epoch yet, or `Σ_j A_j = 0`
     /// (no model holds any seasoned miner or claim-bound verifier capital). While it holds, `P_m` limits neither a claim's block
     /// opportunity nor its reward (the pre-fence rule: the bond's own Q/B/R/F still bind), so REAL is never stopped by an empty
     /// allocation (ADR-0176 2026-10-15); the claims admitted meanwhile record their model and seed `S_m` at the next roll, from
@@ -5571,7 +5571,11 @@ mod tests {
         use crate::config::params::{
             DEVNET_PARAMS, MAINNET_PARAMS, SIMNET_PARAMS, TESTNET_PARAMS, palw_rc_shipped_params, palw_t12_shipped_params,
         };
-        for p in [MAINNET_PARAMS, TESTNET_PARAMS, DEVNET_PARAMS, SIMNET_PARAMS, palw_rc_shipped_params(), palw_t12_shipped_params()] {
+        let t12 = palw_t12_shipped_params();
+        assert_eq!(t12.palw_bond_budget_v1.as_ref().map(|f| f.activation.daa_score()), Some(18_400));
+        assert_eq!(t12.palw_model_bond_allocation_v1.as_ref().map(|f| f.activation.daa_score()), Some(18_400));
+        assert!(!t12.palw_bond_budget_active_at(18_399) && t12.palw_bond_budget_active_at(18_400));
+        for p in [MAINNET_PARAMS, TESTNET_PARAMS, DEVNET_PARAMS, SIMNET_PARAMS, palw_rc_shipped_params()] {
             assert!(p.palw_bond_budget_v1.is_none() && p.palw_model_bond_allocation_v1.is_none());
             assert!(!p.palw_bond_budget_active_at(u64::MAX) && !p.palw_model_bond_allocation_active_at(u64::MAX));
             assert!(p.palw_fences_v1().iter().any(|(n, f)| *n == "palw_bond_budget_v1" && f.is_none()));
@@ -5602,6 +5606,8 @@ mod tests {
         let PalwModeV2Error::Invalid(why) = malformed.validate_palw_bond_budget_v1().unwrap_err() else { panic!("Invalid") };
         assert!(why.contains("policy is invalid"), "a malformed policy is named before the arming refusal: {why}");
         let mut alone = palw_t12_shipped_params();
+        alone.palw_bond_budget_v1 = None;
+        alone.sync_palw_bond_budget_v1();
         alone.palw_model_bond_allocation_v1 = Some(PalwModelBondAllocationFenceV1::at(ForkActivation::new(9_000_000)));
         let PalwModeV2Error::Invalid(why) = alone.validate_palw_model_bond_allocation_v1().unwrap_err() else { panic!("Invalid") };
         assert!(why.contains("requires palw_bond_budget_v1"), "{why}");

@@ -22,6 +22,7 @@
 //!
 //! Run: cargo test -p kaspa-consensus-core --test t02b_rt2_is_s0_prime_on_every_class
 
+#![allow(warnings)]
 #[path = "rcore_common.rs"]
 mod common;
 use common::*;

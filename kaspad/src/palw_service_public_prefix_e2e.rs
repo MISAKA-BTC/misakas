@@ -97,8 +97,13 @@ pub(super) struct Monitor {
     seed: Option<(Hash64, u64)>,
     completed: bool,
     pending_sources: BTreeSet<Hash64>,
+    expected_signers: BTreeSet<PalwBondKeyV2>,
 }
 impl Monitor {
+    pub(super) fn new(mut valid_signers: BTreeSet<PalwBondKeyV2>, producer: PalwBondKeyV2) -> Self {
+        valid_signers.insert(producer);
+        Self { expected_signers: valid_signers, ..Self::default() }
+    }
     pub(super) fn observe(&mut self, chain: &Chain, claim: Hash64, owner: PalwBondKeyV2) {
         let Some(progress) = chain.tc.palw_staged_owned_progress_v1((claim, owner)).unwrap() else { return };
         let Some(PalwStagedOwnedCursorV1::PublicPrefix { cursor, pending, completed, .. }) = progress.cursor else { return };
@@ -107,12 +112,22 @@ impl Monitor {
             assert_eq!(seed, previous, "one ordinary reservation never opens a replacement public court");
         }
         self.seed = Some(seed);
-        if let Some(pending) = pending {
+        if let Some(pending) = pending.as_ref() {
             self.pending_sources.insert(pending.demand_id);
             assert!(pending.source.byte_length > 0);
-            assert_eq!(pending.signers.len(), 6, "producer plus all five literal Valid custodians are eligible sources");
+            let mut expected = self.expected_signers.clone();
+            expected.insert(owner);
+            assert_eq!(
+                pending.signers.keys().copied().collect::<BTreeSet<_>>(),
+                expected,
+                "the owner, producer and every literal Valid custodian are exactly the eligible sources"
+            );
         }
-        assert_ne!(completed, Some(false), "the deliberately false named prefix cannot finish Honest");
+        // A protected acquisition in progress reports Ok(None) from
+        // certificate(), so `Some(false)` is not a terminal Honest verdict.
+        if cursor == PalwPrefixFamilyCursorV1::Complete && pending.is_none() {
+            assert_ne!(completed, Some(false), "the deliberately false named prefix cannot finish Honest");
+        }
         if completed == Some(true) {
             assert_eq!(cursor, PalwPrefixFamilyCursorV1::Complete);
             self.completed = true;
@@ -148,12 +163,23 @@ impl Monitor {
         assert!(matches!(seed.auxiliary, Some(PalwAuxiliaryPublicCourtSeedV1::PublicPrefix { slots: 7, prefix_tokens: 2, .. })));
         let mut demands = 0;
         let mut answers = 0;
+        let mut bundle_controls = 0;
         for object in carriers {
             if let PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement } = object
                 && (movement.claim, movement.reserver) == (claim, owner)
             {
-                assert_eq!(movement.seed_id, reference.seed_id);
                 movement.check().unwrap();
+                if matches!(
+                    movement.action,
+                    PalwConstraintStreamActionV1::BundleOpen { .. }
+                        | PalwConstraintStreamActionV1::ActivateStage { .. }
+                        | PalwConstraintStreamActionV1::InventoryPart { .. }
+                        | PalwConstraintStreamActionV1::InventoryFinish
+                ) {
+                    bundle_controls += 1;
+                    continue;
+                }
+                assert_eq!(movement.seed_id, reference.seed_id, "every prefix continuation names the exact convicted family seed");
                 match &movement.action {
                     PalwConstraintStreamActionV1::PrefixPublicDemand(_) => demands += 1,
                     PalwConstraintStreamActionV1::PrefixPublicAnswer(answer) => {
@@ -169,18 +195,40 @@ impl Monitor {
                 }
             }
         }
+        assert!(bundle_controls > 0, "the claim's required-family bundle is carried through its own control seed");
         assert!(demands > 0 && answers >= demands, "signed automatic custodian answers fulfilled every demanded original leaf");
-        assert!(
-            carriers.iter().any(|object| matches!(object,
-                PalwConsensusObjectV2::MaterialDisclosedV2 { claim: c, unit, discloser, .. }
-                    if *c == claim && *unit == kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1::Event { row: 0, tile: 0 }
-                        && *discloser == chain.view(claim).producer
-            )),
-            "the actual producer service discloses the public authenticated binding before opening the typed court"
+        let original = chain
+            .history
+            .iter()
+            .flat_map(|block| &block.transactions)
+            .find_map(|tx| {
+                kaspa_consensus_core::palw_history_custody_v1::PalwHistoryFpEnvelopeV1::decode_v1(&tx.payload)
+                    .ok()
+                    .filter(|envelope| envelope.pledge.claim == claim)
+            })
+            .expect("the producer carried the authenticated original binding in the accepted HFP1 claim");
+        let payload = original.original_fp_v1().unwrap();
+        assert_eq!(payload.claim_id(), claim);
+        assert_eq!(original.pledge.producer, chain.view(claim).producer);
+        assert_eq!(
+            original.original_binding,
+            kaspa_consensus_core::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1::Legacy(
+                kaspa_consensus_core::palw_public_binding_v1::PalwPublicLegacyBindingHeaderV1::of_binding_v1(&seed.binding)
+            ),
+            "the public court uses the exact original binding, without a redundant DA disclosure"
         );
         let view = chain.view(claim);
-        let record = view.record.expect("owner's actual reservation remains auditable");
-        assert!(!record.live.contains_key(&owner), "objective conviction releases the owner reservation");
-        assert!(record.closed.contains(&owner));
+        let state = chain.tc.palw_state_v2_store.read().load_tip(&chain.bundle.state).unwrap().unwrap().1;
+        assert!(
+            matches!(
+                reference.resolve_fault_v1(&state, view.execution_root).unwrap(),
+                kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedFaultV1::Prefix(_)
+            ),
+            "the paid owner certificate remains auditable after ordinary reservation release"
+        );
+        assert!(
+            state.legacy_dispute_reservation_v1(&claim, &owner).is_none(),
+            "objective conviction releases the ordinary owner reservation"
+        );
     }
 }

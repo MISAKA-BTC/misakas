@@ -29,6 +29,7 @@
 //! `TIR_V2_BLESS=1 cargo test -p misaka-palw-tir --test golden_v2` rewrites them (a separate switch
 //! from version 1's `TIR_BLESS`, so blessing one can never rewrite the other).
 
+#![allow(warnings)]
 mod v2common;
 
 use std::collections::BTreeMap;

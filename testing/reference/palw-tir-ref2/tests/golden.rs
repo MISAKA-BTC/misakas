@@ -5,6 +5,7 @@
 //! Revision 2 of 04b (§9.3): every rule names the class of its refusal and every vector breaks one
 //! rule, so a vector's `expect_error` class is required exactly, as are the bytes of every success.
 
+#![allow(warnings)]
 mod common;
 
 use std::collections::BTreeMap;

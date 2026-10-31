@@ -220,7 +220,7 @@ pub fn lower_processor_v41(p: &ProcessorProfileV41, profile: SourceProfileV39) -
 /// Its provenance must still bind the original encoded/raster input; this helper
 /// alone grants neither source fidelity nor authenticated native image authority.
 pub fn rgba_over_white_v41(raw: &[u8]) -> Result<Vec<u8>> {
-    if raw.len() % 4 != 0 || raw.len() > 256 << 20 {
+    if !raw.len().is_multiple_of(4) || raw.len() > 256 << 20 {
         return Err(bad("PIXTRAL41_RGBA_EXTENT"));
     }
     let mut out = Vec::with_capacity(raw.len() / 4 * 3);

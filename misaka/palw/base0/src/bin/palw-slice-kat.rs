@@ -23,6 +23,7 @@
 //! grounds to spend the bandwidth, not to declare capability. A seat's duty replays full jobs on
 //! full weights; declaring on a slice is the documented `Incapable` trap.
 
+#![allow(warnings)]
 use misaka_palw_base0::artifact::decode_artifact_file_v1;
 use misaka_palw_base0::engine_a16::{A16Cache, A16Engine};
 

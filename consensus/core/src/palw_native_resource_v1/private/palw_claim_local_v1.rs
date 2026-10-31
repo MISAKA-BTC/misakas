@@ -23,7 +23,7 @@ impl NativeWireScanV1 for PalwClaimLocalRowOwnerV1 {
     fn scan_native_wire_v1<R: Read>(reader: &mut NativeWireReaderV1<R>) -> io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 | 1 | 2 | 6 => Ok(NativeWireShapeV1::default()),
+            0..=2 => Ok(NativeWireShapeV1::default()),
             _ => Err(io::Error::new(io::ErrorKind::InvalidData, "unknown liability row owner")),
         }
     }
@@ -149,5 +149,26 @@ impl NativeWireScanV1 for PalwClaimLiabilityFrameV1 {
         sum = sum.merge(<Vec<crate::palw_state_v2::PalwConsensusObjectV2> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
         sum = sum.merge(<BTreeMap<Hash64, Vec<u8>> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
         sum.merge(<Vec<PalwClaimLocalInputV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)
+    }
+}
+
+#[cfg(test)]
+mod namespace_tests {
+    use super::*;
+
+    #[test]
+    fn rfc23s2_row_owner_and_work_namespaces_have_distinct_tags() {
+        use crate::palw_native_resource_v1::preflight_native_value_v1;
+        for owner in [PalwClaimLocalRowOwnerV1::KernelRoute, PalwClaimLocalRowOwnerV1::ExecV2, PalwClaimLocalRowOwnerV1::ChainClaims] {
+            let bytes = borsh::to_vec(&owner).unwrap();
+            preflight_native_value_v1::<PalwClaimLocalRowOwnerV1>(&bytes[..], bytes.len() as u64).unwrap();
+        }
+        // Tag 6 is an allocated work identity, never a fourth journal owner.
+        assert!(preflight_native_value_v1::<PalwClaimLocalRowOwnerV1>(&[6][..], 1).is_err());
+        let work = PalwClaimLocalWorkRefV1::KernelClaim { claim: Hash64::from_u64_word(0x144) };
+        let bytes = borsh::to_vec(&work).unwrap();
+        assert_eq!(bytes[0], 6);
+        preflight_native_value_v1::<PalwClaimLocalWorkRefV1>(&bytes[..], bytes.len() as u64).unwrap();
+        assert_eq!(borsh::from_slice::<PalwClaimLocalWorkRefV1>(&bytes).unwrap(), work);
     }
 }

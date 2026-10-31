@@ -7,6 +7,7 @@
 //! disagreeing with itself. They are a different fact — what a live chain's derivations name — and
 //! they sit in their own file. They never move: a re-pin of the current tree does not touch them.
 
+#![allow(warnings)]
 use misaka_palw_derive::ids::transformer_id;
 
 /// The ids the PREVIOUS published tree gave the same transformers — the pin as it read from

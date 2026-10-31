@@ -27,8 +27,9 @@ pub struct PalwTirFundedOriginalEnvelopeV1 {
 /// activation fence. A truncated TFO1 framing cannot fall back to legacy FP.
 pub fn is_funded_original_carrier_v1(tx: &Transaction) -> bool {
     tx.subnetwork_id == crate::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT
-        && ([PALW_TIR_FUNDED_ORIGINAL_MAGIC_V1, crate::palw_tir_funded_original_envelope_v2::MAGIC].iter().any(|magic|
-            tx.payload.starts_with(*magic) || (!tx.payload.is_empty() && magic.starts_with(&tx.payload))))
+        && ([PALW_TIR_FUNDED_ORIGINAL_MAGIC_V1, crate::palw_tir_funded_original_envelope_v2::MAGIC]
+            .iter()
+            .any(|magic| tx.payload.starts_with(*magic) || (!tx.payload.is_empty() && magic.starts_with(&tx.payload))))
 }
 fn invalid(why: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, why.into())
@@ -125,14 +126,21 @@ impl PalwTirFundedOriginalEnvelopeV1 {
         let outer = if tx.payload.starts_with(b"FPR2") {
             crate::palw_claim_local_v1::prefix_v1::PalwPrefixDependencyEnvelopeV1::inner_view_v1(&tx.payload)
                 .map_err(|_| "invalid FPR2 funded carrier")?
-        } else { tx.payload.as_slice() };
+        } else {
+            tx.payload.as_slice()
+        };
         let payload = if outer.starts_with(b"FPA1") {
             crate::palw_fp_answer_accounting_v1::palw_fp_answer_envelope_view_v1(outer, u32::MAX as usize)
-                .ok_or("invalid FPA1 funded carrier")?.inner
-        } else { outer };
+                .ok_or("invalid FPA1 funded carrier")?
+                .inner
+        } else {
+            outer
+        };
         let family = if payload.starts_with(crate::palw_tir_funded_original_envelope_v2::MAGIC) {
             Some(crate::palw_tir_funded_original_envelope_v2::PalwTirFundedOriginalEnvelopeV2::decode_v2(payload)?)
-        } else { None };
+        } else {
+            None
+        };
         let payload = family.as_ref().map_or(payload, |e| e.funded_original.as_slice());
         // Inspect the actual outer TX: its signed input scope and funding output are never projected.
         if tx.subnetwork_id != crate::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT || payload != literal {
@@ -207,7 +215,12 @@ mod tests {
             vec![TransactionInput::new(TransactionOutpoint::new(h(99), 0), vec![], 0, 0)],
             vec![
                 TransactionOutput::new(1, ScriptPublicKey::default()),
-                TransactionOutput::new(1000, crate::mldsa87_primitives::p2pkh_mldsa87_spk(&kaspa_hashes::blake2b_512_address_payload(&e.payer_pubkey).as_bytes())),
+                TransactionOutput::new(
+                    1000,
+                    crate::mldsa87_primitives::p2pkh_mldsa87_spk(
+                        &kaspa_hashes::blake2b_512_address_payload(&e.payer_pubkey).as_bytes(),
+                    ),
+                ),
             ],
             0,
             crate::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT,
@@ -311,7 +324,7 @@ mod tests {
         let e = envelope();
         let plain = carrier(&e);
         let mut outer = plain.clone();
-        outer.payload = crate::palw_fp_answer_accounting_v1::palw_fp_answer_envelope_encode_v1(&plain.payload, &[7,8]);
+        outer.payload = crate::palw_fp_answer_accounting_v1::palw_fp_answer_envelope_encode_v1(&plain.payload, &[7, 8]);
         outer.finalize();
         assert_ne!(plain.id(), outer.id());
         let pairing = crate::palw_funded_original_coordinator_v1::palw_funded_original_answer_pairing_v1(&outer).unwrap();
@@ -324,26 +337,29 @@ mod tests {
             let mut wrong = outer.clone();
             match n {
                 0 => wrong.outputs[1].value -= 1,
-                1 => wrong.payload = crate::palw_fp_answer_accounting_v1::palw_fp_answer_envelope_encode_v1(&outer.payload, &[7,8]),
+                1 => wrong.payload = crate::palw_fp_answer_accounting_v1::palw_fp_answer_envelope_encode_v1(&outer.payload, &[7, 8]),
                 _ => wrong.payload.push(0),
             }
             wrong.finalize();
             assert!(e.inspect_carrier_v1(&wrong).is_err());
         }
-        assert!(e.funding.verify_signature_v1(&e.payer_pubkey).is_err(), "framing never authenticates synthetic consent or answer/output binding");
+        assert!(
+            e.funding.verify_signature_v1(&e.payer_pubkey).is_err(),
+            "framing never authenticates synthetic consent or answer/output binding"
+        );
     }
     #[test]
     fn actual_own_output_and_once_only_fee_are_bound_to_the_identical_carrier() {
         // RFC38's wrapper is independently activated from RFC40. Its exact
         // funding output remains provisionally locked without Prefix support.
         {
-            let e=envelope();
-            let mut tx=carrier(&e);
-            tx.payload=crate::palw_fp_answer_accounting_v1::palw_fp_answer_envelope_encode_v1(&tx.payload,&[1]);
+            let e = envelope();
+            let mut tx = carrier(&e);
+            tx.payload = crate::palw_fp_answer_accounting_v1::palw_fp_answer_envelope_encode_v1(&tx.payload, &[1]);
             tx.finalize();
-            let expected=TransactionOutpoint::new(tx.id(),e.funding.terms.funding_output_index);
-            assert_eq!(crate::palw_funded_escrow_v1::palw_wrapped_tfo1_provisional_lock_v1(&tx,false,true),Some(expected));
-            assert_eq!(crate::palw_funded_escrow_v1::palw_wrapped_tfo1_provisional_lock_v1(&tx,false,false),None);
+            let expected = TransactionOutpoint::new(tx.id(), e.funding.terms.funding_output_index);
+            assert_eq!(crate::palw_funded_escrow_v1::palw_wrapped_tfo1_provisional_lock_v1(&tx, false, true), Some(expected));
+            assert_eq!(crate::palw_funded_escrow_v1::palw_wrapped_tfo1_provisional_lock_v1(&tx, false, false), None);
         }
 
         let e = envelope();

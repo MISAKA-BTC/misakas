@@ -16,6 +16,7 @@
 //! `MISAKA_PALW_ARTIFACT` names one — announcing itself when it does not, because a check that
 //! quietly did not run is worth less than no check.
 
+#![allow(warnings)]
 use std::process::Command;
 
 /// The class id `palw-certify` printed, read out of the line it writes on success.

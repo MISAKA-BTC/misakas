@@ -14,6 +14,7 @@
 //!
 //! Pinned: every block's state root, every block's delta as borsh, and the tip's carriage as borsh, folded into one BLAKE2b-512.
 
+#![allow(warnings)]
 #[path = "rcore_common.rs"]
 mod common;
 use common::*;

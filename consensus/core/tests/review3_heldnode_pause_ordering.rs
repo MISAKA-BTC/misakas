@@ -19,6 +19,7 @@
 //! carriage, the way the fold leaves the state; kaspad's `held_court_e2e` plays the ordering through
 //! the node and the fold (the close a block after the demand, and in the same block after it).
 
+#![allow(warnings)]
 #[path = "rcore_common.rs"]
 mod common;
 use common::*;

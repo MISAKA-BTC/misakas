@@ -5,6 +5,7 @@
 //! a 4,096-lane logits tile, two-position checkpoints) at a 64-position context, their logits under
 //! the tiled scheme, their inventory roots real. The ruleset is testnet-12's with `palw_tir_v1` armed.
 
+#![allow(warnings)]
 #[path = "palw_tir_fixture_common.rs"]
 mod fixture;
 use fixture::*;

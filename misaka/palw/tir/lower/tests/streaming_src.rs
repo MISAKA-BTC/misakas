@@ -3,6 +3,7 @@
 //! row, the whole evaluation — for every param, every layer, every block size — and the byte-range
 //! reads of a sharded checkpoint equal the whole-tensor reads.
 
+#![allow(warnings)]
 use misaka_palw_tir_lower::weights::stream::{eval_src_rows, row_blocks, src_row_space};
 use misaka_palw_tir_lower::weights::{Checkpoint, Resolver, TensorSource, eval_src, layers_of_param};
 use misaka_palw_tir_lower::{hf_weights, hl, parse_config_str};

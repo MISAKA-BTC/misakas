@@ -41,10 +41,10 @@ pub fn prove_native_aux_page_v39(state: &PalwChainStateV2, request: &[u8]) -> Re
     if route.aux.len() > crate::palw_native_audit_proof_v39::NATIVE_AUX_ROWS_MAX_V39 {
         return Err("audit39 original row count exceeds profile".into());
     }
-    if let Some(key) = &cursor {
-        if !route.aux.contains_key(key) {
-            return Err("audit39 page cursor is not an original row in the pinned state".into());
-        }
+    if let Some(key) = &cursor
+        && !route.aux.contains_key(key)
+    {
+        return Err("audit39 page cursor is not an original row in the pinned state".into());
     }
     let opening = PalwStateOpeningV1::of(state);
     if opening.preimage.len() > 4 << 20 {

@@ -8,7 +8,7 @@
 //! committed root (`into_state`: the ledger re-derived from the claims' commitments, R-core+'s load
 //! invariants, DL-1's deadlines exactly).
 #![allow(dead_code, unused_imports)]
-
+#![allow(warnings)]
 #[path = "panel_room_common.rs"]
 mod room;
 pub use room::*;
@@ -59,7 +59,21 @@ pub struct Chain {
 }
 
 impl Chain {
-    pub fn new(p: Params) -> Self {
+    pub fn new(mut p: Params) -> Self {
+        // These folds do not carry kernel-route extras. Take off G14 fences that are still at the
+        // shipped flag day. A caller that moved one to its own height keeps that height.
+        let flag = kaspa_consensus_core::config::params::PALW_T12_G14_17000_DAA_V1;
+        let armed_at_flag: Vec<&'static str> = p
+            .palw_fences_v1()
+            .iter()
+            .filter(|(_, fence)| fence.is_some_and(|at| at.daa_score() == flag))
+            .map(|(name, _)| *name)
+            .collect();
+        for entry in kaspa_consensus_core::config::params::PALW_T12_G14_17000_FENCES_V1 {
+            if armed_at_flag.contains(&entry.name) {
+                (entry.set)(&mut p, None);
+            }
+        }
         let sp = bundle(&p).state.clone();
         let s = genesis_state(&p);
         Self { p, sp, s, daa: 1_000, room: false, attribution: false }

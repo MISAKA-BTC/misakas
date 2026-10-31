@@ -14,6 +14,7 @@
 //! * The LoRA budget lists every target of a llama, fits them all, and sizes each composite under
 //!   the cap. On Phi-3 it refuses the fused projections by name.
 
+#![allow(warnings)]
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

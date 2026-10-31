@@ -39,11 +39,14 @@ async fn t10_fixture_coverage_does_not_cover_every_paid_original() {
     #[cfg(feature = "g14-t-campaign-intended-api")]
     {
         let w = World::new().await;
-        let refusal = w.net.chain.tip_state().1.palw_funded_original_admission_preview_v1(&w.class, /* uncovered family */ 0xFFFF);
+        let refusal =
+            w.net.chain.tip_state().1.palw_funded_original_admission_preview_v1(&w.class, /* uncovered family */ 0xFFFF);
         assert!(matches!(refusal, Err(e) if e.contains("not covered")), "typed refusal for an uncovered paid original");
     }
     #[cfg(not(feature = "g14-t-campaign-intended-api"))]
-    blocked_on!("every node-level funded admission is refused at the schedule (palw_funded_original_schedule_v1 typed-missing, V2) before family coverage is consulted (see tests/funded_original_native_candidate.rs); intended palw_funded_original_admission_preview_v1 does not exist");
+    blocked_on!(
+        "every node-level funded admission is refused at the schedule (palw_funded_original_schedule_v1 typed-missing, V2) before family coverage is consulted (see tests/funded_original_native_candidate.rs); intended palw_funded_original_admission_preview_v1 does not exist"
+    );
 }
 
 /// **T11 (scaled): N concurrent pursuits, only the LAST one false; every retained liability and the capacity accounted.** N claims

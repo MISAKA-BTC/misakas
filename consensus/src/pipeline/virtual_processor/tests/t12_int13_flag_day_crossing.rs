@@ -25,6 +25,7 @@
 //!    root and the same panels on every bound claim; a third node fed the chain in two halves cut AT the fence (a restart across it) does
 //!    too;
 //! 5. **the fork id** keeps the released build below `H` in both directions and refuses it from `H` — over this harness's ruleset as well.
+#![allow(warnings)]
 use super::t12_round_lane_e2e::{T12Chain, t12_genesis_chain, t12_with_harness_cards_over};
 use crate::model::stores::ghostdag::GhostdagStoreReader;
 use kaspa_consensus_core::BlockHash;

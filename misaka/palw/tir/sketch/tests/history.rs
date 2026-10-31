@@ -4,6 +4,7 @@
 //!
 //! Run: `cargo test -p misaka-palw-tir-sketch --test history`
 
+#![allow(warnings)]
 use misaka_palw_tir_sketch::{TirHistorySketchV1, TirSeatSketchSecretV1, TirSketchModulusV1};
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;

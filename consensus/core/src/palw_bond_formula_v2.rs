@@ -90,12 +90,12 @@ pub struct PalwMeasuredAuditCapacityRecordV2 {
 /// runs), or a class with a pinned measured-capacity record with positive capacity.
 pub fn palw_bond_formula_reduction_allowed_v2(class_id: &Hash64, base_class: &Hash64) -> bool {
     class_id == base_class
-        || PALW_BOND_FORMULA_MEASURED_CAPACITY_PINNED_V2
-            .iter()
-            .any(|r| r.audits_per_day > 0
+        || PALW_BOND_FORMULA_MEASURED_CAPACITY_PINNED_V2.iter().any(|r| {
+            r.audits_per_day > 0
                 && class_id.as_byte_slice() == &r.class_id[..]
                 && r.evidence_digest != [0; 64]
-                && r.review_digest != [0; 64])
+                && r.review_digest != [0; 64]
+        })
 }
 
 /// **The pricing type of a budget row's origin** (the close path's reading: which type's court/DA/retention span holds its liability).
@@ -359,7 +359,11 @@ pub fn palw_bond_formula_right_ceilings_v2(budget: &PalwBondBudgetPolicyV1) -> O
 
 /// **The weight part** `L_weight = max(⌈f_c · v_F⌉, ⌈PWU·S·A · λ_pwu / 1000⌉)` — never divided by ρ. The value the V2 ledger records as
 /// `claim.reserved` past the fence.
-pub fn palw_bond_formula_weight_part_v2(policy: &PalwBondFormulaPolicyV2, budget: &PalwBondBudgetPolicyV1, pwu_exposure: u128) -> u128 {
+pub fn palw_bond_formula_weight_part_v2(
+    policy: &PalwBondFormulaPolicyV2,
+    budget: &PalwBondBudgetPolicyV1,
+    pwu_exposure: u128,
+) -> u128 {
     let f_c = palw_bond_formula_right_ceilings_v2(budget).map_or(0, |(_, f)| f);
     let value = f_c.saturating_mul(policy.weight_value_sompi_per_weight as u128);
     value.max(ceil_mul_div(pwu_exposure, policy.pwu_loss_permille as u128, 1_000))
@@ -372,7 +376,8 @@ pub fn palw_bond_formula_split_v2(
     budget: &PalwBondBudgetPolicyV1,
     input: &PalwBondFormulaInputV2,
 ) -> Result<PalwReservationSplitV2, &'static str> {
-    let hold = budget.hold.as_ref().filter(|_| budget.version == PALW_BOND_BUDGET_POLICY_VERSION_V3).ok_or("needs a V3 budget policy")?;
+    let hold =
+        budget.hold.as_ref().filter(|_| budget.version == PALW_BOND_BUDGET_POLICY_VERSION_V3).ok_or("needs a V3 budget policy")?;
     let (r_c, f_c) = palw_bond_formula_right_ceilings_v2(budget).ok_or("needs a budget policy that slices rights by rho (D2)")?;
     let t = input.claim_type;
     let pricing = policy.pricing(t);
@@ -393,11 +398,8 @@ pub fn palw_bond_formula_split_v2(
     let right_part = if t.reward_in_user_escrow() { 0 } else { reward as u128 };
     let gain = (reward as u128).saturating_add(weight_value);
     let collectable = (pricing.loss_floor_sompi as u128).max(ceil_mul_div(gain, pricing.loss_multiplier_permille as u128, 1_000));
-    let penalty = if t.reward_in_user_escrow() {
-        collectable
-    } else {
-        collectable.saturating_sub(right_part.saturating_add(weight_value))
-    };
+    let penalty =
+        if t.reward_in_user_escrow() { collectable } else { collectable.saturating_sub(right_part.saturating_add(weight_value)) };
     let other = (pricing.court_cost_sompi as u128).saturating_add(pricing.da_retention_cost_sompi as u128);
     let terminal = PalwComponentHoldV2::TerminalPlusLiability { liability_hold_daa: budget.liability_hold_daa };
     Ok(PalwReservationSplitV2 {

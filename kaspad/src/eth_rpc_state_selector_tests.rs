@@ -15,7 +15,12 @@ struct Reader {
 }
 impl Reader {
     fn new(result: ConsensusResult<Option<EvmBlockResponse>>) -> Self {
-        Self { result, canonical: Ok(true), heads: Ok(Some(CanonicalEvmHeads { latest: hash(1), safe: hash(2), finalized: hash(3) })), calls: Mutex::new(Vec::new()) }
+        Self {
+            result,
+            canonical: Ok(true),
+            heads: Ok(Some(CanonicalEvmHeads { latest: hash(1), safe: hash(2), finalized: hash(3) })),
+            calls: Mutex::new(Vec::new()),
+        }
     }
     fn record(&self, call: String) {
         self.calls.lock().unwrap().push(call);
@@ -110,7 +115,11 @@ fn state_selector_existing_tags_use_exact_canonical_head_source() {
 #[test]
 fn simulation_certified_missing_or_unreadable_head_stops_before_snapshot() {
     for tag in ["safe", "finalized"] {
-        for heads in [Ok(None), Ok(Some(CanonicalEvmHeads { latest: hash(1), safe: hash(0), finalized: hash(0) })), Err(ConsensusError::General("head read fault"))] {
+        for heads in [
+            Ok(None),
+            Ok(Some(CanonicalEvmHeads { latest: hash(1), safe: hash(0), finalized: hash(0) })),
+            Err(ConsensusError::General("head read fault")),
+        ] {
             let mut reader = Reader::new(Ok(None));
             reader.heads = heads;
             let result: EthResult<()> = with_resolved_simulation_target(&reader, &BlockId::Tag(tag.into()), |_| {

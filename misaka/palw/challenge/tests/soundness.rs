@@ -1,6 +1,7 @@
 //! **Effective false-accept accounting, pinned** (golden vectors), its wiring into the approval check, and the complete-check
 //! policy shape. Every number here is derived by hand in `docs/design/palw/verification/opv-beacon-bootstrap.md` §6–§7.
 
+#![allow(warnings)]
 use misaka_palw_challenge::hash::named_id;
 use misaka_palw_challenge::policy::{ImplementedV1, PolicyRefusalV1};
 use misaka_palw_challenge::soundness::{ceil_log2_v1, sampled_family_millibits_v1};

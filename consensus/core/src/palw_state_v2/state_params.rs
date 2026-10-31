@@ -1811,7 +1811,9 @@ impl PalwStateParamsV2 {
         self.claim_local_settlement_from_daa = from;
         self
     }
-    pub fn claim_local_settlement_from_daa(&self) -> Option<u64> { self.claim_local_settlement_from_daa }
+    pub fn claim_local_settlement_from_daa(&self) -> Option<u64> {
+        self.claim_local_settlement_from_daa
+    }
     pub fn claim_local_settlement_active_at(&self, daa: u64) -> bool {
         self.claim_local_settlement_from_daa.is_some_and(|from| daa >= from)
     }
@@ -2138,6 +2140,17 @@ impl PalwStateParamsV2 {
         self.window_court
     }
 
+    /// Isolated clock/court harnesses choose explicit bounded lattice budgets.
+    /// Presets and activation records do not use this test-only builder.
+    pub fn with_test_only_lattice_windows_v1(mut self, window_challenge: u64, window_court: u64) -> Result<Self, PalwStateV2Error> {
+        if window_challenge == 0 || window_court == 0 {
+            return Err(PalwStateV2Error::InvalidParams("every lattice window must be at least one DAA unit"));
+        }
+        self.window_challenge = window_challenge;
+        self.window_court = window_court;
+        Ok(self)
+    }
+
     /// **Lane V02 (post-launch): the mirror's setter** — written by `Params::sync_palw_final_lock_life`
     /// and by nothing else, so the copy cannot drift from `Params::palw_final_lock_life`. `None` where
     /// the fence is not armed.
@@ -2252,10 +2265,24 @@ impl PalwStateParamsV2 {
 }
 
 impl PalwStateParamsV2 {
-    pub fn material_release_recovery_from_v2(&self) -> Option<u64> { self.material_release_recovery_v2.as_ref().map(|m|m.from_daa) }
-    pub fn with_material_release_recovery_v2(mut self, mirror: Option<crate::palw_material_release_recovery_v2::PalwMaterialReleaseRecoveryMirrorV2>) -> Self { self.material_release_recovery_v2 = mirror; self }
-    pub fn material_release_recovery_at_v2(&self, daa: u64) -> Option<&crate::palw_material_release_recovery_v2::PalwMaterialReleaseRecoveryPolicyV2> {
-        self.material_release_recovery_v2.as_ref().filter(|m|daa>=m.from_daa && self.monetary_material_at_v1(daa).is_some()).map(|m|&m.policy)
+    pub fn material_release_recovery_from_v2(&self) -> Option<u64> {
+        self.material_release_recovery_v2.as_ref().map(|m| m.from_daa)
+    }
+    pub fn with_material_release_recovery_v2(
+        mut self,
+        mirror: Option<crate::palw_material_release_recovery_v2::PalwMaterialReleaseRecoveryMirrorV2>,
+    ) -> Self {
+        self.material_release_recovery_v2 = mirror;
+        self
+    }
+    pub fn material_release_recovery_at_v2(
+        &self,
+        daa: u64,
+    ) -> Option<&crate::palw_material_release_recovery_v2::PalwMaterialReleaseRecoveryPolicyV2> {
+        self.material_release_recovery_v2
+            .as_ref()
+            .filter(|m| daa >= m.from_daa && self.monetary_material_at_v1(daa).is_some())
+            .map(|m| &m.policy)
     }
     pub fn monetary_material_from_v1(&self) -> Option<u64> {
         self.monetary_material.as_ref().map(|m| m.from_daa)
@@ -2299,7 +2326,8 @@ impl PalwStateParamsV2 {
         self.palw_claim_compact_v4.as_ref()
     }
     pub fn claim_compact_v4_at(&self, daa: u64) -> Option<&crate::palw_claim_compact_v4::PalwClaimCompactPolicyV4> {
-        self.palw_claim_compact_v4.as_ref()
+        self.palw_claim_compact_v4
+            .as_ref()
             .filter(|f| f.activation.is_active(daa) && self.claim_challenge_v2_at(daa).is_some())
             .map(|f| &f.policy)
     }

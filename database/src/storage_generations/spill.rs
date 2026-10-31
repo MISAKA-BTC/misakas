@@ -122,7 +122,14 @@ impl SpillArea {
                 return Err(e.into());
             }
         };
-        Ok(SpillFile { file, path, cap: self.per_file_cap, written: 0, accounting: self.accounting.clone(), _reservation: reservation })
+        Ok(SpillFile {
+            file,
+            path,
+            cap: self.per_file_cap,
+            written: 0,
+            accounting: self.accounting.clone(),
+            _reservation: reservation,
+        })
     }
 }
 

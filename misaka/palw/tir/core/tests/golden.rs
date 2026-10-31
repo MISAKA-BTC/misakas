@@ -14,6 +14,7 @@
 //! `TIR_BLESS=1 cargo test -p misaka-palw-tir --test golden` rewrites them — which is a change of
 //! the vectors and must be reviewed as a change of the semantics.
 
+#![allow(warnings)]
 mod common;
 
 use std::path::PathBuf;

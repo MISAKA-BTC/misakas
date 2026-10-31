@@ -40,22 +40,29 @@ fn first(state: &PalwChainStateV2, class: Hash64) -> Result<Option<u64>, PalwSta
         .transpose()
 }
 
-pub(super) fn profile_key_v2(class: Hash64) -> [u8; 65] { key(0xA3, class) }
+pub(super) fn profile_key_v2(class: Hash64) -> [u8; 65] {
+    key(0xA3, class)
+}
 
 impl PalwChainStateV2 {
     /// Registered graph identity only: no model approval, work eligibility or credit.
     /// Legacy profile rows remain readable, without writing the price/deadline index.
-    pub fn reader_router_profile_v2(&self, class: Hash64) -> Result<Option<NativeRetainedV1<crate::palw_step::PalwShapeProfileV3>>, PalwStateV2Error> {
+    pub fn reader_router_profile_v2(
+        &self,
+        class: Hash64,
+    ) -> Result<Option<NativeRetainedV1<crate::palw_step::PalwShapeProfileV3>>, PalwStateV2Error> {
         let profile = if let Some(bytes) = raw(self, &profile_key_v2(class)) {
             Some(retain_native_value_decode_classified_v1(bytes, || borsh::from_slice(bytes)).map_err(decode_error)?)
         } else {
-            self.fp_work_profile_of(&class).map(NativeRetainedV1::try_from_clone_v1)
-                .transpose().map_err(PalwStateV2Error::NativeResource)?
+            self.fp_work_profile_of(&class)
+                .map(NativeRetainedV1::try_from_clone_v1)
+                .transpose()
+                .map_err(PalwStateV2Error::NativeResource)?
         };
-        if let Some(profile) = &profile {
-            if self.class(&class).is_none() || profile.shape_profile_id() != class {
-                return Err(refused("routing profile differs from its registered class"));
-            }
+        if let Some(profile) = &profile
+            && (self.class(&class).is_none() || profile.shape_profile_id() != class)
+        {
+            return Err(refused("routing profile differs from its registered class"));
         }
         Ok(profile)
     }
@@ -261,8 +268,10 @@ impl TransitionBuilder<'_> {
         if self.state.tir_classes.contains_key(&claim.class_id) || self.state.gen_classes.contains_key(&claim.class_id) {
             return Ok(());
         }
-        let profile =
-            self.state.reader_router_profile_v2(claim.class_id)?.ok_or_else(|| refused("V2 claim needs its native canonical profile"))?;
+        let profile = self
+            .state
+            .reader_router_profile_v2(claim.class_id)?
+            .ok_or_else(|| refused("V2 claim needs its native canonical profile"))?;
         if !(0..profile.global_node_count()).filter_map(|slot| profile.resolve_node_slot(slot)).any(|(n, _)| needs_reader_router_v2(n))
         {
             return Ok(());
@@ -287,7 +296,10 @@ impl TransitionBuilder<'_> {
     }
     pub(super) fn remove_reader_router_class_v2(&mut self, class_id: Hash64) -> Result<(), PalwStateV2Error> {
         // Preserve flags-off legacy class removal exactly when no V2 cell exists.
-        if raw(&self.state, class_id.as_byte_slice()).is_none() && first(&self.state, class_id)?.is_none() && raw(&self.state, &profile_key_v2(class_id)).is_none() {
+        if raw(&self.state, class_id.as_byte_slice()).is_none()
+            && first(&self.state, class_id)?.is_none()
+            && raw(&self.state, &profile_key_v2(class_id)).is_none()
+        {
             return Ok(());
         }
         // Retain the first-use marker through ordinary claim GC and restart.

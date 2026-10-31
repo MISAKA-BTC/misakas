@@ -21,6 +21,7 @@
 //! then added the KV aux series with a plain `+` -- "attempt to add with overflow" at
 //! palw_step.rs:1471 on 0e8ec984e. Tests 4 and 5 pin that it now answers instead of panicking.
 
+#![allow(warnings)]
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::palw_legs::{
     PALW_LEGS_DOMAIN_CHECKPOINT_MERKLE_LEAF, PALW_LEGS_DOMAIN_CHECKPOINT_MERKLE_NODE, PALW_LEGS_MAX_CHECKPOINTS,

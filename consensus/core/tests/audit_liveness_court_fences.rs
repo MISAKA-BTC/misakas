@@ -1,4 +1,5 @@
 //! audit(liveness-court): print testnet-12's shipped fences (int-12 release shape) and which are live at DAA 13,850.
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::palw_t12_shipped_params;
 
 #[test]

@@ -20,6 +20,7 @@
 //!
 //! Run: cargo test -p kaspa-consensus-core --test panel_room_held_claim_is_charged_to_every_class_until_final
 
+#![allow(warnings)]
 #[path = "panel_room_common.rs"]
 mod room;
 use room::*;

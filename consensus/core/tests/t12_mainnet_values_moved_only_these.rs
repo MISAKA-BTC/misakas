@@ -18,6 +18,7 @@
 //! `T12_BEFORE_THE_ATTRIBUTION` as it stood there — so nothing else in this change reached
 //! testnet-12's ruleset, identity or schedule.
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{
     ForkActivation, MAINNET_PARAMS, PalwPanelExposureFloorV1, Params, palw_t12_shipped_params,
 };
@@ -40,11 +41,11 @@ fn at_the_parent(mut p: Params) -> Params {
 
 /// `palw_offence_attribution_is_t12_only`'s `T12_BEFORE_THE_ATTRIBUTION` at `8270cf03` (testnet-12
 /// with the attribution fence taken away), before this change moved it.
-// re-pin 2026-10-08 @42452229ee51: no DAA-9,000 flag day (user, 2026-10-08): the int-13 list is dormant; ids back to the int-12 release (was 61d4eb4d…, 2d23b5f3…)
+// re-pin 2026-10-30 @64535b7bf7e8: User selected DAA18400 for the unpublished G14 schedule on 2026-10-30; preserve the current main CI fixes (was d15e80d7…, 7df51396…)
 const PARENT_WITHOUT_THE_ATTRIBUTION: (&str, &str, &str) = (
-    "d837fb191d81f01d30f241d28fdb9d13a12caa9cd5ee5644abbe37da53b37cf5",
+    "396ba2c678b99de2e9afe5071c6288cddfac109d5ab46ba99f04b76bb913fe64",
     "df8d548dea8dc91bf12a34c6ba2f79d81c0736fb40212012080e4cce35cd5cfe",
-    "9e6afcf540c02944e18bf3a75e31cbfaf65884510c136e57ce9f692a7cd5c27b",
+    "3f258e13da0c13843bf7af3e19c3c3e6cef756baa6dd9d64d69c428a0d1d99d2",
 );
 
 #[test]

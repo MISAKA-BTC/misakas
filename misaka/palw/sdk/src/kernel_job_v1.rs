@@ -27,10 +27,10 @@ pub struct KernelTokenizerV1 {
 pub fn kernel_tokenizer_v1(bytes: &[u8], commitment: Option<Hash64>) -> Result<KernelTokenizerV1, String> {
     let digest = palw_tokenizer_raw_commitment_v1(bytes);
     let commitment = commitment.filter(|c| *c != Hash64::default());
-    if let Some(c) = commitment {
-        if c != digest {
-            return Err(format!("the tokenizer file hashes to {digest}, not the class's tokenizer commitment {c}"));
-        }
+    if let Some(c) = commitment
+        && c != digest
+    {
+        return Err(format!("the tokenizer file hashes to {digest}, not the class's tokenizer commitment {c}"));
     }
     let tokenizer = QwenTokenizer::from_json(bytes).map_err(|e| e.to_string())?;
     Ok(KernelTokenizerV1 { tokenizer, digest, verified: commitment.is_some() })
@@ -70,6 +70,7 @@ pub fn kernel_result_text_v1(tokenizer: &QwenTokenizer, tokens: &[u32]) -> Resul
 /// Test support (also used by the node E2E): see [`tests::tiny_tokenizer_json`].
 #[doc(hidden)]
 pub mod tests {
+    #[cfg(test)]
     use super::*;
 
     /// A byte-level tokenizer of 32 ids (`a`..`z`, `Ġ` for space, `0`..`4`), no merges — the 32-token fixture class's whole range.
@@ -87,7 +88,8 @@ pub mod tests {
         let bytes = tiny_tokenizer_json();
         let t = kernel_tokenizer_v1(&bytes, None).unwrap();
         assert!(!t.verified, "no commitment: used as given, never claimed verified");
-        let job = kernel_job_from_text_v1(&t.tokenizer, "hi there", Hash64::from_bytes([7; 64]), 32, 64, 3, Hash64::default()).unwrap();
+        let job =
+            kernel_job_from_text_v1(&t.tokenizer, "hi there", Hash64::from_bytes([7; 64]), 32, 64, 3, Hash64::default()).unwrap();
         assert_eq!(job.prompt.len(), 8);
         assert_eq!(kernel_result_text_v1(&t.tokenizer, &job.prompt).unwrap(), "hi there");
         assert!(kernel_job_from_text_v1(&t.tokenizer, "hi", Hash64::default(), 5, 64, 1, Hash64::default()).is_err(), "token bound");

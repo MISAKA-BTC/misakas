@@ -40,6 +40,7 @@
 //!
 //! Run: cargo test -p kaspa-consensus-core --test t06_stake_draw_ev_grid -- --nocapture
 
+#![allow(warnings)]
 use kaspa_consensus_core::BlockHash;
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::params::{PALW_T12_GENESIS_BLOCK_SUBSIDY_SOMPI, PALW_T12_GENESIS_BONDS, palw_t12_shipped_params};

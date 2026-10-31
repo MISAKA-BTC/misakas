@@ -29,6 +29,7 @@
 //!
 //! Run: cargo test -p kaspa-consensus-core --test dos_repro_4_withholding_producer_charged_only_by_pol -- --nocapture --test-threads=2
 
+#![allow(warnings)]
 #[path = "dos_l5_common.rs"]
 mod common;
 use common::*;
@@ -714,7 +715,8 @@ fn repro4_d_kaspad_never_constructs_default_accused() {
             // `*_e2e.rs` files are test modules too, some reached only through another test module's `#[path]` (no `#[cfg(test)]`
             // of their own): `palw_legacy_held_e2e.rs` from `palw_filer_held_e2e.rs`, the service suites from `palw_service_public_e2e.rs`.
             let name = path.file_name().unwrap().to_string_lossy().to_string();
-            if test_only.contains(&name) || name.ends_with("_e2e.rs") {
+            // `*_tests.rs` / `*_tests_v2.rs` likewise (`palw_gdn_held_action_owner_tests_v2.rs` is mounted by `#[path]` from a test module).
+            if test_only.contains(&name) || name.ends_with("_e2e.rs") || name.ends_with("_tests.rs") || name.contains("_tests_v") {
                 continue;
             }
             let text = std::fs::read_to_string(&path).unwrap();
@@ -734,8 +736,12 @@ fn repro4_d_kaspad_never_constructs_default_accused() {
                 cfg_test = line == "#[cfg(test)]";
                 let at = format!("{}:{}", path.file_name().unwrap().to_string_lossy(), n + 1);
                 if line.contains("DefaultAccused {") && !line.contains("DefaultAccusedHeld") {
-                    if line.contains("{ .. }") { patterns.push(at) } else { constructs.push(at) }
-                } else if line.contains("DefaultAccusedHeld {") && !line.contains("{ .. }") {
+                    // A rest pattern (`{ .. }` or `{ claim, .. }`, e.g. palw_court_object_claim_v1's match arm) builds nothing.
+                    if line.contains("{ .. }") || line.contains(", .. }") { patterns.push(at) } else { constructs.push(at) }
+                } else if line.contains("DefaultAccusedHeld {")
+                    && !line.contains("{ .. }")
+                    && !line.trim_start().starts_with("if let ")
+                {
                     held.push(at);
                 }
             }
@@ -760,7 +766,13 @@ fn repro4_d_kaspad_never_constructs_default_accused() {
     println!("P2-6's automatic accusations go through the ONE consensus-core builder: {one_builder}");
     assert!(constructs.is_empty(), "kaspad's production code writes no DefaultAccused literal");
     assert!(one_builder, "P2-6 files DefaultAccused only through palw_da_accusation_object_v1");
-    assert_eq!(held.len(), 1, "one DefaultAccusedHeld construction");
+    // Two production sites: the seat's held demand in palw_panel (gated below), and RFC-0006 06-A's held-GDN filer
+    // (`palw_gdn_held_action_owner_v2.rs`, reached only through `palw_gdn_held_filer`, dormant below `palw_memory_routing_court_v2`).
+    let gdn_site = held.iter().filter(|h| h.starts_with("palw_gdn_held_action_owner_v2.rs:")).count();
+    assert_eq!(held.len() - gdn_site, 1, "one DefaultAccusedHeld construction in the seat path: {held:?}");
+    assert!(gdn_site <= 1, "the held-GDN filer builds its demand in one place: {held:?}");
+    let gdn_filer = std::fs::read_to_string(root.join("kaspad/src/palw_gdn_held_filer.rs")).unwrap();
+    assert!(gdn_filer.contains("dormant with `palw_memory_routing_court_v2`"), "the held-GDN filer states its fence");
     assert!(gate);
     assert!(needs_served, "a producer that serves nothing gives the seat no binding, so no held demand is built");
 }

@@ -122,6 +122,7 @@ impl Factory {
 
 /// Reserve and durably publish a real Existing management entry before seeding
 /// only that node's scratch DB. No handwritten max key or opaque prefix copies.
+#[allow(clippy::ptr_arg)]
 pub(crate) fn reserve_existing_entry_v1(management_db: Arc<DB>, root: &PathBuf) -> PathBuf {
     let mut management = MultiConsensusManagementStore::new(management_db);
     let entry = match management.active_consensus_entry().unwrap() {

@@ -51,7 +51,11 @@ fn pausable_v2(params: &PalwStateParamsV2, state: &PalwChainStateV2, claim_id: &
         )
 }
 
-fn write_row(builder: &mut TransitionBuilder<'_>, claim: &Hash64, row: Option<&PalwReceiptPauseRowV2>) -> Result<(), PalwStateV2Error> {
+fn write_row(
+    builder: &mut TransitionBuilder<'_>,
+    claim: &Hash64,
+    row: Option<&PalwReceiptPauseRowV2>,
+) -> Result<(), PalwStateV2Error> {
     builder.write_kernel_row_encoded_v1(PALW_RECEIPT_PAUSE_TABLE_V2, &palw_receipt_pause_key_v2(claim), row)
 }
 

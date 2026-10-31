@@ -2,6 +2,7 @@
 //! of the toy stages recomputed from committed leaves alone equals the run; the latent written in
 //! `post` is a leaf; inputs are read at their position; a refused input fails `Missing`.
 
+#![allow(warnings)]
 mod v2common;
 
 use misaka_palw_tir::TirErrorKind;

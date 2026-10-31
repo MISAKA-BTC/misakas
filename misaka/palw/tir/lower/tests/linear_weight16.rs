@@ -1,4 +1,5 @@
 //! Explicit decoder precision profile: legacy bytes, streamed split rows, expert rows and bounds.
+#![allow(warnings)]
 use misaka_palw_tir_lower::{
     fidelity,
     float_ref::stream::Streamed,

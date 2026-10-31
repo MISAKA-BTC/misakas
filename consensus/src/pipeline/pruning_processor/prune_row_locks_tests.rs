@@ -114,11 +114,10 @@ fn pruning_row_lock_real_stores_complete_virtual_batch_before_pruner() {
     let pruning_storage = storage.clone();
     let pruning_db = db.clone();
     let pruning = std::thread::spawn(move || {
-        let RowGuards { palw: mut palw, relations, reachability_relations, statuses: mut statuses } =
-            lock_rows_after(&pruning_storage, || {
-                arrived_tx.send(()).unwrap();
-                allow_lock_rx.recv().unwrap();
-            });
+        let RowGuards { mut palw, relations, reachability_relations, mut statuses } = lock_rows_after(&pruning_storage, || {
+            arrived_tx.send(()).unwrap();
+            allow_lock_rx.recv().unwrap();
+        });
         let mut batch = WriteBatch::default();
         palw.delete_delta_batch(&mut batch, pruned).unwrap();
         assert_eq!(palw.gc_prefix_history_batch_v1(&mut batch, 201, 64).unwrap(), 1);

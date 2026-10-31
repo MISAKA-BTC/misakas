@@ -48,7 +48,8 @@ fn g14_fix_wide128_registers_under_the_production_gain_bound_on_shipped_params_a
 
     let gain_bound = state.kernel_panel_one_external_gain_bound_v1();
     assert_eq!(gain_bound, Some(500 * 100_000_000), "the production bound, no test override");
-    let cost = if clocked { panel_one_censorship_cost_clocked_v1(&policy, worst) } else { panel_one_censorship_cost_v1(&policy, worst) };
+    let cost =
+        if clocked { panel_one_censorship_cost_clocked_v1(&policy, worst) } else { panel_one_censorship_cost_v1(&policy, worst) };
     let gain = if clocked { policy.claim_collateral as u128 } else { 0 } + policy.claim_reward as u128 + gain_bound.unwrap() as u128;
     eprintln!(
         "G14FIX-WIDE128 clock_from={clock_from:?} clocked={clocked} worst_court_work={worst} max_court_work_per_block={} \

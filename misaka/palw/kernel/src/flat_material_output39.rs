@@ -103,7 +103,7 @@ impl CheckedOutputCertificatePlanV39 {
             || claim.positions == 0
             || claim.positions > source.original_context_max()
             || claim.segment_roots.len() != crate::seg::segment_count_v1(claim.positions) as usize
-            || claim.segment_roots.iter().any(|r| *r == [0; 64])
+            || claim.segment_roots.contains(&[0; 64])
         {
             return Err("output39 original accepted claim/source geometry differs".into());
         }

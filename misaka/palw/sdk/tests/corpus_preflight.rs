@@ -8,6 +8,7 @@
 //! verdict fails here by name (`UPDATE_PINS=1` rewrites the file; review the diff). They also record the coverage the corpus measures
 //! on the preflight's own terms: how many of the 100 reach `convert: ok`.
 
+#![allow(warnings)]
 use misaka_palw_sdk::preflight::{self, Depth, Options};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;

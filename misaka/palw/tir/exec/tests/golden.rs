@@ -13,6 +13,7 @@
 //! Where a vector pins an error class (spec 04b §9.3: one class per rule, and every vector breaks
 //! one rule) the backend must report that class.
 
+#![allow(warnings)]
 mod common;
 
 use std::path::PathBuf;

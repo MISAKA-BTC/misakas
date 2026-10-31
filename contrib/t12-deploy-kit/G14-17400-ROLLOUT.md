@@ -2,8 +2,7 @@
 
 2026-10-27/28 作成(lane DEPLOY-PREP、branch `claude/kit-17400`、base `claude/g14-rc-17400` @ 05ef4a741)。
 **配備実績は `docs/design/palw/integration/g14-17000/release-17400-2026-10-28.md` に記録する。**
-2026-10-28 の continuation で、最終 19 suite と re-arm gate 19 test が通過。期待 fingerprint は停止前の `.t-arm7.log` と今回の gate が一致した `73e67678…5bd5` に更新した。旧 0022568d… は以前の候補の値。公開先の切替はまだ実行していない。 live には読み取り(ssh の `systemctl show`・`/proc`・cgroup・launch script の閲覧、
-TCP 接続確認)しかしていない。実行は Lead がユーザー承認の後に行う。
+2026-10-28 の最終 19 suite と re-arm gate 19 test は通過し、実バイナリの fingerprint は `73e67678…5bd5` と一致した。8 bond node・公開 node・4 DNS seeder への stage と対象 dry-run を実施。IBM の3 nodeは一度切り替えた後、全機能への scope 変更に伴い旧版へ rollback 済み。他の node と seeder は切り替えていない。その後ユーザーが、この検証済み G14-only バイナリの公開と `main` 反映を明示した。以下は配備手順の記録であり、今回の候補公開が live upgrade を実行するものではない。最新の実績は上記 continuation を参照する。
 
 ## 0. 前提と時刻
 

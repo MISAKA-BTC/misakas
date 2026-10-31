@@ -602,6 +602,9 @@ impl Params {
         measured: &[PalwRfc0016MeasuredRecordV1],
         arming: &[PalwRfc0016ArmingRecordV1],
     ) -> Result<(), PalwModeV2Error> {
+        if self.has_isolated_g14_genesis_v1() {
+            return Ok(());
+        }
         let Some(at) = fence.armed(self) else { return Ok(()) };
         if !palw_rfc0016_values_measured_v1(values, measured) {
             return Err(PalwModeV2Error::Invalid(match fence {
@@ -613,7 +616,8 @@ impl Params {
                 }
             }));
         }
-        palw_rfc0016_arming_record_admits_v1(fence, self.genesis.hash, at, values, arming).map_err(PalwModeV2Error::Invalid)
+        palw_rfc0016_arming_record_admits_v1(fence, self.palw_arming_record_genesis_v1(), at, values, arming)
+            .map_err(PalwModeV2Error::Invalid)
     }
 
     /// **`palw_elastic_final_capacity_v1`'s refusals**: the mirror; a ConsensusV2 rule on a network whose model registry governs; the
@@ -695,7 +699,8 @@ mod tests {
         static EVIDENCE: [[u8; 32]; 6] = [[1; 32], [2; 32], [3; 32], [4; 32], [5; 32], [6; 32]];
         static DUPLICATED: [[u8; 32]; 6] = [[1; 32], [1; 32], [3; 32], [4; 32], [5; 32], [6; 32]];
         let values = measured();
-        let measured_record = PalwRfc0016MeasuredRecordV1 { values, evidence_digest: [7; 32], review_digest: [8; 32], harness: "test" };
+        let measured_record =
+            PalwRfc0016MeasuredRecordV1 { values, evidence_digest: [7; 32], review_digest: [8; 32], harness: "test" };
         for fence in PalwRfc0016GatedFenceV1::ALL {
             assert_eq!(fence.requirements().len(), 6, "{}: one digest per §14 conjunct", fence.name());
             let shipped = palw_t12_shipped_params();
@@ -704,7 +709,9 @@ mod tests {
             let mut p = palw_t12_shipped_params();
             match fence {
                 PalwRfc0016GatedFenceV1::ModelBlockRightsV1 => p.palw_model_block_rights_v1 = Some(ForkActivation::new(16_000)),
-                PalwRfc0016GatedFenceV1::ElasticFinalCapacityV1 => p.palw_elastic_final_capacity_v1 = Some(ForkActivation::new(16_000)),
+                PalwRfc0016GatedFenceV1::ElasticFinalCapacityV1 => {
+                    p.palw_elastic_final_capacity_v1 = Some(ForkActivation::new(16_000))
+                }
             }
             assert_eq!(fence.armed(&p), Some(16_000));
             let record = PalwRfc0016ArmingRecordV1 {

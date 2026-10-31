@@ -1,5 +1,4 @@
 //! **`qwen25_a16_backend`'s `aheld_windowed_builder` module**, moved out of `qwen25_a16_backend.rs` (2026-10-12, a behaviour-preserving split: the module path and every item in it are unchanged; only the file moved).
-#![cfg(test)]
 
 use super::*;
 use kaspa_consensus_core::palw_attn_court_v1::{

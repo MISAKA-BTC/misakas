@@ -31,6 +31,7 @@
 //!
 //! Run: cargo test -p kaspa-consensus --lib -- t62_the_unique_path
 
+#![allow(warnings)]
 use super::*;
 use kaspa_consensus_core::palw_da_rcore_v1::palw_da_offence_id_v1;
 use kaspa_consensus_core::palw_offence_attribution_v1::{

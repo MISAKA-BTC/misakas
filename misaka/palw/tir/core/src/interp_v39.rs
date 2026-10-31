@@ -213,10 +213,10 @@ impl<'p> InterpreterV39<'p> {
                     None => return Err(missing()),
                 };
                 check(&t, &TensorTypeV39::fixed(d.dtype, &d.shape), 1, self.program.profile.max_value_elements)?;
-                if let StateKind::Fixed { lo, hi } = d.kind {
-                    if t.data.iter().any(|v| *v < lo as i128 || *v > hi as i128) {
-                        return err(TirErrorKind::Operand, "state39 outside original interval");
-                    }
+                if let StateKind::Fixed { lo, hi } = d.kind
+                    && t.data.iter().any(|v| *v < lo as i128 || *v > hi as i128)
+                {
+                    return err(TirErrorKind::Operand, "state39 outside original interval");
                 }
                 Ok(Arc::new(t))
             }

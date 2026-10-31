@@ -1,6 +1,7 @@
 //! **Admission of version-2 programs and pipelines** (spec 04b §15.9): the view's analyses with the
 //! inputs' intervals and openings, the post-written states, the per-stage and per-job ceilings.
 
+#![allow(warnings)]
 mod v2common;
 
 use misaka_palw_tir::TirErrorKind;

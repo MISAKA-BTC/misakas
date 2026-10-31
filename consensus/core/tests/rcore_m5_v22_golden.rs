@@ -17,6 +17,7 @@
 //!
 //! Run: cargo test -p kaspa-consensus-core --test rcore_m5_v22_golden -- --nocapture
 
+#![allow(warnings)]
 #[path = "rcore_common.rs"]
 mod common;
 use common::*;

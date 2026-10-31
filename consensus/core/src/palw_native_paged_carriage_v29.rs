@@ -38,12 +38,10 @@ impl NativePagedCarriageRecordV29 {
     pub fn root(&self) -> Digest {
         if self.version == 39 {
             object_id(b"misaka-palw/native/original-complete-source-carriage/v39", self)
+        } else if self.version == 32 {
+            object_id(b"misaka-palw/native/original-phase-exclusive-producer-carriage/v32", self)
         } else {
-            if self.version == 32 {
-                object_id(b"misaka-palw/native/original-phase-exclusive-producer-carriage/v32", self)
-            } else {
-                object_id(b"misaka-palw/native/original-full-court-carriage/v29", self)
-            }
+            object_id(b"misaka-palw/native/original-full-court-carriage/v29", self)
         }
     }
 }
@@ -83,6 +81,7 @@ impl CheckedNativePagedCarriagePlanV29 {
     /// lane becomes ineligible. Queue30 reserves the larger complete burst and
     /// physical22 reserves the smaller service window conservatively. Neither
     /// an old29 record nor an ordinary carrier receives this interpretation.
+    #[allow(clippy::too_many_arguments)]
     pub fn derive_invocation_v32(
         program: &TirProgramV1,
         real_pc: &ParamCommitmentsV1,
@@ -201,6 +200,7 @@ impl CheckedNativePagedCarriagePlanV29 {
             },
         })
     }
+    #[allow(clippy::too_many_arguments)]
     pub fn derive(
         program: &TirProgramV1,
         real_pc: &ParamCommitmentsV1,

@@ -425,19 +425,28 @@ mod tests {
             1_000,
             old.body.clone(),
             signer(&executor),
-        ).unwrap();
+        )
+        .unwrap();
         let policy = ProviderTransportPolicyV1::new(Hash64::from_u64_word(1), 1 << 20);
         let verify = |message: &ProviderTransportRequestV1, purpose| {
-            provider_transport_verify_request_v1(message, purpose, &policy, NOW, Some(1_000),
-                &mut ProviderTransportReplayGuardV1::new(16, policy.max_skew_ms))
+            provider_transport_verify_request_v1(
+                message,
+                purpose,
+                &policy,
+                NOW,
+                Some(1_000),
+                &mut ProviderTransportReplayGuardV1::new(16, policy.max_skew_ms),
+            )
         };
         verify(&manifest, ProviderTransportPurposeV1::NativeManifestV3).unwrap();
         assert!(verify(&manifest, ProviderTransportPurposeV1::NativeReadyV3).is_err());
         assert!(verify(&old, ProviderTransportPurposeV1::NativeManifestV3).is_err());
         let mut relabelled = old;
         relabelled.header.purpose = ProviderTransportPurposeV1::NativeManifestV3;
-        assert!(verify(&relabelled, ProviderTransportPurposeV1::NativeManifestV3).is_err(),
-            "changing the ordinal must invalidate the original signed request");
+        assert!(
+            verify(&relabelled, ProviderTransportPurposeV1::NativeManifestV3).is_err(),
+            "changing the ordinal must invalidate the original signed request"
+        );
     }
     #[test]
     fn a_signed_request_verifies_once_and_every_tamper_or_replay_is_refused() {
@@ -522,7 +531,7 @@ impl kaspa_consensus_core::palw_native_resource_v1::NativeWireScanV1 for Provide
 macro_rules! transport_wire_v1 {($ty:ty;$($field:ty),+)=>{
     impl kaspa_consensus_core::palw_native_resource_v1::NativeWireScanV1 for $ty {
         fn scan_native_wire_v1<R:std::io::Read>(r:&mut kaspa_consensus_core::palw_native_resource_v1::NativeWireReaderV1<R>)->std::io::Result<kaspa_consensus_core::palw_native_resource_v1::NativeWireShapeV1>{
-            use kaspa_consensus_core::palw_native_resource_v1::{NativeWireShapeV1,NativeWireScanV1};
+            use kaspa_consensus_core::palw_native_resource_v1::NativeWireShapeV1;
             r.step()?;let shape=NativeWireShapeV1::default();$(let shape=shape.merge(<$field>::scan_native_wire_v1(r)?)?;)+Ok(shape)
         }
     }

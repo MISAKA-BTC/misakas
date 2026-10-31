@@ -12,6 +12,7 @@
 //! `Some(never())` is absence; `validate_palw_v2` refuses it off ConsensusV2, without F-N at or below it, and with a bundle
 //! mirror that disagrees. It is in no flag-day list (the int-11 flag day names its height) and not in the capacity list.
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{
     ForkActivation, MAINNET_PARAMS, PALW_T12_CAPACITY_FENCES_V1, PALW_T12_CAPACITY_NETWORK_VERIFY_FENCES_V1,
     PALW_T12_POST_LAUNCH_FENCES_V1, PalwPostLaunchFenceV1, Params, SIMNET_PARAMS, TESTNET_PARAMS, devnet_shipped_params,
@@ -23,7 +24,7 @@ use kaspa_consensus_core::palw_network_room_v1::palw_network_verify_level_v1;
 
 /// testnet-12 as THIS build ships its DAA-1,300 release — params, identity, schedule (the F-N test's own pin: a dormant
 /// fence must not move it).
-// re-pin 2026-09-27 @b2bf20a78b0d: third post-launch flag day: capacity tests judge their fence against the DAA-1,300 release (release_v2) (was cbe9152f…, f78b02ad…)
+// re-pin 2026-10-29 @d3ed36fdc77d: G14 at DAA 17400 moved testnet-12 params and schedule ids; the handshake identity stayed 5de80e64 (was 24e1aec3…, d263d7f2…)
 const T12_RELEASE: (&str, &str, &str) = (
     "24e1aec3e9a102fa40d559cd28005ad5944c32caa485d685bed65c52e4c056ff",
     "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",

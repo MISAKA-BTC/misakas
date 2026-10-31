@@ -15,6 +15,7 @@
 //! cargo run --release --bin tir-gpu-replay -- [--layers 2] [--positions 256,512,1024] [--chunk 256] [--step 32]
 //! ```
 
+#![allow(warnings)]
 use std::time::Instant;
 
 use misaka_palw_tir_exec::elem::{Elem, Slice};

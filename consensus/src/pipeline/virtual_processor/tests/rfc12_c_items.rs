@@ -15,6 +15,7 @@
 //! hook in `native_row`): the node's own stored delta, its extraction, the conversion (bond -> operator, canonical weight), the lifecycle
 //! closure and the certificate all run unchanged; only the class id of the one record is replaced. The pure conversion of a REAL record is
 //! `rfc0012_native_evidence_fold`'s.
+#![allow(warnings)]
 use super::rfc12_zero_dns_matrix::parts;
 use super::t12_round_lane_e2e::{T12Chain, card_payout_spk, sign_spend, t12_genesis_chain};
 use crate::consensus::test_consensus::TestConsensus;

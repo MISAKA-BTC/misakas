@@ -10,6 +10,7 @@
 //! cargo run --release -p misaka-palw-base0 --bin base0-kat > palw-base0-kat-v1.json
 //! ```
 
+#![allow(warnings)]
 fn main() {
     let groups = misaka_palw_base0::kat::groups();
     let total: usize = groups.iter().map(|g| g.vectors.len()).sum();

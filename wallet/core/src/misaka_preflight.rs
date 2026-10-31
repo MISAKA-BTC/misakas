@@ -445,9 +445,13 @@ mod tests {
         assert_eq!(caps.finality_authority, MisakaFinalityAuthorityV1::Dns);
         let bond = kaspa_consensus_core::subnets::SUBNETWORK_ID_STAKE_BOND;
         assert!(
-            evaluate_preflight_v1(&caps, &expect(Some(5_000 + MISAKA_RETIREMENT_SIGNING_MARGIN_DAA_V1)), &[bond.clone()]).is_err()
+            evaluate_preflight_v1(&caps, &expect(Some(5_000 + MISAKA_RETIREMENT_SIGNING_MARGIN_DAA_V1)), std::slice::from_ref(&bond))
+                .is_err()
         );
-        assert!(evaluate_preflight_v1(&caps, &expect(Some(5_001 + MISAKA_RETIREMENT_SIGNING_MARGIN_DAA_V1)), &[bond.clone()]).is_ok());
+        assert!(
+            evaluate_preflight_v1(&caps, &expect(Some(5_001 + MISAKA_RETIREMENT_SIGNING_MARGIN_DAA_V1)), std::slice::from_ref(&bond))
+                .is_ok()
+        );
         let json = evaluate_preflight_json_v1(
             &serde_json::to_string(&caps).unwrap(),
             &serde_json::to_string(&expect(Some(5_000))).unwrap(),

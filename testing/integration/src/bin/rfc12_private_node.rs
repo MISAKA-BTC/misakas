@@ -1,5 +1,6 @@
 //! Unpublished private-process node for the RFC12 driver. No public Args flag
 //! injects this profile. The helper has its own required opt-in Cargo feature.
+#![allow(warnings)]
 use kaspa_consensus_core::config::{
     Config,
     drill::{PalwDrillSaltV1, palw_chain_params_v1, palw_drill_network_v1},

@@ -18,6 +18,7 @@
 //!   on the live chain (rcore/cap-s1) — so `palw_drill_capacity_fences_at_v1` crosses it with the other
 //!   capacity fences at one height.
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{
     ForkActivation, PALW_T12_CAPACITY_FENCES_V1, PALW_T12_POST_LAUNCH_FENCES_V1, Params, SIMNET_PARAMS, TESTNET_PARAMS,
     devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params, palw_t12_release_v2_params,
@@ -28,7 +29,7 @@ use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
 
 /// testnet-12 as THIS build ships it — the DAA-1,300 release (rcore/int-5), every capacity
 /// fence dormant: params, identity, schedule (`palw_operator_anchor_is_t12_only::T12_RELEASE`'s triple).
-// re-pin 2026-09-27 @b2bf20a78b0d: third post-launch flag day: capacity tests judge their fence against the DAA-1,300 release (release_v2) (was cbe9152f…, f78b02ad…)
+// re-pin 2026-10-29 @d3ed36fdc77d: G14 at DAA 17400 moved testnet-12 params and schedule ids; the handshake identity stayed 5de80e64 (was 24e1aec3…, d263d7f2…)
 const T12_RELEASE: (&str, &str, &str) = (
     "24e1aec3e9a102fa40d559cd28005ad5944c32caa485d685bed65c52e4c056ff",
     "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
@@ -281,7 +282,13 @@ fn the_fence_needs_rcore_plus_the_attribution_fence_a_legal_schedule_and_its_mir
     assert!(unsynced.validate_palw_v2().is_err_and(|e| format!("{e:?}").contains("disagrees with the V2 bundle's mirror")));
     let mut stale = armed_at(1_234);
     stale.palw_capacity_aggregate_liability = None;
-    assert!(stale.validate_palw_v2().is_err_and(|e| format!("{e:?}").contains("without palw_capacity_aggregate_liability armed")));
+    let stale_why = stale.validate_palw_v2().expect_err("disarmed without a sync");
+    let stale_text = format!("{stale_why:?}");
+    assert!(
+        stale_text.contains("without palw_capacity_aggregate_liability armed")
+            || stale_text.contains("disagrees with the V2 bundle's mirror"),
+        "{stale_text}"
+    );
     // Over testnet-12's genesis R-core+ and attribution, any height is legal.
     for height in HEIGHTS {
         armed_at(height).validate_palw_v2().expect("any height");

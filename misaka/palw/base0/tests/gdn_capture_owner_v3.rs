@@ -1,4 +1,5 @@
 //! Actual tiny Q36 capture→retained accuser→GDN court controls. No campaign claim.
+#![allow(warnings)]
 mod common;
 use common::*;
 use kaspa_consensus_core::{
@@ -128,9 +129,8 @@ fn capacity_refusal_precedes_dense_decode_or_folded_replay() {
         let (backend, profile, out, prompt) = &captures[1];
         let ceiling = 256 << 20;
         arm_native_logical_limits_v1(Some(NativeSnapshotResourceLimitsV1 { memory_bytes: ceiling, database_bytes: 0 }));
-        let owned = backend
-            .gdn_accuser_view_retained_v3(&out.material, Some(&prompt), out.execution_root, profile.shape_profile_id())
-            .unwrap();
+        let owned =
+            backend.gdn_accuser_view_retained_v3(&out.material, Some(prompt), out.execution_root, profile.shape_profile_id()).unwrap();
         assert!(
             kaspa_consensus_core::palw_native_resource_v1::reserve_native_requests_v1(ceiling).is_err(),
             "returned accuser owner must keep its own exact reservation after construction returns"
@@ -144,7 +144,7 @@ fn capacity_refusal_precedes_dense_decode_or_folded_replay() {
     for (backend, profile, out, prompt) in &captures {
         assert!(matches!(binding_from_capture_v3(&out.material), Err(NativeDecodeErrorV1::Resource(_))));
         assert!(matches!(
-            backend.gdn_accuser_view_retained_v3(&out.material, Some(&prompt), out.execution_root, profile.shape_profile_id()),
+            backend.gdn_accuser_view_retained_v3(&out.material, Some(prompt), out.execution_root, profile.shape_profile_id()),
             Err(NativeDecodeErrorV1::Resource(_))
         ));
     }

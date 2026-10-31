@@ -6,6 +6,7 @@
 //! one lane is convicted at the sub-tile holding it, at the lane's place in it. A tile length that
 //! does not divide 4,096 is refused by the layout.
 
+#![allow(warnings)]
 #[path = "palw_tir_fixture_common.rs"]
 mod fixture;
 use fixture::*;

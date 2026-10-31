@@ -23,6 +23,7 @@
 //! Correctness is decided by deterministic recomputation and spot checks (Freivalds for products), never by a cryptographic
 //! proof of computation (PRINCIPLES §8). Written, not run here: the validation lane compiles and runs it.
 
+#![allow(warnings)]
 mod common;
 
 use common::*;

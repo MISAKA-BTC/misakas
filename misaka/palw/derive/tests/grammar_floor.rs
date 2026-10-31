@@ -70,6 +70,7 @@
 //! smallest of the three floors is 38 tokens. The floors are pinned below so that a grammar edit
 //! which changes them has to come here and say so.
 
+#![allow(warnings)]
 use kaspa_consensus_core::palw_derived_v1::PALW_DERIVED_V1_EXECUTOR_PUBKEY_LEN;
 use kaspa_hashes::Hash64;
 use misaka_palw_base0::tokenizer::QwenTokenizer;

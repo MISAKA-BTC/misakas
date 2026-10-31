@@ -51,7 +51,12 @@ impl CheckedStageSourceV28 {
         if template.program != self.program || template.source_parameters != self.parameters().root() {
             return Err("stage template differs from immutable source program or real weights".into());
         }
-        if template.program.v1_view().encode() != template.lengths.max_program_bytes || template.max_positions == 0 || template.max_positions > self.program.history_bound { return Err("source28 template changes canonical maximum geometry".into()); }
+        if template.program.v1_view().encode() != template.lengths.max_program_bytes
+            || template.max_positions == 0
+            || template.max_positions > self.program.history_bound
+        {
+            return Err("source28 template changes canonical maximum geometry".into());
+        }
         Ok(())
     }
 }
@@ -74,11 +79,17 @@ impl FlatStageSourceWireV28 {
         let mut raw = 0u128;
         let mut expanded = 0u128;
         for d in &program.inputs {
-            let cells = d.shape.iter().try_fold(1u128, |n,x| n.checked_mul(*x as u128)).ok_or("source28 input geometry overflow")?;
-            raw = raw.checked_add(cells.checked_mul(d.dtype.width() as u128).ok_or("source28 input bytes overflow")?).ok_or("source28 input sum overflow")?;
-            expanded = expanded.checked_add(cells.checked_mul(16).ok_or("source28 expanded input overflow")?).ok_or("source28 input sum overflow")?;
+            let cells = d.shape.iter().try_fold(1u128, |n, x| n.checked_mul(*x as u128)).ok_or("source28 input geometry overflow")?;
+            raw = raw
+                .checked_add(cells.checked_mul(d.dtype.width() as u128).ok_or("source28 input bytes overflow")?)
+                .ok_or("source28 input sum overflow")?;
+            expanded = expanded
+                .checked_add(cells.checked_mul(16).ok_or("source28 expanded input overflow")?)
+                .ok_or("source28 input sum overflow")?;
         }
-        if raw > INPUT_RAW_BYTES_MAX_V12 || expanded > INPUT_REFERENCE_BYTES_MAX_V12 { return Err("source28 bounded declared inputs exceed caps".into()); }
+        if raw > INPUT_RAW_BYTES_MAX_V12 || expanded > INPUT_REFERENCE_BYTES_MAX_V12 {
+            return Err("source28 bounded declared inputs exceed caps".into());
+        }
         let mut keys = std::collections::BTreeSet::new();
         let count = program
             .params
@@ -151,4 +162,3 @@ impl FlatStageSourceWireV28 {
         Ok(wire)
     }
 }
-

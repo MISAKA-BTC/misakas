@@ -2,6 +2,7 @@
 //! declared input; the tower is not computed) through its cross-attention layers. `tools/gen_mllama_cross_fixture.py` ran
 //! transformers' `MllamaForConditionalGeneration` over the tiny checkpoint with seeded random states (`cross.json`).
 
+#![allow(warnings)]
 mod common;
 
 use misaka_palw_tir_lower::fidelity;

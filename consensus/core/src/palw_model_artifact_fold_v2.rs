@@ -120,7 +120,11 @@ pub(super) fn bind(
         return Ok(());
     }
     ids.push(id);
-    builder.write_kernel_row(PALW_MODEL_ARTIFACT_BINDINGS_TABLE_V2, borsh::to_vec(&id).unwrap(), Some(borsh::to_vec(&row).unwrap()))?;
+    builder.write_kernel_row(
+        PALW_MODEL_ARTIFACT_BINDINGS_TABLE_V2,
+        borsh::to_vec(&id).unwrap(),
+        Some(borsh::to_vec(&row).unwrap()),
+    )?;
     builder.write_kernel_row(
         PALW_MODEL_ARTIFACT_BOND_INDEX_TABLE_V2,
         borsh::to_vec(signer).unwrap(),

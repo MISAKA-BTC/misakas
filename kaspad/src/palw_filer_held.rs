@@ -311,7 +311,12 @@ pub(super) fn palw_held_opening_v1(
         Err(why) => return PalwHeldOpeningV1::Missing(why),
     };
     // 3. N2 — the challenger's evidence, the A-held line's builder.
-    let challenger = match palw_held_challenger_evidence_v1(kaspa_consensus_core::palw_backend::PalwCourtEvidenceOpsV1::new(backend), &filing, leaf, served.carried.as_deref()) {
+    let challenger = match palw_held_challenger_evidence_v1(
+        kaspa_consensus_core::palw_backend::PalwCourtEvidenceOpsV1::new(backend),
+        &filing,
+        leaf,
+        served.carried.as_deref(),
+    ) {
         Ok(challenger) => challenger,
         Err(why) => return PalwHeldOpeningV1::Unplayable(why),
     };

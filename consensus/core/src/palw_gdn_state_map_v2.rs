@@ -82,8 +82,8 @@ impl<'a> PalwGdnStateGeometryV2<'a> {
             return Err("class map declares no supported recurrence layout");
         };
         let heads = u32::from(profile.gdn_heads);
-        let k_dim = u32::from(profile.gdn_head_k_dim);
-        let v_dim = u32::from(profile.gdn_head_v_dim);
+        let k_dim = profile.gdn_head_k_dim;
+        let v_dim = profile.gdn_head_v_dim;
         let conv_kernel = u32::from(profile.gdn_conv_kernel);
         if heads == 0 || k_dim == 0 || v_dim == 0 || conv_kernel == 0 {
             return Err("zero recurrence geometry");
@@ -191,8 +191,7 @@ impl<'a> PalwGdnStateGeometryV2<'a> {
         if block >= per_head {
             return None;
         }
-        let delta_total =
-            self.recurrence_layers * u64::from(self.heads) * u64::from(self.v_dim.div_ceil(self.delta_rows_per_chunk));
+        let delta_total = self.recurrence_layers * u64::from(self.heads) * u64::from(self.v_dim.div_ceil(self.delta_rows_per_chunk));
         let ordinal = self.layers().position(|candidate| candidate == layer)? as u64;
         Some(delta_total + (ordinal * u64::from(conv_heads) + u64::from(head)) * u64::from(per_head) + u64::from(block))
     }

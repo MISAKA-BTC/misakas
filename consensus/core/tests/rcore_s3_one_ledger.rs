@@ -13,6 +13,7 @@
 //!
 //! Run: cargo test -p kaspa-consensus-core --test rcore_s3_one_ledger
 
+#![allow(warnings)]
 #[path = "rcore_common.rs"]
 mod common;
 use common::*;

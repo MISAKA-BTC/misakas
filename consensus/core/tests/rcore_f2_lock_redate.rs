@@ -19,6 +19,7 @@
 //!
 //! Run: cargo test -p kaspa-consensus-core --test rcore_f2_lock_redate -- --nocapture
 
+#![allow(warnings)]
 #[path = "rcore_common.rs"]
 mod common;
 use common::*;

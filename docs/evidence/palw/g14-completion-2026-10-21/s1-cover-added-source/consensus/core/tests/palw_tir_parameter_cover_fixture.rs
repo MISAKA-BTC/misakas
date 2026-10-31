@@ -1,4 +1,5 @@
 //! Test-only native dynamic dependency fixture; no production profile values.
+#![allow(warnings)]
 use super::fixture::{Fixture,fixture_with};
 /// A real native history-dissection fixture whose reduction controls BOTH a
 /// Select branch and a Gather row. Only the tail piece of each possible row is

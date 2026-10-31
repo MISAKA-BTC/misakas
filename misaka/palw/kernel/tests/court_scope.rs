@@ -2,6 +2,7 @@
 //! model-dependent value for the ledger to serve, so no union of demands rebuilds a weight; model-independent values stay owed.
 //! (G14R's ledger hook applies `court_withheld_mask_v1`; this pins what it applies.)
 
+#![allow(warnings)]
 use misaka_palw_kernel::scope::*;
 use misaka_palw_tir::program::Ref;
 use misaka_palw_tir_sketch::fixture::dense_moe_v1;

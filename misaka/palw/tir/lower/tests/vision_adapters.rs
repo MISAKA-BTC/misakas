@@ -4,6 +4,7 @@
 //! Qwen2-VL, Qwen2.5-VL and LLaVA. A wrapper model (a VLM) is read as its text decoder; its tower is reached by name
 //! (`match.tower_of`), and a tower's own unknown key is refused while a wrapper's is not this adapter's business.
 
+#![allow(warnings)]
 use misaka_palw_tir_lower::adapter::builtin;
 use misaka_palw_tir_lower::hf_schema::is_vision_tower;
 use misaka_palw_tir_lower::lower::vision::{parse_vision, parse_vision_rust};

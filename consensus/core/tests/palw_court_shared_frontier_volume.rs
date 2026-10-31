@@ -1,6 +1,7 @@
 //! Codec/geometry lower bound, not measured model or network performance.
 //! Applies ONLY if all canonical bottom StepNode branches may be requested
 //! and must be served with the existing public frontier encoding.
+#![allow(warnings)]
 use kaspa_consensus_core::palw_tir_court_v1::{
     PALW_TIR_STEP_NODE_DEPTH_V1, palw_tir_step_node_frontier_v1, palw_tir_step_tree_height_v1, palw_tir_step_tree_width_v1,
 };

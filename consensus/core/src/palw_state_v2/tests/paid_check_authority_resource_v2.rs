@@ -1,6 +1,7 @@
 //! Private existing Program/authority fixture, actual native Receipt/FS folds.
 //! The scheduling callback only retains a real concurrent-demand owner; neither
 //! an approval nor an error result is injected. No signed native campaign claim.
+#![allow(warnings)]
 use super::*;
 use crate::palw_native_resource_v1::{
     NativeDemandLeaseV1, NativeSnapshotResourceLimitsV1, arm_native_logical_limits_v1, reserve_native_requests_v1,
@@ -99,7 +100,10 @@ fn paid_check_authority_native_resource_after_first_reads_keeps_receipt_atomic()
     let object = PaidClaimObjectV2::Receipt { receipt: receipt(&a, &lock, &seat) };
     let root = b.state.state_root();
     let journal_len = b.entries.len();
-    arm_native_logical_limits_v1(Some(NativeSnapshotResourceLimitsV1 { memory_bytes: LOGICAL_TEST_LIMIT, database_bytes: LOGICAL_TEST_LIMIT }));
+    arm_native_logical_limits_v1(Some(NativeSnapshotResourceLimitsV1 {
+        memory_bytes: LOGICAL_TEST_LIMIT,
+        database_bytes: LOGICAL_TEST_LIMIT,
+    }));
     assert_eq!(crate::palw_native_resource_v1::native_declared_logical_limits_v1().unwrap().memory_bytes, LOGICAL_TEST_LIMIT);
     let reached = Rc::new(Cell::new(false));
     let blocker = Rc::new(RefCell::new(None));
@@ -181,7 +185,10 @@ fn paid_check_authority_fs_second_read_resource_is_not_a_source_approval() {
         PaidClaimObjectV2::StageMessage { enrollment: a.enrollment.id(), round: 0, prior_transcript: [0; 64], message_root: [22; 64] };
     let root = b.state.state_root();
     let journal_len = b.entries.len();
-    arm_native_logical_limits_v1(Some(NativeSnapshotResourceLimitsV1 { memory_bytes: LOGICAL_TEST_LIMIT, database_bytes: LOGICAL_TEST_LIMIT }));
+    arm_native_logical_limits_v1(Some(NativeSnapshotResourceLimitsV1 {
+        memory_bytes: LOGICAL_TEST_LIMIT,
+        database_bytes: LOGICAL_TEST_LIMIT,
+    }));
     assert_eq!(crate::palw_native_resource_v1::native_declared_logical_limits_v1().unwrap().memory_bytes, LOGICAL_TEST_LIMIT);
     let reached = Rc::new(Cell::new(false));
     let blocker = Rc::new(RefCell::new(None));

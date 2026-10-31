@@ -1,0 +1,6 @@
+staging contrib/t12-deploy-kit/.cache/655b6cf3a8f6/misaka-dnsseeder (66cd151a07eeff09b6c7fca849ea17d8f14d1a967cc309c28e69e9ebbe7cc1bb) -> root@169.58.232.113:/usr/local/bin/misaka-dnsseeder-t12.new-66cd151a
+-rwxr-xr-x 1 root root  8042424 Sep 22 21:56 /usr/local/bin/misaka-dnsseeder-t12
+-rwxr-xr-x 1 root root 52715760 Oct 28 09:00 /usr/local/bin/misaka-dnsseeder-t12.new-66cd151a
+misaka-dnsseeder 1.1.0
+smoke skipped on seeder1: it hosts a PUBLIC node (rule: no demos on public-node hosts).
+the bytes are identical to what was smoke-tested on c5104/seeder3 (sha 66cd151a07eeff09b6c7fca849ea17d8f14d1a967cc309c28e69e9ebbe7cc1bb).

@@ -1,6 +1,7 @@
 //! **RFC-0023 / ADR-0186 stage 1 through the fold's own floor rows**: claims with different liability horizons, the retirement floor
 //! (audit F05: the floor update never re-checked the oldest open claim — the invariant under test), a late conviction's rollback, and
 //! the carriage round trip a pruned/IBD node restores from, as one set.
+#![allow(warnings)]
 use super::*;
 use crate::palw_rfc0018_v1::{PalwGateCRuleV1, PalwRfc0018MirrorV1};
 use crate::palw_security_certification_v1::*;

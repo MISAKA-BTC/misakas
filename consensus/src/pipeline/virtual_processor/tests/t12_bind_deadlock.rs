@@ -29,6 +29,7 @@
 //!   are below the claims due at it — and it is disqualified as before (the node is told no binder is
 //!   due for a non-operator); the operator's at-ceiling attempt then binds every claim due at it, on
 //!   its own execution's seed.
+#![allow(warnings)]
 use super::t12_round_lane_e2e::{T12Chain, card_payout_spk, t12_genesis_chain, t12_with_harness_cards};
 use crate::consensus::test_consensus::TestConsensus;
 use kaspa_consensus_core::BlockHash;

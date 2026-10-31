@@ -341,7 +341,11 @@ impl ServiceReservations {
             }
             let mut floor = next.max(packet.release_daa);
             for pred in edges.get(&packet.id).map(Vec::as_slice).unwrap_or(&[]) {
-                let after = candidate.assignments.get(pred).ok_or(ServiceRefusal::InvalidState)?.checked_add(1)
+                let after = candidate
+                    .assignments
+                    .get(pred)
+                    .ok_or(ServiceRefusal::InvalidState)?
+                    .checked_add(1)
                     .ok_or(ServiceRefusal::DeadlineExhausted)?;
                 floor = floor.max(after);
             }

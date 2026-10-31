@@ -247,13 +247,11 @@ impl OwnerPagesV1 {
     fn put(&self, kind: &str, hash: Hash64, bytes: &[u8]) -> Result<(), String> {
         let mut disk = self.disk.lock().map_err(|_| "owner page accounting poisoned")?;
         let path = self.path(kind, hash);
-        if path.exists() {
-            if self.read(kind, hash, bytes.len()).is_ok_and(|existing| existing == bytes) {
-                return Ok(());
-            }
-            // A corrupt acceleration file is replaced only by freshly kernel-derived
-            // bytes under their computed content address, never trusted backup content.
+        if path.exists() && self.read(kind, hash, bytes.len()).is_ok_and(|existing| existing == bytes) {
+            return Ok(());
         }
+        // A corrupt acceleration file is replaced only by freshly kernel-derived
+        // bytes under their computed content address, never trusted backup content.
         let temp = self.directory.join(format!(".{kind}-{hash}.tmp"));
         if let Ok(metadata) = fs::metadata(&temp) {
             fs::remove_file(&temp).map_err(|e| e.to_string())?;

@@ -163,7 +163,9 @@ impl PalwTirPublicWitnessRowV1 {
             || self.received.is_empty()
             || self.received.len() as u64 >= self.total_bytes
         {
-            return Err("TIR staged witness row changes its key or is empty/complete (a complete witness is adjudicated, never kept)".into());
+            return Err(
+                "TIR staged witness row changes its key or is empty/complete (a complete witness is adjudicated, never kept)".into()
+            );
         }
         Ok(())
     }
@@ -481,10 +483,9 @@ impl PalwTirPublicControlV1 {
         | OwnedAction::Part { demand_id, .. }
         | OwnedAction::Finish { demand_id, .. }
         | OwnedAction::Collect { demand_id } = action
+            && owned.active_v1().is_none_or(|p| p.demand_id != *demand_id)
         {
-            if owned.active_v1().is_none_or(|p| p.demand_id != *demand_id) {
-                return Err("TIR answer/collection names another accepted original demand".into());
-            }
+            return Err("TIR answer/collection names another accepted original demand".into());
         }
         Ok(())
     }
@@ -497,10 +498,10 @@ impl PalwTirPublicControlV1 {
         {
             return Err("TIR preparation changes the original claim-wide accepted scope".into());
         }
-        if let PalwTirPublicControlActionV1::Preparation(OwnedAction::WorkDebit(debit)) = &self.action {
-            if debit.scope.owner != c.producer {
-                return Err("TIR preparation debit changes its original producer scope".into());
-            }
+        if let PalwTirPublicControlActionV1::Preparation(OwnedAction::WorkDebit(debit)) = &self.action
+            && debit.scope.owner != c.producer
+        {
+            return Err("TIR preparation debit changes its original producer scope".into());
         }
         Ok(())
     }

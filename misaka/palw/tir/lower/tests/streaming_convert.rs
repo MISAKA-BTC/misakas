@@ -5,6 +5,7 @@
 //! Same file, so the same inventory root and class id; the options change what is resident and
 //! nothing else.
 
+#![allow(warnings)]
 use misaka_palw_tir_artifact::chunks::{ChunkStore, write_container_v1_chunked};
 use misaka_palw_tir_lower::float_ref::stream::Streamed;
 use misaka_palw_tir_lower::lower::{ChunkSink, LowerOpts, StreamOpts, StreamStats, materialise, materialise_stream};

@@ -39,9 +39,9 @@
 //! 2026-10-22 under `palw_court_model_scope_v1`), which admission refuses while the draw cap is unadopted; until it is adopted a class
 //! registered past the fence takes no readiness proof and seats it by the possession floor's other conditions.
 
-pub mod readiness_root;
 /// ADR-0200 C1: the digest/path disclosure court over recorded tag-230 roots (G14 item 6).
 pub mod readiness_disclosure;
+pub mod readiness_root;
 
 use borsh::BorshSerialize;
 

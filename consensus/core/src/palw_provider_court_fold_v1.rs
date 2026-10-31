@@ -65,7 +65,11 @@ fn claim_row(builder: &TransitionBuilder<'_>, claim: &Hash64) -> Result<ClaimRow
     route_of(builder)?.kernel_claim_row_v1(claim).ok_or_else(|| refused("no such kernel claim"))
 }
 
-fn write_subject(builder: &mut TransitionBuilder<'_>, subject: &ProviderSubjectV1, row: &ProviderSubjectRowV1) -> Result<(), PalwStateV2Error> {
+fn write_subject(
+    builder: &mut TransitionBuilder<'_>,
+    subject: &ProviderSubjectV1,
+    row: &ProviderSubjectRowV1,
+) -> Result<(), PalwStateV2Error> {
     builder.write_kernel_row(
         PALW_PROVIDER_COURT_TABLE_SUBJECTS_V1,
         subject.key(),
@@ -513,7 +517,11 @@ pub(super) fn court_scope_admit_demand_v1(
 }
 
 /// Write the court scope's tally (the claim's subject row) once the kernel accepted the demand it admitted.
-pub(super) fn write_court_scope_row_v1(builder: &mut TransitionBuilder<'_>, subject: &ProviderSubjectV1, row: &ProviderSubjectRowV1) -> Result<(), PalwStateV2Error> {
+pub(super) fn write_court_scope_row_v1(
+    builder: &mut TransitionBuilder<'_>,
+    subject: &ProviderSubjectV1,
+    row: &ProviderSubjectRowV1,
+) -> Result<(), PalwStateV2Error> {
     write_subject(builder, subject, row)?;
     Ok(())
 }

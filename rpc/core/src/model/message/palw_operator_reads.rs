@@ -2522,25 +2522,47 @@ impl Serializer for GetPalwFreePromptPriceRequest {
 /// Primitive borsh vectors with their length checked before capacity allocation.
 fn fp_quote_load_bounded_vec_v2<T: borsh::BorshDeserialize, R: std::io::Read>(reader: &mut R, cap: usize) -> std::io::Result<Vec<T>> {
     let count = load!(u32, reader)? as usize;
-    if count > cap { return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "FP quote vector exceeds native bound")); }
+    if count > cap {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "FP quote vector exceeds native bound"));
+    }
     let mut items = Vec::new();
     items.try_reserve_exact(count).map_err(|_| std::io::Error::new(std::io::ErrorKind::OutOfMemory, "FP quote vector capacity"))?;
-    for _ in 0..count { items.push(T::deserialize_reader(reader)?); }
+    for _ in 0..count {
+        items.push(T::deserialize_reader(reader)?);
+    }
     Ok(items)
 }
 
 impl Deserializer for GetPalwFreePromptPriceRequest {
     fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
         let version = load!(u16, reader)?;
-        if version != 1 && version != 2 { return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "unsupported FP quote version")); }
+        if version != 1 && version != 2 {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "unsupported FP quote version"));
+        }
         let class_id = load!(String, reader)?;
         let prompt_token_ids = fp_quote_load_bounded_vec_v2(reader, 1usize << 21)?;
         let prompt_tokens = load!(u32, reader)?;
         let decode_tokens_executed = load!(u32, reader)?;
         let work_leaves = load!(u64, reader)?;
         let bond = load!(String, reader)?;
-        let (accounting_payload, answer_token_ids) = if version == 2 { (fp_quote_load_bounded_vec_v2(reader, kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_COMMITMENT_TX_MAX_BYTES)?, fp_quote_load_bounded_vec_v2(reader, 1usize << 21)?) } else { (vec![], vec![]) };
-        Ok(Self { class_id, prompt_token_ids, prompt_tokens, decode_tokens_executed, work_leaves, bond, accounting_payload, answer_token_ids })
+        let (accounting_payload, answer_token_ids) = if version == 2 {
+            (
+                fp_quote_load_bounded_vec_v2(reader, kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_COMMITMENT_TX_MAX_BYTES)?,
+                fp_quote_load_bounded_vec_v2(reader, 1usize << 21)?,
+            )
+        } else {
+            (vec![], vec![])
+        };
+        Ok(Self {
+            class_id,
+            prompt_token_ids,
+            prompt_tokens,
+            decode_tokens_executed,
+            work_leaves,
+            bond,
+            accounting_payload,
+            answer_token_ids,
+        })
     }
 }
 
@@ -2611,7 +2633,9 @@ impl Serializer for GetPalwFreePromptPriceResponse {
 impl Deserializer for GetPalwFreePromptPriceResponse {
     fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
         let version = load!(u16, reader)?;
-        if version != 1 && version != 2 { return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "unsupported FP quote version")); }
+        if version != 1 && version != 2 {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "unsupported FP quote version"));
+        }
         let available = load!(bool, reader)?;
         let daa_score = load!(u64, reader)?;
         let priced = load!(bool, reader)?;
@@ -2621,11 +2645,48 @@ impl Deserializer for GetPalwFreePromptPriceResponse {
         let pwu = load!(u64, reader)?;
         let reserved_sompi = load!(String, reader)?;
         let bond_room_sompi = load!(String, reader)?;
-        let (accounting_quote_version, accounting_active, chain_point, network_domain, mass_per_tx_byte, mass_per_script_pub_key_byte, mass_per_sig_op, storage_mass_parameter) = if version == 2 {
-            (load!(u16, reader)?, load!(bool, reader)?, load!(String, reader)?, load!(String, reader)?, load!(u64, reader)?, load!(u64, reader)?, load!(u64, reader)?, load!(u64, reader)?)
-        } else { (0, false, String::new(), String::new(), 0, 0, 0, 0) };
-        Ok(Self { available, daa_score, priced, refusal, priced_in_compute, quanta, pwu, reserved_sompi, bond_room_sompi,
-            accounting_quote_version, accounting_active, chain_point, network_domain, mass_per_tx_byte, mass_per_script_pub_key_byte, mass_per_sig_op, storage_mass_parameter })
+        let (
+            accounting_quote_version,
+            accounting_active,
+            chain_point,
+            network_domain,
+            mass_per_tx_byte,
+            mass_per_script_pub_key_byte,
+            mass_per_sig_op,
+            storage_mass_parameter,
+        ) = if version == 2 {
+            (
+                load!(u16, reader)?,
+                load!(bool, reader)?,
+                load!(String, reader)?,
+                load!(String, reader)?,
+                load!(u64, reader)?,
+                load!(u64, reader)?,
+                load!(u64, reader)?,
+                load!(u64, reader)?,
+            )
+        } else {
+            (0, false, String::new(), String::new(), 0, 0, 0, 0)
+        };
+        Ok(Self {
+            available,
+            daa_score,
+            priced,
+            refusal,
+            priced_in_compute,
+            quanta,
+            pwu,
+            reserved_sompi,
+            bond_room_sompi,
+            accounting_quote_version,
+            accounting_active,
+            chain_point,
+            network_domain,
+            mass_per_tx_byte,
+            mass_per_script_pub_key_byte,
+            mass_per_sig_op,
+            storage_mass_parameter,
+        })
     }
 }
 

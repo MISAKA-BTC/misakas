@@ -685,7 +685,12 @@ pub fn palw_producer_facts_v4(
             || state.fp_lane_certification(&class_id).is_some(),
         // Lane g14-court-capacity-r2: a court-demanding (fused-attention) class past `palw_court_capacity_v1` promises the longer
         // retention its court guarantee needs; every other class the minimum.
-        min_trace_retention_daa: crate::palw_court_capacity_v1::palw_attempt_trace_retention_daa_v1(state, state_params, &class_id, daa_score),
+        min_trace_retention_daa: crate::palw_court_capacity_v1::palw_attempt_trace_retention_daa_v1(
+            state,
+            state_params,
+            &class_id,
+            daa_score,
+        ),
         witness_chunks: if state_params.witness_manifest_active_at(daa_score) {
             state.mesh_witness_profile_v1(&class_id).map_or(0, |profile| profile.chunks)
         } else {
@@ -742,38 +747,56 @@ mod tests {
         };
         let params = state_params()
             .with_bond_budget(Some(PalwBondBudgetMirrorV1 {
-                from_daa: 0, policy: PalwBondBudgetPolicyV1::unapproved_probe_v1(), allocation: None,
+                from_daa: 0,
+                policy: PalwBondBudgetPolicyV1::unapproved_probe_v1(),
+                allocation: None,
             }))
-            .with_reporter_income_from(Some(0)).with_material_income_from(Some(0))
+            .with_reporter_income_from(Some(0))
+            .with_material_income_from(Some(0))
             .with_paid_consumer_lifecycle(Some(PalwPaidConsumerLifecycleMirrorV1 {
                 from_daa: 200,
                 policy: PalwPaidConsumerLifecyclePolicyV1 {
-                    version: 1, service_span_daa: 1_000, dispute_tail_daa: 3_000, material_tail_daa: 2_000,
+                    version: 1,
+                    service_span_daa: 1_000,
+                    dispute_tail_daa: 3_000,
+                    material_tail_daa: 2_000,
                 },
             }));
         let legacy = palw_min_trace_retention_daa_v1(&params);
-        assert_eq!(palw_min_trace_retention_daa_at_v2(&params,199),legacy);
-        assert_eq!(palw_min_trace_retention_daa_at_v2(&params,200),6_000);
+        assert_eq!(palw_min_trace_retention_daa_at_v2(&params, 199), legacy);
+        assert_eq!(palw_min_trace_retention_daa_at_v2(&params, 200), 6_000);
         let state = state();
         let admission = crate::palw_admission_v2::PalwAdmissionParamsV2::new(500).unwrap();
-        let facts = palw_producer_facts_v2(&state,&params,&admission,h64(1),200,h64(1),None,None).unwrap();
-        assert_eq!(facts.min_trace_retention_daa,6_000);
+        let facts = palw_producer_facts_v2(&state, &params, &admission, h64(1), 200, h64(1), None, None).unwrap();
+        assert_eq!(facts.min_trace_retention_daa, 6_000);
         let trace = h64(31);
         let mut attempt = PalwAttemptUnsignedV2 {
-            version: PALW_ATTEMPT_V2_VERSION, network_domain: h64(NET), challenge: h64(32),
-            class_id: h64(1), executor_bond: bond_outpoint(), executor_pubkey: vec![7;4], operator_id: h64(33),
-            artifact_root: h64(11), trace_root: trace, output_root: h64(34), execution_root: h64(35), pwu: facts.pwu,
-            trace_manifest_root: crate::palw_attempt_v2::attempt_trace_manifest_root_v1(trace,1),
-            trace_chunk_count: 1, trace_retention_daa: 200+facts.min_trace_retention_daa,
+            version: PALW_ATTEMPT_V2_VERSION,
+            network_domain: h64(NET),
+            challenge: h64(32),
+            class_id: h64(1),
+            executor_bond: bond_outpoint(),
+            executor_pubkey: vec![7; 4],
+            operator_id: h64(33),
+            artifact_root: h64(11),
+            trace_root: trace,
+            output_root: h64(34),
+            execution_root: h64(35),
+            pwu: facts.pwu,
+            trace_manifest_root: crate::palw_attempt_v2::attempt_trace_manifest_root_v1(trace, 1),
+            trace_chunk_count: 1,
+            trace_retention_daa: 200 + facts.min_trace_retention_daa,
         };
-        crate::palw_admission_v2::check_palw_attempt_da_pins_v1(&params,&attempt,200).unwrap();
-        attempt.trace_retention_daa=200+legacy;
-        assert!(matches!(crate::palw_admission_v2::check_palw_attempt_da_pins_v1(&params,&attempt,200),
-            Err(crate::palw_admission_v2::PalwAdmissionV2Error::TraceRetentionNotDerived { .. })));
-        crate::palw_admission_v2::check_palw_attempt_da_pins_v1(&params,&attempt,199)
+        crate::palw_admission_v2::check_palw_attempt_da_pins_v1(&params, &attempt, 200).unwrap();
+        attempt.trace_retention_daa = 200 + legacy;
+        assert!(matches!(
+            crate::palw_admission_v2::check_palw_attempt_da_pins_v1(&params, &attempt, 200),
+            Err(crate::palw_admission_v2::PalwAdmissionV2Error::TraceRetentionNotDerived { .. })
+        ));
+        crate::palw_admission_v2::check_palw_attempt_da_pins_v1(&params, &attempt, 199)
             .expect_err("the obligation is anchored at the header's own DAA");
-        attempt.trace_retention_daa=199+legacy;
-        crate::palw_admission_v2::check_palw_attempt_da_pins_v1(&params,&attempt,199).unwrap();
+        attempt.trace_retention_daa = 199 + legacy;
+        crate::palw_admission_v2::check_palw_attempt_da_pins_v1(&params, &attempt, 199).unwrap();
     }
 
     fn bond_outpoint() -> TransactionOutpoint {

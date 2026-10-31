@@ -16,7 +16,14 @@ async fn finish(node: KNode) {
 }
 
 /// The card's service with `roles`, in its own state dir.
-fn service(w: &KWorld, dir: &std::path::Path, card: usize, model: &std::path::Path, r: crate::palw_panel::palw_kernel_roles::PalwKernelRolesConfigV1, keep: &mut Vec<kaspa_database::utils::DbLifetime>) -> KNode {
+fn service(
+    w: &KWorld,
+    dir: &std::path::Path,
+    card: usize,
+    model: &std::path::Path,
+    r: crate::palw_panel::palw_kernel_roles::PalwKernelRolesConfigV1,
+    keep: &mut Vec<kaspa_database::utils::DbLifetime>,
+) -> KNode {
     let sub = dir.join(format!("card-{card}"));
     std::fs::create_dir_all(&sub).unwrap();
     start_kernel_service_with(&w.chain, &sub, w.chain.bonds[card], Some(card), &w.floats[card], model, r, keep)
@@ -82,7 +89,12 @@ async fn knode_poster_and_producer_services_carry_an_honest_claim_answer_its_dem
     eprintln!("[knode] producer carried {carried:?}");
     // A demand on it (the harness's card 2), answered by the producer's service.
     let key = (claim, 0u8, 1u32);
-    let o = route_obj(&w.chain, 2, w.chain.bonds[2], &K::FileDemand { demander: palw_kernel_bond_id_v1(&w.chain.bonds[2]), claim, stage: 0, position: 1 });
+    let o = route_obj(
+        &w.chain,
+        2,
+        w.chain.bonds[2],
+        &K::FileDemand { demander: palw_kernel_bond_id_v1(&w.chain.bonds[2]), claim, stage: 0, position: 1 },
+    );
     w.chain.send(2, &o, &mut w.floats[2], &[]).await;
     assert!(ledger_of(&w.chain).demands.contains_key(&key), "the demand is open");
     run_until(&mut w.chain, &producer, 300, "the producer's service answers the demand", |c| answered(c, &key)).await;
@@ -104,7 +116,9 @@ async fn knode_poster_and_producer_services_carry_an_honest_claim_answer_its_dem
     finish(injector).await;
     w.chain.heartbeat(vec![]).await;
     let ledger = ledger_of(&w.chain);
-    assert!(ledger.proof_seals.contains_key(&(claim, accuser)) || carried_by(&w.chain, w.chain.bonds[3], &claim).contains_key("SealProof"));
+    assert!(
+        ledger.proof_seals.contains_key(&(claim, accuser)) || carried_by(&w.chain, w.chain.bonds[3], &claim).contains_key("SealProof")
+    );
     assert!(!ledger.claims[&claim].convicted, "the court dismissed the wrong challenge");
 }
 
@@ -129,7 +143,12 @@ async fn knode_a_silent_lying_producer_and_a_relay_service_carries_its_committed
     let claim = claim_of(&w.chain, 0).unwrap();
     assert_eq!(ledger_of(&w.chain).claims[&claim].job_id, job.id());
     let key = (claim, 0u8, 1u32);
-    let o = route_obj(&w.chain, 2, w.chain.bonds[2], &K::FileDemand { demander: palw_kernel_bond_id_v1(&w.chain.bonds[2]), claim, stage: 0, position: 1 });
+    let o = route_obj(
+        &w.chain,
+        2,
+        w.chain.bonds[2],
+        &K::FileDemand { demander: palw_kernel_bond_id_v1(&w.chain.bonds[2]), claim, stage: 0, position: 1 },
+    );
     w.chain.send(2, &o, &mut w.floats[2], &[]).await;
     // The silent producer's service runs on and answers nothing.
     for _ in 0..6 {

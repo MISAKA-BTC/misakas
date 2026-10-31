@@ -13,6 +13,7 @@
 //!
 //! Run: cargo test -p kaspa-consensus-core --test t37_an_fp_only_stretch_is_a_halt
 
+#![allow(warnings)]
 #[path = "rcore_common.rs"]
 mod common;
 use common::*;

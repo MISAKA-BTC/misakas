@@ -16,6 +16,7 @@
 //! `palw_bond_collateral_is_locked_v5`. The v4 measurements are kept as PRE-FENCE DEFECT RECORDs
 //! (v4 is the gate the fix replaced; below the fence both are the DAA-only rule).
 
+#![allow(warnings)]
 use kaspa_consensus_core::palw_attempt_v2::{PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2, attempt_id_v2};
 use kaspa_consensus_core::palw_panel_v2::{PalwReceiptVerdictV2, PalwSeatReceiptV2};
 use kaspa_consensus_core::palw_state_v2::{

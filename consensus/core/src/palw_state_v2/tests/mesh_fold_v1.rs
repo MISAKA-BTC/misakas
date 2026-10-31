@@ -5,6 +5,7 @@
 //! The fold does not verify signatures (the acceptance walk does, once per object; `consensus`'s processor tests drive that half), so
 //! an object here carries a dummy signature of the right length.
 
+#![allow(warnings)]
 use super::*;
 use crate::palw_mesh_v1::*;
 use crate::palw_vertex_v1::*;

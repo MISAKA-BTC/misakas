@@ -8,7 +8,7 @@
 //! it goes — must reproduce the leaf count, the step Merkle root, the generated tokens, the logits
 //! trace root and the IR execution root.
 #![cfg(feature = "node")]
-
+#![allow(warnings)]
 mod node_common;
 
 use std::collections::BTreeMap;

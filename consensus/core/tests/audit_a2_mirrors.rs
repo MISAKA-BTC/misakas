@@ -1,6 +1,7 @@
 //! AUDIT LANE A2 (part 2) — the mirrors: what the reward clamps and the collateral does not,
 //! and the exact cliff in the execution-quanta mint. Read-only.
 
+#![allow(warnings)]
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::params::{PALW_T12_DENSE_N_CTX, PALW_T12_HYBRID_N_CTX, Params};
 use kaspa_consensus_core::config::premine::PALW_T12_GENESIS_BOND_COLLATERAL_SOMPI;

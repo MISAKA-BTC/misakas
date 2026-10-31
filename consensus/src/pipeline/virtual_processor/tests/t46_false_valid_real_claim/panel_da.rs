@@ -130,8 +130,12 @@ fn committed(h: &H) -> (Walk, Hash64, Vec<u32>) {
         .expect("the run becomes a commitment");
     let signature = sign(EXECUTOR, fp_claim_id_v3(&commitment).as_byte_slice(), PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT);
     // PanelDa: the ids stay off the commitment transaction.
-    let payload =
-        PalwFpCommitmentTxPayloadV3 { version: PALW_FP_V3_VERSION, commitment: commitment.clone(), prompt_token_ids: vec![], signature };
+    let payload = PalwFpCommitmentTxPayloadV3 {
+        version: PALW_FP_V3_VERSION,
+        commitment: commitment.clone(),
+        prompt_token_ids: vec![],
+        signature,
+    };
     let tx = kaspa_consensus_core::tx::Transaction::new(
         0,
         vec![],

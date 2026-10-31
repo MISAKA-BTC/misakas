@@ -6,6 +6,7 @@
 //! leaves, inventory leaves, location-free rows, the token, supplied elements, the row pattern), and
 //! the worst closes they bound are the same, byte for byte. The work of both is printed.
 
+#![allow(warnings)]
 #[path = "palw_tir_fixture_common.rs"]
 mod fixture;
 use fixture::*;

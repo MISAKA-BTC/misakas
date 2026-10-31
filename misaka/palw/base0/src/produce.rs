@@ -573,7 +573,7 @@ pub struct Base0FpMaterialV2 {
 
 impl kaspa_consensus_core::palw_native_resource_v1::NativeHeapV1 for Base0FpMaterialV2 {
     fn native_heap_v1(&self, component: &str) -> kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1 {
-        use kaspa_consensus_core::palw_native_resource_v1::{NativeCoverageV1, NativeHeapV1};
+        use kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1;
         NativeCoverageV1::zero()
             .add::<Self>(self.binding.native_heap_v1(component), component)
             .add::<Self>(self.step_tree.native_heap_v1(component), component)
@@ -584,7 +584,6 @@ impl kaspa_consensus_core::palw_native_resource_v1::NativeHeapV1 for Base0FpMate
             .add::<Self>(self.checkpoint_leaves.native_heap_v1(component), component)
     }
     fn native_members_v1(&self) -> Option<u64> {
-        use kaspa_consensus_core::palw_native_resource_v1::NativeHeapV1;
         let mut n = self.binding.native_members_v1()?;
         n = n.checked_add(self.step_tree.native_members_v1()?)?;
         n = n.checked_add(self.logits_rows.native_members_v1()?)?;
@@ -598,7 +597,7 @@ impl kaspa_consensus_core::palw_native_resource_v1::NativeWireScanV1 for Base0Fp
     fn scan_native_wire_v1<R: std::io::Read>(
         reader: &mut kaspa_consensus_core::palw_native_resource_v1::NativeWireReaderV1<R>,
     ) -> std::io::Result<kaspa_consensus_core::palw_native_resource_v1::NativeWireShapeV1> {
-        use kaspa_consensus_core::palw_native_resource_v1::{NativeWireScanV1, NativeWireShapeV1};
+        use kaspa_consensus_core::palw_native_resource_v1::NativeWireShapeV1;
         reader.step()?;
         let shape = NativeWireShapeV1::default().merge(u16::scan_native_wire_v1(reader)?)?;
         let shape = shape.merge(kaspa_consensus_core::palw_step_leg::PalwStepBindingV2::scan_native_wire_v1(reader)?)?;

@@ -1,6 +1,7 @@
 //! OS-kill import publication controls. These use authentic harness premine
 //! UTXOs at genesis; they do not establish useful-work/P2P/pruning/market or
 //! hardware power-loss acceptance. Execute only in the consolidated test phase.
+#![allow(warnings)]
 use super::*;
 use kaspa_database::prelude::ConnBuilder;
 use kaspa_muhash::MuHash;

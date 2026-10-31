@@ -14,6 +14,7 @@
 //!
 //! Run: `cargo test -p misaka-palw-sdk --test exec_v2_work_slice_subject`
 
+#![allow(warnings)]
 use kaspa_consensus_core::palw_exec_v2::{PalwWorkRangeV1, PalwWorkSliceV1};
 use kaspa_consensus_core::palw_state_v2::PalwBondKeyV2;
 use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};

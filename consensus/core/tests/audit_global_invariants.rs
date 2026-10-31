@@ -17,6 +17,7 @@
 //!
 //! Run: cargo test -p kaspa-consensus-core --test audit_global_invariants -- --nocapture
 
+#![allow(warnings)]
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::class_manifest_const_v1 as manifest;
 use kaspa_consensus_core::config::params::{

@@ -22,6 +22,7 @@
 //! Same bytes, same execution key, same fence. Only the grouping into chain blocks differs, and
 //! the grouping is the attacker's free variable.
 
+#![allow(warnings)]
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::params::Params;
 use kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN;

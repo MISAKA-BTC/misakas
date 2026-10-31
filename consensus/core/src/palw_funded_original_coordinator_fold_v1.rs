@@ -471,6 +471,7 @@ pub(super) fn coordinate_funded_original_v1(
     } else {
         Some(PreparedFamilyActorEvidenceV1::derive_v1(&requirements, &family, &derivation, &complete, &row, required_amount)?)
     };
+    #[allow(clippy::drop_non_drop)]
     drop(funding);
     let semantic_table = pairing
         .semantic_table_owned_v2()
@@ -637,18 +638,22 @@ pub fn palw_family_original_native_quote_v2(
     let PalwConsensusObjectV2::FreePromptCommitted { public_job: Some(job), .. } = object else {
         return Err(refused("family native quote requires actual public original"));
     };
-    let quoted=crate::palw_native_resource_v1::NativeRetainedV1::try_from_clone_v1(extras).map_err(PalwStateV2Error::NativeResource)?;
-    let (mut quote_extras,_quote_ticket)=quoted.into_parts_v1();
-    if let Some(bytes)=semantic_table {
-        let sem=state.class_semantics.get(&job.job.class_id).ok_or_else(||refused("family quote table semantics absent"))?;
-        let record=state.tir_class_v1(&job.job.class_id).ok_or_else(||refused("family quote table class absent"))?;
-        let table=crate::palw_court_family_material_v1::prepare_family_table_inventory_v1(bytes,sem,record.logits_vocab).map_err(|e|match e {
-            crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(e)=>PalwStateV2Error::NativeResource(e),
-            crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(e)=>refused(e),
-        })?;
-        quote_extras.family_original_table_inventories_v2.insert(crate::palw_freeprompt_v3::fp_claim_id_v3(job),table);
+    let quoted =
+        crate::palw_native_resource_v1::NativeRetainedV1::try_from_clone_v1(extras).map_err(PalwStateV2Error::NativeResource)?;
+    let (mut quote_extras, _quote_ticket) = quoted.into_parts_v1();
+    if let Some(bytes) = semantic_table {
+        let sem = state.class_semantics.get(&job.job.class_id).ok_or_else(|| refused("family quote table semantics absent"))?;
+        let record = state.tir_class_v1(&job.job.class_id).ok_or_else(|| refused("family quote table class absent"))?;
+        let table =
+            crate::palw_court_family_material_v1::prepare_family_table_inventory_v1(bytes, sem, record.logits_vocab).map_err(|e| {
+                match e {
+                    crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(e) => PalwStateV2Error::NativeResource(e),
+                    crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(e) => refused(e),
+                }
+            })?;
+        quote_extras.family_original_table_inventories_v2.insert(crate::palw_freeprompt_v3::fp_claim_id_v3(job), table);
     }
-    let extras=&quote_extras;
+    let extras = &quote_extras;
     let b = TransitionBuilder::try_new(state, params, false, false, false, false, extras)?;
     let prepared = prepare_paired_original_v1(&b, ctx, object, Some(job))?
         .ok_or_else(|| refused("family native quote lacks signed paired original"))?;

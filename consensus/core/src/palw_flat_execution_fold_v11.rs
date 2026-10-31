@@ -206,7 +206,11 @@ pub(super) fn quota_shard_seal(
     )
     .map_err(refused)
 }
-pub(super) fn write_shard(builder: &mut TransitionBuilder<'_>, shard: &CheckedQuotaShardV11, job: Digest) -> Result<(), PalwStateV2Error> {
+pub(super) fn write_shard(
+    builder: &mut TransitionBuilder<'_>,
+    shard: &CheckedQuotaShardV11,
+    job: Digest,
+) -> Result<(), PalwStateV2Error> {
     let g = shard.global_row();
     let a = shard.actor_row();
     builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, vec![0], Some(key(&(g.root(), g))))?;
@@ -270,7 +274,12 @@ pub(super) fn trace_shard(
     )
     .map_err(refused)
 }
-pub(super) fn write_trace(builder: &mut TransitionBuilder<'_>, shard: &TraceShardV17, role: u8, entitlement: Digest) -> Result<(), PalwStateV2Error> {
+pub(super) fn write_trace(
+    builder: &mut TransitionBuilder<'_>,
+    shard: &TraceShardV17,
+    role: u8,
+    entitlement: Digest,
+) -> Result<(), PalwStateV2Error> {
     let g = shard.global_row();
     let a = shard.actor_row();
     builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, vec![0], Some(key(&(g.root(), g))))?;
@@ -292,7 +301,11 @@ pub(super) fn source_shard_from_rows(
 ) -> Result<SourceShardV16, PalwStateV2Error> {
     SourceShardV16::from_native_rows(&p.quota, plan, g, &g.root(), (a, &a.root()), (s, &s.row_root()), row).map_err(refused)
 }
-pub(super) fn write_source_shard(builder: &mut TransitionBuilder<'_>, shard: &SourceShardV16, job: Digest) -> Result<(), PalwStateV2Error> {
+pub(super) fn write_source_shard(
+    builder: &mut TransitionBuilder<'_>,
+    shard: &SourceShardV16,
+    job: Digest,
+) -> Result<(), PalwStateV2Error> {
     let g = shard.global_row();
     let a = shard.producer_row();
     builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, vec![0], Some(key(&(g.root(), g))))?;
@@ -964,7 +977,10 @@ fn credit(
         });
     builder.cancel_native_recipient_v1(original, row.header.producer, 19)?;
     if !held {
-        builder.bond_budget_close_v1(&super::palw_bond_budget_fold_v1::funded_execution_budget_id_v13(&row.header.job_id), ctx.daa_score)?;
+        builder.bond_budget_close_v1(
+            &super::palw_bond_budget_fold_v1::funded_execution_budget_id_v13(&row.header.job_id),
+            ctx.daa_score,
+        )?;
     }
     if held {
         // A held fee is paid later through its own per-job queue only (never the pooled producer payout).
@@ -1315,7 +1331,11 @@ fn held_final_reserve_v11(r: &PalwKernelRouteStateV1, h: &NativeExecutionJobHead
 /// book's `claim.reserved_original` (what [`held_final_reserve_v11`] keeps committed and a post-Final conviction collects); text29:
 /// the book's signed `maximum.producer_reserve`. The post-Final F02 default slashes exactly this (bounded by what the bond still
 /// holds), consistent with the families' pre-Final DA default and conviction. Refused — never a default — when it is not readable.
-pub(super) fn native_held_final_reserve_v1(builder: &TransitionBuilder<'_>, family: u8, job: &Digest) -> Result<u64, PalwStateV2Error> {
+pub(super) fn native_held_final_reserve_v1(
+    builder: &TransitionBuilder<'_>,
+    family: u8,
+    job: &Digest,
+) -> Result<u64, PalwStateV2Error> {
     if builder.state.kernel_route.is_none() {
         return Err(refused("held reserve: no kernel route"));
     }

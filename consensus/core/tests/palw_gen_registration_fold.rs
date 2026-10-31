@@ -8,6 +8,7 @@
 //! Every block is checked by the shared chain harness three ways: the delta re-applies and reverts,
 //! and the child's carriage (with the new `0xC2` tail) reloads under its committed root.
 
+#![allow(warnings)]
 #[path = "rcore_common.rs"]
 mod rcore;
 use rcore::*;

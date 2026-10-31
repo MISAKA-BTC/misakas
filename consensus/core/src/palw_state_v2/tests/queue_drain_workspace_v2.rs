@@ -1,5 +1,6 @@
 //! Stored obligations exercise the real shared drain, rehearsal and block fold.
 //! These are not a market-fill or source-economics activation fixture.
+#![allow(warnings)]
 use super::*;
 use crate::evm::{
     EvmAddress,

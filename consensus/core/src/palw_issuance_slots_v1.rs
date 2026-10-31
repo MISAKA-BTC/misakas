@@ -160,7 +160,8 @@ pub fn palw_issuance_holds_slot_v1(params: &PalwStateParamsV2, claim: &PalwClaim
     // ADR-0176 amendment (ユーザー判断 2026-10-15): past `palw_bond_formula_v2` a slot is held from acceptance to the earliest recovery
     // `d + W_M` fixed at acceptance — no licence, Valid, Final, void or court result returns it earlier (a colluding Valid cannot
     // rotate the same slots), and nothing holds it longer (collateral release is the liability clock's).
-    if let Some(until) = params.bond_formula_recovery_daa_v2(claim.accepted_daa, crate::palw_bond_budget_v1::PalwHoldModeV1::PanelOne) {
+    if let Some(until) = params.bond_formula_recovery_daa_v2(claim.accepted_daa, crate::palw_bond_budget_v1::PalwHoldModeV1::PanelOne)
+    {
         return now_daa < until;
     }
     match &claim.phase {

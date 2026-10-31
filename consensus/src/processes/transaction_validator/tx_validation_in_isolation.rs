@@ -24,41 +24,68 @@ use super::{
 impl TransactionValidator {
     /// Only payload bytes are viewed; no cloned TX can detach its outer inputs, fee, ID or signature scope.
     pub(super) fn palw_fp_door_payload_v1<'a>(&self, tx: &'a Transaction, daa: Option<u64>) -> TxResult<std::borrow::Cow<'a, [u8]>> {
-        use std::borrow::Cow;
         use kaspa_consensus_core::config::params::ForkActivation;
-        let invalid = || TxRuleError::InvalidPalwFpPayload(kaspa_consensus_core::palw_freeprompt_v3::PalwFpV3Error::PayloadUndecodable);
-        if tx.subnetwork_id != SUBNETWORK_ID_PALW_FP_COMMITMENT { return Ok(Cow::Borrowed(&tx.payload)); }
+        use std::borrow::Cow;
+        let invalid =
+            || TxRuleError::InvalidPalwFpPayload(kaspa_consensus_core::palw_freeprompt_v3::PalwFpV3Error::PayloadUndecodable);
+        if tx.subnetwork_id != SUBNETWORK_ID_PALW_FP_COMMITMENT {
+            return Ok(Cow::Borrowed(&tx.payload));
+        }
         let active = |fence: Option<ForkActivation>| fence.is_some_and(|f| daa.is_none_or(|at| f.is_active(at)));
         let outer = if tx.payload.starts_with(b"FPR2") {
-            if !active(self.palw_prefix_dependency_fence) { return Err(invalid()); }
+            if !active(self.palw_prefix_dependency_fence) {
+                return Err(invalid());
+            }
             kaspa_consensus_core::palw_claim_local_v1::prefix_v1::PalwPrefixDependencyEnvelopeV1::inner_view_v1(&tx.payload)
                 .map_err(|_| invalid())?
-        } else { tx.payload.as_slice() };
+        } else {
+            tx.payload.as_slice()
+        };
         let accounting = outer.starts_with(b"FPA1");
         let payload = if accounting {
-            if !active(self.palw_fp_answer_accounting_fence) { return Err(invalid()); }
+            if !active(self.palw_fp_answer_accounting_fence) {
+                return Err(invalid());
+            }
             kaspa_consensus_core::palw_fp_answer_accounting_v1::palw_fp_answer_envelope_view_v1(outer, u32::MAX as usize)
-                .ok_or_else(invalid)?.inner
-        } else { outer };
+                .ok_or_else(invalid)?
+                .inner
+        } else {
+            outer
+        };
         if payload.starts_with(b"TFP1") {
-            if !active(self.palw_tir_public_conviction_fence) { return Err(invalid()); }
-            let env = kaspa_consensus_core::palw_tir_public_fp_envelope_v1::PalwTirPublicFpEnvelopeV1::decode_v1(payload).map_err(|_| invalid())?;
+            if !active(self.palw_tir_public_conviction_fence) {
+                return Err(invalid());
+            }
+            let env = kaspa_consensus_core::palw_tir_public_fp_envelope_v1::PalwTirPublicFpEnvelopeV1::decode_v1(payload)
+                .map_err(|_| invalid())?;
             return Ok(Cow::Owned(env.original_payload));
         }
         if payload.starts_with(b"HFP1") {
-            if !active(self.palw_staged_public_court_fence) { return Err(invalid()); }
-            let env = kaspa_consensus_core::palw_history_custody_v1::PalwHistoryFpEnvelopeV1::decode_v1(payload).map_err(|_| invalid())?;
+            if !active(self.palw_staged_public_court_fence) {
+                return Err(invalid());
+            }
+            let env =
+                kaspa_consensus_core::palw_history_custody_v1::PalwHistoryFpEnvelopeV1::decode_v1(payload).map_err(|_| invalid())?;
             return Ok(Cow::Owned(env.original_payload));
         }
         if payload.starts_with(b"TFO2") {
-            if !active(self.palw_court_family_supplier_fence)||!active(self.palw_tir_public_conviction_fence){return Err(invalid());}
-            let env=kaspa_consensus_core::palw_tir_funded_original_envelope_v2::PalwTirFundedOriginalEnvelopeV2::decode_v2(payload).map_err(|_|invalid())?;
-            let base=kaspa_consensus_core::palw_tir_funded_original_envelope_v1::PalwTirFundedOriginalEnvelopeV1::decode_v1(&env.funded_original).map_err(|_|invalid())?;
-            return Ok(Cow::Owned(base.original_v1().map_err(|_|invalid())?.original_payload));
+            if !active(self.palw_court_family_supplier_fence) || !active(self.palw_tir_public_conviction_fence) {
+                return Err(invalid());
+            }
+            let env = kaspa_consensus_core::palw_tir_funded_original_envelope_v2::PalwTirFundedOriginalEnvelopeV2::decode_v2(payload)
+                .map_err(|_| invalid())?;
+            let base = kaspa_consensus_core::palw_tir_funded_original_envelope_v1::PalwTirFundedOriginalEnvelopeV1::decode_v1(
+                &env.funded_original,
+            )
+            .map_err(|_| invalid())?;
+            return Ok(Cow::Owned(base.original_v1().map_err(|_| invalid())?.original_payload));
         }
         if (accounting || tx.payload.starts_with(b"FPR2")) && payload.starts_with(b"TFO1") {
-            if !active(self.palw_tir_public_conviction_fence) { return Err(invalid()); }
-            let env = kaspa_consensus_core::palw_tir_funded_original_envelope_v2::decode_funded_original_base_v2(payload).map_err(|_| invalid())?;
+            if !active(self.palw_tir_public_conviction_fence) {
+                return Err(invalid());
+            }
+            let env = kaspa_consensus_core::palw_tir_funded_original_envelope_v2::decode_funded_original_base_v2(payload)
+                .map_err(|_| invalid())?;
             return Ok(Cow::Owned(env.original_v1().map_err(|_| invalid())?.original_payload));
         }
         Ok(Cow::Borrowed(payload))
@@ -87,11 +114,16 @@ impl TransactionValidator {
                 self.palw_panel_da_admissible,
                 self.palw_prompt_ids_form,
                 kaspa_consensus_core::palw_fp_objects_v3::palw_fp_isolation_work_leaves_cap_v1(self.palw_held_context_fence.is_some()),
-                kaspa_consensus_core::palw_freeprompt_v3::PalwFpDecodeRulesV1::door(self.palw_fp_decode_rules_fence.map(|f| f.daa_score())),
-                self.palw_improvement_fence.is_some(), self.palw_fp_job_v5_fence.is_some(),
-                self.palw_fp_prefix_state_fence.is_some(), self.palw_fp_prefix_inherit_fence.is_some(),
+                kaspa_consensus_core::palw_freeprompt_v3::PalwFpDecodeRulesV1::door(
+                    self.palw_fp_decode_rules_fence.map(|f| f.daa_score()),
+                ),
+                self.palw_improvement_fence.is_some(),
+                self.palw_fp_job_v5_fence.is_some(),
+                self.palw_fp_prefix_state_fence.is_some(),
+                self.palw_fp_prefix_inherit_fence.is_some(),
                 self.palw_fp_decode_constraint_fence.is_some(),
-            ).map_err(TxRuleError::InvalidPalwFpPayload)?;
+            )
+            .map_err(TxRuleError::InvalidPalwFpPayload)?;
             return check_transaction_version(tx);
         }
         check_transaction_subnetwork(
@@ -1693,7 +1725,8 @@ mod pq_output_class_enforcement_tests {
             .with_tir_public_conviction_fence(Some(ForkActivation::new(1_000)))
             .with_fp_answer_accounting_fence(Some(ForkActivation::new(1_200)));
         let mut answered = funded.clone();
-        answered.payload = kaspa_consensus_core::palw_fp_answer_accounting_v1::palw_fp_answer_envelope_encode_v1(&funded.payload, &[7, 8]);
+        answered.payload =
+            kaspa_consensus_core::palw_fp_answer_accounting_v1::palw_fp_answer_envelope_encode_v1(&funded.payload, &[7, 8]);
         answered.finalize();
         let actual_id = answered.id();
         let actual_payload = answered.payload.clone();
@@ -1705,9 +1738,11 @@ mod pq_output_class_enforcement_tests {
         assert_eq!(answered.id(), actual_id);
         assert_eq!(answered.payload, actual_payload);
         let mut nested = answered.clone();
-        nested.payload = kaspa_consensus_core::palw_fp_answer_accounting_v1::palw_fp_answer_envelope_encode_v1(&answered.payload, &[7, 8]);
+        nested.payload =
+            kaspa_consensus_core::palw_fp_answer_accounting_v1::palw_fp_answer_envelope_encode_v1(&answered.payload, &[7, 8]);
         assert!(accounting.validate_tx_in_isolation(&nested).is_err());
-        let mut malformed_answer = answered.clone(); malformed_answer.payload.pop();
+        let mut malformed_answer = answered.clone();
+        malformed_answer.payload.pop();
         assert!(accounting.validate_tx_in_isolation(&malformed_answer).is_err());
         let identity = wrapped_v4.id();
         let payload = wrapped_v4.payload.clone();

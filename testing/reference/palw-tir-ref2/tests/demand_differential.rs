@@ -17,6 +17,7 @@
 //!
 //! Scale with `TIR_REF2_CASES` (default 1; the findings report runs at 25).
 
+#![allow(warnings)]
 mod common;
 
 use std::collections::{BTreeMap, BTreeSet};

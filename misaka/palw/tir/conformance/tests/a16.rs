@@ -3,6 +3,7 @@
 //! where it does not; triples take any multiplier and zero point and every shift `from_wire`
 //! admits (`0..=62`).
 
+#![allow(warnings)]
 mod common;
 
 use common::*;

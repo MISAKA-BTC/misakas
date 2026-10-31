@@ -237,8 +237,11 @@ async fn checker_child() {
         use std::os::unix::fs::OpenOptionsExt;
         key_options.mode(0o600);
     }
-    key_options.open(&key_path).unwrap()
-        .write_all(faster_hex::hex_string(&common::seed(input.checker_card as usize)).as_bytes()).unwrap();
+    key_options
+        .open(&key_path)
+        .unwrap()
+        .write_all(faster_hex::hex_string(&common::seed(input.checker_card as usize)).as_bytes())
+        .unwrap();
     let spec_path = dir.join("checker-spec.json");
     let outpoint = |p: TransactionOutpoint| format!("{}:{}", p.transaction_id, p.index);
     std::fs::write(&spec_path,serde_json::to_vec(&serde_json::json!({"version":4,"work_path":dir.join("checker-work"),"enrollment":input.enrollment.to_string(),"round":0,"checker_bond":outpoint(input.checker.0),"checker_key":key_path,"provider_bond":outpoint(input.provider.0),"provider_address":address,"payer_key":key_path,"funding_outpoints":[outpoint(input.funding)],"maximum_fee_sompi":100_000_000u64,"max_input_bytes":16<<20,"max_unit_bytes":1<<20,"max_total_fetch_bytes":4<<20,"max_workspace_bytes":128<<20,"max_requests":65536,"challenge_valid_until_daa":input.daa+64})).unwrap()).unwrap();

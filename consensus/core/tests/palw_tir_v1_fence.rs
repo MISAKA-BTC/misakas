@@ -8,6 +8,7 @@
 //! (`palw_t12_release_v3_params`: the ruleset before its IR flag day, the fence dormant). testnet-12
 //! as shipped arms it at DAA 2,000 — `palw_tir_flag_day_t12.rs`.
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{ForkActivation, Params, SIMNET_PARAMS, palw_t12_release_v3_params};
 use kaspa_consensus_core::fork_id_v1::fork_id_gate_fences_v1;
 use kaspa_consensus_core::palw_tir_v1::{

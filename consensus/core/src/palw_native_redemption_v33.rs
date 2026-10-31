@@ -229,11 +229,11 @@ pub fn derive_native_redemption_v33(
     if r.namespace != 28
         && Hash64::from_bytes(r.payout_queue)
             != crate::palw_native_audit_v27::native_final_credit_queue_v27(
-            r.job,
-            r.funding,
-            r.settlement,
-            Hash64::from_bytes(r.payout_payload),
-        )
+                r.job,
+                r.funding,
+                r.settlement,
+                Hash64::from_bytes(r.payout_payload),
+            )
     {
         return Err("native redemption33 original unique credit queue identity differs".into());
     }
@@ -378,7 +378,8 @@ pub fn derive_native_redemption_v39(
         }
     }
     let output = coinbase.transaction.outputs.get(output_index as usize).ok_or("native39 real output index absent")?;
-    if output.value != row.amount || output.script_public_key != crate::mldsa87_primitives::p2pkh_mldsa87_spk(&row.payload.as_bytes()) {
+    if output.value != row.amount || output.script_public_key != crate::mldsa87_primitives::p2pkh_mldsa87_spk(&row.payload.as_bytes())
+    {
         return Err("native39 original payout script/value differs".into());
     }
     Ok(CheckedNativeRedemptionV33 {

@@ -26,6 +26,7 @@
 //! indistinguishable from "unreachable", and that distinction is most of what the regression
 //! measures.
 
+#![allow(warnings)]
 use kaspa_grpc_client::GrpcClient;
 use kaspa_rpc_core::{api::rpc::RpcApi, notify::mode::NotificationMode};
 use std::process::ExitCode;

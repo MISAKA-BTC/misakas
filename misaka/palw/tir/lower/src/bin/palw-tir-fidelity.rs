@@ -7,6 +7,7 @@
 //! Token files are JSON `{"source": …, "sequences": [[id, …], …]}` (tokenise with the model's own
 //! `tokenizer.json`, offline). Without them, seeded random sequences are used (tiny models).
 
+#![allow(warnings)]
 use clap::Parser;
 use misaka_palw_tir_lower::float_ref::SiteStat;
 use misaka_palw_tir_lower::float_ref::stream::{OccParams, Streamed};

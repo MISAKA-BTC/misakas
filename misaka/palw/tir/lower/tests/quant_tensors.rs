@@ -7,6 +7,7 @@
 //! implementation of each library's dequantiser gives — run when a descriptor is loaded
 //! (`QuantFormat::from_json`); the registry test below counts them.
 
+#![allow(warnings)]
 use misaka_palw_tir_lower::LowerError;
 use misaka_palw_tir_lower::prequant::{
     QFormat, QuantConfig, parse_quant_config, parse_quant_config_with, skip_matches, unpack_awq, unpack_gptq,

@@ -11,6 +11,7 @@
 use crate::palw_arming_waiver_v1::{PALW_ARMING_WAIVER_REVIEW_V1, PalwArmingWaiverKindV1, PalwArmingWaiverV1};
 
 /// Every pinned waiver.
+#[rustfmt::skip]
 pub const PALW_T12_18400_WAIVERS_V1: &[PalwArmingWaiverV1] = &[
     PalwArmingWaiverV1 {
         fence: "palw_legacy_public_filer_v1",
@@ -725,6 +726,7 @@ pub const PALW_T12_18400_WAIVERS_V1: &[PalwArmingWaiverV1] = &[
 ];
 
 /// The g14 records (complete ones only).
+#[rustfmt::skip]
 pub const PALW_T12_18400_G14_RECORDS_V1: &[crate::palw_g14_gates_v1::PalwG14ArmingRecordV1] = &[
     crate::palw_g14_gates_v1::PalwG14ArmingRecordV1 {
         version: crate::palw_g14_gates_v1::PALW_G14_ARMING_RECORD_VERSION_V1,
@@ -859,6 +861,7 @@ pub const PALW_T12_18400_G14_RECORDS_V1: &[crate::palw_g14_gates_v1::PalwG14Armi
 ];
 
 /// The kernel-route records (complete ones only).
+#[rustfmt::skip]
 pub const PALW_T12_18400_KERNEL_ROUTE_RECORDS_V1: &[crate::palw_kernel_route_arming_v1::PalwKernelRouteArmingRecordV1] = &[
     crate::palw_kernel_route_arming_v1::PalwKernelRouteArmingRecordV1 {
         version: crate::palw_kernel_route_arming_v1::PALW_KERNEL_ROUTE_ARMING_RECORD_VERSION_V1,
@@ -895,6 +898,7 @@ pub const PALW_T12_18400_KERNEL_ROUTE_RECORDS_V1: &[crate::palw_kernel_route_arm
 ];
 
 /// The rfc0018 records (complete ones only).
+#[rustfmt::skip]
 pub const PALW_T12_18400_RFC0018_RECORDS_V1: &[crate::palw_rfc0018_v1::PalwRfc0018ArmingRecordV1] = &[
     crate::palw_rfc0018_v1::PalwRfc0018ArmingRecordV1 {
         version: crate::palw_rfc0018_v1::PALW_RFC0018_ARMING_RECORD_VERSION_V1,
@@ -916,6 +920,7 @@ pub const PALW_T12_18400_RFC0018_RECORDS_V1: &[crate::palw_rfc0018_v1::PalwRfc00
 
 /// The frame cost record for FpSelection: the lane VAL estimate (ProvisionalEstimate) and the agent review. Emitted only
 /// with the final evidence run's candidate commit as its source (a zero commit is refused, never pinned).
+#[rustfmt::skip]
 pub const PALW_T12_18400_FRAME_COST_RECORDS_V1: &[crate::palw_tir_frame_cost_v1::PalwTirFrameCostRecordV1] = &[
     crate::palw_tir_frame_cost_v1::PalwTirFrameCostRecordV1 {
         version: crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_COST_RECORD_VERSION_V1,
@@ -929,6 +934,7 @@ pub const PALW_T12_18400_FRAME_COST_RECORDS_V1: &[crate::palw_tir_frame_cost_v1:
 ];
 
 /// The model-tier record: c 300, kappa 1000 (user decision 2026-10-27), catalog edition 0 (empty) as the tip.
+#[rustfmt::skip]
 pub const PALW_T12_18400_MODEL_TIER_RECORDS_V1: &[crate::palw_model_tier_v1::PalwModelTierArmingRecordV1] = &[
     crate::palw_model_tier_v1::PalwModelTierArmingRecordV1 {
         version: crate::palw_model_tier_v1::PALW_MODEL_TIER_ARMING_RECORD_VERSION_V1,

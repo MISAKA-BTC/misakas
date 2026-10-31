@@ -896,7 +896,7 @@ fn rfc09_issuer_and_wire_reader_use_v2_v3_and_bind_the_attested_version() {
         let point = PalwForkChoicePointV1 { block: h(700), daa_score: 100, blue_score: 100 };
         let cx = PalwBlockContextV2 { block: point.block, daa_score: point.daa_score, blue_score: point.blue_score, subsidy: 0 };
         let (state, _) =
-            apply_palw_transition_v2(&PalwChainStateV2::genesis(), &p.palw_rule_e_state_params_v1().unwrap(), &cx, &[], None).unwrap();
+            apply_palw_transition_v2(&PalwChainStateV2::genesis(), p.palw_rule_e_state_params_v1().unwrap(), &cx, &[], None).unwrap();
         let opening = PalwCommittedOpeningV2::of(&state, &p).unwrap();
         let root = opening.committed_root();
         let decoded = opening_from_wire_v2(&opening.leaf, &opening.inner_root.to_string()).unwrap();
@@ -906,6 +906,7 @@ fn rfc09_issuer_and_wire_reader_use_v2_v3_and_bind_the_attested_version() {
         let served = IssuerServedV2 { point, opening, committed_root: root, committed_form: true };
         let sign = |msg: &[u8]| msg.to_vec();
         let verify = |pk: &[u8], msg: &[u8], sig: &[u8]| pk == b"pk" && msg == sig;
+        #[allow(clippy::cloned_ref_to_slice_refs)]
         let (att, skipped) = issue_attestations_v2(&p, &rs, &[served.clone()], None, 100, b"issuer", &sign);
         assert!(skipped.is_empty());
         assert_eq!(att.len(), 1);

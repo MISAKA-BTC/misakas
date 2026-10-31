@@ -1,6 +1,7 @@
 //! G14 lane r5-f02-wire (2026-10-22) — written, not compiled. RFC-0029 tag-178 dispatch, the RFC-0026 F02 default during the RFC08
 //! post-Final hold (text29 / funded v11), its no-slash hold / recovery / release at H, the per-claim court-service index and the
 //! shared bottom's captured end evidence.
+#![allow(warnings)]
 use super::super::palw_court_service_lifecycle_fold_v1 as lifecycle;
 use super::super::palw_native_liability_hold_fold_v1::*;
 use super::super::palw_native_post_final_default_fold_v1::*;
@@ -399,7 +400,12 @@ fn r5_f02_wire_shared_bottom_captures_its_actual_end_evidence() {
         total_bytes: 3,
         body_hash: h64(3),
     };
-    let parts = vec![crate::palw_court_numerical_transport_v1::NumericalPartV1 { version: 1, stream_id: h64(4), offset: 0, bytes: vec![1, 2, 3] }];
+    let parts = vec![crate::palw_court_numerical_transport_v1::NumericalPartV1 {
+        version: 1,
+        stream_id: h64(4),
+        offset: 0,
+        bytes: vec![1, 2, 3],
+    }];
     assert!(b.court_end_evidence.is_none());
     let previous = lifecycle::capture_shared_bottom_evidence_v1(&mut b, &at, &manifest, &parts).unwrap();
     assert!(previous.is_none());

@@ -5,6 +5,7 @@
 //! give the version-1 program's bytes, and all three are held against the HF output, which is
 //! fidelity, not validity. Admission (`tir_admit_v2`, `tir_admit_pipeline_v1`) must accept both.
 
+#![allow(warnings)]
 mod common;
 
 use misaka_palw_tir as tir;

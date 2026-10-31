@@ -428,8 +428,10 @@ mod tests {
         fs::rename(object_path, &archived_object).unwrap();
         fs::rename(tx_path, &archived_tx).unwrap();
         for native in [route(&[], &[]), route(&[(7, actor())], &[])] {
-            assert!(matches!(scan_outbox(outbox, &[point(1), point(2)], CAP, &native, actor(), BASE, ENROLLMENT, 0),
-                Err(CheckerOutboxErrorV4::Outbox(_))));
+            assert!(matches!(
+                scan_outbox(outbox, &[point(1), point(2)], CAP, &native, actor(), BASE, ENROLLMENT, 0),
+                Err(CheckerOutboxErrorV4::Outbox(_))
+            ));
         }
         assert_eq!(fs::read(archived_object).unwrap(), borsh::to_vec(&object).unwrap());
         assert_eq!(fs::read(archived_tx).unwrap(), borsh::to_vec(&carrier).unwrap());

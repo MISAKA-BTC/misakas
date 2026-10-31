@@ -51,18 +51,16 @@ impl PalwRfc0608FenceV1 {
 /// **Open blockers**: known code or design gaps that make arming the fence unsafe (not mere coverage gaps and not values to
 /// measure — those belong to the record). While a fence has an entry here no record can arm it. Each entry names the
 /// remaining-work checkbox (`docs/design/palw/integration/rfc-0006-0007-0008-0012-remaining-work-2026-10-15.md`) that closes it.
-pub const PALW_RFC0608_OPEN_BLOCKERS_V1: &[(PalwRfc0608FenceV1, &str)] = &[
-    (
-        PalwRfc0608FenceV1::SettlementOnceV1,
-        "RFC08-2 (unsourced terms): past the fence the combined liability predicate refuses, by name, every leg whose terms \
+pub const PALW_RFC0608_OPEN_BLOCKERS_V1: &[(PalwRfc0608FenceV1, &str)] = &[(
+    PalwRfc0608FenceV1::SettlementOnceV1,
+    "RFC08-2 (unsourced terms): past the fence the combined liability predicate refuses, by name, every leg whose terms \
          have no authenticated source: verifier check fees outside a paid V2 claim past palw_paid_claim_trap_v1 (no verifier \
          liability horizon; a paid V2 claim's fee is held and sourced by RFC07-5's trap window), material provider fees \
          (event-relative covenant, no finite horizon), native mining receipts and native funded/text/job/mining admissions (no \
          signed hard deadline), kernel claims outside a paid V2 enrollment (no producer-signed lifetime), beacon source-fee \
          promise payouts (no claim reservation, X3 deadline or material TTL) and audit answers paid before their trap window \
          (palw_audit_1004_v1 off)",
-    ),
-];
+)];
 
 /// **A measured-value record** for one fence's exact policy on one network, with the digests of the evidence (harness commit,
 /// params, hardware, network conditions, raw data, derivation) and of its independent review.

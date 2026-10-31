@@ -17,20 +17,16 @@ use kaspa_consensus_core::{
     network::{NetworkId, NetworkType},
     subnets::SUBNETWORK_ID_NATIVE,
     tx::{
-        MutableTransaction, PopulatedTransaction, ScriptPublicKey, Transaction, TransactionInput,
-        TransactionOutpoint, TransactionOutput, UtxoEntry,
+        MutableTransaction, PopulatedTransaction, ScriptPublicKey, Transaction, TransactionInput, TransactionOutpoint,
+        TransactionOutput, UtxoEntry,
     },
 };
 use kaspa_core::{info, kaspad_env::version, time::unix_now, warn};
 use kaspa_grpc_client::{ClientPool, GrpcClient};
 use kaspa_notify::subscription::context::SubscriptionContext;
-use kaspa_pq_validator_core::{
-    VALIDATOR_SEED_LEN, ValidatorKey, load_validator_seed, relay_fee_for_compute_mass,
-};
+use kaspa_pq_validator_core::{VALIDATOR_SEED_LEN, ValidatorKey, load_validator_seed, relay_fee_for_compute_mass};
 use kaspa_rpc_core::{RpcUtxoEntry, api::rpc::RpcApi, notify::mode::NotificationMode};
-use kaspa_txscript::{
-    MLDSA87_SIG_LEN, MLDSA87_TX_CONTEXT, pay_to_address_script, script_builder::ScriptBuilder,
-};
+use kaspa_txscript::{MLDSA87_SIG_LEN, MLDSA87_TX_CONTEXT, pay_to_address_script, script_builder::ScriptBuilder};
 use parking_lot::Mutex;
 use rand::{Rng, RngCore};
 use rayon::prelude::*;
@@ -84,21 +80,13 @@ impl Args {
             measurement_capabilities: m.get_flag("measurement-capabilities"),
             initial_utxos: m.get_one::<u32>("initial-utxos").map(|v| *v as usize),
             measurement_duration_secs: *m.get_one::<u64>("measurement-duration-secs").unwrap(),
-            measurement_funding_timeout_secs: *m
-                .get_one::<u64>("measurement-funding-timeout-secs")
-                .unwrap(),
+            measurement_funding_timeout_secs: *m.get_one::<u64>("measurement-funding-timeout-secs").unwrap(),
             measurement_log: m.get_one::<String>("measurement-log").cloned(),
             private_key_file: m.get_one::<String>("private-key-file").cloned(),
-            private_key_stdin: m
-                .get_one::<bool>("private-key-stdin")
-                .cloned()
-                .unwrap_or(false),
+            private_key_stdin: m.get_one::<bool>("private-key-stdin").cloned().unwrap_or(false),
             tps: m.get_one::<u64>("tps").cloned().unwrap(),
             network: network_id,
-            rpc_server: m
-                .get_one::<String>("rpcserver")
-                .cloned()
-                .unwrap_or(default_rpc_server),
+            rpc_server: m.get_one::<String>("rpcserver").cloned().unwrap_or(default_rpc_server),
             threads: m.get_one::<u8>("threads").cloned().unwrap(),
             unleashed: m.get_one::<bool>("unleashed").cloned().unwrap_or(false),
             addr: m.get_one::<String>("addr").cloned(),
@@ -113,16 +101,38 @@ pub fn cli() -> Command {
     Command::new("rothschild")
         .about(format!("{} (rothschild) v{}", env!("CARGO_PKG_DESCRIPTION"), version()))
         .version(env!("CARGO_PKG_VERSION"))
-        .arg(Arg::new("measurement-capabilities").long("measurement-capabilities").action(ArgAction::SetTrue)
-            .help("Print truthful measurement support before key loading or RPC connection, then exit"))
-        .arg(Arg::new("initial-utxos").long("initial-utxos").value_parser(clap::value_parser!(u32).range(1..=10_000))
-            .requires("measurement-log").help("Local-devnet only: prepare and confirm this many independent funding outputs before load"))
-        .arg(Arg::new("measurement-log").long("measurement-log").value_name("fresh-path").requires("initial-utxos")
-            .help("Exclusive new mode-0600 JSONL trace; existing paths are refused"))
-        .arg(Arg::new("measurement-duration-secs").long("measurement-duration-secs").default_value("600")
-            .value_parser(clap::value_parser!(u64).range(1..=3600)))
-        .arg(Arg::new("measurement-funding-timeout-secs").long("measurement-funding-timeout-secs").default_value("600")
-            .value_parser(clap::value_parser!(u64).range(1..=3600)))
+        .arg(
+            Arg::new("measurement-capabilities")
+                .long("measurement-capabilities")
+                .action(ArgAction::SetTrue)
+                .help("Print truthful measurement support before key loading or RPC connection, then exit"),
+        )
+        .arg(
+            Arg::new("initial-utxos")
+                .long("initial-utxos")
+                .value_parser(clap::value_parser!(u32).range(1..=10_000))
+                .requires("measurement-log")
+                .help("Local-devnet only: prepare and confirm this many independent funding outputs before load"),
+        )
+        .arg(
+            Arg::new("measurement-log")
+                .long("measurement-log")
+                .value_name("fresh-path")
+                .requires("initial-utxos")
+                .help("Exclusive new mode-0600 JSONL trace; existing paths are refused"),
+        )
+        .arg(
+            Arg::new("measurement-duration-secs")
+                .long("measurement-duration-secs")
+                .default_value("600")
+                .value_parser(clap::value_parser!(u64).range(1..=3600)),
+        )
+        .arg(
+            Arg::new("measurement-funding-timeout-secs")
+                .long("measurement-funding-timeout-secs")
+                .default_value("600")
+                .value_parser(clap::value_parser!(u64).range(1..=3600)),
+        )
         .arg(
             Arg::new("private-key-file")
                 .long("private-key-file")
@@ -168,7 +178,9 @@ pub fn cli() -> Command {
                 .help("The number of threads to use for TX generation. Set to 0 to use 1 thread per core. Default is 2."),
         )
         .arg(Arg::new("unleashed").long("unleashed").action(ArgAction::SetTrue).hide(true).help("Allow higher TPS"))
-        .arg(Arg::new("addr").long("to-addr").short('a').value_name("addr").help("PubKeyHashMlDsa87 address to send to (default: own)"))
+        .arg(
+            Arg::new("addr").long("to-addr").short('a').value_name("addr").help("PubKeyHashMlDsa87 address to send to (default: own)"),
+        )
         .arg(
             Arg::new("priority-fee")
                 .long("priority-fee")
@@ -238,12 +250,7 @@ struct TxPlan<'a> {
 }
 
 fn mass_calc(p: &Params) -> MassCalculator {
-    MassCalculator::new(
-        p.mass_per_tx_byte,
-        p.mass_per_script_pub_key_byte,
-        p.mass_per_sig_op,
-        p.storage_mass_parameter,
-    )
+    MassCalculator::new(p.mass_per_tx_byte, p.mass_per_script_pub_key_byte, p.mass_per_sig_op, p.storage_mass_parameter)
 }
 
 /// Read the ML-DSA-87 seed from a file or from stdin only. The seed is never echoed.
@@ -258,22 +265,15 @@ fn load_seed(args: &Args) -> [u8; VALIDATOR_SEED_LEN] {
         }
     } else if args.private_key_stdin {
         let mut s = String::new();
-        std::io::stdin()
-            .read_to_string(&mut s)
-            .expect("failed to read the private key from stdin");
+        std::io::stdin().read_to_string(&mut s).expect("failed to read the private key from stdin");
         let mut seed = [0u8; VALIDATOR_SEED_LEN];
         if faster_hex::hex_decode(s.trim().as_bytes(), &mut seed).is_err() {
-            eprintln!(
-                "refusing to start: the seed on stdin must be {} hex characters (not echoed)",
-                VALIDATOR_SEED_LEN * 2
-            );
+            eprintln!("refusing to start: the seed on stdin must be {} hex characters (not echoed)", VALIDATOR_SEED_LEN * 2);
             std::process::exit(1);
         }
         seed
     } else {
-        eprintln!(
-            "refusing to start: pass --private-key-file <path> or --private-key-stdin (an ML-DSA-87 seed)"
-        );
+        eprintln!("refusing to start: pass --private-key-file <path> or --private-key-stdin (an ML-DSA-87 seed)");
         std::process::exit(1);
     }
 }
@@ -306,13 +306,7 @@ async fn main() {
     let address_prefix = Prefix::from(args.network);
     let params = Params::from(args.network);
 
-    let stats = Arc::new(Mutex::new(Stats {
-        num_txs: 0,
-        since: unix_now(),
-        num_utxos: 0,
-        utxos_amount: 0,
-        num_outs: 0,
-    }));
+    let stats = Arc::new(Mutex::new(Stats { num_txs: 0, since: unix_now(), num_utxos: 0, utxos_amount: 0, num_outs: 0 }));
     let subscription_context = SubscriptionContext::new();
     let rpc_client = GrpcClient::connect_with_args(
         NotificationMode::Direct,
@@ -341,30 +335,18 @@ async fn main() {
         Some(addr_str) => {
             let to = Address::try_from(addr_str.clone()).expect("bad --to-addr");
             if to.version != Version::PubKeyHashMlDsa87 {
-                eprintln!(
-                    "refusing to start: --to-addr must be a PubKeyHashMlDsa87 address (t12 outputs), got another version"
-                );
+                eprintln!("refusing to start: --to-addr must be a PubKeyHashMlDsa87 address (t12 outputs), got another version");
                 std::process::exit(1);
             }
             to
         }
     };
 
-    assert!(
-        args.payload_size <= MAX_PAYLOAD_SIZE,
-        "payload-size can be max {MAX_PAYLOAD_SIZE}"
-    );
+    assert!(args.payload_size <= MAX_PAYLOAD_SIZE, "payload-size can be max {MAX_PAYLOAD_SIZE}");
 
-    let tx_config = TxConfig {
-        priority_fee: args.priority_fee,
-        randomize_fee: args.randomize_fee,
-        payload_size: args.payload_size,
-    };
+    let tx_config = TxConfig { priority_fee: args.priority_fee, randomize_fee: args.randomize_fee, payload_size: args.payload_size };
 
-    rayon::ThreadPoolBuilder::new()
-        .num_threads(args.threads as usize)
-        .build_global()
-        .unwrap();
+    rayon::ThreadPoolBuilder::new().num_threads(args.threads as usize).build_global().unwrap();
 
     let mut log_message = format!(
         "Using Rothschild with:\n\
@@ -381,30 +363,17 @@ async fn main() {
         log_message.push_str(&format!(
             "\n\tpriority fee: {} SOMPS {}",
             tx_config.priority_fee,
-            if tx_config.randomize_fee {
-                "[randomize]"
-            } else {
-                ""
-            }
+            if tx_config.randomize_fee { "[randomize]" } else { "" }
         ));
     }
     if args.payload_size != 0 {
-        log_message.push_str(&format!(
-            "\n\tpayload size: {} random bytes",
-            tx_config.payload_size,
-        ));
+        log_message.push_str(&format!("\n\tpayload size: {} random bytes", tx_config.payload_size,));
     }
     info!("{}", log_message);
 
-    let info = rpc_client
-        .get_block_dag_info()
-        .await
-        .expect("Failed to get block dag info.");
+    let info = rpc_client.get_block_dag_info().await.expect("Failed to get block dag info.");
 
-    assert_eq!(
-        info.network, args.network,
-        "connected node differs from explicitly selected network"
-    );
+    assert_eq!(info.network, args.network, "connected node differs from explicitly selected network");
     let coinbase_maturity = match info.network.suffix {
         Some(11) => panic!("TN11 is not supported on this version"),
         None | Some(_) => params.coinbase_maturity(),
@@ -428,15 +397,8 @@ async fn main() {
     if args.initial_utxos.is_some() {
         #[cfg(unix)]
         {
-            if let Err(error) = measurement::run(
-                &args,
-                &key,
-                &params,
-                &rpc_client,
-                &kaspa_addr,
-                params.coinbase_spend_maturity(),
-            )
-            .await
+            if let Err(error) =
+                measurement::run(&args, &key, &params, &rpc_client, &kaspa_addr, params.coinbase_spend_maturity()).await
             {
                 eprintln!("measurement stopped: {error}");
                 std::process::exit(1);
@@ -453,9 +415,7 @@ async fn main() {
     const CLIENT_POOL_SIZE: usize = 8;
     let mut rpc_clients = Vec::with_capacity(CLIENT_POOL_SIZE);
     for _ in 0..CLIENT_POOL_SIZE {
-        rpc_clients.push(Arc::new(
-            new_rpc_client(&subscription_context, &args.rpc_server).await,
-        ));
+        rpc_clients.push(Arc::new(new_rpc_client(&subscription_context, &args.rpc_server).await));
     }
 
     let submit_tx_pool = ClientPool::new(rpc_clients, 1000);
@@ -504,31 +464,12 @@ async fn main() {
 
     let target_tps = args.tps.min(if args.unleashed { u64::MAX } else { 100 });
     let should_tick_per_second = target_tps * MILLIS_PER_TICK / 1000 == 0;
-    let avg_txs_per_tick = if should_tick_per_second {
-        target_tps
-    } else {
-        target_tps * MILLIS_PER_TICK / 1000
-    };
-    let mut utxos = refresh_utxos(
-        &rpc_client,
-        kaspa_addr.clone(),
-        &mut pending,
-        coinbase_maturity,
-    )
-    .await;
-    let mut ticker = interval(Duration::from_millis(if should_tick_per_second {
-        1000
-    } else {
-        MILLIS_PER_TICK
-    }));
+    let avg_txs_per_tick = if should_tick_per_second { target_tps } else { target_tps * MILLIS_PER_TICK / 1000 };
+    let mut utxos = refresh_utxos(&rpc_client, kaspa_addr.clone(), &mut pending, coinbase_maturity).await;
+    let mut ticker = interval(Duration::from_millis(if should_tick_per_second { 1000 } else { MILLIS_PER_TICK }));
     ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
-    let plan = TxPlan {
-        key: &key,
-        params: &params,
-        to_spk: pay_to_address_script(&kaspa_to_addr),
-        num_outs: 2,
-    };
+    let plan = TxPlan { key: &key, params: &params, to_spk: pay_to_address_script(&kaspa_to_addr), num_outs: 2 };
 
     let mut maximize_inputs = false;
     let mut last_refresh = unix_now();
@@ -569,13 +510,7 @@ async fn main() {
         if !has_funds || now - last_refresh > 60_000 {
             info!("Refetching UTXO set");
             tokio::time::sleep(Duration::from_millis(100)).await; // We don't want this operation to be too frequent since its heavy on the node, so we wait some time before executing it.
-            utxos = refresh_utxos(
-                &rpc_client,
-                kaspa_addr.clone(),
-                &mut pending,
-                coinbase_maturity,
-            )
-            .await;
+            utxos = refresh_utxos(&rpc_client, kaspa_addr.clone(), &mut pending, coinbase_maturity).await;
             last_refresh = unix_now();
             next_available_utxo_index = 0;
             pause_if_mempool_is_full(&rpc_client).await;
@@ -589,11 +524,7 @@ fn should_maximize_inputs(
     utxos: &[(TransactionOutpoint, UtxoEntry)],
     pending: &HashMap<TransactionOutpoint, Instant>,
 ) -> bool {
-    let estimated_utxos = if utxos.len() > pending.len() {
-        utxos.len() - pending.len()
-    } else {
-        0
-    };
+    let estimated_utxos = if utxos.len() > pending.len() { utxos.len() - pending.len() } else { 0 };
     if !old_value && estimated_utxos > 1_000_000 {
         info!("Starting to maximize inputs");
         true
@@ -613,10 +544,7 @@ async fn pause_if_mempool_is_full(rpc_client: &GrpcClient) {
         }
 
         const PAUSE_DURATION: u64 = 10;
-        info!(
-            "Mempool has {} entries. Pausing for {} seconds to reduce mempool pressure",
-            mempool_size, PAUSE_DURATION
-        );
+        info!("Mempool has {} entries. Pausing for {} seconds to reduce mempool pressure", mempool_size, PAUSE_DURATION);
         tokio::time::sleep(Duration::from_secs(PAUSE_DURATION)).await;
     }
 }
@@ -636,10 +564,7 @@ async fn populate_pending_outpoints_from_mempool(
     kaspa_addr: Address,
     pending_outpoints: &mut HashMap<TransactionOutpoint, Instant>,
 ) {
-    let entries = rpc_client
-        .get_mempool_entries_by_addresses(vec![kaspa_addr], true, false)
-        .await
-        .unwrap();
+    let entries = rpc_client.get_mempool_entries_by_addresses(vec![kaspa_addr], true, false).await.unwrap();
     let now = Instant::now();
 
     for entry in entries {
@@ -657,10 +582,7 @@ async fn fetch_spendable_utxos(
     coinbase_maturity: u64,
     pending: &mut HashMap<TransactionOutpoint, Instant>,
 ) -> Vec<(TransactionOutpoint, UtxoEntry)> {
-    let resp = rpc_client
-        .get_utxos_by_addresses(vec![kaspa_addr])
-        .await
-        .unwrap();
+    let resp = rpc_client.get_utxos_by_addresses(vec![kaspa_addr]).await.unwrap();
     let dag_info = rpc_client.get_block_dag_info().await.unwrap();
 
     let mut utxos = resp
@@ -707,25 +629,14 @@ async fn maybe_send_tx(
     tx_config: &TxConfig,
 ) -> bool {
     let num_outs = if maximize_inputs { 1 } else { plan.num_outs };
-    let plan = TxPlan {
-        key: plan.key,
-        params: plan.params,
-        to_spk: plan.to_spk.clone(),
-        num_outs,
-    };
+    let plan = TxPlan { key: plan.key, params: plan.params, to_spk: plan.to_spk.clone(), num_outs };
 
     let mut has_fund = false;
 
     let selected_utxos_groups = (0..txs_to_send)
         .map(|_| {
-            let (selected_utxos, selected_amount) = select_utxos(
-                utxos,
-                DEFAULT_SEND_AMOUNT,
-                &plan,
-                maximize_inputs,
-                next_available_utxo_index,
-                tx_config,
-            );
+            let (selected_utxos, selected_amount) =
+                select_utxos(utxos, DEFAULT_SEND_AMOUNT, &plan, maximize_inputs, next_available_utxo_index, tx_config);
             if selected_amount == 0 {
                 return None;
             }
@@ -751,20 +662,8 @@ async fn maybe_send_tx(
         .into_par_iter()
         .map(|utxo_option| {
             let (selected_utxos, selected_amount) = utxo_option?;
-            match generate_tx(
-                &plan,
-                &selected_utxos,
-                selected_amount,
-                tx_config.payload_size,
-            ) {
-                Ok(tx) => Some((
-                    tx,
-                    selected_utxos.len(),
-                    selected_utxos
-                        .into_iter()
-                        .map(|(_, entry)| entry.amount)
-                        .sum::<u64>(),
-                )),
+            match generate_tx(&plan, &selected_utxos, selected_amount, tx_config.payload_size) {
+                Ok(tx) => Some((tx, selected_utxos.len(), selected_utxos.into_iter().map(|(_, entry)| entry.amount).sum::<u64>())),
                 Err(e) => {
                     warn!("could not build a transaction: {e}");
                     None
@@ -806,36 +705,14 @@ fn relay_fee(plan: &TxPlan<'_>, entries: &[UtxoEntry], out_value: u64, payload_s
         .add_data(&vec![0u8; plan.key.public_key().len()])
         .expect("pubkey push fits")
         .drain();
-    let dummy_outpoint =
-        TransactionOutpoint::new(kaspa_consensus_core::Hash64::from_bytes([0u8; 64]), 0);
-    let inputs: Vec<TransactionInput> = entries
-        .iter()
-        .map(|_| {
-            TransactionInput::new(
-                dummy_outpoint,
-                sig_script.clone(),
-                MAX_TX_IN_SEQUENCE_NUM,
-                1,
-            )
-        })
-        .collect();
-    let outputs: Vec<TransactionOutput> = (0..plan.num_outs)
-        .map(|_| TransactionOutput::new(out_value, plan.to_spk.clone()))
-        .collect();
-    let tx = Transaction::new(
-        TX_VERSION,
-        inputs,
-        outputs,
-        0,
-        SUBNETWORK_ID_NATIVE,
-        0,
-        vec![0u8; payload_size],
-    );
+    let dummy_outpoint = TransactionOutpoint::new(kaspa_consensus_core::Hash64::from_bytes([0u8; 64]), 0);
+    let inputs: Vec<TransactionInput> =
+        entries.iter().map(|_| TransactionInput::new(dummy_outpoint, sig_script.clone(), MAX_TX_IN_SEQUENCE_NUM, 1)).collect();
+    let outputs: Vec<TransactionOutput> = (0..plan.num_outs).map(|_| TransactionOutput::new(out_value, plan.to_spk.clone())).collect();
+    let tx = Transaction::new(TX_VERSION, inputs, outputs, 0, SUBNETWORK_ID_NATIVE, 0, vec![0u8; payload_size]);
     let mc = mass_calc(plan.params);
     let compute = mc.calc_non_contextual_masses(&tx).compute_mass;
-    let storage = mc
-        .calc_contextual_masses(&PopulatedTransaction::new(&tx, entries.to_vec()))
-        .map_or(0, |m| m.storage_mass);
+    let storage = mc.calc_contextual_masses(&PopulatedTransaction::new(&tx, entries.to_vec())).map_or(0, |m| m.storage_mass);
     relay_fee_for_compute_mass(compute.max(storage))
 }
 
@@ -850,20 +727,10 @@ fn build_signed_tx(
     payload: Vec<u8>,
     storage_mass_parameter: u64,
 ) -> Result<Transaction, String> {
-    let inputs: Vec<TransactionInput> = utxos
-        .iter()
-        .map(|(op, _)| TransactionInput::new(*op, vec![], MAX_TX_IN_SEQUENCE_NUM, 1))
-        .collect();
+    let inputs: Vec<TransactionInput> =
+        utxos.iter().map(|(op, _)| TransactionInput::new(*op, vec![], MAX_TX_IN_SEQUENCE_NUM, 1)).collect();
     let entries: Vec<UtxoEntry> = utxos.iter().map(|(_, e)| e.clone()).collect();
-    let tx = Transaction::new(
-        TX_VERSION,
-        inputs,
-        outputs,
-        0,
-        SUBNETWORK_ID_NATIVE,
-        0,
-        payload,
-    );
+    let tx = Transaction::new(TX_VERSION, inputs, outputs, 0, SUBNETWORK_ID_NATIVE, 0, payload);
     let storage_mass = MassCalculator::new(0, 0, 0, storage_mass_parameter)
         .calc_contextual_masses(&PopulatedTransaction::new(&tx, entries.clone()))
         .ok_or_else(|| "contextual mass not computable for the native tx".to_string())?
@@ -874,9 +741,7 @@ fn build_signed_tx(
     let mut scripts = Vec::with_capacity(utxos.len());
     for i in 0..utxos.len() {
         let sighash = calc_mldsa87_signature_hash(&mtx.as_verifiable(), i, SIG_HASH_ALL, &reused);
-        let mut sig_data = key
-            .sign_with_context(sighash.as_bytes().as_slice(), MLDSA87_TX_CONTEXT)
-            .to_vec();
+        let mut sig_data = key.sign_with_context(sighash.as_bytes().as_slice(), MLDSA87_TX_CONTEXT).to_vec();
         sig_data.push(SIG_HASH_ALL.to_u8());
         let script = ScriptBuilder::new()
             .add_data(&sig_data)
@@ -913,12 +778,7 @@ fn select_utxos(
         *next_available_utxo_index += 1;
 
         let entries: Vec<UtxoEntry> = selected.iter().map(|(_, e)| e.clone()).collect();
-        let fee = relay_fee(
-            plan,
-            &entries,
-            total_amount / plan.num_outs,
-            tx_config.payload_size,
-        );
+        let fee = relay_fee(plan, &entries, total_amount / plan.num_outs, tx_config.payload_size);
         let priority_fee = if tx_config.randomize_fee && tx_config.priority_fee > 0 {
             rng.gen_range(0..tx_config.priority_fee)
         } else {
@@ -950,26 +810,13 @@ fn generate_tx(
     let per_out = send_amount / num_outs;
     let outputs: Vec<TransactionOutput> = (0..num_outs)
         .map(|i| {
-            let value = if i + 1 == num_outs {
-                send_amount - per_out * (num_outs - 1)
-            } else {
-                per_out
-            };
-            TransactionOutput {
-                value,
-                script_public_key: plan.to_spk.clone(),
-            }
+            let value = if i + 1 == num_outs { send_amount - per_out * (num_outs - 1) } else { per_out };
+            TransactionOutput { value, script_public_key: plan.to_spk.clone() }
         })
         .collect();
     let mut data = vec![0u8; payload_size];
     rand::thread_rng().fill_bytes(&mut data);
-    build_signed_tx(
-        plan.key,
-        utxos,
-        outputs,
-        data,
-        plan.params.storage_mass_parameter,
-    )
+    build_signed_tx(plan.key, utxos, outputs, data, plan.params.storage_mass_parameter)
 }
 
 #[cfg(test)]

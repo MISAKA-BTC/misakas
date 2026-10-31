@@ -13,6 +13,7 @@
 //! cargo run --release --bin tir-gpu-layers -- [--layers 2] [--positions 24]
 //! ```
 
+#![allow(warnings)]
 use std::time::Instant;
 
 use misaka_palw_tir_exec::{NoSink, TirExecutor, TirParams, TirPlan};

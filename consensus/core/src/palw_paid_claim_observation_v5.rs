@@ -11,7 +11,7 @@ use crate::{
         NativeDecodeErrorV1 as E, NativeHeapV1, NativeRetainedV1, NativeWireScanV1, preflight_native_value_v1,
         reserve_native_requests_v1, retain_native_value_decode_classified_v1,
     },
-    palw_state_v2::{PalwBondKeyV2, PalwChainStateV2},
+    palw_state_v2::PalwChainStateV2,
 };
 use misaka_palw_kernel::{
     beacon_source_fee::BeaconSourceFeeOutcomeV1,

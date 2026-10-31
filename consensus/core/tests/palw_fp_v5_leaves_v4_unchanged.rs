@@ -17,6 +17,7 @@
 //! (`misaka-palw-base0`'s `fp_job_v4*`, `palw_court_decode_close_door`), and the shipped rulesets'
 //! ids are pinned in `palw_tir_fences_are_dormant.rs` and `palw_the_release_did_not_move.rs`.
 
+#![allow(warnings)]
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::params::{
     ForkActivation, MAINNET_PARAMS, PALW_T12_INT11_FENCES_V1, PALW_T12_INT11_FLAG_DAY_DAA, PALW_T12_POST_LAUNCH_FENCES_V1,

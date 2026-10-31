@@ -4,6 +4,7 @@
 //! Every [`Chain::step_at`] block is re-applied, reverted and reloaded, so each state written here is also a reorg check.
 //!
 //! Run: cargo test -p kaspa-consensus-core --test court_clock_v2_fold
+#![allow(warnings)]
 #[path = "rcore_common.rs"]
 mod common;
 use common::*;

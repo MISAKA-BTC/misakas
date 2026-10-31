@@ -1,5 +1,6 @@
 //! Real Legacy ingress over native registry/claim rows and a stored running
 //! session. Private fee injection is not production policy or court acceptance.
+#![allow(warnings)]
 use super::*;
 use crate::palw_court_paid_ingress_v1::{PalwCourtIngressScheduleV1, set_palw_court_ingress_test_schedule_v1};
 use crate::palw_native_resource_v1::{NativeDemandCheckerV1, NativeSnapshotResourceLimitsV1, NativeTransitionReservationV1};
@@ -71,7 +72,7 @@ fn builder<'a>(
 
 #[test]
 fn legacy_court_ingress_workspace_refuses_before_fee_or_journal_and_retries_paid_and_unpaid() {
-    for fee in [None, Some(5)] {
+    for fee in [Some(0), Some(5)] {
         let _schedule = Schedule::set(fee);
         let (s, p, claim) = source();
         let e = PalwTransitionExtrasV1::default();
@@ -209,11 +210,49 @@ fn legacy_court_ingress_borrowed_side_matches_old_membership_and_zero_quota_dorm
         assert!(full.entries.is_empty());
     }
     // Direct evidence is exempt from the follow-on split, but not overall cap.
-    let _schedule = Schedule::set(None);
+    let _schedule = Schedule::set(Some(0));
     s.court_sessions.clear();
+    let c = checker(u64::MAX);
     let mut direct = builder(&s, &p, &e, &c);
     assert_eq!(court_ingress_admission_v1(&mut direct, &point, claim, bond_key(2), true, 20).unwrap(), PalwCourtAdmissionV1::Legacy);
     assert_eq!(direct.state, s);
     assert!(direct.entries.is_empty());
+    drop(direct);
     assert_eq!(c.outstanding(), (0, 0));
+}
+
+#[test]
+fn paid_ingress_preserves_actual_claim_principal_and_refuses_before_burn() {
+    let _schedule = Schedule::set(Some(500));
+    let (state, params, claim) = source();
+    let extras = PalwTransitionExtrasV1::default();
+    let point = ctx(3, 80, 3);
+    // The producer's already folded attempt supplies the real outstanding duty;
+    // this is not a fabricated reserved_exposure entry.
+    let opener = bond_key(1);
+    let probe = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+    let held = u64::try_from(probe.committed_at(&opener, point.daa_score).unwrap()).unwrap();
+    assert!(held > 0);
+    drop(probe);
+    for free in [499, 500] {
+        let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+        let keep = held.checked_add(free).unwrap();
+        let collateral = b.state.bond(&opener).unwrap().collateral;
+        assert!(collateral >= keep && keep >= 500);
+        b.slash_bond(opener, u128::from(collateral - keep)).unwrap();
+        assert_eq!(b.committed_at(&opener, point.daa_score).unwrap(), u128::from(held));
+        let root = b.state.state_root();
+        let journal = borsh::to_vec(&b.entries).unwrap();
+        let result = court_ingress_admission_v1(&mut b, &point, claim, opener, false, 20);
+        if free < 500 {
+            let err = result.unwrap_err();
+            assert!(format!("{err:?}").contains("free principal"), "{err:?}");
+            assert_eq!(b.state.state_root(), root);
+            assert_eq!(borsh::to_vec(&b.entries).unwrap(), journal);
+        } else {
+            assert_eq!(result.unwrap(), PalwCourtAdmissionV1::Legacy);
+            assert_eq!(b.state.bond(&opener).unwrap().collateral, held);
+            assert_eq!(b.committed_at(&opener, point.daa_score).unwrap(), u128::from(held));
+        }
+    }
 }

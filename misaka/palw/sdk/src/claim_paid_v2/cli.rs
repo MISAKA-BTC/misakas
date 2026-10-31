@@ -56,7 +56,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
     }
     let command = args[0].to_ascii_uppercase();
     let mut f = BTreeMap::new();
-    if (args.len() - 1) % 2 != 0 {
+    if !(args.len() - 1).is_multiple_of(2) {
         return Err(USAGE.into());
     }
     for pair in args[1..].chunks_exact(2) {
@@ -68,6 +68,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
     let lr = Hash64::from_bytes(hash(&mut f, "--ledger-root")?);
     let ar = Hash64::from_bytes(hash(&mut f, "--aux-root")?);
     let snapshot = take(&mut f, "--snapshot")?;
+    #[allow(clippy::type_complexity)]
     let (header, rows): (Vec<u8>, Vec<(u8, Vec<u8>, Vec<u8>)>) = typed(&snapshot, 256 << 20)?;
     let route = PalwKernelRouteStateV1::from_served_rows_v1(&header, rows.clone(), &lr, &ar).map_err(|e| e.to_string())?;
     let object = match command.as_str() {

@@ -294,7 +294,9 @@ impl VirtualStateProcessor {
             if refusal.class == PalwH1RefusalClassV1::Invalid
                 && let Some(digest) = digest
             {
-                guard.invalid_objects.insert(digest, (virtual_daa_score.saturating_add(PALW_H1_INVALID_MEMORY_DAA_V1), refusal.clone()));
+                guard
+                    .invalid_objects
+                    .insert(digest, (virtual_daa_score.saturating_add(PALW_H1_INVALID_MEMORY_DAA_V1), refusal.clone()));
             }
         }
         verdict.map(PalwH1RefusalV1::into_admission_error)
@@ -361,7 +363,6 @@ impl VirtualStateProcessor {
         }
         Some(refusal.to_string())
     }
-
 
     /// Test-only: the guard's counters `(rehearsals run at admission, admissions throttled)`.
     #[cfg(test)]

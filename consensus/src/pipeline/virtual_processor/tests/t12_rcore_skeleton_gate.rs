@@ -7,6 +7,7 @@
 //!
 //! No block is mined: the gate, the walk and the fold are asked on the genesis state the processor
 //! stored at construction, with the harness cards of `t12_round_lane_e2e::t12_with_harness_cards`.
+#![allow(warnings)]
 use super::TestContext;
 use crate::consensus::test_consensus::TestConsensus;
 use kaspa_consensus_core::api::ConsensusApi;

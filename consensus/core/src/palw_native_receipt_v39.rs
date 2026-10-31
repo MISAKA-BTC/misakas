@@ -92,7 +92,11 @@ impl PalwNativeReceiptSpendEnvelopeV39 {
         let body = bytes.strip_prefix(&PALW_NATIVE_RECEIPT_CARRIAGE_MAGIC_V39).ok_or("native39 receipt carriage magic")?;
         let mut slice = body;
         let decoded = Self::deserialize(&mut slice).map_err(|_| "native39 receipt carriage grammar")?;
-        if !slice.is_empty() || decoded.spend.version != 39 || decoded.spend.producer_pubkey.len() > 4096 || decoded.signature.len() > 8192 {
+        if !slice.is_empty()
+            || decoded.spend.version != 39
+            || decoded.spend.producer_pubkey.len() > 4096
+            || decoded.signature.len() > 8192
+        {
             return Err("native39 receipt carriage exact extent/version".into());
         }
         Ok(decoded)
@@ -128,8 +132,12 @@ pub fn native_mining_receipt_view_v39(
         route.aux_row(MINING_TABLE_V39, &native_mining_row_key_v39(MINING_RECEIPT_KIND_V39, &receipt.as_bytes()))?;
     let (croot, c): (Digest, NativeMiningClaimRecordV39) =
         route.aux_row(MINING_TABLE_V39, &native_mining_row_key_v39(MINING_CLAIM_KIND_V39, &r.claim))?;
-    (rroot == r.root() && croot == c.root() && r.id == receipt.as_bytes() && c.id == r.claim && c.closed == Some((r.established_daa, true)))
-        .then_some((r, c))
+    (rroot == r.root()
+        && croot == c.root()
+        && r.id == receipt.as_bytes()
+        && c.id == r.claim
+        && c.closed == Some((r.established_daa, true)))
+    .then_some((r, c))
 }
 /// **G14 lane closure G-N2: an open post-Final accusation of `claim`** (a demand on a credited component's material awaiting its
 /// answer). While one is open the claim's certification decision waits (Gate C pending) and no receipt quantum is spent.
@@ -178,7 +186,16 @@ where
     let s = &envelope.spend;
     if s.version != 39
         || s.network_domain != network_domain
-        || s.challenge != native_receipt_spend_challenge_v39(network_domain, pre_pow_hash, timestamp, nonce, s.receipt, s.quantum_index, &s.producer_bond)
+        || s.challenge
+            != native_receipt_spend_challenge_v39(
+                network_domain,
+                pre_pow_hash,
+                timestamp,
+                nonce,
+                s.receipt,
+                s.quantum_index,
+                &s.producer_bond,
+            )
     {
         return Err("native39 receipt spend version/network/header-position challenge differs".into());
     }

@@ -1,4 +1,5 @@
 //! Dynamic history-selection relation components, not a native/model task.
+#![allow(warnings)]
 use misaka_palw_kernel::{
     flat_court5::{FlatOperandV5, flat_profile_commitment_v5},
     flat_detect5::{FlatPublicReadsV5, FlatReadV5},

@@ -21,7 +21,7 @@ pub mod native_v4;
 
 use crate::monetary_material::DurableMonetaryMaterialProviderV1;
 use borsh::{BorshDeserialize, BorshSerialize};
-use kaspa_consensus_core::{palw_monetary_material_v1::PalwMonetaryMaterialRowV1, BlockHash, Hash64};
+use kaspa_consensus_core::{BlockHash, Hash64, palw_monetary_material_v1::PalwMonetaryMaterialRowV1};
 use std::{
     collections::BTreeMap,
     fs::{self, File, OpenOptions},
@@ -471,7 +471,8 @@ impl MonetaryMaterialGcJanitorV1 {
                             // deletion. The WAL is now the only durable cleanup
                             // tuple/claim inventory. Keep it across an authority
                             // refusal and retry; absence cannot finish or forget it.
-                            report.refused = Some("interrupted deletion authority changed after raw publication; exact intent retained".into());
+                            report.refused =
+                                Some("interrupted deletion authority changed after raw publication; exact intent retained".into());
                             report.retained = store.held_contracts().len();
                             return Ok(report);
                         }
@@ -797,16 +798,18 @@ impl<A: RemoteFinalityAuthorityV1, F: FnMut(BlockHash) -> Result<crate::monetary
         }))
     }
     fn release_finalized(&mut self, root: Hash64, consent: Hash64, tail: Hash64, release: BlockHash) -> Result<bool, String> {
-        Ok(self.terminal_receipt(root, consent)?.is_some_and(|(_, r)| {
-            native_v4::receipt_matches_gc_intent_v4(&r, root, consent, tail, release)
-        }))
+        Ok(self
+            .terminal_receipt(root, consent)?
+            .is_some_and(|(_, r)| native_v4::receipt_matches_gc_intent_v4(&r, root, consent, tail, release)))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    mod publication { include!("monetary_material_gc_publication_tests.rs"); }
+    mod publication {
+        include!("monetary_material_gc_publication_tests.rs");
+    }
 
     struct Fake {
         rows: Result<Vec<PalwMonetaryMaterialRowV1>, String>,
@@ -853,7 +856,7 @@ mod tests {
     fn typed_store(
         file: &Path,
     ) -> (DurableMonetaryMaterialProviderV1, PalwMonetaryMaterialRowV1, misaka_palw_kernel::ledger::KernelLedgerV1) {
-        use crate::monetary_gc_kernel_fixture::ledger_world::{position, World};
+        use crate::monetary_gc_kernel_fixture::ledger_world::{World, position};
         use kaspa_consensus_core::{
             palw_material_capacity_v1::{PalwKernelMaterialBundleV1, PalwMaterialManifestV1},
             palw_monetary_material_v1::*,
@@ -918,8 +921,11 @@ mod tests {
     #[test]
     fn wrong_pin_aux_proof_retains_real_material_across_gc_and_cold_reopen() {
         use crate::monetary_material_rpc::provenance_tests::{empty_page, finality, finish};
-        let dir = std::env::temp_dir().join(format!("misaka-gc-pin-{}-{}", std::process::id(),
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let dir = std::env::temp_dir().join(format!(
+            "misaka-gc-pin-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
         let file = dir.join("store");
         let (mut store, row, ledger) = typed_store(&file);
         let bytes = fs::read(&file).unwrap();
@@ -934,12 +940,21 @@ mod tests {
         assert_eq!(fs::read(&file).unwrap(), bytes);
         // Simulate a crash after the deletion intent was fsynced but before
         // publishing a deletion. Reopen must obtain current proof authority.
-        let pending = MonetaryGcCompletedV2 { version: 2,
-            intent: MonetaryGcIntentV1 { version: 1, stored_consent: row.consent, root: row.terms.root,
-                release_consent: row.consent, tail: h(20), release_block: h(501) },
-            native_claims: vec![], };
+        let pending = MonetaryGcCompletedV2 {
+            version: 2,
+            intent: MonetaryGcIntentV1 {
+                version: 1,
+                stored_consent: row.consent,
+                root: row.terms.root,
+                release_consent: row.consent,
+                tail: h(20),
+                release_block: h(501),
+            },
+            native_claims: vec![],
+        };
         write_atomic(&janitor.intent, &borsh::to_vec(&pending).unwrap()).unwrap();
-        drop(janitor); drop(store);
+        drop(janitor);
+        drop(store);
         let mut store = DurableMonetaryMaterialProviderV1::open(&file, 1 << 24, 1 << 26, Some(&ledger), |_| None).unwrap();
         let mut janitor = MonetaryMaterialGcJanitorV1::open(&file).unwrap();
         let report = janitor.tick(&mut store, &mut oracle).unwrap();
@@ -949,7 +964,8 @@ mod tests {
         assert_eq!(fs::read(&file).unwrap(), bytes, "cold replay cannot convert a foreign proof into deletion authority");
         assert!(janitor.intent.exists(), "unknown authority retains the interrupted intent for later revalidation");
         assert!(janitor.completed_receipts().next().is_none(), "unknown authority cannot create a cleanup/ACK receipt");
-        drop(janitor); drop(store);
+        drop(janitor);
+        drop(store);
         fs::remove_dir_all(dir).unwrap();
     }
 

@@ -1,3 +1,4 @@
+#![allow(warnings)]
 use misaka_palw_kernel::trace::{StageBindingV1, trace_stage_v1, trace_streaming_v1, trace_v1};
 use misaka_palw_tir::{DType, Dim, MapParams, Ref, Tensor, TensorType, builder::ProgramBuilder, program::HISTORY_BOUND_V1_SMALL};
 

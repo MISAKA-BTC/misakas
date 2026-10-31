@@ -8,6 +8,7 @@
 //! fold refuses it — so a block carrying one folds exactly as the same block without it; past the
 //! fence admission v10 decides (`palw_tir_admission.rs`) and it folds (`palw_tir_registration_fold.rs`).
 
+#![allow(warnings)]
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::params::palw_t12_shipped_params;
 use kaspa_consensus_core::palw_heartbeat_carriers_v1::palw_h1_carrier_object_v1;

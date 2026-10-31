@@ -52,6 +52,11 @@ impl std::io::Write for IdentityWriter {
     }
 }
 
+/// Hex, for messages.
+pub fn hex(d: &[u8]) -> String {
+    d.iter().map(|b| format!("{b:02x}")).collect()
+}
+
 #[cfg(test)]
 mod identity_controls {
     use super::*;
@@ -71,9 +76,4 @@ mod identity_controls {
             );
         }
     }
-}
-
-/// Hex, for messages.
-pub fn hex(d: &[u8]) -> String {
-    d.iter().map(|b| format!("{b:02x}")).collect()
 }

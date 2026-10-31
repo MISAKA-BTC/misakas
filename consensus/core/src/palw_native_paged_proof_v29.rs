@@ -541,6 +541,21 @@ impl PalwKernelRouteStateV1 {
         })
     }
 }
+
+pub fn paged_proof_root_v29(bytes: &[u8]) -> Digest {
+    misaka_palw_kernel::hash::id(b"misaka-palw/native/paged-whole-file/v29", bytes)
+}
+pub fn paged_proof_seal_v29(
+    namespace: &u16,
+    job: &Digest,
+    claim: &Digest,
+    actor: &Digest,
+    maximum: &Digest,
+    proof: &Digest,
+    salt: &Digest,
+) -> Digest {
+    object_id(b"misaka-palw/native/original-paged-own-file-seal/v29", &(*namespace, *job, *claim, *actor, *maximum, *proof, *salt))
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -561,19 +576,4 @@ mod tests {
         b.push(0);
         assert!(borrowed_native_paged_part_v29(&b).is_none());
     }
-}
-
-pub fn paged_proof_root_v29(bytes: &[u8]) -> Digest {
-    misaka_palw_kernel::hash::id(b"misaka-palw/native/paged-whole-file/v29", bytes)
-}
-pub fn paged_proof_seal_v29(
-    namespace: &u16,
-    job: &Digest,
-    claim: &Digest,
-    actor: &Digest,
-    maximum: &Digest,
-    proof: &Digest,
-    salt: &Digest,
-) -> Digest {
-    object_id(b"misaka-palw/native/original-paged-own-file-seal/v29", &(*namespace, *job, *claim, *actor, *maximum, *proof, *salt))
 }

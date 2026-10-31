@@ -5,6 +5,7 @@
 //! ML-DSA-87 signature under the routing context with the record's own public key — the same
 //! `verify_mldsa87_with_context` the virtual processor uses. Exit 0 = every claim held.
 
+#![allow(warnings)]
 use kaspa_consensus_core::mldsa87_primitives::mldsa87_key_id;
 use kaspa_consensus_core::palw_routing::{
     PALW_ROUTING_MLDSA87_CAPABILITY_CONTEXT, PalwVerifierCapabilityV1, verifier_capability_message_v1, verify_ready_binding_v1,

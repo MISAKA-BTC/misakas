@@ -1,5 +1,6 @@
 //! Synthetic metadata admission. Large dimensions do not execute a checkpoint
 //! or allocate a max-length trace, and candidates carry no execution rights.
+#![allow(warnings)]
 mod common;
 use common::{ledger_world::policy, opv_world::opv_example};
 use misaka_palw_kernel::{

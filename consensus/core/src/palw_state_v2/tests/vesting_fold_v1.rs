@@ -11,6 +11,7 @@
 //! (so the derived indexes are built by the delta path itself) and sets the two clocks directly,
 //! which is how the second clock, the halt and the backlog are driven without a licence lattice.
 
+#![allow(warnings)]
 use super::*;
 use crate::palw_economic_safety_v1::PalwLicenceDoorTagV1;
 use crate::palw_offence_v1::PalwOffenceKindV1;

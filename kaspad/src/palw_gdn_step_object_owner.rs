@@ -55,6 +55,7 @@ impl PalwGdnStepObjectV1 {
         NativeRetainedV1::try_from_clone_v1(&self.object)
     }
     /// Keep method resolution from silently selecting the payload's deep Clone.
+    #[allow(clippy::should_implement_trait)]
     pub fn clone(&self) -> Result<NativeRetainedV1<PalwConsensusObjectV2>, NativeCoverageV1> {
         self.try_clone_v1()
     }

@@ -31,7 +31,6 @@ use kaspa_consensus_core::{
     blockstatus::BlockStatus::{self, StatusHeaderOnly, StatusInvalid},
     config::{genesis::GenesisBlock, params::Params},
     mass::{Mass, MassCalculator, MassOps},
-    tx::Transaction,
 };
 use kaspa_consensus_notify::{
     notification::{BlockAddedNotification, Notification},

@@ -33,6 +33,7 @@
 //! lane — is
 //! `kaspad::palw_panel::palw_filer_replay`'s tests; a node e2e on a devnet preset is a POST-LAUNCH
 //! item (the operator moved every drill and node launch after the t12 launch, 2026-09-24).
+#![allow(warnings)]
 use super::*;
 use kaspa_consensus_core::palw_backend::{PalwClaimRootsV1, PalwMaterialVerdictV1};
 use kaspa_consensus_core::palw_da_rcore_v1::{PalwDaAnswerV1, PalwDaUnitV1, palw_da_offence_id_v1};

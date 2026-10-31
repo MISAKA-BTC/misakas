@@ -145,19 +145,18 @@ impl NativeFinalPolicyV27 {
     }
     pub fn check(&self, network: Digest) -> Result<(), String> {
         self.queue_policy.check(network)?;
-        if let NativeFinalPurposeV34::IsolatedCalibration { version, isolation, measurement_manifest, .. } = &self.purpose {
-            if *version != 34
+        if let NativeFinalPurposeV34::IsolatedCalibration { version, isolation, measurement_manifest, .. } = &self.purpose
+            && (*version != 34
                 || *isolation == [0; 64]
                 || *measurement_manifest == [0; 64]
-                || self.calibrations.iter().any(|c| c.independent_node_ready || c.independent_native_final_root != [0; 64])
-            {
-                return Err("native calibration34 cannot contain a fabricated prior Final or a qualification flag".into());
-            }
+                || self.calibrations.iter().any(|c| c.independent_node_ready || c.independent_native_final_root != [0; 64]))
+        {
+            return Err("native calibration34 cannot contain a fabricated prior Final or a qualification flag".into());
         }
-        if let NativeFinalPurposeV34::LocalQualifiedValidation { version, isolation, measurement_manifest, .. } = &self.purpose {
-            if *version != 34 || *isolation == [0; 64] || *measurement_manifest == [0; 64] {
-                return Err("native local qualified validation34 requires its isolated devnet binding".into());
-            }
+        if let NativeFinalPurposeV34::LocalQualifiedValidation { version, isolation, measurement_manifest, .. } = &self.purpose
+            && (*version != 34 || *isolation == [0; 64] || *measurement_manifest == [0; 64])
+        {
+            return Err("native local qualified validation34 requires its isolated devnet binding".into());
         }
         if self.version != 27
             || self.network_domain != network

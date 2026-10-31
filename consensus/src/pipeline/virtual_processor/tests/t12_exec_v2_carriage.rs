@@ -16,6 +16,7 @@
 //! * the gates: a chain block naming a lane block as a parent, a `PXR1` envelope past the fence, a slice block carrying a transaction, a
 //!   re-hung anchor, a forged payload commitment, a trailer on a lane block and a lying trailer are each refused by name; below the fence
 //!   a `PXE2` header is refused and a root declaration is dropped.
+#![allow(warnings)]
 use super::t12_round_lane_e2e::{
     AtTheTargetSpan, SeedDraw, T12Chain, a_floor_final_scheduled_with, card_payout_spk, sign_spend, stamp_harness_time,
     t12_genesis_chain, t12_with_harness_cards,

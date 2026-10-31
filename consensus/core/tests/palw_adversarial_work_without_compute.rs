@@ -10,6 +10,7 @@
 //! `rate_sompi_per_giga = 900_000_000`) is *not* under test here. That path already prices the
 //! job `palw_attempt_job_v1` runs.
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::palw_rc_shipped_params;
 use kaspa_consensus_core::palw_base0_profile::rc_job_context;
 use kaspa_consensus_core::palw_canonical_work_v1::{PalwCanonicalClassDescriptorV1, palw_canonical_draw_work_v1};

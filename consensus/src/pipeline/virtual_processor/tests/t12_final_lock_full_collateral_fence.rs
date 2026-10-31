@@ -20,6 +20,7 @@
 //!   locks' conviction route is `rcore_v02_final_lock_budget`'s, at the fold). The launch build's fold
 //!   of the same binding leaves it inert and voids the claim at the same anchor block.
 //! * **the processor carries the fence it was built with** (the bundle's mirror), the launch twin none.
+#![allow(warnings)]
 use super::t12_round_lane_e2e::{T12Chain, t12_genesis_chain, t12_with_harness_cards};
 use crate::model::stores::headers::HeaderStoreReader;
 use kaspa_consensus_core::BlockHash;

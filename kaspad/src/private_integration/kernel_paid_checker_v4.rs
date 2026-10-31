@@ -25,8 +25,10 @@ use misaka_palw_kernel::{
 use misaka_palw_sdk::claim_paid_v2::{
     VerifiedPaidClaimSourcesV2, paid_claim_round_sources_from_route_v3, paid_claim_sources_from_route_v2,
     private_bootstrap::ProgramPaidBootstrapWorkV3,
-    provider_actions_v4::{objective_action_from_provider_check_v4, provider_material_challenge_unit_v4, sign_provider_objective_action_v4},
-    provider_reader_v4::{ProviderReaderLimitsV4, ProviderReaderErrorV4},
+    provider_actions_v4::{
+        objective_action_from_provider_check_v4, provider_material_challenge_unit_v4, sign_provider_objective_action_v4,
+    },
+    provider_reader_v4::{ProviderReaderErrorV4, ProviderReaderLimitsV4},
 };
 use std::{
     fs::{self, OpenOptions},
@@ -520,13 +522,17 @@ impl PreparedKernelPaidCheckV4 {
                     let query = PalwKernelMaterialUnitQueryV4 {
                         version: 4,
                         root: Hash64::from_bytes(base),
-                        consent: material_consent.ok_or_else(|| ProviderReaderErrorV4::Unknown("checker serving provider has no current active generation".into()))?,
+                        consent: material_consent.ok_or_else(|| {
+                            ProviderReaderErrorV4::Unknown("checker serving provider has no current active generation".into())
+                        })?,
                         dependency: Hash64::from_bytes(base),
                         provider: self.provider,
                         stage,
                         position,
                     };
-                    let authority = api.palw_kernel_material_query_authority_v4(&query, self.checker, self.key.public_key()).map_err(ProviderReaderErrorV4::Unknown)?;
+                    let authority = api
+                        .palw_kernel_material_query_authority_v4(&query, self.checker, self.key.public_key())
+                        .map_err(ProviderReaderErrorV4::Unknown)?;
                     client
                         .as_ref()
                         .ok_or_else(|| ProviderReaderErrorV4::Unknown("explicit checker query client absent".into()))?
@@ -577,7 +583,11 @@ impl PreparedKernelPaidCheckV4 {
                         // transport read. Its exact coordinate is not a guessed
                         // last request; cross-unit reconstruction has none.
                         let unit = failed_query::select_failed_material_query_v4(
-                            base, material_consent, self.provider, failure.into_inner(), invalid_unit,
+                            base,
+                            material_consent,
+                            self.provider,
+                            failure.into_inner(),
+                            invalid_unit,
                         );
                         let Some(unit) = unit else {
                             kaspa_core::debug!(

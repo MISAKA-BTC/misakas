@@ -1,4 +1,5 @@
 //! Source controls for the native carrier/fold. No execution result is implied.
+#![allow(warnings)]
 use super::*;
 use crate::palw_gdn_court_v2::{PalwGdnCourtAccusationV2, PalwGdnCourtLimitsV2};
 

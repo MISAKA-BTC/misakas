@@ -19,6 +19,7 @@
 //!
 //! Run: `cargo test -p kaspa-consensus-core --test palw_capacity_stage2_q_s -- --nocapture`
 
+#![allow(warnings)]
 #[path = "capacity_stage1_common.rs"]
 mod stage1;
 use stage1::*;

@@ -2,6 +2,7 @@
 //! and its bound checked: output selection by a last contributor, the distinct source rules against one party filling every position,
 //! the per-class cap, withholding after the lock (a counted veto), Final timing, fork choice and precomputation.
 
+#![allow(warnings)]
 use std::collections::BTreeSet;
 
 use misaka_palw_challenge::hash::{Digest, object_id};

@@ -216,7 +216,9 @@ impl PalwOwnedTirPrefixCourtV1 {
             }
         }
         let first = self.slots.values().find_map(PalwTirPrefixStateStreamV1::verdict_v1);
-        if self.verdict.is_some() != first.is_some() || self.verdict.is_some_and(|v| self.slots.values().all(|s| s.verdict_v1() != Some(v))) {
+        if self.verdict.is_some() != first.is_some()
+            || self.verdict.is_some_and(|v| self.slots.values().all(|s| s.verdict_v1() != Some(v)))
+        {
             return Err("TIR prefix verdict is not a completed slot's".into());
         }
         Ok(())
@@ -274,13 +276,15 @@ impl PalwOwnedTirPrefixCourtV1 {
         self.check()?;
         match self.verdict.ok_or("no TIR prefix slot has completed its authenticated boundary")? {
             PalwTirPrefixStateVerdictV1::Honest => Ok(None),
-            PalwTirPrefixStateVerdictV1::StateRootMismatch { .. } => Ok(Some(crate::palw_prefix_owned_court_v1::PalwPrefixCourtFaultV1 {
-                claim: self.claim,
-                reserver: self.reserver,
-                reserved_daa: self.reserved_daa,
-                seed_id: self.seed_id,
-                execution_root: self.execution_root,
-            })),
+            PalwTirPrefixStateVerdictV1::StateRootMismatch { .. } => {
+                Ok(Some(crate::palw_prefix_owned_court_v1::PalwPrefixCourtFaultV1 {
+                    claim: self.claim,
+                    reserver: self.reserver,
+                    reserved_daa: self.reserved_daa,
+                    seed_id: self.seed_id,
+                    execution_root: self.execution_root,
+                }))
+            }
         }
     }
     /// An honest stage is complete once a slot re-derived the declared root and the custody
@@ -405,17 +409,9 @@ mod tests {
         .unwrap();
         let (producer, panel, owner) = (key(1), key(2), key(9));
         let open = |declared: Hash64| {
-            let template = PalwTirPrefixStateStreamV1::new_v1(
-                &space,
-                class_id,
-                &ctx,
-                x.binding.step_merkle_root,
-                count,
-                maximum,
-                k,
-                declared,
-            )
-            .unwrap();
+            let template =
+                PalwTirPrefixStateStreamV1::new_v1(&space, class_id, &ctx, x.binding.step_merkle_root, count, maximum, k, declared)
+                    .unwrap();
             PalwOwnedTirPrefixCourtV1::admit_v1(
                 Hash64::from_u64_word(7),
                 Hash64::from_u64_word(8),
@@ -434,13 +430,14 @@ mod tests {
             )
             .unwrap()
         };
-        let answer = |court: &PalwOwnedTirPrefixCourtV1, signer: PalwBondKeyV2, values_le: Vec<u8>, leaf: u64| PalwTirPrefixLeafAnswerV1 {
-            answerer: signer,
-            seed_id: court.seed_id(),
-            ordinal: court.slot_ordinal_v1(&signer).unwrap(),
-            values_le,
-            opening: opening(leaf),
-        };
+        let answer =
+            |court: &PalwOwnedTirPrefixCourtV1, signer: PalwBondKeyV2, values_le: Vec<u8>, leaf: u64| PalwTirPrefixLeafAnswerV1 {
+                answerer: signer,
+                seed_id: court.seed_id(),
+                ordinal: court.slot_ordinal_v1(&signer).unwrap(),
+                values_le,
+                opening: opening(leaf),
+            };
         let stream = |court: &mut PalwOwnedTirPrefixCourtV1, signer: PalwBondKeyV2| {
             for ordinal in 0..total {
                 let leaf = space.prefix_state_leaf_v1(&ctx, k, ordinal).unwrap();

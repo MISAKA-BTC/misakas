@@ -15,6 +15,7 @@
 //! converted program on the reference evaluator (from the written file) and refuses unless every
 //! logit code agrees.
 
+#![allow(warnings)]
 use misaka_palw_base0::artifact::decode_artifact_file_mapped_v1;
 use misaka_palw_base0::engine_a16::{A16Cache, A16Engine};
 use misaka_palw_base0::mmap::ReadOnlyMap;

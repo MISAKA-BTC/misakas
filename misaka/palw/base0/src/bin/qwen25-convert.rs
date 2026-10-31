@@ -10,6 +10,7 @@
 //! health. Nothing here is on the block-validation path: a verifier re-runs this and compares the
 //! class id, which is why the conversion has to be bit-reproducible.
 
+#![allow(warnings)]
 use misaka_palw_base0::artifact::{Base0ArtifactV1, Base0ShapeV1, LN_THETA_1000000_GEN_Q};
 use misaka_palw_base0::convert::{
     Qwen25ConvertPlan, activation_scale_of, biased_channel_count, calibrate_layer_residuals, convert_qwen25, measure_depth_health,
@@ -212,8 +213,7 @@ fn main() {
                 "calibration_tokens": prompt,
                 "note": "offline physical logit scale; not an artifact field or a fidelity result",
             });
-            std::fs::write(path, serde_json::to_vec_pretty(&report).unwrap())
-                .unwrap_or_else(|e| die(format!("{path}: {e}")));
+            std::fs::write(path, serde_json::to_vec_pretty(&report).unwrap()).unwrap_or_else(|e| die(format!("{path}: {e}")));
         }
         // **`--out` is what turns a measurement into a runtime.** Until the artifact could be
         // written, every use of this class re-read a 3 GiB checkpoint and re-quantized it, which

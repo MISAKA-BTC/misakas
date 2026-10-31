@@ -1,4 +1,5 @@
 //! Version separation, immutable signed target binding and finite failure semantics for v4.
+#![allow(warnings)]
 use misaka_palw_challenge::beacon::VerifiedWorkBeaconV1;
 use misaka_palw_challenge::hash::object_id;
 use misaka_palw_challenge::*;

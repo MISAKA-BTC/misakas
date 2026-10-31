@@ -3,6 +3,7 @@
 //! two KV-sharing layers, the Gaussian top-k at sparsity 0.95 in two layers): the float reference against `transformers`'
 //! logits, the integer program against the float reference, admission, the three implementations and the court.
 
+#![allow(warnings)]
 mod common;
 
 use common::three_ways;

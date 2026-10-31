@@ -447,6 +447,65 @@ fn a_positive_material_storage_fee_is_debited_from_the_submitter() {
     set_material_intake_test_schedule_v1(None);
 }
 
+/// A real native original's existing duties remain collateralized after the
+/// submitter pays storage. Refusal restores both the draft and financial journal.
+#[test]
+fn material_storage_fee_preserves_reserved_principal_and_refuses_atomically() {
+    use super::super::palw_court_shared_material_intake_fold_v1::material_intake;
+    use crate::palw_court_shared_material_intake_v1::*;
+    use crate::palw_tir_court_v1::PalwTirEvidenceStoreV1;
+    let fx = crate::palw_tir_public_claim_v1::palw_tir_public_history_frame_fixture_v1();
+    let (mut state, params, extras, claim, scope) = material_intake_world(&fx);
+    let who = fx.frame.custody_v1().pledge_v1().producer;
+    let kp = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([78; 32]);
+    state.bonds.get_mut(&who).unwrap().pubkey = kp.verification_key.as_ref().to_vec();
+    let mut schedule = material_test_schedule();
+    let leaf = required_parameter_leaves_v1(&state, claim, schedule.cover).unwrap()[0];
+    let body = borsh::to_vec(&fx.execution.param_opening(leaf).unwrap()).unwrap();
+    let target = MaterialTargetV1::Parameter { leaf };
+    let fee = body.len() as u64;
+    let signed = material_signed(
+        &kp,
+        extras.tir_public_network_domain_v1.unwrap(),
+        claim,
+        scope,
+        target,
+        who,
+        MaterialActionV1::Begin { total_bytes: fee, body_hash: crate::palw_tir_public_owned_v1::palw_tir_public_body_hash_v1(&body) },
+    );
+    schedule.sompi_per_byte = 1;
+    set_material_intake_test_schedule_v1(Some(schedule));
+    let point = at(&fx.frame, 1);
+    let initial = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+    let held = u64::try_from(initial.committed_at(&who, point.daa_score).unwrap()).unwrap();
+    assert!(held > 0, "the actual native original must already reserve producer principal");
+    drop(initial);
+    for free in [fee - 1, fee] {
+        let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+        let available = b.state.bond(&who).unwrap().collateral;
+        let keep = held.checked_add(free).unwrap();
+        assert!(available >= keep);
+        b.slash_bond(who, u128::from(available - keep)).unwrap();
+        assert_eq!(b.committed_at(&who, point.daa_score).unwrap(), u128::from(held));
+        assert!(keep >= fee, "total collateral alone would allow this charge");
+        let before = b.state.state_root();
+        let journal = borsh::to_vec(&b.entries).unwrap();
+        let result = material_intake(&mut b, &point, &signed);
+        if free < fee {
+            let err = result.unwrap_err();
+            assert!(format!("{err:?}").contains("free principal"), "{err:?}");
+            assert_eq!(b.state.state_root(), before);
+            assert_eq!(borsh::to_vec(&b.entries).unwrap(), journal);
+            assert!(b.state.staged_court_row_v1(&Key::CourtMaterialLedger(claim, who)).is_none());
+        } else {
+            result.unwrap();
+            assert_eq!(b.state.bond(&who).unwrap().collateral, held);
+            assert_eq!(b.committed_at(&who, point.daa_score).unwrap(), u128::from(held));
+        }
+    }
+    set_material_intake_test_schedule_v1(None);
+}
+
 /// **values/p1-measure (2026-10-22, test side only): material intake Begin / Part / Finish wall time and retained bytes.** Ignored.
 /// Uploads every step leaf, every read parameter and the prompt of the history fixture through the real intake fold (the ML-DSA-87
 /// check, the checkpoint clone of the state, the authentication at Finish), `MEASURE_RUNS` times (default 21; the first run is the

@@ -4,6 +4,7 @@
 //! table had no graph-v7 row at all, so the SDK could pair no artifact with it and no node on the
 //! fleet held one. The rows added here derive their ids through the same expression the card does,
 //! which is the only way a row here and a class there can be one class.
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::Params;
 use kaspa_consensus_core::network::{NetworkId, NetworkType};
 use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;

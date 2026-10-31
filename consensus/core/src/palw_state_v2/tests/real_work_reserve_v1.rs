@@ -5,6 +5,7 @@
 //! one delta entry, so a reorg reverts it exactly; the carriage — a pruning snapshot — carries it. The machine itself
 //! (`palw_floor_step_v1`) is tested beside its definition; this is the fold around it.
 
+#![allow(warnings)]
 use super::*;
 use crate::palw_real_share_v1::PalwFloorModeV1::{Idle, Normal, Probe};
 use crate::palw_real_share_v1::{

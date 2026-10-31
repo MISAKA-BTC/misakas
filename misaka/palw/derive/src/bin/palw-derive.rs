@@ -69,6 +69,7 @@
 //! bound: the canonical form is the shortest text the grammar accepts, so a model writing anything
 //! else needs more.
 
+#![allow(warnings)]
 use std::collections::{BTreeMap, VecDeque};
 use std::path::{Path, PathBuf};
 

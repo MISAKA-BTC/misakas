@@ -15,6 +15,7 @@
 //! No transformers here: a tiny llama written in this file with seeded weights; the equality of the `freq_factors` rope with
 //! transformers' `llama3` table is `rope.rs`'s unit test (`freq_factors_divide_the_default_frequencies_and_reproduce_llama3_scaling`).
 
+#![allow(warnings)]
 use misaka_palw_tir_lower::gguf::{GgufFile, GgufModel};
 use misaka_palw_tir_lower::lower::LowerOpts;
 use serde_json::Value;

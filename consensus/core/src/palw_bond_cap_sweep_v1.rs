@@ -140,13 +140,15 @@ pub fn palw_bond_cap_simulate_v1(profile: &PalwHonestProfileV1, candidate: &Palw
         PalwHoldModeV1::PanelZero => PalwBudgetOriginV1::KernelRoute,
         PalwHoldModeV1::PanelOne => PalwBudgetOriginV1::Attempt,
     };
-    let interval = |k: usize| profile.claim_intervals_daa.get(k % profile.claim_intervals_daa.len().max(1)).copied().unwrap_or(1).max(1);
+    let interval =
+        |k: usize| profile.claim_intervals_daa.get(k % profile.claim_intervals_daa.len().max(1)).copied().unwrap_or(1).max(1);
     let delay = |k: usize| profile.final_delays_daa.get(k % profile.final_delays_daa.len().max(1)).copied().unwrap_or(1);
 
     // The honest miner: a claim is ready at `next_ready`; refused → it retries every DAA (the stall is measured), never discarded.
     let mut honest = PalwBondBudgetStateV1::new(0, &policy);
     let mut finals: BTreeMap<u64, Vec<Hash64>> = BTreeMap::new();
-    let (mut accepted, mut refused_cap, mut refused_collateral, mut stall, mut max_gap, mut peak) = (0u64, 0u64, 0u64, 0u64, 0u64, 0u128);
+    let (mut accepted, mut refused_cap, mut refused_collateral, mut stall, mut max_gap, mut peak) =
+        (0u64, 0u64, 0u64, 0u64, 0u64, 0u128);
     let mut next_ready = interval(0);
     let mut last_accept = 0u64;
     let mut k = 0usize;
@@ -162,8 +164,18 @@ pub fn palw_bond_cap_simulate_v1(profile: &PalwHonestProfileV1, candidate: &Palw
         }
         if now >= next_ready {
             let id = claim_id(1, k as u64);
-            match honest.reserve_claim_moded_v1(&policy, profile.capital_sompi, id, bond_key(1), None, now, ask, origin, profile.mode, &mut j)
-            {
+            match honest.reserve_claim_moded_v1(
+                &policy,
+                profile.capital_sompi,
+                id,
+                bond_key(1),
+                None,
+                now,
+                ask,
+                origin,
+                profile.mode,
+                &mut j,
+            ) {
                 Ok(_) => {
                     accepted += 1;
                     max_gap = max_gap.max(now - last_accept);

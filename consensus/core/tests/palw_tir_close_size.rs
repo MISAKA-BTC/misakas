@@ -8,6 +8,7 @@
 //! first and to its last tile (`build_tir_dissect_bottom_v1`) — its program stripped as it rides, and
 //! the borsh length of the object as filed is held under the bound. The measured margins are printed.
 
+#![allow(warnings)]
 #[path = "palw_tir_fixture_common.rs"]
 mod fixture;
 use fixture::*;

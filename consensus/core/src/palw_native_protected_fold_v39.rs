@@ -588,7 +588,7 @@ fn expire(
         return Ok(());
     }
     let e = epoch(p, ctx)?;
-    let r = builder.state.kernel_route.as_ref().unwrap();
+    let _r = builder.state.kernel_route.as_ref().unwrap();
     let shard =
         super::super::palw_flat_execution_fold_v11::quota_shard(builder, &p.execution, &e, palw_kernel_bond_id_v1(&o.actor), job)?;
     let mut g = shard.global_row();

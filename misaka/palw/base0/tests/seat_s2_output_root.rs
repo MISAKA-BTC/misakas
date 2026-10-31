@@ -10,6 +10,7 @@
 //! and a claim whose output tokens were altered commits a root the replay does not reproduce. The
 //! comparison itself is kaspad's (`replay_licenses_v1`).
 
+#![allow(warnings)]
 mod common;
 
 use common::*;

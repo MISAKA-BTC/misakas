@@ -16,6 +16,7 @@
 //! This test derives both numbers from the shipped params so the discrepancy is a measurement and
 //! not a reading of a log line.
 
+#![allow(warnings)]
 use kaspa_consensus_core::palw_canonical_work_v1::{PalwCanonicalClassDescriptorV1, palw_canonical_draw_work_v1};
 use kaspa_consensus_core::palw_state_v2::{PalwConsensusObjectV2, PalwPwuRuleV2, palw_max_exposure_pwu_of_rule_v1};
 

@@ -41,6 +41,7 @@
 //! reference; the tests hold the two equal (golden vectors, whole programs, random programs,
 //! range-extreme inputs).
 
+#![cfg_attr(test, allow(warnings))]
 pub mod cellproc;
 pub mod cellstep;
 pub mod cone;

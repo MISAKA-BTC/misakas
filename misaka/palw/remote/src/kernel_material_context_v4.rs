@@ -255,7 +255,7 @@ impl KernelMaterialContextArchiveV4 {
         if self.pending_expiry.is_none() {
             return Ok(());
         }
-        if !self.pending_expiry.is_some_and(|(id, _, _)| id == consent) || self.rows.contains_key(&consent) {
+        if self.pending_expiry.is_none_or(|(id, _, _)| id != consent) || self.rows.contains_key(&consent) {
             return Err("kernel expiry completion still has metadata or another intent".into());
         }
         let file = self.file.with_extension("kernel-context-expiry-v4");
@@ -273,7 +273,8 @@ impl KernelMaterialContextArchiveV4 {
     }
     pub fn get(&self, consent: Hash64) -> Result<Option<KernelMaterialContextRecordOwnedV4>, String> {
         let Some(bytes) = self.rows.get(&consent) else { return Ok(None) };
-        let p = preflight_native_value_v1::<KernelMaterialContextRecordV4>(bytes.as_slice(), bytes.len() as u64).map_err(|e| e.to_string())?;
+        let p = preflight_native_value_v1::<KernelMaterialContextRecordV4>(bytes.as_slice(), bytes.len() as u64)
+            .map_err(|e| e.to_string())?;
         if p.logical_requests_v1() > self.limits.max_heap_bytes {
             return Err("kernel metadata row exceeds decode RAM cap".into());
         }
@@ -305,10 +306,12 @@ impl KernelMaterialContextArchiveV4 {
                 continue;
             }
             let old = self.get(*id)?.ok_or("replacement slot row vanished")?;
-            if let PalwMaterialRecoveryActionV2::ReplaceBeforeV4 { replacement: prior, .. } = &old.capsule {
-                if prior.root == replacement.root && prior.previous == replacement.previous && prior.sequence == replacement.sequence {
-                    return Err("root/previous/sequence already has an immutable signed replacement deadline".into());
-                }
+            if let PalwMaterialRecoveryActionV2::ReplaceBeforeV4 { replacement: prior, .. } = &old.capsule
+                && prior.root == replacement.root
+                && prior.previous == replacement.previous
+                && prior.sequence == replacement.sequence
+            {
+                return Err("root/previous/sequence already has an immutable signed replacement deadline".into());
             }
         }
         Ok(())
@@ -347,7 +350,8 @@ impl KernelMaterialContextArchiveV4 {
         let _raw_ram = self.ram.reserve(canonical_buffers_v4(len, 1)?)?;
         let _raw = reserve_native_requests_v1(canonical_buffers_v4(len, 1)?).map_err(|e| e.to_string())?;
         let bytes = borsh::to_vec(&(context, capsule)).map_err(|e| e.to_string())?;
-        let proof = preflight_native_value_v1::<KernelMaterialContextRecordV4>(&bytes[..], bytes.len() as u64).map_err(|e| e.to_string())?;
+        let proof =
+            preflight_native_value_v1::<KernelMaterialContextRecordV4>(&bytes[..], bytes.len() as u64).map_err(|e| e.to_string())?;
         if proof.logical_requests_v1() > self.limits.max_heap_bytes {
             return Err("kernel metadata nested decode exceeds aggregate RAM cap before publication".into());
         }

@@ -12,6 +12,7 @@
 //!
 //! Run: `cargo test -p kaspa-consensus-core --test evm_bridge_ledger_is_t12_only -- --nocapture`
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{
     Params, devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params, palw_t12_shipped_params,
 };
@@ -35,11 +36,11 @@ fn ids(p: &Params) -> (String, String, String) {
 ///
 /// **Re-pinned 2026-09-25 for the lead cap** (`palw_clock_lead_cap`, armed from genesis on testnet-12,
 /// hashed Some-only into all three ids). Previous: `58c04756…` / `6388b87b…` / `2c2f7c0e…`.
-// re-pin 2026-10-08 @42452229ee51: no DAA-9,000 flag day (user, 2026-10-08): the int-13 list is dormant; ids back to the int-12 release (was d445125c…, 27ad3cf4…)
+// re-pin 2026-10-30 @64535b7bf7e8: User selected DAA18400 for the unpublished G14 schedule on 2026-10-30; preserve the current main CI fixes (was 7e5c3920…, d6d3287d…)
 const T12_AT_THE_PARENT_WITHOUT_THE_ATTRIBUTION: (&str, &str, &str) = (
-    "b272e2f5f7adcacc8e3b7ef5121f2223a04ed50a7a0ec6ad5a3ffde3ebb066ad",
+    "d11a2f69957a9758873d77f632571160482fbd2c3403acc5ff992bf159a09cd0",
     "e36ebef71a24c0ee234a0db62506caff6a58461f6cce7ba48a6cf6be809c9035",
-    "11ce9af44c0ee06cd645b678f84a80e6a4b06a52e6f2bdbcd8635f0663744934",
+    "7502175e521d50244b5e1264e3e911d564904887f7ce727d9b2526b4ea6e811e",
 );
 
 /// **The ledger is the only thing this change moved on testnet-12.** Take it away (and the

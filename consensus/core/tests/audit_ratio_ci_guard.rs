@@ -33,6 +33,7 @@
 //! Run: `cargo test -p kaspa-consensus-core --test audit_ratio_ci_guard -- --nocapture`
 //! Measured wall time in this worktree, warm, debug profile: see `MEASURED_RUNTIME`.
 
+#![allow(warnings)]
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::params::{Params, palw_t12_shipped_params};
 use kaspa_consensus_core::palw_base0_profile::{PALW_RC_BASE0_CANONICAL, PALW_RC_BASE0_GEOMETRY, base0_profile_v1, rc_job_context};

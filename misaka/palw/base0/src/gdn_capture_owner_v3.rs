@@ -65,7 +65,9 @@ fn verify_binding(binding: &kaspa_consensus_core::palw_step_leg::PalwStepBinding
         bytes.checked_mul(2).and_then(|n| n.checked_add(2048)).ok_or_else(|| capacity("GDN binding hash overflow"))?,
     )
     .map_err(E::Resource)?;
-    kaspa_consensus_core::palw_step_leg::verify_binding_v1(binding).map(|_| ()).map_err(|e| invalid(format!("GDN capture binding: {e:?}")))
+    kaspa_consensus_core::palw_step_leg::verify_binding_v1(binding)
+        .map(|_| ())
+        .map_err(|e| invalid(format!("GDN capture binding: {e:?}")))
 }
 impl NativeHeapV1 for Base0GdnOwnedMaterialV2 {
     fn native_heap_v1(&self, path: &str) -> C {

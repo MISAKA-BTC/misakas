@@ -45,6 +45,7 @@
 //! 5. V-3's consistency;
 //! 6. the books T03 closes from: the claims each block accepted, the row each `Final` wrote (its
 //!    escrow the carve withheld), and the `BuybackAtFinal`, `ReserveCredited` and `Burned` notes.
+#![allow(warnings)]
 use super::t12_round_lane_e2e::{
     T12Chain, card_payout_spk, sign_spend, stamp_harness_time, t12_genesis_chain, t12_with_harness_cards,
 };

@@ -7,6 +7,7 @@
 //! Columns: family | job | class/shape | input size | output size | observable compute proxy
 //!          | protocol-measured work | protocol reward | estimated real cost | reward/cost
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::palw_rc_shipped_params;
 use kaspa_consensus_core::palw_economic_compute_v1::{
     PALW_ECONOMIC_COST_TABLE_V1, palw_attempt_economic_compute_v1, palw_job_economic_compute_v1,

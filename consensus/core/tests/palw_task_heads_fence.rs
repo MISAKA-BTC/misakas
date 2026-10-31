@@ -12,6 +12,7 @@
 //!   (`Profile(6)`), never the drop.
 //! * The decode rule (`HEAD_DECODE_V1`) is a pure function of the verified output.
 
+#![allow(warnings)]
 use borsh::{BorshDeserialize, BorshSerialize};
 use kaspa_consensus_core::config::params::{ForkActivation, Params, palw_t12_shipped_params};
 use kaspa_consensus_core::palw_gen_class_v1::{

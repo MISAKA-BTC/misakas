@@ -86,7 +86,7 @@ use kaspa_consensus_core::{
     merkle::calc_hash_merkle_root,
     mining_rules::MiningRules,
     pruning::PruningPointsList,
-    tx::{MutableTransaction, Transaction, TransactionId, TransactionOutpoint, TransactionOutput, UtxoEntry},
+    tx::{MutableTransaction, Transaction, TransactionId, TransactionOutpoint, UtxoEntry},
     utxo::{
         utxo_diff::{ImmutableUtxoDiff, UtxoDiff},
         utxo_view::{UtxoView, UtxoViewComposition},
@@ -1322,14 +1322,14 @@ pub(super) enum PalwMergedOwnedWorkV1 {
 
 mod dns;
 mod evm;
+mod native_reserve_v1;
 mod palw;
 pub(in crate::pipeline::virtual_processor) mod palw_accept;
+mod palw_evm_asof_v2;
 pub(crate) mod palw_h1_guard;
+mod palw_pruning_capture_v1;
 mod palw_validate;
 mod template;
-mod native_reserve_v1;
-mod palw_pruning_capture_v1;
-mod palw_evm_asof_v2;
 pub(crate) use palw_evm_asof_v2::NativeEvmAsOfFaultV2;
 pub use palw_pruning_capture_v1::PalwPruningCaptureFaultV1;
 
@@ -2404,7 +2404,8 @@ impl VirtualStateProcessor {
                     // walk currently holds — which IS this block's selected parent, since the
                     // transition below has not run yet. Set before `calculate_utxo_state` because
                     // that is where the coinbase is verified against it.
-                    ctx.palw_v2_payout_outputs = palw_state.as_ref().map(|s| self.palw_v2_payout_outputs(s)).transpose()?.unwrap_or_default();
+                    ctx.palw_v2_payout_outputs =
+                        palw_state.as_ref().map(|s| self.palw_v2_payout_outputs(s)).transpose()?.unwrap_or_default();
                     // Audit C-08: and the collateral this block may not let anyone spend, from the
                     // same parent state and for the same reason — PLUS every bond this block's own
                     // mergeset declares.
@@ -5979,7 +5980,7 @@ impl VirtualStateProcessor {
                     &kaspa_consensus_core::palw_state_v2::PalwChainStateV2::genesis(),
                     state_params,
                     &point,
-                    &objects,
+                    objects,
                     None,
                     self.palw_unavailable_abstains_at(self.genesis.daa_score),
                     self.palw_capability_bound_at(self.genesis.daa_score),

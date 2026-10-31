@@ -6,6 +6,7 @@
 //! than staying green (`pin-the-limitation-not-just-the-behaviour`). The generator is
 //! `misaka-palw-base0 --bin palw-model-fit`; these are the assertions that make its findings hold.
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{Params, devnet_shipped_params, palw_rc_shipped_params};
 use kaspa_consensus_core::palw_class_admission_v2::{PalwKaryCourtV1, palw_admission_shape_at_v1};
 use kaspa_consensus_core::palw_context_ladder::{palw_a16_context_row_profile_v5, palw_qwen36_context_row_profile_v5};

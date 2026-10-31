@@ -23,6 +23,7 @@
 //! IS a fold, whose roots a short prefill keeps self-consistent — the fold branch refuses it only
 //! through the whole-job helper, so this file goes red if that branch loses it.
 
+#![allow(warnings)]
 mod common;
 
 use common::*;

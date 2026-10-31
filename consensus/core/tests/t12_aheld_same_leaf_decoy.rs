@@ -9,6 +9,7 @@
 //! from `t12_aheld_held_court.rs` (testnet-12's own ruleset; the opening block folds with the
 //! 2026-09-23 fence off so the unbound verdict defers the grief object, as that file does).
 
+#![allow(warnings)]
 #[path = "dos_l5_common.rs"]
 mod common;
 use common::*;

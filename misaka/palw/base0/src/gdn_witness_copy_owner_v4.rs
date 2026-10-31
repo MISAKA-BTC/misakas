@@ -28,7 +28,7 @@ fn slots<T>(n: usize) -> Result<u64, Error> {
 }
 fn native_heap<T: NativeHeapV1>(value: &T) -> Result<u64, Error> {
     let request = value.native_heap_v1(PATH);
-    request.bytes().ok_or_else(|| Error::Resource(request))
+    request.bytes().ok_or(Error::Resource(request))
 }
 
 /// Guard only for the accused witness. The consumer that transfers its witness
@@ -81,7 +81,8 @@ impl<T> Deref for Base0GdnWitnessBuiltV4<T> {
     }
 }
 impl<T> Base0GdnWitnessBuiltV4<T> {
-    pub(super) fn with_predecessor_owner_v3(mut self,
+    pub(super) fn with_predecessor_owner_v3(
+        mut self,
         owner: Option<kaspa_consensus_core::palw_step_refute::memory_v2::PalwGdnPredecessorOwnerV3>,
     ) -> Self {
         self.owner.predecessor_owner = owner;
@@ -150,7 +151,11 @@ pub fn base0_gdn_checkpoint_witness_retained_v4(
     answers: &[PalwHeldDisclosureV1],
 ) -> Result<Base0GdnRetainedCheckpointWitnessV4, Error> {
     let bytes = witness_copy_request_v4(demands, answers)?;
-    let owner = Base0GdnWitnessCopyOwnerV4 { _lease: reserve_native_requests_v1(bytes).map_err(Error::Resource)?, conv_owner: None, predecessor_owner: None };
+    let owner = Base0GdnWitnessCopyOwnerV4 {
+        _lease: reserve_native_requests_v1(bytes).map_err(Error::Resource)?,
+        conv_owner: None,
+        predecessor_owner: None,
+    };
     let witness =
         gdn_checkpoint_witness_from_disclosures_v2(demands, answers).map_err(crate::gdn_evidence_v2::base0_gdn_court_error_v3)?;
     // Validate the actual output capacities against the requested clone roles.

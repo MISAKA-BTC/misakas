@@ -19,6 +19,7 @@
 //! the pipeline cases (`g14_*_mined_*`) through the mempool, the node's own block template, the
 //! chain block's fold, the persisted tip, the ConsensusApi reads, a second node replaying the blocks, and
 //! a reorg.
+#![allow(warnings)]
 use super::t12_round_lane_e2e::{
     T12Chain, card_payout_spk, sign_spend, t12_genesis_chain, t12_genesis_chain_on, t12_reopened_chain, t12_with_harness_cards,
 };

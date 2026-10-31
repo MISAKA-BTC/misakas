@@ -6,6 +6,7 @@
 //! commit. The demand carries no
 //! binding: the claim and its class are the fold's, and a unit past the claim's own execution is the
 //! accused's to prove (`palw_tir_da_step_fold`).
+#![allow(warnings)]
 use super::t12_round_lane_e2e::{t12_genesis_chain, t12_with_harness_cards};
 use crate::consensus::test_consensus::TestConsensus;
 use kaspa_consensus_core::config::ConfigBuilder;

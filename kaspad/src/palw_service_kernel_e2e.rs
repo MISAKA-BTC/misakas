@@ -909,8 +909,13 @@ async fn g14r2_kernel_interim_seats_run_as_services_pay_the_honest_claim_and_ref
     while !done(&w.chain) {
         honest_receipts = honest_receipts.max(route_of(&w.chain).receipts_of(&honest).len());
         passed |= matches!(state_of(&w.chain, &honest), ClaimStateV1::ProbabilisticPass { .. });
-        assert!(std::time::Instant::now() < deadline, "no progress by DAA {}: honest {:?}, lie {:?}", w.chain.daa(),
-            state_of(&w.chain, &honest), state_of(&w.chain, &lie));
+        assert!(
+            std::time::Instant::now() < deadline,
+            "no progress by DAA {}: honest {:?}, lie {:?}",
+            w.chain.daa(),
+            state_of(&w.chain, &honest),
+            state_of(&w.chain, &lie)
+        );
         let mut mined = false;
         for node in &nodes {
             assert!(!node.running.task.as_ref().unwrap().is_finished(), "a seat's service stopped by itself");
@@ -958,7 +963,10 @@ async fn g14r2_kernel_interim_seats_run_as_services_pay_the_honest_claim_and_ref
         on_honest.len(),
         w.chain.daa()
     );
-    assert!(on_honest.len() >= kaspa_consensus_core::palw_kernel_route_v1::PALW_KERNEL_ROUTE_INTERIM_QUORUM_V1 as usize, "a quorum of the seats receipted the honest claim");
+    assert!(
+        on_honest.len() >= kaspa_consensus_core::palw_kernel_route_v1::PALW_KERNEL_ROUTE_INTERIM_QUORUM_V1 as usize,
+        "a quorum of the seats receipted the honest claim"
+    );
     assert!(on_honest.iter().all(|s| honest_kernel_seats.contains(s)), "only its own seats");
     assert!(!carried.iter().any(|(c, _)| *c == lie), "no seat ever carried a receipt for the lie");
     assert_eq!(
@@ -972,7 +980,6 @@ async fn g14r2_kernel_interim_seats_run_as_services_pay_the_honest_claim_and_ref
         running.finish().await;
     }
 }
-
 
 /// Lane KNODE: the kernel route's slice roles run by kaspad's actual service (`palw_kernel_roles`).
 #[path = "palw_service_kernel_roles_e2e.rs"]

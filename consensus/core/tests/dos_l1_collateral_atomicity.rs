@@ -26,6 +26,7 @@
 //!       lane-certified classes): past `palw_audit_2026_09_23` a commitment on a class the registry
 //!       does not admit is refused `ClassNotAdmitting`, as an attempt is; below it, accepted.
 
+#![allow(warnings)]
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::params::{PALW_T12_SETTLED_ANCHOR_DEPTH, Params, palw_v2_bond_withdrawal_delay_at_v1};
 use kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN;

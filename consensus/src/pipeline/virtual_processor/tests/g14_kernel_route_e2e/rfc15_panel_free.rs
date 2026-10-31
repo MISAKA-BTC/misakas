@@ -94,7 +94,7 @@ async fn rfc15_e2e_an_opv_claim_draws_the_bond_budget_and_its_slot_returns_only_
     let honest = w.claim(0, &job, false).await;
     let rows = kernel_budget_rows(&w, 0);
     assert_eq!(rows.len(), 1, "one reservation for the one claim: {rows:?}");
-    let row = rows[0].clone();
+    let row = rows[0];
     assert_eq!(row.reserved.claims, 1, "Q = 1 whatever the class, its PWU or its token count");
     assert_eq!((row.reserved.block_units, row.reserved.final_weight), (0, 0), "a kernel carrier creates no reward block or weight");
     assert_eq!(row.reuse_not_before, row.accepted_daa + W, "the common hold d + W");

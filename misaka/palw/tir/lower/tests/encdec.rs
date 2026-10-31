@@ -15,6 +15,7 @@
 //! The job's source ids ride in `PipelineJob::negative` (`TokenSource::Negative`): the IR has no
 //! second token list of its own (see hf-coverage §17).
 
+#![allow(warnings)]
 mod common;
 
 use common::{court_coverage, int_tensor, three_ways, with_inputs};

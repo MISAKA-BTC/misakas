@@ -271,7 +271,11 @@ pub(super) fn capped_class_admits_v1(state: &PalwChainStateV2) -> Result<(), Pal
 /// the deadline [`crate::palw_state_v2::palw_provisional_bind_deadline_v1`] reads — and its deadline is re-armed. A claim that
 /// binds a panel inside the window is the holders' to verify through the ordinary receipt path; one that does not is voided at the
 /// window's end like any claim that never bound, its escrow never minted.
-pub(super) fn capped_exit_v1(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, class_id: &Hash64) -> Result<(), PalwStateV2Error> {
+pub(super) fn capped_exit_v1(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    class_id: &Hash64,
+) -> Result<(), PalwStateV2Error> {
     let window_end = ctx.daa_score.saturating_add(crate::palw_mesh_v1::PALW_CAPPED_REVERIFY_WINDOW_DAA_V1);
     let waiting: Vec<(Hash64, crate::palw_mesh_v1::PalwCappedClaimRowV1)> = builder
         .state
@@ -296,7 +300,11 @@ pub(super) fn capped_exit_v1(builder: &mut TransitionBuilder<'_>, ctx: &PalwBloc
 
 /// **A claim has just been accepted**: past `palw_audit_mesh_v1`, an IR class's claim draws its audit row. Infallible by design (module
 /// doc): whatever cannot be done is left undone.
-pub(super) fn on_claim_accepted_v1(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, claim_id: &Hash64) -> Result<(), PalwStateV2Error> {
+pub(super) fn on_claim_accepted_v1(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    claim_id: &Hash64,
+) -> Result<(), PalwStateV2Error> {
     if !builder.params.audit_mesh_active_at(ctx.daa_score) {
         return Ok(());
     }
@@ -836,7 +844,11 @@ impl PalwChainStateV2 {
 /// ways and each rider draws its own audit at its share; the lead's row still carried 4 ‰ of the whole, so the batch funded
 /// `pay(E) + Σ pay(E/(1+n))` — more than one claim's worth. The row's `pay` follows the escrow the lead keeps (its reservation, the
 /// penalty, stays: auditors reserved it at the draw). A lead with no row changes nothing.
-pub(super) fn resnapshot_audit_pay_v1(builder: &mut TransitionBuilder<'_>, lead_id: &Hash64, kept_escrow: u64) -> Result<(), PalwStateV2Error> {
+pub(super) fn resnapshot_audit_pay_v1(
+    builder: &mut TransitionBuilder<'_>,
+    lead_id: &Hash64,
+    kept_escrow: u64,
+) -> Result<(), PalwStateV2Error> {
     let Some(mut row) = builder.state.vertex.mesh.audits.get(lead_id).cloned() else { return Ok(()) };
     let pay = palw_mesh_audit_pay_v1(kept_escrow);
     if pay == row.pay {

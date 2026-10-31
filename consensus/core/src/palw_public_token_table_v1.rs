@@ -103,10 +103,10 @@ pub trait PalwPublicTokenTableSourceV1: Send + Sync {
         let present = self
             .visit_rendering_v1(id, &mut |bytes| {
                 for &byte in bytes {
-                    if let Some(s) = next.as_mut() {
-                        if !constraint_step_v1(c, s, byte) {
-                            next = None
-                        }
+                    if let Some(s) = next.as_mut()
+                        && !constraint_step_v1(c, s, byte)
+                    {
+                        next = None
                     }
                 }
             })?

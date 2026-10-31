@@ -16,6 +16,7 @@
 //! manifests and reports each package's DECLARED dependencies, which is exactly the artifact
 //! this test is about.
 
+#![allow(warnings)]
 use std::collections::{HashMap, HashSet, VecDeque};
 
 /// The crates that define validity. `kaspa-consensus-core` carries pure consensus helpers,

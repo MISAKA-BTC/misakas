@@ -425,10 +425,10 @@ pub fn check_component_invocation_v39(
                         None
                     }
                 };
-                if let Some(expected) = expected {
-                    if descriptor.tensor != expected || !matches!(descriptor.origin, MaterialOriginV39::External { .. }) {
-                        return Err("master39 public input tensor does not implement original pipeline binding".into());
-                    }
+                if let Some(expected) = expected
+                    && (descriptor.tensor != expected || !matches!(descriptor.origin, MaterialOriginV39::External { .. }))
+                {
+                    return Err("master39 public input tensor does not implement original pipeline binding".into());
                 }
             }
             _ => return Err("master39 random/external canonical input binding differs".into()),
@@ -508,7 +508,8 @@ pub fn compose_component_request_v39(
     }
     let (stop, maximum_positions) = match s.trip {
         TripRule::TextStream | TripRule::Decode => {
-            let stop = RequestStopV39::Decode { prompt: r.prompt.clone(), requested_new_tokens: r.requested_new_tokens, eos: r.eos.clone() };
+            let stop =
+                RequestStopV39::Decode { prompt: r.prompt.clone(), requested_new_tokens: r.requested_new_tokens, eos: r.eos.clone() };
             let n = stop.maximum_positions()?;
             (stop, n)
         }
@@ -562,20 +563,20 @@ pub fn compose_component_request_v39(
                         let v = *r.scalars.get(*index as usize).ok_or("compose39 scalar absent")? as i128;
                         // Same commitment as the native rule's `scalar`.
                         let c = public(vec![v])?;
-                        if let ComposedInputV39::Public { tensor, .. } = &c {
-                            if *tensor != scalar(declaration.dtype, v)? {
-                                return Err("compose39 scalar declaration is not rank-0".into());
-                            }
+                        if let ComposedInputV39::Public { tensor, .. } = &c
+                            && *tensor != scalar(declaration.dtype, v)?
+                        {
+                            return Err("compose39 scalar declaration is not rank-0".into());
                         }
                         c
                     }
                     Binding::JobTokens { rule: t } => {
                         let (seq, _) = rule(r, t, prior, wire)?;
                         let c = public(seq.iter().map(|v| *v as i128).collect())?;
-                        if let ComposedInputV39::Public { tensor, .. } = &c {
-                            if *tensor != expected_tensor(declaration.dtype, &declaration.shape, &seq)? {
-                                return Err("compose39 token tensor differs from the native rule".into());
-                            }
+                        if let ComposedInputV39::Public { tensor, .. } = &c
+                            && *tensor != expected_tensor(declaration.dtype, &declaration.shape, &seq)?
+                        {
+                            return Err("compose39 token tensor differs from the native rule".into());
                         }
                         c
                     }
@@ -594,7 +595,8 @@ pub fn compose_component_request_v39(
                         }
                     }
                     Binding::StageRowCount { stage: from, drop } => {
-                        let q = prior.iter().find(|p| p.stage == *from as u16).ok_or("compose39 upstream row count is not Final yet")?;
+                        let q =
+                            prior.iter().find(|p| p.stage == *from as u16).ok_or("compose39 upstream row count is not Final yet")?;
                         let rows_from = if matches!(wire.stages[*from as usize].trip, TripRule::Decode) {
                             r.prompt.len().saturating_sub(1) as u32
                         } else {
@@ -661,7 +663,9 @@ impl ComposedComponentV39 {
                     bindings.push(InputBindingV39::Random { seed: *seed, domain: *domain, per_step: *per_step });
                     continue;
                 }
-                ComposedInputV39::Public { input, tensor, .. } | ComposedInputV39::Image { input, tensor, .. } => (*input, Some(*tensor)),
+                ComposedInputV39::Public { input, tensor, .. } | ComposedInputV39::Image { input, tensor, .. } => {
+                    (*input, Some(*tensor))
+                }
                 ComposedInputV39::Upstream { input, .. } => (*input, None),
             };
             let d = next.next().ok_or("compose39 material descriptor absent")?;
@@ -681,8 +685,16 @@ impl ComposedComponentV39 {
                         return Err("compose39 public material differs from the request-derived tensor".into());
                     }
                 }
-                (ComposedInputV39::Image { dtype, shape, raw_source, .. }, MaterialOriginV39::External { original_task, raw_source: r }) => {
-                    if d.dtype != *dtype || d.shape != *shape || Some(d.tensor) != expected || r != raw_source || *original_task != self.original_task {
+                (
+                    ComposedInputV39::Image { dtype, shape, raw_source, .. },
+                    MaterialOriginV39::External { original_task, raw_source: r },
+                ) => {
+                    if d.dtype != *dtype
+                        || d.shape != *shape
+                        || Some(d.tensor) != expected
+                        || r != raw_source
+                        || *original_task != self.original_task
+                    {
                         return Err("compose39 image material differs from the request commitment".into());
                     }
                 }

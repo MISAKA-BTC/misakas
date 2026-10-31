@@ -2,6 +2,7 @@
 //! OPV pipeline class has no Panel, a fresh outsider (replaying the chain, reading public DA bytes only) convicts a lie in a stage
 //! and an honest one finalizes by the window rule alone.
 
+#![allow(warnings)]
 #[path = "../../tir/core/tests/v2common/mod.rs"]
 mod v2common;
 

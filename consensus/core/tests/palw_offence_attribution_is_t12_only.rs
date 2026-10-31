@@ -11,6 +11,7 @@
 //! that parent too, by running this file against it — so the fence is the only thing that moved
 //! testnet-12, and nothing moved anything else.
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{
     ForkActivation, Params, devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params, palw_t12_shipped_params,
 };
@@ -85,11 +86,11 @@ const BEFORE_THE_ATTRIBUTION: &[(&str, &str, &str, &str)] = &[
 /// HIGH): armed from genesis on testnet-12 and hashed Some-only into all three ids;
 /// `palw_clock_lead_cap_is_t12_only` pins that taking it away returns testnet-12's previous ids.
 /// Previous: `05173205…` / `df02039d…` / `beeaa0a8…`.
-// re-pin 2026-10-08 @42452229ee51: no DAA-9,000 flag day (user, 2026-10-08): the int-13 list is dormant; ids back to the int-12 release (was 74686c49…, 6972fda0…)
+// re-pin 2026-10-30 @64535b7bf7e8: User selected DAA18400 for the unpublished G14 schedule on 2026-10-30; preserve the current main CI fixes (was 05e77c24…, e8090e8b…)
 const T12_BEFORE_THE_ATTRIBUTION: (&str, &str, &str) = (
-    "b09de8cfbd6a730f15ca47dbcc2c5de7a8ebffb53cc82b11b0a23db61137db71",
+    "88a30d08798d7b030d2088648fd3f894f6c2a585d072e467b93af5e10da0df2c",
     "7be7b92fd3583a6d288ebcd417d3f2cee9ab7d86f13967c19ee28c9aec08c62f",
-    "b7500a134ca5c4fe3f6451076a1024891eb24cc8aa3e3681a112d14fdbb92f4b",
+    "bb2a4742a1c042d4b3d22a6c2c0c96c20be7d90f7ef19d2b57310563ba0ee7e5",
 );
 
 /// testnet-12 with this fence AND `palw_class_verify_deadline` taken away — the depth re-derived
@@ -104,11 +105,11 @@ const T12_BEFORE_THE_ATTRIBUTION: (&str, &str, &str) = (
 ///
 /// **Re-pinned 2026-09-25 with [`T12_BEFORE_THE_ATTRIBUTION`], for the lead cap**
 /// (`palw_clock_lead_cap`). Previous: `2343195d…` / `1e06025d…` / `b08b25bd…`.
-// re-pin 2026-10-08 @42452229ee51: no DAA-9,000 flag day (user, 2026-10-08): the int-13 list is dormant; ids back to the int-12 release (was b0113c68…, 1b1cc0da…)
+// re-pin 2026-10-30 @64535b7bf7e8: User selected DAA18400 for the unpublished G14 schedule on 2026-10-30; preserve the current main CI fixes (was 0dedee88…, c859f523…)
 const T12_BEFORE_THE_ATTRIBUTION_AND_THE_DEADLINE: (&str, &str, &str) = (
-    "ca795cfdfec408e8875237a4756a8d2f7d80d7fab39c9a2fbe51a08ad12637c6",
+    "2cc9c900ed74603cd6ee5483a02dd96cccd7c0a024eedb8f75b3bf6f198f051e",
     "0d7ca2bade522865cc0c3f464262b90834064de57ad1c984ecdbf11b3cab9c8c",
-    "d414fa7a6d7f591e6cf2a6be07cf8185ac8bfc2692cec286dbccb35419cebce2",
+    "310125bbd6758c970a1309490c0b8e25e0ccf7f365be7b00c3de0393a9b6b989",
 );
 
 fn shipped(name: &str) -> Params {
@@ -236,6 +237,11 @@ fn a_later_height_is_refused_by_validation() {
     // (`palw_t12_launch_params_v1`): the post-launch release's fences armed at DAA 750 stand on
     // R-core+ as well, and are not what this fence's genesis rule is about.
     let mut never = kaspa_consensus_core::config::params::palw_t12_launch_params_v1();
+    kaspa_consensus_core::config::params::palw_t12_arm_after_int13_at_v1(
+        &mut never,
+        kaspa_consensus_core::config::params::PALW_T12_G14_17000_FENCES_V1,
+        None,
+    );
     never.palw_offence_attribution = Some(ForkActivation::never());
     never.palw_rcore_plus = None;
     never.palw_rcore_conservative_classes = &[];

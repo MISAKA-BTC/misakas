@@ -2,6 +2,7 @@
 //! (`PACK_NOT_VERIFIED`, `ARTIFACT_ROOT_KNOWN`, `READY_SEATS_INSUFFICIENT`), the class-specific court window's reading, and a
 //! repository read by HTTP ranges against a loopback server that serves a fixture directory (no hub is ever touched).
 
+#![allow(warnings)]
 use misaka_palw_sdk::preflight::full::FullInputs;
 use misaka_palw_sdk::preflight::node::{NodeClassFact, NodeFacts, NodeSeatingFact};
 use misaka_palw_sdk::preflight::remote::HttpRangeFetcher;

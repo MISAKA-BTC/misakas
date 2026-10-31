@@ -9,6 +9,7 @@
 //! refuses a second as its second lock (`TirRegistrationsPerBlockExceeded`). Every registration here
 //! is admissible on its own — each one alone is accepted — so the only thing that drops the second
 //! is the cap.
+#![allow(warnings)]
 use super::t12_round_lane_e2e::{t12_genesis_chain, t12_with_harness_cards};
 use crate::consensus::test_consensus::TestConsensus;
 use kaspa_consensus_core::config::ConfigBuilder;

@@ -2,6 +2,7 @@
 //!
 //! Read-only audit artefact. Nothing here is a fixture any shipped code reads.
 
+#![allow(warnings)]
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::class_manifest_const_v1 as manifest;
 use kaspa_consensus_core::config::params::*;
@@ -132,7 +133,9 @@ fn no_consensus_boundary_names_the_typed_identities() {
             if p.extension().and_then(|x| x.to_str()) != Some("rs") {
                 continue;
             }
-            if p.file_name().and_then(|x| x.to_str()) == Some("palw_class_identity_v1.rs") {
+            // The later container-identity module defines distinct newtypes with
+            // overlapping names; it does not use this audit's class-identity types.
+            if matches!(p.file_name().and_then(|x| x.to_str()), Some("palw_class_identity_v1.rs" | "palw_artifact_identity_v1.rs")) {
                 continue;
             }
             let src = std::fs::read_to_string(&p).unwrap_or_default();

@@ -9,6 +9,7 @@
 //! child it hides in. The same root claim rides as the chain's object (tag 69), and the site the fold
 //! derives is the site the acceptance layer's finalize admits.
 
+#![allow(warnings)]
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::palw_bisect::PalwBisectTurnV1;
 use kaspa_consensus_core::palw_decode_pipeline_v4::DecodeConfigV4;

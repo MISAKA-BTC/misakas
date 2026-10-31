@@ -103,7 +103,9 @@ impl PalwPanelFreeConjunctV1 {
             Self::PanelFreeCollateralAccountingReview => "panel-free collateral/accounting review complete",
             Self::ClassIndependentCapsAndCommonDaaHold => "class-independent Q/B/R/F caps + common DAA hold complete",
             Self::PublicMaterialWatcherInclusionAssumptions => "public material/watcher/inclusion operating assumptions supported",
-            Self::Adr177NonInterferenceCapitalAllocationEcon => "ADR177 non-interference/capital/allocation/open-vs-closed gates complete",
+            Self::Adr177NonInterferenceCapitalAllocationEcon => {
+                "ADR177 non-interference/capital/allocation/open-vs-closed gates complete"
+            }
             Self::Rfc14ClaimSpecificProsecutionAndRuleE => "RFC14 claim-specific prosecution / Rule E gates complete",
             Self::IndependentAdversarialNodeE2eRecoveryMigration => "independent adversarial node E2E + recovery/migration PASS",
             Self::SeparatelyCoordinatedNetworkSchedule => "separately coordinated network schedule",
@@ -281,7 +283,11 @@ impl PalwPanelFreeGateRecordV1 {
             if e.verdict != PalwGateVerdictV1::Pass {
                 return Err(PalwPanelFreeGateRefusalV1::NotPass(e.conjunct));
             }
-            if is_zero(&e.evidence) || is_zero(&e.review) || e.evidence == e.review || seen.contains(&&e.evidence) || seen.contains(&&e.review)
+            if is_zero(&e.evidence)
+                || is_zero(&e.review)
+                || e.evidence == e.review
+                || seen.contains(&&e.evidence)
+                || seen.contains(&&e.review)
             {
                 return Err(PalwPanelFreeGateRefusalV1::Evidence(e.conjunct));
             }
@@ -294,7 +300,12 @@ impl PalwPanelFreeGateRecordV1 {
     /// **The gate** against `params` and its armed `fence`, accepting only digests in `pins` (the node passes
     /// [`PALW_PANEL_FREE_GATE_PINNED_RECORDS_V1`]; tests pass their own to exercise every other check). Checks in the order of the
     /// module doc; the pin last, so every structural and binding refusal is named before it.
-    pub fn verify_v1(&self, params: &Params, fence: &PalwPanelFreeFenceV1, pins: &[[u8; 64]]) -> Result<(), PalwPanelFreeGateRefusalV1> {
+    pub fn verify_v1(
+        &self,
+        params: &Params,
+        fence: &PalwPanelFreeFenceV1,
+        pins: &[[u8; 64]],
+    ) -> Result<(), PalwPanelFreeGateRefusalV1> {
         self.validate_form_v1()?;
         if self.genesis != params.genesis.hash {
             return Err(PalwPanelFreeGateRefusalV1::WrongNetwork);
@@ -334,7 +345,9 @@ impl PalwPanelFreeGateRecordV1 {
             return Err(PalwPanelFreeGateRefusalV1::BondBudgetPolicy);
         }
         let allocation = allocation.expect("checked above");
-        if allocation.policy.validate().is_err() || palw_panel_free_allocation_policy_digest_v1(&allocation.policy) != self.allocation_policy {
+        if allocation.policy.validate().is_err()
+            || palw_panel_free_allocation_policy_digest_v1(&allocation.policy) != self.allocation_policy
+        {
             return Err(PalwPanelFreeGateRefusalV1::AllocationPolicy);
         }
         let digest = self.digest();

@@ -26,6 +26,7 @@
 //! `dos_g2_conviction_takes_back::dos_g2_review_a_forged_equivocation_convicts_nobody_past_the_fence`
 //! folds it through the real t12 fold.
 
+#![allow(warnings)]
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::palw_offence_v1::{
     PALW_PANEL_FALSE_VALID_VERSION_V1, PalwOffenceKindV1, PalwPanelContradictionV1, PalwPanelFalseValidEvidenceV1,

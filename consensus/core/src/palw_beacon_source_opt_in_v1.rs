@@ -149,7 +149,11 @@ impl crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
             // common source admission still requires an ordinary seal at S.
             if daa >= target.terms.seal_end
                 || (daa < target.terms.seal_start
-                    && !matches!(target.context.subject_kind, misaka_palw_challenge::SubjectKindV1::PanelAssignment | misaka_palw_challenge::SubjectKindV1::ClaimVerification))
+                    && !matches!(
+                        target.context.subject_kind,
+                        misaka_palw_challenge::SubjectKindV1::PanelAssignment
+                            | misaka_palw_challenge::SubjectKindV1::ClaimVerification
+                    ))
             {
                 continue;
             }

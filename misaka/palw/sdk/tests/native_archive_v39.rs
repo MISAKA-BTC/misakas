@@ -1,5 +1,6 @@
 //! Archive39 is plain data: exclusive bounded files under original identities.
 //! (Unbuilt test source; the consolidated validation phase runs it.)
+#![allow(warnings)]
 use kaspa_consensus_core::palw_native_execution_v39::NativeOriginalSourceArchiveV39;
 use misaka_palw_sdk::native_archive_v39::NativeArchiveDirV39;
 

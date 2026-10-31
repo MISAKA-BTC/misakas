@@ -4,6 +4,7 @@
 //! per-position cost and interval, every cone, every node's §8 cost and §7 interval — and every
 //! refusal's kind, limit, value and cap (or class).
 
+#![allow(warnings)]
 mod common;
 
 use common::*;

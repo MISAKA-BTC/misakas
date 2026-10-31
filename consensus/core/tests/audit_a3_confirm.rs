@@ -1,6 +1,7 @@
 //! **AUDIT LANE A3 (part 3) — confirmation runs.**
 //! cargo test -p kaspa-consensus-core --test audit_a3_confirm -- --nocapture --test-threads=1
 
+#![allow(warnings)]
 use std::time::Instant;
 
 use kaspa_consensus_core::Hash64;

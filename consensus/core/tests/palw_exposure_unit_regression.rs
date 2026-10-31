@@ -13,6 +13,7 @@
 //! `PalwExposureBasisV1` does both — see its doc for why the floor class is the normaliser and why
 //! the normaliser is derived rather than chosen.
 
+#![allow(warnings)]
 use kaspa_consensus_core::palw_base0_profile::{PALW_RC_BASE0_CANONICAL, PALW_RC_BASE0_GEOMETRY, base0_profile_v1, rc_job_context};
 use kaspa_consensus_core::palw_context_ladder::palw_a16_context_row_profile_v5;
 use kaspa_consensus_core::palw_economic_compute_v1::{PALW_ECONOMIC_COST_TABLE_V1, palw_attempt_economic_compute_v1};

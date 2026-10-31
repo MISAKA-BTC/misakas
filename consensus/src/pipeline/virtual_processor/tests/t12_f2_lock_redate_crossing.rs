@@ -17,6 +17,7 @@
 //! * a second armed node fed the chain reaches the same sink and the same PALW root;
 //! * a node running lane V02 without this fence accepts every block below `H` with the same root, and
 //!   refuses the chain at the crossing (the re-date is in the committed root: a flag day).
+#![allow(warnings)]
 use super::t12_round_lane_e2e::{T12Chain, card_payout_spk, sign_spend, t12_genesis_chain, t12_with_harness_cards};
 use crate::consensus::test_consensus::TestConsensus;
 use crate::model::stores::ghostdag::GhostdagStoreReader;

@@ -329,14 +329,18 @@ pub(crate) fn output_point(o: &FlatOperandV5, shape: &[usize], index: u64) -> Re
 /// a correct sorted TopK set cannot have a dominated member and an authenticated gap.
 pub fn verify_topk_fault_v7(c: &TopKContextV7<'_>, f: &TopKFaultV7) -> Result<(), DismissalV1> {
     let pr = common::prepare(&c.base)?;
-    verify_topk_prepared_v32(c,f,&pr)
+    verify_topk_prepared_v32(c, f, &pr)
 }
-pub(crate) fn verify_topk_prepared_v32(c:&TopKContextV7<'_>,f:&TopKFaultV7,pr:&crate::element::PreparedV1<'_>)->Result<(),DismissalV1>{
+pub(crate) fn verify_topk_prepared_v32(
+    c: &TopKContextV7<'_>,
+    f: &TopKFaultV7,
+    pr: &crate::element::PreparedV1<'_>,
+) -> Result<(), DismissalV1> {
     f.structure().map_err(|_| bad("malformed TopK fault"))?;
     let o = f.output.node.as_ref().unwrap();
     let (p, s, n) = (o.position, o.occurrence, o.node);
-    let scope = derived(c, &pr, p, s, n)?;
-    if !common::authenticate_node(&c.base, &pr, o, (p, s, n)) {
+    let scope = derived(c, pr, p, s, n)?;
+    if !common::authenticate_node(&c.base, pr, o, (p, s, n)) {
         return Err(bad("TopK output not bound"));
     }
     if common::size_with_limit(f, scope.filing_bytes).is_err() {
@@ -360,7 +364,7 @@ pub(crate) fn verify_topk_prepared_v32(c:&TopKContextV7<'_>,f:&TopKFaultV7,pr:&c
             if (gap > 0 && selected(gap - 1)? >= rival as i128) || (gap < k && selected(gap)? <= rival as i128) {
                 return Err(bad("rival is not inside the authenticated omitted-member gap"));
             }
-            let ops = common::authenticate_inputs(&c.base, &pr, p, s, n, std::slice::from_ref(&f.scores), &None, &[2])?;
+            let ops = common::authenticate_inputs(&c.base, pr, p, s, n, std::slice::from_ref(&f.scores), &None, &[2])?;
             let av = ops.get(0, at(&sh.inputs[0], axis, f.row, a as u32)?).map_err(|_| bad("missing selected score"))?;
             let bv = ops.get(0, at(&sh.inputs[0], axis, f.row, rival)?).map_err(|_| bad("missing rival score"))?;
             bv > av || (bv == av && (rival as i128) < a)

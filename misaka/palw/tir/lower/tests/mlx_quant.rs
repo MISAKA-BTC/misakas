@@ -6,6 +6,7 @@
 //! (a module's own bits / group size, or `false`: kept in float) are read by the same descriptor. Nothing here is specific to a
 //! model; the end-to-end fixtures (MLX itself as the quantiser) are `tests/quantized.rs`' `mlx_*`.
 
+#![allow(warnings)]
 use misaka_palw_tir_lower::LowerError;
 use misaka_palw_tir_lower::prequant::{MLX_QUANT_METHOD, QFormat, QuantConfig, is_mlx_block, parse_quant_config, quant_block};
 use misaka_palw_tir_lower::quantfmt::QuantRegistry;

@@ -35,6 +35,7 @@
 //!
 //! Run: cargo test -p kaspa-consensus-core --test dos_repro_2_free_prompt_flood_linear_per_block_cost -- --nocapture --test-threads=2
 
+#![allow(warnings)]
 #[path = "dos_l5_common.rs"]
 mod common;
 use common::*;

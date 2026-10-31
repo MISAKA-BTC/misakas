@@ -7,6 +7,7 @@
 //! written by `hf_greedy.py`); with `--compare`, each record's `generated` is the expected output.
 //! Prints each prompt's ids, and the prefill and decode throughput of this host.
 
+#![allow(warnings)]
 use clap::Parser;
 use misaka_palw_tir_artifact::PalwTirContainerV1;
 use misaka_palw_tir_exec::{NoSink, ParamData, TirExecutor, TirParams, TirPlan};

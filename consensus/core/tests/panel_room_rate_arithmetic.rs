@@ -15,6 +15,7 @@
 //!
 //! Run: cargo test -p kaspa-consensus-core --test panel_room_rate_arithmetic
 
+#![allow(warnings)]
 use kaspa_consensus_core::palw_model_registry_v1::PALW_REGISTRY_GLOBALS_V1;
 use kaspa_consensus_core::palw_state_v2::palw_inflight_claims_counted_v1;
 use kaspa_consensus_core::palw_work_target_v1::{

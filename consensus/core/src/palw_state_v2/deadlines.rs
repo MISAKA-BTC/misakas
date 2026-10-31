@@ -312,7 +312,13 @@ fn sweep_court_deadlines_inner(
             builder.write_court(session_id, None)?;
             match side {
                 PalwCourtSideV1::Challenger => rearm_after_challenger_side_close(
-                    builder, ctx, session.claim, &claim, session.challenger_bond, session.opened_daa)?,
+                    builder,
+                    ctx,
+                    session.claim,
+                    &claim,
+                    session.challenger_bond,
+                    session.opened_daa,
+                )?,
                 PalwCourtSideV1::Executor => rearm_after_unanswered_opening(builder, ctx, session.claim, &claim)?,
             }
             continue;
@@ -342,8 +348,12 @@ pub(super) fn sweep_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlo
         if !claim.phase.is_terminal() && builder.state.palw_v2_expiry_held_v1(builder.params, &claim_id, &claim) {
             continue;
         }
-        // G14 lane r6-d1-release (D1): only a terminal bound claim's retirement is held (DL-1 arms nothing else away).
-        if builder.state.court_service_holds_retirement_v1(&claim_id, &claim) { continue; }
+        // The binding holds retirement, while the exact operational hold-release deadline still fires.
+        if builder.state.court_service_holds_retirement_v1(&claim_id, &claim)
+            && super::terminal_operational_release_at_v1(&claim, builder.params, None)? != Some(deadline)
+        {
+            continue;
+        }
         match claim.phase {
             PalwClaimPhaseV2::Provisional => {
                 let reason = builder.bind_timeout_reason(&claim, ctx);
@@ -596,10 +606,11 @@ pub(super) fn sweep_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlo
     Ok(())
 }
 
-
 impl TransitionBuilder<'_> {
     pub(super) fn reserve_court_deadline_workspace_v2(&mut self, daa: u64) -> Result<(), PalwStateV2Error> {
-        if !self.native_writers_tracking_v1() { return Ok(()); }
+        if !self.native_writers_tracking_v1() {
+            return Ok(());
+        }
         self.admit_native_write_v1(workspace::quote(&self.state, daa)?)
     }
 }

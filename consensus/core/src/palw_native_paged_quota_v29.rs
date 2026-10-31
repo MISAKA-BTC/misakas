@@ -330,6 +330,7 @@ impl NativePagedQuotaProjectionV29 {
     }
     /// Exact private native ticket conversion, never a caller-supplied flag.
     /// It preserves original debt, every source attempt and finite stream clock.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn convert_discovery(
         &mut self,
         quota: &QuotaPolicyV11,

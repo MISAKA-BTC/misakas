@@ -1857,7 +1857,9 @@ mod driver {
     pub enum EvmValidateError {
         /// The producer's `evm_commitment_root` does not match the re-executed
         /// result — the one EVM condition that makes a block invalid (design §6.3).
-        CommitmentMismatch { block: BlockHash },
+        CommitmentMismatch {
+            block: BlockHash,
+        },
         /// The executor rejected the block body (e.g. an undecodable payload tx).
         Exec(String),
         /// A store read/write failed.
@@ -2159,11 +2161,10 @@ mod driver {
             typed_receipt_root_activation_daa_score,
         };
 
-        let (result, snapshot) = kaspa_evm::snapshot::execute_block_from_snapshot(&parent_snapshot, &input)
-            .map_err(|e| match e {
-                kaspa_evm::EvmExecError::NativeResource(why) => EvmValidateError::Resource(why),
-                other => EvmValidateError::Exec(other.to_string()),
-            })?;
+        let (result, snapshot) = kaspa_evm::snapshot::execute_block_from_snapshot(&parent_snapshot, &input).map_err(|e| match e {
+            kaspa_evm::EvmExecError::NativeResource(why) => EvmValidateError::Resource(why),
+            other => EvmValidateError::Exec(other.to_string()),
+        })?;
 
         // §11: assemble the `debug_traceTransaction` replay plan from the exact
         // acceptance this block performed — the env inputs, B's own system ops, and

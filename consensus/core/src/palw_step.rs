@@ -1932,7 +1932,10 @@ pub fn canonical_step_leaf_index(
 
 /// [`canonical_step_leaf_index`] with the node-visit counter its cost test reads.
 pub(crate) fn canonical_step_leaf_index_counted_v1(
-    profile: &PalwShapeProfileV3, context: &PalwJobContextV2, coord: &PalwStepCoordinateV1, visits: &mut u64,
+    profile: &PalwShapeProfileV3,
+    context: &PalwJobContextV2,
+    coord: &PalwStepCoordinateV1,
+    visits: &mut u64,
 ) -> Option<u64> {
     rank_requests_v3::canonical_rank_with_shape_v3(profile, context, coord, visits, None)
 }
@@ -3746,5 +3749,4 @@ mod tests {
         assert_eq!(PALW_STEP_MAX_LEAVES, 4_194_304);
     }
     include!("palw_step_rank_requests_tests_v3.rs");
-
 }

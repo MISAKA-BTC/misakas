@@ -3,6 +3,7 @@
 //! producer default, never a conviction; and no reward opens until RFC-0015 §1.1's criteria are evidenced for exactly that profile
 //! with public material — for inference classes and for RFC-0004's evaluation claims alike.
 
+#![allow(warnings)]
 mod common;
 
 use std::collections::{BTreeMap, BTreeSet};

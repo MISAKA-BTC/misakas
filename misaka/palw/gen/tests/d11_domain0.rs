@@ -18,6 +18,7 @@
 //!    the logit's unit, and many sampled rows now select a lane the greedy rule would not), and this
 //!    test requires that they still do.
 
+#![allow(warnings)]
 use misaka_palw_gen::rand::{GUMBEL_Q24_V1_DIGEST_HEX, RAND_DOMAINS_V1, RandLayoutV1, RandStepRuleV1, TEXT_GUMBEL_V1, rand_word_v1};
 use serde::Deserialize;
 

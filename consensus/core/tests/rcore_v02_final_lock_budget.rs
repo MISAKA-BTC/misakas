@@ -15,6 +15,7 @@
 //!
 //! Run: cargo test -p kaspa-consensus-core --test rcore_v02_final_lock_budget -- --nocapture
 
+#![allow(warnings)]
 #[path = "rcore_common.rs"]
 mod common;
 use common::*;

@@ -24,6 +24,7 @@
 //!   refuses it from it — the flag day as a named refusal instead of a silent fork;
 //! * `validate_palw_v2` refuses it where ADR-0105's transparency is not in force at or below it.
 
+#![allow(warnings)]
 use kaspa_consensus_core::config::params::{
     ForkActivation, PALW_T12_BOND_MATURITY_WINDOW_DAA, PALW_T12_POST_LAUNCH_FENCE_DAA, Params, SIMNET_PARAMS, TESTNET_PARAMS,
     devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params, palw_t12_launch_params_v1, palw_t12_shipped_params,
@@ -38,11 +39,11 @@ use kaspa_consensus_core::fork_id_v1::{
 /// release `0e8ec984e` was `b8564b88…` / `5de80e64…` / `93da24cc…`, which `palw_t12_launch_params_v1()`
 /// still hashes to): params, identity, schedule — the same pins `palw_clock_lead_cap_is_t12_only`'s
 /// `T12_WITH_THE_CAP` holds.
-// re-pin 2026-10-08 @42452229ee51: no DAA-9,000 flag day (user, 2026-10-08): the int-13 list is dormant; ids back to the int-12 release (was 2e567642…, 5f5df817…)
+// re-pin 2026-10-30 @64535b7bf7e8: User selected DAA18400 for the unpublished G14 schedule on 2026-10-30; preserve the current main CI fixes (was 73e67678…, fd42c167…)
 const T12_RELEASED: (&str, &str, &str) = (
-    "5ee7fd8ee019968cf52929b844cf9ddfb1aad500842a89cf04bced8ba4edefb6",
+    "3e6da238306cfdb7e71599d5ef8fb314f1b3ff33a50673af1321f3da9cfa5b94",
     "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-    "1678e07359f6727e96224041450a3b1d2aadcf8acd6bb6db0c277ff4d401c9b9",
+    "b4706ae535fc2c9e4f0a0fe1b6cb0456025f3e00c1b8aba5cde02191f46f9194",
 );
 
 /// An illustrative flag-day height. The operator picks one common, independent height for every
@@ -94,8 +95,8 @@ fn the_same_chain_fence_is_dormant_on_every_other_preset_and_t12_arms_it_at_750(
     assert_eq!((t12.0.as_str(), t12.1.as_str(), t12.2.as_str()), T12_RELEASED, "testnet-12 is the released ruleset, to the id");
     assert_eq!(
         palw_t12_launch_params_v1().fence_schedule_v1(),
-        vec![PALW_T12_BOND_MATURITY_WINDOW_DAA],
-        "the LAUNCHED testnet-12 schedules one height, ADR-0065 D1's bond-maturity window, and F1 adds none"
+        vec![PALW_T12_BOND_MATURITY_WINDOW_DAA, 18_400],
+        "the launched testnet-12 schedules the bond-maturity window and the G14 flag day"
     );
 }
 
@@ -160,11 +161,12 @@ fn an_armed_build_peers_with_the_launched_build_until_the_height() {
     let shipped = palw_t12_launch_params_v1();
     let maturity = PALW_T12_BOND_MATURITY_WINDOW_DAA;
     assert!(fork_id_gate_armed_v1(&shipped), "the launched testnet-12's gate is armed by the maturity window");
-    assert_eq!(fork_id_gate_fences_v1(&shipped), vec![maturity]);
+    assert_eq!(fork_id_gate_fences_v1(&shipped), vec![maturity, 18_400]);
     for h in [maturity / 2, maturity - 1, maturity + 1, H] {
         let armed = armed_at(ForkActivation::new(h));
-        let mut schedule = vec![h, maturity];
+        let mut schedule = vec![h, maturity, 18_400];
         schedule.sort_unstable();
+        schedule.dedup();
         assert_eq!(armed.fence_schedule_v1(), schedule, "F1 at {h}: the armed schedule");
         assert_eq!(fork_id_gate_fences_v1(&armed), schedule, "F1 at {h}: and the gate names both heights");
         // Both nodes on one chain at the same DAA score, each judging the other's announcement.
@@ -212,11 +214,15 @@ fn an_armed_build_peers_with_the_launched_build_until_the_height() {
             // this build at every height, and a connection made below 1,000 is NEVER re-judged to a
             // refusal at `H`. Only a handshake made past 1,000 carries a refusal height.
             assert_eq!(rejudged_from_below, None, "F1 at {h}: a connection made below 1,000 is not re-judged at {h}");
-            let lm = fork_id_v1(&shipped, maturity);
+            // The launched schedule's next fence after 1,000 is the G14 flag day. A fence past that
+            // day is invisible to a handshake taken at 1,000; the handshake that carries it is one
+            // taken at 18,400.
+            let met_at = if h > 18_400 { 18_400 } else { maturity };
+            let lm = fork_id_v1(&shipped, met_at);
             assert_eq!(
-                fork_id_refusal_height_v1(&armed, maturity, lm.fired.as_bytes().as_slice(), lm.next),
+                fork_id_refusal_height_v1(&armed, met_at, lm.fired.as_bytes().as_slice(), lm.next),
                 Some(h),
-                "F1 at {h}: a launched peer met past 1,000 is judged again at {h}, and refused there"
+                "F1 at {h}: a launched peer met at {met_at} is judged again at {h}, and refused there"
             );
         }
         assert_eq!(
@@ -235,7 +241,7 @@ fn an_armed_build_peers_with_the_launched_build_until_the_height() {
     }
     // A build armed at another height is a different schedule, refused from the lower of the two.
     let elsewhere = armed_at(ForkActivation::new(H + 100));
-    let peer = fork_id_v1(&elsewhere, maturity);
+    let peer = fork_id_v1(&elsewhere, 18_400);
     assert!(!evaluate_fork_id_v1(&armed, H - 1, peer.fired.as_bytes().as_slice(), peer.next).refuses());
     assert_eq!(
         evaluate_fork_id_v1(&armed, H, peer.fired.as_bytes().as_slice(), peer.next),
