@@ -374,4 +374,111 @@ mod tests {
             .is_err()
         );
     }
+
+    /// Hash/serialization equivalence only, using synthetic record roots. No
+    /// old envelope/signature, actual inference or native permission is made.
+    #[test]
+    fn panel_computational_roots_reproduce_fixed_ordinary_pav2_pricing_vectors() {
+        use crate::palw_attempt_v2::*;
+        use misaka_palw_positive_contract::{identity::ResultId, record::RecordHeader};
+        let h = |b| Hash64::from_bytes([b; 64]);
+        let hex = |bytes: &[u8]| bytes.iter().map(|x| format!("{x:02x}")).collect::<String>();
+        let key: Vec<u8> = (0..2592).map(|i| (i % 256) as u8).collect();
+        let bond = crate::tx::TransactionOutpoint::new(h(0x44), 7);
+        let nonce = (3 << 22) + 17;
+        let anchor = execution_anchor_v3(h(0x11), h(0x22), h(0x33), &bond, nonce);
+        assert_eq!(
+            hex(anchor.as_byte_slice()),
+            "d43875a6a707195f8f142ba48869230eb0b8f44168059f32a31c634590e23b45a0f8a4db63d97416756e99fc4c690c40072538937872573d28c861e5c76c6bff"
+        );
+        let mut panel = RecordHeader {
+            version: CONTRACT_VERSION,
+            revision: CONTRACT_REVISION,
+            result: ResultId(Digest([1; 64])),
+            artifact: Digest([0x55; 64]),
+            full_logits_trace_root: Digest([0x66; 64]),
+            step_leaf_count: 17,
+            step_merkle_root: Digest([0x99; 64]),
+            committed_execution_root: Digest([0x88; 64]),
+        };
+        for (witness_chunks, expected_root, expected_ticket, expected_tag) in [
+            (
+                0,
+                "ec2d0e9aec6a1079f452ac6823c9fafc0eebf741b597703caf0b0b1edeceaa8fbad3b8e8d07961550591da0cba86e108f5e0c8427bdfb190b3165502dddf2c38",
+                147039231898356257704988905654317484686u128,
+                "1b1afcaa57cc560a21390ba4d3bedd5eadc6a8c763408c37cd73563f49b5f399bc3cf16265bfe26009da458567304f159ef07654efaacd2f0a344463860774665712739fd38cf89c862ca2b2009f51252aaef1232d293450eac360fd4292f7fd4c67096a8eed7b10d3744ddf6b08c02705a7a7f048a663ab34016838f42047947e84280a0b11748f2b448c570fff77e8f27b7c414b527d5d9e5ea1e4b22b3ade613b9e9c9799579154911f8061e7c985b91be7dac81dd55effa22c90c2376de50ee34073ee1485de",
+            ),
+            (
+                2,
+                "9bc6d98b43bcc61d73c165135dae0d7cb6ca30b76f684afae5fb377ba8954fbcda5ce8450deee3043e3df3aa3d7c561ea71af2e7b0ca580889bcc304986bb084",
+                40716739261137875090781374613249411800u128,
+                "bad490accdeafaa5c5f14a335a3febf7dc371c17446ef252e2691049f08533169515418b88e443139e62e9fa68dc708ebdad74cd9d4d435ca6588dd0405c48d61363ab1fc6cd0c2fd6f76067426d3e6f51b8285418b70c84f48d6a0fe57bc6d89b3ac1f948e84d52ff47de2c2a5123ba4bfbc5bfe0b3c29a5ab8515437a7d5fedf56d6e95ff868645667e9ce7bf33adb5ada6eb84210e7d647e6b55d694ed6093f772efbe9200f1da01e95c56dc92771212cb5db440f7faa0e3d35a212b8768fd44a4a1595bf211b",
+            ),
+        ] {
+            let facts = PalwAttemptChainFactsV1 {
+                class_id: h(0x33),
+                artifact_root: h(0x55),
+                pwu: 1000,
+                min_trace_retention_daa: 600,
+                witness_chunks,
+                operator_id: crate::palw_state_v2::palw_operator_id_v2(&key),
+            };
+            let project = |record: &RecordHeader| {
+                palw_attempt_from_execution_v1(
+                    h(0x11),
+                    h(0x22),
+                    1_700_000_000_000,
+                    nonce,
+                    bond,
+                    key.clone(),
+                    &facts,
+                    &PalwAttemptExecutionV1 {
+                        trace_root: Hash64::from_bytes(record.full_logits_trace_root.0),
+                        output_root: h(0x77),
+                        execution_root: Hash64::from_bytes(record.committed_execution_root.0),
+                        trace_manifest_root: attempt_trace_manifest_root_v1(Hash64::from_bytes(record.full_logits_trace_root.0), 1),
+                        trace_chunk_count: 1,
+                    },
+                    900_000,
+                )
+            };
+            let projected = project(&panel);
+            let count = 1 + witness_chunks;
+            let old = PalwAttemptUnsignedV2 {
+                version: 6,
+                network_domain: h(0x11),
+                challenge: challenge_v2(h(0x11), h(0x22), 1_700_000_000_000, nonce, h(0x33), &bond),
+                class_id: h(0x33),
+                executor_bond: bond,
+                executor_pubkey: key.clone(),
+                operator_id: facts.operator_id,
+                artifact_root: h(0x55),
+                trace_root: h(0x66),
+                output_root: h(0x77),
+                pwu: 1000,
+                trace_manifest_root: if witness_chunks > 0 {
+                    crate::palw_mesh_v1::palw_attempt_trace_manifest_root_v2(h(0x66), count)
+                } else {
+                    attempt_trace_manifest_root_v1(h(0x66), 1)
+                },
+                trace_chunk_count: count,
+                trace_retention_daa: 900_600,
+                execution_root: h(0x88),
+            };
+            assert_eq!(borsh::to_vec(&projected).unwrap(), borsh::to_vec(&old).unwrap());
+            assert_eq!(borsh::to_vec(&old).unwrap().len(), 3262);
+            let priced = execution_commitment_v3(&projected, anchor);
+            assert_eq!(hex(priced.as_byte_slice()), expected_root);
+            assert_eq!(class_ticket_v3(&projected, anchor), expected_ticket);
+            assert_eq!(hex(&l1_tag_v2(priced)), expected_tag);
+            // Record transport's ResultId (including its fees) is not a price
+            // input. Neither are a Panel key, signature or Witness attempt.
+            panel.result.0.0[0] ^= 1;
+            assert_eq!(execution_commitment_v3(&project(&panel), anchor), priced);
+            if witness_chunks > 0 {
+                let wrong = PalwAttemptUnsignedV2 { trace_manifest_root: attempt_trace_manifest_root_v1(h(0x66), count), ..old };
+                assert_ne!(execution_commitment_v3(&wrong, anchor), priced, "v1 manifest shortcut changes a witness-enabled draw");
+            }
+        }
+    }
 }

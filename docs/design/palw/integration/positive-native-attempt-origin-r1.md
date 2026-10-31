@@ -205,3 +205,125 @@ borrowed layout framing, truncation/extra bytes, hostile lengths and unsigned
 bytes independent of signature variation. They do not establish native
 header acceptance, live funding, selected-verifier certification or credit.
 No full core build or public activation is performed by this annex task.
+
+## Alternative under review: Panel-owned roots, unchanged ordinary PAV2 price
+
+This alternative resolves the missing-old-root **price calculation** without
+requiring the Miner to construct a trace. It is not yet a successful header
+route. The primitive r1 Result remains unchanged and root-free. A Panel runs
+the same registered program/job, constructs the existing TIR record, and signs
+its Witness. The Miner receives the small root metadata and authenticated
+reference; receiving it does not transfer ownership of record construction or
+Court evidence to the Miner. Its outer Notice signature authenticates public
+references and position, not a statement that it built the Panel's record.
+
+The exact old `PalwAttemptUnsignedV2` has the following fields. It contains no
+Panel author, signature, provenance, WitnessId, ResultId or service contract.
+
+| Old projection field | New alternative source |
+| --- | --- |
+| version | Existing attempt-lane version resolved at the origin; no arbitrary v6 substitution for historical lanes |
+| network_domain | Native network/genesis derivation |
+| challenge | Existing `challenge_v2` over actual header position/class/bond; zeroed by the old price function |
+| class_id | Native registered class |
+| executor_bond | Native Miner bond |
+| executor_pubkey | Exact registered Miner key, with the existing Borsh Vec length |
+| operator_id | Native keyed/length-prefixed `palw_operator_id_v2(key)` |
+| artifact_root | Actual registered artifact root |
+| trace_root | Panel record `full_logits_trace_root` |
+| output_root | Existing `palw_attempt_output_root_v1(native_job, unchanged_generated_ids)` |
+| pwu | Existing actual origin class-target/work derivation |
+| trace_manifest_root | Existing constructor's exact manifest rule, not a freely selected root |
+| trace_chunk_count | Existing constructor's native witness-profile rule |
+| trace_retention_daa | Exact old numeric projection `origin.daa.saturating_add(native_min_retention)` |
+| execution_root | Panel record `committed_execution_root` |
+
+Use `palw_attempt_from_execution_v1` as the price adapter, without constructing
+or accepting an old signed envelope. `node/backend.rs:773` supplies precisely
+these roots in the ordinary TIR execution path. The Panel encoder in
+`node/positive_panel.rs:202` preserves the same capture roots. A Node must
+reconstruct/check the binding from native class/job and later check every
+mandatory relation. Matching roots and a Panel signature alone are not
+computation correctness or credit.
+
+When `facts.witness_chunks == 0`, the old TIR outcome uses the v1 manifest with
+one chunk. When it is nonzero, the constructor uses the **v2 mesh domain** and
+`1 + facts.witness_chunks`. Replacing that with a v1 manifest is a concrete
+counterexample: same execution roots, different old priced commitment and
+ticket. The numeric retention/chunk fields here are price-compatibility data;
+they do not silently impose the old producer's trace-service obligation on the
+new Miner. New response/Panel duties must use their explicit new version.
+
+With exactly equal native facts, job and computational roots, the whole
+unsigned projection is byte-identical. Therefore the existing
+`execution_commitment_v3`, `class_ticket_v3` and `l1_tag_v2` outputs are equal.
+Neither a full Result ID, fees, consent, Panel key/signature, provenance nor a
+Witness attempt is added to those bytes. False roots still move the draw, as
+they do on the old route; Court checks and the old eligibility/exposure
+conditions remain necessary. No additional fraud conclusion is assigned to
+the Miner merely because a Panel constructed false intermediate data.
+
+This equality covers **ordinary PAV2 pricing only**. Existing PAV3 is different:
+`PalwAttemptMaterialEnvelopeV3::priced_execution` additionally hashes Ready
+session/consent/provider roster, and its class-ticket function uses a different
+domain (`palw_attempt_material_v3.rs:205`, `:222`; the finalizer consumes this
+at `consensus/pow/src/lib.rs:458`). Preserving those PAV3 outputs while excluding
+these fields is not established. This alternative must not silently downgrade
+PAV3's custody/eligibility requirements to ordinary PAV2.
+
+An independent Python serializer and fixed vectors are in
+[the verifier](../../../../scripts/verify/positive-notice-projection-v2.py) and
+[the vector artifact](../../../evidence/positive-court-a0-2026-10-31/integration/panel-root-pav2-projection-vectors.json).
+It checks the actual Rust field order/domain spellings, exercises both witness
+branches and performs 32 assertions. Synthetic roots make this a
+serialization/hash check, not an LLM execution test. The corresponding Rust
+unit test calls the actual existing constructor/hash/ticket/tag functions and
+checks those fixed values when the private codec module is registered.
+
+### Remaining identity and two-phase conditions
+
+Pricing equality does not by itself solve header identity. If two Notice
+payloads differ only in a post-PoW funding term or Panel/Witness reference, the
+old computational projection gives the same ticket and tag. Hashing both full
+payloads into distinct block identities would introduce that extra identity
+freedom. Removing those references from identity while storing their literal
+values in origin consensus state would instead make one block hash have two
+possible native states. Both are invalid shortcuts.
+
+Two-phase candidates must distinguish the following contracts:
+
+1. **Accepted origin then body:** the header Notice commits the computational
+   projection and independently authenticated public attachments; later body0
+   binds the exact accepted origin. If attachments are interchangeable for
+   block identity, the origin consensus row must contain only their canonical
+   semantic projection. Exact Result/Witness/service choices become authority
+   only through later accepted transaction bytes. This differs from requiring
+   the origin hash itself to fix one complete literal r1 Result, so it needs
+   an explicit contract decision; it cannot be called equivalent silently.
+2. **Pre-PoW non-computational intent:** pin every discretionary funding/role/
+   reference requirement in an actual origin-template transaction or native
+   prior-state intent before deriving the anchor. Changing it then changes
+   pre-PoW hash/job and requires another inference, as ordinary template
+   grinding already does. The pre-intent cannot contain final ResultId,
+   ServiceId, funding scope/consent derived from the final Result, record roots,
+   origin hash or actual later lease ID: those reintroduce a cycle. Final
+   Result/service/consent must be uniquely checked against the pinned intent
+   and deterministic computation. An unhashed local draft or a caller-provided
+   precommit token is insufficient. Adopting and authoritatively resolving
+   this new intent operation is additional implementation work, not existing
+   mining eligibility or new issuance.
+
+A Panel must also build its record before the relevant ticket/PoW decision;
+letting it construct the priced roots only after mining changes own-template
+work semantics. For a pre-mining Panel service, native admission/reservation
+must authenticate a draft template preimage against the real native parent,
+but must not treat an unmined template as an accepted origin or rewardable
+mining claim. At final admission it must compare the actual origin header,
+accepted prefix and all derived facts and consume the real leases atomically.
+
+The alternative is useful: it removes a need to invent a new computation-only
+lottery formula for ordinary PAV2. It does not yet remove the need to specify
+the exact header identity/attachment contract, pre-mining Panel reservation
+contract and PAV3 compatibility boundary. These differences remain for formal
+review; the current payload codec stays non-permitting and no new native
+identifier is allocated here.
