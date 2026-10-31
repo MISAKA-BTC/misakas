@@ -18,7 +18,7 @@ use kaspa_consensus_core::{
         check_tir_cone_refutation_v1, check_tir_logits_consistency_v1,
     },
     palw_tir_step_v1::{PalwTirLeafKindV1, PalwTirLeafV1, PalwTirStepBindingV1, PalwTirStepSpaceV1, verify_tir_binding_v1},
-    palw_v2::PalwJobContextV2,
+    palw_v2::{PALW_TRACE_COMMITMENT_VERSION_V2, PALW_V2_MAX_NETWORK_ID_BYTES, PalwJobContextV2},
 };
 use misaka_palw_tir::{DType, Dim, demand::DemandLimits};
 
@@ -55,6 +55,9 @@ pub enum CheckError {
     Wire,
     Order,
     PanelEvidence,
+    /// The checker could not adjudicate (including an evaluation allowance
+    /// that is too small). This is not evidence of a false Panel value.
+    Unverified,
     Incomplete,
     Closed,
 }
@@ -70,6 +73,7 @@ pub struct CoveragePlan {
     space: PalwTirStepSpaceV1,
     job: PalwJobContextV2,
     artifact: Hash64,
+    program_bytes: usize,
     limits: CheckLimits,
     form: PalwPromptIdsFormV1,
     leaves: u64,
@@ -85,6 +89,18 @@ impl CoveragePlan {
         form: PalwPromptIdsFormV1,
         limits: CheckLimits,
     ) -> Result<Self, CheckError> {
+        // This initial profile replays the entire execution from its ordinary
+        // initial state. Inherited-prefix contexts need their own authenticated
+        // state bridge and must not silently enter this profile.
+        if job.version != PALW_TRACE_COMMITMENT_VERSION_V2 {
+            return Err(CheckError::UnsupportedProfile);
+        }
+        if job.network_id.is_empty()
+            || job.network_id.len() > PALW_V2_MAX_NETWORK_ID_BYTES
+            || job.declared_prefill_tokens.checked_add(job.exact_decode_tokens).is_none_or(|n| n > job.max_context_tokens)
+        {
+            return Err(CheckError::Binding);
+        }
         if registered.class_id(&artifact) != job.shape_profile_id || registered.tokenizer_id != job.tokenizer_id {
             return Err(CheckError::Binding);
         }
@@ -131,7 +147,7 @@ impl CoveragePlan {
             evaluation_terms: reserve(limits.max_terms_per_leaf, limits.max_total_terms)?,
             decoded_part_bytes: limits.max_part_heap,
         };
-        Ok(Self { space, job: job.clone(), artifact, limits, form, leaves, vocab, cost })
+        Ok(Self { space, job: job.clone(), artifact, program_bytes: registered.program.len(), limits, form, leaves, vocab, cost })
     }
     pub fn leaf_count(&self) -> u64 {
         self.leaves
@@ -141,6 +157,31 @@ impl CoveragePlan {
     }
     pub fn cost(&self) -> CostEnvelope {
         self.cost
+    }
+    /// Validate the admitted Panel binding by reference before cloning a
+    /// candidate's vectors or hashing its generated output. Shape equality is
+    /// checked first so foreign oversized program/layout/token vectors cannot
+    /// trigger serialization or program decoding as a side effect of rejection.
+    pub fn validate_witness(&self, binding: &PalwTirStepBindingV1, generated: &[u32]) -> Result<(), CheckError> {
+        if generated.len() != self.job.exact_decode_tokens as usize {
+            return Err(CheckError::PanelEvidence);
+        }
+        if binding.job_context != self.job
+            || binding.artifact_root != self.artifact
+            || binding.class.program.len() != self.program_bytes
+            || binding.class.layout != self.space.layout
+            || binding.step_leaf_count != self.leaves
+        {
+            return Err(CheckError::Binding);
+        }
+        if binding.class.class_id(&self.artifact) != self.job.shape_profile_id {
+            return Err(CheckError::Binding);
+        }
+        verify_tir_binding_v1(binding, self.limits.max_leaves).map_err(|_| CheckError::Binding)?;
+        if generated.iter().any(|x| *x as u64 >= self.vocab) {
+            return Err(CheckError::PanelEvidence);
+        }
+        Ok(())
     }
     fn rules(&self) -> PalwTirCourtRulesV1 {
         PalwTirCourtRulesV1 {
@@ -159,6 +200,7 @@ pub enum CheckOutcome {
     Matched,
     OutputMismatch,
     WitnessRejected,
+    EndedUnverified,
 }
 
 /// Read-only diagnostics, never a restart token or an authority to skip work.
@@ -198,17 +240,7 @@ impl ExactChecker {
         if !sampling.is_greedy() {
             return Err(CheckError::UnsupportedProfile);
         }
-        if binding.job_context != plan.job
-            || binding.artifact_root != plan.artifact
-            || binding.class.class_id(&plan.artifact) != plan.job.shape_profile_id
-            || binding.step_leaf_count != plan.leaves
-        {
-            return Err(CheckError::Binding);
-        }
-        verify_tir_binding_v1(&binding, plan.limits.max_leaves).map_err(|_| CheckError::Binding)?;
-        if generated.len() != plan.job.exact_decode_tokens as usize || generated.iter().any(|x| *x as u64 >= plan.vocab) {
-            return Err(CheckError::PanelEvidence);
-        }
+        plan.validate_witness(&binding, &generated)?;
         Ok(Self {
             plan,
             binding,
@@ -231,14 +263,15 @@ impl ExactChecker {
     }
 
     /// Scan lengths before allocating; failed attempts spend their reservation.
-    /// Any failed candidate is terminal, so replay cannot reset its work budget.
+    /// Any stopped candidate is terminal, so replay cannot reset its work budget.
     pub fn submit_encoded(&mut self, cone: &[u8], trace: Option<&[u8]>) -> Result<(), CheckError> {
         if self.progress.outcome != CheckOutcome::Checking {
             return Err(CheckError::Closed);
         }
         let result = self.submit_inner(cone, trace);
-        if result.is_err() {
-            self.progress.outcome = CheckOutcome::WitnessRejected;
+        if let Err(error) = &result {
+            self.progress.outcome =
+                if *error == CheckError::Unverified { CheckOutcome::EndedUnverified } else { CheckOutcome::WitnessRejected };
         }
         result
     }
@@ -386,6 +419,7 @@ impl ExactChecker {
 fn exact<T>(result: Result<T, PalwStepRefuteError>) -> Result<(), CheckError> {
     match result {
         Err(PalwStepRefuteError::NoFaultFound) => Ok(()),
+        Err(PalwStepRefuteError::Unadjudicable | PalwStepRefuteError::WeightUnavailable) => Err(CheckError::Unverified),
         _ => Err(CheckError::PanelEvidence),
     }
 }
