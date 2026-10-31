@@ -13408,7 +13408,7 @@ async fn palw_v2_no_read_side_impl_takes_an_uncached_tip_materialization() {
         // ownership): the template's exact-parent state, the EVM as-of post state, the checked pruning-point capture.
         "evm_template_parent_owned_v2",
         "palw_evm_post_state_owned_v2",
-        "capture_pruning_point_palw_state_checked_v1",
+        "capture_pruning_point_palw_state_while_v1",
     ];
     // Every file of the processor, not only the guard list's: the 10-13 split put callers in files the list does not name
     // (`processor/palw_evm_asof_v2.rs`, `processor/evm_market_owned_v2.rs`, `processor/palw_pruning_capture_v1.rs`, ...).

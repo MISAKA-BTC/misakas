@@ -1,0 +1,6 @@
+
+running 1 test
+test consensus::startup_readiness_tests::startup_readiness_holds_until_workers_start_and_preserves_import_hold ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1319 filtered out; finished in 0.01s
+

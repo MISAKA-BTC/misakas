@@ -1,0 +1,17 @@
+   Compiling kaspa-consensus v1.1.0 (/Users/wata/.codex/worktrees/g14-producer-panel-one/MISAKA-testnet/consensus)
+    Finished `test` profile [unoptimized] target(s) in 6m 04s
+     Running unittests src/lib.rs (/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/g14-18400-deploy/target/ci-gates/debug/deps/kaspa_consensus-6f2fca31543d3d7b)
+
+running 9 tests
+test pipeline::virtual_processor::tests::pruning_snapshot_readiness_v1::detached_pruning_capture_allows_real_store_writer_and_serves_exact_historical_root ... ok
+test pipeline::virtual_processor::tests::pruning_snapshot_readiness_v1::pruning_capture_cancellation_between_deltas_never_publishes_or_deletes ... ok
+test pipeline::virtual_processor::tests::pruning_snapshot_readiness_v1::pruning_capture_same_point_new_import_epoch_refuses_stale_publication ... ok
+test pipeline::virtual_processor::tests::pruning_snapshot_readiness_v1::pruning_capture_uses_shorter_verified_checkpoint_instead_of_far_live_tip ... ok
+test pipeline::virtual_processor::tests::pruning_snapshot_readiness_v1::pruning_snapshot_readiness_fault_preserves_body_delta_and_same_point_repairs ... ok
+test pipeline::virtual_processor::tests::pruning_snapshot_readiness_v1::pruning_snapshot_readiness_missing_active_tip_is_context_not_inactive_success ... ok
+test pipeline::virtual_processor::tests::pruning_snapshot_readiness_v1::pruning_snapshot_readiness_missing_walk_history_never_enters_delete ... ok
+test pipeline::virtual_processor::tests::pruning_snapshot_readiness_v1::pruning_snapshot_readiness_reuses_cold_exact_snapshot_after_partial_prune ... ok
+test pipeline::virtual_processor::tests::pruning_snapshot_readiness_v1::pruning_snapshot_readiness_valid_genesis_and_inactive_lane_keep_contract ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 1311 filtered out; finished in 1.93s
+

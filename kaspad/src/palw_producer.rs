@@ -2313,6 +2313,14 @@ impl PalwProducerService {
             // join, and the process, with it (8+ minutes at 0 % CPU on a graph-v7@2048 producer whose
             // 97 s draw finished after SIGINT). So the submit and the announcement both yield to it.
             require_fresh_routing_v2()?;
+            if !facts.is_base_class {
+                info!(
+                    "[{PALW_PRODUCER}] submitting model attempt block {hash}, claim {message}, class {} at template DAA {} after {} s; local validation and public acceptance are still pending",
+                    facts.class_id,
+                    block.header.daa_score,
+                    template_at.elapsed().as_secs()
+                );
+            }
             palw_until_exit_v1(&self.shutdown.listener, self.flow_context.submit_rpc_block(session, block))
                 .await
                 .ok_or_else(|| format!("{PALW_PRODUCER_EXITING}: block {hash} was not submitted"))?

@@ -164,6 +164,7 @@ pub struct Consensus {
 
     // Signals
     is_consensus_exiting: Arc<AtomicBool>,
+    processors_started: AtomicBool,
 }
 
 impl Deref for Consensus {
@@ -411,6 +412,7 @@ impl Consensus {
             config,
             creation_timestamp,
             is_consensus_exiting,
+            processors_started: AtomicBool::new(false),
         };
 
         // Run database upgrades if any
@@ -785,6 +787,8 @@ impl Consensus {
     }
 
     pub fn run_processors(&self) -> Vec<JoinHandle<()>> {
+        let startup_at = std::time::Instant::now();
+        info!("Consensus startup: recovering interrupted pruning before starting block processors; local participation is held");
         // Spawn the asynchronous processors.
         let header_processor = self.header_processor.clone();
         let body_processor = self.body_processor.clone();
@@ -804,12 +808,15 @@ impl Consensus {
             );
         }
 
-        vec![
+        let handles = vec![
             thread::Builder::new().name("header-processor".to_string()).spawn(move || header_processor.worker()).unwrap(),
             thread::Builder::new().name("body-processor".to_string()).spawn(move || body_processor.worker()).unwrap(),
             thread::Builder::new().name("virtual-processor".to_string()).spawn(move || virtual_processor.worker()).unwrap(),
             thread::Builder::new().name("pruning-processor".to_string()).spawn(move || pruning_processor.worker()).unwrap(),
-        ]
+        ];
+        self.processors_started.store(true, Ordering::Release);
+        info!("Consensus startup: block processors started after {} s", startup_at.elapsed().as_secs());
+        handles
     }
 
     /// Acquires a consensus session, blocking data-pruning from occurring until released
@@ -852,6 +859,7 @@ impl Consensus {
     }
 
     pub fn signal_exit(&self) {
+        self.processors_started.store(false, Ordering::Release);
         self.is_consensus_exiting.store(true, Ordering::Relaxed);
         self.block_sender.send(BlockProcessingMessage::Exit).unwrap();
     }
@@ -5928,6 +5936,12 @@ impl ConsensusApi for Consensus {
     }
 
     fn is_consensus_in_transitional_ibd_state(&self) -> bool {
+        // A recent cached tip does not make an unstarted pipeline ready. Cold
+        // pruning recovery can take minutes before any block worker exists.
+        // Existing producer/panel preflights and RPC sync reporting use this door.
+        if !self.processors_started.load(Ordering::Acquire) || self.is_consensus_exiting.load(Ordering::Acquire) {
+            return true;
+        }
         let pruning_meta_read = self.pruning_meta_stores.read();
         pruning_meta_read.is_in_transitional_ibd_state()
     }
@@ -6085,3 +6099,6 @@ mod evm_logs_fault_tests;
 
 #[cfg(test)]
 mod evm_parent_fault_tests;
+
+#[cfg(test)]
+mod startup_readiness_tests;
