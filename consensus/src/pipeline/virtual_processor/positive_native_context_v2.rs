@@ -262,8 +262,8 @@ mod tests {
         subnets::SUBNETWORK_ID_NATIVE,
         tx::{ScriptPublicKey, ScriptVec, TransactionInput},
     };
-    use std::collections::BTreeMap;
-    struct View(BTreeMap<TransactionOutpoint, UtxoEntry>);
+    use std::collections::HashMap;
+    struct View(HashMap<TransactionOutpoint, UtxoEntry>);
     impl UtxoView for View {
         fn get(&self, key: &TransactionOutpoint) -> Option<UtxoEntry> {
             self.0.get(key).cloned()
@@ -282,7 +282,7 @@ mod tests {
             0,
             vec![],
         );
-        (tx, View(BTreeMap::from([(outpoint, entry.clone())])), entry)
+        (tx, View(HashMap::from([(outpoint, entry.clone())])), entry)
     }
     #[test]
     fn public_validated_dto_cannot_substitute_actual_current_entries_fee_or_outputs() {
