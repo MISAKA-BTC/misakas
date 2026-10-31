@@ -73,6 +73,24 @@ pub struct EvidenceFrame<'a> {
     header: EvidenceHeader,
     payload: &'a [u8],
 }
+/// Authorship of these exact bytes only. This is not native admission, Panel
+/// draw membership, delivery acceptance, an arithmetic verdict, or fee authority.
+/// A4 resolves the already authenticated witness and key from its rooted state.
+pub struct AuthenticatedEvidenceFrame<'a> {
+    frame: EvidenceFrame<'a>,
+    author: PrincipalId,
+}
+impl<'a> AuthenticatedEvidenceFrame<'a> {
+    pub fn frame(&self) -> EvidenceFrame<'a> {
+        self.frame
+    }
+    pub fn author(&self) -> PrincipalId {
+        self.author
+    }
+    pub fn id(&self) -> EvidencePartId {
+        self.frame.id()
+    }
+}
 impl EvidenceHeader {
     pub fn validate(&self) -> Result<(), ContractError> {
         if self.relation_count == 0 || self.first_relation.checked_add(self.relation_count).is_none() {
@@ -82,6 +100,46 @@ impl EvidenceHeader {
     }
 }
 impl<'a> EvidenceFrame<'a> {
+    /// Digest of the canonical whole frame, streamed without copying the opaque
+    /// G14 payload. The witness ID in the header fixes the literal Panel author.
+    pub fn id(&self) -> EvidencePartId {
+        let mut state = blake2b_simd::Params::new().hash_length(64).key(b"misaka/positive/evidence-frame/v2/r1").to_state();
+        state.update(EVIDENCE_MAGIC);
+        state.update(&borsh::to_vec(&self.header).expect("fixed evidence header"));
+        state.update(self.payload);
+        EvidencePartId(Digest(state.finalize().as_bytes().try_into().expect("64")))
+    }
+    pub fn signed_wire_bytes(&self) -> u64 {
+        self.wire_bytes() + SIGNATURE_BYTES as u64
+    }
+    /// An untrusted relay must not be able to reject an honest witness by
+    /// submitting bad openings on its behalf. Authenticate BEFORE NodeChecker.
+    pub fn authenticate(
+        self,
+        witness: &PanelWitnessCommit,
+        key: &[u8; PUBKEY_BYTES],
+        signature: &[u8; SIGNATURE_BYTES],
+        max_signed_bytes: u64,
+    ) -> Result<AuthenticatedEvidenceFrame<'a>, ContractError> {
+        if self.signed_wire_bytes() > max_signed_bytes {
+            return Err(ContractError::Budget);
+        }
+        witness.validate_shape()?;
+        if self.header.witness != witness.id()
+            || self.header.result != witness.result
+            || self.header.case != witness.case
+            || self.header.plan != witness.plan
+        {
+            return Err(ContractError::Identity);
+        }
+        if principal(key) != witness.author {
+            return Err(ContractError::Identity);
+        }
+        if !verify_signature(key, self.id().0, signature, EVIDENCE_SIGN_CONTEXT) {
+            return Err(ContractError::Signature);
+        }
+        Ok(AuthenticatedEvidenceFrame { frame: self, author: witness.author })
+    }
     pub fn new(header: EvidenceHeader, payload: &'a [u8], max_frame_bytes: u64) -> Result<Self, ContractError> {
         header.validate()?;
         let length = EVIDENCE_HEADER_BYTES.checked_add(payload.len()).ok_or(ContractError::Budget)?;
