@@ -11,13 +11,8 @@ use kaspa_consensus_core::{
 };
 
 fn context() -> PalwJobContextV2 {
-    let facts = PalwTirJobFactsV1 {
-        class_id: Hash64::from_u64_word(7),
-        max_context: 8192,
-        token_bound: 4099,
-        tiled: true,
-        held: false,
-    };
+    let facts =
+        PalwTirJobFactsV1 { class_id: Hash64::from_u64_word(7), max_context: 8192, token_bound: 4099, tiled: true, held: false };
     let mut context = palw_tir_job_context_v1(&facts, (4, 2));
     // This is fixture data, not independently resolved native authority.
     context.trace_scheme_id = wide::scheme_id();
@@ -26,40 +21,22 @@ fn context() -> PalwJobContextV2 {
 fn rows() -> Vec<Vec<i64>> {
     vec![vec![1082i64 << 24; 4099], vec![-(1i64 << 34); 4099]]
 }
-fn event(
-    ctx: &PalwJobContextV2,
-    rows: &[Vec<i64>],
-    ids: &[u32],
-    row: u32,
-    tile: u32,
-) -> wide::WideLogitsEventV2 {
+fn event(ctx: &PalwJobContextV2, rows: &[Vec<i64>], ids: &[u32], row: u32, tile: u32) -> wide::WideLogitsEventV2 {
     let row_index = usize::try_from(row).unwrap();
     let context = ctx.context_hash();
-    let roots: Vec<_> = rows
-        .iter()
-        .enumerate()
-        .map(|(r, lanes)| wide::row_root(&context, u32::try_from(r).unwrap(), lanes).unwrap())
-        .collect();
+    let roots: Vec<_> =
+        rows.iter().enumerate().map(|(r, lanes)| wide::row_root(&context, u32::try_from(r).unwrap(), lanes).unwrap()).collect();
     let row_root = roots[row_index];
-    let row_opening = step_opening_from_leaf_source_capped_v1(
-        u64::try_from(roots.len()).unwrap(),
-        u64::from(row),
-        16,
-        |index| roots[usize::try_from(index).unwrap()],
-    )
+    let row_opening = step_opening_from_leaf_source_capped_v1(u64::try_from(roots.len()).unwrap(), u64::from(row), 16, |index| {
+        roots[usize::try_from(index).unwrap()]
+    })
     .unwrap();
     let chunks: Vec<_> = rows[row_index].chunks(PALW_LOGITS_TILE_LANES).collect();
-    let leaves: Vec<_> = chunks
-        .iter()
-        .enumerate()
-        .map(|(t, lanes)| wide::tile_leaf(&context, row, u32::try_from(t).unwrap(), lanes))
-        .collect();
-    let tile_opening = step_opening_from_leaf_source_capped_v1(
-        u64::try_from(leaves.len()).unwrap(),
-        u64::from(tile),
-        16,
-        |index| leaves[usize::try_from(index).unwrap()],
-    )
+    let leaves: Vec<_> =
+        chunks.iter().enumerate().map(|(t, lanes)| wide::tile_leaf(&context, row, u32::try_from(t).unwrap(), lanes)).collect();
+    let tile_opening = step_opening_from_leaf_source_capped_v1(u64::try_from(leaves.len()).unwrap(), u64::from(tile), 16, |index| {
+        leaves[usize::try_from(index).unwrap()]
+    })
     .unwrap();
     wide::WideLogitsEventV2 {
         row,
@@ -71,10 +48,7 @@ fn event(
     }
 }
 fn keyed(domain: &[u8], parts: &[&[u8]]) -> Hash64 {
-    let mut hash = blake2b_simd::Params::new()
-        .hash_length(64)
-        .key(domain)
-        .to_state();
+    let mut hash = blake2b_simd::Params::new().hash_length(64).key(domain).to_state();
     for part in parts {
         hash.update(&u64::try_from(part.len()).unwrap().to_le_bytes());
         hash.update(part);
@@ -85,21 +59,13 @@ fn keyed(domain: &[u8], parts: &[&[u8]]) -> Hash64 {
 #[test]
 fn normative_domains_and_length_prefixed_bytes_stay_exact() {
     let name = b"tiled-logits-i64-q24-v2";
-    assert_eq!(
-        wide::scheme_id(),
-        keyed(b"misaka-palw/tiled-logits/scheme/v2", &[name])
-    );
+    assert_eq!(wide::scheme_id(), keyed(b"misaka-palw/tiled-logits/scheme/v2", &[name]));
     assert_ne!(wide::scheme_id(), tiled_logits_scheme_id_v1());
     let ctx = context();
     let context = ctx.context_hash();
     let lanes = [i64::MIN, 1082i64 << 24, i64::MAX];
     let bytes: Vec<_> = lanes.iter().flat_map(|lane| lane.to_le_bytes()).collect();
-    let parts: &[&[u8]] = &[
-        context.as_byte_slice(),
-        &1u64.to_le_bytes(),
-        &3u64.to_le_bytes(),
-        &bytes,
-    ];
+    let parts: &[&[u8]] = &[context.as_byte_slice(), &1u64.to_le_bytes(), &3u64.to_le_bytes(), &bytes];
     let tile = wide::tile_leaf(&context, 1, 3, &lanes);
     assert_eq!(tile, keyed(b"misaka-palw/tiled-logits/tile/v2", parts));
     assert_ne!(tile, keyed(b"misaka-palw/tiled-logits/tile/v1", parts));
@@ -123,11 +89,7 @@ fn normative_domains_and_length_prefixed_bytes_stay_exact() {
 
 #[test]
 fn every_tested_i32_lane_key_and_seeded_selection_matches_legacy() {
-    let mut all = vec![
-        vec![i32::MIN, 0, i32::MAX],
-        vec![1, 1, -1],
-        vec![-7, -4, -1],
-    ];
+    let mut all = vec![vec![i32::MIN, 0, i32::MAX], vec![1, 1, -1], vec![-7, -4, -1]];
     let mut random = 0x5a1cu32;
     for _ in 0..16 {
         all.push(
@@ -141,49 +103,25 @@ fn every_tested_i32_lane_key_and_seeded_selection_matches_legacy() {
     }
     for seed in [[0; 32], [7; 32], [255; 32]] {
         for temperature_q in [0, 1, 1 << 24, u32::MAX] {
-            let sampling = PalwDecodeSamplingV2 {
-                seed,
-                temperature_q,
-            };
+            let sampling = PalwDecodeSamplingV2 { seed, temperature_q };
             for position in [0, 1, 13, 1023] {
                 for row in &all {
                     let values: Vec<_> = row.iter().map(|value| i64::from(*value)).collect();
                     for (lane, value) in row.iter().enumerate() {
                         assert_eq!(
                             wide::lane_key(i64::from(*value), &sampling, position, lane),
-                            i128::from(decode_lane_key_v2(
-                                *value,
-                                &seed,
-                                position,
-                                lane,
-                                temperature_q
-                            ))
+                            i128::from(decode_lane_key_v2(*value, &seed, position, lane, temperature_q))
                         );
                     }
-                    assert_eq!(
-                        wide::select(&values, &sampling, position),
-                        Some(sampling.select(row, position))
-                    );
+                    assert_eq!(wide::select(&values, &sampling, position), Some(sampling.select(row, position)));
                 }
             }
         }
     }
-    let sampling = PalwDecodeSamplingV2 {
-        seed: [1; 32],
-        temperature_q: u32::MAX,
-    };
-    assert_eq!(
-        wide::select(&[i64::MIN, i64::MAX, 0], &sampling, 1),
-        Some(1)
-    );
-    assert_eq!(
-        wide::lane_key(1082i64 << 24, &PalwDecodeSamplingV2::GREEDY, 0, 0),
-        1082i128 << 48
-    );
-    assert_eq!(
-        wide::select(&[5, 5, 4], &PalwDecodeSamplingV2::GREEDY, 0),
-        Some(0)
-    );
+    let sampling = PalwDecodeSamplingV2 { seed: [1; 32], temperature_q: u32::MAX };
+    assert_eq!(wide::select(&[i64::MIN, i64::MAX, 0], &sampling, 1), Some(1));
+    assert_eq!(wide::lane_key(1082i64 << 24, &PalwDecodeSamplingV2::GREEDY, 0, 0), 1082i128 << 48);
+    assert_eq!(wide::select(&[5, 5, 4], &PalwDecodeSamplingV2::GREEDY, 0), Some(0));
     assert_eq!(wide::select(&[], &sampling, 0), None);
 }
 
@@ -237,20 +175,13 @@ fn authenticate_exact_rows_tiles_and_caps_without_narrowing() {
                     8 => bad.tile_opening.leaf_index ^= 1,
                     _ => bad.generated.pop().map(|_| ()).unwrap(),
                 }
-                assert!(
-                    bad.authenticate(&ctx, &trace, 4099, 2).is_err(),
-                    "row {row} tile {tile} attack {attack}"
-                );
+                assert!(bad.authenticate(&ctx, &trace, 4099, 2).is_err(), "row {row} tile {tile} attack {attack}");
             }
         }
     }
     let mut bad = ctx.clone();
     bad.exact_decode_tokens = 3;
-    assert!(
-        event(&ctx, &rows, &ids, 0, 0)
-            .authenticate(&bad, &trace, 4099, 2)
-            .is_err()
-    );
+    assert!(event(&ctx, &rows, &ids, 0, 0).authenticate(&bad, &trace, 4099, 2).is_err());
 }
 
 #[test]
@@ -264,17 +195,9 @@ fn coherently_committed_bad_token_is_data_not_computation_authority() {
     // This explicit ordinary semantic predicate fails. No full Court/native
     // integration or computation-pass capability is claimed by this test.
     assert!(usize::try_from(disclosure.generated[0]).unwrap() >= 4099);
-    assert_ne!(
-        wide::select(&rows[0], &PalwDecodeSamplingV2::GREEDY, 0),
-        Some(4099)
-    );
-    let roots: Vec<_> = rows
-        .iter()
-        .enumerate()
-        .map(|(i, row)| {
-            wide::row_root(&ctx.context_hash(), u32::try_from(i).unwrap(), row).unwrap()
-        })
-        .collect();
+    assert_ne!(wide::select(&rows[0], &PalwDecodeSamplingV2::GREEDY, 0), Some(4099));
+    let roots: Vec<_> =
+        rows.iter().enumerate().map(|(i, row)| wide::row_root(&ctx.context_hash(), u32::try_from(i).unwrap(), row).unwrap()).collect();
     let root = step_merkle_root_v1(&roots).unwrap();
     assert_eq!(wide::outer_root(&ctx, 2, &root, &ids), trace);
     assert_ne!(wide::outer_root(&ctx, 3, &root, &ids), trace);

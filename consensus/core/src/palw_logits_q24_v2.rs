@@ -32,26 +32,13 @@ pub fn tile_leaf(ctx: &Hash64, row: u32, tile: u32, lanes: &[i64]) -> Hash64 {
     // Hash the identical length-prefixed lane bytes without another full tile
     // allocation. An i64 slice's actual byte length is representable in u64 on
     // the supported 32/64-bit targets.
-    let mut h = blake2b_simd::Params::new()
-        .hash_length(64)
-        .key(b"misaka-palw/tiled-logits/tile/v2")
-        .to_state();
-    for part in [
-        ctx.as_byte_slice(),
-        &u64::from(row).to_le_bytes(),
-        &u64::from(tile).to_le_bytes(),
-    ] {
-        h.update(
-            &u64::try_from(part.len())
-                .expect("fixed part fits u64")
-                .to_le_bytes(),
-        );
+    let mut h = blake2b_simd::Params::new().hash_length(64).key(b"misaka-palw/tiled-logits/tile/v2").to_state();
+    let parts: [&[u8]; 3] = [ctx.as_byte_slice(), &u64::from(row).to_le_bytes(), &u64::from(tile).to_le_bytes()];
+    for part in parts {
+        h.update(&u64::try_from(part.len()).expect("fixed part fits u64").to_le_bytes());
         h.update(part);
     }
-    let bytes = u64::try_from(lanes.len())
-        .expect("slice length fits u64")
-        .checked_mul(8)
-        .expect("i64 slice bytes fit u64");
+    let bytes = u64::try_from(lanes.len()).expect("slice length fits u64").checked_mul(8).expect("i64 slice bytes fit u64");
     h.update(&bytes.to_le_bytes());
     for lane in lanes {
         h.update(&lane.to_le_bytes());
@@ -80,40 +67,27 @@ pub fn rows_root(ctx: &PalwJobContextV2, rows: &[Vec<i64>]) -> Option<Hash64> {
         return None;
     }
     let context = ctx.context_hash();
-    let roots: Vec<_> = rows
-        .iter()
-        .enumerate()
-        .map(|(r, l)| row_root(&context, u32::try_from(r).ok()?, l))
-        .collect::<Option<_>>()?;
+    let roots: Vec<_> = rows.iter().enumerate().map(|(r, l)| row_root(&context, u32::try_from(r).ok()?, l)).collect::<Option<_>>()?;
     step_merkle_root_v1(&roots).ok()
 }
 /// Raw outer commitment, including the literal count and IDs. Structural
 /// authentication checks count/shape; vocabulary membership and selection are
 /// separate computation checks, including for coherently committed invalid IDs.
 pub fn outer_root(ctx: &PalwJobContextV2, count: u64, root: &Hash64, ids: &[u32]) -> Hash64 {
-    let mut h = blake2b_simd::Params::new()
-        .hash_length(64)
-        .key(b"misaka-palw/tiled-logits/root/v2")
-        .to_state();
+    let mut h = blake2b_simd::Params::new().hash_length(64).key(b"misaka-palw/tiled-logits/root/v2").to_state();
     let context = ctx.context_hash();
-    for part in [
+    let parts: [&[u8]; 5] = [
         context.as_byte_slice(),
         &u64::from(ctx.declared_prefill_tokens).to_le_bytes(),
         &u64::from(ctx.exact_decode_tokens).to_le_bytes(),
         &count.to_le_bytes(),
         root.as_byte_slice(),
-    ] {
-        h.update(
-            &u64::try_from(part.len())
-                .expect("fixed part fits u64")
-                .to_le_bytes(),
-        );
+    ];
+    for part in parts {
+        h.update(&u64::try_from(part.len()).expect("fixed part fits u64").to_le_bytes());
         h.update(part);
     }
-    let bytes = u64::try_from(ids.len())
-        .expect("slice length fits u64")
-        .checked_mul(4)
-        .expect("u32 slice bytes fit u64");
+    let bytes = u64::try_from(ids.len()).expect("slice length fits u64").checked_mul(4).expect("u32 slice bytes fit u64");
     h.update(&bytes.to_le_bytes());
     for id in ids {
         h.update(&id.to_le_bytes());
@@ -124,39 +98,20 @@ pub fn trace_root(ctx: &PalwJobContextV2, rows: &[Vec<i64>], ids: &[u32]) -> Opt
     if rows.len() != ids.len() || rows.len() != usize::try_from(ctx.exact_decode_tokens).ok()? {
         return None;
     }
-    Some(outer_root(
-        ctx,
-        u64::try_from(rows.len()).ok()?,
-        &rows_root(ctx, rows)?,
-        ids,
-    ))
+    Some(outer_root(ctx, u64::try_from(rows.len()).ok()?, &rows_root(ctx, rows)?, ids))
 }
 /// Q48 keys need i128: i64 Q24 times 2^24 and the existing u32-temperature /
 /// i32-Gumbel product fit comfortably. Caller authenticates sampling against the
 /// actual job, never the peer's disclosure. Units and lowest-index tie rule are
 /// identical to the legacy selector for every i32 input.
-pub fn lane_key(
-    value: i64,
-    sampling: &crate::palw_decode_select_v2::PalwDecodeSamplingV2,
-    position: u32,
-    lane: usize,
-) -> i128 {
+pub fn lane_key(value: i64, sampling: &crate::palw_decode_select_v2::PalwDecodeSamplingV2, position: u32, lane: usize) -> i128 {
     let base = i128::from(value) * (1i128 << 24);
     if sampling.is_greedy() {
         return base;
     }
-    base + i128::from(sampling.temperature_q)
-        * i128::from(crate::palw_decode_select_v2::gumbel_q24_v1(
-            &sampling.seed,
-            position,
-            lane,
-        ))
+    base + i128::from(sampling.temperature_q) * i128::from(crate::palw_decode_select_v2::gumbel_q24_v1(&sampling.seed, position, lane))
 }
-pub fn select(
-    values: &[i64],
-    sampling: &crate::palw_decode_select_v2::PalwDecodeSamplingV2,
-    position: u32,
-) -> Option<usize> {
+pub fn select(values: &[i64], sampling: &crate::palw_decode_select_v2::PalwDecodeSamplingV2, position: u32) -> Option<usize> {
     values
         .iter()
         .enumerate()
@@ -180,17 +135,10 @@ impl WideLogitsEventV2 {
     /// `vocab` and `cap` must come from independently resolved class/rules. A
     /// generated ID outside `vocab` remains authentic bad-computation evidence;
     /// this method does not check its selector key or authorize any credit.
-    pub fn authenticate(
-        &self,
-        ctx: &PalwJobContextV2,
-        trace: &Hash64,
-        vocab: usize,
-        cap: u64,
-    ) -> Result<(), &'static str> {
+    pub fn authenticate(&self, ctx: &PalwJobContextV2, trace: &Hash64, vocab: usize, cap: u64) -> Result<(), &'static str> {
         let decode = usize::try_from(ctx.exact_decode_tokens).map_err(|_| "decode index width")?;
         let vocabulary = vocabulary(vocab).ok_or("wide vocabulary width")?;
-        let tiles = u64::from(vocabulary)
-            .div_ceil(u64::try_from(PALW_LOGITS_TILE_LANES).expect("tile width fits u64"));
+        let tiles = u64::from(vocabulary).div_ceil(u64::try_from(PALW_LOGITS_TILE_LANES).expect("tile width fits u64"));
         if ctx.trace_scheme_id != scheme_id()
             || decode == 0
             || self.generated.len() != decode
@@ -200,41 +148,24 @@ impl WideLogitsEventV2 {
         {
             return Err("wide trace shape/scheme");
         }
-        let tile_coordinate =
-            u32::try_from(self.tile_opening.leaf_index).map_err(|_| "tile index width")?;
+        let tile_coordinate = u32::try_from(self.tile_opening.leaf_index).map_err(|_| "tile index width")?;
         let tile = usize::try_from(tile_coordinate).map_err(|_| "tile index")?;
-        let start = tile
-            .checked_mul(PALW_LOGITS_TILE_LANES)
-            .ok_or("tile index overflow")?;
+        let start = tile.checked_mul(PALW_LOGITS_TILE_LANES).ok_or("tile index overflow")?;
         if start >= vocab || self.lanes.len() != (vocab - start).min(PALW_LOGITS_TILE_LANES) {
             return Err("wide tile width");
         }
-        if self.row_opening.leaf_index != u64::from(self.row)
-            || self.row_opening.leaf_hash != self.row_root
-        {
+        if self.row_opening.leaf_index != u64::from(self.row) || self.row_opening.leaf_hash != self.row_root {
             return Err("wide row identity");
         }
         let rows =
-            step_opening_root_capped_v1(u64::from(ctx.exact_decode_tokens), &self.row_opening, cap)
-                .map_err(|_| "wide row opening")?;
-        if outer_root(
-            ctx,
-            u64::from(ctx.exact_decode_tokens),
-            &rows,
-            &self.generated,
-        ) != *trace
-        {
+            step_opening_root_capped_v1(u64::from(ctx.exact_decode_tokens), &self.row_opening, cap).map_err(|_| "wide row opening")?;
+        if outer_root(ctx, u64::from(ctx.exact_decode_tokens), &rows, &self.generated) != *trace {
             return Err("wide trace root");
         }
-        if self.tile_opening.leaf_hash
-            != tile_leaf(&ctx.context_hash(), self.row, tile_coordinate, &self.lanes)
-        {
+        if self.tile_opening.leaf_hash != tile_leaf(&ctx.context_hash(), self.row, tile_coordinate, &self.lanes) {
             return Err("wide tile preimage");
         }
-        if step_opening_root_capped_v1(tiles, &self.tile_opening, cap)
-            .map_err(|_| "wide tile opening")?
-            != self.row_root
-        {
+        if step_opening_root_capped_v1(tiles, &self.tile_opening, cap).map_err(|_| "wide tile opening")? != self.row_root {
             return Err("wide tile root");
         }
         Ok(())
