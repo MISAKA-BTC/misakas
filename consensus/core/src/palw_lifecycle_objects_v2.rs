@@ -3221,6 +3221,9 @@ pub const PALW_A2_TAG_ALLOCATIONS_V1: &[(u8, u8, &str, &[&str])] = &[
     // 168–169: the G14 TIR staged route (native seed opening, TIR class layout publication), merged 2026-10-15.
     (168, 169, "G14 TIR staged route", &["palw_staged_tir_route_v1"]),
     (170, 171, "G14 original paid TIR conviction", &["palw_tir_public_conviction_v1"]),
+    // A0 RFC-0044 / ADR-0212: reserved for the versioned light-result Positive
+    // Court carrier. Reservation only: no decoder/kind/fence is armed here.
+    (176, 176, "RFC-0044 Positive Court R2", &["palw_positive_court_v2"]),
     // 178: G14 lane r5-f02-wire (2026-10-22) — RFC-0029 shared court operation carriage. Chosen by the lane (lane rule: one new tag,
     // collisions detected at central merge); dormant behind the public conviction fence (+ the outsider lane in the fold).
     (178, 178, "G14 RFC-0029 shared court operation", &["palw_tir_public_conviction_v1"]),
