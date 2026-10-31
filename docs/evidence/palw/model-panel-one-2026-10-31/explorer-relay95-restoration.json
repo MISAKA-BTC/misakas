@@ -1,0 +1,179 @@
+{
+  "switch": {
+    "time": "2026-10-31T12:55:54.036073+00:00",
+    "backend": "95.111.236.186",
+    "privateJsonEndpoint": "127.0.0.1:38314",
+    "privateGrpcEndpoint": "127.0.0.1:38312",
+    "publicPrimaryRoutes": [
+      "/kaspa",
+      "/kaspa-seed"
+    ],
+    "backup": "/root/misaka-incident-20261031/explorer-relay95-18640-backup",
+    "daa": 18640,
+    "sink": "d7cb4a13d72f171b589a2184db9245cad1d3903b61f32a1fccc7108407d5535f4e3129c57deb9959331c40b92f4753133f77ce72f37ea9053f4621a8112337a6",
+    "params": "edf472294c89dab0e64e625dbdfcd039b91081b05f89eacf8ba2aa25baa3a189",
+    "schedule": "4024a6e74d7aeb170d99e67c6d8fbe7884d71a716ccb778cd1ee526d01781b04",
+    "genesis": "a27f8f44fe4d91a5bed940be9dbd6d260ccb95cc00d948b1c08ddb6bd1a5f02542a6cf35c7a4d959ba4863ac1557861671763e5cc22937c697870283a8ca1f23",
+    "nginxConfigurationTestPassed": true,
+    "databaseChangedBySwitch": false,
+    "applicationJsChanged": false,
+    "originalNodeConfigChanged": false
+  },
+  "observations": [
+    {
+      "file": "explorer-public-before.jsonl",
+      "at": "2026-10-31T12:51:46.623Z",
+      "target": "wss://misakascan.com/kaspa",
+      "synced": false,
+      "daa": 18576,
+      "sink": "c1d33ff211f8926315add0e693f32b98a14dc3c30e20b585ca6db8d1b9775c1af13d4db14b38f3ccba7c96f2aabec47fbf4b824b557512235746394d61c4b8a4",
+      "params": "edf472294c89dab0e64e625dbdfcd039b91081b05f89eacf8ba2aa25baa3a189",
+      "schedule": "4024a6e74d7aeb170d99e67c6d8fbe7884d71a716ccb778cd1ee526d01781b04",
+      "genesis": "a27f8f44fe4d91a5bed940be9dbd6d260ccb95cc00d948b1c08ddb6bd1a5f02542a6cf35c7a4d959ba4863ac1557861671763e5cc22937c697870283a8ca1f23"
+    },
+    {
+      "file": "explorer-candidate95.jsonl",
+      "at": "2026-10-31T12:51:48.976Z",
+      "target": "ws://127.0.0.1:39314",
+      "synced": true,
+      "daa": 18639,
+      "sink": "b9e86dc83ebb5f1f95c3a2409beff43e63630fb3b58d2d569325f5b50f063bb864b102ce476dfd35aff489201ce5587477d5f5a70626ba9168f2f838ccff4179",
+      "params": "edf472294c89dab0e64e625dbdfcd039b91081b05f89eacf8ba2aa25baa3a189",
+      "schedule": "4024a6e74d7aeb170d99e67c6d8fbe7884d71a716ccb778cd1ee526d01781b04",
+      "genesis": "a27f8f44fe4d91a5bed940be9dbd6d260ccb95cc00d948b1c08ddb6bd1a5f02542a6cf35c7a4d959ba4863ac1557861671763e5cc22937c697870283a8ca1f23"
+    },
+    {
+      "file": "explorer-public-after1.jsonl",
+      "at": "2026-10-31T12:56:02.237Z",
+      "target": "wss://misakascan.com/kaspa",
+      "synced": true,
+      "daa": 18640,
+      "sink": "d7cb4a13d72f171b589a2184db9245cad1d3903b61f32a1fccc7108407d5535f4e3129c57deb9959331c40b92f4753133f77ce72f37ea9053f4621a8112337a6",
+      "params": "edf472294c89dab0e64e625dbdfcd039b91081b05f89eacf8ba2aa25baa3a189",
+      "schedule": "4024a6e74d7aeb170d99e67c6d8fbe7884d71a716ccb778cd1ee526d01781b04",
+      "genesis": "a27f8f44fe4d91a5bed940be9dbd6d260ccb95cc00d948b1c08ddb6bd1a5f02542a6cf35c7a4d959ba4863ac1557861671763e5cc22937c697870283a8ca1f23"
+    },
+    {
+      "file": "explorer-public-after2.jsonl",
+      "at": "2026-10-31T12:57:12.747Z",
+      "target": "wss://misakascan.com/kaspa",
+      "synced": true,
+      "daa": 18640,
+      "sink": "d7cb4a13d72f171b589a2184db9245cad1d3903b61f32a1fccc7108407d5535f4e3129c57deb9959331c40b92f4753133f77ce72f37ea9053f4621a8112337a6",
+      "params": "edf472294c89dab0e64e625dbdfcd039b91081b05f89eacf8ba2aa25baa3a189",
+      "schedule": "4024a6e74d7aeb170d99e67c6d8fbe7884d71a716ccb778cd1ee526d01781b04",
+      "genesis": "a27f8f44fe4d91a5bed940be9dbd6d260ccb95cc00d948b1c08ddb6bd1a5f02542a6cf35c7a4d959ba4863ac1557861671763e5cc22937c697870283a8ca1f23"
+    },
+    {
+      "file": "explorer-public-seed-after.jsonl",
+      "at": "2026-10-31T12:57:10.635Z",
+      "target": "wss://misakascan.com/kaspa-seed",
+      "synced": true,
+      "daa": 18640,
+      "sink": "d7cb4a13d72f171b589a2184db9245cad1d3903b61f32a1fccc7108407d5535f4e3129c57deb9959331c40b92f4753133f77ce72f37ea9053f4621a8112337a6",
+      "params": "edf472294c89dab0e64e625dbdfcd039b91081b05f89eacf8ba2aa25baa3a189",
+      "schedule": "4024a6e74d7aeb170d99e67c6d8fbe7884d71a716ccb778cd1ee526d01781b04",
+      "genesis": "a27f8f44fe4d91a5bed940be9dbd6d260ccb95cc00d948b1c08ddb6bd1a5f02542a6cf35c7a4d959ba4863ac1557861671763e5cc22937c697870283a8ca1f23"
+    }
+  ],
+  "arming": {
+    "nowDaa": 18641,
+    "routes": [
+      {
+        "armed": true,
+        "armedFramed": true,
+        "family": "legacyPanelAttempt",
+        "fences": [
+          "palw_legacy_public_filer_v1",
+          "palw_legacy_held_da_v2",
+          "palw_g14_route_required_v1"
+        ],
+        "newClaims": false
+      },
+      {
+        "allModels": true,
+        "armed": true,
+        "family": "g14ModelPanelOne",
+        "fromDaa": 18640,
+        "modelReviewRequired": false,
+        "scope": "whole-claim",
+        "seatCount": 1
+      }
+    ]
+  },
+  "applicationJs": {
+    "path": "/var/www/misaka-explorer/app.js",
+    "mtimeNs": 1793354868479161534,
+    "atimeNs": 1793451344119882750,
+    "sha256": "3d3b15b582c59e027d5e870a640285080198b48c1bb30da7133e92aa4b8948b5"
+  },
+  "sourceChainProgressAfter18640NotYetObserved": false,
+  "operationalVerification": {
+    "checkedAt": "2026-10-31T13:08:08Z",
+    "tunnelEnabled": true,
+    "tunnelActive": true,
+    "fillerActive": true,
+    "restActive": true,
+    "publicRestSynced": true,
+    "publicRestAddressProjection": "healthy"
+  },
+  "postFenceAdvances": [
+    {
+      "at": "2026-10-31T13:03:17.013Z",
+      "daa": 18640,
+      "headerCount": 18640,
+      "blockCount": 18640,
+      "sink": "d7cb4a13d72f171b589a2184db9245cad1d3903b61f32a1fccc7108407d5535f4e3129c57deb9959331c40b92f4753133f77ce72f37ea9053f4621a8112337a6",
+      "synced": true,
+      "params": "edf472294c89dab0e64e625dbdfcd039b91081b05f89eacf8ba2aa25baa3a189",
+      "schedule": "4024a6e74d7aeb170d99e67c6d8fbe7884d71a716ccb778cd1ee526d01781b04",
+      "genesis": "a27f8f44fe4d91a5bed940be9dbd6d260ccb95cc00d948b1c08ddb6bd1a5f02542a6cf35c7a4d959ba4863ac1557861671763e5cc22937c697870283a8ca1f23"
+    },
+    {
+      "at": "2026-10-31T13:11:15.926Z",
+      "daa": 18641,
+      "headerCount": 18641,
+      "blockCount": 18641,
+      "sink": "a8fe6b0632251dd1fa1c0c3494828d542b026ea3106d0cd21a3a9a36bd2a2e945dc8aa952565de70dea21b15090cc79eac6ac9ab655fc11c171af6d4d59608e9",
+      "synced": true,
+      "params": "edf472294c89dab0e64e625dbdfcd039b91081b05f89eacf8ba2aa25baa3a189",
+      "schedule": "4024a6e74d7aeb170d99e67c6d8fbe7884d71a716ccb778cd1ee526d01781b04",
+      "genesis": "a27f8f44fe4d91a5bed940be9dbd6d260ccb95cc00d948b1c08ddb6bd1a5f02542a6cf35c7a4d959ba4863ac1557861671763e5cc22937c697870283a8ca1f23"
+    },
+    {
+      "at": "2026-10-31T13:13:21.580Z",
+      "daa": 18642,
+      "headerCount": 18642,
+      "blockCount": 18642,
+      "sink": "3012083a4f8d416b1483fbafed1e9cb92db7f0438ff9af9ad9e129a1ee28f6c03541ed7851c37249bbf48b8dc8fc4d08cf68db0f369694550fcf4323b5f0e09f",
+      "synced": true,
+      "params": "edf472294c89dab0e64e625dbdfcd039b91081b05f89eacf8ba2aa25baa3a189",
+      "schedule": "4024a6e74d7aeb170d99e67c6d8fbe7884d71a716ccb778cd1ee526d01781b04",
+      "genesis": "a27f8f44fe4d91a5bed940be9dbd6d260ccb95cc00d948b1c08ddb6bd1a5f02542a6cf35c7a4d959ba4863ac1557861671763e5cc22937c697870283a8ca1f23"
+    }
+  ],
+  "twoPostFenceDaaAdvancesVerified": true,
+  "browserVisualVerification": {
+    "blockCountAndDaa": 18642,
+    "headers": 18642,
+    "nodeConnected": true,
+    "screenshotLocalPath": "/tmp/misaka-chain-20261031/explorer-public-ui-18642.jpg",
+    "observedSinkAbbreviation": "7273a524\u2026fec2be",
+    "observedLaneWindow": "work 599 / heartbeat 1 of last 600 blocks"
+  },
+  "finalPublicRestVerification": {
+    "network": "misaka-testnet-12",
+    "daa": 18642,
+    "blockCount": 18642,
+    "synced": true,
+    "addressProjection": {
+      "status": "healthy",
+      "inputCursor": 180817,
+      "inputHead": 180817,
+      "inputLag": 0,
+      "outputCursor": 356077,
+      "outputHead": 356077,
+      "outputLag": 0
+    }
+  }
+}

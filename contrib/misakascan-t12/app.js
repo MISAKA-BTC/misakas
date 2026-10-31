@@ -3874,6 +3874,24 @@ cargo build --release --bin qwen25-convert --bin palw-class
   onBlockAdded(() => refreshLlm());    // push: sweep immediately on every new block
 }
 
+// New-claim admission policy comes from the node's explicit arming view.
+// A height, a historical readiness row, or a missing read does not establish G14.
+function llmModelOneArmed(read){
+  if (!read || read.__unsupported || read.__error || read.available !== true || read.found !== true) return false;
+  let view;
+  try { view = typeof read.viewJson === "string" ? JSON.parse(read.viewJson) : null; } catch { return false; }
+  if (!view || !Array.isArray(view.routeFamilies)) return false;
+  return view.routeFamilies.some(r => r && r.family === "g14ModelPanelOne" && r.armed === true &&
+    r.allModels === true && r.seatCount === 1 && r.scope === "whole-claim");
+}
+function llmModelOneClassDisplay(armed, c, facts){
+  if (!armed) return null;  // retain the historical renderer when policy is inactive or unread
+  const available = !!facts && facts.available === true;
+  const route = c.tag === "floor" ? "" : '<span class="pill blue" title="One randomly selected verifier checks the whole new claim; court and certification rules remain">G14 · 1 seat · whole claim</span> ';
+  const state = available ? (c.tag === "floor" ? "floor class available" : "class available") : "class unavailable on this node";
+  return { available, status: route + '<span class="dim">' + state + '</span>' };
+}
+
 async function refreshLlm(){
   if (llmBusy) return; llmBusy = true;
   try { await refreshLlmInner(); }
@@ -3883,8 +3901,12 @@ async function refreshLlm(){
 async function refreshLlmInner(){
   // Class facts — the same RPC the operators read (budget, produced, pwu per class).
   refreshLlmJobs();   // fire-and-forget; the next paint picks it up
-  const regRaw = await palwRead("getPalwModelRegistry");
+  const [regRaw, armingRaw] = await Promise.all([
+    palwRead("getPalwModelRegistry"),
+    palwRead("getPalwFenceSchedule", { view:"arming", key:"" }),
+  ]);
   const llmReg = llmRegistryIndex(regRaw);
+  const modelOneArmed = llmModelOneArmed(armingRaw);
   const classes = llmLiveClasses(llmReg);
   const unknownClasses = classes.filter(c => !LLM_CLASSES.some(known => known.id === c.id));
   const factsOf = async c => {
@@ -4000,22 +4022,26 @@ async function refreshLlmInner(){
     const budgetOpen = !f || Number(f.epochBudgetBlocks) > 0;
     const minable = ok && admits && readyOk && quorumOk;
     const readyLbl = (ready == null || need == null) ? "—" : `${num(ready)} / ${num(need)}`;
+    const modelOneDisplay = llmModelOneClassDisplay(modelOneArmed, c, f);
     let status;
-    if (!ok)            status = '<span class="dim">unavailable on chain</span>';
+    if (modelOneDisplay) status = modelOneDisplay.status;
+    else if (!ok)            status = '<span class="dim">unavailable on chain</span>';
     else if (c.tag !== "floor" && !row) status = '<span class="pill blue" title="getPalwModelRegistry did not return this class — admission unread">readiness unread</span>';
     else if (!admits || !readyOk) status = `<span class="pill red" title="${esc((row && row.reason) || "this class does not admit claims until requiredReadySeats ("+need+") seats have proved possession on chain; the panel is 5 drawn / 3-of-5 after that")}">OFF — ${esc(st || "not admitted")} · ready ${readyLbl}</span>`;
     else if (!quorumOk) status = `<span class="pill red" title="the node currently reports fewer than ${PANEL_QUORUM} eligible bonded verifier seats for this class">OFF — eligible seats ${nVer}/${PANEL_QUORUM}</span>`;
     else if (!budgetOpen) status = `<span class="pill blue" title="registered mid-epoch: the block budget opens at the next per-class retarget boundary (every 1000 DAA); registry admission is open">⛏ ready — budget opens next epoch</span>`;
     else                status = `<span class="pill chain" title="registry admits claims; ${num(ready)} / ${num(need)} seats have proved possession; a well-formed claim draws ${PANEL_DRAW} and licenses at ${PANEL_QUORUM}-of-${PANEL_DRAW}">⛏ minable — ready ${readyLbl}</span>`;
-    return `<div class="card${minable?"":" off"}"><div class="k">${esc(c.name)} ${c.tag==="floor"?'<span class="pill blue">floor</span>':'<span class="pill chain">LLM</span>'}</div>
-      <div class="v sm">${esc(c.model)}</div>
+    const cardAvailable = modelOneDisplay ? modelOneDisplay.available : minable;
+    const modelText = modelOneArmed ? String(c.model || "").replace(/\s*\(genesis row;.*\)$/, "") : c.model;
+    return `<div class="card${cardAvailable?"":" off"}"><div class="k">${esc(c.name)} ${c.tag==="floor"?'<span class="pill blue">floor</span>':'<span class="pill chain">LLM</span>'}</div>
+      <div class="v sm">${esc(modelText)}</div>
       <div class="sub">${status}</div>
       <div class="sub">epoch: <b>${prod}</b> blocks · claims ${pwu} pwu/block</div>
       <div class="sub">issuance <b>${fmtP(bSum?wRows[i].budget/bSum*100:0)}%</b> of epoch blocks · weight <b>${fmtP(wSum?wRows[i].designed/wSum*100:0)}%</b>${wRows[i].mult?` · ×${num(wRows[i].mult)} floor pwu`:""}</div>
       <div class="sub mono" title="${esc(c.id)}">class ${esc(short(c.id,8))} · <a href="#/models/${esc(c.id)}">panel &amp; claims →</a></div></div>`;
   }).join("");
   const sm = document.getElementById("llmSeatMatrix");
-  if (sm) sm.innerHTML = `<table class="tbl"><thead><tr>
+  if (sm) sm.innerHTML = `${modelOneArmed ? `<p class="note">New model claims use G14: one randomly selected verifier checks the whole claim. Readiness records and operator file notes below do not gate new claims. Existing claim assignments and their original panel rules remain unchanged. Claim-level court and certification rules still apply.</p>` : ""}<table class="tbl"><thead><tr>
       <th>Panel seat (bond)</th>${classes.map(c=>`<th title="${esc(c.model)}"><a href="#/models/${esc(c.id)}">${esc(c.name)}</a></th>`).join("")}
     </tr></thead><tbody>${Array.from(panelByBond, ([bond, seats])=>{
       const ix = Number(bond.split(":").pop());
@@ -4040,7 +4066,7 @@ async function refreshLlmInner(){
       const rows = panelByClass.get(c.id) || [];
       return `<td>${rows.some(s => s.assigned == null) ? "—" : num(rows.reduce((n,s) => n + Number(s.assigned || 0), 0))}</td>`;
     }).join("")}</tr>
-    <tr class="sumrow"><td class="dim">chain ready (need requiredReadySeats)</td>${classes.map(c=>{
+    <tr class="sumrow"><td class="dim">${modelOneArmed ? "historical readiness · not an admission gate" : "chain ready (need requiredReadySeats)"}</td>${classes.map(c=>{
       if (c.tag === "floor") return `<td class="dim" title="every node verifies the floor; it is not readiness-gated">not gated</td>`;
       const row = llmReg.byId[String(c.id).toLowerCase()] || null;
       const ready = row && row.readySeatsNow != null ? Number(row.readySeatsNow) : null;

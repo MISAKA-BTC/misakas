@@ -37,6 +37,10 @@ jobs:
         if: runner.os == 'Windows'
         run: git config --global core.autocrlf false
 
+      - name: Allow long paths on Windows
+        if: runner.os == 'Windows'
+        run: git config --global core.longpaths true
+
       - name: Checkout sources
         uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3
 
