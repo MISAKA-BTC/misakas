@@ -1,7 +1,20 @@
 # 全モデル G14 Panel=1 — 2026-10-31 検証記録
 
-状態: 実装・ローカル検証済み。**配備・有効化は未実施**。t12 の移行 fence 候補は DAA **18,640**。mainnet 等は無効のまま。
+状態（2026-10-31 12:39 UTC）: 実装・検証・Linuxバイナリ配布済み。95 relayとb0〜b7のunitを移行版へ更新し、復旧・同期を進めている。t12 の移行 fence は DAA **18,640**。**実モデルclaimのpanel=1・Finalは確認中**。mainnet 等は無効のまま。
 [RFC-0042](../../../rfc/0042-all-model-g14-panel-one.md) / [ADR-0210](../../../adr/0210-all-model-g14-panel-one.md)。
+
+## 現在の配布版
+
+- [最新Release](https://github.com/MISAKA-BTC/misakas/releases/tag/testnet12-g14-panel1-18640): GitHubのlatest APIで公開・latest指定と3 assetsのuploaded状態を確認。
+- main push / release tag: `8b19b4a66fa0aa7ac3cd2ed0a41aa3cdbf47742e`。
+- バイナリのimmutable build source: `8cac52ec4ed15fb4ea982d46235a5c3b5f78e4cc`。統合後の実行コードとの差分なし（文書・release metadata・cfg(test) fixture/assertionのみ）。
+- 現行params: `edf472294c89dab0e64e625dbdfcd039b91081b05f89eacf8ba2aa25baa3a189`。
+- 現行schedule: `4024a6e74d7aeb170d99e67c6d8fbe7884d71a716ccb778cd1ee526d01781b04`。
+- Linux x86_64 GNU archive: 54,238,819 bytes、SHA-256 `0d0f53aa40e615e8412060e2a5b13acf1d575259a69ffe3c0a52f51a36cda7c9`。glibc 2.39以上・libstdc++が必要。
+- 展開後の`bin/kaspad`: 155,485,528 bytes、SHA-256 `e6d638a4f2a9fa32b6072c32ad5ce929f015efa189b721ceee2be5a9aa52e83e`。
+
+公開APIのasset digestはローカルarchive/manifest/checksumと一致。認証用秘密鍵・モデルartifact・DB・運用configは配布物に含まない。
+旧候補のrawログは以下に履歴として残す。Gate Cの認証・発行完了を今回の配布やlocal replayから主張しない。
 
 ## 配備候補の基点
 
