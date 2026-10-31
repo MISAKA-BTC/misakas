@@ -8,7 +8,7 @@
 //! borrowed preparation after transport corruption.
 
 use super::{AdapterError, CheckContext, PreparedCheck, digest};
-use kaspa_consensus_core::{
+use crate::{
     Hash64,
     palw_tir_step_v1::{PALW_TIR_STEP_BINDING_VERSION_V1, PalwTirStepBindingV1},
 };
