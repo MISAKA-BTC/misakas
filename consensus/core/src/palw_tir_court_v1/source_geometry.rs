@@ -75,7 +75,7 @@ pub(crate) fn history(
         let lane = (row_pos - tile_start) as u64 * row_lanes + (index as u64 - first_lane);
         Ok(SupplyGeometryV1::Step { coord, dtype: inst.dtype, lane: lane as usize })
     } else {
-        let Some((ctx, node)) = hist_row_node_v1(&space.program(), state, layer, row_pos) else {
+        let Some((ctx, node)) = hist_row_node_v1(space.program(), state, layer, row_pos) else {
             return tir_err(TirErrorKind::Malformed, format!("history {state} layer {layer:?} appends nothing"));
         };
         Ok(SupplyGeometryV1::Node { ctx, node, index })

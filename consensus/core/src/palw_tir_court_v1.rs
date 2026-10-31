@@ -944,18 +944,18 @@ fn evaluate_leaf_with_work(
                 target: DemandTarget::Node { ctx: DemandContext { pos: leaf.position, occurrence: occurrence as u16 }, node },
                 elements: &elements,
             };
-            eval_demanded(&space.program(), &space.info(), &request, source, limits)
+            eval_demanded(space.program(), space.info(), &request, source, limits)
         }
         PalwTirLeafKindV1::State { state, layer, first_element, .. } => {
             let elements = range(first_element);
             let request = DemandRequest { target: DemandTarget::StateAfter { pos: leaf.position, state, layer }, elements: &elements };
-            eval_demanded(&space.program(), &space.info(), &request, source, limits)
+            eval_demanded(space.program(), space.info(), &request, source, limits)
         }
         PalwTirLeafKindV1::HistTile { state, layer, first_lane, row_lanes, first_position, .. } => {
             // A history tile is the committed rows it concatenates, read from their commit points.
             let mut out = Vec::with_capacity(leaf.value_count as usize);
             for row_pos in first_position..=leaf.position {
-                let (ctx, node) = hist_row_node_v1(&space.program(), state, layer, row_pos)
+                let (ctx, node) = hist_row_node_v1(space.program(), state, layer, row_pos)
                     .ok_or_else(|| DemandError::Tir(TirError::new(TirErrorKind::Malformed, "the history appends nothing")))?;
                 for l in first_lane..first_lane + row_lanes as u64 {
                     out.push(source.node(ctx, node, l as usize)?);
@@ -1109,7 +1109,7 @@ fn check_opened_leaves(
         if *index >= count {
             return Err(bad("the artifact multiproof names no leaf"));
         }
-        check_inventory_operand_v1(&v.space().program(), inventory, base + *index, operand)?;
+        check_inventory_operand_v1(v.space().program(), inventory, base + *index, operand)?;
     }
     Ok(())
 }
