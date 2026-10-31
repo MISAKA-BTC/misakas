@@ -31,7 +31,10 @@ The A7 crate has a separate lock containing only versions already present in A0'
 root lock. It avoids editing A0's workspace/feature/module files. `--locked` and
 source hashes make dependency differences reviewable. Debug information and
 incremental compilation are disabled; consensus-core uses opt-level=0. These are
-test-profile observations, not production performance certification.
+test-profile observations, not production performance certification. Rust test
+threads use an explicit 16 MiB `RUST_MIN_STACK`: the earlier unoptimized fence
+run aborted on the default test-thread stack; its original failed log is retained.
+The same fence binary passed all nine tests with the explicit test-stack setting.
 
 ## Independent trust and arithmetic
 
@@ -79,6 +82,10 @@ These test files are not a new native wire codec.
 Each role reports elapsed/CPU/peak RSS and unsigned and signed frame bytes. RSS/CPU are
 process-lifetime counters; stage timings include fixture, codec and signing work.
 These scopes cannot be subtracted to claim a certified Miner overhead ratio.
+The fixture initializer's artifact-index preparation and trusted-metadata read
+are outside the role-stage timer. The baseline also includes local plan/params
+setup; it is not a pure inference kernel benchmark. Neither A2's actual Miner
+adapter nor A3's actual PanelBuilder is called by this warm fixture.
 One warm 4x4 sample is **not** a real LLM, cold/provider, minimum-hardware,
 concurrency, p95/p99, storage-retention or native-network measurement.
 

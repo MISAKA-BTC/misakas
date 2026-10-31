@@ -215,7 +215,7 @@ fn role_worker() {
         "baseline" => {
             let t = Instant::now();
             let ids = infer(&trusted, false, 1);
-            serde_json::json!({"generated":ids,"inference_seconds":t.elapsed().as_secs_f64()})
+            serde_json::json!({"generated":ids,"inference_with_fixture_setup_seconds":t.elapsed().as_secs_f64()})
         }
         "miner" => {
             let r = result(&trusted, false, 1);
@@ -340,16 +340,22 @@ fn separate_processes_recover_checked_frames_and_reject_a_whole_foreign_packet()
     assert_eq!(reports[3]["detail"]["charged_full_frame_bytes"], reports[5]["detail"]["charged_full_frame_bytes"]);
     assert_eq!(reports[8]["detail"]["status"], "RejectedForeignScope");
     let report = serde_json::json!({"schema":"a7-r1-all-node-i32-v1","profile":"warm-4x4-3-decode","reports":reports,
+        "a2_miner_adapter_connected":false,
         "activation_allowed":false,"real_llm":false,"cold_model":false,"native_network":false,"a3_builder_port_connected":false,
         "recovery":"test-frame replay only; not A6 atomic/native persistence"});
     if let Some(dir) = std::env::var_os("PC_A7_REPORT_DIR") {
         let output = std::path::PathBuf::from(dir);
         // Raw signed candidates and the separately fixed expected metadata are
         // retained so A0 can inspect/replay the complete replacement attack.
-        std::fs::copy(source.path().join("trusted.borsh"), output.join("trusted.borsh")).unwrap();
-        std::fs::copy(source.path().join("packet.borsh"), output.join("honest-packet.borsh")).unwrap();
-        std::fs::copy(node.path().join("packet.borsh"), output.join("foreign-packet.borsh")).unwrap();
-        std::fs::copy(node.path().join("prefix.borsh"), output.join("prefix.borsh")).unwrap();
+        for (source, name) in [
+            (source.path().join("trusted.borsh"), "trusted.borsh"),
+            (source.path().join("packet.borsh"), "honest-packet.borsh"),
+            (node.path().join("packet.borsh"), "foreign-packet.borsh"),
+            (node.path().join("prefix.borsh"), "prefix.borsh"),
+        ] {
+            let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(output.join(name)).unwrap();
+            std::io::Write::write_all(&mut file, &std::fs::read(source).unwrap()).unwrap();
+        }
         assert_eq!(
             std::fs::read(source.path().join("trusted.borsh")).unwrap(),
             std::fs::read(node.path().join("trusted.borsh")).unwrap()

@@ -1,0 +1,21 @@
+{
+  "exit_code": "TIMEOUT",
+  "elapsed_seconds": 2.0534525,
+  "cleanup": {
+    "group": 57422,
+    "live_descendants": [],
+    "zombies": []
+  },
+  "schema": "a7-timeout-proof-v1",
+  "commit": "1db6fcc2bf000ba47cc20140413a218520fe5a2a",
+  "argv": [
+    "/Applications/Xcode.app/Contents/Developer/usr/bin/python3",
+    "-u",
+    "-c",
+    "import os,signal,subprocess,sys,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); print('PARENT_READY',os.getpid(),flush=True); subprocess.Popen([sys.executable,'-u','-c',\"import os,signal,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); print('GRANDCHILD_READY',os.getpid(),flush=True); exec('while True:\\\\n print(123,flush=True); time.sleep(.02)')\"]); time.sleep(60)"
+  ],
+  "log": "timeout-proof.log",
+  "sha256": "af8f4361d37302f2ef6bcc3eb23be09e5fe7d92edac1ca47a0a2fe1995c5f8e0",
+  "log_stable_after_termination": true,
+  "process_control_sha256": "4f95dd3c8b00e82742978c40c746ab9d59cb9dec88a92896ad680af8d8fbccf8"
+}

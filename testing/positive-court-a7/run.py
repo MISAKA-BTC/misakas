@@ -28,7 +28,7 @@ def main():
     args = p.parse_args()
     out = args.out.resolve()
     out.mkdir(parents=True, exist_ok=False)
-    build_env = {'CARGO_INCREMENTAL':'0', 'CARGO_PROFILE_DEV_DEBUG':'0', 'CARGO_PROFILE_TEST_DEBUG':'0', 'CARGO_TARGET_DIR':str(ROOT/'target')}
+    build_env = {'CARGO_INCREMENTAL':'0', 'CARGO_PROFILE_DEV_DEBUG':'0', 'CARGO_PROFILE_TEST_DEBUG':'0', 'CARGO_TARGET_DIR':str(ROOT/'target'), 'RUST_MIN_STACK':'16777216'}
     env = dict(os.environ, PC_A7_REPORT_DIR=str(out), **build_env)
     source = {}
     for tree in ['consensus/core','misaka/palw/tir/core','misaka/palw/tir/exec','misaka/palw/positive-contract','misaka/palw/positive-accounting','testing/positive-court-a7']:

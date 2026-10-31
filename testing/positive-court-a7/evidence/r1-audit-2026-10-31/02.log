@@ -1,0 +1,18 @@
+    Finished `test` profile [unoptimized] target(s) in 0.15s
+     Running tests/independent.rs (target/debug/deps/independent-806304c9682b2390)
+
+running 10 tests
+test all_signers_agreeing_on_wrong_arithmetic_still_get_witness_rejection ... ok
+test an_unsigned_relay_tamper_cannot_reject_the_honest_panel_candidate ... ok
+test coherent_signed_model_artifact_input_job_and_witness_replacements_cannot_select_expected_state ... ok
+test complete_coverage_is_required_for_output_mismatch_and_outer_bytes_are_charged ... ok
+test each_leaf_corruption_and_every_incomplete_prefix_cannot_finish ... ok
+test exhausted_evaluation_budget_is_unverified_and_never_an_arithmetic_conviction ... ok
+test role_worker ... ignored, explicit subprocess worker; exercised by process acceptance
+test scalar_oracle_checks_every_logit_and_output_without_tir_evaluation ... ok
+test separate_processes_recover_checked_frames_and_reject_a_whole_foreign_packet ... A7_PROCESS_REPORT={"a3_builder_port_connected":false,"activation_allowed":false,"cold_model":false,"native_network":false,"profile":"warm-4x4-3-decode","real_llm":false,"recovery":"test-frame replay only; not A6 atomic/native persistence","reports":[{"detail":{"generated":[2,0,0],"inference_seconds":0.000333917},"elapsed_seconds":0.000338416,"pid":56217,"role":"baseline","usage":{"peak_rss_bytes":9945088,"system_cpu_seconds":0.001895,"user_cpu_seconds":0.002817}},{"detail":{"result_bytes":8303},"elapsed_seconds":0.02508825,"pid":56218,"role":"miner","usage":{"peak_rss_bytes":11124736,"system_cpu_seconds":0.001758,"user_cpu_seconds":0.026825}},{"detail":{"artifact":"8265752fdea94a94a83c7c41c8a9ab2540df5e55b7b2f7b8c100b780105157c4524b11bee67f03b99b1a13f3cad4648217d7f658c64c8ca8d022542d611500c4","full_frame_bytes":27288,"input":"35f0d2bd9172a3387fc7c1800051751e0fbc582bb45be938af5378a673ef1cd9e76fcf85debfd6c3fdddc4131d39fffd3e164ce3aa682f4b228d248a9fa9a98b","leaves":9,"signed_delivery_bytes":68931},"elapsed_seconds":0.246891958,"pid":56220,"role":"panel","usage":{"peak_rss_bytes":12304384,"system_cpu_seconds":0.00251,"user_cpu_seconds":0.246964}},{"detail":{"charged_full_frame_bytes":27288,"cursor":9,"native_credit":false,"status":"Matched"},"elapsed_seconds":0.085467125,"pid":56228,"role":"node","usage":{"peak_rss_bytes":10502144,"system_cpu_seconds":0.002007,"user_cpu_seconds":0.087073}},{"detail":{"charged_full_frame_bytes":11549,"cursor":4,"native_credit":false,"status":"Checking"},"elapsed_seconds":0.047514542,"pid":56229,"role":"prefix","usage":{"peak_rss_bytes":10469376,"system_cpu_seconds":0.002004,"user_cpu_seconds":0.049326}},{"detail":{"charged_full_frame_bytes":27288,"cursor":9,"native_credit":false,"status":"Matched"},"elapsed_seconds":0.085388417,"pid":56231,"role":"restart","usage":{"peak_rss_bytes":10534912,"system_cpu_seconds":0.002059,"user_cpu_seconds":0.087065}},{"detail":{"charged_full_frame_bytes":27288,"cursor":9,"native_credit":false,"status":"OutputMismatch"},"elapsed_seconds":0.086215333,"pid":56234,"role":"refute","usage":{"peak_rss_bytes":10551296,"system_cpu_seconds":0.002051,"user_cpu_seconds":0.087706}},{"detail":{"charged_full_frame_bytes":2342,"cursor":0,"native_credit":false,"status":"WitnessRejected"},"elapsed_seconds":0.023707125,"pid":56236,"role":"reject","usage":{"peak_rss_bytes":10223616,"system_cpu_seconds":0.001968,"user_cpu_seconds":0.025908}},{"detail":{"status":"RejectedForeignScope"},"elapsed_seconds":0.000154791,"pid":56238,"role":"foreign","usage":{"peak_rss_bytes":8028160,"system_cpu_seconds":0.001596,"user_cpu_seconds":0.002679}}],"schema":"a7-r1-all-node-i32-v1"}
+ok
+test signature_domains_malformed_frames_and_stale_ordinals_fail ... ok
+
+test result: ok. 9 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 7.95s
+

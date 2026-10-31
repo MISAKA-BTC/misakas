@@ -18,6 +18,7 @@ class ProcessGroups(unittest.TestCase):
         before = log.read_bytes()
         time.sleep(0.15)
         self.assertEqual(log.read_bytes(), before)
+        result['captured_output'] = before
         return result
 
     def test_normal_exit(self):
@@ -26,12 +27,15 @@ class ProcessGroups(unittest.TestCase):
     def test_timeout_kills_term_ignoring_parent_and_grandchild(self):
         child = "import signal,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); exec('while True:\\n print(123,flush=True); time.sleep(.02)')"
         code = f"import signal,subprocess,sys,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); subprocess.Popen([sys.executable,'-u','-c',{child!r}]); time.sleep(60)"
-        self.assertEqual(self.run_case(code, timeout=0.5)["exit_code"], "TIMEOUT")
+        result = self.run_case(code, timeout=1)
+        self.assertEqual(result["exit_code"], "TIMEOUT")
+        self.assertIn(b'123', result['captured_output'])
 
     def test_successful_parent_must_not_leave_a_log_writer(self):
         child = "import time; exec('while True:\\n print(123,flush=True); time.sleep(.02)')"
         code = f"import subprocess,sys; subprocess.Popen([sys.executable,'-u','-c',{child!r}])"
-        self.assertEqual(self.run_case(code)["exit_code"], "DESCENDANT_LEAK")
+        result = self.run_case(code)
+        self.assertEqual(result["exit_code"], "DESCENDANT_LEAK")
 
 
 if __name__ == "__main__":
