@@ -197,6 +197,12 @@ pub struct CheckContext {
     identity: ContextIdentity,
 }
 impl CheckContext {
+    /// Compare the complete opaque bindings and limits for an idempotent join.
+    /// Native ingress must reserve this bounded comparison's work.
+    pub fn same_identity(&self, other: &Self) -> bool {
+        self.identity == other.identity
+    }
+
     /// Identity of the already authenticated candidate, for the Court adapter.
     /// This accessor grants no native admission or computation authority.
     pub fn witness_id(&self) -> WitnessId {
