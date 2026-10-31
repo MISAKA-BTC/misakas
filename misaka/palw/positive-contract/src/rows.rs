@@ -137,7 +137,10 @@ pub struct CoverageRow {
     pub plan: PlanId,
     pub mandatory_relations: u64,
     pub next_relation: u64,
+    /// A1 charged_wire_bytes: complete UNSIGNED EvidenceFrame bytes. Includes
+    /// failed/retried authenticated attempts; it is not a receipt-only sum.
     pub frame_bytes: u64,
+    /// Number of charged packet signatures, not their byte count.
     pub signatures: u64,
     pub elements: u64,
     pub terms: u64,
@@ -169,7 +172,10 @@ pub struct ServiceReceiptRow {
     pub duty: AcceptedMaterial,
     pub response: AcceptedMaterial,
     pub provider: PrincipalId,
+    /// Exact raw unique source data bytes, excluding opening/wire overhead.
     pub bytes: u64,
+    /// Deterministic case service-schedule preparation charge for this unit,
+    /// not physical CPU time or Node LLM arithmetic work.
     pub additional_work: u64,
     /// Literal once-only settlement schedule/event, not a paid boolean.
     pub settlement: Option<AcceptedMaterial>,
@@ -219,6 +225,9 @@ pub struct FundingRow {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PacketReceiptRow {
+    // Current r1 ExactPart authenticates exactly ONE mandatory relation. This
+    // row records one successfully checked relation, not a failed/retried part.
+    // Failed/retried authored material and its costs remain in canonical history.
     pub witness: WitnessId,
     pub first_relation: u64,
     pub frame: EvidencePartId,
@@ -353,7 +362,9 @@ impl NativeRowBody {
                 }
             }
             Self::PacketReceipt(r) => {
-                if r.signed_bytes < crate::wire::EVIDENCE_HEADER_BYTES as u64 + SIGNATURE_BYTES as u64 {
+                if r.signed_bytes
+                    < (crate::wire::EVIDENCE_HEADER_BYTES + crate::tir::EXACT_PART_HEADER_BYTES) as u64 + SIGNATURE_BYTES as u64
+                {
                     return Err(ContractError::Range);
                 }
             }
