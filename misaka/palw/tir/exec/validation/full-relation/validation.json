@@ -1,0 +1,131 @@
+{
+  "start_date_jst": "2026-10-31",
+  "final_evidence_observed_utc": "2026-10-31 15:16:48 UTC",
+  "candidate_commit": "a527eeb26528fa677985d39a9583b881b4b5258c",
+  "branch": "codex/positive-court-a1",
+  "parent_commit": "196d274b12e920d5aeb681b0e4c185cc8d92ade2",
+  "final_tests": {
+    "log": "final-tests.log",
+    "passed": 48,
+    "failed": 0,
+    "new_full_relation_tests": 9,
+    "existing_node_plan_record_port_tests": 39,
+    "targets": {
+      "positive_check": 13,
+      "positive_check_hardening": 2,
+      "positive_contract": 13,
+      "positive_expanded_plan": 4,
+      "positive_full_relation": 9,
+      "positive_production_port": 3,
+      "positive_record": 4
+    }
+  },
+  "legacy_court_separate_scope": {
+    "log": "initial-combined-fixture-failure.log",
+    "passed": 7,
+    "failed": 0,
+    "seconds": 194.06,
+    "included_in_final_48": false,
+    "old_function_bodies_unchanged": "old-entrypoints-unchanged.json",
+    "note": "This scope completed before the first new rounding fixture failed. It is not an overall success for that initial combined run."
+  },
+  "initial_failures_preserved": {
+    "test": "invalid new rounding fixture admitted possible I32 CarryIn addition overflow",
+    "test_fix": "explicit post Clamp before bias in newly registered test fixture; added fixture range precondition",
+    "core_algorithm_changed_for_fixture_fix": false,
+    "log": "initial-combined-fixture-failure.log",
+    "initial_clippy": "initial-core-clippy.log",
+    "clippy_fix": "collapse nested decode-pin if; no semantic change"
+  },
+  "package_clippy": {
+    "passed": true,
+    "scope": "executor compatibility library and positive_full_relation target; --no-deps -D warnings",
+    "log": "final-package-clippy.log"
+  },
+  "core_strict_clippy": {
+    "passed": false,
+    "unchanged_findings": [
+      "clone_on_copy:consensus/core/src/palw_model_panel_one_v1.rs:92",
+      "nonminimal_bool:consensus/core/src/palw_state_v2/chain_state.rs:3728"
+    ],
+    "new_module_findings": 0,
+    "log": "final-core-clippy.log"
+  },
+  "docs": {
+    "mode": "no-new-regressions",
+    "passed": true,
+    "known_missing": 43,
+    "new_occurrences": 0,
+    "log": "docs-check.log"
+  },
+  "review": {
+    "delegated_implementation": "source-only authentication/evaluation API",
+    "independent_tests": "whole-node Interpreter oracle plus manual wide/HAFZ values",
+    "independent_readonly_review": "no remaining blocker after cumulative geometry reservation correction; no callback/store fallback in validator; signed claims are comparison targets only"
+  },
+  "build_environment": {
+    "CARGO_TARGET_DIR": "/Users/wata/.cache/misaka-positive-a1-port-target",
+    "CARGO_INCREMENTAL": "0",
+    "CARGO_PROFILE_DEV_DEBUG": "0",
+    "CARGO_PROFILE_TEST_DEBUG": "0",
+    "CARGO_BUILD_JOBS": "2",
+    "cargo_config": "profile.dev.package.kaspa-consensus-core.opt-level=0",
+    "new_large_target_created": false,
+    "other_owner_cache_deleted": false
+  },
+  "scope": {
+    "typed_local_prototype": true,
+    "signed_panel_full_manifest": true,
+    "verifier_fixed_local_domains": true,
+    "all_positions_nodes_lanes": true,
+    "unsigned_material_errors_are_delivery_only": true,
+    "all_rooted_material_checks_before_coverage_advance": true,
+    "registered_program_dtype_layout_context_rewritten": false,
+    "old_initial_profile_acceptance_changed": false,
+    "formal_wire_profile_domain_assigned": false,
+    "implements_shared_nodechecker_for_new_profile": false,
+    "native_activation": false,
+    "real_llm_validated": false,
+    "wide_final_q24_apis_integrated": false,
+    "total_node_rss_qualified": false
+  },
+  "physical_resource_exclusions": [
+    "registered program decode and range/inventory analysis",
+    "Merkle verifier scratch",
+    "external retained typed carrier storage and builder store internals",
+    "allocator overhead and total Node RSS",
+    "native cumulative case/attempt/reorg/journal authority"
+  ],
+  "source_sha256": {
+    "consensus/core/src/palw_positive_check_v2.rs": "f57c4b07e7e3a6915252ca3de24eba9fed945e62d659cee6ed24992a7d0dd33c",
+    "consensus/core/src/palw_positive_check_v2/expanded_plan.rs": "e02a8d76c1df64c9eba4f9ccc784c8d7e0777f0a697b01151f2e1b0e215ee64c",
+    "consensus/core/src/palw_positive_check_v2/full_relation.rs": "ba8de6e830ea1faaae7d89259aa7412a335e0cad943d0dca0c4dcfc4e6ac4912",
+    "consensus/core/src/palw_tir_court_v1.rs": "8ea36af84ca1f7e3af96145a30a51e382573692691820ea83ce70a5af55f94b0",
+    "consensus/core/src/palw_tir_court_v1/source_only.rs": "583eb83932c05448dba3e062ef4fd7bdf27a45bc746919b9df6e47b8f4a0d979",
+    "misaka/palw/tir/exec/tests/positive_full_relation.rs": "b60ad8e45085490fb61b18bfe8b842d2821736471a3cd08b9a6b7cf603b6e0e6",
+    "misaka/palw/tir/exec/A1-FULL-RELATION-PROTOTYPE.md": "a6ad020924f79d960ccb0bb957018ec7d619a617f3960b79b681c92caf24905a",
+    "misaka/palw/positive-contract/src/identity.rs": "c983c6fc73096be1cd869667eea8fe7723fb46d217db9090cdf6adfabd6bb2e6",
+    "misaka/palw/positive-contract/src/messages.rs": "68b06aa73de26da938333697cf02b4cf832046369598ae83c94a4cf18a3f840b",
+    "consensus/core/Cargo.toml": "6a62f42bee5b7bc07b1feeecd11a66a0d78f519f08877f4fa4608ade58335b29",
+    "misaka/palw/tir/exec/Cargo.toml": "90039d68f73d1810af7c4e863df0bfd69cbaae9668591baa061b5106a7527926",
+    "Cargo.lock": "bdd237c284b1e1b5362358db98361698bc3fb1de69c9849f2d4438ee8582c77e"
+  },
+  "evidence_sha256": {
+    "corrected-seven-tests-and-regression.log": "c895357647c7a0ac450e3e05e1009e106a718d16845ad7f588113b49fc048fbf",
+    "docs-check.log": "d5c2e8049f9b12f200d58f69ea6a9abc18c0734c57510e402f5e1688770586ba",
+    "final-commands.json": "97e4992b08dc60625c8c58ea7c30cea04b5a0f679a41aebbea62efd1d748ad57",
+    "final-core-clippy.log": "6d0a5ed490fcf3dcfd51e98fd1c22cc2c1e116e408716581971e83697e00f196",
+    "final-package-clippy.log": "c7c3bcee7db5005e2353761bcb4d92d5addb357f47ce99f055d1277d0ff5921d",
+    "final-tests.log": "d652311c66f4e6ff58212a9b7146c57000933c73e471ee1c357a09b0d62af18f",
+    "initial-combined-fixture-failure.log": "cdccbb989efcc3f6431aea51cd9816037f1f08110e8100c2c954e132a4c54391",
+    "initial-commands.json": "01c0f0ac74d2885ff8c86df7c4e78bc5bf651bda41579f2d770760dbb1ba13e3",
+    "initial-core-clippy.log": "78254cc041ab7e1df55997ce89eb6f7f5cca5b3ce19d9e0d4f198e809d40be37",
+    "initial-package-clippy.log": "77646e5c484068b116aa5970c8183d24a58396d00100b14b91eb53501316cd5b",
+    "old-entrypoints-unchanged.json": "95388e937aa19710452e7babe6c33807ed960a91b692b1f42a86835b1e101abb"
+  },
+  "notes": [
+    "Counts from earlier phases/A0/A4/A7 are not added to the final run.",
+    "All raw logs retain original content including trailing blank lines.",
+    "Formal source-only decoder, profile/derivation and supplementary record fields require A0 allocation; no new native receipt or dispatch is exposed."
+  ]
+}
