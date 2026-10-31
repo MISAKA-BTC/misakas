@@ -8,7 +8,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use std::io::{self, Read, Write};
 use std::path::Path;
 
-const SCHEMA: u16 = 1; // Private archive schema, never a consensus wire tag.
+const SCHEMA: u16 = 2; // Private archive schema, never a consensus wire tag.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct EventOriginV2 {
@@ -24,13 +24,46 @@ pub struct SavedPartV2 {
 /// There are deliberately no ACK, cursor, meter, payment, or Pass setters.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum RecoveryEventV2 {
-    Request { panel: Hash64, first: u64, count: u64, signature: Vec<u8> },
-    Response { index: u64, bytes: Vec<u8>, opening: PalwStepOpeningV1 },
-    Candidate { panel: Hash64, witness: PanelWitnessV2, signature: Vec<u8> },
-    Batch { witness: Hash64, first: u64, parts: Vec<SavedPartV2> },
+    Request {
+        panel: Hash64,
+        first: u64,
+        count: u64,
+        signature: Vec<u8>,
+    },
+    Response {
+        index: u64,
+        bytes: Vec<u8>,
+        opening: PalwStepOpeningV1,
+    },
+    Candidate {
+        panel: Hash64,
+        witness: PanelWitnessV2,
+        signature: Vec<u8>,
+    },
+    Batch {
+        witness: Hash64,
+        first: u64,
+        parts: Vec<SavedPartV2>,
+    },
     Finish,
     Expire,
     Revoke,
+    ConfigureMaterial {
+        max_chunk_bytes: u64,
+        max_buffer_bytes: u64,
+        max_wire_bytes: u64,
+        max_packets: u64,
+    },
+    MaterialChunk {
+        witness: Hash64,
+        index: u64,
+        cone_bytes: u64,
+        trace_bytes: Option<u64>,
+        payload: Hash64,
+        offset: u64,
+        bytes: Vec<u8>,
+    },
+    DiscardMaterial,
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 struct Record {
@@ -97,7 +130,9 @@ impl NativeWireScanV1 for RecoveryEventV2 {
             1 => scan_fields!(r; u64, Vec<u8>, PalwStepOpeningV1),
             2 => scan_fields!(r; Hash64, u16, Hash64, Hash64, u32, crate::palw_tir_step_v1::PalwTirStepBindingV1, Vec<u32>, Vec<u8>),
             3 => scan_fields!(r; Hash64, u64, Vec<SavedPartV2>),
-            4..=6 => Ok(NativeWireShapeV1::default()),
+            4..=6 | 9 => Ok(NativeWireShapeV1::default()),
+            7 => scan_fields!(r; u64, u64, u64, u64),
+            8 => scan_fields!(r; Hash64, u64, u64, Option<u64>, Hash64, u64, Vec<u8>),
             _ => Err(io::Error::new(io::ErrorKind::InvalidData, "unknown recovery event")),
         }
     }
@@ -132,7 +167,8 @@ fn preflight(bytes: &[u8], limits: RecoveryLimitsV2) -> Result<(), ErrorV2> {
     Ok(())
 }
 fn pristine(c: &PositiveCoordinatorV2) -> bool {
-    c.current.is_none()
+    c.transport.is_none()
+        && c.current.is_none()
         && c.history.is_empty()
         && c.meter.attempts == 0
         && c.service_meter().rounds == 0
@@ -187,6 +223,31 @@ fn apply(c: &mut PositiveCoordinatorV2, event: &RecoveryEventV2, now: u64) -> Re
             c.revoke();
             Ok(())
         }
+        RecoveryEventV2::ConfigureMaterial { max_chunk_bytes, max_buffer_bytes, max_wire_bytes, max_packets } => c
+            .configure_material_transport(super::transport::MaterialTransportLimitsV2 {
+                max_chunk_bytes: *max_chunk_bytes,
+                max_buffer_bytes: *max_buffer_bytes,
+                max_wire_bytes: *max_wire_bytes,
+                max_packets: *max_packets,
+            }),
+        RecoveryEventV2::MaterialChunk { witness, index, cone_bytes, trace_bytes, payload, offset, bytes } => c
+            .submit_material_chunk(
+                super::transport::MaterialDescriptorV2 {
+                    witness: *witness,
+                    index: *index,
+                    cone_bytes: *cone_bytes,
+                    trace_bytes: *trace_bytes,
+                    payload: *payload,
+                },
+                *offset,
+                bytes,
+                now,
+            )
+            .map(|_| ()),
+        RecoveryEventV2::DiscardMaterial => {
+            c.discard_material_buffer();
+            Ok(())
+        }
     }
 }
 
@@ -228,6 +289,74 @@ impl JournaledCoordinatorV2 {
         Ok(&self.bytes)
     }
 
+    pub fn observed_daa(&self) -> Result<u64, RecoveryErrorV2> {
+        self.state()?;
+        Ok(self.last_daa)
+    }
+
+    /// A trusted chain clock projects expiry independently of input quotas.
+    /// This creates no journal input, transfer or credit: recovery derives the
+    /// same result from its receiving clock. Native fee/resource side effects
+    /// still belong in the embedding store's checked atomic transaction.
+    pub fn advance_clock(&mut self, now: u64, authenticate_clock: impl FnOnce(u64) -> bool) -> Result<(), RecoveryErrorV2> {
+        self.state()?;
+        if now < self.last_daa || !authenticate_clock(now) {
+            return Err(ErrorV2::Binding.into());
+        }
+        self.coordinator.expire(now);
+        self.last_daa = now;
+        Ok(())
+    }
+
+    /// Clock-only checked proposal remains possible when input bytes/records
+    /// are exhausted. Persistence must bind the observed native DAA as well as
+    /// the unchanged history head; it does not invent a carrier or new input.
+    pub fn prepare_clock(
+        mut self,
+        now: u64,
+        authenticate_clock: impl FnOnce(u64) -> bool,
+    ) -> Result<PreparedRecoveryUpdateV2, RecoveryErrorV2> {
+        let previous = self.head()?;
+        self.advance_clock(now, authenticate_clock)?;
+        Ok(PreparedRecoveryUpdateV2 { previous, next: self, outcome: Ok(()) })
+    }
+
+    /// Consumes the old runtime and computes the next fully checked state
+    /// before any financial/native rows are committed. The caller resolves a
+    /// fresh admission from the same trusted anchor. No mutable state is
+    /// published until PreparedRecoveryUpdateV2::commit succeeds.
+    pub fn prepare_record(
+        self,
+        fresh: PositiveCoordinatorV2,
+        admitted_at: u64,
+        origin: EventOriginV2,
+        event: RecoveryEventV2,
+        authenticate: impl Fn(EventOriginV2, &RecoveryEventV2) -> bool,
+    ) -> Result<PreparedRecoveryUpdateV2, RecoveryErrorV2> {
+        self.state()?;
+        if origin.daa < self.last_daa || !authenticate(origin, &event) {
+            return Err(ErrorV2::Binding.into());
+        }
+        if self.image.records.len() as u64 >= self.limits.max_records {
+            return Err(ErrorV2::Budget.into());
+        }
+        let previous = self.head()?;
+        let record = Record { origin, event };
+        let added = borsh::object_length(&record).map_err(|_| ErrorV2::Wire)? as u64;
+        if (self.bytes.len() as u64).checked_add(added).filter(|n| *n <= self.limits.max_encoded_bytes).is_none() {
+            return Err(ErrorV2::Budget.into());
+        }
+        let mut next = Self::restore(fresh, admitted_at, &self.bytes, previous, self.limits, self.last_daa, &authenticate)?;
+        next.image.schema = SCHEMA;
+        next.image.records.push(record);
+        let bytes = borsh::to_vec(&next.image).map_err(|_| ErrorV2::Wire)?;
+        preflight(&bytes, self.limits)?;
+        let outcome = apply(&mut next.coordinator, &next.image.records.last().unwrap().event, origin.daa);
+        next.last_daa = origin.daa;
+        next.bytes = bytes;
+        Ok(PreparedRecoveryUpdateV2 { previous, next, outcome })
+    }
+
     /// `authenticate` must check selected carrier membership, its accepted DAA,
     /// and the event's canonical order (including trusted expiry/revocation).
     /// A hash selected by the submitting peer is insufficient.
@@ -253,27 +382,35 @@ impl JournaledCoordinatorV2 {
             return Err(ErrorV2::Budget.into());
         }
         self.image.records.push(record);
+        let old_schema = self.image.schema;
+        self.image.schema = SCHEMA;
         let bytes = match borsh::to_vec(&self.image) {
             Ok(bytes) => bytes,
             Err(_) => {
                 self.image.records.pop();
+                self.image.schema = old_schema;
                 return Err(ErrorV2::Wire.into());
             }
         };
         if let Err(error) = preflight(&bytes, self.limits) {
             self.image.records.pop();
+            self.image.schema = old_schema;
             return Err(error.into());
         }
         let next_head = head(&bytes, self.image.records.len() as u64);
+        // Also poison on panic/unwind: a sink may have durably committed before
+        // losing its acknowledgement, and callers may catch that panic.
+        self.indeterminate = true;
         if let Err(error) = persist(&bytes, next_head) {
-            self.indeterminate = true;
             return Err(RecoveryErrorV2::Persistence(error));
         }
         self.bytes = bytes;
         self.last_daa = origin.daa;
         // Retain failures: source validation and candidate admission can charge
         // work/attempts or reject a witness before returning Err.
-        Ok(apply(&mut self.coordinator, &self.image.records.last().unwrap().event, origin.daa))
+        let outcome = apply(&mut self.coordinator, &self.image.records.last().unwrap().event, origin.daa);
+        self.indeterminate = false;
+        Ok(outcome)
     }
     /// Restore into a NEW admission. On any malformed suffix, wrong head or
     /// origin failure, the partially replayed coordinator is dropped entirely.
@@ -289,7 +426,16 @@ impl JournaledCoordinatorV2 {
     ) -> Result<Self, ErrorV2> {
         preflight(bytes, limits)?;
         let image: Image = borsh::from_slice(bytes).map_err(|_| ErrorV2::Wire)?;
-        if image.schema != SCHEMA
+        if ![1, SCHEMA].contains(&image.schema)
+            || (image.schema == 1
+                && image.records.iter().any(|r| {
+                    matches!(
+                        r.event,
+                        RecoveryEventV2::ConfigureMaterial { .. }
+                            | RecoveryEventV2::MaterialChunk { .. }
+                            | RecoveryEventV2::DiscardMaterial
+                    )
+                }))
             || head(bytes, image.records.len() as u64) != expected
             || !pristine(&c)
             || image.admission != admission(&c, admitted_at, limits)
@@ -313,6 +459,31 @@ impl JournaledCoordinatorV2 {
         restored.image = image;
         restored.bytes = bytes.to_vec();
         Ok(restored)
+    }
+}
+
+/// Checked proposal, not a persisted Pass flag. Even failed operations retain
+/// their charged work/attempts. A failed/ambiguous commit consumes the proposal;
+/// callers must resolve the durable head before reconstructing a runtime.
+pub struct PreparedRecoveryUpdateV2 {
+    previous: RecoveryHeadV2,
+    next: JournaledCoordinatorV2,
+    outcome: Result<(), ErrorV2>,
+}
+impl PreparedRecoveryUpdateV2 {
+    pub fn observed_daa(&self) -> u64 {
+        self.next.last_daa
+    }
+    pub fn checked_state(&self) -> &PositiveCoordinatorV2 {
+        &self.next.coordinator
+    }
+    pub fn commit(
+        self,
+        persist: impl FnOnce(RecoveryHeadV2, RecoveryHeadV2, &[u8], &PositiveCoordinatorV2) -> io::Result<()>,
+    ) -> Result<(JournaledCoordinatorV2, Result<(), ErrorV2>), RecoveryErrorV2> {
+        let next_head = self.next.head()?;
+        persist(self.previous, next_head, &self.next.bytes, &self.next.coordinator).map_err(RecoveryErrorV2::Persistence)?;
+        Ok((self.next, self.outcome))
     }
 }
 
@@ -431,3 +602,7 @@ impl RetentionV2 {
 #[cfg(test)]
 #[path = "coordinator_recovery_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "recovery_adversarial_tests.rs"]
+mod adversarial_tests;

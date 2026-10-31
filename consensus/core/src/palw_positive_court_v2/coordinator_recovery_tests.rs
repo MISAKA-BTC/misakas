@@ -452,3 +452,83 @@ fn a0_recovery_port_uses_resolved_head_and_bounded_archive_reader() {
     let small = RecoveryLimitsV2 { max_encoded_bytes: bytes.len() as u64 - 1, ..caps() };
     assert_eq!(read_generation(&bytes[..], small), Err(ErrorV2::Budget));
 }
+
+#[test]
+fn fragmented_material_restarts_with_partial_bytes_and_failed_packet_budget_intact() {
+    use super::super::transport::MaterialDescriptorV2;
+    let x = tiny_execution(None);
+    let (s, p, _, mut l) = setup(&x);
+    l.max_reserved_witness_bytes += 1 << 20;
+    let mut j = fresh(&x, &s, p.clone(), l);
+    record(
+        &mut j,
+        RecoveryEventV2::ConfigureMaterial {
+            max_chunk_bytes: 1 << 16,
+            max_buffer_bytes: 1 << 20,
+            max_wire_bytes: 1 << 20,
+            max_packets: 100,
+        },
+        2,
+    )
+    .unwrap();
+    record(&mut j, candidate(&s), 3).unwrap();
+    let (cone, trace) = parts(&x, s.policy).remove(0);
+    let descriptor = MaterialDescriptorV2::for_part(s.witness.id(), 0, &cone, trace.as_deref());
+    let mut payload = cone.clone();
+    payload.extend_from_slice(trace.as_deref().unwrap_or(&[]));
+    let event = |offset, bytes: Vec<u8>| RecoveryEventV2::MaterialChunk {
+        witness: descriptor.witness,
+        index: descriptor.index,
+        cone_bytes: descriptor.cone_bytes,
+        trace_bytes: descriptor.trace_bytes,
+        payload: descriptor.payload,
+        offset,
+        bytes,
+    };
+    record(&mut j, event(0, payload[..17].to_vec()), 4).unwrap();
+    assert_eq!(record(&mut j, event(18, vec![7]), 4), Err(ErrorV2::Order));
+    record(&mut j, event(0, payload[..17].to_vec()), 4).unwrap();
+    let before = j.state().unwrap().material_transport_meter().unwrap();
+    assert_eq!(before.packets, 3);
+    let mut restored = restore(&x, &s, p.clone(), l, &j, 5);
+    assert_eq!(restored.state().unwrap().material_transport_meter(), Some(before));
+    assert_eq!(restored.state().unwrap().attempts(), j.state().unwrap().attempts());
+    record(&mut restored, event(17, payload[17..].to_vec()), 6).unwrap();
+    assert_eq!(restored.state().unwrap().current().unwrap().cursor(), 1);
+    assert_eq!(restored.state().unwrap().material_transport_meter().unwrap().checked_parts, 1);
+    let restored = restore(&x, &s, p, l, &restored, 7);
+    assert_eq!(restored.state().unwrap().current().unwrap().cursor(), 1);
+    assert_eq!(restored.state().unwrap().material_transport_meter().unwrap().packets, 4);
+}
+
+#[test]
+fn legacy_schema_one_replays_but_cannot_smuggle_transport_configuration() {
+    let x = tiny_execution(None);
+    let (s, p, _, l) = setup(&x);
+    let j = fresh(&x, &s, p.clone(), l);
+    let mut old = j.encoded().unwrap().to_vec();
+    old[..2].copy_from_slice(&1u16.to_le_bytes());
+    let mut r =
+        JournaledCoordinatorV2::restore(coordinator(&x, &s, p.clone(), l), 1, &old, head(&old, 0), caps(), 2, canonical).unwrap();
+    record(&mut r, candidate(&s), 3).unwrap();
+    assert_eq!(&r.encoded().unwrap()[..2], &SCHEMA.to_le_bytes());
+    let mut l = l;
+    l.max_reserved_witness_bytes += 1 << 20;
+    let mut r = fresh(&x, &s, p.clone(), l);
+    record(
+        &mut r,
+        RecoveryEventV2::ConfigureMaterial {
+            max_chunk_bytes: 1 << 16,
+            max_buffer_bytes: 1 << 20,
+            max_wire_bytes: 1 << 20,
+            max_packets: 100,
+        },
+        2,
+    )
+    .unwrap();
+    let mut disguised = r.encoded().unwrap().to_vec();
+    disguised[..2].copy_from_slice(&1u16.to_le_bytes());
+    assert!(
+        JournaledCoordinatorV2::restore(coordinator(&x, &s, p, l), 1, &disguised, head(&disguised, 1), caps(), 3, canonical).is_err()
+    );
+}

@@ -51,6 +51,8 @@ pub mod palw_panel;
 /// (node policy).
 pub mod palw_prefill_run;
 pub mod palw_producer;
+/// Checked node-local Positive recovery storage; no network activation.
+pub mod palw_positive_recovery;
 /// 2026-10-01 (F3): the producer holds its attempt lane while its own claims are not getting licensed
 /// (node policy).
 pub mod palw_producer_backpressure;

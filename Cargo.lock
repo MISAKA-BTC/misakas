@@ -5371,6 +5371,7 @@ dependencies = [
  "misaka-palw",
  "misaka-palw-base0",
  "misaka-palw-kernel",
+ "misaka-palw-positive-recovery",
  "misaka-palw-remote",
  "misaka-palw-sdk",
  "misaka-palw-tir",
@@ -6313,6 +6314,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "misaka-palw-positive-accounting"
+version = "1.1.0"
+dependencies = [
+ "misaka-palw-positive-contract",
+]
+
+[[package]]
 name = "misaka-palw-positive-contract"
 version = "1.1.0"
 dependencies = [
@@ -6320,6 +6328,20 @@ dependencies = [
  "borsh",
  "libcrux-ml-dsa",
  "serde_json",
+]
+
+[[package]]
+name = "misaka-palw-positive-recovery"
+version = "1.1.0"
+dependencies = [
+ "blake2b_simd",
+ "borsh",
+ "kaspa-consensus-core",
+ "kaspa-database",
+ "libcrux-ml-dsa",
+ "misaka-palw-positive-contract",
+ "misaka-palw-tir",
+ "tempfile",
 ]
 
 [[package]]
