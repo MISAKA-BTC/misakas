@@ -20,6 +20,9 @@ pub(crate) mod palw_tir_corpus_fixture_v1;
 
 pub mod palw_mergeset_v1;
 pub mod palw_native_readiness_v1;
+// Pure bounded Positive checker; no mapped artifacts or model runtime.
+pub mod palw_positive_check_v2;
+pub mod palw_positive_contract_v2;
 pub mod palw_positive_rows_v2;
 pub mod palw_positive_source_read_v2;
 pub mod palw_native_settlement_resources_v1;
