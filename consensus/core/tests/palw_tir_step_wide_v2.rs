@@ -347,7 +347,14 @@ fn profile_metadata_and_builder_admission_cannot_be_substituted() {
     let (class, artifact, job) = fixture(true);
     let space = PalwTirStepSpaceV2::new(&class).unwrap();
     let p = class.decode_program().unwrap();
-    let other_info = misaka_palw_tir::validate::validate(&program(false)).unwrap();
+    let actual_info = misaka_palw_tir::validate::validate(&p).unwrap();
+    let mut other_info = actual_info.clone();
+    // Validation metadata contains history geometry rather than every node's
+    // type. Forge that geometry explicitly instead of assuming another program
+    // necessarily has different metadata.
+    assert_eq!(actual_info.blocks[0].window, None);
+    other_info.blocks[0].window = Some(2);
+    assert_ne!(other_info, actual_info);
     assert!(PalwTirStepSpaceV2::from_program(p.clone(), other_info, class.layout.clone()).is_err());
     let mut wrong = class.clone();
     wrong.version = 2;
