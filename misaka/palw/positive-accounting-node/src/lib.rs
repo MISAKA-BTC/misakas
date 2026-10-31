@@ -3,6 +3,7 @@
 //! Native ingress/activation remains owned by A0 and is not implied by these
 //! locally checked terminals or transaction preflight results.
 
+pub mod dues;
 pub mod native;
 pub mod rows;
 #[cfg(feature = "tir-checker")]

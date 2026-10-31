@@ -1,0 +1,32 @@
+{
+  "command": [
+    "cargo",
+    "test",
+    "--offline",
+    "--locked",
+    "--config",
+    "profile.dev.package.kaspa-consensus-core.opt-level=0",
+    "-p",
+    "misaka-palw-positive-accounting-node",
+    "--no-default-features",
+    "--lib",
+    "dues::"
+  ],
+  "environment": {
+    "CARGO_TARGET_DIR": "/Users/wata/.cache/misaka-positive-accounting-node-target",
+    "CARGO_INCREMENTAL": "0",
+    "CARGO_PROFILE_DEV_DEBUG": "0",
+    "CARGO_PROFILE_TEST_DEBUG": "0",
+    "CARGO_BUILD_JOBS": "2"
+  },
+  "base_commit": "cb353f7baa85b41251c3e2e48d4691271066a55f",
+  "source_sha256": {
+    "misaka/palw/positive-accounting-node/src/lib.rs": "152e75a3a2954dfe20b9ac2cac485fa0cbbd255891483c5c08fc36a84326c106",
+    "misaka/palw/positive-accounting-node/src/dues.rs": "c3db139200395acff2aac6c307e61b7aade16b870502b426e1ea23916c2e7f91",
+    "misaka/palw/positive-accounting-node/src/dues/tests.rs": "8d2c5d8c25fac2f1b6c667cc5c173701d85250c90f1e896e9a06b82f62877b7f",
+    "misaka/palw/positive-contract/src/rows.rs": "917cf67e5ef6f0e75ac36c1d1e9cebbbe81e3bf67722b57f6236467bd2dfef89"
+  },
+  "raw_log": "source-dues.log",
+  "scope": "node-local DATA proposals, not native money authority",
+  "exit_code": 0
+}
