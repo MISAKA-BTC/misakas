@@ -157,6 +157,10 @@ struct CaseAccount {
     contract: ResolvedAdmission,
     totals: HoldTotals,
     settled: BTreeMap<ServiceKey, ServicePayment>,
+    // Existing native escrow schedules consume a chronological prefix. A map's
+    // key order alone cannot preserve that prefix when a lower source unit is
+    // delivered after a higher one was already paid.
+    payment_order: Vec<ServiceKey>,
     closed: bool,
 }
 
@@ -209,6 +213,44 @@ pub struct CheckedFeeTransition {
     intent: AdmissionIntent,
     operation: Operation,
     plan: SettlementPlan,
+}
+
+/// A current, read-only projection for the existing native funded-escrow
+/// checker. Its private fields can only be populated by this book after
+/// rechecking the prepared transition. It is not native admission, a UTXO
+/// authorization, a serialized fee receipt, or permission to skip scripts.
+pub struct FeeSettlementProjection {
+    owner: Arc<()>,
+    epoch: u64,
+    operation: Operation,
+    checked_plan: SettlementPlan,
+    intent: AdmissionIntent,
+    payer: PrincipalId,
+    before: HoldTotals,
+    after: HoldTotals,
+    payments: Vec<(ServiceKey, ServicePayment)>,
+    closure: Option<ClaimStatus>,
+}
+impl FeeSettlementProjection {
+    pub fn intent(&self) -> AdmissionIntent {
+        self.intent
+    }
+    pub fn payer(&self) -> PrincipalId {
+        self.payer
+    }
+    pub fn before(&self) -> HoldTotals {
+        self.before
+    }
+    pub fn after(&self) -> HoldTotals {
+        self.after
+    }
+    /// Cumulative, append-only settlement order, including earlier paid units.
+    pub fn payments(&self) -> &[(ServiceKey, ServicePayment)] {
+        &self.payments
+    }
+    pub fn closure(&self) -> Option<ClaimStatus> {
+        self.closure
+    }
 }
 
 /// Reference undo contains the bounded before-image, never a persisted Pass.
@@ -350,10 +392,10 @@ impl<A: AccountingAuthority> PrivateAccountingStore<A> {
             (ServiceKey::Source { .. } | ServiceKey::Carrier { .. }, ServiceDisposition::Delivered { recipient }) => recipient,
             _ => return Err(AccountingError::ServiceNotProvided),
         };
-        if let Recipient::Fixed(expected) = terms.recipient {
-            if expected != recipient {
-                return Err(AccountingError::Recipient);
-            }
+        if let Recipient::Fixed(expected) = terms.recipient
+            && expected != recipient
+        {
+            return Err(AccountingError::Recipient);
         }
         Ok(Some(ServicePayment { recipient, amount: terms.amount }))
     }
@@ -414,6 +456,74 @@ impl<A: AccountingAuthority> PrivateAccountingStore<A> {
     }
     pub fn prepare_close(&self, admitted: &AdmittedCase) -> Result<CheckedFeeTransition, AccountingError> {
         self.prepare_transition(admitted, Operation::Close)
+    }
+    /// A bridge reads exactly the amounts this transition will move. It cannot
+    /// choose recipient amounts, reorder old dues, or obtain a projection from
+    /// a stale preparation after another settlement or rollback.
+    pub fn settlement_projection(
+        &self,
+        admitted: &AdmittedCase,
+        transition: &CheckedFeeTransition,
+    ) -> Result<FeeSettlementProjection, AccountingError> {
+        self.owned(&transition.owner)?;
+        let account = self.account(admitted)?;
+        if transition.intent != admitted.intent {
+            return Err(AccountingError::Binding);
+        }
+        if transition.epoch != self.epoch {
+            return Err(AccountingError::StalePreparation);
+        }
+        let plan = self.plan(admitted.intent, transition.operation)?;
+        if plan != transition.plan {
+            return Err(AccountingError::StalePreparation);
+        }
+        let mut payments = Vec::with_capacity(account.settled.len() + plan.payments.len());
+        for key in &account.payment_order {
+            payments.push((*key, *account.settled.get(key).ok_or(AccountingError::Binding)?));
+        }
+        let mut after = account.totals;
+        for (key, payment) in &plan.payments {
+            after.remaining = after.remaining.checked_sub(payment.amount).ok_or(AccountingError::InsufficientFunds)?;
+            after.paid_unique_service = after.paid_unique_service.checked_add(payment.amount).ok_or(AccountingError::Overflow)?;
+            payments.push((*key, *payment));
+        }
+        if plan.close_status.is_some() {
+            after.contractual_burn = account.contract.contractual_burn;
+            after.refunded = after.remaining.checked_sub(after.contractual_burn).ok_or(AccountingError::InsufficientFunds)?;
+            after.remaining = 0;
+        }
+        if !after.conserved() {
+            return Err(AccountingError::Conservation);
+        }
+        Ok(FeeSettlementProjection {
+            owner: self.owner.clone(),
+            epoch: self.epoch,
+            operation: transition.operation,
+            checked_plan: plan.clone(),
+            intent: admitted.intent,
+            payer: account.contract.payer,
+            before: account.totals,
+            after,
+            payments,
+            closure: plan.close_status,
+        })
+    }
+    /// Recheck immediately before translating a projection to an external
+    /// money-engine proposal. Old projections cannot outlive a payment,
+    /// rollback, changed authority view or ownership boundary.
+    pub fn validate_projection(&self, projection: &FeeSettlementProjection) -> Result<(), AccountingError> {
+        self.owned(&projection.owner)?;
+        if projection.epoch != self.epoch {
+            return Err(AccountingError::StalePreparation);
+        }
+        let account = self.case(projection.intent)?;
+        if account.totals != projection.before || account.contract.payer != projection.payer {
+            return Err(AccountingError::Binding);
+        }
+        if self.plan(projection.intent, projection.operation)? != projection.checked_plan {
+            return Err(AccountingError::StalePreparation);
+        }
+        Ok(())
     }
     fn install(&mut self, candidate: Book) -> Result<AccountingUndo, AccountingError> {
         if !self.conserved_book(&candidate) {
@@ -488,6 +598,7 @@ impl<A: AccountingAuthority> AtomicCourtStore for PrivateAccountingStore<A> {
                 contract: current,
                 totals: HoldTotals { initial, remaining: initial, ..Default::default() },
                 settled: BTreeMap::new(),
+                payment_order: Vec::new(),
                 closed: false,
             },
         );
@@ -523,6 +634,7 @@ impl<A: AccountingAuthority> AtomicCourtStore for PrivateAccountingStore<A> {
             account.totals.paid_unique_service =
                 account.totals.paid_unique_service.checked_add(payment.amount).ok_or(AccountingError::Overflow)?;
             account.settled.insert(key, payment);
+            account.payment_order.push(key);
         }
         if plan.close_status.is_some() {
             let burn = account.contract.contractual_burn;

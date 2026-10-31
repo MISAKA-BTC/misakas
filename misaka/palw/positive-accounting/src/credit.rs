@@ -9,6 +9,8 @@ use misaka_palw_positive_contract::{
 };
 use std::collections::BTreeMap;
 
+pub mod consumers;
+
 pub const ALL_CREDIT_USES: [CreditUse; 7] = [
     CreditUse::Reward,
     CreditUse::WorkReceipt,
