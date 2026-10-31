@@ -1,0 +1,15 @@
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a1/MISAKA-testnet/consensus/core)
+    Finished `test` profile [unoptimized] target(s) in 2m 00s
+     Running unittests src/lib.rs (/Users/wata/.cache/misaka-positive-a1-target/debug/deps/kaspa_consensus_core-5b3fb8e6accaaca6)
+
+running 7 tests
+test palw_tir_row_profile_v2::tests::raw_caps_precede_hashing_or_decode_and_unknown_scheme_never_falls_back ... ok
+test palw_tir_row_profile_v2::tests::keys_artifacts_digests_and_every_program_derived_row_field_are_checked ... ok
+test palw_tir_row_profile_v2::tests::in_range_context_is_explicit_row_metadata_and_out_of_range_is_refused ... ok
+test palw_tir_row_profile_v2::tests::nonempty_dissection_metadata_is_compared_canonically_under_its_own_cap ... ok
+test palw_tir_row_profile_v2::tests::wide_4097_vocab_dispatches_two_tiles_without_redefining_old_tiled_bit ... ok
+test palw_tir_row_profile_v2::tests::narrow_row_bytes_identity_and_profile_metadata_stay_unchanged ... ok
+test palw_tir_row_profile_v2::tests::legacy_i8_i16_and_idx_outputs_keep_old_factory_bytes_and_four_byte_wire_lanes ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 5458 filtered out; finished in 0.01s
+

@@ -1,0 +1,110 @@
+{
+  "date_jst": "2026-11-01",
+  "branch": "codex/a1-row-profile-metadata-v2",
+  "candidate_commit": "983b5277a02a1c7fdb20cf7b8610ee26c793ba7a",
+  "candidate_tree": "443f41b81aae40ac589fe2c7c9adaed2261ee405",
+  "base_commit": "017bff082c59992ab9e2017ad9b0bfdd791a5746",
+  "final_tests": {
+    "passed": 10,
+    "failed": 0,
+    "row_profile": 9,
+    "class_id_compatibility": 1,
+    "historical_counts_added": false
+  },
+  "strict_clippy": {
+    "passed": true,
+    "scope": "Core library only, --no-deps -D warnings; new unit tests compiled/executed by cargo test"
+  },
+  "docs": {
+    "mode": "no-new-regressions",
+    "known_issue_occurrences": 43,
+    "new_issue_occurrences": 0,
+    "strict_clean_audit": false,
+    "final_log": "docs-final-check.log",
+    "final_exit_code": 0
+  },
+  "build": {
+    "source_unchanged_during_run": true,
+    "tracked_source_clean_after_run": true,
+    "existing_a1_cache_only": true,
+    "root_or_a0_target_used": false,
+    "new_target_created": false,
+    "cpp_rebuilt": false,
+    "rust_rlib_manually_reused": false,
+    "cache_released_after_evidence_capture": true,
+    "binaries": [
+      {
+        "path": "/Users/wata/.cache/misaka-positive-a1-target/debug/deps/kaspa_consensus_core-5b3fb8e6accaaca6",
+        "size": 237675008,
+        "sha256": "1cc42c02dc7b389988648acdb7dd3c59e7eacf6e836b10bf3a04a85ac2863e8b"
+      }
+    ],
+    "archive": {
+      "path": "/Users/wata/.codex/worktrees/rfc14-g14-completion/MISAKA-testnet/target/release/build/librocksdb-sys-865d89ee7dbf2b2a/out/librocksdb.a",
+      "size": 23048496,
+      "sha256_before": "6eae541967b2cb5345ace55eadb34b2c490e91acfd8a4e2da5822a60f91af3a2",
+      "sha256_after": "6eae541967b2cb5345ace55eadb34b2c490e91acfd8a4e2da5822a60f91af3a2"
+    },
+    "static_link_output": [
+      {
+        "path": "/Users/wata/.cache/misaka-positive-a1-target/debug/build/librocksdb-sys-cf7973eacfe37c82/output",
+        "sha256": "31813c2ba93956d6951362983f71821362fd84cbf56be2a50e1dfd977726cec4"
+      }
+    ]
+  },
+  "scope": {
+    "serialized_view": false,
+    "schema_wire_tag_domain_change": false,
+    "v1_reader_factory_admission_dispatch_change": false,
+    "layout_reconstruction_or_native_authority": false,
+    "legacy_committable_dtypes_preserved": [
+      "I8",
+      "I16",
+      "I32",
+      "Idx"
+    ],
+    "in_range_max_context_only_rooted_row_metadata": true
+  },
+  "source_sha256": {
+    "Cargo.lock": "b8a58e9e08bdbfd7e3dfa87118d641fd673e50d7c277dfebd59686f4cb29ed61",
+    "Cargo.toml": "5b1cf91b2106e81e3c4046c125ec062d33dae86e7b5d8361ec4a2ce187e51efc",
+    "consensus/core/Cargo.toml": "084e2eb8a015be8b0c3abd513244a4587493a404810884b383b801b096fb1295",
+    "consensus/core/src/lib.rs": "bec516fe2bc69dfe1c2cfceb122771a33cb669ed93c29ac46d353b1641a24c81",
+    "consensus/core/src/palw_tir_row_profile_v2.rs": "56e182779c09fbc092caa76ab6c9d6308fc35a732290cbf7448972ee3cbe8136",
+    "consensus/core/src/palw_tir_row_profile_v2/tests.rs": "d989529f3d3cd9ec755b3ce2b44514c9c0989df400fb4518ada9c7b8ea9d8f0a",
+    "consensus/core/src/palw_tir_class_v1.rs": "0785d6f7b9c3341b8f4c6e7216e7a0d4f353a6cb1c37dd32d2fa48258a4082d9",
+    "consensus/core/src/palw_tir_class_record_v2.rs": "5d74d78fb95b6751143df581bc38f6facd397f50ec0778364f521345e2a13c22",
+    "consensus/core/src/palw_tir_profile_resolver_v2.rs": "f2f7055ba0a1ce12fc616075226371957295b161b8dfb06838f10e692893c86c",
+    "consensus/core/src/palw_tir_admission_v1.rs": "98cd4001bf769d81a4bb6847864c1090866ebc4bfb99385472cf5d09064fa364",
+    "consensus/core/src/palw_tir_attempt_v1.rs": "18e5555c1ad4b6501710fb746c95e798520e5a3b090a703ca4627253993765ba",
+    "consensus/core/src/palw_tir_dissect_v1.rs": "0f75b762f1f63905d309a12d3e3fdd5159f5b23ef127ea66802dc20a602d93e8",
+    "misaka/palw/tir/core/src/program.rs": "ef9eed8581b0a43673c5fa9eb1a84fbf5ec5e2ae77a9316b442907d1c4f92f23",
+    "misaka/palw/tir/core/src/validate.rs": "b95af832779a177854b2e1eea23fa1f58afc593c864f52222c52e96034c7ab65",
+    "misaka/palw/tir/core/src/types.rs": "c611245c756db63026eec084b8e43a04d2ee50c14b7071169f61035d1217f554"
+  },
+  "initial_run": {
+    "candidate": "4dff0e4e253d15c0294e6899e8a27f6dee5dc038",
+    "tests_passed": 8,
+    "strict_library_clippy_passed": true,
+    "raw_logs_unchanged": true,
+    "included_in_final_test_count": false
+  },
+  "evidence_sha256": {
+    "build-inputs.json": "6d8a22dfdc5d590f37f8c40909a4861a42f042a7062a5a545488ac7e6a9868d7",
+    "build-result.json": "4c7cbcc5149b04ee204ba07e81e5cd8895d39555e0bbdda1c17409a5df73dd0e",
+    "clippy.log": "fc9f9f2c4010116b87e54025addb7565b501739b746c38b13ed86f8636e2f04a",
+    "docs-check.log": "674c2e0f6754867d56b3d661fee8f32db0fe99672e852879d5b22248f643224e",
+    "identity-test.log": "07cd82b7f99fb6b549a7dd8e28d151bc27e5629257bbb56ff4da354cd6f4b592",
+    "initial/build-inputs.json": "8c79b718a27607f2686cd56f7ce83b8c1c0461d0e69724e7a0b0cf6faed3878b",
+    "initial/build-result.json": "4bc32213a84cb8c2f006b73123e435f7e5683186343dd4de8f1b7f1a511070ec",
+    "initial/clippy.log": "58250726175933c5ed6cb03519cbe76c6dc0642d63dd0820ec82b70f8f47ba3b",
+    "initial/identity-test.log": "f7537ed5385412b96ff29ce86554b1d45fdd660b4fc27097ddd6e2b4963b57dc",
+    "initial/row-tests.log": "c457d9b769f7da22aea881189d3143e21acb9228fa6173a487eda6fdd1b1fe1a",
+    "initial/run.py": "a1c0bdafe70bc28453b060a68d5f0899b300acfbd73e1ede14641a51a4f8c42d",
+    "rocksdb-build-script-librocksdb-sys-cf7973eacfe37c82.log": "31813c2ba93956d6951362983f71821362fd84cbf56be2a50e1dfd977726cec4",
+    "row-tests.log": "03b2669c295832c1813d5088df27f137414557c5585a2da9a6587d6eb87769ba",
+    "run.py": "ff4981164f306ed6cad1bb7791f3af6b2e42d0a822adbe5f350e75f31454dd8b",
+    "docs-final-check.log": "674c2e0f6754867d56b3d661fee8f32db0fe99672e852879d5b22248f643224e"
+  },
+  "handoff_sha256": "f8c5246ca605d462abe74c50c95ff998a4141f3ad624b199df71144d4d0dcff9"
+}

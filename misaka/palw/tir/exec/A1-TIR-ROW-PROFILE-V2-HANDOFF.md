@@ -20,7 +20,7 @@ schema1、programの実長とgraph hashを確認した後、元bytesをcanonical
 exact schemeを分類し、logits dtype、token_bound、held、旧tiled predicate、prim_set_id、
 logits_vocab、dissected全listを再導出して照合する。listは順序・重複も含めて完全一致を求める。
 
-既存 `palw_tir_class_id_from_digests_v1` helperを意味不変で抽出した。
+既存class ID計算を `palw_tir_class_id_from_digests_v1` helperとして意味不変で抽出した。
 既存domainと `version(u16LE) || graph_root || layout_digest || artifact || tokenizer` の
 順序を保ち、`PalwTirClassV1::class_id` も同helperに委譲する。導出IDをnative map keyと
 `row.facts.class_id` の両方に照合する。program hashは前段で検査済みである。
@@ -67,3 +67,17 @@ program/row/dissectedをcloneせず、bounded decoder・re-encode・validatorと
 strict Core library Clippy、実unit-test binary、既存static RocksDB archive、link build-script
 outputのSHA256を記録する。A1既存cacheだけを使用しRoot/A0 target・新target・C++ buildを
 使わない。過去のphaseのテスト数は合算せず、raw log末尾も変更しない。
+
+## 最終結果
+
+凍結sourceは `983b5277a`（実装 `4dff0e4e2`、追加拒否テスト `983b5277a`）。
+最終runのrow profile 9件＋既存class ID互換性1件＝10件がすべて通過した。
+Core libraryのみのstrict Clippy（`--no-deps -D warnings`）も通過した。
+新unit testはCargoでcompile・実行したが、全integration targetのClippyや全Core testを
+実行したとは扱わない。文書checkerは既知43件・新規0件でPASS（strict clean auditではない）。
+
+`validation/row-profile-metadata-v2/validation.json` に最終source/tree、実binaryとarchive、
+各evidence fileのSHA256を保存した。build inputs/resultsとraw logも同directoryにある。
+`initial/` は初回凍結 `4dff0e4e2` の8件＋Clippy結果を保持し、最終10件には合算しない。
+最終build中のsource不変とtracked clean、archiveの前後一致を確認した。
+証拠取得後、既存A1専用cacheをreleaseした。

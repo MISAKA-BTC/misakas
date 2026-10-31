@@ -1,0 +1,8 @@
+    Finished `test` profile [unoptimized] target(s) in 0.59s
+     Running unittests src/lib.rs (/Users/wata/.cache/misaka-positive-a1-target/debug/deps/kaspa_consensus_core-5b3fb8e6accaaca6)
+
+running 1 test
+test palw_tir_class_v1::class_id_digest_tests::digest_helper_preserves_legacy_preimage_and_binds_every_part ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5466 filtered out; finished in 0.00s
+
