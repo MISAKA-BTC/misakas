@@ -6,7 +6,7 @@
 use super::*;
 use crate::{
     palw_positive_rows_v2::PositiveRowsV2,
-    palw_positive_source_v2::{NativeSourceLedgerV2, PreparedSourceUpdateV2, SourceEffectV2},
+    palw_positive_source_v2::{NativeSourceLedgerV2, PreparedSourceUpdateV2},
 };
 use misaka_palw_positive_contract::{
     native::{KERNEL_AUX_TABLE, NativeRowKey},
@@ -63,7 +63,9 @@ impl TransitionBuilder<'_> {
                 return Err(source_refusal("unit receipt differs from complete replay"));
             }
         }
-        if update.effect() == SourceEffectV2::AlreadyApplied {
+        // Logical relay duplicates still require the full old-literal CAS
+        // above, but cannot grow Case usage, native row deltas or its journal.
+        if !update.changes_case() {
             return Ok(());
         }
         let checkpoint = self.try_checkpoint()?;

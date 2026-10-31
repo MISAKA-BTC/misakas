@@ -237,8 +237,12 @@ struct TestLiteralHistory {
     result: ResultId,
     service: Digest,
     ordered: Vec<AcceptedMaterial>,
+    // Ordinary accepted carriers include logical retransmissions. The source
+    // Case journal retains only meaningful events under the fixed NoOp rule.
+    logical_noops: Vec<AcceptedMaterial>,
     requests: Vec<LiteralRequest>,
     responses: Vec<LiteralResponse>,
+    providers: Vec<PrincipalId>,
     missing: Option<SourceMissingPortV2>,
     cutoff: u64,
     fee: SourceServiceFeeV2,
@@ -254,7 +258,11 @@ impl TestLiteralHistory {
         Ok(SourceEventCostV2 { additional_work: 2, outer_carrier_bytes: 7, cutoff: self.cutoff, service_fee: 0 })
     }
     fn add_request(&mut self, request: SourceRequest, panel: u8) {
+        let is_noop = self.requests.iter().any(|prior| prior.request == request);
         let literal = LiteralRequest::new(request, self.ordered.len(), panel);
+        if is_noop {
+            self.logical_noops.push(literal.material);
+        }
         self.ordered.push(literal.material);
         self.requests.push(literal);
     }
@@ -262,6 +270,10 @@ impl TestLiteralHistory {
         let literal = LiteralResponse::new(request, provider, raw, self.ordered.len());
         self.ordered.push(literal.material);
         self.responses.push(literal);
+    }
+    fn mark_last_response_noop(&mut self) {
+        let material = self.responses.last().unwrap().material;
+        self.logical_noops.push(material);
     }
 }
 impl NativeSourceContextV2 for TestLiteralHistory {
@@ -279,7 +291,10 @@ impl NativeSourceContextV2 for TestLiteralHistory {
         }
         let index = self.ordered.iter().position(|m| m == next).ok_or(SourceErrorV2::History)?;
         let observed: Vec<_> = history.entries().iter().map(|e| e.material).collect();
-        if observed != self.ordered[..index] && observed != self.ordered[..=index] {
+        let meaningful = |carriers: &[AcceptedMaterial]| -> Vec<AcceptedMaterial> {
+            carriers.iter().filter(|material| !self.logical_noops.contains(material)).copied().collect()
+        };
+        if observed != meaningful(&self.ordered[..index]) && observed != meaningful(&self.ordered[..=index]) {
             return Err(SourceErrorV2::History);
         }
         Ok(())
@@ -309,6 +324,9 @@ impl NativeSourceContextV2 for TestLiteralHistory {
         event: &SourceResponseEventV2<'_>,
     ) -> Result<SourceEventCostV2, SourceErrorV2> {
         let mut cost = self.check(result, service)?;
+        if !self.providers.contains(&event.provider) {
+            return Err(SourceErrorV2::MissingPort(SourceMissingPortV2::DrawnRole));
+        }
         let literal = self.responses.iter().find(|r| r.material == event.material).ok_or(SourceErrorV2::History)?;
         if literal.request != event.request
             || literal.provider != event.provider
@@ -361,8 +379,10 @@ fn ledger_fixture(
         result: f.result.id(),
         service: service.id(),
         ordered: vec![],
+        logical_noops: vec![],
         requests: vec![],
         responses: vec![],
+        providers: vec![f.result.miner],
         missing: None,
         cutoff: 90,
         fee: SourceServiceFeeV2 { amount: 3, schedule: d(210), funding_scope: FundingScopeId(d(211)) },
@@ -551,11 +571,19 @@ fn independent_identical_ranges_from_other_panels_preserve_first_duty_and_once_o
     budget.unique_source_bytes = 4;
     let (f, values, geometry, mut ledger, mut context) = ledger_fixture(budget);
     let request = f.request(SourceKind::ArtifactInventory, 0, 1);
+    let mut request_usage = None;
     for panel in [71, 72] {
         context.add_request(request, panel);
         let update = ledger.prepare_request(&geometry, &context, context.requests.last().unwrap().event()).unwrap();
+        assert_eq!(update.changes_case(), panel == 71);
+        if panel == 72 {
+            assert_eq!(update.usage(), ledger.usage());
+            assert_eq!(usage_tuple(&ledger), request_usage.unwrap());
+        }
         ledger.apply(update).unwrap();
+        request_usage = Some(usage_tuple(&ledger));
     }
+    assert_eq!(ledger.history_events().len(), 1);
     assert_eq!(ledger.usage().rounds, 1);
     assert_eq!(ledger.usage().unique_source_bytes, 4);
     assert_eq!(ledger.request(request.id()).unwrap().material, context.requests[0].material);
@@ -571,16 +599,19 @@ fn independent_identical_ranges_from_other_panels_preserve_first_duty_and_once_o
     let update = ledger.prepare_response(&geometry, &context, context.responses[0].event()).unwrap();
     ledger.apply(update).unwrap();
     assert_eq!(usage_tuple(&ledger), before);
-    // A new accepted op4 is retained/metered, but cannot replace the original
-    // literal receipt or manufacture a second completion/settlement.
+    // A new accepted carrier is a logical NoOp after full authorization/data
+    // checks. It cannot grow Case history, cost, or first receipt provenance.
     context.add_response(request, f.result.miner, &raw);
+    context.mark_last_response_noop();
     let update = ledger.prepare_response(&geometry, &context, context.responses[1].event()).unwrap();
+    assert!(!update.changes_case());
     ledger.apply(update).unwrap();
     assert_eq!(ledger.receipt(request.kind, request.source, 0), Some(&first));
     assert_eq!(ledger.source_union(request.kind, request.source).unwrap().completed_units, 1);
     assert_eq!(ledger.usage().unique_source_bytes, 4);
     assert_eq!(ledger.usage().rounds, 1);
-    assert_eq!(ledger.usage().transmitted_bytes - before.2, 137 + 166 + 7);
+    assert_eq!(usage_tuple(&ledger), before);
+    assert_eq!(ledger.history_events().len(), 2);
 }
 
 #[test]
@@ -627,8 +658,12 @@ fn independent_fresh_fee_reservation_is_atomic_and_first_receipt_creates_only_on
     let raw = borsh::to_vec(&open_artifact_leaf_v1(&values, 0).unwrap()).unwrap();
     for index in 0..2 {
         context.add_response(request, f.result.miner, &raw);
+        if index == 1 {
+            context.mark_last_response_noop();
+        }
         let update = ledger.prepare_response(&geometry, &context, context.responses[index].event()).unwrap();
         assert_eq!(update.fee_intent().is_some(), index == 0);
+        assert_eq!(update.changes_case(), index == 0);
         if let Some(intent) = update.fee_intent() {
             assert_eq!(intent.result, f.result.id());
             assert_eq!(intent.provider, f.result.miner);
@@ -637,7 +672,7 @@ fn independent_fresh_fee_reservation_is_atomic_and_first_receipt_creates_only_on
             assert_eq!(intent.funding_scope, context.fee.funding_scope);
             assert_eq!(intent.accepted_response, context.responses[index].material);
             assert_eq!(
-                intent.key,
+                intent.receipt_key,
                 misaka_palw_positive_contract::native::NativeRowKey::ServiceReceipt {
                     case: request.case,
                     kind: request.kind,
@@ -824,14 +859,19 @@ fn independent_first_receipt_names_the_op4_request_while_unit_completion_and_fee
     assert_eq!(ledger.status(a.kind, a.source, 1), MinerDataStatus::Complete);
     assert_eq!(ledger.usage().fee, 3);
     assert_eq!(ledger.usage().unique_source_bytes, 16);
+    let before = usage_tuple(&ledger);
     context.add_response(a, f.result.miner, &raw);
+    context.mark_last_response_noop();
     let update = ledger.prepare_response(&geometry, &context, context.responses[1].event()).unwrap();
+    assert!(!update.changes_case());
     assert!(update.receipt().is_none());
     assert!(update.fee_intent().is_none());
     ledger.apply(update).unwrap();
     assert_eq!(ledger.receipt(a.kind, a.source, 1), Some(&receipt));
     assert_eq!(ledger.usage().fee, 3);
     assert_eq!(ledger.source_union(a.kind, a.source).unwrap().completed_units, 1);
+    assert_eq!(usage_tuple(&ledger), before);
+    assert_eq!(ledger.history_events().len(), 3);
 
     let (_, _, replay_geometry, mut replay, _) = ledger_fixture(service_budget());
     for literal in &context.requests {
@@ -859,6 +899,7 @@ fn independent_no_output_updates_still_identify_every_native_row_that_requires_c
     ledger.apply(update).unwrap();
     let update = ledger.prepare_request(&geometry, &context, context.requests[0].event()).unwrap();
     assert_eq!(update.effect(), SourceEffectV2::AlreadyApplied);
+    assert!(!update.changes_case());
     assert!(update.union().is_none());
     assert!(update.receipt().is_none());
     assert_eq!(update.touched_source(), source);
@@ -873,6 +914,7 @@ fn independent_no_output_updates_still_identify_every_native_row_that_requires_c
     let before = usage_tuple(&ledger);
     let update = ledger.prepare_response(&geometry, &context, context.responses[0].event()).unwrap();
     assert_eq!(update.effect(), SourceEffectV2::AlreadyApplied);
+    assert!(!update.changes_case());
     assert!(update.union().is_none());
     assert!(update.receipt().is_none());
     assert_eq!(update.touched_source(), source);
@@ -880,8 +922,10 @@ fn independent_no_output_updates_still_identify_every_native_row_that_requires_c
     ledger.apply(update).unwrap();
     assert_eq!(usage_tuple(&ledger), before);
     context.add_response(request, f.result.miner, &raw);
+    context.mark_last_response_noop();
     let update = ledger.prepare_response(&geometry, &context, context.responses[1].event()).unwrap();
     assert_eq!(update.effect(), SourceEffectV2::AlreadyComplete);
+    assert!(!update.changes_case());
     assert!(update.receipt().is_none());
     assert!(update.fee_intent().is_none());
     assert_eq!(update.touched_source(), source);
@@ -889,4 +933,188 @@ fn independent_no_output_updates_still_identify_every_native_row_that_requires_c
     ledger.apply(update).unwrap();
     assert_eq!(ledger.usage().fee, 3);
     assert_eq!(ledger.source_union(request.kind, request.source).unwrap().completed_units, 1);
+}
+
+#[test]
+fn independent_logical_noop_flood_preserves_case_caps_and_does_not_stale_a_meaningful_update() {
+    let mut budget = service_budget();
+    budget.rounds = 2;
+    budget.unique_source_bytes = 8;
+    budget.transmitted_bytes = 2 * 4909 + 2 * 303 + 4 * 7;
+    budget.additional_work = 8;
+    budget.retained_bytes = 2 * 4909 + 2 * 303;
+    budget.fee = 6;
+    let (f, values, geometry, initial, mut context) = ledger_fixture(budget);
+    let mut caps = source_limits();
+    caps.max_requests = 2;
+    caps.max_responses = 2;
+    caps.max_history_events = 4;
+    caps.max_history_bytes = budget.retained_bytes;
+    caps.max_intervals = 1;
+    caps.max_units_per_request = 1;
+    let mut ledger = NativeSourceLedgerV2::new(f.result.clone(), *initial.service(), AggregateUsage::default(), caps).unwrap();
+    ledger.bind_case(&current_case_fixture(&ledger)).unwrap();
+    let a = f.request(SourceKind::ArtifactInventory, 0, 1);
+    context.add_request(a, 71);
+    let update = ledger.prepare_request(&geometry, &context, context.requests[0].event()).unwrap();
+    ledger.apply(update).unwrap();
+    let raw = borsh::to_vec(&open_artifact_leaf_v1(&values, 0).unwrap()).unwrap();
+    context.add_response(a, f.result.miner, &raw);
+    let update = ledger.prepare_response(&geometry, &context, context.responses[0].event()).unwrap();
+    let original_case = *update.case_row().unwrap();
+    ledger.apply(update).unwrap();
+    let first_receipt = *ledger.receipt(a.kind, a.source, 0).unwrap();
+    let unchanged = usage_tuple(&ledger);
+    let delegated = PrincipalId(d(240));
+    context.providers.push(delegated); // Explicitly permitted by this test-only role map.
+    for attempt in 0..12 {
+        context.add_request(a, 72 + attempt % 2);
+        let update = ledger.prepare_request(&geometry, &context, context.requests.last().unwrap().event()).unwrap();
+        assert!(!update.changes_case());
+        assert_eq!(update.expected_case(), Some(&original_case));
+        assert_eq!(update.case_row(), Some(&original_case));
+        assert_eq!(update.touched_source(), (a.kind, a.source));
+        ledger.apply(update).unwrap();
+        assert!(ledger.history().resolve(&context.requests.last().unwrap().material).is_err());
+        context.add_response(a, delegated, &raw);
+        context.mark_last_response_noop();
+        let update = ledger.prepare_response(&geometry, &context, context.responses.last().unwrap().event()).unwrap();
+        assert!(!update.changes_case());
+        assert!(update.receipt().is_none());
+        assert!(update.fee_intent().is_none());
+        assert_eq!(update.case_row(), Some(&original_case));
+        assert_eq!(update.touched_unit(), Some((a.kind, a.source, 0)));
+        ledger.apply(update).unwrap();
+        assert!(ledger.history().resolve(&context.responses.last().unwrap().material).is_err());
+        assert_eq!(usage_tuple(&ledger), unchanged);
+        assert_eq!(ledger.history_events().len(), 2);
+        assert_eq!(ledger.receipt(a.kind, a.source, 0), Some(&first_receipt));
+    }
+    assert_eq!(first_receipt.provider, f.result.miner);
+    // Prepare a meaningful later candidate against the same logical prefix.
+    // Its preceding ordinary carrier is a NoOp and must not change revision.
+    context.add_request(a, 73);
+    let noop_index = context.requests.len() - 1;
+    let b = f.request(SourceKind::ArtifactInventory, 1, 2);
+    context.add_request(b, 74);
+    let meaningful = ledger.prepare_request(&geometry, &context, context.requests.last().unwrap().event()).unwrap();
+    assert!(meaningful.changes_case());
+    let noop = ledger.prepare_request(&geometry, &context, context.requests[noop_index].event()).unwrap();
+    assert!(!noop.changes_case());
+    ledger.apply(noop).unwrap();
+    ledger.validate_prepared(&meaningful).unwrap();
+    ledger.apply(meaningful).unwrap();
+    assert_eq!(ledger.history_events().len(), 3);
+    assert_eq!(ledger.usage().additional_work, 6);
+    assert_eq!(ledger.usage().unique_source_bytes, 8);
+    assert_eq!(ledger.usage().rounds, 2);
+    assert_eq!(ledger.usage().fee, 3);
+    assert_eq!(ledger.status(b.kind, b.source, 1), MinerDataStatus::Pending);
+    assert_eq!(ledger.receipt(a.kind, a.source, 0), Some(&first_receipt));
+    let second_raw = borsh::to_vec(&open_artifact_leaf_v1(&values, 1).unwrap()).unwrap();
+    context.add_response(b, f.result.miner, &second_raw);
+    let update = ledger.prepare_response(&geometry, &context, context.responses.last().unwrap().event()).unwrap();
+    assert!(update.changes_case());
+    assert!(update.fee_intent().is_some());
+    ledger.apply(update).unwrap();
+    assert_eq!(ledger.history_events().len(), 4);
+    assert_eq!(ledger.usage().retained_bytes, budget.retained_bytes);
+    assert_eq!(ledger.usage().transmitted_bytes, budget.transmitted_bytes);
+    assert_eq!(ledger.usage().additional_work, budget.additional_work);
+    assert_eq!(ledger.usage().fee, 6);
+    assert_eq!(ledger.status(b.kind, b.source, 1), MinerDataStatus::Complete);
+}
+
+#[test]
+fn independent_logical_duplicates_still_require_actor_g14_clock_and_origin_authorization() {
+    for attack in 0..9 {
+        let (f, values, geometry, mut ledger, mut context) = ledger_fixture(service_budget());
+        let request = f.request(SourceKind::ArtifactInventory, 0, 1);
+        context.add_request(request, 71);
+        let update = ledger.prepare_request(&geometry, &context, context.requests[0].event()).unwrap();
+        ledger.apply(update).unwrap();
+        let raw = borsh::to_vec(&open_artifact_leaf_v1(&values, 0).unwrap()).unwrap();
+        context.add_response(request, f.result.miner, &raw);
+        let update = ledger.prepare_response(&geometry, &context, context.responses[0].event()).unwrap();
+        ledger.apply(update).unwrap();
+        let before = usage_tuple(&ledger);
+        let first_receipt = *ledger.receipt(request.kind, request.source, 0).unwrap();
+        if attack <= 1 {
+            context.add_request(request, 72);
+            if attack == 0 {
+                context.missing = Some(SourceMissingPortV2::DrawnRole);
+            } else {
+                let literal = context.requests.last_mut().unwrap();
+                literal.signature[0] ^= 1;
+                let signature_offset = literal.body.len() - SIGNATURE_BYTES;
+                literal.body[signature_offset] ^= 1;
+            }
+            assert!(ledger.prepare_request(&geometry, &context, context.requests.last().unwrap().event()).is_err());
+        } else {
+            let mut next_raw = raw.clone();
+            if attack == 3 {
+                next_raw[22] ^= 1;
+            }
+            let provider = if attack == 2 { PrincipalId(d(241)) } else { f.result.miner };
+            context.add_response(request, provider, &next_raw);
+            context.mark_last_response_noop();
+            match attack {
+                4 => {
+                    context.responses.last_mut().unwrap().material.digest = d(242);
+                    *context.ordered.last_mut().unwrap() = context.responses.last().unwrap().material;
+                    *context.logical_noops.last_mut().unwrap() = context.responses.last().unwrap().material;
+                }
+                5 => {
+                    context.responses.last_mut().unwrap().material.origin.event_ordinal = 1;
+                    *context.ordered.last_mut().unwrap() = context.responses.last().unwrap().material;
+                    *context.logical_noops.last_mut().unwrap() = context.responses.last().unwrap().material;
+                }
+                6 => context.fee.schedule = d(243),
+                7 => context.cutoff = context.responses.last().unwrap().material.origin.accepted_daa,
+                8 => {
+                    context.responses.last_mut().unwrap().material.origin.accepted_blue_score = 19;
+                    *context.ordered.last_mut().unwrap() = context.responses.last().unwrap().material;
+                    *context.logical_noops.last_mut().unwrap() = context.responses.last().unwrap().material;
+                }
+                _ => {}
+            }
+            assert!(
+                ledger.prepare_response(&geometry, &context, context.responses.last().unwrap().event()).is_err(),
+                "NoOp attack {attack}"
+            );
+        }
+        assert_eq!(usage_tuple(&ledger), before);
+        assert_eq!(ledger.history_events().len(), 2);
+        assert_eq!(ledger.receipt(request.kind, request.source, 0), Some(&first_receipt));
+    }
+}
+
+#[test]
+fn independent_distinct_request_id_with_a_fully_overlapping_range_remains_meaningful() {
+    let (f, _, geometry, mut ledger, mut context) = ledger_fixture(service_budget());
+    let a = f.request(SourceKind::ArtifactInventory, 0, 3);
+    let b = f.request(SourceKind::ArtifactInventory, 1, 2);
+    assert_ne!(a.id(), b.id());
+    context.add_request(a, 71);
+    let update = ledger.prepare_request(&geometry, &context, context.requests[0].event()).unwrap();
+    ledger.apply(update).unwrap();
+    let before = usage_tuple(&ledger);
+    context.add_request(a, 72);
+    let noop = ledger.prepare_request(&geometry, &context, context.requests[1].event()).unwrap();
+    assert!(!noop.changes_case());
+    ledger.apply(noop).unwrap();
+    context.add_request(b, 73);
+    let update = ledger.prepare_request(&geometry, &context, context.requests[2].event()).unwrap();
+    assert_eq!(update.effect(), SourceEffectV2::Coalesced);
+    assert!(update.changes_case());
+    ledger.apply(update).unwrap();
+    let after = usage_tuple(&ledger);
+    assert_eq!(after.0, before.0);
+    assert_eq!(after.1, before.1);
+    assert_eq!(after.2 - before.2, 4909 + 7);
+    assert_eq!(after.3 - before.3, 2);
+    assert_eq!(after.4 - before.4, 4909);
+    assert_eq!(ledger.history_events().len(), 2);
+    assert_eq!(ledger.request(b.id()).unwrap().material, context.requests[2].material);
+    assert_eq!(ledger.source_union(b.kind, b.source).unwrap().union, context.requests[2].material);
 }
