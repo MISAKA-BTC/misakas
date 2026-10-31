@@ -322,3 +322,192 @@ fn stale_checked_transition_cannot_cross_undo_and_restore_in_same_branch() {
     assert_eq!(c.store().reserved_resources(), 4);
     assert!(c.store().conserved());
 }
+mod committed_recovery {
+    use super::*;
+    use misaka_palw_positive_accounting::fees::{AdmittedCase, HoldTotals};
+    use std::cell::Cell;
+
+    /// Test wrapper delegates EVERY effect and opaque receipt to the actual A5
+    /// book. It has no native success implementation or synthetic case handle.
+    struct RecoveryBook {
+        inner: PrivateAccountingStore<View>,
+        view: View,
+        reads: Cell<u32>,
+        change_after_read: Cell<bool>,
+    }
+    impl AtomicCourtStore for RecoveryBook {
+        type PreparedAdmission = <PrivateAccountingStore<View> as AtomicCourtStore>::PreparedAdmission;
+        type AdmittedCase = <PrivateAccountingStore<View> as AtomicCourtStore>::AdmittedCase;
+        type CheckedTransition = <PrivateAccountingStore<View> as AtomicCourtStore>::CheckedTransition;
+        type UndoRecord = <PrivateAccountingStore<View> as AtomicCourtStore>::UndoRecord;
+        type Error = AccountingError;
+        fn prepare_admission(&self, intent: AdmissionIntent) -> Result<Self::PreparedAdmission, Self::Error> {
+            self.inner.prepare_admission(intent)
+        }
+        fn commit_admission(&mut self, prepared: Self::PreparedAdmission) -> Result<Self::AdmittedCase, Self::Error> {
+            self.inner.commit_admission(prepared)
+        }
+        fn apply_transition(
+            &mut self,
+            case: &Self::AdmittedCase,
+            next: Self::CheckedTransition,
+        ) -> Result<Self::UndoRecord, Self::Error> {
+            self.inner.apply_transition(case, next)
+        }
+        fn rollback(&mut self, undo: Self::UndoRecord) -> Result<(), Self::Error> {
+            self.inner.rollback(undo)
+        }
+    }
+    impl CommittedCourtRecoveryStoreV2 for RecoveryBook {
+        fn recover_committed_case(
+            &self,
+            intent: AdmissionIntent,
+            root: CourtAdmissionRootV2,
+        ) -> Result<AdmittedCase, AccountingError> {
+            if root != self.view.root() {
+                return Err(AccountingError::Binding);
+            }
+            self.reads.set(self.reads.get() + 1);
+            let case = self.inner.recover_committed_case(intent)?;
+            if self.change_after_read.get() {
+                self.view.0.borrow_mut().root.generation += 1;
+            }
+            Ok(case)
+        }
+    }
+    #[derive(Clone)]
+    struct RecoveryView {
+        inner: View,
+        change_during_resolve: Rc<Cell<bool>>,
+    }
+    impl CourtAdmissionViewV2 for RecoveryView {
+        type Error = &'static str;
+        fn root(&self) -> CourtAdmissionRootV2 {
+            self.inner.root()
+        }
+        fn resolve(&self, _: &MinerResultCommit) -> Result<ResolvedCourtAdmissionV2, Self::Error> {
+            Err("recovery fixture forbids new-intake resolution")
+        }
+        fn resolve_committed(&self, _: &AdmissionIntent, _: &MinerResultCommit) -> Result<ResolvedCourtAdmissionV2, Self::Error> {
+            // Explicit PRIVATE completed-history fixture, not a native Case or
+            // deadline adapter. Real native implementations need actual rows.
+            let mut facts = self.inner.0.borrow_mut();
+            if !facts.closed {
+                return Err("completed history unavailable");
+            }
+            if self.change_during_resolve.get() {
+                facts.root.generation += 1;
+            }
+            Ok(facts.resolved)
+        }
+    }
+    type RecoveryCoordinator = AtomicAdmissionCoordinatorV2<RecoveryBook, RecoveryView>;
+    fn wrap(store: PrivateAccountingStore<View>, view: &View) -> RecoveryCoordinator {
+        AtomicAdmissionCoordinatorV2::new(
+            RecoveryBook { inner: store, view: view.clone(), reads: Cell::new(0), change_after_read: Cell::new(false) },
+            RecoveryView { inner: view.clone(), change_during_resolve: Rc::new(Cell::new(false)) },
+        )
+    }
+    fn snapshot(c: &RecoveryCoordinator, s: &Signed) -> (u64, u64, Option<HoldTotals>) {
+        (c.store().inner.balance(s.result.miner), c.store().inner.reserved_resources(), c.store().inner.totals(s.result.case_id()))
+    }
+    #[test]
+    fn completed_case_recovers_after_intake_and_service_expiry_without_readmission_or_epoch_change() {
+        let (s, v) = fixture();
+        let mut original = coordinator(&v);
+        let old = original.commit(prepare(&original, &s)).unwrap();
+        v.0.borrow_mut().closed = true;
+        let before_restart = original.store().prepare_close(old.store_case()).unwrap();
+        let (book, _) = original.into_parts();
+        let mut fresh = wrap(book, &v);
+        {
+            let mut f = v.0.borrow_mut();
+            f.root.now = 110;
+            f.root.generation = 8;
+            // New-admission authority is no longer supplied. The committed book
+            // is still real, held, and recoverable; no replacement hold is made.
+            f.fee.intent.obligations = d(98);
+        }
+        let before = snapshot(&fresh, &s);
+        let recovered = fresh.recover_committed_case(s.result.clone(), &s.key, &s.signature, old.intent()).unwrap();
+        assert_eq!(recovered.root(), v.root());
+        assert_eq!(recovered.intent(), old.intent());
+        assert_eq!(snapshot(&fresh, &s), before);
+        assert_eq!(fresh.store().reads.get(), 1);
+        assert!(fresh.prepare(s.result.clone(), &s.key, &s.signature).is_err());
+        let foreign = fresh.store().inner.prepare_close(old.store_case()).unwrap();
+        assert_eq!(fresh.apply_transition(&old, foreign).err(), Some(CourtAdmissionErrorV2::ForeignCapability));
+        // This transition was prepared before restart/recovery. Its real A5
+        // epoch still matches, proving recovery did not advance the book.
+        fresh.apply_transition(&recovered, before_restart).unwrap();
+        assert_eq!(fresh.store().inner.balance(s.result.miner), 1000);
+        assert_eq!(fresh.store().inner.reserved_resources(), 0);
+        assert!(fresh.store().inner.conserved());
+        assert!(recovered.into_store_case().into_admission_undo().is_none());
+    }
+    #[test]
+    fn recovery_rejects_forgery_foreign_scope_different_result_intent_missing_case_and_root_races() {
+        for mode in 0..7 {
+            let (s, v) = fixture();
+            let mut original = coordinator(&v);
+            let old = original.commit(prepare(&original, &s)).unwrap();
+            v.0.borrow_mut().closed = true;
+            let old_transition = original.store().prepare_close(old.store_case()).unwrap();
+            let (book, _) = original.into_parts();
+            let book = if mode == 4 { coordinator(&v).into_parts().0 } else { book };
+            let fresh = wrap(book, &v);
+            {
+                let mut f = v.0.borrow_mut();
+                f.root.now = 110;
+                f.root.generation = 8;
+            }
+            let before = snapshot(&fresh, &s);
+            let mut result = s.result.clone();
+            let mut signature = s.signature;
+            let mut intent = old.intent();
+            let expected = match mode {
+                0 => {
+                    signature[0] ^= 1;
+                    CourtAdmissionErrorV2::Contract(ContractError::Signature)
+                }
+                1 => {
+                    intent.scope.branch = d(99);
+                    CourtAdmissionErrorV2::Binding
+                }
+                2 => {
+                    result.output = d(99);
+                    signature = sign_result(&result);
+                    intent.result = result.id();
+                    CourtAdmissionErrorV2::Binding
+                }
+                3 => {
+                    intent.resource_quote = d(99);
+                    CourtAdmissionErrorV2::Binding
+                }
+                4 => CourtAdmissionErrorV2::Store(AccountingError::UnknownCase),
+                5 => {
+                    fresh.view().change_during_resolve.set(true);
+                    CourtAdmissionErrorV2::StaleRoot
+                }
+                _ => {
+                    fresh.store().change_after_read.set(true);
+                    CourtAdmissionErrorV2::StaleRoot
+                }
+            };
+            assert_eq!(fresh.recover_committed_case(result, &s.key, &signature, intent).err(), Some(expected), "mode {mode}");
+            assert_eq!(snapshot(&fresh, &s), before, "mode {mode}");
+            assert_eq!(fresh.store().reads.get(), if mode == 4 || mode == 6 { 1 } else { 0 });
+            if mode != 4 {
+                // No wrapper epoch/receipt substitution: the original actual
+                // A5 transition is still usable after every failed recovery.
+                let (mut actual, _) = fresh.into_parts();
+                actual.inner.apply_transition(old.store_case(), old_transition).unwrap();
+                assert_eq!(actual.inner.balance(s.result.miner), 1000);
+                assert_eq!(actual.inner.reserved_resources(), 0);
+                assert!(actual.inner.conserved());
+            } else {
+                assert!(fresh.store().inner.conserved());
+            }
+        }
+    }
+}

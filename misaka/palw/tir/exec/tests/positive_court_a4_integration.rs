@@ -1256,6 +1256,90 @@ mod admitted_fact_bridge {
             assert!(c.prepare(result.clone(), &miner_key(), &sign_result(&result)).is_err());
         }
     }
+
+    use misaka_palw_positive_contract::ports::AtomicCourtStore;
+    struct RestartBook(PrivateAccountingStore<View>);
+    impl AtomicCourtStore for RestartBook {
+        type PreparedAdmission = <PrivateAccountingStore<View> as AtomicCourtStore>::PreparedAdmission;
+        type AdmittedCase = <PrivateAccountingStore<View> as AtomicCourtStore>::AdmittedCase;
+        type CheckedTransition = <PrivateAccountingStore<View> as AtomicCourtStore>::CheckedTransition;
+        type UndoRecord = <PrivateAccountingStore<View> as AtomicCourtStore>::UndoRecord;
+        type Error = AccountingError;
+        fn prepare_admission(&self, intent: AdmissionIntent) -> Result<Self::PreparedAdmission, Self::Error> {
+            self.0.prepare_admission(intent)
+        }
+        fn commit_admission(&mut self, prepared: Self::PreparedAdmission) -> Result<Self::AdmittedCase, Self::Error> {
+            self.0.commit_admission(prepared)
+        }
+        fn apply_transition(
+            &mut self,
+            case: &Self::AdmittedCase,
+            transition: Self::CheckedTransition,
+        ) -> Result<Self::UndoRecord, Self::Error> {
+            self.0.apply_transition(case, transition)
+        }
+        fn rollback(&mut self, undo: Self::UndoRecord) -> Result<(), Self::Error> {
+            self.0.rollback(undo)
+        }
+    }
+    impl CommittedCourtRecoveryStoreV2 for RestartBook {
+        fn recover_committed_case(&self, intent: AdmissionIntent, _: CourtAdmissionRootV2) -> Result<Self::AdmittedCase, Self::Error> {
+            // Explicit PRIVATE adapter. The independently resolved committed
+            // view above is still mandatory; this does not restore native funds.
+            self.0.recover_committed_case(intent)
+        }
+    }
+    #[test]
+    fn real_a1_fact_binds_recovered_actual_book_after_restart_and_funding_cutoff() {
+        let f = fixture();
+        let (result, service) = court_result(&f, false);
+        let (mut old, view) = admission(&result, service);
+        let old_receipt = old.commit(old.prepare(result.clone(), &miner_key(), &sign_result(&result)).unwrap()).unwrap();
+        let fact = completed(&f, &result, service);
+        let foreign_fact = completed(&f, &result, service);
+        view.0.borrow_mut().terminal = Some(match fact.terminal_kind() {
+            TerminalKindV2::PositivePassed => ClaimStatus::PositivePassed,
+            other => panic!("unexpected actual A1 terminal {other:?}"),
+        });
+        let before_restart_close = old.store().prepare_close(old_receipt.store_case()).unwrap();
+        let (book, _) = old.into_parts();
+        let mut current = AtomicAdmissionCoordinatorV2::new(RestartBook(book), view.clone());
+        {
+            let mut facts = view.0.borrow_mut();
+            facts.root.now = 110;
+            facts.root.generation = 8;
+        }
+        let before = (
+            current.store().0.balance(result.miner),
+            current.store().0.reserved_resources(),
+            current.store().0.totals(result.case_id()),
+        );
+        let recovered =
+            current.recover_committed_case(result.clone(), &miner_key(), &sign_result(&result), old_receipt.intent()).unwrap();
+        assert_eq!(
+            before,
+            (
+                current.store().0.balance(result.miner),
+                current.store().0.reserved_resources(),
+                current.store().0.totals(result.case_id())
+            )
+        );
+        assert_eq!(recovered.root(), view.root());
+        assert!(current.prepare(result.clone(), &miner_key(), &sign_result(&result)).is_err());
+        assert!(matches!(current.bind_checked_fact(&old_receipt, foreign_fact), Err(CourtAdmissionErrorV2::ForeignCapability)));
+        let bound = current.bind_checked_fact(&recovered, fact).unwrap();
+        assert_eq!(bound.checked_fact().terminal_kind(), TerminalKindV2::PositivePassed);
+        // Actual A5 transition prepared BEFORE restart remains valid: recovery
+        // performed no epoch update, hold, reservation or journal operation.
+        current.apply_bound_transition(&bound, before_restart_close).unwrap();
+        assert_eq!(current.store().0.balance(result.miner), 1000);
+        assert_eq!(current.store().0.reserved_resources(), 0);
+        let again = current.store().0.prepare_close(recovered.store_case()).unwrap();
+        current.apply_bound_transition(&bound, again).unwrap();
+        assert_eq!(current.store().0.balance(result.miner), 1000);
+        assert_eq!(current.store().0.reserved_resources(), 0);
+        assert!(current.store().0.conserved());
+    }
 }
 
 #[test]
