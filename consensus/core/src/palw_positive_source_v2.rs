@@ -95,16 +95,7 @@ pub struct SourceServiceFeeV2 {
     pub schedule: Digest,
     pub funding_scope: FundingScopeId,
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct SourceFeeIntentV2 {
-    pub key: misaka_palw_positive_contract::native::NativeRowKey,
-    pub result: ResultId,
-    pub funding_scope: FundingScopeId,
-    pub schedule: Digest,
-    pub provider: PrincipalId,
-    pub amount: u64,
-    pub accepted_response: AcceptedMaterial,
-}
+pub use misaka_palw_positive_contract::funding::SourceFeeDeltaIntent as SourceFeeIntentV2;
 #[derive(Clone, Copy)]
 struct FeeReservation {
     quote: SourceServiceFeeV2,
@@ -336,8 +327,16 @@ impl NativeSourceLedgerV2 {
         if cost.service_fee != 0 {
             return Err(SourceErrorV2::Binding);
         }
-        let retained = self.history.prepare(event.material, SourceHistoryKindV2::Request, event.native_body, self.limits)?;
-        if retained.is_none() {
+        // A different carrier/author/signature is not a new logical request.
+        // Authenticate the actual delivery above, then check its literal
+        // origin/order without reserving retained-history capacity.
+        self.history.check(event.material, SourceHistoryKindV2::Request, event.native_body)?;
+        let id = event.request.id();
+        let existing_record = self.requests.get(&id);
+        if let Some(old) = existing_record {
+            if old.request != event.request {
+                return Err(SourceErrorV2::Binding);
+            }
             return Ok(self.prepared(
                 SourceEffectV2::AlreadyApplied,
                 self.usage,
@@ -349,10 +348,9 @@ impl NativeSourceLedgerV2 {
                 None,
             ));
         }
-        let id = event.request.id();
-        let existing_record = self.requests.get(&id);
-        if existing_record.is_some_and(|old| old.request != event.request) {
-            return Err(SourceErrorV2::Binding);
+        let retained = self.history.prepare(event.material, SourceHistoryKindV2::Request, event.native_body, self.limits)?;
+        if retained.is_none() {
+            return Err(SourceErrorV2::History);
         }
         if existing_record.is_none() && self.requests.len() as u64 >= self.limits.max_requests {
             return Err(SourceErrorV2::Budget);
@@ -459,10 +457,20 @@ impl NativeSourceLedgerV2 {
         if actual_quote != reserved.quote || cost.service_fee != actual_quote.amount {
             return Err(SourceErrorV2::Binding);
         }
-        let retained = self.history.prepare(event.material, SourceHistoryKindV2::Response, event.native_body, self.limits)?;
-        if retained.is_none() {
+        let fresh_origin = self.history.check(event.material, SourceHistoryKindV2::Response, event.native_body)?;
+        // Opening bytes, provider and the currently named request may differ.
+        // Once this authenticated canonical unit has a literal first receipt,
+        // this delivery cannot create another retained/cost-changing event.
+        if let Some(receipt) = self.receipts.get(&key) {
+            if receipt.case != self.result.case_id()
+                || receipt.result != self.result.id()
+                || (receipt.kind, receipt.source, receipt.unit) != key
+                || receipt.bytes != data_bytes
+            {
+                return Err(SourceErrorV2::Binding);
+            }
             return Ok(self.prepared(
-                SourceEffectV2::AlreadyApplied,
+                if fresh_origin { SourceEffectV2::AlreadyComplete } else { SourceEffectV2::AlreadyApplied },
                 self.usage,
                 None,
                 None,
@@ -472,42 +480,48 @@ impl NativeSourceLedgerV2 {
                 Some(key),
             ));
         }
+        let retained = self.history.prepare(event.material, SourceHistoryKindV2::Response, event.native_body, self.limits)?;
+        if retained.is_none() {
+            return Err(SourceErrorV2::History);
+        }
         let mut usage = self.event_usage(cost, event.native_body.len() as u64)?;
         let mut union = self.source_union(key.0, key.1).ok_or(SourceErrorV2::MissingRequest)?;
-        let receipt = if self.receipts.contains_key(&key) {
-            None
-        } else {
-            if self.receipts.len() as u64 >= self.limits.max_responses {
-                return Err(SourceErrorV2::Budget);
-            }
-            union.completed_units = add(union.completed_units, 1)?;
-            usage.fee = add(usage.fee, actual_quote.amount)?;
-            usage.validate(&self.service.budget)?;
-            // Bind the literal op3 duty to THIS accepted op4's RequestId.
-            // Canonical unit identity still deduplicates fulfillment/payment
-            // across other, overlapping requests.
-            let duty = request.material;
-            Some(ServiceReceiptRow {
-                case: self.result.case_id(),
-                kind: key.0,
-                source: key.1,
-                unit,
-                result: self.result.id(),
-                duty,
-                response: event.material,
-                provider: event.provider,
-                bytes: data_bytes,
-                additional_work: cost.additional_work,
-                settlement: None,
-            })
+        if self.receipts.len() as u64 >= self.limits.max_responses {
+            return Err(SourceErrorV2::Budget);
+        }
+        union.completed_units = add(union.completed_units, 1)?;
+        usage.fee = add(usage.fee, actual_quote.amount)?;
+        usage.validate(&self.service.budget)?;
+        // Bind the literal op3 duty to THIS accepted op4's RequestId.
+        // Canonical unit identity deduplicates all later fulfillment/payment.
+        let receipt = ServiceReceiptRow {
+            case: self.result.case_id(),
+            kind: key.0,
+            source: key.1,
+            unit,
+            result: self.result.id(),
+            duty: request.material,
+            response: event.material,
+            provider: event.provider,
+            bytes: data_bytes,
+            additional_work: cost.additional_work,
+            settlement: None,
         };
-        let effect = if receipt.is_some() { SourceEffectV2::Responded } else { SourceEffectV2::AlreadyComplete };
-        Ok(self.prepared(effect, usage, Some(union), receipt, retained, SourceChange::Response, (key.0, key.1), Some(key)))
+        Ok(self.prepared(
+            SourceEffectV2::Responded,
+            usage,
+            Some(union),
+            Some(receipt),
+            retained,
+            SourceChange::Response,
+            (key.0, key.1),
+            Some(key),
+        ))
     }
     /// Pure cache application only. A4 must NOT use this as native acceptance.
     pub fn apply(&mut self, update: PreparedSourceUpdateV2) -> Result<(), SourceErrorV2> {
         self.validate_prepared(&update)?;
-        if update.effect == SourceEffectV2::AlreadyApplied {
+        if !update.changes_case() {
             return Ok(());
         }
         let revision = self.revision.checked_add(1).ok_or(SourceErrorV2::Budget)?;
@@ -626,7 +640,7 @@ impl NativeSourceLedgerV2 {
     ) -> PreparedSourceUpdateV2 {
         let next_miner_data = self.next_miner_data(union.as_ref());
         let case_row = self.case_basis.map(|mut case| {
-            if effect != SourceEffectV2::AlreadyApplied {
+            if retained.is_some() {
                 case.usage = usage;
                 case.miner_data = next_miner_data;
                 if let Some(event) = retained.as_ref() {
@@ -637,7 +651,7 @@ impl NativeSourceLedgerV2 {
         });
         let fee_intent = receipt.as_ref().and_then(|receipt| {
             self.reservations.get(&(receipt.kind, receipt.source, receipt.unit)).map(|reservation| SourceFeeIntentV2 {
-                key: misaka_palw_positive_contract::native::NativeRowKey::ServiceReceipt {
+                receipt_key: misaka_palw_positive_contract::native::NativeRowKey::ServiceReceipt {
                     case: receipt.case,
                     kind: receipt.kind,
                     source: receipt.source,
@@ -698,6 +712,11 @@ impl NativeSourceLedgerV2 {
     }
 }
 impl PreparedSourceUpdateV2 {
+    /// Only a meaningful state/cost-changing event enters the case journal.
+    /// Logical copies preserve every usage/history field and cache revision.
+    pub fn changes_case(&self) -> bool {
+        self.retained.is_some()
+    }
     /// Coordinates to compare against actual native rows even when this
     /// proposal emits no row (AlreadyApplied or AlreadyComplete).
     pub fn touched_source(&self) -> (SourceKind, Digest) {

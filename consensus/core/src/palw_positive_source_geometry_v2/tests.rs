@@ -3,9 +3,11 @@
 use super::*;
 use kaspa_consensus_core::{
     palw_artifact::{PalwArtifactOperandV1, artifact_leaf_v1, artifact_root_v1, open_artifact_leaf_v1},
+    palw_attempt_v2::palw_attempt_job_v1,
     palw_prompt_ids_v1::{prompt_ids_close_bytes_v1, prompt_ids_opening_v1, prompt_token_ids_commitment_v1},
     palw_step_refute::{PALW_LOGITS_TILE_LANES, tiled_logits_scheme_id_v1},
     palw_tir_admission_v1::palw_tir_class_record_v1,
+    palw_tir_attempt_v1::{palw_tir_attempt_canonical_v1, palw_tir_attempt_job_for_anchor_of_v1, palw_tir_attempt_job_for_anchor_v1},
     palw_tir_class_v1::PalwTirLayoutV1,
 };
 use misaka_palw_positive_contract::{
@@ -131,6 +133,29 @@ impl Fixture {
     fn geometry(&self, cap: GeometryLimitsV2) -> Result<TirSourceGeometryV2, PositiveSourceGeometryErrorV2> {
         TirSourceGeometryV2::derive(&self.class, &self.record, self.artifact, &self.context, &self.result, self.network_form, cap)
     }
+    /// Existing canonical producer/draw functions over registered facts. The
+    /// resulting DTOs are not an actual native job-origin capability.
+    fn use_canonical_attempt(&mut self, prefill_draw: bool) {
+        let canonical = palw_tir_attempt_canonical_v1(&self.class).unwrap();
+        let anchor = Hash64::from_bytes([84; 64]);
+        let (context, prompt) =
+            palw_tir_attempt_job_for_anchor_of_v1(&self.record.facts, &anchor, canonical, self.network_form).unwrap();
+        assert_eq!(
+            palw_tir_attempt_job_for_anchor_v1(&self.class, self.record.facts.class_id, canonical, &anchor, self.network_form),
+            Some((context.clone(), prompt.clone()))
+        );
+        self.context = palw_attempt_job_v1(context, prefill_draw);
+        self.prompt = prompt;
+        self.result.job = Digest(self.context.job_id.as_bytes());
+        self.result.execution = Digest(self.context.context_hash().as_bytes());
+        self.result.input = Digest(self.context.prompt_token_ids_hash.as_bytes());
+        self.result.tokenizer = Digest(self.context.tokenizer_id.as_bytes());
+        self.result.execution_rules = Digest(self.context.cu_ruleset_id.as_bytes());
+        self.result.generation_seed = self.context.execution_seed;
+        self.result.prefill = self.context.declared_prefill_tokens;
+        self.result.decode = self.context.exact_decode_tokens;
+        self.result.max_context = self.context.max_context_tokens;
+    }
     fn request(&self, kind: SourceKind, first: u64, end: u64) -> SourceRequest {
         SourceRequest {
             version: CONTRACT_VERSION,
@@ -177,6 +202,57 @@ fn actual_inventory_opening_and_ragged_prompt_tile_fit_hand_calculated_bounds() 
     let maximum = geometry.request_bound(&request).unwrap();
     assert_eq!(maximum.max_data_bytes, 128);
     assert_eq!(maximum.max_unit_bytes, prompt_ids_close_bytes_v1(PalwPromptIdsFormV1::MerkleV1, 65).unwrap());
+}
+
+#[test]
+fn canonical_attempt_zero_context_tokenizer_keeps_nonzero_registered_identity_and_existing_g14_geometry() {
+    let values = operands();
+    let artifact = artifact_root_v1(&values.iter().map(artifact_leaf_v1).collect::<Vec<_>>()).unwrap();
+    for form in [PalwPromptIdsFormV1::Flat, PalwPromptIdsFormV1::MerkleV1] {
+        for prefill_draw in [false, true] {
+            let mut f = Fixture::new(4, 2, form, false, artifact);
+            f.use_canonical_attempt(prefill_draw);
+            assert_ne!(f.class.tokenizer_id, Hash64::default());
+            assert_eq!(f.record.tokenizer_id, f.class.tokenizer_id);
+            assert_eq!(f.context.tokenizer_id, Hash64::default());
+            assert_eq!(f.result.tokenizer, Digest([0; 64]));
+            assert_eq!(f.prompt.len(), 31);
+            let geometry = f.geometry(limits()).unwrap();
+            assert_eq!(geometry.source_units(SourceKind::ArtifactInventory), 4);
+            let request = f.request(SourceKind::ArtifactInventory, 0, 1);
+            let opening = open_artifact_leaf_v1(&values, 0).unwrap();
+            let encoded = borsh::to_vec(&opening).unwrap();
+            assert_eq!(encoded.len(), 166);
+            assert_eq!(geometry.decode_g14_response_v2(&request, &encoded).unwrap(), (0, StoredUnitV2::Artifact(opening)));
+            assert_eq!(geometry.source_units(SourceKind::Input), 1);
+            let request = f.request(SourceKind::Input, 0, 1);
+            let unit = match form {
+                PalwPromptIdsFormV1::Flat => StoredUnitV2::FlatInput(f.prompt.clone()),
+                PalwPromptIdsFormV1::MerkleV1 => StoredUnitV2::Input(prompt_ids_opening_v1(&f.prompt, 0).unwrap()),
+            };
+            let encoded = match &unit {
+                StoredUnitV2::FlatInput(ids) => borsh::to_vec(ids).unwrap(),
+                StoredUnitV2::Input(opening) => borsh::to_vec(opening).unwrap(),
+                _ => unreachable!(),
+            };
+            assert_eq!(geometry.decode_g14_response_v2(&request, &encoded).unwrap(), (0, unit));
+        }
+    }
+}
+
+#[test]
+fn canonical_attempt_tokenizer_changes_cannot_substitute_context_result_or_registered_class() {
+    for attack in 0..4 {
+        let mut f = Fixture::new(4, 2, PalwPromptIdsFormV1::Flat, false, h(85));
+        f.use_canonical_attempt(true);
+        match attack {
+            0 => f.context.tokenizer_id = f.class.tokenizer_id,
+            1 => f.result.tokenizer = Digest(f.class.tokenizer_id.as_bytes()),
+            2 => f.record.tokenizer_id = Hash64::default(),
+            _ => f.class.tokenizer_id = Hash64::default(),
+        }
+        assert!(f.geometry(limits()).is_err(), "tokenizer substitution {attack}");
+    }
 }
 #[test]
 fn row_pieces_and_tensor_names_are_counted_in_existing_g14_borsh_width() {

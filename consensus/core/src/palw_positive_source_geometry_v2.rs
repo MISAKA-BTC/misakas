@@ -157,6 +157,9 @@ impl TirSourceGeometryV2 {
             return Err(PositiveSourceGeometryErrorV2::Budget);
         }
         result.validate_shape()?;
+        // Registration authenticates its own tokenizer via class identity.
+        // The signed Result binds the supplied job tokenizer, which is zero
+        // for existing canonical attempts. This reader creates no job authority.
         if class.version != PALW_TIR_CLASS_VERSION_V1
             || class.layout.version != PALW_TIR_LAYOUT_VERSION_V1
             || registered.version != PALW_TIR_CLASS_RECORD_VERSION_V1
@@ -165,7 +168,7 @@ impl TirSourceGeometryV2 {
             || result.artifact.0 != registered_artifact.as_bytes()
             || result.registered_class.0 != registered.facts.class_id.as_bytes()
             || result.program.0 != registered.graph_ir_root.as_bytes()
-            || result.tokenizer.0 != registered.tokenizer_id.as_bytes()
+            || result.tokenizer.0 != job.tokenizer_id.as_bytes()
         {
             return Err(PositiveSourceGeometryErrorV2::Binding);
         }
@@ -194,7 +197,6 @@ impl TirSourceGeometryV2 {
                 != u32::try_from(program.blocks[program.schedule.post as usize].nodes[program.logits as usize].out.elements_at(1))
                     .unwrap_or(u32::MAX)
             || job.shape_profile_id != class_id
-            || job.tokenizer_id != class.tokenizer_id
             || result.job.0 != job.job_id.as_bytes()
             || result.execution.0 != job.context_hash().as_bytes()
             || result.input.0 != job.prompt_token_ids_hash.as_bytes()
