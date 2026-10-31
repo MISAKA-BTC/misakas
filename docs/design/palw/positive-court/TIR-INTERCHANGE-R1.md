@@ -20,7 +20,7 @@ TIR v1、全nodeを登録前にcommit対象にしたprogram、tiled i32 logits�
 | `artifact` | nativeの登録artifact root |
 | `program` | 登録classの`graph_ir_root()` |
 | `input` | 正規jobの`prompt_token_ids_hash`。flat/Merkle formもnative規則から解決 |
-| `tokenizer` | 正規job・登録classのtokenizer ID |
+| `tokenizer` | 正規jobの`tokenizer_id`。canonical attemptのゼロを維持し、登録tokenizerはclass ID/metadataで別に認証する |
 | `execution_rules` | 正規jobの`cu_ruleset_id` |
 | `generation_seed` | 正規jobの`execution_seed` |
 | `temperature_q24` | 初期profileでは0 |
