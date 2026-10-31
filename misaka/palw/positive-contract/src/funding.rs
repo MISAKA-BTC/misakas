@@ -22,6 +22,21 @@ pub struct FundingPlanBasis {
     pub required_capital: u64,
 }
 
+/// Shared source-due DATA, not a payment or admission capability. The native
+/// one-writer must re-resolve the canonical rate/provider, first receipt,
+/// funding/leases/current generation and full before-images atomically.
+/// No new wire identity: the existing ServiceReceipt key is the once-only key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SourceFeeDeltaIntent {
+    pub receipt_key: crate::native::NativeRowKey,
+    pub result: ResultId,
+    pub funding_scope: FundingScopeId,
+    pub schedule: Digest,
+    pub provider: PrincipalId,
+    pub amount: u64,
+    pub accepted_response: crate::rows::AcceptedMaterial,
+}
+
 /// Explicit acyclic projection. The FULL Miner result and service contract are
 /// still signed/hashed normally. Only their two self-referential link fields
 /// are zeroed in this SEPARATE domain; every other literal field is included.
