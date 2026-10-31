@@ -18,6 +18,11 @@
 //! makes one lying node useless and is not a proof. **The node validates the block independently** — nothing here is an authority over what the
 //! chain accepts; a published block is only a candidate until the chain's own rules take it.
 
+/// A2 lightweight result/source adapter; public-network activation remains absent.
+#[cfg(feature = "positive-miner")]
+#[path = "positive_miner_v2.rs"]
+pub mod positive_v2;
+
 use std::collections::BTreeMap;
 
 use kaspa_consensus_core::block::Block;
