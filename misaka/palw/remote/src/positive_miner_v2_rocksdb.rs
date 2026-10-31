@@ -185,7 +185,7 @@ impl RocksAnchorDbV2 {
             check_capacity(self.owner.limits, count)?;
             let row = CaseRow { binding, current: None, previous: None };
             let mut batch = WriteBatch::default();
-            batch.put(&key, encode_case(row));
+            batch.put(key, encode_case(row));
             batch.put(COUNT_KEY, count.to_le_bytes());
             write_sync(&self.owner.db, batch)?;
         }
@@ -238,7 +238,7 @@ impl ProtectedAnchorStoreV2 for RocksCaseAnchorV2 {
             return Err(error("local anchor compare-and-commit conflict"));
         }
         let mut batch = WriteBatch::default();
-        batch.put(&self.key, encode_case(CaseRow { binding: self.binding, current: Some(next), previous: expected }));
+        batch.put(self.key, encode_case(CaseRow { binding: self.binding, current: Some(next), previous: expected }));
         write_sync(&self.owner.db, batch)
     }
 }
@@ -517,7 +517,7 @@ fn io_error(source: std::io::Error) -> MinerErrorV2 {
     error(&source.to_string())
 }
 fn db_error(source: ::rocksdb::Error) -> MinerErrorV2 {
-    error(&source.to_string())
+    error(source.as_ref())
 }
 
 #[cfg(test)]
