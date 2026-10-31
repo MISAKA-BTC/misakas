@@ -1,0 +1,19 @@
+{
+  "head_at_start": "b4499397fe54ae41ddcb971cd18a341b4a3008b0",
+  "command": [
+    "python3",
+    "docs/maintenance/check_docs.py"
+  ],
+  "exit_code": 0,
+  "source_before": {
+    "docs/maintenance/check_docs.py": "b3c60cb961354414b99cfad25f517401aa885bddd28400928cb52e7fa630287d",
+    "docs/design/palw/positive-court/case-journal-vectors-r1.json": "1d087885518f33d82c8817e15681ea6d4eb96a62b39262bfac9bf9d986361665"
+  },
+  "source_after": {
+    "docs/maintenance/check_docs.py": "b3c60cb961354414b99cfad25f517401aa885bddd28400928cb52e7fa630287d",
+    "docs/design/palw/positive-court/case-journal-vectors-r1.json": "1d087885518f33d82c8817e15681ea6d4eb96a62b39262bfac9bf9d986361665"
+  },
+  "source_unchanged": true,
+  "log_sha256": "38ca52631310d0b3d4d1afac2b99a1e7ccc5d8a6b36da16de6f9df8b3f8a797a",
+  "scope": "Documentation no-new-regressions check only; known missing references are not a clean strict audit."
+}
