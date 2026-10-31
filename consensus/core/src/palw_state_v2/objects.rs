@@ -2959,7 +2959,10 @@ fn apply_object_inner(
             for index in 0..group.count {
                 assembled.extend_from_slice(group.chunks.get(&index).expect("a complete group holds every index below count"));
             }
-            let decoded = (palw_court_close_chunk_digest_v1(&assembled) == group.close_digest)
+            // A reserved Positive body cannot be an old CourtClosed. Refuse it
+            // before generic Borsh could allocate its peer-sized inner fields.
+            let decoded = (!crate::palw_lifecycle_objects_v2::palw_positive_object_bytes_v2(&assembled)
+                && palw_court_close_chunk_digest_v1(&assembled) == group.close_digest)
                 .then(|| borsh::from_slice::<PalwConsensusObjectV2>(&assembled).ok())
                 .flatten()
                 .filter(|object| {
