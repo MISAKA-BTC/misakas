@@ -16,6 +16,18 @@
 
 kind1は課金・台帳変更・policy callbackより前に `MissingSettlementPort` で拒否する。qualified native settlementの成功stub、public paid setter、settlement overlay、保存済みFundingからの復元は無い。fee intentとreceiptのservice完了は支払済み状態ではない。
 
+## 追加監査 — 未完了source dutyの予約保護は未実装
+
+A4の追加read-only監査を受け、`199ae602f` の実装も照合した。helperの `add_usage` はCourt signed wireを同じ `transmitted_bytes` へ無条件に加算し、mapperのwork/retentionを加えたCaseを `Service.budget` と照合してSourceLedgerへ戻す。次のop3/4はこの累積usageを起点に同じcapを照合する。したがって、Courtが余白を先に消費すると、受付済みdutyへの正当なop4でもBudget拒否され得る。現在のhelperはsourceの未完了予約を保護するnative能力を実装していない。
+
+53件のlocal試験は差分の一度加算・source due・失敗隔離を確認したものであり、役割別の予約保護やnative capへの正規射影を認証した結果ではない。mapperが明示toyであることに加え、mapperを通らず加算されるCourt wireにも保護が必要である。現時点で実native policyは未接続であり、このhelperをそのままnative受付へ有効化しない。
+
+[RFC-0044 §13](../../../rfc/0044-positive-court-full-coverage.md) はMinerの資料供給、Panelの再計算・証拠構築、Nodeの検査・保存・復旧を別々に測り予約する。[COMMON-CONTRACT §4](COMMON-CONTRACT.md) の全Panel合計はMinerの有限義務を鍵替え等で再生させない条件で、Panel/Nodeの計算担当をMinerへ移す授権ではない。[NATIVE-CONTRACT-R1](NATIVE-CONTRACT-R1.md) はfeeの区分を明示している一方、work/retention/wireの各fieldについてsourceとwhole-Caseの射影を確定し切っていない。3fieldを厳密にsource専用と断言したり、全作業を同じMiner義務へ合算してよいと扱ったりしない。
+
+native接続には、役割別cold最悪値と全未完了source dutyの予約をadmission時に確保し、Court遷移後も各capで「消費済み＋未完了source予約＋許可するCourt消費」が収まることを守るownerが必要である。source応答で予約を解放する際も、消費への移動を同じ原子的遷移に含め、二重計上・枠の再生を防ぐ。workspaceをcanonical retentionへ足さず、payer同意でMinerの計算担当・責任範囲を拡張しない。具体的な射影・予約・役割責任の契約はA0が明文化した後に接続し、新rate/schemaや成功stubをここで補わない。
+
+この共有枠による供給機会の喪失を、Miner delivery defaultへ読み替えてはならない。既に受理済みの応答Completeも取消さない。Budgetはlocal再生拒否でありMiner有罪の事実ではない。機会条件を満たさない帰責defaultは無効のまま、未検証claimのcredit拒否を維持する。本追記は実装・元ログ・53件のsource snapshotを変更しない。
+
 ## 結合試験の内容
 
 実TIR class/jobからgeometryを導出し、実inventory builderのG14 openingと入力資料を用意する。署名済みop3 requestとop4 responseを、実Courtが検査するframeの間へ挿入する。ExternalStateはproduction helperそのもので、疑似counterだけを増やす代替台帳は使わない。

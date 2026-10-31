@@ -1,0 +1,24 @@
+{
+  "date": "2026-11-01",
+  "runtime_code_unchanged": "199ae602f",
+  "previous_handoff": "e99d93a94",
+  "method": "A4 read-only review, A6 source inspection, separate sync_retention read-only crosscheck; no build or new runtime tests",
+  "finding": "Court can consume common work/wire/retention headroom before an already accepted source response; native reservation protection is not implemented by this local helper",
+  "path": [
+    "common_source_replay::apply_inner -> map_usage_delta -> add_usage (Court signed wire unconditional, mapper work/retention) -> Service.budget validate -> SourceLedger.refresh_case_usage",
+    "subsequent op4 -> SourceLedger.event_usage (current cumulative usage + body/outer/work/retention) -> same Service.budget validate"
+  ],
+  "symbolic_counterexample": "For one dimension, U+C <= B < U+C+R, with R>0 the already accepted source response cost: the Court step can pass while the response exceeds the shared cap. This is static reasoning, not a measured runtime case or a protocol parameter.",
+  "existing_reservation": "SourceLedger FeeReservation/pending_fee protects source fee only; no pending duty carveout for the other three fields found",
+  "interpretation": "r1 does not settle each non-fee field source-to-whole-Case projection. Do not silently classify all three as strictly source-only or authorize all Node/Panel work as Miner obligation.",
+  "required_owner_contract": [
+    "role-specific cold worst-case admission reservations",
+    "preserve pending source work/wire/retention and service opportunity across every Court step, including automatic Court wire charge",
+    "same-view atomic reserve-to-consumption conversion, no duplication or budget regeneration",
+    "no workspace-to-canonical-retention substitution",
+    "no Miner default from lost opportunity and no cancellation of accepted Complete"
+  ],
+  "status": "A0 notified; wait for explicit projection/reservation/role contract; no new rate/schema/success stub or activation",
+  "evidence_scope": "original 53 tests and all original logs/snapshots unchanged; they do not demonstrate role reservation protection",
+  "source_hash_verification": "all original snapshot SHA256 values still match"
+}
