@@ -452,3 +452,172 @@ fn a0_recovery_port_uses_resolved_head_and_bounded_archive_reader() {
     let small = RecoveryLimitsV2 { max_encoded_bytes: bytes.len() as u64 - 1, ..caps() };
     assert_eq!(read_generation(&bytes[..], small), Err(ErrorV2::Budget));
 }
+
+fn transport_config(max_packets: u64) -> RecoveryEventV2 {
+    RecoveryEventV2::ConfigureTransport { max_chunk_bytes: 1 << 16, max_buffer_bytes: 1 << 20, max_wire_bytes: 8 << 20, max_packets }
+}
+fn transport_limits(mut limits: CoordinatorLimitsV2) -> CoordinatorLimitsV2 {
+    limits.max_reserved_witness_bytes += 8 << 20;
+    limits
+}
+fn material_event(descriptor: transport::MaterialDescriptorV2, offset: u64, bytes: &[u8]) -> RecoveryEventV2 {
+    RecoveryEventV2::MaterialChunk {
+        witness: descriptor.witness,
+        index: descriptor.index,
+        cone_bytes: descriptor.cone_bytes,
+        trace_bytes: descriptor.trace_bytes,
+        payload: descriptor.payload,
+        offset,
+        bytes: bytes.to_vec(),
+    }
+}
+fn first_material(x: &TinyExecution, s: &Signed) -> (transport::MaterialDescriptorV2, Vec<u8>) {
+    let ps = parts(x, s.policy);
+    let (cone, trace) = &ps[0];
+    let descriptor = transport::MaterialDescriptorV2::for_part(s.witness.id(), 0, cone, trace.as_deref());
+    let mut bytes = cone.clone();
+    bytes.extend_from_slice(trace.as_deref().unwrap_or_default());
+    (descriptor, bytes)
+}
+
+#[test]
+fn transport_configuration_partial_buffer_and_charged_failures_replay_together() {
+    let x = tiny_execution(None);
+    let (s, p, _, l) = setup(&x);
+    let l = transport_limits(l);
+    let mut j = fresh(&x, &s, p.clone(), l);
+    let initial_reservation = j.state().unwrap().attempts().reserved_witness_bytes;
+    record(&mut j, transport_config(100), 2).unwrap();
+    assert_eq!(j.state().unwrap().attempts().reserved_witness_bytes, initial_reservation + (8 << 20));
+    record(&mut j, candidate(&s), 3).unwrap();
+    let (descriptor, bytes) = first_material(&x, &s);
+    record(&mut j, material_event(descriptor, 0, &bytes[..10]), 4).unwrap();
+    record(&mut j, material_event(descriptor, 0, &bytes[..10]), 5).unwrap();
+    assert_eq!(record(&mut j, material_event(descriptor, 11, &bytes[11..12]), 6), Err(ErrorV2::Order));
+    let mut corrupt = bytes[..10].to_vec();
+    corrupt[0] ^= 1;
+    assert_eq!(record(&mut j, material_event(descriptor, 0, &corrupt), 7), Err(ErrorV2::Binding));
+    let meter = j.state().unwrap().material_transport_meter().unwrap();
+    assert_eq!(meter.packets, 4);
+    let reserved = j.state().unwrap().attempts();
+    let mut r = restore(&x, &s, p, l, &j, 7);
+    assert_eq!(r.state().unwrap().material_transport_meter(), Some(meter));
+    assert_eq!(r.state().unwrap().attempts(), reserved);
+    assert_eq!(r.state().unwrap().current().unwrap().cursor(), 0);
+    // A lost partial buffer would reject this nonzero offset as out of order.
+    record(&mut r, material_event(descriptor, 10, &bytes[10..]), 8).unwrap();
+    assert_eq!(r.state().unwrap().current().unwrap().cursor(), 1);
+    assert_eq!(r.state().unwrap().material_transport_meter().unwrap().checked_parts, 1);
+}
+
+#[test]
+fn discarded_buffer_and_duplicate_packet_quota_cannot_be_refilled_by_restart() {
+    let x = tiny_execution(None);
+    let (s, p, _, l) = setup(&x);
+    let l = transport_limits(l);
+    let mut j = fresh(&x, &s, p.clone(), l);
+    record(&mut j, transport_config(2), 2).unwrap();
+    record(&mut j, candidate(&s), 3).unwrap();
+    let (descriptor, bytes) = first_material(&x, &s);
+    record(&mut j, material_event(descriptor, 0, &bytes[..1]), 4).unwrap();
+    record(&mut j, material_event(descriptor, 0, &bytes[..1]), 5).unwrap();
+    record(&mut j, RecoveryEventV2::DiscardTransport, 6).unwrap();
+    let meter = j.state().unwrap().material_transport_meter();
+    let mut r = restore(&x, &s, p, l, &j, 6);
+    assert_eq!(r.state().unwrap().material_transport_meter(), meter);
+    assert_eq!(record(&mut r, material_event(descriptor, 0, &bytes[..1]), 7), Err(ErrorV2::Budget));
+    assert_eq!(r.state().unwrap().material_transport_meter(), meter);
+    assert_eq!(r.state().unwrap().current().unwrap().cursor(), 0);
+}
+
+#[test]
+fn discard_and_checked_part_acknowledgement_are_reconstructed_without_rechecking() {
+    let x = tiny_execution(None);
+    let (s, p, _, l) = setup(&x);
+    let l = transport_limits(l);
+    let mut j = fresh(&x, &s, p.clone(), l);
+    record(&mut j, transport_config(100), 2).unwrap();
+    record(&mut j, candidate(&s), 3).unwrap();
+    let (descriptor, bytes) = first_material(&x, &s);
+    record(&mut j, material_event(descriptor, 0, &bytes[..10]), 4).unwrap();
+    record(&mut j, RecoveryEventV2::DiscardTransport, 5).unwrap();
+    let mut r = restore(&x, &s, p.clone(), l, &j, 5);
+    assert_eq!(record(&mut r, material_event(descriptor, 10, &bytes[10..]), 6), Err(ErrorV2::Order));
+    record(&mut r, material_event(descriptor, 0, &bytes), 7).unwrap();
+    let payload_meter = r.state().unwrap().attempts().received_witness_bytes;
+    let checked_meter = r.state().unwrap().material_transport_meter().unwrap();
+    let mut rr = restore(&x, &s, p, l, &r, 7);
+    record(&mut rr, material_event(descriptor, 0, &bytes[..1]), 8).unwrap();
+    assert_eq!(rr.state().unwrap().current().unwrap().cursor(), 1);
+    assert_eq!(rr.state().unwrap().attempts().received_witness_bytes, payload_meter);
+    assert_eq!(rr.state().unwrap().material_transport_meter().unwrap().checked_parts, checked_meter.checked_parts);
+    assert_eq!(rr.state().unwrap().material_transport_meter().unwrap().packets, checked_meter.packets + 1);
+}
+
+#[test]
+fn transport_must_be_configured_by_an_authenticated_journal_event_not_admission_state() {
+    let x = tiny_execution(None);
+    let (s, p, _, l) = setup(&x);
+    let l = transport_limits(l);
+    let pristine_journal = fresh(&x, &s, p.clone(), l);
+    let outside = || {
+        let mut c = coordinator(&x, &s, p.clone(), l);
+        c.configure_material_transport(transport::MaterialTransportLimitsV2 {
+            max_chunk_bytes: 1 << 16,
+            max_buffer_bytes: 1 << 20,
+            max_wire_bytes: 8 << 20,
+            max_packets: 100,
+        })
+        .unwrap();
+        c
+    };
+    assert!(matches!(JournaledCoordinatorV2::new(outside(), 1, caps()), Err(ErrorV2::Order)));
+    assert!(matches!(
+        JournaledCoordinatorV2::restore(
+            outside(),
+            1,
+            pristine_journal.encoded().unwrap(),
+            pristine_journal.head().unwrap(),
+            caps(),
+            2,
+            canonical
+        ),
+        Err(ErrorV2::Binding)
+    ));
+    let mut j = fresh(&x, &s, p, l);
+    assert!(matches!(
+        j.record(origin(2), transport_config(100), |_, _| false, |_, _| panic!("unselected must not persist")),
+        Err(RecoveryErrorV2::Invalid(ErrorV2::Binding))
+    ));
+    assert!(j.state().unwrap().material_transport_meter().is_none());
+    assert_eq!(record(&mut j, transport_config(100), 100), Err(ErrorV2::Closed));
+    assert!(j.state().unwrap().material_transport_meter().is_none());
+    assert_eq!(j.state().unwrap().completion().claim, ClaimStatusV2::EndedUnverified);
+}
+
+#[test]
+fn old_private_archive_layout_is_unchanged_and_new_event_scans_are_bounded() {
+    let mut old_empty = vec![1, 0];
+    old_empty.extend_from_slice(&[0; 64]);
+    old_empty.extend_from_slice(&[0; 4]);
+    let image: Image = borsh::from_slice(&old_empty).unwrap();
+    assert_eq!(image.schema, 1);
+    assert!(image.records.is_empty());
+    assert_eq!(borsh::to_vec(&image).unwrap(), old_empty);
+    assert_eq!(borsh::to_vec(&RecoveryEventV2::Finish).unwrap(), vec![4]);
+    assert_eq!(borsh::to_vec(&RecoveryEventV2::Expire).unwrap(), vec![5]);
+    assert_eq!(borsh::to_vec(&RecoveryEventV2::Revoke).unwrap(), vec![6]);
+    assert_eq!(borsh::to_vec(&transport_config(10)).unwrap()[0], 7);
+    assert_eq!(borsh::to_vec(&RecoveryEventV2::DiscardTransport).unwrap(), vec![9]);
+    let descriptor = transport::MaterialDescriptorV2::for_part(Hash64::from_bytes([4; 64]), 0, &[1], None);
+    let event = material_event(descriptor, 0, &[1]);
+    assert_eq!(borsh::to_vec(&event).unwrap()[0], 8);
+    let image = Image { schema: SCHEMA, admission: Hash64::from_bytes([0; 64]), records: vec![Record { origin: origin(2), event }] };
+    let mut bytes = borsh::to_vec(&image).unwrap();
+    preflight(&bytes, caps()).unwrap();
+    // Last frame ends in Vec<u8> length=1 + byte. Hostile length must fail the
+    // allocation-free scanner before Borsh can allocate an unbounded fragment.
+    let len = bytes.len();
+    bytes[len - 5..len - 1].copy_from_slice(&u32::MAX.to_le_bytes());
+    assert!(preflight(&bytes, caps()).is_err());
+}

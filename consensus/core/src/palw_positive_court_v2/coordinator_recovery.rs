@@ -8,7 +8,11 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use std::io::{self, Read, Write};
 use std::path::Path;
 
-const SCHEMA: u16 = 1; // Private archive schema, never a consensus wire tag.
+// Schema 1 remains readable byte-for-byte. New private input variants are
+// appended at tags 7..9; tags 0..6 and all existing archive/hash identities are
+// unchanged. Older readers fail closed on an unknown appended event. This is
+// not a native codec/tag assignment and does not rewrite stored generations.
+const SCHEMA: u16 = 1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct EventOriginV2 {
@@ -24,13 +28,46 @@ pub struct SavedPartV2 {
 /// There are deliberately no ACK, cursor, meter, payment, or Pass setters.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum RecoveryEventV2 {
-    Request { panel: Hash64, first: u64, count: u64, signature: Vec<u8> },
-    Response { index: u64, bytes: Vec<u8>, opening: PalwStepOpeningV1 },
-    Candidate { panel: Hash64, witness: PanelWitnessV2, signature: Vec<u8> },
-    Batch { witness: Hash64, first: u64, parts: Vec<SavedPartV2> },
+    Request {
+        panel: Hash64,
+        first: u64,
+        count: u64,
+        signature: Vec<u8>,
+    },
+    Response {
+        index: u64,
+        bytes: Vec<u8>,
+        opening: PalwStepOpeningV1,
+    },
+    Candidate {
+        panel: Hash64,
+        witness: PanelWitnessV2,
+        signature: Vec<u8>,
+    },
+    Batch {
+        witness: Hash64,
+        first: u64,
+        parts: Vec<SavedPartV2>,
+    },
     Finish,
     Expire,
     Revoke,
+    ConfigureTransport {
+        max_chunk_bytes: u64,
+        max_buffer_bytes: u64,
+        max_wire_bytes: u64,
+        max_packets: u64,
+    },
+    MaterialChunk {
+        witness: Hash64,
+        index: u64,
+        cone_bytes: u64,
+        trace_bytes: Option<u64>,
+        payload: Hash64,
+        offset: u64,
+        bytes: Vec<u8>,
+    },
+    DiscardTransport,
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 struct Record {
@@ -97,7 +134,9 @@ impl NativeWireScanV1 for RecoveryEventV2 {
             1 => scan_fields!(r; u64, Vec<u8>, PalwStepOpeningV1),
             2 => scan_fields!(r; Hash64, u16, Hash64, Hash64, u32, crate::palw_tir_step_v1::PalwTirStepBindingV1, Vec<u32>, Vec<u8>),
             3 => scan_fields!(r; Hash64, u64, Vec<SavedPartV2>),
-            4..=6 => Ok(NativeWireShapeV1::default()),
+            4..=6 | 9 => Ok(NativeWireShapeV1::default()),
+            7 => scan_fields!(r; u64, u64, u64, u64),
+            8 => scan_fields!(r; Hash64, u64, u64, Option<u64>, Hash64, u64, Vec<u8>),
             _ => Err(io::Error::new(io::ErrorKind::InvalidData, "unknown recovery event")),
         }
     }
@@ -132,7 +171,8 @@ fn preflight(bytes: &[u8], limits: RecoveryLimitsV2) -> Result<(), ErrorV2> {
     Ok(())
 }
 fn pristine(c: &PositiveCoordinatorV2) -> bool {
-    c.current.is_none()
+    c.transport.is_none()
+        && c.current.is_none()
         && c.history.is_empty()
         && c.meter.attempts == 0
         && c.service_meter().rounds == 0
@@ -185,6 +225,34 @@ fn apply(c: &mut PositiveCoordinatorV2, event: &RecoveryEventV2, now: u64) -> Re
         }
         RecoveryEventV2::Revoke => {
             c.revoke();
+            Ok(())
+        }
+        RecoveryEventV2::ConfigureTransport { max_chunk_bytes, max_buffer_bytes, max_wire_bytes, max_packets } => {
+            c.expire(now);
+            c.configure_material_transport(transport::MaterialTransportLimitsV2 {
+                max_chunk_bytes: *max_chunk_bytes,
+                max_buffer_bytes: *max_buffer_bytes,
+                max_wire_bytes: *max_wire_bytes,
+                max_packets: *max_packets,
+            })
+        }
+        RecoveryEventV2::MaterialChunk { witness, index, cone_bytes, trace_bytes, payload, offset, bytes } => c
+            .submit_material_chunk(
+                transport::MaterialDescriptorV2 {
+                    witness: *witness,
+                    index: *index,
+                    cone_bytes: *cone_bytes,
+                    trace_bytes: *trace_bytes,
+                    payload: *payload,
+                },
+                *offset,
+                bytes,
+                now,
+            )
+            .map(|_| ()),
+        RecoveryEventV2::DiscardTransport => {
+            c.expire(now);
+            c.discard_material_buffer();
             Ok(())
         }
     }

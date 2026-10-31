@@ -1,5 +1,7 @@
 # A4 — G14 Court基盤の初回実装
 
+> 本文は初回実装の履歴。続報は[A4共通契約接続](A4-CONTRACT-INTEGRATION.md)を参照。
+
 - 担当branch: `codex/positive-court-a4`
 - 元HEAD: `a5800d2dd`
 - 作業開始時の既存prototype依存snapshot: `c4749c861`（A4の新規実装とは別commit）

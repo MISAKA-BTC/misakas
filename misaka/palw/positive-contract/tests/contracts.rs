@@ -357,3 +357,37 @@ fn coverage_identity_binds_the_derivation_rules_and_complete_relation_count() {
     assert_eq!(coverage_plan_id(&r, CheckProfile::ExactStreamV1, d(20), 0), Err(ContractError::Range));
     assert_eq!(coverage_plan_id(&r, CheckProfile::FullRelationDirectV1, d(20), 4), Err(ContractError::UnsupportedProfile));
 }
+
+#[test]
+fn relay_cannot_supply_malformed_arithmetic_as_an_honest_panel_packet() {
+    use libcrux_ml_dsa::ml_dsa_87::*;
+    let r = result();
+    let mut w = witness(&r);
+    let k = generate_key_pair([71; 32]);
+    let key: &[u8; PUBKEY_BYTES] = k.verification_key.as_ref();
+    w.author = principal(key);
+    let payload = b"G14 material";
+    let header = EvidenceHeader {
+        case: w.case,
+        result: w.result,
+        witness: w.id(),
+        plan: w.plan,
+        first_relation: 0,
+        relation_count: 1,
+        payload_bytes: payload.len() as u32,
+    };
+    let frame = EvidenceFrame::new(header, payload, 4096).unwrap();
+    let sig: [u8; SIGNATURE_BYTES] = *sign(&k.signing_key, &frame.id().0.0, EVIDENCE_SIGN_CONTEXT, [0; 32]).unwrap().as_ref();
+    let authorized = frame.authenticate(&w, key, &sig, 8192).unwrap();
+    assert_eq!(authorized.frame(), frame);
+    assert_eq!(authorized.author(), w.author);
+    assert_eq!(authorized.id(), frame.id());
+    assert_eq!(frame.signed_wire_bytes(), frame.wire_bytes() + SIGNATURE_BYTES as u64);
+    let altered = EvidenceFrame::new(header, b"BAD material", 4096).unwrap();
+    assert!(matches!(altered.authenticate(&w, key, &sig, 8192), Err(ContractError::Signature)));
+    assert!(matches!(frame.authenticate(&w, key, &sig, frame.signed_wire_bytes() - 1), Err(ContractError::Budget)));
+    let copied_to_next = EvidenceFrame::new(EvidenceHeader { first_relation: 1, ..header }, payload, 4096).unwrap();
+    assert!(matches!(copied_to_next.authenticate(&w, key, &sig, 8192), Err(ContractError::Signature)));
+    let wrong_domain: [u8; SIGNATURE_BYTES] = *sign(&k.signing_key, &frame.id().0.0, WITNESS_SIGN_CONTEXT, [0; 32]).unwrap().as_ref();
+    assert!(matches!(frame.authenticate(&w, key, &wrong_domain, 8192), Err(ContractError::Signature)));
+}
