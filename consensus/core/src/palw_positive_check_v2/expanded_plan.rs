@@ -9,7 +9,7 @@
 //! its complete structural visit/metadata bounds cannot be reserved. No sampling
 //! is used; producing a plan does not admit a native claim.
 
-use kaspa_consensus_core::{
+use crate::{
     Hash64,
     palw_step_refute::tiled_logits_scheme_id_v1,
     palw_tir_class_v1::{PALW_TIR_CLASS_VERSION_V1, PalwTirClassV1},
