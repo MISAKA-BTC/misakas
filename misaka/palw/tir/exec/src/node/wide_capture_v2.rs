@@ -241,13 +241,15 @@ impl TirWideCaptureV2 {
             || self.logits_rows.len() != self.generated.len()
             || vocab == 0
             || vocab > u64::from(u32::MAX)
-            || self.logits_rows.iter().any(|r| r.len() as u64 != vocab)
         {
             return Err("wide capture original prompt/row/leaf shape".into());
         }
         let dense = if self.leaves.is_empty() { 0 } else { n };
         if add(dense, u64::from(ctx.exact_decode_tokens))? > limits.max_work {
             return Err("wide capture authentication minimum visit ceiling".into());
+        }
+        if self.logits_rows.iter().any(|r| r.len() as u64 != vocab) {
+            return Err("wide capture row width differs from original program".into());
         }
         let capture_bytes = self.backing_bytes()?;
         let payload = space.maximum_leaf_payload_bytes_v2(ctx).map_err(|e| e.to_string())?;
