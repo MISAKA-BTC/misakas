@@ -230,6 +230,19 @@ pub struct BlockValidationFutures {
 /// Abstracts the consensus external API
 #[allow(unused_variables)]
 pub trait ConsensusApi: Send + Sync {
+    /// Acquire a read session for a literal accepted Positive source request.
+    /// The actual implementation revalidates current generation/root/prefix
+    /// on each operation. This default grants no duty or completion authority.
+    fn palw_positive_source_duty_v2(
+        &self,
+        _request: misaka_palw_positive_contract::identity::RequestId,
+        _result: misaka_palw_positive_contract::identity::ResultId,
+    ) -> Result<
+        Box<dyn crate::palw_positive_source_read_v2::PositiveSourceReadV2>,
+        crate::palw_positive_source_read_v2::PositiveSourceReadErrorV2,
+    > {
+        Err(crate::palw_positive_source_read_v2::PositiveSourceReadErrorV2::Unavailable)
+    }
     fn build_block_template(
         &self,
         miner_data: MinerData,
