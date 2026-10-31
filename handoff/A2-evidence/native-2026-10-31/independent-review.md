@@ -7,8 +7,12 @@ It does not report a successful native integration run.
 ## Candidate and validation ownership
 
 - HEAD when this report was written: `f8c79c92f3c0a7500ce0878e25059772c61b2ce9`.
+- HEAD at the later session-binding addendum inspection:
+  `3d764a0c1fd34300d6e68b9e385e4e50403399dd`; the session correction was then
+  present in the working tree. The SHA list includes that correction.
 - The reviewed working tree additionally contains the touched-coordinate/full
-  old-row CAS correction and its independent regression test. The hashes below
+  old-row CAS correction, its independent regression test, and the node-private
+  consumer correction described below. The hashes below
   identify the actual files inspected, rather than attributing these additions
   to that HEAD.
 - Root owns Cargo compilation/execution and the candidate rerun. This agent has
@@ -16,7 +20,7 @@ It does not report a successful native integration run.
   candidate results do not validate this candidate.
 - This agent constructed 19 independent pure source/codec tests in
   `consensus/core/src/palw_positive_source_geometry_v2/independent_source_ledger.rs`
-  and 11 RocksDB tests, including the subprocess entry point, in
+  and 13 RocksDB tests, including the subprocess entry point, in
   `misaka/palw/remote/src/positive_miner_v2_rocksdb_tests.rs`.
 - Both files passed this agent's `rustfmt --edition 2024 --check` before the
   report. No production code was edited during this final read audit. The
@@ -98,6 +102,57 @@ resume; explicit repair discards the unanchored suffix rather than adopting its
 unit identities or discounted meters. The protected local I/O anchor is
 independent of canonical chain reorg undo.
 
+### P1 addendum: one raw journal could merge equal status meters from fresh sessions
+
+A single exclusive RocksDB case lease did not itself bind the raw public
+`FilePreparationJournalV2` to one live `MinerResponderV2`. With a completed unit,
+session A reaches `(status_checks=1, rounds=0, provider_reads=0)`. A separately
+constructed session B can initially persist that identical meter into A's raw
+journal, then perform another status read. Repeating fresh sessions defeats
+`max_status_checks=1` while the recorded meter stays at 1. The recommended
+durable wrapper hides its inner responder, but the public recorded API still
+needed enforcement.
+
+The initially proposed unavailable-provider variant is a negative control:
+after A records one failed provider read, B's first status checkpoint has lower
+round/read/work counters and the existing monotonicity check already refuses
+it before a second provider read. Do not report a provider-read bypass for this
+variant.
+
+Two independent real-RocksDB tests now cover these distinct cases using one
+protected scope. The completed-status regression also requires legitimate
+drop/reopen through `DurableMinerResponderV2::resume` to restore the exhausted
+status budget. Root's pre-fix execution of the completed-status regression is
+recorded in `/tmp/misaka-a2-session-repro.log` as 0 passed / 1 failed at the
+fresh-session-rejection assertion. This agent read that log; this is a root-run
+reproduction, not an independent Cargo execution or a fixed-candidate pass.
+
+The inspected fix creates a private `Arc<()>` identity for each authenticated
+responder instance. Raw journal create/open retains the supplied instance's
+identity; append requires `Arc::ptr_eq` before any associated status/provider
+effect, and a mismatch poisons the journal. A proper resume binds the new
+instance and restores its protected state. The identity is process-local and
+changes neither the on-disk header/checkpoint format nor network codecs.
+Fixed-candidate test execution remains root-owned and pending in this report.
+
+### P2: a dynamic consensus proxy is not a sealed native capability
+
+`ConsensusProxy` aliases a session type with public constructors accepting an
+arbitrary `DynConsensus`. A public wrapper accepting that proxy could therefore
+receive a mock `ConsensusApi` returning an arbitrary source read port. The
+adapter's private duty constructor did not, by itself, establish the stronger
+claim that its input was the actual node's consensus implementation. This was
+a local preparation/API boundary issue, not a route to accepted native credit
+or payment.
+
+The inspected fix makes the kaspad module private, its consumer types/methods
+crate-visible, and `NativeSourceDutyV2` plus its resolver entirely
+module-private. The module header now states that the proxy alias is not an
+authentication capability and requires trusted node callsites plus an actual
+VP-private read implementation/current-view validation. The source API remains
+unavailable by default. This removes the public consumer exposure without
+claiming that arbitrary trusted Rust implementations have become authentic.
+
 ## Final private-writer and own-node path inspection
 
 - `TransitionBuilder` remains private. There is no exported source-row setter
@@ -145,15 +200,12 @@ does not close the native integration boundaries below.
    receipt to the private combined transaction. A public cache refresh or a
    paid boolean does not establish that provenance. Do not weaken full CAS or
    derive Complete from payment to work around this absent owner integration.
-4. `ConsensusProxy` is an alias for `ConsensusSessionOwned`, whose public
-   constructors accept `DynConsensus`, including arbitrary `ConsensusApi`
-   implementations. It is therefore not itself a sealed authenticity token.
-   A caller can wrap a mock API/read port and pass it to the public miner
-   wrapper. This can affect local preparation but cannot create a native
-   receipt or credit through the inspected path. Before claiming a sealed
-   actual-native duty, the node must own the entry/factory and actual session
-   provenance, or provide a genuinely sealed read capability. Merely passing
-   the proxy type does not establish that stronger property.
+4. `ConsensusProxy` remains a dynamic interface rather than a sealed
+   authenticity token. The inspected consumer is now node-private, but the
+   actual node owner must still supply genuine session provenance and its
+   private current-view read implementation. Before claiming a sealed native
+   duty, validate that real owner path or provide a sealed read capability;
+   merely passing the proxy type does not establish the stronger property.
 5. A current request B must be allowed to observe Complete through a literally
    resolved earlier response/duty A for the same canonical unit. Conversely,
    the stored receipt's actual duty must match its own op4 request. Both links
@@ -174,12 +226,13 @@ c9fa336f7041cb62265935533273fdba36a0052bcab21a64e6b0d47b96fdc4f3  consensus/core
 cc58702e34c6eccd9bb04bb09c55fe5db8a7e03e2a720aae5c80f9dbed8e5cfe  consensus/core/src/palw_positive_rows_v2.rs
 2a2dd3c1f58c487d38865d773fc760b60862debdc089aee777aa0bd7a72c9fb1  consensus/core/src/api/mod.rs
 da500afb9f6426f1c1309456fb9bbe5aef813d0ec05e2313f760507afe43a0d2  components/consensusmanager/src/session.rs
-b81802dd01f29fddaf7c2d7770e6e70dcd1845ff132cb11e23c664c3a497a041  kaspad/src/palw_positive_miner_source_v2.rs
-ceb745308dbc5b1df1427f6f21c33dae1cd297eed126e4548b408c986f8b4f49  misaka/palw/remote/src/positive_miner_v2.rs
+94494aa4083d49e6e5c25ab15365e82f77dfffe07d858c95669e7c90374e353b  kaspad/src/lib.rs
+51297618c665585450e0c85a7191127b8f0eb2952135aaec17269638c4e79f3d  kaspad/src/palw_positive_miner_source_v2.rs
+f563d5b638643f3d6c8317f356b00cfe23d8ee124812c8c8a88944a3f8f4caa9  misaka/palw/remote/src/positive_miner_v2.rs
 af012051e160be481c05642914b94c949507b42aea6c8352911f62343b98ee5b  misaka/palw/remote/src/positive_miner_v2_geometry.rs
 79cfb0f234fcd8b4911c4091c08cae24f493d7766ffcc136a2779d18fbb71056  misaka/palw/remote/src/positive_miner_v2_g14.rs
-6d009a851bcc01ad48e0633b3a6511ebcd6b7b82ac5c9e9cb31c419604006d44  misaka/palw/remote/src/positive_miner_v2_recovery.rs
+0a454dda00d93fc7adc7df7f494f43853d7528fedf1dd658c3abdacf90251bab  misaka/palw/remote/src/positive_miner_v2_recovery.rs
 cb53d36e492ca30d111aa8d59bdc8693f424ddc584c2419e1c4e931ea4639612  misaka/palw/remote/src/positive_miner_v2_rocksdb.rs
 fb137300c4db51f20a588bf32f664147a923611759003dd751ade283b9093b93  consensus/core/src/palw_positive_source_geometry_v2/independent_source_ledger.rs
-e21056fa2b987386138b85a33e92b1e86f15c6a2c72040d83c3760d1060c3e50  misaka/palw/remote/src/positive_miner_v2_rocksdb_tests.rs
+53d8b269bf3c55b746120f11a3edb9636b12617b98e9d039ec5efcca17428b16  misaka/palw/remote/src/positive_miner_v2_rocksdb_tests.rs
 ```

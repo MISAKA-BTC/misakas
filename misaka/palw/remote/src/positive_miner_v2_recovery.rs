@@ -265,6 +265,7 @@ pub trait ProtectedAnchorStoreV2 {
 /// Append-only local journal with an exclusive crash-released file lease.
 /// The single fd is private; uncertain writes/sync poison it until bounded replay.
 pub struct FilePreparationJournalV2<A> {
+    session: Arc<()>,
     anchors: A,
     committed_anchor: JournalAnchorV2,
     file: File,
@@ -303,6 +304,7 @@ impl<A: ProtectedAnchorStoreV2> FilePreparationJournalV2<A> {
         let anchor = JournalAnchorV2 { sequence: 0, hash };
         anchors.commit(None, anchor)?;
         Ok(Self {
+            session: Arc::clone(&responder.session),
             anchors,
             committed_anchor: anchor,
             file,
@@ -422,7 +424,17 @@ impl<A: ProtectedAnchorStoreV2> FilePreparationJournalV2<A> {
             file.sync_all().map_err(io_error)?;
         }
         file.seek(SeekFrom::End(0)).map_err(io_error)?;
-        Ok(Self { anchors, committed_anchor: anchor, file, state, anchor, limits, bytes: consumed, poisoned: false })
+        Ok(Self {
+            session: Arc::clone(&responder.session),
+            anchors,
+            committed_anchor: anchor,
+            file,
+            state,
+            anchor,
+            limits,
+            bytes: consumed,
+            poisoned: false,
+        })
     }
 
     pub fn anchor(&self) -> JournalAnchorV2 {
@@ -432,6 +444,9 @@ impl<A: ProtectedAnchorStoreV2> FilePreparationJournalV2<A> {
     fn append<D>(&mut self, responder: &MinerResponderV2<'_, D>, added: Option<(UnitKey, u64)>) -> Result<(), MinerErrorV2> {
         if self.poisoned {
             return Err(journal_error("journal is poisoned after uncertain I/O"));
+        }
+        if !Arc::ptr_eq(&self.session, &responder.session) {
+            return Err(journal_error("journal belongs to a different live responder session"));
         }
         // Only fixed-size identity/limit fields and the explicitly changed unit
         // are inspected here. No full union clone or scan occurs per operation.

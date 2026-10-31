@@ -1,0 +1,10 @@
+   Compiling misaka-palw-remote v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a2-miner/MISAKA-testnet/misaka/palw/remote)
+    Finished `test` profile [unoptimized] target(s) in 10.73s
+     Running unittests src/lib.rs (/tmp/misaka-a2-target/debug/deps/misaka_palw_remote-7f5ddc1bd06de1f5)
+
+running 2 tests
+test miner::positive_v2::rocksdb::tests::raw_journal_does_not_merge_equal_complete_status_meters_from_fresh_sessions ... ok
+test miner::positive_v2::rocksdb::tests::raw_journal_rejects_a_fresh_session_after_an_unavailable_provider_without_a_second_read ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 247 filtered out; finished in 0.13s
+

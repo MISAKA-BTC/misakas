@@ -32,6 +32,8 @@ Prepared updates retain touched source/unit coordinates even when they write no 
 
 ## Validation in progress
 
-Remote library/tests metadata and the kaspad client feature typecheck passed. Initial actual RocksDB/remote execution: 251 passed, one failed, one existing ignored. The failure exposed a subprocess test's unpiped stdin: its pause exited at EOF before the lock assertion. Fixed by holding stdin open, verifying the paused child is alive and requiring SIGKILL signal 9. The corrected full execution and the new finite-ledger/geometry fixtures are being run on the final source candidate; do not cite the initial run as final acceptance.
+Candidate `3d764a0c1`: remote 246 passed/one existing ignored, focused source 25 passed, default-off 176 passed/one existing ignored. Each recorded run kept the exact source hashes unchanged. The real subprocess checks hold stdin open, verify the paused child is alive and require SIGKILL signal 9.
+
+A further independent raw-journal fixture exposed equal Complete-only status counters merging across two fresh responder instances. The provider-failure variant was already rejected by the monotone meter guard. A local instance seal now binds each file journal to its creating/resuming live responder; this changes no wire, anchor DB or checkpoint schema. Before-fix reproduction failed as expected, and both post-fix controls passed. The final full suite/client checks for this additional fix are being recorded; previous-stage raw logs remain preserved separately.
 
 Real model cold/warm overhead and actual mempool/template/heartbeat source admission, native funds, independent-node replay, canonical reorg and IBD remain unmeasured/unverified until the actual owner connections above run on this same candidate.

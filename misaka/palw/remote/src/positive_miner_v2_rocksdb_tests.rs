@@ -3,13 +3,14 @@
 //! remains an independent integration boundary and is not simulated as success.
 #![cfg(unix)]
 use super::super::{
-    recovery::{DurableMinerResponderV2, JournalLimitsV2, ProtectedAnchorStoreV2},
+    recovery::{DurableMinerResponderV2, FilePreparationJournalV2, JournalLimitsV2, ProtectedAnchorStoreV2},
     store::{FileStoredProviderV2, StoreLimitsV2, StoredEncodingV2, source_file_name_v2},
     tests::Fixture,
     *,
 };
 use super::*;
 use std::{
+    cell::Cell,
     fs::{File, OpenOptions},
     io::{BufRead, Read, Write},
     os::unix::process::ExitStatusExt,
@@ -100,6 +101,109 @@ fn cloned_database_owners_share_an_exclusive_case_scope_and_persisted_cas_head()
     assert_eq!(rebound.load().unwrap(), Some(anchor(1, 20)));
     assert!(rebound.commit(None, anchor(0, 10)).is_err());
     assert!(db.bind(&fresh).is_err());
+}
+
+struct UnavailableCountingProvider {
+    reads: Cell<u64>,
+}
+impl StoredProviderV2 for UnavailableCountingProvider {
+    fn unit(&self, _: SourceKind, _: Digest, _: u64) -> Result<&StoredUnitV2, String> {
+        self.reads.set(self.reads.get() + 1);
+        Err("independent unavailable source".into())
+    }
+}
+struct CountingCompleteDuty<'a, D> {
+    inner: D,
+    status_reads: &'a Cell<u64>,
+}
+impl<D: CanonicalDataDutyV2> CanonicalDataDutyV2 for CountingCompleteDuty<'_, D> {
+    fn request(&self) -> &SourceRequest {
+        self.inner.request()
+    }
+    fn authorize(&self, result: &MinerResultCommit) -> Result<DutyBoundsV2, MinerErrorV2> {
+        self.inner.authorize(result)
+    }
+    fn status(&self, _: u64) -> Result<MinerDataStatus, MinerErrorV2> {
+        self.status_reads.set(self.status_reads.get() + 1);
+        // Test-only completed native read. This mock mints no actual receipt.
+        Ok(MinerDataStatus::Complete)
+    }
+}
+
+#[test]
+fn raw_journal_rejects_a_fresh_session_after_an_unavailable_provider_without_a_second_read() {
+    let dir = TempScope::new();
+    let f = Fixture::new();
+    let provider = UnavailableCountingProvider { reads: Cell::new(0) };
+    let providers: [&dyn StoredProviderV2; 1] = [&provider];
+    let mut limits = process_limits();
+    limits.max_provider_reads = 1;
+    let mut first = f.responder(&providers, limits);
+    let db = RocksAnchorDbV2::create(&dir.db(), db_limits()).unwrap();
+    let anchors = db.bind(&first).unwrap();
+    let mut journal = FilePreparationJournalV2::create(&dir.journal(), &first, journal_limits(), anchors).unwrap();
+    assert!(matches!(first.respond_recorded(&f.duty(), &mut journal), Err(MinerErrorV2::Unavailable)));
+    assert_eq!(provider.reads.get(), 1);
+    assert_eq!(first.meter().provider_reads, 1);
+    assert_eq!(first.meter().rounds, 1);
+    assert_eq!(first.meter().status_checks, 1);
+    assert_eq!(first.meter().unique_source_bytes, 0);
+    let protected = journal.anchor();
+    let mut second = f.responder(&providers, limits);
+    assert!(second.respond_recorded(&f.duty(), &mut journal).is_err());
+    assert_eq!(provider.reads.get(), 1, "fresh session performed a second unaccounted provider read");
+    assert_eq!(second.meter().provider_reads, 0);
+    assert_eq!(journal.anchor(), protected);
+    assert_eq!(db.case_count().unwrap(), 1);
+    assert_eq!(read_case(&db.owner.db, &case_key(&f.result)).unwrap().unwrap().current, Some(protected));
+}
+
+#[test]
+fn raw_journal_does_not_merge_equal_complete_status_meters_from_fresh_sessions() {
+    let dir = TempScope::new();
+    let f = Fixture::new();
+    let provider = UnavailableCountingProvider { reads: Cell::new(0) };
+    let providers: [&dyn StoredProviderV2; 1] = [&provider];
+    let status_reads = Cell::new(0);
+    let duty = CountingCompleteDuty { inner: f.duty(), status_reads: &status_reads };
+    let mut limits = process_limits();
+    limits.max_provider_reads = 1;
+    limits.max_status_checks = 1;
+    let mut first =
+        MinerResponderV2::new(&f.admission, f.result.clone(), f.contract, 1, &f.key, &f.signature, &providers, limits).unwrap();
+    let db = RocksAnchorDbV2::create(&dir.db(), db_limits()).unwrap();
+    let anchors = db.bind(&first).unwrap();
+    let mut journal = FilePreparationJournalV2::create(&dir.journal(), &first, journal_limits(), anchors).unwrap();
+    assert!(first.respond_recorded(&duty, &mut journal).unwrap().units.is_empty());
+    assert_eq!(status_reads.get(), 1);
+    assert_eq!(provider.reads.get(), 0);
+    assert_eq!(first.meter().status_checks, 1);
+    assert_eq!(first.meter().rounds, 0);
+    assert_eq!(first.meter().provider_reads, 0);
+    let protected = journal.anchor();
+    // The owning session cannot make a second status read at this limit.
+    assert!(matches!(first.respond_recorded(&duty, &mut journal), Err(MinerErrorV2::Budget)));
+    assert_eq!(status_reads.get(), 1);
+    let mut second =
+        MinerResponderV2::new(&f.admission, f.result.clone(), f.contract, 1, &f.key, &f.signature, &providers, limits).unwrap();
+    // Without an instance binding, the first persist from this fresh session
+    // exactly equals the journal meter and incorrectly permits another read.
+    assert!(second.respond_recorded(&duty, &mut journal).is_err(), "fresh session merged equal status meters into one case journal");
+    assert_eq!(status_reads.get(), 1, "max_status_checks=1 allowed a second physical status read");
+    assert_eq!(provider.reads.get(), 0);
+    assert_eq!(journal.anchor(), protected);
+    assert_eq!(db.case_count().unwrap(), 1);
+    assert_eq!(read_case(&db.owner.db, &case_key(&f.result)).unwrap().unwrap().current, Some(protected));
+    drop(journal);
+    let fresh =
+        MinerResponderV2::new(&f.admission, f.result.clone(), f.contract, 1, &f.key, &f.signature, &providers, limits).unwrap();
+    let anchors = db.bind(&fresh).unwrap();
+    let mut resumed = DurableMinerResponderV2::resume(&dir.journal(), fresh, journal_limits(), anchors).unwrap();
+    assert_eq!(resumed.meter().status_checks, 1);
+    assert!(matches!(resumed.respond(&duty), Err(MinerErrorV2::Budget)));
+    assert_eq!(status_reads.get(), 1);
+    assert_eq!(provider.reads.get(), 0);
+    assert_eq!(resumed.anchor(), protected);
 }
 
 #[test]
