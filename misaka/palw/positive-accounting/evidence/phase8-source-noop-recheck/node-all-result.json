@@ -1,0 +1,42 @@
+{
+  "command": [
+    "cargo",
+    "test",
+    "--offline",
+    "--locked",
+    "--config",
+    "profile.dev.package.kaspa-consensus-core.opt-level=0",
+    "-p",
+    "misaka-palw-positive-accounting-node",
+    "--no-default-features",
+    "--lib"
+  ],
+  "environment": {
+    "CARGO_TARGET_DIR": "/Users/wata/.cache/misaka-positive-accounting-node-target",
+    "CARGO_INCREMENTAL": "0",
+    "CARGO_PROFILE_DEV_DEBUG": "0",
+    "CARGO_PROFILE_TEST_DEBUG": "0",
+    "CARGO_BUILD_JOBS": "2"
+  },
+  "base_commit": "425372a751affa65ba868e51045517c7c71c7a42",
+  "source_sha256": {
+    "misaka/palw/positive-accounting-node/src/dues.rs": "0f3f234a040451c7ba72a9b607f4e78ba32b9de6048183b2954eb120c8df677e",
+    "misaka/palw/positive-accounting-node/src/dues/tests.rs": "8a65e986230dbbc5854dd2bb6242ae51c6faa0a7166e54b8a720564863d91bb3",
+    "misaka/palw/positive-accounting-node/src/lib.rs": "62657713cd3311968ca27ffc5bbefdd768593e5fb387451478f3005ee5d47c49",
+    "misaka/palw/positive-accounting-node/src/native.rs": "27011bd251f0496a26d4279e56682dbdc5f03b82697034e402aec3d11b41277c",
+    "misaka/palw/positive-accounting-node/src/native/tests.rs": "f96ea0bec32adfbed4d9d8c1ae6ef7fb11866277829bd5df192ae3e3db1ffcc6",
+    "misaka/palw/positive-accounting-node/src/native_funds.rs": "53800ab7889605d141407e588e9d51d384f023ca483c1c4506ef54fe2e1fdb0a",
+    "misaka/palw/positive-accounting-node/src/native_funds/tests.rs": "ce6f998ee72d35c7737b207e0a0818db6cccf4ec7eeb182bf998bdd8ce31b99c",
+    "misaka/palw/positive-accounting-node/src/rows.rs": "a78a2a6aa0148874ee0f6a354b1c24b8f11a7d1cb1ce855a41dc6e1b3b035807",
+    "misaka/palw/positive-accounting-node/src/rows/tests.rs": "3cce030a5737981560043a8ace736fdc15b6fa295b4bb37c3a5fcac5f60fa2db",
+    "misaka/palw/positive-accounting-node/src/tir.rs": "c09507b31356a1c3384d3fce6a28a22abdc31b972d11be872e0803117ae210a3",
+    "misaka/palw/positive-accounting-node/src/tir_tests.rs": "14b8840d1db8f3d04180eb993236a878ed1d05298806cf10ec8e88b7e1d0ed29",
+    "misaka/palw/positive-accounting/src/fees.rs": "fe7b3e59121b92a2fe406137b66a4f89ebb1ae48e85981e42e51d1c84fa312f7",
+    "misaka/palw/positive-contract/src/funding.rs": "0996296c8d2b114e099133d46b16814ae13e02acf177acee16246fb4163162a9",
+    "misaka/palw/positive-contract/src/rows.rs": "53d42d3a6f65af575eaf3ccebc16e63155501bb9128ae6c934994b5a683be7d4"
+  },
+  "exit_code": 0,
+  "raw_log": "node-all.log",
+  "scope": "source DATA arithmetic recheck/NoOp invariants; not A2/A4 native auth/history classification",
+  "source_unchanged_during_run": true
+}
