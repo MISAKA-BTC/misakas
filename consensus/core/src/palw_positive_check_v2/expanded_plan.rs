@@ -124,6 +124,10 @@ impl ExpandedPlan {
     pub fn step_space(&self) -> &PalwTirStepSpaceV1 {
         &self.space
     }
+    /// Exact original job used to derive this geometry, without substitution.
+    pub fn job_context(&self) -> &PalwJobContextV2 {
+        &self.job
+    }
     pub fn derive(
         registered: &PalwTirClassV1,
         artifact: Hash64,
