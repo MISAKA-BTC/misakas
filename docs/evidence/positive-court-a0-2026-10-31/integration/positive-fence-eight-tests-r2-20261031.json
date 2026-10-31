@@ -1,0 +1,38 @@
+{
+  "head_at_end": "8bb6dae30438931c95d16d708cabd4830e7512c6",
+  "command": [
+    "cargo",
+    "test",
+    "-p",
+    "kaspa-consensus-core",
+    "--test",
+    "positive_court_fence_v2",
+    "--offline",
+    "--locked",
+    "--config",
+    "profile.dev.package.kaspa-consensus-core.opt-level=0"
+  ],
+  "environment": {
+    "CARGO_TARGET_DIR": "/Users/wata/.cache/misaka-positive-a1-target",
+    "CARGO_PROFILE_DEV_DEBUG": "0",
+    "CARGO_INCREMENTAL": "0",
+    "CARGO_BUILD_JOBS": "2",
+    "RUST_MIN_STACK": "16777216"
+  },
+  "exit_code": 0,
+  "elapsed_seconds": 141.7939989566803,
+  "source_before": {
+    "consensus/core/src/config/params/positive_court_v2.rs": "dbfd0f6cbb8eb4d7a4f047b4f526215287f2649db4e2ac30d3e1f5b028bb3c4d",
+    "consensus/core/src/config/params/positive_court_v2_tests.rs": "97dc351e2b8bf6147adbf9233e1f42fc00f30232e49536e7f7120549652cebd3",
+    "consensus/core/tests/positive_court_fence_v2.rs": "affe66fe2fea042c9a7bbcbd38e514a8bc36c4056c9e144f4761c4595fa80eb3",
+    "consensus/core/src/palw_lifecycle_objects_v2.rs": "57b0791d441ac4e2a1eb915e0afdd26e4e9c0af230fee2d90ed0d7b68cc13097"
+  },
+  "source_after": {
+    "consensus/core/src/config/params/positive_court_v2.rs": "dbfd0f6cbb8eb4d7a4f047b4f526215287f2649db4e2ac30d3e1f5b028bb3c4d",
+    "consensus/core/src/config/params/positive_court_v2_tests.rs": "97dc351e2b8bf6147adbf9233e1f42fc00f30232e49536e7f7120549652cebd3",
+    "consensus/core/tests/positive_court_fence_v2.rs": "affe66fe2fea042c9a7bbcbd38e514a8bc36c4056c9e144f4761c4595fa80eb3",
+    "consensus/core/src/palw_lifecycle_objects_v2.rs": "57b0791d441ac4e2a1eb915e0afdd26e4e9c0af230fee2d90ed0d7b68cc13097"
+  },
+  "log_sha256": "ed9b6cd7df07c4c88101db6ac7ac77a2ec2c4f30e56375e3ac426c6180cf5b7c",
+  "scope": "eight public fence boundary tests; private visitor test retained separately, no native Positive accepted claim"
+}

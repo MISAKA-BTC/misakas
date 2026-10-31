@@ -6,7 +6,7 @@
 
 `positive-contract/src/native.rs`が定数とkeyの正本。
 
-- lifecycle object **176** を `PositiveCourtEventV2` 用に中央 `PALW_A2_TAG_ALLOCATIONS_V1` へ予約。既存170/171/175/178、旧Miner-trace形式を再利用しない。現時点では予約のみで、176のlive decoder・kind・fenceはまだない。
+- lifecycle object **176** を `PositiveCourtEventV2` 用に中央 `PALW_A2_TAG_ALLOCATIONS_V1` へ予約。既存170/171/175/178、旧Miner-trace形式を再利用しない。176のlive decoder・kindはまだない。typed fenceは下記の通り無効のまま追加した。
 - kernel-route aux table **151** を使用。150（court capital）、161（rejected response）と別。既存aux root、`KernelRouteRow` delta 160、carriage tail `0xEC`を使い、空の新top-level root blockを追加しない。
 - keyはBorsh `(2u16,1u16,NativeRowKey)`。kind 0 Result、1 ClaimIndex、2 Case、3 Witness、4 Coverage、5 SourceUnion、6 ServiceReceipt、7 Funding、8 PacketReceipt、9 JournalHead。keyのidentity型と順序はcodeを参照。
 - 新claimのGate C subject prefixは **P（0x50）**、IDは `native::certification_subject(full_result)`。旧S/K/V subjectや任意旧claim IDの承認を借りない。全LLMで実際のclaim抽選承認の`Certified`が必要で、`PublicCheckCertified`、Positive単体、一致したlocal replayを代替にしない。
@@ -25,13 +25,19 @@ CaseはResult、literal Service、全CoverageDescriptor、claim/Miner資料/Pane
 
 coreの`palw_positive_rows_v2::PositiveRowsV2::read`は実stateのaux151を読み、`Result<Option<NativeRowValue>, PositiveRowErrorV2>`を返す。kernel route欠落、row欠落、破損を区別する。`bundle`はResult/ClaimIndex/Case/Fundingの全linkと元の受付DAAでのMiner/payer署名を照合する。既存consentの受付期限を過ぎても、その理由で現在のcoin lockを消さない。署名・row読取成功はnative admission、登録期待値、現在lineage、live UTXO、local replay、P抽選承認のcapabilityではない。
 
-この段階ではlive decoder・writer・aux151 native scanner/restoreへの登録は未接続である。A6は型付きscannerと重複key拒否を接続し、native ownerは全cross-row整合性と認証済みhistoryを検査してから受理する。BTreeMapのlast-wins decodeに重複rowを任せない。
+A6の型付きscanner・heap visitor・構造restoreは`57d247b78 / 0c3e98d5d / 763c3b373`で接続した。row間参照、署名、同一block順序・時計、成功receiptのgap-free prefix、使用量下限を検査する。後続`253634d19`で直接Borshも降順Positive keyを正規化せず拒否する。外部native入場ではbounded preflightを引き続き必須とする。live decoder・writer・認証済みhistory再生は未接続である。構造restoreを算術検査やlive fundingの成功へ昇格しない。
 
 ## 2. 安定したscope
 
 `ChainScope.branch`は、そのcaseに割り当てた**祖先anchor**であり、刻々変わる現在tipではない。native viewは現在のlineageにanchorが存在すること、branch固有のResult/Case rowが存在すること、同じaccepted-prefix/state世代であることを確認する。reorgで消えたcaseのsaved Passを移植しない。
 
 新規受付のrulesetは、nativeが解決する既発火fork digestとPositive policy digestから `native::ruleset_id` で導出する。将来のactivation予定全体を含むparams fingerprintを署名rulesetにしない。caseは受付時のscope/policyを固定し、後続forkでの既存case処理は明示的移行規則で決める。Minerのoptional flagで旧形式へ戻せない。
+
+`PositiveCourtFenceV2::ruleset_id`は既存の32-byte fork identityを64-byteの先頭32 bytesへ保持し、残りを0で埋めてshared Digestへ渡す。これはnative BlockHash/TransactionIdの64-byte identityとは別であり、block/transaction hashを切り詰める操作ではない。native callerはこの同じ変換を使う。
+
+`Params.palw_positive_court_v2: Option<PositiveCourtFenceV2>`は全released presetで`None`。有限な`PositiveCourtPolicyV2`は既存exact derivation/greedy selector、資料/料金policy ID、frame/heap/relations/全試行bytes・演算/全case heap・journal・work/保持の上限をcommitする。`None`時は既存fingerprintへ新fieldを出力しない。future scheduleとneverの既存正規化を維持する。shapeが有限でも公開activation validatorは拒否し、実資金・全役割・coverage・P承認・復旧のreadinessを代替しない。
+
+raw176のpre-fence遮断はheader-context extractor、block受付、mempool、旧fee/bond走査に接続した。本文・署名・資源・fundingを解釈する前に扱う。live kind未実装の間は`NEW_KINDS`や実装済みowner一覧へ載せず、A2監査表も予約・未landedとする。live event導入時にowner/foldの二重検査、legacy ObjectChunk経由の扱いを同時接続する。
 
 ## 3. Resultから始めるfunding scope
 
@@ -77,9 +83,31 @@ commit時にも現在view・時刻・funds・capacityを再確認し、case/予�
 
 176のversioned bounded bodyはResult受付、Witness commit、署名済みExactFrame、資料要求、既存G14資料応答、Finish、Expireの操作を区別する。Finish/Expireは参照だけを提出し、Passedやclockをpeerから権限として受け取らない。A4のbody schema提案とA6のscannerが揃ってからlive decoderをA0で登録する。
 
+Witnessのrecordは`record.rs`のprimitive codecを使う。magic `PC2R1REC`、332-byte固定header、u32生成token数、little-endian u32列で、overheadは344 bytes。headerはversion/revision、ResultId、artifact、既存logits trace root、既存step leaf数、step Merkle root、既存execution root。生成数は署名Result.decodeに一致させ、body上限と正確なbyte extentを検査してから借用sliceとして読む。class/job/programを搬送し直さず、native期待値から既存`PalwTirStepBindingV1`を再構築してA1の検査へ渡す。dtype・旧leaf・commit算法・署名domainは変更しない。
+
 Result rowはliteral署名commitとnativeで解決した役割/登録/受理origin/funding scopeを保存。Case rowは単一Result、全計画・source契約・予約・試行・三進捗を保持。Witness rowは実作者、署名、attempt、固定時刻とそのrecordを保持。Coverage rowやsnapshotのcursorはauthorityではなく、復元は認証済みcarrier履歴と既存検査を用いる。SourceUnionとunit receiptは全Panelで共有し、Panel/relay/nonceをdedupe keyに入れない。
 
 署名済みframeの認証は[TIR annex](TIR-INTERCHANGE-R1.md)に従う。Record header等の単なるopeningが壊れている場合も、第三者の搬送だけで正直なcandidateを消費・有罪にしない。全費用の上限はnative wrapperと署名を含める。
+
+native全Case履歴のidentity・包含条件・精算・readonly復旧境界は [NATIVE-JOURNAL-R1](NATIVE-JOURNAL-R1.md) に固定した。既知packet/source操作の完全no-opはCase課金・journal append前に判別する。正規frameでも将来位置の搬送コピーをCase予算消耗へ利用させない。現在のrelationに対するauthored検査失敗の費用は保持する。
+
+### 5.1 新P所見
+
+`certification.rs::PositiveCourtAttestationV2`は837-byte固定DTO。version/revision、scope、claim/result/case、P subject、認証policy、実draw record ID、witness、verifier bond/principal、versioned verdict、対象の全Court資料履歴rootを署名へ結び付ける。署名は別に4,627 bytesで、native envelopeと合わせた費用を予約する。`PositiveChecked / Unavailable / NotReproducible`を旧`Reproduced`へ詰め替えない。
+
+`draw_anchor`はraw beaconだけではなく、roster/seed/policy/accepted originを固定する実draw recordのID。native ownerが正規IDを導出・解決する。資料rootは否定所見でも同じ期待対象を指定し、肯定所見だけが全資料を自分で検査したとの主張になる。key-derived principalとpool除外用operatorは別である。
+
+共通認証は実nativeから解決した期待値と全field・ML-DSAを照合するだけで、実draw・投票資格・担保・計算検査・信用を生成しない。P row/getter・table136 scanner・実抽選fold・責任/全consumerはこの段階で未実装。A4へ176の追加local operation 7として新所見を運ぶ接続を依頼した。旧local 0–6を変更しない。
+
+### 5.2 Minerのnative資料read port
+
+`palw_positive_source_read_v2::PositiveSourceReadV2`と`ConsensusApi::palw_positive_source_duty_v2(RequestId, ResultId)`を追加した。boxed interfaceはimmutable request、view ID、full Resultに対する有限bounds、per-unit geometry、unit statusを読む。view IDはnative selected parent・state root・accepted prefix・generationを区別する。旧implementorのdefaultは`Unavailable`のみで、production dutyを生成しない。
+
+実装型のconstructorはconsensus側に非公開で置き、実VP state/accepted op3/正規資料geometry/role・資金・予約・cutoffを解決し、authorize/statusのたびに現在viewと一致させる。kaspad側のprivate adapterは実`ConsensusProxy`から取得し、任意Box/peer DTOから作らない。remote client crateへconsensus依存を追加しない。A2が具体adapterを担当するが、interface追加はその実装・授権成功の宣言ではない。
+
+`PositiveSourceUnitBoundsV2 { data_bytes, body_bytes }`はraw unique dataの正確な量と、既存G14 opening bodyのwire上界を分ける。短い末尾unitもmax×countで過大評価せず、原資料16 bytesにopeningが付く場合もraw budgetとwire budgetを取り違えない。native outer framing等は別quote。unit geometry/status読取の回数・費用も有限にする。
+
+資料要求はcanonical accepted op3履歴から、完了はliteral unit receiptから読む。Panel ACK、local準備journal、union summaryだけでCompleteを返さない。Minerのspent I/O用ProtectedAnchorStoreは単調永続のlocal専用storeとし、A6のnative branch undoに巻き戻されるjournal/関連rowとはnamespace・寿命を分ける。
 
 ## 6. 同一candidateの最低native試験
 

@@ -1,0 +1,67 @@
+{
+  "started_utc": "20261031T124350",
+  "head": "6337ea50d7211b3eedcd4c39737555fc1b081723",
+  "environment_overrides": {
+    "CARGO_TARGET_DIR": "/Users/wata/.codex/worktrees/positive-court-a0/target",
+    "CARGO_INCREMENTAL": "0",
+    "CARGO_PROFILE_DEV_DEBUG": "0"
+  },
+  "commands": [
+    [
+      "cargo",
+      "test",
+      "--locked",
+      "-p",
+      "misaka-palw-positive-contract",
+      "--tests"
+    ],
+    [
+      "cargo",
+      "clippy",
+      "--locked",
+      "-p",
+      "misaka-palw-positive-contract",
+      "--all-targets",
+      "--",
+      "-D",
+      "warnings"
+    ]
+  ],
+  "source_sha256": {
+    "misaka/palw/positive-contract/src/certification.rs": "139092972ee5a0e083bf256681a3235e44c9cd8d3bc434e547ba70137f456140",
+    "misaka/palw/positive-contract/tests/certification.rs": "6e8f30fa91c7b0991e97493290479ef10fdf5f95640a7fff1fc67accd948b3fd",
+    "misaka/palw/positive-contract/src/lib.rs": "13d94d2529a8d83282abfe72a2d7fe774c340e123b00acc3fa1a5941afe31d0a",
+    "misaka/palw/positive-contract/src/identity.rs": "a4e5b7d7f88fd4e6fbf183105e732121903aae017b49a78c8edbf5a7363331cc"
+  },
+  "results": [
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "misaka-palw-positive-contract",
+        "--tests"
+      ],
+      "exit_code": 0,
+      "seconds": 3.7769325
+    },
+    {
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "-p",
+        "misaka-palw-positive-contract",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0,
+      "seconds": 0.9208112090000005
+    }
+  ],
+  "finished_utc": "2026-10-31T12:43:55.150724+00:00",
+  "source_unchanged": true
+}
