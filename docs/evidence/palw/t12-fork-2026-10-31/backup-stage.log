@@ -1,0 +1,28 @@
+{"phase": "extract", "files": 69, "bytes": 539437497}
+{"phase": "extract", "files": 138, "bytes": 1081318155}
+{"phase": "extract", "files": 208, "bytes": 1621519164}
+{"phase": "extract", "files": 281, "bytes": 2164571574}
+{"phase": "extract", "files": 352, "bytes": 2702659472}
+{"phase": "extract", "files": 422, "bytes": 3240602484}
+{"phase": "extract", "files": 490, "bytes": 3777551803}
+{"phase": "extract", "files": 563, "bytes": 4436769083}
+{"phase": "extract", "files": 634, "bytes": 4980509291}
+{"phase": "extract", "files": 707, "bytes": 5521182439}
+{"phase": "extract", "files": 779, "bytes": 6062483975}
+{"phase": "extract", "files": 845, "bytes": 6604197496}
+{"phase": "extract", "files": 919, "bytes": 7141229999}
+{"phase": "extract", "files": 997, "bytes": 7684197293}
+{"phase": "extract", "files": 1074, "bytes": 8222534166}
+{"phase": "extract", "files": 1141, "bytes": 8764999909}
+{"preparedUnix": 1793442333, "sourceArchive": "/root/misaka-incident-20261031/relay95-clean-20261031T0957Z.tar.zst", "sourceArchiveBytes": 7438164368, "sourceArchiveSha256": "2a4af052174ebc554929fa2673a53f4c81f831d6718019f925578182fc2e002d", "shaVerifiedByTransferOwner": true, "zstdVerifiedByTransferOwner": true, "extractedFiles": 1213, "extractedBytes": 9108885840, "stagedDatabase": "/root/misaka-fork-20261031/restore-stage/datadir", "appliedToLiveAppdir": false, "independentReplay": false, "method": "same-operator clean offline validated-node backup restore; pending native peer hold retained"}
+SNAPSHOT_MANIFEST {
+  "kind": "offline-backup-of-user-validated-node",
+  "network": "testnet-12",
+  "sourceHost": "95.111.236.186",
+  "cleanExitStatus": 0,
+  "params": "3e6da238306cfdb7e71599d5ef8fb314f1b3ff33a50673af1321f3da9cfa5b94",
+  "binaryRevision": "2ca68baee2c9",
+  "createdUtc": "2026-10-31T09:59:30.856572+00:00",
+  "independentReplay": false
+}
+

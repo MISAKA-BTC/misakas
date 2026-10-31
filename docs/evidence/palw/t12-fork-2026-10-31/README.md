@@ -69,12 +69,23 @@ Block/BlockLocator 返信 queue から分離する。従来は 10 秒の summary
   `f7d1998f043d8fc6c82a8683e02dc134aa6ae1e9` を5.104でビルド中。
   合意 core の変更は含めない。修正版の live 配備・再同期完了は作業中。
 
+19:51 JST 時点では b0 は停止中。95 の offline backup を復元先に配置し、
+元の分岐 DB と fresh sync の partial DB を両方保持している。
+pending report は byte 単位で変更せず、旧 binary に対する launcher の再起動拒否も実測した。
+修正版の隔離起動試験が完了するまで、この復元 DB を起動しない。
+配置ログは [backup-stage.log](backup-stage.log)。
+
 全履歴 IBD の body/fold が毎秒約 7–20 ブロックにとどまるため、同じ管理下の95から
 clean offline backup を取得して復元する運用も進める。95 は18:57:07 JST に
 `Kaspad has stopped`、18:57:09 に正常終了（status 0）を確認した。
 これは自分の検証済み DB のバックアップ復元であり、復元先での独立した全履歴再検証ではない。
 転送データの digest を照合し、native pending-resync hold と実際の複数 peer 確認を維持する。
 report の `confirmed` を手書きしたり、claim の認証状態を加算したりしない。
+
+転送済み archive は 7,438,164,368 bytes、SHA-256 は
+`2a4af052174ebc554929fa2673a53f4c81f831d6718019f925578182fc2e002d`。
+受信側で size・SHA-256・zstd integrity を確認し、1,213 files / 9,108,885,840 bytes を展開した。
+復元には meta・consensus・utxoindex をまとめて使用し、producer key は移動していない。
 
 元 DB は削除しない。verified resync の report が `confirmed` となり、選択チェーン上の
 共通ブロック・先端の進行・複数 outbound peer の確認が得られるまで完了としない。
