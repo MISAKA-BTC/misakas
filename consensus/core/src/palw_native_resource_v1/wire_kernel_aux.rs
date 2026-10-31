@@ -9,6 +9,10 @@ impl NativeWireScanV1 for crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
         // consumer operation, never inferred from their encoded row length here.
         sum = sum.merge(BTreeMap::<(u8, Vec<u8>), Vec<u8>>::scan_native_wire_v1(reader)?)?;
         let count = reader.word()? as u64;
+        // Canonical Borsh map ordering detects repeated Positive keys before
+        // BTreeMap decoding could collapse them. Previous-key memory is fixed.
+        let mut previous_positive = [0u8; misaka_palw_positive_contract::rows::MAX_NATIVE_KEY_BYTES];
+        let mut previous_positive_len = 0usize;
         for _ in 0..count {
             let table = reader.byte()?;
             let key_bytes = reader.word()? as u64;
@@ -21,6 +25,16 @@ impl NativeWireScanV1 for crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
             let mut key = [0u8; NATIVE_AUX_KEY_MAX_BYTES_V1 as usize];
             reader.step()?;
             reader.read_exact(&mut key[..key_bytes as usize])?;
+            if table == misaka_palw_positive_contract::native::KERNEL_AUX_TABLE {
+                let n = key_bytes as usize;
+                if n > previous_positive.len()
+                    || (previous_positive_len != 0 && key[..n] <= previous_positive[..previous_positive_len])
+                {
+                    return Err(wire::wire_bad("duplicate or noncanonical Positive aux key"));
+                }
+                previous_positive[..n].copy_from_slice(&key[..n]);
+                previous_positive_len = n;
+            }
             sum = sum.allocation(key_bytes.checked_mul(2).ok_or_else(|| wire::wire_bad("native aux key allocation overflow"))?, 1)?;
             let row_bytes = reader.word()? as u64;
             if row_bytes > reader.remaining() {
@@ -1176,6 +1190,7 @@ pub(crate) fn scan_native_aux_row_v1<R: Read>(
         }
         149 => return Err(wire::wire_bad("unallocated paid bootstrap source V6 row namespace")),
         150 => crate::palw_kernel_court_admission_v1::KernelCourtCapitalRowV1::scan_native_wire_v1(frame)?,
+        misaka_palw_positive_contract::native::KERNEL_AUX_TABLE => super::positive_rows::scan_positive_aux_row_v1(key, frame)?,
         145 => return Err(wire::wire_bad("unallocated receipt pause row namespace")),
         _ => {
             return Err(std::io::Error::new(

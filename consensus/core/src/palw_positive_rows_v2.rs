@@ -10,6 +10,10 @@ use misaka_palw_positive_contract::{
     rows::*,
 };
 
+pub mod restore;
+#[cfg(test)]
+mod tests;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PositiveRowErrorV2 {
     MissingKernelRoute,

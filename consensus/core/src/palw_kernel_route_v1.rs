@@ -406,7 +406,7 @@ pub struct PalwKernelRouteHeaderV1 {
 }
 
 /// **The kernel route state** (module doc). `rows` are the ledger's tables; `aux` the consensus tables.
-#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize)]
 pub struct PalwKernelRouteStateV1 {
     pub header: PalwKernelRouteHeaderV1,
     pub rows: LedgerRowsV1,
@@ -417,6 +417,48 @@ pub struct PalwKernelRouteStateV1 {
     /// reverted, a row the fold writes outside its flush). A state decoded from a store, a snapshot or a carriage starts without it.
     #[borsh(skip)]
     pub ledger_cache: KernelLedgerCacheV1,
+}
+
+/// Keep the canonical field layout, but reject duplicate aux keys before a
+/// BTreeMap could silently collapse them. Positive rows have fixed codec caps
+/// even when a caller invokes Borsh directly (native preflight remains required
+/// for aggregate reservation before untrusted intake).
+impl BorshDeserialize for PalwKernelRouteStateV1 {
+    fn deserialize_reader<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        fn positive_blob<R: std::io::Read>(reader: &mut R, cap: usize) -> std::io::Result<Vec<u8>> {
+            let length = u32::deserialize_reader(reader)? as usize;
+            if length > cap {
+                return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "Positive aux frame exceeds codec ceiling"));
+            }
+            let mut bytes = Vec::new();
+            bytes
+                .try_reserve_exact(length)
+                .map_err(|_| std::io::Error::new(std::io::ErrorKind::OutOfMemory, "Positive aux allocation"))?;
+            bytes.resize(length, 0);
+            reader.read_exact(&mut bytes)?;
+            Ok(bytes)
+        }
+        let header = PalwKernelRouteHeaderV1::deserialize_reader(reader)?;
+        let rows = LedgerRowsV1::deserialize_reader(reader)?;
+        let count = u32::deserialize_reader(reader)?;
+        let mut aux = BTreeMap::new();
+        for _ in 0..count {
+            let table = u8::deserialize_reader(reader)?;
+            let (key, value) = if table == misaka_palw_positive_contract::native::KERNEL_AUX_TABLE {
+                let key = positive_blob(reader, misaka_palw_positive_contract::rows::MAX_NATIVE_KEY_BYTES)?;
+                let value = positive_blob(reader, misaka_palw_positive_contract::rows::MAX_NATIVE_ROW_BYTES)?;
+                misaka_palw_positive_contract::rows::NativeRowValue::decode(&key, &value)
+                    .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "Positive aux key/value mismatch"))?;
+                (key, value)
+            } else {
+                (Vec::<u8>::deserialize_reader(reader)?, Vec::<u8>::deserialize_reader(reader)?)
+            };
+            if aux.insert((table, key), value).is_some() {
+                return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "duplicate kernel aux key"));
+            }
+        }
+        Ok(Self { header, rows, aux, ledger_cache: KernelLedgerCacheV1::default() })
+    }
 }
 
 /// How many kernel ledger loads were served from the cache in this process (a diagnostic: the fold of a block loads the ledger once
@@ -1154,6 +1196,8 @@ impl PalwKernelRouteStateV1 {
         if route.aux_root() != *aux_root {
             return Err("the served rows do not root to the served aux root".into());
         }
+        crate::palw_positive_rows_v2::restore::validate_positive_aux_restore_v2(&route.aux)
+            .map_err(|error| format!("inconsistent Positive aux rows: {error:?}"))?;
         Ok(route)
     }
 

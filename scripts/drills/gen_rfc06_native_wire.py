@@ -394,6 +394,29 @@ router_arms += '149=>return Err(wire::wire_bad("unallocated paid bootstrap sourc
 router_arms += '150=>crate::palw_kernel_court_admission_v1::KernelCourtCapitalRowV1::scan_native_wire_v1(frame)?,\n'
 
 code=code.replace(router_marker, router_arms+router_marker, 1)
+# Keep owner-audited aux151 VALUE scanning and strict map order on regeneration.
+# Patch this small manual section only; do not regenerate the shared DTO codec.
+def positive_aux_wire_v1(code):
+    count = '  let count=reader.word()? as u64;\n  for _ in 0..count {'
+    ordered = ('  let count=reader.word()? as u64;\n'
+               '  // Previous Positive key is fixed scratch; duplicates cannot collapse in BTreeMap decode.\n'
+               '  let mut previous_positive=[0u8;misaka_palw_positive_contract::rows::MAX_NATIVE_KEY_BYTES];\n'
+               '  let mut previous_positive_len=0usize;\n  for _ in 0..count {')
+    key = '   let mut key=[0u8;NATIVE_AUX_KEY_MAX_BYTES_V1 as usize];reader.step()?;reader.read_exact(&mut key[..key_bytes as usize])?;\n'
+    checked = key + ('   if table==misaka_palw_positive_contract::native::KERNEL_AUX_TABLE {\n'
+                     '    let n=key_bytes as usize;\n'
+                     '    if n>previous_positive.len() || (previous_positive_len!=0 && key[..n]<=previous_positive[..previous_positive_len]) {\n'
+                     '     return Err(wire::wire_bad("duplicate or noncanonical Positive aux key"));\n    }\n'
+                     '    previous_positive[..n].copy_from_slice(&key[..n]);previous_positive_len=n;\n   }\n')
+    fallback = ' _=>return Err(std::io::Error::new(std::io::ErrorKind::Unsupported,NativeCoverageV1::unsupported::<crate::palw_kernel_route_v1::PalwKernelRouteStateV1>'
+    typed = (' misaka_palw_positive_contract::native::KERNEL_AUX_TABLE=>super::positive_rows::scan_positive_aux_row_v1(key,frame)?,\n' + fallback)
+    for before, after in [(count, ordered), (key, checked), (fallback, typed)]:
+        if code.count(before) != 1:
+            raise ValueError('Positive aux151 manual scanner template changed: ' + before[:70])
+        code = code.replace(before, after, 1)
+    return code
+
+code=positive_aux_wire_v1(code)
 (OUT.parent/'wire_kernel_aux.rs').write_text(code)
 
 # Concrete native ledger row codecs; reflected from the same KernelLedger
