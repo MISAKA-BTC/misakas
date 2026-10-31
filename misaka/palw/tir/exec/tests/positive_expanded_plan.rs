@@ -38,6 +38,9 @@ struct Fixture {
     job: PalwJobContextV2,
 }
 fn fixture(program: TirProgramV1, prompt: Vec<u32>, decode: u32) -> Fixture {
+    fixture_with_job_tokenizer(program, prompt, decode, Hash64::from_u64_word(18))
+}
+fn fixture_with_job_tokenizer(program: TirProgramV1, prompt: Vec<u32>, decode: u32, job_tokenizer: Hash64) -> Fixture {
     let program = node_common::tiled(program);
     let class = PalwTirClassV1 {
         version: PALW_TIR_CLASS_VERSION_V1,
@@ -49,7 +52,7 @@ fn fixture(program: TirProgramV1, prompt: Vec<u32>, decode: u32) -> Fixture {
     let artifact = Hash64::from_u64_word(29);
     let mut job =
         node_common::job(&program, prompt.len() as u32, decode, class.class_id(&artifact), &prompt, PalwPromptIdsFormV1::Flat);
-    job.tokenizer_id = class.tokenizer_id;
+    job.tokenizer_id = job_tokenizer;
     Fixture { class, artifact, job }
 }
 fn wide_fixture() -> Fixture {
@@ -338,4 +341,24 @@ fn original_matmul_and_reduction_work_is_counted_at_every_executed_position() {
     // 2 + (2+6) + 24 + 8 + 4 bytes and writes 2+24+8+4+4 bytes.
     assert_eq!(work.bytes_read, 3 * 6 + 2 * 46);
     assert_eq!(work.bytes_written, 3 * 2 + 2 * 42);
+}
+
+#[test]
+fn canonical_zero_job_tokenizer_preserves_registered_class_identity_and_stale_ids_still_fail() {
+    let ordinary = wide_fixture();
+    let canonical = fixture_with_job_tokenizer(ordinary.class.decode_program().unwrap(), vec![0, 1], 2, Hash64::from_u64_word(0));
+    assert_eq!(canonical.class, ordinary.class);
+    assert_eq!(canonical.class.tokenizer_id, Hash64::from_u64_word(18));
+    assert_eq!(canonical.job.tokenizer_id, Hash64::from_u64_word(0));
+    assert_eq!(canonical.job.shape_profile_id, ordinary.job.shape_profile_id);
+    assert_ne!(canonical.job.context_hash(), ordinary.job.context_hash());
+    assert_complete_original_geometry(&canonical, limits());
+    let mut foreign_class = canonical.class.clone();
+    foreign_class.tokenizer_id = Hash64::from_u64_word(999);
+    assert_ne!(foreign_class.class_id(&canonical.artifact), canonical.job.shape_profile_id);
+    assert!(matches!(
+        ExpandedPlan::derive(&foreign_class, canonical.artifact, &canonical.job, limits()),
+        Err(ExpandedPlanError::Binding)
+    ));
+    assert_eq!(canonical.class, ordinary.class);
 }

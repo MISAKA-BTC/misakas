@@ -321,3 +321,28 @@ core全体のstrict Clippyは既知の `palw_model_panel_one_v1.rs:92` の `clon
 原log、対象command、最終source hash、scopeの機械可読記録は
 `validation/full-relation/` に保存する。実LLM性能・total Node RSS・native受付・正式profile・
 wire割当・公開有効化は、この検証から導出しない。
+
+## 10. canonical job tokenizerと登録tokenizerの分離
+
+canonical TIR jobのconstructor `palw_tir_job_context_v1` はjobのtokenizerを0にする。
+登録classのtokenizerはclass IDへ固定された別fieldであり、両者の数値一致を求めない。
+ExpandedPlanの余分なequalityだけを除き、登録値へjobを書き換える処理は追加しない。
+
+FullRelationの `Result.tokenizer == actual job.tokenizer`、実jobのcontext hash、登録class ID／
+artifact／program、record bindingの元class／元jobとの完全一致は維持する。source-onlyの
+所属認証と元rootへのopeningも変えない。classとjobを一貫して別値へ差し替えても、
+元のrooted／署名済みResultや準備済みrecordを流用できることにはならない。
+
+登録tokenizerが非0・job tokenizerが0のままcaptureと資料構築を行う追加fixtureを用意し、
+既存の非0一致fixtureも残す。この修正の検証は `validation/canonical-tokenizer/` に別記し、
+前節48件の履歴を更新・加算しない。初期CoveragePlan親の同種hunkはA3担当で、本A1差分に
+含めない。`palw_public_binding_v1` の照合はA0が確認した既存free-promptの意味を維持し、
+変更しない。canonical新modeの別metadata／assignment routeやwide profile解決のv2 APIは
+今回のnarrow tokenizer修正へ混ぜない。新native job authorityや新profileの採択・有効化を
+意味しない。
+
+追加検証はexpanded plan 5件、full relation 11件の**計16件成功・失敗0件**。
+両test targetのpackage-only Clippyも `--no-deps -- -D warnings` で成功した。
+新規caseはcanonical-tokenizer0のgeometryと実capture／source-only全検査、および
+旧expected execution／署名済みResultを固定したclass・job・record binding差替えの拒否。
+この件数を過去の48件やA3の別scopeへ加算しない。

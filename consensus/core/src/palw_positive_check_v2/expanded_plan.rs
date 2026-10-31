@@ -146,10 +146,13 @@ impl ExpandedPlan {
             || job.exact_decode_tokens == 0
             || job.declared_prefill_tokens.checked_add(job.exact_decode_tokens).is_none_or(|n| n > job.max_context_tokens)
             || registered.class_id(&artifact) != job.shape_profile_id
-            || registered.tokenizer_id != job.tokenizer_id
         {
             return Err(ExpandedPlanError::Binding);
         }
+        // The registered tokenizer remains part of class identity. The job's
+        // tokenizer is a distinct execution field (canonical jobs may use 0).
+        // FullRelationPreparation binds the actual job/context and its tokenizer
+        // to the independently rooted, signed Result; never rewrite either DTO.
         let positions = job.declared_prefill_tokens.checked_add(job.exact_decode_tokens - 1).ok_or(ExpandedPlanError::Overflow)?;
         if positions > limits.max_positions
             || limits.uncommitted_tile_lanes == 0
