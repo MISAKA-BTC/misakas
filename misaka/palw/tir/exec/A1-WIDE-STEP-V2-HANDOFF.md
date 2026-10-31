@@ -77,8 +77,12 @@ leaf capは個数の上限であり、heap/work leaseではない。builderのha
 callerが呼出し前に予約する必要がある。新builderのhash Vecとwide preimageは
 `try_reserve` により確保失敗を拒否する。他の共有geometry／decoder／Merkle実装まで
 一律にallocation failureを捕捉するという保証ではなく、capや事前予約を免除しない。
-`maximum_leaf_bytes_v2` は全leafを8 bytes/laneとして保守的に見積もり、DTO metadata、hash、
-Merkle scratch、allocator overhead、total Node RSSを含めない。旧4-byte価格は変更しない。
+`maximum_leaf_payload_bytes_v2` は全leafを8 bytes/laneとして保守的に見積もり、DTO metadata、hash、
+Merkle scratch、allocator overhead、total Node RSSを含めない。Borsh leaf headerは26 bytes
+（u16 version＋4つのu32座標＋u32 count＋Vec長u32）で、wide 4 lanesのpayload32 bytesに
+加えるとDTOのserialized総長は58 bytes。native pricingはpayloadだけをleaf総byte数とせず、
+header／外側DTOと署名／opening bytes、decoded DTOとhash／Merkle scratchのheapを別予約する。
+この段階ではnative pricingへ自動接続せず、旧4-byte価格は変更しない。
 
 Court/source-onlyのwide operand読取、実行／capture／cell、native row/受付とfee、FullRelation
 I64終端、実checkpoint／元最大context／性能の検証は別工程。今回の型を追加したことから

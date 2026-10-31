@@ -158,9 +158,10 @@ impl PalwTirStepSpaceV2 {
         self.inner.lane_count_at_position_v1(job, a)
     }
 
-    /// Conservative maximum encoded leaf bytes, using eight bytes even for narrow leaves.
-    /// This excludes the preimage DTO, builder hashes, Merkle temporaries and allocator overhead.
-    pub fn maximum_leaf_bytes_v2(&self, ctx: &PalwJobContextV2) -> Result<u64, PalwTirStepError> {
+    /// Conservative maximum lane payload bytes, using eight bytes even for narrow leaves.
+    /// This excludes the serialized leaf header, decoded DTO, openings, builder hashes,
+    /// Merkle temporaries and allocator overhead; native callers reserve those separately.
+    pub fn maximum_leaf_payload_bytes_v2(&self, ctx: &PalwJobContextV2) -> Result<u64, PalwTirStepError> {
         let job = self.job_shape(ctx)?;
         self.inner.maximum_leaf_lanes_v1(&job).checked_mul(8).ok_or_else(|| canonical_error("maximum leaf bytes overflow"))
     }
