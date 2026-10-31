@@ -15,17 +15,15 @@ use kaspa_consensus_core::{
 use misaka_palw_positive_contract::{
     identity::*,
     messages::*,
-    tir::{greedy_selector_id, provenance_id},
+    tir::{ExactPart, greedy_selector_id, provenance_id},
     wire::*,
 };
 use misaka_palw_tir::{DType, MapParams, Ref, Tensor, TensorType, builder::ProgramBuilder, demand::DemandLimits};
 use misaka_palw_tir_exec::{
     TirParams, TirPlan,
     node::{
-        TirClassRunnerV1, TirEvidenceV1, TirHeldInventoryV1, TirParamsSourceV1,
-        positive_check::CheckLimits,
-        positive_contract::{PreparedCheck, encode_payload},
-        positive_court_adapter::TirCourtCheckerV2,
+        TirClassRunnerV1, TirEvidenceV1, TirHeldInventoryV1, TirParamsSourceV1, positive_check::CheckLimits,
+        positive_contract::PreparedCheck, positive_court_adapter::TirCourtCheckerV2,
     },
 };
 
@@ -235,7 +233,8 @@ impl Fixture {
             .iter()
             .enumerate()
             .map(|(index, (cone, trace))| {
-                let payload = encode_payload(cone, trace.as_deref(), descriptor.max_part_bytes).unwrap();
+                let payload =
+                    ExactPart::new(cone, trace.as_deref(), descriptor.max_part_bytes - EVIDENCE_HEADER_BYTES as u64).unwrap().encode();
                 frame_bytes(witness, descriptor, index as u64, &payload)
             })
             .collect()

@@ -1,5 +1,5 @@
 //! The actual A0 NodeChecker port with separately signed Miner/Panel records.
-#![cfg(feature = "node")]
+#![cfg(feature = "positive-contract")]
 mod node_common;
 
 use kaspa_consensus_core::{
@@ -10,14 +10,21 @@ use kaspa_consensus_core::{
     palw_tir_court_v1::{PalwTirCourtRulesV1, tir_logits_event_disclosure_v1},
     palw_tir_step_v1::{PALW_TIR_STEP_BINDING_VERSION_V1, PalwTirLeafKindV1, PalwTirStepBindingV1, PalwTirStepSpaceV1},
 };
-use misaka_palw_positive_contract::{ContractError, identity::*, messages::*, ports::NodeChecker, wire::*};
+use misaka_palw_positive_contract::{
+    ContractError,
+    identity::*,
+    messages::*,
+    ports::NodeChecker,
+    tir::{EXACT_PART_HEADER_BYTES, ExactPart, greedy_selector_id, provenance_id},
+    wire::*,
+};
 use misaka_palw_tir::{DType, MapParams, Ref, Tensor, TensorType, builder::ProgramBuilder, demand::DemandLimits};
 use misaka_palw_tir_exec::{
     TirParams, TirPlan,
     node::{
         TirClassRunnerV1, TirEvidenceV1, TirHeldInventoryV1, TirParamsSourceV1,
         positive_check::{CheckError, CheckLimits, CheckOutcome},
-        positive_contract::{AdapterError, CheckContext, ContractProgress, PreparedCheck, TirNodeChecker, encode_payload},
+        positive_contract::{AdapterError, CheckContext, ContractProgress, PreparedCheck, TirNodeChecker},
     },
 };
 
@@ -172,7 +179,7 @@ impl Fixture {
             input: native(job.prompt_token_ids_hash),
             tokenizer: native(job.tokenizer_id),
             execution_rules: native(job.cu_ruleset_id),
-            selector: misaka_palw_positive_contract::tir::greedy_selector_id(),
+            selector: greedy_selector_id(),
             generation_seed: job.execution_seed,
             temperature_q24: 0,
             prefill: job.declared_prefill_tokens,
@@ -212,7 +219,7 @@ impl Fixture {
             profile: CheckProfile::ExactStreamV1,
             plan: plan.plan,
             execution_record: native(self.binding.committed_execution_root),
-            provenance: misaka_palw_positive_contract::tir::provenance_id(&result),
+            provenance: provenance_id(result),
             candidate_output: native(palw_attempt_output_root_v1(&self.binding.job_context, &self.generated)),
         }
     }
@@ -229,7 +236,8 @@ impl Fixture {
             .iter()
             .enumerate()
             .map(|(index, (cone, trace))| {
-                let payload = encode_payload(cone, trace.as_deref(), descriptor.max_part_bytes).unwrap();
+                let payload =
+                    ExactPart::new(cone, trace.as_deref(), descriptor.max_part_bytes - EVIDENCE_HEADER_BYTES as u64).unwrap().encode();
                 frame_bytes(witness, descriptor, index as u64, &payload)
             })
             .collect()
@@ -317,7 +325,7 @@ fn bad_actor_signatures_and_signed_false_witness_metadata_are_rejected() {
         ),
         Err(AdapterError::Contract(ContractError::Signature))
     ));
-    for variant in 0..3 {
+    for variant in 0..4 {
         let prepared = f.prepare(&result, limits());
         let mut witness = f.witness(&result, prepared.descriptor());
         if variant == 1 {
@@ -325,6 +333,9 @@ fn bad_actor_signatures_and_signed_false_witness_metadata_are_rejected() {
         }
         if variant == 2 {
             witness.candidate_output = d(99);
+        }
+        if variant == 3 {
+            witness.provenance = d(99);
         }
         let mut signature = sign_witness(&witness);
         if variant == 0 {
@@ -416,15 +427,22 @@ fn bounded_outer_frames_do_not_authorize_malformed_inner_length_prefixes() {
     let (context, witness) = f.context(&f.correct_result(), limits());
     let descriptor = TirNodeChecker.derive_plan(&context).unwrap();
     let (cone, trace) = &f.parts[0];
-    let valid = encode_payload(cone, trace.as_deref(), descriptor.max_part_bytes).unwrap();
+    let valid = ExactPart::new(cone, trace.as_deref(), descriptor.max_part_bytes - EVIDENCE_HEADER_BYTES as u64).unwrap().encode();
+    let mut wrong_magic = valid.clone();
+    wrong_magic[0] ^= 1;
+    let mut oversized_cone = valid.clone();
+    oversized_cone[8..12].copy_from_slice(&u32::MAX.to_le_bytes());
     let mut extra = valid.clone();
     extra.push(0);
     let mut truncated = valid.clone();
     truncated.pop();
-    for payload in [u32::MAX.to_le_bytes().to_vec(), vec![0, 0, 1], extra, truncated] {
+    for payload in [wrong_magic, oversized_cone, vec![0, 0, 1], extra, truncated] {
         let frame = frame_bytes(&witness, descriptor, 0, &payload);
         let mut progress = context.start().unwrap();
-        assert_eq!(submit(&context, &mut progress, &frame), Err(AdapterError::Check(CheckError::Wire)));
+        assert!(matches!(
+            submit(&context, &mut progress, &frame),
+            Err(AdapterError::Contract(ContractError::Version | ContractError::NonCanonical | ContractError::Budget))
+        ));
         assert_eq!(progress.charged_wire_bytes(), frame.len() as u64);
         assert_eq!(progress.snapshot().next_leaf, 0);
         assert_eq!(progress.snapshot().outcome, CheckOutcome::WitnessRejected);
@@ -440,10 +458,11 @@ fn admission_reserves_every_outer_header_and_both_payload_length_prefixes() {
     let descriptor = prepared.descriptor();
     let witness = f.witness(&result, descriptor);
     // Measure actual private framing on one byte, independently of the
-    // reservation implementation: 284 header bytes plus 16-byte A0 TIR framing.
-    let payload = encode_payload(&[0x17], None, descriptor.max_part_bytes).unwrap();
+    // reservation implementation: 284 outer bytes plus the 16-byte G14 annex.
+    let payload = ExactPart::new(&[0x17], None, descriptor.max_part_bytes - EVIDENCE_HEADER_BYTES as u64).unwrap().encode();
     let encoded = frame_bytes(&witness, descriptor, 0, &payload);
     let measured_overhead = encoded.len() as u64 - 1;
+    assert_eq!(EXACT_PART_HEADER_BYTES, 16);
     assert_eq!(measured_overhead, 300);
     let required = descriptor.mandatory_relations * limits().max_part_bytes;
     assert_eq!(prepared.reserved_wire_bytes(), required);
@@ -464,10 +483,164 @@ fn admission_reserves_every_outer_header_and_both_payload_length_prefixes() {
             &sign_result(&result),
         )
     };
-    assert!(matches!(authenticate(short), Err(AdapterError::Check(CheckError::Budget))));
+    assert!(matches!(
+        authenticate(short),
+        Err(AdapterError::Check(CheckError::Budget) | AdapterError::Contract(ContractError::Budget))
+    ));
     for outer_part_bytes in [measured_overhead - 1, measured_overhead] {
         let mut cap = limits();
         cap.max_part_bytes = outer_part_bytes;
-        assert!(matches!(authenticate(cap), Err(AdapterError::Check(CheckError::Budget))));
+        assert!(matches!(
+            authenticate(cap),
+            Err(AdapterError::Check(CheckError::Budget) | AdapterError::Contract(ContractError::Budget))
+        ));
     }
+}
+
+#[test]
+fn a_signed_alternate_selector_cannot_replace_the_rooted_greedy_rule() {
+    let f = fixture();
+    let mut result = f.correct_result();
+    result.selector = d(99);
+    let mut rooted_greedy = rooted(&result);
+    rooted_greedy.selector = greedy_selector_id();
+    let authenticate = |admission: &AdmissionContext| {
+        PreparedCheck::authenticate(
+            admission,
+            &f.binding.class,
+            f.binding.artifact_root,
+            &f.binding.job_context,
+            PalwPromptIdsFormV1::Flat,
+            limits(),
+            result.clone(),
+            &miner_key(),
+            &sign_result(&result),
+        )
+    };
+    // A valid Miner signature does not change the selector fixed by admission.
+    assert!(matches!(authenticate(&rooted_greedy), Err(AdapterError::Contract(ContractError::Scope))));
+    // Even an otherwise self-consistent non-greedy context is outside this exact
+    // adapter's explicit semantics, rather than grounds to refute the Miner.
+    assert!(matches!(authenticate(&rooted(&result)), Err(AdapterError::Check(CheckError::UnsupportedProfile))));
+}
+
+fn sign_frame(frame: EvidenceFrame<'_>) -> [u8; SIGNATURE_BYTES] {
+    let key = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([92; 32]);
+    *libcrux_ml_dsa::ml_dsa_87::sign(&key.signing_key, &frame.id().0.0, EVIDENCE_SIGN_CONTEXT, [0; 32]).unwrap().as_ref()
+}
+
+#[test]
+fn unauthenticated_or_foreign_packets_cannot_poison_an_honest_panel_candidate() {
+    let f = fixture();
+    let (context, witness) = f.context(&f.correct_result(), limits());
+    let descriptor = TirNodeChecker.derive_plan(&context).unwrap();
+    let frames = f.frames(&witness, descriptor);
+    let first = EvidenceFrame::decode(&frames[0], descriptor.max_part_bytes).unwrap();
+    let original_signature = sign_frame(first);
+    let mut progress = context.start().unwrap();
+    // All three attacks arrive under the honest candidate's exact frame IDs.
+    let mut bad_signature = original_signature;
+    bad_signature[0] ^= 1;
+    assert_eq!(
+        TirNodeChecker.check_signed_part(&context, &mut progress, first, &panel_key(), &bad_signature),
+        Err(AdapterError::Contract(ContractError::Signature))
+    );
+    let mut altered = frames[0].clone();
+    *altered.last_mut().unwrap() ^= 1;
+    let altered = EvidenceFrame::decode(&altered, descriptor.max_part_bytes).unwrap();
+    assert_eq!(
+        TirNodeChecker.check_signed_part(&context, &mut progress, altered, &panel_key(), &original_signature),
+        Err(AdapterError::Contract(ContractError::Signature))
+    );
+    let foreign_key = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([93; 32]);
+    let foreign_signature =
+        *libcrux_ml_dsa::ml_dsa_87::sign(&foreign_key.signing_key, &first.id().0.0, EVIDENCE_SIGN_CONTEXT, [0; 32]).unwrap().as_ref();
+    assert_eq!(
+        TirNodeChecker.check_signed_part(&context, &mut progress, first, foreign_key.verification_key.as_ref(), &foreign_signature),
+        Err(AdapterError::Contract(ContractError::Identity))
+    );
+    assert_eq!(progress.snapshot().next_leaf, 0);
+    assert_eq!(progress.snapshot().outcome, CheckOutcome::Checking);
+    assert_eq!(progress.charged_wire_bytes(), 0);
+    assert_eq!(progress.charged_signature_bytes(), 0);
+    assert_eq!(progress.charged_transport_bytes().unwrap(), 0);
+    // The legitimate author can still complete the exact same candidate.
+    for bytes in &frames {
+        let frame = EvidenceFrame::decode(bytes, descriptor.max_part_bytes).unwrap();
+        TirNodeChecker.check_signed_part(&context, &mut progress, frame, &panel_key(), &sign_frame(frame)).unwrap();
+    }
+    assert_eq!(TirNodeChecker.finish(&context, progress).unwrap().outcome(), CheckOutcome::Matched);
+}
+
+#[test]
+fn author_authenticated_frames_can_be_relayed_and_charge_all_packet_signatures() {
+    let f = fixture();
+    let result = f.correct_result();
+    let prepared = f.prepare(&result, limits());
+    let prepared_quote = prepared.signed_transport_quote().unwrap();
+    let (context, witness) = f.context(&result, limits());
+    let quote = context.signed_transport_quote().unwrap();
+    assert_eq!(quote.max_packet_bytes, prepared_quote.max_packet_bytes);
+    assert_eq!(quote.total_packet_bytes, prepared_quote.total_packet_bytes);
+    let descriptor = TirNodeChecker.derive_plan(&context).unwrap();
+    let frames = f.frames(&witness, descriptor);
+    let mut progress = context.start().unwrap();
+    for bytes in &frames {
+        let frame = EvidenceFrame::decode(bytes, descriptor.max_part_bytes).unwrap();
+        // A relay carries an already authenticated author's packet. It cannot
+        // replace the payload or acquire arithmetic authorship from this token.
+        let authenticated = frame.authenticate(&witness, &panel_key(), &sign_frame(frame), quote.max_packet_bytes).unwrap();
+        TirNodeChecker.check_authenticated_part(&context, &mut progress, authenticated).unwrap();
+    }
+    let raw_bytes = frames.iter().map(|f| f.len() as u64).sum::<u64>();
+    let signature_bytes = frames.len() as u64 * SIGNATURE_BYTES as u64;
+    assert_eq!(progress.charged_wire_bytes(), raw_bytes);
+    assert_eq!(progress.charged_signature_bytes(), signature_bytes);
+    assert_eq!(progress.charged_transport_bytes().unwrap(), raw_bytes + signature_bytes);
+    assert!(raw_bytes + signature_bytes <= quote.total_packet_bytes);
+    assert_eq!(TirNodeChecker.finish(&context, progress).unwrap().outcome(), CheckOutcome::Matched);
+}
+
+#[test]
+fn author_signed_malformed_material_charges_the_panel_packet_and_rejects_only_its_witness() {
+    let f = fixture();
+    let (context, witness) = f.context(&f.correct_result(), limits());
+    let descriptor = TirNodeChecker.derive_plan(&context).unwrap();
+    let frame_bytes = frame_bytes(&witness, descriptor, 0, &[0; EXACT_PART_HEADER_BYTES]);
+    let frame = EvidenceFrame::decode(&frame_bytes, descriptor.max_part_bytes).unwrap();
+    let mut progress = context.start().unwrap();
+    assert_eq!(
+        TirNodeChecker.check_signed_part(&context, &mut progress, frame, &panel_key(), &sign_frame(frame)),
+        Err(AdapterError::Contract(ContractError::Version))
+    );
+    assert_eq!(progress.snapshot().next_leaf, 0);
+    assert_eq!(progress.snapshot().outcome, CheckOutcome::WitnessRejected);
+    assert_eq!(progress.charged_wire_bytes(), frame_bytes.len() as u64);
+    assert_eq!(progress.charged_signature_bytes(), SIGNATURE_BYTES as u64);
+    assert_eq!(progress.charged_transport_bytes().unwrap(), frame.signed_wire_bytes());
+    assert!(matches!(TirNodeChecker.finish(&context, progress), Err(AdapterError::Closed)));
+}
+
+#[test]
+fn signed_transport_reservation_includes_every_signature_and_refuses_aggregate_overflow() {
+    let f = fixture();
+    let result = f.correct_result();
+    let prepared = f.prepare(&result, limits());
+    let relations = prepared.descriptor().mandatory_relations;
+    let quote = prepared.signed_transport_quote().unwrap();
+    assert_eq!(quote.max_packet_bytes, limits().max_part_bytes + SIGNATURE_BYTES as u64);
+    assert_eq!(quote.unsigned_frame_bytes, relations * limits().max_part_bytes);
+    assert_eq!(quote.signature_bytes, relations * SIGNATURE_BYTES as u64);
+    assert_eq!(quote.total_packet_bytes, relations * (limits().max_part_bytes + SIGNATURE_BYTES as u64));
+    let mut near_overflow = limits();
+    near_overflow.max_part_bytes = u64::MAX / relations;
+    near_overflow.max_total_bytes = u64::MAX;
+    // The raw G14 codec is capped at u32 payloads, so preparation itself remains
+    // finite. The larger admitted packet allowance still must reserve its
+    // signatures without wrapping its aggregate transport quotation.
+    let prepared = f.prepare(&result, near_overflow);
+    assert!(matches!(
+        prepared.signed_transport_quote(),
+        Err(AdapterError::Check(CheckError::Budget) | AdapterError::Contract(ContractError::Budget))
+    ));
 }
