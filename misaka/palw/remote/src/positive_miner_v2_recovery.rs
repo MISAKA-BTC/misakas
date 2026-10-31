@@ -270,7 +270,7 @@ pub struct FilePreparationJournalV2<A> {
     committed_anchor: JournalAnchorV2,
     file: File,
     state: PreparationCheckpointV2,
-    anchor: JournalAnchorV2,
+    file_anchor: JournalAnchorV2,
     limits: JournalLimitsV2,
     bytes: u64,
     poisoned: bool,
@@ -309,7 +309,7 @@ impl<A: ProtectedAnchorStoreV2> FilePreparationJournalV2<A> {
             committed_anchor: anchor,
             file,
             state,
-            anchor: JournalAnchorV2 { sequence: 0, hash },
+            file_anchor: JournalAnchorV2 { sequence: 0, hash },
             limits,
             bytes: HEADER_BYTES as u64,
             poisoned: false,
@@ -436,13 +436,14 @@ impl<A: ProtectedAnchorStoreV2> FilePreparationJournalV2<A> {
             committed_anchor: anchor,
             file,
             state,
-            anchor,
+            file_anchor: anchor,
             limits,
             bytes: consumed,
             poisoned: false,
         })
     }
 
+    /// Last acknowledged protected-store commit, excluding an uncommitted file tail.
     pub fn anchor(&self) -> JournalAnchorV2 {
         self.committed_anchor
     }
@@ -464,10 +465,10 @@ impl<A: ProtectedAnchorStoreV2> FilePreparationJournalV2<A> {
         {
             return Err(MinerErrorV2::Binding);
         }
-        if let Some((key, bytes)) = added {
-            if responder.prepared.get(&key) != Some(&bytes) {
-                return Err(MinerErrorV2::Binding);
-            }
+        if let Some((key, bytes)) = added
+            && responder.prepared.get(&key) != Some(&bytes)
+        {
+            return Err(MinerErrorV2::Binding);
         }
         self.state.validate_increment(responder.meter, added)?;
         let mut payload = Vec::with_capacity((STATE_FIXED_BYTES + ENTRY_BYTES) as usize);
@@ -484,7 +485,8 @@ impl<A: ProtectedAnchorStoreV2> FilePreparationJournalV2<A> {
             put_u64(&mut payload, index);
             put_u64(&mut payload, bytes);
         }
-        let sequence = self.anchor.sequence.checked_add(1).filter(|n| *n <= self.limits.max_records).ok_or(MinerErrorV2::Budget)?;
+        let sequence =
+            self.file_anchor.sequence.checked_add(1).filter(|n| *n <= self.limits.max_records).ok_or(MinerErrorV2::Budget)?;
         let record_len = (payload.len() as u64).checked_add(RECORD_OVERHEAD_BYTES).ok_or(MinerErrorV2::Budget)?;
         let next_bytes = self.bytes.checked_add(record_len).filter(|n| *n <= self.limits.max_bytes).ok_or(MinerErrorV2::Budget)?;
         if self.file.metadata().map_err(io_error)?.len() != self.bytes {
@@ -493,7 +495,7 @@ impl<A: ProtectedAnchorStoreV2> FilePreparationJournalV2<A> {
         let mut prefix = Vec::with_capacity(RECORD_PREFIX_BYTES);
         put_u64(&mut prefix, sequence);
         put_u64(&mut prefix, payload.len() as u64);
-        prefix.extend_from_slice(&self.anchor.hash.0);
+        prefix.extend_from_slice(&self.file_anchor.hash.0);
         let hash = record_digest(&prefix, &payload);
         let write = self
             .file
@@ -509,10 +511,10 @@ impl<A: ProtectedAnchorStoreV2> FilePreparationJournalV2<A> {
             self.state.prepared.insert(key, bytes);
         }
         self.state.meter = responder.meter;
-        self.anchor = JournalAnchorV2 { sequence, hash };
+        self.file_anchor = JournalAnchorV2 { sequence, hash };
         self.bytes = next_bytes;
-        self.anchors.commit(Some(self.committed_anchor), self.anchor)?;
-        self.committed_anchor = self.anchor;
+        self.anchors.commit(Some(self.committed_anchor), self.file_anchor)?;
+        self.committed_anchor = self.file_anchor;
         Ok(())
     }
 }
