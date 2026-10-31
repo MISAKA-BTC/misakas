@@ -1,0 +1,61 @@
+{
+  "date_jst": "2026-11-01",
+  "candidate": "78e274630c2330a8c4aff418a4c1855aa50cf00c",
+  "source_inputs": "source-inputs.json",
+  "independent_static_reviews": [
+    {
+      "reviewer": "review_core",
+      "blocking_findings": 0,
+      "scope": "Post-freeze verifier/registration/10 test sources/handoff; F7 shape/carry/range and cost/helper gates; visibility-only V1 diff",
+      "typecheck_or_execution": false
+    },
+    {
+      "reviewer": "contract_review",
+      "blocking_findings": 0,
+      "scope": "Post-freeze parent V2 policy/cost, constructor/preflight, tests, handoff, critical V1 signature/body preservation",
+      "typecheck_or_execution": false
+    }
+  ],
+  "static_checks": {
+    "rustfmt_check_exit_code": 0,
+    "git_diff_check_exit_code": 0,
+    "v1_entire_file_equal_after_three_visibility_normalizations": true,
+    "critical_identity_params_tags_native_acceptance_fold_unchanged": true,
+    "docs": {
+      "exit_code": 0,
+      "mode": "no-new-regressions",
+      "known_issue_occurrences": 43,
+      "new_issue_occurrences": 0,
+      "strict_clean_audit": false
+    }
+  },
+  "new_unit_test_source_count": 10,
+  "tests_run": false,
+  "tests_passed": null,
+  "wide_scope": {
+    "exact_wide_only": true,
+    "local_court_version_required": 2,
+    "params_validator_arming_or_dispatch_changed": false,
+    "original_canonical_program_layout_preserved": true,
+    "held_gen_composite_pricing_supported": false,
+    "close_formula": "M=max(checked old coarse O, complete typed serialized S)",
+    "stop_above": null,
+    "empty_or_error_refused": true,
+    "root_cap_independent": true,
+    "existing_catalog_operand_ceiling_checked": true,
+    "new_wire_tag_domain_schema_currency_rate_model_review_or_native_authority": false
+  },
+  "pending_validation": [
+    "Cargo typecheck and strict Clippy",
+    "10 new unit tests and required old admission/close-size/range/GEN regressions",
+    "A4 imported sizing test sources",
+    "Full mixed CourtClosed serialized upper-bound evidence",
+    "All reader/owner fees and real native activation remain separate work"
+  ],
+  "evidence_sha256": {
+    "docs-check.log": "12b83e526d7d29281ea1647320641420f3ab7b5f3f21fbe6108dbc5e990cd28e",
+    "rustfmt-check.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "source-inputs.json": "8d058a1f43d209d19a5cc08bb8090d62b3ac33adca399e2b6c45ca2037ab08a1",
+    "static-compatibility.json": "4276b8515dee85167e5a63d59ee2d30833db5680dbc88413f535ecfdf9d9dc9f"
+  }
+}
