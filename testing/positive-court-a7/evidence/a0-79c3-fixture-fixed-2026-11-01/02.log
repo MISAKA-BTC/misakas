@@ -1,0 +1,35 @@
+    Finished `test` profile [unoptimized] target(s) in 0.17s
+     Running tests/independent.rs (/Users/wata/.cache/misaka-positive-a1-target/debug/deps/independent-ce81e781ca5df4f0)
+
+running 13 tests
+test all_signers_agreeing_on_wrong_arithmetic_still_get_witness_rejection ... ok
+test an_unsigned_relay_tamper_cannot_reject_the_honest_panel_candidate ... ok
+test authenticated_recovery_prefix_cannot_switch_scope_skip_or_duplicate_frames ... ok
+test coherent_signed_model_artifact_input_job_and_witness_replacements_cannot_select_expected_state ... ok
+test complete_coverage_is_required_for_output_mismatch_and_outer_bytes_are_charged ... ok
+test each_leaf_corruption_and_every_incomplete_prefix_cannot_finish ... ok
+test exhausted_evaluation_budget_is_unverified_and_never_an_arithmetic_conviction ... ok
+test malformed_actor_credential_lengths_are_refusals_not_node_panics ... ok
+test role_worker ... ignored, explicit subprocess worker; exercised by process acceptance
+test scalar_oracle_checks_every_logit_and_output_without_tir_evaluation ... ok
+test separate_processes_recover_checked_frames_and_reject_a_whole_foreign_packet ... A7_PROCESS_REPORT={"a2_miner_adapter_connected":false,"a3_builder_port_connected":true,"activation_allowed":false,"cold_model":false,"native_network":false,"profile":"warm-4x4-3-decode","real_llm":false,"recovery":"test-frame replay only; not A6 atomic/native persistence","reports":[{"detail":{"generated":[2,0,0],"inference_with_fixture_setup_seconds":0.000437416},"elapsed_seconds":0.000441583,"pid":52295,"role":"baseline","usage":{"peak_rss_bytes":10272768,"system_cpu_seconds":0.001907,"user_cpu_seconds":0.002849}},{"detail":{"result_bytes":8303},"elapsed_seconds":0.019324417,"pid":52296,"role":"miner","usage":{"peak_rss_bytes":11370496,"system_cpu_seconds":0.001932,"user_cpu_seconds":0.021181}},{"detail":{"artifact":"994843db5f27dc0a76014a2171b34a89df59c29574de746549f1cdf9671cbd2a943fd7d64a9c3bccba86cd94aa9409a86a62a657558188f1017fcfa32b183da6","full_frame_bytes":27288,"input":"35f0d2bd9172a3387fc7c1800051751e0fbc582bb45be938af5378a673ef1cd9e76fcf85debfd6c3fdddc4131d39fffd3e164ce3aa682f4b228d248a9fa9a98b","leaves":9,"signed_delivery_bytes":68931},"elapsed_seconds":0.24313525,"pid":52297,"role":"panel","usage":{"peak_rss_bytes":12582912,"system_cpu_seconds":0.002534,"user_cpu_seconds":0.244513}},{"detail":{"charged_full_frame_bytes":27288,"charged_signature_bytes":41643,"charged_signed_transport_bytes":68931,"cursor":9,"native_credit":false,"status":"Matched"},"elapsed_seconds":0.08382275,"pid":52298,"role":"node","usage":{"peak_rss_bytes":10108928,"system_cpu_seconds":0.002034,"user_cpu_seconds":0.085955}},{"detail":{"charged_full_frame_bytes":11549,"charged_signature_bytes":18508,"charged_signed_transport_bytes":30057,"cursor":4,"native_credit":false,"status":"Checking"},"elapsed_seconds":0.046097334,"pid":52299,"role":"prefix","usage":{"peak_rss_bytes":10076160,"system_cpu_seconds":0.001998,"user_cpu_seconds":0.048211}},{"detail":{"charged_full_frame_bytes":27288,"charged_signature_bytes":41643,"charged_signed_transport_bytes":68931,"cursor":9,"native_credit":false,"status":"Matched"},"elapsed_seconds":0.083968583,"pid":52300,"role":"restart","usage":{"peak_rss_bytes":10125312,"system_cpu_seconds":0.001938,"user_cpu_seconds":0.086158}},{"detail":{"charged_full_frame_bytes":27288,"charged_signature_bytes":41643,"charged_signed_transport_bytes":68931,"cursor":9,"native_credit":false,"status":"OutputMismatch"},"elapsed_seconds":0.083800167,"pid":52301,"role":"refute","usage":{"peak_rss_bytes":10108928,"system_cpu_seconds":0.002056,"user_cpu_seconds":0.086081}},{"detail":{"charged_full_frame_bytes":2342,"charged_signature_bytes":4627,"charged_signed_transport_bytes":6969,"cursor":0,"native_credit":false,"status":"WitnessRejected"},"elapsed_seconds":0.022763208,"pid":52307,"role":"reject","usage":{"peak_rss_bytes":9830400,"system_cpu_seconds":0.001801,"user_cpu_seconds":0.024854}},{"detail":{"status":"RejectedForeignScope"},"elapsed_seconds":0.000186083,"pid":52308,"role":"foreign","usage":{"peak_rss_bytes":8110080,"system_cpu_seconds":0.001869,"user_cpu_seconds":0.002817}}],"schema":"a7-r1-all-node-i32-v1"}
+ok
+test signature_domains_malformed_frames_and_stale_ordinals_fail ... ok
+test unsigned_frame_allowance_cannot_authorize_signature_bytes_or_overflow_a_signed_quote ... ok
+
+test result: ok. 12 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 9.23s
+
+     Running tests/pipeline.rs (/Users/wata/.cache/misaka-positive-a1-target/debug/deps/pipeline-f63ab58d275dcab4)
+
+running 8 tests
+test a2_signed_wrong_output_is_checked_mismatch_and_never_private_credit ... ok
+test bound_a2_foreign_class_job_and_prompt_never_reach_the_signer ... ok
+test bound_a2_rejects_parameters_that_do_not_open_to_the_fixed_registration ... ok
+test checked_math_does_not_replace_gate_c_funding_maturity_or_current_fraud_state ... ok
+test committed_a2_a3_a1_and_a5_connect_with_independent_expected_tokens ... ok
+test missing_last_a3_frame_cannot_produce_a5_terminal_authority ... ok
+test omitted_existing_entitlement_port_denies_even_after_real_checked_execution_and_all_prerequisites ... ok
+test paid_success_has_only_existing_worker_payment_and_settlement_after_real_checked_execution ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.22s
+
