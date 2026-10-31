@@ -340,9 +340,14 @@ mod tests {
         let (layer, site) = {
             let mut b = pb.block("layer", vec![carry.clone()]);
             let rows = b.hist_append(history, Ref::CarryIn(0));
-            let sum = b.reduce_sum(rows, 0, DType::I32);
-            let Ref::Node(site) = sum else { unreachable!() };
-            (b.finish(&[sum]), site)
+            // ReduceSum retains its axis as length one: collapse [1, 1]
+            // back to the declared [1] carry shape. Sum the full I32 history
+            // in I64, then clamp to keep the legacy range contract valid.
+            let sum = b.reduce_sum(rows, 0, DType::I64);
+            let sum = b.reshape_fixed(sum, &[1]);
+            let carry_out = b.clamp(sum, -1000, 1000, DType::I32);
+            let Ref::Node(site) = carry_out else { unreachable!() };
+            (b.finish(&[carry_out]), site)
         };
         let (post, logits) = {
             let mut b = pb.block("post", vec![carry]);
