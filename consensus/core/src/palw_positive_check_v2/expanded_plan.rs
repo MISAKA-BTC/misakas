@@ -119,7 +119,9 @@ pub struct ExpandedPlan {
 }
 
 impl ExpandedPlan {
-    pub(super) fn step_space(&self) -> &PalwTirStepSpaceV1 {
+    /// Original geometry for read-only builders. This reference is not a
+    /// checked-prefix, arithmetic-success or native-admission capability.
+    pub fn step_space(&self) -> &PalwTirStepSpaceV1 {
         &self.space
     }
     pub fn derive(
