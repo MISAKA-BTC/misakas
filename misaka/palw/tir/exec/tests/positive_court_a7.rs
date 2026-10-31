@@ -6,6 +6,45 @@ use kaspa_consensus_core::{palw_positive_court_v2::*, palw_tir_court_v1::PalwTir
 use std::{io::Cursor, path::Path, process::Command, time::Instant};
 
 #[test]
+fn yardstick_context_requires_the_authenticated_class_tokenizer_before_inference() {
+    use misaka_palw_tir_exec::{TirParams, TirPlan, node::positive_court::miner_infer_v2};
+    let (class, result) = setup(false, false, 1);
+    let mut ctx =
+        kaspa_consensus_core::palw_tir_attempt_v1::palw_tir_canonical_context_v1(&class, result.job.shape_profile_id, (1, 3)).unwrap();
+    ctx.prompt_token_ids_hash = result.job.prompt_token_ids_hash;
+    assert_ne!(ctx.tokenizer_id, class.tokenizer_id);
+    let plan = TirPlan::compile(&program(false, false)).unwrap();
+    let map = params(false);
+    let params = TirParams::from_map(&plan, &map).unwrap();
+    assert!(
+        miner_infer_v2(
+            &class,
+            result.artifact,
+            &plan,
+            &params,
+            &ctx,
+            &[1],
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            limits()
+        )
+        .is_err()
+    );
+    ctx.tokenizer_id = class.tokenizer_id;
+    let run = miner_infer_v2(
+        &class,
+        result.artifact,
+        &plan,
+        &params,
+        &ctx,
+        &[1],
+        kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+        limits(),
+    )
+    .unwrap();
+    assert_eq!(run.generated, [2, 0, 0]);
+}
+
+#[test]
 fn scalar_oracle_checks_signed_outputs_and_every_logits_lane() {
     assert_eq!(oracle(1, false, false).0, [2, 0, 0]);
     assert_eq!(oracle(2, false, true).0, [0, 0, 0]); // tie at lanes 0/1 selects 0

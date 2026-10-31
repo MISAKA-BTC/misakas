@@ -46,6 +46,7 @@ Node checkerを期待値の計算に使わない。i32、i64 Q24、負値、同�
 | 誤weightで自己整合するtraceを作り全員署名 | 登録materialとの不一致をNodeが拒否 |
 | network/branch/ruleset/input/tokenizer/class/artifact差替え | 正しく再署名してもadmission拒否 |
 | 署名domain・鍵の役割差替え | Authentication拒否 |
+| yardstick contextの未設定tokenizer | 推論前に拒否し、登録tokenizer固定後のみ実行 |
 | 偽のMiner outputと正しいPanel evidence | 全範囲検査・Finish後のみRefuted |
 | 未完了・Passed・Refutedと全7信用consumer | prototypeではいずれもnative信用を付与しない |
 | journal prefix・切断・ID/資料改ざん・余剰bytes・期限 | 再検査し、不正なPass復元や期限延長をしない |
@@ -69,6 +70,13 @@ RSSはプロセス生涯の最大値で、三者の同時peakやGPU/VRAM、保�
 再起動は正常なプロセス終了後にjournalを別プロセスへ渡す。電源断・fsync・原子commitは未検証。
 
 ## 他担当への接続事項・未検証
+
+確認事項: snapshotの `misaka/palw/tir/exec/examples/positive-court-llm.rs` は
+`palw_tir_canonical_context_v1` の後にpromptだけを設定し、tokenizerを設定していない。
+このhelperのtokenizerはゼロなので、非ゼロtokenizerのclassはrole admissionで拒否される。
+`yardstick_context_requires_the_authenticated_class_tokenizer_before_inference` で拒否と正しい設定後の
+実行を再現する。A7 fixtureは登録classのtokenizerを固定した。共有の計測exampleは担当外のため
+変更せず、実LLM計測を行う担当へ引き継ぐ。
 
 | 担当 | 必要な統合/計測 |
 |---|---|

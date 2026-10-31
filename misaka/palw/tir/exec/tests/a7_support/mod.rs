@@ -110,12 +110,13 @@ pub fn setup(wide: bool, ties: bool, prompt: u32) -> (PalwTirClassV1, MinerResul
             max_context: 16,
             checkpoint_interval: 2,
             h_tile: 2,
-            commit_tiles: vec![2, 4096],
+            commit_tiles: vec![4, 4, 4096],
             state_tiles: vec![],
         },
     };
     let class_id = class.class_id(&artifact);
     let mut job = kaspa_consensus_core::palw_tir_attempt_v1::palw_tir_canonical_context_v1(&class, class_id, (1, 3)).unwrap();
+    job.tokenizer_id = class.tokenizer_id;
     job.prompt_token_ids_hash =
         kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_commitment_v1(PalwPromptIdsFormV1::Flat, &[prompt]).unwrap();
     (

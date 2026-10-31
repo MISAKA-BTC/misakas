@@ -91,7 +91,8 @@ def main():
                     item = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                if item.get("reason") == "compiler-artifact" and item.get("executable"):
+                if (item.get("reason") == "compiler-artifact" and item.get("executable")
+                        and item.get("target", {}).get("name") == "positive_court_a7"):
                     binary = Path(item["executable"])
                     record["a7_binary"] = {"path": str(binary), "sha256": sha(binary)}
         (out / "run.json").write_text(json.dumps(record, indent=2)+"\n")
