@@ -18,11 +18,15 @@ A4 must supply `NativeSourceContextV2`: actual accepted carrier/body provenance,
 
 The actual `ConsensusApi::palw_positive_source_duty_v2` implementation and its private current-view constructor are still required. The interface's default returns `Unavailable`. It must fix selected parent/state root/accepted prefix/monotonic generation, reject stale views on every call, reconstruct accepted op3 requests and verify literal op4 receipts. A public `PositiveRowsV2` structural reader alone cannot authorize a duty.
 
+`ConsensusProxy` itself is a public dynamic-interface alias which trusted Rust code can manufacture around a mock. The kaspad consumer and duty constructor are therefore node-private; the alias alone is not an authentication capability. Only the actual native owner can complete the private snapshot/publication path. No production success implementation is inferred from this wrapper.
+
 A6 must persist/replay the COMPLETE case journal with its protected native head, not just these source records or the latest TxID. Reorg rolls back native rows/dues; it must not roll back the separate local spent-I/O DB. No native activation or public policy was added.
 
 ## Receipt / fee semantics agreed with A0
 
 `ServiceReceiptRow.bytes` is exact raw data, not opening/carrier bytes. Its `duty` identifies the literal accepted op3 referenced by its op4 response. A receipt from request A also completes an overlapping request B for that unit. Settlement may remain `None`; data completion and payment are separate.
+
+Prepared updates retain touched source/unit coordinates even when they write no receipt or union. The private writer checks the complete old literals before every retry/duplicate path. A5 settlement changes require an actual same-view A5/A6 history/snapshot bridge; until connected, a settlement mismatch is rejected rather than trusting a saved payment flag.
 
 `Case.usage.fee` is only finite source-service dues, bounded by `Service.budget.fee`. Reserve worst-case fresh-unit fees before admitting a request, accrue once at the first valid unit response, and pass `SourceFeeIntentV2` to A5. The once-only payment coordinate is the existing ServiceReceipt key. This cache never moves funds or writes a paid flag.
 

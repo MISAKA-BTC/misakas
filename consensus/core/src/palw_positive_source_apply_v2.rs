@@ -46,19 +46,19 @@ impl TransitionBuilder<'_> {
             return Err(source_refusal("source transition rewrites another role"));
         }
         NativeRowBody::Case(*next).validate_shape().map_err(source_refusal)?;
-        if let Some(union) = update.union() {
-            let key = NativeRowKey::SourceUnion { case: union.case, kind: union.kind, source: union.source };
+        {
+            let (kind, source) = update.touched_source();
+            let key = NativeRowKey::SourceUnion { case: expected.case, kind, source };
             let old = rows.read(key).map_err(source_refusal)?.map(|row| row.body);
-            let expected = ledger.source_union(union.kind, union.source).map(NativeRowBody::SourceUnion);
+            let expected = ledger.source_union(kind, source).map(NativeRowBody::SourceUnion);
             if old != expected {
                 return Err(source_refusal("source union differs from complete replay"));
             }
         }
-        if let Some(receipt) = update.receipt() {
-            let key =
-                NativeRowKey::ServiceReceipt { case: receipt.case, kind: receipt.kind, source: receipt.source, unit: receipt.unit };
+        if let Some((kind, source, unit)) = update.touched_unit() {
+            let key = NativeRowKey::ServiceReceipt { case: expected.case, kind, source, unit };
             let old = rows.read(key).map_err(source_refusal)?.map(|row| row.body);
-            let expected = ledger.receipt(receipt.kind, receipt.source, receipt.unit).copied().map(NativeRowBody::ServiceReceipt);
+            let expected = ledger.receipt(kind, source, unit).copied().map(NativeRowBody::ServiceReceipt);
             if old != expected {
                 return Err(source_refusal("unit receipt differs from complete replay"));
             }
