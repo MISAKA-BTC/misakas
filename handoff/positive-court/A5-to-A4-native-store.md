@@ -75,4 +75,20 @@ pre-admission拒否と、admission後に受理したpacketの失敗を区別す�
 
 A5 phase3の候補別結果とphase4 row境界7試験・lib Clippy・独立read-only監査は
 [検証記録](../../misaka/palw/positive-accounting/evidence/phase4-native-rows/README.md)を参照。
-この回答のためのcode変更・新build・有効化変更はない。
+初回回答時点ではcode変更・新build・有効化変更はなかった。後続実装・検証は追記した各節を参照する。
+
+## restart時の既存private case receipt
+
+A4のrebind extension用に、leaf `fees::PrivateAccountingStore::recover_committed_case(intent)` を追加した。
+共通 `AtomicCourtStore` は変更しない。返り値は既存のopaque `AdmittedCase` である。
+現在bookの既存caseとintentの全fieldを照合し、unknownは `UnknownCase`、不一致は `Binding`。
+receiptを同じstore ownerへ結び付け、`admission_undo: None` とする。
+authority/new admission expiry/prepare/commitを呼ばず、book/balances/holds/resources/journal head/epochは不変。
+既存caseは期限後・authority利用不可でも読めるが、新受付は従来どおり拒否する。
+元admissionのundoはこのgetterから取得できない。rollbackでcaseがなくなれば再読取も拒否する。
+
+A4のextension implementationはこのgetterを呼び、currentRoot/resolve_committed/Result署名/世代を別途照合して
+fresh coordinator-owned receiptへbindする。native storeではactual rooted history/funding/lease/epochがさらに必須。
+private getter成功をrestart完了やnative復旧と称さない。
+4反例を含むleaf全44件とall-targets Clippyの記録は
+[phase7 evidence](../../misaka/palw/positive-accounting/evidence/phase7-recovery-receipt/README.md)を参照する。
