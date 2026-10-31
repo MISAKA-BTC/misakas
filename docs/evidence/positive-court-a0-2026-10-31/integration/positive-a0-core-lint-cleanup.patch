@@ -1,0 +1,115 @@
+diff --git a/consensus/core/src/palw_positive_court_v2/coordinator/contract.rs b/consensus/core/src/palw_positive_court_v2/coordinator/contract.rs
+--- a/consensus/core/src/palw_positive_court_v2/coordinator/contract.rs
++++ b/consensus/core/src/palw_positive_court_v2/coordinator/contract.rs
+@@ -307,14 +307,14 @@
+         {
+             return Err(CourtErrorV2::Contract(ContractError::Identity));
+         }
+-        if let Some(current) = &self.candidate {
+-            if current.status == WitnessStatus::Checking {
+-                return if current.witness == witness && current.plan == plan && self.checker.same_context(&current.context, &context) {
+-                    Ok(CandidateOpenV2::AlreadyActive)
+-                } else {
+-                    Err(CourtErrorV2::Contract(ContractError::Identity))
+-                };
+-            }
++        if let Some(current) = &self.candidate
++            && current.status == WitnessStatus::Checking
++        {
++            return if current.witness == witness && current.plan == plan && self.checker.same_context(&current.context, &context) {
++                Ok(CandidateOpenV2::AlreadyActive)
++            } else {
++                Err(CourtErrorV2::Contract(ContractError::Identity))
++            };
+         }
+         if self.attempts >= self.limits.max_attempts {
+             return Err(CourtErrorV2::Budget);
+diff --git a/consensus/core/src/palw_positive_court_v2/coordinator.rs b/consensus/core/src/palw_positive_court_v2/coordinator.rs
+--- a/consensus/core/src/palw_positive_court_v2/coordinator.rs
++++ b/consensus/core/src/palw_positive_court_v2/coordinator.rs
+@@ -296,14 +296,14 @@
+         if !signature.verifies(key, &witness.id(), WITNESS_CONTEXT) {
+             return Err(ErrorV2::Authentication);
+         }
+-        if let Some((author, current)) = &self.current {
+-            if current.statuses().1 == WitnessStatusV2::Checking {
+-                return if *author == panel && current.witness() == &witness {
+-                    Ok(CandidateEffectV2::AlreadyActive)
+-                } else {
+-                    Err(ErrorV2::Order)
+-                };
+-            }
++        if let Some((author, current)) = &self.current
++            && current.statuses().1 == WitnessStatusV2::Checking
++        {
++            return if *author == panel && current.witness() == &witness {
++                Ok(CandidateEffectV2::AlreadyActive)
++            } else {
++                Err(ErrorV2::Order)
++            };
+         }
+         if self.meter.attempts >= self.limits.max_attempts {
+             return Err(ErrorV2::Budget);
+diff --git a/consensus/core/src/palw_positive_source_v2.rs b/consensus/core/src/palw_positive_source_v2.rs
+--- a/consensus/core/src/palw_positive_source_v2.rs
++++ b/consensus/core/src/palw_positive_source_v2.rs
+@@ -777,11 +777,11 @@
+     ranges.sort_unstable();
+     let mut out: Vec<(u64, u64)> = Vec::with_capacity(ranges.len());
+     for (first, end) in ranges {
+-        if let Some(last) = out.last_mut() {
+-            if first <= last.1 {
+-                last.1 = last.1.max(end);
+-                continue;
+-            }
++        if let Some(last) = out.last_mut()
++            && first <= last.1
++        {
++            last.1 = last.1.max(end);
++            continue;
+         }
+         out.push((first, end));
+     }
+diff --git a/consensus/core/src/palw_positive_rows_v2/restore.rs b/consensus/core/src/palw_positive_rows_v2/restore.rs
+--- a/consensus/core/src/palw_positive_rows_v2/restore.rs
++++ b/consensus/core/src/palw_positive_rows_v2/restore.rs
+@@ -433,7 +433,7 @@
+ /// backend; cached Matched/usage/union summaries cannot mint any authority here.
+ pub fn validate_positive_aux_restore_v2(aux: &PositiveAuxRowsV2) -> Result<PositiveRestoreReportV2, PositiveRowErrorV2> {
+     let first = aux.range((Included((KERNEL_AUX_TABLE, Vec::new())), Unbounded)).next();
+-    if !first.is_some_and(|((table, _), _)| *table == KERNEL_AUX_TABLE) {
++    if first.is_none_or(|((table, _), _)| *table != KERNEL_AUX_TABLE) {
+         return Ok(PositiveRestoreReportV2::default());
+     }
+     validate_positive_aux_present_v2(aux)
+diff --git a/consensus/core/src/palw_model_panel_one_v1.rs b/consensus/core/src/palw_model_panel_one_v1.rs
+--- a/consensus/core/src/palw_model_panel_one_v1.rs
++++ b/consensus/core/src/palw_model_panel_one_v1.rs
+@@ -89,7 +89,7 @@
+     historical: &PalwPanelParamsV2,
+ ) -> Result<PalwPanelParamsV2, PalwPanelV2Error> {
+     match model_claim_route_v1(from_daa, accepted_daa) {
+-        PalwModelClaimRouteV1::HistoricalPanel => Ok(historical.clone()),
++        PalwModelClaimRouteV1::HistoricalPanel => Ok(*historical),
+         PalwModelClaimRouteV1::G14PanelOne => PalwPanelParamsV2::new(1, 1, historical.anchor_delay()),
+     }
+ }
+diff --git a/consensus/core/src/palw_state_v2/chain_state.rs b/consensus/core/src/palw_state_v2/chain_state.rs
+--- a/consensus/core/src/palw_state_v2/chain_state.rs
++++ b/consensus/core/src/palw_state_v2/chain_state.rs
+@@ -3729,11 +3729,10 @@
+                 let rcore = &claim.rcore;
+                 let one = params.model_panel_one_governs_v1(claim.accepted_daa);
+                 let tagged_one = rcore.licence_door == Some(crate::palw_economic_safety_v1::PalwLicenceDoorTagV1::G14PanelOne);
+-                if tagged_one && !one
+-                    || one && rcore.licence_door.is_some() && !tagged_one
+-                    || one
+-                        && matches!(claim.phase, PalwClaimPhaseV2::ReceiptLicensed { .. } | PalwClaimPhaseV2::Final { .. })
+-                        && !tagged_one
++                if (tagged_one != one)
++                    && (tagged_one
++                        || rcore.licence_door.is_some()
++                        || matches!(claim.phase, PalwClaimPhaseV2::ReceiptLicensed { .. } | PalwClaimPhaseV2::Final { .. }))
+                     || tagged_one && (rcore.basis_k != 1 || rcore.served_mask != 1 || rcore.unserved_seen || rcore.escrow_released)
+                     || one && self.panels.get(id).is_some_and(|panel| panel.seats.len() != 1)
+                 {

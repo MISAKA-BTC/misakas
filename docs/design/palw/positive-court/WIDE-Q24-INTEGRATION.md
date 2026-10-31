@@ -11,8 +11,8 @@
 ## A0に残る実装
 
 - `50339b43a`でadopted schemeと最終post logitsだけのi64 commitを識別するstructural foundationを統合。独立static review後、新7件と既存golden3件・golden_v2の11件、対象Clippyが成功した。[source/原log](../../../evidence/positive-court-a0-2026-10-31/integration/wide-structural-and-goldens-20261101.json)、[レビュー/Clippy](../../../evidence/positive-court-a0-2026-10-31/integration/wide-structural-review-and-clippy-20261101.json)。native admissionの既存scheme whitelistは変更していない。
-- 8-byte step leaf、別domainのtrace/opening、型幅を保持する実行・capture・cell・sampling・court・資料費用の選択統合と旧経路回帰。
-- 登録programから解決したoutput profileをcanonical contextへ反映する明示API。旧`PalwTirJobFactsV1`のserialized layoutや`tiled_logits` booleanへ幅を混入させない。
+- 別domainのデータroot/openingとi128 Q48の選択primitiveを`82146b3b9 / 74aac75f8`へ統合した。profile/旧入口11件・source料金2件・wide data/selection5件が同sourceで成功し、Core libraryのstrict Clippyも等価cleanup後に成功。[stage2記録](../../../evidence/positive-court-a0-2026-10-31/integration/profile-wide-stage2-review-20261101.json)。8-byte step leaf、実行・capture・cell・Court・資料費用の全経路接続はまだ必要。
+- `f862774d3`で登録program由来の明示profile resolverを追加。旧factsの74-byte保存形式を維持し、旧class record/StepSpace/binding入口は未対応wideを拒否する。canonical tokenizer/CUのゼロ、元の最大context、anchor由来prompt/seed/full jobを維持する。factsだけを読むnative callerへの接続は別途必要。
 - A1の全範囲検査とA3の一回のPanel再計算・証拠生成への接続。現FullRelation経路の最終logitsはi32限定で、i64をcastして受理しない。
 - 同一候補での実checkpoint、元の最大文脈長、role別費用、cold/warm、複数Node・再起動の確認。
 

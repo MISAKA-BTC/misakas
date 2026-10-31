@@ -75,3 +75,14 @@ A6のnative journal caller-batch保存とactual accepted-data readerを`6e25d763
 `50339b43a`のTIR sourceで新structural7件・既存golden3件・golden_v2の11件、計**21件PASS**、対象Clippy `-D warnings`成功。全対象sourceは前後不変。[commands/source/result](../../../evidence/positive-court-a0-2026-10-31/integration/wide-structural-and-goldens-20261101.json)、[原log](../../../evidence/positive-court-a0-2026-10-31/integration/wide-structural-and-goldens-20261101.log)、[独立レビューとClippy](../../../evidence/positive-court-a0-2026-10-31/integration/wide-structural-review-and-clippy-20261101.json)。exact schemeと最終post I64 commitだけを構造認識し、他のI64 commit・state・carry・非最終logitsを拒否する。新codec・実LLM・native受理・広幅Courtの試験ではない。旧i32の単なるencode/decode roundtripをpre/post goldenの独立証拠と呼ばず、既存の固定golden targetを別に実行した。
 
 採択本文・元checkoutでの登録実験原資料も取り込んだが、[統合境界](WIDE-Q24-INTEGRATION.md)のとおり外部実験の成功をA0のPositive Court完成実績へ加算しない。元evidence manifest73件のfile hashを照合し、原ログ・digest・実測値を維持している。
+
+
+## 明示profile・旧入口拒否・wide dataのstage2
+
+`74aac75f8`の同一sourceでprofile/legacy guard **11件**、source料金差分 **2件**、wide data/selection **5件**の計**18件PASS**、全対象source前後不変。[commands/env/source/result](../../../evidence/positive-court-a0-2026-10-31/integration/profile-source-wide-stage2-final-20261101.json)、[profile](../../../evidence/positive-court-a0-2026-10-31/integration/profile-source-wide-stage2-final-20261101-0.log)、[source](../../../evidence/positive-court-a0-2026-10-31/integration/profile-source-wide-stage2-final-20261101-1.log)、[data](../../../evidence/positive-court-a0-2026-10-31/integration/profile-source-wide-stage2-final-20261101-2.log)。既存RocksDB archiveを指定、標準test stackで実行した。初回の不要なC++再buildを自分のCargoだけSIGINT中断した記録と、次のhash part配列型のcompile失敗は原ログのまま保存し、成功件数へ含めない。
+
+二回の独立reviewで旧record/StepSpace入口のwide誤解釈を検出・修正し、整合するnarrow対照とcoherent wide bindingの固有の幅拒否を検査した。新root/openingはデータ同一性だけを認証し、rootと整合した範囲外tokenも後段で反証できるよう保持する。これを計算合格にしない。[review・原patch・失敗範囲](../../../evidence/positive-court-a0-2026-10-31/integration/profile-wide-stage2-review-20261101.json)。
+
+Core strict Clippy初回は6箇所のstyle lintで失敗。`91ff5c669`はCopy・3 let-chain・Optionの否定・16組すべて同値なboolean式だけを整理し、後続のCore library `-D warnings`は**exit0**。[最終Clippy log](../../../evidence/positive-court-a0-2026-10-31/integration/profile-wide-core-clippy-final-20261101.log)。残りの条件やnative資格は変更していない。18件のruntimeと等価style後のClippyを区別し、全native/実LLMの同候補合格とはしない。
+
+A7のproduction79独立回帰は旧A5fixtureの不整合6件で一度失敗した。A5の修正を`b3da72953`へ統合し、production検査を弱めず17行の整合DATA fixtureとinvalid import拒否へ更新した。ownerの55件/Clippy成功は[phase11記録](../../../../misaka/palw/positive-accounting/evidence/phase11-restore-fixture/README.md)の79+fixture修正候補・16MiB test stackの結果であり、A0 currentやA7全体の成功へ加算しない。A7の失敗原本を保持し、新候補の正式再実行を依頼した。

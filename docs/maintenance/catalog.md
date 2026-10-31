@@ -497,6 +497,7 @@
 - [design/palw/positive-court/A6-AUX151-VALIDATION.md](../design/palw/positive-court/A6-AUX151-VALIDATION.md)
 - [design/palw/positive-court/A6-COMMON-JOURNAL-VALIDATION.md](../design/palw/positive-court/A6-COMMON-JOURNAL-VALIDATION.md)
 - [design/palw/positive-court/A6-ORDER-COUNTERS-VALIDATION.md](../design/palw/positive-court/A6-ORDER-COUNTERS-VALIDATION.md)
+- [design/palw/positive-court/A6-SOURCE-REPLAY-HANDOFF.md](../design/palw/positive-court/A6-SOURCE-REPLAY-HANDOFF.md)
 - [design/palw/positive-court/COMMON-CONTRACT.md](../design/palw/positive-court/COMMON-CONTRACT.md)
 - [design/palw/positive-court/IMPLEMENTATION-ALIGNMENT.md](../design/palw/positive-court/IMPLEMENTATION-ALIGNMENT.md)
 - [design/palw/positive-court/IMPLEMENTATION-STATUS.md](../design/palw/positive-court/IMPLEMENTATION-STATUS.md)
