@@ -442,10 +442,19 @@ impl BorshDeserialize for PalwKernelRouteStateV1 {
         let rows = LedgerRowsV1::deserialize_reader(reader)?;
         let count = u32::deserialize_reader(reader)?;
         let mut aux = BTreeMap::new();
+        // Positive keys must be canonical BEFORE BTreeMap can sort/collapse
+        // them. Other aux tables retain their legacy ordering semantics.
+        let mut previous_positive = [0u8; misaka_palw_positive_contract::rows::MAX_NATIVE_KEY_BYTES];
+        let mut previous_positive_len = 0usize;
         for _ in 0..count {
             let table = u8::deserialize_reader(reader)?;
             let (key, value) = if table == misaka_palw_positive_contract::native::KERNEL_AUX_TABLE {
                 let key = positive_blob(reader, misaka_palw_positive_contract::rows::MAX_NATIVE_KEY_BYTES)?;
+                if previous_positive_len != 0 && key.as_slice() <= &previous_positive[..previous_positive_len] {
+                    return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "noncanonical Positive aux key order"));
+                }
+                previous_positive[..key.len()].copy_from_slice(&key);
+                previous_positive_len = key.len();
                 let value = positive_blob(reader, misaka_palw_positive_contract::rows::MAX_NATIVE_ROW_BYTES)?;
                 misaka_palw_positive_contract::rows::NativeRowValue::decode(&key, &value)
                     .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "Positive aux key/value mismatch"))?;
