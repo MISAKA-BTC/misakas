@@ -1,0 +1,122 @@
+{
+  "date_jst": "2026-11-01",
+  "branch": "codex/a1-wide-step-v2",
+  "candidate_commit": "9a3e952e9e00ec71a418d935095b14af7e7aceba",
+  "parent_commit": "363e231d13ac3a340acc7c49577a7425ff9151e9",
+  "change": "Rename conservative lane-only upper bound to maximum_leaf_payload_bytes_v2; add mixed Fixed/Hist/wide structural regression.",
+  "byte_semantics": {
+    "wide_four_lane_payload": 32,
+    "borsh_leaf_header": 26,
+    "wide_four_lane_borsh_total": 58,
+    "opening_outer_dto_signature_native_heap_separately_reserved": true,
+    "bound_is_conservative_all_lanes_times_8": true,
+    "native_pricing_auto_connected": false
+  },
+  "new_regression": {
+    "positions": 7,
+    "per_position_leaf_counts": [
+      2,
+      6,
+      7,
+      7,
+      6,
+      8,
+      6
+    ],
+    "total_leaves": 42,
+    "wide_final_leaves": 6,
+    "fixed_checkpoint_leaves": 2,
+    "history_tile_leaves": 3,
+    "C": 3,
+    "h_tile": 2,
+    "W": 3,
+    "P": 2,
+    "D": 6,
+    "nonlogits_old_version1_four_byte": true,
+    "wide_final_version2_eight_byte": true,
+    "scope": "structural data geometry/encoding/binding identity, not arithmetic execution or native LLM admission"
+  },
+  "final_tests": {
+    "passed": 11,
+    "failed": 0,
+    "new_wide_step_target": 6,
+    "existing_wide_primitives": 5,
+    "historical_10_or_failure_logs_modified": false,
+    "historical_counts_added": false,
+    "log": "tests.log"
+  },
+  "core_strict_clippy": {
+    "passed": true,
+    "scope": "library and both integration test targets; --no-deps -D warnings",
+    "log": "clippy.log"
+  },
+  "docs": {
+    "mode": "no-new-regressions",
+    "passed": true,
+    "known_missing": 43,
+    "new_occurrences": 0,
+    "log": "docs-check.log"
+  },
+  "build": {
+    "normal_cargo_source_compile": true,
+    "rust_rlib_manually_copied": false,
+    "cpp_rebuilt": false,
+    "static_archive_link_evidence": [
+      {
+        "path": "/Users/wata/.cache/misaka-positive-a1-target/debug/build/librocksdb-sys-cf7973eacfe37c82/output",
+        "saved": "rocksdb-build-script-librocksdb-sys-cf7973eacfe37c82.log",
+        "sha256": "31813c2ba93956d6951362983f71821362fd84cbf56be2a50e1dfd977726cec4"
+      }
+    ],
+    "inputs": "build-inputs.json",
+    "results": "build-result.json",
+    "archive": {
+      "path": "/Users/wata/.codex/worktrees/rfc14-g14-completion/MISAKA-testnet/target/release/build/librocksdb-sys-865d89ee7dbf2b2a/out/librocksdb.a",
+      "sha256_before": "6eae541967b2cb5345ace55eadb34b2c490e91acfd8a4e2da5822a60f91af3a2",
+      "size": 23048496,
+      "sha256_after": "6eae541967b2cb5345ace55eadb34b2c490e91acfd8a4e2da5822a60f91af3a2"
+    },
+    "binaries": [
+      {
+        "target": "palw_tir_step_wide_v2.rs",
+        "path": "/Users/wata/.cache/misaka-positive-a1-target/debug/deps/palw_tir_step_wide_v2-fb55f4bb24b4889c",
+        "size": 2306464,
+        "sha256": "7adb924002412d9332c9f2215184f2718a435eb6cc7bb6803a4be40ac1eb07d1"
+      },
+      {
+        "target": "wide_logits_primitives_v2.rs",
+        "path": "/Users/wata/.cache/misaka-positive-a1-target/debug/deps/wide_logits_primitives_v2-898482192ea7821a",
+        "size": 1301632,
+        "sha256": "897291fa9330d0cb0b96ca1d2f513bf78d2b587d7015d29b13bb83c81d088d73"
+      }
+    ],
+    "exclusive_existing_a1_cache_released": true,
+    "root_own_cache_or_a0_target_used": false,
+    "new_large_target_created": false
+  },
+  "scope": {
+    "new_wire_native_tag_domain_binding_version": false,
+    "full_relation_i64_or_public_activation": false,
+    "real_llm_native_or_total_rss_validated": false
+  },
+  "source_sha256": {
+    "Cargo.lock": "b8a58e9e08bdbfd7e3dfa87118d641fd673e50d7c277dfebd59686f4cb29ed61",
+    "consensus/core/Cargo.toml": "084e2eb8a015be8b0c3abd513244a4587493a404810884b383b801b096fb1295",
+    "consensus/core/src/lib.rs": "b91c6fe6c2004bf63770696ddbc07d84e1e4c58219fd5cbacf348f5cf3b186a0",
+    "consensus/core/src/palw_step_leg.rs": "372f065a2491c77ac0ceff73898704a2abcb44da005a00329d709a7b2a2fe1e1",
+    "consensus/core/src/palw_tir_step_v1.rs": "7dc8c66373bc13dcbdbdec0bee52b0ad6edd40e0e44e6cd51b08877acb4664da",
+    "consensus/core/src/palw_tir_step_v1/wide_v2.rs": "5abe3db73130998fc73b5e600f02cc8dd8a0623124b152ef663cc29b02d5c28b",
+    "consensus/core/src/palw_logits_q24_v2.rs": "64aed6659e9431823f82e3bc2e9ad2856a6ec76149481344e88b977c704d3843",
+    "consensus/core/tests/palw_tir_step_wide_v2.rs": "f50e942fc0d332842ef39be01c0ed3209b002461b5e9da6af8b2838542a169f4",
+    "consensus/core/tests/wide_logits_primitives_v2.rs": "1ffbdeaaf719ba62be0d613e6799f5e972eb657ed39dfeeea8b803be8bdda36a"
+  },
+  "handoff_sha256": "baf2abec99a5065b2feab80c96858d95b62c43492b18a41057986dd2c36bfa76",
+  "evidence_sha256": {
+    "build-inputs.json": "a2a1e783e89064720f579fed4840790e2959b679dabebfc67c964a6b13da1395",
+    "build-result.json": "52a894d9d40a859d533eacf70599fe2c40b1f792c6bb74ee1501692a76a3c0d5",
+    "clippy.log": "b2fbdb6362f9c2a0cc04fe9f1aa76c882b752bcb94d77120922e93aa7f88b58b",
+    "docs-check.log": "2371f24aef8cd2c9bb7b594fa643dadb096be69cb1009a54873644720e5bb793",
+    "rocksdb-build-script-librocksdb-sys-cf7973eacfe37c82.log": "31813c2ba93956d6951362983f71821362fd84cbf56be2a50e1dfd977726cec4",
+    "tests.log": "35093fe3f549ed27591c28e16034bb7f598eab9c69019530aeb7b5bc93069b6d"
+  }
+}
