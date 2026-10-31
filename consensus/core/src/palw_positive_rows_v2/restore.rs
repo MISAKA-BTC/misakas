@@ -40,6 +40,25 @@ fn inconsistent<T>() -> Result<T, PositiveRowErrorV2> {
     Err(PositiveRowErrorV2::InconsistentLinks)
 }
 
+/// A local contradiction check, never a substitute for accepted-history
+/// ancestry. Transaction/event ordinals are comparable only inside the same
+/// accepting block; its accepted clock is invariant across all its events.
+fn same_block_event_order_v2(before: &AcceptedOrigin, after: &AcceptedOrigin, strict: bool) -> Result<(), PositiveRowErrorV2> {
+    if before.accepting_block != after.accepting_block {
+        return Ok(());
+    }
+    let first = (before.accepted_tx_ordinal, before.event_ordinal);
+    let second = (after.accepted_tx_ordinal, after.event_ordinal);
+    if before.accepted_daa != after.accepted_daa
+        || before.accepted_blue_score != after.accepted_blue_score
+        || first > second
+        || (strict && first == second)
+    {
+        return inconsistent();
+    }
+    Ok(())
+}
+
 /// Invoke BEFORE a carriage's typed Vec is collected into a BTreeMap. Map
 /// decoding must never erase a repeated Positive row with last-wins behavior.
 /// This index borrows the encoded keys; it does not copy decoded row bodies.
@@ -269,6 +288,7 @@ impl Reader<'_> {
         let case = self.case(row.witness.case)?;
         let result = self.result(row.witness.result)?;
         let coverage = self.coverage(row.witness.id())?;
+        same_block_event_order_v2(&result.origin, &row.origin, true)?;
         validate_witness_bundle(&result, &case, row, &coverage)?;
         add(&mut self.report.signature_checks, 1)?;
         if row.witness.attempt >= case.usage.witness_attempts || !attempts.insert((case.case, row.witness.attempt)) {
@@ -290,7 +310,33 @@ impl Reader<'_> {
         {
             return inconsistent();
         }
-
+        same_block_event_order_v2(&witness.origin, &row.last_event, false)?;
+        if row.next_relation > 0 {
+            self.coverage_packet_order(row)?;
+        }
+        Ok(())
+    }
+    #[inline(never)]
+    fn coverage_packet_order(&mut self, coverage: &CoverageRow) -> Result<(), PositiveRowErrorV2> {
+        let mut prefix = NativeRowKey::PacketReceipt { witness: coverage.witness, first_relation: 0 }.encode();
+        prefix.truncate(prefix.len() - 8);
+        let aux = self.aux;
+        // Each Coverage owns a disjoint fixed witness prefix. Across the
+        // restore, each literal packet is visited once more, without a decoded
+        // row map or an inference that the cached cursor grants authority.
+        for ((table, key), value) in aux.range((Included((KERNEL_AUX_TABLE, prefix.clone())), Unbounded)) {
+            if *table != KERNEL_AUX_TABLE || !key.starts_with(&prefix) {
+                break;
+            }
+            add(&mut self.report.reference_reads, 1)?;
+            let NativeRowBody::PacketReceipt(packet) = self.decode(key, value)? else {
+                return Err(PositiveRowErrorV2::WrongRowKind);
+            };
+            same_block_event_order_v2(&packet.origin, &coverage.last_event, false)?;
+        }
+        // Missing packet/history preimages and inter-block ordering remain the
+        // canonical accepted-history backend's responsibility, not a cursor
+        // or this local ordinal check's authorization.
         Ok(())
     }
     #[inline(never)]
@@ -302,6 +348,10 @@ impl Reader<'_> {
     }
     #[inline(never)]
     fn validate_service_receipt_row(&mut self, row: &ServiceReceiptRow) -> Result<(), PositiveRowErrorV2> {
+        same_block_event_order_v2(&row.duty.origin, &row.response.origin, true)?;
+        if let Some(settlement) = &row.settlement {
+            same_block_event_order_v2(&row.response.origin, &settlement.origin, false)?;
+        }
         let case = self.case(row.case)?;
         let union = self.union(row.case, row.kind, row.source)?;
         if row.result != case.result || row.unit >= union.source_units || union.completed_units == 0 {
@@ -322,6 +372,7 @@ impl Reader<'_> {
     #[inline(never)]
     fn validate_packet_receipt_row(&mut self, row: &PacketReceiptRow) -> Result<(), PositiveRowErrorV2> {
         let witness = self.witness(row.witness)?;
+        same_block_event_order_v2(&witness.origin, &row.origin, true)?;
         let coverage = self.coverage(row.witness)?;
         if row.author != witness.witness.author || row.first_relation >= coverage.mandatory_relations {
             return inconsistent();
@@ -366,5 +417,7 @@ fn validate_positive_aux_present_v2(aux: &PositiveAuxRowsV2) -> Result<PositiveR
     Ok(reader.report)
 }
 
+#[cfg(test)]
+mod accepted_order_tests;
 #[cfg(test)]
 mod tests;
