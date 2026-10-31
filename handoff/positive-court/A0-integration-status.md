@@ -27,3 +27,8 @@ native全経路・実UTXO精算・全consumer・複数Node/reorg/IBD/pruning・�
 同候補の共通51件・private会計53件とClippyは成功した。旧共通44件の説明は42件へ訂正し、原ログは保持した。A1 source-only full-relationは`d657007ce`、A3 one-pass typed captureは`da941bb55`、両canonical tokenizer修正は`4bf984f35 / dbe95bacc`へ統合した。A2 source journal bridgeは`a87e7f789`へ統合した。typed→full-relation adapterとactual native環境は未接続。別候補の件数を合算しない。
 
 最初のaccepted native assignment経路はレビュー済みの新RFC/ADR案`08b0db8ba`への明示採択を照会中。旧PAV2/PAV3・L1・発行規則の置換を許可する案ではない。採択前に新authority/wireを実装しない。
+
+
+`79c3f9bca`でsource候補を固定: A1のimmutable metadata/plan/checker borrow API、A2の意味不変lint cleanup、A6のcaller-batch journal store・actual accepted-data readerと独立レビューを統合した。先行`dbe95bacc`のsourceではcanonical/full-relation/r1/typed32件＋source専用37件がsource安定で成功。古いlib filterの0件実行は合格に数えず別原ログを保持。現候補のconsensus library型検査はexit0・全対象source不変で成功。A7全対象rerunは同sourceで行い、別候補証拠を加算しない。
+
+A7へ`79c3f9bca`固定sourceでの独立回帰開始を依頼した。A6の実SourceExternalState追加候補`1b7fff400`とA3のtyped→FullRelation逐次adapterは後続レビュー・接続・同候補検証が必要。新nativeAssignment案の採択回答は未受領。

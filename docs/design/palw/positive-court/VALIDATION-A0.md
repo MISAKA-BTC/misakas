@@ -56,3 +56,15 @@ A5 readonly private receipt復旧`c8d7238dd`を加えたleaf会計は**44件PASS
 `0d678c8be` の同一sourceに対し共通契約**51件PASS**、private会計**53件PASS**、両crateのClippy `-D warnings`成功。[commands/source/result](../../../evidence/positive-court-a0-2026-10-31/integration/journal-and-eight-purpose-leaf-20261101.json)、[共通契約log](../../../evidence/positive-court-a0-2026-10-31/integration/journal-and-eight-purpose-leaf-20261101-0.log)、[会計log](../../../evidence/positive-court-a0-2026-10-31/integration/journal-and-eight-purpose-leaf-20261101-1.log)、[Clippy log](../../../evidence/positive-court-a0-2026-10-31/integration/journal-and-eight-purpose-leaf-20261101-2.log)。borrowed journal codec/連鎖の固定形式と、既存7用途を維持して末尾に追加したWorkerPaymentの独立entitlementを含む。sourceは前後不変。native再生・実資金・P抽選・公開有効化の合格件数として合算しない。
 
 先行`5871a5b86`時点のconsensus全test source型検査も成功した。[source/result](../../../evidence/positive-court-a0-2026-10-31/integration/native-provenance-typecheck-20261031.json)、[原log](../../../evidence/positive-court-a0-2026-10-31/integration/native-provenance-typecheck-20261031.log)。Full carrier provenance・raw decode前の上限検査・readonly metadataを含むが、後続のRAM lease強制・source復旧・journal候補の型検査やnative実行成功を代替しない。
+
+
+## 2026-11-01 canonical tokenizer・typed capture・source journal結合
+
+`dbe95bacc`のsourceで、ExpandedPlan5・FullRelation11・既存r1 Panel7・typed capture9の**32件PASS**を確認した。[commands/source/result](../../../evidence/positive-court-a0-2026-10-31/integration/canonical-typed-source-joined-20261101.json)、[原log](../../../evidence/positive-court-a0-2026-10-31/integration/canonical-typed-source-joined-20261101-0.log)。sourceは実行中不変。登録tokenizerとcanonical job tokenizerを独立に保持し、固定expected context/class/Resultの差替えを拒否する。typed capture→FullRelationの逐次adapterそのものはまだ未接続で、同target実行をadapter完成とはしない。
+
+同記録のsource指定`--lib palw_positive_source_geometry_v2`は移動済みテストを選択できず**0件**だった。exit0でも合格実績に含めない。[その原log](../../../evidence/positive-court-a0-2026-10-31/integration/canonical-typed-source-joined-20261101-1.log)を保持し、正しい専用target`--test positive_source_v2`で**37件PASS**を確認した。[訂正command/source/result](../../../evidence/positive-court-a0-2026-10-31/integration/source-journal-dedicated-20261101.json)、[専用target原log](../../../evidence/positive-court-a0-2026-10-31/integration/source-journal-dedicated-20261101.log)。後者も全対象source不変。raw source journalの完全Case binding・NoOp非append・G14認証・全Panel予算等を含むpure preparationの検証である。
+
+A6のnative journal caller-batch保存とactual accepted-data readerを`6e25d7631`へ選択統合した。[独立read-only review](../../../evidence/positive-court-a0-2026-10-31/integration/a6-native-data-readonly-review-20261101.json)は新たなbuildをしていない。ownerの別候補38件（native11を含む）は[A6記録](A6-COMMON-JOURNAL-VALIDATION.md)を保持する。native writer/accepted role/資金lock/qualified支払を生成する実装ではなく、当A0候補の実行件数へ加算しない。
+
+
+`79c3f9bca`のconsensus library型検査は**exit0、全対象source不変**。[commands/env/source/result](../../../evidence/positive-court-a0-2026-10-31/integration/native-journal-data-typecheck-20261101.json)、[原log](../../../evidence/positive-court-a0-2026-10-31/integration/native-journal-data-typecheck-20261101.log)。A6のnative store/reader、A1のborrow APIとA2のlint修正を含む。これはlibrary型検査であり、同候補のnative unit実行・actual受理/精算・restart/IBDの合格ではない。A7へ同sourceの独立回帰を依頼した。
