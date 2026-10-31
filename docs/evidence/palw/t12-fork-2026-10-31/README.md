@@ -105,3 +105,74 @@ report の `confirmed` を手書きしたり、claim の認証状態を加算し
 
 元 DB は削除しない。verified resync の report が `confirmed` となり、選択チェーン上の
 共通ブロック・先端の進行・複数 outbound peer の確認が得られるまで完了としない。
+
+## 実機の復旧結果
+
+- 21:24:49 JST に b0 を統合版で通常起動。`--palw-verified-resync` は再指定せず、
+  復元済み DAA 18,554 の DB を移動し直さずに native hold が再開した。
+  ヘッダー 7,133、本文 7,132 とその後の差分を通常 IBD で処理した。
+- 配備時に別の設定問題も発見した。`--connect` は `inbound_limit=0` とし、
+  明示 `--listen` があっても受信待受を作らない。復旧クライアント b0/b1 はそのまま使用し、
+  接続先 b3/b6/b7 は別担当が `--addpeer` へ修正した。既存 listen の公開範囲は維持した。
+  停止中の失敗による最大480秒の retry backoff は、既存接続先と同じ `addPeer` request で
+  再試行を前倒しした。JSON の `peerAddress` は文字列ではなく `{ip, port}`。
+- DAA 18,640 を先に越えた95/b3による fork-id 再判定は、境界前の接続を一度閉じた。
+  daemon の再起動ではない。接続後の10分を再度待ち、正規 heartbeat が中継された後、
+  **22:10:58.575 JST に native reporter が実際に `confirmed` を記録した。**
+  `confirmingOutboundPeers=2 / eligibleOutboundPeers=2`、sink DAA 18,640。
+  [report](b0-resync-confirmed.json)、[実ログ](b0-native-confirmation.log)。手書きの確認・credit 加算はない。
+- 22:11:57 JST に b0 は DAA 18,641 / `isSynced=true`。
+  95 の同時期の選択チェーンから200ブロック後方の共通ブロックを取り、
+  b0 でも `removed=[]` を確認した。古い固定ブロックの RPC は1応答1,800件で切れるため、
+  件数だけを先端進行と扱わず pagination と最近の共通ブロックを用いた。
+- native 確認・元 DB 保持・本体同期・EDF/4024・公開/ローカル DAA ≥18,640 の成立後、
+  exact standalone `--palw-produce` だけを復帰。22:14:54.753 JST に旧プロセスが正常終了し、
+  22:14:57 JST に新 PID `3502051` を通常起動した。
+  再起動前後の confirmed report は SHA-256
+  `643f22b46ffe9ff90b8fd0d8a69517499fb033aff434109a742071ce2e083c7f` で byte 一致。
+  元の約9.7 GB・途中同期約3.1 GB の両 DB は引き続き保持する。
+- 22:20:53 JST に再起動後も DAA 18,645 / synced、22:28:03 JST には DAA 18,649 / synced。
+  最近の共通ブロックは `removed=[]` のまま、added は199から593へ増加した。
+  [チェーン一致](chain-agreement.json)、[RPC 時系列](b0-native-status.jsonl)。
+  actual executable SHA は配備 manifest と一致し、実引数に resync flag はなく、producer flag はある。
+- runtime の producer class も `ebf44d0a…2246d01`（既存 Qwen 8K）であり、floor への変更はない。
+  `producerState=drawing`、理由は空、最初の A16 実行 cache 構築を確認した。
+  claim の受理・panel=1・approval・Final・次 claim への進行はモデル移行担当と続けて観測する。
+  この段階で計算 credit の認証完了まで主張しない。
+
+
+## 復帰後の Qwen 生成と残る問題（2026-10-31 23:17 JST 時点）
+
+Qwen の実計算は22:18:51から22:37:47 JSTまで約1,137秒で完走し、
+22:37:50にローカル block
+`231d1ac153a764207cea97d4adba9d748fcbe4d4d77ec3a88231e1c4c6970062897fbc50c76cd2531922a3fb3be7f10e6c01e7077fb06094c6123edb5612cc6a`
+を生成した。しかし95の `getBlock` はヘッダーなしを返した。b0の active DB には本文があり、
+選択チェーン外・子なしだった。ローカル生成を公開受理・claim認証の成功と扱わない。
+このブロックの DAA は18,643、timestamp は計算開始時の22:18:48 JSTである。
+長い計算中の floor 生成により、古い親が relay の merge-depth 閾値を下回った可能性を調査中。
+初期の分岐原因として確定した事実ではなく、閾値や合意規則の変更もしていない。
+
+次の計算の capture 完了後も提出が進まず、23:13:47 JSTの終了信号で
+未提出 block `c684d65e9b9b773a6302d0f4fa70e5a1e1e84ed32977bd454debae710dad4ca1cf808e570ff56f8f5289038be1509d0537b7e8176f6c237cf636672c05ae6872`
+をキャンセルした。drill delay の引数は使っておらず、`submit_rpc_block` 待ちの可能性が高い。
+同時に公開95で一部RPCの timeout と DAA18,660の停滞を別担当が調査している。
+
+floor 側の新規生成を別担当が一時停止した後、b0を通常再起動した。
+旧PID3502051は180秒で終了せず23:16:47 JSTにsystemdがSIGKILL、
+23:16:49に新PID3525795を起動した。この停止を正常終了とは記録しない。
+confirmed report のSHAは上記と一致し、実行本体SHAも配備manifestと一致した。
+DBの再配置・resync flag・計算shape・認証gateの変更はない。
+初回の公開受理を待つ間のCPUWeight400は一時措置であり、公開受理後に元の未設定へ戻す。
+
+
+23:18:24 JST、新PIDは DAA18,660 / synced、既存 b3/b6 への outbound 2本、
+同じ confirmed report と Qwen class で drawing を確認した。23:18:26に本来の
+A16/1,023 positions/105,396,200 leaves の cache を構築した。
+再起動後の `getBlock` で前回 c684…6872 の本文がDBに存在すると判明したため、
+「was not submitted」は未挿入を意味しない。提出APIの挿入後処理待ちを含めて調査する。
+[再起動後の head と前回ブロック](qwen-restart-head.json)。
+
+
+再起動の抜粋ログは [b0-qwen-restart.log](b0-qwen-restart.log)。
+このノードの分岐からの復旧と、ネットワーク全体の停止・公開Qwen受理は別の完了条件である。
+後者が未解決の間は全体正常化とは記録しない。

@@ -1,0 +1,9 @@
+{
+  "confirmedUnixMs": 1793452258575,
+  "confirmingOutboundPeers": 2,
+  "eligibleOutboundPeers": 2,
+  "previousDataDirectoryMovedTo": "/root/.t12r-b0/misaka-testnet-12/datadir.pre-resync-1793439634462",
+  "sink": "a576793eae4a2feb033e6365709d6b40ea67233b06e55058ddecca800d50361e70cecbad991e828dc1a479bc3716c31beb7fba6948409965a679c45926df6790",
+  "sinkDaa": 18640,
+  "status": "confirmed"
+}

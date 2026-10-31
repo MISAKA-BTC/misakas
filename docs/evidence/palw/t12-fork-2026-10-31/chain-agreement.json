@@ -1,0 +1,44 @@
+{
+  "source": {
+    "unix": 1793451683,
+    "start": "d5beca7571353e1f1ad8acff88784cb460b65ca01099653f37536822e45ec5fe0c0925910e0f6b8ffca6d7f751db7259c8c47cf12d474aa0fb33e494bcc7a747",
+    "sourceDaa": 18640,
+    "sourceSink": "d7cb4a13d72f171b589a2184db9245cad1d3903b61f32a1fccc7108407d5535f4e3129c57deb9959331c40b92f4753133f77ce72f37ea9053f4621a8112337a6",
+    "pages": [
+      1800,
+      1800,
+      1720,
+      0
+    ],
+    "stableAnchor": "d66c00226a39e41bbfcf37dfe4bc6f9f59fcd7d42f45a62f2b838b94f53459f1ddd92feb986d3eb5e9abb7c3e19b696248a54e0235bdad73b28669cf64bdadc9",
+    "selectedPathCount": 5320
+  },
+  "b0BeforeProducerRestart": {
+    "unix": 1793452069,
+    "anchor": "d66c00226a39e41bbfcf37dfe4bc6f9f59fcd7d42f45a62f2b838b94f53459f1ddd92feb986d3eb5e9abb7c3e19b696248a54e0235bdad73b28669cf64bdadc9",
+    "removed": [],
+    "addedCount": 199,
+    "daa": 18640,
+    "sink": "d7cb4a13d72f171b589a2184db9245cad1d3903b61f32a1fccc7108407d5535f4e3129c57deb9959331c40b92f4753133f77ce72f37ea9053f4621a8112337a6",
+    "synced": false
+  },
+  "b0AfterProducerRestart": {
+    "unix": 1793453283,
+    "anchor": "d66c00226a39e41bbfcf37dfe4bc6f9f59fcd7d42f45a62f2b838b94f53459f1ddd92feb986d3eb5e9abb7c3e19b696248a54e0235bdad73b28669cf64bdadc9",
+    "removed": [],
+    "addedCount": 593,
+    "daa": 18649,
+    "sink": "e1575548d300512c39d3bfa37c181d5c83fb7b111eeaded4003c66d0ddf56375e2c77b56eed787f29de530879a251d5561bcb3a2c9669a5ea450394e9e4dce9b",
+    "synced": true
+  },
+  "confirmationReport": {
+    "confirmedUnixMs": 1793452258575,
+    "confirmingOutboundPeers": 2,
+    "eligibleOutboundPeers": 2,
+    "previousDataDirectoryMovedTo": "/root/.t12r-b0/misaka-testnet-12/datadir.pre-resync-1793439634462",
+    "sink": "a576793eae4a2feb033e6365709d6b40ea67233b06e55058ddecca800d50361e70cecbad991e828dc1a479bc3716c31beb7fba6948409965a679c45926df6790",
+    "sinkDaa": 18640,
+    "status": "confirmed"
+  },
+  "independentFullHistoryReplay": false
+}
