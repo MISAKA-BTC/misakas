@@ -267,13 +267,13 @@ impl MinerServiceContract {
         Ok(())
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum MinerDataStatus {
     NotRequested,
     Pending,
     Complete,
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum WitnessStatus {
     Building,
     Committed,
@@ -282,7 +282,7 @@ pub enum WitnessStatus {
     Rejected,
     Incomplete,
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum ClaimStatus {
     ResultCommitted,
     Pending,
@@ -293,7 +293,7 @@ pub enum ClaimStatus {
 }
 
 /// A1 derives this from the registered program; A3 cannot nominate a smaller plan.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct CoverageDescriptor {
     pub scope: ChainScope,
     pub result: ResultId,

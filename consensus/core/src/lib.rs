@@ -1204,3 +1204,4 @@ pub mod palw_logits_q24_v2;
 
 /// Isolated Positive Court R2 prototype; no native activation.
 pub mod palw_positive_court_v2;
+pub mod palw_positive_rows_v2;
