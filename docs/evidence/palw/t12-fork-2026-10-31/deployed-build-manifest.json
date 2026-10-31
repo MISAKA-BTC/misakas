@@ -1,0 +1,14 @@
+{
+  "sourceRevision": "8cac52ec4ed15fb4ea982d46235a5c3b5f78e4cc",
+  "binarySha256": "e6d638a4f2a9fa32b6072c32ad5ce929f015efa189b721ceee2be5a9aa52e83e",
+  "params": "edf472294c89dab0e64e625dbdfcd039b91081b05f89eacf8ba2aa25baa3a189",
+  "schedule": "4024a6e74d7aeb170d99e67c6d8fbe7884d71a716ccb778cd1ee526d01781b04",
+  "fenceDaa": 18640,
+  "profile": "standard release: opt3, thin LTO, overflow checks enabled",
+  "features": [
+    "default",
+    "pq-only",
+    "evm"
+  ],
+  "createdUtc": "2026-10-31T12:07:32.137925+00:00"
+}
