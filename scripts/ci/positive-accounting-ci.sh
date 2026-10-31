@@ -28,6 +28,9 @@ manifest = '\n'.join([
     f'misaka-palw-positive-contract = {{ path = {json.dumps(str(contract))} }}',
     '',
 ])
+for test in sorted((root / 'misaka/palw/positive-accounting/tests').glob('*.rs')):
+    manifest += '\n'.join(['', '[[test]]', f'name = {json.dumps(test.stem)}',
+                           f'path = {json.dumps(str(test))}', ''])
 (scratch / 'Cargo.toml').write_text(manifest)
 import shutil
 shutil.copyfile(root / 'Cargo.lock', scratch / 'Cargo.lock')
