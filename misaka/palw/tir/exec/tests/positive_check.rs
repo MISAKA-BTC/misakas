@@ -1,10 +1,7 @@
 #![cfg(feature = "node")]
 
 mod node_common;
-// A0 owns module registration. Compile the exact source without editing its
-// shared node/mod.rs before the common integration contract is available.
-#[path = "../src/node/positive_check.rs"]
-mod positive_check;
+use misaka_palw_tir_exec::node::positive_check;
 
 use kaspa_consensus_core::{
     Hash64,
@@ -70,6 +67,17 @@ fn fixture(form: PalwPromptIdsFormV1, forge: bool) -> Fixture {
             node.commit = true;
         }
     }
+    run_fixture(p, map, vec![3, 8, 13], 3, form, forge)
+}
+
+fn run_fixture(
+    p: misaka_palw_tir::TirProgramV1,
+    map: misaka_palw_tir::MapParams,
+    prompt: Vec<u32>,
+    decode: u32,
+    form: PalwPromptIdsFormV1,
+    forge: bool,
+) -> Fixture {
     let plan = TirPlan::compile(&p).unwrap();
     let params = TirParams::from_map(&plan, &map).unwrap();
     let source = TirParamsSourceV1(&params);
@@ -82,8 +90,7 @@ fn fixture(form: PalwPromptIdsFormV1, forge: bool) -> Fixture {
         tokenizer_id: Hash64::from_u64_word(18),
     };
     let class_id = class.class_id(&artifact);
-    let prompt = vec![3, 8, 13];
-    let mut ctx = node_common::job(&p, 3, 3, class_id, &prompt, form);
+    let mut ctx = node_common::job(&p, prompt.len() as u32, decode, class_id, &prompt, form);
     ctx.tokenizer_id = class.tokenizer_id;
     let space = PalwTirStepSpaceV1::new(&class).unwrap();
     let runner = TirClassRunnerV1::new(&space, &plan, &params, class_id).unwrap();
@@ -158,6 +165,40 @@ fn fixture(form: PalwPromptIdsFormV1, forge: bool) -> Fixture {
         .collect();
     Fixture { binding, generated: run.generated, parts }
 }
+// A second fixture deliberately places the greedy winner in the ragged second
+// vocabulary tile. A scalar input-dependent offset cannot change the winner.
+fn multi_tile_fixture(form: PalwPromptIdsFormV1, input: Vec<u32>, model_offset: i128) -> Fixture {
+    use misaka_palw_tir::{DType, MapParams, Ref, Tensor, TensorType, builder::ProgramBuilder};
+    const VOCAB: usize = 4101;
+    let mut p = ProgramBuilder::new(VOCAB as u32, 1 << 18);
+    let embed = p.param("scalar_embed", DType::I8, &[VOCAB as u32, 1], false);
+    let mut pre = p.block("pre", vec![]);
+    let x = pre.gather(embed, Ref::Input(0), 0, 0);
+    let pre = pre.finish(&[x]);
+    let mut values: Vec<i128> = (0..VOCAB).map(|i| (i % 17) as i128 - 10).collect();
+    values[4096] = 1000;
+    values[4100] = 1000; // Equal maxima: the smaller lane 4096 must win.
+    let logits_bias = p.konst(DType::I32, &[VOCAB as u32], &values);
+    let mut post = p.block("post", vec![TensorType::fixed(DType::I8, &[1])]);
+    let offset = post.cast(Ref::CarryIn(0), DType::I32);
+    let logits = post.add(logits_bias, offset, DType::I32);
+    let Ref::Node(logits_node) = logits else { unreachable!() };
+    post.commit(logits);
+    let post = post.finish(&[]);
+    let mut p = node_common::tiled(p.finish(pre, vec![], post, logits_node));
+    for block in &mut p.blocks {
+        for node in &mut block.nodes {
+            node.commit = true;
+        }
+    }
+    let mut params = MapParams::default();
+    params.tensors.insert(
+        (0, None),
+        Tensor::new(DType::I8, vec![VOCAB, 1], (0..VOCAB).map(|i| (i % 3) as i128 + model_offset).collect()).unwrap(),
+    );
+    run_fixture(p, params, input, 2, form, false)
+}
+
 impl Fixture {
     fn plan(&self, form: PalwPromptIdsFormV1, limits: CheckLimits) -> Result<CoveragePlan, CheckError> {
         CoveragePlan::derive(&self.binding.class, self.binding.artifact_root, &self.binding.job_context, form, limits)
@@ -389,4 +430,90 @@ fn budgets_overflow_heap_caps_and_malformed_vectors_fail_closed() {
     let mut c = f.checker(PalwPromptIdsFormV1::Flat);
     assert_eq!(c.submit_encoded(&hostile, None), Err(CheckError::Wire));
     assert_eq!(c.progress().next_leaf, 0);
+}
+
+#[test]
+fn ragged_second_logits_tile_is_required_and_global_ties_choose_the_first_lane() {
+    for form in [PalwPromptIdsFormV1::Flat, PalwPromptIdsFormV1::MerkleV1] {
+        let f = multi_tile_fixture(form, vec![1, 2], 0);
+        // Independently constructed bias has two maxima, at 4096 and 4100;
+        // the input contributes the same scalar to all 4101 lanes.
+        assert_eq!(f.generated, vec![4096, 4096]);
+        let trace_indices: Vec<_> = f.parts.iter().enumerate().filter_map(|(i, p)| p.1.as_ref().map(|_| i)).collect();
+        assert_eq!(trace_indices.len(), 4);
+        let first_second_tile = trace_indices[1];
+        let mut c = f.checker(form);
+        for p in &f.parts[..first_second_tile] {
+            submit(&mut c, p).unwrap();
+        }
+        assert_eq!(c.progress().checked_rows, 0);
+        assert_eq!(c.progress().next_lane, 4096);
+        assert_eq!(c.finish(), Err(CheckError::Incomplete));
+        for p in &f.parts[first_second_tile..f.parts.len() - 1] {
+            submit(&mut c, p).unwrap();
+        }
+        assert_eq!(c.progress().checked_rows, 1);
+        assert_eq!(c.progress().next_lane, 4096);
+        assert_eq!(c.finish(), Err(CheckError::Incomplete));
+        submit(&mut c, f.parts.last().unwrap()).unwrap();
+        assert_eq!(c.finish(), Ok(CheckOutcome::Matched));
+        assert_eq!(c.progress().checked_rows, 2);
+    }
+}
+
+#[test]
+fn later_logits_tile_cannot_reuse_another_tile_or_rows_trace_opening() {
+    let form = PalwPromptIdsFormV1::Flat;
+    let f = multi_tile_fixture(form, vec![1, 2], 0);
+    let indices: Vec<_> = f.parts.iter().enumerate().filter_map(|(i, p)| p.1.as_ref().map(|_| i)).collect();
+    for (target, wrong_trace) in [(indices[1], indices[0]), (indices[3], indices[1])] {
+        let mut c = f.checker(form);
+        for p in &f.parts[..target] {
+            submit(&mut c, p).unwrap();
+        }
+        assert_eq!(c.submit_encoded(&f.parts[target].0, f.parts[wrong_trace].1.as_deref()), Err(CheckError::PanelEvidence));
+        assert_eq!(c.progress().outcome, CheckOutcome::WitnessRejected);
+        assert_eq!(c.finish(), Err(CheckError::Closed));
+    }
+}
+
+#[test]
+fn valid_alternative_model_and_input_openings_cannot_be_spliced_into_the_admitted_job() {
+    let form = PalwPromptIdsFormV1::Flat;
+    let f = multi_tile_fixture(form, vec![1, 2], 0);
+    let alternative_model = multi_tile_fixture(form, vec![1, 2], 1);
+    let alternative_input = multi_tile_fixture(form, vec![2, 1], 0);
+    // These are full, internally consistent alternate executions and openings.
+    // Their matching outputs do not authorize replacing the admitted identities.
+    for alternative in [&alternative_model, &alternative_input] {
+        assert_eq!(alternative.generated, f.generated);
+        assert!(matches!(
+            ExactChecker::begin_greedy(
+                f.plan(form, limits()).unwrap(),
+                alternative.binding.clone(),
+                alternative.generated.clone(),
+                palw_attempt_output_root_v1(&f.binding.job_context, &f.generated),
+                PalwDecodeSamplingV2::GREEDY
+            ),
+            Err(CheckError::Binding)
+        ));
+        let mut c = f.checker(form);
+        assert_eq!(submit(&mut c, &alternative.parts[0]), Err(CheckError::Binding));
+    }
+    let root_cone: PalwTirConeRefutationV1 = borsh::from_slice(&f.parts[0].0).unwrap();
+    let model_cone: PalwTirConeRefutationV1 = borsh::from_slice(&alternative_model.parts[0].0).unwrap();
+    let input_cone: PalwTirConeRefutationV1 = borsh::from_slice(&alternative_input.parts[0].0).unwrap();
+    assert_ne!(root_cone.params, model_cone.params);
+    assert_ne!(root_cone.prompt_token_ids, input_cone.prompt_token_ids);
+    for replacement in 0..2 {
+        let mut c = f.checker(form);
+        let mut splice = root_cone.clone();
+        if replacement == 0 {
+            splice.params = model_cone.params.clone();
+        } else {
+            splice.prompt_token_ids = input_cone.prompt_token_ids.clone();
+        }
+        assert_eq!(c.submit_encoded(&borsh::to_vec(&splice).unwrap(), None), Err(CheckError::PanelEvidence));
+        assert_eq!(c.progress().outcome, CheckOutcome::WitnessRejected);
+    }
 }
