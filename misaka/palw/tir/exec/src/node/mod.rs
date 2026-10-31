@@ -21,6 +21,8 @@ mod own_source;
 pub mod partial;
 /// A1 full-coverage checker; computation facts only, no native credit.
 pub mod positive_check;
+#[cfg(feature = "positive-contract")]
+pub mod positive_contract;
 mod public_source;
 pub mod residency;
 pub mod run;
