@@ -1,0 +1,29 @@
+   Compiling workflow-core v0.18.0
+   Compiling kaspa-utils v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a5/MISAKA-testnet/utils)
+   Compiling workflow-wasm v0.18.0
+   Compiling log4rs v1.4.0
+   Compiling kaspa-hashes v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a5/MISAKA-testnet/crypto/hashes)
+   Compiling misaka-palw-positive-contract v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a5/MISAKA-testnet/misaka/palw/positive-contract)
+   Compiling kaspa-math v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a5/MISAKA-testnet/math)
+   Compiling kaspa-core v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a5/MISAKA-testnet/core)
+   Compiling kaspa-merkle v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a5/MISAKA-testnet/crypto/merkle)
+   Compiling kaspa-muhash v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a5/MISAKA-testnet/crypto/muhash)
+   Compiling misaka-palw-panel v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a5/MISAKA-testnet/misaka/palw/panel)
+   Compiling kaspa-addresses v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a5/MISAKA-testnet/crypto/addresses)
+   Compiling misaka-palw-positive-accounting v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a5/MISAKA-testnet/misaka/palw/positive-accounting)
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a5/MISAKA-testnet/consensus/core)
+   Compiling misaka-palw-positive-accounting-node v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a5/MISAKA-testnet/misaka/palw/positive-accounting-node)
+    Finished `test` profile [unoptimized] target(s) in 1m 37s
+     Running unittests src/lib.rs (/Users/wata/.cache/misaka-positive-accounting-node-target/debug/deps/misaka_palw_positive_accounting_node-49ca883e32b27f5d)
+
+running 7 tests
+test rows::tests::actual_public_genesis_and_empty_route_reads_keep_missing_route_and_row_distinct ... ok
+test rows::tests::actual_claim_index_missing_result_never_falls_back_to_an_old_subject ... ok
+test rows::tests::malformed_version_and_wrong_key_body_are_not_reported_as_absent_rows ... ok
+test rows::tests::core_bundle_signature_failure_and_cross_row_link_failure_are_distinct ... ok
+test rows::tests::actual_core_signed_bundle_is_data_and_leaves_every_native_owner_missing ... ok
+test rows::tests::missing_positive_witness_or_coverage_is_not_a_completed_local_check ... ok
+test rows::tests::witness_authentication_and_coverage_binding_are_checked_by_shared_validator ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 15 filtered out; finished in 0.44s
+

@@ -4,6 +4,31 @@
 このcrateはnode側だけに置く。依存方向は `node → core + exec + accounting leaf` で、coreがexecutorに依存する循環を作らない。
 namespaceはA0 `42a60b840` で予約済みだが、native新claimの受付、rooted row生成、公開網の有効化は未完成である。
 
+## 実coreのtyped rowsから信用入力を読む
+
+`rows::PositiveCreditRows` はA0 `327393e8e` の固定value/既存keyを使い、実 `PalwChainStateV2` に対する
+core `PositiveRowsV2::read/bundle`へ直接接続する。独自codecやnative setterは追加しない。
+欠落route、欠落row、malformed key/value、signed bundleのlink不一致、Result/fundingとWitnessの署名失敗を区別する。
+Caseにpositive_witnessがある場合は実Witness/Coverage rowも読み、共通 `validate_witness_bundle` で照合する。
+core bundleの失敗時だけread-only probeで欠落/破損componentを特定し、署名失敗を単なる欠落に変えない。
+
+成功結果 `SignedCreditInputs` は署名確認済み**data only**であり、native admissionやcreditではない。
+公開DTOから生成するconstructorはなく、`rows::NativeRowCreditGate`の認可型は `Infallible`。
+全7信用用途は同じread結果、または次の8 ownerの未実装をtyped denialとして返す。
+
+- accepted origin
+- accepted prefix / import世代
+- registered expectations
+- local replay
+- live funding / capital
+- dependencies / exports
+- current Court / resources
+- actual P draw Certified
+
+署名bundle内のOrigin/Passed/資金残高、snapshot root、A0 `069d54007` のP statement DTO署名は、
+これらownerのprivate capabilityを作らない。P DTO認証は実抽選の`Certified`ではなく、
+`PublicCheckCertified`や旧S/K/V subjectも代用しない。旧認証rowへのfallbackは実装していない。
+
 ## 実A1検査から信用判定
 
 `tir::TirCreditView` はA1のprivate-field `CheckedTerminal` を所有する。外からPassed flagやrelation数を入れてterminalを作れない。
@@ -72,6 +97,9 @@ nodeだけの一時workspaceを実行しており、native node processの起動
 payer署名の差替え、source/Court cap、capital、actual output、狭いintent期限の反例を検査する。
 原ログは `../positive-accounting/evidence/independent-phase2/` と後続 `independent-phase3*` に保存し、
 候補rev1の容量不足とrev2のsource修正を別に記録する。
+typed rows境界の後続7試験とlib clippyは `../positive-accounting/evidence/phase4-native-rows/README.md` を参照する。
+その実state fixtureは既存public carriageによるローカルDTO snapshotであり、native Originの成立を示す試験ではない。
+phase4ではnative受付/coin lock、全consumer、実process、再起動/reorg/IBDの完成を主張しない。
 
 workspace/lockfile登録はA0 `1eecf492a` / `6aeb4c42c` で適用済み。元の `workspace-registration.patch` は提案履歴として保持する。
 全native reader・Gate C対象の具体提案は `../../../handoff/positive-court/A5-native-credit-api.md`、

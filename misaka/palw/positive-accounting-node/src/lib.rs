@@ -4,5 +4,6 @@
 //! locally checked terminals or transaction preflight results.
 
 pub mod native;
+pub mod rows;
 #[cfg(feature = "tir-checker")]
 pub mod tir;
