@@ -835,10 +835,15 @@ pub(crate) fn create_core_with_runtime_inner(
     // LIVE-R1: the verified resync moves the data directory ASIDE before anything opens it. Never deleted:
     // the operator removes it once the report says the synced chain was confirmed, or moves it back.
     let resync_report_path = app_dir.join(network.to_prefixed()).join(crate::palw_verified_resync::REPORT_FILE);
-    let resync_aside: Option<Option<PathBuf>> = args.palw_verified_resync.then(|| {
-        crate::palw_verified_resync::move_datadir_aside(&db_dir, &resync_report_path)
-            .unwrap_or_else(|e| panic!("--palw-verified-resync: {e}"))
-    });
+    let resync_aside: Option<Option<PathBuf>> = if args.palw_verified_resync {
+        Some(
+            crate::palw_verified_resync::move_datadir_aside(&db_dir, &resync_report_path)
+                .unwrap_or_else(|e| panic!("--palw-verified-resync: {e}")),
+        )
+    } else {
+        crate::palw_verified_resync::pending_resync_aside(&db_dir, &resync_report_path)
+            .unwrap_or_else(|e| panic!("could not resume verified resync: {e}"))
+    };
 
     let consensus_db_dir = db_dir.join(CONSENSUS_DB);
     let utxoindex_db_dir = db_dir.join(UTXOINDEX_DB);
