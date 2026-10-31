@@ -4,15 +4,19 @@
 
 | 担当 | A0へ統合した範囲 | 未完了・保留 |
 | --- | --- | --- |
-| A0 | v2/r1共通型、ML-DSA署名scope、TIR interchange、frame作者認証、非循環funding scope、176/151/P予約、固定row/typed reader `327393e8e` | native live event・writer、実資金lock、P実draw、全consumer・復旧との結合 |
-| A1 | exact checker、PreparedCheck/NodeChecker、全計画・selector・provenance pin、signed ingressと費用計上 | 実LLMの未commit i64/i128 laneへ対応する別derivation、native viewからの登録期待値と資源予約 |
-| A2 | 初期r1通常推論・有限原資料応答 `6cf9ee042` | 追加`1b8e4e5c9`は未保護journal tailでquotaを割り引ける反例により保留。修正監査後にA3のstatus_checks追従と一体統合 |
-| A3 | 実PanelBuilder、r1 witness/frame、G14 cold資料、A1連結、acyclic funding互換 `fe97a716e` | A2修正版への追従、native受付・実LLM測定 |
-| A4 | 共通portと要求条件の調整 | bounded176 body・受付coordinatorは担当作業中。旧prototype全体をnative実装として取り込まない |
-| A5 | leaf会計と実A1 terminal/旧escrow checkerへのnode bridge `acc22a5df`、workspace/lock登録 | phase3の新funding/lineage修正、native出力のlock・正規料金/recipient・P承認・全consumerの実経路 |
-| A6 | aux151 schema/接続条件を共有 | node-local RocksDB/recoveryのready差分はA4旧prototype依存を確認して選択統合。typed scanner/restore接続を依頼中 |
-| A7 | fixed candidateの独立監査結果を受領 | 履歴110件は現A0候補の成功ではない。最新signed ingress/meter、runner外部signal cleanup修正と再実行を依頼 |
+| A0 | v2/r1共通型、frame作者認証、非循環funding scope、176/151/P、固定row `327393e8e`、無効のtyped fence、P所見 `069d54007`、record `d284f5902`、source read interface `49c86968c` | native live event・writer、実資金lock、P実draw、全consumer・復旧との結合 |
+| A1 | exact checker、PreparedCheck/NodeChecker、signed ingressと費用計上、pure coreへ一元移植 `5ef211508 / 9cd63d984`、実験用expanded geometry（新wire/derivationなし） | 実LLMの未commit i64/i128 laneを検査する別derivation/body、native期待値と資源予約 |
+| A2 | 初期r1、bound通常推論・file provider・durable有限原資料応答 `e2c2d13f0`＋保護prefix修正 `56f5332ba` | 未保護tailの反例を独立監査し修正版として受理。native保護store/dutyと同一candidateの最終再検証は別 |
+| A3 | 実PanelBuilder、r1 witness/frame、G14 cold資料、A1連結、非循環funding、primitive record接続 `12f243d1f / 829a0da3c`。別候補148件の証拠 `43858d820` | 最新統合候補の再検証、native受付・実LLM測定 |
+| A4 | d204固定のowned Court/coordinator/body0..7を `815b7ca1c` へ統合。candidate事前認可・accepted frame無課金ACK、narrow prototype `d028330f8`、future frame課金前拒否 `17990b173` | actual176 one-writerとFull seal、canonical origin/job/role/profile、追加future-frame修正のruntime検証 |
+| A5 | phase3、typed row reader、source due、3勘定spend DATA計算、共有due型aliasを `d3d4054a5 / c596a4106 / 312df466b / 456999953` へ統合 | actual lockと全consumer、跨settlement一回払い・未払due/refund条件、P実承認 |
+| A6 | native aux151 scanner/heap/構造restore `57d247b78`、順序/counter `0c3e98d5d / 763c3b373`、direct decode降順拒否 `253634d19` | 新common casejournalと全履歴再生、typed material store・同batch/reorg/IBD。旧private archiveをaliasしない |
+| A7 | signed pipeline/runner/原証拠を `3bb1c1e16`、A4再監査・future-copy反例を `c75ebcbfe` へ選択統合 | 歴史的243件を現A0成功へ流用しない。A2/A4修正後の固定candidate実行が必要 |
 
-共通契約の29テスト・Clippy成功と、各担当の別候補での成功を区別する。frameの署名は作者の認証だけ、FundingConsent署名は支払条件への同意だけ、row/cursor保存は計算検証だけで得られる権限を生成しない。新Pは全LLMで実抽選の`Certified`のみを認め、`PublicCheckCertified`・旧S/K/V・local replay単独を流用しない。
+共通契約はrow段階29件、P所見後35件、record後41件とClippy成功を別snapshotに保存した。core/test sourceとconsensus libraryの型検査、fence専用8件も成功。各担当の別候補での成功と区別する。frame署名は作者の認証、FundingConsent署名は支払条件への同意だけである。row/cursor保存やP所見認証がnative権限を生成することはない。新Pは全LLMで実抽選の`Certified`のみを認め、`PublicCheckCertified`・旧S/K/V・local replay単独を流用しない。
 
 native全経路・実UTXO精算・全consumer・複数Node/reorg/IBD/pruning・実LLM cold/warm測定は未完了。公開presetの有効化は行わない。実装全体の完了や認定profileの成立を宣言しない。
+
+直近のA0実行では、A6 preflight追加後の共通契約44件とClippyが成功（対象source安定）。A4統合直後のcore型検査は4エラーで失敗し、missing opaque identity比較と未統合wide参照を修正した後、`d028330f8` のcore library型検査はsource安定で成功した。これは後続patchやnative実行の成功を含まない。A7 process/manifest Python8件も成功した。詳細は [A0検証記録](../../docs/design/palw/positive-court/VALIDATION-A0.md)。
+
+全Caseの新native履歴は [journal契約](../../docs/design/palw/positive-court/NATIVE-JOURNAL-R1.md) に固定した。完全なlogical no-opはCase課金・履歴append前に判別し、実state/cost-changing失敗は保持する。actual origin/headerではfees/Panel metadataによる抽選再試行、origin計算rootとCourtの厳密結合、旧経済条件との整合が未解決。[origin annex](../../docs/design/palw/integration/positive-native-attempt-origin-r1.md) の非許可境界を維持する。

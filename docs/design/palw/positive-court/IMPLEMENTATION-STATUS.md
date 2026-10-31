@@ -11,7 +11,7 @@
 
 独立した `misaka-palw-positive-contract` crateに、Miner結果とPanel証拠の別型、case/result/claim/witness/request/planのID、実ML-DSA-87の役割別認証、登録rootとbranch/rulesetの照合、有限資料契約、bounded framing、六系統の接続portを置いた。署名付きframe認証、循環しないpayer funding scope、176番object・aux151・P subjectの予約、固定row valueとtyped readerを追加した。[native契約](NATIVE-CONTRACT-R1.md)を正本とする。公開有効化は行っていない。
 
-これはnative受付・実資金hold・支払・IBDの完成報告ではない。A1/A3の実演算検査・Panel生成経路、A2初期有限応答、A5会計/Node bridgeを選択統合した。各候補の検証を全機能が同じcandidateで通った実績へ合算しない。共通型の状態enumをnativeの合格権限として扱わない。[担当別の現状](../../../../handoff/positive-court/A0-integration-status.md)を参照。
+これはnative受付・実資金hold・支払・IBDの完成報告ではない。A1のpure core検査器、A3の実Panel生成・primitive record接続、A2初期有限応答、A4の認証付きCourt/coordinator、A5の会計・typed reader・資金差分計算、A6のbounded scanner/構造restore、A7の独立検証runnerを選択統合した。各候補の検証を全機能が同じcandidateで通った実績へ合算しない。共通型の状態enumをnativeの合格権限として扱わない。[担当別の現状](../../../../handoff/positive-court/A0-integration-status.md)を参照。
 
 ## 前workspaceとの関係
 
@@ -19,4 +19,4 @@
 
 ## 検証記録
 
-初期A0契約13テストの記録は保持し、row追加後の共通契約29テストとClippy成功を別snapshotで保存した。[検証記録](VALIDATION-A0.md)を参照。文書検査は既知43件、新規欠落0件。ZIP記載の42 Python参照テストは入力資料の検証であり、このRust contractやnative runtimeの完成を保証しない。実LLM性能の測定値はまだない。公開網有効化も行っていない。
+初期A0契約13テストの記録を保持し、row追加後29件、P所見後35件、primitive record後41件、A6の割当前検査追加後44件の共通契約成功を別snapshotで保存した。Clippy、typed fence専用8件、当時のcore/test source・consensus libraryの型検査も成功。A4追加直後のcore型検査失敗は未統合wide参照とopaque identity比較の欠落によるもので、修正と原ログを区別して保存する。[検証記録](VALIDATION-A0.md)を参照。ZIP記載の42 Python参照テストは入力資料の検証であり、このRust contractやnative runtimeの完成を保証しない。実LLM性能の測定値はまだない。公開網有効化も行っていない。
