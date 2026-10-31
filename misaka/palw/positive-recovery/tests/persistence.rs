@@ -710,3 +710,220 @@ fn startup_restore_rechecks_authoritative_clock_after_replay_before_projecting_r
     assert_eq!(db.load(&raw(f.result.claim)).unwrap().unwrap(), saved);
     assert_eq!(fees(&db), (0, 0, 20));
 }
+
+#[test]
+fn checksum_valid_shorter_or_advanced_cache_history_cannot_replace_the_external_protected_head() {
+    use kaspa_consensus_core::palw_positive_court_v2::recovery_sync::RecoveryImportErrorV2;
+    fn wire_replay<C: RecoveryContextV2<TrustedAnchor = Hash64>>(
+        f: &Scenario,
+        journal: &JournaledCoordinatorV2,
+        context: C,
+    ) -> Result<CheckedRecoveryImportV2, RecoveryImportErrorV2> {
+        let head = journal.head().unwrap();
+        let bytes = journal.encoded().unwrap();
+        let scope = RecoveryImportScopeV2 {
+            network: f.result.network,
+            branch: f.result.branch,
+            ruleset: f.result.ruleset,
+            case: f.result.claim,
+            result: f.result.id(),
+        };
+        let mut receiver = RecoveryChunkImportV2::new(
+            scope,
+            head,
+            bytes.len() as u64,
+            RecoveryTransferLimitsV2 { chunk_bytes: 1024, max_chunks: 100_000, max_packets: 100_000, max_wire_bytes: 128 << 20 },
+            caps(),
+            Vec::new(),
+        )
+        .unwrap();
+        for (index, chunk) in bytes.chunks(1024).enumerate() {
+            receiver.accept(scope, head, index as u64, chunk).unwrap();
+        }
+        let driver = RecoveryAdapterV2::new(context, caps());
+        receiver.finish(&driver, &f.result.branch, |bytes, _| Ok(bytes))
+    }
+    struct RejectUnanchoredTail<'a> {
+        base: Context<'a>,
+    }
+    impl RecoveryContextV2 for RejectUnanchoredTail<'_> {
+        type TrustedAnchor = Hash64;
+        fn resolve(&self, anchor: &Hash64) -> Result<RecoveryAdmissionV2, ErrorV2> {
+            self.base.resolve(anchor)
+        }
+        fn authenticate(&self, anchor: &Hash64, origin: EventOriginV2, event: &RecoveryEventV2) -> bool {
+            // The independently selected canonical history contains the request
+            // but never accepted the extra source-response carrier/event.
+            self.base.authenticate(anchor, origin, event) && origin.daa == 2 && matches!(event, RecoveryEventV2::Request { .. })
+        }
+        fn current_daa(&self) -> u64 {
+            self.base.now
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let protected = store(&dir.path().join("protected"));
+    let shorter = store(&dir.path().join("shorter-cache"));
+    let target = store(&dir.path().join("unpublished-import"));
+    let f = Scenario::new();
+    let initial_history = initial(&protected, &f);
+    let request = f.request(&initial_history);
+    let (protected_history, outcome) = step(&protected, &f, initial_history, request, 2);
+    outcome.unwrap();
+    let pinned = protected_history.head().unwrap();
+    assert_eq!(protected_history.state().unwrap().service_meter().rounds, 1);
+    assert_eq!(protected_history.state().unwrap().service_meter().unique_bytes, 4096);
+
+    // Both archives and their checksums are honestly encoded. The cache with a
+    // shorter history has zero charged request bytes; it must not discount the
+    // independently protected request obligation merely because it parses.
+    let short_history = initial(&shorter, &f);
+    assert_ne!(short_history.head().unwrap(), pinned);
+    assert_eq!(short_history.state().unwrap().service_meter().unique_bytes, 0);
+    assert!(matches!(
+        restore_selected(&shorter, Context { fixture: &f, head: pinned, now: 3 }, &f.result.branch, caps()),
+        Err(PersistenceErrorV2::Binding)
+    ));
+    assert!(wire_replay(&f, &short_history, Context { fixture: &f, head: pinned, now: 3 }).is_err());
+
+    // Simulate a locally advanced but externally unanchored cache tail using
+    // an actual DB transaction. The previous protected anchor stays pinned.
+    let (advanced, outcome) = step(&protected, &f, protected_history, f.response(), 3);
+    outcome.unwrap();
+    let advanced_head = advanced.head().unwrap();
+    assert_ne!(advanced_head, pinned);
+    assert_eq!(protected.load(&raw(f.result.claim)).unwrap().unwrap().head.digest, raw(advanced_head.digest));
+    assert!(matches!(
+        restore_selected(&protected, Context { fixture: &f, head: pinned, now: 3 }, &f.result.branch, caps()),
+        Err(PersistenceErrorV2::Binding)
+    ));
+    assert!(
+        restore_and_commit(&protected, Context { fixture: &f, head: pinned, now: 3 }, &f.result.branch, caps(), |_| {
+            panic!("cache-selected head must not reach native projection")
+        })
+        .is_err()
+    );
+    assert!(wire_replay(&f, &advanced, Context { fixture: &f, head: pinned, now: 3 }).is_err());
+    assert!(target.load(&raw(f.result.claim)).unwrap().is_none());
+    assert!(target.related_value(b"test-native/service-fees").unwrap().is_none());
+
+    let checksum_valid = wire_replay(&f, &advanced, Context { fixture: &f, head: advanced_head, now: 3 }).unwrap();
+    assert_eq!(checksum_valid.head(), advanced_head);
+    assert_eq!(checksum_valid.state().state().unwrap().service_meter().unique_bytes, 4096);
+    // Matching the checksum/head does not bypass origin/canonical-history
+    // authentication. An authenticated identity is not an accepted event.
+    assert!(matches!(
+        restore_selected(
+            &protected,
+            RejectUnanchoredTail { base: Context { fixture: &f, head: advanced_head, now: 3 } },
+            &f.result.branch,
+            caps(),
+        ),
+        Err(PersistenceErrorV2::Core(ErrorV2::Binding))
+    ));
+    assert!(wire_replay(&f, &advanced, RejectUnanchoredTail { base: Context { fixture: &f, head: advanced_head, now: 3 } }).is_err());
+}
+
+#[test]
+fn interrupted_actual_request_commit_restores_only_the_pinned_head_and_never_discounts_short_responses() {
+    use kaspa_database::palw_positive_recovery::{CommitFault, RecoveryBinding, RecoveryCommit, RecoveryHead};
+    for (index, fault) in [CommitFault::BeforeWrite, CommitFault::AfterWrite].into_iter().enumerate() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("db");
+        let f = Scenario::new();
+        let h0;
+        let h1;
+        {
+            let db = store(&path);
+            let journal = initial(&db, &f);
+            h0 = journal.head().unwrap();
+            let request = f.request(&journal);
+            let prepared = journal.prepare_record(f.fresh(), 1, origin(2), request, auth).unwrap();
+            let mut pinned_before_write = None;
+            // A real prepared coordinator operation supplies the exact archive
+            // and head. The hook injects an actual synchronous DB batch fault;
+            // no successful persistence stub stands in for this write.
+            let interrupted = prepared.commit(|previous, next, archive, state| {
+                assert_eq!(previous, h0);
+                pinned_before_write = Some(next);
+                let meter = state.service_meter();
+                assert_eq!((meter.rounds, meter.unique_bytes, meter.transmitted_bytes, meter.work), (1, 4096, 0, 0));
+                let related = project(&db, state).map_err(|error| std::io::Error::other(format!("{error:?}")))?;
+                db.commit_with_fault(
+                    RecoveryCommit {
+                        case: raw(f.result.claim),
+                        binding: RecoveryBinding {
+                            branch: raw(f.result.branch),
+                            ruleset: raw(f.result.ruleset),
+                            result: raw(f.result.id()),
+                        },
+                        expected_head: Some(RecoveryHead { records: previous.records, digest: raw(previous.digest) }),
+                        head: RecoveryHead { records: next.records, digest: raw(next.digest) },
+                        observed_daa: 2,
+                        transaction: [71 + index as u8; 64],
+                        archive: archive.to_vec(),
+                        related,
+                    },
+                    fault,
+                )
+                .map(|_| ())
+                .map_err(|error| std::io::Error::other(format!("{error:?}")))
+            });
+            assert!(interrupted.is_err());
+            h1 = pinned_before_write.expect("head was pinned before the attempted write");
+            assert_ne!(h0, h1);
+        }
+        // Resolve only the independently pinned pre-write/proposed heads. A
+        // peer-selected checksum-valid suffix is never a third recovery choice.
+        let db = store(&path);
+        let (selected, rejected, initial_rounds, initial_unique) = match fault {
+            CommitFault::BeforeWrite => (h0, h1, 0, 0),
+            CommitFault::AfterWrite => (h1, h0, 1, 4096),
+        };
+        assert!(matches!(
+            restore_selected(&db, Context { fixture: &f, head: rejected, now: 2 }, &f.result.branch, caps()),
+            Err(PersistenceErrorV2::Binding)
+        ));
+        let journal = restore(&db, &f, selected, 2);
+        let meter = journal.state().unwrap().service_meter();
+        assert_eq!((meter.rounds, meter.unique_bytes, meter.transmitted_bytes, meter.work), (initial_rounds, initial_unique, 0, 0));
+        assert_eq!(fees(&db), (0, 0, 20));
+        let request = f.request(&journal);
+        let (journal, outcome) = step(&db, &f, journal, request, 3);
+        outcome.unwrap();
+        let request = f.request(&journal);
+        let (journal, outcome) = step(&db, &f, journal, request, 4);
+        outcome.unwrap();
+        assert_eq!(journal.state().unwrap().service_meter().rounds, 1);
+        assert_eq!(journal.state().unwrap().service_meter().unique_bytes, 4096);
+        let mut short = f.response();
+        if let RecoveryEventV2::Response { bytes, .. } = &mut short {
+            bytes.truncate(CHUNK_BYTES - 1);
+        }
+        let (journal, outcome) = step(&db, &f, journal, short, 5);
+        assert_eq!(outcome, Err(ErrorV2::Wire));
+        let meter = journal.state().unwrap().service_meter();
+        assert_eq!((meter.rounds, meter.unique_bytes, meter.transmitted_bytes, meter.work, meter.paid), (1, 4096, 0, 0, 0));
+        assert_eq!(
+            journal.state().unwrap().completion().miner_data,
+            kaspa_consensus_core::palw_positive_court_v2::coordinator::DataResponseStatusV2::Pending,
+        );
+        assert_eq!(fees(&db), (0, 0, 20));
+        let (journal, outcome) = step(&db, &f, journal, f.response(), 6);
+        outcome.unwrap();
+        let (journal, outcome) = step(&db, &f, journal, f.response(), 7);
+        outcome.unwrap();
+        let meter = journal.state().unwrap().service_meter();
+        // Each complete source reply includes its 76-byte opening. The short
+        // malformed reply did not complete service or reduce either later debit.
+        assert_eq!((meter.rounds, meter.unique_bytes, meter.transmitted_bytes, meter.work, meter.paid), (1, 4096, 8344, 2, 10));
+        assert_eq!(fees(&db), (10, 0, 10));
+        let final_head = journal.head().unwrap();
+        drop(journal);
+        drop(db);
+        let db = store(&path);
+        let restored = restore(&db, &f, final_head, 7);
+        let meter = restored.state().unwrap().service_meter();
+        assert_eq!((meter.rounds, meter.unique_bytes, meter.transmitted_bytes, meter.work, meter.paid), (1, 4096, 8344, 2, 10));
+        assert_eq!(fees(&db), (10, 0, 10));
+    }
+}

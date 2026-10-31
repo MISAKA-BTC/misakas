@@ -24,7 +24,7 @@ A0所有の具体的なTrustedAnchorは、少なくとも次を同じ選択履�
 - 期待するjournal headとadmission DAA、固定されたrole key / drawn roster / policy
 - 全eventのcanonical carrier、accepted DAA、同一DAA内も含む正規event順序
 
-`RecoveryContextV2::resolve` はそのviewからfresh admissionと期待headを解決する。`authenticate` はeventの実内容・所属・accepted DAA・正規順序を検証する。peerと一緒に届いたorigin、保存されたcursor/Pass、DBにあるheadだけをauthorityにしない。現在のprivate result/witnessを新contract DTOへaliasしない。
+`RecoveryContextV2::resolve` はそのviewからfresh admissionと期待headを解決する。`authenticate` はeventの実内容・所属・accepted DAA・正規順序を検証する。peerと一緒に届いたorigin、保存されたcursor/Pass、DBにあるheadだけをauthorityにしない。unkeyed checksum列やgeneration directoryの末尾から期待headを自動選択しない。短い正常prefix・余分なchecksum-valid tailも保護されたheadと違えば拒否する。headが一致していても、全eventの正規origin/順序とcheckerの再認証を省略しない。準備済みunit/sizeや保存meterを将来のquota割引へ復元する入口は設けない。現在のprivate result/witnessを新contract DTOへaliasしない。
 
 ### 2. 同じexclusive writer guardとread-only projection
 
