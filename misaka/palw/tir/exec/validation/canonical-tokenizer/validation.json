@@ -1,0 +1,90 @@
+{
+  "date_jst": "2026-11-01",
+  "candidate_commit": "3b4b0267f59ff696f7064a180993ecc99ceac01d",
+  "parent_commit": "3411c785276b05fc92bc2aaa7f25e4021fcd2a9d",
+  "branch": "codex/positive-court-a1",
+  "change": "Remove only ExpandedPlan registration-tokenizer/job-tokenizer numerical equality; preserve their independent identities.",
+  "final_tests": {
+    "passed": 16,
+    "failed": 0,
+    "targets": {
+      "positive_expanded_plan": 5,
+      "positive_full_relation": 11
+    },
+    "log": "tests.log",
+    "new_cases": 3,
+    "existing_cases_retained": 13,
+    "historical_counts_added": false
+  },
+  "package_clippy": {
+    "passed": true,
+    "scope": "both affected test targets, --no-deps -D warnings",
+    "log": "clippy.log"
+  },
+  "docs": {
+    "mode": "no-new-regressions",
+    "passed": true,
+    "known_missing": 43,
+    "new_occurrences": 0,
+    "log": "docs-check.log"
+  },
+  "positive_case": "Registration tokenizer18 stays in classID; actualjob tokenizer0 is set before runner/capture/roots/material. Result.tokenizer is actualjob0; full source-only verification completes.",
+  "negative_cases": [
+    "stale classID after registrationtokenizer change",
+    "consistent foreignclass+job substitution with original rooted/signedResult",
+    "job-only tokenizer substitution changes original expectedcontext hash",
+    "rewritten internally-valid Panelbindings cannot reuse original preparation"
+  ],
+  "preserved_guards": [
+    "registered classID/artifact/program",
+    "Result.execution == actualjob.context_hash",
+    "Result.tokenizer == actualjob.tokenizer",
+    "record binding exact originalclass/originaljob equality",
+    "source openings and originalcontext-bound roots"
+  ],
+  "untouched_files_verified": [
+    "consensus/core/src/palw_positive_check_v2.rs",
+    "consensus/core/src/palw_positive_check_v2/full_relation.rs",
+    "consensus/core/src/palw_tir_court_v1/source_only.rs",
+    "consensus/core/src/palw_public_binding_v1.rs",
+    "consensus/core/src/palw_tir_step_v1.rs"
+  ],
+  "scope": {
+    "a3_owned_parent_coverageplan_changed": false,
+    "full_relation_or_source_only_authentication_weakened": false,
+    "registered_tokenizer_copied_into_canonical_job": false,
+    "free_prompt_binding_gate_changed": false,
+    "wide_profile_or_new_job_authority_changed": false,
+    "native_public_activation_changed": false,
+    "real_llm_validated": false
+  },
+  "independent_review": "Confirmed canonical palw_tir_job_context_v1 sets jobtokenizer0; registration tokenizer remains in classID. No remaining expanded/full/source-only equality or rewriter beyond A3-owned parent; existing FP gate intentionally retained.",
+  "build_environment": {
+    "target": "/Users/wata/.cache/misaka-positive-a1-port-target",
+    "jobs": 2,
+    "incremental": false,
+    "dev_debug": 0,
+    "test_debug": 0,
+    "core_opt_level": 0,
+    "new_target_created": false,
+    "other_owner_cache_deleted": false
+  },
+  "source_sha256": {
+    "consensus/core/src/palw_positive_check_v2/expanded_plan.rs": "e6c5125e02ab650979fe07dfe251994ee123ec1d6d3abfbec30cf867d6f0c8b1",
+    "misaka/palw/tir/exec/tests/positive_expanded_plan.rs": "290217cf4bd83edfd60ffa71d60af72fbd8892d6b76317aba827f3352d656ae4",
+    "misaka/palw/tir/exec/tests/positive_full_relation.rs": "e6ee0a27aeb1e14277db3edd867173de58d7847b7f5506ca20562c0b0dd0692d",
+    "misaka/palw/tir/exec/A1-FULL-RELATION-PROTOTYPE.md": "da2199353b49b434654461d749efeb7a2956a4e824397a2a8f2eddf3aae85935",
+    "consensus/core/src/palw_positive_check_v2.rs": "f57c4b07e7e3a6915252ca3de24eba9fed945e62d659cee6ed24992a7d0dd33c",
+    "consensus/core/src/palw_positive_check_v2/full_relation.rs": "ba8de6e830ea1faaae7d89259aa7412a335e0cad943d0dca0c4dcfc4e6ac4912",
+    "consensus/core/src/palw_tir_court_v1/source_only.rs": "583eb83932c05448dba3e062ef4fd7bdf27a45bc746919b9df6e47b8f4a0d979",
+    "consensus/core/src/palw_public_binding_v1.rs": "5225663431183f868d478b9ddc9a6f33c062216fb61313754710f00888f9f70a",
+    "consensus/core/src/palw_tir_step_v1.rs": "08ce64bf5b3135b697f139c2672ba3f4b324efdc2e23a6f5cd01443e27165b3b",
+    "consensus/core/src/palw_tir_attempt_v1.rs": "bd1ae4045a977f3216b4b0e6c9f1340133109f22d4ec2b2d7c0f7a725f0a6676"
+  },
+  "evidence_sha256": {
+    "clippy.log": "1ed903a979f2a074097178b033a9e2633e7a292c4f6aa780d203555fb63469f3",
+    "commands.json": "ec54c729110f429ec19550b32a43155f8f7faef2f47694d3d80efec857a56026",
+    "docs-check.log": "d5c2e8049f9b12f200d58f69ea6a9abc18c0734c57510e402f5e1688770586ba",
+    "tests.log": "ea6f4de647a862ed4189d471c88bc9c34ecb6733a04599bdf5ae07da3d9fd5dc"
+  }
+}
