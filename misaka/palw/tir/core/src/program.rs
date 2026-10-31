@@ -13,6 +13,16 @@ use crate::types::{DType, TensorType};
 
 /// The only version this crate reads.
 pub const TIR_PROGRAM_VERSION_V1: u16 = 1;
+/// Accepted wide-Q24 output profile. Identity is keyed BLAKE2b-512 under
+/// `misaka-palw/tiled-logits/scheme/v2`, with one u64-LE-length-prefixed part
+/// `tiled-logits-i64-q24-v2`. Only the final post logits may be an i64 commit.
+/// This structural recognition does not activate network admission.
+pub const LOGITS_I64_Q24_SCHEME_V2: [u8; 64] = [
+    173, 125, 196, 251, 176, 168, 48, 25, 196, 242, 122, 213, 79, 68, 57, 93, 124, 217, 112, 15, 136, 110, 157, 108, 168, 81, 94, 227,
+    54, 6, 121, 234, 236, 54, 239, 135, 101, 253, 172, 79, 199, 32, 145, 203, 65, 203, 34, 250, 137, 15, 200, 39, 131, 59, 96, 171,
+    61, 6, 13, 148, 243, 6, 37, 203,
+];
+
 /// The two history bounds a program may declare (ADR-0103/0116).
 pub const HISTORY_BOUND_V1_SMALL: u32 = 1 << 18;
 pub const HISTORY_BOUND_V1_HELD: u32 = 1 << 21;
@@ -155,6 +165,14 @@ impl TirProgramV1 {
         }
         crate::validate::validate(&program)?;
         Ok(program)
+    }
+
+    pub fn wide_logits_q24(&self) -> bool {
+        self.logits_scheme_id == LOGITS_I64_Q24_SCHEME_V2
+    }
+
+    pub fn is_wide_logits_node(&self, block: usize, node: usize) -> bool {
+        self.wide_logits_q24() && block == self.schedule.post as usize && node == self.logits as usize
     }
 
     pub fn param_index(&self, name: &str) -> Option<u16> {
