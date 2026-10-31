@@ -11,6 +11,7 @@ use misaka_palw_positive_accounting::fees::{
     AccountingAuthority, AccountingError, AccountingLimits, PrivateAccountingStore, ResolvedAdmission, UnassignedAccountingAuthority,
 };
 use misaka_palw_positive_contract::{
+    ContractError,
     funding::{FundingConsent, FundingPlanBasis, funding_scope},
     identity::{ChainScope, Digest, FUNDING_SIGN_CONTEXT, PUBKEY_BYTES, PrincipalId, RESULT_SIGN_CONTEXT, SIGNATURE_BYTES, principal},
     messages::{AdmissionContext, AggregateBudget, CheckProfile, ClaimForm, MinerResultCommit, MinerServiceContract},
@@ -324,4 +325,120 @@ fn funding_atomic_rejects_foreign_capability_and_preserves_native_unassigned_err
         Err(FundingAtomicErrorV2::Admission(CourtAdmissionErrorV2::Store(AccountingError::NativeAdapterUnassigned)))
     ));
     assert_eq!(admission.store().balance(f.consent.payer), 1000);
+}
+
+fn funding_body(
+    f: &FundingFixture,
+    basis: FundingPlanBasis,
+) -> kaspa_consensus_core::palw_positive_court_v2::coordinator::native_body::PositiveNativeBodyV2 {
+    use kaspa_consensus_core::palw_positive_court_v2::coordinator::native_body::*;
+    PositiveNativeBodyV2 {
+        version: 2,
+        revision: 1,
+        operation: PositiveNativeOperationV2::ResultAdmission {
+            result: f.result.clone(),
+            miner_signature: f.miner_signature,
+            service: f.service,
+            basis,
+            consent: f.consent.clone(),
+            payer_signature: f.payer_signature,
+        },
+    }
+}
+
+#[test]
+fn native_result_body_uses_rooted_keys_and_rejects_other_kinds_or_versions() {
+    use kaspa_consensus_core::palw_positive_court_v2::coordinator::native_body::PositiveNativeOperationV2;
+    let (f, view, carrier) = funding_fixture();
+    let basis = view.0.borrow().quote.basis;
+    let funding = FundingPreflightCoordinatorV2::new(view);
+    let body = funding_body(&f, basis);
+    let checked = funding.check_native_admission(&body, &f.miner_key, &f.payer_key, &carrier).unwrap();
+    assert_eq!(checked.result(), &f.result);
+    assert_eq!(checked.basis(), &basis);
+    assert_eq!(checked.output().amount, 150);
+    let mut wrong = body.clone();
+    wrong.version = 1;
+    assert!(matches!(
+        funding.check_native_admission(&wrong, &f.miner_key, &f.payer_key, &carrier),
+        Err(FundingPreflightErrorV2::Contract(ContractError::Version))
+    ));
+    wrong = body.clone();
+    wrong.revision = 0;
+    assert!(matches!(
+        funding.check_native_admission(&wrong, &f.miner_key, &f.payer_key, &carrier),
+        Err(FundingPreflightErrorV2::Contract(ContractError::Version))
+    ));
+    wrong = body.clone();
+    wrong.operation = PositiveNativeOperationV2::Expire { case: f.result.case_id(), result: f.result.id() };
+    assert!(matches!(
+        funding.check_native_admission(&wrong, &f.miner_key, &f.payer_key, &carrier),
+        Err(FundingPreflightErrorV2::NativeBodyKind)
+    ));
+    assert!(funding.check_native_admission(&body, &f.payer_key, &f.payer_key, &carrier).is_err());
+    assert!(funding.check_native_admission(&body, &f.miner_key, &f.miner_key, &carrier).is_err());
+}
+
+#[test]
+fn native_body_peer_basis_must_equal_every_independently_derived_field() {
+    let (f, view, carrier) = funding_fixture();
+    let basis = view.0.borrow().quote.basis;
+    let funding = FundingPreflightCoordinatorV2::new(view.clone());
+    let admission = accounting(&view, f.consent.payer);
+    for mode in 0..9 {
+        let mut declared = basis;
+        match mode {
+            0 => declared.mandatory_relations += 1,
+            1 => declared.derivation = fd(99),
+            2 => declared.source_catalog = fd(99),
+            3 => declared.resource_quote = fd(99),
+            4 => declared.policy = fd(99),
+            5 => declared.schedule = fd(99),
+            6 => declared.required_fee += 1,
+            7 => declared.required_capital += 1,
+            _ => declared.profile = CheckProfile::FullRelationDirectV1,
+        }
+        let body = funding_body(&f, declared);
+        assert!(
+            matches!(
+                funding.check_native_admission(&body, &f.miner_key, &f.payer_key, &carrier),
+                Err(FundingPreflightErrorV2::PeerBasis)
+            ),
+            "mode {mode}"
+        );
+        assert!(matches!(
+            funding.prepare_native_atomic(&admission, &body, &f.miner_key, &f.payer_key, &carrier),
+            Err(FundingAtomicErrorV2::Funding(FundingPreflightErrorV2::PeerBasis))
+        ));
+    }
+    assert_eq!(admission.store().balance(f.consent.payer), 1000);
+    assert_eq!(admission.store().reserved_resources(), 0);
+    assert_eq!(admission.store().totals(f.result.case_id()), None);
+}
+
+#[test]
+fn native_body_preflight_prepares_the_same_atomic_store_and_rechecks_actual_output() {
+    let (f, view, mut carrier) = funding_fixture();
+    let basis = view.0.borrow().quote.basis;
+    let funding = FundingPreflightCoordinatorV2::new(view.clone());
+    let mut admission = accounting(&view, f.consent.payer);
+    let body = funding_body(&f, basis);
+    let prepared = funding.prepare_native_atomic(&admission, &body, &f.miner_key, &f.payer_key, &carrier).unwrap();
+    assert_eq!(admission.store().balance(f.consent.payer), 1000);
+    carrier.amount = 151;
+    assert!(matches!(
+        funding.commit_atomic(&mut admission, prepared, &carrier),
+        Err(FundingAtomicErrorV2::Funding(FundingPreflightErrorV2::OutputChanged))
+    ));
+    assert_eq!(admission.store().totals(f.result.case_id()), None);
+    carrier.amount = 150;
+    let prepared = funding.prepare_native_atomic(&admission, &body, &f.miner_key, &f.payer_key, &carrier).unwrap();
+    let admitted = funding.commit_atomic(&mut admission, prepared, &carrier).unwrap();
+    assert_eq!(admitted.funding().basis(), &basis);
+    assert_eq!(admitted.admitted().intent().result, f.result.id());
+    assert_eq!(admission.store().balance(f.consent.payer), 950);
+    assert_eq!(admission.store().reserved_resources(), 4);
+    assert!(admission.store().conserved());
+    // This success is only the explicitly provisioned PRIVATE store. It did
+    // not create native UTXO-lock, lifecycle or settlement authorization.
 }

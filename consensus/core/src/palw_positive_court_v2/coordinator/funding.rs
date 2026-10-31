@@ -8,8 +8,9 @@ use super::admission::{
     AdmittedCourtV2, AtomicAdmissionCoordinatorV2, CourtAdmissionErrorV2, CourtAdmissionRootV2, CourtAdmissionViewV2,
     PreparedCourtAdmissionV2,
 };
+use super::native_body::{PositiveNativeBodyV2, PositiveNativeOperationV2};
 use misaka_palw_positive_contract::{
-    ContractError,
+    CONTRACT_REVISION, CONTRACT_VERSION, ContractError,
     funding::{FundingConsent, FundingPlanBasis},
     identity::{Digest, PUBKEY_BYTES, SIGNATURE_BYTES},
     messages::{AdmissionContext, ClaimForm, MinerResultCommit, MinerServiceContract},
@@ -96,6 +97,8 @@ pub enum FundingPreflightErrorV2<E> {
     QuoteChanged,
     OutputChanged,
     ForeignCapability,
+    NativeBodyKind,
+    PeerBasis,
 }
 
 /// Both literal signatures, acyclic linkage, rooted quote and output amount
@@ -158,6 +161,42 @@ impl<V: RootedFundingViewV2> FundingPreflightCoordinatorV2<V> {
     }
     pub fn view(&self) -> &V {
         &self.view
+    }
+
+    fn native_inputs<'a>(
+        body: &'a PositiveNativeBodyV2,
+        miner_key: &'a [u8; PUBKEY_BYTES],
+        payer_key: &'a [u8; PUBKEY_BYTES],
+    ) -> Result<(SignedFundingInputsV2<'a>, &'a FundingPlanBasis), FundingPreflightErrorV2<V::Error>> {
+        if body.version != CONTRACT_VERSION || body.revision != CONTRACT_REVISION {
+            return Err(FundingPreflightErrorV2::Contract(ContractError::Version));
+        }
+        let PositiveNativeOperationV2::ResultAdmission { result, miner_signature, service, basis, consent, payer_signature } =
+            &body.operation
+        else {
+            return Err(FundingPreflightErrorV2::NativeBodyKind);
+        };
+        Ok((SignedFundingInputsV2 { result, service, consent, miner_key, miner_signature, payer_key, payer_signature }, basis))
+    }
+
+    /// Sole conversion from a bounded native ResultAdmission body to the signed
+    /// funding inputs. Keys MUST come from rooted roles. The body's basis is a
+    /// claimed literal only: independently resolve the quote, then require full
+    /// equality. Successful decoding or a self-signed peer quote buys no standing.
+    /// The caller still must bind this body to its actual validated carrier.
+    pub fn check_native_admission(
+        &self,
+        body: &PositiveNativeBodyV2,
+        miner_key: &[u8; PUBKEY_BYTES],
+        payer_key: &[u8; PUBKEY_BYTES],
+        carrier: &V::Carrier,
+    ) -> Result<SignatureCheckedFundingPreflightV2, FundingPreflightErrorV2<V::Error>> {
+        let (inputs, declared_basis) = Self::native_inputs(body, miner_key, payer_key)?;
+        let checked = self.check(inputs, carrier)?;
+        if checked.basis() != declared_basis {
+            return Err(FundingPreflightErrorV2::PeerBasis);
+        }
+        Ok(checked)
     }
 
     pub fn check(
@@ -308,8 +347,31 @@ impl<V: RootedFundingViewV2> FundingPreflightCoordinatorV2<V> {
         carrier: &V::Carrier,
     ) -> Result<PreparedFundingPreflightAdmissionV2<S::PreparedAdmission>, FundingAtomicErrorV2<V::Error, A::Error, S::Error>> {
         let funding = self.check(inputs, carrier).map_err(FundingAtomicErrorV2::Funding)?;
+        self.prepare_checked_atomic(admission, funding)
+    }
+
+    /// Native-body route into the SAME atomic admission path. It enforces the
+    /// literal basis before preparing the store, without introducing a second
+    /// funding ledger or calling the native UTXO lock unassigned path successful.
+    pub fn prepare_native_atomic<S: AtomicCourtStore, A: CourtAdmissionViewV2>(
+        &self,
+        admission: &AtomicAdmissionCoordinatorV2<S, A>,
+        body: &PositiveNativeBodyV2,
+        miner_key: &[u8; PUBKEY_BYTES],
+        payer_key: &[u8; PUBKEY_BYTES],
+        carrier: &V::Carrier,
+    ) -> Result<PreparedFundingPreflightAdmissionV2<S::PreparedAdmission>, FundingAtomicErrorV2<V::Error, A::Error, S::Error>> {
+        let funding = self.check_native_admission(body, miner_key, payer_key, carrier).map_err(FundingAtomicErrorV2::Funding)?;
+        self.prepare_checked_atomic(admission, funding)
+    }
+
+    fn prepare_checked_atomic<S: AtomicCourtStore, A: CourtAdmissionViewV2>(
+        &self,
+        admission: &AtomicAdmissionCoordinatorV2<S, A>,
+        funding: SignatureCheckedFundingPreflightV2,
+    ) -> Result<PreparedFundingPreflightAdmissionV2<S::PreparedAdmission>, FundingAtomicErrorV2<V::Error, A::Error, S::Error>> {
         let prepared = admission
-            .prepare(inputs.result.clone(), inputs.miner_key, inputs.miner_signature)
+            .prepare(funding.result.clone(), &funding.miner_key, &funding.miner_signature)
             .map_err(FundingAtomicErrorV2::Admission)?;
         self.check_atomic_binding(admission, &prepared, &funding)?;
         Ok(PreparedFundingPreflightAdmissionV2 { funding, admission: prepared })

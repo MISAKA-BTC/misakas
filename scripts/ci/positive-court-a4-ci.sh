@@ -10,12 +10,15 @@ export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-2}"
 # Fresh Rust source build. Optional ROCKSDB_LIB_DIR may point to an existing
 # compatible native RocksDB archive; no consensus Rust rlib is substituted.
 cargo test -p misaka-palw-positive-contract -p misaka-palw-positive-accounting --offline --locked
-cargo test -p misaka-palw-tir-exec --features node --offline --locked \
+cargo test -p misaka-palw-tir-exec --features node,positive-contract --offline --locked \
     --test positive_check --test positive_check_hardening --test positive_contract \
-    --test positive_court_a4_integration --test positive_court_a4_admission --test positive_court_a4_native \
+    --test positive_expanded_plan --test positive_record --test positive_production_port \
+    --test positive_court_a4_integration --test positive_court_a4_admission --test positive_court_a4_native --test positive_court_a4_record_ingress \
     --config 'profile.dev.package.kaspa-consensus-core.opt-level=0'
 cargo test -p kaspa-consensus-core --lib palw_positive_court_v2::coordinator --offline --locked \
     --config 'profile.dev.package.kaspa-consensus-core.opt-level=0'
 cargo test -p kaspa-consensus-core --lib palw_court_shared --offline --locked \
+    --config 'profile.dev.package.kaspa-consensus-core.opt-level=0'
+cargo test -p kaspa-consensus-core --test positive_court_fence_v2 --test positive_source_v2 --offline --locked \
     --config 'profile.dev.package.kaspa-consensus-core.opt-level=0'
 python3 docs/maintenance/check_docs.py
