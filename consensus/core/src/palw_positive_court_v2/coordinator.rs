@@ -16,6 +16,8 @@ use crate::{
 };
 use std::collections::BTreeMap;
 
+#[path = "coordinator_recovery.rs"]
+pub mod recovery;
 pub mod capacity;
 pub mod transport;
 
