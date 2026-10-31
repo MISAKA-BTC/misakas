@@ -140,6 +140,8 @@ mod palw_exec_v2_origin_v1;
 mod palw_exec_v2_rewards_v1;
 #[path = "palw_kernel_route_fold_v1.rs"]
 mod palw_kernel_route_fold_v1;
+#[path = "palw_positive_source_apply_v2.rs"]
+mod palw_positive_source_apply_v2;
 #[path = "palw_mesh_fold_v1.rs"]
 mod palw_mesh_fold_v1;
 #[path = "palw_model_panel_one_fold_v1.rs"]
