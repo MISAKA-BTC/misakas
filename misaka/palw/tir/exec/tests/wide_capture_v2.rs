@@ -490,3 +490,24 @@ fn build_copy_encode_decode_and_authentication_charge_every_simultaneous_owner_a
         assert_eq!(capture.encode_bounded(limits()).unwrap(), frame);
     });
 }
+
+#[test]
+fn authentication_refuses_minimum_work_before_scanning_malformed_row_widths() {
+    with_producer(3, |_, run, expected, leaves| {
+        let mut raw = raw_source(run, expected, leaves);
+        raw.logits_rows[0].pop();
+        // The malformed width is a bounded, decodable delivery. Its independently
+        // expected binding and outer row/ID/leaf counts remain unchanged.
+        let capture = TirWideCaptureV2::decode_bounded(&raw.frame(), limits()).unwrap();
+        assert_eq!(capture.binding(), expected);
+        assert_eq!(capture.logits_rows()[0].len(), 3);
+        let verified = verify_tir_binding_v2(expected, LEAF_CAP).unwrap();
+        let mut no_work = auth_limits();
+        no_work.max_work = 0;
+        let refusal = capture.authenticate_expected(expected, &verified, no_work).unwrap_err();
+        assert!(refusal.contains("minimum visit"), "{refusal}");
+        assert!(!refusal.contains("row width"));
+        let refusal = capture.authenticate_expected(expected, &verified, auth_limits()).unwrap_err();
+        assert!(refusal.contains("row width"), "{refusal}");
+    });
+}
