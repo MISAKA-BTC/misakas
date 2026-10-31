@@ -1,0 +1,10 @@
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/consensus/core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2m 02s
+     Running unittests src/lib.rs (/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/kaspa_consensus_core-b2df9d40a9b2c4d1)
+
+running 2 tests
+test palw_positive_common_source_replay_v2::tests::counter_rewind_and_overflow_are_refused ... ok
+test palw_positive_common_source_replay_v2::tests::only_delta_is_added_and_receipt_capacity_is_not_retention ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 5431 filtered out; finished in 0.00s
+
