@@ -10,6 +10,10 @@
 #[doc(hidden)]
 pub mod expanded_plan;
 
+/// Local typed prototype only: no wire/derivation assignment or native authority.
+#[doc(hidden)]
+pub mod full_relation;
+
 use crate::{
     Hash64,
     palw_attempt_rules_v1::palw_attempt_output_root_v1,

@@ -56,6 +56,10 @@
 pub mod parameter_cover;
 mod source_geometry;
 
+/// Source membership and bounded direct evaluation for local prototypes only.
+#[doc(hidden)]
+pub mod source_only;
+
 use std::{
     cell::Cell,
     collections::{BTreeMap, BTreeSet},

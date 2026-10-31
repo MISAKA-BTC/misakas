@@ -119,6 +119,9 @@ pub struct ExpandedPlan {
 }
 
 impl ExpandedPlan {
+    pub(super) fn step_space(&self) -> &PalwTirStepSpaceV1 {
+        &self.space
+    }
     pub fn derive(
         registered: &PalwTirClassV1,
         artifact: Hash64,
