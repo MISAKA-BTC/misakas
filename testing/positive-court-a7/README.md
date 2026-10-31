@@ -88,6 +88,27 @@ budgets produce `EndedUnverified`, not an arithmetic conviction. The signed fram
 adds 4,627 bytes to each unsigned frame; native transaction/wrapper overhead is
 still excluded and is not claimed to fit a production cap.
 
+## Existing entitlements: source-ready follow-up, runtime unverified
+
+The pipeline fixture now targets A5 `30f3fd23e4db6d494d4f511a2addad5e736df851`
+(parent `dd8efe1ab`): `RootedCreditView::authorize_entitlement` and the appended
+`WorkerPayment` purpose with `CreditConsumers::worker_payment`. These dependency
+changes are not merged by this A7 fixture update. Rust typechecking and runtime
+verification await the accepted full candidate; historical PASS evidence does
+not cover this source change.
+The current [source-ready handoff](../../handoff/positive-court/A7-entitlement-source-ready-2026-11-01.md)
+supersedes the retained, historical pending-patch note for application status.
+
+Existing primary rights are an explicit private oracle for the original seven
+uses and deny WorkerPayment. A separate paid-worker contract oracle allows only
+WorkerPayment and Settlement. Both check the complete binding; PositivePassed,
+Gate C, readiness, fees and P do not create these rights. The real bound A2 → A3
+→ A1 → TirCreditView tests retain literal eight-use expectations, reject every
+use with a missing entitlement port, and check paid authorizations' exact purpose
+and binding. Unassigned native WorkerPayment remains denied. Earned source-service
+fees and safe refunds retain their separate existing conditions; they do not
+acquire a successful-worker Positive/P prerequisite through this fixture.
+
 ## Process measurement and unfinished evidence
 
 The toy process run separates baseline, Miner, Panel, Node, prefix, restart,
