@@ -11,7 +11,7 @@ import time
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
 parser = argparse.ArgumentParser()
-parser.add_argument('kind', choices=['remote-rocks', 'default-off', 'client-check'])
+parser.add_argument('kind', choices=['remote-rocks', 'default-off', 'client-check', 'journal-contract'])
 args = parser.parse_args()
 common = ['--offline', '--config', 'profile.dev.debug=0', '--config', 'profile.test.debug=0',
           '--config', 'profile.dev.incremental=false', '--config', 'profile.test.incremental=false',
@@ -21,12 +21,16 @@ commands = {
                      '--features', 'positive-miner-rocksdb'],
     'default-off': ['cargo', 'test', '-p', 'misaka-palw-remote', '--lib', '--no-default-features'],
     'client-check': ['cargo', 'check', '-p', 'kaspad', '--lib', '--no-default-features', '--features', 'positive-miner-client'],
+    'journal-contract': ['cargo', 'test', '-p', 'misaka-palw-positive-contract', '--test', 'case_journal'],
 }
 paths = [ROOT / x for x in ['Cargo.lock', 'Cargo.toml', 'consensus/core/Cargo.toml', 'consensus/core/src/lib.rs',
     'consensus/core/src/palw_state_v2.rs', 'consensus/core/src/palw_positive_rows_v2.rs',
     'consensus/core/tests/positive_source_v2.rs', 'kaspad/Cargo.toml', 'kaspad/src/lib.rs',
     'kaspad/src/palw_positive_miner_source_v2.rs', 'misaka/palw/remote/Cargo.toml',
-    'misaka/palw/remote/tests/positive_native_source_v2.rs']]
+    'misaka/palw/remote/tests/positive_native_source_v2.rs',
+    'misaka/palw/positive-contract/tests/case_journal.rs',
+    'docs/design/palw/positive-court/case-journal-vectors-r1.json']]
+paths.append(HERE / 'run_validation.py')
 paths += list((ROOT / 'consensus/core/src').glob('palw_positive_source*.rs'))
 paths += list((ROOT / 'consensus/core/src/palw_positive_source_geometry_v2').glob('*.rs'))
 paths += list((ROOT / 'misaka/palw/remote/src').glob('positive_miner_v2*.rs'))

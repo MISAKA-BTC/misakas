@@ -7,6 +7,7 @@ use kaspa_consensus_core::palw_positive_source_v2::{
 };
 use misaka_palw_positive_contract::{
     identity::{FundingScopeId, PUBKEY_BYTES, PlanId, REQUEST_SIGN_CONTEXT, RequestId, ResultId, SIGNATURE_BYTES, principal},
+    journal::{CaseJournalEventKind, CaseJournalHeader, CaseJournalLimits, CaseJournalRecord, CaseJournalRecordView},
     messages::{AggregateBudget, CheckProfile, ClaimStatus, CoverageDescriptor, MinerDataStatus, MinerServiceContract, WitnessStatus},
     rows::{AcceptedMaterial, AcceptedOrigin, AggregateUsage, CaseRow, NativeHash64},
 };
@@ -1117,4 +1118,349 @@ fn independent_distinct_request_id_with_a_fully_overlapping_range_remains_meanin
     assert_eq!(ledger.history_events().len(), 2);
     assert_eq!(ledger.request(b.id()).unwrap().material, context.requests[2].material);
     assert_eq!(ledger.source_union(b.kind, b.source).unwrap().union, context.requests[2].material);
+}
+
+fn common_journal_codec_limits() -> CaseJournalLimits {
+    CaseJournalLimits {
+        max_record_bytes: 16384,
+        max_payload_bytes: 8192,
+        max_aux_entries: 4,
+        max_aux_preimage_bytes: 8192,
+        max_total_preimage_bytes: 8192,
+        max_logical_heap_bytes: 16384,
+    }
+}
+/// Codec DTO only. Sequence 1's actual admission and accepted-chain inclusion
+/// are deliberately not represented as verified authority in this fixture.
+fn source_common_record(f: &Fixture, material: AcceptedMaterial, body: &[u8], sequence: u64) -> CaseJournalRecord {
+    CaseJournalRecord {
+        header: CaseJournalHeader {
+            version: CONTRACT_VERSION,
+            revision: CONTRACT_REVISION,
+            scope: f.result.scope,
+            case: f.result.case_id(),
+            result: f.result.id(),
+            sequence,
+            previous: if sequence == 1 { d(0) } else { d(245) },
+            origin: material.origin,
+            kind: CaseJournalEventKind::NativeBody,
+        },
+        payload: body.to_vec(),
+        aux: vec![],
+    }
+}
+fn mutate_source_common_record(record: &mut CaseJournalRecord, attack: u8, other_operation: u8) {
+    match attack {
+        0 => record.header.scope.network = d(246),
+        1 => record.header.scope.branch = d(246),
+        2 => record.header.scope.ruleset = d(246),
+        3 => record.header.case.0 = d(247),
+        4 => record.header.result = ResultId(d(248)),
+        5 => record.header.origin.accepting_block = NativeHash64([249; 64]),
+        6 => record.header.origin.carrier_block = NativeHash64([249; 64]),
+        7 => record.header.origin.carrier_transaction = NativeHash64([249; 64]),
+        8 => record.header.origin.accepted_tx_ordinal += 1,
+        9 => record.header.origin.event_ordinal += 1,
+        10 => record.header.origin.accepted_daa += 1,
+        11 => record.header.origin.accepted_blue_score += 1,
+        12 => *record.payload.last_mut().unwrap() ^= 1,
+        13 => record.payload[4] = other_operation,
+        14 => record.header.kind = CaseJournalEventKind::NativeTransaction,
+        15 => {
+            record.header.sequence = 1;
+            record.header.previous = d(0);
+        }
+        _ => {
+            record.payload.pop();
+        }
+    }
+}
+
+#[test]
+fn independent_common_journal_bridge_binds_real_request_and_g14_response_but_is_not_native_authority() {
+    let (f, values, geometry, mut ledger, mut context) = ledger_fixture(service_budget());
+    ledger.bind_case(&current_case_fixture(&ledger)).unwrap();
+    let request = f.request(SourceKind::ArtifactInventory, 0, 1);
+    context.add_request(request, 71);
+    let literal = &context.requests[0];
+    let record = source_common_record(&f, literal.material, &literal.body, 2);
+    let bytes = record.encode(common_journal_codec_limits()).unwrap();
+    let view = CaseJournalRecordView::decode(&bytes, common_journal_codec_limits()).unwrap();
+    assert_ne!(view.history().digest, literal.material.digest);
+    let update = ledger.prepare_journal_request_v2(&geometry, &context, view, literal.event()).unwrap();
+    assert!(update.changes_case());
+    assert_eq!(ledger.usage().rounds, 0, "preparation must not apply its proposed state");
+    assert_eq!(ledger.history_events().len(), 0);
+    ledger.apply(update).unwrap();
+    let raw = borsh::to_vec(&open_artifact_leaf_v1(&values, 0).unwrap()).unwrap();
+    context.add_response(request, f.result.miner, &raw);
+    let literal = &context.responses[0];
+    let mut record = source_common_record(&f, literal.material, &literal.body, 3);
+    record.header.previous = view.head();
+    let bytes = record.encode(common_journal_codec_limits()).unwrap();
+    let view = CaseJournalRecordView::decode(&bytes, common_journal_codec_limits()).unwrap();
+    let update = ledger.prepare_journal_response_v2(&geometry, &context, view, literal.event()).unwrap();
+    assert!(update.changes_case());
+    assert_eq!(update.receipt().unwrap().duty, context.requests[0].material);
+    assert_eq!(update.receipt().unwrap().response, literal.material);
+    assert_eq!(update.receipt().unwrap().bytes, 4);
+    assert_eq!(update.fee_intent().unwrap().amount, 3);
+    assert!(ledger.receipt(request.kind, request.source, 0).is_none());
+    ledger.apply(update).unwrap();
+    assert_eq!(ledger.status(request.kind, request.source, 0), MinerDataStatus::Complete);
+    assert_eq!(ledger.usage().fee, 3);
+}
+
+#[test]
+fn independent_common_journal_request_requires_a_bound_case_and_rejects_all_record_identity_substitutions() {
+    let (f, _, geometry, mut ledger, mut context) = ledger_fixture(service_budget());
+    let request = f.request(SourceKind::ArtifactInventory, 0, 1);
+    context.add_request(request, 71);
+    let literal = &context.requests[0];
+    let good = source_common_record(&f, literal.material, &literal.body, 2);
+    let bytes = good.encode(common_journal_codec_limits()).unwrap();
+    let view = CaseJournalRecordView::decode(&bytes, common_journal_codec_limits()).unwrap();
+    let error = ledger.prepare_journal_request_v2(&geometry, &context, view, literal.event()).err().unwrap();
+    assert_eq!(error, SourceErrorV2::MissingPort(SourceMissingPortV2::CanonicalHistory));
+    ledger.bind_case(&current_case_fixture(&ledger)).unwrap();
+    let sentinel = ledger.prepare_request(&geometry, &context, literal.event()).unwrap();
+    let before = usage_tuple(&ledger);
+    for attack in 0..17 {
+        let mut record = good.clone();
+        mutate_source_common_record(&mut record, attack, 4);
+        let bytes = record.encode(common_journal_codec_limits()).unwrap();
+        let view = CaseJournalRecordView::decode(&bytes, common_journal_codec_limits()).unwrap();
+        assert!(
+            ledger.prepare_journal_request_v2(&geometry, &context, view, literal.event()).is_err(),
+            "request record attack {attack}"
+        );
+        assert_eq!(usage_tuple(&ledger), before);
+        assert_eq!(ledger.history_events().len(), 0);
+        assert!(ledger.request(request.id()).is_none());
+        ledger.validate_prepared(&sentinel).unwrap();
+    }
+}
+
+#[test]
+fn independent_common_journal_response_rejects_record_substitutions_without_receipt_fee_or_revision_changes() {
+    let (f, values, geometry, mut ledger, mut context) = ledger_fixture(service_budget());
+    ledger.bind_case(&current_case_fixture(&ledger)).unwrap();
+    let request = f.request(SourceKind::ArtifactInventory, 0, 1);
+    context.add_request(request, 71);
+    let update = ledger.prepare_request(&geometry, &context, context.requests[0].event()).unwrap();
+    ledger.apply(update).unwrap();
+    let raw = borsh::to_vec(&open_artifact_leaf_v1(&values, 0).unwrap()).unwrap();
+    context.add_response(request, f.result.miner, &raw);
+    let literal = &context.responses[0];
+    let good = source_common_record(&f, literal.material, &literal.body, 3);
+    let sentinel = ledger.prepare_response(&geometry, &context, literal.event()).unwrap();
+    let before = usage_tuple(&ledger);
+    for attack in 0..17 {
+        let mut record = good.clone();
+        mutate_source_common_record(&mut record, attack, 3);
+        let bytes = record.encode(common_journal_codec_limits()).unwrap();
+        let view = CaseJournalRecordView::decode(&bytes, common_journal_codec_limits()).unwrap();
+        assert!(
+            ledger.prepare_journal_response_v2(&geometry, &context, view, literal.event()).is_err(),
+            "response record attack {attack}"
+        );
+        assert_eq!(usage_tuple(&ledger), before);
+        assert_eq!(ledger.history_events().len(), 1);
+        assert!(ledger.receipt(request.kind, request.source, 0).is_none());
+        ledger.validate_prepared(&sentinel).unwrap();
+    }
+}
+
+#[test]
+fn independent_common_journal_history_or_head_digest_never_replaces_source_carrier_material() {
+    let (f, values, geometry, mut ledger, mut context) = ledger_fixture(service_budget());
+    ledger.bind_case(&current_case_fixture(&ledger)).unwrap();
+    let request = f.request(SourceKind::ArtifactInventory, 0, 1);
+    context.add_request(request, 71);
+    let literal = &context.requests[0];
+    let record = source_common_record(&f, literal.material, &literal.body, 2);
+    let bytes = record.encode(common_journal_codec_limits()).unwrap();
+    let view = CaseJournalRecordView::decode(&bytes, common_journal_codec_limits()).unwrap();
+    for material in [view.history(), AcceptedMaterial { origin: view.header().origin, digest: view.head() }] {
+        let mut event = literal.event();
+        event.material = material;
+        assert!(ledger.prepare_journal_request_v2(&geometry, &context, view, event).is_err());
+        assert_eq!(ledger.history_events().len(), 0);
+    }
+    let update = ledger.prepare_journal_request_v2(&geometry, &context, view, literal.event()).unwrap();
+    ledger.apply(update).unwrap();
+    let raw = borsh::to_vec(&open_artifact_leaf_v1(&values, 0).unwrap()).unwrap();
+    context.add_response(request, f.result.miner, &raw);
+    let literal = &context.responses[0];
+    let record = source_common_record(&f, literal.material, &literal.body, 3);
+    let bytes = record.encode(common_journal_codec_limits()).unwrap();
+    let view = CaseJournalRecordView::decode(&bytes, common_journal_codec_limits()).unwrap();
+    let before = usage_tuple(&ledger);
+    for material in [view.history(), AcceptedMaterial { origin: view.header().origin, digest: view.head() }] {
+        let mut event = literal.event();
+        event.material = material;
+        assert!(ledger.prepare_journal_response_v2(&geometry, &context, view, event).is_err());
+        assert_eq!(usage_tuple(&ledger), before);
+        assert!(ledger.receipt(request.kind, request.source, 0).is_none());
+    }
+}
+
+#[test]
+fn independent_common_journal_rejects_logical_request_and_unit_noops_without_mutating_case_or_revision() {
+    let (f, values, geometry, mut ledger, mut context) = ledger_fixture(service_budget());
+    ledger.bind_case(&current_case_fixture(&ledger)).unwrap();
+    let request = f.request(SourceKind::ArtifactInventory, 0, 1);
+    context.add_request(request, 71);
+    let literal = &context.requests[0];
+    let record = source_common_record(&f, literal.material, &literal.body, 2);
+    let bytes = record.encode(common_journal_codec_limits()).unwrap();
+    let view = CaseJournalRecordView::decode(&bytes, common_journal_codec_limits()).unwrap();
+    let update = ledger.prepare_journal_request_v2(&geometry, &context, view, literal.event()).unwrap();
+    ledger.apply(update).unwrap();
+    assert_eq!(ledger.prepare_journal_request_v2(&geometry, &context, view, literal.event()).err(), Some(SourceErrorV2::History));
+    context.add_request(request, 72);
+    let literal = &context.requests[1];
+    let record = source_common_record(&f, literal.material, &literal.body, 3);
+    let bytes = record.encode(common_journal_codec_limits()).unwrap();
+    let view = CaseJournalRecordView::decode(&bytes, common_journal_codec_limits()).unwrap();
+    let before = usage_tuple(&ledger);
+    assert!(!ledger.prepare_request(&geometry, &context, literal.event()).unwrap().changes_case());
+    assert_eq!(ledger.prepare_journal_request_v2(&geometry, &context, view, literal.event()).err(), Some(SourceErrorV2::History));
+    assert_eq!(usage_tuple(&ledger), before);
+    assert_eq!(ledger.history_events().len(), 1);
+    context.missing = Some(SourceMissingPortV2::DrawnRole);
+    assert_eq!(
+        ledger.prepare_journal_request_v2(&geometry, &context, view, context.requests[1].event()).err(),
+        Some(SourceErrorV2::MissingPort(SourceMissingPortV2::DrawnRole))
+    );
+    context.missing = None;
+    let raw = borsh::to_vec(&open_artifact_leaf_v1(&values, 0).unwrap()).unwrap();
+    context.add_response(request, f.result.miner, &raw);
+    let literal = &context.responses[0];
+    let record = source_common_record(&f, literal.material, &literal.body, 3);
+    let bytes = record.encode(common_journal_codec_limits()).unwrap();
+    let view = CaseJournalRecordView::decode(&bytes, common_journal_codec_limits()).unwrap();
+    let update = ledger.prepare_journal_response_v2(&geometry, &context, view, literal.event()).unwrap();
+    ledger.apply(update).unwrap();
+    assert_eq!(ledger.prepare_journal_response_v2(&geometry, &context, view, literal.event()).err(), Some(SourceErrorV2::History));
+    let receipt = *ledger.receipt(request.kind, request.source, 0).unwrap();
+    context.add_response(request, f.result.miner, &raw);
+    context.mark_last_response_noop();
+    let later = f.request(SourceKind::ArtifactInventory, 1, 2);
+    context.add_request(later, 73);
+    let sentinel = ledger.prepare_request(&geometry, &context, context.requests.last().unwrap().event()).unwrap();
+    let literal = &context.responses[1];
+    let record = source_common_record(&f, literal.material, &literal.body, 4);
+    let bytes = record.encode(common_journal_codec_limits()).unwrap();
+    let view = CaseJournalRecordView::decode(&bytes, common_journal_codec_limits()).unwrap();
+    let before = usage_tuple(&ledger);
+    assert!(!ledger.prepare_response(&geometry, &context, literal.event()).unwrap().changes_case());
+    assert_eq!(ledger.prepare_journal_response_v2(&geometry, &context, view, literal.event()).err(), Some(SourceErrorV2::History));
+    assert_eq!(usage_tuple(&ledger), before);
+    assert_eq!(ledger.history_events().len(), 2);
+    assert_eq!(ledger.receipt(request.kind, request.source, 0), Some(&receipt));
+    ledger.validate_prepared(&sentinel).unwrap();
+}
+
+#[test]
+fn independent_common_journal_framing_does_not_replace_any_required_native_context_port() {
+    let (f, values, geometry, mut ledger, mut context) = ledger_fixture(service_budget());
+    ledger.bind_case(&current_case_fixture(&ledger)).unwrap();
+    let request = f.request(SourceKind::ArtifactInventory, 0, 1);
+    context.add_request(request, 71);
+    let literal = &context.requests[0];
+    let record = source_common_record(&f, literal.material, &literal.body, 2);
+    let bytes = record.encode(common_journal_codec_limits()).unwrap();
+    let view = CaseJournalRecordView::decode(&bytes, common_journal_codec_limits()).unwrap();
+    let sentinel = ledger.prepare_request(&geometry, &context, literal.event()).unwrap();
+    let ports = [
+        SourceMissingPortV2::AcceptedHistory,
+        SourceMissingPortV2::CanonicalHistory,
+        SourceMissingPortV2::DrawnRole,
+        SourceMissingPortV2::LiveFunding,
+        SourceMissingPortV2::Reservation,
+        SourceMissingPortV2::FeeSchedule,
+        SourceMissingPortV2::NativeApply,
+    ];
+    for port in ports {
+        context.missing = Some(port);
+        assert_eq!(
+            ledger.prepare_journal_request_v2(&geometry, &context, view, context.requests[0].event()).err(),
+            Some(SourceErrorV2::MissingPort(port))
+        );
+        assert_eq!(ledger.history_events().len(), 0);
+        ledger.validate_prepared(&sentinel).unwrap();
+    }
+    context.missing = None;
+    let update = ledger.prepare_journal_request_v2(&geometry, &context, view, context.requests[0].event()).unwrap();
+    ledger.apply(update).unwrap();
+    let raw = borsh::to_vec(&open_artifact_leaf_v1(&values, 0).unwrap()).unwrap();
+    context.add_response(request, f.result.miner, &raw);
+    let literal = &context.responses[0];
+    let record = source_common_record(&f, literal.material, &literal.body, 3);
+    let bytes = record.encode(common_journal_codec_limits()).unwrap();
+    let view = CaseJournalRecordView::decode(&bytes, common_journal_codec_limits()).unwrap();
+    let sentinel = ledger.prepare_response(&geometry, &context, literal.event()).unwrap();
+    let before = usage_tuple(&ledger);
+    for port in ports {
+        context.missing = Some(port);
+        assert_eq!(
+            ledger.prepare_journal_response_v2(&geometry, &context, view, context.responses[0].event()).err(),
+            Some(SourceErrorV2::MissingPort(port))
+        );
+        assert_eq!(usage_tuple(&ledger), before);
+        assert!(ledger.receipt(request.kind, request.source, 0).is_none());
+        ledger.validate_prepared(&sentinel).unwrap();
+    }
+}
+
+#[test]
+fn independent_common_journal_full_body_equality_does_not_bypass_request_signature_or_g14_authentication() {
+    let (f, _, geometry, mut ledger, mut context) = ledger_fixture(service_budget());
+    ledger.bind_case(&current_case_fixture(&ledger)).unwrap();
+    context.add_request(f.request(SourceKind::ArtifactInventory, 0, 1), 71);
+    let literal = &mut context.requests[0];
+    literal.signature[0] ^= 1;
+    let offset = literal.body.len() - SIGNATURE_BYTES;
+    literal.body[offset] ^= 1;
+    let record = source_common_record(&f, literal.material, &literal.body, 2);
+    let bytes = record.encode(common_journal_codec_limits()).unwrap();
+    let view = CaseJournalRecordView::decode(&bytes, common_journal_codec_limits()).unwrap();
+    assert!(ledger.prepare_journal_request_v2(&geometry, &context, view, context.requests[0].event()).is_err());
+    assert_eq!(usage_tuple(&ledger), (0, 0, 0, 0, 0, 0, 0));
+    assert_eq!(ledger.history_events().len(), 0);
+
+    for attack in 0..5 {
+        let (f, values, geometry, mut ledger, mut context) = ledger_fixture(service_budget());
+        ledger.bind_case(&current_case_fixture(&ledger)).unwrap();
+        let request = f.request(SourceKind::ArtifactInventory, 0, 1);
+        context.add_request(request, 71);
+        let update = ledger.prepare_request(&geometry, &context, context.requests[0].event()).unwrap();
+        ledger.apply(update).unwrap();
+        let mut raw = borsh::to_vec(&open_artifact_leaf_v1(&values, 0).unwrap()).unwrap();
+        if attack == 0 {
+            raw[22] ^= 1;
+        }
+        let provider = if attack == 1 { PrincipalId(d(244)) } else { f.result.miner };
+        context.add_response(request, provider, &raw);
+        if attack == 2 {
+            context.fee.funding_scope = FundingScopeId(d(244));
+        }
+        let literal = &context.responses[0];
+        let record = source_common_record(&f, literal.material, &literal.body, 3);
+        let bytes = record.encode(common_journal_codec_limits()).unwrap();
+        let view = CaseJournalRecordView::decode(&bytes, common_journal_codec_limits()).unwrap();
+        let mut event = literal.event();
+        if attack == 3 {
+            event.g14_data_range.0 += 1;
+        }
+        if attack == 4 {
+            event.request = RequestId(d(244));
+        }
+        let before = usage_tuple(&ledger);
+        assert!(ledger.prepare_journal_response_v2(&geometry, &context, view, event).is_err(), "authenticated-body attack {attack}");
+        assert_eq!(usage_tuple(&ledger), before);
+        assert_eq!(ledger.history_events().len(), 1);
+        assert!(ledger.receipt(request.kind, request.source, 0).is_none());
+    }
 }
