@@ -1,0 +1,27 @@
+    Checking misaka-palw-tir v1.1.0 (/Users/wata/.codex/worktrees/a3-panel-positive-court/MISAKA-testnet/misaka/palw/tir/core)
+    Checking misaka-palw-kernel v1.1.0 (/Users/wata/.codex/worktrees/a3-panel-positive-court/MISAKA-testnet/misaka/palw/kernel)
+    Checking misaka-palw-tir-artifact v1.1.0 (/Users/wata/.codex/worktrees/a3-panel-positive-court/MISAKA-testnet/misaka/palw/tir/artifact)
+    Checking kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/a3-panel-positive-court/MISAKA-testnet/consensus/core)
+    Checking misaka-palw-tir-exec v1.1.0 (/Users/wata/.codex/worktrees/a3-panel-positive-court/MISAKA-testnet/misaka/palw/tir/exec)
+error[E0277]: `?` couldn't convert the error to `String`
+   --> misaka/palw/tir/exec/src/node/run_wide_q24_v2.rs:210:68
+    |
+210 |         let payload = self.space.maximum_leaf_payload_bytes_v2(ctx)?;
+    |                                  ----------------------------------^ the trait `From<PalwTirStepError>` is not implemented for `String`
+    |                                  |
+    |                                  this can't be annotated with `?` because it has type `Result<_, PalwTirStepError>`
+    |
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+    = help: the following other types implement trait `From<T>`:
+              `String` implements `From<&String>`
+              `String` implements `From<&js_sys::JsString>`
+              `String` implements `From<&kaspa_addresses::Address>`
+              `String` implements `From<&mut str>`
+              `String` implements `From<&str>`
+              `String` implements `From<&workflow_core::runtime::Runtime>`
+              `String` implements `From<Box<str>>`
+              `String` implements `From<Cow<'_, str>>`
+            and 5 others
+
+For more information about this error, try `rustc --explain E0277`.
+error: could not compile `misaka-palw-tir-exec` (lib) due to 1 previous error
