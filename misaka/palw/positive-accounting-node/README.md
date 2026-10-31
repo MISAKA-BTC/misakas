@@ -45,6 +45,9 @@ core bundleの失敗時だけread-only probeで欠落/破損componentを特定�
 認証済みResultと現在のadmitted bindingに対して、scope/result/output/dependencies、A0のselector、
 `coverage_plan_id(... exact_derivation_id(), mandatory_relations)`、全数を照合する。
 Mismatchは信用にならず、現在のGate C・fraud・満期・責任・資金・全祖先はleafの同一predicateでさらに確認する。
+その共通必要条件に加え、`authorize_entitlement(binding, usage)` をtrusted rooted viewへ委譲する。
+実A1 terminalとP承認が揃っても、paid契約にないDagWeight/WorkReceipt/Rule E等の権利は生まれない。
+rootは要求用途、祖先はDependencyの既存権利を確認し、port欠落は全用途を拒否する。
 全7用途の具体入口はleaf `CreditConsumers`。既存native readerの新Positive armはまだ存在しないため、その接続済みとは宣言しない。
 `validate_scope` は各claimの固定ancestry anchorを現在viewで検証する。親子のanchorが異なっても同じ有効lineageなら進め、
 親originだけがreorgで消えた場合はその子孫をholdする。現在tipへ署名scopeを塗り替えない。

@@ -10,6 +10,7 @@ use misaka_palw_positive_accounting::credit::{CheckedCoverage, CreditBinding, Cr
 use misaka_palw_positive_contract::{
     identity::{ChainScope, ClaimId},
     messages::{AuthenticatedResult, CheckProfile, ClaimStatus, coverage_plan_id},
+    ports::CreditUse,
     tir::{exact_derivation_id, greedy_selector_id},
 };
 use misaka_palw_tir_exec::node::{positive_check::CheckOutcome, positive_contract::CheckedTerminal};
@@ -114,6 +115,10 @@ impl<S: RootedCreditView> RootedCreditView for TirCreditView<'_, S> {
 
     fn validate_scope(&self, binding: &CreditBinding) -> Result<(), CreditDenial> {
         self.rooted.validate_scope(binding)
+    }
+
+    fn authorize_entitlement(&self, binding: &CreditBinding, usage: CreditUse) -> Result<(), CreditDenial> {
+        self.rooted.authorize_entitlement(binding, usage)
     }
 
     fn checked_coverage(&self, claim: ClaimId) -> Result<CheckedCoverage, CreditDenial> {

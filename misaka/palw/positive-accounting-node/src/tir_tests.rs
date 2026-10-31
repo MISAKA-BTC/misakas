@@ -358,6 +358,12 @@ pub fn job(
 struct State {
     scope: Cell<ChainScope>,
     facts: Cell<RootedCreditFacts>,
+    entitlements: Cell<FixtureEntitlements>,
+}
+#[derive(Clone, Copy)]
+enum FixtureEntitlements {
+    All,
+    Only(&'static [CreditUse]),
 }
 impl RootedCreditView for State {
     fn scope(&self) -> ChainScope {
@@ -372,6 +378,16 @@ impl RootedCreditView for State {
         // The real A4 adapter must authenticate the result's dependency digest.
         Ok(&[])
     }
+    fn authorize_entitlement(&self, binding: &CreditBinding, usage: CreditUse) -> Result<(), CreditDenial> {
+        if self.claim(binding.claim)?.binding != *binding {
+            return Err(CreditDenial::Binding(binding.claim));
+        }
+        match self.entitlements.get() {
+            FixtureEntitlements::All => Ok(()),
+            FixtureEntitlements::Only(uses) if uses.contains(&usage) => Ok(()),
+            FixtureEntitlements::Only(_) => Err(CreditDenial::Entitlement { claim: binding.claim, usage }),
+        }
+    }
 }
 fn economic_fixture(result: &MinerResultCommit, descriptor: CoverageDescriptor) -> State {
     let binding = CreditBinding {
@@ -384,6 +400,7 @@ fn economic_fixture(result: &MinerResultCommit, descriptor: CoverageDescriptor) 
     };
     State {
         scope: Cell::new(result.scope),
+        entitlements: Cell::new(FixtureEntitlements::All),
         facts: Cell::new(RootedCreditFacts {
             binding,
             plan: descriptor.plan,
@@ -454,6 +471,75 @@ fn actual_a1_checked_terminal_reaches_all_consumers_only_with_all_existing_condi
     facts.fraud = FraudState::AcceptedPending;
     state.facts.set(facts);
     denied_all(&view, result.claim_id(), CreditDenial::Fraud(result.claim_id()));
+}
+
+#[test]
+fn checked_terminal_delegates_existing_rights_without_promoting_settlement_to_other_uses() {
+    let f = fixture();
+    let result = f.correct_result();
+    let (descriptor, terminal) = complete(&f, &result);
+    let state = economic_fixture(&result, descriptor);
+    state.entitlements.set(FixtureEntitlements::Only(&[CreditUse::Settlement]));
+    let mut view = TirCreditView::new(&state, 1).unwrap();
+    let key = miner_key();
+    let signature = sign_result(&result);
+    view.record_checked(&result.authenticate(&key, &signature).unwrap(), terminal).unwrap();
+    assert_eq!(view.recorded_terminals(), 1);
+    assert!(view.checked_coverage(result.claim_id()).is_ok());
+    for usage in ALL_CREDIT_USES {
+        let expected = state.authorize_entitlement(&state.facts.get().binding, usage);
+        assert_eq!(view.authorize_entitlement(&state.facts.get().binding, usage), expected);
+        assert_eq!(gate(&view).authorize(&result.claim_id(), usage).err(), expected.err());
+    }
+    let g = gate(&view);
+    let uses = CreditConsumers::new(&g);
+    assert_eq!(uses.dag_weight(&result.claim_id(), 17), 0);
+    assert_eq!(uses.rule_e_capital(&result.claim_id(), 19), 0);
+    assert!(uses.work_receipt(&result.claim_id()).is_err());
+    assert!(uses.settlement(&result.claim_id()).is_ok());
+    // Changes in the current rooted entitlement cannot be hidden by the saved
+    // terminal or a previously successful settlement authorization.
+    state.entitlements.set(FixtureEntitlements::Only(&[]));
+    for usage in ALL_CREDIT_USES {
+        assert_eq!(
+            gate(&view).authorize(&result.claim_id(), usage).err(),
+            Some(CreditDenial::Entitlement { claim: result.claim_id(), usage })
+        );
+    }
+}
+
+struct MissingEntitlement<'a>(&'a State);
+impl RootedCreditView for MissingEntitlement<'_> {
+    fn scope(&self) -> ChainScope {
+        self.0.scope()
+    }
+    fn claim(&self, claim: ClaimId) -> Result<RootedCreditFacts, CreditDenial> {
+        self.0.claim(claim)
+    }
+    fn checked_dependencies(&self, claim: ClaimId) -> Result<&[CreditBinding], CreditDenial> {
+        self.0.checked_dependencies(claim)
+    }
+    // Deliberately no authorize_entitlement: exercise the closed trait default.
+}
+
+#[test]
+fn checked_terminal_cannot_replace_a_missing_rooted_entitlement_port() {
+    let f = fixture();
+    let result = f.correct_result();
+    let (descriptor, terminal) = complete(&f, &result);
+    let state = economic_fixture(&result, descriptor);
+    let missing = MissingEntitlement(&state);
+    let mut view = TirCreditView::new(&missing, 1).unwrap();
+    let key = miner_key();
+    let signature = sign_result(&result);
+    view.record_checked(&result.authenticate(&key, &signature).unwrap(), terminal).unwrap();
+    assert!(view.checked_coverage(result.claim_id()).is_ok());
+    let gate = PositiveCreditGate::new(&view, CreditLimits { max_claims: 10, max_edges: 10 }).unwrap();
+    for usage in ALL_CREDIT_USES {
+        let denied = CreditDenial::Entitlement { claim: result.claim_id(), usage };
+        assert_eq!(view.authorize_entitlement(&state.facts.get().binding, usage), Err(denied));
+        assert_eq!(gate.authorize(&result.claim_id(), usage).err(), Some(denied));
+    }
 }
 
 #[test]
