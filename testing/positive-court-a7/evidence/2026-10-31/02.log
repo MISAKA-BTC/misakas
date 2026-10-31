@@ -1,0 +1,59 @@
+   Compiling misaka-palw-tir-exec v1.1.0 (/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/misaka/palw/tir/exec)
+    Finished `test` profile [unoptimized] target(s) in 2.33s
+     Running tests/capture_codec.rs (target/debug/deps/capture_codec-0db80e275ff6d1da)
+
+running 4 tests
+test framed_capture_preserves_dense_fold_and_false_value_wire_bytes ... ok
+test every_capture_vector_refuses_a_truncated_hostile_length_before_allocation ... ok
+test framed_capture_keeps_strict_eof_and_refuses_truncated_frames ... ok
+test nested_empty_rows_cannot_amplify_beyond_the_real_consumer_reservation ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/court.rs (target/debug/deps/court-6a2c22709b1152c1)
+
+running 7 tests
+test one_position_replay_does_not_allocate_for_a_100k_position_job ... ok
+test replay_work_is_shared_across_all_source_requests_until_the_next_builder_move ... ok
+test replay_storage_and_position_caps_refuse_before_replaying_and_preserve_every_model_leaf ... ok
+test bounded_cone_builders_match_canonical_and_refuse_at_the_whole_move_boundary ... ok
+test the_step_tree_opens_as_the_consensus_tree ... ok
+test the_inventory_tree_opens_as_the_consensus_inventory has been running for over 60 seconds
+test the_node_builds_what_the_court_acquits_and_convicts has been running for over 60 seconds
+test the_node_builds_what_the_court_acquits_and_convicts ... ok
+test the_inventory_tree_opens_as_the_consensus_inventory ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 199.23s
+
+     Running tests/node_leg.rs (target/debug/deps/node_leg-3ec39b965e4ee003)
+
+running 3 tests
+test a_mapped_container_runs_like_the_params_it_holds ... ok
+test the_node_leg_equals_the_reference_through_the_consensus_builder ... ok
+test a_run_resumed_at_any_checkpoint_continues_leaf_for_leaf ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.63s
+
+     Running tests/positive_court_roles.rs (target/debug/deps/positive_court_roles-1119ba3139482082)
+
+running 7 tests
+test capture_limit_and_input_substitution_fail_before_replay ... ok
+test ordinary_miner_panel_replay_and_cold_node_pass ... ok
+test explicit_i64_q24_output_and_cold_node_pass ... ok
+test only_checked_terminal_difference_refutes_miner ... ok
+test missing_last_step_cannot_pass_or_gain_credit ... ok
+test bad_panel_never_convicts_the_correct_miner ... ok
+test altered_losing_logit_lane_rejects_panel_evidence ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.23s
+
+     Running tests/wide_q24.rs (target/debug/deps/wide_q24-a4cb3027b64c5dc3)
+
+running 4 tests
+test sampling_retains_units_extremes_and_legacy_answers ... ok
+test wide_is_only_final_logits_under_its_explicit_scheme ... ok
+test ipc_v2_preserves_eight_byte_logits_and_rejects_old_decoder ... ok
+test helper_negotiates_v2_and_mirrors_large_logits_without_narrowing ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

@@ -1,0 +1,147 @@
+{
+  "activation_allowed": false,
+  "native_network_e2e": false,
+  "profile": "4x4-embedding-3-decode-i32",
+  "real_llm_measurement": false,
+  "reports": [
+    {
+      "detail": {
+        "generated": [
+          2,
+          0,
+          0
+        ],
+        "inference_seconds": 0.000487042
+      },
+      "elapsed_seconds": 0.002107625,
+      "pid": 30244,
+      "role": "baseline",
+      "usage": {
+        "peak_rss_bytes": 9994240,
+        "system_cpu_seconds": 0.003203,
+        "user_cpu_seconds": 0.002401
+      }
+    },
+    {
+      "detail": {
+        "note": "includes private artifact-index/setup cost; no Panel capture or witness builder in this branch",
+        "result_commit_bytes": 8545
+      },
+      "elapsed_seconds": 0.023838542,
+      "pid": 30245,
+      "role": "miner",
+      "usage": {
+        "peak_rss_bytes": 11337728,
+        "system_cpu_seconds": 0.002426,
+        "user_cpu_seconds": 0.024949
+      }
+    },
+    {
+      "detail": {
+        "artifact_root": "8265752fdea94a94a83c7c41c8a9ab2540df5e55b7b2f7b8c100b780105157c4524b11bee67f03b99b1a13f3cad4648217d7f658c64c8ca8d022542d611500c4",
+        "class_id": "da907698fd1e0dcdb987af991a8b6d92dd2aa9c44478a552fdc5555b4a3471a6882a2b11ddeff131addafabff91f6a102f9aabef377f58c00bdf0f4d0e3514e5",
+        "evidence_bytes": 24588,
+        "input_root": "35f0d2bd9172a3387fc7c1800051751e0fbc582bb45be938af5378a673ef1cd9e76fcf85debfd6c3fdddc4131d39fffd3e164ce3aa682f4b228d248a9fa9a98b",
+        "leaves": 9,
+        "output_root": "967d5d062c69a94bd925f57dfeb40b12ee5dc15d3d20a3dad85bc5863e09a346d48ebc2ed0b3cf47952368e54a3f4f860cc8a3aa823bd10b5ea7a99f900ecf95",
+        "policy_id": "d57e24b8374bcea95dee7e72870081e50cd72f4e4023e310195e8f0ff25760d6b0205081175f3937580204a720d706c1c7f09abdd41ba5cb0abac52793102792",
+        "ruleset": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000300000000000000"
+      },
+      "elapsed_seconds": 0.049139042,
+      "pid": 30246,
+      "role": "panel",
+      "usage": {
+        "peak_rss_bytes": 12091392,
+        "system_cpu_seconds": 0.002351,
+        "user_cpu_seconds": 0.050659
+      }
+    },
+    {
+      "detail": {
+        "charged_bytes": 24588,
+        "cursor": 9,
+        "native_credit": false,
+        "node_input": "registered class, signed commitments, evidence only",
+        "status": "Passed"
+      },
+      "elapsed_seconds": 0.016609917,
+      "pid": 30247,
+      "role": "node",
+      "usage": {
+        "peak_rss_bytes": 9895936,
+        "system_cpu_seconds": 0.001986,
+        "user_cpu_seconds": 0.018641
+      }
+    },
+    {
+      "detail": {
+        "charged_bytes": 10349,
+        "cursor": 4,
+        "native_credit": false,
+        "node_input": "registered class, signed commitments, evidence only",
+        "status": "Checking"
+      },
+      "elapsed_seconds": 0.030891958,
+      "pid": 30248,
+      "role": "prefix",
+      "usage": {
+        "peak_rss_bytes": 9945088,
+        "system_cpu_seconds": 0.002103,
+        "user_cpu_seconds": 0.032661
+      }
+    },
+    {
+      "detail": {
+        "charged_bytes": 24588,
+        "cursor": 9,
+        "native_credit": false,
+        "node_input": "registered class, signed commitments, evidence only",
+        "status": "Passed"
+      },
+      "elapsed_seconds": 0.016683666,
+      "pid": 30249,
+      "role": "restart",
+      "usage": {
+        "peak_rss_bytes": 9994240,
+        "system_cpu_seconds": 0.00185,
+        "user_cpu_seconds": 0.018839
+      }
+    },
+    {
+      "detail": {
+        "charged_bytes": 24588,
+        "cursor": 9,
+        "native_credit": false,
+        "node_input": "registered class, signed commitments, evidence only",
+        "status": "Refuted"
+      },
+      "elapsed_seconds": 0.016481375,
+      "pid": 30250,
+      "role": "node-refute",
+      "usage": {
+        "peak_rss_bytes": 9928704,
+        "system_cpu_seconds": 0.001893,
+        "user_cpu_seconds": 0.018773
+      }
+    },
+    {
+      "detail": {
+        "charged_bytes": 2042,
+        "cursor": 0,
+        "native_credit": false,
+        "node_input": "registered class, signed commitments, evidence only",
+        "status": "Checking"
+      },
+      "elapsed_seconds": 0.015247709,
+      "pid": 30251,
+      "role": "node-reject",
+      "usage": {
+        "peak_rss_bytes": 9535488,
+        "system_cpu_seconds": 0.001681,
+        "user_cpu_seconds": 0.017477
+      }
+    }
+  ],
+  "schema": "positive-court-a7-toy-process-v1",
+  "source_case": "warm Panel; no Miner requests"
+}
