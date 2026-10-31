@@ -1,8 +1,9 @@
 # t12 分岐の調査とノード復旧 — 2026-10-31
 
-本記録は公開 testnet-12 の運用調査。合意規則・パラメーター・モデル係数を変更しない。
+本記録は公開 testnet-12 の運用調査。本件のノード局所修正は合意規則・パラメーター・モデル係数を変更しない。
 `SecurityCertified`、claim ごとの検証者認証、court の要件も変更しない。
 別作業の全モデル G14 移行の実装・有効化・配備判断とは区別する。
+実機配備には、その別作業の移行版に本件修正を含めた統合バイナリを使用する（下記）。
 
 ## 確認した原因
 
@@ -65,9 +66,24 @@ Block/BlockLocator 返信 queue から分離する。従来は 10 秒の summary
   通常の連続再起動が partial DB・元 DB・report を変更せず hold を再開し、confirmed 後は解除すること、
   破損・不整合 report は拒否すること、元 DB がない fresh sync でも hold を保つことを確認。
 - 実行ログ: [P2P](route-tests.log)、[EVM 型検査](flow-check.log)、[再同期](resync-tests.log)。
-- 先行配備版は live `2ca68baee` に今回の4ファイルだけを適用した
-  `f7d1998f043d8fc6c82a8683e02dc134aa6ae1e9` を5.104でビルド中。
-  合意 core の変更は含めない。修正版の live 配備・再同期完了は作業中。
+- 先行ビルドは live `2ca68baee` に今回の4ファイルだけを適用した
+  `f7d1998f043d8fc6c82a8683e02dc134aa6ae1e9`。合意 core の変更は含めない。
+  別担当の統合版が先に完成したため、先行ビルドと待機 probe は停止した。
+  この停止をビルド成功・Linux probe 成功と扱わない。
+- 実配備に選んだ統合版は `8cac52ec4ed15fb4ea982d46235a5c3b5f78e4cc`、
+  SHA-256 `e6d638a4f2a9fa32b6072c32ad5ce929f015efa189b721ceee2be5a9aa52e83e`。
+  別担当の全モデル移行（DAA 18,640）も含むため、旧 live と params/schedule ID は異なる。
+  [build manifest](deployed-build-manifest.json) に全 ID と features/profile を記録した。
+- 統合版の Linux 隔離2起動試験は **PASS**。
+  初回は `--palw-verified-resync`、2回目は通常起動で、pending report の byte 一致、
+  partial DB sentinel、aside 数、hold 再開ログを確認。両回の params/schedule/genesis と
+  DAA 0・unsynced が一致し、両回とも `Kaspad has stopped` / clean stop を確認した。
+  [結果](linux-resume-probe.json)、[ログ](linux-resume-probe.log)。末尾の stop 警告は、
+  正常停止後に GC 済みの transient unit を cleanup でもう一度 stop したもの。
+- 21:21 JST 時点で b0 の launcher は統合版への SHA・全 flags・always-on duties 検査を通過し、
+  native hold 再開を使用する準備が完了。b0 はまだ停止中で、新しい ID の95・b3を待つ。
+  モデル移行担当との調整で `--palw-produce` のみ一時除去し、旧5席 claim の新規生成を止める。
+  bond/key・relay・検証者 duties は保持し、producer 再開は移行版での別担当作業とする。
 
 19:51 JST 時点では b0 は停止中。95 の offline backup を復元先に配置し、
 元の分岐 DB と fresh sync の partial DB を両方保持している。
