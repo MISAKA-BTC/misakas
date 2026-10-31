@@ -1,0 +1,46 @@
+[
+  {
+    "name": "tests",
+    "command": [
+      "cargo",
+      "test",
+      "-p",
+      "misaka-palw-tir-exec",
+      "--features",
+      "positive-contract",
+      "--test",
+      "positive_expanded_plan",
+      "--test",
+      "positive_full_relation",
+      "--offline",
+      "--config",
+      "profile.dev.package.kaspa-consensus-core.opt-level=0"
+    ],
+    "exit_code": 0,
+    "log": "/tmp/misaka-a1-canonical-tokenizer-tests-2026-11-01.log"
+  },
+  {
+    "name": "clippy",
+    "command": [
+      "cargo",
+      "clippy",
+      "-p",
+      "misaka-palw-tir-exec",
+      "--features",
+      "positive-contract",
+      "--test",
+      "positive_expanded_plan",
+      "--test",
+      "positive_full_relation",
+      "--no-deps",
+      "--offline",
+      "--config",
+      "profile.dev.package.kaspa-consensus-core.opt-level=0",
+      "--",
+      "-D",
+      "warnings"
+    ],
+    "exit_code": 0,
+    "log": "/tmp/misaka-a1-canonical-tokenizer-clippy-2026-11-01.log"
+  }
+]
