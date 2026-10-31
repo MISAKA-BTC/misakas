@@ -10,7 +10,7 @@
 
 ## A0に残る実装
 
-- adopted schemeと最終post logitsだけのi64 commitを識別するstructural foundation。
+- `50339b43a`でadopted schemeと最終post logitsだけのi64 commitを識別するstructural foundationを統合。独立static review後、新7件と既存golden3件・golden_v2の11件、対象Clippyが成功した。[source/原log](../../../evidence/positive-court-a0-2026-10-31/integration/wide-structural-and-goldens-20261101.json)、[レビュー/Clippy](../../../evidence/positive-court-a0-2026-10-31/integration/wide-structural-review-and-clippy-20261101.json)。native admissionの既存scheme whitelistは変更していない。
 - 8-byte step leaf、別domainのtrace/opening、型幅を保持する実行・capture・cell・sampling・court・資料費用の選択統合と旧経路回帰。
 - 登録programから解決したoutput profileをcanonical contextへ反映する明示API。旧`PalwTirJobFactsV1`のserialized layoutや`tiled_logits` booleanへ幅を混入させない。
 - A1の全範囲検査とA3の一回のPanel再計算・証拠生成への接続。現FullRelation経路の最終logitsはi32限定で、i64をcastして受理しない。

@@ -68,3 +68,10 @@ A6のnative journal caller-batch保存とactual accepted-data readerを`6e25d763
 
 
 `79c3f9bca`のconsensus library型検査は**exit0、全対象source不変**。[commands/env/source/result](../../../evidence/positive-court-a0-2026-10-31/integration/native-journal-data-typecheck-20261101.json)、[原log](../../../evidence/positive-court-a0-2026-10-31/integration/native-journal-data-typecheck-20261101.log)。A6のnative store/reader、A1のborrow APIとA2のlint修正を含む。これはlibrary型検査であり、同候補のnative unit実行・actual受理/精算・restart/IBDの合格ではない。A7へ同sourceの独立回帰を依頼した。
+
+
+## 採択済みwide Q24のstructural foundation
+
+`50339b43a`のTIR sourceで新structural7件・既存golden3件・golden_v2の11件、計**21件PASS**、対象Clippy `-D warnings`成功。全対象sourceは前後不変。[commands/source/result](../../../evidence/positive-court-a0-2026-10-31/integration/wide-structural-and-goldens-20261101.json)、[原log](../../../evidence/positive-court-a0-2026-10-31/integration/wide-structural-and-goldens-20261101.log)、[独立レビューとClippy](../../../evidence/positive-court-a0-2026-10-31/integration/wide-structural-review-and-clippy-20261101.json)。exact schemeと最終post I64 commitだけを構造認識し、他のI64 commit・state・carry・非最終logitsを拒否する。新codec・実LLM・native受理・広幅Courtの試験ではない。旧i32の単なるencode/decode roundtripをpre/post goldenの独立証拠と呼ばず、既存の固定golden targetを別に実行した。
+
+採択本文・元checkoutでの登録実験原資料も取り込んだが、[統合境界](WIDE-Q24-INTEGRATION.md)のとおり外部実験の成功をA0のPositive Court完成実績へ加算しない。元evidence manifest73件のfile hashを照合し、原ログ・digest・実測値を維持している。
