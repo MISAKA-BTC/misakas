@@ -1,0 +1,53 @@
+{
+  "scope": "Only Root-owned superseded rebuildable Rust intermediate libraries; preserve raw evidence, test/SDK executables and every other target/cache",
+  "active_builds": false,
+  "before_free_bytes": 2006630400,
+  "removed": [
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libkaspa_consensus_core-e6494b85b43e13bc.rlib",
+      "bytes": 366459960,
+      "sha256": "980c02b2045226917d5dc1dc2bde57dac3341041e3565f0584da748b579eeb88"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libkaspa_consensus_core-e6494b85b43e13bc.rmeta",
+      "bytes": 118823834,
+      "sha256": "f17a607feec86c0686d7997e37c913fe9c31bd70e02045a818cab77e7a5e07a7"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libkaspa_consensus_core-7d49d5e2770caf69.rlib",
+      "bytes": 366667952,
+      "sha256": "8c4b36c06e09735c0390c343dffe34beb3c7f1db4e5e38634417c1875a683d41"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libkaspa_consensus_core-7d49d5e2770caf69.rmeta",
+      "bytes": 118828201,
+      "sha256": "9991bcf322df29ed96210afbb4b504c21e9e78e79f69b2d3a98ab1d2a5954bc6"
+    }
+  ],
+  "protected_before": [
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/kaspa_consensus_core-5b3fb8e6accaaca6",
+      "bytes": 237515536,
+      "sha256": "398e140442ff09af0f845d7b80163aab66574ae0ba4677d30c1369c88953c4cb"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/runtime_pack-066d0b88b30f6893",
+      "bytes": 177603680,
+      "sha256": "bd0712abe66d232d9bd520a26319cbb61e03777ca63fb3f85c7395d88314202b"
+    }
+  ],
+  "after_free_bytes": 2977517568,
+  "protected_after": [
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/kaspa_consensus_core-5b3fb8e6accaaca6",
+      "bytes": 237515536,
+      "sha256": "398e140442ff09af0f845d7b80163aab66574ae0ba4677d30c1369c88953c4cb"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/runtime_pack-066d0b88b30f6893",
+      "bytes": 177603680,
+      "sha256": "bd0712abe66d232d9bd520a26319cbb61e03777ca63fb3f85c7395d88314202b"
+    }
+  ],
+  "protected_unchanged": true
+}
