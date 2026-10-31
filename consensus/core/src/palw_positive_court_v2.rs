@@ -225,6 +225,13 @@ impl ExactCaseV2 {
             return Err(ErrorV2::UnsupportedProfile);
         }
         let verified = verify_tir_binding_v1(&witness.binding, policy.max_leaves).map_err(|_| ErrorV2::Binding)?;
+        // This isolated legacy prototype implements only the existing i32
+        // logits profile. Wider traces are explicitly unsupported here; they
+        // must not acquire r1 acceptance through unrelated work-in-progress APIs.
+        let program = &verified.space.program;
+        if program.blocks[program.schedule.post as usize].nodes[program.logits as usize].out.dtype != misaka_palw_tir::DType::I32 {
+            return Err(ErrorV2::UnsupportedProfile);
+        }
         let n = witness.binding.step_leaf_count;
         if n == 0
             || n.checked_mul(policy.max_elements_per_leaf).filter(|x| *x <= policy.max_total_elements).is_none()
@@ -388,27 +395,16 @@ impl ExactCaseV2 {
                     &self.rules,
                 )
             }
-            PalwTirTraceEventDisclosureV1::WideQ24V2 { event, .. } => {
-                if event.generated != self.witness.generated {
-                    return Err(ErrorV2::PanelEvidence);
-                }
-                check_tir_logits_consistency_wide_q24_v2(&c.binding, &c.output_opening, &c.output_preimage, event, &self.rules)
-            }
             _ => return Err(ErrorV2::UnsupportedProfile),
         };
         exact_ok(verdict)?;
-        let wide = p.wide_logits_q24();
-        let width = if wide { 8 } else { 4 };
+        let width = 4;
         if c.output_preimage.values_le.len() != leaf.value_count as usize * width {
             return Err(ErrorV2::PanelEvidence);
         }
         // Compare every lane, in order; greedy ties select the first lane.
         for bytes in c.output_preimage.values_le.chunks_exact(width) {
-            let value = if wide {
-                i64::from_le_bytes(bytes.try_into().map_err(|_| ErrorV2::Wire)?) as i128
-            } else {
-                i32::from_le_bytes(bytes.try_into().map_err(|_| ErrorV2::Wire)?) as i128
-            };
+            let value = i32::from_le_bytes(bytes.try_into().map_err(|_| ErrorV2::Wire)?) as i128;
             if self.best.is_none_or(|(best, _)| value > best) {
                 self.best = Some((value, self.lane as u32));
             }
