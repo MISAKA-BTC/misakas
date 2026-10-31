@@ -4,6 +4,7 @@
 pub mod certification;
 pub mod funding;
 pub mod identity;
+pub mod journal;
 pub mod messages;
 pub mod native;
 pub mod ports;
