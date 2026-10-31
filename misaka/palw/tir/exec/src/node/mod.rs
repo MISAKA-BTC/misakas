@@ -9,6 +9,7 @@ pub mod artifact;
 pub mod backend;
 mod capture_codec;
 pub mod cell;
+pub mod cell_ipc_v2;
 pub mod conformance;
 mod copies;
 pub mod cost;
