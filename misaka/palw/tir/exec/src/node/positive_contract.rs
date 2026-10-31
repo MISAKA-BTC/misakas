@@ -3,6 +3,8 @@
 //! calling this adapter. Signatures here authenticate authors, not native
 //! admission, drawn membership, funding, deadlines or computation truth.
 
+pub mod record;
+
 use super::positive_check::{CheckError, CheckLimits, CheckOutcome, CheckProgress, CoveragePlan, ExactChecker};
 use kaspa_consensus_core::{
     Hash64, palw_attempt_rules_v1::palw_attempt_output_root_v1, palw_decode_select_v2::PalwDecodeSamplingV2,
@@ -69,6 +71,10 @@ pub struct PreparedCheck {
     descriptor: CoverageDescriptor,
     form: PalwPromptIdsFormV1,
     limits: CheckLimits,
+    // Exact independently resolved metadata, retained for primitive record
+    // reconstruction. These are not decoded from an evidence carrier.
+    native_class: PalwTirClassV1,
+    native_job: PalwJobContextV2,
 }
 impl PreparedCheck {
     /// Native inputs must be resolved independently of the candidate. The
@@ -130,7 +136,7 @@ impl PreparedCheck {
             reserved_terms: cost.evaluation_terms,
             max_part_bytes: limits.max_part_bytes,
         };
-        Ok(Self { result, plan, descriptor, form, limits })
+        Ok(Self { result, plan, descriptor, form, limits, native_class: registered.clone(), native_job: job.clone() })
     }
     pub fn descriptor(&self) -> CoverageDescriptor {
         self.descriptor
