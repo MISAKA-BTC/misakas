@@ -230,6 +230,12 @@ pub fn palw_tir_class_record_v1(
     artifact_root: &Hash64,
 ) -> misaka_palw_tir::TirResult<(PalwTirClassRecordV1, TirProgramV1)> {
     let program = class.decode_program()?;
+    if program.wide_logits_q24() {
+        return Err(misaka_palw_tir::TirError::new(
+            misaka_palw_tir::TirErrorKind::NormalForm,
+            "wide Q24 class records require an explicit v2 record factory, not legacy job facts",
+        ));
+    }
     let class_id = class.class_id(artifact_root);
     let post = &program.blocks[program.schedule.post as usize];
     let logits_vocab = post.nodes[program.logits as usize].out.elements_at(1);

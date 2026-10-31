@@ -73,6 +73,15 @@ fn layout_err<T>(msg: impl Into<String>) -> Result<T, PalwTirStepError> {
     Err(PalwTirStepError::Layout(msg.into()))
 }
 
+/// This geometry and its leaves are the legacy four-byte family. Recognizing
+/// the wide program structurally never authorizes reinterpretation here.
+fn require_legacy_step_width_v1(program: &TirProgramV1) -> Result<(), PalwTirStepError> {
+    if program.wide_logits_q24() {
+        return layout_err("wide Q24 requires an explicit v2 step space; legacy step leaves are four-byte lanes");
+    }
+    Ok(())
+}
+
 #[derive(Clone, Debug)]
 struct CommitNodeV1 {
     node: u16,
@@ -276,12 +285,14 @@ impl PalwTirStepSpaceV1 {
     /// Decode the class's program, validate it and check the layout against it.
     pub fn new(class: &PalwTirClassV1) -> Result<Self, PalwTirStepError> {
         let program = class.decode_program().map_err(|e| PalwTirStepError::Program(e.to_string()))?;
+        require_legacy_step_width_v1(&program)?;
         let info = misaka_palw_tir::validate::validate(&program).map_err(|e| PalwTirStepError::Program(e.to_string()))?;
         Self::from_program(program, info, class.layout.clone())
     }
 
     /// [`Self::new`] over an already-validated program.
     pub fn from_program(program: TirProgramV1, info: ProgramInfo, layout: PalwTirLayoutV1) -> Result<Self, PalwTirStepError> {
+        require_legacy_step_width_v1(&program)?;
         if layout.version != PALW_TIR_LAYOUT_VERSION_V1 {
             return layout_err(format!("layout version {} is not {PALW_TIR_LAYOUT_VERSION_V1}", layout.version));
         }
