@@ -1,0 +1,11 @@
+# A3 — preparation for the fixed A2 source service
+
+Required A2 source pair: `1b8e4e5c98469e0a723a3fc62794c976dcf6b756` → `fd9d4c5d7a07efb791a82bb6b9717a4ff657136b`. The immutable parent relationship and exact ProcessLimitsV2/PreparationMeterV2 declarations were inspected. A0's final independent acceptance is pending; neither A2 commit has been imported into this A3 branch.
+
+The reviewable [fixture patch](A3-r1-evidence/a2-status-followup/fixture.patch) prepares both ProcessLimitsV2 literals with finite `max_status_checks: 64`. A private fixture duty can report canonical Complete independently from Panel cache import/ACK. Actual requery returns zero prepared units, increments status_checks by `request.end - request.first`, leaves ALL other PreparationMeterV2 fields unchanged, performs no provider reads and retains identical cached data. The original `assert_eq!(responder.meter(), meter)` across cache import is preserved; foreign-source refusal also asserts zero status checks.
+
+To avoid importing unaccepted A2 source or leaving the old API checkout with unresolved field references, the prepared change is packaged as a patch. The original source file is restored. After A0 accepts/integrates the required A2 pair, apply this patch with `git apply handoff/positive-court/A3-r1-evidence/a2-status-followup/fixture.patch` and execute the source integration test on the resulting same candidate when build resources permit.
+
+Lightweight verification: exact immutable API-field matching for both literals, rustfmt syntax/format check, source diff whitespace check and clean patch applicability passed. [Metadata and hashes](A3-r1-evidence/a2-status-followup/api-preparation.json) explicitly record **PREPARED_NOT_INTEGRATION_TESTED**. No build was run for this preparation, respecting the host disk/SDK-build restriction. Existing logs retain their narrower scope: `a1-a3-exec.log` covers the accepted A1 729 adapter (local cherry `f870b9da4`, 33 tests); `preflight-completed-fixture.log` covers the Complete fixture under the old A2 API (6 tests), before the new status field/assertion. Neither is proof of the final fixed-A2 candidate.
+
+No A3 production adapter, native activation, service tree, payment authority or success stub was changed.
