@@ -24,6 +24,7 @@ pub type NativeStateCarriageV1 = NativeRetainedV1<crate::palw_state_v2::PalwStat
 mod generated;
 mod inventory;
 mod kernel_ledger;
+pub(crate) mod positive_rows;
 mod kernel_material;
 mod kernel_salted;
 mod kernel_segment_assembly;

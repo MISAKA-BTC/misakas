@@ -101,6 +101,14 @@ pub(crate) fn native_restore_consistency_requests_v1(c: &PalwStateCarriageV2) ->
         let heap = row.native_heap_v1("restore cloned vesting row");
         q.add_v1(heap.bytes().ok_or(heap)?)?;
     }
+    if let Some(route) = &c.kernel_route {
+        let count =
+            route.aux.keys().filter(|(table, _)| *table == misaka_palw_positive_contract::native::KERNEL_AUX_TABLE).count() as u64;
+        let bytes = count
+            .checked_mul(super::positive_rows::positive_aux_row_memory_bytes_v1())
+            .ok_or_else(|| NativeCoverageV1::overflow::<PalwStateCarriageV2>("Positive aux151 restore workspace"))?;
+        q.add_v1(bytes)?;
+    }
     Ok(q.bytes_v1())
 }
 

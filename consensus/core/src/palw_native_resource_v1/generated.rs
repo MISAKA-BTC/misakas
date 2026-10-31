@@ -263,7 +263,7 @@ native_enum!(misaka_palw_kernel::route::SaltedCommitV1; Claim { claim, evidence,
 native_struct!(crate::palw_material_capacity_v1::PalwMaterialManifestV1; root, scopes);
 native_struct!(misaka_palw_kernel::merkle::TensorOpeningV1; dtype, shape, axis, index, values, siblings, other_root);
 native_struct!(misaka_palw_kernel::merkle3::LeafOpeningV3; dtype, shape, axis, line, tile, values, siblings, other_root);
-native_struct!(crate::palw_kernel_route_v1::PalwKernelRouteStateV1; header, rows, aux, ledger_cache);
+// PalwKernelRouteStateV1: manual field-exhaustive visitor in positive_rows.rs adds aux151 fixed DTO/workspace.
 native_struct!(crate::palw_step_refute::PalwExecutionStepRefutationV1; binding, output_opening, output_preimage, inputs, prompt_token_ids, decode_tokens, kv_checkpoint);
 native_struct!(crate::palw_step_refute::memory_v2::PalwGdnCheckpointWitnessV2; leaf, opening, chunks);
 native_struct!(crate::palw_reader_router_v2::PalwReaderRouterDeclarationV2; version, class_id, artifact_root, bindings);
