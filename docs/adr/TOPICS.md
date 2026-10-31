@@ -184,6 +184,7 @@
 - [ADR-0177 — Model-bond coinbase allocation without model-availability consensus](0177-model-bond-allocation-without-availability-consensus.md)
 - [ADR-0179 — モデル階層: genesis・年次フォーク 1.0、登録モデル 0.3](0179-model-tiers-genesis-annual-1-0-registered-0-3.md)
 - [ADR-0191 — TIR court: dispute-local decomposition for long-context claims (Proposed)](0191-tir-dispute-local-decomposition-long-context.md)
+- [ADR-0210 — 全モデルの新規 producer claim を G14 の 1 席経路へ移す](0210-all-model-g14-panel-one.md)
 
 ## Operations / interfaces / recovery
 

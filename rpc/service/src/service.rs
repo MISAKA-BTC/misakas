@@ -2473,7 +2473,18 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         // ADR-0131 Decision 1: the census the chain holds, and each class's compute from the graph it
         // registered (the carriage) or, for a genesis class that carried none, from this build.
         let seat_count = match &self.config.params.palw_consensus_mode {
-            kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => bundle.panel.seat_count(),
+            kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => {
+                if self
+                    .config
+                    .params
+                    .palw_model_panel_one_v1_fence()
+                    .is_some_and(|f| f.is_active(self.consensus_manager.consensus().unguarded_session().get_virtual_daa_score()))
+                {
+                    1
+                } else {
+                    bundle.panel.seat_count()
+                }
+            }
             _ => 0,
         };
         let session = self.consensus_manager.consensus().unguarded_session();

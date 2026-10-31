@@ -47,3 +47,4 @@
 | RFC-0039 | [通常 verifier の fee consent と provider の有限支払・保持契約](0039-finite-fee-consent-and-provider-payment-bounds.md) | 原文と後続改定を参照 |
 | RFC-0040 | [再利用 prefix の生成元を署名済み work identity で拘束する](0040-authenticated-prefix-work-dependencies.md) | 原文と後続改定を参照 |
 | RFC-0041 | [genesis bond を廃止し、公開の BASE 回復経路から立ち上げる](0041-genesis-bond-free-bootstrap.md) | 原文と後続改定を参照 |
+| RFC-0042 | [全モデルの producer を G14 Panel=1 に統一する](0042-all-model-g14-panel-one.md) | 原文と後続改定を参照 |

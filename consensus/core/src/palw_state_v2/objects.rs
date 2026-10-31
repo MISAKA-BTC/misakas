@@ -2167,6 +2167,9 @@ fn apply_object_inner(
             }
         }
         PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor, seats } => {
+            if builder.state.claims.get(claim_id).is_some_and(|c| builder.params.model_panel_one_governs_v1(c.accepted_daa)) {
+                return Err(PalwStateV2Error::CarriageInconsistent("G14 model panels are assigned by the post-commit fold".into()));
+            }
             if seats.is_empty() {
                 return Err(PalwStateV2Error::EmptyPanel);
             }

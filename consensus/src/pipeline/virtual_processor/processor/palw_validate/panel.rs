@@ -510,6 +510,9 @@ impl VirtualStateProcessor {
                 }
             }
             Obj::OptimisticLicensed { claim, receipts } => {
+                if state.claim(&*claim).is_some_and(|c| state_params.model_panel_one_governs_v1(c.accepted_daa)) {
+                    return Err("G14 model claims require a full-scope single-seat receipt".into());
+                }
                 if !self.palw_verification_s2_at(point.daa_score) {
                     return Err(format!("claim {claim}: an optimistic licence below Verification S2's fence (ADR-0133)"));
                 }
@@ -550,6 +553,9 @@ impl VirtualStateProcessor {
                 }
             }
             Obj::TirShardReceiptLicensed { part } => {
+                if state.claim(&part.claim).is_some_and(|c| state_params.model_panel_one_governs_v1(c.accepted_daa)) {
+                    return Err("G14 model claims require a full-scope single-seat receipt".into());
+                }
                 if !self.palw_tir_shard_at(point.daa_score) {
                     return Err(format!("claim {}: layer-sharded panels are not armed on this network (RFC-0006)", part.claim));
                 }
@@ -567,6 +573,9 @@ impl VirtualStateProcessor {
                 .map_err(|e| format!("claim {} shard {}: the part does not license its shard: {e}", part.claim, part.shard))?;
             }
             Obj::ShardReceiptLicensed { part } => {
+                if state.claim(&part.claim).is_some_and(|c| state_params.model_panel_one_governs_v1(c.accepted_daa)) {
+                    return Err("G14 model claims require a full-scope single-seat receipt".into());
+                }
                 if !self.palw_shard_licensing_at(point.daa_score) {
                     return Err(format!("claim {}: per-shard licensing is not armed on this network (ADR-0100)", part.claim));
                 }

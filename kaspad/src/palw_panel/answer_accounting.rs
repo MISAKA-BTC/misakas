@@ -162,6 +162,7 @@ mod tests {
         let (wire, lease) = wire.into_parts_v1();
         let tx = Transaction::new(0, vec![], vec![], 0, SUBNETWORK_ID_PALW_FP_COMMITMENT, 0, wire);
         let duty = PalwSeatDutyV2 {
+            model_panel_one: false,
             accepted_block: h(1),
             claim_id: payload.claim_id(),
             class_id: job.class_id,

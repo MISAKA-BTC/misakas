@@ -776,6 +776,9 @@ pub fn palw_vertex_leaf_fate_v1(
         return Ignored("actual inclusion exceeds signed Panel service or pause budget");
     }
     let (Some(claim), Some(panel)) = (state.claim(claim_id), state.panel(claim_id)) else { return Ignored("no such claim or panel") };
+    if params.model_panel_one_governs_v1(claim.accepted_daa) {
+        return Ignored("the G14 model claim requires its whole-scope receipt");
+    }
     let Some(fence) = params.vertex_from_daa() else { return Ignored("the fence is not armed") };
     if panel.bound_daa < fence {
         return Ignored("the claim's panel bound before the fence: it licenses on the receipt path");
@@ -897,7 +900,8 @@ pub fn palw_vertex_claim_licenses_by_tally_v1(
     daa_score: u64,
     claim_id: &Hash64,
 ) -> bool {
-    params.vertex_active_at(daa_score)
+    !state.claim(claim_id).is_some_and(|claim| params.model_panel_one_governs_v1(claim.accepted_daa))
+        && params.vertex_active_at(daa_score)
         && params.vertex_from_daa().is_some_and(|fence| state.panel(claim_id).is_some_and(|panel| panel.bound_daa >= fence))
 }
 

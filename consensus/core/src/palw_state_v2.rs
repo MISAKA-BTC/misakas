@@ -142,6 +142,8 @@ mod palw_exec_v2_rewards_v1;
 mod palw_kernel_route_fold_v1;
 #[path = "palw_mesh_fold_v1.rs"]
 mod palw_mesh_fold_v1;
+#[path = "palw_model_panel_one_fold_v1.rs"]
+mod palw_model_panel_one_fold_v1;
 // G14 lane D phase 3: the onboarding objects' fold arms (artifact binding and refutation, kernel binding, conformance commitment).
 #[path = "palw_flat_model_vector_fold_v3.rs"]
 mod palw_flat_model_vector_fold_v3;
@@ -2054,6 +2056,9 @@ pub struct PalwStateParamsV2 {
     /// by `Params::sync_palw_g14_gates_v1`. `None` on every shipped preset (the interim 3-of-3).
     #[borsh(skip)]
     kernel_route_panel_one_from_daa: Option<u64>,
+    /// Claim-local all-model migration, mirrored from its separate fork identity.
+    #[borsh(skip)]
+    model_panel_one_from_daa: Option<u64>,
     /// **Lane F03k2: a TEST-ONLY external gain bound** for the Panel=1 class censorship relation. Fixtures only; `None` everywhere else,
     /// so the fold falls back to `palw_g14_values_v1` (typed-missing today).
     #[borsh(skip)]
@@ -3617,9 +3622,19 @@ pub fn palw_receipt_set_basis_k_v1(masks: &[crate::palw_verification_v2::PalwSeg
 /// door was recorded (past the fence), a recount of at least [`PALW_RCORE_FINAL_BASIS_K_V1`] — so an
 /// S2 licence keeps its replay charged. Below the fence `licence_door` is never written, so this is
 /// today's rule, `ReceiptLicensed`.
+/// The stored licence route fixes its basis across reload and reorg. A G14
+/// whole-claim approval is distinct from the historical optimistic S2 door.
+pub fn palw_rcore_required_basis_of_claim_v1(claim: &PalwClaimStateV2) -> u8 {
+    if claim.rcore.licence_door == Some(crate::palw_economic_safety_v1::PalwLicenceDoorTagV1::G14PanelOne) {
+        1
+    } else {
+        PALW_RCORE_FINAL_BASIS_K_V1
+    }
+}
+
 pub fn palw_rcore_counts_licensed_v1(claim: &PalwClaimStateV2) -> bool {
     matches!(claim.phase, PalwClaimPhaseV2::ReceiptLicensed { .. })
-        && (claim.rcore.licence_door.is_none() || claim.rcore.basis_k >= PALW_RCORE_FINAL_BASIS_K_V1)
+        && (claim.rcore.licence_door.is_none() || claim.rcore.basis_k >= palw_rcore_required_basis_of_claim_v1(claim))
 }
 
 /// **C7, the one conservative set** (ADR-0152 SR-5, post-edit 5): a class whose verification window
@@ -15340,6 +15355,7 @@ fn apply_palw_transition_v7_inner(
     //      block created under the V3 rule, in the order the chain accepted them; and the engine's journal. A no-op below
     //      `palw_permissionless_panel_v1`.
     palw_panel_v3_fold_v1::take_block_v1(&mut builder, parent, ctx)?;
+    palw_model_panel_one_fold_v1::bind_due_v1(&mut builder, ctx)?;
 
     // 4c. **ADR-0152 SW-8 / DL-1 (M4): a claim not bound in its anchor block is due `BindTimeout`
     //     AT that block.** Past `palw_rcore_plus` a panel binds only in its anchor block — the first
@@ -18307,6 +18323,9 @@ fn palw_void_claims_unbound_in_their_anchor_block_v1(
         .then(|| crate::palw_rfc0018_v1::palw_permissionless_contributions_from_state_v1(&builder.state, ctx.blue_score));
     for claim_id in palw_claims_provisional_past_their_anchor_slot_v1(&builder.state, reach, anchor_delay) {
         let claim = builder.state.claims.get(&claim_id).ok_or(PalwStateV2Error::MissingClaim(claim_id))?.clone();
+        if builder.params.model_panel_one_governs_v1(claim.accepted_daa) {
+            continue;
+        }
         if let Some(contributions) = permissionless.as_ref()
             && !crate::palw_rfc0018_v1::palw_permissionless_anchors_claim_v1(
                 contributions,

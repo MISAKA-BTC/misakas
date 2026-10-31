@@ -252,6 +252,9 @@ impl PalwFoldReadV1<'_> {
         executor: Option<&PalwBondKeyV2>,
         daa: u64,
     ) -> Result<(), PalwStateV2Error> {
+        if self.params.model_panel_one_governs_v1(daa) {
+            return Ok(());
+        }
         if !self.params.audit_1004_active_at(daa) || self.state.classes.get(class_id).is_none_or(|class| class.artifact_root == *root)
         {
             return Ok(());
@@ -311,6 +314,11 @@ impl PalwFoldReadV1<'_> {
         executor: &PalwBondKeyV2,
         daa: u64,
     ) -> Result<(), PalwStateV2Error> {
+        // Model possession is not a model admission review on the G14 route.
+        // The selected verifier must still execute and approve this particular claim.
+        if self.params.model_panel_one_governs_v1(daa) {
+            return Ok(());
+        }
         let root = root.filter(|_| self.params.audit_1004_active_at(daa));
         // RFC-0008 v2 (X8R): the composed run's test seam — empty in production (`test_admitted_class_v1`).
         if self.test_admitted_class_v1(class_id) {

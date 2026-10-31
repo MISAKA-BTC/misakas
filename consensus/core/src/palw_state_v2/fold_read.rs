@@ -498,7 +498,9 @@ impl PalwFoldReadV1<'_> {
     /// [`Self::rcore_lock`] before ADR-0160's AS-2 — today's L-1 price, which AS-2 re-prices (and
     /// AS-1's duty reads through AS-2, `palw_seat_duty_v2`).
     pub(super) fn rcore_lock_unreduced(&self, claim_id: &Hash64, claim: &PalwClaimStateV2, basis_k: u8) -> u128 {
-        palw_rcore_lock_v1(
+        crate::palw_model_panel_one_v1::model_claim_seat_lock_v1(
+            self.params.model_panel_one_from_daa(),
+            claim.accepted_daa,
             self.rcore_g_res(claim_id, claim),
             claim.escrowed_reward,
             self.rcore_buyback_bound(claim_id, claim),
@@ -587,6 +589,9 @@ impl PalwFoldReadV1<'_> {
         }
         let colluding = crate::palw_economic_safety_v1::palw_door_colluding_signers_v1(door);
         match door {
+            PalwLicenceDoorV1::G14PanelOne => {
+                PalwDoorLockPricesV1 { every: self.panel_valid_lock_required_for(claim, 1), load_bearing: None }
+            }
             PalwLicenceDoorV1::Quorum | PalwLicenceDoorV1::Coverage => PalwDoorLockPricesV1 { every, load_bearing: None },
             PalwLicenceDoorV1::Optimistic => {
                 let full_price = self.panel_valid_lock_required_for(claim, colluding);
@@ -632,7 +637,14 @@ impl PalwFoldReadV1<'_> {
         let g_res = crate::palw_panel_var_v1::palw_max_fraud_gain_v1(&facts).saturating_sub(u128::from(claim.escrowed_reward));
         // ADR-0160 AS-2 (lane liab): the supplementary set's price, re-priced as the licence's is.
         crate::palw_aggregate_liability_v1::palw_seat_lock_v2(
-            palw_rcore_lock_v1(g_res, claim.escrowed_reward, 0, basis_k),
+            crate::palw_model_panel_one_v1::model_claim_seat_lock_v1(
+                self.params.model_panel_one_from_daa(),
+                claim.accepted_daa,
+                g_res,
+                claim.escrowed_reward,
+                0,
+                basis_k,
+            ),
             crate::palw_audit_door_v1::palw_capacity_seat_step_v1(self.params, claim),
         )
     }
@@ -921,7 +933,9 @@ impl PalwFoldReadV1<'_> {
         // convictable by the kernel route, so an ONBOARDED class's claims get nothing beyond the old rules below — the registry
         // lifecycle, the Panel verify deadline and the Panel room are all asked (the Lead's GAP-81 decision: the new rewards are per
         // CLAIM verification route; only kernel-route claims earn them). Unarmed, exempt or onboarded: the rules below, byte for byte.
-        if let crate::palw_opv_bootstrap_v1::PalwRewardGateV1::Refused { code, why } = self.reward_gate_v1(class_id, now_daa) {
+        if !self.params.model_panel_one_governs_v1(now_daa)
+            && let crate::palw_opv_bootstrap_v1::PalwRewardGateV1::Refused { code, why } = self.reward_gate_v1(class_id, now_daa)
+        {
             return Err(PalwStateV2Error::ClassNotRewardable { class: *class_id, code, why });
         }
         // **G-01 option (b) (`palw_g14_route_required_v1`)**: past the fence a V2 Attempt — the legacy Panel route, whatever its class
@@ -978,6 +992,28 @@ impl PalwFoldReadV1<'_> {
                 code: crate::palw_cell_coverage_closure_v1::PALW_CELL_UNCOVERABLE_CODE_V1,
                 why: refusal.why().to_string(),
             });
+        }
+        // The all-model route admits a registered model without a model review,
+        // holder-count gate or lifecycle promotion. Claim resource ceilings and
+        // the existing per-bond budgets still bound each actual execution.
+        if self.params.model_panel_one_governs_v1(now_daa) {
+            let shape = match incoming {
+                PalwGatedClaimV1::Attempt => crate::palw_class_verify_deadline_v1::PalwClaimVerifyShapeV1::Attempt,
+                _ => crate::palw_class_verify_deadline_v1::PalwClaimVerifyShapeV1::FreePrompt { work_leaves: 0 },
+            };
+            self.check_class_verify_admits_v1(class_id, now_daa, shape, false)?;
+            if let Some(row) = self.state.model_lifecycles.get(class_id) {
+                let inflight = self.model_registry_inflight(class_id);
+                let whole = incoming.whole_claims(self.params.fp_quanta_per_canonical_job as u64);
+                if (inflight as u64).saturating_add(whole) > row.profile.max_inflight_claims as u64 {
+                    return Err(PalwStateV2Error::ClassInflightCapped {
+                        class: *class_id,
+                        inflight,
+                        cap: row.profile.max_inflight_claims,
+                    });
+                }
+            }
+            return Ok(());
         }
         // **RFC-0017 (`palw_model_eligibility_v1`, REQ-ELIG-1)**: past the fence, a class whose eligibility stage carries no
         // reward-bearing block right (`Registered`, `Lapsed`) takes no attempt and no free-prompt commitment — both lanes carry a
@@ -1418,6 +1454,11 @@ impl PalwFoldReadV1<'_> {
     /// [`crate::palw_verify_capacity_v1::palw_panel_capacity_v2`]. `None` where the share is no rule
     /// ([`Self::bond_class_share_v1`]'s conditions).
     pub(super) fn class_capacity_v1(&self, class_id: &Hash64, now_daa: u64) -> Option<u64> {
+        if self.params.model_panel_one_governs_v1(now_daa) {
+            return (*class_id != self.params.base_class_id())
+                .then(|| self.state.model_lifecycles.get(class_id).map(|r| u64::from(r.profile.max_inflight_claims)))
+                .flatten();
+        }
         if !self.params.rcore_plus_active_at(now_daa) {
             return None;
         }
@@ -1645,12 +1686,15 @@ impl PalwFoldReadV1<'_> {
         if !self.params.capacity_room_active_at(now_daa) || claim.class_id != base {
             return None;
         }
-        let seat_count = self
-            .extras
-            .model_registry
-            .as_ref()
-            .map(|fold| fold.globals.seat_count as u64)
-            .unwrap_or(crate::palw_verification_profile_v1::PALW_SEAT_COUNT_V1 as u64);
+        let seat_count = if self.params.model_panel_one_governs_v1(claim.accepted_daa) {
+            1
+        } else {
+            self.extras
+                .model_registry
+                .as_ref()
+                .map(|fold| fold.globals.seat_count as u64)
+                .unwrap_or(crate::palw_verification_profile_v1::PALW_SEAT_COUNT_V1 as u64)
+        };
         let eligibility = self.rcore_bind_prices(claim_id, claim, seat_count as usize, now_daa).eligibility;
         // Every seat keeps room for its own next claims before any is counted as a slot: the seats
         // are the network's anchors (past `palw_operator_anchor`, its only ones), and a seat whose
@@ -1763,6 +1807,9 @@ impl PalwFoldReadV1<'_> {
     /// clamp, [`Self::bond_class_share_for_v1`]); `None` where the share is no rule.
     pub(super) fn class_share_room_v1(&self, class_id: &Hash64, now_daa: u64) -> Option<u64> {
         let room = self.class_capacity_v1(class_id, now_daa)?;
+        if self.params.model_panel_one_governs_v1(now_daa) {
+            return Some(room);
+        }
         let rho = u64::from(crate::palw_weight_cap_v1::palw_capacity_rho_at_v1(self.params, now_daa));
         Some(match self.class_capacity_shipped_v1(class_id, now_daa) {
             Some(shipped) => room.min(rho.saturating_mul(shipped.div_ceil(2))),

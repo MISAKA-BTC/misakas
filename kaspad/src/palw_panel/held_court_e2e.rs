@@ -2827,6 +2827,7 @@ fn gc_duty_real_backend_fused_leaf_held_to_final_reproduces_and_certifies_and_a_
             job: Some(job.clone()),
             producer: Some(bond_key(1)),
             seat_duty: Some(kaspa_consensus_core::palw_producer_v2::PalwSeatDutyV2 {
+                model_panel_one: false,
                 accepted_block: h64(1),
                 claim_id: h64(7),
                 class_id: h64(2),

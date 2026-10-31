@@ -963,7 +963,7 @@ native_struct!(crate::palw_execution_quanta_v1::PalwExecQuantumV1; quantum_id, f
 native_enum!(crate::palw_model_registry_v1::PalwModelLifecycleV1; Registered, Prefetching, Probation { probes_passed }, ActiveLimited { stable_epochs }, Active, Held, Candidate, Capped { since_daa });
 native_struct!(crate::palw_model_registry_v1::PalwDerivedProfileV1; version, verification_window_spans, artifact_prefetch_spans, max_inflight_claims, required_ready_seats, registration_bond_sompi, admission_claims_per_span_milli);
 native_enum!(crate::palw_state_v2::PalwVoidReasonV2; BindTimeout, ReceiptTimeout, CourtFraud, ProducerWithholding, NoCapablePanel, UnavailableQuorum, NotReplayBacked, CourtDefault, CourtHeldVerdict, AggregateForfeit, PanelUnavailable, SealUnavailable, BeaconUnavailable, PermissionlessNoCapablePanel, WorkRootExpired, WorkSliceProvenFalse, WorkSliceDefaulted, PanelDaDisclosureDefault);
-native_enum!(crate::palw_economic_safety_v1::PalwLicenceDoorTagV1; Quorum, Coverage, Optimistic, ShardPart { quorum_per_shard });
+native_enum!(crate::palw_economic_safety_v1::PalwLicenceDoorTagV1; Quorum, Coverage, Optimistic, ShardPart { quorum_per_shard }, G14PanelOne);
 native_struct!(crate::palw_state_v2::PalwRewardWinnerV1; committed_daa, commitment, reporter, payload);
 native_enum!(crate::palw_da_rcore_v1::PalwDaStageV1; Live, Licensed, FinalRow);
 native_struct!(crate::palw_activation_pool_v1::PalwActivationCreditV1; operator, bond, claim);

@@ -829,6 +829,7 @@ impl Params {
         let liability = PalwG14GatedFenceV1::RewardLiabilityHorizonV1.armed(self).map(|f| f.daa_score());
         let outsider_lane = self.palw_court_outsider_lane_v1_fence().map(|f| f.daa_score());
         let panel_one = self.palw_kernel_route_panel_one_v1_fence().map(|f| f.daa_score());
+        let model_one = self.palw_model_panel_one_v1_fence().map(|f| f.daa_score());
         let court_clock = self.palw_court_clock_v2_fence().map(|f| f.daa_score());
         let panel_da_disclosure = self.palw_panel_da_disclosure_v1_fence().map(|f| f.daa_score());
         if let PalwConsensusMode::ConsensusV2(bundle) = &mut self.palw_consensus_mode {
@@ -839,6 +840,7 @@ impl Params {
                 .with_reward_liability_horizon_from_daa(liability)
                 .with_court_outsider_lane_from_daa(outsider_lane)
                 .with_kernel_route_panel_one_from_daa(panel_one)
+                .with_model_panel_one_from_daa(model_one)
                 .with_court_clock_v2_from_daa(court_clock)
                 .with_panel_da_disclosure_from_daa(panel_da_disclosure);
         }
@@ -1079,6 +1081,10 @@ pub fn palw_g14_fp_route_families_at_v1(
 /// once `palw_court_capacity_v1` is in force at the claim's acceptance. `fused` is `PalwClassStateV2::fused_attention`. This is the
 /// one the class gate asks; below option (b)'s fence `None`, byte for byte.
 pub fn palw_g14_route_attempt_refusal_for_class_v1(params: &PalwStateParamsV2, accepted_daa: u64, fused: bool) -> Option<String> {
+    if params.model_panel_one_governs_v1(accepted_daa) {
+        return palw_g14_route_attempt_refusal_v1(params, accepted_daa);
+    }
+
     if let Some(why) = palw_g14_route_attempt_refusal_v1(params, accepted_daa) {
         return Some(why);
     }
@@ -1099,6 +1105,15 @@ pub fn palw_g14_route_attempt_refusal_for_class_v1(params: &PalwStateParamsV2, a
 /// below the fence (or where no network arms it), or when the legacy Panel route's G14 route is armed; else `Some(why)`, refused at
 /// the claim gate with [`PALW_G14_ROUTE_ABSENT_CODE_V1`].
 pub fn palw_g14_route_attempt_refusal_v1(params: &PalwStateParamsV2, accepted_daa: u64) -> Option<String> {
+    if params.model_panel_one_governs_v1(accepted_daa) {
+        let ready = params.g14_route_required_v1().is_some_and(|m| {
+            m.governs(accepted_daa)
+                && m.route_armed(PalwG14RouteFamilyV1::KernelRoutePanelOne, accepted_daa, false)
+                && m.route_armed(PalwG14RouteFamilyV1::LegacyFusedLeaf, accepted_daa, false)
+        });
+        return (!ready).then(|| "G14 model single-seat route lacks its public court, held DA, capacity or Gate C dependency".into());
+    }
+
     let mirror = params.g14_route_required_v1()?;
     if !mirror.governs(accepted_daa) || mirror.route_armed(PalwG14RouteFamilyV1::LegacyPanelAttempt, accepted_daa, false) {
         return None;

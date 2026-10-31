@@ -115,6 +115,7 @@ fn bond(v: u64) -> PalwBondKeyV2 {
 /// A duty at `shard` of `s_l`, assigned `segments` of `s_p`; `outsider` seats attest the whole shard.
 fn duty(ir: &Ir, shard: u16, s_l: u16, s_p: u16, segments: PalwSegmentMaskV2, outsider: bool) -> PalwSeatDutyV2 {
     PalwSeatDutyV2 {
+        model_panel_one: false,
         accepted_block: Hash64::from_u64_word(0xB10C),
         claim_id: Hash64::from_u64_word(0xC1A1),
         class_id: ir.class_id,

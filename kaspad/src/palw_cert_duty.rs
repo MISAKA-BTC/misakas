@@ -464,6 +464,7 @@ pub(super) mod tests {
             0,
         ));
         kaspa_consensus_core::palw_producer_v2::PalwSeatDutyV2 {
+            model_panel_one: false,
             accepted_block: j.accepted_block,
             claim_id: Hash64::from_bytes([7; 64]),
             class_id: j.class_id,

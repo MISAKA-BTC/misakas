@@ -4106,7 +4106,14 @@ impl<'a> TransitionBuilder<'a> {
         let step = crate::palw_audit_door_v1::palw_capacity_seat_step_v1(self.params, claim);
         let lock_at = |basis_k: u8| {
             crate::palw_aggregate_liability_v1::palw_seat_lock_v2(
-                palw_rcore_lock_v1(g_res, claim.escrowed_reward, buyback, basis_k),
+                crate::palw_model_panel_one_v1::model_claim_seat_lock_v1(
+                    self.params.model_panel_one_from_daa(),
+                    claim.accepted_daa,
+                    g_res,
+                    claim.escrowed_reward,
+                    buyback,
+                    basis_k,
+                ),
                 step,
             )
         };
@@ -4137,14 +4144,27 @@ impl<'a> TransitionBuilder<'a> {
         carried: &[(crate::palw_panel_v2::PalwSeatReceiptV2, Option<crate::palw_verification_v2::PalwSegmentMaskV2>)],
         now_daa: u64,
     ) -> Result<(), PalwStateV2Error> {
+        let model_one = self.params.model_panel_one_governs_v1(claim.accepted_daa);
+        let door = if model_one {
+            if !matches!(door, PalwLicenceDoorV1::Quorum | PalwLicenceDoorV1::Coverage)
+                || carried.iter().any(|(_, mask)| mask.is_some_and(|m| m != crate::palw_verification_v2::PalwSegmentMaskV2::full(1)))
+            {
+                return Err(PalwStateV2Error::CarriageInconsistent("the G14 model route requires a whole-claim receipt".into()));
+            }
+            PalwLicenceDoorV1::G14PanelOne
+        } else {
+            door
+        };
         let all: Vec<crate::palw_panel_v2::PalwSeatReceiptV2> = carried.iter().map(|(receipt, _)| receipt.clone()).collect();
-        palw_licence_names_its_outsider_v1(
-            &self.state,
-            &claim_id,
-            claim,
-            &palw_seat_verdicts_of_v2(&all),
-            self.extras.admission_independence_daa,
-        )?;
+        if !model_one {
+            palw_licence_names_its_outsider_v1(
+                &self.state,
+                &claim_id,
+                claim,
+                &palw_seat_verdicts_of_v2(&all),
+                self.extras.admission_independence_daa,
+            )?;
+        }
         let set = self.rcore_backed_set(claim_id, claim, carried, now_daa);
         let reads: Vec<(crate::palw_panel_v2::PalwSeatReceiptV2, Option<crate::palw_verification_v2::PalwSegmentMaskV2>)> = carried
             .iter()
@@ -4158,6 +4178,9 @@ impl<'a> TransitionBuilder<'a> {
         let verdicts = palw_seat_verdicts_of_v2(&read_receipts);
         let quorum = crate::palw_offence_v1::PALW_PANEL_COLLUDING_QUORUM_V1 as usize;
         let door_holds = match door {
+            PalwLicenceDoorV1::G14PanelOne => {
+                self.state.panels.get(&claim_id).is_some_and(|p| p.seats.len() == 1) && set.backed.len() == 1 && set.basis_k == 1
+            }
             PalwLicenceDoorV1::Quorum => set.backed.len() >= quorum,
             PalwLicenceDoorV1::Coverage => set.backed.len() >= quorum && set.basis_k >= PALW_RCORE_FINAL_BASIS_K_V1,
             PalwLicenceDoorV1::Optimistic => {
@@ -4168,8 +4191,15 @@ impl<'a> TransitionBuilder<'a> {
             PalwLicenceDoorV1::ShardPart { .. } => false,
         };
         if !door_holds
-            || palw_licence_names_its_outsider_v1(&self.state, &claim_id, claim, &verdicts, self.extras.admission_independence_daa)
-                .is_err()
+            || (!model_one
+                && palw_licence_names_its_outsider_v1(
+                    &self.state,
+                    &claim_id,
+                    claim,
+                    &verdicts,
+                    self.extras.admission_independence_daa,
+                )
+                .is_err())
         {
             return Ok(());
         }
@@ -9719,7 +9749,7 @@ impl<'a> TransitionBuilder<'a> {
         // reaches on its own — keeps the tick only below the fence (`finalize_claim`).
         let attempt = matches!(claim.source, PalwClaimSourceV2::Attempt);
         let ticks = if rcore {
-            attempt && claim.rcore.basis_k >= PALW_RCORE_FINAL_BASIS_K_V1
+            attempt && claim.rcore.basis_k >= palw_rcore_required_basis_of_claim_v1(&claim)
         } else {
             self.extras.audit_2026_09_23_active && attempt
         };

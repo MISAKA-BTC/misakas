@@ -3723,6 +3723,20 @@ impl PalwChainStateV2 {
         if params.rcore_plus_from_daa().is_some() {
             for (id, claim) in &self.claims {
                 let rcore = &claim.rcore;
+                let one = params.model_panel_one_governs_v1(claim.accepted_daa);
+                let tagged_one = rcore.licence_door == Some(crate::palw_economic_safety_v1::PalwLicenceDoorTagV1::G14PanelOne);
+                if tagged_one && !one
+                    || one && rcore.licence_door.is_some() && !tagged_one
+                    || one
+                        && matches!(claim.phase, PalwClaimPhaseV2::ReceiptLicensed { .. } | PalwClaimPhaseV2::Final { .. })
+                        && !tagged_one
+                    || tagged_one && (rcore.basis_k != 1 || rcore.served_mask != 1 || rcore.unserved_seen || rcore.escrow_released)
+                    || one && self.panels.get(id).is_some_and(|panel| panel.seats.len() != 1)
+                {
+                    return Err(PalwStateV2Error::CarriageInconsistent(format!(
+                        "claim {id} has inconsistent G14 single-seat scope or licence"
+                    )));
+                }
                 match &claim.phase {
                     PalwClaimPhaseV2::Provisional | PalwClaimPhaseV2::PanelBound { .. } if *rcore != PalwClaimRcoreV1::default() => {
                         return Err(PalwStateV2Error::CarriageInconsistent(format!(
