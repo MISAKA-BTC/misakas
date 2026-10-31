@@ -32,6 +32,7 @@ pub mod positive_typed_adapter;
 mod public_source;
 pub mod residency;
 pub mod run;
+pub mod run_wide_q24_v2;
 pub mod shardrows;
 mod sparse_tree;
 pub mod tree;
