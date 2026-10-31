@@ -48,4 +48,5 @@
 | RFC-0040 | [再利用 prefix の生成元を署名済み work identity で拘束する](0040-authenticated-prefix-work-dependencies.md) | 原文と後続改定を参照 |
 | RFC-0041 | [genesis bond を廃止し、公開の BASE 回復経路から立ち上げる](0041-genesis-bond-free-bootstrap.md) | 原文と後続改定を参照 |
 | RFC-0042 | [全モデルの producer を G14 Panel=1 に統一する](0042-all-model-g14-panel-one.md) | 原文と後続改定を参照 |
+| RFC-0043 | [学習済みLLMの広いQ24 logit表現](0043-wide-q24-llm-output.md) | 原文と後続改定を参照 |
 | RFC-0044 | [Positive Court：Panelによる正常計算証拠の生成・提出と、Minerの上限付き対話応答](0044-positive-court-full-coverage.md) | 原文と後続改定を参照 |

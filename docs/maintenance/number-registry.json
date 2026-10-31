@@ -73,5 +73,18 @@
     "docs/spec/palw/18-inference-surface.md",
     "docs/spec/palw/18-layer-sharded-panels.md",
     "docs/spec/palw/18-verification-certificates.md"
+  ],
+  "imported_adopted_decisions": [
+    {
+      "rfc": "0043",
+      "rfc_path": "docs/rfc/0043-wide-q24-llm-output.md",
+      "adr": "0211",
+      "adr_path": "docs/adr/0211-wide-q24-llm-output.md",
+      "source_checkout": "/Users/wata/Downloads/MISAKA-testnet",
+      "adopted_by": "user",
+      "adoption_date": "2026-10-31",
+      "import_date": "2026-11-01",
+      "note": "Previously allocated adopted canonical documents imported without renumbering; A0 implementation and public activation are separate."
+    }
   ]
 }

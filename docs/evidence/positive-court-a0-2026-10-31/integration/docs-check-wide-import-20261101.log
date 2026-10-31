@@ -1,0 +1,21 @@
+FAIL — no-new-regressions
+{
+  "mode": "no-new-regressions",
+  "passed": false,
+  "markdown_files": 1349,
+  "targets": {
+    "ok": 9458,
+    "outside-package-unchecked": 253,
+    "external-unchecked": 240,
+    "missing-doc-file": 45
+  },
+  "primary_documents": {
+    "adr": 207,
+    "rfc": 44
+  },
+  "known_issue_occurrences": 43,
+  "new_issue_occurrences": 2
+}
+  new link issue x1: missing-doc-file|docs/evidence/models/trained-llm-cohort-2026-10-31.md|docs/rfc-v2/0002-tensor-ir-and-shared-query-data.md|
+  new link issue x1: missing-doc-file|docs/evidence/models/trained-llm-cohort-2026-10-31.md|docs/rfc-v2/0003-model-onboarding-and-artifacts.md|
+NOTE: baseline missing references remain; PASS is not a clean strict audit.

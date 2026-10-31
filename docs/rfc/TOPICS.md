@@ -15,6 +15,7 @@
 - [RFC-0036 — 認証付き PALW state map と行単位アクセス](0036-authenticated-palw-state-map-and-row-access.md)
 - [RFC-0038 — free-prompt の回答トークンを支払済み計算として記録する(FPA1 carriage)](0038-palw-fp-answer-accounting.md)
 - [RFC-0040 — 再利用 prefix の生成元を署名済み work identity で拘束する](0040-authenticated-prefix-work-dependencies.md)
+- [RFC-0043 — 学習済みLLMの広いQ24 logit表現](0043-wide-q24-llm-output.md)
 
 ## EVM / wallet
 

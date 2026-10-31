@@ -211,4 +211,5 @@
 | ADR-0208 | [再利用 prefix の生成元 identity を明示する案](0208-authenticated-prefix-work-dependencies.md) | 原文と後続改定を参照 |
 | ADR-0209 | [genesis bond を廃止し、BASE 回復と通常 bond 登録で起動する](0209-genesis-bond-free-bootstrap.md) | 原文と後続改定を参照 |
 | ADR-0210 | [全モデルの新規 producer claim を G14 の 1 席経路へ移す](0210-all-model-g14-panel-one.md) | 原文と後続改定を参照 |
+| ADR-0211 | [学習済みcheckpointのlogit範囲を損なわず扱う](0211-wide-q24-llm-output.md) | 原文と後続改定を参照 |
 | ADR-0212 | [Panelが正常・不正の証拠生成を担い、Minerは結果commitと上限付き対話応答に限定する](0212-positive-court-without-model-prepossession.md) | 原文と後続改定を参照 |
