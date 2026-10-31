@@ -1,4 +1,4 @@
-use super::super::tests::{all_rows, d, encoded_rows};
+use super::super::tests::{all_rows, d, encoded_rows, material, origin};
 use super::*;
 
 fn rows_map(rows: &[NativeRowValue]) -> PositiveAuxRowsV2 {
@@ -92,32 +92,75 @@ fn orphan_rows_of_all_reference_kinds_are_rejected() {
     }
 }
 
+fn initial_rows() -> Vec<NativeRowValue> {
+    let mut rows = all_rows();
+    rows.retain(|row| {
+        matches!(
+            &row.body,
+            NativeRowBody::Result(_)
+                | NativeRowBody::ClaimIndex(_)
+                | NativeRowBody::Case(_)
+                | NativeRowBody::Funding(_)
+                | NativeRowBody::JournalHead(_)
+        )
+    });
+    update(&mut rows, |body| match body {
+        NativeRowBody::Case(case) => {
+            case.status = ClaimStatus::ResultCommitted;
+            case.miner_data = MinerDataStatus::NotRequested;
+            case.witness_status = misaka_palw_positive_contract::messages::WitnessStatus::Building;
+            case.positive_witness = None;
+            case.usage = AggregateUsage::default();
+            case.last_event = origin();
+        }
+        NativeRowBody::Funding(funding) => funding.last_settlement = None,
+        NativeRowBody::JournalHead(head) => {
+            head.sequence = 1;
+            head.previous = d(0);
+            head.history = material();
+        }
+        _ => (),
+    });
+    rows
+}
+
 #[test]
 fn native_initial_journal_is_required_and_uses_its_own_sequence_convention() {
+    let initial = initial_rows();
+    assert!(check(&initial).is_ok());
     for variant in 0..4 {
-        let mut rows = all_rows();
+        let mut rows = initial.clone();
         update(&mut rows, |body| match body {
             NativeRowBody::JournalHead(r) => match variant {
                 0 => r.sequence = 0,
                 1 => r.previous = d(9),
-                2 => r.history.origin.accepted_daa += 1,
-                _ => {
-                    r.history.origin.accepted_daa += 1;
-                }
+                _ => r.history.origin.event_ordinal += 1,
             },
-            NativeRowBody::Case(r) if variant == 3 => r.last_event.accepted_daa += 1,
+            NativeRowBody::Case(r) if variant == 3 => r.last_event.event_ordinal += 1,
             _ => (),
         });
         assert!(check(&rows).is_err());
     }
-    let mut rows = all_rows();
+    let mut rows = initial;
+    // An origin in another accepting block has no local ordinal relation to
+    // the admission block. Structural linkage is allowed; only the native
+    // history backend can establish its actual ancestry and accepted position.
+    let unknown_origin = AcceptedOrigin {
+        accepting_block: NativeHash64([44; 64]),
+        carrier_block: NativeHash64([45; 64]),
+        carrier_transaction: NativeHash64([46; 64]),
+        accepted_tx_ordinal: 0,
+        event_ordinal: 0,
+        accepted_daa: 7,
+        accepted_blue_score: 8,
+    };
     update(&mut rows, |body| match body {
         NativeRowBody::JournalHead(r) => {
             r.sequence = 2;
             r.previous = d(9);
-            r.history.origin.accepted_daa += 1;
+            r.history.origin = unknown_origin;
         }
-        NativeRowBody::Case(r) => r.last_event.accepted_daa += 1,
+        NativeRowBody::Case(r) => r.last_event = unknown_origin,
         _ => (),
     });
     assert!(check(&rows).is_ok()); // Still no accepted-origin capability.

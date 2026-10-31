@@ -19,8 +19,16 @@ pub(super) fn origin() -> AcceptedOrigin {
         accepted_blue_score: 7,
     }
 }
+pub(super) fn origin_at(event_ordinal: u32) -> AcceptedOrigin {
+    // All fixture events share one actual accepting block and therefore the
+    // same native DAA/blue-score coordinates. Only event order advances.
+    AcceptedOrigin { event_ordinal, ..origin() }
+}
+pub(super) fn material_at(event_ordinal: u32) -> AcceptedMaterial {
+    AcceptedMaterial { origin: origin_at(event_ordinal), digest: d(8) }
+}
 pub(super) fn material() -> AcceptedMaterial {
-    AcceptedMaterial { origin: origin(), digest: d(8) }
+    material_at(origin().event_ordinal)
 }
 pub(super) fn coverage() -> CoverageRow {
     CoverageRow {
@@ -145,7 +153,7 @@ pub(super) fn signed_bundle() -> (ClaimIndexRow, ResultRow, CaseRow, FundingRow,
         panel_signature: *sign(&panel.signing_key, &w.id().0.0, WITNESS_SIGN_CONTEXT, [0; 32]).unwrap().as_ref(),
         panel_key: *panel.verification_key.as_ref(),
         witness: w.clone(),
-        origin: origin(),
+        origin: origin_at(6),
         record_header: material(),
         generated_tokens: material(),
         role_assignment: material(),
@@ -173,7 +181,7 @@ pub(super) fn signed_bundle() -> (ClaimIndexRow, ResultRow, CaseRow, FundingRow,
         liability: material(),
         maturity_daa: 100,
         unresolved_fraud: 0,
-        last_event: origin(),
+        last_event: origin_at(10),
     };
     let coverage = CoverageRow {
         witness: w.id(),
@@ -187,7 +195,7 @@ pub(super) fn signed_bundle() -> (ClaimIndexRow, ResultRow, CaseRow, FundingRow,
         elements: 100,
         terms: 200,
         state: CoverageState::Matched,
-        last_event: origin(),
+        last_event: origin_at(7),
     };
     (ClaimIndexRow { claim: r.claim_id(), result: r.id(), case: r.case_id() }, result, case, funding, witness, coverage)
 }
@@ -195,7 +203,10 @@ pub(super) fn signed_bundle() -> (ClaimIndexRow, ResultRow, CaseRow, FundingRow,
 pub(super) fn all_rows() -> Vec<NativeRowValue> {
     let (index, result, case, funding, witness, coverage) = signed_bundle();
     let source = case.service.source_catalog;
-    let journal = JournalHeadRow { case: case.case, sequence: 1, previous: d(0), head: d(96), history: material() };
+    // Result admission(5), witness(6), packet/check(7), source duty(8),
+    // response/settlement(9), Finish(10). Initial sequence 1 is tested with a
+    // separate admission-only bundle, not this completed-case cache snapshot.
+    let journal = JournalHeadRow { case: case.case, sequence: 6, previous: d(95), head: d(96), history: material_at(10) };
     [
         NativeRowBody::Result(result.clone()),
         NativeRowBody::ClaimIndex(index),
@@ -209,7 +220,7 @@ pub(super) fn all_rows() -> Vec<NativeRowValue> {
             source_units: 9,
             requested_units: 5,
             completed_units: 1,
-            union: material(),
+            union: material_at(8),
         }),
         NativeRowBody::ServiceReceipt(ServiceReceiptRow {
             case: case.case,
@@ -217,12 +228,12 @@ pub(super) fn all_rows() -> Vec<NativeRowValue> {
             source,
             unit: 4,
             result: result.result.id(),
-            duty: material(),
-            response: material(),
+            duty: material_at(8),
+            response: material_at(9),
             provider: PrincipalId(d(66)),
             bytes: 4096,
             additional_work: 1,
-            settlement: Some(material()),
+            settlement: Some(material_at(9)),
         }),
         NativeRowBody::Funding(funding),
         NativeRowBody::PacketReceipt(PacketReceiptRow {
@@ -231,7 +242,7 @@ pub(super) fn all_rows() -> Vec<NativeRowValue> {
             frame: EvidencePartId(d(77)),
             author: witness.witness.author,
             signed_bytes: 6000,
-            origin: origin(),
+            origin: origin_at(7),
         }),
         NativeRowBody::JournalHead(journal),
     ]
