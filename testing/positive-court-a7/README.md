@@ -47,6 +47,21 @@ re-enumerates/rechecks sources, root manifests, locks, HEAD and both A7 test
 binaries before writing PASS. Concurrent edits therefore cannot silently
 change the candidate after its initial fingerprint.
 
+Runner v4 requires the dedicated core `positive_court_fence_v2` target and the
+A7 `pipeline` target to each execute at least eight tests and every explicitly
+listed required test name in one summary. A library visitor, ignored test,
+another target, or several partial summaries cannot satisfy that requirement.
+The final suite check also rejects an omitted normal execution; `--no-run`
+artifacts never substitute for it. The literal inventory is saved in the manifest.
+
+`CARGO_TARGET_DIR` may select an existing shared cache. Its directory must already
+exist; the runner does not create a new cache. When `ROCKSDB_LIB_DIR` selects an
+existing compatible `librocksdb.a`, the runner records its path, streaming hash,
+and library/static environment inputs, then checks them again before PASS.
+The source snapshot includes the whole consensus tree and database adapter.
+These preparations do not certify a Rust candidate. A fixed A0 candidate must
+include the source-ready fixture's dependencies before the full suite runs.
+
 ## Independent trust and arithmetic
 
 `Trusted` contains the simulated rooted class/artifact, canonical job/input,
