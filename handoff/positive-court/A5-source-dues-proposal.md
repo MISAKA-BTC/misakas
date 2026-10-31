@@ -2,8 +2,8 @@
 
 `misaka/palw/positive-accounting-node/src/dues.rs` is a bounded, node-local DATA
 calculator. It defines no wire format, identifier, domain, reservation ledger,
-native constructor, funding permission, or state writer. A0 adoption of any
-shared intent and A4's actual native transaction remain required.
+native constructor, funding permission, or state writer. A0 adopted the shared
+intent in `c2e93ec49`; A4's actual native transaction remains required.
 
 ## Existing boundaries used
 
@@ -26,6 +26,9 @@ shared intent and A4's actual native transaction remain required.
 `FundingScopeId`, schedule digest, actual-provider proposal, amount, and accepted
 response reference. It has no serialization. It is emitted only for a proposed
 first receipt; even a zero-rate unit retains once-only receipt identity.
+The seven-field type now lives in `positive_contract::funding`; `dues` re-exports
+it so existing node imports keep the identical shared type. It remains DATA with
+no serialization, wire/domain allocation or native authority.
 
 `prepare_source_due(result, case, funding, source_usage, receipt, existing, terms)`
 returns `SourceDueProposal` containing optional delta plus expected/new usage and
