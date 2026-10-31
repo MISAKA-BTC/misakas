@@ -309,12 +309,15 @@ impl PanelFrameAuthorityV2 for FrameDuty {
 }
 type ActualVerifier = PanelSignatureVerifierV2<FrameDuty>;
 fn verifier_for(result: &MinerResultCommit) -> ActualVerifier {
+    verifier_with_limit(result, court_limits().max_part_bytes + SIGNATURE_BYTES as u64)
+}
+fn verifier_with_limit(result: &MinerResultCommit, max_signed_bytes: u64) -> ActualVerifier {
     PanelSignatureVerifierV2::new(FrameDuty {
         scope: result.scope,
         case: result.case_id(),
         result: result.id(),
         author: principal(&panel_key()),
-        max_signed_bytes: court_limits().max_part_bytes + SIGNATURE_BYTES as u64,
+        max_signed_bytes,
     })
 }
 fn packet_signature(signature: [u8; SIGNATURE_BYTES]) -> PanelPacketSignatureV2 {
@@ -355,6 +358,7 @@ fn court_limits() -> CourtLimitsV2 {
         max_attempts: 2,
         max_total_wire_bytes: 1 << 32,
         max_part_bytes: 1 << 20,
+        max_receipt_bytes: 1 << 20,
         max_reserved_elements: 1 << 44,
         max_reserved_terms: 1 << 44,
         deadline: 100,
@@ -367,25 +371,32 @@ fn court_result(f: &Fixture, mismatch: bool) -> (MinerResultCommit, MinerService
     (result, service)
 }
 fn court(result: MinerResultCommit, service: MinerServiceContract) -> ContractCourtV2<TirCourtCheckerV2, ActualVerifier> {
+    let verifier = verifier_for(&result);
+    court_with_verifier(result, service, verifier)
+}
+fn court_with_verifier(
+    result: MinerResultCommit,
+    service: MinerServiceContract,
+    verifier: ActualVerifier,
+) -> ContractCourtV2<TirCourtCheckerV2, ActualVerifier> {
     let signature = sign_result(&result);
-    ContractCourtV2::new(
-        TirCourtCheckerV2,
-        verifier_for(&result),
-        &rooted(&result),
-        result,
-        &miner_key(),
-        &signature,
-        service,
-        court_limits(),
-        1,
-    )
-    .unwrap()
+    ContractCourtV2::new(TirCourtCheckerV2, verifier, &rooted(&result), result, &miner_key(), &signature, service, court_limits(), 1)
+        .unwrap()
 }
 fn open(
     court: &mut ContractCourtV2<TirCourtCheckerV2, ActualVerifier>,
     f: &Fixture,
     result: &MinerResultCommit,
     attempt: u32,
+) -> (PanelWitnessCommit, CoverageDescriptor, Vec<Vec<u8>>) {
+    open_at(court, f, result, attempt, 2 + 2 * attempt as u64)
+}
+fn open_at(
+    court: &mut ContractCourtV2<TirCourtCheckerV2, ActualVerifier>,
+    f: &Fixture,
+    result: &MinerResultCommit,
+    attempt: u32,
+    now: u64,
 ) -> (PanelWitnessCommit, CoverageDescriptor, Vec<Vec<u8>>) {
     let prepared = f.prepare(result, limits());
     let descriptor = prepared.descriptor();
@@ -394,7 +405,7 @@ fn open(
     let signature = sign_witness(&witness);
     let context =
         prepared.authenticate_witness(witness.clone(), f.binding.clone(), f.generated.clone(), &panel_key(), &signature).unwrap();
-    court.open_candidate(witness.clone(), &panel_key(), &signature, context, 2 + 2 * attempt as u64).unwrap();
+    court.open_candidate(witness.clone(), &panel_key(), &signature, context, now).unwrap();
     let frames = f.frames(&witness, descriptor);
     (witness, descriptor, frames)
 }
@@ -449,20 +460,84 @@ fn unauthenticated_self_consistent_bad_material_cannot_poison_or_charge_an_hones
 }
 
 #[test]
+fn self_signed_unassigned_prover_cannot_spend_attempts_or_replace_the_active_candidate() {
+    let f = fixture();
+    let (result, service) = court_result(&f, false);
+    let mut court = court(result.clone(), service);
+    let unassigned = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([93; 32]);
+    let unassigned_key = *unassigned.verification_key.as_ref();
+    let prepared = f.prepare(&result, limits());
+    let mut witness = f.witness(&result, prepared.descriptor());
+    witness.author = principal(&unassigned_key);
+    let signature =
+        *libcrux_ml_dsa::ml_dsa_87::sign(&unassigned.signing_key, &witness.id().0.0, WITNESS_SIGN_CONTEXT, [0; 32]).unwrap().as_ref();
+    // Both literal signature and actual A1 context are valid. Only the rooted
+    // duty fixture excludes this self-nominated author; no Gate C draw is an
+    // opening prerequisite for the independently assigned honest prover.
+    witness.authenticate(&result, &unassigned_key, &signature).unwrap();
+    let context =
+        prepared.authenticate_witness(witness.clone(), f.binding.clone(), f.generated.clone(), &unassigned_key, &signature).unwrap();
+    assert!(court.open_candidate(witness.clone(), &unassigned_key, &signature, context, 2).is_err());
+    assert_eq!(court.attempts(), 0);
+    assert_eq!(court.last_attempt(), None);
+    assert_eq!(court.witness_status(), None);
+    assert_eq!(court.cursor(), 0);
+    assert_eq!(court.charged_wire_bytes(), 0);
+    assert_eq!(court.charged_elements(), 0);
+    assert_eq!(court.charged_terms(), 0);
+    assert_eq!(court.status(), ClaimStatus::Pending);
+
+    let (_, descriptor, frames) = open(&mut court, &f, &result, 0);
+    send(&mut court, &frames[0], descriptor.max_part_bytes, 3);
+    let before = (
+        court.last_attempt(),
+        court.attempts(),
+        court.cursor(),
+        court.charged_wire_bytes(),
+        court.charged_elements(),
+        court.charged_terms(),
+    );
+    let context = f
+        .prepare(&result, limits())
+        .authenticate_witness(witness.clone(), f.binding.clone(), f.generated.clone(), &unassigned_key, &signature)
+        .unwrap();
+    assert!(court.open_candidate(witness, &unassigned_key, &signature, context, 4).is_err());
+    assert_eq!(
+        (
+            court.last_attempt(),
+            court.attempts(),
+            court.cursor(),
+            court.charged_wire_bytes(),
+            court.charged_elements(),
+            court.charged_terms()
+        ),
+        before
+    );
+    assert_eq!(court.witness_status(), Some(WitnessStatus::Checking));
+    for frame in &frames[1..] {
+        send(&mut court, frame, descriptor.max_part_bytes, 5);
+    }
+    assert_eq!(court.finish(6).unwrap().terminal_kind(), TerminalKindV2::PositivePassed);
+}
+
+#[test]
 fn authenticated_bad_panel_material_does_not_refute_miner_or_reset_attempt_and_wire_budgets() {
     let f = fixture();
     let (result, service) = court_result(&f, false);
     let mut court = court(result.clone(), service);
-    let (witness, descriptor, _) = open(&mut court, &f, &result, 0);
-    let bad = frame_bytes(&witness, descriptor, 0, &[0]);
+    let (witness, descriptor, frames) = open(&mut court, &f, &result, 0);
+    send(&mut court, &frames[0], descriptor.max_part_bytes, 3);
+    // A distinct signed packet is not made free merely by sharing the case,
+    // witness and next relation with an accepted history.
+    let bad = frame_bytes(&witness, descriptor, 1, &[0]);
     let frame = EvidenceFrame::decode(&bad, descriptor.max_part_bytes).unwrap();
     let signature = carrier_signature(&frame);
     assert!(court.submit_frame(frame, &signature, 3).is_err());
     assert_eq!(court.status(), ClaimStatus::Pending);
     assert_eq!(court.witness_status(), Some(WitnessStatus::Rejected));
-    assert_eq!(court.cursor(), 0);
+    assert_eq!(court.cursor(), 1);
     let charged = court.charged_wire_bytes();
-    assert_eq!(charged, signed_bytes(&bad));
+    assert_eq!(charged, signed_bytes(&frames[0]) + signed_bytes(&bad));
     let (_, next, frames) = open(&mut court, &f, &result, 1);
     assert_eq!(court.attempts(), 2);
     assert_eq!(court.charged_wire_bytes(), charged);
@@ -471,6 +546,57 @@ fn authenticated_bad_panel_material_does_not_refute_miner_or_reset_attempt_and_w
     }
     assert_eq!(court.finish(5).unwrap().terminal_kind(), TerminalKindV2::PositivePassed);
     assert!(court.charged_wire_bytes() > charged);
+}
+
+#[test]
+fn candidate_authority_requires_a_finite_usable_signed_packet_limit() {
+    let f = fixture();
+    let (result, service) = court_result(&f, false);
+    let minimum = EVIDENCE_HEADER_BYTES as u64 + SIGNATURE_BYTES as u64;
+    for unusable in [0, u64::MAX, minimum - 1] {
+        let mut court = court_with_verifier(result.clone(), service.clone(), verifier_with_limit(&result, unusable));
+        let prepared = f.prepare(&result, limits());
+        let witness = f.witness(&result, prepared.descriptor());
+        let signature = sign_witness(&witness);
+        let context =
+            prepared.authenticate_witness(witness.clone(), f.binding.clone(), f.generated.clone(), &panel_key(), &signature).unwrap();
+        assert!(court.open_candidate(witness, &panel_key(), &signature, context, 2).is_err(), "limit {unusable}");
+        assert_eq!(court.attempts(), 0);
+        assert_eq!(court.last_attempt(), None);
+        assert_eq!(court.witness_status(), None);
+        assert_eq!(court.reserved_receipt_bytes(), 0);
+        assert_eq!(court.cursor(), 0);
+        assert_eq!(court.charged_wire_bytes(), 0);
+        assert_eq!(court.charged_elements(), 0);
+        assert_eq!(court.charged_terms(), 0);
+        assert_eq!(court.status(), ClaimStatus::Pending);
+    }
+}
+
+#[test]
+fn authenticated_noncanonical_relation_count_is_charged_without_advancing_coverage() {
+    let f = fixture();
+    let (result, service) = court_result(&f, false);
+    let mut court = court(result.clone(), service);
+    let (_, descriptor, frames) = open(&mut court, &f, &result, 0);
+    let canonical = EvidenceFrame::decode(&frames[0], descriptor.max_part_bytes).unwrap();
+    let mut header = canonical.header();
+    header.relation_count = 2;
+    let malformed = EvidenceFrame::new(header, canonical.payload(), descriptor.max_part_bytes).unwrap();
+    let billed = malformed.signed_wire_bytes();
+    let signature = carrier_signature(&malformed);
+    assert!(court.submit_frame(malformed, &signature, 3).is_err());
+    assert_eq!(court.charged_wire_bytes(), billed);
+    assert_eq!(court.cursor(), 0);
+    assert_eq!(court.attempts(), 1);
+    assert_eq!(court.status(), ClaimStatus::Pending);
+    // The syntactic delivery refusal neither proves a Miner fault nor poisons
+    // the actual checker. Canonical material can still complete this candidate.
+    for bytes in &frames {
+        send(&mut court, bytes, descriptor.max_part_bytes, 4);
+    }
+    assert_eq!(court.charged_wire_bytes(), billed + frames.iter().map(|p| signed_bytes(p)).sum::<u64>());
+    assert_eq!(court.finish(5).unwrap().terminal_kind(), TerminalKindV2::PositivePassed);
 }
 
 #[test]
@@ -487,6 +613,8 @@ fn exclusive_deadline_rejects_final_frame_before_any_success_fact() {
     let signature = carrier_signature(&last);
     assert!(court.submit_frame(last, &signature, 100).is_err());
     assert_eq!(court.charged_wire_bytes(), before);
+    assert_eq!(court.status(), ClaimStatus::Pending, "a refused packet does not supply the trusted expiry clock");
+    court.expire(100).unwrap();
     assert_eq!(court.status(), ClaimStatus::EndedUnverified);
     assert!(court.finish(100).is_err());
 }
@@ -516,18 +644,86 @@ fn signed_result_cannot_replace_rooted_input_even_with_its_own_valid_signature()
 }
 
 #[test]
-fn authenticated_retry_spends_carriage_budget_without_rechecking_or_minting_coverage() {
+fn accepted_packet_replays_are_receipt_bound_and_never_spend_budget_or_mint_coverage() {
     let f = fixture();
     let (result, service) = court_result(&f, false);
     let mut court = court(result.clone(), service);
     let (_, descriptor, frames) = open(&mut court, &f, &result, 0);
-    for copies in 1..=3 {
-        send(&mut court, &frames[0], descriptor.max_part_bytes, 3 + copies);
+    send(&mut court, &frames[0], descriptor.max_part_bytes, 3);
+    let before = (court.attempts(), court.cursor(), court.charged_wire_bytes(), court.charged_elements(), court.charged_terms());
+    for now in 4..=6 {
+        send(&mut court, &frames[0], descriptor.max_part_bytes, now);
         assert_eq!(court.cursor(), 1);
-        assert_eq!(court.charged_wire_bytes(), copies * signed_bytes(&frames[0]));
+        assert_eq!(court.charged_wire_bytes(), signed_bytes(&frames[0]));
+        assert_eq!(
+            (court.attempts(), court.cursor(), court.charged_wire_bytes(), court.charged_elements(), court.charged_terms()),
+            before
+        );
         assert_eq!(court.status(), ClaimStatus::Pending);
     }
+    // Receipt lookup does not turn an unauthenticated delivery into a valid
+    // replay just because its unsigned bytes match an earlier accepted frame.
+    let first = EvidenceFrame::decode(&frames[0], descriptor.max_part_bytes).unwrap();
+    assert!(court.submit_frame(first, &packet_signature([0; SIGNATURE_BYTES]), 6).is_err());
+    assert_eq!(
+        (court.attempts(), court.cursor(), court.charged_wire_bytes(), court.charged_elements(), court.charged_terms()),
+        before
+    );
     assert!(court.finish(7).is_err());
+
+    // A receipt must cover the whole accepted prefix, not only the last ACK.
+    assert!(frames.len() > 2);
+    send(&mut court, &frames[1], descriptor.max_part_bytes, 8);
+    let after_second = (court.attempts(), court.cursor(), court.charged_wire_bytes(), court.charged_elements(), court.charged_terms());
+    send(&mut court, &frames[0], descriptor.max_part_bytes, 9);
+    assert_eq!(
+        (court.attempts(), court.cursor(), court.charged_wire_bytes(), court.charged_elements(), court.charged_terms()),
+        after_second
+    );
+    for bytes in &frames[2..] {
+        send(&mut court, bytes, descriptor.max_part_bytes, 10);
+    }
+    assert_eq!(court.charged_wire_bytes(), frames.iter().map(|p| signed_bytes(p)).sum::<u64>());
+    assert_eq!(court.finish(11).unwrap().terminal_kind(), TerminalKindV2::PositivePassed);
+}
+
+#[test]
+fn accepted_packet_receipts_require_the_full_plan_capacity_before_spending_an_attempt() {
+    let f = fixture();
+    let (result, service) = court_result(&f, false);
+    let descriptor = f.prepare(&result, limits()).descriptor();
+    let required_receipts = descriptor.mandatory_relations.checked_mul(64).unwrap();
+    for enough in [false, true] {
+        let mut bounded = court_limits();
+        bounded.max_receipt_bytes = required_receipts - u64::from(!enough);
+        let mut court = ContractCourtV2::new(
+            TirCourtCheckerV2,
+            verifier_for(&result),
+            &rooted(&result),
+            result.clone(),
+            &miner_key(),
+            &sign_result(&result),
+            service.clone(),
+            bounded,
+            1,
+        )
+        .unwrap();
+        let witness = f.witness(&result, descriptor);
+        let signature = sign_witness(&witness);
+        let context = f
+            .prepare(&result, limits())
+            .authenticate_witness(witness.clone(), f.binding.clone(), f.generated.clone(), &panel_key(), &signature)
+            .unwrap();
+        assert_eq!(court.open_candidate(witness, &panel_key(), &signature, context, 2).is_ok(), enough);
+        assert_eq!(court.attempts(), u32::from(enough));
+        assert_eq!(court.charged_wire_bytes(), 0);
+        assert_eq!(court.cursor(), 0);
+        if !enough {
+            assert_eq!(court.last_attempt(), None);
+            assert_eq!(court.charged_elements(), 0);
+            assert_eq!(court.charged_terms(), 0);
+        }
+    }
 }
 
 #[test]
@@ -547,9 +743,61 @@ fn a_context_for_another_signed_witness_cannot_be_opened_under_the_same_result_a
         .unwrap();
     assert!(court.open_candidate(outer.clone(), &panel_key(), &sign_witness(&outer), context, 2).is_err());
     assert_eq!(court.status(), ClaimStatus::Pending);
+    assert_eq!(court.attempts(), 0);
+    assert_eq!(court.last_attempt(), None);
+    assert_eq!(court.witness_status(), None);
     assert_eq!(court.cursor(), 0);
     assert_eq!(court.charged_wire_bytes(), 0);
     assert!(court.finish(3).is_err());
+    // A malformed caller context cannot consume the honest Panel's ordinal.
+    let (_, descriptor, frames) = open_at(&mut court, &f, &result, 0, 4);
+    assert_eq!(court.attempts(), 1);
+    send(&mut court, &frames[0], descriptor.max_part_bytes, 5);
+    let before = (
+        court.last_attempt(),
+        court.attempts(),
+        court.cursor(),
+        court.charged_wire_bytes(),
+        court.charged_elements(),
+        court.charged_terms(),
+    );
+    let context = f
+        .prepare(&result, limits())
+        .authenticate_witness(inner.clone(), f.binding.clone(), f.generated.clone(), &panel_key(), &sign_witness(&inner))
+        .unwrap();
+    assert!(court.open_candidate(outer.clone(), &panel_key(), &sign_witness(&outer), context, 6).is_err());
+    assert_eq!(
+        (
+            court.last_attempt(),
+            court.attempts(),
+            court.cursor(),
+            court.charged_wire_bytes(),
+            court.charged_elements(),
+            court.charged_terms()
+        ),
+        before
+    );
+    // The signed witness and coverage descriptor alone do not identify the
+    // active checker: inner heap/evaluation allowances also belong to context.
+    let mut changed_limits = limits();
+    changed_limits.max_part_heap /= 2;
+    let changed = f.prepare(&result, changed_limits);
+    assert_eq!(changed.descriptor(), descriptor);
+    let changed_context = changed
+        .authenticate_witness(outer.clone(), f.binding.clone(), f.generated.clone(), &panel_key(), &sign_witness(&outer))
+        .unwrap();
+    assert!(court.open_candidate(outer.clone(), &panel_key(), &sign_witness(&outer), changed_context, 7).is_err());
+    assert_eq!(
+        (
+            court.last_attempt(),
+            court.attempts(),
+            court.cursor(),
+            court.charged_wire_bytes(),
+            court.charged_elements(),
+            court.charged_terms()
+        ),
+        before
+    );
 }
 
 #[test]
@@ -567,7 +815,7 @@ fn fresh_common_court_replays_actual_authenticated_history_and_reconstructs_all_
         for bytes in &frames[1..] {
             send(&mut court, bytes, descriptor.max_part_bytes, 5);
         }
-        let bytes = frames.iter().map(|p| signed_bytes(p)).sum::<u64>() + signed_bytes(&frames[0]);
+        let bytes = frames.iter().map(|p| signed_bytes(p)).sum::<u64>();
         assert_eq!(court.charged_wire_bytes(), bytes);
         assert_eq!(court.cursor(), descriptor.mandatory_relations);
         assert_eq!(court.finish(6).unwrap().terminal_kind(), TerminalKindV2::PositivePassed);
@@ -619,6 +867,8 @@ fn replay_on_another_branch_or_after_the_current_cutoff_cannot_reuse_the_old_suc
     assert!(expired.submit_frame(old_frame, &old_authorization, 100).is_err());
     assert_eq!(expired.cursor(), 0);
     assert_eq!(expired.charged_wire_bytes(), 0);
+    assert_eq!(expired.status(), ClaimStatus::Pending);
+    expired.expire(100).unwrap();
     assert_eq!(expired.status(), ClaimStatus::EndedUnverified);
     assert!(expired.finish(100).is_err());
 }

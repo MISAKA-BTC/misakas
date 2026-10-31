@@ -9,7 +9,7 @@ use misaka_palw_positive_contract::{
     ContractError,
     identity::{PUBKEY_BYTES, SIGNATURE_BYTES},
     messages::{MinerResultCommit, PanelWitnessCommit},
-    wire::EvidenceFrame,
+    wire::{EVIDENCE_HEADER_BYTES, EvidenceFrame},
 };
 
 /// Process input, not a newly allocated wire schema. The public key must be
@@ -22,7 +22,8 @@ pub struct PanelPacketSignatureV2 {
     pub signature: [u8; SIGNATURE_BYTES],
 }
 
-/// Resolve the live authorized Panel obligation and its signed-packet limit.
+/// Resolve the live authorized prover role, opportunity, author, reserved
+/// resources and signed-packet limit. This is NOT the Gate C draw.
 /// Implementations MUST check the actual rooted author/key registration, duty,
 /// current network/ruleset/branch and clock against result/witness. The returned
 /// finite limit includes the whole unsigned frame plus its Panel signature.
@@ -59,10 +60,24 @@ impl<R> PanelSignatureVerifierV2<R> {
         &self.authority
     }
 }
+impl<R: PanelFrameAuthorityV2> PanelSignatureVerifierV2<R> {
+    fn resolved_limit(&self, result: &MinerResultCommit, witness: &PanelWitnessCommit) -> Result<u64, PanelCarrierErrorV2<R::Error>> {
+        witness.validate_binding(result).map_err(PanelCarrierErrorV2::Contract)?;
+        let limit = self.authority.authorize(result, witness).map_err(PanelCarrierErrorV2::Authority)?;
+        if limit == u64::MAX || limit < (EVIDENCE_HEADER_BYTES + SIGNATURE_BYTES) as u64 {
+            return Err(PanelCarrierErrorV2::Contract(ContractError::Budget));
+        }
+        Ok(limit)
+    }
+}
 impl<R: PanelFrameAuthorityV2> CarrierVerifierV2 for PanelSignatureVerifierV2<R> {
     type Authorization = PanelPacketSignatureV2;
     type Error = PanelCarrierErrorV2<R::Error>;
 
+    fn authorize_candidate(&self, result: &MinerResultCommit, witness: &PanelWitnessCommit) -> Result<(), Self::Error> {
+        self.resolved_limit(result, witness)?;
+        Ok(())
+    }
     fn max_carrier_overhead(&self) -> u64 {
         SIGNATURE_BYTES as u64
     }
@@ -73,8 +88,7 @@ impl<R: PanelFrameAuthorityV2> CarrierVerifierV2 for PanelSignatureVerifierV2<R>
         frame: &EvidenceFrame<'_>,
         authorization: &Self::Authorization,
     ) -> Result<u64, Self::Error> {
-        witness.validate_binding(result).map_err(PanelCarrierErrorV2::Contract)?;
-        let max_signed_bytes = self.authority.authorize(result, witness).map_err(PanelCarrierErrorV2::Authority)?;
+        let max_signed_bytes = self.resolved_limit(result, witness)?;
         let authenticated = frame
             .authenticate(witness, &authorization.key, &authorization.signature, max_signed_bytes)
             .map_err(PanelCarrierErrorV2::Contract)?;

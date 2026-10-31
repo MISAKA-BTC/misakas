@@ -7,19 +7,22 @@
 use super::admission::{AdmittedCourtV2, CourtAdmissionRootV2};
 use misaka_palw_positive_contract::{
     ContractError,
-    identity::{CaseId, ChainScope, PUBKEY_BYTES, PlanId, PrincipalId, ResultId, SIGNATURE_BYTES, WitnessId},
+    identity::{CaseId, ChainScope, EvidencePartId, PUBKEY_BYTES, PlanId, PrincipalId, ResultId, SIGNATURE_BYTES, WitnessId},
     messages::{
         AdmissionContext, ClaimForm, ClaimStatus, CoverageCursor, CoverageDescriptor, MinerResultCommit, MinerServiceContract,
         PanelWitnessCommit, WitnessStatus,
     },
     ports::{NodeChecker, require_next},
-    wire::{EvidenceFrame, EvidenceHeader},
+    wire::EvidenceFrame,
 };
 
 /// The implementation must delegate to A1's actual independent checker. There
 /// is deliberately no successful default checker or terminal classification.
 pub trait CourtCheckerV2: NodeChecker {
     fn start(&self, context: &Self::Context) -> Result<Self::Progress, Self::Error>;
+    /// Bounded comparison of all opaque context bindings/limits, not just the
+    /// descriptor. Native ingress quotes its comparison work separately.
+    fn same_context(&self, left: &Self::Context, right: &Self::Context) -> bool;
     fn terminal_kind(&self, terminal: &Self::CheckedTerminal) -> TerminalKindV2;
     /// Candidate-only classification from the checker's opaque progress. An
     /// error string/category cannot manufacture a Miner fault or a pass.
@@ -35,6 +38,9 @@ pub trait CourtCheckerV2: NodeChecker {
 pub trait CarrierVerifierV2 {
     type Authorization;
     type Error;
+    /// Resolve the actual current prover role, opportunity, author and resource
+    /// permission before any candidate admission or attempt mutation.
+    fn authorize_candidate(&self, result: &MinerResultCommit, witness: &PanelWitnessCommit) -> Result<(), Self::Error>;
     /// Complete carrier overhead in addition to an unsigned EvidenceFrame.
     /// It participates in the claim-wide worst-case reservation.
     fn max_carrier_overhead(&self) -> u64;
@@ -65,6 +71,9 @@ pub struct CourtLimitsV2 {
     pub max_attempts: u32,
     pub max_total_wire_bytes: u64,
     pub max_part_bytes: u64,
+    /// Additional heap reserved for the active candidate's 64-byte canonical
+    /// frame IDs. Include this within the native policy case heap quote.
+    pub max_receipt_bytes: u64,
     pub max_reserved_elements: u64,
     pub max_reserved_terms: u64,
     pub deadline: u64,
@@ -175,8 +184,9 @@ struct Candidate<C: CourtCheckerV2> {
     progress: Option<C::Progress>,
     next: u64,
     status: WitnessStatus,
-    // Bounded by max_part_bytes; a single last frame suffices for a retry ACK.
-    last: Option<(EvidenceHeader, Vec<u8>)>,
+    // EXACT uses one relation per frame, giving a bounded O(1) receipt lookup
+    // by first_relation. No complete evidence payload is retained for ACKs.
+    receipts: Vec<EvidencePartId>,
 }
 
 /// Claim-wide counters survive candidate/prover changes. No Deserialize and no
@@ -216,6 +226,7 @@ impl<C: CourtCheckerV2, V: CarrierVerifierV2> ContractCourtV2<C, V> {
         }
         if limits.max_attempts == 0
             || limits.max_attempts > service.budget.witness_attempts
+            || limits.max_receipt_bytes == 0
             || limits.max_part_bytes == 0
             || limits.max_total_wire_bytes == 0
             || limits.max_reserved_elements == 0
@@ -256,6 +267,9 @@ impl<C: CourtCheckerV2, V: CarrierVerifierV2> ContractCourtV2<C, V> {
     pub fn last_attempt(&self) -> Option<ContractAttemptV2> {
         self.last_attempt
     }
+    pub fn reserved_receipt_bytes(&self) -> u64 {
+        self.candidate.as_ref().map_or(0, |x| x.receipts.capacity() as u64 * std::mem::size_of::<EvidencePartId>() as u64)
+    }
     pub fn charged_wire_bytes(&self) -> u64 {
         self.wire_bytes
     }
@@ -274,29 +288,9 @@ impl<C: CourtCheckerV2, V: CarrierVerifierV2> ContractCourtV2<C, V> {
         context: C::Context,
         now: u64,
     ) -> Result<CandidateOpenV2, CourtErrorV2<C::Error, V::Error>> {
-        self.ensure_open(now)?;
+        self.check_open(now)?;
         witness.authenticate(&self.result, panel_key, signature).map_err(CourtErrorV2::Contract)?;
-        if let Some(current) = &self.candidate {
-            if current.status == WitnessStatus::Checking {
-                return if current.witness == witness { Ok(CandidateOpenV2::AlreadyActive) } else { Err(CourtErrorV2::Order) };
-            }
-        }
-        if self.attempts >= self.limits.max_attempts {
-            return Err(CourtErrorV2::Budget);
-        }
-        if witness.attempt != self.attempts {
-            return Err(CourtErrorV2::Order);
-        }
-        // A signed candidate consumes its ordinal even if its context/plan is
-        // invalid; changing the author or commitment cannot create a free retry.
-        self.last_attempt = Some(ContractAttemptV2 {
-            ordinal: self.attempts,
-            witness: witness.id(),
-            author: witness.author,
-            status: WitnessStatus::Incomplete,
-        });
-        self.attempts += 1;
-        self.candidate = None;
+        self.verifier.authorize_candidate(&self.result, &witness).map_err(CourtErrorV2::Carrier)?;
         if self.checker.context_witness_id(&context) != witness.id() {
             return Err(CourtErrorV2::Contract(ContractError::Identity));
         }
@@ -312,6 +306,21 @@ impl<C: CourtCheckerV2, V: CarrierVerifierV2> ContractCourtV2<C, V> {
             || plan.max_part_bytes > self.limits.max_part_bytes
         {
             return Err(CourtErrorV2::Contract(ContractError::Identity));
+        }
+        if let Some(current) = &self.candidate {
+            if current.status == WitnessStatus::Checking {
+                return if current.witness == witness && current.plan == plan && self.checker.same_context(&current.context, &context) {
+                    Ok(CandidateOpenV2::AlreadyActive)
+                } else {
+                    Err(CourtErrorV2::Contract(ContractError::Identity))
+                };
+            }
+        }
+        if self.attempts >= self.limits.max_attempts {
+            return Err(CourtErrorV2::Budget);
+        }
+        if witness.attempt != self.attempts {
+            return Err(CourtErrorV2::Order);
         }
         let signed_part_ceiling = plan.max_part_bytes.checked_add(self.verifier.max_carrier_overhead()).ok_or(CourtErrorV2::Budget)?;
         let wire_reservation = plan
@@ -338,14 +347,34 @@ impl<C: CourtCheckerV2, V: CarrierVerifierV2> ContractCourtV2<C, V> {
             .checked_add(plan.reserved_terms)
             .filter(|x| *x <= self.limits.max_reserved_terms)
             .ok_or(CourtErrorV2::Budget)?;
-        // Reserve before start. Failed checker construction still spends its
-        // admitted work ceiling and cannot replenish CPU by alternating authors.
+        // All preparation, including allocation and checker construction, is
+        // fallible and precedes any change to the current candidate or counters.
+        let receipt_bytes = plan
+            .mandatory_relations
+            .checked_mul(std::mem::size_of::<EvidencePartId>() as u64)
+            .filter(|x| *x <= self.limits.max_receipt_bytes)
+            .ok_or(CourtErrorV2::Budget)?;
+        let capacity = usize::try_from(plan.mandatory_relations).map_err(|_| CourtErrorV2::Budget)?;
+        let mut receipts = Vec::new();
+        receipts.try_reserve_exact(capacity).map_err(|_| CourtErrorV2::Budget)?;
+        let actual_receipt_bytes =
+            (receipts.capacity() as u64).checked_mul(std::mem::size_of::<EvidencePartId>() as u64).ok_or(CourtErrorV2::Budget)?;
+        if actual_receipt_bytes > self.limits.max_receipt_bytes || actual_receipt_bytes < receipt_bytes {
+            return Err(CourtErrorV2::Budget);
+        }
+        let progress = self.checker.start(&context).map_err(CourtErrorV2::Check)?;
+        self.last_attempt = Some(ContractAttemptV2 {
+            ordinal: self.attempts,
+            witness: witness.id(),
+            author: witness.author,
+            status: WitnessStatus::Checking,
+        });
+        self.attempts += 1;
         self.elements = elements;
         self.terms = terms;
-        let progress = self.checker.start(&context).map_err(CourtErrorV2::Check)?;
+        self.now = now;
         self.candidate =
-            Some(Candidate { witness, plan, context, progress: Some(progress), next: 0, status: WitnessStatus::Checking, last: None });
-        self.last_attempt.as_mut().expect("attempt recorded").status = WitnessStatus::Checking;
+            Some(Candidate { witness, plan, context, progress: Some(progress), next: 0, status: WitnessStatus::Checking, receipts });
         Ok(CandidateOpenV2::Opened)
     }
 
@@ -355,7 +384,7 @@ impl<C: CourtCheckerV2, V: CarrierVerifierV2> ContractCourtV2<C, V> {
         authorization: &V::Authorization,
         now: u64,
     ) -> Result<(), CourtErrorV2<C::Error, V::Error>> {
-        self.ensure_open(now)?;
+        self.check_open(now)?;
         if frame.wire_bytes() > self.limits.max_part_bytes {
             return Err(CourtErrorV2::Budget);
         }
@@ -371,14 +400,24 @@ impl<C: CourtCheckerV2, V: CarrierVerifierV2> ContractCourtV2<C, V> {
         if billed_bytes < frame.wire_bytes() || billed_bytes > signed_ceiling {
             return Err(CourtErrorV2::Budget);
         }
+        // Current rooted authorization and actual signature were checked above.
+        // An identical already checked frame is idempotent even after the byte
+        // budget is exhausted. Only successful canonical frames enter the index.
+        let frame_id = frame.id();
+        if frame.header().relation_count == 1
+            && usize::try_from(frame.header().first_relation).ok().and_then(|i| candidate.receipts.get(i)) == Some(&frame_id)
+        {
+            return Ok(());
+        }
         let total = self
             .wire_bytes
             .checked_add(billed_bytes)
             .filter(|x| *x <= self.limits.max_total_wire_bytes)
             .ok_or(CourtErrorV2::Budget)?;
         self.wire_bytes = total;
-        if candidate.last.as_ref().is_some_and(|(header, payload)| *header == frame.header() && payload == frame.payload()) {
-            return Ok(());
+        self.now = now;
+        if frame.header().relation_count != 1 {
+            return Err(CourtErrorV2::Contract(ContractError::NonCanonical));
         }
         let end = require_next(
             &candidate.plan,
@@ -388,9 +427,6 @@ impl<C: CourtCheckerV2, V: CarrierVerifierV2> ContractCourtV2<C, V> {
         )
         .map_err(CourtErrorV2::Contract)?;
         let progress = candidate.progress.as_mut().ok_or(CourtErrorV2::Closed)?;
-        // Discard the old retry ACK before decoding the next part. Capture
-        // the new ACK only after the checker drops its transient part buffers.
-        candidate.last = None;
         if let Err(error) = self.checker.check_part(&candidate.context, progress, frame) {
             // Only authenticated material reached the checker. Read the actual
             // candidate outcome; budget/unadjudicable failures remain unverified.
@@ -401,11 +437,11 @@ impl<C: CourtCheckerV2, V: CarrierVerifierV2> ContractCourtV2<C, V> {
             };
             self.last_attempt.as_mut().expect("attempt recorded").status = candidate.status;
             candidate.progress = None;
-            candidate.last = None;
+            candidate.receipts = Vec::new();
             return Err(CourtErrorV2::Check(error));
         }
         candidate.next = end;
-        candidate.last = Some((frame.header(), frame.payload().to_vec()));
+        candidate.receipts.push(frame_id);
         Ok(())
     }
 
@@ -424,6 +460,7 @@ impl<C: CourtCheckerV2, V: CarrierVerifierV2> ContractCourtV2<C, V> {
             Err(error) => {
                 candidate.status = WitnessStatus::Incomplete;
                 self.last_attempt.as_mut().expect("attempt recorded").status = WitnessStatus::Incomplete;
+                candidate.receipts = Vec::new();
                 return Err(CourtErrorV2::Check(error));
             }
         };
@@ -431,7 +468,7 @@ impl<C: CourtCheckerV2, V: CarrierVerifierV2> ContractCourtV2<C, V> {
         if identity != (self.result.id(), candidate.witness.id(), candidate.plan) {
             candidate.status = WitnessStatus::Incomplete;
             self.last_attempt.as_mut().expect("attempt recorded").status = WitnessStatus::Incomplete;
-            candidate.last = None;
+            candidate.receipts = Vec::new();
             return Err(CourtErrorV2::Contract(ContractError::Identity));
         }
         let kind = self.checker.terminal_kind(&terminal);
@@ -453,7 +490,7 @@ impl<C: CourtCheckerV2, V: CarrierVerifierV2> ContractCourtV2<C, V> {
             }
         }
         self.last_attempt.as_mut().expect("attempt recorded").status = candidate.status;
-        candidate.last = None;
+        candidate.receipts = Vec::new();
         Ok(CheckedCourtFactV2 {
             scope: self.result.scope,
             case: self.result.case_id(),
@@ -478,7 +515,7 @@ impl<C: CourtCheckerV2, V: CarrierVerifierV2> ContractCourtV2<C, V> {
                     self.last_attempt.as_mut().expect("attempt recorded").status = WitnessStatus::Incomplete;
                 }
                 candidate.progress = None;
-                candidate.last = None;
+                candidate.receipts = Vec::new();
             }
         }
         Ok(())
@@ -491,8 +528,20 @@ impl<C: CourtCheckerV2, V: CarrierVerifierV2> ContractCourtV2<C, V> {
                 self.last_attempt.as_mut().expect("attempt recorded").status = WitnessStatus::Incomplete;
             }
             candidate.progress = None;
-            candidate.last = None;
+            candidate.receipts = Vec::new();
         }
+    }
+    /// Packet preparation never observes a peer-provided clock. Native callers
+    /// use expire() for an explicit trusted-clock sweep, and successful new
+    /// authenticated operations commit their supplied native clock below.
+    fn check_open(&self, now: u64) -> Result<(), CourtErrorV2<C::Error, V::Error>> {
+        if now < self.now {
+            return Err(CourtErrorV2::Order);
+        }
+        if now >= self.limits.deadline || self.claim_status != ClaimStatus::Pending {
+            return Err(CourtErrorV2::Closed);
+        }
+        Ok(())
     }
     fn ensure_open(&mut self, now: u64) -> Result<(), CourtErrorV2<C::Error, V::Error>> {
         self.expire(now)?;

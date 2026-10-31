@@ -38,6 +38,9 @@ impl CourtCheckerV2 for TirCourtCheckerV2 {
     fn start(&self, context: &CheckContext) -> Result<ContractProgress, AdapterError> {
         context.start()
     }
+    fn same_context(&self, left: &CheckContext, right: &CheckContext) -> bool {
+        left.same_identity(right)
+    }
     fn failure_kind(&self, progress: &ContractProgress) -> CandidateFailureV2 {
         match progress.snapshot().outcome {
             CheckOutcome::WitnessRejected => CandidateFailureV2::Rejected,
