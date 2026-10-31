@@ -159,6 +159,12 @@ pub struct LocalReplayEventV2 {
 }
 
 /// Native implementations must hold a stable actual accepted-prefix/root view.
+/// Before invoking the engine, that owner must hold a real resource lease for
+/// `CommonReplayLimitsV2::max_known_buffer_bytes` (including source backing,
+/// index, body, facts/diagnostics and private native heaps) and the quoted work.
+/// Limits/quotes below are checked logical bounds, not a resource-pool ticket.
+/// Keep the owner/lease alive while outputs or their extracted parts remain
+/// resident; this local-only API does not manufacture native RAM admission.
 /// A test/peer implementation is not native authority. Public trait use can
 /// produce LOCAL facts only; the separate native recovery factory must verify
 /// its own genuine committed case receipt, epoch, current rows and journal head.
