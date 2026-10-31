@@ -1,0 +1,39 @@
+{
+  "source_commit": "a5f11612893fe733299cf802d65f393acd1bcfb5",
+  "allowed_changes": [
+    "external core imports become crate imports",
+    "positive_contract sibling path becomes crate::palw_positive_check_v2",
+    "CheckContext::witness_id read-only accessor for A4",
+    "rustfmt import ordering"
+  ],
+  "files": [
+    {
+      "old": "misaka/palw/tir/exec/src/node/positive_check.rs",
+      "new": "consensus/core/src/palw_positive_check_v2.rs",
+      "old_sha256": "d9e57592fdb4436806918a73cebbaf78ecd29581c3b1873cb01a9ad7185738ce",
+      "new_sha256": "8da9b5339184d63c789919bcb464c910a1ff09e6f1ebe5813727a7bba9a0f086",
+      "mechanical_transform_matches": true
+    },
+    {
+      "old": "misaka/palw/tir/exec/src/node/positive_check/expanded_plan.rs",
+      "new": "consensus/core/src/palw_positive_check_v2/expanded_plan.rs",
+      "old_sha256": "568f51c502696cd12f4dd7e087214f48370e5eccdc8a035a32406dc12c6ad756",
+      "new_sha256": "e36b5ed32db0c91c5a938fb3703662197ee26c2c1512a0ab36192b6a209104f3",
+      "mechanical_transform_matches": true
+    },
+    {
+      "old": "misaka/palw/tir/exec/src/node/positive_contract.rs",
+      "new": "consensus/core/src/palw_positive_contract_v2.rs",
+      "old_sha256": "7b608c2592dec00f956afd2b4c0b27bcf8c6d69e958a84dccc96853514f0d19e",
+      "new_sha256": "0aff4e0569b2dac43704710cffc8026f41288b99fc21b36245c7a70b8e447243",
+      "mechanical_transform_matches": true
+    },
+    {
+      "old": "misaka/palw/tir/exec/src/node/positive_contract/record.rs",
+      "new": "consensus/core/src/palw_positive_contract_v2/record.rs",
+      "old_sha256": "cad4c67b72498cd5351a60fd35c0d19696b3bad9dcbf4dcfd9d8518a9e97755f",
+      "new_sha256": "5c3cb4540967af355ba780770b42371837d10218dd88b9f9b45a3cd4625a5c44",
+      "mechanical_transform_matches": true
+    }
+  ]
+}

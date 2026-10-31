@@ -1,0 +1,32 @@
+    Checking serde_json v1.0.151
+   Compiling rustix v0.38.37
+    Checking misaka-palw-gen v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a1/MISAKA-testnet/misaka/palw/gen)
+    Checking misaka-palw-challenge v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a1/MISAKA-testnet/misaka/palw/challenge)
+    Checking misaka-palw-tir v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a1/MISAKA-testnet/misaka/palw/tir/core)
+    Checking misaka-palw-positive-contract v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a1/MISAKA-testnet/misaka/palw/positive-contract)
+    Checking kaspa-txscript-errors v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a1/MISAKA-testnet/crypto/txscript/errors)
+    Checking wasm-bindgen v0.2.100
+    Checking log4rs v1.4.0
+    Checking js-sys v0.3.77
+    Checking workflow-log v0.18.0
+    Checking kaspa-utils v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a1/MISAKA-testnet/utils)
+    Checking kaspa-core v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a1/MISAKA-testnet/core)
+    Checking misaka-palw-kernel v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a1/MISAKA-testnet/misaka/palw/kernel)
+    Checking polling v3.7.3
+    Checking async-io v2.3.4
+    Checking async-global-executor v2.4.1
+    Checking async-std v1.13.0
+    Checking web-sys v0.3.77
+    Checking serde-wasm-bindgen v0.6.5
+    Checking wasm-bindgen-futures v0.4.50
+    Checking workflow-panic-hook v0.18.0
+    Checking workflow-core v0.18.0
+    Checking workflow-wasm v0.18.0
+    Checking kaspa-hashes v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a1/MISAKA-testnet/crypto/hashes)
+    Checking kaspa-addresses v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a1/MISAKA-testnet/crypto/addresses)
+    Checking kaspa-math v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a1/MISAKA-testnet/math)
+    Checking kaspa-merkle v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a1/MISAKA-testnet/crypto/merkle)
+    Checking kaspa-muhash v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a1/MISAKA-testnet/crypto/muhash)
+    Checking misaka-palw-panel v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a1/MISAKA-testnet/misaka/palw/panel)
+    Checking kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a1/MISAKA-testnet/consensus/core)
+    Finished `dev` profile [unoptimized] target(s) in 49.90s
