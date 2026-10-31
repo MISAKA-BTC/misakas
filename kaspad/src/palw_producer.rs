@@ -1132,7 +1132,7 @@ impl PalwProducerService {
             // ADR-0135: the registry's class-local gate, read before a draw is built. Not a rule of
             // this node's — the fold refuses what it refuses — but a draw for a HELD class or one at
             // its inflight cap is a block the chain will not take, so it is not built.
-            if let Some(detail) = self.registry_holds_class(&session) {
+            if let Some(detail) = self.registry_holds_class(&session, facts.daa_score) {
                 self.flow_context.update_palw_runtime(|r| r.set_producer("holding", &detail));
                 let stale = last_hold_at.is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(300));
                 if last_hold.as_deref() != Some(detail.as_str()) || stale {
@@ -1639,7 +1639,14 @@ impl PalwProducerService {
     /// ADR-0135: why the registry would refuse this class's next claim now, if it would — `None`
     /// below the fence, during the activation grace, for the base class, and for a class the
     /// registry admits with room in flight.
-    fn registry_holds_class(&self, session: &kaspa_consensusmanager::ConsensusProxy) -> Option<String> {
+    fn registry_holds_class(&self, session: &kaspa_consensusmanager::ConsensusProxy, candidate_daa: u64) -> Option<String> {
+        // The model-one route's authoritative admission is already in the
+        // producer facts. The historical registry read still reports lifecycle
+        // holds and five-seat room; neither is a new model claim's gate.
+        // Facts retain the actual class cap, network room, budget and collateral.
+        if self.consensus_config.params.palw_model_panel_one_v1_fence().is_some_and(|f| f.is_active(candidate_daa)) {
+            return None;
+        }
         let read = session.palw_model_registry_v1()?;
         if !read.active || read.tip_daa < read.grace_until_daa {
             return None;

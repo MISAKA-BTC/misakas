@@ -71,3 +71,18 @@ Linux 用ビルドと配備検証は別途記録する。これらの pass を�
 
 [SDK cache identity](18600-sdk-cache-test.log)は1件成功。[旧int13 constructor](historical-v7-test.log)は新fenceを引き継がず、過去のparamsのvalidationが成功。旧G14 isolated sandboxも同じ歴史基準を使う。
 既存のrelease re-pin toolでRustから値を再算出し、現行t12/copyの64 pinsを更新した。26件のhistoryは更新せず、mainnet・testnet-11・v22 goldenは不変。新規fenceを意図的に持たない旧経路の負のfixtureを明示化し、新経路の必須依存guard自体は維持した。元ログ・fleetの旧identity記録は保存した。
+
+## Linux配備前の復旧準備（10:36 UTC）
+
+95.111.236.186を正常停止（exit 0）して取得した、meta・consensus・utxoindexを含む同一時点のバックアップを使用する。
+これは自分の検証済みnodeのoffline backupであり、独立した全履歴再実行の結果ではない。
+archiveは7,438,164,368 bytes、SHA-256 `2a4af052174ebc554929fa2673a53f4c81f831d6718019f925578182fc2e002d`。
+IBM受信側でもSHA-256一致と`zstd -t`成功を確認した。転送専用の一時鍵とauthorized_keysの許可行は削除済み。
+
+b1は停止後、元fork DB・以前のresync DB・今回の途中DBをすべて別名で保持し、展開済みbackupをdatadirへrenameした。
+`palw-resync-report.json`はstatus `syncing`のままbytes不変（SHA-256 `e8cd99af98a7ed667ae13eadca3743c2cf4d884295d0749ccf9809980a880e1a`）。
+旧binaryの再起動ではholdを失うため、旧SHAに対するlauncher guardを追加し、exit 78を実行確認した。
+まだ新binaryで起動していない。native pending-resync再開と、実際の2 outbound peersによる確認を必要とする。reportのconfirmed偽装やGate Cの代替には使わない。
+
+node producerの追加点検で、authoritative producer factsとは別の`registry_holds_class`が旧Held/5席roomを再び要求することを発見した。
+候補blockのDAAがmodel-one境界以降は、この歴史的な補助チェックを起動しない。factsが持つclaimのclass cap・共有network room・予算・担保の判定は維持する。
