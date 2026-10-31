@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 
 pub mod consumers;
 
-pub const ALL_CREDIT_USES: [CreditUse; 7] = [
+pub const ALL_CREDIT_USES: [CreditUse; 8] = [
     CreditUse::Reward,
     CreditUse::WorkReceipt,
     CreditUse::DagWeight,
@@ -19,6 +19,7 @@ pub const ALL_CREDIT_USES: [CreditUse; 7] = [
     CreditUse::Settlement,
     CreditUse::PrefixReuse,
     CreditUse::Dependency,
+    CreditUse::WorkerPayment,
 ];
 
 /// Native admission must bind the *new signed result*, not a legacy claim ID.
@@ -277,7 +278,8 @@ impl<'a, V: RootedCreditView> CreditGate for PositiveCreditGate<'a, V> {
             | CreditUse::RuleE
             | CreditUse::Settlement
             | CreditUse::PrefixReuse
-            | CreditUse::Dependency => {}
+            | CreditUse::Dependency
+            | CreditUse::WorkerPayment => {}
         }
         Ok(CreditAuthorization { _view: self.view, binding: self.check(*claim, usage)?, usage })
     }

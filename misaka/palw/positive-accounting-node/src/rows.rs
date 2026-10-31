@@ -194,7 +194,8 @@ impl CreditGate for NativeRowCreditGate<'_> {
             | CreditUse::RuleE
             | CreditUse::Settlement
             | CreditUse::PrefixReuse
-            | CreditUse::Dependency => {}
+            | CreditUse::Dependency
+            | CreditUse::WorkerPayment => {}
         }
         let inputs = self.rows.resolve(*claim).map_err(NativeRowCreditDenial::Rows)?;
         Err(NativeRowCreditDenial::MissingOwner(inputs.missing_native_owners()[0]))

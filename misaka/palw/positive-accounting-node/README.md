@@ -24,7 +24,7 @@ core bundleの失敗時だけread-only probeで欠落/破損componentを特定�
 
 成功結果 `SignedCreditInputs` は署名確認済み**data only**であり、native admissionやcreditではない。
 公開DTOから生成するconstructorはなく、`rows::NativeRowCreditGate`の認可型は `Infallible`。
-全7信用用途は同じread結果、または次の8 ownerの未実装をtyped denialとして返す。
+全8信用用途は同じread結果、または次の8 ownerの未実装をtyped denialとして返す。
 
 - accepted origin
 - accepted prefix / import世代
@@ -48,7 +48,10 @@ Mismatchは信用にならず、現在のGate C・fraud・満期・責任・資�
 その共通必要条件に加え、`authorize_entitlement(binding, usage)` をtrusted rooted viewへ委譲する。
 実A1 terminalとP承認が揃っても、paid契約にないDagWeight/WorkReceipt/Rule E等の権利は生まれない。
 rootは要求用途、祖先はDependencyの既存権利を確認し、port欠落は全用途を拒否する。
-全7用途の具体入口はleaf `CreditConsumers`。既存native readerの新Positive armはまだ存在しないため、その接続済みとは宣言しない。
+全8用途の具体入口はleaf `CreditConsumers`。Rewardはprimary issuance用、WorkerPaymentは既存worker成功支払用とする。
+既存native readerの新Positive armはまだ存在しないため、その接続済みとは宣言しない。
+source既提供料・安全返金はこの計算信用gateの外でactual receipt/liability/funds/once条件を確認する。
+P欠落だけで返還可能な資金を永久lockせず、未解決の責任や未払サービス料も消さない。
 `validate_scope` は各claimの固定ancestry anchorを現在viewで検証する。親子のanchorが異なっても同じ有効lineageなら進め、
 親originだけがreorgで消えた場合はその子孫をholdする。現在tipへ署名scopeを塗り替えない。
 

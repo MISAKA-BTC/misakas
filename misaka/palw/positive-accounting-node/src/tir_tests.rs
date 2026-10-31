@@ -432,6 +432,7 @@ fn denied_all(view: &TirCreditView<'_, State>, claim: ClaimId, expected: CreditD
     let g = gate(view);
     let uses = CreditConsumers::new(&g);
     assert!(uses.inference_reward(&claim).is_err());
+    assert!(uses.worker_payment(&claim).is_err());
     assert!(uses.work_receipt(&claim).is_err());
     assert_eq!(uses.dag_weight(&claim, 17), 0);
     assert_eq!(uses.rule_e_capital(&claim, 19), 0);
@@ -457,6 +458,7 @@ fn actual_a1_checked_terminal_reaches_all_consumers_only_with_all_existing_condi
     let g = gate(&view);
     let uses = CreditConsumers::new(&g);
     assert_eq!(uses.inference_reward(&result.claim_id()).unwrap().usage(), CreditUse::Reward);
+    assert_eq!(uses.worker_payment(&result.claim_id()).unwrap().usage(), CreditUse::WorkerPayment);
     assert_eq!(uses.work_receipt(&result.claim_id()).unwrap().usage(), CreditUse::WorkReceipt);
     assert_eq!(uses.dag_weight(&result.claim_id(), 17), 17);
     assert_eq!(uses.rule_e_capital(&result.claim_id(), 19), 19);
@@ -474,12 +476,12 @@ fn actual_a1_checked_terminal_reaches_all_consumers_only_with_all_existing_condi
 }
 
 #[test]
-fn checked_terminal_delegates_existing_rights_without_promoting_settlement_to_other_uses() {
+fn checked_terminal_delegates_paid_worker_rights_without_promoting_them_to_primary_reward() {
     let f = fixture();
     let result = f.correct_result();
     let (descriptor, terminal) = complete(&f, &result);
     let state = economic_fixture(&result, descriptor);
-    state.entitlements.set(FixtureEntitlements::Only(&[CreditUse::Settlement]));
+    state.entitlements.set(FixtureEntitlements::Only(&[CreditUse::WorkerPayment, CreditUse::Settlement]));
     let mut view = TirCreditView::new(&state, 1).unwrap();
     let key = miner_key();
     let signature = sign_result(&result);
@@ -495,7 +497,9 @@ fn checked_terminal_delegates_existing_rights_without_promoting_settlement_to_ot
     let uses = CreditConsumers::new(&g);
     assert_eq!(uses.dag_weight(&result.claim_id(), 17), 0);
     assert_eq!(uses.rule_e_capital(&result.claim_id(), 19), 0);
+    assert!(uses.inference_reward(&result.claim_id()).is_err());
     assert!(uses.work_receipt(&result.claim_id()).is_err());
+    assert_eq!(uses.worker_payment(&result.claim_id()).unwrap().usage(), CreditUse::WorkerPayment);
     assert!(uses.settlement(&result.claim_id()).is_ok());
     // Changes in the current rooted entitlement cannot be hidden by the saved
     // terminal or a previously successful settlement authorization.
@@ -523,7 +527,7 @@ impl RootedCreditView for MissingEntitlement<'_> {
 }
 
 #[test]
-fn checked_terminal_cannot_replace_a_missing_rooted_entitlement_port() {
+fn checked_terminal_cannot_replace_a_missing_rooted_entitlement_port_for_any_of_eight_uses() {
     let f = fixture();
     let result = f.correct_result();
     let (descriptor, terminal) = complete(&f, &result);
@@ -535,6 +539,7 @@ fn checked_terminal_cannot_replace_a_missing_rooted_entitlement_port() {
     view.record_checked(&result.authenticate(&key, &signature).unwrap(), terminal).unwrap();
     assert!(view.checked_coverage(result.claim_id()).is_ok());
     let gate = PositiveCreditGate::new(&view, CreditLimits { max_claims: 10, max_edges: 10 }).unwrap();
+    assert_eq!(ALL_CREDIT_USES.len(), 8);
     for usage in ALL_CREDIT_USES {
         let denied = CreditDenial::Entitlement { claim: result.claim_id(), usage };
         assert_eq!(view.authorize_entitlement(&state.facts.get().binding, usage), Err(denied));

@@ -84,6 +84,8 @@ pub trait AtomicCourtStore {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CreditUse {
+    /// Existing primary issuance/coinbase/model/PWU entitlement only.
+    /// Poster-funded worker success payment is a different purpose.
     Reward,
     WorkReceipt,
     DagWeight,
@@ -91,6 +93,9 @@ pub enum CreditUse {
     Settlement,
     PrefixReuse,
     Dependency,
+    /// Existing contract-authorized worker success payment, never primary
+    /// issuance. Provided source fees and safe refunds do not use this gate.
+    WorkerPayment,
 }
 /// A5 owns the current rooted predicate. No success implementation is included.
 /// A caller may not supply Gate C / complete / mature as boolean parameters.

@@ -14,10 +14,19 @@ impl<'a, G: CreditGate> CreditConsumers<'a, G> {
         Self { gate }
     }
 
-    /// Issuance/coinbase/model/PWU and worker/user success escrow all require
-    /// this authorization. A prepaid verification service fee is separate.
+    /// Existing primary issuance/coinbase/model/PWU entitlement. Worker success
+    /// payment cannot use or satisfy this purpose. Native readers must check
+    /// the authorization's purpose at their final use, not accept another use.
     pub fn inference_reward(&self, claim: &G::RootedClaim) -> Result<G::Authorization, G::Denial> {
         self.gate.authorize(claim, CreditUse::Reward)
+    }
+
+    /// Existing contract-authorized worker success payment only. This does not
+    /// mint primary issuance. Earned source-service fees and safe refunds use
+    /// their actual receipt/liability/funding/once-only money predicates instead
+    /// and must not stay locked merely because Positive/P credit is unavailable.
+    pub fn worker_payment(&self, claim: &G::RootedClaim) -> Result<G::Authorization, G::Denial> {
+        self.gate.authorize(claim, CreditUse::WorkerPayment)
     }
 
     /// The same entry is used at both mint and spend; an old mint flag does not
@@ -63,6 +72,7 @@ mod tests {
         let claim = ClaimId(Digest([7; 64]));
         let denied = Err(CreditDenial::MissingNativeResultBinding);
         assert_eq!(consumers.inference_reward(&claim), denied);
+        assert_eq!(consumers.worker_payment(&claim), denied);
         assert_eq!(consumers.work_receipt(&claim), denied);
         assert_eq!(consumers.dag_weight(&claim, u128::MAX), 0);
         assert_eq!(consumers.rule_e_capital(&claim, u128::MAX), 0);

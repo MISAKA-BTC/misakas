@@ -100,14 +100,14 @@ fn all_consumers_share_the_current_predicate_and_preserve_the_exact_weight() {
 }
 
 #[test]
-fn ready_paid_settlement_entitlement_does_not_grant_weight_receipts_or_rule_e() {
+fn ready_paid_worker_entitlement_does_not_grant_primary_reward_weight_receipts_or_rule_e() {
     let mut v = view();
-    // Private fixture for an existing settlement-only entitlement. The full
+    // Private fixture for existing worker-payment/settlement entitlements. Full
     // coverage, drawn approval and economic readiness supplied by ready() stay
     // intact; none can manufacture a different existing right.
-    v.0.get_mut(&id(10)).unwrap().entitlements = FixtureEntitlements::Only(&[CreditUse::Settlement]);
+    v.0.get_mut(&id(10)).unwrap().entitlements = FixtureEntitlements::Only(&[CreditUse::WorkerPayment, CreditUse::Settlement]);
     for usage in ALL_CREDIT_USES {
-        if usage == CreditUse::Settlement {
+        if matches!(usage, CreditUse::WorkerPayment | CreditUse::Settlement) {
             assert!(gate(&v).authorize(&id(10), usage).is_ok());
         } else {
             assert_eq!(gate(&v).authorize(&id(10), usage).err(), Some(CreditDenial::Entitlement { claim: id(10), usage }));
@@ -117,7 +117,9 @@ fn ready_paid_settlement_entitlement_does_not_grant_weight_receipts_or_rule_e() 
     let consumers = consumers::CreditConsumers::new(&gate);
     assert_eq!(consumers.dag_weight(&id(10), u128::MAX), 0);
     assert_eq!(consumers.rule_e_capital(&id(10), u128::MAX), 0);
+    assert!(consumers.inference_reward(&id(10)).is_err());
     assert!(consumers.work_receipt(&id(10)).is_err());
+    assert_eq!(consumers.worker_payment(&id(10)).unwrap().usage(), CreditUse::WorkerPayment);
     assert!(consumers.settlement(&id(10)).is_ok());
 }
 
@@ -140,9 +142,10 @@ impl RootedCreditView for MissingEntitlement {
 }
 
 #[test]
-fn missing_existing_entitlement_rejects_all_seven_ready_credit_uses() {
+fn missing_existing_entitlement_rejects_all_eight_ready_credit_uses() {
     let view = MissingEntitlement(view());
     let gate = PositiveCreditGate::new(&view, CreditLimits { max_claims: 10, max_edges: 10 }).unwrap();
+    assert_eq!(ALL_CREDIT_USES.len(), 8);
     for usage in ALL_CREDIT_USES {
         assert_eq!(gate.authorize(&id(10), usage).err(), Some(CreditDenial::Entitlement { claim: id(10), usage }));
     }

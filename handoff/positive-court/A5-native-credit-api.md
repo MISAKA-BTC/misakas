@@ -46,7 +46,7 @@ A0への要求の現在地は次のとおり。
 
 A5は採用された型を実core `PositiveRowsV2::read/bundle`で読むdata-only bridgeを実装済みである。
 `PositiveCreditRows::resolve`は `SignedCreditInputs` を返し、Caseのpositive_witnessがあればWitness/Coverageも共通validatorで照合する。
-`NativeRowCreditGate`は全7用途で同じ欠落/破損/link/署名失敗を返し、data確認後も8 native ownerをtyped missingとして拒否する。
+`NativeRowCreditGate`は全8用途で同じ欠落/破損/link/署名失敗を返し、data確認後も8 native ownerをtyped missingとして拒否する。
 origin/prefix、登録期待値、local replay、live funding/capital、依存/export、現在Court/資源、実P drawのcapabilityが揃えば、
 ここからnative `RootedCreditView` / `CreditGate` へ接続する。
 既存の公開`RootedCreditFacts`や任意`RootedCreditView`実装からnative支払権限を生成するadapterは作らない。
@@ -227,13 +227,21 @@ Positive解決失敗から旧S/K/V rowや旧pre-fenceのtrueへfallbackしない
 
 | `CreditUse` | Positive armの挿入箇所 | 拒否時の結果 |
 | --- | --- | --- |
-| Reward | Final/held reward release・issuance/coinbase/model/PWU・worker/user成功escrowの支払前 | 成功報酬なし。既に提供されたサービス料金は別のqualified fee処理 |
+| Reward | 既存primary issuance・coinbase/model/PWUの発行前 | 一次発行なし。paid worker権利で代替しない |
 | WorkReceipt | mint時と各spend時、native receipt資格の検査時 | mint/spend/自己carrier資格なし |
 | DagWeight | live/provisional/safe加算、復算、retire/取消し | 一貫して0。以前の加算は同じjournalで取消し |
 | RuleE | 参加資本とleaf/復算 | 参加資本0 |
 | Settlement | safe frontier/depth/settled anchor/EVM settlementの根拠claim読取 | 進行しない。既存のsource/depth条件も維持 |
 | PrefixReuse | export/stateをtrusted inputへ再利用する前 | 再利用creditなし |
 | Dependency | 子claimの信用を進める前 | 当該子孫だけhold |
+| WorkerPayment | poster-funded等の既存契約が許したworker成功支払前 | 成功支払なし。source既提供料/安全返金とは分離 |
+
+WorkerPaymentはpure enumの末尾追加で、旧7用途の意味・順序とwire/domainを変えない。
+native最終issuerは現在viewでReward、worker payerはWorkerPaymentというpurposeを厳密に確認する。
+genericな認可型の値を用途確認なしで他consumerへ受け渡さない。
+既提供sourceサービス料と安全返金は、このPositive/P計算信用gateの対象外である。
+actual receipt・current funding・未払due/責任/予約・一回精算を確認して処理し、P不足だけで永久lockしない。
+P不足やEndedUnverifiedだけを、未解決liabilityを無条件に解除する根拠にもしない。
 
 RPC/SDK表示も同じtyped handleと判定理由を使う。PositivePassed、DrawCertified、CreditReadyを区別する。
 `NativeCreditAuthorization`を得ても、実支払はA4/A5/A6の同一fold checkpoint/UTXO batchを通す。
@@ -259,12 +267,12 @@ RPC/SDK表示も同じtyped handleと判定理由を使う。PositivePassed、Dr
 1. value型はA0採用済み。P value/getter・old/new handleの採用と、A6のtyped scanner/restore登録が残る。
 2. **DATA read部分は実装済み**。node `rows::PositiveCreditRows` が実coreのClaimIndex→Result/Case/Funding bundleと
    Witness/Coverageを読み、欠落・malformed・link・auth失敗を区別する。data成功からnative ownerを作らず、
-   全7用途は `NativeRowCreditGate` で同じmissingを返す。実P decision/current-view/readinessとの合成は残る。
+   全8用途は `NativeRowCreditGate` で同じmissingを返す。実P decision/current-view/readinessとの合成は残る。
    writerはA4/A6既存one-writerに残し、shared module登録はA0が行う。
 3. node側で実A1 terminal/A6 replayとnative sessionを合成し、`validate_scope`と既存leaf gateへ接続。
 4. 各consumerにtyped old/new dispatchを追加。Positive armだけがこのgateを呼び、旧armの回帰を維持。
 5. 同一candidateで、別固定anchor依存の成功、親origin除去、P以外のrow借用、PublicCheckCertified、
-   保存PassだけのIBD、funding解除/reorg、署名packet拒否、全7用途の拒否と成熟後の許可を検証。
+   保存PassだけのIBD、funding解除/reorg、署名packet拒否、全8用途の拒否と成熟後の許可を検証。
 
 この順序ならA0採用後に必要なAPIやfieldを再発明せず最小adapterを実装できる。
 現在の `UnavailableNativeCredit` を根拠なく成功へ変えない。本番presetの有効化は変更しない。

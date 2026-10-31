@@ -70,6 +70,13 @@ spendの結果は三勘定のbefore/after、paid/burn/refund/continuationとactu
 native ownerが全未精算due・予約・責任を再解決して返金可能額を計算する。
 `RefundData.resolution` と保存済みliability参照が一致するだけで、その責任が解消したとは扱わない。
 
+既存worker成功支払の計算信用用途は `WorkerPayment`、primary issuanceは `Reward` と区別する。
+この区別は提供済みsource料金・安全返金をPositive/P信用gateへ入れる理由にはならない。
+それらはactual receipt/liability/funding/once-money条件で処理し、P不成立だけで返還可能な資金を永久lockしない。
+未解決の責任や未払due/予約を消すことも認めない。
+`PrivateAccountingStore` のPanel完成サービス料をworker成功報酬へ再解釈せず、
+worker payoutは既存の実契約と資金ownerが専用purposeを確認して処理する。
+
 ## actual node接続を行う箇所
 
 既存旧escrowの接続順序を参照するが、その旧型・deltaを新意味で使わない。

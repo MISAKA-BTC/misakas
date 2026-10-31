@@ -598,3 +598,63 @@ fn recovered_handles_preserve_once_only_pay_refund_and_real_admission_rollback()
     assert_eq!(s.reserved_resources(), 0);
     assert!(s.conserved());
 }
+
+#[test]
+fn unavailable_computation_credit_does_not_lock_earned_private_service_fees_or_safe_refunds() {
+    use crate::credit::{ALL_CREDIT_USES, CreditDenial, UnavailableNativeCredit};
+    use misaka_palw_positive_contract::{identity::ClaimId, ports::CreditGate};
+
+    // The real private book executes transfers and undo below. Its fixture
+    // authority supplies service/closure facts only: no P-ready/guilty flags or
+    // native funding/recovery/acceptance capability are manufactured here.
+    let assert_computation_denied = || {
+        assert_eq!(ALL_CREDIT_USES.len(), 8);
+        for usage in ALL_CREDIT_USES {
+            assert_eq!(UnavailableNativeCredit.authorize(&ClaimId(d(90)), usage), Err(CreditDenial::MissingNativeResultBinding));
+        }
+    };
+    let a = authority();
+    let mut s = store(&a);
+    let initial_book = s.book.clone();
+    let admitted = admit(&mut s, 10);
+    a.0.borrow_mut().status.insert(intent(10).case, ClaimStatus::Pending);
+    assert_computation_denied();
+    delivered(&a, data(0), 2);
+    let pending_payment = pay(&mut s, &admitted, data(0));
+    pay(&mut s, &admitted, data(0));
+    assert_eq!(s.balance(party(2)), 10);
+
+    a.0.borrow_mut().status.insert(intent(10).case, ClaimStatus::EndedUnverified);
+    assert_computation_denied();
+    // Neither failed computation credit nor EndedUnverified can, by itself,
+    // release an escrow whose service/liability closure is still unresolved.
+    assert_eq!(s.prepare_close(&admitted).err(), Some(AccountingError::MissingCourtClosure));
+    delivered(&a, data(1), 2);
+    let ended_payment = pay(&mut s, &admitted, data(1));
+    pay(&mut s, &admitted, data(1));
+    assert_eq!(s.balance(party(2)), 20);
+    assert_eq!(s.totals(intent(10).case).unwrap().remaining, 80);
+
+    // Only the existing authority's actual closure fact makes the remaining
+    // contractual refund safe. P remains unavailable throughout this path.
+    a.0.borrow_mut().closed.insert(intent(10).case, ClaimStatus::EndedUnverified);
+    let refund_undo = close(&mut s, &admitted);
+    let after = (s.book.clone(), s.epoch, s.head, s.initial_supply);
+    close(&mut s, &admitted);
+    assert_eq!((s.book.clone(), s.epoch, s.head, s.initial_supply), after);
+    assert_computation_denied();
+    assert_eq!((s.balance(party(1)), s.balance(party(2)), s.reserved_resources()), (978, 20, 0));
+    assert_eq!(
+        s.totals(intent(10).case),
+        Some(HoldTotals { initial: 100, paid_unique_service: 20, refunded: 78, remaining: 0, contractual_burn: 2 })
+    );
+
+    s.rollback(refund_undo).unwrap();
+    assert_eq!((s.balance(party(1)), s.balance(party(2)), s.reserved_resources()), (900, 20, 4));
+    s.rollback(ended_payment).unwrap();
+    s.rollback(pending_payment).unwrap();
+    s.rollback(admitted.into_admission_undo().unwrap()).unwrap();
+    assert_computation_denied();
+    assert_eq!(s.book, initial_book);
+    assert!(s.conserved());
+}
