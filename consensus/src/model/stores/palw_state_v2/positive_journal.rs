@@ -81,6 +81,10 @@ pub struct PositiveJournalStoreQuoteV2 {
     pub decode_workspace_bytes: u64,
     pub batch_added_bytes: u64,
     pub total_batch_bytes: u64,
+    /// Simultaneous LOCAL memory reservation, including caller buffers and
+    /// predecessor reads. This is NOT canonical Case.usage.retained_bytes and
+    /// must never be added to a Case fee/retention meter. The native owner
+    /// prices canonical new material bytes separately from capacities/caches.
     pub retained_bytes: u64,
 }
 
