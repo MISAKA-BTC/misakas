@@ -1,0 +1,59 @@
+{
+  "command": [
+    "cargo",
+    "--config",
+    "profile.dev.package.kaspa-consensus-core.opt-level=0",
+    "--config",
+    "profile.test.package.kaspa-consensus-core.opt-level=0",
+    "test",
+    "-p",
+    "misaka-palw-positive-accounting-node",
+    "--offline",
+    "--locked"
+  ],
+  "environment": {
+    "CARGO_TARGET_DIR": "/Users/wata/.cache/misaka-positive-accounting-node-target",
+    "CARGO_INCREMENTAL": "0",
+    "CARGO_PROFILE_DEV_DEBUG": "0",
+    "CARGO_PROFILE_TEST_DEBUG": "0",
+    "CARGO_BUILD_JOBS": "2",
+    "CARGO_TERM_COLOR": "never",
+    "RUST_MIN_STACK": "16777216",
+    "ROCKSDB_LIB_DIR": "/Users/wata/.codex/worktrees/rfc14-g14-completion/MISAKA-testnet/target/release/build/librocksdb-sys-865d89ee7dbf2b2a/out"
+  },
+  "base_commit": "79c3f9bcae0fde86940fd65cbcbfa2018a72cc21",
+  "production_commit": "79c3f9bcae0fde86940fd65cbcbfa2018a72cc21",
+  "production_tree": "fa3175d99e51683f59f44b33574568ab15bff591",
+  "source_sha256": {
+    "Cargo.toml": "5b1cf91b2106e81e3c4046c125ec062d33dae86e7b5d8361ec4a2ce187e51efc",
+    "Cargo.lock": "b8a58e9e08bdbfd7e3dfa87118d641fd673e50d7c277dfebd59686f4cb29ed61",
+    "consensus/core/Cargo.toml": "084e2eb8a015be8b0c3abd513244a4587493a404810884b383b801b096fb1295",
+    "consensus/core/src/palw_positive_rows_v2.rs": "90438779f3981c8ba6841549d29feaea16146412e2bb6decd5caf4cc032b64ce",
+    "consensus/core/src/palw_positive_rows_v2/restore.rs": "b3ef8844df59818a7bae37ed383cc8bb29bdc741cc76d09cb0bd0683579696ec",
+    "consensus/core/src/palw_state_v2/chain_state.rs": "c34081912aaca1d4d76454b41bdca9acb11ff71962c04d79a09b4cf19eeae536",
+    "consensus/core/src/palw_kernel_route_v1.rs": "bf1a6bb9bf6567b2d7f3b61ce8441280de027ff248ca1ef84e48d2c2a803e848",
+    "misaka/palw/positive-contract/src/rows.rs": "53d42d3a6f65af575eaf3ccebc16e63155501bb9128ae6c934994b5a683be7d4",
+    "misaka/palw/positive-contract/src/ports.rs": "3a91a53bb431c031ca8f45db8bc2d5650f0688025186822dcb0cdae854f96475",
+    "misaka/palw/positive-accounting-node/Cargo.toml": "15e519598233cc4b10d90371f28c824def40726a6c4149d34b2f1aeebccf1515",
+    "misaka/palw/positive-accounting-node/src/dues.rs": "0f3f234a040451c7ba72a9b607f4e78ba32b9de6048183b2954eb120c8df677e",
+    "misaka/palw/positive-accounting-node/src/dues/tests.rs": "8a65e986230dbbc5854dd2bb6242ae51c6faa0a7166e54b8a720564863d91bb3",
+    "misaka/palw/positive-accounting-node/src/lib.rs": "62657713cd3311968ca27ffc5bbefdd768593e5fb387451478f3005ee5d47c49",
+    "misaka/palw/positive-accounting-node/src/native.rs": "27011bd251f0496a26d4279e56682dbdc5f03b82697034e402aec3d11b41277c",
+    "misaka/palw/positive-accounting-node/src/native/tests.rs": "f96ea0bec32adfbed4d9d8c1ae6ef7fb11866277829bd5df192ae3e3db1ffcc6",
+    "misaka/palw/positive-accounting-node/src/native_funds.rs": "53800ab7889605d141407e588e9d51d384f023ca483c1c4506ef54fe2e1fdb0a",
+    "misaka/palw/positive-accounting-node/src/native_funds/tests.rs": "ce6f998ee72d35c7737b207e0a0818db6cccf4ec7eeb182bf998bdd8ce31b99c",
+    "misaka/palw/positive-accounting-node/src/rows.rs": "5a5ce36c9e700ae5f55dc99cd392e68fb1cabaf4f139084d8c0a630b597219ef",
+    "misaka/palw/positive-accounting-node/src/rows/tests.rs": "d020883d7dcc6ebffd9de5a79812771e70f8bb42a88080e303a4c70a3686b128",
+    "misaka/palw/positive-accounting-node/src/tir.rs": "ce528f97377ddae2610b753b7d1b04c9fdabc8705943f932b182b4a4c55f9d7c",
+    "misaka/palw/positive-accounting-node/src/tir_tests.rs": "ab3cc96ff4e8ce39a69920e2f3b5947a3e8e6602c52eb04847f21fcd98810bd0"
+  },
+  "exit_code": 0,
+  "raw_log": "node-full.log",
+  "native_archive": {
+    "path": "/Users/wata/.codex/worktrees/rfc14-g14-completion/MISAKA-testnet/target/release/build/librocksdb-sys-865d89ee7dbf2b2a/out/librocksdb.a",
+    "sha256": "6eae541967b2cb5345ace55eadb34b2c490e91acfd8a4e2da5822a60f91af3a2",
+    "use": "read-only existing archive if needed, no C++ rebuild"
+  },
+  "scope": "exact production79c3 plus rows/tests.rs fixture fix only; strict restore unchanged; no native authority or process integration",
+  "source_unchanged_during_run": true
+}

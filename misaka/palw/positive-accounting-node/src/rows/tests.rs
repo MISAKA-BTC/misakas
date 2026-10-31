@@ -2,15 +2,20 @@
 //! values below are the existing A0 row-codec fixture data, used ONLY as signed
 //! DTO fields. No test treats them as executed origins, current locks, native
 //! registration, replay or P approval; the production bridge always reports
-//! these missing owners. There is no new native-state setter.
+//! these missing owners. Full fixtures pass the actual strict carriage restore.
+//! Partial/corrupt fixtures are rejected there and inspected through the real
+//! lower-level decoders/validators, never installed through an unchecked setter.
 use super::*;
 use kaspa_consensus_core::{
     palw_kernel_route_v1::{PalwKernelRouteStateV1, palw_kernel_route_policy_v1},
-    palw_state_v2::{PalwStateCarriageV2, PalwStateParamsV2},
+    palw_positive_rows_v2::{restore::validate_positive_aux_restore_v2, validate_positive_bundle_v2},
+    palw_state_v2::{PalwStateCarriageV2, PalwStateParamsV2, PalwStateV2Error},
 };
 use misaka_palw_kernel::rows::LedgerScalarsV1;
 use misaka_palw_positive_accounting::credit::ALL_CREDIT_USES;
-use misaka_palw_positive_contract::{identity::*, messages::*, native::KERNEL_AUX_TABLE, rows::*};
+use misaka_palw_positive_contract::{
+    identity::*, messages::*, native::KERNEL_AUX_TABLE, rows::*, tir::EXACT_PART_HEADER_BYTES, wire::EVIDENCE_HEADER_BYTES,
+};
 use std::collections::BTreeMap;
 fn d(n: u8) -> Digest {
     Digest([n; 64])
@@ -28,6 +33,15 @@ fn origin() -> AcceptedOrigin {
 }
 fn material() -> AcceptedMaterial {
     AcceptedMaterial { origin: origin(), digest: d(8) }
+}
+fn origin_at(event_ordinal: u32) -> AcceptedOrigin {
+    // Same codec-example accepting block means identical accepted clocks.
+    // Only its event position advances; these DTOs do not establish acceptance.
+    AcceptedOrigin { event_ordinal, ..origin() }
+}
+fn unsigned_packet_bytes() -> u64 {
+    // Current r1 minimum: outer header 284 + ExactPart header 16 = 300.
+    (EVIDENCE_HEADER_BYTES + EXACT_PART_HEADER_BYTES) as u64
 }
 fn signed_bundle() -> (ClaimIndexRow, ResultRow, CaseRow, FundingRow, WitnessRow, CoverageRow) {
     use libcrux_ml_dsa::ml_dsa_87::*;
@@ -133,7 +147,7 @@ fn signed_bundle() -> (ClaimIndexRow, ResultRow, CaseRow, FundingRow, WitnessRow
         capital: leg(20),
         surplus: leg(5),
         liability: material(),
-        last_settlement: Some(material()),
+        last_settlement: None,
     };
     let plan = coverage_plan_id(&r, basis.profile, basis.derivation, 10).unwrap();
     let w = PanelWitnessCommit {
@@ -154,7 +168,7 @@ fn signed_bundle() -> (ClaimIndexRow, ResultRow, CaseRow, FundingRow, WitnessRow
         panel_signature: *sign(&panel.signing_key, &w.id().0.0, WITNESS_SIGN_CONTEXT, [0; 32]).unwrap().as_ref(),
         panel_key: *panel.verification_key.as_ref(),
         witness: w.clone(),
-        origin: origin(),
+        origin: origin_at(6),
         record_header: material(),
         generated_tokens: material(),
         role_assignment: material(),
@@ -174,15 +188,15 @@ fn signed_bundle() -> (ClaimIndexRow, ResultRow, CaseRow, FundingRow, WitnessRow
             max_part_bytes: 10000,
         },
         status: ClaimStatus::PositivePassed,
-        miner_data: MinerDataStatus::Pending,
+        miner_data: MinerDataStatus::NotRequested,
         witness_status: WitnessStatus::Complete,
         positive_witness: Some(w.id()),
-        usage: AggregateUsage::default(),
+        usage: AggregateUsage { witness_attempts: 1, ..AggregateUsage::default() },
         reservation: material(),
         liability: material(),
         maturity_daa: 100,
         unresolved_fraud: 0,
-        last_event: origin(),
+        last_event: origin_at(16),
     };
     let coverage = CoverageRow {
         witness: w.id(),
@@ -191,19 +205,19 @@ fn signed_bundle() -> (ClaimIndexRow, ResultRow, CaseRow, FundingRow, WitnessRow
         plan,
         mandatory_relations: 10,
         next_relation: 10,
-        frame_bytes: 1000,
+        frame_bytes: 10 * unsigned_packet_bytes(),
         signatures: 10,
         elements: 100,
         terms: 200,
         state: CoverageState::Matched,
-        last_event: origin(),
+        last_event: origin_at(16),
     };
     (ClaimIndexRow { claim: r.claim_id(), result: r.id(), case: r.case_id() }, result, case, funding, witness, coverage)
 }
 
 // Local, already-owned DTO carriage import exercises the existing public state
 // read surface. It is NOT a peer import or native acceptance of these rows.
-fn dto_state(entries: BTreeMap<(u8, Vec<u8>), Vec<u8>>) -> PalwChainStateV2 {
+fn dto_state(entries: BTreeMap<(u8, Vec<u8>), Vec<u8>>) -> Result<PalwChainStateV2, PalwStateV2Error> {
     let params = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, Hash64::from_u64_word(1), 4, 1000, 100, 1000, 0).unwrap();
     let mut carriage = PalwStateCarriageV2::from_state(&PalwChainStateV2::genesis());
     let mut route = PalwKernelRouteStateV1::new(
@@ -213,7 +227,7 @@ fn dto_state(entries: BTreeMap<(u8, Vec<u8>), Vec<u8>>) -> PalwChainStateV2 {
     );
     route.aux = entries;
     carriage.kernel_route = Some(route);
-    carriage.into_state(&params, None).unwrap()
+    carriage.into_state(&params, None)
 }
 
 fn encoded_rows(bodies: impl IntoIterator<Item = NativeRowBody>) -> BTreeMap<(u8, Vec<u8>), Vec<u8>> {
@@ -226,9 +240,62 @@ fn encoded_rows(bodies: impl IntoIterator<Item = NativeRowBody>) -> BTreeMap<(u8
         .collect()
 }
 
+fn complete_rows(
+    index: ClaimIndexRow,
+    result: ResultRow,
+    case: CaseRow,
+    funding: FundingRow,
+    witness: WitnessRow,
+    coverage: CoverageRow,
+) -> BTreeMap<(u8, Vec<u8>), Vec<u8>> {
+    let id = witness.witness.id();
+    let author = witness.witness.author;
+    let mut bodies = vec![
+        NativeRowBody::ClaimIndex(index),
+        NativeRowBody::Result(result),
+        NativeRowBody::Case(case),
+        NativeRowBody::Funding(funding),
+        NativeRowBody::Witness(witness),
+        NativeRowBody::Coverage(coverage),
+        NativeRowBody::JournalHead(JournalHeadRow {
+            case: case.case,
+            // Result admission + witness commitment + ten one-relation parts.
+            sequence: 12,
+            previous: d(95),
+            head: d(96),
+            history: AcceptedMaterial { origin: case.last_event, digest: d(97) },
+        }),
+    ];
+    for first_relation in 0..10 {
+        bodies.push(NativeRowBody::PacketReceipt(PacketReceiptRow {
+            witness: id,
+            first_relation,
+            frame: EvidencePartId(d(77 + first_relation as u8)),
+            author,
+            // 300 unsigned + 4627 signature = 4927 signed bytes. The literal
+            // preimages/real A1 checking remain native-owner responsibilities.
+            signed_bytes: unsigned_packet_bytes() + SIGNATURE_BYTES as u64,
+            origin: origin_at(7 + first_relation as u32),
+        }));
+    }
+    encoded_rows(bodies)
+}
+
+fn assert_restore_refused(entries: BTreeMap<(u8, Vec<u8>), Vec<u8>>, cause: PositiveRowErrorV2) {
+    assert_eq!(validate_positive_aux_restore_v2(&entries).err(), Some(cause));
+    match dto_state(entries) {
+        Err(PalwStateV2Error::CarriageInconsistent(message)) => {
+            assert_eq!(message, format!("inconsistent Positive aux rows: {cause:?}"));
+        }
+        Err(other) => panic!("unexpected carriage refusal: {other:?}"),
+        Ok(_) => panic!("partial/corrupt Positive rows must not become a native state"),
+    }
+}
+
 fn denied_all(state: &PalwChainStateV2, claim: ClaimId, error: NativeRowCreditDenial) {
     let before = state.state_root();
     let gate = NativeRowCreditGate::new(state);
+    assert_eq!(ALL_CREDIT_USES.len(), 8);
     for usage in ALL_CREDIT_USES {
         assert_eq!(gate.authorize(&claim, usage), Err(error), "{usage:?}");
     }
@@ -245,16 +312,19 @@ fn actual_public_genesis_and_empty_route_reads_keep_missing_route_and_row_distin
     );
     denied_all(&absent_route, claim, NativeRowCreditDenial::Rows(CreditRowFailure::MissingKernelRoute));
 
-    let empty_route = dto_state(BTreeMap::new());
+    let empty_route = dto_state(BTreeMap::new()).unwrap();
     assert_eq!(PositiveCreditRows::new(&empty_route).read(NativeRowKey::ClaimIndex(claim)), Ok(None));
     denied_all(&empty_route, claim, NativeRowCreditDenial::Rows(CreditRowFailure::MissingRow(NativeRowKey::ClaimIndex(claim))));
 }
 
 #[test]
-fn actual_claim_index_missing_result_never_falls_back_to_an_old_subject() {
+fn orphan_claim_index_is_rejected_before_native_credit_reads() {
     let index = ClaimIndexRow { claim: ClaimId(d(1)), result: ResultId(d(2)), case: CaseId(d(3)) };
-    let state = dto_state(encoded_rows([NativeRowBody::ClaimIndex(index)]));
-    denied_all(&state, index.claim, NativeRowCreditDenial::Rows(CreditRowFailure::MissingRow(NativeRowKey::Result(index.result))));
+    let key = NativeRowKey::Result(index.result);
+    // The real restore now rejects an orphan before a reader can observe it.
+    // Test that earlier boundary instead of installing a partial native state.
+    assert_restore_refused(encoded_rows([NativeRowBody::ClaimIndex(index)]), PositiveRowErrorV2::MissingRequiredRow);
+    assert_eq!(classify_read_error(key, PositiveRowErrorV2::MissingRequiredRow), CreditRowFailure::MissingRow(key));
 }
 
 #[test]
@@ -264,47 +334,33 @@ fn malformed_version_and_wrong_key_body_are_not_reported_as_absent_rows() {
     let key = NativeRowKey::ClaimIndex(index.claim);
     let mut malformed = row.encode().unwrap();
     malformed.pop();
-    let state = dto_state(BTreeMap::from([((KERNEL_AUX_TABLE, key.encode()), malformed)]));
-    denied_all(
-        &state,
-        index.claim,
-        NativeRowCreditDenial::Rows(CreditRowFailure::MalformedRow { key, cause: ContractError::NonCanonical }),
-    );
-
     let mut bad_version = row.encode().unwrap();
     bad_version[0] = 1;
-    let state = dto_state(BTreeMap::from([((KERNEL_AUX_TABLE, key.encode()), bad_version)]));
-    denied_all(
-        &state,
-        index.claim,
-        NativeRowCreditDenial::Rows(CreditRowFailure::MalformedRow { key, cause: ContractError::Version }),
-    );
-
     let other = ClaimIndexRow { claim: ClaimId(d(99)), ..index };
     let bytes = NativeRowValue::new(NativeRowBody::ClaimIndex(other)).unwrap().encode().unwrap();
-    let state = dto_state(BTreeMap::from([((KERNEL_AUX_TABLE, key.encode()), bytes)]));
-    denied_all(
-        &state,
-        index.claim,
-        NativeRowCreditDenial::Rows(CreditRowFailure::MalformedRow { key, cause: ContractError::Identity }),
-    );
+    for (bytes, cause) in
+        [(malformed, ContractError::NonCanonical), (bad_version, ContractError::Version), (bytes, ContractError::Identity)]
+    {
+        // Real codec errors keep their exact A5 diagnostic; production restore
+        // must reject the same bytes, rather than expose malformed live state.
+        assert_eq!(NativeRowValue::decode(&key.encode(), &bytes).err(), Some(cause));
+        assert_eq!(classify_read_error(key, PositiveRowErrorV2::Contract(cause)), CreditRowFailure::MalformedRow { key, cause });
+        assert_restore_refused(BTreeMap::from([((KERNEL_AUX_TABLE, key.encode()), bytes)]), PositiveRowErrorV2::Contract(cause));
+    }
 }
 
 #[test]
 fn actual_core_signed_bundle_is_data_and_leaves_every_native_owner_missing() {
     let (index, result, case, funding, witness, coverage) = signed_bundle();
-    let state = dto_state(encoded_rows([
-        NativeRowBody::ClaimIndex(index),
-        NativeRowBody::Result(result),
-        NativeRowBody::Case(case),
-        NativeRowBody::Funding(funding),
-        NativeRowBody::Witness(witness),
-        NativeRowBody::Coverage(coverage),
-    ]));
+    let entries = complete_rows(index, result, case, funding, witness, coverage);
+    let report = validate_positive_aux_restore_v2(&entries).unwrap();
+    assert_eq!((report.rows, report.cases, report.witnesses, report.signature_checks), (17, 1, 1, 3));
+    assert_eq!((unsigned_packet_bytes(), SIGNATURE_BYTES), (300, 4627));
+    let state = dto_state(entries).unwrap();
     let reader = PositiveCreditRows::new(&state);
     let inputs = reader.resolve(index.claim).unwrap();
     assert_eq!(inputs.bundle().index, index);
-    assert_eq!(inputs.bundle().case.miner_data, MinerDataStatus::Pending);
+    assert_eq!(inputs.bundle().case.miner_data, MinerDataStatus::NotRequested);
     assert_eq!(inputs.witness_and_coverage().unwrap().1.state, CoverageState::Matched);
     assert_eq!(inputs.source_state_root(), state.state_root());
     assert_eq!(inputs.missing_native_owners(), MISSING_NATIVE_OWNERS);
@@ -313,91 +369,71 @@ fn actual_core_signed_bundle_is_data_and_leaves_every_native_owner_missing() {
 
 #[test]
 fn core_bundle_signature_failure_and_cross_row_link_failure_are_distinct() {
-    let (index, result, case, funding, _, _) = signed_bundle();
+    let (index, result, case, funding, witness, coverage) = signed_bundle();
+    let entries = complete_rows(index, result.clone(), case, funding.clone(), witness, coverage);
     let mut bad_signature = result.clone();
     bad_signature.miner_signature[0] ^= 1;
-    let state = dto_state(encoded_rows([
-        NativeRowBody::ClaimIndex(index),
-        NativeRowBody::Result(bad_signature),
-        NativeRowBody::Case(case),
-        NativeRowBody::Funding(funding.clone()),
-    ]));
-    denied_all(
-        &state,
-        index.claim,
-        NativeRowCreditDenial::Rows(CreditRowFailure::Authentication {
-            stage: AuthenticationStage::ResultAndFunding,
-            cause: ContractError::Signature,
-        }),
+    let failure = validate_positive_bundle_v2(&index, &bad_signature, &case, &funding).unwrap_err();
+    assert_eq!(failure, PositiveRowErrorV2::Contract(ContractError::Signature));
+    assert_eq!(
+        classify_bundle_error(AuthenticationStage::ResultAndFunding, ContractError::Signature),
+        CreditRowFailure::Authentication { stage: AuthenticationStage::ResultAndFunding, cause: ContractError::Signature }
     );
+    let mut bad_entries = entries.clone();
+    bad_entries.extend(encoded_rows([NativeRowBody::Result(bad_signature)]));
+    assert_restore_refused(bad_entries, failure);
 
     let mut wrong_plan = case;
     wrong_plan.coverage.plan = PlanId(d(99));
-    let state = dto_state(encoded_rows([
-        NativeRowBody::ClaimIndex(index),
-        NativeRowBody::Result(result),
-        NativeRowBody::Case(wrong_plan),
-        NativeRowBody::Funding(funding),
-    ]));
-    denied_all(&state, index.claim, NativeRowCreditDenial::Rows(CreditRowFailure::BundleLinks(ContractError::Identity)));
+    let failure = validate_positive_bundle_v2(&index, &result, &wrong_plan, &funding).unwrap_err();
+    assert_eq!(failure, PositiveRowErrorV2::Contract(ContractError::Identity));
+    assert_eq!(
+        classify_bundle_error(AuthenticationStage::ResultAndFunding, ContractError::Identity),
+        CreditRowFailure::BundleLinks(ContractError::Identity)
+    );
+    let mut bad_entries = entries;
+    bad_entries.extend(encoded_rows([NativeRowBody::Case(wrong_plan)]));
+    assert_restore_refused(bad_entries, failure);
 }
 
 #[test]
-fn missing_positive_witness_or_coverage_is_not_a_completed_local_check() {
-    let (index, result, case, funding, witness, _) = signed_bundle();
-    let bodies = [
-        NativeRowBody::ClaimIndex(index),
-        NativeRowBody::Result(result.clone()),
-        NativeRowBody::Case(case),
-        NativeRowBody::Funding(funding.clone()),
-    ];
-    let state = dto_state(encoded_rows(bodies));
-    denied_all(
-        &state,
-        index.claim,
-        NativeRowCreditDenial::Rows(CreditRowFailure::MissingRow(NativeRowKey::Witness(witness.witness.id()))),
-    );
+fn missing_positive_witness_coverage_journal_or_packet_cannot_be_restored() {
+    let (index, result, case, funding, witness, coverage) = signed_bundle();
     let id = witness.witness.id();
-    let state = dto_state(encoded_rows([
-        NativeRowBody::ClaimIndex(index),
-        NativeRowBody::Result(result),
-        NativeRowBody::Case(case),
-        NativeRowBody::Funding(funding),
-        NativeRowBody::Witness(witness),
-    ]));
-    denied_all(&state, index.claim, NativeRowCreditDenial::Rows(CreditRowFailure::MissingRow(NativeRowKey::Coverage(id))));
+    let entries = complete_rows(index, result, case, funding, witness, coverage);
+    for key in [NativeRowKey::Witness(id), NativeRowKey::Coverage(id), NativeRowKey::JournalHead(case.case)] {
+        let mut missing = entries.clone();
+        assert!(missing.remove(&(KERNEL_AUX_TABLE, key.encode())).is_some());
+        assert_restore_refused(missing, PositiveRowErrorV2::MissingRequiredRow);
+    }
+    let mut missing_packet = entries;
+    assert!(
+        missing_packet.remove(&(KERNEL_AUX_TABLE, NativeRowKey::PacketReceipt { witness: id, first_relation: 5 }.encode())).is_some()
+    );
+    assert_restore_refused(missing_packet, PositiveRowErrorV2::InconsistentLinks);
 }
 
 #[test]
 fn witness_authentication_and_coverage_binding_are_checked_by_shared_validator() {
     let (index, result, case, funding, witness, coverage) = signed_bundle();
+    let entries = complete_rows(index, result.clone(), case, funding, witness.clone(), coverage);
     let mut bad_signature = witness.clone();
     bad_signature.panel_signature[0] ^= 1;
-    let state = dto_state(encoded_rows([
-        NativeRowBody::ClaimIndex(index),
-        NativeRowBody::Result(result.clone()),
-        NativeRowBody::Case(case),
-        NativeRowBody::Funding(funding.clone()),
-        NativeRowBody::Witness(bad_signature),
-        NativeRowBody::Coverage(coverage),
-    ]));
-    denied_all(
-        &state,
-        index.claim,
-        NativeRowCreditDenial::Rows(CreditRowFailure::Authentication {
-            stage: AuthenticationStage::Witness,
-            cause: ContractError::Signature,
-        }),
+    let failure = validate_witness_bundle(&result, &case, &bad_signature, &coverage).unwrap_err();
+    assert_eq!(failure, ContractError::Signature);
+    assert_eq!(
+        classify_bundle_error(AuthenticationStage::Witness, failure),
+        CreditRowFailure::Authentication { stage: AuthenticationStage::Witness, cause: ContractError::Signature }
     );
+    let mut bad_entries = entries.clone();
+    bad_entries.extend(encoded_rows([NativeRowBody::Witness(bad_signature)]));
+    assert_restore_refused(bad_entries, PositiveRowErrorV2::Contract(failure));
     let mut wrong_plan = coverage;
     wrong_plan.plan = PlanId(d(99));
-    let state = dto_state(encoded_rows([
-        NativeRowBody::ClaimIndex(index),
-        NativeRowBody::Result(result),
-        NativeRowBody::Case(case),
-        NativeRowBody::Funding(funding),
-        NativeRowBody::Witness(witness),
-        NativeRowBody::Coverage(wrong_plan),
-    ]));
-    denied_all(&state, index.claim, NativeRowCreditDenial::Rows(CreditRowFailure::BundleLinks(ContractError::Identity)));
+    let failure = validate_witness_bundle(&result, &case, &witness, &wrong_plan).unwrap_err();
+    assert_eq!(failure, ContractError::Identity);
+    assert_eq!(classify_bundle_error(AuthenticationStage::Witness, failure), CreditRowFailure::BundleLinks(ContractError::Identity));
+    let mut bad_entries = entries;
+    bad_entries.extend(encoded_rows([NativeRowBody::Coverage(wrong_plan)]));
+    assert_restore_refused(bad_entries, PositiveRowErrorV2::Contract(failure));
 }
