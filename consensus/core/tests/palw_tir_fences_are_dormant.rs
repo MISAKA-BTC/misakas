@@ -162,9 +162,9 @@ const PINS: &[(&str, &str, &str, &str)] = &[
     (
         // re-pin 2026-10-31 @cc5a7dd0e096: undeployed model-one fence delayed to 18640 for verified fleet rollout (was d093d119…, 67c126f5…)
         "from(testnet-12) − IR flag day",
-        "8b48626ce2ad305b50dd66cf7ff984f34d1bfce7ee3e6c82634fe4f4ecda3dfc",
+        "cd12b4714408e5694e263f59e15b2fb1bf27c80a5ee5d7255f09164604c7f978",
         "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-        "6487dd1cbbbee581b264add191e615b97de045b11ad4189d3db91a3226247598",
+        "ebc1b8bba64ff0b5669b37493be3a2e792594f79b0e853a20fd49ddf2078118a",
     ),
     (
         "from(devnet)",
@@ -199,9 +199,9 @@ const PINS: &[(&str, &str, &str, &str)] = &[
     (
         // re-pin 2026-10-31 @cc5a7dd0e096: undeployed model-one fence delayed to 18640 for verified fleet rollout (was d093d119…, 67c126f5…)
         "palw_t12_shipped_params − IR flag day",
-        "8b48626ce2ad305b50dd66cf7ff984f34d1bfce7ee3e6c82634fe4f4ecda3dfc",
+        "cd12b4714408e5694e263f59e15b2fb1bf27c80a5ee5d7255f09164604c7f978",
         "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-        "6487dd1cbbbee581b264add191e615b97de045b11ad4189d3db91a3226247598",
+        "ebc1b8bba64ff0b5669b37493be3a2e792594f79b0e853a20fd49ddf2078118a",
     ),
     (
         // re-pin 2026-10-30 @64535b7bf7e8: User selected DAA18400 for the unpublished G14 schedule on 2026-10-30; preserve the current main CI fixes (was 0fb64448…, 3299840c…)
@@ -234,9 +234,9 @@ const PINS: &[(&str, &str, &str, &str)] = &[
     (
         // re-pin 2026-10-31 @cc5a7dd0e096: undeployed model-one fence delayed to 18640 for verified fleet rollout (was b922235d…, 67c126f5…)
         "palw_t12_drill_params_v1 − IR flag day",
-        "f68dce733f9e4a0c73fe39bd9d1ea5520e65bb42af6f4ef8848529a33ac48994",
+        "1b0411ba360aac6e1c060c6abc4ef8878f1d092878b7940fca7f20dffc610480",
         "2254a5ae75cc1ed6fa70cc6f9a57281e7ab36aa8f80a820a545b81dad21549c6",
-        "6487dd1cbbbee581b264add191e615b97de045b11ad4189d3db91a3226247598",
+        "ebc1b8bba64ff0b5669b37493be3a2e792594f79b0e853a20fd49ddf2078118a",
     ),
 ];
 

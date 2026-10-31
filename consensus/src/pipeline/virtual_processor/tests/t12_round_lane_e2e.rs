@@ -199,6 +199,7 @@ pub(super) fn t12_with_harness_cards_over(
         None,
     );
     params.palw_model_panel_one_v1 = None;
+    params.palw_model_panel_one_retention_v1 = None;
     params.sync_palw_g14_gates_v1();
 
     // The divergence is stated, not assumed: testnet-12 ships the lane at genesis.
@@ -230,6 +231,7 @@ pub(super) fn t12_with_harness_cards_over(
         None,
     );
     expected.palw_model_panel_one_v1 = None;
+    expected.palw_model_panel_one_retention_v1 = None;
     expected.sync_palw_g14_gates_v1();
     let PalwConsensusMode::ConsensusV2(shipped_bundle) = &expected.palw_consensus_mode else { unreachable!() };
     assert_eq!(bundle.state, shipped_bundle.state, "every window as shipped with the public-genesis G14 fences removed");

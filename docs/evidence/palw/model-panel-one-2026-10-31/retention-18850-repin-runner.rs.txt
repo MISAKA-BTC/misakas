@@ -1,0 +1,43 @@
+// Temporary aggregate runner; not a release source input.
+#[path = "palw_panel_seed_execution_is_t12_only.rs"]
+mod palw_panel_seed_execution_is_t12_only;
+#[path = "palw_lane_accept_parents_first_is_t12_only.rs"]
+mod palw_lane_accept_parents_first_is_t12_only;
+#[path = "palw_hb_transparency_same_chain_fence.rs"]
+mod palw_hb_transparency_same_chain_fence;
+#[path = "reorg_strict_win_fence.rs"]
+mod reorg_strict_win_fence;
+#[path = "palw_final_lock_life_is_t12_only.rs"]
+mod palw_final_lock_life_is_t12_only;
+#[path = "palw_final_lock_full_collateral_is_t12_only.rs"]
+mod palw_final_lock_full_collateral_is_t12_only;
+#[path = "pruning_proof_strict_economic_fence.rs"]
+mod pruning_proof_strict_economic_fence;
+#[path = "palw_anchor_at_ceiling_is_t12_only.rs"]
+mod palw_anchor_at_ceiling_is_t12_only;
+#[path = "palw_bond_maturity_early_is_t12_only.rs"]
+mod palw_bond_maturity_early_is_t12_only;
+#[path = "palw_clock_lead_cap_is_t12_only.rs"]
+mod palw_clock_lead_cap_is_t12_only;
+#[path = "palw_readiness_horizon_is_t12_only.rs"]
+mod palw_readiness_horizon_is_t12_only;
+#[path = "palw_registry_resilience_is_t12_only.rs"]
+mod palw_registry_resilience_is_t12_only;
+#[path = "g14_close_legacy.rs"]
+mod g14_close_legacy;
+#[path = "palw_operator_anchor_is_t12_only.rs"]
+mod palw_operator_anchor_is_t12_only;
+#[path = "g14_court_capacity.rs"]
+mod g14_court_capacity;
+#[path = "palw_model_sink_bound_is_t12_only.rs"]
+mod palw_model_sink_bound_is_t12_only;
+#[path = "palw_exec_maturity_is_t12_only.rs"]
+mod palw_exec_maturity_is_t12_only;
+#[path = "palw_offence_attribution_is_t12_only.rs"]
+mod palw_offence_attribution_is_t12_only;
+#[path = "evm_bridge_ledger_is_t12_only.rs"]
+mod evm_bridge_ledger_is_t12_only;
+#[path = "t12_mainnet_values_moved_only_these.rs"]
+mod t12_mainnet_values_moved_only_these;
+#[path = "palw_tir_fences_are_dormant.rs"]
+mod palw_tir_fences_are_dormant;

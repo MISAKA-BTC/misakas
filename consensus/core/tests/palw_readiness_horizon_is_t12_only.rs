@@ -59,10 +59,11 @@ const BEFORE_THE_HORIZON: &[(&str, &str, &str, &str)] = &[
 /// (`palw_exec_maturity_is_t12_only`) is in this twin — and so are c6ffd812's mainnet values, which the
 /// merge `2004c588` left un-re-pinned here. Previous: `fd7353c0…` / `a7fe561c…` / `28d866f1…`.
 // re-pin 2026-10-31 @cc5a7dd0e096: undeployed model-one fence delayed to 18640 for verified fleet rollout (was f542f515…, e2e3f853…)
+// re-pin 2026-11-01: same without-rule constructor; new 18850 retention fence retained.
 const T12_BEFORE_THE_HORIZON: (&str, &str, &str) = (
-    "62d8c8cedd6b7e9df505b559653c74f48181fced6fdebf894f34f3bd9a68c531",
+    "fabadc7551619df89aba3b3aaf8d0c3df930b8c56c9ff461c392bb599f67db8a",
     "9f267fb1794c366a70a9b9008773bc470f8d0ab03ebb0ca26e9a28eaacb70ab4",
-    "5ed2aa627b008a0a05922dc41b1cda1ff350242e5e825c9845260260f50cc499",
+    "6aeeaf1d0f62787ee5cee4f35f7fe823664a81b4dc53eee9b64727365ea12e7c",
 );
 
 /// testnet-12 with the horizon, on the same tree (at `3e9ae4ba`, before the pool and int-3 merges:
@@ -72,11 +73,11 @@ const T12_BEFORE_THE_HORIZON: (&str, &str, &str) = (
 /// (= `palw_exec_maturity_is_t12_only`'s `T12_WITH_THE_MATURITY`; at `2004c588` they were `2790d7ce…` /
 /// `1fd06c99…` / `e0af0218…`, which this pin never caught up with). Previous: `4d38b3f1…` / `2477a803…` /
 /// `06dd5566…`.
-// re-pin 2026-10-31 @cc5a7dd0e096: undeployed model-one fence delayed to 18640 for verified fleet rollout (was 3d33cad2…, f55a7039…)
+// re-pin 2026-11-01: future ModelOne retention fence at 18850; computed by retention-18850 aggregate regression
 const T12_WITH_THE_HORIZON: (&str, &str, &str) = (
-    "edf472294c89dab0e64e625dbdfcd039b91081b05f89eacf8ba2aa25baa3a189",
+    "bbb4ad66e54695b04f136742902794a6d93aa4cec178e80c185cb58b1c3050a2",
     "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-    "4024a6e74d7aeb170d99e67c6d8fbe7884d71a716ccb778cd1ee526d01781b04",
+    "5a84a8d700cae89fad2fb6316cf2033d7c80cecede29e7ccfa00eb3088e8679a",
 );
 
 fn shipped(name: &str) -> Params {

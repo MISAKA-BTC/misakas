@@ -61,18 +61,19 @@ const SIMNET_IDS: (&str, &str, &str) = (
 /// testnet-12 at `befb59dfe` (the mainnet-values commit's own pins: `1870bc1f…` / `6e193d30…` /
 /// `79563f51…`) — what testnet-12 is with the cap taken away: the cap is the only thing that moved it.
 // re-pin 2026-10-31 @cc5a7dd0e096: undeployed model-one fence delayed to 18640 for verified fleet rollout (was 1003130d…, 6fcb297c…)
+// re-pin 2026-11-01: same without-rule constructor; new 18850 retention fence retained.
 const T12_BEFORE_THE_CAP: (&str, &str, &str) = (
-    "baf7429c1bd1760c48d34589d8ecb82c0bcb2b41851b3a0221183bc5d64d6117",
+    "3f467a99a23d8bb68ccaaf2bd7b14a4751b2cfd30e9ab4a2cea9c6999f1eec1f",
     "50990e0f0b634856aeae49eb38ffa38cfa991571be196d27c17befaefe805ec2",
-    "b8176e47f4503ff3e72440792fc562b1fd186572053f89ac644828a3c7efca9f",
+    "990c031172c1f759a53dd3e44f04921956c2d2907b0984909aebc744da147a76",
 );
 
 /// testnet-12 as this change ships it — the ids a testnet-12 node on this build announces.
-// re-pin 2026-10-31 @cc5a7dd0e096: undeployed model-one fence delayed to 18640 for verified fleet rollout (was 3d33cad2…, f55a7039…)
+// re-pin 2026-11-01: future ModelOne retention fence at 18850; computed by retention-18850 aggregate regression
 const T12_WITH_THE_CAP: (&str, &str, &str) = (
-    "edf472294c89dab0e64e625dbdfcd039b91081b05f89eacf8ba2aa25baa3a189",
+    "bbb4ad66e54695b04f136742902794a6d93aa4cec178e80c185cb58b1c3050a2",
     "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-    "4024a6e74d7aeb170d99e67c6d8fbe7884d71a716ccb778cd1ee526d01781b04",
+    "5a84a8d700cae89fad2fb6316cf2033d7c80cecede29e7ccfa00eb3088e8679a",
 );
 
 fn shipped(name: &str) -> Params {

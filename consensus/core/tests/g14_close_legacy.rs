@@ -84,6 +84,7 @@ fn full_collateral_beside_lock_life(p: &mut Params, filer_at: u64) {
 fn arm_legacy(mut p: Params, at: u64, held: bool, route: bool) -> (Params, Vec<PalwG14ArmingRecordV1>) {
     // Exercise the historical route without the later all-model route's mandatory dependencies.
     p.palw_model_panel_one_v1 = None;
+    p.palw_model_panel_one_retention_v1 = None;
     // Shipped and launch already arm this list at 18,400. The fixture records only the fences it
     // sets below, so those entries go back to dormant first. Each entry syncs its own mirror.
     palw_t12_arm_after_int13_at_v1(&mut p, PALW_T12_G14_17000_FENCES_V1, None);
@@ -219,6 +220,7 @@ fn lg14_arming_needs_a_record_naming_the_network_and_height() {
     // LG14-B needs LG14-A at or below it — refused by name even with its own record.
     let mut b_only = t12.clone();
     b_only.palw_model_panel_one_v1 = None;
+    b_only.palw_model_panel_one_retention_v1 = None;
     palw_t12_arm_after_int13_at_v1(&mut b_only, PALW_T12_G14_17000_FENCES_V1, None);
     b_only.palw_legacy_held_da_v2 = Some(ForkActivation::new(RELEASE));
     b_only.sync_palw_g14_gates_v1();
@@ -232,6 +234,7 @@ fn lg14_arming_needs_a_record_naming_the_network_and_height() {
     // `never()` is dormant and needs no record.
     let mut never = t12.clone();
     never.palw_model_panel_one_v1 = None;
+    never.palw_model_panel_one_retention_v1 = None;
     palw_t12_arm_after_int13_at_v1(&mut never, PALW_T12_G14_17000_FENCES_V1, None);
     never.palw_legacy_public_filer_v1 = Some(ForkActivation::never());
     never.palw_legacy_held_da_v2 = Some(ForkActivation::never());
@@ -263,6 +266,7 @@ fn fp_recoverable_families_have_no_remaining_lg14a_dependency() {
     let t12 = palw_t12_shipped_params();
     let mut p = t12.clone();
     p.palw_model_panel_one_v1 = None;
+    p.palw_model_panel_one_retention_v1 = None;
     palw_t12_arm_after_int13_at_v1(&mut p, PALW_T12_G14_17000_FENCES_V1, None);
     let at = Some(ForkActivation::new(RELEASE));
     p.palw_legacy_public_filer_v1 = at;
@@ -940,7 +944,7 @@ fn testnet12_identity_did_not_move() {
     let (params, identity, schedule) =
         (t12.consensus_params_id().to_string(), t12.consensus_identity_id().to_string(), t12.consensus_schedule_id().to_string());
     eprintln!("[t12 ids] params {params} identity {identity} schedule {schedule}");
-    assert!(params.starts_with("edf47229") && identity.starts_with("5de80e64") && schedule.starts_with("4024a6e7"));
+    assert!(params.starts_with("bbb4ad66") && identity.starts_with("5de80e64") && schedule.starts_with("5a84a8d7"));
     t12.validate_palw_v2().expect("testnet-12 as shipped validates");
     for p in [launch, t12] {
         let armed = Some(ForkActivation::new(18_400));

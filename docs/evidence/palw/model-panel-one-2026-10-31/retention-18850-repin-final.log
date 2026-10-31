@@ -1,0 +1,342 @@
+
+running 109 tests
+test evm_bridge_ledger_is_t12_only::on_testnet11_an_inert_ledger_is_absence_and_a_future_height_is_not_yet_a_rule ... ok
+test evm_bridge_ledger_is_t12_only::the_ledger_is_armed_on_testnet12_and_nowhere_else ... ok
+test evm_bridge_ledger_is_t12_only::the_ledger_is_the_only_thing_that_moved_testnet12 ... testnet-12 at the parent (the ledger and the deadline fence taken away): ("d2b383b1ecba10c724457dee8b2c822107cebaf6e8a3b056ab0247417d9c6172", "40f4670447ec6fa2c88508aa81323ca7862ce82881e2e5060999fb938c154736", "14a00b3e69ca481c92b296c212986c9e99dbb7af361e8d74cefd1238a127286c")
+testnet-12 at the parent without the attribution: params a012c74138264894056e5585a8e664286cf717a1555fae52bc0be94080ae2d19 identity e36ebef71a24c0ee234a0db62506caff6a58461f6cce7ba48a6cf6be809c9035 schedule 84145809a36a08e2e0b1c86d150d5ef541579452f33dd70876ef63358d9874cd
+ok
+test evm_bridge_ledger_is_t12_only::the_ledger_moves_testnet12s_fingerprint_and_identity ... testnet-12 params id with the ledger bbb4ad66e54695b04f136742902794a6d93aa4cec178e80c185cb58b1c3050a2 / inert twin f6e304cfbef892966cccbb4acdf1a13e41c69711385028c9a4e7696ae89cf8c8
+ok
+test g14_close_legacy::fp_recoverable_families_have_no_remaining_lg14a_dependency ... [FP] route mirror at 14000: PalwG14RouteMirrorV1 { from_daa: 14000, legacy_filer_from: Some(14000), legacy_held_da_from: None, staged_court_from: Some(14000), tir_conviction_from: Some(14000), court_capacity_from: None, kernel_panel_one_from: None, gate_c_from: None, tokenizer_match_from: Some(14000), panel_da_disclosure_from: None }
+ok
+test g14_close_legacy::g06_a_reserver_opens_its_dissection_beside_a_decoy_court_and_holds_final ... ok
+test g14_close_legacy::g07_a_coalition_cannot_spend_the_outsiders_budget ... ok
+test g14_close_legacy::g07_residual_the_network_court_cap_is_shared ... [G-07] testnet-12 court-session cap: 42 (turn_deadline_daa 42)
+ok
+test g14_close_legacy::g13_a_valid_lock_lives_to_the_liability_horizon ... [G-13] (armed, F) = [(true, 1124), (false, 1124)]
+ok
+test g14_close_legacy::g14_close_legacy_from_genesis ... ok
+test g14_close_legacy::g14_f03_outsider_court_lane_opens_past_decoy_occupancy ... ok
+test g14_close_legacy::lg14_arming_needs_a_record_naming_the_network_and_height ... ok
+test g14_close_legacy::testnet12_identity_did_not_move ... [t12 ids] params bbb4ad66e54695b04f136742902794a6d93aa4cec178e80c185cb58b1c3050a2 identity 5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5 schedule 5a84a8d700cae89fad2fb6316cf2033d7c80cecede29e7ccfa00eb3088e8679a
+ok
+test g14_court_capacity::court_capacity_arming_needs_a_measured_record ... ok
+test g14_court_capacity::fused_leaf_route_counts_only_with_court_capacity ... [option (b)] genesis class f1c5635c6e47e96e7af864789c94523335dc56584af297cb8cc19021c228b897bee1a50145597e45f8ca2727349bf4aa352a98cc05274b7f059a176642f623c8: fused_attention false
+[option (b)] genesis class ebf44d0aa09ff7d1310a7855ab4005c275cdce557e32c269b0f3a984ea80ca73ad1ea0c9b1c0539c8ae04abb5fe24399e67e05bb0895a3dee82253e772246d01: fused_attention true
+[option (b)] genesis class 74c67e63d9c03daa05880c5d8a47b354ca20e952b1a2d49c107abe14f890a9c50790371bb715c7cea33ae8ac9213a3a63da409070cb2c98b8e861598db902f7a: fused_attention true
+ok
+test g14_court_capacity::g07_an_earlier_deadline_flood_cannot_push_a_queued_prosecution_past_its_deadline ... [G-07 flood] backstop 4100; worst case 7142; hard 7147; honest granted at 1160; verdict at 1220
+ok
+test g14_court_capacity::g07_bond_splitting_does_not_avoid_the_occupancy_fee ... [G-07] occupancy fee: one bond 504000000, four bonds 504000000, per session 126000000
+ok
+test g14_court_capacity::g07_restart_and_reorg_mid_queue_are_identical ... ok
+test g14_court_capacity::g07_saturation_and_continuous_refill_an_honest_prosecution_reaches_its_verdict ... [G-07] saturated at 1100; first coalition backstop 4100; honest granted at 1160; hard deadline 998799
+[G-07] verdict at 1220 (hard deadline 998799)
+ok
+test g14_court_capacity::g07_the_block_budget_holds_at_maximum_load ... ok
+test g14_court_capacity::g07_unarmed_the_43rd_prosecution_is_refused_at_capacity ... ok
+test g14_court_capacity::g07r2_a_court_demanding_claim_promises_the_retention_its_guarantee_needs ... [G-07 r2 retention] W 3042, W_disclose 1200, minimum 5400, court retention 14568: accepted 1001, licence by 2201, last guaranteed first move 2201, hard deadline 14369
+ok
+test g14_court_capacity::g07r2_a_late_honest_reserve_row_is_never_refused_and_convicts ... [G-07 r2] honest arrived at 1055 (spare saturated, 68 pre-filled), verdict at 1114 (hard deadline 998799)
+ok
+test g14_court_capacity::g07r2_an_unserved_prosecution_means_the_claim_earns_nothing ... [G-07 r2 unserved] waited a service window: Voided { voided_daa: 4146, reason: PanelUnavailable }
+[G-07 r2 unserved] filed late: ReceiptLicensed { licensed_daa: 1004 }
+[G-07 r2 unserved] post-Final: Voided { voided_daa: 4146, reason: PanelUnavailable }
+ok
+test g14_court_capacity::g07r2_one_move_accusations_have_their_own_budget ... ok
+test g14_court_capacity::g07r2_the_reserve_bound_serves_every_first_row_by_its_deadline ... [G-07 r2 bound] C=2 M=1 starts: worst lateness -9126
+[G-07 r2 bound] C=2 M=1 straddle: worst lateness -9126
+[G-07 r2 bound] C=2 M=1 spread: worst lateness -9126
+[G-07 r2 bound] C=2 4M per boundary: worst lateness 112553
+[G-07 r2 bound] C=7 M=3 starts: worst lateness -9126
+[G-07 r2 bound] C=7 M=3 straddle: worst lateness -9126
+[G-07 r2 bound] C=7 M=3 spread: worst lateness -9126
+[G-07 r2 bound] C=7 4M per boundary: worst lateness 79091
+[G-07 r2 bound] C=21 M=10 starts: worst lateness -9126
+[G-07 r2 bound] C=21 M=10 straddle: worst lateness -9126
+[G-07 r2 bound] C=21 M=10 spread: worst lateness -9126
+[G-07 r2 bound] C=21 4M per boundary: worst lateness 103427
+[G-07 r2 bound] C=64 M=32 starts: worst lateness -9126
+[G-07 r2 bound] C=64 M=32 straddle: worst lateness -9126
+[G-07 r2 bound] C=64 M=32 spread: worst lateness -9126
+[G-07 r2 bound] C=64 4M per boundary: worst lateness 112553
+ok
+test g14_court_capacity::palw_court_op_timing_harness ... ignored
+test g14_court_capacity::testnet12_identity_did_not_move ... [t12 ids] params bbb4ad66e54695b04f136742902794a6d93aa4cec178e80c185cb58b1c3050a2 identity 5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5 schedule 5a84a8d700cae89fad2fb6316cf2033d7c80cecede29e7ccfa00eb3088e8679a
+ok
+test g14_court_capacity::the_scheduler_admits_only_what_every_queued_deadline_survives ... ok
+test g14_court_capacity::v7_restart_reorg_ibd_and_pruned_import_mid_queue_agree ... ok
+test palw_anchor_at_ceiling_is_t12_only::an_armed_build_below_its_fence_handshakes_with_the_shipped_build ... ok
+test palw_anchor_at_ceiling_is_t12_only::arming_moves_the_params_and_schedule_ids_but_not_the_identity ... testnet-12 armed at 500: params 84569cc77b18c886ed436bfaeaf26fd5d65f2935a94af32c7c60a5445e21bc32 identity 5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5 schedule a04b0fa4a33bc1b51cb914622a51a548aa1ebe777177020ebd80edd2c4b52697
+testnet-12 armed at 1234: params 7cbb5ab8f6b7a7dc38bd34919efed1e087be0320590fde88210faf285e8061dc identity 5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5 schedule f0574d9d65a731e2fb53278a03e3be14b82fabdfe3a21c68ba8a6a799bb723fe
+testnet-12 armed at 5000: params 973acd4d9b3d7264a4fd40aaf7793e619e2c7285185d42d4b5db07785fe639a4 identity 5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5 schedule f7dfdc96aedbf53d815c318a5cee2208077e3b0bd61cdc767c9d1bb48bbaeec8
+ok
+test palw_anchor_at_ceiling_is_t12_only::the_fence_is_dormant_on_every_other_preset_and_testnet12_arms_it_at_750 ... testnet-12 on this build: ("bbb4ad66e54695b04f136742902794a6d93aa4cec178e80c185cb58b1c3050a2", "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5", "5a84a8d700cae89fad2fb6316cf2033d7c80cecede29e7ccfa00eb3088e8679a")
+ok
+test palw_anchor_at_ceiling_is_t12_only::the_fence_needs_rcore_plus_at_or_below_it ... testnet-11 armed: Err(Invalid("palw_anchor_at_ceiling is armed without palw_rcore_plus at or below it: below R-core+ a heartbeat anchors a panel, so no claim waits on an attempt block and there is no ceiling deadlock to break"))
+devnet armed: Err(Invalid("palw_anchor_at_ceiling is armed without palw_rcore_plus at or below it: below R-core+ a heartbeat anchors a panel, so no claim waits on an attempt block and there is no ceiling deadlock to break"))
+ok
+test palw_bond_maturity_early_is_t12_only::a_bond_registered_at_daa_13_leaves_the_draw_at_the_fence_and_returns_at_its_own_window ... === fence at 60 ===
+anchor    15: registered-by None, newcomer drawable true (released rule: true), 8 eligible, jury 5 seats (newcomer seated)
+anchor    21: registered-by None, newcomer drawable true (released rule: true), 8 eligible, jury 5 seats
+anchor    59: registered-by None, newcomer drawable true (released rule: true), 8 eligible, jury 5 seats
+anchor    60: registered-by Some(0), newcomer drawable false (released rule: true), 7 eligible, jury 5 seats
+anchor    61: registered-by Some(0), newcomer drawable false (released rule: true), 7 eligible, jury 5 seats
+anchor   499: registered-by Some(0), newcomer drawable false (released rule: true), 7 eligible, jury 5 seats
+anchor   500: registered-by Some(0), newcomer drawable false (released rule: true), 7 eligible, jury 5 seats
+anchor   501: registered-by Some(0), newcomer drawable false (released rule: true), 7 eligible, jury 5 seats
+anchor   999: registered-by Some(0), newcomer drawable false (released rule: true), 7 eligible, jury 5 seats
+anchor  1000: registered-by Some(0), newcomer drawable false (released rule: false), 7 eligible, jury 5 seats
+anchor  1012: registered-by Some(12), newcomer drawable false (released rule: false), 7 eligible, jury 5 seats
+anchor  1013: registered-by Some(13), newcomer drawable true (released rule: true), 8 eligible, jury 5 seats
+anchor  1014: registered-by Some(14), newcomer drawable true (released rule: true), 8 eligible, jury 5 seats
+anchor  2000: registered-by Some(1000), newcomer drawable true (released rule: true), 8 eligible, jury 5 seats
+=== fence at 500 ===
+anchor    15: registered-by None, newcomer drawable true (released rule: true), 8 eligible, jury 5 seats (newcomer seated)
+anchor    21: registered-by None, newcomer drawable true (released rule: true), 8 eligible, jury 5 seats
+anchor    59: registered-by None, newcomer drawable true (released rule: true), 8 eligible, jury 5 seats
+anchor    60: registered-by None, newcomer drawable true (released rule: true), 8 eligible, jury 5 seats (newcomer seated)
+anchor    61: registered-by None, newcomer drawable true (released rule: true), 8 eligible, jury 5 seats
+anchor   499: registered-by None, newcomer drawable true (released rule: true), 8 eligible, jury 5 seats
+anchor   500: registered-by Some(0), newcomer drawable false (released rule: true), 7 eligible, jury 5 seats
+anchor   501: registered-by Some(0), newcomer drawable false (released rule: true), 7 eligible, jury 5 seats
+anchor   999: registered-by Some(0), newcomer drawable false (released rule: true), 7 eligible, jury 5 seats
+anchor  1000: registered-by Some(0), newcomer drawable false (released rule: false), 7 eligible, jury 5 seats
+anchor  1012: registered-by Some(12), newcomer drawable false (released rule: false), 7 eligible, jury 5 seats
+anchor  1013: registered-by Some(13), newcomer drawable true (released rule: true), 8 eligible, jury 5 seats
+anchor  1014: registered-by Some(14), newcomer drawable true (released rule: true), 8 eligible, jury 5 seats
+anchor  2000: registered-by Some(1000), newcomer drawable true (released rule: true), 8 eligible, jury 5 seats
+newcomer seated on 3 of the below-fence draws
+ok
+test palw_bond_maturity_early_is_t12_only::an_armed_build_below_its_fence_handshakes_with_the_shipped_build ... testnet-12 as shipped gates on [1000, 18400]
+armed at 60: at the height the armed node says DisagreePastFence { mismatch: NextFenceDiffers { expected: 60, got: 1000 }, fired_through: 60 } to a shipped peer
+armed at 500: at the height the armed node says DisagreePastFence { mismatch: NextFenceDiffers { expected: 500, got: 1000 }, fired_through: 500 } to a shipped peer
+armed at 999: at the height the armed node says DisagreePastFence { mismatch: NextFenceDiffers { expected: 999, got: 1000 }, fired_through: 999 } to a shipped peer
+ok
+test palw_bond_maturity_early_is_t12_only::arming_moves_the_params_and_schedule_ids_but_not_the_identity ... testnet-12 armed at 60: params 20856d1d6cb588121de9fff35033a58e63c9b15b176d2fd7549fce2eee564402 identity 5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5 schedule ee44818c14e2b077fc426404e8facb3758040bcee209ab88365daaeee8a34da7
+testnet-12 armed at 500: params 7ac8a7086e36e3910913bd8aac0d744fa457cb9345fae1f9772377e9c37fdefd identity 5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5 schedule ae50fb2b73b60c554a44c536691583d444e320e0aaf391909d43c896ff7e494f
+testnet-12 armed at 999: params 306a6cfeeb96cabb085272684b9bba644c18f0579b8374b76f50d5e4038d495d identity 5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5 schedule 9d849cd2df10ed870038d31ea553372220f35f391acb5ca6163f8993452aad81
+ok
+test palw_bond_maturity_early_is_t12_only::one_window_on_both_fences ... ok
+test palw_bond_maturity_early_is_t12_only::the_fence_is_dormant_on_every_other_preset_and_testnet12_arms_it_at_750 ... testnet-12 on this build: ("bbb4ad66e54695b04f136742902794a6d93aa4cec178e80c185cb58b1c3050a2", "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5", "5a84a8d700cae89fad2fb6316cf2033d7c80cecede29e7ccfa00eb3088e8679a")
+ok
+test palw_bond_maturity_early_is_t12_only::what_the_fence_refuses ... testnet-11 armed: Err(Invalid("palw_bond_maturity_early is armed without palw_bond_maturity scheduled: the window it brings forward is palw_bond_maturity's, and it has none of its own"))
+devnet armed: Err(Invalid("palw_bond_maturity_early is armed without palw_bond_maturity scheduled: the window it brings forward is palw_bond_maturity's, and it has none of its own"))
+ok
+test palw_clock_lead_cap_is_t12_only::every_other_preset_fingerprints_as_it_did_before_the_cap ... testnet-11: params bd633ce933974d4134676efbdaf46b269dc2fb78f007e0907479aabd4d743f29 identity 44cb8fd729e9575a6e3b1e72c466b8abce4b9ecd81bb556685c9ba225487117f schedule 5a1d8d5679e0e8d7e9022255668fd5d4b3e4c8a6c367acf3882c6a3d480d8b64
+devnet: params 7a27f341e49902ebb5e15ea79a45806fbd37b65daaddf8f0a5a10a15f9bfd4a8 identity 7a27f341e49902ebb5e15ea79a45806fbd37b65daaddf8f0a5a10a15f9bfd4a8 schedule edd80c01c791d225d602b9136f539f4dfeb506ba1b3071b177b0d873a661142f
+mainnet: params eb866c61ca1a8ab58108be6cd1f39f951b582123472545575a5c7dbe0f1e5aa5 identity 7819e5ed2b3df50b3303df3df2f0fec7677ddcb37ed55f1d43455a37ecd9c9a8 schedule a1ed7ff07231b84c51d9dc1013a8047ea3efb012bfc9daa36d5dd623709807e4
+testnet-10: params 0d9cf361e02dea6d9e873014ff5e414c2e8e6879e8d705cde6c924a3a3f8dd88 identity 2c3067c01e76ac32f0bd3f78ba49cc25f2ea771af4eb848e5aaad17f825a0a64 schedule 7ea3296f36fc827898aa6560a1f71159652a12a7dd69105178564b9f7723d5d0
+simnet: params 63238ba10766c824ff6915484829b01eb4fc3c105665a7db2cf6b175bf870dfd identity 63238ba10766c824ff6915484829b01eb4fc3c105665a7db2cf6b175bf870dfd schedule f981edc9bff1b71ae46abf030c0c56c40beafabeeae78d8435dd502ad6191f69
+ok
+test palw_clock_lead_cap_is_t12_only::the_cap_moves_testnet12s_fingerprint_and_a_never_collapses ... testnet-12 with the cap: ("bbb4ad66e54695b04f136742902794a6d93aa4cec178e80c185cb58b1c3050a2", "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5", "5a84a8d700cae89fad2fb6316cf2033d7c80cecede29e7ccfa00eb3088e8679a")
+testnet-12 without it:   ("3f467a99a23d8bb68ccaaf2bd7b14a4751b2cfd30e9ab4a2cea9c6999f1eec1f", "50990e0f0b634856aeae49eb38ffa38cfa991571be196d27c17befaefe805ec2", "990c031172c1f759a53dd3e44f04921956c2d2907b0984909aebc744da147a76")
+ok
+test palw_clock_lead_cap_is_t12_only::the_lead_cap_is_armed_on_testnet12_only ... ok
+test palw_exec_maturity_is_t12_only::testnet11_devnet_and_mainnet_fingerprint_as_they_did_before_the_maturity ... ok
+test palw_exec_maturity_is_t12_only::the_economic_safety_table_is_the_same_at_1200_and_at_120 ... 
+  maturity 1,200 -> 120 DAA; gap 1800 -> 2880 DAA; permit 1000000 sompi
+  BASE-0 floor           quanta      1  residual     0.01 ->     0.01 MSK  G    3200.86 ->    3200.86  lock(3)    1173.65  lock(1)    3520.94  lock(k'=2)     240.07  seat 939063.21 MSK
+  held Qwen2.5 @8,192    quanta   4945  residual    49.45 ->    49.45 MSK  G    3275.01 ->    3275.01  lock(3)    1200.84  lock(1)    3602.51  lock(k'=2)     280.85  seat 939063.21 MSK
+  held Qwen2.5 @2M       quanta  65537  residual   655.37 ->   655.37 MSK  G   63599.16 ->   63599.16  lock(3)   23319.69  lock(1)   69959.07  lock(k'=2)   33459.14  seat 939063.21 MSK
+ok
+test palw_exec_maturity_is_t12_only::the_maturity_is_stated_on_testnet12_only ... ok
+test palw_exec_maturity_is_t12_only::the_maturity_moves_testnet12s_fingerprint_and_nothing_else_did ... testnet-12 with the maturity ("bbb4ad66e54695b04f136742902794a6d93aa4cec178e80c185cb58b1c3050a2", "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5", "5a84a8d700cae89fad2fb6316cf2033d7c80cecede29e7ccfa00eb3088e8679a") / without the maturity ("616affca901c89ede3e622350d46830d21b7807f81c1d8f204a8ad6819caf220", "e4add02e255f61615fbe0195a08ea893614bc4a234f4c635a0706d9e3b3d7b53", "a7fc2066fe2824edd74bea131532cbbaf4b8bc677c2a61567f22b05fc6f84b6f")
+ok
+test palw_exec_maturity_is_t12_only::the_maturity_rides_its_bundle_inside_the_horizon ... ok
+test palw_final_lock_full_collateral_is_t12_only::an_armed_build_below_the_split_handshakes_with_the_shipped_build ... ok
+test palw_final_lock_full_collateral_is_t12_only::arming_the_split_moves_the_params_and_schedule_ids_but_not_the_identity ... testnet-12 with the split at 60: params 40da7edfd95236e0880b72704c99b447dc7336e4ceda12cbd3e9c05a60e2e86e identity 5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5 schedule dd03c4fbf22f32338dac5e71aa227c5c49c14eb34a8fa732105909bdb3c0d56a
+testnet-12 with the split at 500: params dfce8fe81fe643ca3624525ea8f4b2f6604ed5637e00f02572c5ae36052431af identity 5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5 schedule 2eae03fbab8ea4f2615e8c1fb49e8a4414419a5499063c682a2d0e43691e6338
+testnet-12 with the split at 5000: params a86d4fc111f0e4d5a33e43c551eb631eec634363b685e15de3a6ca00f76b8996 identity 5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5 schedule f5b13dbcddc81ec30b147213bfcee9478d3b78888f49e6768fc09cd1313c0404
+ok
+test palw_final_lock_full_collateral_is_t12_only::the_split_is_dormant_on_every_other_preset_and_testnet12_arms_it_at_750 ... testnet-12 on this build: ("bbb4ad66e54695b04f136742902794a6d93aa4cec178e80c185cb58b1c3050a2", "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5", "5a84a8d700cae89fad2fb6316cf2033d7c80cecede29e7ccfa00eb3088e8679a")
+ok
+test palw_final_lock_full_collateral_is_t12_only::the_split_needs_rcore_plus_and_a_synced_mirror ... ok
+test palw_final_lock_life_is_t12_only::an_armed_build_below_the_shortening_handshakes_with_the_shipped_build ... ok
+test palw_final_lock_life_is_t12_only::arming_the_shortening_moves_the_params_and_schedule_ids_but_not_the_identity ... testnet-12 with the shortening at 60: params e33b28fd376f8b94a8cc51c439c17160b0f7c221299f486ae5deeb345f5b3ee6 identity 5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5 schedule 0975b57a9109b64e5329d44ffecdb7bf41ea596c3a0bd24611899a823e776a69
+testnet-12 with the shortening at 500: params bc74c11837df7e6abe28a545e1a1f80d0be6b2172cb6d0b68220e45c4e96dd66 identity 5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5 schedule 0784bf8f8c2607e5ead17c8e36bf39ac85599bf7f6970b6044945b690ac6975d
+testnet-12 with the shortening at 5000: params 5b37d4a466023eb2e01976e8f272b1f26ff11bbf31597de1683e9ea797433912 identity 5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5 schedule 50142289040fcf76539ae4d539d8052c942908bef479eae16d6a390e65acf537
+ok
+test palw_final_lock_life_is_t12_only::the_shortening_is_dormant_on_every_other_preset_and_testnet12_arms_it_at_750 ... testnet-12 on this build: ("bbb4ad66e54695b04f136742902794a6d93aa4cec178e80c185cb58b1c3050a2", "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5", "5a84a8d700cae89fad2fb6316cf2033d7c80cecede29e7ccfa00eb3088e8679a")
+ok
+test palw_final_lock_life_is_t12_only::the_shortening_needs_rcore_plus_and_a_synced_mirror ... ok
+test palw_hb_transparency_same_chain_fence::an_armed_build_peers_with_the_launched_build_until_the_height ... ok
+test palw_hb_transparency_same_chain_fence::arming_moves_the_params_and_schedule_ids_and_not_the_identity ... testnet-12 launched: ("322104e40468fc3382ed325e2faf0c86846e11df52d3d6c99806d596fb2d663b", "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5", "a96d6caf49dbdf82e3dff89d23e9d97795460a7ba1122e9389c2959c04a90234")
+testnet-12 with F1 at 1234567: ("23ffc27f2d4d1ec0a8d2e7499a04aca958e377ae47fc192ea47748a7cb33216e", "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5", "0ef0ec56fb8045dc11bc8fc4f025a140a98fa934c8931d0a6504fffc733d70fd")
+ok
+test palw_hb_transparency_same_chain_fence::at_the_maturity_windows_height_the_fence_is_invisible_to_the_fork_id ... ok
+test palw_hb_transparency_same_chain_fence::it_is_refused_without_the_transparency_it_narrows ... ok
+test palw_hb_transparency_same_chain_fence::on_testnet12_it_is_a_height_never_a_genesis_rule ... ok
+test palw_hb_transparency_same_chain_fence::the_same_chain_fence_is_dormant_on_every_other_preset_and_t12_arms_it_at_750 ... testnet-12: ("bbb4ad66e54695b04f136742902794a6d93aa4cec178e80c185cb58b1c3050a2", "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5", "5a84a8d700cae89fad2fb6316cf2033d7c80cecede29e7ccfa00eb3088e8679a")
+ok
+test palw_lane_accept_parents_first_is_t12_only::an_armed_build_below_its_fence_handshakes_with_the_shipped_build ... ok
+test palw_lane_accept_parents_first_is_t12_only::arming_moves_the_params_and_schedule_ids_but_not_the_identity ... testnet-12 armed at 750: params 48b98833901e4959b841adcf6bd9dc1cf8ec0c2430ae89adc6c210abca442a2b identity 5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5 schedule f7b7489eee665aa8d0c21060515ed97e8ed6f670f238a2f4239b50966a00181c
+testnet-12 armed at 1234: params 27486e77516730fac5267aa9fe14136721882579e540d85da69113041d12a50f identity 5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5 schedule e09803f4993193acc996d66107af181c4b4f9954d56fd54822db377c91e80a49
+testnet-12 armed at 5000: params 6c642ded356db68f83fed0a0a55d9ceb6c6480e12b1cc8372f1849b9ecbf1b8e identity 5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5 schedule 8601ada5b0003ee258c1a6433de51e36d5650f53b9053de265fd55ea0b42c7ef
+ok
+test palw_lane_accept_parents_first_is_t12_only::the_fence_is_dormant_on_every_other_preset_and_testnet12_arms_it_at_750 ... testnet-12 on this build: ("bbb4ad66e54695b04f136742902794a6d93aa4cec178e80c185cb58b1c3050a2", "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5", "5a84a8d700cae89fad2fb6316cf2033d7c80cecede29e7ccfa00eb3088e8679a")
+ok
+test palw_lane_accept_parents_first_is_t12_only::the_fence_needs_consensus_v2_and_the_execution_lane_at_or_below_it ... testnet-11 armed below its lane: Err(Invalid("palw_lane_accept_parents_first is armed without palw_execution_lane opening at or below it: without round blocks no mergeset holds a blue-work tie between a block and its parent, so there is nothing to order"))
+testnet-10 armed: Err(Invalid("palw_lane_accept_parents_first is armed on a network that is not ConsensusV2: there is no round lane to order"))
+ok
+test palw_lane_accept_parents_first_is_t12_only::the_release_list_arms_it_and_the_drill_moves_it ... ok
+test palw_model_sink_bound_is_t12_only::an_armed_build_below_the_binding_handshakes_with_the_shipped_build ... testnet-12 as shipped gates on [1000, 18400]
+armed at 60: at the height the armed node says DisagreePastFence { mismatch: NextFenceDiffers { expected: 60, got: 1000 }, fired_through: 60 } to a shipped peer
+armed at 500: at the height the armed node says DisagreePastFence { mismatch: NextFenceDiffers { expected: 500, got: 1000 }, fired_through: 500 } to a shipped peer
+armed at 5000: at the height the armed node says DisagreePastFence { mismatch: NextFenceDiffers { expected: 5000, got: 18400 }, fired_through: 5000 } to a shipped peer
+ok
+test palw_model_sink_bound_is_t12_only::arming_the_binding_moves_the_params_and_schedule_ids_but_not_the_identity ... testnet-12 with the binding at 60: params 1bb08a12d65681e026bd3b45a58f07ef2f6dbce2e7179c36ac0b745b028d9ac1 identity 5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5 schedule 65008c82a800f1db7dea93bf577acea8da4320e932668bfaba5435adb6486801
+testnet-12 with the binding at 500: params 321e945236582e27ecb0bdf513eedc9c7e30ef2c845b434a2f7023cbd687ad06 identity 5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5 schedule 1a929ed7035400d14f563db88eb729f3bf5f721de0e28d4a77ddc2b41742b8f5
+testnet-12 with the binding at 5000: params 5fdac569994c221cdcb95f7a6bb2ee93e6f17e56eaea77189d3e6b73fd7321c8 identity 5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5 schedule f070e1f38c385edf46ecb1a6959379d3102fe411f597c6d05b1fa2f36ac88c2c
+ok
+test palw_model_sink_bound_is_t12_only::the_binding_is_dormant_on_every_other_preset_and_testnet12_arms_it_at_750 ... testnet-12 on this build: ("bbb4ad66e54695b04f136742902794a6d93aa4cec178e80c185cb58b1c3050a2", "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5", "5a84a8d700cae89fad2fb6316cf2033d7c80cecede29e7ccfa00eb3088e8679a")
+ok
+test palw_model_sink_bound_is_t12_only::the_binding_needs_the_market_and_the_refund_route_at_or_below_it ... ok
+test palw_model_sink_bound_is_t12_only::the_rule_names_every_unbound_sink ... ok
+test palw_offence_attribution_is_t12_only::a_later_height_is_refused_by_validation ... ok
+test palw_offence_attribution_is_t12_only::testnet11_devnet_and_mainnet_fingerprint_as_they_did_before_the_attribution_fence ... testnet-11: params bd633ce933974d4134676efbdaf46b269dc2fb78f007e0907479aabd4d743f29 identity 44cb8fd729e9575a6e3b1e72c466b8abce4b9ecd81bb556685c9ba225487117f schedule 5a1d8d5679e0e8d7e9022255668fd5d4b3e4c8a6c367acf3882c6a3d480d8b64
+devnet: params 7a27f341e49902ebb5e15ea79a45806fbd37b65daaddf8f0a5a10a15f9bfd4a8 identity 7a27f341e49902ebb5e15ea79a45806fbd37b65daaddf8f0a5a10a15f9bfd4a8 schedule edd80c01c791d225d602b9136f539f4dfeb506ba1b3071b177b0d873a661142f
+mainnet: params eb866c61ca1a8ab58108be6cd1f39f951b582123472545575a5c7dbe0f1e5aa5 identity 7819e5ed2b3df50b3303df3df2f0fec7677ddcb37ed55f1d43455a37ecd9c9a8 schedule a1ed7ff07231b84c51d9dc1013a8047ea3efb012bfc9daa36d5dd623709807e4
+ok
+test palw_offence_attribution_is_t12_only::the_attribution_fence_is_armed_on_testnet12_only ... ok
+test palw_offence_attribution_is_t12_only::the_fence_moves_testnet12s_fingerprint_and_nothing_else_did ... testnet-12 without the fence: params 2c96fc09b9050440d27193bf7bfdf53e1e7f477a548a63888170b1aa4d0139c7 identity 7be7b92fd3583a6d288ebcd417d3f2cee9ab7d86f13967c19ee28c9aec08c62f schedule 385e033a25cc6ceff9f050379fe182e26f6fc94e0ffe40a89ef8db169ac02c4b
+testnet-12 with the fence:    params bbb4ad66e54695b04f136742902794a6d93aa4cec178e80c185cb58b1c3050a2 identity 5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5 schedule 5a84a8d700cae89fad2fb6316cf2033d7c80cecede29e7ccfa00eb3088e8679a
+testnet-12 without the fence or the deadline fence: params 90adbb90aa759482d66a3201974f8fd19f7b6d557bce7cc8318946fa4a55dff9 identity 0d7ca2bade522865cc0c3f464262b90834064de57ad1c984ecdbf11b3cab9c8c schedule f882a28c7d007e615e8eeb83d39de7774df183d0abc368e47838cbe9e299fca6
+ok
+test palw_operator_anchor_is_t12_only::an_armed_build_below_its_fence_handshakes_with_the_shipped_build ... lanes F1 + A at one height armed at 900: at 900 the armed node says DisagreePastFence { mismatch: NextFenceDiffers { expected: 900, got: 1000 }, fired_through: 900 } to a shipped peer
+lane A above F1 armed at 900: at 899 the armed node says DisagreePastFence { mismatch: NextFenceDiffers { expected: 899, got: 1000 }, fired_through: 899 } to a shipped peer
+lanes F1 + A at one height armed at 1234: at 1234 the armed node says DisagreePastFence { mismatch: NextFenceDiffers { expected: 1234, got: 18400 }, fired_through: 1234 } to a shipped peer
+lane A above F1 armed at 1234: at 1233 the armed node says DisagreePastFence { mismatch: NextFenceDiffers { expected: 1233, got: 18400 }, fired_through: 1233 } to a shipped peer
+lanes F1 + A at one height armed at 5000: at 5000 the armed node says DisagreePastFence { mismatch: NextFenceDiffers { expected: 5000, got: 18400 }, fired_through: 5000 } to a shipped peer
+lane A above F1 armed at 5000: at 4999 the armed node says DisagreePastFence { mismatch: NextFenceDiffers { expected: 4999, got: 18400 }, fired_through: 4999 } to a shipped peer
+ok
+test palw_operator_anchor_is_t12_only::arming_moves_the_params_and_schedule_ids_but_not_the_identity ... testnet-12 armed at 900: params a2f96c20cddf2d7bf92e93aaa33563b63b601f42e766700bfb31baa5961b6ff7 identity 5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5 schedule 12e2d5bb26aee84312f4d9803fedd6f9f1b24aa7579b146427751d5ed99ca45d
+testnet-12 armed at 1234: params ecb5dfc3ad9f8b1eff6ae8f3c9a87a1075907eb7cb6c177c366ece0dc4db3b52 identity 5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5 schedule ce23e310afb97d15f68b237e4880842ed3e9100099b233da24db6f8bfaccfab5
+testnet-12 armed at 5000: params a204cf30e92c694985d545af309568fcd6f2d51372762fe1974ff0b95f01633b identity 5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5 schedule 7a012de23cdd380dfc2756fff4cd8a1929a11ef16399fa0d84ca13158d178af4
+ok
+test palw_operator_anchor_is_t12_only::testnet12_s_operators_are_its_eight_genesis_cards ... testnet-12 operator bonds: premine 5e0d5f1b37a71288cc0eb24acc10d2f4973dd3475569f274f03cc64a2233d035099d386e24c91d48427c30a895664dea979abedc90a7788fad170379e55e2669 outputs [0, 1, 2, 3, 4, 5, 6, 7]
+ok
+test palw_operator_anchor_is_t12_only::the_fence_is_dormant_on_every_other_preset_and_testnet12_arms_it_at_750 ... testnet-12 on this build: ("bbb4ad66e54695b04f136742902794a6d93aa4cec178e80c185cb58b1c3050a2", "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5", "5a84a8d700cae89fad2fb6316cf2033d7c80cecede29e7ccfa00eb3088e8679a")
+ok
+test palw_operator_anchor_is_t12_only::the_fence_needs_rcore_plus_and_a_genesis_operator_list ... testnet-11 armed: Err(Invalid("palw_operator_anchor is armed without palw_rcore_plus at or below it: below R-core+ a heartbeat may anchor a panel, and the operator rule narrows R-core+'s attempt-only anchor lane"))
+devnet armed: Err(Invalid("palw_operator_anchor is armed without palw_rcore_plus at or below it: below R-core+ a heartbeat may anchor a panel, and the operator rule narrows R-core+'s attempt-only anchor lane"))
+testnet-12, lane A at 1,234 with F1 at None: Err(Invalid("palw_operator_anchor is armed without palw_panel_seed_execution (lane F1) at or below it: past lane A the seed is read off the earliest operator attempt at or past the slot as an execution commitment, so a displaced operator attempt still keys the draw — without F1 the seed would be the binding block's identity, and displacing the anchor would re-roll the panel"))
+testnet-12, lane A at 1,234 with F1 at Some(1235): Err(Invalid("palw_operator_anchor is armed without palw_panel_seed_execution (lane F1) at or below it: past lane A the seed is read off the earliest operator attempt at or past the slot as an execution commitment, so a displaced operator attempt still keys the draw — without F1 the seed would be the binding block's identity, and displacing the anchor would re-roll the panel"))
+testnet-12 with a bad operator list: Err(Invalid("palw_operator_anchor names no operator bond: past it no block could anchor a panel and every claim would void at its bind window"))
+testnet-12 with a bad operator list: Err(Invalid("palw_operator_anchor's operator bonds are not sorted and distinct: one rule would have two spellings"))
+testnet-12 with a bad operator list: Err(Invalid("palw_operator_anchor's operator bonds are not sorted and distinct: one rule would have two spellings"))
+testnet-12 with a bad operator list: Err(Invalid("palw_operator_anchor names a bond the genesis does not register: an operator is a genesis bond, whose key the ruleset itself carries"))
+ok
+test palw_panel_seed_execution_is_t12_only::an_armed_build_below_its_fence_handshakes_with_the_shipped_build ... testnet-12 as shipped gates on [1000, 18400]
+armed at 900: at the height the armed node says DisagreePastFence { mismatch: NextFenceDiffers { expected: 900, got: 1000 }, fired_through: 900 } to a shipped peer
+armed at 1234: at the height the armed node says DisagreePastFence { mismatch: NextFenceDiffers { expected: 1234, got: 18400 }, fired_through: 1234 } to a shipped peer
+armed at 5000: at the height the armed node says DisagreePastFence { mismatch: NextFenceDiffers { expected: 5000, got: 18400 }, fired_through: 5000 } to a shipped peer
+ok
+test palw_panel_seed_execution_is_t12_only::arming_moves_the_params_and_schedule_ids_but_not_the_identity ... testnet-12 armed at 900: params 6aaf13f77fe821c9c923125de64aa0875207041578a5fb1bf5b17019489e4935 identity 5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5 schedule cdd71854e05047a7065e90d1f9e56c79e498932da25c7f1a94b73b0df49d575f
+testnet-12 armed at 1234: params fa3fca3b257cf44c642aa51efd9515d9db572613ecbf61d5cc1ab8ff797fe47e identity 5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5 schedule 9e0122f0f5b743f02b1edcf4841bd690757a82c87a6a9d2b7bcaf11420add7fc
+testnet-12 armed at 5000: params 5daefa15c00d6b60567aa743e365c28ae3134d878677c15592e58f9636b01a9a identity 5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5 schedule a0d0363a81c437cd521e720c1a424cb53b089cd8658fa9b2ee13ef6498d86e42
+ok
+test palw_panel_seed_execution_is_t12_only::the_fence_is_dormant_on_every_other_preset_and_testnet12_arms_it_at_750 ... testnet-12 on this build: ("bbb4ad66e54695b04f136742902794a6d93aa4cec178e80c185cb58b1c3050a2", "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5", "5a84a8d700cae89fad2fb6316cf2033d7c80cecede29e7ccfa00eb3088e8679a")
+ok
+test palw_panel_seed_execution_is_t12_only::the_fence_needs_rcore_plus_at_or_below_it ... testnet-11 armed: Err(Invalid("palw_panel_seed_execution is armed without palw_rcore_plus at or below it: below R-core+ a heartbeat may anchor a panel, and a heartbeat has no execution commitment to key the seed on"))
+devnet armed: Err(Invalid("palw_panel_seed_execution is armed without palw_rcore_plus at or below it: below R-core+ a heartbeat may anchor a panel, and a heartbeat has no execution commitment to key the seed on"))
+ok
+test palw_readiness_horizon_is_t12_only::on_testnet12_a_row_at_age_24_is_fresh_and_at_25_it_is_not ... ok
+test palw_readiness_horizon_is_t12_only::testnet11_devnet_and_mainnet_fingerprint_as_they_did_before_the_horizon ... ok
+test palw_readiness_horizon_is_t12_only::the_horizon_carries_its_fork_id_name ... ok
+test palw_readiness_horizon_is_t12_only::the_horizon_is_armed_on_testnet12_only ... ok
+test palw_readiness_horizon_is_t12_only::the_horizon_is_genesis_only_bounded_and_mirrored ... ok
+test palw_readiness_horizon_is_t12_only::the_horizon_moves_testnet12s_fingerprint_and_nothing_else_did ... testnet-12 with the horizon ("bbb4ad66e54695b04f136742902794a6d93aa4cec178e80c185cb58b1c3050a2", "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5", "5a84a8d700cae89fad2fb6316cf2033d7c80cecede29e7ccfa00eb3088e8679a") / without ("fabadc7551619df89aba3b3aaf8d0c3df930b8c56c9ff461c392bb599f67db8a", "9f267fb1794c366a70a9b9008773bc470f8d0ab03ebb0ca26e9a28eaacb70ab4", "6aeeaf1d0f62787ee5cee4f35f7fe823664a81b4dc53eee9b64727365ea12e7c")
+ok
+test palw_registry_resilience_is_t12_only::an_armed_build_keeps_the_launch_build_until_the_height ... ok
+test palw_registry_resilience_is_t12_only::arming_moves_the_params_and_schedule_ids_and_never_the_identity ... testnet-12 armed at 2000: ("f40256cc4f9523e179015090239974e6034b72d09d640bf18aea472e5860e86b", "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5", "193e74e3679771eccba0bb6faf4df00aaa24b9db93e8c271667ab8cc0bfc1455")
+testnet-12's scheduled fences: [("palw_bond_maturity", 1000), ("palw_staged_public_court_v1", 18400), ("palw_staged_tir_route_v1", 18400), ("palw_tir_public_conviction_v1", 18400), ("palw_tir_container_identity_v1", 18400), ("palw_probabilistic_constraints_v1", 18400), ("palw_provider_court_v1", 18400), ("palw_legacy_held_da_v2", 18400), ("palw_bond_budget_v1", 18400), ("palw_model_bond_allocation_v1", 18400), ("palw_legacy_public_filer_v1", 18400), ("palw_claim_hard_deadline_v1", 18400), ("palw_g14_route_required_v1", 18400), ("palw_court_capacity_v1", 18400), ("palw_model_tier_v1", 18400), ("palw_independently_work_certified_v1", 18400), ("palw_gate_c_attestor_liability_v1", 18400), ("palw_court_outsider_lane_v1", 18400), ("palw_kernel_route_panel_one_v1", 18400), ("palw_court_clock_v2", 18400), ("palw_panel_da_disclosure_v1", 18400)]; schedule [1000, 18400]
+ok
+test palw_registry_resilience_is_t12_only::every_shipped_id_is_the_release_ones ... testnet-12: ("bbb4ad66e54695b04f136742902794a6d93aa4cec178e80c185cb58b1c3050a2", "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5", "5a84a8d700cae89fad2fb6316cf2033d7c80cecede29e7ccfa00eb3088e8679a")
+testnet-11: ("bd633ce933974d4134676efbdaf46b269dc2fb78f007e0907479aabd4d743f29", "44cb8fd729e9575a6e3b1e72c466b8abce4b9ecd81bb556685c9ba225487117f", "5a1d8d5679e0e8d7e9022255668fd5d4b3e4c8a6c367acf3882c6a3d480d8b64")
+devnet: ("7a27f341e49902ebb5e15ea79a45806fbd37b65daaddf8f0a5a10a15f9bfd4a8", "7a27f341e49902ebb5e15ea79a45806fbd37b65daaddf8f0a5a10a15f9bfd4a8", "edd80c01c791d225d602b9136f539f4dfeb506ba1b3071b177b0d873a661142f")
+mainnet: ("eb866c61ca1a8ab58108be6cd1f39f951b582123472545575a5c7dbe0f1e5aa5", "7819e5ed2b3df50b3303df3df2f0fec7677ddcb37ed55f1d43455a37ecd9c9a8", "a1ed7ff07231b84c51d9dc1013a8047ea3efb012bfc9daa36d5dd623709807e4")
+testnet-10: ("0d9cf361e02dea6d9e873014ff5e414c2e8e6879e8d705cde6c924a3a3f8dd88", "2c3067c01e76ac32f0bd3f78ba49cc25f2ea771af4eb848e5aaad17f825a0a64", "7ea3296f36fc827898aa6560a1f71159652a12a7dd69105178564b9f7723d5d0")
+simnet: ("63238ba10766c824ff6915484829b01eb4fc3c105665a7db2cf6b175bf870dfd", "63238ba10766c824ff6915484829b01eb4fc3c105665a7db2cf6b175bf870dfd", "f981edc9bff1b71ae46abf030c0c56c40beafabeeae78d8435dd502ad6191f69")
+ok
+test palw_registry_resilience_is_t12_only::the_fence_is_refused_unsynced_below_its_prerequisites_and_off_testnet12 ... ok
+test palw_registry_resilience_is_t12_only::the_fence_ships_dormant_on_every_preset ... ok
+test palw_tir_fences_are_dormant::every_armed_row_is_its_pinned_row_with_the_ir_flag_day_at_2000 ... ok
+test palw_tir_fences_are_dormant::every_shipped_ruleset_keeps_its_three_ids ... REPIN tirdorm.mainnet_params.params_id eb866c61ca1a8ab58108be6cd1f39f951b582123472545575a5c7dbe0f1e5aa5
+REPIN tirdorm.mainnet_params.identity_id 7819e5ed2b3df50b3303df3df2f0fec7677ddcb37ed55f1d43455a37ecd9c9a8
+REPIN tirdorm.mainnet_params.schedule_id a1ed7ff07231b84c51d9dc1013a8047ea3efb012bfc9daa36d5dd623709807e4
+REPIN tirdorm.testnet_params.params_id 3de9ba33581b12b8478a1d476a4e58889ed21ddb91dc24cc00706f49dd5b5b97
+REPIN tirdorm.testnet_params.identity_id 22307d0c46b75110aea7967d16708fdf50a69f31450f7ed44d7309574395972a
+REPIN tirdorm.testnet_params.schedule_id 7ea3296f36fc827898aa6560a1f71159652a12a7dd69105178564b9f7723d5d0
+REPIN tirdorm.testnet11_params.params_id 03b8564ece85e237b9252f390d0a73001bd67d02aee26418032a716e94057beb
+REPIN tirdorm.testnet11_params.identity_id 929a3367d45faebd8c23927923abf10f91e6025cfb4b52a1ecb8768ade2d0e78
+REPIN tirdorm.testnet11_params.schedule_id cb379fa021867dab89971e6f99a3469a6d044084d688113fa0b8e20f93af04d1
+REPIN tirdorm.devnet_params.params_id 80cbefe885c82921843f431a0d0ca85d93bec6d6cd74f0bf3413c2fd3827be52
+REPIN tirdorm.devnet_params.identity_id 80cbefe885c82921843f431a0d0ca85d93bec6d6cd74f0bf3413c2fd3827be52
+REPIN tirdorm.devnet_params.schedule_id edd80c01c791d225d602b9136f539f4dfeb506ba1b3071b177b0d873a661142f
+REPIN tirdorm.simnet_params.params_id 63238ba10766c824ff6915484829b01eb4fc3c105665a7db2cf6b175bf870dfd
+REPIN tirdorm.simnet_params.identity_id 63238ba10766c824ff6915484829b01eb4fc3c105665a7db2cf6b175bf870dfd
+REPIN tirdorm.simnet_params.schedule_id f981edc9bff1b71ae46abf030c0c56c40beafabeeae78d8435dd502ad6191f69
+REPIN tirdorm.from_mainnet.params_id eb866c61ca1a8ab58108be6cd1f39f951b582123472545575a5c7dbe0f1e5aa5
+REPIN tirdorm.from_mainnet.identity_id 7819e5ed2b3df50b3303df3df2f0fec7677ddcb37ed55f1d43455a37ecd9c9a8
+REPIN tirdorm.from_mainnet.schedule_id a1ed7ff07231b84c51d9dc1013a8047ea3efb012bfc9daa36d5dd623709807e4
+REPIN tirdorm.from_testnet_10.params_id 0d9cf361e02dea6d9e873014ff5e414c2e8e6879e8d705cde6c924a3a3f8dd88
+REPIN tirdorm.from_testnet_10.identity_id 2c3067c01e76ac32f0bd3f78ba49cc25f2ea771af4eb848e5aaad17f825a0a64
+REPIN tirdorm.from_testnet_10.schedule_id 7ea3296f36fc827898aa6560a1f71159652a12a7dd69105178564b9f7723d5d0
+REPIN tirdorm.from_testnet_11.params_id bd633ce933974d4134676efbdaf46b269dc2fb78f007e0907479aabd4d743f29
+REPIN tirdorm.from_testnet_11.identity_id 44cb8fd729e9575a6e3b1e72c466b8abce4b9ecd81bb556685c9ba225487117f
+REPIN tirdorm.from_testnet_11.schedule_id 5a1d8d5679e0e8d7e9022255668fd5d4b3e4c8a6c367acf3882c6a3d480d8b64
+REPIN tirdorm.from_testnet_12_ir_flag_day.params_id cd12b4714408e5694e263f59e15b2fb1bf27c80a5ee5d7255f09164604c7f978
+REPIN tirdorm.from_testnet_12_ir_flag_day.identity_id 5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5
+REPIN tirdorm.from_testnet_12_ir_flag_day.schedule_id ebc1b8bba64ff0b5669b37493be3a2e792594f79b0e853a20fd49ddf2078118a
+REPIN tirdorm.from_devnet.params_id 7a27f341e49902ebb5e15ea79a45806fbd37b65daaddf8f0a5a10a15f9bfd4a8
+REPIN tirdorm.from_devnet.identity_id 7a27f341e49902ebb5e15ea79a45806fbd37b65daaddf8f0a5a10a15f9bfd4a8
+REPIN tirdorm.from_devnet.schedule_id edd80c01c791d225d602b9136f539f4dfeb506ba1b3071b177b0d873a661142f
+REPIN tirdorm.from_simnet.params_id 63238ba10766c824ff6915484829b01eb4fc3c105665a7db2cf6b175bf870dfd
+REPIN tirdorm.from_simnet.identity_id 63238ba10766c824ff6915484829b01eb4fc3c105665a7db2cf6b175bf870dfd
+REPIN tirdorm.from_simnet.schedule_id f981edc9bff1b71ae46abf030c0c56c40beafabeeae78d8435dd502ad6191f69
+REPIN tirdorm.mainnet_shipped_params.params_id eb866c61ca1a8ab58108be6cd1f39f951b582123472545575a5c7dbe0f1e5aa5
+REPIN tirdorm.mainnet_shipped_params.identity_id 7819e5ed2b3df50b3303df3df2f0fec7677ddcb37ed55f1d43455a37ecd9c9a8
+REPIN tirdorm.mainnet_shipped_params.schedule_id a1ed7ff07231b84c51d9dc1013a8047ea3efb012bfc9daa36d5dd623709807e4
+REPIN tirdorm.devnet_shipped_params.params_id 7a27f341e49902ebb5e15ea79a45806fbd37b65daaddf8f0a5a10a15f9bfd4a8
+REPIN tirdorm.devnet_shipped_params.identity_id 7a27f341e49902ebb5e15ea79a45806fbd37b65daaddf8f0a5a10a15f9bfd4a8
+REPIN tirdorm.devnet_shipped_params.schedule_id edd80c01c791d225d602b9136f539f4dfeb506ba1b3071b177b0d873a661142f
+REPIN tirdorm.palw_rc_shipped_params.params_id bd633ce933974d4134676efbdaf46b269dc2fb78f007e0907479aabd4d743f29
+REPIN tirdorm.palw_rc_shipped_params.identity_id 44cb8fd729e9575a6e3b1e72c466b8abce4b9ecd81bb556685c9ba225487117f
+REPIN tirdorm.palw_rc_shipped_params.schedule_id 5a1d8d5679e0e8d7e9022255668fd5d4b3e4c8a6c367acf3882c6a3d480d8b64
+REPIN tirdorm.palw_t12_shipped_params_ir_flag_day.params_id cd12b4714408e5694e263f59e15b2fb1bf27c80a5ee5d7255f09164604c7f978
+REPIN tirdorm.palw_t12_shipped_params_ir_flag_day.identity_id 5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5
+REPIN tirdorm.palw_t12_shipped_params_ir_flag_day.schedule_id ebc1b8bba64ff0b5669b37493be3a2e792594f79b0e853a20fd49ddf2078118a
+REPIN tirdorm.palw_t12_launch_params_v1.params_id 322104e40468fc3382ed325e2faf0c86846e11df52d3d6c99806d596fb2d663b
+REPIN tirdorm.palw_t12_launch_params_v1.identity_id 5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5
+REPIN tirdorm.palw_t12_launch_params_v1.schedule_id a96d6caf49dbdf82e3dff89d23e9d97795460a7ba1122e9389c2959c04a90234
+REPIN tirdorm.palw_t12_release_v1_params.params_id dbbc9104a2ee754f0f053a6e1614118979fd2c3dc87cbe6bffcf6dcaf4bd59c9
+REPIN tirdorm.palw_t12_release_v1_params.identity_id 5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5
+REPIN tirdorm.palw_t12_release_v1_params.schedule_id 7c652212ab5337bda9508deeee2d2e119331856fce0bd27897f19dd66e552397
+REPIN tirdorm.palw_t12_release_v2_params.params_id 24e1aec3e9a102fa40d559cd28005ad5944c32caa485d685bed65c52e4c056ff
+REPIN tirdorm.palw_t12_release_v2_params.identity_id 5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5
+REPIN tirdorm.palw_t12_release_v2_params.schedule_id d263d7f2971f4e20b57b26d7b7428bd8f9346c3728bbb6927341d8b36b0c1c3a
+REPIN tirdorm.palw_t12_release_v3_params.params_id 770fb822f6e82c72e31d0c37375400a29047b9430b666018d4a8937d14a95fb9
+REPIN tirdorm.palw_t12_release_v3_params.identity_id 5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5
+REPIN tirdorm.palw_t12_release_v3_params.schedule_id 9410712f252cbb8aede7f1e337dc5f46c30f5c01914d0b8f2f714a26e69f1906
+REPIN tirdorm.palw_t12_drill_params_v1_ir_flag_day.params_id 1b0411ba360aac6e1c060c6abc4ef8878f1d092878b7940fca7f20dffc610480
+REPIN tirdorm.palw_t12_drill_params_v1_ir_flag_day.identity_id 2254a5ae75cc1ed6fa70cc6f9a57281e7ab36aa8f80a820a545b81dad21549c6
+REPIN tirdorm.palw_t12_drill_params_v1_ir_flag_day.schedule_id ebc1b8bba64ff0b5669b37493be3a2e792594f79b0e853a20fd49ddf2078118a
+ok
+test pruning_proof_strict_economic_fence::a_scheduled_never_collapses_to_the_dormant_identity ... ok
+test pruning_proof_strict_economic_fence::armed_at_genesis_is_a_real_rule_difference_that_separates_identities ... ok
+test pruning_proof_strict_economic_fence::arming_moves_the_params_id_and_the_schedule_id_but_not_the_identity_id ... ok
+test pruning_proof_strict_economic_fence::shipped_testnet_12_arms_the_fence_at_750 ... ok
+test pruning_proof_strict_economic_fence::the_two_strict_economic_fences_are_independent_heights ... ok
+test reorg_strict_win_fence::a_scheduled_never_collapses_to_the_dormant_identity ... ok
+test reorg_strict_win_fence::armed_at_genesis_is_a_real_rule_difference_that_separates_identities ... ok
+test reorg_strict_win_fence::arming_moves_the_params_id_and_the_schedule_id_but_not_the_identity_id ... ok
+test reorg_strict_win_fence::shipped_testnet_12_arms_the_fence_at_750 ... ok
+test t12_mainnet_values_moved_only_these::testnet12_runs_the_three_mainnet_values ... ok
+test t12_mainnet_values_moved_only_these::the_three_mainnet_values_are_the_only_thing_that_moved_testnet12 ... testnet-12 now:           params bbb4ad66e54695b04f136742902794a6d93aa4cec178e80c185cb58b1c3050a2 identity 5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5 schedule 5a84a8d700cae89fad2fb6316cf2033d7c80cecede29e7ccfa00eb3088e8679a
+testnet-12 at the parent: params cfb097513291d16c64854b9d8159a72245412b30697fa9a6da8ac2acad448e47 identity e9a37a6eb9240db2c158c1cc9008dcf39e6f19087aad4c2e6651085dd25a7849 schedule c86fe51c8b3204289b36a3cb6d00ef7017971e34439dfc4046844399a6869a3e
+testnet-12 mainnet-values parent twin: params b3d58e52311e86055b207cefa48e857f790e334a2f2a37b7519f97b705d146b5 identity df8d548dea8dc91bf12a34c6ba2f79d81c0736fb40212012080e4cce35cd5cfe schedule 98566ae08f2bc9750819f5c6f323d401f6867d0cd225569a9f4c911e026c2973
+ok
+
+test result: ok. 108 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 66.52s
+
