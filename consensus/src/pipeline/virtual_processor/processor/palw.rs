@@ -9497,6 +9497,10 @@ impl VirtualStateProcessor {
         if kaspa_consensus_core::palw_state_v2::palw_object_chunk_group_id_v1(&whole) != *group {
             return None;
         }
+        // A Positive lifecycle body is never this old FamilyCertified payload.
+        if kaspa_consensus_core::palw_lifecycle_objects_v2::palw_positive_object_bytes_v2(&whole) {
+            return None;
+        }
         match borsh::from_slice::<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>(&whole) {
             // RFC-0002 Phase F: below `palw_tir_v1` an IR drill is bytes an older build cannot decode,
             // so it is none here either — it is graded, and charged, only past the fence.

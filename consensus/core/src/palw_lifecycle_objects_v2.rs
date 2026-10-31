@@ -1111,10 +1111,43 @@ pub fn palw_lifecycle_objects_from_accepted_txs_in_context_v2(
 /// Raw tag classification only. It must not read a claimed Result/profile or
 /// reserve resources, inspect funding, or allocate/deserialize an inner body.
 pub fn palw_positive_lifecycle_payload_v2(payload: &[u8]) -> bool {
-    payload.get(2) == Some(&misaka_palw_positive_contract::native::LIFECYCLE_OBJECT_TAG)
+    payload.get(2..).is_some_and(palw_positive_object_bytes_v2)
+}
+/// Raw object bytes (without the lifecycle u16 version). Unrelated old object
+/// readers use this to preserve their nonmatching path without decoding 176.
+pub fn palw_positive_object_bytes_v2(object: &[u8]) -> bool {
+    object.first() == Some(&misaka_palw_positive_contract::native::LIFECYCLE_OBJECT_TAG)
 }
 pub fn palw_positive_lifecycle_unjudged_v2(payload: &[u8], fences: &PalwLifecycleKindFencesV1, daa: u64) -> bool {
     palw_positive_lifecycle_payload_v2(payload) && !fences.positive_court_reserved_active_at_v2(daa)
+}
+
+/// Predecode syntax/resource check only; this installs no decoder or acceptance
+/// authority for the reserved tag. Call only AFTER its owning height check.
+fn preflight_positive_lifecycle_payload_v2(payload: &[u8]) -> Result<(), PalwLifecycleTxError> {
+    use crate::palw_positive_court_v2::coordinator::native_body::{
+        MAX_BODY_BYTES_V2, MAX_EXACT_RELATIONS_V2, MAX_OPAQUE_BYTES_V2, MAX_SIGNATURES_V2, NativeBodyLimitsV2, scan_native_body_v2,
+    };
+    if !palw_positive_lifecycle_payload_v2(payload) {
+        return Ok(());
+    }
+    let got = u16::from_le_bytes([payload[0], payload[1]]);
+    if got != PALW_LIFECYCLE_TX_VERSION_V2 {
+        return Err(PalwLifecycleTxError::UnsupportedVersion { got, expected: PALW_LIFECYCLE_TX_VERSION_V2 });
+    }
+    // These are codec defense ceilings, not an adopted execution profile. The
+    // native driver must additionally clamp to its rooted finite runtime policy.
+    scan_native_body_v2(
+        &payload[3..],
+        NativeBodyLimitsV2 {
+            max_body_bytes: MAX_BODY_BYTES_V2,
+            max_opaque_bytes: MAX_OPAQUE_BYTES_V2,
+            max_exact_relations: MAX_EXACT_RELATIONS_V2,
+            max_signatures: MAX_SIGNATURES_V2,
+        },
+    )
+    .map(|_| ())
+    .map_err(|_| PalwLifecycleTxError::Undecodable)
 }
 
 fn extract_lifecycle_objects_v2(txs: &[Transaction], context: Option<(&PalwLifecycleKindFencesV1, u64)>) -> PalwLifecycleExtractionV2 {
@@ -1124,8 +1157,14 @@ fn extract_lifecycle_objects_v2(txs: &[Transaction], context: Option<(&PalwLifec
             continue;
         }
         let id = tx.id();
-        if context.is_some_and(|(fences, daa)| palw_positive_lifecycle_unjudged_v2(&tx.payload, fences, daa)) {
+        if palw_positive_lifecycle_payload_v2(&tx.payload)
+            && context.is_none_or(|(fences, daa)| palw_positive_lifecycle_unjudged_v2(&tx.payload, fences, daa))
+        {
             out.skipped.push((id, "positive2 is undecodable below its owning fence"));
+            continue;
+        }
+        if preflight_positive_lifecycle_payload_v2(&tx.payload).is_err() {
+            out.skipped.push((id, "payload does not decode"));
             continue;
         }
         let payload: PalwLifecycleTxPayloadV2 = match borsh::from_slice(&tx.payload) {
@@ -1997,6 +2036,7 @@ pub fn validate_palw_lifecycle_tx_in_context_v1(
     if palw_positive_lifecycle_unjudged_v2(payload, fences, ctx_daa_score) {
         return Ok(());
     }
+    preflight_positive_lifecycle_payload_v2(payload)?;
     let Ok(payload) = borsh::from_slice::<PalwLifecycleTxPayloadV2>(payload) else { return Ok(()) };
     if payload.version != PALW_LIFECYCLE_TX_VERSION_V2 {
         return Ok(());
