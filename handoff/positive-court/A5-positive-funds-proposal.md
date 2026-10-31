@@ -98,6 +98,22 @@ actual nodeでmempool/block/templateの同一判定、same-mergeset lock、三�
 old/new CAS、source受理と精算の同batch、reorg/IBDまで接続・検証してからnative完了とする。
 本番presetは変更しない。
 
+## A0 checkpoint `f6c7d9f4d` とのjournal接続
+
+新しい正本はA0 `docs/design/palw/positive-court/NATIVE-JOURNAL-R1.md`。
+A5はjournal codec・domainを再定義せず、kind1の完全canonical native Transactionをspend再検査の資料とする。
+TxID、case journal head、`JournalHeadRow.history.digest` は別identityでありaliasしない。
+aux preimageの正規参照一覧・origin・完全性はnative ownerが照合する。
+保存済みproposal/paid flag/receiptやhashだけで適格spendを再生成しない。
+
+Case状態または費用を変える精算とsource dueはjournal対象、実認証後のlogical NoOpは対象外である。
+異なるauthored failure/retryで生じた消費は残す。ordinary TX受理・fee/historyとCase journalを混同しない。
+aux151のold/new、actual UTXO、acceptance、追加material-storeを既存caller-owned per-block batchで確定し、
+commit前にcache/terminalを公開しない。別WriteBatchやA2 local I/O storeをchain undoへ流用しない。
+restart getterは再受付を避けるread-only portであり、raw eventの独立再生・current root/history/funding/lease確認を代替しない。
+
+この照合は文書上の接続確認で、新しいruntime実行・native journal codec・actual VP統合の成功記録ではない。
+
 検証は [phase5記録](../../misaka/palw/positive-accounting/evidence/phase5-positive-funds/README.md) を参照。
 root通常Cargoのno-default node全lib 44件と同候補のall-targets Clippyが成功した。
 独立レビューで見つかったCase/Result/receipt snapshotと時刻逆行、局所重複請求のguardも反映した。
