@@ -2279,6 +2279,7 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         let Some(read) = session.spawn_blocking(|c| c.palw_model_registry_v1()).await else {
             return Ok(GetPalwModelRegistryResponse::default());
         };
+        let model_one = self.config.params.palw_model_panel_one_v1_fence().is_some_and(|f| f.is_active(read.tip_daa));
         let globals = read.globals;
         // The Activation Pool's P4 (user decision 2026-09-25): the figure a reader is shown is the
         // non-binding recommended pool of the terms in force, not the registry's derived bond.
@@ -2365,7 +2366,9 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             tip_daa: read.tip_daa,
             scheduled: read.fence_daa.is_some(),
             fence_daa: read.fence_daa.unwrap_or(0),
-            active: read.active,
+            // The retained lifecycle rows describe the historical registry.
+            // New model claims use their claim-local G14 admission after the fence.
+            active: read.active && !model_one,
             grace_until_daa: read.grace_until_daa,
             span_daa: read.span_daa,
             reference_work_per_span: globals.map(|g| g.reference_work_per_span.to_string()).unwrap_or_else(|| "0".to_string()),

@@ -36,11 +36,11 @@ use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
 /// release `0e8ec984e` was `b8564b88…` / `5de80e64…` / `93da24cc…`, which `palw_t12_launch_params_v1()`
 /// still hashes to): params, identity, schedule — the same pins `palw_clock_lead_cap_is_t12_only`'s
 /// `T12_WITH_THE_CAP` holds.
-// re-pin 2026-10-31 @612b72dd2828: Stage the user-requested all-model G14 one-seat migration at DAA 18600; preserve historical release identities (was 3e6da238…, b4706ae5…)
+// re-pin 2026-10-31 @cc5a7dd0e096: undeployed model-one fence delayed to 18640 for verified fleet rollout (was 3d33cad2…, f55a7039…)
 const T12_RELEASE: (&str, &str, &str) = (
-    "3d33cad25caeada14dd729bf622c122b6832e94d50891d5a0662ca2c8aadc350",
+    "edf472294c89dab0e64e625dbdfcd039b91081b05f89eacf8ba2aa25baa3a189",
     "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-    "f55a70399992d223d92b61c35f38012919024ef291edb5722026d66640a17508",
+    "4024a6e74d7aeb170d99e67c6d8fbe7884d71a716ccb778cd1ee526d01781b04",
 );
 
 /// Every other preset at the release, as `palw_clock_lead_cap_is_t12_only` pins them there.

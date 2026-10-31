@@ -63,7 +63,7 @@ fn make(
 /// What blocks `class`, read from the registry `r` it is in; `None` where nothing does (the base class, a class with no row, an
 /// `Active` class).
 pub fn palw_registry_blocking(r: &GetPalwModelRegistryResponse, class: &RpcPalwModelLifecycle) -> Option<RpcPalwClassBlocking> {
-    if class.is_base_class || !class.has_row {
+    if !r.active || class.is_base_class || !class.has_row {
         return None;
     }
     let state = class.state.as_str();
@@ -325,6 +325,19 @@ mod tests {
         assert!(block("Legacy", |c| c.has_row = false).is_none());
         assert!(block("Prefetching", |c| c.is_base_class = true).is_none());
         assert!(palw_registry_blockings(&GetPalwModelRegistryResponse::default()).is_empty());
+    }
+
+    #[test]
+    fn retained_lifecycle_rows_are_not_admission_requirements_when_the_registry_is_inactive() {
+        let mut r = registry();
+        r.classes = ["Candidate", "Prefetching", "Held", "Probation { probes_passed: 0 }"]
+            .into_iter()
+            .map(class)
+            .collect();
+        assert_eq!(palw_registry_blockings(&r).len(), 4);
+        r.active = false;
+        assert!(palw_registry_blockings(&r).is_empty(), "clients must not recreate retired jury or five-seat gates");
+        assert!(r.classes.iter().any(|c| c.state == "Held"), "historical row data is retained");
     }
 
     #[test]

@@ -1594,7 +1594,7 @@ fn testnet12_identity_did_not_move() {
     let (params, identity, schedule) =
         (t12.consensus_params_id().to_string(), t12.consensus_identity_id().to_string(), t12.consensus_schedule_id().to_string());
     eprintln!("[t12 ids] params {params} identity {identity} schedule {schedule}");
-    assert!(params.starts_with("3d33cad2") && identity.starts_with("5de80e64") && schedule.starts_with("f55a7039"));
+    assert!(params.starts_with("edf47229") && identity.starts_with("5de80e64") && schedule.starts_with("4024a6e7"));
     t12.validate_palw_v2().expect("testnet-12 as shipped validates");
     assert_eq!(t12.palw_court_capacity_v1.as_ref().map(|f| f.activation), Some(ForkActivation::new(18_400)));
     assert_eq!(bundle(&t12).state.court_capacity_v1().map(|m| m.from_daa), Some(18_400));

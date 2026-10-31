@@ -16,7 +16,7 @@ genesis / 年次フォーク指定は 1.0、後発登録は登録時から審査
 ## 移行境界と履歴
 
 別の fence `palw_model_panel_one_v1` を使用する。既に発火した kernel slice の DAA 18,400 を全モデル移行の高さに読み替えない。
-t12 の配備候補は DAA **18,600**。params / schedule identity、fork visitor、state params の mirror に含める。mainnet 等の fence は無効のまま。
+t12 の配備候補は DAA **18,640**。params / schedule identity、fork visitor、state params の mirror に含める。mainnet 等の fence は無効のまま。
 
 経路を選ぶ基準は claim の **最初の acceptance DAA**。再抽選、receipt、Final、再起動、reorg、pruned restore の高さでは切り替えない。
 境界前の claim とその責任記録は従来の席数・scope・経済条件を維持する。

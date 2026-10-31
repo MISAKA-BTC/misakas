@@ -2,8 +2,8 @@
 
 ## 2026-10-31 全モデル G14 1 席移行（t12 配備候補）
 
-`palw_model_panel_one_v1`: `None` → DAA **18,600**。t12 の claim の最初の acceptance DAA に適用し、mainnet 等は `None` を維持する。
-ユーザーは全モデル移行、main 反映、node 更新、t12 での Panel=1・Final・実ブロック生成を明示的に指示した（2026-10-31）。高さは段階配備のための実装上の境界。未配備の初期候補18,560はTIR再抽選の回帰修正・配備時間を確保するため撤回し、18,600へ延期した。
+`palw_model_panel_one_v1`: `None` → DAA **18,640**。t12 の claim の最初の acceptance DAA に適用し、mainnet 等は `None` を維持する。
+ユーザーは全モデル移行、main 反映、node 更新、t12 での Panel=1・Final・実ブロック生成を明示的に指示した（2026-10-31）。高さは段階配備のための実装上の境界。未配備の初期候補18,560はTIR再抽選の回帰修正・配備時間を確保するため撤回し、18,600へ延期した。その候補も未配備のまま、Linux最適化ビルドと全nodeの起動・同期検証の時間を確保するため18,640へ延期した。
 [RFC-0042](../rfc/0042-all-model-g14-panel-one.md) / [ADR-0210](../adr/0210-all-model-g14-panel-one.md)。関連回帰283件と全target型検査は成功。[検証記録](../evidence/palw/model-panel-one-2026-10-31/README.md)。実ノードの稼働完了は別途確認する。
 旧 claim の席数・責任記録、二階層係数、claim 単位の Gate C 承認・公開訴追期間は変更しない。
 

@@ -1,6 +1,6 @@
 # 全モデル G14 Panel=1 — 2026-10-31 検証記録
 
-状態: 実装・ローカル検証済み。**配備・有効化は未実施**。t12 の移行 fence 候補は DAA **18,600**。mainnet 等は無効のまま。
+状態: 実装・ローカル検証済み。**配備・有効化は未実施**。t12 の移行 fence 候補は DAA **18,640**。mainnet 等は無効のまま。
 [RFC-0042](../../../rfc/0042-all-model-g14-panel-one.md) / [ADR-0210](../../../adr/0210-all-model-g14-panel-one.md)。
 
 ## 配備候補の基点
@@ -9,7 +9,7 @@
 過去の状態遷移を変更したバイナリへ同時更新しないためであり、その修正自体の採否の変更ではない。
 元の main 基点の実装はローカル branch `codex/g14-model-panel-one-main-base` に保存した。
 
-## 現在のt12配備候補
+## 撤回した18,600候補（未配備）
 
 未配備だった18,560候補を撤回し、DAA **18,600**へ延期した。Linuxビルド中に追加したnative TIR ORIGINAL回帰で、1席の初回割当後、無応答からの再抽選が固定済みcustody契約と衝突して後続block全体を拒否する不具合を再現した。
 [再現ログ](tir-original-redraw-reproduction.log) / [修正後ログ](tir-original-redraw-fixed.log)。再抽選先へ契約を移さず、当該claimをPanelUnavailableで非fraud終了する。producer collateral不変、元custody保持、delta revert、cold restoreを確認した。
@@ -86,3 +86,13 @@ b1は停止後、元fork DB・以前のresync DB・今回の途中DBをすべて
 
 node producerの追加点検で、authoritative producer factsとは別の`registry_holds_class`が旧Held/5席roomを再び要求することを発見した。
 候補blockのDAAがmodel-one境界以降は、この歴史的な補助チェックを起動しない。factsが持つclaimのclass cap・共有network room・予算・担保の判定は維持する。
+
+## 現在の18,640候補
+
+18,600候補はLinux最適化ビルドとfleetの起動・同期確認の時間を確保するため、未配備のまま撤回した。
+新規claimの移行高さのみ18,640へ延期する。18,400と履歴claimの規則は変えない。旧候補のraw logとidentityは上に保存した。
+旧registryのrowは履歴として返すが、新経路が有効な時点では旧registryをadmission authorityとしてRPCでactive表示せず、clientが旧jury・5席案内を再生成しない。
+このRPCのinactive registry回帰8件と、fleet identity回帰4件は成功。新候補のidentityと配備記録は別途追記する。
+
+18,640候補の再計算値: params `edf472294c89dab0e64e625dbdfcd039b91081b05f89eacf8ba2aa25baa3a189`、schedule `4024a6e74d7aeb170d99e67c6d8fbe7884d71a716ccb778cd1ee526d01781b04`。handshake / kernel policyは`5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5`で不変。
+18,600候補の最終pin検証はlib 186件、integration 47対象237件が成功（明示的ignored 2件）。これは18,640候補の未実施テストを代替するものではない。

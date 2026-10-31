@@ -18,9 +18,9 @@ Addresses keep the `misaka` prefix (`misaka…` mainnet, `misakatest…` testnet
 kaspad --testnet --netsuffix=12
 ```
 
-The all-model G14 Panel=1 candidate in this checkout schedules its separate migration at **DAA 18,600**. Its fingerprint is
-**`3d33cad25caeada14dd729bf622c122b6832e94d50891d5a0662ca2c8aadc350`**, genesis
-`a27f8f44fe4d91a5…`, and schedule id `f55a70399992d223d92b61c35f38012919024ef291edb5722026d66640a17508`.
+The all-model G14 Panel=1 candidate in this checkout schedules its separate migration at **DAA 18,640**. Its fingerprint is
+**`edf472294c89dab0e64e625dbdfcd039b91081b05f89eacf8ba2aa25baa3a189`**, genesis
+`a27f8f44fe4d91a5…`, and schedule id `4024a6e74d7aeb170d99e67c6d8fbe7884d71a716ccb778cd1ee526d01781b04`.
 
 This candidate is under Linux build and deployment validation. Code and local tests do not establish live activation,
 Final or SecurityCertified. See [the migration and validation record](docs/evidence/palw/model-panel-one-2026-10-31/README.md),
