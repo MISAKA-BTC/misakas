@@ -1,0 +1,14 @@
+[    1.1s] GPTNeoXForCausalLM — TIR program v1: 3 blocks, 6 layers, 324 nodes, 69 params, 10 consts (3420 B), 2 states, 14205 bytes encoded
+[    1.1s] frontend: built-in data file `gpt-neox` (75a05ac8c56150c2) (level B), spec 444158d103aa9301
+[    1.1s] text-generation: token ids → next-token logits; nothing left out
+[    1.1s] calibration statistics from /Users/wata/Downloads/misaka-trained-llm-cohort-20261031/EleutherAI__pythia-70m/run-wide-q24-v2/pack/stats.json
+[    1.1s] calibration statistics 106 sites, digest fb87145b40c7dc86cdefd3d4407f49a2e9d0846916c0c3dcea2f89ec2c541e21 (from "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/EleutherAI__pythia-70m/run-wide-q24-v2/pack/stats.json")
+[    1.1s] converting
+[    8.9s]   materialise 8/8
+[    9.2s] /var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/palw-pack-verify-1532-0/rebuild.palwtir: 329 tensors, 98.6 MiB in the tensors, 98.6 MiB file; 347 chunks (300 distinct); file digest 2d14e6384908b54c674d6c4c16e6df23190e04f90c9f6a6732256ba2f1fde8d26467e7b6410a94a500f236da61bcda929dda2c34858ae168fe9a84539ff40365
+[    9.7s] streamed conformance: 1 vectors, 5 positions; checking every requested executor
+[   51.7s] conformance vector 1/1 (random 0 (3+2)): position 1/5 computed; final conformance-vector comparison pending
+[   93.1s] conformance vector 1/1 (random 0 (3+2)): position 2/5 computed; final conformance-vector comparison pending
+[  134.0s] conformance vector 1/1 (random 0 (3+2)): position 3/5 computed; final conformance-vector comparison pending
+[  176.0s] conformance vector 1/1 (random 0 (3+2)): position 4/5 computed; final conformance-vector comparison pending
+[  217.2s] conformance vector 1/1 (random 0 (3+2)): position 5/5 computed; final conformance-vector comparison pending

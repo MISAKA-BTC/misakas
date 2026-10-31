@@ -107,9 +107,7 @@ impl PalwTirClassEntryV1 {
     /// The canonical job's context — consensus's yardstick (`palw_tir_attempt_v1::palw_tir_job_context_v1`),
     /// what a registration carries.
     pub fn canonical_context(&self) -> PalwJobContextV2 {
-        use kaspa_consensus_core::palw_tir_attempt_v1::{PalwTirJobFactsV1, palw_tir_job_context_v1};
-        let facts = PalwTirJobFactsV1::of(&self.class, &self.artifact.plan().program, self.class_id());
-        palw_tir_job_context_v1(&facts, self.canonical_job)
+        kaspa_consensus_core::palw_tir_attempt_v1::palw_tir_canonical_context_v1(&self.class,self.class_id(),self.canonical_job).expect("entry's canonical program")
     }
 }
 

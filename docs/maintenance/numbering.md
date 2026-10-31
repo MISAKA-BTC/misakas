@@ -40,3 +40,11 @@ RFC-0010/0012のdormant implementationは主RFCではなくdesignへ移しまし
 ## 2026-10-22 認証付き state map の追加予約
 
 [ADR-0203](../adr/0203-authenticated-palw-state-map-and-row-access.md) / [RFC-0036](../rfc/0036-authenticated-palw-state-map-and-row-access.md)をProposed / Review Requiredとして予約した（30 GB pruned node 方針の state lane）。基準 b1eb33960 の tree には ADR-0202 / RFC-0035 までの主文書があり、0198–0202 / 0031–0035 は他 lane の割当で本台帳には未記録。storage 作業の他 lane（IBD）が consensus 可視の形式を起案する場合は ADR-0204 / RFC-0037 以降を使う。次のローカル番号は ADR-0204 / RFC-0037。未 fetch の remote や将来 branch の未使用保証ではない。
+
+## 2026-10-31 統合版の名前空間
+
+現行の閲覧・更新先は [RFC-v2-0001〜0015](../rfc-v2/README.md) / [ADR-v2-0001〜0050](../adr-v2/README.md)。旧RFC/ADRの番号・欠番・重複・予約は履歴として維持し、新番号へ再利用しません。現行一覧は各 `registry.json`、旧番号の照合は従来の台帳を使います。重大変更の新規RFC・ADRと明示採択の義務は維持します。
+
+## 2026-10-31 学習済みLLMのwide Q24
+
+[RFC-0043](../rfc/0043-wide-q24-llm-output.md) / [ADR-0211](../adr/0211-wide-q24-llm-output.md) を新規割当。両提案をユーザーが「両案を採択し、実装を進める」と明示採択した。同番号について現checkoutの主文書と `git log --all -- docs/rfc/0043-* docs/adr/0211-*` を照合し、既存割当は見つからなかった。未fetchのremote・将来branchの未使用保証ではない。提案時のdesign URLは互換pointerとして保持する。実装の採択であり公開presetへの有効化ではない。次ローカル番号はRFC-0044 / ADR-0212。

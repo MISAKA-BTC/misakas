@@ -1620,6 +1620,7 @@ pub fn lower_cnn_opts(hl: &HlProgram, spec: &CnnSpec, opts: &LowerOpts) -> Resul
         carry_keys: BTreeMap::new(),
         table_chunk: 1 << 24,
         linear_weight_bits: 8,
+        logits_dtype: DType::I32,
         conv_weight_bits: opts.conv_weight_bits,
         out_major_rows: false,
         gdn_core_wide: false,

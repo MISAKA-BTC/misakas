@@ -1,0 +1,56 @@
+{
+  "schema": "misaka.hf-native-retry.v1",
+  "status": "PASS",
+  "source_run": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/EleutherAI__pythia-70m/run-wide-q24-v2",
+  "unchanged_executable": {
+    "build_argv": [
+      "cargo",
+      "--config",
+      "profile.dev.package.kaspa-consensus-core.opt-level=0",
+      "--config",
+      "profile.dev.package.kaspa-consensus.opt-level=0",
+      "test",
+      "--locked",
+      "--offline",
+      "-p",
+      "kaspa-consensus",
+      "--features",
+      "evm",
+      "--lib",
+      "--no-run",
+      "--message-format=json"
+    ],
+    "executable": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/kaspa_consensus-3c124941e1736064",
+    "sha256": "3b65ebe2a6592642e9bfb13e412ed87b09b5b2a1949c0b31e8ae55cdd91e6e60",
+    "test_argv": [
+      "g14_downloaded_hf_artifact_registration_mined_and_replayed",
+      "--ignored",
+      "--nocapture"
+    ]
+  },
+  "fixture_sha256": "29c0d221c7f998dee2e4778bd8bfd9f9b8b4e610b17a62b1bf6f4484b7f367a8",
+  "environment": {
+    "RUST_MIN_STACK": "67108864",
+    "MISAKA_PRIVATE_WIDE_Q24": "1"
+  },
+  "original_failure": "unoptimized test thread stack overflow before first model-identification log",
+  "model_context_changed": false,
+  "consensus_limits_changed": false,
+  "result": {
+    "artifact_root": "427a912e722f173d1d0fe4b02dac4148709e9a70d245c3012768a5962fa3f6736ea9cb921b8824b9712a1f718f5dc389c00c1d81fa9c8f552fd358c96ba10ef4",
+    "artifact_sha256": "2d1010327664743f240ea8d5bc089daed5a704d4340fea322d1f9cafbe009651",
+    "carrier_txid": "5246d613778698095ebe90521a71c77942dad671d9967a559617d2ed62dbaa2c5f4a582fad63bb980ea3555f74d3175e7622831088bf18244996ac570793ef05",
+    "claim_certified": false,
+    "class_id": "356fbf891ef8ff98cc008c5187c7105bbc9eb32a53225a54361493c96fdc75f3af9d7acb1789a4fa9866771442fa1a55a8217371278bf88130ece5d2e4af91e1",
+    "independent_node_replay": true,
+    "max_context": 2048,
+    "mempool_accepted": true,
+    "name": "checkpoint",
+    "persisted_registry_read": true,
+    "public_network": false,
+    "registration_mined": true,
+    "schema": "misaka.hf-registration-local-acceptance.v1",
+    "sink": "95447b500bba5fa72dc532a37911451c9ec3dbe60224d855750f67fcd935c6019231317e7c7e9e4dad8cbfcfabba1191ea7d0dc442576e26ab91313ed35854c0",
+    "state_root": "5cdb57f9d7004fdaff17aa9848b919a5165bf364c965c8c0de786d16d0fc95ca9287c65c293598a1c0c0981d30c0a270f00754d1f5fe3f463cffae9bf09f186a"
+  }
+}

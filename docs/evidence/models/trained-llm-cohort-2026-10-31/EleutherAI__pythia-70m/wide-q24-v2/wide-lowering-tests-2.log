@@ -1,0 +1,14 @@
+   Compiling misaka-palw-tir v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/misaka/palw/tir/core)
+   Compiling misaka-palw-tir-ref2 v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/testing/reference/palw-tir-ref2)
+   Compiling misaka-palw-tir-artifact v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/misaka/palw/tir/artifact)
+   Compiling misaka-palw-tir-exec v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/misaka/palw/tir/exec)
+   Compiling misaka-palw-tir-lower v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/misaka/palw/tir/lower)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 14.58s
+     Running tests/logits_q24.rs (target/debug/deps/logits_q24-9eda85c03b4848a7)
+
+running 2 tests
+test a_model_whose_calibrated_logits_pass_the_bound_is_refused ... ok
+test the_logits_are_natural_log_units_times_two_to_the_24 ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.24s
+

@@ -1,0 +1,2050 @@
+{
+  "kind": "docs-overlay",
+  "input": "misakas-pre(5).zip",
+  "active_rfc_count": 15,
+  "legacy_rfc_count": 41,
+  "runtime_code_changed": false,
+  "manifest_excludes_itself": true,
+  "files": [
+    {
+      "path": "README.md",
+      "bytes": 994,
+      "sha256": "788b93fc14dd383836984eea97fb1a422912c8f8cc9a51d25ddd5155ec529ac6"
+    },
+    {
+      "path": "docs/PRINCIPLES.md",
+      "bytes": 38263,
+      "sha256": "7de5364029db47b54ba9bce6c895ac49ce3084b29acc539922a2ad077d548900"
+    },
+    {
+      "path": "docs/README.md",
+      "bytes": 3061,
+      "sha256": "3bcefaf43c20234fc9daf926d2c37f963a3a48e3066c8e8a7272131188ba3aee"
+    },
+    {
+      "path": "docs/STATUS.md",
+      "bytes": 3111,
+      "sha256": "78bc551f3b8e9e239a107a5b69088f184a86e0fb857d9fd1adb3710aa4cfec3f"
+    },
+    {
+      "path": "docs/adr/0001-network-isolation.md",
+      "bytes": 6901,
+      "sha256": "05b7099891ef0f6ac156037b59440b7cc96e05ede047b3af9a3fb86162dea659"
+    },
+    {
+      "path": "docs/adr/0002-mldsa65-p2pkh.md",
+      "bytes": 8512,
+      "sha256": "8e883ba80b55cb09e8af5665eacbc20ce0b7fdc475e7eda9a63143fa765d7f29"
+    },
+    {
+      "path": "docs/adr/0003-lthash-utxo-accumulator.md",
+      "bytes": 9863,
+      "sha256": "c8d4d836cbbf0c4ba66a058c0de49f32e332f85ecdec0c4568680ca58921dc79"
+    },
+    {
+      "path": "docs/adr/0004-utxo-commitment64.md",
+      "bytes": 8696,
+      "sha256": "0edbbbd7537f86908d13966049557de77f9e00b23e8e7ef6f2066fc2b1e1a26e"
+    },
+    {
+      "path": "docs/adr/0005-mass-policy.md",
+      "bytes": 12198,
+      "sha256": "4a673df180c3d9524db66488410e0160ef39bf5c275d4fa89b529960cc767d1c"
+    },
+    {
+      "path": "docs/adr/0006-rpc-wasm-sdk-types.md",
+      "bytes": 12478,
+      "sha256": "bcf2f67fe5745ebe90ffaff03044791ffa4efc2f3060969b3a01e5e7b8c44911"
+    },
+    {
+      "path": "docs/adr/0007-layered-pow.md",
+      "bytes": 21255,
+      "sha256": "9c9353c588efeae4e327da3fe04a07de7239b5223ced1dead61a0c0ad812b400"
+    },
+    {
+      "path": "docs/adr/0008-hash64-consensus-identity.md",
+      "bytes": 14848,
+      "sha256": "35bc3c5a55ecba2031f6d139ec30f47c34173b100cce6483e8528120785381dc"
+    },
+    {
+      "path": "docs/adr/0009-dns-probabilistic-finality.md",
+      "bytes": 839,
+      "sha256": "cc395194f6289642457df32bcc333ca4b25bc6e8c64ec6971d431810d5705846"
+    },
+    {
+      "path": "docs/adr/0010-validator-node-architecture.md",
+      "bytes": 861,
+      "sha256": "b24809a3fe620f8c4e5be81e1530dbc13491271a51d639a2a38f49a5a1bbd00b"
+    },
+    {
+      "path": "docs/adr/0011-validator-deployment-and-equivocation-safety.md",
+      "bytes": 826,
+      "sha256": "41c2f49be65d2efb9724f6beeb4f9370f8eb947933939ec714add9e2c55b3c31"
+    },
+    {
+      "path": "docs/adr/0012-mainnet-validator-sortition-commit-reveal.md",
+      "bytes": 902,
+      "sha256": "7d61ea6fbccd712a098d2e867e93a1b845c341c61becc659d9546b07ec9ecbdc"
+    },
+    {
+      "path": "docs/adr/0013-validator-reward-distribution.md",
+      "bytes": 831,
+      "sha256": "b27b4f4e0d9349e2e528bb68e4d635f85314d669a4708f0647185a84ff6976ac"
+    },
+    {
+      "path": "docs/adr/0014-coordinated-failover-protocol.md",
+      "bytes": 778,
+      "sha256": "c5734f3ff7101f7ae5e39974d949afebb15c641124c2985f4af1597e8ac6a611"
+    },
+    {
+      "path": "docs/adr/0015-remote-signer-hsm-protocol.md",
+      "bytes": 880,
+      "sha256": "9ad4eb6b101eb23b540c9f8f7ebf5895a9033104b2d65d600aa84aa761812ec4"
+    },
+    {
+      "path": "docs/adr/0016-stake-locked-bond-utxos.md",
+      "bytes": 864,
+      "sha256": "5614f006b6be9549cddacfad7bb73349302aa255f37b97b29087555df0971986"
+    },
+    {
+      "path": "docs/adr/0017-all-active-staker-attestation.md",
+      "bytes": 851,
+      "sha256": "8082002c1cbc21acb7a71ac3c1ba2b36c9b9271f3532bae208c4cdbe9aa66e6a"
+    },
+    {
+      "path": "docs/adr/0018-quality-gated-stakescore-inclusion-economics.md",
+      "bytes": 837,
+      "sha256": "65e78f2971205e4a34c136e68d12deb34aa1ec77f78d0c0535259971c48b71ea"
+    },
+    {
+      "path": "docs/adr/0019-mldsa87-migration.md",
+      "bytes": 18826,
+      "sha256": "eb2aea507e9d4ea52f21d3557329363e817b0a56bd40b80ba709aa7047febc09"
+    },
+    {
+      "path": "docs/adr/0020-selected-parent-evm-lane.md",
+      "bytes": 14321,
+      "sha256": "b6586849aeafeacd070f747249cac3580f7f24fa9bd1712b100610084b248732"
+    },
+    {
+      "path": "docs/adr/0021-palw-llm-pow.md",
+      "bytes": 839,
+      "sha256": "82c41f790ee539787cd12b45e69f6d8606a740887b557252decd486d2e6b47b7"
+    },
+    {
+      "path": "docs/adr/0022-pruned-ibd-evm-overlay-snapshot.md",
+      "bytes": 15048,
+      "sha256": "e1412de18a73b20159d70cd57db031d08669c2b9632bbabaa9caf96fd6a8f649"
+    },
+    {
+      "path": "docs/adr/0023-base-three-lane-execution.md",
+      "bytes": 798,
+      "sha256": "11d67029c9a3af26faf3327616f4711c54e6e3a6bf754df800b642448732d475"
+    },
+    {
+      "path": "docs/adr/0024-verified-llm-token-weighted-bft.md",
+      "bytes": 837,
+      "sha256": "05a9ca072dbcf2bd8ec905f1aa4487ae0cf451831b170eb402200c7516a53350"
+    },
+    {
+      "path": "docs/adr/0025-chain-participation-and-ibd-candidate-selection.md",
+      "bytes": 6900,
+      "sha256": "c6e45674aab5b34f282c64914fafaaa7d6ca078210b0e6ae49b3c74c21bd7566"
+    },
+    {
+      "path": "docs/adr/0026-current-palw-testnet11-architecture.md",
+      "bytes": 5513,
+      "sha256": "8344d7711ac72da9d4bb4d3f0871528212377803520163086251a93916faa9fa"
+    },
+    {
+      "path": "docs/adr/0026-palw-v2-runtime-separated-verification.md",
+      "bytes": 29549,
+      "sha256": "8a700163a20c1a455ccaebe8f738b2a8243f7dae697858be79ba798eafbcddf6"
+    },
+    {
+      "path": "docs/adr/0027-palw-slash-unilateral-fraud-proofs.md",
+      "bytes": 24326,
+      "sha256": "150f66dda612712eacecc4c0131a16bd8403ddf32a2d985a7c1af9a708b4e807"
+    },
+    {
+      "path": "docs/adr/0028-palw-challenge-sampling-protocol.md",
+      "bytes": 34432,
+      "sha256": "18edab2ff7a9d65bc02dae81095d679796d8bd55f5a95564d54594de480de7d0"
+    },
+    {
+      "path": "docs/adr/0029-palw-chain-carriage.md",
+      "bytes": 20068,
+      "sha256": "fabb7c65451f3adf213519bc2d3e5e4abae4aaf6999fc2fb6e11b8ce6ff821fa"
+    },
+    {
+      "path": "docs/adr/0030-palw-step-function-shape-profile.md",
+      "bytes": 25650,
+      "sha256": "c994f81843e20ae4cf957067971e1caac576c27d9e15b30c9f7c1dbb167f4222"
+    },
+    {
+      "path": "docs/adr/0031-palw-canonical-transcendentals.md",
+      "bytes": 7795,
+      "sha256": "fe1c008699f2ac716a277fa27531282d373b82d128f8e44687eea2cc9080443e"
+    },
+    {
+      "path": "docs/adr/0032-palw-fee-bond-escrow.md",
+      "bytes": 13112,
+      "sha256": "e7f575eda08cfbee529b406b287649ba4c405777374b1085e32610fa776988eb"
+    },
+    {
+      "path": "docs/adr/0033-palw-credit-gate-wiring.md",
+      "bytes": 944,
+      "sha256": "6d2dd04d25527f6cc6d8ea3a05bae8c704342d09a952540ec51ebfdfc26d85ac"
+    },
+    {
+      "path": "docs/adr/0034-palw-execution-class-model-band-routing.md",
+      "bytes": 45467,
+      "sha256": "e6b5f79f095910be77ca01f0a7edb064f21d1260081bb7bc384454f4f54db78a"
+    },
+    {
+      "path": "docs/adr/0035-palw-public-testnet-strategy.md",
+      "bytes": 14298,
+      "sha256": "bb32fb2fc67cf40773f9a0e1fa50e84518b65fc168b0746a71b17d5b15199c8e"
+    },
+    {
+      "path": "docs/adr/0036-palw-mainnet-activation-model.md",
+      "bytes": 16916,
+      "sha256": "9e368fad154179316127402a16361311b6c98cfe424161eade14a9766e718071"
+    },
+    {
+      "path": "docs/adr/0037-palw-async-job-state-machine.md",
+      "bytes": 22306,
+      "sha256": "54891a7da15767700724c9d98dc0ec8e81c6022c442294aa7a203710b9b5faba"
+    },
+    {
+      "path": "docs/adr/0038-palw-is-the-consensus-work.md",
+      "bytes": 60759,
+      "sha256": "349530a80ae555c13ba49a9e494eff23011daf593980f6e00f4865dc0ab48ea2"
+    },
+    {
+      "path": "docs/adr/0039-palw-only-block-production.md",
+      "bytes": 26270,
+      "sha256": "b3d9b788895bafba54ef21ade4a58f444cec5bb8e5bf58b53082155a0bb4d67a"
+    },
+    {
+      "path": "docs/adr/0040-palw-base-0-integer-arithmetic.md",
+      "bytes": 29974,
+      "sha256": "6c789337305ac72c5ddb352555941acc554e746432c2ac93a010671f94c4db54"
+    },
+    {
+      "path": "docs/adr/0041-palw-pruning-proof-verification.md",
+      "bytes": 30775,
+      "sha256": "da3d00802a32b077eefa89ed585a3c11ee285532b45a1807f79f59c9770a19c6"
+    },
+    {
+      "path": "docs/adr/0042-palw-mainnet-candidate-ruleset.md",
+      "bytes": 42876,
+      "sha256": "208f479f390b687616edec42cdd3475a0189a7ac8931971045b52b4ac1082997"
+    },
+    {
+      "path": "docs/adr/0043-palw-v2-state-root-ordering.md",
+      "bytes": 15188,
+      "sha256": "17ed2f04ccbd3907c279f598c2bde040182ee13d52bea8d7b163d9b8e00cfa88"
+    },
+    {
+      "path": "docs/adr/0044-palw-free-prompt-receipts.md",
+      "bytes": 39361,
+      "sha256": "32a738a65f90d2a2e734da0406758add1e6144449da80fdf6150b6382b22bbc6"
+    },
+    {
+      "path": "docs/adr/0045-palw-class-economy-on-chain.md",
+      "bytes": 15655,
+      "sha256": "fa2ed1b821c117beafcf960fc6b3831c086dabe78038dff08031887d94bb4c8d"
+    },
+    {
+      "path": "docs/adr/0046-palw-v2-consensus-object-carriage.md",
+      "bytes": 14649,
+      "sha256": "8e245fb614ac8598ecd7d19b4449adf80ab7189f164c01ea9c895f3cd547a96e"
+    },
+    {
+      "path": "docs/adr/0047-palw-a16-activation-tier.md",
+      "bytes": 8371,
+      "sha256": "de05f8d78f9c024bd21982205eefc92c27a64c8d3f2bf8fdf13e066f5c3b6da8"
+    },
+    {
+      "path": "docs/adr/0049-palw-adjudication-contract.md",
+      "bytes": 31718,
+      "sha256": "91dbc5d2d0133cedf525838e0d54dfc4b58ff41b4279c78a43b296e1e7c38549"
+    },
+    {
+      "path": "docs/adr/0050-palw-base0-residual-site.md",
+      "bytes": 12270,
+      "sha256": "575d07814066d0e3e48cbe8a67634085d16e9b8a3d104eb62bd75e9740961139"
+    },
+    {
+      "path": "docs/adr/0051-palw-metal-gguf-execution-family.md",
+      "bytes": 800,
+      "sha256": "d1131aa5f63889adc1c352af799b8b77cdf0afc05ebe533ce97080cc6ad2c5b9"
+    },
+    {
+      "path": "docs/adr/0052-palw-qwen36-hybrid-class.md",
+      "bytes": 18480,
+      "sha256": "81e034aa79ea8fcb686aa370a158ab98694a3026b4b0123663d7a8513b92055d"
+    },
+    {
+      "path": "docs/adr/0053-palw-one-execution-family.md",
+      "bytes": 24234,
+      "sha256": "33e4bf54ede94edfa12f03b068ae4763d1d51ce4174fffd8a1f3f541be08c3c4"
+    },
+    {
+      "path": "docs/adr/0054-palw-share-follows-production.md",
+      "bytes": 10395,
+      "sha256": "a77edf9564652f8257af0c0a956ff222dc1ab3b6149a323c36ec206960953527"
+    },
+    {
+      "path": "docs/adr/0055-palw-position-is-earned-not-declared.md",
+      "bytes": 8969,
+      "sha256": "d11892da8694085b7581da28efa0940cc91198069f7afb606243c0f1a3b6fb67"
+    },
+    {
+      "path": "docs/adr/0056-palw-permissionless-class-admission-and-share-economy.md",
+      "bytes": 22725,
+      "sha256": "944c47dde0335bb41e2474aa9f89aba080b048483d41f87893fe8a8b627b52cd"
+    },
+    {
+      "path": "docs/adr/0057-palw-base0-runtime-acceleration.md",
+      "bytes": 11613,
+      "sha256": "6a7d991f76f5cc2ee57e6e1b39c869fb8ca9dfe3ee5e813324e4c2b7747c8a84"
+    },
+    {
+      "path": "docs/adr/0058-palw-merged-work-is-counted.md",
+      "bytes": 11065,
+      "sha256": "ed797e37e602f19d1d47dfb54452990ddfe9a17af5cf062995ddc0f5b04fb15a"
+    },
+    {
+      "path": "docs/adr/0059-the-10b-premine-cap.md",
+      "bytes": 8057,
+      "sha256": "f56190bd0770fbfde28134fdc8bee5e21884cf311750eabee4e9500053fe05dc"
+    },
+    {
+      "path": "docs/adr/0060-the-liveness-doctrine.md",
+      "bytes": 25506,
+      "sha256": "3a595b4f615c7be2c9b7bacc94d1864ec53a076fbb3051f01084edf99b21e753"
+    },
+    {
+      "path": "docs/adr/0061-zero-seat-genesis-and-right-sized-collateral.md",
+      "bytes": 10801,
+      "sha256": "8a4c90ffd9f2cba1e4076a8794a65598cc50d098cbb3de1b13bc4c5d482b35b9"
+    },
+    {
+      "path": "docs/adr/0062-data-availability-court.md",
+      "bytes": 49502,
+      "sha256": "4067f7cce556165185743de72ece25d9638f0bc01e44c1e6f70fb9107dc94913"
+    },
+    {
+      "path": "docs/adr/0063-operator-tooling-the-missing-half.md",
+      "bytes": 16316,
+      "sha256": "a4a39aa920e76a879498e16cc6c7cc3c59d346dfd913bec3d66b1daa08611cc9"
+    },
+    {
+      "path": "docs/adr/0064-trustless-recovery-from-a-total-stop.md",
+      "bytes": 17485,
+      "sha256": "1de41fd78e06482ef15b11af6b5f335bace231cf036d5f113cfaaed5a78bdf86"
+    },
+    {
+      "path": "docs/adr/0065-a-bond-must-be-earned-and-a-seat-must-be-someone-else.md",
+      "bytes": 36268,
+      "sha256": "f9d09d8c24d15d16c41783817a3d74487d85bfa2e66f602082b973f193192236"
+    },
+    {
+      "path": "docs/adr/0066-the-heartbeat-lane-out-of-header-bits-and-a-committed-liveness-table.md",
+      "bytes": 21344,
+      "sha256": "a4dfac430c4265c7697b867b1077619d9aae0aa6c2cb7dcc702e4c771634be53"
+    },
+    {
+      "path": "docs/adr/0067-classes-are-chain-data-kernels-are-the-build.md",
+      "bytes": 61895,
+      "sha256": "28bfa9a545e16e25f06a0129bca3b0b3e793d7bad591bbd2abac0f7da4d4fb9c"
+    },
+    {
+      "path": "docs/adr/0068-the-llm-primary-economy-and-the-floors-minimum.md",
+      "bytes": 17107,
+      "sha256": "4ad8fa05f497bea65b44756a2324d7b5848914a70bb2b4e73c40f4f13ebd2066"
+    },
+    {
+      "path": "docs/adr/0069-e2e-adjudicability-is-the-price-of-weight.md",
+      "bytes": 41095,
+      "sha256": "4c48dadb0765704bba4459b8adc7c23c1a126f72b9486f17e95900c65d506954"
+    },
+    {
+      "path": "docs/adr/0070-the-model-tiers-step-spaces-are-adjudicable.md",
+      "bytes": 17857,
+      "sha256": "4437a88ff1b19adb32c59467d2e04055b76b48216c141aec93fc27275d8fe668"
+    },
+    {
+      "path": "docs/adr/0071-the-attempt-lanes-price-and-the-tickets-bound.md",
+      "bytes": 23127,
+      "sha256": "8bdf0cbc927aa1bbb4ffd8133e9d6496cf6c798b83c9f0075c10a4d1a6df9c50"
+    },
+    {
+      "path": "docs/adr/0072-the-ticket-is-the-execution.md",
+      "bytes": 29819,
+      "sha256": "fd5a33fabe60f1b2850e820df0ffc00e6f0f90b83c703b05983445fddba717ac"
+    },
+    {
+      "path": "docs/adr/0073-real-demand-work-bears-the-weight.md",
+      "bytes": 28420,
+      "sha256": "27999d1cb5fc2cdb4b0ab9df8d28d8b5e830427f7fc9408c3195763a26d46816"
+    },
+    {
+      "path": "docs/adr/0074-the-attempt-is-a-claim-drawn-by-the-chain.md",
+      "bytes": 19503,
+      "sha256": "3cb1e097036734d8daf6d3d4b587d37c296171bf76dea9604140f16f973d9cc1"
+    },
+    {
+      "path": "docs/adr/0075-certification-is-a-consensus-object.md",
+      "bytes": 31210,
+      "sha256": "95ff48a3dc100d0801ee22e66026768cb36f6f4fbec5f6ddc8cd7a797eeecfc0"
+    },
+    {
+      "path": "docs/adr/0076-the-attempt-lanes-seed-is-the-retargets-equilibrium.md",
+      "bytes": 15563,
+      "sha256": "8b1145cbe3164084a0825d93941b8b9cee67130128e5c325d87398dd1be880f6"
+    },
+    {
+      "path": "docs/adr/0077-a-prompt-a-person-would-type-is-a-claim-the-court-can-try.md",
+      "bytes": 50936,
+      "sha256": "f3c46dd6b8192fa186aa5efddc5ef9afc0191c32300878dd35babe5393026f37"
+    },
+    {
+      "path": "docs/adr/0078-what-was-made-from-it-is-committed-the-thing-never-rides.md",
+      "bytes": 38438,
+      "sha256": "36a5f3d6cf7f00be96cd0f38403e72f2c19b9bbead670ad638640e7ef25f4278"
+    },
+    {
+      "path": "docs/adr/0079-a-pure-function-needs-no-permissions-the-sandbox-is-for-the-host.md",
+      "bytes": 41471,
+      "sha256": "d499b25bba005d4fff4ae1c12dab3bd9dda5d16e5f0103195532618fe570798f"
+    },
+    {
+      "path": "docs/adr/0080-the-answer-is-long-the-verified-unit-is-short.md",
+      "bytes": 831,
+      "sha256": "946f3b2014c864dbe78c0db2218d94eb4a2ed028364ba45f80731a0e86c55923"
+    },
+    {
+      "path": "docs/adr/0081-long-context-the-input-is-a-state-chain.md",
+      "bytes": 814,
+      "sha256": "0307dcab39afc253b90fd526a7a1bf35ce9d82fbed72bc73595b52c94fd80deb"
+    },
+    {
+      "path": "docs/adr/0082-the-close-is-flat-in-the-context.md",
+      "bytes": 85690,
+      "sha256": "44df4a6ee97a33248aaa24f44eb55cf3ae9c9a21a9f987f61d2a3d8f93b708a5"
+    },
+    {
+      "path": "docs/adr/0083-the-difficulty-window-counts-only-rows-priced-by-bits.md",
+      "bytes": 9806,
+      "sha256": "dc07f9058da676ee8b98a6d760be9fb2c45f17a0f131205524aad6b41b075dfa"
+    },
+    {
+      "path": "docs/adr/0084-the-ids-ride-the-capture-stays-home.md",
+      "bytes": 39736,
+      "sha256": "771eec722893b231fad947cabe04f84abb171ba8c4c17e5facf93a309a235342"
+    },
+    {
+      "path": "docs/adr/0085-the-close-is-assembled-from-what-was-served.md",
+      "bytes": 21275,
+      "sha256": "f9494fbcd0b9cbbb3998e52f5f0dcfa658dee98e528cfc844ee3f07147548ae1"
+    },
+    {
+      "path": "docs/adr/0086-the-opening-carries-the-fold-not-the-leaves.md",
+      "bytes": 26530,
+      "sha256": "9036e60905a3551a24295b1a911381a30dee036ef176f479e528ac64cfe20380"
+    },
+    {
+      "path": "docs/adr/0087-a-position-is-bought-from-the-curve-and-sold-back-to-it.md",
+      "bytes": 37144,
+      "sha256": "42c96943def3b953216e34becdf18fffa054357372bedb3cd3eee9ebb508e55d"
+    },
+    {
+      "path": "docs/adr/0088-the-class-keeps-its-graph-and-the-owner-keeps-publishing.md",
+      "bytes": 47375,
+      "sha256": "9b2675d2e90f499d5c4339aa8318afc20841567bd1de844a2cb8ba5561aaad5e"
+    },
+    {
+      "path": "docs/adr/0089-the-fold-is-the-truth-and-the-evm-is-its-window-and-its-hand.md",
+      "bytes": 59487,
+      "sha256": "9dd6dbf5cce911b31b093b6122cb85e4c8074c43ce376462dbd852d39f972a00"
+    },
+    {
+      "path": "docs/adr/0090-the-pair-is-seeded-with-real-msk-locked-for-good-and-a-position-is-whole.md",
+      "bytes": 18611,
+      "sha256": "73978cc6bc1acb1e441756fdcdf0e0525725cd4a111cf35d249d38b03c172213"
+    },
+    {
+      "path": "docs/adr/0091-the-reward-buys-the-pair-and-no-holder-is-paid.md",
+      "bytes": 26298,
+      "sha256": "dfd861f3cc4ae76ce165e909263aa8e52448c3dc29639131d094e22df9578920"
+    },
+    {
+      "path": "docs/adr/0092-the-ladder-is-minted-once-and-the-clock-is-what-binds.md",
+      "bytes": 22469,
+      "sha256": "60d497474f1417a18b098ae13be5b76095cc71b755018da323ccc2d5961bc46f"
+    },
+    {
+      "path": "docs/adr/0093-the-court-can-try-a-fused-row-and-the-responder-is-what-is-missing.md",
+      "bytes": 32665,
+      "sha256": "2e03bda07a88a4f4842fd25ccceeb44750aadb5fd90de1531a7480aa2c37f830"
+    },
+    {
+      "path": "docs/adr/0094-a-seed-is-paid-in-as-many-transactions-as-it-takes.md",
+      "bytes": 15599,
+      "sha256": "15e27a3b29fb6599b0921e2ab259ffbd5905ff8b376297d929b38b0aa985ed49"
+    },
+    {
+      "path": "docs/adr/0095-a-position-is-a-membership-not-an-income.md",
+      "bytes": 25661,
+      "sha256": "f77645fe7798f075076a8fdf54e9f8c9c865c243805ba4ad85ef223385aa408c"
+    },
+    {
+      "path": "docs/adr/0096-the-app-you-already-use-is-the-entrance-and-the-shape-of-the-answer-is-committed.md",
+      "bytes": 55513,
+      "sha256": "acafd1a31c5c8c36ac8ccafabddc05be0b086dba27ec8597ded90aa5d80206fe"
+    },
+    {
+      "path": "docs/adr/0097-a-models-fit-is-a-lookup-and-the-entrance-says-its-limits-before-the-first-token.md",
+      "bytes": 38893,
+      "sha256": "f1866cf6be7ff1af3048bcca1fb4b5b48635082c6c5ddac3e896304aae452655"
+    },
+    {
+      "path": "docs/adr/0098-the-panels-coverage-is-a-number-and-a-seat-that-found-a-lie-files-nothing-else.md",
+      "bytes": 24907,
+      "sha256": "0c581d5fd5a5f4410b24213989c82255f51cf02507369e4662e5310610adb322"
+    },
+    {
+      "path": "docs/adr/0099-the-adder-measures-the-chain-recomputes-and-a-seat-holds-a-shard.md",
+      "bytes": 30598,
+      "sha256": "721025729355d16b3ca85934245abed441c2a8bcb19bd5af1989f9739666deaa"
+    },
+    {
+      "path": "docs/adr/0100-a-model-is-data-and-the-court-the-measure-and-the-licence-are-built-for-a-shard.md",
+      "bytes": 36841,
+      "sha256": "4bcc6c87a8576ad37219c66efa0c19edb92a2ef55c04e09dd208a3f31f277af3"
+    },
+    {
+      "path": "docs/adr/0101-a-membership-is-proven-by-the-chain-and-served-by-anyone-and-a-position-never-moves.md",
+      "bytes": 15357,
+      "sha256": "c910224a5c686aee35e9856691ab9609266a555325802331f591938274da067a"
+    },
+    {
+      "path": "docs/adr/0102-the-embedding-lift-is-read-per-token-and-an-unarmed-kernel-is-not-in-the-identity.md",
+      "bytes": 19166,
+      "sha256": "c53ba0842d041a3b6455f35545be058ba63a2594a23033ed543e7c30c4bb3e77"
+    },
+    {
+      "path": "docs/adr/0103-the-context-is-held-off-the-chain-and-the-chain-carries-a-root-an-opening-and-a-logarithm.md",
+      "bytes": 75119,
+      "sha256": "95c3c9e1273bf5b1746184130de27ed1194e5fa9f4683a6bf8419bc3367ac2f7"
+    },
+    {
+      "path": "docs/adr/0105-a-heartbeat-never-turns-a-bonded-block-red.md",
+      "bytes": 46545,
+      "sha256": "4e734271e58166ad163788033f8a2f63244479c8f44cab86cd6cc6e0da1c828b"
+    },
+    {
+      "path": "docs/adr/0106-an-inventory-is-a-stream-of-leaves-not-a-copy-of-the-model.md",
+      "bytes": 19336,
+      "sha256": "050b3ac9654e360f4049322868e7db56e5ca638fef99679e88832dd854d6aed0"
+    },
+    {
+      "path": "docs/adr/0107-a-share-grows-on-work-that-reached-final.md",
+      "bytes": 13083,
+      "sha256": "49cdada121e234b5cb53cb5a4e46e28ae04254029240f6b1a29c96b268df258d"
+    },
+    {
+      "path": "docs/adr/0108-an-extension-is-a-manifest-the-verifier-recomputes-and-a-receipt-is-evidence-not-a-vote.md",
+      "bytes": 42312,
+      "sha256": "a273232bc2a6921de48bf235586b7ff68e5e11e89edc076f24a4a2327ee04cec"
+    },
+    {
+      "path": "docs/adr/0109-a-lock-is-its-own-claim-and-finality-is-a-label-not-a-pause.md",
+      "bytes": 23223,
+      "sha256": "ce03b28c91f721226682a137c4b57a7146ed5c1e56a5e61612b1726ac58c78d2"
+    },
+    {
+      "path": "docs/adr/0110-a-context-limit-is-activated-from-reproducible-public-vectors-not-the-maintainers-workstation.md",
+      "bytes": 31055,
+      "sha256": "875e343ab173ac164f1d3a90310f4781d97e240cf26f8222bf0ddd17f98e2be9"
+    },
+    {
+      "path": "docs/adr/0111-a-seat-may-demand-the-committed-leaf-it-needs-to-judge.md",
+      "bytes": 27609,
+      "sha256": "73d849b7a6b384deff4965843b803047f5b8fba1dbf28b589e3aa1d217cf2fb2"
+    },
+    {
+      "path": "docs/adr/0112-a-classs-weights-are-read-within-a-budget-the-operator-states-and-the-budget-is-a-fifth-of-the-artifact.md",
+      "bytes": 35051,
+      "sha256": "ee5c3eed6d12750c1d2901dc5b06e4a839000e6fad0bee7f523be8b2b032fe29"
+    },
+    {
+      "path": "docs/adr/0114-the-owners-leg-is-five-percent-and-it-arrives-at-a-height.md",
+      "bytes": 10756,
+      "sha256": "674483248cc5f390f03fe7f6f3d17082b58e22c5ed56c4a62ca9483104fb782d"
+    },
+    {
+      "path": "docs/adr/0115-a-pending-transaction-is-announced-until-it-lands.md",
+      "bytes": 7786,
+      "sha256": "11f16ebce4015e634b0aa7172a7e2cf41cdef30a2e2c060b8b88dc8a5533cb55"
+    },
+    {
+      "path": "docs/adr/0116-an-attention-history-is-the-classs-and-the-held-regime-reduces-over-its-own-width.md",
+      "bytes": 14861,
+      "sha256": "edf43de1ee0161199aabc358828116cc7262f8b3a6e94fe78e4636475001e580"
+    },
+    {
+      "path": "docs/adr/0117-a-draw-is-one-forward.md",
+      "bytes": 20992,
+      "sha256": "77973c5070da5c094291583c58b887549a2706e457f95c12008102b5ae1d8c45"
+    },
+    {
+      "path": "docs/adr/0118-the-held-regime-arrives-at-a-height-and-a-held-class-carries-its-own-prompt-form.md",
+      "bytes": 24864,
+      "sha256": "c418227ea951b3fde01490e16879e86ca3aeaa02c1468f18300a11b96f527925"
+    },
+    {
+      "path": "docs/adr/0119-a-held-class-is-walked-at-the-regimes-ladder-and-the-chain-records-which-classes-those-are.md",
+      "bytes": 21420,
+      "sha256": "ec1c14f59b90270c105575b5c64f119c2647d53dcc4b619474911c3154a723c0"
+    },
+    {
+      "path": "docs/adr/0120-the-least-seed-is-one-million-msk-and-it-arrives-at-a-height.md",
+      "bytes": 7550,
+      "sha256": "f3f575c898928935f2cada5bda2a01823047993632c36275d0fd88d0a2e77b11"
+    },
+    {
+      "path": "docs/adr/0121-a-held-capture-is-served-from-its-fold-as-the-replay-streams-and-a-node-holds-two-ladders.md",
+      "bytes": 24326,
+      "sha256": "9523e8e53dca4984a8580d15ef50ccac721d22c631a8509751f9043af6b4abdd"
+    },
+    {
+      "path": "docs/adr/0122-mining-is-a-purpose-an-operator-runs-one-command-and-reads-one-work-id.md",
+      "bytes": 68982,
+      "sha256": "26b48428f11050638634471a2a822afd816926dc15fdeb8fa238d50923308368"
+    },
+    {
+      "path": "docs/adr/0123-the-epoch-progressively-releases-unused-class-budget.md",
+      "bytes": 4686,
+      "sha256": "0c6fdd3d986082eada57e9d3b701d93e7b319571658d445cad98ce3db5190ea2"
+    },
+    {
+      "path": "docs/adr/0124-the-panel-is-paid-out-of-the-claims-reward-a-seat-holds-exposure-and-a-claim-is-paid-for-the-compute-it-certifies.md",
+      "bytes": 37286,
+      "sha256": "d04264352849608b5b72044477bb078f2c07ee49b238c321a5b0ca0b19ff8cb1"
+    },
+    {
+      "path": "docs/adr/0125-the-execution-lane-is-a-second-lane-inside-the-cadence-and-it-widens-one-permit-at-a-time.md",
+      "bytes": 39023,
+      "sha256": "ec76b956e6402a3f6f6a0441b96aba9da29e7f0dd9cd606ff5855eb3eab4c8a9"
+    },
+    {
+      "path": "docs/adr/0126-the-validator-carve-drops-to-a-fifth-and-the-stake-reorg-gate-stays.md",
+      "bytes": 889,
+      "sha256": "de30286f7c2294079e744e43d9362cb8696eb7c694baef6e104c686590e9e96d"
+    },
+    {
+      "path": "docs/adr/0127-palw-settles-on-its-own-and-its-terms-are-not-dns-terms.md",
+      "bytes": 9647,
+      "sha256": "c762122c754cccec9c788db8796bf079e6770a4765b98996cb19475105938596"
+    },
+    {
+      "path": "docs/adr/0128-dns-validators-vote-bft-by-bonded-stake-and-that-vote-decides-the-stake-reorg-gate.md",
+      "bytes": 898,
+      "sha256": "f0f7a55aa77231b4d9adee69cc53525bfbb387bf763c81585b689cf96253de5c"
+    },
+    {
+      "path": "docs/adr/0129-a-double-spend-needs-the-anchors-not-the-blocks.md",
+      "bytes": 12041,
+      "sha256": "b44bcee7cecff32b7d275790d99922942f3f0c8fbad25089c5e3b2de5b0da471"
+    },
+    {
+      "path": "docs/adr/0130-bps1-is-hardened-before-it-is-widened.md",
+      "bytes": 25048,
+      "sha256": "0604398b281c1018eb5d0d12571187a4cc494417f104249ba84e06ba74fae586"
+    },
+    {
+      "path": "docs/adr/0131-a-claim-is-paid-for-the-compute-it-cost-in-economic-compute-not-leaves.md",
+      "bytes": 18014,
+      "sha256": "6fcde9b4e87254ef3e430f0262bbe127f238fcbf668374d227f9e8d25d78e1be"
+    },
+    {
+      "path": "docs/adr/0132-what-a-model-is-actually-paid-per-forward-it-ran-and-why-the-gap-is-liveness-before-it-is-price.md",
+      "bytes": 37501,
+      "sha256": "292a036fc3beaf9ebe538bfb79181a8eb5a270fda3594c4947baef81978b5a0a"
+    },
+    {
+      "path": "docs/adr/0133-verification-is-its-own-clock-a-class-verifies-over-spans-and-a-starved-class-stops-only-itself.md",
+      "bytes": 46247,
+      "sha256": "828d17b42f4fe09b4ddea31ce745c23a1cf22cd7281c26934eef05b15be610f8"
+    },
+    {
+      "path": "docs/adr/0134-the-compute-overlays-committee-beacon-retires-at-a-height-and-its-machinery-goes.md",
+      "bytes": 12343,
+      "sha256": "55d45bb241cfd5c54eb4413623394f325b2f4269df1e0d00af35e86df95342f4"
+    },
+    {
+      "path": "docs/adr/0135-a-model-is-data-the-permissionless-registry-derives-its-profile-proves-its-panel-and-walks-its-lifecycle.md",
+      "bytes": 39874,
+      "sha256": "070ed0fc77a317c8943318e71c9b01d354bd084aaf5d10d87a4f86d8e311afc0"
+    },
+    {
+      "path": "docs/adr/0136-an-artifact-is-mapped-not-read-and-a-host-holds-one-copy-of-it.md",
+      "bytes": 9634,
+      "sha256": "9e49f9bf364579866c5163717e8c93720b2f6860aa8e88041c042878f9bb7b91"
+    },
+    {
+      "path": "docs/adr/0137-a-block-buys-one-unit-of-work-from-any-model-and-a-share-is-a-result-not-an-input.md",
+      "bytes": 56195,
+      "sha256": "22169577750cf06531949dcf6578a6ff994c24b6d8175ba8be7d408da638c709"
+    },
+    {
+      "path": "docs/adr/0138-the-daa-score-is-the-anchors-clock.md",
+      "bytes": 11768,
+      "sha256": "9e67e21cb0b02ba54472c3ff8c15578f0cd1fc70dcf52080d3484701f7d6718a"
+    },
+    {
+      "path": "docs/adr/0139-the-execution-lanes-gas-is-one-budget-a-round.md",
+      "bytes": 9083,
+      "sha256": "f68c087780cb1de3bb91fd6916e7765407e4e29def84845f0c95d0125217fc94"
+    },
+    {
+      "path": "docs/adr/0140-the-heartbeat-is-the-emergency-generator.md",
+      "bytes": 16239,
+      "sha256": "936520f39e1d6ff3d8b11a6f611119443319013451341a615df81b9467493a88"
+    },
+    {
+      "path": "docs/adr/0141-can-an-inference-be-the-ticket-without-a-hash-lottery.md",
+      "bytes": 10475,
+      "sha256": "d33f93e4adf64c9f3bde871d3df21b7bc2703a2d43da4c833485aaf6b361776e"
+    },
+    {
+      "path": "docs/adr/0142-the-consensus-clock-is-a-cursor-a-heartbeat-consumes-a-slot.md",
+      "bytes": 24099,
+      "sha256": "7bfd0c0875196aad7a887058778f12eb46307f3c8a74d09ddf700cf870eda4eb"
+    },
+    {
+      "path": "docs/adr/0143-an-artifact-root-has-one-owner-on-the-chain.md",
+      "bytes": 16599,
+      "sha256": "af51e3d1c0e88ee070108c0131828db4b17660bae0b778b95e3db233d68dc805"
+    },
+    {
+      "path": "docs/adr/0144-palw-pays-for-the-inference-you-were-going-to-run-anyway.md",
+      "bytes": 21228,
+      "sha256": "96e431b3529045651c09b58053c1499c6c0ee99a6f0a438e81749529587d398c"
+    },
+    {
+      "path": "docs/adr/0145-canonical-work-is-derived-and-admission-is-earned.md",
+      "bytes": 18395,
+      "sha256": "842a3308fc8718d5878b6796626ad7c64c1730b2d4c3a42b43a6b261c3cbe1ea"
+    },
+    {
+      "path": "docs/adr/0146-a-coefficient-is-justified-by-the-arbitrage-it-permits.md",
+      "bytes": 17914,
+      "sha256": "5f590e5e1c46f90f9376f5a43368e48bf8118b099a3362f1cb4ef19a1480bdd5"
+    },
+    {
+      "path": "docs/adr/0147-independence-is-drawn-not-declared.md",
+      "bytes": 17447,
+      "sha256": "045369886958bf9a983b1603f6dd4884d738b9b00b858d9318ca89cd76d9177f"
+    },
+    {
+      "path": "docs/adr/0148-the-free-prompt-lane-prices-compute.md",
+      "bytes": 18009,
+      "sha256": "c073f93ddaf5baa3cf1c82322805b2d08a1b95733b1bf6535770c78d575459fc"
+    },
+    {
+      "path": "docs/adr/0149-an-attempts-pwu-is-the-derivation.md",
+      "bytes": 13254,
+      "sha256": "c400ace72725e43ed9fa99647308b744bad0fde6c2e0ad9d8c954be1a0811fa7"
+    },
+    {
+      "path": "docs/adr/0150-the-fingerprint-must-see-the-rule-not-only-the-height.md",
+      "bytes": 13457,
+      "sha256": "4ab5832c63ad2710c11cac41f9c6cee3a9b74b2af1f1916561d2506fa48df3e5"
+    },
+    {
+      "path": "docs/adr/0151-liveness-is-structural-collateral-covers-fraud.md",
+      "bytes": 29548,
+      "sha256": "321165813e67d661c0cbf5c6e7bf130b2942774120f1d358247f880e75816930"
+    },
+    {
+      "path": "docs/adr/0152-account-stake-staged-reserve-and-vested-rewards.md",
+      "bytes": 7132,
+      "sha256": "17a8fab6060b409a79f2132c19c55dfa07317a7f401cc443c41e6e4ee5be2e60"
+    },
+    {
+      "path": "docs/adr/0153-2m-verification-sharding-plan.md",
+      "bytes": 5653,
+      "sha256": "ed68950c99c9d9a7d9c2d1913ea9a0f0c6fc2c717f57f2711ef33a0d496e36e7"
+    },
+    {
+      "path": "docs/adr/0154-testnet-12-flag-day-daa-750.md",
+      "bytes": 5181,
+      "sha256": "37d0069886268b0341236f203c07d4a0c58b6f50680299090117393f48a13c89"
+    },
+    {
+      "path": "docs/adr/0155-testnet-12-flag-day-daa-1300.md",
+      "bytes": 3287,
+      "sha256": "dffa6877038381438d87b139ad25c0c1a62caf3432c83b7ff95c575de7635ed2"
+    },
+    {
+      "path": "docs/adr/0160-claim-capacity-separation.md",
+      "bytes": 124638,
+      "sha256": "240771b933b275ab85c017d8976f7bed9e121c9638f831d75b6990f642229f19"
+    },
+    {
+      "path": "docs/adr/0161-a-claim-is-not-an-emission.md",
+      "bytes": 7939,
+      "sha256": "900ccd3c67248b637945a341eaaa9f9492346964465b0cecc35b37ec82efe164"
+    },
+    {
+      "path": "docs/adr/0162-the-pair-opens-on-a-virtual-reserve.md",
+      "bytes": 33468,
+      "sha256": "1d050f11843da18706f3f12a5ab6b083168185884abc97a4ec86fd83f51367be"
+    },
+    {
+      "path": "docs/adr/0163-an-adapter-class-is-its-parent-plus-an-adapter-and-is-listed.md",
+      "bytes": 10168,
+      "sha256": "296356fa72a6b61fe09629d265fb7a31cc1433e1d27879127940591250c5a6d7"
+    },
+    {
+      "path": "docs/adr/0165-the-floor-is-a-reserve-and-the-work-carries-the-clock.md",
+      "bytes": 45894,
+      "sha256": "922cc3a260cf33f2a7bb927dbd3c7838da3f70a1983b1dc2078731744705ff29"
+    },
+    {
+      "path": "docs/adr/0166-verifier-unavailability-is-not-producer-fraud.md",
+      "bytes": 13225,
+      "sha256": "1566a51b9f1bde8d1d9a51cfe567eeed2e8f77de0e79e292988fb557fc5871c8"
+    },
+    {
+      "path": "docs/adr/0167-the-x1000-capacity-package-a-fixed-per-daa-reward-budget-riders-and-a-lower-only-breaker.md",
+      "bytes": 18935,
+      "sha256": "6b0b9e8f03b7734e7bff593505b911851a7a8d862576e9e971ed4b5acce6f156"
+    },
+    {
+      "path": "docs/adr/0168-an-execution-block-is-a-third-class-and-the-chain-reaches-it-through-an-anchor.md",
+      "bytes": 27012,
+      "sha256": "745ca0959b0ece5a6b8e0ab21ad298082e0463fccca8f87cb8c0df011bec043d"
+    },
+    {
+      "path": "docs/adr/0169-a-work-slice-is-a-normal-consensus-block-the-session-earns-nothing-and-the-floor-is-kept-out-by-merge-admission.md",
+      "bytes": 4010,
+      "sha256": "989739e6d91bb40974cdd7c9a4f59e82f699d14f8a2c5d8a2ed388e49cd3e0af"
+    },
+    {
+      "path": "docs/adr/0170-the-seed-anchor-is-a-window-not-a-span.md",
+      "bytes": 16461,
+      "sha256": "03f4e8bf29af7051b1aac13ce313286c88bba25f1d62f87372d94ca119426e1f"
+    },
+    {
+      "path": "docs/adr/0171-probabilistic-constraint-checks-and-court-on-dispute.md",
+      "bytes": 20105,
+      "sha256": "e2bdc16e7574aa39365f9e326ca3e61ba3694c109adbb261e12f216b50bfe462"
+    },
+    {
+      "path": "docs/adr/0172-model-extensibility-uses-versioned-kernels-not-a-universal-vm.md",
+      "bytes": 20151,
+      "sha256": "ec7046522068d48b93281590bb8e367e1a40ef02df040494715cebc9e219f35c"
+    },
+    {
+      "path": "docs/adr/0173-a-seat-holds-a-root-not-a-class-and-possession-gates-activation.md",
+      "bytes": 17381,
+      "sha256": "ff94c29ce145912b07651c7b24ad79039e98ccad0f3e0c3ae51cfbe97bfe2665"
+    },
+    {
+      "path": "docs/adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md",
+      "bytes": 33371,
+      "sha256": "6d0d70756a07758e18e577008af4ba443e52ea904fde2055a3081884351bfeac"
+    },
+    {
+      "path": "docs/adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md",
+      "bytes": 5160,
+      "sha256": "1ca8afa02713035f825760a6e902ebfdd095090a4eff6c439d8363c6d97ae8bd"
+    },
+    {
+      "path": "docs/adr/0175-registered-models-are-permanently-immutable.md",
+      "bytes": 13034,
+      "sha256": "22ae8670d982d6325a536da7c8e9d4beb048071bcde1506462511eece963bb77"
+    },
+    {
+      "path": "docs/adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md",
+      "bytes": 30091,
+      "sha256": "91679146b42a1e02f64c1f5ec768870f0775303b3a0f69ef3540dc9cf62864f1"
+    },
+    {
+      "path": "docs/adr/0177-model-bond-allocation-without-availability-consensus.md",
+      "bytes": 39469,
+      "sha256": "c3ecd98a1dd86837e74637212153e285ec4d9312a1000bf72acf0ed429698c03"
+    },
+    {
+      "path": "docs/adr/0178-fork-choice-heals-a-partition-on-bonded-participation.md",
+      "bytes": 28375,
+      "sha256": "18811fd0f13c44758eb53e8e9c712d783f2cbe79b83ef41b145847cb4c3bb6b9"
+    },
+    {
+      "path": "docs/adr/0179-model-tiers-genesis-annual-1-0-registered-0-3.md",
+      "bytes": 12902,
+      "sha256": "85afabad2ddee9576ce3139bd864a68c64274ff5d69d03f4d2ff5ec6ec01de7d"
+    },
+    {
+      "path": "docs/adr/0180-palw-only-consensus-no-bft-validators.md",
+      "bytes": 2679,
+      "sha256": "96d22678d1fb7c078622b596812ac803f3704b13247071521e0a6965b92ea809"
+    },
+    {
+      "path": "docs/adr/0181-design-freeze-and-controlled-change.md",
+      "bytes": 1826,
+      "sha256": "dc0c6ec889bbd72020779f02fc1db4903cffc7d349f1d652843dafe9b8a169a3"
+    },
+    {
+      "path": "docs/adr/0182-defer-media-and-model-improvement-until-post-mainnet.md",
+      "bytes": 2898,
+      "sha256": "8276d2dcbdd7068914774944c28e6b283542d004899ae847bccdc092a9a3350e"
+    },
+    {
+      "path": "docs/adr/0183-g14-court-capacity-panel-floor-retention-detection.md",
+      "bytes": 2569,
+      "sha256": "1b44afbca30f920d11b27c4d9e0b41b999e85dccf83c99f809092ed527dadbf5"
+    },
+    {
+      "path": "docs/adr/0184-native-liability-horizon-panel-record-and-single-certified-leg.md",
+      "bytes": 4187,
+      "sha256": "88a4ef31fb9e1457fadf717d85fff996d4895ba6ea01603826e59c99f201dc22"
+    },
+    {
+      "path": "docs/adr/0185-paid-lock-randomness-bootstrap-and-paid-sources.md",
+      "bytes": 4453,
+      "sha256": "b85e913e2e12aa69e3767f3b97141b2354c3efe5004d14a58b2c256a13c0553f"
+    },
+    {
+      "path": "docs/adr/0186-hold-unresolved-liability-advance-independent-claims.md",
+      "bytes": 3965,
+      "sha256": "daf1d76e3ce7473b9f6233380658e2e7a9f0c4a6d257a60949edf399aeeea5c1"
+    },
+    {
+      "path": "docs/adr/0187-g14-native-public-filing-and-post-final-mining-accusation.md",
+      "bytes": 6570,
+      "sha256": "0d6d4c12d124430a21f5019e1ea794227e27dcc622d31e9749e8054f0d91c504"
+    },
+    {
+      "path": "docs/adr/0188-d2-x3-arm-records-composition-and-pause-credit.md",
+      "bytes": 17540,
+      "sha256": "3b9a7ff50d55343778bbfb6807af1e28768463017c54e8d91cca2a72909fb5c3"
+    },
+    {
+      "path": "docs/adr/0189-tir-court-read-set-door-options.md",
+      "bytes": 4810,
+      "sha256": "2108181592ff428afd1caeab0fc03406f3f96d3b33186bec38c8c1c7a2c7f8b0"
+    },
+    {
+      "path": "docs/adr/0190-tir-door-sparse-fetch-designated-answers-tenure-split.md",
+      "bytes": 9356,
+      "sha256": "3f81782c9c596a9fc9dd043e4c4431e897ee205e274d31552de40edbdca71b3a"
+    },
+    {
+      "path": "docs/adr/0191-tir-dispute-local-decomposition-long-context.md",
+      "bytes": 19330,
+      "sha256": "be6e68bcd9208655c398e33565824820db3cd9328e9732b96ae8607fc00599d0"
+    },
+    {
+      "path": "docs/adr/0192-court-service-opportunity-and-shared-pursuit.md",
+      "bytes": 7220,
+      "sha256": "a384287d1cf5704e14a4788bcc828c3e931ef71ba333ad5ecbeaefe69fe67ded"
+    },
+    {
+      "path": "docs/adr/0193-miner-account-bond-for-panel-incentives.md",
+      "bytes": 17560,
+      "sha256": "1954c6a83447c6dfdc4474536938e2e718c82303750b4bbf23c743c3bcbeae60"
+    },
+    {
+      "path": "docs/adr/0193-sequential-witness-filing-clock.md",
+      "bytes": 3557,
+      "sha256": "8f2f2503eb9b1145045dfd35a97cbff11ab273b272151fbf748e063249ccf72e"
+    },
+    {
+      "path": "docs/adr/0194-dormant-g14-integration-and-service-schema.md",
+      "bytes": 7114,
+      "sha256": "a0f8dde80cf72fefd73fd1303cde130176222f3e96aa9d1f6f199ba74d81319d"
+    },
+    {
+      "path": "docs/adr/0195-rooted-court-response-eligibility-history.md",
+      "bytes": 6517,
+      "sha256": "8ca748ec0e21060d17fe726e1853fa514f598fdb41fe39eb8414fb5cb0d69d14"
+    },
+    {
+      "path": "docs/adr/0196-owner-independent-shared-tir-query-data.md",
+      "bytes": 11805,
+      "sha256": "73fd05b57108e5717e4a0ffa0fb8d7d989b8019c378e811025a397679d79efb5"
+    },
+    {
+      "path": "docs/adr/0197-court-end-effects-and-pending-liability-archive.md",
+      "bytes": 8190,
+      "sha256": "84dd7bb01e852f02e25125f61e741638432806d5120a5f60e59e170b9eea1c7b"
+    },
+    {
+      "path": "docs/adr/0198-shared-court-initial-notice-boundary.md",
+      "bytes": 2544,
+      "sha256": "1c5b488641ad486fab0db4f420efcb0c574ac30322579234269780c3cc526e83"
+    },
+    {
+      "path": "docs/adr/0199-shared-court-terminal-material-and-nonblocking-ingress.md",
+      "bytes": 2704,
+      "sha256": "d96b38a24ea12f01bb37e8c3340aff08d1ec3559bd77b469fe698a46e798ba72"
+    },
+    {
+      "path": "docs/adr/0200-d2-readiness-root-opening-availability.md",
+      "bytes": 2461,
+      "sha256": "95e023723a87246e34c014a428f671520a571c9439fae4c1ce1b181657f1fb78"
+    },
+    {
+      "path": "docs/adr/0201-archived-close-qualified-financial-discharge.md",
+      "bytes": 5233,
+      "sha256": "01e9e93987e74b16ee46b6e11c6d54d766776f7f761e9a9db3ff5903ce204697"
+    },
+    {
+      "path": "docs/adr/0202-court-original-funded-contract-and-role-consent.md",
+      "bytes": 4365,
+      "sha256": "ab4e490cec8181b7db7d9e65b07746bf7a84b8c0f878999d30935fb71fd6426b"
+    },
+    {
+      "path": "docs/adr/0203-authenticated-palw-state-map-and-row-access.md",
+      "bytes": 3992,
+      "sha256": "c98c20f2d73905bfd5e24ab5c42e328c0aa177c1f45c1801de0441933db07f91"
+    },
+    {
+      "path": "docs/adr/0204-ibd-bounded-row-stream-and-storage-generations.md",
+      "bytes": 3213,
+      "sha256": "ae580e9c62a410454c1e31980998c5bd53eabacdb64fd100d23a07f13a36fbb3"
+    },
+    {
+      "path": "docs/adr/0205-a-decoded-answer-is-not-paid-twice.md",
+      "bytes": 2169,
+      "sha256": "0a3e3675a742466ef1181f0375bdd12b222e2016907897273e141336a7fc0b86"
+    },
+    {
+      "path": "docs/adr/0206-panel-da-mandatory-disclosure-g14-route.md",
+      "bytes": 7638,
+      "sha256": "44aa854f9a7f654c1264742a192632b8827966a60452d17be5934ec51427a889"
+    },
+    {
+      "path": "docs/adr/0207-finite-fee-consent-and-provider-payment-bounds.md",
+      "bytes": 6100,
+      "sha256": "6d72afdf3ea86504c69c7d360b67c4696ec4561231aa445da3ae9cd64f501b8e"
+    },
+    {
+      "path": "docs/adr/0208-authenticated-prefix-work-dependencies.md",
+      "bytes": 2351,
+      "sha256": "60c8daa15b83fc5bc1d1cd7103014db35e6a82880d07262313784b934418f37a"
+    },
+    {
+      "path": "docs/adr/0209-genesis-bond-free-bootstrap.md",
+      "bytes": 1734,
+      "sha256": "17d64fc16ff93a4bb80336c6ef3274a78b403ee06c7d79b5cca0df0c93def867"
+    },
+    {
+      "path": "docs/adr/INDEX.md",
+      "bytes": 36370,
+      "sha256": "2caf1575aea0e072f0eb3013c35d32db5c0d8e688fa89710253cee99ec40a852"
+    },
+    {
+      "path": "docs/adr/README.md",
+      "bytes": 2534,
+      "sha256": "9d1c2a07cff3c582f36b90cc710ac5fce7e7ccb3dc2cac626cf14499dcfcfda3"
+    },
+    {
+      "path": "docs/adr/TOPICS.md",
+      "bytes": 29769,
+      "sha256": "65df784d62cb209bfba40892c2102ea6ceec51e70e4e5ca56cab991688485c45"
+    },
+    {
+      "path": "docs/governance/README.md",
+      "bytes": 796,
+      "sha256": "9cc6bd41dec58654876a8c22b51e2447972236da1d9999dd80014cc251a04f94"
+    },
+    {
+      "path": "docs/governance/design-freeze.md",
+      "bytes": 4613,
+      "sha256": "aaf370f3d7b68df12574318139ba0d42bd1299a9e1630288b3466574bdde3527"
+    },
+    {
+      "path": "docs/governance/document-lifecycle.md",
+      "bytes": 2197,
+      "sha256": "2aaae4311b22de80a7e89fd7cd6a2d27b728d3600c93fd7ecbac7fbd23c5ec6d"
+    },
+    {
+      "path": "docs/governance/parameter-register.md",
+      "bytes": 43972,
+      "sha256": "179b7918109466970b2f36a5037e1b83a48495d283417e11358d1b0fed0d58cc"
+    },
+    {
+      "path": "docs/governance/parameters.json",
+      "bytes": 30483,
+      "sha256": "ffcf109510ec4f05394a4c4ffc7bd991f1b8f38a5d32a3ffaeccbc430f33ee12"
+    },
+    {
+      "path": "docs/governance/post-mainnet-scope.md",
+      "bytes": 5775,
+      "sha256": "f167bbd91342a6b34da0c1d98ebe1cc71be843b2d0e94c4ef9ab3a82b3d235a2"
+    },
+    {
+      "path": "docs/governance/release-scope.json",
+      "bytes": 736,
+      "sha256": "6d92df25ba29d0fee9a3b86fa2daabe9c5e1677fee873210026cdb4671d2623d"
+    },
+    {
+      "path": "docs/governance/templates/README.md",
+      "bytes": 208,
+      "sha256": "d2c0d6b29bf3adec2f1f8eaefaebed8a085920f562f4641f852494aecf4b7a55"
+    },
+    {
+      "path": "docs/governance/templates/adr-major-change.md",
+      "bytes": 467,
+      "sha256": "a2758914852d62f6bef3deed0a34ce17470db97926bfbc73241578d1dbe9cc4c"
+    },
+    {
+      "path": "docs/governance/templates/parameter-change.md",
+      "bytes": 517,
+      "sha256": "bceda5cf469af7e854a927b1b8805f9ed58172f103f9fff482d8046b3ba675ba"
+    },
+    {
+      "path": "docs/governance/templates/rfc-major-change.md",
+      "bytes": 512,
+      "sha256": "b084c1fe0c37eda921dca47d161e359c8cac8bfeae8d7439dc9047f130f5439d"
+    },
+    {
+      "path": "docs/history/decisions/2026-10/README.md",
+      "bytes": 561,
+      "sha256": "1e8260b10abd776cb6e27fe207971c290bc4de57bca6402feb9371afc193b71b"
+    },
+    {
+      "path": "docs/history/decisions/2026-10/adr-0162-0178-user-decisions-2026-10-15.md",
+      "bytes": 10969,
+      "sha256": "746f3f6c3ed29ef1667fc3d79e149e5cf77b927cd12074dac30af0664d1de2c9"
+    },
+    {
+      "path": "docs/history/decisions/2026-10/rfc-0006-0012-user-decisions-2026-10-15.md",
+      "bytes": 21436,
+      "sha256": "6a3ec7d26125974e3d0c7e68ff552045b3dbe42b3f900eb29021d1a7d4d77f57"
+    },
+    {
+      "path": "docs/history/decisions/2026-10/user-decisions-2026-10-15-adr-rfc16-rfc17.md",
+      "bytes": 21782,
+      "sha256": "e5395543a9c516a072fac42d771c4180214b292a6d361f219dd2290d2d10fd01"
+    },
+    {
+      "path": "docs/history/decisions/README.md",
+      "bytes": 291,
+      "sha256": "3ea3e1b5b50b491411ab874d0000f9274374cfb2ba34b035ad40c243145618d6"
+    },
+    {
+      "path": "docs/history/documentation/2026-10-29-rfc-v2/README.md",
+      "bytes": 2755,
+      "sha256": "29d6ecb60276f5b89befdf8993d75c9c87353a1c7d26a6898e77172b5dd27ad8"
+    },
+    {
+      "path": "docs/history/documentation/2026-10-29-rfc-v2/maintenance/numbering.md",
+      "bytes": 3361,
+      "sha256": "646a29148a2bc3a3b84a141c36cfe98d10a3820aee085099bc2265f305f56ce8"
+    },
+    {
+      "path": "docs/history/documentation/2026-10-29-rfc-v2/rfc/INDEX.md",
+      "bytes": 7821,
+      "sha256": "05d539b40b1a29e7bbbef3d7961d10150ef98d8fa24985c9efec15c964f86456"
+    },
+    {
+      "path": "docs/history/documentation/2026-10-29-rfc-v2/rfc/README.md",
+      "bytes": 3232,
+      "sha256": "f6bff68b12d93ef85fed4659041d7d6370186ad77476d02c84d5ce42b25cbbd9"
+    },
+    {
+      "path": "docs/history/documentation/2026-10-29-rfc-v2/rfc/TOPICS.md",
+      "bytes": 6377,
+      "sha256": "c8f3086c2e7eb943fb30cb09edcb5641dd0c5c00162852e47bcafcde0d448a47"
+    },
+    {
+      "path": "docs/history/rfc/0017-model-eligibility-retired-2026-10-15.md",
+      "bytes": 49865,
+      "sha256": "9216fdc9460c8ee795a36cdab7c7742bd0249ffaac2ae0140d124425d534b86e"
+    },
+    {
+      "path": "docs/history/rfc/README.md",
+      "bytes": 453,
+      "sha256": "647cad71e6bb4b72556253ab50b4f620006966a42694980167a5f9a12a213f26"
+    },
+    {
+      "path": "docs/maintenance/numbering.md",
+      "bytes": 3856,
+      "sha256": "ee8d5ba0ab349e79c97ca50e2080790de55c6f417b440d700d85bcdd8a02ae6d"
+    },
+    {
+      "path": "docs/rfc/0001-palw-inference-surface-gaps.md",
+      "bytes": 49564,
+      "sha256": "cf5d0a773fa10221d09ec0e4f5f28cbede209fdfda1c97e4e993ed4bfa941486"
+    },
+    {
+      "path": "docs/rfc/0002-palw-tensor-ir.md",
+      "bytes": 383102,
+      "sha256": "146a6db24530aa8a5440e9b6904a3f3bf7f643fe21c4d63325be6c7eb6d78d87"
+    },
+    {
+      "path": "docs/rfc/0003-palw-generative-model-classes.md",
+      "bytes": 210123,
+      "sha256": "2e6c459f7c1f2aceb4233f4c9b71364486d78f625e948aacf6e4c4fa1fe951b5"
+    },
+    {
+      "path": "docs/rfc/0004-palw-model-improvement.md",
+      "bytes": 95917,
+      "sha256": "6abaa2eba4f2ef5aa97774b93154858365f116370cec0b7a64465240252deb42"
+    },
+    {
+      "path": "docs/rfc/0005-palw-ml-vm.md",
+      "bytes": 2996,
+      "sha256": "cc096f4afa7bc81205e50f8123553a81d1b4ece4ed7ea6084cf6118aaa41676f"
+    },
+    {
+      "path": "docs/rfc/0006-palw-layer-sharded-panels.md",
+      "bytes": 96980,
+      "sha256": "06ae27140abd9812a80678750240b9e84785ecbd3871fc48fd64483af029f50c"
+    },
+    {
+      "path": "docs/rfc/0007-palw-verification-certificates-and-algebraic-checks.md",
+      "bytes": 143742,
+      "sha256": "eadad4e17cc30e8acf0b0f882d664fa1bedb871af9e6e63fb7bd1c00d924c07b"
+    },
+    {
+      "path": "docs/rfc/0008-palw-claim-backed-consensus-blocks.md",
+      "bytes": 52096,
+      "sha256": "710936edcb883c09baa8b7daea0c8a3d953a02f521315bfa34d5cc266eb17324"
+    },
+    {
+      "path": "docs/rfc/0009-palw-remote-miner.md",
+      "bytes": 46681,
+      "sha256": "14a7202db577ccbe68b1f4ca4c929ad558e51fa31f9b4c468ca602db92243ddc"
+    },
+    {
+      "path": "docs/rfc/0010-permissionless-palw-panel-and-claim-completion.md",
+      "bytes": 42156,
+      "sha256": "127e4c2429955ff112c13b0fd2a4e54dcc01dd3b8c243ca83ebe75e101f0210f"
+    },
+    {
+      "path": "docs/rfc/0011-permissionless-model-and-long-context-onboarding.md",
+      "bytes": 124418,
+      "sha256": "7b90b55124990629f5b00ab4b14ac189edb3bb2a22416ee493bf7ca6e229b083"
+    },
+    {
+      "path": "docs/rfc/0012-palw-only-consensus-and-native-evm-settlement.md",
+      "bytes": 57041,
+      "sha256": "95a70735174361d070ca69e17f44907f70bb8ee30f25a9ea77e8c7e5c728b9f9"
+    },
+    {
+      "path": "docs/rfc/0013-reproducible-layouts-and-resource-bounded-onboarding-tools.md",
+      "bytes": 36800,
+      "sha256": "8c9c2a6e3b5cb2b1c95d62da8a60670d826b5ecd27e56c661819a171102c2df0"
+    },
+    {
+      "path": "docs/rfc/0014-panel-independent-fraud-prosecution.md",
+      "bytes": 89592,
+      "sha256": "b6abbf1fcc2c62fe91397078274339ac6cb11942ccd4632dc6a00296a2d3bab8"
+    },
+    {
+      "path": "docs/rfc/0015-panel-free-permissionless-verification.md",
+      "bytes": 81978,
+      "sha256": "9f005a05fd7c732069baa47195f4c56ef9995b423e9cf35876937f8d1046618c"
+    },
+    {
+      "path": "docs/rfc/0016-bond-weighted-block-opportunity-and-elastic-final-capacity.md",
+      "bytes": 61265,
+      "sha256": "e821fe260743d5b9bad78d8918647c6f71a946818d1ac0bcd410c1673984f47a"
+    },
+    {
+      "path": "docs/rfc/0017-model-eligibility-examination-and-renewal.md",
+      "bytes": 5637,
+      "sha256": "6f91c20b1650ec66336df78bd6715a742e97edde4c5cdbc396afb3544c32fabc"
+    },
+    {
+      "path": "docs/rfc/0018-dag-parallel-multi-model-consensus.md",
+      "bytes": 56280,
+      "sha256": "3672c8774d690749527351c5276e622f19a623798a16e29386c2265392b28390"
+    },
+    {
+      "path": "docs/rfc/0019-annual-model-upgrade.md",
+      "bytes": 60831,
+      "sha256": "ea6c0bbcb654f575bb8396e909f2b31ed78004a3b4897fba1d7088b8e0c66d0e"
+    },
+    {
+      "path": "docs/rfc/0020-long-context-calibration-memory.md",
+      "bytes": 22702,
+      "sha256": "9ea21859e194f85dedd83868df1c397b982df9f65f30e34de281fa2a355f6fce"
+    },
+    {
+      "path": "docs/rfc/0021-design-freeze-and-documentation-governance.md",
+      "bytes": 1628,
+      "sha256": "1d780be260b557208bf4bdf3310e09bb3b1b7f463d1dbc13cfe6a0f81b68183a"
+    },
+    {
+      "path": "docs/rfc/0022-post-mainnet-media-and-model-improvement-scope.md",
+      "bytes": 2195,
+      "sha256": "753f83e076fc1228ddf8b29ae0520c9a61457ff66842da20d3fd31e773df4717"
+    },
+    {
+      "path": "docs/rfc/0023-unresolved-claim-liability-and-independent-progress.md",
+      "bytes": 53538,
+      "sha256": "cfe54859d881c7201abbd9e2253d29fff83af7615b170f1e5b9efb4932cf8759"
+    },
+    {
+      "path": "docs/rfc/0024-assets/ADR-DRAFT-palw-court-door-3200.md",
+      "bytes": 6333,
+      "sha256": "77c79c4246a9446330ecd33f6427502b9352514d0077bcbfa5adc2e7c8dc6a3e"
+    },
+    {
+      "path": "docs/rfc/0024-assets/PACKAGE-MANIFEST.json",
+      "bytes": 1966,
+      "sha256": "b48c9c39db6c8409171de82034d5e2e5302aeb70cd33aae002fde2724bee62e5"
+    },
+    {
+      "path": "docs/rfc/0024-assets/budget-self-test.txt",
+      "bytes": 734,
+      "sha256": "01bce0a6af2a47d257e010e393347b8ecc25371672bc2cd7832a787fcb120522"
+    },
+    {
+      "path": "docs/rfc/0024-assets/budget-template-report.json",
+      "bytes": 12577,
+      "sha256": "057ee1183b0936d4711284b049cb1fcf989bc7d4aa1cf9c8a2faeefecf6b064b"
+    },
+    {
+      "path": "docs/rfc/0024-assets/delta-plan-report.json",
+      "bytes": 1021,
+      "sha256": "7eaf227d29582a28855f00864702ebb023619895d30c86f5b9093f53ab6ce120"
+    },
+    {
+      "path": "docs/rfc/0024-assets/door-budget.template.json",
+      "bytes": 9236,
+      "sha256": "4a6a39f01b1cab6fc2c8c9d6d3ce5252d930dbe1d306a48155ebec31abab10fa"
+    },
+    {
+      "path": "docs/rfc/0024-assets/door_budget.py",
+      "bytes": 15361,
+      "sha256": "1143c57b5ddc3a9bc52955d216c91dcfb5eb60aa241a4b566e60c127d1ccb108"
+    },
+    {
+      "path": "docs/rfc/0024-assets/geometry-report.json",
+      "bytes": 843,
+      "sha256": "86e16f0b8a165c9432a79756cfa39861ea787c62de1bab7e27d8e42419d9a6d7"
+    },
+    {
+      "path": "docs/rfc/0024-assets/repository-scan.json",
+      "bytes": 787,
+      "sha256": "d89b5547f696d6925dc785b91313e8aecb570fa1db2708ca7b731d112ccbb42a"
+    },
+    {
+      "path": "docs/rfc/0024-assets/source-audit.md",
+      "bytes": 67732,
+      "sha256": "afc1b6dd56a1e2841d282797049d7f48badb2b7bad90844d0684281aabd65b95"
+    },
+    {
+      "path": "docs/rfc/0024-court-door-3200-to-ctx-2m.md",
+      "bytes": 51926,
+      "sha256": "ab4f29ce187abefcc408a26fcd0b9c0f4e4e862311a0406bab3a658037a9f62f"
+    },
+    {
+      "path": "docs/rfc/0025-assets/ADR-DRAFT-scalable-court-v2.md",
+      "bytes": 5561,
+      "sha256": "49d8a2b3da034d07fd7c585b5fb28f88b19d2858c21343b98bbbe89d2f55c937"
+    },
+    {
+      "path": "docs/rfc/0025-assets/PACKAGE-MANIFEST.json",
+      "bytes": 3931,
+      "sha256": "73cec12ef2a05d6c0e5d17f3c75c706cbcaf782504946649a051f2c66c045bb9"
+    },
+    {
+      "path": "docs/rfc/0025-assets/README.md",
+      "bytes": 4152,
+      "sha256": "266d96b9290bb29b072368fcc4b7ce8a65ff62d821224cdf8f71cc090842fe6e"
+    },
+    {
+      "path": "docs/rfc/0025-assets/arithmetic-test-results.txt",
+      "bytes": 2588,
+      "sha256": "e6480ac5e50cf680f1b7c9adf42661db57e0048138a6869f2e9a77178c1f462f"
+    },
+    {
+      "path": "docs/rfc/0025-assets/arming-record.template.json",
+      "bytes": 1896,
+      "sha256": "26332040d6688d892005d5992c9275d8285e5652c6c3309d64c39848898c9241"
+    },
+    {
+      "path": "docs/rfc/0025-assets/capacity-report.json",
+      "bytes": 3264,
+      "sha256": "0da83e6a99496d909d8e2e7f27153a6c8932e06b67eb880bc3ba464ee50743ae"
+    },
+    {
+      "path": "docs/rfc/0025-assets/capacity_planner.py",
+      "bytes": 9473,
+      "sha256": "ec57a30a50e24ce96c97788f58fcd263576341345067fe0adf35806d46ff57d0"
+    },
+    {
+      "path": "docs/rfc/0025-assets/package-checks.txt",
+      "bytes": 323,
+      "sha256": "121c7b0d7435553cb5502f24f61444eee1e4f02c8af7e11951c2eec06ad87a49"
+    },
+    {
+      "path": "docs/rfc/0025-assets/source-audit-v2.md",
+      "bytes": 26719,
+      "sha256": "33b90f5733c61e79e7cff7b989bfa4c190bf427bd7d9acc224f9dc5e701dbd4a"
+    },
+    {
+      "path": "docs/rfc/0025-assets/test_capacity_planner.py",
+      "bytes": 4866,
+      "sha256": "9694b6cf5fb01f5a308df337d5e91f4662469a04d75abb2f22ff1cbaf2c9e553"
+    },
+    {
+      "path": "docs/rfc/0025-scalable-objective-court-many-models-mass-disputes.md",
+      "bytes": 57889,
+      "sha256": "c4cf2e50999f29623cde90fff5e96b70b07f8e2f0c7fcf24d7df82c02a78f8db"
+    },
+    {
+      "path": "docs/rfc/0026-assets/MANIFEST.json",
+      "bytes": 1672,
+      "sha256": "a6958a6ecc60dc1fa519758d9034003a0e431cab2592a4dfcc0d2a933516bf21"
+    },
+    {
+      "path": "docs/rfc/0026-assets/README.md",
+      "bytes": 1756,
+      "sha256": "fc4b62e3d028829b4bd4cc4537ce7313e6fec405e0b99642e2cef654715c6079"
+    },
+    {
+      "path": "docs/rfc/0026-assets/audit-report.md",
+      "bytes": 37408,
+      "sha256": "38feee5b24cf01bf6f1ed43fb1fc0351d452c00ea2488334c2f02a99b98b8101"
+    },
+    {
+      "path": "docs/rfc/0026-assets/checks.json",
+      "bytes": 12923,
+      "sha256": "910b1e624b9c58ea775b4ac21944cf375ecf4cc212682929efeb787fcfbb1606"
+    },
+    {
+      "path": "docs/rfc/0026-assets/coverage.md",
+      "bytes": 8102,
+      "sha256": "7329875a106a69c24a6e705f9d96da6a601e6552dc440557b17e5c34a974b116"
+    },
+    {
+      "path": "docs/rfc/0026-assets/cross-rfc-normative-scan.json",
+      "bytes": 273944,
+      "sha256": "81aa3090881a954bff29b05e1cb3b74d8321e209b033184894c78149248f84fa"
+    },
+    {
+      "path": "docs/rfc/0026-assets/findings.json",
+      "bytes": 11936,
+      "sha256": "9b53fc77459191833452b843b4b6653a75a6062795795a8799e8bc547270bf8e"
+    },
+    {
+      "path": "docs/rfc/0026-assets/inventory.json",
+      "bytes": 105253,
+      "sha256": "fe69cfa3fab0c460d38732003939aa11a131425d636e4357b2c9613ec04296b0"
+    },
+    {
+      "path": "docs/rfc/0026-assets/reproduce_checks.py",
+      "bytes": 7471,
+      "sha256": "9aa51ad0a74dccf2953310d82d2f1eb59f75623e19f286998b82b655cdf2c881"
+    },
+    {
+      "path": "docs/rfc/0026-assets/source-evidence.md",
+      "bytes": 184546,
+      "sha256": "7105e278f2f33ae842ee5e7dc6221e7b85056fcc267c00287b78319ba14c02e1"
+    },
+    {
+      "path": "docs/rfc/0026-court-policy-master-contract.md",
+      "bytes": 22213,
+      "sha256": "8dfdc4e80aa7a50f7f2b00f1dc302c347bb50a8da8e8f169865cef6fe038c687"
+    },
+    {
+      "path": "docs/rfc/0027-assets/README.md",
+      "bytes": 1216,
+      "sha256": "7ac7296896fe33c47f96ce8be4623f893f6e2bb4dbf28915daf20b99017f585b"
+    },
+    {
+      "path": "docs/rfc/0027-assets/docs-after.json",
+      "bytes": 1466,
+      "sha256": "75773f8e2dc4914ed5bd61016e970688177865e8fdcade815209d9185c7c4a5b"
+    },
+    {
+      "path": "docs/rfc/0027-assets/docs-after.log",
+      "bytes": 1237,
+      "sha256": "7ad4309dc6f3a4e25493e02183f4ae83a256fbb0b6bb5d2133e231f79543cf54"
+    },
+    {
+      "path": "docs/rfc/0027-assets/docs-before.json",
+      "bytes": 1517,
+      "sha256": "b8d87829a406e1fa0d1069182c845591028897ebbefe89194686afa9cf057d84"
+    },
+    {
+      "path": "docs/rfc/0027-assets/docs-before.log",
+      "bytes": 1283,
+      "sha256": "c6dec3844c2d430adc487df1aa58344611e303be95041786a7e3270e17e4af8f"
+    },
+    {
+      "path": "docs/rfc/0027-assets/economic-examples.md",
+      "bytes": 4988,
+      "sha256": "0c9cb12cf441bf21d5af03a170b60ffc60e74f76fad2dbc0119fceb8fbd78da9"
+    },
+    {
+      "path": "docs/rfc/0027-assets/examples-results.json",
+      "bytes": 2531,
+      "sha256": "33f518bc1420602fd33099c8262b56230e6588345ccc184476a054395fc54189"
+    },
+    {
+      "path": "docs/rfc/0027-assets/examples.log",
+      "bytes": 1837,
+      "sha256": "ffbc380a49d93bd64ed6b31efa81d08d7645620af233d5c22e81584893586b8b"
+    },
+    {
+      "path": "docs/rfc/0027-assets/import-record/MANIFEST.json",
+      "bytes": 10103,
+      "sha256": "730020864624b3472afacf72c103e6c4f2769705cf3e0a8eea94abf9f7d80b7f"
+    },
+    {
+      "path": "docs/rfc/0027-assets/import-record/PATCH_APPLY_CHECK.json",
+      "bytes": 1343,
+      "sha256": "75e4452aac5c3d77eec892da2f3f5a93e09db385340b3713cb0e4d5217aabf38"
+    },
+    {
+      "path": "docs/rfc/0027-assets/import-record/README.md",
+      "bytes": 2804,
+      "sha256": "641fd09935cdb94d8143e6570e5e71ad5ac990c4e756edfd63cdbfd04c6f209f"
+    },
+    {
+      "path": "docs/rfc/0027-assets/import-record/README_JA.md.txt",
+      "bytes": 5533,
+      "sha256": "3ff17347553583103a8286205eaa5445e10b5ec5ef13d9eeb6091454f0a1fd84"
+    },
+    {
+      "path": "docs/rfc/0027-assets/import-record/comparison.json",
+      "bytes": 847,
+      "sha256": "29acff6e14b2a00cf380489391057e917180043ea0743eaf7cd675a21ba2a153"
+    },
+    {
+      "path": "docs/rfc/0027-assets/import-record/local-source-check.json",
+      "bytes": 3214,
+      "sha256": "82cea33e3ce527af98b2cd0d547ba922b14aa972b3935333451b3f831a2b8e69"
+    },
+    {
+      "path": "docs/rfc/0027-assets/import-record/local-validation/archive-claim-summary.json",
+      "bytes": 24285,
+      "sha256": "32e092242f422260cd5caffad48c778eeff3ec4027f2698f35421b89afe0315e"
+    },
+    {
+      "path": "docs/rfc/0027-assets/import-record/local-validation/archive-panel-samples.json",
+      "bytes": 92677,
+      "sha256": "a2c18c056bdf4303543f624360da0591751c381620af15d2c79aa86f272b87ba"
+    },
+    {
+      "path": "docs/rfc/0027-assets/import-record/local-validation/archive-panel-summary.json",
+      "bytes": 13369,
+      "sha256": "b27c3fdb8a70b61c86e835075246e8f40a6d472881b01035adfc2198c929fc08"
+    },
+    {
+      "path": "docs/rfc/0027-assets/import-record/local-validation/capital-envelope.csv",
+      "bytes": 19319,
+      "sha256": "e1562753ac31c93cb214dd8e812f6a3a3c08ff1dc9844f8dff68ad5f4497e0fb"
+    },
+    {
+      "path": "docs/rfc/0027-assets/import-record/local-validation/environment.json",
+      "bytes": 1223,
+      "sha256": "c39fc7b7a87783eb9bf779928e437135a8acfb2a72f9999676620cb354148db8"
+    },
+    {
+      "path": "docs/rfc/0027-assets/import-record/local-validation/examples.json",
+      "bytes": 2531,
+      "sha256": "33f518bc1420602fd33099c8262b56230e6588345ccc184476a054395fc54189"
+    },
+    {
+      "path": "docs/rfc/0027-assets/import-record/local-validation/examples.log",
+      "bytes": 1216,
+      "sha256": "09db35a4a842feafb846d209c8db7ea9e59974e9126e055db599619b644c615c"
+    },
+    {
+      "path": "docs/rfc/0027-assets/import-record/local-validation/panel-cost-sensitivity.csv",
+      "bytes": 26923,
+      "sha256": "a55b1bfce120b74d1b7be3700b8e143bef52826b8bfdf1dabd3c92b03dec7eb2"
+    },
+    {
+      "path": "docs/rfc/0027-assets/import-record/local-validation/reaggregation-checks.json",
+      "bytes": 129743,
+      "sha256": "d857423789d7ba87f12d42536340efbe45e019b2488fd93c020b6b6f4778a5b2"
+    },
+    {
+      "path": "docs/rfc/0027-assets/import-record/local-validation/reaggregation.log",
+      "bytes": 1088,
+      "sha256": "55e289e95ad19a0e1a668483fa0ce6ee9aa7315db012892f1b78f53d2a759a8b"
+    },
+    {
+      "path": "docs/rfc/0027-assets/import-record/local-validation/source-manifest.json",
+      "bytes": 5500,
+      "sha256": "5fa761f21bfe3b8ed1d19192ba3bc9a61c6968629285e695ff6f66e3e8e78607"
+    },
+    {
+      "path": "docs/rfc/0027-assets/import-record/local-validation/summary.json",
+      "bytes": 1088,
+      "sha256": "9884dd795a3692ed4bba70c636dc2d50c9e3a51f415f25c9fc340440595be5c7"
+    },
+    {
+      "path": "docs/rfc/0027-assets/import-record/local-validation/synthetic-admission.csv",
+      "bytes": 116554,
+      "sha256": "9b02020eb0de899e502d186b71b0621f3177ec906c5768f90db154782cb00ef4"
+    },
+    {
+      "path": "docs/rfc/0027-assets/import-record/local-validation/synthetic-special-cases.json",
+      "bytes": 2285,
+      "sha256": "72643034e87981c628bbb5a3501f1b9cae5359669c6e4dbb87276c5c7b814dfc"
+    },
+    {
+      "path": "docs/rfc/0027-assets/import-record/local-validation/tests.log",
+      "bytes": 2127,
+      "sha256": "72a44dbb0f276820dddb5ec3dd7374eae099f0b73418ed6a49b2a2210c693b32"
+    },
+    {
+      "path": "docs/rfc/0027-assets/import-record/local-validation/trace-shadow.csv",
+      "bytes": 76510,
+      "sha256": "f6b9436a7b1c36dc55184cdbfa5960774b989b16730b1bb0656ba1845a6eb84b"
+    },
+    {
+      "path": "docs/rfc/0027-assets/import-record/panel-sample-differences.json",
+      "bytes": 1805,
+      "sha256": "dfa1b22616faf0d59fcfd243a8acc51ccc990eba8cf39de3fed2e2c70363422b"
+    },
+    {
+      "path": "docs/rfc/0027-assets/import-record/source-package.zip",
+      "bytes": 369641,
+      "sha256": "ec23d813ce1f6fcd8c5f7d78234f93ca48acb71df9306d8317711d10a96c0eb0"
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/docs-update-check.json",
+      "bytes": 1466,
+      "sha256": "abaa4551594a348df730af413a1186deac8b97e1d6c305c1e69bf301fdca92f4"
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/docs-update-check.log",
+      "bytes": 1237,
+      "sha256": "c7c135f9f0f0bb914b502b7b19262489f97285d9a3e75f0db547b001c85f83cb"
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/index-generation.log",
+      "bytes": 41,
+      "sha256": "053942a4b2aab8a62db9e3086403d3066dcb35a680f190d1ae683a4876c84b5f"
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/measure.py",
+      "bytes": 25209,
+      "sha256": "69b49ef76e69f03501307f8083ca89f9d6b9c9b403989a844dcbaebcd7247149"
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/measurement-report.md",
+      "bytes": 22334,
+      "sha256": "0cbf7757e642773e897abd721a673a2ed17cb2e88f1ba25252cd8e32e7a4582c"
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/plan.json",
+      "bytes": 3261,
+      "sha256": "ae373b9341770b5e670f98c93a7ee79e9937a9753b3da55e35421ba5f595d541"
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/rechecked-examples.json",
+      "bytes": 2531,
+      "sha256": "33f518bc1420602fd33099c8262b56230e6588345ccc184476a054395fc54189"
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/rechecked-examples.log",
+      "bytes": 1837,
+      "sha256": "0a6c119519f304fa92963eaa6a97c69a96c64afaf64739ca38afe33bb053e239"
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/results/archive-claim-summary.json",
+      "bytes": 24285,
+      "sha256": "32e092242f422260cd5caffad48c778eeff3ec4027f2698f35421b89afe0315e"
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/results/archive-panel-samples.json",
+      "bytes": 92677,
+      "sha256": "43af0cd8c1442eb86c53f18f5dad0f347c69d39f87292dd26217046877e23eee"
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/results/archive-panel-summary.json",
+      "bytes": 13369,
+      "sha256": "b27c3fdb8a70b61c86e835075246e8f40a6d472881b01035adfc2198c929fc08"
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/results/capital-envelope.csv",
+      "bytes": 19319,
+      "sha256": "e1562753ac31c93cb214dd8e812f6a3a3c08ff1dc9844f8dff68ad5f4497e0fb"
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/results/environment.json",
+      "bytes": 1302,
+      "sha256": "ca31d1003877677df647d150eb4271af0f158f7b2f8c2ef8da2aeaa2698bb084"
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/results/panel-cost-sensitivity.csv",
+      "bytes": 26923,
+      "sha256": "a55b1bfce120b74d1b7be3700b8e143bef52826b8bfdf1dabd3c92b03dec7eb2"
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/results/reaggregation-checks.json",
+      "bytes": 129743,
+      "sha256": "d857423789d7ba87f12d42536340efbe45e019b2488fd93c020b6b6f4778a5b2"
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/results/source-manifest.json",
+      "bytes": 5500,
+      "sha256": "58175596d87d2e96f9b38f639b38343a09f6d25a14bc599ac126d57862af8165"
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/results/summary.json",
+      "bytes": 1094,
+      "sha256": "fd756e8b9ad7451e2126751510d36b015ded594f158a57d316a76c04f6351826"
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/results/synthetic-admission.csv",
+      "bytes": 116554,
+      "sha256": "9b02020eb0de899e502d186b71b0621f3177ec906c5768f90db154782cb00ef4"
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/results/synthetic-special-cases.json",
+      "bytes": 2285,
+      "sha256": "72643034e87981c628bbb5a3501f1b9cae5359669c6e4dbb87276c5c7b814dfc"
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/results/trace-shadow.csv",
+      "bytes": 76510,
+      "sha256": "f6b9436a7b1c36dc55184cdbfa5960774b989b16730b1bb0656ba1845a6eb84b"
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/run-initial-failed.log",
+      "bytes": 1035,
+      "sha256": "018c65f80b4bb678becea8033bfa406749bb620a1ee5eea4284c93d59227dba3"
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/run.log",
+      "bytes": 1094,
+      "sha256": "c47a7541b39cb0445768abdce2502ff1513938c37fb69400c67fc89874e822cc"
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/stage1-collector-selftest.log",
+      "bytes": 13,
+      "sha256": "55f9eb6f9a3591a0892d6a747ebe24a4b8ecc880425670426bc02ecd5c3e6dce"
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/test_measure.py",
+      "bytes": 8060,
+      "sha256": "7cce9a21f204b658a0a1e7088f260bcb051cdcbc15886506943e3e6082be8790"
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/tests.log",
+      "bytes": 3154,
+      "sha256": "e6f77c5ae3d6ba27f277cd8160bfceb2f676c5fa3d6cb7670441326f54d3ca7a"
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/validation-update.json",
+      "bytes": 2672,
+      "sha256": "42f09f1add1075f14cb425f17774673f416eef7e3f689c2903e62d39b8357860"
+    },
+    {
+      "path": "docs/rfc/0027-assets/reproduce_examples.py",
+      "bytes": 11726,
+      "sha256": "a7a8e01c86b55b2c64b1b49d2fcafd112481810f09effb8aec9d7878349ee0b7"
+    },
+    {
+      "path": "docs/rfc/0027-assets/source-manifest.json",
+      "bytes": 6378,
+      "sha256": "5007a8a727deb41ac3e804f167ed0fc0852f89d7505c7b67aab7784c8502be9f"
+    },
+    {
+      "path": "docs/rfc/0027-assets/source-review.md",
+      "bytes": 5950,
+      "sha256": "5565035de6ee9ebac724041d149341731c03abe046881310f5a57e5147bf5f3d"
+    },
+    {
+      "path": "docs/rfc/0027-assets/validation-results.json",
+      "bytes": 698,
+      "sha256": "ba02d738c5add43e0f1b8f7102c4b9ba68afd81f53ad634a5102bd4d30f3779b"
+    },
+    {
+      "path": "docs/rfc/0027-assets/validation.md",
+      "bytes": 5239,
+      "sha256": "0bcb6b1318a4219a2d727de0ccf639d9576e57562b4db1cb8823363420972ac4"
+    },
+    {
+      "path": "docs/rfc/0027-miner-account-bond-and-panel-incentives.md",
+      "bytes": 49014,
+      "sha256": "337747d946ea2685c2920767eb9c552705fc38f42f2e299139808470ab582053"
+    },
+    {
+      "path": "docs/rfc/0028-rooted-court-response-eligibility-history.md",
+      "bytes": 13221,
+      "sha256": "8bfeec2011ee648014ff4ee4207167189ff74d3828e99a70649d38832bd273b8"
+    },
+    {
+      "path": "docs/rfc/0029-owner-independent-shared-tir-query-data.md",
+      "bytes": 55657,
+      "sha256": "9fb6257c28155e32e66c3dba004f6baf2e2c0661ad49ca858ff0c9a7ba6c723e"
+    },
+    {
+      "path": "docs/rfc/0030-court-end-effects-and-pending-liability-archive.md",
+      "bytes": 30534,
+      "sha256": "1c46304fa175f2b1f214c397c682b829f3c0e3a23ef2729c7234746453ae501d"
+    },
+    {
+      "path": "docs/rfc/0031-shared-court-initial-notice-boundary.md",
+      "bytes": 4469,
+      "sha256": "5a969226d9d4b4a805d6e2f80df6df2b05dd5bac745927d717e2cc8f53d83b2f"
+    },
+    {
+      "path": "docs/rfc/0032-shared-court-terminal-material-and-nonblocking-ingress.md",
+      "bytes": 10680,
+      "sha256": "da14fa673ee16cbf368bf1caa10b27a388a06aa4425de5d51062be75a6c1ae36"
+    },
+    {
+      "path": "docs/rfc/0033-d2-readiness-root-opening-availability.md",
+      "bytes": 4087,
+      "sha256": "3339abc3303c7e80e22a64778b65643d7bcaea049f6241fa040b8d0726d5215e"
+    },
+    {
+      "path": "docs/rfc/0034-archived-close-qualified-financial-discharge.md",
+      "bytes": 15659,
+      "sha256": "9f23efd19a8949949a1c8abfa192226e552de303045f33b3dbbc1102d2ad2ae8"
+    },
+    {
+      "path": "docs/rfc/0035-court-original-funded-contract-and-role-consent.md",
+      "bytes": 24380,
+      "sha256": "746be1d58ec259fb8aaca4b55dd988025f9f558cd05b7c7d145cc0a468786042"
+    },
+    {
+      "path": "docs/rfc/0036-authenticated-palw-state-map-and-row-access.md",
+      "bytes": 11418,
+      "sha256": "2a7da16331868ede8756e30c9e2d069a4827dee36b07ef62fa1729123b690920"
+    },
+    {
+      "path": "docs/rfc/0037-ibd-bounded-row-stream-and-storage-generations.md",
+      "bytes": 7447,
+      "sha256": "55f9c44976a289045f147c59f0a5cddbfe56efa1e0c81689d7cf5384b59515d3"
+    },
+    {
+      "path": "docs/rfc/0038-palw-fp-answer-accounting.md",
+      "bytes": 3770,
+      "sha256": "c6f5f27e7426fb99920201e90dba22931029b54128ede4f81b9f127c0bd75bbf"
+    },
+    {
+      "path": "docs/rfc/0039-finite-fee-consent-and-provider-payment-bounds.md",
+      "bytes": 16635,
+      "sha256": "cbfd09fe01ac1ffd3068666c292ad1ba6103cc2e313caacf3c6ad123eb263474"
+    },
+    {
+      "path": "docs/rfc/0040-authenticated-prefix-work-dependencies.md",
+      "bytes": 6115,
+      "sha256": "73c697298446b50af899349f1f32147c5da5300beef81c8c19b39c60b2fcf7e3"
+    },
+    {
+      "path": "docs/rfc/0041-genesis-bond-free-bootstrap.md",
+      "bytes": 4093,
+      "sha256": "eb0d90281513b079f0075ae58ca66dbef383eee2e30bd5e2cd9478d0f8ea582d"
+    },
+    {
+      "path": "docs/rfc/INDEX.md",
+      "bytes": 8080,
+      "sha256": "895e0d47eb81a226475ca96d5fdd02fac77cfe5869c134bb7772a48597abdada"
+    },
+    {
+      "path": "docs/rfc/README.md",
+      "bytes": 788,
+      "sha256": "445caba081951420f3a7527be46b11e9f7cc3f66fbecaf7ecf02fdc756c18796"
+    },
+    {
+      "path": "docs/rfc/TOPICS.md",
+      "bytes": 6636,
+      "sha256": "ee06880119838f6b3eeea2074d55797e25b99f2a5820f7646a1c09f8037fec16"
+    },
+    {
+      "path": "docs/rfc-v2/0001-inference-and-generative-jobs.md",
+      "bytes": 205614,
+      "sha256": "090c60784e72965c54a6827908bbba9e150c50833167cbfe7218b08ca4200929"
+    },
+    {
+      "path": "docs/rfc-v2/0002-tensor-ir-and-shared-query-data.md",
+      "bytes": 286596,
+      "sha256": "69865797271e054a00ea17da060c869b208a9229944f8d5835d49561f5968e9f"
+    },
+    {
+      "path": "docs/rfc-v2/0003-model-onboarding-and-artifacts.md",
+      "bytes": 283936,
+      "sha256": "fec3271cc7e652d9ca21ddc8ba5000383c2b9837a9c059e488cfd9be6e172a33"
+    },
+    {
+      "path": "docs/rfc-v2/0004-model-tiers-and-annual-catalog.md",
+      "bytes": 70767,
+      "sha256": "6e4dd9b5dbfb33c531e9280361e11cb3d5df155b0d33b61e1178f63f2b33045f"
+    },
+    {
+      "path": "docs/rfc-v2/0005-bounded-resources-and-long-context.md",
+      "bytes": 26815,
+      "sha256": "50910862ea80095bfc41bc608f2f99732a07907bf2d5dbb7b6ab81297ce0de3b"
+    },
+    {
+      "path": "docs/rfc-v2/0006-panels-and-probabilistic-verification.md",
+      "bytes": 286733,
+      "sha256": "ded647ff4236b4739c6198c552813ff60a6b082555ae1c1636267af2df50b1f3"
+    },
+    {
+      "path": "docs/rfc-v2/0007-claims-exec-and-answer-accounting.md",
+      "bytes": 55386,
+      "sha256": "6c4a90643bbc2373c79d929451441dbcaa88a576cf78a456d02b4c3402feb725"
+    },
+    {
+      "path": "docs/rfc-v2/0008-claim-dependencies-and-liability.md",
+      "bytes": 64407,
+      "sha256": "7b4ec48a34583bf7131e286a563a2cc43c7cc03684375db9a7a3f015aadcff60"
+    },
+    {
+      "path": "docs/rfc-v2/0009-remote-client-and-sdk.md",
+      "bytes": 50752,
+      "sha256": "4dc5076908ef74ea92c8c84d838692e9612f5e35dd80a9f9867c0854e9b093c7"
+    },
+    {
+      "path": "docs/rfc-v2/0010-dag-consensus-and-native-settlement.md",
+      "bytes": 118804,
+      "sha256": "fc4450688f29dc37f1cb921abbbc7ad9bb14afcb1901166df2f8702d353875d7"
+    },
+    {
+      "path": "docs/rfc-v2/0011-bond-budgets-fees-and-payments.md",
+      "bytes": 116718,
+      "sha256": "2b41d33d1b2870e8811c3e29ce92c5b6ce4c7e46e20e3414a8a48e7608d20dcd"
+    },
+    {
+      "path": "docs/rfc-v2/0012-authenticated-state-storage-and-ibd.md",
+      "bytes": 23607,
+      "sha256": "8ec772aaa89ee6e8bd8a6432fed26312443156205f4c3e781072d2eec0a3a823"
+    },
+    {
+      "path": "docs/rfc-v2/0013-permissionless-bootstrap-and-release.md",
+      "bytes": 8455,
+      "sha256": "e889fef57195ff090ee160e1e24237544a3d07144c30a0a0ab6b4ae5e1085a71"
+    },
+    {
+      "path": "docs/rfc-v2/0014-court-master-contract.md",
+      "bytes": 384871,
+      "sha256": "8d0b7fca5c3cd9cfc4f94e58018be2abeff731da25e5e8bb23bdab8d73692909"
+    },
+    {
+      "path": "docs/rfc-v2/0015-freeze-deferred-rejected-and-governance.md",
+      "bytes": 292637,
+      "sha256": "73c9b982daf9221d07a9a6df44ca185233c2f615d44ce321c72f621fc55a57c0"
+    },
+    {
+      "path": "docs/rfc-v2/MAPPING.md",
+      "bytes": 10703,
+      "sha256": "235e997ddc2cf7d978db229525ddb82ca5670828e04b59f133d4cbeadf17b2f2"
+    },
+    {
+      "path": "docs/rfc-v2/MIGRATION.md",
+      "bytes": 4079,
+      "sha256": "b2a1f27aa4812636fceabd8366a3ab92db2d54c6888de02a0e8ecd22d965fc8b"
+    },
+    {
+      "path": "docs/rfc-v2/README.md",
+      "bytes": 4201,
+      "sha256": "a0ff48f87f6355b99ac3be6dd6ab3c3946f3612ddd719fc82751a63f3ef1c15b"
+    },
+    {
+      "path": "docs/rfc-v2/VALIDATION.md",
+      "bytes": 1946,
+      "sha256": "3d9346865eb95c3dce23e476eff1a987975d02d49a4b6904bc3a39ae35e8b7e7"
+    },
+    {
+      "path": "docs/rfc-v2/check_integrity.py",
+      "bytes": 4780,
+      "sha256": "39e14d699380380a39e537be2adfbe8de59bc81b087a6df445955add04cd666c"
+    },
+    {
+      "path": "docs/rfc-v2/registry.json",
+      "bytes": 3910,
+      "sha256": "9f50869daa220b13ede2bd6358efebc05b98dcc301ead77d0aa1938a0e6f93da"
+    },
+    {
+      "path": "docs/rfc-v2/section-owners.json",
+      "bytes": 689839,
+      "sha256": "1b075d8d6751f6ffe20b2ea859ef5bd64cecd885acec40efae5f842ef65e9f8d"
+    },
+    {
+      "path": "docs/rfc-v2/source-map.json",
+      "bytes": 48351,
+      "sha256": "0d3e1acc430829fcfefab0dd84f662ecdcb9a29b1df65134af6cd90440a569aa"
+    },
+    {
+      "path": "docs/spec/README.md",
+      "bytes": 1840,
+      "sha256": "6f32100ac3fb41a9a14a5fe7c7b87a3199e96aa7e4cafa755e7dea84beae7f7a"
+    },
+    {
+      "path": "docs/spec/palw/04b-tensor-ir.md",
+      "bytes": 282393,
+      "sha256": "a3269b9c7c069305bd702b0df4cad59c6ef0b290876f187fba337baae636aaa6"
+    },
+    {
+      "path": "docs/spec/palw/17-model-improvement.md",
+      "bytes": 162777,
+      "sha256": "1a7cff9c7ad2213cf098cdb2bd4736ca3d44b1884f8f8a6d8b99850506b0e829"
+    },
+    {
+      "path": "docs/spec/palw/18-inference-surface.md",
+      "bytes": 5071,
+      "sha256": "539611da3391e06e723bd1ce1757712d073a78afefd1bb5dc0a9097e3e879460"
+    },
+    {
+      "path": "docs/spec/palw/18-layer-sharded-panels.md",
+      "bytes": 25179,
+      "sha256": "b281337ddf9952b976d7b206d00796baf2e604837e846dd1c0a8fc9fa6907ebd"
+    },
+    {
+      "path": "docs/spec/palw/18-verification-certificates.md",
+      "bytes": 52008,
+      "sha256": "bf37a617dd743e0a70581c715c38a940780ccf8ae285ec9cdc83855e3868b345"
+    },
+    {
+      "path": "docs/spec/palw/README.md",
+      "bytes": 703,
+      "sha256": "b36feb75ebe65ab82a6dd11786e39e60b3dc3f00fbb1e9c7614d9b52022dfb20"
+    },
+    {
+      "path": "docs/spec/palw/block-opportunity.md",
+      "bytes": 1491,
+      "sha256": "43281116c7afc72b785dd3d781e3f94304f15cf1f0dc3ee137ce41e0b19b68b1"
+    },
+    {
+      "path": "docs/spec/palw/bond-budgets.md",
+      "bytes": 1537,
+      "sha256": "c7d5598dc52d3ad13a10100b5478ad09d93b11fd3532cbaa90ee9e05252b5d33"
+    },
+    {
+      "path": "docs/spec/palw/claim-certification.md",
+      "bytes": 1570,
+      "sha256": "ebb0872322a3266dfd269b1acc9410c876c9ea6ed00c7b8678d293df8244ee67"
+    },
+    {
+      "path": "docs/spec/palw/model-allocation.md",
+      "bytes": 1731,
+      "sha256": "133a0f85f8e141bb08608d689e8c14c0ede319db52d2cfb8a20659562f0e7851"
+    },
+    {
+      "path": "docs/spec/palw/model-tiers.md",
+      "bytes": 1544,
+      "sha256": "7d886d0b8dde56419abeb1a74575dbf73c6b6f39ad763a5cbb31bb847361252a"
+    },
+    {
+      "path": "docs/spec/pq/kaspa-pq-spec.md",
+      "bytes": 24739,
+      "sha256": "7e222f462e02265471fa4c9a0fb2e2ba102ffbc0d90fb0222cd1da25e8809920"
+    }
+  ]
+}

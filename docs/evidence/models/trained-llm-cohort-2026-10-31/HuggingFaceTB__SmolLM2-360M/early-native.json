@@ -1,0 +1,17 @@
+{
+  "artifact_root": "041029123feed837f46db580ee1b89092e0c1700b4cc033c9089f50afd587be75ceab1f985700042ee934194f244fafbd9e4940299621a8c3e2b09529dd8ec12",
+  "artifact_sha256": "21c3fcf6056f80d2b4e3dc93ef53cc76f9728413743913483d3f2daa21b84b1e",
+  "carrier_txid": "6047d2cfba629ac6b899d5dec0f4d48469f10d1a580080da742f395c44dafc3e56fbb445b2a880bf941eaa98bdf38c717a77729fc3e8db9a41529a6f50bb8754",
+  "claim_certified": false,
+  "class_id": "ad6c9866ee15de51ad18c4c83c595dfafd646a931cc18db77b8bbe627b8e9f555dd87f3efb81943d098ff32729d9c5c645a88571f65b5e007061234fa5489476",
+  "independent_node_replay": true,
+  "max_context": 8192,
+  "mempool_accepted": true,
+  "name": "HuggingFaceTB/SmolLM2-360M@f8027fd0eaeea54caa13c31d31b9fdc459c38b49",
+  "persisted_registry_read": true,
+  "public_network": false,
+  "registration_mined": true,
+  "schema": "misaka.hf-registration-local-acceptance.v1",
+  "sink": "56833774c6ee2c3c7bc64c5d663f0bd8544863b5e9e9715a91f24ae9c1f6e8f5efba596ba2ab6ae8ffed1c94829e1a9e6f446f0b2a494564682293167145cf57",
+  "state_root": "fea4476cc65d4763856154ae2f1eb3082c9d8c7113c1d6996e9c7c6b245ca4e322b422535aede2e8daffcd271090e729846f7cbc27aa1ba8a41ff94d4a533f22"
+}

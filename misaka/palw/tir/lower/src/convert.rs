@@ -160,6 +160,7 @@ pub struct ConvertRequest {
     pub gdn_core_wide: bool,
     /// Explicit decoder linear weight profile; 8 preserves legacy artifact bytes.
     pub linear_weight_bits: u8,
+    pub logits_bits: u8,
     /// Explicit pins for a freshly converted full25 artifact; legacy conversion has none.
     pub full_court_source_pin: Option<crate::full_court_source25::SourcePinV25>,
     pub chunk_store: Option<std::path::PathBuf>,
@@ -209,6 +210,7 @@ impl ConvertRequest {
             max_window: None,
             gdn_core_wide: false,
             linear_weight_bits: 8,
+            logits_bits: 32,
             full_court_source_pin: None,
             chunk_store: None,
             keep_chunks: false,
@@ -267,6 +269,7 @@ pub fn convert_model(req: &ConvertRequest, log: &dyn Fn(String)) -> Result<Conve
         max_window: req.max_window,
         gdn_core_wide: req.gdn_core_wide,
         linear_weight_bits: req.linear_weight_bits,
+        logits_bits: req.logits_bits,
         ..LowerOpts::default()
     };
     let reg = QuantRegistry::with_files(&req.quant_formats)?;
@@ -288,6 +291,9 @@ pub fn convert_model(req: &ConvertRequest, log: &dyn Fn(String)) -> Result<Conve
         (None, None) => crate::fidelity::open_model_full(&req.model, &opts, &reg, &read)?,
     };
     let prep = &opened.prepared;
+    if req.logits_bits == 64 && prep.lowered.program.blocks[prep.lowered.program.schedule.post as usize].nodes[prep.lowered.program.logits as usize].out.dtype != misaka_palw_tir::DType::I64 {
+        return Err(LowerError::not_lowerable("wide Q24 is currently a decoder logit profile"));
+    }
     let ck = opened.source.as_ref();
     let descriptors = match &req.gguf_source {
         // The header again, through the same source (its first windows are still cached): no local path to open.
@@ -471,6 +477,9 @@ pub fn convert_model(req: &ConvertRequest, log: &dyn Fn(String)) -> Result<Conve
                 "lowered_context_max": req.context, "complete_component_inventory": true,
                 "source_fidelity_or_native_eligibility": false
             });
+        }
+        if req.logits_bits != 32 {
+            meta["logits_bits"] = serde_json::json!(req.logits_bits);
         }
         if req.linear_weight_bits == 16 {
             meta["linear_weight_profile"] = serde_json::json!({"schema": "misaka.palw.decoder-linear-weights.v16", "main_bits": 16, "stored_quant_formats": "unchanged"});

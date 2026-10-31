@@ -265,6 +265,7 @@ pub fn run(args: &[String]) -> Result<i32, String> {
             }
             req.max_window = num(&mut args, "--max-window")?;
             req.gdn_core_wide = take_bool(&mut args, "--gdn-core-wide");
+            req.logits_bits = num(&mut args, "--logits-bits")?.unwrap_or(32);
             req.linear_weight_bits = num(&mut args, "--linear-weight-bits")?.unwrap_or(8);
             if let Some(m) = take_flag(&mut args, "--math") {
                 req.math = MathMode::parse(&m).ok_or_else(|| format!("--math {m}: libm-v1 or std"))?;

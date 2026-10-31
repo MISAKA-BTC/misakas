@@ -1,0 +1,36 @@
+{
+  "passed": true,
+  "scope": "documentation-integrity-only",
+  "errors": [],
+  "stats": {
+    "current_adr_documents": 50,
+    "legacy_source_files": 204,
+    "legacy_distinct_numbers": 201,
+    "legacy_duplicate_numbers": [
+      "0026",
+      "0173",
+      "0193"
+    ],
+    "legacy_missing_numbers": [
+      "0048",
+      "0104",
+      "0113",
+      "0156",
+      "0157",
+      "0158",
+      "0159",
+      "0164"
+    ],
+    "legacy_lines": 48236,
+    "legacy_bytes": 3981701,
+    "verified_full_appendices": 204,
+    "verified_status_declarations": 212,
+    "verified_existing_rfc_files": 160,
+    "verified_unchanged_baseline_files": 404,
+    "current_rfc_documents": 15,
+    "legacy_rfc_documents": 41,
+    "checked_new_local_link_occurrences": 2747,
+    "checked_explicit_fragment_links": 204,
+    "runtime_executed": false
+  }
+}

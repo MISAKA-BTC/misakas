@@ -2,6 +2,8 @@
 
 [入口](README.md) / [トピック別](TOPICS.md) / [番号台帳](../maintenance/numbering.md)。自動生成の探索用索引です。原文の過去のStatusを現在の稼働保証へ昇格させません。
 
+> **旧番号の履歴索引。** 現行の閲覧・更新先は [ADR v2](../adr-v2/README.md)。[旧→新対応表](../adr-v2/MAPPING.md)。
+
 **画像・動画（RFC-0003）とモデル改善（RFC-0004）はmainnet後へ延期・当面無効。** [現行方針](../governance/post-mainnet-scope.md)。
 
 | 番号 | 文書 | 状態の入口 |
@@ -211,3 +213,5 @@
 | ADR-0208 | [再利用 prefix の生成元 identity を明示する案](0208-authenticated-prefix-work-dependencies.md) | 原文と後続改定を参照 |
 | ADR-0209 | [genesis bond を廃止し、BASE 回復と通常 bond 登録で起動する](0209-genesis-bond-free-bootstrap.md) | 原文と後続改定を参照 |
 | ADR-0210 | [全モデルの新規 producer claim を G14 の 1 席経路へ移す](0210-all-model-g14-panel-one.md) | 原文と後続改定を参照 |
+| ADR-0211 | [学習済みcheckpointのlogit範囲を損なわず扱う](0211-wide-q24-llm-output.md) | 原文と後続改定を参照 |
+| ADR-0212 | [Panelが正常・不正の証拠生成を担い、Minerは結果commitと上限付き対話応答に限定する](0212-positive-court-without-model-prepossession.md) | 原文と後続改定を参照 |

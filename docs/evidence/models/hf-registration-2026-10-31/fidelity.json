@@ -1,0 +1,37 @@
+{
+  "architecture": "GPTNeoForCausalLM",
+  "artifact_bytes": 174165734,
+  "artifact_digest": null,
+  "backend": "misaka-palw-tir-exec",
+  "calibration": {
+    "length_rule": {
+      "context": 4,
+      "longest": null,
+      "rule": "not recurrent"
+    },
+    "positions": 8,
+    "sequences": 2,
+    "source": "fixed token IDs in the pinned GPT-Neo tokenizer; registration smoke profile (64 positions)"
+  },
+  "composite": null,
+  "drift": null,
+  "evaluation": {
+    "positions": 4,
+    "sequences": 1,
+    "source": "fixed token IDs in the pinned GPT-Neo tokenizer; registration smoke profile (64 positions)"
+  },
+  "max_window": 2048,
+  "metrics": {
+    "kl_max": 0.09184684791516776,
+    "kl_mean": 0.025116872896021727,
+    "positions": 4,
+    "ppl_delta": 0.07171526786740334,
+    "ppl_float": 414.05337055932466,
+    "ppl_int": 443.74731894038786,
+    "scored": 3,
+    "top1_agreement": 1.0
+  },
+  "program_bytes": 19469,
+  "program_digest": "05c48cc3c45efa1a69de33c01d8e88f439197f60ec91d881ba46af3817466855347a60936daaf36d718592c4211482d80375f2f4d44528786422f4ed350d6555",
+  "seconds": 42.78893175
+}

@@ -1,0 +1,471 @@
+# ADR-v2-0019 — モデル二階層・年次指定・非共有リスクの境界
+
+編集統合日: 2026-10-30　|　名前空間: `ADR-v2`　|　原文の主担当: 2本
+
+**状態: 主題別の編集統合。採択・未採択・撤回・実装・有効化の状態は原資料から継承し、この統合では変更しません。** 新しい設計の採択、runtime修正、wire／署名domain／合意定数／activationの変更ではありません。
+
+[50本の一覧](README.md) · [全204本の対応](MAPPING.md) · [原文の状態宣言](STATUS-LEDGER.md) · [変更・置換の境界](PRECEDENCE.md)
+
+関連仕様: [RFC-v2-0004](../rfc-v2/0004-model-tiers-and-annual-catalog.md) / [RFC-v2-0011](../rfc-v2/0011-bond-budgets-fees-and-payments.md)
+
+## 1. この文書の役割
+
+年次指定・通常登録の配分係数と、モデル非共有に関する保証の限界を一緒に参照できるようにする。
+
+## 2. 統合した判断の読み方
+
+### 2.1
+
+genesis／年次指定は1.0、通常登録は審査なしで0.3に固定し、1.0への追加は年次指定経路とする。係数は配分重みに一度だけ適用する。[旧ADR-0179](../adr/0179-model-tiers-genesis-annual-1-0-registered-0-3.md)
+
+### 2.2
+
+重複のないMiner＋Verifierの適格元本、平均期間、α = 1.5、network／model／bondの各上限を区別する。候補だった別曲線を最終採択曲線と併用しない。[旧ADR-0177](../adr/0177-model-bond-allocation-without-availability-consensus.md)
+
+### 2.3
+
+モデル配布の強制管理を廃止してもclaimの検証は省かない。FinalとSecurityCertifiedを区別し、G14の条件付き追及能力をモデル未取得の無条件証明へ読み替えない。[旧ADR-0177](../adr/0177-model-bond-allocation-without-availability-consensus.md) [旧ADR-0179](../adr/0179-model-tiers-genesis-annual-1-0-registered-0-3.md)
+
+## 3. 維持する境界・後続改定
+
+直近の会話で説明された「1倍対象を年次に増やし、任意登録の非共有リスクを0.3で扱う」という意図は、既存の二階層を理解する補足として保持する。今回、カタログ撤廃・取得審査追加・暗号学的計算証明の採用は行っていない。
+
+## 4. 隣接する判断との分担
+
+仕様は[RFC-v2-0004](../rfc-v2/0004-model-tiers-and-annual-catalog.md)、資金保存は[ADR-v2-0035](0035-bond-budget-and-shared-reservations.md)、G14の保証は[ADR-v2-0038](0038-g14-public-prosecution-and-completeness.md)、撤回された審査・Seeder方針は[ADR-v2-0050](0050-freeze-deferred-rejected-and-governance.md)。
+
+## 原資料一覧
+
+各原文は一つの主担当だけに全文収録します。他の文書からの参照は副参照であり、別の規範を重複定義しません。以下の行番号は旧ファイルの行番号です。
+
+| 原文（完全ファイル名） | 全文の行範囲 | 原文の状態宣言の場所 |
+| --- | --- | --- |
+| [0177-model-bond-allocation-without-availability-consensus.md](../adr/0177-model-bond-allocation-without-availability-consensus.md) | L1–L285 | L5–L10, L206–L207 |
+| [0179-model-tiers-genesis-annual-1-0-registered-0-3.md](../adr/0179-model-tiers-genesis-annual-1-0-registered-0-3.md) | L1–L109 | L7–L9 |
+
+## 原条文の完全収録（履歴）
+
+**この欄は原文の保存であり、全条項を現行規則として再採択したものではありません。** 原文中の旧リンク・旧番号・コード・数式・状態宣言をそのまま保存します。後続改定の優先は上の境界と原資料で確認してください。リンクを開く場合は各項目の「原文を開く」を使います。
+
+<a id="source-0177-model-bond-allocation-without-availability-consensus"></a>
+
+<details>
+<summary>0177-model-bond-allocation-without-availability-consensus.md — 原文 L1–L285</summary>
+
+[原文を開く](../adr/0177-model-bond-allocation-without-availability-consensus.md) · SHA-256: `c3ecd98a1dd86837e74637212153e285ec4d9312a1000bf72acf0ed429698c03`
+
+<!-- ADR_SOURCE_BEGIN:0177-model-bond-allocation-without-availability-consensus.md -->
+~~~~~~~~markdown
+# ADR-0177 — Model-bond coinbase allocation without model-availability consensus
+
+> **変更管理:** 採用済み部分は原則凍結。パラメーター調整と重大問題時の新規RFC + ADRは [凍結規程](../governance/design-freeze.md) に従う。Draft全文の採用や有効化ではない。
+
+* **Status:** Accepted design direction at the user's request, 2026-10-10, after the Seeder/FPR amendments. Allocation parameters, economic validation, implementation and activation remain pending.
+* **Scope:** Future PALW model distribution and model-specific coinbase allocation, with Panels or the separately gated Panel=0 mode.
+* **Supersedes:** MISAKA Torrent adoption/integration, dedicated Bonded Seeder roles/rewards, and the model-availability parts of [ADR173 D9–D11](0173-public-verifier-dispute-completeness-is-misaka-purpose.md), [RFC14 §16](../rfc/0014-panel-independent-fraud-prosecution.md), RFC15 and their related amendments. Mandatory Torrent, independent Bonded Seeder requirements, PoR/Full Fetch leases, TRDC/FPR model-disclosure gates and availability-based reward/weight suspension are withdrawn.
+* **Preserves:** [ADR175](0175-registered-models-are-permanently-immutable.md)'s permanent model identity, [ADR176](0176-bond-bounds-palw-production-rewards-and-final-weight.md)'s per-bond production/reward/Final-weight ceilings and common DAA hold, authenticated computation adjudication, existing monetary issuance constraints and old-claim rules.
+* **2026-10-12 誤読防止:** 本ADRが外すのは**モデル配布**の合意管理であり、Miner・Panelのモデル保有義務と個別claimの検証・裁定・Final条件は外さない。[D1補足](#d1補足--役割の区別2026-10-12誤読防止)と[D7注記](#d7--非強制取得の下での検証経済安全性)を先に読むこと。Miner＋Panelのclaim bond合算と1.3〜2倍の配分係数は末尾の[2026-10-12改定](#改定--2026-10-12minerpanelのclaim-bond合算と1320倍の配分係数提案)（提案・未決）。
+* **Implementation:** No code, wire id, Params field, activation DAA, fingerprint or deployment is assigned by this document. The earlier availability/FPR document checks record a withdrawn design, not current acceptance or economic evidence.
+
+## 1. 採択する原則
+
+**チェーンはモデルを入手できるかどうかに一切干渉しない。** モデル配布は参加者のP2P・市場活動とし、
+公開を促す中心手段を、モデルへ予約・拘束されたminer bond元本に連動するcoinbase配分とする。
+モデル別の報酬プールを固定せず、参加資本を集めたモデルの配分weightを拡大する。
+
+目指すのは、閉鎖集団が自己資本だけで採掘するより、モデルを第三者へ公開して多くの参加資本を集める方が、
+大きな配分倍率と利益を得る構造である。外部参加による増加を**圧倒的に有利にする**ことを経済設計の目標とする。
+ただし、bond金額だけで資本の実質所有者・独立性を識別できるとはしない。
+この目標を達成したとの宣言には、倍率曲線と敵対的経済評価が必要であり、現時点では未立証である。
+
+## 2. 規範的決定
+
+### D1 — モデル配布を合意の管理対象から外す
+
+**MISAKA Torrentの採用・統合方針、専用Bonded Seederのrole/契約、Seeder報酬の概念を廃止する。**
+新しいPALW制度としてこれらを実装・activationしない。一般的な任意の配布手段はoff-chainで選べる。
+合意はSeederの登録・選出・人数・IP・地域・独立性・保有コピー数・転送量・速度を管理しない（MUST NOT）。
+モデルのPoR、全量取得監査、availability lease、TRDC、FPR、全weightsの強制公開費用予約や
+モデル配布用のCHALLENGED/SUSPENDEDを新しい報酬条件として要求しない（MUST NOT）。
+モデル配布停止、取得失敗、低速化、第三者への提供拒否だけで、登録・claim受理・報酬・Final weightを
+無効化し、bondをslashし、または合意上のサービスペナルティを課してはならない（MUST NOT）。
+取得監査の失敗を算術的な不正証拠にせず、モデル未取得だけで反証期間を無限延長しない。
+
+一般的なP2P配布、DHT/PEX、HTTP mirror、任意の保存・共有契約はoff-chainで選べる。
+MISAKA固有の取得プロトコルやSeeder制度は設けず、Panel/miner/一般peerの共有は任意である。
+外部の配布契約をchainのminer bond責任へ自動変換せず、専用Seederへの固定15%配分も採用しない。
+
+### D1補足 — 役割の区別（2026-10-12、誤読防止）
+
+D1は**モデルの配布**を合意の管理対象から外す決定であり、**計算・検証に参加する者の保有義務**や**個別claimの検証条件**を外す決定ではない。次の3つを区別する。
+
+1. **Miner・Panel:** PALW計算に参加するMinerおよび検証を担当するPanelは、適用されるrulesetに従い、正しい固定Model ID/root/specに対応するモデルを保有し、モデル同一性を確認でき、必要な実行・検証能力とreadiness条件を満たさなければならない（MUST）。
+2. **モデル登録者・所有者:** 第三者へのモデル配布、取得成功、継続的な公開提供を合意上保証する義務を負わない。モデルを配布できない、または配布を拒否したという理由だけで、登録モデルの報酬資格を停止したり、登録者に制裁を科したりしない（MUST NOT）。
+3. **個別claim:** 実際の計算・検証・裁定・Finalに必要な条件は満たさなければならない。モデルの配布自由と、未検証の計算への無条件支払いは別問題である。
+
+必要なPanelが成立しない個別claimを受理しないことは、モデル登録者の配布義務違反や計算不正の認定を意味しない。モデルの取得不能だけを理由とする登録資格の取消し、既存の有効claimの報酬停止、slashは行わない。
+モデルへのアクセス結果、peerの接続状態、配布者の応答状況を、合意判定への暗黙の入力としてはならない。Miner・Panelの資格は、適用rulesetで定義された認証済みの状態・証拠によって判定する。
+仕様上は「**第三者がモデルを取得できなかった場合**（登録者の義務違反でも不正でもない）」と「**必要なPanelが成立しなかった場合**（そのclaimは検証条件を満たさないため受理・Finalされない。非不正の終了）」を区別して扱う。
+RFC-0002 Proposal Aの `class_seated`（executor以外のモデル保有operatorを `seat_count` 以上、registrant・executorを除いた独立operatorの下限）は、この保有義務と両立し、claim受理・報酬資格・登録者の責任の関係を同時に満たすよう検証する。
+詳細は[RFC/ADRレビューの整理（2026-10-12）](../audit/palw/design-reviews/rfc-adr-review-resolution-2026-10-12.md)。
+
+### D2 — 入手性と登録モデルの同一性を分離する
+
+Model ID、Canonical Artifact Root、canonical manifest、weights・tokenizer/config・実行仕様の固定bindingを維持する。
+登録後の内容変更は別のModel IDとして登録する。claimは同じ固定Model ID/root/specを参照し、
+取得したbytesはpiece/shardの認証と全量復元後のcanonical-root照合を行う。
+任意のTorrent descriptor/infohashを登録する場合、そのrootとの対応もimmutable bindingとするが、
+infohashの登録やpeer到達性を報酬資格の必須条件にしない。root一致は実行正当性の証明ではない。
+
+既存claimのstate/trace/output/opening等のcommitment、適格な有限court要求とその回答義務は維持する。
+これは**個別claimの認証済み証拠を裁く責任**であり、全モデルの取得・公開を強制する権限ではない。
+新routeの要求対象はclaim固有のwitness/state等に限定し、モデル取得を目的とするweight-file/range要求、
+全weightsを列挙する要求、反復要求によるモデルの再構成を禁止する。
+実装前に許可unitと累積scopeを固定し、既存unitでmodel bytesを要求できる場合は新rulesetで制限する。
+court側が必要なmodel operandをどう認証・検証するかも別途定義し、この制限でterminalが成立しないprofileを
+「裁定可能」と表示しない。claim固有証拠の正当な要求・署名付き虚偽・客観的計算不正の責任と、
+off-chainの配布拒否を混同しない。
+
+### D3 — モデルごとの拘束元本を重複なく集計する
+
+配分期間/epoch `t`の受理済みsnapshotから、producer bond `b`が固定Model ID `m`へ割り当てた
+適格な拘束元本を`C_{b,m}(t)`として定義し、次をMUST満たす。
+
+~~~text
+0 <= C_{b,m}(t)
+sum_m C_{b,m}(t) <= C_b_effective_locked(t)
+S_m(t) = sum_b C_{b,m}(t)
+~~~
+
+claimの予約件数・予約額の単純合算をモデル資本として扱わない。同じ元本から1000claimを発行しても
+`S_m`を1000倍にしない。rho、再送、root/slice/rider、bond/key分割、モデル複製でも資本を重複計上しない。
+model ownerの市場seed、AMM流動性、Position購入、Panel/配布契約の担保をminer元本へ自動算入しない。
+
+新しい配分権に使える実効元本、既存責任控除、slash/退出、model間移動、期間途中の増減を定義する。
+一つの本物の元本が責任と配分の両方に現れる場合も別の追加元本を作らず、回収可能性を維持する。
+共通DAA拘束と整合したsnapshot/積分方式を選び、短期借入・epoch直前だけの拘束・移動による二重配分を防ぐ。
+7日間は説明例であり、配分epochとADR176の`W`の具体値・対応は未決である。
+
+### D4 — 固定された総発行予算の中でcoinbaseを配分する
+
+非負の単調な配分関数`f`を用い、`f(0)=0`とする。正の分母があるときの設計形は次とする。
+
+~~~text
+A_m(t) = f(S_m(t))
+R_m(t) = R_PALW(t) * A_m(t) / sum_j A_j(t)
+sum_m R_m(t) <= R_PALW(t)
+~~~
+
+`R_PALW`は採択済みcoinbase/subsidy・DAA発行制約内のPALW予算であり、新しい追加mintではない。
+整数算術・overflow・丸め残余・zero denominatorを規範化し、分母0ならモデル配分は0として
+未配分残高の処理を既存発行上限内のversioned規則へ渡す。未配分・未使用予算を架空の報酬として発行しない。
+使い切れないモデル枠をどう扱うかもrelease前に固定し、miner capを超える自動再配分を許さない。
+
+他モデルの資本が固定なら、当該モデルへの資本追加で相対配分は非減少とする。
+他モデルも増資する場合に絶対額が必ず増えるとはしない。全モデルの配分合計は一定の総予算内にある。
+資本預託だけでは支払わず、当該モデルの有効claim、固有の計算仕事、Finalと適用会計を満たしたものにだけ支払う。
+既存のowner/Panel等のlegとの接続と帰属を明示し、同じcoinbaseを別legから二重支払しない。
+**2026-10-14改定:** モデル配分のcoinbaseにowner/登録者のlegは置かない。マイナー報酬は登録者へ直接分配せず、登録者の収入はModelPositionの売買手数料とする（末尾の2026-10-14決定）。
+
+### D5 — モデル配分とminerの採掘枠を別々に制限する
+
+モデル別coinbaseは集合の**配分予算**であり、個々のproducerの共通上限を増やす規則ではない。
+各bondのclaim/block/reward/Final-weight上限、受理時予約、最早回復`d + W`、残存責任をADR176に従って維持する。
+公開により外部minerが増えればモデル集合の資本・配分は増え得るが、既存minerの最大採掘枠は増えない。
+計算省略、閉鎖、model変更、倍率上昇でも同額bond・同期間の上限を増やさない。
+新claim受理時に適用model/snapshot/配分権を固定し、coinbase・未払escrow・成熟・Finalの全経路で
+ネットワーク予算、モデル予算、個別bond予約/上限を同時に検査する。
+
+実際の支払はmodel予算とbond上限の両方以下とし、配分上限と実収入を区別する。
+可変model予算から過去claimへ無予約の追加権利を遡及付与しない。
+coinbase配分変更だけでは物理block頻度・ticket/DAA/難易度・fork choiceを変更しない。
+将来それらをモデル資本に連動させるなら、別の明示的設計・review・upgradeを要する。
+
+### D6 — 公開の経済優位を評価し、所有者識別を偽装しない
+
+**同じ`S_m`と他モデル状態なら、自己資本か外部資本かによらず配分は同じである。**
+ウォレット数、IP数、別bond、参加者の自己申告を独立資本の証明として倍率に使わない。
+permissionlessな金額会計だけでは閉鎖集団と独立した参加者を識別できない。
+したがって「外部資本だから別の高倍率」を合意上保証する式を本ADRで発明しない。
+
+公開の利益は、公開によって追加の実資本・有効な計算参加が集まることから生じるように設計する。
+`f(S)=S`だけでは既存minerの収入増を保証しない。superlinearな曲線も、資本集中・自己増資・Sybil・
+報酬予算の飽和を悪化させ得る。modelを公開しただけのボーナスや取得成功票による倍率は導入しない。
+
+採択候補の`f`、上限・逓増範囲、model内配分、他モデル競争と個別capを一体で評価する。
+公開後の既存miner/ownerの実利益を、外部参加者との取り分、自己増資の資本費用、配布費、
+検証費、slashリスク、資本移動と外部利得まで含めて比較する。
+圧倒的な優位の数値基準・対象資本範囲・市場仮定を評価前に固定し、成立しない条件も報告する。
+全資本を自前で用意できる攻撃者まで、公開が常に利益最大になるとは保証しない。
+閉鎖・同額自己増資に対する優位が示せない場合は「問題を塞いだ」とは記載せず、未解決として残す。
+
+### D7 — 非強制取得の下での検証・経済安全性
+
+G14は、検証者が正しい登録モデルを実際に保有/取得できた条件で、Panel外の認証証拠から
+不正をlocalizeし、有限のexact courtへ進める能力を検証する。全所有者が配布を拒否しても第三者が
+必ず取得できるという旧保証は撤回する。modelの未取得は計算不正の証明でも資格停止条件でもない。
+必要なmodelを得られず監視できない場合、実効検出確率`p`は0にもなり得る。
+`p * (R_risk + L_collectible_net) > C_saved`は実効`p`・期限内包含・徴収可能額の仮定付きであり、
+model資本増加やclaim capだけで成立したとしない。閉鎖して検出を避ける利益もD6の評価へ含める。
+
+モデル入手性による停止を外しても、有効な計算反証、claim固有witnessの客観的default、
+未解決の適格court、rulesetのFinal条件、予算違反はそれぞれの規則で処理する。
+Panel=0は別の実装・fresh-verifier試験・経済評価・協調activationを要する。
+閉鎖モデルへの実効検出が未立証である間は、その経済安全性も未立証と報告する。
+
+**D7注記（2026-10-12、誤読防止）:** 上の「必要なmodelを得られず監視できない場合、実効検出確率`p`は0にもなり得る」は、**モデルを保有する独立した検証者が一人もいない場合**の話である。
+D1補足のとおりMiner・Panelはモデル保有が必須であり、独立したモデル保有Panelが検証できる場合、閉鎖モデルでも`p`は0とは限らない。「閉鎖モデルなら必ず`p=0`」とは読まない。
+残る課題は、Panelの共謀・独立性の偽装・検証能力不足をどの程度抑止できるかであり、operator IDが別でも実質所有者が同一である可能性は残る。
+
+## 3. 完成条件と移行
+
+| Gate | 必須の証拠 |
+| --- | --- |
+| Non-interference | 同一chain/claim/proofを入力し、全peer停止・配布拒否・ローカル取得結果を変えても合意判定、報酬資格、weightが変わらない。モデル要求ではcourt/Slashを起動できない |
+| Immutable identity / court scope | 別weights/configを拒否。claim固有証拠とモデル取得要求を型・累積scopeで分離。許可scopeから実際のterminalへ到達できる |
+| Distinct capital | 同じ資本の多claim、多model、key/bond/model複製、rho変更、退出/移動/epoch境界・借入で二重集計しない |
+| Allocation conservation | model増資/競合増資、分母0、整数丸め/overflow/残余、未使用枠、旧新rulesetで総coinbase・各model・各bondの予算を維持 |
+| Same-bond opportunity | 正直な計算と高速偽造で同じQ/B/R/F最大枠と共通DAA時計。model倍率変動で予約や枠を回復/増額しない |
+| Open versus closed economics | 閉鎖自己資本、同額自己増資、公開外部資本、全資本自前、Sybil/model分割、借入/退出、資本集中、競合増資、既存minerのcap飽和、閉鎖によるp低下を比較 |
+| Recovery / activation | snapshot・元本帰属・配分権・支払・courtをreorg/restart/IBD/pruningで一致再生。既存責任/消費履歴を保持し別upgradeで有効化 |
+
+現行[palw_reward_v2.rs](../../consensus/core/src/palw_reward_v2.rs)のsubsidy carveと
+[ADR167](0167-the-x1000-capacity-package-a-fixed-per-daa-reward-budget-riders-and-a-lower-only-breaker.md)の
+DAA emission budgetは総発行制約の参考であり、`S_m`/`f(S_m)`の実装証拠ではない。
+以前のSeeder/FPR、ADR176、t12監査のPASSを、この配分式・公開優位・Panel=0の完成証拠へ流用しない。
+詳細は[RFC14 §16](../rfc/0014-panel-independent-fraud-prosecution.md)と
+[RFC15 §8.5](../rfc/0015-panel-free-permissionless-verification.md)へ接続する。
+
+この改定はdocsの設計変更であり、既存ネットワーク・旧claimの取得/DA/court規則を遡及的に解除しない。
+既存model operandの扱いを含むversioned移行、全受入gateと未決の倍率式を確定するまで新modeを有効化しない。
+
+## 目的の改定 — 2026-10-10（bond集約優位）
+
+ユーザーの決定により、本ADRの経済目標を**「公開そのものを優遇する」から「モデルへ実際に拘束された適格miner bondを多く集めたモデルを強く優遇する」**へ変更する。
+
+> **モデルへ実際に拘束された適格miner bondが多いほど、モデル別coinbaseの配分を強く優遇する。公開は、他のminerが参加してbondを集められるようにするための手段であり、公開という申告自体には報酬を与えない。自己資本・外部資本、運営者・一般参加者を区別しない。**
+
+- **D6の改定:** 「同額の自己増資より公開が常に有利」の証明はリリース要件から外す。ECONの反例（自己資本は任意の`f`で公開に勝ち、`p=0`では閉鎖が有利）は旧目標の限界を示す記録として保持する。
+  新しい受入要件は「多くのbondを集めたモデルの優遇」の定量化である（対象資本範囲、倍率、配分予算・実支払・純利益のどれについて成立するか、個別cap未到達の領域）。
+- **配分曲線の候補:** `A_m = S_m^α`（`α > 1`、比較候補`α = 2`）、`R_m = R_PALW · A_m / Σ_j A_j`。増えるのは固定予算の取り分であり、総発行量ではない。`α`は未承認のpolicy値である。
+  ECONは「大きな公開モデルへの参加」と「小さな閉鎖モデルでの自己採掘」の単位資本利益を、個別cap・費用・モデル内配分・資本集中を含めて比較する（単純化した比`(S_public/S_closed)^(α−1)/d`は成立可能性の説明であり、証明ではない）。
+- **大口資本の受容:** 悪意ある主体でも本物の資本を大量に拘束した場合、それだけを理由に配分から排除しない。資本集中による報酬集中と支配リスクは残余リスクとして明記する。
+  2乗配分は資本集中を積極的に優遇し、運営の初期資本も有利にする（身分の特権がないことと、初期資本の優位が小さいことは別である）。
+  少ない実資本を大きく見せる行為（複数モデルへの重複計上、epoch直前の移動、鍵・claim分割による増幅）はD3のとおり引き続き禁止する。
+- **p=0の分離:** モデルを閉じた参加者が計算しないclaimを報酬まで通せる問題は、配分曲線の変更では解消しない。ADR-0176 D6の`p(R_risk + L_collectible,net) > C_saved`は`p=0`で成立しない。**2026-10-14改定:** これは有効化を止める安全性gateではなく、ADR-0176のbond単位のBlock / Reward / Final Weight上限・共通拘束期間・Final前払い出し禁止で被害を有界化する残余リスクとする（[PRINCIPLES §0](../PRINCIPLES.md)）。
+  資本集約優位の成立をその解消証拠に流用しない。報告は「正直なverifierが機能する範囲（G14・裁定・抑止）」と「全所有者が閉鎖し実効`p=0`となる範囲（配分曲線による利益比較と、残る不正収益・合意への影響）」に分ける。
+- **範囲:** 変更するのはモデル別coinbase配分だけである。個別bondのQ/B/R/F上限、元本の重複禁止、共通拘束期間、総発行予算はADR-0176・D3–D5のまま維持する。
+  bond集約倍率をblock発行数・beacon・Final weight・fork-choiceへ掛けることは含めない。
+- **検証承認gate（ECON round 2の設計）の位置づけ:** 補助金を検証承認に条件付ける機構として休眠実装を続けてよいが、`p=0`の解消証拠には数えない。
+
+<a id="改定--2026-10-12minerpanelのclaim-bond合算と1320倍の配分係数提案"></a>
+## 改定 — 2026-10-12（Miner＋Panelのclaim bond合算と1.3〜2倍の配分係数：提案）
+
+**状態:** 設計の改定・提案。実装、敵対的試験、経済評価、ネットワーク有効化は未実施。数値は本番定数ではない。
+ユーザーの追加方針として、**モデルに実際に拘束されたMinerおよびPanelの適格claim bond元本の和**に応じた**1.3〜2倍の配分係数**を、モデル別の報酬配分（とブロック生成機会の配分）に反映する設計を提案として採録する。全文と攻撃試験C01〜C18は[Panel=1・Bond/time予算・モデル拘束資本倍率の改定案（2026-10-12）](../design/palw/economics/panel1-bond-budget-model-capital-amendments-2026-10-12.md) §3A。
+
+> モデル別のブロック生成機会と報酬配分には、そのモデルに実際に拘束されたMinerおよびPanelの適格claim bond元本の和を使用する（MUST）。同じ実元本を複数claim・role・modelで重複計上してはならない（MUST NOT）。
+>
+> 適格元本に応じた1.3〜2倍の配分係数を設計候補とし、公開によって実参加資本を集めるモデルを、自己資本だけの閉鎖的な運用より相対的に有利にすることを目的とする。倍率曲線・閾値・snapshot・評価期間・整数丸め・model内配分はrelease前に確定する。
+>
+> claim bondは、正常claimの検証・Finalおよび共通の枠回復・責任保持条件を満たす前に再利用してはならない。Finalの故意の遅延、challenge、Panel交代で評価期間・採掘枠・絶対期限を延長してはならない。
+>
+> 配分係数は検証とFinalの代替ではない。network/model/producer-bondの上限を同時に維持し、既定の個別絶対capや総発行を後付けの乗算で増やしてはならない。モデル資本にはPanel元本を含めても、producer元本として二重に扱わない。
+>
+> モデルの非公開や第三者への提供拒否だけで登録者を罰しない。同じ適格元本・条件なら、自己資本と外部資本を同じ規則で扱う。公開の利益は追加の実参加・実資本から生じるという仮定を、敵対的な経済試験で評価する。
+>
+> 通常claimのPanel=1、必要な正の検証証拠、non-seatの客観反証、N1の実効検出・経済評価は維持する。モデル拘束資本倍率を追加しただけで、Miner/Panel共謀に対する安全性を証明済みと宣言してはならない。
+
+候補式（未採用）: `S_m = C_miner_claim(m) + C_panel_claim(m)`（資金単位で重複なし）、`S_m > 0` のとき `A_m = S_m · μ(S_m)`、`1.3 ≤ μ ≤ 2.0`、`S_m = 0` のとき `A_m = 0`。倍率は配分重みの段階で一度だけ反映し、実支払・ブロック数へ重ねない。全モデルへ一律の係数を掛けて正規化しても相対配分は変わらない（資本に依存する曲線が必要）。
+
+**既存決定との関係（未決として明記）:**
+- **曲線:** 2026-10-10の目的改定と同日のユーザー裁定で暫定採用した `A_m = S_m^α`（α = 1.5、BUDGETの休眠実装 `palw_model_bond_allocation_v1`）と、本提案の `S_m · μ(S_m)`（1.3〜2.0の有界係数）は別の曲線である。どちらを採るか、または `μ` をどう定めるかは未決であり、本改定は暫定のα = 1.5を置き換えない。
+- **集計対象:** 2026-10-10の改定はminer bondのみを集計した。本提案はPanelのclaim bondも合算する（ただしproducerのQ/B/R/F上限の元本としては二重に扱わない）。新しいpolicy/versionと移行規則を要する。
+- **範囲:** 2026-10-10の改定は「変更するのはモデル別coinbase配分だけ。block発行数・Final weight・fork-choiceへは掛けない」とした。本提案はブロック生成機会の配分への接続を含むが、物理block頻度・DAA・fork choice・Final weightの変更は決定しておらず、Final weightへ係数を自動乗算しない。ブロック機会への接続はRFC-0008/0010/0012で別review・versioned activationを要する。
+- **評価:** 閉鎖攻撃者が同額の実資本を拘束できれば同じ係数を得る。倍率だけで全Panel共謀や`p=0`の計算省略益を排除できるとはしない（2026-10-10改定の「p=0の分離」を維持）。
+
+## 最終Goalと達成条件の改定 — 2026-10-14（ユーザー決定）
+
+[PRINCIPLES §0](../PRINCIPLES.md)に従う。本ADRの配分は、MISAKAの最終Goal「**モデルを非公開にしておくことが経済的に不利になる仕組み**」を担う。不正の完全排除は目標にしない。
+
+- **非公開は不利になる。** chainはモデルが共有されたかを判定せず、拘束されたbond資本と検証の成立だけを読む。非公開は二つの経路で不利になる。(1) 公開モデルへbondが集まる結果として、閉鎖モデルが相対的な配分を失う。(2) 検証attestation gate（ECON round 2、readiness §3f）は維持し、bondから抽選された検証者が自分のコピーで検査して所定数が承認しないmodel-epochにはモデル配分を払わない。誰にも共有されないモデルは検証が成立せず配分を受けられない。理由は「検証が承認されなかった」であり、D1の「配布を合意で管理しない」と両立する（2026-10-12改定の「非公開や提供拒否だけで登録者を罰しない」とも両立する。罰するのではなく、検証が成立しないmodel-epochに補助配分を払わないだけである）。配分曲線は末尾の「モデル配分の確定 — 2026-10-14」で`α = 1.5`に確定した。配分曲線は現行の暫定値`α = 1.5`（readiness §3g）のままとする。
+- **共有されたモデル:** 1人にでも共有され、正しいPanel（正直な検証者）を建てられれば、claim固有の公開・認証済み証拠から不正を客観的なcourtで立証しslashできる（ADR-0173）。
+- **非公開モデル（`p = 0`）:** 上の「p=0の分離」の改定のとおり、有界化する残余リスクであり、未解決のgateではない（2026-10-12改定の「p=0の分離を維持」もこの意味で読む）。
+- **達成条件（D6の受入要件に追加）— 二段で評価する。**
+  - **(a) モデル全体:** 非公開のときと、共有して外部bondを集めたときで、モデルの総bond・配分割合・経済規模の差。例（他モデル900M、自己100M、外部200M参加）: 総bond 100M→300M、配分割合は`α = 1.5`で3.6%→16.1%（`α = 1`なら10%→25%）。
+  - **(b) 所有者個人:** 元の所有者の取り分が共有で増えるか。モデル内の配分と、自己資本を追加してbondを増やす場合の資本コスト・期待収益の差を含める（自己資本の追加は禁止しない）。
+  - モデル全体の伸びを所有者個人の伸びとして報告しない。
+
+## モデル配分の確定 — 2026-10-14（ユーザー決定）
+
+2026-10-12改定の提案のうち、**Miner＋検証者の元本合算**と**ブロック生成機会への接続**を採用し、配分曲線は**`α = 1.5`**に確定する。`S_m · μ(S_m)`（1.3〜2倍）は採用せず、比較試験用に保持する。正式式・表・試験は[RFC-0015 §8.5.5](../rfc/0015-panel-free-permissionless-verification.md)に置く。
+
+- **式:** `S_m = C_miner_claim(m) + C_verifier_claim(m)`（資金単位で重複なし）、`S̄_m`は30日相当DAAの平均、`P_m = S̄_m^1.5 / Σ_j S̄_j^1.5`（分母0なら0）。
+  - **立ち上げ規則（ユーザー決定 2026-10-28、option (b)「b)(推奨」）:** 配分 epoch がまだ無い間、または `Σ_j S̄_j = 0` の間は、`P_m` はブロック生成機会もclaimの報酬も制限せず、モデル別報酬の予約もしない（fence 前の規則。bond 自身の Q/B/R/F は効く）。有効化の時点では全モデルの `P_m = 0` になり REAL が止まる（ADR-0176 2026-10-15「枠不足で REAL が止まらない」に反する）ため。この間に受理された claim は自分のモデルを記録し、その席の担保が次の roll で `S_m` になる。以後 `P_m` は本 ADR のとおり適用する。実装 `PalwBondBudgetStateV1::allocation_bootstrapping_v1`。
+- **適用先:** `P_m`をモデル別のブロック生成機会とcoinbase予算の共通目標にする。1 block当たりの報酬に再び掛けない。network全体のblock頻度・DAA・難易度・fork-choice・Final weightは変えない。上の「範囲」の「block発行数へ掛けない」は、モデル間のblock機会の配分についてこの決定で改める。
+- **検証者の元本:** 2026-10-12改定の「Panelのclaim bond」を、Panel=0に合わせて「claimに実際に紐付いて拘束され、検証上の責任を負うpermissionless verifierの元本」へ一般化する。固定seatは要らない。待機bondは数えず、MinerとVerifierで二重計上しない。Verifier元本はMiner個人のQ/B/R/F capを増やさない。参加手順・責任・拘束期間・報酬条件と「預けるだけで検査しない」対策はrelease前に定義する。
+- **個別上限:** 共通拘束期間`W`は7日相当DAA。各bondのQ/B/R/F capはモデル配分で増えない。
+- **マイナー報酬はモデル登録者へ直接分配しない。** モデル別のcoinbaseとブロック報酬はclaimを生成したMinerと検証責任を果たしたVerifierにだけ帰属し、登録者・ownerのlegを置かない（[ADR-0091](0091-the-reward-buys-the-pair-and-no-holder-is-paid.md)の「報酬からのowner service feeはNo」を維持）。登録者の収入は**ModelPositionの売買手数料**（売買ごとのBILI額の5 %、[ADR-0114](0114-the-owners-leg-is-five-percent-and-it-arrives-at-a-height.md)。fence `palw_model_leg_v2`でADR-0087の1 %から引き上げ。別に5 %をburn）であり、モデルが使われPositionの売買が増えるほど増える。報酬の5 %による買い上げ（ADR-0091）はlegなしで価格を上げるだけである。登録者が自らMiner/Verifierとして参加する場合は、その役割の報酬を同じ規則で受ける。
+- **二段評価の(b)所有者個人:** 所有者の収入は、Position売買手数料と、自らMiner/Verifierとして得る報酬の和で測る。モデル配分の伸びが直接登録者の収入になるとは扱わない。
+- **必須の受入試験:** `α = 1.5`は資本集中を強める。新規モデルが採掘機会を失いすぎないことを有効化前の必須評価とする。
+
+## 休眠実装 — 2026-10-15（上の2026-10-14決定の実装）
+
+**休眠実装（未build・未検証、`palw_model_bond_allocation_v1`は全presetで`None`、有効化は拒否）:** V3 allocation policy（`PalwAllocationAverageV1`: 30日、verifier元本、block機会。validationで`α = 1.5`と30日を固定）。`roll_epoch_v3`がepochごとにminerの成熟した割当とPanel seatが生存claimに拘束した額（`seat_exposure`）をbondごとに合算・元本でpro-rata clipして`S_m(k)`を記録し、30日分の平均`S̄_m`から`A_m = ⌊S̄_m^1.5⌋`を書く。`model_blocks_available_v1`は1 DAA = 1 block機会として`⌊accrued · A_m / ΣA⌋ − reserved_m`を返し、claimのplanが不足を拒否（clipしない）、commitが予約する（riderは先頭blockで計上済み）。待機bond・登録料・AMM/Position・未払報酬は数えない。所在: `consensus/core/src/palw_bond_budget_v1/allocation_v3.rs`、`palw_bond_budget_fold_v1.rs`（epoch roll、plan/commit）、試験source `consensus/core/tests/adr0177_allocation_v3.rs`。
+
+**未了:** 利用者escrowをmodel予算で削らない修正（RFC-0016 P4、`eee1710ce`）はmerge済み。coinbase由来のclaimについて、V3のmodel別報酬対象block権利とcoinbase側のR clip（`palw_model_available_v1`）が`P_m`を二重に適用しないよう解消する必要がある（ユーザー判断待ち）。実装したblock機会は報酬対象ブロック権利の層（claimが拒否されても物理blockは残る）であり、RFC-0016 D-Q1の物理層（V+、Draft）は未実装。新規モデルが`α = 1.5`で採掘機会を失いすぎないことの評価、verifierの参加手順・責任・拘束期間・報酬条件（預けるだけで検査しない対策を含む）の定義は有効化前の必須事項（ユーザー）。
+
+## ユーザー方針 2026-10-15 による改定 — 入手不能と合意creditの関係を変更
+
+* **明示的な変更:** 本ADRは「モデルの入手不能だけでは報酬もweightも止めない」とした。**合意creditについてこれを変更する。** モデルを入手できない抽選検証者は再実行できないので、そのモデルのclaimは`SecurityCertified`にならず、**合意credit(weightを含む)を持たない**。
+* **変わらない点:** すでに認証されたworkの報酬は、入手不能を理由に取り消さない(取り消すのはG14での反証だけ)。入手不能を理由にslashしない。chainはモデルの配布・取得を管理しない(入手不介入は維持)。
+
+**ユーザー方針(原文):**「この攻撃を塞ぐ方針で進める。DNS-BFTはRFCにある通り廃止したので使用できない。」— ここでの攻撃は、閉鎖モデルまたは自前Panelのモデルの未認証claimが`Final`に達し、safe frontier・safe weight・live total・settlement depth・rule E participation・settled anchorを進めて、不正な合意またはsettlement finalityを得ること。補足判断(同日):「抽選した検証者の承認を認証の柱にしている。これは承認にするということは前提にするのでそのままでいい。」
+
+* **`Final`と`SecurityCertified`は別状態である。** `Final`は手続きの完了(利用者払いescrowの経済的settlementは既存規則どおり)。合意credit(safe frontier、safe weight、bounded immature/live total、settlement depth、rule E participation、settled anchor、発行由来の報酬leg)は`SecurityCertified`のclaimだけが生む([RFC-0018](../rfc/0018-dag-parallel-multi-model-consensus.md) §7、Gate C)。
+* **認証は前提に基づく。** claim固定後の乱数でglobal poolから抽選した検証者のm-of-k肯定承認と、G14公開告発windowの異議なし経過で成立する。「抽選されたverifier stakeのうち正直な割合が閾値以上」を明示的な前提とし、無条件の数学的証明とは扱わない。暗号学的な計算証明は使わない(PRINCIPLES §8)。認証済みでもG14で反証されたclaimはvoidされ、合意creditは取り消される。
+* **DNS-BFTは廃止済みであり、安全性にも収束にも使わない。**
+* **genesisモデルにも認証の免除はない。70Bモデルは、独立した検証(抽選検証者による再実行)が成立するまで合意creditを持たない。**
+* 本改定は追記であり、上の本文は履歴として残す。実装は休眠(fence `palw_independently_work_certified_v1`、全presetで`None`、有効化は別途のユーザー判断)。
+
+## ユーザー方針 2026-10-15 第4回 — 配分の重みに階層係数 `c_m`
+
+> **統治する前提:** [PRINCIPLES §9](../PRINCIPLES.md)(凍結前提)。規則は [ADR-0179](0179-model-tiers-genesis-annual-1-0-registered-0-3.md) が定める。
+
+* 配分の重みを `A_m = c_m · S̄_m^1.5` とする。`c_m` の値は次のとおり。
+  * `ApprovedModels(h)`(genesis と年次フォークの指定): 1.0。
+  * 後から登録したモデル: 登録時点から固定の 0.3。
+* `S̄_m` は従来どおり、Miner + Verifier の 30 日平均の適格 bond であり、`α = 1.5` は変えない。
+* `c_m` はこの重みに**一度だけ**掛ける。その `P_m` を物理ブロック機会(RFC-0016 V+)と coinbase 配分の両方が使う。受理ブロックの報酬には重ねて掛けない。
+* 登録 tier 全体に発行上限 `κ` を設ける。
+  * 登録 tier の重みの合計が `ΣA` の `κ` を超えると、各重みを同じ割合で縮める。header の `ΣA` は縮める前の値を保つ。
+  * 縮めた分は発行せず、1.0 の階層へも再配分しない。
+* 実装(休眠): `PalwBondBudgetStateV1::roll_epoch_v3_tiered`(`consensus/core/src/palw_bond_budget_v1/allocation_v3.rs`)。fold は fence `palw_model_tier_v1` 以後でこれを使う。fence 未満では、従来の `roll_epoch_v3` と byte 単位で同じである。
+~~~~~~~~
+<!-- ADR_SOURCE_END:0177-model-bond-allocation-without-availability-consensus.md -->
+
+</details>
+
+<a id="source-0179-model-tiers-genesis-annual-1-0-registered-0-3"></a>
+
+<details>
+<summary>0179-model-tiers-genesis-annual-1-0-registered-0-3.md — 原文 L1–L109</summary>
+
+[原文を開く](../adr/0179-model-tiers-genesis-annual-1-0-registered-0-3.md) · SHA-256: `85afabad2ddee9576ce3139bd864a68c64274ff5d69d03f4d2ff5ec6ec01de7d`
+
+<!-- ADR_SOURCE_BEGIN:0179-model-tiers-genesis-annual-1-0-registered-0-3.md -->
+~~~~~~~~markdown
+# ADR-0179 — モデル階層: genesis・年次フォーク 1.0、登録モデル 0.3
+
+> **変更管理:** 採用済み部分は原則凍結。パラメーター調整と重大問題時の新規RFC + ADRは [凍結規程](../governance/design-freeze.md) に従う。Draft全文の採用や有効化ではない。
+
+> **統治する前提 — [PRINCIPLES §9](../PRINCIPLES.md)(凍結前提、2026-10-15 ユーザー決定):** モデルの二階層と、モデル単位の検証の不採用。本 ADR は §9 を実装上の規則として書き下したものであり、§9 と衝突する場合は §9 が優先する。本 ADR は §9 を再審しない。
+
+* **Status:** Accepted(ユーザー決定 2026-10-15 第 4 回・第 5 回、[判断記録](../history/decisions/2026-10/user-decisions-2026-10-15-adr-rfc16-rfc17.md) §7b・§7c)。実装は休眠(fence `palw_model_tier_v1`、全 preset で `None`、有効化は承認していない)。build・試験は未実施で PASS ではない。
+* **Supersedes:** [RFC-0017](../rfc/0017-model-eligibility-examination-and-renewal.md) のモデル資格審査(Registered → Probation → Eligible → Lapsed、抽選審査、更新、失効、試行手数料・試行上限)。RFC-0017 は本 ADR の階層制度の文書に改定した。
+* **Related:** [ADR-0175](0175-registered-models-are-permanently-immutable.md)(登録の不変性)、[ADR-0177](0177-model-bond-allocation-without-availability-consensus.md)(配分 `α = 1.5`、30 日平均)、[RFC-0016](../rfc/0016-bond-weighted-block-opportunity-and-elastic-final-capacity.md)(V+)、[RFC-0018](../rfc/0018-dag-parallel-multi-model-consensus.md)(Gate C)、[PRINCIPLES §8](../PRINCIPLES.md)(暗号学的な計算証明を使わない)。
+
+## 決定
+
+1. **genesis と年次フォークで指定されたモデルは 1.0 である。** `ApprovedModels(h)` は、genesis のモデルと、高さ `h` までに有効化された年次フォーク(ソフト / ハード)が指定した「モデル ID + 固定 artifact root」の集合である。
+   * 年次フォークは `ApprovedModels` に**追加するだけ**で、既存モデルを上書きしない(ADR-0175)。
+   * リストへの指定は政策的決定であり、「公開されている」「独立検証可能である」ことの技術的証明ではない。
+2. **後から登録したモデルは、登録した時点から審査なしで 0.3 に固定する。**
+   * 昇格・更新・失効・試行手数料・試行上限はない。
+   * 何年経っても、どれだけ使われても 0.3 のままである。
+   * 1.0 になる経路は年次フォークでの指定だけである。
+   * registry の `Active` などの状態は運用状態であり、階層の資格とは関係しない。
+3. **モデル単位の検証・審査は行わない(不採用)。**
+   * 理由(ユーザー): モデルに対して検証を行うと、その検証において何を信頼するか(誰が・何を根拠に「正しく共有・運用されている」と判断するか)という問題が新たに発生し、それは解決しない。
+   * チェーンは、モデルの公開状況・保持者数・取得可能性・共有状況を審査しない。
+   * ユーザー判断(原文):「genesis/fork モデルは 1 倍で有効、後から追加されるモデルは 0.3 倍で、そこから検証などはなく 0.3 倍のまま固定。つまりモデルに対しての検証がなくなった。」
+4. **係数は配分の重みに一度だけ掛ける。**
+   * `A_m = c_m · S̄_m^1.5`(`α = 1.5`、Miner + Verifier の 30 日平均の適格 bond、ADR-0177)。
+   * この `P_m = A_m / ΣA` を、物理ブロック機会(RFC-0016 V+)と coinbase 配分の両方が使う。
+   * 受理ブロックの報酬に係数を重ねて掛けない(0.09 倍にしない)。
+5. **登録モデル全体に発行上限 `κ` を設ける。** 多数のモデルを登録しても 0.3 の枠は増えない。
+   * 登録 tier の重みの合計が `ΣA` の `κ` を超えると、登録 tier の各重みを同じ割合で縮める。
+   * 縮めた分は発行しない。1.0 の tier へ再配分もしない。
+   * bond 総量と共通の Q/B/R/F 上限(ADR-0176)は、そのまま維持する。
+6. **claim 単位の検証は、すべての階層で維持する。** ユーザー判断(原文):「これは残す。そうじゃないと claim の検証ができない」。
+   * モデル単位の検証を行わないことは、claim の検証を省くことではない。
+   * 各 claim は階層に関係なく、確率的検出、公開証拠による局所化、決定論的裁定(court)、claim ごとの抽選検証者による認証を受ける。
+   * 認証は RFC-0018 の `SecurityCertified`(Gate C)であり、正直な割合の明示的前提に基づく。
+   * 認証されていない claim は、どの階層でも次のものを進めない: fork choice、決済深度、Rule E 参加、settled anchor、weight。genesis・年次指定モデルも Gate C を免除されない。
+   * 階層は経済上の権利だけを決める。
+
+## 数値
+
+| 名前 | 値 | 種別 |
+| --- | --- | --- |
+| `PALW_MODEL_TIER_APPROVED_PERMILLE_V1` | 1000(1.0) | 決定 |
+| `PALW_MODEL_TIER_REGISTERED_PERMILLE_DESIGN_V1` | 300(0.3) | ユーザーの設計値(fence の値として名前付き) |
+| `PALW_MODEL_TIER_REGISTERED_CAP_PERMILLE_DESIGN_V1`(`κ`) | 300‰ | 設計値・未承認(測定値記録なし。validation は arm を拒否する) |
+
+## 他の規則との関係
+
+| 規則 | 扱い |
+| --- | --- |
+| RFC-0017 の資格審査 | fence `palw_model_tier_v1` の下では到達しない。全ての資格 read は「対象外」になり、inner 74/75 の審査 object は拒否され、sweep は何もしない。`palw_model_eligibility_v1` は、tier fence が同じ高さ以下にあるときだけ arm できる(validation) |
+| RFC-0017 の Probation に基づく SecurityCertified 不許可(U-2 の bar) | 対象が存在しないため削除した。Gate C の claim 単位認証だけが安全性の gate である。Gate C 自体は弱めていない |
+| RFC-0016 の entrant reserve(`ε`)と RFC-0017 の Probation 予算 | tier fence の下では審査も昇格もなく entrant が存在しないため、無意味になる。`ε = 0` とする。`κ` が tier の唯一の上限である |
+| ADR-0177 の配分 | `c_m` を `A_m` に一度だけ掛け、`κ` を適用する(`roll_epoch_v3_tiered`) |
+| ADR-0175 | `ApprovedModels` は追加のみ。membership は class 自身の artifact root と一致しなければならない |
+
+## 実装(休眠、未 build、未試験)
+
+* **module:** `consensus/core/src/palw_model_tier_v1.rs`(単体試験 source `palw_model_tier_v1/tests.rs`)。
+* **fence:** `Params::palw_model_tier_v1: Option<PalwModelTierFenceV1>`。
+  * fence の値は、genesis list、年次 list(それぞれの有効化高さ付き)、`c`、`κ` である。
+  * 全 preset で `None`。identity では collapse、named list、Some-only の fingerprint(list と値を高さの横に書く)、visitor(各年次 list の有効化高さを含む)。
+  * validation:
+    * 追加のみを検査する。同じモデル ID の再掲を拒否する。年次 list は fence 以後で、有効化高さが厳密に増加しなければならない。
+    * 配分 fence と RFC-0018 Gate C が同じ高さ以下にあることを要求する。
+    * その上で arm を拒否する。
+  * fork-id の probe 名と、state params の mirror(`#[borsh(skip)]`)がある。
+* **狭い interface:** `palw_model_tier_v1(state, params, class) -> PalwModelTierV1`(`_at_v1` は高さ指定版、`_of_model_v1` は配分 model key 版)。RFC02 の登録 lane と、RFC-0019 の年次カタログ(`ApprovedModels(h)` をカタログに置き換える)が使う。
+* **配分:** `PalwBondBudgetStateV1::roll_epoch_v3_tiered`(fold は tier fence 以後で使う)。
+* **RPC:** registry 行(wire version 4、`RpcPalwModelLifecycle` の proto field 46/47、この message 内の番号)に `modelTier` と `modelTierPermille` を載せる。
+* **新しい番号:** object tag、kernel inner kind、aux table、RPC op、`messages.proto` 番号はいずれも割り当てていない。
+* **RFC-0019 による置き換え(2026-10-15、branch `integ/rfc0019-annual-catalog`):** fence の値の genesis list と年次 list は、[RFC-0019](../rfc/0019-annual-model-upgrade.md) の年次モデルカタログの連鎖 `PalwModelTierFenceV1::catalogs`(`AnnualModelCatalogV1` を `previous_catalog_root` でつなぐ。genesis = edition 0)に置き換えた。並行する list は残さない。階層の API(`palw_model_tier_v1`、`_at_v1`、`_of_model_v1`、`palw_model_tier_of_v1`、係数・重み・cap)は呼出元から見て不変。`PalwTierSourceV1::AnnualFork` は `index` ではなく `edition` を持つ。identity では、まだ有効でない edition を中身ごと外し(旧新の build が切替まで同じ identity)、fork id は各 edition の高さで gate する(RFC-0019 §7.2–7.3)。上の「追加のみ」の検査は、連鎖全体での class id の一意性・root の連鎖・高さの厳密な増加として連鎖の検証に入った。
+
+## 試験 source
+
+| 要件 | 試験 |
+| --- | --- |
+| 登録モデルは登録時から審査なしで 0.3。何年後でも 0.3 | `palw_model_tier_v1/tests.rs` `a_registered_model_is_0_3_from_registration_with_no_review_and_forever`。fold 側 `palw_state_v2/tests/model_eligibility_fold_v1.rs` `round5_no_model_review_under_the_tier_fence_and_a_registered_model_stays_0_3` |
+| 1.0 になる経路は年次フォークの指定だけ | `only_an_annual_fork_listing_makes_1_0` |
+| 年次 list は追加のみで上書きしない | `an_annual_list_only_adds_and_never_re_roots_a_model` |
+| 係数は一度だけ(0.09 にならない) | `c_m_is_applied_once_never_0_09` |
+| N 個登録しても tier の合計は増えない | `n_registrations_never_raise_the_registered_tier_total` |
+| どの階層でも合意 credit に SecurityCertified が必要 | `palw_rfc0018_v1/tests.rs` `rfc18_round5_every_tier_needs_security_certified_and_none_is_exempt` |
+| reorg・IBD・restart で一貫する | `the_tiered_roll_is_the_same_after_reorg_ibd_and_restart`、fold 試験の carriage round-trip |
+| fence は休眠で、arm すると拒否される | `the_fence_is_dormant_some_only_and_refused_when_armed` |
+
+## 追記(2026-10-16 ユーザー決定):RFC-0017 の方針を採用した理由
+
+**ユーザーが追加したモデルが共有されているという前提は、保証できない。**
+- 追加モデル(add model)の重みが、miner や検証者の間で実際に共有されていることを、チェーンで保証する方法は無い。
+- Torrent などの共有の仕組みを作っても、「誰がそれを検証するのか」という問題が残る。
+- 取得が遅いとき、それが攻撃による遅延なのか、正直な事情によるものなのかを判別できない。
+- このため、共有を審査・検証する仕組みは採らない(PRINCIPLES §9 のモデル単位の検証不採用と同じ理由)。
+
+**解決:追加モデルの報酬とブロック生成の権利を 0.3 倍にする。**
+- miner bond から生じるブロックと報酬には上限がある。不正をして高速に claim しても、実際に計算して claim しても、どちらも上限に当たる。つまり bond が時間内にできる claim の量は、どちらでも変わらない(ADR-0176、RFC-0016)。
+- この制約のもとでは、0.3 倍の追加モデルは 1.0 倍の genesis・年次フォークのモデルより不利である。追加モデルで攻撃を成立させるには、より多くの bond が要る。
+- この性質を理由に本設計を採用した。モデル単位の検証や共有の証明に頼らず、bond による上限と階層係数で、共有を保証できない追加モデルの影響を抑える。
+
+**前提として肝心なこと:不正による損失が利益を上回る。**
+- claim を 1 回不正すれば slash される。
+- その slash による損失は、不正によって得られる利益を上回らなければならない(ADR-0176 の bond 予算、ADR-0032 の告発者取り分の上限と合わせて評価する)。
+- この条件が崩れる構成では、0.3 倍の不利だけでは抑止にならない。
+
+## 追記(2026-10-16 ユーザー決定):Position は追加モデルだけ
+
+genesis・年次フォークのモデル(1.0)は、Model Position 化できない。Position を持てるのは、追加モデル(0.3)だけである。
+正規モデルの指定から先行者利益を生まないためである。規則と実装は [ADR-0162 の 2026-10-16 改定](0162-the-pair-opens-on-a-virtual-reserve.md)。
+~~~~~~~~
+<!-- ADR_SOURCE_END:0179-model-tiers-genesis-annual-1-0-registered-0-3.md -->
+
+</details>
+

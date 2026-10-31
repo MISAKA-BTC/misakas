@@ -1,0 +1,15 @@
+    Blocking waiting for file lock on build directory
+   Compiling kaspa-utils v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/utils)
+   Compiling misaka-palw-sdk v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/misaka/palw/sdk)
+    Checking kaspa-hashes v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/crypto/hashes)
+    Checking kaspa-math v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/math)
+    Checking kaspa-merkle v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/crypto/merkle)
+    Checking kaspa-muhash v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/crypto/muhash)
+    Checking misaka-palw-panel v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/misaka/palw/panel)
+    Checking kaspa-consensus-core v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/consensus/core)
+    Checking kaspa-txscript v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/crypto/txscript)
+    Checking misaka-palw-tir-exec v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/misaka/palw/tir/exec)
+    Checking kaspa-pq-validator-core v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/misaka/pq/validator-core)
+    Checking misaka-palw-base0 v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/misaka/palw/base0)
+    Checking misaka-palw-tir-lower v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/misaka/palw/tir/lower)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 10m 37s

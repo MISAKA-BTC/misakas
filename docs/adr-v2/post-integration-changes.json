@@ -1,0 +1,40 @@
+{
+  "schema": "misaka.docs.post-integration-metadata-changes.v1",
+  "adoption": "2026-10-31 user: 両案を採択し、実装を進める",
+  "documents": [
+    "docs/rfc/0043-wide-q24-llm-output.md",
+    "docs/adr/0211-wide-q24-llm-output.md"
+  ],
+  "changes": [
+    {
+      "path": "docs/rfc/INDEX.md",
+      "baseline_sha256": "f0d8dd00070b4a17cda91c6779d4d3fd7973e7c38497e44d61b350dff5b7c6de",
+      "updated_sha256": "82948aa1f8de893decc2752d887e35d178748de638a73bae0526e9f1ea8a423b",
+      "reason": "Register user-adopted RFC-0043 / ADR-0211 and regenerate current navigation; original numbered RFC/ADR source files and appendices remain protected."
+    },
+    {
+      "path": "docs/rfc/TOPICS.md",
+      "baseline_sha256": "7fa9f05d0f292d97319137f2fc5bd66c72aff6bb0fbce1e85e2fd16708603e7f",
+      "updated_sha256": "b53c9638f1ebc60d88c1a5fdc36c877d5f8430b837b2761d074945caf28b721d",
+      "reason": "Register user-adopted RFC-0043 / ADR-0211 and regenerate current navigation; original numbered RFC/ADR source files and appendices remain protected."
+    },
+    {
+      "path": "docs/rfc-v2/README.md",
+      "baseline_sha256": "56f5a86a7a413a3d483fa478730222eb8319df2e1a301dd8891372c589185d8d",
+      "updated_sha256": "aab57ba207ec24c9067191460a1f81d5d7dda602eadc32bd6c00502f9228dbba",
+      "reason": "Register user-adopted RFC-0043 / ADR-0211 and regenerate current navigation; original numbered RFC/ADR source files and appendices remain protected."
+    },
+    {
+      "path": "docs/rfc-v2/registry.json",
+      "baseline_sha256": "e3e1b19a8ed7b23128e1051257a195c88680a0a3bd428fc664d2070d907ad2b3",
+      "updated_sha256": "182f96575448eebbda5428b6108269c02e8fc3cd4983734721804a706d926ff9",
+      "reason": "Register user-adopted RFC-0043 / ADR-0211 and regenerate current navigation; original numbered RFC/ADR source files and appendices remain protected."
+    },
+    {
+      "path": "docs/maintenance/numbering.md",
+      "baseline_sha256": "f4f2c916f512a2b59a0c4d231fc238c5196182c1ccc1caac0abe2f7c3c3c9481",
+      "updated_sha256": "d3706dba32a87019d5cecbb09acf23c439bfbd18993bb0181ede33a3ed05d3eb",
+      "reason": "Register user-adopted RFC-0043 / ADR-0211 and regenerate current navigation; original numbered RFC/ADR source files and appendices remain protected."
+    }
+  ]
+}

@@ -2,6 +2,8 @@
 
 [番号順](INDEX.md) / [入口](README.md)。分類は探索用で、採用状態・権威の順位ではありません。
 
+> **旧番号の履歴索引。** 現行の閲覧・更新先は [ADR v2](../adr-v2/README.md)。[旧→新対応表](../adr-v2/MAPPING.md)。
+
 ## Consensus / architecture
 
 - [ADR-0005 — Mass / DoS policy for ML-DSA P2PKH transactions](0005-mass-policy.md)
@@ -112,6 +114,7 @@
 - [ADR-0203 — 認証付き PALW state map と行単位アクセス](0203-authenticated-palw-state-map-and-row-access.md)
 - [ADR-0205 — decode 済みの回答は二度支払わない](0205-a-decoded-answer-is-not-paid-twice.md)
 - [ADR-0208 — 再利用 prefix の生成元 identity を明示する案](0208-authenticated-prefix-work-dependencies.md)
+- [ADR-0211 — 学習済みcheckpointのlogit範囲を損なわず扱う](0211-wide-q24-llm-output.md)
 
 ## EVM / wallet
 
@@ -185,6 +188,7 @@
 - [ADR-0179 — モデル階層: genesis・年次フォーク 1.0、登録モデル 0.3](0179-model-tiers-genesis-annual-1-0-registered-0-3.md)
 - [ADR-0191 — TIR court: dispute-local decomposition for long-context claims (Proposed)](0191-tir-dispute-local-decomposition-long-context.md)
 - [ADR-0210 — 全モデルの新規 producer claim を G14 の 1 席経路へ移す](0210-all-model-g14-panel-one.md)
+- [ADR-0212 — Panelが正常・不正の証拠生成を担い、Minerは結果commitと上限付き対話応答に限定する](0212-positive-court-without-model-prepossession.md)
 
 ## Operations / interfaces / recovery
 

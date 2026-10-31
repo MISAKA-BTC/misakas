@@ -36,6 +36,8 @@ pub const PALW_TIR_PRIM_SET_DOMAIN_V1: &[u8] = misaka_palw_tir::prim::PRIM_SET_I
 pub const PALW_TIR_COURT_ROOT_DOMAIN_V1: &[u8] = b"misaka-palw/tir/court-root/v1";
 /// The IR court's semantics version this build implements.
 pub const PALW_TIR_COURT_VERSION_V1: u16 = 1;
+/// Explicit wide output court. Never selected by shipped presets.
+pub const PALW_TIR_COURT_VERSION_WIDE_Q24_V2: u16 = 2;
 
 fn keyed64(key: &[u8], parts: &[&[u8]]) -> Hash64 {
     let mut state = blake2b_simd::Params::new().hash_length(64).key(key).to_state();
@@ -272,7 +274,7 @@ impl Params {
                 "palw_tir_v1 names a primitive set this build does not adjudicate (prim_set_id is not this build's)",
             ));
         }
-        if fence.court_version != PALW_TIR_COURT_VERSION_V1 {
+        if ![PALW_TIR_COURT_VERSION_V1, PALW_TIR_COURT_VERSION_WIDE_Q24_V2].contains(&fence.court_version) {
             return Err(PalwModeV2Error::Invalid("palw_tir_v1 names an IR court version this build does not implement"));
         }
         fence.ceilings.within_format_caps().map_err(PalwModeV2Error::Invalid)?;

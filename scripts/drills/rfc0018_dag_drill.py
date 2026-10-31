@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""RFC-0018 real-process drivers: three scenarios on owned local nodes, from a plan pinned BEFORE launch.
+"""RFC-0018 real-process drivers: four scenarios on owned local nodes, from a plan pinned BEFORE launch.
 
-  siblings   (§10 T-1) three models, three miners, separate Panels, sibling attempts from the SAME parents:
+  siblings   (§10 T-1) three models, three miners, per-claim Panels, sibling attempts from the SAME parents:
              every sibling retained and merged (selected parent / blue / red), every claim recorded with its own
-             bond and class and carrying block, bound to its own Panel, paid to its own miner.
+             bond and class and carrying block, bound to its own Panel, and licensed. This scenario alone does not
+             establish SecurityCertified or payment; the report states its observed completion stage.
   partition  (§10 T-3) partition, reconnect and a fresh IBD node, with a different per-link delivery delay on every
              link (so the blocks arrive in a different order at every node): one sink, one GHOSTDAG reading of the
              merged blocks, one adopted-claim set, one PALW economic state and one fork-choice standing everywhere.
@@ -30,7 +31,8 @@ Plan (JSON): {
                         "argv": [...]  # mines ONE attempt of its model on its node's current virtual, then exits}},
   "fixtures": {"<name>": [[argv], ...]},          # optional extra finite commands (bootstrap, registrations)
   "expected_consensus_params_id": "<hex>",       # pinned ruleset; a different binary/ruleset is BLOCKED
-  "required_fences": ["palw_..."],               # must be reported active by getPalwNodeStatus.fences (retired only)
+  "required_fences": ["palw_..."],               # must be armed in getPalwFenceSchedule's named view
+  "claim_bonds": ["<txid:index>", ...],          # extra executor bonds to inspect, in addition to miners
   "link_delays_ms": {"A>B": 0, "B>A": 900, ...}, # per directed link delivery delay (arrival-order variation)
   "partition": {"groups": [["A", "C"], ["B", "D"]], "daa_span": 40, "join_role": "Z"},
   "scenario_timeout_s": 900, "probe_timeout_s": 30
@@ -66,11 +68,25 @@ def field(row, *names, default=None):
     return default
 
 
+def panel_seats_for_claim(reply, claim_id, class_id):
+    """Read the current GetPalwPanelAssignments response, bound to both subjects."""
+    assert reply.get('available') and not reply.get('truncated'), 'complete panel read required'
+    assignments = reply.get('assignments', [])
+    assert len(assignments) == 1, 'exactly one assignment for the requested claim'
+    assignment = assignments[0]
+    assert norm(assignment['claimId']) == norm(claim_id), 'panel assignment must name its own claim'
+    assert norm(assignment['classId']) == norm(class_id), 'panel assignment must name its own model'
+    seats = assignment.get('seats')
+    assert seats, 'the panel read must carry seats'
+    return sorted(norm(x['seatId']) for x in seats)
+
+
 class DelayedLink:
     """Opaque loopback P2P link with a fixed per-direction delivery delay; `cut` closes only its own sockets."""
 
-    def __init__(self, target, delay_ms):
-        self.target, self.delay = target, delay_ms / 1000.0
+    def __init__(self, target, delay_ms, reverse_delay_ms=0):
+        assert delay_ms >= 0 and reverse_delay_ms >= 0, 'link delays are nonnegative'
+        self.target, self.delay, self.reverse_delay = target, delay_ms / 1000.0, reverse_delay_ms / 1000.0
         self.enabled, self.closed = threading.Event(), threading.Event()
         self.lock, self.connections = threading.Lock(), set()
         self.listener = socket.socket()
@@ -100,16 +116,17 @@ class DelayedLink:
             with self.lock:
                 self.connections.update((incoming, outgoing))
             with selectors.DefaultSelector() as poll:
-                poll.register(incoming, selectors.EVENT_READ, outgoing)
-                poll.register(outgoing, selectors.EVENT_READ, incoming)
+                poll.register(incoming, selectors.EVENT_READ, (outgoing, self.delay))
+                poll.register(outgoing, selectors.EVENT_READ, (incoming, self.reverse_delay))
                 while self.enabled.is_set() and not self.closed.is_set():
                     for event, _ in poll.select(.2):
                         data = event.fileobj.recv(65536)
                         if not data:
                             return
-                        if self.delay and event.fileobj is incoming:
-                            time.sleep(self.delay)  # this direction delivers late: a different arrival order downstream
-                        event.data.sendall(data)
+                        destination, delay = event.data
+                        if delay:
+                            time.sleep(delay)  # each direction has the plan's own delivery delay
+                        destination.sendall(data)
         except OSError:
             pass
         finally:
@@ -214,17 +231,69 @@ class Drill:
             dag = rpc.call('getBlockDagInfo')
             node = rpc.call('getPalwNodeStatus')
             sink = rpc.call('getBlock', {'hash': dag['sink'], 'includeTransactions': False})['block']
-            claims = rpc.call('getPalwClaims', {})
+            claims = self.read_claims(rpc)
+            settlement = rpc.call('getPalwSettlement', {'daaScore': 0})
+            if not settlement.get('available'):
+                raise Blocked('%s cannot serve PALW settlement' % role)
+            state = rpc.call('getPalwStateCarriage', {'blockHash': dag['sink'], 'offset': 0, 'limitBytes': 1024})
+            if not state.get('available') or not state.get('stateRoot'):
+                raise Blocked('%s cannot serve the pinned PALW state root' % role)
             after = rpc.call('getBlockDagInfo')
             assert after['sink'] == dag['sink'], 'the sink moved during the probe; retry'
         finally:
             rpc.close()
-        row = {'role': role, 'dag': dag, 'node': node, 'sinkHeader': sink['header'], 'claims': claims}
+        row = {'role': role, 'dag': dag, 'node': node, 'sinkHeader': sink['header'], 'claims': claims,
+               'stateRoot': state['stateRoot'], 'settlement': settlement}
         self.observations.append(row)
         return row
 
+    def read_claims(self, rpc):
+        # This RPC is per bond, not a global scan. Include terminal rows: otherwise
+        # a successful Final disappears from the observation we are comparing.
+        bonds = {norm(b) for b in self.plan.get('claim_bonds', [])}
+        bonds.update(norm(m['bond']) for m in self.plan.get('miners', {}).values())
+        if not bonds:
+            raise Blocked('the plan must name miners or claim_bonds for per-bond claim reads')
+        claims = {}
+        for bond in sorted(bonds):
+            reply = rpc.call('getPalwClaims', {'bond': bond, 'role': 'executor', 'includeTerminal': True, 'limit': 0})
+            if not reply.get('available') or reply.get('truncated'):
+                raise Blocked('claim read unavailable or truncated for bond %s' % bond)
+            for row in reply['claims']:
+                cid = row['claimId']
+                assert cid and norm(row['executorBond']) == norm(bond), 'claim read must name its queried executor'
+                assert cid not in claims, 'duplicate claim id in per-bond reads'
+                claims[cid] = row
+        return {'claims': list(claims.values())}
+
     def block(self, role, block_hash):
         return self.call(role, 'getBlock', {'hash': block_hash, 'includeTransactions': True})['block']
+
+    def sibling_colours(self, role, sink, base, siblings, common_parents=None):
+        # A normal template can take several join blocks to include all tips.
+        # Inspect the actual DAG back to the common base, rather than calling a
+        # block absent from the last mergeset "IN_PAST" without checking it.
+        roots = set(common_parents or [base])
+        assert base in roots, 'the common parent set includes the common base'
+        pending, seen, colours = [sink], set(), {}
+        bound = self.plan.get('ancestry_block_limit', 4096)
+        while pending:
+            block_hash = pending.pop()
+            if block_hash in roots or block_hash in seen:
+                continue
+            assert len(seen) < bound, 'sibling ancestry exceeds the plan bound'
+            seen.add(block_hash)
+            block = self.block(role, block_hash)
+            verbose = block['verboseData']
+            for colour, hashes in [('SELECTED_PARENT', [verbose['selectedParentHash']]),
+                                   ('BLUE', verbose['mergeSetBluesHashes']), ('RED', verbose['mergeSetRedsHashes'])]:
+                for h in hashes:
+                    if h in siblings.values():
+                        colours.setdefault(h, colour)
+            pending.extend(block['header']['parentsByLevel'][0])
+        assert set(siblings.values()) <= seen, 'every sibling must actually be in the joined DAG past'
+        assert set(siblings.values()) <= set(colours), 'every sibling must have an observed GHOSTDAG attribution'
+        return {name: colours[h] for name, h in siblings.items()}
 
     # ---- links -----------------------------------------------------------------------------------------------------
 
@@ -235,7 +304,8 @@ class Drill:
             return self.links[key]
         host, port = self.plan['nodes'][dst]['p2p'].split(':')
         assert host == '127.0.0.1', 'loopback peers only'
-        link = DelayedLink((host, int(port)), self.plan.get('link_delays_ms', {}).get(key, 0))
+        delays = self.plan.get('link_delays_ms', {})
+        link = DelayedLink((host, int(port)), delays.get(key, 0), delays.get('%s>%s' % (dst, src), 0))
         link.enabled.set()
         self.links[key] = link
         ip, p = link.address.rsplit(':', 1)
@@ -263,12 +333,18 @@ class Drill:
     # ---- checks ----------------------------------------------------------------------------------------------------
 
     def ruleset(self, roles):
+        pinned = norm(self.plan.get('expected_consensus_params_id'))
+        if not pinned:
+            raise Blocked('the plan must pin expected_consensus_params_id before launch')
         for role in roles:
             node = self.probe(role)['node']
-            pinned = norm(self.plan.get('expected_consensus_params_id'))
-            if pinned and norm(field(node, 'consensusParamsId')) != pinned:
+            if norm(field(node, 'consensusParamsId')) != pinned:
                 raise Blocked('%s runs a ruleset other than the pinned one' % role)
-            active = set(field(node, 'activeFences', 'fences', default=[]) or [])
+            response = self.call(role, 'getPalwFenceSchedule', {})
+            if not response.get('available') or not response.get('found'):
+                raise Blocked('%s cannot serve its named fence schedule' % role)
+            schedule = json.loads(response['viewJson'])
+            active = {f['name'] for f in schedule['fences'] if f['armed']}
             missing = [f for f in self.plan.get('required_fences', []) if f not in active]
             if missing:
                 raise Blocked('%s does not report %s active: this binary/ruleset cannot run the scenario (arms nothing)' % (role, missing))
@@ -289,10 +365,9 @@ class Drill:
         reading = {json.dumps([field(v, 'selectedParentHash'), sorted(field(v, 'mergeSetBluesHashes', default=[]) or []),
                                sorted(field(v, 'mergeSetRedsHashes', default=[]) or [])]) for v in verbose}
         assert len(reading) == 1, 'nodes read the sink mergeset differently (selected parent / blues / reds)'
-        claim_sets = {json.dumps(sorted(self.claim_rows(row))) for row in rows}
-        assert len(claim_sets) == 1, 'the adopted claim sets differ'
-        economics = {json.dumps([field(row['node'], 'palwStateRoot', 'stateRoot'), field(row['node'], 'safeFrontierBlueScore'),
-                                 field(row['node'], 'safeWeight'), field(row['node'], 'liveTotal')]) for row in rows}
+        claim_sets = {json.dumps(self.claim_rows(row), sort_keys=True) for row in rows}
+        assert len(claim_sets) == 1, 'the adopted claim records differ'
+        economics = {json.dumps([row['stateRoot'], row['settlement']], sort_keys=True) for row in rows}
         assert len(economics) == 1, 'the PALW economic state / fork-choice standing differs'
         return rows
 
@@ -309,8 +384,8 @@ class Drill:
         self.fixture('bootstrap')
         base = self.wait(lambda: self.converged(roles), 'a common tip before the siblings')[0]['dag']['sink']
         miners = self.plan['miners']
-        assert len({m['model'] for m in miners.values()}) >= 3, 'three distinct models'
-        assert len({m['bond'] for m in miners.values()}) >= 3, 'three distinct miners (bonds)'
+        assert len({norm(m['model']) for m in miners.values()}) >= 3, 'three distinct models'
+        assert len({norm(m['bond']) for m in miners.values()}) >= 3, 'three distinct miners (bonds)'
         assert len({m['node'] for m in miners.values()}) >= 3, 'three distinct producer nodes'
         # Isolate the producer nodes so each mines on the SAME base, then run the three miners concurrently.
         producers = sorted({m['node'] for m in miners.values()})
@@ -330,29 +405,27 @@ class Drill:
             t.join()
         if failures:
             raise Blocked('a miner fixture failed: %r' % failures)
-        siblings = {}
+        siblings, parent_sets = {}, set()
         for name, miner in miners.items():
             tips = self.call(miner['node'], 'getBlockDagInfo')['tipHashes']
             mined = [t for t in tips if t != base]
             assert len(mined) == 1, '%s: exactly one new tip on its own node' % name
             header = self.block(miner['node'], mined[0])['header']
             assert base in (field(header, 'parentsByLevel', default=[[]])[0] or []), '%s mined on the common base' % name
+            parent_sets.add(tuple(sorted(header['parentsByLevel'][0])))
             siblings[name] = mined[0]
+        assert len(parent_sets) == 1, 'all models must build from the same direct parent set'
         for key in list(self.links):
             self.links[key].enabled.set()
         self.mesh(roles)
         self.fixture('merge')  # e.g. one heartbeat that merges the tips
         rows = self.wait(lambda: self.converged(roles), 'convergence after the siblings')
         sink = rows[0]['dag']['sink']
-        report = {'base': base, 'siblings': siblings, 'colour': {}, 'claims': {}}
-        verbose = field(self.block(roles[0], sink), 'verboseData', default={})
-        chain = [field(verbose, 'selectedParentHash')]
-        blues, reds = field(verbose, 'mergeSetBluesHashes', default=[]) or [], field(verbose, 'mergeSetRedsHashes', default=[]) or []
+        report = {'base': base, 'siblings': siblings,
+                  'colour': self.sibling_colours(roles[0], sink, base, siblings, next(iter(parent_sets))), 'claims': {}}
         claims = self.claim_rows(rows[0])
         by_block = {norm(field(r, 'acceptedBlock', 'carryingBlock')): r for r in claims.values()}
         for name, block in siblings.items():
-            colour = 'SELECTED_PARENT' if block in chain else 'BLUE' if block in blues else 'RED' if block in reds else 'IN_PAST'
-            report['colour'][name] = colour
             row = by_block.get(norm(block))
             assert row is not None, '%s: its claim is recorded (blue or red alike)' % name
             miner = miners[name]
@@ -366,24 +439,18 @@ class Drill:
         panels = {}
         for name in siblings:
             claim_id = norm(field(report['claims'][name], 'claimId', 'id'))
-            panel = self.call(roles[0], 'getPalwPanelAssignments', {'claimId': claim_id})
-            answered = field(panel, 'claimId')
-            if answered is None:
-                raise AssertionError('%s: the panel read names no claim id (missing data is a failure, not the requested id)' % name)
-            assert norm(answered) == claim_id, '%s: the panel answers for its own claim, not %s' % (name, answered)
-            seats = field(panel, 'seats', 'assignments')
-            if not seats:
-                raise AssertionError('%s: the panel read carries no seats (missing data is a failure, never [])' % name)
+            panel = self.call(roles[0], 'getPalwPanelAssignments', {'claimId': claim_id, 'seatId': ''})
+            read_seats = panel_seats_for_claim(panel, claim_id, miners[name]['model'])
             row = self.claim_rows(self.probe(roles[0])).get(claim_id)
             assert row is not None, '%s: its claim row is still served' % name
             assert field(row, 'phase') in ('panel_bound', 'receipt_licensed', 'final', 'voided'), \
                 '%s: the claim is bound (phase %s)' % (name, field(row, 'phase'))
             row_seats = sorted(norm(x) for x in (field(row, 'seats', default=[]) or []))
-            read_seats = sorted(norm(field(x, 'bond', 'seatBond') if isinstance(x, dict) else x) for x in seats)
             assert row_seats and row_seats == read_seats, '%s: the claim row binds exactly the seats the panel read names' % name
             assert norm(field(row, 'bond', 'executorBond')) not in read_seats, '%s: the producer never sits its own panel' % name
             panels[name] = {'claim': claim_id, 'seats': read_seats, 'boundDaa': field(row, 'boundDaa')}
-        # Verification and the transition after it, per claim: a licence (or a void naming the reason) is observed for each.
+        # These are honest-model fixtures: a void is a failure, not successful
+        # verification of parallel model production.
         self.fixture('advance_to_verdict')
         for name, panel in panels.items():
             def verdict(panel=panel):
@@ -392,13 +459,14 @@ class Drill:
             r = self.wait(verdict, '%s: its panel verifies and the claim moves on' % name)
             panel['phase'] = field(r, 'phase')
             panel['voidReason'] = field(r, 'voidReason')
-            if panel['phase'] == 'voided':
-                assert panel['voidReason'], '%s: a void names its reason' % name
+            assert panel['phase'] != 'voided', '%s: honest sibling was voided: %s' % (name, panel['voidReason'])
         # A real per-claim check (each claim bound to its own derived panel above), and the cross-claim disjointness reported apart.
         report['panelsBoundPerClaim'] = len(panels) == len(siblings) and all(p['seats'] for p in panels.values())
         report['panelsDistinctByClaim'] = report['panelsBoundPerClaim']
-        report['panelSeatSetsDisjoint'] = len({json.dumps(p['seats']) for p in panels.values()}) == len(panels)
+        seat_sets = [set(p['seats']) for p in panels.values()]
+        report['panelSeatSetsDisjoint'] = all(not a.intersection(b) for i, a in enumerate(seat_sets) for b in seat_sets[i + 1:])
         report['panels'] = panels
+        report['completionStage'] = 'licensed'
         self.report = report
 
     def scenario_partition(self, retired=False):
@@ -441,13 +509,19 @@ class Drill:
         claims = self.claim_rows(row)
         adversary = {cid: r for cid, r in claims.items() if norm(field(r, 'payout', 'payoutAddress', 'bondPayout')) in adversary_payouts
                      or field(r, 'adversary') is True}
+        if not adversary:
+            raise Blocked('the RPC observations contain no attributable adversary claims; an empty set is not attack evidence')
         def total(key):
-            return sum(int(field(r, key, default=0) or 0) for r in adversary.values())
+            if any(key not in r or r[key] is None for r in adversary.values()):
+                raise Blocked('the node does not expose per-claim %s; missing measurements are not zero' % key)
+            return sum(int(r[key]) for r in adversary.values())
         settlement = self.call(role, 'getPalwSettlement', {'daaScore': 0})
         premise = field(settlement, 'securityCertificationPremise')
         if premise is None:
             raise Blocked('%s does not state the certification premise: Gate C is not in force on this ruleset' % role)
-        frontier_claim = norm(field(row['node'], 'safeFrontierClaim', default=''))
+        if 'safeFrontierClaim' not in row['node']:
+            raise Blocked('the node does not attribute the safe frontier to a claim')
+        frontier_claim = norm(row['node']['safeFrontierClaim'])
         return {
             'safeFrontierMovedByAdversary': bool(frontier_claim) and frontier_claim in adversary,
             'adversarySafeWeight': total('finalWeight'),
@@ -538,12 +612,14 @@ class Drill:
         violations = []
         for role in roles:
             for claim_id, row in self.claim_rows(self.probe(role)).items():
-                certified = field(row, 'independentlyWorkCertified')
-                if certified is None:
-                    raise Blocked('the node does not report Gate C per claim (independentlyWorkCertified): RFC-0018 GAP-R5')
-                if certified is False:
+                status = row.get('securityCertification')
+                if not status:
+                    raise Blocked('the node does not report a governed Gate C state for claim %s' % claim_id)
+                if status != 'certified':
                     for key in ('finalWeight', 'provisionalWeight', 'participationCapital', 'settledAnchorCredit', 'reward'):
-                        if int(field(row, key, default=0) or 0) != 0:
+                        if key not in row or row[key] is None:
+                            raise Blocked('the node does not expose per-claim %s; missing measurements are not zero' % key)
+                        if int(row[key]) != 0:
                             violations.append((role, claim_id, key))
         assert not violations, 'uncertified claims contributed: %r' % violations[:10]
         return {'uncertifiedContributionViolations': 0}

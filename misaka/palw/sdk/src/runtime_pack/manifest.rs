@@ -171,6 +171,9 @@ fn is_legacy_linear_bits(bits: &u8) -> bool {
     *bits == 8
 }
 
+fn legacy_logits_bits() -> u8 { 32 }
+fn is_legacy_logits_bits(bits: &u8) -> bool { *bits == 32 }
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProfileSection {
@@ -183,6 +186,8 @@ pub struct ProfileSection {
     /// Explicit decoder main-weight profile; absent means the legacy 8-bit profile.
     #[serde(default = "legacy_linear_bits", skip_serializing_if = "is_legacy_linear_bits")]
     pub linear_weight_bits: u8,
+    #[serde(default = "legacy_logits_bits", skip_serializing_if = "is_legacy_logits_bits")]
+    pub logits_bits: u8,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context: Option<usize>,
     pub calibration: CalibrationRec,
@@ -516,6 +521,9 @@ impl RuntimePackV1 {
             .is_some_and(|s| misaka_palw_tir_artifact::metadata_v16::MetadataParseProfileV16::parse(s).is_none())
         {
             return Err("unknown converter.metadata_parsing_profile".into());
+        }
+        if !matches!(self.profile.logits_bits, 32 | 64) {
+            return Err("profile.logits_bits must be 32 or 64".into());
         }
         if !matches!(self.profile.linear_weight_bits, 8 | 16) {
             return Err("profile.linear_weight_bits must be 8 or 16".into());

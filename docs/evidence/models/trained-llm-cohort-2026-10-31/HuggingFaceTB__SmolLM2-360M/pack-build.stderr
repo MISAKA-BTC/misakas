@@ -1,0 +1,26 @@
+[    0.0s] hashing config.json
+[    0.0s] hashing model.safetensors
+[    2.5s] hashing tokenizer.json
+[    2.5s] hashing vocab.json
+[    3.1s] LlamaForCausalLM — TIR program v1: 3 blocks, 32 layers, 308 nodes, 67 params, 11 consts (3428 B), 2 states, 13778 bytes encoded
+[    3.1s] frontend: built-in data file `llama` (72f42bf13844d406) (level B), spec 8e6724c01ce74011
+[    3.1s] text-generation: token ids → next-token logits; nothing left out
+[    3.1s] calibrating on 3 sequences, 48 positions
+[   12.8s]   calibration 8/34
+[   22.8s]   calibration 16/34
+[   33.4s]   calibration 24/34
+[   43.0s]   calibration 32/34
+[   48.7s]   calibration 34/34
+[   48.8s] calibration statistics 612 sites, digest f5e02491feb07b1b5ce163d682294778ab2eb26491a677bd7e88256573017bfe (from "three saved natural-text excerpts encoded using this pinned model tokenizer; calibration only")
+[   49.0s] converting
+[   60.1s]   materialise 8/34
+[   65.6s]   materialise 16/34
+[   71.1s]   materialise 24/34
+[   76.3s]   materialise 32/34
+[   78.8s]   materialise 34/34
+[   80.7s] /Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-360M/run/model.palwtir: 1772 tensors, 416.1 MiB in the tensors, 416.2 MiB file; 1794 chunks (1582 distinct); file digest 538e42bcdb9dfd9d8d0658a21925c34e21450991d54b0361a45a2319d4609a474feb5a446087c48fc4c8293167b85a925656378592556d2e9228ba2a2cf3b9ef
+[   82.4s] artifact 538e42bcdb9dfd9d inventory root 041029123feed837
+[   82.4s] conformance streamed: the reference reads one tensor at a time, the typed backend runs over the mapped artifact
+[ 1588.2s] conformance vector 1 of 1
+[ 1588.2s] declaring the class on testnet-12
+[ 1591.4s] pack c8259df323b18e3491f18b6aff43c5b15cfc4253e0f46e6c3c9eb352ec36527c written to /Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-360M/run/pack

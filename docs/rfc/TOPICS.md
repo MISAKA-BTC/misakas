@@ -2,6 +2,8 @@
 
 [番号順](INDEX.md) / [入口](README.md)。分類は探索用で、採用状態・権威の順位ではありません。
 
+> **旧番号の履歴索引。** 現行の閲覧・更新先は [RFC v2](../rfc-v2/README.md)。[旧→新対応表](../rfc-v2/MAPPING.md)。
+
 ## Consensus / architecture
 
 - [RFC-0001 — PALW 推論サーフェスの欠落機能 — 決定論的な生成制御・サービング・入力拡張の設計](0001-palw-inference-surface-gaps.md)
@@ -15,6 +17,7 @@
 - [RFC-0036 — 認証付き PALW state map と行単位アクセス](0036-authenticated-palw-state-map-and-row-access.md)
 - [RFC-0038 — free-prompt の回答トークンを支払済み計算として記録する(FPA1 carriage)](0038-palw-fp-answer-accounting.md)
 - [RFC-0040 — 再利用 prefix の生成元を署名済み work identity で拘束する](0040-authenticated-prefix-work-dependencies.md)
+- [RFC-0043 — 学習済みLLMの広いQ24 logit表現](0043-wide-q24-llm-output.md)
 
 ## EVM / wallet
 
@@ -64,4 +67,5 @@
 - [RFC-0031 — 共有courtのinitial notice境界](0031-shared-court-initial-notice-boundary.md)
 - [RFC-0032 — 共有courtの終端materialと非独占提出](0032-shared-court-terminal-material-and-nonblocking-ingress.md)
 - [RFC-0035 — shared court originalの実原資と役割別同意](0035-court-original-funded-contract-and-role-consent.md)
+- [RFC-0044 — Positive Court：Panelによる正常計算証拠の生成・提出と、Minerの上限付き対話応答](0044-positive-court-full-coverage.md)
 

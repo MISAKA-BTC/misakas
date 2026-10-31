@@ -129,8 +129,19 @@ fn a_model_whose_calibrated_logits_pass_the_bound_is_refused() {
     let calib = fidelity::random_sequences(prep.hl.vocab, 6, 32, 7);
     let stats = fidelity::calibrate(&prep.hl, &loader, &calib, &quiet).expect("calibrate");
     match materialise(&prep.lowered, &prep.hl, &loader, &stats, &QuantPolicy::default(), &quiet) {
-        Err(LowerError::NotLowerable(m)) => assert!(m.contains("LOGITS_Q24_V1") && m.contains("128"), "{m}"),
+        Err(LowerError::NotLowerable(m)) => {
+            assert!(m.contains("LOGITS_Q24_V1") && m.contains("128"), "{m}");
+            assert!(m.contains("Trained checkpoints can exceed"), "{m}");
+            assert!(!m.contains("trained model\'s are far below"), "{m}");
+        }
         other => panic!("expected a NOT_LOWERABLE refusal, got {:?}", other.map(|m| m.logits_scale)),
     }
+    // The separately selected wide storage profile retains Q24 units and the large values.
+    let wide = misaka_palw_tir_lower::lower::lower(&prep.hl, &LowerOpts { logits_bits: 64, ..Default::default() }).unwrap();
+    assert_eq!(wide.program.blocks[wide.program.schedule.post as usize].nodes[wide.program.logits as usize].out.dtype, misaka_palw_tir::DType::I64);
+    let material = materialise(&wide, &prep.hl, &loader, &stats, &QuantPolicy::default(), &quiet).unwrap();
+    assert_eq!(material.logits_scale, Q24);
+    let values = fidelity::int_logits(&wide.program, &material.params, &calib[0], material.logits_scale, &|_| {}).unwrap();
+    assert!(values.iter().flatten().any(|x| x.abs() > 128.0), "wide output must not clip or wrap at the legacy boundary");
     assert!(LOGITS_Q24_REFUSE_AT < 128.0);
 }

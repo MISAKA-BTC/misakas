@@ -1,0 +1,189 @@
+{
+  "schema_version": 1,
+  "namespace": "RFC-v2",
+  "active_count": 15,
+  "legacy_namespace": "RFC",
+  "legacy_range": "0001..0041",
+  "legacy_mode": "immutable-reference-history",
+  "protocol_identifiers_changed": false,
+  "documents": [
+    {
+      "id": "RFC-v2-0001",
+      "file": "0001-inference-and-generative-jobs.md",
+      "title": "推論・生成Job・入出力",
+      "primary_v1": [
+        "RFC-0001",
+        "RFC-0003"
+      ]
+    },
+    {
+      "id": "RFC-v2-0002",
+      "file": "0002-tensor-ir-and-shared-query-data.md",
+      "title": "TIR・Kernel・共有Queryデータ",
+      "primary_v1": [
+        "RFC-0002",
+        "RFC-0029"
+      ]
+    },
+    {
+      "id": "RFC-v2-0003",
+      "file": "0003-model-onboarding-and-artifacts.md",
+      "title": "モデル登録・変換・Artifact",
+      "primary_v1": [
+        "RFC-0011",
+        "RFC-0013"
+      ]
+    },
+    {
+      "id": "RFC-v2-0004",
+      "file": "0004-model-tiers-and-annual-catalog.md",
+      "title": "モデル二階層・年次カタログ",
+      "primary_v1": [
+        "RFC-0017",
+        "RFC-0019"
+      ]
+    },
+    {
+      "id": "RFC-v2-0005",
+      "file": "0005-bounded-resources-and-long-context.md",
+      "title": "資源上限・長文脈メモリ・計測",
+      "primary_v1": [
+        "RFC-0020"
+      ]
+    },
+    {
+      "id": "RFC-v2-0006",
+      "file": "0006-panels-and-probabilistic-verification.md",
+      "title": "Panel参加・抽選・確率的検証・認証Receipt",
+      "primary_v1": [
+        "RFC-0006",
+        "RFC-0007",
+        "RFC-0010"
+      ]
+    },
+    {
+      "id": "RFC-v2-0007",
+      "file": "0007-claims-exec-and-answer-accounting.md",
+      "title": "Claim・EXEC・仕事量・回答会計",
+      "primary_v1": [
+        "RFC-0008",
+        "RFC-0038"
+      ]
+    },
+    {
+      "id": "RFC-v2-0008",
+      "file": "0008-claim-dependencies-and-liability.md",
+      "title": "Claim依存・Prefix生成元・未解決責任",
+      "primary_v1": [
+        "RFC-0023",
+        "RFC-0040"
+      ]
+    },
+    {
+      "id": "RFC-v2-0009",
+      "file": "0009-remote-client-and-sdk.md",
+      "title": "Remote Client・SDK・非保管型操作",
+      "primary_v1": [
+        "RFC-0009"
+      ]
+    },
+    {
+      "id": "RFC-v2-0010",
+      "file": "0010-dag-consensus-and-native-settlement.md",
+      "title": "DAG合意・Gate C・Native EVM決済",
+      "primary_v1": [
+        "RFC-0012",
+        "RFC-0018"
+      ]
+    },
+    {
+      "id": "RFC-v2-0011",
+      "file": "0011-bond-budgets-fees-and-payments.md",
+      "title": "Bond予算・配分・Fee同意・決済会計",
+      "primary_v1": [
+        "RFC-0016",
+        "RFC-0039"
+      ]
+    },
+    {
+      "id": "RFC-v2-0012",
+      "file": "0012-authenticated-state-storage-and-ibd.md",
+      "title": "認証State・保存・Pruning・IBD",
+      "primary_v1": [
+        "RFC-0036",
+        "RFC-0037"
+      ]
+    },
+    {
+      "id": "RFC-v2-0013",
+      "file": "0013-permissionless-bootstrap-and-release.md",
+      "title": "公開Bootstrap・Genesis・有効化とRelease接続",
+      "primary_v1": [
+        "RFC-0041"
+      ]
+    },
+    {
+      "id": "RFC-v2-0014",
+      "file": "0014-court-master-contract.md",
+      "title": "Court統合契約 — 受付・対話・裁定・資金・責任終了",
+      "primary_v1": [
+        "RFC-0014",
+        "RFC-0024",
+        "RFC-0025",
+        "RFC-0026",
+        "RFC-0028",
+        "RFC-0030",
+        "RFC-0031",
+        "RFC-0032",
+        "RFC-0033",
+        "RFC-0034",
+        "RFC-0035"
+      ]
+    },
+    {
+      "id": "RFC-v2-0015",
+      "file": "0015-freeze-deferred-rejected-and-governance.md",
+      "title": "設計凍結・延期・不採用・未採択・変更管理",
+      "primary_v1": [
+        "RFC-0004",
+        "RFC-0005",
+        "RFC-0015",
+        "RFC-0021",
+        "RFC-0022",
+        "RFC-0027"
+      ]
+    }
+  ],
+  "post_consolidation_documents": [
+    {
+      "kind": "adr",
+      "id": "ADR-0210",
+      "path": "docs/adr/0210-all-model-g14-panel-one.md"
+    },
+    {
+      "kind": "rfc",
+      "id": "RFC-0042",
+      "path": "docs/rfc/0042-all-model-g14-panel-one.md"
+    },
+    {
+      "kind": "rfc",
+      "id": "RFC-0043",
+      "path": "docs/rfc/0043-wide-q24-llm-output.md"
+    },
+    {
+      "kind": "adr",
+      "id": "ADR-0211",
+      "path": "docs/adr/0211-wide-q24-llm-output.md"
+    },
+    {
+      "kind": "rfc",
+      "id": "RFC-0044",
+      "path": "docs/rfc/0044-positive-court-full-coverage.md"
+    },
+    {
+      "kind": "adr",
+      "id": "ADR-0212",
+      "path": "docs/adr/0212-positive-court-without-model-prepossession.md"
+    }
+  ]
+}

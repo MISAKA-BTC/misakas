@@ -242,8 +242,7 @@ fn spec_of(c: &Case, card: usize, activation_daa: u64) -> Spec {
 /// counted against the network's ladder, the chain's own target and slash value), UNSIGNED.
 fn build(env: &Env, state: &PalwChainStateV2, s: &Spec) -> Obj {
     let (target, slash, ladder) = env.terms(state);
-    let facts = PalwTirJobFactsV1::of_class(&s.class, s.class.class_id(&s.root)).expect("decodes");
-    let canonical = palw_tir_job_context_v1(&facts, palw_tir_attempt_canonical_v1(&s.class).expect("wide enough"));
+    let canonical = kaspa_consensus_core::palw_tir_attempt_v1::palw_tir_canonical_context_v1(&s.class,s.class.class_id(&s.root),palw_tir_attempt_canonical_v1(&s.class).expect("wide enough")).expect("decodes");
     palw_tir_post_genesis_registration_v1(
         s.class.clone(),
         canonical,
@@ -1476,6 +1475,89 @@ async fn g14_gate_and_chain_agree_across_the_shipped_fence_schedule() {
 /// root is synthetic (no weights were loaded) — registration never reads weights.
 fn real_cases() -> Vec<Case> {
     real_cases_in("")
+}
+
+/// Full-weight HF artifact exported by the SDK, rather than the shape-only fixtures below.
+/// Exercises real carrier signing, mempool, block insertion, persisted rows and replay
+/// on a private harness. This does not grant public-network consensus credit.
+#[tokio::test]
+#[ignore = "requires MISAKA_HF_REGISTRATION_FIXTURE from export-tir-registration-fixture"]
+async fn g14_downloaded_hf_artifact_registration_mined_and_replayed() {
+    use std::io::Read;
+    let path = std::env::var("MISAKA_HF_REGISTRATION_FIXTURE").expect("a real-artifact fixture path is required");
+    let mut bytes = Vec::new();
+    std::fs::File::open(path).expect("fixture exists").take((8 << 20) + 1).read_to_end(&mut bytes).unwrap();
+    assert!(bytes.len() <= 8 << 20, "bounded fixture");
+    let v: serde_json::Value = serde_json::from_slice(&bytes).expect("fixture JSON");
+    assert_eq!(v["schema"], "misaka.tir.real-artifact-registration-fixture.v1");
+    assert_eq!(v["weights_loaded"], true, "shape-only roots are not this acceptance case");
+    assert!(v["artifact_bytes"].as_u64().unwrap() > 0);
+    assert_eq!(v["artifact_sha256"].as_str().unwrap().len(), 64);
+    let root = |key: &str| Hash64::from_bytes(unhex(v[key].as_str().unwrap()).try_into().expect("64-byte identity"));
+    let class = PalwTirClassV1 {
+        version: PALW_TIR_CLASS_VERSION_V1,
+        program: unhex(v["program_borsh_hex"].as_str().unwrap()),
+        layout: borsh::from_slice(&unhex(v["layout_borsh_hex"].as_str().unwrap())).expect("layout"),
+        tokenizer_id: root("tokenizer_id_hex"),
+    };
+    let artifact_root = root("artifact_root_hex");
+    assert_eq!(class.class_id(&artifact_root), root("class_id_hex"));
+    assert_eq!(class.layout.max_context as u64, v["max_context"].as_u64().unwrap());
+    let case = Case { name: v["name"].as_str().unwrap().to_string(), class, root: artifact_root, real_root: true };
+    eprintln!(
+        "[hf-registration] {} context={} class={} root={}",
+        case.name,
+        case.class.layout.max_context,
+        case.class.class_id(&case.root),
+        case.root
+    );
+    let mined = if case.class.decode_program().unwrap().wide_logits_q24() {
+        assert_eq!(std::env::var("MISAKA_PRIVATE_WIDE_Q24").as_deref(),Ok("1"),"explicit private wide ruleset required");
+        let (config,_,premine,floats) = t12_tir_config(0);
+        let mut params = config.params.clone();
+        params.palw_tir_v1.as_mut().unwrap().court_version = kaspa_consensus_core::palw_tir_v1::PALW_TIR_COURT_VERSION_WIDE_Q24_V2;
+        params.sync_palw_tir_v1();
+        let config = ConfigBuilder::new(params).skip_proof_of_work().build();
+        config.params.validate_palw_v2().expect("private wide ruleset validates");
+        let PalwConsensusMode::ConsensusV2(bundle) = &config.params.palw_consensus_mode else {unreachable!()};
+        let bundle = bundle.clone();
+        mine_registration_on(Env::over((config,bundle,premine,floats)),&case,2).await
+    } else { mine_registration(&case, 2).await };
+    let (_, state) = mined.env.chain.tip_state();
+    let row = state.class(&mined.class_id).expect("registration persisted");
+    assert_eq!(row.artifact_root, case.root);
+    assert_eq!(row.registrant_bond, Some(mined.env.chain.bonds[mined.card]));
+    assert_eq!(state.tir_class_v1(&mined.class_id), Some(&mined.record));
+    let terms = mined.env.chain.ctx.consensus.palw_v2_registration_terms().expect("registration reads");
+    assert!(terms.registered_class_ids.contains(&mined.class_id));
+    assert!(terms.registered_artifact_roots.contains(&case.root));
+    let replica = fresh_node(&mined);
+    for block in chain_blocks(&mined.env.chain, mined.env.chain.sink()) {
+        arrive(&replica, block, "downloaded HF registration replay").await;
+    }
+    let (_, replayed) = replica.tip_state();
+    assert_eq!(replica.sink(), mined.env.chain.sink());
+    assert_eq!(replayed.state_root(), state.state_root());
+    assert_eq!(replayed.class(&mined.class_id), Some(row));
+    assert_eq!(replayed.tir_class_v1(&mined.class_id), Some(&mined.record));
+    if let Ok(path) = std::env::var("MISAKA_HF_REGISTRATION_REPORT") {
+        let output = std::fs::OpenOptions::new().write(true).create_new(true).open(path).expect("fresh report");
+        serde_json::to_writer_pretty(
+            output,
+            &serde_json::json!({
+                "schema": "misaka.hf-registration-local-acceptance.v1",
+                "name": case.name, "artifact_sha256": v["artifact_sha256"],
+                "artifact_root": case.root.to_string(), "class_id": mined.class_id.to_string(),
+                "max_context": case.class.layout.max_context,
+                "carrier_txid": mined.carrier.id().to_string(),
+                "sink": replica.sink().to_string(), "state_root": replayed.state_root().to_string(),
+                "mempool_accepted": true, "registration_mined": true,
+                "persisted_registry_read": true, "independent_node_replay": true,
+                "public_network": false, "claim_certified": false,
+            }),
+        )
+        .unwrap();
+    }
 }
 
 /// [`real_cases`] from `fixtures/g14/<sub>` (`shipped`: lowered and judged under `palw_t12_shipped_params()` at DAA 5,585).

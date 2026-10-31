@@ -1,0 +1,13 @@
+{
+  "source_snapshot": "misakas-pre(5).zip",
+  "source_snapshot_sha256": "f11e757b2cf49886fc0f9c0998c15129bf03c29f2899c5aa66ee3d0b0367985b",
+  "prior_package": "misakas-rfc-v2-15.zip",
+  "prior_package_sha256": "a52708e0ea7fb3aa2a7d7183d46ab7feae34db287f8131893ee62515bdd0e198",
+  "original_adr_byte_comparison": {
+    "files": 204,
+    "matched": 204,
+    "method": "Read each docs/adr/<complete-filename> directly from the uploaded ZIP and compare with packaged legacy source bytes."
+  },
+  "decision_status_policy": "Copied declarations and scoped amendments; no new policy adoption.",
+  "runtime_tested": false
+}

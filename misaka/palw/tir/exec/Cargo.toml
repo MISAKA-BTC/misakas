@@ -51,6 +51,7 @@ borsh.workspace = true
 rand.workspace = true
 rand_chacha.workspace = true
 serde_json.workspace = true
+libcrux-ml-dsa.workspace = true
 
 [lints]
 workspace = true
