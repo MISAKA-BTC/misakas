@@ -1,0 +1,16 @@
+[package]
+name = "misaka-palw-positive-accounting"
+description = "A5 Positive Court credit and accounting; native integration remains closed"
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+misaka-palw-positive-contract = { path = "../positive-contract" }
+
+[lints]
+workspace = true
