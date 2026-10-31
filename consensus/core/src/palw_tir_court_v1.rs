@@ -551,7 +551,7 @@ fn check_binding(binding: &PalwTirStepBindingV1) -> Result<BindingOutcome, PalwS
     if binding.version != PALW_TIR_STEP_BINDING_VERSION_V1 {
         return Err(bad("unsupported IR binding version"));
     }
-    crate::palw_slash::check_job_context_shape(&binding.job_context).map_err(|_| bad("the job context is not well formed"))?;
+    crate::palw_tir_step_v1::check_tir_context_profile_v2(&binding.job_context, &binding.class).map_err(|_| bad("the job context is not well formed"))?;
     let class_id = binding.class.class_id(&binding.artifact_root);
     if binding.job_context.shape_profile_id != class_id {
         return Err(bad("the job context names another class"));
@@ -606,19 +606,18 @@ fn check_output_leaf(
     }
     let committed = &binding.committed_execution_root;
     let structural = |fault| Ok(Err(convict(committed, PALW_TIR_EVIDENCE_KIND_LEAF, opening.leaf_index, fault)));
-    if preimage.version != PALW_TIR_STEP_LEAF_VERSION_V1 {
-        return structural(PalwStepFaultV1::StepCoordinatesNotCanonical);
-    }
     let Some(index) = v.space.leaf_index(&binding.job_context, &preimage.coord) else {
         return structural(PalwStepFaultV1::StepCoordinatesNotCanonical);
     };
     if index != opening.leaf_index {
         return structural(PalwStepFaultV1::StepLeafIndexNotCanonical);
     }
-    if preimage.values_le.len() != 4 * preimage.value_count as usize {
-        return structural(PalwStepFaultV1::StepBytesNotFourPerValue);
-    }
     let leaf = v.space.leaf_at(&binding.job_context, index).ok_or(PalwStepRefuteError::Unadjudicable)?;
+    let (version, width) = if leaf.dtype == DType::I64 { (2, 8) } else { (PALW_TIR_STEP_LEAF_VERSION_V1, 4) };
+    if preimage.version != version { return structural(PalwStepFaultV1::StepCoordinatesNotCanonical); }
+    if preimage.values_le.len() != width * preimage.value_count as usize {
+        return structural(if leaf.dtype == DType::I64 { PalwStepFaultV1::WideStepBytesNotEightPerValue } else { PalwStepFaultV1::StepBytesNotFourPerValue });
+    }
     if leaf.value_count != preimage.value_count {
         return structural(PalwStepFaultV1::StepValueCountNotCanonical);
     }
@@ -656,6 +655,7 @@ pub fn palw_tir_leaf_interval_v1(space: &PalwTirStepSpaceV1, intervals: &[Vec<In
 }
 
 fn lane(dtype: DType, bytes: &[u8], i: usize) -> Option<i128> {
+    if dtype == DType::I64 { return Some(i64::from_le_bytes(bytes.get(i.checked_mul(8)?..i.checked_mul(8)?.checked_add(8)?)?.try_into().ok()?) as i128); }
     let b = bytes.get(i * 4..i * 4 + 4)?;
     let q = [b[0], b[1], b[2], b[3]];
     Some(if dtype == DType::Idx { u32::from_le_bytes(q) as i128 } else { i32::from_le_bytes(q) as i128 })
@@ -663,7 +663,7 @@ fn lane(dtype: DType, bytes: &[u8], i: usize) -> Option<i128> {
 
 /// The first lane of `bytes` outside `interval`.
 fn first_outside(dtype: DType, bytes: &[u8], interval: Interval) -> Option<u32> {
-    (0..bytes.len() / 4).find(|i| lane(dtype, bytes, *i).is_none_or(|v| !interval.contains(v))).map(|i| i as u32)
+    (0..bytes.len() / if dtype == DType::I64 {8} else {4}).find(|i| lane(dtype, bytes, *i).is_none_or(|v| !interval.contains(v))).map(|i| i as u32)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -987,9 +987,9 @@ fn authenticate_operands(
             return Err(bad("an operand does not precede the disputed leaf"));
         }
         let leaf = v.space.leaf_at(&binding.job_context, index).ok_or(PalwStepRefuteError::Unadjudicable)?;
-        if preimage.version != PALW_TIR_STEP_LEAF_VERSION_V1
+        if preimage.version != if leaf.dtype == DType::I64 {2} else {PALW_TIR_STEP_LEAF_VERSION_V1}
             || preimage.value_count != leaf.value_count
-            || preimage.values_le.len() != 4 * leaf.value_count as usize
+            || preimage.values_le.len() != (if leaf.dtype == DType::I64 {8} else {4}) * leaf.value_count as usize
         {
             return Err(bad("an operand leaf is not well formed"));
         }
@@ -1314,11 +1314,12 @@ fn authenticate_decode_pin(
     let decode = ctx.exact_decode_tokens as usize;
     let (vocab, scheme) = logits_shape(space);
     match pin {
-        PalwDecodeTokenPinV1::TiledV1(d) if scheme == tiled_logits_scheme_id_v1() => {
+        PalwDecodeTokenPinV1::TiledV1(d) if scheme == tiled_logits_scheme_id_v1() || space.program.wide_logits_q24() => {
             if d.generated_token_ids.len() != decode {
                 return Err(bad("the pin's id count is not the context's decode count"));
             }
-            if tiled_logits_outer_root_v1(ctx, decode as u64, &d.rows_root, &d.generated_token_ids) != binding.full_logits_trace_root {
+            let root = if space.program.wide_logits_q24() { crate::palw_logits_q24_v2::outer_root(ctx, decode as u64, &d.rows_root, &d.generated_token_ids) } else { tiled_logits_outer_root_v1(ctx, decode as u64, &d.rows_root, &d.generated_token_ids) };
+            if root != binding.full_logits_trace_root {
                 return Err(bad("the carried ids and rows root do not reproduce the claim's own tiled trace root"));
             }
             Ok(d.generated_token_ids.clone())
@@ -2746,13 +2747,15 @@ pub enum PalwTirTraceEventDisclosureV1 {
     /// The accused event is not in the committed run: a row past the decode count, or a tile past
     /// the row's vocabulary (any tile but 0 on the flat scheme). The binding alone proves it.
     OutOfRange { binding: Box<PalwTirStepBindingV1> },
+    /// Wide Q24, tag 3. Eight-byte lanes and separate hash domains.
+    WideQ24V2 { binding: Box<PalwTirStepBindingV1>, event: crate::palw_logits_q24_v2::WideLogitsEventV2 },
 }
 
 impl PalwTirTraceEventDisclosureV1 {
     /// The IR binding every variant carries — what the identity rule (J-5) reads.
     pub fn binding(&self) -> &PalwTirStepBindingV1 {
         match self {
-            Self::Flat { binding, .. } | Self::Tiled { binding, .. } | Self::OutOfRange { binding } => binding,
+            Self::Flat { binding, .. } | Self::Tiled { binding, .. } | Self::OutOfRange { binding } | Self::WideQ24V2 { binding, .. } => binding,
         }
     }
 
@@ -2763,7 +2766,7 @@ impl PalwTirTraceEventDisclosureV1 {
 
     fn binding_mut(&mut self) -> &mut PalwTirStepBindingV1 {
         match self {
-            Self::Flat { binding, .. } | Self::Tiled { binding, .. } | Self::OutOfRange { binding } => binding,
+            Self::Flat { binding, .. } | Self::Tiled { binding, .. } | Self::OutOfRange { binding } | Self::WideQ24V2 { binding, .. } => binding,
         }
     }
 
@@ -2856,10 +2859,14 @@ pub fn check_tir_trace_event_disclosure_v1(
                 max_step_leaf_count,
             )
         }
+        PalwTirTraceEventDisclosureV1::WideQ24V2 { event, .. } => {
+            if !v.space.program.wide_logits_q24() || event.row != row || event.tile_opening.leaf_index != tile as u64 { return Err(bad("wide event identity/scheme")); }
+            event.authenticate(ctx, &binding.full_logits_trace_root, vocab, max_step_leaf_count).map_err(bad)
+        }
         PalwTirTraceEventDisclosureV1::OutOfRange { .. } => {
             let out = if scheme == flat_logits_scheme_id_v1() {
                 row >= decode || tile != 0
-            } else if scheme == tiled_logits_scheme_id_v1() {
+            } else if scheme == tiled_logits_scheme_id_v1() || v.space.program.wide_logits_q24() {
                 row >= decode || tile as u64 >= tiles
             } else {
                 return Err(bad("this class commits under a scheme no disclosure form names"));
@@ -4685,4 +4692,50 @@ mod inventory_material_tests {
         let other = TirInventoryOpeningVerifierV1::new(&other_program, x.binding.artifact_root).unwrap();
         assert!(other.check(&opening).is_err());
     }
+}
+
+/// Wide Q24 decode court. Sampling is taken from the authenticated job, never from evidence.
+/// The two opened tiles are tied to the same generated IDs and trace root before comparing Q48 keys.
+pub fn check_tir_decode_wide_q24_v2(
+    binding: &PalwTirStepBindingV1,
+    committed: &crate::palw_logits_q24_v2::WideLogitsEventV2,
+    beat: &crate::palw_logits_q24_v2::WideLogitsEventV2,
+    beat_lane: usize,
+    sampling: &crate::palw_decode_select_v2::PalwDecodeSamplingV2,
+    rules: &PalwTirCourtRulesV1,
+) -> Result<PalwStepRefutationVerdictV1, PalwStepRefuteError> {
+    let v = match check_binding(binding)? { BindingOutcome::Convicted(x) => return Ok(x), BindingOutcome::Verified(x) => x };
+    if !v.space.program.wide_logits_q24() || committed.row != beat.row || committed.generated != beat.generated { return Err(bad("wide decode profile/row/ids")); }
+    let vocab = logits_shape(&v.space).0;
+    committed.authenticate(&binding.job_context,&binding.full_logits_trace_root,vocab,rules.max_step_leaf_count).map_err(bad)?;
+    beat.authenticate(&binding.job_context,&binding.full_logits_trace_root,vocab,rules.max_step_leaf_count).map_err(bad)?;
+    let row = committed.row;
+    let id = committed.generated[row as usize] as usize;
+    let verdict = || convict(&binding.committed_execution_root, PALW_DECODE_TOKEN_EVIDENCE_KIND, row as u64, PalwStepFaultV1::DecodeTokenMismatch {position:row});
+    if id >= vocab { return Ok(verdict()); }
+    if beat_lane >= vocab || committed.tile_opening.leaf_index as usize != id / PALW_LOGITS_TILE_LANES || beat.tile_opening.leaf_index as usize != beat_lane / PALW_LOGITS_TILE_LANES { return Err(bad("wide decode lane/tile")); }
+    let a = crate::palw_logits_q24_v2::lane_key(committed.lanes[id % PALW_LOGITS_TILE_LANES],sampling,row,id);
+    let b = crate::palw_logits_q24_v2::lane_key(beat.lanes[beat_lane % PALW_LOGITS_TILE_LANES],sampling,row,beat_lane);
+    if b > a || (b == a && beat_lane < id) { Ok(verdict()) } else { Err(PalwStepRefuteError::NoFaultFound) }
+}
+
+/// Tie the eight-byte step output to the independently committed wide logits trace.
+pub fn check_tir_logits_consistency_wide_q24_v2(
+    binding: &PalwTirStepBindingV1, opening: &PalwStepOpeningV1, preimage: &PalwStepTileLeafV1,
+    event: &crate::palw_logits_q24_v2::WideLogitsEventV2, rules: &PalwTirCourtRulesV1,
+) -> Result<PalwStepRefutationVerdictV1, PalwStepRefuteError> {
+    let v = match check_binding(binding)? { BindingOutcome::Convicted(x) => return Ok(x), BindingOutcome::Verified(x) => x };
+    if !v.space.program.wide_logits_q24() { return Err(bad("wide consistency profile")); }
+    let leaf = match check_output_leaf(binding,&v,opening,preimage,rules.max_step_leaf_count)? {Ok(x)=>x,Err(x)=>return Ok(x)};
+    let PalwTirLeafKindV1::Commit {block,node,first_element,..} = leaf.kind else {return Err(bad("wide consistency is not an output"));};
+    if !v.space.program.is_wide_logits_node(block as usize,node as usize) || leaf.position + 1 - v.job.prefill != event.row || first_element / PALW_LOGITS_TILE_LANES as u64 != event.tile_opening.leaf_index { return Err(bad("wide consistency coordinates")); }
+    event.authenticate(&binding.job_context,&binding.full_logits_trace_root,logits_shape(&v.space).0,rules.max_step_leaf_count).map_err(bad)?;
+    for i in 0..leaf.value_count as usize {
+        let k = first_element as usize % PALW_LOGITS_TILE_LANES + i;
+        let value = event.lanes.get(k).ok_or(bad("wide consistency tile width"))?;
+        if lane(leaf.dtype,&preimage.values_le,i) != Some(*value as i128) {
+            return Ok(convict(&binding.committed_execution_root, PALW_TIR_EVIDENCE_KIND_LOGITS, opening.leaf_index, PalwStepFaultV1::TirLogitsTraceMismatch { value_index:i as u32 }));
+        }
+    }
+    Err(PalwStepRefuteError::NoFaultFound)
 }

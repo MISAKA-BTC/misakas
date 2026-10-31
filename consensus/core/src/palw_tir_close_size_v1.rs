@@ -1156,7 +1156,7 @@ impl<'a> PalwTirClosePriceV1<'a> {
         let mut runs: Vec<u64> = Vec::new();
         let mut last: Option<u64> = None;
         for (i, v) in &reads.steps {
-            bytes += step_preimage_bytes(*v);
+            bytes += self.step_bytes(*v);
             match runs.last_mut() {
                 Some(len) if !every_leaf_a_run && last == Some(i.wrapping_sub(1)) => *len += 1,
                 _ => runs.push(1),
@@ -1164,7 +1164,7 @@ impl<'a> PalwTirClosePriceV1<'a> {
             last = Some(*i);
         }
         for v in &reads.loose_steps {
-            bytes += step_preimage_bytes(*v);
+            bytes += self.step_bytes(*v);
             runs.push(1);
         }
         bytes + runs.iter().map(|len| 4 + 64 * if *len == 1 { self.depth } else { 2 * self.depth }).sum::<u64>()
@@ -1288,17 +1288,20 @@ impl<'a> PalwTirClosePriceV1<'a> {
             }
             last = Some(*i);
         }
-        runs * (step_preimage_bytes(widest) + 4 + 2 * 64 * self.depth)
+        runs * (self.step_bytes(widest) + 4 + 2 * 64 * self.depth)
     }
+
+    fn lane_width(&self) -> u64 { if self.space.program.wide_logits_q24() {8} else {4} }
+    fn step_bytes(&self, values: u32) -> u64 { step_preimage_bytes(values) + (self.lane_width()-4) * values as u64 }
 
     /// One whole close of `reads`, its disputed leaf of `leaf_values` lanes.
     pub fn close(&self, reads: &PalwTirCloseReadsV1, leaf_values: u32) -> u64 {
-        self.frame + 4 * leaf_values as u64 + self.units(reads, false)
+        self.frame + self.lane_width() * leaf_values as u64 + self.units(reads, false)
     }
 
     /// The frame alone: a close that opens nothing, its disputed leaf of `leaf_values` lanes.
     pub fn frame(&self, leaf_values: u32) -> u64 {
-        self.frame + 4 * leaf_values as u64
+        self.frame + self.lane_width() * leaf_values as u64
     }
 
     /// A root claim's frame, as carried: the move object with nothing opened, its leaf of
@@ -1451,7 +1454,7 @@ fn worst_closes_priced(
     // step leaf per run.
     let slack = |reads: &PalwTirCloseReadsV1| {
         let widest = reads.steps.values().chain(reads.loose_steps.iter()).copied().max().unwrap_or(0);
-        step_runs(reads) * (step_preimage_bytes(widest) + 4 + 2 * 64 * price.depth)
+        step_runs(reads) * (price.step_bytes(widest) + 4 + 2 * 64 * price.depth)
     };
     // The work left, shared by the twin's reads and the counting outside them.
     let budget = std::cell::Cell::new(sizing.cap);
@@ -1473,7 +1476,7 @@ fn worst_closes_priced(
         }
     }
     // A leaf priced as a run of its own.
-    let lone = |values: u32| step_preimage_bytes(values) + 4 + 64 * price.depth;
+    let lone = |values: u32| price.step_bytes(values) + 4 + 64 * price.depth;
     let mut out = Vec::new();
     for (bi, block) in program.blocks.iter().enumerate() {
         for (ni, node) in block.nodes.iter().enumerate() {
