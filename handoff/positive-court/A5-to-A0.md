@@ -6,6 +6,12 @@
 その後A0 aux151型 `327393e8e` とP statement DTO `069d54007` を取り込み、data-only row readerの準備を完了した。
 native owner・P実抽選Certified・受付/lockの未実装を成功へ変えていない。
 
+後続: source dueのfirst unique計上は `c0d21e2f1` で具体化した。
+new-version Positive fundsのlock分類/spend算術/CAS候補は
+[採用案](A5-positive-funds-proposal.md) とnode `dues` / `native_funds` を参照する。
+同候補のno-default node全lib 44件、all-targets Clippy、独立レビュー記録はphase5 evidenceに保存した。
+actual native writer・mempool/blockの呼出し・同一DB batchの接続と有効化は別に残る。
+
 ## 採用済みA1共通adapter
 
 A1 workspaceの `positive_contract.rs` はA0 annexの `tir::exact_derivation_id()`、

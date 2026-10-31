@@ -4,6 +4,16 @@
 このcrateはnode側だけに置く。依存方向は `node → core + exec + accounting leaf` で、coreがexecutorに依存する循環を作らない。
 namespaceはA0 `42a60b840` で予約済みだが、native新claimの受付、rooted row生成、公開網の有効化は未完成である。
 
+## 新Positive資金とsource dueの採用案
+
+`dues` は既存ServiceReceipt keyに対するfirst unique source料金の発生を計算する。
+`Case.usage.fee`は資料サービスdueだけを数え、実支払やCourt全体の料金とは分ける。
+`native_funds` は新FundingRowの三勘定、old/new/provisional共通lock分類、actual Transactionの出力・burnを検査する。
+どちらもnode-local DATA提案で、state writerやnative権限を持たない。
+actual accepted-prefix・canonical recipient/rate・live UTXO/lock・一回払い・責任・同一batchはnative ownerの接続が必要である。
+具体APIと採用箇所は [A5-positive-funds-proposal.md](../../../handoff/positive-court/A5-positive-funds-proposal.md) を参照。
+旧FundingTerms/escrowのID、global key/domain、公開presetは変更しない。
+
 ## 実coreのtyped rowsから信用入力を読む
 
 `rows::PositiveCreditRows` はA0 `327393e8e` の固定value/既存keyを使い、実 `PalwChainStateV2` に対する
