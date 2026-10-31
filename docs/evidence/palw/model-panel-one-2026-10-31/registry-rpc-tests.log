@@ -1,0 +1,47 @@
+   Compiling num-traits v0.2.19
+   Compiling rustix v0.38.37
+   Compiling chrono v0.4.38
+   Compiling polling v3.7.3
+   Compiling async-io v2.3.4
+   Compiling cc v1.2.61
+   Compiling async-global-executor v2.4.1
+   Compiling async-std v1.13.0
+   Compiling kaspa-hashes v1.1.0 (/Users/wata/.codex/worktrees/g14-producer-panel-one/MISAKA-testnet/crypto/hashes)
+   Compiling ordered-float v2.10.1
+   Compiling serde-value v0.7.0
+   Compiling log4rs v1.4.0
+   Compiling workflow-core v0.18.0
+   Compiling workflow-wasm v0.18.0
+   Compiling kaspa-math v1.1.0 (/Users/wata/.codex/worktrees/g14-producer-panel-one/MISAKA-testnet/math)
+   Compiling kaspa-core v1.1.0 (/Users/wata/.codex/worktrees/g14-producer-panel-one/MISAKA-testnet/core)
+   Compiling kaspa-muhash v1.1.0 (/Users/wata/.codex/worktrees/g14-producer-panel-one/MISAKA-testnet/crypto/muhash)
+   Compiling misaka-palw-panel v1.1.0 (/Users/wata/.codex/worktrees/g14-producer-panel-one/MISAKA-testnet/misaka/palw/panel)
+   Compiling kaspa-merkle v1.1.0 (/Users/wata/.codex/worktrees/g14-producer-panel-one/MISAKA-testnet/crypto/merkle)
+   Compiling kaspa-addresses v1.1.0 (/Users/wata/.codex/worktrees/g14-producer-panel-one/MISAKA-testnet/crypto/addresses)
+   Compiling kaspa-wasm-core v1.1.0 (/Users/wata/.codex/worktrees/g14-producer-panel-one/MISAKA-testnet/wasm/core)
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/g14-producer-panel-one/MISAKA-testnet/consensus/core)
+   Compiling hex v0.4.3
+   Compiling kaspa-rpc-macros v1.1.0 (/Users/wata/.codex/worktrees/g14-producer-panel-one/MISAKA-testnet/rpc/macros)
+   Compiling kaspa-txscript v1.1.0 (/Users/wata/.codex/worktrees/g14-producer-panel-one/MISAKA-testnet/crypto/txscript)
+   Compiling kaspa-notify v1.1.0 (/Users/wata/.codex/worktrees/g14-producer-panel-one/MISAKA-testnet/notify)
+   Compiling kaspa-consensus-client v1.1.0 (/Users/wata/.codex/worktrees/g14-producer-panel-one/MISAKA-testnet/consensus/client)
+   Compiling kaspa-consensus-wasm v1.1.0 (/Users/wata/.codex/worktrees/g14-producer-panel-one/MISAKA-testnet/consensus/wasm)
+   Compiling kaspa-index-core v1.1.0 (/Users/wata/.codex/worktrees/g14-producer-panel-one/MISAKA-testnet/indexes/core)
+   Compiling kaspa-consensus-notify v1.1.0 (/Users/wata/.codex/worktrees/g14-producer-panel-one/MISAKA-testnet/consensus/notify)
+   Compiling kaspa-mining-errors v1.1.0 (/Users/wata/.codex/worktrees/g14-producer-panel-one/MISAKA-testnet/mining/errors)
+   Compiling kaspa-rpc-core v1.1.0 (/Users/wata/.codex/worktrees/g14-producer-panel-one/MISAKA-testnet/rpc/core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2m 12s
+     Running unittests src/lib.rs (/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/g14-18400-deploy/target/ci-gates/debug/deps/kaspa_rpc_core-cfcc71e436048406)
+
+running 8 tests
+test model::palw_blocking::tests::a_class_that_nothing_blocks_has_no_reading ... ok
+test model::palw_blocking::tests::a_held_class_says_whether_it_lacks_a_panel_seats_or_a_window ... ok
+test model::palw_blocking::tests::an_unknown_state_is_reported_not_hidden ... ok
+test model::palw_blocking::tests::each_state_names_its_stage_and_what_is_missing ... ok
+test model::palw_blocking::tests::retained_lifecycle_rows_are_not_admission_requirements_when_the_registry_is_inactive ... ok
+test model::palw_blocking::tests::state_text_is_read_for_its_name_and_its_progress ... ok
+test model::palw_blocking::tests::the_independence_floor_is_named_once_possession_holds ... ok
+test model::palw_blocking::tests::the_registry_reading_lists_every_class_that_has_one_in_order ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 300 filtered out; finished in 0.00s
+

@@ -96,3 +96,9 @@ node producerの追加点検で、authoritative producer factsとは別の`regis
 
 18,640候補の再計算値: params `edf472294c89dab0e64e625dbdfcd039b91081b05f89eacf8ba2aa25baa3a189`、schedule `4024a6e74d7aeb170d99e67c6d8fbe7884d71a716ccb778cd1ee526d01781b04`。handshake / kernel policyは`5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5`で不変。
 18,600候補の最終pin検証はlib 186件、integration 47対象237件が成功（明示的ignored 2件）。これは18,640候補の未実施テストを代替するものではない。
+
+[18,640 pin lib](18640-pin-lib.log): 186 passed。
+[18,640 pin integration](18640-pin-integration.log): 48対象241 passed / 0 failed / 明示的ignored 2件。
+[18,640 node型検査](18640-node-check.log): `kaspad --features evm --all-targets`成功。
+[registry RPC回帰](registry-rpc-tests.log): 8 passed。
+Linux build対象sourceは`8cac52ec4ed15fb4ea982d46235a5c3b5f78e4cc`で固定し、build中にsourceを変更しない。
