@@ -265,6 +265,20 @@ impl<A: AccountingAuthority> PrivateAccountingStore<A> {
     pub fn totals(&self, case: CaseId) -> Option<HoldTotals> {
         self.book.cases.get(&case).map(|c| c.totals)
     }
+    /// Read a receipt for an already committed case in THIS private store.
+    /// Checks every intent field against the stored admission; does not run
+    /// new-admission authority/expiry checks, reserve funds, or change the book,
+    /// resource totals, journal head or epoch. The receipt carries no admission
+    /// undo, so reading it cannot acquire authority to undo the original hold.
+    ///
+    /// This is not native restart/restore authority. A4's recovery adapter must
+    /// independently validate its current root/generation, signed Result and
+    /// committed view before binding a fresh coordinator-owned receipt. A real
+    /// native store also requires actual history, funding and lease evidence.
+    pub fn recover_committed_case(&self, intent: AdmissionIntent) -> Result<AdmittedCase, AccountingError> {
+        self.case(intent)?;
+        Ok(AdmittedCase { owner: self.owner.clone(), intent, admission_undo: None })
+    }
     pub fn payment(&self, case: CaseId, key: ServiceKey) -> Option<ServicePayment> {
         self.book.cases.get(&case)?.settled.get(&key).copied()
     }

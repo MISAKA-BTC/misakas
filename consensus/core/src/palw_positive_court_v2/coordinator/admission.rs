@@ -7,7 +7,7 @@
 //! a DTO, a successful prepare, or a saved status flag.
 use super::contract::{AdmittedCheckedFactV2, CheckedCourtFactV2, bind_admitted_fact};
 use misaka_palw_positive_contract::{
-    ContractError,
+    CONTRACT_REVISION, CONTRACT_VERSION, ContractError,
     identity::{ChainScope, PUBKEY_BYTES, SIGNATURE_BYTES},
     messages::{AdmissionContext, ClaimForm, MinerResultCommit, MinerServiceContract},
     ports::{AdmissionIntent, AtomicCourtStore},
@@ -50,6 +50,21 @@ pub trait CourtAdmissionViewV2 {
     -> Result<ResolvedCourtAdmissionV2, Self::Error>;
 }
 
+/// Read-only reissuance of an EXISTING store capability after restart.
+/// Native implementations MUST authenticate the actual current Case row,
+/// canonical accepted history/anchor, funding/lease ownership and current Case
+/// epoch under `current_root`. Missing adapters/rows are errors. Deserializing
+/// an intent/status or running new admission is not recovery. No balance,
+/// reservation, epoch, liability or journal mutation is permitted, and the
+/// funding NEW-admission cutoff must not erase already earned obligations.
+pub trait CommittedCourtRecoveryStoreV2: AtomicCourtStore {
+    fn recover_committed_case(
+        &self,
+        intent: AdmissionIntent,
+        current_root: CourtAdmissionRootV2,
+    ) -> Result<Self::AdmittedCase, Self::Error>;
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum CourtAdmissionErrorV2<V, S> {
     Contract(ContractError),
@@ -83,7 +98,8 @@ impl<P> PreparedCourtAdmissionV2<P> {
     }
 }
 
-/// Only a successful atomic-store commit constructs this capability. It means
+/// A successful atomic-store commit or authenticated read-only recovery
+/// constructs this capability. It means
 /// admitted under the supplied store, never PositivePassed, native funding,
 /// credit, or a computation certificate by itself.
 pub struct AdmittedCourtV2<C> {
@@ -285,6 +301,58 @@ impl<S: AtomicCourtStore, V: CourtAdmissionViewV2> AtomicAdmissionCoordinatorV2<
         }
         // A6 must be able to undo an old branch after switching rooted views.
         self.store.rollback(undo.store).map_err(CourtAdmissionErrorV2::Store)
+    }
+}
+
+impl<S: CommittedCourtRecoveryStoreV2, V: CourtAdmissionViewV2> AtomicAdmissionCoordinatorV2<S, V> {
+    /// Reissue a committed case under THIS coordinator's fresh owner identity.
+    /// Neither this method nor its store port performs new intake, reserves
+    /// money/capacity or reconstructs a native grant from a saved DTO. Existing
+    /// Court/service clocks are resolved independently of funding intake expiry.
+    pub fn recover_committed_case(
+        &self,
+        result: MinerResultCommit,
+        miner_key: &[u8; PUBKEY_BYTES],
+        miner_signature: &[u8; SIGNATURE_BYTES],
+        lookup_intent: AdmissionIntent,
+    ) -> Result<AdmittedCourtV2<S::AdmittedCase>, CourtAdmissionErrorV2<V::Error, S::Error>> {
+        result.authenticate(miner_key, miner_signature).map_err(CourtAdmissionErrorV2::Contract)?;
+        let root = self.view.root();
+        if result.scope != root.scope
+            || lookup_intent.scope != root.scope
+            || lookup_intent.case != result.case_id()
+            || lookup_intent.result != result.id()
+        {
+            return Err(CourtAdmissionErrorV2::Binding);
+        }
+        let resolved = self.view.resolve_committed(&lookup_intent, &result).map_err(CourtAdmissionErrorV2::View)?;
+        resolved.context.check(ClaimForm::PositiveResultV2, &result).map_err(CourtAdmissionErrorV2::Contract)?;
+        let service = resolved.service;
+        // Structural links only. service.validate(result, root.now) is a NEW
+        // intake predicate and would incorrectly expire existing obligations.
+        if service.version != CONTRACT_VERSION || service.revision != CONTRACT_REVISION {
+            return Err(CourtAdmissionErrorV2::Contract(ContractError::Version));
+        }
+        if resolved.intent != lookup_intent
+            || service.case != result.case_id()
+            || service.id() != result.service_contract
+            || service.funding_consent != lookup_intent.funding_consent
+            || lookup_intent.expiry > service.deadline
+        {
+            return Err(CourtAdmissionErrorV2::Binding);
+        }
+        if service.budget.retention_until < service.deadline || service.budget.witness_attempts == 0 {
+            return Err(CourtAdmissionErrorV2::Contract(ContractError::Budget));
+        }
+        if self.view.root() != root {
+            return Err(CourtAdmissionErrorV2::StaleRoot);
+        }
+        let store = CommittedCourtRecoveryStoreV2::recover_committed_case(&self.store, lookup_intent, root)
+            .map_err(CourtAdmissionErrorV2::Store)?;
+        if self.view.root() != root {
+            return Err(CourtAdmissionErrorV2::StaleRoot);
+        }
+        Ok(AdmittedCourtV2 { owner: self.owner.clone(), intent: lookup_intent, root, result, resolved, store })
     }
 }
 

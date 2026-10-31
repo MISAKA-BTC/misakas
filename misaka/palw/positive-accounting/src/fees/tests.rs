@@ -470,3 +470,101 @@ fn out_of_order_rollback_or_expired_admission_cannot_change_balances() {
     assert_eq!(s.reserved_resources(), 4);
     assert!(s.conserved());
 }
+
+#[test]
+fn recover_existing_private_case_is_read_only_even_after_authority_removal_and_expiry() {
+    let a = authority();
+    let mut s = store(&a);
+    let admitted = admit(&mut s, 10);
+    delivered(&a, data(0), 2);
+    pay(&mut s, &admitted, data(0));
+    let before = (s.book.clone(), s.epoch, s.head, s.initial_supply);
+    a.0.borrow_mut().now = 101;
+    a.0.borrow_mut().contracts.clear();
+    let recovered = {
+        // Any call to either authority.now() or admission() would borrow this
+        // RefCell and panic. A reader of the committed book needs neither.
+        let _authority_unavailable = a.0.borrow_mut();
+        s.recover_committed_case(intent(10)).unwrap()
+    };
+    assert_eq!(recovered.intent(), intent(10));
+    assert!(recovered.into_admission_undo().is_none());
+    assert_eq!(s.prepare_admission(intent(10)).err(), Some(AccountingError::MissingConsentOrFunding));
+    a.0.borrow_mut().contracts.insert(intent(10).case, contract(10));
+    assert_eq!(s.prepare_admission(intent(10)).err(), Some(AccountingError::Expired));
+    assert_eq!((s.book.clone(), s.epoch, s.head, s.initial_supply), before);
+    assert!(s.conserved());
+}
+
+#[test]
+fn recover_requires_every_literal_intent_field_to_match_the_committed_case() {
+    let a = authority();
+    let mut s = store(&a);
+    admit(&mut s, 10);
+    let before = (s.book.clone(), s.epoch, s.head, s.initial_supply);
+    for field in 0..9 {
+        let mut changed = intent(10);
+        match field {
+            0 => changed.scope.network = d(90),
+            1 => changed.scope.ruleset = d(90),
+            2 => changed.scope.branch = d(90),
+            3 => changed.case = CaseId(d(90)),
+            4 => changed.result = ResultId(d(90)),
+            5 => changed.resource_quote = d(90),
+            6 => changed.funding_consent = d(90),
+            7 => changed.obligations = d(90),
+            _ => changed.expiry += 1,
+        }
+        let expected = if field == 3 { AccountingError::UnknownCase } else { AccountingError::Binding };
+        assert_eq!(s.recover_committed_case(changed).err(), Some(expected), "field {field}");
+    }
+    assert_eq!((s.book.clone(), s.epoch, s.head, s.initial_supply), before);
+}
+
+#[test]
+fn a_recovered_handle_cannot_be_used_by_an_identically_funded_foreign_store() {
+    let a = authority();
+    let mut first = store(&a);
+    let mut second = store(&a);
+    admit(&mut first, 10);
+    admit(&mut second, 10);
+    assert_eq!(first.book, second.book);
+    let recovered = first.recover_committed_case(intent(10)).unwrap();
+    let before = (second.book.clone(), second.epoch, second.head, second.initial_supply);
+    assert_eq!(second.prepare_service(&recovered, data(0)).err(), Some(AccountingError::ForeignStore));
+    assert_eq!(second.prepare_close(&recovered).err(), Some(AccountingError::ForeignStore));
+    assert!(recovered.into_admission_undo().is_none());
+    assert_eq!((second.book.clone(), second.epoch, second.head, second.initial_supply), before);
+}
+
+#[test]
+fn recovered_handles_preserve_once_only_pay_refund_and_real_admission_rollback() {
+    let a = authority();
+    let mut s = store(&a);
+    let original = admit(&mut s, 10);
+    delivered(&a, data(0), 2);
+    let recovered = s.recover_committed_case(intent(10)).unwrap();
+    let payment_undo = pay(&mut s, &recovered, data(0));
+    let again = s.recover_committed_case(intent(10)).unwrap();
+    pay(&mut s, &again, data(0));
+    assert_eq!(s.balance(party(2)), 10);
+    assert_eq!(s.totals(intent(10).case).unwrap().remaining, 90);
+    a.0.borrow_mut().closed.insert(intent(10).case, ClaimStatus::EndedUnverified);
+    let close_undo = close(&mut s, &again);
+    let closed = s.recover_committed_case(intent(10)).unwrap();
+    let closed_before = (s.book.clone(), s.epoch, s.head, s.initial_supply);
+    close(&mut s, &closed);
+    assert_eq!((s.book.clone(), s.epoch, s.head, s.initial_supply), closed_before);
+    assert_eq!(s.balance(party(1)), 988);
+    assert_eq!(s.balance(party(2)), 10);
+    assert_eq!(s.reserved_resources(), 0);
+    s.rollback(close_undo).unwrap();
+    s.rollback(payment_undo).unwrap();
+    s.rollback(original.into_admission_undo().unwrap()).unwrap();
+    assert_eq!(s.recover_committed_case(intent(10)).err(), Some(AccountingError::UnknownCase));
+    assert_eq!(s.prepare_service(&recovered, data(0)).err(), Some(AccountingError::UnknownCase));
+    assert_eq!(s.balance(party(1)), 1000);
+    assert_eq!(s.balance(party(2)), 0);
+    assert_eq!(s.reserved_resources(), 0);
+    assert!(s.conserved());
+}
