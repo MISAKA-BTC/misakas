@@ -29,6 +29,7 @@ indexmap.workspace = true
 itertools.workspace = true
 kaspa-addresses.workspace = true
 kaspa-consensus-core.workspace = true
+misaka-palw-positive-contract.workspace = true
 kaspa-consensus-notify.workspace = true
 kaspa-consensusmanager.workspace = true
 kaspa-core.workspace = true

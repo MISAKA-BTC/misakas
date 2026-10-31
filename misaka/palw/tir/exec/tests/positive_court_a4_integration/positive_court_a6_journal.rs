@@ -272,6 +272,7 @@ struct Environment<'a> {
     active: Cell<Option<u64>>,
     quote_calls: Cell<u64>,
     native_calls: Cell<u64>,
+    external_state_creations: Cell<u64>,
     external_calls: Cell<u64>,
     role_calls: Cell<u64>,
     final_calls: Cell<u64>,
@@ -291,6 +292,7 @@ impl<'a> Environment<'a> {
             active: Cell::new(None),
             quote_calls: Cell::new(0),
             native_calls: Cell::new(0),
+            external_state_creations: Cell::new(0),
             external_calls: Cell::new(0),
             role_calls: Cell::new(0),
             final_calls: Cell::new(0),
@@ -409,6 +411,7 @@ impl NativeReplayEnvironmentV2 for Environment<'_> {
         Ok(StepVerifier { env: self, actual: verifier_for(&self.scenario.result) })
     }
     fn new_external_state(&self, _: &CaseJournalPinV2) -> Result<Self::ExternalState, Self::Error> {
+        self.external_state_creations.set(self.external_state_creations.get() + 1);
         Ok(Shadow::default())
     }
     fn apply_external_event(
@@ -556,7 +559,14 @@ fn pinned_tail_and_exact_native_material_references_cannot_be_shortened() {
     j.store.remove(&j.pin.head.head);
     let env = Environment::new(&s, &j);
     assert!(replay_common_case_v2(&j, &links, &env, replay_limits()).is_err());
-    assert_eq!(env.native_calls.get(), 0);
+    // Forward visitation permits readonly prefix callbacks before discovering
+    // a later missing record. No replay state or effect may escape that error.
+    assert_eq!(env.native_calls.get(), j.records.len() as u64 - 1);
+    assert_eq!(env.external_state_creations.get(), 0);
+    assert_eq!(env.external_calls.get(), 0);
+    assert_eq!(env.final_calls.get(), 0);
+    assert_eq!(env.live_commits.get(), 0);
+    assert_eq!(env.active.get(), None);
     let shortened = s.journal(&s.bodies[..s.bodies.len() - 1]);
     let expected = s.journal(&s.bodies);
     let env = Environment::new(&s, &expected);
