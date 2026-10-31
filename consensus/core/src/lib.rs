@@ -27,6 +27,8 @@ pub mod palw_positive_court_v2;
 pub mod palw_positive_metadata_v2;
 pub mod palw_positive_rows_v2;
 pub mod palw_positive_source_read_v2;
+pub mod palw_positive_source_geometry_v2;
+pub mod palw_positive_source_v2;
 pub mod palw_native_settlement_resources_v1;
 pub mod palw_native_settlement_v1;
 pub mod palw_panel_beacon_v1;
