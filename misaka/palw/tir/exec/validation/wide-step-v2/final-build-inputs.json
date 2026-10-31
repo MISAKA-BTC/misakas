@@ -1,0 +1,29 @@
+{
+  "candidate": "b048ce4e16651c5187a4f1646d15e844a374e8f7",
+  "source_sha256": {
+    "Cargo.lock": "b8a58e9e08bdbfd7e3dfa87118d641fd673e50d7c277dfebd59686f4cb29ed61",
+    "consensus/core/Cargo.toml": "084e2eb8a015be8b0c3abd513244a4587493a404810884b383b801b096fb1295",
+    "consensus/core/src/lib.rs": "b91c6fe6c2004bf63770696ddbc07d84e1e4c58219fd5cbacf348f5cf3b186a0",
+    "consensus/core/src/palw_step_leg.rs": "372f065a2491c77ac0ceff73898704a2abcb44da005a00329d709a7b2a2fe1e1",
+    "consensus/core/src/palw_tir_step_v1.rs": "7dc8c66373bc13dcbdbdec0bee52b0ad6edd40e0e44e6cd51b08877acb4664da",
+    "consensus/core/src/palw_tir_step_v1/wide_v2.rs": "bbfaf96b2019e90474401490b708a6a8db497b9840abc994e0fa1eb234cbf782",
+    "consensus/core/src/palw_logits_q24_v2.rs": "64aed6659e9431823f82e3bc2e9ad2856a6ec76149481344e88b977c704d3843",
+    "consensus/core/tests/palw_tir_step_wide_v2.rs": "659233f6ea36dbad7acebbed8b87193a096a8dab5e7f8ef243f03d079a8f02c3",
+    "consensus/core/tests/wide_logits_primitives_v2.rs": "1ffbdeaaf719ba62be0d613e6799f5e972eb657ed39dfeeea8b803be8bdda36a"
+  },
+  "archive": {
+    "path": "/Users/wata/.codex/worktrees/rfc14-g14-completion/MISAKA-testnet/target/release/build/librocksdb-sys-865d89ee7dbf2b2a/out/librocksdb.a",
+    "sha256_before": "6eae541967b2cb5345ace55eadb34b2c490e91acfd8a4e2da5822a60f91af3a2",
+    "size": 23048496
+  },
+  "env": {
+    "CARGO_TARGET_DIR": "/Users/wata/.codex/worktrees/positive-court-a0/target",
+    "ROCKSDB_STATIC": "1",
+    "ROCKSDB_LIB_DIR": "/Users/wata/.codex/worktrees/rfc14-g14-completion/MISAKA-testnet/target/release/build/librocksdb-sys-865d89ee7dbf2b2a/out",
+    "CARGO_INCREMENTAL": "0",
+    "CARGO_PROFILE_DEV_DEBUG": "0",
+    "CARGO_PROFILE_TEST_DEBUG": "0",
+    "CARGO_BUILD_JOBS": "2"
+  },
+  "commands": []
+}
