@@ -31,3 +31,7 @@ core は低容量の検証用 override `profile.dev.package.kaspa-consensus-core
 最終候補でも標準 stack の既存復元試験1件は overflow を再現した。32MiB 条件の成功を標準条件の成功と扱わない。分割後のARM64未最適化 prologue は薄いwrapper432 bytes、present loop37,984 bytes、Case検査114,032 bytes（各関数単体）。原因を既存実装へ帰属する baseline 比較は行っていない。最初の最終buildのENOSPCと、Cargo/直接metadata試行の失敗も成功へ数えず原ログを保存した。その後同じ固定sourceのfull test compilationと実行が成功したため、最終sourceの型検査はこの正常buildで確認済みである。
 
 source・Markdown の `git diff --check` は成功。evidence の原ログにある末尾空白・空行は保持し、この whitespace 検査から除外する。原ログを整形して成功扱いにはしない。
+
+## レビュー後の追補
+
+受理順序、成功receiptの完全性、費用下限、Route manual review登録の追加検証は [A6-ORDER-COUNTERS-VALIDATION.md](A6-ORDER-COUNTERS-VALIDATION.md) に分離した。ここに記録したd2bdb候補と101件の結果は履歴として保持する。

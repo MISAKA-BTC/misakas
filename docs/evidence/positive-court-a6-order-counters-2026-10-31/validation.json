@@ -1,0 +1,54 @@
+{
+  "code_commit": "c14e39353416fe506cefa156f4753ac91e5e8bb8",
+  "parent_review_followup": "f68246e649bb5df2c673a8fb3dfcbfcf7a4b0e8f",
+  "profile": {
+    "core_opt_level": 0,
+    "core_debug": 0,
+    "incremental": false,
+    "build_jobs": 2,
+    "test_threads": 2,
+    "stack": "default"
+  },
+  "final_scope": {
+    "passed": 30,
+    "failed": 0,
+    "ignored": 0,
+    "original_rows_tests": 15,
+    "order_tests": 6,
+    "counter_tests": 9,
+    "log": "fixed-core-30.log"
+  },
+  "intermediate_scope_not_added_to_final_total": {
+    "code_commit": "f68246e649bb5df2c673a8fb3dfcbfcf7a4b0e8f",
+    "passed": 21,
+    "log": "order-21.log"
+  },
+  "old_native61_route25": "not rerun; retained under original pinned d2bdb evidence and not counted here",
+  "generator": {
+    "route_review_registered": true,
+    "route_review_classification": "adapter",
+    "route_review_hash": "e341c97eb511a52c27cad7cb94085c46c42015fef9f17955d8d1bf64f321f782",
+    "isolated_generator_exit": 1,
+    "full_roundtrip_passed": false,
+    "real_tree_generated_rust_changed": false,
+    "blocker": "pre-existing NumericalManifestV1 handwritten-codec PIN mismatch",
+    "old_pin": "2f0c22e8f59e71fc823b26b9a23e724c32b9314637db8d19bf3440f3bf75e164",
+    "current_and_pre_A6_a5800d2dd_body_hash": "9bc64e5873cf1327400c7ff2ac38d6f20452e0dfa848d6fc0e1d7f228c7baf1d",
+    "old_pin_modified": false
+  },
+  "not_authority": [
+    "cross-block ancestry and accepted preimage authentication",
+    "replayed arithmetic terminal",
+    "live native funding or capacity",
+    "payment or Gate C",
+    "public activation"
+  ],
+  "static_checks": {
+    "rustfmt": "passed for changed Rust files before fixed code commit",
+    "code_diff_check": "passed c276f63a3..c14e39353",
+    "markdown_diff_check": "passed, raw evidence logs excluded without modification",
+    "docs_no_new_regressions": "passed",
+    "known_doc_issues": 43,
+    "new_doc_issues": 0
+  }
+}

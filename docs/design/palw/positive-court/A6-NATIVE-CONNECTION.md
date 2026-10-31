@@ -71,3 +71,13 @@ A0 の正規 VALUE schema (`327393e8e`) を取り込み、`NativeWireScanV1`、`
 A6 の `PositiveRecoveryStore::rollback` は選択履歴と関連 native 行の transaction undo に用いる。A2 の local spent I/O budget は branch/reorg で巻き戻さない別寿命の永続領域に置き、この undo の RelatedRow に含めない。chain request/accepted-response の undo と local traffic の消費を同一視しない。
 
 検証と残る境界は [A6-AUX151-VALIDATION.md](A6-AUX151-VALIDATION.md) を参照。
+
+## 2026-10-31 native writer batchへの接続案
+
+A4との照合では、native aux151は既存の `PalwDeltaEntryV2::KernelRouteRow { table, key, old, new }` で差分・before-imageを保持できる。`VirtualProcessor::commit_utxo_state` は `palw_state_v2_store.write()` guardを取り、`insert_delta_batch_tracked_v1(&mut batch, current, root, delta)` のticketとguardを、typed UTXO/MuHash/acceptanceと同じDB writeまで保持している。まずCourt/A2/A5のnative行差分をこの既存PALW deltaへまとめる。A6 private storeのRelatedRow raw keyでUTXOやtyped native storeを直接書き換えない。
+
+A2 accepted-material preimageが別namespaceを必要とする場合は、具体的な共通history schemaの確定後、native typed material-storeのcaller-owned batch準備APIをこのguard下へ接続する。prepareはbounded encode/CAS/quotaを済ませ、caller batchの確定前に新native cache/terminalを公開しない。private archiveの型を共通historyへaliasしない。
+
+private再開cacheまで同じbatchへ同梱する必要が生じる場合のport案は、A6 DB-wide mutexを所有するscoped `RecoveryBatchGuard` がstage_commit/rollbackで準備した差分とundoをcaller batchへ追加し、実DB write終了まで生存する形である。これは未実装の提案であり、既存commit APIの能力として扱わない。native exclusive guard→A6 guardの順序を統一し、準備失敗時caller batchを変更せず、private metadata以外をこのportから操作させない。native aux151は既存PALW delta経路を優先し、独立WriteBatchでnative fundingとjournalを二重commitしない。
+
+追加レビューの順序・counter・receipt条件は [A6-ORDER-COUNTERS-VALIDATION.md](A6-ORDER-COUNTERS-VALIDATION.md) を参照する。
