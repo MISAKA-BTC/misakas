@@ -1,0 +1,106 @@
+{
+  "reviewed_base_commit": "cc45ad4ae8930692e234479a22dbb71978a2dcf6",
+  "scope": "Shared SourceFeeDeltaIntent DATA re-export and official PacketReceipt lower-bound dependency; independent source/log review only.",
+  "actions": {
+    "builds_run": false,
+    "tests_rerun": false,
+    "source_code_edited": false,
+    "git_commits_created": false,
+    "only_this_evidence_json_written": true
+  },
+  "findings": [],
+  "type_review": {
+    "all_seven_field_names_and_types_match_removed_local_type": true,
+    "shared_type_adds_copy_but_no_serialized_wire_or_authority": true,
+    "existing_dues_import_path_preserved_by_pub_use": true,
+    "native_funds_consumer_source_unchanged": true,
+    "dues_and_native_funds_test_sources_unchanged": true,
+    "authority_constructor_domain_or_key_added": false
+  },
+  "dependency_review": {
+    "shared_a0_commit": "c2e93ec4982d76a9c5fdbc5e6db64a168e7212b5",
+    "receipt_a0_dependency": "fa1c73f184868080af7e4c7bcb44794712952fbe",
+    "receipt_bound": "PacketReceipt signed bytes now include outer evidence header, inner EXACT_PART_HEADER_BYTES and signature. The existing failing assertion is preserved and now passes.",
+    "test_weakened_or_assertion_removed": false
+  },
+  "final_source_sha256": {
+    "misaka/palw/positive-accounting-node/src/dues.rs": "7b86d96e72c32267cedd5a26a39c7f80e10877e3785f28130322addda1d01e58",
+    "misaka/palw/positive-accounting-node/src/dues/tests.rs": "8d2c5d8c25fac2f1b6c667cc5c173701d85250c90f1e896e9a06b82f62877b7f",
+    "misaka/palw/positive-accounting-node/src/lib.rs": "62657713cd3311968ca27ffc5bbefdd768593e5fb387451478f3005ee5d47c49",
+    "misaka/palw/positive-accounting-node/src/native.rs": "27011bd251f0496a26d4279e56682dbdc5f03b82697034e402aec3d11b41277c",
+    "misaka/palw/positive-accounting-node/src/native/tests.rs": "f96ea0bec32adfbed4d9d8c1ae6ef7fb11866277829bd5df192ae3e3db1ffcc6",
+    "misaka/palw/positive-accounting-node/src/native_funds.rs": "53800ab7889605d141407e588e9d51d384f023ca483c1c4506ef54fe2e1fdb0a",
+    "misaka/palw/positive-accounting-node/src/native_funds/tests.rs": "ce6f998ee72d35c7737b207e0a0818db6cccf4ec7eeb182bf998bdd8ce31b99c",
+    "misaka/palw/positive-accounting-node/src/rows.rs": "a78a2a6aa0148874ee0f6a354b1c24b8f11a7d1cb1ce855a41dc6e1b3b035807",
+    "misaka/palw/positive-accounting-node/src/rows/tests.rs": "3cce030a5737981560043a8ace736fdc15b6fa295b4bb37c3a5fcac5f60fa2db",
+    "misaka/palw/positive-accounting-node/src/tir.rs": "c09507b31356a1c3384d3fce6a28a22abdc31b972d11be872e0803117ae210a3",
+    "misaka/palw/positive-accounting-node/src/tir_tests.rs": "14b8840d1db8f3d04180eb993236a878ed1d05298806cf10ec8e88b7e1d0ed29",
+    "misaka/palw/positive-contract/src/funding.rs": "0996296c8d2b114e099133d46b16814ae13e02acf177acee16246fb4163162a9",
+    "misaka/palw/positive-contract/src/rows.rs": "53d42d3a6f65af575eaf3ccebc16e63155501bb9128ae6c934994b5a683be7d4",
+    "misaka/palw/positive-contract/tests/native_rows.rs": "a87849b1ab0f919b0acf5a24c3a68964d8d2b98e43f05d81f21ea9edc31b685a"
+  },
+  "execution_evidence": {
+    "common-native-rows": {
+      "metadata": "common-native-rows-result.json",
+      "metadata_sha256": "1739b9ad465c573d39718fe47fbdfa1ca7b3d1cafabd1b3162125bf36662f1c5",
+      "raw_log": "common-native-rows.log",
+      "raw_log_sha256": "ae4ac6d8285900ec2a8bc3acf2a7861f7ecc0cbb290422801ea3f980f3272059",
+      "exit_code": 101,
+      "base_commit": "3d191fbef029b0af3bc19b65bc9d9ae7a0954312",
+      "recorded_source_hashes_match_current": true,
+      "source_unchanged_during_run": true,
+      "passed": 4,
+      "failed": 1,
+      "preserved_original_failure": true,
+      "cause": "Shared-commit PacketReceipt regression assertion preceded its official inner TIR framing lower-bound dependency. Original failure/log retained, not relabeled as pass.",
+      "limit": "This original metadata did not hash rows.rs; its historical source is identified by base commit 3d191fbef and the recorded failed assertion. The later rows.rs dependency is a separate candidate."
+    },
+    "common-native-rows-rev2": {
+      "metadata": "common-native-rows-rev2-result.json",
+      "metadata_sha256": "8603aadd36a667abcc2cf6f03c9bbe7ec4225a3b27aa6f021e02611e0a99d25d",
+      "raw_log": "common-native-rows-rev2.log",
+      "raw_log_sha256": "d1a381036cf176d5a82651c6ada8c624efe068d91f1eb8eede1b6e722924b7f5",
+      "exit_code": 0,
+      "base_commit": "cc45ad4ae8930692e234479a22dbb71978a2dcf6",
+      "recorded_source_hashes_match_current": true,
+      "source_unchanged_during_run": true,
+      "passed": 5,
+      "failed": 0
+    },
+    "node-all-rev2": {
+      "metadata": "node-all-rev2-result.json",
+      "metadata_sha256": "55fe83a8c198e67224c1410288dd2473298208d289c4b94a0e2d1fa1bc81d6a2",
+      "raw_log": "node-all-rev2.log",
+      "raw_log_sha256": "0424e3041978286f9959e05f0bbc8f731a7d9649a04e0465708475f7e9b3a322",
+      "exit_code": 0,
+      "base_commit": "cc45ad4ae8930692e234479a22dbb71978a2dcf6",
+      "recorded_source_hashes_match_current": true,
+      "source_unchanged_during_run": true,
+      "passed": 44,
+      "failed": 0,
+      "module_pass_counts": {
+        "dues": 7,
+        "native_funds": 15,
+        "native": 15,
+        "rows": 7
+      }
+    },
+    "node-clippy-rev2": {
+      "metadata": "node-clippy-rev2-result.json",
+      "metadata_sha256": "9b1c15d9cab83340957cf7ce1354885ff96d1d1f3c316638c2717c7aab2f9e52",
+      "raw_log": "node-clippy-rev2.log",
+      "raw_log_sha256": "75b39c699f62050bac63425f136a050074d4ec7c0ed979c9caacb4f56c281064",
+      "exit_code": 0,
+      "base_commit": "cc45ad4ae8930692e234479a22dbb71978a2dcf6",
+      "recorded_source_hashes_match_current": true,
+      "source_unchanged_during_run": true,
+      "raw_warnings_found": false
+    }
+  },
+  "limits": [
+    "All executions were performed by root; this reviewer read source/raw output and verified hashes without rerunning builds or tests.",
+    "The first failed candidate is preserved separately; its 4 successes are not summed with revised-candidate results.",
+    "No-default node tests and Clippy exclude default-feature TIR execution.",
+    "Shared public DATA, signatures and matching DTO snapshots cannot establish accepted-prefix/import generation, canonical prices/providers, native lock/spend authority or the actual atomic UTXO/PALW writer. Existing phase5 native-owner integration limitations remain."
+  ]
+}

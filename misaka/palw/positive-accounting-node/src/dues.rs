@@ -11,24 +11,14 @@ use misaka_palw_positive_accounting::fees::{FeeScheduleCeilings, Recipient, Serv
 use misaka_palw_positive_contract::{
     ContractError,
     funding::funding_scope,
-    identity::{Digest, FundingScopeId, PrincipalId, ResultId},
     messages::{SourceKind, coverage_plan_id},
     native::NativeRowKey,
-    rows::{AcceptedMaterial, AggregateUsage, CaseRow, FundingRow, NativeRowBody, ResultRow, ServiceReceiptRow},
+    rows::{AggregateUsage, CaseRow, FundingRow, NativeRowBody, ResultRow, ServiceReceiptRow},
 };
 
-/// Node-local DATA proposal pending A0 adoption; never native spend authority.
-/// Terms are supplied values, not authenticated canonical schedule preimages.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SourceFeeDeltaIntent {
-    pub receipt_key: NativeRowKey,
-    pub result: ResultId,
-    pub funding_scope: FundingScopeId,
-    pub schedule: Digest,
-    pub provider: PrincipalId,
-    pub amount: u64,
-    pub accepted_response: AcceptedMaterial,
-}
+/// The A0-adopted shared DATA type; preserves this module's existing import path.
+/// Neither this re-export nor supplied terms establish native spend authority.
+pub use misaka_palw_positive_contract::funding::SourceFeeDeltaIntent;
 
 /// Expected/new DTOs for the writer's conditional application. No state mutation
 /// occurs here. Native origin/generation checks remain additional requirements.

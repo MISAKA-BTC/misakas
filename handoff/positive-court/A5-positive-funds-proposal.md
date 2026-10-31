@@ -36,8 +36,8 @@ requestの受付時点で `Case.usage.fee` を支払済みやdueとして増や�
 dueは最初の正規response受理時に計上し、再送・別Panel・引継ぎで再計上しない。
 予約残額/寿命は既存reservationの正規preimageとnative資源ownerが管理し、A5の別ledgerは作らない。
 
-node-local due intentはResult/FundingScope/schedule/provider/amount/accepted-responseと
-期待するbefore/after usageを保持するDATA提案とする。wireやnative権限ではない。
+A0 `c2e93ec49` 採用の共通due intentはreceipt key/Result/FundingScope/schedule/provider/amount/accepted-responseを持つ。
+A5は同じ型を再公開し、node-local proposalが期待するbefore/after usageを保持する。wireやnative権限ではない。
 A4 one-writerは実accepted-prefix、first receiptの有無、正規rate/recipient、old/new行を再解決する。
 ゼロ料金もfirst receiptのidentityを保存し、実spendなしでdue 0を記録できる。
 そのreceiptを後の料金変更で再課金しない。

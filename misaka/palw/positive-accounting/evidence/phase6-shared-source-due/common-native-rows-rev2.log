@@ -1,0 +1,13 @@
+   Compiling misaka-palw-positive-contract v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a5/MISAKA-testnet/misaka/palw/positive-contract)
+    Finished `test` profile [unoptimized] target(s) in 0.78s
+     Running tests/native_rows.rs (/Users/wata/.cache/misaka-positive-accounting-node-target/debug/deps/native_rows-9e3f4079f3e67303)
+
+running 5 tests
+test balances_require_conservation_and_checked_arithmetic ... ok
+test no_saved_pass_or_union_summary_can_exceed_its_own_plan ... ok
+test fixed_rows_roundtrip_and_do_not_conflate_corruption_with_absence ... ok
+test large_signed_rows_and_all_optional_references_fit_the_fixed_codec ... ok
+test signed_bundles_bind_origin_plan_consent_and_do_not_require_panel_ack ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+
