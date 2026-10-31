@@ -243,6 +243,14 @@ impl Packet {
         self.authenticate_limits(t, limits())
     }
     pub fn authenticate_limits(&self, t: &Trusted, policy: CheckLimits) -> Result<CheckContext, AdapterError> {
+        use misaka_palw_positive_contract::ContractError;
+        // These vectors originate in a decoded candidate, unlike the fixed
+        // trusted registration. Malformed actor credentials are an admission
+        // refusal, not a Node process panic or a computation verdict.
+        let miner_key = self.miner_key.as_slice().try_into().map_err(|_| ContractError::Identity)?;
+        let miner_sig = self.miner_sig.as_slice().try_into().map_err(|_| ContractError::Signature)?;
+        let panel_key = self.panel_key.as_slice().try_into().map_err(|_| ContractError::Identity)?;
+        let panel_sig = self.panel_sig.as_slice().try_into().map_err(|_| ContractError::Signature)?;
         let prepared = PreparedCheck::authenticate(
             &t.admission(),
             &t.class,
@@ -251,16 +259,10 @@ impl Packet {
             PalwPromptIdsFormV1::Flat,
             policy,
             self.result.clone(),
-            self.miner_key.as_slice().try_into().unwrap(),
-            self.miner_sig.as_slice().try_into().unwrap(),
+            miner_key,
+            miner_sig,
         )?;
-        prepared.authenticate_witness(
-            self.witness.clone(),
-            self.binding.clone(),
-            self.generated.clone(),
-            self.panel_key.as_slice().try_into().unwrap(),
-            self.panel_sig.as_slice().try_into().unwrap(),
-        )
+        prepared.authenticate_witness(self.witness.clone(), self.binding.clone(), self.generated.clone(), panel_key, panel_sig)
     }
     pub fn resign_and_reframe(&mut self) {
         let payloads: Vec<_> =
@@ -477,7 +479,7 @@ pub fn submit(p: &Packet, t: &Trusted) -> Result<misaka_palw_tir_exec::node::pos
     let mut progress = ctx.start()?;
     let checker = misaka_palw_tir_exec::node::positive_contract::TirNodeChecker;
     for bytes in &p.frames {
-        checker.check_part(&ctx, &mut progress, p.authenticated(bytes)?.frame())?;
+        checker.check_authenticated_part(&ctx, &mut progress, p.authenticated(bytes)?)?;
     }
     checker.finish(&ctx, progress)
 }

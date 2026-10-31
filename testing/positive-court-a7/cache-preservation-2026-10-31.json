@@ -1,0 +1,27 @@
+{
+  "scope": "A7-owned regeneration cache only",
+  "timestamp_utc": "2026-10-31T12:32:03.578174+00:00",
+  "preserved": [
+    {
+      "evidence": "testing/positive-court-a7/evidence/a1-a3-joint-2026-10-31/run.json",
+      "old_path": "/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/target/debug/deps/independent-606f86afef88eae8",
+      "preserved_path": "/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/testing/positive-court-a7/runs/preserved-binaries/bda712d1b345c305a688f23b55892b6bd548366c6cc60393f734eb7beab6eb27",
+      "sha256": "bda712d1b345c305a688f23b55892b6bd548366c6cc60393f734eb7beab6eb27",
+      "bytes": 24217648
+    },
+    {
+      "evidence": "testing/positive-court-a7/evidence/r1-verified-2026-10-31/run.json",
+      "old_path": "/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/target/debug/deps/independent-806304c9682b2390",
+      "preserved_path": "/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/testing/positive-court-a7/runs/preserved-binaries/5011772d9348c09d91fea4aaa2cdf75fe8c942ce521470913661fce386836f8d",
+      "sha256": "5011772d9348c09d91fea4aaa2cdf75fe8c942ce521470913661fce386836f8d",
+      "bytes": 24087952
+    }
+  ],
+  "historical_binary_unavailable": [
+    {
+      "evidence": "testing/positive-court-a7/evidence/r1-audit-2026-10-31/run.json",
+      "sha256": "49a1979c0ad279f55e5dc1849386673b283930ada0be17bfaeba7bb5e812daad",
+      "note": "Recorded hash kept; old file had already been replaced or absent before this cleanup."
+    }
+  ]
+}

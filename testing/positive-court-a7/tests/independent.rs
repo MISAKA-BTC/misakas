@@ -74,7 +74,9 @@ fn all_signers_agreeing_on_wrong_arithmetic_still_get_witness_rejection() {
     let ctx = p.authenticate(&t).unwrap();
     let mut progress = ctx.start().unwrap();
     let checker = TirNodeChecker;
-    assert!(p.frames.iter().try_for_each(|b| checker.check_part(&ctx, &mut progress, p.authenticated(b).unwrap().frame())).is_err());
+    assert!(
+        p.frames.iter().try_for_each(|b| checker.check_authenticated_part(&ctx, &mut progress, p.authenticated(b).unwrap())).is_err()
+    );
     assert_eq!(progress.snapshot().outcome, CheckOutcome::WitnessRejected);
     assert!(checker.finish(&ctx, progress).is_err());
 }
@@ -87,7 +89,7 @@ fn each_leaf_corruption_and_every_incomplete_prefix_cannot_finish() {
         let ctx = p.authenticate(&t).unwrap();
         let mut progress = ctx.start().unwrap();
         for b in &p.frames[..i] {
-            checker.check_part(&ctx, &mut progress, p.authenticated(b).unwrap().frame()).unwrap();
+            checker.check_authenticated_part(&ctx, &mut progress, p.authenticated(b).unwrap()).unwrap();
         }
         let f = EvidenceFrame::decode(&p.frames[i], limits().max_part_bytes).unwrap();
         let part = tir::decode_frame(&f, limits().max_part_bytes).unwrap();
@@ -99,13 +101,13 @@ fn each_leaf_corruption_and_every_incomplete_prefix_cannot_finish() {
         let mut authored = p.clone();
         authored.frames[i] = bad;
         authored.resign_frame(i);
-        assert!(checker.check_part(&ctx, &mut progress, authored.authenticated(&authored.frames[i]).unwrap().frame()).is_err());
+        assert!(checker.check_authenticated_part(&ctx, &mut progress, authored.authenticated(&authored.frames[i]).unwrap()).is_err());
         assert_eq!(progress.snapshot().outcome, CheckOutcome::WitnessRejected);
         assert!(checker.finish(&ctx, progress).is_err());
         let ctx = p.authenticate(&t).unwrap();
         let mut progress = ctx.start().unwrap();
         for b in &p.frames[..i] {
-            checker.check_part(&ctx, &mut progress, p.authenticated(b).unwrap().frame()).unwrap();
+            checker.check_authenticated_part(&ctx, &mut progress, p.authenticated(b).unwrap()).unwrap();
         }
         assert!(checker.finish(&ctx, progress).is_err());
     }
@@ -123,10 +125,110 @@ fn complete_coverage_is_required_for_output_mismatch_and_outer_bytes_are_charged
     let mut progress = ctx.start().unwrap();
     let checker = TirNodeChecker;
     for b in &p.frames {
-        checker.check_part(&ctx, &mut progress, p.authenticated(b).unwrap().frame()).unwrap();
+        checker.check_authenticated_part(&ctx, &mut progress, p.authenticated(b).unwrap()).unwrap();
     }
     assert_eq!(progress.charged_wire_bytes(), p.frames.iter().map(|b| b.len() as u64).sum::<u64>());
+    assert_eq!(progress.charged_signature_bytes(), p.frames.len() as u64 * SIGNATURE_BYTES as u64);
+    assert_eq!(
+        progress.charged_transport_bytes().unwrap(),
+        p.frames.iter().map(|b| b.len() as u64 + SIGNATURE_BYTES as u64).sum::<u64>()
+    );
     assert!(misaka_palw_positive_contract::require_native_activation().is_err());
+}
+
+#[test]
+fn malformed_actor_credential_lengths_are_refusals_not_node_panics() {
+    let (trusted, packet) = fixture(false, 1, 7);
+    for actor_field in 0..4 {
+        let expected = if actor_field % 2 == 0 { PUBKEY_BYTES } else { SIGNATURE_BYTES };
+        for length in [0, expected - 1, expected + 1] {
+            let mut malformed = packet.clone();
+            let field = match actor_field {
+                0 => &mut malformed.miner_key,
+                1 => &mut malformed.miner_sig,
+                2 => &mut malformed.panel_key,
+                _ => &mut malformed.panel_sig,
+            };
+            field.resize(length, 0);
+            assert!(malformed.authenticate(&trusted).is_err(), "credential={actor_field} length={length}");
+        }
+    }
+    assert_eq!(submit(&packet, &trusted).unwrap().outcome(), CheckOutcome::Matched);
+}
+
+#[test]
+fn unsigned_frame_allowance_cannot_authorize_signature_bytes_or_overflow_a_signed_quote() {
+    let (trusted, packet) = fixture(false, 1, 7);
+    let context = packet.authenticate(&trusted).unwrap();
+    let frame = EvidenceFrame::decode(&packet.frames[0], limits().max_part_bytes).unwrap();
+    let signed_bytes = frame.signed_wire_bytes();
+    let key = packet.panel_key.as_slice().try_into().unwrap();
+    let signature = packet.frame_signatures[0].as_slice().try_into().unwrap();
+    for insufficient in [frame.wire_bytes(), signed_bytes - 1] {
+        assert!(frame.authenticate(&packet.witness, key, signature, insufficient).is_err());
+    }
+    let authenticated = frame.authenticate(&packet.witness, key, signature, signed_bytes).unwrap();
+    let quote = context.signed_transport_quote().unwrap();
+    assert_eq!(quote.max_packet_bytes, limits().max_part_bytes + SIGNATURE_BYTES as u64);
+    assert_eq!(quote.signature_bytes, packet.frames.len() as u64 * SIGNATURE_BYTES as u64);
+    assert_eq!(quote.total_packet_bytes, quote.unsigned_frame_bytes + quote.signature_bytes);
+    let mut progress = context.start().unwrap();
+    TirNodeChecker.check_authenticated_part(&context, &mut progress, authenticated).unwrap();
+    assert_eq!(progress.charged_signature_bytes(), SIGNATURE_BYTES as u64);
+    assert_eq!(progress.charged_transport_bytes().unwrap(), signed_bytes);
+
+    // The unsigned reservation fits u64, but the same allowance plus every
+    // signature does not. This quote-only attack allocates no giant frame.
+    let mut oversized = limits();
+    oversized.max_total_bytes = u64::MAX;
+    oversized.max_part_bytes = u64::MAX / packet.frames.len() as u64;
+    let context = packet.authenticate_limits(&trusted, oversized).unwrap();
+    assert!(context.signed_transport_quote().is_err());
+    let mut progress = context.start().unwrap();
+    assert!(
+        TirNodeChecker.check_authenticated_part(&context, &mut progress, packet.authenticated(&packet.frames[0]).unwrap()).is_err()
+    );
+    assert_eq!(progress.snapshot().outcome, CheckOutcome::Checking);
+    assert_eq!(progress.charged_transport_bytes().unwrap(), 0);
+}
+
+#[test]
+fn authenticated_recovery_prefix_cannot_switch_scope_skip_or_duplicate_frames() {
+    let (trusted, packet) = fixture(false, 1, 7);
+    let (foreign_trusted, foreign_packet) = fixture(false, 2, 99);
+    let foreign_context = foreign_packet.authenticate(&foreign_trusted).unwrap();
+    let checker = TirNodeChecker;
+    for cut in [1, packet.frames.len() / 2] {
+        let context = packet.authenticate(&trusted).unwrap();
+        let mut restored = context.start().unwrap();
+        // Replay authenticated bytes rather than accepting a stored cursor or
+        // completion flag. This is a checker test, not A6 atomic persistence.
+        for bytes in &packet.frames[..cut] {
+            checker.check_authenticated_part(&context, &mut restored, packet.authenticated(bytes).unwrap()).unwrap();
+        }
+        let before = restored.snapshot();
+        let transport_before = restored.charged_transport_bytes().unwrap();
+        // The foreign frame is genuinely author-authenticated, so the failure
+        // must come from its incompatible context, not a broken signature.
+        let foreign = foreign_packet.authenticated(&foreign_packet.frames[cut]).unwrap();
+        assert!(checker.check_authenticated_part(&foreign_context, &mut restored, foreign).is_err());
+        assert_eq!(restored.snapshot(), before);
+        assert_eq!(restored.charged_transport_bytes().unwrap(), transport_before);
+        for index in [cut - 1, cut + 1] {
+            assert!(
+                checker
+                    .check_authenticated_part(&context, &mut restored, packet.authenticated(&packet.frames[index]).unwrap())
+                    .is_err()
+            );
+            assert_eq!(restored.snapshot(), before);
+            assert_eq!(restored.charged_transport_bytes().unwrap(), transport_before);
+        }
+        for bytes in &packet.frames[cut..] {
+            checker.check_authenticated_part(&context, &mut restored, packet.authenticated(bytes).unwrap()).unwrap();
+        }
+        assert_eq!(restored.charged_signature_bytes(), packet.frames.len() as u64 * SIGNATURE_BYTES as u64);
+        assert_eq!(checker.finish(&context, restored).unwrap().outcome(), CheckOutcome::Matched);
+    }
 }
 
 #[test]
@@ -147,7 +249,7 @@ fn signature_domains_malformed_frames_and_stale_ordinals_fail() {
     let ctx = p.authenticate(&t).unwrap();
     let mut progress = ctx.start().unwrap();
     let checker = TirNodeChecker;
-    assert!(checker.check_part(&ctx, &mut progress, p.authenticated(&p.frames[1]).unwrap().frame()).is_err());
+    assert!(checker.check_authenticated_part(&ctx, &mut progress, p.authenticated(&p.frames[1]).unwrap()).is_err());
     assert_eq!(progress.snapshot().next_leaf, 0);
 }
 
@@ -171,7 +273,7 @@ fn an_unsigned_relay_tamper_cannot_reject_the_honest_panel_candidate() {
     assert_eq!(progress.charged_wire_bytes(), 0);
     // The exact same author-signed packet can still be relayed and checked.
     for b in &p.frames {
-        TirNodeChecker.check_part(&ctx, &mut progress, p.authenticated(b).unwrap().frame()).unwrap();
+        TirNodeChecker.check_authenticated_part(&ctx, &mut progress, p.authenticated(b).unwrap()).unwrap();
     }
     assert_eq!(TirNodeChecker.finish(&ctx, progress).unwrap().outcome(), CheckOutcome::Matched);
     let mut wrong_domain = p.clone();
@@ -187,7 +289,7 @@ fn exhausted_evaluation_budget_is_unverified_and_never_an_arithmetic_conviction(
     cap.max_terms_per_leaf = 1;
     let ctx = p.authenticate_limits(&t, cap).unwrap();
     let mut progress = ctx.start().unwrap();
-    assert!(TirNodeChecker.check_part(&ctx, &mut progress, p.authenticated(&p.frames[0]).unwrap().frame()).is_err());
+    assert!(TirNodeChecker.check_authenticated_part(&ctx, &mut progress, p.authenticated(&p.frames[0]).unwrap()).is_err());
     assert_eq!(progress.snapshot().outcome, CheckOutcome::EndedUnverified);
     assert!(TirNodeChecker.finish(&ctx, progress).is_err());
 }
@@ -252,7 +354,7 @@ fn role_worker() {
                 };
                 let mut failed = false;
                 for b in &frames {
-                    if checker.check_part(&ctx, &mut progress, p.authenticated(b).unwrap().frame()).is_err() {
+                    if checker.check_authenticated_part(&ctx, &mut progress, p.authenticated(b).unwrap()).is_err() {
                         failed = true;
                         break;
                     }
@@ -260,10 +362,12 @@ fn role_worker() {
                 if role == "restart" {
                     let cut = progress.snapshot().next_leaf as usize;
                     for b in &p.frames[cut..] {
-                        checker.check_part(&ctx, &mut progress, p.authenticated(b).unwrap().frame()).unwrap();
+                        checker.check_authenticated_part(&ctx, &mut progress, p.authenticated(b).unwrap()).unwrap();
                     }
                 }
                 let bytes = progress.charged_wire_bytes();
+                let signatures = progress.charged_signature_bytes();
+                let signed_transport = progress.charged_transport_bytes().unwrap();
                 let cursor = progress.snapshot().next_leaf;
                 let status = if role == "prefix" {
                     assert!(!failed);
@@ -281,7 +385,8 @@ fn role_worker() {
                     assert_eq!(outcome, if role == "refute" { CheckOutcome::OutputMismatch } else { CheckOutcome::Matched });
                     format!("{outcome:?}")
                 };
-                serde_json::json!({"status":status,"cursor":cursor,"charged_full_frame_bytes":bytes,"native_credit":false})
+                serde_json::json!({"status":status,"cursor":cursor,"charged_full_frame_bytes":bytes,
+                    "charged_signature_bytes":signatures,"charged_signed_transport_bytes":signed_transport,"native_credit":false})
             }
         }
         _ => panic!("unknown role"),
@@ -341,6 +446,8 @@ fn separate_processes_recover_checked_frames_and_reject_a_whole_foreign_packet()
         reports.push(report);
     }
     assert_eq!(reports[3]["detail"]["charged_full_frame_bytes"], reports[5]["detail"]["charged_full_frame_bytes"]);
+    assert_eq!(reports[3]["detail"]["charged_signed_transport_bytes"], reports[5]["detail"]["charged_signed_transport_bytes"]);
+    assert_eq!(reports[2]["detail"]["signed_delivery_bytes"], reports[3]["detail"]["charged_signed_transport_bytes"]);
     assert_eq!(reports[8]["detail"]["status"], "RejectedForeignScope");
     let report = serde_json::json!({"schema":"a7-r1-all-node-i32-v1","profile":"warm-4x4-3-decode","reports":reports,
         "a2_miner_adapter_connected":false,

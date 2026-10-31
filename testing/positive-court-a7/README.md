@@ -1,10 +1,12 @@
 # A7 — independent Positive Court r1 acceptance
 
-Workspace: `codex/positive-court-a7`, based on A0 `4dede1aff` plus the A1
-`ef8e4e87d` / `b3a61454c` adapters and A0 author-frame authentication
-`5901eff3f`, followed by A3 `b699358de` / `84d95e372`. A7 owns only this test
-crate and runner. A0's later `42a60b840` namespace/funding additions are not part
-of this pinned candidate and are not included in its PASS.
+Workspace: `codex/positive-court-a7`. The earlier 110-test candidate is retained
+as historical evidence. Parallel follow-up merges A0 through `6337ea50d`,
+including native schema/funding reservations, A1 signed ingress/meter, the
+accepted A2 bound inference plus protected-tail fix, A3 compatibility, and A5
+node bridges. A7 owns only this test crate, audit evidence and runner.
+New follow-up code is not treated as verified until its own pinned manifest
+reports success; prior candidates' successes are never summed into that result.
 No shared production module, native activation, model tier, or model-review rule
 is changed by A7. Computation is checked directly; cryptography authenticates data
 and authors only.
@@ -26,8 +28,11 @@ binary/lock hashes, raw logs and explicit gaps. It starts each command in a new
 session. Timeout or surviving descendants trigger TERM, then KILL if necessary;
 the direct child is reaped and the whole group checked for live writers before
 the log is closed or hashed. Zombie entries, if any, are recorded separately.
-The three process-control tests include a TERM-ignoring parent and grandchild,
-and a wrapper that exits successfully but leaves a writer behind.
+The process-control tests include a TERM-ignoring parent/grandchild, a wrapper
+that leaves a writer, SIGTERM of the controller, and repeated SIGINT during
+cleanup. Handler restoration and log stability are checked. SIGKILL of the
+controller and a child deliberately escaping into a different session are
+outside this process-group guarantee.
 
 The A7 crate has a separate lock containing only versions already present in A0's
 root lock. It avoids editing A0's workspace/feature/module files. `--locked` and
@@ -37,6 +42,10 @@ test-profile observations, not production performance certification. Rust test
 threads use an explicit 16 MiB `RUST_MIN_STACK`: the earlier unoptimized fence
 run aborted on the default test-thread stack; its original failed log is retained.
 The same fence binary passed all nine tests with the explicit test-stack setting.
+The runner rejects an empty/ignored required test target individually, and
+re-enumerates/rechecks sources, root manifests, locks, HEAD and both A7 test
+binaries before writing PASS. Concurrent edits therefore cannot silently
+change the candidate after its initial fingerprint.
 
 ## Independent trust and arithmetic
 
@@ -71,7 +80,8 @@ substitution, false arithmetic signed by all actors, a valid full computation
 with a wrong Miner output, malformed framing, ordering and complete-frame bytes.
 Rejected Panel material must not be converted to a Miner computation conviction.
 Every frame sent to A1 first authenticates the exact canonical bytes with A0's
-`EvidenceFrame::authenticate` and `EVIDENCE_SIGN_CONTEXT`. Third-party tampering
+`EvidenceFrame::authenticate` and `EVIDENCE_SIGN_CONTEXT`, then uses A1's actual
+`check_authenticated_part` so signature bytes enter its meter. Third-party tampering
 fails delivery before touching candidate progress; a deliberately bad Panel frame
 is signed again by that Panel before testing witness rejection. Low evaluation
 budgets produce `EndedUnverified`, not an arithmetic conviction. The signed frame
@@ -95,9 +105,11 @@ process-lifetime counters; stage timings include fixture, codec and signing work
 These scopes cannot be subtracted to claim a certified Miner overhead ratio.
 The fixture initializer's artifact-index preparation and trusted-metadata read
 are outside the role-stage timer. The baseline also includes local plan/params
-setup; it is not a pure inference kernel benchmark. A2's actual Miner adapter is
-not called by this warm fixture. A3's local PanelBuilder port is connected; its
-remote provider/delivery path remains outside this process test.
+setup; it is not a pure inference kernel benchmark. The role-process measurement
+retains a small local Miner fixture. Separate pipeline tests call A2's actual
+bound inference/signing and preserve that exact signature across A3/A1/A5.
+A3's local PanelBuilder port is connected; its remote provider/delivery path is
+tested separately as a private fixture rather than real network delivery.
 One warm 4x4 sample is **not** a real LLM, cold/provider, minimum-hardware,
 concurrency, p95/p99, storage-retention or native-network measurement.
 
@@ -105,11 +117,17 @@ The test-only prefix journal replays checked frames in a new process. It is not
 A6's atomic service/request/attempt/funding journal, power-loss durability,
 reorg, pruning or IBD. Missing those integrations stays unverified.
 
-Remaining evidence: A3 remote provider/delivery; A2 actual adapter/provider/cold data
-delivery and signed duties; A4 rooted draw/carrier/deadline/funding admission;
+Remaining evidence: real provider/cold data delivery and native signed duties;
+A4 rooted draw/carrier/deadline/funding admission;
 A5 current Gate C and every actual reward/DAG/settlement/dependency read; A6 atomic
 recovery; real LLM and concurrent-network limits and explicit production caps.
 No stub grants native credit. Activation remains disabled.
+
+The [trained-artifact profile audit](test-compatible-llm-audit.md) records why
+the inspected existing trained artifacts cannot run under the current initial
+all-node-i32 checker profile. It is claim-profile compatibility, not model
+registration/quality/tier review. No real LLM throughput is inferred from toy
+measurements or from older registration/conformance successes.
 
 Known old-example handoff: the former `positive-court-llm` prototype example used
 the yardstick context without filling the registered tokenizer. Nonzero-tokenizer

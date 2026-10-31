@@ -1277,6 +1277,7 @@ dependencies = [
  "misaka-palw-gen",
  "misaka-palw-kernel",
  "misaka-palw-panel",
+ "misaka-palw-positive-contract",
  "misaka-palw-tir",
  "rand 0.8.6",
  "serde",
@@ -1368,6 +1369,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "kaspa-txscript"
+version = "1.1.0"
+dependencies = [
+ "blake2b_simd",
+ "borsh",
+ "cfg-if",
+ "hexplay",
+ "indexmap",
+ "itertools 0.13.0",
+ "kaspa-addresses",
+ "kaspa-consensus-core",
+ "kaspa-hashes",
+ "kaspa-txscript-errors",
+ "kaspa-utils",
+ "kaspa-wasm-core",
+ "libcrux-ml-dsa",
+ "log",
+ "parking_lot",
+ "rand 0.8.6",
+ "serde",
+ "serde-wasm-bindgen",
+ "serde_json",
+ "sha2",
+ "smallvec",
+ "thiserror 1.0.64",
+ "wasm-bindgen",
+ "workflow-wasm",
+]
+
+[[package]]
 name = "kaspa-txscript-errors"
 version = "1.1.0"
 dependencies = [
@@ -1401,6 +1432,17 @@ dependencies = [
  "triggered",
  "uuid",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "kaspa-wasm-core"
+version = "1.1.0"
+dependencies = [
+ "faster-hex 0.10.1",
+ "hexplay",
+ "js-sys",
+ "wasm-bindgen",
+ "workflow-wasm",
 ]
 
 [[package]]
@@ -1667,6 +1709,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "misaka-endpoints"
+version = "1.1.0"
+dependencies = [
+ "dirs",
+ "kaspa-consensus-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "misaka-palw-challenge"
 version = "1.1.0"
 dependencies = [
@@ -1707,12 +1759,55 @@ dependencies = [
 ]
 
 [[package]]
+name = "misaka-palw-positive-accounting"
+version = "1.1.0"
+dependencies = [
+ "misaka-palw-positive-contract",
+]
+
+[[package]]
+name = "misaka-palw-positive-accounting-node"
+version = "1.1.0"
+dependencies = [
+ "kaspa-consensus-core",
+ "kaspa-hashes",
+ "misaka-palw-positive-accounting",
+ "misaka-palw-positive-contract",
+ "misaka-palw-tir-exec",
+]
+
+[[package]]
 name = "misaka-palw-positive-contract"
 version = "1.1.0"
 dependencies = [
  "blake2b_simd",
  "borsh",
  "libcrux-ml-dsa",
+]
+
+[[package]]
+name = "misaka-palw-remote"
+version = "1.1.0"
+dependencies = [
+ "blake2b_simd",
+ "borsh",
+ "faster-hex 0.10.1",
+ "kaspa-addresses",
+ "kaspa-consensus-core",
+ "kaspa-hashes",
+ "kaspa-txscript",
+ "libc",
+ "libcrux-ml-dsa",
+ "misaka-endpoints",
+ "misaka-palw-challenge",
+ "misaka-palw-kernel",
+ "misaka-palw-positive-contract",
+ "misaka-palw-tir",
+ "misaka-palw-tir-artifact",
+ "misaka-palw-tir-exec",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.64",
 ]
 
 [[package]]
@@ -1759,7 +1854,10 @@ dependencies = [
  "kaspa-consensus-core",
  "libc",
  "libcrux-ml-dsa",
+ "misaka-palw-positive-accounting",
+ "misaka-palw-positive-accounting-node",
  "misaka-palw-positive-contract",
+ "misaka-palw-remote",
  "misaka-palw-tir",
  "misaka-palw-tir-exec",
  "serde_json",
