@@ -76,6 +76,14 @@ pub trait StepSink {
         false
     }
     fn node(&mut self, v: &NodeValue<'_>);
+    /// Fallible observation without changing existing sinks. On failure the
+    /// executor aborts the position and applies none of its pending effects.
+    /// Values already observed belong to an unsuccessful step and must be
+    /// discarded by the receiver, as for an arithmetic execution failure.
+    fn try_node(&mut self, v: &NodeValue<'_>) -> TirResult<()> {
+        self.node(v);
+        Ok(())
+    }
 }
 
 /// A sink that keeps nothing.
@@ -782,6 +790,53 @@ impl<'a> TirExecutor<'a> {
         matches!(self.plan.instances[k].kind, StateKind::Fixed { .. }).then(|| self.run.fixed[k].slice())
     }
 
+    /// Borrow the successful current state without exporting or converting its
+    /// tensors. Fixed instances are visited first in plan order, followed by each
+    /// history's retained window, oldest row first. History coordinates are the
+    /// original absolute positions; dropped rows and the legacy i32 tail cache
+    /// are deliberately absent. A visitor error stops before the next value.
+    /// Each slice is valid only for its callback and keeps its native storage.
+    #[allow(clippy::type_complexity)]
+    pub fn visit_state(
+        &self,
+        visit: &mut dyn FnMut(u16, Option<u16>, Option<u32>, DType, &[usize], Slice<'_>) -> Result<(), String>,
+    ) -> Result<(), String> {
+        let scoped = self.cell_occ.as_ref().map(|occ| self.plan.cell_state_instances(occ)).transpose().map_err(|e| e.to_string())?;
+        for (k, inst) in self.plan.instances.iter().enumerate() {
+            if scoped.as_ref().is_some_and(|set| !set.contains(&k)) {
+                continue;
+            }
+            if matches!(inst.kind, StateKind::Fixed { .. }) {
+                visit(inst.state, inst.layer, None, inst.dtype, &inst.shape, self.run.fixed[k].slice())?;
+            }
+        }
+        for (k, inst) in self.plan.instances.iter().enumerate() {
+            if scoped.as_ref().is_some_and(|set| !set.contains(&k)) {
+                continue;
+            }
+            if matches!(inst.kind, StateKind::Hist { .. }) {
+                let history = &self.run.hist[k];
+                let rows = u32::try_from(history.rows).map_err(|_| "history row count exceeds u32")?;
+                let first = self.run.pos.checked_sub(rows).ok_or("history rows precede execution start")?;
+                let data = history.data.slice();
+                for offset in 0..history.rows {
+                    let start = history
+                        .start
+                        .checked_add(offset)
+                        .and_then(|row| row.checked_mul(history.row))
+                        .ok_or("history row extent overflow")?;
+                    let end =
+                        start.checked_add(history.row).filter(|end| *end <= data.len()).ok_or("history row outside native storage")?;
+                    let source_row = first
+                        .checked_add(u32::try_from(offset).map_err(|_| "history row index exceeds u32")?)
+                        .ok_or("history source position overflow")?;
+                    visit(inst.state, inst.layer, Some(source_row), inst.dtype, &inst.shape, data.sub(start, end - start))?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// The last successful step's logits.
     pub fn logits(&self) -> (&[usize], Slice<'_>) {
         (&self.work.logits_shape, self.work.logits.slice())
@@ -849,6 +904,16 @@ impl<'a> TirExecutor<'a> {
                     self.inner.node(&NodeValue { data: buf.slice(), ..*v });
                 } else {
                     self.inner.node(v);
+                }
+            }
+            fn try_node(&mut self, v: &NodeValue<'_>) -> TirResult<()> {
+                if v.slot == self.slot {
+                    let mut lanes = v.data.to_i128s();
+                    (self.lie)(&mut lanes);
+                    let buf = Buf::from_i128s(v.dtype, &lanes);
+                    self.inner.try_node(&NodeValue { data: buf.slice(), ..*v })
+                } else {
+                    self.inner.try_node(v)
                 }
             }
         }
@@ -1125,7 +1190,7 @@ impl<'a> TirExecutor<'a> {
                         materialize(&opd, &mut work.commit);
                         work.commit.slice()
                     };
-                    sink.node(&NodeValue {
+                    sink.try_node(&NodeValue {
                         slot: base + ni as u32,
                         block,
                         layer,
@@ -1134,7 +1199,7 @@ impl<'a> TirExecutor<'a> {
                         dtype: node.out.dtype,
                         shape: out_shape,
                         data,
-                    });
+                    })?;
                 }
             }
             // Carry to the next occurrence, or the logits.

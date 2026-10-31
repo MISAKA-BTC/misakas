@@ -25,6 +25,8 @@ pub mod positive_contract;
 pub mod positive_court_adapter;
 #[cfg(feature = "positive-panel")]
 pub mod positive_panel;
+#[cfg(feature = "positive-panel")]
+pub mod positive_typed_capture;
 mod public_source;
 pub mod residency;
 pub mod run;
