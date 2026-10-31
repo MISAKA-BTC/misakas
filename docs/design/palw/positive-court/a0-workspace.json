@@ -1,0 +1,46 @@
+{
+  "schema": "misaka.positive.a0-workspace.v1",
+  "base_commit": "a5800d2dd5d334e89f7a1ddb6e956aedcbf4adf5",
+  "branch": "codex/positive-court-a0",
+  "scope": "A0 shared contract and integration only",
+  "prototype_source_checkout": "/Users/wata/Downloads/MISAKA-testnet",
+  "prototype_is_authoritative": false,
+  "prototype_copied": false,
+  "frozen_reference_files": [
+    {
+      "path": "consensus/core/src/palw_positive_court_v2.rs",
+      "sha256": "86eea342ac6472fc9e510f6050763ca7a5c1ef7ef33ea889440b5ed0caf1a7bb"
+    },
+    {
+      "path": "consensus/core/src/palw_positive_court_v2/service.rs",
+      "sha256": "720ebe8846d921c74bcbb9d36091f29a11e30aea182d2803e7b43c0ceb1eb5cf"
+    },
+    {
+      "path": "consensus/core/src/palw_positive_court_v2/gate.rs",
+      "sha256": "b44d5aa10164eef33f6f3156e9e50713906ba6ac1c47346bac9cfe34a60d4d4c"
+    },
+    {
+      "path": "consensus/core/src/palw_positive_court_v2/coordinator.rs",
+      "sha256": "0e28450339c057d4b9874e0c921e4c435e13a66732e32b81049768118f9dc277"
+    },
+    {
+      "path": "consensus/core/src/palw_positive_court_v2/journal.rs",
+      "sha256": "26f344bcdd65fe975d37c828f7e4f47db9f1ca2e4575467762bce69a341415c1"
+    },
+    {
+      "path": "misaka/palw/tir/exec/src/node/positive_court.rs",
+      "sha256": "15fff9e9ca176c6b608b9d6bbee82892d385e650e033aae0dd1f14747f67f881"
+    },
+    {
+      "path": "misaka/palw/remote/src/pursuit/positive.rs",
+      "sha256": "e12e27383c95efa2b995707e66672d7e08d4f38d2de376f4331636d26f20f790"
+    }
+  ],
+  "contract_version": 2,
+  "contract_revision": 1,
+  "external_reserved_numbers": [
+    "RFC-0043",
+    "ADR-0211"
+  ],
+  "external_reservation_note": "User-adopted wide Q24 work remains in original checkout; no silent import or number reuse."
+}
