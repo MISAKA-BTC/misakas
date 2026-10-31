@@ -27,3 +27,5 @@
 - `afc37f144` はwide metadataを認証済みclass/artifact/layoutからfull record照合して導出し、V1 decodeのflat/Int32 fallbackへ既知wide program/headerが入ることを拒否する。旧I8/I16を含むnarrow経路は維持し、新しいauthorityを発行しない。この追加のRoot試験は実行中。
 
 全範囲Node checkerの最終wide出力接続、8B上界の全Court sizing、DA/decode reader、private court2の全経路の受付、P/資金/全consumerと実trained cohort再現は未完了。guardやdata APIの追加だけでfenceを有効化しない。
+
+Rootの後続確認ではmetadata8・decode4・wide runner10・専用positive-panel adapter8の30件が標準test stackで成功した。[count audit](../../../evidence/positive-court-a0-2026-10-31/integration/wide-run-safety-count-audit-20261101.json) は、先行node-only指定でadapterが0件だったことを保持し除外する。A1のlayout不要row-profile viewを`941b78c86`まで統合した後、[SDK/Core/exec strict library Clippy](../../../evidence/positive-court-a0-2026-10-31/integration/wide-row-sdk-core-clippy-20261101.json) が成功。viewの`row_max_context`はrooted row由来であり、layout preimageとの一致・step geometry・admission・native権限を代替しない。

@@ -46,3 +46,8 @@ A7の旧79c3正式失敗（661成功/6失敗）と、test-only fixture修正後�
 
 
 Root `afc37f144` まで: A3 explicit wide CPU producer（owner49件・Clippy、Root alias `9689b3369` / evidence `f03fc56d3`）とmetadata/full-layout join・V1 decode拒否を統合。Root `017bff082` ではrecord6件とStep/data11件が標準stackで成功し、SDK全16件は同じbinary・明示16MiB stackで成功。SDK標準stackの全suite停止と追加4件中1件停止は原本を保持し、LLDBでshipped Params生成中の既存apply_object_innerのstack probeへ局所化した。標準stackを直したとは扱わない。現在のnewrun/metadata/decode合成sourceは別のRoot試験中。A1 row-only metadata view、A3 capture2/Hello2、A4 explicit8B sizing、A0 reviewerのwide source-only checkerを並行作業中。新nativeAssignment案の採択回答は引き続き未受領。
+
+
+Root `4e60a7253` checkpoint: `afc37f144` と同じRust sourceのmetadata8／decode4／wide runner10／専用positive-panel adapter8、計30件は標準test stackで成功・source不変。先行node-only adapterの0件は [count audit](../../docs/evidence/positive-court-a0-2026-10-31/integration/wide-run-safety-count-audit-20261101.json) で明示除外し、専用featureで実行し直した。A1 row-profile/helperの確定sourceをRoot `a01b79dda / 941b78c86`、owner証拠を`66e1aad31`へ取り込み、Root currentのSDK/Core/exec(positive-panel) library strictClippyは成功。A1の9+1件はowner983b5277aの別候補で、Root30件へ加算しない。SDK16MiB条件と標準stack停止は前段のまま。
+
+次のNode wide全範囲checkerは `/tmp/positive-a0-wide-node-exact-v2.patch` の未適用案。初回frozen artifact b004...は独立レビューで重複型名・未定義helper・unused警告が見つかり、修正とFixed/Hist試験追加を依頼中。未コンパイルの7試験を成功に数えず、Rootへは適用していない。A3capture2はsource/review段階、追加buildは空き容量確認まで待機。A4はexplicitV2 pure sizingを実装中で、private fence/version2許可はまだ変更しない。
