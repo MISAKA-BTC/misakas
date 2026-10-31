@@ -326,3 +326,159 @@ fn unauthenticated_relay_mutations_never_touch_node_progress_or_charge_arithmeti
         assert_eq!(progress.snapshot().next_leaf, 1);
     });
 }
+
+#[test]
+fn acyclic_funding_consent_precedes_final_result_and_actual_panel_node_plan() {
+    use kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1;
+    use misaka_palw_positive_contract::{
+        CONTRACT_REVISION, CONTRACT_VERSION,
+        funding::{FundingConsent, FundingPlanBasis, funding_scope},
+        native,
+    };
+    use misaka_palw_tir_exec::node::{positive_check::CoveragePlan, positive_panel::PanelAdmission};
+    with_fixture(false, |f, runner, inventory| {
+        // These fork/policy/quote/address digests are explicit synthetic inputs
+        // from a fixed fixture resolver, not native funding/UTXO capabilities.
+        let fired_fork = d(70);
+        let policy = d(71);
+        let mut rooted = f.rooted;
+        rooted.scope.ruleset = native::ruleset_id(fired_fork, policy);
+        let coverage = CoveragePlan::derive(&f.class, f.artifact, &f.job, PalwPromptIdsFormV1::Flat, check_limits()).unwrap();
+        let relations = coverage.leaf_count();
+        let basis = FundingPlanBasis {
+            profile: CheckProfile::ExactStreamV1,
+            derivation: tir::exact_derivation_id(),
+            mandatory_relations: relations,
+            source_catalog: d(72),
+            resource_quote: d(73),
+            policy,
+            schedule: d(74),
+            required_fee: 3,
+            required_capital: 5,
+        };
+        let mut result_core = f.result.clone();
+        result_core.scope = rooted.scope;
+        result_core.service_contract = Digest([0; 64]);
+        let stale_preconsent_plan = coverage_plan_id(&result_core, basis.profile, basis.derivation, relations).unwrap();
+        let mut service = MinerServiceContract {
+            version: CONTRACT_VERSION,
+            revision: CONTRACT_REVISION,
+            case: result_core.case_id(),
+            source_catalog: basis.source_catalog,
+            provider_delegations: d(75),
+            budget: AggregateBudget {
+                rounds: 4,
+                unique_source_bytes: 1 << 20,
+                transmitted_bytes: 1 << 22,
+                additional_work: 1000,
+                retained_bytes: 1 << 20,
+                retention_until: 100,
+                fee: 2,
+                witness_attempts: 2,
+            },
+            funding_consent: Digest([0; 64]),
+            deadline: 90,
+        };
+        let payer = Key::new(63);
+        let consent = FundingConsent {
+            version: CONTRACT_VERSION,
+            revision: CONTRACT_REVISION,
+            case: result_core.case_id(),
+            scope: funding_scope(&result_core, &service, &basis),
+            payer: principal(payer.0.verification_key.as_ref()),
+            max_fees: 4,
+            max_locked: 9,
+            funding_output_index: 0,
+            refund_payload: d(93), // Synthetic address payload, deliberately not a principal/key ID.
+            admission_expiry: 80,
+        };
+        assert_ne!(consent.refund_payload, consent.payer.0);
+        let payer_signature: [u8; SIGNATURE_BYTES] =
+            payer.sign_with_context(&consent.id().0.0, FUNDING_SIGN_CONTEXT).unwrap().try_into().unwrap();
+        service.funding_consent = consent.id().0;
+        let mut final_result = result_core.clone();
+        final_result.service_contract = service.id();
+        let payer_auth =
+            consent.authenticate(&final_result, &service, &basis, 1, payer.0.verification_key.as_ref(), &payer_signature).unwrap();
+        assert_eq!(payer_auth.basis().mandatory_relations, relations);
+        assert_eq!(consent.scope, funding_scope(&final_result, &service, &basis));
+        assert_eq!(final_result.case_id(), result_core.case_id());
+        assert_ne!(final_result.id(), result_core.id());
+        // Invalid literal terms fail the shared helper even with coherent
+        // acyclic links. No actual output qualification is performed here.
+        for bad_term in 0..3 {
+            let mut invalid = consent.clone();
+            match bad_term {
+                0 => invalid.max_fees = 2,
+                1 => invalid.max_locked = 7,
+                _ => invalid.admission_expiry = 1,
+            }
+            let mut invalid_service = service;
+            invalid_service.funding_consent = invalid.id().0;
+            let mut invalid_result = final_result.clone();
+            invalid_result.service_contract = invalid_service.id();
+            assert_eq!(invalid.validate(&invalid_result, &invalid_service, &basis, 1), Err(ContractError::Budget));
+        }
+        let miner = Key::new(61);
+        let miner_signature: [u8; SIGNATURE_BYTES] =
+            miner.sign_with_context(&final_result.id().0.0, RESULT_SIGN_CONTEXT).unwrap().try_into().unwrap();
+        let authenticated = final_result.authenticate(&f.key, &miner_signature).unwrap();
+        let admitted = PanelAdmission::authenticate(
+            &final_result,
+            rooted,
+            &f.class,
+            &f.job,
+            PROMPT,
+            PalwPromptIdsFormV1::Flat,
+            &f.key,
+            &miner_signature,
+            panel_limits(),
+        )
+        .unwrap();
+        let builder = TirPanelBuilder::new(runner, inventory);
+        let capture = builder.replay_and_capture(&admitted).unwrap();
+        let final_plan = admitted.plan();
+        assert_eq!(final_plan.mandatory_relations, basis.mandatory_relations);
+        assert_eq!(final_plan.plan, coverage_plan_id(&final_result, basis.profile, basis.derivation, coverage.leaf_count()).unwrap());
+        assert_ne!(final_plan.plan, stale_preconsent_plan);
+        let mut stale = final_plan;
+        stale.plan = stale_preconsent_plan;
+        assert!(builder.commit(&capture, &stale, witness_author(), 0).is_err());
+        let witness = builder.commit(&capture, &final_plan, witness_author(), 0).unwrap();
+        let signed = SignedPanelWitnessR1::sign(&authenticated, final_plan, witness, &Key::new(62)).unwrap();
+        let mut full_limits = check_limits();
+        full_limits.max_part_bytes = FRAME_CAP;
+        let prepared = PreparedCheck::authenticate(
+            &rooted,
+            &f.class,
+            f.artifact,
+            &f.job,
+            PalwPromptIdsFormV1::Flat,
+            full_limits,
+            final_result.clone(),
+            &f.key,
+            &miner_signature,
+        )
+        .unwrap();
+        assert_eq!(prepared.descriptor(), final_plan);
+        let context = prepared
+            .authenticate_witness(
+                signed.witness().clone(),
+                capture.binding().clone(),
+                capture.generated().to_vec(),
+                signed.author_key(),
+                signed.signature(),
+            )
+            .unwrap();
+        let mut progress = context.start().unwrap();
+        let mut batch = signed.batch(0, relations, relations, SIGNED_FRAME_CAP * relations).unwrap();
+        let parts = builder.prepare_parts(&capture).unwrap();
+        for next_relation in 0..relations {
+            let part = parts.build_part(CoverageCursor { plan: final_plan.plan, next_relation }).unwrap();
+            let packet = signed.sign_part(&part.frame(signed.witness(), &final_plan).unwrap(), &Key::new(62)).unwrap();
+            batch.push(&packet).unwrap();
+        }
+        assert_eq!(batch.check_with(&TirNodeChecker, &context, &mut progress).unwrap(), relations);
+        assert_eq!(TirNodeChecker.finish(&context, progress).unwrap().outcome(), CheckOutcome::Matched);
+    });
+}
