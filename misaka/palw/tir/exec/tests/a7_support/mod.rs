@@ -98,7 +98,8 @@ pub fn setup(wide: bool, ties: bool, prompt: u32) -> (PalwTirClassV1, MinerResul
     let plan = TirPlan::compile(&p).unwrap();
     let map = params(false);
     let params = TirParams::from_map(&plan, &map).unwrap();
-    let inventory = TirHeldInventoryV1::build(&p, &TirParamsSourceV1(&params)).unwrap();
+    let source = TirParamsSourceV1(&params);
+    let inventory = TirHeldInventoryV1::build(&p, &source).unwrap();
     let artifact = inventory.tree.root();
     let class = PalwTirClassV1 {
         version: 1,
@@ -202,7 +203,8 @@ pub fn panel(wide: bool, ties: bool, prompt: u32, result: MinerResultV2, poison:
     let plan = TirPlan::compile(&program(wide, ties)).unwrap();
     let honest_map = params(false);
     let honest_params = TirParams::from_map(&plan, &honest_map).unwrap();
-    let inventory = TirHeldInventoryV1::build(&plan.program, &TirParamsSourceV1(&honest_params)).unwrap();
+    let honest_source = TirParamsSourceV1(&honest_params);
+    let inventory = TirHeldInventoryV1::build(&plan.program, &honest_source).unwrap();
     let map = params(poison);
     let params = TirParams::from_map(&plan, &map).unwrap();
     let space = PalwTirStepSpaceV1::new(&class).unwrap();
