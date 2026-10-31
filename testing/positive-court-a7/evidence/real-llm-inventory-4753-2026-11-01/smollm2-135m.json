@@ -1,0 +1,4619 @@
+{
+  "schema": "a7.existing-trained-llm-inventory.v1",
+  "purpose": "Read-only source/artifact data-identity inventory; no model quality/registration/tier review or claim-credit acceptance",
+  "repository_source_commit": "4753ee4beae5e245095954c6ef6e9b96fa05f361",
+  "requested_fixed_source": "4753ee4beae5e245095954c6ef6e9b96fa05f361",
+  "started_utc": "2026-10-31T17:55:46.246703+00:00",
+  "finished_utc": "2026-10-31T17:57:21.159142+00:00",
+  "repository": "HuggingFaceTB/SmolLM2-135M",
+  "revision": "93efa2f097d58c2a74874c7e644dbc9b0cee75a2",
+  "original_max_context": 8192,
+  "selected_original_three": [
+    {
+      "repository": "HuggingFaceTB/SmolLM2-360M",
+      "revision": "f8027fd0eaeea54caa13c31d31b9fdc459c38b49"
+    },
+    {
+      "repository": "HuggingFaceTB/SmolLM2-135M",
+      "revision": "93efa2f097d58c2a74874c7e644dbc9b0cee75a2"
+    },
+    {
+      "repository": "EleutherAI/pythia-70m",
+      "revision": "a39f36b100fe8a5377810d56c3f4789b9c53ac42"
+    }
+  ],
+  "selection_scope": "uniform sample of three from seven explicitly predeclared publisher-released pretrained causal LMs; not a Hub-wide random sample",
+  "resampling_on_failure": false,
+  "assigned_model_directory": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M",
+  "directory_realpath": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M",
+  "hash_method": {
+    "algorithm": "SHA-256 over entire file streamed in 1 MiB chunks",
+    "stat_stability_fields": [
+      "device",
+      "inode",
+      "bytes",
+      "mtime_ns",
+      "ctime_ns",
+      "mode"
+    ],
+    "checks": "path stat before/open fd/after fd/path stat after, realpath before/after",
+    "limitations": "No atomic filesystem snapshot; equal observed stats are a stability check, not external publisher authentication. Only assigned model tree and directly referenced cohort metadata were examined."
+  },
+  "checkpoint": {
+    "path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/checkpoint",
+    "realpath": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/checkpoint",
+    "source_manifest_complete_recorded": true,
+    "physical_tensor_files": [
+      "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/checkpoint/model.safetensors"
+    ],
+    "header_only_safetensors": {
+      "tensor_entries": 272,
+      "parameters_by_dtype": {
+        "BF16": 134515008
+      },
+      "header_bytes": 30528
+    },
+    "publisher_revision_evidence": "Existing pinned source-manifest, hub-info, selection, pack and run agree; no network request was made.",
+    "git_lfs_pointer_note": "source-manifest.git_blob_sha1 for model.safetensors identifies its 134-byte Git LFS pointer; it is reproduced separately. The full physical checkpoint payload SHA256 matches both LFS oid and source/pack records."
+  },
+  "configuration": {
+    "architectures": [
+      "LlamaForCausalLM"
+    ],
+    "attention_bias": false,
+    "attention_dropout": 0.0,
+    "bos_token_id": 0,
+    "eos_token_id": 0,
+    "hidden_act": "silu",
+    "hidden_size": 576,
+    "initializer_range": 0.041666666666666664,
+    "intermediate_size": 1536,
+    "is_llama_config": true,
+    "max_position_embeddings": 8192,
+    "model_type": "llama",
+    "num_attention_heads": 9,
+    "num_hidden_layers": 30,
+    "num_key_value_heads": 3,
+    "pretraining_tp": 1,
+    "rms_norm_eps": 1e-05,
+    "rope_interleaved": false,
+    "rope_scaling": null,
+    "rope_theta": 100000,
+    "tie_word_embeddings": true,
+    "torch_dtype": "bfloat16",
+    "transformers_version": "4.40.1",
+    "use_cache": true,
+    "vocab_size": 49152
+  },
+  "declared_identity": {
+    "class_id": "7a2616b4b132946d21b1d396c0a82f69a144fb7f692394314efb35e3f8bff1f231b857f174e1165ad92c65ce742e1bcc57dfb11e1e5eab02b67b8cf87436c625",
+    "artifact_inventory_root": "8e31580dc81f6548b9e440c9b6d45fe63bff1d42ed2dbb4b342bdb58fc4590f0b8210f10a2a23e6c352c866a4313004b547ec363997e5757d2bce31a6838eec4",
+    "tokenizer_id": "57c55fb228e8bb272c1d3e3a75eb8e7a238fe2e6a7ccc5e4cd6b874c1278fbc79342c2d466bc52d53000bb0de6de57cb196fc0a413c2751d45cfb69551615ac2",
+    "output_profile_recorded": "i32 Q24 v1",
+    "max_context": 8192,
+    "status": "Existing declarations only; class digest recomputation uses the recorded inventory root, not a newly reconstructed weight root.",
+    "base_pack_graph_ir_root": "49fc964aa12211c20438c20bb16a0e3ff4f63730b4150d5b25b10096857a3b6b04c380a8d4dad71d2113fd87fc77799fe6b14ffc791fd3cb566a82dc75ccd4ad",
+    "declared_graph_ir_root": "203f9c0a8c6744d2cb5a533e1399f7ceca6719257165235612e1aa4c0ee5ce66e50f169c0a9be7c1b1255a47e82292e84b16f0bcb60bdb02ef2dab243a3fce41"
+  },
+  "historical_run_summary": {
+    "status_recorded": "PASS",
+    "registration_recorded": "PASS_PRIVATE_NATIVE_AND_REPLAY",
+    "public_network_recorded": false,
+    "claim_certified_recorded": false,
+    "all_statuses_are_historical_not_rerun": true
+  },
+  "artifact_containers": [
+    {
+      "path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/model.palwtir",
+      "physical": {
+        "path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/model.palwtir",
+        "realpath": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/model.palwtir",
+        "is_symlink": false,
+        "exists": true,
+        "bytes": 180336256,
+        "sha256": "809bfeb4d6af051c173e9e401ded0f60bcc10fe173f3a0cdfe2885cef8c697c8",
+        "git_blob_sha1": "7f457d82786f21b69cb0bd8a3e10a0cd0b2a61a3",
+        "stat_before": {
+          "device": 16777234,
+          "inode": 47103521,
+          "bytes": 180336256,
+          "mtime_ns": 1793439934648578085,
+          "ctime_ns": 1793439934648578085,
+          "mode": 33188
+        },
+        "stat_open": {
+          "device": 16777234,
+          "inode": 47103521,
+          "bytes": 180336256,
+          "mtime_ns": 1793439934648578085,
+          "ctime_ns": 1793439934648578085,
+          "mode": 33188
+        },
+        "stat_after_fd": {
+          "device": 16777234,
+          "inode": 47103521,
+          "bytes": 180336256,
+          "mtime_ns": 1793439934648578085,
+          "ctime_ns": 1793439934648578085,
+          "mode": 33188
+        },
+        "stat_after_path": {
+          "device": 16777234,
+          "inode": 47103521,
+          "bytes": 180336256,
+          "mtime_ns": 1793439934648578085,
+          "ctime_ns": 1793439934648578085,
+          "mode": 33188
+        },
+        "realpath_after": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/model.palwtir",
+        "stable_during_read": true,
+        "palwtir_file_digest_v1": "28851a1b2fc493b62f3e241beabb2c554126e67aad740d40097b2b1a9784ad018867c785d6d82f2de256837e6179071c0a083ab1368f42d330277c4833de3049"
+      },
+      "container_version": 1,
+      "header_version": 1,
+      "header_bytes": 49592,
+      "header_sha256": "9ae095033b7cc936a506b186682a53cf1bdf21aa8154319f50ccb2137e8de3ce",
+      "program_bytes": 13776,
+      "program_sha256": "c5b2976867f1ee5e6283b35777551f0d756f9676317aa9abacb2b7d023dacd96",
+      "graph_ir_root_recomputed": "49fc964aa12211c20438c20bb16a0e3ff4f63730b4150d5b25b10096857a3b6b04c380a8d4dad71d2113fd87fc77799fe6b14ffc791fd3cb566a82dc75ccd4ad",
+      "layout_bytes": 0,
+      "layout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "layout_digest_recomputed": null,
+      "tokenizer_id": "57c55fb228e8bb272c1d3e3a75eb8e7a238fe2e6a7ccc5e4cd6b874c1278fbc79342c2d466bc52d53000bb0de6de57cb196fc0a413c2751d45cfb69551615ac2",
+      "tensor_instances": 1662,
+      "tensor_payload_bytes": 180279606,
+      "tensor_table_max_end": 180336256,
+      "tensor_table_within_file": true,
+      "provenance_metadata": {
+        "architecture": "LlamaForCausalLM",
+        "calibration": {
+          "digest": "a02172d3c9d0e5341e05a6c40e01d74475155c9b89563438c70055cf58b513f8",
+          "schema": "misaka.palw.calib-stats.v1"
+        },
+        "converter": "palw-tir-convert 1.1.0",
+        "frontend": {
+          "adapter": {
+            "hash": "72f42bf13844d406d06c03526b29f6a076488c77bb65ded41f2bb7b604a8a9a1b8369064ba26f59cbb9c27f7e93502f6cefbfb55cd5ff4589a14ceeba3fec861",
+            "id": "llama",
+            "kind": "built-in"
+          },
+          "level": "B",
+          "spec_digest": "c4627be563b796421298d6c4fdf6565b01e2c2af48d680c3e987a28120b96e4a"
+        },
+        "logits_scale": 5.960464477539063e-08,
+        "math": {
+          "mode": "libm-v1"
+        },
+        "max_window": 8192,
+        "policy": {
+          "headroom16": 2.0,
+          "headroom32": 4.0,
+          "headroom_resid": 4.0
+        },
+        "quant": {
+          "descriptors": []
+        },
+        "resid_scale": 3.6068388015762154e-05,
+        "scope": {
+          "excluded": [],
+          "input": "token ids",
+          "output": "next-token logits",
+          "schema": "misaka.palw.feature-scope.v1",
+          "task": "text-generation",
+          "text_only": false
+        }
+      },
+      "recomputed_class_id_using_recorded_inventory_root": null,
+      "inventory_root_recomputation": "NOT_RUN; inventory root retained from existing metadata, not reconstructed from tensors"
+    },
+    {
+      "path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/model.palwtir.testnet-12.palwtir",
+      "physical": {
+        "path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/model.palwtir.testnet-12.palwtir",
+        "realpath": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/model.palwtir.testnet-12.palwtir",
+        "is_symlink": false,
+        "exists": true,
+        "bytes": 180336320,
+        "sha256": "48c72278b0d9b45c7ab92b6e70f5fbcef47fa86cc8644cd4307798354639fe90",
+        "git_blob_sha1": "a65d0c2823cb25f4879db7c87b63dbb97caeb19c",
+        "stat_before": {
+          "device": 16777234,
+          "inode": 47131659,
+          "bytes": 180336320,
+          "mtime_ns": 1793440555519333785,
+          "ctime_ns": 1793440555519333785,
+          "mode": 33188
+        },
+        "stat_open": {
+          "device": 16777234,
+          "inode": 47131659,
+          "bytes": 180336320,
+          "mtime_ns": 1793440555519333785,
+          "ctime_ns": 1793440555519333785,
+          "mode": 33188
+        },
+        "stat_after_fd": {
+          "device": 16777234,
+          "inode": 47131659,
+          "bytes": 180336320,
+          "mtime_ns": 1793440555519333785,
+          "ctime_ns": 1793440555519333785,
+          "mode": 33188
+        },
+        "stat_after_path": {
+          "device": 16777234,
+          "inode": 47131659,
+          "bytes": 180336320,
+          "mtime_ns": 1793440555519333785,
+          "ctime_ns": 1793440555519333785,
+          "mode": 33188
+        },
+        "realpath_after": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/model.palwtir.testnet-12.palwtir",
+        "stable_during_read": true,
+        "palwtir_file_digest_v1": "7ef829d64c6909e9332f5dc988086106e541ebeef5f17f7b5e7027892694a49e1f27b76714d43f513e7f164c0d62dfcd1c17287aebbd0bf265f4ac83a39765d6"
+      },
+      "container_version": 1,
+      "header_version": 1,
+      "header_bytes": 49714,
+      "header_sha256": "0767360d41d7fe101e9b28d369b272a4bf3b9b35ba5f36363c7c4cc107d8c3e3",
+      "program_bytes": 13776,
+      "program_sha256": "744225e2c41ebb11a741f86e9109f49cae28b3a0b50a07d266685779872cf6df",
+      "graph_ir_root_recomputed": "203f9c0a8c6744d2cb5a533e1399f7ceca6719257165235612e1aa4c0ee5ce66e50f169c0a9be7c1b1255a47e82292e84b16f0bcb60bdb02ef2dab243a3fce41",
+      "layout_bytes": 98,
+      "layout_sha256": "cdf5d64207dc9d34e5b659cb7e5873fafe789088b2b92f51f3dd74f3eb4f8a33",
+      "layout_digest_recomputed": "e39d73712d507ba1838875c35357195b197011ac468e485721563ca8c56629a164bf3db8eb395d6b4334e4c7686952aaa16390bf8d432bc4b209f14d7136b3c8",
+      "tokenizer_id": "57c55fb228e8bb272c1d3e3a75eb8e7a238fe2e6a7ccc5e4cd6b874c1278fbc79342c2d466bc52d53000bb0de6de57cb196fc0a413c2751d45cfb69551615ac2",
+      "tensor_instances": 1662,
+      "tensor_payload_bytes": 180279606,
+      "tensor_table_max_end": 180336320,
+      "tensor_table_within_file": true,
+      "provenance_metadata": {
+        "architecture": "LlamaForCausalLM",
+        "calibration": {
+          "digest": "a02172d3c9d0e5341e05a6c40e01d74475155c9b89563438c70055cf58b513f8",
+          "schema": "misaka.palw.calib-stats.v1"
+        },
+        "converter": "palw-tir-convert 1.1.0",
+        "frontend": {
+          "adapter": {
+            "hash": "72f42bf13844d406d06c03526b29f6a076488c77bb65ded41f2bb7b604a8a9a1b8369064ba26f59cbb9c27f7e93502f6cefbfb55cd5ff4589a14ceeba3fec861",
+            "id": "llama",
+            "kind": "built-in"
+          },
+          "level": "B",
+          "spec_digest": "c4627be563b796421298d6c4fdf6565b01e2c2af48d680c3e987a28120b96e4a"
+        },
+        "logits_scale": 5.960464477539064e-08,
+        "math": {
+          "mode": "libm-v1"
+        },
+        "max_window": 8192,
+        "model_id": "checkpoint",
+        "policy": {
+          "headroom16": 2.0,
+          "headroom32": 4.0,
+          "headroom_resid": 4.0
+        },
+        "quant": {
+          "descriptors": []
+        },
+        "resid_scale": 3.6068388015762154e-05,
+        "scope": {
+          "excluded": [],
+          "input": "token ids",
+          "output": "next-token logits",
+          "schema": "misaka.palw.feature-scope.v1",
+          "task": "text-generation",
+          "text_only": false
+        }
+      },
+      "recomputed_class_id_using_recorded_inventory_root": "7a2616b4b132946d21b1d396c0a82f69a144fb7f692394314efb35e3f8bff1f231b857f174e1165ad92c65ce742e1bcc57dfb11e1e5eab02b67b8cf87436c625",
+      "inventory_root_recomputation": "NOT_RUN; inventory root retained from existing metadata, not reconstructed from tensors",
+      "layout_max_context": 8192
+    },
+    {
+      "path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/early-declared.palwtir",
+      "physical": {
+        "path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/early-declared.palwtir",
+        "realpath": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/early-declared.palwtir",
+        "is_symlink": false,
+        "exists": true,
+        "bytes": 180336384,
+        "sha256": "5691357f2f31a91c60bb2adacd683ca2c2204456d23a0e52421c2abede5ebb5e",
+        "git_blob_sha1": "b48ae3e5a1aa8f06a1cc56a9d093711ea77e6900",
+        "stat_before": {
+          "device": 16777234,
+          "inode": 47111067,
+          "bytes": 180336384,
+          "mtime_ns": 1793440077346431282,
+          "ctime_ns": 1793440077346431282,
+          "mode": 33188
+        },
+        "stat_open": {
+          "device": 16777234,
+          "inode": 47111067,
+          "bytes": 180336384,
+          "mtime_ns": 1793440077346431282,
+          "ctime_ns": 1793440077346431282,
+          "mode": 33188
+        },
+        "stat_after_fd": {
+          "device": 16777234,
+          "inode": 47111067,
+          "bytes": 180336384,
+          "mtime_ns": 1793440077346431282,
+          "ctime_ns": 1793440077346431282,
+          "mode": 33188
+        },
+        "stat_after_path": {
+          "device": 16777234,
+          "inode": 47111067,
+          "bytes": 180336384,
+          "mtime_ns": 1793440077346431282,
+          "ctime_ns": 1793440077346431282,
+          "mode": 33188
+        },
+        "realpath_after": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/early-declared.palwtir",
+        "stable_during_read": true,
+        "palwtir_file_digest_v1": "8f602ce530802a0794313489b99c1889e89896c5e85963c9bc081feb5816992f9f393da96e8e30bff3031a803e8800f89ccce778f8f572cd394f3380bfe3554b"
+      },
+      "container_version": 1,
+      "header_version": 1,
+      "header_bytes": 49771,
+      "header_sha256": "424aea5523376e0e22e112e4129721599046a85a4fb108801033a48d11ae488b",
+      "program_bytes": 13776,
+      "program_sha256": "744225e2c41ebb11a741f86e9109f49cae28b3a0b50a07d266685779872cf6df",
+      "graph_ir_root_recomputed": "203f9c0a8c6744d2cb5a533e1399f7ceca6719257165235612e1aa4c0ee5ce66e50f169c0a9be7c1b1255a47e82292e84b16f0bcb60bdb02ef2dab243a3fce41",
+      "layout_bytes": 98,
+      "layout_sha256": "cdf5d64207dc9d34e5b659cb7e5873fafe789088b2b92f51f3dd74f3eb4f8a33",
+      "layout_digest_recomputed": "e39d73712d507ba1838875c35357195b197011ac468e485721563ca8c56629a164bf3db8eb395d6b4334e4c7686952aaa16390bf8d432bc4b209f14d7136b3c8",
+      "tokenizer_id": "57c55fb228e8bb272c1d3e3a75eb8e7a238fe2e6a7ccc5e4cd6b874c1278fbc79342c2d466bc52d53000bb0de6de57cb196fc0a413c2751d45cfb69551615ac2",
+      "tensor_instances": 1662,
+      "tensor_payload_bytes": 180279606,
+      "tensor_table_max_end": 180336384,
+      "tensor_table_within_file": true,
+      "provenance_metadata": {
+        "architecture": "LlamaForCausalLM",
+        "calibration": {
+          "digest": "a02172d3c9d0e5341e05a6c40e01d74475155c9b89563438c70055cf58b513f8",
+          "schema": "misaka.palw.calib-stats.v1"
+        },
+        "converter": "palw-tir-convert 1.1.0",
+        "frontend": {
+          "adapter": {
+            "hash": "72f42bf13844d406d06c03526b29f6a076488c77bb65ded41f2bb7b604a8a9a1b8369064ba26f59cbb9c27f7e93502f6cefbfb55cd5ff4589a14ceeba3fec861",
+            "id": "llama",
+            "kind": "built-in"
+          },
+          "level": "B",
+          "spec_digest": "c4627be563b796421298d6c4fdf6565b01e2c2af48d680c3e987a28120b96e4a"
+        },
+        "logits_scale": 5.960464477539064e-08,
+        "math": {
+          "mode": "libm-v1"
+        },
+        "max_window": 8192,
+        "model_id": "HuggingFaceTB/SmolLM2-135M@93efa2f097d58c2a74874c7e644dbc9b0cee75a2",
+        "policy": {
+          "headroom16": 2.0,
+          "headroom32": 4.0,
+          "headroom_resid": 4.0
+        },
+        "quant": {
+          "descriptors": []
+        },
+        "resid_scale": 3.6068388015762154e-05,
+        "scope": {
+          "excluded": [],
+          "input": "token ids",
+          "output": "next-token logits",
+          "schema": "misaka.palw.feature-scope.v1",
+          "task": "text-generation",
+          "text_only": false
+        }
+      },
+      "recomputed_class_id_using_recorded_inventory_root": "7a2616b4b132946d21b1d396c0a82f69a144fb7f692394314efb35e3f8bff1f231b857f174e1165ad92c65ce742e1bcc57dfb11e1e5eab02b67b8cf87436c625",
+      "inventory_root_recomputation": "NOT_RUN; inventory root retained from existing metadata, not reconstructed from tensors",
+      "layout_max_context": 8192
+    }
+  ],
+  "files": [
+    {
+      "path": "/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/docs/evidence/models/trained-llm-cohort-2026-10-31/HuggingFaceTB__SmolLM2-135M/README.md.txt",
+      "realpath": "/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/docs/evidence/models/trained-llm-cohort-2026-10-31/HuggingFaceTB__SmolLM2-135M/README.md.txt",
+      "is_symlink": false,
+      "exists": true,
+      "bytes": 6340,
+      "sha256": "d1ba68cae64a89b6b434b11526e6e2271ee5ffd2c914ec35ed515f9d84c6085c",
+      "git_blob_sha1": "4049f762cb41ec6f526936c9af80ae216048bc74",
+      "stat_before": {
+        "device": 16777234,
+        "inode": 48105346,
+        "bytes": 6340,
+        "mtime_ns": 1793469170952796817,
+        "ctime_ns": 1793469170952796817,
+        "mode": 33188
+      },
+      "stat_open": {
+        "device": 16777234,
+        "inode": 48105346,
+        "bytes": 6340,
+        "mtime_ns": 1793469170952796817,
+        "ctime_ns": 1793469170952796817,
+        "mode": 33188
+      },
+      "stat_after_fd": {
+        "device": 16777234,
+        "inode": 48105346,
+        "bytes": 6340,
+        "mtime_ns": 1793469170952796817,
+        "ctime_ns": 1793469170952796817,
+        "mode": 33188
+      },
+      "stat_after_path": {
+        "device": 16777234,
+        "inode": 48105346,
+        "bytes": 6340,
+        "mtime_ns": 1793469170952796817,
+        "ctime_ns": 1793469170952796817,
+        "mode": 33188
+      },
+      "realpath_after": "/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/docs/evidence/models/trained-llm-cohort-2026-10-31/HuggingFaceTB__SmolLM2-135M/README.md.txt",
+      "stable_during_read": true,
+      "stat_at_inventory_close": {
+        "device": 16777234,
+        "inode": 48105346,
+        "bytes": 6340,
+        "mtime_ns": 1793469170952796817,
+        "ctime_ns": 1793469170952796817,
+        "mode": 33188
+      },
+      "stable_until_inventory_close": true
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/docs/evidence/models/trained-llm-cohort-2026-10-31/HuggingFaceTB__SmolLM2-135M/calibration.json",
+      "realpath": "/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/docs/evidence/models/trained-llm-cohort-2026-10-31/HuggingFaceTB__SmolLM2-135M/calibration.json",
+      "is_symlink": false,
+      "exists": true,
+      "bytes": 399,
+      "sha256": "616cd2c08043901407c062edff6389067709e4ef3ae2648d9e2e911f7e11a6d4",
+      "git_blob_sha1": "0e4489abe3b16c8e26ac3b16f827595bc37c9324",
+      "stat_before": {
+        "device": 16777234,
+        "inode": 48105347,
+        "bytes": 399,
+        "mtime_ns": 1793469170952880235,
+        "ctime_ns": 1793469170952880235,
+        "mode": 33188
+      },
+      "stat_open": {
+        "device": 16777234,
+        "inode": 48105347,
+        "bytes": 399,
+        "mtime_ns": 1793469170952880235,
+        "ctime_ns": 1793469170952880235,
+        "mode": 33188
+      },
+      "stat_after_fd": {
+        "device": 16777234,
+        "inode": 48105347,
+        "bytes": 399,
+        "mtime_ns": 1793469170952880235,
+        "ctime_ns": 1793469170952880235,
+        "mode": 33188
+      },
+      "stat_after_path": {
+        "device": 16777234,
+        "inode": 48105347,
+        "bytes": 399,
+        "mtime_ns": 1793469170952880235,
+        "ctime_ns": 1793469170952880235,
+        "mode": 33188
+      },
+      "realpath_after": "/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/docs/evidence/models/trained-llm-cohort-2026-10-31/HuggingFaceTB__SmolLM2-135M/calibration.json",
+      "stable_during_read": true,
+      "stat_at_inventory_close": {
+        "device": 16777234,
+        "inode": 48105347,
+        "bytes": 399,
+        "mtime_ns": 1793469170952880235,
+        "ctime_ns": 1793469170952880235,
+        "mode": 33188
+      },
+      "stable_until_inventory_close": true
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/docs/evidence/models/trained-llm-cohort-2026-10-31/HuggingFaceTB__SmolLM2-135M/config.json",
+      "realpath": "/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/docs/evidence/models/trained-llm-cohort-2026-10-31/HuggingFaceTB__SmolLM2-135M/config.json",
+      "is_symlink": false,
+      "exists": true,
+      "bytes": 704,
+      "sha256": "1d556eab73b69c7f11f64c557a2f9c6f440bd4c6b89bb2584a6b498c92603843",
+      "git_blob_sha1": "ccf3dac2f33905d152adbdf3886b5e38a4eb7579",
+      "stat_before": {
+        "device": 16777234,
+        "inode": 48105348,
+        "bytes": 704,
+        "mtime_ns": 1793469170952953611,
+        "ctime_ns": 1793469170952953611,
+        "mode": 33188
+      },
+      "stat_open": {
+        "device": 16777234,
+        "inode": 48105348,
+        "bytes": 704,
+        "mtime_ns": 1793469170952953611,
+        "ctime_ns": 1793469170952953611,
+        "mode": 33188
+      },
+      "stat_after_fd": {
+        "device": 16777234,
+        "inode": 48105348,
+        "bytes": 704,
+        "mtime_ns": 1793469170952953611,
+        "ctime_ns": 1793469170952953611,
+        "mode": 33188
+      },
+      "stat_after_path": {
+        "device": 16777234,
+        "inode": 48105348,
+        "bytes": 704,
+        "mtime_ns": 1793469170952953611,
+        "ctime_ns": 1793469170952953611,
+        "mode": 33188
+      },
+      "realpath_after": "/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/docs/evidence/models/trained-llm-cohort-2026-10-31/HuggingFaceTB__SmolLM2-135M/config.json",
+      "stable_during_read": true,
+      "stat_at_inventory_close": {
+        "device": 16777234,
+        "inode": 48105348,
+        "bytes": 704,
+        "mtime_ns": 1793469170952953611,
+        "ctime_ns": 1793469170952953611,
+        "mode": 33188
+      },
+      "stable_until_inventory_close": true
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/docs/evidence/models/trained-llm-cohort-2026-10-31/HuggingFaceTB__SmolLM2-135M/early-native.json",
+      "realpath": "/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/docs/evidence/models/trained-llm-cohort-2026-10-31/HuggingFaceTB__SmolLM2-135M/early-native.json",
+      "is_symlink": false,
+      "exists": true,
+      "bytes": 1173,
+      "sha256": "adc3ea225edd7f57fec8beac695318d7f736ca83fa4a0a3dbe924368eef93c4e",
+      "git_blob_sha1": "14c7ca706a15dc4183ee3f34b2879b2aebc74c52",
+      "stat_before": {
+        "device": 16777234,
+        "inode": 48105349,
+        "bytes": 1173,
+        "mtime_ns": 1793469170953041780,
+        "ctime_ns": 1793469170953041780,
+        "mode": 33188
+      },
+      "stat_open": {
+        "device": 16777234,
+        "inode": 48105349,
+        "bytes": 1173,
+        "mtime_ns": 1793469170953041780,
+        "ctime_ns": 1793469170953041780,
+        "mode": 33188
+      },
+      "stat_after_fd": {
+        "device": 16777234,
+        "inode": 48105349,
+        "bytes": 1173,
+        "mtime_ns": 1793469170953041780,
+        "ctime_ns": 1793469170953041780,
+        "mode": 33188
+      },
+      "stat_after_path": {
+        "device": 16777234,
+        "inode": 48105349,
+        "bytes": 1173,
+        "mtime_ns": 1793469170953041780,
+        "ctime_ns": 1793469170953041780,
+        "mode": 33188
+      },
+      "realpath_after": "/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/docs/evidence/models/trained-llm-cohort-2026-10-31/HuggingFaceTB__SmolLM2-135M/early-native.json",
+      "stable_during_read": true,
+      "stat_at_inventory_close": {
+        "device": 16777234,
+        "inode": 48105349,
+        "bytes": 1173,
+        "mtime_ns": 1793469170953041780,
+        "ctime_ns": 1793469170953041780,
+        "mode": 33188
+      },
+      "stable_until_inventory_close": true
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/docs/evidence/models/trained-llm-cohort-2026-10-31/HuggingFaceTB__SmolLM2-135M/early-native.log",
+      "realpath": "/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/docs/evidence/models/trained-llm-cohort-2026-10-31/HuggingFaceTB__SmolLM2-135M/early-native.log",
+      "is_symlink": false,
+      "exists": true,
+      "bytes": 612,
+      "sha256": "05bc3574ab4303c5244cb44b0f217cd43523f8e789d4f3af2f4a767da4cf3c20",
+      "git_blob_sha1": "9bed79a4dc352e15079d253d0e8fc19dbad9ea39",
+      "stat_before": {
+        "device": 16777234,
+        "inode": 48105350,
+        "bytes": 612,
+        "mtime_ns": 1793469170953133073,
+        "ctime_ns": 1793469170953133073,
+        "mode": 33188
+      },
+      "stat_open": {
+        "device": 16777234,
+        "inode": 48105350,
+        "bytes": 612,
+        "mtime_ns": 1793469170953133073,
+        "ctime_ns": 1793469170953133073,
+        "mode": 33188
+      },
+      "stat_after_fd": {
+        "device": 16777234,
+        "inode": 48105350,
+        "bytes": 612,
+        "mtime_ns": 1793469170953133073,
+        "ctime_ns": 1793469170953133073,
+        "mode": 33188
+      },
+      "stat_after_path": {
+        "device": 16777234,
+        "inode": 48105350,
+        "bytes": 612,
+        "mtime_ns": 1793469170953133073,
+        "ctime_ns": 1793469170953133073,
+        "mode": 33188
+      },
+      "realpath_after": "/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/docs/evidence/models/trained-llm-cohort-2026-10-31/HuggingFaceTB__SmolLM2-135M/early-native.log",
+      "stable_during_read": true,
+      "stat_at_inventory_close": {
+        "device": 16777234,
+        "inode": 48105350,
+        "bytes": 612,
+        "mtime_ns": 1793469170953133073,
+        "ctime_ns": 1793469170953133073,
+        "mode": 33188
+      },
+      "stable_until_inventory_close": true
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/docs/evidence/models/trained-llm-cohort-2026-10-31/HuggingFaceTB__SmolLM2-135M/info.json",
+      "realpath": "/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/docs/evidence/models/trained-llm-cohort-2026-10-31/HuggingFaceTB__SmolLM2-135M/info.json",
+      "is_symlink": false,
+      "exists": true,
+      "bytes": 6457,
+      "sha256": "a602ec10c233f8693fbb323788bf03a9f275f6aed2bb1c80f66fa4183993e6c5",
+      "git_blob_sha1": "34348c6ba7d54621f9dccde4d0c3e37a8037462b",
+      "stat_before": {
+        "device": 16777234,
+        "inode": 48105351,
+        "bytes": 6457,
+        "mtime_ns": 1793469170953250116,
+        "ctime_ns": 1793469170953250116,
+        "mode": 33188
+      },
+      "stat_open": {
+        "device": 16777234,
+        "inode": 48105351,
+        "bytes": 6457,
+        "mtime_ns": 1793469170953250116,
+        "ctime_ns": 1793469170953250116,
+        "mode": 33188
+      },
+      "stat_after_fd": {
+        "device": 16777234,
+        "inode": 48105351,
+        "bytes": 6457,
+        "mtime_ns": 1793469170953250116,
+        "ctime_ns": 1793469170953250116,
+        "mode": 33188
+      },
+      "stat_after_path": {
+        "device": 16777234,
+        "inode": 48105351,
+        "bytes": 6457,
+        "mtime_ns": 1793469170953250116,
+        "ctime_ns": 1793469170953250116,
+        "mode": 33188
+      },
+      "realpath_after": "/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/docs/evidence/models/trained-llm-cohort-2026-10-31/HuggingFaceTB__SmolLM2-135M/info.json",
+      "stable_during_read": true,
+      "stat_at_inventory_close": {
+        "device": 16777234,
+        "inode": 48105351,
+        "bytes": 6457,
+        "mtime_ns": 1793469170953250116,
+        "ctime_ns": 1793469170953250116,
+        "mode": 33188
+      },
+      "stable_until_inventory_close": true
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/docs/evidence/models/trained-llm-cohort-2026-10-31/HuggingFaceTB__SmolLM2-135M/native-register.stderr",
+      "realpath": "/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/docs/evidence/models/trained-llm-cohort-2026-10-31/HuggingFaceTB__SmolLM2-135M/native-register.stderr",
+      "is_symlink": false,
+      "exists": true,
+      "bytes": 311,
+      "sha256": "1eeeb90c37e011dcf144eb7cda5a6e1c9d4c176c2f91499544db4aff89ba3ae4",
+      "git_blob_sha1": "ccb237668a39e38b7287cd31c2aaa6be5925071f",
+      "stat_before": {
+        "device": 16777234,
+        "inode": 48105352,
+        "bytes": 311,
+        "mtime_ns": 1793469170953328951,
+        "ctime_ns": 1793469170953328951,
+        "mode": 33188
+      },
+      "stat_open": {
+        "device": 16777234,
+        "inode": 48105352,
+        "bytes": 311,
+        "mtime_ns": 1793469170953328951,
+        "ctime_ns": 1793469170953328951,
+        "mode": 33188
+      },
+      "stat_after_fd": {
+        "device": 16777234,
+        "inode": 48105352,
+        "bytes": 311,
+        "mtime_ns": 1793469170953328951,
+        "ctime_ns": 1793469170953328951,
+        "mode": 33188
+      },
+      "stat_after_path": {
+        "device": 16777234,
+        "inode": 48105352,
+        "bytes": 311,
+        "mtime_ns": 1793469170953328951,
+        "ctime_ns": 1793469170953328951,
+        "mode": 33188
+      },
+      "realpath_after": "/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/docs/evidence/models/trained-llm-cohort-2026-10-31/HuggingFaceTB__SmolLM2-135M/native-register.stderr",
+      "stable_during_read": true,
+      "stat_at_inventory_close": {
+        "device": 16777234,
+        "inode": 48105352,
+        "bytes": 311,
+        "mtime_ns": 1793469170953328951,
+        "ctime_ns": 1793469170953328951,
+        "mode": 33188
+      },
+      "stable_until_inventory_close": true
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/docs/evidence/models/trained-llm-cohort-2026-10-31/HuggingFaceTB__SmolLM2-135M/native.json",
+      "realpath": "/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/docs/evidence/models/trained-llm-cohort-2026-10-31/HuggingFaceTB__SmolLM2-135M/native.json",
+      "is_symlink": false,
+      "exists": true,
+      "bytes": 1116,
+      "sha256": "57a9ecccc71f3499550b46df97c17a58c17ee85b8fad81ce32aa60b2d328590e",
+      "git_blob_sha1": "2303bfab35dc99d15f7a5105eacbdceb309473ed",
+      "stat_before": {
+        "device": 16777234,
+        "inode": 48105353,
+        "bytes": 1116,
+        "mtime_ns": 1793469170953414702,
+        "ctime_ns": 1793469170953414702,
+        "mode": 33188
+      },
+      "stat_open": {
+        "device": 16777234,
+        "inode": 48105353,
+        "bytes": 1116,
+        "mtime_ns": 1793469170953414702,
+        "ctime_ns": 1793469170953414702,
+        "mode": 33188
+      },
+      "stat_after_fd": {
+        "device": 16777234,
+        "inode": 48105353,
+        "bytes": 1116,
+        "mtime_ns": 1793469170953414702,
+        "ctime_ns": 1793469170953414702,
+        "mode": 33188
+      },
+      "stat_after_path": {
+        "device": 16777234,
+        "inode": 48105353,
+        "bytes": 1116,
+        "mtime_ns": 1793469170953414702,
+        "ctime_ns": 1793469170953414702,
+        "mode": 33188
+      },
+      "realpath_after": "/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/docs/evidence/models/trained-llm-cohort-2026-10-31/HuggingFaceTB__SmolLM2-135M/native.json",
+      "stable_during_read": true,
+      "stat_at_inventory_close": {
+        "device": 16777234,
+        "inode": 48105353,
+        "bytes": 1116,
+        "mtime_ns": 1793469170953414702,
+        "ctime_ns": 1793469170953414702,
+        "mode": 33188
+      },
+      "stable_until_inventory_close": true
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/docs/evidence/models/trained-llm-cohort-2026-10-31/HuggingFaceTB__SmolLM2-135M/pack-build.stderr",
+      "realpath": "/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/docs/evidence/models/trained-llm-cohort-2026-10-31/HuggingFaceTB__SmolLM2-135M/pack-build.stderr",
+      "is_symlink": false,
+      "exists": true,
+      "bytes": 1792,
+      "sha256": "10a3269cc9f95d44d344091ac59564320e9bce3df7d863475083c967ea1eb22c",
+      "git_blob_sha1": "f18c47d5cc5b42042cc5b1fc515da38a75e90a9a",
+      "stat_before": {
+        "device": 16777234,
+        "inode": 48105354,
+        "bytes": 1792,
+        "mtime_ns": 1793469170953502120,
+        "ctime_ns": 1793469170953502120,
+        "mode": 33188
+      },
+      "stat_open": {
+        "device": 16777234,
+        "inode": 48105354,
+        "bytes": 1792,
+        "mtime_ns": 1793469170953502120,
+        "ctime_ns": 1793469170953502120,
+        "mode": 33188
+      },
+      "stat_after_fd": {
+        "device": 16777234,
+        "inode": 48105354,
+        "bytes": 1792,
+        "mtime_ns": 1793469170953502120,
+        "ctime_ns": 1793469170953502120,
+        "mode": 33188
+      },
+      "stat_after_path": {
+        "device": 16777234,
+        "inode": 48105354,
+        "bytes": 1792,
+        "mtime_ns": 1793469170953502120,
+        "ctime_ns": 1793469170953502120,
+        "mode": 33188
+      },
+      "realpath_after": "/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/docs/evidence/models/trained-llm-cohort-2026-10-31/HuggingFaceTB__SmolLM2-135M/pack-build.stderr",
+      "stable_during_read": true,
+      "stat_at_inventory_close": {
+        "device": 16777234,
+        "inode": 48105354,
+        "bytes": 1792,
+        "mtime_ns": 1793469170953502120,
+        "ctime_ns": 1793469170953502120,
+        "mode": 33188
+      },
+      "stable_until_inventory_close": true
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/docs/evidence/models/trained-llm-cohort-2026-10-31/HuggingFaceTB__SmolLM2-135M/pack-build.stdout",
+      "realpath": "/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/docs/evidence/models/trained-llm-cohort-2026-10-31/HuggingFaceTB__SmolLM2-135M/pack-build.stdout",
+      "is_symlink": false,
+      "exists": true,
+      "bytes": 65,
+      "sha256": "9d33e2846ece01ef396e739157e1f3a1e9c8347162f951e50fcb2e8bd3f23eaa",
+      "git_blob_sha1": "9f695309e143cde1d8236103bde11c015f1ff5ad",
+      "stat_before": {
+        "device": 16777234,
+        "inode": 48105355,
+        "bytes": 65,
+        "mtime_ns": 1793469170953580121,
+        "ctime_ns": 1793469170953580121,
+        "mode": 33188
+      },
+      "stat_open": {
+        "device": 16777234,
+        "inode": 48105355,
+        "bytes": 65,
+        "mtime_ns": 1793469170953580121,
+        "ctime_ns": 1793469170953580121,
+        "mode": 33188
+      },
+      "stat_after_fd": {
+        "device": 16777234,
+        "inode": 48105355,
+        "bytes": 65,
+        "mtime_ns": 1793469170953580121,
+        "ctime_ns": 1793469170953580121,
+        "mode": 33188
+      },
+      "stat_after_path": {
+        "device": 16777234,
+        "inode": 48105355,
+        "bytes": 65,
+        "mtime_ns": 1793469170953580121,
+        "ctime_ns": 1793469170953580121,
+        "mode": 33188
+      },
+      "realpath_after": "/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/docs/evidence/models/trained-llm-cohort-2026-10-31/HuggingFaceTB__SmolLM2-135M/pack-build.stdout",
+      "stable_during_read": true,
+      "stat_at_inventory_close": {
+        "device": 16777234,
+        "inode": 48105355,
+        "bytes": 65,
+        "mtime_ns": 1793469170953580121,
+        "ctime_ns": 1793469170953580121,
+        "mode": 33188
+      },
+      "stable_until_inventory_close": true
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/docs/evidence/models/trained-llm-cohort-2026-10-31/HuggingFaceTB__SmolLM2-135M/pack.json",
+      "realpath": "/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/docs/evidence/models/trained-llm-cohort-2026-10-31/HuggingFaceTB__SmolLM2-135M/pack.json",
+      "is_symlink": false,
+      "exists": true,
+      "bytes": 9200,
+      "sha256": "80f1de7dc9ee6e72e85b87f56a5808f6e9d2c35073272376f6116e62893408f5",
+      "git_blob_sha1": "4fb3152d1129f3c976a31f08db949b5a2c44b534",
+      "stat_before": {
+        "device": 16777234,
+        "inode": 48105356,
+        "bytes": 9200,
+        "mtime_ns": 1793469170953666206,
+        "ctime_ns": 1793469170953666206,
+        "mode": 33188
+      },
+      "stat_open": {
+        "device": 16777234,
+        "inode": 48105356,
+        "bytes": 9200,
+        "mtime_ns": 1793469170953666206,
+        "ctime_ns": 1793469170953666206,
+        "mode": 33188
+      },
+      "stat_after_fd": {
+        "device": 16777234,
+        "inode": 48105356,
+        "bytes": 9200,
+        "mtime_ns": 1793469170953666206,
+        "ctime_ns": 1793469170953666206,
+        "mode": 33188
+      },
+      "stat_after_path": {
+        "device": 16777234,
+        "inode": 48105356,
+        "bytes": 9200,
+        "mtime_ns": 1793469170953666206,
+        "ctime_ns": 1793469170953666206,
+        "mode": 33188
+      },
+      "realpath_after": "/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/docs/evidence/models/trained-llm-cohort-2026-10-31/HuggingFaceTB__SmolLM2-135M/pack.json",
+      "stable_during_read": true,
+      "stat_at_inventory_close": {
+        "device": 16777234,
+        "inode": 48105356,
+        "bytes": 9200,
+        "mtime_ns": 1793469170953666206,
+        "ctime_ns": 1793469170953666206,
+        "mode": 33188
+      },
+      "stable_until_inventory_close": true
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/docs/evidence/models/trained-llm-cohort-2026-10-31/HuggingFaceTB__SmolLM2-135M/run.json",
+      "realpath": "/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/docs/evidence/models/trained-llm-cohort-2026-10-31/HuggingFaceTB__SmolLM2-135M/run.json",
+      "is_symlink": false,
+      "exists": true,
+      "bytes": 5004,
+      "sha256": "f550e3f10f54ee53d922a41f07fae805fea500b7cb07d36a77cf3d8a3ec0a5a2",
+      "git_blob_sha1": "081872625a82a062192fdb510d27f96262d7ab91",
+      "stat_before": {
+        "device": 16777234,
+        "inode": 48105357,
+        "bytes": 5004,
+        "mtime_ns": 1793469170953773041,
+        "ctime_ns": 1793469170953773041,
+        "mode": 33188
+      },
+      "stat_open": {
+        "device": 16777234,
+        "inode": 48105357,
+        "bytes": 5004,
+        "mtime_ns": 1793469170953773041,
+        "ctime_ns": 1793469170953773041,
+        "mode": 33188
+      },
+      "stat_after_fd": {
+        "device": 16777234,
+        "inode": 48105357,
+        "bytes": 5004,
+        "mtime_ns": 1793469170953773041,
+        "ctime_ns": 1793469170953773041,
+        "mode": 33188
+      },
+      "stat_after_path": {
+        "device": 16777234,
+        "inode": 48105357,
+        "bytes": 5004,
+        "mtime_ns": 1793469170953773041,
+        "ctime_ns": 1793469170953773041,
+        "mode": 33188
+      },
+      "realpath_after": "/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/docs/evidence/models/trained-llm-cohort-2026-10-31/HuggingFaceTB__SmolLM2-135M/run.json",
+      "stable_during_read": true,
+      "stat_at_inventory_close": {
+        "device": 16777234,
+        "inode": 48105357,
+        "bytes": 5004,
+        "mtime_ns": 1793469170953773041,
+        "ctime_ns": 1793469170953773041,
+        "mode": 33188
+      },
+      "stable_until_inventory_close": true
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/docs/evidence/models/trained-llm-cohort-2026-10-31/HuggingFaceTB__SmolLM2-135M/texts.json",
+      "realpath": "/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/docs/evidence/models/trained-llm-cohort-2026-10-31/HuggingFaceTB__SmolLM2-135M/texts.json",
+      "is_symlink": false,
+      "exists": true,
+      "bytes": 557,
+      "sha256": "50bb72eb3f01eace09d09909dcb37845a760bce5d6fae7a01caa70c54a428c81",
+      "git_blob_sha1": "7922b52882b7b53f6f2a0cf693fd70e3ffc0bfda",
+      "stat_before": {
+        "device": 16777234,
+        "inode": 48105358,
+        "bytes": 557,
+        "mtime_ns": 1793469170953840834,
+        "ctime_ns": 1793469170953840834,
+        "mode": 33188
+      },
+      "stat_open": {
+        "device": 16777234,
+        "inode": 48105358,
+        "bytes": 557,
+        "mtime_ns": 1793469170953840834,
+        "ctime_ns": 1793469170953840834,
+        "mode": 33188
+      },
+      "stat_after_fd": {
+        "device": 16777234,
+        "inode": 48105358,
+        "bytes": 557,
+        "mtime_ns": 1793469170953840834,
+        "ctime_ns": 1793469170953840834,
+        "mode": 33188
+      },
+      "stat_after_path": {
+        "device": 16777234,
+        "inode": 48105358,
+        "bytes": 557,
+        "mtime_ns": 1793469170953840834,
+        "ctime_ns": 1793469170953840834,
+        "mode": 33188
+      },
+      "realpath_after": "/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/docs/evidence/models/trained-llm-cohort-2026-10-31/HuggingFaceTB__SmolLM2-135M/texts.json",
+      "stable_during_read": true,
+      "stat_at_inventory_close": {
+        "device": 16777234,
+        "inode": 48105358,
+        "bytes": 557,
+        "mtime_ns": 1793469170953840834,
+        "ctime_ns": 1793469170953840834,
+        "mode": 33188
+      },
+      "stable_until_inventory_close": true
+    },
+    {
+      "path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/calibration.json",
+      "realpath": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/calibration.json",
+      "is_symlink": false,
+      "exists": true,
+      "bytes": 399,
+      "sha256": "616cd2c08043901407c062edff6389067709e4ef3ae2648d9e2e911f7e11a6d4",
+      "git_blob_sha1": "0e4489abe3b16c8e26ac3b16f827595bc37c9324",
+      "stat_before": {
+        "device": 16777234,
+        "inode": 47099858,
+        "bytes": 399,
+        "mtime_ns": 1793439847265033893,
+        "ctime_ns": 1793439847265033893,
+        "mode": 33188
+      },
+      "stat_open": {
+        "device": 16777234,
+        "inode": 47099858,
+        "bytes": 399,
+        "mtime_ns": 1793439847265033893,
+        "ctime_ns": 1793439847265033893,
+        "mode": 33188
+      },
+      "stat_after_fd": {
+        "device": 16777234,
+        "inode": 47099858,
+        "bytes": 399,
+        "mtime_ns": 1793439847265033893,
+        "ctime_ns": 1793439847265033893,
+        "mode": 33188
+      },
+      "stat_after_path": {
+        "device": 16777234,
+        "inode": 47099858,
+        "bytes": 399,
+        "mtime_ns": 1793439847265033893,
+        "ctime_ns": 1793439847265033893,
+        "mode": 33188
+      },
+      "realpath_after": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/calibration.json",
+      "stable_during_read": true,
+      "stat_at_inventory_close": {
+        "device": 16777234,
+        "inode": 47099858,
+        "bytes": 399,
+        "mtime_ns": 1793439847265033893,
+        "ctime_ns": 1793439847265033893,
+        "mode": 33188
+      },
+      "stable_until_inventory_close": true
+    },
+    {
+      "path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/driver.log",
+      "realpath": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/driver.log",
+      "is_symlink": false,
+      "exists": true,
+      "bytes": 5069,
+      "sha256": "d7428278931e1e9a1bc6106ef550e077773a6afc6bfaab22ba189968d03e8cc3",
+      "git_blob_sha1": "2c2a165983e5c99d3cf1508906501ee8a3e3edf8",
+      "stat_before": {
+        "device": 16777234,
+        "inode": 47099863,
+        "bytes": 5069,
+        "mtime_ns": 1793440560166057677,
+        "ctime_ns": 1793440560166057677,
+        "mode": 33188
+      },
+      "stat_open": {
+        "device": 16777234,
+        "inode": 47099863,
+        "bytes": 5069,
+        "mtime_ns": 1793440560166057677,
+        "ctime_ns": 1793440560166057677,
+        "mode": 33188
+      },
+      "stat_after_fd": {
+        "device": 16777234,
+        "inode": 47099863,
+        "bytes": 5069,
+        "mtime_ns": 1793440560166057677,
+        "ctime_ns": 1793440560166057677,
+        "mode": 33188
+      },
+      "stat_after_path": {
+        "device": 16777234,
+        "inode": 47099863,
+        "bytes": 5069,
+        "mtime_ns": 1793440560166057677,
+        "ctime_ns": 1793440560166057677,
+        "mode": 33188
+      },
+      "realpath_after": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/driver.log",
+      "stable_during_read": true,
+      "stat_at_inventory_close": {
+        "device": 16777234,
+        "inode": 47099863,
+        "bytes": 5069,
+        "mtime_ns": 1793440560166057677,
+        "ctime_ns": 1793440560166057677,
+        "mode": 33188
+      },
+      "stable_until_inventory_close": true
+    },
+    {
+      "path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/early-0.log",
+      "realpath": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/early-0.log",
+      "is_symlink": false,
+      "exists": true,
+      "bytes": 792,
+      "sha256": "add45ac3b81597d73745eb09cd4839222de228c8c1c07ea5dbd1a1363d5d4bee",
+      "git_blob_sha1": "7b0b0d5eddf744526ce7354759498ab76bf0ea9c",
+      "stat_before": {
+        "device": 16777234,
+        "inode": 47111054,
+        "bytes": 792,
+        "mtime_ns": 1793440077348903995,
+        "ctime_ns": 1793440077348903995,
+        "mode": 33188
+      },
+      "stat_open": {
+        "device": 16777234,
+        "inode": 47111054,
+        "bytes": 792,
+        "mtime_ns": 1793440077348903995,
+        "ctime_ns": 1793440077348903995,
+        "mode": 33188
+      },
+      "stat_after_fd": {
+        "device": 16777234,
+        "inode": 47111054,
+        "bytes": 792,
+        "mtime_ns": 1793440077348903995,
+        "ctime_ns": 1793440077348903995,
+        "mode": 33188
+      },
+      "stat_after_path": {
+        "device": 16777234,
+        "inode": 47111054,
+        "bytes": 792,
+        "mtime_ns": 1793440077348903995,
+        "ctime_ns": 1793440077348903995,
+        "mode": 33188
+      },
+      "realpath_after": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/early-0.log",
+      "stable_during_read": true,
+      "stat_at_inventory_close": {
+        "device": 16777234,
+        "inode": 47111054,
+        "bytes": 792,
+        "mtime_ns": 1793440077348903995,
+        "ctime_ns": 1793440077348903995,
+        "mode": 33188
+      },
+      "stable_until_inventory_close": true
+    },
+    {
+      "path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/early-1.log",
+      "realpath": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/early-1.log",
+      "is_symlink": false,
+      "exists": true,
+      "bytes": 269,
+      "sha256": "e4d5ac202bc3d0ba4fd30948d365bfb60424492dfaf70d8c934d9ac40ea24134",
+      "git_blob_sha1": "8b25caed72c99c059690b031e7e0119dedd3ddde",
+      "stat_before": {
+        "device": 16777234,
+        "inode": 47111070,
+        "bytes": 269,
+        "mtime_ns": 1793440078445832965,
+        "ctime_ns": 1793440078445832965,
+        "mode": 33188
+      },
+      "stat_open": {
+        "device": 16777234,
+        "inode": 47111070,
+        "bytes": 269,
+        "mtime_ns": 1793440078445832965,
+        "ctime_ns": 1793440078445832965,
+        "mode": 33188
+      },
+      "stat_after_fd": {
+        "device": 16777234,
+        "inode": 47111070,
+        "bytes": 269,
+        "mtime_ns": 1793440078445832965,
+        "ctime_ns": 1793440078445832965,
+        "mode": 33188
+      },
+      "stat_after_path": {
+        "device": 16777234,
+        "inode": 47111070,
+        "bytes": 269,
+        "mtime_ns": 1793440078445832965,
+        "ctime_ns": 1793440078445832965,
+        "mode": 33188
+      },
+      "realpath_after": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/early-1.log",
+      "stable_during_read": true,
+      "stat_at_inventory_close": {
+        "device": 16777234,
+        "inode": 47111070,
+        "bytes": 269,
+        "mtime_ns": 1793440078445832965,
+        "ctime_ns": 1793440078445832965,
+        "mode": 33188
+      },
+      "stable_until_inventory_close": true
+    },
+    {
+      "path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/early-declared.palwtir",
+      "realpath": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/early-declared.palwtir",
+      "is_symlink": false,
+      "exists": true,
+      "bytes": 180336384,
+      "sha256": "5691357f2f31a91c60bb2adacd683ca2c2204456d23a0e52421c2abede5ebb5e",
+      "git_blob_sha1": "b48ae3e5a1aa8f06a1cc56a9d093711ea77e6900",
+      "stat_before": {
+        "device": 16777234,
+        "inode": 47111067,
+        "bytes": 180336384,
+        "mtime_ns": 1793440077346431282,
+        "ctime_ns": 1793440077346431282,
+        "mode": 33188
+      },
+      "stat_open": {
+        "device": 16777234,
+        "inode": 47111067,
+        "bytes": 180336384,
+        "mtime_ns": 1793440077346431282,
+        "ctime_ns": 1793440077346431282,
+        "mode": 33188
+      },
+      "stat_after_fd": {
+        "device": 16777234,
+        "inode": 47111067,
+        "bytes": 180336384,
+        "mtime_ns": 1793440077346431282,
+        "ctime_ns": 1793440077346431282,
+        "mode": 33188
+      },
+      "stat_after_path": {
+        "device": 16777234,
+        "inode": 47111067,
+        "bytes": 180336384,
+        "mtime_ns": 1793440077346431282,
+        "ctime_ns": 1793440077346431282,
+        "mode": 33188
+      },
+      "realpath_after": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/early-declared.palwtir",
+      "stable_during_read": true,
+      "palwtir_file_digest_v1": "8f602ce530802a0794313489b99c1889e89896c5e85963c9bc081feb5816992f9f393da96e8e30bff3031a803e8800f89ccce778f8f572cd394f3380bfe3554b",
+      "stat_at_inventory_close": {
+        "device": 16777234,
+        "inode": 47111067,
+        "bytes": 180336384,
+        "mtime_ns": 1793440077346431282,
+        "ctime_ns": 1793440077346431282,
+        "mode": 33188
+      },
+      "stable_until_inventory_close": true
+    },
+    {
+      "path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/early-fixture.json",
+      "realpath": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/early-fixture.json",
+      "is_symlink": false,
+      "exists": true,
+      "bytes": 28611,
+      "sha256": "6daeb3e76a4f8dacd4c534d1384a56ea25e2115a474c4383faa0b43bbbec1707",
+      "git_blob_sha1": "b60fef72daea95fe1b646847174fbd8a6a300838",
+      "stat_before": {
+        "device": 16777234,
+        "inode": 47111082,
+        "bytes": 28611,
+        "mtime_ns": 1793440078445780050,
+        "ctime_ns": 1793440078445780050,
+        "mode": 33188
+      },
+      "stat_open": {
+        "device": 16777234,
+        "inode": 47111082,
+        "bytes": 28611,
+        "mtime_ns": 1793440078445780050,
+        "ctime_ns": 1793440078445780050,
+        "mode": 33188
+      },
+      "stat_after_fd": {
+        "device": 16777234,
+        "inode": 47111082,
+        "bytes": 28611,
+        "mtime_ns": 1793440078445780050,
+        "ctime_ns": 1793440078445780050,
+        "mode": 33188
+      },
+      "stat_after_path": {
+        "device": 16777234,
+        "inode": 47111082,
+        "bytes": 28611,
+        "mtime_ns": 1793440078445780050,
+        "ctime_ns": 1793440078445780050,
+        "mode": 33188
+      },
+      "realpath_after": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/early-fixture.json",
+      "stable_during_read": true,
+      "stat_at_inventory_close": {
+        "device": 16777234,
+        "inode": 47111082,
+        "bytes": 28611,
+        "mtime_ns": 1793440078445780050,
+        "ctime_ns": 1793440078445780050,
+        "mode": 33188
+      },
+      "stable_until_inventory_close": true
+    },
+    {
+      "path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/early-native.json",
+      "realpath": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/early-native.json",
+      "is_symlink": false,
+      "exists": true,
+      "bytes": 1173,
+      "sha256": "adc3ea225edd7f57fec8beac695318d7f736ca83fa4a0a3dbe924368eef93c4e",
+      "git_blob_sha1": "14c7ca706a15dc4183ee3f34b2879b2aebc74c52",
+      "stat_before": {
+        "device": 16777234,
+        "inode": 47111137,
+        "bytes": 1173,
+        "mtime_ns": 1793440080741475259,
+        "ctime_ns": 1793440080741475259,
+        "mode": 33188
+      },
+      "stat_open": {
+        "device": 16777234,
+        "inode": 47111137,
+        "bytes": 1173,
+        "mtime_ns": 1793440080741475259,
+        "ctime_ns": 1793440080741475259,
+        "mode": 33188
+      },
+      "stat_after_fd": {
+        "device": 16777234,
+        "inode": 47111137,
+        "bytes": 1173,
+        "mtime_ns": 1793440080741475259,
+        "ctime_ns": 1793440080741475259,
+        "mode": 33188
+      },
+      "stat_after_path": {
+        "device": 16777234,
+        "inode": 47111137,
+        "bytes": 1173,
+        "mtime_ns": 1793440080741475259,
+        "ctime_ns": 1793440080741475259,
+        "mode": 33188
+      },
+      "realpath_after": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/early-native.json",
+      "stable_during_read": true,
+      "stat_at_inventory_close": {
+        "device": 16777234,
+        "inode": 47111137,
+        "bytes": 1173,
+        "mtime_ns": 1793440080741475259,
+        "ctime_ns": 1793440080741475259,
+        "mode": 33188
+      },
+      "stable_until_inventory_close": true
+    },
+    {
+      "path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/early-native.log",
+      "realpath": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/early-native.log",
+      "is_symlink": false,
+      "exists": true,
+      "bytes": 612,
+      "sha256": "05bc3574ab4303c5244cb44b0f217cd43523f8e789d4f3af2f4a767da4cf3c20",
+      "git_blob_sha1": "9bed79a4dc352e15079d253d0e8fc19dbad9ea39",
+      "stat_before": {
+        "device": 16777234,
+        "inode": 47111083,
+        "bytes": 612,
+        "mtime_ns": 1793440080747808430,
+        "ctime_ns": 1793440080747808430,
+        "mode": 33188
+      },
+      "stat_open": {
+        "device": 16777234,
+        "inode": 47111083,
+        "bytes": 612,
+        "mtime_ns": 1793440080747808430,
+        "ctime_ns": 1793440080747808430,
+        "mode": 33188
+      },
+      "stat_after_fd": {
+        "device": 16777234,
+        "inode": 47111083,
+        "bytes": 612,
+        "mtime_ns": 1793440080747808430,
+        "ctime_ns": 1793440080747808430,
+        "mode": 33188
+      },
+      "stat_after_path": {
+        "device": 16777234,
+        "inode": 47111083,
+        "bytes": 612,
+        "mtime_ns": 1793440080747808430,
+        "ctime_ns": 1793440080747808430,
+        "mode": 33188
+      },
+      "realpath_after": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/early-native.log",
+      "stable_during_read": true,
+      "stat_at_inventory_close": {
+        "device": 16777234,
+        "inode": 47111083,
+        "bytes": 612,
+        "mtime_ns": 1793440080747808430,
+        "ctime_ns": 1793440080747808430,
+        "mode": 33188
+      },
+      "stable_until_inventory_close": true
+    },
+    {
+      "path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/calibration.json",
+      "realpath": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/calibration.json",
+      "is_symlink": false,
+      "exists": true,
+      "bytes": 399,
+      "sha256": "616cd2c08043901407c062edff6389067709e4ef3ae2648d9e2e911f7e11a6d4",
+      "git_blob_sha1": "0e4489abe3b16c8e26ac3b16f827595bc37c9324",
+      "stat_before": {
+        "device": 16777234,
+        "inode": 47099874,
+        "bytes": 399,
+        "mtime_ns": 1793439847265033893,
+        "ctime_ns": 1793439847991603733,
+        "mode": 33188
+      },
+      "stat_open": {
+        "device": 16777234,
+        "inode": 47099874,
+        "bytes": 399,
+        "mtime_ns": 1793439847265033893,
+        "ctime_ns": 1793439847991603733,
+        "mode": 33188
+      },
+      "stat_after_fd": {
+        "device": 16777234,
+        "inode": 47099874,
+        "bytes": 399,
+        "mtime_ns": 1793439847265033893,
+        "ctime_ns": 1793439847991603733,
+        "mode": 33188
+      },
+      "stat_after_path": {
+        "device": 16777234,
+        "inode": 47099874,
+        "bytes": 399,
+        "mtime_ns": 1793439847265033893,
+        "ctime_ns": 1793439847991603733,
+        "mode": 33188
+      },
+      "realpath_after": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/calibration.json",
+      "stable_during_read": true,
+      "stat_at_inventory_close": {
+        "device": 16777234,
+        "inode": 47099874,
+        "bytes": 399,
+        "mtime_ns": 1793439847265033893,
+        "ctime_ns": 1793439847991603733,
+        "mode": 33188
+      },
+      "stable_until_inventory_close": true
+    },
+    {
+      "path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/checkpoint/README.md",
+      "realpath": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/checkpoint/README.md",
+      "is_symlink": false,
+      "exists": true,
+      "bytes": 6340,
+      "sha256": "d1ba68cae64a89b6b434b11526e6e2271ee5ffd2c914ec35ed515f9d84c6085c",
+      "git_blob_sha1": "4049f762cb41ec6f526936c9af80ae216048bc74",
+      "stat_before": {
+        "device": 16777234,
+        "inode": 47100449,
+        "bytes": 6340,
+        "mtime_ns": 1793439889870402221,
+        "ctime_ns": 1793439889870522717,
+        "mode": 33188
+      },
+      "stat_open": {
+        "device": 16777234,
+        "inode": 47100449,
+        "bytes": 6340,
+        "mtime_ns": 1793439889870402221,
+        "ctime_ns": 1793439889870522717,
+        "mode": 33188
+      },
+      "stat_after_fd": {
+        "device": 16777234,
+        "inode": 47100449,
+        "bytes": 6340,
+        "mtime_ns": 1793439889870402221,
+        "ctime_ns": 1793439889870522717,
+        "mode": 33188
+      },
+      "stat_after_path": {
+        "device": 16777234,
+        "inode": 47100449,
+        "bytes": 6340,
+        "mtime_ns": 1793439889870402221,
+        "ctime_ns": 1793439889870522717,
+        "mode": 33188
+      },
+      "realpath_after": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/checkpoint/README.md",
+      "stable_during_read": true,
+      "stat_at_inventory_close": {
+        "device": 16777234,
+        "inode": 47100449,
+        "bytes": 6340,
+        "mtime_ns": 1793439889870402221,
+        "ctime_ns": 1793439889870522717,
+        "mode": 33188
+      },
+      "stable_until_inventory_close": true
+    },
+    {
+      "path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/checkpoint/config.json",
+      "realpath": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/checkpoint/config.json",
+      "is_symlink": false,
+      "exists": true,
+      "bytes": 704,
+      "sha256": "1d556eab73b69c7f11f64c557a2f9c6f440bd4c6b89bb2584a6b498c92603843",
+      "git_blob_sha1": "ccf3dac2f33905d152adbdf3886b5e38a4eb7579",
+      "stat_before": {
+        "device": 16777234,
+        "inode": 47100450,
+        "bytes": 704,
+        "mtime_ns": 1793439890082945468,
+        "ctime_ns": 1793439890083073964,
+        "mode": 33188
+      },
+      "stat_open": {
+        "device": 16777234,
+        "inode": 47100450,
+        "bytes": 704,
+        "mtime_ns": 1793439890082945468,
+        "ctime_ns": 1793439890083073964,
+        "mode": 33188
+      },
+      "stat_after_fd": {
+        "device": 16777234,
+        "inode": 47100450,
+        "bytes": 704,
+        "mtime_ns": 1793439890082945468,
+        "ctime_ns": 1793439890083073964,
+        "mode": 33188
+      },
+      "stat_after_path": {
+        "device": 16777234,
+        "inode": 47100450,
+        "bytes": 704,
+        "mtime_ns": 1793439890082945468,
+        "ctime_ns": 1793439890083073964,
+        "mode": 33188
+      },
+      "realpath_after": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/checkpoint/config.json",
+      "stable_during_read": true,
+      "stat_at_inventory_close": {
+        "device": 16777234,
+        "inode": 47100450,
+        "bytes": 704,
+        "mtime_ns": 1793439890082945468,
+        "ctime_ns": 1793439890083073964,
+        "mode": 33188
+      },
+      "stable_until_inventory_close": true
+    },
+    {
+      "path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/checkpoint/generation_config.json",
+      "realpath": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/checkpoint/generation_config.json",
+      "is_symlink": false,
+      "exists": true,
+      "bytes": 111,
+      "sha256": "2056c988e990b0d13670f63f2f3b87b3b6d07edaf7a3416998ba27dab2d8a059",
+      "git_blob_sha1": "0fce861c328ff24830f3037d91ce773254447bf7",
+      "stat_before": {
+        "device": 16777234,
+        "inode": 47100454,
+        "bytes": 111,
+        "mtime_ns": 1793439890302629779,
+        "ctime_ns": 1793439890302765566,
+        "mode": 33188
+      },
+      "stat_open": {
+        "device": 16777234,
+        "inode": 47100454,
+        "bytes": 111,
+        "mtime_ns": 1793439890302629779,
+        "ctime_ns": 1793439890302765566,
+        "mode": 33188
+      },
+      "stat_after_fd": {
+        "device": 16777234,
+        "inode": 47100454,
+        "bytes": 111,
+        "mtime_ns": 1793439890302629779,
+        "ctime_ns": 1793439890302765566,
+        "mode": 33188
+      },
+      "stat_after_path": {
+        "device": 16777234,
+        "inode": 47100454,
+        "bytes": 111,
+        "mtime_ns": 1793439890302629779,
+        "ctime_ns": 1793439890302765566,
+        "mode": 33188
+      },
+      "realpath_after": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/checkpoint/generation_config.json",
+      "stable_during_read": true,
+      "stat_at_inventory_close": {
+        "device": 16777234,
+        "inode": 47100454,
+        "bytes": 111,
+        "mtime_ns": 1793439890302629779,
+        "ctime_ns": 1793439890302765566,
+        "mode": 33188
+      },
+      "stable_until_inventory_close": true
+    },
+    {
+      "path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/checkpoint/hub-info.json",
+      "realpath": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/checkpoint/hub-info.json",
+      "is_symlink": false,
+      "exists": true,
+      "bytes": 5187,
+      "sha256": "d4e3b5f1c2de6c30021efbfd939c5969192fa03fa5e37d9bdedc7fefc2ee93a1",
+      "git_blob_sha1": "f893cc64701dda05888b9da9744934f0b81fbeca",
+      "stat_before": {
+        "device": 16777234,
+        "inode": 47100446,
+        "bytes": 5187,
+        "mtime_ns": 1793439889642078398,
+        "ctime_ns": 1793439889642078398,
+        "mode": 33188
+      },
+      "stat_open": {
+        "device": 16777234,
+        "inode": 47100446,
+        "bytes": 5187,
+        "mtime_ns": 1793439889642078398,
+        "ctime_ns": 1793439889642078398,
+        "mode": 33188
+      },
+      "stat_after_fd": {
+        "device": 16777234,
+        "inode": 47100446,
+        "bytes": 5187,
+        "mtime_ns": 1793439889642078398,
+        "ctime_ns": 1793439889642078398,
+        "mode": 33188
+      },
+      "stat_after_path": {
+        "device": 16777234,
+        "inode": 47100446,
+        "bytes": 5187,
+        "mtime_ns": 1793439889642078398,
+        "ctime_ns": 1793439889642078398,
+        "mode": 33188
+      },
+      "realpath_after": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/checkpoint/hub-info.json",
+      "stable_during_read": true,
+      "stat_at_inventory_close": {
+        "device": 16777234,
+        "inode": 47100446,
+        "bytes": 5187,
+        "mtime_ns": 1793439889642078398,
+        "ctime_ns": 1793439889642078398,
+        "mode": 33188
+      },
+      "stable_until_inventory_close": true
+    },
+    {
+      "path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/checkpoint/merges.txt",
+      "realpath": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/checkpoint/merges.txt",
+      "is_symlink": false,
+      "exists": true,
+      "bytes": 466391,
+      "sha256": "0b54e8aa4e53d5383e2e4bc635a56b43f9647f7b13832d5d9ecd8f82dac4f510",
+      "git_blob_sha1": "69503b13f727ba3812b6803e97442a6de05ef5eb",
+      "stat_before": {
+        "device": 16777234,
+        "inode": 47100456,
+        "bytes": 466391,
+        "mtime_ns": 1793439890548428956,
+        "ctime_ns": 1793439890548609034,
+        "mode": 33188
+      },
+      "stat_open": {
+        "device": 16777234,
+        "inode": 47100456,
+        "bytes": 466391,
+        "mtime_ns": 1793439890548428956,
+        "ctime_ns": 1793439890548609034,
+        "mode": 33188
+      },
+      "stat_after_fd": {
+        "device": 16777234,
+        "inode": 47100456,
+        "bytes": 466391,
+        "mtime_ns": 1793439890548428956,
+        "ctime_ns": 1793439890548609034,
+        "mode": 33188
+      },
+      "stat_after_path": {
+        "device": 16777234,
+        "inode": 47100456,
+        "bytes": 466391,
+        "mtime_ns": 1793439890548428956,
+        "ctime_ns": 1793439890548609034,
+        "mode": 33188
+      },
+      "realpath_after": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/checkpoint/merges.txt",
+      "stable_during_read": true,
+      "stat_at_inventory_close": {
+        "device": 16777234,
+        "inode": 47100456,
+        "bytes": 466391,
+        "mtime_ns": 1793439890548428956,
+        "ctime_ns": 1793439890548609034,
+        "mode": 33188
+      },
+      "stable_until_inventory_close": true
+    },
+    {
+      "path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/checkpoint/model.safetensors",
+      "realpath": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/checkpoint/model.safetensors",
+      "is_symlink": false,
+      "exists": true,
+      "bytes": 269060552,
+      "sha256": "80521b40281d6ce74e35c9282c22539e75aa0ac8578892b2a59955ef78d55da1",
+      "git_blob_sha1": "f67bb85431374f81fdca648ecb1793034b87de5d",
+      "stat_before": {
+        "device": 16777234,
+        "inode": 47100471,
+        "bytes": 269060552,
+        "mtime_ns": 1793439898044047635,
+        "ctime_ns": 1793439898044232588,
+        "mode": 33188
+      },
+      "stat_open": {
+        "device": 16777234,
+        "inode": 47100471,
+        "bytes": 269060552,
+        "mtime_ns": 1793439898044047635,
+        "ctime_ns": 1793439898044232588,
+        "mode": 33188
+      },
+      "stat_after_fd": {
+        "device": 16777234,
+        "inode": 47100471,
+        "bytes": 269060552,
+        "mtime_ns": 1793439898044047635,
+        "ctime_ns": 1793439898044232588,
+        "mode": 33188
+      },
+      "stat_after_path": {
+        "device": 16777234,
+        "inode": 47100471,
+        "bytes": 269060552,
+        "mtime_ns": 1793439898044047635,
+        "ctime_ns": 1793439898044232588,
+        "mode": 33188
+      },
+      "realpath_after": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/checkpoint/model.safetensors",
+      "stable_during_read": true,
+      "stat_at_inventory_close": {
+        "device": 16777234,
+        "inode": 47100471,
+        "bytes": 269060552,
+        "mtime_ns": 1793439898044047635,
+        "ctime_ns": 1793439898044232588,
+        "mode": 33188
+      },
+      "stable_until_inventory_close": true
+    },
+    {
+      "path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/checkpoint/source-manifest.json",
+      "realpath": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/checkpoint/source-manifest.json",
+      "is_symlink": false,
+      "exists": true,
+      "bytes": 2584,
+      "sha256": "77b1649f2fbfb01468386b7c6b08b1ed996a870352918fdd643ee9892b3296ea",
+      "git_blob_sha1": "e583ea1255c9ae82f900f66d7a01dc16f3b5bd43",
+      "stat_before": {
+        "device": 16777234,
+        "inode": 47100447,
+        "bytes": 2584,
+        "mtime_ns": 1793439898044939107,
+        "ctime_ns": 1793439898044939107,
+        "mode": 33188
+      },
+      "stat_open": {
+        "device": 16777234,
+        "inode": 47100447,
+        "bytes": 2584,
+        "mtime_ns": 1793439898044939107,
+        "ctime_ns": 1793439898044939107,
+        "mode": 33188
+      },
+      "stat_after_fd": {
+        "device": 16777234,
+        "inode": 47100447,
+        "bytes": 2584,
+        "mtime_ns": 1793439898044939107,
+        "ctime_ns": 1793439898044939107,
+        "mode": 33188
+      },
+      "stat_after_path": {
+        "device": 16777234,
+        "inode": 47100447,
+        "bytes": 2584,
+        "mtime_ns": 1793439898044939107,
+        "ctime_ns": 1793439898044939107,
+        "mode": 33188
+      },
+      "realpath_after": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/checkpoint/source-manifest.json",
+      "stable_during_read": true,
+      "stat_at_inventory_close": {
+        "device": 16777234,
+        "inode": 47100447,
+        "bytes": 2584,
+        "mtime_ns": 1793439898044939107,
+        "ctime_ns": 1793439898044939107,
+        "mode": 33188
+      },
+      "stable_until_inventory_close": true
+    },
+    {
+      "path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/checkpoint/special_tokens_map.json",
+      "realpath": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/checkpoint/special_tokens_map.json",
+      "is_symlink": false,
+      "exists": true,
+      "bytes": 831,
+      "sha256": "e786b595b9a23148bf1630df78d9037a048ea671e48bfd3549a1e3c233742bb3",
+      "git_blob_sha1": "f6652f246cb895ca1edfb16d10b57917b266e335",
+      "stat_before": {
+        "device": 16777234,
+        "inode": 47100457,
+        "bytes": 831,
+        "mtime_ns": 1793439890763127509,
+        "ctime_ns": 1793439890763400209,
+        "mode": 33188
+      },
+      "stat_open": {
+        "device": 16777234,
+        "inode": 47100457,
+        "bytes": 831,
+        "mtime_ns": 1793439890763127509,
+        "ctime_ns": 1793439890763400209,
+        "mode": 33188
+      },
+      "stat_after_fd": {
+        "device": 16777234,
+        "inode": 47100457,
+        "bytes": 831,
+        "mtime_ns": 1793439890763127509,
+        "ctime_ns": 1793439890763400209,
+        "mode": 33188
+      },
+      "stat_after_path": {
+        "device": 16777234,
+        "inode": 47100457,
+        "bytes": 831,
+        "mtime_ns": 1793439890763127509,
+        "ctime_ns": 1793439890763400209,
+        "mode": 33188
+      },
+      "realpath_after": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/checkpoint/special_tokens_map.json",
+      "stable_during_read": true,
+      "stat_at_inventory_close": {
+        "device": 16777234,
+        "inode": 47100457,
+        "bytes": 831,
+        "mtime_ns": 1793439890763127509,
+        "ctime_ns": 1793439890763400209,
+        "mode": 33188
+      },
+      "stable_until_inventory_close": true
+    },
+    {
+      "path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/checkpoint/tokenizer.json",
+      "realpath": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/checkpoint/tokenizer.json",
+      "is_symlink": false,
+      "exists": true,
+      "bytes": 2104556,
+      "sha256": "9ca9acddb6525a194ec8ac7a87f24fbba7232a9a15ffa1af0c1224fcd888e47c",
+      "git_blob_sha1": "f922b1797f0c88e71addc8393787831f2477a4bd",
+      "stat_before": {
+        "device": 16777234,
+        "inode": 47100460,
+        "bytes": 2104556,
+        "mtime_ns": 1793439891021579822,
+        "ctime_ns": 1793439891021775108,
+        "mode": 33188
+      },
+      "stat_open": {
+        "device": 16777234,
+        "inode": 47100460,
+        "bytes": 2104556,
+        "mtime_ns": 1793439891021579822,
+        "ctime_ns": 1793439891021775108,
+        "mode": 33188
+      },
+      "stat_after_fd": {
+        "device": 16777234,
+        "inode": 47100460,
+        "bytes": 2104556,
+        "mtime_ns": 1793439891021579822,
+        "ctime_ns": 1793439891021775108,
+        "mode": 33188
+      },
+      "stat_after_path": {
+        "device": 16777234,
+        "inode": 47100460,
+        "bytes": 2104556,
+        "mtime_ns": 1793439891021579822,
+        "ctime_ns": 1793439891021775108,
+        "mode": 33188
+      },
+      "realpath_after": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/checkpoint/tokenizer.json",
+      "stable_during_read": true,
+      "stat_at_inventory_close": {
+        "device": 16777234,
+        "inode": 47100460,
+        "bytes": 2104556,
+        "mtime_ns": 1793439891021579822,
+        "ctime_ns": 1793439891021775108,
+        "mode": 33188
+      },
+      "stable_until_inventory_close": true
+    },
+    {
+      "path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/checkpoint/tokenizer_config.json",
+      "realpath": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/checkpoint/tokenizer_config.json",
+      "is_symlink": false,
+      "exists": true,
+      "bytes": 3658,
+      "sha256": "4bb9af56a342753d39374f4016a16574cab299fe088e896f425ce3c433f61424",
+      "git_blob_sha1": "d45192775d58298087a1fedf5967fe5b63b091ab",
+      "stat_before": {
+        "device": 16777234,
+        "inode": 47100463,
+        "bytes": 3658,
+        "mtime_ns": 1793439891248064330,
+        "ctime_ns": 1793439891248212450,
+        "mode": 33188
+      },
+      "stat_open": {
+        "device": 16777234,
+        "inode": 47100463,
+        "bytes": 3658,
+        "mtime_ns": 1793439891248064330,
+        "ctime_ns": 1793439891248212450,
+        "mode": 33188
+      },
+      "stat_after_fd": {
+        "device": 16777234,
+        "inode": 47100463,
+        "bytes": 3658,
+        "mtime_ns": 1793439891248064330,
+        "ctime_ns": 1793439891248212450,
+        "mode": 33188
+      },
+      "stat_after_path": {
+        "device": 16777234,
+        "inode": 47100463,
+        "bytes": 3658,
+        "mtime_ns": 1793439891248064330,
+        "ctime_ns": 1793439891248212450,
+        "mode": 33188
+      },
+      "realpath_after": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/checkpoint/tokenizer_config.json",
+      "stable_during_read": true,
+      "stat_at_inventory_close": {
+        "device": 16777234,
+        "inode": 47100463,
+        "bytes": 3658,
+        "mtime_ns": 1793439891248064330,
+        "ctime_ns": 1793439891248212450,
+        "mode": 33188
+      },
+      "stable_until_inventory_close": true
+    },
+    {
+      "path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/checkpoint/vocab.json",
+      "realpath": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/checkpoint/vocab.json",
+      "is_symlink": false,
+      "exists": true,
+      "bytes": 800662,
+      "sha256": "82b84012e3add4d01d12ba14442026e49b8cbbaead1f79ecf3d919784f82dc79",
+      "git_blob_sha1": "0ad5ecc2035b7031b88afb544ee95e2d49baa484",
+      "stat_before": {
+        "device": 16777234,
+        "inode": 47100465,
+        "bytes": 800662,
+        "mtime_ns": 1793439891497394811,
+        "ctime_ns": 1793439891497582472,
+        "mode": 33188
+      },
+      "stat_open": {
+        "device": 16777234,
+        "inode": 47100465,
+        "bytes": 800662,
+        "mtime_ns": 1793439891497394811,
+        "ctime_ns": 1793439891497582472,
+        "mode": 33188
+      },
+      "stat_after_fd": {
+        "device": 16777234,
+        "inode": 47100465,
+        "bytes": 800662,
+        "mtime_ns": 1793439891497394811,
+        "ctime_ns": 1793439891497582472,
+        "mode": 33188
+      },
+      "stat_after_path": {
+        "device": 16777234,
+        "inode": 47100465,
+        "bytes": 800662,
+        "mtime_ns": 1793439891497394811,
+        "ctime_ns": 1793439891497582472,
+        "mode": 33188
+      },
+      "realpath_after": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/checkpoint/vocab.json",
+      "stable_during_read": true,
+      "stat_at_inventory_close": {
+        "device": 16777234,
+        "inode": 47100465,
+        "bytes": 800662,
+        "mtime_ns": 1793439891497394811,
+        "ctime_ns": 1793439891497582472,
+        "mode": 33188
+      },
+      "stable_until_inventory_close": true
+    },
+    {
+      "path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/export-fixture.stderr",
+      "realpath": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/export-fixture.stderr",
+      "is_symlink": false,
+      "exists": true,
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "git_blob_sha1": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
+      "stat_before": {
+        "device": 16777234,
+        "inode": 47131688,
+        "bytes": 0,
+        "mtime_ns": 1793440556506502927,
+        "ctime_ns": 1793440556506502927,
+        "mode": 33188
+      },
+      "stat_open": {
+        "device": 16777234,
+        "inode": 47131688,
+        "bytes": 0,
+        "mtime_ns": 1793440556506502927,
+        "ctime_ns": 1793440556506502927,
+        "mode": 33188
+      },
+      "stat_after_fd": {
+        "device": 16777234,
+        "inode": 47131688,
+        "bytes": 0,
+        "mtime_ns": 1793440556506502927,
+        "ctime_ns": 1793440556506502927,
+        "mode": 33188
+      },
+      "stat_after_path": {
+        "device": 16777234,
+        "inode": 47131688,
+        "bytes": 0,
+        "mtime_ns": 1793440556506502927,
+        "ctime_ns": 1793440556506502927,
+        "mode": 33188
+      },
+      "realpath_after": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/export-fixture.stderr",
+      "stable_during_read": true,
+      "stat_at_inventory_close": {
+        "device": 16777234,
+        "inode": 47131688,
+        "bytes": 0,
+        "mtime_ns": 1793440556506502927,
+        "ctime_ns": 1793440556506502927,
+        "mode": 33188
+      },
+      "stable_until_inventory_close": true
+    },
+    {
+      "path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/export-fixture.stdout",
+      "realpath": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/export-fixture.stdout",
+      "is_symlink": false,
+      "exists": true,
+      "bytes": 269,
+      "sha256": "e4d5ac202bc3d0ba4fd30948d365bfb60424492dfaf70d8c934d9ac40ea24134",
+      "git_blob_sha1": "8b25caed72c99c059690b031e7e0119dedd3ddde",
+      "stat_before": {
+        "device": 16777234,
+        "inode": 47131687,
+        "bytes": 269,
+        "mtime_ns": 1793440557520870812,
+        "ctime_ns": 1793440557520870812,
+        "mode": 33188
+      },
+      "stat_open": {
+        "device": 16777234,
+        "inode": 47131687,
+        "bytes": 269,
+        "mtime_ns": 1793440557520870812,
+        "ctime_ns": 1793440557520870812,
+        "mode": 33188
+      },
+      "stat_after_fd": {
+        "device": 16777234,
+        "inode": 47131687,
+        "bytes": 269,
+        "mtime_ns": 1793440557520870812,
+        "ctime_ns": 1793440557520870812,
+        "mode": 33188
+      },
+      "stat_after_path": {
+        "device": 16777234,
+        "inode": 47131687,
+        "bytes": 269,
+        "mtime_ns": 1793440557520870812,
+        "ctime_ns": 1793440557520870812,
+        "mode": 33188
+      },
+      "realpath_after": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/export-fixture.stdout",
+      "stable_during_read": true,
+      "stat_at_inventory_close": {
+        "device": 16777234,
+        "inode": 47131687,
+        "bytes": 269,
+        "mtime_ns": 1793440557520870812,
+        "ctime_ns": 1793440557520870812,
+        "mode": 33188
+      },
+      "stable_until_inventory_close": true
+    },
+    {
+      "path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/fetch-source.stderr",
+      "realpath": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/fetch-source.stderr",
+      "is_symlink": false,
+      "exists": true,
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "git_blob_sha1": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
+      "stat_before": {
+        "device": 16777234,
+        "inode": 47100443,
+        "bytes": 0,
+        "mtime_ns": 1793439889305563721,
+        "ctime_ns": 1793439889305563721,
+        "mode": 33188
+      },
+      "stat_open": {
+        "device": 16777234,
+        "inode": 47100443,
+        "bytes": 0,
+        "mtime_ns": 1793439889305563721,
+        "ctime_ns": 1793439889305563721,
+        "mode": 33188
+      },
+      "stat_after_fd": {
+        "device": 16777234,
+        "inode": 47100443,
+        "bytes": 0,
+        "mtime_ns": 1793439889305563721,
+        "ctime_ns": 1793439889305563721,
+        "mode": 33188
+      },
+      "stat_after_path": {
+        "device": 16777234,
+        "inode": 47100443,
+        "bytes": 0,
+        "mtime_ns": 1793439889305563721,
+        "ctime_ns": 1793439889305563721,
+        "mode": 33188
+      },
+      "realpath_after": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/fetch-source.stderr",
+      "stable_during_read": true,
+      "stat_at_inventory_close": {
+        "device": 16777234,
+        "inode": 47100443,
+        "bytes": 0,
+        "mtime_ns": 1793439889305563721,
+        "ctime_ns": 1793439889305563721,
+        "mode": 33188
+      },
+      "stable_until_inventory_close": true
+    },
+    {
+      "path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/fetch-source.stdout",
+      "realpath": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/fetch-source.stdout",
+      "is_symlink": false,
+      "exists": true,
+      "bytes": 414,
+      "sha256": "fd4acd6d46420f291e7e5afed7089c79d8cc91d449aeb855699b70b882594498",
+      "git_blob_sha1": "1553f131e6f711597f28425759d749ee528ebc70",
+      "stat_before": {
+        "device": 16777234,
+        "inode": 47100442,
+        "bytes": 414,
+        "mtime_ns": 1793439898045034937,
+        "ctime_ns": 1793439898045034937,
+        "mode": 33188
+      },
+      "stat_open": {
+        "device": 16777234,
+        "inode": 47100442,
+        "bytes": 414,
+        "mtime_ns": 1793439898045034937,
+        "ctime_ns": 1793439898045034937,
+        "mode": 33188
+      },
+      "stat_after_fd": {
+        "device": 16777234,
+        "inode": 47100442,
+        "bytes": 414,
+        "mtime_ns": 1793439898045034937,
+        "ctime_ns": 1793439898045034937,
+        "mode": 33188
+      },
+      "stat_after_path": {
+        "device": 16777234,
+        "inode": 47100442,
+        "bytes": 414,
+        "mtime_ns": 1793439898045034937,
+        "ctime_ns": 1793439898045034937,
+        "mode": 33188
+      },
+      "realpath_after": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/fetch-source.stdout",
+      "stable_during_read": true,
+      "stat_at_inventory_close": {
+        "device": 16777234,
+        "inode": 47100442,
+        "bytes": 414,
+        "mtime_ns": 1793439898045034937,
+        "ctime_ns": 1793439898045034937,
+        "mode": 33188
+      },
+      "stable_until_inventory_close": true
+    },
+    {
+      "path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/model.palwtir",
+      "realpath": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/model.palwtir",
+      "is_symlink": false,
+      "exists": true,
+      "bytes": 180336256,
+      "sha256": "809bfeb4d6af051c173e9e401ded0f60bcc10fe173f3a0cdfe2885cef8c697c8",
+      "git_blob_sha1": "7f457d82786f21b69cb0bd8a3e10a0cd0b2a61a3",
+      "stat_before": {
+        "device": 16777234,
+        "inode": 47103521,
+        "bytes": 180336256,
+        "mtime_ns": 1793439934648578085,
+        "ctime_ns": 1793439934648578085,
+        "mode": 33188
+      },
+      "stat_open": {
+        "device": 16777234,
+        "inode": 47103521,
+        "bytes": 180336256,
+        "mtime_ns": 1793439934648578085,
+        "ctime_ns": 1793439934648578085,
+        "mode": 33188
+      },
+      "stat_after_fd": {
+        "device": 16777234,
+        "inode": 47103521,
+        "bytes": 180336256,
+        "mtime_ns": 1793439934648578085,
+        "ctime_ns": 1793439934648578085,
+        "mode": 33188
+      },
+      "stat_after_path": {
+        "device": 16777234,
+        "inode": 47103521,
+        "bytes": 180336256,
+        "mtime_ns": 1793439934648578085,
+        "ctime_ns": 1793439934648578085,
+        "mode": 33188
+      },
+      "realpath_after": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/model.palwtir",
+      "stable_during_read": true,
+      "palwtir_file_digest_v1": "28851a1b2fc493b62f3e241beabb2c554126e67aad740d40097b2b1a9784ad018867c785d6d82f2de256837e6179071c0a083ab1368f42d330277c4833de3049",
+      "stat_at_inventory_close": {
+        "device": 16777234,
+        "inode": 47103521,
+        "bytes": 180336256,
+        "mtime_ns": 1793439934648578085,
+        "ctime_ns": 1793439934648578085,
+        "mode": 33188
+      },
+      "stable_until_inventory_close": true
+    },
+    {
+      "path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/model.palwtir.testnet-12.palwtir",
+      "realpath": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/model.palwtir.testnet-12.palwtir",
+      "is_symlink": false,
+      "exists": true,
+      "bytes": 180336320,
+      "sha256": "48c72278b0d9b45c7ab92b6e70f5fbcef47fa86cc8644cd4307798354639fe90",
+      "git_blob_sha1": "a65d0c2823cb25f4879db7c87b63dbb97caeb19c",
+      "stat_before": {
+        "device": 16777234,
+        "inode": 47131659,
+        "bytes": 180336320,
+        "mtime_ns": 1793440555519333785,
+        "ctime_ns": 1793440555519333785,
+        "mode": 33188
+      },
+      "stat_open": {
+        "device": 16777234,
+        "inode": 47131659,
+        "bytes": 180336320,
+        "mtime_ns": 1793440555519333785,
+        "ctime_ns": 1793440555519333785,
+        "mode": 33188
+      },
+      "stat_after_fd": {
+        "device": 16777234,
+        "inode": 47131659,
+        "bytes": 180336320,
+        "mtime_ns": 1793440555519333785,
+        "ctime_ns": 1793440555519333785,
+        "mode": 33188
+      },
+      "stat_after_path": {
+        "device": 16777234,
+        "inode": 47131659,
+        "bytes": 180336320,
+        "mtime_ns": 1793440555519333785,
+        "ctime_ns": 1793440555519333785,
+        "mode": 33188
+      },
+      "realpath_after": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/model.palwtir.testnet-12.palwtir",
+      "stable_during_read": true,
+      "palwtir_file_digest_v1": "7ef829d64c6909e9332f5dc988086106e541ebeef5f17f7b5e7027892694a49e1f27b76714d43f513e7f164c0d62dfcd1c17287aebbd0bf265f4ac83a39765d6",
+      "stat_at_inventory_close": {
+        "device": 16777234,
+        "inode": 47131659,
+        "bytes": 180336320,
+        "mtime_ns": 1793440555519333785,
+        "ctime_ns": 1793440555519333785,
+        "mode": 33188
+      },
+      "stable_until_inventory_close": true
+    },
+    {
+      "path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/native-register.stderr",
+      "realpath": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/native-register.stderr",
+      "is_symlink": false,
+      "exists": true,
+      "bytes": 311,
+      "sha256": "1eeeb90c37e011dcf144eb7cda5a6e1c9d4c176c2f91499544db4aff89ba3ae4",
+      "git_blob_sha1": "ccb237668a39e38b7287cd31c2aaa6be5925071f",
+      "stat_before": {
+        "device": 16777234,
+        "inode": 47131738,
+        "bytes": 311,
+        "mtime_ns": 1793440557768005900,
+        "ctime_ns": 1793440557768005900,
+        "mode": 33188
+      },
+      "stat_open": {
+        "device": 16777234,
+        "inode": 47131738,
+        "bytes": 311,
+        "mtime_ns": 1793440557768005900,
+        "ctime_ns": 1793440557768005900,
+        "mode": 33188
+      },
+      "stat_after_fd": {
+        "device": 16777234,
+        "inode": 47131738,
+        "bytes": 311,
+        "mtime_ns": 1793440557768005900,
+        "ctime_ns": 1793440557768005900,
+        "mode": 33188
+      },
+      "stat_after_path": {
+        "device": 16777234,
+        "inode": 47131738,
+        "bytes": 311,
+        "mtime_ns": 1793440557768005900,
+        "ctime_ns": 1793440557768005900,
+        "mode": 33188
+      },
+      "realpath_after": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/native-register.stderr",
+      "stable_during_read": true,
+      "stat_at_inventory_close": {
+        "device": 16777234,
+        "inode": 47131738,
+        "bytes": 311,
+        "mtime_ns": 1793440557768005900,
+        "ctime_ns": 1793440557768005900,
+        "mode": 33188
+      },
+      "stable_until_inventory_close": true
+    },
+    {
+      "path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/native-register.stdout",
+      "realpath": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/native-register.stdout",
+      "is_symlink": false,
+      "exists": true,
+      "bytes": 244,
+      "sha256": "65975b0ffd83c4b497781331bf0b61f3b047b716f0ceaa914631da31d86aab3d",
+      "git_blob_sha1": "5d816b21acb5fc4daea5e4ee3dd3dd5632ab341a",
+      "stat_before": {
+        "device": 16777234,
+        "inode": 47131737,
+        "bytes": 244,
+        "mtime_ns": 1793440560130594138,
+        "ctime_ns": 1793440560130594138,
+        "mode": 33188
+      },
+      "stat_open": {
+        "device": 16777234,
+        "inode": 47131737,
+        "bytes": 244,
+        "mtime_ns": 1793440560130594138,
+        "ctime_ns": 1793440560130594138,
+        "mode": 33188
+      },
+      "stat_after_fd": {
+        "device": 16777234,
+        "inode": 47131737,
+        "bytes": 244,
+        "mtime_ns": 1793440560130594138,
+        "ctime_ns": 1793440560130594138,
+        "mode": 33188
+      },
+      "stat_after_path": {
+        "device": 16777234,
+        "inode": 47131737,
+        "bytes": 244,
+        "mtime_ns": 1793440560130594138,
+        "ctime_ns": 1793440560130594138,
+        "mode": 33188
+      },
+      "realpath_after": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/native-register.stdout",
+      "stable_during_read": true,
+      "stat_at_inventory_close": {
+        "device": 16777234,
+        "inode": 47131737,
+        "bytes": 244,
+        "mtime_ns": 1793440560130594138,
+        "ctime_ns": 1793440560130594138,
+        "mode": 33188
+      },
+      "stable_until_inventory_close": true
+    },
+    {
+      "path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/native.json",
+      "realpath": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/native.json",
+      "is_symlink": false,
+      "exists": true,
+      "bytes": 1116,
+      "sha256": "57a9ecccc71f3499550b46df97c17a58c17ee85b8fad81ce32aa60b2d328590e",
+      "git_blob_sha1": "2303bfab35dc99d15f7a5105eacbdceb309473ed",
+      "stat_before": {
+        "device": 16777234,
+        "inode": 47131934,
+        "bytes": 1116,
+        "mtime_ns": 1793440560121687381,
+        "ctime_ns": 1793440560121687381,
+        "mode": 33188
+      },
+      "stat_open": {
+        "device": 16777234,
+        "inode": 47131934,
+        "bytes": 1116,
+        "mtime_ns": 1793440560121687381,
+        "ctime_ns": 1793440560121687381,
+        "mode": 33188
+      },
+      "stat_after_fd": {
+        "device": 16777234,
+        "inode": 47131934,
+        "bytes": 1116,
+        "mtime_ns": 1793440560121687381,
+        "ctime_ns": 1793440560121687381,
+        "mode": 33188
+      },
+      "stat_after_path": {
+        "device": 16777234,
+        "inode": 47131934,
+        "bytes": 1116,
+        "mtime_ns": 1793440560121687381,
+        "ctime_ns": 1793440560121687381,
+        "mode": 33188
+      },
+      "realpath_after": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/native.json",
+      "stable_during_read": true,
+      "stat_at_inventory_close": {
+        "device": 16777234,
+        "inode": 47131934,
+        "bytes": 1116,
+        "mtime_ns": 1793440560121687381,
+        "ctime_ns": 1793440560121687381,
+        "mode": 33188
+      },
+      "stable_until_inventory_close": true
+    },
+    {
+      "path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/pack/calib-tokens.json",
+      "realpath": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/pack/calib-tokens.json",
+      "is_symlink": false,
+      "exists": true,
+      "bytes": 349,
+      "sha256": "0776e65b604659663315317de8b8bdacb67a3d3b4aec49fbecabf6570732c2ab",
+      "git_blob_sha1": "476c747e60ce3179e01d6465d0ab6bd055c48bcd",
+      "stat_before": {
+        "device": 16777234,
+        "inode": 47103941,
+        "bytes": 349,
+        "mtime_ns": 1793439935006712941,
+        "ctime_ns": 1793439935006712941,
+        "mode": 33188
+      },
+      "stat_open": {
+        "device": 16777234,
+        "inode": 47103941,
+        "bytes": 349,
+        "mtime_ns": 1793439935006712941,
+        "ctime_ns": 1793439935006712941,
+        "mode": 33188
+      },
+      "stat_after_fd": {
+        "device": 16777234,
+        "inode": 47103941,
+        "bytes": 349,
+        "mtime_ns": 1793439935006712941,
+        "ctime_ns": 1793439935006712941,
+        "mode": 33188
+      },
+      "stat_after_path": {
+        "device": 16777234,
+        "inode": 47103941,
+        "bytes": 349,
+        "mtime_ns": 1793439935006712941,
+        "ctime_ns": 1793439935006712941,
+        "mode": 33188
+      },
+      "realpath_after": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/pack/calib-tokens.json",
+      "stable_during_read": true,
+      "stat_at_inventory_close": {
+        "device": 16777234,
+        "inode": 47103941,
+        "bytes": 349,
+        "mtime_ns": 1793439935006712941,
+        "ctime_ns": 1793439935006712941,
+        "mode": 33188
+      },
+      "stable_until_inventory_close": true
+    },
+    {
+      "path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/pack/pack.json",
+      "realpath": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/pack/pack.json",
+      "is_symlink": false,
+      "exists": true,
+      "bytes": 9200,
+      "sha256": "80f1de7dc9ee6e72e85b87f56a5808f6e9d2c35073272376f6116e62893408f5",
+      "git_blob_sha1": "4fb3152d1129f3c976a31f08db949b5a2c44b534",
+      "stat_before": {
+        "device": 16777234,
+        "inode": 47131682,
+        "bytes": 9200,
+        "mtime_ns": 1793440556352134481,
+        "ctime_ns": 1793440556352134481,
+        "mode": 33188
+      },
+      "stat_open": {
+        "device": 16777234,
+        "inode": 47131682,
+        "bytes": 9200,
+        "mtime_ns": 1793440556352134481,
+        "ctime_ns": 1793440556352134481,
+        "mode": 33188
+      },
+      "stat_after_fd": {
+        "device": 16777234,
+        "inode": 47131682,
+        "bytes": 9200,
+        "mtime_ns": 1793440556352134481,
+        "ctime_ns": 1793440556352134481,
+        "mode": 33188
+      },
+      "stat_after_path": {
+        "device": 16777234,
+        "inode": 47131682,
+        "bytes": 9200,
+        "mtime_ns": 1793440556352134481,
+        "ctime_ns": 1793440556352134481,
+        "mode": 33188
+      },
+      "realpath_after": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/pack/pack.json",
+      "stable_during_read": true,
+      "stat_at_inventory_close": {
+        "device": 16777234,
+        "inode": 47131682,
+        "bytes": 9200,
+        "mtime_ns": 1793440556352134481,
+        "ctime_ns": 1793440556352134481,
+        "mode": 33188
+      },
+      "stable_until_inventory_close": true
+    },
+    {
+      "path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/pack/stats.json",
+      "realpath": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/pack/stats.json",
+      "is_symlink": false,
+      "exists": true,
+      "bytes": 4800363,
+      "sha256": "a32bcc21e43cee4164c84745a306e69ab277928bf151cc3884537948613a2c16",
+      "git_blob_sha1": "c71838f1bb7dc91782a713afff66e5fab567abae",
+      "stat_before": {
+        "device": 16777234,
+        "inode": 47101117,
+        "bytes": 4800363,
+        "mtime_ns": 1793439915309602307,
+        "ctime_ns": 1793439915309602307,
+        "mode": 33188
+      },
+      "stat_open": {
+        "device": 16777234,
+        "inode": 47101117,
+        "bytes": 4800363,
+        "mtime_ns": 1793439915309602307,
+        "ctime_ns": 1793439915309602307,
+        "mode": 33188
+      },
+      "stat_after_fd": {
+        "device": 16777234,
+        "inode": 47101117,
+        "bytes": 4800363,
+        "mtime_ns": 1793439915309602307,
+        "ctime_ns": 1793439915309602307,
+        "mode": 33188
+      },
+      "stat_after_path": {
+        "device": 16777234,
+        "inode": 47101117,
+        "bytes": 4800363,
+        "mtime_ns": 1793439915309602307,
+        "ctime_ns": 1793439915309602307,
+        "mode": 33188
+      },
+      "realpath_after": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/pack/stats.json",
+      "stable_during_read": true,
+      "stat_at_inventory_close": {
+        "device": 16777234,
+        "inode": 47101117,
+        "bytes": 4800363,
+        "mtime_ns": 1793439915309602307,
+        "ctime_ns": 1793439915309602307,
+        "mode": 33188
+      },
+      "stable_until_inventory_close": true
+    },
+    {
+      "path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/pack-build.stderr",
+      "realpath": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/pack-build.stderr",
+      "is_symlink": false,
+      "exists": true,
+      "bytes": 1792,
+      "sha256": "10a3269cc9f95d44d344091ac59564320e9bce3df7d863475083c967ea1eb22c",
+      "git_blob_sha1": "f18c47d5cc5b42042cc5b1fc515da38a75e90a9a",
+      "stat_before": {
+        "device": 16777234,
+        "inode": 47100510,
+        "bytes": 1792,
+        "mtime_ns": 1793440556352565872,
+        "ctime_ns": 1793440556352565872,
+        "mode": 33188
+      },
+      "stat_open": {
+        "device": 16777234,
+        "inode": 47100510,
+        "bytes": 1792,
+        "mtime_ns": 1793440556352565872,
+        "ctime_ns": 1793440556352565872,
+        "mode": 33188
+      },
+      "stat_after_fd": {
+        "device": 16777234,
+        "inode": 47100510,
+        "bytes": 1792,
+        "mtime_ns": 1793440556352565872,
+        "ctime_ns": 1793440556352565872,
+        "mode": 33188
+      },
+      "stat_after_path": {
+        "device": 16777234,
+        "inode": 47100510,
+        "bytes": 1792,
+        "mtime_ns": 1793440556352565872,
+        "ctime_ns": 1793440556352565872,
+        "mode": 33188
+      },
+      "realpath_after": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/pack-build.stderr",
+      "stable_during_read": true,
+      "stat_at_inventory_close": {
+        "device": 16777234,
+        "inode": 47100510,
+        "bytes": 1792,
+        "mtime_ns": 1793440556352565872,
+        "ctime_ns": 1793440556352565872,
+        "mode": 33188
+      },
+      "stable_until_inventory_close": true
+    },
+    {
+      "path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/pack-build.stdout",
+      "realpath": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/pack-build.stdout",
+      "is_symlink": false,
+      "exists": true,
+      "bytes": 65,
+      "sha256": "9d33e2846ece01ef396e739157e1f3a1e9c8347162f951e50fcb2e8bd3f23eaa",
+      "git_blob_sha1": "9f695309e143cde1d8236103bde11c015f1ff5ad",
+      "stat_before": {
+        "device": 16777234,
+        "inode": 47100509,
+        "bytes": 65,
+        "mtime_ns": 1793440556352631951,
+        "ctime_ns": 1793440556352631951,
+        "mode": 33188
+      },
+      "stat_open": {
+        "device": 16777234,
+        "inode": 47100509,
+        "bytes": 65,
+        "mtime_ns": 1793440556352631951,
+        "ctime_ns": 1793440556352631951,
+        "mode": 33188
+      },
+      "stat_after_fd": {
+        "device": 16777234,
+        "inode": 47100509,
+        "bytes": 65,
+        "mtime_ns": 1793440556352631951,
+        "ctime_ns": 1793440556352631951,
+        "mode": 33188
+      },
+      "stat_after_path": {
+        "device": 16777234,
+        "inode": 47100509,
+        "bytes": 65,
+        "mtime_ns": 1793440556352631951,
+        "ctime_ns": 1793440556352631951,
+        "mode": 33188
+      },
+      "realpath_after": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/pack-build.stdout",
+      "stable_during_read": true,
+      "stat_at_inventory_close": {
+        "device": 16777234,
+        "inode": 47100509,
+        "bytes": 65,
+        "mtime_ns": 1793440556352631951,
+        "ctime_ns": 1793440556352631951,
+        "mode": 33188
+      },
+      "stable_until_inventory_close": true
+    },
+    {
+      "path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/preflight.stderr",
+      "realpath": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/preflight.stderr",
+      "is_symlink": false,
+      "exists": true,
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "git_blob_sha1": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
+      "stat_before": {
+        "device": 16777234,
+        "inode": 47099877,
+        "bytes": 0,
+        "mtime_ns": 1793439847992183506,
+        "ctime_ns": 1793439847992183506,
+        "mode": 33188
+      },
+      "stat_open": {
+        "device": 16777234,
+        "inode": 47099877,
+        "bytes": 0,
+        "mtime_ns": 1793439847992183506,
+        "ctime_ns": 1793439847992183506,
+        "mode": 33188
+      },
+      "stat_after_fd": {
+        "device": 16777234,
+        "inode": 47099877,
+        "bytes": 0,
+        "mtime_ns": 1793439847992183506,
+        "ctime_ns": 1793439847992183506,
+        "mode": 33188
+      },
+      "stat_after_path": {
+        "device": 16777234,
+        "inode": 47099877,
+        "bytes": 0,
+        "mtime_ns": 1793439847992183506,
+        "ctime_ns": 1793439847992183506,
+        "mode": 33188
+      },
+      "realpath_after": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/preflight.stderr",
+      "stable_during_read": true,
+      "stat_at_inventory_close": {
+        "device": 16777234,
+        "inode": 47099877,
+        "bytes": 0,
+        "mtime_ns": 1793439847992183506,
+        "ctime_ns": 1793439847992183506,
+        "mode": 33188
+      },
+      "stable_until_inventory_close": true
+    },
+    {
+      "path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/preflight.stdout",
+      "realpath": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/preflight.stdout",
+      "is_symlink": false,
+      "exists": true,
+      "bytes": 52417,
+      "sha256": "959101763f1b0f7f2f2e3d160cda7859c19164b8b23a8469f3a9d5ee2abb2b4d",
+      "git_blob_sha1": "0a8ba2d89332d96e434d6385ef1ad39cabeef6b3",
+      "stat_before": {
+        "device": 16777234,
+        "inode": 47099876,
+        "bytes": 52417,
+        "mtime_ns": 1793439889297691724,
+        "ctime_ns": 1793439889297691724,
+        "mode": 33188
+      },
+      "stat_open": {
+        "device": 16777234,
+        "inode": 47099876,
+        "bytes": 52417,
+        "mtime_ns": 1793439889297691724,
+        "ctime_ns": 1793439889297691724,
+        "mode": 33188
+      },
+      "stat_after_fd": {
+        "device": 16777234,
+        "inode": 47099876,
+        "bytes": 52417,
+        "mtime_ns": 1793439889297691724,
+        "ctime_ns": 1793439889297691724,
+        "mode": 33188
+      },
+      "stat_after_path": {
+        "device": 16777234,
+        "inode": 47099876,
+        "bytes": 52417,
+        "mtime_ns": 1793439889297691724,
+        "ctime_ns": 1793439889297691724,
+        "mode": 33188
+      },
+      "realpath_after": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/preflight.stdout",
+      "stable_during_read": true,
+      "stat_at_inventory_close": {
+        "device": 16777234,
+        "inode": 47099876,
+        "bytes": 52417,
+        "mtime_ns": 1793439889297691724,
+        "ctime_ns": 1793439889297691724,
+        "mode": 33188
+      },
+      "stable_until_inventory_close": true
+    },
+    {
+      "path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/registration-fixture.json",
+      "realpath": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/registration-fixture.json",
+      "is_symlink": false,
+      "exists": true,
+      "bytes": 28554,
+      "sha256": "252c20d0aab613bdc3e7349ba85e1a1306167cf06185ffff4bf12dea6df6e1b9",
+      "git_blob_sha1": "f341da671ce560ab7993f2d22a9854c18c2687d2",
+      "stat_before": {
+        "device": 16777234,
+        "inode": 47131728,
+        "bytes": 28554,
+        "mtime_ns": 1793440557520819565,
+        "ctime_ns": 1793440557520819565,
+        "mode": 33188
+      },
+      "stat_open": {
+        "device": 16777234,
+        "inode": 47131728,
+        "bytes": 28554,
+        "mtime_ns": 1793440557520819565,
+        "ctime_ns": 1793440557520819565,
+        "mode": 33188
+      },
+      "stat_after_fd": {
+        "device": 16777234,
+        "inode": 47131728,
+        "bytes": 28554,
+        "mtime_ns": 1793440557520819565,
+        "ctime_ns": 1793440557520819565,
+        "mode": 33188
+      },
+      "stat_after_path": {
+        "device": 16777234,
+        "inode": 47131728,
+        "bytes": 28554,
+        "mtime_ns": 1793440557520819565,
+        "ctime_ns": 1793440557520819565,
+        "mode": 33188
+      },
+      "realpath_after": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/registration-fixture.json",
+      "stable_during_read": true,
+      "stat_at_inventory_close": {
+        "device": 16777234,
+        "inode": 47131728,
+        "bytes": 28554,
+        "mtime_ns": 1793440557520819565,
+        "ctime_ns": 1793440557520819565,
+        "mode": 33188
+      },
+      "stable_until_inventory_close": true
+    },
+    {
+      "path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/run.json",
+      "realpath": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/run.json",
+      "is_symlink": false,
+      "exists": true,
+      "bytes": 5004,
+      "sha256": "f550e3f10f54ee53d922a41f07fae805fea500b7cb07d36a77cf3d8a3ec0a5a2",
+      "git_blob_sha1": "081872625a82a062192fdb510d27f96262d7ab91",
+      "stat_before": {
+        "device": 16777234,
+        "inode": 47131947,
+        "bytes": 5004,
+        "mtime_ns": 1793440560165419590,
+        "ctime_ns": 1793440560165529834,
+        "mode": 33188
+      },
+      "stat_open": {
+        "device": 16777234,
+        "inode": 47131947,
+        "bytes": 5004,
+        "mtime_ns": 1793440560165419590,
+        "ctime_ns": 1793440560165529834,
+        "mode": 33188
+      },
+      "stat_after_fd": {
+        "device": 16777234,
+        "inode": 47131947,
+        "bytes": 5004,
+        "mtime_ns": 1793440560165419590,
+        "ctime_ns": 1793440560165529834,
+        "mode": 33188
+      },
+      "stat_after_path": {
+        "device": 16777234,
+        "inode": 47131947,
+        "bytes": 5004,
+        "mtime_ns": 1793440560165419590,
+        "ctime_ns": 1793440560165529834,
+        "mode": 33188
+      },
+      "realpath_after": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/run.json",
+      "stable_during_read": true,
+      "stat_at_inventory_close": {
+        "device": 16777234,
+        "inode": 47131947,
+        "bytes": 5004,
+        "mtime_ns": 1793440560165419590,
+        "ctime_ns": 1793440560165529834,
+        "mode": 33188
+      },
+      "stable_until_inventory_close": true
+    },
+    {
+      "path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/source-config.json",
+      "realpath": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/source-config.json",
+      "is_symlink": false,
+      "exists": true,
+      "bytes": 704,
+      "sha256": "1d556eab73b69c7f11f64c557a2f9c6f440bd4c6b89bb2584a6b498c92603843",
+      "git_blob_sha1": "ccf3dac2f33905d152adbdf3886b5e38a4eb7579",
+      "stat_before": {
+        "device": 16777234,
+        "inode": 47099873,
+        "bytes": 704,
+        "mtime_ns": 1793439847991177622,
+        "ctime_ns": 1793439847991177622,
+        "mode": 33188
+      },
+      "stat_open": {
+        "device": 16777234,
+        "inode": 47099873,
+        "bytes": 704,
+        "mtime_ns": 1793439847991177622,
+        "ctime_ns": 1793439847991177622,
+        "mode": 33188
+      },
+      "stat_after_fd": {
+        "device": 16777234,
+        "inode": 47099873,
+        "bytes": 704,
+        "mtime_ns": 1793439847991177622,
+        "ctime_ns": 1793439847991177622,
+        "mode": 33188
+      },
+      "stat_after_path": {
+        "device": 16777234,
+        "inode": 47099873,
+        "bytes": 704,
+        "mtime_ns": 1793439847991177622,
+        "ctime_ns": 1793439847991177622,
+        "mode": 33188
+      },
+      "realpath_after": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/source-config.json",
+      "stable_during_read": true,
+      "stat_at_inventory_close": {
+        "device": 16777234,
+        "inode": 47099873,
+        "bytes": 704,
+        "mtime_ns": 1793439847991177622,
+        "ctime_ns": 1793439847991177622,
+        "mode": 33188
+      },
+      "stable_until_inventory_close": true
+    },
+    {
+      "path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/texts.json",
+      "realpath": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/texts.json",
+      "is_symlink": false,
+      "exists": true,
+      "bytes": 557,
+      "sha256": "50bb72eb3f01eace09d09909dcb37845a760bce5d6fae7a01caa70c54a428c81",
+      "git_blob_sha1": "7922b52882b7b53f6f2a0cf693fd70e3ffc0bfda",
+      "stat_before": {
+        "device": 16777234,
+        "inode": 47099818,
+        "bytes": 557,
+        "mtime_ns": 1793439846784132318,
+        "ctime_ns": 1793439846784132318,
+        "mode": 33188
+      },
+      "stat_open": {
+        "device": 16777234,
+        "inode": 47099818,
+        "bytes": 557,
+        "mtime_ns": 1793439846784132318,
+        "ctime_ns": 1793439846784132318,
+        "mode": 33188
+      },
+      "stat_after_fd": {
+        "device": 16777234,
+        "inode": 47099818,
+        "bytes": 557,
+        "mtime_ns": 1793439846784132318,
+        "ctime_ns": 1793439846784132318,
+        "mode": 33188
+      },
+      "stat_after_path": {
+        "device": 16777234,
+        "inode": 47099818,
+        "bytes": 557,
+        "mtime_ns": 1793439846784132318,
+        "ctime_ns": 1793439846784132318,
+        "mode": 33188
+      },
+      "realpath_after": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/texts.json",
+      "stable_during_read": true,
+      "stat_at_inventory_close": {
+        "device": 16777234,
+        "inode": 47099818,
+        "bytes": 557,
+        "mtime_ns": 1793439846784132318,
+        "ctime_ns": 1793439846784132318,
+        "mode": 33188
+      },
+      "stable_until_inventory_close": true
+    },
+    {
+      "path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/tokenizer.json",
+      "realpath": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/tokenizer.json",
+      "is_symlink": false,
+      "exists": true,
+      "bytes": 2104556,
+      "sha256": "9ca9acddb6525a194ec8ac7a87f24fbba7232a9a15ffa1af0c1224fcd888e47c",
+      "git_blob_sha1": "f922b1797f0c88e71addc8393787831f2477a4bd",
+      "stat_before": {
+        "device": 16777234,
+        "inode": 47099817,
+        "bytes": 2104556,
+        "mtime_ns": 1793439846783918866,
+        "ctime_ns": 1793439846783918866,
+        "mode": 33188
+      },
+      "stat_open": {
+        "device": 16777234,
+        "inode": 47099817,
+        "bytes": 2104556,
+        "mtime_ns": 1793439846783918866,
+        "ctime_ns": 1793439846783918866,
+        "mode": 33188
+      },
+      "stat_after_fd": {
+        "device": 16777234,
+        "inode": 47099817,
+        "bytes": 2104556,
+        "mtime_ns": 1793439846783918866,
+        "ctime_ns": 1793439846783918866,
+        "mode": 33188
+      },
+      "stat_after_path": {
+        "device": 16777234,
+        "inode": 47099817,
+        "bytes": 2104556,
+        "mtime_ns": 1793439846783918866,
+        "ctime_ns": 1793439846783918866,
+        "mode": 33188
+      },
+      "realpath_after": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/tokenizer.json",
+      "stable_during_read": true,
+      "stat_at_inventory_close": {
+        "device": 16777234,
+        "inode": 47099817,
+        "bytes": 2104556,
+        "mtime_ns": 1793439846783918866,
+        "ctime_ns": 1793439846783918866,
+        "mode": 33188
+      },
+      "stable_until_inventory_close": true
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/docs/evidence/models/trained-llm-cohort-2026-10-31/selection.json",
+      "realpath": "/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/docs/evidence/models/trained-llm-cohort-2026-10-31/selection.json",
+      "is_symlink": false,
+      "exists": true,
+      "bytes": 13528,
+      "sha256": "a10fe8c617f71357d59f8af00ebc89e7f864cb1d8a0e9b3bb8e7574e76c81523",
+      "git_blob_sha1": "bf10ed2770556d39649d51442a53b41ebae879c7",
+      "stat_before": {
+        "device": 16777234,
+        "inode": 48105377,
+        "bytes": 13528,
+        "mtime_ns": 1793469170955461693,
+        "ctime_ns": 1793469170955461693,
+        "mode": 33188
+      },
+      "stat_open": {
+        "device": 16777234,
+        "inode": 48105377,
+        "bytes": 13528,
+        "mtime_ns": 1793469170955461693,
+        "ctime_ns": 1793469170955461693,
+        "mode": 33188
+      },
+      "stat_after_fd": {
+        "device": 16777234,
+        "inode": 48105377,
+        "bytes": 13528,
+        "mtime_ns": 1793469170955461693,
+        "ctime_ns": 1793469170955461693,
+        "mode": 33188
+      },
+      "stat_after_path": {
+        "device": 16777234,
+        "inode": 48105377,
+        "bytes": 13528,
+        "mtime_ns": 1793469170955461693,
+        "ctime_ns": 1793469170955461693,
+        "mode": 33188
+      },
+      "realpath_after": "/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/docs/evidence/models/trained-llm-cohort-2026-10-31/selection.json",
+      "stable_during_read": true,
+      "stat_at_inventory_close": {
+        "device": 16777234,
+        "inode": 48105377,
+        "bytes": 13528,
+        "mtime_ns": 1793469170955461693,
+        "ctime_ns": 1793469170955461693,
+        "mode": 33188
+      },
+      "stable_until_inventory_close": true
+    },
+    {
+      "path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/selection.json",
+      "realpath": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/selection.json",
+      "is_symlink": false,
+      "exists": true,
+      "bytes": 13528,
+      "sha256": "a10fe8c617f71357d59f8af00ebc89e7f864cb1d8a0e9b3bb8e7574e76c81523",
+      "git_blob_sha1": "bf10ed2770556d39649d51442a53b41ebae879c7",
+      "stat_before": {
+        "device": 16777234,
+        "inode": 47094871,
+        "bytes": 13528,
+        "mtime_ns": 1793439628297583018,
+        "ctime_ns": 1793439628297583018,
+        "mode": 33188
+      },
+      "stat_open": {
+        "device": 16777234,
+        "inode": 47094871,
+        "bytes": 13528,
+        "mtime_ns": 1793439628297583018,
+        "ctime_ns": 1793439628297583018,
+        "mode": 33188
+      },
+      "stat_after_fd": {
+        "device": 16777234,
+        "inode": 47094871,
+        "bytes": 13528,
+        "mtime_ns": 1793439628297583018,
+        "ctime_ns": 1793439628297583018,
+        "mode": 33188
+      },
+      "stat_after_path": {
+        "device": 16777234,
+        "inode": 47094871,
+        "bytes": 13528,
+        "mtime_ns": 1793439628297583018,
+        "ctime_ns": 1793439628297583018,
+        "mode": 33188
+      },
+      "realpath_after": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/selection.json",
+      "stable_during_read": true,
+      "stat_at_inventory_close": {
+        "device": 16777234,
+        "inode": 47094871,
+        "bytes": 13528,
+        "mtime_ns": 1793439628297583018,
+        "ctime_ns": 1793439628297583018,
+        "mode": 33188
+      },
+      "stable_until_inventory_close": true
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/docs/evidence/models/trained-llm-cohort-2026-10-31/summary.json",
+      "realpath": "/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/docs/evidence/models/trained-llm-cohort-2026-10-31/summary.json",
+      "is_symlink": false,
+      "exists": true,
+      "bytes": 19511,
+      "sha256": "52c7b50773c8d7e187cc46bf64be92348812fc55d5b3cf3f904cad7b7fc3524f",
+      "git_blob_sha1": "533ab8b48316b0941670bc776dc6f3884bcc7b0a",
+      "stat_before": {
+        "device": 16777234,
+        "inode": 48105379,
+        "bytes": 19511,
+        "mtime_ns": 1793469170955683114,
+        "ctime_ns": 1793469170955683114,
+        "mode": 33188
+      },
+      "stat_open": {
+        "device": 16777234,
+        "inode": 48105379,
+        "bytes": 19511,
+        "mtime_ns": 1793469170955683114,
+        "ctime_ns": 1793469170955683114,
+        "mode": 33188
+      },
+      "stat_after_fd": {
+        "device": 16777234,
+        "inode": 48105379,
+        "bytes": 19511,
+        "mtime_ns": 1793469170955683114,
+        "ctime_ns": 1793469170955683114,
+        "mode": 33188
+      },
+      "stat_after_path": {
+        "device": 16777234,
+        "inode": 48105379,
+        "bytes": 19511,
+        "mtime_ns": 1793469170955683114,
+        "ctime_ns": 1793469170955683114,
+        "mode": 33188
+      },
+      "realpath_after": "/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/docs/evidence/models/trained-llm-cohort-2026-10-31/summary.json",
+      "stable_during_read": true,
+      "stat_at_inventory_close": {
+        "device": 16777234,
+        "inode": 48105379,
+        "bytes": 19511,
+        "mtime_ns": 1793469170955683114,
+        "ctime_ns": 1793469170955683114,
+        "mode": 33188
+      },
+      "stable_until_inventory_close": true
+    },
+    {
+      "path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/summary.json",
+      "realpath": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/summary.json",
+      "is_symlink": false,
+      "exists": true,
+      "bytes": 19511,
+      "sha256": "52c7b50773c8d7e187cc46bf64be92348812fc55d5b3cf3f904cad7b7fc3524f",
+      "git_blob_sha1": "533ab8b48316b0941670bc776dc6f3884bcc7b0a",
+      "stat_before": {
+        "device": 16777234,
+        "inode": 47222348,
+        "bytes": 19511,
+        "mtime_ns": 1793441516838151022,
+        "ctime_ns": 1793441516838244150,
+        "mode": 33188
+      },
+      "stat_open": {
+        "device": 16777234,
+        "inode": 47222348,
+        "bytes": 19511,
+        "mtime_ns": 1793441516838151022,
+        "ctime_ns": 1793441516838244150,
+        "mode": 33188
+      },
+      "stat_after_fd": {
+        "device": 16777234,
+        "inode": 47222348,
+        "bytes": 19511,
+        "mtime_ns": 1793441516838151022,
+        "ctime_ns": 1793441516838244150,
+        "mode": 33188
+      },
+      "stat_after_path": {
+        "device": 16777234,
+        "inode": 47222348,
+        "bytes": 19511,
+        "mtime_ns": 1793441516838151022,
+        "ctime_ns": 1793441516838244150,
+        "mode": 33188
+      },
+      "realpath_after": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/summary.json",
+      "stable_during_read": true,
+      "stat_at_inventory_close": {
+        "device": 16777234,
+        "inode": 47222348,
+        "bytes": 19511,
+        "mtime_ns": 1793441516838151022,
+        "ctime_ns": 1793441516838244150,
+        "mode": 33188
+      },
+      "stable_until_inventory_close": true
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/docs/evidence/models/trained-llm-cohort-2026-10-31/summary-after-wide-q24.json",
+      "realpath": "/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/docs/evidence/models/trained-llm-cohort-2026-10-31/summary-after-wide-q24.json",
+      "is_symlink": false,
+      "exists": true,
+      "bytes": 6537,
+      "sha256": "1f03e263d608085c962fa5a546f5144cfc6704f5863595fd3d923339951a5a6c",
+      "git_blob_sha1": "abd3434c2aa50d1b7ab5465b9516f46d39fe21de",
+      "stat_before": {
+        "device": 16777234,
+        "inode": 48105378,
+        "bytes": 6537,
+        "mtime_ns": 1793469170955572737,
+        "ctime_ns": 1793469170955572737,
+        "mode": 33188
+      },
+      "stat_open": {
+        "device": 16777234,
+        "inode": 48105378,
+        "bytes": 6537,
+        "mtime_ns": 1793469170955572737,
+        "ctime_ns": 1793469170955572737,
+        "mode": 33188
+      },
+      "stat_after_fd": {
+        "device": 16777234,
+        "inode": 48105378,
+        "bytes": 6537,
+        "mtime_ns": 1793469170955572737,
+        "ctime_ns": 1793469170955572737,
+        "mode": 33188
+      },
+      "stat_after_path": {
+        "device": 16777234,
+        "inode": 48105378,
+        "bytes": 6537,
+        "mtime_ns": 1793469170955572737,
+        "ctime_ns": 1793469170955572737,
+        "mode": 33188
+      },
+      "realpath_after": "/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/docs/evidence/models/trained-llm-cohort-2026-10-31/summary-after-wide-q24.json",
+      "stable_during_read": true,
+      "stat_at_inventory_close": {
+        "device": 16777234,
+        "inode": 48105378,
+        "bytes": 6537,
+        "mtime_ns": 1793469170955572737,
+        "ctime_ns": 1793469170955572737,
+        "mode": 33188
+      },
+      "stable_until_inventory_close": true
+    },
+    {
+      "path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/summary-after-wide-q24.json",
+      "realpath": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/summary-after-wide-q24.json",
+      "is_symlink": false,
+      "exists": true,
+      "bytes": 6537,
+      "sha256": "1f03e263d608085c962fa5a546f5144cfc6704f5863595fd3d923339951a5a6c",
+      "git_blob_sha1": "abd3434c2aa50d1b7ab5465b9516f46d39fe21de",
+      "stat_before": {
+        "device": 16777234,
+        "inode": 47352267,
+        "bytes": 6537,
+        "mtime_ns": 1793443755589259439,
+        "ctime_ns": 1793443755589259439,
+        "mode": 33188
+      },
+      "stat_open": {
+        "device": 16777234,
+        "inode": 47352267,
+        "bytes": 6537,
+        "mtime_ns": 1793443755589259439,
+        "ctime_ns": 1793443755589259439,
+        "mode": 33188
+      },
+      "stat_after_fd": {
+        "device": 16777234,
+        "inode": 47352267,
+        "bytes": 6537,
+        "mtime_ns": 1793443755589259439,
+        "ctime_ns": 1793443755589259439,
+        "mode": 33188
+      },
+      "stat_after_path": {
+        "device": 16777234,
+        "inode": 47352267,
+        "bytes": 6537,
+        "mtime_ns": 1793443755589259439,
+        "ctime_ns": 1793443755589259439,
+        "mode": 33188
+      },
+      "realpath_after": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/summary-after-wide-q24.json",
+      "stable_during_read": true,
+      "stat_at_inventory_close": {
+        "device": 16777234,
+        "inode": 47352267,
+        "bytes": 6537,
+        "mtime_ns": 1793443755589259439,
+        "ctime_ns": 1793443755589259439,
+        "mode": 33188
+      },
+      "stable_until_inventory_close": true
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/docs/evidence/models/trained-llm-cohort-2026-10-31/evidence-sha256.json",
+      "realpath": "/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/docs/evidence/models/trained-llm-cohort-2026-10-31/evidence-sha256.json",
+      "is_symlink": false,
+      "exists": true,
+      "bytes": 13401,
+      "sha256": "905da715403dbb361920ff69e4a8edd8f1f55e0542422e7cd117dc51677eb951",
+      "git_blob_sha1": "48bd7ef51751fc3e7d5c28e37986b1619fad6df0",
+      "stat_before": {
+        "device": 16777234,
+        "inode": 48105373,
+        "bytes": 13401,
+        "mtime_ns": 1793469170955095562,
+        "ctime_ns": 1793469170955095562,
+        "mode": 33188
+      },
+      "stat_open": {
+        "device": 16777234,
+        "inode": 48105373,
+        "bytes": 13401,
+        "mtime_ns": 1793469170955095562,
+        "ctime_ns": 1793469170955095562,
+        "mode": 33188
+      },
+      "stat_after_fd": {
+        "device": 16777234,
+        "inode": 48105373,
+        "bytes": 13401,
+        "mtime_ns": 1793469170955095562,
+        "ctime_ns": 1793469170955095562,
+        "mode": 33188
+      },
+      "stat_after_path": {
+        "device": 16777234,
+        "inode": 48105373,
+        "bytes": 13401,
+        "mtime_ns": 1793469170955095562,
+        "ctime_ns": 1793469170955095562,
+        "mode": 33188
+      },
+      "realpath_after": "/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/docs/evidence/models/trained-llm-cohort-2026-10-31/evidence-sha256.json",
+      "stable_during_read": true,
+      "stat_at_inventory_close": {
+        "device": 16777234,
+        "inode": 48105373,
+        "bytes": 13401,
+        "mtime_ns": 1793469170955095562,
+        "ctime_ns": 1793469170955095562,
+        "mode": 33188
+      },
+      "stable_until_inventory_close": true
+    }
+  ],
+  "cross_checks": [
+    {
+      "check": "revision:selected",
+      "scope": "data_identity",
+      "actual": "93efa2f097d58c2a74874c7e644dbc9b0cee75a2",
+      "expected": "93efa2f097d58c2a74874c7e644dbc9b0cee75a2",
+      "matches": true
+    },
+    {
+      "check": "revision:source_manifest",
+      "scope": "data_identity",
+      "actual": "93efa2f097d58c2a74874c7e644dbc9b0cee75a2",
+      "expected": "93efa2f097d58c2a74874c7e644dbc9b0cee75a2",
+      "matches": true
+    },
+    {
+      "check": "revision:checkpoint_hub_info",
+      "scope": "data_identity",
+      "actual": "93efa2f097d58c2a74874c7e644dbc9b0cee75a2",
+      "expected": "93efa2f097d58c2a74874c7e644dbc9b0cee75a2",
+      "matches": true
+    },
+    {
+      "check": "revision:pack_model",
+      "scope": "data_identity",
+      "actual": "93efa2f097d58c2a74874c7e644dbc9b0cee75a2",
+      "expected": "93efa2f097d58c2a74874c7e644dbc9b0cee75a2",
+      "matches": true
+    },
+    {
+      "check": "revision:onboarding_run",
+      "scope": "data_identity",
+      "actual": "93efa2f097d58c2a74874c7e644dbc9b0cee75a2",
+      "expected": "93efa2f097d58c2a74874c7e644dbc9b0cee75a2",
+      "matches": true
+    },
+    {
+      "check": "revision:summary",
+      "scope": "data_identity",
+      "actual": "93efa2f097d58c2a74874c7e644dbc9b0cee75a2",
+      "expected": "93efa2f097d58c2a74874c7e644dbc9b0cee75a2",
+      "matches": true
+    },
+    {
+      "check": "revision:wide_summary",
+      "scope": "data_identity",
+      "actual": "93efa2f097d58c2a74874c7e644dbc9b0cee75a2",
+      "expected": "93efa2f097d58c2a74874c7e644dbc9b0cee75a2",
+      "matches": true
+    },
+    {
+      "check": "original_max_context:selected_config",
+      "scope": "data_identity",
+      "actual": 8192,
+      "expected": 8192,
+      "matches": true
+    },
+    {
+      "check": "original_max_context:checkpoint_config",
+      "scope": "data_identity",
+      "actual": 8192,
+      "expected": 8192,
+      "matches": true
+    },
+    {
+      "check": "original_max_context:source_config",
+      "scope": "data_identity",
+      "actual": 8192,
+      "expected": 8192,
+      "matches": true
+    },
+    {
+      "check": "original_max_context:docs_config",
+      "scope": "data_identity",
+      "actual": 8192,
+      "expected": 8192,
+      "matches": true
+    },
+    {
+      "check": "original_max_context:run_source_context",
+      "scope": "data_identity",
+      "actual": 8192,
+      "expected": 8192,
+      "matches": true
+    },
+    {
+      "check": "original_max_context:pack_context",
+      "scope": "data_identity",
+      "actual": 8192,
+      "expected": 8192,
+      "matches": true
+    },
+    {
+      "check": "original_max_context:pack_window",
+      "scope": "data_identity",
+      "actual": 8192,
+      "expected": 8192,
+      "matches": true
+    },
+    {
+      "check": "original_max_context:declared_layout",
+      "scope": "data_identity",
+      "actual": 8192,
+      "expected": 8192,
+      "matches": true
+    },
+    {
+      "check": "original_max_context:fixture",
+      "scope": "data_identity",
+      "actual": 8192,
+      "expected": 8192,
+      "matches": true
+    },
+    {
+      "check": "original_max_context:native_record",
+      "scope": "data_identity",
+      "actual": 8192,
+      "expected": 8192,
+      "matches": true
+    },
+    {
+      "check": "original_max_context:summary_source",
+      "scope": "data_identity",
+      "actual": 8192,
+      "expected": 8192,
+      "matches": true
+    },
+    {
+      "check": "original_max_context:summary_registered",
+      "scope": "data_identity",
+      "actual": 8192,
+      "expected": 8192,
+      "matches": true
+    },
+    {
+      "check": "source_manifest:README.md:bytes",
+      "scope": "data_identity",
+      "actual": 6340,
+      "expected": 6340,
+      "matches": true
+    },
+    {
+      "check": "source_manifest:README.md:sha256",
+      "scope": "data_identity",
+      "actual": "d1ba68cae64a89b6b434b11526e6e2271ee5ffd2c914ec35ed515f9d84c6085c",
+      "expected": "d1ba68cae64a89b6b434b11526e6e2271ee5ffd2c914ec35ed515f9d84c6085c",
+      "matches": true
+    },
+    {
+      "check": "source_manifest:README.md:git_blob_sha1",
+      "scope": "data_identity",
+      "actual": "4049f762cb41ec6f526936c9af80ae216048bc74",
+      "expected": "4049f762cb41ec6f526936c9af80ae216048bc74",
+      "matches": true
+    },
+    {
+      "check": "source_manifest:config.json:bytes",
+      "scope": "data_identity",
+      "actual": 704,
+      "expected": 704,
+      "matches": true
+    },
+    {
+      "check": "source_manifest:config.json:sha256",
+      "scope": "data_identity",
+      "actual": "1d556eab73b69c7f11f64c557a2f9c6f440bd4c6b89bb2584a6b498c92603843",
+      "expected": "1d556eab73b69c7f11f64c557a2f9c6f440bd4c6b89bb2584a6b498c92603843",
+      "matches": true
+    },
+    {
+      "check": "source_manifest:config.json:git_blob_sha1",
+      "scope": "data_identity",
+      "actual": "ccf3dac2f33905d152adbdf3886b5e38a4eb7579",
+      "expected": "ccf3dac2f33905d152adbdf3886b5e38a4eb7579",
+      "matches": true
+    },
+    {
+      "check": "source_manifest:generation_config.json:bytes",
+      "scope": "data_identity",
+      "actual": 111,
+      "expected": 111,
+      "matches": true
+    },
+    {
+      "check": "source_manifest:generation_config.json:sha256",
+      "scope": "data_identity",
+      "actual": "2056c988e990b0d13670f63f2f3b87b3b6d07edaf7a3416998ba27dab2d8a059",
+      "expected": "2056c988e990b0d13670f63f2f3b87b3b6d07edaf7a3416998ba27dab2d8a059",
+      "matches": true
+    },
+    {
+      "check": "source_manifest:generation_config.json:git_blob_sha1",
+      "scope": "data_identity",
+      "actual": "0fce861c328ff24830f3037d91ce773254447bf7",
+      "expected": "0fce861c328ff24830f3037d91ce773254447bf7",
+      "matches": true
+    },
+    {
+      "check": "source_manifest:merges.txt:bytes",
+      "scope": "data_identity",
+      "actual": 466391,
+      "expected": 466391,
+      "matches": true
+    },
+    {
+      "check": "source_manifest:merges.txt:sha256",
+      "scope": "data_identity",
+      "actual": "0b54e8aa4e53d5383e2e4bc635a56b43f9647f7b13832d5d9ecd8f82dac4f510",
+      "expected": "0b54e8aa4e53d5383e2e4bc635a56b43f9647f7b13832d5d9ecd8f82dac4f510",
+      "matches": true
+    },
+    {
+      "check": "source_manifest:merges.txt:git_blob_sha1",
+      "scope": "data_identity",
+      "actual": "69503b13f727ba3812b6803e97442a6de05ef5eb",
+      "expected": "69503b13f727ba3812b6803e97442a6de05ef5eb",
+      "matches": true
+    },
+    {
+      "check": "source_manifest:special_tokens_map.json:bytes",
+      "scope": "data_identity",
+      "actual": 831,
+      "expected": 831,
+      "matches": true
+    },
+    {
+      "check": "source_manifest:special_tokens_map.json:sha256",
+      "scope": "data_identity",
+      "actual": "e786b595b9a23148bf1630df78d9037a048ea671e48bfd3549a1e3c233742bb3",
+      "expected": "e786b595b9a23148bf1630df78d9037a048ea671e48bfd3549a1e3c233742bb3",
+      "matches": true
+    },
+    {
+      "check": "source_manifest:special_tokens_map.json:git_blob_sha1",
+      "scope": "data_identity",
+      "actual": "f6652f246cb895ca1edfb16d10b57917b266e335",
+      "expected": "f6652f246cb895ca1edfb16d10b57917b266e335",
+      "matches": true
+    },
+    {
+      "check": "source_manifest:tokenizer.json:bytes",
+      "scope": "data_identity",
+      "actual": 2104556,
+      "expected": 2104556,
+      "matches": true
+    },
+    {
+      "check": "source_manifest:tokenizer.json:sha256",
+      "scope": "data_identity",
+      "actual": "9ca9acddb6525a194ec8ac7a87f24fbba7232a9a15ffa1af0c1224fcd888e47c",
+      "expected": "9ca9acddb6525a194ec8ac7a87f24fbba7232a9a15ffa1af0c1224fcd888e47c",
+      "matches": true
+    },
+    {
+      "check": "source_manifest:tokenizer.json:git_blob_sha1",
+      "scope": "data_identity",
+      "actual": "f922b1797f0c88e71addc8393787831f2477a4bd",
+      "expected": "f922b1797f0c88e71addc8393787831f2477a4bd",
+      "matches": true
+    },
+    {
+      "check": "source_manifest:tokenizer_config.json:bytes",
+      "scope": "data_identity",
+      "actual": 3658,
+      "expected": 3658,
+      "matches": true
+    },
+    {
+      "check": "source_manifest:tokenizer_config.json:sha256",
+      "scope": "data_identity",
+      "actual": "4bb9af56a342753d39374f4016a16574cab299fe088e896f425ce3c433f61424",
+      "expected": "4bb9af56a342753d39374f4016a16574cab299fe088e896f425ce3c433f61424",
+      "matches": true
+    },
+    {
+      "check": "source_manifest:tokenizer_config.json:git_blob_sha1",
+      "scope": "data_identity",
+      "actual": "d45192775d58298087a1fedf5967fe5b63b091ab",
+      "expected": "d45192775d58298087a1fedf5967fe5b63b091ab",
+      "matches": true
+    },
+    {
+      "check": "source_manifest:vocab.json:bytes",
+      "scope": "data_identity",
+      "actual": 800662,
+      "expected": 800662,
+      "matches": true
+    },
+    {
+      "check": "source_manifest:vocab.json:sha256",
+      "scope": "data_identity",
+      "actual": "82b84012e3add4d01d12ba14442026e49b8cbbaead1f79ecf3d919784f82dc79",
+      "expected": "82b84012e3add4d01d12ba14442026e49b8cbbaead1f79ecf3d919784f82dc79",
+      "matches": true
+    },
+    {
+      "check": "source_manifest:vocab.json:git_blob_sha1",
+      "scope": "data_identity",
+      "actual": "0ad5ecc2035b7031b88afb544ee95e2d49baa484",
+      "expected": "0ad5ecc2035b7031b88afb544ee95e2d49baa484",
+      "matches": true
+    },
+    {
+      "check": "source_manifest:model.safetensors:bytes",
+      "scope": "data_identity",
+      "actual": 269060552,
+      "expected": 269060552,
+      "matches": true
+    },
+    {
+      "check": "source_manifest:model.safetensors:sha256",
+      "scope": "data_identity",
+      "actual": "80521b40281d6ce74e35c9282c22539e75aa0ac8578892b2a59955ef78d55da1",
+      "expected": "80521b40281d6ce74e35c9282c22539e75aa0ac8578892b2a59955ef78d55da1",
+      "matches": true
+    },
+    {
+      "check": "source_manifest:model.safetensors:git_LFS_pointer_blob_sha1",
+      "scope": "data_identity",
+      "actual": "ed736e4e5f39dd99c5d435bf84c0d8c222839b1b",
+      "expected": "ed736e4e5f39dd99c5d435bf84c0d8c222839b1b",
+      "matches": true,
+      "method": "Reconstructed canonical LFS pointer from recorded oid/size; SHA1 blob header + pointer. Physical payload SHA256 is checked separately."
+    },
+    {
+      "check": "lfs:model.safetensors",
+      "scope": "data_identity",
+      "actual": "80521b40281d6ce74e35c9282c22539e75aa0ac8578892b2a59955ef78d55da1",
+      "expected": "80521b40281d6ce74e35c9282c22539e75aa0ac8578892b2a59955ef78d55da1",
+      "matches": true
+    },
+    {
+      "check": "pack_source:config.json:sha256",
+      "scope": "data_identity",
+      "actual": "1d556eab73b69c7f11f64c557a2f9c6f440bd4c6b89bb2584a6b498c92603843",
+      "expected": "1d556eab73b69c7f11f64c557a2f9c6f440bd4c6b89bb2584a6b498c92603843",
+      "matches": true
+    },
+    {
+      "check": "pack_source:config.json:bytes",
+      "scope": "data_identity",
+      "actual": 704,
+      "expected": 704,
+      "matches": true
+    },
+    {
+      "check": "pack_source:model.safetensors:sha256",
+      "scope": "data_identity",
+      "actual": "80521b40281d6ce74e35c9282c22539e75aa0ac8578892b2a59955ef78d55da1",
+      "expected": "80521b40281d6ce74e35c9282c22539e75aa0ac8578892b2a59955ef78d55da1",
+      "matches": true
+    },
+    {
+      "check": "pack_source:model.safetensors:bytes",
+      "scope": "data_identity",
+      "actual": 269060552,
+      "expected": 269060552,
+      "matches": true
+    },
+    {
+      "check": "pack_source:tokenizer.json:sha256",
+      "scope": "data_identity",
+      "actual": "9ca9acddb6525a194ec8ac7a87f24fbba7232a9a15ffa1af0c1224fcd888e47c",
+      "expected": "9ca9acddb6525a194ec8ac7a87f24fbba7232a9a15ffa1af0c1224fcd888e47c",
+      "matches": true
+    },
+    {
+      "check": "pack_source:tokenizer.json:bytes",
+      "scope": "data_identity",
+      "actual": 2104556,
+      "expected": 2104556,
+      "matches": true
+    },
+    {
+      "check": "pack_source:vocab.json:sha256",
+      "scope": "data_identity",
+      "actual": "82b84012e3add4d01d12ba14442026e49b8cbbaead1f79ecf3d919784f82dc79",
+      "expected": "82b84012e3add4d01d12ba14442026e49b8cbbaead1f79ecf3d919784f82dc79",
+      "matches": true
+    },
+    {
+      "check": "pack_source:vocab.json:bytes",
+      "scope": "data_identity",
+      "actual": 800662,
+      "expected": 800662,
+      "matches": true
+    },
+    {
+      "check": "pack_aux:calib-tokens.json:blake2b256",
+      "scope": "data_identity",
+      "actual": "d8d5472176b1c4d40bf87a23f06f80f23362b98429f56ec79d6ac981576f895c",
+      "expected": "d8d5472176b1c4d40bf87a23f06f80f23362b98429f56ec79d6ac981576f895c",
+      "matches": true
+    },
+    {
+      "check": "pack_aux:stats.json:blake2b256",
+      "scope": "data_identity",
+      "actual": "0e6e927b4dfbda7dafdd7faa0f7c70aadc4e26f8ac5e192c49cb456fd844887a",
+      "expected": "0e6e927b4dfbda7dafdd7faa0f7c70aadc4e26f8ac5e192c49cb456fd844887a",
+      "matches": true
+    },
+    {
+      "check": "retained_docs_copy:pack.json",
+      "scope": "data_identity",
+      "actual": "80f1de7dc9ee6e72e85b87f56a5808f6e9d2c35073272376f6116e62893408f5",
+      "expected": "80f1de7dc9ee6e72e85b87f56a5808f6e9d2c35073272376f6116e62893408f5",
+      "matches": true
+    },
+    {
+      "check": "retained_docs_copy:run.json",
+      "scope": "data_identity",
+      "actual": "f550e3f10f54ee53d922a41f07fae805fea500b7cb07d36a77cf3d8a3ec0a5a2",
+      "expected": "f550e3f10f54ee53d922a41f07fae805fea500b7cb07d36a77cf3d8a3ec0a5a2",
+      "matches": true
+    },
+    {
+      "check": "retained_docs_copy:info.json",
+      "scope": "non_identity_hub_snapshot_metadata",
+      "actual": "a602ec10c233f8693fbb323788bf03a9f275f6aed2bb1c80f66fa4183993e6c5",
+      "expected": "d4e3b5f1c2de6c30021efbfd939c5969192fa03fa5e37d9bdedc7fefc2ee93a1",
+      "matches": false,
+      "differing_top_level_keys": [
+        "spaces"
+      ],
+      "classification": "Byte difference limited to spaces listing; repository revision, model config metadata and sibling byte/hash records agree."
+    },
+    {
+      "check": "retained_docs_copy:native.json",
+      "scope": "data_identity",
+      "actual": "57a9ecccc71f3499550b46df97c17a58c17ee85b8fad81ce32aa60b2d328590e",
+      "expected": "57a9ecccc71f3499550b46df97c17a58c17ee85b8fad81ce32aa60b2d328590e",
+      "matches": true
+    },
+    {
+      "check": "retained_docs_copy:config.json",
+      "scope": "data_identity",
+      "actual": "1d556eab73b69c7f11f64c557a2f9c6f440bd4c6b89bb2584a6b498c92603843",
+      "expected": "1d556eab73b69c7f11f64c557a2f9c6f440bd4c6b89bb2584a6b498c92603843",
+      "matches": true
+    },
+    {
+      "check": "retained_docs_copy:README.md.txt",
+      "scope": "data_identity",
+      "actual": "d1ba68cae64a89b6b434b11526e6e2271ee5ffd2c914ec35ed515f9d84c6085c",
+      "expected": "d1ba68cae64a89b6b434b11526e6e2271ee5ffd2c914ec35ed515f9d84c6085c",
+      "matches": true
+    },
+    {
+      "check": "retained_docs_copy:calibration.json",
+      "scope": "data_identity",
+      "actual": "616cd2c08043901407c062edff6389067709e4ef3ae2648d9e2e911f7e11a6d4",
+      "expected": "616cd2c08043901407c062edff6389067709e4ef3ae2648d9e2e911f7e11a6d4",
+      "matches": true
+    },
+    {
+      "check": "retained_docs_copy:texts.json",
+      "scope": "data_identity",
+      "actual": "50bb72eb3f01eace09d09909dcb37845a760bce5d6fae7a01caa70c54a428c81",
+      "expected": "50bb72eb3f01eace09d09909dcb37845a760bce5d6fae7a01caa70c54a428c81",
+      "matches": true
+    },
+    {
+      "check": "retained_docs_copy:early-native.json",
+      "scope": "data_identity",
+      "actual": "adc3ea225edd7f57fec8beac695318d7f736ca83fa4a0a3dbe924368eef93c4e",
+      "expected": "adc3ea225edd7f57fec8beac695318d7f736ca83fa4a0a3dbe924368eef93c4e",
+      "matches": true
+    },
+    {
+      "check": "cohort_retained_copy:selection.json",
+      "scope": "data_identity",
+      "actual": "a10fe8c617f71357d59f8af00ebc89e7f864cb1d8a0e9b3bb8e7574e76c81523",
+      "expected": "a10fe8c617f71357d59f8af00ebc89e7f864cb1d8a0e9b3bb8e7574e76c81523",
+      "matches": true
+    },
+    {
+      "check": "cohort_retained_copy:summary.json",
+      "scope": "data_identity",
+      "actual": "52c7b50773c8d7e187cc46bf64be92348812fc55d5b3cf3f904cad7b7fc3524f",
+      "expected": "52c7b50773c8d7e187cc46bf64be92348812fc55d5b3cf3f904cad7b7fc3524f",
+      "matches": true
+    },
+    {
+      "check": "cohort_retained_copy:summary-after-wide-q24.json",
+      "scope": "data_identity",
+      "actual": "1f03e263d608085c962fa5a546f5144cfc6704f5863595fd3d923339951a5a6c",
+      "expected": "1f03e263d608085c962fa5a546f5144cfc6704f5863595fd3d923339951a5a6c",
+      "matches": true
+    },
+    {
+      "check": "root_tokenizer_copy",
+      "scope": "data_identity",
+      "actual": "9ca9acddb6525a194ec8ac7a87f24fbba7232a9a15ffa1af0c1224fcd888e47c",
+      "expected": "9ca9acddb6525a194ec8ac7a87f24fbba7232a9a15ffa1af0c1224fcd888e47c",
+      "matches": true
+    },
+    {
+      "check": "run_calibration",
+      "scope": "data_identity",
+      "actual": "616cd2c08043901407c062edff6389067709e4ef3ae2648d9e2e911f7e11a6d4",
+      "expected": "616cd2c08043901407c062edff6389067709e4ef3ae2648d9e2e911f7e11a6d4",
+      "matches": true
+    },
+    {
+      "check": "source_manifest_record",
+      "scope": "data_identity",
+      "actual": "77b1649f2fbfb01468386b7c6b08b1ed996a870352918fdd643ee9892b3296ea",
+      "expected": "77b1649f2fbfb01468386b7c6b08b1ed996a870352918fdd643ee9892b3296ea",
+      "matches": true
+    },
+    {
+      "check": "pack_record",
+      "scope": "data_identity",
+      "actual": "80f1de7dc9ee6e72e85b87f56a5808f6e9d2c35073272376f6116e62893408f5",
+      "expected": "80f1de7dc9ee6e72e85b87f56a5808f6e9d2c35073272376f6116e62893408f5",
+      "matches": true
+    },
+    {
+      "check": "summary_embedded_run",
+      "scope": "data_identity",
+      "actual": "existing run.json object",
+      "expected": "same-model summary.run object",
+      "matches": true
+    },
+    {
+      "check": "run/model.palwtir.testnet-12.palwtir:artifact_sha256",
+      "scope": "data_identity",
+      "actual": "48c72278b0d9b45c7ab92b6e70f5fbcef47fa86cc8644cd4307798354639fe90",
+      "expected": "48c72278b0d9b45c7ab92b6e70f5fbcef47fa86cc8644cd4307798354639fe90",
+      "matches": true
+    },
+    {
+      "check": "run/model.palwtir.testnet-12.palwtir:bytes",
+      "scope": "data_identity",
+      "actual": 180336320,
+      "expected": 180336320,
+      "matches": true
+    },
+    {
+      "check": "run/model.palwtir.testnet-12.palwtir:program_preimage",
+      "scope": "data_identity",
+      "actual": "744225e2c41ebb11a741f86e9109f49cae28b3a0b50a07d266685779872cf6df",
+      "expected": "744225e2c41ebb11a741f86e9109f49cae28b3a0b50a07d266685779872cf6df",
+      "matches": true
+    },
+    {
+      "check": "run/model.palwtir.testnet-12.palwtir:layout_preimage",
+      "scope": "data_identity",
+      "actual": "0100002000000000010040000000110000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000000020000020000004000000040000000",
+      "expected": "0100002000000000010040000000110000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000000020000020000004000000040000000",
+      "matches": true
+    },
+    {
+      "check": "run/model.palwtir.testnet-12.palwtir:class_id_from_recorded_inventory_root",
+      "scope": "data_identity",
+      "actual": "7a2616b4b132946d21b1d396c0a82f69a144fb7f692394314efb35e3f8bff1f231b857f174e1165ad92c65ce742e1bcc57dfb11e1e5eab02b67b8cf87436c625",
+      "expected": "7a2616b4b132946d21b1d396c0a82f69a144fb7f692394314efb35e3f8bff1f231b857f174e1165ad92c65ce742e1bcc57dfb11e1e5eab02b67b8cf87436c625",
+      "matches": true
+    },
+    {
+      "check": "run/model.palwtir.testnet-12.palwtir:tokenizer",
+      "scope": "data_identity",
+      "actual": "57c55fb228e8bb272c1d3e3a75eb8e7a238fe2e6a7ccc5e4cd6b874c1278fbc79342c2d466bc52d53000bb0de6de57cb196fc0a413c2751d45cfb69551615ac2",
+      "expected": "57c55fb228e8bb272c1d3e3a75eb8e7a238fe2e6a7ccc5e4cd6b874c1278fbc79342c2d466bc52d53000bb0de6de57cb196fc0a413c2751d45cfb69551615ac2",
+      "matches": true
+    },
+    {
+      "check": "early-declared.palwtir:artifact_sha256",
+      "scope": "data_identity",
+      "actual": "5691357f2f31a91c60bb2adacd683ca2c2204456d23a0e52421c2abede5ebb5e",
+      "expected": "5691357f2f31a91c60bb2adacd683ca2c2204456d23a0e52421c2abede5ebb5e",
+      "matches": true
+    },
+    {
+      "check": "early-declared.palwtir:bytes",
+      "scope": "data_identity",
+      "actual": 180336384,
+      "expected": 180336384,
+      "matches": true
+    },
+    {
+      "check": "early-declared.palwtir:program_preimage",
+      "scope": "data_identity",
+      "actual": "744225e2c41ebb11a741f86e9109f49cae28b3a0b50a07d266685779872cf6df",
+      "expected": "744225e2c41ebb11a741f86e9109f49cae28b3a0b50a07d266685779872cf6df",
+      "matches": true
+    },
+    {
+      "check": "early-declared.palwtir:layout_preimage",
+      "scope": "data_identity",
+      "actual": "0100002000000000010040000000110000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000000020000020000004000000040000000",
+      "expected": "0100002000000000010040000000110000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000000020000020000004000000040000000",
+      "matches": true
+    },
+    {
+      "check": "early-declared.palwtir:class_id_from_recorded_inventory_root",
+      "scope": "data_identity",
+      "actual": "7a2616b4b132946d21b1d396c0a82f69a144fb7f692394314efb35e3f8bff1f231b857f174e1165ad92c65ce742e1bcc57dfb11e1e5eab02b67b8cf87436c625",
+      "expected": "7a2616b4b132946d21b1d396c0a82f69a144fb7f692394314efb35e3f8bff1f231b857f174e1165ad92c65ce742e1bcc57dfb11e1e5eab02b67b8cf87436c625",
+      "matches": true
+    },
+    {
+      "check": "early-declared.palwtir:tokenizer",
+      "scope": "data_identity",
+      "actual": "57c55fb228e8bb272c1d3e3a75eb8e7a238fe2e6a7ccc5e4cd6b874c1278fbc79342c2d466bc52d53000bb0de6de57cb196fc0a413c2751d45cfb69551615ac2",
+      "expected": "57c55fb228e8bb272c1d3e3a75eb8e7a238fe2e6a7ccc5e4cd6b874c1278fbc79342c2d466bc52d53000bb0de6de57cb196fc0a413c2751d45cfb69551615ac2",
+      "matches": true
+    },
+    {
+      "check": "declared_artifact_run_hash",
+      "scope": "data_identity",
+      "actual": "48c72278b0d9b45c7ab92b6e70f5fbcef47fa86cc8644cd4307798354639fe90",
+      "expected": "48c72278b0d9b45c7ab92b6e70f5fbcef47fa86cc8644cd4307798354639fe90",
+      "matches": true
+    },
+    {
+      "check": "declared_artifact_native_hash",
+      "scope": "data_identity",
+      "actual": "48c72278b0d9b45c7ab92b6e70f5fbcef47fa86cc8644cd4307798354639fe90",
+      "expected": "48c72278b0d9b45c7ab92b6e70f5fbcef47fa86cc8644cd4307798354639fe90",
+      "matches": true
+    },
+    {
+      "check": "pack_base_file_digest",
+      "scope": "data_identity",
+      "actual": "28851a1b2fc493b62f3e241beabb2c554126e67aad740d40097b2b1a9784ad018867c785d6d82f2de256837e6179071c0a083ab1368f42d330277c4833de3049",
+      "expected": "28851a1b2fc493b62f3e241beabb2c554126e67aad740d40097b2b1a9784ad018867c785d6d82f2de256837e6179071c0a083ab1368f42d330277c4833de3049",
+      "matches": true
+    },
+    {
+      "check": "pack_declared_file_digest",
+      "scope": "data_identity",
+      "actual": "7ef829d64c6909e9332f5dc988086106e541ebeef5f17f7b5e7027892694a49e1f27b76714d43f513e7f164c0d62dfcd1c17287aebbd0bf265f4ac83a39765d6",
+      "expected": "7ef829d64c6909e9332f5dc988086106e541ebeef5f17f7b5e7027892694a49e1f27b76714d43f513e7f164c0d62dfcd1c17287aebbd0bf265f4ac83a39765d6",
+      "matches": true
+    },
+    {
+      "check": "checkpoint_header_parameter_count",
+      "scope": "data_identity",
+      "actual": 134515008,
+      "expected": 134515008,
+      "matches": true
+    },
+    {
+      "check": "checkpoint_header_dtype_count",
+      "scope": "data_identity",
+      "actual": {
+        "BF16": 134515008
+      },
+      "expected": {
+        "BF16": 134515008
+      },
+      "matches": true
+    },
+    {
+      "check": "retained_evidence_digest:HuggingFaceTB__SmolLM2-135M/README.md.txt:sha256",
+      "scope": "data_identity",
+      "actual": "d1ba68cae64a89b6b434b11526e6e2271ee5ffd2c914ec35ed515f9d84c6085c",
+      "expected": "d1ba68cae64a89b6b434b11526e6e2271ee5ffd2c914ec35ed515f9d84c6085c",
+      "matches": true
+    },
+    {
+      "check": "retained_evidence_digest:HuggingFaceTB__SmolLM2-135M/README.md.txt:bytes",
+      "scope": "data_identity",
+      "actual": 6340,
+      "expected": 6340,
+      "matches": true
+    },
+    {
+      "check": "retained_evidence_digest:HuggingFaceTB__SmolLM2-135M/calibration.json:sha256",
+      "scope": "data_identity",
+      "actual": "616cd2c08043901407c062edff6389067709e4ef3ae2648d9e2e911f7e11a6d4",
+      "expected": "616cd2c08043901407c062edff6389067709e4ef3ae2648d9e2e911f7e11a6d4",
+      "matches": true
+    },
+    {
+      "check": "retained_evidence_digest:HuggingFaceTB__SmolLM2-135M/calibration.json:bytes",
+      "scope": "data_identity",
+      "actual": 399,
+      "expected": 399,
+      "matches": true
+    },
+    {
+      "check": "retained_evidence_digest:HuggingFaceTB__SmolLM2-135M/config.json:sha256",
+      "scope": "data_identity",
+      "actual": "1d556eab73b69c7f11f64c557a2f9c6f440bd4c6b89bb2584a6b498c92603843",
+      "expected": "1d556eab73b69c7f11f64c557a2f9c6f440bd4c6b89bb2584a6b498c92603843",
+      "matches": true
+    },
+    {
+      "check": "retained_evidence_digest:HuggingFaceTB__SmolLM2-135M/config.json:bytes",
+      "scope": "data_identity",
+      "actual": 704,
+      "expected": 704,
+      "matches": true
+    },
+    {
+      "check": "retained_evidence_digest:HuggingFaceTB__SmolLM2-135M/early-native.json:sha256",
+      "scope": "data_identity",
+      "actual": "adc3ea225edd7f57fec8beac695318d7f736ca83fa4a0a3dbe924368eef93c4e",
+      "expected": "adc3ea225edd7f57fec8beac695318d7f736ca83fa4a0a3dbe924368eef93c4e",
+      "matches": true
+    },
+    {
+      "check": "retained_evidence_digest:HuggingFaceTB__SmolLM2-135M/early-native.json:bytes",
+      "scope": "data_identity",
+      "actual": 1173,
+      "expected": 1173,
+      "matches": true
+    },
+    {
+      "check": "retained_evidence_digest:HuggingFaceTB__SmolLM2-135M/early-native.log:sha256",
+      "scope": "data_identity",
+      "actual": "05bc3574ab4303c5244cb44b0f217cd43523f8e789d4f3af2f4a767da4cf3c20",
+      "expected": "05bc3574ab4303c5244cb44b0f217cd43523f8e789d4f3af2f4a767da4cf3c20",
+      "matches": true
+    },
+    {
+      "check": "retained_evidence_digest:HuggingFaceTB__SmolLM2-135M/early-native.log:bytes",
+      "scope": "data_identity",
+      "actual": 612,
+      "expected": 612,
+      "matches": true
+    },
+    {
+      "check": "retained_evidence_digest:HuggingFaceTB__SmolLM2-135M/info.json:sha256",
+      "scope": "data_identity",
+      "actual": "a602ec10c233f8693fbb323788bf03a9f275f6aed2bb1c80f66fa4183993e6c5",
+      "expected": "a602ec10c233f8693fbb323788bf03a9f275f6aed2bb1c80f66fa4183993e6c5",
+      "matches": true
+    },
+    {
+      "check": "retained_evidence_digest:HuggingFaceTB__SmolLM2-135M/info.json:bytes",
+      "scope": "data_identity",
+      "actual": 6457,
+      "expected": 6457,
+      "matches": true
+    },
+    {
+      "check": "retained_evidence_digest:HuggingFaceTB__SmolLM2-135M/native-register.stderr:sha256",
+      "scope": "data_identity",
+      "actual": "1eeeb90c37e011dcf144eb7cda5a6e1c9d4c176c2f91499544db4aff89ba3ae4",
+      "expected": "1eeeb90c37e011dcf144eb7cda5a6e1c9d4c176c2f91499544db4aff89ba3ae4",
+      "matches": true
+    },
+    {
+      "check": "retained_evidence_digest:HuggingFaceTB__SmolLM2-135M/native-register.stderr:bytes",
+      "scope": "data_identity",
+      "actual": 311,
+      "expected": 311,
+      "matches": true
+    },
+    {
+      "check": "retained_evidence_digest:HuggingFaceTB__SmolLM2-135M/native.json:sha256",
+      "scope": "data_identity",
+      "actual": "57a9ecccc71f3499550b46df97c17a58c17ee85b8fad81ce32aa60b2d328590e",
+      "expected": "57a9ecccc71f3499550b46df97c17a58c17ee85b8fad81ce32aa60b2d328590e",
+      "matches": true
+    },
+    {
+      "check": "retained_evidence_digest:HuggingFaceTB__SmolLM2-135M/native.json:bytes",
+      "scope": "data_identity",
+      "actual": 1116,
+      "expected": 1116,
+      "matches": true
+    },
+    {
+      "check": "retained_evidence_digest:HuggingFaceTB__SmolLM2-135M/pack-build.stderr:sha256",
+      "scope": "data_identity",
+      "actual": "10a3269cc9f95d44d344091ac59564320e9bce3df7d863475083c967ea1eb22c",
+      "expected": "10a3269cc9f95d44d344091ac59564320e9bce3df7d863475083c967ea1eb22c",
+      "matches": true
+    },
+    {
+      "check": "retained_evidence_digest:HuggingFaceTB__SmolLM2-135M/pack-build.stderr:bytes",
+      "scope": "data_identity",
+      "actual": 1792,
+      "expected": 1792,
+      "matches": true
+    },
+    {
+      "check": "retained_evidence_digest:HuggingFaceTB__SmolLM2-135M/pack-build.stdout:sha256",
+      "scope": "data_identity",
+      "actual": "9d33e2846ece01ef396e739157e1f3a1e9c8347162f951e50fcb2e8bd3f23eaa",
+      "expected": "9d33e2846ece01ef396e739157e1f3a1e9c8347162f951e50fcb2e8bd3f23eaa",
+      "matches": true
+    },
+    {
+      "check": "retained_evidence_digest:HuggingFaceTB__SmolLM2-135M/pack-build.stdout:bytes",
+      "scope": "data_identity",
+      "actual": 65,
+      "expected": 65,
+      "matches": true
+    },
+    {
+      "check": "retained_evidence_digest:HuggingFaceTB__SmolLM2-135M/pack.json:sha256",
+      "scope": "data_identity",
+      "actual": "80f1de7dc9ee6e72e85b87f56a5808f6e9d2c35073272376f6116e62893408f5",
+      "expected": "80f1de7dc9ee6e72e85b87f56a5808f6e9d2c35073272376f6116e62893408f5",
+      "matches": true
+    },
+    {
+      "check": "retained_evidence_digest:HuggingFaceTB__SmolLM2-135M/pack.json:bytes",
+      "scope": "data_identity",
+      "actual": 9200,
+      "expected": 9200,
+      "matches": true
+    },
+    {
+      "check": "retained_evidence_digest:HuggingFaceTB__SmolLM2-135M/run.json:sha256",
+      "scope": "data_identity",
+      "actual": "f550e3f10f54ee53d922a41f07fae805fea500b7cb07d36a77cf3d8a3ec0a5a2",
+      "expected": "f550e3f10f54ee53d922a41f07fae805fea500b7cb07d36a77cf3d8a3ec0a5a2",
+      "matches": true
+    },
+    {
+      "check": "retained_evidence_digest:HuggingFaceTB__SmolLM2-135M/run.json:bytes",
+      "scope": "data_identity",
+      "actual": 5004,
+      "expected": 5004,
+      "matches": true
+    },
+    {
+      "check": "retained_evidence_digest:HuggingFaceTB__SmolLM2-135M/texts.json:sha256",
+      "scope": "data_identity",
+      "actual": "50bb72eb3f01eace09d09909dcb37845a760bce5d6fae7a01caa70c54a428c81",
+      "expected": "50bb72eb3f01eace09d09909dcb37845a760bce5d6fae7a01caa70c54a428c81",
+      "matches": true
+    },
+    {
+      "check": "retained_evidence_digest:HuggingFaceTB__SmolLM2-135M/texts.json:bytes",
+      "scope": "data_identity",
+      "actual": 557,
+      "expected": 557,
+      "matches": true
+    },
+    {
+      "check": "retained_evidence_digest:selection.json:sha256",
+      "scope": "data_identity",
+      "actual": "a10fe8c617f71357d59f8af00ebc89e7f864cb1d8a0e9b3bb8e7574e76c81523",
+      "expected": "a10fe8c617f71357d59f8af00ebc89e7f864cb1d8a0e9b3bb8e7574e76c81523",
+      "matches": true
+    },
+    {
+      "check": "retained_evidence_digest:selection.json:bytes",
+      "scope": "data_identity",
+      "actual": 13528,
+      "expected": 13528,
+      "matches": true
+    },
+    {
+      "check": "retained_evidence_digest:summary-after-wide-q24.json:sha256",
+      "scope": "data_identity",
+      "actual": "1f03e263d608085c962fa5a546f5144cfc6704f5863595fd3d923339951a5a6c",
+      "expected": "1f03e263d608085c962fa5a546f5144cfc6704f5863595fd3d923339951a5a6c",
+      "matches": true
+    },
+    {
+      "check": "retained_evidence_digest:summary-after-wide-q24.json:bytes",
+      "scope": "data_identity",
+      "actual": 6537,
+      "expected": 6537,
+      "matches": true
+    },
+    {
+      "check": "retained_evidence_digest:summary.json:sha256",
+      "scope": "data_identity",
+      "actual": "52c7b50773c8d7e187cc46bf64be92348812fc55d5b3cf3f904cad7b7fc3524f",
+      "expected": "52c7b50773c8d7e187cc46bf64be92348812fc55d5b3cf3f904cad7b7fc3524f",
+      "matches": true
+    },
+    {
+      "check": "retained_evidence_digest:summary.json:bytes",
+      "scope": "data_identity",
+      "actual": 19511,
+      "expected": 19511,
+      "matches": true
+    },
+    {
+      "check": "pack_result_graph_root_matches_base_artifact",
+      "scope": "data_identity",
+      "actual": "49fc964aa12211c20438c20bb16a0e3ff4f63730b4150d5b25b10096857a3b6b04c380a8d4dad71d2113fd87fc77799fe6b14ffc791fd3cb566a82dc75ccd4ad",
+      "expected": "49fc964aa12211c20438c20bb16a0e3ff4f63730b4150d5b25b10096857a3b6b04c380a8d4dad71d2113fd87fc77799fe6b14ffc791fd3cb566a82dc75ccd4ad",
+      "matches": true
+    },
+    {
+      "check": "hub_info_identity_metadata_except_spaces",
+      "scope": "data_identity",
+      "actual": "all fields except spaces",
+      "expected": "same retained metadata",
+      "matches": true
+    }
+  ],
+  "missing_files": [],
+  "unstable_files": [],
+  "mismatches": [
+    {
+      "check": "retained_docs_copy:info.json",
+      "scope": "non_identity_hub_snapshot_metadata",
+      "actual": "a602ec10c233f8693fbb323788bf03a9f275f6aed2bb1c80f66fa4183993e6c5",
+      "expected": "d4e3b5f1c2de6c30021efbfd939c5969192fa03fa5e37d9bdedc7fefc2ee93a1",
+      "matches": false,
+      "differing_top_level_keys": [
+        "spaces"
+      ],
+      "classification": "Byte difference limited to spaces listing; repository revision, model config metadata and sibling byte/hash records agree."
+    }
+  ],
+  "unfetched_hub_siblings": [
+    ".gitattributes"
+  ],
+  "summary": {
+    "files_stream_hashed": 61,
+    "checkpoint_manifest_files": 9,
+    "identity_checks": 126,
+    "mismatch_count": 1,
+    "missing_referenced_count": 0,
+    "unstable_count": 0,
+    "checkpoint_and_declared_artifact_present": true,
+    "integrity_mismatch_count": 0,
+    "metadata_snapshot_difference_count": 1,
+    "unstable_at_close_count": 0,
+    "stream_hashed_bytes": 820630058,
+    "scope": "Inventory data identity only; no computation/native/model-tier acceptance"
+  },
+  "not_performed": [
+    "network/download",
+    "Cargo/build/target creation",
+    "conversion or artifact mutation",
+    "new registration/native execution",
+    "weight inference/claim checker execution",
+    "claim certification/credit",
+    "model quality or tier review",
+    "full tensor inventory Merkle-root reconstruction"
+  ],
+  "new_output_only": "/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/testing/positive-court-a7/evidence/real-llm-inventory-4753-2026-11-01/smollm2-135m.json",
+  "artifact_stage_distinctions": {
+    "base_program_sha256": "c5b2976867f1ee5e6283b35777551f0d756f9676317aa9abacb2b7d023dacd96",
+    "declared_program_sha256": "744225e2c41ebb11a741f86e9109f49cae28b3a0b50a07d266685779872cf6df",
+    "early_declared_program_sha256": "744225e2c41ebb11a741f86e9109f49cae28b3a0b50a07d266685779872cf6df",
+    "base_vs_declared_program_equal": false,
+    "same_program_length": true,
+    "different_program_byte_count": 63,
+    "different_program_byte_offsets_first_100": [
+      13712,
+      13713,
+      13714,
+      13715,
+      13716,
+      13717,
+      13718,
+      13719,
+      13720,
+      13721,
+      13722,
+      13723,
+      13724,
+      13725,
+      13726,
+      13727,
+      13728,
+      13729,
+      13730,
+      13731,
+      13732,
+      13733,
+      13734,
+      13735,
+      13736,
+      13737,
+      13738,
+      13739,
+      13740,
+      13741,
+      13742,
+      13743,
+      13744,
+      13745,
+      13746,
+      13747,
+      13748,
+      13749,
+      13750,
+      13751,
+      13752,
+      13753,
+      13754,
+      13755,
+      13756,
+      13758,
+      13759,
+      13760,
+      13761,
+      13762,
+      13763,
+      13764,
+      13765,
+      13766,
+      13767,
+      13768,
+      13769,
+      13770,
+      13771,
+      13772,
+      13773,
+      13774,
+      13775
+    ],
+    "base_program_graph_root_from_pack_result": "49fc964aa12211c20438c20bb16a0e3ff4f63730b4150d5b25b10096857a3b6b04c380a8d4dad71d2113fd87fc77799fe6b14ffc791fd3cb566a82dc75ccd4ad",
+    "declared_program_graph_root": "203f9c0a8c6744d2cb5a533e1399f7ceca6719257165235612e1aa4c0ee5ce66e50f169c0a9be7c1b1255a47e82292e84b16f0bcb60bdb02ef2dab243a3fce41",
+    "declared_program_matches_registration_fixture": true,
+    "declared_class_id_matches_recorded": true,
+    "note": "Existing base and declared containers have different original program bytes/graph roots. pack.result.graph_ir_root describes the base container; the recorded declared class is derived from the declared program, layout, tokenizer and recorded inventory root. No artifact was changed by this inventory.",
+    "differing_program_region": "All differences are within the original final 64 bytes; no earlier program byte differs. Declared and early-declared program bytes are equal."
+  },
+  "unstable_at_inventory_close": [],
+  "source_head_at_close": "4753ee4beae5e245095954c6ef6e9b96fa05f361",
+  "identity_algorithm_sources": [
+    "4753ee4be:misaka/palw/tir/artifact/src/lib.rs (PALWTIR1 header fields and keyed container-file digest)",
+    "4753ee4be:consensus/core/src/palw_tir_artifact_v1.rs (graph-ir-root keyed BLAKE2b-512)",
+    "4753ee4be:consensus/core/src/palw_tir_class_v1.rs (layout/class digest field order)"
+  ]
+}

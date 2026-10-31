@@ -1,0 +1,46 @@
+{
+  "scope": "A7 new inventory and proposal outputs only; data identity",
+  "source_commit": "4753ee4beae5e245095954c6ef6e9b96fa05f361",
+  "files": [
+    {
+      "path": "README.md",
+      "bytes": 6146,
+      "sha256": "5b4332eef29a430c0dbd0561c0dab94aee0a39dc02247e630ea41426c3091839"
+    },
+    {
+      "path": "audit_inventory.py",
+      "bytes": 4933,
+      "sha256": "2f20cbc873315a889f74170a5e88bc0401b242ca3b730cbddd7a5f41983a196b"
+    },
+    {
+      "path": "local-repro-proposal.md",
+      "bytes": 11014,
+      "sha256": "ade8a0f0811756494f3e0b73679156bb70f8df4f6be57b6899abecc225904825"
+    },
+    {
+      "path": "parent-audit.json",
+      "bytes": 311388,
+      "sha256": "c1134c8149c3c9f0c977531dfd9b788cd5d5fee67795efa8324ded20062da9cf"
+    },
+    {
+      "path": "pythia-70m.json",
+      "bytes": 1655558,
+      "sha256": "24296d0c2a56a50d662092eb20f1dc8e35dfa46af6762ad32e7e184f1c54f60b"
+    },
+    {
+      "path": "review.json",
+      "bytes": 1861,
+      "sha256": "f84e616389256bdc4ed28d928602fd90b7ea6b325221d117be2570d5c2c537cd"
+    },
+    {
+      "path": "smollm2-135m.json",
+      "bytes": 168166,
+      "sha256": "e6d86d57454fae5ae36b0625b73de537cf0fc552c19d882096cae015824f8920"
+    },
+    {
+      "path": "smollm2-360m.json",
+      "bytes": 120326,
+      "sha256": "80e43e0fd9ad9fb0b4dc0b44cdda2b78513ef29ea1fa549d1e2b99fe4bc26548"
+    }
+  ]
+}
