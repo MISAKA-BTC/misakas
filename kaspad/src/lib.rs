@@ -52,7 +52,7 @@ pub mod palw_panel;
 pub mod palw_prefill_run;
 pub mod palw_producer;
 #[cfg(feature = "positive-miner-client")]
-pub mod palw_positive_miner_source_v2;
+mod palw_positive_miner_source_v2;
 /// 2026-10-01 (F3): the producer holds its attempt lane while its own claims are not getting licensed
 /// (node policy).
 pub mod palw_producer_backpressure;

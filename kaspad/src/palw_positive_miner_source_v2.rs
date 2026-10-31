@@ -1,5 +1,9 @@
 //! Own-node source duty adapter. Its constructor takes the actual consensus
-//! session, never a peer DTO, arbitrary read-port implementation or saved flag.
+//! session supplied only by trusted node callsites, never a peer DTO or saved
+//! flag. ConsensusProxy is a public dynamic-interface alias, not by itself an
+//! authenticated capability. The actual VP owner must supply the private read
+//! implementation and current-view validation; this module cannot seal a mock
+//! ConsensusApi supplied by other trusted Rust code.
 //! Run on a bounded blocking worker; a session must not be retained by a queue.
 use kaspa_consensus_core::palw_positive_source_read_v2::{PositiveSourceReadErrorV2, PositiveSourceReadV2, PositiveSourceViewIdV2};
 use kaspa_consensusmanager::ConsensusProxy;
@@ -18,12 +22,12 @@ use std::path::Path;
 
 /// Caller-selected recovery mode. An absent/corrupt protected store must never
 /// automatically fall back to Create or replace the namespace after reorg.
-pub enum SourceJournalOpenV2 {
+pub(crate) enum SourceJournalOpenV2 {
     Create,
     Resume,
     DiscardUnanchoredTail,
 }
-pub struct SignedSourceCaseV2<'a> {
+pub(crate) struct SignedSourceCaseV2<'a> {
     pub admission: &'a AdmissionContext,
     pub result: MinerResultCommit,
     pub service: MinerServiceContract,
@@ -35,12 +39,12 @@ pub struct SignedSourceCaseV2<'a> {
 /// Concrete own-node path: authenticated local result -> exclusive protected
 /// case lease -> write-ahead journal -> actual-session native duty -> G14 units.
 /// No method treats these local units as accepted service or a payable claim.
-pub struct NativeMinerSourceV2<'p> {
+pub(crate) struct NativeMinerSourceV2<'p> {
     result: MinerResultCommit,
     responder: DurableMinerResponderV2<'p, NativeSourceDutyV2, RocksCaseAnchorV2>,
 }
 impl<'p> NativeMinerSourceV2<'p> {
-    pub fn open(
+    pub(crate) fn open(
         signed: SignedSourceCaseV2<'_>,
         providers: &'p [&'p dyn StoredProviderV2],
         process_limits: ProcessLimitsV2,
@@ -74,12 +78,12 @@ impl<'p> NativeMinerSourceV2<'p> {
     /// Call in one bounded blocking worker and drop its session after this
     /// response. Data is submitted through A4 op4; intake independently resolves
     /// the canonical request, rechecks G14 data and creates the actual receipt.
-    pub fn respond(&mut self, session: ConsensusProxy, request: RequestId) -> Result<PreparedDataV2, MinerErrorV2> {
+    pub(crate) fn respond(&mut self, session: ConsensusProxy, request: RequestId) -> Result<PreparedDataV2, MinerErrorV2> {
         let duty = NativeSourceDutyV2::resolve(session, request, &self.result)?;
         self.responder.respond(&duty)
     }
 
-    pub fn meter(&self) -> PreparationMeterV2 {
+    pub(crate) fn meter(&self) -> PreparationMeterV2 {
         self.responder.meter()
     }
 }
@@ -87,7 +91,7 @@ impl<'p> NativeMinerSourceV2<'p> {
 /// Not serializable or constructible outside the own-node adapter. The read
 /// port's concrete implementation belongs to consensus and must recheck the
 /// current state generation/root/accepted prefix on every call.
-pub(crate) struct NativeSourceDutyV2 {
+struct NativeSourceDutyV2 {
     _session: ConsensusProxy,
     read: Box<dyn PositiveSourceReadV2>,
     request: SourceRequest,
@@ -95,7 +99,7 @@ pub(crate) struct NativeSourceDutyV2 {
     view: PositiveSourceViewIdV2,
 }
 impl NativeSourceDutyV2 {
-    pub(crate) fn resolve(session: ConsensusProxy, request: RequestId, result: &MinerResultCommit) -> Result<Self, MinerErrorV2> {
+    fn resolve(session: ConsensusProxy, request: RequestId, result: &MinerResultCommit) -> Result<Self, MinerErrorV2> {
         let read = session
             .with_consensus_api_v1(|consensus| consensus.palw_positive_source_duty_v2(request, result.id()))
             .map_err(source_error)?;
