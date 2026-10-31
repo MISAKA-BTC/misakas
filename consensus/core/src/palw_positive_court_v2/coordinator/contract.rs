@@ -409,13 +409,9 @@ impl<C: CourtCheckerV2, V: CarrierVerifierV2> ContractCourtV2<C, V> {
         {
             return Ok(());
         }
-        let total = self
-            .wire_bytes
-            .checked_add(billed_bytes)
-            .filter(|x| *x <= self.limits.max_total_wire_bytes)
-            .ok_or(CourtErrorV2::Budget)?;
-        self.wire_bytes = total;
-        self.now = now;
+        // Relays cannot consume the case budget by replaying a signed future
+        // frame or another ineligible header. Only the current required single
+        // relation may reach arithmetic checking and acquire a wire charge.
         if frame.header().relation_count != 1 {
             return Err(CourtErrorV2::Contract(ContractError::NonCanonical));
         }
@@ -427,6 +423,13 @@ impl<C: CourtCheckerV2, V: CarrierVerifierV2> ContractCourtV2<C, V> {
         )
         .map_err(CourtErrorV2::Contract)?;
         let progress = candidate.progress.as_mut().ok_or(CourtErrorV2::Closed)?;
+        let total = self
+            .wire_bytes
+            .checked_add(billed_bytes)
+            .filter(|x| *x <= self.limits.max_total_wire_bytes)
+            .ok_or(CourtErrorV2::Budget)?;
+        self.wire_bytes = total;
+        self.now = now;
         if let Err(error) = self.checker.check_part(&candidate.context, progress, frame) {
             // Only authenticated material reached the checker. Read the actual
             // candidate outcome; budget/unadjudicable failures remain unverified.
