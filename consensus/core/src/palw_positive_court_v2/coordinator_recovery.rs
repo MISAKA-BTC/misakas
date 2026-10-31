@@ -316,6 +316,48 @@ impl JournaledCoordinatorV2 {
     }
 }
 
+/// Resolved from the caller's trusted selected-history store. This is an
+/// explicit adapter over the PRIVATE coordinator, not an alias or decoder for
+/// A0 result/witness wire objects. Native ingress must supply its own binding.
+pub struct RecoveryAdmissionV2 {
+    pub coordinator: PositiveCoordinatorV2,
+    pub admitted_at: u64,
+    pub expected: RecoveryHeadV2,
+}
+pub trait RecoveryContextV2 {
+    type TrustedAnchor;
+    fn resolve(&self, anchor: &Self::TrustedAnchor) -> Result<RecoveryAdmissionV2, ErrorV2>;
+    fn authenticate(&self, anchor: &Self::TrustedAnchor, origin: EventOriginV2, event: &RecoveryEventV2) -> bool;
+    fn current_daa(&self) -> u64;
+}
+pub struct RecoveryAdapterV2<C> {
+    context: C,
+    limits: RecoveryLimitsV2,
+}
+impl<C> RecoveryAdapterV2<C> {
+    pub fn new(context: C, limits: RecoveryLimitsV2) -> Self {
+        Self { context, limits }
+    }
+}
+impl<C: RecoveryContextV2> misaka_palw_positive_contract::ports::Recovery for RecoveryAdapterV2<C> {
+    type TrustedAnchor = C::TrustedAnchor;
+    type BoundedJournal = Vec<u8>;
+    type RestoredState = JournaledCoordinatorV2;
+    type Error = ErrorV2;
+    fn replay(&self, anchor: &Self::TrustedAnchor, journal: Vec<u8>) -> Result<JournaledCoordinatorV2, ErrorV2> {
+        let admitted = self.context.resolve(anchor)?;
+        JournaledCoordinatorV2::restore(
+            admitted.coordinator,
+            admitted.admitted_at,
+            &journal,
+            admitted.expected,
+            self.limits,
+            self.context.current_daa(),
+            |origin, event| self.context.authenticate(anchor, origin, event),
+        )
+    }
+}
+
 /// Bounded archive input for disk/IBD adapters. The archive still needs a
 /// separately trusted head and selected-history authentication in `restore`.
 pub fn read_generation<R: Read>(reader: R, limits: RecoveryLimitsV2) -> Result<Vec<u8>, ErrorV2> {

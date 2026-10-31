@@ -406,3 +406,49 @@ fn pending_horizons_and_missing_archive_prevent_pruning() {
     assert!(!RetentionV2 { pending: true, ..r }.may_prune_for_self_verifying_import(100));
     assert!(!RetentionV2 { archive_available: false, ..r }.may_prune_for_self_verifying_import(100));
 }
+
+#[test]
+fn a0_recovery_port_uses_resolved_head_and_bounded_archive_reader() {
+    use misaka_palw_positive_contract::ports::Recovery;
+    struct Context<'a> {
+        x: &'a TinyExecution,
+        s: &'a Signed,
+        p: ServicePolicyV2,
+        l: CoordinatorLimitsV2,
+        head: RecoveryHeadV2,
+    }
+    impl RecoveryContextV2 for Context<'_> {
+        type TrustedAnchor = Hash64;
+        fn resolve(&self, anchor: &Hash64) -> Result<RecoveryAdmissionV2, ErrorV2> {
+            if *anchor != self.s.result.branch {
+                return Err(ErrorV2::Binding);
+            }
+            Ok(RecoveryAdmissionV2 {
+                coordinator: coordinator(self.x, self.s, self.p.clone(), self.l),
+                admitted_at: 1,
+                expected: self.head,
+            })
+        }
+        fn authenticate(&self, _: &Hash64, origin: EventOriginV2, event: &RecoveryEventV2) -> bool {
+            canonical(origin, event)
+        }
+        fn current_daa(&self) -> u64 {
+            4
+        }
+    }
+    let x = tiny_execution(None);
+    let (s, p, _, l) = setup(&x);
+    let mut j = fresh(&x, &s, p.clone(), l);
+    let req = source_request(&j, 32);
+    record(&mut j, req, 2).unwrap();
+    record(&mut j, candidate(&s), 3).unwrap();
+    let bytes = read_generation(j.encoded().unwrap(), caps()).unwrap();
+    let driver = RecoveryAdapterV2::new(Context { x: &x, s: &s, p, l, head: j.head().unwrap() }, caps());
+    let restored = driver.replay(&s.result.branch, bytes.clone()).unwrap();
+    assert_eq!(restored.state().unwrap().service_meter(), j.state().unwrap().service_meter());
+    assert_eq!(restored.state().unwrap().attempts(), j.state().unwrap().attempts());
+    assert!(driver.replay(&Hash64::from_bytes([77; 64]), bytes.clone()).is_err());
+    assert!(driver.replay(&s.result.branch, bytes[..bytes.len() - 1].to_vec()).is_err());
+    let small = RecoveryLimitsV2 { max_encoded_bytes: bytes.len() as u64 - 1, ..caps() };
+    assert_eq!(read_generation(&bytes[..], small), Err(ErrorV2::Budget));
+}
