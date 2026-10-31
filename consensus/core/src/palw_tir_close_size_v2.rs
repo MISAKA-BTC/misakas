@@ -186,7 +186,28 @@ impl<'a> CloseGeometry<'a> {
             Self::Wide { space: s, .. } => s.layout(),
         }
     }
+    /// Legacy spaces expose mutable program metadata. Recheck just the lane
+    /// family before quoting/reading it; this is not a full NF/layout validator.
+    /// Unknown schemes retain their old meaning for narrow committed/final outputs.
+    pub(crate) fn require_legacy_width(self) -> Result<(), String> {
+        let Self::Legacy(space) = self else { return Ok(()) };
+        let program = &space.program;
+        if program.wide_logits_q24() {
+            return Err("wide Q24 requires explicit v2 close sizing; legacy step lanes are four bytes".into());
+        }
+        let committed_wide = program.blocks.iter().flat_map(|b| &b.nodes).any(|n| n.commit && !n.out.dtype.committable());
+        let final_wide = program
+            .blocks
+            .get(program.schedule.post as usize)
+            .and_then(|b| b.nodes.get(program.logits as usize))
+            .is_some_and(|n| !n.out.dtype.committable());
+        if committed_wide || final_wide {
+            return Err("non-four-byte committed or final lanes cannot use legacy close sizing".into());
+        }
+        Ok(())
+    }
     pub(crate) fn job_shape(self, ctx: &PalwJobContextV2) -> Result<PalwTirJobShapeV1, PalwTirStepError> {
+        self.require_legacy_width().map_err(PalwTirStepError::Layout)?;
         match self {
             Self::Legacy(s) => s.job_shape(ctx),
             Self::Wide { space: s, .. } => s.job_shape(ctx),
