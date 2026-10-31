@@ -2,8 +2,12 @@
 //! G14 inventory leaves. There is no Panel capture or native admission fixture.
 use super::*;
 use kaspa_consensus_core::{
-    palw_artifact::{PalwArtifactOperandV1, artifact_leaf_v1, artifact_root_v1},
+    palw_artifact::{PalwArtifactOperandV1, artifact_leaf_v1, artifact_root_v1, open_artifact_leaf_v1},
+    palw_attempt_v2::palw_attempt_job_v1,
+    palw_positive_source_geometry_v2::{GeometryLimitsV2, StoredUnitV2, TirSourceGeometryV2},
     palw_prompt_ids_v1::prompt_token_ids_commitment_v1,
+    palw_tir_admission_v1::palw_tir_class_record_v1,
+    palw_tir_attempt_v1::{palw_tir_attempt_canonical_v1, palw_tir_attempt_job_for_anchor_of_v1, palw_tir_attempt_job_for_anchor_v1},
     palw_tir_class_v1::{PALW_TIR_CLASS_VERSION_V1, PALW_TIR_LAYOUT_VERSION_V1, PalwTirLayoutV1},
 };
 use misaka_palw_positive_contract::{
@@ -49,6 +53,40 @@ struct Fixture {
 impl Fixture {
     fn new() -> Self {
         Self::with_profile(true, true)
+    }
+    /// Actual existing job derivation over registered tiny-class facts. This
+    /// data fixture does not resolve a native job origin or grant admission.
+    fn canonical_attempt(prefill_draw: bool) -> Self {
+        let mut f = Self::new();
+        let artifact = Hash64::from_bytes(f.artifact.0);
+        let (registered, _) = palw_tir_class_record_v1(&f.class, &artifact).unwrap();
+        let canonical = palw_tir_attempt_canonical_v1(&f.class).unwrap();
+        assert_eq!(canonical, (7, 2));
+        let anchor = Hash64::from_bytes([82; 64]);
+        let (context, prompt) =
+            palw_tir_attempt_job_for_anchor_of_v1(&registered.facts, &anchor, canonical, PalwPromptIdsFormV1::Flat).unwrap();
+        assert_eq!(
+            palw_tir_attempt_job_for_anchor_v1(&f.class, registered.facts.class_id, canonical, &anchor, PalwPromptIdsFormV1::Flat),
+            Some((context.clone(), prompt.clone()))
+        );
+        f.context = palw_attempt_job_v1(context, prefill_draw);
+        f.prompt = prompt;
+        assert_ne!(registered.tokenizer_id, Hash64::default());
+        assert_eq!(f.context.tokenizer_id, Hash64::default());
+        f.result.job = Digest(f.context.job_id.as_bytes());
+        f.result.input = Digest(f.context.prompt_token_ids_hash.as_bytes());
+        f.result.tokenizer = Digest(f.context.tokenizer_id.as_bytes());
+        f.result.execution_rules = Digest(f.context.cu_ruleset_id.as_bytes());
+        f.result.generation_seed = f.context.execution_seed;
+        f.result.prefill = f.context.declared_prefill_tokens;
+        f.result.decode = f.context.exact_decode_tokens;
+        f.result.max_context = f.context.max_context_tokens;
+        f.admission.expected_job = f.result.job;
+        f.admission.expected_input = f.result.input;
+        f.admission.tokenizer = f.result.tokenizer;
+        f.admission.execution_rules = f.result.execution_rules;
+        f.refresh_execution_identity();
+        f
     }
     fn with_profile(all_committed: bool, tiled: bool) -> Self {
         let mut p = ProgramBuilder::new(4, 1 << 18);
@@ -258,6 +296,87 @@ fn bound_tir_infers_real_output_then_signs_only_the_result() {
     assert_eq!(signs.get(), 1);
     result.authenticate(&f.key, &signature).unwrap();
     assert_eq!(result.service_contract, f.contract.id());
+}
+
+#[test]
+fn canonical_attempt_context_tokenizer_zero_is_distinct_from_registered_class_and_still_runs_and_serves_g14() {
+    for prefill_draw in [false, true] {
+        let f = Fixture::canonical_attempt(prefill_draw);
+        assert_ne!(f.class.tokenizer_id, Hash64::default());
+        assert_eq!(f.context.tokenizer_id, Hash64::default());
+        assert_eq!(f.result.tokenizer, Digest([0; 64]));
+        assert_eq!(f.prompt.len(), 7);
+        let held = AuthenticatedTirParamsV2::authenticate(&f.plan, &f.params, f.artifact, identity_limits()).unwrap();
+        let signs = Cell::new(0);
+        let (result, signature, generated) = f.run(&held, &signs).unwrap();
+        assert_eq!(generated, vec![3; f.context.exact_decode_tokens as usize]);
+        assert_eq!(signs.get(), 1);
+        result.authenticate(&f.key, &signature).unwrap();
+        assert_eq!(result.output, Digest(palw_attempt_output_root_v1(&f.context, &generated).as_bytes()));
+        assert_eq!(result.tokenizer, Digest([0; 64]));
+
+        let artifact = Hash64::from_bytes(f.artifact.0);
+        let (registered, _) = palw_tir_class_record_v1(&f.class, &artifact).unwrap();
+        let geometry = TirSourceGeometryV2::derive(
+            &f.class,
+            &registered,
+            artifact,
+            &f.context,
+            &result,
+            PalwPromptIdsFormV1::Flat,
+            GeometryLimitsV2 {
+                max_program_bytes: 1 << 20,
+                max_parameter_instances: 4,
+                max_inventory_leaves: 4,
+                max_units_per_range: 4,
+            },
+        )
+        .unwrap();
+        let operands: Vec<_> = (0u32..4)
+            .map(|row| PalwArtifactOperandV1 {
+                tensor_name: "embedding".into(),
+                layer: None,
+                row_start: row * 4,
+                bytes: (row * 4 + 1..=row * 4 + 4).map(|x| x as u8).collect(),
+            })
+            .collect();
+        let request = SourceRequest {
+            version: CONTRACT_VERSION,
+            revision: CONTRACT_REVISION,
+            case: result.case_id(),
+            contract: result.service_contract,
+            source: result.artifact,
+            kind: SourceKind::ArtifactInventory,
+            first: 0,
+            end: 1,
+        };
+        let opening = open_artifact_leaf_v1(&operands, 0).unwrap();
+        let raw = borsh::to_vec(&opening).unwrap();
+        assert_eq!(raw.len(), 166);
+        let (index, unit) = geometry.decode_g14_response_v2(&request, &raw).unwrap();
+        assert_eq!(index, 0);
+        assert_eq!(unit, StoredUnitV2::Artifact(opening));
+        assert_eq!(unit.sizes().unwrap(), (4, 166));
+        let input_request = SourceRequest { source: result.input, kind: SourceKind::Input, ..request };
+        let (_, input) = geometry.decode_g14_response_v2(&input_request, &borsh::to_vec(&f.prompt).unwrap()).unwrap();
+        assert_eq!(input, StoredUnitV2::FlatInput(f.prompt.clone()));
+    }
+}
+
+#[test]
+fn canonical_context_or_result_tokenizer_substitution_does_not_reach_signer() {
+    for attack in 0..3 {
+        let mut f = Fixture::canonical_attempt(true);
+        match attack {
+            0 => f.context.tokenizer_id = f.class.tokenizer_id,
+            1 => f.result.tokenizer = Digest(f.class.tokenizer_id.as_bytes()),
+            _ => f.class.tokenizer_id = h(83),
+        }
+        let held = AuthenticatedTirParamsV2::authenticate(&f.plan, &f.params, f.artifact, identity_limits()).unwrap();
+        let signs = Cell::new(0);
+        assert!(f.run(&held, &signs).is_err(), "tokenizer substitution {attack}");
+        assert_eq!(signs.get(), 0);
+    }
 }
 
 #[test]

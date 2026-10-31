@@ -316,15 +316,19 @@ impl<A: ProtectedAnchorStoreV2> FilePreparationJournalV2<A> {
         })
     }
 
-    /// Resume only if the file ends at the exact protected anchor. Checksum-
-    /// valid records beyond it are untrusted and cannot discount future work.
+    /// Verify the exact protected prefix and restore the supplied fresh session
+    /// BEFORE publishing a usable journal. Binding a fresh session without its
+    /// saved meter would merge equal Complete-only status counters on restart.
+    /// Checksum-valid unanchored suffixes cannot discount future work.
     pub fn open<D>(
         path: &Path,
-        responder: &MinerResponderV2<'_, D>,
+        responder: &mut MinerResponderV2<'_, D>,
         limits: JournalLimitsV2,
         anchors: A,
     ) -> Result<Self, MinerErrorV2> {
-        Self::open_prefix(path, responder, limits, anchors, false)
+        let journal = Self::open_prefix(path, responder, limits, anchors, false)?;
+        journal.state.restore(responder)?;
+        Ok(journal)
     }
 
     /// Explicit crash-window repair. Discard bytes AFTER the exact protected
@@ -332,11 +336,13 @@ impl<A: ProtectedAnchorStoreV2> FilePreparationJournalV2<A> {
     /// missing/corrupt protected prefix is never repaired from untrusted data.
     pub fn open_discarding_unanchored_tail<D>(
         path: &Path,
-        responder: &MinerResponderV2<'_, D>,
+        responder: &mut MinerResponderV2<'_, D>,
         limits: JournalLimitsV2,
         anchors: A,
     ) -> Result<Self, MinerErrorV2> {
-        Self::open_prefix(path, responder, limits, anchors, true)
+        let journal = Self::open_prefix(path, responder, limits, anchors, true)?;
+        journal.state.restore(responder)?;
+        Ok(journal)
     }
 
     fn open_prefix<D>(
@@ -534,8 +540,7 @@ impl<'p, D: CanonicalDataDutyV2, A: ProtectedAnchorStoreV2> DurableMinerResponde
         Ok(Self { inner, journal })
     }
     pub fn resume(path: &Path, mut fresh: MinerResponderV2<'p, D>, limits: JournalLimitsV2, anchors: A) -> Result<Self, MinerErrorV2> {
-        let journal = FilePreparationJournalV2::open(path, &fresh, limits, anchors)?;
-        journal.state.restore(&mut fresh)?;
+        let journal = FilePreparationJournalV2::open(path, &mut fresh, limits, anchors)?;
         Ok(Self { inner: fresh, journal })
     }
     /// Explicit recovery of the fsync-before-protected-CAS crash window.
@@ -547,8 +552,7 @@ impl<'p, D: CanonicalDataDutyV2, A: ProtectedAnchorStoreV2> DurableMinerResponde
         limits: JournalLimitsV2,
         anchors: A,
     ) -> Result<Self, MinerErrorV2> {
-        let journal = FilePreparationJournalV2::open_discarding_unanchored_tail(path, &fresh, limits, anchors)?;
-        journal.state.restore(&mut fresh)?;
+        let journal = FilePreparationJournalV2::open_discarding_unanchored_tail(path, &mut fresh, limits, anchors)?;
         Ok(Self { inner: fresh, journal })
     }
     pub fn meter(&self) -> PreparationMeterV2 {
@@ -954,18 +958,18 @@ mod tests {
         let live = DurableMinerResponderV2::create(&case.path(), f.responder(&providers, limits()), journal_limits(), anchors.clone())
             .unwrap();
         assert!(
-            FilePreparationJournalV2::open(&case.path(), &f.responder(&providers, limits()), journal_limits(), anchors.clone())
+            FilePreparationJournalV2::open(&case.path(), &mut f.responder(&providers, limits()), journal_limits(), anchors.clone())
                 .is_err()
         );
         let alias = case.0.join("alias");
         symlink(case.path(), &alias).unwrap();
         assert!(
-            FilePreparationJournalV2::open(&alias, &f.responder(&providers, limits()), journal_limits(), anchors.clone()).is_err()
+            FilePreparationJournalV2::open(&alias, &mut f.responder(&providers, limits()), journal_limits(), anchors.clone()).is_err()
         );
         let fifo = case.0.join("fifo");
         let name = CString::new(fifo.as_os_str().as_bytes()).unwrap();
         assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
-        assert!(FilePreparationJournalV2::open(&fifo, &f.responder(&providers, limits()), journal_limits(), anchors).is_err());
+        assert!(FilePreparationJournalV2::open(&fifo, &mut f.responder(&providers, limits()), journal_limits(), anchors).is_err());
         drop(live);
     }
 

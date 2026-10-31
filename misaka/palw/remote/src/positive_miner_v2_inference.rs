@@ -205,11 +205,13 @@ pub fn infer_and_sign_tir_result_v2(
     {
         return Err(MinerErrorV2::Binding);
     }
+    // The registered tokenizer is bound by the class ID. The Result names its
+    // job's tokenizer instead: existing canonical attempt contexts use zero.
+    // Actual native origin/assignment is still the admission owner's duty.
     if ctx.version != 2
         || held.artifact != result.artifact
         || class.class_id(&Hash64::from_bytes(held.artifact.0)).as_bytes() != result.registered_class.0
         || class.graph_ir_root().as_bytes() != result.program.0
-        || class.tokenizer_id != ctx.tokenizer_id
         || result.tokenizer.0 != ctx.tokenizer_id.as_bytes()
         || result.job.0 != ctx.job_id.as_bytes()
         || result.execution.0 != ctx.context_hash().as_bytes()
