@@ -1,0 +1,97 @@
+{
+  "schema": "misaka.positive.a2-validation.v1",
+  "base_contract_commit": "a85152edcbb3b41b6bd16bb1c83dacb6a425167c",
+  "contract_version": 2,
+  "contract_revision": 1,
+  "rustc": "rustc 1.93.0 (254b59607 2026-01-19)",
+  "runs": [
+    {
+      "configuration": "with-positive-miner",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "misaka-palw-remote",
+        "--lib",
+        "--features",
+        "positive-miner",
+        "--config",
+        "profile.dev.debug=0",
+        "--config",
+        "profile.test.debug=0",
+        "--config",
+        "profile.dev.incremental=false",
+        "--config",
+        "profile.test.incremental=false",
+        "--target-dir",
+        "/tmp/misaka-a2-target",
+        "-j",
+        "2"
+      ],
+      "exit_code": 0,
+      "passed": 190,
+      "failed": 0,
+      "ignored": 1,
+      "raw_log": "with-positive-miner.log"
+    },
+    {
+      "configuration": "default-off",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "misaka-palw-remote",
+        "--lib",
+        "--no-default-features",
+        "--config",
+        "profile.dev.debug=0",
+        "--config",
+        "profile.test.debug=0",
+        "--config",
+        "profile.dev.incremental=false",
+        "--config",
+        "profile.test.incremental=false",
+        "--target-dir",
+        "/tmp/misaka-a2-target",
+        "-j",
+        "2"
+      ],
+      "exit_code": 0,
+      "passed": 176,
+      "failed": 0,
+      "ignored": 1,
+      "raw_log": "default-off.log"
+    }
+  ],
+  "a2_tests_passed": 14,
+  "existing_ignored_test": "l2::tests::l2fc_cost_per_view",
+  "rustfmt_check_exit_code": 0,
+  "git_diff_check_exit_code": 0,
+  "files": [
+    {
+      "path": "Cargo.lock",
+      "sha256": "448f3ec930a502b6dbe958a408ef330377d5318166d25076fb806d7af7caf9ca"
+    },
+    {
+      "path": "misaka/palw/remote/Cargo.toml",
+      "sha256": "9bb8d1adc1f9958e70e1364d0da4963357141767bee876ccd1fd31b5ff606634"
+    },
+    {
+      "path": "misaka/palw/remote/src/miner.rs",
+      "sha256": "ce46284eb48c40dbbcbda796861de70983e3d25d9397dd936677c81d2b0b594d"
+    },
+    {
+      "path": "misaka/palw/remote/src/positive_miner_v2.rs",
+      "sha256": "a1d508e1bfc6b185ba82c47ab630a47f294b04f6a7cfa2988dc82abf3e54cc30"
+    },
+    {
+      "path": "misaka/palw/remote/src/positive_miner_v2_tests.rs",
+      "sha256": "509170d4f9ed00e9897acf657aebdf3d1f497c85e1c1c018a1df322256bb052d"
+    }
+  ],
+  "scope": "process API tests; canonical A4 duty is an in-memory fixture, not native admission",
+  "public_activation_changed": false,
+  "native_court_integration_verified": false,
+  "restart_reorg_ibd_verified": false,
+  "real_llm_overhead": "UNKNOWN"
+}
