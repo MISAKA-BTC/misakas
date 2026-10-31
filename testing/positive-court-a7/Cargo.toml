@@ -1,0 +1,22 @@
+[package]
+name = "misaka-positive-a7-tests"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# A7 owns this isolated test crate; no shared module/feature registration.
+[workspace]
+
+[dependencies]
+borsh = { version = "=1.5.1", features = ["derive", "rc"] }
+serde_json = "1"
+tempfile = "3.13"
+libc = "0.2"
+libcrux-ml-dsa = "=0.0.10"
+kaspa-consensus-core = { path = "../../consensus/core" }
+misaka-palw-positive-contract = { path = "../../misaka/palw/positive-contract" }
+misaka-palw-tir = { path = "../../misaka/palw/tir/core" }
+misaka-palw-tir-exec = { path = "../../misaka/palw/tir/exec", features = ["positive-panel"] }
+misaka-palw-remote = { path = "../../misaka/palw/remote", features = ["positive-miner"] }
+misaka-palw-positive-accounting = { path = "../../misaka/palw/positive-accounting" }
+misaka-palw-positive-accounting-node = { path = "../../misaka/palw/positive-accounting-node" }

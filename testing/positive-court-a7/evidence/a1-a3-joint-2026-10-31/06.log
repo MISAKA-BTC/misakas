@@ -1,0 +1,19 @@
+   Compiling misaka-palw-tir-exec v1.1.0 (/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/misaka/palw/tir/exec)
+   Compiling misaka-palw-tir-sketch v1.1.0 (/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/misaka/palw/tir/sketch)
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/consensus/core)
+    Finished `test` profile [unoptimized] target(s) in 5.96s
+     Running tests/palw_tir_v1_fence.rs (target/debug/deps/palw_tir_v1_fence-8197a0d8109fa9ee)
+
+running 9 tests
+test the_ids_are_keyed_hashes_of_what_they_name ... ok
+test testnet_12_leaves_it_dormant_and_the_accessor_agrees ... ok
+test validate_refuses_every_value_this_build_cannot_run ... ok
+test the_value_is_fingerprinted_and_the_height_alone_is_what_the_identity_normalises ... ok
+test the_flag_day_entry_sets_the_field_it_names ... ok
+test the_fork_id_gate_names_it_at_its_height ... ok
+test a_scheduled_fence_moves_the_ruleset_and_the_schedule_and_never_the_identity ... ok
+test never_is_absence_for_the_identity_and_genesis_is_a_rule ... ok
+test the_fold_reads_the_height_through_a_mirror_the_ruleset_must_agree_with ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+
