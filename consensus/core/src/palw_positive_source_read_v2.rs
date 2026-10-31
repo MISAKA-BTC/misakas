@@ -27,6 +27,16 @@ pub struct PositiveSourceReadBoundsV2 {
     pub cutoff: u64,
 }
 
+/// Per-unit G14 geometry. Raw unique source data and transmitted authenticated
+/// opening bytes are different budget dimensions, including at a short tail.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PositiveSourceUnitBoundsV2 {
+    pub data_bytes: u64,
+    /// Upper bound for this existing raw G14 response body. Native outer
+    /// framing/signatures/carriers are charged separately by the native quote.
+    pub body_bytes: u64,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PositiveSourceReadErrorV2 {
     Unavailable,
@@ -49,5 +59,6 @@ pub trait PositiveSourceReadV2: Send + Sync {
     fn request(&self) -> &SourceRequest;
     fn view_id(&self) -> PositiveSourceViewIdV2;
     fn authorize(&self, result: &MinerResultCommit) -> Result<PositiveSourceReadBoundsV2, PositiveSourceReadErrorV2>;
+    fn unit_bounds(&self, unit: u64) -> Result<PositiveSourceUnitBoundsV2, PositiveSourceReadErrorV2>;
     fn status(&self, unit: u64) -> Result<MinerDataStatus, PositiveSourceReadErrorV2>;
 }
