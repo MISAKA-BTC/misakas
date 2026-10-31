@@ -452,3 +452,6 @@ mod tests {
         );
     }
 }
+
+/// Explicit strict-wide plan; the original derive/getters remain narrow-only.
+pub mod wide_v2;

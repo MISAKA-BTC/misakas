@@ -732,3 +732,6 @@ fn valid_limits(limits: TirSourceOnlyLimitsV1) -> Result<(), TirSourceOnlyErrorV
     }
     Ok(())
 }
+
+/// Explicit wide source authentication; old entrypoints stay narrow-only.
+pub mod wide_v2;

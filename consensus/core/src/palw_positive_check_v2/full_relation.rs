@@ -699,3 +699,6 @@ impl Write for HashWriter {
         Ok(())
     }
 }
+
+/// Explicit strict-wide local exact checker; V1 identities and acceptance stay unchanged.
+pub mod wide_v2;
