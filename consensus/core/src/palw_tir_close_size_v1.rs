@@ -333,7 +333,7 @@ impl Twin<'_> {
             return Ok(());
         }
         let (block, layer) = self.block_of(key.occurrence)?;
-        let h = history_length_v1(&self.space.info(), block, key.pos).ok_or("the program's info does not cover the block")?;
+        let h = history_length_v1(self.space.info(), block, key.pos).ok_or("the program's info does not cover the block")?;
         let b = &self.space.program().blocks[block as usize];
         self.tick(b.nodes.len() as u64)?;
         self.space.guard_allocation(b.nodes.len() as u64)?;
@@ -391,7 +391,7 @@ impl Twin<'_> {
         if self.placed.contains(&(self.in_hist, coord.call_index, coord.node_slot, coord.position, coord.tile_index)) {
             return Ok(());
         }
-        let h = history_length_v1(&self.space.info(), block, key.pos).ok_or("no block info")?;
+        let h = history_length_v1(self.space.info(), block, key.pos).ok_or("no block info")?;
         let out = &self.space.program().blocks[block as usize].nodes[node as usize].out;
         let count = element_count(&out.resolve(h));
         let values = tile_len.min(count.saturating_sub(tile * tile_len)) as u32;
@@ -477,7 +477,7 @@ impl Twin<'_> {
                 let coord = self.reserved_coord(at - 1, k as u32, tile);
                 return self.step_leaf(coord, values, false);
             }
-            match state_writer_v1(&self.space.program(), state, layer) {
+            match state_writer_v1(self.space.program(), state, layer) {
                 Some((occ, w)) => {
                     let key = DemandContext { pos: at - 1, occurrence: occ };
                     self.ctx(key)?;
@@ -528,7 +528,7 @@ impl Twin<'_> {
                 Some(x) => *x,
                 None => {
                     let (key, node) =
-                        hist_row_node_v1(&self.space.program(), state, layer, 0).ok_or("a history that appends nothing")?;
+                        hist_row_node_v1(self.space.program(), state, layer, 0).ok_or("a history that appends nothing")?;
                     self.hist_nodes.insert((state, layer), (key.occurrence, node));
                     (key.occurrence, node)
                 }
@@ -537,7 +537,7 @@ impl Twin<'_> {
             if self.pattern.is_some() {
                 let (block, _) = self.block_of(occurrence)?;
                 let tile_len = self.space.commit_tile_len(block, node).ok_or("a history row that is no commit point")? as usize;
-                let h = history_length_v1(&self.space.info(), block, row_pos).ok_or("no block info")?;
+                let h = history_length_v1(self.space.info(), block, row_pos).ok_or("no block info")?;
                 let count = element_count(&self.space.program().blocks[block as usize].nodes[node as usize].out.resolve(h));
                 let tile = index / tile_len;
                 let values = tile_len.min(count.saturating_sub(tile * tile_len)) as u32;
@@ -562,7 +562,7 @@ impl Twin<'_> {
             return Ok(());
         }
         let space = self.space;
-        let program = &space.program();
+        let program = space.program();
         match r {
             Ref::Node(j) => {
                 if self.is_leaf(key, j) {
@@ -647,7 +647,7 @@ impl Twin<'_> {
     }
 
     fn operand_shape(&self, key: DemandContext, r: Ref) -> Result<Vec<usize>, String> {
-        let p = &self.space.program();
+        let p = self.space.program();
         let st = &self.ctxs[&(key.pos, key.occurrence)];
         Ok(match r {
             Ref::Node(j) => st.shapes.get(j as usize).ok_or("no such node")?.clone(),
@@ -1219,7 +1219,7 @@ impl<'a> PalwTirClosePriceV1<'a> {
     /// instance of a per-layer param, whose leaves sit elsewhere in the inventory (a proof's siblings
     /// are at most the sum of its runs'). A location-free row's pieces are a run of their own.
     pub fn params(&self, reads: &PalwTirCloseReadsV1) -> u64 {
-        let program = &self.space.program();
+        let program = self.space.program();
         // Per section — one, or a composite's two — the operands and the siblings.
         let (mut lens, mut siblings): ([Vec<u64>; 2], [u64; 2]) = ([Vec::with_capacity(reads.params.len()), Vec::new()], [0, 0]);
         let depth = |side: usize| match self.composite {
@@ -1754,7 +1754,7 @@ fn worst_closes_priced<P: ClosePriceDriver>(
     gen_stage: Option<&PalwGenTwinStageV1>,
     mut trace: Option<&mut Vec<(u8, u16, u64)>>,
 ) -> Result<(Vec<PalwTirCloseBoundV1>, u64), String> {
-    let program = &space.program();
+    let program = space.program();
     let job = space.job_shape(job_ctx).map_err(|e| e.to_string())?;
     let p_max = job.positions.checked_sub(1).ok_or("a job with no position")?;
     let c = space.layout().checkpoint_interval.max(1);
@@ -1817,7 +1817,7 @@ fn worst_closes_priced<P: ClosePriceDriver>(
                 Some(a) => priced_elements(&price, &node.out.resolve(1)[a + 1..])?.max(1),
                 None => 1,
             };
-            let h_at = |pos: u32| history_length_v1(&space.info(), bi8, pos).unwrap_or(1);
+            let h_at = |pos: u32| history_length_v1(space.info(), bi8, pos).unwrap_or(1);
             let count_at = |pos: u32| priced_elements(&price, &node.out.resolve(h_at(pos)));
             // Every tile of `pos`, `(first element, length)`: its elements are made one tile at a time.
             let tiles_at = |pos: u32| {
