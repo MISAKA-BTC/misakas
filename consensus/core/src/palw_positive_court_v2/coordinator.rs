@@ -18,6 +18,8 @@ use std::collections::BTreeMap;
 
 #[path = "coordinator_recovery.rs"]
 pub mod recovery;
+pub mod capacity;
+pub mod transport;
 
 pub const SOURCE_REQUEST_CONTEXT: &[u8] = b"misaka/positive-court/source-request/v2";
 
@@ -114,6 +116,7 @@ pub struct PositiveCoordinatorV2 {
     current: Option<(Hash64, ExactCaseV2)>,
     history: Vec<AttemptRecordV2>,
     claim: ClaimStatusV2,
+    transport: Option<transport::MaterialTransportV2>,
 }
 impl PositiveCoordinatorV2 {
     #[allow(clippy::too_many_arguments)]
@@ -207,6 +210,7 @@ impl PositiveCoordinatorV2 {
             current: None,
             history: Vec::new(),
             claim: ClaimStatusV2::Checking,
+            transport: None,
         })
     }
 
@@ -337,6 +341,7 @@ impl PositiveCoordinatorV2 {
         }
     }
     fn archive_current(&mut self) {
+        self.discard_material_buffer();
         if let Some((panel, case)) = self.current.take() {
             self.history.push(AttemptRecordV2 {
                 attempt: case.witness().attempt,
@@ -389,6 +394,7 @@ impl PositiveCoordinatorV2 {
         let (_, case) = self.current.as_mut().ok_or(ErrorV2::Order)?;
         let status = case.finish(now)?;
         self.claim = status;
+        self.discard_material_buffer();
         if self.service.meter().unique_bytes == 0 || self.service.data_complete() {
             self.service.close();
         }
@@ -403,6 +409,7 @@ impl PositiveCoordinatorV2 {
     }
     pub fn expire(&mut self, now: u64) {
         if now >= self.policy.deadline {
+            self.discard_material_buffer();
             if self.claim == ClaimStatusV2::Checking {
                 self.claim = ClaimStatusV2::EndedUnverified;
                 if let Some((_, case)) = self.current.as_mut() {
@@ -413,6 +420,7 @@ impl PositiveCoordinatorV2 {
         }
     }
     pub fn revoke(&mut self) {
+        self.discard_material_buffer();
         self.claim = ClaimStatusV2::Revoked;
         if let Some((_, case)) = self.current.as_mut() {
             case.revoke();
