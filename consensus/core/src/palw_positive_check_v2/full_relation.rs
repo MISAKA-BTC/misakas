@@ -201,6 +201,25 @@ impl FullRelationPreparation {
     pub fn plan(&self) -> &ExpandedPlan {
         &self.plan
     }
+    /// Independently authenticated Miner metadata; read-only, not native credit.
+    pub fn result(&self) -> &MinerResultCommit {
+        &self.result
+    }
+    /// Original registration metadata. The job tokenizer remains a separate field.
+    pub fn registered_class(&self) -> &PalwTirClassV1 {
+        &self.class
+    }
+    /// Exact independently resolved job; no metadata substitution or rewriting.
+    pub fn job(&self) -> &PalwJobContextV2 {
+        &self.job
+    }
+    /// Original artifact identity, not a computation-success capability.
+    pub fn artifact(&self) -> Hash64 {
+        self.artifact
+    }
+    pub fn prompt_form(&self) -> PalwPromptIdsFormV1 {
+        self.form
+    }
     /// Panel-owned additional record. Neither Miner Result nor original class,
     /// layout, step tree or trace is regenerated/resigned. Every claim is an
     /// exact original integer in i128 storage, within its ORIGINAL dtype.
