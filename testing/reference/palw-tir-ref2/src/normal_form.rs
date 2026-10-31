@@ -9,7 +9,11 @@ use crate::types::{DType, MAX_DIM, MAX_RANK, TensorType};
 use crate::typing::check_type;
 
 // Independent profile identity, derived from the normative v2 descriptor.
-const WIDE_Q24: [u8; 64] = [173, 125, 196, 251, 176, 168, 48, 25, 196, 242, 122, 213, 79, 68, 57, 93, 124, 217, 112, 15, 136, 110, 157, 108, 168, 81, 94, 227, 54, 6, 121, 234, 236, 54, 239, 135, 101, 253, 172, 79, 199, 32, 145, 203, 65, 203, 34, 250, 137, 15, 200, 39, 131, 59, 96, 171, 61, 6, 13, 148, 243, 6, 37, 203];
+const WIDE_Q24: [u8; 64] = [
+    173, 125, 196, 251, 176, 168, 48, 25, 196, 242, 122, 213, 79, 68, 57, 93, 124, 217, 112, 15, 136, 110, 157, 108, 168, 81, 94, 227,
+    54, 6, 121, 234, 236, 54, 239, 135, 101, 253, 172, 79, 199, 32, 145, 203, 65, 203, 34, 250, 137, 15, 200, 39, 131, 59, 96, 171,
+    61, 6, 13, 148, 243, 6, 37, 203,
+];
 
 const HISTORY_BOUNDS: [u32; 2] = [1 << 18, 1 << 21];
 
@@ -340,10 +344,18 @@ pub fn violations(p: &Program) -> Vec<Violation> {
     // NF-6
     if post_ok {
         match p.blocks[post].nodes.get(p.logits as usize) {
-            Some(n) if n.commit && n.out.h_count() == 0
-                && (n.out.dtype.committable() || (p.logits_scheme_id == WIDE_Q24 && n.out.dtype == DType::I64)) => {
-                    c.when(p.logits_scheme_id == WIDE_Q24 && (n.out.dtype != DType::I64 || p.logits as usize + 1 != p.blocks[post].nodes.len()), "NF-6", "wide logits must be final i64 node");
-                }
+            Some(n)
+                if n.commit
+                    && n.out.h_count() == 0
+                    && (n.out.dtype.committable() || (p.logits_scheme_id == WIDE_Q24 && n.out.dtype == DType::I64)) =>
+            {
+                c.when(
+                    p.logits_scheme_id == WIDE_Q24
+                        && (n.out.dtype != DType::I64 || p.logits as usize + 1 != p.blocks[post].nodes.len()),
+                    "NF-6",
+                    "wide logits must be final i64 node",
+                );
+            }
             _ => c.fail("NF-6", "logits is not a committed, committable, H-free node of post"),
         }
     }
@@ -352,7 +364,13 @@ pub fn violations(p: &Program) -> Vec<Violation> {
         let mut writes: BTreeMap<u16, u32> = BTreeMap::new();
         let mut appends: BTreeMap<u16, u32> = BTreeMap::new();
         for (i, n) in block.nodes.iter().enumerate() {
-            c.when(n.commit && !n.out.dtype.committable() && !(p.logits_scheme_id == WIDE_Q24 && b == post && i == p.logits as usize && n.out.dtype == DType::I64), "NF-17", format!("block {b} node {i} commits a wide dtype"));
+            c.when(
+                n.commit
+                    && !n.out.dtype.committable()
+                    && !(p.logits_scheme_id == WIDE_Q24 && b == post && i == p.logits as usize && n.out.dtype == DType::I64),
+                "NF-17",
+                format!("block {b} node {i} commits a wide dtype"),
+            );
             match n.prim {
                 Prim::TopK { .. } => c.when(!n.commit, "NF-18", "TopK not committed"),
                 Prim::StateWrite { state } => *writes.entry(state).or_default() += 1,

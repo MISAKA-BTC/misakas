@@ -233,7 +233,11 @@ pub fn materialise_stream(
                     done.insert(key);
                 }
                 if hbk == hl.post {
-                    super::check_logits_range(hl, &ctx, lw.program.blocks[lw.program.schedule.post as usize].nodes[lw.program.logits as usize].out.dtype)?;
+                    super::check_logits_range(
+                        hl,
+                        &ctx,
+                        lw.program.blocks[lw.program.schedule.post as usize].nodes[lw.program.logits as usize].out.dtype,
+                    )?;
                     logits_scale = Some(ctx.scale(&lw.logits_key)?);
                 }
                 Ok(())
