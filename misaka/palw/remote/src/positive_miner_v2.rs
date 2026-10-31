@@ -400,6 +400,12 @@ impl<D: CanonicalDataDutyV2> MinerResponderV2<'_, D> {
                     self.meter.unique_source_bytes += data_bytes;
                     Some((key, data_bytes))
                 } else {
+                    // Even protected history must agree with this exact data
+                    // identity before an old preparation can discount a retry.
+                    if self.prepared.get(&key) != Some(&data_bytes) {
+                        self.poisoned = true;
+                        return Err(MinerErrorV2::Journal("prepared unit size differs from authenticated source data".into()));
+                    }
                     None
                 };
                 self.meter.prepared_bytes += wire_bytes;
