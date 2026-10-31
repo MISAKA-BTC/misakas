@@ -10,9 +10,9 @@ native の信用認証と資金受付は、未接続の間は必ず拒否する�
 | ファイル | 内容 |
 | --- | --- |
 | `src/credit.rs` | 現viewに対する共通信用判定、全祖先の走査、循環・別branch・別result・不完全coverageの拒否 |
-| `src/credit/consumers.rs` | 推論報酬・receipt・DAG weight・Rule E・決済・prefix・依存の全7用途の同一gate入口 |
+| `src/credit/consumers.rs` | 一次発行・worker支払・receipt・DAG weight・Rule E・決済・prefix・依存の全8用途の同一gate入口 |
 | `src/fees.rs` | 有限なprivate会計参照実装。実原資を模した明示的初期残高、hold、適格サービスの一回精算、返金、契約burn、原子的受付とrollback |
-| `src/credit/tests.rs` | 全7用途の共通必要条件と用途別既存権利、未検証祖先、独立claim、diamond、循環、binding差替え、上限 |
+| `src/credit/tests.rs` | 全8用途の共通必要条件と用途別既存権利、未検証祖先、独立claim、diamond、循環、binding差替え、上限 |
 | `src/fees/tests.rs` | 支払・返金の重複、Panel交代、未検証終了、失敗の原子性、rollback、古い準備・別storeのtoken拒否 |
 | `tests/` | 独立到達/循環oracle・独立算術oracle・consumer用途転送の全列挙試験 |
 | `../positive-accounting-node/` | 実A1terminalを所有するviewと、実Transactionを既存escrow engineへ渡すnode adapter |
@@ -42,6 +42,10 @@ scopeはclaim別の固定ancestry anchorとして `validate_scope` で検証し�
 PositivePassed・全coverage・P承認・資金Readyは既存権利の追加必要条件であり、新しい権利を作らない。
 Kernel/Native39のposter-funded paid FinalがB/F/R=0なら、Positive/PだけでDagWeight・WorkReceipt・Rule Eを与えない。
 Settlementの許可を他用途へ転用しない。私設fixtureのAll/用途集合は明示的な試験入力であり、native resolverではない。
+`Reward` / `inference_reward` は既存primary issuance・coinbase・model/PWU専用である。
+poster-funded worker成功支払は末尾追加のpure用途 `WorkerPayment` / `worker_payment` を使う。
+WorkerPaymentやSettlementの許可をRewardへ転用せず、native最終consumerもpurposeを現在viewで確認する。
+CreditUseにserialization/wire/domainは追加していない。
 
 公開DTOの `PositivePassed`、任意のGate C boolean、旧claim IDの認証rowだけでは許可しない。
 Gate Cの正直な割合の前提は既存規則のまま維持する。モデルの階層・登録モデルの審査をこの判定へ加えない。
@@ -53,7 +57,7 @@ node crateの `TirCreditView` は実A1terminal・署名済み新result・A0 cano
 
 A0 `327393e8e` のaux151 valueとcore `PositiveRowsV2::read/bundle`を使う `PositiveCreditRows` も接続した。
 実stateのrow欠落、malformed value/key、cross-row link、Miner/payer/Witness署名の失敗を区別し、
-成功時も `SignedCreditInputs` というdata-only結果に留める。`NativeRowCreditGate` は同じ境界を全7用途で読み、
+成功時も `SignedCreditInputs` というdata-only結果に留める。`NativeRowCreditGate` は同じ境界を全8用途で読み、
 後述の8 native ownerが未実装のため認可型は `Infallible` のまま拒否する。旧S/K/Vの認証へfallbackしない。
 必要ownerはaccepted origin、accepted prefix/import世代、登録期待値、local replay、live funding/capital、
 依存/export、現在Court/資源、実P draw Certifiedである。
@@ -76,6 +80,11 @@ new admissionのprepare/commit・authority・expiry再評価をせず、資金/�
 - `closed_case`: sourceの残義務・料金を含めて終了可能であること。Positive完了だけで未応答source義務を消さない。
 
 未実装の既定methodは拒否する。`UnassignedAccountingAuthority` のnative受付に成功経路はない。
+
+既提供sourceサービス料と安全な返金は計算信用gateの対象外であり、既存のactual receipt・liability・資金・一回精算条件で処理する。
+P未成立だけを理由に、成立済みsource料金や返還可能な残額を永久lockしない。
+一方、EndedUnverifiedやP欠落だけで未解決liabilityを解放しない。実closure・未払due/予約の保全・現在fundingを確認する。
+WorkerPaymentは契約上の成功支払であり、source料金・安全返金へこの用途の認可を要求しない。
 private初期残高は明示的なテスト/統合入力であり、UTXO検査やpayer署名の代わりではない。
 
 受付は読取専用prepare後に、残高debit・case・資源hold・undoを一体で確定する。
@@ -116,8 +125,9 @@ namespace・固定row value・data-only typed readerはA0で確定済みだが�
 
 | consumer | 既存入口（repo相対） | `CreditUse` | 新Positiveの接続 |
 | --- | --- | --- | --- |
-| legacy発行・worker/user成功報酬・coinbase/model/PWU | `consensus/core/src/palw_state_v2/transition_builder.rs`、`palw_security_certification_fold_v1.rs`、`palw_state_v2.rs` | Reward | 未接続 |
-| kernel escrow成功報酬・held reward release | `consensus/core/src/palw_security_certification_fold_v1.rs`、`palw_kernel_route_fold_v1.rs` | Reward | 未接続 |
+| legacy一次発行・coinbase/model/PWU | `consensus/core/src/palw_state_v2/transition_builder.rs`、`palw_security_certification_fold_v1.rs`、`palw_state_v2.rs` | Reward | 未接続 |
+| poster-funded worker/user成功支払 | 同上のactual paid契約・成功escrow | WorkerPayment | 未接続 |
+| kernel escrow成功報酬・held reward release | `consensus/core/src/palw_security_certification_fold_v1.rs`、`palw_kernel_route_fold_v1.rs` | actual originでReward/WorkerPaymentを厳密に区別 | 未接続 |
 | native mining reward/receipt生成 | `consensus/core/src/palw_native_mining_fold_v39.rs` | Reward / WorkReceipt | 未接続 |
 | receipt mint/spend・carrier資格 | `consensus/core/src/palw_rfc0018_v1.rs`、`palw_native_receipt_v39.rs` | WorkReceipt | 未接続 |
 | safe/live/provisional weight、復算・retire・取消 | `consensus/core/src/palw_rfc0018_v1.rs`、`palw_weight_cap_v1.rs`、`palw_state_v2/chain_state.rs`、`palw_state_v2/transition_builder.rs` | DagWeight | 未接続 |

@@ -26,6 +26,8 @@ fn each_consumer_forwards_the_same_claim_and_its_own_credit_use_on_every_read() 
         let expected = |usage| if allow { Ok(usage) } else { Err(usage) };
         assert_eq!(consumers.inference_reward(&51), expected(CreditUse::Reward));
         assert_eq!(gate.last.get(), Some((51, CreditUse::Reward)));
+        assert_eq!(consumers.worker_payment(&58), expected(CreditUse::WorkerPayment));
+        assert_eq!(gate.last.get(), Some((58, CreditUse::WorkerPayment)));
         assert_eq!(consumers.work_receipt(&52), expected(CreditUse::WorkReceipt));
         assert_eq!(gate.last.get(), Some((52, CreditUse::WorkReceipt)));
         assert_eq!(consumers.dag_weight(&53, u128::MAX), if allow { u128::MAX } else { 0 });

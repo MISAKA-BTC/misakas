@@ -57,7 +57,7 @@ A1 `50473e607` のauthor-authenticated packet wrapperも採用し、実terminal�
 
 ## A5側の実装接続口
 
-- leaf `PositiveCreditGate<RootedCreditView>` と全7用途の `CreditConsumers`。
+- leaf `PositiveCreditGate<RootedCreditView>` と全8用途の `CreditConsumers`。Rewardは一次発行、WorkerPaymentは既存worker成功支払へ分離。
 - node `TirCreditView` は実A1 `CheckedTerminal` と認証済み新resultだけを保持し、A0 canonical planを照合。
 - leaf `FeeSettlementProjection` はprivate fieldsを持ち、現在のbook世代・同じchecked transitionからのみ生成。
 - node `check_existing_escrow_fee_spend` は実Transactionを既存 `palw_escrow_qualified_spend_v1` に渡す。
@@ -67,7 +67,7 @@ A1 `50473e607` のauthor-authenticated packet wrapperも採用し、実terminal�
   workspace/lockfileはA0 `1eecf492a` / `6aeb4c42c` で登録済み。元の登録patchは提案履歴として保持する。
 - `rows::PositiveCreditRows` はactual core `PositiveRowsV2::read/bundle` と共通Witness/Coverage validatorを使用する。
   missing/malformed/link/authを分離し、成功しても `SignedCreditInputs` というdata-only結果に留める。
-  `NativeRowCreditGate` は全7用途で同じread failure、または8 native ownerのtyped missingを返す。
+  `NativeRowCreditGate` は全8用途で同じread failure、または8 native ownerのtyped missingを返す。
   原ログとsource hashは [phase4検証記録](../../misaka/palw/positive-accounting/evidence/phase4-native-rows/README.md) を参照する。
 
 ## 全native readerの具体的な未完了条件
@@ -82,7 +82,8 @@ privatefixtureのAll/集合はnative権利resolverではない。反例・実A1�
 
 | 用途 | 入口 | 未完了条件 |
 | --- | --- | --- |
-| 発行/coinbase/model/PWU/worker-user成功報酬 | `palw_state_v2.rs`, `palw_state_v2/transition_builder.rs`, `palw_security_certification_fold_v1.rs` | 新result binding・全coverage・Gate C等の同一gateを、Final/held rewardの**支払前**に読む |
+| 発行/coinbase/model/PWU | `palw_state_v2.rs`, `palw_state_v2/transition_builder.rs`, `palw_security_certification_fold_v1.rs` | 同一Positive gate AND既存Reward entitlementを一次発行前に読む |
+| worker/user成功支払 | actual paid契約・成功escrow | 専用WorkerPayment entitlementを使用。Rewardへ転用せず、source既提供料/安全返金は別actualmoney条件で処理 |
 | kernel escrow成功報酬 | `palw_kernel_route_fold_v1.rs`, `palw_security_certification_fold_v1.rs` | 新Positive claimと既存kernel claimの対応・原資/一回精算をnative rowで固定 |
 | native reward/receipt mint-spend | `palw_native_mining_fold_v39.rs`, `palw_native_receipt_v39.rs`, `palw_rfc0018_v1.rs` | 新形式のcertificationを読んでmint/spendを再認可。carrier自己資格化を拒否 |
 | safe/live/provisional weight・復算/retire/取消 | `palw_rfc0018_v1.rs`, `palw_weight_cap_v1.rs`, `palw_state_v2/chain_state.rs`, `palw_state_v2/transition_builder.rs` | 未完了・取消し・祖先holdを加算/復算/取消しの全箇所で同じ数値へ反映 |

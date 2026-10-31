@@ -184,15 +184,27 @@ fn a_positive_ready_view_without_an_entitlement_implementation_denies_every_use(
 }
 
 #[test]
-fn one_existing_use_never_implies_any_of_the_other_six_rights() {
-    for granted in ALL_CREDIT_USES {
+fn one_existing_use_never_implies_any_of_the_other_seven_rights() {
+    let uses = [
+        CreditUse::Reward,
+        CreditUse::WorkReceipt,
+        CreditUse::DagWeight,
+        CreditUse::RuleE,
+        CreditUse::Settlement,
+        CreditUse::PrefixReuse,
+        CreditUse::Dependency,
+        CreditUse::WorkerPayment,
+    ];
+    assert_eq!(ALL_CREDIT_USES.len(), uses.len());
+    assert!(uses.iter().all(|usage| ALL_CREDIT_USES.contains(usage)));
+    for granted in uses {
         let view = GraphView {
             ready: 7,
             parents: [vec![], vec![], vec![]],
             entitlements: PrivateEntitlements::Only(vec![(binding(0), granted)]),
         };
         let gate = PositiveCreditGate::new(&view, limits()).unwrap();
-        for requested in ALL_CREDIT_USES {
+        for requested in uses {
             let result = gate.authorize(&claim(0), requested);
             if requested == granted {
                 assert_eq!(result.unwrap().usage(), requested);
@@ -201,6 +213,38 @@ fn one_existing_use_never_implies_any_of_the_other_six_rights() {
             }
         }
     }
+}
+
+#[test]
+fn paid_worker_payment_and_contract_settlement_cannot_authorize_primary_reward_or_work_credit() {
+    // Explicit private rights for a paid-only case. They authorize contractual
+    // payment/settlement, not primary issuance or B/F/R economic work credit.
+    let view = GraphView {
+        ready: 7,
+        parents: [vec![], vec![], vec![]],
+        entitlements: PrivateEntitlements::Only(vec![(binding(0), CreditUse::WorkerPayment), (binding(0), CreditUse::Settlement)]),
+    };
+    let gate = PositiveCreditGate::new(&view, limits()).unwrap();
+    for usage in ALL_CREDIT_USES {
+        assert_eq!(
+            gate.authorize(&claim(0), usage).is_ok(),
+            matches!(usage, CreditUse::WorkerPayment | CreditUse::Settlement),
+            "requested={usage:?}"
+        );
+    }
+    let consumers = misaka_palw_positive_accounting::credit::consumers::CreditConsumers::new(&gate);
+    assert_eq!(consumers.worker_payment(&claim(0)).unwrap().usage(), CreditUse::WorkerPayment);
+    assert_eq!(consumers.settlement(&claim(0)).unwrap().usage(), CreditUse::Settlement);
+    assert_eq!(
+        consumers.inference_reward(&claim(0)).err(),
+        Some(CreditDenial::Entitlement { claim: claim(0), usage: CreditUse::Reward })
+    );
+    assert_eq!(consumers.dag_weight(&claim(0), u128::MAX), 0);
+    assert_eq!(consumers.rule_e_capital(&claim(0), u128::MAX), 0);
+    assert_eq!(
+        consumers.work_receipt(&claim(0)).err(),
+        Some(CreditDenial::Entitlement { claim: claim(0), usage: CreditUse::WorkReceipt })
+    );
 }
 
 #[test]
