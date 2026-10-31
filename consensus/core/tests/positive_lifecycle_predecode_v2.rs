@@ -98,7 +98,7 @@ fn positive_payload_never_binds_unrelated_sinks_or_registration() {
         ),
     ] {
         let carrier = tx(payload(&huge), vec![TransactionOutput::new(1, sink), TransactionOutput::new(1, payee.clone())]);
-        assert_eq!(check(&carrier), Some((0, expected)));
+        assert_eq!(check(&carrier), Some((0usize, expected)));
         assert!(kaspa_consensus_core::palw_model_registration_v1::palw_registration_carrier_object_v1(&carrier).is_none());
         assert!(kaspa_consensus_core::palw_state_v2::palw_model_carrier_payout_rows_v1(&carrier).is_none());
     }
