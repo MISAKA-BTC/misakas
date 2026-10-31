@@ -4,6 +4,10 @@
 [RFC-0042](../../../rfc/0042-all-model-g14-panel-one.md) / [ADR-0210](../../../adr/0210-all-model-g14-panel-one.md)。
 
 
+## 将来 DAA 18,850 の保持 clock 修正
+
+[原因・新旧 identity・試験結果・未完事項](retention-18850.md)。新 core 9/9（config 4 件を含む）、既存 route 9/9、identity 1/1、node 3/3 が成功。新境界での実 claim 受理・panel=1・Final と新配布 SHA は pending。
+
 ## 18,660再停止の修正（2026-10-31 UTC / 11月1日 JST）
 
 公開95のPALW pruning snapshotは46分24秒の再構成後に自然完了し、

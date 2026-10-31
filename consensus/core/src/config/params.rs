@@ -2467,6 +2467,10 @@ pub struct Params {
     pub palw_kernel_route_panel_one_v1: Option<ForkActivation>,
     /// All-model G14 single-seat migration; original claim acceptance selects its route.
     pub palw_model_panel_one_v1: Option<ForkActivation>,
+    /// New ModelOne Attempt claims retain the protocol-derived full obligation
+    /// from their original acceptance. Signed header pins/lotteries are unchanged.
+    /// None preserves every historical claim and network; future activation only.
+    pub palw_model_panel_one_retention_v1: Option<ForkActivation>,
     /// **G14 U06/U07 court clock v2 (DORMANT, lane g14p/court-clock; RFC-0026 §2-3, RFC-0014 2026-10-19 §B/§D, ADR-0198 A).** A claim
     /// whose ORIGINAL acceptance is at/after this height has every court clock derived from that acceptance (`a + 3,120` normal,
     /// `a + 10,000` once disputed — one rooted extension); older claims keep the old clock (T15). `None` on every shipped preset;
@@ -5136,6 +5140,40 @@ impl Params {
         self.palw_model_panel_one_v1.filter(|f| *f != ForkActivation::never())
     }
 
+    pub fn palw_model_panel_one_retention_v1_fence(&self) -> Option<ForkActivation> {
+        self.palw_model_panel_one_retention_v1.filter(|f| *f != ForkActivation::never())
+    }
+
+    pub fn validate_palw_model_panel_one_retention_v1(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
+        use crate::palw_mode_v2::{PalwConsensusMode, PalwModeV2Error};
+        let Some(at) = self.palw_model_panel_one_retention_v1_fence() else {
+            if let PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode
+                && bundle.state.model_panel_one_retention_v1_from_daa().is_some()
+            {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_model_panel_one_retention_v1 is absent but its ConsensusV2 mirror is armed",
+                ));
+            }
+            return Ok(());
+        };
+        let dependencies = [
+            self.palw_model_panel_one_v1_fence(),
+            self.palw_court_capacity_v1.map(|f| f.activation),
+            self.palw_independently_work_certified_v1,
+        ];
+        if dependencies.iter().any(|f| f.is_none_or(|f| f == ForkActivation::never() || f.daa_score() > at.daa_score())) {
+            return Err(PalwModeV2Error::Invalid(
+                "palw_model_panel_one_retention_v1 requires ModelOne, court capacity and Gate C at or before its activation",
+            ));
+        }
+        match &self.palw_consensus_mode {
+            PalwConsensusMode::ConsensusV2(bundle) if bundle.state.model_panel_one_retention_v1_from_daa() == Some(at.daa_score()) => {
+                Ok(())
+            }
+            _ => Err(PalwModeV2Error::Invalid("palw_model_panel_one_retention_v1 requires its synchronized ConsensusV2 mirror")),
+        }
+    }
+
     pub fn palw_kernel_route_panel_one_v1_fence(&self) -> Option<ForkActivation> {
         self.palw_kernel_route_panel_one_v1.filter(|f| *f != ForkActivation::never())
     }
@@ -6222,6 +6260,7 @@ impl Params {
             palw_state_row_map_v1: self.palw_state_row_map_v1,
             palw_kernel_route_panel_one_v1: self.palw_kernel_route_panel_one_v1,
             palw_model_panel_one_v1: self.palw_model_panel_one_v1,
+            palw_model_panel_one_retention_v1: self.palw_model_panel_one_retention_v1,
             palw_court_clock_v2: self.palw_court_clock_v2,
             palw_panel_da_disclosure_v1: self.palw_panel_da_disclosure_v1,
             palw_staged_float_constraint_v1: self.palw_staged_float_constraint_v1,
@@ -7406,6 +7445,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_state_row_map_v1: None,
     palw_kernel_route_panel_one_v1: None,
     palw_model_panel_one_v1: None,
+    palw_model_panel_one_retention_v1: None,
     palw_court_clock_v2: None,
     palw_panel_da_disclosure_v1: None,
     palw_staged_float_constraint_v1: None,
@@ -7782,6 +7822,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_state_row_map_v1: None,
     palw_kernel_route_panel_one_v1: None,
     palw_model_panel_one_v1: None,
+    palw_model_panel_one_retention_v1: None,
     palw_court_clock_v2: None,
     palw_panel_da_disclosure_v1: None,
     palw_staged_float_constraint_v1: None,
@@ -8140,6 +8181,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_state_row_map_v1: None,
     palw_kernel_route_panel_one_v1: None,
     palw_model_panel_one_v1: None,
+    palw_model_panel_one_retention_v1: None,
     palw_court_clock_v2: None,
     palw_panel_da_disclosure_v1: None,
     palw_staged_float_constraint_v1: None,
@@ -10997,12 +11039,15 @@ pub fn palw_t12_shipped_params() -> Params {
 /// All-model producer migration, separately scheduled after the kernel slice.
 /// This height does not reinterpret claims accepted under the DAA-18,400 rules.
 pub const PALW_T12_MODEL_PANEL_ONE_FENCE_DAA_V1: u64 = 18_640;
+/// Separate future obligation rule: never reinterpret the old 18,400 activation.
+pub const PALW_T12_MODEL_PANEL_ONE_RETENTION_FENCE_DAA_V1: u64 = 18_850;
 
 /// The live DAA-18,400 ruleset before the all-model migration, for historical
 /// replay identities and fixtures that deliberately disarm its prerequisites.
 pub fn palw_t12_pre_model_panel_one_params_v1() -> Params {
     let mut params = palw_t12_shipped_params();
     params.palw_model_panel_one_v1 = None;
+    params.palw_model_panel_one_retention_v1 = None;
     params.sync_palw_g14_gates_v1();
     params
 }
@@ -12213,6 +12258,7 @@ fn palw_t12_params_with_registry_v1(
     full_activation_v1::palw_t12_arm_full_activation_v1(&mut params);
     // RFC-0042 / ADR-0210: the all-model route is a separate future fork.
     params.palw_model_panel_one_v1 = Some(ForkActivation::new(PALW_T12_MODEL_PANEL_ONE_FENCE_DAA_V1));
+    params.palw_model_panel_one_retention_v1 = Some(ForkActivation::new(PALW_T12_MODEL_PANEL_ONE_RETENTION_FENCE_DAA_V1));
     params.sync_palw_g14_gates_v1();
     // **`palw_rc_arm_phase1` is NOT called here, and that is deliberate.** Its whole body is
     // "arm this if the preset left it dormant", and `palw_t12_arm_every_rule_from_genesis` has
@@ -13721,6 +13767,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_state_row_map_v1: None,
     palw_kernel_route_panel_one_v1: None,
     palw_model_panel_one_v1: None,
+    palw_model_panel_one_retention_v1: None,
     palw_court_clock_v2: None,
     palw_panel_da_disclosure_v1: None,
     palw_staged_float_constraint_v1: None,
@@ -13919,6 +13966,9 @@ pub const DEVNET_PARAMS: Params = Params {
 
 #[cfg(test)]
 mod consensus_params_id_tests;
+
+#[cfg(test)]
+mod model_panel_one_retention_config_tests;
 
 #[cfg(test)]
 mod fingerprint_probe {

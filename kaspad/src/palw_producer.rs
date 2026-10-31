@@ -260,6 +260,48 @@ pub(crate) fn parse_outpoint(s: &str) -> Result<TransactionOutpoint, String> {
     Ok(TransactionOutpoint::new(transaction_id, index))
 }
 
+/// A new-fence rider inherits the accepted lead's actual obligation, before
+/// spending inference. A submitted block alone is not an accepted lead.
+fn accepted_rider_retention_v1(
+    lead: Option<&kaspa_consensus_core::palw_state_v2::PalwClaimStateV2>,
+    now: u64,
+    class: Hash64,
+    executor: TransactionOutpoint,
+) -> Result<u64, &'static str> {
+    use kaspa_consensus_core::palw_state_v2::{PalwClaimPhaseV2, PalwClaimSourceV2};
+    let lead = lead.ok_or("rider waits for its lead's actual chain acceptance")?;
+    if !matches!(lead.source, PalwClaimSourceV2::Attempt)
+        || !matches!(lead.phase, PalwClaimPhaseV2::Provisional)
+        || lead.class_id != class
+        || lead.bond.0 != executor
+    {
+        return Err("rider lead is not this executor's provisional attempt of this class");
+    }
+    if now < lead.accepted_daa
+        || now > lead.accepted_daa.saturating_add(kaspa_consensus_core::palw_capacity_s567_v1::PALW_RIDERS_WINDOW_DAA_V1)
+    {
+        return Err("rider lead's accepted attachment window is not open");
+    }
+    Ok(lead.trace_retention_daa)
+}
+
+/// Local BASE submission cadence. The consensus floor admission and anchor
+/// rules remain authoritative; this only avoids rapid successful submissions.
+fn floor_submission_wait_v1(
+    base: bool,
+    g14: bool,
+    target_ms: u64,
+    last: Option<std::time::Instant>,
+    now: std::time::Instant,
+) -> std::time::Duration {
+    if !base || !g14 {
+        return std::time::Duration::ZERO;
+    }
+    last.map_or(std::time::Duration::ZERO, |last| {
+        std::time::Duration::from_millis(target_ms).saturating_sub(now.saturating_duration_since(last))
+    })
+}
+
 /// The extension a retained capture is stored under. Named once, because two files write it and
 /// three read it.
 pub(crate) const PALW_RETAINED_MATERIAL_SUFFIX: &str = ".material";
@@ -1031,6 +1073,7 @@ impl PalwProducerService {
         let mut debt_gate = crate::palw_producer_backpressure::PalwProducerDebtGateV1::default();
         let mut debt = crate::palw_producer_backpressure::PalwProducerDebtV1::default();
         let mut debt_read_at: Option<std::time::Instant> = None;
+        let mut last_floor_submission: Option<std::time::Instant> = None;
         loop {
             if !self.tick(std::time::Duration::from_millis(200)).await {
                 break;
@@ -1352,6 +1395,27 @@ impl PalwProducerService {
                     continue;
                 }
             }
+            let model_one = match &self.consensus_config.params.palw_consensus_mode {
+                kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => {
+                    bundle.state.model_panel_one_governs_v1(facts.daa_score)
+                }
+                _ => false,
+            };
+            let floor_wait = floor_submission_wait_v1(
+                facts.is_base_class,
+                model_one,
+                self.consensus_config.params.target_time_per_block(),
+                last_floor_submission,
+                std::time::Instant::now(),
+            );
+            if !floor_wait.is_zero() {
+                self.flow_context.update_palw_runtime(|r| {
+                    r.set_producer("holding", &format!("G14 BASE cadence: next attempt submission in {} ms", floor_wait.as_millis()))
+                });
+                // The regular 200 ms tick and the earlier receipt lane keep
+                // running. Panel, court and data services have their own loops.
+                continue;
+            }
             // Cleared so the next hold, whatever it is, prints immediately rather than being
             // suppressed as a repeat of one the node has since recovered from.
             last_hold = None;
@@ -1366,6 +1430,9 @@ impl PalwProducerService {
             });
             match outcome {
                 Ok(Some((hash, claim))) => {
+                    if facts.is_base_class && model_one {
+                        last_floor_submission = Some(std::time::Instant::now());
+                    }
                     draws += 1;
                     produced += 1;
                     if facts.bond_class_share.is_some() {
@@ -1380,7 +1447,6 @@ impl PalwProducerService {
                         && self.consensus_config.params.palw_capacity_riders_active_at_v1(facts.daa_score)
                         && !self.exiting()
                     {
-                        let retention = self.last_lead_retention.load(std::sync::atomic::Ordering::Relaxed);
                         let mut built = match crate::palw_rider_outbox::RiderBatchV2::new(claim, self.config.riders as usize) {
                             Ok(batch) => batch,
                             Err(why) => {
@@ -1392,13 +1458,40 @@ impl PalwProducerService {
                             if self.exiting() {
                                 break;
                             }
+                            let rider_session = self.consensus_manager.consensus().unguarded_session();
+                            let now = rider_session.get_virtual_daa_score();
+                            let accepted_clock = matches!(
+                                &self.consensus_config.params.palw_consensus_mode,
+                                kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle)
+                                    if bundle.state.model_panel_one_retention_active_at(now)
+                            );
+                            let retention = if accepted_clock {
+                                if !self.flow_context.is_consensus_participation_allowed()
+                                    || rider_session.async_is_consensus_in_transitional_ibd_state().await
+                                {
+                                    break;
+                                }
+                                let lead = rider_session.palw_derived_artifacts_v1(claim);
+                                match accepted_rider_retention_v1(lead.as_ref().map(|(state, _, _)| state), now, facts.class_id, bond)
+                                {
+                                    Ok(retention) => retention,
+                                    Err(why) => {
+                                        info!(
+                                            "[{PALW_PRODUCER}] rider {index} of {claim} SKIPPED before inference (no queued retry): {why}"
+                                        );
+                                        break;
+                                    }
+                                }
+                            } else {
+                                self.last_lead_retention.load(std::sync::atomic::Ordering::Relaxed)
+                            };
                             // **Lane PA, C-F2**: a rider's pwu is what the fold derives at ITS share of the lead's subsidy for a batch of
                             // `self.config.riders` — not the lead's `facts.pwu`, which a model class whose floor at the share prices it
                             // otherwise has refused `PwuClaimNotDerived` (the batch never landed).
                             let rider_facts = rider_facts_v1(&facts, self.config.riders as usize);
                             if let Err(e) = self
                                 .produce_one(
-                                    &session,
+                                    if accepted_clock { &rider_session } else { &session },
                                     &rider_facts,
                                     network_domain,
                                     bond,
@@ -2947,6 +3040,90 @@ mod retention_tests {
         assert!(retained_capture_prune_due_v1(Some(old), None, hour));
         assert!(retained_capture_prune_due_v1(None, None, hour));
         assert!(retained_capture_prune_due_v1(None, Some((&S::Attempt, &P::Provisional)), hour));
+    }
+}
+
+#[cfg(test)]
+mod accepted_rider_tests {
+    use super::*;
+    use kaspa_consensus_core::palw_state_v2::{PalwClaimPhaseV2, PalwClaimSourceV2};
+
+    #[test]
+    fn g14_floor_submission_cadence_uses_exact_network_millisecond_boundary() {
+        use std::time::{Duration, Instant};
+        let target = kaspa_consensus_core::config::params::palw_t12_shipped_params().target_time_per_block();
+        assert_eq!(target, 120_000);
+        let at = Instant::now();
+        let wait = |base, g14, last, now| floor_submission_wait_v1(base, g14, target, last, now);
+        assert_eq!(wait(true, true, None, at), Duration::ZERO, "the first legal anchor is immediate");
+        assert_eq!(wait(true, true, Some(at), at), Duration::from_millis(target));
+        assert_eq!(wait(true, true, Some(at), at + Duration::from_millis(target - 1)), Duration::from_millis(1));
+        assert_eq!(wait(true, true, Some(at), at + Duration::from_millis(target)), Duration::ZERO);
+        assert_eq!(wait(true, true, Some(at), at + Duration::from_millis(target + 1)), Duration::ZERO);
+        assert_eq!(wait(false, true, Some(at), at), Duration::ZERO, "model computation has no BASE cooldown");
+        assert_eq!(wait(true, false, Some(at), at), Duration::ZERO, "historical production is unchanged");
+    }
+
+    #[test]
+    fn accepted_rider_inherits_stored_obligation_only_inside_exact_window() {
+        use borsh::BorshDeserialize;
+        let mut lead = kaspa_consensus_core::palw_state_v2::PalwClaimStateV2::deserialize(&mut &[0u8; 8192][..]).unwrap();
+        lead.source = PalwClaimSourceV2::Attempt;
+        lead.phase = PalwClaimPhaseV2::Provisional;
+        lead.accepted_daa = 107;
+        lead.trace_retention_daa = 20608;
+        let class = lead.class_id;
+        let executor = lead.bond.0;
+        assert!(accepted_rider_retention_v1(None, 107, class, executor).is_err(), "no precomputation against unaccepted lead");
+        assert!(accepted_rider_retention_v1(Some(&lead), 106, class, executor).is_err());
+        assert_eq!(accepted_rider_retention_v1(Some(&lead), 107, class, executor), Ok(20608));
+        let last = 107 + kaspa_consensus_core::palw_capacity_s567_v1::PALW_RIDERS_WINDOW_DAA_V1;
+        assert_eq!(accepted_rider_retention_v1(Some(&lead), last, class, executor), Ok(20608));
+        assert!(accepted_rider_retention_v1(Some(&lead), last + 1, class, executor).is_err());
+        assert!(accepted_rider_retention_v1(Some(&lead), 107, Hash64::from_u64_word(99), executor).is_err());
+        lead.phase = PalwClaimPhaseV2::PanelBound { bound_daa: 108 };
+        assert!(accepted_rider_retention_v1(Some(&lead), 108, class, executor).is_err());
+        lead.phase = PalwClaimPhaseV2::Provisional;
+        lead.source = PalwClaimSourceV2::FreePrompt { quanta: 1, spent: Default::default() };
+        assert!(accepted_rider_retention_v1(Some(&lead), 108, class, executor).is_err());
+    }
+
+    #[test]
+    fn accepted_effective_obligation_pins_old_own_and_foreign_material() {
+        use crate::palw_retention::{RetainedChainViewV1, RetainedClaimV1, RetainedKindV1, retention_prune_plan_v1};
+        use borsh::BorshDeserialize;
+        let mut claim = kaspa_consensus_core::palw_state_v2::PalwClaimStateV2::deserialize(&mut &[0u8; 8192][..]).unwrap();
+        claim.source = PalwClaimSourceV2::Attempt;
+        claim.phase = PalwClaimPhaseV2::Final { final_daa: 200 };
+        claim.trace_retention_daa = 20_608;
+        let files: Vec<_> = [RetainedKindV1::Attempt, RetainedKindV1::Foreign]
+            .into_iter()
+            .map(|kind| RetainedClaimV1 {
+                claim: Hash64::from_u64_word(1),
+                paths: vec![],
+                bytes: 100,
+                age: Some(std::time::Duration::MAX),
+                kind,
+            })
+            .collect();
+        let plan = |now| {
+            retention_prune_plan_v1(
+                &files,
+                |_| {
+                    Some(RetainedChainViewV1 {
+                        source: claim.source.clone(),
+                        phase: claim.phase.clone(),
+                        da_owed: kaspa_consensus_core::palw_da_rcore_v1::palw_da_material_owed_v1(&claim, now),
+                    })
+                },
+                std::time::Duration::from_secs(60),
+                0,
+                200,
+            )
+        };
+        assert_eq!(plan(20_605), (vec![], 200), "raw header deadline 20604 cannot discharge accepted obligation");
+        assert_eq!(plan(20_608), (vec![], 200));
+        assert_eq!(plan(20_609), (vec![0, 1], 0));
     }
 }
 

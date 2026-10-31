@@ -296,6 +296,7 @@ impl Params {
         // **Lane g14p/kernel-route U02** (`crate::palw_kernel_route_arming_v1`): the Panel=1 seat policy's ordering and mirror.
         self.validate_palw_kernel_route_panel_one_v1()?;
         self.validate_palw_model_panel_one_v1()?;
+        self.validate_palw_model_panel_one_retention_v1()?;
         self.validate_palw_legacy_held_da_v2_in(records)?;
         // **ADR-0176 / ADR-0177's dormant fences** (`crate::palw_bond_budget_v1`): refused when armed.
         self.validate_palw_bond_budget_v1()?;

@@ -2059,6 +2059,11 @@ pub struct PalwStateParamsV2 {
     /// Claim-local all-model migration, mirrored from its separate fork identity.
     #[borsh(skip)]
     model_panel_one_from_daa: Option<u64>,
+    /// Separately activated acceptance-clock obligation. The signed Attempt
+    /// deadline retains its header-clock pin; only new claims acquire the
+    /// protocol-derived holding obligation at their original acceptance.
+    #[borsh(skip)]
+    model_panel_one_retention_v1_from_daa: Option<u64>,
     /// **Lane F03k2: a TEST-ONLY external gain bound** for the Panel=1 class censorship relation. Fixtures only; `None` everywhere else,
     /// so the fold falls back to `palw_g14_values_v1` (typed-missing today).
     #[borsh(skip)]
@@ -22214,10 +22219,17 @@ fn apply_attempt(
     builder.check_class_admits_claim(&attempt.class_id, ctx.daa_score, PalwGatedClaimV1::Attempt)?;
     // **Lane g14-court-capacity-r2 (`palw_court_capacity_v1`, dormant): bounded admission of court-demanding claims** — a
     // fused-attention V2 Attempt is taken only while its hard-deadline bucket has room on the reserve slots. `Ok` below the fence.
-    builder.check_attempt_court_admission_native_v2(
+    let effective_trace_retention_daa = crate::palw_model_panel_one_v1::model_panel_one_effective_attempt_retention_v1(
+        &builder.state,
+        builder.params,
         &attempt.class_id,
         ctx.daa_score,
         attempt.trace_retention_daa,
+    );
+    builder.check_attempt_court_admission_native_v2(
+        &attempt.class_id,
+        ctx.daa_score,
+        effective_trace_retention_daa,
         builder.extras.model_registry.as_ref().map_or(0, |fold| fold.span_daa),
     )?;
     // **RFC-0002 Part II Proposal A (`palw_class_seating`): and the class is seated for this executor** — one function, the
@@ -22296,7 +22308,7 @@ fn apply_attempt(
                 builder.params,
                 &attempt.class_id,
                 ctx.daa_score,
-                attempt.trace_retention_daa,
+                effective_trace_retention_daa,
             ),
         ) {
             return Err(PalwStateV2Error::ClassNotRewardable { class: attempt.class_id, code, why });
@@ -22319,7 +22331,9 @@ fn apply_attempt(
         output_root: attempt.output_root,
         execution_root: attempt.execution_root,
         trace_chunk_count: attempt.trace_chunk_count,
-        trace_retention_daa: attempt.trace_retention_daa,
+        // The wire value remains signed/header-pinned. This stored value is
+        // the actual protocol holding obligation, including a delayed merge.
+        trace_retention_daa: effective_trace_retention_daa,
         reserved,
         // **ADR-0069 Decision 7's immature half, priced ONCE and stored.**
         //

@@ -195,6 +195,7 @@ impl PalwStateParamsV2 {
             court_outsider_lane_from_daa: None,
             kernel_route_panel_one_from_daa: None,
             model_panel_one_from_daa: None,
+            model_panel_one_retention_v1_from_daa: None,
             kernel_panel_one_test_only_external_gain_bound_v1: None,
             kernel_court_admission_test_only_v1: None,
             court_clock_v2_from_daa: None,
@@ -789,6 +790,20 @@ impl PalwStateParamsV2 {
     pub fn model_panel_one_governs_v1(&self, accepted_daa: u64) -> bool {
         crate::palw_model_panel_one_v1::model_claim_route_v1(self.model_panel_one_from_daa, accepted_daa)
             == crate::palw_model_panel_one_v1::PalwModelClaimRouteV1::G14PanelOne
+    }
+
+    pub fn with_model_panel_one_retention_v1(mut self, from_daa: Option<u64>) -> Self {
+        self.model_panel_one_retention_v1_from_daa = from_daa;
+        self
+    }
+
+    pub fn model_panel_one_retention_v1_from_daa(&self) -> Option<u64> {
+        self.model_panel_one_retention_v1_from_daa
+    }
+
+    pub fn model_panel_one_retention_active_at(&self, accepted_daa: u64) -> bool {
+        self.model_panel_one_governs_v1(accepted_daa)
+            && self.model_panel_one_retention_v1_from_daa.is_some_and(|from| from != u64::MAX && accepted_daa >= from)
     }
 
     /// `Params::sync_palw_g14_gates_v1` (and by fixtures).

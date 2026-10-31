@@ -1,0 +1,17 @@
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/g14-producer-panel-one/MISAKA-testnet/consensus/core)
+    Finished `test` profile [unoptimized] target(s) in 1m 52s
+     Running unittests src/lib.rs (/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/g14-18400-deploy/target/ci-gates/debug/deps/kaspa_consensus_core-be5fadb285d7110f)
+
+running 9 tests
+test config::params::model_panel_one_retention_config_tests::model_panel_one_retention_future_boundary_is_independently_visited_and_mirrored ... ok
+test config::params::model_panel_one_retention_config_tests::model_panel_one_retention_none_and_never_preserve_the_shipped_old_identities ... ok
+test config::params::model_panel_one_retention_config_tests::model_panel_one_retention_requires_preceding_route_court_gate_c_and_an_exact_mirror ... ok
+test config::params::model_panel_one_retention_config_tests::model_panel_one_retention_stays_absent_on_historical_and_other_network_params ... ok
+test palw_state_v2::tests::g14_model_panel_one_retention_v1::delayed_registered_attempt_gets_one_real_signature_approval_and_final ... ok
+test palw_state_v2::tests::g14_model_panel_one_retention_v1::delayed_signed_attempt_extends_only_new_acceptance_and_survives_revert_and_cold_load ... ok
+test palw_state_v2::tests::g14_model_panel_one_retention_v1::effective_retention_never_reduces_raw_promise_or_rewrites_old_claims ... ok
+test palw_state_v2::tests::g14_model_panel_one_retention_v1::full_admission_class_pin_prevents_a_second_fused_retention_ticket ... ok
+test palw_state_v2::tests::g14_model_panel_one_retention_v1::rider_signs_exact_accepted_lead_obligation_and_gets_its_own_full_guarantee ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 5307 filtered out; finished in 0.51s
+

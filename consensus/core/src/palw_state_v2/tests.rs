@@ -2,6 +2,7 @@
 //! `crate::palw_state_v2::tests` and every test in it are unchanged; only the file moved).
 
 mod g14_model_panel_one_v1;
+mod g14_model_panel_one_retention_v1;
 mod kernel_route_locator_v1;
 // Liveness audit (lane lifecycle): per-object rehearsal / per-block fold cost vs state rows.
 mod claim_local_rewards_v1;
