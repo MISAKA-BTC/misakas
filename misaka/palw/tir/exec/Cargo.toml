@@ -40,6 +40,7 @@ misaka-palw-base0 = { workspace = true, optional = true }
 metal = []
 node = ["dep:kaspa-consensus-core", "dep:misaka-palw-tir-artifact", "dep:libc", "dep:borsh", "dep:blake2b_simd", "dep:tempfile"]
 positive-contract = ["node", "dep:misaka-palw-positive-contract"]
+positive-panel = ["positive-contract"]
 legacy-bench = ["node", "dep:misaka-palw-base0"]
 
 # The Metal bridge is compiled by the build script on macOS (feature `metal`); a build script cannot be feature-gated, so the compiler

@@ -23,6 +23,8 @@ pub mod partial;
 pub mod positive_check;
 #[cfg(feature = "positive-contract")]
 pub mod positive_contract;
+#[cfg(feature = "positive-panel")]
+pub mod positive_panel;
 mod public_source;
 pub mod residency;
 pub mod run;
