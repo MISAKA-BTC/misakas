@@ -1,0 +1,44 @@
+{
+  "date": "2026-10-31",
+  "state": "reviewed proposal; user adoption pending; no native or public activation",
+  "scope": "architecture of first native paid TIR Assignment lane; not completion of primary mining replacement or whole RFC44 goal",
+  "files": {
+    "docs/design/palw/integration/positive-native-assignment-rfc-draft-2026-10-31.md": "95580440826209f0c677b1082fb290013820285ba87f9b4b298f64b22d02a6fa",
+    "docs/design/palw/integration/positive-native-assignment-adr-draft-2026-10-31.md": "48a37df7974de9c5144925a54672f1a19eef303b29bc6cea7946f876413eb3d0"
+  },
+  "reviews": [
+    {
+      "reviewer": "A0/positive_tests",
+      "mode": "read-only architecture and r1 field/finance/nonce/journal audit",
+      "findings_closed": [
+        "execution_rules equals derived context.cu_ruleset_id including canonical zero",
+        "all 21 MinerResultCommit fields mapped",
+        "pre-Case source/prover services prohibited in first profile; no undefined A-to-C source meter bridge",
+        "joined prover cancellation rights and liabilities retained",
+        "FutureCaseFundingBounds and actual Case payer/refund/caps; reward/fee/capital floor",
+        "full unsigned bundle replay comparison and current reauthorization"
+      ],
+      "new_blocking_inconsistency_found": false
+    },
+    {
+      "reviewer": "A0/positive_roles",
+      "mode": "read-only principles/role/liability/P/resource/entitlement audit",
+      "findings_closed": [
+        "P delay/draw queue/epoch cap/certify-by/attestation/decision and failure horizons included in real finite reserve",
+        "joined roles consent to cancellation terms and preserve all claims",
+        "service payments and safe refunds use independent actual receipt/liability/funds/once predicates",
+        "WorkerPayment distinct from primary Reward; assignment has B/F/R zero"
+      ],
+      "new_blocking_inconsistency_found": false
+    }
+  ],
+  "remaining": [
+    "explicit user adoption of both new design proposals",
+    "central namespace/schema finalization after adoption",
+    "real native supply/funding/lease owners and finite existing-policy bounds",
+    "native one-writer and complete accepted-history/recovery/IBD integration",
+    "actual P draw/Certified and purpose-specific consumer entitlements",
+    "private real-LLM role-separated measurement and independent end-to-end verification",
+    "separate public activation decision; all released presets remain None"
+  ]
+}
