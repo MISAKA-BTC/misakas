@@ -516,8 +516,10 @@ impl VirtualStateProcessor {
             use kaspa_consensus_core::palw_tir_public_carriage_v1::{
                 PalwTirPublicControlActionV1 as A, PalwTirPublicControlTargetV1 as T,
             };
-            return kaspa_consensus_core::palw_lifecycle_objects_v2::palw_lifecycle_objects_from_accepted_txs_v2(
+            return kaspa_consensus_core::palw_lifecycle_objects_v2::palw_lifecycle_objects_from_accepted_txs_in_context_v2(
                 std::slice::from_ref(tx),
+                &self.palw_lifecycle_kind_fences,
+                daa,
             )
             .objects
             .first()

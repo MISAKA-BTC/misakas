@@ -3989,10 +3989,17 @@ impl VirtualStateProcessor {
         ctx: &UtxoProcessingContext,
     ) -> std::collections::HashSet<TransactionOutpoint> {
         use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2;
-        let mergeset_txs: Vec<kaspa_consensus_core::tx::Transaction> = std::iter::once(ctx.selected_parent())
+        let mut mergeset_txs: Vec<kaspa_consensus_core::tx::Transaction> = std::iter::once(ctx.selected_parent())
             .chain(ctx.ghostdag_data.consensus_ordered_mergeset_without_selected_parent(self.ghostdag_store.deref()))
             .flat_map(|b| (*self.block_transactions_store.get(b).unwrap()).clone())
             .collect();
+        // Positive's reserved carrier can never be a legacy BondRegistered.
+        // This raw mergeset scan has no admission clock; do not decode its body
+        // even on a future private Positive branch just to find bond outputs.
+        mergeset_txs.retain(|tx| {
+            tx.subnetwork_id != kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE
+                || !kaspa_consensus_core::palw_lifecycle_objects_v2::palw_positive_lifecycle_payload_v2(&tx.payload)
+        });
         kaspa_consensus_core::palw_lifecycle_objects_v2::palw_lifecycle_objects_from_accepted_txs_v2(&mergeset_txs)
             .objects
             .iter()
