@@ -6506,7 +6506,9 @@ dependencies = [
  "blake2b_simd",
  "borsh",
  "cc",
+ "kaspa-consensus",
  "kaspa-consensus-core",
+ "kaspa-database",
  "libc",
  "libcrux-ml-dsa",
  "misaka-palw-base0",
@@ -6517,6 +6519,7 @@ dependencies = [
  "rand 0.8.6",
  "rand_chacha 0.3.1",
  "rayon",
+ "rocksdb",
  "serde_json",
  "tempfile",
 ]
