@@ -97,9 +97,9 @@ fn class(seed: i128) -> (PalwTirClassV1, Hash64) {
     )
 }
 struct Env {
-    chain: T12Chain,
-    config: Config,
-    bundle: PalwConsensusParamsV2,
+    chain: Box<T12Chain>,
+    config: Box<Config>,
+    bundle: Box<PalwConsensusParamsV2>,
     premine: Premine,
     floats: Premine,
 }
@@ -109,7 +109,7 @@ impl Env {
     }
     fn over((config, bundle, premine, floats): (Config, PalwConsensusParamsV2, Premine, Premine)) -> Self {
         let chain = t12_genesis_chain(&config, &bundle, &premine, &floats);
-        Self { chain, config, bundle, premine, floats }
+        Self { chain: Box::new(chain), config: Box::new(config), bundle: Box::new(bundle), premine, floats }
     }
     fn domain(&self) -> Hash64 {
         kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
@@ -296,7 +296,7 @@ async fn wide_registration_real_carrier_replays_and_rolls_back_across_a_reorg() 
     assert!(z.ctx.consensus.get_virtual_utxo_entry(TransactionOutpoint::new(a.carrier.id(), 0)).is_none());
     // Reapply the original class with a freshly signed registration at current
     // terms, through a carrier spending the restored original UTXO.
-    a.env.chain = z;
+    a.env.chain = Box::new(z);
     let mut renewed = a.env.object();
     sign(&a.env, &mut renewed, CARD);
     let carrier = a.env.carrier(&renewed, a.env.floats[CARD].clone());
@@ -311,7 +311,14 @@ async fn wide_registration_restarts_from_the_same_real_database() {
     let (_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
     let (sender, _rx) = async_channel::unbounded();
     let chain = t12_genesis_chain_on(TestConsensus::with_db(db.clone(), &config, sender), &config, &bundle, &premine, &floats);
-    let mined = registered(Env { chain, config: config.clone(), bundle: bundle.clone(), premine, floats }).await;
+    let mined = registered(Env {
+        chain: Box::new(chain),
+        config: Box::new(config.clone()),
+        bundle: Box::new(bundle.clone()),
+        premine,
+        floats,
+    })
+    .await;
     let class_id = id(&mined.object);
     let (sink, state) = mined.env.chain.tip_state();
     let expected_root = state.state_root();
@@ -525,9 +532,6 @@ fn isolated_wide_carrier_origin_boxed_verification(
         // chain/restore/db/receiver owners have been released, as in the old case.
         let IsolatedWideCarrierOriginPrepared { _lifetime, db, _rx, setup, chain } = *prepared;
         let IsolatedWideCarrierOriginSetup { config, bundle, premine, floats } = *setup;
-        let config = *config;
-        let bundle = *bundle;
-        let chain = *chain;
         let mined = registered(Env { chain, config: config.clone(), bundle: bundle.clone(), premine, floats }).await;
         let class_id = id(&mined.object);
         let (sink, state) = mined.env.chain.tip_state();

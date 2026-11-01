@@ -178,16 +178,11 @@ struct RegistrationInputs {
 }
 
 #[inline(never)]
-fn native_genesis_boxed(
-    setup: Box<IsolatedWideCarrierOriginSetup>,
-    db: &Arc<crate::model::stores::DB>,
-) -> Result<Box<Env>, String> {
+fn native_genesis_boxed(setup: Box<IsolatedWideCarrierOriginSetup>, db: &Arc<crate::model::stores::DB>) -> Result<Box<Env>, String> {
     let IsolatedWideCarrierOriginSetup { config, bundle, premine, floats } = *setup;
-    let config = *config;
-    let bundle = *bundle;
     let (sender, _rx) = async_channel::unbounded();
     let consensus = TestConsensus::with_db(db.clone(), &config, sender);
-    let chain = t12_genesis_chain_on(consensus, &config, &bundle, &premine, &floats);
+    let chain = Box::new(t12_genesis_chain_on(consensus, &config, &bundle, &premine, &floats));
     let env = Box::new(Env { chain, config, bundle, premine, floats });
     let (_, state) = env.chain.tip_state();
     require(
@@ -650,11 +645,7 @@ fn boxed_run(slug: &'static str) -> std::pin::Pin<Box<dyn std::future::Future<Ou
 
 fn run_on_current_thread(slug: &'static str) {
     let mut case = boxed_run(slug);
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("Failed building the Runtime")
-        .block_on(case.as_mut());
+    tokio::runtime::Builder::new_current_thread().enable_all().build().expect("Failed building the Runtime").block_on(case.as_mut());
 }
 
 #[test]
