@@ -223,7 +223,7 @@ fn ordinary_wide_free_prompt_refuses_even_with_derived_and_original_fences_off()
                 // class lookup. This is safe denial, not evidence that the new
                 // post-class guard was reached on this branch.
                 assert!(matches!(refused, PalwStateV2Error::ClassNotRewardable { code, .. }
-                    if code == crate::palw_tir_public_fold_v1::PALW_G03_FRAMELESS_TIR_ORIGINAL_CODE_V1));
+                    if code == crate::palw_state_v2::palw_tir_public_fold_v1::PALW_G03_FRAMELESS_TIR_ORIGINAL_CODE_V1));
             } else {
                 assert!(matches!(refused, PalwStateV2Error::TirFence2Refused(message) if message.contains("wide Q24")));
             }
