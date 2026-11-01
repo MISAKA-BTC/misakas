@@ -114,6 +114,9 @@ fn raw_matches(data: Slice<'_>, ty: DType, bytes: &[u8]) -> Result<bool, String>
     Ok(equal)
 }
 
+/// Borrowed trusted CPU source. The caller supplies an unmodified result of
+/// `TirPlan::compile` and its matching resident parameters. Public compiled plan
+/// fields are not authenticated or reconstructed by this prepared-source API.
 pub struct PreparedWideCellV2<'a> {
     pub(crate) verified: &'a PalwTirVerifiedBindingV2,
     pub(crate) ctx: &'a PalwJobContextV2,
@@ -124,6 +127,9 @@ pub struct PreparedWideCellV2<'a> {
 }
 
 impl<'a> PreparedWideCellV2<'a> {
+    /// Check original program/context identity and the local resource envelope.
+    /// This is not validation of arbitrary caller-mutated compiled plan fields;
+    /// the caller must establish the trusted-source precondition of this type.
     pub fn new(
         verified: &'a PalwTirVerifiedBindingV2,
         ctx: &'a PalwJobContextV2,
