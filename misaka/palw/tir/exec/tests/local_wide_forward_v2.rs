@@ -238,7 +238,8 @@ fn fixture_case(
     let context_max = if long { 1 << 21 } else { MAX_CONTEXT };
     let plan = TirPlan::compile(&program).unwrap();
     let params = TirParams::from_map(&plan, &map).unwrap();
-    let inventory = TirHeldInventoryV1::build(&program, &TirParamsSourceV1(&params)).unwrap();
+    let parameter_source = TirParamsSourceV1(&params);
+    let inventory = TirHeldInventoryV1::build(&program, &parameter_source).unwrap();
     let artifact = inventory.tree.root();
     let class = PalwTirClassV1 {
         version: 1,
