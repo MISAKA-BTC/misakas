@@ -104,7 +104,8 @@ fn detached_disk_claims_and_materials_finish_real_node_after_producer_run_is_rel
             let signed = SignedMiner::new(f, false);
             let result = signed.authenticate();
             let prep = signed.preparation(f);
-            let inventory = TirHeldInventoryV1::build(f.program, &TirParamsSourceV1(f.params)).unwrap();
+            let params_source = TirParamsSourceV1(f.params);
+            let inventory = TirHeldInventoryV1::build(f.program, &params_source).unwrap();
             let builder =
                 WidePanelBuilderV2::prepare(&capture, &prep, &result, &signed.rooted, &inventory, provider(), owners(), &reservation)
                     .unwrap();
