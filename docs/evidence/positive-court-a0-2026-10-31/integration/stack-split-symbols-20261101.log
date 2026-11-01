@@ -1,0 +1,34 @@
+(lldb) target create "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/runtime_pack-066d0b88b30f6893"
+Current executable set to '/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/runtime_pack-066d0b88b30f6893' (arm64).
+(lldb) image lookup -r -n apply_object_inner
+4 matches found in /Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/runtime_pack-066d0b88b30f6893:
+        Address: runtime_pack-066d0b88b30f6893[0x00000001042132ec] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69282092)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_inner::h7f93df6b10e91d1f
+        Address: runtime_pack-066d0b88b30f6893[0x0000000104214368] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69286312)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_inner::_$u7b$$u7b$closure$u7d$$u7d$::h073986e8500362fd
+        Address: runtime_pack-066d0b88b30f6893[0x00000001042143b4] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69286388)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_inner::_$u7b$$u7b$closure$u7d$$u7d$::h3b50c3ceb5a9a3db
+        Address: runtime_pack-066d0b88b30f6893[0x00000001042143e0] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69286432)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_inner::_$u7b$$u7b$closure$u7d$$u7d$::_$u7b$$u7b$closure$u7d$$u7d$::h66bbd89a0db621ca
+(lldb) image lookup -r -n apply_object_batch_00_v1
+10 matches found in /Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/runtime_pack-066d0b88b30f6893:
+        Address: runtime_pack-066d0b88b30f6893[0x00000001042145fc] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69286972)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_00_v1::h68abbc030766bd36
+        Address: runtime_pack-066d0b88b30f6893[0x0000000104219418] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69306968)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_00_v1::_$u7b$$u7b$closure$u7d$$u7d$::h71699f04a0e4c3e8
+        Address: runtime_pack-066d0b88b30f6893[0x0000000104219420] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69306976)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_00_v1::_$u7b$$u7b$closure$u7d$$u7d$::hb3d7a9281929191e
+        Address: runtime_pack-066d0b88b30f6893[0x0000000104219450] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69307024)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_00_v1::_$u7b$$u7b$closure$u7d$$u7d$::hb571f0cfc4be1de0
+        Address: runtime_pack-066d0b88b30f6893[0x00000001042194c8] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69307144)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_00_v1::_$u7b$$u7b$closure$u7d$$u7d$::hc9362fc2e64cfbff
+        Address: runtime_pack-066d0b88b30f6893[0x0000000104219540] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69307264)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_00_v1::_$u7b$$u7b$closure$u7d$$u7d$::hd031876031d1ab1e
+        Address: runtime_pack-066d0b88b30f6893[0x0000000104219584] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69307332)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_00_v1::_$u7b$$u7b$closure$u7d$$u7d$::hd170b9d60c32ad1a
+        Address: runtime_pack-066d0b88b30f6893[0x00000001042195b4] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69307380)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_00_v1::_$u7b$$u7b$closure$u7d$$u7d$::hd2e3754dee666ad0
+        Address: runtime_pack-066d0b88b30f6893[0x00000001042195f8] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69307448)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_00_v1::_$u7b$$u7b$closure$u7d$$u7d$::he03d8e6a72cfcd63
+        Address: runtime_pack-066d0b88b30f6893[0x0000000104219638] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69307512)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_00_v1::_$u7b$$u7b$closure$u7d$$u7d$::he3ba468479b113cb

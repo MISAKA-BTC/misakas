@@ -5,13 +5,13 @@
 | 担当 | A0へ統合した範囲 | 未完了・保留 |
 | --- | --- | --- |
 | A0 | v2/r1共通型、frame作者認証、非循環funding scope、176/151/P、固定row `327393e8e`、無効のtyped fence、P所見 `069d54007`、record `d284f5902`、source read interface `49c86968c` | native live event・writer、実資金lock、P実draw、全consumer・復旧との結合 |
-| A1 | pure core exact検査器、署名/費用、ExpandedPlan・source-only FullRelation `d657007ce`、canonical tokenizerとborrow API | wide最終出力のFullRelation接続、native期待値と全資源予約、実LLM範囲/性能 |
+| A1 | narrow/wide source-only FullRelation、canonical tokenizer・row-profile、purewide admission `0df5f3cca` | wide admissionのRoot単体試験、native期待値と全資源予約、実LLM範囲/性能 |
 | A2 | 通常推論・有限原資料応答、session seal、protected raw reopen meter復元、logical NoOp/fullCAS、common journal bridge `a87e7f789` | actual native duty/read factory、qualified paid receipt更新、実money owner |
-| A3 | r1 Panel/record/G14 cold資料、one-pass typed capture・canonical tokenizer、typed→legacy opening/ExpandedPlan adapter、同時保持予約修正 `b401bc5e2` | wide V2実行とcapture/IPC、実LLMの範囲/peak/性能 |
-| A4 | Court/coordinator/body0..7、future-frame課金前拒否、actual Full carrier保持・RAM lease必須化、readonly復旧receipt | actual176 one-writer、canonical job/role/profile/schedule、実資金lockとP |
+| A3 | r1 Panel・one-pass narrow/wide CPU runner、typed→legacy adapterの同時保持修正、PALWTRC2 capture | Hello2固定plan CPU subsetの実行、汎用artifact startup、wide Panel証拠組立て、実LLM範囲/peak/性能 |
+| A4 | Court/coordinator/body0..7、future-frame課金前拒否、Full carrier保持・RAM lease、readonly復旧、purewide sizing `40417c9e3`＋修正 | actual176 one-writer、canonical job/role/profile/schedule、実資金lockとP |
 | A5 | 独立entitlement照合、旧7用途維持＋第8 WorkerPayment、first-source fee照合、readonly private会計receipt | 全native consumerと実coin lock/一回払い/安全返金・責任floor、P実承認 |
 | A6 | aux151 scanner/restore、shared journal/実A1 local replay、caller-batch material store/actualdata reader `6e25d7631`、実SourceLedger/global差分/fee隔離 `3773083f9` | production NativeReplayEnvironment・actual roles/資金/lease、kind1 qualified spend、P2P/IBD/GC/T12 |
-| A7 | 独立fixture/runner、future-copy反例、8用途fixture、A4 R5証拠監査。production79c3＋test-only fixture修正の固定候補で667件成功、原失敗と証拠を保持 | 最新wide統合候補の回帰、native/実LLM/複数Node性能。過去候補件数を合算しない |
+| A7 | 独立fixture/runner、future-copy反例、8用途fixture、A4 R5証拠監査。production79c3＋test-only fixture修正の固定候補で667件成功、原失敗と証拠を保持 | 実trained cohort inventory再照合済み、同候補での推論/登録/native/複数Node性能は未確認。過去候補件数を合算しない |
 
 共通契約はrow段階29件、P所見後35件、record後41件とClippy成功を別snapshotに保存した。core/test sourceとconsensus libraryの型検査、fence専用8件も成功。各担当の別候補での成功と区別する。frame署名は作者の認証、FundingConsent署名は支払条件への同意だけである。row/cursor保存やP所見認証がnative権限を生成することはない。新Pは全LLMで実抽選の`Certified`のみを認め、`PublicCheckCertified`・旧S/K/V・local replay単独を流用しない。
 
@@ -60,3 +60,10 @@ strict Clippyの初回7件のneedless_borrow失敗と、修正未適用のまま
 `5a2f18ba9` は巨大object dispatchを11個のprivate noninline handlerへ機械的に分割した。元153 arm本文・156 variant・guard順・rollback wrapperの一致を独立source検査したが、ビルド・標準stack・goldenは未確認。[固定入力と検査器](../../docs/evidence/positive-court-a0-2026-10-31/integration/object-dispatch-stack-inputs/)。A4 purewide sizing `13e1fe213` はowner試験中で、新規integration13・scalar2・compile-fail1は成功報告、旧GEN価格全targetはParams生成のstack overflowで停止した原記録を保持中。Root stack修正の検証はA4終了後に行う。
 
 A1 purewide admission `78e274630` はsource固定・独立レビュー中、Root未統合。A3 Hello2は固定plan CPU subsetのsource作成中。A7の実trained3モデルinventoryを統合し新manifest8件のサイズ/SHAをRoot再照合した。原context8192/8192/2048と学習済みcheckpointを維持し、旧失敗narrow成果物4件の欠損も記録する。inventoryは新たな推論・登録・全位置・Court・credit試験ではない。Panel wide collector/geometry-only依存追跡とbounded証拠組立ては別途実装中。native Assignment案の明示採択・actual role残予約owner・資金・P/全consumer・複数Node復旧と実LLM性能は引き続き未完了。
+
+
+Root `c85d5a9c9` 結合初回: SDK16、Core integration7 targetsの53（新wide sizing13、旧GEN価格全14、旧close/range/GEN、状態/carriage golden2、T12の15）、既存ingress/archive/receipt7、scalar/golden/deadline/G14の14が、標準stack・同一sourceで成功した。一方、新admission10は8成功/2失敗であり、候補全体PASSとは扱わない。[初回件数監査](../../docs/evidence/positive-court-a0-2026-10-31/integration/wide-admission-stack-first-count-audit-20261101.json)。失敗binaryはgzip復元SHAまで固定した。両失敗はArtifactをcommitted operandへ誤算入した試験oracleに局所化し、規則を変えず、既存F7の真の2source coneへcap1拒否を移すtest-only修正をA1で作成中。
+
+同候補のSDK/Core/exec strict library Clippyと新wide sizing integration target Clippyは両方成功した。[原記録](../../docs/evidence/positive-court-a0-2026-10-31/integration/wide-admission-stack-clippy-20261101.json)。SDKの以前停止した実Params経路は今回標準stackで成功した。static disassemblyの固定frameはcommon inner8224B、最大batch153296Bで、12関数を独立再計算した。[監査](../../docs/evidence/positive-court-a0-2026-10-31/integration/stack-split-prologue-audit-20261101.json)。旧771840Bは別sourceの参考であり、呼出全体・RSS・最小stack認定を意味しない。旧arm全文一致と既存回帰が、全156 variantの実行網羅を意味することもない。paired-original post-write rollbackとPanelLifetime共通guardのfocused testは別途作成中。
+
+A3 Hello2はsource `1b14d1ecc`（固定plan CPU/session subset、直接CPU APIの事前admitはcaller責務）まで凍結し未実行。汎用artifact startupの割当前scanner/retained decodeはA1/A3で別途実装準備。A5は同block DAA/blue矛盾のDATA-only修正 `2e63b1421` を凍結したがnode側の新2試験は未実行。A2のsource journal新3試験とA6の実DBreopen/replay bridgeも準備中。いずれもnativeの権限・実精算・P・実LLM登録の完了へ昇格しない。

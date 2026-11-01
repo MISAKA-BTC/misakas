@@ -1,0 +1,86 @@
+{
+  "source_commit": "c85d5a9c9",
+  "scope": "AArch64 SDK test binary fixed function prologues, static disassembly only. SDK16 defaultstack runtime success recorded separately. Not full recursive/call-chain/RSS/production minimal-stack certification.",
+  "binary": {
+    "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/runtime_pack-066d0b88b30f6893",
+    "bytes": 177701184,
+    "sha256": "aec4ea235f46f234a630818e97e1abbed0ab76fab449d5d156ccdca994663a54"
+  },
+  "before_reference": {
+    "record": "sdk-standard-stack-diagnosis-20261101.json",
+    "old_apply_object_inner_prologue_stack_bytes": 771840,
+    "old_source_different": "017bff082; exact original binary preserved and verified in stack-prebuild-binary-preservation-20261101.json"
+  },
+  "functions": [
+    {
+      "function": "apply_object_inner",
+      "prologue_fixed_stack_bytes": 8224,
+      "includes_saved_register_predecrement": 32
+    },
+    {
+      "function": "apply_object_batch_00_v1",
+      "prologue_fixed_stack_bytes": 62544,
+      "includes_saved_register_predecrement": 32
+    },
+    {
+      "function": "apply_object_batch_01_v1",
+      "prologue_fixed_stack_bytes": 90304,
+      "includes_saved_register_predecrement": 32
+    },
+    {
+      "function": "apply_object_batch_02_v1",
+      "prologue_fixed_stack_bytes": 59424,
+      "includes_saved_register_predecrement": 32
+    },
+    {
+      "function": "apply_object_batch_03_v1",
+      "prologue_fixed_stack_bytes": 57904,
+      "includes_saved_register_predecrement": 32
+    },
+    {
+      "function": "apply_object_batch_04_v1",
+      "prologue_fixed_stack_bytes": 56576,
+      "includes_saved_register_predecrement": 32
+    },
+    {
+      "function": "apply_object_batch_05_v1",
+      "prologue_fixed_stack_bytes": 58000,
+      "includes_saved_register_predecrement": 32
+    },
+    {
+      "function": "apply_object_batch_06_v1",
+      "prologue_fixed_stack_bytes": 41472,
+      "includes_saved_register_predecrement": 32
+    },
+    {
+      "function": "apply_object_batch_07_v1",
+      "prologue_fixed_stack_bytes": 33904,
+      "includes_saved_register_predecrement": 32
+    },
+    {
+      "function": "apply_object_batch_08_v1",
+      "prologue_fixed_stack_bytes": 55360,
+      "includes_saved_register_predecrement": 32
+    },
+    {
+      "function": "apply_object_batch_09_v1",
+      "prologue_fixed_stack_bytes": 96912,
+      "includes_saved_register_predecrement": 32
+    },
+    {
+      "function": "apply_object_batch_10_v1",
+      "prologue_fixed_stack_bytes": 153296,
+      "includes_saved_register_predecrement": 32
+    }
+  ],
+  "largest_batch_fixed_bytes": 153296,
+  "failed_debugger_attempts": "initial demangled short/full --name lookup and unsupported --func-regex failed, raw retained; resolved image lookup addresses then disassembled 12 functions with rc0",
+  "raw_sha256": {
+    "stack-split-all-symbols-20261101.log": "69464f75b5526938397f06ee9478df959e49f6945e3f61754eebcfc939136b3d",
+    "stack-split-prologues-address-20261101.log": "6b846076a658d066dd99cb8d0dbb0f7e1e0a24dc056e8483abbaa51f98d196d4",
+    "stack-split-symbols-20261101.log": "c77c2cf59a9f46db3fea20abb5a657e8cef07b860848a0f9b1579243b9b7961c",
+    "stack-split-prologues-20261101.log": "5527e2f8749e7b278a0e5c4614c9ee885ed52ad5f73e6173dff4efdc3a0672f4",
+    "stack-split-prologues-regex-20261101.log": "91fde28ba6631615758277113567cb06c24854bfdcd1d2c7c6266296bd915e5d",
+    "stack-split-prologues-resolved-20261101.log": "dd9a7c2f5f6cada41e1dbfb75df71a3fceb0e51249dfbff07c0a0e232ff202a0"
+  }
+}

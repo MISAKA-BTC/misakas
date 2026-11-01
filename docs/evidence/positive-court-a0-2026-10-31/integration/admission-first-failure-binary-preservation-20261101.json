@@ -1,0 +1,11 @@
+{
+  "source_commit": "c85d5a9c9",
+  "scope": "Preserve actual initial admission test 8pass/2fail binary before any fixture/source correction and Cargo relink. No deletion.",
+  "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/kaspa_consensus_core-5b3fb8e6accaaca6",
+  "bytes": 239667024,
+  "sha256": "feaf20eb5423acd38becb2f2c8716eba68a35b8f4c036413d2f36e79f21125af",
+  "gzip_path": "/Users/wata/.codex/worktrees/positive-court-a0/target/stack-before-0df5-preserved-20261101/core-c85-admission-first-failure.gz",
+  "gzip_bytes": 68753612,
+  "gzip_sha256": "ac7956164a8e7f627d6183f5c9fdf9f694937721ef28b5af2a16710857a76d97",
+  "decompression_sha256_verified": true
+}
