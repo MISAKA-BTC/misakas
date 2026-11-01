@@ -21,3 +21,17 @@ raw stage単独はCase/head deltaを保存しないため、typed delta writer�
 追加依存はTIR executorのnative targetに限るdev-dependencies `kaspa-consensus` / `kaspa-database` / `rocksdb` の3件で、新package versionやlibraryの通常依存edgeを増やさない。native testのbuild graphには既存consensus/databaseを含む。逆向きのconsensus→executorも既存dev-edgeであり、full offline Cargo metadata解決を確認した。
 
 source hashと未実行状態は [source freeze](../../../evidence/positive-court-a6-db-reopen-2026-11-01/source-freeze.json) に固定する。中央Rootで実行する場合は統合後のsourceと結果を別candidateとして記録する。
+
+## owner実行runnerの準備（未実行）
+
+A0との調整で、まずstack修正を追加せずowner `355408e5a` のまま既存targetを使う計画とした。新DB試験は重い`config::Params`生成や`apply_object`のfoldを呼ばず、typed deltaのserialize/retained decodeとtiny TIR/Source再生を使う。ただしderived enumのstack安全性も含めて実行は未計測であり、標準stackの初回停止を成功へ読み替えない。
+
+[run-owner.py](../../../evidence/positive-court-a6-db-reopen-2026-11-01/run-owner.py) は既定で読み取り専用planを作る。A0が排他的なheavy実行枠を渡すまで、`--execute`、旧binaryの圧縮・削除、コンパイル、DB試験は開始しない。旧3binaryはgzip保存後に実tempfileへ復元しsize/SHAを照合してから、同一性を確認したその旧exeだけをunlinkする設計。復元先は新しいdirectoryに限定し、新しいcache成果物へ上書きしない。
+
+build前に空き4GiB以上を必須とし、実行中512MiBを割ったら自身のprocess groupを停止する。Cargo親が先に終了しても子が残る場合を検出する。SIGTERMを無視する子を残して親が終了する軽量process-control回帰は1件成功したが、これはDB試験やnative予約の検証件数ではない。compiler/testの失敗後には同run directoryで再試行せず、stackも増やさない。compiler開始前の容量停止だけは、既存backupのSHAと同じplanを確認した上で明示的に再開でき、以前の停止記録を残す。
+
+native libraryはRootの実検証がpinしたRFC14 completion release archiveを使う。RocksDBは23,048,496 bytes、Snappyは46,784 bytesで、正確なpath/SHA、同一bindingsとarm64/libc++・default compression featureの照合を [archive review](../../../evidence/positive-court-a6-db-reopen-2026-11-01/external-native-archive-read-only-review.json) に固定した。最初に調べた別の104MiB候補とは区別する。両external `LIB_DIR` と `STATIC=1` / `COMPILE=0` を指定し、追加C++ compiler呼出を禁止する。外部archiveではlibc++自動linkも消えるため、global RUSTFLAGSを変えず、単一のfinal test targetへだけ `cargo rustc ... --profile test -- -l c++` を渡し、JSONが返したexeを直接実行する。
+
+対象はnative store/readerの14件とactual TIR common replayの17件、計31件を予定する。まだ1件も実行していない。source/runtime owner結果とRoot source結果、clean DB reopenと実Node再起動/IBD/native authorityの資格を分ける。
+
+旧EVM consensus library候補はembedded metadataがmain Downloads checkoutを指すためA6所有と扱わず、削除しない。A6所有と確認できる旧Core853 pairについても [read-only cache plan](../../../evidence/positive-court-a6-db-reopen-2026-11-01/obsolete-rust-cache-read-only-plan.json) を返しただけで、まだ削除していない。
