@@ -399,7 +399,9 @@ fn not_after(earlier: AcceptedOrigin, later: AcceptedOrigin) -> bool {
     earlier.accepted_daa <= later.accepted_daa
         && earlier.accepted_blue_score <= later.accepted_blue_score
         && (earlier.accepting_block != later.accepting_block
-            || (earlier.accepted_tx_ordinal, earlier.event_ordinal) <= (later.accepted_tx_ordinal, later.event_ordinal))
+            || (earlier.accepted_daa == later.accepted_daa
+                && earlier.accepted_blue_score == later.accepted_blue_score
+                && (earlier.accepted_tx_ordinal, earlier.event_ordinal) <= (later.accepted_tx_ordinal, later.event_ordinal)))
 }
 
 pub fn propose_positive_spend(input: PositiveSpendData<'_>) -> Result<PositiveSpendProposalData, PositiveFundsError> {
