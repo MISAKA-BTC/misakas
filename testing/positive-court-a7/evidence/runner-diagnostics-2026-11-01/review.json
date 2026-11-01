@@ -1,0 +1,40 @@
+{
+  "source_commit": "c3a5084fa7798602c67182b98c8a8e8c77d97948",
+  "utc": "2026-11-01T14:41:58.039500+00:00",
+  "scope": "small Python diagnostics only; no new Rust or model runs",
+  "source_sha256": {
+    "testing/positive-court-a7/real_llm_process.py": "e1461f13153108f6597383f836094537360e512af676965a21a91bbdfb189e9b",
+    "testing/positive-court-a7/test_real_llm_process.py": "7541c045e108285b71a86f88c13e995796fb4073aa3e206926ec4e32ec108714",
+    "testing/positive-court-a7/REAL-LLM-REPRO.md": "ea623ac13d56682c369815d4f91896100453ad1cfa23705657fda4f1c54fea01"
+  },
+  "guard_validation": {
+    "argv": [
+      "python3",
+      "-B",
+      "testing/positive-court-a7/test_real_llm_process.py",
+      "--driver",
+      "testing/positive-court-a7/real_llm_process.py"
+    ],
+    "exit_code_observed": 0,
+    "passed_observed": 18,
+    "result_origin": "tool output observed before source commit; identical source bytes committed",
+    "raw_stdout_retained": false,
+    "kind": "pure/mock guards; not resource measurements or model execution"
+  },
+  "root_json_replay": {
+    "cases": 3,
+    "classification": "RESOURCE_LIMIT_REPORTED",
+    "reported_phase": "quote",
+    "reported_cpu_started": false,
+    "originals_unchanged": true
+  },
+  "independent_review": "adversarial_tests read all three Root runner JSONs; exact error/phase/caps/excess and fixed class/context/prompt matched; no success criteria weakened",
+  "status_rules": "error presence is rejected even with success status; missing error is not inferred as resource limit; boolean is not numeric byte bound",
+  "not_run": [
+    "Cargo/build",
+    "new runtime quote",
+    "CPU inference",
+    "native/credit",
+    "independent roots"
+  ]
+}
