@@ -293,7 +293,7 @@ impl NativeRetainedV1<crate::palw_state_v2::PalwChainStateV2> {
 }
 
 impl NativeRetainedV1<crate::palw_state_v2::PalwChainStateV2> {
-    /// The ONLY mutable-state operation exposed by this owner. Replay reserves
+    /// Borrowed replay retains the original owner on every error. It reserves
     /// its new state, decoded row temporaries and index rebuild before cloning
     /// or applying anything. The old state/ticket remains live on every error.
     pub fn try_delta_v1(
@@ -311,6 +311,36 @@ impl NativeRetainedV1<crate::palw_state_v2::PalwChainStateV2> {
             crate::palw_state_v2::apply_delta_v2(&self.value, delta, params)
         }
         .map_err(NativeDecodeErrorV1::Decode)?;
+        Ok(Self { value, _lease: lease })
+    }
+
+    /// Replay consumes a private owner: on failure no partially changed value escapes. Keep the
+    /// same conservative quote and source/destination ticket overlap as borrowed replay.
+    pub fn into_delta_v1(
+        self,
+        delta: &crate::palw_state_v2::PalwStateDeltaV2,
+        params: &crate::palw_state_v2::PalwStateParamsV2,
+        revert: bool,
+    ) -> Result<Self, NativeStateMutationErrorV1> {
+        let requests =
+            if enabled() { native_delta_replay_requests_v1(&self.value, delta).map_err(NativeDecodeErrorV1::Resource)? } else { 0 };
+        self.into_delta_after_reservation_v1(delta, params, revert, requests, reserve_native_requests_v1)
+    }
+
+    fn into_delta_after_reservation_v1(
+        self,
+        delta: &crate::palw_state_v2::PalwStateDeltaV2,
+        params: &crate::palw_state_v2::PalwStateParamsV2,
+        revert: bool,
+        requests: u64,
+        reserve: impl FnOnce(u64) -> Result<Option<NativeDemandLeaseV1>, NativeCoverageV1>,
+    ) -> Result<Self, NativeStateMutationErrorV1> {
+        // On a replay error the consuming core call drops its private value before unwinding
+        // either reservation here. The source's ticket therefore covers every byte until drop.
+        let lease = reserve(requests).map_err(NativeDecodeErrorV1::Resource)?;
+        let Self { value, _lease: source_lease } = self;
+        let value = crate::palw_state_v2::replay_delta_owned_v1(value, delta, params, revert).map_err(NativeDecodeErrorV1::Decode)?;
+        drop(source_lease);
         Ok(Self { value, _lease: lease })
     }
 }
@@ -447,5 +477,94 @@ mod replay_tests {
     #[test]
     fn opaque_restore_membership_overflow_is_not_saturated() {
         assert!(crate::palw_state_v2::restore_index_native_shape_v1(&[("vesting", u64::MAX, 1)]).is_err());
+    }
+}
+
+#[cfg(test)]
+mod owned_replay_tests {
+    use super::*;
+    use crate::palw_state_v2::{PalwBlockContextV2, PalwChainStateV2, PalwDeltaEntryV2, PalwStateDeltaV2, PalwStateParamsV2};
+
+    fn params() -> PalwStateParamsV2 {
+        PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, crate::BlockHash::from_u64_word(1), 4, 1000, 100, 1000, 0).unwrap()
+    }
+    fn delta() -> PalwStateDeltaV2 {
+        let point = PalwBlockContextV2 { block: crate::BlockHash::from_u64_word(1), daa_score: 1, blue_score: 1, subsidy: 0 };
+        PalwStateDeltaV2 { point, entries: vec![PalwDeltaEntryV2::LastPoint { old: None, new: Some(point) }] }
+    }
+    fn source_request(state: &PalwChainStateV2) -> u64 {
+        let heap = state.native_heap_v1("test source").bytes().unwrap();
+        // Same retained-owner envelope as value_requests_v1, independent of global admission.
+        let request = heap + (size_of::<NativeChainStateV1>() + size_of::<[usize; 3]>()) as u64;
+        assert!(request > 0);
+        request
+    }
+    fn source(checker: &std::sync::Arc<NativeDemandCheckerV1>, request: u64) -> NativeChainStateV1 {
+        let lease = checker.reserve_requests_v1(request, 0).unwrap();
+        NativeRetainedV1 { value: PalwChainStateV2::genesis(), _lease: Some(lease) }
+    }
+
+    #[test]
+    fn owned_delta_replay_capacity_admitted_before_change_and_tickets_release() {
+        let p = params();
+        let d = delta();
+        let state = PalwChainStateV2::genesis();
+        let source_request = source_request(&state);
+        let replay_request = native_delta_replay_requests_v1(&state, &d).unwrap();
+        let limit = source_request.checked_add(replay_request).unwrap();
+        let checker = NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 { memory_bytes: limit, database_bytes: 0 });
+        let owned = source(&checker, source_request);
+        let output = owned
+            .into_delta_after_reservation_v1(&d, &p, false, replay_request, |request| {
+                assert_eq!(request, replay_request, "the original conservative replay quote");
+                assert_eq!(checker.outstanding(), (source_request, 0), "source ticket retained before destination admission");
+                let lease = checker.reserve_requests_v1(request, 0)?;
+                assert_eq!(checker.outstanding(), (limit, 0));
+                Ok(Some(lease))
+            })
+            .unwrap();
+        assert_eq!(output.last_point(), Some(&d.point));
+        assert_eq!(checker.outstanding(), (replay_request, 0), "source ticket replaced only after success");
+        drop(output);
+        assert_eq!(checker.outstanding(), (0, 0));
+
+        let checker = NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 { memory_bytes: limit - 1, database_bytes: 0 });
+        let owned = source(&checker, source_request);
+        let refused = owned.into_delta_after_reservation_v1(&d, &p, false, replay_request, |n| {
+            assert_eq!(checker.outstanding(), (source_request, 0));
+            checker.reserve_requests_v1(n, 0).map(Some)
+        });
+        assert!(matches!(refused, Err(NativeDecodeErrorV1::Resource(_))));
+        assert_eq!(checker.outstanding(), (0, 0), "consumed source released on pre-mutation refusal");
+    }
+
+    #[test]
+    fn owned_delta_replay_failed_private_mutation_releases_both_tickets_and_shared_owner_survives() {
+        let p = params();
+        let mut d = delta();
+        d.entries.push(PalwDeltaEntryV2::Weights { old: (1, 1), new: (0, 0) });
+        let state = PalwChainStateV2::genesis();
+        let source_request = source_request(&state);
+        let replay_request = native_delta_replay_requests_v1(&state, &d).unwrap();
+        let checker = NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 {
+            memory_bytes: source_request * 2 + replay_request,
+            database_bytes: 0,
+        });
+        let shared = std::sync::Arc::new(source(&checker, source_request));
+        let reader = std::sync::Arc::clone(&shared);
+        let original_root = shared.state_root();
+        let owned = source(&checker, source_request);
+        let old_error = crate::palw_state_v2::apply_delta_v2(&shared, &d, &p).unwrap_err();
+        let error = owned
+            .into_delta_after_reservation_v1(&d, &p, false, replay_request, |n| checker.reserve_requests_v1(n, 0).map(Some))
+            .unwrap_err();
+        assert!(matches!(error, NativeDecodeErrorV1::Decode(e) if e == old_error));
+        assert_eq!(checker.outstanding(), (source_request, 0), "failed private owner and destination ticket were released");
+        assert_eq!(reader.last_point(), None);
+        assert_eq!(reader.state_root(), original_root);
+        drop(shared);
+        assert_eq!(checker.outstanding(), (source_request, 0), "shared reader retains original ticket");
+        drop(reader);
+        assert_eq!(checker.outstanding(), (0, 0));
     }
 }

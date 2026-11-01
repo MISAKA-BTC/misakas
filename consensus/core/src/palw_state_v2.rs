@@ -22651,15 +22651,7 @@ pub fn apply_delta_v2(
     delta: &PalwStateDeltaV2,
     params: &PalwStateParamsV2,
 ) -> Result<PalwChainStateV2, PalwStateV2Error> {
-    let mut state = parent.clone();
-    for entry in &delta.entries {
-        apply_delta_entry(&mut state, entry, false)?;
-    }
-    palw_panel_v3_fold_v1::refresh_derived_v1(&mut state)?;
-    rebuild_deadline_free_indices(&mut state);
-    rebuild_deadline_index_v2(&mut state, params)?;
-    rebuild_capacity_weight_index_v1(&mut state, params);
-    Ok(state)
+    replay_delta_owned_v1(parent.clone(), delta, params, false)
 }
 
 /// Revert a recorded delta from the exact child it produced, restoring the parent bit-for-bit
@@ -22669,9 +22661,26 @@ pub fn revert_delta_v2(
     delta: &PalwStateDeltaV2,
     params: &PalwStateParamsV2,
 ) -> Result<PalwChainStateV2, PalwStateV2Error> {
-    let mut state = child.clone();
-    for entry in delta.entries.iter().rev() {
-        apply_delta_entry(&mut state, entry, true)?;
+    replay_delta_owned_v1(child.clone(), delta, params, true)
+}
+
+/// A private replay owner may discard its state on failure. Borrowed entry points clone before
+/// handing over ownership, so their input remains unchanged even if a later row or index fails.
+/// Native callers must reserve construction before entering; no mutable shared owner is exposed.
+pub(crate) fn replay_delta_owned_v1(
+    mut state: PalwChainStateV2,
+    delta: &PalwStateDeltaV2,
+    params: &PalwStateParamsV2,
+    revert: bool,
+) -> Result<PalwChainStateV2, PalwStateV2Error> {
+    if revert {
+        for entry in delta.entries.iter().rev() {
+            apply_delta_entry(&mut state, entry, true)?;
+        }
+    } else {
+        for entry in &delta.entries {
+            apply_delta_entry(&mut state, entry, false)?;
+        }
     }
     palw_panel_v3_fold_v1::refresh_derived_v1(&mut state)?;
     rebuild_deadline_free_indices(&mut state);
