@@ -1,0 +1,12 @@
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/a4-g14-court/MISAKA-testnet/consensus/core)
+    Finished `test` profile [unoptimized] target(s) in 1.94s
+     Running tests/palw_gen_close_price.rs (target/a4-fresh/debug/deps/palw_gen_close_price-d6f3ac8096d2329f)
+
+running 14 tests
+
+thread 'a_decode_close_past_what_can_be_carried_is_refused_by_name_and_the_catalog_records_the_one_it_admits' (3653519) has overflowed its stack
+fatal runtime error: stack overflow, aborting
+error: test failed, to rerun pass `-p kaspa-consensus-core --test palw_gen_close_price`
+
+Caused by:
+  process didn't exit successfully: `/Users/wata/.codex/worktrees/a4-g14-court/MISAKA-testnet/target/a4-fresh/debug/deps/palw_gen_close_price-d6f3ac8096d2329f --test-threads=2` (signal: 6, SIGABRT: process abort signal)

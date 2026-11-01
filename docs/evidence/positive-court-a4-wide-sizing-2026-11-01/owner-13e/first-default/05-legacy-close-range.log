@@ -1,0 +1,11 @@
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/a4-g14-court/MISAKA-testnet/consensus/core)
+    Finished `test` profile [unoptimized] target(s) in 1.18s
+     Running tests/palw_tir_close_range.rs (target/a4-fresh/debug/deps/palw_tir_close_range-1fb166acaeb5150c)
+
+running 3 tests
+test the_range_twin_bounds_every_close_as_the_element_twin_does ... ok
+test the_range_twin_stops_at_its_cap ... ok
+test the_range_twin_reads_what_the_element_twin_reads_request_by_request ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.78s
+
