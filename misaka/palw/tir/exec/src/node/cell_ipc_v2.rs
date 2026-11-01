@@ -7,6 +7,7 @@
 pub(super) mod budget;
 pub mod codec;
 pub mod cpu;
+pub mod process;
 pub mod session;
 
 pub use budget::{WideCellLimitsV2, WideCellSessionQuoteV2, WideCellUsageV2, quote_client, quote_server};
