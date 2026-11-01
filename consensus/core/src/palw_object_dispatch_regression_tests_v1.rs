@@ -152,7 +152,7 @@ fn dispatcher_lifetime_fixture(
 ) -> (PalwChainStateV2, PalwStateParamsV2, PalwTransitionExtrasV1, PalwConsensusObjectV2, u64) {
     use crate::palw_panel_lifetime_v2::*;
     use crate::palw_permissionless_panel_v1::{PalwPanelV3ParamsV1, PanelPolicyV1};
-    let fx = palw_tir_public_frame_fixture_v1(2);
+    let fx = palw_tir_public_frame_fixture_v1(None, 2);
     let (mut state, params, extras) = world(&fx, &fx.frame);
     let claim_id = fx.frame.plan_v1().original_claim;
     let accepted = state.claims[&claim_id].accepted_daa;
