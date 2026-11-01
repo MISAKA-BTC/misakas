@@ -660,6 +660,7 @@ pub struct VirtualStateProcessor {
     pub(crate) pruning_import_session_lock: parking_lot::Mutex<()>,
     /// LIVE-R1 N3: the PALW state AT the committed virtual sink, for the `palw_*` readers
     /// ([`Self::palw_v2_reader_state`]). Memory only, keyed by the sink it was derived at.
+    pub(super) template_parent_snapshot_v1: template_parent_snapshot_v1::TemplateParentSnapshotCacheV1,
     pub(super) palw_reader_snapshot:
         parking_lot::Mutex<Option<(BlockHash, Arc<kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1>)>>,
     /// LIVE-R1 N2: the consensus half of the partition watchdog — the run of resolves that settled after
@@ -1286,6 +1287,7 @@ pub(crate) mod palw_h1_guard;
 mod palw_pruning_capture_v1;
 mod palw_validate;
 mod template;
+mod template_parent_snapshot_v1;
 pub(crate) use palw_evm_asof_v2::NativeEvmAsOfFaultV2;
 pub use palw_pruning_capture_v1::PalwPruningCaptureFaultV1;
 
@@ -1515,6 +1517,7 @@ impl VirtualStateProcessor {
             native_rows: Default::default(),
             native_readiness_memo: Default::default(),
             pruning_import_session_lock: Default::default(),
+            template_parent_snapshot_v1: Default::default(),
             palw_reader_snapshot: Default::default(),
             palw_refusal_streak: Default::default(),
             palw_h1_guard: Default::default(),
@@ -4147,6 +4150,16 @@ impl VirtualStateProcessor {
         let Some((_, state)) = self.palw_v2_state_at(ghostdag.selected_parent) else {
             return (0, 0);
         };
+        self.native_inclusion_ratio_with_state_v1(ghostdag, non_daa, unentitled, &state)
+    }
+
+    pub(super) fn native_inclusion_ratio_with_state_v1(
+        &self,
+        ghostdag: &GhostdagData,
+        non_daa: &BlockHashSet,
+        unentitled: &BlockHashSet,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+    ) -> (u128, u128) {
         let mut eligible = 0u128;
         let mut total = 0u128;
         let Some(params) = self.palw_state_params_v2.as_ref() else {
