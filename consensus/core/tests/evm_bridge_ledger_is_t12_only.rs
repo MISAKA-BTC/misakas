@@ -37,11 +37,11 @@ fn ids(p: &Params) -> (String, String, String) {
 /// **Re-pinned 2026-09-25 for the lead cap** (`palw_clock_lead_cap`, armed from genesis on testnet-12,
 /// hashed Some-only into all three ids). Previous: `58c04756…` / `6388b87b…` / `2c2f7c0e…`.
 // re-pin 2026-10-31 @cc5a7dd0e096: undeployed model-one fence delayed to 18640 for verified fleet rollout (was 41807e2d…, ebc50f6a…)
-// re-pin 2026-11-01: actual derived twin retaining the new 18850 retention fence.
+// re-pin 2026-11-01: actual derived twin retaining the new 20000 retention fence; unreleased 18850 withdrawn.
 const T12_AT_THE_PARENT_WITHOUT_THE_ATTRIBUTION: (&str, &str, &str) = (
-    "a012c74138264894056e5585a8e664286cf717a1555fae52bc0be94080ae2d19",
+    "08beb0542ec29edfc529a44ec5d1d542c33989edb8c9b62dc9929fc991d9e1bc",
     "e36ebef71a24c0ee234a0db62506caff6a58461f6cce7ba48a6cf6be809c9035",
-    "84145809a36a08e2e0b1c86d150d5ef541579452f33dd70876ef63358d9874cd",
+    "9f6601de29a3df327db3a2a76c975479077e65bf4fa1a7755f65a5431cee6aeb",
 );
 
 /// **The ledger is the only thing this change moved on testnet-12.** Take it away (and the

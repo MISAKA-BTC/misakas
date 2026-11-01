@@ -31,7 +31,8 @@ fn model_panel_one_retention_future_boundary_is_independently_visited_and_mirror
     let scheduled = palw_t12_shipped_params();
     scheduled.validate_palw_v2().unwrap();
     let at = PALW_T12_MODEL_PANEL_ONE_RETENTION_FENCE_DAA_V1;
-    assert_eq!(at, 18_850);
+    assert_eq!(at, 20_000);
+    assert_eq!(scheduled.palw_model_panel_one_v1_fence().unwrap().daa_score(), 18_640);
     let fence = scheduled.palw_model_panel_one_retention_v1_fence().unwrap();
     assert!(!fence.is_active(at - 1));
     assert!(fence.is_active(at));

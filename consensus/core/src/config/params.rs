@@ -11040,7 +11040,7 @@ pub fn palw_t12_shipped_params() -> Params {
 /// This height does not reinterpret claims accepted under the DAA-18,400 rules.
 pub const PALW_T12_MODEL_PANEL_ONE_FENCE_DAA_V1: u64 = 18_640;
 /// Separate future obligation rule: never reinterpret the old 18,400 activation.
-pub const PALW_T12_MODEL_PANEL_ONE_RETENTION_FENCE_DAA_V1: u64 = 18_850;
+pub const PALW_T12_MODEL_PANEL_ONE_RETENTION_FENCE_DAA_V1: u64 = 20_000;
 
 /// The live DAA-18,400 ruleset before the all-model migration, for historical
 /// replay identities and fixtures that deliberately disarm its prerequisites.

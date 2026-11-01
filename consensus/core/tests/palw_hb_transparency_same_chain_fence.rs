@@ -39,11 +39,11 @@ use kaspa_consensus_core::fork_id_v1::{
 /// release `0e8ec984e` was `b8564b88…` / `5de80e64…` / `93da24cc…`, which `palw_t12_launch_params_v1()`
 /// still hashes to): params, identity, schedule — the same pins `palw_clock_lead_cap_is_t12_only`'s
 /// `T12_WITH_THE_CAP` holds.
-// re-pin 2026-11-01: future ModelOne retention fence at 18850; computed by retention-18850 aggregate regression
+// re-pin 2026-11-01: future ModelOne retention fence at 20000 (unreleased 18850 withdrawn); derived for retention-20000; new-source regression evidence recorded separately
 const T12_RELEASED: (&str, &str, &str) = (
-    "bbb4ad66e54695b04f136742902794a6d93aa4cec178e80c185cb58b1c3050a2",
+    "253d22bbc32fbcf3f23e9333524435478a5a7b87ac9a360de6513dde4cdc5248",
     "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-    "5a84a8d700cae89fad2fb6316cf2033d7c80cecede29e7ccfa00eb3088e8679a",
+    "ec5f56fa48cdeafb3a6fc953c02a2dcd53f0f54025fe7243a87972884a47eb5e",
 );
 
 /// An illustrative flag-day height. The operator picks one common, independent height for every

@@ -1,0 +1,22 @@
+use kaspa_consensus_core::config::params::{palw_t12_shipped_params, ForkActivation, Params};
+fn print_ids(label: &str, p: &Params) {
+    println!("{} params={} schedule={} identity={}", label, p.consensus_params_id(), p.consensus_schedule_id(), p.consensus_identity_id());
+}
+fn main() {
+    let mut p = palw_t12_shipped_params();
+    print_ids("compiled-reference", &p);
+    p.palw_model_panel_one_retention_v1 = Some(ForkActivation::new(20_000));
+    p.sync_palw_g14_gates_v1();
+    p.validate_palw_v2().unwrap();
+    print_ids("retention-20000", &p);
+    assert!(p.palw_model_panel_one_v1_fence().unwrap().is_active(18_640));
+    assert!(!p.palw_model_panel_one_retention_v1_fence().unwrap().is_active(19_999));
+    assert!(p.palw_model_panel_one_retention_v1_fence().unwrap().is_active(20_000));
+    let mut old = p.clone(); old.palw_model_panel_one_retention_v1=None; old.sync_palw_g14_gates_v1(); old.validate_palw_v2().unwrap();
+    print_ids("historical-none", &old);
+    let mut never = p.clone(); never.palw_model_panel_one_retention_v1=Some(ForkActivation::never()); never.sync_palw_g14_gates_v1(); never.validate_palw_v2().unwrap();
+    print_ids("historical-never", &never);
+    assert_eq!(old.consensus_params_id(), never.consensus_params_id());
+    assert_eq!(old.consensus_schedule_id(), never.consensus_schedule_id());
+    assert_eq!(p.consensus_identity_id(), old.consensus_identity_id());
+}

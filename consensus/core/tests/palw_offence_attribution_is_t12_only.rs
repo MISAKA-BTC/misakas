@@ -87,11 +87,11 @@ const BEFORE_THE_ATTRIBUTION: &[(&str, &str, &str, &str)] = &[
 /// `palw_clock_lead_cap_is_t12_only` pins that taking it away returns testnet-12's previous ids.
 /// Previous: `05173205…` / `df02039d…` / `beeaa0a8…`.
 // re-pin 2026-10-31 @cc5a7dd0e096: undeployed model-one fence delayed to 18640 for verified fleet rollout (was 2592d935…, adb1d2f1…)
-// re-pin 2026-11-01: actual derived twin retaining the new 18850 retention fence.
+// re-pin 2026-11-01: actual derived twin retaining the new 20000 retention fence; unreleased 18850 withdrawn.
 const T12_BEFORE_THE_ATTRIBUTION: (&str, &str, &str) = (
-    "2c96fc09b9050440d27193bf7bfdf53e1e7f477a548a63888170b1aa4d0139c7",
+    "7fc34c6dbf17a337c20a16b7410f8c40024873427e9de50a2fa7617795a7c759",
     "7be7b92fd3583a6d288ebcd417d3f2cee9ab7d86f13967c19ee28c9aec08c62f",
-    "385e033a25cc6ceff9f050379fe182e26f6fc94e0ffe40a89ef8db169ac02c4b",
+    "4050e781a9093275cfc21d7aaebd1cc835df6c80789243e53bd484ff9ef31270",
 );
 
 /// testnet-12 with this fence AND `palw_class_verify_deadline` taken away — the depth re-derived
@@ -107,11 +107,11 @@ const T12_BEFORE_THE_ATTRIBUTION: (&str, &str, &str) = (
 /// **Re-pinned 2026-09-25 with [`T12_BEFORE_THE_ATTRIBUTION`], for the lead cap**
 /// (`palw_clock_lead_cap`). Previous: `2343195d…` / `1e06025d…` / `b08b25bd…`.
 // re-pin 2026-10-31 @cc5a7dd0e096: undeployed model-one fence delayed to 18640 for verified fleet rollout (was 942a9be8…, 1b3a5dc4…)
-// re-pin 2026-11-01: actual derived twin retaining the new 18850 retention fence.
+// re-pin 2026-11-01: actual derived twin retaining the new 20000 retention fence; unreleased 18850 withdrawn.
 const T12_BEFORE_THE_ATTRIBUTION_AND_THE_DEADLINE: (&str, &str, &str) = (
-    "90adbb90aa759482d66a3201974f8fd19f7b6d557bce7cc8318946fa4a55dff9",
+    "488c0c510bebdddfde9810f20112d5920f0750a96155be4c1a4cc0ffd956e078",
     "0d7ca2bade522865cc0c3f464262b90834064de57ad1c984ecdbf11b3cab9c8c",
-    "f882a28c7d007e615e8eeb83d39de7774df183d0abc368e47838cbe9e299fca6",
+    "ffcc2b4989da7e0f39ed83fa109d13ac0390dedcd9dd485197fbedc6ca57dbde",
 );
 
 fn shipped(name: &str) -> Params {
