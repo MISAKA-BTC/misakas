@@ -317,7 +317,8 @@ impl BoundedPalwTirHeaderV1 {
 
     /// Validate only byte equality and the existing tensor-table/file geometry
     /// against an independently canonical-decoded, normal-form-validated program.
-    /// This is NOT another program validator: keep the Core program owner/lease.
+    /// This is NOT another program validator: retain the program owner and the
+    /// caller's separate reservation for all coexisting startup ownership.
     /// No program/layout/tensor copy or BTreeMap index is constructed here.
     pub fn validate_with_program<'a>(
         &'a self,
@@ -515,8 +516,8 @@ mod tests {
         let Ref::Node(logits) = value else { unreachable!() };
         let post = post.finish(&[]);
         let program = p.finish(pre, vec![], post, logits);
-        // In production this canonical program and its parse/validation lease
-        // come from the independent Core bounded owner, not this test decode.
+        // Production uses an independent bounded program owner plus the caller's
+        // separate startup reservation, rather than this test-only decode.
         let bytes = program.encode();
         let program = TirProgramV1::decode_canonical(&bytes).unwrap();
         let original = header(bytes);
