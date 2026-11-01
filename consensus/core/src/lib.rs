@@ -775,6 +775,8 @@ pub mod palw_terminal_carriage_v1;
 pub mod palw_tir_admission_v1;
 /// Explicit pure wide-only TIR admission data; no native dispatch or activation.
 pub mod palw_tir_admission_v2;
+/// Chain-selected legacy/wide registration routing; no object or environment selector.
+pub mod palw_tir_registration_dispatch_v1;
 /// RFC-0002 Phase F (F3): the TIR inventory — the artifact layout an IR class's `artifact_root` commits to.
 pub mod palw_tir_artifact_v1;
 /// RFC-0002 Phase F step F6: an IR class's attempt job — the canonical job, the yardstick context and the job an anchor names (J5).

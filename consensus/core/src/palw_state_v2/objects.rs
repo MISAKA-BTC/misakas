@@ -1904,9 +1904,10 @@ fn apply_object_batch_04_v1(
             builder.write_gen_class(*class_id, Some(record))?;
         }
         // **RFC-0002 Phase F (tag 61): an IR class registration**, past `palw_tir_v1` (the lock above
-        // refuses it below). Admission v10 ran at acceptance (ADR-0049 Decision H: no graph walk
-        // inside the transition); the fold derives what it keeps from the carried class — the
-        // `tir_classes` row by the one function v10 derives it with, and the registry work from the
+        // refuses it below). Chain-selected v10 or explicit wide V2 admission ran at acceptance
+        // (ADR-0049 Decision H: no full admission/range walk inside the transition);
+        // the fold derives what it keeps from the carried class — the
+        // `tir_classes` row by the same selected derivation, and the registry work from the
         // program — and folds the rest through the legacy registration's own body. A class with a
         // dissected commit point (spec 04b §9.5.1: a cone that reduces over the history) owes its
         // court's terminal move — a root claim at a dissected leaf, an acquitting close at any other
@@ -1930,8 +1931,19 @@ fn apply_object_batch_04_v1(
                 });
             }
             builder.tir_registrations += 1;
-            let (record, program) = crate::palw_tir_admission_v1::palw_tir_class_record_v1(&admission.class, artifact_root)
-                .map_err(|_| PalwStateV2Error::TirRegistrationRefused("the carried IR program does not decode"))?;
+            let (record, program) = match builder.params.tir_wide_registration_fence_at(ctx.daa_score) {
+                Some(selected) => crate::palw_tir_registration_dispatch_v1::palw_tir_class_record_selected_v1(
+                    &admission.class,
+                    artifact_root,
+                    &selected,
+                    ctx.daa_score,
+                )
+                .map_err(|_| PalwStateV2Error::TirRegistrationRefused("the carried IR program does not decode"))?,
+                // The old height-only/manual and court1 paths remain exactly
+                // the legacy factory. In particular, neither can admit wide.
+                None => crate::palw_tir_admission_v1::palw_tir_class_record_v1(&admission.class, artifact_root)
+                    .map_err(|_| PalwStateV2Error::TirRegistrationRefused("the carried IR program does not decode"))?,
+            };
             if record.facts.class_id != *class_id {
                 return Err(PalwStateV2Error::TirRegistrationRefused("the declared class id is not the carried class's"));
             }

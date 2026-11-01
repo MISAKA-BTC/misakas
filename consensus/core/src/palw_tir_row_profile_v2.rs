@@ -21,6 +21,19 @@ use misaka_palw_tir::{
     program::{HISTORY_BOUND_V1_HELD, MAX_PROGRAM_BYTES},
 };
 
+/// Deny the known wide profile at legacy readers that have no width adapter.
+/// In canonical TirProgramV1 Borsh, the scheme is the final fixed 64-byte field.
+/// This allocation-free check is only a refusal: it neither parses/authenticates
+/// the row nor establishes that any other bytes are a supported legacy profile.
+/// Empty, unknown and synthetic rows retain their existing reader behavior.
+pub(crate) fn reject_known_wide_tir_row_v1(record: &PalwTirClassRecordV1) -> Result<(), &'static str> {
+    if record.program.ends_with(&misaka_palw_tir::program::LOGITS_I64_Q24_SCHEME_V2) {
+        Err("wide Q24 requires an explicit V2 reader; this legacy consumer is not adapted")
+    } else {
+        Ok(())
+    }
+}
+
 /// A metadata-only wire-lane classification. Legacy four-byte logits include
 /// ALL old committable dtypes (I8/I16/I32/Idx), not just the arithmetic I32 type.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

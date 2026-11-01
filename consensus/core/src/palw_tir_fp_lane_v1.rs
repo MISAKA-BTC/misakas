@@ -35,6 +35,7 @@ use crate::palw_tir_step_v1::{PalwTirJobShapeV1, PalwTirStepSpaceV1};
 /// tokenizer and the published layout. Refused unless the layout is the one the class id binds (`layout_digest`) and the program is
 /// the record's (`graph_ir_root`, the load check).
 pub fn palw_tir_fp_class_v1(record: &PalwTirClassRecordV1, layout: &PalwTirLayoutV1) -> Result<PalwTirClassV1, String> {
+    crate::palw_tir_row_profile_v2::reject_known_wide_tir_row_v1(record).map_err(str::to_string)?;
     record.check_program_v1().map_err(str::to_string)?;
     let class = PalwTirClassV1 {
         version: PALW_TIR_CLASS_VERSION_V1,
@@ -154,6 +155,7 @@ pub fn palw_tir_fp_lane_covered_v1<'a>(
     record: &PalwTirClassRecordV1,
     families: impl IntoIterator<Item = &'a crate::palw_e2e_adjudicability::PalwE2eFamilyV1>,
 ) -> Result<(), String> {
+    crate::palw_tir_row_profile_v2::reject_known_wide_tir_row_v1(record).map_err(str::to_string)?;
     record.check_program_v1().map_err(str::to_string)?;
     let program = misaka_palw_tir::TirProgramV1::decode_canonical(&record.program).map_err(|e| e.to_string())?;
     let reachable = crate::palw_tir_admission_v1::palw_tir_reachable_prims_v1(&program);

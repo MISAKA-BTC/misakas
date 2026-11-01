@@ -33,6 +33,9 @@ pub(super) fn open_da_session_v2(
         return Err(PalwStateV2Error::DaCourtDormant);
     }
     let claim = builder.state.claims.get(&claim_id).ok_or(PalwStateV2Error::MissingClaim(claim_id))?.clone();
+    if let Some(record) = builder.state.tir_class_v1(&claim.class_id) {
+        crate::palw_tir_row_profile_v2::reject_known_wide_tir_row_v1(record).map_err(PalwStateV2Error::TirFence2Refused)?;
+    }
     if claim.phase.is_terminal() {
         return Err(PalwStateV2Error::WrongPhase { claim: claim_id, edge: "DefaultAccused" });
     }
@@ -175,6 +178,9 @@ pub(super) fn open_da_session_rcore_mode_v1(
     }
     let admission = builder.read().da_admission_v1(&claim_id, &accuser, ctx.daa_score)?;
     let claim = builder.state.claims.get(&claim_id).ok_or(PalwStateV2Error::MissingClaim(claim_id))?.clone();
+    if let Some(record) = builder.state.tir_class_v1(&claim.class_id) {
+        crate::palw_tir_row_profile_v2::reject_known_wide_tir_row_v1(record).map_err(PalwStateV2Error::TirFence2Refused)?;
+    }
     // **D2 (REQ-T6-3, restricted; `palw_court_model_scope_v1`)**: a held `StepLeaf` demand compels the producer's weight rows
     // (`artifact_openings`), so on a claim accepted past the fence it is not admissible — LG14-B's legacy held unit, whose answer owes
     // no model rows, is the route. A claim accepted below the fence keeps the demand (the OLD rule).
