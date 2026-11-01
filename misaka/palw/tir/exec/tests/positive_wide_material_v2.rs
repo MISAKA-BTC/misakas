@@ -592,3 +592,6 @@ fn denied_capture_ram_reservation_precedes_all_allocating_identity_hashes() {
 
 #[path = "positive_wide_material_v2/stream_record_tests.rs"]
 mod stream_record_tests;
+
+#[path = "positive_wide_material_v2/loaded_bridge_tests.rs"]
+mod loaded_bridge_tests;
