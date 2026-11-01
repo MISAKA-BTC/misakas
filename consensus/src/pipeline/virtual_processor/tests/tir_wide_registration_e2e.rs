@@ -439,8 +439,14 @@ async fn wide_registration_one_per_block_cap_preserves_both_real_carrier_utxo_ac
 // Keep construction of the large test continuation outside the runtime's
 // block_on/poll call chain. This changes ownership, not the libtest stack size.
 #[inline(never)]
-fn isolated_wide_carrier_origin_boxed_case() -> std::pin::Pin<Box<dyn std::future::Future<Output = ()>>> {
-    let setup = Box::new(isolated_origin_config());
+fn isolated_wide_carrier_origin_boxed_setup() -> Box<(Config, PalwConsensusParamsV2, Premine, Premine)> {
+    Box::new(isolated_origin_config())
+}
+
+#[inline(never)]
+fn isolated_wide_carrier_origin_boxed_case(
+    setup: Box<(Config, PalwConsensusParamsV2, Premine, Premine)>,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()>>> {
     Box::pin(async move {
         use kaspa_consensus_core::palw_class_registration_origin_v1::{
             PalwClassRegistrationDoorV1, palw_class_admission_digest_v1, palw_class_registration_origin_row_v1,
@@ -491,6 +497,7 @@ fn isolated_wide_carrier_origin_boxed_case() -> std::pin::Pin<Box<dyn std::futur
 
 #[test]
 fn isolated_wide_carrier_origin_matches_actual_accepting_block_and_survives_same_db_restore() {
-    let mut case = isolated_wide_carrier_origin_boxed_case();
+    let setup = isolated_wide_carrier_origin_boxed_setup();
+    let mut case = isolated_wide_carrier_origin_boxed_case(setup);
     tokio::runtime::Builder::new_current_thread().enable_all().build().expect("Failed building the Runtime").block_on(case.as_mut());
 }
