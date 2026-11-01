@@ -18,6 +18,9 @@ use std::{
     mem::size_of,
 };
 
+/// Configured native-File/same-byte startup pre-admission, with no Core dependency.
+pub mod startup_quote;
+
 const SCRATCH_BYTES: u64 = 8192;
 
 /// Per-operation local policy, not a host lease or a physical RSS claim.

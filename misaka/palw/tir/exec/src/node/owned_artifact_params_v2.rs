@@ -23,6 +23,9 @@ use std::{
     mem::size_of,
 };
 
+/// Concrete same-descriptor aggregate startup owner.
+pub mod loaded;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OwnedParamErrorV2 {
     UnsupportedPolicy,
@@ -408,6 +411,16 @@ pub fn load_owned_artifact_params_v2<'a, R: Read + Seek>(
     let metadata_work = budget.start(inputs)?;
     let q = quote(inputs, budget.limits, metadata_work)?;
     budget.admit(q)?;
+    load_owned_artifact_params_admitted_v2(reader, inputs, q, reserver)
+}
+// Private sequencing seam: only the public loader above or the aggregate Loaded
+// child calls this AFTER both local/cumulative and whole-operation admission.
+fn load_owned_artifact_params_admitted_v2<'a, R: Read + Seek>(
+    reader: &mut R,
+    inputs: OwnedParamInputsV2<'a>,
+    q: OwnedParamQuoteV2,
+    reserver: Option<&TirMemoryReserverV1>,
+) -> Result<OwnedArtifactParamsV2<'a>, E> {
     let layout_origin = check_pins(inputs)?;
     let lease = match reserver {
         Some(r) => Some(
