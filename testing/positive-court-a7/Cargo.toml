@@ -16,6 +16,8 @@ libcrux-ml-dsa = "=0.0.10"
 kaspa-consensus-core = { path = "../../consensus/core" }
 misaka-palw-positive-contract = { path = "../../misaka/palw/positive-contract" }
 misaka-palw-tir = { path = "../../misaka/palw/tir/core" }
+misaka-palw-tir-artifact = { path = "../../misaka/palw/tir/artifact" }
+sha2 = "0.10"
 misaka-palw-tir-exec = { path = "../../misaka/palw/tir/exec", features = ["positive-panel"] }
 misaka-palw-remote = { path = "../../misaka/palw/remote", features = ["positive-miner"] }
 misaka-palw-positive-accounting = { path = "../../misaka/palw/positive-accounting" }

@@ -1859,8 +1859,10 @@ dependencies = [
  "misaka-palw-positive-contract",
  "misaka-palw-remote",
  "misaka-palw-tir",
+ "misaka-palw-tir-artifact",
  "misaka-palw-tir-exec",
  "serde_json",
+ "sha2",
  "tempfile",
 ]
 
