@@ -480,7 +480,8 @@ mod replay_tests {
     }
 }
 
-#[cfg(test)]
+// The native replay quote explicitly requires the pinned 64-bit layout.
+#[cfg(all(test, target_pointer_width = "64"))]
 mod owned_replay_tests {
     use super::*;
     use crate::palw_state_v2::{PalwBlockContextV2, PalwChainStateV2, PalwDeltaEntryV2, PalwStateDeltaV2, PalwStateParamsV2};
