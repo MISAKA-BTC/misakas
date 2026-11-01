@@ -1,0 +1,129 @@
+{
+  "artifact": "private wide record streaming, existing record bytes/identity and independent Node numerical driver",
+  "baseline_root_head_at_start": "919309e93929938c0f90b9b3abe330625510c2f9",
+  "baseline_root_head_at_freeze": "4e6724e32ac2cbde9f7d021ee87cf8f7c05f5218",
+  "patch": "/tmp/positive-a0-wide-record-stream-v2.patch",
+  "patch_sha256": "214dbf15373fed946fa3394b2aa144644201ef41281d3a6f9989b9a47dcc1533",
+  "frozen_tree": "/tmp/positive-wide-record-stream-v2-frozen",
+  "checks_log": "/tmp/positive-a0-wide-record-stream-v2.checks.log",
+  "checks_sha256": "7dc3026a4fc149ee05035927b723301e0c2de49e1a39b4d5235ea0721151b8da",
+  "checks": {
+    "rustfmt_check_exit": 0,
+    "git_apply_check_exit": 0,
+    "cargo": "NOT_RUN_BY_INSTRUCTION",
+    "rustc": "NOT_RUN_BY_INSTRUCTION"
+  },
+  "files": [
+    {
+      "file": "consensus/core/src/palw_positive_check_v2/full_relation/wide_v2/stream.rs",
+      "before_sha256": null,
+      "after_sha256": "20627e7341c09cc272759335f562eafd35fb1b0a37bf6e653af8148303c85195",
+      "bytes": 20068,
+      "status": "new"
+    },
+    {
+      "file": "consensus/core/src/palw_positive_check_v2/full_relation/wide_v2/tests/stream_record.rs",
+      "before_sha256": null,
+      "after_sha256": "0400905ac4159c713b7ba0d129ddc40f6a07c5da45af83c8f646f080e84c885a",
+      "bytes": 12818,
+      "status": "new"
+    },
+    {
+      "file": "consensus/core/src/palw_positive_check_v2/full_relation/wide_v2/tests.rs",
+      "before_sha256": "d76382205b7d8eee95f009a069cf70f16c1ecc19ef2b6c1000a829beb7d1cfba",
+      "after_sha256": "4fd2e6a8cb9be8ea0bcd94e3dd79f5e0607d5704c56e1f41e9d66a7fbcd70d20",
+      "bytes": 22924,
+      "status": "modified"
+    },
+    {
+      "file": "consensus/core/src/palw_positive_check_v2/full_relation/wide_v2.rs",
+      "before_sha256": "a0b449e48c41226905c662e565eed683e88b83a4776e1980c666729e8be747bd",
+      "after_sha256": "731a8a15d3a00d665e9de4b49194c705f304f73feb15e0dff977c395d78f6559",
+      "bytes": 22221,
+      "status": "modified"
+    },
+    {
+      "file": "consensus/core/src/palw_positive_check_v2/full_relation.rs",
+      "before_sha256": "35fe0c422b2595c3fd7a346edd562623e32e35902365a481b639f11aadb591f3",
+      "after_sha256": "6749ec8639ea3f49bd33eb5687ed10730c405a1e19da88cb32f9c921bbb7d224",
+      "bytes": 30292,
+      "status": "modified"
+    },
+    {
+      "file": "misaka/palw/tir/exec/src/node/positive_wide_material_v2/claims_tape.rs",
+      "before_sha256": "35c363b97c352d92c273049f4c94e3d242c4bb55de6a740c93a5afc388007108",
+      "after_sha256": "23bc7fae94fcbc41dd303dac73a31a05be079f62185d25c4f6f1239a27b316e4",
+      "bytes": 8018,
+      "status": "modified"
+    },
+    {
+      "file": "misaka/palw/tir/exec/tests/positive_wide_material_v2/stream_record_tests.rs",
+      "before_sha256": null,
+      "after_sha256": "c1efa6e58d91d155df4a236402c43234207c9d7a6062eb531ffa09fdf54a08e1",
+      "bytes": 9355,
+      "status": "new"
+    },
+    {
+      "file": "misaka/palw/tir/exec/tests/positive_wide_material_v2.rs",
+      "before_sha256": "d9cadae593b410f7c184924dcc516c09d00689364e30813d17c5e24072b1b0ce",
+      "after_sha256": "cff213ac6114dac0742dba6d329b508f8140055d05860eb40fe5e9d7d25bbdf2",
+      "bytes": 24321,
+      "status": "modified"
+    }
+  ],
+  "new_tests": [
+    {
+      "file": "consensus/core/src/palw_positive_check_v2/full_relation/wide_v2/tests/stream_record.rs",
+      "test": "old_record_bytes_match_stream_signature_and_every_wide_relation_is_required_before_eof_outcome",
+      "state": "SOURCE_ONLY_NOT_COMPILED_OR_EXECUTED"
+    },
+    {
+      "file": "consensus/core/src/palw_positive_check_v2/full_relation/wide_v2/tests/stream_record.rs",
+      "test": "signed_bad_panel_claim_is_only_attributed_after_eof_and_never_turns_into_miner_output_fault",
+      "state": "SOURCE_ONLY_NOT_COMPILED_OR_EXECUTED"
+    },
+    {
+      "file": "consensus/core/src/palw_positive_check_v2/full_relation/wide_v2/tests/stream_record.rs",
+      "test": "wrong_signed_miner_output_waits_for_complete_claims_source_coverage_and_eof_signature",
+      "state": "SOURCE_ONLY_NOT_COMPILED_OR_EXECUTED"
+    },
+    {
+      "file": "consensus/core/src/palw_positive_check_v2/full_relation/wide_v2/tests/stream_record.rs",
+      "test": "post_begin_changed_unread_tape_with_local_mismatch_has_no_panel_or_miner_verdict_on_wrong_root",
+      "state": "SOURCE_ONLY_NOT_COMPILED_OR_EXECUTED"
+    },
+    {
+      "file": "consensus/core/src/palw_positive_check_v2/full_relation/wide_v2/tests/stream_record.rs",
+      "test": "middle_disk_failure_or_invalid_signature_cannot_expose_a_computation_outcome",
+      "state": "SOURCE_ONLY_NOT_COMPILED_OR_EXECUTED"
+    },
+    {
+      "file": "consensus/core/src/palw_positive_check_v2/full_relation/wide_v2/tests/stream_record.rs",
+      "test": "source_delivery_retry_uses_same_claim_without_re_read_or_coverage_advance",
+      "state": "SOURCE_ONLY_NOT_COMPILED_OR_EXECUTED"
+    },
+    {
+      "file": "consensus/core/src/palw_positive_check_v2/full_relation/wide_v2/tests/stream_record.rs",
+      "test": "unknown_provider_owners_or_denied_mandatory_lease_refuse_before_any_stream_read",
+      "state": "SOURCE_ONLY_NOT_COMPILED_OR_EXECUTED"
+    },
+    {
+      "file": "consensus/core/src/palw_positive_check_v2/full_relation/wide_v2/tests/stream_record.rs",
+      "test": "noncanonical_outer_or_claim_lengths_and_trailing_bytes_cannot_reach_an_outcome",
+      "state": "SOURCE_ONLY_NOT_COMPILED_OR_EXECUTED"
+    },
+    {
+      "file": "misaka/palw/tir/exec/tests/positive_wide_material_v2/stream_record_tests.rs",
+      "test": "detached_disk_claims_and_materials_finish_real_node_after_producer_run_is_released",
+      "state": "SOURCE_ONLY_NOT_COMPILED_OR_EXECUTED"
+    }
+  ],
+  "authority": "NONE; no native row/wire/fence/operation/domain/funding/P/credit changes",
+  "remaining": [
+    "Independent typecheck/Clippy/runtime of these sources, old narrow/full wide regression suites",
+    "Actual native body/reader dispatch and rooted source/session/resource owners are not supplied",
+    "Full real trained LLM feasibility unmeasured; producer captures/run/Merkle inventory retain existing bounded RAM owners",
+    "Production source-material tape/provider transport beyond detached claims tape remains separate; SDK archive is local test-only and not a peer decoder",
+    "Every external model/preparation/provider/material alias, crypto scratch, file/cache and disk retention owner must be reserved independently before input allocation/copy and retained through transfer"
+  ]
+}

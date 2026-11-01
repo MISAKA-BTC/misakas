@@ -1,0 +1,92 @@
+{
+  "review": "Independent read-only A3 compiled-plan logical quote/opaque owner source audit; no Cargo/build/runtime",
+  "commits": [
+    "54d4fa6b3b964cbbe092ab0aa032811678905b3d",
+    "d410c20eaff33b1629a3e8ed10190c1a80df8e76"
+  ],
+  "owner_census_evidence_commit": "adaab8ddd366d3edae1c6ddba6ff9902dae801e9",
+  "dependencies": [
+    "74bd239321771f47cd2a6eabdb338c63649292ba",
+    "9c010109dc56f51808c51dded67c4b93df10fa2c"
+  ],
+  "source_sha256": "cc24885f8b7d148467329bd4faf16cbcb5831bb0a302b3aa9f33c2c52fc6639c",
+  "hash_evidence": "/tmp/positive-a0-a3-plan-compile-independent-hashes-20261102.json",
+  "original_plan_file_unchanged_except9line_cfg_export": true,
+  "current_root_plan_matches_before": true,
+  "recommendation": "READY_FOR_SELECTIVE_IMPORT_AS_LOGICAL_QUOTE_AND_OPAQUE_COMPILE_HELPER; not completion of mandatory host reservation/startup pipeline. Typecheck/lint/runtime still required.",
+  "arithmetic_or_source_identity_blockers_found": [],
+  "important_contract_gap": {
+    "file": "misaka/palw/tir/exec/src/plan/compile_quote_v2.rs",
+    "line": 243,
+    "finding": "compile(self) directly calls TirPlan::compile(source.program()) and accepts no guard/reserver/token. It returns an owner that retains no host guard. Mandatory acquire-before-compile and retain-through-plan-lifetime are documented caller obligations, not enforced here. Quote walk precharge/retry accounting likewise requires an external cumulative startup budget.",
+    "classification": "Scope/integration limitation, not an underquote bug when used under stated caller contract. Cannot describe this module itself as an implemented mandatory-guard pipeline.",
+    "safe_followup": "Actual aggregate must precharge quote visits on every attempted/retried preparation, acquire a real host guard from the quote before consuming compile, account its own root/external owners, and retain guard through plan destruction/export lifetimes. No success stub or lease fabrication."
+  },
+  "line_anchors": {
+    "pub fn compile(self)": 243,
+    "pub(crate) fn plan": 280,
+    "pub fn tir_plan_compile_quote_visits_upper": 288,
+    "pub fn prepare_tir_plan_compile": 291,
+    "fn program_clone_heap": 302,
+    "pub fn quote_tir_plan_compile": 351,
+    "let revalidation_requests": 369,
+    "let mut row_bytes": 396,
+    "let mut state_bytes": 465,
+    "let producer_frame_bytes": 500,
+    "UnsupportedCoverage": 615,
+    "fn actual_compile_const": 632,
+    "fn exact_and_one": 660,
+    "fn shared_vec_tree": 686
+  },
+  "audit": [
+    {
+      "area": "immutable source/wrong-source substitution",
+      "finding": "Prepared fields private, no Clone or unchecked ctor, borrow exact LocalSourceProgramOwnerV1; that owner private constructor uses supported-build-gated same-byte scanner then canonical decoder/NF, exposes shared immutable program only. Quote cannot be caller-constructed/edited; consuming compile has no replacement-program parameter. No mutation or alternative grammar/callback at compile seam."
+    },
+    {
+      "area": "quote before allocating work",
+      "finding": "quote_tir_plan_compile_v2 only checked scalar arithmetic, lengths/rank lookups and borrowed collection traversal. It neither compiles/validates/encodes nor creates Vec/String/tree/formatting; fixed Copy error kinds. O(1) visit-upper can be charged externally before count traversal. Geometry failures precede compiler allocation. This does not mean original source parsing, header/file or supplied copies were pre-reserved by this module."
+    },
+    {
+      "area": "compiler preserved",
+      "finding": "Machine check removed only exact9-line cfg(node) declaration/export insertion from plan.rs and obtained byte-identical parent. All original compile/validation/early errors/row construction remain. d410 style followup only elides inferred lifetime. No native flags/wire IDs/pricing/model tiers/credit changed."
+    },
+    {
+      "area": "program clone/info/native constants",
+      "finding": "Census covers typed declaration/block/node arrays, names/constant byte arrays, shapes/carry/types/inputs/transpose perm/layers; ProgramInfo BlockInfo/carry tensor shapes; native constant Buf array and dtype-specific buffers. One SECOND complete admitted immutable Source envelope pays unchanged validate allocations/diagnostics; original Source and compiler ProgramInfo explicitly retained separately. Logical conservative SUM, not new validation policy or CPU guarantee."
+    },
+    {
+      "area": "blocks and constants scratch",
+      "finding": "Per-block NodePlan/carry vectors and per-node original inputs/out/in-types/intervals/shape ranks inventoried. ranges::node_facts uses scalar interval operations; leaf constant scan has no Vec. Const-first Gather slab_interval creates usize shape plus full Buf.to_i128s, quoted as maximum whole constant width (not selected rows). Byte divisions valid under canonical NF and widths match original dtype."
+    },
+    {
+      "area": "states/parameter memberships",
+      "finding": "All declared state slots/layer slots conservatively bound sparse touched instances, instance_of arrays and instance shape heaps; state touch tree bounded by all states. Duplicate grow<StateInstance> is conservative, no omitted dynamic state tensor (compile allocates metadata only). Param memberships tree bounded by declared per-layer slots; NF forbids per-layer params outside layer blocks, preventing extra None key undercount. Occurrences and duplicate occurrence_slot_bases temporary covered."
+    },
+    {
+      "area": "row site retained/scratch",
+      "finding": "Counts per-block Option gather arrays, group arrays, dense bool flags, every potential axis0/no-batch Gather. Group members minimum-capacity partition bound includes both flat grow(total) and candidate*grow(1). Temp view array, carry set tree plus FromIterator input Vec, by_index map, data/index TensorType shape clones and fixed_dims arrays explicitly coexist. Reshape temp dims included. MAX_CARRY8 from NF bounds the pinned small-sort assumption; exact upstream Rust1.93 source behavior is inherited reviewed dependency, not newly runtime measured."
+    },
+    {
+      "area": "plan opacity/lifetimes",
+      "finding": "Returned owner private plan/quote, no Clone/Deref/public raw accessor/conversion. Crate-private plan() can access TirPlan public OnceLock only inside trusted same-crate bridge; future fusion/refine/exports need separate accounting. Owner retains no Source borrow so aggregate need not self-reference. No literal quote or opaque plan is native execution authority."
+    },
+    {
+      "area": "errors and failure work",
+      "finding": "Backend TirError allocated payload is funded by second validation envelope, classified by fixed kind and dropped before return. No owned error String escapes this wrapper. Panics/OOM are not recovered. Compiler NF CPU, constant scans, tree comparisons and total execution are not bounded by quote_visits; named occurrence/const counters are partial work dimensions only. Compile retry cost/host guard failure carryover is outside this helper."
+    },
+    {
+      "area": "tests/source limits",
+      "finding": "Three source tests exercise narrow/wide/repeated-layer metadata compilation, original constants/full4-lane slab, exact row group/state counts, empty fusion, exact/one-below4caps, checked Vec/tree overflow. Unknown build profile deliberately prints UNSUPPORTED and returns early; a passing Rust test on that branch proves no actual compilation, so runtime evidence must record supported execution explicitly. Tests use no actual guard; they validate logical API only."
+    }
+  ],
+  "runtime": "ALL_NEW_SOURCE_UNRUN_BY_REVIEW; no typecheck, strictlint, quote noallocation instrumentation, compile allocation census measurement or all-source/runtime resource bound established",
+  "validation_needed": [
+    "Typecheck and strictClippy on supported Source profile; preserve unsupported-profile branch separately.",
+    "Execute3newtests and old plan/compiler/row/constant/state regressions without expected-value regeneration.",
+    "Use meaningful allocation instrumentation to verify pure quote has zero allocations, and full compile logical request envelopes if claiming measured allocation coverage. Existing3tests do not measure allocator requests.",
+    "Actual startup aggregate integration must enforce cumulative attempts/work and real guard acquisition/lifetime including caller inputs/external owners; then verify wrong-source/refusal/retry/ownerDrop behavior.",
+    "No model arithmetic, native admission, P/credit/publicactivation or full retained trained LLM startup success follows from these tests."
+  ],
+  "mutations": "Only /tmp JSON evidence; immutable git show and readonly local source. No Root/A3 source/index edits or Cargo/build/target/model operations."
+}

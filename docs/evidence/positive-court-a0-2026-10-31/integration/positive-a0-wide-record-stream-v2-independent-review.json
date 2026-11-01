@@ -1,0 +1,74 @@
+{
+  "review": "Independent frozen stream source audit; readonly, no Cargo/rustc/runtime/model reruns",
+  "artifact_sha256": "214dbf15373fed946fa3394b2aa144644201ef41281d3a6f9989b9a47dcc1533",
+  "manifest_sha256": "073e7a97709ebb61dcce4291916396cd2fecd2561fd4ad43b0b416bbd17268ab",
+  "current_root_at_hash_check": "babfda57e74b62ed8bb83cfbbac9a535107fd25e",
+  "hash_evidence": "/tmp/positive-a0-wide-record-stream-v2-independent-hashes.json",
+  "all_8_frozen_hashes_match": true,
+  "all_5_existing_before_hashes_and_3_absences_match_current_root": true,
+  "git_apply_check_exit": 0,
+  "recommendation": "HOLD frozen artifact: repair one statically identified type mismatch and refreeze; no other source-level blocker found in reviewed boundary; compile/runtime remain required",
+  "blockers": [
+    {
+      "priority": "P1",
+      "file": "consensus/core/src/palw_positive_check_v2/full_relation/wide_v2.rs",
+      "line": 411,
+      "issue": "Refactor dropped explicit borrow: argument self.record.binding().full_logits_trace_root is Hash64; WideLogitsEventV2::authenticate second argument is &Hash64 at consensus/core/src/palw_logits_q24_v2.rs:138. Rust does not auto-borrow ordinary function arguments.",
+      "minimal_fix": "&self.record.binding().full_logits_trace_root",
+      "status": "STATIC_SIGNATURE_MISMATCH_NOT_COMPILED"
+    }
+  ],
+  "reviewed_invariants": [
+    {
+      "area": "old Borsh and local signature identity",
+      "finding": "Only old final claims tuple field is split off. Prefix result/author/binding/generated/policy/form/signature_context uses unchanged Borsh field order; Vec and slice Borsh encode same length/elements. Old resident record uses same helper then unchanged claims.serialize. Keyed hash/domain/context/cap ordering unchanged. New independent old literal tuple test pins both old/resident and streamed digest; not run."
+    },
+    {
+      "area": "numerical driver and old Vec outcomes",
+      "finding": "Sealed WideRecordAccessV2 only abstracts binding/generated/claim. Existing source authentication, direct evaluation, legacy target validation, logits ordering/greedy checks and finish output root remain shared. Old resident record private constructors already ensure valid claim index; new get maps impossible missing resident claim to Delivery instead of panic. No arithmetic clone, dtype rewrite, rescale, new domain or native result capability."
+    },
+    {
+      "area": "TOCTOU and attribution",
+      "source": "stream.rs:436-507",
+      "finding": "Each consumed byte is hashed in the read that supplies numerical claims. submit hides PanelMismatch as NeedEof with private pending flag; finish drains remaining structurally bounded claims, requires exact EOF, matching digest, then MLDSA before WitnessRejected or inner.finish. Changed same-length file/read alias cannot retain matching signed digest. Invalid root/signature/short IO exposes no computation outcome. Panel mismatch cannot become Miner OutputMismatch; only complete successful numerical coverage enters inner.finish."
+    },
+    {
+      "area": "source delivery retries",
+      "source": "stream.rs:447-476; wide_v2.rs:275-305",
+      "finding": "On authenticated-source Delivery, current claim stays owned, next_relation/frontier unchanged, and numerical driver charges attempted material/source/elements/terms/geometry cumulatively. Retrying uses same claim and no claims reread. Budget/Unverified or stream read error closes stream checker. Meter is not a reusable acceptance capability."
+    },
+    {
+      "area": "finite caps and owner order",
+      "source": "stream.rs:231-315, 328-402",
+      "finding": "Trusted preparation supplies bounded relation geometry/count. Acquire performs checked scalar inventory/capacity arithmetic, nonzero ceilings, known reader retention/scratch requirement, metadata-auth floor and max extra/record inventory checks before validate_binding/hash/read/one-claim decode. Reserver mandatory and retained in marker/checker. One Vec has exactly declared lane capacity; fixed4096-byte scratch; relation and per-claim lengths must exactly match trusted plan; dtype and EOF structural checks. No generic untrusted Borsh deserialize in production stream module."
+    },
+    {
+      "area": "detached session and disk ownership",
+      "source": "claims_tape.rs:17-25, 46, 115-145; existing mod.rs:122-168,204-238",
+      "finding": "Detached tape owns Tape(File,len)+Rc<Session>; Session contains only limits/cumulative meter/disk lease, no capture/run/params/model pointer. rewind resets cursor only, not Session budgets. Tape read retains range+IO charging; length mutation denied, same-length mutation denied at final stream digest. Read cursor stays <= fixed tape len through private construction/read/rewind. Shared disk guard retained after capture drop."
+    },
+    {
+      "area": "source-only SDK integration test",
+      "source": "exec/tests/positive_wide_material_v2/stream_record_tests.rs:83-225",
+      "finding": "Windows1/3 test spools bounded local claim/material files, independently owns archive copies before construction, detaches Node checker, checks both CPU/run capture lease counters dropped before checking. Test Frame generic Borsh decoding is explicitly trusted locally generated test archive, not a new peer decoder. Successful Node test remains unexecuted source, same-run material provenance, no independently expected LLM calculation."
+    },
+    {
+      "area": "authority boundary",
+      "finding": "No native row/version/tag/fence/policy/rate/operation/funding/P/credit changes. Stream marker has private fields and no Deserialize; getters provide literal metadata/signing digest only. No public network activation/native memory lease/full trained LLM feasibility established."
+    }
+  ],
+  "caveats": [
+    "read_bytes is conservative requested remaining bytes charged before each read/Interrupted, plus one EOF probe; it is not measured actual successful disk bytes. File system/cache and metadata IO are external owner obligations.",
+    "Reader bounds and external_retained_bytes/signature_workspace_bytes are trusted operational declarations; nonzero values do not authenticate providers or prove real process/RSS containment. Preparation/model/material exports/aliases/Session shared objects/disk/cache/crypto backing need independently acquired actual owners retained for overlapping lifetime.",
+    "Input binding/generated and preparation are owned before entry. Docs correctly require caller reservation before constructing/copying them; this factory does not retroactively validate upstream allocation history.",
+    "Authentication-before-verdict does not prevent doing bounded numerical work for an ultimately invalid signature. This is an explicitly prepaid local API, not native admission.",
+    "Out-of-dtype/noncanonical streamed claim returns Delivery; old trusted producer freeze_record returns Binding for malformed local input. This is a receiver vs producer boundary error distinction, not an old resident path outcome change."
+  ],
+  "validation_needed_after_fix": [
+    "Compile/check new common Core and SDK test code, strict lint. Nine newly authored tests are SOURCE_ONLY_NOT_COMPILED_OR_EXECUTED.",
+    "Run all existing resident wide/mixed-state and narrow full-relation tests to validate the generic record view and shared hash helper.",
+    "Run all8 new Core tests and detached SDK test windows1/3; preserve raw command/env/source hashes.",
+    "Useful additional adversarial tests: short-reading/Interrupted reader, caps exhausted midway/at EOF, wrong-author-key rejected before any IO, bad signature with pending numerical mismatch, lease Drop retained across Delivery retry. Source currently suggests intended behavior but these combinations are not all explicitly covered."
+  ],
+  "mutations": "Only this report and separate /tmp hash report written. No Root/original/worktree edits, index operations, builds or model executions."
+}

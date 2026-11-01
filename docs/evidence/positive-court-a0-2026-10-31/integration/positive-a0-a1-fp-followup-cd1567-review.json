@@ -1,0 +1,71 @@
+{
+  "kind": "Independent final static review of A1 known-wide FP seams",
+  "recorded_at_utc": "2026-11-01T15:42:54.372493+00:00",
+  "commit": "cd1567a1162e5b06de351abda506d6a4d6e7009d",
+  "parent": "0a5d835aa653f3cf4d0cc904bfccd0b3842c01dd",
+  "root_target": "babfda57e74b62ed8bb83cfbbac9a535107fd25e",
+  "source_hashes": {
+    "consensus/core/src/palw_improve_eval_fold_v1.rs": "5958353be0bfb11b4a4c1d305df5ceecfd833b85654c154ec5a61b6968b6427b",
+    "consensus/core/src/palw_state_v2/objects.rs": "0b89cacda419128a0764a6198a15a73ac78ab10749fbfdbad6f8b257d5013b21",
+    "consensus/core/src/palw_state_v2/tests.rs": "9d7876ff2db38afa16235a51c8d8e816dfecb0d4c337adc60be137205567c9a7",
+    "misaka/palw/tir/exec/A1-WIDE-NATIVE-REGISTRATION-HANDOFF.md": "c2c75dbc09ca05e80e414192aefe23f613d66d459880e91190075c7aa8f1ad81",
+    "misaka/palw/tir/exec/validation/wide-native-registration-source/fp-followup.json": "cf3de50958ea910d1f7bede48e125153a56ab0791444d5bc01cffff7ec5357d7"
+  },
+  "owner_source_manifest_three_hashes_match": true,
+  "root_pick_before_files_match_parent_or_new_absent": {
+    "consensus/core/src/palw_improve_eval_fold_v1.rs": true,
+    "consensus/core/src/palw_state_v2/objects.rs": true,
+    "consensus/core/src/palw_state_v2/tests.rs": true,
+    "misaka/palw/tir/exec/A1-WIDE-NATIVE-REGISTRATION-HANDOFF.md": true,
+    "misaka/palw/tir/exec/validation/wide-native-registration-source/fp-followup.json": true
+  },
+  "blockers": [],
+  "readiness": "SELECTIVE_PICK_THEN_RUNTIME_VALIDATION; NO PASS CLAIM",
+  "old_first_errors_preserved": [
+    "ordinary duplicate/bond checks and N4/G03/container/G14 then MissingClass/Frozen remain before new denial",
+    "eval dormant/epoch/item/subject/policy/roots/budget/row/layout then MissingClass/Frozen/lifecycle remain before new denial"
+  ],
+  "known_changed_error_order": "Known-wide now refuses before later eligibility/work/pricing instead of proceeding through unsupported readers; ordinary original-frame-on/unpaired still gets G03 first.",
+  "ordinary_fixture": {
+    "new_unit_functions": 1,
+    "matrix_branches": 4,
+    "guard_reached_branches": "original-frame false x derived false/true",
+    "earlier_g03_branches": "original-frame true x derived false/true; new guard not reached",
+    "control": "rowless off/off real claim creation under same fixture",
+    "asserts": "direct root/exposure/claim invariance and full apply_derived refusal"
+  },
+  "eval_fixture": {
+    "new_unit_functions": 1,
+    "controls": [
+      "existing narrow applies",
+      "synthetic canonical wide old GEN context/count derives same leaves",
+      "dormant preserves exact previous first error"
+    ],
+    "asserts": "guard error plus root/exposure/claim/job invariance",
+    "limitations": [
+      "Synthetic fixture IDs/rows are not authenticated native registration",
+      "No new separate layout/Frozen/lifecycle negative fixture; source order checked",
+      "No runtime executed, so context/count asserts are intended test conditions rather than observed PASS"
+    ]
+  },
+  "write_and_reservation_review": "Known-wide guard before claim/exposure/prefix/job writers; existing common/paired rollback unchanged. No general refund/all-work/no-allocation promise.",
+  "scope_preserved": [
+    "existing explicit wide SourceChecker untouched",
+    "RFC4 dormant/mainnet defer/Params/fences unchanged",
+    "no old GEN numeric/context/count redesign",
+    "no new wire/schema/native authority/model review/tier change",
+    "guard is deny-only suffix recognition, not a parser/acceptance classifier",
+    "not a full repository consumer-closure claim"
+  ],
+  "suggested_unique_runtime_filters": [
+    "ordinary_wide_free_prompt_refuses_even_with_derived_and_original_fences_off",
+    "legacy_eval_denies_wide_before_row_clone_and_keeps_dormant_refusal_first"
+  ],
+  "owner_execution": "NOT_RUN; Cargo/rustc/Clippy/build/tests and target/cache/model payload access remain HOLD",
+  "reviewer_cargo_root_index_mutations": false,
+  "md": {
+    "path": "/tmp/positive-a0-a1-fp-followup-cd1567-review.md",
+    "sha256": "770c973839a97f470874bddf2e6c8a35ec88b3c808c29410103a6b5ef67ae45a"
+  },
+  "record_path": "/tmp/positive-a0-a1-fp-followup-cd1567-review.json"
+}

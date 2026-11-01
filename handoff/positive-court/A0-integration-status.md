@@ -96,3 +96,15 @@ A1は採択済RFC-0043内のnative class受付を接続中。登録受付後も�
 修正後 `1c90300a4` 同候補でexec65、Core全関係10＋Vec境界2、旧StepSpace独立walk4、bounded artifact5、計86件が標準stackで成功した。[独立件数・pin監査](../../docs/evidence/positive-court-a0-2026-10-31/integration/positive-a0-r5-1c903-independent-final-audit.json)。ignored child helper1と過去候補のleaf1/Panel8は合算しない。4798/4898のsource/input pin、binary・native archive・raw hashを独立照合し重複0・問題0。元のcompile失敗とallocation失敗は原本保持し、旧quote失敗binaryもgzipの圧縮hashとメモリ展開の原size/SHAを確認して保全した。256Bは固定配列の型上の保存量であり、生成frame/RSSの実測値ではない。これらは小fixture/旧corpusの実行で、generic startupの完全な資源上限・実LLM Panel/Node性能・native登録・P・資金・creditを認定しない。
 
 同1c903の4 library＋新integration targetsのstrict Clippyは全3コマンド成功、source/native前後一致。A1固定19fileの最終レビューでは登録scopeのblockerは未発見だが、旧FreePrompt入口のknownwide拒否をfence off/on共通にする追加修正を依頼した。A7class-only source2fileは独立レビューを通過し、typecheck/buildは次候補で行う。
+
+
+後続source候補 `e2d5a43e8`: A1 native dispatch/full court2 mirror/SDK/processor/fold、early Attempt/rider拒否、ordinary/eval FPのknownwide拒否、実trained3の実署名・実UTXO carrierテストsourceを統合。stream r2は旧Vec recordのBorsh/hashを維持し、1claimずつ読取り・hashし、EOF/digest/ML-DSA完了前に裁定を公開しない。A3 SourceLocal74bd/owned params9b/compile quote54d+d410も独立source review後に統合した。すべてこの新候補の型検査・runtimeは未実行。logical quote/helperはhost leaseそのものではなく、whole loaded ownerによる取得・保持の接続は追加review中。RFC0004 dormant・全public preset None・旧wire/型ID・P/credit権限は維持する。
+
+実trained3のclass-only原文脈解析は別source4e672で実行し、Py full4/Smol2はoff-element参照のみcap拒否、全体INCOMPLETEを保持した。[検証範囲](../../docs/design/palw/positive-court/VALIDATION-A0.md)。A6はsource355/HEADfddの別runでnative14＋DB Court/Source17の31件が標準stackで成功し、C++標準libraryの依存cdylib伝播問題を標準Cargo links overrideで解消した。新候補へ件数を加算しない。今後はRoot最終source起点の保全branchへA6最小DBtestsだけを合わせ、既存A6 checkout/target/profile/native cacheを再利用する同候補検証計画を調整する。元A6branch/source/rawは保全する。
+
+容量確保では原モデル・source・rawを保存し、旧Core依存の実test executableとCPU/class解析binaryは全件actual tempfile復元size/SHAを確認してgzipへ保全した。現Cargo出力へ手動でRust libraryを戻さない。初回stem指定にnode無効execの再build不要な2中間ファイル32815679Bも含めたことは[訂正記録](../../docs/evidence/positive-court-a0-2026-10-31/integration/root-core-native-reclaim-correction-20261102.json)へ明記し、以降はcompiled fingerprintの実依存とRoot由来を照合して限定した。原reclaim記録は書換えていない。
+
+
+後続 `352113d4c`: Loaded908/evidence37ab、OS-main stdio join9d828、既存R5へのPanel bridge973を独立source review後に統合した。新子テストは実File→Loaded→CPU I64 endpoint→実stdin/stdout→usage/guard/reapを構造化markerで検査する設計で、libtestのPASS数へ合算しない。Takeの有限EOFはOS pipe EOFではなく、自然exit0も主張しない。bridgeの2caseは旧binding用oracleを先に構成するtestで、captureのrun guard1回が全testのCPU1回やcold cacheを意味しない。全新sourceは引き続き型検査・runtime未実行。
+
+現Loadedは完全なexpected/verified step bindingを前提とし、trace無しの最初のMiner起動が完成したとは扱わない。Node検査条件や旧APIを弱めず、別のlocal非serialized class/job metadata＋ordinary forward componentを後続incrementで実装中。新native Assignment/Result/役割・資金・Pの設計採択は依然未受領。Root最終source＋A6最小DBtestsを固定した保全branchで、native実登録・同sourceの回帰を先行して実行する。

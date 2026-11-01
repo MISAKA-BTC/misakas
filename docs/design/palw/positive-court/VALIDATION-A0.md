@@ -116,3 +116,20 @@ Pythiaの50304 logitsは全てi32範囲を超え（最小3753610348、最大1806
 今回の実行は小fixtureと旧corpusによる回帰である。実trained3モデルの前節CPU自己整合性測定とはsource/scopeを分け、native class受付・全native role/精算/P/credit、元最大文脈の全位置実行、実LLM Panel/Node性能の成功へ合算しない。
 
 同1c903 sourceのTIR/Core/artifact/execライブラリ、および新node_cost・Panel material・quote integration targetのstrict Clippyも全3コマンドexit0で成功した。[原記録](../../../evidence/positive-court-a0-2026-10-31/integration/panel-r5-clippy-1c903-20261102.json)。runtime件数への追加はない。
+
+
+### 2026-11-02: 元文脈長のclass geometry／typed close解析
+
+A7 class-only binaryはRoot `4e6724e32`でbuild成功（6,259,216B、SHA `60a84e2f4597724b24d46d98f87ddb8f232f45af0a0ab8222d35c8a363d98f2b`）。[build原記録](../../../evidence/positive-court-a0-2026-10-31/integration/real-llm-class-analysis-first-build-20261102.json)と[実行原記録](../../../evidence/positive-court-a0-2026-10-31/integration/real-llm-class-analysis-first-run-20261102/manifest.json)は前節のCPU推論・native登録と別scopeである。
+
+| 実trained artifact | 元max positions | canonical leaf数 | 別の最長解析probe leaf数 | Court有効条件のterminal／root最大bytes | class解析全体 |
+|---|---:|---:|---:|---|---|
+| Pythia-70M wide | 2048 | 224026 | 2208768 | 648069 / 89128 | 全4 traversal完走 |
+| SmolLM2-135M | 8192 | 5173266 | 42244608 | 685643 / 57712 | off-element参照のみwork cap拒否 |
+| SmolLM2-360M | 8192 | 9195742 | 74473472 | 1080999 / 61680 | off-element参照のみwork cap拒否 |
+
+Court有効条件では3件ともelement/rangeが全commit点を走査し全bounds一致。Smol2件のCourt無効条件ではrangeは完走したがelementが固定`2^26`work capに達し、partial workはunknownのまま保存した。したがって原runはモデル別exit0/2/2、全体`CLASS_DATA_INCOMPLETE`。原context・class/program/layout/tokenizer・cap/bytes/work単位は変更していない。測定約23.45/44.95/49.57秒、Darwin peak RSS約17.5/36.9/37.4MiBは全class解析processの観測であり、LLM推論やowner RAM上限ではない。
+
+rootの100000B比較は固定one-carrier形式だけで、terminalの実carrier適合、coarse、actual rules/DAA/ladder、constructor/full gate、native/P/creditは未検査である。型付き8B比較もデータ解析に限る。nativeが別の既定H7/Range経路を選ぶ場合に、非選択のelement参照のcap拒否を登録拒否へ転用しない。[既存selectorと費用の調査](../../../evidence/positive-court-a4-range-policy-2026-11-02/analysis-plan.json)。自動fallbackや実ルールの緩和は追加していない。
+
+原wrapperの停止理由と完了が競合し得る制御上の不足は別policy-v2案へ修正した。今回3caseはstop_reasonなし・live/zombieなし・source/binary不変であり、原結果への誤分類影響は観測されていない。16件のPython/mockは別policy検証で、モデル実行の再試験ではない。[A7原run監査](../../../../testing/positive-court-a7/evidence/class-analysis-first-run-audit-20261102/README.md)。

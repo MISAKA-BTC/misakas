@@ -1,0 +1,71 @@
+{
+  "commit": "9b3216719b0b567a1c4aff08ccb62f9f0a866006",
+  "review": "READ_ONLY_SOURCE_AUDIT",
+  "recommendation": "IMPORTABLE_AS_OPT_IN_FOUNDATION_PENDING_TYPECHECK_AND_FOUR_RUNTIME_TESTS",
+  "critical_findings": [],
+  "confirmed": [
+    {
+      "at": "owned_artifact_params_v2.rs:137-178,408-418",
+      "fact": "Attempt metadata work is admitted before nested scans; payload/read/leaves/work/retained claims are admitted before lease, native allocation, seek/read; guard/root/IO failures do not refund accepted counters."
+    },
+    {
+      "at": "params.rs:386-412; owned_artifact_params_v2.rs:181-264",
+      "fact": "Quote follows Params table/ranges slots and per-layer widths, sums exact native payload, one bounded chunk, actual Core inventory projection scratch and logarithmic frontier using public logical request envelopes. No whole i128 payload mirror."
+    },
+    {
+      "at": "owned_artifact_params_v2.rs:275-303,340-393,422-464",
+      "fact": "Literal admitted pin/layout checks preserve original context/tokenizer/maxctx; exact native from_le_bytes vectors are moved into Params, then owned contents are re-encoded by authoritative Core inventory visitor; only expected artifact-root equality permits returning owner."
+    },
+    {
+      "at": "owned_artifact_params_v2.rs:312-336,396-417,465-475",
+      "fact": "Params drop before optional retained host guard. Getter borrows owner, no move-out/Clone owner. Absent optional host reserver is explicitly absent, never manufactured. No native authority or computation pass."
+    }
+  ],
+  "integration_conditions": [
+    {
+      "at": "owned_artifact_params_v2.rs:67-80,275-291,396-401",
+      "requirement": "Canonical program/compiled-plan fields and whole expected/verified/context association must come from one independently admitted retained owner; this component checks literal consistency, not arbitrary mutated plan-field validity."
+    },
+    {
+      "at": "owned_artifact_params_v2.rs:396-406,425-426",
+      "requirement": "Read+Seek is a caller-owned bounded provider contract, not enforced same-FD/stamp/call-count capability. Wire/startup callers must supply same checked descriptor and account hidden provider scratch/IO/Interrupted behavior. Root identity is checked on final owned bytes, so later file mutation cannot alter returned parameters."
+    },
+    {
+      "at": "owned_artifact_params_v2.rs:312-336; handoff/positive-court/A3-owned-artifact-params-v2.md",
+      "requirement": "External header/program/plan/pins/provider/aliases and deep cloned Params copies require independent retained reservations. Optional local host guard is not native resource admission."
+    },
+    {
+      "at": "owned_artifact_params_v2.rs:674-951",
+      "requirement": "All four new tests are source-only UNRUN. Typecheck plus exact-cap, guard-lifetime, bad-root/truncation and multipiece per-layer runtime results are required before validation claims. No explicit injected seek failure/short-read/Interrupted fixture is currently present."
+    }
+  ],
+  "files": [
+    {
+      "path": "handoff/positive-court/A3-owned-artifact-params-v2.md",
+      "source_sha256": "a8ca7567c935cd7cbdfcb42d6576e2d02ec0fdd0bb939671c0371d5dd286ba58"
+    },
+    {
+      "path": "misaka/palw/tir/artifact/src/bounded_v1.rs",
+      "source_sha256": "c96ab7d9acb579a826653704798c508d44a6211f98469cbc4419359e3e9bbc6e"
+    },
+    {
+      "path": "misaka/palw/tir/exec/src/node/mod.rs",
+      "source_sha256": "255ee6c098ce6449ae5a5e297729678b541a1bc6d5248d43f1961c112941feab"
+    },
+    {
+      "path": "misaka/palw/tir/exec/src/node/owned_artifact_params_v2.rs",
+      "source_sha256": "508213075ad114a369a0a31c7248a762ff28a5bdbafd6227b4cfe29f9be2d616"
+    },
+    {
+      "path": "misaka/palw/tir/exec/src/params.rs",
+      "source_sha256": "22e5182e735cccb81dfee6723bbbf85e0a42349cde2928552bc478c1aed7a60d"
+    }
+  ],
+  "commands": [
+    "git show --stat 9b3216719",
+    "git show 9b3216719:<owned source + params + bounded accessor + handoff>",
+    "read current dependent Core inventory/frontier/Vec policy and Params code"
+  ],
+  "builds": "NONE",
+  "root_edits": "NONE"
+}

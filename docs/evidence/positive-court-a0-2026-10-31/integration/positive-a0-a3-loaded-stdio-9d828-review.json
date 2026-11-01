@@ -1,0 +1,95 @@
+{
+  "schema": "misaka.independent-static-review.v1",
+  "status": "NO_SOURCE_BLOCKER_PROCEED_TO_OWNER_BUILD_AND_RUNTIME_ONLY",
+  "reviewed_commit": "9d828c26503349d1f77c6a24e79a36d2dc031454",
+  "parent": "37ab25298365b9027a7fef6f38c5aacbe1383acc",
+  "root_observed_head": "7c3cdf8de4263cec373ffa0ed05e9dc09bd92742",
+  "changed_files": {
+    "misaka/palw/tir/exec/Cargo.toml": {
+      "sha256": "9fefd966f81e96d5dbb1bb4193655fb97b18061d518a4f5a04e53b99ed12016b",
+      "bytes": 3149
+    },
+    "misaka/palw/tir/exec/tests/loaded_wide_process_v2.rs": {
+      "sha256": "fab179ee6297df0429fc1e1ff82a3731ed9550b56a3fc6797eedb053ceba0ae3",
+      "bytes": 32985
+    },
+    "handoff/positive-court/A3-loaded-stdio-join-v2.md": {
+      "sha256": "7c46bee76fa288d5ed385926adb1626e3f15bd8b5ae0d7ab0721c8004c61b9dd",
+      "bytes": 4086
+    }
+  },
+  "dependent_source_hashes": {
+    "misaka/palw/tir/exec/src/node/owned_artifact_params_v2/loaded.rs": "c4ca1694e63e11af8bb391b07f2c0b63e4db479eaa8b7efd6081b4745b006b0d",
+    "misaka/palw/tir/exec/src/node/cell_ipc_v2/process.rs": "d762cebf8174b7c8e293423722bb0602e71febaa0fd2f819aa41d50f7ae9ad21",
+    "misaka/palw/tir/exec/src/node/cell_ipc_v2/session.rs": "e024f159df9185f9cc60a3e0e54d90891f269057b0f58e3e21e5847ea5d16295",
+    "misaka/palw/tir/exec/src/node/cell_ipc_v2/cpu.rs": "4e0e22705c75379ccf829e0c75ca21bacd5435bd5ef77b01ecda8c684ce86e55"
+  },
+  "root_same_dependent_source": {
+    "misaka/palw/tir/exec/src/node/owned_artifact_params_v2/loaded.rs": true,
+    "misaka/palw/tir/exec/src/node/cell_ipc_v2/process.rs": true,
+    "misaka/palw/tir/exec/src/node/cell_ipc_v2/session.rs": true,
+    "misaka/palw/tir/exec/src/node/cell_ipc_v2/cpu.rs": true
+  },
+  "production_code_changes": 0,
+  "manifest_change": "8 test-target lines only: harness=false, required-features=node; no dependency changes",
+  "blockers": [],
+  "checks": [
+    {
+      "topic": "marker",
+      "lines": "test:601-669,693-710",
+      "finding": "Only parent emits PASS after every endpoint/counter/guard/reap assertion; child emits no PASS. Unknown profile returns77 before parent. Require process exit0 and exactly one complete fixed-field marker."
+    },
+    {
+      "topic": "real data path",
+      "lines": "test:395-446,522-562,601-607; session:327-349; cpu:411-458",
+      "finding": "Independent synthetic pins exist before writer; actual PALWTIR1 file separately loaded in parent and child. Child owner.serve routes session Step to CPU step_data and logits_lanes. expected_step is parent-only comparator, no canned child output or TCP."
+    },
+    {
+      "topic": "guard before artifact reads",
+      "lines": "loaded:358-382; test:400-431,469-473,649-665",
+      "finding": "Host allowance acquired before header seek/read/Source/native values; test checks one reserve remains held during both cycles and drops after Loaded owner. File::open precedes guard but does not read payload. Optional production guard/caller workspace external admission is not native authority or RSS accounting."
+    },
+    {
+      "topic": "wire arithmetic",
+      "lines": "test:261-281,588-625,643-648; process:184-251",
+      "finding": "Hello13/Ready42; each Open program+88, Step25, Close9; response Opened9+Stepped212+Closed9. Open body program+80,3params26bytes and metadata factor4*3*128 match builder source; CYCLES2 cumulative counters checked on both peers without reset. Server work is checked positive not independently exact."
+    },
+    {
+      "topic": "completion/cleanup",
+      "lines": "test:318-383,440-475,477-519,627-658; process:88-135,525-529",
+      "finding": "Take exhaustion after final Close supplies bounded EOF; fixed256B atomic record published only after serve return and owner drop. Parent sees completion before process Drop; then verifies direct PID no longer waitable. PID fallback kill only after waitpid WNOHANG establishes live direct child. No OS pipeEOF, natural exit0, descendant cleanup or finite OS scheduling claim."
+    },
+    {
+      "topic": "missing inputs/refusal",
+      "lines": "test:406-425,671-707",
+      "finding": "Child missing path/control env returns failure; absent artifact sets failure kind; parent checks exact success record. Parent creates synthetic temporary file internally; no external trained-model path is required by or covered in this test."
+    },
+    {
+      "topic": "custom harness identity",
+      "lines": "Cargo:17-24; test:693-723",
+      "finding": "OS-main binary has no libtest preamble. Runtime takes no arguments; --list/--exact/--test-threads/--nocapture would refuse, not select a test. Compile target can be cargo no-run, execute obtained binary with no flags and custom-marker validation."
+    }
+  ],
+  "scope_limits": [
+    "Source-only; compile/type/lifetime checking and actual OS run not performed.",
+    "Synthetic ORIGINAL data association uses existing verified V2 binding with literal trace/step roots; does not provide NativeResult/assignment/P/claim/Court/payment/credit.",
+    "I8 endpoints, full-bit Idx and i64 MIN/MAX reshape evaluation only; no trained LLM or full-context inference claim.",
+    "Synthetic host guard verifies Loaded lifetime, not all CPU/transport memory reservations, RSS or allocator bound.",
+    "Server work positive and cumulative accounting, not independent exact CPU work count.",
+    "No actual child natural-exit status checked; process owner may kill it after completion record.",
+    "Existing Unix adapter implementation inherited, no new explicit cancellation/timeout failure case in this positive harness."
+  ],
+  "recommended_runtime_validation": {
+    "compile_target": "cargo test -p misaka-palw-tir-exec --features positive-panel --test loaded-wide-process-v2 --no-run --message-format=json-render-diagnostics with owner pinned A6 config/profiles/target",
+    "run": "obtained custom harness executable, NO arguments, standard OS-main stack",
+    "success": "exit0, unique exact A3_LOADED_PROCESS_V2_PASS full fixed field marker; elapsed_ms nonnegative integer; no unsupported/refused marker; source/binary/native hashes pinned",
+    "count": "1 standalone custom harness case, separate from libtest totals"
+  },
+  "not_performed": [
+    "Cargo/rustc/clippy",
+    "source/index/branch edits",
+    "model-file or tensor reads",
+    "child process execution",
+    "runtime or native certification"
+  ]
+}

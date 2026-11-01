@@ -1,0 +1,77 @@
+{
+  "review": "Independent readonly frozen Loaded to R5 Panel bridge source audit; no Cargo/runtime",
+  "commit": "973ed058c494caeb759a8049970b47b17b9e558c",
+  "parent": "7c3cdf8de4263cec373ffa0ed05e9dc09bd92742",
+  "root_at_review": "276e3354ec867112fb3504726b1f58d568a8504f",
+  "hash_evidence": "/tmp/positive-a0-a3-loaded-panel-bridge-independent-hashes-20261102.json",
+  "source_manifest_sha256": "f07037c7cb64c75ed77c5eac81fd84c992c0cdaa9bad64e09e156c96a87d1939",
+  "all5_exact_git_source_hashes_match_manifest": true,
+  "all5_current_root_before_hashes_or_absences_match": true,
+  "canonical_git_patch": "/tmp/a3-loaded-panel-bridge-frozen-973ed058c.patch",
+  "canonical_git_patch_sha256": "a2754b4523fad125aed727a811ffa0eba5c8d7a956ee18e4f6014405dd962012",
+  "canonical_patch_apply_check_exit": 0,
+  "mutable_patch_identity_correction": {
+    "path": "/tmp/a3-loaded-wide-panel-bridge.patch",
+    "original_task_sha256": "aafd6d184bbf0b93977519a7f8623642652712d4f9ef86306ca822ab8442cad4",
+    "current_sha256": "e7144ddbb658f73f484757cb26de053e72618feefe06b26ee9e9fa80c40b5f9b",
+    "not_reviewed_as_canonical_artifact": true,
+    "only_added_code_delta_is_exact4_scope_doc_lines": true,
+    "note": "Also differs in patch path order/index/context formatting. Exact Git973 tree is review target; do not relabel mutable patch as original frozen hash."
+  },
+  "recommendation": "READY_FOR_SELECTIVE_GIT973_IMPORT_AND_COMPILE within existing-claim local Panel/source scope; no concrete source blocker found. All2newtests UNRUN.",
+  "blocking_findings": [],
+  "line_anchors": {
+    "misaka/palw/tir/exec/src/node/owned_artifact_params_v2/loaded/panel.rs": {
+      "pub fn wide_panel_work": 28,
+      "pub fn capture_wide_panel_one_pass": 65
+    },
+    "misaka/palw/tir/exec/src/node/positive_wide_material_v2/mod.rs": {
+      "pub(crate) fn admit_loaded_runner_v2": 126
+    }
+  },
+  "reviewed_invariants": [
+    {
+      "area": "narrow production delta",
+      "finding": "Only Loaded cfgpositive-panel module registration,96line borrowed helper, crate-private Work prefix checker/visit debit,2test module hookup/newtestfile. Existing R5 capture/proof/claims/trace/runner numerical algorithms untouched; original compile/ownedParams unaffected. No raw plan or params getter/closure/export introduced."
+    },
+    {
+      "area": "full binding and fixed context",
+      "finding": "Loaded already requires independently admitted full old PalwTirStepBindingV1 trace/step/execution commitments+opaqueVerified/context association. Bridge gets class/layout/program/space/classID/context from these retained inputs and actual authenticated Params/artifactroot; prompt is supplied slice separately retained/capquoted. It does not derive first Miner trace-free Result/assignment or trust peer own expected values. No context/tokenizer/layout repair or shortened context."
+    },
+    {
+      "area": "Loaded plus control floor",
+      "finding": "wide_panel_work checked-adds entire Loaded prepaid allowance plus original external/prior claims to ADDITIONAL caller external ownership, refuses when exceeding unchanged max_live_heap. Existing Work builder still requires disk guard and finite nonzero counters. Direct Work supplied to capture checked for same fixed class/context and externalfloor before runner program comparison. Work being public local data does not enforce native funding/authority; constructing a fresh Work is explicitly not a legitimate external budget reset."
+    },
+    {
+      "area": "same shared prefix/oneuse",
+      "finding": "New checker uses same sharedRcSession andRcCellstarted across Work clones; refuses started/scope/floor before visit debit, charges one boundedMAXPROGRAM traversal before runner.new equality. Existingcapture then sets shared started before quote/guards/tape/CPU. Failed quote/guard/nonemptytape/CPU after this point spends that handle permanently, and counters never reset. Earlier invalid shape/prompt length refuses before capture started under unchangedR5 semantics; prefix debit remains cumulative. Do not claim every precondition refusal spends oneuse."
+    },
+    {
+      "area": "RAM/error/provider boundaries",
+      "finding": "capture receives explicit mandatory reserver and delegates unchangedrequired-run path to same callback, preserving both capture+run guards rather than optional global fallback. No new provider/opener is invented or full parameter re-encoding in production. Fixed String errors on pre-run refusals, arbitrary provider internals/errors, prompts/exports/signatures/Node prep remain separately admitted caller control owners as documented; prefix visits is work not RAM/RSS receipt."
+    },
+    {
+      "area": "lifetime/opaque plan",
+      "finding": "Runner is temporary borrowed view of private plan/nativeParams/verifiedspace; result capture borrows Loaded+prompt for its lifetime, retaining Loaded startup ticket/optionalguard while builder uses it. Returned capture owns its existing mandatoryrun/capture leases. No unsafe/self-reference/public plan OnceLock injection, no deep clone introduced."
+    },
+    {
+      "area": "new2tests actual path",
+      "finding": "Windows1/3 test constructs valid existing fullbinding before file creation, loads concrete File, invokes Loaded capture, then original Builder/provider→claimsdisk→MLDSA→streamNode allrelations/exactEOFMatched. Lowfloor branch observes no prefix meter/capture/run change; nonemptytape branch observes chargedprefix+captureguardrelease/noRun and sameWork retry denied without newdebit. All are source assertions uncompiled/unrun."
+    },
+    {
+      "area": "oracle/run count qualification",
+      "finding": "Fixture run_wide_common::reference uses independent Interpreter.step and eval_cone to construct nodes/states/rows before Loaded candidate file; existing_binding hashes those observations. Thus countersrun_calls==1 measures one required-run guard request for this Loaded capture, not a total of one CPU computation in whole test. Source shows exactly one delegated run_observed call in originalcapture; Node itself directly recomputes allrelations. Cold originalFile means fresh loader path, not coldOSpagecache."
+    },
+    {
+      "area": "no native authority",
+      "finding": "No Root-enforced admission/registry/funding/Assignment/P/selected-verifier approval/credit/publicactivation/firstMinerclaim created. Existing-claim local proof material data authentication and deterministic recomputation remain originalR5 behavior; no cryptographic computation correctness proof."
+    }
+  ],
+  "remaining_validation": [
+    "Typecheck/strictlint and both2newtests plus oldR5 resident/stream regressions UNRUN. Preserve sourcehash/env/rawlogs and unsupportedprofile earlyreturn label.",
+    "Meaningful followups: wrongWork class/context, prefix visit cap refusal, requiredcapture/run guard denial, invalidprompt shape earlyrefusal semantics, and lifecycle drop assertions. Callbackcount alone is not executedCPU count; preserve separate interpreteroracle accounting.",
+    "No physicalallocator/RSS, allCPU/time/deadline/cancel, trainedmodelscale, actualstdin/stdoutchild supervisor, native source/court/Pcredit or whole usergoal success follows.",
+    "Use immutable Git973 cherry-pick; mutable/tmp patch changeddoclines after initialhash and must stay separately attributed."
+  ],
+  "mutations": "Only /tmp review/hash JSON. All source via immutablegitshow; noRoot/source/index/Cargo/target/largeartifact operations."
+}
