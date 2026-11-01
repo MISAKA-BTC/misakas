@@ -59,6 +59,35 @@ fn model_panel_one_retention_future_boundary_is_independently_visited_and_mirror
 }
 
 #[test]
+fn model_panel_one_retention_rollout_keeps_live_peers_until_the_disputed_fence() {
+    use crate::fork_id_v1::{ForkIdVerdict, evaluate_fork_id_v1, fork_id_v1};
+    let old = without_retention();
+    let scheduled = palw_t12_shipped_params();
+    let at = PALW_T12_MODEL_PANEL_ONE_RETENTION_FENCE_DAA_V1;
+    // The actual public G14 build already crossed 18,640. Merely comparing
+    // normalized identity cannot establish that its next-fence gate stays open.
+    for daa in [18_640, 18_930, at - 1] {
+        let old_id = fork_id_v1(&old, daa);
+        let new_id = fork_id_v1(&scheduled, daa);
+        assert_eq!(old_id.fired, new_id.fired);
+        assert_eq!(new_id.next, at);
+        assert!(!evaluate_fork_id_v1(&scheduled, daa, old_id.fired.as_bytes(), old_id.next).refuses());
+        assert!(!evaluate_fork_id_v1(&old, daa, new_id.fired.as_bytes(), new_id.next).refuses());
+    }
+    // Once the rule actually changes, keeping an un-upgraded peer would hide
+    // a consensus split. Both sides must retain their existing refusal policy.
+    for daa in [at, at + 1] {
+        let old_id = fork_id_v1(&old, daa);
+        let new_id = fork_id_v1(&scheduled, daa);
+        assert!(matches!(
+            evaluate_fork_id_v1(&scheduled, daa, old_id.fired.as_bytes(), old_id.next),
+            ForkIdVerdict::DisagreePastFence { fired_through, .. } if fired_through == at
+        ));
+        assert!(evaluate_fork_id_v1(&old, daa, new_id.fired.as_bytes(), new_id.next).refuses());
+    }
+}
+
+#[test]
 fn model_panel_one_retention_requires_preceding_route_court_gate_c_and_an_exact_mirror() {
     let shipped = palw_t12_shipped_params();
     let at = PALW_T12_MODEL_PANEL_ONE_RETENTION_FENCE_DAA_V1;
