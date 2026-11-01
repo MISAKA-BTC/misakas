@@ -1,0 +1,70 @@
+{
+  "date_jst": "2026-11-01",
+  "fix_commit": "8b7010531892800f1e96e2beb6b3d66e0bfc3a4e",
+  "initial_source": "78e274630c2330a8c4aff418a4c1855aa50cf00c",
+  "initial_root_candidate": "c85d5a9c92632e81a2880d3159bf95ce38e0e370",
+  "initial_root_admission_result": {
+    "passed": 8,
+    "failed": 2,
+    "first_failure": "operand oracle left1/right2 at tests.rs151, not the preceding passed16/224 leaf assertions",
+    "second_failure": "operandcap1 refusal incorrectly expected on the same max1 fixture"
+  },
+  "raw_log": {
+    "source": "/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/wide-admission-stack-joined-20261101-2.log",
+    "saved": "root-c85-initial-admission.log",
+    "sha256": "edb7791591377941bb03f088c9d820ba2de68accb519e1b69e30a77d2bdf08f0",
+    "unchanged_including_trailing_bytes": true
+  },
+  "root_cause": "Artifact parameters are priced bytes but excluded from committed-source operand count by ParamLeafV1::is_operand; initial static reviews missed this distinction.",
+  "justified_oracles": {
+    "main_fixture": {
+      "pre_gather": 0,
+      "post_narrow_carry": 1,
+      "post_final_prior_commit": 1,
+      "maximum": 1,
+      "canonical_leaves": 16,
+      "deepest_leaves": 224
+    },
+    "unchanged_existing_f7_fixture": {
+      "layer_sources": [
+        "CarryIn(0)",
+        "History(state)"
+      ],
+      "maximum": 2,
+      "same_object_rules_except_court_operand_cap": true
+    }
+  },
+  "fix_scope": {
+    "changed_files": [
+      "consensus/core/src/palw_tir_admission_v2/tests.rs"
+    ],
+    "production_unchanged_paths": [
+      "consensus/core/src/palw_tir_admission_v2.rs",
+      "consensus/core/src/palw_tir_admission_v2/registration.rs",
+      "consensus/core/src/palw_tir_admission_v1.rs"
+    ],
+    "program_context_pwu_and_model_unchanged": true,
+    "negative_ceiling_test_preserved": true,
+    "new_unsupported_fixture_or_blindcap0_replacement": false
+  },
+  "static_reviews": [
+    {
+      "reviewer": "review_core",
+      "reviewed_commit": "8b7010531",
+      "blocking_findings": 0
+    },
+    {
+      "reviewer": "adversarial_tests",
+      "reviewed_commit": "8b7010531",
+      "blocking_findings": 0
+    }
+  ],
+  "source_sha256": {
+    "consensus/core/src/palw_tir_admission_v2/tests.rs": "2725c6f112d0ce41edb00bf55da632740ce0ba375837cf62e3f4752b54981401",
+    "consensus/core/src/palw_tir_admission_v2.rs": "490c900d295c8e1bfb316b1766bd98e3ff47177da58231e5290d5427a53204dd",
+    "consensus/core/src/palw_tir_admission_v2/registration.rs": "88235ad696e90915f4cf9f5ac46bac470b8dc7f03b1dd4c25fbb57cea57fdc00",
+    "consensus/core/src/palw_tir_admission_v1.rs": "5fcbe9e2c0cf57a536320789b49289a72d27a095a5a03bf37c5f512d68dc4925"
+  },
+  "validation_status": "Source/static review only. Root owns execution on the next fixed candidate; no rerun PASS claimed.",
+  "a1_cargo_cache_target_access": false
+}
