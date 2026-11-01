@@ -1,0 +1,218 @@
+{
+  "schema": "misaka.a7.owned-core-cache-provenance.v1",
+  "mode": "READ_ONLY; NOT_RECLAIM_AUTHORIZATION",
+  "utc": "2026-11-01T17:37:59.766905+00:00",
+  "current_a7_head": "a25c14cf94db8155c3536c28bb3354a1e788042d",
+  "historical_execution_records": [
+    {
+      "phase": "a0-79c3-regression-2026-11-01",
+      "manifest_path": "/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/testing/positive-court-a7/evidence/a0-79c3-regression-2026-11-01/run.json",
+      "manifest_sha256": "a50f6639f23692643944aafdf0ba246db01846da4bd100d664f7c004e65de3c0",
+      "log_path": "/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/testing/positive-court-a7/evidence/a0-79c3-regression-2026-11-01/01.log",
+      "log_sha256": "c78ff0667335a0948a649be4f1c03a60d144def2d01f6dd5f434b51d72491a52",
+      "source_commit": "7dd56d8cd1e31b684a97e35c6650eff1b04fab80",
+      "source_commit_exists": true,
+      "phase_result": "FAILED_OR_INCOMPLETE",
+      "started_utc": "2026-10-31T16:02:50.973254+00:00",
+      "finished_utc_recorded": null,
+      "cargo_argv": [
+        "cargo",
+        "--config",
+        "profile.dev.package.kaspa-consensus-core.opt-level=0",
+        "--config",
+        "profile.test.package.kaspa-consensus-core.opt-level=0",
+        "test",
+        "--manifest-path",
+        "testing/positive-court-a7/Cargo.toml",
+        "--offline",
+        "--locked",
+        "--test",
+        "independent",
+        "--test",
+        "pipeline",
+        "--no-run",
+        "--message-format=json"
+      ],
+      "cargo_exit_code": 0,
+      "phase_cleanup": {
+        "group": 34438,
+        "live_descendants": [],
+        "zombies": []
+      },
+      "profile_env": {
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_TARGET_DIR": "/Users/wata/.cache/misaka-positive-a1-target",
+        "RUST_MIN_STACK": "16777216",
+        "CARGO_BUILD_JOBS": "2",
+        "CARGO_TERM_COLOR": "never",
+        "ROCKSDB_LIB_DIR": "/Users/wata/.codex/worktrees/rfc14-g14-completion/MISAKA-testnet/target/release/build/librocksdb-sys-865d89ee7dbf2b2a/out"
+      },
+      "rustc_record": "rustc 1.93.0 (254b59607 2026-01-19)\nbinary: rustc\ncommit-hash: 254b59607d4417e9dffbc307138ae5c86280fe4c\ncommit-date: 2026-01-19\nhost: aarch64-apple-darwin\nrelease: 1.93.0\nLLVM version: 21.1.8",
+      "compiler_artifacts": [
+        {
+          "line": 416,
+          "record": {
+            "reason": "compiler-artifact",
+            "package_id": "path+file:///Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/consensus/core#kaspa-consensus-core@1.1.0",
+            "manifest_path": "/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/consensus/core/Cargo.toml",
+            "target": {
+              "kind": [
+                "lib"
+              ],
+              "crate_types": [
+                "lib"
+              ],
+              "name": "kaspa_consensus_core",
+              "src_path": "/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/consensus/core/src/lib.rs",
+              "edition": "2024",
+              "doc": true,
+              "doctest": true,
+              "test": true
+            },
+            "profile": {
+              "opt_level": "0",
+              "debuginfo": 0,
+              "debug_assertions": true,
+              "overflow_checks": true,
+              "test": false
+            },
+            "features": [
+              "default",
+              "pq-only"
+            ],
+            "filenames": [
+              "/Users/wata/.cache/misaka-positive-a1-target/debug/deps/libkaspa_consensus_core-8d23c7aaac2eb958.rlib",
+              "/Users/wata/.cache/misaka-positive-a1-target/debug/deps/libkaspa_consensus_core-8d23c7aaac2eb958.rmeta"
+            ],
+            "executable": null,
+            "fresh": false
+          }
+        }
+      ]
+    },
+    {
+      "phase": "a0-79c3-fixture-fixed-2026-11-01",
+      "manifest_path": "/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/testing/positive-court-a7/evidence/a0-79c3-fixture-fixed-2026-11-01/run.json",
+      "manifest_sha256": "4c0e05c233b337e4c0f7cb87bdeef5b76fd7e0f7ae20228c04fe3e399789672c",
+      "log_path": "/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/testing/positive-court-a7/evidence/a0-79c3-fixture-fixed-2026-11-01/01.log",
+      "log_sha256": "d2e39989add30cd1438418757c1f1f2d7f6fd825226367217a6120c3e85cbf32",
+      "source_commit": "c2e4226253900c3711ec2a4ee7d2ec8b548e57c5",
+      "source_commit_exists": true,
+      "phase_result": "PASS_PINNED_PRIVATE_R1_CANDIDATE_ONLY",
+      "started_utc": "2026-10-31T16:33:09.699399+00:00",
+      "finished_utc_recorded": "2026-10-31T16:43:37.193442+00:00",
+      "cargo_argv": [
+        "cargo",
+        "--config",
+        "profile.dev.package.kaspa-consensus-core.opt-level=0",
+        "--config",
+        "profile.test.package.kaspa-consensus-core.opt-level=0",
+        "test",
+        "--manifest-path",
+        "testing/positive-court-a7/Cargo.toml",
+        "--offline",
+        "--locked",
+        "--test",
+        "independent",
+        "--test",
+        "pipeline",
+        "--no-run",
+        "--message-format=json"
+      ],
+      "cargo_exit_code": 0,
+      "phase_cleanup": {
+        "group": 52265,
+        "live_descendants": [],
+        "zombies": []
+      },
+      "profile_env": {
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_TARGET_DIR": "/Users/wata/.cache/misaka-positive-a1-target",
+        "RUST_MIN_STACK": "16777216",
+        "CARGO_BUILD_JOBS": "2",
+        "CARGO_TERM_COLOR": "never",
+        "ROCKSDB_LIB_DIR": "/Users/wata/.codex/worktrees/rfc14-g14-completion/MISAKA-testnet/target/release/build/librocksdb-sys-865d89ee7dbf2b2a/out"
+      },
+      "rustc_record": "rustc 1.93.0 (254b59607 2026-01-19)\nbinary: rustc\ncommit-hash: 254b59607d4417e9dffbc307138ae5c86280fe4c\ncommit-date: 2026-01-19\nhost: aarch64-apple-darwin\nrelease: 1.93.0\nLLVM version: 21.1.8",
+      "compiler_artifacts": [
+        {
+          "line": 370,
+          "record": {
+            "reason": "compiler-artifact",
+            "package_id": "path+file:///Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/consensus/core#kaspa-consensus-core@1.1.0",
+            "manifest_path": "/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/consensus/core/Cargo.toml",
+            "target": {
+              "kind": [
+                "lib"
+              ],
+              "crate_types": [
+                "lib"
+              ],
+              "name": "kaspa_consensus_core",
+              "src_path": "/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet/consensus/core/src/lib.rs",
+              "edition": "2024",
+              "doc": true,
+              "doctest": true,
+              "test": true
+            },
+            "profile": {
+              "opt_level": "0",
+              "debuginfo": 0,
+              "debug_assertions": true,
+              "overflow_checks": true,
+              "test": false
+            },
+            "features": [
+              "default",
+              "pq-only"
+            ],
+            "filenames": [
+              "/Users/wata/.cache/misaka-positive-a1-target/debug/deps/libkaspa_consensus_core-8d23c7aaac2eb958.rlib",
+              "/Users/wata/.cache/misaka-positive-a1-target/debug/deps/libkaspa_consensus_core-8d23c7aaac2eb958.rmeta"
+            ],
+            "executable": null,
+            "fresh": true
+          }
+        }
+      ]
+    }
+  ],
+  "unit_decisions": [
+    {
+      "unit": "8d23c7aaac2eb958",
+      "disposition": "A7_EXECUTION_LINKED_ENDED_PHASE_REBUILDABLE_INTERMEDIATE_FOR_REVIEW_ONLY",
+      "potential_file_bytes": 484106330,
+      "paths": [
+        "/Users/wata/.cache/misaka-positive-a1-target/debug/deps/libkaspa_consensus_core-8d23c7aaac2eb958.rlib",
+        "/Users/wata/.cache/misaka-positive-a1-target/debug/deps/libkaspa_consensus_core-8d23c7aaac2eb958.rmeta"
+      ],
+      "basis": [
+        "original fresh:false compiler-artifact with exact shared-cache paths",
+        "later completed candidate reuses same paths fresh:true",
+        "old source/locks/rustc profile records retained",
+        "current compiled root source changed; dependency map tracked separately",
+        "static Rust rlib/rmeta intermediates, not test executables/native archive/raw state"
+      ],
+      "limitations": [
+        "historical library content SHA was not recorded at compilation; current bytes cannot be retrospectively certified as identical",
+        "no current open observed is not future reuse exclusion",
+        "file bytes/blocks are not a guarantee of actual free-space recovery; APFS sharing/accounting may differ"
+      ]
+    },
+    {
+      "unit": "0bbd599cd27ef842",
+      "disposition": "EXCLUDED_EXECUTION_OWNER_UNCONFIRMED",
+      "file_bytes": 484879963,
+      "basis": [
+        "A7 source-origin env-dep only",
+        "shared cache generating command not identified",
+        "same unit old local-target cleanup has different bytes and SHA; cannot be reused as current identity evidence"
+      ]
+    }
+  ],
+  "action": "No unlink, gzip, build, model run or new target; metadata/source/raw/current A6 cache/native CPP/registry/all other owners protected"
+}
