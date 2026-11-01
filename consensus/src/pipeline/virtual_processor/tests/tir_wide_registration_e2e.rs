@@ -39,20 +39,6 @@ type Premine = Vec<(TransactionOutpoint, UtxoEntry)>;
 const FEE: u64 = 2_000_000;
 const CARD: usize = 2;
 
-fn config(version: u16) -> (Config, PalwConsensusParamsV2, Premine, Premine) {
-    let (base, _, premine, floats) = t12_with_harness_cards();
-    let mut params = base.params.clone();
-    let mut fence = PalwTirFenceV1::testnet12_v1(ForkActivation::new(0));
-    fence.court_version = version;
-    params.palw_tir_v1 = Some(fence);
-    params.sync_palw_tir_v1();
-    params.palw_reorg_strict_economic_win = Some(ForkActivation::new(0));
-    let config = ConfigBuilder::new(params).skip_proof_of_work().build();
-    config.params.validate_palw_v2().expect("the private typed registration rules validate");
-    let PalwConsensusMode::ConsensusV2(bundle) = &config.params.palw_consensus_mode else { unreachable!() };
-    (config.clone(), bundle.clone(), premine, floats)
-}
-
 struct Source(MapParams);
 impl PalwTirTensorSourceV1 for Source {
     fn tensor_bytes(&self, param: u16, layer: Option<u16>) -> Option<Cow<'_, [u8]>> {
@@ -104,13 +90,6 @@ struct Env {
     floats: Premine,
 }
 impl Env {
-    fn new(version: u16) -> Self {
-        Self::over(config(version))
-    }
-    fn over((config, bundle, premine, floats): (Config, PalwConsensusParamsV2, Premine, Premine)) -> Self {
-        let chain = t12_genesis_chain(&config, &bundle, &premine, &floats);
-        Self { chain: Box::new(chain), config: Box::new(config), bundle: Box::new(bundle), premine, floats }
-    }
     fn domain(&self) -> Hash64 {
         kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
             self.config.params.net.to_string().as_bytes(),
@@ -262,9 +241,95 @@ async fn registered(mut env: Env) -> Mined {
     Mined { env, object, carrier, warm, carrying, folding, collateral }
 }
 
-#[tokio::test]
-async fn wide_registration_real_carrier_replays_and_rolls_back_across_a_reorg() {
-    let mut a = registered(Env::new(2)).await;
+// Keep legacy (non-origin) setup stages separate from each other and from
+// construction of the large registration continuation. Reuse the exact same
+// harness and court-only operations; do not enter the isolated-origin tail.
+#[inline(never)]
+fn court_only_setup(version: u16) -> Box<IsolatedWideCarrierOriginSetup> {
+    let setup = isolated_wide_carrier_origin_initial_setup();
+    isolated_wide_carrier_origin_court_setup(setup, version)
+}
+
+// Genesis/Consensus construction finishes before the caller creates the large
+// continuation. The existing shared chain helper keeps all its assertions.
+#[inline(never)]
+fn boxed_env_chain(setup: &IsolatedWideCarrierOriginSetup) -> Box<T12Chain> {
+    Box::new(t12_genesis_chain(&setup.config, &setup.bundle, &setup.premine, &setup.floats))
+}
+
+#[inline(never)]
+fn boxed_env_on_setup(setup: Box<IsolatedWideCarrierOriginSetup>) -> Box<Env> {
+    let chain = boxed_env_chain(setup.as_ref());
+    let IsolatedWideCarrierOriginSetup { config, bundle, premine, floats } = *setup;
+    Box::new(Env { chain, config, bundle, premine, floats })
+}
+
+type LegacyWideCaseFuture = std::pin::Pin<Box<dyn std::future::Future<Output = ()>>>;
+
+#[inline(never)]
+fn boxed_legacy_reorg_verification(env: Box<Env>) -> LegacyWideCaseFuture {
+    Box::pin(legacy_reorg_verification(env))
+}
+
+#[inline(never)]
+fn boxed_legacy_restart_verification(prepared: Box<IsolatedWideCarrierOriginPrepared>) -> LegacyWideCaseFuture {
+    Box::pin(legacy_restart_verification(prepared))
+}
+
+#[inline(never)]
+fn boxed_legacy_invalid_version_verification(version: u16, env: Box<Env>) -> LegacyWideCaseFuture {
+    Box::pin(legacy_invalid_version_verification(version, env))
+}
+
+#[inline(never)]
+fn boxed_legacy_cap_verification(env: Box<Env>) -> LegacyWideCaseFuture {
+    Box::pin(legacy_cap_verification(env))
+}
+
+#[inline(never)]
+fn boxed_legacy_reorg_outer() -> LegacyWideCaseFuture {
+    Box::pin(async move {
+        let setup = court_only_setup(2);
+        let env = boxed_env_on_setup(setup);
+        boxed_legacy_reorg_verification(env).await;
+    })
+}
+
+#[inline(never)]
+fn boxed_legacy_restart_outer() -> LegacyWideCaseFuture {
+    Box::pin(async move {
+        let setup = court_only_setup(2);
+        let prepared = isolated_wide_carrier_origin_prepare(setup);
+        boxed_legacy_restart_verification(prepared).await;
+    })
+}
+
+#[inline(never)]
+fn boxed_legacy_invalid_outer() -> LegacyWideCaseFuture {
+    Box::pin(async move {
+        for version in [1, 2] {
+            let setup = court_only_setup(version);
+            let env = boxed_env_on_setup(setup);
+            boxed_legacy_invalid_version_verification(version, env).await;
+        }
+    })
+}
+
+#[inline(never)]
+fn boxed_legacy_cap_outer() -> LegacyWideCaseFuture {
+    Box::pin(async move {
+        let setup = court_only_setup(2);
+        let env = boxed_env_on_setup(setup);
+        boxed_legacy_cap_verification(env).await;
+    })
+}
+
+fn run_legacy_wide_case(mut case: LegacyWideCaseFuture) {
+    tokio::runtime::Builder::new_current_thread().enable_all().build().expect("Failed building the Runtime").block_on(case.as_mut());
+}
+
+async fn legacy_reorg_verification(env: Box<Env>) {
+    let mut a = registered(*env).await;
     let class_id = id(&a.object);
     let (_, accepted) = a.env.chain.tip_state();
     let z = t12_genesis_chain(&a.env.config, &a.env.bundle, &a.env.premine, &a.env.floats);
@@ -304,21 +369,11 @@ async fn wide_registration_real_carrier_replays_and_rolls_back_across_a_reorg() 
     assert!(a.env.chain.tip_state().1.tir_class_v1(&class_id).is_some());
 }
 
-#[tokio::test]
-async fn wide_registration_restarts_from_the_same_real_database() {
-    use kaspa_database::{create_temp_db, prelude::ConnBuilder};
-    let (config, bundle, premine, floats) = config(2);
-    let (_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
-    let (sender, _rx) = async_channel::unbounded();
-    let chain = t12_genesis_chain_on(TestConsensus::with_db(db.clone(), &config, sender), &config, &bundle, &premine, &floats);
-    let mined = registered(Env {
-        chain: Box::new(chain),
-        config: Box::new(config.clone()),
-        bundle: Box::new(bundle.clone()),
-        premine,
-        floats,
-    })
-    .await;
+async fn legacy_restart_verification(prepared: Box<IsolatedWideCarrierOriginPrepared>) {
+    // Bind the guard first so all later DB/native owners are dropped before it.
+    let IsolatedWideCarrierOriginPrepared { _lifetime, db, _rx, setup, chain } = *prepared;
+    let IsolatedWideCarrierOriginSetup { config, bundle, premine, floats } = *setup;
+    let mined = registered(Env { chain, config: config.clone(), bundle: bundle.clone(), premine, floats }).await;
     let class_id = id(&mined.object);
     let (sink, state) = mined.env.chain.tip_state();
     let expected_root = state.state_root();
@@ -338,45 +393,41 @@ async fn wide_registration_restarts_from_the_same_real_database() {
     assert!(reopened.ctx.consensus.get_virtual_utxo_entry(change).is_some());
 }
 
-#[tokio::test]
-async fn wide_registration_invalid_bond_signature_or_target_still_spends_only_the_valid_carrier() {
-    for version in [1, 2] {
-        let mut env = Env::new(version);
-        let t = env.config.params.target_time_per_block();
-        env.chain.heartbeat(t, vec![]).await;
-        let collateral = env.chain.tip_state().1.bond(&env.chain.bonds[CARD]).unwrap().collateral;
-        let exposure = env.chain.tip_state().1.registration_exposure(&env.chain.bonds[CARD]);
-        let mut funding = env.floats[CARD].clone();
-        // Version1 also receives an otherwise honest signed object, isolating
-        // the trusted court selector from signature/target rejection.
-        for mutation in 0..if version == 1 { 4 } else { 3 } {
-            let mut object = env.object();
-            if mutation == 2 {
-                let Obj::ClassRegisteredTirV1 { initial_target, .. } = &mut object else { unreachable!() };
-                *initial_target /= 2;
-            }
-            sign(&env, &mut object, if mutation == 1 { CARD + 1 } else { CARD });
-            if mutation == 0 {
-                let Obj::ClassRegisteredTirV1 { admission, .. } = &mut object else { unreachable!() };
-                admission.signature[0] ^= 1;
-            }
-            let carrier = env.carrier(&object, funding);
-            env.mine(&carrier).await;
-            let (_, state) = env.chain.tip_state();
-            assert!(state.class(&id(&object)).is_none());
-            assert!(state.tir_class_v1(&id(&object)).is_none());
-            assert_eq!(state.bond(&env.chain.bonds[CARD]).unwrap().collateral, collateral);
-            assert_eq!(state.registration_exposure(&env.chain.bonds[CARD]), exposure);
-            funding =
-                (TransactionOutpoint::new(carrier.id(), 0), UtxoEntry::new(carrier.outputs[0].value, card_payout_spk(CARD), 0, false));
-            assert!(env.chain.ctx.consensus.get_virtual_utxo_entry(funding.0).is_some());
+async fn legacy_invalid_version_verification(version: u16, env: Box<Env>) {
+    let mut env = env;
+    let t = env.config.params.target_time_per_block();
+    env.chain.heartbeat(t, vec![]).await;
+    let collateral = env.chain.tip_state().1.bond(&env.chain.bonds[CARD]).unwrap().collateral;
+    let exposure = env.chain.tip_state().1.registration_exposure(&env.chain.bonds[CARD]);
+    let mut funding = env.floats[CARD].clone();
+    // Version1 also receives an otherwise honest signed object, isolating
+    // the trusted court selector from signature/target rejection.
+    for mutation in 0..if version == 1 { 4 } else { 3 } {
+        let mut object = env.object();
+        if mutation == 2 {
+            let Obj::ClassRegisteredTirV1 { initial_target, .. } = &mut object else { unreachable!() };
+            *initial_target /= 2;
         }
+        sign(&env, &mut object, if mutation == 1 { CARD + 1 } else { CARD });
+        if mutation == 0 {
+            let Obj::ClassRegisteredTirV1 { admission, .. } = &mut object else { unreachable!() };
+            admission.signature[0] ^= 1;
+        }
+        let carrier = env.carrier(&object, funding);
+        env.mine(&carrier).await;
+        let (_, state) = env.chain.tip_state();
+        assert!(state.class(&id(&object)).is_none());
+        assert!(state.tir_class_v1(&id(&object)).is_none());
+        assert_eq!(state.bond(&env.chain.bonds[CARD]).unwrap().collateral, collateral);
+        assert_eq!(state.registration_exposure(&env.chain.bonds[CARD]), exposure);
+        funding =
+            (TransactionOutpoint::new(carrier.id(), 0), UtxoEntry::new(carrier.outputs[0].value, card_payout_spk(CARD), 0, false));
+        assert!(env.chain.ctx.consensus.get_virtual_utxo_entry(funding.0).is_some());
     }
 }
 
-#[tokio::test]
-async fn wide_registration_one_per_block_cap_preserves_both_real_carrier_utxo_acceptances() {
-    let mut env = Env::new(2);
+async fn legacy_cap_verification(env: Box<Env>) {
+    let mut env = env;
     let t = env.config.params.target_time_per_block();
     env.chain.heartbeat(t, vec![]).await;
     let (_, before) = env.chain.tip_state();
@@ -421,10 +472,30 @@ async fn wide_registration_one_per_block_cap_preserves_both_real_carrier_utxo_ac
     }
 }
 
+#[test]
+fn wide_registration_real_carrier_replays_and_rolls_back_across_a_reorg() {
+    run_legacy_wide_case(boxed_legacy_reorg_outer());
+}
+
+#[test]
+fn wide_registration_restarts_from_the_same_real_database() {
+    run_legacy_wide_case(boxed_legacy_restart_outer());
+}
+
+#[test]
+fn wide_registration_invalid_bond_signature_or_target_still_spends_only_the_valid_carrier() {
+    run_legacy_wide_case(boxed_legacy_invalid_outer());
+}
+
+#[test]
+fn wide_registration_one_per_block_cap_preserves_both_real_carrier_utxo_acceptances() {
+    run_legacy_wide_case(boxed_legacy_cap_outer());
+}
+
 // These test-only stages return before the next stage starts. In particular,
 // the t12 builder is never below the court/isolated Params clone/build frames.
 // Keep Config/bundle on the heap between stages; this does not enlarge libtest's
-// stack, weaken validation, or change the remaining by-value config factory.
+// stack or weaken validation.
 struct IsolatedWideCarrierOriginSetup {
     config: Box<Config>,
     bundle: Box<PalwConsensusParamsV2>,
