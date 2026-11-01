@@ -256,7 +256,9 @@ fn fixture_case(
         layout: PalwTirLayoutV1 {
             version: 1,
             max_context: context_max,
-            checkpoint_interval: 3,
+            // The long quote-only job ends before its first fixed-state
+            // checkpoint, keeping the single POST leaf used by the regression.
+            checkpoint_interval: if long { context_max } else { 3 },
             h_tile: if window == 1 { 1 } else { 2 },
             commit_tiles: program.blocks.iter().flat_map(|b| &b.nodes).filter(|n| n.commit).map(|_| 4).collect(),
             state_tiles: vec![4; program.states.len()],
