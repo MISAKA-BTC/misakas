@@ -682,8 +682,10 @@ impl PalwTirStepSpaceV1 {
         let a64 = a as u64;
         let post_occ = self.occurrences.len() - 1;
         let post_block = self.occurrences[post_occ].0;
-        // Occurrence multiplicity of every non-post block.
-        let mut mult = vec![0u128; self.blocks.len()];
+        // Validated programs have at most MAX_BLOCKS (16). Keep the existing
+        // linear counting algorithm in fixed 256-byte stack storage, so a
+        // leaf-count/quote caller needs no heap allocation before reservation.
+        let mut mult = [0u128; misaka_palw_tir::program::MAX_BLOCKS];
         for (i, (b, _)) in self.occurrences.iter().enumerate() {
             if i != post_occ {
                 mult[*b as usize] += 1;
