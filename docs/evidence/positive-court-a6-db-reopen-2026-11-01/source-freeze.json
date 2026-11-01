@@ -1,0 +1,24 @@
+{
+  "source_commit": "355408e5a3426926d863193b76ffaa810704bef0",
+  "source_commits": [
+    "f8d3bd3fa5a2ab56e6f69fdd56701b082ed8776e",
+    "355408e5a3426926d863193b76ffaa810704bef0"
+  ],
+  "runtime_code_changes": false,
+  "new_tests": 6,
+  "executed_new_tests": 0,
+  "build": "HOLD per A0, no cargo check/test/clippy run",
+  "metadata": "full offline cargo metadata resolution passed; three new native-target dev dependencies only",
+  "checks": [
+    "rustfmt check PASS",
+    "source diff check PASS",
+    "independent read-only review PASS"
+  ],
+  "files": {
+    "Cargo.lock": "9c989098af20057cfacbddaae3cdea8b4cd3344592e8d815d8662db1c3f5a8e8",
+    "misaka/palw/tir/exec/Cargo.toml": "4911e719fb724ade72510d4744e8b4fd08ceaa726534df130f233a4af5e2401d",
+    "consensus/src/model/stores/palw_state_v2/positive_journal/tests.rs": "1be0542a9acb4cec0eee5cdc0f78e5680ecb4de75bca0f480cecc38cd4e818a8",
+    "misaka/palw/tir/exec/tests/positive_court_a4_integration/positive_court_a6_source.rs": "26f3c4fe37769c9a98a35ae7234e2e57f5bb6fb19e77e356f876ea01a78c442a",
+    "misaka/palw/tir/exec/tests/positive_court_a4_integration/positive_court_a6_db_replay.rs": "9f901bd3798ece0a64fa7c92c224bb4c5656812046e40da0d440ef83775e4554"
+  }
+}
