@@ -69,3 +69,6 @@ pub use prim::{Cmp, Prim, Rounding};
 pub use program::{Block, ConstDecl, Node, ParamDecl, Ref, Schedule, StateDecl, StateKind, TirProgramV1};
 pub use tensor::Tensor;
 pub use types::{DType, Dim, TensorType};
+
+/// Pure coordinates shared by Court and local producer dependency tracing.
+pub mod lane_geometry;

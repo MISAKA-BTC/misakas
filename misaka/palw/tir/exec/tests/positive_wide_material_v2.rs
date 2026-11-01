@@ -1,0 +1,494 @@
+#![cfg(feature = "positive-panel")]
+//! Local programs; no native registration, public activation or credit assertion.
+//! One production observed CPU run; the real Node independently recomputes.
+mod run_wide_common;
+use kaspa_consensus_core::{
+    Hash64,
+    palw_artifact::{PalwArtifactMultiproofV1, PalwArtifactOpeningV1},
+    palw_attempt_rules_v1::palw_attempt_output_root_v1,
+    palw_positive_check_v2::{
+        CheckOutcome,
+        expanded_plan::{ExpandedPlanLimits, ExpandedRelationKind},
+        full_relation::{FullRelationError, FullRelationLimits, PrototypeDomains, wide_v2::FullRelationPreparationV2},
+    },
+    palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    palw_tir_class_v1::PalwTirClassV1,
+    palw_tir_court_v1::source_only::TirSourceOnlyLimitsV1,
+    palw_tir_step_v1::PalwTirStepSpaceV2,
+    palw_v2::PalwJobContextV2,
+};
+use misaka_palw_positive_contract::{CONTRACT_REVISION, CONTRACT_VERSION, identity::*, messages::*, tir::greedy_selector_id};
+use misaka_palw_tir_exec::node::{
+    TirHeldInventoryV1, TirParamOpenerV1, TirParamsSourceV1,
+    memory::TirMemoryReserverV1,
+    positive_wide_material_v2::{
+        CaptureExpectedV2, WidePanelBuilderV2, WidePanelDiskReserverV2, WidePanelLimitsV2, WidePanelOwnersV2, WidePanelWorkV2,
+        WideProviderEnvelopeV2, capture_one_pass_v2,
+    },
+    run_wide_q24_v2::{TirClassRunnerWideQ24V2, TirWideRunLimitsV2},
+};
+use run_wide_common::{EXPECTED_GENERATED, Fixture, LEAF_CAP, MAX_CONTEXT, PROMPT};
+use std::sync::Arc;
+const EXPECTED: &[u32] = EXPECTED_GENERATED;
+trait OracleFixture {
+    fn class(&self) -> &PalwTirClassV1;
+    fn artifact(&self) -> Hash64;
+    fn job(&self) -> &PalwJobContextV2;
+}
+impl OracleFixture for Fixture<'_> {
+    fn class(&self) -> &PalwTirClassV1 {
+        &self.class
+    }
+    fn artifact(&self) -> Hash64 {
+        self.artifact
+    }
+    fn job(&self) -> &PalwJobContextV2 {
+        &self.job
+    }
+}
+
+fn d(n: u8) -> Digest {
+    Digest([n; 64])
+}
+fn digest(n: Hash64) -> Digest {
+    Digest(n.as_bytes())
+}
+fn full_limits() -> FullRelationLimits {
+    FullRelationLimits {
+        plan: ExpandedPlanLimits {
+            max_positions: 16,
+            max_geometry_visits: 1 << 24,
+            max_plan_bytes: 1 << 24,
+            max_legacy_leaves: 1 << 16,
+            max_relations: 1 << 20,
+            max_target_lanes: 1 << 26,
+            max_peak_target_bytes: 1 << 20,
+            uncommitted_tile_lanes: 3,
+            max_elements_per_relation: 1 << 14,
+            max_terms_per_relation: 1 << 16,
+            max_total_elements: 1 << 52,
+            max_total_terms: 1 << 52,
+        },
+        source: TirSourceOnlyLimitsV1 {
+            max_auth_storage_bytes: 1 << 28,
+            max_workspace_bytes: 1 << 30,
+            max_source_reads: 1 << 16,
+            max_target_lanes: 1 << 16,
+            max_target_bytes: 1 << 20,
+            max_material_bytes: 1 << 24,
+            max_material_units: 1 << 16,
+        },
+        max_record_bytes: 1 << 28,
+        max_record_heap_bytes: 1 << 28,
+        max_record_geometry_visits: 1 << 52,
+        max_total_material_bytes: 1 << 44,
+        max_total_source_reads: 1 << 40,
+    }
+}
+fn domains() -> PrototypeDomains {
+    PrototypeDomains::local_only(b"A1/full-relation/local-test-record", b"A1/FULL/LOCAL/TEST").unwrap()
+}
+struct SignedMiner {
+    rooted: AdmissionContext,
+    result: MinerResultCommit,
+    key: [u8; PUBKEY_BYTES],
+    signature: [u8; SIGNATURE_BYTES],
+}
+impl SignedMiner {
+    fn new(f: &impl OracleFixture, wrong: bool) -> Self {
+        let class = f.class();
+        let job = f.job();
+        let artifact = f.artifact();
+        assert_eq!(class.tokenizer_id, Hash64::from_u64_word(18));
+        assert_eq!(job.tokenizer_id, Hash64::from_u64_word(0));
+        let pair = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([91; 32]);
+        let key = *pair.verification_key.as_ref();
+        let rooted = AdmissionContext {
+            scope: ChainScope { network: d(1), ruleset: d(2), branch: d(3) },
+            expected_job: digest(job.job_id),
+            expected_execution: digest(job.context_hash()),
+            expected_miner: principal(&key),
+            expected_input: digest(job.prompt_token_ids_hash),
+            registered_class: digest(class.class_id(&artifact)),
+            artifact: digest(artifact),
+            program: digest(class.graph_ir_root()),
+            tokenizer: digest(job.tokenizer_id),
+            execution_rules: digest(job.cu_ruleset_id),
+            selector: greedy_selector_id(),
+            required_form: ClaimForm::PositiveResultV2,
+        };
+        let mut result = MinerResultCommit {
+            version: CONTRACT_VERSION,
+            revision: CONTRACT_REVISION,
+            scope: rooted.scope,
+            job: rooted.expected_job,
+            execution: rooted.expected_execution,
+            miner: rooted.expected_miner,
+            registered_class: rooted.registered_class,
+            artifact: rooted.artifact,
+            program: rooted.program,
+            input: rooted.expected_input,
+            tokenizer: rooted.tokenizer,
+            execution_rules: rooted.execution_rules,
+            selector: rooted.selector,
+            generation_seed: job.execution_seed,
+            temperature_q24: 0,
+            prefill: job.declared_prefill_tokens,
+            decode: job.exact_decode_tokens,
+            max_context: job.max_context_tokens,
+            output: digest(palw_attempt_output_root_v1(job, EXPECTED)),
+            dependencies: d(21),
+            service_contract: d(22),
+        };
+        if wrong {
+            result.output = d(99);
+        }
+        let signature =
+            *libcrux_ml_dsa::ml_dsa_87::sign(&pair.signing_key, &result.id().0.0, RESULT_SIGN_CONTEXT, [0; 32]).unwrap().as_ref();
+        Self { rooted, result, key, signature }
+    }
+    fn authenticate(&self) -> AuthenticatedResult<'_> {
+        self.result.authenticate(&self.key, &self.signature).unwrap()
+    }
+    fn preparation(&self, f: &impl OracleFixture) -> FullRelationPreparationV2 {
+        FullRelationPreparationV2::authenticate(
+            &self.rooted,
+            f.class(),
+            f.artifact(),
+            f.job(),
+            PalwPromptIdsFormV1::Flat,
+            full_limits(),
+            domains(),
+            self.result.clone(),
+            &self.key,
+            &self.signature,
+        )
+        .unwrap()
+    }
+}
+fn reserve() -> TirMemoryReserverV1 {
+    Arc::new(|_, _, _, bytes| {
+        assert!(bytes > 0);
+        Ok(Box::new(()) as Box<dyn Send + Sync>)
+    })
+}
+fn disk_reserve() -> WidePanelDiskReserverV2 {
+    Arc::new(|_, _, bytes| {
+        assert!(bytes > 0);
+        Ok(Box::new(()) as Box<dyn Send + Sync>)
+    })
+}
+fn bounds() -> WidePanelLimitsV2 {
+    WidePanelLimitsV2 {
+        max_records: 4096,
+        max_step_leaves: LEAF_CAP,
+        max_tape_bytes: 1 << 26,
+        max_live_heap_bytes: 1 << 35,
+        max_visits: 1 << 42,
+        max_io_bytes: 1 << 42,
+        max_hash_work: 1 << 48,
+        max_proof_attempts: 1 << 20,
+        max_provider_bytes: 1 << 42,
+        max_provider_scratch: 1 << 24,
+        max_material_bytes: 1 << 20,
+        max_claim_bytes: 1 << 20,
+        max_trace_frames: 1 << 16,
+        external_retained_bytes: 1 << 28,
+    }
+}
+fn run_bounds() -> TirWideRunLimitsV2 {
+    TirWideRunLimitsV2 {
+        max_positions: MAX_CONTEXT,
+        max_step_leaves: LEAF_CAP,
+        max_row_lanes: 16,
+        max_work: 1 << 40,
+        max_requested_bytes: 1 << 30,
+    }
+}
+fn owners() -> WidePanelOwnersV2 {
+    WidePanelOwnersV2 {
+        metadata_auth_bytes: 1 << 29,
+        metadata_auth_work: 1 << 24,
+        source_auth_bytes: 1 << 24,
+        signature_bytes: 1 << 20,
+        retained_record_bytes: 1 << 26,
+    }
+}
+fn provider() -> WideProviderEnvelopeV2 {
+    WideProviderEnvelopeV2 { per_call_io: 1 << 20, per_call_work: 1 << 20, max_result_bytes: 1 << 16 }
+}
+fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
+    let space = PalwTirStepSpaceV2::new(&f.class).unwrap();
+    let runner = TirClassRunnerWideQ24V2::new(&space, f.plan, f.params, f.class.class_id(&f.artifact)).unwrap();
+    let reserver = reserve();
+    let work = WidePanelWorkV2::new(bounds(), f.job.shape_profile_id, f.job.context_hash(), &disk_reserve()).unwrap();
+    let capture = capture_one_pass_v2(
+        CaptureExpectedV2 { class: &f.class, artifact: f.artifact, job: &f.job, space: &space, prompt: PROMPT },
+        &runner,
+        run_bounds(),
+        &work,
+        tempfile::tempfile().unwrap(),
+        &reserver,
+    )
+    .unwrap();
+    assert_eq!(capture.run().generated(), EXPECTED);
+    let signed = SignedMiner::new(f, wrong_miner);
+    let result = signed.authenticate();
+    let prep = signed.preparation(f);
+    let source = TirParamsSourceV1(f.params);
+    let inventory = TirHeldInventoryV1::build(f.program, &source).unwrap();
+    assert_eq!(inventory.tree.root(), f.artifact);
+    let builder =
+        WidePanelBuilderV2::prepare(&capture, &prep, &result, &signed.rooted, &inventory, provider(), owners(), &reserver).unwrap();
+    let tape = builder.claims_tape(tempfile::tempfile().unwrap()).unwrap();
+    let mut claims = vec![];
+    tape.visit(&mut |index, values| {
+        assert_eq!(index as usize, claims.len());
+        claims.push(values.to_vec());
+        Ok(())
+    })
+    .unwrap();
+    let mut encoded = vec![];
+    tape.stream_borsh(&mut encoded).unwrap();
+    assert_eq!(encoded, borsh::to_vec(&claims).unwrap());
+    let n = claims.len();
+    if wrong_panel {
+        let i = prep.plan().iter().find(|r| matches!(r.kind, ExpandedRelationKind::RecomputeNode { .. })).unwrap().index as usize;
+        claims[i][0] += 1;
+    }
+    let panel = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([92; 32]);
+    let record = prep
+        .freeze_record(
+            capture.binding().unwrap(),
+            capture.run().generated().to_vec(),
+            principal(panel.verification_key.as_ref()),
+            claims,
+        )
+        .unwrap();
+    let sig = *libcrux_ml_dsa::ml_dsa_87::sign(&panel.signing_key, &record.signing_digest().0, record.signature_context(), [0; 32])
+        .unwrap()
+        .as_ref();
+    // This separately authenticated Node preparation owns all numerical checking.
+    let mut checker = signed.preparation(f).begin(record, panel.verification_key.as_ref(), &sig).unwrap();
+    let before = builder.meter();
+    let mut rejected = false;
+    for index in 0..n {
+        let progress = checker.progress();
+        let material = builder.material(index as u64, progress.legacy_frontier).unwrap();
+        assert!(builder.material(index as u64, progress.legacy_frontier).is_err());
+        let outcome = checker.submit(&material.as_borrowed(), material.target());
+        if outcome == Err(FullRelationError::PanelMismatch) {
+            assert!(wrong_panel);
+            assert_eq!(checker.progress().outcome, CheckOutcome::WitnessRejected);
+            rejected = true;
+            break;
+        }
+        outcome.unwrap();
+        assert_eq!(checker.progress().next_relation, index as u64 + 1);
+    }
+    assert!(builder.meter().proof_attempts > before.proof_attempts);
+    if wrong_panel {
+        assert!(rejected);
+    } else {
+        assert_eq!(checker.finish().unwrap(), if wrong_miner { CheckOutcome::OutputMismatch } else { CheckOutcome::Matched });
+    }
+    signed.authenticate();
+}
+#[test]
+fn one_pass_wide_tape_materials_reach_real_node_for_windows_one_and_three() {
+    for window in [1, 3] {
+        run_wide_common::with_fixture(window, |f, _| exercise(f, false, false));
+    }
+}
+#[test]
+fn wrong_panel_claim_remains_witness_rejection_and_wrong_miner_waits_for_all_relations() {
+    run_wide_common::with_fixture(3, |f, _| {
+        exercise(f, false, true);
+        exercise(f, true, false);
+    });
+}
+struct Unknown<'a>(&'a dyn TirParamOpenerV1);
+impl TirParamOpenerV1 for Unknown<'_> {
+    fn param_opening(&self, i: u32) -> Option<PalwArtifactOpeningV1> {
+        self.0.param_opening(i)
+    }
+    fn param_multiproof(&self, i: &[u32]) -> Option<PalwArtifactMultiproofV1> {
+        self.0.param_multiproof(i)
+    }
+}
+#[test]
+fn unknown_provider_scratch_is_refused_without_resetting_session_costs() {
+    run_wide_common::with_fixture(1, |f, _| {
+        let space = PalwTirStepSpaceV2::new(&f.class).unwrap();
+        let runner = TirClassRunnerWideQ24V2::new(&space, f.plan, f.params, f.class.class_id(&f.artifact)).unwrap();
+        let reserve = reserve();
+        let work = WidePanelWorkV2::new(bounds(), f.job.shape_profile_id, f.job.context_hash(), &disk_reserve()).unwrap();
+        let capture = capture_one_pass_v2(
+            CaptureExpectedV2 { class: &f.class, artifact: f.artifact, job: &f.job, space: &space, prompt: PROMPT },
+            &runner,
+            run_bounds(),
+            &work,
+            tempfile::tempfile().unwrap(),
+            &reserve,
+        )
+        .unwrap();
+        let s = SignedMiner::new(f, false);
+        let auth = s.authenticate();
+        let prep = s.preparation(f);
+        let src = TirParamsSourceV1(f.params);
+        let inv = TirHeldInventoryV1::build(f.program, &src).unwrap();
+        let unknown = Unknown(&inv);
+        let builder =
+            WidePanelBuilderV2::prepare(&capture, &prep, &auth, &s.rooted, &unknown, provider(), owners(), &reserve).unwrap();
+        let before = builder.meter();
+        for _ in 0..2 {
+            let err = match builder.material(0, 0) {
+                Ok(_) => panic!("unknown provider accepted"),
+                Err(e) => e,
+            };
+            assert!(err.contains("scratch unknown"));
+        }
+        let after = builder.meter();
+        assert!(after.visits > before.visits);
+        assert!(after.copied_bytes > before.copied_bytes);
+        assert!(after.provider_bytes > before.provider_bytes);
+    });
+}
+#[test]
+fn captured_gather_select_topk_and_fixed_history_feed_actual_node_without_discovery_evaluation() {
+    use kaspa_consensus_core::palw_tir_class_v1::PalwTirLayoutV1;
+    use misaka_palw_tir::{Cmp, DType, MapParams, Ref, Tensor, TensorType, builder::ProgramBuilder};
+    use misaka_palw_tir_exec::{TirParams, TirPlan};
+    // A NEW local declaration. Its flags/dtypes/layout are not a rewrite of a
+    // registered model; no native registration receipt is asserted by this test.
+    let mut b = ProgramBuilder::new(4, 1 << 18);
+    let embed = b.param("e", DType::I8, &[4, 4], false);
+    let logits_table = b.param("l", DType::I64, &[4, 4], false);
+    let fixed = b.fixed_state("s", DType::I8, &[4], -128, 127, false);
+    let hist = b.hist_state("h", DType::I8, &[4], 3, false);
+    let zero = b.scalar(DType::Idx, 0);
+    let pre = {
+        let mut p = b.block("pre", vec![]);
+        let row = p.gather(embed, Ref::Input(0), 0, 0);
+        let top = p.topk(row, 0, 1);
+        let top = p.reshape_fixed(top, &[]);
+        let other = p.gather(embed, top, 0, 0);
+        let cond = p.compare(Ref::Input(0), zero, Cmp::Eq);
+        let chosen = p.select(cond, row, other, DType::I8);
+        let acc = p.add(Ref::State(fixed), chosen, DType::I32);
+        let bounded = p.clamp(acc, -128, 127, DType::I8);
+        p.state_write(fixed, bounded);
+        let rows = p.hist_append(hist, bounded);
+        let sum = p.reduce_sum(rows, 0, DType::I32);
+        let sum = p.reshape_fixed(sum, &[4]);
+        let carry = p.clamp(sum, -128, 127, DType::I8);
+        p.finish(&[carry])
+    };
+    let (post, logits) = {
+        let mut p = b.block("post", vec![TensorType::fixed(DType::I8, &[4])]);
+        let last = p.gather(logits_table, Ref::Input(0), 0, 0);
+        p.commit(last);
+        let Ref::Node(n) = last else { unreachable!() };
+        (p.finish(&[]), n)
+    };
+    let mut program = b.finish(pre, vec![], post, logits);
+    program.logits_scheme_id = misaka_palw_tir::program::LOGITS_I64_Q24_SCHEME_V2;
+    misaka_palw_tir::interval::analyze_ranges(&program).unwrap();
+    let mut map = MapParams::default();
+    map.tensors.insert((0, None), Tensor::new(DType::I8, vec![4, 4], run_wide_common::EMBEDDING.to_vec()).unwrap());
+    map.tensors.insert((1, None), Tensor::new(DType::I64, vec![4, 4], run_wide_common::logits_table(true)).unwrap());
+    let plan = TirPlan::compile(&program).unwrap();
+    let params = TirParams::from_map(&plan, &map).unwrap();
+    let source = TirParamsSourceV1(&params);
+    let inventory = TirHeldInventoryV1::build(&program, &source).unwrap();
+    let artifact = inventory.tree.root();
+    let committed = program.blocks.iter().flat_map(|b| &b.nodes).filter(|n| n.commit).count();
+    let class = PalwTirClassV1 {
+        version: 1,
+        program: program.encode(),
+        layout: PalwTirLayoutV1 {
+            version: 1,
+            max_context: 16,
+            checkpoint_interval: 2,
+            h_tile: 2,
+            commit_tiles: vec![4; committed],
+            state_tiles: vec![4; 2],
+        },
+        tokenizer_id: Hash64::from_u64_word(18),
+    };
+    run_wide_common::with_fixture(3, |old, _| {
+        let job = PalwJobContextV2 { shape_profile_id: class.class_id(&artifact), ..old.job.clone() };
+        let f = Fixture {
+            program: &program,
+            plan: &plan,
+            params: &params,
+            class,
+            artifact,
+            job,
+            nodes: vec![],
+            steps: vec![],
+            rows: vec![],
+        };
+        exercise(&f, false, false);
+    });
+}
+#[test]
+fn failed_capture_keeps_shared_spent_work_and_cannot_start_a_second_cpu_run() {
+    use std::io::Write;
+    run_wide_common::with_fixture(1, |f, _| {
+        let space = PalwTirStepSpaceV2::new(&f.class).unwrap();
+        let runner = TirClassRunnerWideQ24V2::new(&space, f.plan, f.params, f.job.shape_profile_id).unwrap();
+        let work = WidePanelWorkV2::new(bounds(), f.job.shape_profile_id, f.job.context_hash(), &disk_reserve()).unwrap();
+        let shared = work.clone();
+        let mut nonempty = tempfile::tempfile().unwrap();
+        nonempty.write_all(b"not an empty tape").unwrap();
+        let attempt = |file, work: &WidePanelWorkV2| {
+            capture_one_pass_v2(
+                CaptureExpectedV2 { class: &f.class, artifact: f.artifact, job: &f.job, space: &space, prompt: PROMPT },
+                &runner,
+                run_bounds(),
+                work,
+                file,
+                &reserve(),
+            )
+        };
+        let first = match attempt(nonempty, &work) {
+            Ok(_) => panic!("nonempty tape accepted"),
+            Err(e) => e,
+        };
+        assert!(first.contains("empty"));
+        let spent = shared.meter();
+        assert!(spent.hash_work > 0);
+        let second = match attempt(tempfile::tempfile().unwrap(), &shared) {
+            Ok(_) => panic!("failed attempt reset"),
+            Err(e) => e,
+        };
+        assert!(second.contains("already started"));
+        assert_eq!(shared.meter(), spent);
+    });
+}
+#[test]
+fn oversized_typed_network_is_dropped_before_hashing_or_starting_the_cpu_run() {
+    run_wide_common::with_fixture(1, |f, _| {
+        let space = PalwTirStepSpaceV2::new(&f.class).unwrap();
+        let runner = TirClassRunnerWideQ24V2::new(&space, f.plan, f.params, f.job.shape_profile_id).unwrap();
+        // The work constructor receives only fixed IDs, never a delivered job.
+        let work = WidePanelWorkV2::new(bounds(), f.job.shape_profile_id, f.job.context_hash(), &disk_reserve()).unwrap();
+        let mut delivered = f.job.clone();
+        delivered.network_id = vec![0; kaspa_consensus_core::palw_v2::PALW_V2_MAX_NETWORK_ID_BYTES + 1];
+        let before = work.meter();
+        let error = match capture_one_pass_v2(
+            CaptureExpectedV2 { class: &f.class, artifact: f.artifact, job: &delivered, space: &space, prompt: PROMPT },
+            &runner,
+            run_bounds(),
+            &work,
+            tempfile::tempfile().unwrap(),
+            &reserve(),
+        ) {
+            Ok(_) => panic!("oversized typed network accepted"),
+            Err(e) => e,
+        };
+        assert!(error.contains("shape/length"));
+        assert_eq!(work.meter(), before);
+    });
+}

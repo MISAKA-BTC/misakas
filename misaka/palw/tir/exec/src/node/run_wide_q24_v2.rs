@@ -159,6 +159,11 @@ impl<'a> TirClassRunnerWideQ24V2<'a> {
         Ok(Self { space, plan, params, class_id })
     }
 
+    /// Original immutable geometry, for local collectors to join an independent
+    /// registry/job expectation. This is metadata, not native authorization.
+    pub fn original_space(&self) -> &PalwTirStepSpaceV2 {
+        self.space
+    }
     /// Pure closed-form preflight. No position/leaf list or encoded program is allocated.
     pub fn quote(&self, ctx: &PalwJobContextV2, limits: TirWideRunLimitsV2) -> Result<TirWideRunQuoteV2, String> {
         if ctx.shape_profile_id != self.class_id {
@@ -263,7 +268,11 @@ impl<'a> TirClassRunnerWideQ24V2<'a> {
         limits: TirWideRunLimitsV2,
         on_leaf: &mut dyn FnMut(&TirLeafOutWideQ24V2<'_>),
     ) -> Result<TirJobRunWideQ24V2, String> {
-        self.drive(ctx, prompt, expected_execution, limits, on_leaf, None)
+        let mut forward = |leaf: &TirLeafOutWideQ24V2<'_>| {
+            on_leaf(leaf);
+            Ok(())
+        };
+        self.drive(ctx, prompt, expected_execution, limits, &mut forward, None)
     }
 
     /// Every-node/state/native-output observation within this same single run.
@@ -278,6 +287,26 @@ impl<'a> TirClassRunnerWideQ24V2<'a> {
         on_leaf: &mut dyn FnMut(&TirLeafOutWideQ24V2<'_>),
         observer: &mut dyn TirRunObserverV1,
     ) -> Result<TirJobRunWideQ24V2, String> {
+        let mut forward = |leaf: &TirLeafOutWideQ24V2<'_>| {
+            on_leaf(leaf);
+            Ok(())
+        };
+        self.drive(ctx, prompt, expected_execution, limits, &mut forward, Some(observer))
+    }
+
+    /// Fallible local custody callback. A failed tape write aborts this same
+    /// run immediately; partial values cannot become a completed capture.
+    /// Original run/run_observed callback APIs and all output bytes are retained.
+    #[allow(clippy::too_many_arguments)]
+    pub fn run_observed_fallible(
+        &self,
+        ctx: &PalwJobContextV2,
+        prompt: &[u32],
+        expected_execution: Hash64,
+        limits: TirWideRunLimitsV2,
+        on_leaf: &mut dyn FnMut(&TirLeafOutWideQ24V2<'_>) -> Result<(), String>,
+        observer: &mut dyn TirRunObserverV1,
+    ) -> Result<TirJobRunWideQ24V2, String> {
         self.drive(ctx, prompt, expected_execution, limits, on_leaf, Some(observer))
     }
 
@@ -288,7 +317,7 @@ impl<'a> TirClassRunnerWideQ24V2<'a> {
         prompt: &[u32],
         expected_execution: Hash64,
         limits: TirWideRunLimitsV2,
-        on_leaf: &mut dyn FnMut(&TirLeafOutWideQ24V2<'_>),
+        on_leaf: &mut dyn FnMut(&TirLeafOutWideQ24V2<'_>) -> Result<(), String>,
         mut observer: Option<&mut dyn TirRunObserverV1>,
     ) -> Result<TirJobRunWideQ24V2, String> {
         let q = self.quote(ctx, limits)?;
@@ -434,7 +463,7 @@ struct WideEmitter<'s, 'f> {
     context: Hash64,
     position: u32,
     hashes: Vec<Hash64>,
-    on_leaf: &'f mut dyn FnMut(&TirLeafOutWideQ24V2<'_>),
+    on_leaf: &'f mut dyn FnMut(&TirLeafOutWideQ24V2<'_>) -> Result<(), String>,
 }
 impl WideEmitter<'_, '_> {
     fn native(&mut self, slot: u32, tile: u32, data: Slice<'_>, from: usize, lanes: usize) -> Result<(), String> {
@@ -460,8 +489,8 @@ impl WideEmitter<'_, '_> {
         // A1 alone selects the eight-byte final leaf versus old narrow bytes.
         let preimage = palw_tir_leaf_preimage_v2(self.space, self.ctx, &leaf, values).map_err(|e| e.to_string())?;
         let hash = step_tile_leaf_hash_v1(&self.context, &self.class_id, &preimage);
+        (self.on_leaf)(&TirLeafOutWideQ24V2 { index, position: self.position, preimage: &preimage, hash })?;
         self.hashes.push(hash); // exact whole-job reservation already admitted
-        (self.on_leaf)(&TirLeafOutWideQ24V2 { index, position: self.position, preimage: &preimage, hash });
         Ok(())
     }
 }

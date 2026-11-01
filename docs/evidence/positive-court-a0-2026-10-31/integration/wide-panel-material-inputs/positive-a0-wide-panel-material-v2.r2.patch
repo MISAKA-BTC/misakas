@@ -1,0 +1,2512 @@
+diff --git a/consensus/core/src/palw_tir_court_v1/source_only/wide_v2.rs b/consensus/core/src/palw_tir_court_v1/source_only/wide_v2.rs
+--- a/consensus/core/src/palw_tir_court_v1/source_only/wide_v2.rs
++++ b/consensus/core/src/palw_tir_court_v1/source_only/wide_v2.rs
+@@ -188,6 +188,22 @@
+ }
+ 
+ impl AuthenticatedTirSourceOnlyV2<'_> {
++    /// Artifact identity only: read an already authenticated parameter lane.
++    /// This does not evaluate a model or authenticate a Panel intermediate.
++    /// Local producer geometry may use it to resolve a dynamic address; Node
++    /// still independently recomputes the address and canonical read closure.
++    /// Sorted inventory coordinates authenticated by artifact commitments only.
++    pub fn authenticated_parameter_leaves(&self) -> impl Iterator<Item = u32> + '_ {
++        self.params.keys().copied()
++    }
++    pub fn authenticated_parameter_lane(&self, param: u16, layer: Option<u16>, index: usize) -> Option<i128> {
++        let d = self.verified.space().program().params.get(usize::from(param))?;
++        let byte = u64::try_from(index).ok()?.checked_mul(d.dtype.width() as u64)?;
++        let leaf = self.inventory.leaf_of(param, layer, byte)?;
++        let (start, bytes) = self.params.get(&leaf)?;
++        let first = usize::try_from(byte.checked_sub(u64::from(*start))?).ok()?;
++        Some(d.dtype.decode_le(bytes.get(first..first.checked_add(d.dtype.width())?)?))
++    }
+     pub fn quote(&self) -> TirSourceOnlyQuoteV1 {
+         self.quote
+     }
+diff --git a/misaka/palw/tir/core/src/demand.rs b/misaka/palw/tir/core/src/demand.rs
+--- a/misaka/palw/tir/core/src/demand.rs
++++ b/misaka/palw/tir/core/src/demand.rs
+@@ -68,6 +68,7 @@
+ 
+ use crate::arith::{div_round, int_exp, int_ln, int_rsqrt, log2_floor};
+ use crate::error::{TirError, TirErrorKind, TirResult};
++use crate::lane_geometry::{broadcast_index, gather_data_coordinate, gather_index_coordinate, ravel, unravel};
+ use crate::prim::Prim;
+ use crate::program::{Block, INPUT_TOKEN, Ref, StateKind, TirProgramV1};
+ use crate::types::{DType, element_count, strides};
+@@ -536,28 +537,6 @@
+     inputs: DemandInputsV1<'p>,
+ }
+ 
+-fn unravel(mut i: usize, st: &[usize]) -> Vec<usize> {
+-    st.iter()
+-        .map(|s| {
+-            let q = i / s;
+-            i %= s;
+-            q
+-        })
+-        .collect()
+-}
+-
+-fn ravel(ix: &[usize], st: &[usize]) -> usize {
+-    ix.iter().zip(st).map(|(a, b)| a * b).sum()
+-}
+-
+-/// The element of `in_shape` that output multi-index `o` (of rank ≥ `in_shape.len()`) reads under
+-/// numpy broadcasting — `eval.rs`'s `broadcast_map`, one element at a time.
+-fn broadcast_index(o: &[usize], in_shape: &[usize]) -> usize {
+-    let ist = strides(in_shape);
+-    let off = o.len() - in_shape.len();
+-    (0..in_shape.len()).map(|k| if in_shape[k] == 1 { 0 } else { o[off + k] * ist[k] }).sum()
+-}
+-
+ fn fit(v: i128, dtype: DType, what: &str) -> DemandResult<i128> {
+     if dtype.contains(v) { Ok(v) } else { fail(TirErrorKind::Overflow, format!("{what}: {v} does not fit {}", dtype.name())) }
+ }
+@@ -1022,17 +1001,13 @@
+                 let (a, bd) = (*axis as usize, *batch_dims as usize);
+                 let dshape = self.operand_shape(ci, inputs[0])?;
+                 let xshape = self.operand_shape(ci, inputs[1])?;
+-                let m = xshape.len() - bd;
+                 let o = unravel(index, &ost);
+-                let mut xi: Vec<usize> = o[..bd].to_vec();
+-                xi.extend_from_slice(&o[a..a + m]);
++                let xi = gather_index_coordinate(&o, a, bd, xshape.len());
+                 let Some(v) = self.fetch_one(ci, inputs[1], ravel(&xi, &strides(&xshape)))? else { return Ok(None) };
+                 if v < 0 || v >= dshape[a] as i128 {
+                     return fail(TirErrorKind::Index, format!("Gather: index {v} outside [0, {})", dshape[a]));
+                 }
+-                let mut di: Vec<usize> = o[..a].to_vec();
+-                di.push(v as usize);
+-                di.extend_from_slice(&o[a + m..]);
++                let di = gather_data_coordinate(&o, a, xshape.len(), bd, v as usize);
+                 self.fetch_one(ci, inputs[0], ravel(&di, &strides(&dshape)))
+             }
+             Prim::Add | Prim::Sub | Prim::Mul | Prim::Div { .. } | Prim::Compare { .. } => {
+diff --git a/misaka/palw/tir/core/src/lane_geometry.rs b/misaka/palw/tir/core/src/lane_geometry.rs
+new file mode 100644
+--- /dev/null
++++ b/misaka/palw/tir/core/src/lane_geometry.rs
+@@ -0,0 +1,39 @@
++//! Pure row-major primitive coordinate maps. No values or execution authority.
++//! Shared with the original Demand evaluator; producer tracing may use captured
++//! control values, while Node continues to compute its own values independently.
++use crate::types::strides;
++pub fn unravel(mut i: usize, st: &[usize]) -> Vec<usize> {
++    st.iter()
++        .map(|s| {
++            let q = i / s;
++            i %= s;
++            q
++        })
++        .collect()
++}
++
++pub fn ravel(ix: &[usize], st: &[usize]) -> usize {
++    ix.iter().zip(st).map(|(a, b)| a * b).sum()
++}
++
++/// The element of `in_shape` that output multi-index `o` (of rank ≥ `in_shape.len()`) reads under
++/// numpy broadcasting — `eval.rs`'s `broadcast_map`, one element at a time.
++pub fn broadcast_index(o: &[usize], in_shape: &[usize]) -> usize {
++    let ist = strides(in_shape);
++    let off = o.len() - in_shape.len();
++    (0..in_shape.len()).map(|k| if in_shape[k] == 1 { 0 } else { o[off + k] * ist[k] }).sum()
++}
++
++pub fn gather_index_coordinate(o: &[usize], axis: usize, batch: usize, index_rank: usize) -> Vec<usize> {
++    let m = index_rank - batch;
++    let mut ix = o[..batch].to_vec();
++    ix.extend_from_slice(&o[axis..axis + m]);
++    ix
++}
++pub fn gather_data_coordinate(o: &[usize], axis: usize, index_rank: usize, batch: usize, selected: usize) -> Vec<usize> {
++    let m = index_rank - batch;
++    let mut ix = o[..axis].to_vec();
++    ix.push(selected);
++    ix.extend_from_slice(&o[axis + m..]);
++    ix
++}
+diff --git a/misaka/palw/tir/core/src/lib.rs b/misaka/palw/tir/core/src/lib.rs
+--- a/misaka/palw/tir/core/src/lib.rs
++++ b/misaka/palw/tir/core/src/lib.rs
+@@ -69,3 +69,6 @@
+ pub use program::{Block, ConstDecl, Node, ParamDecl, Ref, Schedule, StateDecl, StateKind, TirProgramV1};
+ pub use tensor::Tensor;
+ pub use types::{DType, Dim, TensorType};
++
++/// Pure coordinates shared by Court and local producer dependency tracing.
++pub mod lane_geometry;
+diff --git a/misaka/palw/tir/exec/src/node/mod.rs b/misaka/palw/tir/exec/src/node/mod.rs
+--- a/misaka/palw/tir/exec/src/node/mod.rs
++++ b/misaka/palw/tir/exec/src/node/mod.rs
+@@ -27,17 +27,17 @@
+ #[cfg(feature = "positive-panel")]
+ pub mod positive_panel;
+ #[cfg(feature = "positive-panel")]
++pub mod positive_typed_adapter;
++#[cfg(feature = "positive-panel")]
+ pub mod positive_typed_capture;
+-#[cfg(feature = "positive-panel")]
+-pub mod positive_typed_adapter;
+ mod public_source;
+ pub mod residency;
+ pub mod run;
+ pub mod run_wide_q24_v2;
+-pub mod wide_capture_v2;
+ pub mod shardrows;
+ mod sparse_tree;
+ pub mod tree;
++pub mod wide_capture_v2;
+ 
+ pub use crate::cellstep::{CpuCellStepperV1, TirCellStepperV1, TirDeviceV1, buf_lanes_le_v1};
+ pub use annex::{
+@@ -89,3 +89,6 @@
+     TirMemoryLeaseV1, TirMemoryReserverV1, TirRetainedJobLeaseV1, set_tir_memory_reserver_v1, tir_executor_storage_need_v1,
+     tir_fold_hash_storage_need_v1, tir_full_tree_storage_need_v1, tir_retained_storage_need_v1,
+ };
++
++/// Explicit wide local Panel material production; no native authority.
++pub mod positive_wide_material_v2;
+diff --git a/misaka/palw/tir/exec/src/node/positive_wide_material_v2/capture.rs b/misaka/palw/tir/exec/src/node/positive_wide_material_v2/capture.rs
+new file mode 100644
+--- /dev/null
++++ b/misaka/palw/tir/exec/src/node/positive_wide_material_v2/capture.rs
+@@ -0,0 +1,536 @@
++use super::*;
++use crate::node::{
++    run::TirRunObserverV1,
++    run_wide_q24_v2::{TirClassRunnerWideQ24V2, TirLeafOutWideQ24V2, TirWideRunLimitsV2},
++};
++use crate::{NodeValue, Slice};
++use kaspa_consensus_core::{
++    palw_prompt_ids_v1::{PalwPromptIdsFormV1, prompt_token_ids_match_v1},
++    palw_step_leg::{PalwStepTileLeafV1, step_tile_leaf_hash_v1},
++    palw_tir_step_v1::{palw_tir_execution_root_v1, palw_tir_leaf_values_v2},
++};
++use misaka_palw_tir::{Prim, demand::history_length_v1};
++use std::{cell::Cell, rc::Rc};
++/// Metadata comes from the actual registry/job owner, not a peer capture. This
++/// borrowed DTO is no native authorization and does not invent an assignment.
++pub struct CaptureExpectedV2<'a> {
++    pub class: &'a PalwTirClassV1,
++    pub artifact: Hash64,
++    pub job: &'a PalwJobContextV2,
++    pub space: &'a PalwTirStepSpaceV2,
++    pub prompt: &'a [u32],
++}
++struct Leaf {
++    version: u16,
++    coord: kaspa_consensus_core::palw_step::PalwStepCoordinateV1,
++    count: u32,
++    offset: u64,
++    bytes: u64,
++}
++pub struct WidePanelCaptureV2<'a> {
++    pub(super) expected: CaptureExpectedV2<'a>,
++    pub(super) run: TirJobRunWideQ24V2,
++    pub(super) records: Vec<Record>,
++    leaves: Vec<Leaf>,
++    pub(super) tape: Tape,
++    pub(super) session: Rc<Session>,
++    pub(super) builder_live: Cell<bool>,
++    pub(super) retained_heap: u64,
++    _lease: TirMemoryLeaseV1,
++}
++impl WidePanelCaptureV2<'_> {
++    pub fn meter(&self) -> WidePanelMeterV2 {
++        *self.session.meter.borrow()
++    }
++    pub fn run(&self) -> &TirJobRunWideQ24V2 {
++        &self.run
++    }
++    pub fn binding(&self) -> Result<PalwTirStepBindingV1, Error> {
++        let c = self.expected.class;
++        let bytes = add(
++            count(c.program.len())?,
++            add(
++                mul(count(c.layout.commit_tiles.len() + c.layout.state_tiles.len())?, 4)?,
++                add(count(self.expected.job.network_id.len())?, 1024)?,
++            ),
++        )?;
++        self.session.charge(Charge::Copy, bytes)?;
++        let e = &self.expected;
++        Ok(PalwTirStepBindingV1 {
++            version: 1,
++            class: e.class.clone(),
++            artifact_root: e.artifact,
++            job_context: e.job.clone(),
++            full_logits_trace_root: self.run.trace_root(),
++            step_leaf_count: self.run.leaf_count(),
++            step_merkle_root: self.run.step_merkle_root(),
++            committed_execution_root: self.run.execution_root(),
++        })
++    }
++    pub(super) fn record(&self, key: Key) -> Result<&Record, Error> {
++        self.session.charge(Charge::Visit, 64)?;
++        let i = self.records.binary_search_by_key(&key, |r| r.key).map_err(|_| "wide Panel missing record")?;
++        Ok(&self.records[i])
++    }
++    pub(super) fn value(&self, key: Key, lane: usize) -> Result<i128, Error> {
++        let r = self.record(key)?;
++        if r.shape().iter().product::<usize>() as u64 != r.lanes {
++            return Err("wide tape metadata shape changed".into());
++        }
++        if count(lane)? >= r.lanes {
++            return Err("wide Panel lane range".into());
++        }
++        match r.storage {
++            Storage::Bytes(at) => {
++                let w = r.dtype.width();
++                let mut b = [0; 16];
++                self.tape.read(add(at, mul(count(lane)?, w as u64)?)?, &mut b[..w], &self.session)?;
++                Ok(decode(r.dtype, &b[..w]))
++            }
++            Storage::StepView { position, occurrence, node } => {
++                let space = self.expected.space;
++                let (block, _) = space.occurrences()[occurrence as usize];
++                let tile = space.commit_tile_len(block, node).ok_or("wide committed view tile")?;
++                let slot = space.node_slot(occurrence as usize, node).ok_or("wide committed view slot")?;
++                let job = space.job_shape(self.expected.job).map_err(|e| e.to_string())?;
++                let (call_index, p) = job.call_position(position);
++                let coord = kaspa_consensus_core::palw_step::PalwStepCoordinateV1 {
++                    call_index,
++                    node_slot: slot,
++                    position: p,
++                    tile_index: (lane / tile as usize) as u32,
++                };
++                self.session.charge(Charge::Visit, mul(add(count(self.expected.class.program.len())?, 1024)?, 128)?)?;
++                let index = space.leaf_index(self.expected.job, &coord).ok_or("wide committed view source")?;
++                let image = self.preimage(index)?;
++                let width = if r.dtype == DType::I64 { 8 } else { 4 };
++                let at = (lane % tile as usize) * width;
++                let bytes = image.values_le.get(at..at + width).ok_or("wide committed view lane")?;
++                Ok(if width == 8 {
++                    i64::from_le_bytes(bytes.try_into().map_err(|_| "wide lane8")?) as i128
++                } else if r.dtype == DType::Idx {
++                    u32::from_le_bytes(bytes.try_into().map_err(|_| "wide lane4")?) as i128
++                } else {
++                    i32::from_le_bytes(bytes.try_into().map_err(|_| "wide lane4")?) as i128
++                })
++            }
++            Storage::HistoryView { state, layer, first, row_lanes } => {
++                let row = count(lane)? / row_lanes;
++                let pos = u32::try_from(add(u64::from(first), row)?).map_err(|_| "wide history position")?;
++                let r = self.record(Key::History(pos, state, layer))?;
++                let Storage::Bytes(at) = r.storage else { return Err("wide history nested view".into()) };
++                let w = r.dtype.width();
++                let mut b = [0; 16];
++                self.tape.read(add(at, mul(count(lane)? % row_lanes, w as u64)?)?, &mut b[..w], &self.session)?;
++                Ok(decode(r.dtype, &b[..w]))
++            }
++        }
++    }
++    /// Bounded contiguous claim extraction. Native i64/i128 lanes remain exact;
++    /// no full-node/window clone and no per-lane disk syscall in the common path.
++    pub(super) fn values(&self, key: Key, first: u64, n: u32) -> Result<Vec<i128>, Error> {
++        let r = self.record(key)?;
++        if first.checked_add(u64::from(n)).is_none_or(|end| end > r.lanes)
++            || mul(u64::from(n), 16)? > self.session.limits.max_claim_bytes
++        {
++            return Err("wide claim slice extent/cap".into());
++        }
++        let mut out = vec_exact(n as usize)?;
++        match r.storage {
++            Storage::Bytes(at) => self.read_values(at, r.dtype, first, n, &mut out)?,
++            Storage::HistoryView { state, layer, first: row0, row_lanes } => {
++                let end = first + u64::from(n);
++                let mut lane = first;
++                while lane < end {
++                    let row = lane / row_lanes;
++                    let within = lane % row_lanes;
++                    let take = (end - lane).min(row_lanes - within);
++                    let position = u32::try_from(add(u64::from(row0), row)?).map_err(|_| "wide history position width")?;
++                    let record = self.record(Key::History(position, state, layer))?;
++                    let Storage::Bytes(at) = record.storage else {
++                        return Err("wide raw append row is not stored once".into());
++                    };
++                    self.read_values(
++                        at,
++                        record.dtype,
++                        within,
++                        u32::try_from(take).map_err(|_| "wide history claim width")?,
++                        &mut out,
++                    )?;
++                    lane += take;
++                }
++            }
++            Storage::StepView { .. } => {
++                for lane in first..first + u64::from(n) {
++                    out.push(self.value(key, lane as usize)?);
++                }
++            }
++        }
++        Ok(out)
++    }
++    fn read_values(&self, at: u64, dtype: DType, first: u64, n: u32, out: &mut Vec<i128>) -> Result<(), Error> {
++        let width = dtype.width();
++        let mut done = 0usize;
++        let mut chunk = [0u8; 4096];
++        while done < n as usize {
++            let take = (n as usize - done).min(chunk.len() / width);
++            let bytes = take * width;
++            let offset = add(at, mul(add(first, count(done)?)?, width as u64)?)?;
++            self.tape.read(offset, &mut chunk[..bytes], &self.session)?;
++            out.extend(chunk[..bytes].chunks_exact(width).map(|b| dtype.decode_le(b)));
++            done += take;
++        }
++        Ok(())
++    }
++    pub(super) fn preimage_bytes(&self, index: u64) -> Result<u64, Error> {
++        self.session.charge(Charge::Visit, 1)?;
++        self.leaves.get(usize::try_from(index).map_err(|_| "wide leaf index")?).map(|l| l.bytes).ok_or("wide leaf absent".into())
++    }
++    pub(super) fn preimage(&self, index: u64) -> Result<PalwStepTileLeafV1, Error> {
++        self.session.charge(Charge::Visit, 1)?;
++        let l = self.leaves.get(usize::try_from(index).map_err(|_| "wide leaf index")?).ok_or("wide leaf absent")?;
++        if l.bytes > self.session.limits.max_material_bytes {
++            return Err("wide leaf body cap".into());
++        }
++        let mut bytes = vec_exact(usize::try_from(l.bytes).map_err(|_| "wide leaf width")?)?;
++        bytes.resize(l.bytes as usize, 0);
++        self.tape.read(l.offset, &mut bytes, &self.session)?;
++        let image = PalwStepTileLeafV1 { version: l.version, coord: l.coord, value_count: l.count, values_le: bytes };
++        self.session.charge(Charge::Hash, add(l.bytes, 1)?)?;
++        if step_tile_leaf_hash_v1(&self.expected.job.context_hash(), &self.expected.job.shape_profile_id, &image)
++            != *self.run.leaf_hashes().get(index as usize).ok_or("wide original leaf hash absent")?
++        {
++            return Err("wide tape leaf differs from original run".into());
++        }
++        Ok(image)
++    }
++}
++struct Build<'a> {
++    e: CaptureExpectedV2<'a>,
++    class_id: Hash64,
++    context: Hash64,
++    tape: Tape,
++    session: Rc<Session>,
++    records: Vec<Record>,
++    leaves: Vec<Leaf>,
++    position: u32,
++    occ: usize,
++    node: usize,
++    outputs: u32,
++}
++impl Build<'_> {
++    fn push(&mut self, key: Key, dtype: DType, shape: &[usize], data: Slice<'_>, from: usize, n: usize) -> Result<(), Error> {
++        if self.records.len() as u64 >= self.session.limits.max_records || from.checked_add(n).is_none_or(|e| e > data.len()) {
++            return Err("wide record cap/extent".into());
++        }
++        self.session.charge(Charge::Visit, count(n)?)?;
++        let shape = Shape::new(shape)?;
++        let lanes = shape.0[..shape.1].iter().try_fold(1u64, |n, d| mul(n, *d as u64))?;
++        if lanes != count(n)? {
++            return Err("wide record shape".into());
++        }
++        let at = self.tape.len;
++        let w = dtype.width();
++        let total = mul(count(n)?, w as u64)?;
++        if add(at, total)? > self.session.limits.max_tape_bytes {
++            return Err("wide record tape preflight".into());
++        }
++        let mut chunk = [0u8; 4096];
++        let mut used = 0;
++        for i in from..from + n {
++            let v = data.get(i);
++            if !dtype.contains(v) {
++                return Err("wide original dtype value".into());
++            }
++            chunk[used..used + w].copy_from_slice(&v.to_le_bytes()[..w]);
++            used += w;
++            if used == chunk.len() {
++                self.tape.append(&chunk, &self.session)?;
++                used = 0;
++            }
++        }
++        if used > 0 {
++            self.tape.append(&chunk[..used], &self.session)?;
++        }
++        self.records.push(Record { key, dtype, rank: shape.1, shape: shape.0, lanes, storage: Storage::Bytes(at) });
++        Ok(())
++    }
++    fn normalize_cursor(&mut self) -> Result<(), Error> {
++        let job = self.e.space.job_shape(self.e.job).map_err(|e| e.to_string())?;
++        while self.position < job.positions {
++            if self.occ >= self.e.space.occurrences().len() {
++                self.position += 1;
++                self.occ = 0;
++                self.node = 0;
++                continue;
++            }
++            if (self.occ + 1 == self.e.space.occurrences().len() && !job.runs_post(self.position))
++                || self.node >= self.e.space.program().blocks[self.e.space.occurrences()[self.occ].0 as usize].nodes.len()
++            {
++                self.occ += 1;
++                self.node = 0;
++                continue;
++            }
++            break;
++        }
++        Ok(())
++    }
++    fn leaf(&mut self, out: &TirLeafOutWideQ24V2<'_>) -> Result<(), Error> {
++        if out.index != self.leaves.len() as u64 || out.index >= self.session.limits.max_step_leaves {
++            return Err("wide leaf order".into());
++        }
++        if out.preimage.values_le.len() as u64 > self.session.limits.max_material_bytes {
++            return Err("wide emitted leaf scratch cap".into());
++        }
++        self.session.charge(Charge::Visit, mul(add(count(self.e.class.program.len())?, 1024)?, 128)?)?;
++        let canonical = self.e.space.leaf_at(self.e.job, out.index).ok_or("wide extra leaf")?;
++        self.session.charge(Charge::Hash, add(count(out.preimage.values_le.len())?, 1)?)?;
++        drop(palw_tir_leaf_values_v2(self.e.space, self.e.job, &canonical, out.preimage).map_err(|e| e.to_string())?);
++        if step_tile_leaf_hash_v1(&self.context, &self.class_id, out.preimage) != out.hash {
++            return Err("wide emitted leaf hash".into());
++        }
++        let at = self.tape.append(&out.preimage.values_le, &self.session)?;
++        self.leaves.push(Leaf {
++            version: out.preimage.version,
++            coord: out.preimage.coord,
++            count: out.preimage.value_count,
++            offset: at,
++            bytes: count(out.preimage.values_le.len())?,
++        });
++        Ok(())
++    }
++}
++struct Observer<'a>(Rc<RefCell<Build<'a>>>);
++impl TirRunObserverV1 for Observer<'_> {
++    fn node(&mut self, position: u32, v: &NodeValue<'_>) -> Result<(), String> {
++        let mut b = self.0.borrow_mut();
++        let geometry_bound = mul(add(count(b.e.class.program.len())?, 1024)?, 8)?;
++        b.session.charge(Charge::Visit, geometry_bound)?;
++        b.normalize_cursor()?;
++        if position != b.position {
++            return Err("wide node position/order".into());
++        }
++        let (block, layer) = b.e.space.occurrences()[b.occ];
++        let space = b.e.space;
++        let node = &space.program().blocks[block as usize].nodes[b.node];
++        let h = history_length_v1(b.e.space.info(), block, position).ok_or("wide node history")?;
++        let shape = node.out.resolve(h);
++        let slot = b.e.space.occurrences()[..b.occ].iter().try_fold(0u32, |a, (block, _)| {
++            a.checked_add(b.e.space.program().blocks[*block as usize].nodes.len() as u32).ok_or("wide slot")
++        })? + b.node as u32;
++        if (v.block, v.layer, v.node, v.slot, v.commit, v.dtype) != (block, layer, b.node as u16, slot, node.commit, node.out.dtype)
++            || v.shape != shape
++            || v.data.len() != shape.iter().product::<usize>()
++        {
++            return Err("wide node original geometry".into());
++        }
++        let key = Key::Node(position, b.occ as u16, b.node as u16);
++        let dtype = node.out.dtype;
++        let hist = if let Prim::HistAppend { state } = node.prim { Some(state) } else { None };
++        if let Some(state) = hist {
++            let decl = &b.e.space.program().states[state as usize];
++            let row = decl.shape.iter().map(|n| *n as usize).collect::<Vec<_>>();
++            let n = row.iter().product::<usize>();
++            let layer = decl.per_layer.then_some(layer).flatten();
++            b.push(Key::History(position, state, layer), dtype, &row, v.data, v.data.len() - n, n)?;
++            let s = Shape::new(&shape)?;
++            if b.records.len() as u64 >= b.session.limits.max_records {
++                return Err("wide history metadata cap".into());
++            }
++            b.records.push(Record {
++                key,
++                dtype,
++                rank: s.1,
++                shape: s.0,
++                lanes: count(v.data.len())?,
++                storage: Storage::HistoryView { state, layer, first: position + 1 - h as u32, row_lanes: count(n)? },
++            });
++        } else if v.commit {
++            // The original step callback writes committed tiles once. Keep an
++            // indexed view instead of cloning the same whole native tensor.
++            if b.records.len() as u64 >= b.session.limits.max_records {
++                return Err("wide commit-view metadata cap".into());
++            }
++            let shape = Shape::new(&shape)?;
++            let occurrence = b.occ as u16;
++            b.records.push(Record {
++                key,
++                dtype,
++                rank: shape.1,
++                shape: shape.0,
++                lanes: count(v.data.len())?,
++                storage: Storage::StepView { position, occurrence, node: v.node },
++            });
++        } else {
++            b.push(key, dtype, &shape, v.data, 0, v.data.len())?;
++        }
++        b.node += 1;
++        Ok(())
++    }
++    fn state(
++        &mut self,
++        position: u32,
++        state: u16,
++        layer: Option<u16>,
++        history: Option<u32>,
++        dtype: DType,
++        shape: &[usize],
++        data: Slice<'_>,
++    ) -> Result<(), String> {
++        if history.is_some() {
++            return Ok(());
++        }
++        let mut b = self.0.borrow_mut();
++        let inst = b.e.space.fixed_instances().iter().find(|i| i.state == state && i.layer == layer).ok_or("wide unknown Fixed")?;
++        if inst.dtype != dtype
++            || shape != b.e.space.program().states[state as usize].shape.iter().map(|n| *n as usize).collect::<Vec<_>>()
++            || data.len() as u64 != inst.elements
++        {
++            return Err("wide Fixed metadata".into());
++        }
++        b.push(Key::Fixed(position, state, layer), dtype, shape, data, 0, data.len())
++    }
++    fn last_output(&mut self, position: u32, _dtype: DType, _shape: &[usize], _data: Slice<'_>, _selected: u32) -> Result<(), String> {
++        let mut b = self.0.borrow_mut();
++        if position + 1 != b.e.job.declared_prefill_tokens + b.outputs {
++            return Err("wide output order".into());
++        }
++        b.outputs += 1;
++        Ok(())
++    }
++}
++/// Own one empty tape and one actual reservation before callbacks allocate or
++/// write. The caller must include original model/plan/input/space owners in the
++/// external envelope; this is an operational lease, never consensus authority.
++#[allow(clippy::too_many_arguments)]
++pub fn capture_one_pass_v2<'a>(
++    expected: CaptureExpectedV2<'a>,
++    runner: &TirClassRunnerWideQ24V2<'_>,
++    run_limits: TirWideRunLimitsV2,
++    work: &WidePanelWorkV2,
++    file: File,
++    reserver: &TirMemoryReserverV1,
++) -> Result<WidePanelCaptureV2<'a>, Error> {
++    let limits = work.inner.limits;
++    if work.class != expected.job.shape_profile_id || work.execution != expected.job.context_hash() {
++        return Err("wide work belongs to another original job/class".into());
++    }
++    if work.started.replace(true) {
++        return Err("wide attempt CPU run already started; spent work is retained".into());
++    }
++    if expected.class.program.len() > misaka_palw_tir::program::MAX_PROGRAM_BYTES
++        || expected.class.layout.commit_tiles.len()
++            > misaka_palw_tir::program::MAX_BLOCKS * misaka_palw_tir::program::MAX_NODES_PER_BLOCK
++        || expected.class.layout.state_tiles.len() > misaka_palw_tir::program::MAX_STATES
++    {
++        return Err("wide foreign metadata cap".into());
++    }
++    let run_quote = runner.quote(expected.job, run_limits)?;
++    let session = work.inner.clone();
++    session.charge(
++        Charge::Hash,
++        mul(
++            add(
++                count(expected.class.program.len())?,
++                mul(count(expected.class.layout.commit_tiles.len() + expected.class.layout.state_tiles.len())?, 4)?,
++            )?,
++            8,
++        )?,
++    )?;
++    let records_cap = usize::try_from(limits.max_records).map_err(|_| "wide records index")?;
++    let leaves_cap = usize::try_from(limits.max_step_leaves).map_err(|_| "wide leaves index")?;
++    let heap = add(
++        limits.external_retained_bytes,
++        add(
++            mul(limits.max_records, size_of::<Record>() as u64)?,
++            add(
++                mul(limits.max_step_leaves, size_of::<Leaf>() as u64)?,
++                add(mul(count(expected.class.program.len())?, 4)?, add(mul(limits.max_material_bytes, 4)?, 65536)?)?,
++            ),
++        )?,
++    )?;
++    if add(heap, run_quote.requested_bytes)? > limits.max_live_heap_bytes {
++        return Err("wide collector simultaneous heap cap".into());
++    }
++    let lease =
++        reserver("positive-wide-panel-capture-v2", expected.class.class_id(&expected.artifact), expected.job.context_hash(), heap)?;
++    if expected.class.program.len() > misaka_palw_tir::program::MAX_PROGRAM_BYTES
++        || expected.class.class_id(&expected.artifact) != expected.job.shape_profile_id
++        || expected.class.layout != *expected.space.layout()
++        || expected.class.program != expected.space.program().encode()
++        || runner.original_space().program() != expected.space.program()
++        || runner.original_space().layout() != expected.space.layout()
++        || !prompt_token_ids_match_v1(PalwPromptIdsFormV1::Flat, expected.prompt, &expected.job.prompt_token_ids_hash)
++    {
++        return Err("wide collector independent original metadata".into());
++    }
++    let shared = Rc::new(RefCell::new(Build {
++        class_id: expected.class.class_id(&expected.artifact),
++        context: expected.job.context_hash(),
++        e: expected,
++        tape: Tape::empty(file)?,
++        session,
++        records: vec_exact(records_cap)?,
++        leaves: vec_exact(leaves_cap)?,
++        position: 0,
++        occ: 0,
++        node: 0,
++        outputs: 0,
++    }));
++    let mut observer = Observer(shared.clone());
++    let target = shared.clone();
++    let mut leaves = move |out: &TirLeafOutWideQ24V2<'_>| target.borrow_mut().leaf(out);
++
++    let (job, prompt, execution) = {
++        let b = shared.borrow();
++        (b.e.job, b.e.prompt, b.e.job.context_hash())
++    };
++    let run = runner.run_observed_fallible(job, prompt, execution, run_limits, &mut leaves, &mut observer)?;
++    drop(leaves);
++    drop(observer);
++    let mut b = Rc::try_unwrap(shared).map_err(|_| "wide collector leaked callback")?.into_inner();
++    b.normalize_cursor()?;
++    let shape = b.e.space.job_shape(b.e.job).map_err(|e| e.to_string())?;
++    if b.position != shape.positions
++        || b.outputs != b.e.job.exact_decode_tokens
++        || b.leaves.len() as u64 != run.leaf_count()
++        || run.leaf_hashes().len() != b.leaves.len()
++    {
++        return Err("wide collector incomplete execution".into());
++    }
++    b.session.charge(Charge::Visit, mul(count(b.records.len())?, 64)?)?;
++    b.records.sort_unstable_by_key(|r| r.key);
++    if b.records.windows(2).any(|w| w[0].key == w[1].key) {
++        return Err("wide duplicate record".into());
++    }
++    let fixed = count(b.e.space.fixed_instances().len())?;
++    b.session.charge(Charge::Visit, mul(u64::from(shape.positions), mul(fixed, 64)?)?)?;
++    for p in 0..shape.positions {
++        for inst in b.e.space.fixed_instances() {
++            if b.records.binary_search_by_key(&Key::Fixed(p, inst.state, inst.layer), |r| r.key).is_err() {
++                return Err("wide missing Fixed observation".into());
++            }
++        }
++    }
++    if palw_tir_execution_root_v1(
++        &execution,
++        &run.trace_root(),
++        &b.e.class.class_id(&b.e.artifact),
++        run.leaf_count(),
++        &run.step_merkle_root(),
++    ) != run.execution_root()
++    {
++        return Err("wide collector run root join".into());
++    }
++    Ok(WidePanelCaptureV2 {
++        expected: b.e,
++        run,
++        records: b.records,
++        leaves: b.leaves,
++        tape: b.tape,
++        session: b.session,
++        builder_live: Cell::new(false),
++        retained_heap: heap,
++        _lease: lease,
++    })
++}
+diff --git a/misaka/palw/tir/exec/src/node/positive_wide_material_v2/claims_tape.rs b/misaka/palw/tir/exec/src/node/positive_wide_material_v2/claims_tape.rs
+new file mode 100644
+--- /dev/null
++++ b/misaka/palw/tir/exec/src/node/positive_wide_material_v2/claims_tape.rs
+@@ -0,0 +1,100 @@
++//! Bounded local claims tape. The bytes are EXACT Borsh Vec<Vec<i128>> order,
++//! suitable as the claims section of the existing local record hash recipe.
++//! No new domain/ID, generic deserializer, signature or arithmetic certificate.
++//! The current Node PrototypePanelRecord still owns Vec<Vec<i128>>: stream-backed
++//! record signing/checking is a required next integration, not completed here.
++use super::proof::WidePanelBuilderV2;
++use super::*;
++/// Owns one empty local file. Not reopenable from a saved "complete" bit.
++/// A callback/reader may retain exports only under its own additional reservation.
++pub struct WideClaimsTapeV2<'s> {
++    tape: Tape,
++    session: &'s Session,
++    relations: u32,
++    max_tile_lanes: u64,
++}
++impl WidePanelBuilderV2<'_, '_> {
++    pub fn claims_tape<'s>(&'s self, file: File) -> Result<WideClaimsTapeV2<'s>, Error> {
++        let count = self.plan().summary().relations;
++        let relations = u32::try_from(count).map_err(|_| "wide claims Borsh count")?;
++        let mut tape = Tape::empty(file)?;
++        tape.append(&relations.to_le_bytes(), self.session())?;
++        let mut max_tile_lanes = 0;
++        for i in 0..count {
++            let values = self.claim(i)?;
++            let n = u32::try_from(values.len()).map_err(|_| "wide claims Borsh lane count")?;
++            max_tile_lanes = max_tile_lanes.max(u64::from(n));
++            tape.append(&n.to_le_bytes(), self.session())?;
++            let mut chunk = [0u8; 4096];
++            for values in values.chunks(chunk.len() / 16) {
++                for (i, v) in values.iter().enumerate() {
++                    chunk[i * 16..i * 16 + 16].copy_from_slice(&v.to_le_bytes());
++                }
++                tape.append(&chunk[..values.len() * 16], self.session())?;
++            }
++        }
++        Ok(WideClaimsTapeV2 { tape, session: self.session(), relations, max_tile_lanes })
++    }
++}
++impl WideClaimsTapeV2<'_> {
++    pub fn encoded_bytes(&self) -> u64 {
++        self.tape.len
++    }
++    pub fn relations(&self) -> u32 {
++        self.relations
++    }
++    /// Stream the existing Borsh claims field, without materializing all claims.
++    /// Writer scratch/retention belongs to its external owner; no live work reset.
++    pub fn stream_borsh(&self, out: &mut dyn Write) -> Result<(), Error> {
++        if self.tape.file.borrow().metadata().map_err(|e| e.to_string())?.len() != self.tape.len {
++            return Err("wide claims tape length changed".into());
++        }
++        let mut at = 0;
++        let mut b = [0; 4096];
++        while at < self.tape.len {
++            let n = (self.tape.len - at).min(b.len() as u64) as usize;
++            self.tape.read(at, &mut b[..n], self.session)?;
++            self.session.charge(Charge::Io, n as u64)?;
++            out.write_all(&b[..n]).map_err(|e| e.to_string())?;
++            at += n as u64;
++        }
++        Ok(())
++    }
++    /// Sequential bounded access for a future stream-record checker. This emits
++    /// raw Panel claims, never trusted operands or a stored checker result.
++    pub fn visit(&self, visit: &mut dyn FnMut(u32, &[i128]) -> Result<(), Error>) -> Result<(), Error> {
++        let mut at = 0;
++        let mut n = [0; 4];
++        self.tape.read(at, &mut n, self.session)?;
++        at += 4;
++        if u32::from_le_bytes(n) != self.relations {
++            return Err("wide claims count changed".into());
++        }
++        for i in 0..self.relations {
++            self.tape.read(at, &mut n, self.session)?;
++            at += 4;
++            let n = u64::from(u32::from_le_bytes(n));
++            if n > self.max_tile_lanes || mul(n, 16)? > self.session.limits.max_claim_bytes {
++                return Err("wide claims tile changed".into());
++            }
++            let mut values = vec_exact(n as usize)?;
++            let mut left = n;
++            let mut chunk = [0u8; 4096];
++            while left > 0 {
++                let take = left.min((chunk.len() / 16) as u64) as usize;
++                let bytes = take * 16;
++                self.tape.read(at, &mut chunk[..bytes], self.session)?;
++                at = add(at, bytes as u64)?;
++                for b in chunk[..bytes].chunks_exact(16) {
++                    values.push(i128::from_le_bytes(b.try_into().map_err(|_| "wide claims lane")?));
++                }
++                left -= take as u64;
++            }
++            visit(i, &values)?;
++        }
++        if at != self.tape.len {
++            return Err("wide claims trailing/missing data".into());
++        }
++        Ok(())
++    }
++}
+diff --git a/misaka/palw/tir/exec/src/node/positive_wide_material_v2/mod.rs b/misaka/palw/tir/exec/src/node/positive_wide_material_v2/mod.rs
+new file mode 100644
+--- /dev/null
++++ b/misaka/palw/tir/exec/src/node/positive_wide_material_v2/mod.rs
+@@ -0,0 +1,251 @@
++//! Explicit wide Panel production from ONE original CPU run. Local data only:
++//! no native permission, protocol identity, new wire/domain or saved verdict.
++//! Node still authenticates canonical sources and independently evaluates them.
++//! Tape offsets/collector values are never authenticated Node operands.
++mod capture;
++pub mod claims_tape;
++mod proof;
++mod trace;
++use super::{
++    memory::{TirMemoryLeaseV1, TirMemoryReserverV1},
++    run_wide_q24_v2::TirJobRunWideQ24V2,
++};
++pub use capture::{CaptureExpectedV2, WidePanelCaptureV2, capture_one_pass_v2};
++use kaspa_consensus_core::{
++    Hash64,
++    palw_tir_class_v1::PalwTirClassV1,
++    palw_tir_step_v1::{PalwTirStepBindingV1, PalwTirStepSpaceV2},
++    palw_v2::PalwJobContextV2,
++};
++use misaka_palw_tir::{DType, types::MAX_RANK};
++pub use proof::{WidePanelBuilderV2, WidePanelMaterialV2, WidePanelOwnersV2, WidePanelTargetV2, WideProviderEnvelopeV2};
++use std::{
++    cell::RefCell,
++    fs::File,
++    io::{Read, Seek, SeekFrom, Write},
++    mem::size_of,
++};
++pub type Error = String;
++fn add(a: u64, b: u64) -> Result<u64, Error> {
++    a.checked_add(b).ok_or_else(|| "wide Panel addition overflow".into())
++}
++fn mul(a: u64, b: u64) -> Result<u64, Error> {
++    a.checked_mul(b).ok_or_else(|| "wide Panel multiplication overflow".into())
++}
++fn count(n: usize) -> Result<u64, Error> {
++    u64::try_from(n).map_err(|_| "wide Panel index width".into())
++}
++fn vec_exact<T>(n: usize) -> Result<Vec<T>, Error> {
++    let mut v = Vec::new();
++    v.try_reserve_exact(n).map_err(|_| "wide Panel allocation")?;
++    if v.capacity() != n {
++        return Err("wide Panel excess capacity".into());
++    }
++    Ok(v)
++}
++#[derive(Clone, Copy, Debug)]
++pub struct WidePanelLimitsV2 {
++    pub max_records: u64,
++    pub max_step_leaves: u64,
++    pub max_tape_bytes: u64,
++    pub max_live_heap_bytes: u64,
++    pub max_visits: u64,
++    pub max_io_bytes: u64,
++    pub max_hash_work: u64,
++    pub max_proof_attempts: u64,
++    pub max_provider_bytes: u64,
++    pub max_provider_scratch: u64,
++    pub max_material_bytes: u64,
++    pub max_claim_bytes: u64,
++    pub max_trace_frames: u64,
++    /// Existing plan/model/input/frame/signature/Node owners, pre-summed by caller.
++    /// This does not reserve or authenticate those owners on their behalf.
++    pub external_retained_bytes: u64,
++}
++#[derive(Default, Clone, Copy, Debug, PartialEq, Eq)]
++pub struct WidePanelMeterV2 {
++    pub visits: u64,
++    pub io_bytes: u64,
++    pub hash_work: u64,
++    pub proof_attempts: u64,
++    pub provider_bytes: u64,
++    pub copied_bytes: u64,
++    pub tape_bytes: u64,
++}
++/// Separate operational disk quota owner. It must acquire the entire quoted
++/// simultaneous tape capacity before returning its guard and release on Drop.
++/// This is NOT the RAM reserver and grants no native storage/credit authority.
++pub type WidePanelDiskReserverV2 = std::sync::Arc<dyn Fn(Hash64, Hash64, u64) -> Result<TirMemoryLeaseV1, Error> + Send + Sync>;
++/// One local Panel attempt's immutable limits and spent work. Clones share
++/// counters; a failed capture does not erase them or permit another CPU run.
++/// The native/service owner must retain this handle for its attempt. Creating
++/// a new local handle is not native permission, funding or a budget reset grant.
++#[derive(Clone)]
++pub struct WidePanelWorkV2 {
++    inner: std::rc::Rc<Session>,
++    class: Hash64,
++    execution: Hash64,
++    started: std::rc::Rc<std::cell::Cell<bool>>,
++}
++impl WidePanelWorkV2 {
++    pub fn new(limits: WidePanelLimitsV2, class: Hash64, execution: Hash64, disk: &WidePanelDiskReserverV2) -> Result<Self, Error> {
++        if [
++            limits.max_records,
++            limits.max_step_leaves,
++            limits.max_tape_bytes,
++            limits.max_live_heap_bytes,
++            limits.max_visits,
++            limits.max_io_bytes,
++            limits.max_hash_work,
++            limits.max_proof_attempts,
++            limits.max_provider_bytes,
++            limits.max_provider_scratch,
++            limits.max_material_bytes,
++            limits.max_claim_bytes,
++            limits.max_trace_frames,
++        ]
++        .contains(&0)
++        {
++            return Err("wide Panel finite nonzero ceilings required".into());
++        }
++        Ok(Self {
++            inner: std::rc::Rc::new(Session::new(limits, disk(class, execution, limits.max_tape_bytes)?)?),
++            class,
++            execution,
++            started: std::rc::Rc::new(std::cell::Cell::new(false)),
++        })
++    }
++    pub fn meter(&self) -> WidePanelMeterV2 {
++        *self.inner.meter.borrow()
++    }
++}
++struct Session {
++    _disk_lease: TirMemoryLeaseV1,
++    limits: WidePanelLimitsV2,
++    meter: RefCell<WidePanelMeterV2>,
++}
++#[derive(Clone, Copy)]
++enum Charge {
++    Visit,
++    Io,
++    Hash,
++    Proof,
++    Provider,
++    Copy,
++    Tape,
++}
++impl Session {
++    fn new(l: WidePanelLimitsV2, disk_lease: TirMemoryLeaseV1) -> Result<Self, Error> {
++        if [
++            l.max_records,
++            l.max_step_leaves,
++            l.max_tape_bytes,
++            l.max_live_heap_bytes,
++            l.max_visits,
++            l.max_io_bytes,
++            l.max_hash_work,
++            l.max_proof_attempts,
++            l.max_provider_bytes,
++            l.max_provider_scratch,
++            l.max_material_bytes,
++            l.max_claim_bytes,
++            l.max_trace_frames,
++        ]
++        .contains(&0)
++        {
++            return Err("wide Panel finite nonzero ceilings required".into());
++        }
++        Ok(Self { _disk_lease: disk_lease, limits: l, meter: RefCell::new(WidePanelMeterV2::default()) })
++    }
++    fn charge(&self, k: Charge, n: u64) -> Result<(), Error> {
++        let mut m = self.meter.borrow_mut();
++        let (v, cap) = match k {
++            Charge::Visit => (&mut m.visits, self.limits.max_visits),
++            Charge::Io => (&mut m.io_bytes, self.limits.max_io_bytes),
++            Charge::Hash => (&mut m.hash_work, self.limits.max_hash_work),
++            Charge::Proof => (&mut m.proof_attempts, self.limits.max_proof_attempts),
++            Charge::Provider => (&mut m.provider_bytes, self.limits.max_provider_bytes),
++            Charge::Copy => (&mut m.copied_bytes, self.limits.max_io_bytes),
++            Charge::Tape => (&mut m.tape_bytes, self.limits.max_tape_bytes),
++        };
++        let next = add(*v, n)?;
++        if next > cap {
++            return Err("wide Panel cumulative budget".into());
++        }
++        *v = next;
++        Ok(())
++    }
++}
++#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
++enum Key {
++    Node(u32, u16, u16),
++    Fixed(u32, u16, Option<u16>),
++    History(u32, u16, Option<u16>),
++}
++#[derive(Clone, Copy)]
++enum Storage {
++    Bytes(u64),
++    StepView { position: u32, occurrence: u16, node: u16 },
++    HistoryView { state: u16, layer: Option<u16>, first: u32, row_lanes: u64 },
++}
++struct Record {
++    key: Key,
++    dtype: DType,
++    rank: usize,
++    shape: [usize; MAX_RANK],
++    lanes: u64,
++    storage: Storage,
++}
++impl Record {
++    fn shape(&self) -> &[usize] {
++        &self.shape[..self.rank]
++    }
++}
++struct Tape {
++    file: RefCell<File>,
++    len: u64,
++}
++impl Tape {
++    fn empty(file: File) -> Result<Self, Error> {
++        if file.metadata().map_err(|e| e.to_string())?.len() != 0 {
++            return Err("wide Panel tape must be empty and exclusively acquired".into());
++        }
++        Ok(Self { file: RefCell::new(file), len: 0 })
++    }
++    fn append(&mut self, b: &[u8], session: &Session) -> Result<u64, Error> {
++        let end = add(self.len, count(b.len())?)?;
++        if end > session.limits.max_tape_bytes {
++            return Err("wide Panel tape cap".into());
++        }
++        session.charge(Charge::Tape, count(b.len())?)?;
++        session.charge(Charge::Io, count(b.len())?)?;
++        let at = self.len;
++        self.file.get_mut().seek(SeekFrom::Start(at)).map_err(|e| e.to_string())?;
++        self.file.get_mut().write_all(b).map_err(|e| e.to_string())?;
++        self.len = end;
++        Ok(at)
++    }
++    fn read(&self, at: u64, b: &mut [u8], session: &Session) -> Result<(), Error> {
++        if add(at, count(b.len())?)? > self.len {
++            return Err("wide Panel tape range".into());
++        }
++        session.charge(Charge::Io, count(b.len())?)?;
++        let mut f = self.file.borrow_mut();
++        f.seek(SeekFrom::Start(at)).map_err(|e| e.to_string())?;
++        f.read_exact(b).map_err(|e| e.to_string())
++    }
++}
++struct Shape([usize; MAX_RANK], usize);
++impl Shape {
++    fn new(s: &[usize]) -> Result<Self, Error> {
++        if s.len() > MAX_RANK {
++            return Err("wide Panel rank".into());
++        }
++        let mut a = [0; MAX_RANK];
++        a[..s.len()].copy_from_slice(s);
++        Ok(Self(a, s.len()))
++    }
++}
++fn decode(dtype: DType, b: &[u8]) -> i128 {
++    dtype.decode_le(b)
++}
+diff --git a/misaka/palw/tir/exec/src/node/positive_wide_material_v2/proof.rs b/misaka/palw/tir/exec/src/node/positive_wide_material_v2/proof.rs
+new file mode 100644
+--- /dev/null
++++ b/misaka/palw/tir/exec/src/node/positive_wide_material_v2/proof.rs
+@@ -0,0 +1,527 @@
++use super::trace::discover;
++use super::*;
++use crate::node::{inventory::TirParamOpenerV1, memory::tir_full_tree_storage_need_v1, tree::TirStepTreeV1};
++use kaspa_consensus_core::{
++    palw_logits_q24_v2::{self as wide, WideLogitsEventV2},
++    palw_positive_check_v2::{
++        expanded_plan::{ExpandedRelation, ExpandedRelationKind},
++        full_relation::wide_v2::{FullRelationPreparationV2, StepTargetV2},
++    },
++    palw_prompt_ids_v1::PalwPromptIdsFormV1,
++    palw_step_leg::{PalwStepOpeningV1, PalwStepTileLeafV1},
++    palw_step_refute::{PALW_LOGITS_TILE_LANES, PalwStepInputRowV1},
++    palw_tir_court_v1::{
++        PalwTirCourtRulesV1, PalwTirInventoryIndexV1, PalwTirParamOpeningV1,
++        source_only::{
++            TirSourceOnlyLimitsV1,
++            wide_v2::{TirSourceOnlyMaterialV2, WideGeneratedIdsPinV2, authenticate_source_only_v2},
++        },
++    },
++    palw_tir_step_v1::{PalwTirLeafKindV1, palw_tir_leaf_values_v2},
++};
++use misaka_palw_positive_contract::{
++    messages::{AdmissionContext, AuthenticatedResult, ClaimForm},
++    tir::greedy_selector_id,
++};
++use misaka_palw_tir::{
++    Ref,
++    demand::{DemandContext, DemandLimits, carry_in_node_v1},
++};
++use std::cell::Cell;
++/// Required owner bounds for the actual provider and coexisting stages. They
++/// are not consensus authority. Unknown provider scratch remains a hard refusal.
++#[derive(Clone, Copy)]
++pub struct WideProviderEnvelopeV2 {
++    pub per_call_io: u64,
++    pub per_call_work: u64,
++    pub max_result_bytes: u64,
++}
++#[derive(Clone, Copy)]
++pub struct WidePanelOwnersV2 {
++    pub metadata_auth_bytes: u64,
++    pub metadata_auth_work: u64,
++    pub source_auth_bytes: u64,
++    pub signature_bytes: u64,
++    pub retained_record_bytes: u64,
++}
++type BuiltMaterialV2 = (PalwStepInputRowV1, PalwTirParamOpeningV1, Vec<u32>, Option<WideGeneratedIdsPinV2>, Option<WidePanelTargetV2>);
++pub struct WidePanelBuilderV2<'c, 'a> {
++    pub(super) capture: &'c WidePanelCaptureV2<'a>,
++    prep: &'c FullRelationPreparationV2,
++    opener: &'c dyn TirParamOpenerV1,
++    envelope: WideProviderEnvelopeV2,
++    owners: WidePanelOwnersV2,
++    pub(super) inventory: PalwTirInventoryIndexV1,
++    binding: PalwTirStepBindingV1,
++    tree: TirStepTreeV1,
++    row_tree: TirStepTreeV1,
++    tile_trees: Vec<TirStepTreeV1>,
++    live: Cell<bool>,
++    _lease: TirMemoryLeaseV1,
++}
++impl<'c, 'a> WidePanelBuilderV2<'c, 'a> {
++    #[allow(clippy::too_many_arguments)]
++    pub fn prepare(
++        capture: &'c WidePanelCaptureV2<'a>,
++        prep: &'c FullRelationPreparationV2,
++        result: &AuthenticatedResult<'_>,
++        rooted: &AdmissionContext,
++        opener: &'c dyn TirParamOpenerV1,
++        envelope: WideProviderEnvelopeV2,
++        owners: WidePanelOwnersV2,
++        reserver: &TirMemoryReserverV1,
++    ) -> Result<Self, Error> {
++        if capture.builder_live.get() {
++            return Err("wide capture already has a prepared builder".into());
++        }
++        let l = capture.session.limits;
++        let e = &capture.expected;
++        if prep.registered_class() != e.class
++            || prep.job() != e.job
++            || prep.artifact() != e.artifact
++            || prep.result() != result.commit()
++            || prep.prompt_form() != PalwPromptIdsFormV1::Flat
++            || prep.result().selector != greedy_selector_id()
++        {
++            return Err("wide Panel independent preparation mismatch".into());
++        }
++        rooted.check(ClaimForm::PositiveResultV2, result.commit()).map_err(|e| format!("wide Panel rooted join: {e:?}"))?;
++        if [
++            owners.metadata_auth_bytes,
++            owners.metadata_auth_work,
++            owners.source_auth_bytes,
++            owners.signature_bytes,
++            owners.retained_record_bytes,
++            envelope.per_call_io,
++            envelope.per_call_work,
++            envelope.max_result_bytes,
++        ]
++        .contains(&0)
++            || envelope.max_result_bytes > l.max_material_bytes
++        {
++            return Err("wide Panel owner/provider envelope required".into());
++        }
++        // Conservative local request floor for repeated original metadata
++        // decode/validation/ranges/StepSpace and the inventory's per-layer
++        // instances. Caller owner declarations cannot silently choose zero or
++        // ignore the param/state x occurrence expansion. This is not RSS or a
++        // native resource admission; the upstream metadata owner remains required.
++        let p = e.space.program();
++        let layers = add(count(p.schedule.layers.len())?, 1)?;
++        let metadata_floor = [
++            mul(count(e.class.program.len())?, 512)?,
++            mul(count(p.params.len())?, add(1024, mul(layers, 32)?)?)?,
++            mul(count(p.states.len())?, add(1024, mul(layers, 256)?)?)?,
++            mul(count(e.class.layout.commit_tiles.len() + e.class.layout.state_tiles.len())?, 32)?,
++            65536,
++        ]
++        .into_iter()
++        .try_fold(0, add)?;
++        let work_floor =
++            add(mul(count(e.class.program.len())?, 128)?, mul(mul(count(p.params.len() + p.states.len())?, layers)?, 64)?)?;
++        if owners.metadata_auth_bytes < metadata_floor || owners.metadata_auth_work < work_floor {
++            return Err("wide metadata owner below derived original-program request floor".into());
++        }
++        let trees =
++            capture.run.logits_rows().iter().try_fold(tir_full_tree_storage_need_v1(capture.run.leaf_count())?, |a, row| {
++                add(a, tir_full_tree_storage_need_v1(row.len().div_ceil(PALW_LOGITS_TILE_LANES) as u64)?)
++            })?;
++        let heap = [
++            l.external_retained_bytes,
++            trees,
++            tir_full_tree_storage_need_v1(capture.run.generated().len() as u64)?,
++            mul(l.max_trace_frames, 1024)?,
++            mul(l.max_material_bytes, 4)?,
++            mul(l.max_claim_bytes, 2)?,
++            l.max_provider_scratch,
++            owners.metadata_auth_bytes,
++            owners.source_auth_bytes,
++            owners.signature_bytes,
++            owners.retained_record_bytes,
++        ]
++        .into_iter()
++        .try_fold(0, add)?;
++        if add(add(heap, capture.retained_heap)?, capture.run.reserved_bytes())? > l.max_live_heap_bytes {
++            return Err("wide Panel builder simultaneous owners cap".into());
++        }
++        let lease = reserver("positive-wide-panel-builder-v2", e.job.shape_profile_id, e.job.context_hash(), heap)?;
++        capture.session.charge(Charge::Hash, mul(capture.run.leaf_count(), 4)?)?;
++        capture.session.charge(Charge::Io, mul(capture.run.leaf_count(), 64)?)?;
++        let tree = TirStepTreeV1::full(capture.run.leaf_hashes());
++        if tree.root() != Some(capture.run.step_merkle_root()) {
++            return Err("wide Panel original tree root".into());
++        }
++        let mut tile_trees = vec_exact(capture.run.logits_rows().len())?;
++        let mut roots = vec_exact(capture.run.logits_rows().len())?;
++        for (row, lanes) in capture.run.logits_rows().iter().enumerate() {
++            capture.session.charge(
++                Charge::Hash,
++                add(mul(lanes.len() as u64, 8)?, mul(lanes.len().div_ceil(PALW_LOGITS_TILE_LANES) as u64, 4)?)?,
++            )?;
++            let hashes = lanes
++                .chunks(PALW_LOGITS_TILE_LANES)
++                .enumerate()
++                .map(|(tile, values)| wide::tile_leaf(&e.job.context_hash(), row as u32, tile as u32, values))
++                .collect::<Vec<_>>();
++            let tree = TirStepTreeV1::full(&hashes);
++            roots.push(tree.root().ok_or("wide empty row tree")?);
++            tile_trees.push(tree)
++        }
++        capture.session.charge(Charge::Hash, mul(roots.len() as u64, 4)?)?;
++        let row_tree = TirStepTreeV1::full(&roots);
++        if wide::outer_root(e.job, roots.len() as u64, &row_tree.root().ok_or("wide empty rows")?, capture.run.generated())
++            != capture.run.trace_root()
++        {
++            return Err("wide Panel trace tree root".into());
++        }
++        capture.session.charge(Charge::Visit, owners.metadata_auth_work)?;
++        let inventory = PalwTirInventoryIndexV1::new(e.space.program()).ok_or("wide Panel inventory")?;
++        let binding = capture.binding()?;
++        capture.builder_live.set(true);
++        Ok(Self {
++            capture,
++            prep,
++            opener,
++            envelope,
++            owners,
++            inventory,
++            binding,
++            tree,
++            row_tree,
++            tile_trees,
++            live: Cell::new(false),
++            _lease: lease,
++        })
++    }
++    pub fn meter(&self) -> WidePanelMeterV2 {
++        self.capture.meter()
++    }
++    pub fn plan(&self) -> &kaspa_consensus_core::palw_positive_check_v2::expanded_plan::wide_v2::ExpandedPlanV2 {
++        self.prep.plan()
++    }
++    pub(super) fn session(&self) -> &Session {
++        &self.capture.session
++    }
++    fn relation(&self, index: u64, frontier: u64) -> Result<ExpandedRelation, Error> {
++        self.capture.session.charge(Charge::Visit, self.prep.plan().summary().geometry_visit_bound)?;
++        let r = self.prep.plan().relation_at(index).ok_or("wide relation index")?;
++        if r.legacy_frontier != frontier {
++            return Err("wide relation frontier mismatch".into());
++        }
++        Ok(r)
++    }
++    fn rules(&self, limits: TirSourceOnlyLimitsV1) -> PalwTirCourtRulesV1 {
++        PalwTirCourtRulesV1 {
++            max_step_leaf_count: self.capture.session.limits.max_step_leaves,
++            prompt_form: self.prep.prompt_form(),
++            limits: DemandLimits { max_elements: limits.max_target_lanes, max_terms: self.capture.session.limits.max_visits },
++        }
++    }
++    fn parameters(&self, leaves: &[u32], limits: TirSourceOnlyLimitsV1) -> Result<PalwTirParamOpeningV1, Error> {
++        if leaves.is_empty() {
++            return Ok(PalwTirParamOpeningV1::None);
++        }
++        let scratch = self.opener.param_scratch_storage_v1(leaves).ok_or("wide provider scratch unknown")?;
++        if scratch > self.capture.session.limits.max_provider_scratch {
++            return Err("wide provider scratch cap".into());
++        }
++        self.capture.session.charge(Charge::Provider, self.envelope.per_call_io)?;
++        self.capture.session.charge(Charge::Io, self.envelope.per_call_io)?;
++        self.capture.session.charge(Charge::Visit, self.envelope.per_call_work)?;
++        let proof = self.opener.param_carriage(leaves).ok_or("wide provider missing inventory proof")?;
++        let empty = PalwStepInputRowV1 { preimages: vec![], run_siblings: vec![] };
++        let material = TirSourceOnlyMaterialV2 {
++            operands: &empty,
++            params: &proof,
++            prompt_token_ids: &[],
++            prompt_ids_openings: &[],
++            decode_tokens: None,
++        };
++        let q = material.preflight(limits).map_err(|e| format!("wide provider response bounds: {e:?}"))?;
++        if q.material_bytes > self.envelope.max_result_bytes {
++            return Err("wide provider exceeded quote".into());
++        }
++        self.capture.session.charge(Charge::Hash, add(self.owners.metadata_auth_work, mul(q.material_bytes, 8)?)?)?;
++        let authenticated =
++            authenticate_source_only_v2(&self.binding, material, self.binding.step_leaf_count, &self.rules(limits), limits)
++                .map_err(|e| format!("wide provider provenance: {e:?}"))?;
++        if !authenticated.authenticated_parameter_leaves().eq(leaves.iter().copied()) {
++            return Err("wide provider returned a different requested leaf set".into());
++        }
++        drop(authenticated);
++        Ok(proof)
++    }
++    pub(super) fn ref_shape(&self, ctx: DemandContext, r: Ref) -> Result<Vec<usize>, Error> {
++        self.capture.session.charge(Charge::Visit, 1)?;
++        let space = self.capture.expected.space;
++        let (block, _) = space.occurrences()[ctx.occurrence as usize];
++        let p = space.program();
++        Ok(match r {
++            Ref::Node(n) => {
++                let h = misaka_palw_tir::demand::history_length_v1(space.info(), block, ctx.pos).ok_or("wide shape history")?;
++                p.blocks[block as usize].nodes[n as usize].out.resolve(h)
++            }
++            Ref::CarryIn(k) => p.blocks[block as usize].carry_in[k as usize].resolve(1),
++            Ref::Param(j) => p.params[j as usize].shape.iter().map(|n| *n as usize).collect(),
++            Ref::Const(j) => p.consts[j as usize].shape.iter().map(|n| *n as usize).collect(),
++            Ref::State(j) => p.states[j as usize].shape.iter().map(|n| *n as usize).collect(),
++            Ref::Input(_) => vec![],
++        })
++    }
++    pub(super) fn ref_value(&self, ctx: DemandContext, r: Ref, lane: usize) -> Result<i128, Error> {
++        let space = self.capture.expected.space;
++        let (_, layer) = space.occurrences()[ctx.occurrence as usize];
++        let p = space.program();
++        match r {
++            Ref::Node(n) => self.capture.value(Key::Node(ctx.pos, ctx.occurrence, n), lane),
++            Ref::CarryIn(k) => {
++                let (c, n) = carry_in_node_v1(p, ctx, k).ok_or("wide dynamic carry")?;
++                self.capture.value(Key::Node(c.pos, c.occurrence, n), lane)
++            }
++            Ref::State(s) => {
++                if ctx.pos == 0 {
++                    return Ok(0);
++                }
++                let layer = p.states[s as usize].per_layer.then_some(layer).flatten();
++                self.capture.value(Key::Fixed(ctx.pos - 1, s, layer), lane)
++            }
++            Ref::Input(j) => {
++                if j == 0 {
++                    let job = space.job_shape(self.capture.expected.job).map_err(|e| e.to_string())?;
++                    let id = if ctx.pos < job.prefill {
++                        *self.capture.expected.prompt.get(ctx.pos as usize).ok_or("wide prompt missing")?
++                    } else {
++                        *self.capture.run.generated().get((ctx.pos - job.prefill) as usize).ok_or("wide generated missing")?
++                    };
++                    Ok(i128::from(id))
++                } else {
++                    Ok(i128::from(ctx.pos))
++                }
++            }
++            Ref::Const(j) => {
++                let c = &p.consts[j as usize];
++                let width = c.dtype.width();
++                let from = lane.checked_mul(width).ok_or("wide const byte overflow")?;
++                Ok(c.dtype.decode_le(c.data.get(from..from + width).ok_or("wide const lane")?))
++            }
++            Ref::Param(j) => {
++                let d = &p.params[j as usize];
++                let layer = d.per_layer.then_some(layer).flatten();
++                let leaf =
++                    self.inventory.leaf_of(j, layer, mul(count(lane)?, d.dtype.width() as u64)?).ok_or("wide dynamic param leaf")?;
++                let limits = self.source_limits();
++                let proof = self.parameters(&[leaf], limits)?;
++                let empty = PalwStepInputRowV1 { preimages: vec![], run_siblings: vec![] };
++                let material = TirSourceOnlyMaterialV2 {
++                    operands: &empty,
++                    params: &proof,
++                    prompt_token_ids: &[],
++                    prompt_ids_openings: &[],
++                    decode_tokens: None,
++                };
++                self.capture.session.charge(Charge::Hash, self.owners.metadata_auth_work)?;
++                let auth =
++                    authenticate_source_only_v2(&self.binding, material, self.binding.step_leaf_count, &self.rules(limits), limits)
++                        .map_err(|e| format!("wide dynamic artifact auth: {e:?}"))?;
++                auth.authenticated_parameter_lane(j, layer, lane).ok_or("wide dynamic artifact lane".into())
++            }
++        }
++    }
++    fn source_limits(&self) -> TirSourceOnlyLimitsV1 {
++        let l = self.capture.session.limits;
++        TirSourceOnlyLimitsV1 {
++            max_source_reads: l.max_visits,
++            max_target_lanes: l.max_trace_frames,
++            max_target_bytes: l.max_material_bytes,
++            max_material_bytes: l.max_material_bytes,
++            max_material_units: l.max_trace_frames,
++            max_auth_storage_bytes: self.owners.source_auth_bytes,
++            max_workspace_bytes: self.owners.metadata_auth_bytes,
++        }
++    }
++    /// Extract only comparison claims from the same run, preserving original i128
++    /// integers. These values never become Node source operands or computation credit.
++    pub fn claim(&self, index: u64) -> Result<Vec<i128>, Error> {
++        let r = self.prep.plan().relation_at(index).ok_or("wide claim index")?;
++        self.capture.session.charge(Charge::Visit, self.prep.plan().summary().geometry_visit_bound)?;
++        let n = match r.kind {
++            ExpandedRelationKind::Legacy(l) => l.value_count,
++            ExpandedRelationKind::RecomputeNode { lane_count, .. } => lane_count,
++        };
++        let bytes = mul(u64::from(n), 16)?;
++        if bytes > self.capture.session.limits.max_claim_bytes {
++            return Err("wide claim tile cap".into());
++        }
++        self.capture.session.charge(Charge::Copy, bytes)?;
++        let mut out = Vec::new();
++        match r.kind {
++            ExpandedRelationKind::Legacy(l) => {
++                let preimage = self.capture.preimage(l.index)?;
++                out = palw_tir_leaf_values_v2(self.capture.expected.space, self.capture.expected.job, &l, &preimage)
++                    .map_err(|e| e.to_string())?
++            }
++            ExpandedRelationKind::RecomputeNode { ctx, node, first_lane, lane_count, .. } => {
++                out = self.capture.values(Key::Node(ctx.pos, ctx.occurrence, node), first_lane, lane_count)?;
++            }
++        }
++        Ok(out)
++    }
++    pub fn material(&self, index: u64, frontier: u64) -> Result<WidePanelMaterialV2<'_, 'c, 'a>, Error> {
++        if self.live.replace(true) {
++            return Err("wide Panel material slot already live".into());
++        }
++        let result = self.material_inner(index, frontier);
++        match result {
++            Ok((operands, params, prompt, pin, target)) => {
++                Ok(WidePanelMaterialV2 { builder: self, operands, params, prompt, pin, target })
++            }
++            Err(e) => {
++                self.live.set(false);
++                Err(e)
++            }
++        }
++    }
++    fn material_inner(&self, index: u64, frontier: u64) -> Result<BuiltMaterialV2, Error> {
++        self.capture.session.charge(Charge::Copy, mul(self.capture.session.limits.max_material_bytes, 2)?)?;
++        let r = self.relation(index, frontier)?;
++        let reads = discover(self, &r)?;
++        let steps = reads.steps.iter().copied().collect::<Vec<_>>();
++        // Bound all source copies/proofs BEFORE reading a leaf or calling a provider.
++        // Range proofs have at most two siblings per tree level (u64 => <=128).
++        let mut runs = 0u64;
++        let mut previous = None;
++        let mut bound = 256u64;
++        for index in &steps {
++            bound = add(bound, add(64, self.capture.preimage_bytes(*index)?)?)?;
++            if previous.is_none_or(|p: u64| p.checked_add(1) != Some(*index)) {
++                runs += 1;
++            }
++            previous = Some(*index);
++        }
++        bound = add(bound, mul(runs, add(4, 128 * 64)?)?)?;
++        if !reads.params.is_empty() {
++            bound = add(bound, self.envelope.max_result_bytes)?;
++        }
++        if reads.prompt {
++            bound = add(bound, mul(count(self.capture.expected.prompt.len())?, 4)?)?;
++        }
++        if reads.decode {
++            bound = add(bound, add(68, mul(count(self.capture.run.generated().len())?, 4)?)?)?;
++        }
++        if bound > self.capture.session.limits.max_material_bytes {
++            return Err("wide material pre-copy cap".into());
++        }
++        let mut preimages = vec_exact(steps.len())?;
++        for i in &steps {
++            preimages.push(self.capture.preimage(*i)?)
++        }
++        let mut siblings = vec![];
++        let mut k = 0;
++        while k < steps.len() {
++            let mut n = 1;
++            while k + n < steps.len() && steps[k + n] == steps[k] + n as u64 {
++                n += 1
++            }
++            self.capture.session.charge(Charge::Proof, 1)?;
++            self.capture.session.charge(Charge::Visit, 128)?;
++            self.capture.session.charge(Charge::Io, 128 * 64)?;
++            siblings.push(self.tree.range_siblings(steps[k], n as u64).ok_or("wide source range proof")?);
++            k += n;
++        }
++        let operands = PalwStepInputRowV1 { preimages, run_siblings: siblings };
++        let params = self.parameters(&reads.params.iter().copied().collect::<Vec<_>>(), self.source_limits())?;
++        let prompt = if reads.prompt { self.capture.expected.prompt.to_vec() } else { vec![] };
++        let pin = reads.decode.then(|| WideGeneratedIdsPinV2 {
++            rows_root: self.row_tree.root().expect("prepared rows"),
++            generated_token_ids: self.capture.run.generated().to_vec(),
++        });
++        let target = self.target(&r)?;
++        let material = TirSourceOnlyMaterialV2 {
++            operands: &operands,
++            params: &params,
++            prompt_token_ids: &prompt,
++            prompt_ids_openings: &[],
++            decode_tokens: pin.as_ref(),
++        };
++        material.preflight(self.source_limits()).map_err(|e| format!("wide assembled material bound: {e:?}"))?;
++        Ok((operands, params, prompt, pin, target))
++    }
++    fn target(&self, r: &ExpandedRelation) -> Result<Option<WidePanelTargetV2>, Error> {
++        let ExpandedRelationKind::Legacy(leaf) = r.kind else { return Ok(None) };
++        self.capture.session.charge(Charge::Proof, 1)?;
++        self.capture.session.charge(Charge::Visit, 256)?;
++        self.capture.session.charge(Charge::Io, 128 * 64 * 3)?;
++        let mut bound = add(self.capture.preimage_bytes(leaf.index)?, add(512, mul(count(self.capture.run.generated().len())?, 4)?)?)?;
++        if leaf.dtype == DType::I64 {
++            bound = add(bound, add((PALW_LOGITS_TILE_LANES as u64) * 8, 128 * 64 * 3)?)?;
++        }
++        if bound > self.capture.session.limits.max_material_bytes {
++            return Err("wide target pre-copy cap".into());
++        }
++        let opening = self.tree.opening(leaf.index).ok_or("wide target opening")?;
++        let preimage = self.capture.preimage(leaf.index)?;
++        let trace = if leaf.dtype == DType::I64 {
++            let PalwTirLeafKindV1::Commit { first_element, .. } = leaf.kind else { return Err("wide non-final target".into()) };
++            let row = leaf.position + 1 - self.capture.expected.job.declared_prefill_tokens;
++            let tile = first_element / PALW_LOGITS_TILE_LANES as u64;
++            self.capture.session.charge(Charge::Proof, 2)?;
++            let all = &self.capture.run.logits_rows()[row as usize];
++            let from = tile as usize * PALW_LOGITS_TILE_LANES;
++            let lanes = all[from..all.len().min(from + PALW_LOGITS_TILE_LANES)].to_vec();
++            Some(WideLogitsEventV2 {
++                row,
++                generated: self.capture.run.generated().to_vec(),
++                row_root: self.tile_trees[row as usize].root().ok_or("wide row root")?,
++                row_opening: self.row_tree.opening(u64::from(row)).ok_or("wide row proof")?,
++                lanes,
++                tile_opening: self.tile_trees[row as usize].opening(tile).ok_or("wide tile proof")?,
++            })
++        } else {
++            None
++        };
++        Ok(Some(WidePanelTargetV2 { opening, preimage, trace }))
++    }
++}
++pub struct WidePanelTargetV2 {
++    pub opening: PalwStepOpeningV1,
++    pub preimage: PalwStepTileLeafV1,
++    pub trace: Option<WideLogitsEventV2>,
++}
++impl WidePanelTargetV2 {
++    pub fn as_borrowed(&self) -> StepTargetV2<'_> {
++        StepTargetV2 { opening: &self.opening, preimage: &self.preimage, trace: self.trace.as_ref() }
++    }
++}
++pub struct WidePanelMaterialV2<'b, 'c, 'a> {
++    builder: &'b WidePanelBuilderV2<'c, 'a>,
++    operands: PalwStepInputRowV1,
++    params: PalwTirParamOpeningV1,
++    prompt: Vec<u32>,
++    pin: Option<WideGeneratedIdsPinV2>,
++    target: Option<WidePanelTargetV2>,
++}
++impl WidePanelMaterialV2<'_, '_, '_> {
++    pub fn as_borrowed(&self) -> TirSourceOnlyMaterialV2<'_> {
++        TirSourceOnlyMaterialV2 {
++            operands: &self.operands,
++            params: &self.params,
++            prompt_token_ids: &self.prompt,
++            prompt_ids_openings: &[],
++            decode_tokens: self.pin.as_ref(),
++        }
++    }
++    pub fn target(&self) -> Option<StepTargetV2<'_>> {
++        self.target.as_ref().map(WidePanelTargetV2::as_borrowed)
++    }
++}
++impl Drop for WidePanelMaterialV2<'_, '_, '_> {
++    fn drop(&mut self) {
++        self.builder.live.set(false)
++    }
++}
++
++impl Drop for WidePanelBuilderV2<'_, '_> {
++    fn drop(&mut self) {
++        self.capture.builder_live.set(false)
++    }
++}
+diff --git a/misaka/palw/tir/exec/src/node/positive_wide_material_v2/trace.rs b/misaka/palw/tir/exec/src/node/positive_wide_material_v2/trace.rs
+new file mode 100644
+--- /dev/null
++++ b/misaka/palw/tir/exec/src/node/positive_wide_material_v2/trace.rs
+@@ -0,0 +1,346 @@
++//! Producer-only dependency walk. NO eval_demanded / numerical primitives.
++//! Captured values choose dynamic addresses only. Node independently recomputes
++//! those choices and refuses missing/noncanonical material if this data is wrong.
++use super::proof::WidePanelBuilderV2;
++use super::*;
++use kaspa_consensus_core::{
++    palw_positive_check_v2::expanded_plan::{ExpandedRelation, ExpandedRelationKind},
++    palw_step::PalwStepCoordinateV1,
++    palw_tir_step_v1::PalwTirLeafKindV1,
++};
++use misaka_palw_tir::{
++    Prim, Ref,
++    demand::{DemandContext, carry_in_node_v1, hist_row_node_v1, history_length_v1, state_writer_v1},
++    lane_geometry::{broadcast_index, gather_data_coordinate, gather_index_coordinate, ravel, unravel},
++    types::strides,
++};
++use std::collections::BTreeSet;
++#[derive(Default)]
++pub(super) struct Reads {
++    pub steps: BTreeSet<u64>,
++    pub params: BTreeSet<u32>,
++    pub prompt: bool,
++    pub decode: bool,
++}
++#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
++enum Task {
++    Node(DemandContext, u16, usize, bool),
++    Value(DemandContext, RefKey, usize),
++    Fixed(u32, u16, Option<u16>, usize),
++    History(u32, u16, Option<u16>, u32, usize),
++}
++// Ref itself lacks Ord; this private key has no serialized representation.
++#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
++enum RefKey {
++    Node(u16),
++    Carry(u8),
++    Param(u16),
++    Const(u16),
++    State(u16),
++    Input(u8),
++}
++impl From<Ref> for RefKey {
++    fn from(r: Ref) -> Self {
++        match r {
++            Ref::Node(n) => Self::Node(n),
++            Ref::CarryIn(n) => Self::Carry(n),
++            Ref::Param(n) => Self::Param(n),
++            Ref::Const(n) => Self::Const(n),
++            Ref::State(n) => Self::State(n),
++            Ref::Input(n) => Self::Input(n),
++        }
++    }
++}
++struct Walk<'b, 'c, 'a> {
++    b: &'b WidePanelBuilderV2<'c, 'a>,
++    frontier: u64,
++    pending: Vec<Task>,
++    seen: BTreeSet<Task>,
++    reads: Reads,
++}
++impl Walk<'_, '_, '_> {
++    fn push(&mut self, t: Task) -> Result<(), Error> {
++        self.b.capture.session.charge(Charge::Visit, 128)?;
++        if self.seen.contains(&t) {
++            return Ok(());
++        }
++        if self.seen.len() as u64 >= self.b.capture.session.limits.max_trace_frames
++            || self.pending.len() as u64 >= self.b.capture.session.limits.max_trace_frames
++        {
++            return Err("wide trace frame cap".into());
++        }
++        self.seen.insert(t);
++        self.pending.push(t);
++        Ok(())
++    }
++    fn value(&mut self, ctx: DemandContext, r: Ref, lane: usize) -> Result<(), Error> {
++        self.push(Task::Value(ctx, r.into(), lane))
++    }
++    fn step_leaf(&mut self, index: u64) -> Result<(), Error> {
++        if index >= self.frontier {
++            return Err("wide source does not precede target".into());
++        }
++        if self.reads.steps.len() as u64 >= self.b.capture.session.limits.max_trace_frames {
++            return Err("wide source set cap".into());
++        }
++        self.reads.steps.insert(index);
++        Ok(())
++    }
++    fn coord(&mut self, pos: u32, slot: u32, tile: u64) -> Result<(), Error> {
++        let builder = self.b;
++        let space = builder.capture.expected.space;
++        let job = space.job_shape(self.b.capture.expected.job).map_err(|e| e.to_string())?;
++        let (call_index, position) = job.call_position(pos);
++        let coord = PalwStepCoordinateV1 {
++            call_index,
++            node_slot: slot,
++            position,
++            tile_index: u32::try_from(tile).map_err(|_| "wide tile index")?,
++        };
++        let index = space.leaf_index(self.b.capture.expected.job, &coord).ok_or("wide source coordinate absent")?;
++        self.step_leaf(index)
++    }
++    fn node(&mut self, ctx: DemandContext, node: u16, lane: usize, force: bool) -> Result<(), Error> {
++        let builder = self.b;
++        let space = builder.capture.expected.space;
++        let (block, layer) = *space.occurrences().get(ctx.occurrence as usize).ok_or("wide trace occurrence")?;
++        let p = space.program();
++        let n = p.blocks[block as usize].nodes.get(node as usize).ok_or("wide trace node")?;
++        let h = history_length_v1(space.info(), block, ctx.pos).ok_or("wide trace history shape")?;
++        let shape = n.out.resolve(h);
++        if lane >= shape.iter().product::<usize>() {
++            return Err("wide trace target lane".into());
++        }
++        if n.commit && !force {
++            let tile = space.commit_tile_len(block, node).ok_or("wide commit tile")?;
++            let slot = space.node_slot(ctx.occurrence as usize, node).ok_or("wide commit slot")?;
++            return self.coord(ctx.pos, slot, (lane / tile as usize) as u64);
++        }
++        let inputs = &n.inputs;
++        let o = unravel(lane, &strides(&shape));
++        let ish = |r: Ref| builder.ref_shape(ctx, r);
++        match &n.prim {
++            Prim::Reshape
++            | Prim::Cast
++            | Prim::Clamp { .. }
++            | Prim::Log2Floor
++            | Prim::IntExp
++            | Prim::IntRsqrt
++            | Prim::IntLn
++            | Prim::StateWrite { .. } => self.value(ctx, inputs[0], lane)?,
++            Prim::Transpose { perm } => {
++                let sh = ish(inputs[0])?;
++                let mut ix = vec![0; o.len()];
++                for (k, p) in perm.iter().enumerate() {
++                    ix[*p as usize] = o[k]
++                }
++                self.value(ctx, inputs[0], ravel(&ix, &strides(&sh)))?
++            }
++            Prim::Slice { axis, start } => {
++                let sh = ish(inputs[0])?;
++                let mut ix = o;
++                ix[*axis as usize] += *start as usize;
++                self.value(ctx, inputs[0], ravel(&ix, &strides(&sh)))?
++            }
++            Prim::Concat { axis } => {
++                let a = *axis as usize;
++                let mut ix = o;
++                let mut found = false;
++                for r in inputs {
++                    let sh = ish(*r)?;
++                    if ix[a] < sh[a] {
++                        self.value(ctx, *r, ravel(&ix, &strides(&sh)))?;
++                        found = true;
++                        break;
++                    }
++                    ix[a] -= sh[a]
++                }
++                if !found {
++                    return Err("wide concat extent".into());
++                }
++            }
++            Prim::Broadcast => {
++                let sh = ish(inputs[0])?;
++                self.value(ctx, inputs[0], broadcast_index(&o, &sh))?
++            }
++            Prim::Iota { .. } => {}
++            Prim::Gather { axis, batch_dims } => {
++                let d = ish(inputs[0])?;
++                let x = ish(inputs[1])?;
++                let a = *axis as usize;
++                let bd = *batch_dims as usize;
++                let xi = ravel(&gather_index_coordinate(&o, a, bd, x.len()), &strides(&x));
++                self.value(ctx, inputs[1], xi)?;
++                let selected = self.b.ref_value(ctx, inputs[1], xi)?;
++                if selected < 0 || selected >= d[a] as i128 {
++                    return Err("wide captured Gather index".into());
++                }
++                let di = ravel(&gather_data_coordinate(&o, a, x.len(), bd, selected as usize), &strides(&d));
++                self.value(ctx, inputs[0], di)?
++            }
++            Prim::Add | Prim::Sub | Prim::Mul | Prim::Div { .. } | Prim::Compare { .. } => {
++                for r in inputs {
++                    let sh = ish(*r)?;
++                    self.value(ctx, *r, broadcast_index(&o, &sh))?
++                }
++            }
++            Prim::Select => {
++                let sh = ish(inputs[0])?;
++                let at = broadcast_index(&o, &sh);
++                self.value(ctx, inputs[0], at)?;
++                let choice = if self.b.ref_value(ctx, inputs[0], at)? != 0 { inputs[1] } else { inputs[2] };
++                let sh = ish(choice)?;
++                self.value(ctx, choice, broadcast_index(&o, &sh))?
++            }
++            Prim::MatMul => {
++                let x = ish(inputs[0])?;
++                let y = ish(inputs[1])?;
++                let (xr, yr, or) = (x.len(), y.len(), shape.len());
++                let (m, k, n) = (x[xr - 2], x[xr - 1], y[yr - 1]);
++                let batch = &o[..or - 2];
++                let xb = broadcast_index(batch, &x[..xr - 2]);
++                let yb = broadcast_index(batch, &y[..yr - 2]);
++                let (xo, yo) = (xb * m * k + o[or - 2] * k, yb * k * n + o[or - 1]);
++                for t in 0..k {
++                    self.value(ctx, inputs[0], xo + t)?;
++                    self.value(ctx, inputs[1], yo + t * n)?
++                }
++            }
++            Prim::ReduceSum { axis } | Prim::ReduceMax { axis } | Prim::TopK { axis, .. } => {
++                let sh = ish(inputs[0])?;
++                let mut ix = o;
++                for t in 0..sh[*axis as usize] {
++                    ix[*axis as usize] = t;
++                    self.value(ctx, inputs[0], ravel(&ix, &strides(&sh)))?
++                }
++            }
++            Prim::HistAppend { state } => {
++                let s = &p.states[*state as usize];
++                let rows = s.shape.iter().map(|d| *d as usize).product::<usize>();
++                let (t, within) = (lane / rows, lane % rows);
++                if t + 1 == h {
++                    self.value(ctx, inputs[0], within)?
++                } else {
++                    let row = (ctx.pos as usize + 1 - h + t) as u32;
++                    let layer = s.per_layer.then_some(layer).flatten();
++                    self.push(Task::History(ctx.pos, *state, layer, row, within))?
++                }
++            }
++        }
++        Ok(())
++    }
++    fn run_task(&mut self, t: Task) -> Result<(), Error> {
++        let builder = self.b;
++        let e = &builder.capture.expected;
++        let space = e.space;
++        match t {
++            Task::Node(ctx, n, l, force) => self.node(ctx, n, l, force),
++            Task::Value(ctx, r, lane) => {
++                let (block, layer) = space.occurrences()[ctx.occurrence as usize];
++                let p = space.program();
++                match r {
++                    RefKey::Node(n) => self.push(Task::Node(ctx, n, lane, false)),
++                    RefKey::Carry(k) => {
++                        let (c, n) = carry_in_node_v1(p, ctx, k).ok_or("wide carry mapping")?;
++                        self.push(Task::Node(c, n, lane, false))
++                    }
++                    RefKey::Param(j) => {
++                        let d = &p.params[j as usize];
++                        let layer = d.per_layer.then_some(layer).flatten();
++                        let at = mul(count(lane)?, d.dtype.width() as u64)?;
++                        let leaf = self.b.inventory.leaf_of(j, layer, at).ok_or("wide param inventory mapping")?;
++                        self.reads.params.insert(leaf);
++                        Ok(())
++                    }
++                    RefKey::State(j) => {
++                        let s = &p.states[j as usize];
++                        let layer = s.per_layer.then_some(layer).flatten();
++                        self.push(Task::Fixed(ctx.pos, j, layer, lane))
++                    }
++                    RefKey::Const(_) => Ok(()),
++                    RefKey::Input(j) => {
++                        if j == 0 {
++                            let job = space.job_shape(e.job).map_err(|e| e.to_string())?;
++                            if ctx.pos < job.prefill { self.reads.prompt = true } else { self.reads.decode = true }
++                        }
++                        let _ = block;
++                        Ok(())
++                    }
++                }
++            }
++            Task::Fixed(mut pos, s, layer, lane) => {
++                while pos > 0 {
++                    if pos.is_multiple_of(space.layout().checkpoint_interval) {
++                        let k = space.fixed_instance_index(s, layer).ok_or("wide Fixed instance")?;
++                        let inst = space.fixed_instances()[k];
++                        return self.coord(pos - 1, space.program_slots() + k as u32, (lane / inst.tile_lanes as usize) as u64);
++                    }
++                    if let Some((occ, n)) = state_writer_v1(space.program(), s, layer) {
++                        return self.push(Task::Node(DemandContext { pos: pos - 1, occurrence: occ }, n, lane, false));
++                    }
++                    self.b.capture.session.charge(Charge::Visit, 1)?;
++                    pos -= 1
++                }
++                Ok(())
++            }
++            Task::History(pos, s, layer, row, lane) => {
++                let tile = space.layout().h_tile;
++                let start = row - row % tile;
++                let end = start + (tile - 1);
++                if end < pos {
++                    let k = space.hist_instance_index(s, layer).ok_or("wide Hist instance")?;
++                    let inst = space.hist_instances()[k];
++                    self.coord(
++                        end,
++                        space.program_slots() + space.fixed_instances().len() as u32 + k as u32,
++                        (lane / inst.tile_lanes as usize) as u64,
++                    )
++                } else {
++                    let (ctx, n) = hist_row_node_v1(space.program(), s, layer, row).ok_or("wide Hist append source")?;
++                    self.push(Task::Node(ctx, n, lane, false))
++                }
++            }
++        }
++    }
++}
++pub(super) fn discover(b: &WidePanelBuilderV2<'_, '_>, r: &ExpandedRelation) -> Result<Reads, Error> {
++    let cap = usize::try_from(b.capture.session.limits.max_trace_frames).map_err(|_| "wide trace capacity")?;
++    let mut w = Walk { b, frontier: r.legacy_frontier, pending: vec_exact(cap)?, seen: BTreeSet::new(), reads: Reads::default() };
++    match r.kind {
++        ExpandedRelationKind::RecomputeNode { ctx, node, first_lane, lane_count, .. } => {
++            for l in first_lane..first_lane + u64::from(lane_count) {
++                w.push(Task::Node(ctx, node, l as usize, true))?
++            }
++        }
++        ExpandedRelationKind::Legacy(leaf) => match leaf.kind {
++            PalwTirLeafKindV1::Commit { occurrence, node, first_element, .. } => {
++                for l in first_element..first_element + u64::from(leaf.value_count) {
++                    w.push(Task::Node(DemandContext { pos: leaf.position, occurrence: occurrence as u16 }, node, l as usize, true))?
++                }
++            }
++            PalwTirLeafKindV1::State { state, layer, first_element, .. } => {
++                for l in first_element..first_element + u64::from(leaf.value_count) {
++                    if let Some((occ, n)) = state_writer_v1(b.capture.expected.space.program(), state, layer) {
++                        w.push(Task::Node(DemandContext { pos: leaf.position, occurrence: occ }, n, l as usize, false))?
++                    } else {
++                        w.push(Task::Fixed(leaf.position, state, layer, l as usize))?
++                    }
++                }
++            }
++            PalwTirLeafKindV1::HistTile { state, layer, first_lane, row_lanes, first_position, .. } => {
++                for pos in first_position..=leaf.position {
++                    let (ctx, n) =
++                        hist_row_node_v1(b.capture.expected.space.program(), state, layer, pos).ok_or("wide Hist target input")?;
++                    for l in first_lane..first_lane + u64::from(row_lanes) {
++                        w.push(Task::Node(ctx, n, l as usize, false))?
++                    }
++                }
++            }
++        },
++    }
++    while let Some(t) = w.pending.pop() {
++        w.b.capture.session.charge(Charge::Visit, 1)?;
++        w.run_task(t)?;
++    }
++    Ok(w.reads)
++}
+diff --git a/misaka/palw/tir/exec/src/node/run_wide_q24_v2.rs b/misaka/palw/tir/exec/src/node/run_wide_q24_v2.rs
+--- a/misaka/palw/tir/exec/src/node/run_wide_q24_v2.rs
++++ b/misaka/palw/tir/exec/src/node/run_wide_q24_v2.rs
+@@ -159,6 +159,11 @@
+         Ok(Self { space, plan, params, class_id })
+     }
+ 
++    /// Original immutable geometry, for local collectors to join an independent
++    /// registry/job expectation. This is metadata, not native authorization.
++    pub fn original_space(&self) -> &PalwTirStepSpaceV2 {
++        self.space
++    }
+     /// Pure closed-form preflight. No position/leaf list or encoded program is allocated.
+     pub fn quote(&self, ctx: &PalwJobContextV2, limits: TirWideRunLimitsV2) -> Result<TirWideRunQuoteV2, String> {
+         if ctx.shape_profile_id != self.class_id {
+@@ -263,7 +268,11 @@
+         limits: TirWideRunLimitsV2,
+         on_leaf: &mut dyn FnMut(&TirLeafOutWideQ24V2<'_>),
+     ) -> Result<TirJobRunWideQ24V2, String> {
+-        self.drive(ctx, prompt, expected_execution, limits, on_leaf, None)
++        let mut forward = |leaf: &TirLeafOutWideQ24V2<'_>| {
++            on_leaf(leaf);
++            Ok(())
++        };
++        self.drive(ctx, prompt, expected_execution, limits, &mut forward, None)
+     }
+ 
+     /// Every-node/state/native-output observation within this same single run.
+@@ -278,6 +287,26 @@
+         on_leaf: &mut dyn FnMut(&TirLeafOutWideQ24V2<'_>),
+         observer: &mut dyn TirRunObserverV1,
+     ) -> Result<TirJobRunWideQ24V2, String> {
++        let mut forward = |leaf: &TirLeafOutWideQ24V2<'_>| {
++            on_leaf(leaf);
++            Ok(())
++        };
++        self.drive(ctx, prompt, expected_execution, limits, &mut forward, Some(observer))
++    }
++
++    /// Fallible local custody callback. A failed tape write aborts this same
++    /// run immediately; partial values cannot become a completed capture.
++    /// Original run/run_observed callback APIs and all output bytes are retained.
++    #[allow(clippy::too_many_arguments)]
++    pub fn run_observed_fallible(
++        &self,
++        ctx: &PalwJobContextV2,
++        prompt: &[u32],
++        expected_execution: Hash64,
++        limits: TirWideRunLimitsV2,
++        on_leaf: &mut dyn FnMut(&TirLeafOutWideQ24V2<'_>) -> Result<(), String>,
++        observer: &mut dyn TirRunObserverV1,
++    ) -> Result<TirJobRunWideQ24V2, String> {
+         self.drive(ctx, prompt, expected_execution, limits, on_leaf, Some(observer))
+     }
+ 
+@@ -288,7 +317,7 @@
+         prompt: &[u32],
+         expected_execution: Hash64,
+         limits: TirWideRunLimitsV2,
+-        on_leaf: &mut dyn FnMut(&TirLeafOutWideQ24V2<'_>),
++        on_leaf: &mut dyn FnMut(&TirLeafOutWideQ24V2<'_>) -> Result<(), String>,
+         mut observer: Option<&mut dyn TirRunObserverV1>,
+     ) -> Result<TirJobRunWideQ24V2, String> {
+         let q = self.quote(ctx, limits)?;
+@@ -434,7 +463,7 @@
+     context: Hash64,
+     position: u32,
+     hashes: Vec<Hash64>,
+-    on_leaf: &'f mut dyn FnMut(&TirLeafOutWideQ24V2<'_>),
++    on_leaf: &'f mut dyn FnMut(&TirLeafOutWideQ24V2<'_>) -> Result<(), String>,
+ }
+ impl WideEmitter<'_, '_> {
+     fn native(&mut self, slot: u32, tile: u32, data: Slice<'_>, from: usize, lanes: usize) -> Result<(), String> {
+@@ -460,8 +489,8 @@
+         // A1 alone selects the eight-byte final leaf versus old narrow bytes.
+         let preimage = palw_tir_leaf_preimage_v2(self.space, self.ctx, &leaf, values).map_err(|e| e.to_string())?;
+         let hash = step_tile_leaf_hash_v1(&self.context, &self.class_id, &preimage);
++        (self.on_leaf)(&TirLeafOutWideQ24V2 { index, position: self.position, preimage: &preimage, hash })?;
+         self.hashes.push(hash); // exact whole-job reservation already admitted
+-        (self.on_leaf)(&TirLeafOutWideQ24V2 { index, position: self.position, preimage: &preimage, hash });
+         Ok(())
+     }
+ }
+diff --git a/misaka/palw/tir/exec/tests/positive_wide_material_v2.rs b/misaka/palw/tir/exec/tests/positive_wide_material_v2.rs
+new file mode 100644
+--- /dev/null
++++ b/misaka/palw/tir/exec/tests/positive_wide_material_v2.rs
+@@ -0,0 +1,468 @@
++#![cfg(feature = "positive-panel")]
++//! Local programs; no native registration, public activation or credit assertion.
++//! One production observed CPU run; the real Node independently recomputes.
++mod run_wide_common;
++use kaspa_consensus_core::{
++    Hash64,
++    palw_artifact::{PalwArtifactMultiproofV1, PalwArtifactOpeningV1},
++    palw_attempt_rules_v1::palw_attempt_output_root_v1,
++    palw_positive_check_v2::{
++        CheckOutcome,
++        expanded_plan::{ExpandedPlanLimits, ExpandedRelationKind},
++        full_relation::{FullRelationError, FullRelationLimits, PrototypeDomains, wide_v2::FullRelationPreparationV2},
++    },
++    palw_prompt_ids_v1::PalwPromptIdsFormV1,
++    palw_tir_class_v1::PalwTirClassV1,
++    palw_tir_court_v1::source_only::TirSourceOnlyLimitsV1,
++    palw_tir_step_v1::PalwTirStepSpaceV2,
++    palw_v2::PalwJobContextV2,
++};
++use misaka_palw_positive_contract::{CONTRACT_REVISION, CONTRACT_VERSION, identity::*, messages::*, tir::greedy_selector_id};
++use misaka_palw_tir_exec::node::{
++    TirHeldInventoryV1, TirParamOpenerV1, TirParamsSourceV1,
++    memory::TirMemoryReserverV1,
++    positive_wide_material_v2::{
++        CaptureExpectedV2, WidePanelBuilderV2, WidePanelDiskReserverV2, WidePanelLimitsV2, WidePanelOwnersV2, WidePanelWorkV2,
++        WideProviderEnvelopeV2, capture_one_pass_v2,
++    },
++    run_wide_q24_v2::{TirClassRunnerWideQ24V2, TirWideRunLimitsV2},
++};
++use run_wide_common::{EXPECTED_GENERATED, Fixture, LEAF_CAP, MAX_CONTEXT, PROMPT};
++use std::sync::Arc;
++const EXPECTED: &[u32] = EXPECTED_GENERATED;
++trait OracleFixture {
++    fn class(&self) -> &PalwTirClassV1;
++    fn artifact(&self) -> Hash64;
++    fn job(&self) -> &PalwJobContextV2;
++}
++impl OracleFixture for Fixture<'_> {
++    fn class(&self) -> &PalwTirClassV1 {
++        &self.class
++    }
++    fn artifact(&self) -> Hash64 {
++        self.artifact
++    }
++    fn job(&self) -> &PalwJobContextV2 {
++        &self.job
++    }
++}
++
++fn d(n: u8) -> Digest {
++    Digest([n; 64])
++}
++fn digest(n: Hash64) -> Digest {
++    Digest(n.as_bytes())
++}
++fn full_limits() -> FullRelationLimits {
++    FullRelationLimits {
++        plan: ExpandedPlanLimits {
++            max_positions: 16,
++            max_geometry_visits: 1 << 24,
++            max_plan_bytes: 1 << 24,
++            max_legacy_leaves: 1 << 16,
++            max_relations: 1 << 20,
++            max_target_lanes: 1 << 26,
++            max_peak_target_bytes: 1 << 20,
++            uncommitted_tile_lanes: 3,
++            max_elements_per_relation: 1 << 14,
++            max_terms_per_relation: 1 << 16,
++            max_total_elements: 1 << 52,
++            max_total_terms: 1 << 52,
++        },
++        source: TirSourceOnlyLimitsV1 {
++            max_auth_storage_bytes: 1 << 28,
++            max_workspace_bytes: 1 << 30,
++            max_source_reads: 1 << 16,
++            max_target_lanes: 1 << 16,
++            max_target_bytes: 1 << 20,
++            max_material_bytes: 1 << 24,
++            max_material_units: 1 << 16,
++        },
++        max_record_bytes: 1 << 28,
++        max_record_heap_bytes: 1 << 28,
++        max_record_geometry_visits: 1 << 52,
++        max_total_material_bytes: 1 << 44,
++        max_total_source_reads: 1 << 40,
++    }
++}
++fn domains() -> PrototypeDomains {
++    PrototypeDomains::local_only(b"A1/full-relation/local-test-record", b"A1/FULL/LOCAL/TEST").unwrap()
++}
++struct SignedMiner {
++    rooted: AdmissionContext,
++    result: MinerResultCommit,
++    key: [u8; PUBKEY_BYTES],
++    signature: [u8; SIGNATURE_BYTES],
++}
++impl SignedMiner {
++    fn new(f: &impl OracleFixture, wrong: bool) -> Self {
++        let class = f.class();
++        let job = f.job();
++        let artifact = f.artifact();
++        assert_eq!(class.tokenizer_id, Hash64::from_u64_word(18));
++        assert_eq!(job.tokenizer_id, Hash64::from_u64_word(0));
++        let pair = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([91; 32]);
++        let key = *pair.verification_key.as_ref();
++        let rooted = AdmissionContext {
++            scope: ChainScope { network: d(1), ruleset: d(2), branch: d(3) },
++            expected_job: digest(job.job_id),
++            expected_execution: digest(job.context_hash()),
++            expected_miner: principal(&key),
++            expected_input: digest(job.prompt_token_ids_hash),
++            registered_class: digest(class.class_id(&artifact)),
++            artifact: digest(artifact),
++            program: digest(class.graph_ir_root()),
++            tokenizer: digest(job.tokenizer_id),
++            execution_rules: digest(job.cu_ruleset_id),
++            selector: greedy_selector_id(),
++            required_form: ClaimForm::PositiveResultV2,
++        };
++        let mut result = MinerResultCommit {
++            version: CONTRACT_VERSION,
++            revision: CONTRACT_REVISION,
++            scope: rooted.scope,
++            job: rooted.expected_job,
++            execution: rooted.expected_execution,
++            miner: rooted.expected_miner,
++            registered_class: rooted.registered_class,
++            artifact: rooted.artifact,
++            program: rooted.program,
++            input: rooted.expected_input,
++            tokenizer: rooted.tokenizer,
++            execution_rules: rooted.execution_rules,
++            selector: rooted.selector,
++            generation_seed: job.execution_seed,
++            temperature_q24: 0,
++            prefill: job.declared_prefill_tokens,
++            decode: job.exact_decode_tokens,
++            max_context: job.max_context_tokens,
++            output: digest(palw_attempt_output_root_v1(job, EXPECTED)),
++            dependencies: d(21),
++            service_contract: d(22),
++        };
++        if wrong {
++            result.output = d(99);
++        }
++        let signature =
++            *libcrux_ml_dsa::ml_dsa_87::sign(&pair.signing_key, &result.id().0.0, RESULT_SIGN_CONTEXT, [0; 32]).unwrap().as_ref();
++        Self { rooted, result, key, signature }
++    }
++    fn authenticate(&self) -> AuthenticatedResult<'_> {
++        self.result.authenticate(&self.key, &self.signature).unwrap()
++    }
++    fn preparation(&self, f: &impl OracleFixture) -> FullRelationPreparationV2 {
++        FullRelationPreparationV2::authenticate(
++            &self.rooted,
++            f.class(),
++            f.artifact(),
++            f.job(),
++            PalwPromptIdsFormV1::Flat,
++            full_limits(),
++            domains(),
++            self.result.clone(),
++            &self.key,
++            &self.signature,
++        )
++        .unwrap()
++    }
++}
++fn reserve() -> TirMemoryReserverV1 {
++    Arc::new(|_, _, _, bytes| {
++        assert!(bytes > 0);
++        Ok(Box::new(()) as Box<dyn Send + Sync>)
++    })
++}
++fn disk_reserve() -> WidePanelDiskReserverV2 {
++    Arc::new(|_, _, bytes| {
++        assert!(bytes > 0);
++        Ok(Box::new(()) as Box<dyn Send + Sync>)
++    })
++}
++fn bounds() -> WidePanelLimitsV2 {
++    WidePanelLimitsV2 {
++        max_records: 4096,
++        max_step_leaves: LEAF_CAP,
++        max_tape_bytes: 1 << 26,
++        max_live_heap_bytes: 1 << 35,
++        max_visits: 1 << 42,
++        max_io_bytes: 1 << 42,
++        max_hash_work: 1 << 48,
++        max_proof_attempts: 1 << 20,
++        max_provider_bytes: 1 << 42,
++        max_provider_scratch: 1 << 24,
++        max_material_bytes: 1 << 20,
++        max_claim_bytes: 1 << 20,
++        max_trace_frames: 1 << 16,
++        external_retained_bytes: 1 << 28,
++    }
++}
++fn run_bounds() -> TirWideRunLimitsV2 {
++    TirWideRunLimitsV2 {
++        max_positions: MAX_CONTEXT,
++        max_step_leaves: LEAF_CAP,
++        max_row_lanes: 16,
++        max_work: 1 << 40,
++        max_requested_bytes: 1 << 30,
++    }
++}
++fn owners() -> WidePanelOwnersV2 {
++    WidePanelOwnersV2 {
++        metadata_auth_bytes: 1 << 29,
++        metadata_auth_work: 1 << 24,
++        source_auth_bytes: 1 << 24,
++        signature_bytes: 1 << 20,
++        retained_record_bytes: 1 << 26,
++    }
++}
++fn provider() -> WideProviderEnvelopeV2 {
++    WideProviderEnvelopeV2 { per_call_io: 1 << 20, per_call_work: 1 << 20, max_result_bytes: 1 << 16 }
++}
++fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
++    let space = PalwTirStepSpaceV2::new(&f.class).unwrap();
++    let runner = TirClassRunnerWideQ24V2::new(&space, f.plan, f.params, f.class.class_id(&f.artifact)).unwrap();
++    let reserver = reserve();
++    let work = WidePanelWorkV2::new(bounds(), f.job.shape_profile_id, f.job.context_hash(), &disk_reserve()).unwrap();
++    let capture = capture_one_pass_v2(
++        CaptureExpectedV2 { class: &f.class, artifact: f.artifact, job: &f.job, space: &space, prompt: PROMPT },
++        &runner,
++        run_bounds(),
++        &work,
++        tempfile::tempfile().unwrap(),
++        &reserver,
++    )
++    .unwrap();
++    assert_eq!(capture.run().generated(), EXPECTED);
++    let signed = SignedMiner::new(f, wrong_miner);
++    let result = signed.authenticate();
++    let prep = signed.preparation(f);
++    let source = TirParamsSourceV1(f.params);
++    let inventory = TirHeldInventoryV1::build(f.program, &source).unwrap();
++    assert_eq!(inventory.tree.root(), f.artifact);
++    let builder =
++        WidePanelBuilderV2::prepare(&capture, &prep, &result, &signed.rooted, &inventory, provider(), owners(), &reserver).unwrap();
++    let tape = builder.claims_tape(tempfile::tempfile().unwrap()).unwrap();
++    let mut claims = vec![];
++    tape.visit(&mut |index, values| {
++        assert_eq!(index as usize, claims.len());
++        claims.push(values.to_vec());
++        Ok(())
++    })
++    .unwrap();
++    let mut encoded = vec![];
++    tape.stream_borsh(&mut encoded).unwrap();
++    assert_eq!(encoded, borsh::to_vec(&claims).unwrap());
++    let n = claims.len();
++    if wrong_panel {
++        let i = prep.plan().iter().find(|r| matches!(r.kind, ExpandedRelationKind::RecomputeNode { .. })).unwrap().index as usize;
++        claims[i][0] += 1;
++    }
++    let panel = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([92; 32]);
++    let record = prep
++        .freeze_record(
++            capture.binding().unwrap(),
++            capture.run().generated().to_vec(),
++            principal(panel.verification_key.as_ref()),
++            claims,
++        )
++        .unwrap();
++    let sig = *libcrux_ml_dsa::ml_dsa_87::sign(&panel.signing_key, &record.signing_digest().0, record.signature_context(), [0; 32])
++        .unwrap()
++        .as_ref();
++    // This separately authenticated Node preparation owns all numerical checking.
++    let mut checker = signed.preparation(f).begin(record, panel.verification_key.as_ref(), &sig).unwrap();
++    let before = builder.meter();
++    let mut rejected = false;
++    for index in 0..n {
++        let progress = checker.progress();
++        let material = builder.material(index as u64, progress.legacy_frontier).unwrap();
++        assert!(builder.material(index as u64, progress.legacy_frontier).is_err());
++        let outcome = checker.submit(&material.as_borrowed(), material.target());
++        if outcome == Err(FullRelationError::PanelMismatch) {
++            assert!(wrong_panel);
++            assert_eq!(checker.progress().outcome, CheckOutcome::WitnessRejected);
++            rejected = true;
++            break;
++        }
++        outcome.unwrap();
++        assert_eq!(checker.progress().next_relation, index as u64 + 1);
++    }
++    assert!(builder.meter().proof_attempts > before.proof_attempts);
++    if wrong_panel {
++        assert!(rejected);
++    } else {
++        assert_eq!(checker.finish().unwrap(), if wrong_miner { CheckOutcome::OutputMismatch } else { CheckOutcome::Matched });
++    }
++    signed.authenticate();
++}
++#[test]
++fn one_pass_wide_tape_materials_reach_real_node_for_windows_one_and_three() {
++    for window in [1, 3] {
++        run_wide_common::with_fixture(window, |f, _| exercise(f, false, false));
++    }
++}
++#[test]
++fn wrong_panel_claim_remains_witness_rejection_and_wrong_miner_waits_for_all_relations() {
++    run_wide_common::with_fixture(3, |f, _| {
++        exercise(f, false, true);
++        exercise(f, true, false);
++    });
++}
++struct Unknown<'a>(&'a dyn TirParamOpenerV1);
++impl TirParamOpenerV1 for Unknown<'_> {
++    fn param_opening(&self, i: u32) -> Option<PalwArtifactOpeningV1> {
++        self.0.param_opening(i)
++    }
++    fn param_multiproof(&self, i: &[u32]) -> Option<PalwArtifactMultiproofV1> {
++        self.0.param_multiproof(i)
++    }
++}
++#[test]
++fn unknown_provider_scratch_is_refused_without_resetting_session_costs() {
++    run_wide_common::with_fixture(1, |f, _| {
++        let space = PalwTirStepSpaceV2::new(&f.class).unwrap();
++        let runner = TirClassRunnerWideQ24V2::new(&space, f.plan, f.params, f.class.class_id(&f.artifact)).unwrap();
++        let reserve = reserve();
++        let work = WidePanelWorkV2::new(bounds(), f.job.shape_profile_id, f.job.context_hash(), &disk_reserve()).unwrap();
++        let capture = capture_one_pass_v2(
++            CaptureExpectedV2 { class: &f.class, artifact: f.artifact, job: &f.job, space: &space, prompt: PROMPT },
++            &runner,
++            run_bounds(),
++            &work,
++            tempfile::tempfile().unwrap(),
++            &reserve,
++        )
++        .unwrap();
++        let s = SignedMiner::new(f, false);
++        let auth = s.authenticate();
++        let prep = s.preparation(f);
++        let src = TirParamsSourceV1(f.params);
++        let inv = TirHeldInventoryV1::build(f.program, &src).unwrap();
++        let unknown = Unknown(&inv);
++        let builder =
++            WidePanelBuilderV2::prepare(&capture, &prep, &auth, &s.rooted, &unknown, provider(), owners(), &reserve).unwrap();
++        let before = builder.meter();
++        for _ in 0..2 {
++            let err = match builder.material(0, 0) {
++                Ok(_) => panic!("unknown provider accepted"),
++                Err(e) => e,
++            };
++            assert!(err.contains("scratch unknown"));
++        }
++        let after = builder.meter();
++        assert!(after.visits > before.visits);
++        assert!(after.copied_bytes > before.copied_bytes);
++    });
++}
++#[test]
++fn captured_gather_select_topk_and_fixed_history_feed_actual_node_without_discovery_evaluation() {
++    use kaspa_consensus_core::palw_tir_class_v1::PalwTirLayoutV1;
++    use misaka_palw_tir::{Cmp, DType, MapParams, Ref, Tensor, TensorType, builder::ProgramBuilder};
++    use misaka_palw_tir_exec::{TirParams, TirPlan};
++    // A NEW local declaration. Its flags/dtypes/layout are not a rewrite of a
++    // registered model; no native registration receipt is asserted by this test.
++    let mut b = ProgramBuilder::new(4, 1 << 18);
++    let embed = b.param("e", DType::I8, &[4, 4], false);
++    let logits_table = b.param("l", DType::I64, &[4, 4], false);
++    let fixed = b.fixed_state("s", DType::I8, &[4], -128, 127, false);
++    let hist = b.hist_state("h", DType::I8, &[4], 3, false);
++    let zero = b.scalar(DType::Idx, 0);
++    let pre = {
++        let mut p = b.block("pre", vec![]);
++        let row = p.gather(embed, Ref::Input(0), 0, 0);
++        let top = p.topk(row, 0, 1);
++        let top = p.reshape_fixed(top, &[]);
++        let other = p.gather(embed, top, 0, 0);
++        let cond = p.compare(Ref::Input(0), zero, Cmp::Eq);
++        let chosen = p.select(cond, row, other, DType::I8);
++        let acc = p.add(Ref::State(fixed), chosen, DType::I32);
++        let bounded = p.clamp(acc, -128, 127, DType::I8);
++        p.state_write(fixed, bounded);
++        let rows = p.hist_append(hist, bounded);
++        let sum = p.reduce_sum(rows, 0, DType::I32);
++        let sum = p.reshape_fixed(sum, &[4]);
++        let carry = p.clamp(sum, -128, 127, DType::I8);
++        p.finish(&[carry])
++    };
++    let (post, logits) = {
++        let mut p = b.block("post", vec![TensorType::fixed(DType::I8, &[4])]);
++        let last = p.gather(logits_table, Ref::Input(0), 0, 0);
++        p.commit(last);
++        let Ref::Node(n) = last else { unreachable!() };
++        (p.finish(&[]), n)
++    };
++    let mut program = b.finish(pre, vec![], post, logits);
++    program.logits_scheme_id = misaka_palw_tir::program::LOGITS_I64_Q24_SCHEME_V2;
++    misaka_palw_tir::interval::analyze_ranges(&program).unwrap();
++    let mut map = MapParams::default();
++    map.tensors.insert((0, None), Tensor::new(DType::I8, vec![4, 4], run_wide_common::EMBEDDING.to_vec()).unwrap());
++    map.tensors.insert((1, None), Tensor::new(DType::I64, vec![4, 4], run_wide_common::logits_table(true)).unwrap());
++    let plan = TirPlan::compile(&program).unwrap();
++    let params = TirParams::from_map(&plan, &map).unwrap();
++    let source = TirParamsSourceV1(&params);
++    let inventory = TirHeldInventoryV1::build(&program, &source).unwrap();
++    let artifact = inventory.tree.root();
++    let committed = program.blocks.iter().flat_map(|b| &b.nodes).filter(|n| n.commit).count();
++    let class = PalwTirClassV1 {
++        version: 1,
++        program: program.encode(),
++        layout: PalwTirLayoutV1 {
++            version: 1,
++            max_context: 16,
++            checkpoint_interval: 2,
++            h_tile: 2,
++            commit_tiles: vec![4; committed],
++            state_tiles: vec![4; 2],
++        },
++        tokenizer_id: Hash64::from_u64_word(18),
++    };
++    run_wide_common::with_fixture(3, |old, _| {
++        let job = PalwJobContextV2 { shape_profile_id: class.class_id(&artifact), ..old.job.clone() };
++        let f = Fixture {
++            program: &program,
++            plan: &plan,
++            params: &params,
++            class,
++            artifact,
++            job,
++            nodes: vec![],
++            steps: vec![],
++            rows: vec![],
++        };
++        exercise(&f, false, false);
++    });
++}
++#[test]
++fn failed_capture_keeps_shared_spent_work_and_cannot_start_a_second_cpu_run() {
++    use std::io::Write;
++    run_wide_common::with_fixture(1, |f, _| {
++        let space = PalwTirStepSpaceV2::new(&f.class).unwrap();
++        let runner = TirClassRunnerWideQ24V2::new(&space, f.plan, f.params, f.job.shape_profile_id).unwrap();
++        let work = WidePanelWorkV2::new(bounds(), f.job.shape_profile_id, f.job.context_hash(), &disk_reserve()).unwrap();
++        let shared = work.clone();
++        let mut nonempty = tempfile::tempfile().unwrap();
++        nonempty.write_all(b"not an empty tape").unwrap();
++        let attempt = |file, work: &WidePanelWorkV2| {
++            capture_one_pass_v2(
++                CaptureExpectedV2 { class: &f.class, artifact: f.artifact, job: &f.job, space: &space, prompt: PROMPT },
++                &runner,
++                run_bounds(),
++                work,
++                file,
++                &reserve(),
++            )
++        };
++        let first = match attempt(nonempty, &work) {
++            Ok(_) => panic!("nonempty tape accepted"),
++            Err(e) => e,
++        };
++        assert!(first.contains("empty"));
++        let spent = shared.meter();
++        assert!(spent.hash_work > 0);
++        let second = match attempt(tempfile::tempfile().unwrap(), &shared) {
++            Ok(_) => panic!("failed attempt reset"),
++            Err(e) => e,
++        };
++        assert!(second.contains("already started"));
++        assert_eq!(shared.meter(), spent);
++    });
++}

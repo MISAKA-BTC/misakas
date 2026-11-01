@@ -27,17 +27,17 @@ pub mod positive_court_adapter;
 #[cfg(feature = "positive-panel")]
 pub mod positive_panel;
 #[cfg(feature = "positive-panel")]
-pub mod positive_typed_capture;
-#[cfg(feature = "positive-panel")]
 pub mod positive_typed_adapter;
+#[cfg(feature = "positive-panel")]
+pub mod positive_typed_capture;
 mod public_source;
 pub mod residency;
 pub mod run;
 pub mod run_wide_q24_v2;
-pub mod wide_capture_v2;
 pub mod shardrows;
 mod sparse_tree;
 pub mod tree;
+pub mod wide_capture_v2;
 
 pub use crate::cellstep::{CpuCellStepperV1, TirCellStepperV1, TirDeviceV1, buf_lanes_le_v1};
 pub use annex::{
@@ -89,3 +89,6 @@ pub use memory::{
     TirMemoryLeaseV1, TirMemoryReserverV1, TirRetainedJobLeaseV1, set_tir_memory_reserver_v1, tir_executor_storage_need_v1,
     tir_fold_hash_storage_need_v1, tir_full_tree_storage_need_v1, tir_retained_storage_need_v1,
 };
+
+/// Explicit wide local Panel material production; no native authority.
+pub mod positive_wide_material_v2;

@@ -188,6 +188,22 @@ impl TirSourceOnlyEvaluationV2 {
 }
 
 impl AuthenticatedTirSourceOnlyV2<'_> {
+    /// Artifact identity only: read an already authenticated parameter lane.
+    /// This does not evaluate a model or authenticate a Panel intermediate.
+    /// Local producer geometry may use it to resolve a dynamic address; Node
+    /// still independently recomputes the address and canonical read closure.
+    /// Sorted inventory coordinates authenticated by artifact commitments only.
+    pub fn authenticated_parameter_leaves(&self) -> impl Iterator<Item = u32> + '_ {
+        self.params.keys().copied()
+    }
+    pub fn authenticated_parameter_lane(&self, param: u16, layer: Option<u16>, index: usize) -> Option<i128> {
+        let d = self.verified.space().program().params.get(usize::from(param))?;
+        let byte = u64::try_from(index).ok()?.checked_mul(d.dtype.width() as u64)?;
+        let leaf = self.inventory.leaf_of(param, layer, byte)?;
+        let (start, bytes) = self.params.get(&leaf)?;
+        let first = usize::try_from(byte.checked_sub(u64::from(*start))?).ok()?;
+        Some(d.dtype.decode_le(bytes.get(first..first.checked_add(d.dtype.width())?)?))
+    }
     pub fn quote(&self) -> TirSourceOnlyQuoteV1 {
         self.quote
     }
