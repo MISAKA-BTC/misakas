@@ -675,6 +675,10 @@ fn child_connection(mode: &str) -> (ChildGuard, TcpStream) {
             Err(error) => panic!("toy IPC accept failed: {error}"),
         }
     };
+    // Darwin may preserve the listener's nonblocking flag on an accepted socket.
+    // The protocol uses blocking reads with finite timeouts, independent of the
+    // platform's accept flag inheritance.
+    stream.set_nonblocking(false).unwrap();
     stream.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
     stream.set_write_timeout(Some(Duration::from_secs(10))).unwrap();
     (guard, stream)
