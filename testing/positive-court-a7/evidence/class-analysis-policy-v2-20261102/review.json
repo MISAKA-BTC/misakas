@@ -1,0 +1,34 @@
+{
+  "schema": "misaka.a7.class-analysis-wrapper-policy-review.v2",
+  "utc": "2026-11-01T15:54:27.033610+00:00",
+  "scope": "NEXT_PREFIX_SOURCE_PROPOSAL_AND_PYTHON_MOCKS_ONLY",
+  "wrapper_path": "/tmp/positive-a0-class-analysis-run-policy-v2-20261102.py",
+  "wrapper_sha256": "c597f3cfe5cae8aaa76653310d5e55e2827866d4f7cf366d725772715dd8edcb",
+  "test_path": "/tmp/test_positive_a0_class_analysis_run_policy_v2_20261102.py",
+  "test_sha256": "5caa0e3fb1a140a5f01cd41de7772ca880754c7321855a760e455f8e25c7e8e4",
+  "independent_review": {
+    "reviewer": "adversarial_tests",
+    "result": "no remaining blocking finding",
+    "confirmed": [
+      "complete AND predicate includes stop/cancel/exit/reap/quiescence/report/identity",
+      "cancel priority and checks after poll/wait/context and before next spawn",
+      "final aggregate fixed three exact cases plus source/binary/HEAD stability",
+      "raw finalized only after reaped and no live/zombie; quiescent failures retained",
+      "error field cannot hide behind success status",
+      "import inert, explicit fresh output, original source/build/binary/cohort/policy pinned"
+    ]
+  },
+  "mock_tests": 16,
+  "mock_execution_exit_code": 0,
+  "existing_actual_outcomes_preserved": [
+    0,
+    2,
+    2
+  ],
+  "original_run_audit_commit": "9e6cb5d4d83643f6722e99f763715c3840b8dcdd",
+  "original_run_actual_false_completion_observed": false,
+  "original_source_and_raw_unchanged": true,
+  "no_models_rerun": true,
+  "no_cargo_or_target_model_access": true,
+  "execution_status": "NOT_EXECUTED_AS_A_MODEL_WRAPPER; current Root requires a new explicitly pinned plan"
+}
