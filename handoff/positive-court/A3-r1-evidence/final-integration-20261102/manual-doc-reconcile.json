@@ -1,0 +1,92 @@
+{
+  "schema": "a3-final-handoff-manual-reconcile-v1",
+  "utc": "2026-11-01T21:26:49.978270+00:00",
+  "status": "TMP_DOCUMENTATION_PROPOSAL_ONLY_CANONICAL_WRITES_HOLD",
+  "input_correspondence": {
+    "path": "/tmp/a3-final-root-source-correspondence-20261102.json",
+    "sha256": "8837947a2cf72b78b755cde43bbe8c664c55029c6a61996fc0ac60e07baf4150"
+  },
+  "pinned_refs": {
+    "A3": "87017a0041693fbf3429a887a26a69b2d777fbcb",
+    "Root_preparation_baseline": "a867e78e05f8fdfb6586c21c8ddbf64f76dd159b"
+  },
+  "scope": "Only the two differing shared A3-owned handoff paths. Immutable Git blob reads only; no worktree/index/checkout/commit/build/runtime or active Clippy log access.",
+  "items": [
+    {
+      "path": "handoff/positive-court/A3-bounded-artifact-header-results.md",
+      "original_versions": {
+        "A3": {
+          "ref": "87017a0041693fbf3429a887a26a69b2d777fbcb",
+          "git_blob": "b48c3297843140d70ff02b90c0c045fc2a03523d",
+          "sha256": "2d877f377de88487fc830cfcc27c532b77e6aa2fc93315c5c73b5b7fc702f1a0",
+          "bytes": 3176,
+          "text": "# A3 — bounded PALWTIR1 metadata validation\n\nExact source **`e934dcc09393f77e0c047ca93e292d1465bd7800`**, tree\n`2297fd0067ca4d8bc9c9c0e1a640a56611a681cd`, branch\n`codex/a3-wide-artifact-startup-v2`. New executable source is `e49e5628a`;\n`9df57dea8` clarifies logical program ownership versus a separate startup host\nreservation. Hello2 test correction `61d243bca` is the local alias of `c99125eb8`.\n\n**Five selected tests passed, zero failures** on the first frozen-source run.\nArtifact library strict Clippy passed with zero warnings. Documentation check:\n43 known missing references, zero new issues. The other 12 artifact tests were\nfiltered out, not counted as executed successes.\n\n| New metadata test scope | Passed |\n|---|---:|\n| Exact native/copy/operation backing and one below | 1 |\n| Hostile field/prefix lengths and truncated headers | 1 |\n| Empty table, valid original program borrow and changed-program refusal | 1 |\n| Handwritten nonempty table,11 table/extent attacks and canonical-decode negative | 1 |\n| Existing layout words retained without generic nested decoding | 1 |\n\n[Commands, source/file hashes, before/after binary information and raw logs](A3-r1-evidence/bounded-artifact-header-e934dcc09/validation.json)\npin this run. The single actual test binary is SHA256\n`a9260624f2490d071c997da4f035b5f518f632dc8bff4d4291e3cf09f1ade94f`.\nThe existing A3 target was reused with jobs1/debug0/incremental0, unset\n`RUST_MIN_STACK`, offline/locked dependencies and no new cache or cleanup.\nThis artifact leaf package has no Core/RocksDB dependency and triggered no C++\nbuild. The existing static archive was supplied/recorded for build policy;\nrecording it does not mean this binary links it. Source and archive hashes were\nstable across checks. A runner directory-label error was corrected after the\nrun by renaming its enclosing evidence directory; raw log bytes are unchanged.\n\nThe original helper fixtures' invalid history bound/empty pre and module doc\nplacement were corrected during source review before this frozen run. No hidden\npreflight failure is counted as success. Root's earlier Hello2 failure and\ncorrected integration batch remain separate records, with separate source and\ncounts. Neither the previous 18/49 nor Root's 30 is added to these five.\n\nThe parser uses the existing PALWTIR1 field order, borrowed existing layout\nwords and literal values. It checks nested native allocations before reserve,\nthen binds table/program bytes against a caller-owned, independently canonical\nprogram without another generic decode. Existing default loaders and formats\nare unchanged. [The contract and remaining owner dependencies](A3-bounded-artifact-header-v1.md)\nspecify the separate caller/source reservations.\n\nThis is metadata/data binding only. Tensor loading, whole-startup plan/params\nadmission, streamed artifact-root authentication, source mutation checks,\nbounded V2-space construction and generic process/SDK/native integration remain\nrequired. The separate child-process patch is still a draft. These five tests\ndo not establish a trained-model startup, RSS bound, native role, Court result,\nGate C, SecurityCertified or computation credit.\n"
+        },
+        "Root": {
+          "ref": "a867e78e05f8fdfb6586c21c8ddbf64f76dd159b",
+          "git_blob": "ab2d5b295b8ff706d1bcb0f7560b5c42266d35c5",
+          "sha256": "c18dd5e04b075fe09b02251133baee759c2b170eb2fe3bd94603c6273aacde29",
+          "bytes": 3173,
+          "text": "# A3 — bounded PALWTIR1 metadata validation\n\nExact source **`e934dcc09393f77e0c047ca93e292d1465bd7800`**, tree\n`2297fd0067ca4d8bc9c9c0e1a640a56611a681cd`, branch\n`codex/a3-wide-artifact-startup-v2`. New executable source is `e49e5628a`;\n`9df57dea8` clarifies logical program ownership versus a separate startup host\nreservation. Hello2 test correction `61d243bca` is the local alias of `c99125eb8`.\n\n**Five selected tests passed, zero failures** on the first frozen-source run.\nArtifact library strict Clippy passed with zero warnings. Documentation check:\n43 known missing references, zero new issues. The other12 artifact tests were\nfiltered out, not counted as executed successes.\n\n| New metadata test scope | Passed |\n|---|---:|\n| Exact native/copy/operation backing and one below | 1 |\n| Hostile field/prefix lengths and truncated headers | 1 |\n| Empty table, valid original program borrow and changed-program refusal | 1 |\n| Handwritten nonempty table,11 table/extent attacks and canonical-decode negative | 1 |\n| Existing layout words retained without generic nested decoding | 1 |\n\n[Commands, source/file hashes, before/after binary information and raw logs](A3-r1-evidence/bounded-artifact-header-e934dcc09/validation.json)\npin this run. The single actual test binary is SHA256\n`a9260624f2490d071c997da4f035b5f518f632dc8bff4d4291e3cf09f1ade94f`.\nThe existing A3 target was reused with jobs1/debug0/incremental0, unset\n`RUST_MIN_STACK`, offline/locked dependencies and no new cache or cleanup.\nThis artifact leaf package has no Core/RocksDB dependency and triggered no C++\nbuild. The existing static archive was supplied/recorded for build policy;\nrecording it does not mean this binary links it. Source and archive hashes were\nstable across checks. A runner directory-label error was corrected after the\nrun by renaming its enclosing evidence directory; raw log bytes are unchanged.\n\nThe original helper fixtures' invalid history bound/empty pre and module doc\nplacement were corrected during source review before this frozen run. No hidden\npreflight failure is counted as success. Root's earlier Hello2 failure and\ncorrected integration batch remain separate records, with separate source and\ncounts. Neither the previous18/49 nor Root's30 is added to these five.\n\nThe parser uses the existing PALWTIR1 field order, borrowed existing layout\nwords and literal values. It checks nested native allocations before reserve,\nthen binds table/program bytes against a caller-owned, independently canonical\nprogram without another generic decode. Existing default loaders and formats\nare unchanged. [The contract and remaining owner dependencies](A3-bounded-artifact-header-v1.md)\nspecify the separate caller/source reservations.\n\nThis is metadata/data binding only. Tensor loading, whole-startup plan/params\nadmission, streamed artifact-root authentication, source mutation checks,\nbounded V2-space construction and generic process/SDK/native integration remain\nrequired. The separate child-process patch is still a draft. These five tests\ndo not establish a trained-model startup, RSS bound, native role, Court result,\nGate C, SecurityCertified or computation credit.\n"
+        }
+      },
+      "correspondence_original_blob_ids_verified": true,
+      "exact_Root_to_A3_diff": "--- Root/handoff/positive-court/A3-bounded-artifact-header-results.md\n+++ A3/handoff/positive-court/A3-bounded-artifact-header-results.md\n@@ -8,7 +8,7 @@\n \n **Five selected tests passed, zero failures** on the first frozen-source run.\n Artifact library strict Clippy passed with zero warnings. Documentation check:\n-43 known missing references, zero new issues. The other12 artifact tests were\n+43 known missing references, zero new issues. The other 12 artifact tests were\n filtered out, not counted as executed successes.\n \n | New metadata test scope | Passed |\n@@ -34,7 +34,7 @@\n placement were corrected during source review before this frozen run. No hidden\n preflight failure is counted as success. Root's earlier Hello2 failure and\n corrected integration batch remain separate records, with separate source and\n-counts. Neither the previous18/49 nor Root's30 is added to these five.\n+counts. Neither the previous 18/49 nor Root's 30 is added to these five.\n \n The parser uses the existing PALWTIR1 field order, borrowed existing layout\n words and literal values. It checks nested native allocations before reserve,\n",
+      "recommended_action": "RETAIN_ROOT_UNCHANGED; no substantive bounded-header/source evidence facts are missing. Do not overwrite Root with older A3 whole file.",
+      "finding": "Only three inserted ASCII spaces differ: other12→other 12, previous18/49→previous 18/49, Root's30→Root's 30. Exact source/tree, five-test count, binary hash, evidence link, filtered count, source-only boundaries and historical draft statement are already identical. Neither version is substantively newer for this path.",
+      "required_add_only_text": "",
+      "optional_historical_scope_append_only_text": "\nHistorical scope clarification: the results, draft status and remaining-work statements above describe frozen source `e934dcc09393f77e0c047ca93e292d1465bd7800` and its five selected metadata tests. Later source-owner, startup, process or Panel evidence must retain its own source reference, commands and counts; it does not retroactively change this run or turn an earlier source-only/UNRUN record into an executed result.\n",
+      "optional_append_condition": "Only if maintainers want an explicit historical qualifier during final handoff synchronization. This paragraph adds no later runtime success claim and does not remove or rewrite the original draft/remaining-work statements.",
+      "evidence_preservation": [
+        "Retain existing validation.json link and actual test-binary SHA256 unchanged.",
+        "Keep five selected passed / twelve filtered scope; do not aggregate previous18/49 or Root30.",
+        "No new test/build/runtime assertion follows from this documentation comparison."
+      ]
+    },
+    {
+      "path": "handoff/positive-court/A3-r1-evidence/.gitattributes",
+      "original_versions": {
+        "A3": {
+          "ref": "87017a0041693fbf3429a887a26a69b2d777fbcb",
+          "git_blob": "d2ffa89d3269b60efc227fac800968db8b385d3d",
+          "sha256": "26c9e6fa1a6ab11c9baf0292fe8e9e744b8a21fa136e61995231b5e57a7626d7",
+          "bytes": 177,
+          "text": "# Preserve raw Cargo output, including its trailing blank line.\n*.log -whitespace\n\n# Preserve exact raw patch context (blank context lines carry one space).\n*.patch -whitespace\n"
+        },
+        "Root": {
+          "ref": "a867e78e05f8fdfb6586c21c8ddbf64f76dd159b",
+          "git_blob": "e93735be950250ea762ecbe450449884aedcba01",
+          "sha256": "52df1e59ac6db61b2ce1af8ee6d6b38a1be6898542be758e2c60a5bda029bd4d",
+          "bytes": 82,
+          "text": "# Preserve raw Cargo output, including its trailing blank line.\n*.log -whitespace\n"
+        }
+      },
+      "correspondence_original_blob_ids_verified": true,
+      "exact_Root_to_A3_diff": "--- Root/handoff/positive-court/A3-r1-evidence/.gitattributes\n+++ A3/handoff/positive-court/A3-r1-evidence/.gitattributes\n@@ -1,2 +1,5 @@\n # Preserve raw Cargo output, including its trailing blank line.\n *.log -whitespace\n+\n+# Preserve exact raw patch context (blank context lines carry one space).\n+*.patch -whitespace\n",
+      "recommended_action": "APPEND_ONLY after eventual final Root ref/blob recheck; retain existing *.log line and comment byte-for-byte.",
+      "required_add_only_text": "\n# Preserve exact raw patch context (blank context lines carry one space).\n*.patch -whitespace\n",
+      "expected_result_git_blob": "d2ffa89d3269b60efc227fac800968db8b385d3d",
+      "expected_result_sha256": "26c9e6fa1a6ab11c9baf0292fe8e9e744b8a21fa136e61995231b5e57a7626d7",
+      "expected_result_equals_A3_blob": true,
+      "effect": "Adds patch-specific whitespace-check suppression for historical raw patch context. It does not modify stored patch bytes, normalize line endings, or change the existing log rule. This is not a global whitespace-policy change.",
+      "guard": "If final Root already contains this exact patch rule, retain Root with no duplicate addition. If Root has new attributes/comments, append the absent rule manually and preserve all Root contributions; do not replace the whole file."
+    }
+  ],
+  "manual_application_order": [
+    "Recheck both paths at the eventual final Root reference before any future authorized synchronization. a867 is a preparation baseline, not assumed to be the final release ref.",
+    "Retain bounded-artifact-header-results.md because all evidence facts already coincide; optionally append the explicit historical qualifier, without editing old UNRUN/source-only/draft statements.",
+    "Append only the absent *.patch -whitespace stanza to Root .gitattributes; preserve existing Root content.",
+    "Do not use either entire A3 file as a blanket overlay, and do not infer runtime success from this comparison."
+  ],
+  "actions_performed": {
+    "immutable_git_blob_read": true,
+    "tmp_report_write": true,
+    "worktree_write": false,
+    "index_write": false,
+    "checkout": false,
+    "commit": false,
+    "cargo_or_rustc": false,
+    "runtime": false,
+    "active_clippy_log_read": false
+  }
+}

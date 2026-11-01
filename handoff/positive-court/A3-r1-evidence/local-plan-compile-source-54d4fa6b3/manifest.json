@@ -1,0 +1,61 @@
+{
+  "status": "SOURCE_ONLY_THREE_TESTS_UNRUN_NO_CARGO",
+  "source_commit": "54d4fa6b3b964cbbe092ab0aa032811678905b3d",
+  "source_tree": "8d02e1c20486b05aa0d8b9628d76ca049b162434",
+  "base_commit": "4879e2652bb24ffc20d5e9dcd67c4d85129796bf",
+  "dependencies": [
+    "Core Source-local74bd239321771f47cd2a6eabdb338c63649292ba",
+    "Core publicVec9c010109dc56f51808c51dded67c4b93df10fa2c"
+  ],
+  "files_sha256": {
+    "handoff/positive-court/A3-local-plan-compile-v2.md": "7c58d02a0485537be8114d09581902d244f64c23b6d664f2abd361b4c9c1de09",
+    "misaka/palw/tir/exec/src/plan.rs": "93c06c06687d7d1d45647e9bb017deeafe97265f4586e07a5f4663aa8e8d02e5",
+    "misaka/palw/tir/exec/src/plan/compile_quote_v2.rs": "ffcc94accad4233779890d4bf26401d1d5403a683c0f1c32b775013b3daf221b"
+  },
+  "draft_inputs": [
+    {
+      "original": "/tmp/a3-startup-plan-quote.patch",
+      "copy": "a3-startup-plan-quote.patch",
+      "sha256": "54fb5bb408a8f718a2ca1a7153f1cdf10dbdb24422f91dcdf35d1bd855c08ea9"
+    },
+    {
+      "original": "/tmp/a3-startup-plan-quote.notes.md",
+      "copy": "a3-startup-plan-quote.notes.md",
+      "sha256": "e8efd84dfdf150acd25361c530fa6d6cbcb478ac5ddd3084568a226efefc7bc5"
+    }
+  ],
+  "applied_change": "project rustfmt formatting only; original compiler body byte unchanged, declaration added after imports",
+  "reviews": [
+    {
+      "reviewer": "main independent of author",
+      "scope": "entire quote/prepared/opaqueowner, actual compile/tiers/ranges/elem and all3tests",
+      "result": "no concrete blocker; header ambiguity/testplacement corrected before freeze"
+    },
+    {
+      "reviewer": "startup_quote_review independent",
+      "source_reviewed_sha256": "b634e488b8837c865f1413a709dffdba9381102662467077b75f17343e6ce357",
+      "scope": "all producer allocations/provenance and official Rust1.93 carried BTreeSet Vec+small sort",
+      "result": "no actionable blocker within logical request/partialwork scope; local1.98rustsrc not mistaken for pinned1.93"
+    }
+  ],
+  "official_std_sources": [
+    "https://github.com/rust-lang/rust/blob/1.93.0/library/alloc/src/collections/btree/set.rs#L1410",
+    "https://github.com/rust-lang/rust/blob/1.93.0/library/core/src/slice/sort/stable/mod.rs#L70"
+  ],
+  "new_tests_unrun": 3,
+  "not_claimed": [
+    "typecheck/runtime/Clippy",
+    "hostreservation fabrication",
+    "allNF/compilerCPU/RSS/OOMrecovery",
+    "modelarithmetic/qualification/nativeactivation/credit",
+    "wholeLoaded/startup/process registration"
+  ],
+  "created_utc": "2026-11-01T15:55:44.411107+00:00",
+  "docs": {
+    "exit_code": 0,
+    "known_issue_occurrences": 43,
+    "new_issue_occurrences": 0,
+    "log": "docs.log",
+    "sha256": "2371f24aef8cd2c9bb7b594fa643dadb096be69cb1009a54873644720e5bb793"
+  }
+}
