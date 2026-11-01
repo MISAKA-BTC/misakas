@@ -228,17 +228,19 @@ impl Params {
     /// bytes that do not decode, as on an older build. Written here and nowhere else; `None` where the
     /// fence is not armed (or is `never()`). Call it wherever the fence is set on an assembled
     /// ruleset; [`Self::validate_palw_tir_v1`] refuses a ruleset whose copy disagrees.
+    /// Court2 additionally mirrors the complete selected fence for registration;
+    /// court1 preserves its old height-only representation.
     pub fn sync_palw_tir_v1(&mut self) {
-        let from_daa = self.palw_tir_v1.filter(|f| f.activation != ForkActivation::never()).map(|f| f.activation.daa_score());
+        let selected = self.palw_tir_v1.filter(|f| f.activation != ForkActivation::never());
         if let PalwConsensusMode::ConsensusV2(bundle) = &mut self.palw_consensus_mode {
-            bundle.state = bundle.state.clone().with_tir_from_daa(from_daa);
+            bundle.state = bundle.state.clone().with_tir_registration_fence(selected);
         }
     }
 
     /// **The IR fence's own refusals**, asked by [`Params::validate_palw_v2`] before a peer is dialed:
     ///
-    /// * a value naming another build's `prim_set_id` or court version — a build adjudicates only
-    ///   its own primitive set;
+    /// * a value naming another build's `prim_set_id` or an unsupported court
+    ///   version (only legacy1 and the adopted explicit wide2 are supported);
     /// * ceilings wider than the format allows;
     /// * arming on a ruleset that is not `ConsensusV2`, or that has not declared
     ///   `palw_audit_2026_09_11` — the IR's registration object is APPENDED to the lifecycle
@@ -248,7 +250,9 @@ impl Params {
     ///   history dissections, which that court plays;
     /// * arming without `palw_rcore_plus` in force at or below it — an IR claim's data-availability
     ///   answers ride `MaterialDisclosedV2`, which exists only there;
-    /// * a V2 bundle whose mirror of the height (`PalwStateParamsV2::tir_from_daa`) is not the fence's.
+    /// * a V2 bundle whose height mirror or full court2 registration mirror
+    ///   differs from the selected fence. Runtime mirrors are reconstructed by
+    ///   sync from trusted top-level Params after any codec restore.
     ///
     /// A `Some(never())` value is dormant and passes (it collapses out of the identity).
     pub fn validate_palw_tir_v1(&self) -> Result<(), PalwModeV2Error> {
@@ -263,6 +267,14 @@ impl Params {
                  assembled",
             ));
         }
+        let wide_mirror = match &self.palw_consensus_mode {
+            PalwConsensusMode::ConsensusV2(bundle) => bundle.state.tir_wide_registration_fence(),
+            _ => None,
+        };
+        let expected_wide = self.palw_tir_v1.filter(|f| f.activation != ForkActivation::never() && f.court_version == 2);
+        if wide_mirror != expected_wide {
+            return Err(PalwModeV2Error::Invalid("palw_tir_v1 disagrees with the complete wide registration fence mirror"));
+        }
         let Some(fence) = self.palw_tir_v1 else { return Ok(()) };
         if fence.activation == ForkActivation::never() {
             return Ok(());
@@ -272,7 +284,7 @@ impl Params {
                 "palw_tir_v1 names a primitive set this build does not adjudicate (prim_set_id is not this build's)",
             ));
         }
-        if fence.court_version != PALW_TIR_COURT_VERSION_V1 {
+        if !matches!(fence.court_version, PALW_TIR_COURT_VERSION_V1 | 2) {
             return Err(PalwModeV2Error::Invalid("palw_tir_v1 names an IR court version this build does not implement"));
         }
         fence.ceilings.within_format_caps().map_err(PalwModeV2Error::Invalid)?;

@@ -1841,6 +1841,11 @@ pub struct PalwStateParamsV2 {
     /// `floor_refusal_retry_from_daa`'s reason, and `validate_palw_v2` refuses a copy that disagrees.
     #[borsh(skip)]
     tir_from_daa: Option<u64>,
+    /// Full chain-selected court2 registration fence, runtime-only. The Params
+    /// fence already fingerprints every field; this mirror changes no wire bytes.
+    /// Legacy court1/height-only fixtures cannot authorize wide registration.
+    #[borsh(skip)]
+    tir_wide_registration_fence: Option<crate::palw_tir_v1::PalwTirFenceV1>,
     /// **RFC-0003: `Params::palw_gen_v1`'s height**, mirrored by `Params::sync_palw_gen_v1` because
     /// the fold that admits a generative registration holds only these params: below the fence the
     /// fold refuses one by name, as the second lock behind the acceptance walk's drop. `None` on every
@@ -22074,6 +22079,13 @@ fn attach_riders_v1(
     if remainder < e_r {
         return refuse("the lead's remainder is below a rider's share");
     }
+    // Legacy rider generation has no wide source/court adapter. Refuse the
+    // whole batch before changing the lead's escrow, exposure or budget.
+    for class_id in std::iter::once(&lead.class_id).chain(riders.iter().map(|r| &r.attempt.class_id)) {
+        if let Some(record) = builder.state.tir_class_v1(class_id) {
+            crate::palw_tir_row_profile_v2::reject_known_wide_tir_row_v1(record).map_err(PalwStateV2Error::TirFence2Refused)?;
+        }
+    }
     // The lead gives its shares up FIRST (the commitment it held is released and re-reserved at what it keeps), so the riders meet the
     // ceilings with the room the split freed.
     let mut kept = lead.clone();
@@ -22216,6 +22228,11 @@ fn apply_attempt(
     let class = builder.state.classes.get(&attempt.class_id).ok_or(PalwStateV2Error::MissingClass(attempt.class_id))?;
     if let PalwClassStatusV2::Frozen { .. } = class.status {
         return Err(PalwStateV2Error::FrozenClass(attempt.class_id));
+    }
+    // This legacy claim path has no wide reader/court adapter. It must refuse
+    // before any claim/reservation write, independently of audit-mesh arming.
+    if let Some(record) = builder.state.tir_class_v1(&attempt.class_id) {
+        crate::palw_tir_row_profile_v2::reject_known_wide_tir_row_v1(record).map_err(PalwStateV2Error::TirFence2Refused)?;
     }
     // ADR-0135: a class the registry does not admit (REGISTERED, PREFETCHING, HELD) takes no new
     // claim, and one at its inflight cap takes none until a claim leaves flight.

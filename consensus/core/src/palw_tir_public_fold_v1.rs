@@ -150,6 +150,9 @@ fn palw_funded_original_candidate_inner_v1(
     let Some(record) = state.tir_class_v1(&fp.commitment.job.class_id) else {
         return Invalid("registered original TIR class absent");
     };
+    if let Err(why) = crate::palw_tir_row_profile_v2::reject_known_wide_tir_row_v1(record) {
+        return Missing(why);
+    }
     let Some(layout) = crate::palw_staged_court_state_v1::palw_staged_tir_layout_v1(state, record.facts.class_id) else {
         return Invalid("registered original TIR layout absent");
     };
@@ -223,6 +226,7 @@ fn source(
     frame: &Frame,
 ) -> Result<crate::palw_tir_public_source_v1::PalwTirPublicSourceV1, PalwStateV2Error> {
     let record = b.state.tir_class_v1(&frame.original_v1().job.class_id).ok_or_else(|| refused("TIR original class is absent"))?;
+    crate::palw_tir_row_profile_v2::reject_known_wide_tir_row_v1(record).map_err(refused)?;
     let layout = crate::palw_staged_court_state_v1::palw_staged_tir_layout_v1(&b.state, record.facts.class_id)
         .ok_or_else(|| refused("TIR original registered layout is absent"))?;
     frame.source_v1(record, layout, frame.descriptor_v1().maximum_leaves).map_err(refused)
@@ -420,9 +424,8 @@ fn original_plan_v1(
         return Err(refused("TIR original allocation cannot be attached to an existing claim"));
     }
     // G14 audit §11 (d): a frame's custodians are the flat Panel's credited seats and the producer (no typed licence reaches it).
-    if b.state.tir_class_v1(&original.job.class_id).is_none() {
-        return Err(refused("TIR original class is not registered"));
-    }
+    let record = b.state.tir_class_v1(&original.job.class_id).ok_or_else(|| refused("TIR original class is not registered"))?;
+    crate::palw_tir_row_profile_v2::reject_known_wide_tir_row_v1(record).map_err(refused)?;
     let upper = crate::palw_tir_frame_cost_v1::palw_tir_frame_custodian_upper_v1(now_daa, b.params, b.extras)?;
     if native.maximum_custodians != upper {
         return Err(refused("TIR original quote does not use the actual native custodian upper"));
@@ -436,7 +439,6 @@ fn original_plan_v1(
         job_identity: crate::palw_fp_execution_v3::palw_fp_job_pin_v1(original),
         accepted_daa: now_daa,
     };
-    let record = b.state.tir_class_v1(&geometry.class_id).ok_or_else(|| refused("TIR original class is not registered"))?;
     let layout = crate::palw_staged_court_state_v1::palw_staged_tir_layout_v1(&b.state, geometry.class_id)
         .ok_or_else(|| refused("TIR original layout is not registered"))?;
     let semantics = b.state.class_semantics.get(&geometry.class_id);

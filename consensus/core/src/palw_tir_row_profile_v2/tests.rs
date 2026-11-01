@@ -80,6 +80,7 @@ fn narrow_row_bytes_identity_and_profile_metadata_stay_unchanged() {
             let (legacy, _) = palw_tir_class_record_v1(&class, &artifact).unwrap();
             let row = build(&class, artifact);
             assert_eq!(row, legacy);
+            assert!(reject_known_wide_tir_row_v1(&row).is_ok());
             let bytes = borsh::to_vec(&row).unwrap();
             let rooted = row.rooted_bytes_v1();
             let view = resolve(&row, artifact);
@@ -119,6 +120,36 @@ fn wide_4097_vocab_dispatches_two_tiles_without_redefining_old_tiled_bit() {
     assert_eq!(view.class_id(), class.class_id(&artifact));
     assert_eq!(borsh::to_vec(&stored).unwrap(), raw);
     assert!(palw_tir_class_record_v1(&class, &artifact).is_err());
+}
+
+#[test]
+fn legacy_reader_guard_denies_wide_4097_without_reinterpreting_the_old_fact_bit() {
+    let (class, artifact) = fixture(TirTraceProfileV2::TiledI64Q24, false, 4097);
+    let mut row = build(&class, artifact);
+    let bytes = borsh::to_vec(&row).unwrap();
+    assert!(!row.facts.tiled);
+    assert_eq!(row.logits_tiles(), 1);
+    assert!(reject_known_wide_tir_row_v1(&row).is_err());
+    assert!(crate::palw_tir_fp_lane_v1::palw_tir_fp_class_v1(&row, &class.layout).unwrap_err().contains("wide Q24"));
+    assert!(crate::palw_tir_fp_lane_v1::palw_tir_fp_lane_covered_v1(&row, std::iter::empty()).unwrap_err().contains("wide Q24"));
+    assert_eq!(borsh::to_vec(&row).unwrap(), bytes);
+    assert_eq!(resolve(&row, artifact).logits_tiles(), 2);
+    // A raw facts hint cannot bypass the guard on the original program bytes.
+    row.facts.tiled = true;
+    assert!(reject_known_wide_tir_row_v1(&row).is_err());
+}
+
+#[test]
+fn legacy_reader_guard_does_not_authenticate_empty_unknown_or_synthetic_rows() {
+    let (class, artifact) = fixture(TirTraceProfileV2::TiledI32, false, 8);
+    let mut row = build(&class, artifact);
+    for bytes in [Vec::new(), vec![0; 63], vec![0x88; 64], vec![0xff; 128]] {
+        row.program = Arc::new(bytes);
+        // The existing consumer still has to validate these bytes. This guard
+        // promises only that the known wide footer cannot reach its fallback.
+        assert!(reject_known_wide_tir_row_v1(&row).is_ok());
+        assert!(row.check_program_v1().is_err());
+    }
 }
 
 #[test]
@@ -296,6 +327,7 @@ fn legacy_i8_i16_and_idx_outputs_keep_old_factory_bytes_and_four_byte_wire_lanes
             let bytes = borsh::to_vec(&legacy).unwrap();
             let rooted = legacy.rooted_bytes_v1();
             let view = resolve(&legacy, artifact);
+            assert!(reject_known_wide_tir_row_v1(&legacy).is_ok());
             assert_eq!(view.class_id(), class.class_id(&artifact));
             assert_eq!(view.profile(), row_profile(profile));
             assert_eq!(view.logits_dtype(), dtype);
