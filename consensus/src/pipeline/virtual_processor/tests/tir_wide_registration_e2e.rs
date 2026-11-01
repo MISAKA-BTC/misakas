@@ -53,28 +53,6 @@ fn config(version: u16) -> (Config, PalwConsensusParamsV2, Premine, Premine) {
     (config.clone(), bundle.clone(), premine, floats)
 }
 
-/// The existing validator recognizes this private isolated genesis and exempts
-/// only its kernel-route record pin. Full Params validation still runs; this
-/// is not evidence for the public T12 genesis/DAA18400 arming records.
-fn isolated_origin_config() -> (Config, PalwConsensusParamsV2, Premine, Premine) {
-    let (base, _, premine, floats) = config(2);
-    let mut params = base.params.clone();
-    params.genesis = kaspa_consensus_core::palw_g14_gates_v1::palw_isolated_g14_genesis_v1(
-        &params.genesis,
-        Hash64::from_u64_word(0x5749_4445_4f52_4947),
-    )
-    .unwrap();
-    params.palw_probabilistic_constraints_v1 = Some(ForkActivation::new(0));
-    params.palw_class_registration_origin_v1 = Some(ForkActivation::new(0));
-    params.sync_palw_class_registration_origin_v1();
-    assert!(params.has_isolated_g14_genesis_v1());
-    assert_ne!(params.genesis.hash, kaspa_consensus_core::config::genesis::PALW_T12_GENESIS.hash);
-    params.validate_palw_v2().expect("documented isolated Params, with all validation enabled");
-    let config = ConfigBuilder::new(params).skip_proof_of_work().build();
-    let PalwConsensusMode::ConsensusV2(bundle) = &config.params.palw_consensus_mode else { unreachable!() };
-    (config.clone(), bundle.clone(), premine, floats)
-}
-
 struct Source(MapParams);
 impl PalwTirTensorSourceV1 for Source {
     fn tensor_bytes(&self, param: u16, layer: Option<u16>) -> Option<Cow<'_, [u8]>> {
@@ -439,7 +417,7 @@ async fn wide_registration_one_per_block_cap_preserves_both_real_carrier_utxo_ac
 // These test-only stages return before the next stage starts. In particular,
 // the t12 builder is never below the court/isolated Params clone/build frames.
 // Keep Config/bundle on the heap between stages; this does not enlarge libtest's
-// stack, weaken validation, or change either legacy by-value config factory.
+// stack, weaken validation, or change the remaining by-value config factory.
 struct IsolatedWideCarrierOriginSetup {
     config: Box<Config>,
     bundle: Box<PalwConsensusParamsV2>,
@@ -502,22 +480,54 @@ fn isolated_wide_carrier_origin_boxed_setup() -> Box<IsolatedWideCarrierOriginSe
     isolated_wide_carrier_origin_isolated_setup(setup)
 }
 
+// Retain the original notification receiver AND DB lifetime through the full
+// verification/restore. Field order drops chain/DB references before lifetime.
+struct IsolatedWideCarrierOriginPrepared {
+    chain: Box<T12Chain>,
+    setup: Box<IsolatedWideCarrierOriginSetup>,
+    _rx: async_channel::Receiver<kaspa_consensus_notify::notification::Notification>,
+    db: std::sync::Arc<kaspa_database::prelude::DB>,
+    _lifetime: kaspa_database::utils::DbLifetime,
+}
+
+// Called while only the SMALL outer future is active. The large verification
+// continuation is not even constructed until this synchronous helper returns.
+#[inline(never)]
+fn isolated_wide_carrier_origin_prepare(setup: Box<IsolatedWideCarrierOriginSetup>) -> Box<IsolatedWideCarrierOriginPrepared> {
+    use kaspa_database::{create_temp_db, prelude::ConnBuilder};
+    let (_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+    let (sender, _rx) = async_channel::unbounded();
+    let consensus = TestConsensus::with_db(db.clone(), &setup.config, sender);
+    let chain = Box::new(t12_genesis_chain_on(consensus, &setup.config, &setup.bundle, &setup.premine, &setup.floats));
+    Box::new(IsolatedWideCarrierOriginPrepared { chain, setup, _rx, db, _lifetime })
+}
+
 #[inline(never)]
 fn isolated_wide_carrier_origin_boxed_case(
     setup: Box<IsolatedWideCarrierOriginSetup>,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()>>> {
     Box::pin(async move {
+        let prepared = isolated_wide_carrier_origin_prepare(setup);
+        let mut verification = isolated_wide_carrier_origin_boxed_verification(prepared);
+        verification.as_mut().await;
+    })
+}
+
+#[inline(never)]
+fn isolated_wide_carrier_origin_boxed_verification(
+    prepared: Box<IsolatedWideCarrierOriginPrepared>,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()>>> {
+    Box::pin(async move {
         use kaspa_consensus_core::palw_class_registration_origin_v1::{
             PalwClassRegistrationDoorV1, palw_class_admission_digest_v1, palw_class_registration_origin_row_v1,
         };
-        use kaspa_database::{create_temp_db, prelude::ConnBuilder};
+        // Bind lifetime first, so reverse local drop order keeps it alive until
+        // chain/restore/db/receiver owners have been released, as in the old case.
+        let IsolatedWideCarrierOriginPrepared { _lifetime, db, _rx, setup, chain } = *prepared;
         let IsolatedWideCarrierOriginSetup { config, bundle, premine, floats } = *setup;
-        // Setup construction is complete before this continuation is polled.
         let config = *config;
         let bundle = *bundle;
-        let (_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
-        let (sender, _rx) = async_channel::unbounded();
-        let chain = t12_genesis_chain_on(TestConsensus::with_db(db.clone(), &config, sender), &config, &bundle, &premine, &floats);
+        let chain = *chain;
         let mined = registered(Env { chain, config: config.clone(), bundle: bundle.clone(), premine, floats }).await;
         let class_id = id(&mined.object);
         let (sink, state) = mined.env.chain.tip_state();

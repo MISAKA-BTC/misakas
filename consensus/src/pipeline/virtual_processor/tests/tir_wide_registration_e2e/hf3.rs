@@ -165,6 +165,43 @@ async fn heartbeat(report: &mut Report, name: &'static str, env: &mut Env, txs: 
     report.finish_stage(name, at, result)
 }
 
+struct RegistrationInputs {
+    // Drop native owners before the database and retained artifact metadata if
+    // this payload is dropped before its continuation is polled.
+    env: Box<Env>,
+    db: Arc<crate::model::stores::DB>,
+    artifact: (u64, String),
+    entry: misaka_palw_sdk::lineage::PalwTirClassEntryV1,
+    inventory: (u64, String),
+    fixture: Value,
+    pin: Value,
+}
+
+#[inline(never)]
+fn native_genesis_boxed(
+    setup: Box<IsolatedWideCarrierOriginSetup>,
+    db: &Arc<crate::model::stores::DB>,
+) -> Result<Box<Env>, String> {
+    let IsolatedWideCarrierOriginSetup { config, bundle, premine, floats } = *setup;
+    let config = *config;
+    let bundle = *bundle;
+    let (sender, _rx) = async_channel::unbounded();
+    let consensus = TestConsensus::with_db(db.clone(), &config, sender);
+    let chain = t12_genesis_chain_on(consensus, &config, &bundle, &premine, &floats);
+    let env = Box::new(Env { chain, config, bundle, premine, floats });
+    let (_, state) = env.chain.tip_state();
+    require(
+        matches!(state.bond(&env.chain.bonds[CARD]).ok_or("genesis registrant bond missing")?.status, PalwBondStatusV2::Active),
+        "genesis registrant bond is not Active",
+    )?;
+    Ok(env)
+}
+
+#[inline(never)]
+fn boxed_execute<'a>(report: &'a mut Report) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), Failure>> + 'a>> {
+    Box::pin(execute(report))
+}
+
 async fn execute(report: &mut Report) -> Result<(), Failure> {
     let slug = report.slug;
     let pin = report.stage("cohort_pins", || {
@@ -249,28 +286,41 @@ async fn execute(report: &mut Report) -> Result<(), Failure> {
         "max_context":entry.class.layout.max_context,"checkpoint_interval":entry.class.layout.checkpoint_interval,
         "h_tile":entry.class.layout.h_tile}),
     );
-    let (config, bundle, premine, floats) = report.stage("private_same_court2_params", || Ok(isolated_origin_config()))?;
+    let setup = report.stage("private_same_court2_params", || Ok(isolated_wide_carrier_origin_boxed_setup()))?;
     report.facts.insert(
         "chain_identity".into(),
-        json!({"genesis":config.params.genesis.hash.to_string(),
-        "params_id":config.params.consensus_params_id().to_string(),"schedule_id":config.params.consensus_schedule_id().to_string(),
-        "court_version":config.params.palw_tir_v1.unwrap().court_version,"isolated_record_exemption":true}),
+        json!({"genesis":setup.config.params.genesis.hash.to_string(),
+        "params_id":setup.config.params.consensus_params_id().to_string(),"schedule_id":setup.config.params.consensus_schedule_id().to_string(),
+        "court_version":setup.config.params.palw_tir_v1.unwrap().court_version,"isolated_record_exemption":true}),
     );
     use kaspa_database::{create_temp_db, prelude::ConnBuilder};
     let (_db_lifetime, db) =
         report.stage("registration_database", || Ok(create_temp_db!(ConnBuilder::default().with_files_limit(10))))?;
-    let mut env = report.stage("native_genesis_active_bond", || {
-        let (sender, _rx) = async_channel::unbounded();
-        let consensus = TestConsensus::with_db(db.clone(), &config, sender);
-        let chain = t12_genesis_chain_on(consensus, &config, &bundle, &premine, &floats);
-        let env = Env { chain, config, bundle, premine, floats };
-        let (_, state) = env.chain.tip_state();
-        require(
-            matches!(state.bond(&env.chain.bonds[CARD]).ok_or("genesis registrant bond missing")?.status, PalwBondStatusV2::Active),
-            "genesis registrant bond is not Active",
-        )?;
-        Ok(env)
-    })?;
+    let env = report.stage("native_genesis_active_bond", || native_genesis_boxed(setup, &db))?;
+    // The guard remains in this small prefix until the child completes (or is
+    // dropped), so the child releases all native/database strong references first.
+    let inputs = Box::new(RegistrationInputs { env, db, artifact, entry, inventory, fixture, pin });
+    boxed_registration(report, inputs).await
+}
+
+#[inline(never)]
+fn boxed_registration<'a>(
+    report: &'a mut Report,
+    inputs: Box<RegistrationInputs>,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), Failure>> + 'a>> {
+    // Setup and native genesis have returned before this continuation is
+    // constructed; this factory returns before its large poll frame runs.
+    Box::pin(registration(report, inputs))
+}
+
+async fn registration(report: &mut Report, inputs: Box<RegistrationInputs>) -> Result<(), Failure> {
+    let _pin = inputs.pin;
+    let _fixture = inputs.fixture;
+    let _inventory = inputs.inventory;
+    let entry = inputs.entry;
+    let _artifact = inputs.artifact;
+    let db = inputs.db;
+    let mut env = inputs.env;
     heartbeat(report, "warm_block", &mut env, vec![]).await?;
     let (_, before) = env.chain.tip_state();
     let bond = env.chain.bonds[CARD];
@@ -577,10 +627,11 @@ async fn execute(report: &mut Report) -> Result<(), Failure> {
 async fn run(slug: &'static str) {
     let _serial = SERIAL.lock().await;
     let mut report = Report::new(slug);
-    let result = AssertUnwindSafe(execute(&mut report))
-        .catch_unwind()
-        .await
-        .unwrap_or_else(|panic| Err(Failure { stage: report.current, detail: panic_message(panic) }));
+    let caught = {
+        let case = boxed_execute(&mut report);
+        AssertUnwindSafe(case).catch_unwind().await
+    };
+    let result = caught.unwrap_or_else(|panic| Err(Failure { stage: report.current, detail: panic_message(panic) }));
     let failure = result.as_ref().err().map(|f| json!({"stage":f.stage,"detail":f.detail}));
     let output = json!({"schema":"misaka.a1.hf3.native-registration-result.v1","model":slug,
         "result":if result.is_ok(){"native_registration_checked"}else{"refused"},"failure":failure,
@@ -592,18 +643,32 @@ async fn run(slug: &'static str) {
     assert!(result.is_ok(), "HF3 model {slug} refused: {}", output["failure"]);
 }
 
-#[tokio::test]
-#[ignore = "requires parent execution grant; retained model read, one model invocation at a time"]
-async fn retained_smollm2_360m_native_registration() {
-    run("smollm2-360m").await;
+#[inline(never)]
+fn boxed_run(slug: &'static str) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()>>> {
+    Box::pin(run(slug))
 }
-#[tokio::test]
-#[ignore = "requires parent execution grant; retained model read, one model invocation at a time"]
-async fn retained_smollm2_135m_native_registration() {
-    run("smollm2-135m").await;
+
+fn run_on_current_thread(slug: &'static str) {
+    let mut case = boxed_run(slug);
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("Failed building the Runtime")
+        .block_on(case.as_mut());
 }
-#[tokio::test]
+
+#[test]
 #[ignore = "requires parent execution grant; retained model read, one model invocation at a time"]
-async fn retained_pythia_70m_native_registration() {
-    run("pythia-70m").await;
+fn retained_smollm2_360m_native_registration() {
+    run_on_current_thread("smollm2-360m");
+}
+#[test]
+#[ignore = "requires parent execution grant; retained model read, one model invocation at a time"]
+fn retained_smollm2_135m_native_registration() {
+    run_on_current_thread("smollm2-135m");
+}
+#[test]
+#[ignore = "requires parent execution grant; retained model read, one model invocation at a time"]
+fn retained_pythia_70m_native_registration() {
+    run_on_current_thread("pythia-70m");
 }
