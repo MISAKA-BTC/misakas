@@ -12,6 +12,15 @@ use misaka_palw_tir::{DType, Prim, Ref, TensorType, TirError, TirErrorKind, TirR
 use crate::elem::Buf;
 use crate::ranges::{Facts, dtype_iv, in_i64, leaf_interval, node_facts, within};
 
+// Opt-in local startup allocation contract; legacy compiler stays unchanged.
+#[cfg(feature = "node")]
+mod compile_quote_v2;
+#[cfg(feature = "node")]
+pub use compile_quote_v2::{
+    LocalCompiledTirPlanV2, PreparedTirPlanCompileV2, TirPlanCompileLimitsV2, TirPlanCompileQuoteErrorV2, TirPlanCompileQuoteV2,
+    prepare_tir_plan_compile_v2, quote_tir_plan_compile_v2, tir_plan_compile_quote_visits_upper_v2,
+};
+
 /// The integer type an elementwise node computes in before its result is narrowed to `out`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Work {
