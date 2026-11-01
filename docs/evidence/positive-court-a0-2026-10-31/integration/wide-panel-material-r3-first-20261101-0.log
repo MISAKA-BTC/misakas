@@ -1,0 +1,56 @@
+   Compiling misaka-palw-tir v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/misaka/palw/tir/core)
+   Compiling misaka-palw-kernel v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/misaka/palw/kernel)
+   Compiling misaka-palw-tir-artifact v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/misaka/palw/tir/artifact)
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/consensus/core)
+   Compiling misaka-palw-tir-exec v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/misaka/palw/tir/exec)
+error[E0308]: mismatched types
+  --> misaka/palw/tir/exec/src/node/positive_wide_material_v2/capture.rs:53:13
+   |
+51 |           let bytes = add(
+   |                       --- arguments to this function are incorrect
+52 |               count(c.program.len())?,
+53 | /             add(
+54 | |                 mul(count(c.layout.commit_tiles.len() + c.layout.state_tiles.len())?, 4)?,
+55 | |                 add(count(self.expected.job.network_id.len())?, 1024)?,
+56 | |             ),
+   | |_____________^ expected `u64`, found `Result<u64, String>`
+   |
+   = note: expected type `u64`
+              found enum `std::result::Result<u64, String>`
+note: function defined here
+  --> misaka/palw/tir/exec/src/node/positive_wide_material_v2/mod.rs:29:4
+   |
+29 | fn add(a: u64, b: u64) -> Result<u64, Error> {
+   |    ^^^         ------
+help: use the `?` operator to extract the `std::result::Result<u64, String>` value, propagating a `Result::Err` value to the caller
+   |
+56 |             )?,
+   |              +
+
+error[E0308]: mismatched types
+   --> misaka/palw/tir/exec/src/node/positive_wide_material_v2/capture.rs:468:13
+    |
+466 |           add(
+    |           --- arguments to this function are incorrect
+467 |               mul(limits.max_records, size_of::<Record>() as u64)?,
+468 | /             add(
+469 | |                 mul(limits.max_step_leaves, size_of::<Leaf>() as u64)?,
+470 | |                 add(mul(count(expected.class.program.len())?, 4)?, add(mul(limits.max_material_bytes, 4)?, 65536)?)?,
+471 | |             ),
+    | |_____________^ expected `u64`, found `Result<u64, String>`
+    |
+    = note: expected type `u64`
+               found enum `std::result::Result<u64, String>`
+note: function defined here
+   --> misaka/palw/tir/exec/src/node/positive_wide_material_v2/mod.rs:29:4
+    |
+ 29 | fn add(a: u64, b: u64) -> Result<u64, Error> {
+    |    ^^^         ------
+help: use the `?` operator to extract the `std::result::Result<u64, String>` value, propagating a `Result::Err` value to the caller
+    |
+471 |             )?,
+    |              +
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `misaka-palw-tir-exec` (lib) due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...

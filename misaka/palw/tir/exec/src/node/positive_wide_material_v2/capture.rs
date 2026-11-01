@@ -53,7 +53,7 @@ impl WidePanelCaptureV2<'_> {
             add(
                 mul(count(c.layout.commit_tiles.len() + c.layout.state_tiles.len())?, 4)?,
                 add(count(self.expected.job.network_id.len())?, 1024)?,
-            ),
+            )?,
         )?;
         self.session.charge(Charge::Copy, bytes)?;
         let e = &self.expected;
@@ -468,7 +468,7 @@ pub fn capture_one_pass_v2<'a>(
             add(
                 mul(limits.max_step_leaves, size_of::<Leaf>() as u64)?,
                 add(mul(count(expected.class.program.len())?, 4)?, add(mul(limits.max_material_bytes, 4)?, 65536)?)?,
-            ),
+            )?,
         )?,
     )?;
     if add(heap, run_quote.requested_bytes)? > limits.max_live_heap_bytes {
