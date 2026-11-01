@@ -11,7 +11,7 @@ import time
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
 parser = argparse.ArgumentParser()
-parser.add_argument('kind', choices=['remote-rocks', 'default-off', 'client-check', 'journal-contract'])
+parser.add_argument('kind', choices=['remote-rocks', 'default-off', 'client-check', 'journal-contract', 'source-focused'])
 args = parser.parse_args()
 common = ['--offline', '--config', 'profile.dev.debug=0', '--config', 'profile.test.debug=0',
           '--config', 'profile.dev.incremental=false', '--config', 'profile.test.incremental=false',
@@ -22,6 +22,8 @@ commands = {
     'default-off': ['cargo', 'test', '-p', 'misaka-palw-remote', '--lib', '--no-default-features'],
     'client-check': ['cargo', 'check', '-p', 'kaspad', '--lib', '--no-default-features', '--features', 'positive-miner-client'],
     'journal-contract': ['cargo', 'test', '-p', 'misaka-palw-positive-contract', '--test', 'case_journal'],
+    'source-focused': ['cargo', 'test', '-p', 'misaka-palw-remote', '--test', 'positive_native_source_v2',
+                       '--features', 'positive-miner-rocksdb'],
 }
 paths = [ROOT / x for x in ['Cargo.lock', 'Cargo.toml', 'consensus/core/Cargo.toml', 'consensus/core/src/lib.rs',
     'consensus/core/src/palw_state_v2.rs', 'consensus/core/src/palw_positive_rows_v2.rs',
