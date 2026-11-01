@@ -7,6 +7,7 @@
 pub(super) mod budget;
 pub mod codec;
 pub mod cpu;
+pub mod deadline_unix;
 pub mod process;
 pub mod session;
 
