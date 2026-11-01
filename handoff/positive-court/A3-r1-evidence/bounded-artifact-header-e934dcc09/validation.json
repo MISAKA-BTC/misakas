@@ -1,0 +1,130 @@
+{
+  "status": "PASS_BOUNDED_PALWTIR1_HEADER_ONLY_NOT_STARTUP",
+  "source_commit": "e934dcc09393f77e0c047ca93e292d1465bd7800",
+  "source_tree": "2297fd0067ca4d8bc9c9c0e1a640a56611a681cd",
+  "base_commit": "9c4e21f56ab72de57f05037eafbfed22d7919602",
+  "dependencies_upstream": [
+    "9c4e21f56"
+  ],
+  "source_sequence": [
+    "e49e5628a",
+    "61d243bca",
+    "9df57dea8",
+    "e934dcc09393f77e0c047ca93e292d1465bd7800"
+  ],
+  "started_utc": "2026-11-01T14:02:59.874453+00:00",
+  "build_settings": {
+    "CARGO_TARGET_DIR": "/Users/wata/.cache/misaka-positive-a3-target",
+    "CARGO_BUILD_JOBS": "1",
+    "CARGO_PROFILE_DEV_DEBUG": "0",
+    "CARGO_INCREMENTAL": "0",
+    "ROCKSDB_STATIC": "1",
+    "ROCKSDB_LIB_DIR": "/Users/wata/.codex/worktrees/rfc14-g14-completion/MISAKA-testnet/target/release/build/librocksdb-sys-865d89ee7dbf2b2a/out"
+  },
+  "static_archive": {
+    "path": "/Users/wata/.codex/worktrees/rfc14-g14-completion/MISAKA-testnet/target/release/build/librocksdb-sys-865d89ee7dbf2b2a/out/librocksdb.a",
+    "bytes": 23048496,
+    "sha256": "6eae541967b2cb5345ace55eadb34b2c490e91acfd8a4e2da5822a60f91af3a2"
+  },
+  "source_files_sha256": {
+    "handoff/positive-court/A3-bounded-artifact-header-v1.md": "9d630beae3ee4deac0540b486ec27f69c87b2211135caab8306182cf1fe7d693",
+    "handoff/positive-court/A3-hello2-prepared-cpu-results.md": "3a1ae7a575a8e9bac5e91103ac840bdd9363c513ce188ec702047f418811a756",
+    "handoff/positive-court/A3-r1-evidence/hello2-root7a693-corrected/root-batch.json": "9333a1f907aa33bc351a047f5e894f414b5112b3e7790ae8ee49e913ac30df0f",
+    "handoff/positive-court/A3-r1-evidence/hello2-root7a693-corrected/root-corrected-batch.log": "490a5db705c95c233eb980485ebbb8531f38c6907728a1a20393a58aa08dcefd",
+    "handoff/positive-court/A3-r1-evidence/hello2-root9795-initial/failure.json": "e1dee340af5b9b229d228c84d60b232f54bdebe6506cd92a3425c1e071b9d29a",
+    "handoff/positive-court/A3-r1-evidence/hello2-root9795-initial/root-initial.log": "449d72b855a9be1f12b8020299b69f0782e66f85f4647c619ee132d5e7738c75",
+    "misaka/palw/tir/artifact/src/bounded_v1.rs": "1ff6233f1f8f1276ea6e87c6f7d3ede545f2014ca49bd154c3a12748c01d8f6b",
+    "misaka/palw/tir/artifact/src/lib.rs": "a3e474bd3a1c4b2112c026b5ee9987bc241fe25f25726eb231d9afedaa198cec",
+    "misaka/palw/tir/exec/tests/cell_ipc_v2.rs": "98b0af4a33a4de578664e1fc4c612d967cc3766aa908e60505797553a50ee9fb"
+  },
+  "checks": [
+    {
+      "name": "bounded-header",
+      "command": [
+        "cargo",
+        "--config",
+        "profile.dev.package.kaspa-consensus-core.opt-level=0",
+        "test",
+        "--offline",
+        "--locked",
+        "-p",
+        "misaka-palw-tir-artifact",
+        "--lib",
+        "bounded_v1::tests",
+        "--",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 9.347,
+      "log": "bounded-header.log",
+      "log_sha256": "1496652b4e85ce261f1cd4e6dd62ea22cd6b1da650164e0a8417f475bbbfab08",
+      "top_level_results": [
+        {
+          "passed": 5,
+          "failed": 0,
+          "ignored": 0
+        }
+      ],
+      "passed": 5,
+      "failed": 0
+    },
+    {
+      "name": "clippy",
+      "command": [
+        "cargo",
+        "--config",
+        "profile.dev.package.kaspa-consensus-core.opt-level=0",
+        "clippy",
+        "--offline",
+        "--locked",
+        "-p",
+        "misaka-palw-tir-artifact",
+        "--lib",
+        "--no-deps",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 3.622,
+      "log": "clippy.log",
+      "log_sha256": "88c1e1e03d6f13ef93348821435948f7fd500fa7cd442352720c1305f86e8755",
+      "top_level_results": [],
+      "passed": 0,
+      "failed": 0
+    },
+    {
+      "name": "docs",
+      "command": [
+        "python3",
+        "docs/maintenance/check_docs.py"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 2.543,
+      "log": "docs.log",
+      "log_sha256": "2371f24aef8cd2c9bb7b594fa643dadb096be69cb1009a54873644720e5bb793",
+      "top_level_results": [],
+      "passed": 0,
+      "failed": 0
+    }
+  ],
+  "test_binaries": [
+    {
+      "path": "/Users/wata/.cache/misaka-positive-a3-target/debug/deps/misaka_palw_tir_artifact-d9c7fdc17e3bf3f6",
+      "sha256": "a9260624f2490d071c997da4f035b5f518f632dc8bff4d4291e3cf09f1ade94f",
+      "bytes": 4415632
+    }
+  ],
+  "count_policy": "Last outer result per Cargo-launched binary; nested child repeats excluded. Historical and other-role counts never added.",
+  "effective_RUST_MIN_STACK": null,
+  "preexisting_package_binaries": [],
+  "scope": "Core-free PALWTIR1 header parser/split-table data binding only; not generic artifact startup or process execution.",
+  "archive_note": "Existing supplied archive recorded for host build policy; artifact leaf crate has no Core/RocksDB dependency.",
+  "source_files_stable": true,
+  "static_archive_stable": true,
+  "passed": 5,
+  "failed": 0,
+  "completed_utc": "2026-11-01T14:03:15.441362+00:00",
+  "runner_source_sha256": "709005c793661f46eeee43f10a8f34d8664999d193402530bf1a9da5350b20ec",
+  "directory_note": "Enclosing directory renamed after completed validation from hello2-prepared-cpu-e934dcc09 to bounded-artifact-header-e934dcc09 to correct a runner label. Raw logs unchanged."
+}

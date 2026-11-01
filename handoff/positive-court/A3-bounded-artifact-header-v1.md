@@ -1,6 +1,6 @@
-# A3 bounded PALWTIR1 header — source only, not compiled
+# A3 bounded PALWTIR1 header — metadata contract
 
-Base code: Hello2 `1b14d1ecc`; source-review evidence `9c4e21f56`. The reviewed header patch is applied on separate branch `codex/a3-wide-artifact-startup-v2`. No Cargo/type check/test execution has occurred. Earlier Hello2 sources and Root validation candidate remain separate. The process-owner patch and LoadedWideArtifact sketch below remain unapplied drafts.
+Base code: Hello2 `1b14d1ecc`; source-review evidence `9c4e21f56`. The reviewed header patch is applied on separate branch `codex/a3-wide-artifact-startup-v2`. Initial source freeze was uncompiled; the later exact-source five-test/Clippy execution is recorded in [the results](A3-bounded-artifact-header-results.md). Earlier Hello2 sources and Root validation candidate remain separate. The process-owner patch and LoadedWideArtifact sketch below remain unapplied drafts.
 
 ## Patch scope
 
