@@ -330,10 +330,7 @@ mod tests {
     #[test]
     fn retained_lifecycle_rows_are_not_admission_requirements_when_the_registry_is_inactive() {
         let mut r = registry();
-        r.classes = ["Candidate", "Prefetching", "Held", "Probation { probes_passed: 0 }"]
-            .into_iter()
-            .map(class)
-            .collect();
+        r.classes = ["Candidate", "Prefetching", "Held", "Probation { probes_passed: 0 }"].into_iter().map(class).collect();
         assert_eq!(palw_registry_blockings(&r).len(), 4);
         r.active = false;
         assert!(palw_registry_blockings(&r).is_empty(), "clients must not recreate retired jury or five-seat gates");
