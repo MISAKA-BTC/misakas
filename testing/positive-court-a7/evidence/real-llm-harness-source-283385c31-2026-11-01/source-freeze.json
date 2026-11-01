@@ -1,0 +1,209 @@
+{
+  "schema": "misaka.a7.real-llm-harness-source-freeze.v1",
+  "utc": "2026-11-01T13:46:58.284942+00:00",
+  "base": "4753ee4beae5e245095954c6ef6e9b96fa05f361",
+  "source_commit": "283385c31f808b4894fbc7a9969215645a97dbe4",
+  "source_status": "SOURCE_REVIEWED_NOT_TYPECHECKED",
+  "root_observed_candidate": "c85d5a9c92632e81a2880d3159bf95ce38e0e370",
+  "source_files": [
+    {
+      "path": "testing/positive-court-a7/Cargo.lock",
+      "bytes": 87836,
+      "sha256": "d942706ac4d6208c5532b72473f86e89e07253b17be8eb918a23bbd1879b2e06"
+    },
+    {
+      "path": "testing/positive-court-a7/Cargo.toml",
+      "bytes": 979,
+      "sha256": "cb755e381c3e0578f1904f295e8a0db947e63496357a3bbb0b946d1c4c20018a"
+    },
+    {
+      "path": "testing/positive-court-a7/REAL-LLM-REPRO.md",
+      "bytes": 5177,
+      "sha256": "97cd0fbabbbf3c9967040b14c87289eda7b9396a5c6297fb730a714002db17de"
+    },
+    {
+      "path": "testing/positive-court-a7/real-llm-inputs/manifest.json",
+      "bytes": 2141,
+      "sha256": "aa6b5e4135308d1371a155f5d4b9ef3157cb6fe54cd0dbbed28a73316c1f4c4d"
+    },
+    {
+      "path": "testing/positive-court-a7/real-llm-inputs/pythia-70m.json",
+      "bytes": 93,
+      "sha256": "4c8cddb074ec598ad93a8e441dbd92f2cb10c9d3fc4f9a6b0bcaf14266a296f8"
+    },
+    {
+      "path": "testing/positive-court-a7/real-llm-inputs/smollm2-135m.json",
+      "bytes": 92,
+      "sha256": "6c1a7d347fbad6e1511bbc8d560ec610c170952e6dbff26a12369bc50c5a92c3"
+    },
+    {
+      "path": "testing/positive-court-a7/real-llm-inputs/smollm2-360m.json",
+      "bytes": 92,
+      "sha256": "6c1a7d347fbad6e1511bbc8d560ec610c170952e6dbff26a12369bc50c5a92c3"
+    },
+    {
+      "path": "testing/positive-court-a7/real_llm_process.py",
+      "bytes": 27170,
+      "sha256": "04aa8c510e89eb592f592835dbcf10071ccdafb642dd106a184502aa18df7ad8"
+    },
+    {
+      "path": "testing/positive-court-a7/src/bin/real_llm_repro.rs",
+      "bytes": 37227,
+      "sha256": "2a8c23b9e851d93c41f22d5bfb6865daf41e0ec9bbdf4342bc450019206a2d98"
+    },
+    {
+      "path": "testing/positive-court-a7/test_real_llm_process.py",
+      "bytes": 4327,
+      "sha256": "646b46283c5a2569b470b9f65100f427f11a5a457a704b7e8247432d86de28dd"
+    }
+  ],
+  "api_compatibility_read_only": [
+    {
+      "path": "consensus/core/src/palw_prompt_ids_v1.rs",
+      "a7_base_sha256": "d5637c26a913e2fd07c17c4122b1ba8a49e1c2bec71e406194776c2b475db1d9",
+      "root_c85_sha256": "d5637c26a913e2fd07c17c4122b1ba8a49e1c2bec71e406194776c2b475db1d9",
+      "same_bytes": true
+    },
+    {
+      "path": "consensus/core/src/palw_step_leg.rs",
+      "a7_base_sha256": "372f065a2491c77ac0ceff73898704a2abcb44da005a00329d709a7b2a2fe1e1",
+      "root_c85_sha256": "372f065a2491c77ac0ceff73898704a2abcb44da005a00329d709a7b2a2fe1e1",
+      "same_bytes": true
+    },
+    {
+      "path": "consensus/core/src/palw_tir_class_v1.rs",
+      "a7_base_sha256": "0785d6f7b9c3341b8f4c6e7216e7a0d4f353a6cb1c37dd32d2fa48258a4082d9",
+      "root_c85_sha256": "0785d6f7b9c3341b8f4c6e7216e7a0d4f353a6cb1c37dd32d2fa48258a4082d9",
+      "same_bytes": true
+    },
+    {
+      "path": "consensus/core/src/palw_tir_profile_resolver_v2.rs",
+      "a7_base_sha256": "f2f7055ba0a1ce12fc616075226371957295b161b8dfb06838f10e692893c86c",
+      "root_c85_sha256": "f2f7055ba0a1ce12fc616075226371957295b161b8dfb06838f10e692893c86c",
+      "same_bytes": true
+    },
+    {
+      "path": "consensus/core/src/palw_tir_step_v1.rs",
+      "a7_base_sha256": "7dc8c66373bc13dcbdbdec0bee52b0ad6edd40e0e44e6cd51b08877acb4664da",
+      "root_c85_sha256": "7dc8c66373bc13dcbdbdec0bee52b0ad6edd40e0e44e6cd51b08877acb4664da",
+      "same_bytes": true
+    },
+    {
+      "path": "consensus/core/src/palw_tir_step_v1/wide_v2.rs",
+      "a7_base_sha256": "5abe3db73130998fc73b5e600f02cc8dd8a0623124b152ef663cc29b02d5c28b",
+      "root_c85_sha256": "5abe3db73130998fc73b5e600f02cc8dd8a0623124b152ef663cc29b02d5c28b",
+      "same_bytes": true
+    },
+    {
+      "path": "consensus/core/src/palw_v2.rs",
+      "a7_base_sha256": "dc47d630b7d06152e6c9b285077bf071a7c5d2ef5f921b706b24968c0f8125d6",
+      "root_c85_sha256": "dc47d630b7d06152e6c9b285077bf071a7c5d2ef5f921b706b24968c0f8125d6",
+      "same_bytes": true
+    },
+    {
+      "path": "misaka/palw/tir/exec/src/node/artifact.rs",
+      "a7_base_sha256": "5c94a736d0acade7560a3740969688d85444b6b890e641b21634fe5e199f3185",
+      "root_c85_sha256": "5c94a736d0acade7560a3740969688d85444b6b890e641b21634fe5e199f3185",
+      "same_bytes": true
+    },
+    {
+      "path": "misaka/palw/tir/exec/src/node/backend.rs",
+      "a7_base_sha256": "393d84e9244b2f7cc050b05bbe11579b6fa5eae5b111f055839a7c1de66d650c",
+      "root_c85_sha256": "393d84e9244b2f7cc050b05bbe11579b6fa5eae5b111f055839a7c1de66d650c",
+      "same_bytes": true
+    },
+    {
+      "path": "misaka/palw/tir/exec/src/node/memory.rs",
+      "a7_base_sha256": "9f07f423474eaf5ba0b0148f0dcc7f81d6028951b4232284dbd2f07b7ba4fbf7",
+      "root_c85_sha256": "9f07f423474eaf5ba0b0148f0dcc7f81d6028951b4232284dbd2f07b7ba4fbf7",
+      "same_bytes": true
+    },
+    {
+      "path": "misaka/palw/tir/exec/src/node/run.rs",
+      "a7_base_sha256": "211a0558bfba8b17070827d0cfb6cb29ceaa799198495286bc3d90937f974136",
+      "root_c85_sha256": "211a0558bfba8b17070827d0cfb6cb29ceaa799198495286bc3d90937f974136",
+      "same_bytes": true
+    },
+    {
+      "path": "misaka/palw/tir/exec/src/node/run_wide_q24_v2.rs",
+      "a7_base_sha256": "46c29f1476252d4eeab6d37a387c0724a33b3f62df6045a95c0b1bac1fab81d4",
+      "root_c85_sha256": "46c29f1476252d4eeab6d37a387c0724a33b3f62df6045a95c0b1bac1fab81d4",
+      "same_bytes": true
+    },
+    {
+      "path": "misaka/palw/tir/exec/src/node/wide_capture_v2.rs",
+      "a7_base_sha256": "b91de0904467aebb7d7f9a947a7d46f1eb0cdec2a1afc574cc69161d10586945",
+      "root_c85_sha256": "b91de0904467aebb7d7f9a947a7d46f1eb0cdec2a1afc574cc69161d10586945",
+      "same_bytes": true
+    },
+    {
+      "path": "misaka/palw/tir/exec/src/node/wide_capture_v2/budget.rs",
+      "a7_base_sha256": "c66a8dd95cf3b0334e2ef25fb0162a57f7d935b287d2d01561442532d576128f",
+      "root_c85_sha256": "c66a8dd95cf3b0334e2ef25fb0162a57f7d935b287d2d01561442532d576128f",
+      "same_bytes": true
+    },
+    {
+      "path": "misaka/palw/tir/artifact/src/metadata_v16.rs",
+      "a7_base_sha256": "70ffb223de17446f241b73d66152b2d9a5a1b8f8a4c6482c5645d98aa29d0fe4",
+      "root_c85_sha256": "70ffb223de17446f241b73d66152b2d9a5a1b8f8a4c6482c5645d98aa29d0fe4",
+      "same_bytes": true
+    },
+    {
+      "path": "misaka/palw/tir/core/src/admit.rs",
+      "a7_base_sha256": "223a8a1dff68716f2fb04d3c50572446b4571fc50196bcea7e3955453e0d4fef",
+      "root_c85_sha256": "223a8a1dff68716f2fb04d3c50572446b4571fc50196bcea7e3955453e0d4fef",
+      "same_bytes": true
+    },
+    {
+      "path": "misaka/palw/tir/core/src/validate.rs",
+      "a7_base_sha256": "b95af832779a177854b2e1eea23fa1f58afc593c864f52222c52e96034c7ab65",
+      "root_c85_sha256": "b95af832779a177854b2e1eea23fa1f58afc593c864f52222c52e96034c7ab65",
+      "same_bytes": true
+    }
+  ],
+  "static_review": {
+    "integration_audit": "source author plus direct signature review; rustfmt parse only",
+    "adversarial_tests": "second read found no remaining material static contract contradiction after fixes",
+    "process_measurement": "exact leaf reservation, operation owner accounting and work scope reviewed; no new blocker",
+    "findings_resolved": [
+      "common narrow prompt commitment/context preflight",
+      "canonical unsigned Idx lane decoding",
+      "bounded same-read JSON hashing",
+      "empty versus dense coverage, producer roots versus independent roots",
+      "exact canonical leaf payload allocation instead of global maximum for every leaf",
+      "streamed logits summary instead of duplicated full JSON rows",
+      "per-operation work versus cumulative cost and physical RSS",
+      "fixed driver argv and exact result/input/cap contract",
+      "late cancellation after signal context exit"
+    ]
+  },
+  "python_guards": {
+    "passed": 12,
+    "scope": "pure/mock driver guards; zero Rust/model processes",
+    "raw_stdout": "guards.stdout"
+  },
+  "preflight": {
+    "status": "NOT_RUN_BUILD_NOT_REQUESTED",
+    "models": 3,
+    "all_input_models_error_free": true,
+    "source_identity_unchanged": true,
+    "artifact_revision_context_maintained": true,
+    "prefill_tokens": 16,
+    "decode_tokens_planned": 1,
+    "planned_positions": 16
+  },
+  "not_run": [
+    "Cargo/typecheck/build",
+    "Rust unit or integration tests",
+    "runtime quote-only",
+    "CPU model inference",
+    "capture roundtrip",
+    "independent expected roots",
+    "maximum original context coverage",
+    "new native V2 registration/admission/registry/restart",
+    "SecurityCertified/P/credit"
+  ],
+  "execution_hold": "A0 explicitly holds A7 heavy builds while Root/A4 joined checks use shared resources; no cache grant was used",
+  "source_scope": "A7 testing files only; no production changes or original artifact/log changes",
+  "previous_inventory_commit": "0d8418c5b191b735afd0151b6f2f0ebcfb4ab6bf"
+}
