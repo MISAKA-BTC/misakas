@@ -263,14 +263,14 @@ fn trace_free_same_descriptor_owner_reaches_ordinary_outputs_all_three_profiles(
             .unwrap();
         assert_eq!(output.generated(), EXPECTED_GENERATED);
         assert_eq!(output.execution(), f.execution);
-        let output_bytes = output.quote().requested_bytes;
+        let output_bytes = output.retained_requested_bytes();
         assert_eq!(held.load(Ordering::SeqCst), EXTERNAL + q.actual_guard_allowance + output_bytes);
         drop(owner);
         assert_eq!(held.load(Ordering::SeqCst), EXTERNAL + output_bytes);
         drop(output);
         drop(ticket);
         assert_eq!(held.load(Ordering::SeqCst), 0);
-        assert_eq!(calls.load(Ordering::SeqCst), 4);
+        assert_eq!(calls.load(Ordering::SeqCst), 5);
         assert_eq!(b.usage().borrowed_validations, 1);
     }
 }

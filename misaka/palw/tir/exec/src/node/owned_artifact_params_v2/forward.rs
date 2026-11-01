@@ -452,6 +452,7 @@ pub struct LocalWideForwardLimitsV2 {
     pub max_generated: u32,
     pub max_logits_lanes: u64,
     pub max_work_per_attempt: u64,
+    /// Full working + small output guard handoff overlap, before work release.
     pub max_requested_bytes: u64,
     pub max_operation_bytes: u64,
     pub max_attempts: u64,
@@ -508,6 +509,27 @@ pub struct LocalWideForwardQuoteV2 {
     pub hashing_scratch: u64,
     pub requested_bytes: u64,
 }
+/// Returned ordinary data retains ONLY this typed output root plus the exact
+/// generated-ID Vec backing. exact() checks capacity == generated count. There
+/// is no retained executor/row, plan, Params or borrowed context in this object.
+/// The opaque lease HANDLE is included in sizeof; callback-owned guard/ledger
+/// backing remains its required host contract (the concrete caller charges its
+/// own Reservation backing on the same ledger before allocating that guard).
+/// This arithmetic is data, not native admission or a physical RSS quote.
+pub fn local_forward_retained_output_requests_v2(generated: u32) -> u64 {
+    size_of::<LocalWideForwardOutputV2>() as u64 + u64::from(generated) * size_of::<u32>() as u64
+}
+impl LocalWideForwardQuoteV2 {
+    /// Unchanged requested_bytes is the FULL conservative working reservation.
+    pub fn retained_output_requests(&self) -> u64 {
+        local_forward_retained_output_requests_v2(self.generated)
+    }
+    /// Both real guards coexist briefly at handoff. Charge that conservative
+    /// overlap before CPU; accepted work/request budgets are never refunded.
+    pub fn handoff_peak_requests(&self) -> Result<u64, F> {
+        plus(self.requested_bytes, self.retained_output_requests())
+    }
+}
 /// Ordinary local data only: no serialization, trace roots, native receipt,
 /// Result constructor or success capability. Copies require separate ownership.
 pub struct LocalWideForwardOutputV2 {
@@ -530,6 +552,10 @@ impl LocalWideForwardOutputV2 {
     }
     pub fn quote(&self) -> LocalWideForwardQuoteV2 {
         self.quote
+    }
+    /// Actual reservation that survives CPU completion, NOT the working peak.
+    pub fn retained_requested_bytes(&self) -> u64 {
+        self.quote.retained_output_requests()
     }
 }
 impl LocalWideForwardArtifactV2<'_> {
@@ -594,7 +620,8 @@ impl LocalWideForwardArtifactV2<'_> {
         let hash =
             plus(writer_bytes(context)?, plus(writer_bytes(plus(4, times(prefill, 4)?)?)?, plus(output_writer, writer_bytes(4)?)?)?)?;
         let requested = plus(size_of::<LocalWideForwardOutputV2>() as u64, plus(executor, plus(row, plus(generated, hash)?)?)?)?;
-        cap(requested, l.max_requested_bytes)?;
+        let handoff = plus(requested, local_forward_retained_output_requests_v2(self.inputs.original_context.exact_decode_tokens))?;
+        cap(handoff, l.max_requested_bytes)?;
         Ok(LocalWideForwardQuoteV2 {
             positions: self.job.positions,
             generated: self.inputs.original_context.exact_decode_tokens,
@@ -633,13 +660,14 @@ impl LocalWideForwardArtifactV2<'_> {
         let remaining_work = q.work.checked_sub(scans).ok_or(F::Overflow)?;
         let total_work = plus(prior_work, remaining_work)?;
         cap(total_work, l.max_total_work)?;
-        let retained = plus(budget.usage.retained_requests, q.requested_bytes)?;
+        let handoff = q.handoff_peak_requests()?;
+        let retained = plus(budget.usage.retained_requests, handoff)?;
         cap(retained, l.max_retained_requests)?;
         cap(plus(self.inputs.external_retained_bytes, self.quote.requested_bytes)?, l.external_retained_bytes)?;
-        cap(plus(plus(l.external_retained_bytes, budget.usage.retained_requests)?, q.requested_bytes)?, l.max_operation_bytes)?;
+        cap(plus(plus(l.external_retained_bytes, budget.usage.retained_requests)?, handoff)?, l.max_operation_bytes)?;
         budget.usage.work = total_work;
         budget.usage.retained_requests = retained;
-        let lease =
+        let work_lease =
             reserver("tir-local-wide-forward-run-v2", self.inputs.expected_class, self.inputs.expected_execution, q.requested_bytes)
                 .map_err(|_| F::Guard)?;
         let ctx = self.inputs.original_context;
@@ -669,12 +697,27 @@ impl LocalWideForwardArtifactV2<'_> {
             return Err(F::Output);
         }
         let output_root = palw_attempt_output_root_v1(ctx, &ids);
+        // Keep the full original work guard through ALL CPU/hash activity. The
+        // executor and selection row actually release their backing BEFORE its
+        // handoff; generated IDs/root remain covered by that full work guard.
+        drop(row);
+        drop(exec);
+        let output_lease = reserver(
+            "tir-local-wide-forward-output-v2",
+            self.inputs.expected_class,
+            self.inputs.expected_execution,
+            q.retained_output_requests(),
+        )
+        .map_err(|_| F::Guard)?;
+        // Real output guard is now live; no allocation/reset/permission replaces
+        // the old guard. Late denial returns no result, with spent budgets kept.
+        drop(work_lease);
         Ok(LocalWideForwardOutputV2 {
             generated: ids,
             output_root,
             execution: self.inputs.expected_execution,
             quote: q,
-            _memory: lease,
+            _memory: output_lease,
         })
     }
 }

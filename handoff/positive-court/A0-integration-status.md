@@ -108,3 +108,7 @@ A1は採択済RFC-0043内のnative class受付を接続中。登録受付後も�
 後続 `352113d4c`: Loaded908/evidence37ab、OS-main stdio join9d828、既存R5へのPanel bridge973を独立source review後に統合した。新子テストは実File→Loaded→CPU I64 endpoint→実stdin/stdout→usage/guard/reapを構造化markerで検査する設計で、libtestのPASS数へ合算しない。Takeの有限EOFはOS pipe EOFではなく、自然exit0も主張しない。bridgeの2caseは旧binding用oracleを先に構成するtestで、captureのrun guard1回が全testのCPU1回やcold cacheを意味しない。全新sourceは引き続き型検査・runtime未実行。
 
 現Loadedは完全なexpected/verified step bindingを前提とし、trace無しの最初のMiner起動が完成したとは扱わない。Node検査条件や旧APIを弱めず、別のlocal非serialized class/job metadata＋ordinary forward componentを後続incrementで実装中。新native Assignment/Result/役割・資金・Pの設計採択は依然未受領。Root最終source＋A6最小DBtestsを固定した保全branchで、native実登録・同sourceの回帰を先行して実行する。
+
+2026-11-02、登録・復元phase: source `50fe43e4c9ded609b1be9ab51125caa33ffffd8b` のNode19件と実trained HF3件、別のCore54件が成功した。元context8192/8192/2048、Pythiaのi64 Q24最終出力、実署名・実UTXO・standard MiningManager/template・別Node replay・同じDBの復元を維持する。原失敗と成功実行ファイルの保全を含むevidence commit `893452a27` をA0へFFした。[結果と範囲](../../docs/evidence/positive-court-a0-2026-10-31/integration/trained-native-registration-50fe-results-20261102.md)。旧sourceの144件等とは合算しない。Core library Clippyは成功、Execはstyle2件で停止しSDKは未実行だった。
+
+後続の通常推論phaseは別source `f7a7d2897b09a9ab889e4667e0ad4888111c2566` にtrace-free local forward、metadata owner、同じowned parametersを使うdense比較とguarded callerを統合した段階で、まだ未コンパイル・未実行である。style2件は等価な `is_multiple_of` 判定へ修正した。360Mの計算終了後も全workspace予約が保持される問題を、runtimeの見積もりを維持したoutputへの予約引継ぎで修正中。これらのsource追加を実LLM推論や全RFCの成功に数えない。新native Assignmentの権限・役割・資金・Pの採択境界と全public preset Noneは維持する。

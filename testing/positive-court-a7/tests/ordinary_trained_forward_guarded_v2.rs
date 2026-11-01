@@ -24,6 +24,7 @@ use misaka_palw_tir_exec::{
             OwnedParamLimitsV2,
             forward::{
                 LocalForwardLoadBudgetV2, LocalForwardLoadLimitsV2, LocalWideForwardBudgetV2, LocalWideForwardLimitsV2,
+                local_forward_retained_output_requests_v2,
                 measurement::{DenseMeasurementBudgetV2, DenseMeasurementLimitsV2},
                 metadata::{MetadataOwnerBudgetV2, MetadataOwnerInputsV2, MetadataOwnerLimitsV2, load_local_forward_metadata_v2},
             },
@@ -572,7 +573,11 @@ fn guarded_case(model: FixedTrainedModelV2) -> Result<()> {
     require_source_program_local_profile_v1().map_err(|_| Error::SourceProfile)?;
     let o = options()?;
     let external = bootstrap_requests(o)?;
-    let total = add(add(add(add(external, o.metadata_bytes)?, o.parameter_bytes)?, o.ordinary_bytes)?, o.dense_bytes)?;
+    let output_retained = local_forward_retained_output_requests_v2(1);
+    // Ordinary ceiling already includes its full-work + retained handoff. Dense
+    // then overlaps ONLY retained ordinary data, not the freed executor guard.
+    let phase_peak = o.ordinary_bytes.max(add(o.dense_bytes, output_retained)?);
+    let total = add(add(add(external, o.metadata_bytes)?, o.parameter_bytes)?, phase_peak)?;
     check(total <= REQUESTED_LIMIT && o.source_bytes < o.metadata_bytes && o.header_native < o.metadata_bytes, Error::Limit)?;
     // Named fixture passes: zero/read/SHA, boundary+hex scan, hex decode,
     // and tile insertion, plus key comparison at every byte. Symbolic only;
@@ -609,9 +614,8 @@ fn guarded_case(model: FixedTrainedModelV2) -> Result<()> {
         let run_external = add(metadata_external, o.parameter_bytes)?;
         let mut runs =
             LocalWideForwardBudgetV2::new(run_limits(o, pin.original_max_context, run_external)).map_err(|_| Error::Limit)?;
-        let mut denses =
-            DenseMeasurementBudgetV2::new(dense_limits(o, pin.original_max_context, add(run_external, o.ordinary_bytes)?))
-                .map_err(|_| Error::Limit)?;
+        let mut denses = DenseMeasurementBudgetV2::new(dense_limits(o, pin.original_max_context, add(run_external, output_retained)?))
+            .map_err(|_| Error::Limit)?;
         // SAME mutable descriptor only; NO clone/replace/detach/reopen or owned class
         // copies. HRTB is borrow control, not a claim it forbids arbitrary FD clones.
         let measured = metadata

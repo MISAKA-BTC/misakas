@@ -404,7 +404,7 @@ fn output_owns_required_guard_and_failed_prompt_or_guard_attempts_do_not_refund(
         let load_bytes = held.load(Ordering::SeqCst);
         let mut runs = LocalWideForwardBudgetV2::new(run_limits()).unwrap();
         let output = loaded.forward_local(PROMPT, &mut runs, &r).unwrap();
-        let run_bytes = output.quote().requested_bytes;
+        let run_bytes = output.retained_requested_bytes();
         assert_eq!(held.load(Ordering::SeqCst), load_bytes + run_bytes);
         drop(loaded);
         assert_eq!(held.load(Ordering::SeqCst), run_bytes);
@@ -781,4 +781,152 @@ fn narrow_runner_work_cap_is_enforced_independently_of_larger_aggregate_cap() {
         assert!(l.max_work_per_attempt > q.work);
         assert_eq!(owner.quote_dense_measurement(l).err(), Some(DenseMeasurementErrorV2::Limit));
     });
+}
+
+#[test]
+fn working_to_output_handoff_keeps_both_guards_until_scratch_drops_then_retains_only_ids() {
+    for case in [Case::Flat, Case::Tiled, Case::Wide] {
+        fixture_case(case, 1, false, |file, input, _, _, _| {
+            struct PhaseGuard {
+                role: &'static str,
+                bytes: u64,
+                held: Arc<AtomicU64>,
+                phase: Arc<AtomicUsize>,
+            }
+            impl Drop for PhaseGuard {
+                fn drop(&mut self) {
+                    if self.role == "tir-local-wide-forward-run-v2" {
+                        // The real output reservation already exists when the
+                        // full working guard is released after CPU/scratch.
+                        assert_eq!(self.phase.compare_exchange(2, 3, Ordering::SeqCst, Ordering::SeqCst), Ok(2));
+                    } else if self.role == "tir-local-wide-forward-output-v2" {
+                        assert_eq!(self.phase.compare_exchange(3, 4, Ordering::SeqCst, Ordering::SeqCst), Ok(3));
+                    }
+                    self.held.fetch_sub(self.bytes, Ordering::SeqCst);
+                }
+            }
+            let held = Arc::new(AtomicU64::new(0));
+            let phase = Arc::new(AtomicUsize::new(0));
+            let live = held.clone();
+            let stage = phase.clone();
+            let r: TirMemoryReserverV1 = Arc::new(move |role, _, _, bytes| {
+                if role == "tir-local-wide-forward-run-v2" {
+                    assert_eq!(stage.compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst), Ok(0));
+                } else if role == "tir-local-wide-forward-output-v2" {
+                    assert_eq!(stage.compare_exchange(1, 2, Ordering::SeqCst, Ordering::SeqCst), Ok(1));
+                }
+                live.fetch_add(bytes, Ordering::SeqCst);
+                Ok(Box::new(PhaseGuard { role, bytes, held: live.clone(), phase: stage.clone() }))
+            });
+            let owner =
+                load_local_wide_forward_v2(file, input, &mut LocalForwardLoadBudgetV2::new(load_limits()).unwrap(), &r).unwrap();
+            let load = held.load(Ordering::SeqCst);
+            let q = owner.forward_quote(run_limits()).unwrap();
+            let mut runs = LocalWideForwardBudgetV2::new(run_limits()).unwrap();
+            let output = owner.forward_local(PROMPT, &mut runs, &r).unwrap();
+            assert_eq!(phase.load(Ordering::SeqCst), 3);
+            assert_eq!(output.generated(), EXPECTED_GENERATED);
+            assert_eq!(output.quote().requested_bytes, q.requested_bytes); // Full working quote unchanged.
+            assert_eq!(output.retained_requested_bytes(), q.retained_output_requests());
+            assert!(output.retained_requested_bytes() < q.requested_bytes);
+            assert_eq!(runs.usage().retained_requests, q.handoff_peak_requests().unwrap());
+            assert_eq!(held.load(Ordering::SeqCst), load + output.retained_requested_bytes());
+            drop(owner);
+            assert_eq!(held.load(Ordering::SeqCst), output.retained_requested_bytes());
+            drop(output);
+            assert_eq!(phase.load(Ordering::SeqCst), 4);
+            assert_eq!(held.load(Ordering::SeqCst), 0);
+        });
+    }
+}
+
+#[test]
+fn output_handoff_denial_after_cpu_returns_no_result_and_never_refunds_attempts_or_requests() {
+    fixture(1, false, |file, input, _, _, _| {
+        let held = Arc::new(AtomicU64::new(0));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let actual = reserver(held.clone(), calls);
+        let delegate = actual.clone();
+        let denied = Arc::new(AtomicUsize::new(0));
+        let observed = denied.clone();
+        let refuse_output: TirMemoryReserverV1 = Arc::new(move |role, class, execution, bytes| {
+            if role == "tir-local-wide-forward-output-v2" {
+                observed.fetch_add(1, Ordering::SeqCst);
+                Err("late output owner refusal".into())
+            } else {
+                delegate(role, class, execution, bytes)
+            }
+        });
+        let owner =
+            load_local_wide_forward_v2(file, input, &mut LocalForwardLoadBudgetV2::new(load_limits()).unwrap(), &actual).unwrap();
+        let load = held.load(Ordering::SeqCst);
+        let mut l = run_limits();
+        l.max_attempts = 1;
+        let q = owner.forward_quote(l).unwrap();
+        let mut runs = LocalWideForwardBudgetV2::new(l).unwrap();
+        assert_eq!(owner.forward_local(PROMPT, &mut runs, &refuse_output).err(), Some(LocalForwardErrorV2::Guard));
+        assert_eq!(denied.load(Ordering::SeqCst), 1);
+        assert_eq!(held.load(Ordering::SeqCst), load);
+        let spent = runs.usage();
+        assert_eq!(spent.work, q.work);
+        assert_eq!(spent.retained_requests, q.handoff_peak_requests().unwrap());
+        assert_eq!(owner.forward_local(PROMPT, &mut runs, &actual).err(), Some(LocalForwardErrorV2::Limit));
+        assert_eq!(runs.usage(), spent);
+        assert_eq!(denied.load(Ordering::SeqCst), 1);
+    });
+}
+
+#[test]
+fn exact_and_one_below_handoff_caps_cover_both_real_guards_before_cpu() {
+    fixture(1, false, |file, input, _, _, r| {
+        let owner = load_local_wide_forward_v2(file, input, &mut LocalForwardLoadBudgetV2::new(load_limits()).unwrap(), r).unwrap();
+        let q = owner.forward_quote(run_limits()).unwrap();
+        let handoff = q.handoff_peak_requests().unwrap();
+        for axis in 0..3 {
+            let mut l = run_limits();
+            l.max_requested_bytes = handoff;
+            l.max_retained_requests = handoff;
+            l.max_operation_bytes = l.external_retained_bytes + handoff;
+            match axis {
+                0 => l.max_requested_bytes -= 1,
+                1 => l.max_retained_requests -= 1,
+                _ => l.max_operation_bytes -= 1,
+            }
+            let deny: TirMemoryReserverV1 = Arc::new(|_, _, _, _| panic!("one-below handoff admission must precede CPU/guard"));
+            let mut runs = LocalWideForwardBudgetV2::new(l).unwrap();
+            assert_eq!(owner.forward_local(PROMPT, &mut runs, &deny).err(), Some(LocalForwardErrorV2::Limit));
+            assert_eq!(runs.usage().attempts, 1);
+        }
+        let mut l = run_limits();
+        l.max_requested_bytes = handoff;
+        l.max_retained_requests = handoff;
+        l.max_operation_bytes = l.external_retained_bytes + handoff;
+        let mut runs = LocalWideForwardBudgetV2::new(l).unwrap();
+        let output = owner.forward_local(PROMPT, &mut runs, r).unwrap();
+        assert_eq!(output.generated(), EXPECTED_GENERATED);
+        assert_eq!(runs.usage().retained_requests, handoff);
+    });
+}
+
+#[test]
+fn dense_external_floor_uses_real_retained_output_after_working_guard_release() {
+    for case in [Case::Flat, Case::Tiled, Case::Wide] {
+        fixture_case(case, 1, false, |file, input, _, _, r| {
+            let owner =
+                load_local_wide_forward_v2(file, input, &mut LocalForwardLoadBudgetV2::new(load_limits()).unwrap(), r).unwrap();
+            let ordinary = owner.forward_local(PROMPT, &mut LocalWideForwardBudgetV2::new(run_limits()).unwrap(), r).unwrap();
+            let external = input.external_retained_bytes + owner.load_quote().requested_bytes + ordinary.retained_requested_bytes();
+            let mut l = dense_limits();
+            l.external_retained_bytes = external;
+            let mut budget = DenseMeasurementBudgetV2::new(l).unwrap();
+            let dense = owner.prepare_dense_measurement(&ordinary, &mut budget).unwrap().run(PROMPT, r).unwrap();
+            assert!(dense.matches_ordinary());
+            assert_eq!(dense.generated(), ordinary.generated());
+            l.external_retained_bytes -= 1;
+            assert_eq!(
+                owner.prepare_dense_measurement(&ordinary, &mut DenseMeasurementBudgetV2::new(l).unwrap()).err(),
+                Some(DenseMeasurementErrorV2::Limit)
+            );
+        });
+    }
 }
