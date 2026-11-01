@@ -6,12 +6,15 @@ use kaspa_consensus_core::{
     palw_positive_common_source_replay_v2::*,
     palw_positive_source_geometry_v2::{GeometryLimitsV2, TirSourceGeometryV2},
     palw_positive_source_v2::{
-        NativeSourceContextV2, SourceErrorV2, SourceEventCostV2, SourceLimitsV2, SourceRequestEventV2, SourceResponseEventV2,
-        SourceServiceFeeV2, history::NativeSourceHistoryV2,
+        NativeSourceContextV2, NativeSourceLedgerV2, SourceErrorV2, SourceEventCostV2, SourceLimitsV2, SourceRequestEventV2,
+        SourceResponseEventV2, SourceServiceFeeV2, history::NativeSourceHistoryV2,
     },
     palw_tir_admission_v1::palw_tir_class_record_v1,
 };
-use misaka_palw_positive_contract::rows::AggregateUsage;
+use misaka_palw_positive_contract::{
+    reservations::RemainingCapacity,
+    rows::{AggregateUsage, CaseRow},
+};
 
 #[path = "positive_court_a6_db_replay.rs"]
 mod real_db_replay;
@@ -133,6 +136,10 @@ enum Error {
 struct ToyUsagePolicy<'a> {
     active: &'a Cell<Option<u64>>,
     fail_at: Option<u64>,
+    fixture: &'a SourceFixture,
+    last_usage: &'a Cell<Option<AggregateUsage>>,
+    exhaust_wire_at: Option<u64>,
+    fail_capacity_at: Option<u64>,
 }
 impl NativeCommonUsagePolicyV2 for ToyUsagePolicy<'_> {
     fn map_usage_delta(
@@ -153,11 +160,60 @@ impl NativeCommonUsagePolicyV2 for ToyUsagePolicy<'_> {
         }
         // Arbitrary TEST-ONLY E+T work and signed-wire retention accounting.
         // A0/A4 have adopted no native conversion rate or tariff from this.
+        let extra_transmitted_bytes = if self.exhaust_wire_at == Some(record.header().sequence) {
+            let used = self.last_usage.get().ok_or(CommonSourceReplayErrorV2::NativePolicy)?;
+            self.fixture
+                .scenario
+                .service
+                .budget
+                .transmitted_bytes
+                .checked_sub(used.transmitted_bytes)
+                .and_then(|n| n.checked_sub(source.transmitted_bytes))
+                .and_then(|n| n.checked_sub(court.signed_wire_bytes))
+                .ok_or(CommonSourceReplayErrorV2::Budget)?
+        } else {
+            0
+        };
         Ok(NativeUsageChargeV2 {
-            extra_transmitted_bytes: 0,
+            extra_transmitted_bytes,
             additional_work: court.elements.checked_add(court.terms).ok_or(CommonSourceReplayErrorV2::Budget)?,
             retained_bytes: court.signed_wire_bytes,
         })
+    }
+
+    fn remaining_capacity(
+        &self,
+        record: CaseJournalRecordView<'_>,
+        _: Option<&PositiveNativeBodyV2>,
+        source: &NativeSourceLedgerV2,
+        proposed: &CaseRow,
+    ) -> Result<RemainingCapacity, CommonSourceReplayErrorV2> {
+        if self.active.get() != Some(record.header().sequence)
+            || self.fail_capacity_at == Some(record.header().sequence)
+            || source.result() != &self.fixture.scenario.result
+            || proposed.service != self.fixture.scenario.service
+            || proposed.last_event != record.header().origin
+        {
+            return Err(CommonSourceReplayErrorV2::NativePolicy);
+        }
+        // Explicit LOCAL projection: actual unfinished fixture requests, with
+        // independently known response bodies, outer wire=7 and work=2. This
+        // neither assigns native rates nor certifies deadline/physical supply.
+        let mut held = RemainingCapacity { transmitted_bytes: 0, additional_work: 0, retained_bytes: 0 };
+        for (request, units) in self.fixture.requests.iter().zip(&self.fixture.raw) {
+            if source.request(request.id()).is_none() {
+                continue;
+            }
+            for (unit, raw) in units.iter().enumerate() {
+                if source.receipt(request.kind, request.source, unit as u64).is_none() {
+                    let body = 137 + raw.len() as u64;
+                    held.transmitted_bytes += body + 7;
+                    held.additional_work += 2;
+                    held.retained_bytes += body;
+                }
+            }
+        }
+        Ok(held)
     }
 }
 struct SourceEnvironment<'a> {
@@ -171,6 +227,8 @@ struct SourceEnvironment<'a> {
     poisoned: Cell<bool>,
     fee_timeline: std::cell::RefCell<Vec<(u8, u64)>>,
     fail_policy_at: Option<u64>,
+    exhaust_wire_at: Option<u64>,
+    fail_capacity_at: Option<u64>,
 }
 impl<'a> SourceEnvironment<'a> {
     fn new(fixture: &'a SourceFixture, journal: &'a Journal) -> Self {
@@ -185,6 +243,8 @@ impl<'a> SourceEnvironment<'a> {
             poisoned: Cell::new(false),
             fee_timeline: std::cell::RefCell::new(vec![]),
             fail_policy_at: None,
+            exhaust_wire_at: None,
+            fail_capacity_at: None,
         }
     }
     fn current_record(&self) -> Result<CaseJournalRecordView<'_>, SourceErrorV2> {
@@ -398,7 +458,14 @@ impl NativeReplayEnvironmentV2 for SourceEnvironment<'_> {
         if self.corrupt_basis && record.payload().get(4) == Some(&3) {
             before.as_mut().unwrap().charged_wire_bytes = 0;
         }
-        let policy = ToyUsagePolicy { active: &self.base.active, fail_at: self.fail_policy_at };
+        let policy = ToyUsagePolicy {
+            active: &self.base.active,
+            fail_at: self.fail_policy_at,
+            fixture: self.fixture,
+            last_usage: &self.last_usage,
+            exhaust_wire_at: self.exhaust_wire_at,
+            fail_capacity_at: self.fail_capacity_at,
+        };
         let effect = match state.apply_record(record, body, before, after, self, &policy, event) {
             Ok(effect) => effect,
             Err(error) => {
@@ -661,5 +728,54 @@ fn policy_failure_after_real_source_apply_poisons_every_getter_and_a_fresh_repla
     assert_eq!(fresh.facts()[0].terminal_kind(), TerminalKindV2::PositivePassed);
     assert_eq!(fresh.external().usage().unwrap().fee, 15);
     assert_eq!(fresh.external().history().unwrap().entries().len(), 7);
+    assert_eq!(fresh.external().case_row().unwrap().miner_data, MinerDataStatus::Complete);
+}
+
+#[test]
+fn a_fitting_court_charge_cannot_spend_capacity_still_owed_to_real_source_responses() {
+    let f = SourceFixture::new();
+    let mut bodies = f.bodies.clone();
+    // Move the next REAL checked relation between the artifact request and its
+    // first response. The source engine has four accepted outstanding units.
+    let next_frame = bodies.remove(4 + f.raw[0].len());
+    bodies.insert(4, next_frame);
+    let j = f.scenario.journal(&bodies);
+    let normal = SourceEnvironment::new(&f, &j);
+    let passed = replay_common_case_v2(&j, &j.links(), &normal, replay_limits()).unwrap();
+    assert_eq!(passed.facts()[0].terminal_kind(), TerminalKindV2::PositivePassed);
+    assert_eq!(passed.external().case_row().unwrap().miner_data, MinerDataStatus::Complete);
+
+    let mut starved = SourceEnvironment::new(&f, &j);
+    starved.exhaust_wire_at = Some(5); // The interleaved Court event fits by itself.
+    assert!(matches!(
+        replay_common_case_v2(&j, &j.links(), &starved, replay_limits()),
+        Err(CommonReplayErrorV2::Environment(Error::Source(CommonSourceReplayErrorV2::Contract(
+            misaka_palw_positive_contract::ContractError::Budget
+        ))))
+    ));
+    assert_eq!(starved.last_usage.get().unwrap().fee, 0, "no response was made unavailable and then treated as delivered");
+    assert!(starved.last_usage.get().unwrap().transmitted_bytes < f.scenario.service.budget.transmitted_bytes);
+    assert!(starved.poisoned.get());
+    assert_eq!(starved.base.final_calls.get(), 0);
+    assert_eq!(starved.base.live_commits.get(), 0);
+}
+
+#[test]
+fn missing_historical_capacity_protection_after_source_apply_cannot_publish_partial_state() {
+    let f = SourceFixture::new();
+    let j = f.journal();
+    let mut env = SourceEnvironment::new(&f, &j);
+    env.fail_capacity_at = Some(5); // Real first response already checked internally.
+    assert!(matches!(
+        replay_common_case_v2(&j, &j.links(), &env, replay_limits()),
+        Err(CommonReplayErrorV2::Environment(Error::Source(CommonSourceReplayErrorV2::NativePolicy)))
+    ));
+    assert!(env.poisoned.get());
+    assert_eq!(env.last_usage.get().unwrap().fee, 0);
+    assert_eq!(env.base.final_calls.get(), 0);
+    assert_eq!(env.base.live_commits.get(), 0);
+    let fresh_env = SourceEnvironment::new(&f, &j);
+    let fresh = replay_common_case_v2(&j, &j.links(), &fresh_env, replay_limits()).unwrap();
+    assert_eq!(fresh.external().usage().unwrap().fee, 15);
     assert_eq!(fresh.external().case_row().unwrap().miner_data, MinerDataStatus::Complete);
 }

@@ -553,7 +553,7 @@ fn candidate_authority_requires_a_finite_usable_signed_packet_limit() {
     let (result, service) = court_result(&f, false);
     let minimum = EVIDENCE_HEADER_BYTES as u64 + SIGNATURE_BYTES as u64;
     for unusable in [0, u64::MAX, minimum - 1] {
-        let mut court = court_with_verifier(result.clone(), service.clone(), verifier_with_limit(&result, unusable));
+        let mut court = court_with_verifier(result.clone(), service, verifier_with_limit(&result, unusable));
         let prepared = f.prepare(&result, limits());
         let witness = f.witness(&result, prepared.descriptor());
         let signature = sign_witness(&witness);
@@ -761,7 +761,7 @@ fn accepted_packet_receipts_require_the_full_plan_capacity_before_spending_an_at
             result.clone(),
             &miner_key(),
             &sign_result(&result),
-            service.clone(),
+            service,
             bounded,
             1,
         )

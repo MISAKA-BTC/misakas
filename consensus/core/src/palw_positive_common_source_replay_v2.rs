@@ -25,6 +25,7 @@ use misaka_palw_positive_contract::{
     identity::{Digest, ResultId},
     journal::{CaseJournalEventKind, CaseJournalRecordView},
     messages::{ClaimStatus, CoverageDescriptor, MinerDataStatus, MinerResultCommit, MinerServiceContract, SourceKind, WitnessStatus},
+    reservations::RemainingCapacity,
     rows::{AcceptedMaterial, AcceptedOrigin, AggregateUsage, CaseRow, ServiceReceiptRow, SourceUnionRow},
 };
 use std::collections::BTreeMap;
@@ -111,6 +112,21 @@ pub trait NativeCommonUsagePolicyV2 {
         court: CourtUsageDeltaV2,
         source_delta: AggregateUsage,
     ) -> Result<NativeUsageChargeV2, CommonSourceReplayErrorV2>;
+
+    /// Required protection for the proposed post-event Case and actual replayed
+    /// source ledger. Resolve ALL unfinished source/other-role reservations in
+    /// this existing projection, plus retention beyond response completion.
+    /// The historical native owner must also validate deadline/interval service
+    /// opportunity and physical leases; a scalar sum alone cannot do that.
+    /// No empty/successful default or guess of unassigned native units exists.
+    /// This is readonly: it must not commit live reservations or funding.
+    fn remaining_capacity(
+        &self,
+        record: CaseJournalRecordView<'_>,
+        body: Option<&PositiveNativeBodyV2>,
+        source: &NativeSourceLedgerV2,
+        proposed: &CaseRow,
+    ) -> Result<RemainingCapacity, CommonSourceReplayErrorV2>;
 }
 
 #[derive(Clone, Copy)]
@@ -367,6 +383,12 @@ impl CommonSourceReplayStateV2 {
         if changed {
             next.last_event = header.origin;
         }
+        // A currently fitting Court charge must not consume the capacity still
+        // owed to accepted source duties. Validate the same proposed transition
+        // after source reservation-to-consumption transfer, before publishing
+        // any Case/cursor. Any failure poisons the whole local projection; it is
+        // neither a Miner default nor a change to an accepted Complete receipt.
+        policy.remaining_capacity(record, body, &self.ledger, &next)?.check(&next.usage, &next.service.budget)?;
         self.ledger.refresh_case_usage(&next)?;
         self.case = next;
         self.last_sequence = header.sequence;

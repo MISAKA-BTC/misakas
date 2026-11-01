@@ -516,7 +516,7 @@ fn actual_tir_journal_replay_recomputes_pass_and_genuine_miner_mismatch() {
         assert_eq!(replay.current_court().cursor, s.descriptor.mandatory_relations);
         assert_eq!(replay.current_court().charged_wire_bytes, s.frames.iter().map(|f| signed_bytes(f)).sum::<u64>());
         assert_eq!(replay.events().len(), s.bodies.len());
-        assert!(env.role_calls.get() >= s.frames.len() as u64 + 1);
+        assert!(env.role_calls.get() > s.frames.len() as u64);
         assert_eq!(env.active.get(), None);
         assert_eq!(env.live_commits.get(), 0);
     }
