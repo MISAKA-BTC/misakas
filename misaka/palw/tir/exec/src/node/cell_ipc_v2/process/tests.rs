@@ -278,7 +278,7 @@ fn actual_process_builder_frames_native_bytes_exports_work_and_drop_reap() {
     assert_eq!(captured(&directory, "close2"), frame(&[5]));
     let payload = &captured(&directory, "open1")[8..];
     assert_eq!(Request::decode_bounded(payload, limits()).unwrap(), manual);
-    let source_quote = source.quote_admitted(&0..2, limits(), metadata).unwrap();
+    let source_quote = source.quote_admitted(&(0..2), limits(), metadata).unwrap();
     let expected_native =
         size_of::<Request>() as u64 + fixture.bytes.len() as u64 + 3 * size_of::<CellParamBlobV1>() as u64 + 2 + 8 + 16;
     assert_eq!(source_quote.request_bytes, expected_native);
