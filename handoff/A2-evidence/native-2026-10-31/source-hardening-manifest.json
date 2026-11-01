@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "source_candidate_commit": "416bdba72d20a3ddf40533ac0aa05ee3ce4cdb0d",
+  "parent_commit": "7fe48c398c2bb77dea5f6e92efe5950bf887177a",
+  "status": {
+    "source": "frozen",
+    "review": "read-only static review; no concrete defect found",
+    "runtime": "NOT EXECUTED; A0/A4 heavy-build hold; central slot not yet granted"
+  },
+  "files": {
+    "consensus/core/src/palw_positive_source_geometry_v2/independent_source_ledger.rs": "04289409d0d63d2f4b976bb6fac2b54107791d26f9c11be08cd28af2cdc92e5c",
+    "handoff/A2-evidence/native-2026-10-31/run_validation.py": "5a2d55aa0a9b30f7df9ea8d5776689bd28453ef9b0b14fdf49b31db7af9a78a3",
+    "handoff/A2-evidence/native-2026-10-31/independent-review.md": "228049b68d0394b3f762a1e26d509393db46045083628f47a0cf621b4b316863"
+  },
+  "production_diff_from_parent": "empty for listed paths",
+  "production_paths_checked": [
+    "consensus/core/src/palw_positive_source_v2.rs",
+    "consensus/core/src/palw_positive_source_v2_history.rs",
+    "consensus/core/src/palw_positive_source_v2_journal.rs",
+    "consensus/core/src/palw_positive_source_apply_v2.rs",
+    "consensus/core/src/palw_positive_source_geometry_v2.rs",
+    "misaka/palw/remote/src",
+    "kaspad/src/palw_positive_miner_source_v2.rs"
+  ],
+  "new_test_names": [
+    "independent_all_artifact_and_merkle_input_units_replay_from_one_source_journal_with_exact_first_receipts_and_dues",
+    "independent_requested_all_source_prefixes_cannot_restore_saved_complete_when_tail_or_middle_response_is_missing",
+    "independent_reconstructed_full_source_history_and_identical_case_do_not_transfer_prepared_instance_seals"
+  ],
+  "new_tests": 3,
+  "expected_source_geometry_suite_count": 40,
+  "observed_runtime_count": null,
+  "fixed_expectations": {
+    "artifact_raw_bytes": [
+      4,
+      4,
+      4,
+      4
+    ],
+    "merkle_input_raw_bytes": [
+      128,
+      128,
+      4
+    ],
+    "unique_source_bytes": 276,
+    "first_receipts": 7,
+    "test_fee_per_receipt": 3,
+    "first_fee_total": 21,
+    "fresh_rounds": 2,
+    "meaningful_source_records": 11
+  },
+  "negative_cases": [
+    "accepted requests remain Pending after missing tail or middle response",
+    "saved Complete Case cannot replace missing response material",
+    "later source event rejects omitted canonical source history without changing usage/receipts/history/revision",
+    "byte-identical reconstructed Case/history does not permit foreign-instance Prepared updates"
+  ],
+  "coverage_notes": [
+    "The same-RequestId delivery is excluded from this meaningful source slice; existing separate tests exercise NoOp classification.",
+    "Fixtures authenticate opening bytes and test request signatures only, not omitted admission/full Case/DB chain/accepted prefix/native roles.",
+    "A6 owns actual DB stage/sync/close/reopen/common-replay tests; this manifest is not their successful result.",
+    "Existing pending_fee does not protect source wire/work/retention/future-slot reservations.",
+    "Native factory/mapper/reservation owner/qualified settlement remain unprovided; proposed Assignment RFC/ADR remains unadopted."
+  ],
+  "planned_runner": [
+    "python3",
+    "handoff/A2-evidence/native-2026-10-31/run_validation.py",
+    "source-focused"
+  ],
+  "execution_boundary": "Not executed. Wait for the separately granted central build slot and use its owner-approved existing target/cache. Do not infer a successful re-link or native authority from static review."
+}
