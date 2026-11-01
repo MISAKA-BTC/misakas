@@ -200,10 +200,10 @@ impl VirtualStateProcessor {
             Err(_) => self.template_parent_legacy_fallback_v1(target),
         };
         let key = self.palw_state_params_v2.as_ref().map(|_| self.template_parent_key_v1(target)).transpose()?;
-        if let (Some(key), Some((at, state))) = (key, state.as_ref()) {
-            if *at != key.target || key.root.is_some_and(|root| state.state_root() != root) {
-                return Err(PalwWeighFaultV2::StoreUnreadable);
-            }
+        if let (Some(key), Some((at, state))) = (key, state.as_ref())
+            && (*at != key.target || key.root.is_some_and(|root| state.state_root() != root))
+        {
+            return Err(PalwWeighFaultV2::StoreUnreadable);
         }
         let prepared = PreparedTemplateParentV1 { key, state, checked: checked.map(|_| ()) };
         self.check_prepared_template_parent_v1(&prepared)?;
@@ -212,10 +212,10 @@ impl VirtualStateProcessor {
 
     /// Only fixed-size metadata reads. This method MUST NOT run a cold loader.
     pub(super) fn check_prepared_template_parent_v1(&self, prepared: &PreparedTemplateParentV1) -> Result<(), PalwWeighFaultV2> {
-        if let Some(key) = prepared.key {
-            if !key.stable || key.active.is_some() || self.template_parent_key_v1(key.target)? != key {
-                return Err(PalwWeighFaultV2::NoOpinion);
-            }
+        if let Some(key) = prepared.key
+            && (!key.stable || key.active.is_some() || self.template_parent_key_v1(key.target)? != key)
+        {
+            return Err(PalwWeighFaultV2::NoOpinion);
         }
         Ok(())
     }
