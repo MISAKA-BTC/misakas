@@ -1,0 +1,97 @@
+{
+  "artifact": "/tmp/positive-a0-wide-panel-material-v2.r4.patch",
+  "sha256": "93fc6a4985efd4f2892d42250a25adcdcfb74344d4f19dff3f302e6ab3fcbf20",
+  "source_tree": "/tmp/positive-wide-panel-v4-frozen",
+  "base_commit": "cc22b0da13784eb03a023cbd1781969577883d9e",
+  "requires": "Root cc22b0da1 (r3 applied and nested checked-add ? propagation fixed)",
+  "files": [
+    {
+      "path": "consensus/core/src/palw_positive_check_v2/full_relation/wide_v2.rs",
+      "before_sha256": "3c0ede7b36f94031f493a48cd842bcf8a88cd99578b5c6bd0323de9fdf956c68",
+      "after_sha256": "a0b449e48c41226905c662e565eed683e88b83a4776e1980c666729e8be747bd"
+    },
+    {
+      "path": "misaka/palw/tir/exec/src/node/positive_wide_material_v2/capture.rs",
+      "before_sha256": "00d936f14bfd8e93004d17a00a7b17d214e2ffb06491c27d649226e83e3bb069",
+      "after_sha256": "0626efeb769bb281cbd1e93aae923c1f237f7f771835871f7bbcedffd894bc84"
+    },
+    {
+      "path": "misaka/palw/tir/exec/src/node/positive_wide_material_v2/claims_tape.rs",
+      "before_sha256": "3f2cf3a94b9b3d0d4188fa6ae73477775ab0143b6d559fe8afd4222002cc24cc",
+      "after_sha256": "35c363b97c352d92c273049f4c94e3d242c4bb55de6a740c93a5afc388007108"
+    },
+    {
+      "path": "misaka/palw/tir/exec/src/node/positive_wide_material_v2/proof.rs",
+      "before_sha256": "0ad7c89eefb022ff4f525ae84bf32d72959c035cf652f252deea1ad98d9d0ce7",
+      "after_sha256": "628fbdd743ba16e9030adf081bd84b0152b6809a2ab5d2be9477ace1f996f64c"
+    },
+    {
+      "path": "misaka/palw/tir/exec/src/node/run_wide_q24_v2.rs",
+      "before_sha256": "c046784b97f1f706f0d51090fc7be80042414dea7fc8ec5963c43eed294db1ff",
+      "after_sha256": "accc60ab3039a8af9bb042d905cc15b7905222b7d3951e0d052f4d70d561fa29"
+    },
+    {
+      "path": "misaka/palw/tir/exec/tests/positive_wide_material_v2.rs",
+      "before_sha256": "0a73750f34593f4608f2b0004eee680d6645e6347ed14426100a784447131024",
+      "after_sha256": "d9cadae593b410f7c184924dcc516c09d00689364e30813d17c5e24072b1b0ce"
+    }
+  ],
+  "test_names": [
+    "one_pass_wide_tape_materials_reach_real_node_for_windows_one_and_three",
+    "wrong_panel_claim_remains_witness_rejection_and_wrong_miner_waits_for_all_relations",
+    "unknown_provider_scratch_is_refused_without_resetting_session_costs",
+    "captured_gather_select_topk_and_fixed_history_feed_actual_node_without_discovery_evaluation",
+    "failed_capture_keeps_shared_spent_work_and_cannot_start_a_second_cpu_run",
+    "oversized_typed_network_is_dropped_before_hashing_or_starting_the_cpu_run",
+    "required_same_ledger_capture_and_run_guards_survive_until_owned_capture_drop",
+    "denied_capture_ram_reservation_precedes_all_allocating_identity_hashes"
+  ],
+  "test_status": "ALL_EIGHT_WRITTEN_NOT_COMPILED_OR_EXECUTED_FOR_R4",
+  "freeze_status": "IMMUTABLE_R4_STATIC_REVIEW_READY_NOT_BUILT",
+  "checks": {
+    "rustfmt_parse_and_format": "PASS",
+    "git_apply_check": "PASS",
+    "before_sha_matches_current_root": "PASS",
+    "root_source_writes": false,
+    "index_or_commit_changes": false,
+    "cargo_or_rust_build": false,
+    "independent_review": "PENDING"
+  },
+  "fixes": [
+    "separate explicit per-material read/unit/target/auth caps from cumulative visits and bound them by unchanged Node caps",
+    "mandatory same-ledger run lease on the new fallible route, stored in owned returned run, no optional-global double reservation",
+    "mandatory capture lease before allocating context/class/layout hashing or encoding; include foreign layout bytes in metadata envelope",
+    "compare opaque original program serialization without a new encoded Vec or expected-length allocation assumption",
+    "explicit caller ownership/lifetime conditions for exports, tape callbacks, frozen record and signing/hash/Node allocations"
+  ],
+  "api_ownership_note": {
+    "path": "/tmp/positive-wide-panel-v4-frozen/API-OWNERSHIP.txt",
+    "sha256": "55733f2d1d995d7fd237dd0516eebb70723426ac778007de29d462ba9553b675"
+  },
+  "preserved_inputs": [
+    {
+      "path": "/tmp/positive-a0-wide-panel-material-v2.initial.patch",
+      "sha256": "16b2de79f1c0597253ea9b8680f69bef87a03d305f41ca126b2bc4b4631da165"
+    },
+    {
+      "path": "/tmp/positive-a0-wide-panel-material-v2.r2.patch",
+      "sha256": "bb6c9687dcce2e40e5e4f70d610756a686e91d46ce333daa7c82c17635f9f52e"
+    },
+    {
+      "path": "/tmp/positive-a0-wide-panel-material-v2.r3.patch",
+      "sha256": "2b6a434f19d1a48f348383d2484db2b01cc621e47339944a498dd380fa8da8c6"
+    },
+    {
+      "path": "/tmp/positive-a0-wide-panel-material-v2.r3.manifest.json",
+      "sha256": "c26a981b0f359e185928ddbc768af89ed232fc08553e8a7f301872ec883104b4"
+    }
+  ],
+  "remaining": [
+    "stream/tape-backed full record/signing and actual Node claim reader",
+    "RAM run/Merkle spill/residency feasibility for actual LLMs",
+    "held/Merkle prompt producer adapter",
+    "actual native service/catalog/lease/funding/role owner integration",
+    "real trained Hugging Face model maximum-context registration/runtime feasibility; no completion claim",
+    "no native wire/domain/tag/rate/activation change"
+  ]
+}

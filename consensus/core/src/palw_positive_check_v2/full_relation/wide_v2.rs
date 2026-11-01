@@ -114,6 +114,11 @@ impl FullRelationPreparationV2 {
     pub fn artifact(&self) -> Hash64 {
         self.artifact
     }
+    /// Immutable per-material Node limits. Producer/authentication-local caps
+    /// may be stricter; session-wide work is never a replacement for these.
+    pub fn source_limits(&self) -> TirSourceOnlyLimitsV1 {
+        self.limits.source
+    }
     pub fn prompt_form(&self) -> PalwPromptIdsFormV1 {
         self.form
     }

@@ -11,6 +11,27 @@ use kaspa_consensus_core::{
 };
 use misaka_palw_tir::{Prim, demand::history_length_v1};
 use std::{cell::Cell, rc::Rc};
+/// Compare canonical original program bytes without allocating an encoded Vec.
+/// A foreign expected class may be much smaller than the independently held
+/// space; its claimed length must never size a clone of that other program.
+fn program_matches(program: &misaka_palw_tir::TirProgramV1, expected: &[u8]) -> bool {
+    use borsh::BorshSerialize;
+    struct Match<'a>(&'a [u8]);
+    impl std::io::Write for Match<'_> {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            if !self.0.starts_with(b) {
+                return Err(std::io::ErrorKind::InvalidData.into());
+            }
+            self.0 = &self.0[b.len()..];
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut out = Match(expected);
+    program.serialize(&mut out).is_ok() && out.0.is_empty()
+}
 /// Metadata comes from the actual registry/job owner, not a peer capture. This
 /// borrowed DTO is no native authorization and does not invent an assignment.
 pub struct CaptureExpectedV2<'a> {
@@ -46,6 +67,10 @@ impl WidePanelCaptureV2<'_> {
     pub fn run(&self) -> &TirJobRunWideQ24V2 {
         &self.run
     }
+    /// Owned metadata export. The caller MUST acquire an independent export
+    /// guard before this call, additive to all earlier copies, and retain it
+    /// until the returned binding/copies are dropped, even after capture Drop.
+    /// The capture lease and copy-work counter do not own that returned lifetime.
     pub fn binding(&self) -> Result<PalwTirStepBindingV1, Error> {
         let c = self.expected.class;
         let bytes = add(
@@ -437,48 +462,58 @@ pub fn capture_one_pass_v2<'a>(
     if work.started.replace(true) {
         return Err("wide attempt CPU run already started; spent work is retained".into());
     }
-    // 1024 covers all fixed job fields/Borsh prefixes; network bytes are explicit.
-    session.charge(Charge::Hash, add(1024, count(expected.job.network_id.len())?)?)?;
+    // Only immutable lengths/checked arithmetic and the runner's pure quote
+    // occur before this mandatory capture lease. The ledger key is the owner's
+    // pre-existing fixed expectation, not a freshly hashed delivered DTO.
+    // The opaque actual space was independently decoded under the format cap;
+    // bound metadata quote/equality work even when the foreign expected bytes
+    // are tiny. No numerical execution or program Vec allocation occurs here.
+    session.charge(Charge::Visit, mul(add(misaka_palw_tir::program::MAX_PROGRAM_BYTES as u64, 1024)?, 128)?)?;
+    let run_quote = runner.quote(expected.job, run_limits)?;
+    let records_cap = usize::try_from(limits.max_records).map_err(|_| "wide records index")?;
+    let leaves_cap = usize::try_from(limits.max_step_leaves).map_err(|_| "wide leaves index")?;
+    let layout_bytes = add(32, mul(count(expected.class.layout.commit_tiles.len() + expected.class.layout.state_tiles.len())?, 4)?)?;
+    let context_bytes = add(1024, count(expected.job.network_id.len())?)?;
+    // Metadata request envelope: original program re-encoding, layout Borsh
+    // hashing and context Borsh hashing, allowing Vec growth/coexisting writers.
+    // Include FOREIGN layout length explicitly, even before layout equality.
+    let metadata_scratch = mul(add(add(count(expected.class.program.len())?, layout_bytes)?, context_bytes)?, 4)?;
+    // A callback first decodes one mixed-width leaf to i128 (<=4x its bytes),
+    // DROPS that Vec, then hashes/writes the borrowed preimage. Runner-owned
+    // native tile/preimage/hash buffers are separately in run_quote.
+    let callback_scratch = mul(limits.max_material_bytes, 4)?;
+    // Fixed local rank/scalar/hash/4096-byte IO/control request envelope. This
+    // is not process RSS; original stack/allocator/OS owners remain external.
+    let control_scratch = 65536u64;
+    let heap = [
+        limits.external_retained_bytes,
+        mul(limits.max_records, size_of::<Record>() as u64)?,
+        mul(limits.max_step_leaves, size_of::<Leaf>() as u64)?,
+        metadata_scratch,
+        callback_scratch,
+        control_scratch,
+    ]
+    .into_iter()
+    .try_fold(0, add)?;
+    if add(heap, run_quote.requested_bytes)? > limits.max_live_heap_bytes {
+        return Err("wide collector simultaneous heap cap".into());
+    }
+    let lease = reserver("positive-wide-panel-capture-v2", work.class, work.execution, heap)?;
+    // Hash work accounting is additive to the RAM guards, never a substitute.
+    session.charge(Charge::Hash, context_bytes)?;
     let execution = expected.job.context_hash();
     if work.class != expected.job.shape_profile_id || work.execution != execution {
         return Err("wide work belongs to another original job/class".into());
     }
     session.charge(
         Charge::Hash,
-        add(
-            mul(
-                add(
-                    count(expected.class.program.len())?,
-                    mul(count(expected.class.layout.commit_tiles.len() + expected.class.layout.state_tiles.len())?, 4)?,
-                )?,
-                8,
-            )?,
-            mul(count(expected.prompt.len())?, 4)?,
-        )?,
+        add(mul(add(count(expected.class.program.len())?, layout_bytes)?, 8)?, mul(count(expected.prompt.len())?, 4)?)?,
     )?;
-    session.charge(Charge::Visit, mul(add(count(expected.class.program.len())?, 1024)?, 128)?)?;
     let class_id = expected.class.class_id(&expected.artifact);
-    let run_quote = runner.quote(expected.job, run_limits)?;
-    let records_cap = usize::try_from(limits.max_records).map_err(|_| "wide records index")?;
-    let leaves_cap = usize::try_from(limits.max_step_leaves).map_err(|_| "wide leaves index")?;
-    let heap = add(
-        limits.external_retained_bytes,
-        add(
-            mul(limits.max_records, size_of::<Record>() as u64)?,
-            add(
-                mul(limits.max_step_leaves, size_of::<Leaf>() as u64)?,
-                add(mul(count(expected.class.program.len())?, 4)?, add(mul(limits.max_material_bytes, 4)?, 65536)?)?,
-            )?,
-        )?,
-    )?;
-    if add(heap, run_quote.requested_bytes)? > limits.max_live_heap_bytes {
-        return Err("wide collector simultaneous heap cap".into());
-    }
-    let lease = reserver("positive-wide-panel-capture-v2", class_id, execution, heap)?;
     if expected.class.program.len() > misaka_palw_tir::program::MAX_PROGRAM_BYTES
         || class_id != expected.job.shape_profile_id
         || expected.class.layout != *expected.space.layout()
-        || expected.class.program != expected.space.program().encode()
+        || !program_matches(expected.space.program(), &expected.class.program)
         || runner.original_space().program() != expected.space.program()
         || runner.original_space().layout() != expected.space.layout()
         || !prompt_token_ids_match_v1(PalwPromptIdsFormV1::Flat, expected.prompt, &expected.job.prompt_token_ids_hash)
@@ -506,7 +541,7 @@ pub fn capture_one_pass_v2<'a>(
         let b = shared.borrow();
         (b.e.job, b.e.prompt, b.context)
     };
-    let run = runner.run_observed_fallible(job, prompt, execution, run_limits, &mut leaves, &mut observer)?;
+    let run = runner.run_observed_fallible(job, prompt, execution, run_limits, &mut leaves, &mut observer, reserver)?;
     drop(leaves);
     drop(observer);
     let mut b = Rc::try_unwrap(shared).map_err(|_| "wide collector leaked callback")?.into_inner();

@@ -21,7 +21,7 @@ use kaspa_consensus_core::{
 use misaka_palw_tir::{StateKind, TirError, TirErrorKind, admit::node_cost};
 
 use super::{
-    memory::{self, TirMemoryLeaseV1},
+    memory::{self, TirMemoryLeaseV1, TirMemoryReserverV1},
     run::{ObservedSink, TirRunObserverV1},
 };
 use crate::{
@@ -164,7 +164,12 @@ impl<'a> TirClassRunnerWideQ24V2<'a> {
     pub fn original_space(&self) -> &PalwTirStepSpaceV2 {
         self.space
     }
-    /// Pure closed-form preflight. No position/leaf list or encoded program is allocated.
+    /// Structural request preflight over an already validated, borrowed plan.
+    /// The successful path makes no heap input-type/shape Vec, position/leaf list
+    /// or encoded program. node_cost folds borrowed operand views. Error Strings
+    /// remain caller-owned control/error allocations, not a RAM admission token.
+    /// Both the capture preflight and direct required-run API use this same path;
+    /// their actual data/executor allocations still require the following guard.
     pub fn quote(&self, ctx: &PalwJobContextV2, limits: TirWideRunLimitsV2) -> Result<TirWideRunQuoteV2, String> {
         if ctx.shape_profile_id != self.class_id {
             return Err("wide job names another class".into());
@@ -272,7 +277,7 @@ impl<'a> TirClassRunnerWideQ24V2<'a> {
             on_leaf(leaf);
             Ok(())
         };
-        self.drive(ctx, prompt, expected_execution, limits, &mut forward, None)
+        self.drive(ctx, prompt, expected_execution, limits, &mut forward, None, None)
     }
 
     /// Every-node/state/native-output observation within this same single run.
@@ -291,12 +296,18 @@ impl<'a> TirClassRunnerWideQ24V2<'a> {
             on_leaf(leaf);
             Ok(())
         };
-        self.drive(ctx, prompt, expected_execution, limits, &mut forward, Some(observer))
+        self.drive(ctx, prompt, expected_execution, limits, &mut forward, Some(observer), None)
     }
 
     /// Fallible local custody callback. A failed tape write aborts this same
     /// run immediately; partial values cannot become a completed capture.
-    /// Original run/run_observed callback APIs and all output bytes are retained.
+    /// Requires the actual caller's RAM ledger; its run guard is retained by
+    /// the returned TirJobRunWideQ24V2. No optional-global fallback or double
+    /// reservation occurs here. Its validated success quote is a borrowed,
+    /// heap-allocation-free structural traversal before acquisition; malformed
+    /// request/error Strings remain under the caller's control/error owner.
+    /// Original run/run_observed APIs remain optional and all successful output
+    /// bytes are retained.
     #[allow(clippy::too_many_arguments)]
     pub fn run_observed_fallible(
         &self,
@@ -306,8 +317,9 @@ impl<'a> TirClassRunnerWideQ24V2<'a> {
         limits: TirWideRunLimitsV2,
         on_leaf: &mut dyn FnMut(&TirLeafOutWideQ24V2<'_>) -> Result<(), String>,
         observer: &mut dyn TirRunObserverV1,
+        required_reserver: &TirMemoryReserverV1,
     ) -> Result<TirJobRunWideQ24V2, String> {
-        self.drive(ctx, prompt, expected_execution, limits, on_leaf, Some(observer))
+        self.drive(ctx, prompt, expected_execution, limits, on_leaf, Some(observer), Some(required_reserver))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -319,6 +331,7 @@ impl<'a> TirClassRunnerWideQ24V2<'a> {
         limits: TirWideRunLimitsV2,
         on_leaf: &mut dyn FnMut(&TirLeafOutWideQ24V2<'_>) -> Result<(), String>,
         mut observer: Option<&mut dyn TirRunObserverV1>,
+        required_reserver: Option<&TirMemoryReserverV1>,
     ) -> Result<TirJobRunWideQ24V2, String> {
         let q = self.quote(ctx, limits)?;
         if prompt.len() != ctx.declared_prefill_tokens as usize {
@@ -329,7 +342,13 @@ impl<'a> TirClassRunnerWideQ24V2<'a> {
         }
         // Bounded hashing follows simultaneous request admission; caller pins the
         // independently resolved expected execution, never a delivered replacement.
-        let lease = memory::reserve_v1(&memory::memory_reserver_v1(), "tir-wide-q24-v2", self.class_id, ctx, q.requested_bytes)?;
+        // Required Panel route uses this SAME ledger and the independently
+        // supplied fixed execution ID before any allocating context hash. Never
+        // also acquire the optional global lease. Successful run owns the guard.
+        let lease = match required_reserver {
+            Some(reserver) => Some(reserver("tir-wide-q24-v2-required", self.class_id, expected_execution, q.requested_bytes)?),
+            None => memory::reserve_v1(&memory::memory_reserver_v1(), "tir-wide-q24-v2", self.class_id, ctx, q.requested_bytes)?,
+        };
         let context = ctx.context_hash();
         if context != expected_execution {
             return Err("wide original execution pin differs".into());

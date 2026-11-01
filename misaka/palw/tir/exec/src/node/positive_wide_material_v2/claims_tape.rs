@@ -3,6 +3,9 @@
 //! No new domain/ID, generic deserializer, signature or arithmetic certificate.
 //! The current Node PrototypePanelRecord still owns Vec<Vec<i128>>: stream-backed
 //! record signing/checking is a required next integration, not completed here.
+//! Existing Core record.hash already uses HashWriter streaming: the missing
+//! part is replacing its retained Vec<Vec<i128>> owner/reader, not inventing a
+//! new hash/domain or an extra full encoded-record allocation.
 use super::proof::WidePanelBuilderV2;
 use super::*;
 /// Owns one empty local file. Not reopenable from a saved "complete" bit.
@@ -14,6 +17,11 @@ pub struct WideClaimsTapeV2<'s> {
     max_tile_lanes: u64,
 }
 impl WidePanelBuilderV2<'_, '_> {
+    /// Per-tile temporaries stay under the live builder request. If callers
+    /// materialize all claims (e.g. compatibility freeze_record), they MUST
+    /// separately quote/acquire/retain the complete Vec capacities, binding,
+    /// generated IDs, frozen record, signing/hash and Node-checker owners.
+    /// retained_record_bytes!=0 is only a declared cap, never such a receipt.
     pub fn claims_tape<'s>(&'s self, file: File) -> Result<WideClaimsTapeV2<'s>, Error> {
         let count = self.plan().summary().relations;
         let relations = u32::try_from(count).map_err(|_| "wide claims Borsh count")?;
@@ -62,6 +70,9 @@ impl WideClaimsTapeV2<'_> {
     }
     /// Sequential bounded access for a future stream-record checker. This emits
     /// raw Panel claims, never trusted operands or a stored checker result.
+    /// The callback MUST acquire its own guard before retaining/copying values
+    /// and keep it through that independent lifetime. A visit into Vec<Vec<_>>
+    /// is the explicit RAM compatibility path, not stream-record completion.
     pub fn visit(&self, visit: &mut dyn FnMut(u32, &[i128]) -> Result<(), Error>) -> Result<(), Error> {
         let mut at = 0;
         let mut n = [0; 4];

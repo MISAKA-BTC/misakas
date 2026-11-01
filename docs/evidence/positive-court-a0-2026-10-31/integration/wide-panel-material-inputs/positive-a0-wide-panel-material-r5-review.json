@@ -1,0 +1,88 @@
+{
+  "kind": "Independent frozen r5 source-only review; suitable for controlled compile/test, not runtime/native readiness.",
+  "recorded_at_utc": "2026-11-01T14:49:12.354132+00:00",
+  "patch_sha256": "558c78c9eb4f72a232d307089ed9eae7315a482ae32687b6312b731979be2ccf",
+  "manifest_sha256": "a50b33640cfe59aeb3737edac1495cd0735f6aaf7d0795b7158cb7d33aa23e1e",
+  "base_commit": "cc22b0da13784eb03a023cbd1781969577883d9e",
+  "r4_reference_review_sha256": "bc0d80af9476e68106853448192c5f745f2c574dbdf2d01bac4554adada81758",
+  "blockers": [],
+  "verification": {
+    "all_nine_current_before_and_frozen_after_hashes_match": true,
+    "git_apply_check": true,
+    "r4_byte_identical_files": [
+      "consensus/core/src/palw_positive_check_v2/full_relation/wide_v2.rs",
+      "misaka/palw/tir/exec/src/node/positive_wide_material_v2/capture.rs",
+      "misaka/palw/tir/exec/src/node/positive_wide_material_v2/claims_tape.rs",
+      "misaka/palw/tir/exec/src/node/positive_wide_material_v2/proof.rs",
+      "misaka/palw/tir/exec/tests/positive_wide_material_v2.rs"
+    ],
+    "runner_executable_code_identical_to_r4_doc_comments_only": true,
+    "admit_prefix_before_private_cost_view_unchanged": true,
+    "admit_tail_after_node_cost_unchanged": true,
+    "five_old_helper_bodies_unchanged_in_production_and_frozen_test": {
+      "ref_type": "fba0ef81e80a01643028e725a091bfc192f8207bf33f34ec34498801d4f16b34",
+      "elems": "a6e1a9a5d70fdf07f091a4bc6f85e293fed796c3424cbc0d9c4547b354719fa6",
+      "bytes": "959144a86d5c8cb565a42025d6749027a7b1129f487cff11f5f085261d6236b9",
+      "dim_at": "aebe02d5bd790ba7710a5e94de7e30b63bce4d0a7446b97dd6d0c24cf1feee1f",
+      "contraction": "fd546a5fcf0f8e937c069059993fa386d71b108135ca4b835e3d7ccfdeb23f71"
+    },
+    "legacy_node_cost_test_body_exact_original_sha256": "64a7d373225da9e7cb7968af84e50171d0aae21a8dbb870d02fd7491b1d3185d",
+    "ten_test_names_match_manifest": true
+  },
+  "cost_equivalence": [
+    {
+      "area": "Input views",
+      "reason": "Node and CarryIn borrow the same TensorType; Param/Const/State borrow dtype and original u32 shape. TensorType::fixed formerly mapped every extent to Dim::Fixed, whose ordered saturating product is exactly the new Fixed product. Scalar Input formerly used empty-shape TensorType::scalar(Idx), giving one element and Idx width; new IndexScalar is identical."
+    },
+    {
+      "area": "Saturation and evaluation order",
+      "reason": "Both versions compute output elements/bytes first, then visit every input in original order and saturating-add each full input byte count. Within each shape, the left fold starts at one and applies the same saturating multiply by each original extent, then dtype width. No reassociation across products or additions."
+    },
+    {
+      "area": "Cost branches",
+      "reason": "Gather remains out_elements*input0_width + input1_bytes; MatMul remains out_elements*last input0 dimension evaluated at H; reductions and TopK use same input0 elements; transcendental/Iota/default branches and HistAppend byte directions unchanged. All multiplications/additions retain the original saturating order and u64 widths."
+    },
+    {
+      "area": "Validated-node assumption",
+      "reason": "MatMul last_extent changes the shape lookup form, but validated MatMul rank is nonzero and the same last Fixed/H extent is selected. Malformed rank/index programs remain unsupported inputs and can panic in both forms; this is not a new validator/acceptance path."
+    },
+    {
+      "area": "Fees/IDs/other callers",
+      "reason": "Public node_cost signature and CostV1 fields unchanged. Other ref_type/Cow/contraction/cone/admission code remains byte-identical, including fee/demand equations. No wire/domain/tag/rate/class/program/identity/authority change."
+    }
+  ],
+  "r4_prelease_allocation_blocker": {
+    "status": "CLOSED_BY_SOURCE_STRUCTURE_FOR_VALID_SUCCESS_QUOTE; allocation tests still unexecuted",
+    "reason": "node_cost no longer constructs Vec<Cow<TensorType>>, owned TensorType fixed shapes, or any heap owner. The successful complete runner.quote uses borrowed validated geometry, scalar checked folds, size/count arithmetic and borsh object_length, not program encoding. Capture and direct required runner both reach that same quote. Error/control Strings are explicitly caller-owned and not claimed allocation-free."
+  },
+  "test_source_review": {
+    "count": 10,
+    "status": "ALL_TEN_WRITTEN_NOT_COMPILED_OR_EXECUTED_FOR_R5",
+    "new_core_test": "Exact old reference body plus every corpus node at H=0/1/2/17/u32::MAX/u64::MAX, all six Ref kinds and saturation assertions. Thread-local GlobalAlloc probe detects a live Vec sentinel before requiring zero node_cost allocations. Test inputs/setup/old allocating reference occur outside the measured interval.",
+    "new_exec_test": "Measures whole successful quote with existing wide fixture history windows1/3, and a positive allocation sentinel. It is a borrowed-plan success test; startup/compile/error allocations remain excluded. An unmeasured preceding quote is used as expected value; inspected success path has no lazy cache/interior-mutability allocation, but this is source review, not observed runtime allocation evidence.",
+    "commands_after_parent_cache_authorization": [
+      "cargo test --locked -p misaka-palw-tir --test node_cost_noalloc",
+      "cargo test --locked -p misaka-palw-tir-exec --features positive-panel --test positive_wide_material_v2",
+      "cargo test --locked -p misaka-palw-tir-exec --features node --test wide_quote_noalloc"
+    ],
+    "existing_expected_vectors_not_regenerated": true
+  },
+  "preserved_r4_scope_limits": [
+    "stream/tape-backed full record/signing and actual Node claim reader",
+    "RAM run/Merkle spill/residency feasibility for actual LLMs",
+    "held/Merkle prompt producer adapter",
+    "actual native service/catalog/lease/funding/role owner integration",
+    "real trained Hugging Face model maximum-context registration/runtime feasibility; no completion claim",
+    "no native wire/domain/tag/rate/activation change"
+  ],
+  "residual_limits": [
+    "No new per-material seven-cap negative matrix is added by r5; prior r4 source review only.",
+    "R3 previous compile/runtime/provider budget failures remain prior-source evidence and are not cleared by this source review.",
+    "Full record/tape/signing/Node-reader ownership, actual native role/service/catalog/funding owners and trained-LLM role-path RAM/spill feasibility remain incomplete.",
+    "The separately audited real LLM local CPU/capture roundtrip does not establish this new Panel material route or native certification."
+  ],
+  "reviewer_root_source_or_index_changes": false,
+  "reviewer_cargo_or_build": false,
+  "reviewer_test_execution": false,
+  "mutable_stage_reads": false
+}

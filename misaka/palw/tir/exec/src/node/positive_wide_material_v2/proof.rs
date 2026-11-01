@@ -38,10 +38,18 @@ pub struct WideProviderEnvelopeV2 {
 }
 #[derive(Clone, Copy)]
 pub struct WidePanelOwnersV2 {
+    /// Explicit PER-MATERIAL authentication/source caps. These must be finite,
+    /// no larger than the immutable Node preparation caps, and fit the actual
+    /// source/metadata owner bytes below. Cumulative max_visits is separate.
+    pub material_limits: TirSourceOnlyLimitsV1,
     pub metadata_auth_bytes: u64,
     pub metadata_auth_work: u64,
     pub source_auth_bytes: u64,
     pub signature_bytes: u64,
+    /// Caller-declared ceiling for the independent record owner, not a receipt
+    /// that Vec<Vec<i128>>, signatures or arbitrary later exports are reserved.
+    /// Actual record allocation/signing/hash/Node owners acquire their guards
+    /// BEFORE materializing and retain them until every owned value is dropped.
     pub retained_record_bytes: u64,
 }
 type BuiltMaterialV2 = (PalwStepInputRowV1, PalwTirParamOpeningV1, Vec<u32>, Option<WideGeneratedIdsPinV2>, Option<WidePanelTargetV2>);
@@ -128,6 +136,33 @@ impl<'c, 'a> WidePanelBuilderV2<'c, 'a> {
             add(mul(count(e.class.program.len())?, 128)?, mul(mul(count(p.params.len() + p.states.len())?, layers)?, 64)?)?;
         if owners.metadata_auth_bytes < metadata_floor || owners.metadata_auth_work < work_floor {
             return Err("wide metadata owner below derived original-program request floor".into());
+        }
+        let local = owners.material_limits;
+        let node = prep.source_limits();
+        let local_words = [
+            local.max_source_reads,
+            local.max_target_lanes,
+            local.max_target_bytes,
+            local.max_material_bytes,
+            local.max_material_units,
+            local.max_auth_storage_bytes,
+            local.max_workspace_bytes,
+        ];
+        let node_words = [
+            node.max_source_reads,
+            node.max_target_lanes,
+            node.max_target_bytes,
+            node.max_material_bytes,
+            node.max_material_units,
+            node.max_auth_storage_bytes,
+            node.max_workspace_bytes,
+        ];
+        if local_words.iter().zip(node_words).any(|(a, b)| *a == 0 || *a > b)
+            || local.max_material_bytes > l.max_material_bytes
+            || local.max_auth_storage_bytes > owners.source_auth_bytes
+            || local.max_workspace_bytes > owners.metadata_auth_bytes
+        {
+            return Err("wide per-material source limits exceed Node or local owner caps".into());
         }
         let trees =
             capture.run.logits_rows().iter().try_fold(tir_full_tree_storage_need_v1(capture.run.leaf_count())?, |a, row| {
@@ -335,19 +370,16 @@ impl<'c, 'a> WidePanelBuilderV2<'c, 'a> {
         }
     }
     fn source_limits(&self) -> TirSourceOnlyLimitsV1 {
-        let l = self.capture.session.limits;
-        TirSourceOnlyLimitsV1 {
-            max_source_reads: l.max_visits,
-            max_target_lanes: l.max_trace_frames,
-            max_target_bytes: l.max_material_bytes,
-            max_material_bytes: l.max_material_bytes,
-            max_material_units: l.max_trace_frames,
-            max_auth_storage_bytes: self.owners.source_auth_bytes,
-            max_workspace_bytes: self.owners.metadata_auth_bytes,
-        }
+        self.owners.material_limits
     }
     /// Extract only comparison claims from the same run, preserving original i128
     /// integers. These values never become Node source operands or computation credit.
+    /// The returned Vec is CALLER-OWNED: before calling, acquire its own export
+    /// guard (max_claim_bytes plus Vec header), additive to all earlier retained
+    /// exports, and keep it until that Vec/any copies are dropped. Builder Drop
+    /// cannot release or certify those allocations. Prefer claims_tape for a
+    /// bounded streaming producer; legacy freeze_record still needs its actual
+    /// full claims/record/signature owner, not merely retained_record_bytes!=0.
     pub fn claim(&self, index: u64) -> Result<Vec<i128>, Error> {
         self.capture.session.charge(Charge::Visit, self.prep.plan().summary().geometry_visit_bound)?;
         let r = self.prep.plan().relation_at(index).ok_or("wide claim index")?;

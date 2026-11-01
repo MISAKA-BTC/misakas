@@ -207,6 +207,15 @@ fn run_bounds() -> TirWideRunLimitsV2 {
 }
 fn owners() -> WidePanelOwnersV2 {
     WidePanelOwnersV2 {
+        material_limits: TirSourceOnlyLimitsV1 {
+            max_source_reads: 256,
+            max_target_lanes: 1 << 16,
+            max_target_bytes: 1 << 20,
+            max_material_bytes: 1 << 20,
+            max_material_units: 1 << 16,
+            max_auth_storage_bytes: 1 << 24,
+            max_workspace_bytes: 1 << 29,
+        },
         metadata_auth_bytes: 1 << 29,
         metadata_auth_work: 1 << 24,
         source_auth_bytes: 1 << 24,
@@ -490,5 +499,93 @@ fn oversized_typed_network_is_dropped_before_hashing_or_starting_the_cpu_run() {
         };
         assert!(error.contains("shape/length"));
         assert_eq!(work.meter(), before);
+    });
+}
+#[test]
+fn required_same_ledger_capture_and_run_guards_survive_until_owned_capture_drop() {
+    use std::sync::{
+        Mutex,
+        atomic::{AtomicUsize, Ordering},
+    };
+    struct Guard(Arc<AtomicUsize>);
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            self.0.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+    run_wide_common::with_fixture(1, |f, _| {
+        let live = Arc::new(AtomicUsize::new(0));
+        let calls = Arc::new(Mutex::new(vec![]));
+        let (counter, requests) = (live.clone(), calls.clone());
+        let expected_class = f.job.shape_profile_id;
+        let expected_execution = f.job.context_hash();
+        let ledger: TirMemoryReserverV1 = Arc::new(move |role, class, execution, bytes| {
+            assert_eq!((class, execution), (expected_class, expected_execution));
+            assert!(bytes > 0);
+            requests.lock().unwrap().push((role, bytes));
+            counter.fetch_add(1, Ordering::SeqCst);
+            Ok(Box::new(Guard(counter.clone())) as Box<dyn Send + Sync>)
+        });
+        let space = PalwTirStepSpaceV2::new(&f.class).unwrap();
+        let runner = TirClassRunnerWideQ24V2::new(&space, f.plan, f.params, expected_class).unwrap();
+        let work = WidePanelWorkV2::new(bounds(), expected_class, expected_execution, &disk_reserve()).unwrap();
+        let capture = capture_one_pass_v2(
+            CaptureExpectedV2 { class: &f.class, artifact: f.artifact, job: &f.job, space: &space, prompt: PROMPT },
+            &runner,
+            run_bounds(),
+            &work,
+            tempfile::tempfile().unwrap(),
+            &ledger,
+        )
+        .unwrap();
+        let requests = calls.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0].0, "positive-wide-panel-capture-v2");
+        assert_eq!(requests[1].0, "tir-wide-q24-v2-required");
+        assert_eq!(requests[1].1, capture.run().reserved_bytes());
+        drop(requests);
+        assert_eq!(live.load(Ordering::SeqCst), 2);
+        drop(capture);
+        assert_eq!(live.load(Ordering::SeqCst), 0);
+    });
+}
+#[test]
+fn denied_capture_ram_reservation_precedes_all_allocating_identity_hashes() {
+    run_wide_common::with_fixture(1, |f, _| {
+        let space = PalwTirStepSpaceV2::new(&f.class).unwrap();
+        let runner = TirClassRunnerWideQ24V2::new(&space, f.plan, f.params, f.job.shape_profile_id).unwrap();
+        let work = WidePanelWorkV2::new(bounds(), f.job.shape_profile_id, f.job.context_hash(), &disk_reserve()).unwrap();
+        let deny: TirMemoryReserverV1 = Arc::new(|role, _, _, _| {
+            assert_eq!(role, "positive-wide-panel-capture-v2");
+            Err("capture RAM denied".into())
+        });
+        let error = match capture_one_pass_v2(
+            CaptureExpectedV2 { class: &f.class, artifact: f.artifact, job: &f.job, space: &space, prompt: PROMPT },
+            &runner,
+            run_bounds(),
+            &work,
+            tempfile::tempfile().unwrap(),
+            &deny,
+        ) {
+            Ok(_) => panic!("unreserved capture accepted"),
+            Err(e) => e,
+        };
+        assert!(error.contains("RAM denied"));
+        let spent = work.meter();
+        assert_eq!(spent.hash_work, 0);
+        assert!(spent.visits > 0);
+        let second = match capture_one_pass_v2(
+            CaptureExpectedV2 { class: &f.class, artifact: f.artifact, job: &f.job, space: &space, prompt: PROMPT },
+            &runner,
+            run_bounds(),
+            &work,
+            tempfile::tempfile().unwrap(),
+            &deny,
+        ) {
+            Ok(_) => panic!("failed attempt restarted"),
+            Err(e) => e,
+        };
+        assert!(second.contains("already started"));
+        assert_eq!(work.meter(), spent);
     });
 }
