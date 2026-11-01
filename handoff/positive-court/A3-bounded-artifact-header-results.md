@@ -8,7 +8,7 @@ reservation. Hello2 test correction `61d243bca` is the local alias of `c99125eb8
 
 **Five selected tests passed, zero failures** on the first frozen-source run.
 Artifact library strict Clippy passed with zero warnings. Documentation check:
-43 known missing references, zero new issues. The other12 artifact tests were
+43 known missing references, zero new issues. The other 12 artifact tests were
 filtered out, not counted as executed successes.
 
 | New metadata test scope | Passed |
@@ -34,7 +34,7 @@ The original helper fixtures' invalid history bound/empty pre and module doc
 placement were corrected during source review before this frozen run. No hidden
 preflight failure is counted as success. Root's earlier Hello2 failure and
 corrected integration batch remain separate records, with separate source and
-counts. Neither the previous18/49 nor Root's30 is added to these five.
+counts. Neither the previous 18/49 nor Root's 30 is added to these five.
 
 The parser uses the existing PALWTIR1 field order, borrowed existing layout
 words and literal values. It checks nested native allocations before reserve,

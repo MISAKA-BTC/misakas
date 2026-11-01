@@ -34,8 +34,10 @@ record that additional target. Earlier 18/49-test runs and other roles are not a
 pin the Root source, command, original metadata snapshot hash, source-file hashes,
 five actual test-binary hashes, raw log, archive identity and stable source/archive
 checks. A3 kept its Cargo hold; this is **Root integration execution**, not an
-A3 standalone frozen-branch run. No strict Clippy result for this source is yet
-asserted here. The source-only documentation checker reported 43 known missing
+A3 standalone frozen-branch run. On this same Root source,
+[strict Clippy](A3-r1-evidence/hello2-root7a693-corrected/root-clippy.json) also passed
+for Exec/accounting-node libraries and the Hello2 test target with positive-panel
+features. Clippy contributes no additional runtime tests. The source-only documentation checker reported 43 known missing
 references and zero new issues; that is not a strict clean audit.
 
 ## Initial failure and correction
