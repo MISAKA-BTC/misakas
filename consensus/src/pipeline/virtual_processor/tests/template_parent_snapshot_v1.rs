@@ -91,6 +91,9 @@ async fn template_parent_snapshot_reuses_exact_root_across_tip_walks_without_blo
     assert_eq!(template.block.header.palw_state_root, sink_state.state_root());
     drop(template);
     let (recorded_root, delta) = vp.palw_state_v2_store.read().delta_of(sink).unwrap();
+    // Exercise a real target walk: an exact materialized tip is authoritative
+    // at its own block and does not need that block's retained delta.
+    vp.palw_state_v2_store.write().set_tip_for_tests(parent, &parent_state).unwrap();
     vp.palw_state_v2_store
         .write()
         .set_delta_record_for_tests(
@@ -211,8 +214,10 @@ async fn template_parent_snapshot_sink_seed_refuses_wrong_point_root_and_import(
     let expected = vp.palw_template_parent_checked_v1(sink).unwrap().state_root();
     let (point, reader) = vp.palw_v2_reader_state(&bundle.state).unwrap().unwrap();
     assert_eq!((point, reader.state_root()), (sink, expected));
-    drop(reader);
     let (root, delta) = vp.palw_state_v2_store.read().delta_of(sink).unwrap();
+    let parent_state = kaspa_consensus_core::palw_state_v2::revert_delta_v2(&reader, &delta, &bundle.state).unwrap();
+    drop(reader);
+    vp.palw_state_v2_store.write().set_tip_for_tests(parent, &parent_state).unwrap();
     vp.palw_state_v2_store
         .write()
         .set_delta_record_for_tests(
@@ -244,7 +249,7 @@ async fn template_parent_snapshot_sink_seed_refuses_wrong_point_root_and_import(
 
 #[tokio::test]
 async fn template_parent_snapshot_legacy_pruning_fallback_is_an_optimization_skip() {
-    use crate::model::stores::virtual_state::VirtualStateStoreReader;
+    use crate::model::stores::{pruning::PruningStoreReader, virtual_state::VirtualStateStoreReader};
     use kaspa_consensus_core::errors::block::RuleError;
     for armed_future in [false, true] {
         let catalog = palw_v2_test_catalog();
@@ -305,6 +310,7 @@ async fn template_parent_snapshot_legacy_pruning_fallback_is_an_optimization_ski
         let actual = vp.virtual_stores.read().state.get().unwrap();
         let (sink, sink_state) = vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().unwrap();
         let parent = vp.ghostdag_store.get_selected_parent(sink).unwrap();
+        let (original_root, original_delta) = vp.palw_state_v2_store.read().delta_of(sink).unwrap();
         let parent_state = {
             let store = vp.palw_state_v2_store.read();
             let (_, delta) = store.delta_of(sink).unwrap();
@@ -328,7 +334,31 @@ async fn template_parent_snapshot_legacy_pruning_fallback_is_an_optimization_ski
             .build_block_template(ctx.miner_data.clone(), Box::new(OnetimeTxSelector::new(vec![])), TemplateBuildMode::Standard)
             .unwrap();
         assert_eq!(template.block.header.palw_state_root, old.state_root(), "historical/unarmed template success is preserved");
+        // A sidecar-only pruning import has not completed the UTXO import.
+        // That disables memo/seeding, but was never an unarmed template gate.
+        let pruning_point = vp.pruning_point_store.read().pruning_point().unwrap();
+        vp.begin_pruning_point_import(pruning_point).unwrap();
+        let during_import = vp.prepare_template_parent_v1(&actual).unwrap();
+        *vp.palw_reader_snapshot.lock() = None;
+        vp.seed_template_sink_reader_v1(&actual, &during_import).unwrap();
+        assert!(vp.palw_reader_snapshot.lock().is_none(), "an incomplete import cannot seed the strict memo");
+        let during_import_template = ctx
+            .consensus
+            .build_block_template(ctx.miner_data.clone(), Box::new(OnetimeTxSelector::new(vec![])), TemplateBuildMode::Standard)
+            .unwrap();
+        assert_eq!(during_import_template.block.header.palw_state_root, old.state_root());
         if armed_future {
+            vp.palw_state_v2_store
+                .write()
+                .set_delta_record_for_tests(
+                    sink,
+                    crate::model::stores::palw_state_v2::PalwStateDeltaRecordV2 {
+                        state_root: original_root,
+                        delta_borsh: borsh::to_vec(&original_delta).unwrap(),
+                    },
+                )
+                .unwrap();
+            assert!(vp.palw_candidate_state_v2_checked(sink).is_ok(), "the strict history is now complete");
             let mut future = (*actual).clone();
             future.daa_score = 101;
             let result = vp.build_block_template_from_virtual_state(
@@ -348,10 +378,54 @@ async fn template_parent_snapshot_legacy_pruning_fallback_is_an_optimization_ski
                         kaspa_consensus_core::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1::HistoryUnavailable
                     ))
                 ),
-                "once active, strict source preflight STILL refuses the same missing history"
+                "once active, strict source preflight STILL refuses the incomplete import, even with complete history"
             );
         }
     }
+}
+
+#[tokio::test]
+async fn template_parent_snapshot_exact_carriage_tip_has_precedence_over_older_delta() {
+    use kaspa_consensus_core::Hash64;
+    use kaspa_consensus_core::palw_execution_lane_v1::PalwExecFinalV1;
+    use kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2;
+    let (config, bundle) = adr0125_config_funded_for(8);
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+    for _ in 0..3 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+    let vp = ctx.consensus.virtual_processor().clone();
+    let sink = ctx.consensus.get_sink();
+    let (tip, state) = vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().unwrap();
+    assert_eq!(tip, sink);
+    let recorded_root = vp.palw_state_v2_store.read().state_root_of(sink).unwrap();
+    let bond = state.bond(&adr0125_harness_bond()).unwrap();
+    let schedule = adr0125_schedule_of(
+        0,
+        &[PalwExecFinalV1 {
+            domain: bundle.base_class_id,
+            bond: adr0125_harness_bond(),
+            operator_id: bond.operator_id,
+            claim_id: Hash64::from_u64_word(0xC1A1),
+            execution_root: Hash64::from_u64_word(0xE0),
+            credit: 1,
+            accepted_blue_score: 0,
+        }],
+    );
+    let mut carriage = PalwStateCarriageV2::from_state(&state);
+    carriage.round_schedules.insert(0, schedule);
+    let installed = carriage.into_state(&bundle.state, None).unwrap();
+    assert_ne!(installed.state_root(), recorded_root);
+    vp.palw_state_v2_store.write().set_tip_for_tests(sink, &installed).unwrap();
+    let old = vp.old_template_parent_for_tests_v1(sink).unwrap().1;
+    assert_eq!(old.state_root(), installed.state_root(), "the original exact-tip reader accepts this carriage");
+    let checked = vp.palw_template_parent_checked_v1(sink).unwrap();
+    assert_eq!(checked.state_root(), old.state_root());
+    let template = ctx
+        .consensus
+        .build_block_template(ctx.miner_data.clone(), Box::new(OnetimeTxSelector::new(vec![])), TemplateBuildMode::Standard)
+        .unwrap();
+    assert_eq!(template.block.header.palw_state_root, old.state_root());
 }
 
 #[tokio::test]

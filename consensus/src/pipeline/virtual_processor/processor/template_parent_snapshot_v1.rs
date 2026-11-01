@@ -111,16 +111,19 @@ impl VirtualStateProcessor {
         let stable = meta.try_pruning_utxoset_stable_flag().map_err(store_fault_v1)?;
         drop(meta);
         let store = self.palw_state_v2_store.try_read().ok_or(PalwWeighFaultV2::NoOpinion)?;
-        let root = match store.state_root_of(target) {
-            Ok(root) => Some(root),
-            Err(kaspa_database::prelude::StoreError::KeyNotFound(_)) => {
-                let tip = store.tip_key().map_err(store_fault_v1)?;
-                let checkpoint = store.pruning_snapshot_key().map_err(store_fault_v1)?;
-                tip.filter(|(block, _)| *block == target)
-                    .or_else(|| checkpoint.filter(|(block, _)| *block == target))
-                    .map(|(_, root)| root)
-            }
-            Err(error) => return Err(store_fault_v1(error)),
+        // Match the original exact-tip reader: the root-verified materialized
+        // tip is authoritative at its own block. A retained delta can predate
+        // a freshly installed carriage at that same block.
+        let root = match store.tip_key().map_err(store_fault_v1)? {
+            Some((block, root)) if block == target => Some(root),
+            _ => match store.state_root_of(target) {
+                Ok(root) => Some(root),
+                Err(kaspa_database::prelude::StoreError::KeyNotFound(_)) => {
+                    let checkpoint = store.pruning_snapshot_key().map_err(store_fault_v1)?;
+                    checkpoint.filter(|(block, _)| *block == target).map(|(_, root)| root)
+                }
+                Err(error) => return Err(store_fault_v1(error)),
+            },
         };
         drop(store);
         let pruning_point =
@@ -194,14 +197,16 @@ impl VirtualStateProcessor {
         virtual_state: &VirtualState,
     ) -> Result<PreparedTemplateParentV1, PalwWeighFaultV2> {
         let target = virtual_state.ghostdag_data.selected_parent;
+        // Bind BOTH loaders to the same captured generation. Reading the key
+        // only after loading could relabel an older owner with a newer epoch.
+        let key = self.palw_state_params_v2.as_ref().map(|_| self.template_parent_key_v1(target)).transpose()?;
         let checked = self.palw_template_parent_checked_v1(target);
         let state = match &checked {
             Ok(state) => Some((target, Arc::clone(state))),
             Err(_) => self.template_parent_legacy_fallback_v1(target),
         };
-        let key = self.palw_state_params_v2.as_ref().map(|_| self.template_parent_key_v1(target)).transpose()?;
         if let (Some(key), Some((at, state))) = (key, state.as_ref())
-            && (*at != key.target || key.root.is_some_and(|root| state.state_root() != root))
+            && (*at != key.target || (checked.is_ok() && key.root.is_some_and(|root| state.state_root() != root)))
         {
             return Err(PalwWeighFaultV2::StoreUnreadable);
         }
@@ -213,7 +218,7 @@ impl VirtualStateProcessor {
     /// Only fixed-size metadata reads. This method MUST NOT run a cold loader.
     pub(super) fn check_prepared_template_parent_v1(&self, prepared: &PreparedTemplateParentV1) -> Result<(), PalwWeighFaultV2> {
         if let Some(key) = prepared.key
-            && (!key.stable || key.active.is_some() || self.template_parent_key_v1(key.target)? != key)
+            && self.template_parent_key_v1(key.target)? != key
         {
             return Err(PalwWeighFaultV2::NoOpinion);
         }
@@ -239,6 +244,9 @@ impl VirtualStateProcessor {
         }
         let Some((at, state)) = prepared.state.as_ref() else { return Ok(()) };
         let Some(key) = prepared.key else { return Ok(()) };
+        if !key.stable || key.active.is_some() {
+            return Ok(());
+        }
         let Some(root) = key.root else { return Ok(()) };
         if *at != captured.ghostdag_data.selected_parent
             || key.target != *at
@@ -281,9 +289,9 @@ impl VirtualStateProcessor {
     ) -> Option<(BlockHash, Arc<kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1>)> {
         let params = self.palw_state_params_v2.as_ref()?;
         let before = self.template_parent_key_v1(at).ok()?;
-        if !before.stable || before.active.is_some() {
-            return None;
-        }
+        // An incomplete sidecar import disables the strict memo. It was not a
+        // legacy template admission gate; preserve the old checked fallback
+        // while still refusing a generation change across this cold read.
         let store = self.palw_state_v2_store.try_read()?.clone();
         let (tip_block, tip_state) = store.load_tip_cached(params).ok().flatten()?;
         if tip_block == at {
