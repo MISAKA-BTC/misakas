@@ -178,7 +178,12 @@ fn the_list_is_tier_one_and_armed_nowhere_on_the_shipped_ruleset() {
     }
     let armed_schedule = armed.fence_schedule_v1();
     assert!(armed_schedule.contains(&H), "the test height is on the armed schedule ({armed_schedule:?})");
-    assert_eq!(armed_schedule.last(), Some(&18_400), "the G14 flag day stays the schedule's last ({armed_schedule:?})");
+    assert!(armed_schedule.contains(&18_400), "the G14 flag day remains scheduled ({armed_schedule:?})");
+    assert_eq!(
+        armed_schedule.last(),
+        Some(&PALW_T12_MODEL_PANEL_ONE_RETENTION_FENCE_DAA_V1),
+        "the later retention fence remains last when historical flags are re-armed ({armed_schedule:?})"
+    );
     assert_eq!(armed_schedule.iter().filter(|h| **h == H).count(), 1, "one height for the whole list");
 }
 
