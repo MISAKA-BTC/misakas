@@ -80,6 +80,13 @@ stdout, stderr, time output, exit/timeout and process-group cleanup. A zero
 exit alone is insufficient for success; the runner's declared result and
 fixed input identity must also match.
 
+For a runner failure, `runner_diagnostic` retains its reported error, phase,
+status, CPU-start flag and logical quote bounds beside the requested cap.
+`RESOURCE_LIMIT` remains a rejected result; the driver does not increase caps
+or rerun automatically. A quoted excess is not measured RSS. A generic failed
+status without the explicit error is not silently classified as a resource
+limit, and an error field cannot be hidden behind a success status.
+
 The driver separately records its outer process boundary: wall timeout covers
 the runner process group from launch, including startup. It does not cover
 the Python parent's source/input hashing. The Darwin RSS figure covers the
