@@ -273,6 +273,9 @@ def result_errors(value, model, mode):
                 'exact_decode_tokens': model['decode_tokens'],
                 'caps': model['caps']}
     errors = ['RUNNER_RESULT_MISMATCH:' + key for key, target in expected.items() if value.get(key) != target]
+    if 'error' in value:
+        errors.append('RUNNER_REPORTED_RESOURCE_LIMIT' if isinstance(value['error'], str) and
+                      value['error'].startswith('RESOURCE_LIMIT:') else 'RUNNER_REPORTED_ERROR')
     if mode == 'run' and value.get('roundtrip_pass') is not True:
         errors.append('RUNNER_ROUNDTRIP_NOT_PASSED')
     quote = value.get('quote')
@@ -283,6 +286,32 @@ def result_errors(value, model, mode):
         if value.get(key) is not False:
             errors.append('RUNNER_BOUNDARY_NOT_FALSE:' + key)
     return errors
+
+
+def runner_diagnostic(value):
+    """Preserve reported failure details; this never authenticates or admits a result."""
+    if not isinstance(value, dict):
+        return {'classification': 'RUNNER_RESULT_NOT_OBJECT'}
+    error = value.get('error')
+    classification = ('RESOURCE_LIMIT_REPORTED' if isinstance(error, str) and error.startswith('RESOURCE_LIMIT:')
+                      else 'ERROR_REPORTED' if 'error' in value else 'NO_ERROR_REPORTED')
+    quote = value.get('quote') if isinstance(value.get('quote'), dict) else {}
+    caps = value.get('caps') if isinstance(value.get('caps'), dict) else {}
+    upper, cap = quote.get('simultaneous_operation_upper'), caps.get('max_requested_bytes')
+    # Python bool is an int subclass; a boolean is never a byte quantity here.
+    numeric = type(upper) is int and upper >= 0 and type(cap) is int and cap >= 0
+    return {'classification': classification,
+            'authority': 'runner-reported diagnostic only; strict result and process checks still apply',
+            'reported_status': value.get('status'), 'reported_phase': value.get('phase'),
+            'reported_error_present': 'error' in value, 'reported_error': error,
+            'reported_cpu_execution_started': value.get('cpu_execution_started'),
+            'reported_quote_bounds': {key: quote.get(key) for key in
+                                      ['simultaneous_operation_upper', 'dense_callback_backing_upper',
+                                       'capture_frame_upper', 'external_retained_bytes', 'external_floor']},
+            'reported_max_requested_bytes': cap,
+            'logical_operation_exceeds_reported_cap': upper > cap if numeric else None,
+            'logical_operation_excess_bytes': max(upper - cap, 0) if numeric else None,
+            'scope': 'logical quote values, not measured RSS, native budget, fees or inference success'}
 
 
 def main(argv=None):
@@ -444,6 +473,7 @@ def main(argv=None):
                     result_path = Path(model['output_json'])
                     if result_path.is_file():
                         model['runner_result'] = read_json(result_path)
+                        model['runner_diagnostic'] = runner_diagnostic(model['runner_result'])
                         model['errors'].extend(result_errors(model['runner_result'], model, args.mode))
                     else:
                         model['errors'].append('MISSING_RUNNER_JSON')

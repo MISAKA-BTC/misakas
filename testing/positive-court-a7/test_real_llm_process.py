@@ -46,6 +46,23 @@ check('external_owner_allowance_must_match', m.result_errors(dict(good, quote={'
 run = dict(good, mode='run', status='LOCAL_ROUNDTRIP_PASS', roundtrip_pass=True)
 check('complete_run_contract_accepted', not m.result_errors(run, model, 'run'))
 check('failed_roundtrip_cannot_pass', m.result_errors(dict(run, roundtrip_pass=False), model, 'run'))
+failure = dict(good, status='FAILED_OR_RESOURCE_LIMIT', phase='quote', cpu_execution_started=False,
+               error='RESOURCE_LIMIT: logical upper exceeds explicit cap',
+               quote={'external_retained_bytes': 1024, 'simultaneous_operation_upper': 5000},
+               caps=dict(model['caps'], max_requested_bytes=4000))
+diagnostic = m.runner_diagnostic(failure)
+check('resource_failure_details_are_preserved', diagnostic['classification'] == 'RESOURCE_LIMIT_REPORTED' and
+      diagnostic['reported_error'] == failure['error'] and diagnostic['reported_phase'] == 'quote' and
+      diagnostic['reported_cpu_execution_started'] is False)
+check('logical_quote_excess_is_not_rss', diagnostic['logical_operation_exceeds_reported_cap'] is True and
+      diagnostic['logical_operation_excess_bytes'] == 1000)
+check('resource_failure_stays_rejected', 'RUNNER_REPORTED_RESOURCE_LIMIT' in m.result_errors(failure, model, 'quote-only'))
+check('error_cannot_hide_behind_success_status', 'RUNNER_REPORTED_ERROR' in
+      m.result_errors(dict(good, error='failure with a success status'), model, 'quote-only'))
+check('missing_error_is_not_invented_as_resource_limit',
+      m.runner_diagnostic(dict(good, status='FAILED_OR_RESOURCE_LIMIT'))['classification'] == 'NO_ERROR_REPORTED')
+check('boolean_is_not_a_byte_bound', m.runner_diagnostic(dict(failure, quote={'simultaneous_operation_upper': True}))
+      ['logical_operation_excess_bytes'] is None)
 
 
 @contextmanager
