@@ -537,3 +537,5 @@ fn wide_ids_pin_byte_unit_and_storage_bounds_include_the_new_root_and_ids() {
 }
 
 mod mixed_state;
+
+mod stream_record;

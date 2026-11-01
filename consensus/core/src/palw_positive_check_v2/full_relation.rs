@@ -325,23 +325,32 @@ impl PrototypePanelRecord {
     }
     fn hash(&self, cap: u64) -> Result<Digest, FullRelationError> {
         let mut writer =
-            HashWriter { state: blake2b_simd::Params::new().hash_length(64).key(&self.domains.hash_key).to_state(), bytes: 0, cap };
-        // Local structural tuple only. No public magic/version/tag is assigned.
-        let value = (
-            &self.result,
-            &self.author,
-            &self.binding,
-            &self.generated,
-            &self.policy,
-            &self.form,
-            &self.domains.signature_context,
-            &self.claims,
-        );
-        value.serialize(&mut writer).map_err(|_| FullRelationError::Budget)?;
+            record_hash_prefix(self.result, self.author, &self.binding, &self.generated, &self.policy, self.form, &self.domains, cap)?;
+        self.claims.serialize(&mut writer).map_err(|_| FullRelationError::Budget)?;
         Ok(Digest(writer.state.finalize().as_bytes().try_into().expect("64-byte hash")))
     }
 }
 
+/// Shared exact existing structural prefix. Splitting the tuple before its
+/// final claims field preserves every old Borsh byte and hash/domain recipe.
+#[allow(clippy::too_many_arguments)]
+fn record_hash_prefix(
+    result: misaka_palw_positive_contract::identity::ResultId,
+    author: PrincipalId,
+    binding: &PalwTirStepBindingV1,
+    generated: &[u32],
+    policy: &[u64],
+    form: PalwPromptIdsFormV1,
+    domains: &PrototypeDomains,
+    cap: u64,
+) -> Result<HashWriter, FullRelationError> {
+    let mut writer =
+        HashWriter { state: blake2b_simd::Params::new().hash_length(64).key(&domains.hash_key).to_state(), bytes: 0, cap };
+    (result, author, binding, generated, policy, form, &domains.signature_context)
+        .serialize(&mut writer)
+        .map_err(|_| FullRelationError::Budget)?;
+    Ok(writer)
+}
 pub struct LegacyTarget<'a> {
     pub opening: &'a PalwStepOpeningV1,
     pub preimage: &'a PalwStepTileLeafV1,

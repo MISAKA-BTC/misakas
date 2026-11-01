@@ -9,6 +9,31 @@ use crate::{
     palw_tir_court_v1::source_only::wide_v2::{TirSourceOnlyMaterialV2, authenticate_source_only_v2},
     palw_tir_step_v1::wide_v2::verify_tir_binding_v2,
 };
+mod record_access_sealed {
+    pub trait Sealed {}
+}
+/// Read-only sealed record view. Only signature-checked resident records and
+/// the private single-claim streaming adapter implement this interface.
+#[doc(hidden)]
+pub trait WideRecordAccessV2: record_access_sealed::Sealed {
+    fn binding(&self) -> &PalwTirStepBindingV1;
+    fn generated(&self) -> &[u32];
+    fn claim(&self, index: u64) -> Option<&[i128]>;
+}
+impl record_access_sealed::Sealed for PrototypePanelRecord {}
+impl WideRecordAccessV2 for PrototypePanelRecord {
+    fn binding(&self) -> &PalwTirStepBindingV1 {
+        &self.binding
+    }
+    fn generated(&self) -> &[u32] {
+        &self.generated
+    }
+    fn claim(&self, index: u64) -> Option<&[i128]> {
+        self.claims.get(usize::try_from(index).ok()?).map(Vec::as_slice)
+    }
+}
+/// Stream-backed private record/Node reader; no native authority or new codec.
+pub mod stream;
 pub struct StepTargetV2<'a> {
     pub opening: &'a PalwStepOpeningV1,
     pub preimage: &'a PalwStepTileLeafV1,
@@ -202,14 +227,14 @@ impl FullRelationPreparationV2 {
 }
 
 /// Immutable local manifest, not a shared DTO or old execution-record root.
-pub struct FullRelationCheckerV2 {
+pub struct FullRelationCheckerV2<R: WideRecordAccessV2 = PrototypePanelRecord> {
     prepared: FullRelationPreparationV2,
-    record: PrototypePanelRecord,
+    record: R,
     progress: FullRelationProgress,
     best: Option<(i64, u32)>,
     next_lane: u64,
 }
-impl FullRelationCheckerV2 {
+impl<R: WideRecordAccessV2> FullRelationCheckerV2<R> {
     /// Borrow retained preparation for material construction. This grants no
     /// mutable progress access or additional native authority.
     pub fn preparation(&self) -> &FullRelationPreparationV2 {
@@ -278,12 +303,12 @@ impl FullRelationCheckerV2 {
             },
         };
         if let Some(pin) = material.decode_tokens
-            && pin.generated_token_ids != self.record.generated
+            && pin.generated_token_ids.as_slice() != self.record.generated()
         {
             return Err(FullRelationError::Delivery);
         }
         let source =
-            authenticate_source_only_v2(&self.record.binding, *material, self.progress.legacy_frontier, &rules, limits.source)
+            authenticate_source_only_v2(self.record.binding(), *material, self.progress.legacy_frontier, &rules, limits.source)
                 .map_err(source_error)?;
         let evaluation = match &relation.kind {
             ExpandedRelationKind::RecomputeNode { ctx, node, first_lane, lane_count, .. } => {
@@ -299,7 +324,7 @@ impl FullRelationCheckerV2 {
             }
         };
         let values = evaluation.values();
-        if values != self.record.claims[self.progress.next_relation as usize] {
+        if values != self.record.claim(self.progress.next_relation).ok_or(FullRelationError::Delivery)? {
             return Err(FullRelationError::PanelMismatch);
         }
         // No coverage/selection mutation until membership, direct arithmetic,
@@ -333,7 +358,7 @@ impl FullRelationCheckerV2 {
     ) -> Result<(), FullRelationError> {
         let mut counter = ByteCounter { bytes: 0, cap };
         (target.opening, target.preimage, target.trace).serialize(&mut counter).map_err(|_| FullRelationError::Budget)?;
-        let binding = &self.record.binding;
+        let binding = self.record.binding();
         let width = if leaf.dtype == DType::I64 { 8 } else { 4 };
         let version = if width == 8 { 2 } else { PALW_TIR_STEP_LEAF_VERSION_V1 };
         if self.prepared.plan.step_space().leaf_at(&binding.job_context, leaf.index) != Some(*leaf)
@@ -377,13 +402,13 @@ impl FullRelationCheckerV2 {
             return Err(FullRelationError::Unverified);
         }
         let trace = target.trace.ok_or(FullRelationError::Delivery)?;
-        if trace.generated != self.record.generated || trace.row != row {
+        if trace.generated.as_slice() != self.record.generated() || trace.row != row {
             return Err(FullRelationError::Delivery);
         }
         trace
             .authenticate(
                 &self.prepared.job,
-                &self.record.binding.full_logits_trace_root,
+                &self.record.binding().full_logits_trace_root,
                 self.prepared.vocab as usize,
                 self.prepared.limits.plan.max_legacy_leaves,
             )
@@ -415,7 +440,7 @@ impl FullRelationCheckerV2 {
             return Err(FullRelationError::Unverified);
         }
         if next == self.prepared.vocab {
-            if best.map(|(_, token)| token) != self.record.generated.get(row as usize).copied() {
+            if best.map(|(_, token)| token) != self.record.generated().get(row as usize).copied() {
                 return Err(FullRelationError::PanelMismatch);
             }
             self.progress.checked_rows += 1;
@@ -439,7 +464,7 @@ impl FullRelationCheckerV2 {
             return Err(FullRelationError::Incomplete);
         }
         self.progress.outcome =
-            if digest(palw_attempt_output_root_v1(&self.prepared.job, &self.record.generated)) == self.prepared.result.output {
+            if digest(palw_attempt_output_root_v1(&self.prepared.job, self.record.generated())) == self.prepared.result.output {
                 CheckOutcome::Matched
             } else {
                 CheckOutcome::OutputMismatch

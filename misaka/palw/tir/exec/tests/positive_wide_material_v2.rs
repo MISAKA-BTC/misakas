@@ -589,3 +589,6 @@ fn denied_capture_ram_reservation_precedes_all_allocating_identity_hashes() {
         assert_eq!(work.meter(), spent);
     });
 }
+
+#[path = "positive_wide_material_v2/stream_record_tests.rs"]
+mod stream_record_tests;
