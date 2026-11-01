@@ -375,8 +375,7 @@ impl<'s> LocalWideForwardArtifactV2<'s> {
             return Err(D::Identity);
         }
         let quote = self.dense_projection(l, scan)?;
-        let needed_external =
-            add(self.inputs.external_retained_bytes, add(self.quote.requested_bytes, ordinary.retained_requested_bytes())?)?;
+        let needed_external = add(self.quote.operation_retained_bytes, ordinary.retained_requested_bytes())?;
         limit(needed_external, l.external_retained_bytes)?;
         let retained = add(budget.usage.retained_requests, quote.combined_peak_bytes)?;
         limit(retained, l.max_retained_requests)?;

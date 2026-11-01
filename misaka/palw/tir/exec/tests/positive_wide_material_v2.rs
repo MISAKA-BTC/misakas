@@ -595,3 +595,6 @@ mod stream_record_tests;
 
 #[path = "positive_wide_material_v2/loaded_bridge_tests.rs"]
 mod loaded_bridge_tests;
+
+#[path = "positive_wide_material_v2/trace_free_bridge_tests.rs"]
+mod trace_free_bridge_tests;

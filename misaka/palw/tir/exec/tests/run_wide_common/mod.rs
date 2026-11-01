@@ -217,7 +217,7 @@ fn reference(program: &TirProgramV1, params: &MapParams) -> (Vec<ExpectedNode>, 
     (nodes, steps, rows)
 }
 
-fn declaration(program: &TirProgramV1, artifact: Hash64, window: u32) -> (PalwTirClassV1, PalwJobContextV2) {
+pub fn declaration(program: &TirProgramV1, artifact: Hash64, window: u32) -> (PalwTirClassV1, PalwJobContextV2) {
     let class = PalwTirClassV1 {
         version: 1,
         program: program.encode(),

@@ -6,6 +6,9 @@
 pub mod measurement;
 /// Whole same-descriptor trace-free metadata owner; no native authority.
 pub mod metadata;
+/// Trace-free resident parameters to the existing one-pass wide Panel producer.
+#[cfg(feature = "positive-panel")]
+mod panel;
 use super::*;
 use crate::{Elem, NoSink, TirExecutor, plan::LocalCompiledTirPlanV2, with_slice};
 use kaspa_consensus_core::{
@@ -296,6 +299,9 @@ pub struct LocalForwardLoadQuoteV2 {
     pub metadata_hash_bytes: u64,
     pub metadata_hash_scratch: u64,
     pub requested_bytes: u64,
+    /// Original metadata/provider owners plus ALL retained load-budget claims,
+    /// including earlier successful or failed attempts. Not a new host lease.
+    pub operation_retained_bytes: u64,
 }
 /// Native Params owned and root-checked; no Clone, raw-plan/Params export or
 /// full-binding input. This is NOT self-owned generic startup: all borrowed
@@ -441,6 +447,7 @@ pub fn load_local_wide_forward_v2<'a, R: LocalForwardReaderV2>(
             metadata_hash_bytes: hash_bytes,
             metadata_hash_scratch: hash_scratch,
             requested_bytes: requested,
+            operation_retained_bytes: plus(inputs.external_retained_bytes, next)?,
         },
         layout_origin: origin,
         _memory: lease,
@@ -663,7 +670,7 @@ impl LocalWideForwardArtifactV2<'_> {
         let handoff = q.handoff_peak_requests()?;
         let retained = plus(budget.usage.retained_requests, handoff)?;
         cap(retained, l.max_retained_requests)?;
-        cap(plus(self.inputs.external_retained_bytes, self.quote.requested_bytes)?, l.external_retained_bytes)?;
+        cap(self.quote.operation_retained_bytes, l.external_retained_bytes)?;
         cap(plus(plus(l.external_retained_bytes, budget.usage.retained_requests)?, handoff)?, l.max_operation_bytes)?;
         budget.usage.work = total_work;
         budget.usage.retained_requests = retained;

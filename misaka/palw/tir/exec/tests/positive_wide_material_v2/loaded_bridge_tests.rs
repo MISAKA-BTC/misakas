@@ -34,7 +34,7 @@ use std::{
 };
 const EXTERNAL: u64 = 1 << 28;
 const ALLOWANCE: u64 = 1 << 29;
-fn startup_limits() -> LoadedWideLimitsV2 {
+pub(super) fn startup_limits() -> LoadedWideLimitsV2 {
     LoadedWideLimitsV2 {
         header: PalwTirHeaderLimitsV1 {
             max_file_bytes: 1 << 20,
@@ -278,7 +278,7 @@ fn with_loaded(
     assert_eq!(f.job, original_job);
     assert_eq!(f.class, original_class);
 }
-fn record_limits() -> StreamRecordLimitsV2 {
+pub(super) fn record_limits() -> StreamRecordLimitsV2 {
     StreamRecordLimitsV2 {
         max_record_bytes: 1 << 28,
         max_claim_values: 1 << 14,
