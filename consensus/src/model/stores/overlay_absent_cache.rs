@@ -30,6 +30,10 @@ struct Invalidation<K> {
 struct AbsentEntries<K> {
     generation: u64,
     rows: IndexMap<K, DbKey>,
+    #[cfg(test)]
+    eviction_scanned_rows: usize,
+    #[cfg(test)]
+    eviction_batches: usize,
 }
 
 /// Acknowledged only after the corresponding RocksDB batch committed successfully.
@@ -69,7 +73,14 @@ impl<K: Eq + Hash> OverlayCommitTicket<K> {
 impl<K: Clone + Eq + Hash> OverlayAbsentCache<K> {
     pub(super) fn new(limit: usize) -> Self {
         Self {
-            entries: Arc::new(Mutex::new(AbsentEntries { generation: 0, rows: IndexMap::new() })),
+            entries: Arc::new(Mutex::new(AbsentEntries {
+                generation: 0,
+                rows: IndexMap::new(),
+                #[cfg(test)]
+                eviction_scanned_rows: 0,
+                #[cfg(test)]
+                eviction_batches: 0,
+            })),
             invalidation: Arc::new(Mutex::new(Invalidation { generation: 0, pending: IndexMap::new(), disabled: false })),
             limit: limit.min(MAX_ABSENT_OVERLAY_ROWS),
         }
@@ -118,10 +129,21 @@ impl<K: Clone + Eq + Hash> OverlayAbsentCache<K> {
         let result = read();
         if let Err(StoreError::KeyNotFound(db_key)) = &result {
             if entries.rows.len() == self.limit {
-                // Bounded FIFO metadata movement, without another key queue.
-                // swap_remove would move the newest key into slot zero and
-                // repeatedly evict it while stale middle entries never leave.
-                entries.rows.shift_remove_index(0);
+                // A single IndexMap prefix removal shifts and reindexes its
+                // tail. Doing that for every miss made an advancing sparse
+                // walk quadratic in the cache limit (the live 16K-row cache).
+                // Drain the oldest half once per batch instead: no extra key
+                // queue, bounded storage and amortized constant movement per
+                // miss. Some older misses may be reread; only a verified DB
+                // absence is cached, so eviction cannot change a read result.
+                // swap_remove(0) would repeatedly evict the newest key instead.
+                #[cfg(test)]
+                {
+                    entries.eviction_scanned_rows += entries.rows.len();
+                    entries.eviction_batches += 1;
+                }
+                let oldest = (self.limit / 2).max(1);
+                drop(entries.rows.drain(..oldest));
             }
             entries.rows.insert(key, db_key.clone());
         }
