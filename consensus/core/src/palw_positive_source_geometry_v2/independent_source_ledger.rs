@@ -2,14 +2,15 @@
 //! admission, selected-history, role, funding or reservation capabilities.
 use super::*;
 use kaspa_consensus_core::palw_positive_source_v2::{
-    NativeSourceContextV2, NativeSourceLedgerV2, SourceEffectV2, SourceErrorV2, SourceEventCostV2, SourceLimitsV2,
-    SourceMissingPortV2, SourceRequestEventV2, SourceResponseEventV2, SourceServiceFeeV2, history::NativeSourceHistoryV2,
+    NativeSourceContextV2, NativeSourceLedgerV2, PreparedSourceUpdateV2, SourceEffectV2, SourceErrorV2, SourceEventCostV2,
+    SourceFeeIntentV2, SourceLimitsV2, SourceMissingPortV2, SourceRequestEventV2, SourceResponseEventV2, SourceServiceFeeV2,
+    history::NativeSourceHistoryV2,
 };
 use misaka_palw_positive_contract::{
     identity::{FundingScopeId, PUBKEY_BYTES, PlanId, REQUEST_SIGN_CONTEXT, RequestId, ResultId, SIGNATURE_BYTES, principal},
     journal::{CaseJournalEventKind, CaseJournalHeader, CaseJournalLimits, CaseJournalRecord, CaseJournalRecordView},
     messages::{AggregateBudget, CheckProfile, ClaimStatus, CoverageDescriptor, MinerDataStatus, MinerServiceContract, WitnessStatus},
-    rows::{AcceptedMaterial, AcceptedOrigin, AggregateUsage, CaseRow, NativeHash64},
+    rows::{AcceptedMaterial, AcceptedOrigin, AggregateUsage, CaseRow, NativeHash64, ServiceReceiptRow},
 };
 
 fn real_artifact_fixture() -> (Fixture, Vec<PalwArtifactOperandV1>) {
@@ -1463,4 +1464,284 @@ fn independent_common_journal_full_body_equality_does_not_bypass_request_signatu
         assert_eq!(ledger.history_events().len(), 1);
         assert!(ledger.receipt(request.kind, request.source, 0).is_none());
     }
+}
+
+#[derive(Clone, Copy)]
+enum AllSourceStep {
+    Request(usize),
+    Response(usize),
+}
+struct ExpectedSourceUnit {
+    kind: SourceKind,
+    source: Digest,
+    unit: u64,
+    raw_bytes: u64,
+    request_index: usize,
+    response_index: usize,
+    provider: PrincipalId,
+}
+/// Data-only source journal slice. All unit openings and request signatures are
+/// real, but the omitted admission, full Case/DB history and native provenance
+/// are NOT authenticated by this fixture or its test-only context.
+struct AllSourceJournalFixture {
+    f: Fixture,
+    geometry: TirSourceGeometryV2,
+    service: MinerServiceContract,
+    initial_case: CaseRow,
+    context: TestLiteralHistory,
+    steps: Vec<AllSourceStep>,
+    records: Vec<Vec<u8>>,
+    expected: Vec<ExpectedSourceUnit>,
+    probe_request: usize,
+    probe_record: Vec<u8>,
+}
+impl AllSourceJournalFixture {
+    fn new() -> Self {
+        let (f, values, geometry, ledger, mut context) = ledger_fixture(service_budget());
+        let service = *ledger.service();
+        let initial_case = current_case_fixture(&ledger);
+        for (kind, first, end, panel) in [
+            (SourceKind::ArtifactInventory, 0, 4, 71),
+            (SourceKind::Input, 0, 3, 72),
+            (SourceKind::ArtifactInventory, 1, 4, 73),
+            (SourceKind::Input, 1, 3, 74),
+            (SourceKind::ArtifactInventory, 0, 4, 75), // different Panel, same logical RequestId
+        ] {
+            context.add_request(f.request(kind, first, end), panel);
+        }
+        let providers = [f.result.miner, PrincipalId(d(230)), PrincipalId(d(231))];
+        context.providers.extend_from_slice(&providers[1..]);
+        let mut steps = (0..4).map(AllSourceStep::Request).collect::<Vec<_>>();
+        let mut expected = Vec::new();
+        // Interleave the two sources. Overlap requests deliberately own some
+        // first responses even though the full-range request reserved first.
+        for (kind, unit, request_index, provider_index, raw_bytes) in [
+            (SourceKind::ArtifactInventory, 0, 0, 0, 4),
+            (SourceKind::Input, 0, 1, 1, 128),
+            (SourceKind::ArtifactInventory, 1, 2, 2, 4),
+            (SourceKind::Input, 1, 3, 0, 128),
+            (SourceKind::ArtifactInventory, 2, 0, 1, 4),
+            (SourceKind::Input, 2, 3, 2, 4),
+            (SourceKind::ArtifactInventory, 3, 2, 0, 4),
+        ] {
+            let raw = match kind {
+                SourceKind::ArtifactInventory => borsh::to_vec(&open_artifact_leaf_v1(&values, unit as u32).unwrap()).unwrap(),
+                SourceKind::Input => borsh::to_vec(&prompt_ids_opening_v1(&f.prompt, unit as u32 * 32).unwrap()).unwrap(),
+            };
+            let request = context.requests[request_index].request;
+            let provider = providers[provider_index];
+            context.add_response(request, provider, &raw);
+            let response_index = context.responses.len() - 1;
+            steps.push(AllSourceStep::Response(response_index));
+            expected.push(ExpectedSourceUnit {
+                kind,
+                source: request.source,
+                unit,
+                raw_bytes,
+                request_index,
+                response_index,
+                provider,
+            });
+        }
+        let mut previous = d(245); // unverified predecessor admission, not native authority
+        let mut records = Vec::new();
+        for (index, step) in steps.iter().enumerate() {
+            let (material, body) = match *step {
+                AllSourceStep::Request(i) => (context.requests[i].material, context.requests[i].body.as_slice()),
+                AllSourceStep::Response(i) => (context.responses[i].material, context.responses[i].body.as_slice()),
+            };
+            let mut record = source_common_record(&f, material, body, index as u64 + 2);
+            record.header.previous = previous;
+            let bytes = record.encode(common_journal_codec_limits()).unwrap();
+            previous = CaseJournalRecordView::decode(&bytes, common_journal_codec_limits()).unwrap().head();
+            records.push(bytes);
+        }
+        // A genuine future request probes completeness of the preceding source
+        // prefix. It is not part of this fixture's fulfilled source slice.
+        let probe_request = context.requests.len();
+        context.add_request(f.request(SourceKind::ArtifactInventory, 0, 2), 76);
+        let literal = &context.requests[probe_request];
+        let mut probe = source_common_record(&f, literal.material, &literal.body, records.len() as u64 + 2);
+        probe.header.previous = previous;
+        let probe_record = probe.encode(common_journal_codec_limits()).unwrap();
+        Self { f, geometry, service, initial_case, context, steps, records, expected, probe_request, probe_record }
+    }
+    fn fresh(&self) -> NativeSourceLedgerV2 {
+        let mut ledger =
+            NativeSourceLedgerV2::new(self.f.result.clone(), self.service, AggregateUsage::default(), source_limits()).unwrap();
+        ledger.bind_case(&self.initial_case).unwrap();
+        ledger
+    }
+    fn prepare(&self, ledger: &NativeSourceLedgerV2, step: usize) -> Result<PreparedSourceUpdateV2, SourceErrorV2> {
+        let view = CaseJournalRecordView::decode(&self.records[step], common_journal_codec_limits()).unwrap();
+        match self.steps[step] {
+            AllSourceStep::Request(i) => {
+                ledger.prepare_journal_request_v2(&self.geometry, &self.context, view, self.context.requests[i].event())
+            }
+            AllSourceStep::Response(i) => {
+                ledger.prepare_journal_response_v2(&self.geometry, &self.context, view, self.context.responses[i].event())
+            }
+        }
+    }
+    fn prepare_probe(&self, ledger: &NativeSourceLedgerV2) -> Result<PreparedSourceUpdateV2, SourceErrorV2> {
+        let view = CaseJournalRecordView::decode(&self.probe_record, common_journal_codec_limits()).unwrap();
+        ledger.prepare_journal_request_v2(&self.geometry, &self.context, view, self.context.requests[self.probe_request].event())
+    }
+    fn replay_prefix(&self, count: usize) -> (NativeSourceLedgerV2, CaseRow, Vec<SourceFeeIntentV2>) {
+        let mut ledger = self.fresh();
+        let mut case = self.initial_case;
+        let mut intents = Vec::new();
+        for step in 0..count {
+            let update = self.prepare(&ledger, step).unwrap();
+            assert!(update.changes_case());
+            case = *update.case_row().unwrap();
+            if let Some(intent) = update.fee_intent() {
+                intents.push(*intent);
+            }
+            ledger.apply(update).unwrap();
+        }
+        (ledger, case, intents)
+    }
+    fn receipt_snapshot(&self, ledger: &NativeSourceLedgerV2) -> Vec<Option<ServiceReceiptRow>> {
+        self.expected.iter().map(|u| ledger.receipt(u.kind, u.source, u.unit).copied()).collect()
+    }
+}
+
+#[test]
+fn independent_all_artifact_and_merkle_input_units_replay_from_one_source_journal_with_exact_first_receipts_and_dues() {
+    let f = AllSourceJournalFixture::new();
+    let (first, first_case, first_intents) = f.replay_prefix(f.steps.len());
+    let (fresh, fresh_case, fresh_intents) = f.replay_prefix(f.steps.len());
+    assert_eq!(f.steps.len(), 11); // four distinct requests plus seven first responses
+    assert_eq!(first.history_events().len(), 11);
+    assert_eq!(first_case, fresh_case);
+    assert_eq!(usage_tuple(&first), usage_tuple(&fresh));
+    assert_eq!(first.usage().unique_source_bytes, 276);
+    assert_eq!(first.usage().fee, 21);
+    assert_eq!(first.usage().rounds, 2);
+    assert_eq!(first_case.miner_data, MinerDataStatus::Complete);
+    assert_eq!(first.miner_data_status(), MinerDataStatus::Complete);
+    assert_eq!(first_intents.len(), 7);
+    assert_eq!(first_intents, fresh_intents);
+    let mut raw_sum = 0;
+    for (expected, intent) in f.expected.iter().zip(&first_intents) {
+        raw_sum += expected.raw_bytes;
+        let row = ServiceReceiptRow {
+            case: f.f.result.case_id(),
+            kind: expected.kind,
+            source: expected.source,
+            unit: expected.unit,
+            result: f.f.result.id(),
+            duty: f.context.requests[expected.request_index].material,
+            response: f.context.responses[expected.response_index].material,
+            provider: expected.provider,
+            bytes: expected.raw_bytes,
+            additional_work: 2,
+            settlement: None,
+        };
+        assert_eq!(first.receipt(expected.kind, expected.source, expected.unit), Some(&row));
+        assert_eq!(fresh.receipt(expected.kind, expected.source, expected.unit), Some(&row));
+        assert_eq!(fresh.status(expected.kind, expected.source, expected.unit), MinerDataStatus::Complete);
+        assert_eq!(intent.amount, 3);
+        assert_eq!(intent.result, row.result);
+        assert_eq!(intent.provider, row.provider);
+        assert_eq!(intent.accepted_response, row.response);
+        assert_eq!(intent.schedule, f.context.fee.schedule);
+        assert_eq!(intent.funding_scope, f.context.fee.funding_scope);
+        assert_eq!(
+            intent.receipt_key,
+            misaka_palw_positive_contract::native::NativeRowKey::ServiceReceipt {
+                case: row.case,
+                kind: row.kind,
+                source: row.source,
+                unit: row.unit,
+            }
+        );
+    }
+    assert_eq!(raw_sum, 276);
+    for (kind, source, count) in [(SourceKind::ArtifactInventory, f.f.result.artifact, 4), (SourceKind::Input, f.f.result.input, 3)] {
+        let union = fresh.source_union(kind, source).unwrap();
+        assert_eq!((union.source_units, union.requested_units, union.completed_units), (count, count, count));
+    }
+    // Same full-range request, different Panel: ordinary accepted-carrier
+    // history contains it, while the logical source journal correctly does not.
+    assert!(fresh.history().resolve(&f.context.requests[4].material).is_err());
+    let body_sum: u64 = f
+        .records
+        .iter()
+        .map(|raw| CaseJournalRecordView::decode(raw, common_journal_codec_limits()).unwrap().payload().len() as u64)
+        .sum();
+    assert_eq!(fresh.usage().retained_bytes, body_sum);
+    assert_eq!(fresh.usage().transmitted_bytes, body_sum + 11 * 7);
+}
+
+#[test]
+fn independent_requested_all_source_prefixes_cannot_restore_saved_complete_when_tail_or_middle_response_is_missing() {
+    let f = AllSourceJournalFixture::new();
+    let (_, saved_complete, _) = f.replay_prefix(f.steps.len());
+    assert_eq!(saved_complete.miner_data, MinerDataStatus::Complete);
+    assert!(matches!(
+        NativeSourceLedgerV2::new(f.f.result.clone(), f.service, saved_complete.usage, source_limits()),
+        Err(SourceErrorV2::MissingPort(SourceMissingPortV2::CanonicalHistory))
+    ));
+    // All four distinct requests are established before either gap. No
+    // NotRequested prefix is misrepresented as an incomplete accepted duty.
+    for omitted in [f.steps.len() - 1, 6] {
+        assert!(matches!(f.steps[omitted], AllSourceStep::Response(_)));
+        let (mut prefix, prefix_case, _) = f.replay_prefix(omitted);
+        assert_eq!(prefix.usage().unique_source_bytes, 276);
+        assert_eq!(prefix.usage().rounds, 2);
+        assert_eq!(prefix_case.miner_data, MinerDataStatus::Pending);
+        assert_eq!(prefix.miner_data_status(), MinerDataStatus::Pending);
+        let sentinel = f.prepare(&prefix, omitted).unwrap();
+        let before = usage_tuple(&prefix);
+        let history_before: Vec<_> = prefix.history_events().iter().map(|entry| entry.material).collect();
+        let receipts_before = f.receipt_snapshot(&prefix);
+        assert!(prefix.refresh_case_usage(&saved_complete).is_err());
+        prefix.validate_prepared(&sentinel).unwrap();
+        let error = if omitted + 1 < f.steps.len() {
+            f.prepare(&prefix, omitted + 1).err().unwrap()
+        } else {
+            f.prepare_probe(&prefix).err().unwrap()
+        };
+        assert_eq!(error, SourceErrorV2::History);
+        assert_eq!(usage_tuple(&prefix), before);
+        assert_eq!(prefix.history_events().iter().map(|entry| entry.material).collect::<Vec<_>>(), history_before);
+        assert_eq!(f.receipt_snapshot(&prefix), receipts_before);
+        prefix.validate_prepared(&sentinel).unwrap();
+        for unit in &f.expected {
+            assert_ne!(prefix.status(unit.kind, unit.source, unit.unit), MinerDataStatus::NotRequested);
+        }
+    }
+}
+
+#[test]
+fn independent_reconstructed_full_source_history_and_identical_case_do_not_transfer_prepared_instance_seals() {
+    let f = AllSourceJournalFixture::new();
+    let (old, old_case, _) = f.replay_prefix(f.steps.len());
+    let old_prepared = f.prepare_probe(&old).unwrap();
+    assert!(old_prepared.changes_case());
+    assert_eq!(old_prepared.expected_case(), Some(&old_case));
+    let (mut fresh, fresh_case, _) = f.replay_prefix(f.steps.len());
+    assert_eq!(old_case, fresh_case);
+    assert_eq!(usage_tuple(&old), usage_tuple(&fresh));
+    assert_eq!(f.receipt_snapshot(&old), f.receipt_snapshot(&fresh));
+    let before = usage_tuple(&fresh);
+    assert!(matches!(fresh.apply(old_prepared), Err(SourceErrorV2::StalePrepared)));
+    assert_eq!(usage_tuple(&fresh), before);
+    assert_eq!(fresh.history_events().len(), 11);
+    let new_prepared = f.prepare_probe(&fresh).unwrap();
+    assert_eq!(new_prepared.expected_case(), Some(&fresh_case));
+    assert!(old.validate_prepared(&new_prepared).is_err());
+    fresh.validate_prepared(&new_prepared).unwrap();
+    let next_case = *new_prepared.case_row().unwrap();
+    fresh.apply(new_prepared).unwrap();
+    assert_eq!(fresh.usage(), next_case.usage);
+    assert_eq!(fresh.history_events().len(), 12);
+    assert_eq!(fresh.usage().transmitted_bytes - before.2, 4909 + 7);
+    assert_eq!(fresh.usage().additional_work - before.3, 2);
+    assert_eq!(fresh.usage().retained_bytes - before.4, 4909);
+    assert_eq!((fresh.usage().unique_source_bytes, fresh.usage().fee, fresh.usage().rounds), (276, 21, 2));
+    assert_eq!(fresh.miner_data_status(), MinerDataStatus::Complete);
+    assert_eq!(f.receipt_snapshot(&fresh), f.receipt_snapshot(&old));
 }
