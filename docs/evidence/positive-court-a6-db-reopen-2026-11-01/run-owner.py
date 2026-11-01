@@ -27,6 +27,10 @@ ARCHIVES = {
     "librocksdb.a": (23048496, "6eae541967b2cb5345ace55eadb34b2c490e91acfd8a4e2da5822a60f91af3a2"),
     "libsnappy.a": (46784, "f45a4731a8dc330e5723b70dabb4be96167a71044fcdeb0ce4d78f837f9538e5"),
 }
+NATIVE_INPUTS = dict(ARCHIVES, **{
+    "bindings.rs": (208430, "cbe5eae46ca4209c1bfb020945fd86fb9a401015979112ae70933a2ac5621e62"),
+})
+LINKS_CONFIG = Path(__file__).with_name("native-links-r2.toml").resolve()
 OLD = (
     "kaspa_consensus-cdd71196065befc6",
     "kaspa_consensus_core-b2df9d40a9b2c4d1",
@@ -70,24 +74,41 @@ def unchanged_source():
             raise RuntimeError(f"source freeze changed: {name}")
 
 
-def plan():
+def verify_native_inputs():
+    for name, (size, expected) in NATIVE_INPUTS.items():
+        path = EXTERNAL / name
+        if path.is_symlink() or path.stat().st_size != size or digest(path) != expected:
+            raise RuntimeError(f"external input identity mismatch: {path}")
+
+
+def plan(preserved_from=None):
     unchanged_source()
+    verify_native_inputs()
     archives = {}
-    for name, (size, expected) in ARCHIVES.items():
+    for name, (size, expected) in NATIVE_INPUTS.items():
         path = EXTERNAL / name
         if path.is_symlink() or path.stat().st_size != size or digest(path) != expected:
             raise RuntimeError(f"external archive identity mismatch: {path}")
         archives[name] = {"path": str(path), "bytes": size, "sha256": expected}
-    old = []
-    for name in OLD:
-        path = TARGET / "debug/deps" / name
-        if path.is_symlink() or not path.is_file():
-            raise RuntimeError(f"expected owner executable is missing: {path}")
-        old.append({"path": str(path), "bytes": path.stat().st_size, "sha256": digest(path)})
+    if preserved_from is None:
+        old = []
+        for name in OLD:
+            path = TARGET / "debug/deps" / name
+            if path.is_symlink() or not path.is_file():
+                raise RuntimeError(f"expected owner executable is missing: {path}")
+            old.append({"path": str(path), "bytes": path.stat().st_size, "sha256": digest(path)})
+    else:
+        # Reuse only the fully verified original backups, not any failed test
+        # result, in a NEW run directory/configuration. Never rewrite run 1.
+        anchor = json.loads((Path(__file__).parent / "owner-run-plan-r2.json").read_text())
+        old = anchor["old_binaries"]
+        verified_saved_backups(preserved_from, old)
     return {
         "source": SOURCE, "runner_sha256": digest(__file__),
         "workspace": str(WORKSPACE), "target": str(TARGET),
         "archives": archives, "old_binaries": old,
+        "preserved_from": str(preserved_from.resolve()) if preserved_from else None,
+        "links_override": {"path": str(LINKS_CONFIG), "sha256": digest(LINKS_CONFIG)},
         "free_bytes_now": shutil.disk_usage(TARGET).free,
         "disk_plan": {
             "old_binary_bytes": sum(x["bytes"] for x in old),
@@ -160,6 +181,15 @@ def verified_saved_backups(run_dir, planned):
                 or backup.stat().st_size != entry["gzip_bytes"]
                 or digest(backup) != entry["gzip_sha256"]):
             raise RuntimeError("a preserved executable archive changed")
+        restored_hash = hashlib.sha256()
+        restored_bytes = 0
+        with gzip.open(backup, "rb") as compressed:
+            for chunk in iter(lambda: compressed.read(1 << 20), b""):
+                restored_bytes += len(chunk)
+                restored_hash.update(chunk)
+        if restored_bytes != entry["bytes"] or restored_hash.hexdigest() != entry["sha256"]:
+            raise RuntimeError("preserved gzip CRC/uncompressed identity check failed")
+        entry["reuse_gzip_crc_and_uncompressed_sha256_verified"] = True
     return entries
 
 
@@ -228,10 +258,10 @@ def execute(plan_file, run_dir, min_free_gib, preserve_only=False):
             or (key.startswith("CARGO_TARGET_") and key.endswith(("_RUSTFLAGS", "_LINKER")))
         ):
             raise RuntimeError(f"{key} is set; a separately reviewed plan is required")
-    for name, (size, sha) in ARCHIVES.items():
-        path = EXTERNAL / name
-        if path.stat().st_size != size or digest(path) != sha:
-            raise RuntimeError("external native archive changed")
+    verify_native_inputs()
+    if (data["links_override"]["path"] != str(LINKS_CONFIG)
+            or data["links_override"]["sha256"] != digest(LINKS_CONFIG)):
+        raise RuntimeError("native links override changed")
     resumed_backups = None
     if run_dir.exists():
         # A capacity stop BEFORE any compiler/test attempt can be resumed
@@ -255,9 +285,17 @@ def execute(plan_file, run_dir, min_free_gib, preserve_only=False):
     status = {"source": SOURCE, "executed_suites": [], "status": "preparing"}
     try:
         if resumed_backups is None:
-            if shutil.disk_usage(TARGET).free < data["disk_plan"]["gzip_roundtrip_peak_extra_bytes"] + (256 << 20):
-                raise RuntimeError("insufficient space even for verified old-binary preservation")
-            status["old_binaries"] = preserve_old(run_dir, data["old_binaries"])
+            if data.get("preserved_from"):
+                status["old_binaries"] = verified_saved_backups(Path(data["preserved_from"]), data["old_binaries"])
+                status["preserved_from"] = data["preserved_from"]
+                # A new manifest references the original gzip paths. No old
+                # cache path is deleted again and no compressed bytes copied.
+                (run_dir / "old-binaries").mkdir()
+                write_json(run_dir / "old-binaries/manifest.json", status["old_binaries"])
+            else:
+                if shutil.disk_usage(TARGET).free < data["disk_plan"]["gzip_roundtrip_peak_extra_bytes"] + (256 << 20):
+                    raise RuntimeError("insufficient space even for verified old-binary preservation")
+                status["old_binaries"] = preserve_old(run_dir, data["old_binaries"])
         else:
             status["old_binaries"] = resumed_backups
         if preserve_only:
@@ -292,7 +330,8 @@ def execute(plan_file, run_dir, min_free_gib, preserve_only=False):
             unchanged_source()
             command = ["cargo", "rustc", "--offline", "--locked", "-p", suite["package"],
                        *suite["select"], "--profile", "test",
-                       "--message-format=json-render-diagnostics", *CONFIG, "--", "-l", "c++"]
+                       "--message-format=json-render-diagnostics",
+                       "--config", str(LINKS_CONFIG), *CONFIG, "--", "-l", "c++"]
             prefix = f"{number}-{suite['package']}"
             buildlog = run_dir / (prefix + "-build.log")
             result = dict(suite, build_command=command, build_log=str(buildlog))
@@ -329,12 +368,20 @@ def execute(plan_file, run_dir, min_free_gib, preserve_only=False):
         if (run_dir / "forbidden-cxx.jsonl").exists():
             raise RuntimeError("unexpected C++ invocation was blocked; do not claim C++-free success")
         unchanged_source()
+        verify_native_inputs()
+        if digest(LINKS_CONFIG) != data["links_override"]["sha256"]:
+            raise RuntimeError("native links override changed during the run")
         status["status"] = "PASS owner scope only; not Root/native authority/IBD qualification"
     except BaseException as exc:
         status["status"] = "STOPPED; no automatic retry"
         status["error"] = str(exc)
         raise
     finally:
+        status["external_inputs_after"] = {
+            name: digest(EXTERNAL / name) if (EXTERNAL / name).is_file() else None
+            for name in NATIVE_INPUTS
+        }
+        status["links_override_after_sha256"] = digest(LINKS_CONFIG) if LINKS_CONFIG.is_file() else None
         status["free_bytes_final"] = shutil.disk_usage(TARGET).free
         write_json(run_dir / "status.json", status)
 
@@ -361,9 +408,11 @@ if __name__ == "__main__":
     mode.add_argument("--execute", action="store_true")
     mode.add_argument("--preserve-only", action="store_true")
     mode.add_argument("--restore-manifest", type=Path)
-    parser.add_argument("--plan-file", type=Path, default=Path("/tmp/misaka-a6-db-reopen-run-plan.json"))
-    parser.add_argument("--run-dir", type=Path, default=Path("/tmp/misaka-a6-db-reopen-owner-355408e5a"))
+    parser.add_argument("--plan-file", type=Path, default=Path("/tmp/misaka-a6-db-reopen-owner-links-r2-plan.json"))
+    parser.add_argument("--run-dir", type=Path, default=Path("/tmp/misaka-a6-db-reopen-owner-links-r2"))
     parser.add_argument("--restore-dir", type=Path)
+    parser.add_argument("--preserved-from", type=Path,
+                        help="plan a new run using original verified backups, not previous runtime results")
     parser.add_argument("--min-free-gib", type=float, default=4)
     args = parser.parse_args()
     if args.restore_manifest:
@@ -373,6 +422,6 @@ if __name__ == "__main__":
     elif args.execute or args.preserve_only:
         execute(args.plan_file, args.run_dir, args.min_free_gib, args.preserve_only)
     else:
-        result = plan()
+        result = plan(args.preserved_from)
         write_json(args.plan_file, result)
         print(f"Read-only plan saved: {args.plan_file}; no compression, unlink, compiler or test executed")

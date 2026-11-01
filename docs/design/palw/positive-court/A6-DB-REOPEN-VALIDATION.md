@@ -1,6 +1,6 @@
 # A6 — durable journal data と actual local replay の結合候補
 
-2026-11-01。code候補は `f8d3bd3fa` と `355408e5a`（HEAD `355408e5a3426926d863193b76ffaa810704bef0`）。本記録の時点では **追加6件は未実行** であり、成功件数は0。A0/A4の中央検証と競合しないようheavy buildを保留している。rustfmt・差分検査・offline Cargo metadata解決・独立read-only reviewは完了した。旧候補の38件・53件を本候補の成功へ加算しない。
+2026-11-01のcode候補は `f8d3bd3fa` と `355408e5a`（runtime source `355408e5a3426926d863193b76ffaa810704bef0`）。初回owner runは依存cdylibのlink errorでbuild exit101となり停止した。**追加6件を含む31件のruntime試験は未実行、成功件数は0**。rustfmt・差分検査・offline Cargo metadata解決・独立read-only reviewは完了したが、型検査・実行の完了とは扱わない。旧候補の38件・53件を本候補の成功へ加算しない。
 
 ## 追加する検証
 
@@ -32,10 +32,26 @@ build前に空き4GiB以上を必須とし、実行中512MiBを割ったら自�
 
 旧binaryの保全だけを別枠で行う場合は `--preserve-only` でcompiler/testを呼ばずに止められる。これも現在は未実行であり、heavy枠の調整前に自動では行わない。その後の実行は同planとbackupを確認してから行い、4GiB条件を維持する。
 
-現行runnerと一致する計画は [owner run plan r2](../../../evidence/positive-court-a6-db-reopen-2026-11-01/owner-run-plan-r2.json)。r1は以前のrunner digestを持つ原記録として変更せず保持する。
+初回runnerと一致する計画は [owner run plan r2](../../../evidence/positive-court-a6-db-reopen-2026-11-01/owner-run-plan-r2.json)。r1も以前のrunner digestを持つ原記録として変更せず保持し、局所link修正後の新計画は後述のr3へ分ける。
 
 native libraryはRootの実検証がpinしたRFC14 completion release archiveを使う。RocksDBは23,048,496 bytes、Snappyは46,784 bytesで、正確なpath/SHA、同一bindingsとarm64/libc++・default compression featureの照合を [archive review](../../../evidence/positive-court-a6-db-reopen-2026-11-01/external-native-archive-read-only-review.json) に固定した。最初に調べた別の104MiB候補とは区別する。両external `LIB_DIR` と `STATIC=1` / `COMPILE=0` を指定し、追加C++ compiler呼出を禁止する。外部archiveではlibc++自動linkも消えるため、global RUSTFLAGSを変えず、単一のfinal test targetへだけ `cargo rustc ... --profile test -- -l c++` を渡し、JSONが返したexeを直接実行する。
 
 対象はnative store/readerの14件とactual TIR common replayの17件、計31件を予定する。まだ1件も実行していない。source/runtime owner結果とRoot source結果、clean DB reopenと実Node再起動/IBD/native authorityの資格を分ける。
 
 旧EVM consensus library候補はembedded metadataがmain Downloads checkoutを指すためA6所有と扱わず、削除しない。A6所有と確認できる旧Core853 pairについても [read-only cache plan](../../../evidence/positive-court-a6-db-reopen-2026-11-01/obsolete-rust-cache-read-only-plan.json) を返しただけで、まだ削除していない。
+
+## 初回owner run — build停止、runtime 0件
+
+A0の専用枠割当後、`--preserve-only` で旧3exeをgzip保存し、実tempfileへの復元・size/SHA一致を検査した。722,180,536 bytesを194,621,101 gzip bytesで保持し、元のexact exeだけをunlinkした。さらにA0が許可した旧Core853のrlib/rmeta計482,185,893 bytesだけを、所有source・stat/SHA・lsof未使用・他Cargoなしを再確認して削除した。他owner/main由来3 EVM pair、current Core aa8/ca2、C++ archive、raw、モデルは変更しない。空き4.54GiBで実行開始条件を満たした。
+
+固定runtime source355、runner `9776b83dd`、標準stack、exact release archive、2jobs/opt0/debug0の初回buildは `kaspa-wrpc-server` の依存cdylib linkで停止した。外部RocksDB/Snappy指定によってsys build scriptのlibc++ link指定が失われ、final test target限定の `-l c++` では中間cdylibへ届かなかった。これはlink設定の失敗であり、archive ABI不一致や新試験のRust型検査成功を意味しない。Cargo exit101、test未起動、runner停止・own PG消滅を確認し、同run-dirで再試行もstack増加も行っていない。
+
+836,209-byteの原build log、status/plan、exact旧runner、旧exe保全manifest、Core2files削除map、開始PID訂正前後は [owner run 1](../../../evidence/positive-court-a6-db-reopen-2026-11-01/owner-run-1/) に固定した。compressed exe本体は同manifestが指すprivate tmpに保持し、原raw記録を書き換えない。
+
+## 局所link修正案 — 未実行の別run
+
+[native links override](../../../evidence/positive-court-a6-db-reopen-2026-11-01/native-links-r2.toml) はCargo標準の `target.aarch64-apple-darwin.rocksdb` 設定だけを使う。sysのnative link metadataへstatic RocksDB/Snappyとdylib libc++を入れ、中間cdylibへも伝播させる。sysのbuild scriptを省略し、SHA固定のrelease `bindings.rs` を `rustc-env.OUT_DIR` で使う。元のcustom metadata `out_dir` と `cargo_manifest_dir` を別に保持し、他codec sys cratesの通常link経路を変更しない。
+
+global RUSTFLAGS、新しいtarget directory、不可視wrapper、Rust source/料金/schemaの変更は無い。overrideのBuildOutputはCargo fingerprint対象だが外部入力bytesは別途検査が必要なため、archive2本とbindings・設定fileをplanへ固定し、前後SHA照合を行う。sysと逆依存Rustの再buildはあり得る。[read-only根拠](../../../evidence/positive-court-a6-db-reopen-2026-11-01/native-links-r2-read-only-review.json) は現Cargoの実装・公式仕様との照合で、実link成功の証拠ではない。
+
+次候補は [owner plan r3](../../../evidence/positive-court-a6-db-reopen-2026-11-01/owner-run-plan-r3.json)。初回のverified gzipをCRC・uncompressed size/SHAも含め再照合し、**別run directory** の新manifestから参照する。旧pathを再削除せず、初回結果を成功へ加算しない。Rootのheavy枠releaseまでコンパイルを再開しない。
