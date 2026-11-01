@@ -1,0 +1,1413 @@
+{
+  "scope": "Root-owned inactive Cargo Mach-O executable artifacts only, preserved losslessly before unlink. No rawlogs/source/models/nativearchives/rlibs/other cache removed. No new test/qualification. No Rust rlib copy.",
+  "source_head": "cc22b0da1",
+  "restore_policy": "Restore into a fresh directory, set recorded executable mode; do not silently overwrite Cargo/current source artifacts. Original gzip decompressed into an actual tempfile and read back for size/SHA verification.",
+  "files": [
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/kaspa_consensus_core-5b3fb8e6accaaca6",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/kaspa_consensus_core-5b3fb8e6accaaca6"
+      ],
+      "bytes": 239976496,
+      "sha256": "dc41dc3488b4b609c43406bd92592a24f5a850966275f89a8346a8451dd2f0e6",
+      "mode": 33261,
+      "mtime_ns": 1793541496051383057,
+      "inode": 48311071,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/kaspa_consensus_core-5b3fb8e6accaaca6.gz",
+      "gzip_bytes": 68847170,
+      "gzip_sha256": "d6b8d1c5f713f66ec4e9cdcd37142403ca8002926efd3faa19519ebf42600407",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/kaspa_consensus_core-5b3fb8e6accaaca6"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/palw_class-f6c952d007d51603",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/palw_class-f6c952d007d51603"
+      ],
+      "bytes": 215298144,
+      "sha256": "21c7bc38f5c99344c9c70ae5232eb8c7c63314d66ae599f3a1bd32a7743022a1",
+      "mode": 33261,
+      "mtime_ns": 1793540128627015457,
+      "inode": 48297037,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/palw_class-f6c952d007d51603.gz",
+      "gzip_bytes": 62549287,
+      "gzip_sha256": "85f92459b9b16f5b4e691d7e9cd5b48f5c3ffb674a5bbc1adcd05a67c66fca86",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/palw_class-f6c952d007d51603"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/runtime_pack-066d0b88b30f6893",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/runtime_pack-066d0b88b30f6893"
+      ],
+      "bytes": 177701184,
+      "sha256": "aec4ea235f46f234a630818e97e1abbed0ab76fab449d5d156ccdca994663a54",
+      "mode": 33261,
+      "mtime_ns": 1793540127690849569,
+      "inode": 48297035,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/runtime_pack-066d0b88b30f6893.gz",
+      "gzip_bytes": 50686351,
+      "gzip_sha256": "e1f7e4ae7020aba94102aa87188b3d62777129e3108dc06a75ea8255c02177a6",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/runtime_pack-066d0b88b30f6893"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/palw_tir_equiv-81d62f5f97f82703",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/palw_tir_equiv-81d62f5f97f82703"
+      ],
+      "bytes": 146414192,
+      "sha256": "8b523abb4e2aeb7fc0be2076a88fbb404f061af137a75435cb28bff2ec97dade",
+      "mode": 33261,
+      "mtime_ns": 1793540129731389452,
+      "inode": 48297058,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/palw_tir_equiv-81d62f5f97f82703.gz",
+      "gzip_bytes": 41220501,
+      "gzip_sha256": "b46778343542d105888ffe64efa38fd3cae749b447d06a868114baaf8eb68d7d",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/palw_tir_equiv-81d62f5f97f82703"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/rcore_m5_v22_golden-9426651f23de3055",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/rcore_m5_v22_golden-9426651f23de3055"
+      ],
+      "bytes": 132107520,
+      "sha256": "4836fb4832ba855e91e24295569cfaeab9b58ad48d516f9a35e4d37b4770f2e3",
+      "mode": 33261,
+      "mtime_ns": 1793540244541279718,
+      "inode": 48305463,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/rcore_m5_v22_golden-9426651f23de3055.gz",
+      "gzip_bytes": 37917565,
+      "gzip_sha256": "480b7f08afcb5846ce8d020448729fc00c3492c9e699f267cee04112e5025748",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/rcore_m5_v22_golden-9426651f23de3055"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/palw_gen_close_price-d6f3ac8096d2329f",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/palw_gen_close_price-d6f3ac8096d2329f"
+      ],
+      "bytes": 129689328,
+      "sha256": "c14852a98150c8348e2b03bd5109cd1a8d827362d281c3814f387206521b8364",
+      "mode": 33261,
+      "mtime_ns": 1793540243657019680,
+      "inode": 48305455,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/palw_gen_close_price-d6f3ac8096d2329f.gz",
+      "gzip_bytes": 37295246,
+      "gzip_sha256": "9ca2ffe8ad566261a3498fc732323f00536cee1e9c482c9138462182e15e54e7",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/palw_gen_close_price-d6f3ac8096d2329f"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/palw_native_receipt_audit-9137b33fdb2ed49b",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/palw_native_receipt_audit-9137b33fdb2ed49b"
+      ],
+      "bytes": 129131392,
+      "sha256": "1069e9f5f20ee29274d427926251ce43ce248d61951bb5ed16ead84e67374f69",
+      "mode": 33261,
+      "mtime_ns": 1793540131884925046,
+      "inode": 48297092,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/palw_native_receipt_audit-9137b33fdb2ed49b.gz",
+      "gzip_bytes": 37146159,
+      "gzip_sha256": "af102a722d413bf931a794dbd2664893eb56284bacbdcf6306fb9fac85261563",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/palw_native_receipt_audit-9137b33fdb2ed49b"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/palw_native_receipt_audit39-781c3d1dc73271bc",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/palw_native_receipt_audit39-781c3d1dc73271bc"
+      ],
+      "bytes": 128565792,
+      "sha256": "1c5d7be6a8ddd1a195444b5b6a3ae49dda4cb4cbbf51422f1aaeabe54ad49d99",
+      "mode": 33261,
+      "mtime_ns": 1793540124713298338,
+      "inode": 48296996,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/palw_native_receipt_audit39-781c3d1dc73271bc.gz",
+      "gzip_bytes": 36960305,
+      "gzip_sha256": "939dc986d3d3c8d749bca1ba289bc63ce5d012c1c2238819fbdc5d0ed8bfa0b3",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/palw_native_receipt_audit39-781c3d1dc73271bc"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/palw_native_redemption39-af0b8e41184e26c0",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/palw_native_redemption39-af0b8e41184e26c0"
+      ],
+      "bytes": 128150736,
+      "sha256": "c2e50bb8e6bc7346463c299e2e25de8f4a343023bf40bb293485fb2398f4e183",
+      "mode": 33261,
+      "mtime_ns": 1793540133704428096,
+      "inode": 48297104,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/palw_native_redemption39-af0b8e41184e26c0.gz",
+      "gzip_bytes": 36834290,
+      "gzip_sha256": "9b3ae0fe9da920c8e3648c7d9b6c95e1ea6b77d4c3a07438ac72a7af556441cb",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/palw_native_redemption39-af0b8e41184e26c0"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/palw_native_final_audit39-6760a8bc5bf0e264",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/palw_native_final_audit39-6760a8bc5bf0e264"
+      ],
+      "bytes": 127870000,
+      "sha256": "e13d732d197f44047f7a8ff536762c60f4937f27f62c678d6d4f8d936489ef0f",
+      "mode": 33261,
+      "mtime_ns": 1793540132182781798,
+      "inode": 48297094,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/palw_native_final_audit39-6760a8bc5bf0e264.gz",
+      "gzip_bytes": 36734600,
+      "gzip_sha256": "9466802daf7466b79113348438257619f5a0a83cf2af0bbb6227328ea08a373e",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/palw_native_final_audit39-6760a8bc5bf0e264"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/t12_regenesis-a0be964b0aca8911",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/t12_regenesis-a0be964b0aca8911"
+      ],
+      "bytes": 127454160,
+      "sha256": "5a5541510f2abba1188eb6aeac2585cd29f80c3129d536fd5b6110981935a7fc",
+      "mode": 33261,
+      "mtime_ns": 1793540241657940928,
+      "inode": 48305394,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/t12_regenesis-a0be964b0aca8911.gz",
+      "gzip_bytes": 36645448,
+      "gzip_sha256": "c053f7ca8d3b78e43e9f1cab88e2ad74950490f0c16aaf1b182931e429bfff5f",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/t12_regenesis-a0be964b0aca8911"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/palw_native_snapshot39-cbc6557ba5ede58f",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/palw_native_snapshot39-cbc6557ba5ede58f"
+      ],
+      "bytes": 127060400,
+      "sha256": "e11d1c0b706bc770700551d04f7d6700c4611e9f173f575b2cbef3a9da576be6",
+      "mode": 33261,
+      "mtime_ns": 1793540124835421601,
+      "inode": 48296998,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/palw_native_snapshot39-cbc6557ba5ede58f.gz",
+      "gzip_bytes": 36414232,
+      "gzip_sha256": "1076a8f62dd1b9fe1e8c384c1ac10a052e8225b30e1ce0c02b7a76561b69637b",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/palw_native_snapshot39-cbc6557ba5ede58f"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/misaka_palw_positive_accounting_node-079fcdd0641abd4c",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/misaka_palw_positive_accounting_node-079fcdd0641abd4c"
+      ],
+      "bytes": 79947744,
+      "sha256": "387c68fd247fc5696c7eef8d75494dc41f14a482f785c059d85d526c09876fdd",
+      "mode": 33261,
+      "mtime_ns": 1793541683964474881,
+      "inode": 48311763,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/misaka_palw_positive_accounting_node-079fcdd0641abd4c.gz",
+      "gzip_bytes": 21579110,
+      "gzip_sha256": "03cb96162fa9e15fea2b89e4a7379c156aac68aa46b656fc2b6a39aa74169a39",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/misaka_palw_positive_accounting_node-079fcdd0641abd4c"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/palw_tir_fidelity-826fc51a6cc9d180",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/palw_tir_fidelity-826fc51a6cc9d180"
+      ],
+      "bytes": 42950208,
+      "sha256": "6fcb681853cf5a54e086107293f7111e02dc8ea0ae6a7c76132e0a9528e0bbec",
+      "mode": 33261,
+      "mtime_ns": 1793465679653252677,
+      "inode": 47971490,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/palw_tir_fidelity-826fc51a6cc9d180.gz",
+      "gzip_bytes": 11333203,
+      "gzip_sha256": "b3a728b0933a76f23c6453eb5df9437362bd692c086a2909eec1c5c23841c28a",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/palw_tir_fidelity-826fc51a6cc9d180"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/logits_q24-fa2f02328dae1542",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/logits_q24-fa2f02328dae1542"
+      ],
+      "bytes": 42730256,
+      "sha256": "2be339d7ee239bc16d7e52fd6e61cc5b91161b9b6e0c5b25cf6bdd19c85bdeb4",
+      "mode": 33261,
+      "mtime_ns": 1793465681072963927,
+      "inode": 47971561,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/logits_q24-fa2f02328dae1542.gz",
+      "gzip_bytes": 11346670,
+      "gzip_sha256": "c955ea49768a33846ed945ba6a90fc1dc7c90a47fe55800d0e1292e9f45e5e65",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/logits_q24-fa2f02328dae1542"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/cnn-917d365d76a21b85",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/cnn-917d365d76a21b85"
+      ],
+      "bytes": 38684688,
+      "sha256": "d609eba2cddd1cb5b0870de1b3ab402adc011dbf7a6e4016ea7972b3787d1a12",
+      "mode": 33261,
+      "mtime_ns": 1793465681044403699,
+      "inode": 47971559,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/cnn-917d365d76a21b85.gz",
+      "gzip_bytes": 10222085,
+      "gzip_sha256": "8ba4bc4e198790e51af7b7dd89e0d04ea2f5b011cd593d318b10a144d898a2fa",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/cnn-917d365d76a21b85"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/palw_tir_convert-7d8803130b67662d",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/palw_tir_convert-7d8803130b67662d"
+      ],
+      "bytes": 26271568,
+      "sha256": "0be87317821e00131d3fa25fcfd61e7c140fd30c8daffd1f17a48870b882031c",
+      "mode": 33261,
+      "mtime_ns": 1793465678200858036,
+      "inode": 47971422,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/palw_tir_convert-7d8803130b67662d.gz",
+      "gzip_bytes": 7768939,
+      "gzip_sha256": "6007a951aa6f67bbc99daf64a85fa9f3af64ff266720d5ecf7b9d210efe6dc29",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/palw_tir_convert-7d8803130b67662d"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/cell-31fb22b90f49729e",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/cell-31fb22b90f49729e"
+      ],
+      "bytes": 25764080,
+      "sha256": "dc05e42a9ee9e9f209dd4a2a17d44dc711879e9c8e4f41ab3d48fa502904d00e",
+      "mode": 33261,
+      "mtime_ns": 1793541189564401235,
+      "inode": 48309789,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/cell-31fb22b90f49729e.gz",
+      "gzip_bytes": 6596989,
+      "gzip_sha256": "b9e1826de2fa264936f76959fcdbb0b718cf8dcc3e78cfdd449f58daa86d0c77",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/cell-31fb22b90f49729e"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/positive_typed_adapter-985284a67a55320c",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/positive_typed_adapter-985284a67a55320c"
+      ],
+      "bytes": 24375424,
+      "sha256": "fedb102a5b2e95bead2e5f17051910f1b068d602cc0e6b45fd0904b9c6bc760f",
+      "mode": 33261,
+      "mtime_ns": 1793469014778308797,
+      "inode": 48104903,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/positive_typed_adapter-985284a67a55320c.gz",
+      "gzip_bytes": 6199765,
+      "gzip_sha256": "8136528b8b889566ca89b18b9f69bacb3c469bec330b7c24c88238d0958c87c7",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/positive_typed_adapter-985284a67a55320c"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/positive_full_relation-e7a518d5bca743ab",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/positive_full_relation-e7a518d5bca743ab"
+      ],
+      "bytes": 24098912,
+      "sha256": "d2bc36b0cf4640eba239a41704b521e68aa8d2a16b9cd4d157cee15a5ac9b414",
+      "mode": 33261,
+      "mtime_ns": 1793542641577568887,
+      "inode": 48314542,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/positive_full_relation-e7a518d5bca743ab.gz",
+      "gzip_bytes": 6107771,
+      "gzip_sha256": "67559d9c5ec103869032b63b594e0660b21a87de86aaabd58cd908c59b9c08cc",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/positive_full_relation-e7a518d5bca743ab"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/positive_wide_material_v2-af4f03d4a24b5512",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/positive_wide_material_v2-af4f03d4a24b5512"
+      ],
+      "bytes": 23746864,
+      "sha256": "c76e7ff59a06b2fe138a46ac6628d7741bf7042ececdc0b078f301637974b294",
+      "mode": 33261,
+      "mtime_ns": 1793542641209703688,
+      "inode": 48314533,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/positive_wide_material_v2-af4f03d4a24b5512.gz",
+      "gzip_bytes": 6046706,
+      "gzip_sha256": "26c4c3c285a4fb0393ce79d8bd4293eeba0f63fe83310cc2de084166e90200c1",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/positive_wide_material_v2-af4f03d4a24b5512"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/golden_lowering-1ac81658298b1a41",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/golden_lowering-1ac81658298b1a41"
+      ],
+      "bytes": 22642000,
+      "sha256": "dc2c136e9a24dd6606f6b3adc040735def66e71871e3cf1c3d77b520711fe8e4",
+      "mode": 33261,
+      "mtime_ns": 1793465677836623908,
+      "inode": 47971380,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/golden_lowering-1ac81658298b1a41.gz",
+      "gzip_bytes": 6660994,
+      "gzip_sha256": "9fa0f544abd0836cf3739855408cb760b443358ed93b6462912df8e9386570c3",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/golden_lowering-1ac81658298b1a41"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/palw_tir_check-5ce75cfb7097ce7d",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/palw_tir_check-5ce75cfb7097ce7d"
+      ],
+      "bytes": 22004960,
+      "sha256": "84f351d2e87d781e935f4cfd354f55c22bbd7476b433907a51a332237d08945b",
+      "mode": 33261,
+      "mtime_ns": 1793465678733096364,
+      "inode": 47971447,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/palw_tir_check-5ce75cfb7097ce7d.gz",
+      "gzip_bytes": 6634247,
+      "gzip_sha256": "b32fc7d8fde9f98407d80af2ccf6e344aee20ff0cbad15dd00ed747664809fcb",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/palw_tir_check-5ce75cfb7097ce7d"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/run_wide_q24_v2-b7b0acdbdd74363d",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/run_wide_q24_v2-b7b0acdbdd74363d"
+      ],
+      "bytes": 21913648,
+      "sha256": "bd4a9ab52a58c8ad39ae97113d244eba034b05fa5e54a3d2494a3fd1502bb0f9",
+      "mode": 33261,
+      "mtime_ns": 1793542640152223849,
+      "inode": 48314497,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/run_wide_q24_v2-b7b0acdbdd74363d.gz",
+      "gzip_bytes": 5375488,
+      "gzip_sha256": "b7df0c76d8d6eaab6a82ef62c590d5da4be5a354e3e1e20c7be464cf84a5ed34",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/run_wide_q24_v2-b7b0acdbdd74363d"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/run_wide_q24_v2-33192694b100907b",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/run_wide_q24_v2-33192694b100907b"
+      ],
+      "bytes": 21907392,
+      "sha256": "215fa08033dfab5be6386f51e65cc059c0af0df13320a84c5b2263311399d486",
+      "mode": 33261,
+      "mtime_ns": 1793541686678354147,
+      "inode": 48311870,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/run_wide_q24_v2-33192694b100907b.gz",
+      "gzip_bytes": 5372770,
+      "gzip_sha256": "0eb6eb65cc0904b9abdb1f3c262a10a0617c86155bec60287bbdc93d448d2a90",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/run_wide_q24_v2-33192694b100907b"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/wide_capture_v2-3fc56f2ab05111d1",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/wide_capture_v2-3fc56f2ab05111d1"
+      ],
+      "bytes": 21583296,
+      "sha256": "c5d335915f6aa110b160d5165011ad86cbca12867114e9a08d932dcfd87207dc",
+      "mode": 33261,
+      "mtime_ns": 1793542642931329553,
+      "inode": 48314575,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/wide_capture_v2-3fc56f2ab05111d1.gz",
+      "gzip_bytes": 5280326,
+      "gzip_sha256": "7cb01147887b1c182196c00361d98a2553fe12a01bfa63a2ba0c66423f688e59",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/wide_capture_v2-3fc56f2ab05111d1"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/wide_capture_v2-cc910cf2d06a0915",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/wide_capture_v2-cc910cf2d06a0915"
+      ],
+      "bytes": 21577616,
+      "sha256": "130c570f006a7100e07e0bb35f4a2f78f37051cc1c018b006911d43bf734dead",
+      "mode": 33261,
+      "mtime_ns": 1793541186770869296,
+      "inode": 48309701,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/wide_capture_v2-cc910cf2d06a0915.gz",
+      "gzip_bytes": 5275952,
+      "gzip_sha256": "0717df79dfa341d303421e977ae0800183f114442b1a20c280390ae7e69650fa",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/wide_capture_v2-cc910cf2d06a0915"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/tir_exec_bench-8f2dfdef08a25328",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/tir_exec_bench-8f2dfdef08a25328"
+      ],
+      "bytes": 21267808,
+      "sha256": "3d59ca14d7834f49e1cac3b83f4c72aa460b296f57e660ef30473d9acf42cd9b",
+      "mode": 33261,
+      "mtime_ns": 1793542642401995132,
+      "inode": 48314572,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/tir_exec_bench-8f2dfdef08a25328.gz",
+      "gzip_bytes": 5062887,
+      "gzip_sha256": "7009dab53b61eb06ae07edc5ca1bc35e28e27c11a65684c17865568643a63477",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/tir_exec_bench-8f2dfdef08a25328"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/tir_exec_bench-cd79b6c668f0c2de",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/tir_exec_bench-cd79b6c668f0c2de"
+      ],
+      "bytes": 21262976,
+      "sha256": "f2f0d4bb9bc2b5d5492f9400f95f7071c469eadf6591bfe078866adb0f767a21",
+      "mode": 33261,
+      "mtime_ns": 1793541186686131993,
+      "inode": 48309699,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/tir_exec_bench-cd79b6c668f0c2de.gz",
+      "gzip_bytes": 5061786,
+      "gzip_sha256": "d82c6b658bf72dd3a1bbc9584dff989a80009830d22823d2c348c7e64b7312fe",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/tir_exec_bench-cd79b6c668f0c2de"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/cell_ipc_v2-24d04baed76552cc",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/cell_ipc_v2-24d04baed76552cc"
+      ],
+      "bytes": 21257136,
+      "sha256": "daa9edc778bdaca61e781360ae3122e6a4437aff70dc74af7df8e75ab5ea1ac4",
+      "mode": 33261,
+      "mtime_ns": 1793541376411674233,
+      "inode": 48310713,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/cell_ipc_v2-24d04baed76552cc.gz",
+      "gzip_bytes": 5170239,
+      "gzip_sha256": "ebee86e9512af453a4ee237a10fdc0e3bc196c30481c20847cac997cfb5cd0f5",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/cell_ipc_v2-24d04baed76552cc"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/palw_tir_generate-2034b01ec658381e",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/palw_tir_generate-2034b01ec658381e"
+      ],
+      "bytes": 20978912,
+      "sha256": "975af86e16733153fc3a43ab06c20fb96bc3c6882c623d11c895d69d8d66e829",
+      "mode": 33261,
+      "mtime_ns": 1793465679488805599,
+      "inode": 47971489,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/palw_tir_generate-2034b01ec658381e.gz",
+      "gzip_bytes": 5069676,
+      "gzip_sha256": "49921d32a3495e61420e065f607e0feafe4911329267967be6a889ef10c2e4ba",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/palw_tir_generate-2034b01ec658381e"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/run_wide_idx_history-93b3a9d28a263584",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/run_wide_idx_history-93b3a9d28a263584"
+      ],
+      "bytes": 20894752,
+      "sha256": "bfab6f2da1d5a5f0320cef08315ab54777b065b1db6422148207902fd11f4667",
+      "mode": 33261,
+      "mtime_ns": 1793467481022473291,
+      "inode": 48099337,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/run_wide_idx_history-93b3a9d28a263584.gz",
+      "gzip_bytes": 5055337,
+      "gzip_sha256": "b4f130a22de1d40d04025c067ad7f6aafb89c49eebd1f4926931f3f9c9aab475",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/run_wide_idx_history-93b3a9d28a263584"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/streaming_convert-595b393fffc556cf",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/streaming_convert-595b393fffc556cf"
+      ],
+      "bytes": 20842208,
+      "sha256": "c4a7e358bdfb1d80087a0aef3da89289904594ef70fef26fceff4169da278e07",
+      "mode": 33261,
+      "mtime_ns": 1793465681452566043,
+      "inode": 47971578,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/streaming_convert-595b393fffc556cf.gz",
+      "gzip_bytes": 6173909,
+      "gzip_sha256": "ba6e8ff79f872130670846e0b2ddfcb0280d540351d8066999c64caa72bf1a59",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/streaming_convert-595b393fffc556cf"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/run_wide_memory-c0cdcb1dcf02896e",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/run_wide_memory-c0cdcb1dcf02896e"
+      ],
+      "bytes": 20476672,
+      "sha256": "116ff22b9c1735c57a396adf550aa8b8f752374480b4e1d2d67c96c6598e4ff3",
+      "mode": 33261,
+      "mtime_ns": 1793541189025913544,
+      "inode": 48309787,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/run_wide_memory-c0cdcb1dcf02896e.gz",
+      "gzip_bytes": 4924138,
+      "gzip_sha256": "e117ed4fc5d66248ab4f552def7fe643a5d89ee30f5ed348e11f77328168ea9b",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/run_wide_memory-c0cdcb1dcf02896e"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/capture_codec-bd9af3d9c95b8e12",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/capture_codec-bd9af3d9c95b8e12"
+      ],
+      "bytes": 20027200,
+      "sha256": "3607109a7daacc699f4f505e8a8890c0b80566986180b837c221b5cadfa36966",
+      "mode": 33261,
+      "mtime_ns": 1793541187901462819,
+      "inode": 48309739,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/capture_codec-bd9af3d9c95b8e12.gz",
+      "gzip_bytes": 4768561,
+      "gzip_sha256": "c0836465b9ce6515603372aedc38bbebe0d50475fb519a7f8a0a7aca8c33d5aa",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/capture_codec-bd9af3d9c95b8e12"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/capture_codec-3aaa65e22925c2a1",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/capture_codec-3aaa65e22925c2a1"
+      ],
+      "bytes": 20023648,
+      "sha256": "9c9052adb13102d01008d5175bfaa20cf5b61aff14527ddf0185fef63f9aa2d9",
+      "mode": 33261,
+      "mtime_ns": 1793469015986312010,
+      "inode": 48104932,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/capture_codec-3aaa65e22925c2a1.gz",
+      "gzip_bytes": 4770949,
+      "gzip_sha256": "14413654397cb5fb92af303d7eff78c29649290ae01e9d92171d7bae715c3db1",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/capture_codec-3aaa65e22925c2a1"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/palw_tir_frontend-bb3eaaaf9d1b2e6b",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/palw_tir_frontend-bb3eaaaf9d1b2e6b"
+      ],
+      "bytes": 15366672,
+      "sha256": "15d9e8e276552c8d435dfa99b08717273d0ab7f3bc7a0ec1b2eaa173e0aba97b",
+      "mode": 33261,
+      "mtime_ns": 1793465680171038850,
+      "inode": 47971528,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/palw_tir_frontend-bb3eaaaf9d1b2e6b.gz",
+      "gzip_bytes": 4701039,
+      "gzip_sha256": "1ea48fb2829967623212354f24fdc6175780c104379a1872a2f8f658da424b39",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/palw_tir_frontend-bb3eaaaf9d1b2e6b"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/palw_gen_close-6a6835456a768b8d",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/palw_gen_close-6a6835456a768b8d"
+      ],
+      "bytes": 7227456,
+      "sha256": "1fd7552f43f1bfa94b0900edf63406f33b19224ea3224469bef5c1cf6ba892f5",
+      "mode": 33261,
+      "mtime_ns": 1793540241778725106,
+      "inode": 48305411,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/palw_gen_close-6a6835456a768b8d.gz",
+      "gzip_bytes": 2537907,
+      "gzip_sha256": "00e8369fce612536417717ce1cc61abbd1437e83761f744b774944d2ad43253a",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/palw_gen_close-6a6835456a768b8d"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/palw_tir_close_size-d7bc1d2fc7ad3312",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/palw_tir_close_size-d7bc1d2fc7ad3312"
+      ],
+      "bytes": 7175504,
+      "sha256": "8d64e8266992caceb7625364530e0301f04e011bc8bcd8281c67cbc7094fb091",
+      "mode": 33261,
+      "mtime_ns": 1793540239778726145,
+      "inode": 48305344,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/palw_tir_close_size-d7bc1d2fc7ad3312.gz",
+      "gzip_bytes": 2288984,
+      "gzip_sha256": "6d7a79b04870cd4cb4c6595471bf944fb33735dd6f3445931430077f9e76aff1",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/palw_tir_close_size-d7bc1d2fc7ad3312"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/golden_v2-301bbe67ecfa36c3",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/golden_v2-301bbe67ecfa36c3"
+      ],
+      "bytes": 6902944,
+      "sha256": "717ae50b3c013860b8a45aa16e7a7ee865a7e2da1b27afc5bc07f999f0b67157",
+      "mode": 33261,
+      "mtime_ns": 1793462114589424497,
+      "inode": 47925495,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/golden_v2-301bbe67ecfa36c3.gz",
+      "gzip_bytes": 2260620,
+      "gzip_sha256": "885a44910c68ce1d7a205294cd58991185406c4fb8853c0c53dab5894f650207",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/golden_v2-301bbe67ecfa36c3"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/palw_tir_close_size_wide_v2-5838e1fa14321ee7",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/palw_tir_close_size_wide_v2-5838e1fa14321ee7"
+      ],
+      "bytes": 6040032,
+      "sha256": "8e86f3a212b2ffd0acc44e75060d5725f87ae467ead0ac8a5eba454206cb1f14",
+      "mode": 33261,
+      "mtime_ns": 1793540240824770865,
+      "inode": 48305384,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/palw_tir_close_size_wide_v2-5838e1fa14321ee7.gz",
+      "gzip_bytes": 1972851,
+      "gzip_sha256": "213da823d7a45da0540b20abfc64ce8fcb8dba8af1ed13b772f2a4791528fab0",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/palw_tir_close_size_wide_v2-5838e1fa14321ee7"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/palw_q36_differential40-05cc5df5f0b703b3",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/palw_q36_differential40-05cc5df5f0b703b3"
+      ],
+      "bytes": 5818592,
+      "sha256": "3103c39a2fb87ff7fa76794a5bad361930c6e4a88cf18f3353d527d13d52f952",
+      "mode": 33261,
+      "mtime_ns": 1793540129796817026,
+      "inode": 48297064,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/palw_q36_differential40-05cc5df5f0b703b3.gz",
+      "gzip_bytes": 2091447,
+      "gzip_sha256": "13ff341c4594acdeac019d46f0aadad56ebb89d4141838ae2a5ca2a2f6bc3870",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/palw_q36_differential40-05cc5df5f0b703b3"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/palw_tir_close_range-1fb166acaeb5150c",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/palw_tir_close_range-1fb166acaeb5150c"
+      ],
+      "bytes": 5804176,
+      "sha256": "4ae6fbb813a07dbfd079f265347e8ea819e59cbf1fee22ed9d342f9dc7fd0514",
+      "mode": 33261,
+      "mtime_ns": 1793540239764257087,
+      "inode": 48305343,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/palw_tir_close_range-1fb166acaeb5150c.gz",
+      "gzip_bytes": 1891478,
+      "gzip_sha256": "02869b3078c61da7086c78f0733719230e193d0cf98d9ee102b6896533e72197",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/palw_tir_close_range-1fb166acaeb5150c"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/palw_tir_court-c34cd514081cf4b7",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/palw_tir_court-c34cd514081cf4b7"
+      ],
+      "bytes": 5420544,
+      "sha256": "33a8a3ac339eb3e856785b36beec2081581c6a2e0dc8a242a61024371e5ad73b",
+      "mode": 33261,
+      "mtime_ns": 1793468830049202660,
+      "inode": 48104038,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/palw_tir_court-c34cd514081cf4b7.gz",
+      "gzip_bytes": 1842017,
+      "gzip_sha256": "506b9d414d40cba7e0d118f2e112fdbce71545c8bcfbc047f3084cb60222c1d6",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/palw_tir_court-c34cd514081cf4b7"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/positive_source_v2-cd4948d3a0edb2e1",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/positive_source_v2-cd4948d3a0edb2e1"
+      ],
+      "bytes": 4405408,
+      "sha256": "224790568ae11261f340acbf886a673377329f13061bf9a62a9b2e91d9709c87",
+      "mode": 33261,
+      "mtime_ns": 1793541671522795448,
+      "inode": 48311485,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/positive_source_v2-cd4948d3a0edb2e1.gz",
+      "gzip_bytes": 1614514,
+      "gzip_sha256": "f7e4ab5e891fb58e8951bfc0deef06d4753984b7f234f32a6a89b5de61495c5b",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/positive_source_v2-cd4948d3a0edb2e1"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/golden-1488ba94938d7e5c",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/golden-1488ba94938d7e5c"
+      ],
+      "bytes": 4176608,
+      "sha256": "e0103e9133fa840b9f442d5787cd736dbd5b3b6d6eb20fb125afe4dd3b4090d3",
+      "mode": 33261,
+      "mtime_ns": 1793462114237189783,
+      "inode": 47925475,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/golden-1488ba94938d7e5c.gz",
+      "gzip_bytes": 1402945,
+      "gzip_sha256": "e645d0e54aadda830bfa29b5630bfec1f8fd8e00509de95d77dad4a1c944d665",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/golden-1488ba94938d7e5c"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/contracts-f9a126bef1d6e811",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/contracts-f9a126bef1d6e811"
+      ],
+      "bytes": 3043688,
+      "sha256": "7165fb0c5121c9d3658aa5c945c0e0f61de391c1235aebe191a81f64d6c53e48",
+      "mode": 33261,
+      "mtime_ns": 1793448615321789570,
+      "inode": 47626132,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/contracts-f9a126bef1d6e811.gz",
+      "gzip_bytes": 1185932,
+      "gzip_sha256": "1acf0b6eba424b6f1632565e00171c7733ef7683814e3605248fa1e14071672e",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/contracts-f9a126bef1d6e811"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/funding-3aa7cef921d49ced",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/funding-3aa7cef921d49ced"
+      ],
+      "bytes": 2933112,
+      "sha256": "49c82d96a9f3fa2e4c423dc6eda46ef4a70d07c105ca22f08c741beab7a0bdc5",
+      "mode": 33261,
+      "mtime_ns": 1793448668925411587,
+      "inode": 47627940,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/funding-3aa7cef921d49ced.gz",
+      "gzip_bytes": 1153841,
+      "gzip_sha256": "afbaa1af550e133860c5713cc028a3f7239afa55d5f6d4ffd197b5eb401ecbd1",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/funding-3aa7cef921d49ced"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/native_rows-9e3f4079f3e67303",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/native_rows-9e3f4079f3e67303"
+      ],
+      "bytes": 2683456,
+      "sha256": "6fe3fd84b1215fc768c7ae3d5c40b0d7d7049211e8ae504bb6fadc50385c2882",
+      "mode": 33261,
+      "mtime_ns": 1793459975109536138,
+      "inode": 47890201,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/native_rows-9e3f4079f3e67303.gz",
+      "gzip_bytes": 1039515,
+      "gzip_sha256": "a8a1f5944eebe9d4cfb410b7241d47df89bd2e0938c808e22ce880e0f7b7c864",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/native_rows-9e3f4079f3e67303"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/wide_logits_structural-e061a44b14c29965",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/wide_logits_structural-e061a44b14c29965"
+      ],
+      "bytes": 2528512,
+      "sha256": "d7378cea734fa3845de31e3a5b00213833d7457abecc7387c00b48ad0c827cde",
+      "mode": 33261,
+      "mtime_ns": 1793462113546673511,
+      "inode": 47925442,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/wide_logits_structural-e061a44b14c29965.gz",
+      "gzip_bytes": 907419,
+      "gzip_sha256": "b6bac28e5ad968aaa45f6f39fb1d8888d43cdc3e80b1e598c6d49400767c2cc4",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/wide_logits_structural-e061a44b14c29965"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/contracts-8185f426e3ac8f6b",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/contracts-8185f426e3ac8f6b"
+      ],
+      "bytes": 2520096,
+      "sha256": "0ce54e6226927634fe3df7915a901d0f93fb4e9d12eeaba2f05aa4c3e3cae747",
+      "mode": 33261,
+      "mtime_ns": 1793459975670277987,
+      "inode": 47890246,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/contracts-8185f426e3ac8f6b.gz",
+      "gzip_bytes": 995673,
+      "gzip_sha256": "5a097e8f65d76f9dfcd804bb9a535bfed431225601248e7c588434ea9f14a33c",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/contracts-8185f426e3ac8f6b"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/funding-7ca5ce9bb4010c92",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/funding-7ca5ce9bb4010c92"
+      ],
+      "bytes": 2440368,
+      "sha256": "cc79f4febb6e3103575095882d1514def865c8fa913a42278c6f4d7cebba61aa",
+      "mode": 33261,
+      "mtime_ns": 1793459974890075393,
+      "inode": 47890178,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/funding-7ca5ce9bb4010c92.gz",
+      "gzip_bytes": 968476,
+      "gzip_sha256": "216a42e3dab482a599b3f4f8e8bef96dc0bfd4c8a54aa4d3fd4a74da0931c687",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/funding-7ca5ce9bb4010c92"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/positive_expanded_plan-12066fd3974897ed",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/positive_expanded_plan-12066fd3974897ed"
+      ],
+      "bytes": 2390160,
+      "sha256": "88506622a9aaaa759d514ebdf0b1911a03a309fc30bc6e2c8eac6b6e7e2b8eda",
+      "mode": 33261,
+      "mtime_ns": 1793542639913249577,
+      "inode": 48314493,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/positive_expanded_plan-12066fd3974897ed.gz",
+      "gzip_bytes": 900307,
+      "gzip_sha256": "8777774ffdd2e9de9841959204e11e6c63858976f0ca6e037ae72438e8d8e831",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/positive_expanded_plan-12066fd3974897ed"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/palw_tir_step_wide_v2-fb55f4bb24b4889c",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/palw_tir_step_wide_v2-fb55f4bb24b4889c"
+      ],
+      "bytes": 2306448,
+      "sha256": "a86e8828e96ba2516f12ff4577c4f0d261af762d293b42e9290ca915837ae0e8",
+      "mode": 33261,
+      "mtime_ns": 1793466884111714398,
+      "inode": 48081334,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/palw_tir_step_wide_v2-fb55f4bb24b4889c.gz",
+      "gzip_bytes": 881958,
+      "gzip_sha256": "397957fb1ad3f97ecc33c6c751c56850c49dd8306841f8edbb193825c80f81ad",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/palw_tir_step_wide_v2-fb55f4bb24b4889c"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/certification-265d607a088050d0",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/certification-265d607a088050d0"
+      ],
+      "bytes": 2253728,
+      "sha256": "972e5f877789e850c3e4ca7021ad22eb4bef480849e44564b2eb482079e44c93",
+      "mode": 33261,
+      "mtime_ns": 1793459975859068519,
+      "inode": 47890335,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/certification-265d607a088050d0.gz",
+      "gzip_bytes": 888450,
+      "gzip_sha256": "4e6daf47cf621f94f6f0299ddb5b60f6200d8c980ed8fa81a0db5800093734f4",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/certification-265d607a088050d0"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/misaka_palw_positive_accounting-48e95e54e47ac566",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/misaka_palw_positive_accounting-48e95e54e47ac566"
+      ],
+      "bytes": 2181552,
+      "sha256": "e8a7cb524f908604d251def0d67a42e58e62f2ac75d870e543b34a5498624dd4",
+      "mode": 33261,
+      "mtime_ns": 1793449623047950150,
+      "inode": 47643123,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/misaka_palw_positive_accounting-48e95e54e47ac566.gz",
+      "gzip_bytes": 707978,
+      "gzip_sha256": "90e7f2bb3d4727988f3900d55735eb4880b0b970a013c332d3d00f0d00a05c32",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/misaka_palw_positive_accounting-48e95e54e47ac566"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/misaka_palw_positive_accounting-a78f4c03e86ed9fc",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/misaka_palw_positive_accounting-a78f4c03e86ed9fc"
+      ],
+      "bytes": 2139520,
+      "sha256": "0de91fc41ad24498fd43d659995fa40a97c35cfd538e66c5ff7aff126e7d84e1",
+      "mode": 33261,
+      "mtime_ns": 1793459981383951776,
+      "inode": 47890473,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/misaka_palw_positive_accounting-a78f4c03e86ed9fc.gz",
+      "gzip_bytes": 729737,
+      "gzip_sha256": "0852568067acd30a49798df831cb2ef26e024f0dda7d90d8e130bd3b3a41c5a6",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/misaka_palw_positive_accounting-a78f4c03e86ed9fc"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/independent_fee_conservation-5782ab4a60f72a33",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/independent_fee_conservation-5782ab4a60f72a33"
+      ],
+      "bytes": 1640944,
+      "sha256": "03cb9eedf2519ac1057996cb86428580d1a3e378d11f0035c2a1ac8453229e82",
+      "mode": 33261,
+      "mtime_ns": 1793449622918654919,
+      "inode": 47643113,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/independent_fee_conservation-5782ab4a60f72a33.gz",
+      "gzip_bytes": 588157,
+      "gzip_sha256": "6581f03d15d9ad09cf11eb132e7ec1571b751e44fff7d6fe1539dd44f9c21e69",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/independent_fee_conservation-5782ab4a60f72a33"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/native_namespace-97c9bf9bc6033093",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/native_namespace-97c9bf9bc6033093"
+      ],
+      "bytes": 1532992,
+      "sha256": "9e76ea5f0f9191278321f200b388240c01f0be70eebf81a7a7b93c68f7bbfb9f",
+      "mode": 33261,
+      "mtime_ns": 1793448615298668966,
+      "inode": 47626128,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/native_namespace-97c9bf9bc6033093.gz",
+      "gzip_bytes": 585847,
+      "gzip_sha256": "80c267d189936b7fb9230f59e0b7e6b4de802bb1ea674400eb9ddd6a8d4bbe8d",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/native_namespace-97c9bf9bc6033093"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/independent_fee_conservation-efa0f9285d838186",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/independent_fee_conservation-efa0f9285d838186"
+      ],
+      "bytes": 1426112,
+      "sha256": "dda4f1a999bdcb9bf5ab179a9c68df9f1fb6dbbe0c2f2e2f351b6afefaaaa04f",
+      "mode": 33261,
+      "mtime_ns": 1793459981449271700,
+      "inode": 47890477,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/independent_fee_conservation-efa0f9285d838186.gz",
+      "gzip_bytes": 553349,
+      "gzip_sha256": "bae25a4eb37b572084e2745086068cae7e8d8ca93b6dfda2656aa3cf8f64d3c3",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/independent_fee_conservation-efa0f9285d838186"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/native_namespace-b87866f978301536",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/native_namespace-b87866f978301536"
+      ],
+      "bytes": 1421568,
+      "sha256": "ecdcb95b26235552bb5bcaaf41a8dc08c94ca8700842e2f282cb1494b928b20b",
+      "mode": 33261,
+      "mtime_ns": 1793459975419408986,
+      "inode": 47890221,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/native_namespace-b87866f978301536.gz",
+      "gzip_bytes": 560271,
+      "gzip_sha256": "069da09a59eb9779e948a2c82c33850b258983ff292d6beeb934862b847c9185",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/native_namespace-b87866f978301536"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/native_preflight_alloc-83d04c9a6f9985bc",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/native_preflight_alloc-83d04c9a6f9985bc"
+      ],
+      "bytes": 1417392,
+      "sha256": "4906729528bfabc77c1da65cbd4ba1aac7cd56ce801f3d7fe14e331b22dc9a73",
+      "mode": 33261,
+      "mtime_ns": 1793459974892019849,
+      "inode": 47890179,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/native_preflight_alloc-83d04c9a6f9985bc.gz",
+      "gzip_bytes": 591561,
+      "gzip_sha256": "aef5da46a601854a5fdf2c521fb6c7bbc4cb7b70d13d4c21a520cc53ed174b34",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/native_preflight_alloc-83d04c9a6f9985bc"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/case_journal-2e6965d03485ce20",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/case_journal-2e6965d03485ce20"
+      ],
+      "bytes": 1410528,
+      "sha256": "ce81609cb7914bf066e729227e73e739962a96029cb63c2381f946b9b73c639a",
+      "mode": 33261,
+      "mtime_ns": 1793459975652979382,
+      "inode": 47890243,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/case_journal-2e6965d03485ce20.gz",
+      "gzip_bytes": 592961,
+      "gzip_sha256": "b17691cd15e22ea7ed4a97b3e6775135e51e7017f27d07e022d5a6676af61b0a",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/case_journal-2e6965d03485ce20"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/tir_contract-e754ce9aeaaa30bf",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/tir_contract-e754ce9aeaaa30bf"
+      ],
+      "bytes": 1404816,
+      "sha256": "f8b266fbdacdc8f3f3560d4d9b8ee17c0bcecb38d2e756500916ae727c6c50d2",
+      "mode": 33261,
+      "mtime_ns": 1793448615273811601,
+      "inode": 47626126,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/tir_contract-e754ce9aeaaa30bf.gz",
+      "gzip_bytes": 568195,
+      "gzip_sha256": "7c47c11ab067f195ef6c4bbdb9cf97907495bf1fe5c127ebc6b547261283bd1b",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/tir_contract-e754ce9aeaaa30bf"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/execution_record-0c846fbd06b29fca",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/execution_record-0c846fbd06b29fca"
+      ],
+      "bytes": 1313600,
+      "sha256": "d438831eb093342cc43c47f19bac6ca5b5df098f72826c6777381dcf398e5994",
+      "mode": 33261,
+      "mtime_ns": 1793459975102609104,
+      "inode": 47890200,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/execution_record-0c846fbd06b29fca.gz",
+      "gzip_bytes": 559044,
+      "gzip_sha256": "c002ab22fe0baf9f365d6e6407a3849683e4fba93dd508feebe0dff1564cbf48",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/execution_record-0c846fbd06b29fca"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/wide_logits_primitives_v2-898482192ea7821a",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/wide_logits_primitives_v2-898482192ea7821a"
+      ],
+      "bytes": 1301648,
+      "sha256": "85468134b014ef4b80a4bdc5b86ceeff727475758626683603543718361e4e49",
+      "mode": 33261,
+      "mtime_ns": 1793466884059527356,
+      "inode": 48081332,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/wide_logits_primitives_v2-898482192ea7821a.gz",
+      "gzip_bytes": 557861,
+      "gzip_sha256": "3d024b4b89835c0ed6f74fb25db803b579368ae7a2af37958149df5e4375847c",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/wide_logits_primitives_v2-898482192ea7821a"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/tir_contract-8820cb1dacd584b0",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/tir_contract-8820cb1dacd584b0"
+      ],
+      "bytes": 1229056,
+      "sha256": "e5233d508f01f1d3fe0011ac8fbe876bec290e5f5ab68f0201ef921b4142040f",
+      "mode": 33261,
+      "mtime_ns": 1793459975364014301,
+      "inode": 47890217,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/tir_contract-8820cb1dacd584b0.gz",
+      "gzip_bytes": 528678,
+      "gzip_sha256": "f43e97cda0e5c098fa4bbe4ee000f1cd11af826c83f74eb66f46763a0449af6b",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/tir_contract-8820cb1dacd584b0"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/independent_credit_graph-4154f88d7cb3d94a",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/independent_credit_graph-4154f88d7cb3d94a"
+      ],
+      "bytes": 1159912,
+      "sha256": "9d50979e913a7b36e25181e5916797de58cf18f296bd44677267c72f880ae521",
+      "mode": 33261,
+      "mtime_ns": 1793449622697181481,
+      "inode": 47643094,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/independent_credit_graph-4154f88d7cb3d94a.gz",
+      "gzip_bytes": 472299,
+      "gzip_sha256": "a54f165c1880488dc9b71153ec3b34f8fcae03842e71d8f3bad3108ea186aed7",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/independent_credit_graph-4154f88d7cb3d94a"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/independent_credit_graph-985e3c1a19032fb4",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/independent_credit_graph-985e3c1a19032fb4"
+      ],
+      "bytes": 1135136,
+      "sha256": "9840e3dea40a717c6542858526257ccb529a10b700abe05d5fb3499deac62047",
+      "mode": 33261,
+      "mtime_ns": 1793459980919643232,
+      "inode": 47890430,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/independent_credit_graph-985e3c1a19032fb4.gz",
+      "gzip_bytes": 479851,
+      "gzip_sha256": "96e1ecfd565760495b7edd6a941e51a7e62d125c22c0bc6f603dfae7c5574e3e",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/independent_credit_graph-985e3c1a19032fb4"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/independent_consumer_routes-940b6414022f66bd",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/independent_consumer_routes-940b6414022f66bd"
+      ],
+      "bytes": 993552,
+      "sha256": "02542fd4428ab552db944730d5efc9d3a00b24880f1bc964b409ee1cddc47b46",
+      "mode": 33261,
+      "mtime_ns": 1793449622652542117,
+      "inode": 47643089,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/independent_consumer_routes-940b6414022f66bd.gz",
+      "gzip_bytes": 422718,
+      "gzip_sha256": "ffd72948658a1b8e7bc37037e69a7ff8b02b9868acadd0bb9b57e2ea3aa08b74",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/independent_consumer_routes-940b6414022f66bd"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/misaka_palw_positive_contract-7911f73a05a2ab01",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/misaka_palw_positive_contract-7911f73a05a2ab01"
+      ],
+      "bytes": 963728,
+      "sha256": "a96da2d4d5e2d618377ca2478a69e997f28f5be9f99d60e5e4388a1709d54d1d",
+      "mode": 33261,
+      "mtime_ns": 1793448615076419857,
+      "inode": 47626096,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/misaka_palw_positive_contract-7911f73a05a2ab01.gz",
+      "gzip_bytes": 411179,
+      "gzip_sha256": "2a62a484315cbc119418322b603d590476cc580599be19616d415ddc1cc9c675",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/misaka_palw_positive_contract-7911f73a05a2ab01"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/independent_consumer_routes-9b9419fc7af19cfe",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/independent_consumer_routes-9b9419fc7af19cfe"
+      ],
+      "bytes": 907968,
+      "sha256": "7aa213c37666f0f5469c523be405e0802fc4a8b46d1dc98b4b4facdaf714bf0f",
+      "mode": 33261,
+      "mtime_ns": 1793459981058383529,
+      "inode": 47890443,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/independent_consumer_routes-9b9419fc7af19cfe.gz",
+      "gzip_bytes": 407306,
+      "gzip_sha256": "bd10ca5b1ed2485a3157db3e963a7d0183628b0682bb776a53126f5d1483defc",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/independent_consumer_routes-9b9419fc7af19cfe"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/misaka_palw_positive_contract-a39d79176e534abc",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/misaka_palw_positive_contract-a39d79176e534abc"
+      ],
+      "bytes": 883648,
+      "sha256": "8511a2291568229d6d00cc131fccacc67a1b119df06cdf0015e25c7aff223bdd",
+      "mode": 33261,
+      "mtime_ns": 1793459974630899901,
+      "inode": 47890152,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/misaka_palw_positive_contract-a39d79176e534abc.gz",
+      "gzip_bytes": 395527,
+      "gzip_sha256": "912c599a30bb9330f436d57a613b9b3ba0a99c64e4a8b1422fdb1137266b84c6",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/misaka_palw_positive_contract-a39d79176e534abc"
+      ]
+    },
+    {
+      "original": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/positive_typed_adapter-d25231301b674abd",
+      "aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/positive_typed_adapter-d25231301b674abd"
+      ],
+      "bytes": 883632,
+      "sha256": "50e91393166ae918e06fcbeb7b4d160e3a2aaec9ff06481e7c9ecd3893c75e84",
+      "mode": 33261,
+      "mtime_ns": 1793467481123440295,
+      "inode": 48099353,
+      "nlink": 1,
+      "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/positive_typed_adapter-d25231301b674abd.gz",
+      "gzip_bytes": 395510,
+      "gzip_sha256": "c8407e04868db840cfa375b57278ab2e82b2ca7a7564c5b15fd3e4d9a583e77a",
+      "actual_tempfile_restore_bytes_sha_verified": true,
+      "deleted_aliases": [
+        "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/positive_typed_adapter-d25231301b674abd"
+      ]
+    }
+  ]
+}

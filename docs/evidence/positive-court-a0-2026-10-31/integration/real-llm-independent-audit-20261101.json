@@ -1,0 +1,237 @@
+{
+  "decision": "No blocking inconsistency found for the reported 3/3 local trained-LLM CPU/capture self-consistency roundtrips.",
+  "review_mode": "Read-only manifests/raw/source/hash/stat audit. No Cargo, model execution, conversion, download or Root/index edits.",
+  "source_commit": "cc22b0da13784eb03a023cbd1781969577883d9e",
+  "binary_sha256": "02708c04e1d7a8b0d92a483a205f44bb53e7b955f8d1bc9e2869656839e9e8e8",
+  "build_manifest_sha256": "da7bade4a00d13c993bba22a5948327b0d22027cbd2ce613d86067a81fef91be",
+  "checks": {
+    "build_before_after_source_entries": 2446,
+    "build_before_after_source_stable": true,
+    "build_snapshot_matches_full_git_commit_and_current": true,
+    "cargo_json_compiler_artifact_profile_and_build_finished_match": true,
+    "build_raw_logs_hashes_match": true,
+    "build_archives_and_profile_file_hashes_match_current": true,
+    "driver_source_entries": 5115,
+    "driver_source_before_after_equal_and_source_identity_unchanged_true": true,
+    "driver_source_maps_same_across_four_stages_and_current": true,
+    "build_map_subset_matches_driver_map": true,
+    "binary_same_across_build_and_all_stages_and_current": true,
+    "small_input_paths_current_sha256_verified": 22,
+    "large_input_paths_checked_by_retained_pin_and_current_stat_not_reread": [
+      "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/EleutherAI__pythia-70m/run-wide-q24-v2/checkpoint/model.safetensors",
+      "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/EleutherAI__pythia-70m/run-wide-q24-v2/model.palwtir.private-wide-q24.palwtir",
+      "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/checkpoint/model.safetensors",
+      "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/model.palwtir.testnet-12.palwtir",
+      "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-360M/run/checkpoint/model.safetensors",
+      "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-360M/run/model.palwtir.testnet-12.palwtir"
+    ],
+    "all_36_output_files_current_sha256_verified": true,
+    "raw_time_cpu_rss_io_values_match": true,
+    "natural_prompt_first_saved_calibration_sequence": true,
+    "contexts_unchanged": [
+      8192,
+      8192,
+      2048
+    ],
+    "fixed_short_job_not_max_position_coverage": true,
+    "pythia_50304_logits_all_above_i32_maximum_and_exact_roundtrip_reported": true,
+    "prior_inventory_records_examined": 816,
+    "prior_inventory_existing_entries_including_shared_paths": 812,
+    "prior_inventory_unique_existing_paths": 808,
+    "retained_inventory_stability_flags_consistent": true
+  },
+  "stages": [
+    {
+      "stage": "real-llm-quote-first-20261101",
+      "manifest_sha256": "a10d745d58e40d964fe522a13b78cf0cb1f6d1b3220a643c214523a36e533d24",
+      "status": "NOT_RUN_PREFLIGHT_FAILED",
+      "models": [
+        {
+          "slug": "smollm2-360m",
+          "status": "PLANNED_NOT_RUN",
+          "runner_status": null,
+          "cpu_execution_started": null
+        },
+        {
+          "slug": "smollm2-135m",
+          "status": "PLANNED_NOT_RUN",
+          "runner_status": null,
+          "cpu_execution_started": null
+        },
+        {
+          "slug": "pythia-70m",
+          "status": "PLANNED_NOT_RUN",
+          "runner_status": null,
+          "cpu_execution_started": null
+        }
+      ]
+    },
+    {
+      "stage": "real-llm-quote-pinned-20261101",
+      "manifest_sha256": "8c4b8df4eb5db52e2ea50f3e4a0577dc6aa086dee811798e419a542ec8abc90c",
+      "status": "FAILED_OR_INCOMPLETE",
+      "models": [
+        {
+          "slug": "smollm2-360m",
+          "status": "PROCESS_FAILED",
+          "runner_status": "FAILED_OR_RESOURCE_LIMIT",
+          "cpu_execution_started": false
+        },
+        {
+          "slug": "smollm2-135m",
+          "status": "PROCESS_FAILED",
+          "runner_status": "FAILED_OR_RESOURCE_LIMIT",
+          "cpu_execution_started": false
+        },
+        {
+          "slug": "pythia-70m",
+          "status": "PROCESS_FAILED",
+          "runner_status": "FAILED_OR_RESOURCE_LIMIT",
+          "cpu_execution_started": false
+        }
+      ]
+    },
+    {
+      "stage": "real-llm-quote-8gib-20261101",
+      "manifest_sha256": "e1088f92485098ec9581671eb487b75f2405d6dc6ff3b349ebba2271502db68b",
+      "status": "QUOTE_ONLY_COMPLETED",
+      "models": [
+        {
+          "slug": "smollm2-360m",
+          "status": "PROCESS_EXIT_ZERO",
+          "runner_status": "QUOTE_ONLY",
+          "cpu_execution_started": false
+        },
+        {
+          "slug": "smollm2-135m",
+          "status": "PROCESS_EXIT_ZERO",
+          "runner_status": "QUOTE_ONLY",
+          "cpu_execution_started": false
+        },
+        {
+          "slug": "pythia-70m",
+          "status": "PROCESS_EXIT_ZERO",
+          "runner_status": "QUOTE_ONLY",
+          "cpu_execution_started": false
+        }
+      ]
+    },
+    {
+      "stage": "real-llm-run-8gib-20261101",
+      "manifest_sha256": "7c00a76085935b21548361c8f3d4d0d6af31c77aec9aa523c7397cfdc0a98c15",
+      "status": "SELF_CONSISTENCY_PROCESS_COMPLETED",
+      "models": [
+        {
+          "slug": "smollm2-360m",
+          "status": "PROCESS_EXIT_ZERO",
+          "runner_status": "LOCAL_ROUNDTRIP_PASS",
+          "cpu_execution_started": true
+        },
+        {
+          "slug": "smollm2-135m",
+          "status": "PROCESS_EXIT_ZERO",
+          "runner_status": "LOCAL_ROUNDTRIP_PASS",
+          "cpu_execution_started": true
+        },
+        {
+          "slug": "pythia-70m",
+          "status": "PROCESS_EXIT_ZERO",
+          "runner_status": "LOCAL_ROUNDTRIP_PASS",
+          "cpu_execution_started": true
+        }
+      ]
+    }
+  ],
+  "actual_runs": [
+    {
+      "model": "HuggingFaceTB/SmolLM2-360M",
+      "revision": "f8027fd0eaeea54caa13c31d31b9fdc459c38b49",
+      "context": 8192,
+      "prompt_tokens": 16,
+      "decode_tokens": 1,
+      "leaf_count": 143711,
+      "profile": "legacy-i32-v1",
+      "frame_bytes": 40910229,
+      "frame_sha256": "deccfe5435d2b2319fc26d3c8ca9539593dcc0946a32dfbb369b9abf7acf5c6c",
+      "logits_summary": {
+        "beyond_i32_range": false,
+        "digest_encoding": "row-major signed i64 LE values; narrow rows widened only for this diagnostic digest, never for execution/wire",
+        "exact_values_compared_in_roundtrip": true,
+        "full_logit_values_exported": false,
+        "lanes": 49152,
+        "maximum": 404859455,
+        "minimum": -183461323,
+        "ordered_values_i64_le_sha256": "e9d7f459b04c2ff99a40a0f12aed6bd908bf08b125cc05331ceb54ef47773d19",
+        "outside_i32_lanes": 0
+      },
+      "execution_seconds_including_capture": 13.324159333,
+      "setup_seconds": 2.166695541,
+      "whole_process_wall_seconds": 17.361666165990755,
+      "peak_rss_bytes": 634503168,
+      "quote_simultaneous_operation_upper": 6721991467
+    },
+    {
+      "model": "HuggingFaceTB/SmolLM2-135M",
+      "revision": "93efa2f097d58c2a74874c7e644dbc9b0cee75a2",
+      "context": 8192,
+      "prompt_tokens": 16,
+      "decode_tokens": 1,
+      "leaf_count": 80889,
+      "profile": "legacy-i32-v1",
+      "frame_bytes": 23194423,
+      "frame_sha256": "94be6a606973f6f8094dbf36dba8bbe09b1ab79e9e096164978bd24369b12b1e",
+      "logits_summary": {
+        "beyond_i32_range": false,
+        "digest_encoding": "row-major signed i64 LE values; narrow rows widened only for this diagnostic digest, never for execution/wire",
+        "exact_values_compared_in_roundtrip": true,
+        "full_logit_values_exported": false,
+        "lanes": 49152,
+        "maximum": 484632700,
+        "minimum": -85671383,
+        "ordered_values_i64_le_sha256": "ac099285cfa7df63be16382bc7661a6da70814dfc51e3a6c64e3a6cfee2b5900",
+        "outside_i32_lanes": 0
+      },
+      "execution_seconds_including_capture": 6.93802825,
+      "setup_seconds": 0.987179583,
+      "whole_process_wall_seconds": 8.953625583002577,
+      "peak_rss_bytes": 303759360,
+      "quote_simultaneous_operation_upper": 4972195946
+    },
+    {
+      "model": "EleutherAI/pythia-70m",
+      "revision": "a39f36b100fe8a5377810d56c3f4789b9c53ac42",
+      "context": 2048,
+      "prompt_tokens": 16,
+      "decode_tokens": 1,
+      "leaf_count": 14157,
+      "profile": "i64-Q24-v2",
+      "frame_bytes": 4762212,
+      "frame_sha256": "488e21005d9814d11b5e283497837e1fe6d6d42991ad4e9a473216945c908daf",
+      "logits_summary": {
+        "beyond_i32_range": true,
+        "digest_encoding": "row-major signed i64 LE values; narrow rows widened only for this diagnostic digest, never for execution/wire",
+        "exact_values_compared_in_roundtrip": true,
+        "full_logit_values_exported": false,
+        "lanes": 50304,
+        "maximum": 18064890089,
+        "minimum": 3753610348,
+        "ordered_values_i64_le_sha256": "d42107e7672abf95ebdbc1c39050b128d53aa0327442518b1e44bd43e405e10c",
+        "outside_i32_lanes": 50304
+      },
+      "execution_seconds_including_capture": 1.558176958,
+      "setup_seconds": 0.569003458,
+      "whole_process_wall_seconds": 2.2705872079823166,
+      "peak_rss_bytes": 146817024,
+      "quote_simultaneous_operation_upper": 4587572532
+    }
+  ],
+  "scope": "SELF_CONSISTENCY_ONLY. Short local noncanonical fixed-length greedy jobs using retained trained checkpoints/declared artifacts. CPU execution including capture; not separate Miner/Panel/Node role-cost measurements. No native v2 admission/registry/restart, P certification, inference credit, independent arithmetic/expected comparison, full maximum-position coverage, cold-cache claim, host reserver/native lease or startup preallocation admission. Logical 8GiB request cap is not an RSS hard limit.",
+  "provenance_notes": [
+    "First manifest proves SOURCE_COMMIT_MISMATCH with zero subprocess executions. Abbreviated expected-source argument as cause is Root-reported; that driver CLI expected-source value is not persisted in this manifest.",
+    "Driver binary_source_mapping intentionally remains UNVERIFIED_NO_BUILD_MANIFEST. This independent audit separately connects the build manifest/compiler artifact and stable source/binary hashes; it does not rewrite that driver field.",
+    "The source_api_candidate value 4753... is retained API provenance, not the actual cc22... build-source commit.",
+    "Encoded capture frames/full logits are not retained as output artifacts. Exact values/equality/dense geometry/Merkle checks were in-memory harness checks, corroborated by inspected pinned source and same recorded binary, not independently re-executed by this audit.",
+    "Prior SmolLM2-135M inventory retains one non-identity hub-info spaces-list metadata difference; integrity_mismatch_count is zero and the actual checkpoint/declared-artifact pins match. This is not silently removed.",
+    "No rehash of the full retained inventory was performed; its per-read/close metadata and the driver before/after input checks are reused. Current main large artifact/checkpoint path stats match, while smaller manifests/tokenizers/prompts and all output logs were independently rehashed."
+  ]
+}

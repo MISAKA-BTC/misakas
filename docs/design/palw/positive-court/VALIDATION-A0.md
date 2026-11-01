@@ -86,3 +86,22 @@ A6のnative journal caller-batch保存とactual accepted-data readerを`6e25d763
 Core strict Clippy初回は6箇所のstyle lintで失敗。`91ff5c669`はCopy・3 let-chain・Optionの否定・16組すべて同値なboolean式だけを整理し、後続のCore library `-D warnings`は**exit0**。[最終Clippy log](../../../evidence/positive-court-a0-2026-10-31/integration/profile-wide-core-clippy-final-20261101.log)。残りの条件やnative資格は変更していない。18件のruntimeと等価style後のClippyを区別し、全native/実LLMの同候補合格とはしない。
 
 A7のproduction79独立回帰は旧A5fixtureの不整合6件で一度失敗した。A5の修正を`b3da72953`へ統合し、production検査を弱めず17行の整合DATA fixtureとinvalid import拒否へ更新した。ownerの55件/Clippy成功は[phase11記録](../../../../misaka/palw/positive-accounting/evidence/phase11-restore-fixture/README.md)の79+fixture修正候補・16MiB test stackの結果であり、A0 currentやA7全体の成功へ加算しない。A7の失敗原本を保持し、新候補の正式再実行を依頼した。
+
+
+## 2026-11-01 実学習済み3モデルの同候補CPU/capture再現
+
+Root `cc22b0da13784eb03a023cbd1781969577883d9e` のハーネスを既存target・固定profile・標準stackでコンパイルし、実artifactの入力SHAと元class/layoutを維持して実行した。[build記録](../../../evidence/positive-court-a0-2026-10-31/integration/real-llm-harness-first-build-20261101.json)、[独立監査](../../../evidence/positive-court-a0-2026-10-31/integration/real-llm-independent-audit-20261101.json)。driver自身の`UNVERIFIED_NO_BUILD_MANIFEST`表示は原本のまま保存し、別監査でCargo compiler-artifactとbinary SHA・source 2446件前後・driver source 5115件前後を対応付けた。モデル品質の審査やclaimの合格ではない。
+
+自然文calibration sequence0の16 prompt token・decode1（実行16位置）の短いlocal jobで、全leafの順序・dtype/幅・Merkle・encode/decode同値を検査した。新たな変換・clip・rescale・元の最大文脈長の短縮は行っていない。
+
+| 学習済みcheckpoint | 元max context | dense leaf数 | CPU＋capture秒 | process peak RSS MiB |
+| --- | ---: | ---: | ---: | ---: |
+| HuggingFaceTB/SmolLM2-360M | 8192 | 143711 | 13.32 | 605.1 |
+| HuggingFaceTB/SmolLM2-135M | 8192 | 80889 | 6.94 | 289.7 |
+| EleutherAI/pythia-70m | 2048 | 14157 | 1.56 | 140.0 |
+
+Pythiaの50304 logitsは全てi32範囲を超え（最小3753610348、最大18064890089）、自然対数×2^24のi64値を保持して往復一致した。Smol2件は旧i32 profileのまま。RSSはDarwin time-lのprocess全寿命観測で、native予約・同時owner和・role別費用・cold cacheを示さない。[実行原本](../../../evidence/positive-court-a0-2026-10-31/integration/real-llm-run-8gib-20261101/manifest.json)。
+
+測定用`max_requested_bytes=4GiB`では3件ともlogical simultaneous見積り（6.72/4.97/4.59GB、caller external allowance2GiB込み）が上限超過し、CPU開始前に拒否された。[4GiB失敗](../../../evidence/positive-court-a0-2026-10-31/integration/real-llm-quote-pinned-20261101/manifest.json)を保持し、明示8GiBの別測定枠で[quote3件](../../../evidence/positive-court-a0-2026-10-31/integration/real-llm-quote-8gib-20261101/manifest.json)とCPU/capture3件が成功した。これはnative合意上限やprogram値の変更ではない。最初のsource pin mismatchは実行0の別preflight原本として保持する。略記CLIが原因という詳細はRootのtool実行記録に基づく説明であり、driver manifest単体は期待CLI引数を保存していない。
+
+結果は`SELF_CONSISTENCY_ONLY`。独立expected roots、最大文脈長の全位置、actual native registration、Positive Court全関係、実役割・資金・P/credit・cold/warm認定は未実行。startupの割当前上限・host reserver/native leaseも未成立の表示を保つ。[全44ファイルmanifest](../../../evidence/positive-court-a0-2026-10-31/integration/real-llm-first-execution-evidence-20261101.json)。

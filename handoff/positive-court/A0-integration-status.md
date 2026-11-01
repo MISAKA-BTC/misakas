@@ -74,3 +74,10 @@ Root `7a6935de6` 固定候補: 修正後のHello2 actual OS childを含む6・�
 初回Hello2 childはmacOSのaccepted nonblocking socketにより5成功/1失敗、試験helperでblockingを明示しdeadlineを維持して修正した。追加Core fixtureの引数不足E0061も原ログを保存し、正常fixture(None,2)へ修正した。失敗・訂正・成功を別sourceに保持し、子helperのignoredを成功へ加算しない。新3fold回帰は実apply_objectとstate/journal/reservation復元・licence更新を検査するが、lifetimeの事前認証row fixtureはnative ingress/実抽選/全履歴の検証ではない。
 
 同7a sourceのexec/positive-accounting-node strict library ClippyとHello2 integration target Clippyは成功した。[記録](../../docs/evidence/positive-court-a0-2026-10-31/integration/hello2-source-clock-clippy-20261101.json)。実trained3モデルharnessはstartup未上限・runtimequote・processRSS/timeoutを区別してsource統合したが、Rust compile/quote/推論は未実行。Panel one-pass tape/tracer/materialの12file案は初版のprivate型・課金順・hash前入力cap指摘を修正したr3の独立review中で、まだRoot未適用。A6実DBreopen→replayのsource6試験も未実行。全native job/role/funding/P/全creditconsumer/復旧/IBD/実LLM登録資格の完了は宣言しない。
+
+
+実LLM後続 `cc22b0da1`: SmolLM2-360M/135M・Pythia-70Mの実trained artifactでCPU＋dense capture全leafの往復が3/3成功した。元context8192/8192/2048を維持し、自然文prompt16/decode1の短job、CPU＋captureは13.32/6.94/1.56秒。Pythiaの50304 logits全てi32超をi64のまま保持。4GiB測定cap拒否と8GiB別測定成功を原本で分け、独立auditはsource/binary/input/raw/RSSとSELF_CONSISTENCY_ONLY境界を確認した。[実LLM検証範囲](../../docs/design/palw/positive-court/VALIDATION-A0.md)。native登録・最大長全位置・Panel/Node全関係・role別性能/P/creditは未成立。
+
+Panel r3は初回compileのchecked sum `?` 2不足をcc22で修正後、6件中3成功/3失敗（per-material source read capへ累積visitを流用したBudget）で停止した。必須run q予約・hash前RAM予約・quote内一時Vecも独立監査で検出し、r5別案をsource-review中。scopeを維持し旧失敗を成功へ置換しない。adopted43内のnativeclass登録配線はv10固定/mirror不足/旧facts依存の13consumer planをA1へ割当、新Assignment authority/P/fundingは未採択案と分離する。
+
+Root既知履歴74 executableは2.57GBをgzip729MBへ完全保全し、実tempfile復元size/SHAを全件確認して元cache aliasesを解放した。[保全map](../../docs/evidence/positive-court-a0-2026-10-31/integration/history-binaries-preserved-20261101.json)。原raw/source/model/native archive/他owner cacheは保持。これは検証成功の追加ではない。A6 DB6件の実行は4GiBの開始余裕を確保してから行う。
