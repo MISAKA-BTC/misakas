@@ -1,0 +1,81 @@
+{
+  "source": "355408e5a3426926d863193b76ffaa810704bef0",
+  "runner_sha256": "28351ec6adf6fb7ceea794ad3589dc5524180f6c3827f49fd6290ff370571a74",
+  "workspace": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet",
+  "target": "/Users/wata/Downloads/MISAKA-testnet/target",
+  "archives": {
+    "librocksdb.a": {
+      "path": "/Users/wata/.codex/worktrees/rfc14-g14-completion/MISAKA-testnet/target/release/build/librocksdb-sys-865d89ee7dbf2b2a/out/librocksdb.a",
+      "bytes": 23048496,
+      "sha256": "6eae541967b2cb5345ace55eadb34b2c490e91acfd8a4e2da5822a60f91af3a2"
+    },
+    "libsnappy.a": {
+      "path": "/Users/wata/.codex/worktrees/rfc14-g14-completion/MISAKA-testnet/target/release/build/librocksdb-sys-865d89ee7dbf2b2a/out/libsnappy.a",
+      "bytes": 46784,
+      "sha256": "f45a4731a8dc330e5723b70dabb4be96167a71044fcdeb0ce4d78f837f9538e5"
+    },
+    "bindings.rs": {
+      "path": "/Users/wata/.codex/worktrees/rfc14-g14-completion/MISAKA-testnet/target/release/build/librocksdb-sys-865d89ee7dbf2b2a/out/bindings.rs",
+      "bytes": 208430,
+      "sha256": "cbe5eae46ca4209c1bfb020945fd86fb9a401015979112ae70933a2ac5621e62"
+    }
+  },
+  "old_binaries": [
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/kaspa_consensus-cdd71196065befc6",
+      "bytes": 448055536,
+      "sha256": "bc8d9e297814a2e94643718ab98350796df1f9d5edd7aa2d0c9fccc8fb3ab964"
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/kaspa_consensus_core-b2df9d40a9b2c4d1",
+      "bytes": 244237528,
+      "sha256": "db0f3b3a31294134364c48f0f348038ddd66b94dd7c345964bdfb6434c2c69f6"
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/positive_court_a4_integration-a21d9f9a1e95c479",
+      "bytes": 29887472,
+      "sha256": "9d173e972567953c3e7f572c16d601f54840e7d9d2a3e9aa7bcff5c3dfcd8351"
+    }
+  ],
+  "preserved_from": "/private/tmp/misaka-a6-db-reopen-owner-355408e5a",
+  "links_override": {
+    "path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/docs/evidence/positive-court-a6-db-reopen-2026-11-01/native-links-r2.toml",
+    "sha256": "05498f7c7d1eb71c799ccda997f0411e920d52e02902a38faa2b61bdd23a484a"
+  },
+  "free_bytes_now": 2637115392,
+  "disk_plan": {
+    "old_binary_bytes": 722180536,
+    "gzip_roundtrip_peak_extra_bytes": 896111072,
+    "estimated_new_rust_and_link_peak_gib": [
+      1.5,
+      3.5
+    ],
+    "estimate_is_not_a_capacity_guarantee": true,
+    "default_min_free_before_build_gib": 4,
+    "stop_free_space_floor_mib": 512
+  },
+  "tests": [
+    {
+      "package": "kaspa-consensus",
+      "target": "kaspa_consensus",
+      "select": [
+        "--lib"
+      ],
+      "filter": "positive_journal",
+      "expected": 14
+    },
+    {
+      "package": "misaka-palw-tir-exec",
+      "target": "positive_court_a4_integration",
+      "select": [
+        "--features",
+        "node",
+        "--test",
+        "positive_court_a4_integration"
+      ],
+      "filter": "a6_journal_replay",
+      "expected": 17
+    }
+  ],
+  "executed": false
+}

@@ -1,6 +1,6 @@
 # A6 — durable journal data と actual local replay の結合候補
 
-2026-11-01のcode候補は `f8d3bd3fa` と `355408e5a`（runtime source `355408e5a3426926d863193b76ffaa810704bef0`）。初回owner runは依存cdylibのlink errorでbuild exit101となり停止した。**追加6件を含む31件のruntime試験は未実行、成功件数は0**。rustfmt・差分検査・offline Cargo metadata解決・独立read-only reviewは完了したが、型検査・実行の完了とは扱わない。旧候補の38件・53件を本候補の成功へ加算しない。
+code候補は `f8d3bd3fa` と `355408e5a`（runtime source `355408e5a3426926d863193b76ffaa810704bef0`）。局所link設定を修正した別owner runで、**31件成功／0失敗／0ignored、標準stack**を確認した。内訳はnative store/reader14件とactual TIR/Source replay17件で、追加6件を含む。初回の依存cdylib link失敗（build101・runtime0）は別の原記録として保持する。旧候補の38件・53件や最新Root結果へ件数を合算しない。
 
 ## 追加する検証
 
@@ -48,10 +48,20 @@ A0の専用枠割当後、`--preserve-only` で旧3exeをgzip保存し、実temp
 
 836,209-byteの原build log、status/plan、exact旧runner、旧exe保全manifest、Core2files削除map、開始PID訂正前後は [owner run 1](../../../evidence/positive-court-a6-db-reopen-2026-11-01/owner-run-1/) に固定した。compressed exe本体は同manifestが指すprivate tmpに保持し、原raw記録を書き換えない。
 
-## 局所link修正案 — 未実行の別run
+## 局所link修正 — 別owner runで検証
 
 [native links override](../../../evidence/positive-court-a6-db-reopen-2026-11-01/native-links-r2.toml) はCargo標準の `target.aarch64-apple-darwin.rocksdb` 設定だけを使う。sysのnative link metadataへstatic RocksDB/Snappyとdylib libc++を入れ、中間cdylibへも伝播させる。sysのbuild scriptを省略し、SHA固定のrelease `bindings.rs` を `rustc-env.OUT_DIR` で使う。元のcustom metadata `out_dir` と `cargo_manifest_dir` を別に保持し、他codec sys cratesの通常link経路を変更しない。
 
 global RUSTFLAGS、新しいtarget directory、不可視wrapper、Rust source/料金/schemaの変更は無い。overrideのBuildOutputはCargo fingerprint対象だが外部入力bytesは別途検査が必要なため、archive2本とbindings・設定fileをplanへ固定し、前後SHA照合を行う。sysと逆依存Rustの再buildはあり得る。[read-only根拠](../../../evidence/positive-court-a6-db-reopen-2026-11-01/native-links-r2-read-only-review.json) は現Cargoの実装・公式仕様との照合で、実link成功の証拠ではない。
 
-次候補は [owner plan r3](../../../evidence/positive-court-a6-db-reopen-2026-11-01/owner-run-plan-r3.json)。初回のverified gzipをCRC・uncompressed size/SHAも含め再照合し、**別run directory** の新manifestから参照する。旧pathを再削除せず、初回結果を成功へ加算しない。Rootのheavy枠releaseまでコンパイルを再開しない。
+別候補の [owner plan r3](../../../evidence/positive-court-a6-db-reopen-2026-11-01/owner-run-plan-r3.json) は、初回のverified gzipをCRC・uncompressed size/SHAも含め再照合し、**別run directory** の新manifestから参照する。旧pathを再削除せず、初回結果を成功へ加算しない。Rootのheavy枠releaseと実空き4GiB確認後に限って再開した。
+
+## 成功owner run 2 — 31件、source355のみ
+
+新たに許可されたA6所有のSys逆依存Rust12filesと、DWARFで所有を確認した初回失敗由来Rust CGU16filesだけを、直前のstat/SHA/inode/nlink/lsof・他Cargo不在確認後に解放した。計330,094,468 bytes。generic WRPC library、DWARFのないshim、旧main/他owner、現Core normal、TIR/base0 normal、C++ archive/raw/モデルは保持した。実空き4.046GiBで開始し、512MiB停止条件を維持した。
+
+native14件とexec17件はbuild/testともexit0。新DB3件では、保存deltaからpinを再構築したclean reopen後もCase・全Court進捗・5 receipts・2 unions・5 dues・fee15・local factが一致し、2回再生してもdueは増えない。middle/tail欠損と形の正規なtail改竄では元fixtureへのfallbackをせず、旧checked-link tokenからも部分cacheを公開しない。future raw tailを保持した古いpinは未完了source duty・Pending・fee0だけを再生する。追加native3件では複数Case混在・片Case旧材料不良時の全batch不変・abandon時のclone/fresh未公開を確認した。
+
+[owner run 2](../../../evidence/positive-court-a6-db-reopen-2026-11-01/owner-run-2/) にraw build/testログ、status/plan、exact runner/config、旧gzip再利用manifest、直前Rust解放map、source postcheckとbinary SHAを保存する。5source hash・source355からのnon-doc差分・archive2本/bindings/configの前後SHAは一致し、CXX呼出は無かった。Core/consensusはopt0/debug0、他依存は既存dev profile、incremental0/jobs2。RUST_MIN_STACKはunsetで、増加再試行していない。
+
+これはowner355のclean DB reopen＋actual LOCAL Court/Source再生の成功である。latest Root/HF/streamのsource資格、実Node process再起動、IBD/P2P/GC、native selected-head reorg、完全aux151復旧、役割別予約・実RAM admission、UTXO精算・Gate Cの成功へ昇格させない。

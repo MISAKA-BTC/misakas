@@ -1,0 +1,1488 @@
+{
+  "status": "READ_ONLY_MAP_ONLY; no deletion/compression/compiler/test/cache mutation performed",
+  "created_utc": "2026-11-01T15:40:30.496576+00:00",
+  "completed_utc": "2026-11-01T15:40:32.290591+00:00",
+  "requested_source": "355408e5a3426926d863193b76ffaa810704bef0",
+  "workspace": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet",
+  "target": "/Users/wata/Downloads/MISAKA-testnet/target",
+  "canonical_failed_build_log": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/docs/evidence/positive-court-a6-db-reopen-2026-11-01/owner-run-1/1-kaspa-consensus-build.log",
+  "canonical_log_sha256": "8d36ddbff30fe069d6dfec79cee6c6301417f1efbb097d80d5ddd95c71ef0d10",
+  "run1_original_log": "/tmp/misaka-a6-db-reopen-owner-355408e5a/1-kaspa-consensus-build.log",
+  "original_log_sha256_matches_canonical": true,
+  "run1_interval": {
+    "start_epoch": 1793545349.0097826,
+    "start_utc": "2026-11-01T15:02:29.009783+00:00",
+    "start_evidence": "original build log birthtime (opened immediately before Cargo)",
+    "end_epoch": 1793545527.668229,
+    "end_utc": "2026-11-01T15:05:27.668229+00:00",
+    "end_evidence": "original STOPPED status.json mtime; copied evidence mtimes excluded"
+  },
+  "method": {
+    "selection": "only compiler-artifact fresh=false from canonical first failed log; .rlib/.rmeta only",
+    "dependency_resolution": "library .fingerprint JSON deps tuple name+u64 matches actual bare fingerprint hex decoded little-endian; reverse BFS from exact run1 sys unit",
+    "system_fingerprint_root": "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/librocksdb-sys-12a5169b0a0cab09/lib-librocksdb_sys.json",
+    "system_fingerprint_bare": "ae2bb48d4ee6434f",
+    "broad_package_metadata_not_used": true,
+    "SYS_native_object_rlib_and_all_native_archives_excluded": true
+  },
+  "fresh_false_artifacts": 31,
+  "library_units": 31,
+  "actual_sys_reverse_A6_units": 6,
+  "candidate_file_count": 12,
+  "candidate_bytes": 256522924,
+  "records": [
+    {
+      "package_id": "registry+https://github.com/rust-lang/crates.io-index#librocksdb-sys@0.17.3+10.4.2",
+      "manifest_path": "/Users/wata/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/librocksdb-sys-0.17.3+10.4.2/Cargo.toml",
+      "target": {
+        "kind": [
+          "lib"
+        ],
+        "crate_types": [
+          "lib"
+        ],
+        "name": "librocksdb_sys",
+        "src_path": "/Users/wata/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/librocksdb-sys-0.17.3+10.4.2/src/lib.rs",
+        "edition": "2021",
+        "doc": true,
+        "doctest": true,
+        "test": true
+      },
+      "raw_log_line": 512,
+      "fresh": false,
+      "fingerprint_json": "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/librocksdb-sys-12a5169b0a0cab09/lib-librocksdb_sys.json",
+      "fingerprint_exists": true,
+      "exclusion_reasons": [
+        "not_A6_workspace_manifest (registry/main/other-owner excluded)",
+        "sys_rust_library_contains_native_objects_excluded"
+      ],
+      "files": [],
+      "features": "[\"bindgen-runtime\", \"bzip2\", \"bzip2-sys\", \"libz-sys\", \"lz4\", \"lz4-sys\", \"snappy\", \"static\", \"zlib\", \"zstd\", \"zstd-sys\"]",
+      "profile_hash": 5347358027863023418,
+      "fingerprint_bare_hex_le": "ae2bb48d4ee6434f",
+      "actual_sys_dependency_path": [
+        "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/librocksdb-sys-12a5169b0a0cab09/lib-librocksdb_sys.json"
+      ],
+      "actual_sys_dependency_edges": []
+    },
+    {
+      "package_id": "registry+https://github.com/rust-lang/crates.io-index#rocksdb@0.24.0",
+      "manifest_path": "/Users/wata/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rocksdb-0.24.0/Cargo.toml",
+      "target": {
+        "kind": [
+          "lib"
+        ],
+        "crate_types": [
+          "lib"
+        ],
+        "name": "rocksdb",
+        "src_path": "/Users/wata/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rocksdb-0.24.0/src/lib.rs",
+        "edition": "2021",
+        "doc": true,
+        "doctest": true,
+        "test": true
+      },
+      "raw_log_line": 531,
+      "fresh": false,
+      "fingerprint_json": "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/rocksdb-98c9cf0c203ac30b/lib-rocksdb.json",
+      "fingerprint_exists": true,
+      "exclusion_reasons": [
+        "not_A6_workspace_manifest (registry/main/other-owner excluded)"
+      ],
+      "files": [],
+      "features": "[\"bindgen-runtime\", \"bzip2\", \"default\", \"lz4\", \"snappy\", \"zlib\", \"zstd\"]",
+      "profile_hash": 5347358027863023418,
+      "fingerprint_bare_hex_le": "289656aa884fa427",
+      "actual_sys_dependency_path": [
+        "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/rocksdb-98c9cf0c203ac30b/lib-rocksdb.json",
+        "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/librocksdb-sys-12a5169b0a0cab09/lib-librocksdb_sys.json"
+      ],
+      "actual_sys_dependency_edges": [
+        {
+          "from": "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/rocksdb-98c9cf0c203ac30b/lib-rocksdb.json",
+          "to": "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/librocksdb-sys-12a5169b0a0cab09/lib-librocksdb_sys.json",
+          "dep_name": "librocksdb_sys",
+          "expected_fingerprint_u64": 5711661977495153582,
+          "matched_bare_hex_le": "ae2bb48d4ee6434f"
+        }
+      ]
+    },
+    {
+      "package_id": "path+file:///Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/database#kaspa-database@1.1.0",
+      "manifest_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/database/Cargo.toml",
+      "target": {
+        "kind": [
+          "lib"
+        ],
+        "crate_types": [
+          "lib"
+        ],
+        "name": "kaspa_database",
+        "src_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/database/src/lib.rs",
+        "edition": "2024",
+        "doc": true,
+        "doctest": true,
+        "test": true
+      },
+      "raw_log_line": 546,
+      "fresh": false,
+      "fingerprint_json": "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/kaspa-database-23a739ada63bfc80/lib-kaspa_database.json",
+      "fingerprint_exists": true,
+      "exclusion_reasons": [],
+      "files": [
+        {
+          "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libkaspa_database-23a739ada63bfc80.rlib",
+          "exists": true,
+          "bytes": 3185288,
+          "sha256": "89f75bc9b0376cf82830fee9a1a7fdb50f1e5b499d5c0a30f4d2304fa4258a57",
+          "inode": 48321653,
+          "device": 16777234,
+          "nlink": 1,
+          "mtime_epoch": 1793545356.3306434,
+          "mtime_utc": "2026-11-01T15:02:36.330643+00:00",
+          "mtime_within_original_run1": true,
+          "stat_unchanged_across_hash": true,
+          "symlink": false,
+          "candidate": true,
+          "candidate_is_not_deletion_authorization": true,
+          "open_in_lsof_snapshot": false
+        },
+        {
+          "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libkaspa_database-23a739ada63bfc80.rmeta",
+          "exists": true,
+          "bytes": 681120,
+          "sha256": "44a5004aa7231c4410a18d8533da91193ab1e9be6550d3df72073f60d9a974ba",
+          "inode": 48321649,
+          "device": 16777234,
+          "nlink": 1,
+          "mtime_epoch": 1793545356.027028,
+          "mtime_utc": "2026-11-01T15:02:36.027028+00:00",
+          "mtime_within_original_run1": true,
+          "stat_unchanged_across_hash": true,
+          "symlink": false,
+          "candidate": true,
+          "candidate_is_not_deletion_authorization": true,
+          "open_in_lsof_snapshot": false
+        }
+      ],
+      "features": "[]",
+      "profile_hash": 6873731449254902479,
+      "fingerprint_bare_hex_le": "d3857507038b76c3",
+      "actual_sys_dependency_path": [
+        "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/kaspa-database-23a739ada63bfc80/lib-kaspa_database.json",
+        "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/rocksdb-98c9cf0c203ac30b/lib-rocksdb.json",
+        "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/librocksdb-sys-12a5169b0a0cab09/lib-librocksdb_sys.json"
+      ],
+      "actual_sys_dependency_edges": [
+        {
+          "from": "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/kaspa-database-23a739ada63bfc80/lib-kaspa_database.json",
+          "to": "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/rocksdb-98c9cf0c203ac30b/lib-rocksdb.json",
+          "dep_name": "rocksdb",
+          "expected_fingerprint_u64": 2856495512051684904,
+          "matched_bare_hex_le": "289656aa884fa427"
+        },
+        {
+          "from": "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/rocksdb-98c9cf0c203ac30b/lib-rocksdb.json",
+          "to": "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/librocksdb-sys-12a5169b0a0cab09/lib-librocksdb_sys.json",
+          "dep_name": "librocksdb_sys",
+          "expected_fingerprint_u64": 5711661977495153582,
+          "matched_bare_hex_le": "ae2bb48d4ee6434f"
+        }
+      ],
+      "dep_info": {
+        "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/kaspa_database-23a739ada63bfc80.d",
+        "exists": true,
+        "sha256": "d90093d38dd45cb105a85e64d4f42b43a4b18f8e0102cc3cd18f2b96862b0bbd",
+        "target_lib_path_present": true,
+        "source_path_prefix_sample": "database/src/lib.rs database/src/access.rs database/src/cache.rs database/src/db.rs database/src/db/conn_builder.rs database/src/db/rocksdb_preset.rs database/src/db/storage_bounds.rs database/src/errors.rs database/src/item.rs database/src/key.rs database/src"
+      },
+      "metadata_source_map": {
+        "rmeta": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libkaspa_database-23a739ada63bfc80.rmeta",
+        "embedded_workspace_roots": [
+          "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet"
+        ],
+        "A6_root_present": true,
+        "exact_target_source_path_present": true,
+        "method": "literal embedded Rust rmeta source-map paths; raw compiler-artifact manifest separately pins owning compilation"
+      },
+      "rebuild_reason": "Exact unit dependency fingerprint chain reaches run1 librocksdb_sys; declared native links build-output override changes sys fingerprint/native link metadata and invalidates its actual reverse dependencies. No package-level dev/EVM graph expansion."
+    },
+    {
+      "package_id": "path+file:///Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/crypto/txscript#kaspa-txscript@1.1.0",
+      "manifest_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/crypto/txscript/Cargo.toml",
+      "target": {
+        "kind": [
+          "lib"
+        ],
+        "crate_types": [
+          "lib"
+        ],
+        "name": "kaspa_txscript",
+        "src_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/crypto/txscript/src/lib.rs",
+        "edition": "2024",
+        "doc": true,
+        "doctest": true,
+        "test": true
+      },
+      "raw_log_line": 644,
+      "fresh": false,
+      "fingerprint_json": "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/kaspa-txscript-5e9fb2c1f6b4a680/lib-kaspa_txscript.json",
+      "fingerprint_exists": true,
+      "exclusion_reasons": [
+        "no_actual_unit_fingerprint_path_to_exact_run1_sys"
+      ],
+      "files": [],
+      "features": "[\"default\", \"pq-only\"]",
+      "profile_hash": 3529655162674907694,
+      "fingerprint_bare_hex_le": "58239ca434d8e95d",
+      "actual_sys_dependency_path": [],
+      "actual_sys_dependency_edges": []
+    },
+    {
+      "package_id": "path+file:///Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/notify#kaspa-notify@1.1.0",
+      "manifest_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/notify/Cargo.toml",
+      "target": {
+        "kind": [
+          "lib"
+        ],
+        "crate_types": [
+          "lib"
+        ],
+        "name": "kaspa_notify",
+        "src_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/notify/src/lib.rs",
+        "edition": "2024",
+        "doc": true,
+        "doctest": true,
+        "test": true
+      },
+      "raw_log_line": 646,
+      "fresh": false,
+      "fingerprint_json": "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/kaspa-notify-583d70b291693d0c/lib-kaspa_notify.json",
+      "fingerprint_exists": true,
+      "exclusion_reasons": [
+        "no_actual_unit_fingerprint_path_to_exact_run1_sys"
+      ],
+      "files": [],
+      "features": "[]",
+      "profile_hash": 6873731449254902479,
+      "fingerprint_bare_hex_le": "2888d2044d3c3238",
+      "actual_sys_dependency_path": [],
+      "actual_sys_dependency_edges": []
+    },
+    {
+      "package_id": "path+file:///Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/consensus/notify#kaspa-consensus-notify@1.1.0",
+      "manifest_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/consensus/notify/Cargo.toml",
+      "target": {
+        "kind": [
+          "lib"
+        ],
+        "crate_types": [
+          "lib"
+        ],
+        "name": "kaspa_consensus_notify",
+        "src_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/consensus/notify/src/lib.rs",
+        "edition": "2024",
+        "doc": true,
+        "doctest": true,
+        "test": true
+      },
+      "raw_log_line": 648,
+      "fresh": false,
+      "fingerprint_json": "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/kaspa-consensus-notify-8dcb287cd7572d03/lib-kaspa_consensus_notify.json",
+      "fingerprint_exists": true,
+      "exclusion_reasons": [
+        "no_actual_unit_fingerprint_path_to_exact_run1_sys"
+      ],
+      "files": [],
+      "features": "[]",
+      "profile_hash": 6873731449254902479,
+      "fingerprint_bare_hex_le": "bce0f2ce714d9651",
+      "actual_sys_dependency_path": [],
+      "actual_sys_dependency_edges": []
+    },
+    {
+      "package_id": "path+file:///Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/mining/errors#kaspa-mining-errors@1.1.0",
+      "manifest_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/mining/errors/Cargo.toml",
+      "target": {
+        "kind": [
+          "lib"
+        ],
+        "crate_types": [
+          "lib"
+        ],
+        "name": "kaspa_mining_errors",
+        "src_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/mining/errors/src/lib.rs",
+        "edition": "2024",
+        "doc": true,
+        "doctest": true,
+        "test": true
+      },
+      "raw_log_line": 650,
+      "fresh": false,
+      "fingerprint_json": "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/kaspa-mining-errors-524c6ce5f74cc4c8/lib-kaspa_mining_errors.json",
+      "fingerprint_exists": true,
+      "exclusion_reasons": [
+        "no_actual_unit_fingerprint_path_to_exact_run1_sys"
+      ],
+      "files": [],
+      "features": "[]",
+      "profile_hash": 6873731449254902479,
+      "fingerprint_bare_hex_le": "596579fa25cb8f2d",
+      "actual_sys_dependency_path": [],
+      "actual_sys_dependency_edges": []
+    },
+    {
+      "package_id": "path+file:///Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/indexes/core#kaspa-index-core@1.1.0",
+      "manifest_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/indexes/core/Cargo.toml",
+      "target": {
+        "kind": [
+          "lib"
+        ],
+        "crate_types": [
+          "lib"
+        ],
+        "name": "kaspa_index_core",
+        "src_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/indexes/core/src/lib.rs",
+        "edition": "2024",
+        "doc": true,
+        "doctest": true,
+        "test": true
+      },
+      "raw_log_line": 652,
+      "fresh": false,
+      "fingerprint_json": "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/kaspa-index-core-f0e02c86f281b497/lib-kaspa_index_core.json",
+      "fingerprint_exists": true,
+      "exclusion_reasons": [
+        "no_actual_unit_fingerprint_path_to_exact_run1_sys"
+      ],
+      "files": [],
+      "features": "[]",
+      "profile_hash": 6873731449254902479,
+      "fingerprint_bare_hex_le": "33ce48fe49f623e4",
+      "actual_sys_dependency_path": [],
+      "actual_sys_dependency_edges": []
+    },
+    {
+      "package_id": "path+file:///Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/consensus/client#kaspa-consensus-client@1.1.0",
+      "manifest_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/consensus/client/Cargo.toml",
+      "target": {
+        "kind": [
+          "lib"
+        ],
+        "crate_types": [
+          "lib"
+        ],
+        "name": "kaspa_consensus_client",
+        "src_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/consensus/client/src/lib.rs",
+        "edition": "2024",
+        "doc": true,
+        "doctest": true,
+        "test": true
+      },
+      "raw_log_line": 654,
+      "fresh": false,
+      "fingerprint_json": "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/kaspa-consensus-client-bdda1d25af878cfe/lib-kaspa_consensus_client.json",
+      "fingerprint_exists": true,
+      "exclusion_reasons": [
+        "no_actual_unit_fingerprint_path_to_exact_run1_sys"
+      ],
+      "files": [],
+      "features": "[\"default\", \"pq-only\"]",
+      "profile_hash": 6873731449254902479,
+      "fingerprint_bare_hex_le": "2f304388469b0c1c",
+      "actual_sys_dependency_path": [],
+      "actual_sys_dependency_edges": []
+    },
+    {
+      "package_id": "path+file:///Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/consensus/wasm#kaspa-consensus-wasm@1.1.0",
+      "manifest_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/consensus/wasm/Cargo.toml",
+      "target": {
+        "kind": [
+          "lib"
+        ],
+        "crate_types": [
+          "lib"
+        ],
+        "name": "kaspa_consensus_wasm",
+        "src_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/consensus/wasm/src/lib.rs",
+        "edition": "2024",
+        "doc": true,
+        "doctest": true,
+        "test": true
+      },
+      "raw_log_line": 656,
+      "fresh": false,
+      "fingerprint_json": "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/kaspa-consensus-wasm-359d2a79516229dd/lib-kaspa_consensus_wasm.json",
+      "fingerprint_exists": true,
+      "exclusion_reasons": [
+        "no_actual_unit_fingerprint_path_to_exact_run1_sys"
+      ],
+      "files": [],
+      "features": "[\"default\", \"pq-only\"]",
+      "profile_hash": 6873731449254902479,
+      "fingerprint_bare_hex_le": "ae5a5fbc07a246f0",
+      "actual_sys_dependency_path": [],
+      "actual_sys_dependency_edges": []
+    },
+    {
+      "package_id": "path+file:///Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/components/consensusmanager#kaspa-consensusmanager@1.1.0",
+      "manifest_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/components/consensusmanager/Cargo.toml",
+      "target": {
+        "kind": [
+          "lib"
+        ],
+        "crate_types": [
+          "lib"
+        ],
+        "name": "kaspa_consensusmanager",
+        "src_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/components/consensusmanager/src/lib.rs",
+        "edition": "2024",
+        "doc": true,
+        "doctest": true,
+        "test": true
+      },
+      "raw_log_line": 658,
+      "fresh": false,
+      "fingerprint_json": "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/kaspa-consensusmanager-24e158810a1d1840/lib-kaspa_consensusmanager.json",
+      "fingerprint_exists": true,
+      "exclusion_reasons": [
+        "no_actual_unit_fingerprint_path_to_exact_run1_sys"
+      ],
+      "files": [],
+      "features": "[]",
+      "profile_hash": 6873731449254902479,
+      "fingerprint_bare_hex_le": "89a87bf9a79a547c",
+      "actual_sys_dependency_path": [],
+      "actual_sys_dependency_edges": []
+    },
+    {
+      "package_id": "path+file:///Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/rpc/core#kaspa-rpc-core@1.1.0",
+      "manifest_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/rpc/core/Cargo.toml",
+      "target": {
+        "kind": [
+          "lib"
+        ],
+        "crate_types": [
+          "lib"
+        ],
+        "name": "kaspa_rpc_core",
+        "src_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/rpc/core/src/lib.rs",
+        "edition": "2024",
+        "doc": true,
+        "doctest": true,
+        "test": true
+      },
+      "raw_log_line": 660,
+      "fresh": false,
+      "fingerprint_json": "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/kaspa-rpc-core-f3e468bafe86139c/lib-kaspa_rpc_core.json",
+      "fingerprint_exists": true,
+      "exclusion_reasons": [
+        "no_actual_unit_fingerprint_path_to_exact_run1_sys"
+      ],
+      "files": [],
+      "features": "[]",
+      "profile_hash": 6873731449254902479,
+      "fingerprint_bare_hex_le": "497235f50e87ee83",
+      "actual_sys_dependency_path": [],
+      "actual_sys_dependency_edges": []
+    },
+    {
+      "package_id": "path+file:///Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/protocol/p2p#kaspa-p2p-lib@1.1.0",
+      "manifest_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/protocol/p2p/Cargo.toml",
+      "target": {
+        "kind": [
+          "lib"
+        ],
+        "crate_types": [
+          "lib"
+        ],
+        "name": "kaspa_p2p_lib",
+        "src_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/protocol/p2p/src/lib.rs",
+        "edition": "2024",
+        "doc": true,
+        "doctest": true,
+        "test": true
+      },
+      "raw_log_line": 662,
+      "fresh": false,
+      "fingerprint_json": "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/kaspa-p2p-lib-fbeac52936c41e77/lib-kaspa_p2p_lib.json",
+      "fingerprint_exists": true,
+      "exclusion_reasons": [
+        "no_actual_unit_fingerprint_path_to_exact_run1_sys"
+      ],
+      "files": [],
+      "features": "[]",
+      "profile_hash": 6873731449254902479,
+      "fingerprint_bare_hex_le": "e0da92c8520676a0",
+      "actual_sys_dependency_path": [],
+      "actual_sys_dependency_edges": []
+    },
+    {
+      "package_id": "path+file:///Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/components/addressmanager#kaspa-addressmanager@1.1.0",
+      "manifest_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/components/addressmanager/Cargo.toml",
+      "target": {
+        "kind": [
+          "lib"
+        ],
+        "crate_types": [
+          "lib"
+        ],
+        "name": "kaspa_addressmanager",
+        "src_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/components/addressmanager/src/lib.rs",
+        "edition": "2024",
+        "doc": true,
+        "doctest": true,
+        "test": true
+      },
+      "raw_log_line": 664,
+      "fresh": false,
+      "fingerprint_json": "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/kaspa-addressmanager-d488ecd932c57f58/lib-kaspa_addressmanager.json",
+      "fingerprint_exists": true,
+      "exclusion_reasons": [],
+      "files": [
+        {
+          "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libkaspa_addressmanager-d488ecd932c57f58.rlib",
+          "exists": true,
+          "bytes": 12302800,
+          "sha256": "d592c056c46ce235c428a692d63a5f13f4180dcef5d7c2b0679b4db0afb7c11c",
+          "inode": 48321806,
+          "device": 16777234,
+          "nlink": 1,
+          "mtime_epoch": 1793545442.3441205,
+          "mtime_utc": "2026-11-01T15:04:02.344121+00:00",
+          "mtime_within_original_run1": true,
+          "stat_unchanged_across_hash": true,
+          "symlink": false,
+          "candidate": true,
+          "candidate_is_not_deletion_authorization": true,
+          "open_in_lsof_snapshot": false
+        },
+        {
+          "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libkaspa_addressmanager-d488ecd932c57f58.rmeta",
+          "exists": true,
+          "bytes": 280083,
+          "sha256": "d062a28321d2a07a297c5d2d8bbe8c988e37e9b3bc81e39ad572cd370cc3d7f1",
+          "inode": 48321801,
+          "device": 16777234,
+          "nlink": 1,
+          "mtime_epoch": 1793545441.3996658,
+          "mtime_utc": "2026-11-01T15:04:01.399666+00:00",
+          "mtime_within_original_run1": true,
+          "stat_unchanged_across_hash": true,
+          "symlink": false,
+          "candidate": true,
+          "candidate_is_not_deletion_authorization": true,
+          "open_in_lsof_snapshot": false
+        }
+      ],
+      "features": "[]",
+      "profile_hash": 6873731449254902479,
+      "fingerprint_bare_hex_le": "1d552c615f24a4ac",
+      "actual_sys_dependency_path": [
+        "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/kaspa-addressmanager-d488ecd932c57f58/lib-kaspa_addressmanager.json",
+        "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/rocksdb-98c9cf0c203ac30b/lib-rocksdb.json",
+        "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/librocksdb-sys-12a5169b0a0cab09/lib-librocksdb_sys.json"
+      ],
+      "actual_sys_dependency_edges": [
+        {
+          "from": "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/kaspa-addressmanager-d488ecd932c57f58/lib-kaspa_addressmanager.json",
+          "to": "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/rocksdb-98c9cf0c203ac30b/lib-rocksdb.json",
+          "dep_name": "rocksdb",
+          "expected_fingerprint_u64": 2856495512051684904,
+          "matched_bare_hex_le": "289656aa884fa427"
+        },
+        {
+          "from": "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/rocksdb-98c9cf0c203ac30b/lib-rocksdb.json",
+          "to": "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/librocksdb-sys-12a5169b0a0cab09/lib-librocksdb_sys.json",
+          "dep_name": "librocksdb_sys",
+          "expected_fingerprint_u64": 5711661977495153582,
+          "matched_bare_hex_le": "ae2bb48d4ee6434f"
+        }
+      ],
+      "dep_info": {
+        "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/kaspa_addressmanager-d488ecd932c57f58.d",
+        "exists": true,
+        "sha256": "de7230a0b02218e15a8ad89694abe402091d5fc0e781449511aec89e469bf1f1",
+        "target_lib_path_present": true,
+        "source_path_prefix_sample": "components/addressmanager/src/lib.rs components/addressmanager/src/port_mapping_extender.rs components/addressmanager/src/stores/mod.rs components/addressmanager/src/stores/address_store.rs components/addressmanager/src/stores/banned_address_store.rs\n\n/Users/w"
+      },
+      "metadata_source_map": {
+        "rmeta": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libkaspa_addressmanager-d488ecd932c57f58.rmeta",
+        "embedded_workspace_roots": [
+          "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet"
+        ],
+        "A6_root_present": true,
+        "exact_target_source_path_present": true,
+        "method": "literal embedded Rust rmeta source-map paths; raw compiler-artifact manifest separately pins owning compilation"
+      },
+      "rebuild_reason": "Exact unit dependency fingerprint chain reaches run1 librocksdb_sys; declared native links build-output override changes sys fingerprint/native link metadata and invalidates its actual reverse dependencies. No package-level dev/EVM graph expansion."
+    },
+    {
+      "package_id": "path+file:///Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/components/connectionmanager#kaspa-connectionmanager@1.1.0",
+      "manifest_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/components/connectionmanager/Cargo.toml",
+      "target": {
+        "kind": [
+          "lib"
+        ],
+        "crate_types": [
+          "lib"
+        ],
+        "name": "kaspa_connectionmanager",
+        "src_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/components/connectionmanager/src/lib.rs",
+        "edition": "2024",
+        "doc": true,
+        "doctest": true,
+        "test": true
+      },
+      "raw_log_line": 666,
+      "fresh": false,
+      "fingerprint_json": "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/kaspa-connectionmanager-b0795978444917f2/lib-kaspa_connectionmanager.json",
+      "fingerprint_exists": true,
+      "exclusion_reasons": [],
+      "files": [
+        {
+          "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libkaspa_connectionmanager-b0795978444917f2.rlib",
+          "exists": true,
+          "bytes": 13838152,
+          "sha256": "6d67ae840be2c324c0584db6c66300e66533cbd99836de6c411e94c2bcfdffae",
+          "inode": 48321815,
+          "device": 16777234,
+          "nlink": 1,
+          "mtime_epoch": 1793545443.8577144,
+          "mtime_utc": "2026-11-01T15:04:03.857714+00:00",
+          "mtime_within_original_run1": true,
+          "stat_unchanged_across_hash": true,
+          "symlink": false,
+          "candidate": true,
+          "candidate_is_not_deletion_authorization": true,
+          "open_in_lsof_snapshot": false
+        },
+        {
+          "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libkaspa_connectionmanager-b0795978444917f2.rmeta",
+          "exists": true,
+          "bytes": 241359,
+          "sha256": "f62721ebbada8b53f1bd41647a9308d00dcf1388790001093fbdc6355b6ab05b",
+          "inode": 48321809,
+          "device": 16777234,
+          "nlink": 1,
+          "mtime_epoch": 1793545442.9120102,
+          "mtime_utc": "2026-11-01T15:04:02.912010+00:00",
+          "mtime_within_original_run1": true,
+          "stat_unchanged_across_hash": true,
+          "symlink": false,
+          "candidate": true,
+          "candidate_is_not_deletion_authorization": true,
+          "open_in_lsof_snapshot": false
+        }
+      ],
+      "features": "[]",
+      "profile_hash": 6873731449254902479,
+      "fingerprint_bare_hex_le": "e0c4e92da94149b3",
+      "actual_sys_dependency_path": [
+        "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/kaspa-connectionmanager-b0795978444917f2/lib-kaspa_connectionmanager.json",
+        "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/kaspa-addressmanager-d488ecd932c57f58/lib-kaspa_addressmanager.json",
+        "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/rocksdb-98c9cf0c203ac30b/lib-rocksdb.json",
+        "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/librocksdb-sys-12a5169b0a0cab09/lib-librocksdb_sys.json"
+      ],
+      "actual_sys_dependency_edges": [
+        {
+          "from": "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/kaspa-connectionmanager-b0795978444917f2/lib-kaspa_connectionmanager.json",
+          "to": "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/kaspa-addressmanager-d488ecd932c57f58/lib-kaspa_addressmanager.json",
+          "dep_name": "kaspa_addressmanager",
+          "expected_fingerprint_u64": 12440108062774940957,
+          "matched_bare_hex_le": "1d552c615f24a4ac"
+        },
+        {
+          "from": "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/kaspa-addressmanager-d488ecd932c57f58/lib-kaspa_addressmanager.json",
+          "to": "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/rocksdb-98c9cf0c203ac30b/lib-rocksdb.json",
+          "dep_name": "rocksdb",
+          "expected_fingerprint_u64": 2856495512051684904,
+          "matched_bare_hex_le": "289656aa884fa427"
+        },
+        {
+          "from": "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/rocksdb-98c9cf0c203ac30b/lib-rocksdb.json",
+          "to": "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/librocksdb-sys-12a5169b0a0cab09/lib-librocksdb_sys.json",
+          "dep_name": "librocksdb_sys",
+          "expected_fingerprint_u64": 5711661977495153582,
+          "matched_bare_hex_le": "ae2bb48d4ee6434f"
+        }
+      ],
+      "dep_info": {
+        "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/kaspa_connectionmanager-b0795978444917f2.d",
+        "exists": true,
+        "sha256": "aa46829883e8dd3c1c2334438e58418c371e7bb191a07bdf2548456ecd4fbe46",
+        "target_lib_path_present": true,
+        "source_path_prefix_sample": "components/connectionmanager/src/lib.rs\n\n/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libkaspa_connectionmanager-b0795978444917f2.rlib: components/connectionmanager/src/lib.rs\n\n/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libkaspa_connectio"
+      },
+      "metadata_source_map": {
+        "rmeta": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libkaspa_connectionmanager-b0795978444917f2.rmeta",
+        "embedded_workspace_roots": [
+          "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet"
+        ],
+        "A6_root_present": true,
+        "exact_target_source_path_present": true,
+        "method": "literal embedded Rust rmeta source-map paths; raw compiler-artifact manifest separately pins owning compilation"
+      },
+      "rebuild_reason": "Exact unit dependency fingerprint chain reaches run1 librocksdb_sys; declared native links build-output override changes sys fingerprint/native link metadata and invalidates its actual reverse dependencies. No package-level dev/EVM graph expansion."
+    },
+    {
+      "package_id": "path+file:///Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/protocol/mining#kaspa-p2p-mining@1.1.0",
+      "manifest_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/protocol/mining/Cargo.toml",
+      "target": {
+        "kind": [
+          "lib"
+        ],
+        "crate_types": [
+          "lib"
+        ],
+        "name": "kaspa_p2p_mining",
+        "src_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/protocol/mining/src/lib.rs",
+        "edition": "2024",
+        "doc": true,
+        "doctest": true,
+        "test": true
+      },
+      "raw_log_line": 668,
+      "fresh": false,
+      "fingerprint_json": "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/kaspa-p2p-mining-e9e17aebff1ff2a3/lib-kaspa_p2p_mining.json",
+      "fingerprint_exists": true,
+      "exclusion_reasons": [
+        "no_actual_unit_fingerprint_path_to_exact_run1_sys"
+      ],
+      "files": [],
+      "features": "[]",
+      "profile_hash": 6873731449254902479,
+      "fingerprint_bare_hex_le": "0cb9ca7a2a2a3c15",
+      "actual_sys_dependency_path": [],
+      "actual_sys_dependency_edges": []
+    },
+    {
+      "package_id": "path+file:///Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/mining#kaspa-mining@1.1.0",
+      "manifest_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/mining/Cargo.toml",
+      "target": {
+        "kind": [
+          "lib"
+        ],
+        "crate_types": [
+          "lib"
+        ],
+        "name": "kaspa_mining",
+        "src_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/mining/src/lib.rs",
+        "edition": "2024",
+        "doc": true,
+        "doctest": true,
+        "test": true
+      },
+      "raw_log_line": 670,
+      "fresh": false,
+      "fingerprint_json": "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/kaspa-mining-dd11cb4d9c4c34c7/lib-kaspa_mining.json",
+      "fingerprint_exists": true,
+      "exclusion_reasons": [
+        "no_actual_unit_fingerprint_path_to_exact_run1_sys"
+      ],
+      "files": [],
+      "features": "[]",
+      "profile_hash": 6873731449254902479,
+      "fingerprint_bare_hex_le": "6898aa3ad5e06893",
+      "actual_sys_dependency_path": [],
+      "actual_sys_dependency_edges": []
+    },
+    {
+      "package_id": "path+file:///Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/consensus/pow#kaspa-pow@1.1.0",
+      "manifest_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/consensus/pow/Cargo.toml",
+      "target": {
+        "kind": [
+          "lib"
+        ],
+        "crate_types": [
+          "lib"
+        ],
+        "name": "kaspa_pow",
+        "src_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/consensus/pow/src/lib.rs",
+        "edition": "2024",
+        "doc": true,
+        "doctest": true,
+        "test": true
+      },
+      "raw_log_line": 672,
+      "fresh": false,
+      "fingerprint_json": "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/kaspa-pow-b1c0889e5fc4f20b/lib-kaspa_pow.json",
+      "fingerprint_exists": true,
+      "exclusion_reasons": [
+        "no_actual_unit_fingerprint_path_to_exact_run1_sys"
+      ],
+      "files": [],
+      "features": "[]",
+      "profile_hash": 3529655162674907694,
+      "fingerprint_bare_hex_le": "0f45a0410be75822",
+      "actual_sys_dependency_path": [],
+      "actual_sys_dependency_edges": []
+    },
+    {
+      "package_id": "path+file:///Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/consensus/core#kaspa-consensus-core@1.1.0",
+      "manifest_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/consensus/core/Cargo.toml",
+      "target": {
+        "kind": [
+          "lib"
+        ],
+        "crate_types": [
+          "lib"
+        ],
+        "name": "kaspa_consensus_core",
+        "src_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/consensus/core/src/lib.rs",
+        "edition": "2024",
+        "doc": true,
+        "doctest": true,
+        "test": true
+      },
+      "raw_log_line": 674,
+      "fresh": false,
+      "fingerprint_json": "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/kaspa-consensus-core-8532c7c589116352/lib-kaspa_consensus_core.json",
+      "fingerprint_exists": true,
+      "exclusion_reasons": [
+        "no_actual_unit_fingerprint_path_to_exact_run1_sys",
+        "Core_normal_explicitly_excluded"
+      ],
+      "files": [],
+      "features": "[\"default\", \"pq-only\"]",
+      "profile_hash": 7864005895464992407,
+      "fingerprint_bare_hex_le": "824e5b664f921ea6",
+      "actual_sys_dependency_path": [],
+      "actual_sys_dependency_edges": []
+    },
+    {
+      "package_id": "path+file:///Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/rpc/grpc/core#kaspa-grpc-core@1.1.0",
+      "manifest_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/rpc/grpc/core/Cargo.toml",
+      "target": {
+        "kind": [
+          "lib"
+        ],
+        "crate_types": [
+          "lib"
+        ],
+        "name": "kaspa_grpc_core",
+        "src_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/rpc/grpc/core/src/lib.rs",
+        "edition": "2024",
+        "doc": true,
+        "doctest": true,
+        "test": true
+      },
+      "raw_log_line": 676,
+      "fresh": false,
+      "fingerprint_json": "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/kaspa-grpc-core-dcedf4350b0fe083/lib-kaspa_grpc_core.json",
+      "fingerprint_exists": true,
+      "exclusion_reasons": [
+        "no_actual_unit_fingerprint_path_to_exact_run1_sys"
+      ],
+      "files": [],
+      "features": "[]",
+      "profile_hash": 6873731449254902479,
+      "fingerprint_bare_hex_le": "53ac28f59e28068d",
+      "actual_sys_dependency_path": [],
+      "actual_sys_dependency_edges": []
+    },
+    {
+      "package_id": "path+file:///Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/indexes/utxoindex#kaspa-utxoindex@1.1.0",
+      "manifest_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/indexes/utxoindex/Cargo.toml",
+      "target": {
+        "kind": [
+          "lib"
+        ],
+        "crate_types": [
+          "lib"
+        ],
+        "name": "kaspa_utxoindex",
+        "src_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/indexes/utxoindex/src/lib.rs",
+        "edition": "2024",
+        "doc": true,
+        "doctest": true,
+        "test": true
+      },
+      "raw_log_line": 678,
+      "fresh": false,
+      "fingerprint_json": "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/kaspa-utxoindex-b0c47323f115ff98/lib-kaspa_utxoindex.json",
+      "fingerprint_exists": true,
+      "exclusion_reasons": [],
+      "files": [
+        {
+          "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libkaspa_utxoindex-b0c47323f115ff98.rlib",
+          "exists": true,
+          "bytes": 3480448,
+          "sha256": "c193fad02bd141adc8075cd0873774cb030dd4af4a90e0ee1d366e57d804dd2b",
+          "inode": 48321875,
+          "device": 16777234,
+          "nlink": 1,
+          "mtime_epoch": 1793545461.1965342,
+          "mtime_utc": "2026-11-01T15:04:21.196534+00:00",
+          "mtime_within_original_run1": true,
+          "stat_unchanged_across_hash": true,
+          "symlink": false,
+          "candidate": true,
+          "candidate_is_not_deletion_authorization": true,
+          "open_in_lsof_snapshot": false
+        },
+        {
+          "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libkaspa_utxoindex-b0c47323f115ff98.rmeta",
+          "exists": true,
+          "bytes": 198557,
+          "sha256": "40a59dd976b7f395a63b0554ae998ce721f689cbf405a40b35ca8df9150f687c",
+          "inode": 48321871,
+          "device": 16777234,
+          "nlink": 1,
+          "mtime_epoch": 1793545460.8817782,
+          "mtime_utc": "2026-11-01T15:04:20.881778+00:00",
+          "mtime_within_original_run1": true,
+          "stat_unchanged_across_hash": true,
+          "symlink": false,
+          "candidate": true,
+          "candidate_is_not_deletion_authorization": true,
+          "open_in_lsof_snapshot": false
+        }
+      ],
+      "features": "[]",
+      "profile_hash": 6873731449254902479,
+      "fingerprint_bare_hex_le": "b0ccce6a69e8214e",
+      "actual_sys_dependency_path": [
+        "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/kaspa-utxoindex-b0c47323f115ff98/lib-kaspa_utxoindex.json",
+        "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/rocksdb-98c9cf0c203ac30b/lib-rocksdb.json",
+        "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/librocksdb-sys-12a5169b0a0cab09/lib-librocksdb_sys.json"
+      ],
+      "actual_sys_dependency_edges": [
+        {
+          "from": "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/kaspa-utxoindex-b0c47323f115ff98/lib-kaspa_utxoindex.json",
+          "to": "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/rocksdb-98c9cf0c203ac30b/lib-rocksdb.json",
+          "dep_name": "rocksdb",
+          "expected_fingerprint_u64": 2856495512051684904,
+          "matched_bare_hex_le": "289656aa884fa427"
+        },
+        {
+          "from": "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/rocksdb-98c9cf0c203ac30b/lib-rocksdb.json",
+          "to": "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/librocksdb-sys-12a5169b0a0cab09/lib-librocksdb_sys.json",
+          "dep_name": "librocksdb_sys",
+          "expected_fingerprint_u64": 5711661977495153582,
+          "matched_bare_hex_le": "ae2bb48d4ee6434f"
+        }
+      ],
+      "dep_info": {
+        "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/kaspa_utxoindex-b0c47323f115ff98.d",
+        "exists": true,
+        "sha256": "5f4ce1274c8a42db32b0fa92be5463164d122a685e692c59bab74f7e88544db8",
+        "target_lib_path_present": true,
+        "source_path_prefix_sample": "indexes/utxoindex/src/lib.rs indexes/utxoindex/src/core/mod.rs indexes/utxoindex/src/core/api/mod.rs indexes/utxoindex/src/core/errors.rs indexes/utxoindex/src/core/model/mod.rs indexes/utxoindex/src/core/model/supply.rs indexes/utxoindex/src/index.rs indexes/"
+      },
+      "metadata_source_map": {
+        "rmeta": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libkaspa_utxoindex-b0c47323f115ff98.rmeta",
+        "embedded_workspace_roots": [
+          "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet"
+        ],
+        "A6_root_present": true,
+        "exact_target_source_path_present": true,
+        "method": "literal embedded Rust rmeta source-map paths; raw compiler-artifact manifest separately pins owning compilation"
+      },
+      "rebuild_reason": "Exact unit dependency fingerprint chain reaches run1 librocksdb_sys; declared native links build-output override changes sys fingerprint/native link metadata and invalidates its actual reverse dependencies. No package-level dev/EVM graph expansion."
+    },
+    {
+      "package_id": "path+file:///Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/misaka/palw/tir/exec#misaka-palw-tir-exec@1.1.0",
+      "manifest_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/misaka/palw/tir/exec/Cargo.toml",
+      "target": {
+        "kind": [
+          "lib"
+        ],
+        "crate_types": [
+          "lib"
+        ],
+        "name": "misaka_palw_tir_exec",
+        "src_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/misaka/palw/tir/exec/src/lib.rs",
+        "edition": "2024",
+        "doc": true,
+        "doctest": true,
+        "test": true
+      },
+      "raw_log_line": 680,
+      "fresh": false,
+      "fingerprint_json": "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/misaka-palw-tir-exec-250a87bd863fa5d6/lib-misaka_palw_tir_exec.json",
+      "fingerprint_exists": true,
+      "exclusion_reasons": [
+        "no_actual_unit_fingerprint_path_to_exact_run1_sys"
+      ],
+      "files": [],
+      "features": "[\"node\"]",
+      "profile_hash": 6873731449254902479,
+      "fingerprint_bare_hex_le": "be6e81abfbeafae4",
+      "actual_sys_dependency_path": [],
+      "actual_sys_dependency_edges": []
+    },
+    {
+      "package_id": "path+file:///Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/protocol/flows#kaspa-p2p-flows@1.1.0",
+      "manifest_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/protocol/flows/Cargo.toml",
+      "target": {
+        "kind": [
+          "lib"
+        ],
+        "crate_types": [
+          "lib"
+        ],
+        "name": "kaspa_p2p_flows",
+        "src_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/protocol/flows/src/lib.rs",
+        "edition": "2024",
+        "doc": true,
+        "doctest": true,
+        "test": true
+      },
+      "raw_log_line": 682,
+      "fresh": false,
+      "fingerprint_json": "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/kaspa-p2p-flows-fd2615d100e6fca3/lib-kaspa_p2p_flows.json",
+      "fingerprint_exists": true,
+      "exclusion_reasons": [],
+      "files": [
+        {
+          "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libkaspa_p2p_flows-fd2615d100e6fca3.rlib",
+          "exists": true,
+          "bytes": 141688320,
+          "sha256": "cc6b35a657f074da355090866d326ab3009571e99b2c3a702cd2f632a564a93d",
+          "inode": 48321899,
+          "device": 16777234,
+          "nlink": 1,
+          "mtime_epoch": 1793545480.0321863,
+          "mtime_utc": "2026-11-01T15:04:40.032186+00:00",
+          "mtime_within_original_run1": true,
+          "stat_unchanged_across_hash": true,
+          "symlink": false,
+          "candidate": true,
+          "candidate_is_not_deletion_authorization": true,
+          "open_in_lsof_snapshot": false
+        },
+        {
+          "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libkaspa_p2p_flows-fd2615d100e6fca3.rmeta",
+          "exists": true,
+          "bytes": 5379091,
+          "sha256": "c74e2338a62c686c02968394eabff420aa3971ce1c0a7b24de4a3c0f70f0c69e",
+          "inode": 48321861,
+          "device": 16777234,
+          "nlink": 1,
+          "mtime_epoch": 1793545464.016666,
+          "mtime_utc": "2026-11-01T15:04:24.016666+00:00",
+          "mtime_within_original_run1": true,
+          "stat_unchanged_across_hash": true,
+          "symlink": false,
+          "candidate": true,
+          "candidate_is_not_deletion_authorization": true,
+          "open_in_lsof_snapshot": false
+        }
+      ],
+      "features": "[]",
+      "profile_hash": 6873731449254902479,
+      "fingerprint_bare_hex_le": "f6a0a4780cf4f059",
+      "actual_sys_dependency_path": [
+        "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/kaspa-p2p-flows-fd2615d100e6fca3/lib-kaspa_p2p_flows.json",
+        "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/kaspa-addressmanager-d488ecd932c57f58/lib-kaspa_addressmanager.json",
+        "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/rocksdb-98c9cf0c203ac30b/lib-rocksdb.json",
+        "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/librocksdb-sys-12a5169b0a0cab09/lib-librocksdb_sys.json"
+      ],
+      "actual_sys_dependency_edges": [
+        {
+          "from": "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/kaspa-p2p-flows-fd2615d100e6fca3/lib-kaspa_p2p_flows.json",
+          "to": "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/kaspa-addressmanager-d488ecd932c57f58/lib-kaspa_addressmanager.json",
+          "dep_name": "kaspa_addressmanager",
+          "expected_fingerprint_u64": 12440108062774940957,
+          "matched_bare_hex_le": "1d552c615f24a4ac"
+        },
+        {
+          "from": "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/kaspa-addressmanager-d488ecd932c57f58/lib-kaspa_addressmanager.json",
+          "to": "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/rocksdb-98c9cf0c203ac30b/lib-rocksdb.json",
+          "dep_name": "rocksdb",
+          "expected_fingerprint_u64": 2856495512051684904,
+          "matched_bare_hex_le": "289656aa884fa427"
+        },
+        {
+          "from": "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/rocksdb-98c9cf0c203ac30b/lib-rocksdb.json",
+          "to": "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/librocksdb-sys-12a5169b0a0cab09/lib-librocksdb_sys.json",
+          "dep_name": "librocksdb_sys",
+          "expected_fingerprint_u64": 5711661977495153582,
+          "matched_bare_hex_le": "ae2bb48d4ee6434f"
+        }
+      ],
+      "dep_info": {
+        "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/kaspa_p2p_flows-fd2615d100e6fca3.d",
+        "exists": true,
+        "sha256": "a3344385b43dadee06ec2a55712b9fae5eb7b21547f30a735c2d60f373d1fe43",
+        "target_lib_path_present": true,
+        "source_path_prefix_sample": "protocol/flows/src/lib.rs protocol/flows/src/evm_payload_delivery.rs protocol/flows/src/flow_context.rs protocol/flows/src/flow_trait.rs protocol/flows/src/flowcontext/mod.rs protocol/flows/src/flowcontext/bootstrap_recovery.rs protocol/flows/src/flowcontext/e"
+      },
+      "metadata_source_map": {
+        "rmeta": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libkaspa_p2p_flows-fd2615d100e6fca3.rmeta",
+        "embedded_workspace_roots": [
+          "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet"
+        ],
+        "A6_root_present": true,
+        "exact_target_source_path_present": true,
+        "method": "literal embedded Rust rmeta source-map paths; raw compiler-artifact manifest separately pins owning compilation"
+      },
+      "rebuild_reason": "Exact unit dependency fingerprint chain reaches run1 librocksdb_sys; declared native links build-output override changes sys fingerprint/native link metadata and invalidates its actual reverse dependencies. No package-level dev/EVM graph expansion."
+    },
+    {
+      "package_id": "path+file:///Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/misaka/pq/validator-core#kaspa-pq-validator-core@1.1.0",
+      "manifest_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/misaka/pq/validator-core/Cargo.toml",
+      "target": {
+        "kind": [
+          "lib"
+        ],
+        "crate_types": [
+          "lib"
+        ],
+        "name": "kaspa_pq_validator_core",
+        "src_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/misaka/pq/validator-core/src/lib.rs",
+        "edition": "2024",
+        "doc": true,
+        "doctest": true,
+        "test": true
+      },
+      "raw_log_line": 684,
+      "fresh": false,
+      "fingerprint_json": "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/kaspa-pq-validator-core-1d78866e2c243f68/lib-kaspa_pq_validator_core.json",
+      "fingerprint_exists": true,
+      "exclusion_reasons": [
+        "no_actual_unit_fingerprint_path_to_exact_run1_sys"
+      ],
+      "files": [],
+      "features": "[]",
+      "profile_hash": 6873731449254902479,
+      "fingerprint_bare_hex_le": "aaac05900d350d54",
+      "actual_sys_dependency_path": [],
+      "actual_sys_dependency_edges": []
+    },
+    {
+      "package_id": "path+file:///Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/rpc/service#kaspa-rpc-service@1.1.0",
+      "manifest_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/rpc/service/Cargo.toml",
+      "target": {
+        "kind": [
+          "lib"
+        ],
+        "crate_types": [
+          "lib"
+        ],
+        "name": "kaspa_rpc_service",
+        "src_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/rpc/service/src/lib.rs",
+        "edition": "2024",
+        "doc": true,
+        "doctest": true,
+        "test": true
+      },
+      "raw_log_line": 686,
+      "fresh": false,
+      "fingerprint_json": "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/kaspa-rpc-service-e31919ee048f75f6/lib-kaspa_rpc_service.json",
+      "fingerprint_exists": true,
+      "exclusion_reasons": [],
+      "files": [
+        {
+          "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libkaspa_rpc_service-e31919ee048f75f6.rlib",
+          "exists": true,
+          "bytes": 72796432,
+          "sha256": "884cd1d538a47119f6c11d62b0a1c438a2177d9cc045c958a790daac4c1d6e02",
+          "inode": 48321916,
+          "device": 16777234,
+          "nlink": 1,
+          "mtime_epoch": 1793545485.4478517,
+          "mtime_utc": "2026-11-01T15:04:45.447852+00:00",
+          "mtime_within_original_run1": true,
+          "stat_unchanged_across_hash": true,
+          "symlink": false,
+          "candidate": true,
+          "candidate_is_not_deletion_authorization": true,
+          "open_in_lsof_snapshot": false
+        },
+        {
+          "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libkaspa_rpc_service-e31919ee048f75f6.rmeta",
+          "exists": true,
+          "bytes": 2451274,
+          "sha256": "e814f9ee39d191b203c72ea99f9e625af0bd9075a2e1cac3e5481e9d1ba431bc",
+          "inode": 48321895,
+          "device": 16777234,
+          "nlink": 1,
+          "mtime_epoch": 1793545480.1117654,
+          "mtime_utc": "2026-11-01T15:04:40.111765+00:00",
+          "mtime_within_original_run1": true,
+          "stat_unchanged_across_hash": true,
+          "symlink": false,
+          "candidate": true,
+          "candidate_is_not_deletion_authorization": true,
+          "open_in_lsof_snapshot": false
+        }
+      ],
+      "features": "[]",
+      "profile_hash": 6873731449254902479,
+      "fingerprint_bare_hex_le": "baaa01e279079229",
+      "actual_sys_dependency_path": [
+        "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/kaspa-rpc-service-e31919ee048f75f6/lib-kaspa_rpc_service.json",
+        "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/kaspa-utxoindex-b0c47323f115ff98/lib-kaspa_utxoindex.json",
+        "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/rocksdb-98c9cf0c203ac30b/lib-rocksdb.json",
+        "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/librocksdb-sys-12a5169b0a0cab09/lib-librocksdb_sys.json"
+      ],
+      "actual_sys_dependency_edges": [
+        {
+          "from": "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/kaspa-rpc-service-e31919ee048f75f6/lib-kaspa_rpc_service.json",
+          "to": "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/kaspa-utxoindex-b0c47323f115ff98/lib-kaspa_utxoindex.json",
+          "dep_name": "kaspa_utxoindex",
+          "expected_fingerprint_u64": 5630036548650978480,
+          "matched_bare_hex_le": "b0ccce6a69e8214e"
+        },
+        {
+          "from": "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/kaspa-utxoindex-b0c47323f115ff98/lib-kaspa_utxoindex.json",
+          "to": "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/rocksdb-98c9cf0c203ac30b/lib-rocksdb.json",
+          "dep_name": "rocksdb",
+          "expected_fingerprint_u64": 2856495512051684904,
+          "matched_bare_hex_le": "289656aa884fa427"
+        },
+        {
+          "from": "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/rocksdb-98c9cf0c203ac30b/lib-rocksdb.json",
+          "to": "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/librocksdb-sys-12a5169b0a0cab09/lib-librocksdb_sys.json",
+          "dep_name": "librocksdb_sys",
+          "expected_fingerprint_u64": 5711661977495153582,
+          "matched_bare_hex_le": "ae2bb48d4ee6434f"
+        }
+      ],
+      "dep_info": {
+        "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/kaspa_rpc_service-e31919ee048f75f6.d",
+        "exists": true,
+        "sha256": "72ecfd5b7588e95bba28d7c634d059035975a3deaee6ca621de6149d7bd50e0f",
+        "target_lib_path_present": true,
+        "source_path_prefix_sample": "rpc/service/src/lib.rs rpc/service/src/collector.rs rpc/service/src/converter/mod.rs rpc/service/src/converter/consensus.rs rpc/service/src/converter/feerate_estimate.rs rpc/service/src/converter/index.rs rpc/service/src/converter/protocol.rs rpc/service/src/p"
+      },
+      "metadata_source_map": {
+        "rmeta": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libkaspa_rpc_service-e31919ee048f75f6.rmeta",
+        "embedded_workspace_roots": [
+          "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet"
+        ],
+        "A6_root_present": true,
+        "exact_target_source_path_present": true,
+        "method": "literal embedded Rust rmeta source-map paths; raw compiler-artifact manifest separately pins owning compilation"
+      },
+      "rebuild_reason": "Exact unit dependency fingerprint chain reaches run1 librocksdb_sys; declared native links build-output override changes sys fingerprint/native link metadata and invalidates its actual reverse dependencies. No package-level dev/EVM graph expansion."
+    },
+    {
+      "package_id": "path+file:///Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/misaka/palw/base0#misaka-palw-base0@1.1.0",
+      "manifest_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/misaka/palw/base0/Cargo.toml",
+      "target": {
+        "kind": [
+          "lib"
+        ],
+        "crate_types": [
+          "lib"
+        ],
+        "name": "misaka_palw_base0",
+        "src_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/misaka/palw/base0/src/lib.rs",
+        "edition": "2024",
+        "doc": true,
+        "doctest": true,
+        "test": true
+      },
+      "raw_log_line": 688,
+      "fresh": false,
+      "fingerprint_json": "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/misaka-palw-base0-4fb1125b5fc20d84/lib-misaka_palw_base0.json",
+      "fingerprint_exists": true,
+      "exclusion_reasons": [
+        "no_actual_unit_fingerprint_path_to_exact_run1_sys"
+      ],
+      "files": [],
+      "features": "[]",
+      "profile_hash": 5347358027863023418,
+      "fingerprint_bare_hex_le": "e0f54c095e9099d4",
+      "actual_sys_dependency_path": [],
+      "actual_sys_dependency_edges": []
+    },
+    {
+      "package_id": "path+file:///Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/rpc/grpc/client#kaspa-grpc-client@1.1.0",
+      "manifest_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/rpc/grpc/client/Cargo.toml",
+      "target": {
+        "kind": [
+          "lib"
+        ],
+        "crate_types": [
+          "lib"
+        ],
+        "name": "kaspa_grpc_client",
+        "src_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/rpc/grpc/client/src/lib.rs",
+        "edition": "2024",
+        "doc": true,
+        "doctest": true,
+        "test": true
+      },
+      "raw_log_line": 690,
+      "fresh": false,
+      "fingerprint_json": "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/kaspa-grpc-client-4b4ab7943514ba83/lib-kaspa_grpc_client.json",
+      "fingerprint_exists": true,
+      "exclusion_reasons": [
+        "no_actual_unit_fingerprint_path_to_exact_run1_sys"
+      ],
+      "files": [],
+      "features": "[]",
+      "profile_hash": 6873731449254902479,
+      "fingerprint_bare_hex_le": "c43b8a209349f8da",
+      "actual_sys_dependency_path": [],
+      "actual_sys_dependency_edges": []
+    },
+    {
+      "package_id": "path+file:///Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/misaka/endpoints#misaka-endpoints@1.1.0",
+      "manifest_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/misaka/endpoints/Cargo.toml",
+      "target": {
+        "kind": [
+          "lib"
+        ],
+        "crate_types": [
+          "lib"
+        ],
+        "name": "misaka_endpoints",
+        "src_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/misaka/endpoints/src/lib.rs",
+        "edition": "2024",
+        "doc": true,
+        "doctest": true,
+        "test": true
+      },
+      "raw_log_line": 692,
+      "fresh": false,
+      "fingerprint_json": "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/misaka-endpoints-cdc2c1cba1c8fe17/lib-misaka_endpoints.json",
+      "fingerprint_exists": true,
+      "exclusion_reasons": [
+        "no_actual_unit_fingerprint_path_to_exact_run1_sys"
+      ],
+      "files": [],
+      "features": "[]",
+      "profile_hash": 6873731449254902479,
+      "fingerprint_bare_hex_le": "52f87e8d3b849533",
+      "actual_sys_dependency_path": [],
+      "actual_sys_dependency_edges": []
+    },
+    {
+      "package_id": "path+file:///Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/misaka/palw/remote#misaka-palw-remote@1.1.0",
+      "manifest_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/misaka/palw/remote/Cargo.toml",
+      "target": {
+        "kind": [
+          "lib"
+        ],
+        "crate_types": [
+          "lib"
+        ],
+        "name": "misaka_palw_remote",
+        "src_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/misaka/palw/remote/src/lib.rs",
+        "edition": "2024",
+        "doc": true,
+        "doctest": true,
+        "test": true
+      },
+      "raw_log_line": 694,
+      "fresh": false,
+      "fingerprint_json": "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/misaka-palw-remote-2a504b51e0e00c7b/lib-misaka_palw_remote.json",
+      "fingerprint_exists": true,
+      "exclusion_reasons": [
+        "no_actual_unit_fingerprint_path_to_exact_run1_sys"
+      ],
+      "files": [],
+      "features": "[]",
+      "profile_hash": 6873731449254902479,
+      "fingerprint_bare_hex_le": "976fb593f5235f09",
+      "actual_sys_dependency_path": [],
+      "actual_sys_dependency_edges": []
+    },
+    {
+      "package_id": "path+file:///Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/misaka/palw/tir/lower#misaka-palw-tir-lower@1.1.0",
+      "manifest_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/misaka/palw/tir/lower/Cargo.toml",
+      "target": {
+        "kind": [
+          "lib"
+        ],
+        "crate_types": [
+          "lib"
+        ],
+        "name": "misaka_palw_tir_lower",
+        "src_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/misaka/palw/tir/lower/src/lib.rs",
+        "edition": "2024",
+        "doc": true,
+        "doctest": true,
+        "test": true
+      },
+      "raw_log_line": 696,
+      "fresh": false,
+      "fingerprint_json": "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/misaka-palw-tir-lower-5d9cf6bc5498c664/lib-misaka_palw_tir_lower.json",
+      "fingerprint_exists": true,
+      "exclusion_reasons": [
+        "no_actual_unit_fingerprint_path_to_exact_run1_sys"
+      ],
+      "files": [],
+      "features": "[\"remote\"]",
+      "profile_hash": 6873731449254902479,
+      "fingerprint_bare_hex_le": "bea3b04393eac360",
+      "actual_sys_dependency_path": [],
+      "actual_sys_dependency_edges": []
+    },
+    {
+      "package_id": "path+file:///Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/misaka/palw/sdk#misaka-palw-sdk@1.1.0",
+      "manifest_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/misaka/palw/sdk/Cargo.toml",
+      "target": {
+        "kind": [
+          "lib"
+        ],
+        "crate_types": [
+          "lib"
+        ],
+        "name": "misaka_palw_sdk",
+        "src_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/misaka/palw/sdk/src/lib.rs",
+        "edition": "2024",
+        "doc": true,
+        "doctest": true,
+        "test": true
+      },
+      "raw_log_line": 1973,
+      "fresh": false,
+      "fingerprint_json": "/Users/wata/Downloads/MISAKA-testnet/target/debug/.fingerprint/misaka-palw-sdk-f416c88d02d65e46/lib-misaka_palw_sdk.json",
+      "fingerprint_exists": true,
+      "exclusion_reasons": [
+        "no_actual_unit_fingerprint_path_to_exact_run1_sys"
+      ],
+      "files": [],
+      "features": "[]",
+      "profile_hash": 5347358027863023418,
+      "fingerprint_bare_hex_le": "af3e3f63a6460848",
+      "actual_sys_dependency_path": [],
+      "actual_sys_dependency_edges": []
+    }
+  ],
+  "fingerprint_read_errors": [],
+  "lsof_snapshot": {
+    "utc": "2026-11-01T15:40:32.290649+00:00",
+    "command": [
+      "lsof",
+      "-nP",
+      "-Fpcfn",
+      "--",
+      "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libkaspa_database-23a739ada63bfc80.rlib",
+      "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libkaspa_database-23a739ada63bfc80.rmeta",
+      "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libkaspa_addressmanager-d488ecd932c57f58.rlib",
+      "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libkaspa_addressmanager-d488ecd932c57f58.rmeta",
+      "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libkaspa_connectionmanager-b0795978444917f2.rlib",
+      "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libkaspa_connectionmanager-b0795978444917f2.rmeta",
+      "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libkaspa_utxoindex-b0c47323f115ff98.rlib",
+      "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libkaspa_utxoindex-b0c47323f115ff98.rmeta",
+      "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libkaspa_p2p_flows-fd2615d100e6fca3.rlib",
+      "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libkaspa_p2p_flows-fd2615d100e6fca3.rmeta",
+      "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libkaspa_rpc_service-e31919ee048f75f6.rlib",
+      "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libkaspa_rpc_service-e31919ee048f75f6.rmeta"
+    ],
+    "exit_code": 1,
+    "stdout": "",
+    "stderr": "",
+    "interpretation": "empty stdout with exit 1 indicates no listed open files at this instant; not a future exclusion guarantee"
+  },
+  "compiler_process_snapshot": {
+    "command": [
+      "ps",
+      "-axo",
+      "pid=,ppid=,comm="
+    ],
+    "exit_code": 0,
+    "relevant_lines": [
+      "53705  1830 /opt/homebrew/Cellar/python@3.14/3.14.6/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python"
+    ],
+    "note": "Root heavy work may be active; map does not claim global idle or authorize deletion"
+  },
+  "authorization": "none for deletion. Any later cleanup needs root authorization plus fresh stat/SHA/nlink/lsof checks."
+}
