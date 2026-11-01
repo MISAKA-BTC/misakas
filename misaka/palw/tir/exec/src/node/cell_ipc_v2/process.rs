@@ -528,3 +528,6 @@ impl<R: Read, W: Write, C: WideExchangeControllerV2> Drop for WideCellProcessV2<
         self.client.take();
     }
 }
+
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+mod tests;
