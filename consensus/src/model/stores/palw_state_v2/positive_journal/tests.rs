@@ -333,3 +333,231 @@ fn append_requires_literal_selected_predecessor_and_keeps_batch_on_failure() {
     ));
     assert_eq!(batch.data(), before);
 }
+
+// These fixtures distinguish cases, results, branches and carrier origins.
+// They exercise storage/framing only and create no accepted native Case.
+fn distinct_origin(tag: u8, sequence: u64) -> AcceptedOrigin {
+    AcceptedOrigin {
+        accepting_block: NativeHash64([tag; 64]),
+        carrier_block: NativeHash64([tag + 1; 64]),
+        carrier_transaction: NativeHash64([tag + sequence as u8; 64]),
+        accepted_tx_ordinal: sequence as u32,
+        ..origin(sequence)
+    }
+}
+fn distinct_case(tag: u8, sequence: u64) -> CaseRow {
+    let mut row = case(sequence);
+    row.case = CaseId(d(tag));
+    row.result = ResultId(d(tag + 1));
+    row.service.case = row.case;
+    row.coverage.scope.branch = d(tag + 2);
+    row.coverage.result = row.result;
+    row.last_event = distinct_origin(tag, sequence);
+    row
+}
+fn distinct_case_entry(tag: u8, old: Option<u64>, new: u64) -> PalwDeltaEntryV2 {
+    let next = distinct_case(tag, new);
+    PalwDeltaEntryV2::KernelRouteRow {
+        table: KERNEL_AUX_TABLE,
+        key: NativeRowKey::Case(next.case).encode(),
+        old: old.map(|sequence| row(NativeRowBody::Case(distinct_case(tag, sequence)))),
+        new: Some(row(NativeRowBody::Case(next))),
+    }
+}
+fn distinct_head_entry(old: Option<JournalHeadRow>, new: JournalHeadRow) -> PalwDeltaEntryV2 {
+    PalwDeltaEntryV2::KernelRouteRow {
+        table: KERNEL_AUX_TABLE,
+        key: NativeRowKey::JournalHead(new.case).encode(),
+        old: old.map(|head| row(NativeRowBody::JournalHead(head))),
+        new: Some(row(NativeRowBody::JournalHead(new))),
+    }
+}
+fn distinct_fixture(tag: u8, count: u64) -> (Vec<Vec<u8>>, Vec<JournalHeadRow>) {
+    let case = distinct_case(tag, 1);
+    let mut previous = d(0);
+    let mut records = Vec::new();
+    let mut heads = Vec::new();
+    for sequence in 1..=count {
+        let header = CaseJournalHeader {
+            version: 2,
+            revision: 1,
+            scope: case.coverage.scope,
+            case: case.case,
+            result: case.result,
+            sequence,
+            previous,
+            origin: distinct_origin(tag, sequence),
+            kind: CaseJournalEventKind::NativeBody,
+        };
+        let raw = CaseJournalRecord { header, payload: vec![2, 0, 1, 0, if sequence == 1 { 0 } else { 5 }], aux: vec![] }
+            .encode(limits().record_limits)
+            .unwrap();
+        let view = CaseJournalRecordView::decode(&raw, limits().record_limits).unwrap();
+        let head = JournalHeadRow { case: case.case, sequence, previous, head: view.head(), history: view.history() };
+        previous = head.head;
+        records.push(raw);
+        heads.push(head);
+    }
+    (records, heads)
+}
+fn distinct_pin(tag: u8, head: JournalHeadRow) -> CaseJournalPinV2 {
+    let case = distinct_case(tag, head.sequence);
+    CaseJournalPinV2 { scope: case.coverage.scope, case: case.case, result: case.result, head }
+}
+
+#[test]
+fn multi_case_coalesced_and_intermediate_tail_reopen_forward() {
+    let (_life, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+    let path = db.path().to_path_buf();
+    let mut store = DbPalwStateV2Store::new(db.clone(), CachePolicy::Count(4));
+    let (a, ah) = distinct_fixture(40, 3);
+    let (b, bh) = distinct_fixture(50, 3);
+    let (c, ch) = distinct_fixture(60, 1);
+    let initial = delta(vec![
+        distinct_case_entry(50, None, 1),
+        distinct_head_entry(None, ch[0]),
+        distinct_case_entry(40, None, 1),
+        distinct_head_entry(None, bh[0]),
+        distinct_case_entry(60, None, 1),
+        distinct_head_entry(None, ah[0]),
+    ]);
+    let mut seed = WriteBatch::default();
+    seed.put([223, 0x49], b"multi-case-parent");
+    let (_, seed_ticket) = store.stage_positive_case_journal_batch_v2(&mut seed, &initial, &[&c[0], &b[0], &a[0]], limits()).unwrap();
+    let mut options = rocksdb::WriteOptions::default();
+    options.set_sync(true);
+    db.write_opt(seed, &options).unwrap();
+    drop(seed_ticket);
+
+    // A advances through a coalesced endpoint, while B supplies intermediate
+    // old/new rows. Delta entries and literal records deliberately interleave.
+    let tail = delta(vec![
+        distinct_case_entry(40, Some(1), 3),
+        distinct_head_entry(Some(bh[0]), bh[1]),
+        distinct_case_entry(50, Some(1), 2),
+        distinct_head_entry(Some(ah[0]), ah[2]),
+        distinct_case_entry(50, Some(2), 3),
+        distinct_head_entry(Some(bh[1]), bh[2]),
+    ]);
+    let mut batch = WriteBatch::default();
+    batch.put([223, 0x49], b"multi-case-tail");
+    let (quote, ticket) =
+        store.stage_positive_case_journal_batch_v2(&mut batch, &tail, &[&b[2], &a[2], &b[1], &a[1]], limits()).unwrap();
+    assert_eq!(quote.records, 4);
+    assert_eq!(quote.predecessor_record_bytes, (a[0].len() + b[0].len()) as u64);
+    assert_eq!(quote.raw_identity_hash_bytes, 2 * (quote.total_raw_bytes + quote.predecessor_record_bytes));
+    assert_eq!(quote.total_batch_bytes as usize, batch.size_in_bytes());
+    assert!(store.with_positive_journal_record_v2(ah[2].head, 4096, |_| ()).is_err());
+    assert!(store.with_positive_journal_record_v2(bh[2].head, 4096, |_| ()).is_err());
+    db.write_opt(batch, &options).unwrap();
+    drop(ticket);
+    drop(store);
+    drop(db);
+
+    let db = ConnBuilder::default().with_db_path(path).with_files_limit(10).build().unwrap();
+    let reopened = DbPalwStateV2Store::new(db.clone(), CachePolicy::Count(4));
+    assert_eq!(db.get([223, 0x49]).unwrap().unwrap(), b"multi-case-tail");
+    for (pin, expected) in [(distinct_pin(40, ah[2]), &a), (distinct_pin(50, bh[2]), &b), (distinct_pin(60, ch[0]), &c)] {
+        let checked = check_case_journal_links_v2(&reopened, pin, chain_limits()).unwrap();
+        let mut visited = Vec::new();
+        checked
+            .visit_forward(&reopened, |view| {
+                assert_eq!(view.header().case, pin.case);
+                assert_eq!(view.header().scope, pin.scope);
+                assert_eq!(view.header().result, pin.result);
+                visited.push(view.raw_bytes().to_vec());
+                Ok::<_, ()>(())
+            })
+            .unwrap();
+        assert_eq!(&visited, expected);
+    }
+    assert!(reopened.with_positive_journal_record_v2(ch[0].head, 4096, |raw| raw == c[0]).unwrap());
+}
+
+#[test]
+fn multi_case_missing_or_corrupt_predecessor_rejects_the_whole_batch() {
+    let (_life, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+    let mut store = DbPalwStateV2Store::new(db.clone(), CachePolicy::Count(4));
+    let (a, ah) = distinct_fixture(40, 2);
+    let (b, bh) = distinct_fixture(50, 2);
+    let (c, ch) = distinct_fixture(60, 1);
+    let initial = delta(vec![
+        distinct_case_entry(40, None, 1),
+        distinct_head_entry(None, ah[0]),
+        distinct_case_entry(50, None, 1),
+        distinct_head_entry(None, bh[0]),
+        distinct_case_entry(60, None, 1),
+        distinct_head_entry(None, ch[0]),
+    ]);
+    let mut seed = WriteBatch::default();
+    seed.put([223, 0x49], b"multi-case-parent");
+    let (_, ticket) = store.stage_positive_case_journal_batch_v2(&mut seed, &initial, &[&a[0], &b[0], &c[0]], limits()).unwrap();
+    db.write(seed).unwrap();
+    drop(ticket);
+    let tail = delta(vec![
+        distinct_head_entry(Some(bh[0]), bh[1]),
+        distinct_case_entry(40, Some(1), 2),
+        distinct_case_entry(50, Some(1), 2),
+        distinct_head_entry(Some(ah[0]), ah[1]),
+    ]);
+    // Missing, truncated, then a valid foreign-case record under B's head key.
+    for bad in [None, Some(&b[0][..10]), Some(a[0].as_slice())] {
+        let mut damage = WriteBatch::default();
+        if let Some(raw) = bad {
+            damage.put(journal_key(bh[0].head), raw);
+        } else {
+            damage.delete(journal_key(bh[0].head));
+        }
+        db.write(damage).unwrap();
+        let mut batch = WriteBatch::default();
+        batch.put([223, 0x49], b"uncommitted-tail");
+        batch.put(b"caller", b"unchanged");
+        let before = batch.data().to_vec();
+        assert!(matches!(
+            store.stage_positive_case_journal_batch_v2(&mut batch, &tail, &[&b[1], &a[1]], limits()),
+            Err(StoreError::DataInconsistency(_))
+        ));
+        assert_eq!(batch.data(), before);
+        let cloned = store.clone();
+        let fresh = DbPalwStateV2Store::new(db.clone(), CachePolicy::Empty);
+        for reader in [&store, &cloned, &fresh] {
+            assert!(matches!(reader.with_positive_journal_record_v2(ah[1].head, 4096, |_| ()), Err(StoreError::KeyNotFound(_))));
+            assert!(matches!(reader.with_positive_journal_record_v2(bh[1].head, 4096, |_| ()), Err(StoreError::KeyNotFound(_))));
+            assert!(reader.with_positive_journal_record_v2(ah[0].head, 4096, |raw| raw == a[0]).unwrap());
+            assert!(reader.with_positive_journal_record_v2(ch[0].head, 4096, |raw| raw == c[0]).unwrap());
+        }
+        assert_eq!(db.get([223, 0x49]).unwrap().unwrap(), b"multi-case-parent");
+        assert!(db.get(b"caller").unwrap().is_none());
+    }
+}
+
+#[test]
+fn multi_case_abandoned_batch_keeps_clone_and_fresh_readers_unpublished() {
+    let (_life, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+    let mut store = DbPalwStateV2Store::new(db.clone(), CachePolicy::Count(4));
+    let (a, ah) = distinct_fixture(40, 1);
+    let (b, bh) = distinct_fixture(50, 1);
+    let initial = delta(vec![
+        distinct_case_entry(40, None, 1),
+        distinct_head_entry(None, ah[0]),
+        distinct_case_entry(50, None, 1),
+        distinct_head_entry(None, bh[0]),
+    ]);
+    let mut abandoned = WriteBatch::default();
+    abandoned.put([223, 0x49], b"never-committed");
+    let (_, ticket) = store.stage_positive_case_journal_batch_v2(&mut abandoned, &initial, &[&b[0], &a[0]], limits()).unwrap();
+    let cloned = store.clone();
+    let fresh = DbPalwStateV2Store::new(db.clone(), CachePolicy::Empty);
+    let require_unpublished = || {
+        for reader in [&store, &cloned, &fresh] {
+            for head in [ah[0].head, bh[0].head] {
+                assert!(matches!(reader.with_positive_journal_record_v2(head, 4096, |_| ()), Err(StoreError::KeyNotFound(_))));
+            }
+        }
+        assert!(db.get([223, 0x49]).unwrap().is_none());
+    };
+    require_unpublished();
+    drop(abandoned);
+    drop(ticket);
+    require_unpublished();
+}

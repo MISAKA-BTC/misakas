@@ -49,6 +49,11 @@ legacy-bench = ["node", "dep:misaka-palw-base0"]
 cc.workspace = true
 
 [dev-dependencies]
+# Real native journal-store restart fixtures only; no consensus dependency is
+# added to the executor library or to the consensus computation checker.
+kaspa-consensus.workspace = true
+kaspa-database.workspace = true
+rocksdb.workspace = true
 misaka-palw-positive-accounting.workspace = true
 # The golden vectors carry each primitive as its canonical Borsh encoding.
 borsh.workspace = true

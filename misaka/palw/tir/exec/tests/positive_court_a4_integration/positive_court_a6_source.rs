@@ -13,6 +13,9 @@ use kaspa_consensus_core::{
 };
 use misaka_palw_positive_contract::rows::AggregateUsage;
 
+#[path = "positive_court_a6_db_replay.rs"]
+mod real_db_replay;
+
 fn geometry(s: &Scenario) -> TirSourceGeometryV2 {
     let binding = &s.f.binding;
     let (registered, _) = palw_tir_class_record_v1(&binding.class, &binding.artifact_root).unwrap();
