@@ -3725,11 +3725,12 @@ impl PalwChainStateV2 {
                 let rcore = &claim.rcore;
                 let one = params.model_panel_one_governs_v1(claim.accepted_daa);
                 let tagged_one = rcore.licence_door == Some(crate::palw_economic_safety_v1::PalwLicenceDoorTagV1::G14PanelOne);
+                let missing_required_tag = one
+                    && !tagged_one
+                    && (rcore.licence_door.is_some()
+                        || matches!(claim.phase, PalwClaimPhaseV2::ReceiptLicensed { .. } | PalwClaimPhaseV2::Final { .. }));
                 if tagged_one && !one
-                    || one && rcore.licence_door.is_some() && !tagged_one
-                    || one
-                        && matches!(claim.phase, PalwClaimPhaseV2::ReceiptLicensed { .. } | PalwClaimPhaseV2::Final { .. })
-                        && !tagged_one
+                    || missing_required_tag
                     || tagged_one && (rcore.basis_k != 1 || rcore.served_mask != 1 || rcore.unserved_seen || rcore.escrow_released)
                     || one && self.panels.get(id).is_some_and(|panel| panel.seats.len() != 1)
                 {

@@ -112,7 +112,7 @@ pub fn model_claim_panel_v1(
     historical: &PalwPanelParamsV2,
 ) -> Result<PalwPanelParamsV2, PalwPanelV2Error> {
     match model_claim_route_v1(from_daa, accepted_daa) {
-        PalwModelClaimRouteV1::HistoricalPanel => Ok(historical.clone()),
+        PalwModelClaimRouteV1::HistoricalPanel => Ok(*historical),
         PalwModelClaimRouteV1::G14PanelOne => PalwPanelParamsV2::new(1, 1, historical.anchor_delay()),
     }
 }
