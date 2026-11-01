@@ -161,10 +161,10 @@ impl<'a> CloseGeometry<'a> {
         }
     }
     pub(crate) fn guard_allocation(self, count: u64) -> Result<(), String> {
-        if let Self::Wide { allocation_cap, .. } = self {
-            if count > allocation_cap || count > u64::from(u32::MAX) || usize::try_from(count).is_err() {
-                return Err(crate::palw_tir_close_size_v1::PALW_TIR_CLOSE_SIZING_OVER_CAP_V1.into());
-            }
+        if let Self::Wide { allocation_cap, .. } = self
+            && (count > allocation_cap || count > u64::from(u32::MAX) || usize::try_from(count).is_err())
+        {
+            return Err(crate::palw_tir_close_size_v1::PALW_TIR_CLOSE_SIZING_OVER_CAP_V1.into());
         }
         Ok(())
     }
