@@ -1,0 +1,8 @@
+
+running 8 tests
+test pipeline::virtual_processor::tests::tir_wide_registration_e2e::hf3::retained_pythia_70m_native_registration ... ignored, requires parent execution grant; retained model read, one model invocation at a time
+test pipeline::virtual_processor::tests::tir_wide_registration_e2e::hf3::retained_smollm2_135m_native_registration ... ignored, requires parent execution grant; retained model read, one model invocation at a time
+test pipeline::virtual_processor::tests::tir_wide_registration_e2e::hf3::retained_smollm2_360m_native_registration ... ignored, requires parent execution grant; retained model read, one model invocation at a time
+test pipeline::virtual_processor::tests::tir_wide_registration_e2e::isolated_wide_carrier_origin_matches_actual_accepting_block_and_survives_same_db_restore ... 
+thread 'pipeline::virtual_processor::tests::tir_wide_registration_e2e::isolated_wide_carrier_origin_matches_actual_accepting_block_and_survives_same_db_restore' (4476139) has overflowed its stack
+fatal runtime error: stack overflow, aborting

@@ -1,0 +1,13 @@
+
+running 8 tests
+test pipeline::virtual_processor::tests::tir_wide_registration_e2e::hf3::retained_pythia_70m_native_registration ... ignored, requires parent execution grant; retained model read, one model invocation at a time
+test pipeline::virtual_processor::tests::tir_wide_registration_e2e::hf3::retained_smollm2_135m_native_registration ... ignored, requires parent execution grant; retained model read, one model invocation at a time
+test pipeline::virtual_processor::tests::tir_wide_registration_e2e::hf3::retained_smollm2_360m_native_registration ... ignored, requires parent execution grant; retained model read, one model invocation at a time
+test pipeline::virtual_processor::tests::tir_wide_registration_e2e::isolated_wide_carrier_origin_matches_actual_accepting_block_and_survives_same_db_restore ... ok
+test pipeline::virtual_processor::tests::tir_wide_registration_e2e::wide_registration_invalid_bond_signature_or_target_still_spends_only_the_valid_carrier ... ok
+test pipeline::virtual_processor::tests::tir_wide_registration_e2e::wide_registration_one_per_block_cap_preserves_both_real_carrier_utxo_acceptances ... ok
+test pipeline::virtual_processor::tests::tir_wide_registration_e2e::wide_registration_real_carrier_replays_and_rolls_back_across_a_reorg ... ok
+test pipeline::virtual_processor::tests::tir_wide_registration_e2e::wide_registration_restarts_from_the_same_real_database ... ok
+
+test result: ok. 5 passed; 0 failed; 3 ignored; 0 measured; 1252 filtered out; finished in 1.85s
+

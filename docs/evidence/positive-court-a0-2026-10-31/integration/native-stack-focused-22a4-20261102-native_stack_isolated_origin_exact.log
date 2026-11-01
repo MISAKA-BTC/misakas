@@ -1,0 +1,18 @@
+
+running 1 test
+test pipeline::virtual_processor::tests::tir_wide_registration_e2e::isolated_wide_carrier_origin_matches_actual_accepting_block_and_survives_same_db_restore ... FAILED
+
+failures:
+
+---- pipeline::virtual_processor::tests::tir_wide_registration_e2e::isolated_wide_carrier_origin_matches_actual_accepting_block_and_survives_same_db_restore stdout ----
+
+thread 'pipeline::virtual_processor::tests::tir_wide_registration_e2e::isolated_wide_carrier_origin_matches_actual_accepting_block_and_survives_same_db_restore' (4584578) panicked at consensus/src/pipeline/virtual_processor/processor.rs:5945:25:
+the bundle's genesis registrations must apply — validate_palw_v2 ran them at construction: immutable model registration rejects class registration origin needs the kernel-route aux store (aux 141); register an independent model (ADR-0175)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    pipeline::virtual_processor::tests::tir_wide_registration_e2e::isolated_wide_carrier_origin_matches_actual_accepting_block_and_survives_same_db_restore
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1259 filtered out; finished in 0.25s
+
