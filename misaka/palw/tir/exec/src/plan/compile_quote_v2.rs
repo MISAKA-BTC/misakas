@@ -238,8 +238,10 @@ impl PreparedTirPlanCompileV2<'_> {
     pub fn quote(&self) -> &TirPlanCompileQuoteV2 {
         &self.quote
     }
-    /// Caller retains the actual startup host guard acquired from quote() before
-    /// entry. This owner is logical data and does not fabricate a lease itself.
+    /// Caller admits the complete logical startup peak before entry and retains
+    /// any host guard its configured policy requires. This method neither
+    /// enforces that caller obligation nor fabricates a lease. Loaded supplies
+    /// the aggregate logical allowance and optional existing host reservation.
     pub fn compile(self) -> Result<LocalCompiledTirPlanV2> {
         match TirPlan::compile(self.source.program()) {
             Ok(plan) => Ok(LocalCompiledTirPlanV2 { plan, quote: self.quote }),
@@ -276,7 +278,6 @@ impl LocalCompiledTirPlanV2 {
     }
     /// For the same-crate Loaded/Prepared bridge only. Native execution, fusion,
     /// refinement and exports require their own separately admitted stages.
-    #[allow(dead_code)] // Loaded aggregate integration is a separate draft.
     pub(crate) fn plan(&self) -> &TirPlan {
         &self.plan
     }
@@ -345,8 +346,9 @@ fn program_clone_heap(p: &TirProgramV1) -> Result<u64> {
 /// Returned plan root+all retained heaps are charged alongside SUM of named
 /// temporary phases, even where a MAX could be tighter. Old realloc/allocator
 /// internals and optimized stack frames are outside logical request accounting.
-/// A caller must acquire/retain its actual startup host guard BEFORE calling
-/// unchanged TirPlan::compile(source.program()). Subsequent public-plan mutation,
+/// A caller must admit the logical peak and retain any configured host guard
+/// BEFORE unchanged TirPlan::compile(source.program()). This helper alone does
+/// not enforce a host lease. Subsequent public-plan mutation,
 /// clones, refine/fused_regions/Params/executor/source loading need new contracts.
 pub fn quote_tir_plan_compile_v2(source: &LocalSourceProgramOwnerV1, limits: TirPlanCompileLimitsV2) -> Result<TirPlanCompileQuoteV2> {
     if limits.max_quote_visits == 0

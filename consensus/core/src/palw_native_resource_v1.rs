@@ -47,7 +47,7 @@ pub use ledger_expansion::{ReservedKernelLedgerV1, inventory_ledger_expansion_v1
 pub(crate) use ledger_expansion::{ledger_cache_clone_v1, reserve_ledger_expansion_v1};
 pub use source_local::{
     LocalScanWorkBudgetV1, LocalSourceProgramOwnerV1, ScannedSourceProgramLocalV1, SourceProgramLocalErrorV1,
-    SourceProgramLocalLimitsV1, SourceProgramLocalQuoteV1, scan_source_program_local_v1,
+    SourceProgramLocalLimitsV1, SourceProgramLocalQuoteV1, require_source_program_local_profile_v1, scan_source_program_local_v1,
 };
 pub(crate) use tir::{NativeTirShardWorkspaceV1, TirNativeRequestsV1, reserve_native_tir_shard_workspace_v1};
 pub use tir::{decode_native_tir_program_v1, growing_vec_request_capacity_v1};

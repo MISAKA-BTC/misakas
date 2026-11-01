@@ -86,6 +86,15 @@ fn supported_build() -> bool {
     )) && matches!(option_env!("MISAKA_SOURCE_LOCAL_BUILD_PROFILE_V1"), Some("rust-1.93.0-borsh-1.5.1-v1"))
 }
 
+/// Require the private audited Source build profile without parsing bytes,
+/// allocating diagnostics, consuming scanner work or granting native authority.
+/// Owner-local startup uses this before its native-File diagnostic census.
+/// It is not a caller-supplied support boolean or installed-source attestation.
+/// The scanner independently checks the same private profile on every attempt.
+pub fn require_source_program_local_profile_v1() -> std::result::Result<(), SourceProgramLocalErrorV1> {
+    if supported_build() { Ok(()) } else { Err(Error::UnsupportedCoverage) }
+}
+
 /// Persistent logical accounting across attempts, including failures and retries.
 /// Observations are evidence, not another debit or a refund of precharged work.
 /// This owner is deliberately neither Clone nor Copy and offers no reset.
