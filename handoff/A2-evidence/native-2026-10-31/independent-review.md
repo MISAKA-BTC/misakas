@@ -343,3 +343,13 @@ c5599378993fc1824cd4b72bfac984b0b20bc5adb3d600ea10f2d3ee453de0ea  consensus/core
 ```
 
 Root validation note, 2026-11-01: the source-journal helper reviewed above was committed byte-identically in `b4499397f`. The subsequent fixed-source runner reports record remote library 251 passed/one existing ignored, focused source/geometry 37 passed, shared case-journal 9 passed, default-off library 176 passed/one existing ignored and client metadata exit zero (seven dead-code warnings for the unconnected private callsite). These are parent-run command results, not agent-executed tests or actual native authority. Source/log digests were rechecked against the current files before this note.
+
+## Full source replay test review — candidate 416bdba72
+
+Read-only independent review of the three new tests in `consensus/core/src/palw_positive_source_geometry_v2/independent_source_ledger.rs`; source SHA-256 `04289409d0d63d2f4b976bb6fac2b54107791d26f9c11be08cd28af2cdc92e5c`, matching the committed file. No concrete defect was found. Review did not run Cargo and is not runtime evidence.
+
+The all-unit fixture uses fixed independent expectations: four artifact units of four raw bytes, Merkle input tiles of 128/128/4 bytes, seven first receipts at the explicit test price three, and two fresh source rounds. Receipt comparisons specify the referenced request, accepted response, provider and raw byte count. Exact replay equality alone is not used as the expected answer. The same-RequestId delivery is excluded from this meaningful source slice; NoOp classification is exercised by the pre-existing separate regression.
+
+The missing-response checks begin only after every source request is established. Both a missing tail and a middle gap leave Pending obligations, reject a saved Complete Case refresh and reject the next source event through history completeness; usage, receipts, history and the pre-existing prepared revision remain unchanged. The instance check reconstructs identical full history/Case/usage/receipts into a fresh ledger before rejecting the prior instance's prepared update and accepting only its own.
+
+These fixtures authenticate source opening bytes and test signatures, not the omitted admission, complete Case/DB chain, native roles or a current-view capability. Native reservation protection, qualified settlement and production source duty remain unprovided. Runtime execution is currently held pending A0/A4's build slot; no new heavy build was launched for this review.
