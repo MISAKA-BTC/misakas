@@ -231,18 +231,77 @@ fn shape_error(error: io::Error) -> NativeCoverageV1 {
     NativeCoverageV1::unsupported::<KernelLedgerV1>("actual persisted ledger codec", &error.to_string())
 }
 
+/// Fixed-size local observations, never a supplied allocation authority.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct SourceProgramScanObservationV1 {
+    readers: [SourceProgramReaderObservationV1; 4],
+    overflowed: bool,
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct SourceProgramReaderObservationV1 {
+    started: bool,
+    steps: u64,
+    reader_bytes: u64,
+}
+impl SourceProgramScanObservationV1 {
+    fn record_v1(&mut self, pass: usize, initial: u64, remaining: u64, steps: u64) {
+        let Some(reader) = self.readers.get_mut(pass) else {
+            self.overflowed = true;
+            return;
+        };
+        let Some(reader_bytes) = initial.checked_sub(remaining) else {
+            self.overflowed = true;
+            return;
+        };
+        if reader.started {
+            self.overflowed = true;
+            return;
+        }
+        *reader = SourceProgramReaderObservationV1 { started: true, steps, reader_bytes };
+    }
+    pub(crate) fn totals_v1(&self) -> Option<(u64, u64, u8)> {
+        if self.overflowed {
+            return None;
+        }
+        self.readers.iter().try_fold((0u64, 0u64, 0u8), |(steps, bytes, count), reader| {
+            Some((
+                steps.checked_add(reader.steps)?,
+                bytes.checked_add(reader.reader_bytes)?,
+                count.checked_add(u8::from(reader.started))?,
+            ))
+        })
+    }
+    pub(crate) fn complete_v1(&self) -> bool {
+        matches!(self.totals_v1(), Some((_, _, 4)))
+    }
+}
+
 fn nested_blob<T: NativeWireScanV1, R: Read>(reader: &mut NativeWireReaderV1<R>, cap: u64) -> io::Result<NativeWireShapeV1> {
+    nested_blob_source_port_v1::<T, R>(reader, cap, None)
+}
+fn nested_blob_source_port_v1<T: NativeWireScanV1, R: Read>(
+    reader: &mut NativeWireReaderV1<R>,
+    cap: u64,
+    observed: Option<&mut SourceProgramScanObservationV1>,
+) -> io::Result<NativeWireShapeV1> {
     let bytes = reader.word()? as u64;
     if bytes > cap || bytes > reader.remaining() {
         return Err(wire::wire_bad("nested ledger codec exceeds exact frame/cap"));
     }
     let mut frame = NativeWireReaderV1::new((&mut *reader).take(bytes), bytes);
-    let shape = T::scan_native_wire_v1(&mut frame)?;
-    if frame.remaining() != 0 {
-        return Err(wire::wire_bad("nested ledger codec trailing bytes"));
+    let result = (|| {
+        let shape = T::scan_native_wire_v1(&mut frame)?;
+        if frame.remaining() != 0 {
+            return Err(wire::wire_bad("nested ledger codec trailing bytes"));
+        }
+        shape.allocation(bytes.checked_mul(2).ok_or_else(|| wire::wire_bad("nested byte Vec overflow"))?, 1)
+    })();
+    if let Some(observed) = observed {
+        observed.record_v1(1, bytes, frame.remaining(), frame.observed_steps_v1());
     }
-    shape.allocation(bytes.checked_mul(2).ok_or_else(|| wire::wire_bad("nested byte Vec overflow"))?, 1)
+    result
 }
+
 impl NativeWireScanV1 for misaka_palw_kernel::state::ClassRecordV1 {
     fn scan_native_wire_v1<R: Read>(r: &mut NativeWireReaderV1<R>) -> io::Result<NativeWireShapeV1> {
         <[u8; 64]>::scan_native_wire_v1(r)?;
@@ -373,6 +432,13 @@ pub(crate) fn ledger_cache_clone_v1(ledger: &KernelLedgerV1) -> Result<ReservedK
 /// Each cone has at most N nodes and N*MAX_NODE_INPUTS distinct operand leaves;
 /// all cone and state closures are therefore a checked typed quadratic sum.
 fn program_blob<T: NativeWireScanV1, R: Read>(r: &mut NativeWireReaderV1<R>, cap: u64) -> io::Result<NativeWireShapeV1> {
+    program_blob_source_port_v1::<T, R>(r, cap, None)
+}
+fn program_blob_source_port_v1<T: NativeWireScanV1, R: Read>(
+    r: &mut NativeWireReaderV1<R>,
+    cap: u64,
+    observed: Option<&mut SourceProgramScanObservationV1>,
+) -> io::Result<NativeWireShapeV1> {
     use misaka_palw_kernel::plan::{PlanRelationV1, StateBoundaryV1};
     use misaka_palw_tir::{
         admit::{ConeV1, CostV1, LeafV1, StateCkptV1},
@@ -382,7 +448,7 @@ fn program_blob<T: NativeWireScanV1, R: Read>(r: &mut NativeWireReaderV1<R>, cap
         validate::BlockInfo,
     };
     let before = r.remaining();
-    let mut shape = nested_blob::<T, R>(r, cap)?;
+    let mut shape = nested_blob_source_port_v1::<T, R>(r, cap, observed)?;
     let encoded = before
         .checked_sub(r.remaining())
         .and_then(|n| n.checked_sub(4))
@@ -458,74 +524,94 @@ struct StepSpaceShapeV1 {
     params: u64,
 }
 fn step_space_shape_v1(bytes: &[u8]) -> io::Result<StepSpaceShapeV1> {
+    step_space_shape_source_port_v1(bytes, None)
+}
+fn step_space_shape_source_port_v1(
+    bytes: &[u8],
+    observed: Option<&mut SourceProgramScanObservationV1>,
+) -> io::Result<StepSpaceShapeV1> {
     use misaka_palw_tir::{
         program::{ConstDecl, Node, ParamDecl},
         types::{DType, TensorType},
     };
     let mut r = NativeWireReaderV1::new(bytes, bytes.len() as u64);
-    if r.short()? != misaka_palw_tir::program::TIR_PROGRAM_VERSION_V1 {
-        return Err(wire::wire_bad("unknown TIR program version for StepSpace shape"));
-    }
-    r.skip(64 + 4 + 4)?;
-    let mut out =
-        StepSpaceShapeV1 { blocks: 0, nodes: 0, layers: 0, fixed_global: 0, fixed_layer: 0, hist_global: 0, hist_layer: 0, params: 0 };
-    out.params = u64::from(r.word()?);
-    for _ in 0..out.params {
-        ParamDecl::scan_native_wire_v1(&mut r)?;
-    }
-    let constants = r.word()?;
-    for _ in 0..constants {
-        ConstDecl::scan_native_wire_v1(&mut r)?;
-    }
-    let states = r.word()?;
-    for _ in 0..states {
-        String::scan_native_wire_v1(&mut r)?;
-        let fixed = match r.byte()? {
-            0 => {
-                r.skip(16)?;
-                true
-            }
-            1 => {
-                r.skip(4)?;
-                false
-            }
-            _ => return Err(wire::wire_bad("unknown state kind for StepSpace shape")),
-        };
-        DType::scan_native_wire_v1(&mut r)?;
-        Vec::<u32>::scan_native_wire_v1(&mut r)?;
-        let per_layer = match r.byte()? {
-            0 => false,
-            1 => true,
-            _ => return Err(wire::wire_bad("invalid state per_layer boolean")),
-        };
-        let count = match (fixed, per_layer) {
-            (true, false) => &mut out.fixed_global,
-            (true, true) => &mut out.fixed_layer,
-            (false, false) => &mut out.hist_global,
-            (false, true) => &mut out.hist_layer,
-        };
-        *count = count.checked_add(1).ok_or_else(|| wire::wire_bad("StepSpace state count overflow"))?;
-    }
-    out.blocks = u64::from(r.word()?);
-    for _ in 0..out.blocks {
-        String::scan_native_wire_v1(&mut r)?;
-        Vec::<TensorType>::scan_native_wire_v1(&mut r)?;
-        let nodes = u64::from(r.word()?);
-        out.nodes = out.nodes.checked_add(nodes).ok_or_else(|| wire::wire_bad("StepSpace node count overflow"))?;
-        for _ in 0..nodes {
-            Node::scan_native_wire_v1(&mut r)?;
+    let result = (|| {
+        if r.short()? != misaka_palw_tir::program::TIR_PROGRAM_VERSION_V1 {
+            return Err(wire::wire_bad("unknown TIR program version for StepSpace shape"));
         }
-        Vec::<u16>::scan_native_wire_v1(&mut r)?;
+        r.skip(64 + 4 + 4)?;
+        let mut out = StepSpaceShapeV1 {
+            blocks: 0,
+            nodes: 0,
+            layers: 0,
+            fixed_global: 0,
+            fixed_layer: 0,
+            hist_global: 0,
+            hist_layer: 0,
+            params: 0,
+        };
+        out.params = u64::from(r.word()?);
+        for _ in 0..out.params {
+            ParamDecl::scan_native_wire_v1(&mut r)?;
+        }
+        let constants = r.word()?;
+        for _ in 0..constants {
+            ConstDecl::scan_native_wire_v1(&mut r)?;
+        }
+        let states = r.word()?;
+        for _ in 0..states {
+            String::scan_native_wire_v1(&mut r)?;
+            let fixed = match r.byte()? {
+                0 => {
+                    r.skip(16)?;
+                    true
+                }
+                1 => {
+                    r.skip(4)?;
+                    false
+                }
+                _ => return Err(wire::wire_bad("unknown state kind for StepSpace shape")),
+            };
+            DType::scan_native_wire_v1(&mut r)?;
+            Vec::<u32>::scan_native_wire_v1(&mut r)?;
+            let per_layer = match r.byte()? {
+                0 => false,
+                1 => true,
+                _ => return Err(wire::wire_bad("invalid state per_layer boolean")),
+            };
+            let count = match (fixed, per_layer) {
+                (true, false) => &mut out.fixed_global,
+                (true, true) => &mut out.fixed_layer,
+                (false, false) => &mut out.hist_global,
+                (false, true) => &mut out.hist_layer,
+            };
+            *count = count.checked_add(1).ok_or_else(|| wire::wire_bad("StepSpace state count overflow"))?;
+        }
+        out.blocks = u64::from(r.word()?);
+        for _ in 0..out.blocks {
+            String::scan_native_wire_v1(&mut r)?;
+            Vec::<TensorType>::scan_native_wire_v1(&mut r)?;
+            let nodes = u64::from(r.word()?);
+            out.nodes = out.nodes.checked_add(nodes).ok_or_else(|| wire::wire_bad("StepSpace node count overflow"))?;
+            for _ in 0..nodes {
+                Node::scan_native_wire_v1(&mut r)?;
+            }
+            Vec::<u16>::scan_native_wire_v1(&mut r)?;
+        }
+        r.byte()?; // schedule.pre
+        out.layers = u64::from(r.word()?);
+        r.skip(out.layers)?;
+        r.byte()?; // schedule.post
+        r.skip(2 + 64)?; // logits and logits scheme
+        if r.remaining() != 0 {
+            return Err(wire::wire_bad("StepSpace shape trailing bytes"));
+        }
+        Ok(out)
+    })();
+    if let Some(observed) = observed {
+        observed.record_v1(2, bytes.len() as u64, r.remaining(), r.observed_steps_v1());
     }
-    r.byte()?; // schedule.pre
-    out.layers = u64::from(r.word()?);
-    r.skip(out.layers)?;
-    r.byte()?; // schedule.post
-    r.skip(2 + 64)?; // logits and logits scheme
-    if r.remaining() != 0 {
-        return Err(wire::wire_bad("StepSpace shape trailing bytes"));
-    }
-    Ok(out)
+    result
 }
 
 /// Borrowed scanner output only. No public fields/constructor: a caller cannot
@@ -556,30 +642,66 @@ impl NativeTirProgramShapeV1 {
 /// Same audited program codec/analysis walk used by ledger restoration.
 /// The stack prefix supplies framing; actual bytes are scanned without a copy.
 pub(crate) fn standalone_tir_program_shape_v1(bytes: &[u8]) -> io::Result<NativeTirProgramShapeV1> {
+    standalone_tir_program_shape_source_port_v1(bytes, None)
+}
+fn standalone_tir_program_shape_source_port_v1(
+    bytes: &[u8],
+    mut observed: Option<&mut SourceProgramScanObservationV1>,
+) -> io::Result<NativeTirProgramShapeV1> {
     let len = u32::try_from(bytes.len()).map_err(|_| wire::wire_bad("TIR program frame exceeds u32"))?;
     let prefix = len.to_le_bytes();
     let source = std::io::Cursor::new(prefix).chain(bytes);
     let mut reader = NativeWireReaderV1::new(source, u64::from(len) + 4);
-    let shape = program_blob::<misaka_palw_tir::TirProgramV1, _>(&mut reader, misaka_palw_tir::program::MAX_PROGRAM_BYTES as u64)?;
-    if reader.remaining() != 0 {
-        return Err(wire::wire_bad("standalone TIR program trailing bytes"));
+    let result = (|| {
+        let shape = program_blob_source_port_v1::<misaka_palw_tir::TirProgramV1, _>(
+            &mut reader,
+            misaka_palw_tir::program::MAX_PROGRAM_BYTES as u64,
+            observed.as_deref_mut(),
+        )?;
+        if reader.remaining() != 0 {
+            return Err(wire::wire_bad("standalone TIR program trailing bytes"));
+        }
+        let program_requests = shape
+            .heap
+            .checked_add(size_of::<NativeRetainedV1<misaka_palw_tir::TirProgramV1>>() as u64)
+            .ok_or_else(|| wire::wire_bad("standalone TIR owner framing overflow"))?;
+        // Vec<u8> is tracked separately by the existing wire scanner. Include it:
+        // in particular schedule.layers is byte-valued and still bounds occurrences.
+        let structural_items = shape
+            .collection_entries
+            .checked_add(shape.byte_entries)
+            .ok_or_else(|| wire::wire_bad("TIR structural item count overflow"))?;
+        Ok(NativeTirProgramShapeV1 {
+            program_requests,
+            structural_items,
+            step_space: match observed.as_deref_mut() {
+                Some(observed) => step_space_shape_source_port_v1(bytes, Some(observed))?,
+                None => step_space_shape_v1(bytes)?,
+            },
+        })
+    })();
+    if let Some(observed) = observed {
+        observed.record_v1(0, u64::from(len) + 4, reader.remaining(), reader.observed_steps_v1());
     }
-    let program_requests = shape
-        .heap
-        .checked_add(size_of::<NativeRetainedV1<misaka_palw_tir::TirProgramV1>>() as u64)
-        .ok_or_else(|| wire::wire_bad("standalone TIR owner framing overflow"))?;
-    // Vec<u8> is tracked separately by the existing wire scanner. Include it:
-    // in particular schedule.layers is byte-valued and still bounds occurrences.
-    let structural_items = shape
-        .collection_entries
-        .checked_add(shape.byte_entries)
-        .ok_or_else(|| wire::wire_bad("TIR structural item count overflow"))?;
-    Ok(NativeTirProgramShapeV1 { program_requests, structural_items, step_space: step_space_shape_v1(bytes)? })
+    result
 }
+
 /// Source-only decoded-program + normal-form validator profile. The general
 /// program/gate/ledger profile above deliberately keeps its wider semantics.
 /// Source executes neither court cone/range analysis nor gate price unrolling.
 pub(crate) fn source_tir_program_shape_v1(bytes: &[u8]) -> Result<(NativeTirProgramShapeV1, u64), NativeDecodeErrorV1<String>> {
+    source_tir_program_shape_source_port_v1(bytes, None)
+}
+pub(crate) fn source_tir_program_shape_observed_v1(
+    bytes: &[u8],
+    observed: &mut SourceProgramScanObservationV1,
+) -> Result<(NativeTirProgramShapeV1, u64), NativeDecodeErrorV1<String>> {
+    source_tir_program_shape_source_port_v1(bytes, Some(observed))
+}
+fn source_tir_program_shape_source_port_v1(
+    bytes: &[u8],
+    mut observed: Option<&mut SourceProgramScanObservationV1>,
+) -> Result<(NativeTirProgramShapeV1, u64), NativeDecodeErrorV1<String>> {
     use super::typed::BTreeNodeEnvelopeV1 as Tree;
     use misaka_palw_tir::{
         program::{MAX_CARRY, MAX_NODE_INPUTS, TirProgramV1},
@@ -601,9 +723,13 @@ pub(crate) fn source_tir_program_shape_v1(bytes: &[u8]) -> Result<(NativeTirProg
     };
     // Existing complete versioned scanner and metadata authority; no decoded
     // caller count, alternate grammar or hand-selected program subset.
-    let shape = standalone_tir_program_shape_v1(bytes).map_err(decode)?;
+    let shape = standalone_tir_program_shape_source_port_v1(bytes, observed.as_deref_mut()).map_err(decode)?;
     let mut r = NativeWireReaderV1::new(bytes, bytes.len() as u64);
-    let raw = TirProgramV1::scan_native_wire_v1(&mut r).map_err(decode)?;
+    let result = TirProgramV1::scan_native_wire_v1(&mut r);
+    if let Some(observed) = observed {
+        observed.record_v1(3, bytes.len() as u64, r.remaining(), r.observed_steps_v1());
+    }
+    let raw = result.map_err(decode)?;
     if r.remaining() != 0 {
         return Err(NativeDecodeErrorV1::Decode("Source program shape trailing bytes".into()));
     }
@@ -661,6 +787,59 @@ pub(crate) fn source_tir_program_shape_v1(bytes: &[u8]) -> Result<(NativeTirProg
         q.vec_v1::<u8>(diagnostic).map_err(NativeDecodeErrorV1::Resource)?;
     }
     Ok((shape, q.bytes_v1()))
+}
+
+#[cfg(test)]
+mod source_scan_observation_tests_v1 {
+    use super::*;
+
+    #[test]
+    fn failed_step_increments_and_refused_skip_observes_no_bytes() {
+        let mut reader = NativeWireReaderV1::new(&[][..], 0);
+        for _ in 0..4096 {
+            reader.step().unwrap();
+        }
+        assert_eq!(reader.step().unwrap_err().kind(), io::ErrorKind::TimedOut);
+        assert_eq!(reader.observed_steps_v1(), 4097);
+        let mut observed = SourceProgramScanObservationV1::default();
+        observed.record_v1(0, 0, reader.remaining(), reader.observed_steps_v1());
+        assert_eq!(observed.totals_v1(), Some((4097, 0, 1)));
+
+        let mut reader = NativeWireReaderV1::new(&[1u8, 2][..], 2);
+        assert!(reader.skip(3).is_err());
+        let mut observed = SourceProgramScanObservationV1::default();
+        observed.record_v1(1, 2, reader.remaining(), reader.observed_steps_v1());
+        assert_eq!(observed.totals_v1(), Some((0, 0, 1)));
+        let mut four = [0u8; 4];
+        assert_eq!(reader.read_exact(&mut four).unwrap_err().kind(), io::ErrorKind::UnexpectedEof);
+        let mut partial = SourceProgramScanObservationV1::default();
+        partial.record_v1(1, 2, reader.remaining(), reader.observed_steps_v1());
+        assert_eq!(partial.totals_v1(), Some((0, 2, 1)));
+        partial.record_v1(1, 2, reader.remaining(), reader.observed_steps_v1());
+        assert_eq!(partial.totals_v1(), None); // Duplicate pass is a coverage error.
+    }
+
+    #[test]
+    fn observed_memory_port_keeps_legacy_error_kind_and_text() {
+        let mut malformed = vec![0u8; 82];
+        malformed[..2].copy_from_slice(&misaka_palw_tir::program::TIR_PROGRAM_VERSION_V1.to_le_bytes());
+        // One parameter, whose claimed name exceeds this actual remaining frame.
+        malformed[74..78].copy_from_slice(&1u32.to_le_bytes());
+        malformed[78..82].copy_from_slice(&u32::MAX.to_le_bytes());
+        for bytes in [&[][..], &[1u8][..], malformed.as_slice()] {
+            let legacy = source_tir_program_shape_v1(bytes).unwrap_err();
+            let mut observed = SourceProgramScanObservationV1::default();
+            let local = source_tir_program_shape_observed_v1(bytes, &mut observed).unwrap_err();
+            match (legacy, local) {
+                (NativeDecodeErrorV1::Decode(a), NativeDecodeErrorV1::Decode(b)) => assert_eq!(a, b),
+                (NativeDecodeErrorV1::Resource(a), NativeDecodeErrorV1::Resource(b)) => assert_eq!(a, b),
+                pair => panic!("legacy/local error class changed: {pair:?}"),
+            }
+            let (_, consumed, readers) = observed.totals_v1().unwrap();
+            assert!(readers > 0 && readers < 4);
+            assert!(consumed <= 4 * bytes.len() as u64 + 4);
+        }
+    }
 }
 
 #[cfg(test)]
