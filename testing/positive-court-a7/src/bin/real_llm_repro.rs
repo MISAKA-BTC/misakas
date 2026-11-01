@@ -2,6 +2,8 @@
 //! Source-only preparation against 4753ee4be; compilation/execution require a
 //! separately approved candidate. Quote-only performs identity/setup reads but
 //! never enters either CPU runner or allocates the dense leaf/capture buffers.
+//! Artifact open/header decode/compile/instance-map setup precede those quotes;
+//! their allocation-before-limit safety is NOT established by this harness.
 use kaspa_consensus_core::{
     Hash64,
     palw_prompt_ids_v1::{PalwPromptIdsFormV1, prompt_token_ids_commitment_v1},
@@ -654,6 +656,9 @@ fn main() {
         "native_v2_admission_executed":false,"credit_executed":false,"independent_expected_executed":false,
         "status":"NOT_RUN","roundtrip_pass":false,"cpu_execution_started":false,"source_api_candidate":"4753ee4beae5e245095954c6ef6e9b96fa05f361",
         "phase":"arguments","result":"NOT_RUN","host_reserver_installed":false,"native_lease":false,
+        "startup_boundary":{"preallocation_bound_status":"NOT_ESTABLISHED","covered_by_runtime_quote":false,
+            "stages":["artifact open","nested container header decode","program compile","parameter instance map","weight identity setup"],
+            "process_rss_and_timeout":"recorded separately by the driver; not a startup allocation admission or native lease"},
         "not_run":["independent expected/arithmetic comparison","full original maximum position coverage","native registration/admission/registry/restart","claim P certification","credit/entitlements"],
         "authority":"No model review or tier decision; captured roots authenticate local data only.","argv":std::env::args().collect::<Vec<_>>()});
     let parsed = options();

@@ -42,6 +42,13 @@ save the full quote, independent live-owner accounting and the acceptance
 decision. No successful cap values or measured costs are supplied by this
 source-only stage.
 
+The quoted backing limits start after artifact startup. Even quote-only opens
+the artifact, decodes nested container headers, compiles the program, builds
+the parameter instance map and performs weight identity setup. Allocation
+before limits in those startup stages is **not established** by this harness.
+The fixed SHA/pinned cohort and a successful runtime quote do not establish
+a bounded startup reader. Core/loader hardening is a separate dependency.
+
 ## Meaning of a result
 
 The fixed artifacts are mandatory; a failure does not select another model,
@@ -72,6 +79,15 @@ does not imply a cold filesystem cache. The driver records each model's raw
 stdout, stderr, time output, exit/timeout and process-group cleanup. A zero
 exit alone is insufficient for success; the runner's declared result and
 fixed input identity must also match.
+
+The driver separately records its outer process boundary: wall timeout covers
+the runner process group from launch, including startup. It does not cover
+the Python parent's source/input hashing. The Darwin RSS figure covers the
+runner's whole lifetime, including startup; it cannot isolate startup RSS.
+RSS is observed after cleanup and **no hard RSS limit is installed** by this
+driver. OOM/kill/timeout or missing resource output remains a failed/incomplete
+attempt, never a startup-memory admission. Dry-run records these policies
+with observation status NOT_RUN.
 
 Work ceilings apply to the named CPU/geometry/authentication operations, not
 to a certified total instruction or cumulative fee bound for the whole
