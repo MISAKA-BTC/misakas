@@ -1,0 +1,29 @@
+{
+  "source_head": "7a6935de6add7fe66deb324090a7144b974a8730",
+  "scope": "Root-owned obsolete c85 SDK-profile Core intermediates and old Clippy metadata only; current7a compile inputs/failed+successful test binaries/raw logs/native archive/other cache/source preserved. Future old profile library rebuilt by Cargo; no manual rlib restoration.",
+  "preflight_correction": "First preflight used an incorrect absolute timestamp threshold and rejected before any deletion. Second uses observed current successful Clippy logfile time and five-minute age plus exact stat/open-file/no-Cargo checks.",
+  "files": [
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libkaspa_consensus_core-7d49d5e2770caf69.rlib",
+      "bytes": 368168960,
+      "inode": 48296879,
+      "mtime_ns": 1793540110919677958,
+      "sha256": "0655cb0aafee353f9d9e106afd1f47ce37b56df1a9d8bb39135a512ae760bf4a"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libkaspa_consensus_core-7d49d5e2770caf69.rmeta",
+      "bytes": 119180488,
+      "inode": 48296431,
+      "mtime_ns": 1793540060777775486,
+      "sha256": "67dc93844fc24e0e4c34407741aba0e5db59b118741dd8958b4be37e3bcb829f"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libkaspa_consensus_core-18ad6127da1b195b.rmeta",
+      "bytes": 69304736,
+      "inode": 48307571,
+      "mtime_ns": 1793540637904397330,
+      "sha256": "df346bf8a65c71fdbe30fe9353bf68f1efa978cd07ba1dabfd85a9c6b632e518"
+    }
+  ],
+  "apparent_bytes_reclaimed": 556654184
+}

@@ -37,3 +37,6 @@ Rootの後続確認ではmetadata8・decode4・wide runner10・専用positive-pa
 
 
 Root `c85d5a9c9` ではSDK全16件と、旧GEN価格全14・旧close/range・新wide sizing13・状態/carriage golden・T12を含むintegration53件が標準stackで成功した。旧裁定・archive・receipt7件とscalar/golden/deadline/G14の14件も成功したが、新admissionは8成功/2失敗で、全体PASSではない。[初回監査](../../../evidence/positive-court-a0-2026-10-31/integration/wide-admission-stack-first-count-audit-20261101.json)。2件はArtifactをoperandと誤算入した試験期待を修正中で、モデル/program/context/PWUや計算規則は変更しない。厳格library Clippyと新sizing target Clippyは成功した。[原記録](../../../evidence/positive-court-a0-2026-10-31/integration/wide-admission-stack-clippy-20261101.json)。標準stackの以前のSDK停止経路は今回成功したが、全branchの最小stack保証・実LLM性能認定ではない。
+
+
+後続 `7a6935de6` はtest-only operand oracle修正、macOS子process試験のblocking修正、actual fold回帰3件、DATA funds clock整合性、Hello2 prepared CPUを統合し、標準stackで107件成功した。[監査](../../../evidence/positive-court-a0-2026-10-31/integration/hello2-source-clock-corrected-count-audit-20261101.json)。初回失敗・0件filter除外・正しいtarget再実行を保持し、別候補の69件/67件等を加算しない。exec/positive-accounting-node libraryとHello2 target strict Clippyも成功した。汎用artifact startup、stream-backed Panel record署名/Node reader、native受付/実資金/P/全consumer、実trained LLMの登録と最大文脈長を維持した同候補再現は未完了。
