@@ -1,0 +1,70 @@
+{
+  "preparedUtc": "2026-11-01T14:57:30.012067+00:00",
+  "status": "final code/docs/fixture review complete; no commit/deploy/push",
+  "ownedSources": {
+    "contrib/misakascan-t12/jobs-publisher.mjs": "095e32dcbff1bfc26c10251e372435cdb3bc67538afe1ba3d2ff482aa3a97043",
+    "contrib/misakascan-t12/test/jobs-publisher.test.mjs": "3ea1dd60a168d9f0748dfab59a7550c32f505105079ee8ae67314c99a3404633",
+    "contrib/misakascan-t12/JOBS-PUBLISHER.md": "d7b29b74a6417a64cd58333eebb961ec29ded3391434ff39b2fe8fa58cf6a485",
+    "contrib/misakascan-t12/systemd/misakascan-jobs-export.service": "133d66090f35dd641d31436ae6f07ab331af0946d1f9412bf4c25e13f662645c",
+    "contrib/misakascan-t12/systemd/misakascan-jobs-export.timer": "63909db4679987236c1521fb2d01b2426c2541bacc2acbf999fd8ce9423435df",
+    "contrib/misakascan-t12/systemd/misakascan-jobs-export.env.example": "7362532da2f110e639d2fbad820c9a97fe5b0238fc94579260a3834716bc9962"
+  },
+  "tests": {
+    "publisher": {
+      "passed": 11,
+      "failed": 0
+    },
+    "combinedUI": {
+      "passed": 31,
+      "failed": 0
+    },
+    "sourceSyntax": "PASS",
+    "systemdTemplates": "local static shape checks PASS; no daemon/runtime install test",
+    "realExporterFixture": "actual immutable29 raw CLI output accepted after strict tuple/u32 normalization; block/class/claim match independent expected JSON",
+    "realUnsyncedNegative": "public95 false/18930: exporter not invoked; temporary feed+cursor SHA unchanged"
+  },
+  "actualExporter": {
+    "binarySha256": "0eb2754f40ef443714eb2aedf3a3a005d3a2145dfa612386242949fcf956bff2",
+    "inputSha256": "11f81760b4eb50f1c4251be75f602ae15eae2e0e94135964eab1527a26f4eb1f",
+    "artifact": "jobs-publisher-exporter-481352-cli-smoke.json",
+    "artifactSha256": "adf459cd6582f67770a08b85109caa8d02e7f8d15ba58cba6b75021364edaeae",
+    "nodeExecutable": false,
+    "futureParams": "Tool source contains future18850 configuration; metadata derivation uses exact header/Attempt and unchanged genesis, not activation/finality policy",
+    "hashClassClaimMatches": true,
+    "acceptance": "unconfirmed, not derived by publisher"
+  },
+  "limits": {
+    "lookback": 24,
+    "overlap": 12,
+    "maxPages": 6,
+    "maxRpc": 64,
+    "runTimeoutMs": 60000,
+    "perRpcTimeoutMs": 5000,
+    "jsonMessageBytes": 16777216,
+    "pageHeaders": 256,
+    "totalHeaders": 2048,
+    "historyRows": 512
+  },
+  "verifiedFixes": [
+    "Strict canonical/tuple executor outpoint normalization to colon, rejecting invalid u32",
+    "Metadata-only scalar/hash whitelist, stripping exporter text/acceptance",
+    "Explicit retired-header fallback only; generic source errors preserve feed/cursor",
+    "Initial and prepublication sync checks",
+    "Serialized stale-lock recovery with new-owner reread",
+    "Lossless decimal u64 token transport before JSON.parse"
+  ],
+  "deferred": [
+    "Production source is unsynced; do not deploy or enable service/timer",
+    "No browser pixels or claim admission/Final evidence",
+    "No live successful publisher run against a synced source yet",
+    "No actual systemd template runtime activation yet"
+  ],
+  "unchanged": [
+    "Core/params",
+    "Node/producer",
+    "Rust exporter",
+    "Frontend app.js",
+    "Originalmain user changes",
+    "Production feed/service/timer/node/DB/binary/holds"
+  ]
+}

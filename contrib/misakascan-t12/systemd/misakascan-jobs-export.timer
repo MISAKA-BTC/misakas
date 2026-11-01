@@ -1,0 +1,11 @@
+[Unit]
+Description=Refresh MISAKAScan metadata two minutes after each completed run
+
+[Timer]
+OnBootSec=45s
+OnUnitInactiveSec=120s
+AccuracySec=5s
+Unit=misakascan-jobs-export.service
+
+[Install]
+WantedBy=timers.target

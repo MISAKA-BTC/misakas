@@ -1,0 +1,21 @@
+{
+  "checkedUtc": "2026-11-01T14:54:16.454Z",
+  "mode": "temporary local files only; production feed/service untouched",
+  "rpc": "wss://misakascan.com/kaspa",
+  "observed": {
+    "isSynced": false,
+    "network": "testnet-12",
+    "daa": 18930,
+    "params": "edf472294c89dab0e64e625dbdfcd039b91081b05f89eacf8ba2aa25baa3a189",
+    "schedule": "4024a6e74d7aeb170d99e67c6d8fbe7884d71a716ccb778cd1ee526d01781b04",
+    "genesis": "a27f8f44fe4d91a5bed940be9dbd6d260ccb95cc00d948b1c08ddb6bd1a5f02542a6cf35c7a4d959ba4863ac1557861671763e5cc22937c697870283a8ca1f23"
+  },
+  "error": "source network/genesis/sync check failed",
+  "exporterInvoked": false,
+  "feedUnchanged": true,
+  "cursorUnchanged": true,
+  "feedShaBefore": "925922bfd20cb62dd5243b046380b869506104ae39f657efca8ed7644b23e5c1",
+  "feedShaAfter": "925922bfd20cb62dd5243b046380b869506104ae39f657efca8ed7644b23e5c1",
+  "cursorShaBefore": "a9c7c94ac8c55fcc6381958becc9342a28c05de2aa4b161169316de172055af8",
+  "cursorShaAfter": "a9c7c94ac8c55fcc6381958becc9342a28c05de2aa4b161169316de172055af8"
+}

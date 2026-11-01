@@ -1,0 +1,19 @@
+✔ actual public model header reaches metadata exporter, history merges and no admission/text is inferred (28.401333ms)
+✔ raw JSON u64 precision survives into the exact header dump, without touching quoted text (19.201709ms)
+✔ source errors, exporter failures, malformed JSON and missing rows preserve feed and cursor bytes (53.090625ms)
+✔ page limit advances only through an exported page, next run catches up without erasing history (32.77175ms)
+✔ retired/reorg cursor is reacquired from a bounded recent window (19.084583ms)
+✔ RPC budget and run deadline preserve the previous feed (130.397958ms)
+✔ actual immutable exporter CLI output is normalized without inventing admission or decoding text (21.6015ms)
+✔ outpoint tuple and canonical forms are strict hex/u32 identities (0.456583ms)
+✔ initial and mid-run unsynced source preserve exact feed/cursor, never infer acceptance (19.318875ms)
+✔ cursor RPC timeout or unknown errors do not masquerade as a retired header (2.739833ms)
+✔ overlapping publishers preserve feed and stale-lock recovery cannot steal a new owner (26.637667ms)
+ℹ tests 11
+ℹ suites 0
+ℹ pass 11
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 444.598041
