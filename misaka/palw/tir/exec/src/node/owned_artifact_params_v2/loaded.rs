@@ -478,5 +478,8 @@ pub fn load_wide_artifact_v2<'a>(
     })
 }
 
+#[cfg(feature = "positive-panel")]
+mod panel;
+
 #[cfg(test)]
 mod tests;
