@@ -13,7 +13,7 @@
 - `50339b43a`でadopted schemeと最終post logitsだけのi64 commitを識別するstructural foundationを統合。独立static review後、新7件と既存golden3件・golden_v2の11件、対象Clippyが成功した。[source/原log](../../../evidence/positive-court-a0-2026-10-31/integration/wide-structural-and-goldens-20261101.json)、[レビュー/Clippy](../../../evidence/positive-court-a0-2026-10-31/integration/wide-structural-review-and-clippy-20261101.json)。native admissionの既存scheme whitelistは変更していない。
 - 別domainのデータroot/openingとi128 Q48の選択primitiveを`82146b3b9 / 74aac75f8`へ統合した。profile/旧入口11件・source料金2件・wide data/selection5件が同sourceで成功し、Core libraryのstrict Clippyも等価cleanup後に成功。[stage2記録](../../../evidence/positive-court-a0-2026-10-31/integration/profile-wide-stage2-review-20261101.json)。明示V2 Step leafとCPU producerは後続で統合した。capture・cell・Court・資料費用の全経路接続はまだ必要。
 - `f862774d3`で登録program由来の明示profile resolverを追加。旧factsの74-byte保存形式を維持し、旧class record/StepSpace/binding入口は未対応wideを拒否する。canonical tokenizer/CUのゼロ、元の最大context、anchor由来prompt/seed/full jobを維持する。factsだけを読むnative callerへの接続は別途必要。
-- A1の全範囲検査とA3の一回のPanel再計算・証拠生成への接続。現FullRelation経路の最終logitsはi32限定で、i64をcastして受理しない。
+- A1の明示V2全範囲検査を後続で統合した。A3の一回のPanel再計算からの証拠生成・native受付への接続は引き続き必要。旧i32入口へi64をcastして受理しない。
 - 同一候補での実checkpoint、元の最大文脈長、role別費用、cold/warm、複数Node・再起動の確認。
 
 未接続consumerは拒否を維持する。元checkoutの広い未コミット差分、公開preset、既存の生成物pinや他作業の変更を一括コピーしない。実native job/role/資金/P/全consumer接続も別に必要であり、構造認識や登録成功をclaimの信用認証へ読み替えない。
@@ -26,6 +26,11 @@
 - `9689b3369` の明示wide CPU runnerはA1 canonical leafを用い、旧state/intermediateは4B、final i64だけ8Bとする。one-pass borrowed observer、checked logical quote、result寿命のhost leaseを保持する。owner固定sourceの49件・Clippy成功を取り込み、Root結合確認は別途実行中。capture2/Hello2は次のincrementで、実LLM・RSS・native資格は含まない。
 - `afc37f144` はwide metadataを認証済みclass/artifact/layoutからfull record照合して導出し、V1 decodeのflat/Int32 fallbackへ既知wide program/headerが入ることを拒否する。旧I8/I16を含むnarrow経路は維持し、新しいauthorityを発行しない。この追加のRoot試験は実行中。
 
-全範囲Node checkerの最終wide出力接続、8B上界の全Court sizing、DA/decode reader、private court2の全経路の受付、P/資金/全consumerと実trained cohort再現は未完了。guardやdata APIの追加だけでfenceを有効化しない。
+8B上界の全Court sizingとPanel証拠組立て、DA/decode reader、private court2の全経路の受付、P/資金/全consumerと実trained cohort再現は未完了。guardやdata APIの追加だけでfenceを有効化しない。
 
 Rootの後続確認ではmetadata8・decode4・wide runner10・専用positive-panel adapter8の30件が標準test stackで成功した。[count audit](../../../evidence/positive-court-a0-2026-10-31/integration/wide-run-safety-count-audit-20261101.json) は、先行node-only指定でadapterが0件だったことを保持し除外する。A1のlayout不要row-profile viewを`941b78c86`まで統合した後、[SDK/Core/exec strict library Clippy](../../../evidence/positive-court-a0-2026-10-31/integration/wide-row-sdk-core-clippy-20261101.json) が成功。viewの`row_max_context`はrooted row由来であり、layout preimageとの一致・step geometry・admission・native権限を代替しない。
+
+
+後続 `4753ee4be` では、明示V2のwide最終出力をsource-only Node全範囲検査へ接続し、A3 PALWTRC2 captureと最小work検査順序修正を統合した。同じsourceの標準test stack試験67件が成功した。[監査](../../../evidence/positive-court-a0-2026-10-31/integration/wide-node-capture-count-audit-20261101.json)。初回lint失敗と誤った再検査は保持し、7箇所の参照修正後 `b89631b38` のSDK/Core/exec library strict Clippyは成功した。[記録](../../../evidence/positive-court-a0-2026-10-31/integration/wide-node-capture-clippy-corrected-20261101.json)。別候補の旧16MiB SDK結果をこれらへ合算しない。
+
+`5a2f18ba9` のobject dispatch分割は旧本文・guard・rollbackのsource同一性を検査した段階で、標準stack/SDK/golden再試験は未完了。A4 pure8B sizingとA1 purewide admissionはowner固定sourceの試験・レビュー段階、A3 Hello2は固定plan CPU subsetを実装中であり、native受付の許可ではない。実trained cohortの保持資料inventoryを再照合したが、新たな同候補での登録・最大context全位置・role別費用は未測定。Panelの再計算値からの証拠組立て、実native job/roles/資金/P/全consumer、復旧とcold/warm実測を完了条件として維持する。

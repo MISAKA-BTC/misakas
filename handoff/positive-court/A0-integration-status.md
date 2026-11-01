@@ -50,4 +50,13 @@ Root `afc37f144` まで: A3 explicit wide CPU producer（owner49件・Clippy、R
 
 Root `4e60a7253` checkpoint: `afc37f144` と同じRust sourceのmetadata8／decode4／wide runner10／専用positive-panel adapter8、計30件は標準test stackで成功・source不変。先行node-only adapterの0件は [count audit](../../docs/evidence/positive-court-a0-2026-10-31/integration/wide-run-safety-count-audit-20261101.json) で明示除外し、専用featureで実行し直した。A1 row-profile/helperの確定sourceをRoot `a01b79dda / 941b78c86`、owner証拠を`66e1aad31`へ取り込み、Root currentのSDK/Core/exec(positive-panel) library strictClippyは成功。A1の9+1件はowner983b5277aの別候補で、Root30件へ加算しない。SDK16MiB条件と標準stack停止は前段のまま。
 
-次のNode wide全範囲checkerは `/tmp/positive-a0-wide-node-exact-v2.patch` の未適用案。初回frozen artifact b004...は独立レビューで重複型名・未定義helper・unused警告が見つかり、修正とFixed/Hist試験追加を依頼中。未コンパイルの7試験を成功に数えず、Rootへは適用していない。A3capture2はsource/review段階、追加buildは空き容量確認まで待機。A4はexplicitV2 pure sizingを実装中で、private fence/version2許可はまだ変更しない。
+当時のNode wide全範囲checkerは `/tmp/positive-a0-wide-node-exact-v2.patch` の未適用案。初回frozen artifact b004...は独立レビューで重複型名・未定義helper・unused警告が見つかり、修正とFixed/Hist試験追加を依頼中。未コンパイルの7試験を成功に数えず、Rootへは適用していない。A3capture2はsource/review段階、追加buildは空き容量確認まで待機。A4はexplicitV2 pure sizingを実装中で、private fence/version2許可はまだ変更しない。
+
+
+2026-11-01後続（Root `5a2f18ba9`、A7資料 `da5c48c2e`）: 初回Node artifactの拒否を保持し、修正版64a36f7を `4753ee4be` へ統合した。A3 capture2（PALWTRC2）の最小work検査順序修正まで統合済み。同じRust sourceでNode wide10・row-profile9・classID1・旧Court12・capture/adapter19・旧fullrelation/expanded16、計67件が標準test stackで成功した。[件数監査](../../docs/evidence/positive-court-a0-2026-10-31/integration/wide-node-capture-count-audit-20261101.json)。実native受付・信用・実LLMの成功は含まない。
+
+strict Clippyの初回7件のneedless_borrow失敗と、修正未適用のまま始めて停止した再検査を原本のまま保持した。実修正 `b89631b38` 後のSDK/Core/execライブラリClippyは成功した。[訂正監査](../../docs/evidence/positive-court-a0-2026-10-31/integration/wide-node-lint-correction-audit-20261101.json)、[修正後記録](../../docs/evidence/positive-court-a0-2026-10-31/integration/wide-node-capture-clippy-corrected-20261101.json)。誤ったcommit subjectを試験成功の根拠にしない。
+
+`5a2f18ba9` は巨大object dispatchを11個のprivate noninline handlerへ機械的に分割した。元153 arm本文・156 variant・guard順・rollback wrapperの一致を独立source検査したが、ビルド・標準stack・goldenは未確認。[固定入力と検査器](../../docs/evidence/positive-court-a0-2026-10-31/integration/object-dispatch-stack-inputs/)。A4 purewide sizing `13e1fe213` はowner試験中で、新規integration13・scalar2・compile-fail1は成功報告、旧GEN価格全targetはParams生成のstack overflowで停止した原記録を保持中。Root stack修正の検証はA4終了後に行う。
+
+A1 purewide admission `78e274630` はsource固定・独立レビュー中、Root未統合。A3 Hello2は固定plan CPU subsetのsource作成中。A7の実trained3モデルinventoryを統合し新manifest8件のサイズ/SHAをRoot再照合した。原context8192/8192/2048と学習済みcheckpointを維持し、旧失敗narrow成果物4件の欠損も記録する。inventoryは新たな推論・登録・全位置・Court・credit試験ではない。Panel wide collector/geometry-only依存追跡とbounded証拠組立ては別途実装中。native Assignment案の明示採択・actual role残予約owner・資金・P/全consumer・複数Node復旧と実LLM性能は引き続き未完了。
