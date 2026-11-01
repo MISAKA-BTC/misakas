@@ -2175,6 +2175,7 @@ mod conviction_e2e_tests {
     }
 
     include!("palw_funded_original_native_fixture_tests.rs");
+    include!("palw_object_dispatch_regression_tests_v1.rs");
 
     fn cone(fx: &PalwTirPublicFrameFixtureV1) -> Evidence {
         let rules = crate::palw_tir_court_v1::PalwTirCourtRulesV1 {
