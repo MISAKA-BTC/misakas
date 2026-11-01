@@ -436,23 +436,85 @@ async fn wide_registration_one_per_block_cap_preserves_both_real_carrier_utxo_ac
     }
 }
 
-// Keep construction of the large test continuation outside the runtime's
-// block_on/poll call chain. This changes ownership, not the libtest stack size.
+// These test-only stages return before the next stage starts. In particular,
+// the t12 builder is never below the court/isolated Params clone/build frames.
+// Keep Config/bundle on the heap between stages; this does not enlarge libtest's
+// stack, weaken validation, or change either legacy by-value config factory.
+struct IsolatedWideCarrierOriginSetup {
+    config: Box<Config>,
+    bundle: Box<PalwConsensusParamsV2>,
+    premine: Premine,
+    floats: Premine,
+}
+
 #[inline(never)]
-fn isolated_wide_carrier_origin_boxed_setup() -> Box<(Config, PalwConsensusParamsV2, Premine, Premine)> {
-    Box::new(isolated_origin_config())
+fn isolated_wide_carrier_origin_initial_setup() -> Box<IsolatedWideCarrierOriginSetup> {
+    let (config, bundle, premine, floats) = t12_with_harness_cards();
+    Box::new(IsolatedWideCarrierOriginSetup { config: Box::new(config), bundle: Box::new(bundle), premine, floats })
+}
+
+#[inline(never)]
+fn isolated_wide_carrier_origin_court_setup(
+    mut setup: Box<IsolatedWideCarrierOriginSetup>,
+    version: u16,
+) -> Box<IsolatedWideCarrierOriginSetup> {
+    let mut params = setup.config.params.clone();
+    let mut fence = PalwTirFenceV1::testnet12_v1(ForkActivation::new(0));
+    fence.court_version = version;
+    params.palw_tir_v1 = Some(fence);
+    params.sync_palw_tir_v1();
+    params.palw_reorg_strict_economic_win = Some(ForkActivation::new(0));
+    let config = Box::new(ConfigBuilder::new(params).skip_proof_of_work().build());
+    config.params.validate_palw_v2().expect("the private typed registration rules validate");
+    let PalwConsensusMode::ConsensusV2(bundle) = &config.params.palw_consensus_mode else { unreachable!() };
+    setup.bundle = Box::new(bundle.clone());
+    setup.config = config;
+    setup
+}
+
+#[inline(never)]
+fn isolated_wide_carrier_origin_isolated_setup(mut setup: Box<IsolatedWideCarrierOriginSetup>) -> Box<IsolatedWideCarrierOriginSetup> {
+    let mut params = setup.config.params.clone();
+    params.genesis = kaspa_consensus_core::palw_g14_gates_v1::palw_isolated_g14_genesis_v1(
+        &params.genesis,
+        Hash64::from_u64_word(0x5749_4445_4f52_4947),
+    )
+    .unwrap();
+    params.palw_probabilistic_constraints_v1 = Some(ForkActivation::new(0));
+    params.palw_class_registration_origin_v1 = Some(ForkActivation::new(0));
+    params.sync_palw_class_registration_origin_v1();
+    assert!(params.has_isolated_g14_genesis_v1());
+    assert_ne!(params.genesis.hash, kaspa_consensus_core::config::genesis::PALW_T12_GENESIS.hash);
+    params.validate_palw_v2().expect("documented isolated Params, with all validation enabled");
+    let config = Box::new(ConfigBuilder::new(params).skip_proof_of_work().build());
+    let PalwConsensusMode::ConsensusV2(bundle) = &config.params.palw_consensus_mode else { unreachable!() };
+    setup.bundle = Box::new(bundle.clone());
+    setup.config = config;
+    setup
+}
+
+// Keep setup, future construction, and runtime/poll in sibling stages. Each
+// heavy setup stage returns before entering the next (no nested factory call).
+#[inline(never)]
+fn isolated_wide_carrier_origin_boxed_setup() -> Box<IsolatedWideCarrierOriginSetup> {
+    let setup = isolated_wide_carrier_origin_initial_setup();
+    let setup = isolated_wide_carrier_origin_court_setup(setup, 2);
+    isolated_wide_carrier_origin_isolated_setup(setup)
 }
 
 #[inline(never)]
 fn isolated_wide_carrier_origin_boxed_case(
-    setup: Box<(Config, PalwConsensusParamsV2, Premine, Premine)>,
+    setup: Box<IsolatedWideCarrierOriginSetup>,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()>>> {
     Box::pin(async move {
         use kaspa_consensus_core::palw_class_registration_origin_v1::{
             PalwClassRegistrationDoorV1, palw_class_admission_digest_v1, palw_class_registration_origin_row_v1,
         };
         use kaspa_database::{create_temp_db, prelude::ConnBuilder};
-        let (config, bundle, premine, floats) = *setup;
+        let IsolatedWideCarrierOriginSetup { config, bundle, premine, floats } = *setup;
+        // Setup construction is complete before this continuation is polled.
+        let config = *config;
+        let bundle = *bundle;
         let (_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
         let (sender, _rx) = async_channel::unbounded();
         let chain = t12_genesis_chain_on(TestConsensus::with_db(db.clone(), &config, sender), &config, &bundle, &premine, &floats);
