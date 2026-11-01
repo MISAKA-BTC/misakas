@@ -82,6 +82,22 @@ full-layout join が必要であり、この一覧は repository 全体の網羅
 区別する。実 test binary / Params identity / raw log は Root の検証後に別途記録する。
 source manifest と最終相互レビューの範囲は `validation/wide-native-registration-source/` を参照する。
 
+## FP consumer の追補
+
+最初の source freeze 後、統合担当の追加レビューで普通の FreePrompt は derived-work /
+original-frame fence が無効だと既存 FP helper の拒否を通らない組合せが見つかった。
+`eval=None` の class / Frozen 確認直後に、両 fence に依存しない known-wide 拒否を追加した。
+off/off の旧経路では同じ fixture が claim を作る対照を置き、off/on matrix では新 guard と
+既存の earlier G03 拒否を区別する。いずれも root / exposure / claim を変更しない回帰 source。
+
+`eval=Some` は普通 FP より前に別分枝へ入る。既存の評価機能は延期・無効の条件を保ち、
+その明示的 eval fixture が有効な場合だけ、既存 layout / Frozen / lifecycle 拒否の後、row
+clone / 旧 GEN context / claim 書き込み前に known-wide を拒否する。旧 geometry / leaf count
+だけでは wide を拒否しないこと、dormant 時の旧最初のエラーを維持する回帰 source を含む。
+GEN の幅・court が未対応であるための拒否であり、評価機能を有効化する変更ではない。
+明示的 full-layout wide SourceChecker は変更しない。詳細は
+[fp-followup.json](validation/wide-native-registration-source/fp-followup.json)。追補も未実行。
+
 ## 7段階 plan の到達点
 
 1. RFC43 / ADR211 と fixed base / 完了語彙を pin: source 記録済み。
