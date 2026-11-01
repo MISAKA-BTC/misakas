@@ -14,6 +14,14 @@ repository.workspace = true
 name = "tir-exec-bench"
 path = "src/bin/tir-exec-bench.rs"
 
+# Actual stdio child integration needs OS-main dispatch: libtest would write
+# its preamble/footer into the protocol. This is TEST ONLY, not an SDK backend.
+[[test]]
+name = "loaded-wide-process-v2"
+path = "tests/loaded_wide_process_v2.rs"
+harness = false
+required-features = ["node"]
+
 # The IR itself (a leaf crate) and a thread pool. Nothing of consensus: this crate is a fast
 # implementation of the reference evaluator's function, and `kaspa-consensus-core` must never
 # depend on it — the court runs the reference, a node runs this, and the tests hold them equal.
