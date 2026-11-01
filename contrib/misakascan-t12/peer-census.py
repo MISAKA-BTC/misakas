@@ -87,7 +87,7 @@ def valid_runtime(runtime):
             and isinstance(runtime.get('p2pId'),str) and bool(runtime['p2pId']) and identities
             and isinstance(fences,list) and all(type(x) is int and 0<=x<2**64 for x in fences))
 
-def document(lines, runtime, bound, now, window=60):
+def document(lines, runtime, bound, now, window=60, unit='misaka-t12-node'):
     rows, warnings, stamps = parse_events(lines,now,window)
     reason = None
     if not bound:
@@ -103,8 +103,8 @@ def document(lines, runtime, bound, now, window=60):
     runtime=runtime if isinstance(runtime,dict) else {}
     return {'generated_at':now.isoformat(),'window_minutes':window,'available':reason is None,'availability_reason':reason,
             'network':runtime.get('network') if runtime else None,'this_node_daa':runtime.get('daa') if runtime else None,
-            'vantage':'T12 unit misaka-t12-node on 169.58.232.113 (log observer, separate from primary RPC)',
-            'source':runtime or {},'observed_from':min(stamps).isoformat() if stamps else None,'observed_to':max(stamps).isoformat() if stamps else None,
+            'vantage':f'T12 unit {unit} on 169.58.232.113 (log observer, separate from primary RPC)',
+            'source':{**runtime,**({'unit':unit} if bound else {})},'observed_from':min(stamps).isoformat() if stamps else None,'observed_to':max(stamps).isoformat() if stamps else None,
             'complete_window':bool(stamps and min(stamps)<=now-dt.timedelta(minutes=window)),
             'unparsed_rejections':warnings,'refused':rows if reason is None else [],
             'note':'Events are sessions, not a list of rejected node identities. One IP/NAT may have successful and rejected sessions. No fork gate is relaxed.'}
@@ -153,7 +153,7 @@ def main():
             if size>(32<<20):lines=lines[1:]
     except OSError:
         pass
-    result=document(lines,runtime,unit_binds_log(log,unit,rpc_url),dt.datetime.now(dt.timezone.utc))
+    result=document(lines,runtime,unit_binds_log(log,unit,rpc_url),dt.datetime.now(dt.timezone.utc),unit=unit)
     fd,tmp=tempfile.mkstemp(prefix='.peer-census-',dir=out.parent)
     try:
         with os.fdopen(fd,'w') as f:json.dump(result,f)

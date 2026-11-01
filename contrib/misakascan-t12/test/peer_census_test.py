@@ -28,4 +28,18 @@ class CensusTests(unittest.TestCase):
   bad=c.document([l.replace('misaka-testnet-12','misaka-testnet-11') for l in LINES],RUNTIME,True,NOW);self.assertFalse(bad['available'])
  def test_unparsed_rejection_cannot_silently_be_zero(self):
   bad=c.document([FRESH,'badtimestamp Fork-id mismatch'],RUNTIME,True,NOW);self.assertFalse(bad['available']);self.assertEqual(bad['unparsed_rejections'],1)
+ def test_actual_b6_b7_payloads_keep_verified_unit_and_label_consistent(self):
+  evidence=Path(__file__).resolve().parents[3]/'docs/evidence/palw/model-panel-one-2026-10-31'
+  import json
+  for unit,file in [('misaka-t12-node','peers-2026-11-01-census-readonly-runtime-proof.json'),('misaka-t12-seat7','peers-census-seat7-before-label-fix.json')]:
+   runtime=json.loads((evidence/file).read_text())['source']
+   read=c.document([FRESH],runtime,True,NOW,unit=unit)
+   self.assertTrue(read['available']);self.assertEqual(read['source']['unit'],unit)
+   self.assertEqual(read['vantage'],f'T12 unit {unit} on 169.58.232.113 (log observer, separate from primary RPC)')
+   self.assertEqual(read['source']['p2pId'],runtime['p2pId']);self.assertFalse(runtime['isSynced'])
+  self.assertEqual(c.document([FRESH],RUNTIME,True,NOW)['vantage'],'T12 unit misaka-t12-node on 169.58.232.113 (log observer, separate from primary RPC)')
+ def test_unbound_unit_does_not_publish_a_verified_source_unit(self):
+  for unit in ['misaka-t12-node','misaka-t12-seat7']:
+   read=c.document([FRESH],RUNTIME,False,NOW,unit=unit);self.assertFalse(read['available']);self.assertNotIn('unit',read['source'])
+   read=c.document([FRESH],{**RUNTIME,'genesisHash':'wrong'},True,NOW,unit=unit);self.assertFalse(read['available'])
 if __name__=='__main__':unittest.main()

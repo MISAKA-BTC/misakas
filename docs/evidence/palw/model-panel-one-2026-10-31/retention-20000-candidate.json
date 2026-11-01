@@ -7,7 +7,7 @@
   "derivedSchedule": "ec5f56fa48cdeafb3a6fc953c02a2dcd53f0f54025fe7243a87972884a47eb5e",
   "identityUnchanged": "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
   "derivationOnlyNotNewSourceTests": true,
-  "newSourceTests": "pending",
+  "newSourceTests": "977 critical25, SDK1/Flow2/VP10, 1229 VP13/node2, C5 scanner1/Coreintegration3 and69e partition13 actualPASS; full final-source CI remains incomplete",
   "ownedSourcePaths": [
     "consensus/core/src/config/params.rs",
     "consensus/core/src/config/params/model_panel_one_retention_config_tests.rs",
@@ -37,7 +37,7 @@
   ],
   "ownedSourceSha256": {
     "consensus/core/src/config/params.rs": "9fdf9a8cbfdc3806b5a819b6108658ae3f3b6c7bb2f0be3932c4049085a76a93",
-    "consensus/core/src/config/params/model_panel_one_retention_config_tests.rs": "40371253954fe729d78855a6143df132ff2f88c94bc17b7b353ee1f4d102b2d4",
+    "consensus/core/src/config/params/model_panel_one_retention_config_tests.rs": "d4cfff2fcef400c5133631677d6708a776ab2122d740298f5bcbd40708261130",
     "consensus/core/tests/evm_bridge_ledger_is_t12_only.rs": "99b260c31ae2fd8e53861d1f899fabd1311d4a1791bb3ed7173b60aa80e04b0d",
     "consensus/core/tests/g14_close_legacy.rs": "3682d77750a133eb950ac532b96122af0bef4013d0fb222c6810760b131c7c20",
     "consensus/core/tests/g14_court_capacity.rs": "dde1deb16dc737043a8f6b50fb3353953adc07440f617645031ac8063b444a84",
@@ -62,12 +62,41 @@
     "misaka/palw/sdk/src/preflight/mod.rs": "2c4dc114489fb1d748e778388a16f1fd66b945c44eac3b5db041381a4d2bfdaf",
     "release.json": "e7a059d1113466d26dbc4adab846371099a8cc445df44ab2e49f5434c1155029"
   },
-  "canonicalChainPolicy": "pending-user-choice; candidate assumes current18640 G14 lineage",
-  "productionDeploymentAndFinalRelease": "held pending chainpolicy answer and verification",
+  "canonicalChainPolicy": "user explicitly confirmed retaining G14 ModelOne18640 and aligning official distribution/participant upgrades on 2026-11-01; earlier redundant confirmation had been withdrawn",
+  "productionDeploymentAndFinalRelease": "69e verified GNU artifact started on B1 with unchanged DB/key/journal; B1 unsynced at18930. B0 normal stop requested2026-11-01T22:00:33Z. Final86fb build includes dnsseeder; release not published.",
   "historicalAuditPaths": [
     "docs/evidence/palw/t12-fork-2026-10-31/retention-18850-live-audit-20261101.md",
     "docs/evidence/palw/t12-fork-2026-10-31/retention-18850-live-audit.json",
     "docs/evidence/palw/t12-fork-2026-10-31/retention-18850-live-claims.json",
     "docs/evidence/palw/t12-fork-2026-10-31/retention-18850-live-headers.json.gz"
-  ]
+  ],
+  "candidateCodeRevision": "86fb7ff9033d871c548eee77d6bf567c09cb6a38",
+  "partialValidation": {
+    "sourceRevision": "e48d3d2d3eba275d452ded51b5b6073864ea40fb",
+    "integrationPassed": 108,
+    "integrationIgnored": 1,
+    "hotpathUniquePassed": 18,
+    "hotpathExecutions": 19,
+    "fullCiTestsuite2": {
+      "passed": 3825,
+      "failed": 32,
+      "skippedByPartition": 11623
+    },
+    "coreCritical25": "not yet executed at this update",
+    "deployment": 0,
+    "scope": "Partial actual runs only; e48 has a template regression and is not a release/deployment candidate"
+  },
+  "currentValidation": {
+    "asOfUtc": "2026-11-01T22:01:00Z",
+    "source69eFocusedPartitionTestsPassed": 13,
+    "source69eTrackedFilesVerified": 12543,
+    "source69eBinarySha256": "3bd39de020a1e119d87b1b2b1791b93ae4fc1e03efaf168ebf6c7f632931b380",
+    "staleFixtureCandidate": "86fb7ff9033d871c548eee77d6bf567c09cb6a38",
+    "staleFixtureValidation": "five original assertions fail, five corrected assertions and two identity preconditions pass using actual normal69e Core rlib; production source projection unchanged; full final-source CI not asserted",
+    "b1Runtime": "actual69e executable and owned RPC/DB verified; isSyncedfalse18930; no chain recovery claim",
+    "publicModelClaimAdmission": false,
+    "selectedFullSeatApproval": false,
+    "final": false,
+    "scope": "Local tests and artifact/runtime provenance do not establish public execution or consensus credit."
+  }
 }
