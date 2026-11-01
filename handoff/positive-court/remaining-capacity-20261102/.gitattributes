@@ -1,0 +1,2 @@
+# Preserve raw compiler/harness output without changing captured bytes.
+*.log -whitespace

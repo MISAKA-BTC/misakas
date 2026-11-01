@@ -1,0 +1,14 @@
+{
+  "original_path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libkaspa_consensus_core-c1ab5a2fa5a30354.rlib",
+  "original_bytes": 1200034864,
+  "original_sha256": "47a0e8ebb05ed97f1d45c86caf555854b06a87f2ee2578e84224439f2fb03268",
+  "original_mtime_ns": 1793445896301629769,
+  "archive_path": "/Users/wata/.cache/misaka-positive-court-build-preservation/libkaspa_consensus_core-c1ab5a2fa5a30354.rlib.20261102.gz",
+  "archive_bytes": 313789123,
+  "archive_sha256": "46250ace4a6b30bb717c210f49ebc6810fccc8b399b8db17a37e482f7249785c",
+  "streamed_full_restore_bytes": 1200034864,
+  "streamed_full_restore_sha256": "47a0e8ebb05ed97f1d45c86caf555854b06a87f2ee2578e84224439f2fb03268",
+  "elapsed_seconds": 12.099,
+  "reason": "old regenerable Rust intermediate only; complete compressed byte preservation before cache removal; no source/model/raw log/executable removed",
+  "free_bytes_after": 1437855744
+}

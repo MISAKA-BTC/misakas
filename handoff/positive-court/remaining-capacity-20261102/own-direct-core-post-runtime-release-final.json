@@ -1,0 +1,6 @@
+{
+  "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libkaspa_consensus_core-e26f169f58011e8b.rlib",
+  "bytes": 371708800,
+  "sha256": "d5f5a52123a3c8364d2157a56e64ab404ee00f1aba420fff82fd74bc90837062",
+  "reason": "this retry only; completed linked runtime tests, subsequent Clippy requires metadata rather than this archive"
+}

@@ -30,6 +30,22 @@ native接続には、役割別cold最悪値と全未完了source dutyの予約�
 
 ## 結合試験の内容
 
+2026-11-02追記: 上記の共有枠消費について、既存replay APIに必須の
+`NativeCommonUsagePolicyV2::remaining_capacity` と、post-event消費＋残予約の
+checked検査を追加した。callbackは実source ledgerの更新後、Case公開前に実行し、
+更新後のoriginも照合できる。無条件の空予約defaultは設けず、失敗時は従来どおり
+local projection全体をpoisonする。wire/schema/rate/既存署名予算は変更していない。
+
+実G14応答とA1を使う統合targetの40件が標準stackで成功し、未完source要求の間へ
+実Court relationを挿入し、Court単体なら収まる消費が残応答枠を奪う反例も拒否した。
+raw/source hashと検証範囲は [残予約保護の記録](../../../../handoff/positive-court/remaining-capacity-20261102/README.md)
+へ保存する。40件は旧53件との合算ではない。
+
+これはlocal replayの必須検査接続であり、actual native mapper・役割別残予約・物理lease・
+deadline/interval供給機会の実装完了ではない。source/whole-Caseの各counterのnative射影を
+新たに割り当てておらず、その正本は引き続きnative ownerが明示的に供給する必要がある。
+上段の旧source候補・53件の原記録は履歴として維持する。
+
 実TIR class/jobからgeometryを導出し、実inventory builderのG14 openingと入力資料を用意する。署名済みop3 requestとop4 responseを、実Courtが検査するframeの間へ挿入する。ExternalStateはproduction helperそのもので、疑似counterだけを増やす代替台帳は使わない。
 
 検査対象は、2種類のsource union・receipt・fee intent、global wire/work/attemptの一度加算、fresh ZERO basis、request/response再送、dutyまたはcanonical history欠落、部分global basis、origin差替え、kind1の型付き拒否、poison、live commit未呼出し。既存actual TIRの正常・不一致・Panel fault等8件も同じ候補で再実行する。

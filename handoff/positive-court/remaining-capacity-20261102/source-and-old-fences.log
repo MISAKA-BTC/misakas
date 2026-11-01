@@ -1,0 +1,8 @@
+   Compiling kaspa-utils v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/utils)
+   Compiling kaspa-hashes v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/crypto/hashes)
+   Compiling kaspa-math v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/math)
+   Compiling misaka-palw-panel v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/misaka/palw/panel)
+   Compiling kaspa-muhash v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/crypto/muhash)
+   Compiling kaspa-merkle v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/crypto/merkle)
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/consensus/core)
+   Compiling kaspa-database v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/database)

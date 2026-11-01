@@ -1,0 +1,6 @@
+{
+  "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libkaspa_consensus_core-e26f169f58011e8b.rmeta",
+  "bytes": 122899785,
+  "sha256": "7ebc94750516248725c22150e3a7cfcdfdebd9ef81892b913d80723d1ef72b31",
+  "reason": "own direct-Core metadata after its completed runtime and strict lint; full-node runtime uses its distinct Core variant"
+}

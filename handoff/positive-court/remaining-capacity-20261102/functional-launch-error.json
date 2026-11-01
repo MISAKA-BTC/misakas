@@ -1,0 +1,7 @@
+{
+  "qualification": "NOT_RUN: Cargo message-format option was placed before the test subcommand",
+  "script_exit_code": 1,
+  "cargo_exit_code": "not recorded before artifact-count assertion",
+  "log": "source-court-integration-functional-final.log",
+  "log_sha256": "3aaa7614cb75182d3e3786b0bffebb3fb968006e557c4e80b5cbecf59be999a6"
+}
