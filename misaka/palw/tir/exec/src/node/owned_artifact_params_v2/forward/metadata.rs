@@ -382,10 +382,10 @@ fn cheap_inputs(i: MetadataOwnerInputsV2<'_>) -> Result<(), M> {
     {
         return Err(M::Pin);
     }
-    if let Some(l) = i.expected_layout {
-        if l.commit_tiles.len() > MAX_BLOCKS * MAX_NODES_PER_BLOCK || l.state_tiles.len() > MAX_STATES {
-            return Err(M::Limit);
-        }
+    if let Some(l) = i.expected_layout
+        && (l.commit_tiles.len() > MAX_BLOCKS * MAX_NODES_PER_BLOCK || l.state_tiles.len() > MAX_STATES)
+    {
+        return Err(M::Limit);
     }
     Ok(())
 }
