@@ -288,10 +288,10 @@ impl LocalCompiledTirPlanV2 {
 pub fn tir_plan_compile_quote_visits_upper_v2(source: &LocalSourceProgramOwnerV1) -> Result<u64> {
     mul(add(source.quote().nf_items(), 1)?, 8)
 }
-pub fn prepare_tir_plan_compile_v2<'a>(
-    source: &'a LocalSourceProgramOwnerV1,
+pub fn prepare_tir_plan_compile_v2(
+    source: &LocalSourceProgramOwnerV1,
     limits: TirPlanCompileLimitsV2,
-) -> Result<PreparedTirPlanCompileV2<'a>> {
+) -> Result<PreparedTirPlanCompileV2<'_>> {
     let quote = quote_tir_plan_compile_v2(source, limits)?;
     Ok(PreparedTirPlanCompileV2 { source, quote })
 }
