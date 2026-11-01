@@ -135,7 +135,13 @@ fn case_program(case: Case, window: u32) -> (misaka_palw_tir::TirProgramV1, misa
         let dtype = if wide { DType::I64 } else { DType::I32 };
         let mut b = ProgramBuilder::new(4, 1 << 21);
         let data = b.param("long.logits", dtype, &[4], false);
-        let pre = b.block("pre", vec![]).finish(&[]);
+        let zero = b.konst(DType::I32, &[1], &[0]);
+        let state = b.fixed_state("prefill.sentinel", DType::I32, &[1], 0, 0, false);
+        let mut pre = b.block("pre", vec![]);
+        // Normal form requires a live node in every block. A noncommitted
+        // state write keeps this pre valid while retaining exactly one POST leaf.
+        pre.state_write(state, zero);
+        let pre = pre.finish(&[]);
         let mut post = b.block("post", vec![]);
         let out = post.reshape_fixed(data, &[4]);
         post.commit(out);
@@ -155,7 +161,10 @@ fn case_program(case: Case, window: u32) -> (misaka_palw_tir::TirProgramV1, misa
             let threshold = b.scalar(DType::I32, 4);
             let when_true = b.konst(DType::I32, &[2], &[0, 7]);
             let when_false = b.konst(DType::I32, &[2], &[8, 1]);
-            let pre = b.block("pre", vec![]).finish(&[]);
+            let state = b.fixed_state("selector.table", DType::I32, &[4, 4], i64::from(i32::MIN), i64::from(i32::MAX), false);
+            let mut pre = b.block("pre", vec![]);
+            pre.state_write(state, table);
+            let pre = pre.finish(&[]);
             let mut post = b.block("post", vec![]);
             let row = post.gather(table, Ref::Input(0), 0, 0);
             let ids = post.topk(row, 0, 2);
