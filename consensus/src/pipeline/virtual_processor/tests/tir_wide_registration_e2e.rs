@@ -329,6 +329,7 @@ fn run_legacy_wide_case(mut case: LegacyWideCaseFuture) {
 }
 
 async fn legacy_reorg_verification(env: Box<Env>) {
+    use crate::model::stores::virtual_state::VirtualStateStoreReader;
     let mut a = registered(*env).await;
     let class_id = id(&a.object);
     let (_, accepted) = a.env.chain.tip_state();
@@ -345,15 +346,49 @@ async fn legacy_reorg_verification(env: Box<Env>) {
     arrive(&alternate, a.warm.clone(), "common warm block").await;
     alternate.ctx.simulated_time = a.warm.header.timestamp;
     let t = a.env.config.params.target_time_per_block();
+    let fork_parent_daa = alternate.daa_of(alternate.sink());
+    let k_history = a.env.config.params.ghostdag_k_history();
+    let depth_history = a.env.config.params.merge_depth_history();
+    let k = k_history.get(fork_parent_daa);
+    let merge_depth = depth_history.get(fork_parent_daa);
+    // Red blocks still contribute valid transactions to the virtual mergeset.
+    // Advance beyond both K and merge depth so bounded merge excludes the old
+    // branch entirely; the independent alternate chain cannot kosherize it.
+    let fork_blocks = 4_u64
+        .max(u64::from(k).checked_add(3).expect("fork K margin fits"))
+        .max(merge_depth.checked_add(3).expect("fork merge-depth margin fits"));
     let mut heavier = vec![];
-    for _ in 0..4 {
+    for _ in 0..fork_blocks {
         heavier.push(alternate.heartbeat(t, vec![]).await);
     }
+    let fork_tip_daa = alternate.daa_of(alternate.sink());
+    assert_eq!(k_history.get(fork_tip_daa), k, "the fixture must not cross an effective K change");
+    assert_eq!(depth_history.get(fork_tip_daa), merge_depth, "the fixture must not cross an effective merge-depth change");
+    let alternate_suffix: Vec<_> = heavier.iter().map(|block| block.header.hash).collect();
     for block in heavier {
         arrive(&z, block, "wide registration reorg branch").await;
     }
     assert_eq!(z.sink(), alternate.sink());
-    let (_, removed) = z.tip_state();
+    {
+        let parents = z.ctx.consensus.get_virtual_parents();
+        let virtual_state = z.vp().virtual_stores.read().state.get().unwrap();
+        let mergeset: Vec<_> = virtual_state.ghostdag_data.unordered_mergeset().collect();
+        let merge_root = z.ctx.consensus.get_virtual_merge_depth_root().expect("a bounded-merge root exists");
+        eprintln!(
+            "A1_WIDE_REORG fork_blocks={fork_blocks} k={k} merge_depth={merge_depth} selected_parent={} parents={parents:?} full_mergeset={mergeset:?} merge_root={merge_root} accepted_tx_ids={:?}",
+            virtual_state.ghostdag_data.selected_parent, virtual_state.accepted_tx_ids
+        );
+        assert_eq!(virtual_state.ghostdag_data.selected_parent, z.sink());
+        assert!(parents.contains(&alternate.sink()));
+        for old_block in [a.carrying.header.hash, a.folding.header.hash] {
+            assert!(!parents.contains(&old_block), "the old branch is not a virtual parent");
+            assert!(!mergeset.contains(&old_block), "even red old-branch blocks must be excluded from virtual acceptance");
+        }
+        assert!(!virtual_state.accepted_tx_ids.contains(&a.carrier.id()), "the old carrier must not remain virtually accepted");
+        assert!(alternate_suffix.contains(&merge_root), "merge-depth root must lie strictly after warm on the alternate chain");
+    }
+    let (palw_tip, removed) = z.tip_state();
+    assert_eq!(palw_tip, z.sink());
     assert!(removed.class(&class_id).is_none());
     assert!(removed.tir_class_v1(&class_id).is_none());
     assert_eq!(removed.bond(&a.env.chain.bonds[CARD]).unwrap().collateral, a.collateral);
