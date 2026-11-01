@@ -17,7 +17,10 @@ refusal or I/O failure ends server processing or poisons the client.
 
 `PreparedWideCellV2` borrows an independently admitted V2 binding/space,
 original job context, plan and resident parameters. It pins class/context and
-program identity. Open streams comparison against that original program and
+program identity. The caller must supply an unmodified `TirPlan::compile` result
+and matching resident parameters; the prepared API does not authenticate all
+public compiled-plan fields. This trusted-source precondition is separate from
+wire-data checks. Open streams comparison against original program and
 parameter bytes. It does not decode a wire program, build a plan, materialize
 wire parameter tensors or fetch lazy rows. A provider with a row source is
 refused before range refinement can materialize it. This is a plan-specific
