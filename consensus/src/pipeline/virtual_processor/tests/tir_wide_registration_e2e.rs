@@ -436,49 +436,60 @@ async fn wide_registration_one_per_block_cap_preserves_both_real_carrier_utxo_ac
     }
 }
 
-#[tokio::test]
-async fn isolated_wide_carrier_origin_matches_actual_accepting_block_and_survives_same_db_restore() {
-    use kaspa_consensus_core::palw_class_registration_origin_v1::{
-        PalwClassRegistrationDoorV1, palw_class_admission_digest_v1, palw_class_registration_origin_row_v1,
-    };
-    use kaspa_database::{create_temp_db, prelude::ConnBuilder};
-    let (config, bundle, premine, floats) = isolated_origin_config();
-    let (_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
-    let (sender, _rx) = async_channel::unbounded();
-    let chain = t12_genesis_chain_on(TestConsensus::with_db(db.clone(), &config, sender), &config, &bundle, &premine, &floats);
-    let mined = registered(Env { chain, config: config.clone(), bundle: bundle.clone(), premine, floats }).await;
-    let class_id = id(&mined.object);
-    let (sink, state) = mined.env.chain.tip_state();
-    let class_row = state.class(&class_id).unwrap();
-    let origin = palw_class_registration_origin_row_v1(state.kernel_route(), &class_id).expect("actual registration origin aux141");
-    let Obj::ClassRegisteredTirV1 { admission, .. } = &mined.object else { unreachable!() };
-    assert_eq!(origin.version, 1);
-    assert_eq!(origin.class_id, class_id);
-    assert_eq!(origin.block, mined.folding.header.hash);
-    assert_eq!(origin.block, sink);
-    assert_eq!(origin.daa_score, class_row.registered_daa);
-    assert_eq!(origin.daa_score, mined.env.chain.daa_of(sink));
-    assert_eq!(origin.door, PalwClassRegistrationDoorV1::Tir);
-    assert_eq!(origin.admission_digest, Some(palw_class_admission_digest_v1(&**admission).unwrap()));
-    // registered() already checked this exact carrier's accepted transaction
-    // entry and its class-table writer at the same accepting DAA.
-    let expected_root = state.state_root();
-    let expected_record = state.tir_class_v1(&class_id).cloned().unwrap();
-    let expected_class = class_row.clone();
-    let change = TransactionOutpoint::new(mined.carrier.id(), 0);
-    let time = mined.env.chain.ctx.simulated_time;
-    let nonce = mined.env.chain.nonce_for_reopen();
-    drop(mined);
-    let mut resumed = config;
-    resumed.process_genesis = false;
-    let (sender, _rx2) = async_channel::unbounded();
-    let second = TestConsensus::with_db(db.clone(), &resumed, sender);
-    let reopened = t12_reopened_chain(second, &resumed, &bundle, time, nonce);
-    let (restored_tip, restored) = reopened.tip_state();
-    assert_eq!(restored_tip, sink);
-    assert_eq!(restored.state_root(), expected_root);
-    assert_eq!(restored.class(&class_id), Some(&expected_class));
-    assert_eq!(restored.tir_class_v1(&class_id), Some(&expected_record));
-    assert_eq!(palw_class_registration_origin_row_v1(restored.kernel_route(), &class_id), Some(origin));
-    assert!(reopened.ctx.consensus.get_virtual_utxo_entry(change).is_some());
+// Keep construction of the large test continuation outside the runtime's
+// block_on/poll call chain. This changes ownership, not the libtest stack size.
+#[inline(never)]
+fn isolated_wide_carrier_origin_boxed_case() -> std::pin::Pin<Box<dyn std::future::Future<Output = ()>>> {
+    Box::pin(async move {
+        use kaspa_consensus_core::palw_class_registration_origin_v1::{
+            PalwClassRegistrationDoorV1, palw_class_admission_digest_v1, palw_class_registration_origin_row_v1,
+        };
+        use kaspa_database::{create_temp_db, prelude::ConnBuilder};
+        let (config, bundle, premine, floats) = isolated_origin_config();
+        let (_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let (sender, _rx) = async_channel::unbounded();
+        let chain = t12_genesis_chain_on(TestConsensus::with_db(db.clone(), &config, sender), &config, &bundle, &premine, &floats);
+        let mined = registered(Env { chain, config: config.clone(), bundle: bundle.clone(), premine, floats }).await;
+        let class_id = id(&mined.object);
+        let (sink, state) = mined.env.chain.tip_state();
+        let class_row = state.class(&class_id).unwrap();
+        let origin =
+            palw_class_registration_origin_row_v1(state.kernel_route(), &class_id).expect("actual registration origin aux141");
+        let Obj::ClassRegisteredTirV1 { admission, .. } = &mined.object else { unreachable!() };
+        assert_eq!(origin.version, 1);
+        assert_eq!(origin.class_id, class_id);
+        assert_eq!(origin.block, mined.folding.header.hash);
+        assert_eq!(origin.block, sink);
+        assert_eq!(origin.daa_score, class_row.registered_daa);
+        assert_eq!(origin.daa_score, mined.env.chain.daa_of(sink));
+        assert_eq!(origin.door, PalwClassRegistrationDoorV1::Tir);
+        assert_eq!(origin.admission_digest, Some(palw_class_admission_digest_v1(&**admission).unwrap()));
+        // registered() already checked this exact carrier's accepted transaction
+        // entry and its class-table writer at the same accepting DAA.
+        let expected_root = state.state_root();
+        let expected_record = state.tir_class_v1(&class_id).cloned().unwrap();
+        let expected_class = class_row.clone();
+        let change = TransactionOutpoint::new(mined.carrier.id(), 0);
+        let time = mined.env.chain.ctx.simulated_time;
+        let nonce = mined.env.chain.nonce_for_reopen();
+        drop(mined);
+        let mut resumed = config;
+        resumed.process_genesis = false;
+        let (sender, _rx2) = async_channel::unbounded();
+        let second = TestConsensus::with_db(db.clone(), &resumed, sender);
+        let reopened = t12_reopened_chain(second, &resumed, &bundle, time, nonce);
+        let (restored_tip, restored) = reopened.tip_state();
+        assert_eq!(restored_tip, sink);
+        assert_eq!(restored.state_root(), expected_root);
+        assert_eq!(restored.class(&class_id), Some(&expected_class));
+        assert_eq!(restored.tir_class_v1(&class_id), Some(&expected_record));
+        assert_eq!(palw_class_registration_origin_row_v1(restored.kernel_route(), &class_id), Some(origin));
+        assert!(reopened.ctx.consensus.get_virtual_utxo_entry(change).is_some());
+    })
+}
+
+#[test]
+fn isolated_wide_carrier_origin_matches_actual_accepting_block_and_survives_same_db_restore() {
+    let mut case = isolated_wide_carrier_origin_boxed_case();
+    tokio::runtime::Builder::new_current_thread().enable_all().build().expect("Failed building the Runtime").block_on(case.as_mut());
 }
