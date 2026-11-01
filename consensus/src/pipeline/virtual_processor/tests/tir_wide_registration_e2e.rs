@@ -440,12 +440,13 @@ async fn wide_registration_one_per_block_cap_preserves_both_real_carrier_utxo_ac
 // block_on/poll call chain. This changes ownership, not the libtest stack size.
 #[inline(never)]
 fn isolated_wide_carrier_origin_boxed_case() -> std::pin::Pin<Box<dyn std::future::Future<Output = ()>>> {
+    let setup = Box::new(isolated_origin_config());
     Box::pin(async move {
         use kaspa_consensus_core::palw_class_registration_origin_v1::{
             PalwClassRegistrationDoorV1, palw_class_admission_digest_v1, palw_class_registration_origin_row_v1,
         };
         use kaspa_database::{create_temp_db, prelude::ConnBuilder};
-        let (config, bundle, premine, floats) = isolated_origin_config();
+        let (config, bundle, premine, floats) = *setup;
         let (_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
         let (sender, _rx) = async_channel::unbounded();
         let chain = t12_genesis_chain_on(TestConsensus::with_db(db.clone(), &config, sender), &config, &bundle, &premine, &floats);
