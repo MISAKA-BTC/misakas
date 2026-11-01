@@ -1,0 +1,148 @@
+{
+  "source_commit": "f8bb847c9e9ba0799d87616db5dee67ebc6407c3",
+  "source_snapshot_sha256": "bbf142bf79500552f2b9288f90027e1d4144c0bccc8c7688ca7af8d2bafa759e",
+  "source_file_count": 3392,
+  "commands": [
+    {
+      "name": "final-python-discovery",
+      "command": [
+        "python3",
+        "-B",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "testing/positive-court-a7",
+        "-p",
+        "test_*.py",
+        "-v"
+      ],
+      "exit_code": 0,
+      "seconds": 5.823,
+      "log": "final-python-discovery.log",
+      "sha256": "7dbe7affe8bdb9104921af84b30d753051a9c1cc96064e7878b9773d96e125ff",
+      "passed": 28
+    },
+    {
+      "name": "final-contract-accounting",
+      "command": [
+        "cargo",
+        "test",
+        "--offline",
+        "--locked",
+        "-p",
+        "misaka-palw-positive-contract",
+        "-p",
+        "misaka-palw-positive-accounting"
+      ],
+      "exit_code": 0,
+      "seconds": 1.576,
+      "log": "final-contract-accounting.log",
+      "sha256": "5fcdd47dbe6bbaa8a3f953cf13762958453c12ec950e9267409f689012a00a8c",
+      "summaries": [
+        {
+          "passed": 42,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 8,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 9,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 6,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 14,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 6,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 5,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 5,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0
+        }
+      ],
+      "passed": 104
+    },
+    {
+      "name": "docs-check",
+      "command": [
+        "python3",
+        "-B",
+        "docs/maintenance/check_docs.py"
+      ],
+      "exit_code": 0,
+      "seconds": 3.676,
+      "log": "docs-check.log",
+      "sha256": "006ed8d7560e8979c6a9f9ff451956c5e6697da95b154619909998e32ce600d6"
+    }
+  ],
+  "source_unchanged": true,
+  "head_unchanged": true,
+  "scope": "selected Python runner and leaf Rust regressions plus documentation checks, not full native qualification",
+  "original_guard_assertions": {
+    "unchanged_by_AST_comparison": true,
+    "count": 18,
+    "baseline": "ece4dc472",
+    "file": "testing/positive-court-a7/test_real_llm_process.py"
+  }
+}

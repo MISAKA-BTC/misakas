@@ -1,0 +1,211 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index 44224254b..f8e0f5ef7 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -3818,6 +3818,7 @@ dependencies = [
+  "misaka-palw-base0",
+  "misaka-palw-challenge",
+  "misaka-palw-kernel",
++ "misaka-palw-positive-contract",
+  "misaka-palw-remote",
+  "misaka-palw-sdk",
+  "misaka-palw-tir",
+@@ -3833,6 +3834,7 @@ dependencies = [
+  "secp256k1",
+  "serde",
+  "serde_json",
++ "sha2 0.10.8",
+  "smallvec",
+  "thiserror 1.0.64",
+  "tokio",
+@@ -3899,6 +3901,7 @@ dependencies = [
+  "misaka-palw-gen",
+  "misaka-palw-kernel",
+  "misaka-palw-panel",
++ "misaka-palw-positive-accounting",
+  "misaka-palw-positive-contract",
+  "misaka-palw-tir",
+  "misaka-palw-tir-sketch",
+@@ -6503,16 +6506,20 @@ dependencies = [
+  "blake2b_simd",
+  "borsh",
+  "cc",
++ "kaspa-consensus",
+  "kaspa-consensus-core",
++ "kaspa-database",
+  "libc",
+  "libcrux-ml-dsa",
+  "misaka-palw-base0",
++ "misaka-palw-positive-accounting",
+  "misaka-palw-positive-contract",
+  "misaka-palw-tir",
+  "misaka-palw-tir-artifact",
+  "rand 0.8.6",
+  "rand_chacha 0.3.1",
+  "rayon",
++ "rocksdb",
+  "serde_json",
+  "tempfile",
+ ]
+diff --git a/consensus/core/src/lib.rs b/consensus/core/src/lib.rs
+index e63190107..02ba6543c 100644
+--- a/consensus/core/src/lib.rs
++++ b/consensus/core/src/lib.rs
+@@ -20,6 +20,14 @@ pub(crate) mod palw_tir_corpus_fixture_v1;
+ 
+ pub mod palw_mergeset_v1;
+ pub mod palw_native_readiness_v1;
++// Pure bounded Positive checker; no mapped artifacts or model runtime.
++pub mod palw_positive_check_v2;
++pub mod palw_positive_common_replay_v2;
++pub mod palw_positive_common_source_replay_v2;
++pub mod palw_positive_contract_v2;
++pub mod palw_positive_court_v2;
++pub mod palw_positive_journal_chain_v2;
++pub mod palw_positive_metadata_v2;
+ pub mod palw_positive_rows_v2;
+ pub mod palw_positive_source_read_v2;
+ pub mod palw_positive_source_geometry_v2;
+@@ -765,10 +773,19 @@ pub mod palw_terminal;
+ pub mod palw_terminal_carriage_v1;
+ /// RFC-0002 Phase F step F6: admission v10 — the gate an IR class registration passes, its builder and the node's preflight.
+ pub mod palw_tir_admission_v1;
++/// Explicit pure wide-only TIR admission data; no native dispatch or activation.
++pub mod palw_tir_admission_v2;
++/// Chain-selected legacy/wide registration routing; no object or environment selector.
++pub mod palw_tir_registration_dispatch_v1;
+ /// RFC-0002 Phase F (F3): the TIR inventory — the artifact layout an IR class's `artifact_root` commits to.
+ pub mod palw_tir_artifact_v1;
+ /// RFC-0002 Phase F step F6: an IR class's attempt job — the canonical job, the yardstick context and the job an anchor names (J5).
+ pub mod palw_tir_attempt_v1;
++/// Explicit metadata-only narrow/wide canonical job profile resolution; no native admission.
++pub mod palw_tir_profile_resolver_v2;
++/// Explicit profile-aware schema-1 class record data; no native admission or activation.
++pub mod palw_tir_class_record_v2;
++pub mod palw_tir_row_profile_v2;
+ /// RFC-0002 Phase F step F6: the IR family certifier — drill evidence graded by the shipped IR court into a family over the program's primitives.
+ pub mod palw_tir_certify_v1;
+ /// RFC-0002 Phase F step F2: an IR class — the program, its commitment layout, its identity and its registration carriage.
+@@ -777,6 +794,8 @@ pub mod palw_tir_class_v1;
+ pub mod palw_tir_close_range_v1;
+ /// RFC-0002 Phase F step F7 (PALW-TIR-38): the carried size of every terminal close of an IR class — the court's own read set, priced as carried.
+ pub mod palw_tir_close_size_v1;
++/// Explicit local eight-byte upper bounds for wide-Q24 TIR closes; no native activation.
++pub mod palw_tir_close_size_v2;
+ /// RFC-0002 Phase F step F5: the IR court — one committed leaf adjudicated by demand evaluation of its cone, PALW-TIR-33, logits consistency and the decode-token door.
+ pub mod palw_tir_court_v1;
+ /// RFC-0002 Phase F step F7: the generic history dissection of an IR class — every reduction over H of the disputed cone, folded exactly.
+@@ -1203,3 +1222,5 @@ pub mod palw_paid_bootstrap_source_v6;
+ pub mod palw_paid_claim_observation_v6;
+ 
+ pub mod palw_exec_origin_coverage_v1;
++
++pub mod palw_logits_q24_v2;
+diff --git a/consensus/core/src/palw_positive_source_v2.rs b/consensus/core/src/palw_positive_source_v2.rs
+index 56cb5b009..5e1861998 100644
+--- a/consensus/core/src/palw_positive_source_v2.rs
++++ b/consensus/core/src/palw_positive_source_v2.rs
+@@ -777,11 +777,11 @@ fn merge(previous: &[(u64, u64)], added: (u64, u64)) -> Vec<(u64, u64)> {
+     ranges.sort_unstable();
+     let mut out: Vec<(u64, u64)> = Vec::with_capacity(ranges.len());
+     for (first, end) in ranges {
+-        if let Some(last) = out.last_mut() {
+-            if first <= last.1 {
+-                last.1 = last.1.max(end);
+-                continue;
+-            }
++        if let Some(last) = out.last_mut()
++            && first <= last.1
++        {
++            last.1 = last.1.max(end);
++            continue;
+         }
+         out.push((first, end));
+     }
+diff --git a/consensus/core/src/palw_state_v2.rs b/consensus/core/src/palw_state_v2.rs
+index d8ef21ce4..32030cbd6 100644
+--- a/consensus/core/src/palw_state_v2.rs
++++ b/consensus/core/src/palw_state_v2.rs
+@@ -1841,6 +1841,11 @@ pub struct PalwStateParamsV2 {
+     /// `floor_refusal_retry_from_daa`'s reason, and `validate_palw_v2` refuses a copy that disagrees.
+     #[borsh(skip)]
+     tir_from_daa: Option<u64>,
++    /// Full chain-selected court2 registration fence, runtime-only. The Params
++    /// fence already fingerprints every field; this mirror changes no wire bytes.
++    /// Legacy court1/height-only fixtures cannot authorize wide registration.
++    #[borsh(skip)]
++    tir_wide_registration_fence: Option<crate::palw_tir_v1::PalwTirFenceV1>,
+     /// **RFC-0003: `Params::palw_gen_v1`'s height**, mirrored by `Params::sync_palw_gen_v1` because
+     /// the fold that admits a generative registration holds only these params: below the fence the
+     /// fold refuses one by name, as the second lock behind the acceptance walk's drop. `None` on every
+@@ -13130,6 +13135,9 @@ pub fn palw_model_carrier_payout_rows_v1(tx: &crate::tx::Transaction) -> Option<
+     if tx.subnetwork_id != crate::subnets::SUBNETWORK_ID_PALW_LIFECYCLE {
+         return None;
+     }
++    if crate::palw_lifecycle_objects_v2::palw_positive_lifecycle_payload_v2(&tx.payload) {
++        return None;
++    }
+     let payload: PalwLifecycleTxPayloadV2 = borsh::from_slice(&tx.payload).ok()?;
+     if payload.version != PALW_LIFECYCLE_TX_VERSION_V2 {
+         return None;
+@@ -13220,6 +13228,9 @@ pub fn palw_model_market_carrier_refusal_v1(
+     if tx.subnetwork_id != crate::subnets::SUBNETWORK_ID_PALW_LIFECYCLE {
+         return None;
+     }
++    if crate::palw_lifecycle_objects_v2::palw_positive_lifecycle_payload_v2(&tx.payload) {
++        return None;
++    }
+     let payload: PalwLifecycleTxPayloadV2 = borsh::from_slice(&tx.payload).ok()?;
+     // ADR-0152-adjacent (Activation Pool): the fold's own refusal of a top-up, asked before it is
+     // relayed or mined — a refused top-up is paid back (P-B1), but a node need not mine the round trip.
+@@ -19296,9 +19307,9 @@ fn apply_class_registration_v1(
+             .map_err(|_| PalwStateV2Error::ImmutableModelUpdate("class registration admission digest"))?
+             .ok_or(PalwStateV2Error::ImmutableModelUpdate("class registration origin needs a registration object"))?;
+         if builder.state.kernel_route.is_none() {
+-            return Err(PalwStateV2Error::ImmutableModelUpdate(
+-                "class registration origin needs the kernel-route aux store (aux 141)",
+-            ));
++            // A genesis registration can be the route's first writer. Create
++            // its journaled, policy-checked header before writing aux 141.
++            palw_kernel_route_fold_v1::ensure_route_header(builder, ctx)?;
+         }
+         let row = PalwClassRegistrationOriginRowV1 {
+             version: PALW_CLASS_REGISTRATION_ORIGIN_ROW_VERSION_V1,
+@@ -22068,6 +22079,13 @@ fn attach_riders_v1(
+     if remainder < e_r {
+         return refuse("the lead's remainder is below a rider's share");
+     }
++    // Legacy rider generation has no wide source/court adapter. Refuse the
++    // whole batch before changing the lead's escrow, exposure or budget.
++    for class_id in std::iter::once(&lead.class_id).chain(riders.iter().map(|r| &r.attempt.class_id)) {
++        if let Some(record) = builder.state.tir_class_v1(class_id) {
++            crate::palw_tir_row_profile_v2::reject_known_wide_tir_row_v1(record).map_err(PalwStateV2Error::TirFence2Refused)?;
++        }
++    }
+     // The lead gives its shares up FIRST (the commitment it held is released and re-reserved at what it keeps), so the riders meet the
+     // ceilings with the room the split freed.
+     let mut kept = lead.clone();
+@@ -22211,6 +22229,11 @@ fn apply_attempt(
+     if let PalwClassStatusV2::Frozen { .. } = class.status {
+         return Err(PalwStateV2Error::FrozenClass(attempt.class_id));
+     }
++    // This legacy claim path has no wide reader/court adapter. It must refuse
++    // before any claim/reservation write, independently of audit-mesh arming.
++    if let Some(record) = builder.state.tir_class_v1(&attempt.class_id) {
++        crate::palw_tir_row_profile_v2::reject_known_wide_tir_row_v1(record).map_err(PalwStateV2Error::TirFence2Refused)?;
++    }
+     // ADR-0135: a class the registry does not admit (REGISTERED, PREFETCHING, HELD) takes no new
+     // claim, and one at its inflight cap takes none until a claim leaves flight.
+     builder.check_class_admits_claim(&attempt.class_id, ctx.daa_score, PalwGatedClaimV1::Attempt)?;
+diff --git a/misaka/palw/positive-contract/src/lib.rs b/misaka/palw/positive-contract/src/lib.rs
+index 516f3d4d0..85f8d88d8 100644
+--- a/misaka/palw/positive-contract/src/lib.rs
++++ b/misaka/palw/positive-contract/src/lib.rs
+@@ -8,6 +8,7 @@ pub mod journal;
+ pub mod messages;
+ pub mod native;
+ pub mod ports;
++pub mod record;
+ pub mod rows;
+ pub mod tir;
+ pub mod wire;

@@ -1,5 +1,7 @@
 # A0 integration checkpoint
 
+2026-11-02、8 workspace統合追記: A0〜A7の固定最終tipを通常mergeで接続し、`ece4dc472`で全tipの祖先関係を確認した。A0の既存修正を保持し、未取り込みだったA7監査資料21fileを追加。続けてA7 guard scriptのimport時CLI解析によるunittest discovery失敗を`f8bb847c9`で修正し、同sourceのPython28件・共通契約51件・会計53件が成功した。元の18guard条件はAST一致、直接実行のJSON互換も確認済み。文書検査は新規不整合0、既知参照欠落43件を維持。[統合記録・原ログ・残件](workspace-integration-20261102/README.md)。公開有効化と未採択native authorityの境界は変更していない。
+
 2026-11-01更新。workspace `/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet`、branch `codex/positive-court-a0`。RFC-0044 / ADR-0212の実装調整。A1〜A7への直接連絡はユーザーが明示許可した。元checkoutや各担当のdirty作業を一括コピーしない。
 
 | 担当 | A0へ統合した範囲 | 未完了・保留 |
