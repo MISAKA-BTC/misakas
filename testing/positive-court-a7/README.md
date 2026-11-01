@@ -23,6 +23,13 @@ fixture and process timeout gaps are addressed here rather than hiding the old l
 python3 testing/positive-court-a7/run.py --out /absolute/path/to/fresh-run
 ```
 
+Run the Python controller and manifest regressions separately with
+`python3 -B -m unittest discover -s testing/positive-court-a7 -p 'test_*.py' -v`.
+Discovery includes the real-LLM driver's 18 synthetic guard checks without
+requiring `--driver` or starting a model. The standalone guard command still
+accepts an explicit driver and emits its original JSON report:
+`python3 -B testing/positive-court-a7/test_real_llm_process.py --driver testing/positive-court-a7/real_llm_process.py`.
+
 Output paths must be fresh. The runner saves commands, exit codes, source/compiler/
 binary/lock hashes, raw logs and explicit gaps. It starts each command in a new
 session. Timeout or surviving descendants trigger TERM, then KILL if necessary;
