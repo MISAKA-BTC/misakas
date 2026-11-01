@@ -19,6 +19,8 @@ pub mod inventory;
 pub mod mapped;
 pub mod memory;
 mod own_source;
+/// Opt-in owned parameter source; no native/backend activation.
+pub mod owned_artifact_params_v2;
 pub mod partial;
 /// A1 full-coverage checker; computation facts only, no native credit.
 pub mod positive_check;

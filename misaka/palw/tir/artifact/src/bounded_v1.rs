@@ -418,6 +418,10 @@ impl PalwTirCheckedHeaderV1<'_> {
     pub fn program(&self) -> &TirProgramV1 {
         self.program
     }
+    /// Borrow the original bounded layout grammar without copying or defaults.
+    pub fn layout(&self) -> Result<Option<PalwTirLayoutBytesV1<'_>>> {
+        self.metadata.layout()
+    }
     pub fn file_len(&self) -> u64 {
         self.metadata.file_len
     }
