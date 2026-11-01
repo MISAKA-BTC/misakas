@@ -73,5 +73,9 @@
     "new_issue_occurrences": 0,
     "log": "docs.log",
     "sha256": "2371f24aef8cd2c9bb7b594fa643dadb096be69cb1009a54873644720e5bb793"
+  },
+  "exact_before_after_and_marker": {
+    "file": "exact-source-and-marker.json",
+    "sha256": "e7a12e0ef89986ba59fb3020ae2e457bc592c14561df16e8b10db1f5fdb09b42"
   }
 }
