@@ -1,0 +1,23 @@
+{
+  "status": "SOURCE_GO_TEST_ONLY_FIX_VALID_NO_WEAKENED_ASSERTS",
+  "scope": "Readonly source review, no Cargo/rustc/CPP/models/runtime/additionaltests/sourcechanges",
+  "base_commit": "08a92823a4c8025423018ad223fe53145d4b62c4",
+  "current_commit": "a867e78e05f8fdfb6586c21c8ddbf64f76dd159b",
+  "current_tree": "3cb715e6d4867f6409063afebbddc6cbb6f9804c",
+  "only_changed_path": "misaka/palw/tir/exec/tests/local_wide_forward_v2.rs",
+  "old_source_sha256": "c371596cfb58865f4e6c1ff6f5f8b8bcc32cbcae777455d6c2e80831624f9fbf",
+  "new_source_sha256": "f627bdf3600ed378a4e570a7c6c7a3add4de36ea854f83b4e14f3e7ebce17b4d",
+  "entire_file_from_first_test_attribute_through_EOF_exact_old_bytes": true,
+  "test_function_count": 18,
+  "findings": [
+    "Binding parameter_source=TirParamsSourceV1(&params) before inventory build preserves source wrapper borrow for actual inventory lifetime/root read/callback. No values/model/native behavior changed.",
+    "Unchanged validator rejects nodes.is_empty at validate.rs459, accepts StateWrite as liveness effect root617, marks its target state used652. Fixture now satisfies existing NF rather than bypassing its error.",
+    "Long pre contains noncommitted I32 state write of literalzero to shape[1] Fixed[0,0], valid range/dtype/shape and alive declaration. It does not introduce a program commitment or history leaves. Wide final post remains same I64 reshape/committed finalnode; narrow same I32.",
+    "Long actual positions=prefill+decode-1=(2^21-1)+1-1=2^21-1, checkpoint interval=maxcontext=2^21, so Fixedcheckpoint floor=0. Exactly one POST commitment remains, preserving q.leaves==1 regression for large prompt writer despite added NF-live effect. Synthetic layout period changed only for long cases; maxcontext/prompt/decode unchanged, no real model contexts.",
+    "SelectTopK adds noncommitted I32 fixedshape[4,4] state write from same table parameter with fulli32range containingzero. Parameter/state names have separate validator name sets, so reused selector.table string is allowed. POST still reads original table parameter; threshold4, branch rows, TopK/Gather/select and feedback recurrence unchanged.",
+    "All test bodies/asserts/literal alternating IDs and logits rows, old dense parity and one-below resource guards byte-identical. Added Select state may add legitimate checkpoint leaves to its synthetic dense run, but no fixed expected leafcount oracle for that case is weakened.",
+    "Only one testfixture file differs across08\u2192a867; no production checker/Source/numerics/lease/Core/layout rules, native/model/params/protocol changes."
+  ],
+  "earlier_review_miss": "My prior source review described empty PRE as valid; this was wrong. Actual validator requires nonempty block. Preserve old source/HOLD/test failure evidence; revised fixture honors rule. E0716 source-wrapper temporary was also missed by static review; binding fixes actual borrowed lifetime, not an API relax.",
+  "runtime_evidence_scope": "Parent reports08 compileE0716, then4b64 Core5+Exec5+forward16PASS2FAIL emptyPRE. This reviewer ran no tests; currenta86739 remains to be re-executed in exact scheduled candidate. Earlier successes/failures not relabeled."
+}

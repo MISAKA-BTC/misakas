@@ -1,0 +1,33 @@
+{
+  "status": "SOURCE_GO_CPU_BLOCKER_CLOSED_NO_FURTHER_BLOCKERS_FOUND",
+  "scope": "Readonly exact delta/hash review only; no Cargo/rustc/CPP/model/checkout/index operations or get/setrlimit calls",
+  "patch_sha256": "10ea05e31aeeb982bd77c2b2e9fd2c60105b22b4c030cfcd6eaddf0e5386f587",
+  "source_sha256": "55ba870897897eaadfda59b804e140befb05d9c1d8f687becf6cd5f6f34453a6",
+  "r2_v1_diff_sha256": "1741649ee18d5332590700ab1ba8a5e3cb73deb08fc8435127998f2431e1ed1f",
+  "initial_preserved": {
+    "patch_sha256": "d54c8e9f663876c564b26b8c54dee2af0cb91ffab2f378c55a46ed3b160c3ead",
+    "review": "/tmp/positive-a0-ordinary-trained-guarded-caller-v2-independent-review-20261102.json",
+    "review_sha256": "3665808334f9f130262c47fc72c4227f3bbed0f0228d14b6031ee3ef4635b6e7"
+  },
+  "hash_and_delta_closure": "PASS immutable r1/r2 patch hashes, exact unified source diff, r2 source matches patch plus-lines and owner expected SHA. Reversing ONLY new helper/test and replacing caller line restores old d54c source exactly.",
+  "blocker_closure": {
+    "id": "DARWIN_CPU_INFINITY_ACCEPTED_AS_FINITE",
+    "status": "CLOSED_SOURCE",
+    "finding": "Pure finite_cpu_limit requires exact u64\u2192rlim_t roundtrip, value>0 and value<libc::RLIM_INFINITY, so Darwin i64MAX sentinel and any above-sentinel request reject before get/setrlimit. install_cpu_limit calls helper as first step. No clipping/saturation/default unlimited fallback.",
+    "test": "New pure regression verifies0 reject,1 success, platformINF reject,u64MAX reject, and aboveINF reject when representable. It calls pure converter only, with no process resource syscalls. This tests actual platform constant, avoiding an assumption INF==u64MAX."
+  },
+  "unchanged": [
+    "EarlyE, private8GiB same requested ledger/guardbacking/Arc recipe, sticky singleactualcase per OSprocess and persistent one-attempt component budgets",
+    "Whole M/fullSource+freshSpace+compile, same descriptor callback, actual owned Params load\u2192ordinaryNoSink/noTrace\u2192same-owned dense; no FD clone/replace/detach/reopen or class clone added",
+    "Comparison bool+IDs+existingoutputhash refusal before fixed bounded report, original job/class/artifact/root/context16/1 and max8192/8192/2048 pins",
+    "Owner lexical RAII drop/error behavior, global monitor/physicalRSSunsupported scope, noNative/Node/P/credit/modelquality/independentexpected/fullctx/cold/RSSclaim",
+    "All prior fourpure and threeignored source bodies and every other line unchanged except pure converter call extraction; new totalfivepure+threeignored"
+  ],
+  "runtime": "ALL8_UNCOMPILED_UNRUN",
+  "limits": [
+    "Source GO is not execution/resource phase authorization or physicalRSS quota qualification. Root must preserve Native evidence before phase boundary, freeze integrated candidate+actual build/native/CXX/profile pins and own monitored process execution.",
+    "Actual requested CPU seconds must remain Root-chosen finite policy. Setter still enforces requested exact final soft/hard within old hard and does not claim preserving a stronger inherited soft cap.",
+    "Same typed-root/request/callerE and no concurrent descriptor/environment mutation contracts remain substantive; outer PG8GiB sampledmonitor/wallcleanup is external/notattested, can overshoot samples, not kernel quota or native permit.",
+    "No actual model/runtime success or comparison outcome asserted by this source closure."
+  ]
+}

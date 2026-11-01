@@ -112,3 +112,7 @@ A1は採択済RFC-0043内のnative class受付を接続中。登録受付後も�
 2026-11-02、登録・復元phase: source `50fe43e4c9ded609b1be9ab51125caa33ffffd8b` のNode19件と実trained HF3件、別のCore54件が成功した。元context8192/8192/2048、Pythiaのi64 Q24最終出力、実署名・実UTXO・standard MiningManager/template・別Node replay・同じDBの復元を維持する。原失敗と成功実行ファイルの保全を含むevidence commit `893452a27` をA0へFFした。[結果と範囲](../../docs/evidence/positive-court-a0-2026-10-31/integration/trained-native-registration-50fe-results-20261102.md)。旧sourceの144件等とは合算しない。Core library Clippyは成功、Execはstyle2件で停止しSDKは未実行だった。
 
 後続の通常推論phaseは別source `f7a7d2897b09a9ab889e4667e0ad4888111c2566` にtrace-free local forward、metadata owner、同じowned parametersを使うdense比較とguarded callerを統合した段階で、まだ未コンパイル・未実行である。style2件は等価な `is_multiple_of` 判定へ修正した。360Mの計算終了後も全workspace予約が保持される問題を、runtimeの見積もりを維持したoutputへの予約引継ぎで修正中。これらのsource追加を実LLM推論や全RFCの成功に数えない。新native Assignmentの権限・役割・資金・Pの採択境界と全public preset Noneは維持する。
+
+通常推論phaseの検証完了: `a867e78e05f8fdfb6586c21c8ddbf64f76dd159b` で39件と実trained3件が成功した。元最大文脈8192/8192/2048を維持し、16入力・1生成のordinary NoTraceと同じowned parametersでのdense実行のID・output hashが一致した。39件は同じsourceの34成功後のdisk停止とA7-only復旧5成功を、元INCOMPLETEを残して合成した結果であり、一つの物理runと偽らない。先のE0716・空PRE fixture失敗、資源停止も原本を保存した。[結果・時間・範囲](../../docs/evidence/positive-court-a0-2026-10-31/integration/ordinary-local-forward-a867-results-20261102.md)。
+
+最後のmetadataの等価let-chain化とpure test内の定数変換だけを行った `7a0ffcc7fb318fdf025d60beeb45f4b411539eec` では、4コマンド・8対象のstrict Clippyが全て成功した。これをa867の実LLM再実行として扱わない。モデル全長の推論、独立HF数値比較、native軽量Result/Assignment・役割・原資・P/全credit consumer接続の完了はこの結果に含まれず、追加native設計案は引き続き未採択である。

@@ -1,0 +1,126 @@
+{
+  "status": "SOURCE_ONLY_ALL_CHANGED_TESTS_UNCOMPILED_UNRUN",
+  "base": "f7a7d2897b09a9ab889e4667e0ad4888111c2566",
+  "current_apply_checked_head": "f7a7d2897b09a9ab889e4667e0ad4888111c2566",
+  "patch": "/tmp/positive-a0-ordinary-output-lease-handoff-v2.patch",
+  "patch_sha256": "c655d7df70d4b68109d98f6c91308bb2beef7ef31d93ff90deeab3853e231cc2",
+  "tree": "/tmp/positive-ordinary-lease-handoff-stage/tree",
+  "files": [
+    {
+      "path": "misaka/palw/tir/exec/src/node/owned_artifact_params_v2/forward.rs",
+      "before_sha256": "b6c4830a2731dd5c355960eeaf42f51006b4d43e2b104c4514df859ee10f81c3",
+      "after_sha256": "00990159c5c161c44830c49a16b71b392067b63ff50c711c31db5c6b59a43e5b",
+      "before_bytes": 31530,
+      "after_bytes": 33941
+    },
+    {
+      "path": "misaka/palw/tir/exec/src/node/owned_artifact_params_v2/forward/measurement.rs",
+      "before_sha256": "bb0889b235539cf107670c017849151560da319670b61d47f02f3bd68f052f5a",
+      "after_sha256": "a11eac51f7d6d1abd5c8fd4f389844907889cc392813300bcd1bde27bc30f1f6",
+      "before_bytes": 19720,
+      "after_bytes": 19723
+    },
+    {
+      "path": "misaka/palw/tir/exec/tests/local_wide_forward_v2.rs",
+      "before_sha256": "1d3ca1ecde6eef08041af36aaa84a761c29b49874e2f26005939f649ea1a633b",
+      "after_sha256": "c371596cfb58865f4e6c1ff6f5f8b8bcc32cbcae777455d6c2e80831624f9fbf",
+      "before_bytes": 37093,
+      "after_bytes": 44996
+    },
+    {
+      "path": "misaka/palw/tir/exec/tests/local_forward_metadata_v2.rs",
+      "before_sha256": "5023799d3194276c714eb439f7245862fe307b04da149e8c58b008334772f8f2",
+      "after_sha256": "0160a9e122f463200d2b12c70fd87b234b745cfc0d30ce8450e2c380af1e41bb",
+      "before_bytes": 16919,
+      "after_bytes": 16922
+    },
+    {
+      "path": "testing/positive-court-a7/tests/ordinary_trained_forward_guarded_v2.rs",
+      "before_sha256": "55ba870897897eaadfda59b804e140befb05d9c1d8f687becf6cd5f6f34453a6",
+      "after_sha256": "da6c76c826d7a1382243ba96aa94274691191f5037dbd8ce53aa5bb6120d63e3",
+      "before_bytes": 32014,
+      "after_bytes": 32343
+    }
+  ],
+  "checks": [
+    {
+      "command": [
+        "git",
+        "-C",
+        "/tmp/positive-ordinary-lease-handoff-stage/before",
+        "apply",
+        "--check",
+        "/tmp/positive-a0-ordinary-output-lease-handoff-v2.patch"
+      ],
+      "exit_code": 0,
+      "stderr": ""
+    },
+    {
+      "command": [
+        "git",
+        "-C",
+        "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet",
+        "apply",
+        "--check",
+        "/tmp/positive-a0-ordinary-output-lease-handoff-v2.patch"
+      ],
+      "exit_code": 0,
+      "stderr": ""
+    },
+    {
+      "command": [
+        "rustfmt",
+        "--check",
+        "--edition",
+        "2024",
+        "--config-path",
+        "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/.rustfmt.toml",
+        "--config",
+        "skip_children=true",
+        "/tmp/positive-ordinary-lease-handoff-stage/tree/misaka/palw/tir/exec/src/node/owned_artifact_params_v2/forward.rs",
+        "/tmp/positive-ordinary-lease-handoff-stage/tree/misaka/palw/tir/exec/src/node/owned_artifact_params_v2/forward/measurement.rs",
+        "/tmp/positive-ordinary-lease-handoff-stage/tree/misaka/palw/tir/exec/tests/local_wide_forward_v2.rs",
+        "/tmp/positive-ordinary-lease-handoff-stage/tree/misaka/palw/tir/exec/tests/local_forward_metadata_v2.rs",
+        "/tmp/positive-ordinary-lease-handoff-stage/tree/testing/positive-court-a7/tests/ordinary_trained_forward_guarded_v2.rs"
+      ],
+      "exit_code": 0,
+      "stderr": "",
+      "stdout": ""
+    },
+    {
+      "name": "CPU_prompt_loop_row_selection_output_hash_exact_and_quote_struct_full_working_formula_exact",
+      "pass": true
+    }
+  ],
+  "scope": "Only ordinary working->retained output lease handoff, dense retained external floor, sequential caller max instead of sum, existing memory assertions+4 focused boundary tests",
+  "new_tests": [
+    "working_to_output_handoff_keeps_both_guards_until_scratch_drops_then_retains_only_ids",
+    "output_handoff_denial_after_cpu_returns_no_result_and_never_refunds_attempts_or_requests",
+    "exact_and_one_below_handoff_caps_cover_both_real_guards_before_cpu",
+    "dense_external_floor_uses_real_retained_output_after_working_guard_release"
+  ],
+  "test_counts": {
+    "forward_target": 18,
+    "metadata_target": 6,
+    "guarded_caller_pure": 5,
+    "guarded_caller_ignored_actual": 3
+  },
+  "not_performed": [
+    "checkout edits",
+    "Cargo",
+    "rustc",
+    "CPP",
+    "model payload/stat",
+    "runtime",
+    "CPU limit changes",
+    "cache operation"
+  ],
+  "guarantees": [
+    "Full work quote/requested_bytes/numeric CPU loop unchanged",
+    "new perattempt/operation/cumulative charge includes full+typed retained overlap before CPU",
+    "drop row+exec after hash; acquire output guard while full guard still lives; then dropfull",
+    "late retention refusal emits no result and never refunds budget",
+    "returned IDs exactcapacity+inline root, no plan/Params/context borrow; callback guard backing covered by host contract/concreteledger",
+    "dense/caller retains only typed output bound, preserves8GiB requested cap; no RSSbound/nativeauthority claim"
+  ]
+}
