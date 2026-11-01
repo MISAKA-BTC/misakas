@@ -1,0 +1,39 @@
+[
+  {
+    "original": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/palw_tir_v1_fence-d79d96bfb7bfc74e",
+    "original_sha256": "05ff139565342129ab5a446d76bbf01af76bb919197f7374e980a2c2da295717",
+    "original_bytes": 132634480,
+    "archive": "/Users/wata/.cache/misaka-positive-court-build-preservation/palw_tir_v1_fence-d79d96bfb7bfc74e.completed-20261102.gz",
+    "archive_bytes": 36145901,
+    "archive_sha256": "941b7ee53a5da72cbfbc8b8224de8c06eb8cd0e1eabc87f89bc355114d777ecb",
+    "restored_stream_sha256": "05ff139565342129ab5a446d76bbf01af76bb919197f7374e980a2c2da295717",
+    "restored_stream_bytes": 132634480,
+    "owned_runtime_log": "source-and-old-fences-final.log",
+    "minimum_staging_free_bytes": 176259072,
+    "released": true,
+    "free_after": 308842496
+  },
+  {
+    "original": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libkaspa_consensus_core-fdf047ace05c4991.rlib",
+    "original_sha256": "cc07a7427ddea9d2c52d858e27ec71bce5df9317a0ef05cbf8897e0eb4af0526",
+    "original_bytes": 372009744,
+    "archive": "/Users/wata/.cache/misaka-positive-court-build-preservation/libkaspa_consensus_core-fdf047ace05c4991.rlib.completed-20261102.gz",
+    "archive_bytes": 96614966,
+    "archive_sha256": "a3ea933498dd76bdd8a31a3b3e1ec6e87cb9228db000dbcc312ab37bf3954719",
+    "restored_stream_sha256": "cc07a7427ddea9d2c52d858e27ec71bce5df9317a0ef05cbf8897e0eb4af0526",
+    "restored_stream_bytes": 372009744,
+    "owned_runtime_log": "source-court-integration-functional-r3.log",
+    "minimum_staging_free_bytes": 211820544,
+    "released": true,
+    "free_after": 584347648
+  },
+  {
+    "original": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/positive_court_a4_integration-b0b7dbbb6d304557",
+    "original_sha256": "56b49be31c315aad0432e74d0a84b34175c990652ecf29e6de0431d7a600b803",
+    "original_bytes": 61064624,
+    "archive": "/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/handoff/positive-court/remaining-capacity-20261102/a4-before-lint-executable.gz",
+    "restored_stream_sha256": "56b49be31c315aad0432e74d0a84b34175c990652ecf29e6de0431d7a600b803",
+    "released": true,
+    "free_after": 645300224
+  }
+]

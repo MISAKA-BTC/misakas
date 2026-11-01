@@ -91,16 +91,17 @@ These are executable-path observations, not conclusions based only on handoffs:
    `RootedCreditView` does not supply a production native factory.
 6. The bounded `LoadedWideArtifactV2` Panel bridge requires an already verified
    full step binding before model startup. The trace-free metadata/parameter
-   owner now supports ordinary inference and a private dense comparison, but
-   has no one-pass Panel capture bridge. Connecting that owner to the existing
-   R5 producer is a remaining implementation task independent of native
-   Assignment adoption; a prior dense oracle must not become a Miner trace
-   requirement.
+   owner supports ordinary inference and a private dense comparison, and
+   now delegates directly to the existing R5 one-pass producer without a prior
+   dense oracle. The independent synthetic cold-file path completes full Node
+   checking with one Panel run. Native service integration and actual trained
+   Panel/Node measurements remain required; this local bridge is not native
+   Assignment authority. See [trace-free bridge validation](trace-free-panel-20261102/README.md).
 
 ## Current implementation increment
 
-The documented source/Court shared-budget gap is being addressed first inside
-the existing replay API: a required historical remaining-capacity resolver and
+The source/Court shared-budget gap is now guarded inside
+the existing replay API by a required historical remaining-capacity resolver and
 checked post-transition usage plus outstanding demand. Actual source replay
 and arithmetic regressions are recorded separately under
 [remaining-capacity-20261102](remaining-capacity-20261102/).

@@ -1,0 +1,17 @@
+{
+  "base_commit": "01463a566",
+  "code_files": {
+    "misaka/palw/tir/exec/src/node/owned_artifact_params_v2/forward.rs": "f81bc4f30104f1b2feb7ab9560c1c82840c4280cd9a156dea52a668619a63db5",
+    "misaka/palw/tir/exec/src/node/owned_artifact_params_v2/forward/measurement.rs": "15f1730ccd7d14f39106db54d4b749446b287d91aa6479830256dc2326ef4c57",
+    "misaka/palw/tir/exec/src/node/owned_artifact_params_v2/forward/panel.rs": "df98e0efed406596bb0ad91287b3ace04915f38e791bc2018bb218b9a358eabe",
+    "misaka/palw/tir/exec/tests/positive_wide_material_v2.rs": "078d976c550eb0705526bd175e86974357a23a2bc257b401bcd576092320e4e0",
+    "misaka/palw/tir/exec/tests/positive_wide_material_v2/loaded_bridge_tests.rs": "77219852988526fd7033d3ad062627632f58d3eb50150bbff93d0eec59c5c582",
+    "misaka/palw/tir/exec/tests/positive_wide_material_v2/trace_free_bridge_tests.rs": "bffd4e90c8ee84467c88c84de0c37059211e5ebb6865352594929b5cdf876a93",
+    "misaka/palw/tir/exec/tests/run_wide_common/mod.rs": "be945723370d03fb61eac5a0f57df3e02bb908a2077da90c798ffce4594dee2a"
+  },
+  "runtime_manifest": "full-runtime.json",
+  "strict_lint_manifest": "strict-clippy-final.json",
+  "both_source_inventories_stable": true,
+  "all_changed_code_matches_runtime_and_lint": true,
+  "remaining_validation_process_groups": []
+}
