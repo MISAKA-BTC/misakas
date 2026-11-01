@@ -319,6 +319,20 @@ def main(argv=None):
                 'build_status': 'BUILD_NOT_RUN_BY_DRIVER',
                 'binary_source_mapping': 'UNVERIFIED_NO_BUILD_MANIFEST; source and binary hashes are separate pins',
                 'quote_status': 'NOT_RUN', 'inference_status': 'NOT_RUN',
+                'startup_boundary': {
+                    'preallocation_bound_status': 'NOT_ESTABLISHED',
+                    'covered_by_runner_runtime_quote': False,
+                    'stages': ['artifact open', 'nested header decode', 'program compile',
+                               'parameter instance map', 'weight identity setup']},
+                'outer_process_policy': {
+                    'wall_timeout_seconds': args.timeout,
+                    'timeout_scope': 'runner process group, including artifact startup; excludes Python parent input/source hashing',
+                    'timeout_enforcement': 'armed only when a quote-only/run subprocess is launched',
+                    'rss_scope': 'whole runner lifetime including startup; phase-specific RSS is not measured',
+                    'rss_measurement': 'Darwin /usr/bin/time -l; raw output retained after process cleanup',
+                    'rss_hard_limit_bytes': None,
+                    'rss_limit_enforced': False,
+                    'observation_status': 'NOT_RUN'},
                 'process_policy': 'one fresh process per fixed model; no model substitution',
                 'platform': platform.platform(), 'models': [], 'preflight_errors': [],
                 'execution_not_run_reasons': []}
@@ -416,8 +430,16 @@ def main(argv=None):
                         checked_file(Path(identity['path']), identity['sha256'], identity['bytes'])
                     model['started_utc'] = utc()
                     process_started = time.monotonic()
+                    manifest['outer_process_policy']['observation_status'] = 'SUBPROCESS_ATTEMPTED'
                     model['process'] = run_fresh(model['timed_command'], directory, env, args.timeout)
                     model['resource_measurement'] = parse_darwin_time(directory / 'time-l.log')
+                    model['outer_process_boundary'] = {
+                        'includes_artifact_startup': True,
+                        'wall_timeout_seconds': args.timeout,
+                        'timeout_reached': model['process']['exit_code'] == 'TIMEOUT',
+                        'rss_observation_status': model['resource_measurement']['status'],
+                        'rss_hard_limit_bytes': None, 'rss_limit_enforced': False,
+                        'startup_preallocation_bound_status': 'NOT_ESTABLISHED'}
                     model['status'] = 'PROCESS_FAILED' if model['process']['exit_code'] != 0 else 'PROCESS_EXIT_ZERO'
                     result_path = Path(model['output_json'])
                     if result_path.is_file():
