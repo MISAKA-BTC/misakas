@@ -507,6 +507,72 @@ fn panel_attempt_and_accepting_origin_changes_cannot_purchase_another_completion
 }
 
 #[test]
+fn same_block_clocks_are_exact_while_cross_block_clocks_are_monotone() {
+    let before = origin(10, [70; 64]);
+    let next_block = AcceptedOrigin { accepting_block: NativeHash64([11; 64]), ..before };
+    let cases = [
+        ("same event", before, true),
+        ("later event", AcceptedOrigin { event_ordinal: 6, ..before }, true),
+        ("later transaction", AcceptedOrigin { accepted_tx_ordinal: 5, event_ordinal: 0, ..before }, true),
+        ("earlier event", AcceptedOrigin { event_ordinal: 4, ..before }, false),
+        ("earlier transaction", AcceptedOrigin { accepted_tx_ordinal: 3, event_ordinal: 6, ..before }, false),
+        ("same block higher DAA", AcceptedOrigin { accepted_daa: 11, ..before }, false),
+        ("same block lower DAA", AcceptedOrigin { accepted_daa: 9, ..before }, false),
+        ("same block higher blue score", AcceptedOrigin { accepted_blue_score: 11, ..before }, false),
+        ("same block lower blue score", AcceptedOrigin { accepted_blue_score: 9, ..before }, false),
+        ("next block equal clocks", next_block, true),
+        (
+            "next block increasing clocks and reset ordinals",
+            AcceptedOrigin { accepted_daa: 11, accepted_blue_score: 11, accepted_tx_ordinal: 0, event_ordinal: 0, ..next_block },
+            true,
+        ),
+        ("next block higher DAA only", AcceptedOrigin { accepted_daa: 11, ..next_block }, true),
+        ("next block higher blue score only", AcceptedOrigin { accepted_blue_score: 11, ..next_block }, true),
+        ("next block lower DAA", AcceptedOrigin { accepted_daa: 9, accepted_blue_score: 11, ..next_block }, false),
+        ("next block lower blue score", AcceptedOrigin { accepted_daa: 11, accepted_blue_score: 9, ..next_block }, false),
+    ];
+    for (label, after, expected) in cases {
+        assert_eq!(not_after(before, after), expected, "{label}");
+    }
+}
+
+#[test]
+fn contradictory_same_block_settlement_clock_is_rejected_by_the_spend_proposal() {
+    let f = Fixture::new(1);
+    let locks = f.locks();
+    let receipt = f.receipt(0);
+    let due = f.due(&receipt, 10);
+    let source = [SourcePaymentData { due: &due, expected_receipt: &receipt }];
+    let (tx, entries) = f.tx(vec![f.pay(10), f.refund(90)], None);
+    let transaction = PopulatedTransaction::new(&tx, entries);
+    // DATA-only contradiction: one accepting block cannot have admission at
+    // DAA/blue 10 and settlement at 30, even with a later event ordinal. No
+    // accepted-money authority is created by this fixture or the calculator.
+    let settlement = AcceptedMaterial {
+        origin: AcceptedOrigin {
+            accepting_block: f.funding.funding_origin.accepting_block,
+            event_ordinal: 6,
+            ..origin(30, tx.id().as_bytes())
+        },
+        digest: d(60),
+    };
+    let result = propose_positive_spend(PositiveSpendData {
+        current: f.data(),
+        locks: &locks,
+        transaction: &transaction,
+        source: &source,
+        court_whole: &[],
+        recipients: &f.keys,
+        refunds: RefundData::default(),
+        other_burn: OtherBurnData::default(),
+        settlement,
+        now: 30,
+        max_dues: 20,
+    });
+    assert_eq!(result.err(), Some(PositiveFundsError::SettlementOrigin));
+}
+
+#[test]
 fn clocks_cannot_rewind_after_a_previous_settlement_or_before_a_response() {
     let mut f = Fixture::new(1);
     let receipt = f.receipt(0);
