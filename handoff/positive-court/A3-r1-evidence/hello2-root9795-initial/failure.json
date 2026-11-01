@@ -1,0 +1,28 @@
+{
+  "status": "ROOT_INITIAL_FAILURE_PRESERVED_NO_A3_CARGO",
+  "root_source": "9795a6038c1edff2ccaa86d7ca9b4a6876830d1d",
+  "selected_a3_source": "1b14d1ecc8049043c1706fafb0eaa9c5ad4c2f4a",
+  "original_log": "/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/hello2-admission-source-clock-joined-20261101-0.log",
+  "log_sha256": "449d72b855a9be1f12b8020299b69f0782e66f85f4647c619ee132d5e7738c75",
+  "counts": {
+    "capture_codec": {
+      "passed": 4,
+      "failed": 0
+    },
+    "cell": {
+      "passed": 12,
+      "failed": 0
+    },
+    "cell_ipc_v2": {
+      "passed": 5,
+      "failed": 1,
+      "ignored_child_helpers": 1
+    }
+  },
+  "remaining_proposed_targets": "NOT_REACHED_AFTER_FAILURE",
+  "diagnosis": "Test accepted TCP stream kept nonblocking mode; first Ready read immediately returned errno35/read0/written13; parent drop led child to EOF and secondary steps0 assertion. Production caps unchanged.",
+  "test_only_fix": "c99125eb85e37e793e04a1a190d83a9718466921",
+  "fix_review": "Independent panel_capture read-only review: exact4 added lines; existing accept/read/write/child deadlines and cleanup preserved; no additional blocker.",
+  "fix_execution": "NOT_RUN_BY_A3; A0 owns rerun and original binary/metadata",
+  "copied_utc": "2026-11-01T13:55:29.890370+00:00"
+}
