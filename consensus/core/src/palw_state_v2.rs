@@ -19307,9 +19307,9 @@ fn apply_class_registration_v1(
             .map_err(|_| PalwStateV2Error::ImmutableModelUpdate("class registration admission digest"))?
             .ok_or(PalwStateV2Error::ImmutableModelUpdate("class registration origin needs a registration object"))?;
         if builder.state.kernel_route.is_none() {
-            return Err(PalwStateV2Error::ImmutableModelUpdate(
-                "class registration origin needs the kernel-route aux store (aux 141)",
-            ));
+            // A genesis registration can be the route's first writer. Create
+            // its journaled, policy-checked header before writing aux 141.
+            palw_kernel_route_fold_v1::ensure_route_header(builder, ctx)?;
         }
         let row = PalwClassRegistrationOriginRowV1 {
             version: PALW_CLASS_REGISTRATION_ORIGIN_ROW_VERSION_V1,
