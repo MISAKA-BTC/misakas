@@ -7,11 +7,10 @@
 //! gate it, build `ClassRegisteredTirV1` with its admission carriage, and sign
 //! `palw_tir_class_registration_message_v1` over every field the object carries.
 //!
-//! The object is consensus's (`palw_tir_admission_v1::palw_tir_post_genesis_registration_v1`: the
-//! class id derived from the class and its root, `pwu_per_inference` counted from the carried
-//! canonical job against the network's ladder, so the object and the gate's recount are one count),
-//! and the gate is the one the acceptance path runs (`palw_tir_registration_preflight_at_v1`:
-//! `palw_tir_v1` in force, then admission v10 under the rules at that height) — asked BEFORE the
+//! Consensus constructs the unchanged tag61 object: the class id derives from the class and its
+//! root, and `pwu_per_inference` counts the canonical job against the network's ladder.
+//! The trusted Params fence and DAA select legacy v10 or the exact wide court2 path. The gate is
+//! the same selected preflight the native acceptance path runs, asked BEFORE the
 //! object is signed, so a class the chain would refuse never reaches the signer, the mempool or the
 //! fee.
 //!
@@ -21,8 +20,12 @@
 use kaspa_consensus_core::config::params::Params;
 use kaspa_consensus_core::palw_mode_v2::PalwConsensusParamsV2;
 use kaspa_consensus_core::palw_state_v2::{PalwBondKeyV2, PalwConsensusObjectV2, PalwRegistrationTermsV2};
-use kaspa_consensus_core::palw_tir_admission_v1::{palw_tir_post_genesis_registration_v1, palw_tir_registration_preflight_at_v1};
+use kaspa_consensus_core::palw_tir_admission_v1::palw_tir_post_genesis_registration_v1;
+use kaspa_consensus_core::palw_tir_admission_v2::palw_tir_post_genesis_registration_v2;
 use kaspa_consensus_core::palw_tir_class_v1::palw_tir_class_registration_message_v1;
+use kaspa_consensus_core::palw_tir_registration_dispatch_v1::{
+    TirRegistrationDispatchV1, palw_tir_registration_preflight_selected_at_v1, select_tir_registration_v1,
+};
 use kaspa_hashes::Hash64;
 
 use crate::lineage::{PalwLoadedArtifactV1, PalwTirClassEntryV1};
@@ -112,7 +115,7 @@ pub fn tir_registration_message_v1(network_domain: Hash64, object: &PalwConsensu
 }
 
 /// **The acceptance path's gate, asked of the unsigned object** (F6 B): `palw_tir_v1` in force at
-/// `daa`, then admission v10 at that height (`palw_tir_registration_preflight_at_v1`) with the
+/// `daa`, then the profile selected by those chain rules with the
 /// chain's certified families. The error names the refusal by its code.
 pub fn tir_registration_preflight_v1(
     params: &Params,
@@ -121,14 +124,14 @@ pub fn tir_registration_preflight_v1(
     daa: u64,
     chain_certified: &[kaspa_consensus_core::palw_e2e_adjudicability::PalwE2eFamilyV1],
 ) -> Result<(), String> {
-    palw_tir_registration_preflight_at_v1(params, bundle, object, daa, chain_certified)
+    palw_tir_registration_preflight_selected_at_v1(params, bundle, object, daa, chain_certified)
         .map(|_| ())
         .map_err(|e| format!("{} ({e})", e.code()))
 }
 
 /// **Build the IR registration** for `entry` under the chain's `terms`: the network's own pricing
 /// (the base class's slash value and initial target), weightless, at the canonical job admission
-/// v10 requires (`palw_tir_job_context_v1` at `palw_tir_attempt_canonical_v1`) — gated before it is
+/// requires (the original profile's full canonical yardstick) — gated before it is
 /// returned. Call once with an empty signature to learn the message to sign
 /// ([`tir_registration_message_v1`]), then again with the signature.
 #[allow(clippy::too_many_arguments)]
@@ -142,9 +145,26 @@ pub fn build_tir_registration_v1(
     signature: Vec<u8>,
     daa: u64,
 ) -> Result<PalwConsensusObjectV2, String> {
-    let object = palw_tir_post_genesis_registration_v1(
+    let selected = params.palw_tir_v1.as_ref();
+    let dispatch = match selected {
+        Some(fence) => {
+            select_tir_registration_v1(&entry.class, fence, daa).map_err(|e| format!("{}: {} ({e})", entry.model_id, e.code()))?
+        }
+        None => TirRegistrationDispatchV1::LegacyV10,
+    };
+    let canonical = match dispatch {
+        TirRegistrationDispatchV1::LegacyV10 => entry.canonical_context(),
+        TirRegistrationDispatchV1::WideV2 => entry
+            .canonical_context_v2(selected.map_or(entry.class.program.len(), |f| f.ceilings.max_program_bytes as usize))
+            .map_err(|e| format!("{}: {e}", entry.model_id))?,
+    };
+    let constructor = match dispatch {
+        TirRegistrationDispatchV1::LegacyV10 => palw_tir_post_genesis_registration_v1,
+        TirRegistrationDispatchV1::WideV2 => palw_tir_post_genesis_registration_v2,
+    };
+    let object = constructor(
         entry.class.as_ref().clone(),
-        entry.canonical_context(),
+        canonical,
         entry.artifact_root,
         0,
         terms.initial_target,

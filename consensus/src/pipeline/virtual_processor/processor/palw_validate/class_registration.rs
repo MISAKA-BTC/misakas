@@ -451,12 +451,24 @@ impl VirtualStateProcessor {
                 let certified = kaspa_consensus_core::palw_e2e_adjudicability::palw_rc_certified_families_v1();
                 let chain_certified =
                     state.chain_certified_families(kaspa_consensus_core::palw_state_v2::PalwCertifiedLaneV1::Attempt);
-                let (entry, _) = kaspa_consensus_core::palw_tir_admission_v1::verify_class_admission_v10(
+                let selected = kaspa_consensus_core::palw_tir_registration_dispatch_v1::select_tir_registration_v1(
+                    &admission.class,
+                    &rules.fence,
+                    point.daa_score,
+                )
+                .map_err(|e| format!("IR class {class_id} is not admissible: {e}"))?;
+                if selected == kaspa_consensus_core::palw_tir_registration_dispatch_v1::TirRegistrationDispatchV1::WideV2
+                    && state_params.tir_wide_registration_fence_at(point.daa_score) != Some(rules.fence)
+                {
+                    return Err(format!("IR class {class_id}: selected wide fence disagrees with the transition runtime mirror"));
+                }
+                let (entry, _) = kaspa_consensus_core::palw_tir_registration_dispatch_v1::verify_selected_tir_class_admission_v1(
                     bundle,
                     &rules,
                     object,
                     &certified,
                     &chain_certified,
+                    point.daa_score,
                 )
                 .map_err(|e| format!("IR class {class_id} is not admissible: {e}"))?;
                 // Decision H's and ADR-0069's share rule, as the legacy arm states it: the

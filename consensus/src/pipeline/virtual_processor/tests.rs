@@ -16873,6 +16873,7 @@ mod t12_tir_registration_cap;
 // G14 lane D: a model registration on the REAL consensus path against the offline gate (preflight parity, adversarial
 // registrations, mempool -> template -> fold -> persisted tip -> ConsensusApi reads, replay and reorg).
 mod g14_registration_e2e;
+mod tir_wide_registration_e2e;
 // G14 lane D phase 2: the kernel route folded into PalwChainStateV2 -- a covered lie convicted by a fresh outsider through the real node path.
 mod g14_kernel_route_e2e;
 // Lane LG14-A: the legacy V2 route under G14 -- a bond registered after genesis reserves, localizes and convicts a lie every seat
