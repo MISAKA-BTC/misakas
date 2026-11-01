@@ -1,0 +1,13 @@
+
+running 8 tests
+test node::cell_ipc_v2::deadline_unix::tests::a_write_then_read_share_one_absolute_exchange_clock ... ok
+test node::cell_ipc_v2::deadline_unix::tests::interrupted_and_wouldblock_retries_keep_the_same_deadline ... ok
+test node::cell_ipc_v2::deadline_unix::tests::partial_constructor_error_and_unwind_close_pipes_without_joining_child ... ok
+test node::cell_ipc_v2::deadline_unix::tests::real_partial_read_and_write_use_original_native_handles ... ok
+test node::cell_ipc_v2::deadline_unix::tests::real_slow_peer_cannot_restart_deadline_with_each_byte ... ok
+test node::cell_ipc_v2::process::tests::actual_process_builder_frames_native_bytes_exports_work_and_drop_reap ... ok
+test node::cell_ipc_v2::process::tests::prepaid_builder_one_below_and_cumulative_reopen_fail_before_open_wire ... ok
+test node::cell_ipc_v2::process::tests::wrong_ready_constructor_refused_open_and_wrong_tag_poison_reap_owned_child ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 35 filtered out; finished in 0.58s
+

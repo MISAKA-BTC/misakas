@@ -40,3 +40,6 @@ Root `c85d5a9c9` ではSDK全16件と、旧GEN価格全14・旧close/range・新
 
 
 後続 `7a6935de6` はtest-only operand oracle修正、macOS子process試験のblocking修正、actual fold回帰3件、DATA funds clock整合性、Hello2 prepared CPUを統合し、標準stackで107件成功した。[監査](../../../evidence/positive-court-a0-2026-10-31/integration/hello2-source-clock-corrected-count-audit-20261101.json)。初回失敗・0件filter除外・正しいtarget再実行を保持し、別候補の69件/67件等を加算しない。exec/positive-accounting-node libraryとHello2 target strict Clippyも成功した。汎用artifact startup、stream-backed Panel record署名/Node reader、native受付/実資金/P/全consumer、実trained LLMの登録と最大文脈長を維持した同候補再現は未完了。
+
+
+2026-11-02追記: Root `1c90300a4` のbounded Panel r5/mandatory run reservation/Process deadline統合候補は標準stackで86件成功、旧sourceの失敗と区別して[独立監査](../../../evidence/positive-court-a0-2026-10-31/integration/positive-a0-r5-1c903-independent-final-audit.json)した。共通leaf-countの残存Vecを固定16配列へ修正し、旧StepSpace独立walk4とquote allocation試験を含めた。strictClippyも対象3コマンド成功。これらは小fixtureの回帰であり、実LLM CPU短jobの3件、native登録、最大位置全実行、Panel/Node実LLM性能・creditとは別範囲である。native class登録はA1固定sourceのレビュー中、stream-backed record/Node接続とgeneric artifact startupは後続作業。

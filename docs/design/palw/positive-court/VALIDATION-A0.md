@@ -105,3 +105,14 @@ Pythiaの50304 logitsは全てi32範囲を超え（最小3753610348、最大1806
 測定用`max_requested_bytes=4GiB`では3件ともlogical simultaneous見積り（6.72/4.97/4.59GB、caller external allowance2GiB込み）が上限超過し、CPU開始前に拒否された。[4GiB失敗](../../../evidence/positive-court-a0-2026-10-31/integration/real-llm-quote-pinned-20261101/manifest.json)を保持し、明示8GiBの別測定枠で[quote3件](../../../evidence/positive-court-a0-2026-10-31/integration/real-llm-quote-8gib-20261101/manifest.json)とCPU/capture3件が成功した。これはnative合意上限やprogram値の変更ではない。最初のsource pin mismatchは実行0の別preflight原本として保持する。略記CLIが原因という詳細はRootのtool実行記録に基づく説明であり、driver manifest単体は期待CLI引数を保存していない。
 
 結果は`SELF_CONSISTENCY_ONLY`。独立expected roots、最大文脈長の全位置、actual native registration、Positive Court全関係、実役割・資金・P/credit・cold/warm認定は未実行。startupの割当前上限・host reserver/native leaseも未成立の表示を保つ。[全44ファイルmanifest](../../../evidence/positive-court-a0-2026-10-31/integration/real-llm-first-execution-evidence-20261101.json)。
+
+
+### 2026-11-02: Panel r5・Process owner・旧geometry回帰
+
+固定候補 `1c90300a4` の86件が標準test stackで成功した。[独立監査](../../../evidence/positive-court-a0-2026-10-31/integration/positive-a0-r5-1c903-independent-final-audit.json)。exec65はPanel one-pass/責任分離/予約8、割当前quote1、wide producer7、capture7、旧full relation11、expanded5、Hello2 6、旧cell12、Process/deadline8。Coreはfull relation10＋Vec境界2、旧StepSpaceの独立walk4、artifactのbounded header5。ignored helper1、旧候補のleaf1とPanel8は加算しない。
+
+初回9193はProcess試験のrange参照括弧不足でbuild停止/runtime0、ce016はPanel8成功後quoteが1 allocationを検出して停止した。共通`running_total`のVecを、検証済み16-block上限に従う固定配列へ置き換え、元の算術・加算順・work/feeを維持した。V1 `from_program`は既に検証済み入力を受けるという従来のcaller前提を維持する。元ログ・digest・失敗binaryの復元照合記録は保存している。
+
+今回の実行は小fixtureと旧corpusによる回帰である。実trained3モデルの前節CPU自己整合性測定とはsource/scopeを分け、native class受付・全native role/精算/P/credit、元最大文脈の全位置実行、実LLM Panel/Node性能の成功へ合算しない。
+
+同1c903 sourceのTIR/Core/artifact/execライブラリ、および新node_cost・Panel material・quote integration targetのstrict Clippyも全3コマンドexit0で成功した。[原記録](../../../evidence/positive-court-a0-2026-10-31/integration/panel-r5-clippy-1c903-20261102.json)。runtime件数への追加はない。

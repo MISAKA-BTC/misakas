@@ -1,0 +1,12 @@
+
+running 7 tests
+test actual_toy_process_hello2_preserves_wide_values_and_rejects_both_v1_directions ... ok
+test client_poisoning_prefix_charges_and_exports_survive_close_without_v1_fallback ... ok
+test codec_caps_native_headers_aggregate_lanes_truncation_and_owned_spare_capacity ... ok
+test hello2_process_child ... ignored, helper invoked only by the bounded loopback subprocess integration
+test hello2_wire_has_literal_i64_logits_and_preserves_all_other_v1_message_bytes ... ok
+test pre_admitted_cpu_keeps_exact_wide_rows_old_state_bytes_and_workspace_guard_scope ... ok
+test server_requires_hello2_and_never_resets_step_or_io_quotas_on_reopen ... ok
+
+test result: ok. 6 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.11s
+

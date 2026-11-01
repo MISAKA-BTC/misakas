@@ -1,0 +1,39 @@
+{
+  "kind": "Independent read-only review of fixed-array running_total correction; runtime pending.",
+  "at_utc": "2026-11-01T15:21:29.519687+00:00",
+  "before_commit": "ce016024dbcfceae71d4aa00b25e2ec2bd7cc628",
+  "current_root_head": "1c90300a4a8ff8f65b13e70c18c37856d9f0145f",
+  "source_status": "Root committed 1c90300a4 during review; exact same proposed minimal source observed. Reviewer made no Root/index edits.",
+  "file": "consensus/core/src/palw_tir_step_v1.rs",
+  "before_sha256": "7dc8c66373bc13dcbdbdec0bee52b0ad6edd40e0e44e6cd51b08877acb4664da",
+  "after_sha256": "085e6fcdd2646134f1c239e4587862a20244d229e5280dc40e644a9d7bde6e4e",
+  "exact_diff_verified": "Only Vec initializer replaced by [0u128; MAX_BLOCKS] and explanatory comment; all loops, branches, arithmetic and summation order byte-identical.",
+  "blockers": [],
+  "equivalence": [
+    "Validated TIR blocks are2..=MAX_BLOCKS16. V1::new and both V2 constructors validate before private geometry construction.",
+    "All counters read by original block loop begin zero, exact same non-post occurrence indices increment exact same u128 counters in original order. No truncation or new saturating operation.",
+    "Original block/commit multiply-and-saturating-add sequence, separate post contribution, checkpoints and history terms unchanged, including earlier occurrences of final post block.",
+    "Original O(B+O) one-pass count retained; no borrowed-count O(B*O) scan inside repeated binary search. No quote/work/fee/schema/ID/authority change."
+  ],
+  "resource_boundary": {
+    "heap": "Removes multiplicity Vec allocation; no new heap/native lease needed.",
+    "stack": "Fixed array contains16 u128 entries =256 bytes logical stack storage. Not a measured compiled prologue or RSS/stack admission guarantee. Existing process/stack owner remains separate from heap leases.",
+    "work": "Zeroing16 fixed counters preserves bounded constant initialization and original counting/traversal complexity; existing arithmetic/work factor unchanged.",
+    "lifetime": "Local storage for one running_total call; not retained or recursively nested by this helper."
+  },
+  "precondition_caveat": "V1::from_program is public and only DOCUMENTS already-validated input; it does not enforce MAX_BLOCKS. A forged >16-block V1 input lies outside that contract and may now index-panic where the old Vec supported the larger table. Do not claim universal malformed-input compatibility or that V1 constructor enforces validation. V2 from_program revalidates actual program/info.",
+  "first_failure_preserved": {
+    "path": "/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/panel-r5-exec-ce016-20261102-exec-1-wide_quote_noalloc.log",
+    "sha256": "888180aa85910ede8ecaa2f2aa1dd59dd235d2b4854438fadd52e6e7c78deadf",
+    "result": "wide_quote_noalloc failed0pass/1fail, observed one allocation vs expected zero, on ce016. Not relabeled as success."
+  },
+  "required_runtime_not_run_by_reviewer": [
+    "palw_tir_step_space::the_closed_form_is_the_walk_on_every_program_layout_and_job",
+    "palw_tir_step_space::a_layout_that_is_not_the_programs_is_refused",
+    "palw_tir_step_space::the_lanes_are_four_bytes_and_idx_is_unsigned",
+    "palw_tir_step_space::an_honest_run_commits_through_the_builder_and_its_binding_verifies",
+    "r5 exec batch including successful_wide_quote_needs_no_local_shape_scratch_allocation_before_required_ram_guard"
+  ],
+  "reviewer_cargo_build_tests_or_source_index_edits": false,
+  "native_or_public_qualification": false
+}

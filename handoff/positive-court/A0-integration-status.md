@@ -81,3 +81,18 @@ Root `7a6935de6` 固定候補: 修正後のHello2 actual OS childを含む6・�
 Panel r3は初回compileのchecked sum `?` 2不足をcc22で修正後、6件中3成功/3失敗（per-material source read capへ累積visitを流用したBudget）で停止した。必須run q予約・hash前RAM予約・quote内一時Vecも独立監査で検出し、r5別案をsource-review中。scopeを維持し旧失敗を成功へ置換しない。adopted43内のnativeclass登録配線はv10固定/mirror不足/旧facts依存の13consumer planをA1へ割当、新Assignment authority/P/fundingは未採択案と分離する。
 
 Root既知履歴74 executableは2.57GBをgzip729MBへ完全保全し、実tempfile復元size/SHAを全件確認して元cache aliasesを解放した。[保全map](../../docs/evidence/positive-court-a0-2026-10-31/integration/history-binaries-preserved-20261101.json)。原raw/source/model/native archive/他owner cacheは保持。これは検証成功の追加ではない。A6 DB6件の実行は4GiBの開始余裕を確保してから行う。
+
+
+2026-11-02 継続（Root `919309e93`）: Panel r5の独立したper-material cap、必須run/capture予約、hash前RAM取得、割当不要のnode_cost/quoteを統合した。旧cost式との一致・割当計測1件は標準stackで成功し、対象source前後一致を確認した。[leaf原記録](../../docs/evidence/positive-court-a0-2026-10-31/integration/panel-r5-leaf-20261102.json)。この1件はPanel全体の成功件数ではない。public Vec envelopeとProcess owner/shared absolute deadlineも統合したが、後続の同候補試験は別記録で扱う。
+
+A6実DBreopenの初回buildは、依存`kaspa-wrpc-server`のcdylibがlibc++をlinkできずexit101で停止した。native14/exec17のruntime成功は0件。最終test targetだけの`-l c++`が依存cdylibへ届かないことを局所化し、元のraw/statusと実行前に復元照合した旧binary gzipを保持した。再試行はまだ行っておらず、stack増加・新target・C++再build・global RUSTFLAGSの変更は行わない。
+
+A1は採択済RFC-0043内のnative class受付を接続中。登録受付後も旧rawfactsのwide非対応consumerへ流さない拒否境界を検査する。A3はboundedなlocal SourceProgram facade/bootstrapとgeneric startupのownerをsource実装中。A7のclass-onlyモデル解析はconstructor/native受付の前提資料がない範囲をNOT_RUNとし、元canonicalと最長解析probeを区別する。これらはRust実行・native登録・P・資金・creditの完了を示さない。新native Assignment案の明示採択は引き続き未受領。
+
+
+同9193のexec結合buildはProcess試験の`&0..2`が`Range<&integer>`になるE0308で停止し、runtime0だった。test-only括弧修正 `ce016024d` 後は全指定targetのbuildが成功し、Panel one-pass/責任分離/必須予約の8件が成功した。しかしquoteのallocation試験1件は1回の割当を検出して失敗し、残scopeは未実行のまま停止した。原因は共通StepSpace `running_total`のmultiplicity Vec。validated programの16-block上限に従う固定配列へ移し、元の線形走査と加算・飽和順序、旧wire/fees/work値を保存した。V1 `from_program`の「既にvalidated」のcaller前提を新たに強制したとは扱わない。修正後の試験結果はこの失敗と別の原記録に残す。
+
+
+修正後 `1c90300a4` 同候補でexec65、Core全関係10＋Vec境界2、旧StepSpace独立walk4、bounded artifact5、計86件が標準stackで成功した。[独立件数・pin監査](../../docs/evidence/positive-court-a0-2026-10-31/integration/positive-a0-r5-1c903-independent-final-audit.json)。ignored child helper1と過去候補のleaf1/Panel8は合算しない。4798/4898のsource/input pin、binary・native archive・raw hashを独立照合し重複0・問題0。元のcompile失敗とallocation失敗は原本保持し、旧quote失敗binaryもgzipの圧縮hashとメモリ展開の原size/SHAを確認して保全した。256Bは固定配列の型上の保存量であり、生成frame/RSSの実測値ではない。これらは小fixture/旧corpusの実行で、generic startupの完全な資源上限・実LLM Panel/Node性能・native登録・P・資金・creditを認定しない。
+
+同1c903の4 library＋新integration targetsのstrict Clippyは全3コマンド成功、source/native前後一致。A1固定19fileの最終レビューでは登録scopeのblockerは未発見だが、旧FreePrompt入口のknownwide拒否をfence off/on共通にする追加修正を依頼した。A7class-only source2fileは独立レビューを通過し、typecheck/buildは次候補で行う。

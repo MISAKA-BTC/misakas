@@ -1,0 +1,10 @@
+
+running 5 tests
+test canonical_zero_job_tokenizer_preserves_registered_class_identity_and_stale_ids_still_fail ... ok
+test dynamic_history_reused_layers_and_fixed_history_leaves_preserve_all_geometry ... ok
+test expanded_geometry_rejects_wrong_identity_zero_jobs_and_every_finite_reservation_cap ... ok
+test original_matmul_and_reduction_work_is_counted_at_every_executed_position ... ok
+test original_sparse_i64_i128_and_output_unused_lanes_are_all_enumerated ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+

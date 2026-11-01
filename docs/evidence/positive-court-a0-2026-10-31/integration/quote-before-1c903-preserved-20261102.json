@@ -1,0 +1,22 @@
+{
+  "source": "ce016024dbcfceae71d4aa00b25e2ec2bd7cc628",
+  "artifact": {
+    "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/wide_quote_noalloc-4252a56d8e4a6e28",
+    "bytes": 3769120,
+    "sha256": "a32fe4a170d925fb13d49f0085b7d391fc06f7bac47a85951874782b75ce7f4a",
+    "fresh": true,
+    "cargo_profile": {
+      "opt_level": "0",
+      "debuginfo": 0,
+      "debug_assertions": true,
+      "overflow_checks": true,
+      "test": true
+    }
+  },
+  "gzip": "/Users/wata/.codex/worktrees/positive-court-a0/target/quote-before-1c903-preserved-20261102/wide_quote_noalloc-4252a56d8e4a6e28.gz",
+  "gzip_bytes": 1200520,
+  "gzip_sha256": "c47b944a1cfdeb3e25103b916d72e4725437513bb74c745d62337afbb528ca17",
+  "restored_memory_size_and_sha_verified": true,
+  "original_not_unlinked": true,
+  "purpose": "Preserve actual failed quote-allocation binary before normal Cargo replacement on new source"
+}
