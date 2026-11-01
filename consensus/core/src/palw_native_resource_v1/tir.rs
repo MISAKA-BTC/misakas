@@ -22,6 +22,38 @@ pub fn decode_native_tir_program_v1(canonical: &[u8]) -> Result<NativeRetainedV1
     Ok(NativeRetainedV1::from_owner_reserved_v1(program, lease))
 }
 
+/// Element-count envelope used by the existing owner-local growing-Vec policy.
+///
+/// This pure, nonallocating function returns Some(0) for count 0. Otherwise the
+/// count is raised to the existing width-dependent minimum (8 for one-byte
+/// elements, 4 for widths at most 1024, 1 for larger elements), then doubled with
+/// checked arithmetic. None means only that this element-count calculation
+/// overflowed; callers must separately check capacity * size_of::<T>() and all
+/// local/coexisting byte limits before allocating.
+///
+/// This exposes the existing logical allocation-request policy, not an actual
+/// Vec capacity promise, physical allocator/RSS bound, host lease, native
+/// admission authority, price, wire identifier or computation verdict. ZSTs
+/// retain that policy too: nonzero counts use minimum 4 and checked doubling;
+/// multiplying a successfully returned count by their width yields zero bytes,
+/// but element-count overflow still returns None.
+#[must_use]
+pub const fn growing_vec_request_capacity_v1<T>(count: u64) -> Option<u64> {
+    if count == 0 {
+        return Some(0);
+    }
+    let width = std::mem::size_of::<T>();
+    let minimum = if width == 1 {
+        8
+    } else if width <= 1024 {
+        4
+    } else {
+        1
+    };
+    let capacity = if count < minimum { minimum } else { count };
+    capacity.checked_mul(2)
+}
+
 /// Checked typed allocation requests for owner-local analyses. Capacity follows
 /// the pinned Vec geometric/minimum-capacity rule; this is neither codec bytes
 /// multiplied by a guessed factor nor a physical allocator/RSS estimate.
@@ -40,15 +72,8 @@ impl TirNativeRequestsV1 {
         if count == 0 {
             return Ok(());
         }
-        let width = std::mem::size_of::<T>();
-        let minimum = if width == 1 {
-            8
-        } else if width <= 1024 {
-            4
-        } else {
-            1
-        };
-        let capacity = count.max(minimum).checked_mul(2).ok_or_else(|| NativeCoverageV1::overflow::<T>("TIR growing Vec capacity"))?;
+        let capacity =
+            growing_vec_request_capacity_v1::<T>(count).ok_or_else(|| NativeCoverageV1::overflow::<T>("TIR growing Vec capacity"))?;
         self.exact_v1::<T>(capacity)
     }
     pub(crate) fn add_v1(&mut self, bytes: u64) -> Result<(), NativeCoverageV1> {
@@ -149,6 +174,61 @@ mod tests {
         assert!(q.vec_v1::<u8>(u64::MAX).is_err());
         assert!(super::TirNativeRequestsV1::product_v1(u64::MAX, 2).is_err());
         assert_eq!(q.bytes_v1(), 0);
+    }
+    #[test]
+    fn public_vec_capacity_envelope_keeps_literal_minimum_and_overflow_boundaries() {
+        use super::super::growing_vec_request_capacity_v1 as capacity;
+        // Const evaluation and the public re-export, not a runtime allocation.
+        const ZERO: Option<u64> = super::super::growing_vec_request_capacity_v1::<u8>(0);
+        const SMALL: Option<u64> = super::super::growing_vec_request_capacity_v1::<u64>(1);
+        assert_eq!(ZERO, Some(0));
+        assert_eq!(SMALL, Some(8));
+        for (count, expected) in [(0, 0), (1, 16), (7, 16), (8, 16), (9, 18)] {
+            assert_eq!(capacity::<u8>(count), Some(expected));
+        }
+        for (count, expected) in [(0, 0), (1, 8), (3, 8), (4, 8), (5, 10)] {
+            assert_eq!(capacity::<u64>(count), Some(expected));
+            assert_eq!(capacity::<[u8; 1024]>(count), Some(expected));
+            assert_eq!(capacity::<()>(count), Some(expected)); // ZST keeps the old minimum 4 policy.
+        }
+        for (count, expected) in [(0, 0), (1, 2), (2, 4), (4, 8)] {
+            assert_eq!(capacity::<[u8; 1025]>(count), Some(expected));
+        }
+        let half = u64::MAX / 2;
+        assert_eq!(capacity::<u8>(half), Some(u64::MAX - 1));
+        assert_eq!(capacity::<[u8; 1025]>(half), Some(u64::MAX - 1));
+        assert_eq!(capacity::<()>(half), Some(u64::MAX - 1));
+        assert_eq!(capacity::<u8>(half + 1), None);
+        assert_eq!(capacity::<u8>(u64::MAX), None);
+        assert_eq!(capacity::<[u8; 1025]>(half + 1), None);
+        assert_eq!(capacity::<()>(half + 1), None);
+    }
+    #[test]
+    fn private_vec_request_preserves_capacity_byte_and_total_overflow_order() {
+        use super::super::NativeCoverageV1;
+        let mut q = super::TirNativeRequestsV1::new();
+        q.add_v1(7).unwrap();
+        assert_eq!(q.vec_v1::<u8>(u64::MAX).unwrap_err(), NativeCoverageV1::overflow::<u8>("TIR growing Vec capacity"));
+        assert_eq!(q.0, 7);
+        // Capacity doubling succeeds first; native byte multiplication then fails.
+        assert_eq!(
+            q.vec_v1::<[u8; 1025]>(u64::MAX / 2).unwrap_err(),
+            NativeCoverageV1::overflow::<[u8; 1025]>("TIR concrete array request")
+        );
+        assert_eq!(q.0, 7);
+        let mut full = super::TirNativeRequestsV1::new();
+        full.add_v1(u64::MAX).unwrap();
+        full.vec_v1::<u8>(0).unwrap(); // Old zero early return, even with a full sum.
+        assert_eq!(
+            full.vec_v1::<u8>(1).unwrap_err(),
+            NativeCoverageV1::overflow::<super::TirNativeRequestsV1>("coexisting TIR typed requests")
+        );
+        assert_eq!(full.bytes_v1(), u64::MAX);
+        let mut zst = super::TirNativeRequestsV1::new();
+        zst.vec_v1::<()>(1).unwrap();
+        assert_eq!(zst.0, 0);
+        assert_eq!(zst.vec_v1::<()>(u64::MAX).unwrap_err(), NativeCoverageV1::overflow::<()>("TIR growing Vec capacity"));
+        assert_eq!(zst.0, 0);
     }
     #[test]
     fn retained_tir_decode_preserves_the_exact_canonical_program() {
