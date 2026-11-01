@@ -717,7 +717,7 @@ fn fixed_original_jobs_keep_recorded_hashes_prompt_and_zero_tokenizer_cu() {
 fn finite_cpu_conversion_rejects_platform_infinity_zero_and_overflow_without_syscalls() {
     assert_eq!(finite_cpu_limit(0), Err(Error::Cpu));
     assert_eq!(finite_cpu_limit(1), Ok(1));
-    let infinity = libc::RLIM_INFINITY as u64;
+    let infinity = u64::try_from(u128::from(libc::RLIM_INFINITY)).expect("platform CPU limit fits u64");
     assert_eq!(finite_cpu_limit(infinity), Err(Error::Cpu));
     assert_eq!(finite_cpu_limit(u64::MAX), Err(Error::Cpu));
     if let Some(above) = infinity.checked_add(1) {
