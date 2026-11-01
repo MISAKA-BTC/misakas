@@ -43,8 +43,13 @@ use misaka_palw_tir::program::{Ref, StateKind, TirProgramV1};
 use misaka_palw_tir::types::{DType, Dim};
 use misaka_palw_tir::validate::ProgramInfo;
 
+/// Owner-local typed geometry request census; no binding or native authority.
+mod local_geometry_quote_v1;
 /// Explicit mixed-width step construction; legacy entry points remain four-byte-only.
 pub mod wide_v2;
+pub use local_geometry_quote_v1::quote_local_tir_step_space_additional_v1;
+mod local_space_diagnostics_v1;
+pub use local_space_diagnostics_v1::{LocalTirStepSpaceFixedRequestsV1, quote_local_tir_step_space_fixed_requests_v1};
 pub use wide_v2::{
     PALW_TIR_STEP_LEAF_VERSION_V2, PalwTirStepLegBuilderV2, PalwTirStepSpaceV2, PalwTirVerifiedBindingV2, palw_tir_leaf_preimage_v2,
     palw_tir_leaf_values_v2, verify_tir_binding_v2,

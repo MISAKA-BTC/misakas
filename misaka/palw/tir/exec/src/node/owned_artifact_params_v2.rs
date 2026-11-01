@@ -2,6 +2,8 @@
 //! No loader startup, program decoding/validation/compile, unsafe/mmap/lazy data,
 //! model qualification, native activation or computation-credit decision.
 //! Uses the shared public Vec policy from Core9c010109d.
+/// Local ordinary forward: no trace binding or native authority.
+pub mod forward;
 use super::memory::{self, TirMemoryLeaseV1, TirMemoryReserverV1};
 use crate::{Buf, ParamData, Slice, TirParams, TirPlan, params::quote_owned_params_table_v2};
 use kaspa_consensus_core::{
@@ -136,13 +138,19 @@ impl OwnedParamBudgetV2 {
         if !cfg!(target_pointer_width = "64") {
             return Err(E::UnsupportedPolicy);
         }
-        let p = inputs.checked.program();
+        self.start_checked(inputs.checked)
+    }
+    fn start_checked(&mut self, checked: &PalwTirCheckedHeaderV1<'_>) -> Result<u64, E> {
+        if !cfg!(target_pointer_width = "64") {
+            return Err(E::UnsupportedPolicy);
+        }
+        let p = checked.program();
         // O(1) format cardinalities precede any nested scans. Symbolic metadata
         // work counts conservative reference/tree/param×layer visits, not cycles.
         let refs = mul(mul(n(p.blocks.len())?, MAX_NODES_PER_BLOCK as u64)?, MAX_NODE_INPUTS as u64)?;
         let joins = mul(mul(n(p.params.len())?, add(n(p.schedule.layers.len())?, 1)?)?, add(refs, 1)?)?;
         let work = add(mul(mul(refs, add(refs, 1)?)?, 2)?, mul(joins, 3)?)?;
-        let work = add(work, add(n(inputs.checked.header().program.len())?, n(inputs.checked.header().tensors.len())?)?)?;
+        let work = add(work, add(n(checked.header().program.len())?, n(checked.header().tensors.len())?)?)?;
         let attempts = add(self.usage.attempts, 1)?;
         let total = add(self.usage.work, work)?;
         limit(attempts, self.limits.max_attempts)?;
@@ -174,7 +182,10 @@ impl OwnedParamBudgetV2 {
 }
 
 fn quote(inputs: OwnedParamInputsV2<'_>, l: OwnedParamLimitsV2, metadata_work: u64) -> Result<OwnedParamQuoteV2, E> {
-    let p = inputs.checked.program();
+    quote_checked(inputs.checked, l, metadata_work)
+}
+fn quote_checked(checked: &PalwTirCheckedHeaderV1<'_>, l: OwnedParamLimitsV2, metadata_work: u64) -> Result<OwnedParamQuoteV2, E> {
+    let p = checked.program();
     let table = quote_owned_params_table_v2(p).map_err(|_| E::Overflow)?;
     let mut refs = 0;
     for block in &p.blocks {
@@ -203,7 +214,7 @@ fn quote(inputs: OwnedParamInputsV2<'_>, l: OwnedParamLimitsV2, metadata_work: u
     let mut chunk = 0;
     let mut elements = 0;
     let mut hash_headers = 0;
-    for e in &inputs.checked.header().tensors {
+    for e in &checked.header().tensors {
         let d = p.params.get(e.param as usize).ok_or(E::Geometry)?;
         if d.dtype == DType::I128 {
             return Err(E::Geometry);
@@ -372,7 +383,7 @@ fn read_native<R: Read>(reader: &mut R, dtype: DType, elements: usize, chunk: &m
 }
 fn encode_piece(data: Slice<'_>, start: usize, len: usize, out: &mut [u8]) -> Result<(), E> {
     let width = data.dtype().width();
-    if start % width != 0 || len % width != 0 || len > out.len() {
+    if !start.is_multiple_of(width) || !len.is_multiple_of(width) || len > out.len() {
         return Err(E::Geometry);
     }
     let first = start / width;
@@ -429,22 +440,33 @@ fn load_owned_artifact_params_admitted_v2<'a, R: Read + Seek>(
         ),
         None => None,
     };
-    let mut params = TirParams::new(inputs.plan);
+    let (params, root) = read_owned_payload_v2(reader, inputs.checked, inputs.plan, inputs.expected.artifact_root, q)?;
+    Ok(OwnedArtifactParamsV2 { params, inputs, root, layout_origin, quote: q, _memory: lease })
+}
+// Shared same-descriptor payload identity component. Only children/old loader
+// call this AFTER literal association checks and their whole-operation lease.
+// This helper constructs no trace/root placeholders or native qualification.
+fn read_owned_payload_v2<R: Read + Seek>(
+    reader: &mut R,
+    checked: &PalwTirCheckedHeaderV1<'_>,
+    plan: &TirPlan,
+    expected_artifact: Hash64,
+    q: OwnedParamQuoteV2,
+) -> Result<(TirParams<'static>, Hash64), E> {
+    let mut params = TirParams::new(plan);
     let mut chunk = exact::<u8>(usize::try_from(q.chunk_bytes).map_err(|_| E::Overflow)?)?;
     chunk.resize(q.chunk_bytes as usize, 0);
-    for entry in &inputs.checked.header().tensors {
-        let d = &inputs.checked.program().params[entry.param as usize];
+    for entry in &checked.header().tensors {
+        let d = &checked.program().params[entry.param as usize];
         let count = usize::try_from(entry.bytes / (d.dtype.width() as u64)).map_err(|_| E::Overflow)?;
         reader.seek(SeekFrom::Start(entry.offset)).map_err(|_| E::Read)?;
         let buf = read_native(reader, d.dtype, count, &mut chunk)?;
-        params
-            .insert(inputs.plan, entry.param, entry.layer, ParamData::from_buf(buf).map_err(|_| E::Geometry)?)
-            .map_err(|_| E::Geometry)?;
+        params.insert(plan, entry.param, entry.layer, ParamData::from_buf(buf).map_err(|_| E::Geometry)?).map_err(|_| E::Geometry)?;
     }
-    params.check_complete(inputs.plan).map_err(|_| E::Geometry)?;
+    params.check_complete(plan).map_err(|_| E::Geometry)?;
     let mut frontier = PalwArtifactMerkleFrontierV1::new();
     let mut failed = None;
-    palw_tir_visit_inventory_rows_v1(inputs.checked.program(), &mut |row| {
+    palw_tir_visit_inventory_rows_v1(checked.program(), &mut |row| {
         if failed.is_some() {
             return;
         }
@@ -452,7 +474,7 @@ fn load_owned_artifact_params_admitted_v2<'a, R: Read + Seek>(
             let data = params.get(row.param, row.layer).ok_or(E::Geometry)?;
             encode_piece(data, row.row_start as usize, row.len as usize, &mut chunk)?;
             frontier.push(artifact_leaf_parts_v1(
-                &inputs.checked.program().params[row.param as usize].name,
+                &checked.program().params[row.param as usize].name,
                 row.layer,
                 row.row_start,
                 &chunk[..row.len as usize],
@@ -471,10 +493,10 @@ fn load_owned_artifact_params_admitted_v2<'a, R: Read + Seek>(
         return Err(E::Inventory);
     }
     let root = frontier.root().ok_or(E::Inventory)?;
-    if root != inputs.expected.artifact_root {
+    if root != expected_artifact {
         return Err(E::Root);
     }
-    Ok(OwnedArtifactParamsV2 { params, inputs, root, layout_origin, quote: q, _memory: lease })
+    Ok((params, root))
 }
 /// Convenience for the existing optional global host-reserver, with no change
 /// to its flags or admission semantics. No guard is fabricated when absent.

@@ -299,6 +299,25 @@ impl<'a> TirClassRunnerWideQ24V2<'a> {
         self.drive(ctx, prompt, expected_execution, limits, &mut forward, Some(observer), None)
     }
 
+    /// Same unobserved default computation with the existing REQUIRED run
+    /// reservation. No optional-global fallback and no extra every-node observer.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn run_required_v2(
+        &self,
+        ctx: &PalwJobContextV2,
+        prompt: &[u32],
+        expected_execution: Hash64,
+        limits: TirWideRunLimitsV2,
+        on_leaf: &mut dyn FnMut(&TirLeafOutWideQ24V2<'_>),
+        reserver: &TirMemoryReserverV1,
+    ) -> Result<TirJobRunWideQ24V2, String> {
+        let mut forward = |leaf: &TirLeafOutWideQ24V2<'_>| {
+            on_leaf(leaf);
+            Ok(())
+        };
+        self.drive(ctx, prompt, expected_execution, limits, &mut forward, None, Some(reserver))
+    }
+
     /// Fallible local custody callback. A failed tape write aborts this same
     /// run immediately; partial values cannot become a completed capture.
     /// Requires the actual caller's RAM ledger; its run guard is retained by

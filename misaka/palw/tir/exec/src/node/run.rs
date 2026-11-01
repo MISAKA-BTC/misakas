@@ -113,6 +113,27 @@ pub struct TirBoundaryLieV1 {
 /// A free-prompt job's decode rule: `(ids generated so far, logits row, row index) -> selected id`.
 pub type TirDecodeSelectorV1 = std::sync::Arc<dyn Fn(&[u32], &[i32], u32) -> u32 + Send + Sync>;
 
+/// Measurement-only construction/inline request. Private concrete types are
+/// counted here rather than guessed by external callers. Payload/rows/hash/tree
+/// backing and the executor each have separately named measurement requests.
+pub(crate) fn dense_measurement_constructor_requests_v2(program: &misaka_palw_tir::TirProgramV1) -> Result<u64, String> {
+    use kaspa_consensus_core::palw_native_resource_v1::growing_vec_request_capacity_v1;
+    let mut bytes =
+        (std::mem::size_of::<TirClassRunnerV1<'_>>() + std::mem::size_of::<Emitter>() + std::mem::size_of::<Driven>()) as u64;
+    let outer = growing_vec_request_capacity_v1::<Vec<u32>>(program.blocks.len() as u64).ok_or("dense constructor overflow")?;
+    bytes = bytes
+        .checked_add(outer.checked_mul(std::mem::size_of::<Vec<u32>>() as u64).ok_or("dense constructor overflow")?)
+        .ok_or("dense constructor overflow")?;
+    for block in &program.blocks {
+        bytes = bytes
+            .checked_add(
+                (block.nodes.len() as u64).checked_mul(std::mem::size_of::<u32>() as u64).ok_or("dense constructor overflow")?,
+            )
+            .ok_or("dense constructor overflow")?;
+    }
+    Ok(bytes)
+}
+
 /// Runs jobs of one IR class over one artifact's params.
 pub struct TirClassRunnerV1<'a> {
     pub space: &'a PalwTirStepSpaceV1,
@@ -213,6 +234,36 @@ impl<'a> TirClassRunnerV1<'a> {
         on_leaf: &mut dyn FnMut(&TirLeafOutV1<'_>),
     ) -> Result<TirJobRunV1, String> {
         let d = self.drive(ctx, prompt, cap, verify, None, None, None, on_leaf, None, None, None)?;
+        self.commit(ctx, cap, d)
+    }
+
+    /// Same default unobserved computation with an explicit REQUIRED executor
+    /// ledger. Only the measurement bridge calls this; old APIs keep None.
+    /// Retained rows/hashes/roots need the bridge's separate extra-owner guard.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn run_required_v2(
+        &self,
+        ctx: &PalwJobContextV2,
+        prompt: &[u32],
+        cap: u64,
+        expected_execution: Hash64,
+        reserver: &super::memory::TirMemoryReserverV1,
+        on_leaf: &mut dyn FnMut(&TirLeafOutV1<'_>),
+    ) -> Result<TirJobRunV1, String> {
+        let d = self.drive_reserved(
+            ctx,
+            prompt,
+            cap,
+            false,
+            None,
+            None,
+            None,
+            on_leaf,
+            None,
+            None,
+            None,
+            Some((reserver, expected_execution)),
+        )?;
         self.commit(ctx, cap, d)
     }
 
@@ -354,11 +405,29 @@ impl<'a> TirClassRunnerV1<'a> {
         verify: bool,
         start: Option<&TirResumePointV1>,
         until: Option<u32>,
+        record: Option<&mut Vec<TirResumePointV1>>,
+        on_leaf: &mut dyn FnMut(&TirLeafOutV1<'_>),
+        stream_rows: Option<&mut dyn FnMut(u32, &[i32]) -> Result<(), String>>,
+        last_resume: Option<&mut Option<TirResumePointV1>>,
+        observer: Option<&mut dyn TirRunObserverV1>,
+    ) -> Result<Driven, String> {
+        self.drive_reserved(ctx, prompt, cap, verify, start, until, record, on_leaf, stream_rows, last_resume, observer, None)
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn drive_reserved(
+        &self,
+        ctx: &PalwJobContextV2,
+        prompt: &[u32],
+        cap: u64,
+        verify: bool,
+        start: Option<&TirResumePointV1>,
+        until: Option<u32>,
         mut record: Option<&mut Vec<TirResumePointV1>>,
         on_leaf: &mut dyn FnMut(&TirLeafOutV1<'_>),
         mut stream_rows: Option<&mut dyn FnMut(u32, &[i32]) -> Result<(), String>>,
         last_resume: Option<&mut Option<TirResumePointV1>>,
         mut observer: Option<&mut dyn TirRunObserverV1>,
+        required: Option<(&super::memory::TirMemoryReserverV1, Hash64)>,
     ) -> Result<Driven, String> {
         let space = self.space;
         if ctx.shape_profile_id != self.class_id {
@@ -379,7 +448,16 @@ impl<'a> TirClassRunnerV1<'a> {
         };
         let h_tile = space.layout.h_tile as usize;
         let memory_need = super::memory::tir_executor_storage_need_v1(space, self.plan, ctx)?;
-        let memory = super::memory::reserve_v1(&super::memory::memory_reserver_v1(), "tir-executor", self.class_id, ctx, memory_need)?;
+        let memory = match required {
+            Some((reserver, expected_execution)) => {
+                let lease = reserver("tir-dense-measurement-executor-v2", self.class_id, expected_execution, memory_need)?;
+                if ctx.context_hash() != expected_execution {
+                    return Err("dense measurement original execution pin differs".into());
+                }
+                Some(lease)
+            }
+            None => super::memory::reserve_v1(&super::memory::memory_reserver_v1(), "tir-executor", self.class_id, ctx, memory_need)?,
+        };
         let mut exec = TirExecutor::new(self.plan, self.params).map_err(|e| e.to_string())?;
         exec.set_hist_tail(h_tile);
         if self.fused {
