@@ -227,12 +227,13 @@ fn the_kit_names_the_int13_flag_day_height_the_preset_arms() {
     }
     let schedule = p.fence_schedule_v1();
     assert!(!schedule.contains(&9_000), "the cancelled 9,000 is not on the public schedule: {schedule:?}");
-    // Preserve int-13 / kernel G14; the separate all-model migration is the next height.
+    // Preserve int-13 / kernel G14 and the all-model migration before the future retention repair.
     assert!(schedule.contains(&PALW_T12_INT13_DAA.unwrap()), "{schedule:?}");
+    assert!(schedule.contains(&PALW_T12_MODEL_PANEL_ONE_FENCE_DAA_V1), "{schedule:?}");
     assert_eq!(
         schedule.last().copied(),
-        Some(PALW_T12_MODEL_PANEL_ONE_FENCE_DAA_V1),
-        "the schedule ends at the all-model G14 migration: {schedule:?}"
+        Some(PALW_T12_MODEL_PANEL_ONE_RETENTION_FENCE_DAA_V1),
+        "the separate retention repair follows the all-model G14 migration: {schedule:?}"
     );
 }
 

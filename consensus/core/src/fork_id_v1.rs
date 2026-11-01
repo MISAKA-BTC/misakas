@@ -613,6 +613,9 @@ mod tests {
     /// both but not here fails the probe by name instead of passing silently.
     fn set_fence_for_probe(params: &mut Params, name: &str, at: ForkActivation) {
         match name {
+            // Independent later fences are probed separately; neither changes the production codec or policy.
+            "palw_model_panel_one_v1" => params.palw_model_panel_one_v1 = Some(at),
+            "palw_model_panel_one_retention_v1" => params.palw_model_panel_one_retention_v1 = Some(at),
             "palw_bootstrap_activation" => params.palw_bootstrap_activation = Some(at),
             "palw_unavailable_abstains" => params.palw_unavailable_abstains = Some(at),
             "palw_bond_maturity" => {
