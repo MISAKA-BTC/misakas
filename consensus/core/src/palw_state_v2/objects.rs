@@ -4032,6 +4032,14 @@ fn apply_object_batch_10_v1(
             if let PalwClassStatusV2::Frozen { .. } = class.status {
                 return Err(PalwStateV2Error::FrozenClass(*class_id));
             }
+            // Ordinary (eval=None) legacy free-prompt generation has no wide
+            // source/court adapter. The separate rewardless evaluation branch
+            // above keeps its existing evaluator-specific rules.
+            // This check is independent of derived-work/original-frame fences
+            // and precedes every claim, exposure and prefix-state write.
+            if let Some(record) = builder.state.tir_class_v1(class_id) {
+                crate::palw_tir_row_profile_v2::reject_known_wide_tir_row_v1(record).map_err(PalwStateV2Error::TirFence2Refused)?;
+            }
             // **2026-09-24 DoS audit #11: the class gate an attempt passes, on this lane too.**
             //
             // `apply_attempt` asks `check_class_admits_claim` before it prices anything: a class the

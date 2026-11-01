@@ -188,6 +188,53 @@ fn own_and_merged_legacy_wide_claim_generation_refuse_independently_of_mesh() {
     }
 }
 
+#[test]
+fn ordinary_wide_free_prompt_refuses_even_with_derived_and_original_fences_off() {
+    let (p, state, env) = wide_legacy_attempt_fixture_v1(false);
+    let id = env.attempt.class_id;
+    let claim_id = h64(0xF0_77);
+    let mut object = fp_commit(0xF0_77, 60, 3);
+    let PalwConsensusObjectV2::FreePromptCommitted { class_id, consumed_prefix_state, .. } = &mut object else { unreachable!() };
+    *class_id = id;
+    *consumed_prefix_state = crate::palw_freeprompt_v3::PalwFpPrefixStateV1::genesis(id);
+    let point = ctx(2, 101, 2);
+
+    // A legacy rowless control reaches actual claim creation under both fences
+    // off. Thus the new refusal cannot be an unrelated malformed-claim gate.
+    let mut legacy = state.clone();
+    legacy.tir_classes.remove(&id);
+    let extras = PalwTransitionExtrasV1::default();
+    let (accepted, _) = apply_derived(&legacy, &p, &point, std::slice::from_ref(&object), &extras).unwrap();
+    assert!(accepted.claim(&claim_id).is_some());
+
+    for derived in [false, true] {
+        for public_original in [false, true] {
+            let extras = PalwTransitionExtrasV1 {
+                fp_derived_work_daa: derived.then_some(0),
+                tir_public_conviction_active: public_original,
+                ..Default::default()
+            };
+            let mut builder = TransitionBuilder::try_new(&state, &p, false, false, true, false, &extras).unwrap();
+            let before = builder.state.state_root();
+            let exposure = builder.state.reserved_exposure(&bond_key(1));
+            let refused = apply_object(&mut builder, &point, &object).unwrap_err();
+            if public_original {
+                // With no paired frame the existing G03 gate is earlier than
+                // class lookup. This is safe denial, not evidence that the new
+                // post-class guard was reached on this branch.
+                assert!(matches!(refused, PalwStateV2Error::ClassNotRewardable { code, .. }
+                    if code == crate::palw_tir_public_fold_v1::PALW_G03_FRAMELESS_TIR_ORIGINAL_CODE_V1));
+            } else {
+                assert!(matches!(refused, PalwStateV2Error::TirFence2Refused(message) if message.contains("wide Q24")));
+            }
+            assert_eq!(builder.state.state_root(), before, "refusal wrote state: derived={derived}, original={public_original}");
+            assert_eq!(builder.state.reserved_exposure(&bond_key(1)), exposure);
+            assert!(builder.state.claim(&claim_id).is_none());
+            assert!(apply_derived(&state, &p, &point, std::slice::from_ref(&object), &extras).is_err());
+        }
+    }
+}
+
 thread_local! {
     /// **R2's measure: how many times the fold asked the readiness predicate** — the unit the
     /// span step's cost is counted in (one ask per bond per class the step reads), so a test can
