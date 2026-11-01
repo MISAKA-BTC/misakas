@@ -68,6 +68,15 @@ Rejected admissions do not mutate counters; accepted charges survive subsequent
 decode, execution or I/O failure. These are admission counters, not physical I/O
 measurements. A Refused reply is attempted only within remaining quotas.
 
+The cumulative work/step/IO guarantees above apply to the session entry point.
+The public low-level CPU source/stepper does not own a connection budget: direct
+callers must admit `open_work` before `open_cell`, admit each kernel/query work
+quote and maintain their own cumulative step/work counters. `step_data` checks
+scope, carry and local response backing but does not itself consume cumulative
+work or steps. Direct CPU tests establish those local properties only. A future
+generic startup/native owner must enforce admission through one owned entry;
+it must not treat possession of a prepared source as authority to bypass it.
+
 The client conservatively accumulates actual native backing of every returned
 response, including retained Ready data, without assuming the caller freed any
 earlier response. Before a later operation it checks base plus all prior exports.

@@ -117,6 +117,8 @@ fn raw_matches(data: Slice<'_>, ty: DType, bytes: &[u8]) -> Result<bool, String>
 /// Borrowed trusted CPU source. The caller supplies an unmodified result of
 /// `TirPlan::compile` and its matching resident parameters. Public compiled plan
 /// fields are not authenticated or reconstructed by this prepared-source API.
+/// Connection work/step/IO limits are enforced by `serve_wide_v2_for_plan`, not
+/// automatically by direct calls to this low-level CPU source or its stepper.
 pub struct PreparedWideCellV2<'a> {
     pub(crate) verified: &'a PalwTirVerifiedBindingV2,
     pub(crate) ctx: &'a PalwJobContextV2,
@@ -225,6 +227,9 @@ impl<'a> PreparedWideCellV2<'a> {
         Ok(())
     }
 
+    /// Construct the resident CPU cell after the caller has admitted `open_work`.
+    /// This checks local scope/backing and acquires the optional workspace lease;
+    /// it does not maintain a cumulative connection work or step counter.
     pub fn open_cell(&self, occ: Range<usize>, limits: WideCellLimitsV2) -> Result<CpuWideCellStepperV2<'a>, String> {
         scope(self.plan, self.ctx, &occ)?;
         let quote = quote_server(self.verified.space(), self.plan, self.ctx, limits)?;
@@ -282,6 +287,8 @@ impl<'a> PreparedWideCellV2<'a> {
 
 /// Private executor ownership prevents use of the legacy i32 logits seam.
 /// The executor field drops before its workspace lease.
+/// Direct users must separately admit each work quote and maintain cumulative
+/// step/work limits. The session server performs those admissions before calls.
 pub struct CpuWideCellStepperV2<'a> {
     exec: TirExecutor<'a>,
     verified: &'a PalwTirVerifiedBindingV2,
@@ -375,6 +382,7 @@ impl CpuWideCellStepperV2<'_> {
         Ok((bytes, lanes))
     }
 
+    /// Quote one step's work; returning this number does not consume a budget.
     pub fn kernel_work_for_next(&self, occ: Range<usize>) -> Result<u64, String> {
         self.check_next(&occ)?;
         let (_, lanes) = self.response_bound(&occ)?;
@@ -398,6 +406,8 @@ impl CpuWideCellStepperV2<'_> {
         Ok(work)
     }
 
+    /// Execute once after external work/step admission. Scope, carry and local
+    /// response limits are checked here; cumulative work/steps are not metered.
     pub fn step_data(
         &mut self,
         token: u32,
