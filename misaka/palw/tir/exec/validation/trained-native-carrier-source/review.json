@@ -1,0 +1,76 @@
+{
+  "schema": "misaka.a1.trained-native-carrier.source-review.v1",
+  "date": "2026-11-02",
+  "base": "cd1567a1162e5b06de351abda506d6a4d6e7009d",
+  "source_file_sha256": {
+    "Cargo.lock": "9b6155420dfd1c0a8af0a227abc144b8b89b75b839e28e8abfdd574459efecbc",
+    "consensus/Cargo.toml": "fd89588fd271858adadc7bed18b5306fe54566bdfe3fc695554185b079663f56",
+    "consensus/src/pipeline/virtual_processor/tests/tir_wide_registration_e2e.rs": "bd70bdac0e0ae3c24f92d4e9e444718858918a316f8771098c0f12f9875d94f6",
+    "consensus/src/pipeline/virtual_processor/tests/tir_wide_registration_e2e/hf3.rs": "71f4bc178acdf109aa4735f069390826ea31600621b4f1f8072c34fb010c390f",
+    "testing/positive-court-a1/inputs/hf3-native-registration-pins-20261102.json": "b9b30c7909ff0dd8545e6e74eadb1c7edb20a4eb1d453802cffd4491dbe776fc"
+  },
+  "models": [
+    {
+      "slug": "smollm2-360m",
+      "profile": "original narrow tiled I32",
+      "max_context": 8192
+    },
+    {
+      "slug": "smollm2-135m",
+      "profile": "original narrow tiled I32",
+      "max_context": 8192
+    },
+    {
+      "slug": "pythia-70m",
+      "profile": "original wide Q24 I64",
+      "max_context": 2048
+    }
+  ],
+  "common_params": "same private isolated court2 Params with original ceilings, full validation and documented record-pin exemption; no public activation",
+  "tests": {
+    "new_ignored": 3,
+    "existing_parent_native_5": "unchanged except child module declaration",
+    "missing_or_empty_case": "FAIL",
+    "gate_or_policy_or_native_refusal": "stage JSON then FAIL; other models independent"
+  },
+  "static_review": [
+    {
+      "agent": "contract_review",
+      "scope": "small original fixtures/pins, independently derived full class IDs, original schemes/context/C65536/h64; no payload read",
+      "result": "matched"
+    },
+    {
+      "agent": "review_core",
+      "scope": "final source exact hash; fee/mass and production policy; SDK/native/carrier/fullrow/origin; replay/sameDB; Rust API/borrow/lifetime review",
+      "result": "no remaining blocking finding statically"
+    },
+    {
+      "agent": "parent",
+      "scope": "source/report scope, before/after identity, dependency lock edge, bounded metadata read and refusal evidence boundaries",
+      "result": "reviewed"
+    }
+  ],
+  "static_checks": {
+    "rustfmt": "PASS skip_children=true,reorder_modules=false",
+    "diff_check": "PASS",
+    "toml_and_existing_sha2_lock_edge": "PASS; Python tomllib only, no Cargo",
+    "copied_pins_sha256": "PASS verbatim from fixed extracted source",
+    "docs": "PASS baseline43/new0; docs-check.json"
+  },
+  "runtime": {
+    "cargo_build_test_clippy_rustc": "NOT_RUN_HOLD",
+    "target_cache_access": "NONE",
+    "new_artifact_checkpoint_payload_reads": "NONE",
+    "actual_native_registered_models": "NOT_MEASURED",
+    "maximum_position_model_execution": "NOT_RUN"
+  },
+  "limits": [
+    "genuine registration must pass unchanged selected fullrules; no numerical/context/fee/mass/court/work relaxation",
+    "new native diagnostic adds another full admission walk; actual pipeline/replay may reevaluate, measure real cost",
+    "actual accepted-object skip code may be unavailable; source explicitly records that and labels diagnostic recheck separately",
+    "existing historical CPU self-consistency/class sizing/inventory is not native acceptance evidence",
+    "genesis-backed Active bond plus actual fee-float spend; no post-genesis new bond creation",
+    "native registered status is weightless and does not establish native wide claim/court support, P, credit or public activation",
+    "no RSS hard limit/cold cache/startup preallocation admission supplied by this test source"
+  ]
+}

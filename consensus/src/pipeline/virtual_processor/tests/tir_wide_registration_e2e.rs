@@ -1,5 +1,6 @@
 //! Private typed wide-registration integration fixtures. These exercise actual
 //! funding transactions; they do not establish native wide claim/court support.
+mod hf3;
 use super::{
     g14_registration_e2e::{arrive, chain_blocks, root_at},
     t12_round_lane_e2e::{
