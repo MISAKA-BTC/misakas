@@ -30,6 +30,10 @@ A0との調整で、まずstack修正を追加せずowner `355408e5a` のまま�
 
 build前に空き4GiB以上を必須とし、実行中512MiBを割ったら自身のprocess groupを停止する。Cargo親が先に終了しても子が残る場合を検出する。SIGTERMを無視する子を残して親が終了する軽量process-control回帰は1件成功したが、これはDB試験やnative予約の検証件数ではない。compiler/testの失敗後には同run directoryで再試行せず、stackも増やさない。compiler開始前の容量停止だけは、既存backupのSHAと同じplanを確認した上で明示的に再開でき、以前の停止記録を残す。
 
+旧binaryの保全だけを別枠で行う場合は `--preserve-only` でcompiler/testを呼ばずに止められる。これも現在は未実行であり、heavy枠の調整前に自動では行わない。その後の実行は同planとbackupを確認してから行い、4GiB条件を維持する。
+
+現行runnerと一致する計画は [owner run plan r2](../../../evidence/positive-court-a6-db-reopen-2026-11-01/owner-run-plan-r2.json)。r1は以前のrunner digestを持つ原記録として変更せず保持する。
+
 native libraryはRootの実検証がpinしたRFC14 completion release archiveを使う。RocksDBは23,048,496 bytes、Snappyは46,784 bytesで、正確なpath/SHA、同一bindingsとarm64/libc++・default compression featureの照合を [archive review](../../../evidence/positive-court-a6-db-reopen-2026-11-01/external-native-archive-read-only-review.json) に固定した。最初に調べた別の104MiB候補とは区別する。両external `LIB_DIR` と `STATIC=1` / `COMPILE=0` を指定し、追加C++ compiler呼出を禁止する。外部archiveではlibc++自動linkも消えるため、global RUSTFLAGSを変えず、単一のfinal test targetへだけ `cargo rustc ... --profile test -- -l c++` を渡し、JSONが返したexeを直接実行する。
 
 対象はnative store/readerの14件とactual TIR common replayの17件、計31件を予定する。まだ1件も実行していない。source/runtime owner結果とRoot source結果、clean DB reopenと実Node再起動/IBD/native authorityの資格を分ける。

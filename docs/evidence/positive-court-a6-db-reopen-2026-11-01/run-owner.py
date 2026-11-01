@@ -207,7 +207,7 @@ def monitored(command, logfile, env, floor):
             stop_owned_group(proc)
 
 
-def execute(plan_file, run_dir, min_free_gib):
+def execute(plan_file, run_dir, min_free_gib, preserve_only=False):
     if not math.isfinite(min_free_gib) or min_free_gib < 4:
         raise RuntimeError("keep the reviewed minimum build headroom at four GiB or higher")
     data = json.loads(plan_file.read_text())
@@ -260,6 +260,9 @@ def execute(plan_file, run_dir, min_free_gib):
             status["old_binaries"] = preserve_old(run_dir, data["old_binaries"])
         else:
             status["old_binaries"] = resumed_backups
+        if preserve_only:
+            status["status"] = "PRESERVED only; no compiler or tests started"
+            return
         if shutil.disk_usage(TARGET).free < min_free_gib * GIB:
             raise RuntimeError("insufficient post-backup build headroom; no compiler started")
         cxx = run_dir / "forbid-cxx.py"
@@ -356,6 +359,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--execute", action="store_true")
+    mode.add_argument("--preserve-only", action="store_true")
     mode.add_argument("--restore-manifest", type=Path)
     parser.add_argument("--plan-file", type=Path, default=Path("/tmp/misaka-a6-db-reopen-run-plan.json"))
     parser.add_argument("--run-dir", type=Path, default=Path("/tmp/misaka-a6-db-reopen-owner-355408e5a"))
@@ -366,8 +370,8 @@ if __name__ == "__main__":
         if args.restore_dir is None:
             parser.error("--restore-dir is required and must not exist")
         restore(args.restore_manifest, args.restore_dir)
-    elif args.execute:
-        execute(args.plan_file, args.run_dir, args.min_free_gib)
+    elif args.execute or args.preserve_only:
+        execute(args.plan_file, args.run_dir, args.min_free_gib, args.preserve_only)
     else:
         result = plan()
         write_json(args.plan_file, result)
