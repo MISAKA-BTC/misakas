@@ -148,7 +148,10 @@ fn original_wide_fixture_is_counted_and_records_original_full_schema_one_data() 
     // and four Fixed checkpoints. Deepest P=1,D=64 runs64+128+32 leaves.
     assert_eq!(entry.canonical_step_leaf_count, 16);
     assert_eq!(entry.max_step_leaf_count, 224);
-    assert_eq!(entry.court_cost.max_operand_count, 2);
+    // The head is an Artifact parameter: its bytes are opened/priced, but it
+    // is not a committed operand. CarryIn and the final Cast's prior commit
+    // each contribute one source to their separate cones.
+    assert_eq!(entry.court_cost.max_operand_count, 1);
     assert_eq!(*pwu_rule, PalwPwuRuleV2::DerivedV1 { pwu_per_inference: entry.canonical_step_leaf_count });
     let profile = ResolvedTirJobProfileV2::new(&admission.class, *artifact_root, MAX_PROGRAM_BYTES).unwrap();
     assert_eq!(Some(admission.canonical.clone()), profile.ctx());
@@ -361,12 +364,6 @@ fn existing_resource_program_and_court_limits_remain_effective() {
         tight.court = PalwCourtParamsV2::with_cost_ceilings(ladder, 45, 2, close, macs, 128).unwrap();
         assert!(verify_tir_class_admission_v2(&tight, &rules(), &object, &[], &[]).is_err());
     }
-    let mut one_operand = bundle();
-    one_operand.court = PalwCourtParamsV2::with_cost_ceilings(1 << 30, 45, 2, 2_000_000, 1 << 30, 1).unwrap();
-    assert!(matches!(
-        verify_tir_class_admission_v2(&one_operand, &rules(), &object, &[], &[]),
-        Err(E::CourtCostExceedsCeiling { what: "operand count", got: 2, ceiling: 1 })
-    ));
     let mut malformed = object;
     let PalwConsensusObjectV2::ClassRegisteredTirV1 { admission, .. } = &mut malformed else { unreachable!() };
     admission.class.program.push(0);
@@ -481,11 +478,20 @@ fn original_wide_history_reduction_requires_a_sufficient_f7_window() {
         prompt_ids_form: generous.prompt_ids_form,
         window_court_daa: 100_000,
     });
-    let (_, row) = verify_tir_class_admission_v2(&bundle(), &generous, &object, &[], &[]).unwrap();
+    let (entry, row) = verify_tir_class_admission_v2(&bundle(), &generous, &object, &[], &[]).unwrap();
+    // Unlike an Artifact parameter, both CarryIn(0) and the prior History
+    // are distinct committed sources of this layer's reduction cone.
+    assert_eq!(entry.court_cost.max_operand_count, 2);
     assert_eq!(row.dissected, vec![(layer, site)]);
     assert_eq!(row.program.as_ref(), &original.program);
     let PalwConsensusObjectV2::ClassRegisteredTirV1 { admission, .. } = &object else { unreachable!() };
     assert_eq!(admission.class, original);
+    let mut one_operand = bundle();
+    one_operand.court = PalwCourtParamsV2::with_cost_ceilings(1 << 30, 45, 2, 2_000_000, 1 << 30, 1).unwrap();
+    assert!(matches!(
+        verify_tir_class_admission_v2(&one_operand, &generous, &object, &[], &[]),
+        Err(E::CourtCostExceedsCeiling { what: "operand count", got: 2, ceiling: 1 })
+    ));
     let mut short = generous;
     short.court.as_mut().unwrap().window_court_daa = 1;
     assert!(matches!(verify_tir_class_admission_v2(&bundle(), &short, &object, &[], &[]), Err(E::CourtWindowTooShort { .. })));
