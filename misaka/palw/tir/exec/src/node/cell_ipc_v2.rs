@@ -7,7 +7,9 @@
 pub(super) mod budget;
 pub mod codec;
 pub mod cpu;
+pub mod session;
 
 pub use budget::{WideCellLimitsV2, WideCellSessionQuoteV2, WideCellUsageV2, quote_client, quote_server};
 pub use codec::{CELL_WIRE_VERSION_V2, CellParamBlobV1, CellRequestWideV2, CellResponseWideV2, CellValueV1};
 pub use cpu::{CpuWideCellStepperV2, PreparedWideCellV2};
+pub use session::{WideCellClientV2, WideCellIoErrorV2, serve_wide_v2_for_plan};
