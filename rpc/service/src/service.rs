@@ -597,7 +597,8 @@ impl RpcCoreService {
     /// IBD, candidate review, or quarantine reports unsynced here regardless of how recent its sink
     /// looks.
     async fn is_node_synced(&self, session: &ConsensusSessionOwned, sink_daa_score_timestamp: DaaScoreTimestamp) -> bool {
-        self.mining_rule_engine.is_sink_recent_and_connected(sink_daa_score_timestamp)
+        self.flow_context.is_consensus_participation_allowed()
+            && self.mining_rule_engine.is_sink_recent_and_connected(sink_daa_score_timestamp)
             && !session.async_is_consensus_in_transitional_ibd_state().await
     }
 
