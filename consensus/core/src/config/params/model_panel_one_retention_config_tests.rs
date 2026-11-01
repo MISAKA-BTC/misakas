@@ -71,8 +71,8 @@ fn model_panel_one_retention_rollout_keeps_live_peers_until_the_disputed_fence()
         let new_id = fork_id_v1(&scheduled, daa);
         assert_eq!(old_id.fired, new_id.fired);
         assert_eq!(new_id.next, at);
-        assert!(!evaluate_fork_id_v1(&scheduled, daa, old_id.fired.as_bytes(), old_id.next).refuses());
-        assert!(!evaluate_fork_id_v1(&old, daa, new_id.fired.as_bytes(), new_id.next).refuses());
+        assert!(!evaluate_fork_id_v1(&scheduled, daa, &old_id.fired.as_bytes(), old_id.next).refuses());
+        assert!(!evaluate_fork_id_v1(&old, daa, &new_id.fired.as_bytes(), new_id.next).refuses());
     }
     // Once the rule actually changes, keeping an un-upgraded peer would hide
     // a consensus split. Both sides must retain their existing refusal policy.
@@ -80,10 +80,10 @@ fn model_panel_one_retention_rollout_keeps_live_peers_until_the_disputed_fence()
         let old_id = fork_id_v1(&old, daa);
         let new_id = fork_id_v1(&scheduled, daa);
         assert!(matches!(
-            evaluate_fork_id_v1(&scheduled, daa, old_id.fired.as_bytes(), old_id.next),
+            evaluate_fork_id_v1(&scheduled, daa, &old_id.fired.as_bytes(), old_id.next),
             ForkIdVerdict::DisagreePastFence { fired_through, .. } if fired_through == at
         ));
-        assert!(evaluate_fork_id_v1(&old, daa, new_id.fired.as_bytes(), new_id.next).refuses());
+        assert!(evaluate_fork_id_v1(&old, daa, &new_id.fired.as_bytes(), new_id.next).refuses());
     }
 }
 
