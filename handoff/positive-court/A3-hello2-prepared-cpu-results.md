@@ -9,7 +9,7 @@ documentation), then test-only fix `c99125eb8`. Source-review evidence is
 ## Executed scope
 
 Root candidate **`7a6935de6add7fe66deb324090a7144b974a8730`** successfully ran this
-30-test batch with feature `node`, default stack, two jobs, debug0, no incremental
+37-test selection (30 plus producer7) with feature `node`, default stack, two jobs, debug0, no incremental
 compilation, Core dev/test opt0 and the existing static RocksDB archive:
 
 | Target | Passed |
@@ -19,21 +19,23 @@ compilation, Core dev/test opt0 and the existing static RocksDB archive:
 | `capture_codec` | 4 |
 | `wide_capture_v2` | 7 |
 | `run_wide_memory` | 1 |
-| Total | 30 |
+| `run_wide_q24_v2` | 7 |
+| Total | 37 |
 
 The one ignored OS-child helper is not another test success. The actual-child
 test is among the six executed Hello2 tests. It checks exact i64 rows/committed
 values/carry/state/history data and both Hello1/Hello2 rejection directions.
 The selected wide producer target `run_wide_q24_v2` has seven separate tests;
-those are pending in this record and are not confused with the one host-memory
-test. Earlier 18/49-test runs and other roles are not added.
+those also passed on this same Root candidate and are not confused with the one
+host-memory test. [Its separate raw log and binary pin](A3-r1-evidence/hello2-root7a693-corrected/root-producer.json)
+record that additional target. Earlier 18/49-test runs and other roles are not added.
 
 [Copied raw batch and selected Root metadata](A3-r1-evidence/hello2-root7a693-corrected/root-batch.json)
 pin the Root source, command, original metadata snapshot hash, source-file hashes,
 five actual test-binary hashes, raw log, archive identity and stable source/archive
 checks. A3 kept its Cargo hold; this is **Root integration execution**, not an
 A3 standalone frozen-branch run. No strict Clippy result for this source is yet
-asserted here. The source-only documentation checker reported43 known missing
+asserted here. The source-only documentation checker reported 43 known missing
 references and zero new issues; that is not a strict clean audit.
 
 ## Initial failure and correction
