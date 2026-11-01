@@ -4717,33 +4717,49 @@ async function refreshPeerCensus(force){
   peerCensusTs = Date.now();
   try {
     const r = await fetch("/peer-census.json", { cache: "no-store" });
-    if (r.ok) peerCensus = await r.json();
-  } catch {}
+    peerCensus = r.ok ? await r.json() : {available:false,availability_reason:"Census fetch failed."};
+  } catch { peerCensus={available:false,availability_reason:"Census fetch unavailable."}; }
   return peerCensus;
 }
+const CENSUS_T12_GENESIS = "a27f8f44fe4d91a5bed940be9dbd6d260ccb95cc00d948b1c08ddb6bd1a5f02542a6cf35c7a4d959ba4863ac1557861671763e5cc22937c697870283a8ca1f23";
+function censusUsable(read=peerCensus, now=Date.now()){
+  const at=Date.parse(read && read.generated_at || "");
+  return !!read && read.available === true && read.network === "testnet-12" &&
+    read.source && read.source.genesisHash === CENSUS_T12_GENESIS &&
+    Number.isFinite(at) && now-at>=-60000 && now-at<=300000;
+}
 function censusRefused(kinds){
-  const list = (peerCensus && Array.isArray(peerCensus.refused)) ? peerCensus.refused : [];
-  return kinds ? list.filter(r => kinds.includes(r.reason)) : list;
+  const list=censusUsable() && Array.isArray(peerCensus.refused) ? peerCensus.refused : [];
+  return kinds ? list.filter(r=>kinds.includes(r.reason)) : list;
 }
 function censusReason(r){
-  switch (r.reason) {
-    case "outdated_build":
-      return `outdated build — this chain has crossed the fence at DAA ${num(r.missing_fence)} and the node's build does not carry it`
-        + (r.peer_daa != null ? `; the node itself is at DAA ${num(r.peer_daa)}, on its own arm` : "");
-    case "different_schedule": return "a different fence schedule";
-    case "refused_us": return "the node refused this one" + (r.peer_daa != null ? ` (it is at DAA ${num(r.peer_daa)})` : "");
-    case "different_ruleset": return `another ruleset (fingerprint ${esc(r.remote_fingerprint || "?")}…)`;
-    case "different_genesis": return `another chain (genesis ${esc(r.remote_genesis || "?")}…)`;
-    default: return esc(r.reason || "refused");
+  const direction=r.direction === "peer_rejected_local" ? "peer rejected this observer" : "observer rejected a peer session";
+  if(r.reason === "fork_id_mismatch"){
+    const next=v=>String(v)==="18446744073709551615" ? "none (u64::MAX)" : String(v);
+    const detail=r.mismatch === "next_fence_mismatch" ? `next-fence mismatch${r.rejecting_node_expected_next ? "; rejecting node expects " + next(r.rejecting_node_expected_next) : ""}${r.rejected_peer_next_fence ? "; other side advertises " + next(r.rejected_peer_next_fence) : ""}`
+      : r.mismatch === "unknown_fired_set" ? "unknown fired-fence set"
+      : r.mismatch === "missing_fork_id" ? "fork-id absent"
+      : r.mismatch === "rejudge_required" ? "fresh fork-id announcement required" : "fork-id mismatch";
+    return esc(direction+" · "+detail+(r.crossed_fence!=null ? " · rejecting node crossed " + r.crossed_fence : ""));
   }
+  if(r.reason === "different_genesis") return esc(direction+" · genesis mismatch");
+  if(r.reason === "different_ruleset") return esc(direction+" · params mismatch");
+  return esc(r.reason || "handshake rejection");
 }
-function censusRemedy(r){
-  const rem = peerCensus && peerCensus.remedy;
-  if (r.reason === "different_genesis")
-    return "It is not on this chain at all: stop it, move its datadir aside (keep the keys) and resync.";
-  if (rem && rem.text)
-    return rem.url ? `<a href="${esc(rem.url)}" target="_blank" rel="noopener">${esc(rem.text)}</a>` : esc(rem.text);
-  return "Its operator has to rebuild. Until then it keeps extending its own arm, and nothing the rest of the network does reaches it.";
+function censusRemedy(){
+  return "Compare the actual runtime genesis, params and fired/next fences on both sides. A version label or missing IP does not identify which branch is current. Preserve the data and diagnose before changing it.";
+}
+function peerRuntimeView(vantages){
+  return `<h2 class="sec">Actual RPC vantages</h2><div class="note">These are the responding nodes' current reports, not a git-revision attestation or a network-majority count.</div><div class="tblscroll"><table class="tbl"><thead><tr><th>RPC source</th><th>Network · DAA</th><th>Params / schedule</th><th>Advertised fences</th><th>P2P identity</th></tr></thead><tbody>${vantages.map(v=>{
+    const n=v.node || {},d=v.dag || {};
+    return `<tr><td>${esc((v.names || [v.name || v.path]).join(" / "))}</td><td>${esc(d.network || "unavailable")} · ${d.virtualDaaScore==null ? "unknown" : num(d.virtualDaaScore)}${v.synced === false ? " · not synced" : ""}</td><td class="mono" style="overflow-wrap:anywhere">${esc(n.consensusParamsId || "unavailable")}<br>${esc(n.consensusScheduleId || "unavailable")}</td><td>${Array.isArray(n.fenceSchedule) ? n.fenceSchedule.map(x=>num(x)).join(", ") : "unavailable"}</td><td class="mono">${esc(v.p2pId || "unavailable")}</td></tr>`;
+  }).join("")}</tbody></table></div>`;
+}
+function censusPanelHtml(connectedIps){
+  if(!censusUsable()) return `<h2 class="sec">Handshake rejection observation unavailable</h2><div class="note">${esc(peerCensus && peerCensus.availability_reason || "Source identity or freshness is not verified.")} A missing or stale log is not zero refusals.</div>`;
+  const rows=censusRefused();
+  return `<h2 class="sec">Observed handshake rejection events</h2><div class="note">${esc(peerCensus.vantage || "log observer")} · log through ${esc(peerCensus.observed_to || "unknown")}. Events are separate sessions: one IP/NAT can have connected and refused sessions. ${peerCensus.complete_window ? "" : "The available tail does not cover the complete requested window."}</div>`+
+    (rows.length ? `<table class="tbl"><thead><tr><th>IP · port</th><th>Observed reason</th><th>Attempts</th><th>Last UTC</th></tr></thead><tbody id="refusedRows">${rows.map(r=>`<tr data-ip="${esc(r.ip)}"><td>${esc(r.ip)}:${esc(r.port ?? "?")}${connectedIps.has(r.ip) ? ' <span class="pill chain">also connected</span>' : ""}</td><td title="${esc(r.detail || "")}">${censusReason(r)}</td><td>${num(r.attempts)}</td><td>${esc(r.last_seen || "")}</td></tr>`).join("")}</tbody></table>` : '<div class="note">No rejection events observed in the available log tail.</div>')+`<div class="note">${censusRemedy()}</div>`;
 }
 // claude-bridge-fresh-v2: the node's own bridge gate, restated for the tile. Since main a5f1bdf7,
 // dns_finality_fresh_for_bridge() is: DNS confirmed AND (sink blue score − the confirmed anchor's
@@ -4784,9 +4800,11 @@ function bridgeFreshNote(dns, sbs){
 }
 function censusTileNote(){
   const list = censusRefused();
-  if (!list.length) return "";
+  if (!censusUsable()) return " · handshake log unavailable";
+  if (!list.length) return " · no rejection events observed";
   const labels = [
-    ["outdated_build", "outdated build"],
+    ["fork_id_mismatch", "fork-id events"],
+    ["outdated_build", "legacy diagnosis"],
     ["different_schedule", "different schedule"],
     ["refused_us", "peer refused"],
     ["different_ruleset", "different ruleset"],
@@ -4796,7 +4814,7 @@ function censusTileNote(){
     const n = list.filter(r => r.reason === kind).length;
     return n ? `${num(n)} ${label}` : null;
   }).filter(Boolean);
-  return ` · <b>+${num(list.length)} refused</b> (${detail.join(", ")})`;
+  return ` · <b>${num(list.length)} rejection event groups</b> (${detail.join(", ")})`;
 }
 
 function distinctPeerIps(peerInfo){
@@ -4838,11 +4856,13 @@ async function renderPeers(){
   // Read every vantage the site holds rather than one: an operator asking "am I connected?"
   // wants the union, and any single node's peer list is only a lower bound on the mesh.
   const reads = await Promise.allSettled(PEER_VANTAGES.map(async v => {
-    const [peers, info] = await Promise.all([
+    const [peers, info, dag, node] = await Promise.all([
       pathRpc(v.path, "getConnectedPeerInfo"),
       pathRpc(v.path, "getInfo").catch(() => ({})),
+      pathRpc(v.path, "getBlockDagInfo", {}, 3000).catch(() => ({})),
+      pathRpc(v.path, "getPalwNodeStatus", {}, 3000).catch(() => ({})),
     ]);
-    return { ...v, list: peers.peerInfo || [], p2pId: info.p2pId || null,
+    return { ...v, dag, node, list: peers.peerInfo || [], p2pId: info.p2pId || null,
              synced: info.isSynced == null ? null : !!info.isSynced };
   }));
   if (curSeg() !== "peers") return;                 // navigated away while loading
@@ -4858,7 +4878,7 @@ async function renderPeers(){
   for (const v of ok){
     const key = v.p2pId || v.path;
     if (byNode.has(key)) { byNode.get(key).names.push(v.name); continue; }
-    byNode.set(key, { names: [v.name], p2pId: v.p2pId, synced: v.synced, list: v.list });
+    byNode.set(key, { names: [v.name], p2pId: v.p2pId, synced: v.synced, list: v.list, dag:v.dag, node:v.node });
   }
   const vantages = [...byNode.values()];
 
@@ -4942,14 +4962,13 @@ async function renderPeers(){
       the queried vantage once. <b>Remote addresses</b> are only an IP view: multiple nodes may share
       one host, while one node may hold several sockets. <b>Live connections</b> counts those sockets.
       The count is a lower bound because it includes only nodes observed by the available vantages.</div>
+    ${peerRuntimeView(vantages)}
 
-    <div class="note"><b>Looking for your own node? Search by IP — ignore the port.</b>
-      Every row here is a live TCP connection, and the port shown under an address is the
-      <i>source</i> port the peer's operating system picked for that connection (e.g.
-      <span class="mono">54180</span>). It is <b>not</b> the port your node listens on
-      (<span class="mono">26311</span>). A node that dialled out to the network will therefore
-      <b>never</b> appear as <span class="mono">your.ip:26311</span> — only as your IP with some
-      high-numbered port. If your IP is in this table, your node is connected.</div>
+    <div class="note"><b>Looking for your own node? Search by IP.</b>
+      Every row is an actual TCP connection observed by an RPC vantage. An inbound peer's
+      remote port is usually ephemeral; an outbound connection can show its listening port
+      (for example <span class="mono">26311</span>). IP lookup groups those sessions, so it
+      cannot identify one node behind a shared IP/NAT.</div>
 
     <form class="mtp-lookup" id="peerLookup" autocomplete="off">
       <input id="peerIp" type="text" spellcheck="false"
@@ -4980,25 +4999,10 @@ async function renderPeers(){
   await refreshPeerCensus(true);
   if (curSeg() !== "peers") return;
   const connectedIps = new Set(groups.map(g => g.ip));
-  const refused = censusRefused().filter(r => !connectedIps.has(r.ip));
-  const refusedByIp = new Map(refused.map(r => [r.ip, r]));
-  if (peerCensus) {
-    const sec = document.createElement("div");
-    sec.id = "refusedPeers";
-    const win = num(peerCensus.window_minutes || 60);
-    sec.innerHTML = `<h2 class="sec" style="margin-top:22px">Refused at handshake — ${num(refused.length)} address${refused.length===1?"":"es"} in the last ${win} min</h2>
-      <div class="note">These nodes reached ${esc(peerCensus.vantage || "the explorer's node")} and were turned away before
-        they could join, so they are <b>not</b> in the count above. Read off that node's own log
-        (updated ${esc(peerCensus.generated_at || "?")}); each attempt is one line with the reason.</div>
-      ${refused.length ? `<div class="tblscroll"><table class="tbl"><thead><tr><th>IP address</th><th>Why it was refused</th>
-        <th class="num">Attempts</th><th>Last attempt (UTC)</th></tr></thead><tbody id="refusedRows">${
-        refused.map(r => `<tr data-ip="${esc(r.ip)}"><td class="hash"><b>${esc(r.ip)}</b></td><td>${censusReason(r)}</td>
-          <td class="num">${num(r.attempts)}</td><td class="nowrap">${esc(String(r.last_seen || "").replace("T", " ").replace("Z", ""))}</td></tr>`).join("")
-      }</tbody></table></div>
-      <div class="note">${censusRemedy(refused.find(r => r.reason === "outdated_build") || refused[0])}</div>`
-      : `<div class="note">Nobody was refused in that window.</div>`}`;
-    viewFor(__g).appendChild(sec);
-  }
+  const refused = censusRefused(); // Retain rejected sessions even when this IP also has a live connection.
+  const refusedByIp = new Map(refused.slice().reverse().map(r=>[r.ip,r]));
+  const sec=document.createElement("div");sec.id="refusedPeers";
+  sec.innerHTML=censusPanelHtml(connectedIps);viewFor(__g).appendChild(sec);
 
   // ---- "is my node connected?" ------------------------------------------------------------
   const byIp = new Map(groups.map(g => [g.ip, g]));
@@ -5016,18 +5020,16 @@ async function renderPeers(){
     const ip = m ? m[1] : raw;
     const typedPort = m && m[2] ? m[2] : null;
     const portNote = typedPort
-      ? `<div style="margin-top:6px">You typed <span class="mono">:${esc(typedPort)}</span> — matched on the IP alone, on purpose. The ports in the table are per-connection source ports, never a listening port.</div>`
+      ? `<div style="margin-top:6px">You typed <span class="mono">:${esc(typedPort)}</span> — matched on the IP alone, on purpose. The displayed remote port depends on connection direction; an IP may identify several nodes.</div>`
       : "";
     const g = byIp.get(ip);
     if (g) {
       const ports = g.ports.slice().sort((a,b)=>a-b).join(", ");
       out.innerHTML = `<div class="note" style="border-left-color:var(--good)">
         <span class="pill chain">connected</span> <b class="mono">${esc(ip)}</b> is a peer of this vantage right now.
-        ${num(g.ports.length)} connection${g.ports.length===1?"":"s"} (source port${g.ports.length===1?"":"s"}
+        ${num(g.ports.length)} connection${g.ports.length===1?"":"s"} (remote port${g.ports.length===1?"":"s"}
         <span class="mono">${esc(ports)}</span>)${g.versions.size?`, kaspad <span class="mono">${esc([...g.versions].join(", "))}</span>`:""}${
-        g.upMs?`, up ${esc(fmtDur(g.upMs/1000))}`:""}. The handshake succeeded, which means your
-        genesis and params fingerprint match this network — a node on a different chain is
-        dropped before it ever reaches this list.${portNote}</div>`;
+        g.upMs?`, up ${esc(fmtDur(g.upMs/1000))}`:""}. This session completed a handshake. Other nodes or sessions behind the same IP can still be refused; this is not a runtime revision attestation.${refusedByIp.has(ip) ? " <b>Rejection events were also observed for this IP; see the separate log table.</b>" : ""}${portNote}</div>`;
       const tr = document.querySelector(`#peerRows tr[data-ip="${CSS.escape(ip)}"]`);
       if (tr) {
         tr.style.background = "#a855f71f";
@@ -5037,9 +5039,9 @@ async function renderPeers(){
     } else if (refusedByIp.has(ip)) {
       const r = refusedByIp.get(ip);
       out.innerHTML = `<div class="note" style="border-left-color:var(--bad)">
-        <span class="pill red">refused at handshake</span> <b class="mono">${esc(ip)}</b> reached
+        <span class="pill red">rejection event observed</span> <b class="mono">${esc(ip)}</b> reached
         ${esc(peerCensus.vantage || "the explorer's node")} ${num(r.attempts)} time${r.attempts===1?"":"s"} in the last
-        ${num(peerCensus.window_minutes || 60)} min and was turned away: ${censusReason(r)}.
+        ${num(peerCensus.window_minutes || 60)} min with this recorded outcome: ${censusReason(r)}.
         ${censusRemedy(r)}${portNote}</div>`;
       const tr = document.querySelector(`#refusedRows tr[data-ip="${CSS.escape(ip)}"]`);
       if (tr) {
@@ -5051,11 +5053,11 @@ async function renderPeers(){
       out.innerHTML = `<div class="note" style="border-left-color:var(--bad)">
         <span class="pill red">not in this list</span> <b class="mono">${esc(ip)}</b> is not a peer of
         ${vantages.length === 1 ? "this vantage" : "any vantage the explorer holds"} at this moment.
-        That is not proof your node is down — this list is one node's view. Check, in order:
+        That does not establish that your node is down or rejected; this is a limited set of RPC observations. Check:
         <ol style="margin:8px 0 0 18px;padding:0">
           <li>Your node connected to a <i>different</i> peer. The mesh is not a star; try again in a minute, or check your own log for <span class="mono">P2P Connected to</span>.</li>
           <li>Your node is still starting or mid-IBD and has not completed a handshake yet.</li>
-          <li>Your build's genesis / params fingerprint does not match this network — a mismatched node is disconnected at handshake and never appears here. Compare against the banner at the top of the site.</li>
+          <li>Your build's genesis / params fingerprint does not match this network — a mismatched node is disconnected at handshake and never appears here. Compare actual runtime genesis, params and fired/next fences on both sides.</li>
           <li>You are behind NAT with no outbound reachability at all (rare — outbound almost always works).</li>
         </ol>${portNote}</div>`;
     }
