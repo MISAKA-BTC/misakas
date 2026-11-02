@@ -1,0 +1,59 @@
+{
+  "scope": "transparent filesystem compression of already-present valid own compiled libraries; identical readable bytes/paths/mtime; no absent library restored or foreign binary injected",
+  "files": [
+    {
+      "existing_path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libkaspa_consensus_core-fdf047ace05c4991.rlib",
+      "logical_bytes": 372209696,
+      "unchanged_sha256": "a705db2386c19d84bbea450398934050706269ce5a369e38320c7dc9ade83670",
+      "mtime_ns_unchanged": 1793585185971927729,
+      "allocated_before": 372211712,
+      "allocated_after": 105869312,
+      "observed_free_after": 954314752
+    },
+    {
+      "existing_path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libkaspa_consensus_core-fdf047ace05c4991.rmeta",
+      "logical_bytes": 122927826,
+      "unchanged_sha256": "2d22b242c640090fc041cb43d8a308a69e62467e525ba78b1bd2194f6a9d73cb",
+      "mtime_ns_unchanged": 1793585140195749831,
+      "allocated_before": 122929152,
+      "allocated_after": 45789184,
+      "observed_free_after": 1031454720
+    },
+    {
+      "existing_path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libmisaka_palw_tir_exec-90f9ade7034b1ade.rlib",
+      "logical_bytes": 44266040,
+      "unchanged_sha256": "9ad41b618707ed5fb12d17a044403c290cb67df5a61207a1c3a0974eff7924dc",
+      "mtime_ns_unchanged": 1793585219448428204,
+      "allocated_before": 44269568,
+      "allocated_after": 10240000,
+      "observed_free_after": 1065463808
+    },
+    {
+      "existing_path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libmisaka_palw_kernel-fc1467d1bac8ae21.rlib",
+      "logical_bytes": 48468656,
+      "unchanged_sha256": "406cbe37785c57eceb33ea78b38bde75fbfc4026a769c070f0d4d88aae96c5ab",
+      "mtime_ns_unchanged": 1793575828074979285,
+      "allocated_before": 14434304,
+      "allocated_after": 14434304,
+      "observed_free_after": 1065455616
+    },
+    {
+      "existing_path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libmisaka_palw_base0-44363294fa56f20c.rlib",
+      "logical_bytes": 32010376,
+      "unchanged_sha256": "430bedc8c180d79e7b8f1af0c235926cbf69d4cd3ac4f170e64994fd50a76dab",
+      "mtime_ns_unchanged": 1793585208848359659,
+      "allocated_before": 32014336,
+      "allocated_after": 9469952,
+      "observed_free_after": 1087963136
+    },
+    {
+      "existing_path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libkaspa_consensus-cd5ac97790b645f7.rlib",
+      "logical_bytes": 51831664,
+      "unchanged_sha256": "2878fa2b61af3306502d2c1153bd3df843cf0234f775fc6de162ace7358eb115",
+      "mtime_ns_unchanged": 1793585232133400488,
+      "allocated_before": 51834880,
+      "allocated_after": 14213120,
+      "observed_free_after": 1125584896
+    }
+  ]
+}

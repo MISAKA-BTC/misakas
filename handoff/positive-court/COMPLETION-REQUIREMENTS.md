@@ -136,3 +136,25 @@ unqualified. Each actual refusal/progress result and the full remaining scope
 are preserved in [retained-output-20261102](retained-output-20261102/README.md).
 These private finite operator settings do not supply native resource/funding
 capabilities or approve any production activation.
+
+
+## Exact-evaluation budget diagnosis
+
+The original model's relation-1,752 `Budget` refusal is now traced during its
+same single direct evaluation: 3,881 computed elements, 131,376 reduction terms,
+135,038 source reads and 617,184,640 workspace request bytes. The finite
+131,072-term local ceiling missed upstream work; this is neither a completed
+Node result nor an arithmetic fault. Explicit diagnostics preserve old errors,
+coverage and cumulative charges, including false-Panel/false-Miner and closed
+retry behavior. The private caller's next 262,144-term bound remains inside
+its existing 1-GiB workspace owner and the same 8-GiB global ledger. No native
+policy/credit/activation is supplied. See [evaluation-diagnostics-20261102](evaluation-diagnostics-20261102/README.md)
+for the actual failed run, regression results, later measurements and all
+qualification boundaries.
+
+The measured term allowance crosses the former failure and logs at least 3,072
+of 213,298 numeric checks before SIGXCPU under the unchanged 240-second CPU
+limit. Its prefix records 102.305 s of producer material preparation and 51.407 s
+of Node submission. No complete record authentication, full Node verdict or
+native outcome was produced; performance of the complete unchanged checking
+path is the next required work, not a reduced relation set or relaxed credit.
