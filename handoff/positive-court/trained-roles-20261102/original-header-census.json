@@ -1,0 +1,12 @@
+{
+  "artifact_path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/EleutherAI__pythia-70m/run-wide-q24-v2/model.palwtir.private-wide-q24.palwtir",
+  "header_bytes": 22151,
+  "program_bytes": 14205,
+  "layout_bytes": 90,
+  "tensor_entries": 329,
+  "meta_bytes": 899,
+  "header_sha256": "201d7b8edd61c76fc116feb80cc7872e9d4e233c0e0c1895ba5a0297060792f4",
+  "prior_test_header_max_tensors": 64,
+  "prior_test_header_max_meta_bytes": 1024,
+  "parser_scope": "bounded identity metadata counts only; no tensor payload/model computation"
+}

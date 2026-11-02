@@ -30,7 +30,7 @@ native credit, recovery, role or measurement requirements.
 | 4 | Miner performs ordinary inference plus bounded source responses; Panel replays once, records and submits; resume/transfer preserves global budgets | Actual Miner/Panel services and G14 carriers, instrumented zero mandatory Miner witness construction, direct-to-Node source completion, bounded canonical request unions and durable local spent counters | API/process fixtures and short trained ordinary runs exist. Kaspad producer/verifier and native source-duty service are not connected to the new accepted flow |
 | 5 | Integrate Fraud/Positive intake, transport, deadlines, responsibility, fees, Gate C and every credit reader | Actual P-selected certification plus full local coverage and existing per-use entitlement at reward, receipt mint/spend, DAG live/safe/final weight, Rule E, settlement/EVM, prefix and dependency reads; unresolved fraud and maturity remain effective | `CreditConsumers` is an adapter API. Native factory, P lifecycle and production consumers are not connected; local DTOs/flags cannot fill the gap |
 | 6 | Multiple Nodes, restart, Panel replacement, reorg, IBD/pruning and dependent-claim cancellation reproduce state and money exactly | Real accepted block/carrier history, shared atomic undo and DB restart/IBD/pruning delivery; no repeated payments, defaults or replenished request/attempt budgets | Real DB journal fixtures exist, but no full node admission/role/fund writer to exercise all these transitions |
-| 7 | Measure actual LLM Miner/Panel/Node costs and enable only explicitly approved finite profiles | Pinned original model/job/arithmetic; separate cold/warm role CPU/RAM/IO/wire/storage/recovery costs, maxima and tail latency, global block/epoch/concurrency and Fraud protection; actual permitted activation after review | Short ordinary/dense self-consistency is recorded separately. Full Panel/Node trained-model measurements and approved activation profiles remain absent |
+| 7 | Measure actual LLM Miner/Panel/Node costs and enable only explicitly approved finite profiles | Pinned original model/job/arithmetic; separate cold/warm role CPU/RAM/IO/wire/storage/recovery costs, maxima and tail latency, global block/epoch/concurrency and Fraud protection; actual permitted activation after review | Original Pythia ordinary inference and one-pass Panel capture are now measured separately. Builder resource admission refuses before Node; full Node, isolated role costs and approved activation profiles remain absent |
 
 All seven stages remain part of the goal. A small paid Canonical Assignment
 path, if adopted, is an intermediate native connection. It does not by itself
@@ -118,3 +118,13 @@ requires explicit adoption of both before the new authority can be implemented
 as an accepted native success path. The active goal does not turn a draft into
 an already adopted design. The adoption question is pending; work within
 existing accepted contracts continues.
+
+## Actual trained measurement checkpoint
+
+The original pinned Pythia short job now completes ordinary inference and one
+Panel capture with matching output. Capture writes 93,329,660 bytes. Its next
+builder refuses simultaneous ownership while the run retains its entire working
+reservation after CPU completion. No Node numerical check, native claim or
+activation is reported. The measured prefix, metadata-only storage projection,
+failed attempts and full remaining scope are preserved in
+[trained-roles-20261102](trained-roles-20261102/README.md).
