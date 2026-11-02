@@ -139,8 +139,17 @@ impl ProtocolError {
         )
     }
 
+    /// A local shutdown never judges a peer or its candidate chain.
+    pub fn is_local_consensus_exiting(&self) -> bool {
+        matches!(
+            self,
+            Self::RuleError(RuleError::ConsensusExiting)
+                | Self::PruningImportError(PruningImportError::PruningImportRuleError(RuleError::ConsensusExiting))
+        )
+    }
+
     pub fn is_connection_closed_error(&self) -> bool {
-        matches!(self, Self::ConnectionClosed)
+        matches!(self, Self::ConnectionClosed) || self.is_local_consensus_exiting()
     }
 
     pub fn can_send_outgoing_message(&self) -> bool {
@@ -293,6 +302,19 @@ macro_rules! dequeue_with_request_id {
 
 #[cfg(test)]
 mod reject_classification_tests {
+    #[test]
+    fn local_consensus_shutdown_is_quiet_and_distinct_from_block_invalidity() {
+        use super::*;
+        let stopped = ProtocolError::RuleError(RuleError::ConsensusExiting);
+        assert!(stopped.is_local_consensus_exiting());
+        assert!(stopped.is_connection_closed_error());
+        assert!(!stopped.is_local_native_resource_unavailable(), "shutdown must not invent a resource failure or retry");
+        let wrapped = ProtocolError::PruningImportError(PruningImportError::PruningImportRuleError(RuleError::ConsensusExiting));
+        assert!(wrapped.is_local_consensus_exiting());
+        assert!(wrapped.is_connection_closed_error());
+        assert!(!ProtocolError::Other("invalid block").is_local_consensus_exiting());
+    }
+
     use super::*;
 
     /// **A reject is either about this node or about the peer, and the text has to say which.**

@@ -22,7 +22,9 @@ where
             if let Err(err) = res
                 && let Some(router) = self.router()
             {
-                router.try_sending_reject_message(&err).await;
+                if !err.is_local_consensus_exiting() {
+                    router.try_sending_reject_message(&err).await;
+                }
                 // Always tear down the connection (any flow error closes the whole peer router).
                 let _ = router.close().await;
                 // A ConnectionClosed error is a teardown SYMPTOM, not a root cause: the peer — or
