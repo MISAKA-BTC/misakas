@@ -1,7 +1,8 @@
 # Separate finite extended-cost diagnostic — 2026-11-02
 
 Implementations: diagnostic window/counters `2abe4ff31`; geometry-derived
-cumulative copy allowance `a29de5a96`. The prior goal turn made progress with bounded
+cumulative copy allowance `a29de5a96`; measured element allowance `db0f42fce`.
+The prior goal turn made progress with bounded
 empty-scratch reuse, regressions and an actual 49,152-relation CPU-limited
 prefix. This increment provides a separate opt-in diagnostic window to measure
 the **same entire** original trained short job past that boundary. It does not
@@ -30,12 +31,14 @@ evidence. This experiment must observe full completion or the next real
 refusal instead of declaring feasibility from extrapolation.
 
 Unchanged actual/requested bounds include the 8-GiB shared logical owner,
-1-GiB evaluation workspace, 256-MiB authentication owner, per-relation 16,384
-elements / 262,144 terms / 262,144 source reads, 320-MiB cumulative tapes,
+1-GiB evaluation workspace, 256-MiB authentication owner, per-relation
+262,144 terms / 262,144 source reads, 320-MiB cumulative tapes,
 2^20 opening attempts and two provider-build attempts. Failed work is not
 refunded. The 4-GiB target-group RSS and 512-MiB free-disk stops remain sampled
 monitors, not kernel/atomic admission quotas. Per-call provider read/scratch/
 return envelopes and every source/material/record authentication rule remain.
+The standard element limit remains 16,384. The initial extended runs also use
+16,384; the later measured extended allowance is 32,768, as detailed below.
 
 ## Measurement and validation
 
@@ -48,13 +51,13 @@ not silently recorded as zero. If all numerical checks finish, the same actual
 time and claim-tape read counters. No observation is a native receipt or a
 substitute for authentication, coverage, final output agreement or P approval.
 
-[Current selected runtime](runtime-r3.json) passes **36 tests**: 11 full-relation,
+[Copy-corrected runtime](runtime-r3.json) passes **36 tests**: 11 full-relation,
 four record-authentication and 21 wide Panel tests. All three trained opt-in
 cases are ignored in this default run. The earlier window-only source also
 passed [runtime-first.json](runtime-first.json) before the cumulative/final
 observation additions; it is not relabelled as execution of the later source.
 [Window/counter runtime](runtime-r2.json) also passed before the copy-allowance
-correction. [Current selected strict Clippy](clippy-r2.json) and the earlier
+correction. [Copy-corrected strict Clippy](clippy-r2.json) and the earlier
 [window/counter Clippy](clippy-first.json) pass with `--no-deps -D warnings`.
 These checks do not establish trained-model success or workspace-wide lint
 cleanliness. The private opt2/debug0 overrides retain assertions and overflow
@@ -140,3 +143,55 @@ Documentation checks retain all 43 known missing references with zero new
 issues; the baseline is unchanged. [Staged whitespace audit](staged-whitespace-check.json)
 passes for non-raw files and records four raw tool-log terminal-blank-line
 findings. Those raw bytes and their digests are preserved, not normalized.
+
+## Second execution: exact late-position element refusal
+
+[The corrected-copy execution](pythia-r2.json) also fails: exit **101**, one
+failed test, no outer stop, 511.433 s elapsed and an empty terminal process
+group. It completes exactly **106,198 numeric relations** before the next
+single direct evaluation returns `Budget`. It does not produce a full Node
+verdict or whole-record EOF/signature acceptance. The original model/fixture
+and that execution's compiled SHA still match after termination
+([input pins](input-sha-r2.json)).
+
+[Actual diagnostic](element-refusal-diagnosis.json): position 9, occurrence 1,
+block 1 / layer 0 / node 163, original I64 shape `[8, 1, 1]`, eight target lanes.
+The evaluator attempts **16,385 elements against 16,384**, with 5,280 terms,
+10,339 source reads and 807,985,600 workspace request bytes. The source material
+fits its authentication bound. This is the actual element `WorkLimit`, not an
+arithmetic mismatch or a reason to attribute Miner calculation guilt.
+
+Before the failed evaluation, completed work is 91,589,767 elements,
+1,608,257,540 terms and 1,669,315,565 logical source reads. Producer material
+preparation takes 286.8616 s and successful Node submissions 219.1559 s;
+the failed submission takes another 0.0093 s. Provider usage is 2,297,640,770
+bytes, 4,518,282 reads and 78,917 openings, one attempt. These are actual prefix
+costs and distinct accounting units; they do not establish a full-job bound.
+
+## Measured element allowance within the existing owner
+
+Only `ExtendedCost` now selects 32,768 elements per relation. The standard
+window keeps 16,384; every other source/evaluation, work, actual-read, tape,
+attempt, CPU and memory-owner limit remains. Each relation still passes its
+actual conservative workspace quote before evaluation. The local record's
+policy words authenticate the selected limits, and each experiment constructs
+and signs its own record. No old outcome is reused or converted to native credit.
+
+[Workspace derivation](element-workspace-derivation.json) uses the actual pinned
+compiled 560-byte memo-entry envelope and the unchanged workspace formula.
+The element-limit increment adds 59,506,688 logical request bytes. Even allowing
+the full 65,536-target source cap, the conservative request is 914,148,224 bytes,
+within the existing **1,073,741,824-byte owner**. The context-count cap is already
+bounded by the fixed original job/program, so that term is unchanged. This is
+logical request accounting, not measured RSS or physical admission. Actual
+quotes remain mandatory, and the whole job may still encounter another limit.
+
+[Current runtime](runtime-r4.json) again passes 36 selected tests with three
+trained cases ignored; [current strict Clippy](clippy-r3.json) passes. The
+[current validation checkpoint](validation-element-checkpoint.json) binds
+those checks to the current source, while preserving r2's distinct failed source
+snapshot. [The new running snapshot](running-snapshot-r3.json) records the exact
+new PID/start time/session, compiled SHA, declared limits and observed progress.
+It is historical liveness evidence; r3's terminal result is still unproven at
+that checkpoint. The r3 live log is excluded from its completed-log inventory.
+The r2 failure, earlier snapshots and raw digests remain preserved.

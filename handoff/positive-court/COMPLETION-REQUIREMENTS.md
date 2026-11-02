@@ -217,3 +217,21 @@ separately; its historical running snapshot does not prove a complete outcome.
 See [extended-cost evidence](extended-cost-20261102/README.md). Full trained
 checking, isolated role costs and every native/integration/activation condition
 above remain required.
+
+## Actual late-position evaluation limit
+
+The corrected-copy extended run completes exactly 106,198 numeric relations,
+then its same direct evaluation attempts 16,385 elements against 16,384 at
+position 9 / block 1 / node 163. Actual terms (5,280), source reads (10,339),
+authentication and workspace quote (807,985,600 bytes) remain within their
+bounds. Exit 101 and incomplete record authentication are retained; this is a
+work-budget refusal, not an arithmetic fault or native result.
+
+Only the extended private diagnostic now permits 32,768 elements, with the same
+real 1-GiB workspace owner and 8-GiB whole-operation ledger. The pinned formula
+and compiled memo envelope put its conservative full-target request below
+that owner. The standard window and all other bounds remain. All 36 selected
+regressions and strict selected Clippy pass. A fresh corrected measurement is
+running with exact source/input/process pins, without native authority or an
+approved activation profile. The full completion conditions are unchanged;
+see [extended-cost evidence](extended-cost-20261102/README.md).
