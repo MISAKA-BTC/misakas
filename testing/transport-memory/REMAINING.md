@@ -19,6 +19,10 @@ Implemented:
   response/timeout; they do not remove it and misassign a late same-op response.
 - Local transport pressure is a retryable local-resource condition in the IBD
   candidate path. It does not mark a valid chain InvalidProof.
+- With the retained UTXO service API, gRPC get_utxos_by_addresses keeps Rust and
+  protobuf allocations separately charged during conversion, then transfers the
+  same proto ticket into the queue/HTTP owner. The production quote is compared
+  with actual generated-message capacity at 0/1/4097 entries and long scripts.
 
 P1 incomplete ownership boundaries:
 
@@ -36,11 +40,14 @@ P1 incomplete ownership boundaries:
    travel into the final state owner; holding a ticket only until dequeue fails
    for IBD accumulators that survive multiple receives.
 3. `rpc/service/src/service.rs`: reply construction for get_blocks,
-   get_mempool_entries, get_utxos_by_addresses, get_headers and related methods
+   get_mempool_entries, get_headers and related methods
    occurs before output admission. Large RPC construction must reserve from
    schema/request-derived bounds or use negotiated streaming, before materializing.
    EVM/overlay snapshot serving likewise constructs before the generic output
    ticket; the explicit generation ticket currently covers legacy PALW only.
+   get_utxos_by_addresses is covered through the retained gRPC path after the
+   service/gRPC integration; its legacy wRPC/direct Rust serializer returns a
+   plain response and still lacks the end-to-end serializer/transport ticket.
 4. `notify/src/notifier.rs` notification channel, `notify/src/broadcaster.rs`
    control channel, `notify/src/subscriber.rs` mutation channel, and the RPC client
    notification channel remain unbounded. Critical events need durable cursor/
