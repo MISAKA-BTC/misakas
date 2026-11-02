@@ -9,7 +9,7 @@ use kaspa_consensus_core::BlockHash;
 use kaspa_consensus_core::BlockLevel;
 use kaspa_consensus_core::{
     BlockHashMap, BlockHashSet, HashMapCustomHasher,
-    blockhash::{BlockHashes, ORIGIN},
+    blockhash::{BlockHashExtensions, BlockHashes, ORIGIN},
     errors::pruning::{PruningImportError, PruningImportResult},
     header::Header,
     pruning::PruningPointProof,
@@ -27,7 +27,7 @@ use crate::{
         services::reachability::ReachabilityService,
         stores::{
             ghostdag::{GhostdagData, GhostdagStore, GhostdagStoreReader},
-            headers::HeaderStore,
+            headers::{HeaderStore, HeaderStoreReader},
             pruning::{PruningProofDescriptor, PruningStoreReader},
             reachability::StagingReachabilityStore,
             relations::StagingRelationsStore,
