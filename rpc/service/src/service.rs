@@ -5084,7 +5084,12 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             .utxoindex
             .clone()
             .ok_or(RpcError::NoUtxoIndex)?
-            .get_utxos_by_script_public_keys_reserved(scripts, LARGE_UTXO_HARD_CAP, per_entry, 4096 + 1024 + 1024)
+            .get_utxos_by_script_public_keys_reserved(
+                (scripts, input_memory.clone()),
+                LARGE_UTXO_HARD_CAP,
+                per_entry,
+                4096 + 1024 + 1024,
+            )
             .await
             .map_err(|why| RpcError::General(why.to_string()))?;
         input_memory.materialized();
