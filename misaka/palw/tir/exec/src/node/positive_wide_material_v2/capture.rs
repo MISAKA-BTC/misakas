@@ -470,6 +470,10 @@ pub fn capture_one_pass_v2<'a>(
     // are tiny. No numerical execution or program Vec allocation occurs here.
     session.charge(Charge::Visit, mul(add(misaka_palw_tir::program::MAX_PROGRAM_BYTES as u64, 1024)?, 128)?)?;
     let run_quote = runner.quote(expected.job, run_limits)?;
+    let handoff_peak = run_quote.handoff_peak_requests()?;
+    if handoff_peak > run_limits.max_requested_bytes {
+        return Err("wide required output handoff ceiling".into());
+    }
     let records_cap = usize::try_from(limits.max_records).map_err(|_| "wide records index")?;
     let leaves_cap = usize::try_from(limits.max_step_leaves).map_err(|_| "wide leaves index")?;
     let layout_bytes = add(32, mul(count(expected.class.layout.commit_tiles.len() + expected.class.layout.state_tiles.len())?, 4)?)?;
@@ -495,7 +499,7 @@ pub fn capture_one_pass_v2<'a>(
     ]
     .into_iter()
     .try_fold(0, add)?;
-    if add(heap, run_quote.requested_bytes)? > limits.max_live_heap_bytes {
+    if add(heap, handoff_peak)? > limits.max_live_heap_bytes {
         return Err("wide collector simultaneous heap cap".into());
     }
     let lease = reserver("positive-wide-panel-capture-v2", work.class, work.execution, heap)?;
@@ -541,7 +545,7 @@ pub fn capture_one_pass_v2<'a>(
         let b = shared.borrow();
         (b.e.job, b.e.prompt, b.context)
     };
-    let run = runner.run_observed_fallible(job, prompt, execution, run_limits, &mut leaves, &mut observer, reserver)?;
+    let run = runner.run_observed_with_retained_output_v2(job, prompt, execution, run_limits, &mut leaves, &mut observer, reserver)?;
     drop(leaves);
     drop(observer);
     let mut b = Rc::try_unwrap(shared).map_err(|_| "wide collector leaked callback")?.into_inner();

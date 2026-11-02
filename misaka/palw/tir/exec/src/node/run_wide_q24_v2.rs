@@ -55,6 +55,18 @@ pub struct TirWideRunQuoteV2 {
     pub requested_bytes: u64,
 }
 
+impl TirWideRunQuoteV2 {
+    /// Complete owned result backing and typed root, excluding the executor and
+    /// scratch that do not survive a completed run. A quote is data, not a lease.
+    pub fn retained_output_requests(&self) -> Result<u64, String> {
+        add(self.retained_bytes, size_of::<TirJobRunWideQ24V2>() as u64)
+    }
+    /// Both required guards coexist while completed data changes owners.
+    pub fn handoff_peak_requests(&self) -> Result<u64, String> {
+        add(self.requested_bytes, self.retained_output_requests()?)
+    }
+}
+
 /// A borrowed mixed-width preimage. Explicit copies require caller reservations.
 pub struct TirLeafOutWideQ24V2<'a> {
     pub index: u64,
@@ -277,7 +289,7 @@ impl<'a> TirClassRunnerWideQ24V2<'a> {
             on_leaf(leaf);
             Ok(())
         };
-        self.drive(ctx, prompt, expected_execution, limits, &mut forward, None, None)
+        self.drive(ctx, prompt, expected_execution, limits, &mut forward, None, None, false)
     }
 
     /// Every-node/state/native-output observation within this same single run.
@@ -296,7 +308,7 @@ impl<'a> TirClassRunnerWideQ24V2<'a> {
             on_leaf(leaf);
             Ok(())
         };
-        self.drive(ctx, prompt, expected_execution, limits, &mut forward, Some(observer), None)
+        self.drive(ctx, prompt, expected_execution, limits, &mut forward, Some(observer), None, false)
     }
 
     /// Same unobserved default computation with the existing REQUIRED run
@@ -315,7 +327,7 @@ impl<'a> TirClassRunnerWideQ24V2<'a> {
             on_leaf(leaf);
             Ok(())
         };
-        self.drive(ctx, prompt, expected_execution, limits, &mut forward, None, Some(reserver))
+        self.drive(ctx, prompt, expected_execution, limits, &mut forward, None, Some(reserver), false)
     }
 
     /// Fallible local custody callback. A failed tape write aborts this same
@@ -338,7 +350,27 @@ impl<'a> TirClassRunnerWideQ24V2<'a> {
         observer: &mut dyn TirRunObserverV1,
         required_reserver: &TirMemoryReserverV1,
     ) -> Result<TirJobRunWideQ24V2, String> {
-        self.drive(ctx, prompt, expected_execution, limits, on_leaf, Some(observer), Some(required_reserver))
+        self.drive(ctx, prompt, expected_execution, limits, on_leaf, Some(observer), Some(required_reserver), false)
+    }
+
+    /// Same single numerical pass, with required working-to-result ownership
+    /// handoff. Executor/scratch release before the small completed-output lease
+    /// replaces the working guard. Both guards must fit the supplied limit and
+    /// coexist through acquisition; refusal returns no partial result. No global
+    /// fallback, budget refund, extra replay or new native authority is added.
+    /// Legacy run APIs retain their original whole-run guard behavior.
+    #[allow(clippy::too_many_arguments)]
+    pub fn run_observed_with_retained_output_v2(
+        &self,
+        ctx: &PalwJobContextV2,
+        prompt: &[u32],
+        expected_execution: Hash64,
+        limits: TirWideRunLimitsV2,
+        on_leaf: &mut dyn FnMut(&TirLeafOutWideQ24V2<'_>) -> Result<(), String>,
+        observer: &mut dyn TirRunObserverV1,
+        required_reserver: &TirMemoryReserverV1,
+    ) -> Result<TirJobRunWideQ24V2, String> {
+        self.drive(ctx, prompt, expected_execution, limits, on_leaf, Some(observer), Some(required_reserver), true)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -351,8 +383,17 @@ impl<'a> TirClassRunnerWideQ24V2<'a> {
         on_leaf: &mut dyn FnMut(&TirLeafOutWideQ24V2<'_>) -> Result<(), String>,
         mut observer: Option<&mut dyn TirRunObserverV1>,
         required_reserver: Option<&TirMemoryReserverV1>,
+        retain_output_only: bool,
     ) -> Result<TirJobRunWideQ24V2, String> {
         let q = self.quote(ctx, limits)?;
+        let output_requests = if retain_output_only {
+            if required_reserver.is_none() || q.handoff_peak_requests()? > limits.max_requested_bytes {
+                return Err("wide required output handoff ceiling".into());
+            }
+            Some(q.retained_output_requests()?)
+        } else {
+            None
+        };
         if prompt.len() != ctx.declared_prefill_tokens as usize {
             return Err("wide prompt count differs from actual job".into());
         }
@@ -479,6 +520,21 @@ impl<'a> TirClassRunnerWideQ24V2<'a> {
         let trace_root = wide::trace_root(ctx, &rows, &generated).ok_or("wide rows do not form the original trace")?;
         let execution_root = palw_tir_execution_root_v1(&context, &trace_root, &self.class_id, q.leaf_count, &step_merkle_root);
         let output_root = palw_attempt_output_root_v1(ctx, &generated);
+        let (lease, reserved_bytes) = if let Some(bytes) = output_requests {
+            // All CPU, callbacks and commitment hashes completed under the full
+            // guard. No executor/history/scratch backing survives this point.
+            drop(exec);
+            let retained = required_reserver.ok_or("wide required output owner missing")?(
+                "tir-wide-q24-v2-retained",
+                self.class_id,
+                expected_execution,
+                bytes,
+            )?;
+            drop(lease);
+            (Some(retained), bytes)
+        } else {
+            (lease, q.requested_bytes)
+        };
         Ok(TirJobRunWideQ24V2 {
             leaf_count: q.leaf_count,
             step_merkle_root,
@@ -488,7 +544,7 @@ impl<'a> TirClassRunnerWideQ24V2<'a> {
             execution_root,
             output_root,
             leaf_hashes: emit.hashes,
-            reserved_bytes: q.requested_bytes,
+            reserved_bytes,
             _memory: lease,
         })
     }

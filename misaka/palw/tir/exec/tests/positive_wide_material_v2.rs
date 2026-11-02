@@ -540,10 +540,13 @@ fn required_same_ledger_capture_and_run_guards_survive_until_owned_capture_drop(
         )
         .unwrap();
         let requests = calls.lock().unwrap();
-        assert_eq!(requests.len(), 2);
+        assert_eq!(requests.len(), 3);
         assert_eq!(requests[0].0, "positive-wide-panel-capture-v2");
         assert_eq!(requests[1].0, "tir-wide-q24-v2-required");
-        assert_eq!(requests[1].1, capture.run().reserved_bytes());
+        assert_eq!(requests[1].1, runner.quote(&f.job, run_bounds()).unwrap().requested_bytes);
+        assert_eq!(requests[2].0, "tir-wide-q24-v2-retained");
+        assert_eq!(requests[2].1, capture.run().reserved_bytes());
+        assert_eq!(requests[2].1, runner.quote(&f.job, run_bounds()).unwrap().retained_output_requests().unwrap());
         drop(requests);
         assert_eq!(live.load(Ordering::SeqCst), 2);
         drop(capture);
@@ -603,3 +606,6 @@ mod trace_free_bridge_tests;
 #[cfg(unix)]
 #[path = "positive_wide_material_v2/trained_roles.rs"]
 mod trained_roles;
+
+#[path = "positive_wide_material_v2/retained_handoff_tests.rs"]
+mod retained_handoff_tests;

@@ -123,6 +123,10 @@ fn ledger(c: Arc<Counters>) -> TirMemoryReserverV1 {
                 c.run_calls.fetch_add(1, Ordering::SeqCst);
                 2
             }
+            "tir-wide-q24-v2-retained" => {
+                c.run.fetch_add(1, Ordering::SeqCst);
+                2
+            }
             _ => return Ok(Box::new(()) as Box<dyn Send + Sync>),
         };
         Ok(Box::new(Guard(c.clone(), kind)) as Box<dyn Send + Sync>)
