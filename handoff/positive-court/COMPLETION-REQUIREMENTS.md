@@ -108,16 +108,20 @@ and arithmetic regressions are recorded separately under
 That local enforcement does not supply the missing native policy/role/funding,
 physical capacity, service-time opportunity or accepted writer.
 
-## Design decision awaiting the user
+## Native-assignment design adopted — 2026-11-02
 
-The existing [native-assignment RFC draft](../../docs/design/palw/integration/positive-native-assignment-rfc-draft-2026-10-31.md)
-and [ADR draft](../../docs/design/palw/integration/positive-native-assignment-adr-draft-2026-10-31.md)
-are concrete proposals for independent job/worker/funding authority. They remain
-unadopted. The repository's [freeze procedure](../../docs/governance/design-freeze.md)
-requires explicit adoption of both before the new authority can be implemented
-as an accepted native success path. The active goal does not turn a draft into
-an already adopted design. The adoption question is pending; work within
-existing accepted contracts continues.
+The user explicitly answered “両案を採択し、実装を進める” to the paired
+native-assignment RFC/ADR adoption question. The adopted documents are
+[RFC-0045](../../docs/rfc/0045-positive-court-canonical-assignment.md) and
+[ADR-0213](../../docs/adr/0213-positive-court-canonical-assignment.md).
+This authorizes implementation of the bounded Canonical TIR Assignment
+authority, role consent, purpose funding/reservation, single Result consumption
+and poster-funded payment described by both documents. It does not authorize
+public activation or declare the full seven-stage objective complete.
+The previous drafts remain as historical source. Namespace collision checks,
+finite policy/preimages, actual native atomic state/fund/history integration,
+full coverage plus separate P certification, recovery and measurements remain
+required. Adoption is no longer a blocker for this implementation.
 
 ## Actual trained measurement checkpoint
 
@@ -341,3 +345,17 @@ prove full native legacy money/history/recovery equivalence or any new
 Positive authority/P/consumer/activation. All seven stages and individual
 A01–A12/T01–T44 native requirements remain in scope and unproven. The older
 three-role model performance measurement retains its own exact source pins.
+
+
+## Native legacy G14 checkpoint — 2026-11-02
+
+Eight selected real Consensus/RocksDB legacy signature/fraud/certification/
+settlement/reorg/IBD/restart cases pass, including a new regression that closes
+the final DB owner and reopens persisted files in pending and settled states.
+Canonical state bytes, K/H rows, actual UTXOs/queues, collateral and monetary
+conservation are checked. Test-only erased heap-future boundaries fix stack
+overflows without changing default stack or production rules. All initial
+failures and exact final sources are preserved in
+[legacy-native-history-20261102](legacy-native-history-20261102/README.md).
+This does not qualify every legacy history or complete any new native Positive
+authority, P/credit, service/fund writer, recovery or activation obligation.

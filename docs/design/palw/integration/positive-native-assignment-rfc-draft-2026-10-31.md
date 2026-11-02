@@ -1,3 +1,5 @@
+> **2026-11-02採択済み:** ユーザーが本案と対の案を明示採択し、実装継続を指示した。正式文書は[RFC-0045](../../../rfc/0045-positive-court-canonical-assignment.md)。以下は採択前の原文を履歴として保持する。実装・検証・本番有効化は未完了。
+
 # RFC番号未割当 — Canonical TIR Assignmentを起点とするPositive Court native経路
 
 - 状態: **未採択のintegration draft。実装許可・本番数値・公開有効化を意味しない。**

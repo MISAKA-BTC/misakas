@@ -1,3 +1,5 @@
+> **2026-11-02採択済み:** ユーザーが本案と対の案を明示採択し、実装継続を指示した。正式文書は[ADR-0213](../../../adr/0213-positive-court-canonical-assignment.md)。以下は採択前の原文を履歴として保持する。実装・検証・本番有効化は未完了。
+
 # ADR番号未割当 — 最初のPositive native TIR経路を合意Assignmentとposter原資で分離する案
 
 - 状態: **未採択・無効のintegration draft**。

@@ -1658,6 +1658,14 @@
       "status": "原文と後続改定を参照"
     },
     {
+      "kind": "adr",
+      "number": "0213",
+      "path": "docs/adr/0213-positive-court-canonical-assignment.md",
+      "title": "ADR-0213 — 最初のPositive native TIR経路を合意Assignmentとposter原資で分離する",
+      "topic": "Verification / court",
+      "status": "原文と後続改定を参照"
+    },
+    {
       "kind": "rfc",
       "number": "0001",
       "path": "docs/rfc/0001-palw-inference-surface-gaps.md",
@@ -2006,6 +2014,14 @@
       "number": "0044",
       "path": "docs/rfc/0044-positive-court-full-coverage.md",
       "title": "RFC-0044 — Positive Court：Panelによる正常計算証拠の生成・提出と、Minerの上限付き対話応答",
+      "topic": "Verification / court",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "rfc",
+      "number": "0045",
+      "path": "docs/rfc/0045-positive-court-canonical-assignment.md",
+      "title": "RFC-0045 — Canonical TIR Assignmentを起点とするPositive Court native経路",
       "topic": "Verification / court",
       "status": "原文と後続改定を参照"
     }

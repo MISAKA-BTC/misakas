@@ -232,4 +232,5 @@
 - [ADR-0199 — 共有court終端materialと非独占提出方式](0199-shared-court-terminal-material-and-nonblocking-ingress.md)
 - [ADR-0202 — shared court originalの実原資と役割別同意](0202-court-original-funded-contract-and-role-consent.md)
 - [ADR-0206 — PanelDa の G14 経路 — 期限付きの必須公開](0206-panel-da-mandatory-disclosure-g14-route.md)
+- [ADR-0213 — 最初のPositive native TIR経路を合意Assignmentとposter原資で分離する](0213-positive-court-canonical-assignment.md)
 

@@ -1,0 +1,23 @@
+{
+  "source_record": "native-cert-reopen-heap-futures.json",
+  "exit_code": 101,
+  "test_counts": [],
+  "completed_cases_before_abort": 1,
+  "fault": "ML-DSA signing called from World::on under nested async poll frames",
+  "binary": {
+    "path": "/Users/wata/Downloads/MISAKA-testnet/target/positive-legacy-native-fresh-20261102/debug/deps/kaspa_consensus-832e2e0b6b3845a1",
+    "sha256": "78df76f43cd5cf6902197b9f93c2d8248be200381acd0dbb498acdf531db54e8",
+    "bytes": 346732672
+  },
+  "evidence": [
+    "native-cert-reopen-heap-futures-stack-overflow.ips",
+    "heap-futures-disassembly.log"
+  ],
+  "qualification": "The first selected case printed ok; no successful suite summary. Concrete Box pinning did not prevent LLVM inlining child polls. No production or stack-limit changes.",
+  "reconstructed_failed_sources": {
+    "native-cert-reopen-heap-futures-failed-cert.rs.txt": "2646e55dd617881d820b593c09c1992ccf9cd0eb28428ede26eed4c6ef260a19",
+    "native-cert-reopen-heap-futures-failed-reopen.rs.txt": "aa0a4b126b8bc135dcd444f98e5b742255246d5a73c7e9b3b1cc76d415d97de5"
+  },
+  "net_source_patch": "native-cert-reopen-heap-futures-failed-source.patch",
+  "disassembly_sha256": "39f78ea047932ba438a140c8c1a5e874e8f8ea728a51457a7ce9f11951af60e0"
+}
