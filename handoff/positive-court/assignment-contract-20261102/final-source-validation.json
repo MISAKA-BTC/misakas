@@ -1,0 +1,76 @@
+{
+  "base_commit": "09ee83c8e",
+  "records": [
+    {
+      "label": "assignment-contract-final",
+      "counts": [
+        [
+          4,
+          0,
+          0
+        ]
+      ],
+      "record_sha256": "96b7131d760f8d2a22c5eacc6699f88fb2416e30673fc9b98d3e08bc4d2395e4",
+      "source_equal": true,
+      "executables": [
+        {
+          "path": "/Users/wata/Downloads/MISAKA-testnet/target/positive-legacy-native-fresh-20261102/debug/deps/assignment-6468842c900385fb",
+          "profile": {
+            "opt_level": "0",
+            "debuginfo": 0,
+            "debug_assertions": true,
+            "overflow_checks": true,
+            "test": true
+          },
+          "sha256": "50a4912210967d80ff892be3e5d56f54cadf382dcfa179076b59ae8deaecba80",
+          "bytes": 1944608
+        }
+      ]
+    },
+    {
+      "label": "assignment-core-final",
+      "counts": [
+        [
+          11,
+          0,
+          0
+        ]
+      ],
+      "record_sha256": "a189f483d9cc196c4e8c02ff2d546c73f11d822d67402082f06c97d6ca0fc23f",
+      "source_equal": true,
+      "executables": [
+        {
+          "path": "/Users/wata/Downloads/MISAKA-testnet/target/positive-legacy-native-fresh-20261102/debug/deps/kaspa_consensus_core-b273d62e854cf3f3",
+          "profile": {
+            "opt_level": "2",
+            "debuginfo": 0,
+            "debug_assertions": true,
+            "overflow_checks": true,
+            "test": true
+          },
+          "sha256": "7ae9b762f55581dddcf1dd58919046b05d8fc6322d2a10b2e8da603114b04bd3",
+          "bytes": 127894336
+        }
+      ]
+    },
+    {
+      "label": "assignment-library-clippy",
+      "counts": [],
+      "record_sha256": "60342c1553817475a4a39d115cb3fc2b4cc3ab15aa8edf9402830dbdbc20f21b",
+      "source_equal": true,
+      "executables": []
+    },
+    {
+      "label": "assignment-contract-test-clippy",
+      "counts": [],
+      "record_sha256": "66e6566fc76ead0bf81054c20931a5df5a228f9643ba1a39020adef0cf2d2eb8",
+      "source_equal": true,
+      "executables": []
+    }
+  ],
+  "same_source_map_for_all": true,
+  "selected_passes": 15,
+  "full_goal_complete": false,
+  "native_accepted_assignment": false,
+  "public_activation": false
+}

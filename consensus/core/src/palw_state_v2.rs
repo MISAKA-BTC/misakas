@@ -27331,3 +27331,6 @@ pub(crate) use native_wire_carriage_v1::{
     restore_index_native_shape_v1, scan_budget_delta_row_v1, scan_carriage_native_wire_v1, scan_exec_delta_row_v1,
     scan_improvement_delta_row_v1, scan_vertex_delta_row_v1, transition_existing_index_shape_v1, transition_node_unit_v1,
 };
+
+#[cfg(test)]
+mod positive_assignment_tests;

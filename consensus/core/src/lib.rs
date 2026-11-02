@@ -21,6 +21,12 @@ pub(crate) mod palw_tir_corpus_fixture_v1;
 pub mod palw_mergeset_v1;
 pub mod palw_native_readiness_v1;
 // Pure bounded Positive checker; no mapped artifacts or model runtime.
+pub mod palw_native_settlement_resources_v1;
+pub mod palw_native_settlement_v1;
+pub mod palw_panel_beacon_v1;
+pub mod palw_panel_source_snapshot_v1;
+pub mod palw_permissionless_panel_v1;
+pub mod palw_positive_assignment_v2;
 pub mod palw_positive_check_v2;
 pub mod palw_positive_common_replay_v2;
 pub mod palw_positive_common_source_replay_v2;
@@ -29,14 +35,9 @@ pub mod palw_positive_court_v2;
 pub mod palw_positive_journal_chain_v2;
 pub mod palw_positive_metadata_v2;
 pub mod palw_positive_rows_v2;
-pub mod palw_positive_source_read_v2;
 pub mod palw_positive_source_geometry_v2;
+pub mod palw_positive_source_read_v2;
 pub mod palw_positive_source_v2;
-pub mod palw_native_settlement_resources_v1;
-pub mod palw_native_settlement_v1;
-pub mod palw_panel_beacon_v1;
-pub mod palw_panel_source_snapshot_v1;
-pub mod palw_permissionless_panel_v1;
 
 use std::collections::{HashMap, HashSet};
 use std::hash::{BuildHasher, Hasher};
@@ -775,19 +776,14 @@ pub mod palw_terminal_carriage_v1;
 pub mod palw_tir_admission_v1;
 /// Explicit pure wide-only TIR admission data; no native dispatch or activation.
 pub mod palw_tir_admission_v2;
-/// Chain-selected legacy/wide registration routing; no object or environment selector.
-pub mod palw_tir_registration_dispatch_v1;
 /// RFC-0002 Phase F (F3): the TIR inventory — the artifact layout an IR class's `artifact_root` commits to.
 pub mod palw_tir_artifact_v1;
 /// RFC-0002 Phase F step F6: an IR class's attempt job — the canonical job, the yardstick context and the job an anchor names (J5).
 pub mod palw_tir_attempt_v1;
-/// Explicit metadata-only narrow/wide canonical job profile resolution; no native admission.
-pub mod palw_tir_profile_resolver_v2;
-/// Explicit profile-aware schema-1 class record data; no native admission or activation.
-pub mod palw_tir_class_record_v2;
-pub mod palw_tir_row_profile_v2;
 /// RFC-0002 Phase F step F6: the IR family certifier — drill evidence graded by the shipped IR court into a family over the program's primitives.
 pub mod palw_tir_certify_v1;
+/// Explicit profile-aware schema-1 class record data; no native admission or activation.
+pub mod palw_tir_class_record_v2;
 /// RFC-0002 Phase F step F2: an IR class — the program, its commitment layout, its identity and its registration carriage.
 pub mod palw_tir_class_v1;
 /// RFC-0002 Phase F (PALW-TIR-38, `palw_tir_fence2`): the range twin of the close sizing — the element twin's read sets over ranges.
@@ -811,6 +807,11 @@ pub mod palw_tir_one_move_v1;
 pub mod palw_tir_only_v1;
 /// RFC-0024 §4/§5: versioned position-terminal and lookahead court moves, step multiproof (dormant, `palw_tir_bounded_door_v1`).
 pub mod palw_tir_position_terminal_v2;
+/// Explicit metadata-only narrow/wide canonical job profile resolution; no native admission.
+pub mod palw_tir_profile_resolver_v2;
+/// Chain-selected legacy/wide registration routing; no object or environment selector.
+pub mod palw_tir_registration_dispatch_v1;
+pub mod palw_tir_row_profile_v2;
 /// RFC-0006 per-segment pricing (agent SHARD): the dormant fence `palw_tir_shard_segment_v2` and the resident table, the price share
 /// `max(work, resident)` and the seat need it puts in force.
 pub mod palw_tir_shard_segment_v2;

@@ -359,3 +359,19 @@ failures and exact final sources are preserved in
 [legacy-native-history-20261102](legacy-native-history-20261102/README.md).
 This does not qualify every legacy history or complete any new native Positive
 authority, P/credit, service/fund writer, recovery or activation obligation.
+
+
+## Adopted Assignment contract/metadata increment — 2026-11-02
+
+RFC-0045 / ADR-0213 now have result-free terms/bundle/three-role signature
+contracts, A versus future-C bounds, a nonce exhaustion transition and an
+independent native-registry metadata/assigned-Result reader. Four contract
+cases and eleven Core metadata/binding cases pass on one final source map;
+strict selected library/test Clippy passes. The default-stack opt2 Core build
+and all actual binaries are pinned in
+[assignment-contract-20261102](assignment-contract-20261102/README.md).
+These are data derivation/authentication checks: accepted-prefix eligibility,
+policy/fence/carrier/row/restore schema, actual leases, native funding locks,
+Assignment single-writer/once/history, Case/P/consumer integration, recovery,
+measurements and activation remain required. Staged policy/fence/consent code
+outside the checkout is preparation, not implemented or tested runtime code.

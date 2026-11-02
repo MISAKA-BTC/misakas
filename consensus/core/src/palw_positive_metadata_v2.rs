@@ -106,6 +106,38 @@ impl<'s, 'l> PositiveTirMetadataV2<'s, 'l> {
         native_prompt_form: PalwPromptIdsFormV1,
         native_prefill_draw: bool,
     ) -> Result<PositiveAttemptMetadataV2, PositiveMetadataErrorV2> {
+        let mut derived = self.derive_job_for_anchor(
+            || {
+                crate::palw_attempt_v2::palw_job_anchor_v1(
+                    native_network_domain,
+                    crate::hashing::header::pre_pow_hash_64(native_origin),
+                    self.registered.facts.class_id,
+                    &native_producer_bond.0,
+                    crate::palw_attempt_v2::palw_nonce_bucket_v1(native_origin.nonce),
+                )
+            },
+            native_prompt_form,
+        )?;
+        derived.context = crate::palw_attempt_v2::palw_attempt_job_v1(derived.context, native_prefill_draw);
+        Ok(derived)
+    }
+
+    /// RFC-0045 full canonical job, anchored to result-free Assignment terms.
+    /// This deterministic derivation grants no accepted Assignment/role/funds
+    /// authority; native intake must authenticate those independently.
+    pub fn derive_assignment_job(
+        &self,
+        assignment: misaka_palw_positive_contract::assignment::AssignmentId,
+        native_prompt_form: PalwPromptIdsFormV1,
+    ) -> Result<PositiveAttemptMetadataV2, PositiveMetadataErrorV2> {
+        self.derive_job_for_anchor(|| Hash64::from_bytes(assignment.0.0), native_prompt_form)
+    }
+
+    fn derive_job_for_anchor(
+        &self,
+        anchor: impl FnOnce() -> Hash64,
+        native_prompt_form: PalwPromptIdsFormV1,
+    ) -> Result<PositiveAttemptMetadataV2, PositiveMetadataErrorV2> {
         let facts = &self.registered.facts;
         let canonical = crate::palw_tir_attempt_v1::palw_tir_attempt_canonical_of_v1(facts.max_context)
             .ok_or(PositiveMetadataErrorV2::UnsupportedAttempt)?;
@@ -138,19 +170,12 @@ impl<'s, 'l> PositiveTirMetadataV2<'s, 'l> {
         } else {
             None
         };
-        let anchor = crate::palw_attempt_v2::palw_job_anchor_v1(
-            native_network_domain,
-            crate::hashing::header::pre_pow_hash_64(native_origin),
-            facts.class_id,
-            &native_producer_bond.0,
-            crate::palw_attempt_v2::palw_nonce_bucket_v1(native_origin.nonce),
-        );
+        let anchor = anchor();
         let (context, prompt) = match profile {
             Some(profile) => profile.job_for_anchor(&anchor, native_prompt_form),
             None => crate::palw_tir_attempt_v1::palw_tir_attempt_job_for_anchor_of_v1(facts, &anchor, canonical, native_prompt_form),
         }
         .ok_or(PositiveMetadataErrorV2::Prompt)?;
-        let context = crate::palw_attempt_v2::palw_attempt_job_v1(context, native_prefill_draw);
         Ok(PositiveAttemptMetadataV2 { context, prompt })
     }
 }
@@ -162,6 +187,9 @@ pub struct PositiveAttemptMetadataV2 {
     prompt: Vec<u32>,
 }
 impl PositiveAttemptMetadataV2 {
+    pub fn into_parts(self) -> (PalwJobContextV2, Vec<u32>) {
+        (self.context, self.prompt)
+    }
     pub fn context(&self) -> &PalwJobContextV2 {
         &self.context
     }
@@ -499,5 +527,33 @@ mod tests {
         assert!(matches!(derive(&class, &changed, &layout, restricted), Err(PositiveMetadataErrorV2::Budget)));
         let restricted = PositiveMetadataLimitsV2 { max_prompt_tokens: 254, ..limits };
         assert!(matches!(derive(&class, &record, &layout, restricted), Err(PositiveMetadataErrorV2::Budget)));
+    }
+
+    #[test]
+    fn assignment_anchor_keeps_full_canonical_counts_and_original_profiles() {
+        use misaka_palw_positive_contract::{assignment::AssignmentId, identity::Digest};
+        for dtype in [misaka_palw_tir::DType::I8, misaka_palw_tir::DType::I16, misaka_palw_tir::DType::I64] {
+            let (_, class, record, layout, limits) = output_profile_fixture(dtype);
+            let metadata = PositiveTirMetadataV2 { class: &class, registered: &record, semantics: None, layout: &layout, limits };
+            let assignment = AssignmentId(Digest([0x45; 64]));
+            let anchor = Hash64::from_bytes(assignment.0.0);
+            for form in [PalwPromptIdsFormV1::Flat, PalwPromptIdsFormV1::MerkleV1] {
+                let full = crate::palw_tir_attempt_v1::palw_tir_attempt_canonical_of_v1(record.facts.max_context).unwrap();
+                let (mut expected, ids) =
+                    crate::palw_tir_attempt_v1::palw_tir_attempt_job_for_anchor_of_v1(&record.facts, &anchor, full, form).unwrap();
+                if dtype == misaka_palw_tir::DType::I64 {
+                    expected.trace_scheme_id = Hash64::from_bytes(misaka_palw_tir::program::LOGITS_I64_Q24_SCHEME_V2);
+                }
+                let actual = metadata.derive_assignment_job(assignment, form).unwrap();
+                assert_eq!(actual.context(), &expected);
+                assert_eq!(actual.prompt(), ids);
+                assert_eq!(actual.context().exact_decode_tokens, 2, "no primary prefill-draw shortening");
+                assert_eq!(actual.context().max_context_tokens, record.facts.max_context + 1);
+                assert_eq!(actual.context().tokenizer_id, Hash64::default());
+                assert_eq!(actual.context().cu_ruleset_id, Hash64::default());
+                let another = metadata.derive_assignment_job(AssignmentId(Digest([0x46; 64])), form).unwrap();
+                assert_ne!(another.context().context_hash(), actual.context().context_hash());
+            }
+        }
     }
 }
