@@ -9,6 +9,13 @@ the **same entire** original trained short job past that boundary. It does not
 change any production setting, native authority or activation condition.
 The [full seven-stage goal](../COMPLETION-REQUIREMENTS.md) remains required.
 
+**Current result:** r3 completes all 213,298 original short-job numeric
+relations and the final EOF/root/signature check, returning local `Matched`.
+Its actual ignored test passes with exit zero after 976.730 s. This is complete
+local checking of the original noncanonical 16/1 job in one shared process,
+not native acceptance, isolated cold-role qualification or activation. See
+[the complete result](complete-short-job-r3.json) and the measurements below.
+
 ## Explicit diagnostic bounds
 
 Both private test entry points request all 213,298 original relations. The old
@@ -195,3 +202,88 @@ new PID/start time/session, compiled SHA, declared limits and observed progress.
 It is historical liveness evidence; r3's terminal result is still unproven at
 that checkpoint. The r3 live log is excluded from its completed-log inventory.
 The r2 failure, earlier snapshots and raw digests remain preserved.
+
+The [later live observation](crossed-element-boundary-r3-live.json) crosses
+the exact former 106,198-relation failure. At the shared 103 periodic prefixes
+through 105,472, completed elements/terms/source reads, evaluation counts,
+provider use and evaluator peaks all match r2, with unchanged logical live/peak
+requests ([partial alignment](prefix-alignment-r3-live.json)). The workspace
+quote increases by exactly the derived 59,506,688 bytes. This partial comparison
+does not establish complete trained material-byte equality or a final outcome;
+the new process remains subject to every finite bound and final authentication.
+
+## Third execution: complete original short job
+
+[The actual r3 runtime](pythia-r3.json) exits **zero**, with **one pass**, no
+outer stop and an empty terminal process group. It checks all **213,298**
+relations, reports one source evaluation per relation, reads all 213,298 claim
+vectors and completes the existing exact EOF/root/signature authentication.
+Only then does it emit local `Matched`. Its total outer elapsed time is
+**976.730 s**; libtest reports 976.58 s. The earlier failed r1/r2 executions
+remain failed in their own records and are not counted as passes.
+
+| Actual phase | Elapsed wall time |
+| --- | ---: |
+| Original owned weights load | 0.3214 s |
+| Ordinary Miner inference, zero witness runs | 0.0786 s |
+| Provider's original-data index construction | 0.5192 s |
+| One-pass Panel numerical capture | 0.4859 s |
+| Complete claim tape / signed Panel record construction | 3.5075 s |
+| All producer material preparation | **546.7153 s** |
+| All Node numerical submissions | **424.0629 s** |
+| Final record EOF/root/signature authentication | 0.00691 s |
+
+The Panel's cost includes the long material-construction phase as well as its
+short numerical capture. The combined verification loop is 971.658 s; the
+whole process uses 957.342 s user and 18.866 s system CPU at its completion
+observation. These are actual shared-process phase costs, not isolated role
+CPU or universal model-speed claims. SHA checks before execution warm OS caches.
+
+The completed evaluation observes **184,572,795 elements**, **3,036,075,176
+reduction terms** and **3,156,969,214 logical source reads**. These evaluator
+units are not hardware instructions, network bytes or native fees. Peak
+per-relation observations are 26,282 elements, 164,864 terms, 170,720 source
+reads and **867,668,864** workspace request bytes, inside the enforced
+32,768 / 262,144 / 262,144 caps and existing 1-GiB owner. The logical live/peak
+request ledger remains **8,053,697,455 bytes** under its same 8-GiB cap.
+
+Actual requested original-provider reads total **4,447,335,950 bytes** in
+**8,492,230 calls**, with 149,358 opening attempts. That exceeds the former
+4-GiB / 2^22-call diagnostic window and stays inside the selected 8-GiB /
+2^24-call window. Claim-tape requested read bytes are 212,467,949 in 426,598
+calls, including the EOF probe; the canonical tape payload is 212,467,948 bytes.
+Aggregate capture/claim tapes remain **305,797,608 bytes**. These counters do
+not measure physical disk traffic or a native network carrier.
+
+Sampled target-process-group peak RSS is **174,063,616 bytes** and minimum free
+disk is 1,720,713,216 bytes. The same 4-GiB sampled RSS stop, 512-MiB sampled disk
+stop, 320-MiB cumulative tapes and 1,440-s CPU / 1,800-s outer wall limits hold.
+Sampling and logical leases do not constitute a physical/kernel admission
+guarantee. The caller asserts that all introduced role guards drop and the
+ledger returns to zero before test exit.
+
+[Original model/fixture and compiled binary SHA checks](input-sha-r3.json) match
+before and after execution. The same original class, arithmetic, input IDs,
+token 273 and committed output are retained; Panel executes once and constructs
+the same required relation count/target geometry. The
+[final validation](validation-final-r3.json) checks current source agreement
+with runtime-r4, strict Clippy-r3 and actual model-r3. The 36 selected regressions
+and the separate actual trained pass retain their distinct scopes/counts.
+The old running snapshots and partial alignment records remain historical;
+they are superseded for terminal status by this actual completed runtime.
+
+## Full objective remains incomplete
+
+This result is for the **original noncanonical 16-prompt / one-decode** job,
+not canonical 255/2 or registered full-context 2,048 execution. Producer, data
+provider and Node share a process and retain producer owners. Physical cold/
+warm role isolation, network/wire/storage recovery costs, maxima/tails and
+global/concurrent/Fraud-protected native capacity remain unqualified.
+
+Actual native independent Assignment/Result authority, roles, atomic funding/
+resource writer, source-duty service, P-selected certification, every credit
+consumer, accepted real-node histories/restart/reorg/IBD/pruning/dependencies
+and explicitly approved finite activation remain required. Native-assignment
+RFC/ADR drafts remain unadopted. Full local computation checking does not
+replace validator approval under the explicit honest-fraction assumption.
+No production setting, wire identity or native authority was changed.

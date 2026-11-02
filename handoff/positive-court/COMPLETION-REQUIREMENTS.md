@@ -26,11 +26,11 @@ native credit, recovery, role or measurement requirements.
 | --- | --- | --- | --- |
 | 1 | Preserve old G14 signatures, adjudication, responsibility, settlement and recovery when Positive is disabled | Old-claim/native histories replay identically at the integrated implementation; actual selected source, commands and state/fund comparisons | Earlier selected regressions exist; final integrated native regression and full consumer/history comparison remain required |
 | 2 | Separate Miner Result, Panel Witness and finite source obligations; authenticate each role; atomically reserve capacity, funds and state | Actual native admission from independent registered job/worker/policy, real signatures, UTXO locks and one journal/checkpoint; rejected/duplicate attempts leave consistent funds and reservations | Shared DTOs and local adapters exist. Actual independent job/role authority and the one native writer are missing |
-| 3 | Cold Node independently derives and checks all mandatory relations, connectivity and final output | Accepted native flow using A1, without an executor/model store on the Node; last-relation omission, changed intermediate, model/input/branch substitutions rejected | Pure narrow/wide checkers and role fixtures exist. Actual native accepted context and all required enclosing reservations are not connected |
+| 3 | Cold Node independently derives and checks all mandatory relations, connectivity and final output | Accepted native flow using A1, without an executor/model store on the Node; last-relation omission, changed intermediate, model/input/branch substitutions rejected | Pure narrow/wide checkers, role fixtures and complete local checking of the original trained short job exist. Isolated cold trained Node, actual native accepted context and all required enclosing reservations are not connected |
 | 4 | Miner performs ordinary inference plus bounded source responses; Panel replays once, records and submits; resume/transfer preserves global budgets | Actual Miner/Panel services and G14 carriers, instrumented zero mandatory Miner witness construction, direct-to-Node source completion, bounded canonical request unions and durable local spent counters | API/process fixtures and short trained ordinary runs exist. Kaspad producer/verifier and native source-duty service are not connected to the new accepted flow |
 | 5 | Integrate Fraud/Positive intake, transport, deadlines, responsibility, fees, Gate C and every credit reader | Actual P-selected certification plus full local coverage and existing per-use entitlement at reward, receipt mint/spend, DAG live/safe/final weight, Rule E, settlement/EVM, prefix and dependency reads; unresolved fraud and maturity remain effective | `CreditConsumers` is an adapter API. Native factory, P lifecycle and production consumers are not connected; local DTOs/flags cannot fill the gap |
 | 6 | Multiple Nodes, restart, Panel replacement, reorg, IBD/pruning and dependent-claim cancellation reproduce state and money exactly | Real accepted block/carrier history, shared atomic undo and DB restart/IBD/pruning delivery; no repeated payments, defaults or replenished request/attempt budgets | Real DB journal fixtures exist, but no full node admission/role/fund writer to exercise all these transitions |
-| 7 | Measure actual LLM Miner/Panel/Node costs and enable only explicitly approved finite profiles | Pinned original model/job/arithmetic; separate cold/warm role CPU/RAM/IO/wire/storage/recovery costs, maxima and tail latency, global block/epoch/concurrency and Fraud protection; actual permitted activation after review | Original Pythia ordinary inference, one-pass Panel capture and complete signed record are now measured separately. Actual Node checking reaches a bounded prefix; complete Node, isolated role costs and approved activation profiles remain absent |
+| 7 | Measure actual LLM Miner/Panel/Node costs and enable only explicitly approved finite profiles | Pinned original model/job/arithmetic; separate cold/warm role CPU/RAM/IO/wire/storage/recovery costs, maxima and tail latency, global block/epoch/concurrency and Fraud protection; actual permitted activation after review | Original Pythia ordinary inference, one-pass Panel capture, complete signed record and all 213,298 local Node checks plus EOF/root/signature now complete in the shared-process short-job measurement. Isolated/cold role, canonical/full-context, native/global/concurrency/recovery costs and approved activation remain absent |
 
 All seven stages remain part of the goal. A small paid Canonical Assignment
 path, if adopted, is an intermediate native connection. It does not by itself
@@ -235,3 +235,23 @@ regressions and strict selected Clippy pass. A fresh corrected measurement is
 running with exact source/input/process pins, without native authority or an
 approved activation profile. The full completion conditions are unchanged;
 see [extended-cost evidence](extended-cost-20261102/README.md).
+
+## Complete local trained short-job measurement
+
+The actual corrected r3 process exits zero after 976.730 s and checks all
+213,298 original relations, reads every claim, verifies the exact record
+EOF/root/signature and returns local `Matched`. It performs ordinary Miner
+inference without a witness run, then one Panel capture. Actual material
+preparation is 546.715 s, Node submission 424.063 s and final record
+authentication 0.00691 s. Original model/fixture and compiled binary SHA values
+match before/after, source matches runtime/Clippy, all guards release and the
+process group is empty. Earlier budget failures remain failures in their
+own records. See [the complete short-job result](extended-cost-20261102/complete-short-job-r3.json).
+
+This completes the local original noncanonical 16/1 job measurement under its
+explicit diagnostic bounds. It does not qualify isolated cold-role costs,
+canonical/full-context execution, actual native authority/role/funding/P,
+every credit consumer, real-node recovery/dependencies or activation. All
+seven stages and every native gate/acceptance case remain part of the goal;
+a complete local replay does not replace selected-validator certification
+under its explicit honest-fraction assumption.
