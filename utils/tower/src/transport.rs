@@ -47,10 +47,38 @@ pub fn connection_budget() -> Arc<MemoryBudget> {
     MemoryBudget::new(1536 << 20, [1536 << 20; 4])
 }
 
+/// Convert a pre-admitted reply while keeping its original allocation alive and
+/// charged. The caller's conversion ticket must bound the new owned value before
+/// this function is entered. On panic/cancellation all tickets remain RAII-owned.
+pub fn convert_preallocated<T, U>(
+    original: T,
+    retained: Option<MemoryLease>,
+    conversion: Option<MemoryLease>,
+    convert: impl FnOnce(&T) -> U,
+) -> (U, Option<MemoryLease>) {
+    // Struct field order matters during unwinding: free the source allocation
+    // before its ticket can admit a competing allocation on another thread.
+    struct Owners<T> {
+        original: T,
+        _retained: Option<MemoryLease>,
+        conversion: Option<MemoryLease>,
+    }
+    let mut owners = Owners { original, _retained: retained, conversion };
+    let converted = convert(&owners.original);
+    if let Some(lease) = &owners.conversion {
+        lease.materialized();
+    }
+    let result = (converted, owners.conversion.take());
+    drop(owners);
+    result
+}
+
 /// A queue item is intentionally not Clone: a deep protobuf copy needs new tickets.
 #[derive(Debug)]
 pub struct Outbound<T> {
     message: T,
+    raw: Option<MemoryLease>,
+    local_raw: Option<MemoryLease>,
     resources: RetainedResources,
     scratch: Vec<MemoryLease>,
 }
@@ -77,35 +105,36 @@ impl<T: Message + RetainedSize> Outbound<T> {
         preallocated: Option<MemoryLease>,
         resources: &mut RetainedResources,
     ) -> Result<Self, Status> {
-        let owned = (std::mem::size_of::<T>() as u64).saturating_add(message.retained_heap_bytes()).saturating_add(128);
-        let process = if let Some(mut lease) = preallocated {
+        // Adopt every existing generation owner before any fallible admission.
+        // Field declaration order frees message before tickets, including errors.
+        let mut item = Self { message, raw: preallocated, local_raw: None, resources: std::mem::take(resources), scratch: Vec::new() };
+        let owned = (std::mem::size_of::<T>() as u64).saturating_add(item.message.retained_heap_bytes()).saturating_add(128);
+        if let Some(lease) = item.raw.as_mut() {
             if lease.bytes() < owned {
-                return Err(Status::resource_exhausted("preallocated snapshot envelope is smaller than retained payload"));
+                return Err(Status::resource_exhausted("preallocated envelope is smaller than retained payload"));
             }
-            // Return unused generation headroom atomically while keeping actual
-            // owned capacity continuously charged. No new global admission.
             let actual = lease.split(owned).map_err(|e| Status::resource_exhausted(e.to_string()))?;
-            drop(lease);
-            actual
+            // Actual stays charged continuously; return only unused headroom.
+            item.raw = Some(actual);
         } else {
-            global_memory_budget()
-                .try_reserve_retained(MemoryClass::Transport, owned)
-                .map_err(|e| Status::resource_exhausted(e.to_string()))?
-        };
-        let local =
-            connection.try_reserve_retained(MemoryClass::Transport, owned).map_err(|e| Status::resource_exhausted(e.to_string()))?;
-        // Every accepted item already owns the simultaneous codec peak. A raw
-        // backlog cannot consume the last bytes needed by all encoders.
-        let peak = (message.encoded_len() as u64).saturating_add(64 << 10).saturating_mul(3);
-        let encoder_process =
-            global_memory_budget().try_reserve(MemoryClass::Transport, peak).map_err(|e| Status::resource_exhausted(e.to_string()))?;
-        let encoder_local =
-            connection.try_reserve(MemoryClass::Transport, peak).map_err(|e| Status::resource_exhausted(e.to_string()))?;
-        process.materialized();
-        local.materialized();
-        resources.push(Box::new(process));
-        resources.push(Box::new(local));
-        Ok(Self { message, resources: std::mem::take(resources), scratch: vec![encoder_process, encoder_local] })
+            item.raw = Some(
+                global_memory_budget()
+                    .try_reserve_retained(MemoryClass::Transport, owned)
+                    .map_err(|e| Status::resource_exhausted(e.to_string()))?,
+            );
+        }
+        item.local_raw = Some(
+            connection.try_reserve_retained(MemoryClass::Transport, owned).map_err(|e| Status::resource_exhausted(e.to_string()))?,
+        );
+        let peak = (item.message.encoded_len() as u64).saturating_add(64 << 10).saturating_mul(3);
+        item.scratch.push(
+            global_memory_budget().try_reserve(MemoryClass::Transport, peak).map_err(|e| Status::resource_exhausted(e.to_string()))?,
+        );
+        item.scratch
+            .push(connection.try_reserve(MemoryClass::Transport, peak).map_err(|e| Status::resource_exhausted(e.to_string()))?);
+        item.raw.as_ref().unwrap().materialized();
+        item.local_raw.as_ref().unwrap().materialized();
+        Ok(item)
     }
 }
 
@@ -146,11 +175,13 @@ impl<T: Message> Encoder for BudgetedEncoder<T> {
         Some(item.message.encoded_len())
     }
     fn encode(&mut self, mut item: Self::Item, dst: &mut EncodeBuf<'_>) -> Result<(), Status> {
-        item.message.encode(dst).map_err(|e| Status::internal(e.to_string()))?;
-        // No further allocations use this envelope after encoding/compression.
-        // Keep its conservative bytes charged until the HTTP owner's last drop.
+        // Transfer before writing: partial-buffer errors retain their tickets
+        // until tonic has freed the actual scratch allocations.
         self.scratch.append(&mut item.scratch);
         self.resources.append(&mut item.resources);
+        self.resources.push(Box::new(item.raw.take().unwrap()));
+        self.resources.push(Box::new(item.local_raw.take().unwrap()));
+        item.message.encode(dst).map_err(|e| Status::internal(e.to_string()))?;
         Ok(())
     }
     fn take_resources(&mut self) -> RetainedResources {
