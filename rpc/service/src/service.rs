@@ -57,7 +57,7 @@ use kaspa_p2p_lib::common::ProtocolError;
 use kaspa_p2p_mining::rule_engine::MiningRuleEngine;
 use kaspa_perf_monitor::{Monitor as PerfMonitor, counters::CountersSnapshot};
 use kaspa_rpc_core::{
-    Notification, RpcError, RpcResult,
+    Notification, RetainedRpcReply, RpcError, RpcResult,
     api::{
         connection::DynRpcConnection,
         ops::{RPC_API_REVISION, RPC_API_VERSION},
@@ -936,19 +936,6 @@ impl RpcCoreService {
 
     pub fn core_shutdown_request_listener(&self) -> triggered::Listener {
         self.core_shutdown_request.listener.clone()
-    }
-
-    async fn get_utxo_set_by_script_public_key_bounded<'a>(
-        &self,
-        addresses: impl Iterator<Item = &'a RpcAddress>,
-        max_entries: usize,
-    ) -> RpcResult<UtxoSetByScriptPublicKey> {
-        self.utxoindex
-            .clone()
-            .ok_or(RpcError::NoUtxoIndex)?
-            .get_utxos_by_script_public_keys_bounded(addresses.map(pay_to_address_script).collect(), max_entries)
-            .await
-            .map_err(|why| RpcError::General(why.to_string()))
     }
 
     async fn get_balance_by_script_public_key<'a>(&self, addresses: impl Iterator<Item = &'a RpcAddress>) -> BalanceByScriptPublicKey {
@@ -5027,9 +5014,17 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
 
     async fn get_utxos_by_addresses_call(
         &self,
-        _connection: Option<&DynRpcConnection>,
+        connection: Option<&DynRpcConnection>,
         request: GetUtxosByAddressesRequest,
     ) -> RpcResult<GetUtxosByAddressesResponse> {
+        self.get_utxos_by_addresses_retained_call(connection, request).await.map(RetainedRpcReply::into_response)
+    }
+
+    async fn get_utxos_by_addresses_retained_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetUtxosByAddressesRequest,
+    ) -> RpcResult<RetainedRpcReply<GetUtxosByAddressesResponse>> {
         if !self.config.utxoindex {
             return Err(RpcError::NoUtxoIndex);
         }
@@ -5044,9 +5039,69 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         const LARGE_UTXO_HARD_CAP: usize = 250_000;
         let started = Instant::now();
         let num_addresses = request.addresses.len();
-        let entry_map = self.get_utxo_set_by_script_public_key_bounded(request.addresses.iter(), LARGE_UTXO_HARD_CAP).await?;
-        let entries = self.index_converter.get_utxos_by_addresses_entries(&entry_map);
+        use kaspa_core::memory_budget::{MemoryClass, global_memory_budget};
+        let overflow = || RpcError::General("UTXO response construction byte bound overflow".into());
+        // Admit the generated script set before pay_to_address_script/HashSet
+        // can duplicate a large address request. This is separate from the
+        // already-owned incoming request and from the response entry bytes.
+        let input_bytes = request
+            .addresses
+            .iter()
+            .try_fold(4096u64, |total, address| {
+                (address.payload.len() as u64).checked_mul(8).and_then(|n| n.checked_add(2048)).and_then(|n| total.checked_add(n))
+            })
+            .ok_or_else(overflow)?;
+        let input_memory =
+            global_memory_budget().try_reserve(MemoryClass::Snapshot, input_bytes).map_err(|e| RpcError::General(e.to_string()))?;
+        let scripts = request.addresses.iter().map(pay_to_address_script).collect::<kaspa_consensus_core::tx::ScriptPublicKeys>();
+        let max_payload = request.addresses.iter().map(|a| a.payload.len() as u64).max().unwrap_or(0);
+        let max_script = scripts.iter().map(|script| script.script().len() as u64).max().unwrap_or(0);
+        let dynamic =
+            max_payload.checked_mul(2).and_then(|n| max_script.checked_mul(2).and_then(|m| n.checked_add(m))).ok_or_else(overflow)?;
+        // Raw HashMap growth/reallocation, then an independent Rust Vec and
+        // its address/script clones. All coexist before map conversion ends.
+        let index_per_entry = 4
+            * ((std::mem::size_of::<kaspa_consensus_core::tx::TransactionOutpoint>()
+                + std::mem::size_of::<kaspa_index_core::indexed_utxos::CompactUtxoEntry>()
+                + 1) as u64);
+        let retained_per_entry = (std::mem::size_of::<RpcUtxosByAddressesEntry>() as u64)
+            .checked_mul(3)
+            .and_then(|n| n.checked_add(dynamic))
+            .and_then(|n| n.checked_add(128))
+            .ok_or_else(overflow)?;
+        // Protobuf owns independent address/base32, Hash64 hex and script hex
+        // strings. 512 bytes bounds each entry's inline+nested message layout;
+        // 3x covers Vec growth overlap. A verifies actual retained heap at the
+        // preallocated handoff. The 4KiB base also covers the outer response enum.
+        let conversion_per_entry =
+            kaspa_rpc_core::api::retained::utxo_memory::utxo_proto_per_entry_bytes(max_payload, max_script).ok_or_else(overflow)?;
+        let per_entry =
+            index_per_entry.checked_add(retained_per_entry).and_then(|n| n.checked_add(conversion_per_entry)).ok_or_else(overflow)?;
+        // Tuple fields drop in declaration order: map before its ticket. Keep
+        // them together across every fallible count/split below; unpacking to
+        // locals would return the later-declared ticket first on an error.
+        let mut generation_owner = self
+            .utxoindex
+            .clone()
+            .ok_or(RpcError::NoUtxoIndex)?
+            .get_utxos_by_script_public_keys_reserved(scripts, LARGE_UTXO_HARD_CAP, per_entry, 4096 + 1024 + 1024)
+            .await
+            .map_err(|why| RpcError::General(why.to_string()))?;
+        input_memory.materialized();
+        let count = generation_owner.0.values().try_fold(0u64, |sum, rows| sum.checked_add(rows.len() as u64)).ok_or_else(overflow)?;
+        let retained_bytes = count.checked_mul(retained_per_entry).and_then(|n| n.checked_add(1024)).ok_or_else(overflow)?;
+        let conversion_bytes =
+            kaspa_rpc_core::api::retained::utxo_memory::utxo_proto_reservation_bytes(count, max_payload, max_script)
+                .ok_or_else(overflow)?;
+        let retained = generation_owner.1.split(retained_bytes).map_err(|why| RpcError::General(why.to_string()))?;
+        let conversion = generation_owner.1.split(conversion_bytes).map_err(|why| RpcError::General(why.to_string()))?;
+        let entries = self.index_converter.get_utxos_by_addresses_entries(&generation_owner.0);
         let num_entries = entries.len();
+        // Rust output now exists. Its ticket lives through protobuf conversion;
+        // the protobuf ticket stays pending until that independent copy exists.
+        retained.materialized();
+        drop(generation_owner);
+        drop(input_memory);
         let elapsed = started.elapsed();
         // ~200 bytes/entry is a conservative borsh estimate (outpoint 36 + compact utxo entry +
         // 64-byte PubKeyHashMlDsa87 script + repeated address); JSON is ~2.5x larger.
@@ -5086,7 +5141,11 @@ Use getBalancesByAddresses for balances, or consolidate the address's UTXOs.",
                 est_borsh_mib,
             );
         }
-        Ok(GetUtxosByAddressesResponse::new(entries))
+        Ok(RetainedRpcReply {
+            response: GetUtxosByAddressesResponse::new(entries),
+            retained: Some(retained),
+            conversion: Some(conversion),
+        })
     }
 
     async fn get_utxos_by_address_page_call(

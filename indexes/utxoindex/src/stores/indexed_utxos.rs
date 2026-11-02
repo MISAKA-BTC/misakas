@@ -142,6 +142,12 @@ pub trait UtxoSetByScriptPublicKeyStoreReader {
         script_public_keys: ScriptPublicKeys,
         max_entries: usize,
     ) -> StoreResult<UtxoSetByScriptPublicKey>;
+    /// Streaming count for generation admission; does not materialize a map.
+    fn count_utxos_from_script_public_keys_bounded(
+        &self,
+        script_public_keys: &ScriptPublicKeys,
+        max_entries: usize,
+    ) -> StoreResult<usize>;
     /// Paginated single-script variant of [Self::get_utxos_from_script_public_keys]: returns up to
     /// `chunk_size` UTXOs for `script_public_key` starting after the opaque `cursor` (the raw outpoint
     /// key of the previous page's last entry), plus the cursor to resume from when more entries remain
@@ -224,6 +230,32 @@ impl UtxoSetByScriptPublicKeyStoreReader for DbUtxoSetByScriptPublicKeyStore {
         }
         debug!("IDXPRC, Executed a bounded query for {script_count} script public keys yielding {entries_count} entries");
         Ok(result)
+    }
+
+    fn count_utxos_from_script_public_keys_bounded(
+        &self,
+        script_public_keys: &ScriptPublicKeys,
+        max_entries: usize,
+    ) -> StoreResult<usize> {
+        let mut count = 0usize;
+        for script in script_public_keys {
+            let bucket = ScriptPublicKeyBucket::from(script);
+            for row in
+                self.access.seek_iterator(Some(bucket.as_ref()), None, max_entries.saturating_sub(count).saturating_add(1), false)
+            {
+                let (key, _) = row.map_err(indexed_utxo_read_error)?;
+                if key.len() != TRANSACTION_OUTPOINT_KEY_SIZE {
+                    return Err(StoreError::DataInconsistency("UTXO index outpoint key has invalid length".into()));
+                }
+                if count == max_entries {
+                    return Err(StoreError::LocalResourceUnavailable(format!(
+                        "UTXO query exceeds the {max_entries} entry cap; use getUtxosByAddressPage or getBalancesByAddresses"
+                    )));
+                }
+                count += 1;
+            }
+        }
+        Ok(count)
     }
 
     fn get_utxos_from_script_public_key_chunk(
@@ -392,6 +424,68 @@ mod bounded_query_tests {
     }
     fn scripts(items: &[ScriptPublicKey]) -> ScriptPublicKeys {
         items.iter().cloned().collect()
+    }
+
+    #[test]
+    fn reserved_generation_pressure_child() {
+        if std::env::var_os("MISAKA_UTXO_PRESSURE_CHILD").is_none() {
+            return;
+        }
+        use kaspa_core::memory_budget::{MemoryClass, global_memory_budget};
+        let (_life, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let a = script(1);
+        let b = script(2);
+        add_rows(&db, &a, 0, 2);
+        add_rows(&db, &b, 20, 1);
+        let store = crate::stores::store_manager::Store::new(db.clone());
+        let query = scripts(&[a, b]);
+        let budget = global_memory_budget();
+        let total = budget.snapshot().limit_bytes;
+        let snapshot_cap = total.saturating_sub((total / 8).min(128 << 20));
+        let held = budget.try_reserve(MemoryClass::Snapshot, snapshot_cap).unwrap();
+        match store.get_utxos_by_script_public_key_reserved(query.clone(), 3, 1024, 4096) {
+            Err(StoreError::LocalResourceUnavailable(message)) => assert!(message.contains("byte budget"), "{message}"),
+            _ => panic!("DB count fits, but generation must refuse before returning a materialized map"),
+        }
+        assert_eq!(budget.snapshot().reserved_bytes, snapshot_cap, "failed admission did not leak another ticket");
+        let control = budget.try_reserve(MemoryClass::Transport, 1024).unwrap();
+        control.materialized();
+        drop(control);
+        drop(held);
+        let (entries, memory) = store.get_utxos_by_script_public_key_reserved(query.clone(), 3, 1024, 4096).unwrap();
+        assert_eq!(entries.values().map(|rows| rows.len()).sum::<usize>(), 3);
+        assert_eq!(memory.bytes(), 3 * 1024 + 4096);
+        assert_eq!(budget.snapshot().pending_bytes, memory.bytes());
+        memory.materialized();
+        assert_eq!(budget.snapshot().pending_bytes, 0);
+        let last = memory.clone();
+        drop(memory);
+        drop(entries);
+        assert_eq!(budget.snapshot().reserved_bytes, last.bytes(), "last owner still covers transport handoff");
+        drop(last);
+        assert_eq!(budget.snapshot().reserved_bytes, 0);
+        assert!(store.get_utxos_by_script_public_key_reserved(query, 3, u64::MAX, 4096).is_err());
+        assert_eq!(budget.snapshot().reserved_bytes, 0, "overflow refuses without a reservation");
+        std::fs::write(std::env::var_os("MISAKA_UTXO_PRESSURE_RESULT").unwrap(), b"passed").unwrap();
+    }
+
+    #[test]
+    fn generation_admission_failure_and_last_owner_release_make_progress() {
+        let marker = std::env::temp_dir().join(format!(
+            "misaka-utxo-pressure-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "stores::indexed_utxos::bounded_query_tests::reserved_generation_pressure_child", "--nocapture"])
+            .env("MISAKA_UTXO_PRESSURE_CHILD", "1")
+            .env("MISAKA_UTXO_PRESSURE_RESULT", &marker)
+            .env("MISAKA_MEMORY_BUDGET_BYTES", (64u64 << 20).to_string())
+            .status()
+            .unwrap();
+        assert!(status.success());
+        assert_eq!(std::fs::read(&marker).unwrap(), b"passed", "child filter must execute its assertions");
+        std::fs::remove_file(marker).unwrap();
     }
 
     #[test]

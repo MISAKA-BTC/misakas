@@ -46,6 +46,31 @@ impl Store {
         self.utxos_by_script_public_key_store.get_utxos_from_script_public_keys_bounded(script_public_keys, max_entries)
     }
 
+    /// Called under the owning index read lock. Count, reserve simultaneous
+    /// index/RPC/transport construction, then materialize at most that count.
+    /// The byte bound is supplied only by reviewed local conversion code.
+    pub fn get_utxos_by_script_public_key_reserved(
+        &self,
+        script_public_keys: ScriptPublicKeys,
+        max_entries: usize,
+        per_entry_bytes: u64,
+        base_bytes: u64,
+    ) -> StoreResult<(UtxoSetByScriptPublicKey, kaspa_core::memory_budget::MemoryLease)> {
+        let count =
+            self.utxos_by_script_public_key_store.count_utxos_from_script_public_keys_bounded(&script_public_keys, max_entries)?;
+        let bytes = (count as u64)
+            .checked_mul(per_entry_bytes)
+            .and_then(|n| n.checked_add(base_bytes))
+            .ok_or_else(|| kaspa_database::prelude::StoreError::LocalResourceUnavailable("UTXO generation bytes overflow".into()))?;
+        let memory = kaspa_core::memory_budget::global_memory_budget()
+            .try_reserve(kaspa_core::memory_budget::MemoryClass::Snapshot, bytes)
+            .map_err(|why| kaspa_database::prelude::StoreError::LocalResourceUnavailable(why.to_string()))?;
+        // The count and materialization share an index read guard. The smaller
+        // bound is still enforced if a non-index DB writer changes rows.
+        let entries = self.utxos_by_script_public_key_store.get_utxos_from_script_public_keys_bounded(script_public_keys, count)?;
+        Ok((entries, memory))
+    }
+
     pub fn get_utxos_by_script_public_key_chunk(
         &self,
         script_public_key: &ScriptPublicKey,

@@ -33,6 +33,14 @@ pub trait UtxoIndexApi: Send + Sync + Debug {
         max_entries: usize,
     ) -> StoreResult<UtxoSetByScriptPublicKey>;
 
+    fn get_utxos_by_script_public_keys_reserved(
+        &self,
+        script_public_keys: ScriptPublicKeys,
+        max_entries: usize,
+        per_entry_bytes: u64,
+        base_bytes: u64,
+    ) -> StoreResult<(UtxoSetByScriptPublicKey, kaspa_core::memory_budget::MemoryLease)>;
+
     /// Retrieve a bounded page of utxos for a single script public key (cursor = the opaque resume
     /// token from the previous page; `None` starts at the beginning). Returns the page plus the next
     /// cursor (`None` = no further pages).
@@ -98,6 +106,20 @@ impl UtxoIndexProxy {
         spawn_blocking(move || self.inner.read().get_utxos_by_script_public_keys_bounded(script_public_keys, max_entries))
             .await
             .unwrap()
+    }
+
+    pub async fn get_utxos_by_script_public_keys_reserved(
+        self,
+        script_public_keys: ScriptPublicKeys,
+        max_entries: usize,
+        per_entry_bytes: u64,
+        base_bytes: u64,
+    ) -> StoreResult<(UtxoSetByScriptPublicKey, kaspa_core::memory_budget::MemoryLease)> {
+        spawn_blocking(move || {
+            self.inner.read().get_utxos_by_script_public_keys_reserved(script_public_keys, max_entries, per_entry_bytes, base_bytes)
+        })
+        .await
+        .unwrap()
     }
 
     pub async fn get_utxos_by_script_public_key_chunk(
