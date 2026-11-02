@@ -469,6 +469,37 @@ fn run_loaded(
         serde_json::json!({"generated":generated,"output":format!("{}",ordinary.output_root()),"witness_runs":0}),
     );
     drop(ordinary);
+    let mut panel_bounds = panel_limits();
+    let planned_relations = match window {
+        MeasurementWindow::Standard => None,
+        MeasurementWindow::ExtendedCost => {
+            // Metadata-only geometry, under the still-live bootstrap owner.
+            // Keep every original charge: the producer prepays 2*material cap
+            // per relation, not actual file traffic. The previous 2-TiB IO
+            // allowance exhausted that distinct copy counter at relation 65,529.
+            let started = Instant::now();
+            let geometry = kaspa_consensus_core::palw_positive_check_v2::expanded_plan::wide_v2::ExpandedPlanV2::derive(
+                inputs.class,
+                hash(ROOT),
+                job,
+                node_limits().plan,
+            )
+            .map_err(|e| format!("extended copy geometry {e:?}"))?;
+            let relations = geometry.summary().relations;
+            let material_copy = mul(relations, mul(panel_bounds.max_material_bytes, 2)?)?;
+            panel_bounds.max_io_bytes = add(panel_bounds.max_io_bytes, material_copy)?;
+            report(
+                "cumulative-copy-preflight",
+                started,
+                l,
+                serde_json::json!({"relations":relations,"per_relation_material_copy":2*panel_bounds.max_material_bytes,
+                "material_copy_allowance":material_copy,"existing_io_and_copy_headroom":panel_limits().max_io_bytes,
+                "cumulative_io_and_copy_cap":panel_bounds.max_io_bytes,"actual_provider_read_cap":window.io_limits().bytes,
+                "actual_file_traffic":false,"diagnostic_only":true}),
+            );
+            Some(relations)
+        }
+    };
     let io = IoBudget::for_window(window);
     let start = Instant::now();
     let provider = Provider::build(file, inputs.checked, hash(ROOT), hash(CLASS), hash(CONTEXT), &io, reserve)?;
@@ -476,7 +507,7 @@ fn run_loaded(
     let start = Instant::now();
     let disk_held = Arc::new(AtomicU64::new(0));
     let disk = disk_reserver(disk_held.clone());
-    let work = loaded.wide_panel_work(panel_limits(), &disk).map_err(|_| "Panel work")?;
+    let work = loaded.wide_panel_work(panel_bounds, &disk).map_err(|_| "Panel work")?;
     let capture = loaded
         .capture_wide_panel_one_pass(
             INPUT,
@@ -520,6 +551,9 @@ fn run_loaded(
         &signed.signature,
     )
     .map_err(|e| format!("Node preparation {e:?}"))?;
+    if let Some(expected) = planned_relations {
+        require(prep.plan().summary().relations == expected, "copy quote does not match actual independent preparation")?;
+    }
     let authenticated = signed.authenticate();
     let mut own = owners();
     own.metadata_auth_bytes = 1 << 30;
