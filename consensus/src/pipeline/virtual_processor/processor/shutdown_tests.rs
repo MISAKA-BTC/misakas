@@ -71,8 +71,12 @@ fn stopping_virtual_drains_queued_tasks_preserves_db_and_critical_notifications(
     assert_eq!(critical, 1, "already queued critical notifications survive shutdown and drain before EOF");
     assert!(notify_rx.is_closed());
 
+    // Match ConsensusFactory::new_active_consensus for an Existing entry: reopen the
+    // committed stores without trying to insert genesis a second time.
+    let mut existing_config = config.clone();
+    existing_config.process_genesis = false;
     let (next_tx, _) = async_channel::unbounded();
-    let reopened = TestConsensus::with_db(vp.db.clone(), &config, next_tx);
+    let reopened = TestConsensus::with_db(vp.db.clone(), &existing_config, next_tx);
     let next_handles = reopened.init();
     assert!(!reopened.virtual_processor().is_consensus_exiting.load(Ordering::Acquire));
     assert_eq!(reopened.get_sink(), sink);
