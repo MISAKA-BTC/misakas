@@ -1,12 +1,14 @@
 use super::*;
 use crate::consensus::test_consensus::TestConsensus;
 use crate::pipeline::deps_manager::BlockTask;
+use futures_util::FutureExt;
 use kaspa_consensus_core::{
     api::ConsensusApi,
     blockstatus::BlockStatus,
     config::{ConfigBuilder, params::MAINNET_PARAMS},
 };
 use kaspa_consensus_notify::notification::PruningPointUtxoSetOverrideNotification;
+use kaspa_notify::{scope::PruningPointUtxoSetOverrideScope, subscriber::SubscriptionManager};
 
 #[test]
 fn stopping_virtual_drains_queued_tasks_preserves_db_and_critical_notifications() {
@@ -30,6 +32,10 @@ fn stopping_virtual_drains_queued_tasks_preserves_db_and_critical_notifications(
     );
     let before: Vec<_> = vp.db.iterator(rocksdb::IteratorMode::Start).map(Result::unwrap).collect();
     let root = tc.notification_root();
+    root.start_notify(0, PruningPointUtxoSetOverrideScope {}.into())
+        .now_or_never()
+        .expect("root subscription setup is synchronous")
+        .unwrap();
     root.send(Notification::PruningPointUtxoSetOverride(PruningPointUtxoSetOverrideNotification {})).unwrap();
     assert!(!root.is_closed());
 
@@ -42,9 +48,9 @@ fn stopping_virtual_drains_queued_tasks_preserves_db_and_critical_notifications(
     }
     tx.send(VirtualStateProcessingMessage::Exit).unwrap();
     vp.worker_with_receiver(&rx);
-    for result in results {
+    for mut result in results {
         assert!(
-            matches!(futures::executor::block_on(result).unwrap(), Err(RuleError::ConsensusExiting)),
+            matches!(result.try_recv().unwrap(), Err(RuleError::ConsensusExiting)),
             "every queued caller receives a local stop, never channel cancellation or peer invalidity"
         );
     }
