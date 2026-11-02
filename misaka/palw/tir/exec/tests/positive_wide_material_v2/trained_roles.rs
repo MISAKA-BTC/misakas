@@ -89,10 +89,13 @@ impl Drop for Guard {
     }
 }
 fn ledger(l: Arc<Ledger>) -> TirMemoryReserverV1 {
+    ledger_with_cap(l, REQUEST_CAP)
+}
+fn ledger_with_cap(l: Arc<Ledger>, cap: u64) -> TirMemoryReserverV1 {
     Arc::new(move |role, _, _, bytes| {
         let old = l
             .live
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_add(bytes).filter(|n| *n <= REQUEST_CAP))
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_add(bytes).filter(|n| *n <= cap))
             .map_err(|_| "logical request ledger refused")?;
         l.peak.fetch_max(old + bytes, Ordering::SeqCst);
         if l.cumulative.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_add(bytes)).is_err() {
@@ -424,6 +427,7 @@ fn run_loaded(
     l: &Ledger,
     reserve: &TirMemoryReserverV1,
     window: MeasurementWindow,
+    isolated: bool,
 ) -> R<()> {
     let job = inputs.original_context;
     let start = Instant::now();
@@ -571,6 +575,13 @@ fn run_loaded(
     own.source_auth_bytes = 256 << 20;
     own.retained_record_bytes = 64 << 20;
     own.material_limits = prep.source_limits();
+    if isolated {
+        // Producer authenticates metadata/openings; it never calls the numeric
+        // evaluator. Its separately bounded metadata workspace need not borrow
+        // the independent child Node's one-GiB evaluation owner.
+        own.metadata_auth_bytes = 256 << 20;
+        own.material_limits.max_workspace_bytes = 256 << 20;
+    }
     let builder = WidePanelBuilderV2::prepare(
         &capture,
         &prep,
@@ -594,13 +605,17 @@ fn run_loaded(
     // native authority is accepted here, and no owned result escapes this scope.
     let record_external = l.live.load(Ordering::SeqCst);
     let record_acquire = |whole| reserve_stream_increment(l, reserve, record_external, whole, "measurement-record-increment");
+    let mut record_bounds = record_limits(record_external);
+    if isolated {
+        record_bounds.metadata_auth_bytes = 64 << 20;
+    }
     let record = prep
         .freeze_stream_record(
             capture.binding()?,
             generated,
             principal(panel.verification_key.as_ref()),
             &mut tape,
-            record_limits(record_external),
+            record_bounds,
             &record_acquire,
         )
         .map_err(|e| format!("record admission {e:?}"))?;
@@ -614,6 +629,23 @@ fn run_loaded(
         serde_json::json!({"relations":prep.plan().summary().relations,"provider_bytes":io.used.get().bytes,"tape_bytes":work.meter().tape_bytes}),
     );
     tape.rewind();
+    if isolated {
+        #[cfg(target_os = "macos")]
+        return isolated_process::send_trained(
+            file,
+            &builder,
+            &prep,
+            &record,
+            &mut tape,
+            &signed,
+            panel.verification_key.as_ref(),
+            &sig,
+            l,
+            reserve,
+        );
+        #[cfg(not(target_os = "macos"))]
+        return Err("cold-process diagnostic requires the tested macOS sandbox".into());
+    }
     let start = Instant::now();
     let node_external = l.live.load(Ordering::SeqCst);
     let node_reserve = |whole| reserve_stream_increment(l, reserve, node_external, whole, "measurement-node-increment");
@@ -845,12 +877,36 @@ fn quote_storage(inputs: LocalForwardInputsV2<'_>, l: &Ledger) -> R<()> {
     Ok(())
 }
 
+fn original_job() -> PalwJobContextV2 {
+    let zero = Hash64::default();
+    PalwJobContextV2 {
+        version: 2,
+        network_id: b"a7-local-self-consistency".to_vec(),
+        job_id: Hash64::from_u64_word(7),
+        job_nullifier: zero,
+        assignment_id: zero,
+        execution_seed: [7; 32],
+        model_profile_id: zero,
+        runtime_manifest_hash: zero,
+        runtime_class_id: zero,
+        shape_profile_id: hash(CLASS),
+        trace_scheme_id: kaspa_consensus_core::palw_logits_q24_v2::scheme_id(),
+        cu_ruleset_id: zero,
+        tokenizer_id: zero,
+        prompt_token_ids_hash: prompt_token_ids_commitment_v1(PalwPromptIdsFormV1::Flat, INPUT).expect("fixed original prompt"),
+        declared_prefill_tokens: 16,
+        exact_decode_tokens: 1,
+        max_context_tokens: 2048,
+    }
+}
+
 fn run_trained(
     l: &Ledger,
     reserve: &TirMemoryReserverV1,
     early: &(dyn Send + Sync),
     storage_only: bool,
     window: MeasurementWindow,
+    isolated: bool,
 ) -> R<()> {
     let fixture = File::open(FIXTURE).map_err(|_| "fixture open")?;
     let bytes = fixture.metadata().map_err(|_| "fixture stat")?.len();
@@ -867,26 +923,7 @@ fn run_trained(
     }
     let layout: PalwTirLayoutV1 = borsh::from_slice(&layout_bytes).map_err(|_| "original layout")?;
     require(layout.max_context == 2048, "original max context")?;
-    let zero = Hash64::default();
-    let job = PalwJobContextV2 {
-        version: 2,
-        network_id: b"a7-local-self-consistency".to_vec(),
-        job_id: Hash64::from_u64_word(7),
-        job_nullifier: zero,
-        assignment_id: zero,
-        execution_seed: [7; 32],
-        model_profile_id: zero,
-        runtime_manifest_hash: zero,
-        runtime_class_id: zero,
-        shape_profile_id: hash(CLASS),
-        trace_scheme_id: kaspa_consensus_core::palw_logits_q24_v2::scheme_id(),
-        cu_ruleset_id: zero,
-        tokenizer_id: zero,
-        prompt_token_ids_hash: prompt_token_ids_commitment_v1(PalwPromptIdsFormV1::Flat, INPUT).map_err(|_| "prompt")?,
-        declared_prefill_tokens: 16,
-        exact_decode_tokens: 1,
-        max_context_tokens: 2048,
-    };
+    let job = original_job();
     require(job.context_hash() == hash(CONTEXT), "original job context")?;
     let inputs = MetadataOwnerInputsV2 {
         expected_class: hash(CLASS),
@@ -928,12 +965,9 @@ fn run_trained(
         serde_json::json!({"model":"EleutherAI/pythia-70m","revision":"a39f36b100fe8a5377810d56c3f4789b9c53ac42","original_class":CLASS,"original_artifact":ROOT,"context":CONTEXT}),
     );
     owner
-        .with_inputs(
-            &mut mb,
-            |file, inputs| {
-                if storage_only { quote_storage(inputs, l) } else { run_loaded(file, inputs, l, reserve, window) }
-            },
-        )
+        .with_inputs(&mut mb, |file, inputs| {
+            if storage_only { quote_storage(inputs, l) } else { run_loaded(file, inputs, l, reserve, window, isolated) }
+        })
         .map_err(|_| "metadata changed")??;
     Ok(())
 }
@@ -958,6 +992,9 @@ fn pythia70m_original_short_job_storage_quote() {
 }
 
 fn run_mode(storage_only: bool, window: MeasurementWindow) {
+    run_mode_with_node(storage_only, window, false);
+}
+fn run_mode_with_node(storage_only: bool, window: MeasurementWindow, isolated: bool) {
     assert_eq!(std::env::var("MISAKA_RUN_TRAINED_ROLES").as_deref(), Ok("pythia70m-original-16-1"));
     cpu_limit(window);
     require_source_program_local_profile_v1().expect("audited Source profile required");
@@ -977,7 +1014,7 @@ fn run_mode(storage_only: bool, window: MeasurementWindow) {
         "memo_entry_envelope":kaspa_consensus_core::palw_native_resource_v1::btree_node_envelope_bytes_v1::<usize,i128>(),
         "logical_request_cap":REQUEST_CAP,"cumulative_tape_cap":DISK_CAP,"diagnostic_only":true}),
     );
-    let result = run_trained(&l, &reserve, &early, storage_only, window);
+    let result = run_trained(&l, &reserve, &early, storage_only, window, isolated);
     if let Err(e) = result {
         println!("ROLE_MEASURE_REFUSED {e}");
         panic!("bounded actual trained role measurement refused: {e}");
@@ -1107,3 +1144,7 @@ fn provider_guards_io_and_failed_root_attempts_never_refund_the_caller_budget() 
         assert_eq!(l.live.load(Ordering::SeqCst), 0);
     });
 }
+
+#[cfg(target_os = "macos")]
+#[path = "trained_roles/isolated_process.rs"]
+mod isolated_process;
