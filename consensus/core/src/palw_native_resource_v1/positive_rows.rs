@@ -4,7 +4,13 @@
 use super::wire::{NativeWireReaderV1, NativeWireScanV1, NativeWireShapeV1, wire_bad, wire_struct};
 use super::{NativeCoverageV1, NativeHeapV1, native_enum, native_struct, native_tuple_struct};
 use misaka_palw_positive_contract::{
-    CONTRACT_REVISION, CONTRACT_VERSION, funding::*, identity::*, messages::*, native::NativeRowKey, rows::*,
+    CONTRACT_REVISION, CONTRACT_VERSION,
+    assignment::{AssignmentId, AssignmentRoleV2, rows::*},
+    funding::*,
+    identity::*,
+    messages::*,
+    native::NativeRowKey,
+    rows::*,
 };
 use std::{
     io::{self, Read},
@@ -24,8 +30,13 @@ pub(crate) const POSITIVE_ROW_DECODE_WORKSPACE_BYTES_V1: usize =
 /// Restore's independent (case, attempt) uniqueness index. One BTree node
 /// envelope per input row bounds the small cross-row set before validation.
 pub(crate) const POSITIVE_ROW_ATTEMPT_INDEX_BYTES_V1: usize = size_of::<super::typed::BTreeNodeEnvelopeV1<([u8; 64], u32), ()>>();
+pub(crate) const POSITIVE_ROW_ASSIGNMENT_NONCE_INDEX_BYTES_V1: usize =
+    size_of::<super::typed::BTreeNodeEnvelopeV1<([u8; 68], u64), ()>>();
 pub(crate) const fn positive_aux_row_memory_bytes_v1() -> u64 {
-    (POSITIVE_ROW_RETAINED_TYPED_BYTES_V1 + POSITIVE_ROW_DECODE_WORKSPACE_BYTES_V1 + POSITIVE_ROW_ATTEMPT_INDEX_BYTES_V1) as u64
+    (POSITIVE_ROW_RETAINED_TYPED_BYTES_V1
+        + POSITIVE_ROW_DECODE_WORKSPACE_BYTES_V1
+        + POSITIVE_ROW_ATTEMPT_INDEX_BYTES_V1
+        + POSITIVE_ROW_ASSIGNMENT_NONCE_INDEX_BYTES_V1) as u64
 }
 
 // Exhaustive field/variant visitors make a future shared-schema field addition
@@ -131,13 +142,17 @@ native_enum!(CoverageState; Checking, Matched, Mismatched, EndedUnverified);
 row_wire_enum!(CoverageState; 0=>(), 1=>(), 2=>(), 3=>());
 native_enum!(NativeRowKey; Result(x), ClaimIndex(x), Case(x), Witness(x), Coverage(x),
     SourceUnion{case,kind,source}, ServiceReceipt{case,kind,source,unit}, Funding(x),
-    PacketReceipt{witness,first_relation}, JournalHead(x));
+    PacketReceipt{witness,first_relation}, JournalHead(x),Assignment(x),AssignmentNonce(x),AssignmentUse(x),AssignmentFunding(x),
+    AssignmentSettlement{assignment,leg,party,ordinal},AssignmentRole{assignment,role,bond},AssignmentJournalHead(x),AssignmentJournalFrame{assignment,ordinal},AssignmentProverFunding{assignment,prover});
 row_wire_enum!(NativeRowKey; 0=>(ResultId), 1=>(ClaimId), 2=>(CaseId), 3=>(WitnessId), 4=>(WitnessId),
-    5=>(CaseId,SourceKind,Digest), 6=>(CaseId,SourceKind,Digest,u64), 7=>(CaseId), 8=>(WitnessId,u64), 9=>(CaseId));
+    5=>(CaseId,SourceKind,Digest), 6=>(CaseId,SourceKind,Digest,u64), 7=>(CaseId), 8=>(WitnessId,u64), 9=>(CaseId),10=>(AssignmentId),11=>(NativeOutpoint),12=>(AssignmentId),13=>(AssignmentId),
+    14=>(AssignmentId,AssignmentSettlementLegV2,PrincipalId,u64),15=>(AssignmentId,AssignmentRoleV2,NativeOutpoint),16=>(AssignmentId),17=>(AssignmentId,u64),18=>(AssignmentId,NativeOutpoint));
 native_enum!(NativeRowBody; Result(x), ClaimIndex(x), Case(x), Witness(x), Coverage(x),
-    SourceUnion(x), ServiceReceipt(x), Funding(x), PacketReceipt(x), JournalHead(x));
+    SourceUnion(x), ServiceReceipt(x), Funding(x), PacketReceipt(x), JournalHead(x), Assignment(x),AssignmentNonce(x),AssignmentUse(x),AssignmentFunding(x),
+    AssignmentSettlement(x),AssignmentRole(x),AssignmentJournalHead(x),AssignmentJournalFrame(x),AssignmentProverFunding(x));
 row_wire_enum!(NativeRowBody; 0=>(ResultRow), 1=>(ClaimIndexRow), 2=>(CaseRow), 3=>(WitnessRow), 4=>(CoverageRow),
-    5=>(SourceUnionRow), 6=>(ServiceReceiptRow), 7=>(FundingRow), 8=>(PacketReceiptRow), 9=>(JournalHeadRow));
+    5=>(SourceUnionRow), 6=>(ServiceReceiptRow), 7=>(FundingRow), 8=>(PacketReceiptRow), 9=>(JournalHeadRow),10=>(AssignmentRow),11=>(AssignmentNonceRow),12=>(AssignmentUseRow),13=>(AssignmentFundingRow),
+    14=>(AssignmentSettlementRow),15=>(AssignmentRoleRow),16=>(AssignmentJournalHeadRow),17=>(AssignmentJournalFrameRow),18=>(AssignmentProverFundingRow));
 native_struct!(NativeRowValue; version, revision, body);
 impl NativeWireScanV1 for NativeRowValue {
     fn scan_native_wire_v1<R: Read>(reader: &mut NativeWireReaderV1<R>) -> io::Result<NativeWireShapeV1> {
@@ -172,7 +187,8 @@ pub(crate) fn scan_positive_aux_row_v1<R: Read>(key: &[u8], frame: &mut NativeWi
     shape
         .allocation(1, POSITIVE_ROW_RETAINED_TYPED_BYTES_V1)?
         .allocation(1, POSITIVE_ROW_DECODE_WORKSPACE_BYTES_V1)?
-        .allocation(1, POSITIVE_ROW_ATTEMPT_INDEX_BYTES_V1)
+        .allocation(1, POSITIVE_ROW_ATTEMPT_INDEX_BYTES_V1)?
+        .allocation(1, POSITIVE_ROW_ASSIGNMENT_NONCE_INDEX_BYTES_V1)
 }
 
 /// The generic aux map owns encoded Vecs, not typed VALUE slots. Reserve for

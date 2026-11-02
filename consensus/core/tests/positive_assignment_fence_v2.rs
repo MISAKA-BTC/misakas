@@ -46,7 +46,8 @@ fn policy(positive: &PositiveCourtFenceV2) -> AssignmentPolicyV2 {
 fn selected(at: u64) -> Params {
     let mut p = TESTNET_PARAMS;
     let positive = PositiveCourtFenceV2::unapproved_probe_at(ForkActivation::new(at));
-    let assignment = PositiveAssignmentFenceV2 { activation: ForkActivation::new(at), policy: policy(&positive) };
+    let assignment =
+        PositiveAssignmentFenceV2 { activation: ForkActivation::new(at), policy: policy(&positive), native_preimages: None };
     p.palw_positive_court_v2 = Some(positive);
     p.palw_positive_assignment_v2 = Some(assignment);
     p
@@ -225,4 +226,73 @@ fn assigned_scope_passes_the_unchanged_r1_result_row_recipe_and_rejects_the_reti
     let mut wrong = row;
     wrong.result.scope.ruleset = Digest(retired.as_bytes().try_into().unwrap());
     assert!(NativeRowBody::Result(wrong).validate_shape().is_err());
+}
+
+fn native_preimages() -> AssignmentNativePreimagesV2 {
+    use kaspa_consensus_core::palw_positive_assignment_funds_v2::*;
+    AssignmentNativePreimagesV2 {
+        assignment_fees: AssignmentFeeScheduleV2 {
+            version: 2,
+            revision: 1,
+            admission: 1,
+            per_signature: 1,
+            per_admission_byte: 1,
+            per_retained_byte_daa: 1,
+            per_replay_byte: 1,
+            per_utxo_write: 1,
+            capital_per_retained_byte: 1,
+        },
+        physical: AssignmentPhysicalProfileV2 {
+            version: 2,
+            revision: 1,
+            max_admission_bytes: 1_000_000,
+            max_retained_bytes: 1_000_000,
+            max_replay_bytes: 1_000_000,
+            max_heap_bytes: 1_000_000,
+            max_utxo_writes: 100,
+            max_signatures: 100,
+            max_retention_daa: 1000,
+        },
+    }
+}
+#[test]
+fn assignment_native_preimages_are_complete_policy_bound_and_fingerprinted() {
+    let mut p = selected(100);
+    let preimages = native_preimages();
+    let fence = p.palw_positive_assignment_v2.as_mut().unwrap();
+    fence.policy.assignment_fee_schedule = preimages.assignment_fees.id();
+    fence.policy.reserve_schedule = preimages.assignment_fees.reserve_id();
+    fence.policy.physical_service_profile = preimages.physical.id();
+    preimages.validate(&fence.policy).unwrap();
+    fence.native_preimages = Some(preimages.clone());
+    let first = p.palw_positive_assignment_rule_scope_v2_at(100).unwrap();
+    let mut changed = p.clone();
+    changed.palw_positive_assignment_v2.as_mut().unwrap().native_preimages.as_mut().unwrap().assignment_fees.admission += 1;
+    let after = changed.palw_positive_assignment_rule_scope_v2_at(100).unwrap();
+    assert_ne!(first.fired_rules(), after.fired_rules());
+    assert_ne!(first.ruleset(), after.ruleset());
+    assert!(
+        changed
+            .palw_positive_assignment_v2
+            .as_ref()
+            .unwrap()
+            .native_preimages
+            .as_ref()
+            .unwrap()
+            .validate(&changed.palw_positive_assignment_v2.as_ref().unwrap().policy)
+            .is_err()
+    );
+    assert!(p.validate_palw_positive_assignment_v2().is_err(), "complete prices still do not authorize public activation");
+}
+#[test]
+fn scheduled_native_preimages_do_not_change_the_genesis_handshake_identity() {
+    let mut p = selected(100);
+    p.palw_positive_assignment_v2.as_mut().unwrap().native_preimages = Some(native_preimages());
+    let mut other = p.clone();
+    other.palw_positive_assignment_v2.as_mut().unwrap().native_preimages.as_mut().unwrap().physical.max_utxo_writes += 1;
+    // Future companions do not alter the genesis handshake identity. The
+    // raw scheduled-parameter fingerprint intentionally commits their bytes.
+    assert_eq!(p.palw_positive_assignment_rule_scope_v2_at(99), None);
+    assert_eq!(p.consensus_identity_id(), other.consensus_identity_id());
+    assert_ne!(p.consensus_params_id(), other.consensus_params_id());
 }

@@ -218,6 +218,7 @@ pub(super) struct UtxoProcessingContext<'a> {
     /// The qualified escrow spends this block accepted, in acceptance order — handed to the fold as
     /// `PalwTransitionExtrasV1::funded_escrow_settlements`, so the row settles in the same rooted delta as the UTXO spend.
     pub palw_escrow_settlements: Vec<kaspa_consensus_core::palw_funded_escrow_v1::PalwEscrowSettlementFactV1>,
+    pub palw_assignment_settlements: Vec<kaspa_consensus_core::palw_positive_assignment_funds_v2::AssignmentSpendPlanV2>,
 }
 
 /// **G14 lane escrow-rfc08 (RFC-0035 A): what the funded-escrow half of the spend filter reads.**
@@ -227,11 +228,32 @@ pub(crate) struct PalwEscrowSpendLocksV1 {
     pub rows: std::collections::HashMap<TransactionOutpoint, kaspa_consensus_core::palw_funded_escrow_v1::PalwFundedEscrowRowV1>,
     /// TFO1 carriers' OWN funding outputs accepted earlier in this mergeset: not spendable for the rest of it.
     pub provisional: std::collections::HashSet<TransactionOutpoint>,
+    /// RFC-0045 purpose-separated rooted locks. Missing native entitlement is
+    /// a denial, never permission to treat this P2PKH as ordinary free value.
+    pub assignment: std::collections::HashMap<
+        TransactionOutpoint,
+        (
+            misaka_palw_positive_contract::assignment::rows::AssignmentFundingRow,
+            Option<kaspa_consensus_core::palw_positive_assignment_funds_v2::AssignmentSpendAuthorizationV2>,
+        ),
+    >,
+    /// A malformed rooted money projection fails closed in the mempool.
+    pub assignment_invalid: bool,
+    /// Fresh Case purpose locks. Only an actual native Case settlement owner
+    /// may qualify these; no such authority is inferred from row DTOs.
+    pub positive_case: std::collections::HashMap<TransactionOutpoint, misaka_palw_positive_contract::rows::FundingRow>,
+    pub assignment_prover:
+        std::collections::HashMap<TransactionOutpoint, misaka_palw_positive_contract::assignment::rows::AssignmentProverFundingRow>,
 }
 
 impl PalwEscrowSpendLocksV1 {
     fn is_empty(&self) -> bool {
-        self.rows.is_empty() && self.provisional.is_empty()
+        self.rows.is_empty()
+            && self.provisional.is_empty()
+            && self.assignment.is_empty()
+            && self.positive_case.is_empty()
+            && self.assignment_prover.is_empty()
+            && !self.assignment_invalid
     }
 
     /// **The one escrow-lock rule** — the block filter (`BondSpendFilter::escrow_refusal`), the mempool
@@ -257,15 +279,47 @@ impl PalwEscrowSpendLocksV1 {
         daa_score: u64,
         bond_burn: u64,
     ) -> Option<TransactionOutpoint> {
+        if self.assignment_invalid {
+            return tx.inputs.first().map(|i| i.previous_outpoint);
+        }
         if self.is_empty() {
             return None;
         }
         let amounts: Vec<u64> = input_amounts.into_iter().collect();
         let mut escrow_burn = 0u64;
         let mut first_rooted = None;
+        let mut locked_count = 0usize;
         for outpoint in tx.inputs.iter().map(|input| input.previous_outpoint) {
             if self.provisional.contains(&outpoint) {
                 return Some(outpoint);
+            }
+            if self.positive_case.contains_key(&outpoint) || self.assignment_prover.contains_key(&outpoint) {
+                return Some(outpoint);
+            }
+            // Cross-purpose exclusivity: neither legacy escrow nor A/C may
+            // count a second locked input as the first account's fee funding.
+            if self.rows.contains_key(&outpoint) || self.assignment.contains_key(&outpoint) {
+                locked_count += 1;
+                if locked_count > 1 || (self.rows.contains_key(&outpoint) && self.assignment.contains_key(&outpoint)) {
+                    return Some(outpoint);
+                }
+            }
+            if let Some((row, authorization)) = self.assignment.get(&outpoint) {
+                let Some(authorization) = authorization else { return Some(outpoint) };
+                match kaspa_consensus_core::palw_positive_assignment_funds_v2::qualify_assignment_spend_v2(
+                    row,
+                    authorization,
+                    tx,
+                    &amounts,
+                    daa_score,
+                ) {
+                    Err(_) => return Some(outpoint),
+                    Ok(plan) => {
+                        first_rooted.get_or_insert(outpoint);
+                        let Some(sum) = escrow_burn.checked_add(plan.burned_now) else { return Some(outpoint) };
+                        escrow_burn = sum;
+                    }
+                }
             }
             if let Some(row) = self.rows.get(&outpoint) {
                 match kaspa_consensus_core::palw_funded_escrow_v1::palw_escrow_qualified_spend_v1(
@@ -352,6 +406,7 @@ impl<'a> UtxoProcessingContext<'a> {
             palw_round_fee_incomes: Vec::new(),
             palw_escrow_locks: Default::default(),
             palw_escrow_settlements: Vec::new(),
+            palw_assignment_settlements: Vec::new(),
         }
     }
 
@@ -444,11 +499,12 @@ impl<'a> BondSpendFilter<'a> {
     /// the schedule is typed-missing, so no settlement with a burn qualifies).
     fn escrow_burned(&self, tx: &Transaction, entries: &[UtxoEntry]) -> u64 {
         let Some(locks) = self.escrow else { return 0 };
-        if locks.rows.is_empty() {
+        if locks.rows.is_empty() && locks.assignment.is_empty() {
             return 0;
         }
         let amounts: Vec<u64> = entries.iter().map(|entry| entry.amount).collect();
-        tx.inputs
+        let legacy = tx
+            .inputs
             .iter()
             .filter_map(|input| locks.rows.get(&input.previous_outpoint))
             .filter_map(|row| {
@@ -461,7 +517,23 @@ impl<'a> BondSpendFilter<'a> {
                 )
                 .ok()
             })
-            .fold(0u64, |sum, plan| sum.saturating_add(plan.burned_now))
+            .fold(0u64, |sum, plan| sum.saturating_add(plan.burned_now));
+        let assignment = tx
+            .inputs
+            .iter()
+            .filter_map(|input| locks.assignment.get(&input.previous_outpoint))
+            .filter_map(|(row, authorization)| {
+                kaspa_consensus_core::palw_positive_assignment_funds_v2::qualify_assignment_spend_v2(
+                    row,
+                    authorization.as_ref()?,
+                    tx,
+                    &amounts,
+                    self.daa_score,
+                )
+                .ok()
+            })
+            .fold(0u64, |sum, plan| sum.saturating_add(plan.burned_now));
+        legacy.saturating_add(assignment)
     }
 
     /// **What this transaction must leave unclaimed, in total** — [`palw_bond_burn_owed`] over this
@@ -890,6 +962,30 @@ impl VirtualStateProcessor {
                                     },
                                 );
                             }
+                        }
+                    }
+                }
+                if !ctx.palw_escrow_locks.assignment.is_empty() {
+                    let amounts: Vec<u64> = validated_tx.entries.iter().map(|entry| entry.amount).collect();
+                    for input in &validated_tx.tx.inputs {
+                        if let Some((row, Some(authorization))) = ctx.palw_escrow_locks.assignment.get(&input.previous_outpoint) {
+                            let plan = kaspa_consensus_core::palw_positive_assignment_funds_v2::qualify_assignment_spend_v2(
+                                row,
+                                authorization,
+                                validated_tx.tx,
+                                &amounts,
+                                pov_daa_score,
+                            )
+                            .expect("the shared spend filter admitted this exact rooted Assignment plan");
+                            if let Some(point) = plan.new.current_outpoint {
+                                new_provisional_escrows.push(
+                                    kaspa_consensus_core::palw_positive_assignment_funds_v2::native_assignment_outpoint_v2(point),
+                                );
+                            }
+                            escrow_burned = escrow_burned
+                                .checked_add(plan.burned_now)
+                                .expect("the shared filter checked the combined fee/burn allocation");
+                            ctx.palw_assignment_settlements.push(plan);
                         }
                     }
                 }
@@ -3711,7 +3807,7 @@ mod tests {
         use super::super::{BondSpendFilter, PalwEscrowSpendLocksV1};
         use kaspa_consensus_core::{
             dns_finality::{ActiveBondView, BondStatus, DNS_PAYLOAD_VERSION_V1, STAKE_VALIDATOR_PUBKEY_LEN, StakeBondRecord},
-            tx::TransactionOutpoint,
+            tx::{Transaction, TransactionOutpoint, UtxoEntry},
         };
         use kaspa_hashes::Hash64;
 
@@ -3844,6 +3940,40 @@ mod tests {
             assert!(!filter.locks(&bond_op), "a bond that owes a burn is one that may be spent");
         }
 
+        /// A corrupt native projection refuses the same actual input in both shared filter entry points.
+        #[test]
+        fn malformed_assignment_money_projection_fails_closed_in_the_shared_filter() {
+            use kaspa_consensus_core::tx::{TransactionInput, TransactionOutput};
+            let op = outpoint(4);
+            let payload =
+                kaspa_hashes::blake2b_512_address_payload(&[17; kaspa_consensus_core::mldsa87_primitives::MLDSA87_PUBKEY_LEN]);
+            let script = kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(&payload.as_bytes());
+            let transaction = Transaction::new(
+                0,
+                vec![TransactionInput::new(op, vec![], 0, 0)],
+                vec![TransactionOutput::new(99, script.clone())],
+                0,
+                kaspa_consensus_core::subnets::SUBNETWORK_ID_NATIVE,
+                0,
+                vec![],
+            );
+            let entries = vec![UtxoEntry::new(100, script, DAA - 1, false)];
+            let no_locks = PalwEscrowSpendLocksV1::default();
+            assert_eq!(no_locks.refusal(&transaction, entries.iter().map(|entry| entry.amount), DAA), None);
+            let malformed = PalwEscrowSpendLocksV1 { assignment_invalid: true, ..Default::default() };
+            let empty = std::collections::HashSet::new();
+            let no_burns = std::collections::HashMap::new();
+            let filter = BondSpendFilter {
+                bond_view: None,
+                daa_score: DAA,
+                palw_locked: &empty,
+                palw_burns: &no_burns,
+                escrow: Some(&malformed),
+            };
+            assert_eq!(filter.escrow_refusal(&transaction, &entries), Some(op));
+            assert_eq!(malformed.refusal(&transaction, [100], DAA), Some(op));
+        }
+
         /// **G14 lane escrow-rfc08 (RFC-0035 A): the funded-escrow half of the filter.** A rooted row's outpoint (a LATER block's
         /// view of an installed escrow) refuses a non-qualified spend and admits the qualified payer return; a same-mergeset
         /// provisional lock refuses every spend of the carrier's own output; and with no lock — a refused contract's output in the
@@ -3887,7 +4017,14 @@ mod tests {
             let no_burns = std::collections::HashMap::new();
 
             // A later block: the rooted row locks; only the qualified payer return passes.
-            let rooted = PalwEscrowSpendLocksV1 { rows: [(escrow_op, row)].into_iter().collect(), provisional: Default::default() };
+            let rooted = PalwEscrowSpendLocksV1 {
+                rows: [(escrow_op, row)].into_iter().collect(),
+                provisional: Default::default(),
+                assignment: Default::default(),
+                assignment_invalid: false,
+                positive_case: Default::default(),
+                assignment_prover: Default::default(),
+            };
             let filter =
                 BondSpendFilter { bond_view: None, daa_score: DAA, palw_locked: &empty, palw_burns: &no_burns, escrow: Some(&rooted) };
             assert_eq!(
@@ -3902,7 +4039,14 @@ mod tests {
             assert_eq!(early.escrow_refusal(&payer_return, &entries), Some(escrow_op));
 
             // The same mergeset: the carrier's own output is provisionally locked against every spend, the payer's included.
-            let provisional = PalwEscrowSpendLocksV1 { rows: Default::default(), provisional: [escrow_op].into_iter().collect() };
+            let provisional = PalwEscrowSpendLocksV1 {
+                rows: Default::default(),
+                provisional: [escrow_op].into_iter().collect(),
+                assignment: Default::default(),
+                assignment_invalid: false,
+                positive_case: Default::default(),
+                assignment_prover: Default::default(),
+            };
             let filter = BondSpendFilter {
                 bond_view: None,
                 daa_score: DAA,
@@ -3976,6 +4120,10 @@ mod tests {
             let locks = PalwEscrowSpendLocksV1 {
                 rows: [(a_op, row(1, a_op)), (b_op, row(21, b_op))].into_iter().collect(),
                 provisional: Default::default(),
+                assignment: Default::default(),
+                assignment_invalid: false,
+                positive_case: Default::default(),
+                assignment_prover: Default::default(),
             };
             let empty = std::collections::HashSet::new();
             let no_burns = std::collections::HashMap::new();
@@ -4024,7 +4172,14 @@ mod tests {
                 false,
             )
             .unwrap();
-            let locks = PalwEscrowSpendLocksV1 { rows: [(escrow_op, row)].into_iter().collect(), provisional: Default::default() };
+            let locks = PalwEscrowSpendLocksV1 {
+                rows: [(escrow_op, row)].into_iter().collect(),
+                provisional: Default::default(),
+                assignment: Default::default(),
+                assignment_invalid: false,
+                positive_case: Default::default(),
+                assignment_prover: Default::default(),
+            };
             let empty = std::collections::HashSet::new();
             let no_burns = std::collections::HashMap::new();
             let filter =

@@ -299,10 +299,10 @@ impl DbPalwStateV2Store {
         // Existing content is immutable. Equal bytes are an idempotent append;
         // unequal bytes at this same content address are disk corruption.
         for record in &record_slots {
-            if let Some(existing) = self.db.get_pinned(journal_key(record.head))? {
-                if existing.len() != record.raw.len() || existing.as_ref() != record.raw {
-                    return Err(corrupt("content-addressed key already has different bytes"));
-                }
+            if let Some(existing) = self.db.get_pinned(journal_key(record.head))?
+                && (existing.len() != record.raw.len() || existing.as_ref() != record.raw)
+            {
+                return Err(corrupt("content-addressed key already has different bytes"));
             }
         }
         let quote = PositiveJournalStoreQuoteV2 {
@@ -456,15 +456,14 @@ fn validate_case(cases: &[RowSlot], heads: &[RowSlot], records: &[RecordSlot<'_>
     if old_head.is_some() != old_case.is_some() {
         return Err(corrupt("old Case/JournalHead presence mismatch"));
     }
-    if let (Some(case), Some(head)) = (old_case, old_head) {
-        if case.result != first.header.result
+    if let (Some(case), Some(head)) = (old_case, old_head)
+        && (case.result != first.header.result
             || case.coverage.scope != first.header.scope
             || case.last_event != head.history.origin
             || head.sequence == 0
-            || head.head == head.history.digest
-        {
-            return Err(corrupt("old Case/JournalHead identity mismatch"));
-        }
+            || head.head == head.history.digest)
+    {
+        return Err(corrupt("old Case/JournalHead identity mismatch"));
     }
     let mut previous = old_head.map_or(Digest([0; 64]), |row| row.head);
     let mut sequence = old_head.map_or(0, |row| row.sequence);

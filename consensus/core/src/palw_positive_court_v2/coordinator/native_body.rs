@@ -149,6 +149,10 @@ fn version(version: u16, revision: u16) -> Result<(), NativeBodyErrorV2> {
 const MINER_RESULT_BYTES: u64 = 4 + 16 * 64 + 32 + 4 * 4;
 const SERVICE_BYTES: u64 = 4 + 4 * 64 + 7 * 8 + 4 + 8;
 const CONSENT_BYTES: u64 = 4 + 4 * 64 + 3 * 8 + 4;
+/// Existing body0 payload width, excluding its 5-byte version/revision/kind.
+/// Assigned Result syntax shares this scanner without accepting a separate op0.
+pub(super) const RESULT_ADMISSION_PAYLOAD_BYTES_V2: u64 =
+    MINER_RESULT_BYTES + SERVICE_BYTES + (1 + 5 * 64 + 3 * 8) + CONSENT_BYTES + 2 * SIGNATURE_BYTES as u64;
 fn skip<R: Read>(reader: &mut NativeWireReaderV1<R>, bytes: u64) -> Result<(), NativeBodyErrorV2> {
     reader.skip(bytes).map_err(|_| NativeBodyErrorV2::Wire)
 }

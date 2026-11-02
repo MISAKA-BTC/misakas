@@ -17,6 +17,7 @@ use crate::{
 use std::collections::BTreeMap;
 
 pub mod admission;
+pub mod assignment_body;
 pub mod capacity;
 pub mod carrier;
 pub mod contract;

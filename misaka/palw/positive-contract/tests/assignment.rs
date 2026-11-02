@@ -1,71 +1,8 @@
 use misaka_palw_positive_contract::{assignment::*, identity::*, rows::*};
 
-fn d(n: u8) -> Digest {
-    Digest([n; 64])
-}
-fn bond(n: u8) -> NativeOutpoint {
-    NativeOutpoint { transaction: NativeHash64([n; 64]), index: n as u32 }
-}
-fn bundle() -> AssignmentAdmissionBundleV2 {
-    let terms = AssignmentTermsV2 {
-        version: 2,
-        revision: 1,
-        network: d(1),
-        ruleset: d(2),
-        branch_anchor: NativeHash64([3; 64]),
-        mode: AssignmentModeV2::CanonicalTirAssignmentV1,
-        registered_class: d(4),
-        poster: bond(5),
-        worker: bond(6),
-        prover: bond(7),
-        payer: PrincipalId(d(8)),
-        refund_payload: d(9),
-        poster_nonce: 0,
-        derivation_policy: d(10),
-        source_policy: d(11),
-        reserve_schedule: d(12),
-        worker_reward: 100,
-        max_assignment_fee: 20,
-        max_assignment_capital: 30,
-        max_assignment_locked: 200,
-        accept_before_daa: 100,
-        result_before_daa: 200,
-        reserve_until_daa: 500,
-    };
-    let assignment = terms.id();
-    AssignmentAdmissionBundleV2 {
-        terms,
-        job_context: d(13),
-        quote: d(14),
-        source_catalog: d(15),
-        funding: AssignmentFundingAuthorizationV2 {
-            assignment,
-            quote: d(14),
-            payer: terms.payer,
-            funding_output_index: 0,
-            refund_payload: terms.refund_payload,
-            max_fee: 20,
-            max_capital: 30,
-            max_reward: 100,
-            max_locked: 200,
-            admission_expiry: 100,
-        },
-        future_case: FutureCaseFundingBoundsV2 {
-            assignment,
-            payer: terms.payer,
-            refund_payload: terms.refund_payload,
-            worker: terms.worker,
-            max_case_fee: 40,
-            max_case_capital: 60,
-            max_case_locked: 100,
-            case_admission_before_daa: 200,
-            service_before_daa: 450,
-        },
-        source_consent: d(16),
-        prover_consent: d(17),
-        cancellation_policy: d(18),
-    }
-}
+#[path = "support/assignment.rs"]
+mod support;
+use support::*;
 
 #[test]
 fn terms_identity_precedes_derived_bundle_and_literal_consents() {
@@ -320,4 +257,91 @@ fn source_and_prover_declarations_share_signed_bounds_and_do_not_create_pre_case
     let changed_bundle = AssignmentAdmissionBundleV2 { source_consent: d(99), ..b };
     assert_ne!(changed_bundle.id(), b.id());
     assert!(source.check(&changed_bundle).is_err());
+}
+
+#[test]
+fn cancellation_requires_exact_bundle_deadline_and_distinct_role_contexts() {
+    use libcrux_ml_dsa::ml_dsa_87::portable;
+    use role_actions::*;
+    let key = portable::generate_key_pair([31; 32]);
+    let public: &[u8; PUBKEY_BYTES] = key.verification_key.as_ref();
+    let mut b = bundle();
+    b.terms.payer = principal(public);
+    b.funding.payer = b.terms.payer;
+    b.future_case.payer = b.terms.payer;
+    b.funding.assignment = b.terms.id();
+    b.future_case.assignment = b.terms.id();
+    let cancel = AssignmentCancellationV2 {
+        assignment: b.terms.id(),
+        original_bundle: b.id(),
+        cancellation_policy: b.cancellation_policy,
+        cancel_before_daa: 199,
+    };
+    let poster = portable::sign(&key.signing_key, &cancel.id().0, ASSIGNMENT_CANCEL_POSTER_CONTEXT_V2, [32; 32]).unwrap();
+    let worker = portable::sign(&key.signing_key, &cancel.id().0, ASSIGNMENT_CANCEL_WORKER_CONTEXT_V2, [33; 32]).unwrap();
+    cancel.authenticate_poster(&b, public, poster.as_ref(), 0).unwrap();
+    cancel.authenticate_worker(&b, public, worker.as_ref(), 0).unwrap();
+    assert!(cancel.authenticate_worker(&b, public, poster.as_ref(), 0).is_err());
+    assert!(cancel.authenticate_poster(&b, public, worker.as_ref(), 0).is_err());
+    assert!(cancel.check(&b, 199).is_err());
+    let too_late = AssignmentCancellationV2 { cancel_before_daa: 201, ..cancel };
+    assert!(too_late.check(&b, 0).is_err());
+    let other = AssignmentAdmissionBundleV2 { prover_consent: d(99), ..b };
+    assert_eq!(other.terms.id(), b.terms.id());
+    assert!(cancel.check(&other, 0).is_err(), "same terms are not consent to a different accepted bundle");
+    assert_eq!(borsh::object_length(&cancel).unwrap(), 200);
+}
+
+#[test]
+fn prover_join_binds_bundle_case_funding_caps_and_its_own_purpose_signature() {
+    use libcrux_ml_dsa::ml_dsa_87::portable;
+    use role_actions::*;
+    let b = bundle();
+    let key = portable::generate_key_pair([34; 32]);
+    let public: &[u8; PUBKEY_BYTES] = key.verification_key.as_ref();
+    let join = AssignmentProverJoinV2 {
+        version: 2,
+        revision: 1,
+        assignment: b.terms.id(),
+        original_bundle: b.id(),
+        case: None,
+        prover: bond(30),
+        payer: principal(public),
+        funding_output_index: 0,
+        max_fee: 10,
+        max_capital: 20,
+        max_locked: 30,
+        max_attempts: 1,
+        max_build_work: 1000,
+        max_submitted_bytes: 2000,
+        max_retained_bytes: 1000,
+        admission_before_daa: 150,
+        service_before_daa: 400,
+        retention_until_daa: 500,
+        cancellation_policy: b.cancellation_policy,
+    };
+    let sig = portable::sign(&key.signing_key, &join.id().0, ASSIGNMENT_PROVER_JOIN_CONTEXT_V2, [35; 32]).unwrap();
+    join.authenticate(&b, public, sig.as_ref(), 0).unwrap();
+    let wrong = portable::sign(&key.signing_key, &join.id().0, AssignmentRoleV2::Prover.signing_context(), [36; 32]).unwrap();
+    assert!(join.authenticate(&b, public, wrong.as_ref(), 0).is_err());
+    assert!(join.check(&b, 150).is_err());
+    for mutate in [
+        |j: &mut AssignmentProverJoinV2| j.original_bundle = d(99),
+        |j: &mut AssignmentProverJoinV2| j.max_locked = 29,
+        |j: &mut AssignmentProverJoinV2| j.max_attempts = 0,
+        |j: &mut AssignmentProverJoinV2| j.max_build_work = u64::MAX,
+        |j: &mut AssignmentProverJoinV2| j.admission_before_daa = 201,
+        |j: &mut AssignmentProverJoinV2| j.service_before_daa = 451,
+        |j: &mut AssignmentProverJoinV2| j.retention_until_daa = 399,
+        |j: &mut AssignmentProverJoinV2| j.cancellation_policy = d(99),
+    ] {
+        let mut changed = join;
+        mutate(&mut changed);
+        assert!(changed.check(&b, 0).is_err());
+    }
+    let changed = AssignmentProverJoinV2 { case: Some((CaseId(d(70)), ResultId(d(71)))), ..join };
+    assert_ne!(changed.id(), join.id());
+    assert!(changed.authenticate(&b, public, sig.as_ref(), 0).is_err());
+    assert_eq!(borsh::object_length(&join).unwrap(), 409);
+    assert_eq!(borsh::object_length(&changed).unwrap(), 537);
 }

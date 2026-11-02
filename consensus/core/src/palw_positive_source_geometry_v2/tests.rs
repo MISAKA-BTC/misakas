@@ -361,3 +361,36 @@ fn empty_artifact_inventory_never_creates_a_source_request() {
 
 #[path = "independent_source_ledger.rs"]
 mod independent_source_ledger;
+
+#[test]
+fn result_free_catalog_matches_literal_g14_geometry_and_binds_every_unit() {
+    use misaka_palw_positive_contract::assignment::AssignmentId;
+    for form in [PalwPromptIdsFormV1::Flat, PalwPromptIdsFormV1::MerkleV1] {
+        let fixture = Fixture::new(65, 129, form, false, h(23));
+        let catalog =
+            TirSourceCatalogV2::derive(&fixture.class, &fixture.record, fixture.artifact, &fixture.context, form, limits()).unwrap();
+        let geometry = fixture.geometry(limits()).unwrap();
+        let assignment = AssignmentId(d(24));
+        let context = Digest(fixture.context.context_hash().as_bytes());
+        let quote = catalog.quote(assignment, context, d(25), 1000).unwrap();
+        let mut data = 0;
+        let mut opening = 0;
+        let mut count = 0;
+        for kind in [SourceKind::ArtifactInventory, SourceKind::Input] {
+            assert_eq!(catalog.source_root(kind), geometry.source_root(kind));
+            assert_eq!(catalog.source_units(kind), geometry.source_units(kind));
+            for index in 0..catalog.source_units(kind) {
+                let left = catalog.unit_bound(kind, index).unwrap();
+                assert_eq!(left, geometry.unit_bound(kind, index).unwrap());
+                data += left.max_data_bytes;
+                opening += left.max_unit_bytes;
+                count += 1;
+            }
+        }
+        assert_eq!((quote.units, quote.data_bytes, quote.opening_bytes), (count, data, opening));
+        assert!(catalog.quote(assignment, context, d(25), u32::try_from(count - 1).unwrap()).is_err());
+        assert_ne!(quote.digest, catalog.quote(AssignmentId(d(26)), context, d(25), 1000).unwrap().digest);
+        assert_ne!(quote.digest, catalog.quote(assignment, d(26), d(25), 1000).unwrap().digest);
+        assert_ne!(quote.digest, catalog.quote(assignment, context, d(26), 1000).unwrap().digest);
+    }
+}

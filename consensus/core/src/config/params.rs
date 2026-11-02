@@ -4341,7 +4341,7 @@ mod identity;
 mod positive_court_v2;
 pub use positive_court_v2::{PositiveCourtFenceV2, PositiveCourtPolicyV2};
 mod positive_assignment_v2;
-pub use positive_assignment_v2::{PositiveAssignmentFenceV2, PositiveAssignmentRuleScopeV2};
+pub use positive_assignment_v2::{AssignmentNativePreimagesV2, PositiveAssignmentFenceV2, PositiveAssignmentRuleScopeV2};
 mod mirror;
 mod validation;
 pub use full_activation_v1::*;

@@ -4,8 +4,10 @@
 use crate::identity::hash;
 use crate::{
     CONTRACT_REVISION, CONTRACT_VERSION,
+    assignment::{AssignmentId, AssignmentRoleV2, rows::AssignmentSettlementLegV2},
     identity::*,
     messages::{MinerResultCommit, SourceKind},
+    rows::NativeOutpoint,
 };
 use borsh::{BorshDeserialize, BorshSerialize};
 
@@ -40,6 +42,30 @@ pub enum NativeRowKey {
         first_relation: u64,
     },
     JournalHead(CaseId),
+    Assignment(AssignmentId),
+    AssignmentNonce(NativeOutpoint),
+    AssignmentUse(AssignmentId),
+    AssignmentFunding(AssignmentId),
+    AssignmentSettlement {
+        assignment: AssignmentId,
+        leg: AssignmentSettlementLegV2,
+        party: PrincipalId,
+        ordinal: u64,
+    },
+    AssignmentRole {
+        assignment: AssignmentId,
+        role: AssignmentRoleV2,
+        bond: NativeOutpoint,
+    },
+    AssignmentJournalHead(AssignmentId),
+    AssignmentJournalFrame {
+        assignment: AssignmentId,
+        ordinal: u64,
+    },
+    AssignmentProverFunding {
+        assignment: AssignmentId,
+        prover: NativeOutpoint,
+    },
 }
 impl NativeRowKey {
     pub fn encode(&self) -> Vec<u8> {

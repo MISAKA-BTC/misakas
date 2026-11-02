@@ -943,6 +943,9 @@ pub struct VirtualStateProcessor {
     /// force at a block is the live build's undecodable payload there: the objects-of-block walk drops it before the acceptance walk,
     /// a chunk group assembling to it is undecodable to the walk, and the UTXO walk burns no rent for it.
     pub(super) palw_lifecycle_kind_fences: kaspa_consensus_core::palw_lifecycle_objects_v2::PalwLifecycleKindFencesV1,
+    /// Complete immutable native policy preimages, retained only for the new
+    /// Assignment profile. The fired resolver must not hash heights alone.
+    pub(super) palw_positive_assignment_params_v2: Option<Arc<Params>>,
     /// ADR-0152 v2 F2: `Params::palw_offence_attribution` (`Some(0)` on testnet-12 alone), resolved
     /// once in [`Self::palw_offence_attribution_at`]; the `ObjectiveOffence` gate and the fold's
     /// extras both read it there, so a node cannot admit a false-Valid offence its fold then routes
@@ -1219,6 +1222,9 @@ pub(super) const PALW_RENT_UNPRICED: u64 = u64::MAX;
 /// the map `calculate_utxo_state` filled, and spent in `palw_v2_accepted_objects`.
 pub(super) struct PalwCarriedObjectV1 {
     pub(super) object: kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+    /// Actual accepted transaction identity. Synthetic pre-object bindings have
+    /// no carrier and remain before the new accepted-prefix ordering.
+    pub(super) native_carrier: Option<TransactionId>,
     /// Internal only: fee available for rent after mandatory bond burn, or the unpriced sentinel.
     pub(super) carrier_fee: u64,
     pub(super) fp_answer: Option<kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<Vec<u32>>>,
@@ -1624,6 +1630,7 @@ impl VirtualStateProcessor {
             palw_receipt_spend_v4: params.palw_receipt_spend_v4_fence(),
             palw_header_forms: params.palw_header_form_fences_v1(),
             palw_lifecycle_kind_fences: params.palw_lifecycle_kind_fences_v1(),
+            palw_positive_assignment_params_v2: params.palw_positive_assignment_v2.as_ref().map(|_| Arc::new(params.clone())),
             palw_offence_attribution: params.palw_offence_attribution_fence(),
             palw_activation_pool: params.palw_activation_pool_fence(),
             palw_rcore_plus: params.palw_rcore_plus_fence(),
@@ -2471,6 +2478,18 @@ impl VirtualStateProcessor {
                     // G14 lane escrow-rfc08 (RFC-0035 A): and which funded-escrow outpoints are locked, from the same parent state.
                     ctx.palw_escrow_locks.rows =
                         palw_state.as_ref().map(|s| self.palw_escrow_locked_rows_v1(s, pov_daa_score)).unwrap_or_default();
+                    ctx.palw_escrow_locks.assignment = palw_state.as_ref()
+                        .map(|state| kaspa_consensus_core::palw_positive_assignment_funds_v2::assignment_funding_locks_v2(state))
+                        .transpose().map_err(|why| kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
+                            "Assignment funding lock projection", &format!("{why:?}")))?.unwrap_or_default();
+                    ctx.palw_escrow_locks.positive_case = palw_state.as_ref()
+                        .map(|state| kaspa_consensus_core::palw_positive_assignment_funds_v2::positive_case_funding_locks_v2(state))
+                        .transpose().map_err(|why| kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
+                            "Positive Case funding lock projection", &format!("{why:?}")))?.unwrap_or_default();
+                    ctx.palw_escrow_locks.assignment_prover = palw_state.as_ref()
+                        .map(|state| kaspa_consensus_core::palw_positive_assignment_funds_v2::assignment_prover_funding_locks_v2(state))
+                        .transpose().map_err(|why| kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
+                            "Assignment prover funding lock projection", &format!("{why:?}")))?.unwrap_or_default();
                     // ADR-0125: which merged round blocks hold their permit, from the same parent state.
                     ctx.palw_round_verdicts = palw_state
                         .as_ref()
@@ -2500,7 +2519,7 @@ impl VirtualStateProcessor {
                     // Retain actual UTXO provenance through the PALW phase. Its
                     // native Court consumer is UNASSIGNED: no admission, lock,
                     // row mutation or credit is created by this handoff.
-                    let _positive_native_phase_two = std::mem::take(&mut ctx.positive_native_carriers)
+                    let positive_native_phase_two = std::mem::take(&mut ctx.positive_native_carriers)
                         .into_phase_two(&ctx.mergeset_acceptance_data, &ctx.accepted_tx_ids, positive_point, ctx.selected_parent())
                         .map_err(|why| {
                             kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
@@ -2508,6 +2527,11 @@ impl VirtualStateProcessor {
                                 &format!("{why:?}"),
                             )
                         })?;
+                    // These actual accepted carriers reach a separate bounded
+                    // Assignment decoder. Until the native complete reservation
+                    // owner exists, its precise prerequisite remains visible
+                    // and creates no Assignment/nonce/lock/credit mutation.
+                    positive_native_phase_two.inspect_assignment_ingress_v2(self)?;
                     // ADR-0125: one line a chain block that merges the lane — what an operator (and the
                     // devnet drill) reads to see permits granted and the transactions they carried. The
                     // native (payment) transactions are counted apart from PALW carriers and the first
@@ -2905,6 +2929,7 @@ impl VirtualStateProcessor {
                                         // G14 lane escrow-rfc08: the qualified escrow spends UTXO acceptance admitted, settled by the fold
                                         // in this block's rooted delta (committed with the UTXO diff in one WriteBatch).
                                         extras.funded_escrow_settlements = ctx.palw_escrow_settlements.clone();
+                                        extras.assignment_settlements = ctx.palw_assignment_settlements.clone();
                                         // RFC-0008 v2: and the EXEC blocks this block's anchor covered — the slice carriers (each
                                         // re-judged by the fold against its own running state) and the covered set itself.
                                         if let Some(resolved) = exec_resolved.as_ref() {
@@ -3780,6 +3805,21 @@ impl VirtualStateProcessor {
             .as_ref()
             .map(|(_, state)| self.palw_escrow_locked_rows_v1(state, virtual_daa_window.daa_score))
             .unwrap_or_default();
+        ctx.palw_escrow_locks.assignment = virtual_palw_state.as_ref()
+            .map(|(_, state)| kaspa_consensus_core::palw_positive_assignment_funds_v2::assignment_funding_locks_v2(state))
+            .transpose().map_err(|why| RuleError::LocalNativeCapacityUnavailable(
+                kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
+                    "Assignment virtual funding lock projection", &format!("{why:?}"))))?.unwrap_or_default();
+        ctx.palw_escrow_locks.positive_case = virtual_palw_state.as_ref()
+            .map(|(_,state)| kaspa_consensus_core::palw_positive_assignment_funds_v2::positive_case_funding_locks_v2(state))
+            .transpose().map_err(|why| RuleError::LocalNativeCapacityUnavailable(
+                kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
+                    "Positive virtual Case funding lock projection", &format!("{why:?}"))))?.unwrap_or_default();
+        ctx.palw_escrow_locks.assignment_prover = virtual_palw_state.as_ref()
+            .map(|(_,state)| kaspa_consensus_core::palw_positive_assignment_funds_v2::assignment_prover_funding_locks_v2(state))
+            .transpose().map_err(|why| RuleError::LocalNativeCapacityUnavailable(
+                kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
+                    "Assignment virtual prover funding lock projection", &format!("{why:?}"))))?.unwrap_or_default();
         // ADR-0125: virtual accepts exactly the round blocks the block built on it will accept.
         ctx.palw_round_verdicts = virtual_palw_state
             .as_ref()
@@ -4121,6 +4161,7 @@ impl VirtualStateProcessor {
             .into_iter()
             .map(|object| PalwCarriedObjectV1 {
                 object,
+                native_carrier: None,
                 carrier_fee: PALW_RENT_UNPRICED,
                 fp_answer: None,
                 history_pledge: None,

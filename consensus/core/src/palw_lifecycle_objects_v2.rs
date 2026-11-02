@@ -1119,12 +1119,17 @@ pub fn palw_positive_object_bytes_v2(object: &[u8]) -> bool {
     object.first() == Some(&misaka_palw_positive_contract::native::LIFECYCLE_OBJECT_TAG)
 }
 pub fn palw_positive_lifecycle_unjudged_v2(payload: &[u8], fences: &PalwLifecycleKindFencesV1, daa: u64) -> bool {
-    palw_positive_lifecycle_payload_v2(payload) && !fences.positive_court_reserved_active_at_v2(daa)
+    palw_positive_lifecycle_payload_v2(payload)
+        && (!fences.positive_court_reserved_active_at_v2(daa)
+            || (matches!(payload.get(7), Some(8..=13)) && fences.assignment_body_limits_v2_at(daa).is_none()))
 }
 
 /// Predecode syntax/resource check only; this installs no decoder or acceptance
 /// authority for the reserved tag. Call only AFTER its owning height check.
-fn preflight_positive_lifecycle_payload_v2(payload: &[u8]) -> Result<(), PalwLifecycleTxError> {
+fn preflight_positive_lifecycle_payload_v2(
+    payload: &[u8],
+    assignment_limits: Option<crate::palw_positive_court_v2::coordinator::assignment_body::AssignmentBodyLimitsV2>,
+) -> Result<(), PalwLifecycleTxError> {
     use crate::palw_positive_court_v2::coordinator::native_body::{
         MAX_BODY_BYTES_V2, MAX_EXACT_RELATIONS_V2, MAX_OPAQUE_BYTES_V2, MAX_SIGNATURES_V2, NativeBodyLimitsV2, scan_native_body_v2,
     };
@@ -1134,6 +1139,11 @@ fn preflight_positive_lifecycle_payload_v2(payload: &[u8]) -> Result<(), PalwLif
     let got = u16::from_le_bytes([payload[0], payload[1]]);
     if got != PALW_LIFECYCLE_TX_VERSION_V2 {
         return Err(PalwLifecycleTxError::UnsupportedVersion { got, expected: PALW_LIFECYCLE_TX_VERSION_V2 });
+    }
+    if matches!(payload.get(7), Some(8..=13)) {
+        let limits = assignment_limits.ok_or(PalwLifecycleTxError::Undecodable)?;
+        return crate::palw_positive_court_v2::coordinator::assignment_body::scan_assignment_body_v2(&payload[3..],limits)
+            .map(|_|()).map_err(|_|PalwLifecycleTxError::Undecodable);
     }
     // These are codec defense ceilings, not an adopted execution profile. The
     // native driver must additionally clamp to its rooted finite runtime policy.
@@ -1163,7 +1173,7 @@ fn extract_lifecycle_objects_v2(txs: &[Transaction], context: Option<(&PalwLifec
             out.skipped.push((id, "positive2 is undecodable below its owning fence"));
             continue;
         }
-        if preflight_positive_lifecycle_payload_v2(&tx.payload).is_err() {
+        if preflight_positive_lifecycle_payload_v2(&tx.payload, context.and_then(|(fences,daa)|fences.assignment_body_limits_v2_at(daa))).is_err() {
             out.skipped.push((id, "payload does not decode"));
             continue;
         }
@@ -1867,6 +1877,9 @@ pub struct PalwLifecycleKindFencesV1 {
     activations: [Option<crate::config::params::ForkActivation>; PalwLifecycleKindFenceV1::ALL.len()],
     // Reserved-only: tag176 has no live decoder/owner yet. Keep it OUT of ALL/NEW_KINDS until A4 lands the actual event.
     positive_court_reserved_v2: Option<crate::config::params::ForkActivation>,
+    /// Separate finite codec routing for RFC-0045. This is never admission.
+    assignment_body_limits_v2: Option<(crate::config::params::ForkActivation,
+        crate::palw_positive_court_v2::coordinator::assignment_body::AssignmentBodyLimitsV2)>,
 }
 
 impl PalwLifecycleKindFencesV1 {
@@ -1875,6 +1888,14 @@ impl PalwLifecycleKindFencesV1 {
     pub fn with_positive_court_reserved_v2(mut self, activation: Option<crate::config::params::ForkActivation>) -> Self {
         self.positive_court_reserved_v2 = activation;
         self
+    }
+    pub fn with_assignment_body_limits_v2(mut self, value:Option<(crate::config::params::ForkActivation,
+        crate::palw_positive_court_v2::coordinator::assignment_body::AssignmentBodyLimitsV2)>)->Self {
+        self.assignment_body_limits_v2=value;
+        self
+    }
+    pub fn assignment_body_limits_v2_at(&self, daa:u64)->Option<crate::palw_positive_court_v2::coordinator::assignment_body::AssignmentBodyLimitsV2> {
+        self.assignment_body_limits_v2.filter(|(at,_)|*at!=crate::config::params::ForkActivation::never() && at.is_active(daa)).map(|(_,limits)|limits)
     }
     pub fn positive_court_reserved_active_at_v2(&self, daa: u64) -> bool {
         self.positive_court_reserved_v2.is_some_and(|at| at != crate::config::params::ForkActivation::never() && at.is_active(daa))
@@ -1979,6 +2000,9 @@ impl crate::config::params::Params {
             .with_positive_court_reserved_v2(
                 self.palw_positive_court_v2.as_ref().filter(|f| f.policy.validate_shape().is_ok()).map(|f| f.activation),
             )
+            .with_assignment_body_limits_v2(self.palw_positive_assignment_v2.as_ref().and_then(|fence|
+                crate::palw_positive_court_v2::coordinator::assignment_body::AssignmentBodyLimitsV2::from_policy(&fence.policy)
+                    .ok().map(|limits|(fence.activation,limits))))
     }
 
     /// Both fences armed (neither `never()`): the later one; otherwise none.
@@ -2036,7 +2060,7 @@ pub fn validate_palw_lifecycle_tx_in_context_v1(
     if palw_positive_lifecycle_unjudged_v2(payload, fences, ctx_daa_score) {
         return Ok(());
     }
-    preflight_positive_lifecycle_payload_v2(payload)?;
+    preflight_positive_lifecycle_payload_v2(payload, fences.assignment_body_limits_v2_at(ctx_daa_score))?;
     let Ok(payload) = borsh::from_slice::<PalwLifecycleTxPayloadV2>(payload) else { return Ok(()) };
     if payload.version != PALW_LIFECYCLE_TX_VERSION_V2 {
         return Ok(());

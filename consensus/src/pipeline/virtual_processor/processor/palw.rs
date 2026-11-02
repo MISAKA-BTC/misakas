@@ -497,12 +497,20 @@ impl VirtualStateProcessor {
         {
             return Some(gate.clone());
         }
+        let assignment = kaspa_consensus_core::palw_positive_assignment_funds_v2::assignment_funding_locks_v2(&state);
+        let positive_case = kaspa_consensus_core::palw_positive_assignment_funds_v2::positive_case_funding_locks_v2(&state);
+        let assignment_prover = kaspa_consensus_core::palw_positive_assignment_funds_v2::assignment_prover_funding_locks_v2(&state);
+        let assignment_invalid = assignment.is_err() || positive_case.is_err() || assignment_prover.is_err();
         let gate = Arc::new(PalwMempoolBondGate {
             locked: self.palw_v2_locked_bond_outpoints(&state, now_daa),
             burns: self.palw_v2_bond_burn_obligations(&state, now_daa),
             escrow: super::super::utxo_validation::PalwEscrowSpendLocksV1 {
                 rows: self.palw_escrow_locked_rows_v1(&state, now_daa),
                 provisional: Default::default(),
+                assignment: assignment.unwrap_or_default(),
+                assignment_invalid,
+                positive_case: positive_case.unwrap_or_default(),
+                assignment_prover: assignment_prover.unwrap_or_default(),
             },
         });
         *cache = Some((tip, now_daa, gate.clone()));

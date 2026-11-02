@@ -402,3 +402,38 @@ The old candidate is explicitly rejected by the unchanged Result-row check;
 see [the correction evidence](assignment-ruleset-correction-20261102/README.md).
 This corrects the earlier policy increment; it supplies no accepted native
 Assignment or funds/Case/P/credit/activation. All remaining stages persist.
+
+
+## Assignment codec/funds/rows/DB and native boundary checkpoint — 2026-11-03
+
+The shared contract (68), focused Core targets (62), and actual Consensus
+legacy/storage/filter targets (11) pass: 141 executed cases, with exact source
+maps and 19 actual executable hashes in
+[the integration evidence](assignment-native-integration-20261102/README.md).
+Strict contract/Core/Consensus library Clippy, selected test Clippy and all
+Consensus test-target typechecking pass. Native tests use default opt2,
+debug assertions/overflow checks and the normal stack. Native 11 comprises
+OLD G14 8, actual RocksDB DATA persistence 2 and lock-rejection 1; none is a
+successful new Assignment/Case/P/payment acceptance test.
+
+Append-only operations8–13, aux151 rows10–18, typed A/C/prover UTXO qualification
+and shared locks, role/nonce/use/accounting structural restore, Assignment DB
+journal and private checkpoint writer are implemented. The actual native
+reservation/P/Case owners remain missing and reject. The original-policy
+custody, typed real construction lease, per-ordinal raw final checkpoint and
+same-UTXO-batch material outcome changes in `candidates/` are UNAPPLIED and
+UNCOMPILED; the 141 passed cases do not cover those candidates. A newly found
+metadata-helper assumption rejects distinct registered work/operator keys;
+the correction/regression is a candidate, not a passed runtime fix.
+
+A further actual payout gap is documented: ordinary payer P2PKH scripts still
+need a real future signature. Safe balance/floor calculations cannot generate
+that signature or guarantee withdrawal when the payer stops cooperating.
+The [relay RFC draft](../../docs/design/palw/integration/positive-native-relay-rfc-draft-2026-11-03.md)
+and [paired ADR draft](../../docs/design/palw/integration/positive-native-relay-adr-draft-2026-11-03.md)
+propose separate prior paid/custodied signature material, operation14 and
+bounded terminal fallback/conditional partial progression. Both remain
+UNADOPTED until an explicit paired decision under PRINCIPLES§11. Public
+activation and old-account migration are separate decisions. Work on already
+adopted Case/P/source/funding/recovery integration continues; the full goal and
+RFC45 remain incomplete.

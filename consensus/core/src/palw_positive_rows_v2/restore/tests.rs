@@ -90,6 +90,7 @@ fn orphan_rows_of_all_reference_kinds_are_rejected() {
             NativeRowBody::PacketReceipt(r) => r.witness = WitnessId(d(91)),
             NativeRowBody::JournalHead(r) => r.case = CaseId(d(91)),
             NativeRowBody::Result(_) => unreachable!(),
+            _ => unreachable!("old-schema orphan fixture"),
         }
         rows.push(orphan);
         assert!(check(&rows).is_err(), "orphan kind {kind} must fail");

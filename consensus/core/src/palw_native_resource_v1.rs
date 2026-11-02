@@ -27,6 +27,7 @@ mod kernel_ledger;
 mod kernel_material;
 mod kernel_salted;
 mod kernel_segment_assembly;
+mod positive_assignment;
 pub mod positive_journal;
 pub(crate) mod positive_rows;
 pub use kernel_material::{

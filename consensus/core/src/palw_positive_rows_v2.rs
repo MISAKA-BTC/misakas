@@ -11,6 +11,7 @@ use misaka_palw_positive_contract::{
 };
 
 pub mod restore;
+pub mod assignment;
 #[cfg(test)]
 mod tests;
 

@@ -4,6 +4,7 @@
 //! must authenticate origins, resolve references and replay canonical events.
 use crate::{
     CONTRACT_REVISION, CONTRACT_VERSION, ContractError,
+    assignment::rows::*,
     funding::{FundingConsent, FundingPlanBasis, funding_scope},
     identity::*,
     messages::*,
@@ -260,6 +261,15 @@ pub enum NativeRowBody {
     Funding(FundingRow),
     PacketReceipt(PacketReceiptRow),
     JournalHead(JournalHeadRow),
+    Assignment(AssignmentRow),
+    AssignmentNonce(AssignmentNonceRow),
+    AssignmentUse(AssignmentUseRow),
+    AssignmentFunding(AssignmentFundingRow),
+    AssignmentSettlement(AssignmentSettlementRow),
+    AssignmentRole(AssignmentRoleRow),
+    AssignmentJournalHead(AssignmentJournalHeadRow),
+    AssignmentJournalFrame(AssignmentJournalFrameRow),
+    AssignmentProverFunding(AssignmentProverFundingRow),
 }
 impl NativeRowBody {
     pub fn key(&self) -> NativeRowKey {
@@ -274,6 +284,21 @@ impl NativeRowBody {
             Self::Funding(r) => NativeRowKey::Funding(r.consent.case),
             Self::PacketReceipt(r) => NativeRowKey::PacketReceipt { witness: r.witness, first_relation: r.first_relation },
             Self::JournalHead(r) => NativeRowKey::JournalHead(r.case),
+            Self::Assignment(r) => NativeRowKey::Assignment(r.id()),
+            Self::AssignmentNonce(r) => NativeRowKey::AssignmentNonce(r.poster),
+            Self::AssignmentUse(r) => NativeRowKey::AssignmentUse(r.assignment),
+            Self::AssignmentFunding(r) => NativeRowKey::AssignmentFunding(r.assignment),
+            Self::AssignmentSettlement(r) => {
+                NativeRowKey::AssignmentSettlement { assignment: r.assignment, leg: r.leg, party: r.party, ordinal: r.ordinal }
+            }
+            Self::AssignmentRole(r) => NativeRowKey::AssignmentRole { assignment: r.assignment, role: r.role, bond: r.bond },
+            Self::AssignmentJournalHead(r) => NativeRowKey::AssignmentJournalHead(r.assignment),
+            Self::AssignmentProverFunding(r) => {
+                NativeRowKey::AssignmentProverFunding { assignment: r.assignment, prover: r.consent.prover }
+            }
+            Self::AssignmentJournalFrame(r) => {
+                NativeRowKey::AssignmentJournalFrame { assignment: r.header.assignment, ordinal: r.header.ordinal }
+            }
         }
     }
 
@@ -368,6 +393,40 @@ impl NativeRowBody {
                     return Err(ContractError::Range);
                 }
             }
+            Self::Assignment(r) => r.validate_shape()?,
+            Self::AssignmentNonce(r) => {
+                if r.nonce.exhausted && r.nonce.next != u64::MAX {
+                    return Err(ContractError::NonCanonical);
+                }
+            }
+            Self::AssignmentUse(r) => {
+                if r.binding.origin != r.origin {
+                    return Err(ContractError::Identity);
+                }
+            }
+            Self::AssignmentFunding(r) => r.validate_shape()?,
+            Self::AssignmentSettlement(r) => {
+                if r.amount == 0 || r.once.origin != r.origin {
+                    return Err(ContractError::Range);
+                }
+            }
+            Self::AssignmentRole(r) => {
+                if let crate::assignment::rows::AssignmentRoleAuthorizationV2::Joined(join) = r.authorization
+                    && (r.role != crate::assignment::AssignmentRoleV2::Prover
+                        || join.assignment != r.assignment
+                        || join.prover != r.bond
+                        || r.funding.is_none())
+                {
+                    return Err(ContractError::Identity);
+                }
+            }
+            Self::AssignmentJournalHead(r) => {
+                if r.next_ordinal == 0 || r.retention_until_daa <= r.origin.accepted_daa || r.retention_until_daa == u64::MAX {
+                    return Err(ContractError::Range);
+                }
+            }
+            Self::AssignmentJournalFrame(r) => r.validate_shape()?,
+            Self::AssignmentProverFunding(r) => r.validate_shape()?,
             Self::ClaimIndex(_) | Self::ServiceReceipt(_) | Self::JournalHead(_) => {}
         }
         Ok(())

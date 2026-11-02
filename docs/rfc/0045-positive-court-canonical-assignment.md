@@ -193,6 +193,10 @@ local 0..7を変更・再番号化・読み替えない。aux151 key/valueもBor
 | 15 AssignmentRole | AssignmentId＋role＋native bond → actual登録key/Principal、role別署名済みbundle、同意scope/上限/clock、原資・lease・accepted origin参照 |
 | 16 AssignmentJournalHead | AssignmentId → next ordinal、last frame digest、actual accepted origin、保持clock |
 | 17 AssignmentJournalFrame | AssignmentId＋ordinal → 固定typed frame metadataとbounded payloadのaccepted material参照 |
+| 18 AssignmentProverFunding | AssignmentId＋prover native bond → op13参加者自身の署名済みjoin consent・別の実outpoint・fee/capital/surplus・未払due/責任floor・予約/精算参照 |
+
+2026-11-02実装schema確定: kind18は採択済みop13が要求する参加者自身の原資を、poster専用のkind13へ混在させず保存する従属accountである。0–17の番号・wire・意味を変更せず、新しいResult mode/IDを導入しない。keyはBorsh prefix 5＋AssignmentId 64＋native bond 68＝137 bytes。join consent digestを加えると201 bytesとなり既定142-byte上限を破るためkeyへ加えず、literal consentをvalueへ保存する。同一assignment・同一bondには一つのfunded joinだけを許し、consentの差替えや再入金でCaseの全体予算・期限・onceをresetしない。valueは一つのpayer key/signatureだけを持つ固定rowであり、元のkind13 account、後続Caseのkind7 accountとは別purpose/別実coin lockである。 kind14 settlementのvalueには`Poster / Prover(native bond)`の固定account識別子を含め、対応する原資だけの残額・due・責任floorへ適用する。keyの142-byte上限を維持するためaccountはkeyへ追加せず、ordinalは同一AssignmentId・leg・partyについて全accountを横断して一意とする。異なる原資accountで同じkeyを再利用して精算rowを上書きしない。
+
 
 可変layout/source集合/履歴はbounded carrierとaccepted materialから解決する。固定rowの既存codec ceilingに収まるfield構成と署名保存を、中央schemaレビューで確定する。key/value version、順序、重複、未知kind、孤立Use、nonce不整合、rowリンク、署名、clock、履歴・残額を、bounded ingressとrestoreの両方で検査する。実resource ownerが全temporary/retained/replay費用を負い、DTOのbooleanや整数台帳をnative leaseへ昇格しない。
 

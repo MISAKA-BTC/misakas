@@ -10,6 +10,9 @@ use borsh::{BorshDeserialize, BorshSerialize};
 
 pub mod consents;
 pub mod policy;
+pub mod role_actions;
+pub mod rows;
+pub mod journal;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, BorshSerialize, BorshDeserialize)]
 pub struct AssignmentId(pub Digest);

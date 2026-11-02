@@ -10,11 +10,13 @@
 use super::PositiveRowErrorV2;
 use misaka_palw_positive_contract::{
     ContractError,
+    assignment::{AssignmentId, AssignmentRoleV2, journal::*, rows::*},
     identity::*,
     messages::{ClaimStatus, MinerDataStatus, SourceKind},
     native::{KERNEL_AUX_TABLE, NativeRowKey},
     rows::*,
 };
+mod assignment;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Bound::{Included, Unbounded};
 
@@ -260,6 +262,15 @@ impl Reader<'_> {
             NativeRowBody::Funding(row) => self.validate_funding_row(row),
             NativeRowBody::PacketReceipt(row) => self.validate_packet_receipt_row(row),
             NativeRowBody::JournalHead(row) => self.validate_journal_head_row(row),
+            NativeRowBody::Assignment(row) => self.validate_assignment_row(row),
+            NativeRowBody::AssignmentNonce(row) => self.validate_assignment_nonce_row(row),
+            NativeRowBody::AssignmentUse(row) => self.validate_assignment_use_row(row),
+            NativeRowBody::AssignmentFunding(row) => self.validate_assignment_funding_row(row),
+            NativeRowBody::AssignmentSettlement(row) => self.validate_assignment_settlement_row(row),
+            NativeRowBody::AssignmentRole(row) => self.validate_assignment_role_row(row),
+            NativeRowBody::AssignmentJournalHead(row) => self.validate_assignment_journal_head_row(row),
+            NativeRowBody::AssignmentJournalFrame(row) => self.validate_assignment_journal_frame_row(row),
+            NativeRowBody::AssignmentProverFunding(row) => self.validate_assignment_prover_funding_row(row),
         }
     }
     #[inline(never)]
@@ -443,12 +454,21 @@ pub fn validate_positive_aux_restore_v2(aux: &PositiveAuxRowsV2) -> Result<Posit
 fn validate_positive_aux_present_v2(aux: &PositiveAuxRowsV2) -> Result<PositiveRestoreReportV2, PositiveRowErrorV2> {
     let mut reader = Reader { aux, report: PositiveRestoreReportV2::default() };
     let mut attempts = BTreeSet::<(CaseId, u32)>::new();
+    let mut nonces = BTreeSet::<([u8; 68], u64)>::new();
     for ((table, key), value) in aux.range((Included((KERNEL_AUX_TABLE, Vec::new())), Unbounded)) {
         if *table != KERNEL_AUX_TABLE {
             break;
         }
         add(&mut reader.report.rows, 1)?;
         let row = reader.decode(key, value)?;
+        if let NativeRowBody::Assignment(assignment) = &row {
+            let mut poster = [0u8; 68];
+            poster[..64].copy_from_slice(&assignment.bundle.terms.poster.transaction.0);
+            poster[64..].copy_from_slice(&assignment.bundle.terms.poster.index.to_le_bytes());
+            if !nonces.insert((poster, assignment.bundle.terms.poster_nonce)) {
+                return inconsistent();
+            }
+        }
         reader.validate_row(&row, &mut attempts)?;
     }
     reader.report.witness_attempt_entries = attempts.len() as u64;

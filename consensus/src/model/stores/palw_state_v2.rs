@@ -61,6 +61,7 @@ use rocksdb::WriteBatch;
 use serde::{Deserialize, Serialize};
 
 pub mod positive_journal;
+pub mod assignment_journal;
 
 /// The layout the rows were written under. Bump on ANY change to the wrapped Borsh types or to
 /// the record shapes below, so old rows are discarded for rebuilding instead of read as absent.

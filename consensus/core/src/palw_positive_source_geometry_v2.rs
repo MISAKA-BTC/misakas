@@ -117,10 +117,9 @@ pub struct G14UnitBoundV2 {
     pub max_data_bytes: u64,
 }
 
-pub struct TirSourceGeometryV2 {
-    result: ResultId,
-    case: CaseId,
-    service: Digest,
+/// Result-free native G14 inventory. It has no Case, service receipt or
+/// source-duty authority. Assignment intake can quote it before a Result exists.
+pub struct TirSourceCatalogV2 {
     artifact: Digest,
     input: Digest,
     prefill: u32,
@@ -128,6 +127,18 @@ pub struct TirSourceGeometryV2 {
     program: TirProgramV1,
     inventory: PalwTirInventoryIndexV1,
     max_units_per_range: u64,
+}
+pub struct TirSourceGeometryV2 {
+    result: ResultId,
+    case: CaseId,
+    service: Digest,
+    catalog: TirSourceCatalogV2,
+}
+impl std::ops::Deref for TirSourceGeometryV2 {
+    type Target = TirSourceCatalogV2;
+    fn deref(&self) -> &Self::Target {
+        &self.catalog
+    }
 }
 impl TirSourceGeometryV2 {
     /// `registered_artifact` must come from the actual PalwClassStateV2 row;
@@ -144,59 +155,11 @@ impl TirSourceGeometryV2 {
         network_prompt_form: PalwPromptIdsFormV1,
         limits: GeometryLimitsV2,
     ) -> Result<Self, PositiveSourceGeometryErrorV2> {
-        let cap = limits.max_program_bytes.min(misaka_palw_tir::program::MAX_PROGRAM_BYTES as u64);
-        if cap == 0
-            || limits.max_units_per_range == 0
-            || class.program.len() as u64 > cap
-            || registered.program.len() as u64 > cap
-            || class.layout.commit_tiles.len() as u64 > cap / 4
-            || class.layout.state_tiles.len() as u64 > cap / 4
-            || job.network_id.is_empty()
-            || job.network_id.len() > PALW_V2_MAX_NETWORK_ID_BYTES
-        {
-            return Err(PositiveSourceGeometryErrorV2::Budget);
-        }
         result.validate_shape()?;
-        // Registration authenticates its own tokenizer via class identity.
-        // The signed Result binds the supplied job tokenizer, which is zero
-        // for existing canonical attempts. This reader creates no job authority.
-        if class.version != PALW_TIR_CLASS_VERSION_V1
-            || class.layout.version != PALW_TIR_LAYOUT_VERSION_V1
-            || registered.version != PALW_TIR_CLASS_RECORD_VERSION_V1
-            || job.version != 2
-            || registered.program.as_slice() != class.program.as_slice()
-            || result.artifact.0 != registered_artifact.as_bytes()
+        if result.artifact.0 != registered_artifact.as_bytes()
             || result.registered_class.0 != registered.facts.class_id.as_bytes()
             || result.program.0 != registered.graph_ir_root.as_bytes()
             || result.tokenizer.0 != job.tokenizer_id.as_bytes()
-        {
-            return Err(PositiveSourceGeometryErrorV2::Binding);
-        }
-        // Strictly bounded normal-form program before any inventory expansion.
-        let program = class.decode_program().map_err(|_| PositiveSourceGeometryErrorV2::Binding)?;
-        preflight_inventory_v2(&program, limits)?;
-        let committed = program.blocks.iter().flat_map(|b| &b.nodes).filter(|n| n.commit).count();
-        if class.layout.commit_tiles.len() != committed
-            || class.layout.state_tiles.len() != program.states.len()
-            || class.layout.max_context == 0
-            || class.layout.max_context > program.history_bound
-            || class.layout.checkpoint_interval == 0
-            || class.layout.h_tile == 0
-        {
-            return Err(PositiveSourceGeometryErrorV2::Binding);
-        }
-        registered.check_program_v1().map_err(|_| PositiveSourceGeometryErrorV2::Binding)?;
-        let class_id = class.class_id(&registered_artifact);
-        if class_id != registered.facts.class_id
-            || registered.facts != PalwTirJobFactsV1::of(class, &program, class_id)
-            || class.graph_ir_root() != registered.graph_ir_root
-            || class.layout_digest() != registered.layout_digest
-            || class.tokenizer_id != registered.tokenizer_id
-            || registered.prim_set_id != Hash64::from_bytes(program.prim_set_id)
-            || registered.logits_vocab
-                != u32::try_from(program.blocks[program.schedule.post as usize].nodes[program.logits as usize].out.elements_at(1))
-                    .unwrap_or(u32::MAX)
-            || job.shape_profile_id != class_id
             || result.job.0 != job.job_id.as_bytes()
             || result.execution.0 != job.context_hash().as_bytes()
             || result.input.0 != job.prompt_token_ids_hash.as_bytes()
@@ -205,54 +168,14 @@ impl TirSourceGeometryV2 {
             || result.prefill != job.declared_prefill_tokens
             || result.decode != job.exact_decode_tokens
             || result.max_context != job.max_context_tokens
-            || Hash64::from_bytes(program.logits_scheme_id) != job.trace_scheme_id
         {
             return Err(PositiveSourceGeometryErrorV2::Binding);
         }
-        let positions = result
-            .prefill
-            .checked_add(result.decode.checked_sub(1).ok_or(PositiveSourceGeometryErrorV2::Binding)?)
-            .ok_or(PositiveSourceGeometryErrorV2::Budget)?;
-        if positions > class.layout.max_context || positions >= job.max_context_tokens {
-            return Err(PositiveSourceGeometryErrorV2::Budget);
-        }
-        let inventory = PalwTirInventoryIndexV1::new(&program).ok_or(PositiveSourceGeometryErrorV2::Binding)?;
-        if inventory.leaf_count() > limits.max_inventory_leaves {
-            return Err(PositiveSourceGeometryErrorV2::Budget);
-        }
-        Ok(Self {
-            result: result.id(),
-            case: result.case_id(),
-            service: result.service_contract,
-            artifact: result.artifact,
-            input: result.input,
-            prefill: result.prefill,
-            input_form: registered.facts.prompt_ids_form(network_prompt_form),
-            program,
-            inventory,
-            max_units_per_range: limits.max_units_per_range,
-        })
+        let catalog = TirSourceCatalogV2::derive(class, registered, registered_artifact, job, network_prompt_form, limits)?;
+        Ok(Self { result: result.id(), case: result.case_id(), service: result.service_contract, catalog })
     }
     pub fn result_id(&self) -> ResultId {
         self.result
-    }
-    pub fn input_form(&self) -> PalwPromptIdsFormV1 {
-        self.input_form
-    }
-    pub fn source_root(&self, kind: SourceKind) -> Digest {
-        match kind {
-            SourceKind::ArtifactInventory => self.artifact,
-            SourceKind::Input => self.input,
-        }
-    }
-    pub fn source_units(&self, kind: SourceKind) -> u64 {
-        match kind {
-            SourceKind::ArtifactInventory => u64::from(self.inventory.leaf_count()),
-            SourceKind::Input => match self.input_form {
-                PalwPromptIdsFormV1::Flat => 1,
-                PalwPromptIdsFormV1::MerkleV1 => prompt_ids_tile_count_v1(u64::from(self.prefill)).unwrap_or(0),
-            },
-        }
     }
     pub fn validate_request(&self, request: &SourceRequest) -> Result<(), PositiveSourceGeometryErrorV2> {
         if request.case != self.case || request.contract != self.service || request.source != self.source_root(request.kind) {
@@ -267,46 +190,6 @@ impl TirSourceGeometryV2 {
             return Err(PositiveSourceGeometryErrorV2::Budget);
         }
         Ok(())
-    }
-    pub fn unit_bound(&self, kind: SourceKind, index: u64) -> Result<G14UnitBoundV2, PositiveSourceGeometryErrorV2> {
-        let source_units = self.source_units(kind);
-        if index >= source_units {
-            return Err(PositiveSourceGeometryErrorV2::Binding);
-        }
-        let (data, body) = match kind {
-            SourceKind::ArtifactInventory => {
-                let leaf = u32::try_from(index).map_err(|_| PositiveSourceGeometryErrorV2::Binding)?;
-                let (param, layer, _, len) = self.inventory.piece_of(leaf).ok_or(PositiveSourceGeometryErrorV2::Binding)?;
-                let name = &self.program.params[usize::from(param)].name;
-                let path = palw_artifact_opening_path_len_v1(self.inventory.leaf_count(), leaf)
-                    .ok_or(PositiveSourceGeometryErrorV2::Binding)?;
-                let body = palw_artifact_operand_borsh_len_v1(name.len(), layer.is_some(), len as usize)
-                    .checked_add(12)
-                    .and_then(|n| path.checked_mul(64).and_then(|p| n.checked_add(p)))
-                    .ok_or(PositiveSourceGeometryErrorV2::Budget)?;
-                (u64::from(len), body)
-            }
-            SourceKind::Input => match self.input_form {
-                PalwPromptIdsFormV1::Flat => {
-                    let bytes = u64::from(self.prefill).checked_mul(4).ok_or(PositiveSourceGeometryErrorV2::Budget)?;
-                    (bytes, bytes.checked_add(4).ok_or(PositiveSourceGeometryErrorV2::Budget)?)
-                }
-                PalwPromptIdsFormV1::MerkleV1 => {
-                    let lanes =
-                        prompt_ids_tile_len_v1(u64::from(self.prefill), index).ok_or(PositiveSourceGeometryErrorV2::Binding)? as u64;
-                    let bytes = lanes.checked_mul(4).ok_or(PositiveSourceGeometryErrorV2::Budget)?;
-                    let path = step_leg_max_opening_siblings_v1(source_units) as u64;
-                    (
-                        bytes,
-                        bytes
-                            .checked_add(PALW_PROMPT_IDS_OPENING_HEADER_BYTES)
-                            .and_then(|n| path.checked_mul(64).and_then(|p| n.checked_add(p)))
-                            .ok_or(PositiveSourceGeometryErrorV2::Budget)?,
-                    )
-                }
-            },
-        };
-        Ok(G14UnitBoundV2 { source_units, max_unit_bytes: body, max_data_bytes: data })
     }
     pub fn request_bound(&self, request: &SourceRequest) -> Result<G14UnitBoundV2, PositiveSourceGeometryErrorV2> {
         self.validate_request(request)?;
@@ -364,6 +247,209 @@ impl TirSourceGeometryV2 {
             _ => return Err(PositiveSourceGeometryErrorV2::Binding),
         }
         Ok(bound)
+    }
+}
+
+/// Exact result-free inventory summary, not an accepted service or lease.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SourceCatalogQuoteV2 {
+    pub digest: Digest,
+    pub units: u64,
+    pub data_bytes: u64,
+    pub opening_bytes: u64,
+    pub max_unit_bytes: u64,
+}
+struct CatalogHasherV2(blake2b_simd::State);
+impl std::io::Write for CatalogHasherV2 {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.update(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+impl TirSourceCatalogV2 {
+    /// Stream the canonical full source inventory without allocating a Vec of
+    /// units. The cap is checked before enumeration. Every ordinal and exact
+    /// G14 opening bound is bound; independent roles do not reset this catalog.
+    pub fn quote(
+        &self,
+        assignment: misaka_palw_positive_contract::assignment::AssignmentId,
+        context: Digest,
+        source_policy: Digest,
+        max_entries: u32,
+    ) -> Result<SourceCatalogQuoteV2, PositiveSourceGeometryErrorV2> {
+        let kinds = [SourceKind::ArtifactInventory, SourceKind::Input];
+        let units = self
+            .source_units(kinds[0])
+            .checked_add(self.source_units(kinds[1]))
+            .filter(|n| *n > 0 && *n <= u64::from(max_entries))
+            .ok_or(PositiveSourceGeometryErrorV2::Budget)?;
+        let mut writer = CatalogHasherV2(
+            blake2b_simd::Params::new().hash_length(64).key(b"misaka/positive/assignment-source-catalog/v2/r1").to_state(),
+        );
+        borsh::to_writer(&mut writer, &(2u16, 1u16, assignment, context, source_policy, units))
+            .map_err(|_| PositiveSourceGeometryErrorV2::Binding)?;
+        let mut quote = SourceCatalogQuoteV2 { digest: Digest([0; 64]), units, data_bytes: 0, opening_bytes: 0, max_unit_bytes: 0 };
+        for kind in kinds {
+            let count = self.source_units(kind);
+            borsh::to_writer(&mut writer, &(kind, self.source_root(kind), count))
+                .map_err(|_| PositiveSourceGeometryErrorV2::Binding)?;
+            for index in 0..count {
+                let bound = self.unit_bound(kind, index)?;
+                borsh::to_writer(&mut writer, &(index, bound.max_data_bytes, bound.max_unit_bytes))
+                    .map_err(|_| PositiveSourceGeometryErrorV2::Binding)?;
+                quote.data_bytes = quote.data_bytes.checked_add(bound.max_data_bytes).ok_or(PositiveSourceGeometryErrorV2::Budget)?;
+                quote.opening_bytes =
+                    quote.opening_bytes.checked_add(bound.max_unit_bytes).ok_or(PositiveSourceGeometryErrorV2::Budget)?;
+                quote.max_unit_bytes = quote.max_unit_bytes.max(bound.max_unit_bytes);
+            }
+        }
+        quote.digest = Digest(writer.0.finalize().as_bytes().try_into().expect("64-byte digest"));
+        Ok(quote)
+    }
+    /// Checks complete native registry/program/layout/job inputs. No synthetic
+    /// MinerResultCommit, zero CaseId or placeholder service is constructed.
+    #[allow(clippy::too_many_arguments)]
+    pub fn derive(
+        class: &PalwTirClassV1,
+        registered: &PalwTirClassRecordV1,
+        registered_artifact: Hash64,
+        job: &PalwJobContextV2,
+        network_prompt_form: PalwPromptIdsFormV1,
+        limits: GeometryLimitsV2,
+    ) -> Result<Self, PositiveSourceGeometryErrorV2> {
+        let cap = limits.max_program_bytes.min(misaka_palw_tir::program::MAX_PROGRAM_BYTES as u64);
+        if cap == 0
+            || limits.max_units_per_range == 0
+            || class.program.len() as u64 > cap
+            || registered.program.len() as u64 > cap
+            || class.layout.commit_tiles.len() as u64 > cap / 4
+            || class.layout.state_tiles.len() as u64 > cap / 4
+            || job.network_id.is_empty()
+            || job.network_id.len() > PALW_V2_MAX_NETWORK_ID_BYTES
+        {
+            return Err(PositiveSourceGeometryErrorV2::Budget);
+        }
+        // Registration authenticates its own tokenizer via class identity.
+        // Canonical jobs may use a zero tokenizer independently of this
+        // registered identity. This reader creates no job authority.
+        if class.version != PALW_TIR_CLASS_VERSION_V1
+            || class.layout.version != PALW_TIR_LAYOUT_VERSION_V1
+            || registered.version != PALW_TIR_CLASS_RECORD_VERSION_V1
+            || job.version != 2
+            || registered.program.as_slice() != class.program.as_slice()
+        {
+            return Err(PositiveSourceGeometryErrorV2::Binding);
+        }
+        // Strictly bounded normal-form program before any inventory expansion.
+        let program = class.decode_program().map_err(|_| PositiveSourceGeometryErrorV2::Binding)?;
+        preflight_inventory_v2(&program, limits)?;
+        let committed = program.blocks.iter().flat_map(|b| &b.nodes).filter(|n| n.commit).count();
+        if class.layout.commit_tiles.len() != committed
+            || class.layout.state_tiles.len() != program.states.len()
+            || class.layout.max_context == 0
+            || class.layout.max_context > program.history_bound
+            || class.layout.checkpoint_interval == 0
+            || class.layout.h_tile == 0
+        {
+            return Err(PositiveSourceGeometryErrorV2::Binding);
+        }
+        registered.check_program_v1().map_err(|_| PositiveSourceGeometryErrorV2::Binding)?;
+        let class_id = class.class_id(&registered_artifact);
+        if class_id != registered.facts.class_id
+            || registered.facts != PalwTirJobFactsV1::of(class, &program, class_id)
+            || class.graph_ir_root() != registered.graph_ir_root
+            || class.layout_digest() != registered.layout_digest
+            || class.tokenizer_id != registered.tokenizer_id
+            || registered.prim_set_id != Hash64::from_bytes(program.prim_set_id)
+            || registered.logits_vocab
+                != u32::try_from(program.blocks[program.schedule.post as usize].nodes[program.logits as usize].out.elements_at(1))
+                    .unwrap_or(u32::MAX)
+            || job.shape_profile_id != class_id
+            || Hash64::from_bytes(program.logits_scheme_id) != job.trace_scheme_id
+        {
+            return Err(PositiveSourceGeometryErrorV2::Binding);
+        }
+        let positions = job
+            .declared_prefill_tokens
+            .checked_add(job.exact_decode_tokens.checked_sub(1).ok_or(PositiveSourceGeometryErrorV2::Binding)?)
+            .ok_or(PositiveSourceGeometryErrorV2::Budget)?;
+        if positions > class.layout.max_context || positions >= job.max_context_tokens {
+            return Err(PositiveSourceGeometryErrorV2::Budget);
+        }
+        let inventory = PalwTirInventoryIndexV1::new(&program).ok_or(PositiveSourceGeometryErrorV2::Binding)?;
+        if inventory.leaf_count() > limits.max_inventory_leaves {
+            return Err(PositiveSourceGeometryErrorV2::Budget);
+        }
+        Ok(Self {
+            artifact: Digest(registered_artifact.as_bytes()),
+            input: Digest(job.prompt_token_ids_hash.as_bytes()),
+            prefill: job.declared_prefill_tokens,
+            input_form: registered.facts.prompt_ids_form(network_prompt_form),
+            program,
+            inventory,
+            max_units_per_range: limits.max_units_per_range,
+        })
+    }
+    pub fn input_form(&self) -> PalwPromptIdsFormV1 {
+        self.input_form
+    }
+    pub fn source_root(&self, kind: SourceKind) -> Digest {
+        match kind {
+            SourceKind::ArtifactInventory => self.artifact,
+            SourceKind::Input => self.input,
+        }
+    }
+    pub fn source_units(&self, kind: SourceKind) -> u64 {
+        match kind {
+            SourceKind::ArtifactInventory => u64::from(self.inventory.leaf_count()),
+            SourceKind::Input => match self.input_form {
+                PalwPromptIdsFormV1::Flat => 1,
+                PalwPromptIdsFormV1::MerkleV1 => prompt_ids_tile_count_v1(u64::from(self.prefill)).unwrap_or(0),
+            },
+        }
+    }
+    pub fn unit_bound(&self, kind: SourceKind, index: u64) -> Result<G14UnitBoundV2, PositiveSourceGeometryErrorV2> {
+        let source_units = self.source_units(kind);
+        if index >= source_units {
+            return Err(PositiveSourceGeometryErrorV2::Binding);
+        }
+        let (data, body) = match kind {
+            SourceKind::ArtifactInventory => {
+                let leaf = u32::try_from(index).map_err(|_| PositiveSourceGeometryErrorV2::Binding)?;
+                let (param, layer, _, len) = self.inventory.piece_of(leaf).ok_or(PositiveSourceGeometryErrorV2::Binding)?;
+                let name = &self.program.params[usize::from(param)].name;
+                let path = palw_artifact_opening_path_len_v1(self.inventory.leaf_count(), leaf)
+                    .ok_or(PositiveSourceGeometryErrorV2::Binding)?;
+                let body = palw_artifact_operand_borsh_len_v1(name.len(), layer.is_some(), len as usize)
+                    .checked_add(12)
+                    .and_then(|n| path.checked_mul(64).and_then(|p| n.checked_add(p)))
+                    .ok_or(PositiveSourceGeometryErrorV2::Budget)?;
+                (u64::from(len), body)
+            }
+            SourceKind::Input => match self.input_form {
+                PalwPromptIdsFormV1::Flat => {
+                    let bytes = u64::from(self.prefill).checked_mul(4).ok_or(PositiveSourceGeometryErrorV2::Budget)?;
+                    (bytes, bytes.checked_add(4).ok_or(PositiveSourceGeometryErrorV2::Budget)?)
+                }
+                PalwPromptIdsFormV1::MerkleV1 => {
+                    let lanes =
+                        prompt_ids_tile_len_v1(u64::from(self.prefill), index).ok_or(PositiveSourceGeometryErrorV2::Binding)? as u64;
+                    let bytes = lanes.checked_mul(4).ok_or(PositiveSourceGeometryErrorV2::Budget)?;
+                    let path = step_leg_max_opening_siblings_v1(source_units) as u64;
+                    (
+                        bytes,
+                        bytes
+                            .checked_add(PALW_PROMPT_IDS_OPENING_HEADER_BYTES)
+                            .and_then(|n| path.checked_mul(64).and_then(|p| n.checked_add(p)))
+                            .ok_or(PositiveSourceGeometryErrorV2::Budget)?,
+                    )
+                }
+            },
+        };
+        Ok(G14UnitBoundV2 { source_units, max_unit_bytes: body, max_data_bytes: data })
     }
 }
 

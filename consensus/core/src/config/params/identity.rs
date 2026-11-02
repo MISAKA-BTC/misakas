@@ -1966,6 +1966,10 @@ impl Params {
             h.write(b"palw_positive_assignment_v2");
             h.write(fence.activation.daa_score().to_le_bytes());
             h.write(fence.policy.id().0);
+            if let Some(preimages) = &fence.native_preimages {
+                h.write(b"assignment-native-preimages-v2");
+                h.write(preimages.root().as_byte_slice());
+            }
         }
         if let Some(fence) = &self.palw_funded_execution_v11 {
             h.write(b"palw_funded_execution_v11");
@@ -5641,6 +5645,10 @@ impl Params {
             h.write(b"palw_positive_assignment_v2");
             h.write(fence.activation.daa_score().to_le_bytes());
             h.write(fence.policy.id().0);
+            if let Some(preimages) = &fence.native_preimages {
+                h.write(b"assignment-native-preimages-v2");
+                h.write(preimages.root().as_byte_slice());
+            }
         }
         if let Some(fence) = palw_funded_execution_v11 {
             h.write(b"palw_funded_execution_v11");

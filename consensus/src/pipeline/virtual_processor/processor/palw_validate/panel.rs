@@ -510,7 +510,7 @@ impl VirtualStateProcessor {
                 }
             }
             Obj::OptimisticLicensed { claim, receipts } => {
-                if state.claim(&*claim).is_some_and(|c| state_params.model_panel_one_governs_v1(c.accepted_daa)) {
+                if state.claim(claim).is_some_and(|c| state_params.model_panel_one_governs_v1(c.accepted_daa)) {
                     return Err("G14 model claims require a full-scope single-seat receipt".into());
                 }
                 if !self.palw_verification_s2_at(point.daa_score) {

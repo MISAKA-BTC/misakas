@@ -5,6 +5,7 @@
 //! The second phase must independently resolve notice/origin, current roles,
 //! policy, funding, resource leases and the canonical TransitionBuilder rows.
 use super::BondSpendFilter;
+use crate::model::services::reachability::ReachabilityService;
 use crate::{
     pipeline::virtual_processor::VirtualStateProcessor,
     processes::transaction_validator::tx_validation_in_utxo_context::TxValidationFlags,
@@ -392,5 +393,103 @@ mod tests {
                 assert!(matches!(result, Err(NativeContextErrorV2::Origin)), "mode {mode}");
             }
         }
+    }
+}
+
+/// Explicit diagnosis at the actual accepted-carrier boundary. This is neither
+/// an accepted Assignment nor a saved pass; no status can authorize a write.
+#[derive(Debug)]
+pub(in crate::pipeline::virtual_processor) enum AssignmentIngressPrerequisiteV2 {
+    InactiveAssignmentPolicy,
+    MissingNativePreimages,
+    InvalidNativePreimages,
+    WrongNativeRuleScope,
+    SignedAnchorNotAncestor,
+    MissingActualCertificationPolicy,
+    PendingFraudReservationOwner,
+    NativeAssignmentCheckpointOwner,
+}
+impl PositiveCarrierPhaseTwoV2 {
+    /// The old0--7 codec is not widened. New operations use their own native
+    /// finite policy, scan before any inner allocation, acquire a real lease,
+    /// and retain original transaction order. Semantic rejection leaves the
+    /// ordinary native transaction effects alone; local capacity retries.
+    pub(in crate::pipeline::virtual_processor) fn inspect_assignment_ingress_v2(
+        &self,
+        processor: &VirtualStateProcessor,
+    ) -> Result<(), NativeCoverageV1> {
+        use kaspa_consensus_core::palw_positive_court_v2::coordinator::assignment_body::{
+            AssignmentBodyLimitsV2, PositiveAssignmentNativeOperationV2, decode_assignment_body_v2, scan_assignment_body_v2,
+        };
+        for carrier in &self.carriers {
+            let tx = carrier.transaction();
+            if !kaspa_consensus_core::palw_lifecycle_objects_v2::palw_positive_lifecycle_payload_v2(&tx.payload)
+                || !matches!(tx.payload.get(7), Some(8..=13))
+            {
+                continue;
+            }
+            let point = carrier.prefix.accepting;
+            let Some(params) = processor.palw_positive_assignment_params_v2.as_ref() else {
+                continue;
+            };
+            let Some(fence) = params.palw_positive_assignment_v2_at(point.daa_score) else {
+                continue;
+            };
+            let Ok(limits) = AssignmentBodyLimitsV2::from_policy(&fence.policy) else {
+                continue;
+            };
+            let body = &tx.payload[3..];
+            let Ok(summary) = scan_assignment_body_v2(body, limits) else {
+                continue;
+            };
+            let _decode_lease = require_positive_carrier_lease_v2(reserve_native_requests_v1(summary.heap)?)?;
+            let Ok(decoded) = decode_assignment_body_v2(body, limits) else {
+                continue;
+            };
+            let prerequisite: Result<(), AssignmentIngressPrerequisiteV2> = (|| {
+                let preimages = fence.native_preimages.as_ref().ok_or(AssignmentIngressPrerequisiteV2::MissingNativePreimages)?;
+                preimages.validate(&fence.policy).map_err(|_| AssignmentIngressPrerequisiteV2::InvalidNativePreimages)?;
+                if let PositiveAssignmentNativeOperationV2::AcceptCanonicalAssignment { bundle, .. } = &decoded.operation {
+                    let scope = params
+                        .palw_positive_assignment_rule_scope_v2_at(point.daa_score)
+                        .ok_or(AssignmentIngressPrerequisiteV2::InactiveAssignmentPolicy)?;
+                    if bundle.terms.ruleset.0 != scope.ruleset().as_bytes() {
+                        return Err(AssignmentIngressPrerequisiteV2::WrongNativeRuleScope);
+                    }
+                    let anchor = BlockHash::from_bytes(bundle.terms.branch_anchor.0);
+                    if !processor
+                        .reachability_service
+                        .try_is_chain_ancestor_of(anchor, carrier.prefix.selected_parent)
+                        .unwrap_or(false)
+                    {
+                        return Err(AssignmentIngressPrerequisiteV2::SignedAnchorNotAncestor);
+                    }
+                    let clock = kaspa_consensus_core::palw_positive_assignment_certification_v2::AssignmentGateCClockV2::resolve(
+                        params,
+                        point.daa_score,
+                        // Conservatively quote every permitted later Result
+                        // acceptance clock, never use Assignment intake as P's
+                        // commit. This still grants no native reservation.
+                        bundle.terms.result_before_daa,
+                    )
+                    .map_err(|_| AssignmentIngressPrerequisiteV2::MissingActualCertificationPolicy)?;
+                    match clock.require_complete_native_bound() {
+                        Err(_) => return Err(AssignmentIngressPrerequisiteV2::PendingFraudReservationOwner),
+                        Ok(impossible) => match impossible {},
+                    }
+                }
+                Err(AssignmentIngressPrerequisiteV2::NativeAssignmentCheckpointOwner)
+            })();
+            if let Err(why) = prerequisite {
+                kaspa_core::info!(
+                    "[palw-assignment] native carrier {} at accepted ordinal {} op{} not admitted: {:?}",
+                    tx.id(),
+                    carrier.prefix.accepted_transactions,
+                    summary.kind,
+                    why
+                );
+            }
+        }
+        Ok(())
     }
 }

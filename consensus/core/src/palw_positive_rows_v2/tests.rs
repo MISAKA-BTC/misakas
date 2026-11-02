@@ -224,6 +224,15 @@ pub(super) fn row_kind(body: &NativeRowBody) -> u8 {
         NativeRowBody::Funding(_) => 7,
         NativeRowBody::PacketReceipt(_) => 8,
         NativeRowBody::JournalHead(_) => 9,
+        NativeRowBody::Assignment(_) => 10,
+        NativeRowBody::AssignmentNonce(_) => 11,
+        NativeRowBody::AssignmentUse(_) => 12,
+        NativeRowBody::AssignmentFunding(_) => 13,
+        NativeRowBody::AssignmentSettlement(_) => 14,
+        NativeRowBody::AssignmentRole(_) => 15,
+        NativeRowBody::AssignmentJournalHead(_) => 16,
+        NativeRowBody::AssignmentJournalFrame(_) => 17,
+        NativeRowBody::AssignmentProverFunding(_) => 18,
     }
 }
 

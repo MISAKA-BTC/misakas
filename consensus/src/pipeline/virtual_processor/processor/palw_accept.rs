@@ -451,6 +451,7 @@ impl VirtualStateProcessor {
             .into_iter()
             .map(|(object, carrier_fee)| PalwCarriedObjectV1 {
                 object,
+                native_carrier: None,
                 carrier_fee,
                 fp_answer: None,
                 history_pledge: None,
@@ -488,6 +489,7 @@ impl VirtualStateProcessor {
             .into_iter()
             .map(|(object, refund)| PalwCarriedObjectV1 {
                 object,
+                native_carrier: None,
                 carrier_fee: PALW_RENT_UNPRICED,
                 fp_answer: None,
                 history_pledge: None,
@@ -852,6 +854,7 @@ impl VirtualStateProcessor {
             );
             let PalwCarriedObjectV1 {
                 object,
+                native_carrier: _,
                 carrier_fee,
                 fp_answer,
                 history_pledge,
@@ -2297,6 +2300,7 @@ impl VirtualStateProcessor {
             round_permit_uses: Vec::new(),
             round_fee_incomes: Vec::new(),
             funded_escrow_settlements: Vec::new(),
+            assignment_settlements: Vec::new(),
             // G14 r5: settled funded-escrow rows retire `2 × pruning_depth` DAA after their settling spend, past the route's fence.
             funded_escrow_retention_daa: self
                 .palw_tir_public_conviction_v1
@@ -3052,10 +3056,10 @@ impl VirtualStateProcessor {
                 None => (None, Some(carried.carrier)),
             }
         };
-        self.palw_v2_derived_panel_bindings(state, block, block_daa)?
+        let mut carried = self.palw_v2_derived_panel_bindings(state, block, block_daa)?
             .into_iter()
             // Nothing carried a derived binding, so nothing owes rent for it.
-            .map(|object| Ok(PalwCarriedObjectV1 { object, carrier_fee: PALW_RENT_UNPRICED, fp_answer: None, history_pledge: None, tir_public_original: None, funded_original: None, original_binding: None, custody_delegation: None, refund: None, unrefundable: None }))
+            .map(|object| Ok(PalwCarriedObjectV1 { object, native_carrier: None, carrier_fee: PALW_RENT_UNPRICED, fp_answer: None, history_pledge: None, tir_public_original: None, funded_original: None, original_binding: None, custody_delegation: None, refund: None, unrefundable: None }))
             .chain(extraction.objects.into_iter().chain(evaluation.objects).filter_map(|carried| {
                 let fp_answer = if let Some(tx) = txs.iter().find(|tx| tx.id() == carried.carrier && tx.subnetwork_id == kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT && tx.payload.starts_with(b"FPA1")) {
                     if !answer_armed { return None; }
@@ -3071,6 +3075,7 @@ impl VirtualStateProcessor {
                     _ => None,
                 };
                 Some(Ok(PalwCarriedObjectV1 {
+                    native_carrier: Some(carried.carrier),
                     carrier_fee: fee_of(carried.carrier, tir_public_carriers.contains_key(&carried.carrier)),
                     fp_answer,
                     history_pledge,
@@ -3089,6 +3094,7 @@ impl VirtualStateProcessor {
                         | kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::TirPublicGrantReadyV1 { .. }
                 );
                 Ok(PalwCarriedObjectV1 {
+                    native_carrier: Some(carried.carrier),
                     carrier_fee: fee_of(carried.carrier, tir_route),
                     fp_answer: None,
                     history_pledge: None,
@@ -3101,8 +3107,22 @@ impl VirtualStateProcessor {
                     object: carried.object,
                 })
             }))
-            .collect::<Result<Vec<_>, kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1>>()
-            .map_err(Into::into)
+            .collect::<Result<Vec<_>, kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1>>()?;
+        if self.palw_positive_assignment_params_v2.as_ref()
+            .is_some_and(|params| params.palw_positive_assignment_v2_at(block_daa).is_some())
+        {
+            // The stable sort may allocate at most one full element buffer.
+            // Reserve that actual typed scratch before the sort, not afterward.
+            let sort_bytes = (carried.len() as u64).checked_mul(std::mem::size_of::<PalwCarriedObjectV1>() as u64)
+                .ok_or_else(|| kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::overflow::<Self>(
+                    "Assignment accepted-prefix sort"))?;
+            let _sort_lease = kaspa_consensus_core::palw_native_resource_v1::reserve_native_requests_v1(sort_bytes)?
+                .ok_or_else(|| kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
+                    "Assignment accepted-prefix sort", "actual native capacity lease is not armed"))?;
+            carried.sort_by_key(|object| object.native_carrier.map_or(0,|id|
+                txs.iter().position(|tx|tx.id()==id).map_or(usize::MAX,|n|n+1)));
+        }
+        Ok(carried)
     }
 
     /// **RFC-0009 stage D: the proof of one PALW collection against the header of `block`.**

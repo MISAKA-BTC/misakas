@@ -9,6 +9,40 @@ use misaka_palw_positive_contract::{identity::Digest, native::ruleset_id};
 pub struct PositiveAssignmentFenceV2 {
     pub activation: ForkActivation,
     pub policy: AssignmentPolicyV2,
+    /// Complete finite native price/physical preimages. None is a probe only,
+    /// never an executable funding or capacity promise.
+    pub native_preimages: Option<AssignmentNativePreimagesV2>,
+}
+/// Immutable, versioned native funding inputs. Actual derived usage, leases,
+/// source/Case/P owners and current coins remain separately required.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize)]
+pub struct AssignmentNativePreimagesV2 {
+    pub assignment_fees: crate::palw_positive_assignment_funds_v2::AssignmentFeeScheduleV2,
+    pub physical: crate::palw_positive_assignment_funds_v2::AssignmentPhysicalProfileV2,
+}
+impl AssignmentNativePreimagesV2 {
+    pub fn root(&self) -> Hash64 {
+        Hash64::from_bytes(
+            blake2b_simd::Params::new()
+                .hash_length(64)
+                .key(b"misaka/positive/assignment-native-preimages/v2/r1")
+                .hash(&borsh::to_vec(self).expect("fixed native preimages"))
+                .as_bytes()
+                .try_into()
+                .expect("64-byte digest"),
+        )
+    }
+    pub fn validate(&self, policy: &AssignmentPolicyV2) -> Result<(), PalwModeV2Error> {
+        self.assignment_fees.validate().map_err(|_| PalwModeV2Error::Invalid("assignment fee preimage is invalid"))?;
+        self.physical.validate().map_err(|_| PalwModeV2Error::Invalid("assignment physical preimage is invalid"))?;
+        if self.assignment_fees.id() != policy.assignment_fee_schedule
+            || self.assignment_fees.reserve_id() != policy.reserve_schedule
+            || self.physical.id() != policy.physical_service_profile
+        {
+            return Err(PalwModeV2Error::Invalid("assignment native preimages differ from adopted policy"));
+        }
+        Ok(())
+    }
 }
 impl PositiveAssignmentFenceV2 {
     /// Use the unchanged r1 recipe. The actual fired-rule resolver below
@@ -88,6 +122,9 @@ impl Params {
             return Ok(());
         };
         fence.policy.validate_shape().map_err(|_| PalwModeV2Error::Invalid("assignment2 unsupported/non-finite policy"))?;
+        if let Some(preimages) = &fence.native_preimages {
+            preimages.validate(&fence.policy)?;
+        }
         let Some(positive) = self.palw_positive_court_v2.as_ref() else {
             return Err(PalwModeV2Error::Invalid("assignment2 requires the exact Positive policy"));
         };
