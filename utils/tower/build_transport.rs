@@ -1,5 +1,7 @@
 //! Shared postprocessing of pinned tonic-prost-build output. Fail closed if its
 //! service shape changes; protobuf definitions and all field tags remain intact.
+#[path = "build_wire_preflight.rs"]
+mod build_wire_preflight;
 use std::{fs, path::Path};
 
 pub fn budget_generated_transport(path: &Path, request: &str, response: &str) {
@@ -22,6 +24,12 @@ pub fn budget_generated_transport(path: &Path, request: &str, response: &str) {
         assert_eq!(source.matches(&old).count(), 1, "pinned generated service changed: {old}");
         source = source.replace(&old, &new);
     }
+    fs::write(path, source).expect("write adapted service");
+    budget_generated_messages(path);
+}
+
+pub fn budget_generated_messages(path: &Path) {
+    let source = fs::read_to_string(path).expect("read generated schema");
     // Emit capacity traversal adjacent to each generated struct/enum. This keeps
     // names in their original modules and follows nested Vec/Option/Box storage.
     let mut output = String::new();
@@ -81,5 +89,5 @@ pub fn budget_generated_transport(path: &Path, request: &str, response: &str) {
         }
     }
     assert!(item.is_none(), "unterminated generated protobuf type");
-    fs::write(path, output).expect("write budgeted generated transport");
+    fs::write(path, build_wire_preflight::instrument_source(&output)).expect("write budgeted generated transport");
 }

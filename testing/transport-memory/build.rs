@@ -18,5 +18,14 @@ fn main() {
         build_transport::budget_generated_transport(&destination.join(format!("{package}.rs")), req, res);
         println!("cargo:rerun-if-changed={dir}");
     }
+    tonic_prost_build::configure()
+        .build_client(false)
+        .build_server(false)
+        .out_dir(&out)
+        .compile_protos(&["fixtures/memory.proto"], &["fixtures"])
+        .unwrap();
+    build_transport::budget_generated_messages(&out.join("oom.memory.rs"));
+    println!("cargo:rerun-if-changed=fixtures/memory.proto");
     println!("cargo:rerun-if-changed=../../utils/tower/build_transport.rs");
+    println!("cargo:rerun-if-changed=../../utils/tower/build_wire_preflight.rs");
 }
