@@ -2210,7 +2210,7 @@ fn prune_foreign_retention_v1(
     pinned: &HashSet<Hash64>,
     now: std::time::SystemTime,
     max_files: usize,
-    chain_owed: impl Fn(&Hash64) -> bool,
+    chain_owed: impl Fn(&Hash64) -> Result<bool, String>,
 ) {
     let Ok(entries) = std::fs::read_dir(dir) else { return };
     let cutoff = now - std::time::Duration::from_secs(72 * 3600);
@@ -2223,8 +2223,16 @@ fn prune_foreign_retention_v1(
         let path = entry.path();
         // Cached duties are only an assist: a restart, cache eviction or a
         // reorg may leave them empty while the stored acceptance still owes DA.
-        if claim_of(&path).is_some_and(|claim| pinned.contains(&claim) || chain_owed(&claim)) {
-            continue;
+        if let Some(claim) = claim_of(&path) {
+            if pinned.contains(&claim) {
+                continue;
+            }
+            match chain_owed(&claim) {
+                Ok(false) => {}
+                // A cold/failed/changed read cannot discharge an obligation.
+                // Re-read next pass; no permanent unknown-claim pin is created.
+                Ok(true) | Err(_) => continue,
+            }
         }
         let Ok(meta) = entry.metadata() else { continue };
         let modified = meta.modified().unwrap_or(std::time::UNIX_EPOCH);
@@ -7823,19 +7831,10 @@ impl PalwPanelService {
         }
         let pinned = self.foreign_pinned.lock().unwrap().clone();
         let session = self.consensus_manager.consensus().unguarded_session();
-        let now_daa = session.get_virtual_daa_score();
-        let rcore = self.consensus_config.params.palw_rcore_plus_active_at(now_daa);
-        let income = self.consensus_config.params.palw_material_income_active_at(now_daa);
         prune_foreign_retention_v1(dir, &pinned, std::time::SystemTime::now(), FOREIGN_RETENTION_MAX_FILES, |claim| {
-            // Read the accepted obligation for EVERY retained file, including
-            // after cold start and for a Final claim no longer in the duty cache.
-            // Never reconstruct this from the earlier signed/header deadline.
-            (rcore
-                && session
-                    .palw_derived_artifacts_v1(*claim)
-                    .is_some_and(|(state, _, _)| kaspa_consensus_core::palw_da_rcore_v1::palw_da_material_owed_v1(&state, now_daa)))
-                || (income
-                    && session.palw_material_income_hold_until_v1(*claim).is_some_and(|until| until == u64::MAX || now_daa < until))
+            // One fallible, generation-checked borrowed read. Option getters
+            // merge absent claims with pressure/DB errors and cannot authorize GC.
+            session.palw_material_retention_owed_v1(*claim)
         });
     }
 

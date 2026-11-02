@@ -516,6 +516,13 @@ pub trait ConsensusApi: Send + Sync {
         None
     }
 
+    /// GC authorization from the current accepted native snapshot. Missing/cold
+    /// state, read errors and changing import/branch generations are errors, never
+    /// evidence that a retained claim is absent or its DA/payment obligation ended.
+    fn palw_material_retention_owed_v1(&self, _claim: kaspa_hashes::Hash64) -> Result<bool, String> {
+        Err("this consensus cannot authorize material GC".into())
+    }
+
     /// Coherent signed service terms, recovery state and native payment/tail
     /// authority. An unavailable view cannot discharge a provider obligation.
     fn palw_native_material_provider_authority_v3(

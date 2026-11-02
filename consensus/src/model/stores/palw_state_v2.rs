@@ -802,6 +802,19 @@ impl DbPalwStateV2Store {
         })
     }
 
+    /// Small durable identity + an already-authenticated resident Arc only.
+    /// Irreversible GC must not turn a cold allocation refusal into an absent claim.
+    pub(crate) fn load_tip_resident_v1(&self) -> StoreResult<Option<(BlockHash, Arc<NativeChainStateV1>)>> {
+        let Some((block, root)) = self.tip_key()? else { return Ok(None) };
+        if let Some((cached_block, cached_root, state)) = self.tip_cache.lock().as_ref()
+            && *cached_block == block
+            && *cached_root == root
+        {
+            return Ok(Some((block, Arc::clone(state))));
+        }
+        Err(StoreError::LocalResourceUnavailable("PALW GC snapshot is not resident; retry after the ordinary reader warms it".into()))
+    }
+
     /// **The tip, materialized ONCE per tip row** (audit M-7) — the read every `palw_*` RPC answer
     /// should take.
     ///
@@ -1031,6 +1044,8 @@ mod tests {
         let per_call = uncached.tip_bytes_decoded() / CALLS;
 
         let cached = DbPalwStateV2Store::new(db.clone(), CachePolicy::Count(16));
+        assert!(matches!(cached.load_tip_resident_v1(), Err(StoreError::LocalResourceUnavailable(_))));
+        assert_eq!(cached.tip_bytes_decoded(), 0, "GC does not trigger a cold materialization or turn its failure into absence");
         for _ in 0..CALLS {
             let (block, state) = cached.load_tip_cached(&p).unwrap().expect("the tip is there");
             assert_eq!(block, c1.block);
@@ -1043,6 +1058,12 @@ mod tests {
             cached.tip_bytes_decoded()
         );
         assert_eq!(cached.tip_bytes_decoded(), per_call, "the cache decoded the carriage more than once for one tip");
+        for _ in 0..CALLS {
+            let (at, resident) = cached.load_tip_resident_v1().unwrap().unwrap();
+            assert_eq!(at, c1.block);
+            assert_eq!(*resident, child);
+        }
+        assert_eq!(cached.tip_bytes_decoded(), per_call, "healthy GC borrows cached native state without decoding/cloning it");
         assert_eq!(uncached.tip_bytes_decoded(), per_call * CALLS, "the uncached path is the per-call cost this test measures");
 
         // **And it is keyed on the tip row, not on "we read once".** A second block moves the tip,
