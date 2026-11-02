@@ -8,6 +8,7 @@ use kaspa_consensus_core::{
         params::{DEVNET_PARAMS, ForkActivation},
     },
 };
+use kaspa_database::utils::DbLifetime;
 use std::sync::atomic::AtomicBool;
 
 fn fixture() -> (DbLifetime, Arc<DB>, Arc<ConsensusServices>) {
