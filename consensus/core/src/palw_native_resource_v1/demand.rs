@@ -1,6 +1,7 @@
 //! Bounded prototype demand ledger for native operations. It accounts trusted
 //! typed allocation requests; it never interprets that as physical allocator RSS.
 use super::*;
+use kaspa_core::memory_budget::{MemoryClass, MemoryLease, global_memory_budget};
 use std::sync::{Arc, Mutex, OnceLock};
 #[derive(Default)]
 struct OutstandingV1 {
@@ -15,8 +16,12 @@ pub struct NativeDemandLeaseV1 {
     checker: Arc<NativeDemandCheckerV1>,
     memory: u64,
     database: u64,
+    process: MemoryLease,
 }
 impl NativeDemandLeaseV1 {
+    pub fn materialized_v1(&self) {
+        self.process.materialized();
+    }
     /// Transfer part of this already admitted memory reservation to another
     /// owner. The sum of both tickets remains unchanged; database reservation
     /// stays with the original owner. Refusal changes neither ticket nor ledger.
@@ -24,7 +29,11 @@ impl NativeDemandLeaseV1 {
         let remaining = self.memory.checked_sub(amount).ok_or_else(|| {
             NativeCoverageV1::unsupported::<Self>("native owner ticket split", "transfer exceeds the owner's memory reservation")
         })?;
-        let transferred = Self { checker: Arc::clone(&self.checker), memory: amount, database: 0 };
+        let process = self
+            .process
+            .split(amount)
+            .map_err(|why| NativeCoverageV1::unsupported::<Self>("process byte ticket split", &why.to_string()))?;
+        let transferred = Self { checker: Arc::clone(&self.checker), memory: amount, database: 0, process };
         self.memory = remaining;
         Ok(transferred)
     }
@@ -36,8 +45,26 @@ impl NativeDemandLeaseV1 {
     /// ticket so tracking an unbounded walk does not itself allocate a second
     /// collection whose ownership would need another reservation.
     pub fn grow_memory_v1(&mut self, additional: u64) -> Result<(), NativeCoverageV1> {
+        self.grow_memory_phase_v1(additional, false)
+    }
+    /// For reviewed preallocation boundaries; seal with materialized_v1 once
+    /// the additional allocation exists. Legacy growth stays resident-accounted
+    /// until its caller has an audited materialization boundary.
+    pub fn grow_pending_memory_v1(&mut self, additional: u64) -> Result<(), NativeCoverageV1> {
+        self.grow_memory_phase_v1(additional, true)
+    }
+    fn grow_memory_phase_v1(&mut self, additional: u64, pending: bool) -> Result<(), NativeCoverageV1> {
         let total = self.memory.checked_add(additional).ok_or_else(|| NativeCoverageV1::overflow::<Self>("growing native owner"))?;
-        let mut extra = self.checker.reserve_requests_v1(additional, 0)?;
+        let mut extra = self.checker.reserve_requests_phase_v1(additional, 0, pending)?;
+        // Both tickets are unique and from the same process bank/class. Merge
+        // transfers the accepted extra bytes, with no second allocation charge.
+        let process = extra
+            .process
+            .split(additional)
+            .map_err(|why| NativeCoverageV1::unsupported::<Self>("process byte ticket growth", &why.to_string()))?;
+        self.process
+            .merge(process)
+            .map_err(|_| NativeCoverageV1::unsupported::<Self>("process byte ticket growth", "incompatible process byte owners"))?;
         self.memory = total;
         // The reservation is now owned by self. Dropping the temporary must
         // not return the transferred demand to the shared checker.
@@ -57,6 +84,14 @@ impl NativeDemandCheckerV1 {
         self.reserve_requests_v1(memory, database)
     }
     pub(crate) fn reserve_requests_v1(self: &Arc<Self>, memory: u64, database: u64) -> Result<NativeDemandLeaseV1, NativeCoverageV1> {
+        self.reserve_requests_phase_v1(memory, database, false)
+    }
+    fn reserve_requests_phase_v1(
+        self: &Arc<Self>,
+        memory: u64,
+        database: u64,
+        pending: bool,
+    ) -> Result<NativeDemandLeaseV1, NativeCoverageV1> {
         let mut state = self
             .state
             .lock()
@@ -69,10 +104,15 @@ impl NativeDemandCheckerV1 {
             .ok_or_else(|| NativeCoverageV1::overflow::<Self>("simultaneous logical DB requests"))?;
         if native_resource_admission_enabled_v1() {
             let quota = actual_hard_memory_quota_v1()?;
-            if next_memory > quota.headroom_bytes() {
+            // Already resident retained owners are in memory.current. Comparing
+            // next_memory against free space charges them twice and can hold
+            // all future work until an immutable cached state disappears. The
+            // shared process/host bank bounds the simultaneous promises; this
+            // physical probe admits only the increment about to allocate.
+            if memory > quota.headroom_bytes() {
                 return Err(NativeCoverageV1::unsupported::<NativeHardMemoryQuotaV1>(
                     "aggregate physical quota headroom",
-                    "all outstanding typed requests exceed currently observed enforced quota headroom",
+                    "new typed request exceeds currently observed enforced quota headroom",
                 ));
             }
         }
@@ -82,9 +122,15 @@ impl NativeDemandCheckerV1 {
                 "trusted typed requests plus outstanding operations exceed declared logical capacity",
             ));
         }
+        let process = if pending {
+            global_memory_budget().try_reserve(MemoryClass::Native, memory)
+        } else {
+            global_memory_budget().try_reserve_retained(MemoryClass::Native, memory)
+        }
+        .map_err(|why| NativeCoverageV1::unsupported::<Self>("process-wide native byte budget", &why.to_string()))?;
         state.memory = next_memory;
         state.database = next_database;
-        Ok(NativeDemandLeaseV1 { checker: Arc::clone(self), memory, database })
+        Ok(NativeDemandLeaseV1 { checker: Arc::clone(self), memory, database, process })
     }
     pub fn outstanding(&self) -> (u64, u64) {
         let state = self.state.lock().expect("native demand ledger lock");
@@ -233,9 +279,6 @@ pub fn reserve_native_wire_v1(
     point: BlockHash,
     preflight: &super::wire::NativeWirePreflightV1,
 ) -> Result<Option<NativeDemandLeaseV1>, NativeCoverageV1> {
-    if !native_logical_admission_enabled_v1() && !native_resource_admission_enabled_v1() {
-        return Ok(None);
-    }
     let memory = preflight.memory_requests_v1().map_err(|why| {
         NativeCoverageV1::unsupported::<super::wire::NativeWirePreflightV1>("actual incoming Borsh shape", &why.to_string())
     })?;
@@ -258,7 +301,7 @@ pub fn reserve_native_wire_v1(
         )
         .map_err(|why| NativeCoverageV1::unsupported::<NativeHardMemoryQuotaV1>("actual incoming physical quota", &why))?;
     }
-    LOGICAL.get().and_then(Option::as_ref).map(|checker| checker.reserve_requests_v1(memory, 0)).transpose()
+    reserve_native_requests_phase_v1(memory, true)
 }
 
 /// Logical request reservation for owner-audited native consumers. The caller
@@ -267,13 +310,34 @@ pub fn reserve_native_wire_v1(
 /// establish its actual schema bound before construction and retain the lease
 /// through every owning cache/consumer; raw encoded lengths are not that bound.
 pub fn reserve_native_requests_v1(memory: u64) -> Result<Option<NativeDemandLeaseV1>, NativeCoverageV1> {
+    reserve_native_requests_phase_v1(memory, false)
+}
+/// A reviewed construction boundary: callers seal the returned lease only
+/// after its allocation exists, then retain it through the last owning value.
+pub fn reserve_native_pending_requests_v1(memory: u64) -> Result<Option<NativeDemandLeaseV1>, NativeCoverageV1> {
+    reserve_native_requests_phase_v1(memory, true)
+}
+fn reserve_native_requests_phase_v1(memory: u64, pending: bool) -> Result<Option<NativeDemandLeaseV1>, NativeCoverageV1> {
     if !native_logical_admission_enabled_v1() && !native_resource_admission_enabled_v1() {
-        return Ok(None);
+        // Audited typed requests also participate in the process budget on the
+        // ordinary node. This is not the optional strict schema/DB capability.
+        // A legacy caller with no bound (zero) stays explicitly untracked.
+        if memory == 0 {
+            return Ok(None);
+        }
+        static DEFAULT: OnceLock<Arc<NativeDemandCheckerV1>> = OnceLock::new();
+        let checker = DEFAULT.get_or_init(|| {
+            NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 {
+                memory_bytes: global_memory_budget().snapshot().limit_bytes,
+                database_bytes: u64::MAX,
+            })
+        });
+        return checker.reserve_requests_phase_v1(memory, 0, pending).map(Some);
     }
     let checker = LOGICAL.get().and_then(Option::as_ref).ok_or_else(|| {
         NativeCoverageV1::unsupported::<NativeDemandCheckerV1>("native consumer reservation", "capacity checker is not armed")
     })?;
-    checker.reserve_requests_v1(memory, 0).map(Some)
+    checker.reserve_requests_phase_v1(memory, 0, pending).map(Some)
 }
 
 #[cfg(test)]

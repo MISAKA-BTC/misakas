@@ -167,6 +167,9 @@ pub struct DbPalwStateV2Store {
     /// state. Shared through the `Arc` so a `clone()` of the store is the same cache, and holding
     /// the state itself in an `Arc` so a hit hands out a pointer rather than a copy of the tip.
     tip_cache: Arc<parking_lot::Mutex<Option<(BlockHash, Hash64, Arc<NativeChainStateV1>)>>>,
+    // Separate from the cache lock: only cold readers serialize, while hits
+    // and DB writers never wait for materialization under a cache mutex.
+    tip_load: Arc<parking_lot::Mutex<()>>,
     /// Carriage bytes this store has actually borsh-decoded for a tip read. A measurement, not a
     /// rule: it is what makes "the cache works" a number in a test rather than an assertion about
     /// code that was read.
@@ -187,6 +190,7 @@ pub struct DbPalwStateV2Store {
     /// misses, and the answer is re-materialized. Nothing invalidates this cache by hand, so
     /// nothing can forget to.
     pruning_snapshot_cache: Arc<parking_lot::Mutex<Option<(BlockHash, Hash64, Arc<NativeStateCarriageV1>)>>>,
+    pruning_snapshot_load: Arc<parking_lot::Mutex<()>>,
     /// Carriage bytes borsh-decoded for pruning-point snapshot serves. The same measurement as
     /// `tip_bytes_decoded`, for the lane that has no authentication in front of it at all.
     pruning_snapshot_bytes_decoded: Arc<std::sync::atomic::AtomicU64>,
@@ -234,8 +238,10 @@ impl DbPalwStateV2Store {
             uncertified_weightless: None,
             canonical_work_daa: None,
             tip_cache: Arc::new(parking_lot::Mutex::new(None)),
+            tip_load: Arc::new(parking_lot::Mutex::new(())),
             tip_bytes_decoded: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             pruning_snapshot_cache: Arc::new(parking_lot::Mutex::new(None)),
+            pruning_snapshot_load: Arc::new(parking_lot::Mutex::new(())),
             pruning_snapshot_bytes_decoded: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         }
     }
@@ -770,6 +776,19 @@ impl DbPalwStateV2Store {
         {
             return Ok(Some(Arc::clone(carriage)));
         }
+        let _load = self.pruning_snapshot_load.lock();
+        // Another cold reader may have populated the cache or the row may have
+        // moved while we waited. Re-read durable identity under the load gate.
+        let Some((block, root)) = self.pruning_snapshot_key()? else { return Ok(None) };
+        if block != pruning_point {
+            return Ok(None);
+        }
+        if let Some((cached_block, cached_root, carriage)) = self.pruning_snapshot_cache.lock().as_ref()
+            && *cached_block == block
+            && *cached_root == root
+        {
+            return Ok(Some(Arc::clone(carriage)));
+        }
         self.with_pinned_tip_v1(true, |record| {
             if record.block != pruning_point {
                 return Ok(None);
@@ -819,6 +838,14 @@ impl DbPalwStateV2Store {
         let Some((block, root)) = self.tip_key()? else {
             return Ok(None);
         };
+        if let Some((cached_block, cached_root, state)) = self.tip_cache.lock().as_ref()
+            && *cached_block == block
+            && *cached_root == root
+        {
+            return Ok(Some((block, Arc::clone(state))));
+        }
+        let _load = self.tip_load.lock();
+        let Some((block, root)) = self.tip_key()? else { return Ok(None) };
         if let Some((cached_block, cached_root, state)) = self.tip_cache.lock().as_ref()
             && *cached_block == block
             && *cached_root == root
@@ -1058,6 +1085,61 @@ mod tests {
         let (block, state) = moved.load_tip_cached(&p).unwrap().expect("the tip is there");
         assert_eq!(block, c2.block, "the cache answered from a tip the chain has left");
         assert_eq!(*state, grand);
+    }
+
+    #[test]
+    fn concurrent_cold_readers_share_one_materialization_and_error_retries_progress() {
+        let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let mut writer = DbPalwStateV2Store::new(db.clone(), CachePolicy::Count(16));
+        writer.reindex_if_stale().unwrap();
+        let p = params();
+        let c = ctx(0xB1, 100, 100);
+        let (state, _) = apply_palw_transition_v2(&PalwChainStateV2::genesis(), &p, &c, &registrations(), None).unwrap();
+        let mut batch = WriteBatch::default();
+        writer.set_tip_batch(&mut batch, c.block, &state).unwrap();
+        writer.set_pruning_snapshot_batch(&mut batch, c.block, &state).unwrap();
+        db.write(batch).unwrap();
+        let store = Arc::new(DbPalwStateV2Store::new(db.clone(), CachePolicy::Count(16)));
+        let tip_len = store.tip_record().unwrap().unwrap().carriage_borsh.len() as u64;
+        let snapshot_len = store.pruning_snapshot_record().unwrap().unwrap().carriage_borsh.len() as u64;
+        let barrier = Arc::new(std::sync::Barrier::new(8));
+        let answers: Vec<_> = std::thread::scope(|scope| {
+            let mut threads = Vec::new();
+            for _ in 0..8 {
+                let store = store.clone();
+                let barrier = barrier.clone();
+                let p = &p;
+                threads.push(scope.spawn(move || {
+                    barrier.wait();
+                    (
+                        store.load_tip_cached(p).unwrap().unwrap().1,
+                        store.load_pruning_snapshot_carriage_cached(p, c.block).unwrap().unwrap(),
+                    )
+                }));
+            }
+            threads.into_iter().map(|t| t.join().unwrap()).collect()
+        });
+        assert_eq!(store.tip_bytes_decoded(), tip_len);
+        assert_eq!(store.pruning_snapshot_bytes_decoded(), snapshot_len);
+        for answer in &answers {
+            assert!(Arc::ptr_eq(&answer.0, &answers[0].0));
+            assert!(Arc::ptr_eq(&answer.1, &answers[0].1));
+        }
+        // A failed cold decode must release the load gate. It is not cached;
+        // after the durable row is repaired, the same store makes progress.
+        let mut record = writer.tip_record().unwrap().unwrap();
+        let good = record.clone();
+        record.carriage_borsh.truncate(1);
+        let mut batch = WriteBatch::default();
+        writer.set_tip_record_batch(&mut batch, record).unwrap();
+        db.write(batch).unwrap();
+        *store.tip_cache.lock() = None;
+        assert!(store.load_tip_cached(&p).is_err());
+        assert!(store.load_tip_cached(&p).is_err());
+        let mut batch = WriteBatch::default();
+        writer.set_tip_record_batch(&mut batch, good).unwrap();
+        db.write(batch).unwrap();
+        assert_eq!(store.load_tip_cached(&p).unwrap().unwrap().0, c.block);
     }
 
     /// **A pruning-point snapshot serve costs one materialization per CAPTURED SNAPSHOT, and
