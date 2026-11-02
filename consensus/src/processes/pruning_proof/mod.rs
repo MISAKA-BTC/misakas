@@ -65,7 +65,7 @@ use super::window::WindowManager;
 
 /// Pruning proof manager internal errors
 #[derive(Error, Debug)]
-enum ProofInternalError {
+pub(crate) enum ProofInternalError {
     #[error("block at depth error: {0}")]
     BlockAtDepth(String),
 
@@ -548,21 +548,30 @@ impl PruningProofManager {
     }
 
     pub fn get_pruning_point_proof(&self) -> Arc<PruningPointProof> {
-        let pp = self.pruning_point_store.read().pruning_point().unwrap();
+        self.try_get_pruning_point_proof().expect("local pruning proof construction failed")
+    }
+
+    pub fn try_get_pruning_point_proof(&self) -> PruningImportResult<Arc<PruningPointProof>> {
+        let unavailable = |error| {
+            PruningImportError::PruningPointImportContextUnavailable(self.genesis_hash, format!("local proof construction: {error}"))
+        };
+        let pp = self.pruning_point_store.read().pruning_point().map_err(unavailable)?;
         let mut cache_lock = self.cached_proof.lock();
         if let Some(cache) = cache_lock.clone()
             && cache.pruning_point == pp
         {
-            return cache.data;
+            return Ok(cache.data);
         }
-        let proof = Arc::new(self.build_pruning_point_proof(pp));
+        let proof = Arc::new(self.try_build_pruning_point_proof(pp).map_err(|error| {
+            PruningImportError::PruningPointImportContextUnavailable(pp, format!("local proof construction: {error}"))
+        })?);
         info!(
             "Built headers proof with overall {} headers ({} unique)",
             proof.iter().map(|l| l.len()).sum::<usize>(),
             proof.iter().flatten().unique_by(|h| h.hash).count()
         );
         cache_lock.replace(CachedPruningPointData { pruning_point: pp, data: proof.clone() });
-        proof
+        Ok(proof)
     }
 
     pub fn get_pruning_point_anticone_and_trusted_data(&self) -> ConsensusResult<Arc<PruningPointTrustedData>> {
