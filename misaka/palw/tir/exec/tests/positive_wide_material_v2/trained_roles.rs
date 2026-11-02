@@ -125,13 +125,38 @@ struct Usage {
     bytes: u64,
     openings: u64,
 }
+// Private operator diagnostics only. Both windows request the SAME entire
+// original job, arithmetic, coverage and source limits. The extended window
+// measures costs past the observed 240-s prefix, not a production profile.
+#[derive(Clone, Copy)]
+enum MeasurementWindow {
+    Standard,
+    ExtendedCost,
+}
+impl MeasurementWindow {
+    fn cpu_seconds(self) -> u64 {
+        match self {
+            Self::Standard => 240,
+            Self::ExtendedCost => 1440,
+        }
+    }
+    fn io_limits(self) -> Usage {
+        match self {
+            Self::Standard => Usage { attempts: 2, calls: 1 << 22, bytes: 4 << 30, openings: 1 << 20 },
+            Self::ExtendedCost => Usage { attempts: 2, calls: 1 << 24, bytes: 8 << 30, openings: 1 << 20 },
+        }
+    }
+}
 struct IoBudget {
     used: Cell<Usage>,
     max: Usage,
 }
 impl IoBudget {
     fn new() -> Self {
-        Self { used: Cell::new(Usage::default()), max: Usage { attempts: 2, calls: 1 << 22, bytes: 4 << 30, openings: 1 << 20 } }
+        Self::for_window(MeasurementWindow::Standard)
+    }
+    fn for_window(window: MeasurementWindow) -> Self {
+        Self { used: Cell::new(Usage::default()), max: window.io_limits() }
     }
     fn charge(&self, delta: Usage) -> R<()> {
         let a = self.used.get();
@@ -374,8 +399,8 @@ fn report(phase: &str, start: Instant, l: &Ledger, extra: serde_json::Value) {
         "native_authority":false,"canonical_job":false,"full_context_execution":false,"detail":extra})
     );
 }
-fn cpu_limit() {
-    let value = 240 as libc::rlim_t;
+fn cpu_limit(window: MeasurementWindow) {
+    let value = window.cpu_seconds() as libc::rlim_t;
     assert!(value < libc::RLIM_INFINITY);
     let limit = libc::rlimit { rlim_cur: value, rlim_max: value };
     assert_eq!(unsafe { libc::setrlimit(libc::RLIMIT_CPU, &limit) }, 0);
@@ -383,7 +408,13 @@ fn cpu_limit() {
     assert_eq!(unsafe { libc::setrlimit(libc::RLIMIT_FSIZE, &file) }, 0);
 }
 
-fn run_loaded(file: &mut File, inputs: LocalForwardInputsV2<'_>, l: &Ledger, reserve: &TirMemoryReserverV1) -> R<()> {
+fn run_loaded(
+    file: &mut File,
+    inputs: LocalForwardInputsV2<'_>,
+    l: &Ledger,
+    reserve: &TirMemoryReserverV1,
+    window: MeasurementWindow,
+) -> R<()> {
     let job = inputs.original_context;
     let start = Instant::now();
     let mut ll = super::trace_free_bridge_tests::load_limits();
@@ -438,7 +469,7 @@ fn run_loaded(file: &mut File, inputs: LocalForwardInputsV2<'_>, l: &Ledger, res
         serde_json::json!({"generated":generated,"output":format!("{}",ordinary.output_root()),"witness_runs":0}),
     );
     drop(ordinary);
-    let io = IoBudget::new();
+    let io = IoBudget::for_window(window);
     let start = Instant::now();
     let provider = Provider::build(file, inputs.checked, hash(ROOT), hash(CLASS), hash(CONTEXT), &io, reserve)?;
     report("original-source-index", start, l, serde_json::json!({"read_bytes":io.used.get().bytes,"read_calls":io.used.get().calls}));
@@ -583,6 +614,9 @@ fn run_loaded(file: &mut File, inputs: LocalForwardInputsV2<'_>, l: &Ledger, res
     let mut peak_terms = 0u64;
     let mut peak_reads = 0u64;
     let mut peak_workspace = 0u64;
+    let mut total_elements = 0u64;
+    let mut total_terms = 0u64;
+    let mut total_source_reads = 0u64;
     for i in 0..relations {
         let relation = prep.plan().relation_at(i).ok_or("relation omitted")?;
         let material_started = Instant::now();
@@ -607,6 +641,7 @@ fn run_loaded(file: &mut File, inputs: LocalForwardInputsV2<'_>, l: &Ledger, res
                 "computed_elements":diagnostics.work.map(|w|w.elements),"reduction_terms":diagnostics.work.map(|w|w.terms),
                 "diagnostic_stage":format!("{:?}",diagnostics.stage),"producer_material_ns":producer_material_ns,
                 "previous_successful_node_ns":node_check_ns,"failed_node_ns":node_started.elapsed().as_nanos(),
+                "completed_elements":total_elements,"completed_terms":total_terms,"completed_source_reads":total_source_reads,
                 "per_relation_terms_cap":node_limits().plan.max_terms_per_relation,"whole_record_authenticated":false}),
             );
             format!(
@@ -622,11 +657,13 @@ fn run_loaded(file: &mut File, inputs: LocalForwardInputsV2<'_>, l: &Ledger, res
             result == if i + 1 == relations { StreamSubmitV2::NeedEof } else { StreamSubmitV2::Continue },
             "Node stream completion order",
         )?;
-        if let Some(cost) = diagnostics.work {
-            observed_evaluations += 1;
-            peak_elements = peak_elements.max(cost.elements);
-            peak_terms = peak_terms.max(cost.terms);
-        }
+        let cost = diagnostics.work.ok_or("successful evaluation missing work observation")?;
+        observed_evaluations += 1;
+        peak_elements = peak_elements.max(cost.elements);
+        peak_terms = peak_terms.max(cost.terms);
+        total_elements = add(total_elements, cost.elements)?;
+        total_terms = add(total_terms, cost.terms)?;
+        total_source_reads = add(total_source_reads, diagnostics.source_reads)?;
         peak_reads = peak_reads.max(diagnostics.source_reads);
         if let Some(bytes) = diagnostics.workspace_bytes {
             peak_workspace = peak_workspace.max(bytes);
@@ -640,17 +677,26 @@ fn run_loaded(file: &mut File, inputs: LocalForwardInputsV2<'_>, l: &Ledger, res
                 start,
                 l,
                 serde_json::json!({"checked_relations":node.checked_relations(),"required_relations":relations,"file_usage":format!("{:?}",io.used.get()),"producer_material_ns":producer_material_ns,"node_check_ns":node_check_ns,"observed_evaluations":observed_evaluations,
-                "peak_elements":peak_elements,"peak_terms":peak_terms,"peak_reads":peak_reads,"peak_workspace_bytes":peak_workspace}),
+                "peak_elements":peak_elements,"peak_terms":peak_terms,"peak_reads":peak_reads,"peak_workspace_bytes":peak_workspace,
+                "completed_elements":total_elements,"completed_terms":total_terms,"completed_source_reads":total_source_reads}),
             );
         }
     }
-    require(node.finish().map_err(|e| format!("Node EOF {e:?}"))? == CheckOutcome::Matched, "Node result")?;
+    require(observed_evaluations == relations, "incomplete work observations")?;
+    let authentication_started = Instant::now();
+    let verdict = node.finish().map_err(|e| format!("Node EOF {e:?}"))?;
+    let record_auth_finish_ns = authentication_started.elapsed().as_nanos();
+    require(verdict == CheckOutcome::Matched, "Node result")?;
+    let record_reads = node.read_meter();
     require(l.panel_runs.load(Ordering::SeqCst) == 1, "extra executor run")?;
     report(
         "complete-node",
         start,
         l,
-        serde_json::json!({"checked_relations":relations,"provider_bytes":io.used.get().bytes,"provider_calls":io.used.get().calls,"opening_attempts":io.used.get().openings,"model_runs":0,"producer_material_ns":producer_material_ns,"node_check_ns":node_check_ns,"producer_retained":true,"verdict":"Matched"}),
+        serde_json::json!({"checked_relations":relations,"provider_bytes":io.used.get().bytes,"provider_calls":io.used.get().calls,"opening_attempts":io.used.get().openings,"model_runs":0,"producer_material_ns":producer_material_ns,"node_check_ns":node_check_ns,"producer_retained":true,"verdict":"Matched",
+        "observed_evaluations":observed_evaluations,"completed_elements":total_elements,"completed_terms":total_terms,"completed_source_reads":total_source_reads,
+        "peak_elements":peak_elements,"peak_terms":peak_terms,"peak_reads":peak_reads,"peak_workspace_bytes":peak_workspace,
+        "record_auth_finish_ns":record_auth_finish_ns,"claim_tape_read_bytes":record_reads.read_bytes,"claim_tape_read_calls":record_reads.read_calls,"claim_relations_read":record_reads.relations_read}),
     );
     Ok(())
 }
@@ -754,7 +800,13 @@ fn quote_storage(inputs: LocalForwardInputsV2<'_>, l: &Ledger) -> R<()> {
     Ok(())
 }
 
-fn run_trained(l: &Ledger, reserve: &TirMemoryReserverV1, early: &(dyn Send + Sync), storage_only: bool) -> R<()> {
+fn run_trained(
+    l: &Ledger,
+    reserve: &TirMemoryReserverV1,
+    early: &(dyn Send + Sync),
+    storage_only: bool,
+    window: MeasurementWindow,
+) -> R<()> {
     let fixture = File::open(FIXTURE).map_err(|_| "fixture open")?;
     let bytes = fixture.metadata().map_err(|_| "fixture stat")?.len();
     require(bytes <= 1 << 20, "fixture byte cap before JSON")?;
@@ -834,7 +886,7 @@ fn run_trained(l: &Ledger, reserve: &TirMemoryReserverV1, early: &(dyn Send + Sy
         .with_inputs(
             &mut mb,
             |file, inputs| {
-                if storage_only { quote_storage(inputs, l) } else { run_loaded(file, inputs, l, reserve) }
+                if storage_only { quote_storage(inputs, l) } else { run_loaded(file, inputs, l, reserve, window) }
             },
         )
         .map_err(|_| "metadata changed")??;
@@ -844,23 +896,39 @@ fn run_trained(l: &Ledger, reserve: &TirMemoryReserverV1, early: &(dyn Send + Sy
 #[test]
 #[ignore = "explicit retained Pythia files, isolated CPU/disk/request limits and outer process monitor required"]
 fn pythia70m_original_short_job_ordinary_panel_and_complete_node() {
-    run_mode(false);
+    run_mode(false, MeasurementWindow::Standard);
+}
+
+#[test]
+#[ignore = "explicit extended diagnostic opt-in; exact isolated test and finite CPU/disk/request/outer limits required"]
+fn pythia70m_original_short_job_extended_cost_measurement() {
+    assert_eq!(std::env::var("MISAKA_TRAINED_COST_WINDOW").as_deref(), Ok("1440s-8gib-16mi-calls"));
+    run_mode(false, MeasurementWindow::ExtendedCost);
 }
 
 #[test]
 #[ignore = "requires fixed retained Pythia identity metadata and isolated resource/outer process controls; no model execution"]
 fn pythia70m_original_short_job_storage_quote() {
-    run_mode(true);
+    run_mode(true, MeasurementWindow::Standard);
 }
 
-fn run_mode(storage_only: bool) {
+fn run_mode(storage_only: bool, window: MeasurementWindow) {
     assert_eq!(std::env::var("MISAKA_RUN_TRAINED_ROLES").as_deref(), Ok("pythia70m-original-16-1"));
-    cpu_limit();
+    cpu_limit(window);
     require_source_program_local_profile_v1().expect("audited Source profile required");
     let l = Arc::new(Ledger::default());
     let reserve = ledger(l.clone());
     let early = reserve("measurement-bootstrap-and-export-owners", hash(CLASS), hash(CONTEXT), E).unwrap();
-    let result = run_trained(&l, &reserve, &early, storage_only);
+    let io = window.io_limits();
+    report(
+        "measurement-window",
+        Instant::now(),
+        &l,
+        serde_json::json!({"cpu_seconds":window.cpu_seconds(),"actual_provider_max_bytes":io.bytes,
+        "actual_provider_max_calls":io.calls,"max_openings":io.openings,"max_attempts":io.attempts,
+        "logical_request_cap":REQUEST_CAP,"cumulative_tape_cap":DISK_CAP,"diagnostic_only":true}),
+    );
+    let result = run_trained(&l, &reserve, &early, storage_only, window);
     if let Err(e) = result {
         println!("ROLE_MEASURE_REFUSED {e}");
         panic!("bounded actual trained role measurement refused: {e}");
