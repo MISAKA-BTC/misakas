@@ -789,6 +789,12 @@ impl DbPalwStateV2Store {
         {
             return Ok(Some(Arc::clone(carriage)));
         }
+        // Release an obsolete cache generation before allocating its
+        // replacement. External Arc readers keep their own ticket as needed.
+        // Keeping a cache-only predecessor here can otherwise permanently
+        // refuse the replacement even though it fits on its own.
+        let stale = self.pruning_snapshot_cache.lock().take();
+        drop(stale);
         self.with_pinned_tip_v1(true, |record| {
             if record.block != pruning_point {
                 return Ok(None);
@@ -852,6 +858,8 @@ impl DbPalwStateV2Store {
         {
             return Ok(Some((block, Arc::clone(state))));
         }
+        let stale = self.tip_cache.lock().take();
+        drop(stale);
         self.with_pinned_tip_v1(false, |record| {
             self.tip_bytes_decoded.fetch_add(record.carriage_borsh.len() as u64, std::sync::atomic::Ordering::Relaxed);
             let state =
@@ -1127,14 +1135,17 @@ mod tests {
         }
         // A failed cold decode must release the load gate. It is not cached;
         // after the durable row is repaired, the same store makes progress.
+        let previous = Arc::downgrade(&answers[0].0);
+        drop(answers);
         let mut record = writer.tip_record().unwrap().unwrap();
         let good = record.clone();
+        record.state_root = Hash64::from_u64_word(0xBAD);
         record.carriage_borsh.truncate(1);
         let mut batch = WriteBatch::default();
         writer.set_tip_record_batch(&mut batch, record).unwrap();
         db.write(batch).unwrap();
-        *store.tip_cache.lock() = None;
         assert!(store.load_tip_cached(&p).is_err());
+        assert!(previous.upgrade().is_none(), "cache-only predecessor is freed before the replacement decode");
         assert!(store.load_tip_cached(&p).is_err());
         let mut batch = WriteBatch::default();
         writer.set_tip_record_batch(&mut batch, good).unwrap();
