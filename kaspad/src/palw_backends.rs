@@ -1966,11 +1966,24 @@ pub fn log_memory_phase_v1(role: &str, phase: &str, ram_scale: f64) {
     // The pinned artifacts (int-10.2 A1): in `file` above for every process that maps them, resident
     // once on the host, outside the ledger, and in the memory cgroup of whoever faulted them in first.
     let pinned = crate::palw_artifact_pin::pinned_memory_note_v1();
+    let budget = kaspa_core::memory_budget::global_memory_budget().snapshot();
+    let budget_note = format!(
+        "memory_budget_limit_bytes={} memory_reserved_bytes={} memory_retained_bytes={} memory_pending_bytes={} \
+         memory_transport_bytes={} memory_snapshot_bytes={} memory_native_bytes={} memory_cache_bytes={}",
+        budget.limit_bytes,
+        budget.reserved_bytes,
+        budget.reserved_bytes.saturating_sub(budget.pending_bytes),
+        budget.pending_bytes,
+        budget.class_bytes[0],
+        budget.class_bytes[1],
+        budget.class_bytes[2],
+        budget.class_bytes[3],
+    );
     match process_memory_v1() {
         Some(m) => {
             let unaccounted = m.pss_anon_bytes.saturating_sub(caches);
             info!(
-                "[{role}] memory at {phase}: rss {:.2} / pss {:.2} GiB = anon {:.2} + file {:.2} (shared per sharer);                  swap {:.2}; consensus caches declared {:.2} at --ram-scale {ram_scale:.3}; unaccounted anon {:.2} GiB                  (a class's KV/context, an operand inventory walk, allocator fragmentation); of the anon, {:.2} GiB is freed memory the kernel has not taken back yet (reclaimable) and {:.2} GiB is live; {pinned}",
+                "[{role}] memory at {phase}: rss {:.2} / pss {:.2} GiB = anon {:.2} + file {:.2} (shared per sharer);                  swap {:.2}; consensus caches declared {:.2} at --ram-scale {ram_scale:.3}; unaccounted anon {:.2} GiB                  (a class's KV/context, an operand inventory walk, allocator fragmentation); of the anon, {:.2} GiB is freed memory the kernel has not taken back yet (reclaimable) and {:.2} GiB is live; {pinned}; {budget_note}",
                 gib(m.rss_bytes),
                 gib(m.pss_bytes),
                 gib(m.pss_anon_bytes),
@@ -1983,7 +1996,7 @@ pub fn log_memory_phase_v1(role: &str, phase: &str, ram_scale: f64) {
             );
         }
         None => info!(
-            "[{role}] memory at {phase}: per-process accounting is Linux-only here; consensus caches declared {:.2} GiB at              --ram-scale {ram_scale:.3}; {pinned}",
+            "[{role}] memory at {phase}: per-process accounting is Linux-only here; consensus caches declared {:.2} GiB at              --ram-scale {ram_scale:.3}; {pinned}; {budget_note}",
             gib(caches)
         ),
     }
