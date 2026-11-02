@@ -1,0 +1,581 @@
+{
+  "scope": "transparent compression of existing immutable dependencies from the actual successful current Cargo artifact manifest",
+  "files": [
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libaho_corasick-8c16be3e4b5cd062.rlib",
+      "sha256_unchanged": "1328ec8d309f04d706fbaeee83a57b68a19cdfa95b49946b33af46c47b922906",
+      "bytes_unchanged": 2966872,
+      "mtime_ns_unchanged": 1793575709001313013,
+      "allocated_before": 2969600,
+      "allocated_after": 1118208,
+      "observed_free_after": 761020416
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libasync_std-8bf065135b44307a.rlib",
+      "sha256_unchanged": "cb6580f1ffbc865c4c2c394aee1e0ebce097ef613834ee40e83e29377be30390",
+      "bytes_unchanged": 5221592,
+      "mtime_ns_unchanged": 1793575754186350595,
+      "allocated_before": 5222400,
+      "allocated_after": 1671168,
+      "observed_free_after": 764542976
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libasync_std-8bf065135b44307a.rmeta",
+      "sha256_unchanged": "83184c60ff49182331ee4845401767a8165594396d536e4b1fb6cb9fe667b4fd",
+      "bytes_unchanged": 2789278,
+      "mtime_ns_unchanged": 1793575753744228007,
+      "allocated_before": 2789376,
+      "allocated_after": 1077248,
+      "observed_free_after": 766234624
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libcargo_metadata-d67a89738f11eeb6.rlib",
+      "sha256_unchanged": "d433da6c7b946fec90fdd189ca8f7c6e5db60edabdbe5bc893f50154d20af911",
+      "bytes_unchanged": 2329640,
+      "mtime_ns_unchanged": 1793575728361214214,
+      "allocated_before": 2330624,
+      "allocated_after": 884736,
+      "observed_free_after": 767668224
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libcc-9d4c296a3bb1f4b2.rlib",
+      "sha256_unchanged": "570fd21210171a0e847ab7094dcd4a20c793f61d73b0e3d229021dbd3ee12fc5",
+      "bytes_unchanged": 2393400,
+      "mtime_ns_unchanged": 1793575688935164218,
+      "allocated_before": 2396160,
+      "allocated_after": 856064,
+      "observed_free_after": 769191936
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libchrono-a3315cea2c614753.rlib",
+      "sha256_unchanged": "7182c6a34d57a03397c5f2f032a1b1ad5b6e5633eccb31d92c5f318d3b971ac6",
+      "bytes_unchanged": 2965720,
+      "mtime_ns_unchanged": 1793575736509696873,
+      "allocated_before": 2969600,
+      "allocated_after": 1171456,
+      "observed_free_after": 770977792
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libderanged-410682e3b680339e.rlib",
+      "sha256_unchanged": "bf60662e878b15012ec40fb42f6e4a9bab5d2769c6490b73fbaac346537d71ba",
+      "bytes_unchanged": 3570768,
+      "mtime_ns_unchanged": 1793575718970241117,
+      "allocated_before": 3571712,
+      "allocated_after": 1306624,
+      "observed_free_after": 773230592
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libderanged-410682e3b680339e.rmeta",
+      "sha256_unchanged": "6daafccc49568486a2217a0ac8fb79239cf6bdb0989745acf4887172e52f65ba",
+      "bytes_unchanged": 3569813,
+      "mtime_ns_unchanged": 1793575718958715477,
+      "allocated_before": 3571712,
+      "allocated_after": 1306624,
+      "observed_free_after": 775487488
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libfutures_util-1034b1ae5cfa3831.rlib",
+      "sha256_unchanged": "9e216071f080efeefaf2577d59d1b9f4c9d0e4a437fed8537bc3a6a27972d033",
+      "bytes_unchanged": 6062992,
+      "mtime_ns_unchanged": 1793575726076085570,
+      "allocated_before": 6066176,
+      "allocated_after": 2367488,
+      "observed_free_after": 779173888
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libfutures_util-1034b1ae5cfa3831.rmeta",
+      "sha256_unchanged": "071a56cf535ded4caf8242ca8d096bc007d0bbabd9063b46fa6bc30b2ee468fe",
+      "bytes_unchanged": 5865960,
+      "mtime_ns_unchanged": 1793575726022349181,
+      "allocated_before": 5869568,
+      "allocated_after": 2301952,
+      "observed_free_after": 782729216
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libitertools-20cfa54d90bc631e.rlib",
+      "sha256_unchanged": "1b5a0df4a6ef0c8ba0d313d867bd2af4ebb1f14220a46583ae5c7e66cb6b848c",
+      "bytes_unchanged": 2657256,
+      "mtime_ns_unchanged": 1793575770703401579,
+      "allocated_before": 2658304,
+      "allocated_after": 1130496,
+      "observed_free_after": 784248832
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libitertools-20cfa54d90bc631e.rmeta",
+      "sha256_unchanged": "c454c67b12fc93eb11db91a242a12e32fc98877c56344d91dd35a00a53e2bb8f",
+      "bytes_unchanged": 2606856,
+      "mtime_ns_unchanged": 1793575770679240210,
+      "allocated_before": 2609152,
+      "allocated_after": 1110016,
+      "observed_free_after": 785739776
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libitertools-eb54ef1d81def471.rlib",
+      "sha256_unchanged": "bf592289b94db9806f3deecec302a3eab72c588386805b04f06328a0e24e98cb",
+      "bytes_unchanged": 2217528,
+      "mtime_ns_unchanged": 1793575780772346174,
+      "allocated_before": 2220032,
+      "allocated_after": 942080,
+      "observed_free_after": 787005440
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libitertools-eb54ef1d81def471.rmeta",
+      "sha256_unchanged": "00bfb29fbf96f89db37947e1ea6bfc633ab48f470e7803297af62e57c9dba4ea",
+      "bytes_unchanged": 2167078,
+      "mtime_ns_unchanged": 1793575780752715577,
+      "allocated_before": 2170880,
+      "allocated_after": 929792,
+      "observed_free_after": 788238336
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libjs_sys-f30b04f9a0f35a2a.rlib",
+      "sha256_unchanged": "edf341b29c5ff3688799981a1a0ad414988a9a9a7948f4e11adc49cefd138390",
+      "bytes_unchanged": 3828168,
+      "mtime_ns_unchanged": 1793575756292173692,
+      "allocated_before": 3829760,
+      "allocated_after": 1384448,
+      "observed_free_after": 790675456
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libjs_sys-f30b04f9a0f35a2a.rmeta",
+      "sha256_unchanged": "3cd2cc0571c150dd64693ceb51a02f06fa0f7fc30a11331d178afd9b9a198a4f",
+      "bytes_unchanged": 2840613,
+      "mtime_ns_unchanged": 1793575756082648662,
+      "allocated_before": 2842624,
+      "allocated_after": 1097728,
+      "observed_free_after": 792408064
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libjs_sys-f874c9e35b8a0aa8.rlib",
+      "sha256_unchanged": "61ccf3ba2baca84307aff6ef2bbc8ea60a4655c54d34f87cf82a23275d546f1a",
+      "bytes_unchanged": 3827896,
+      "mtime_ns_unchanged": 1793575722332543594,
+      "allocated_before": 3829760,
+      "allocated_after": 1384448,
+      "observed_free_after": 794845184
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libjs_sys-f874c9e35b8a0aa8.rmeta",
+      "sha256_unchanged": "ac49fc21a2592fba28214b875bdbc2114f87fcb51fc33f76df09a4c8644ba073",
+      "bytes_unchanged": 2840913,
+      "mtime_ns_unchanged": 1793575722129671056,
+      "allocated_before": 2842624,
+      "allocated_after": 1097728,
+      "observed_free_after": 796581888
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/liblibc-10765915190c39ec.rlib",
+      "sha256_unchanged": "51a99f9e8d4871bb2a680a4e29e3518b00a75e4a0428c2417ec47d89acfc5120",
+      "bytes_unchanged": 2156144,
+      "mtime_ns_unchanged": 1793571985318323052,
+      "allocated_before": 2158592,
+      "allocated_after": 860160,
+      "observed_free_after": 797863936
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/liblibc-10765915190c39ec.rmeta",
+      "sha256_unchanged": "084aca20a150fa4d16ee3de1052c05220b666dabdee70e34a59317e6a9af9608",
+      "bytes_unchanged": 2148913,
+      "mtime_ns_unchanged": 1793571985307402913,
+      "allocated_before": 2150400,
+      "allocated_after": 860160,
+      "observed_free_after": 799133696
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/liblibc-5bf633d7d474626d.rlib",
+      "sha256_unchanged": "f9f7b286cb7b9d50390f798ddd8b2258921a7339c280228dbfb2272b22e050ff",
+      "bytes_unchanged": 2940032,
+      "mtime_ns_unchanged": 1793575677425480711,
+      "allocated_before": 2940928,
+      "allocated_after": 1179648,
+      "observed_free_after": 801124352
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/liblibc-5bf633d7d474626d.rmeta",
+      "sha256_unchanged": "3b7a2240abe52ce13527bcc5f1cf166545e832c101b157e3894bdfa46c78135b",
+      "bytes_unchanged": 2903369,
+      "mtime_ns_unchanged": 1793575677407406581,
+      "allocated_before": 2904064,
+      "allocated_after": 1167360,
+      "observed_free_after": 802832384
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/liblibcrux_ml_dsa-f35c5e8e72a49ea2.rlib",
+      "sha256_unchanged": "f09d9d174cd9cf4a7d7bcc78ba77369e9f79eb9973f7a753a401c3cf1b12c2a6",
+      "bytes_unchanged": 4257704,
+      "mtime_ns_unchanged": 1793575785566840438,
+      "allocated_before": 4259840,
+      "allocated_after": 1474560,
+      "observed_free_after": 805654528
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/liblibrocksdb_sys-8e4bda05e1c4a295.rlib",
+      "sha256_unchanged": "0589170dabd567a16a9270808f8721c9ab996246b8a0132f635da999428ef923",
+      "bytes_unchanged": 23730608,
+      "mtime_ns_unchanged": 1793576317547584908,
+      "allocated_before": 23732224,
+      "allocated_after": 7892992,
+      "observed_free_after": 821456896
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/liblog4rs-d813a8834a2e7373.rlib",
+      "sha256_unchanged": "a9fb47d5b341075439e7d351ff371f237e1a0a75a4825d7caa5ce473fe0e6492",
+      "bytes_unchanged": 5480488,
+      "mtime_ns_unchanged": 1793575796863566815,
+      "allocated_before": 5484544,
+      "allocated_after": 1757184,
+      "observed_free_after": 825167872
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libmalachite_base-a8c70d1bdf2eb7ee.rlib",
+      "sha256_unchanged": "7d5e7a0681e2cd64e1a54d8c3d2de581639f4c86539c4fbef1f565666a8af4dc",
+      "bytes_unchanged": 10957096,
+      "mtime_ns_unchanged": 1793575790345494916,
+      "allocated_before": 10960896,
+      "allocated_after": 4194304,
+      "observed_free_after": 831991808
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libmalachite_base-a8c70d1bdf2eb7ee.rmeta",
+      "sha256_unchanged": "9b28d45a89b43f350468e9088e484e4b8abbcf43edbb6d65c1ae8c1cdf73d658",
+      "bytes_unchanged": 10554357,
+      "mtime_ns_unchanged": 1793575788548016835,
+      "allocated_before": 10555392,
+      "allocated_after": 4050944,
+      "observed_free_after": 838479872
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libmalachite_nz-4f22d0f1698b1caf.rlib",
+      "sha256_unchanged": "bde997483af49e75c27f5ccad83ce5464da11cfb90413364cb43e00b0def59a8",
+      "bytes_unchanged": 8560984,
+      "mtime_ns_unchanged": 1793575812019882321,
+      "allocated_before": 8564736,
+      "allocated_after": 3284992,
+      "observed_free_after": 843739136
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libmalachite_nz-4f22d0f1698b1caf.rmeta",
+      "sha256_unchanged": "e632e69aa730bbd145d1f30afa866754a34dcc894cb8e3ea4298bb6172e7eba6",
+      "bytes_unchanged": 5729538,
+      "mtime_ns_unchanged": 1793575800601063594,
+      "allocated_before": 5730304,
+      "allocated_after": 2236416,
+      "observed_free_after": 847228928
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libnix-196932d0dc417619.rlib",
+      "sha256_unchanged": "7e8b6632271607ed84884e535bdd57de3ddf640c2a799d7abcb1c5eddca9ecd0",
+      "bytes_unchanged": 2381880,
+      "mtime_ns_unchanged": 1793575790932641509,
+      "allocated_before": 2383872,
+      "allocated_after": 970752,
+      "observed_free_after": 848629760
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libnum_bigint-17885534892e2258.rlib",
+      "sha256_unchanged": "1e25a2fbec08d38f7b99c6721afa829c7debfce5e8bb3ed04d049c95141aa317",
+      "bytes_unchanged": 2646368,
+      "mtime_ns_unchanged": 1793576314736111220,
+      "allocated_before": 2650112,
+      "allocated_after": 1040384,
+      "observed_free_after": 850227200
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/librayon-d55e7ba967c23134.rlib",
+      "sha256_unchanged": "729bbfcc8754bee463bdb506ea5ac2dedc32cc61828692390bc42c15de608165",
+      "bytes_unchanged": 4063920,
+      "mtime_ns_unchanged": 1793575766356050720,
+      "allocated_before": 4067328,
+      "allocated_after": 1630208,
+      "observed_free_after": 852656128
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/librayon-d55e7ba967c23134.rmeta",
+      "sha256_unchanged": "6cceded96bf7182d4bdec061b1f4c7f7791ab0d361e1e8348638c16ccfeaaaf0",
+      "bytes_unchanged": 3856073,
+      "mtime_ns_unchanged": 1793575766306259975,
+      "allocated_before": 3858432,
+      "allocated_after": 1568768,
+      "observed_free_after": 854929408
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libregex_automata-ea52fa4ae0cde979.rlib",
+      "sha256_unchanged": "f6ebe5f6dc24ba40cd6e9d090b93f00d26a17c6b5d2d455f6e9a3d96d0d35e4b",
+      "bytes_unchanged": 6555616,
+      "mtime_ns_unchanged": 1793575712542531870,
+      "allocated_before": 6557696,
+      "allocated_after": 2478080,
+      "observed_free_after": 859000832
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libregex_automata-ea52fa4ae0cde979.rmeta",
+      "sha256_unchanged": "969b3fb6317272c09d9950f4cd41e6a700eca4d67680dce07567013e2ad49479",
+      "bytes_unchanged": 3244111,
+      "mtime_ns_unchanged": 1793575711907323832,
+      "allocated_before": 3248128,
+      "allocated_after": 1433600,
+      "observed_free_after": 860803072
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libregex_syntax-5897ce61c6fc328e.rlib",
+      "sha256_unchanged": "fd0a72cc3241ddbe417ed1c4fb62dfe1b15a3e423a52a2dfe58835ea41e33796",
+      "bytes_unchanged": 7246552,
+      "mtime_ns_unchanged": 1793575710947575159,
+      "allocated_before": 7249920,
+      "allocated_after": 2543616,
+      "observed_free_after": 865501184
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libregex_syntax-5897ce61c6fc328e.rmeta",
+      "sha256_unchanged": "1bfcab274a1ad15b9038406dfc079dfdeafc4b7d8e751254558d31def1bbfc29",
+      "bytes_unchanged": 4611251,
+      "mtime_ns_unchanged": 1793575710552258675,
+      "allocated_before": 4612096,
+      "allocated_after": 1761280,
+      "observed_free_after": 868352000
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/librocksdb-8014d8d869fb79b1.rlib",
+      "sha256_unchanged": "7f6cbe419ae43fb5b5b7c5d97495c5a0efc6233070a7d2655c4fbe9e6c92a0b8",
+      "bytes_unchanged": 2741352,
+      "mtime_ns_unchanged": 1793576323642782396,
+      "allocated_before": 2744320,
+      "allocated_after": 1048576,
+      "observed_free_after": 870031360
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/librustix-7ea2dc9d782a324a.rlib",
+      "sha256_unchanged": "f688040981cb14fdafbab7e9f046c4daaae7ffe06409a94988918324c8abcfa3",
+      "bytes_unchanged": 5032720,
+      "mtime_ns_unchanged": 1793575714262340403,
+      "allocated_before": 5033984,
+      "allocated_after": 1974272,
+      "observed_free_after": 873238528
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/librustix-7ea2dc9d782a324a.rmeta",
+      "sha256_unchanged": "78cd3468743fce022c7ecdcd8847aa4521494e784e4d83ee94d8c21a06f5198e",
+      "bytes_unchanged": 3951225,
+      "mtime_ns_unchanged": 1793575714058199692,
+      "allocated_before": 3952640,
+      "allocated_after": 1658880,
+      "observed_free_after": 875511808
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libserde_core-2fa1b1377bf58776.rlib",
+      "sha256_unchanged": "ee1589549382e30da567be6a8f5f917f33b87cc6a605eeb0c83185bf9039d008",
+      "bytes_unchanged": 4885176,
+      "mtime_ns_unchanged": 1793575680920033088,
+      "allocated_before": 4886528,
+      "allocated_after": 1699840,
+      "observed_free_after": 878690304
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libserde_core-2fa1b1377bf58776.rmeta",
+      "sha256_unchanged": "d99c8c7eac76713bdc7699e0d59299c61157240c09f2c5c9be8ba4900cb11290",
+      "bytes_unchanged": 4775671,
+      "mtime_ns_unchanged": 1793575680890051399,
+      "allocated_before": 4775936,
+      "allocated_after": 1667072,
+      "observed_free_after": 881778688
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libserde_core-e41ad96b1ddd22b2.rlib",
+      "sha256_unchanged": "b9d64c653e0a91bd42718c4995de426e59ccf62667c8820b376eaa92abc57749",
+      "bytes_unchanged": 4865656,
+      "mtime_ns_unchanged": 1793575699748056051,
+      "allocated_before": 4866048,
+      "allocated_after": 1691648,
+      "observed_free_after": 884940800
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libserde_core-e41ad96b1ddd22b2.rmeta",
+      "sha256_unchanged": "9b475e14580d87fda35b598f0ea0aa3814b5fffe1bb7fe233907a25523947846",
+      "bytes_unchanged": 4756147,
+      "mtime_ns_unchanged": 1793575699716723814,
+      "allocated_before": 4759552,
+      "allocated_after": 1654784,
+      "observed_free_after": 888041472
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libserde_json-b456da44e5805519.rlib",
+      "sha256_unchanged": "3d5a410afcc350786bad5160c06c45159031f7e1c297b77f9392534d57553881",
+      "bytes_unchanged": 2391976,
+      "mtime_ns_unchanged": 1793575697291745233,
+      "allocated_before": 2392064,
+      "allocated_after": 913408,
+      "observed_free_after": 889507840
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libserde_json-be13b721d178c12f.rlib",
+      "sha256_unchanged": "85712607c6e5de59dacae5e63b426d3f432334f73154bd310abba17ecf0656d1",
+      "bytes_unchanged": 2166128,
+      "mtime_ns_unchanged": 1793575720236713755,
+      "allocated_before": 2166784,
+      "allocated_after": 823296,
+      "observed_free_after": 890834944
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libserde_yaml-e9cc6062a95ffe86.rlib",
+      "sha256_unchanged": "f79d12bfadc7ec24258e71f5f431abbbaf82b54d684252773c004289077eb510",
+      "bytes_unchanged": 2842648,
+      "mtime_ns_unchanged": 1793575783086632461,
+      "allocated_before": 2846720,
+      "allocated_after": 1060864,
+      "observed_free_after": 892608512
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libsyn-bc4f4cc12ca0676f.rlib",
+      "sha256_unchanged": "a877791bce402078bf2abb54fe8c1455c7c9e1e02f06d9d7f802d0ee2e3e5a85",
+      "bytes_unchanged": 10207448,
+      "mtime_ns_unchanged": 1793575676295385200,
+      "allocated_before": 10211328,
+      "allocated_after": 3563520,
+      "observed_free_after": 899248128
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libsyn-bc4f4cc12ca0676f.rmeta",
+      "sha256_unchanged": "193771b257f4366294e06c21a28dc1813a8eb7c80692f8ae8fb07f0b38ee1809",
+      "bytes_unchanged": 5184593,
+      "mtime_ns_unchanged": 1793575675417858056,
+      "allocated_before": 5185536,
+      "allocated_after": 2101248,
+      "observed_free_after": 902328320
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libsyn-e04633ceef12c44f.rlib",
+      "sha256_unchanged": "90538357f9ffb12e16a63b95345cb984578637b01df68021dd52de109df6a564",
+      "bytes_unchanged": 9818336,
+      "mtime_ns_unchanged": 1793575716533532186,
+      "allocated_before": 9822208,
+      "allocated_after": 3313664,
+      "observed_free_after": 908824576
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libsyn-e04633ceef12c44f.rmeta",
+      "sha256_unchanged": "059c513c77e09d846524c8a94cad010960431263bea2c2fefbd86b38e4cc09b4",
+      "bytes_unchanged": 4584573,
+      "mtime_ns_unchanged": 1793575715661693569,
+      "allocated_before": 4587520,
+      "allocated_after": 1822720,
+      "observed_free_after": 911585280
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libsyn-e6907338e687e7d3.rlib",
+      "sha256_unchanged": "b652e10aeb774da09bb288344d63448b3fb5f932c79bf3dd9927ac3e22bcbef1",
+      "bytes_unchanged": 6996784,
+      "mtime_ns_unchanged": 1793575731473166253,
+      "allocated_before": 7000064,
+      "allocated_after": 2371584,
+      "observed_free_after": 916189184
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libsyn-e6907338e687e7d3.rmeta",
+      "sha256_unchanged": "cc0041d060c5283af9f47e937f741ace9e8428a7a088c6e9a79dc6717b32aa7a",
+      "bytes_unchanged": 2809948,
+      "mtime_ns_unchanged": 1793575730745413011,
+      "allocated_before": 2813952,
+      "allocated_after": 1122304,
+      "observed_free_after": 917872640
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libsysinfo-aa031fd09d74ae24.rlib",
+      "sha256_unchanged": "7128d65cbf3f5a1580cc65eb19348157e5eb276eb7339be9f961bb526a213a8f",
+      "bytes_unchanged": 2100832,
+      "mtime_ns_unchanged": 1793575769515590993,
+      "allocated_before": 2101248,
+      "allocated_after": 745472,
+      "observed_free_after": 919220224
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libtime-641d28ab7765f29b.rlib",
+      "sha256_unchanged": "034ee63a3c43116e4083e278b5107b7150b5c7151f45d6eab668f79f4df5b0d5",
+      "bytes_unchanged": 3931664,
+      "mtime_ns_unchanged": 1793575726939035143,
+      "allocated_before": 3932160,
+      "allocated_after": 1576960,
+      "observed_free_after": 921567232
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libtime-641d28ab7765f29b.rmeta",
+      "sha256_unchanged": "b1e5d28386fb05a9b09e221719e1876ae5d68d11bfa277e92fba6026e2a54404",
+      "bytes_unchanged": 3147183,
+      "mtime_ns_unchanged": 1793575726771869947,
+      "allocated_before": 3149824,
+      "allocated_after": 1347584,
+      "observed_free_after": 923357184
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libtokio-17dc22035700d3bc.rlib",
+      "sha256_unchanged": "7183cde6088d1ba14446c47726c114dd807067056e1a806599d69419b68054de",
+      "bytes_unchanged": 8799360,
+      "mtime_ns_unchanged": 1793575741949203140,
+      "allocated_before": 8802304,
+      "allocated_after": 3317760,
+      "observed_free_after": 928825344
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libtokio-17dc22035700d3bc.rmeta",
+      "sha256_unchanged": "431f27d0b8063bc3a8b2180f54121363f7519250aae9e71c9ab85573b3b063d6",
+      "bytes_unchanged": 6464524,
+      "mtime_ns_unchanged": 1793575741535339398,
+      "allocated_before": 6467584,
+      "allocated_after": 2551808,
+      "observed_free_after": 932716544
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libtoml_edit-d70cac63cb928d1e.rlib",
+      "sha256_unchanged": "ed3127833a5d59deb4dc7c29f14fd4191893416af109dec6584ab44ac0ef1042",
+      "bytes_unchanged": 3933104,
+      "mtime_ns_unchanged": 1793571985500264119,
+      "allocated_before": 3936256,
+      "allocated_after": 1228800,
+      "observed_free_after": 935411712
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libweb_sys-be6b6c74d9ea72e8.rlib",
+      "sha256_unchanged": "3143b6e1634a5005e29c39a534dc1ff8991b0a51d0d23fc0867e700205b09f5b",
+      "bytes_unchanged": 4847216,
+      "mtime_ns_unchanged": 1793575749830444194,
+      "allocated_before": 4849664,
+      "allocated_after": 1650688,
+      "observed_free_after": 938602496
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libweb_sys-be6b6c74d9ea72e8.rmeta",
+      "sha256_unchanged": "f3e87ac632daf8ad3a333c60aee741c1a48bc579b7d58f8360e87fab31261f03",
+      "bytes_unchanged": 3565983,
+      "mtime_ns_unchanged": 1793575749566796107,
+      "allocated_before": 3567616,
+      "allocated_after": 1314816,
+      "observed_free_after": 940847104
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libwinnow-dd8cd9e3ae8be925.rlib",
+      "sha256_unchanged": "80968c22448a5ad52b15d7372d738f8d12c86e3f8798df1465f67cb55b04dcad",
+      "bytes_unchanged": 3410792,
+      "mtime_ns_unchanged": 1793571984012587749,
+      "allocated_before": 3411968,
+      "allocated_after": 1396736,
+      "observed_free_after": 942841856
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libwinnow-dd8cd9e3ae8be925.rmeta",
+      "sha256_unchanged": "6deef24d165546b5db077030b35e1ba34a4cf08d8fc18a0d90aa4dd74d50cf8e",
+      "bytes_unchanged": 3249866,
+      "mtime_ns_unchanged": 1793571983958003929,
+      "allocated_before": 3252224,
+      "allocated_after": 1335296,
+      "observed_free_after": 944984064
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libzstd_sys-69febebf14d2801d.rlib",
+      "sha256_unchanged": "9a47116aa11cd842c3fa6a12e8bc08f4c9c1284c7f3e1cffdd5e96e4772c5e52",
+      "bytes_unchanged": 2617528,
+      "mtime_ns_unchanged": 1793576315098568251,
+      "allocated_before": 2621440,
+      "allocated_after": 671744,
+      "observed_free_after": 946909184
+    }
+  ]
+}

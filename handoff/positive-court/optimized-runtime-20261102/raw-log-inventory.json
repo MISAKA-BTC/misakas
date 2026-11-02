@@ -1,0 +1,34 @@
+{
+  "docs-complete.log": {
+    "sha256": "6b7b4c5cd4fe54eaa61b3d41bc4b3b85e9fb0390504e87e1f536fd216fa1ae65",
+    "bytes": 438
+  },
+  "docs-final.log": {
+    "sha256": "6b7b4c5cd4fe54eaa61b3d41bc4b3b85e9fb0390504e87e1f536fd216fa1ae65",
+    "bytes": 438
+  },
+  "hashed-walk-clippy-first.log": {
+    "sha256": "b16db0b300894a2912dc27463ee9bdc2878ca9fbd228b03dd498a09255fc84e9",
+    "bytes": 316208
+  },
+  "hashed-walk-runtime-first.log": {
+    "sha256": "ce11b57fd138be7d20eaa50077215ed919f4b9f20498e42d0314a133319c760f",
+    "bytes": 328272
+  },
+  "optimized-runtime-first.log": {
+    "sha256": "4b51edb8c308a6b8530db35a484d21628b68c03a26a15e54f3082b86d2520d74",
+    "bytes": 319557
+  },
+  "optimized-runtime-r2.log": {
+    "sha256": "56dc6776cb42e6027c0a3fb746d5343e1db5c02e1178d3466661669838fdf618",
+    "bytes": 328382
+  },
+  "pythia-hashed-walk-first.log": {
+    "sha256": "76e3760eb3ed0d596491771856630626b2c0332bddd91336dde85cb093f1f7b3",
+    "bytes": 34015
+  },
+  "pythia-optimized-first.log": {
+    "sha256": "c8012998adcbee523bed6dd4294e39f1c12d5ca792c55065f60c89897854ede5",
+    "bytes": 23662
+  }
+}

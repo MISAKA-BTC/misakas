@@ -158,3 +158,19 @@ limit. Its prefix records 102.305 s of producer material preparation and 51.407 
 of Node submission. No complete record authentication, full Node verdict or
 native outcome was produced; performance of the complete unchanged checking
 path is the next required work, not a reduced relation set or relaxed credit.
+
+## Meaning-preserving runtime improvement
+
+Private opt2 builds preserve debug assertions and overflow checks. Under the
+same 240-second CPU limit, the unchanged ordered-membership path logs 26,624
+numeric relations; producer-only hash membership logs 40,960, both out of
+213,298. At their common 26,624 prefix, producer preparation falls from
+172.502 s to 98.332 s and Node submission remains approximately 56.8 s.
+Canonical material/cumulative-charge regressions, 35 selected tests and strict
+selected Clippy pass. Both actual trained executions still terminate with
+SIGXCPU and produce no full Node verdict or native outcome. Source/parameter
+ordering, arithmetic, coverage, owners, finite work caps and credit conditions
+are preserved. See [optimized-runtime-20261102](optimized-runtime-20261102/README.md)
+for exact source/build/input pins, failed build and disk admission records,
+retired generated-cache provenance, raw logs and qualification limits. No
+production setting or activation was changed; all seven stages remain required.

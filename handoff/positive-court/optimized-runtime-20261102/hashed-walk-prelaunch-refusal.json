@@ -1,0 +1,7 @@
+{
+  "scope": "operator prelaunch only; no model process started",
+  "required_free_bytes": 859445736,
+  "observed_free_bytes_at_refusal": 775356416,
+  "reason": "insufficient disk before child creation",
+  "runtime_attempt_count": 0
+}
