@@ -1133,6 +1133,14 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         _connection: Option<&DynRpcConnection>,
         request: GetBlocksRequest,
     ) -> RpcResult<GetBlocksResponse> {
+        self.get_blocks_retained_call(_connection, request).await.map(RetainedRpcReply::into_response)
+    }
+
+    async fn get_blocks_retained_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetBlocksRequest,
+    ) -> RpcResult<RetainedRpcReply<GetBlocksResponse>> {
         // Validate that user didn't set include_transactions without setting include_blocks
         if !request.include_blocks && request.include_transactions {
             return Err(RpcError::InvalidGetBlocksRequest);
@@ -1173,21 +1181,45 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
 
         // Prepend low hash to make it inclusive and append the filtered sink anticone
         let block_hashes = once(low_hash).chain(block_hashes).chain(filtered_sink_anticone).collect::<Vec<_>>();
-        let blocks = if request.include_blocks {
-            let mut blocks = Vec::with_capacity(block_hashes.len());
-            for hash in block_hashes.iter().copied() {
-                let block = session.async_get_block_even_if_header_only(hash).await?;
-                let rpc_block = self
-                    .consensus_converter
-                    .get_block(&session, &block, request.include_transactions, request.include_transactions)
-                    .await?;
-                blocks.push(rpc_block)
+        // The response owns each projected ID vector before its reservation.
+        // This also keeps both alive through error/cancellation after any block.
+        let mut reply = RetainedRpcReply::untracked(GetBlocksResponse { block_hashes, blocks: Vec::new() });
+        if request.include_blocks {
+            // Aggregate/header/metadata/EVM allocations remain separate open
+            // boundaries. Only source-body avoidance and ID ownership are fixed.
+            reply.response.blocks.reserve_exact(reply.response.block_hashes.len());
+            for hash in reply.response.block_hashes.iter().copied() {
+                if request.include_transactions {
+                    let block = session.async_get_block_even_if_header_only(hash).await?;
+                    let rpc_block = self.consensus_converter.get_block(&session, &block, true, true).await?;
+                    reply.response.blocks.push(rpc_block);
+                } else {
+                    let mut source = session.clone().spawn_blocking(move |c| c.get_block_rpc_projection_v1(hash)).await?;
+                    let ids = std::mem::take(&mut source.transaction_ids.ids);
+                    let block =
+                        self.consensus_converter.get_block_with_ids_v1(&session, &source.block, false, false, Some(ids)).await?;
+                    let mut produced =
+                        RetainedRpcReply { response: block, retained: source.transaction_ids.memory.take(), conversion: None };
+                    if let Some(memory) = produced.retained.take() {
+                        if let Some(retained) = reply.retained.as_mut() {
+                            if let Err(memory) = retained.merge(memory) {
+                                // Failed transfers return their ticket to its data
+                                // owner before unwinding, never before data drop.
+                                produced.retained = Some(memory);
+                                return Err(RpcError::General("incompatible projected transaction ID owners".into()));
+                            }
+                        } else {
+                            reply.retained = Some(memory);
+                        }
+                    }
+                    reply.response.blocks.push(produced.response);
+                }
             }
-            blocks
-        } else {
-            Vec::new()
-        };
-        Ok(GetBlocksResponse { block_hashes, blocks })
+        }
+        // A full response/protobuf quote is deliberately not invented here.
+        // gRPC preserves this partial Rust owner through conversion; legacy
+        // wRPC into_response remains a separately unclosed serializer boundary.
+        Ok(reply)
     }
 
     async fn get_info_call(&self, _connection: Option<&DynRpcConnection>, _request: GetInfoRequest) -> RpcResult<GetInfoResponse> {

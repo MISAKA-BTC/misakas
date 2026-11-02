@@ -11,6 +11,8 @@ use rocksdb::WriteBatch;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+mod tx_id_projection;
+
 pub trait BlockTransactionsStoreReader {
     fn get(&self, hash: BlockHash) -> Result<kaspa_consensus_core::block::BlockTransactionsV3, StoreError>;
 }
@@ -65,6 +67,44 @@ impl DbBlockTransactionsStore {
         Self::new(Arc::clone(&self.db), cache_policy)
     }
 
+    /// Read stored cached IDs without cold-decoding a transaction body. A warm
+    /// Arc cache hit is borrowed; a cold row remains pinned through both scans.
+    /// This ticket covers only the newly owned IDs, not RocksDB pin/cache memory.
+    pub fn rpc_transaction_ids_v1(
+        &self,
+        hash: BlockHash,
+    ) -> Result<kaspa_consensus_core::block::RetainedTransactionIdsV1, StoreError> {
+        use kaspa_consensus_core::block::RetainedTransactionIdsV1;
+        use kaspa_core::memory_budget::{MemoryClass, global_memory_budget};
+        let reserve = |bytes| {
+            global_memory_budget()
+                .try_reserve(MemoryClass::Snapshot, bytes)
+                .map_err(|why| StoreError::LocalResourceUnavailable(why.to_string()))
+        };
+        if let Some(body) = self.access.read_from_cache(hash) {
+            let bytes = tx_id_projection::id_reservation_bytes::<kaspa_consensus_core::tx::TransactionId>(body.0.len())
+                .ok_or_else(|| StoreError::LocalResourceUnavailable("transaction IDs allocation overflow".into()))?;
+            let mut ids = RetainedTransactionIdsV1 { ids: Vec::new(), memory: Some(reserve(bytes)?) };
+            ids.ids.try_reserve_exact(body.0.len()).map_err(|why| StoreError::LocalResourceUnavailable(why.to_string()))?;
+            ids.ids.extend(body.0.iter().map(Transaction::id));
+            ids.memory.as_ref().unwrap().materialized();
+            return Ok(ids);
+        }
+        let prefix: Vec<u8> = DatabaseStorePrefixes::BlockTransactions.into();
+        let key = kaspa_database::prelude::DbKey::new(&prefix, hash);
+        let bytes = self.db.get_pinned(&key)?.ok_or(StoreError::KeyNotFound(key))?;
+        let ids =
+            tx_id_projection::project_ids(&bytes, reserve, kaspa_consensus_core::tx::TransactionId::from_bytes).map_err(|why| {
+                match why {
+                    tx_id_projection::ProjectionError::Codec(error) => StoreError::DataInconsistency(error.to_string()),
+                    tx_id_projection::ProjectionError::Capacity(error) => error,
+                    tx_id_projection::ProjectionError::Allocation(error) => StoreError::LocalResourceUnavailable(error.to_string()),
+                }
+            })?;
+        ids.lease.materialized();
+        Ok(RetainedTransactionIdsV1 { ids: ids.ids, memory: Some(ids.lease) })
+    }
+
     pub fn has(&self, hash: BlockHash) -> Result<bool, StoreError> {
         self.access.has(hash)
     }
@@ -114,3 +154,7 @@ mod retained_body_v3_tests;
 #[cfg(test)]
 #[path = "block_transactions/capacity_weight_tests.rs"]
 mod capacity_weight_tests;
+
+#[cfg(test)]
+#[path = "block_transactions/tx_id_projection_tests.rs"]
+mod tx_id_projection_tests;

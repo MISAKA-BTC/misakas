@@ -58,6 +58,30 @@ impl RequestHandler {
             response.id = id;
             return Ok((response, conversion));
         }
+        if self.rpc_op == KaspadPayloadOps::GetBlocks {
+            use kaspa_grpc_core::protowire::{GetBlocksResponseMessage, kaspad_request::Payload};
+            let Some(Payload::GetBlocksRequest(ref wire_request)) = request.payload else {
+                return Err(GrpcServerError::InvalidRequestPayload);
+            };
+            let retained = match kaspa_rpc_core::GetBlocksRequest::try_from(wire_request) {
+                Ok(request) => self.server_ctx.core_service.get_blocks_retained_call(None, request).await,
+                Err(error) => Err(error),
+            };
+            let (wire_response, conversion) = match retained {
+                Ok(reply) => {
+                    let (response, retained, conversion) = reply.into_parts();
+                    // At present only projected Rust IDs are admitted. No
+                    // protobuf admission is claimed when conversion is None.
+                    kaspa_utils_tower::transport::convert_preallocated(response, retained, conversion, |response| {
+                        GetBlocksResponseMessage::from(Ok(response))
+                    })
+                }
+                Err(error) => (GetBlocksResponseMessage::from(error), None),
+            };
+            let mut response: KaspadResponse = wire_response.into();
+            response.id = id;
+            return Ok((response, conversion));
+        }
         let mut response = self.method.call(self.server_ctx.clone(), self.connection.clone(), request).await?;
         response.id = id;
         Ok((response, None))
