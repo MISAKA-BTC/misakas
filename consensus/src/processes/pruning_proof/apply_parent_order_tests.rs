@@ -13,13 +13,15 @@ use kaspa_database::{create_temp_db, prelude::ConnBuilder, utils::DbLifetime};
 use std::sync::atomic::AtomicBool;
 
 fn fixture() -> (DbLifetime, Arc<ConsensusServices>) {
-    fixture_at_level(1)
+    fixture_at_level(1, None)
 }
 
-fn fixture_at_level(max_level: u8) -> (DbLifetime, Arc<ConsensusServices>) {
+fn fixture_at_level(max_level: u8, genesis: Option<BlockHash>) -> (DbLifetime, Arc<ConsensusServices>) {
     let mut config = ConfigBuilder::new(DEVNET_PARAMS).skip_proof_of_work().build();
     config.params.max_block_level = max_level;
-    config.params.genesis.hash = BlockHash::from_u64_word(300);
+    if let Some(genesis) = genesis {
+        config.params.genesis.hash = genesis;
+    }
     config.params.pow_blake2b_sha3_activation = ForkActivation::never();
     let config = Arc::new(config);
     let (lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
@@ -109,7 +111,9 @@ fn apply_checkpoint_fixture(
     upper: Option<Vec<Arc<Header>>>,
     validate: bool,
 ) -> (DbLifetime, Arc<ConsensusServices>) {
-    let (lifetime, services) = fixture_at_level(if upper.is_some() { 1 } else { 0 });
+    let genesis = headers.first().unwrap().hash;
+    assert!(headers.first().unwrap().parents_by_level.is_empty(), "checkpoint fixture uses canonical genesis parents");
+    let (lifetime, services) = fixture_at_level(if upper.is_some() { 1 } else { 0 }, Some(genesis));
     let ppm = &services.pruning_proof_manager;
     crate::processes::relations::init(&mut *ppm.relations_store.write());
     ppm.ghostdag_store.insert(ORIGIN, ppm.ghostdag_manager.origin_ghostdag_data()).unwrap();
@@ -129,6 +133,12 @@ fn apply_checkpoint_fixture(
 
 fn checkpoint_header(hash: u64, parents: &[u64], score: u64, daa: u64) -> Arc<Header> {
     let mut h = (*header(hash, parents)).clone();
+    if parents.is_empty() {
+        // A real genesis has zero parent levels. `[[]]` instead asks
+        // ParentsManager to fall back to genesis at omitted higher levels,
+        // creating a synthetic self-parent if this hash is also genesis.
+        h.parents_by_level = Default::default();
+    }
     h.blue_score = score;
     h.blue_work = crate::processes::difficulty::calc_work(h.bits) * BlueWorkType::from_u64(score);
     h.daa_score = daa;
