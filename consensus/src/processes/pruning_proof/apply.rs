@@ -26,9 +26,9 @@ use crate::{
     model::{
         services::reachability::ReachabilityService,
         stores::{
-            ghostdag::{GhostdagData, GhostdagStore},
+            ghostdag::{GhostdagData, GhostdagStore, GhostdagStoreReader},
             headers::HeaderStore,
-            pruning::PruningProofDescriptor,
+            pruning::{PruningProofDescriptor, PruningStoreReader},
             reachability::StagingReachabilityStore,
             relations::StagingRelationsStore,
             selected_chain::SelectedChainStore,
@@ -45,6 +45,72 @@ use crate::{
 use super::PruningProofManager;
 
 impl PruningProofManager {
+    /// Inspect only the applied proof's complete level-0 chain. The import
+    /// reachability tree spans the union of every proof level and is not the
+    /// GHOSTDAG selected-parent chain. Normal block statuses are not created by
+    /// proof import either, so neither public block-query gate is suitable here.
+    pub fn chain_contains_checkpoint(&self, point: BlockHash, checkpoint: BlockHash, daa_score: u64) -> PruningImportResult<bool> {
+        let unavailable = |message: String| PruningImportError::PruningPointImportContextUnavailable(point, message);
+        let pruning = self.pruning_point_store.read();
+        if pruning.pruning_point().map_err(|e| unavailable(format!("checkpoint target: {e}")))? != point {
+            return Err(unavailable("checkpoint target is not the applied pruning point".into()));
+        }
+        let descriptor = pruning.pruning_proof_descriptor().map_err(|e| unavailable(format!("checkpoint descriptor: {e}")))?;
+        let (Some(&root), Some(&tip), Some(&count)) = (descriptor.roots.first(), descriptor.tips.first(), descriptor.counts.first())
+        else {
+            return Err(unavailable("checkpoint proof has no level-0 descriptor".into()));
+        };
+        if descriptor.pruning_point != point || tip != point || count == 0 {
+            return Err(unavailable("checkpoint proof descriptor does not name the applied point".into()));
+        }
+        // A truncated proof may recompute GHOSTDAG on an incomplete history.
+        // Only a genesis-rooted level 0 has the complete DAG needed to judge
+        // historical selected-chain checkpoints (and exact work validation).
+        if root != self.genesis_hash {
+            return Err(unavailable("historical checkpoint chain requires a genesis-rooted level-0 proof".into()));
+        }
+        let read_header =
+            |hash| self.headers_store.get_header(hash).map_err(|e| unavailable(format!("checkpoint header {hash}: {e}")));
+        let checkpoint_header = read_header(checkpoint)?;
+        if checkpoint_header.daa_score != daa_score {
+            return Err(unavailable("checkpoint header differs from its pre-checked DAA score".into()));
+        }
+        let root_header = read_header(root)?;
+        let point_header = read_header(point)?;
+        if checkpoint_header.daa_score < root_header.daa_score || checkpoint_header.daa_score > point_header.daa_score {
+            return Err(unavailable("checkpoint lies outside the applied proof's level-0 window".into()));
+        }
+        // The pre-check established checkpoint containment. Missing local data
+        // after import must not become a peer's checkpoint violation.
+        self.ghostdag_store
+            .get_selected_parent(checkpoint)
+            .map_err(|e| unavailable(format!("checkpoint ghostdag {checkpoint}: {e}")))?;
+        let mut seen = BlockHashSet::new();
+        let mut current = point;
+        let mut found = false;
+        loop {
+            if !seen.insert(current) || seen.len() as u64 > count {
+                return Err(unavailable("checkpoint selected-parent chain cycles or exceeds the proof's level-0 count".into()));
+            }
+            read_header(current)?;
+            let parent = self
+                .ghostdag_store
+                .get_selected_parent(current)
+                .map_err(|e| unavailable(format!("checkpoint chain {current}: {e}")))?;
+            found |= current == checkpoint;
+            if current == root {
+                if !parent.is_origin() {
+                    return Err(unavailable("checkpoint proof root has an out-of-window selected parent".into()));
+                }
+                return Ok(found);
+            }
+            if parent.is_origin() {
+                return Err(unavailable("checkpoint selected-parent chain ends before the proof root".into()));
+            }
+            current = parent;
+        }
+    }
+
     pub fn apply_proof(&self, proof: PruningPointProof, trusted_set: &[TrustedBlock]) -> PruningImportResult<()> {
         // Following validation of a pruning proof, various consensus storages must be updated
 

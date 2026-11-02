@@ -302,6 +302,18 @@ mod reject_classification_tests {
     use super::*;
 
     #[test]
+    fn missing_checkpoint_proof_context_is_local_and_not_a_peer_verdict() {
+        let error: ProtocolError = PruningImportError::PruningPointImportContextUnavailable(
+            kaspa_consensus_core::BlockHash::default(),
+            "checkpoint proof row unavailable".into(),
+        )
+        .into();
+        assert!(matches!(error, ProtocolError::PruningImportError(PruningImportError::PruningPointImportContextUnavailable(_, _))));
+        assert!(error.is_local_native_resource_unavailable());
+        assert!(!matches!(error, ProtocolError::MisbehavingPeer(_)));
+    }
+
+    #[test]
     fn local_transport_refusals_never_judge_candidate_chain_validity() {
         for error in [
             ProtocolError::LocalTransportCapacityUnavailable("byte budget".into()),

@@ -2716,6 +2716,22 @@ pub trait ConsensusApi: Send + Sync {
         unimplemented!()
     }
 
+    /// Check a checkpoint on the applied pruning proof's level-0 GHOSTDAG chain.
+    /// Proof-only rows deliberately have no normal block status. Missing/incomplete
+    /// local proof context is an error, never an off-chain verdict against a peer.
+    fn pruning_proof_chain_contains_checkpoint(
+        &self,
+        point: BlockHash,
+        checkpoint: BlockHash,
+        daa_score: u64,
+    ) -> PruningImportResult<bool> {
+        let _ = (checkpoint, daa_score);
+        Err(crate::errors::pruning::PruningImportError::PruningPointImportContextUnavailable(
+            point,
+            "pruning proof checkpoint chain inspection unsupported".into(),
+        ))
+    }
+
     fn is_chain_ancestor_of(&self, low: BlockHash, high: BlockHash) -> ConsensusResult<bool> {
         unimplemented!()
     }

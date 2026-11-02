@@ -15,6 +15,7 @@ use std::sync::atomic::AtomicBool;
 fn fixture() -> (DbLifetime, Arc<ConsensusServices>) {
     let mut config = ConfigBuilder::new(DEVNET_PARAMS).skip_proof_of_work().build();
     config.params.max_block_level = 1;
+    config.params.genesis.hash = BlockHash::from_u64_word(300);
     config.params.pow_blake2b_sha3_activation = ForkActivation::never();
     let config = Arc::new(config);
     let (lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
@@ -97,4 +98,129 @@ fn cyclic_import_is_typed_error_before_any_header_or_reachability_write() {
         ppm.order_expanded_proof(&mut proof.clone()),
         Err(PruningImportError::PruningPointImportContextUnavailable(_, _))
     ));
+}
+
+fn apply_checkpoint_fixture(headers: Vec<Arc<Header>>, upper: Option<Vec<Arc<Header>>>) -> (DbLifetime, Arc<ConsensusServices>) {
+    let (lifetime, services) = fixture();
+    let ppm = &services.pruning_proof_manager;
+    crate::processes::relations::init(&mut *ppm.relations_store.write());
+    ppm.ghostdag_store.insert(ORIGIN, Arc::new(ppm.ghostdag_manager.origin_ghostdag_data())).unwrap();
+    let root = headers.first().unwrap().clone();
+    let point = headers.last().unwrap().clone();
+    ppm.apply_proof(vec![headers, upper.unwrap_or_else(|| vec![root.clone()])], &[]).unwrap();
+    ppm.import_pruning_points(&[root, point]).unwrap();
+    (lifetime, services)
+}
+
+fn checkpoint_header(hash: u64, parents: &[u64], score: u64, daa: u64) -> Arc<Header> {
+    let mut h = (*header(hash, parents)).clone();
+    h.blue_score = score;
+    h.daa_score = daa;
+    Arc::new(h)
+}
+
+fn checkpoint_chain() -> Vec<Arc<Header>> {
+    vec![
+        checkpoint_header(300, &[], 0, 0),
+        checkpoint_header(200, &[300], 1, 100),
+        checkpoint_header(100, &[200], 2, 100),
+        checkpoint_header(50, &[100], 3, 2759),
+    ]
+}
+
+#[test]
+fn checkpoint_chain_is_available_after_actual_apply_and_history_import_without_block_statuses() {
+    use crate::model::stores::statuses::{DbStatusesStore, StatusesStoreReader};
+    use kaspa_database::prelude::CachePolicy;
+    let headers = checkpoint_chain();
+    let (_lifetime, services) = apply_checkpoint_fixture(headers.clone(), None);
+    let ppm = &services.pruning_proof_manager;
+    let statuses = DbStatusesStore::new(ppm.db.clone(), CachePolicy::Count(16));
+    for h in &headers {
+        assert!(ppm.headers_store.get_header(h.hash).is_ok());
+        assert!(ppm.ghostdag_store.get_data(h.hash).is_ok());
+        assert!(ppm.reachability_store.read().has(h.hash).unwrap());
+        assert!(!statuses.has(h.hash).unwrap(), "proof import must not fabricate a normal block status");
+    }
+    let point = headers.last().unwrap().hash;
+    for h in &headers {
+        assert!(ppm.chain_contains_checkpoint(point, h.hash, h.daa_score).unwrap(), "equal-DAA chain blocks are not skipped");
+    }
+}
+
+#[test]
+fn checkpoint_dag_ancestor_off_the_selected_parent_chain_is_still_refused() {
+    let root = checkpoint_header(300, &[], 0, 0);
+    let checkpoint = checkpoint_header(200, &[300], 1, 100);
+    let off_chain = checkpoint_header(100, &[300], 1, 100);
+    let point = checkpoint_header(50, &[200, 100], 2, 2759);
+    let (_lifetime, services) = apply_checkpoint_fixture(vec![root, checkpoint.clone(), off_chain.clone(), point.clone()], None);
+    let ppm = &services.pruning_proof_manager;
+    assert!(ppm.reachability_store.read().try_is_dag_ancestor_of(off_chain.hash, point.hash).unwrap());
+    assert_eq!(ppm.ghostdag_store.get_selected_parent(point.hash).unwrap(), checkpoint.hash);
+    assert!(ppm.chain_contains_checkpoint(point.hash, checkpoint.hash, checkpoint.daa_score).unwrap());
+    assert!(!ppm.chain_contains_checkpoint(point.hash, off_chain.hash, off_chain.daa_score).unwrap());
+}
+
+#[test]
+fn checkpoint_uses_level_zero_ghostdag_even_when_all_level_import_tree_takes_another_parent() {
+    let root = checkpoint_header(300, &[], 0, 0);
+    let checkpoint = checkpoint_header(100, &[300], 1, 100);
+    let other = checkpoint_header(200, &[300], 1, 100);
+    let mut point = (*checkpoint_header(50, &[100], 2, 2759)).clone();
+    point.parents_by_level.push(vec![other.hash]);
+    let point = Arc::new(point);
+    let (_lifetime, services) =
+        apply_checkpoint_fixture(vec![root.clone(), checkpoint.clone(), point.clone()], Some(vec![root, other.clone()]));
+    let ppm = &services.pruning_proof_manager;
+    assert_eq!(ppm.reachability_store.read().get_parent(point.hash).unwrap(), other.hash);
+    assert!(!ppm.reachability_store.read().try_is_chain_ancestor_of(checkpoint.hash, point.hash).unwrap());
+    assert_eq!(ppm.ghostdag_store.get_selected_parent(point.hash).unwrap(), checkpoint.hash);
+    assert!(ppm.chain_contains_checkpoint(point.hash, checkpoint.hash, checkpoint.daa_score).unwrap());
+}
+
+#[test]
+fn checkpoint_incomplete_or_corrupt_context_is_typed_local_failure_instead_of_a_false_verdict() {
+    let (_lifetime, services) = fixture();
+    let ppm = &services.pruning_proof_manager;
+    let point = BlockHash::from_u64_word(50);
+    let checkpoint = BlockHash::from_u64_word(200);
+    assert!(matches!(
+        ppm.chain_contains_checkpoint(point, checkpoint, 100),
+        Err(PruningImportError::PruningPointImportContextUnavailable(_, _))
+    ));
+    for fault in ["wrong-target", "header", "ghostdag", "cycle", "premature-origin", "descriptor-count", "wrong-daa", "truncated-root"]
+    {
+        let (_lifetime, services) = apply_checkpoint_fixture(checkpoint_chain(), None);
+        let ppm = &services.pruning_proof_manager;
+        let mut target = point;
+        match fault {
+            "wrong-target" => target = BlockHash::from_u64_word(99),
+            "wrong-daa" => {}
+            "header" => ppm.headers_store.delete(checkpoint).unwrap(),
+            "ghostdag" => ppm.ghostdag_store.delete(checkpoint).unwrap(),
+            "descriptor-count" | "truncated-root" => {
+                let mut descriptor = (*ppm.pruning_point_store.read().pruning_proof_descriptor().unwrap()).clone();
+                if fault == "truncated-root" {
+                    descriptor.roots[0] = checkpoint;
+                } else {
+                    descriptor.counts[0] = 1;
+                }
+                ppm.pruning_point_store.write().set_pruning_proof_descriptor(descriptor).unwrap();
+            }
+            _ => {
+                let mut data = (*ppm.ghostdag_store.get_data(point).unwrap()).clone();
+                data.selected_parent = if fault == "cycle" { point } else { ORIGIN };
+                ppm.ghostdag_store.delete(point).unwrap();
+                ppm.ghostdag_store.insert(point, Arc::new(data)).unwrap();
+            }
+        }
+        assert!(
+            matches!(
+                ppm.chain_contains_checkpoint(target, checkpoint, if fault == "wrong-daa" { 101 } else { 100 }),
+                Err(PruningImportError::PruningPointImportContextUnavailable(_, _))
+            ),
+            "{fault}"
+        );
+    }
 }
