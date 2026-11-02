@@ -350,7 +350,7 @@ impl NativeNumericalGeometryV3 {
             .map_err(NumericalMaterializeErrorV3::native_v3)?;
         let output = native_output_requests_v3(c, court.dissection_arity()).map_err(E::Resource)?;
         if let Some(ticket) = lease.as_mut() {
-            ticket.grow_memory_v1(output).map_err(E::Resource)?;
+            ticket.grow_pending_memory_v1(output).map_err(E::Resource)?;
         }
         let graph =
             Self::materialize_v3(source, registered, layout, court, demand, budget).map_err(NumericalMaterializeErrorV3::native_v3)?;

@@ -34,7 +34,7 @@ Native request tickets can still carry conservative whole-operation peaks for an
 
 ## Legacy growth boundaries not converted in the first implementation
 
-`reserve_native_requests_v1` preserves compatibility (`None` without explicit strict capability); it is not globally activated across its legacy consumers. `grow_memory_v1` remains resident accounting for compatibility. `grow_pending_memory_v1` explicitly reserves new promises and requires `materialized_v1` after the actual construction. These production call sites require follow-up boundary review (not including historical source copies under docs or unit tests):
+`reserve_native_requests_v1` preserves compatibility (`None` without explicit strict capability); it is not globally activated across its legacy consumers. `grow_memory_v1` remains resident accounting for compatibility. `grow_pending_memory_v1` explicitly reserves new promises and requires `materialized_v1` after the actual construction. After the follow-up migration below, these production call sites still require boundary review (not including historical source copies under docs or unit tests):
 
 | Source | Additional allocation / owner |
 | --- | --- |
@@ -44,22 +44,21 @@ Native request tickets can still carry conservative whole-operation peaks for an
 | `consensus/core/src/palw_court_shared_prefix_builder_v1.rs` | Prefix replay and authenticated boundary leaves. |
 | `consensus/core/src/palw_court_shared_prefix_family_v1.rs` | Prefix boundary dependency vector. |
 | `consensus/core/src/palw_routed_material_v2.rs` | Accumulated routed material units / transferred source owners. |
-| `consensus/core/src/palw_court_source_material_graph_v3.rs` | Derived source graph output vertex/edge materialization. |
-| `consensus/core/src/palw_court_numerical_geometry_v3.rs` | Second-pass numerical graph roots/paths/edges. |
-| `consensus/core/src/palw_court_shared_semantic_material_v1.rs` (2 production sites) | Shared semantic replay/output and derived material. |
 | `consensus/core/src/palw_native_resource_v1/kernel_salted.rs` (2 sites) | Reserved sink growth for salted material and commitments. |
 | `consensus/core/src/palw_native_resource_v1/transition.rs` | Transition workspace/decode growth wrapper. |
 | `consensus/core/src/palw_native_resource_v1/kernel_material.rs` | Kernel material collection growth. |
 | `consensus/core/src/palw_native_resource_v1/ledger_expansion.rs` | Kernel ledger expansion growth wrapper. |
 | `consensus/core/src/palw_native_resource_v1/kernel_ledger_mutation.rs` | Ledger mutation workspace growth wrapper. |
-| `consensus/core/src/palw_native_resource_v1/restore.rs` | Carriage restoration/index workspace. |
 | `consensus/core/src/palw_source_bootstrap_v1.rs` | Shared Arc/bootstrap roster envelope. |
 | `consensus/core/src/palw_native_settlement_resources_v1.rs` | Settlement sweep collection/vector growth. |
 | `consensus/core/src/palw_step_refute/memory_v2/capture.rs` | Recurrence capture evidence. |
 | `consensus/core/src/palw_step_refute/routing_v2/capture.rs` | Routing capture evidence. |
 | `consensus/core/src/palw_step_refute/routing_v2/workspace.rs` | Weight-oracle gathered bytes, code/exponent and parameter workspaces. |
 | `consensus/core/src/palw_court_archive_discharge_v1.rs` | Archived close decode. |
-| `consensus/core/src/palw_tir_public_parameter_cover_v1.rs` (2 sites) | Parameter cover and original root input cover. |
+
+## Reviewed growth follow-up
+
+Seven additional large construction boundaries now use `grow_pending_memory_v1`: numerical geometry second-pass output; source graph vertex/edge output; shared semantic full and table-only output; parameter cover and original root-input cover; and carriage restoration/index workspace. Each returns through `NativeRetainedV1::from_owner_reserved_v1`, which seals its materialized owner. Failure before that return drops the pending ticket. These migrations do not turn on existing general request APIs for default consumers or alter semantic/decode verdicts.
 
 ## Validation
 
