@@ -134,6 +134,16 @@ enum MeasurementWindow {
     ExtendedCost,
 }
 impl MeasurementWindow {
+    fn node_limits(self) -> FullRelationLimits {
+        let mut l = node_limits();
+        if matches!(self, Self::ExtendedCost) {
+            // Actual position-9 closure stops at 16,385 elements. Keep the
+            // same per-relation 1-GiB workspace owner and every other bound;
+            // its conservative quote still has to admit each evaluation.
+            l.plan.max_elements_per_relation = 1 << 15;
+        }
+        l
+    }
     fn cpu_seconds(self) -> u64 {
         match self {
             Self::Standard => 240,
@@ -482,7 +492,7 @@ fn run_loaded(
                 inputs.class,
                 hash(ROOT),
                 job,
-                node_limits().plan,
+                window.node_limits().plan,
             )
             .map_err(|e| format!("extended copy geometry {e:?}"))?;
             let relations = geometry.summary().relations;
@@ -544,7 +554,7 @@ fn run_loaded(
         hash(ROOT),
         job,
         PalwPromptIdsFormV1::Flat,
-        node_limits(),
+        window.node_limits(),
         domains(),
         signed.result.clone(),
         &signed.key,
@@ -613,7 +623,7 @@ fn run_loaded(
         hash(ROOT),
         job,
         PalwPromptIdsFormV1::Flat,
-        node_limits(),
+        window.node_limits(),
         domains(),
         signed.result.clone(),
         &signed.key,
@@ -676,7 +686,8 @@ fn run_loaded(
                 "diagnostic_stage":format!("{:?}",diagnostics.stage),"producer_material_ns":producer_material_ns,
                 "previous_successful_node_ns":node_check_ns,"failed_node_ns":node_started.elapsed().as_nanos(),
                 "completed_elements":total_elements,"completed_terms":total_terms,"completed_source_reads":total_source_reads,
-                "per_relation_terms_cap":node_limits().plan.max_terms_per_relation,"whole_record_authenticated":false}),
+                "per_relation_elements_cap":window.node_limits().plan.max_elements_per_relation,
+                "per_relation_terms_cap":window.node_limits().plan.max_terms_per_relation,"whole_record_authenticated":false}),
             );
             format!(
                 "Node relation {i}/{relations}: {e:?}; kind={:?}; material={:?}; file_usage={:?}; work={:?}; evaluation={diagnostics:?}",
@@ -954,12 +965,16 @@ fn run_mode(storage_only: bool, window: MeasurementWindow) {
     let reserve = ledger(l.clone());
     let early = reserve("measurement-bootstrap-and-export-owners", hash(CLASS), hash(CONTEXT), E).unwrap();
     let io = window.io_limits();
+    let node = window.node_limits();
     report(
         "measurement-window",
         Instant::now(),
         &l,
         serde_json::json!({"cpu_seconds":window.cpu_seconds(),"actual_provider_max_bytes":io.bytes,
         "actual_provider_max_calls":io.calls,"max_openings":io.openings,"max_attempts":io.attempts,
+        "per_relation_elements":node.plan.max_elements_per_relation,"per_relation_terms":node.plan.max_terms_per_relation,
+        "per_relation_source_reads":node.source.max_source_reads,"per_relation_workspace_cap":node.source.max_workspace_bytes,
+        "memo_entry_envelope":kaspa_consensus_core::palw_native_resource_v1::btree_node_envelope_bytes_v1::<usize,i128>(),
         "logical_request_cap":REQUEST_CAP,"cumulative_tape_cap":DISK_CAP,"diagnostic_only":true}),
     );
     let result = run_trained(&l, &reserve, &early, storage_only, window);
