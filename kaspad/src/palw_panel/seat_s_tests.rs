@@ -990,7 +990,7 @@ fn r2_the_prune_keeps_a_live_liability_claims_files() {
     let pins = palw_seat_retention_pins_v1(&live, &liabilities, 5_000);
     assert!(pins.contains(&liable) && !pins.contains(&expired));
     let hours = |n: u64| std::time::Duration::from_secs(n * 3600);
-    prune_foreign_retention_v1(&dir, &pins, std::time::SystemTime::now() + hours(100), 4_096);
+    prune_foreign_retention_v1(&dir, &pins, std::time::SystemTime::now() + hours(100), 4_096, |_| false);
     assert!(dir.join(format!("{liable}.material")).exists(), "a live liability's file stays past the age bound");
     assert!(!dir.join(format!("{expired}.material")).exists() && !dir.join(format!("{stranger}.material")).exists());
     let _ = std::fs::remove_dir_all(&dir);

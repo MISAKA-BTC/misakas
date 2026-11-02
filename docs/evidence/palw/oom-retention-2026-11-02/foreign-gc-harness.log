@@ -1,0 +1,7 @@
+production_sha256=e313ed6ace67a180124efafbb377c76d558e5e38e0fd43def3ad6daf54c6827d
+
+running 2 tests
+test foreign_gc_rereads_accepted_retention_after_restart_and_branch_change ... ok
+test the_foreign_retention_keeps_a_live_claims_material_past_the_age_bound ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

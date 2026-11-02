@@ -1666,16 +1666,47 @@ fn the_foreign_retention_keeps_a_live_claims_material_past_the_age_bound() {
     let pinned: HashSet<Hash64> = [live].into();
     let hours = |n: u64| std::time::Duration::from_secs(n * 3600);
     // 93 hours on: the 2M claim is still in its window.
-    prune_foreign_retention_v1(&dir, &pinned, std::time::SystemTime::now() + hours(93), 4_096);
+    prune_foreign_retention_v1(&dir, &pinned, std::time::SystemTime::now() + hours(93), 4_096, |_| false);
     assert!(dir.join(format!("{live}.material")).exists() && dir.join(format!("{live}.answer")).exists(), "a live claim's files stay");
     assert!(!dir.join(format!("{gone}.material")).exists() && !dir.join("junk").exists(), "the rest go by age, as before");
     // By count: the live claim's files do not count, and are never the ones evicted.
     for n in 0..3u64 {
         std::fs::write(dir.join(format!("{}.material", h(0x100 + n))), b"bytes").unwrap();
     }
-    prune_foreign_retention_v1(&dir, &pinned, std::time::SystemTime::now(), 1);
+    prune_foreign_retention_v1(&dir, &pinned, std::time::SystemTime::now(), 1, |_| false);
     let left = std::fs::read_dir(&dir).unwrap().count();
     assert_eq!(left, 3, "the two live files, and one of the three others");
     assert!(dir.join(format!("{live}.material")).exists());
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Cold duty caches and their finite capacity cannot release an accepted DA
+/// obligation. Re-read the selected claim for both the age and count sweeps.
+#[test]
+fn foreign_gc_rereads_accepted_retention_after_restart_and_branch_change() {
+    let dir = std::env::temp_dir().join(format!("seat-r-retention-{}-{:?}", std::process::id(), std::thread::current().id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let claim = h(0x20608);
+    let material = dir.join(format!("{claim}.material"));
+    let answer = dir.join(format!("{claim}.answer"));
+    std::fs::write(&material, b"committed material").unwrap();
+    std::fs::write(&answer, b"answer").unwrap();
+    let old = std::time::SystemTime::now() + std::time::Duration::from_secs(100 * 3600);
+    // An empty cache represents cold startup or eviction. Both files exceed the
+    // age bound, and max_files=0 independently applies count pressure.
+    for now_daa in [20_605, 20_607, 20_608] {
+        let empty = HashSet::new();
+        prune_foreign_retention_v1(&dir, &empty, old, 0, |id| *id == claim && now_daa <= 20_608);
+        assert!(material.exists() && answer.exists(), "DAA {now_daa}: raw deadline 20604 cannot release accepted 20608");
+    }
+    // A different selected branch has a later acceptance. It must be re-read;
+    // neither the old cached horizon nor the raw manifest releases the files.
+    for now_daa in [20_609, 20_612] {
+        prune_foreign_retention_v1(&dir, &HashSet::new(), old, 0, |id| *id == claim && now_daa <= 20_612);
+        assert!(material.exists() && answer.exists());
+    }
+    prune_foreign_retention_v1(&dir, &HashSet::new(), old, 0, |_| false);
+    assert!(!material.exists() && !answer.exists(), "only the current chain's discharge permits GC");
+    std::fs::remove_dir_all(&dir).unwrap();
 }
