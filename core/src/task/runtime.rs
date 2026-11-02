@@ -42,19 +42,29 @@ async fn join_service_tasks<F>(
     futures: Vec<F>,
     progress: &[ServiceTaskProgress],
     phase: &'static str,
+    core: &Core,
 ) -> Result<Vec<AsyncServiceResult<()>>, tokio::task::JoinError>
 where
     F: Future<Output = ServiceTaskResult>,
 {
     let joined = try_join_all(futures);
     tokio::pin!(joined);
-    let started = tokio::time::Instant::now();
-    let mut delay = Duration::from_secs(5);
+    // Some starts (e.g. TickService) complete normally while other services stay
+    // resident. Only start the diagnostic clock after Core signals shutdown.
+    let mut shutdown_started = if core.keep_running.load(Ordering::Relaxed) { None } else { Some(tokio::time::Instant::now()) };
+    let mut delay = Duration::from_secs(if shutdown_started.is_some() { 5 } else { 1 });
     loop {
         tokio::select! {
             biased;
             result = &mut joined => return result,
             _ = tokio::time::sleep(delay) => {
+                let Some(started) = shutdown_started else {
+                    if !core.keep_running.load(Ordering::Relaxed) {
+                        shutdown_started = Some(tokio::time::Instant::now());
+                        delay = Duration::from_secs(5);
+                    }
+                    continue;
+                };
                 let pending = progress.iter().filter(|task| !task.completed.load(Ordering::Relaxed)).map(|task| task.name).collect::<Vec<_>>();
                 if delay == Duration::from_secs(5) {
                     info!("async-runtime shutdown joining {phase} tasks for {}s; unfinished services: {}", started.elapsed().as_secs(), pending.join(", "));
@@ -164,6 +174,7 @@ impl AsyncRuntime {
             remaining_futures.into_iter().map(|future| future.map(|(_, result)| result)).collect(),
             &start_progress,
             "start",
+            &core,
         )
         .await
         .unwrap();
@@ -182,7 +193,7 @@ impl AsyncRuntime {
                 progress.track(tokio::spawn(x.clone().stop())).map(|(_, result)| result)
             })
             .collect::<Vec<_>>();
-        join_service_tasks(futures, &stop_progress, "stop").await.unwrap();
+        join_service_tasks(futures, &stop_progress, "stop", &core).await.unwrap();
 
         // Drop all services and cleanup
         self.services.lock().unwrap().clear();
