@@ -26,11 +26,11 @@ native credit, recovery, role or measurement requirements.
 | --- | --- | --- | --- |
 | 1 | Preserve old G14 signatures, adjudication, responsibility, settlement and recovery when Positive is disabled | Old-claim/native histories replay identically at the integrated implementation; actual selected source, commands and state/fund comparisons | Earlier selected regressions exist; final integrated native regression and full consumer/history comparison remain required |
 | 2 | Separate Miner Result, Panel Witness and finite source obligations; authenticate each role; atomically reserve capacity, funds and state | Actual native admission from independent registered job/worker/policy, real signatures, UTXO locks and one journal/checkpoint; rejected/duplicate attempts leave consistent funds and reservations | Shared DTOs and local adapters exist. Actual independent job/role authority and the one native writer are missing |
-| 3 | Cold Node independently derives and checks all mandatory relations, connectivity and final output | Accepted native flow using A1, without an executor/model store on the Node; last-relation omission, changed intermediate, model/input/branch substitutions rejected | Pure narrow/wide checkers, role fixtures and complete local checking of the original trained short job exist. Isolated cold trained Node, actual native accepted context and all required enclosing reservations are not connected |
+| 3 | Cold Node independently derives and checks all mandatory relations, connectivity and final output | Accepted native flow using A1, without an executor/model store on the Node; last-relation omission, changed intermediate, model/input/branch substitutions rejected | Pure narrow/wide checkers, role fixtures and all 213,298 original short-job checks now complete in a separate sandboxed Node process with original model/fixture access denied. Actual native accepted context, production role services and all required enclosing reservations remain unconnected |
 | 4 | Miner performs ordinary inference plus bounded source responses; Panel replays once, records and submits; resume/transfer preserves global budgets | Actual Miner/Panel services and G14 carriers, instrumented zero mandatory Miner witness construction, direct-to-Node source completion, bounded canonical request unions and durable local spent counters | API/process fixtures and short trained ordinary runs exist. Kaspad producer/verifier and native source-duty service are not connected to the new accepted flow |
 | 5 | Integrate Fraud/Positive intake, transport, deadlines, responsibility, fees, Gate C and every credit reader | Actual P-selected certification plus full local coverage and existing per-use entitlement at reward, receipt mint/spend, DAG live/safe/final weight, Rule E, settlement/EVM, prefix and dependency reads; unresolved fraud and maturity remain effective | `CreditConsumers` is an adapter API. Native factory, P lifecycle and production consumers are not connected; local DTOs/flags cannot fill the gap |
 | 6 | Multiple Nodes, restart, Panel replacement, reorg, IBD/pruning and dependent-claim cancellation reproduce state and money exactly | Real accepted block/carrier history, shared atomic undo and DB restart/IBD/pruning delivery; no repeated payments, defaults or replenished request/attempt budgets | Real DB journal fixtures exist, but no full node admission/role/fund writer to exercise all these transitions |
-| 7 | Measure actual LLM Miner/Panel/Node costs and enable only explicitly approved finite profiles | Pinned original model/job/arithmetic; separate cold/warm role CPU/RAM/IO/wire/storage/recovery costs, maxima and tail latency, global block/epoch/concurrency and Fraud protection; actual permitted activation after review | Original Pythia ordinary inference, one-pass Panel capture, complete signed record and all 213,298 local Node checks plus EOF/root/signature now complete in the shared-process short-job measurement. Isolated/cold role, canonical/full-context, native/global/concurrency/recovery costs and approved activation remain absent |
+| 7 | Measure actual LLM Miner/Panel/Node costs and enable only explicitly approved finite profiles | Pinned original model/job/arithmetic; separate cold/warm role CPU/RAM/IO/wire/storage/recovery costs, maxima and tail latency, global block/epoch/concurrency and Fraud protection; actual permitted activation after review | Original Pythia ordinary inference, one-pass Panel capture, complete signed record and all 213,298 checks plus EOF/root/signature complete in shared and separate sandboxed-Node short-job measurements. Isolated Node CPU/RSS/wire are observed; independent Miner/Panel processes, physically cold caches, canonical/full-context, native/global/concurrency/recovery costs and approved activation remain absent |
 
 All seven stages remain part of the goal. A small paid Canonical Assignment
 path, if adopted, is an intermediate native connection. It does not by itself
@@ -255,3 +255,25 @@ every credit consumer, real-node recovery/dependencies or activation. All
 seven stages and every native gate/acceptance case remain part of the goal;
 a complete local replay does not replace selected-validator certification
 under its explicit honest-fraction assumption.
+
+## Separate sandboxed Node: complete original short job
+
+The same original noncanonical 16/1 job now completes all 213,298 relations and
+record EOF/root/signature in a new Node process whose original model/fixture
+reads are denied by the OS. The parent and child exit zero after 982.396 s;
+source/input/binary pins agree with 38 selected regressions and strict selected
+Clippy. Observed Node submit time is 423.387 s, its CPU checkpoint 427.962 s,
+and parent-to-Node delivered bytes 5,795,421,305. The unchanged 8-GiB global
+request ledger includes the child's real 2-GiB whole-operation subledger;
+all leases release and no process remains. Failed compile, sandbox and lint
+attempts stay preserved as failures. See [isolated-Node evidence](cold-process-20261102/README.md).
+
+Only Node is a separate process; dormant executor code remains in the test
+binary, the parent still hosts Miner/Panel sequentially, OS caches are not
+physically cold, and private framing is not an adversarial peer codec. Final
+provider/evaluator cumulative counters are not emitted by this isolated
+branch. The full native authority/funds/P/all-consumer/recovery/dependency
+flow and approved activation remain unfinished. All seven stages and all
+individual native A01–A12/T01–T44 obligations above remain in scope. No saved
+local Matched or model availability observation replaces selected-validator
+certification or authorizes a new native success path.

@@ -1,0 +1,166 @@
+{
+  "code_commit": "95110addf0d47f5223453f3e46f11e042a59f821",
+  "raw_logs_preserved_including_whitespace": true,
+  "files": {
+    "README.md": {
+      "bytes": 10065,
+      "sha256": "183832943c562b8ed0710c6c204aecf21e0ba0d22bf6e2f8e08a3f9fd64d4a97"
+    },
+    "actual-isolated-events-first.json": {
+      "bytes": 239980,
+      "sha256": "f9eb8587b967eeeb524aaf0e069537a1ec8e65258eb2499159cb7f498fc6e28a"
+    },
+    "actual-isolated-short-job-first.json": {
+      "bytes": 5695,
+      "sha256": "b95a6170c99702697556f0419d4480360eca48f9ed588f974476b73f94e7c82f"
+    },
+    "clippy-first.json": {
+      "bytes": 1102207,
+      "sha256": "7d8dc7197bb20dacf60e91a941aa4a84c0dfd504d2a9c5be2f25ac475abdd86d"
+    },
+    "clippy-first.log": {
+      "bytes": 317492,
+      "sha256": "1d0a3c77a6bc7258aefe6428dea08c99bd4753ac38200ee5db19bfd5422e8f92"
+    },
+    "clippy-r2.json": {
+      "bytes": 1102203,
+      "sha256": "ec3a4b18f43c6a0a5b568e73a2d5cf7ff4468f3b06ff69f7d02d752e8c7da388"
+    },
+    "clippy-r2.log": {
+      "bytes": 316207,
+      "sha256": "c720b82b7df785bcc3cae5270a13b7aea055c26947b81416fd7bf3cc75c12797"
+    },
+    "docs-check-final.json": {
+      "bytes": 635,
+      "sha256": "d7340e84f836f334fd92b5eff00d6f1afe96e6670ae49727097dea4d385902d1"
+    },
+    "docs-check-final.log": {
+      "bytes": 438,
+      "sha256": "6b7b4c5cd4fe54eaa61b3d41bc4b3b85e9fb0390504e87e1f536fd216fa1ae65"
+    },
+    "docs-check.json": {
+      "bytes": 635,
+      "sha256": "d7340e84f836f334fd92b5eff00d6f1afe96e6670ae49727097dea4d385902d1"
+    },
+    "docs-check.log": {
+      "bytes": 438,
+      "sha256": "6b7b4c5cd4fe54eaa61b3d41bc4b3b85e9fb0390504e87e1f536fd216fa1ae65"
+    },
+    "host-toolchain.json": {
+      "bytes": 969,
+      "sha256": "247ceb17ebc1e0574110c9980973f2fbf647aae51666b90339e4bfbe1e198943"
+    },
+    "input-sha-isolated-first.json": {
+      "bytes": 1134,
+      "sha256": "5112d8e55f999cbe86aabaae74f00afc8084fbb070c293c8f0c4875775bcdcf9"
+    },
+    "live-fd-inventory-first.json": {
+      "bytes": 1891,
+      "sha256": "64455f10fe74ffbae94638213a29d0f9b2066597b4309fe5d45475027f40e6da"
+    },
+    "operator-scripts/misaka-cold-process-clippy-20261102.py": {
+      "bytes": 743,
+      "sha256": "74ffa76ac2799f5ba98be4b29f2c356855c5b874338468c8fc2ae32aeb8a37fe"
+    },
+    "operator-scripts/misaka-cold-process-clippy-controller-20261102.py": {
+      "bytes": 4604,
+      "sha256": "c8a6d1be0cf351a43e367d995d138b79fc24d743dce962c66984237f6d8b05c6"
+    },
+    "operator-scripts/misaka-cold-process-clippy-r2-20261102.py": {
+      "bytes": 740,
+      "sha256": "ddb9e2e95ac32c1a5fad60b5de415879f66382d048294db2c2a86abdfddcd2df"
+    },
+    "operator-scripts/misaka-cold-process-controller-20261102.py": {
+      "bytes": 4580,
+      "sha256": "4eecc161a2d3364bfafb563dc6ad6f379ef0cd5ddb51cc312fc65cc7436cc01a"
+    },
+    "operator-scripts/misaka-cold-process-final-audit-20261102.py": {
+      "bytes": 3688,
+      "sha256": "9460da68eb50be19903ff63c346cc5f7147b5c0dce0b9902922bbfe678a5a398"
+    },
+    "operator-scripts/misaka-cold-process-model-first-20261102.py": {
+      "bytes": 1242,
+      "sha256": "6a34b65687ede24d563202ec13b06c7d026bdaadf833cb68053ec29dcff875de"
+    },
+    "operator-scripts/misaka-cold-process-validation-20261102.py": {
+      "bytes": 789,
+      "sha256": "49727412bf2e89e967e308c74b67bff33736602f330d86a9bc3e957499098d87"
+    },
+    "operator-scripts/misaka-cold-process-validation-r2-20261102.py": {
+      "bytes": 780,
+      "sha256": "a67ebd3b498e77ed235f6c070e2a39d0829e1a9da9427d0e465c9e9d7c7e8d7d"
+    },
+    "operator-scripts/misaka-cold-process-validation-r3-20261102.py": {
+      "bytes": 780,
+      "sha256": "00daffed24e4095a06c83fd046e8bc3de8c27cf17e9608ea704034c54edbdb51"
+    },
+    "operator-scripts/misaka-cold-process-validation-r4-20261102.py": {
+      "bytes": 780,
+      "sha256": "88c958bab9e8da11271d1f109d6b030759f11da8cf3fdf6d27d0bafe75aadd3e"
+    },
+    "operator-scripts/misaka-cold-process-validation-r5-20261102.py": {
+      "bytes": 780,
+      "sha256": "45c0146eea0d953e6792e8dd111b3bb4a28bbfac59cbee1c15efcf93bf2c1659"
+    },
+    "pythia-isolated-first.json": {
+      "bytes": 1101273,
+      "sha256": "ed998272dc9ee4c7cadf968578e103d85b7f7bc2a5a8ef89d620a48f205b71f0"
+    },
+    "pythia-isolated-first.log": {
+      "bytes": 181985,
+      "sha256": "4c64305d01d3a354383c9b8720b518091a943be6016b1af5908559641f5b65e9"
+    },
+    "runtime-first.json": {
+      "bytes": 1102203,
+      "sha256": "44c04613c3d61146a25db6e0cf3c5eebfea1e62caa2a56bc4f5572348cc20f84"
+    },
+    "runtime-first.log": {
+      "bytes": 321500,
+      "sha256": "b57a8f293dbe08b50d2ae5eb1fc6bcd1cdcbd0330360fe94cd4e4be0e8f69f32"
+    },
+    "runtime-r2.json": {
+      "bytes": 1102738,
+      "sha256": "441377eebd070162372448e12fc3076350bd32bc8af8a11495c807667cd5cc0a"
+    },
+    "runtime-r2.log": {
+      "bytes": 330360,
+      "sha256": "ca4e0838105eaedd9256c58a68a1a58fc841273f0c3e42b6a828af2065e26744"
+    },
+    "runtime-r3.json": {
+      "bytes": 1102819,
+      "sha256": "8c6169503a60c73ed7e15d0bdc11c62ccee16a044a37c3b5e4ef33a2000f948e"
+    },
+    "runtime-r3.log": {
+      "bytes": 333504,
+      "sha256": "1d30f942a888a32473a0504ca15593523d116d634ed49c37dc11ed5ad8fdb405"
+    },
+    "runtime-r4.json": {
+      "bytes": 1102819,
+      "sha256": "8d360116b9b214754f92e72b048bc72281f69efec1cbe2a9c14d53d8c5ba803e"
+    },
+    "runtime-r4.log": {
+      "bytes": 333504,
+      "sha256": "7e8336ad3acbb9278230469b93fadef9e67e9903d5b32fbf59ec1d9a028bbefe"
+    },
+    "runtime-r5.json": {
+      "bytes": 1102813,
+      "sha256": "54d35043fe761fd95b11628bedfab086a56cc651789f4e68f1d893ae68bf87b5"
+    },
+    "runtime-r5.log": {
+      "bytes": 333504,
+      "sha256": "6cd45f032269fe2705b591651fd160502546e9959c015a7a1635ccdbd8d450a6"
+    },
+    "source-validation.json": {
+      "bytes": 692,
+      "sha256": "e76cd192eeace56f7ec2e50e4ab1f1a88f972d3525722e69d51ce1ee09108c74"
+    },
+    "workspace-ancestry.json": {
+      "bytes": 2503,
+      "sha256": "7df3ea5816b2ef0af5e4d94d7ee5a3af4ad2da5cf673a57122a1b8af761deaa0"
+    },
+    "workspace-working-status.json": {
+      "bytes": 1647,
+      "sha256": "ff4b35017f0409d785dd59380ea0357249cd8afd9f92801533c30e70906d3722"
+    }
+  }
+}
