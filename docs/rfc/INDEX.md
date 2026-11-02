@@ -51,3 +51,4 @@
 | RFC-0043 | [学習済みLLMの広いQ24 logit表現](0043-wide-q24-llm-output.md) | 原文と後続改定を参照 |
 | RFC-0044 | [Positive Court：Panelによる正常計算証拠の生成・提出と、Minerの上限付き対話応答](0044-positive-court-full-coverage.md) | 原文と後続改定を参照 |
 | RFC-0045 | [Canonical TIR Assignmentを起点とするPositive Court native経路](0045-positive-court-canonical-assignment.md) | 原文と後続改定を参照 |
+| RFC-0046 | [Positive native原資の先行relay資料と有限custody](0046-positive-native-funded-relay.md) | 原文と後続改定を参照 |

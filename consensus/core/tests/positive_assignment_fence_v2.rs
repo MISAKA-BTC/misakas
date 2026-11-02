@@ -230,7 +230,46 @@ fn assigned_scope_passes_the_unchanged_r1_result_row_recipe_and_rejects_the_reti
 
 fn native_preimages() -> AssignmentNativePreimagesV2 {
     use kaspa_consensus_core::palw_positive_assignment_funds_v2::*;
+    use kaspa_consensus_core::palw_positive_assignment_resources_v2::*;
     AssignmentNativePreimagesV2 {
+        source_policy: AssignmentSourcePolicyV2 {
+            version: 2,
+            revision: 1,
+            work: AssignmentWorkScheduleV2 {
+                version: 2,
+                revision: 1,
+                per_codec_step: 1,
+                per_hash_byte: 1,
+                per_signature: 1,
+                per_element: 1,
+                per_term: 1,
+                per_io_byte: 1,
+                per_control: 1,
+            },
+            max_parameter_instances: 1024,
+            max_requests: 100,
+            max_responses: 100,
+            max_history_events: 200,
+            max_history_bytes: 1_000_000,
+            max_intervals: 100,
+            max_units_per_request: 100,
+            max_native_body_bytes: 64_000,
+        },
+        case_fees: AssignmentCaseFeeScheduleV2 {
+            version: 2,
+            revision: 1,
+            admission: 1,
+            per_source_unit: 1,
+            per_source_opening_byte: 1,
+            per_checked_relation: 1,
+            per_record_byte: 1,
+            capital_per_retained_byte: 1,
+        },
+        cancellation: AssignmentCancellationPolicyV2 {
+            version: 2,
+            revision: 1,
+            rule: AssignmentCancellationRuleV2::PreserveEarnedAndLiabilityV1,
+        },
         assignment_fees: AssignmentFeeScheduleV2 {
             version: 2,
             revision: 1,
@@ -260,6 +299,9 @@ fn assignment_native_preimages_are_complete_policy_bound_and_fingerprinted() {
     let mut p = selected(100);
     let preimages = native_preimages();
     let fence = p.palw_positive_assignment_v2.as_mut().unwrap();
+    fence.policy.source_policy = preimages.source_policy.id();
+    fence.policy.case_fee_schedule = preimages.case_fees.id();
+    fence.policy.cancellation_policy = preimages.cancellation.id();
     fence.policy.assignment_fee_schedule = preimages.assignment_fees.id();
     fence.policy.reserve_schedule = preimages.assignment_fees.reserve_id();
     fence.policy.physical_service_profile = preimages.physical.id();
@@ -295,4 +337,50 @@ fn scheduled_native_preimages_do_not_change_the_genesis_handshake_identity() {
     assert_eq!(p.palw_positive_assignment_rule_scope_v2_at(99), None);
     assert_eq!(p.consensus_identity_id(), other.consensus_identity_id());
     assert_ne!(p.consensus_params_id(), other.consensus_params_id());
+}
+
+#[path = "../../../misaka/palw/positive-contract/tests/support/assignment.rs"]
+mod assignment_data;
+
+#[test]
+fn signed_money_quote_is_stable_across_eligible_acceptance_clocks() {
+    use kaspa_consensus_core::palw_positive_assignment_funds_v2::{AssignmentPhysicalUsageV2, quote_assignment_money_v2};
+    let params = selected(100);
+    let mut policy = params.palw_positive_assignment_v2.unwrap().policy;
+    let preimages = native_preimages();
+    policy.assignment_fee_schedule = preimages.assignment_fees.id();
+    policy.reserve_schedule = preimages.assignment_fees.reserve_id();
+    policy.physical_service_profile = preimages.physical.id();
+    let mut terms = assignment_data::bundle().terms;
+    terms.derivation_policy = policy.derivation_policy;
+    terms.reserve_schedule = policy.reserve_schedule;
+    terms.accept_before_daa = 200;
+    terms.result_before_daa = 300;
+    terms.reserve_until_daa = 1050;
+    terms.max_assignment_fee = 1_000_000;
+    terms.max_assignment_capital = 1_000_000;
+    terms.max_assignment_locked = 3_000_000;
+    let usage = AssignmentPhysicalUsageV2 {
+        admission_bytes: 100,
+        retained_bytes: 100,
+        replay_bytes: 100,
+        heap_bytes: 100,
+        utxo_writes: 1,
+        signatures: 3,
+    };
+    let quote = |now| quote_assignment_money_v2(&policy, &terms, &preimages.assignment_fees, &preimages.physical, usage, now);
+    let first = quote(100).unwrap();
+    assert_eq!(first.retention_daa, 950);
+    for now in [101, 150, 199] {
+        assert_eq!(quote(now).unwrap(), first);
+    }
+    assert!(quote(99).is_err());
+    assert!(quote(200).is_err());
+    // The original retention window can independently raise the earliest
+    // eligible DAA; it is not an additive TTL or an earned-service claim.
+    terms.reserve_until_daa = 1150;
+    let quote = |now| quote_assignment_money_v2(&policy, &terms, &preimages.assignment_fees, &preimages.physical, usage, now);
+    assert!(quote(149).is_err());
+    assert_eq!(quote(150).unwrap().retention_daa, 1000);
+    assert_eq!(quote(150).unwrap(), quote(199).unwrap());
 }

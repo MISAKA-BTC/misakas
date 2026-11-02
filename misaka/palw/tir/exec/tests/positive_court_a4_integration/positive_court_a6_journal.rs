@@ -678,3 +678,309 @@ fn bounded_budget_refusal_precedes_native_authentication_and_external_callbacks(
         assert_eq!(env.live_commits.get(), 0);
     }
 }
+
+// Local fixture adapter only: actual production accepted Assignment provenance,
+// funds and P are deliberately NOT claimed by these read-only replay tests.
+struct AssignedEnvironment<'a> {
+    base: Environment<'a>,
+    literal: kaspa_consensus_core::palw_positive_court_v2::coordinator::assignment_body::AssignedResultPayloadV2,
+    actual_transaction: Vec<u8>,
+    assigned_calls: Cell<u64>,
+}
+impl<'a> std::ops::Deref for AssignedEnvironment<'a> {
+    type Target = Environment<'a>;
+    fn deref(&self) -> &Self::Target {
+        &self.base
+    }
+}
+fn assigned_body_limits() -> kaspa_consensus_core::palw_positive_court_v2::coordinator::assignment_body::AssignmentBodyLimitsV2 {
+    kaspa_consensus_core::palw_positive_court_v2::coordinator::assignment_body::AssignmentBodyLimitsV2 {
+        max_body_bytes: 2 << 20,
+        max_layout_bytes: 1 << 20,
+        max_layout_entries: 1000,
+        max_settlement_receipts: 1000,
+        max_outer_signatures: 3,
+        max_decode_heap: 4 << 20,
+    }
+}
+fn assigned_transaction(
+    s: &Scenario,
+) -> (Vec<u8>, kaspa_consensus_core::palw_positive_court_v2::coordinator::assignment_body::AssignedResultPayloadV2) {
+    use kaspa_consensus_core::palw_positive_court_v2::coordinator::assignment_body::*;
+    let original =
+        kaspa_consensus_core::palw_positive_court_v2::coordinator::native_body::decode_native_body_v2(&s.bodies[0], body_limits())
+            .unwrap();
+    let PositiveNativeOperationV2::ResultAdmission { result, miner_signature, service, basis, consent, payer_signature } =
+        original.operation
+    else {
+        unreachable!()
+    };
+    let literal = AssignedResultPayloadV2 { result, miner_signature, service, basis, consent, payer_signature };
+    let body = PositiveAssignmentNativeBodyV2 {
+        version: 2,
+        revision: 1,
+        operation: PositiveAssignmentNativeOperationV2::AdmitAssignedResult {
+            assignment: misaka_palw_positive_contract::assignment::AssignmentId(d(88)),
+            payload: literal.clone(),
+        },
+    };
+    let mut payload = vec![1, 0, 176];
+    payload.extend_from_slice(&encode_assignment_body_v2(&body, assigned_body_limits()).unwrap());
+    // Transaction/script validation is not performed or asserted by this fixture.
+    let tx = kaspa_consensus_core::tx::Transaction::new(
+        0,
+        vec![],
+        vec![],
+        0,
+        kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE,
+        0,
+        payload,
+    );
+    (borsh::to_vec(&tx).unwrap(), literal)
+}
+impl NativeReplayEnvironmentV2 for AssignedEnvironment<'_> {
+    type Error = &'static str;
+    type CarrierError = &'static str;
+    type ExternalState = Shadow;
+    type Verifier<'a>
+        = StepVerifier<'a>
+    where
+        Self: 'a;
+    type HistoricalStepGuard<'a>
+        = StepGuard<'a>
+    where
+        Self: 'a;
+    fn quote_record(&self, _: &CaseJournalPinV2, _: CaseJournalRecordView<'_>) -> Result<NativeReplayStepQuoteV2, Self::Error> {
+        self.quote_calls.set(self.quote_calls.get() + 1);
+        Ok(NativeReplayStepQuoteV2 { work_units: self.quote_work, hash_bytes: 1000, peak_native_heap_bytes: 1 << 24 })
+    }
+    fn activate_historical_step<'a>(
+        &'a self,
+        _: &CaseJournalPinV2,
+        record: CaseJournalRecordView<'_>,
+    ) -> Result<Self::HistoricalStepGuard<'a>, Self::Error> {
+        if self.active.replace(Some(record.header().sequence)).is_some() {
+            return Err("nested fixture historical guard");
+        }
+        Ok(StepGuard(&self.active))
+    }
+    fn validate_native_record(&self, pin: &CaseJournalPinV2, record: CaseJournalRecordView<'_>) -> Result<(), Self::Error> {
+        self.guard(record)?;
+        self.native_calls.set(self.native_calls.get() + 1);
+        if pin != &self.accepted.pin {
+            return Err("fixture native head changed");
+        }
+        let expected = self.accepted.records.get((record.header().sequence - 1) as usize).ok_or("fixture acceptance missing")?;
+        let expected = CaseJournalRecordView::decode(expected, journal_limits()).unwrap();
+        if record.header() != expected.header() || record.payload() != expected.payload() {
+            return Err("fixture accepted carrier substitution");
+        }
+        Ok(())
+    }
+    fn with_expected_aux<T>(
+        &self,
+        _: &CaseJournalPinV2,
+        record: CaseJournalRecordView<'_>,
+        visit: impl FnOnce(&[AcceptedMaterial]) -> T,
+    ) -> Result<T, Self::Error> {
+        self.guard(record)?;
+        Ok(visit(if record.header().sequence == 1 { std::slice::from_ref(&self.scenario.aux.material) } else { &[] }))
+    }
+    fn validate_canonical_preimages(&self, _: &CaseJournalPinV2, record: CaseJournalRecordView<'_>) -> Result<(), Self::Error> {
+        self.guard(record)?;
+        for aux in record.aux() {
+            if aux.material() != self.scenario.aux.material || aux.preimage() != self.scenario.aux.preimage {
+                return Err("fixture native material/preimage mismatch");
+            }
+        }
+        Ok(())
+    }
+    fn admission_inputs<'a>(
+        &'a self,
+        _: &CaseJournalPinV2,
+        record: CaseJournalRecordView<'_>,
+        _: &PositiveNativeBodyV2,
+    ) -> Result<RootedReplayAdmissionV2<'a>, Self::Error> {
+        self.guard(record)?;
+        Ok(RootedReplayAdmissionV2 {
+            context: rooted(&self.scenario.result),
+            registered: &self.scenario.f.binding.class,
+            artifact: self.scenario.f.binding.artifact_root,
+            job: &self.scenario.f.binding.job_context,
+            form: PalwPromptIdsFormV1::Flat,
+            check_limits: limits(),
+            record_limits: RecordLimits { max_record_bytes: 1 << 20, max_generated_heap_bytes: 1 << 20 },
+            court_limits: court_limits(),
+            miner_key: &self.key,
+        })
+    }
+    fn assigned_initial_inputs<'a>(
+        &'a self,
+        _pin: &CaseJournalPinV2,
+        record: CaseJournalRecordView<'_>,
+    ) -> Result<Option<AssignedInitialReplayV2<'a>>, Self::Error> {
+        self.guard(record)?;
+        if record.header().sequence != 1
+            || record.header().kind != CaseJournalEventKind::NativeTransaction
+            || record.payload() != self.actual_transaction.as_slice()
+        {
+            return Err("not exact fixture assigned initial tx");
+        }
+        let tx: kaspa_consensus_core::tx::Transaction = borsh::from_slice(record.payload()).map_err(|_| "actual tx decode")?;
+        let decoded = kaspa_consensus_core::palw_positive_court_v2::coordinator::assignment_body::decode_assignment_body_v2(
+            &tx.payload[3..],
+            assigned_body_limits(),
+        )
+        .map_err(|_| "actual op9 decode")?;
+        let kaspa_consensus_core::palw_positive_court_v2::coordinator::assignment_body::PositiveAssignmentNativeOperationV2::AdmitAssignedResult{assignment,payload}=
+            decoded.operation else {return Err("actual initial tx is not op9");};
+        if assignment != misaka_palw_positive_contract::assignment::AssignmentId(d(88)) || payload != self.literal {
+            return Err("actual op9 literal substitution");
+        }
+        self.assigned_calls.set(self.assigned_calls.get() + 1);
+        Ok(Some(AssignedInitialReplayV2 {
+            result: &self.literal.result,
+            miner_signature: &self.literal.miner_signature,
+            service: &self.literal.service,
+            basis: &self.literal.basis,
+            consent: &self.literal.consent,
+            payer_signature: &self.literal.payer_signature,
+            admission: RootedReplayAdmissionV2 {
+                context: rooted(&self.scenario.result),
+                registered: &self.scenario.f.binding.class,
+                artifact: self.scenario.f.binding.artifact_root,
+                job: &self.scenario.f.binding.job_context,
+                form: PalwPromptIdsFormV1::Flat,
+                check_limits: limits(),
+                record_limits: RecordLimits { max_record_bytes: 1 << 20, max_generated_heap_bytes: 1 << 20 },
+                court_limits: court_limits(),
+                miner_key: &self.key,
+            },
+        }))
+    }
+    fn panel_key(
+        &self,
+        _: &CaseJournalPinV2,
+        record: CaseJournalRecordView<'_>,
+        witness: WitnessId,
+    ) -> Result<[u8; PUBKEY_BYTES], Self::Error> {
+        self.guard(record)?;
+        if witness != self.scenario.witness.id() {
+            return Err("unassigned witness");
+        }
+        Ok(panel_key())
+    }
+    fn make_verifier(&self, _: &CaseJournalPinV2) -> Result<Self::Verifier<'_>, Self::Error> {
+        Ok(StepVerifier { env: self, actual: verifier_for(&self.scenario.result) })
+    }
+    fn new_external_state(&self, _: &CaseJournalPinV2) -> Result<Self::ExternalState, Self::Error> {
+        self.external_state_creations.set(self.external_state_creations.get() + 1);
+        Ok(Shadow::default())
+    }
+    fn apply_external_event(
+        &self,
+        _: &CaseJournalPinV2,
+        record: CaseJournalRecordView<'_>,
+        body: Option<&PositiveNativeBodyV2>,
+        _: Option<LocalCourtSnapshotV2>,
+        after: LocalCourtSnapshotV2,
+        _: &LocalCourtOutcomeV2,
+        _: &[LocalCheckedCourtFactV2],
+        state: &mut Self::ExternalState,
+    ) -> Result<ExternalReplayEffectV2, Self::Error> {
+        self.guard(record)?;
+        self.external_calls.set(self.external_calls.get() + 1);
+        if body.is_none() && record.header().sequence == 1 {
+            state.events += 1;
+            state.wire = after.charged_wire_bytes;
+            return Ok(ExternalReplayEffectV2::Changed);
+        }
+        if matches!(
+            body.map(|b| &b.operation),
+            None | Some(
+                PositiveNativeOperationV2::SourceRequest { .. }
+                    | PositiveNativeOperationV2::SourceResponse { .. }
+                    | PositiveNativeOperationV2::PositiveCourtAttestation { .. }
+            )
+        ) {
+            return Err("source/funding/qualified native transaction port unavailable in this fixture");
+        }
+        state.events += 1;
+        state.wire = after.charged_wire_bytes;
+        Ok(ExternalReplayEffectV2::NoOp)
+    }
+    fn validate_committed_effect(
+        &self,
+        _: &CaseJournalPinV2,
+        record: CaseJournalRecordView<'_>,
+        _: Option<LocalCourtSnapshotV2>,
+        after: LocalCourtSnapshotV2,
+        _: &LocalCourtOutcomeV2,
+        _: ExternalReplayEffectV2,
+        state: &Self::ExternalState,
+    ) -> Result<(), Self::Error> {
+        self.guard(record)?;
+        if state.events != record.header().sequence || state.wire != after.charged_wire_bytes {
+            return Err("fixture shadow differs from recomputed Court");
+        }
+        Ok(())
+    }
+    fn current_daa(&self, _: &CaseJournalPinV2) -> Result<u64, Self::Error> {
+        Ok(self.now.get())
+    }
+    fn validate_final(
+        &self,
+        pin: &CaseJournalPinV2,
+        result: &MinerResultCommit,
+        service: &MinerServiceContract,
+        historical: LocalCourtSnapshotV2,
+        _: LocalCourtSnapshotV2,
+        _: u64,
+        _: &[LocalCheckedCourtFactV2],
+        state: &Self::ExternalState,
+    ) -> Result<(), Self::Error> {
+        self.final_calls.set(self.final_calls.get() + 1);
+        if self.fail_final
+            || pin != &self.accepted.pin
+            || result != &self.scenario.result
+            || service != &self.scenario.service
+            || state.events != pin.head.sequence
+            || state.wire != historical.charged_wire_bytes
+        {
+            return Err("fixture native generation/head/rows are stale");
+        }
+        if self.drift_final {
+            self.now.set(self.now.get() + 1);
+        }
+        Ok(())
+    }
+}
+
+#[test]
+fn first_assigned_native_transaction_rejects_default_environment_without_op0_fallback() {
+    let s = Scenario::new(false);
+    let (tx, _) = assigned_transaction(&s);
+    let j = Journal::new(&s, vec![(CaseJournalEventKind::NativeTransaction, tx)], true);
+    let env = Environment::new(&s, &j); // Uses the actual default assigned port: None.
+    assert!(matches!(replay_common_case_v2(&j, &j.links(), &env, replay_limits()), Err(CommonReplayErrorV2::InitialAdmission)));
+    assert_eq!(env.live_commits.get(), 0);
+}
+#[test]
+fn explicit_assigned_native_transaction_replays_literal_op9_without_synthetic_op0() {
+    let s = Scenario::new(false);
+    let (tx, literal) = assigned_transaction(&s);
+    let mut bodies = vec![(CaseJournalEventKind::NativeTransaction, tx.clone())];
+    bodies.extend(s.bodies.iter().skip(1).cloned().map(|body| (CaseJournalEventKind::NativeBody, body)));
+    let j = Journal::new(&s, bodies, true);
+    let env = AssignedEnvironment { base: Environment::new(&s, &j), literal, actual_transaction: tx, assigned_calls: Cell::new(0) };
+    for raw in &j.records {
+        let record = CaseJournalRecordView::decode(raw, journal_limits()).unwrap();
+        assert!(record.header().kind != CaseJournalEventKind::NativeBody || record.payload()[4] != 0);
+    }
+    let replay = replay_common_case_v2(&j, &j.links(), &env, replay_limits()).unwrap();
+    assert_eq!(replay.historical_court().status, ClaimStatus::PositivePassed);
+    assert_eq!(env.assigned_calls.get(), 1);
+    assert_eq!(env.live_commits.get(), 0);
+    assert_eq!(replay.events()[0].operation, None);
+    assert!(matches!(replay.events()[0].court, LocalCourtOutcomeV2::AdmittedLocally));
+}

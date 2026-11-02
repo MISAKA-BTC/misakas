@@ -16,6 +16,7 @@
 - [RFC-0038 — free-prompt の回答トークンを支払済み計算として記録する(FPA1 carriage)](0038-palw-fp-answer-accounting.md)
 - [RFC-0040 — 再利用 prefix の生成元を署名済み work identity で拘束する](0040-authenticated-prefix-work-dependencies.md)
 - [RFC-0043 — 学習済みLLMの広いQ24 logit表現](0043-wide-q24-llm-output.md)
+- [RFC-0046 — Positive native原資の先行relay資料と有限custody](0046-positive-native-funded-relay.md)
 
 ## EVM / wallet
 

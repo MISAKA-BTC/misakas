@@ -2,7 +2,13 @@
 
 2026-11-02に着手し、2026-11-03 JSTに検査。採択済みRFC-0045/ADR-0213の実装途中である。**実native Assignment受付、実P認証、全branchの実予約・支払、RFC45全体の完了を示さない。公開presetはNoneのまま。**
 
-## 確定した検査
+## 2026-11-03の統合継続
+
+3エージェントの候補をA0実sourceへ段階統合している。最新の適用範囲・実行済み結果・未完了ownerは[integration-progress-20261103.md](integration-progress-20261103.md)を参照する。以下の141件は`c9c93e18b`時点の先行基準であり、最新sourceの件数へ加算しない。
+
+ユーザーが両relay案を明示採択したため、正式な[RFC-0046](../../../docs/rfc/0046-positive-native-funded-relay.md)と[ADR-0214](../../../docs/adr/0214-positive-native-funded-relay.md)を登録した。本番有効化・旧資金移行は含まない。native R受付・料金burn・custody・F/R2・終端支払の接続は未完了である。
+
+## 先行基準で確定した検査
 
 | 検査 | 結果 | 記録 |
 | --- | --- | --- |
@@ -25,9 +31,9 @@
 
 実native予約/P/Case execution/checkpoint ownerが欠損する受付は明示拒否のまま。単一writerのprivate setterやDTOの署名/quote/保存状態を受付・creditへ昇格しない。`AssignmentGateCClockV2`は既存policyのchecked時計だけで、pending-fraud全branchの有限予約を生成しない。Final後のprosecutionとResult commitを分ける。
 
-`candidates/`は**未適用・未コンパイルの次の差分**。base/candidate SHA・patchを分け、今回の141件の合格を候補へ移さない。元policy/preimage custody、実typed derivation lease、raw carrier ordinal rehearsal/final checkpoint、actual material outcome/同UTXO DB batch、tentative/accepted支払分離とonceの候補を準備している。P・Case/source session・全将来資源と実送金の完成は別途必要。
+`candidates/`には適用済み候補の基底・差分と、未適用の部分実装が混在する。適用済み実sourceの範囲は最新進捗記録に従い、候補全体を上書き適用しない。先行141件又は別の凍結sourceの合格を未適用候補へ移さない。復旧archiveとmanifestも保存している。P・Case/source session・全将来資源と実送金の完成は引き続き必要。
 
-通常P2PKH inputはpayerの実署名を要する。payerが止まっても支払/返金を終結できる署名custodyは現op8–13にない。別のRelay RFC/ADR draftを準備したが、**未採択**であり実装許可や本番有効化ではない。既存の資金規則/署名を省略してこの欠損を隠さない。
+通常P2PKH inputはpayerの実署名を要する。採択済みRFC-0046では、固定op12/0x82の先行署名を新op14で保管する。通常script保持の署名templateと固定同意codec・料金DATAは実sourceにあるが、nativeの実受付・custody・料金配分・支払ownerはまだ接続していない。採択又は署名試験だけをpayer独立の実送金の完成としない。
 
 ## 失敗記録
 

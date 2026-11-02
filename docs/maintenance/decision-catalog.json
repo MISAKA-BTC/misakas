@@ -1666,6 +1666,14 @@
       "status": "原文と後続改定を参照"
     },
     {
+      "kind": "adr",
+      "number": "0214",
+      "path": "docs/adr/0214-positive-native-funded-relay.md",
+      "title": "ADR-0214 — Positive原資へ先行relay資料・custodyを追加する判断案",
+      "topic": "Consensus / architecture",
+      "status": "原文と後続改定を参照"
+    },
+    {
       "kind": "rfc",
       "number": "0001",
       "path": "docs/rfc/0001-palw-inference-surface-gaps.md",
@@ -2023,6 +2031,14 @@
       "path": "docs/rfc/0045-positive-court-canonical-assignment.md",
       "title": "RFC-0045 — Canonical TIR Assignmentを起点とするPositive Court native経路",
       "topic": "Verification / court",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "rfc",
+      "number": "0046",
+      "path": "docs/rfc/0046-positive-native-funded-relay.md",
+      "title": "RFC-0046 — Positive native原資の先行relay資料と有限custody",
+      "topic": "Consensus / architecture",
       "status": "原文と後続改定を参照"
     }
   ]

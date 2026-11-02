@@ -1,3 +1,5 @@
+> **2026-11-03採択済み:** ユーザーが対のRFC/ADRを明示採択。正式文書は[ADR-0214](../../../adr/0214-positive-native-funded-relay.md)。以下は採択前原文であり、実装・検証・有効化完了を意味しない。
+
 # ADR番号未割当 — Positive原資へ先行relay資料・custodyを追加する判断案
 
 - 状態: **未採択。設計レビュー用であり、live受付・実装許可・公開activationではない。**

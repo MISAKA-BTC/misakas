@@ -81,9 +81,22 @@ impl AssignmentJournalHeaderV2 {
         if assignment_payload_digest_v2(payload) != self.payload_digest {
             return Err(ContractError::Identity);
         }
+        // New native records retain the actual pre-event boundary in a
+        // distinct envelope. Legacy bounded DATA fixtures keep their original
+        // representation; the native writer independently requires an envelope.
+        let payload = if payload.starts_with(&super::control_material::ASSIGNMENT_CONTROL_MAGIC_V2) {
+            super::control_material::AssignmentControlViewV2::decode(payload, max_bytes)?.inner()
+        } else {
+            payload
+        };
         // Body operations retain their own complete bounded codec/authorization.
         // Metadata receipts have an independent typed payload, never op3/op4.
-        if self.kind == AssignmentJournalEventKindV2::MetadataReceipt {
+        if self.kind == AssignmentJournalEventKindV2::Open {
+            super::open_material::AssignmentOpenViewV2::decode(
+                payload,
+                super::open_material::AssignmentOpenLimitsV2::within_payload(max_bytes),
+            )?;
+        } else if self.kind == AssignmentJournalEventKindV2::MetadataReceipt {
             let receipt = borsh::from_slice::<AssignmentMetadataReceiptV2>(payload).map_err(|_| ContractError::NonCanonical)?;
             if receipt.version != CONTRACT_VERSION
                 || receipt.revision != CONTRACT_REVISION

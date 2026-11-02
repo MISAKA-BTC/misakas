@@ -493,3 +493,149 @@ impl PositiveCarrierPhaseTwoV2 {
         Ok(())
     }
 }
+
+impl PositiveCarrierPhaseTwoV2 {
+    /// One actual Full transport and ordinal stream for unchanged original0–7
+    /// and new Assignment8–13. Their codec/signature limits stay independent.
+    pub(in crate::pipeline::virtual_processor) fn into_assignment_raw_actions_v2(
+        self,
+        processor: &VirtualStateProcessor,
+        current_view: &impl UtxoView,
+    ) -> Result<Vec<kaspa_consensus_core::palw_state_v2::PositiveAssignmentRawActionV2>, NativeCoverageV1> {
+        use kaspa_consensus_core::palw_positive_court_v2::coordinator::{
+            assignment_body::{
+                AssignmentBodyLimitsV2, PositiveAssignmentNativeOperationV2 as A, decode_assignment_body_v2, scan_assignment_body_v2,
+            },
+            native_body::{
+                MAX_BODY_BYTES_V2, MAX_EXACT_RELATIONS_V2, MAX_OPAQUE_BYTES_V2, MAX_SIGNATURES_V2, NativeBodyLimitsV2,
+                PositiveNativeBodyV2, PositiveNativeOperationV2 as C, decode_native_body_v2, scan_native_body_v2,
+            },
+        };
+        use kaspa_consensus_core::palw_state_v2::{
+            NativeAssignmentRulesV2, PositiveAssignmentRawActionV2, PositiveAssignmentScheduledActionV2,
+        };
+        use misaka_palw_positive_contract::rows::{AcceptedOrigin, NativeHash64};
+        let old_limits = NativeBodyLimitsV2 {
+            max_body_bytes: MAX_BODY_BYTES_V2,
+            max_opaque_bytes: MAX_OPAQUE_BYTES_V2,
+            max_exact_relations: MAX_EXACT_RELATIONS_V2,
+            max_signatures: MAX_SIGNATURES_V2,
+        };
+        let mut actions = Vec::new();
+        for carrier in self.carriers {
+            let tx = carrier.transaction();
+            if !kaspa_consensus_core::palw_lifecycle_objects_v2::palw_positive_lifecycle_payload_v2(&tx.payload) {
+                continue;
+            }
+            let Some(kind @ 0..=13) = tx.payload.get(7).copied() else {
+                continue;
+            };
+            let point = carrier.prefix.accepting;
+            let Some(params) = processor.palw_positive_assignment_params_v2.as_ref() else {
+                continue;
+            };
+            let Some(fence) = params.palw_positive_assignment_v2_at(point.daa_score) else {
+                continue;
+            };
+            let Ok(limits) = AssignmentBodyLimitsV2::from_policy(&fence.policy) else {
+                continue;
+            };
+            let heap = if kind <= 7 {
+                let Ok(summary) = scan_native_body_v2(&tx.payload[3..], old_limits) else {
+                    continue;
+                };
+                summary.opaque_bytes.checked_mul(2).and_then(|n| n.checked_add(std::mem::size_of::<PositiveNativeBodyV2>() as u64))
+            } else {
+                match scan_assignment_body_v2(&tx.payload[3..], limits) {
+                    Ok(s) => Some(s.heap),
+                    Err(_) => continue,
+                }
+            };
+            let heap = heap.ok_or_else(|| NativeCoverageV1::overflow::<Self>("original/assigned body decode"))?;
+            let output_script = tx.outputs.iter().map(|o| o.script_public_key.script().len() as u64).max().unwrap_or(0);
+            let typed = std::mem::size_of::<PositiveAssignmentRawActionV2>() as u64
+                + 2 * std::mem::size_of::<PositiveAssignmentScheduledActionV2>() as u64
+                + std::mem::size_of::<NativeAssignmentRulesV2>() as u64
+                + std::mem::size_of::<UtxoEntry>() as u64
+                + PositiveAssignmentRawActionV2::retained_owner_bytes_v2();
+            let bytes = heap
+                .checked_add(typed)
+                .and_then(|n| n.checked_add(output_script))
+                .ok_or_else(|| NativeCoverageV1::overflow::<Self>("native Positive raw retained action"))?;
+            let decode = require_positive_carrier_lease_v2(reserve_native_requests_v1(bytes)?)?;
+            let output = if kind <= 7 {
+                let Ok(body) = decode_native_body_v2(&tx.payload[3..], old_limits) else {
+                    continue;
+                };
+                // Old0 is deliberately transported, then explicitly refused
+                // for assigned mode at the canonical raw checkpoint. No fake
+                // admission followed by a later Assignment attachment occurs.
+                let _original_meaning = match &body.operation {
+                    C::Expire { .. } => 6,
+                    C::PositiveCourtAttestation { .. } => 7,
+                    _ => kind,
+                };
+                None
+            } else {
+                let Ok(body) = decode_assignment_body_v2(&tx.payload[3..], limits) else {
+                    continue;
+                };
+                match &body.operation {
+                    A::AcceptCanonicalAssignment { bundle, .. } => {
+                        let anchor = BlockHash::from_bytes(bundle.terms.branch_anchor.0);
+                        if !processor
+                            .reachability_service
+                            .try_is_chain_ancestor_of(anchor, carrier.prefix.selected_parent)
+                            .unwrap_or(false)
+                        {
+                            continue;
+                        }
+                        Some(bundle.funding.funding_output_index)
+                    }
+                    A::AdmitAssignedResult { payload, .. } => Some(payload.consent.funding_output_index),
+                    A::JoinAssignmentProver { consent, .. } => Some(consent.funding_output_index),
+                    _ => None,
+                }
+            };
+            let current_output = output.and_then(|index| current_view.get(&TransactionOutpoint::new(tx.id(), index)));
+            let Some(rules) = NativeAssignmentRulesV2::resolve(
+                params,
+                point.daa_score,
+                processor.palw_network_domain_v2(),
+                processor.palw_prompt_ids_form_at(point.daa_score),
+            ) else {
+                continue;
+            };
+            let origin = AcceptedOrigin {
+                accepting_block: NativeHash64(point.block.as_bytes()),
+                carrier_block: NativeHash64(carrier.carrier_block.as_bytes()),
+                carrier_transaction: NativeHash64(tx.id().as_bytes()),
+                accepted_tx_ordinal: u32::try_from(carrier.prefix.accepted_transactions)
+                    .map_err(|_| NativeCoverageV1::overflow::<Self>("Positive accepted ordinal"))?,
+                event_ordinal: 0,
+                accepted_daa: point.daa_score,
+                accepted_blue_score: point.blue_score,
+            };
+            let transport = carrier._lease.ok_or_else(|| {
+                NativeCoverageV1::unsupported::<Self>("actual Positive carrier", "missing original Full validation lease")
+            })?;
+            let action = PositiveAssignmentRawActionV2::from_native_transport_v2(
+                carrier.body,
+                carrier.index_within_block,
+                carrier.entries,
+                carrier.fee,
+                origin,
+                carrier.prefix.selected_parent,
+                current_output,
+                rules,
+                transport,
+                decode,
+            )?;
+            actions
+                .try_reserve_exact(1)
+                .map_err(|_| NativeCoverageV1::unsupported::<Self>("native Positive raw actions", "allocation refused"))?;
+            actions.push(action);
+        }
+        Ok(actions)
+    }
+}

@@ -32,3 +32,5 @@
 - [rfc-0018-implementation-status-2026-10-15.md](rfc-0018-implementation-status-2026-10-15.md)
 - [t12-daa14000-release-plan-2026-10-15.md](t12-daa14000-release-plan-2026-10-15.md)
 - [unmerged-inventory-2026-10-15.md](unmerged-inventory-2026-10-15.md)
+
+- [RFC-0046](../../../rfc/0046-positive-native-funded-relay.md) / [ADR-0214](../../../adr/0214-positive-native-funded-relay.md): 2026-11-03に両案採択。先行relay資料・有限custodyの限定実装を許可。本番有効化・旧資金移行は未承認。

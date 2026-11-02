@@ -28,6 +28,7 @@ mod kernel_material;
 mod kernel_salted;
 mod kernel_segment_assembly;
 mod positive_assignment;
+mod positive_certification;
 pub mod positive_journal;
 pub(crate) mod positive_rows;
 pub use kernel_material::{

@@ -505,6 +505,30 @@ impl<C: CourtCheckerV2, V: CarrierVerifierV2> ContractCourtV2<C, V> {
         })
     }
 
+    /// Read-only current-clock projection. A cold native replay must retain
+    /// the actual accepted historical machine so that a later genuine op6 can
+    /// atomically commit expiry; observing a clock supplies no accepted origin.
+    pub(crate) fn preview_expiry_v2(
+        &self,
+        now: u64,
+    ) -> Result<(ClaimStatus, Option<ContractAttemptV2>, u64), CourtErrorV2<C::Error, V::Error>> {
+        if now < self.now {
+            return Err(CourtErrorV2::Order);
+        }
+        let mut status = self.claim_status;
+        let mut last = self.last_attempt;
+        let mut receipts = self.reserved_receipt_bytes();
+        if now >= self.limits.deadline && status == ClaimStatus::Pending {
+            status = ClaimStatus::EndedUnverified;
+            if let Some(attempt) = &mut last
+                && attempt.status == WitnessStatus::Checking
+            {
+                attempt.status = WitnessStatus::Incomplete;
+            }
+            receipts = 0;
+        }
+        Ok((status, last, receipts))
+    }
     pub fn expire(&mut self, now: u64) -> Result<(), CourtErrorV2<C::Error, V::Error>> {
         if now < self.now {
             return Err(CourtErrorV2::Order);

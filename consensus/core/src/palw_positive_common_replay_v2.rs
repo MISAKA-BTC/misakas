@@ -31,7 +31,8 @@ use crate::{
 };
 use misaka_palw_positive_contract::{
     ContractError,
-    identity::{PUBKEY_BYTES, WitnessId},
+    funding::{FundingConsent, FundingPlanBasis},
+    identity::{PUBKEY_BYTES, SIGNATURE_BYTES, WitnessId},
     journal::{CaseJournalEventKind, CaseJournalRecordView},
     messages::{AdmissionContext, ClaimStatus, MinerResultCommit, MinerServiceContract},
     rows::AcceptedMaterial,
@@ -54,6 +55,19 @@ pub struct RootedReplayAdmissionV2<'a> {
     pub record_limits: RecordLimits,
     pub court_limits: CourtLimitsV2,
     pub miner_key: &'a [u8; PUBKEY_BYTES],
+}
+
+/// Literal already-preflighted actual op9 fields, borrowed from the concrete
+/// native replay environment. No synthetic old ResultAdmission is constructed.
+/// This is local replay DATA, never accepted Case, funding or P authority.
+pub struct AssignedInitialReplayV2<'a> {
+    pub result: &'a MinerResultCommit,
+    pub miner_signature: &'a [u8; SIGNATURE_BYTES],
+    pub service: &'a MinerServiceContract,
+    pub basis: &'a FundingPlanBasis,
+    pub consent: &'a FundingConsent,
+    pub payer_signature: &'a [u8; SIGNATURE_BYTES],
+    pub admission: RootedReplayAdmissionV2<'a>,
 }
 
 /// A native owner derives this from bounded raw input and actual historical
@@ -210,6 +224,19 @@ pub trait NativeReplayEnvironmentV2 {
         record: CaseJournalRecordView<'_>,
         body: &PositiveNativeBodyV2,
     ) -> Result<RootedReplayAdmissionV2<'a>, Self::Error>;
+    /// Optional assigned-first path, ONLY for sequence1/NativeTransaction.
+    /// The actual native environment must authenticate the exact full accepted
+    /// transaction/op9, consumed Assignment binding, independent expectations,
+    /// original material domains and all funding/aux links. quote_record must
+    /// precharge actual transaction and op9 buffers before this method runs.
+    /// None is refusal, never an old op0 or saved-pass fallback.
+    fn assigned_initial_inputs<'a>(
+        &'a self,
+        _pin: &CaseJournalPinV2,
+        _record: CaseJournalRecordView<'_>,
+    ) -> Result<Option<AssignedInitialReplayV2<'a>>, Self::Error> {
+        Ok(None)
+    }
     fn panel_key(
         &self,
         pin: &CaseJournalPinV2,
@@ -447,6 +474,29 @@ pub fn replay_common_case_v2<S: CaseJournalSourceV2, E: NativeReplayEnvironmentV
     env: &E,
     limits: CommonReplayLimitsV2,
 ) -> Result<LocalReplayedCaseV2<E::ExternalState>, Error<S, E>> {
+    replay_common_case_retained_v2(source, links, env, limits).map(|(local, _machine)| local)
+}
+
+/// Nonserialized checker continuation. Only the same actual native owner may
+/// retain this under its exact current root/head/epoch/lineage and real lease.
+/// It carries real A1 progress, not reconstructed saved counters or Pass flags.
+pub(crate) struct RetainedCommonCourtV2<V: CarrierVerifierV2> {
+    court: ContractCourtV2<TirCourtCheckerV2, V>,
+    prepared: PreparedCheck,
+    record_limits: RecordLimits,
+}
+impl<V: CarrierVerifierV2> RetainedCommonCourtV2<V> {
+    pub(crate) fn into_parts(self) -> (ContractCourtV2<TirCourtCheckerV2, V>, PreparedCheck, RecordLimits) {
+        (self.court, self.prepared, self.record_limits)
+    }
+}
+
+pub(crate) fn replay_common_case_retained_v2<'a, S: CaseJournalSourceV2, E: NativeReplayEnvironmentV2>(
+    source: &S,
+    links: &CheckedCaseJournalLinksV2,
+    env: &'a E,
+    limits: CommonReplayLimitsV2,
+) -> Result<(LocalReplayedCaseV2<E::ExternalState>, RetainedCommonCourtV2<E::Verifier<'a>>), Error<S, E>> {
     if [
         limits.max_events,
         limits.max_facts,
@@ -541,16 +591,33 @@ pub fn replay_common_case_v2<S: CaseJournalSourceV2, E: NativeReplayEnvironmentV
             let before = court.as_ref().map(snapshot);
             let operation = body.as_ref().map(|_| record.payload()[4]);
             let outcome = if header.sequence == 1 {
-                let body = body.as_ref().ok_or(CommonReplayErrorV2::InitialAdmission)?;
-                let PositiveNativeOperationV2::ResultAdmission { result, miner_signature, service: signed_service, .. } =
-                    &body.operation
-                else {
-                    return Err(CommonReplayErrorV2::InitialAdmission);
+                let (result, miner_signature, signed_service, input) = if let Some(body) = body.as_ref() {
+                    let PositiveNativeOperationV2::ResultAdmission { result, miner_signature, service: signed_service, .. } =
+                        &body.operation
+                    else {
+                        return Err(CommonReplayErrorV2::InitialAdmission);
+                    };
+                    let input = env.admission_inputs(&pin, record, body).map_err(CommonReplayErrorV2::Environment)?;
+                    (result, miner_signature, signed_service, input)
+                } else {
+                    if header.kind != CaseJournalEventKind::NativeTransaction {
+                        return Err(CommonReplayErrorV2::InitialAdmission);
+                    }
+                    let assigned = env
+                        .assigned_initial_inputs(&pin, record)
+                        .map_err(CommonReplayErrorV2::Environment)?
+                        .ok_or(CommonReplayErrorV2::InitialAdmission)?;
+                    assigned
+                        .consent
+                        .validate(assigned.result, assigned.service, assigned.basis, header.origin.accepted_daa)
+                        .map_err(|error| CommonReplayErrorV2::Court(CourtErrorV2::Contract(error)))?;
+                    // Literal r1 payload stays op9. Generic engine neither
+                    // synthesizes op0 nor claims native accepted authority.
+                    (assigned.result, assigned.miner_signature, assigned.service, assigned.admission)
                 };
                 if result.scope != pin.scope || result.case_id() != pin.case || result.id() != pin.result {
                     return Err(CommonReplayErrorV2::Identity);
                 }
-                let input = env.admission_inputs(&pin, record, body).map_err(CommonReplayErrorV2::Environment)?;
                 attempt_limit = u64::from(input.court_limits.max_attempts);
                 if attempt_limit == 0 {
                     return Err(CommonReplayErrorV2::Limits);
@@ -706,14 +773,17 @@ pub fn replay_common_case_v2<S: CaseJournalSourceV2, E: NativeReplayEnvironmentV
     if execution_work != preflight.native_work || execution_hash != preflight.native_hash || events.len() as u64 != count {
         return Err(CommonReplayErrorV2::ChangedQuote);
     }
-    let mut court = court.ok_or(CommonReplayErrorV2::InitialAdmission)?;
+    let court = court.ok_or(CommonReplayErrorV2::InitialAdmission)?;
     let historical = snapshot(&court);
     let now = env.current_daa(&pin).map_err(CommonReplayErrorV2::Environment)?;
     if now < latest_daa {
         return Err(CommonReplayErrorV2::Clock);
     }
-    court.expire(now).map_err(CommonReplayErrorV2::Court)?;
-    let current = snapshot(&court);
+    let (clock_status, clock_attempt, clock_receipts) = court.preview_expiry_v2(now).map_err(CommonReplayErrorV2::Court)?;
+    let mut current = historical;
+    current.status = clock_status;
+    current.last_attempt = clock_attempt;
+    current.reserved_receipt_bytes = clock_receipts;
     let service = service.ok_or(CommonReplayErrorV2::InitialAdmission)?;
     env.validate_final(&pin, court.result(), &service, historical, current, now, &facts, &external)
         .map_err(CommonReplayErrorV2::Environment)?;
@@ -721,18 +791,13 @@ pub fn replay_common_case_v2<S: CaseJournalSourceV2, E: NativeReplayEnvironmentV
         return Err(CommonReplayErrorV2::Clock);
     }
     let quote = quote_replay::<S, E>(links, limits, &preflight, facts.capacity() as u64, events.capacity() as u64)?;
-    Ok(LocalReplayedCaseV2 {
-        pin,
-        result: court.result().clone(),
-        service,
-        historical,
-        current,
-        observed_daa: now,
-        facts,
-        events,
-        external,
-        quote,
-    })
+    let result = court.result().clone();
+    let machine = RetainedCommonCourtV2 {
+        court,
+        prepared: prepared.ok_or(CommonReplayErrorV2::InitialAdmission)?,
+        record_limits: record_limits.ok_or(CommonReplayErrorV2::InitialAdmission)?,
+    };
+    Ok((LocalReplayedCaseV2 { pin, result, service, historical, current, observed_daa: now, facts, events, external, quote }, machine))
 }
 
 fn semantic_error<S, E, V>(error: CourtErrorV2<AdapterError, V>) -> Result<LocalCourtOutcomeV2, CommonReplayErrorV2<S, E, V>> {

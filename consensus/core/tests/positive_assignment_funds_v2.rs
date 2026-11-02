@@ -215,6 +215,7 @@ fn assigned() -> (AssignmentRow, AssignmentFundingRow, [u8; PUBKEY_BYTES], Trans
         context: bundle.job_context,
         registered_metadata: support::d(37),
         status: AssignmentStatusV2::Open,
+        admission_material: material,
         derivation: material,
         dependencies: AcceptedMaterial { origin, digest: bundle.terms.empty_dependencies_id() },
         reservation: material,

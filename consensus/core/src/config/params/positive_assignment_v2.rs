@@ -15,10 +15,13 @@ pub struct PositiveAssignmentFenceV2 {
 }
 /// Immutable, versioned native funding inputs. Actual derived usage, leases,
 /// source/Case/P owners and current coins remain separately required.
-#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize)]
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct AssignmentNativePreimagesV2 {
     pub assignment_fees: crate::palw_positive_assignment_funds_v2::AssignmentFeeScheduleV2,
     pub physical: crate::palw_positive_assignment_funds_v2::AssignmentPhysicalProfileV2,
+    pub source_policy: crate::palw_positive_assignment_resources_v2::AssignmentSourcePolicyV2,
+    pub case_fees: crate::palw_positive_assignment_resources_v2::AssignmentCaseFeeScheduleV2,
+    pub cancellation: crate::palw_positive_assignment_resources_v2::AssignmentCancellationPolicyV2,
 }
 impl AssignmentNativePreimagesV2 {
     pub fn root(&self) -> Hash64 {
@@ -35,7 +38,13 @@ impl AssignmentNativePreimagesV2 {
     pub fn validate(&self, policy: &AssignmentPolicyV2) -> Result<(), PalwModeV2Error> {
         self.assignment_fees.validate().map_err(|_| PalwModeV2Error::Invalid("assignment fee preimage is invalid"))?;
         self.physical.validate().map_err(|_| PalwModeV2Error::Invalid("assignment physical preimage is invalid"))?;
-        if self.assignment_fees.id() != policy.assignment_fee_schedule
+        self.source_policy.validate().map_err(|_| PalwModeV2Error::Invalid("assignment source policy preimage is invalid"))?;
+        self.case_fees.validate().map_err(|_| PalwModeV2Error::Invalid("assignment C fee preimage is invalid"))?;
+        self.cancellation.validate().map_err(|_| PalwModeV2Error::Invalid("assignment cancellation preimage is invalid"))?;
+        if self.source_policy.id() != policy.source_policy
+            || self.case_fees.id() != policy.case_fee_schedule
+            || self.cancellation.id() != policy.cancellation_policy
+            || self.assignment_fees.id() != policy.assignment_fee_schedule
             || self.assignment_fees.reserve_id() != policy.reserve_schedule
             || self.physical.id() != policy.physical_service_profile
         {

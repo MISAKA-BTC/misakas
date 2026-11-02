@@ -454,6 +454,42 @@ pub struct PalwTirInventoryIndexV1 {
 /// One inventory leaf's coordinates: `(param, layer, byte offset in the tensor, bytes)`.
 pub type PalwTirInventoryPieceV1 = (u16, Option<u16>, u32, u32);
 
+/// Allocation-only predecode envelope from the audited actual program shape.
+/// Both parameter-instance analysis passes and the retained private index are
+/// named explicitly. Each independently collected per-param Vec keeps its own
+/// growth/minimum allowance; params*layers alone would miss small Vecs.
+pub(crate) fn native_tir_inventory_index_requests_v1(
+    shape: &crate::palw_native_resource_v1::NativeTirProgramShapeV1,
+) -> Result<u64, crate::palw_native_resource_v1::NativeCoverageV1> {
+    let (blocks, _, layers, _, _, _, _) = shape.step_space_counts_v1();
+    inventory_index_requests_from_counts_v1(shape.parameter_count_v1(), blocks, layers)
+}
+fn inventory_index_requests_from_counts_v1(
+    params: u64,
+    blocks: u64,
+    layers: u64,
+) -> Result<u64, crate::palw_native_resource_v1::NativeCoverageV1> {
+    use crate::palw_native_resource_v1::{TirNativeRequestsV1, btree_node_envelope_bytes_v1};
+    let mut q = TirNativeRequestsV1::new();
+    q.exact_v1::<PalwTirInventoryIndexV1>(1)?;
+    if params == 0 {
+        return Ok(q.bytes_v1());
+    }
+    q.exact_v1::<ParamIndexV1>(params)?;
+    for _pass in 0..2 {
+        q.exact_v1::<BTreeSet<u8>>(params)?;
+        q.add_v1(TirNativeRequestsV1::product_v1(
+            TirNativeRequestsV1::product_v1(params, blocks)?,
+            btree_node_envelope_bytes_v1::<u8, ()>() as u64,
+        )?)?;
+        q.vec_v1::<Vec<Option<u16>>>(params)?;
+        let mut one_param = TirNativeRequestsV1::new();
+        one_param.vec_v1::<Option<u16>>(layers.max(1))?;
+        q.add_v1(TirNativeRequestsV1::product_v1(params, one_param.bytes_v1())?)?;
+    }
+    Ok(q.bytes_v1())
+}
+
 impl PalwTirInventoryIndexV1 {
     /// The index of `program`'s inventory (empty for a program that declares no param), or `None`
     /// when the inventory refuses the program (a tensor past 4 GiB, or past a `u32` of leaves).
@@ -4697,5 +4733,31 @@ mod inventory_material_tests {
         other_program.params[0].name.push('!');
         let other = TirInventoryOpeningVerifierV1::new(&other_program, x.binding.artifact_root).unwrap();
         assert!(other.check(&opening).is_err());
+    }
+}
+
+#[cfg(test)]
+mod assignment_inventory_allocation_tests_v2 {
+    use super::*;
+    #[test]
+    fn per_parameter_small_vec_minima_and_reader_nodes_are_accounted() {
+        let one = inventory_index_requests_from_counts_v1(1, 1, 1).unwrap();
+        let four = inventory_index_requests_from_counts_v1(4, 1, 1).unwrap();
+        let readers = inventory_index_requests_from_counts_v1(4, 8, 1).unwrap();
+        assert!(four > one);
+        assert!(readers > four);
+        assert!(inventory_index_requests_from_counts_v1(u64::MAX, 2, 2).is_err());
+        assert!(inventory_index_requests_from_counts_v1(2, u64::MAX, 2).is_err());
+        assert!(inventory_index_requests_from_counts_v1(2, 1, u64::MAX).is_err());
+    }
+    #[test]
+    fn predecode_inventory_quote_bounds_real_retained_index() {
+        let execution = test_support::tiny_execution(None);
+        let program = execution.binding.class.decode_program().unwrap();
+        let (shape, _) = crate::palw_native_resource_v1::source_tir_program_shape_v1(&execution.binding.class.program).unwrap();
+        let inventory = PalwTirInventoryIndexV1::new(&program).unwrap();
+        let retained = inventory.params.capacity() * std::mem::size_of::<ParamIndexV1>()
+            + inventory.params.iter().map(|p| p.layers.capacity() * std::mem::size_of::<Option<u16>>()).sum::<usize>();
+        assert!(native_tir_inventory_index_requests_v1(&shape).unwrap() >= retained as u64);
     }
 }

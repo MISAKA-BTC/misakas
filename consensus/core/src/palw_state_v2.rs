@@ -140,12 +140,12 @@ mod palw_exec_v2_origin_v1;
 mod palw_exec_v2_rewards_v1;
 #[path = "palw_kernel_route_fold_v1.rs"]
 mod palw_kernel_route_fold_v1;
-#[path = "palw_positive_source_apply_v2.rs"]
-mod palw_positive_source_apply_v2;
 #[path = "palw_mesh_fold_v1.rs"]
 mod palw_mesh_fold_v1;
 #[path = "palw_model_panel_one_fold_v1.rs"]
 mod palw_model_panel_one_fold_v1;
+#[path = "palw_positive_source_apply_v2.rs"]
+mod palw_positive_source_apply_v2;
 // G14 lane D phase 3: the onboarding objects' fold arms (artifact binding and refutation, kernel binding, conformance commitment).
 #[path = "palw_flat_model_vector_fold_v3.rs"]
 mod palw_flat_model_vector_fold_v3;
@@ -278,6 +278,8 @@ mod palw_claim_local_fold_v1;
 mod palw_claim_local_rewards_v1;
 #[path = "palw_security_certification_fold_v1.rs"]
 mod palw_security_certification_fold_v1;
+#[path = "palw_state_v2/positive_assignment_certification.rs"]
+mod positive_assignment_certification;
 // RFC-0023 stage 2: per-claim settlement read (dormant `palw_claim_local_settlement_v1`).
 pub use palw_claim_local_rewards_v1::{PalwClaimLocalSettlementV1, palw_claim_local_settlement_v1};
 // RFC-0023 stage 2 (§4.1/§4.5): the fold-derived claim-local checkpoint row and its irreversible frontier (same dormant fence).
@@ -2606,7 +2608,12 @@ pub fn palw_bond_collateral_is_locked_v5(
     duty_gate: bool,
     window_court: u64,
 ) -> bool {
-    if palw_bond_collateral_is_locked_v2(bond, now_daa, withdrawal_delay_daa) {
+    // Prefix P is an independent new duty. Its attestor collateral cannot
+    // escape merely because the unrelated old R-core/duty fence is dormant.
+    // The P projection is zero with no P row and fail-closed if one is corrupt.
+    if crate::palw_positive_certification_v2::positive_verifier_liability_reserved_v2(state, key) > 0
+        || palw_bond_collateral_is_locked_v2(bond, now_daa, withdrawal_delay_daa)
+    {
         return true;
     }
     let retiring_held = match &bond.status {
@@ -2865,6 +2872,7 @@ pub fn palw_bond_committed_v1(
         .saturating_add(state.model_refutation_seal_reserved_v4(bond, now_daa))
         // DA16: the provider court's leases and challenge bonds.
         .saturating_add(state.provider_court_reserved(bond))
+        .saturating_add(crate::palw_positive_certification_v2::positive_verifier_liability_reserved_v2(state,bond))
 }
 
 /// **[`palw_bond_committed_v1`]'s per-lock term: does `lock` on `claim_id` still hold its seat's
@@ -13398,6 +13406,12 @@ impl PalwBondRegistrationIndexV1 {
 }
 
 struct TransitionBuilder<'a> {
+    assignment_materials: Vec<PositiveAssignmentAcceptedMaterialV2>,
+    assignment_case_materials: Vec<PositiveCaseAcceptedMaterialV2>,
+    assignment_active_raw: Option<PositiveAssignmentRawActionV2>,
+    assignment_raw_boundary: Option<(Hash64, usize)>,
+    assignment_case_cache:
+        BTreeMap<misaka_palw_positive_contract::identity::CaseId, positive_assignment_case::NativeAssignedCaseCacheV2>,
     native_reservation: crate::palw_native_resource_v1::NativeTransitionReservationV1,
     monetary_native_ready: BTreeMap<Hash64, (Hash64, crate::palw_attempt_material_v3::PalwNativeMaterialBindingV3)>,
     court_end_evidence:
@@ -13947,6 +13961,22 @@ mod vesting_workspace_v2;
 // G14 lane escrow-rfc08 (RFC-0035 A): the funded-escrow rows' one writer.
 mod funded_escrow;
 mod positive_assignment;
+mod positive_assignment_backing;
+mod positive_assignment_case;
+mod positive_assignment_funds;
+mod positive_assignment_materials;
+mod positive_assignment_raw;
+pub use positive_assignment_backing::{
+    AssignmentControlBoundaryV2, NativeAcceptedCaseCarriageV2, NativeAssignedCaseBackingErrorV2, NativeAssignedCaseBackingV2,
+    NativeCommittedAssignedCaseV2, NativeCommittedAssignmentRecordV2, NativeCommittedCaseRecordV2,
+};
+pub use positive_assignment_funds::{
+    AssignmentMoneyOwnerErrorV2, qualify_rooted_assignment_candidate_v2, validate_assignment_once_reference_v2,
+};
+pub use positive_assignment_materials::{
+    PositiveAssignmentAcceptedMaterialV2, PositiveAssignmentMaterialOutcomeV2, PositiveCaseAcceptedMaterialV2,
+};
+pub use positive_assignment_raw::{NativeAssignmentRulesV2, PositiveAssignmentRawActionV2, PositiveAssignmentScheduledActionV2};
 // G14 item 6 (ADR-0200 C1, lane r5-d2-c1): the D2 readiness registry's one writer and the disclosure court's fold.
 mod d2_readiness;
 pub use input_views::{PalwBlockFactsV1, PalwRulesAtBlockV1, PalwRulesForClaimV1};
@@ -14508,6 +14538,37 @@ pub fn palw_v2_apply_one_object_retained_v1(
     builder.native_reservation.finish_state_v1(builder.state).map_err(PalwStateV2Error::NativeResource)
 }
 
+/// Raw native action rehearsal. A fresh builder resolves every expected field
+/// from this exact prefix. The returned state is for rehearsal only; final
+/// execution receives the original raw action and redoes the same checks.
+#[allow(clippy::too_many_arguments)]
+pub fn palw_v2_apply_one_assignment_retained_v2(
+    base: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    ctx: &PalwBlockContextV2,
+    action: &PositiveAssignmentRawActionV2,
+    unavailable_abstains: bool,
+    capability_bound: bool,
+    uncertified_weightless: bool,
+    da_court: bool,
+    extras: &PalwTransitionExtrasV1,
+) -> Result<crate::palw_native_resource_v1::NativeChainStateV1, PalwStateV2Error> {
+    let mut builder =
+        TransitionBuilder::try_new(base, params, unavailable_abstains, capability_bound, uncertified_weightless, da_court, extras)?;
+    builder.own_attempt_class = extras.own_attempt_class.filter(|_| extras.audit_2026_09_23_active);
+    source_bootstrap_v1::prepare(&mut builder, ctx)?;
+    builder.reserve_assignment_material_slots_v2(1)?;
+    builder.apply_positive_assignment_raw_v2(ctx, action)?;
+    let rehearsal_materials = PositiveAssignmentMaterialOutcomeV2 {
+        records: std::mem::take(&mut builder.assignment_materials),
+        case_records: std::mem::take(&mut builder.assignment_case_materials),
+    };
+    rehearsal_materials.validate_v2(&builder.entries)?;
+    drop(rehearsal_materials); // Final replay must produce its own actual bytes.
+
+    builder.native_reservation.finish_state_v1(builder.state).map_err(PalwStateV2Error::NativeResource)
+}
+
 /// **Would this licence object actually LICENSE its claim on `base`?** (2026-09-24 DoS audit review
 /// of #6.) `true` only for a `ReceiptLicensed`, `ReceiptLicensedV2` or `OptimisticLicensed` that
 /// folds without error AND leaves its claim `ReceiptLicensed` — asked by folding it, so the answer
@@ -14822,6 +14883,79 @@ pub fn apply_palw_transition_retained_v7(
     ),
     PalwStateV2Error,
 > {
+    if !extras.positive_assignment_actions.is_empty() {
+        return Err(PalwStateV2Error::DeltaMismatch("raw Assignment actions require v8 owned material outcome"));
+    }
+    let (state, delta, skips, materials) = crate::palw_attempt_rules_v1::palw_with_prompt_root_block_memo_v2(ctx.block, || {
+        apply_palw_transition_v7_inner(
+            parent,
+            params,
+            admission,
+            ctx,
+            accepted_objects,
+            block_work,
+            merged_work,
+            own_execution_key,
+            unavailable_abstains,
+            capability_bound,
+            uncertified_weightless,
+            da_court,
+            extras,
+        )
+    })?;
+    if !materials.is_empty() {
+        return Err(PalwStateV2Error::DeltaMismatch("v7 must not drop nonempty Assignment material"));
+    }
+    Ok((state, delta, skips))
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn apply_palw_transition_retained_v8(
+    parent: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    admission: Option<&crate::palw_admission_v2::PalwAdmissionParamsV2>,
+    ctx: &PalwBlockContextV2,
+    accepted_objects: &[PalwConsensusObjectV2],
+    block_work: PalwBlockWorkV3<'_>,
+    merged_work: &[PalwMergedWorkV1<'_>],
+    // **B-4: the block's OWN attempt's pre_pow-inclusive execution commitment**, computed by the
+    // processor from this block's header (the fold holds no pre_pow). `Hash64::default()` when the
+    // block carries no attempt, and unread below `palw_audit_2026_09_11_deep`. A wrapper that has no
+    // header (rehearsal / genesis / sync) passes `default` — its fold carries no merged work, so the
+    // own-vs-merged dedup cannot fire there and the own attempt is applied identically either way.
+    own_execution_key: Hash64,
+    unavailable_abstains: bool,
+    capability_bound: bool,
+    uncertified_weightless: bool,
+    da_court: bool,
+    extras: &PalwTransitionExtrasV1,
+) -> Result<
+    (
+        crate::palw_native_resource_v1::NativeChainStateV1,
+        crate::palw_native_resource_v1::NativeStateDeltaV1,
+        crate::palw_native_resource_v1::NativeRetainedV1<Vec<(BlockHash, String)>>,
+        crate::palw_native_resource_v1::NativeRetainedV1<PositiveAssignmentMaterialOutcomeV2>,
+    ),
+    PalwStateV2Error,
+> {
+    if extras.positive_assignment_actions.is_empty() {
+        let (state, delta, skips) = apply_palw_transition_retained_v7(
+            parent,
+            params,
+            admission,
+            ctx,
+            accepted_objects,
+            block_work,
+            merged_work,
+            own_execution_key,
+            unavailable_abstains,
+            capability_bound,
+            uncertified_weightless,
+            da_court,
+            extras,
+        )?;
+        return Ok((state, delta, skips, PositiveAssignmentMaterialOutcomeV2::empty_retained_v2()));
+    }
     crate::palw_attempt_rules_v1::palw_with_prompt_root_block_memo_v2(ctx.block, || {
         apply_palw_transition_v7_inner(
             parent,
@@ -14866,6 +15000,7 @@ fn apply_palw_transition_v7_inner(
         crate::palw_native_resource_v1::NativeChainStateV1,
         crate::palw_native_resource_v1::NativeStateDeltaV1,
         crate::palw_native_resource_v1::NativeRetainedV1<Vec<(BlockHash, String)>>,
+        crate::palw_native_resource_v1::NativeRetainedV1<PositiveAssignmentMaterialOutcomeV2>,
     ),
     PalwStateV2Error,
 > {
@@ -14881,6 +15016,8 @@ fn apply_palw_transition_v7_inner(
 
     let mut builder =
         TransitionBuilder::try_new(parent, params, unavailable_abstains, capability_bound, uncertified_weightless, da_court, extras)?;
+
+    builder.reserve_assignment_material_slots_v2(extras.positive_assignment_actions.len())?;
 
     // Prospective custody is authenticated against the pre-object parent. A same-block
     // enrollment/replacement never authorizes this block's capture. A carriage that does not
@@ -15018,8 +15155,30 @@ fn apply_palw_transition_v7_inner(
         builder.own_attempt_class = Some(envelope.attempt.class_id);
     }
     source_bootstrap_v1::prepare(&mut builder, ctx)?;
-    for object in accepted_objects {
-        apply_object(&mut builder, ctx, object)?;
+    if !extras.assignment_settlements.is_empty() {
+        return Err(PalwStateV2Error::DeltaMismatch("tentative Assignment UTXO previews cannot drive rooted settlement"));
+    }
+    if extras.positive_assignment_actions.is_empty() {
+        for object in accepted_objects {
+            apply_object(&mut builder, ctx, object)?;
+        }
+    } else {
+        let mut raw_cursor = 0usize;
+        let mut previous_raw_ordinal = None;
+        for (index, object) in accepted_objects.iter().enumerate() {
+            positive_assignment::apply_raw_before_object_v2(&mut builder, ctx, index, &mut raw_cursor, &mut previous_raw_ordinal)?;
+            apply_object(&mut builder, ctx, object)?;
+        }
+        positive_assignment::apply_raw_before_object_v2(
+            &mut builder,
+            ctx,
+            accepted_objects.len(),
+            &mut raw_cursor,
+            &mut previous_raw_ordinal,
+        )?;
+        if raw_cursor != builder.extras.positive_assignment_actions.len() {
+            return Err(PalwStateV2Error::DeltaMismatch("Assignment action points beyond accepted object prefix"));
+        }
     }
     // G14 lane court-f02 (RFC-0026 F02 / ADR-0192 A): this accepting block's actual reserved court service supply, after every
     // object (so the block's own unreserved court spend is known). Dormant: past `palw_tir_public_conviction_v1` with a pinned
@@ -15608,7 +15767,13 @@ fn apply_palw_transition_v7_inner(
     }
 
     let delta = PalwStateDeltaV2 { point: *ctx, entries: builder.entries };
-    builder.native_reservation.finish_transition_v1(builder.state, delta, merged_skips).map_err(PalwStateV2Error::NativeResource)
+    let materials =
+        PositiveAssignmentMaterialOutcomeV2 { records: builder.assignment_materials, case_records: builder.assignment_case_materials };
+    materials.validate_v2(&delta.entries)?;
+    builder
+        .native_reservation
+        .finish_transition_with_assignment_materials_v2(builder.state, delta, merged_skips, materials)
+        .map_err(PalwStateV2Error::NativeResource)
 }
 
 /// After the LAST open session on a licensed claim ends challenger-side (an explicit
@@ -20668,6 +20833,9 @@ pub struct PalwTransitionExtrasV1 {
     /// Actual ordinary UTXO spends qualified against current rooted Assignment
     /// entitlements; the canonical writer CASes and journals these in the same batch.
     pub assignment_settlements: Vec<crate::palw_positive_assignment_funds_v2::AssignmentSpendPlanV2>,
+    /// Raw native actions replayed at exact positions in the accepted object
+    /// fold. This is not a vector of prepared or previously accepted rows.
+    pub positive_assignment_actions: Vec<PositiveAssignmentScheduledActionV2>,
     /// **G14 r5 (lane r5-escrow-settlement): how long a SETTLED funded-escrow row stays rooted after its settling spend** — the
     /// processor's `2 × pruning_depth` (DAA advances at least as fast as blue score, so by then the pruning point has passed the
     /// settling block and a pruned node's carriage no longer needs the row). `None` below `palw_tir_public_conviction_v1` (no row
@@ -22666,8 +22834,21 @@ pub fn apply_delta_v2(
     delta: &PalwStateDeltaV2,
     params: &PalwStateParamsV2,
 ) -> Result<PalwChainStateV2, PalwStateV2Error> {
+    apply_delta_prefix_v2(parent, delta, delta.entries.len(), params)
+}
+
+/// Replay the exact recorded prefix without allocating or fabricating a new
+/// delta. Every old-value check is identical to full replay; the retained
+/// native owner must reserve the full audited replay quote before calling.
+pub(crate) fn apply_delta_prefix_v2(
+    parent: &PalwChainStateV2,
+    delta: &PalwStateDeltaV2,
+    end: usize,
+    params: &PalwStateParamsV2,
+) -> Result<PalwChainStateV2, PalwStateV2Error> {
+    let entries = delta.entries.get(..end).ok_or(PalwStateV2Error::DeltaMismatch("recorded prefix exceeds actual delta"))?;
     let mut state = parent.clone();
-    for entry in &delta.entries {
+    for entry in entries {
         apply_delta_entry(&mut state, entry, false)?;
     }
     palw_panel_v3_fold_v1::refresh_derived_v1(&mut state)?;
@@ -27338,3 +27519,11 @@ pub(crate) use native_wire_carriage_v1::{
 
 #[cfg(test)]
 mod positive_assignment_tests;
+
+impl PalwChainStateV2 {
+    /// Borrow actual registry data for the concrete P source reader. This
+    /// iterator does not authenticate current lineage or create a role token.
+    pub(crate) fn bonds_for_positive_p_source_v2(&self) -> impl Iterator<Item = (&PalwBondKeyV2, &PalwBondStateV2)> {
+        self.bonds.iter()
+    }
+}

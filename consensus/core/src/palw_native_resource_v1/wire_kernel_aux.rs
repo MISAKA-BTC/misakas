@@ -232,6 +232,7 @@ pub(crate) fn scan_native_aux_row_v1<R: Read>(
         {
             <(u64, [u8; 64]) as NativeWireScanV1>::scan_native_wire_v1(frame)?
         }
+        136 if key_bytes == 65 && prefix == b'P' => super::positive_certification::scan_positive_certification_row_v2(k, frame)?,
         136 if key_bytes == 65
             && matches!(
                 prefix,

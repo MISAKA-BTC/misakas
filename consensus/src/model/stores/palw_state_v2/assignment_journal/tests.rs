@@ -152,6 +152,7 @@ fn assignment() -> AssignmentRow {
         reservation: material(41),
         liability: material(42),
         last_event: origin(1),
+        admission_material: AcceptedMaterial { origin: origin(1), digest: d(84) },
     }
 }
 
@@ -176,9 +177,9 @@ fn entry(body: NativeRowBody) -> PalwDeltaEntryV2 {
 }
 fn fixture() -> (AssignmentJournalFrameRow, Vec<u8>, PalwStateDeltaV2) {
     let a = assignment();
-    let frame = assignment_frame_v2(a.id(), 0, d(0), AssignmentJournalEventKindV2::Open, a.origin, &[2, 0, 1, 0, 8], 4096).unwrap();
+    let frame = assignment_frame_v2(a.id(), 0, d(0), AssignmentJournalEventKindV2::Open, a.origin, &open_payload(), 4096).unwrap();
     let head = frame.append_to(None, 500).unwrap();
-    let raw = encode_assignment_journal_record_v2(frame.header, &[2, 0, 1, 0, 8], 4096).unwrap();
+    let raw = encode_assignment_journal_record_v2(frame.header, &open_payload(), 4096).unwrap();
     let delta = PalwStateDeltaV2 {
         point: PalwBlockContextV2 { block: BlockHash::from_u64_word(1), daa_score: 10, blue_score: 11, subsidy: 0 },
         entries: vec![
@@ -253,4 +254,42 @@ fn missing_literal_or_delta_and_capacity_errors_preserve_existing_batch() {
         assert!(store.stage_positive_assignment_journal_batch_v2(&mut batch, &delta, &records, limits).is_err());
         assert_eq!(before, batch.data());
     }
+}
+
+#[test]
+fn typed_empty_material_outcome_cannot_publish_new_assignment_delta() {
+    let (_life, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+    let mut store = DbPalwStateV2Store::new(db.clone(), CachePolicy::Count(4));
+    let (frame, _raw, delta) = fixture();
+    let empty = kaspa_consensus_core::palw_state_v2::PositiveAssignmentMaterialOutcomeV2::default();
+    let mut batch = WriteBatch::default();
+    batch.put(b"utxo-atomic-material-no-drop", b"pending");
+    let before = batch.data().to_vec();
+    assert!(store.stage_positive_assignment_material_outcome_v2(&mut batch, &delta, &empty).is_err());
+    assert_eq!(batch.data(), before);
+    drop(batch);
+    assert!(db.get(b"utxo-atomic-material-no-drop").unwrap().is_none());
+    assert!(store.with_positive_assignment_journal_record_v2(frame.header.id(), 4096, |_| ()).is_err());
+}
+#[test]
+fn staged_assignment_journal_and_utxo_batch_abort_together_without_write() {
+    let (_life, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+    let mut store = DbPalwStateV2Store::new(db.clone(), CachePolicy::Count(4));
+    let (frame, raw, delta) = fixture();
+    let mut batch = WriteBatch::default();
+    batch.put(b"utxo-atomic-material-abort", b"pending");
+    batch.put(b"state-root-atomic-material-abort", b"pending");
+    let (_quote, ticket) = store.stage_positive_assignment_journal_batch_v2(&mut batch, &delta, &[&raw], limits()).unwrap();
+    // Actual RocksDB staging does not publish journal or sibling native keys.
+    assert!(store.with_positive_assignment_journal_record_v2(frame.header.id(), 4096, |_| ()).is_err());
+    drop(batch);
+    drop(ticket);
+    assert!(db.get(b"utxo-atomic-material-abort").unwrap().is_none());
+    assert!(db.get(b"state-root-atomic-material-abort").unwrap().is_none());
+    assert!(store.with_positive_assignment_journal_record_v2(frame.header.id(), 4096, |_| ()).is_err());
+}
+
+fn open_payload() -> Vec<u8> {
+    use misaka_palw_positive_contract::assignment::open_material::*;
+    encode_assignment_open_v2(&[1], &[2, 0, 1, 0, 8], [&[2], &[3]], AssignmentOpenLimitsV2::within_payload(1024)).unwrap()
 }

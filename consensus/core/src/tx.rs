@@ -6,6 +6,7 @@
 
 #![allow(non_snake_case)]
 
+mod native_heap;
 mod script_public_key;
 
 use borsh::{BorshDeserialize, BorshSerialize};

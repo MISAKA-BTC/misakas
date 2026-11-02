@@ -296,6 +296,34 @@ impl NativeRetainedV1<crate::palw_state_v2::PalwChainStateV2> {
     /// The ONLY mutable-state operation exposed by this owner. Replay reserves
     /// its new state, decoded row temporaries and index rebuild before cloning
     /// or applying anything. The old state/ticket remains live on every error.
+    /// Reconstruct an original executed event prefix from the ACTUAL selected
+    /// parent and stored accepting delta. The complete replay quote is reserved
+    /// before cloning even when only a prefix is needed. No owned delta clone
+    /// or caller-created replacement history is admitted by this method.
+    pub fn try_delta_prefix_v2(
+        &self,
+        delta: &crate::palw_state_v2::PalwStateDeltaV2,
+        end: usize,
+        expected_root: crate::Hash64,
+        params: &crate::palw_state_v2::PalwStateParamsV2,
+    ) -> Result<Self, NativeStateMutationErrorV1> {
+        use crate::palw_state_v2::PalwStateV2Error;
+        if end > delta.entries.len() {
+            return Err(NativeDecodeErrorV1::Decode(PalwStateV2Error::DeltaMismatch("recorded event prefix exceeds actual delta")));
+        }
+        let requests =
+            if enabled() { native_delta_replay_requests_v1(&self.value, delta).map_err(NativeDecodeErrorV1::Resource)? } else { 0 };
+        let lease = reserve_native_requests_v1(requests).map_err(NativeDecodeErrorV1::Resource)?;
+        let value =
+            crate::palw_state_v2::apply_delta_prefix_v2(&self.value, delta, end, params).map_err(NativeDecodeErrorV1::Decode)?;
+        if value.state_root() != expected_root {
+            return Err(NativeDecodeErrorV1::Decode(PalwStateV2Error::DeltaMismatch(
+                "recorded event prefix root differs from actual history",
+            )));
+        }
+        Ok(Self { value, _lease: lease })
+    }
+
     pub fn try_delta_v1(
         &self,
         delta: &crate::palw_state_v2::PalwStateDeltaV2,

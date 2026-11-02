@@ -415,6 +415,7 @@ impl VirtualStateProcessor {
             None,
             &[],
             &[],
+            None,
         )
         .map(|(objects, ..)| objects.len())
     }
@@ -604,8 +605,58 @@ impl VirtualStateProcessor {
                 own_attempt_class,
                 round_fee_incomes,
                 escrow_settlements,
+                None,
             )
         })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn palw_v2_accepted_objects_and_raw_assignments_v2(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        objects: Vec<PalwCarriedObjectV1>,
+        block: BlockHash,
+        own_attempt_class: Option<kaspa_hashes::Hash64>,
+        round_fee_incomes: &[kaspa_consensus_core::palw_bond_budget_v1::PalwRoundFeeIncomeV1],
+        escrow_settlements: &[kaspa_consensus_core::palw_funded_escrow_v1::PalwEscrowSettlementFactV1],
+        actions: Vec<kaspa_consensus_core::palw_state_v2::PositiveAssignmentRawActionV2>,
+        accepted_ids: &[TransactionId],
+    ) -> Result<
+        (PalwAcceptedObjectsAndOriginalsV2, Vec<kaspa_consensus_core::palw_state_v2::PositiveAssignmentScheduledActionV2>),
+        PalwLocalTransitionFaultV1,
+    > {
+        if actions.is_empty() {
+            return Ok((
+                self.palw_v2_accepted_objects_and_originals(
+                    state,
+                    state_params,
+                    point,
+                    objects,
+                    block,
+                    own_attempt_class,
+                    round_fee_incomes,
+                    escrow_settlements,
+                )?,
+                Vec::new(),
+            ));
+        }
+        let mut raw = NativeAssignmentRehearsalV2::new(actions, accepted_ids)?;
+        let legacy = kaspa_consensus_core::palw_attempt_rules_v1::palw_with_prompt_root_block_memo_v2(point.block, || {
+            self.palw_v2_accepted_objects_and_refunds_inner(
+                state,
+                state_params,
+                point,
+                objects,
+                block,
+                own_attempt_class,
+                round_fee_incomes,
+                escrow_settlements,
+                Some(&mut raw),
+            )
+        })?;
+        Ok((legacy, raw.schedule))
     }
 
     pub(super) fn palw_v2_accepted_objects_and_refunds_inner(
@@ -621,6 +672,7 @@ impl VirtualStateProcessor {
         own_attempt_class: Option<kaspa_hashes::Hash64>,
         round_fee_incomes: &[kaspa_consensus_core::palw_bond_budget_v1::PalwRoundFeeIncomeV1],
         escrow_settlements: &[kaspa_consensus_core::palw_funded_escrow_v1::PalwEscrowSettlementFactV1],
+        mut assignment_actions: Option<&mut NativeAssignmentRehearsalV2<'_>>,
     ) -> Result<
         (
             Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>,
@@ -844,6 +896,9 @@ impl VirtualStateProcessor {
         // the grader to walk, refused or accepted. Dormant it is never read and never written.
         let mut vectors_graded = 0usize;
         for carried in objects {
+            if let Some(raw) = assignment_actions.as_deref_mut() {
+                raw.before(self, state_params, point, carried.native_carrier, accepted.len(), &mut folded, &fee_extras)?;
+            }
             Self::palw_v2_settle_carrier_refund(
                 &mut refund_owed,
                 accepted.len(),
@@ -2105,6 +2160,9 @@ impl VirtualStateProcessor {
                 }
             }
         }
+        if let Some(raw) = assignment_actions {
+            raw.finish(self, state_params, point, accepted.len(), &mut folded, &fee_extras)?;
+        }
         Self::palw_v2_settle_carrier_refund(
             &mut refund_owed,
             accepted.len(),
@@ -2301,6 +2359,7 @@ impl VirtualStateProcessor {
             round_fee_incomes: Vec::new(),
             funded_escrow_settlements: Vec::new(),
             assignment_settlements: Vec::new(),
+            positive_assignment_actions: Vec::new(),
             // G14 r5: settled funded-escrow rows retire `2 × pruning_depth` DAA after their settling spend, past the route's fence.
             funded_escrow_retention_daa: self
                 .palw_tir_public_conviction_v1
@@ -3108,19 +3167,29 @@ impl VirtualStateProcessor {
                 })
             }))
             .collect::<Result<Vec<_>, kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1>>()?;
-        if self.palw_positive_assignment_params_v2.as_ref()
+        if self
+            .palw_positive_assignment_params_v2
+            .as_ref()
             .is_some_and(|params| params.palw_positive_assignment_v2_at(block_daa).is_some())
         {
             // The stable sort may allocate at most one full element buffer.
             // Reserve that actual typed scratch before the sort, not afterward.
-            let sort_bytes = (carried.len() as u64).checked_mul(std::mem::size_of::<PalwCarriedObjectV1>() as u64)
-                .ok_or_else(|| kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::overflow::<Self>(
-                    "Assignment accepted-prefix sort"))?;
-            let _sort_lease = kaspa_consensus_core::palw_native_resource_v1::reserve_native_requests_v1(sort_bytes)?
-                .ok_or_else(|| kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
-                    "Assignment accepted-prefix sort", "actual native capacity lease is not armed"))?;
-            carried.sort_by_key(|object| object.native_carrier.map_or(0,|id|
-                txs.iter().position(|tx|tx.id()==id).map_or(usize::MAX,|n|n+1)));
+            let sort_bytes =
+                (carried.len() as u64).checked_mul(std::mem::size_of::<PalwCarriedObjectV1>() as u64).ok_or_else(|| {
+                    kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::overflow::<Self>(
+                        "Assignment accepted-prefix sort",
+                    )
+                })?;
+            let _sort_lease =
+                kaspa_consensus_core::palw_native_resource_v1::reserve_native_requests_v1(sort_bytes)?.ok_or_else(|| {
+                    kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
+                        "Assignment accepted-prefix sort",
+                        "actual native capacity lease is not armed",
+                    )
+                })?;
+            carried.sort_by_key(|object| {
+                object.native_carrier.map_or(0, |id| txs.iter().position(|tx| tx.id() == id).map_or(usize::MAX, |n| n + 1))
+            });
         }
         Ok(carried)
     }
@@ -3714,4 +3783,141 @@ macro_rules! set_test_only_inclusion_premise_v1 {
             $name,
         )
     };
+}
+
+type PalwAcceptedObjectsAndOriginalsV2 = (
+    Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>,
+    kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1,
+    Vec<kaspa_consensus_core::palw_state_v2::PalwCarrierRefundV1>,
+    std::collections::BTreeMap<kaspa_hashes::Hash64, kaspa_consensus_core::palw_tir_public_fp_envelope_v1::PalwTirPublicFpEnvelopeV1>,
+    std::collections::BTreeMap<
+        kaspa_hashes::Hash64,
+        kaspa_consensus_core::palw_funded_original_coordinator_v1::PalwFundedOriginalPairingV1,
+    >,
+    kaspa_consensus_core::palw_fp_answer_accounting_v1::PalwFpClaimAnswersV1,
+);
+/// Native-only cursor over actual accepted carrier ordinals. A rejected legacy
+/// object contributes no final object slot; its position still advances raw
+/// actions against the correct current prefix in the rehearsal.
+pub(super) struct NativeAssignmentRehearsalV2<'a> {
+    actions: Vec<kaspa_consensus_core::palw_state_v2::PositiveAssignmentRawActionV2>,
+    cursor: usize,
+    accepted_ids: &'a [TransactionId],
+    schedule: Vec<kaspa_consensus_core::palw_state_v2::PositiveAssignmentScheduledActionV2>,
+}
+impl<'a> NativeAssignmentRehearsalV2<'a> {
+    fn new(
+        actions: Vec<kaspa_consensus_core::palw_state_v2::PositiveAssignmentRawActionV2>,
+        accepted_ids: &'a [TransactionId],
+    ) -> Result<Self, PalwLocalTransitionFaultV1> {
+        let mut previous = None;
+        for action in &actions {
+            let origin = action.origin();
+            let ordinal = origin.accepted_tx_ordinal;
+            if previous.is_some_and(|old| ordinal <= old) || accepted_ids.get(ordinal as usize) != Some(&action.transaction().id()) {
+                return Err(kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
+                    "Assignment accepted-prefix rehearsal",
+                    "raw action origin/ordinal no longer matches actual accepted IDs",
+                )
+                .into());
+            }
+            previous = Some(ordinal);
+        }
+        let mut schedule = Vec::new();
+        // Each actual raw transport retained the exact schedule slot request
+        // before allocation. No packet-supplied count is used here.
+        schedule.try_reserve_exact(actions.len()).map_err(|_| {
+            kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
+                "Assignment accepted-prefix rehearsal",
+                "schedule allocation refused",
+            )
+        })?;
+        Ok(Self { actions, cursor: 0, accepted_ids, schedule })
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn before(
+        &mut self,
+        processor: &VirtualStateProcessor,
+        params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        carrier: Option<TransactionId>,
+        accepted_count: usize,
+        folded: &mut kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1,
+        extras: &kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1,
+    ) -> Result<(), PalwLocalTransitionFaultV1> {
+        if self.cursor == self.actions.len() {
+            return Ok(());
+        }
+        let Some(carrier) = carrier else {
+            return Ok(());
+        };
+        let ordinal = self.accepted_ids.iter().position(|id| *id == carrier).ok_or_else(|| {
+            kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
+                "Assignment accepted-prefix rehearsal",
+                "lifecycle object has no actual accepted carrier",
+            )
+        })?;
+        self.through(processor, params, point, ordinal, accepted_count, folded, extras)
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn finish(
+        &mut self,
+        processor: &VirtualStateProcessor,
+        params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        accepted_count: usize,
+        folded: &mut kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1,
+        extras: &kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1,
+    ) -> Result<(), PalwLocalTransitionFaultV1> {
+        self.through(processor, params, point, usize::MAX, accepted_count, folded, extras)
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn through(
+        &mut self,
+        processor: &VirtualStateProcessor,
+        params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        before_ordinal: usize,
+        accepted_count: usize,
+        folded: &mut kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1,
+        extras: &kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1,
+    ) -> Result<(), PalwLocalTransitionFaultV1> {
+        while let Some(action) = self.actions.get(self.cursor) {
+            if action.origin().accepted_tx_ordinal as usize >= before_ordinal {
+                break;
+            }
+            let next = kaspa_consensus_core::palw_state_v2::palw_v2_apply_one_assignment_retained_v2(
+                folded,
+                params,
+                point,
+                action,
+                processor.palw_unavailable_abstains_at(point.daa_score),
+                processor.palw_capability_bound_at(point.daa_score),
+                processor.palw_uncertified_weightless_at(point.daa_score),
+                processor.palw_da_court_at(point.daa_score),
+                extras,
+            );
+            match next {
+                Ok(next) => *folded = next,
+                Err(kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeResource(why)) => return Err(why.into()),
+                Err(kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeContextUnavailable(why)) => {
+                    return Err(PalwLocalTransitionFaultV1::Context(why));
+                }
+                Err(why) => info!(
+                    "[palw-assignment] actual carrier {} at ordinal {} refused at current prefix: {}",
+                    action.transaction().id(),
+                    action.origin().accepted_tx_ordinal,
+                    why
+                ),
+            }
+            self.schedule.push(kaspa_consensus_core::palw_state_v2::PositiveAssignmentScheduledActionV2 {
+                before_object: u32::try_from(accepted_count).map_err(|_| {
+                    kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::overflow::<Self>("Assignment object slot")
+                })?,
+                action: action.clone(),
+            });
+            self.cursor += 1;
+        }
+        Ok(())
+    }
 }

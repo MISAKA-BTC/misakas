@@ -634,7 +634,6 @@ impl NativeTirProgramShapeV1 {
         let s = self.step_space;
         (s.blocks, s.nodes, s.layers, s.fixed_global, s.fixed_layer, s.hist_global, s.hist_layer)
     }
-    #[cfg(test)]
     pub(crate) fn parameter_count_v1(&self) -> u64 {
         self.step_space.params
     }

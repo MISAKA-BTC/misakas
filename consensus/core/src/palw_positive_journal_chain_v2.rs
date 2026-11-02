@@ -253,8 +253,7 @@ fn checked_record<'a, E>(
     }
     if sequence == 1
         && (header.previous != Digest([0; 64])
-            || header.kind != CaseJournalEventKind::NativeBody
-            || record.payload().get(4) != Some(&0))
+            || (header.kind == CaseJournalEventKind::NativeBody && record.payload().get(4) != Some(&0)))
     {
         return Err(CaseJournalChainErrorV2::Invalid(CaseJournalInvalidV2::InitialEvent));
     }
@@ -474,8 +473,17 @@ mod tests {
     }
 
     #[test]
+    fn initial_native_transaction_is_link_identity_only_not_admission() {
+        let source = Source::default();
+        let pin = pin_single(&source, record(1, Digest([0; 64]), CaseJournalEventKind::NativeTransaction, 9));
+        assert!(check_case_journal_links_v2(&source, pin, limits()).is_ok());
+        // The native transaction/op9, Assignment and funding authority are
+        // deliberately not established by this identity-only check.
+    }
+
+    #[test]
     fn initial_event_and_cyclic_malformed_source_fail_without_unbounded_walk() {
-        for (kind, op) in [(CaseJournalEventKind::NativeBody, 5), (CaseJournalEventKind::NativeTransaction, 0)] {
+        for (kind, op) in [(CaseJournalEventKind::NativeBody, 5)] {
             let source = Source::default();
             let pin = pin_single(&source, record(1, Digest([0; 64]), kind, op));
             assert!(matches!(

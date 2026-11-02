@@ -75,8 +75,8 @@ native_enum!(AssignmentRoleAuthorizationV2; Initial, Joined(x));
 assignment_wire_enum!(AssignmentRoleAuthorizationV2; 0=>(),1=>(AssignmentProverJoinV2));
 native_enum!(AssignmentJournalEventKindV2; Open, JoinProver, MetadataReceipt, Cancel, Expire, BindResult, Settlement);
 assignment_wire_enum!(AssignmentJournalEventKindV2; 0=>(),1=>(),2=>(),3=>(),4=>(),5=>(),6=>());
-native_struct!(AssignmentRow; bundle,source_consent,prover_consent,origin,worker_key,positive_policy,assignment_policy,fired_rules,job,input,context,registered_metadata,status,derivation,dependencies,reservation,liability,last_event);
-wire_struct!(AssignmentRow; AssignmentAdmissionBundleV2,AssignmentSourceConsentV2,AssignmentProverConsentV2,AcceptedOrigin,[u8;PUBKEY_BYTES],Digest,Digest,Digest,Digest,Digest,Digest,Digest,AssignmentStatusV2,AcceptedMaterial,AcceptedMaterial,AcceptedMaterial,AcceptedMaterial,AcceptedOrigin);
+native_struct!(AssignmentRow; bundle,source_consent,prover_consent,origin,worker_key,positive_policy,assignment_policy,fired_rules,job,input,context,registered_metadata,status,derivation,dependencies,reservation,liability,last_event,admission_material);
+wire_struct!(AssignmentRow; AssignmentAdmissionBundleV2,AssignmentSourceConsentV2,AssignmentProverConsentV2,AcceptedOrigin,[u8;PUBKEY_BYTES],Digest,Digest,Digest,Digest,Digest,Digest,Digest,AssignmentStatusV2,AcceptedMaterial,AcceptedMaterial,AcceptedMaterial,AcceptedMaterial,AcceptedOrigin,AcceptedMaterial);
 native_struct!(AssignmentNonceRow; poster,nonce);
 wire_struct!(AssignmentNonceRow; NativeOutpoint,AssignmentNonceV2);
 native_struct!(AssignmentUseRow; assignment,case,result,origin,binding);
@@ -94,7 +94,10 @@ wire_struct!(AssignmentJournalHeadRow; AssignmentId,u64,Digest,AcceptedOrigin,u6
 native_struct!(AssignmentJournalFrameRow; header,payload);
 wire_struct!(AssignmentJournalFrameRow; AssignmentJournalHeaderV2,AcceptedMaterial);
 
-native_struct!(crate::palw_positive_assignment_funds_v2::AssignmentSpendPlanV2; old,new,burned_now,paid_now,returned_now,continued_now);
+native_struct!(crate::palw_positive_assignment_funds_v2::AssignmentAuthorizedDueV2; source_leg,kind,party,recipient,amount,receipt);
+native_struct!(crate::palw_positive_assignment_funds_v2::AssignmentSpendAuthorizationV2; before,dues,protected_after,daa,max_frame_bytes,max_history_frames,payload);
+native_struct!(crate::palw_positive_assignment_funds_v2::AssignmentFundingProjectionV2; worker,fee,capital,surplus,worker_reserve,earned_service_due,liability_floor,current_outpoint);
+native_struct!(crate::palw_positive_assignment_funds_v2::AssignmentSpendPlanV2; old,new,transaction,daa,body_digest,burned_now,paid_now,returned_now,continued_now,authorization);
 
 native_struct!(AssignmentProverFundingRow; assignment,consent,payer_key,payer_signature,funding_origin,original_outpoint,current_outpoint,initial_locked,fee,capital,surplus,earned_service_due,liability_floor,reservation,liability,last_settlement);
 wire_struct!(AssignmentProverFundingRow; AssignmentId,AssignmentProverJoinV2,[u8;PUBKEY_BYTES],[u8;SIGNATURE_BYTES],AcceptedOrigin,NativeOutpoint,Option<NativeOutpoint>,u64,BalanceLeg,BalanceLeg,BalanceLeg,u64,u64,AcceptedMaterial,AcceptedMaterial,Option<AcceptedMaterial>);
@@ -106,3 +109,54 @@ wire_struct!(AssignmentMetadataReceiptV2;u16,u16,AssignmentId,AssignmentMetadata
 
 native_enum!(AssignmentSettlementFundingV2;Poster,Prover(x));
 assignment_wire_enum!(AssignmentSettlementFundingV2;0=>(),1=>(NativeOutpoint));
+
+// Frozen admission material: exhaustive visitors + wire preflight before its
+// fixed Borsh decode. Any future heap field requires a reviewed visitor update.
+use crate::{
+    Hash64,
+    config::params::{AssignmentNativePreimagesV2, PositiveCourtPolicyV2},
+    palw_positive_assignment_funds_v2::{
+        AssignmentFeeScheduleV2, AssignmentMoneyQuoteV2, AssignmentPhysicalProfileV2, AssignmentPhysicalUsageV2,
+    },
+    palw_positive_assignment_material_v2::*,
+    palw_positive_assignment_resources_v2::*,
+    palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    palw_security_certification_v1::PalwSecurityCertificationPolicyV1,
+};
+use misaka_palw_positive_contract::{assignment::open_material::ASSIGNMENT_OPEN_PREIMAGES_V2, messages::CheckProfile};
+native_struct!(PositiveCourtPolicyV2;version,revision,profile,derivation_id,selector_id,service_profile_id,funding_schedule_id,max_frame_bytes,max_part_heap,max_relations,max_attempts,max_all_attempt_bytes,max_all_attempt_elements,max_all_attempt_terms,max_case_heap_bytes,max_case_journal_bytes,max_case_work,max_retention_daa);
+wire_struct!(PositiveCourtPolicyV2;u16,u16,CheckProfile,Hash64,Hash64,Hash64,Hash64,u64,u64,u64,u32,u64,u64,u64,u64,u64,u64,u64);
+native_struct!(AssignmentNativePreimagesV2;assignment_fees,physical,source_policy,case_fees,cancellation);
+wire_struct!(AssignmentNativePreimagesV2;crate::palw_positive_assignment_funds_v2::AssignmentFeeScheduleV2,crate::palw_positive_assignment_funds_v2::AssignmentPhysicalProfileV2,crate::palw_positive_assignment_resources_v2::AssignmentSourcePolicyV2,crate::palw_positive_assignment_resources_v2::AssignmentCaseFeeScheduleV2,crate::palw_positive_assignment_resources_v2::AssignmentCancellationPolicyV2);
+native_struct!(AssignmentFeeScheduleV2;version,revision,admission,per_signature,per_admission_byte,per_retained_byte_daa,per_replay_byte,per_utxo_write,capital_per_retained_byte);
+wire_struct!(AssignmentFeeScheduleV2;u16,u16,u64,u64,u64,u64,u64,u64,u64);
+native_struct!(AssignmentPhysicalProfileV2;version,revision,max_admission_bytes,max_retained_bytes,max_replay_bytes,max_heap_bytes,max_utxo_writes,max_signatures,max_retention_daa);
+wire_struct!(AssignmentPhysicalProfileV2;u16,u16,u64,u64,u64,u64,u64,u64,u64);
+native_struct!(AssignmentPhysicalUsageV2;admission_bytes,retained_bytes,replay_bytes,heap_bytes,utxo_writes,signatures);
+wire_struct!(AssignmentPhysicalUsageV2;u64,u64,u64,u64,u64,u64);
+native_struct!(AssignmentMoneyQuoteV2;fee,capital,usage,retention_daa,fee_schedule,reserve_schedule,physical_profile);
+wire_struct!(AssignmentMoneyQuoteV2;u64,u64,AssignmentPhysicalUsageV2,u64,Digest,Digest,Digest);
+native_struct!(AssignmentSourcePolicyV2;version,revision,work,max_parameter_instances,max_requests,max_responses,max_history_events,max_history_bytes,max_intervals,max_units_per_request,max_native_body_bytes);
+wire_struct!(AssignmentSourcePolicyV2;u16,u16,AssignmentWorkScheduleV2,u64,u64,u64,u64,u64,u64,u64,u64);
+native_struct!(AssignmentCaseFeeScheduleV2;version,revision,admission,per_source_unit,per_source_opening_byte,per_checked_relation,per_record_byte,capital_per_retained_byte);
+wire_struct!(AssignmentCaseFeeScheduleV2;u16,u16,u64,u64,u64,u64,u64,u64);
+native_struct!(AssignmentCancellationPolicyV2;version,revision,rule);
+wire_struct!(AssignmentCancellationPolicyV2;u16,u16,AssignmentCancellationRuleV2);
+native_struct!(AssignmentJobDescriptorV2;version,network_length,network,job_id,job_nullifier,assignment_id,execution_seed,model_profile_id,runtime_manifest_hash,runtime_class_id,shape_profile_id,trace_scheme_id,cu_ruleset_id,tokenizer_id,prompt_token_ids_hash,declared_prefill_tokens,exact_decode_tokens,max_context_tokens,context_hash);
+wire_struct!(AssignmentJobDescriptorV2;u16,u8,[u8; 64],Hash64,Hash64,Hash64,[u8; 32],Hash64,Hash64,Hash64,Hash64,Hash64,Hash64,Hash64,Hash64,u32,u32,u32,Hash64);
+native_struct!(AssignmentRegisteredDescriptorV2;class,artifact,program,layout,registered_tokenizer,registration);
+wire_struct!(AssignmentRegisteredDescriptorV2;Digest,Digest,Digest,Digest,Digest,AcceptedMaterial);
+native_struct!(AssignmentSourceQuoteDescriptorV2;digest,units,data_bytes,opening_bytes,max_unit_bytes);
+wire_struct!(AssignmentSourceQuoteDescriptorV2;Digest,u64,u64,u64,u64);
+native_struct!(AssignmentCustodyDescriptorV2;reservation,liability,preimage_bytes,retention_until_daa,retained_bytes,replay_bytes,replay_work,heap_bytes);
+wire_struct!(AssignmentCustodyDescriptorV2;AcceptedMaterial,AcceptedMaterial,[Digest; ASSIGNMENT_OPEN_PREIMAGES_V2],u64,u64,u64,u64,u64);
+native_struct!(AssignmentAdmissionMaterialV2;version,revision,assignment,unsigned_bundle,origin,network,ruleset,fired_rules,branch_anchor,assignment_policy,positive_policy,native_preimages,certification_policy,network_prompt_form,class_prompt_form,job,registered,source,money,custody);
+wire_struct!(AssignmentAdmissionMaterialV2;u16,u16,AssignmentId,Digest,AcceptedOrigin,Digest,Digest,Digest,NativeHash64,AssignmentPolicyV2,PositiveCourtPolicyV2,AssignmentNativePreimagesV2,PalwSecurityCertificationPolicyV1,PalwPromptIdsFormV1,PalwPromptIdsFormV1,AssignmentJobDescriptorV2,AssignmentRegisteredDescriptorV2,AssignmentSourceQuoteDescriptorV2,AssignmentMoneyQuoteV2,AssignmentCustodyDescriptorV2);
+wire_struct!(AssignmentLiveCapsV2;u32,u32,u32,u32,u32);
+wire_struct!(AssignmentPolicyV2;u16,u16,AssignmentModeV2,Digest,Digest,Digest,Digest,Digest,Digest,Digest,Digest,AssignmentLiveCapsV2,u64,u32,u32,u32,u32,u32,u32,u64,u64,u64,u64,u64,u64,u64,u64,u64,u64,u64,u64);
+native_enum!(AssignmentCancellationRuleV2;PreserveEarnedAndLiabilityV1);
+assignment_wire_enum!(AssignmentCancellationRuleV2;0=>());
+
+native_struct!(AssignmentWorkScheduleV2;version,revision,per_codec_step,per_hash_byte,per_signature,per_element,per_term,per_io_byte,per_control);
+
+wire_struct!(AssignmentWorkScheduleV2;u16,u16,u64,u64,u64,u64,u64,u64,u64);

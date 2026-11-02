@@ -147,6 +147,7 @@ impl TransitionBuilder<'_> {
             let collision = match value.body {
                 NativeRowBody::AssignmentFunding(row) => row.original_outpoint == point || row.current_outpoint == Some(point),
                 NativeRowBody::Funding(row) => row.original_outpoint == point || row.current_outpoint == Some(point),
+                NativeRowBody::AssignmentProverFunding(row) => row.original_outpoint == point || row.current_outpoint == Some(point),
                 _ => false,
             };
             if collision {
@@ -253,6 +254,8 @@ impl TransitionBuilder<'_> {
             || plan.result.fired_fork != expected.fired_rules
             || plan.result.dependencies != expected.dependencies
             || plan.result.miner_key != expected.worker_key
+            || plan.result.role_assignment
+                != (misaka_palw_positive_contract::rows::AcceptedMaterial { origin: expected.origin, digest: id.0 })
             || plan.binding.terms() != &expected.bundle.terms
         {
             return Err(refusal("Assignment is stale, expired, consumed or differently bound"));
@@ -400,6 +403,221 @@ impl TransitionBuilder<'_> {
             self.write_assignment_aux_v2(NativeRowBody::Assignment(next))?;
             self.append_assignment_frame_v2(frame, retention)
         })();
+        if result.is_err() {
+            self.restore(checkpoint);
+        }
+        result
+    }
+}
+
+/// Replays raw inputs at the same accepted-object boundary in the final fold.
+/// Semantic refusals affect only the Assignment; local capacity cannot be
+/// swallowed as though it were a peer-invalid operation.
+pub(super) fn apply_raw_before_object_v2(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    index: usize,
+    cursor: &mut usize,
+    previous_ordinal: &mut Option<u32>,
+) -> Result<(), PalwStateV2Error> {
+    while let Some(scheduled) = builder.extras.positive_assignment_actions.get(*cursor) {
+        let slot = scheduled.before_object as usize;
+        if slot > index {
+            break;
+        }
+        if slot < index {
+            return Err(refusal("raw action schedule moved backward"));
+        }
+        let origin = scheduled.action.origin();
+        if previous_ordinal.is_some_and(|previous| origin.accepted_tx_ordinal <= previous) {
+            return Err(refusal("raw native accepted ordinals are not strictly increasing"));
+        }
+        // Arc clone retains the actual immutable transport allocation. It is
+        // not a decoded/saved admission capability and cannot bypass this hook.
+        let action = scheduled.action.clone();
+        match builder.apply_positive_assignment_raw_v2(ctx, &action) {
+            Ok(()) => {}
+            Err(local @ (PalwStateV2Error::NativeResource(_) | PalwStateV2Error::NativeContextUnavailable(_))) => return Err(local),
+            Err(_semantic) => {}
+        }
+        *previous_ordinal = Some(origin.accepted_tx_ordinal);
+        *cursor += 1;
+    }
+    Ok(())
+}
+impl TransitionBuilder<'_> {
+    /// The raw executor is shared by rehearsal and final native fold. Every
+    /// operation enters one canonical checkpoint and decodes afresh. No saved
+    /// prepared rows, public boolean or generic authority trait is consumed.
+    pub(super) fn apply_positive_assignment_raw_v2(
+        &mut self,
+        ctx: &PalwBlockContextV2,
+        action: &PositiveAssignmentRawActionV2,
+    ) -> Result<(), PalwStateV2Error> {
+        use crate::palw_positive_court_v2::coordinator::assignment_body::{
+            PositiveAssignmentNativeOperationV2 as O, decode_assignment_body_v2,
+        };
+        // Capture before ANY event write, including resource/fee/P rows. This
+        // exact delta position is persisted as DATA and re-executed by archive
+        // loading; neither the digest nor a recorded origin grants authority.
+        let boundary =
+            (self.native_reservation.state_root_v2(&self.state).map_err(PalwStateV2Error::NativeResource)?, self.entries.len());
+        let checkpoint = self.try_checkpoint()?;
+        let previous_boundary = self.assignment_raw_boundary.replace(boundary);
+        let previous_active = self.assignment_active_raw.replace(action.clone());
+        let result = (|| {
+            self.assignment_origin_v2(action.origin(), ctx)?;
+            let tx = action.transaction();
+            if tx.id().as_bytes() != action.origin().carrier_transaction.0
+                || tx.inputs.len() != action.entries().len()
+                || tx.subnetwork_id != crate::subnets::SUBNETWORK_ID_PALW_LIFECYCLE
+                || tx.payload.get(..3) != Some(&[1, 0, 176])
+            {
+                return Err(refusal("raw action lost its actual native transaction/origin binding"));
+            }
+            let rules = action.rules();
+            if matches!(tx.payload.get(7), Some(0..=7)) {
+                let old_limits = crate::palw_positive_court_v2::coordinator::native_body::NativeBodyLimitsV2 {
+                    max_body_bytes: crate::palw_positive_court_v2::coordinator::native_body::MAX_BODY_BYTES_V2,
+                    max_opaque_bytes: crate::palw_positive_court_v2::coordinator::native_body::MAX_OPAQUE_BYTES_V2,
+                    max_exact_relations: crate::palw_positive_court_v2::coordinator::native_body::MAX_EXACT_RELATIONS_V2,
+                    max_signatures: crate::palw_positive_court_v2::coordinator::native_body::MAX_SIGNATURES_V2,
+                };
+                let old = crate::palw_positive_court_v2::coordinator::native_body::decode_native_body_v2(&tx.payload[3..], old_limits)
+                    .map_err(refusal)?;
+                return match &old.operation {
+                    crate::palw_positive_court_v2::coordinator::native_body::PositiveNativeOperationV2::ResultAdmission { .. } => {
+                        Err(refusal("assigned mode requires atomic op9, never old op0 then attach"))
+                    }
+                    crate::palw_positive_court_v2::coordinator::native_body::PositiveNativeOperationV2::PositiveCourtAttestation {
+                        ..
+                    } => self.apply_positive_assignment_attestation_raw_v2(ctx, action, &old),
+                    _ => self.apply_positive_assignment_case_raw_v2(ctx, action, &old),
+                };
+            }
+            let limits = rules.body_limits().map_err(refusal)?;
+            let body = decode_assignment_body_v2(&tx.payload[3..], limits).map_err(refusal)?;
+            match &body.operation {
+                O::AcceptCanonicalAssignment { bundle, source, prover, signatures, layout } => {
+                    let scope = rules.rule_scope();
+                    if bundle.terms.network != rules.network() || bundle.terms.ruleset.0 != scope.ruleset().as_bytes() {
+                        return Err(refusal("Assignment does not bind the actual original native scope"));
+                    }
+                    rules.assignment_policy().check_terms(&bundle.terms, ctx.daa_score).map_err(refusal)?;
+                    let preimages =
+                        rules.native_preimages().ok_or_else(|| refusal("actual native fee/physical preimages are missing"))?;
+                    preimages.validate(rules.assignment_policy()).map_err(refusal)?;
+                    source.check(bundle).map_err(refusal)?;
+                    prover.check(bundle, rules.assignment_policy().positive_policy).map_err(refusal)?;
+                    // Literal layout workspace was independently reserved by
+                    // the raw scanner. The heavier registry/program/prompt/
+                    // inventory/CoveragePlan now has its own real typed owner.
+                    // This reads the CURRENT prefix; later registration/nonce
+                    // changes cannot authorize the earlier carrier.
+                    self.require_absent_assignment_key_v2(NativeRowKey::Assignment(bundle.terms.id()))?;
+                    let class = Hash64::from_bytes(bundle.terms.registered_class.0);
+                    if self.state.class(&class).is_none() || !self.state.tir_classes.contains_key(&class) {
+                        return Err(refusal("actual registered TIR class missing at this accepted prefix"));
+                    }
+                    let nonce = match PositiveRowsV2::new(&self.state)
+                        .read(NativeRowKey::AssignmentNonce(bundle.terms.poster))
+                        .map_err(refusal)?
+                    {
+                        None => AssignmentNonceV2::default(),
+                        Some(value) => match value.body {
+                            NativeRowBody::AssignmentNonce(row) => row.nonce,
+                            _ => return Err(refusal("wrong nonce row kind")),
+                        },
+                    };
+                    nonce.after_accepting(bundle.terms.poster_nonce).map_err(refusal)?;
+                    for point in [bundle.terms.poster, bundle.terms.worker, bundle.terms.prover] {
+                        let bond = self.state.bond(&native_bond(point)).ok_or_else(|| refusal("missing current role bond"))?;
+                        if !palw_bond_may_take_work_v2(bond, self.params.min_collateral_sompi) {
+                            return Err(refusal("current role cannot accept work"));
+                        }
+                    }
+                    let layout: crate::palw_tir_class_v1::PalwTirLayoutV1 = borsh::from_slice(layout).map_err(refusal)?;
+                    let reserved = crate::palw_positive_assignment_resources_v2::ReservedAssignmentDerivedResourcesV2::derive(
+                        &self.state,
+                        bundle.terms,
+                        &layout,
+                        rules.assignment_policy(),
+                        rules.positive_policy(),
+                        &preimages.source_policy,
+                        rules.prompt_form(),
+                        preimages.physical.max_heap_bytes.min(rules.assignment_policy().max_heap_bytes),
+                    )
+                    .map_err(|error| match error {
+                        crate::palw_positive_assignment_resources_v2::AssignmentResourceErrorV2::Native(why) => {
+                            PalwStateV2Error::NativeResource(why)
+                        }
+                        crate::palw_positive_assignment_resources_v2::AssignmentResourceErrorV2::MissingNativeLease => {
+                            PalwStateV2Error::NativeResource(crate::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
+                                "Assignment derived construction",
+                                "actual native allocation lease is not armed",
+                            ))
+                        }
+                        other => refusal(other),
+                    })?;
+                    let resources = reserved.resources();
+                    if resources.source_quote().digest != bundle.source_catalog
+                        || resources.binding().job().context_hash().as_bytes() != bundle.job_context.0
+                    {
+                        return Err(refusal("independently derived native job/source catalog differs from signed bundle"));
+                    }
+                    resources.binding().authenticate_bundle_roles(&self.state, bundle, signatures).map_err(refusal)?;
+                    let clock = rules.gate_c_clock(bundle.terms.result_before_daa).map_err(refusal)?;
+                    match clock.require_complete_native_bound() {
+                        Err(why) => Err(refusal(why)),
+                        Ok(impossible) => match impossible {},
+                    }
+                }
+                O::AdmitAssignedResult { assignment, .. } => {
+                    let row = self
+                        .assignment_row_v2(*assignment)?
+                        .ok_or_else(|| refusal("missing actual accepted Assignment at this prefix"))?;
+                    if row.status != AssignmentStatusV2::Open || ctx.daa_score >= row.bundle.terms.result_before_daa {
+                        return Err(refusal("Assignment unavailable for single Result consumption"));
+                    }
+                    Err(refusal("native original material/Case reservation owner is not yet resolved"))
+                }
+                O::CancelAssignment { cancellation, .. } => {
+                    let row =
+                        self.assignment_row_v2(cancellation.assignment)?.ok_or_else(|| refusal("missing accepted Assignment"))?;
+                    cancellation.check(&row.bundle, ctx.daa_score).map_err(refusal)?;
+                    if row.status != AssignmentStatusV2::Open {
+                        return Err(refusal("consumed or terminal Assignment cannot cancel"));
+                    }
+                    Err(refusal("native joined-rights/liability/material close owner is not yet resolved"))
+                }
+                O::ExpireAssignment { assignment } => {
+                    let row = self.assignment_row_v2(*assignment)?.ok_or_else(|| refusal("missing accepted Assignment"))?;
+                    if row.status != AssignmentStatusV2::Open || ctx.daa_score < row.bundle.terms.result_before_daa {
+                        return Err(refusal("Assignment cannot expire at this clock"));
+                    }
+                    Err(refusal("native joined-rights/liability/material expiry owner is not yet resolved"))
+                }
+                O::JoinAssignmentProver { consent, signature } => {
+                    let row = self.assignment_row_v2(consent.assignment)?.ok_or_else(|| refusal("missing accepted Assignment"))?;
+                    let bond = self.state.bond(&native_bond(consent.prover)).ok_or_else(|| refusal("missing current prover bond"))?;
+                    if !palw_bond_may_take_work_v2(bond, self.params.min_collateral_sompi) {
+                        return Err(refusal("current prover cannot accept work"));
+                    }
+                    consent.check(&row.bundle, ctx.daa_score).map_err(refusal)?;
+                    // The actual priced construction/join reservation owner
+                    // must precede role-purpose crypto and fund mutation.
+                    let _untrusted_signature = signature;
+                    self.require_absent_assignment_key_v2(NativeRowKey::AssignmentProverFunding {
+                        assignment: consent.assignment,
+                        prover: consent.prover,
+                    })?;
+                    Err(refusal("native cumulative join capacity/funds/material owner is not yet resolved"))
+                }
+                O::SettleAssignment { .. } => self.settle_positive_assignment_raw_funds_v2(ctx, action, &body),
+            }
+        })();
+        self.assignment_active_raw = previous_active;
+        self.assignment_raw_boundary = previous_boundary;
         if result.is_err() {
             self.restore(checkpoint);
         }

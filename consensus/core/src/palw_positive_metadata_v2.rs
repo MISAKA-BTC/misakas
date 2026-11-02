@@ -207,14 +207,11 @@ pub fn positive_registered_principal_v2(
 ) -> Result<PrincipalId, PositiveMetadataErrorV2> {
     let row = current_state.bond(bond).ok_or(PositiveMetadataErrorV2::MissingBond)?;
     let key: &[u8; PUBKEY_BYTES] = row.pubkey.as_slice().try_into().map_err(|_| PositiveMetadataErrorV2::Key)?;
-    let id = principal(key);
-    // Native operator deduplication uses a keyed/length-prefixed hash. The
-    // Positive principal uses the existing unkeyed ML-DSA key hash instead;
-    // equating these two identities would refuse every genuine native bond.
-    if crate::palw_state_v2::palw_operator_id_v2(key) != row.operator_id {
-        return Err(PositiveMetadataErrorV2::Key);
-    }
-    Ok(id)
+    // The native operator key may differ from the registered work key.
+    // Operator identity is authenticated by registration and is used separately
+    // for pool exclusion/deduplication. It cannot be rederived from this key.
+    // This read creates no role/eligibility or signature capability.
+    Ok(principal(key))
 }
 
 fn validate_parts(

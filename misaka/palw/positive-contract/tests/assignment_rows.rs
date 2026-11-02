@@ -83,6 +83,7 @@ fn assignment() -> AssignmentRow {
         reservation: material(41),
         liability: material(42),
         last_event: origin(1),
+        admission_material: AcceptedMaterial { origin: origin(1), digest: d(84) },
     }
 }
 fn leg(n: u64) -> BalanceLeg {
@@ -119,7 +120,7 @@ fn funding(a: &AssignmentRow) -> AssignmentFundingRow {
 fn appended_rows_preserve_discriminants_and_fixed_codec_ceiling() {
     let a = assignment();
     a.validate_shape().unwrap();
-    let f = assignment_frame_v2(a.id(), 0, d(0), AssignmentJournalEventKindV2::Open, a.origin, &[2, 0, 1, 0, 8], 1024).unwrap();
+    let f = assignment_frame_v2(a.id(), 0, d(0), AssignmentJournalEventKindV2::Open, a.origin, &open_payload(), 1024).unwrap();
     let h = f.append_to(None, 500).unwrap();
     let rows = [
         NativeRowBody::Assignment(a.clone()),
@@ -201,9 +202,9 @@ fn appended_rows_preserve_discriminants_and_fixed_codec_ceiling() {
 #[test]
 fn journal_binds_literal_bytes_continuous_clock_and_exact_previous_head() {
     let id = AssignmentId(d(1));
-    let f = assignment_frame_v2(id, 0, d(0), AssignmentJournalEventKindV2::Open, origin(1), &[2, 0, 1, 0, 8], 1024).unwrap();
+    let f = assignment_frame_v2(id, 0, d(0), AssignmentJournalEventKindV2::Open, origin(1), &open_payload(), 1024).unwrap();
     assert_eq!(
-        assignment_frame_v2(id, 0, d(0), AssignmentJournalEventKindV2::Open, origin(1), &[2, 0, 1, 0, 8], 4),
+        assignment_frame_v2(id, 0, d(0), AssignmentJournalEventKindV2::Open, origin(1), &open_payload(), 4),
         Err(ContractError::Budget)
     );
     let h = f.append_to(None, 500).unwrap();
@@ -244,8 +245,8 @@ fn journal_binds_literal_bytes_continuous_clock_and_exact_previous_head() {
         )
         .is_ok()
     );
-    let raw = encode_assignment_journal_record_v2(f.header, &[2, 0, 1, 0, 8], 1024).unwrap();
-    assert_eq!(raw.len(), 430);
+    let raw = encode_assignment_journal_record_v2(f.header, &open_payload(), 1024).unwrap();
+    assert_eq!(raw.len(), ASSIGNMENT_JOURNAL_HEADER_BYTES_V2 + open_payload().len());
     let view = AssignmentJournalRecordViewV2::decode(&raw, 1024).unwrap();
     assert_eq!(view.frame(), f);
     let mut bad = raw.clone();
@@ -255,7 +256,7 @@ fn journal_binds_literal_bytes_continuous_clock_and_exact_previous_head() {
     trailing.push(0);
     assert!(AssignmentJournalRecordViewV2::decode(&trailing, 1024).is_err());
     assert!(AssignmentJournalRecordViewV2::decode(&raw, 429).is_err());
-    assert!(assignment_frame_v2(id, 1, f.header.id(), AssignmentJournalEventKindV2::Open, origin(2), &[2, 0, 1, 0, 8], 1024).is_err());
+    assert!(assignment_frame_v2(id, 1, f.header.id(), AssignmentJournalEventKindV2::Open, origin(2), &open_payload(), 1024).is_err());
     assert!(
         assignment_frame_v2(id, 1, f.header.id(), AssignmentJournalEventKindV2::BindResult, origin(2), &[2, 0, 1, 0, 3], 1024)
             .is_err()
@@ -356,4 +357,9 @@ fn funding_continuation_requires_actual_settlement_cursor_and_spent_legs() {
     backwards.origin.accepted_daa = 9;
     row.last_settlement = Some(backwards);
     assert!(row.validate_shape().is_err());
+}
+
+fn open_payload() -> Vec<u8> {
+    use misaka_palw_positive_contract::assignment::open_material::*;
+    encode_assignment_open_v2(&[1], &[2, 0, 1, 0, 8], [&[2], &[3]], AssignmentOpenLimitsV2::within_payload(1024)).unwrap()
 }

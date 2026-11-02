@@ -4786,6 +4786,7 @@ impl NativeWireScanV1 for crate::palw_settlement_once_v1::PalwSettlementConsumer
                 let mut sum = NativeWireShapeV1::default();
                 Ok(sum)
             }
+            16 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -4819,6 +4820,12 @@ impl NativeWireScanV1 for crate::palw_settlement_once_v1::PalwSettlementDebitV1 
             4 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(<[u8; 64] as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                sum = sum.merge(<u64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                Ok(sum)
+            }
+            5 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum = sum.merge(<crate::tx::TransactionOutpoint as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 sum = sum.merge(<u64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
@@ -4906,6 +4913,11 @@ impl NativeWireScanV1 for crate::palw_settlement_once_v1::PalwSettlementLegV1 {
                 let mut sum = NativeWireShapeV1::default();
                 Ok(sum)
             }
+            20 => Ok(NativeWireShapeV1::default()),
+            21 => Ok(NativeWireShapeV1::default()),
+            22 => Ok(NativeWireShapeV1::default()),
+            23 => Ok(NativeWireShapeV1::default()),
+            24 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }

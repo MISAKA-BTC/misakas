@@ -78,6 +78,77 @@ fn decode(key: &[u8], value: &[u8]) -> StoreResult<NativeRowBody> {
     NativeRowValue::decode(key, value).map(|r| r.body).map_err(|_| corrupt("malformed aux151 key/value"))
 }
 impl DbPalwStateV2Store {
+    /// Production typed outcome entry. Limits below are checked allocation
+    /// bounds over the actual retained writer output and exact current batch,
+    /// not a caller's funding/credit permission or a replacement policy.
+    pub fn stage_positive_assignment_material_outcome_v2(
+        &mut self,
+        batch: &mut WriteBatch,
+        delta: &PalwStateDeltaV2,
+        outcome: &kaspa_consensus_core::palw_state_v2::PositiveAssignmentMaterialOutcomeV2,
+    ) -> StoreResult<Option<(AssignmentJournalStoreQuoteV2, NativeStoreWriteTicketV1)>> {
+        if outcome.records().is_empty() {
+            for entry in &delta.entries {
+                let PalwDeltaEntryV2::KernelRouteRow { table, key, new: Some(_), .. } = entry else {
+                    continue;
+                };
+                if *table == KERNEL_AUX_TABLE && matches!(key.get(4), Some(10 | 12 | 13 | 14 | 15 | 16 | 17 | 18)) {
+                    return Err(corrupt("new Assignment mutation has no retained transition material outcome"));
+                }
+            }
+            return Ok(None);
+        }
+        let count = outcome.records().len() as u64;
+        let references = mul(count, 2 * size_of::<&[u8]>() as u64)?;
+        let _refs_lease = reserve_native_requests_v1(references).map_err(|e| capacity(&e.to_string()))?;
+        let mut refs = Vec::new();
+        refs.try_reserve_exact(count as usize).map_err(|_| capacity("typed outcome references"))?;
+        let mut raw = 0;
+        let mut added = 0;
+        let mut record_cap = 0;
+        for record in outcome.records() {
+            raw = add(raw, record.raw().len() as u64)?;
+            added = add(added, put_bytes(record.raw().len() as u64)?)?;
+            record_cap = record_cap.max(record.max_record_bytes());
+            refs.push(record.raw());
+        }
+        let mut heads = 0;
+        let mut rows = 0;
+        for entry in &delta.entries {
+            let PalwDeltaEntryV2::KernelRouteRow { table, key, old, new } = entry else {
+                continue;
+            };
+            if *table != KERNEL_AUX_TABLE {
+                continue;
+            }
+            if key.get(4) == Some(&16) {
+                heads = add(heads, 1)?;
+            }
+            for value in [old, new].into_iter().flatten() {
+                rows = add(rows, add(key.len() as u64, value.len() as u64)?)?;
+            }
+        }
+        let predecessor = mul(heads, record_cap)?;
+        let total_raw = add(raw, predecessor)?;
+        let work = add(mul(total_raw, 2)?, mul(mul(add(count, 1)?, rows)?, 4)?)?;
+        let batch_bytes = add(batch.size_in_bytes() as u64, added)?;
+        let scratch =
+            (MAX_NATIVE_ROW_BYTES + MAX_NATIVE_KEY_BYTES + 8 * size_of::<NativeRowValue>() + 2 * size_of::<NativeRowKey>()) as u64;
+        let retained = add(
+            add(add(total_raw, rows)?, add(batch_bytes, scratch)?)?,
+            mul(count, size_of::<AssignmentJournalRecordViewV2<'_>>() as u64)?,
+        )?;
+        let limits = AssignmentJournalStoreLimitsV2 {
+            max_records: count,
+            max_delta_entries: delta.entries.len() as u64,
+            max_record_bytes: record_cap,
+            max_total_raw_bytes: total_raw,
+            max_work: work,
+            max_retained_bytes: retained,
+            max_batch_bytes: batch_bytes,
+        };
+        self.stage_positive_assignment_journal_batch_v2(batch, delta, &refs, limits).map(Some)
+    }
     /// Hold the native write guard through this staging and the batch commit.
     /// All reads, limits and checks finish before this function touches batch.
     /// Actual provenance is independently checked by the private native reader.

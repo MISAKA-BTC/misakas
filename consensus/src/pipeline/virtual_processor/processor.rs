@@ -398,6 +398,9 @@ struct PalwUtxoCommitV2 {
     root: Hash64,
     delta: kaspa_consensus_core::palw_state_v2::PalwStateDeltaV2,
     _native_delta_lease: Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>,
+    assignment_materials: kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<
+        kaspa_consensus_core::palw_state_v2::PositiveAssignmentMaterialOutcomeV2,
+    >,
     genesis: Option<kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1>,
     _native_genesis_carriages_lease: Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>,
     genesis_carriages: Vec<(Hash64, crate::model::stores::palw_class_carriage::PalwClassCarriageRecord)>,
@@ -1291,6 +1294,7 @@ mod palw_evm_asof_v2;
 pub(crate) mod palw_h1_guard;
 mod palw_pruning_capture_v1;
 mod palw_validate;
+mod positive_assignment_archive;
 mod template;
 pub(crate) use palw_evm_asof_v2::NativeEvmAsOfFaultV2;
 pub use palw_pruning_capture_v1::PalwPruningCaptureFaultV1;
@@ -2478,18 +2482,41 @@ impl VirtualStateProcessor {
                     // G14 lane escrow-rfc08 (RFC-0035 A): and which funded-escrow outpoints are locked, from the same parent state.
                     ctx.palw_escrow_locks.rows =
                         palw_state.as_ref().map(|s| self.palw_escrow_locked_rows_v1(s, pov_daa_score)).unwrap_or_default();
-                    ctx.palw_escrow_locks.assignment = palw_state.as_ref()
+                    ctx.palw_escrow_locks.assignment = palw_state
+                        .as_ref()
                         .map(|state| kaspa_consensus_core::palw_positive_assignment_funds_v2::assignment_funding_locks_v2(state))
-                        .transpose().map_err(|why| kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
-                            "Assignment funding lock projection", &format!("{why:?}")))?.unwrap_or_default();
-                    ctx.palw_escrow_locks.positive_case = palw_state.as_ref()
+                        .transpose()
+                        .map_err(|why| {
+                            kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
+                                "Assignment funding lock projection",
+                                &format!("{why:?}"),
+                            )
+                        })?
+                        .unwrap_or_default();
+                    ctx.palw_escrow_locks.positive_case = palw_state
+                        .as_ref()
                         .map(|state| kaspa_consensus_core::palw_positive_assignment_funds_v2::positive_case_funding_locks_v2(state))
-                        .transpose().map_err(|why| kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
-                            "Positive Case funding lock projection", &format!("{why:?}")))?.unwrap_or_default();
-                    ctx.palw_escrow_locks.assignment_prover = palw_state.as_ref()
-                        .map(|state| kaspa_consensus_core::palw_positive_assignment_funds_v2::assignment_prover_funding_locks_v2(state))
-                        .transpose().map_err(|why| kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
-                            "Assignment prover funding lock projection", &format!("{why:?}")))?.unwrap_or_default();
+                        .transpose()
+                        .map_err(|why| {
+                            kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
+                                "Positive Case funding lock projection",
+                                &format!("{why:?}"),
+                            )
+                        })?
+                        .unwrap_or_default();
+                    ctx.palw_escrow_locks.assignment_prover = palw_state
+                        .as_ref()
+                        .map(|state| {
+                            kaspa_consensus_core::palw_positive_assignment_funds_v2::assignment_prover_funding_locks_v2(state)
+                        })
+                        .transpose()
+                        .map_err(|why| {
+                            kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
+                                "Assignment prover funding lock projection",
+                                &format!("{why:?}"),
+                            )
+                        })?
+                        .unwrap_or_default();
                     // ADR-0125: which merged round blocks hold their permit, from the same parent state.
                     ctx.palw_round_verdicts = palw_state
                         .as_ref()
@@ -2531,7 +2558,8 @@ impl VirtualStateProcessor {
                     // Assignment decoder. Until the native complete reservation
                     // owner exists, its precise prerequisite remains visible
                     // and creates no Assignment/nonce/lock/credit mutation.
-                    positive_native_phase_two.inspect_assignment_ingress_v2(self)?;
+                    let assignment_raw_actions = positive_native_phase_two
+                        .into_assignment_raw_actions_v2(self, &(&selected_parent_utxo_view).compose(&ctx.mergeset_diff))?;
                     // ADR-0125: one line a chain block that merges the lane — what an operator (and the
                     // devnet drill) reads to see permits granted and the transactions they carried. The
                     // native (payment) transactions are counted apart from PALW carriers and the first
@@ -2728,17 +2756,21 @@ impl VirtualStateProcessor {
                                 // its MSK in the sink** (the 2026-09-23 Position route matrix,
                                 // P-B1), so past `palw_audit_2026_09_23` the filter also names what
                                 // each such carrier is owed and the transition pays it back.
-                                let (objects, folded, carrier_refunds, tir_public_originals, tir_funded_originals, fp_answers) = self
-                                    .palw_v2_accepted_objects_and_originals(
-                                        state,
-                                        state_params,
-                                        &point,
-                                        objects,
-                                        current,
-                                        own_attempt_class,
-                                        &ctx.palw_round_fee_incomes,
-                                        &ctx.palw_escrow_settlements,
-                                    )?;
+                                let (
+                                    (objects, folded, carrier_refunds, tir_public_originals, tir_funded_originals, fp_answers),
+                                    assignment_raw_schedule,
+                                ) = self.palw_v2_accepted_objects_and_raw_assignments_v2(
+                                    state,
+                                    state_params,
+                                    &point,
+                                    objects,
+                                    current,
+                                    own_attempt_class,
+                                    &ctx.palw_round_fee_incomes,
+                                    &ctx.palw_escrow_settlements,
+                                    assignment_raw_actions,
+                                    &ctx.accepted_tx_ids,
+                                )?;
                                 // Unit C step 4: a receipt-lane block spends a quantum, and its
                                 // right to do so is a DRAW — so the beacon it draws against is
                                 // derived from this candidate's own chain, never read off the
@@ -2874,7 +2906,7 @@ impl VirtualStateProcessor {
                                     Some(envelope) => self.palw_attempt_keys_v1(Some(header.as_ref()), &envelope.attempt),
                                     None => (kaspa_hashes::Hash64::default(), kaspa_hashes::Hash64::default()),
                                 };
-                                match kaspa_consensus_core::palw_state_v2::apply_palw_transition_retained_v7(
+                                match kaspa_consensus_core::palw_state_v2::apply_palw_transition_retained_v8(
                                     state,
                                     state_params,
                                     self.palw_admission_params_v2.as_ref(),
@@ -2929,7 +2961,9 @@ impl VirtualStateProcessor {
                                         // G14 lane escrow-rfc08: the qualified escrow spends UTXO acceptance admitted, settled by the fold
                                         // in this block's rooted delta (committed with the UTXO diff in one WriteBatch).
                                         extras.funded_escrow_settlements = ctx.palw_escrow_settlements.clone();
-                                        extras.assignment_settlements = ctx.palw_assignment_settlements.clone();
+                                        // Tentative UTXO plans are diagnostics only. The raw
+                                        // accepted op12 action is the sole settlement writer input.
+                                        extras.positive_assignment_actions = assignment_raw_schedule;
                                         // RFC-0008 v2: and the EXEC blocks this block's anchor covered — the slice carriers (each
                                         // re-judged by the fold against its own running state) and the covered set itself.
                                         if let Some(resolved) = exec_resolved.as_ref() {
@@ -2954,7 +2988,7 @@ impl VirtualStateProcessor {
                                         extras
                                     })?,
                                 ) {
-                                    Ok((next, delta, merged_skips)) => {
+                                    Ok((next, delta, merged_skips, assignment_materials)) => {
                                         // A skipped merged work is the block standing while a
                                         // piece of its anticone is refused — say which and why,
                                         // because a silent skip of real work is the defect class
@@ -3012,7 +3046,7 @@ impl VirtualStateProcessor {
                                             );
                                         }
                                         let (delta, delta_lease) = delta.into_parts_v1();
-                                        Some((state.state_root(), delta, delta_lease))
+                                        Some((state.state_root(), delta, delta_lease, assignment_materials))
                                     }
                                     Err(kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeResource(why)) => {
                                         return Err(why.into());
@@ -3061,10 +3095,11 @@ impl VirtualStateProcessor {
                             ctx.validator_quality_subpool,
                             ctx.reserve_balance_after,
                             evm_staged,
-                            palw_v2_staged.map(|(root, delta, delta_lease)| PalwUtxoCommitV2 {
+                            palw_v2_staged.map(|(root, delta, delta_lease, assignment_materials)| PalwUtxoCommitV2 {
                                 root,
                                 delta,
                                 _native_delta_lease: delta_lease,
+                                assignment_materials,
                                 genesis: None,
                                 _native_genesis_carriages_lease: None,
                                 genesis_carriages: Vec::new(),
@@ -3514,8 +3549,30 @@ impl VirtualStateProcessor {
         let mut genesis_class_store = None;
         let mut native_delta_write = None;
         let mut native_genesis_write = None;
+        let mut native_assignment_write = None;
+        let mut native_case_material_write = None;
+        let mut native_assignment_materials_hold = None;
         if let Some(staged) = palw_v2_staged {
             let store = palw_archive_guard.as_mut().expect("PALW accepted archive guard");
+            // Keep the native typed material owner alive through the exact same
+            // WriteBatch commit as UTXOs, state root and this delta. A missing
+            // material outcome is a local failed preparation, never a partial
+            // commit of its canonical frame/head/account rows.
+            native_assignment_materials_hold = Some(staged.assignment_materials);
+            native_assignment_write = store
+                .stage_positive_assignment_material_outcome_v2(
+                    &mut batch,
+                    &staged.delta,
+                    native_assignment_materials_hold.as_ref().expect("retained Assignment material outcome"),
+                )
+                .map_err(native_store_capacity_v1)?;
+            native_case_material_write = store
+                .stage_positive_case_material_outcome_v2(
+                    &mut batch,
+                    &staged.delta,
+                    native_assignment_materials_hold.as_ref().expect("retained original Case material outcome"),
+                )
+                .map_err(native_store_capacity_v1)?;
             native_delta_write = Some(
                 store
                     .insert_delta_batch_tracked_v1(&mut batch, current, staged.root, &staged.delta)
@@ -3690,6 +3747,9 @@ impl VirtualStateProcessor {
         let write_guard = self.statuses_store.set_batch(&mut batch, current, StatusUTXOValid).unwrap();
         self.db.write(batch).unwrap();
         drop(native_delta_write);
+        drop(native_assignment_write);
+        drop(native_case_material_write);
+        drop(native_assignment_materials_hold);
         drop(native_genesis_write);
         drop(genesis_class_store);
         if let Some(ticket) = rewarded_commit {
@@ -3805,21 +3865,45 @@ impl VirtualStateProcessor {
             .as_ref()
             .map(|(_, state)| self.palw_escrow_locked_rows_v1(state, virtual_daa_window.daa_score))
             .unwrap_or_default();
-        ctx.palw_escrow_locks.assignment = virtual_palw_state.as_ref()
+        ctx.palw_escrow_locks.assignment = virtual_palw_state
+            .as_ref()
             .map(|(_, state)| kaspa_consensus_core::palw_positive_assignment_funds_v2::assignment_funding_locks_v2(state))
-            .transpose().map_err(|why| RuleError::LocalNativeCapacityUnavailable(
-                kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
-                    "Assignment virtual funding lock projection", &format!("{why:?}"))))?.unwrap_or_default();
-        ctx.palw_escrow_locks.positive_case = virtual_palw_state.as_ref()
-            .map(|(_,state)| kaspa_consensus_core::palw_positive_assignment_funds_v2::positive_case_funding_locks_v2(state))
-            .transpose().map_err(|why| RuleError::LocalNativeCapacityUnavailable(
-                kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
-                    "Positive virtual Case funding lock projection", &format!("{why:?}"))))?.unwrap_or_default();
-        ctx.palw_escrow_locks.assignment_prover = virtual_palw_state.as_ref()
-            .map(|(_,state)| kaspa_consensus_core::palw_positive_assignment_funds_v2::assignment_prover_funding_locks_v2(state))
-            .transpose().map_err(|why| RuleError::LocalNativeCapacityUnavailable(
-                kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
-                    "Assignment virtual prover funding lock projection", &format!("{why:?}"))))?.unwrap_or_default();
+            .transpose()
+            .map_err(|why| {
+                RuleError::LocalNativeCapacityUnavailable(
+                    kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
+                        "Assignment virtual funding lock projection",
+                        &format!("{why:?}"),
+                    ),
+                )
+            })?
+            .unwrap_or_default();
+        ctx.palw_escrow_locks.positive_case = virtual_palw_state
+            .as_ref()
+            .map(|(_, state)| kaspa_consensus_core::palw_positive_assignment_funds_v2::positive_case_funding_locks_v2(state))
+            .transpose()
+            .map_err(|why| {
+                RuleError::LocalNativeCapacityUnavailable(
+                    kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
+                        "Positive virtual Case funding lock projection",
+                        &format!("{why:?}"),
+                    ),
+                )
+            })?
+            .unwrap_or_default();
+        ctx.palw_escrow_locks.assignment_prover = virtual_palw_state
+            .as_ref()
+            .map(|(_, state)| kaspa_consensus_core::palw_positive_assignment_funds_v2::assignment_prover_funding_locks_v2(state))
+            .transpose()
+            .map_err(|why| {
+                RuleError::LocalNativeCapacityUnavailable(
+                    kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
+                        "Assignment virtual prover funding lock projection",
+                        &format!("{why:?}"),
+                    ),
+                )
+            })?
+            .unwrap_or_default();
         // ADR-0125: virtual accepts exactly the round blocks the block built on it will accept.
         ctx.palw_round_verdicts = virtual_palw_state
             .as_ref()
@@ -6059,6 +6143,8 @@ impl VirtualStateProcessor {
                     root: genesis_state.state_root(),
                     delta,
                     _native_delta_lease: delta_lease,
+                    assignment_materials:
+                        kaspa_consensus_core::palw_state_v2::PositiveAssignmentMaterialOutcomeV2::empty_retained_for_legacy_v2(),
                     _native_genesis_carriages_lease: carriage_lease,
                     genesis: Some(genesis_state),
                     genesis_carriages,

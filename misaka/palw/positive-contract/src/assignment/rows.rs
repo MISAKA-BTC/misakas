@@ -33,6 +33,9 @@ pub struct AssignmentRow {
     pub reservation: AcceptedMaterial,
     pub liability: AcceptedMaterial,
     pub last_event: AcceptedOrigin,
+    /// Exact full frozen admission material, retained in the distinct journal
+    /// Open wrapper. Same original accepted origin; never a current Params DTO.
+    pub admission_material: AcceptedMaterial,
 }
 impl AssignmentRow {
     pub fn id(&self) -> AssignmentId {
@@ -48,6 +51,7 @@ impl AssignmentRow {
             || self.dependencies.digest != t.empty_dependencies_id()
             || self.origin.accepted_daa >= t.accept_before_daa
             || self.origin.accepted_daa > self.last_event.accepted_daa
+            || self.admission_material.origin != self.origin
             || [self.job, self.input, self.registered_metadata, self.assignment_policy].contains(&Digest([0; 64]))
         {
             return Err(ContractError::Identity);

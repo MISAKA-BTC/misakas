@@ -113,6 +113,7 @@
 - [ADR-0205 — decode 済みの回答は二度支払わない](0205-a-decoded-answer-is-not-paid-twice.md)
 - [ADR-0208 — 再利用 prefix の生成元 identity を明示する案](0208-authenticated-prefix-work-dependencies.md)
 - [ADR-0211 — 学習済みcheckpointのlogit範囲を損なわず扱う](0211-wide-q24-llm-output.md)
+- [ADR-0214 — Positive原資へ先行relay資料・custodyを追加する判断案](0214-positive-native-funded-relay.md)
 
 ## EVM / wallet
 

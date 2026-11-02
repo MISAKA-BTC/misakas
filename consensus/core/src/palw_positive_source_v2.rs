@@ -76,7 +76,9 @@ pub struct SourceRequestEventV2<'a> {
 #[derive(Clone, Copy)]
 pub struct SourceResponseEventV2<'a> {
     pub request: RequestId,
-    /// Actual accepted carrier/delegation identity; op4 has no provider field.
+    /// Contracted provider from the original signed source duty/delegation.
+    /// This is independent of the normal transaction relay signer; op4 has no
+    /// provider field and a valid relay does not earn the contracted fee.
     pub provider: PrincipalId,
     pub material: AcceptedMaterial,
     pub native_body: &'a [u8],
@@ -158,6 +160,15 @@ struct SourceState {
     intervals: Vec<(u64, u64)>,
     completed: u64,
     union: AcceptedMaterial,
+}
+/// Borrowed outstanding unit obligation, reconstructed from accepted requests.
+/// A response removes its pending fee exactly once; retained receipts remain.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PendingSourceUnitV2 {
+    pub kind: SourceKind,
+    pub source: Digest,
+    pub unit: u64,
+    pub fee: SourceServiceFeeV2,
 }
 /// The seal binds updates to this exact cache instance, not merely matching DTO
 /// revision numbers. It is not serializable or a native-acceptance capability.
@@ -563,6 +574,54 @@ impl NativeSourceLedgerV2 {
         self.case_basis = update.case_row;
         self.revision = revision;
         Ok(())
+    }
+    /// Concrete structural allocation-request bound for this private ledger,
+    /// history and one coexisting prepare/update. This supplies NO lease/work
+    /// admission; the native owner must reserve Some before construction.
+    pub(crate) fn replay_heap_requests_v2(limits: SourceLimitsV2) -> Result<u64, crate::palw_native_resource_v1::NativeCoverageV1> {
+        use crate::palw_native_resource_v1::{TirNativeRequestsV1, typed::BTreeNodeEnvelopeV1};
+        let mut q = TirNativeRequestsV1::new();
+        q.exact_v1::<Self>(1)?;
+        q.exact_v1::<BTreeNodeEnvelopeV1<SourceKey, SourceState>>(2)?;
+        q.exact_v1::<BTreeNodeEnvelopeV1<RequestId, RetainedSourceRequestV2>>(limits.max_requests)?;
+        q.exact_v1::<BTreeNodeEnvelopeV1<UnitKey, ServiceReceiptRow>>(limits.max_responses)?;
+        q.exact_v1::<BTreeNodeEnvelopeV1<UnitKey, FeeReservation>>(limits.max_responses)?;
+        // History stores each literal body once and an origin-to-index tree.
+        q.vec_v1::<SourceHistoryEntryV2>(limits.max_history_events)?;
+        q.exact_v1::<BTreeNodeEnvelopeV1<[u8; 216], usize>>(limits.max_history_events)?;
+        q.vec_v1::<u8>(limits.max_history_bytes)?;
+        // Existing per-source union intervals + merge temporary + proposed
+        // source change may coexist before validate_prepared/apply.
+        for _ in 0..3 {
+            q.vec_v1::<(u64, u64)>(limits.max_intervals)?;
+        }
+        q.exact_v1::<PreparedSourceUpdateV2>(1)?;
+        q.vec_v1::<(UnitKey, FeeReservation)>(limits.max_units_per_request)?;
+        q.exact_v1::<RetainedSourceRequestV2>(1)?;
+        q.exact_v1::<SourceHistoryEntryV2>(1)?;
+        q.vec_v1::<u8>(limits.max_native_body_bytes)?;
+        // Arc cache-instance seal retains reference counters/alignment.
+        q.exact_v1::<usize>(3)?;
+        Ok(q.bytes_v1())
+    }
+    /// Allocation-free enumeration of real unfinished reservations. This does
+    /// not include completed units and does not infer a remaining capacity from
+    /// saved aggregate counters. The caller also reserves retention/other roles.
+    pub fn pending_units_v2(&self) -> impl Iterator<Item = PendingSourceUnitV2> + '_ {
+        self.reservations.iter().filter_map(|(&(kind, source, unit), reservation)| {
+            (!self.receipts.contains_key(&(kind, source, unit))).then_some(PendingSourceUnitV2 {
+                kind,
+                source,
+                unit,
+                fee: reservation.quote,
+            })
+        })
+    }
+    pub fn retained_receipts_v2(&self) -> impl Iterator<Item = &ServiceReceiptRow> {
+        self.receipts.values()
+    }
+    pub fn retained_unions_v2(&self) -> impl Iterator<Item = SourceUnionRow> + '_ {
+        self.sources.keys().filter_map(|&(kind, source)| self.source_union(kind, source))
     }
     pub fn validate_prepared(&self, update: &PreparedSourceUpdateV2) -> Result<(), SourceErrorV2> {
         if !Arc::ptr_eq(&self.seal, &update.seal)

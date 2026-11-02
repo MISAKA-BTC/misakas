@@ -149,6 +149,85 @@ fn put_bytes(value: u64) -> StoreResult<u64> {
 }
 
 impl DbPalwStateV2Store {
+    /// Stages the separate original Case journal from the SAME retained native
+    /// transition output. Assignment records are never re-labelled Case IDs.
+    pub fn stage_positive_case_material_outcome_v2(
+        &mut self,
+        batch: &mut WriteBatch,
+        delta: &PalwStateDeltaV2,
+        outcome: &kaspa_consensus_core::palw_state_v2::PositiveAssignmentMaterialOutcomeV2,
+    ) -> StoreResult<Option<(PositiveJournalStoreQuoteV2, NativeStoreWriteTicketV1)>> {
+        if outcome.case_records().is_empty() {
+            for entry in &delta.entries {
+                let PalwDeltaEntryV2::KernelRouteRow { table, key, new: Some(_), .. } = entry else {
+                    continue;
+                };
+                if *table == KERNEL_AUX_TABLE && matches!(key.get(4), Some(2 | 9)) {
+                    return Err(corrupt("Case mutation has no retained native Case material outcome"));
+                }
+            }
+            return Ok(None);
+        }
+        let count = outcome.case_records().len() as u64;
+        let _refs_lease =
+            reserve_native_requests_v1(mul(count, 2 * size_of::<&[u8]>() as u64)?).map_err(|e| capacity(&e.to_string()))?;
+        let mut refs = Vec::new();
+        refs.try_reserve_exact(count as usize).map_err(|_| capacity("typed Case references"))?;
+        let mut raw = 0;
+        let mut added = 0;
+        let mut bounds = outcome.case_records()[0].limits();
+        for record in outcome.case_records() {
+            let cap = record.limits();
+            bounds.max_record_bytes = bounds.max_record_bytes.max(cap.max_record_bytes);
+            bounds.max_payload_bytes = bounds.max_payload_bytes.max(cap.max_payload_bytes);
+            bounds.max_aux_entries = bounds.max_aux_entries.max(cap.max_aux_entries);
+            bounds.max_aux_preimage_bytes = bounds.max_aux_preimage_bytes.max(cap.max_aux_preimage_bytes);
+            bounds.max_total_preimage_bytes = bounds.max_total_preimage_bytes.max(cap.max_total_preimage_bytes);
+            bounds.max_logical_heap_bytes = bounds.max_logical_heap_bytes.max(cap.max_logical_heap_bytes);
+            raw = add(raw, record.raw().len() as u64)?;
+            added = add(added, put_bytes(record.raw().len() as u64)?)?;
+            refs.push(record.raw());
+        }
+        let mut row_bytes = 0;
+        let mut row_count = 0;
+        let mut old_heads = 0;
+        for entry in &delta.entries {
+            let PalwDeltaEntryV2::KernelRouteRow { table, key, old, new } = entry else {
+                continue;
+            };
+            if *table != KERNEL_AUX_TABLE {
+                continue;
+            }
+            row_count = add(row_count, 1)?;
+            if key.get(4) == Some(&9) && old.is_some() {
+                old_heads = add(old_heads, 1)?;
+            }
+            for value in [old, new].into_iter().flatten() {
+                row_bytes = add(row_bytes, add(key.len() as u64, value.len() as u64)?)?;
+            }
+        }
+        let total_raw = add(raw, mul(old_heads, bounds.max_record_bytes)?)?;
+        let hash = add(mul(total_raw, 2)?, mul(row_bytes, 4)?)?;
+        let index = add(mul(count, size_of::<RecordSlot<'_>>() as u64)?, mul(row_count, size_of::<RowSlot>() as u64)?)?;
+        let batch_bytes = add(batch.size_in_bytes() as u64, added)?;
+        let workspace = add(
+            FIXED_ROW_WORKSPACE as u64,
+            kaspa_consensus_core::palw_native_resource_v1::positive_journal::POSITIVE_JOURNAL_DECODE_WORKSPACE_BYTES_V1 as u64,
+        )?;
+        let retained = add(add(add(add(total_raw, row_bytes)?, index)?, batch_bytes)?, workspace)?;
+        let limits = PositiveJournalStoreLimitsV2 {
+            max_records: count,
+            max_delta_entries: delta.entries.len() as u64,
+            record_limits: bounds,
+            max_total_raw_bytes: total_raw,
+            max_hash_bytes: hash,
+            max_index_bytes: index,
+            max_batch_bytes: batch_bytes,
+            max_retained_bytes: retained,
+        };
+        self.stage_positive_case_journal_batch_v2(batch, delta, &refs, limits).map(Some)
+    }
+
     /// Caller must hold the SAME native PALW write guard from state preparation
     /// through the owning DB batch commit, and retain the returned ticket until
     /// commit/abandonment. `&mut self` and this allocation ticket are not a global

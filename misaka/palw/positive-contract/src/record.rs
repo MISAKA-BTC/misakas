@@ -115,7 +115,7 @@ impl<'a> ExecutionRecord<'a> {
     }
 }
 
-fn wire_size(count: u32) -> Result<u64, ContractError> {
+pub fn wire_size(count: u32) -> Result<u64, ContractError> {
     (count as u64).checked_mul(4).and_then(|n| n.checked_add(RECORD_OVERHEAD_BYTES as u64)).ok_or(ContractError::Budget)
 }
 

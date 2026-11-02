@@ -40,3 +40,7 @@ RFC-0010/0012のdormant implementationは主RFCではなくdesignへ移しまし
 ## 2026-10-22 認証付き state map の追加予約
 
 [ADR-0203](../adr/0203-authenticated-palw-state-map-and-row-access.md) / [RFC-0036](../rfc/0036-authenticated-palw-state-map-and-row-access.md)をProposed / Review Requiredとして予約した（30 GB pruned node 方針の state lane）。基準 b1eb33960 の tree には ADR-0202 / RFC-0035 までの主文書があり、0198–0202 / 0031–0035 は他 lane の割当で本台帳には未記録。storage 作業の他 lane（IBD）が consensus 可視の形式を起案する場合は ADR-0204 / RFC-0037 以降を使う。次のローカル番号は ADR-0204 / RFC-0037。未 fetch の remote や将来 branch の未使用保証ではない。
+
+## 2026-11-03 先行relay資料の採択
+
+[RFC-0046](../rfc/0046-positive-native-funded-relay.md) / [ADR-0214](../adr/0214-positive-native-funded-relay.md)を、ユーザーの「両案を採択し、限定実装を進める」により同時採択。ローカル全refの履歴で同番号の主文書が無いことを確認した。先行署名資料・有限custody・条件付き部分精算を実装する。本番有効化・旧原資移行は別承認。未fetch remoteや将来branchの未使用を保証しない。

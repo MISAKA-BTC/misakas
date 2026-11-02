@@ -22,6 +22,9 @@ impl Reader<'_> {
     #[inline(never)]
     pub(super) fn validate_assignment_row(&mut self, row: &AssignmentRow) -> Result<(), PositiveRowErrorV2> {
         let t = &row.bundle.terms;
+        if row.admission_material.origin != row.origin {
+            return inconsistent();
+        }
         let NativeRowBody::AssignmentNonce(nonce) = self.required(NativeRowKey::AssignmentNonce(t.poster))? else {
             return Err(PositiveRowErrorV2::WrongRowKind);
         };
@@ -191,6 +194,7 @@ impl Reader<'_> {
             || result.policy != assignment.positive_policy
             || result.fired_fork != assignment.fired_rules
             || result.dependencies != assignment.dependencies
+            || result.role_assignment != (AcceptedMaterial { origin: assignment.origin, digest: assignment.id().0 })
         {
             return inconsistent();
         }
@@ -238,6 +242,8 @@ impl Reader<'_> {
     }
     #[inline(never)]
     pub(super) fn validate_assignment_settlement_row(&mut self, row: &AssignmentSettlementRow) -> Result<(), PositiveRowErrorV2> {
+        crate::palw_state_v2::validate_assignment_once_reference_v2(self.aux, row)
+            .map_err(|_| PositiveRowErrorV2::InconsistentLinks)?;
         let a = self.assignment(row.assignment)?;
         same_block_event_order_v2(&a.origin, &row.origin, true)?;
         match row.funding {

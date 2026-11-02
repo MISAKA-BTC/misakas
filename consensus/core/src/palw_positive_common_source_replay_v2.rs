@@ -151,6 +151,16 @@ pub struct CommonSourceReplayStateV2 {
     poisoned: bool,
 }
 impl CommonSourceReplayStateV2 {
+    /// Additional complete source shadow allocation bound (excluding geometry,
+    /// whose actual independent program/inventory owner is reserved separately).
+    pub(crate) fn replay_heap_requests_v2(limits: SourceLimitsV2) -> Result<u64, crate::palw_native_resource_v1::NativeCoverageV1> {
+        use crate::palw_native_resource_v1::{TirNativeRequestsV1, typed::BTreeNodeEnvelopeV1};
+        let mut q = TirNativeRequestsV1::new();
+        q.exact_v1::<Self>(1)?;
+        q.add_v1(NativeSourceLedgerV2::replay_heap_requests_v2(limits)?)?;
+        q.exact_v1::<BTreeNodeEnvelopeV1<UnitKey, SourceFeeIntentV2>>(limits.max_responses)?;
+        Ok(q.bytes_v1())
+    }
     pub fn new(
         result: MinerResultCommit,
         service: MinerServiceContract,
@@ -253,11 +263,39 @@ impl CommonSourceReplayStateV2 {
         event: CommonSourceEventV2<'_>,
     ) -> Result<ExternalReplayEffectV2, CommonSourceReplayErrorV2> {
         self.healthy()?;
-        let result = self.apply_inner(record, body, before, after, context, policy, event);
+        let result = self.apply_inner(record, body, before, after, context, policy, event, None);
         if result.is_err() {
             self.poisoned = true;
         }
         result
+    }
+    /// Assigned mode starts with the genuine accepted op9 full transaction.
+    /// Its native environment must independently check literal op9 and the
+    /// original Assignment/C links; this pure shadow helper creates no receipt.
+    pub fn apply_assigned_initial_record_v2<C: NativeSourceContextV2, P: NativeCommonUsagePolicyV2>(
+        &mut self,
+        record: CaseJournalRecordView<'_>,
+        result: &MinerResultCommit,
+        service: &MinerServiceContract,
+        after: LocalCourtSnapshotV2,
+        context: &C,
+        policy: &P,
+    ) -> Result<ExternalReplayEffectV2, CommonSourceReplayErrorV2> {
+        self.healthy()?;
+        if record.header().kind != CaseJournalEventKind::NativeTransaction || record.header().sequence != 1 {
+            return Err(CommonSourceReplayErrorV2::Order);
+        }
+        let applied = self.apply_inner(record, None, None, after, context, policy, CommonSourceEventV2::None, Some((result, service)));
+        if applied.is_err() {
+            self.poisoned = true;
+        }
+        applied
+    }
+    /// Borrowed actual shadow ledger, for the native owner to protect every
+    /// outstanding unit and compare all first-only receipts after full replay.
+    pub fn source_ledger_v2(&self) -> Result<&NativeSourceLedgerV2, CommonSourceReplayErrorV2> {
+        self.healthy()?;
+        Ok(&self.ledger)
     }
     #[allow(clippy::too_many_arguments)]
     fn apply_inner<C: NativeSourceContextV2, P: NativeCommonUsagePolicyV2>(
@@ -269,6 +307,7 @@ impl CommonSourceReplayStateV2 {
         context: &C,
         policy: &P,
         event: CommonSourceEventV2<'_>,
+        assigned_initial: Option<(&MinerResultCommit, &MinerServiceContract)>,
     ) -> Result<ExternalReplayEffectV2, CommonSourceReplayErrorV2> {
         let header = record.header();
         if header.sequence != self.last_sequence.checked_add(1).ok_or(CommonSourceReplayErrorV2::Order)? || before != self.last_court {
@@ -282,13 +321,22 @@ impl CommonSourceReplayStateV2 {
             return Err(CommonSourceReplayErrorV2::Binding);
         }
         check_body(record, body)?;
-        if header.kind == CaseJournalEventKind::NativeTransaction {
+        if header.kind == CaseJournalEventKind::NativeTransaction && (header.sequence != 1 || assigned_initial.is_none()) {
             return Err(CommonSourceReplayErrorV2::MissingSettlementPort);
         }
+        if assigned_initial.is_some() && (header.sequence != 1 || body.is_some()) {
+            return Err(CommonSourceReplayErrorV2::Order);
+        }
         if header.sequence == 1 {
-            let Some(PositiveNativeBodyV2 { operation: PositiveNativeOperationV2::ResultAdmission { result, service, .. }, .. }) =
-                body
-            else {
+            let (result, service) = if let Some(assigned) = assigned_initial {
+                assigned
+            } else if let Some(PositiveNativeBodyV2 {
+                operation: PositiveNativeOperationV2::ResultAdmission { result, service, .. },
+                ..
+            }) = body
+            {
+                (result, service)
+            } else {
                 return Err(CommonSourceReplayErrorV2::Order);
             };
             if result != self.ledger.result()

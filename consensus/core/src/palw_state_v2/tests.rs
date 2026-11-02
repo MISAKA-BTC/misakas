@@ -28787,6 +28787,8 @@ mod evm_market {
 
     fn extras(actions: Vec<PalwEvmMarketActionV1>) -> PalwTransitionExtrasV1 {
         PalwTransitionExtrasV1 {
+            assignment_settlements: Default::default(),
+            positive_assignment_actions: Default::default(),
             selected_source_bootstrap_v1: None,
             selected_source_bootstrap_fault_v1: None,
             native_court_rules_v1: None,
@@ -29078,6 +29080,8 @@ mod evm_market {
         assert_eq!(st[0].escrow_sompi, 10 * MSK, "a refused buy's escrow is the refund the child pays");
         // Below the fence the same actions write nothing.
         let dormant = PalwTransitionExtrasV1 {
+            assignment_settlements: Default::default(),
+            positive_assignment_actions: Default::default(),
             selected_source_bootstrap_v1: None,
             selected_source_bootstrap_fault_v1: None,
             native_court_rules_v1: None,

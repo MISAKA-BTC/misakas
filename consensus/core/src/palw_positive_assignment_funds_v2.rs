@@ -270,7 +270,15 @@ pub fn quote_assignment_money_v2(
     {
         return Err(AssignmentFundsErrorV2::Schedule);
     }
-    let retention_daa = terms.reserve_until_daa.checked_sub(now).ok_or(AssignmentFundsErrorV2::Expired)?;
+    // The signed quote must survive movement of the accepting block. Both
+    // admission-window constraints imply an immutable earliest eligible DAA.
+    // Quote its maximum retained interval; `now` only checks current eligibility.
+    // DAA starts at zero, so a lower bound before genesis contributes zero.
+    // This reserves a ceiling and is never an earned retention-service receipt.
+    let lower_bound = |deadline: u64, window: u64| deadline.checked_sub(window).unwrap_or_default();
+    let earliest_admission = lower_bound(terms.accept_before_daa, policy.accept_window_daa)
+        .max(lower_bound(terms.reserve_until_daa, policy.retention_window_daa));
+    let retention_daa = terms.reserve_until_daa.checked_sub(earliest_admission).ok_or(AssignmentFundsErrorV2::Expired)?;
     if usage.admission_bytes == 0
         || usage.retained_bytes == 0
         || usage.replay_bytes == 0
@@ -555,40 +563,107 @@ pub fn debit_assignment_leg_v2(
     Ok(after)
 }
 
-/// Native-derived settlement entitlement, separate from the escrow input's
-/// ordinary spending authority. Constructible only inside Core, where the
-/// state owner must resolve each receipt/P decision and preserve all duties.
+/// A rooted native entitlement selected by the actual P/service/liability
+/// session. Fields are Core-private: this is never a public success DTO.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AssignmentAuthorizedDueV2 {
+    pub(crate) source_leg: u8,
+    pub(crate) kind: misaka_palw_positive_contract::assignment::rows::AssignmentSettlementLegV2,
+    pub(crate) party: misaka_palw_positive_contract::identity::PrincipalId,
+    pub(crate) recipient: Digest,
+    pub(crate) amount: u64,
+    pub(crate) receipt: AcceptedMaterial,
+}
+impl AssignmentAuthorizedDueV2 {
+    pub(crate) fn debit(&self) -> Result<AssignmentLegDebitV2, AssignmentFundsErrorV2> {
+        use misaka_palw_positive_contract::assignment::rows::AssignmentSettlementLegV2 as L;
+        if self.amount == 0 || self.source_leg >= 4 || self.receipt.digest == Digest([0; 64]) {
+            return Err(AssignmentFundsErrorV2::Due);
+        }
+        match self.kind {
+            L::WorkerPayment if self.source_leg == 0 => Ok(AssignmentLegDebitV2 { paid: self.amount, ..Default::default() }),
+            L::ServiceFee if self.source_leg == 1 => Ok(AssignmentLegDebitV2 { paid: self.amount, ..Default::default() }),
+            L::CapitalReturn if self.source_leg == 2 => Ok(AssignmentLegDebitV2 { refunded: self.amount, ..Default::default() }),
+            L::Refund if self.source_leg != 2 => Ok(AssignmentLegDebitV2 { refunded: self.amount, ..Default::default() }),
+            L::Burn if self.recipient == Digest([0; 64]) => Ok(AssignmentLegDebitV2 { burned: self.amount, ..Default::default() }),
+            _ => Err(AssignmentFundsErrorV2::Due),
+        }
+    }
+}
+
+/// Tentative entitlement has NO accepting origin. Native derives it for the
+/// exact candidate and current rooted generation. Mempool/template previews do
+/// not invent accepted material. The final writer repeats that derivation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AssignmentSpendAuthorizationV2 {
     pub(crate) before: AssignmentFundingRow,
-    pub(crate) debits: [AssignmentLegDebitV2; 4],
-    pub(crate) payees: Vec<(Digest, u64)>,
+    pub(crate) dues: Vec<AssignmentAuthorizedDueV2>,
     pub(crate) protected_after: [u64; 4],
-    pub(crate) accepted: AcceptedMaterial,
-    /// Exact bounded native op12 carrier payload after the native decoder and
-    /// current rooted receipt/P owner have authenticated the subject. Ordinary
-    /// scripts bind this payload through their normal transaction sighash.
+    pub(crate) daa: u64,
+    pub(crate) max_frame_bytes: u64,
+    pub(crate) max_history_frames: u32,
     pub(crate) payload: Vec<u8>,
 }
 
-/// Exact rooted before/after images, recomputed from an ordinary accepted
-/// transaction. Native must CAS `old`, reject output collisions, and journal
-/// row, receipts and the transaction's UTXO diff in the same checkpoint.
+/// Monetary projection only, deliberately not a serializable FundingRow. It
+/// cannot pass row restore or acquire a fake last_settlement before acceptance.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AssignmentFundingProjectionV2 {
+    pub worker: BalanceLeg,
+    pub fee: BalanceLeg,
+    pub capital: BalanceLeg,
+    pub surplus: BalanceLeg,
+    pub worker_reserve: u64,
+    pub earned_service_due: u64,
+    pub liability_floor: u64,
+    pub current_outpoint: Option<NativeOutpoint>,
+}
+
+/// Exact tentative money plan. Its private authorization prevents construction
+/// from arbitrary before/after row DTOs; final commit still requalifies against
+/// the current native session and actual accepted transaction.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AssignmentSpendPlanV2 {
     pub old: AssignmentFundingRow,
-    pub new: AssignmentFundingRow,
+    pub new: AssignmentFundingProjectionV2,
+    pub transaction: crate::TransactionId,
+    pub daa: u64,
+    pub body_digest: Digest,
     pub burned_now: u64,
     pub paid_now: u64,
     pub returned_now: u64,
     pub continued_now: u64,
+    pub(crate) authorization: AssignmentSpendAuthorizationV2,
+}
+impl AssignmentSpendPlanV2 {
+    /// Called only after native accepted-prefix provenance has supplied the
+    /// actual op12 material. A tentative preview cannot manufacture this row.
+    pub(crate) fn accepted_funding_row_v2(&self, accepted: AcceptedMaterial) -> Result<AssignmentFundingRow, AssignmentFundsErrorV2> {
+        if accepted.origin.carrier_transaction.0 != self.transaction.as_bytes()
+            || accepted.origin.accepted_daa != self.daa
+            || accepted.digest != self.body_digest
+        {
+            return Err(AssignmentFundsErrorV2::Input);
+        }
+        let mut new = self.old.clone();
+        new.worker = self.new.worker;
+        new.fee = self.new.fee;
+        new.capital = self.new.capital;
+        new.surplus = self.new.surplus;
+        new.worker_reserve = self.new.worker_reserve;
+        new.earned_service_due = self.new.earned_service_due;
+        new.liability_floor = self.new.liability_floor;
+        new.current_outpoint = self.new.current_outpoint;
+        new.last_settlement = Some(accepted);
+        new.validate_shape()?;
+        Ok(new)
+    }
 }
 
-/// Qualifies exactly ONE Assignment escrow at input zero. Extra outputs and
-/// fees must be covered by foreign inputs. The block/mempool classifier must
-/// reject every second locked input, including locks from another purpose.
-/// Exact authenticated op12 payload only; no TFO1 identity is reinterpreted. All ordinary
-/// scripts still execute before a native spend fact is committed.
+/// Qualifies exactly one current native Assignment A input at index zero.
+/// Native authorizes exact op12 receipts, not arbitrary payload bytes. Ordinary
+/// scripts remain mandatory. All fees/change outside this account use foreign
+/// inputs and the shared spend classifier rejects any second locked input.
 pub fn qualify_assignment_spend_v2(
     row: &AssignmentFundingRow,
     authorization: &AssignmentSpendAuthorizationV2,
@@ -596,11 +671,27 @@ pub fn qualify_assignment_spend_v2(
     input_amounts: &[u64],
     now: u64,
 ) -> Result<AssignmentSpendPlanV2, AssignmentFundsErrorV2> {
+    use misaka_palw_positive_contract::assignment::rows::AssignmentSettlementLegV2 as L;
     row.validate_shape()?;
-    if &authorization.before != row || authorization.protected_after[3] != 0 {
+    if &authorization.before != row
+        || authorization.protected_after[3] != 0
+        || authorization.daa != now
+        || authorization.max_frame_bytes == 0
+        || authorization.max_frame_bytes == u64::MAX
+        || authorization.max_history_frames == 0
+        || authorization.max_history_frames == u32::MAX
+        || authorization.dues.len() as u64 > u64::from(authorization.max_history_frames)
+        || authorization.payload.len() as u64 > authorization.max_frame_bytes
+    {
         return Err(AssignmentFundsErrorV2::Input);
     }
-    if authorization.payload.is_empty() || transaction.payload != authorization.payload {
+    if authorization.payload.is_empty()
+        || transaction.payload != authorization.payload
+        || !transaction.id_is_current()
+        || transaction.subnetwork_id != crate::subnets::SUBNETWORK_ID_PALW_LIFECYCLE
+        || !crate::palw_lifecycle_objects_v2::palw_positive_lifecycle_payload_v2(&transaction.payload)
+        || transaction.payload.get(7) != Some(&12)
+    {
         return Err(AssignmentFundsErrorV2::Payload);
     }
     let current = native_assignment_outpoint_v2(row.current_outpoint.ok_or(AssignmentFundsErrorV2::Input)?);
@@ -609,32 +700,56 @@ pub fn qualify_assignment_spend_v2(
         || transaction.inputs.iter().filter(|i| i.previous_outpoint == current).count() != 1
         || input_amounts[0] != row.remaining()?
         || now < row.funding_origin.accepted_daa
-        || authorization.accepted.origin.accepted_daa != now
-        || authorization.accepted.origin.carrier_transaction.0 != transaction.id().as_bytes()
-        || authorization.accepted.digest == Digest([0; 64])
     {
         return Err(AssignmentFundsErrorV2::Input);
     }
-    let worker = debit_assignment_leg_v2(row.worker, authorization.debits[0], authorization.protected_after[0])?;
-    let fee = debit_assignment_leg_v2(row.fee, authorization.debits[1], authorization.protected_after[1])?;
-    let capital = debit_assignment_leg_v2(row.capital, authorization.debits[2], authorization.protected_after[2])?;
-    let surplus = debit_assignment_leg_v2(row.surplus, authorization.debits[3], authorization.protected_after[3])?;
-    let paid_now = add(authorization.debits.iter().map(|d| d.paid))?;
-    let burned_now = add(authorization.debits.iter().map(|d| d.burned))?;
-    let returned_now = add(authorization.debits.iter().map(|d| d.refunded))?;
+    let mut debits = [AssignmentLegDebitV2::default(); 4];
+    let mut paid_now = 0u64;
+    let mut burned_now = 0u64;
+    let mut returned_now = 0u64;
+    let mut next = 0usize;
+    let mut seen = std::collections::BTreeSet::new();
+    for due in &authorization.dues {
+        if due.kind == L::WorkerPayment
+            && (due.amount != row.worker.initial || row.worker.paid != 0 || row.worker.refunded != 0 || row.worker.burned != 0)
+        {
+            return Err(AssignmentFundsErrorV2::Due);
+        }
+        let debit = due.debit()?;
+        if due.receipt.origin.accepted_daa > now || !seen.insert((due.source_leg, due.kind as u8, due.receipt.digest.0, due.party.0.0))
+        {
+            return Err(AssignmentFundsErrorV2::Due);
+        }
+        let leg = &mut debits[due.source_leg as usize];
+        leg.paid = add([leg.paid, debit.paid])?;
+        leg.burned = add([leg.burned, debit.burned])?;
+        leg.refunded = add([leg.refunded, debit.refunded])?;
+        match due.kind {
+            L::WorkerPayment | L::ServiceFee => {
+                if transaction.outputs.get(next).is_none_or(|o| o.value != due.amount || payload(o) != Some(due.recipient)) {
+                    return Err(AssignmentFundsErrorV2::Output);
+                }
+                next += 1;
+                paid_now = add([paid_now, due.amount])?;
+            }
+            L::Burn => {
+                burned_now = add([burned_now, due.amount])?;
+            }
+            L::CapitalReturn | L::Refund => {
+                if due.party != row.authorization.payer || due.recipient != row.authorization.refund_payload {
+                    return Err(AssignmentFundsErrorV2::Due);
+                }
+                returned_now = add([returned_now, due.amount])?;
+            }
+        }
+    }
     if add([paid_now, burned_now, returned_now])? == 0 {
         return Err(AssignmentFundsErrorV2::NoMovement);
     }
-    if add(authorization.payees.iter().map(|(_, amount)| *amount))? != paid_now {
-        return Err(AssignmentFundsErrorV2::Due);
-    }
-    let mut next = 0usize;
-    for &(recipient, amount) in &authorization.payees {
-        if amount == 0 || transaction.outputs.get(next).is_none_or(|o| o.value != amount || payload(o) != Some(recipient)) {
-            return Err(AssignmentFundsErrorV2::Output);
-        }
-        next += 1;
-    }
+    let worker = debit_assignment_leg_v2(row.worker, debits[0], authorization.protected_after[0])?;
+    let fee = debit_assignment_leg_v2(row.fee, debits[1], authorization.protected_after[1])?;
+    let capital = debit_assignment_leg_v2(row.capital, debits[2], authorization.protected_after[2])?;
+    let surplus = debit_assignment_leg_v2(row.surplus, debits[3], authorization.protected_after[3])?;
     if returned_now != 0 {
         if transaction
             .outputs
@@ -654,9 +769,9 @@ pub fn qualify_assignment_spend_v2(
         {
             return Err(AssignmentFundsErrorV2::Output);
         }
-        let output_index = u32::try_from(next).map_err(|_| AssignmentFundsErrorV2::Output)?;
+        let index = u32::try_from(next).map_err(|_| AssignmentFundsErrorV2::Output)?;
         next += 1;
-        Some(point(TransactionOutpoint::new(transaction.id(), output_index)))
+        Some(point(TransactionOutpoint::new(transaction.id(), index)))
     } else {
         None
     };
@@ -665,16 +780,31 @@ pub fn qualify_assignment_spend_v2(
     {
         return Err(AssignmentFundsErrorV2::Conservation);
     }
-    let mut new = row.clone();
-    new.worker = worker;
-    new.fee = fee;
-    new.capital = capital;
-    new.surplus = surplus;
-    new.worker_reserve = authorization.protected_after[0];
-    new.earned_service_due = authorization.protected_after[1];
-    new.liability_floor = authorization.protected_after[2];
-    new.current_outpoint = current_outpoint;
-    new.last_settlement = Some(authorization.accepted);
-    new.validate_shape()?;
-    Ok(AssignmentSpendPlanV2 { old: row.clone(), new, burned_now, paid_now, returned_now, continued_now })
+    let projection = AssignmentFundingProjectionV2 {
+        worker,
+        fee,
+        capital,
+        surplus,
+        worker_reserve: authorization.protected_after[0],
+        earned_service_due: authorization.protected_after[1],
+        liability_floor: authorization.protected_after[2],
+        current_outpoint,
+    };
+    let body_digest = misaka_palw_positive_contract::assignment::journal::assignment_payload_digest_v2(&transaction.payload[3..]);
+    Ok(AssignmentSpendPlanV2 {
+        old: row.clone(),
+        new: projection,
+        transaction: transaction.id(),
+        daa: now,
+        body_digest,
+        burned_now,
+        paid_now,
+        returned_now,
+        continued_now,
+        authorization: authorization.clone(),
+    })
 }
+
+#[cfg(test)]
+#[path = "palw_positive_assignment_funds_v2/tentative_tests.rs"]
+mod tentative_tests;

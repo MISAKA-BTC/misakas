@@ -3,13 +3,13 @@
 //! checked coverage or public activation authority. All shipped presets are None.
 use super::{ForkActivation, Params};
 use crate::{Hash64, palw_mode_v2::PalwModeV2Error};
-use borsh::BorshSerialize;
+use borsh::{BorshDeserialize, BorshSerialize};
 use misaka_palw_positive_contract::{messages::CheckProfile, tir};
 
 /// One explicitly bounded private profile. Native A4/A5/A6 must resolve the
 /// service/schedule preimages under THIS digest and reserve the actual complete
 /// quote; supplying these IDs or a feasible shape does not admit a claim.
-#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize)]
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PositiveCourtPolicyV2 {
     pub version: u16,
     pub revision: u16,
