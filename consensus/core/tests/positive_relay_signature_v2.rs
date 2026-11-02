@@ -91,3 +91,15 @@ fn every_current_input_and_fixed_template_field_remains_bound() {
     // Actual maturity must still be checked by Full; neither field is signed.
     template.verify_spend_signature(&tx, &metadata, &sig).unwrap();
 }
+
+#[test]
+fn fixed_template_recipe_matches_independent_borsh_vector() {
+    assert_eq!(
+        funding_relay_template_id_v2().0,
+        [
+            150, 199, 145, 200, 230, 254, 4, 222, 138, 220, 47, 18, 109, 29, 123, 0, 176, 253, 94, 24, 124, 164, 88, 22, 138, 161,
+            240, 41, 235, 53, 203, 56, 215, 69, 67, 158, 218, 40, 100, 37, 246, 150, 156, 238, 168, 229, 138, 185, 21, 98, 248, 11,
+            53, 13, 211, 69, 30, 57, 158, 206, 114, 44, 142, 172
+        ]
+    );
+}

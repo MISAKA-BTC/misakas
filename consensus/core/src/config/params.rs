@@ -3062,6 +3062,8 @@ pub struct Params {
     pub palw_positive_court_v2: Option<PositiveCourtFenceV2>,
     /// RFC-0045 result-free canonical assignments. No public activation is assigned.
     pub palw_positive_assignment_v2: Option<PositiveAssignmentFenceV2>,
+    /// RFC-0046 limited funding-relay metadata intake. Dormant on every preset.
+    pub palw_positive_funding_relay_v2: Option<PositiveFundingRelayFenceV2>,
 
     /// **ADR-0178: rule E, the fork choice that heals a partition on bonded participation** ([`crate::palw_fork_choice_rule_e_v1`]):
     /// past it the sink search weighs every valid tip, the deep-reorg gate and the IBD commit compare the two tips' EXCLUSIVE pasts
@@ -4341,6 +4343,8 @@ mod identity;
 mod positive_court_v2;
 pub use positive_court_v2::{PositiveCourtFenceV2, PositiveCourtPolicyV2};
 mod positive_assignment_v2;
+mod positive_funding_relay_v2;
+pub use positive_funding_relay_v2::{PositiveFundingRelayFenceV2, PositiveFundingRelayRuleScopeV2};
 pub use positive_assignment_v2::{AssignmentNativePreimagesV2, PositiveAssignmentFenceV2, PositiveAssignmentRuleScopeV2};
 mod mirror;
 mod validation;
@@ -6286,6 +6290,7 @@ impl Params {
             palw_native_mining_v39: self.palw_native_mining_v39.clone(),
             palw_positive_court_v2: self.palw_positive_court_v2.clone(),
             palw_positive_assignment_v2: self.palw_positive_assignment_v2.clone(),
+            palw_positive_funding_relay_v2: self.palw_positive_funding_relay_v2.clone(),
             palw_fork_choice_rule_e_v1: self.palw_fork_choice_rule_e_v1,
             palw_typed_roots_v1: self.palw_typed_roots_v1,
             palw_fork_choice_commitment_v1: self.palw_fork_choice_commitment_v1,
@@ -7468,6 +7473,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_native_mining_v39: None,
     palw_positive_court_v2: None,
     palw_positive_assignment_v2: None,
+    palw_positive_funding_relay_v2: None,
     palw_fork_choice_rule_e_v1: None,
     palw_typed_roots_v1: None,
     palw_fork_choice_commitment_v1: None,
@@ -7846,6 +7852,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_native_mining_v39: None,
     palw_positive_court_v2: None,
     palw_positive_assignment_v2: None,
+    palw_positive_funding_relay_v2: None,
     palw_fork_choice_rule_e_v1: None,
     palw_typed_roots_v1: None,
     palw_fork_choice_commitment_v1: None,
@@ -8206,6 +8213,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_native_mining_v39: None,
     palw_positive_court_v2: None,
     palw_positive_assignment_v2: None,
+    palw_positive_funding_relay_v2: None,
     palw_fork_choice_rule_e_v1: None,
     palw_typed_roots_v1: None,
     palw_fork_choice_commitment_v1: None,
@@ -13807,6 +13815,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_native_mining_v39: None,
     palw_positive_court_v2: None,
     palw_positive_assignment_v2: None,
+    palw_positive_funding_relay_v2: None,
     palw_fork_choice_rule_e_v1: None,
     palw_typed_roots_v1: None,
     palw_fork_choice_commitment_v1: None,

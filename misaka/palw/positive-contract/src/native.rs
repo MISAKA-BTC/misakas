@@ -66,6 +66,14 @@ pub enum NativeRowKey {
         assignment: AssignmentId,
         prover: NativeOutpoint,
     },
+    FundingRelayAuthorization {
+        funding: NativeOutpoint,
+        purpose: crate::assignment::funding_relay::RelayFundingPurposeV2,
+    },
+    FundingRelayCustody {
+        funding: NativeOutpoint,
+        purpose: crate::assignment::funding_relay::RelayFundingPurposeV2,
+    },
 }
 impl NativeRowKey {
     pub fn encode(&self) -> Vec<u8> {

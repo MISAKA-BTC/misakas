@@ -233,6 +233,8 @@ pub(super) fn row_kind(body: &NativeRowBody) -> u8 {
         NativeRowBody::AssignmentJournalHead(_) => 16,
         NativeRowBody::AssignmentJournalFrame(_) => 17,
         NativeRowBody::AssignmentProverFunding(_) => 18,
+        NativeRowBody::FundingRelayAuthorization(_) => 19,
+        NativeRowBody::FundingRelayCustody(_) => 20,
     }
 }
 

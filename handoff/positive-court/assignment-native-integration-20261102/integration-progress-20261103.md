@@ -1,6 +1,7 @@
 # 2026-11-03 integration progress — RFC-0045 remains incomplete
 
-The active checkout is `codex/positive-court-a0`, based on `c9c93e18b`.
+The active checkout is `codex/positive-court-a0`. The190-test phase1 checkpoint
+is committed as `556ff5c29` (based on `c9c93e18b`).
 The user requested multiple agents to finish RFC-0045. Three agents handed off
 candidates for the native writer, funds/Case and original materials/P/recovery.
 All three subsequently stopped with a usage-limit error. Root continues their
@@ -119,3 +120,12 @@ node-feature integration target. `integrated-exec-replay-test-first.json` passes
 environment refusal and actual independent A1 execution. No native A/Case/funds/P
 acceptance is asserted by those local fixtures. The source map matches the other
 six passing runs exactly.
+
+## Latest relay/source/cutoff stage
+
+The next root candidates are now applied and checked: see
+[relay-stage-progress-20261103.md](relay-stage-progress-20261103.md) for the actual
+source scope,76 contract +90 Core unique cases, typecheck/strict Clippy, exact
+source differences and remaining owners. The historical190 above belongs to
+phase1 and is not added to166 from the later stage. Native R/A/C acceptance and
+actual payment remain closed.

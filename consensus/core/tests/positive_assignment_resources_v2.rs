@@ -64,6 +64,8 @@ fn source_and_cancellation_preimages_have_finite_bounds_and_separate_domains() {
     let mut source = AssignmentSourcePolicyV2 {
         version: 2,
         revision: 1,
+        responsibility: kaspa_consensus_core::palw_positive_assignment_resources_v2::AssignmentSourceResponsibilityV2::FeeOnlyV1,
+        release: kaspa_consensus_core::palw_positive_assignment_resources_v2::AssignmentSourceReleaseV2::AfterSignedDutiesRetentionAndLiabilityV1,
         work: AssignmentWorkScheduleV2 {
             version: 2,
             revision: 1,
@@ -85,6 +87,15 @@ fn source_and_cancellation_preimages_have_finite_bounds_and_separate_domains() {
         max_native_body_bytes: 20_000,
     };
     source.validate().unwrap();
+    let bytes = borsh::to_vec(&source).unwrap();
+    assert_eq!(bytes.len(), 130);
+    assert_eq!(&bytes[4..6], &[0, 0]);
+    for at in [4, 5] {
+        let mut changed = bytes.clone();
+        changed[at] = 255;
+        assert!(borsh::from_slice::<AssignmentSourcePolicyV2>(&changed).is_err());
+    }
+
     let original = source.id();
     source.max_units_per_request += 1;
     assert_ne!(source.id(), original);

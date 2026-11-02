@@ -147,3 +147,73 @@ impl FundingRelaySignatureTemplateV2 {
         Ok(script)
     }
 }
+
+/// Identity of the fixed signature recipe, including the exact location of the
+/// Assignment parameter in the payload. Outpoint/amount/key are parameters
+/// authenticated by each concrete normal transaction signature and R terms.
+/// This recipe digest establishes neither future UTXO existence nor credit.
+pub fn funding_relay_template_id_v2() -> misaka_palw_positive_contract::identity::Digest {
+    use borsh::BorshSerialize;
+    use misaka_palw_positive_contract::{assignment::funding_relay::RelayTemplateV2, identity::Digest};
+    #[derive(BorshSerialize)]
+    struct Recipe<'a> {
+        version: u16,
+        revision: u16,
+        template: RelayTemplateV2,
+        current_input: u32,
+        transaction_version: u16,
+        sequence: u64,
+        sig_op_count: u8,
+        lock_time: u64,
+        subnetwork: &'a crate::subnets::SubnetworkId,
+        gas: u64,
+        zero_assignment_payload: [u8; ASSIGNMENT_RELAY_PAYLOAD_BYTES_V2],
+        assignment_start: u16,
+        assignment_end: u16,
+        sighash: u8,
+        signature_context: &'a [u8],
+        entry_script_recipe: &'a [u8],
+    }
+    funding_relay_data_hash_v2(
+        b"misaka/positive/funding-relay-template/v2/r1",
+        &Recipe {
+            version: 2,
+            revision: 1,
+            template: RelayTemplateV2::NativeOp12NoCaseNoReceiptsV1,
+            current_input: 0,
+            transaction_version: 0,
+            sequence: 0,
+            sig_op_count: 1,
+            lock_time: 0,
+            subnetwork: &SUBNETWORK_ID_PALW_LIFECYCLE,
+            gas: 0,
+            zero_assignment_payload: assignment_relay_payload_v2(AssignmentId(Digest([0; 64]))),
+            assignment_start: 8,
+            assignment_end: 72,
+            sighash: ASSIGNMENT_RELAY_SIGHASH_V2,
+            signature_context: CONTEXT,
+            entry_script_recipe: b"p2pkh_mldsa87_spk(blake2b_512_address_payload(key))",
+        },
+    )
+}
+
+/// Streaming canonical identity hash for these fixed native DATA recipes.
+/// This function supplies no native acceptance or computation authority.
+pub(crate) fn funding_relay_data_hash_v2<T: borsh::BorshSerialize>(
+    domain: &[u8],
+    value: &T,
+) -> misaka_palw_positive_contract::identity::Digest {
+    struct Writer(blake2b_simd::State);
+    impl std::io::Write for Writer {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.update(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut writer = Writer(blake2b_simd::Params::new().hash_length(64).key(domain).to_state());
+    borsh::to_writer(&mut writer, value).expect("fixed relay identity serialization");
+    misaka_palw_positive_contract::identity::Digest(writer.0.finalize().as_bytes().try_into().expect("64-byte digest"))
+}

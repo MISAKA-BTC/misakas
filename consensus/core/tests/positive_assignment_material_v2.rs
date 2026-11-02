@@ -112,6 +112,8 @@ fn fixture() -> (AssignmentRow, AssignmentAdmissionMaterialV2, PalwJobContextV2)
         source_policy: AssignmentSourcePolicyV2 {
             version: 2,
             revision: 1,
+            responsibility: kaspa_consensus_core::palw_positive_assignment_resources_v2::AssignmentSourceResponsibilityV2::FeeOnlyV1,
+            release: kaspa_consensus_core::palw_positive_assignment_resources_v2::AssignmentSourceReleaseV2::AfterSignedDutiesRetentionAndLiabilityV1,
             work: AssignmentWorkScheduleV2 {
                 version: 2,
                 revision: 1,

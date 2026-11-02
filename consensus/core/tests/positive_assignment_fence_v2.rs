@@ -235,6 +235,8 @@ fn native_preimages() -> AssignmentNativePreimagesV2 {
         source_policy: AssignmentSourcePolicyV2 {
             version: 2,
             revision: 1,
+            responsibility: kaspa_consensus_core::palw_positive_assignment_resources_v2::AssignmentSourceResponsibilityV2::FeeOnlyV1,
+            release: kaspa_consensus_core::palw_positive_assignment_resources_v2::AssignmentSourceReleaseV2::AfterSignedDutiesRetentionAndLiabilityV1,
             work: AssignmentWorkScheduleV2 {
                 version: 2,
                 revision: 1,
@@ -383,4 +385,123 @@ fn signed_money_quote_is_stable_across_eligible_acceptance_clocks() {
     assert!(quote(149).is_err());
     assert_eq!(quote(150).unwrap().retention_daa, 1000);
     assert_eq!(quote(150).unwrap(), quote(199).unwrap());
+}
+
+fn relay_fence(at: u64) -> PositiveFundingRelayFenceV2 {
+    use misaka_palw_positive_contract::assignment::funding_relay_policy::*;
+    let fees = FundingRelayFeeScheduleV2 {
+        version: 2,
+        revision: 1,
+        admission: 1,
+        per_signature: 1,
+        per_frame_byte: 1,
+        per_retained_byte_daa: 1,
+        per_database_byte: 1,
+        per_replay_read: 1,
+        per_replay_work: 1,
+        retirement: 1,
+    };
+    let physical = FundingRelayPhysicalProfileV2 {
+        version: 2,
+        revision: 1,
+        max_frame_bytes: 64_000,
+        max_decoded_bytes: 64_000,
+        max_heap_bytes: 128_000,
+        max_retained_bytes: 64_000,
+        max_database_bytes: 128_000,
+        max_batch_bytes: 256_000,
+        max_replay_reads: 100,
+        max_replay_work: 1_000_000,
+        max_signatures: 2,
+    };
+    let policy = FundingRelayPolicyV2 {
+        version: 2,
+        revision: 1,
+        max_pending_global: 100,
+        max_pending_per_poster: 10,
+        max_pending_per_prover: 10,
+        max_account_candidates: 3,
+        max_account_continuations: 5,
+        max_stored_rows: 1000,
+        max_declared_amount: 1_000_000,
+        register_window_daa: 100,
+        funding_window_daa: 300,
+        custody_window_daa: 1000,
+        rollback_margin_daa: 10,
+        metadata_fee_schedule: fees.id(),
+        physical_custody_profile: physical.id(),
+    };
+    PositiveFundingRelayFenceV2 { activation: ForkActivation::new(at), policy, fees, physical }
+}
+#[test]
+fn relay_metadata_is_some_only_and_every_shipped_preset_remains_dormant() {
+    for p in [MAINNET_PARAMS, TESTNET_PARAMS, TESTNET11_PARAMS, SIMNET_PARAMS, DEVNET_PARAMS, palw_t12_shipped_params()] {
+        assert!(p.palw_positive_funding_relay_v2.is_none());
+        assert!(p.palw_positive_funding_relay_v2_at(u64::MAX).is_none());
+        p.validate_palw_positive_funding_relay_v2().unwrap();
+    }
+    let original = selected(1000);
+    let mut future = original.clone();
+    future.palw_positive_funding_relay_v2 = Some(relay_fence(5000));
+    assert_ne!(future.consensus_params_id(), original.consensus_params_id());
+    assert_ne!(future.consensus_schedule_id(), original.consensus_schedule_id());
+    assert_eq!(future.consensus_identity_id(), original.consensus_identity_id());
+    assert_eq!(future.palw_positive_assignment_rule_scope_v2_at(1000), original.palw_positive_assignment_rule_scope_v2_at(1000));
+    assert!(future.palw_positive_funding_relay_v2_at(4999).is_none());
+    assert!(future.palw_positive_funding_relay_v2_at(5000).is_some());
+    assert!(future.validate_palw_positive_funding_relay_v2().is_err());
+    let mut never = original.clone();
+    let mut fence = relay_fence(u64::MAX);
+    fence.policy.max_pending_global = 0;
+    never.palw_positive_funding_relay_v2 = Some(fence);
+    never.validate_palw_positive_funding_relay_v2().unwrap();
+    assert_eq!(never.fence_schedule_v1(), original.fence_schedule_v1());
+    assert_eq!(never.consensus_identity_id(), original.consensus_identity_id());
+}
+#[test]
+fn relay_scope_binds_all_actual_preimages_and_discards_future_policies() {
+    let mut p = selected(1000);
+    p.palw_positive_funding_relay_v2 = Some(relay_fence(1000));
+    let original = p.palw_positive_funding_relay_rule_scope_v2_at(1000).unwrap();
+    for n in 0..3 {
+        let mut changed = p.clone();
+        let fence = changed.palw_positive_funding_relay_v2.as_mut().unwrap();
+        match n {
+            0 => fence.policy.max_account_continuations += 1,
+            1 => {
+                fence.fees.retirement += 1;
+                fence.policy.metadata_fee_schedule = fence.fees.id();
+            }
+            _ => {
+                fence.physical.max_retained_bytes += 1;
+                fence.policy.physical_custody_profile = fence.physical.id();
+            }
+        }
+        assert_ne!(changed.consensus_params_id(), p.consensus_params_id());
+        assert_ne!(changed.palw_positive_funding_relay_rule_scope_v2_at(1000).unwrap().ruleset(), original.ruleset());
+    }
+    let mut changed = p.clone();
+    changed.palw_native_mining_v39 =
+        Some(kaspa_consensus_core::palw_native_mining_v39::PalwNativeMiningFenceV39::unapproved_probe_at(
+            ForkActivation::new(5000),
+            [7; 64],
+        ));
+    assert_eq!(changed.palw_positive_funding_relay_rule_scope_v2_at(1000), Some(original));
+    assert_ne!(changed.palw_positive_funding_relay_rule_scope_v2_at(5000), Some(original));
+}
+#[test]
+fn relay_selection_rejects_missing_assignment_and_substituted_physical_or_fee_preimage() {
+    let mut p = selected(1000);
+    p.palw_positive_funding_relay_v2 = Some(relay_fence(1000));
+    p.palw_positive_funding_relay_v2.as_ref().unwrap().validate_preimages().unwrap();
+    for n in 0..3 {
+        let mut changed = p.clone();
+        match n {
+            0 => changed.palw_positive_assignment_v2 = None,
+            1 => changed.palw_positive_funding_relay_v2.as_mut().unwrap().fees.retirement += 1,
+            _ => changed.palw_positive_funding_relay_v2.as_mut().unwrap().physical.max_retained_bytes += 1,
+        };
+        assert!(changed.palw_positive_funding_relay_v2_at(1000).is_none());
+        assert!(changed.validate_palw_positive_funding_relay_v2().is_err());
+    }
 }

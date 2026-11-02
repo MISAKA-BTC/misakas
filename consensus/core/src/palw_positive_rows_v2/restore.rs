@@ -17,6 +17,7 @@ use misaka_palw_positive_contract::{
     rows::*,
 };
 mod assignment;
+mod funding_relay;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Bound::{Included, Unbounded};
 
@@ -271,6 +272,8 @@ impl Reader<'_> {
             NativeRowBody::AssignmentJournalHead(row) => self.validate_assignment_journal_head_row(row),
             NativeRowBody::AssignmentJournalFrame(row) => self.validate_assignment_journal_frame_row(row),
             NativeRowBody::AssignmentProverFunding(row) => self.validate_assignment_prover_funding_row(row),
+            NativeRowBody::FundingRelayAuthorization(row) => self.validate_funding_relay_authorization_row(row),
+            NativeRowBody::FundingRelayCustody(row) => self.validate_funding_relay_custody_row(row),
         }
     }
     #[inline(never)]

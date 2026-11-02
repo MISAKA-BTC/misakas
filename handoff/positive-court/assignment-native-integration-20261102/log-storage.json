@@ -374,5 +374,109 @@
     "stored_sha256": "d20cdeb79efe7ded4e5576cd156f8ba7e846a91a9fd19c2500eb3978b28961d9",
     "raw_bytes": 366841,
     "stored_bytes": 25593
+  },
+  {
+    "raw_name": "relay-stage-contract-first.log",
+    "stored_name": "relay-stage-contract-first.log.gz",
+    "raw_sha256": "1d43577e607587e06d4f35e833b12bdbafe9f011dc05e60d481ac11ac541d6bf",
+    "stored_sha256": "65272895ff13aacc4947a702872b509d329eb8ee33bf8785280799fdd3578380",
+    "raw_bytes": 74780,
+    "stored_bytes": 6991
+  },
+  {
+    "raw_name": "relay-stage-contract-test-clippy-first.log",
+    "stored_name": "relay-stage-contract-test-clippy-first.log.gz",
+    "raw_sha256": "76ca518a12ba4bdfe44d56e8f093c9bfe1caf31f9188d5b9dec2477c63af0e31",
+    "stored_sha256": "ff96bd20f3ae567cb02a6a214b47f5ed288f0f7ca20b3c3f049a36a6cf459b97",
+    "raw_bytes": 51220,
+    "stored_bytes": 3981
+  },
+  {
+    "raw_name": "relay-stage-contract-test-clippy-second.log",
+    "stored_name": "relay-stage-contract-test-clippy-second.log.gz",
+    "raw_sha256": "fe5f90d2322e06d87a02cf7b377f3817f56315d88b498e25b2c77095f6600605",
+    "stored_sha256": "a5d3280059ba3327843d408761728cb406309ae480203a001efd23bee3737dac",
+    "raw_bytes": 60501,
+    "stored_bytes": 4101
+  },
+  {
+    "raw_name": "relay-stage-contract-third.log",
+    "stored_name": "relay-stage-contract-third.log.gz",
+    "raw_sha256": "1628f377e52b7886f3fb8ab611a22cfedeb2730733182e27a77ccdbef60fb08a",
+    "stored_sha256": "6e45d457cdba2e51892d81cf837d243496381e3dbd99d93c28d635783cfa7a02",
+    "raw_bytes": 74780,
+    "stored_bytes": 6995
+  },
+  {
+    "raw_name": "relay-stage-core-runtime-second.log",
+    "stored_name": "relay-stage-core-runtime-second.log.gz",
+    "raw_sha256": "34d115e96c52dbd97546d910700bd56e1702edbb374dd39ed4e59792e648591a",
+    "stored_sha256": "a12e9ec01fcd067f3f13142b6ec66aeab4bc3084f6637e6496697956c7057440",
+    "raw_bytes": 380856,
+    "stored_bytes": 27923
+  },
+  {
+    "raw_name": "relay-stage-core-test-clippy-second.log",
+    "stored_name": "relay-stage-core-test-clippy-second.log.gz",
+    "raw_sha256": "49d05c385d32330d1038f80a9550700ace636120210b698a078eddecf53e0016",
+    "stored_sha256": "69c0928515eeeeda537003068a9628dbd760ae15967930afd289554af0bf24a9",
+    "raw_bytes": 349633,
+    "stored_bytes": 23922
+  },
+  {
+    "raw_name": "relay-stage-library-clippy-second.log",
+    "stored_name": "relay-stage-library-clippy-second.log.gz",
+    "raw_sha256": "d1551bfee2a597223356e0192dceecbeee8b192001bd89986478c666d35b985a",
+    "stored_sha256": "5636132213d472f096c5500ac094dba216673ca73dee2a1f2ed673ad22bbafeb",
+    "raw_bytes": 284147,
+    "stored_bytes": 20223
+  },
+  {
+    "raw_name": "relay-stage-library-clippy-third.log",
+    "stored_name": "relay-stage-library-clippy-third.log.gz",
+    "raw_sha256": "05e6329ad7010ed02f710d2f591335c7a099652ccff2188aa6fd9af01b248d17",
+    "stored_sha256": "03464c48ecaacb93d73903474b0f722b9d8694605f2dd5c63f312e669f936595",
+    "raw_bytes": 341872,
+    "stored_bytes": 23646
+  },
+  {
+    "raw_name": "relay-stage-native-typecheck-first.log",
+    "stored_name": "relay-stage-native-typecheck-first.log.gz",
+    "raw_sha256": "be218fe97362ea94fd31e2ce9e13902bdd9577772be8052d04002df0ea399d95",
+    "stored_sha256": "71454eb0853e838a72bf862ea5cad978473b2753f4f86d89ab0b17a08e722941",
+    "raw_bytes": 295740,
+    "stored_bytes": 21008
+  },
+  {
+    "raw_name": "relay-stage-native-typecheck-second.log",
+    "stored_name": "relay-stage-native-typecheck-second.log.gz",
+    "raw_sha256": "2b3377fa687eec8e7d9db00ba7374e8cea1be3d7e073a778f0846064b3b122e9",
+    "stored_sha256": "3d9dc45ad898fc56fea2ef5ac2a24b6cf01ac76c231dbd0511f2f21b7d27e491",
+    "raw_bytes": 881333,
+    "stored_bytes": 52955
+  },
+  {
+    "raw_name": "relay-stage-row-scanner-clippy-first.log",
+    "stored_name": "relay-stage-row-scanner-clippy-first.log.gz",
+    "raw_sha256": "40e93b5b133c9948d0bcec5e88fa21a0fc26471666b257a666cbe37170641917",
+    "stored_sha256": "4e2e7ebbaa30dba6e17b708c4a133fe6277e090b33d5681d0a382552d27e381c",
+    "raw_bytes": 341004,
+    "stored_bytes": 23911
+  },
+  {
+    "raw_name": "relay-stage-row-scanner-clippy-second.log",
+    "stored_name": "relay-stage-row-scanner-clippy-second.log.gz",
+    "raw_sha256": "96aded92357dfd3acab768dd0d1adda81ffd0ddf677aaaefaa7e60037e490140",
+    "stored_sha256": "85d2dc02dfc7a9a989ccdc02ec04d1b9ef94a75fa6cebedfcf2edcc7053e6cef",
+    "raw_bytes": 340782,
+    "stored_bytes": 23612
+  },
+  {
+    "raw_name": "relay-stage-row-scanner-runtime-second.log",
+    "stored_name": "relay-stage-row-scanner-runtime-second.log.gz",
+    "raw_sha256": "76b25286335db0bda71efed7c2178fc70f56182bdbb727dc8ae8e32e62d5b303",
+    "stored_sha256": "fe8ea517e40ab824d28359a14e9767f64c675356b63a2610e36968691c027bdb",
+    "raw_bytes": 358618,
+    "stored_bytes": 24559
   }
 ]

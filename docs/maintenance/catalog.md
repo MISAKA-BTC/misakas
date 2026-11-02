@@ -460,6 +460,7 @@
 - [design/palw/integration/positive-native-assignment-rfc-draft-2026-10-31.md](../design/palw/integration/positive-native-assignment-rfc-draft-2026-10-31.md)
 - [design/palw/integration/positive-native-attempt-origin-r1.md](../design/palw/integration/positive-native-attempt-origin-r1.md)
 - [design/palw/integration/positive-native-relay-adr-draft-2026-11-03.md](../design/palw/integration/positive-native-relay-adr-draft-2026-11-03.md)
+- [design/palw/integration/positive-native-relay-namespaces-2026-11-03.md](../design/palw/integration/positive-native-relay-namespaces-2026-11-03.md)
 - [design/palw/integration/positive-native-relay-rfc-draft-2026-11-03.md](../design/palw/integration/positive-native-relay-rfc-draft-2026-11-03.md)
 - [design/palw/integration/remaining-rfc-integration-matrix.md](../design/palw/integration/remaining-rfc-integration-matrix.md)
 - [design/palw/integration/remaining-work-2026-10-16.md](../design/palw/integration/remaining-work-2026-10-16.md)

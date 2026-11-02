@@ -12,6 +12,7 @@ pub mod consents;
 pub mod control_material;
 pub mod funding_relay;
 pub mod funding_relay_policy;
+pub mod funding_relay_rows;
 pub mod journal;
 pub mod open_material;
 pub mod policy;

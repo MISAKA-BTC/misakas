@@ -12,6 +12,7 @@ pub enum AssignmentGateCClockErrorV2 {
     InvalidClockOrder,
     Overflow,
     UnresolvedPendingFraudOwner,
+    UnboundedVerifierUniverse,
 }
 
 /// Original Result/C acceptance is the commit clock, never Assignment intake.
@@ -78,4 +79,35 @@ impl AssignmentGateCClockV2 {
     pub fn require_complete_native_bound(&self) -> Result<std::convert::Infallible, AssignmentGateCClockErrorV2> {
         Err(AssignmentGateCClockErrorV2::UnresolvedPendingFraudOwner)
     }
+}
+
+/// Pure DATA bound for the global registry work needed by ANY legal later C.
+/// It neither freezes the actual draw pool nor authorizes an anchor snapshot.
+/// Native must independently resolve the signed anchor's real ancestor state,
+/// audit its registration chronology, price all its candidate records and own
+/// the query/index/build/retention capacity. An at-intake eligible count does
+/// not bound future eligibility and is deliberately not an input here.
+///
+/// `None` means no registration DAA can mature before the exclusive Result
+/// cutoff. `Some(cutoff)` means all possibly eligible registrations precede the
+/// anchor DAA strictly. The strict inequality covers later accepting blocks
+/// whose DAA equals the anchor's. Future active status/stake/exclusion and the
+/// actual randomly drawn approval remain the unchanged Gate C predicates.
+pub fn assignment_verifier_registration_cutoff_v2(
+    policy: &PalwSecurityCertificationPolicyV1,
+    anchor_daa: u64,
+    result_before_daa: u64,
+) -> Result<Option<u64>, AssignmentGateCClockErrorV2> {
+    policy.validate().map_err(|_| AssignmentGateCClockErrorV2::InvalidPolicy)?;
+    if result_before_daa == u64::MAX || result_before_daa <= anchor_daa {
+        return Err(AssignmentGateCClockErrorV2::InvalidClockOrder);
+    }
+    let latest_commit = result_before_daa.checked_sub(1).ok_or(AssignmentGateCClockErrorV2::InvalidClockOrder)?;
+    let Some(cutoff) = latest_commit.checked_sub(policy.verifier_maturity_daa) else {
+        return Ok(None);
+    };
+    if cutoff >= anchor_daa {
+        return Err(AssignmentGateCClockErrorV2::UnboundedVerifierUniverse);
+    }
+    Ok(Some(cutoff))
 }

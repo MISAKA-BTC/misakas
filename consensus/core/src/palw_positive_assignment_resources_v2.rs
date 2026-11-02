@@ -102,10 +102,26 @@ impl AssignmentWorkScheduleV2 {
         })
     }
 }
+/// Explicit initial source service mode, authenticated through the full
+/// source-policy ID in the signed bundle/consent. Fee-only duties do not create
+/// an unsigned collateral penalty; computation/certification remains separate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum AssignmentSourceResponsibilityV2 {
+    FeeOnlyV1,
+}
+/// No clock-only release. Native still establishes all signed outstanding
+/// duties, earned fees, retention and applicable original liability at close.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum AssignmentSourceReleaseV2 {
+    AfterSignedDutiesRetentionAndLiabilityV1,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct AssignmentSourcePolicyV2 {
     pub version: u16,
     pub revision: u16,
+    pub responsibility: AssignmentSourceResponsibilityV2,
+    pub release: AssignmentSourceReleaseV2,
     pub work: AssignmentWorkScheduleV2,
     pub max_parameter_instances: u64,
     pub max_requests: u64,

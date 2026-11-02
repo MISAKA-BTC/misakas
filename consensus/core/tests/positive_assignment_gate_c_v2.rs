@@ -114,3 +114,47 @@ fn delayed_final_delays_actual_prosecution_without_moving_result_commit_or_draw(
     assert_eq!(palw_certification_verdict_v1(&policy(), &row, facts, 168), None);
     assert_eq!(palw_certification_verdict_v1(&policy(), &row, facts, 169), Some(PalwCertificationOutcomeV1::Certified));
 }
+
+#[test]
+fn fixed_anchor_registration_bound_covers_every_future_commit_without_freezing_pool() {
+    for maturity in 0..=9 {
+        let mut p = policy();
+        p.verifier_maturity_daa = maturity;
+        for anchor in 0..=9 {
+            for before in 1..=19 {
+                let bound = assignment_verifier_registration_cutoff_v2(&p, anchor, before);
+                if before <= anchor {
+                    assert_eq!(bound, Err(AssignmentGateCClockErrorV2::InvalidClockOrder));
+                    continue;
+                }
+                let oracle = (0..=32)
+                    .filter(|reg| {
+                        (anchor..before).any(|commit| palw_certification_pool_admits_v1(&p, commit, &[1; 64], true, *reg, 1, &[2; 64]))
+                    })
+                    .max();
+                if oracle.is_some_and(|n| n >= anchor) {
+                    assert_eq!(bound, Err(AssignmentGateCClockErrorV2::UnboundedVerifierUniverse));
+                } else {
+                    assert_eq!(bound.unwrap(), oracle);
+                }
+            }
+        }
+    }
+    // A currently ineligible old bond must remain in the resource universe:
+    // future active status/collateral are assessed by the actual draw owner.
+    let p = policy();
+    assert!(!palw_certification_pool_admits_v1(&p, 10, &[1; 64], false, 7, 0, &[2; 64]));
+    assert!(palw_certification_pool_admits_v1(&p, 10, &[1; 64], true, 7, 1, &[2; 64]));
+    assert_eq!(assignment_verifier_registration_cutoff_v2(&p, 9, 11), Ok(Some(7)));
+    assert_eq!(assignment_verifier_registration_cutoff_v2(&p, 9, 13), Err(AssignmentGateCClockErrorV2::UnboundedVerifierUniverse));
+}
+#[test]
+fn verifier_universe_cutoff_preserves_exclusive_end_and_never_wraps_maturity() {
+    let mut p = policy();
+    assert_eq!(assignment_verifier_registration_cutoff_v2(&p, 0, 1), Ok(None));
+    assert_eq!(assignment_verifier_registration_cutoff_v2(&p, 9, 0), Err(AssignmentGateCClockErrorV2::InvalidClockOrder));
+    assert_eq!(assignment_verifier_registration_cutoff_v2(&p, 9, u64::MAX), Err(AssignmentGateCClockErrorV2::InvalidClockOrder));
+    p.verifier_maturity_daa = u64::MAX;
+    assert_eq!(assignment_verifier_registration_cutoff_v2(&p, u64::MAX - 2, u64::MAX - 1), Ok(None));
+    assert!(!palw_certification_pool_admits_v1(&p, u64::MAX - 2, &[1; 64], true, u64::MAX - 3, 1, &[2; 64]));
+}

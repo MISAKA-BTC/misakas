@@ -136,8 +136,8 @@ native_struct!(AssignmentPhysicalUsageV2;admission_bytes,retained_bytes,replay_b
 wire_struct!(AssignmentPhysicalUsageV2;u64,u64,u64,u64,u64,u64);
 native_struct!(AssignmentMoneyQuoteV2;fee,capital,usage,retention_daa,fee_schedule,reserve_schedule,physical_profile);
 wire_struct!(AssignmentMoneyQuoteV2;u64,u64,AssignmentPhysicalUsageV2,u64,Digest,Digest,Digest);
-native_struct!(AssignmentSourcePolicyV2;version,revision,work,max_parameter_instances,max_requests,max_responses,max_history_events,max_history_bytes,max_intervals,max_units_per_request,max_native_body_bytes);
-wire_struct!(AssignmentSourcePolicyV2;u16,u16,AssignmentWorkScheduleV2,u64,u64,u64,u64,u64,u64,u64,u64);
+native_struct!(AssignmentSourcePolicyV2;version,revision,responsibility,release,work,max_parameter_instances,max_requests,max_responses,max_history_events,max_history_bytes,max_intervals,max_units_per_request,max_native_body_bytes);
+wire_struct!(AssignmentSourcePolicyV2;u16,u16,AssignmentSourceResponsibilityV2,AssignmentSourceReleaseV2,AssignmentWorkScheduleV2,u64,u64,u64,u64,u64,u64,u64,u64);
 native_struct!(AssignmentCaseFeeScheduleV2;version,revision,admission,per_source_unit,per_source_opening_byte,per_checked_relation,per_record_byte,capital_per_retained_byte);
 wire_struct!(AssignmentCaseFeeScheduleV2;u16,u16,u64,u64,u64,u64,u64,u64);
 native_struct!(AssignmentCancellationPolicyV2;version,revision,rule);
@@ -160,3 +160,37 @@ assignment_wire_enum!(AssignmentCancellationRuleV2;0=>());
 native_struct!(AssignmentWorkScheduleV2;version,revision,per_codec_step,per_hash_byte,per_signature,per_element,per_term,per_io_byte,per_control);
 
 wire_struct!(AssignmentWorkScheduleV2;u16,u16,u64,u64,u64,u64,u64,u64,u64);
+
+// RFC-0046 fixed metadata contracts; no heap is hidden behind a relay field.
+use misaka_palw_positive_contract::assignment::{funding_relay::*, funding_relay_policy::*, funding_relay_rows::*};
+native_enum!(RelayFundingPurposeV2;PosterA,CaseC,ProverJoin);
+assignment_wire_enum!(RelayFundingPurposeV2;0=>(),1=>(),2=>());
+native_enum!(RelayTemplateV2;NativeOp12NoCaseNoReceiptsV1);
+assignment_wire_enum!(RelayTemplateV2;0=>());
+native_enum!(RelayTargetV2;InitialAssignment{bundle,poster_nonce},InitialCase{result,funding_scope,consent},InitialProver{prover,join},Continuation{original_funding,predecessor,parent_spend,original_contract});
+assignment_wire_enum!(RelayTargetV2;0=>(Digest,u64),1=>(ResultId,FundingScopeId,FundingConsentId),2=>(NativeOutpoint,Digest),3=>(NativeOutpoint,NativeOutpoint,NativeHash64,Digest));
+native_struct!(FundingRelayTermsV2;version,revision,contract_network,contract_ruleset,assignment,contract_anchor,relay_ruleset,relay_policy,payer_bond,payer,refund_payload,funding_purpose,target,funding_outpoint,expected_amount,template,register_before_daa,funding_admission_before_daa,custody_until_daa,metadata_fee_schedule,physical_custody_profile,max_metadata_fee);
+wire_struct!(FundingRelayTermsV2;u16,u16,Digest,Digest,AssignmentId,NativeHash64,Digest,Digest,NativeOutpoint,PrincipalId,Digest,RelayFundingPurposeV2,RelayTargetV2,NativeOutpoint,u64,RelayTemplateV2,u64,u64,u64,Digest,Digest,u64);
+native_struct!(FundingRelayRegistrationBodyV2;version,revision,operation,terms,purpose_signature,relay_signature);
+wire_struct!(FundingRelayRegistrationBodyV2;u16,u16,u8,FundingRelayTermsV2,[u8;SIGNATURE_BYTES],[u8;SIGNATURE_BYTES]);
+native_struct!(FundingRelayAuthorizationRowV2;terms,payer_key,purpose_signature,origin,material,metadata_quote,metadata_charge,policy,fees,physical,quote);
+wire_struct!(FundingRelayAuthorizationRowV2;FundingRelayTermsV2,[u8;PUBKEY_BYTES],[u8;SIGNATURE_BYTES],AcceptedOrigin,AcceptedMaterial,AcceptedMaterial,AcceptedMaterial,FundingRelayPolicyV2,FundingRelayFeeScheduleV2,FundingRelayPhysicalProfileV2,FundingRelayMoneyQuoteV2);
+native_struct!(FundingRelayBindingV2;origin,original_funding,predecessor,original_contract,reservation);
+wire_struct!(FundingRelayBindingV2;AcceptedOrigin,NativeOutpoint,Option<NativeOutpoint>,Digest,AcceptedMaterial);
+native_struct!(FundingRelayCustodyRowV2;funding_outpoint,purpose,terms,relay_signature,material,reservation,retention_until_daa,binding);
+wire_struct!(FundingRelayCustodyRowV2;NativeOutpoint,RelayFundingPurposeV2,Digest,[u8;SIGNATURE_BYTES],AcceptedMaterial,AcceptedMaterial,u64,Option<FundingRelayBindingV2>);
+native_struct!(FundingRelayPolicyV2;version,revision,max_pending_global,max_pending_per_poster,max_pending_per_prover,max_account_candidates,max_account_continuations,max_stored_rows,max_declared_amount,register_window_daa,funding_window_daa,custody_window_daa,rollback_margin_daa,metadata_fee_schedule,physical_custody_profile);
+wire_struct!(FundingRelayPolicyV2;u16,u16,u32,u32,u32,u32,u32,u32,u64,u64,u64,u64,u64,Digest,Digest);
+native_struct!(FundingRelayPhysicalProfileV2;version,revision,max_frame_bytes,max_decoded_bytes,max_heap_bytes,max_retained_bytes,max_database_bytes,max_batch_bytes,max_replay_reads,max_replay_work,max_signatures);
+wire_struct!(FundingRelayPhysicalProfileV2;u16,u16,u64,u64,u64,u64,u64,u64,u64,u64,u32);
+native_struct!(FundingRelayFeeScheduleV2;version,revision,admission,per_signature,per_frame_byte,per_retained_byte_daa,per_database_byte,per_replay_read,per_replay_work,retirement);
+wire_struct!(FundingRelayFeeScheduleV2;u16,u16,u64,u64,u64,u64,u64,u64,u64,u64);
+native_struct!(FundingRelayUsageV2;frame_bytes,decoded_bytes,heap_bytes,retained_bytes,database_bytes,batch_bytes,replay_reads,replay_work,signatures);
+wire_struct!(FundingRelayUsageV2;u64,u64,u64,u64,u64,u64,u64,u64,u32);
+native_struct!(FundingRelayMoneyQuoteV2;terms,policy,fee_schedule,physical_profile,usage,retention_daa,fee);
+wire_struct!(FundingRelayMoneyQuoteV2;Digest,Digest,Digest,Digest,FundingRelayUsageV2,u64,u64);
+
+native_enum!(AssignmentSourceResponsibilityV2;FeeOnlyV1);
+assignment_wire_enum!(AssignmentSourceResponsibilityV2;0=>());
+native_enum!(AssignmentSourceReleaseV2;AfterSignedDutiesRetentionAndLiabilityV1);
+assignment_wire_enum!(AssignmentSourceReleaseV2;0=>());

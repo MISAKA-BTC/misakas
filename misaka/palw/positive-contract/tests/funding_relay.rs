@@ -50,18 +50,15 @@ fn body(terms: FundingRelayTermsV2) -> FundingRelayRegistrationBodyV2 {
 #[test]
 fn exact_fixed_widths_and_unknown_trailing_truncated_data_are_bounded() {
     let mut all = Vec::new();
-    let t = terms();
+    let mut t = terms();
     all.push((t, 895));
-    let mut t = t;
     t.funding_purpose = RelayFundingPurposeV2::CaseC;
     t.target =
         RelayTargetV2::InitialCase { result: ResultId(d(20)), funding_scope: FundingScopeId(d(21)), consent: FundingConsentId(d(22)) };
     all.push((t, 1015));
-    let mut t = t;
     t.funding_purpose = RelayFundingPurposeV2::ProverJoin;
     t.target = RelayTargetV2::InitialProver { prover: t.payer_bond, join: d(23) };
     all.push((t, 955));
-    let mut t = t;
     t.target = RelayTargetV2::Continuation {
         original_funding: point(24),
         predecessor: point(25),
@@ -225,4 +222,203 @@ fn finite_price_is_stable_checked_and_never_a_native_custody_receipt() {
     changed_terms.metadata_fee_schedule = expensive.id();
     changed_terms.relay_policy = changed_policy.id();
     assert!(expensive.quote(&changed_policy, &physical, &changed_terms, usage, 0).is_err());
+}
+
+use misaka_palw_positive_contract::{assignment::funding_relay_rows::*, native::NativeRowKey};
+fn row_origin(tx: NativeHash64, daa: u64) -> AcceptedOrigin {
+    AcceptedOrigin {
+        accepting_block: NativeHash64([41; 64]),
+        carrier_block: NativeHash64([42; 64]),
+        carrier_transaction: tx,
+        accepted_tx_ordinal: 0,
+        event_ordinal: 0,
+        accepted_daa: daa,
+        accepted_blue_score: daa,
+    }
+}
+fn relay_pair(mut terms: FundingRelayTermsV2) -> (FundingRelayAuthorizationRowV2, FundingRelayCustodyRowV2) {
+    let keys = mldsa::generate_key_pair([43; 32]);
+    let key = *keys.verification_key.as_ref();
+    terms.payer = principal(&key);
+    let fees = fee();
+    let physical = physical();
+    let policy = FundingRelayPolicyV2 {
+        version: 2,
+        revision: 1,
+        max_pending_global: 100,
+        max_pending_per_poster: 10,
+        max_pending_per_prover: 10,
+        max_account_candidates: 3,
+        max_account_continuations: 5,
+        max_stored_rows: 1000,
+        max_declared_amount: 1_000_000,
+        register_window_daa: 100,
+        funding_window_daa: 300,
+        custody_window_daa: 1000,
+        rollback_margin_daa: 10,
+        metadata_fee_schedule: fees.id(),
+        physical_custody_profile: physical.id(),
+    };
+    terms.relay_policy = policy.id();
+    terms.metadata_fee_schedule = fees.id();
+    terms.physical_custody_profile = physical.id();
+    let usage = FundingRelayUsageV2 {
+        frame_bytes: 10_346,
+        decoded_bytes: 16_000,
+        heap_bytes: 32_000,
+        retained_bytes: 16_000,
+        database_bytes: 16_000,
+        batch_bytes: 32_000,
+        replay_reads: 10,
+        replay_work: 100,
+        signatures: 2,
+    };
+    let quote = fees.quote(&policy, &physical, &terms, usage, 50).unwrap();
+
+    let sig = mldsa::sign(&keys.signing_key, &terms.id().0, FUNDING_RELAY_REGISTER_CONTEXT_V2, [44; 32]).unwrap();
+    let mut body = body(terms);
+    body.purpose_signature = *sig.as_ref();
+    let origin = row_origin(NativeHash64([45; 64]), 50);
+    let material = AcceptedMaterial { origin, digest: body.material_id() };
+    (
+        FundingRelayAuthorizationRowV2 {
+            terms,
+            payer_key: key,
+            purpose_signature: body.purpose_signature,
+            origin,
+            material,
+            metadata_quote: AcceptedMaterial { origin, digest: quote.id() },
+            metadata_charge: AcceptedMaterial { origin, digest: d(47) },
+            policy,
+            fees,
+            physical,
+            quote,
+        },
+        FundingRelayCustodyRowV2 {
+            funding_outpoint: terms.funding_outpoint,
+            purpose: terms.funding_purpose,
+            terms: terms.id(),
+            relay_signature: body.relay_signature,
+            material,
+            reservation: AcceptedMaterial { origin, digest: d(48) },
+            retention_until_daa: terms.custody_until_daa,
+            binding: None,
+        },
+    )
+}
+#[test]
+fn two_fixed_rows_retain_literal_signature_package_without_future_binding() {
+    let (auth, custody) = relay_pair(terms());
+    custody.check_pair(&auth).unwrap();
+    auth.terms.authenticate_purpose(&auth.payer_key, &auth.purpose_signature).unwrap();
+    assert!(custody.binding.is_none());
+    for field in 0..4 {
+        let mut changed = auth.clone();
+        match field {
+            0 => changed.policy.max_pending_global += 1,
+            1 => changed.fees.retirement += 1,
+            2 => changed.physical.max_retained_bytes += 1,
+            _ => changed.quote.fee += 1,
+        };
+        assert!(custody.check_pair(&changed).is_err());
+    }
+
+    for (value, kind) in
+        [(NativeRowBody::FundingRelayAuthorization(auth.clone()), 19), (NativeRowBody::FundingRelayCustody(custody.clone()), 20)]
+    {
+        let key = value.key().encode();
+        let row = NativeRowValue::new(value).unwrap();
+        let raw = row.encode().unwrap();
+        assert_eq!(key.len(), 74);
+        assert_eq!(&key[..5], &[2, 0, 1, 0, kind]);
+        assert_eq!(raw[4], kind);
+        assert_eq!(NativeRowValue::decode(&key, &raw).unwrap(), row);
+        let mut wrong = key;
+        wrong[4] = if kind == 19 { 20 } else { 19 };
+        assert!(NativeRowValue::decode(&wrong, &raw).is_err());
+    }
+    let mut changed = custody.clone();
+    changed.relay_signature[0] ^= 1;
+    assert!(changed.check_pair(&auth).is_err());
+    let mut changed = auth.clone();
+    changed.purpose_signature[0] ^= 1;
+    assert!(custody.check_pair(&changed).is_err());
+    let mut changed = custody;
+    changed.material.origin.accepted_daa += 1;
+    assert!(changed.check_pair(&auth).is_err());
+}
+#[test]
+fn maximum_relay_rows_fit_exact_ceiling_with_continuation_and_binding() {
+    let mut t = terms();
+    t.target = RelayTargetV2::Continuation {
+        original_funding: point(24),
+        predecessor: point(25),
+        parent_spend: t.funding_outpoint.transaction,
+        original_contract: d(26),
+    };
+    let (auth, mut custody) = relay_pair(t);
+    let origin = row_origin(t.funding_outpoint.transaction, 150);
+    custody.binding = Some(FundingRelayBindingV2 {
+        origin,
+        original_funding: point(24),
+        predecessor: Some(point(25)),
+        original_contract: d(26),
+        reservation: AcceptedMaterial { origin, digest: d(49) },
+    });
+    custody.check_pair(&auth).unwrap();
+    assert_eq!(borsh::to_vec(&auth).unwrap().len(), 10038);
+    assert_eq!(borsh::to_vec(&custody).unwrap().len(), 6026);
+    for (row, len) in
+        [(NativeRowBody::FundingRelayAuthorization(auth.clone()), 10043), (NativeRowBody::FundingRelayCustody(custody.clone()), 6031)]
+    {
+        let row = NativeRowValue::new(row).unwrap();
+        let raw = row.encode().unwrap();
+        assert_eq!(raw.len(), len);
+        assert!(len <= MAX_NATIVE_ROW_BYTES);
+        assert_eq!(NativeRowValue::decode(&row.body.key().encode(), &raw).unwrap(), row);
+    }
+    let binding = custody.binding.unwrap();
+    for n in 0..4 {
+        let mut changed = custody.clone();
+        let b = changed.binding.as_mut().unwrap();
+        match n {
+            0 => b.predecessor = None,
+            1 => b.original_funding = point(99),
+            2 => b.original_contract = d(99),
+            _ => b.origin.carrier_transaction = NativeHash64([99; 64]),
+        };
+        assert!(changed.check_pair(&auth).is_err());
+    }
+    let mut changed = custody;
+    changed.binding =
+        Some(FundingRelayBindingV2 { origin: row_origin(t.funding_outpoint.transaction, t.funding_admission_before_daa), ..binding });
+    assert!(changed.check_pair(&auth).is_err());
+}
+#[test]
+fn pending_and_current_row_shapes_preserve_original_exclusive_clocks() {
+    let (auth, mut custody) = relay_pair(terms());
+    let origin = row_origin(auth.terms.funding_outpoint.transaction, 150);
+    custody.binding = Some(FundingRelayBindingV2 {
+        origin,
+        original_funding: auth.terms.funding_outpoint,
+        predecessor: None,
+        original_contract: d(50),
+        reservation: AcceptedMaterial { origin, digest: d(51) },
+    });
+    custody.check_pair(&auth).unwrap();
+    // Stored original acceptance remains valid shape after new-intake expiry;
+    // no current-clock API deletes a live signature or unlocks its account.
+    let mut invalid = auth.clone();
+    invalid.origin.accepted_daa = auth.terms.register_before_daa;
+    assert!(custody.check_pair(&invalid).is_err());
+    let mut changed = custody.clone();
+    changed.retention_until_daa -= 1;
+    assert!(changed.check_pair(&auth).is_err());
+    let mut changed = custody.clone();
+    changed.binding.as_mut().unwrap().predecessor = Some(point(99));
+    assert!(changed.check_pair(&auth).is_err());
+    let key =
+        NativeRowKey::FundingRelayCustody { funding: auth.terms.funding_outpoint, purpose: RelayFundingPurposeV2::CaseC }.encode();
+    let raw = NativeRowValue::new(NativeRowBody::FundingRelayCustody(custody)).unwrap().encode().unwrap();
+    assert!(NativeRowValue::decode(&key, &raw).is_err());
 }

@@ -4,7 +4,7 @@
 //! must authenticate origins, resolve references and replay canonical events.
 use crate::{
     CONTRACT_REVISION, CONTRACT_VERSION, ContractError,
-    assignment::rows::*,
+    assignment::{funding_relay_rows::*, rows::*},
     funding::{FundingConsent, FundingPlanBasis, funding_scope},
     identity::*,
     messages::*,
@@ -270,6 +270,8 @@ pub enum NativeRowBody {
     AssignmentJournalHead(AssignmentJournalHeadRow),
     AssignmentJournalFrame(AssignmentJournalFrameRow),
     AssignmentProverFunding(AssignmentProverFundingRow),
+    FundingRelayAuthorization(FundingRelayAuthorizationRowV2),
+    FundingRelayCustody(FundingRelayCustodyRowV2),
 }
 impl NativeRowBody {
     pub fn key(&self) -> NativeRowKey {
@@ -296,6 +298,10 @@ impl NativeRowBody {
             Self::AssignmentProverFunding(r) => {
                 NativeRowKey::AssignmentProverFunding { assignment: r.assignment, prover: r.consent.prover }
             }
+            Self::FundingRelayAuthorization(r) => {
+                NativeRowKey::FundingRelayAuthorization { funding: r.terms.funding_outpoint, purpose: r.terms.funding_purpose }
+            }
+            Self::FundingRelayCustody(r) => NativeRowKey::FundingRelayCustody { funding: r.funding_outpoint, purpose: r.purpose },
             Self::AssignmentJournalFrame(r) => {
                 NativeRowKey::AssignmentJournalFrame { assignment: r.header.assignment, ordinal: r.header.ordinal }
             }
@@ -427,6 +433,8 @@ impl NativeRowBody {
             }
             Self::AssignmentJournalFrame(r) => r.validate_shape()?,
             Self::AssignmentProverFunding(r) => r.validate_shape()?,
+            Self::FundingRelayAuthorization(r) => r.validate_shape()?,
+            Self::FundingRelayCustody(r) => r.validate_shape()?,
             Self::ClaimIndex(_) | Self::ServiceReceipt(_) | Self::JournalHead(_) => {}
         }
         Ok(())

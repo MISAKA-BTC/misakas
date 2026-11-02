@@ -1,0 +1,171 @@
+{
+  "base_commit": "556ff5c29",
+  "not_yet_compiled": false,
+  "changes": [
+    {
+      "stage": "relay-rows",
+      "path": "consensus/core/src/palw_native_resource_v1/positive_assignment.rs",
+      "before_sha256": "f9b45c7039cf6f7ab76aee08aed1ca4929834af04cdce536dfa0d3d478b796bd",
+      "after_sha256": "fc4c5b72c4000e95cfd58d274678b6954e37714dd28c2e4f06aa8e4ba115a073"
+    },
+    {
+      "stage": "relay-rows",
+      "path": "consensus/core/src/palw_native_resource_v1/positive_rows.rs",
+      "before_sha256": "62b3e79267b0333bbc6cd1a7602d103538d9cf4716216a899ec9c90e59e55f3e",
+      "after_sha256": "1114e25705faa610f0a9b1f2ef6cc1b28783bc126b1b5b69d42f85ec3cf6edde"
+    },
+    {
+      "stage": "relay-rows",
+      "path": "consensus/core/src/palw_positive_rows_v2/restore/funding_relay.rs",
+      "before_sha256": null,
+      "after_sha256": "f47dbde273b4b0b83e3ee15a7e621ee86e7fe25aaa80e2b6287a71ef9134ceac"
+    },
+    {
+      "stage": "relay-rows",
+      "path": "consensus/core/src/palw_positive_rows_v2/restore.rs",
+      "before_sha256": "2dede8cb2aa77b02daeeee3e278cadeadaf1acb6a49f647ff646b1f4964ff936",
+      "after_sha256": "6a9ee87389fcbafafafec4b89456c203568c99cb8fb1b1a91f2a25495c49e755"
+    },
+    {
+      "stage": "relay-rows",
+      "path": "consensus/core/src/palw_positive_rows_v2/tests.rs",
+      "before_sha256": "194b95d7c05e34c235c902ae55d891aa36fb94cf2b826fdcd73651f4a9d8867f",
+      "after_sha256": "901a51f228f22c1e6b953cd76600363e32e1ae508c80641c60e1a1c75da397d7"
+    },
+    {
+      "stage": "relay-rows",
+      "path": "misaka/palw/positive-contract/src/assignment/funding_relay_rows.rs",
+      "before_sha256": null,
+      "after_sha256": "3f406efa7273b8647bef469b5fd62e5ad2fc8241dd21f2a18a190ad4522aba6f"
+    },
+    {
+      "stage": "relay-rows",
+      "path": "misaka/palw/positive-contract/src/assignment.rs",
+      "before_sha256": "763085ef302ff49d2c27dbb9673af3d36b92c03c38006997fa61fc0646cdad68",
+      "after_sha256": "0a6b5f84ced5a1ac1a9d170df7581bce2f8fe20174f85341ada6a8767c9395f2"
+    },
+    {
+      "stage": "relay-rows",
+      "path": "misaka/palw/positive-contract/src/native.rs",
+      "before_sha256": "fc04a1dcf93ce28e317370313a8df9eae0955a48f7876ecc53f15e1aa697070b",
+      "after_sha256": "b904fe256b19045a4ff4bffc48504239d245a1bfcc9dd13c0bda98c7aadee2c6"
+    },
+    {
+      "stage": "relay-rows",
+      "path": "misaka/palw/positive-contract/src/rows.rs",
+      "before_sha256": "33a95afa262f24fc1b89943c17898388c5855c6891dc48634297ae1ddf29f5d0",
+      "after_sha256": "46b446543cacfeeed8e0ffbecedb2eae3a9f34160269b19dca0eb4d22d320058"
+    },
+    {
+      "stage": "relay-rows",
+      "path": "misaka/palw/positive-contract/tests/funding_relay.rs",
+      "before_sha256": "45b26db688d6681a3f545271565e759b6453c8ecacb12af25bbb593dd0ed81f6",
+      "after_sha256": "88ebeb6ef1b5c32840fb91c69eb4eeb5717f9f4bd62c58823c431f3416bcbcc8"
+    },
+    {
+      "stage": "relay-fence",
+      "path": "consensus/core/src/config/params/identity.rs",
+      "before_sha256": "2f13308597ff340df8f061d800426fd3e320babcc0008ccecd426c9e7f9144a5",
+      "after_sha256": "e8d2004dc6f116413b00b0534178511a6dd54016399d9d3f1cdd269bf43c2024"
+    },
+    {
+      "stage": "relay-fence",
+      "path": "consensus/core/src/config/params/positive_funding_relay_v2.rs",
+      "before_sha256": null,
+      "after_sha256": "e537367829a2ed5747d607391ca3d144591ef7a9f6577c72e73feede6d8aed40"
+    },
+    {
+      "stage": "relay-fence",
+      "path": "consensus/core/src/config/params/validation.rs",
+      "before_sha256": "eb57a21f3e73917c28ebf12d69fb80eca692f4d8b75d87becf0883a876d84985",
+      "after_sha256": "5a847a3a16fc85da29046455798fe6eb41e9b95680c0014dafa2ef14d93c5a22"
+    },
+    {
+      "stage": "relay-fence",
+      "path": "consensus/core/src/config/params.rs",
+      "before_sha256": "7af9304314e2a7772e249e56739e27f63c5d6cdd46f787806810c5f05bf1e125",
+      "after_sha256": "c5d3486a12c9ba38d8e309176d544a2174e19415452701ffdfcee8c3901cd7b3"
+    },
+    {
+      "stage": "relay-fence",
+      "path": "consensus/core/src/palw_positive_relay_signature_v2.rs",
+      "before_sha256": "14d17a325dcaa063a843fe0b905650b91ce0791258be505af3f08b324c3450ce",
+      "after_sha256": "5408e66b7bb91712ee967cd769c94f1bf68030b3143e3bf9a63ed61c9b92dc07"
+    },
+    {
+      "stage": "relay-fence",
+      "path": "consensus/core/tests/positive_assignment_fence_v2.rs",
+      "before_sha256": "606052e33743721d675fe285973655965002504bc94494ee2b6694bce0ed7cbe",
+      "after_sha256": "60bf8aeaae8f90a43feca8a0cf349149642feed1d400441293d35c171ecc9742"
+    },
+    {
+      "stage": "relay-fence",
+      "path": "consensus/core/tests/positive_relay_signature_v2.rs",
+      "before_sha256": "cef0c25f92da0eead40314f13b3b4f9d25f27a68f31f3c4549da2e8ee14aedf1",
+      "after_sha256": "f78e441bf1266792f6d360a97cd2b2bb1a13ff06e5d58e2c61f2414c1f83e301"
+    },
+    {
+      "stage": "anchor-pool",
+      "path": "consensus/core/src/palw_positive_assignment_certification_v2.rs",
+      "before_sha256": "98adca7ec279b2cb4146bf08ef086c92b0388c3d73f1d1cbe3a2931e55182b75",
+      "after_sha256": "196557c382a3339ab9ebff868331f59fb67fa12378fbb8f22e0822a2e3f3e30f"
+    },
+    {
+      "stage": "anchor-pool",
+      "path": "consensus/core/tests/positive_assignment_gate_c_v2.rs",
+      "before_sha256": "029399ee8e55eed9f70300ab0701315c3d85b46602287927e964462680fb52c2",
+      "after_sha256": "6afb74d4858e152b01156077e03798fa37651019ebf9ad6ac152014fb578fdee"
+    },
+    {
+      "stage": "relay-ingress",
+      "path": "consensus/core/src/lib.rs",
+      "before_sha256": "aaef4ad9b808b7af8fb04f831160f45417b88643909d7c672b801e5a18aac9e9",
+      "after_sha256": "34d2a7645d6892d83ed4df586e6a83f31f9cf868a223f49b882dfcc9bca17b36"
+    },
+    {
+      "stage": "relay-ingress",
+      "path": "consensus/core/src/palw_positive_funding_relay_v2.rs",
+      "before_sha256": null,
+      "after_sha256": "15f71c19b037c5a1a34b29e0a89d5018e47d6cfde247e41150bfecbd309a3ade"
+    },
+    {
+      "stage": "relay-ingress",
+      "path": "consensus/core/tests/positive_funding_relay_v2.rs",
+      "before_sha256": null,
+      "after_sha256": "04b6ef938377afd8eda824bea874182414420d50acf6b3be323b98184267d1b9"
+    },
+    {
+      "stage": "source-terms",
+      "path": "consensus/core/src/palw_native_resource_v1/positive_assignment.rs",
+      "before_sha256": "fc4c5b72c4000e95cfd58d274678b6954e37714dd28c2e4f06aa8e4ba115a073",
+      "after_sha256": "a992c11199db0763e7b4b9d0edcf136b9fb60fc078e985cb9f4b77a1656f1ce6"
+    },
+    {
+      "stage": "source-terms",
+      "path": "consensus/core/src/palw_positive_assignment_resources_v2.rs",
+      "before_sha256": "6d4ce1bace1c90f0b605fa501e5892a2b4806b389daeaa63bcf5d4f65f9c81af",
+      "after_sha256": "69a67a7637b48b59ee57a8e6581c8f6722b6b37ac23ce4da7cca23ff9851fe29"
+    },
+    {
+      "stage": "source-terms",
+      "path": "consensus/core/tests/positive_assignment_fence_v2.rs",
+      "before_sha256": "60bf8aeaae8f90a43feca8a0cf349149642feed1d400441293d35c171ecc9742",
+      "after_sha256": "4fb988a57a5fcc5f644def55cec5e387973b48ea502371b56de9e5f8eaa698b2"
+    },
+    {
+      "stage": "source-terms",
+      "path": "consensus/core/tests/positive_assignment_material_v2.rs",
+      "before_sha256": "529888cfa913cb40e6e6effc03edcf446bb4b6603b5c44e2f4ca35323a6e5f14",
+      "after_sha256": "f98477d00bea163ba1712dd4604e4e83f444bd392ecd3ecdb058766fa4cbb819"
+    },
+    {
+      "stage": "source-terms",
+      "path": "consensus/core/tests/positive_assignment_resources_v2.rs",
+      "before_sha256": "2617c74bf902b57117ca45c59182afe1e6ffe267b886e56740156ea5dd81845b",
+      "after_sha256": "8e33ad937ceefea51d1dd1e6718b7c63472a7f70a54d24b826b72703dedcd3a0"
+    }
+  ],
+  "validated_source_map": "relay-stage-artifact-audit-20261103.json",
+  "validation_is_not_native_admission": true,
+  "change_hashes_scope": "Initial candidate application, before rustfmt and the recorded validation fixes; use validated_source_map for final actual source."
+}
