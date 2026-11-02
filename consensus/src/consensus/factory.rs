@@ -565,10 +565,19 @@ impl ConsensusFactory for Factory {
             .unwrap();
         Self::register_low_space_flush(&db);
 
+        // A privately armed test fixture was fingerprinted before constructing
+        // this Factory. Preserve that exact prepared Config in its staging node;
+        // normal production factories still use the unchanged startup gate.
+        #[cfg(test)]
+        let staging_config = self.retained_fixture_staging_config_v1().unwrap_or_else(|| {
+            Arc::new(self.config.to_builder().skip_adding_genesis().build())
+        });
+        #[cfg(not(test))]
+        let staging_config = Arc::new(self.config.to_builder().skip_adding_genesis().build());
         let session_lock = SessionLock::new();
         let consensus = match Consensus::new(
             db.clone(),
-            Arc::new(self.config.to_builder().skip_adding_genesis().build()),
+            staging_config,
             session_lock.clone(),
             self.notification_root.clone(),
             self.counters.clone(),

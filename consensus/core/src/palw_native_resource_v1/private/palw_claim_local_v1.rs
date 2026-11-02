@@ -127,7 +127,8 @@ impl NativeWireScanV1 for PalwClaimLiabilityFrameV1 {
         sum =
             sum.merge(<crate::palw_claim_local_v1::PalwClaimLocalPolicyContextV1 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
         sum = sum.merge(<BTreeSet<Hash64> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
-        sum = sum.merge(<Vec<PalwClaimLocalNativeChangeV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+        let changes=<Vec<PalwClaimLocalNativeChangeV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?;
+        sum=sum.merge(changes)?.allocation(changes.outer_entries,std::mem::size_of::<crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<(crate::Hash64,crate::palw_state_v2::PalwLegacyCarrierLocatorV9),()>>())?;
         // Each raw state frame has its own exact byte boundary. Scan the real
         // carriage, not just Vec<u8>, before any embedded Borsh allocation.
         for _ in 0..2 {

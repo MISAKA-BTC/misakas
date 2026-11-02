@@ -395,6 +395,28 @@ pub fn palw_claim_x3_cap_hard_v2(params: &PalwStateParamsV2, claim: &PalwClaimSt
     if palw_court_clock_v2_governs(params, claim) { Some(palw_court_clock_v2_extended_hard(claim.accepted_daa)) } else { Some(x3) }
 }
 
+/// Checked acceptance-point form of `palw_claim_x3_cap_hard_v2` for financial
+/// admission and retained budget rows, where an overflowing deadline is refused.
+/// This applies only to the existing V2 X3 cohort: clock v2 alone supplies no X3
+/// authority, and a birth before either fence keeps that fence's old semantics.
+pub fn palw_claim_x3_cap_hard_at_checked_v2(
+    params: &PalwStateParamsV2,
+    accepted_daa: u64,
+) -> Result<Option<u64>, CourtPolicyError> {
+    let Some(mirror) = params.claim_hard_deadline_v1().filter(|m| accepted_daa >= m.from_daa) else {
+        return Ok(None);
+    };
+    let hard = if params.court_clock_v2_from_daa().is_some_and(|from| accepted_daa >= from) {
+        accepted_daa.checked_add(DISPUTE_WINDOW_DAA)
+    } else {
+        accepted_daa
+            .checked_add(mirror.policy.prepare_daa)
+            .and_then(|d| d.checked_add(mirror.policy.observe_daa))
+            .and_then(|d| d.checked_add(mirror.policy.resolve_daa))
+    };
+    hard.map(Some).ok_or(CourtPolicyError::Overflow)
+}
+
 // =================================================================================================================================
 // G14 r5 (item 6): T06 — the 6,880 residual budget, mechanised
 // =================================================================================================================================

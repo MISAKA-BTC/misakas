@@ -39,8 +39,17 @@ fn family_native39_joint_candidate_preserves_real_funding_and_policy_domain() {
     let parts = family_native39_campaign_config_v2();
     let original = super::g14_kernel_route_e2e::model_conformance::flat_native_v9::funded11::owning39::master::node_e2e::native39_node_campaign_config_v1(true, true);
     assert_eq!(parts.0.params.genesis.hash, original.0.params.genesis.hash);
-    assert_eq!(parts.2, original.2, "arming introduces no premine funds or collateral");
-    assert_eq!(parts.3, original.3);
+    // Independent constructors collect a UTXO map into a Vec; its iteration
+    // order is not part of the genesis commitment. Compare every exact output
+    // in canonical outpoint order, without dropping duplicates or any value.
+    let canonical_funds = |funds: &Premine| {
+        let mut funds = funds.clone();
+        funds.sort_by_key(|(outpoint, _)| (outpoint.transaction_id, outpoint.index));
+        assert!(funds.windows(2).all(|pair| pair[0].0 != pair[1].0), "duplicate genesis outpoint");
+        funds
+    };
+    assert_eq!(canonical_funds(&parts.2), canonical_funds(&original.2), "arming introduces no premine funds or collateral");
+    assert_eq!(canonical_funds(&parts.3), canonical_funds(&original.3));
     let network = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
         parts.0.params.net.to_string().as_bytes(),
         Some(parts.0.params.genesis.hash),
@@ -82,4 +91,20 @@ fn family_native39_joint_candidate_preserves_real_funding_and_policy_domain() {
         "[family-joint-candidate] network-domain={network} genesis={} executor-test-card=0 executor-bond={}:{}",
         parts.0.params.genesis.hash, producer.0.transaction_id, producer.0.index
     );
+}
+
+#[test]
+fn family_joint_candidate_financial_hard_matches_its_actual_combined_clock() {
+    use kaspa_consensus_core::palw_court_clock_v2::palw_claim_x3_cap_hard_at_checked_v2 as hard;
+    let parts=family_native39_campaign_config_v2();
+    let state=&parts.1.state;
+    let x3=state.claim_hard_deadline_v1().expect("joint private candidate keeps native39 X3");
+    assert_eq!(x3.from_daa,0);
+    assert_eq!(x3.policy.prepare_daa+x3.policy.observe_daa+x3.policy.resolve_daa,300,"existing private native39 probe is preserved, not replaced by an invented economic policy");
+    assert_eq!(state.court_clock_v2_from_daa(),Some(0),"the joint candidate explicitly composes the existing Court clock");
+    assert_eq!(hard(state,0),Ok(Some(10_000)));
+    assert_eq!(hard(state,7),Ok(Some(10_007)));
+    let only=state.clone().with_court_clock_v2_from_daa(None);
+    assert_eq!(hard(&only,7),Ok(Some(307)),"the same actual candidate with clock-v2 absent keeps X3-only semantics");
+    assert_eq!(hard(&state.clone().with_claim_hard_deadline_v1(None),7),Ok(None));
 }

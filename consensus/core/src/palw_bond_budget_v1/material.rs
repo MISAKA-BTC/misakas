@@ -676,3 +676,16 @@ mod tests {
         assert_eq!(s.claim_row(&h(1)).unwrap().consumed.reward_sompi, 125);
     }
 }
+
+impl PalwBondBudgetStateV1 {
+    pub(crate) fn material_root_count_v7(&self,root:Option<Hash64>)->usize{
+        self.material_roots.get(&root).map_or(0,|ids|ids.len())
+    }
+    pub(crate) fn material_root_rows_v7(&self,root:Option<Hash64>)->impl Iterator<Item=Result<(Hash64,PalwMaterialIncomeV1),&'static str>>+'_ {
+        self.material_roots.get(&root).into_iter().flat_map(|ids|ids.iter()).map(move|id|{
+            let row=self.material_income.get(id).ok_or("native material root index missing row")?;
+            if row.root!=root{return Err("native material root index has wrong owner")}
+            Ok((*id,*row))
+        })
+    }
+}

@@ -4663,6 +4663,31 @@ impl ConsensusApi for Consensus {
         self.palw_state_v2_tip()?.kernel_route().cloned()
     }
 
+    fn palw_fp_accounting_winning_carrier_v1(
+        &self,
+        claim: kaspa_hashes::Hash64,
+    ) -> Result<Option<kaspa_hashes::Hash64>, kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1<&'static str>> {
+        use kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1 as E;
+        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.config.params.palw_consensus_mode else {
+            return Err(E::Decode("accounting winning carrier requires ConsensusV2"));
+        };
+        let (_, state) = palw_fp_accounting_reader_result_v1(self.virtual_processor.palw_v2_reader_state(&bundle.state))?;
+        // A materialized legacy state may legitimately have no route. Only
+        // allocate a lookup key once that successful absence case is excluded.
+        let Some(route) = state.kernel_route() else { return Ok(None) };
+        // Pre-admit the one fixed-width owned key, keep its lease through row
+        // decode, and perform a scoped O(log N) lookup without cloning the route.
+        let _key_lease = kaspa_consensus_core::palw_native_resource_v1::reserve_native_requests_v1(64)
+            .map_err(E::Resource)?;
+        let key = claim.as_byte_slice().to_vec();
+        let bytes = route.aux.get(&(
+            kaspa_consensus_core::palw_fp_answer_accounting_v1::PALW_FP_WINNING_CARRIER_TABLE_V1,
+            key,
+        )).map(Vec::as_slice);
+        palw_fp_accounting_winner_bytes_v1(bytes)
+    }
+
+
     fn palw_onboarding_v1(
         &self,
         class_id: kaspa_hashes::Hash64,
@@ -6174,3 +6199,49 @@ mod evm_logs_fault_tests;
 
 #[cfg(test)]
 mod evm_parent_fault_tests;
+
+
+/// Storage does not retain the original NativeCoverage value, but preserves its
+/// local-resource category. Reconstitute that category with the actual store
+/// reason, following the existing typed native-reader convention.
+fn palw_fp_accounting_reader_result_v1<T>(
+    read: kaspa_database::prelude::StoreResult<Option<T>>,
+) -> Result<T, kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1<&'static str>> {
+    use kaspa_consensus_core::palw_native_resource_v1::{NativeCoverageV1, NativeDecodeErrorV1 as E, NativeChainStateV1};
+    match read {
+        Ok(Some(state)) => Ok(state),
+        Ok(None) => Err(E::Decode("accounting winning carrier state unavailable")),
+        Err(kaspa_database::prelude::StoreError::LocalResourceUnavailable(reason)) =>
+            Err(E::Resource(NativeCoverageV1::unsupported::<NativeChainStateV1>("accounting winning carrier state", &reason))),
+        Err(_) => Err(E::Decode("accounting winning carrier state unreadable")),
+    }
+}
+fn palw_fp_accounting_winner_bytes_v1(
+    bytes: Option<&[u8]>,
+) -> Result<Option<kaspa_hashes::Hash64>, kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1<&'static str>> {
+    bytes.map(|bytes| kaspa_hashes::Hash64::try_from(bytes).map_err(|_| {
+        kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Decode("malformed accounting winning carrier index")
+    })).transpose()
+}
+#[cfg(test)]
+mod accounting_winner_reader_fault_tests {
+    use super::*;
+    use kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1 as E;
+    #[test]
+    fn rfc0038_checked_winner_reader_missing_and_failed_state_never_become_absence() {
+        assert!(matches!(palw_fp_accounting_reader_result_v1::<()>(Ok(None)), Err(E::Decode(_))));
+        for why in [kaspa_database::prelude::StoreError::DataInconsistency("corrupt checkpoint".into()),
+                    kaspa_database::prelude::StoreError::DeserializationError(Box::new(bincode::ErrorKind::Custom("corrupt checkpoint bytes".into())))] {
+            assert!(matches!(palw_fp_accounting_reader_result_v1::<()>(Err(why)), Err(E::Decode(_))));
+        }
+        assert!(matches!(palw_fp_accounting_reader_result_v1::<()>(Err(
+            kaspa_database::prelude::StoreError::LocalResourceUnavailable("reader native lease refused".into()))), Err(E::Resource(_))));
+        assert_eq!(palw_fp_accounting_reader_result_v1(Ok(Some(87u64))).unwrap(), 87);
+        assert_eq!(palw_fp_accounting_winner_bytes_v1(None).unwrap(), None);
+        let winner = kaspa_hashes::Hash64::from_u64_word(87);
+        assert_eq!(palw_fp_accounting_winner_bytes_v1(Some(winner.as_byte_slice())).unwrap(), Some(winner));
+        for len in [0,63,65,128] {
+            assert!(matches!(palw_fp_accounting_winner_bytes_v1(Some(&vec![0;len])), Err(E::Decode(_))));
+        }
+    }
+}

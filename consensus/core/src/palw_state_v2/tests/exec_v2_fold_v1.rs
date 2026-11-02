@@ -5071,3 +5071,38 @@ mod amendment_1 {
     }
 
 }
+
+
+#[test]
+fn exec_material_reverse_index_is_unhashed_rebuilds_on_cold_restore_and_scopes_exact_raw_predicate() {
+    let(p,state,root)=opened();
+    let original_bytes=borsh::to_vec(&PalwStateCarriageV2::from_state(&state)).unwrap();
+    let mut no_index=state.clone();no_index.exec_v2_source_roots.clear();
+    assert_eq!(state.state_root(),no_index.state_root());
+    assert_eq!(original_bytes,borsh::to_vec(&PalwStateCarriageV2::from_state(&no_index)).unwrap());
+    let restored=borsh::from_slice::<PalwStateCarriageV2>(&original_bytes).unwrap().into_state(&p,Some(state.state_root())).unwrap();
+    assert_eq!(restored.exec_v2_source_roots,state.exec_v2_source_roots);
+    super::super::palw_exec_v2_material_scope_v7::assert_consistent_v7(&restored).unwrap();
+    let prefix=state.exec_v2.roots[&root].prefix_claim;
+    let scope=super::super::palw_exec_v2_material_scope_v7::source_roots_v7(&restored,prefix).unwrap();
+    assert!(scope.contains(&prefix));assert!(scope.contains(&root));
+}
+
+#[test]
+fn exec_material_reverse_index_counts_shared_prefix_and_slices_and_replays_each_direction() {
+    // Index lifecycle fixture, not an approval or a new admitted EXEC source.
+    let(p,state,root)=opened();let extras=xx();let mut b=TransitionBuilder::new(&state,&p,false,false,false,false,&extras);
+    let source=h64(0xEE51);let mut row=b.state.exec_v2.roots[&root].clone();row.prefix_claim=source;
+    b.write_exec_root(root,Some(row.clone())).unwrap();
+    let slice=PalwWorkSliceRowV2{slice_id:h64(0xEE52),range:PalwWorkRangeV1{start:0,end:1},executor:bond_key(20),carrier:h64(0xEE53),accepted_daa:120,predecessor_state_root:h64(0xEE54),result_state_root:h64(0xEE55),evidence_root:source,da_root:h64(0xEE56),stage:PalwWorkSliceStageV2::Pending};
+    b.write_exec_slice((root,0),Some(slice.clone())).unwrap();b.write_exec_slice((root,1),Some(slice)).unwrap();
+    assert_eq!(b.state.exec_v2_source_roots[&(source,root)],3);
+    b.write_exec_slice((root,0),None).unwrap();assert_eq!(b.state.exec_v2_source_roots[&(source,root)],2);
+    b.write_exec_root(root,None).unwrap();assert_eq!(b.state.exec_v2_source_roots[&(source,root)],1);
+    assert!(super::super::palw_exec_v2_material_scope_v7::reverse_roots_v7(&b.state,source).next().is_none(),"orphan raw slice does not make a native composite root");
+    b.write_exec_root(root,Some(row)).unwrap();assert_eq!(b.state.exec_v2_source_roots[&(source,root)],2);
+    let delta=PalwStateDeltaV2{point:ctx(90,130,90),entries:b.entries.clone()};
+    let replayed=apply_delta_v2(&state,&delta,&p).unwrap();assert_eq!(replayed.exec_v2_source_roots,b.state.exec_v2_source_roots);
+    let reverted=revert_delta_v2(&replayed,&delta,&p).unwrap();assert_eq!(reverted.exec_v2_source_roots,state.exec_v2_source_roots);
+    super::super::palw_exec_v2_material_scope_v7::assert_consistent_v7(&reverted).unwrap();
+}

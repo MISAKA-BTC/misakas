@@ -27,6 +27,9 @@ pub(crate) fn native_restore_consistency_requests_v1(c: &PalwStateCarriageV2) ->
         ));
     }
     let mut q = TirNativeRequestsV1::new();
+    // Actual source coordinates, not encoded bytes or all nested world rows.
+    let carrier=crate::palw_state_v2::palw_carrier_legacy_restore_requests_v9(c.kernel_route.as_ref()).map_err(|e|NativeCoverageV1::unsupported::<PalwStateCarriageV2>("legacy carrier restore count",&e.to_string()))?;
+    q.add_v1(carrier)?;q.add_v1(carrier)?;
     let claims = c.claims.len() as u64;
     let courts = c.court_sessions.len() as u64;
     let audits = c.vertex.mesh.audits.values().try_fold(0u64, |n, row| add(n, row.assignments.len() as u64))?;
@@ -68,6 +71,7 @@ pub(crate) fn native_restore_consistency_requests_v1(c: &PalwStateCarriageV2) ->
         };
     }
     let counts = [
+        ("exec_v2",0,c.exec_v2.native_members_v1().ok_or_else(|| NativeCoverageV1::overflow::<PalwStateCarriageV2>("EXEC incidence source count"))?),
         count!(claims),
         count!(court_close_groups),
         count!(court_sessions),

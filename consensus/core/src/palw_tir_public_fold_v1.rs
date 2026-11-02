@@ -362,9 +362,13 @@ pub(super) fn prepare_paired_original_v1(
         return Err(refused("TFP1 cannot install a frame without this object's exact public job"));
     }
     let frame = prepare_original_v1(b, ctx, object, &original, &envelope.header, &envelope.pledge)?;
-    if envelope.declared_rent_sompi != frame.plan_v1().terms.plan.rent_sompi {
+    let archive_profile=b.extras.tir_funded_originals.get(&frame.plan_v1().original_claim)
+        .is_some_and(|p|original_archive_reservation_proposal_v1::original_archive_terms_selected_v2(&p.envelope().funding.terms));
+    if envelope.declared_rent_sompi != frame.plan_v1().terms.plan.rent_sompi && !archive_profile {
         return Err(refused("TFP1 declared burn differs from the exact original native full-SUM rent"));
     }
+    // The complete signed archive budget/profile is checked before any write.
+
     // Capture native facts without new Source reconstruction/resource scope.
     // The ordinary old preparation and price/quote paths remain unchanged.
     let mut native = rules(b)?;
@@ -373,7 +377,9 @@ pub(super) fn prepare_paired_original_v1(
         .state
         .class(&original.job.class_id)
         .map(|c| (c.registered_daa, crate::palw_tir_fence2_v1::palw_tir_demand_rules_at_v1(b.params, c.registered_daa)));
+    let input_footprint_v12=prepare_native_input_footprint_v12(b,ctx,&frame,object)?;
     Ok(Some(PreparedOriginalFrameV1 {
+        input_footprint_v12,
         frame,
         at: *ctx,
         native,
@@ -397,7 +403,7 @@ pub fn palw_tir_public_preclaim_quote_v1(
     object: &PalwConsensusObjectV2,
     envelope: &crate::palw_tir_public_fp_envelope_v1::PalwTirPublicFpEnvelopeV1,
 ) -> Result<crate::palw_tir_public_allocation_v1::PalwTirPublicAllocationPlanV1, PalwStateV2Error> {
-    let builder = TransitionBuilder::try_new(base, params, false, false, false, false, extras)?;
+    let builder = TransitionBuilder::try_new(base, params, false, false, false, false, extras)?.with_native_original_parent_v19(base);
     rules(&builder)?;
     extras.tir_public_network_domain_v1.ok_or(PalwStateV2Error::ObjectiveOffenceDormant)?;
     let (_, original) = paired_claim(object)?;
@@ -407,9 +413,13 @@ pub fn palw_tir_public_preclaim_quote_v1(
         return Err(refused("TFP1 quote changes the actual original public job"));
     }
     let frame = prepare_original_v1(&builder, ctx, object, original, &envelope.header, &envelope.pledge)?;
-    if envelope.declared_rent_sompi != frame.plan_v1().terms.plan.rent_sompi {
+    let archive_profile=extras.tir_funded_originals.get(&frame.plan_v1().original_claim)
+        .is_some_and(|p|original_archive_reservation_proposal_v1::original_archive_terms_selected_v2(&p.envelope().funding.terms));
+    if envelope.declared_rent_sompi != frame.plan_v1().terms.plan.rent_sompi && !archive_profile {
         return Err(refused("TFP1 quote declaration differs from exact native full-SUM rent"));
     }
+    if archive_profile&&envelope.declared_rent_sompi<frame.plan_v1().terms.plan.rent_sompi{return Err(refused("archive literal rent below unchanged original base rent"));}
+
     Ok(frame.plan_v1().clone())
 }
 
@@ -470,6 +480,25 @@ fn original_plan_v1(
     ),
     PalwStateV2Error,
 > {
+    original_plan_mode_v4(b,now_daa,original,header,false)
+}
+
+#[allow(clippy::type_complexity)]
+fn original_plan_mode_v4(
+    b: &TransitionBuilder<'_>,
+    now_daa: u64,
+    original: &crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
+    header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+    historical_clock3:bool,
+) -> Result<
+    (
+        crate::palw_tir_public_allocation_v1::PalwTirPublicAllocationPlanV1,
+        crate::palw_tir_public_allocation_v1::PalwTirPublicAllocationRulesV1,
+        u64,
+        crate::palw_staged_preclaim_v1::PalwStagedClaimGeometryV1,
+    ),
+    PalwStateV2Error,
+> {
     use crate::palw_tir_public_allocation_v1::{PalwTirPublicAllocationQuoteV1, derive_tir_public_allocation_family_native_v2};
     let mut native = rules(b)?;
     native.maximum_leaves = b.state.class_step_ladder_v1(&original.job.class_id, native.maximum_leaves);
@@ -502,7 +531,14 @@ fn original_plan_v1(
     let family = b.params.family_supplier_active_at(now_daa) && b.extras.family_supplier_active;
     let table = original_family_table_inventory_v2(b, now_daa, original)?;
     let quoted = if family {
-        native.clock.version = crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_CLOCK_FAMILY_VERSION_V3;
+        native.clock.version=if !historical_clock3&&b.params.court_clock_v2_from_daa().is_some_and(|from|now_daa>=from){
+            // This EXISTING profile's reorg term must already cover the actual
+            // disclosure obligation; do not invent/raise either native window.
+            let required_tail=palw_da_disclose_window_daa_v1(b.params).max(
+                crate::palw_court_clock_v2::palw_court_clock_v2_reorg_retention(b.extras.staged_public_court.as_ref()));
+            if native.config.reorg_retention_daa<required_tail{return Err(refused("native family material profile does not cover adopted disclosure/reorg tail"));}
+            crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_CLOCK_FAMILY_MATERIAL_V4
+        }else{crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_CLOCK_FAMILY_VERSION_V3};
         derive_tir_public_allocation_family_native_v2(
             &geometry,
             original,
@@ -548,7 +584,7 @@ pub fn palw_tir_public_original_quote_v1(
     if original.job.tail.is_some() && !params.family_supplier_active_at(now_daa) {
         return Ok(None);
     }
-    let builder = TransitionBuilder::try_new(base, params, false, false, false, false, extras)?;
+    let builder = TransitionBuilder::try_new(base, params, false, false, false, false, extras)?.with_native_original_parent_v19(base);
     let (plan, _, _, geometry) = original_plan_v1(&builder, now_daa, original, header)?;
     let tiled = builder.state.tir_class_v1(&geometry.class_id).is_some_and(|record| record.facts.tiled);
     let judged = crate::palw_tir_court_v1::PalwTirSelectionRuleV1::of_job_v1(&original.job).is_some() || plan.semantic.is_some();
@@ -655,7 +691,7 @@ pub fn palw_tir_public_conviction_preflight_v1(
     evidence: &crate::palw_tir_public_carriage_v1::PalwTirPublicConvictionEvidenceV1,
 ) -> Result<(), PalwStateV2Error> {
     evidence.check_v1().map_err(refused)?;
-    let mut builder = TransitionBuilder::try_new(base, params, false, false, false, false, extras)?;
+    let mut builder = TransitionBuilder::try_new(base, params, false, false, false, false, extras)?.with_native_original_parent_v19(base);
     rules(&builder)?;
     let frame =
         palw_tir_public_claim_v1(base, claim).cloned().ok_or_else(|| refused("TIR conviction preflight: no ORIGINAL frame"))?;
@@ -687,7 +723,7 @@ pub fn palw_tir_public_staged_conviction_preflight_v2(
     if length as u64 > frame.plan_v1().terminal.maximum_witness_bytes {
         return Err(refused("TIR staged preflight exceeds the ORIGINAL frame's prepaid witness ceiling"));
     }
-    let mut builder = TransitionBuilder::try_new(base, params, false, false, false, false, extras)?;
+    let mut builder = TransitionBuilder::try_new(base, params, false, false, false, false, extras)?.with_native_original_parent_v19(base);
     rules(&builder)?;
     let ctx = PalwBlockContextV2 { block: Default::default(), daa_score: next_daa, blue_score: 0, subsidy: 0 };
     apply_conviction_v1(&mut builder, &ctx, frame, filer, evidence)
@@ -704,7 +740,18 @@ pub(super) fn prepare_original_v1(
     header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
     pledge: &crate::palw_tir_public_custody_v1::PalwTirPublicCustodyPledgeV1,
 ) -> Result<Frame, PalwStateV2Error> {
-    let (plan, native, upper, geometry) = original_plan_v1(b, ctx.daa_score, original, header)?;
+    let mut quoted=original_plan_v1(b,ctx.daa_score,original,header)?;
+    if quoted.0.resource_plan_id!=pledge.resource_plan_id
+        &&quoted.1.clock.version==crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_CLOCK_FAMILY_MATERIAL_V4 {
+        // Replay/compatible pending consent: only an EXACT native old3 quote
+        // that ALREADY covers adopted F07 may select old3. A carried horizon
+        // or signature alone never supplies derivation/material authority.
+        let historical=original_plan_mode_v4(b,ctx.daa_score,original,header,true)?;
+        let need=crate::palw_court_clock_v2::palw_court_clock_v2_required_retention_with(ctx.daa_score,
+            palw_da_disclose_window_daa_v1(b.params),crate::palw_court_clock_v2::palw_court_clock_v2_reorg_retention(b.extras.staged_public_court.as_ref())).map_err(|_|refused("clock-v2 original material horizon overflows"))?;
+        if historical.0.resource_plan_id==pledge.resource_plan_id&&historical.0.terms.material_until_daa>=need{quoted=historical;}
+    }
+    let(plan,native,upper,geometry)=quoted;
     let claim = crate::palw_freeprompt_v3::fp_claim_id_v3(original);
     let record = b.state.tir_class_v1(&geometry.class_id).ok_or_else(|| refused("TIR original class is not registered"))?;
     let layout = crate::palw_staged_court_state_v1::palw_staged_tir_layout_v1(&b.state, geometry.class_id)
@@ -718,8 +765,45 @@ pub(super) fn prepare_original_v1(
     // installs beside itself (`frame_semantic_bundle_v1`, checked below and written by `install_original_v1`). Still refused
     // rather than admitted with an unprosecutable layer: a job tail (evaluation/generation) and a FLAT-scheme class (its
     // decode-token pin carries whole rows, which no bounded control holds without split witness carriage, R7).
-    if original.job.tail.is_some() || !record.facts.tiled {
+    let bounded_family = b.params.family_supplier_active_at(ctx.daa_score)
+        && b.extras.family_supplier_active
+        && b.extras.staged_tir_route_active
+        && b.params.legacy_public_filer_active_at(ctx.daa_score)
+        && b.extras.staged_public_court.is_some();
+    let bounded_family_prefix = original.job.is_prefix_state() && bounded_family
+        && plan.semantic.as_ref().is_some_and(|semantic| semantic.stages.iter().any(|stage|
+            stage.family == crate::palw_staged_bundle_v1::PalwStagedFamilyV1::PublicPrefix));
+    let bounded_family_constraint = original.job.is_constraint() && bounded_family
+        && plan.semantic.as_ref().is_some_and(|semantic| semantic.stages.iter().any(|stage|
+            stage.family == crate::palw_staged_bundle_v1::PalwStagedFamilyV1::Constraint));
+    if (original.job.tail.is_some() && !bounded_family_prefix && !bounded_family_constraint) || !record.facts.tiled {
         return Err(refused("TIR original carries a job tail or a flat logits scheme no bounded frame door judges yet"));
+    }
+    if bounded_family_constraint {
+        // Only the existing canonical constrained-job tail is covered by the
+        // derived Constraint stage. This is preparation, not a supplier/funding
+        // permit: admission still requires the complete authenticated TFO2
+        // contracts and reserves their material branches through the coordinator.
+        crate::palw_fp_constraint_job_v1::palw_fp_constraint_shape_v1(&original.job)
+            .map_err(|e| refused(e.to_string()))?;
+    }
+    if bounded_family_prefix {
+        // This plan was derived above from the registered native program,
+        // header, exact Prefix shape and bounded PublicPrefix stream geometry;
+        // it is not a caller-supplied promise that a court will exist. The
+        // ordinary native frame constructor and signed semantic history pledge
+        // are still checked below. Preparation also serves prospective quotes:
+        // it creates NO admission/reservation capability. admit_original_v1
+        // requires the actual TFO2 pairing, then the funded coordinator verifies
+        // all independent supplier signatures/targets and atomically reserves
+        // every branch before installing any new claim. TFP1-only/unsigned
+        // Prefix, Eval/Gen tails, flat schemes and missing semantic doors remain
+        // refused at their original admission gates.
+        let named=crate::palw_fp_prefix_v1::palw_fp_prefix_shape_v1(&original.job).map_err(|e|refused(e.to_string()))?;
+        if named.class_id!=geometry.class_id||named.prefix_tokens==0
+            ||named.prefix_tokens>header.job_context.declared_prefill_tokens {
+            return Err(refused("TIR original Prefix differs from its bounded native semantic geometry"));
+        }
     }
     // A constrained job's selection is its constraint's mask: the staged Constraint court judges it, so the frame must carry
     // the semantic contract (its plan always has the Constraint family when the job is constrained).
@@ -9703,3 +9787,5 @@ mod conviction_e2e_tests {
         assert!(!still && !exit_held, "B-05 widened: a void-closed sibling session's archive is resolvable");
     }
 }
+
+include!("palw_tir_prepared_input_archive_v12.rs");

@@ -863,21 +863,48 @@ fn signed_ordinary_consent_converts_reserved_fee_without_reusing_other_principal
         &signature,
     )
     .unwrap();
-    for unrelated in [0, 1] {
+    // A-1 alone cannot see A-6. Exercise actual rooted legacy-dispute
+    // deposit/occupancy rows, written through their journal/index writer, with
+    // exactly the same real ML-DSA consent and draw as the zero-free case.
+    for (kernel_reserved, unrelated, deposit, occupancy) in [
+        (1000u64, 0u128, 0u128, 0u128),
+        (1000, 1, 0, 0),
+        (1000, 0, 1, 0),
+        (1000, 0, 0, 1),
+        (999, 0, 1, 0),
+        (999, 0, 0, 1),
+        (998, 0, 1, 1),
+    ] {
         let mut source = parent.clone();
-        // Explicit independent registration reservation is the cross-role seam;
-        // the draw escrow remains exactly the same authenticated 1000 in both cases.
-        if unrelated != 0 {
-            source.registration_exposure.insert(bond_key(1), unrelated);
-        }
+        if unrelated != 0 { source.registration_exposure.insert(bond_key(1), unrelated); }
+        let mut ledger = source.kernel_route.as_ref().unwrap().ledger_checked_v1().unwrap();
+        ledger.preview_mut_v1().bonds.get_mut(&poster).unwrap().reserved = kernel_reserved;
+        source.kernel_route.as_mut().unwrap().rows = ledger.to_rows();
         let mut b = TransitionBuilder::new(&source, &p, false, false, false, false, &extras);
-        assert_eq!(source.kernel_route.as_ref().unwrap().ledger_reserved_of(&bond_key(1)), 1000);
-        assert_eq!(b.committed_at(&bond_key(1), 90).unwrap(), 1000 + unrelated);
+        if deposit != 0 || occupancy != 0 {
+            use crate::palw_legacy_public_filer_v1::{PalwDisputeClaimV1, PalwDisputeReservationRowV1};
+            use crate::palw_court_capacity_v1::{PalwCourtStageV1, PalwReservedCourtV1};
+            let mut record = PalwDisputeClaimV1 { opened_daa: 80, hard_deadline_daa: 200, ..Default::default() };
+            record.live.insert(bond_key(1), PalwDisputeReservationRowV1 { reserved_daa: 80, deposit, ..Default::default() });
+            if occupancy != 0 {
+                record.courts.insert(bond_key(1), PalwReservedCourtV1 {
+                    stage: PalwCourtStageV1::Queued { enqueued_daa: 80 }, escrow: occupancy,
+                    rho_sompi: 1, weight: 1, service_daa: 10, reserve: false, guaranteed: false, admitted_daa: 80,
+                });
+            }
+            b.write_legacy_dispute(h64(0xa6), Some(record)).unwrap();
+        }
+        let accuser = deposit + occupancy;
+        let principal = u128::from(kernel_reserved) + unrelated + accuser;
+        assert_eq!(b.state.kernel_route.as_ref().unwrap().ledger_reserved_of(&bond_key(1)), kernel_reserved);
+        assert_eq!(b.committed_at(&bond_key(1), 90).unwrap(), u128::from(kernel_reserved) + unrelated);
+        assert_eq!(b.read().accuser_ledger_v1(&bond_key(1), 90), accuser);
+        assert_eq!(super::super::palw_court_capacity_fold_v1::fee_reserved_principal_v1(&b, &bond_key(1), 90).unwrap(), principal);
         let root = b.state.state_root();
         let journal = borsh::to_vec(&b.entries).unwrap();
-        let result =
-            super::super::palw_kernel_route_fold_v1::apply_kernel_route_object_v1(&mut b, &ctx(90, 90, 90), &bytes, &bond_key(2));
-        if unrelated != 0 {
+        let result = super::super::palw_kernel_route_fold_v1::apply_kernel_route_object_v1(
+            &mut b, &ctx(90, 90, 90), &bytes, &bond_key(2));
+        if principal > 1000 {
             let err = result.unwrap_err();
             assert!(format!("{err:?}").contains("other reserved principal"), "{err:?}");
             assert_eq!(b.state.state_root(), root);
@@ -885,16 +912,69 @@ fn signed_ordinary_consent_converts_reserved_fee_without_reusing_other_principal
         } else {
             result.unwrap();
             assert_eq!(b.state.bond(&bond_key(1)).unwrap().collateral, 983);
-            assert_eq!(b.committed_at(&bond_key(1), 90).unwrap(), 983);
+            assert_eq!(b.committed_at(&bond_key(1), 90).unwrap(), u128::from(kernel_reserved - 17) + unrelated);
+            assert_eq!(b.read().accuser_ledger_v1(&bond_key(1), 90), accuser, "fee conversion cannot release an A-6 duty");
+            assert_eq!(super::super::palw_court_capacity_fold_v1::fee_reserved_principal_v1(&b, &bond_key(1), 90).unwrap(), principal - 17);
             let key = fee_key(HELD, &claim, &verifier, 0);
             let held: HeldVerifierFeeV1 = borsh::from_slice(&b.state.kernel_route.as_ref().unwrap().aux[&(TABLE, key)]).unwrap();
             assert_eq!(held.amount, 17);
             let paid_root = b.state.state_root();
-            assert!(
-                super::super::palw_kernel_route_fold_v1::apply_kernel_route_object_v1(&mut b, &ctx(90, 90, 90), &bytes, &bond_key(2))
-                    .is_err()
-            );
+            assert!(super::super::palw_kernel_route_fold_v1::apply_kernel_route_object_v1(
+                &mut b, &ctx(90, 90, 90), &bytes, &bond_key(2)).is_err());
             assert_eq!(b.state.state_root(), paid_root, "same signed slot cannot debit twice");
         }
     }
+}
+
+#[test]
+fn v2_financial_hard_uses_existing_combined_clock_and_keeps_x3_only_births() {
+    use super::super::palw_settlement_liability_fold_v1::v2_claim_signed_hard_deadline_v1 as hard;
+    use crate::palw_ruling_fences_v1::{PalwClaimHardDeadlineFenceV1,PalwClaimHardDeadlineMirrorV1};
+    let cfg=crate::config::params::palw_t12_shipped_params();
+    let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle)=cfg.palw_consensus_mode else {panic!("real T12 V2 bundle")};
+    let probe=PalwClaimHardDeadlineFenceV1::unapproved_probe_at(crate::config::params::ForkActivation::new(100));
+    let x3=PalwClaimHardDeadlineMirrorV1{from_daa:100,policy:probe.policy};
+    let p=bundle.state.with_claim_hard_deadline_v1(Some(x3)).with_court_clock_v2_from_daa(Some(200));
+    assert!(hard(&p,99).is_err(),"before X3 stays unsourced");
+    assert_eq!(hard(&p,100),Ok(400),"X3-only birth keeps a+300");
+    assert_eq!(hard(&p,199),Ok(499),"clock-v2 activation never rewrites an older birth");
+    assert_eq!(hard(&p,200),Ok(10_200),"both clocks use their existing a+10000 cap");
+    assert!(hard(&p.clone().with_claim_hard_deadline_v1(None),200).is_err(),"clock-v2 alone does not invent X3 authority");
+    assert_eq!(hard(&p,u64::MAX-10_000),Ok(u64::MAX),"exact representable endpoint");
+    assert!(hard(&p,u64::MAX-9_999).is_err(),"overflow never becomes an unlimited term");
+    let only=p.with_court_clock_v2_from_daa(None);
+    assert_eq!(hard(&only,u64::MAX-300),Ok(u64::MAX));
+    assert!(hard(&only,u64::MAX-299).is_err());
+}
+
+#[test]
+fn v2_combined_financial_hard_is_inclusive_without_shortening_liability() {
+    use super::super::palw_settlement_liability_fold_v1::v2_claim_signed_hard_deadline_v1 as hard;
+    use crate::palw_settlement_liability_v1::{PalwSettlementLiabilityTermsV1,palw_settlement_liability_admits_v1};
+    use crate::palw_ruling_fences_v1::{PalwClaimHardDeadlineFenceV1,PalwClaimHardDeadlineMirrorV1};
+    let mirror=PalwClaimHardDeadlineMirrorV1{from_daa:0,policy:PalwClaimHardDeadlineFenceV1::unapproved_probe_at(crate::config::params::ForkActivation::new(0)).policy};
+    let p=params().with_claim_hard_deadline_v1(Some(mirror)).with_court_clock_v2_from_daa(Some(0));
+    let endpoint=hard(&p,100).unwrap();
+    let mut t=PalwSettlementLiabilityTermsV1{reserved_reward:10,consumed_reward:0,draw:0,payment:0,paid_now:0,exported_before:0,export_cap:0,liability_sompi:10,bond_collateral:10,other_live_liability:0,bond_locked_until:endpoint+1,liability_until:endpoint,signed_hard_deadline:endpoint,material_ttl_until:endpoint+1,vest_until:None,retire_not_before:endpoint+1,now:100};
+    assert_eq!(palw_settlement_liability_admits_v1(&t),Ok(()));
+    t.liability_until+=1;
+    assert_eq!(palw_settlement_liability_admits_v1(&t),Err(PalwSettlementLiabilityRefusalV1::HorizonPastHardDeadline),"a late liability remains refused, never clipped to fit");
+}
+
+#[test]
+fn dormant_retirement_source_does_not_evaluate_new_near_max_horizon() {
+    let base=params();
+    let parent=with_route(certify_fp_claim(&base,60,3));
+    let id=h64(0xFC);
+    // Boundary fixture only: no claim is admitted at this fabricated position.
+    // It proves retirement sourcing is a no-op when the predicate is dormant.
+    let mut claim=parent.claim(&id).unwrap().clone();
+    claim.accepted_daa=u64::MAX-1;
+    let dormant=base.with_claim_retirement_daa(3_000).unwrap();
+    let extras=PalwTransitionExtrasV1::default();
+    let b=TransitionBuilder::new(&parent,&dormant,false,false,false,false,&extras);
+    let source=b.prospective_retirement_v1(id,&claim,None).unwrap();
+    assert_eq!(source.floor_v1(&dormant,id,&claim).unwrap(),0,"inactive term is ignored without horizon arithmetic");
+    let armed=dormant.with_settlement_once_from(Some(0));
+    assert!(matches!(source.floor_v1(&armed,id,&claim),Err(PalwStateV2Error::Overflow("prospective claim retirement"))),"the identical new rule refuses checked overflow only when active");
 }

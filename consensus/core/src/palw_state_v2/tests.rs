@@ -28641,6 +28641,7 @@ mod evm_market {
 
     fn extras(actions: Vec<PalwEvmMarketActionV1>) -> PalwTransitionExtrasV1 {
         PalwTransitionExtrasV1 {
+            original_archive_data_observer_v16:false,
             prefix_dependencies_v1: Default::default(),
             selected_source_bootstrap_v1: None,
             selected_source_bootstrap_fault_v1: None,
@@ -28940,6 +28941,7 @@ mod evm_market {
         assert_eq!(st[0].escrow_sompi, 10 * MSK, "a refused buy's escrow is the refund the child pays");
         // Below the fence the same actions write nothing.
         let dormant = PalwTransitionExtrasV1 {
+            original_archive_data_observer_v16:false,
             prefix_dependencies_v1: Default::default(),
             selected_source_bootstrap_v1: None,
             selected_source_bootstrap_fault_v1: None,
@@ -34695,7 +34697,7 @@ mod class_verify_deadline {
             let p = t12_like(armed);
             let s = state(d, PalwClaimPhaseV2::PanelBound { bound_daa: b }, b);
             let mut builder = TransitionBuilder::new(&s, &p, false, false, false, false, &extras);
-            builder.lock_valid_seat_rcore(bond_key(2), id, 5, crate::palw_verification_v2::PalwSegmentMaskV2::full(5), 5, l).unwrap();
+            builder.lock_valid_seat_rcore(bond_key(2), id, s.claims.get(&id).unwrap(), 5, crate::palw_verification_v2::PalwSegmentMaskV2::full(5), 5, l).unwrap();
             assert_eq!(builder.state.slashable_locks[&(bond_key(2), id)].expiry_daa, anchor + 3_000, "D {d}, armed {armed}");
         }
     }

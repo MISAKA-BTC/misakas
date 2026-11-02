@@ -1,5 +1,5 @@
 //! Transaction accounting answer binding. Served-material FPA1 is deliberately absent from this codec.
-use super::{PALW_FP_ANSWER_ENVELOPE_MAGIC_V1, palw_fp_answer_envelope_view_v1};
+use super::{PALW_FP_ANSWER_ENVELOPE_MAGIC_V1, palw_fp_accounting_carrier_view_v1, palw_fp_answer_envelope_view_v1};
 use crate::{
     Hash64,
     palw_freeprompt_v3::{PalwFpCommitmentTxPayloadV3, PalwFreePromptCommitmentV3},
@@ -153,7 +153,7 @@ pub fn palw_fp_answer_bind_duty_v1(
     if !duty.free_prompt || tx.subnetwork_id != crate::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT || !tx.id_is_current() {
         return Err(invalid("accounting carrier namespace or stale actual ID"));
     }
-    let view = palw_fp_answer_envelope_view_v1(&tx.payload, u32::MAX as usize)
+    let view = palw_fp_accounting_carrier_view_v1(&tx.payload, u32::MAX as usize)
         .ok_or_else(|| invalid("missing accounting transaction envelope"))?;
     let original = palw_fp_accounting_original_decode_v1(view.inner)?;
     let c = &original.commitment;

@@ -2068,7 +2068,7 @@ mod tests {
                 Some(PalwTirCompositeRefV1 { parent_class: h(LINE), parent_root: h(1), adapter_root: h(2), p: 3 }),
             )
             .unwrap();
-        let (child, _, _) = builder.checkpoint();
+        let (child, _, _, _) = builder.checkpoint();
         let delta = PalwStateDeltaV2 { point: x, entries: builder.entries.clone() };
         let names: BTreeSet<&str> = delta
             .entries

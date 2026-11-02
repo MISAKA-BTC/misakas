@@ -47,7 +47,7 @@ use kaspa_consensus_core::BlockHash;
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::params::ForkActivation;
 use kaspa_consensus_core::palw_native_resource_v1::{
-    NativeChainStateV1, NativeStateCarriageV1, retain_native_carriage_decode_classified_v1,
+    NativeChainStateV1, NativeStateCarriageV1, retain_native_carriage_decode_with_preflight_error_v1,
 };
 use kaspa_consensus_core::palw_state_v2::{PalwChainStateV2, PalwStateCarriageV2, PalwStateDeltaV2, PalwStateParamsV2};
 use kaspa_database::prelude::CachePolicy;
@@ -295,7 +295,8 @@ impl DbPalwStateV2Store {
                 || (*table == kaspa_consensus_core::palw_claim_local_v1::PALW_CLAIM_LOCAL_TABLE_V1 && key.len() == 65
                     && key.first().is_some_and(|prefix|
                         *prefix == kaspa_consensus_core::palw_state_v2::PALW_COMPACT_CLAIM_SOURCE_PREFIX_V1
-                        || *prefix == kaspa_consensus_core::palw_state_v2::PALW_COMPACT_KERNEL_ORIGIN_PREFIX_V1))
+                        || *prefix == kaspa_consensus_core::palw_state_v2::PALW_COMPACT_KERNEL_ORIGIN_PREFIX_V1
+                        || *prefix == b'A'))
         })) { return Ok(()); }
         let Some((params, maturity)) = self.native39_frontier_context.as_ref() else {
             return Err(StoreError::LocalResourceUnavailable("native39 frontier network context is not configured".into()));
@@ -971,19 +972,29 @@ impl DbPalwStateV2Store {
         if let Some(why) = kaspa_consensus_core::palw_state_v2::palw_carriage_version_refusal_v1(canonical) {
             return Err(StoreError::DataInconsistency(format!("palw v2 {label}: {why}")));
         }
-        let restored = retain_native_carriage_decode_classified_v1(block, canonical, || {
+        let restored = retain_native_carriage_decode_with_preflight_error_v1(block, canonical, |why| {
+            use kaspa_consensus_core::palw_native_resource_v1::{NativeCoverageV1, NativeDecodeErrorV1};
+            match why.kind() {
+                std::io::ErrorKind::InvalidData | std::io::ErrorKind::UnexpectedEof =>
+                    NativeDecodeErrorV1::Decode(StoreError::DataInconsistency(format!("palw v2 {label} preflight refused: {why}"))),
+                _ => NativeDecodeErrorV1::Resource(NativeCoverageV1::unsupported::<PalwStateCarriageV2>(
+                    "actual cold native carriage shape", &why.to_string())),
+            }
+        }, || {
             let carriage = borsh::from_slice::<PalwStateCarriageV2>(canonical)
-                .map_err(|why| format!("palw v2 {label} does not decode: {why}"))?;
+                .map_err(|why| StoreError::DataInconsistency(format!("palw v2 {label} does not decode: {why}")))?;
             let armed = self.uncertified_weightless_at(&carriage);
-            carriage
-                .into_state_v3(params, Some(root), armed, self.canonical_work_daa)
-                .map_err(|why| format!("palw v2 {label} refused: {why}"))
+            carriage.into_state_v3(params, Some(root), armed, self.canonical_work_daa).map_err(|why| match why {
+                kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeResource(resource) =>
+                    StoreError::LocalResourceUnavailable(resource.to_string()),
+                other => StoreError::DataInconsistency(format!("palw v2 {label} refused: {other}")),
+            })
         })
         .map_err(|why| match why {
             kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Resource(e) => {
                 StoreError::LocalResourceUnavailable(e.to_string())
             }
-            kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Decode(e) => StoreError::DataInconsistency(e),
+            kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Decode(e) => e,
         })?;
         self.check_native39_frontier_context_v1(&restored)?;
         Ok(restored)
@@ -1295,6 +1306,40 @@ mod tests {
         assert_eq!(loaded_delta, delta, "the delta's bytes are the machine's bytes");
         let reverted = revert_delta_v2(&tip_state, &loaded_delta, &p).unwrap();
         assert_eq!(reverted, genesis, "the reorg primitive survives the disk");
+    }
+
+    /// Unsupported scoped codec coverage is a local refusal even during the
+    /// typed consistency pass, after the cold wire preflight has succeeded.
+    #[test]
+    fn cold_restore_keeps_unsupported_scoped_codec_as_local_resource() {
+        let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let mut store = DbPalwStateV2Store::new(db.clone(), CachePolicy::Count(16));
+        store.reindex_if_stale().unwrap();
+        let p = params().with_claim_local_settlement_from_daa(Some(0));
+        let point = ctx(0x37, 1, 1);
+        let mut carriage = PalwStateCarriageV2::from_state(&PalwChainStateV2::genesis());
+        carriage.last_point = Some(point);
+        let mut route = kaspa_consensus_core::palw_kernel_route_v1::PalwKernelRouteStateV1::new_typed(
+            kaspa_consensus_core::palw_kernel_route_v1::palw_kernel_route_policy_v1(Hash64::default(), Hash64::default()),
+            None, None, misaka_palw_kernel::rows::LedgerScalarsV1 { daa: 1, burned: 0 });
+        // Negative input only: exact published ComponentSpec/Root Borsh grammar,
+        // but key width513 is outside this node's concrete512-byte codec profile.
+        // No accepted source/frame/checkpoint authority is invented by this test.
+        let spec = (12u8, 1u32, 3u16, 513u16, u64::MAX);
+        let mut key = vec![b'I']; key.extend(borsh::to_vec(&spec).unwrap());
+        let value = borsh::to_vec(&(spec, Option::<Hash64>::None, 0u64)).unwrap();
+        route.aux.insert((kaspa_consensus_core::palw_claim_local_v1::PALW_CLAIM_LOCAL_TABLE_V1, key), value);
+        carriage.kernel_route = Some(route);
+        let mut batch = WriteBatch::default();
+        store.set_tip_record_batch(&mut batch, PalwStateTipRecordV2 {
+            block: point.block, state_root: Hash64::default(), carriage_borsh: borsh::to_vec(&carriage).unwrap(),
+        }).unwrap();
+        db.write(batch).unwrap(); drop(store);
+        let cold = DbPalwStateV2Store::new(db, CachePolicy::Count(16));
+        match cold.load_tip_retained_v1(&p) {
+            Err(StoreError::LocalResourceUnavailable(why)) => assert!(why.contains("bounded key codec"), "inner scoped codec refusal must survive: {why}"),
+            other => panic!("unsupported scoped schema must stay local, got {other:?}"),
+        }
     }
 
     /// A tampered snapshot refuses to become a sink: the recorded root is demanded at load, so

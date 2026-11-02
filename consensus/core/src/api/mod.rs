@@ -2469,6 +2469,19 @@ pub trait ConsensusApi: Send + Sync {
         None
     }
 
+    /// Checked current-cohort accounting winner. `Ok(None)` means a successfully
+    /// materialized ConsensusV2 state has no route or no winner row. Missing state,
+    /// storage/codec failure and local resource refusal must never become absence.
+    /// Implementations without this reader withhold approval rather than invoke
+    /// the legacy unique-carrier fallback.
+    fn palw_fp_accounting_winning_carrier_v1(
+        &self,
+        _claim: kaspa_hashes::Hash64,
+    ) -> Result<Option<kaspa_hashes::Hash64>, crate::palw_native_resource_v1::NativeDecodeErrorV1<&'static str>> {
+        Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode("accounting winning carrier reader unavailable"))
+    }
+
+
     /// **G14 phase 3: where a V2 class stands on the onboarding path** (artifact bindings, kernel binding, conformance commitment, the
     /// activation gate's verdict and reason) at the virtual's DAA. `None` for an unknown class and off ConsensusV2.
     fn palw_onboarding_v1(&self, _class_id: kaspa_hashes::Hash64) -> Option<crate::palw_onboarding_v1::OnboardingReadV1> {

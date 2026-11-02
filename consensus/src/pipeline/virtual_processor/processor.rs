@@ -1323,6 +1323,7 @@ pub(super) enum PalwMergedOwnedWorkV1 {
 mod dns;
 mod evm;
 mod native_reserve_v1;
+mod native_original_input_v19;
 mod palw;
 pub(in crate::pipeline::virtual_processor) mod palw_accept;
 mod palw_evm_asof_v2;
@@ -2728,7 +2729,33 @@ impl VirtualStateProcessor {
                                 // its MSK in the sink** (the 2026-09-23 Position route matrix,
                                 // P-B1), so past `palw_audit_2026_09_23` the filter also names what
                                 // each such carrier is owed and the transition pays it back.
-                                let (objects, folded, carrier_refunds, tir_public_originals, tir_funded_originals, fp_answers, prefix_dependencies, carrier_input_spends) = self.palw_v2_accepted_objects_and_originals(
+                                // Only the recognized, newly signed archive profile needs this
+                                // measurement. Decode real own-work bytes without treating them
+                                // as admitted work; bootstrap admission remains in its old order.
+                                let wants_native_input_context_v19 = state_params.claim_local_settlement_active_at(point.daa_score)
+                                    && objects.iter().any(|c|c.funded_original.as_ref().is_some_and(|p|
+                                        kaspa_consensus_core::palw_court_original_escrow_v1::original_archive_profile_kind_v2(&p.envelope().funding.terms).is_some()));
+                                let mut native_original_merged_v19=None;
+                                let mut native_original_receipt_v19=None;
+                                let native_original_context_v19=if wants_native_input_context_v19 {
+                                let merged_non_daa = {
+                                    use crate::model::stores::daa::DaaStoreReader;
+                                    self.palw_exec_v2_non_daa(
+                                        &self.daa_excluded_store.get_mergeset_non_daa(current).unwrap_or_default(),
+                                        &ctx.ghostdag_data,
+                                        pov_daa_score,
+                                    )
+                                };
+                                let (merged_owned, merged_preskips) =
+                                    self.palw_v2_merged_works(&ctx.ghostdag_data, state, state_params, &merged_non_daa, &point)?;
+                                    let (context,receipt)=self.palw_native_original_input_context_for_header_v19(
+                                        state,state_params,&point,header.as_ref(),&objects,&merged_owned,
+                                    )?;
+                                    native_original_merged_v19=Some((merged_owned,merged_preskips));
+                                    native_original_receipt_v19=Some(receipt);
+                                    context
+                                }else{None};
+                                let (objects, folded, carrier_refunds, tir_public_originals, tir_funded_originals, fp_answers, prefix_dependencies, carrier_input_spends) = self.palw_v2_accepted_objects_with_native_original_context_v19(
                                     state,
                                     state_params,
                                     &point,
@@ -2737,7 +2764,11 @@ impl VirtualStateProcessor {
                                     own_attempt_class,
                                     &ctx.palw_round_fee_incomes,
                                     &ctx.palw_escrow_settlements,
+                                    native_original_context_v19.as_deref(),
                                 )?;
+                                // The singleton filter has consumed the measured basis. The
+                                // authoritative fold below builds its own actual basis anew.
+                                drop(native_original_context_v19);
                                 // Unit C step 4: a receipt-lane block spends a quantum, and its
                                 // right to do so is a DRAW — so the beacon it draws against is
                                 // derived from this candidate's own chain, never read off the
@@ -2794,7 +2825,7 @@ impl VirtualStateProcessor {
                                             }
                                         },
                                     };
-                                let receipt_spend = match self.palw_v2_check_receipt_spend(&header, state, state_params, &point) {
+                                let receipt_spend = match native_original_receipt_v19.take().unwrap_or_else(||self.palw_v2_check_receipt_spend(&header,state,state_params,&point)) {
                                     Ok(spend) => spend,
                                     Err(fp_error) => {
                                         info!(
@@ -2834,6 +2865,7 @@ impl VirtualStateProcessor {
                                 // Assembled against the walk state (the parent's); the transition
                                 // re-runs the stateful admission per work against its LIVE fold
                                 // state, so order inside the block cannot over-commit a budget.
+                                let (merged_owned,merged_preskips)=if let Some(prepared)=native_original_merged_v19.take(){prepared}else{
                                 let merged_non_daa = {
                                     use crate::model::stores::daa::DaaStoreReader;
                                     self.palw_exec_v2_non_daa(
@@ -2844,6 +2876,8 @@ impl VirtualStateProcessor {
                                 };
                                 let (merged_owned, merged_preskips) =
                                     self.palw_v2_merged_works(&ctx.ghostdag_data, state, state_params, &merged_non_daa, &point)?;
+                                    (merged_owned,merged_preskips)
+                                };
                                 let merged_refs: Vec<kaspa_consensus_core::palw_state_v2::PalwMergedWorkV1<'_>> = merged_owned
                                     .iter()
                                     .map(|owned| match owned {

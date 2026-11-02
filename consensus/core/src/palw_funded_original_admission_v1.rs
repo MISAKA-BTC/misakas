@@ -474,3 +474,22 @@ mod tests {
         assert_eq!(funded_required_amount_v1(u64::MAX, 1, 1, 0), None);
     }
 }
+
+/// Source-owned baseline packet geometry BEFORE funding/reservation. It mirrors
+/// the existing two actual derivation branches, not a new fee or service grant.
+/// The native PreparedOriginal owner supplies its actual signer/graph counts;
+/// complete supplier packet/actor facts remain a separate opaque native input.
+impl FundedAdmissionScheduleV1 {
+    pub(crate) fn native_archive_packet_geometry_v11(&self,signers:u64,source_nodes:u64,segmented:bool)->Result<u64,FundedAdmissionRefusalV1>{
+        use FundedAdmissionRefusalV1 as R;
+        if signers==0 || self.heap_bytes_per_branch==0 || self.retention_bytes_per_branch==0 || self.source_packet_cost.controls!=1 || self.source_packet_cost.bytes==0 || self.source_packet_cost.work==0{return Err(R::ScheduleInvalid)}
+        let signer_packets=mul(signers,self.service.packets_per_signer)?;
+        let branches=add(source_nodes,signer_packets)?;
+        if !segmented{return add(branches,1)}
+        let total=mul(branches,add(self.heap_bytes_per_branch,self.retention_bytes_per_branch)?)?;
+        if total==0 || self.service.budget.bytes==0{return Err(R::ScheduleInvalid)}
+        let count=total.div_ceil(self.service.budget.bytes);
+        if count>DISPUTE_WINDOW_DAA{return Err(R::ScheduleInvalid)}
+        add(branches,count)
+    }
+}

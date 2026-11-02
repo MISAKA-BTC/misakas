@@ -468,7 +468,7 @@ pub fn native_facts_and_skips_with_native39_v1(
             skipped.voided = skipped.voided.saturating_add(1);
             continue;
         }
-        let Some(certification) = certification else {
+        let Some(_) = certification else {
             skipped.unpriced = skipped.unpriced.saturating_add(1);
             continue;
         };
@@ -581,7 +581,7 @@ fn native_legacy_facts_borrowed_v1<'a>(
     fp_spends:impl Iterator<Item=(Hash64,&'a PalwClaimStateV2,&'a [u32])>,
     exec_liability_until:&BTreeMap<Hash64,u64>,voided:&BTreeSet<Hash64>,accepting:(u64,u64),
 )->(Vec<MatureUsefulWorkV1>,SkippedEvidenceV1){
-    let (accepting_daa, accepting_blue) = accepting;
+    let (accepting_daa, _accepting_blue) = accepting;
     let mut skipped = SkippedEvidenceV1::default();
     // **The trace retention a claim holds NOW.** Read the later of the live and recorded obligation. Current legacy `CourtOpened`
     // and named-leaf accusations refuse terminal claims: a class-window extension is admitted before Final, holds that Final and

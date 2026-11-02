@@ -324,7 +324,9 @@ fn regular_stop_rule_v1(
     if job.is_constraint() {
         return Err(NativeRegularStopUnsupportedV1::Constraint);
     }
-    if job.tail.is_some() {
+    let prefix = job.is_prefix_state()
+        && matches!(job.tail, Some(crate::palw_freeprompt_v3::PalwFpJobTailV1::Prefix(_)));
+    if (job.tail.is_some() && !prefix) || (job.is_prefix_state() && !prefix) {
         return Err(NativeRegularStopUnsupportedV1::CarriedTail);
     }
     match crate::palw_tir_court_v1::PalwTirSelectionRuleV1::of_job_v1(job) {

@@ -32,6 +32,7 @@ pub(super) struct PreparedOriginalRequirementsV1 {
         crate::palw_tir_public_source_v1::parameter_cover_v1::OriginalRootInputCoverV1,
     >,
     input_material: crate::palw_court_shared_material_intake_v1::InputMaterialDemandV1,
+    carrier_inputs_v3:Option<crate::palw_court_family_material_v1::NativeFamilyCarrierInputsV3>,
     source: PreparedSourceRequirementsV1,
     // New wrapper inline only. Moved old Frame payload retains its legacy native
     // preparation admission, and all new Source/geometry/cover have own leases.
@@ -118,12 +119,19 @@ impl PreparedOriginalGeometryV1 {
             numerical,
             inputs,
             input_material,
+            carrier_inputs_v3:None,
             source,
             _wrapper: wrapper,
         })
     }
 }
 impl PreparedOriginalRequirementsV1 {
+    pub(super) fn bind_carrier_inputs_v3(&mut self,inputs:&[crate::tx::TransactionInput],b:&TransitionBuilder<'_>)->Result<(),PalwStateV2Error>{
+        let frame=self.frame_v1();let original=frame.original_v1();let claim=frame.plan_v1().original_claim;
+        let prefix=b.extras.prefix_dependencies_v1.get(&claim).and_then(|e|e.consumed.as_ref());
+        let facts=crate::palw_court_family_material_v1::NativeFamilyCarrierInputsV3::derive_v3(inputs,prefix,claim,original.job.network_domain,&original.job.executor_pubkey).map_err(|e|match e{crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(c)=>PalwStateV2Error::NativeResource(c),crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(e)=>refused(e)})?;
+        self.carrier_inputs_v3=Some(facts);Ok(())
+    }
     pub(super) fn frame_v1(&self) -> &Frame {
         self.geometry.frame_v1()
     }
@@ -146,7 +154,7 @@ impl PreparedOriginalRequirementsV1 {
         consents: &[crate::palw_court_family_supplier_v1::SignedFamilySupplierV1],
         semantic_table: Option<&[u8]>,
     ) -> Result<Vec<super::palw_court_family_supplier_fold_v1::FamilySupplierPlanV1>, PalwStateV2Error> {
-        let (inventories, _lease) = self.family_inventories_v1(b, ctx, semantic_table)?;
+        let (inventories, _lease) = self.family_inventories_v3(b, ctx, semantic_table)?;
         if consents.len() != inventories.len() || consents.iter().zip(&inventories).any(|(c, i)| c.terms.role != i.role_v1()) {
             return Err(refused("TFO2 lacks exact full native family supplier role set"));
         }
@@ -182,6 +190,12 @@ impl PreparedOriginalRequirementsV1 {
         ),
         PalwStateV2Error,
     > {
+        self.family_inventories_with_purpose_v3(b,ctx,semantic_table,false)
+    }
+    pub(super) fn family_inventories_v3(&self,b:&TransitionBuilder<'_>,ctx:&PalwBlockContextV2,semantic_table:Option<&[u8]>)->Result<(Vec<crate::palw_native_resource_v1::NativeRetainedV1<crate::palw_court_family_material_v1::NativeFamilyInventoryV1>>,Option<crate::palw_native_resource_v1::NativeDemandLeaseV1>),PalwStateV2Error>{
+        self.family_inventories_with_purpose_v3(b,ctx,semantic_table,true)
+    }
+    fn family_inventories_with_purpose_v3(&self,b:&TransitionBuilder<'_>,ctx:&PalwBlockContextV2,semantic_table:Option<&[u8]>,generated_semantic_v3:bool)->Result<(Vec<crate::palw_native_resource_v1::NativeRetainedV1<crate::palw_court_family_material_v1::NativeFamilyInventoryV1>>,Option<crate::palw_native_resource_v1::NativeDemandLeaseV1>),PalwStateV2Error>{
         use crate::palw_court_family_supplier_v1::FamilySupplierRoleV1 as R;
         let bad = |e: PreparedRequirementsErrorV1| refused(format!("family native requirements: {e:?}"));
         self.geometry.prepared.check_preclaim_context_v1(b, ctx).map_err(|e| refused(format!("family native original: {e:?}")))?;
@@ -231,7 +245,8 @@ impl PreparedOriginalRequirementsV1 {
             crate::palw_native_resource_v1::reserve_native_requests_v1(q.bytes_v1()).map_err(PalwStateV2Error::NativeResource)?;
         let mut inventories = Vec::with_capacity(roles.len());
         for role in roles {
-            let inventory = crate::palw_court_family_material_v1::derive_family_inventory_with_table_v1(
+            let derive=if generated_semantic_v3{crate::palw_court_family_material_v1::derive_family_inventory_with_table_v3}else{crate::palw_court_family_material_v1::derive_family_inventory_with_table_v1};
+            let inventory = derive(
                 &b.state,
                 frame,
                 self.geometry.source_v1(),
@@ -247,6 +262,7 @@ impl PreparedOriginalRequirementsV1 {
                 crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(c) => PalwStateV2Error::NativeResource(c),
                 crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(e) => refused(e),
             })?;
+            let inventory=if generated_semantic_v3{crate::palw_court_family_material_v1::bind_family_carrier_inputs_v3(inventory,self.carrier_inputs_v3.as_ref().ok_or_else(||refused("profile3 requires actual candidate carrier inputs before quote"))?).map_err(|e|match e{crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(c)=>PalwStateV2Error::NativeResource(c),crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(e)=>refused(e)})?}else{inventory};
             inventories.push(inventory);
         }
         Ok((inventories, lease))
@@ -305,3 +321,12 @@ impl PreparedOriginalRequirementsV1 {
 }
 
 include!("palw_tir_prepared_actor_catalog_v1.rs");
+
+include!("palw_tir_prepared_archive_adjunct_v11.rs");
+
+// Prospective readonly quote inputs, kept on the actual native preparation.
+// Neither getter constructs a paid permit or an accepting point.
+impl PreparedOriginalRequirementsV1 {
+    pub(super) fn archive_semantics_v10(&self)->Option<&crate::palw_class_semantics_v1::PalwClassSemanticsV1>{self.geometry.prepared.semantic_snapshot.as_ref()}
+    pub(super) fn archive_rules_v10(&self)->crate::palw_court_family_material_v1::FamilyOriginalRuleContextV2 {crate::palw_court_family_material_v1::FamilyOriginalRuleContextV2::from_native_v2(self.geometry.prepared.native)}
+}

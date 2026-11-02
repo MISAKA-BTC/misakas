@@ -512,8 +512,14 @@ pub(super) fn apply(
                 crate::palw_source_verifier_economics_v2::validate_source_economic_provenance_v2(route, &epoch, &row)
                     .map_err(decode_error)?;
             }
+            let actual_owner = if builder.params.claim_local_settlement_active_at(ctx.daa_score) {
+                super::palw_claim_local_kernel_source_owner_v9::kernel_owner_for_open_v9(builder, ctx, work.claim)?
+            } else { None };
             builder.source_bootstrap_write_v1(&key(1, id), &row)?;
             builder.source_bootstrap_write_v1(&key(2, work.canonical_work), &id)?;
+            if let Some(owner) = actual_owner.as_ref() {
+                super::palw_claim_local_kernel_contract_duties_v9::note_open_owner_v9(builder, ctx, &work, owner)?;
+            }
             use crate::palw_native_resource_v1::NativeHeapV1;
             builder
                 .native_reservation

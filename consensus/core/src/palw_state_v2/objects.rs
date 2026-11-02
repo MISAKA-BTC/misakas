@@ -7,6 +7,23 @@ pub(super) fn apply_object(
     ctx: &PalwBlockContextV2,
     object: &PalwConsensusObjectV2,
 ) -> Result<(), PalwStateV2Error> {
+    let Some(span) = palw_claim_local_object_spans_v2::prepare(builder, ctx, object)? else {
+        return apply_object_observed_v2(builder, ctx, object);
+    };
+    let previous = builder.claim_local_object_scope_active;
+    builder.claim_local_object_scope_active = true;
+    let result = apply_object_observed_v2(builder, ctx, object);
+    builder.claim_local_object_scope_active = previous;
+    if result.is_ok() {
+        palw_claim_local_object_spans_v2::complete(builder, span);
+    }
+    result
+}
+fn apply_object_observed_v2(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    object: &PalwConsensusObjectV2,
+) -> Result<(), PalwStateV2Error> {
     if builder.state.court_service_state_v1().is_some_and(|s| !s.claims.is_empty()) {
         let saved = builder.try_checkpoint()?;
         let previous = builder.court_end_evidence.clone();
@@ -4062,7 +4079,7 @@ fn apply_object_inner(
                 claim.trace_retention_daa = claim.trace_retention_daa.max(frame.frame_v1().plan_v1().terms.material_until_daa);
                 None
             } else {
-                builder.prepare_staged_claim_with_job_v1(*claim_id, &mut claim, public_job.as_deref())?
+                Some(builder.prepare_staged_claim_for_budget_v1(*claim_id, &mut claim, public_job.as_deref())?)
             };
             // **Lane BUDGET (ADR-0176 D3): the commitment's reservation** — Q 1, B `quanta` receipt blocks, R `quanta` carves of this
             // block, F `quanta` quanta of weight — before the first write; refused by name. `None` below `palw_bond_budget_v1`.
@@ -4077,7 +4094,11 @@ fn apply_object_inner(
                 &claim.bond,
                 crate::palw_bond_budget_v1::PALW_BUDGET_BLOCK_UNIT_V1.saturating_mul(quanta as u64),
             )?;
-            let budget_plan = builder.plan_free_prompt_budget_v1(ctx, &claim, quanta)?;
+            let retirement = match staged_contract.as_ref() {
+                Some(prepared) => prepared.retirement_v1(),
+                None => builder.prospective_retirement_v1(*claim_id, &claim, tir_original.as_ref())?,
+            };
+            let budget_plan = builder.plan_free_prompt_budget_v1(ctx, *claim_id, &claim, quanta, &retirement)?;
             let budget_plan = match (&probation_ticket, budget_plan) {
                 (Some(ticket), Some(plan)) if ticket.weightless() => Some(plan.without_final_weight_v1()),
                 (_, plan) => plan,
@@ -4099,7 +4120,9 @@ fn apply_object_inner(
                     public_job.as_deref(),
                 )?;
             }
-            builder.stamp_staged_claim_v1(*claim_id, staged_contract)?;
+            if let Some(prepared) = staged_contract {
+                prepared.install_v1(builder, *claim_id)?;
+            }
             if let Some(wire) = public_job_wire {
                 builder.write_public_fp_job_v1(*claim_id, Some(wire))?;
             }
@@ -4145,11 +4168,7 @@ fn apply_object_inner(
                         Some(answer_row),
                     )?;
                     if let Some(carrier) = builder.extras.fp_winning_carriers.get(claim_id) {
-                        builder.write_kernel_row_encoded_v1(
-                            crate::palw_fp_answer_accounting_v1::PALW_FP_WINNING_CARRIER_TABLE_V1,
-                            claim_id.as_byte_slice(),
-                            Some(carrier),
-                        )?;
+                        super::palw_claim_local_carrier_lineage_v9::write_actual_winner_v9(builder,ctx,*claim_id,*carrier)?;
                     }
                 }
             }

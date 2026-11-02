@@ -17,7 +17,7 @@ fn store_fault(error: kaspa_database::prelude::StoreError) -> PalwSourceBootstra
     match error {
         StoreError::KeyNotFound(_) => PalwSourceBootstrapContextFaultV1::HistoryUnavailable,
         StoreError::LocalResourceUnavailable(_) => PalwSourceBootstrapContextFaultV1::CapacityUnavailable,
-        _ => PalwSourceBootstrapContextFaultV1::StoreUnreadable,
+        other => {warn!("source-bootstrap own-store read failed: {other}");PalwSourceBootstrapContextFaultV1::StoreUnreadable},
     }
 }
 fn import_fault(error: kaspa_consensus_core::errors::pruning::PruningImportError) -> PalwSourceBootstrapContextFaultV1 {
@@ -35,7 +35,7 @@ fn state_fault(error: PalwStateV2Error) -> PalwSourceBootstrapContextFaultV1 {
     match error {
         PalwStateV2Error::NativeResource(why) => PalwSourceBootstrapContextFaultV1::Capacity(why),
         PalwStateV2Error::NativeContextUnavailable(why) => why,
-        _ => PalwSourceBootstrapContextFaultV1::StoreUnreadable,
+        other => {warn!("source-bootstrap native-state observation failed: {other}");PalwSourceBootstrapContextFaultV1::StoreUnreadable},
     }
 }
 

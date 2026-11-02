@@ -1,6 +1,6 @@
 # RFC-0041 — genesis bond を廃止し、公開の BASE 回復経路から立ち上げる
 
-Status: **Adopted launch policy / 実装・立ち上げ検証未完**（2026-10-28、ユーザー決定）。[ADR-0209](../adr/0209-genesis-bond-free-bootstrap.md)。[RFC-0010 §3.2](0010-permissionless-palw-panel-and-claim-completion.md#32-freeze-the-eligible-population-and-draw-policy) の分散性・公開参加要件を補足する。
+Status: **Adopted launch policy / 候補 C10 の実装・private node 統合検証済み**（方針採択: 2026-10-28、ユーザー決定。検証: 2026-10-31）。公開ネットワーク起動は未実施。[ADR-0209](../adr/0209-genesis-bond-free-bootstrap.md)。[RFC-0010 §3.2](0010-permissionless-palw-panel-and-claim-completion.md#32-freeze-the-eligible-population-and-draw-policy) の分散性・公開参加要件を補足する。
 
 ## 決定と理由
 
@@ -28,3 +28,15 @@ Status: **Adopted launch policy / 実装・立ち上げ検証未完**（2026-10-
 ## 採択記録
 
 2026-10-28 のユーザー指示は、genesis bond の廃止、PALW ブロックが約30分ない状態で既存 BASE 回復を待ってから bond・PALW へ進む順序、初期資金源に BASE 収入と genesis UTXO を含めることを明示した。本 RFC はその決定の記録であり、実装・検証・ネットワーク起動の完了宣言ではない。
+
+
+## 実装・有限 node 検証記録 — 2026-10-31
+
+[候補 C7 の記録](../evidence/palw/rfc0041-bond-free-bootstrap-2026-10-31/README.md)で、7 package の EVM feature 込み統合ビルド、core 3 件、exact node 1 件の PASS を確認した。空 registry、genesis timestamp 起点の30分境界、実 BASE coinbase、所有 genesis UTXO と実 change からの通常署名登録、既存1000 DAA成熟、実 PALW・抽選 Panel、採用済み75/41 Gate C、既存の検証者成熟・公開告発 window、競合支出を含む reorg、同DBからの Consensus 再起動まで検査した。1つの BASE 報酬で全 bond を賄ったものではない。
+
+fixture の計算 roots を用いる private な production-pipeline 試験であり、実 LLM 再実行 campaign や公開有効化の証拠ではない。署名は抽選された承認者を認証し、正直な stake 割合・参加・取得可能性の前提は維持する。ユーザー指示により並行編集は継続し、後続候補の変更と失敗を C7 の PASS に混在させない。ソース・binary・log の SHA256 と後続候補の状態は記録の `verification.json` を参照する。
+
+
+## 最新候補の再検証 — C10（2026-10-31）
+
+[候補 C10](../evidence/palw/rfc0041-bond-free-bootstrap-2026-10-31/candidate-c10/README.md)で、後続の Prefix 裁定 helper 統合エラーの修正を含む7 packageビルド、RFC0041 core 3件・exact node 1件・関連Prefix回帰11件のPASSを確認した。C7の記録は保全する。継続編集を認めるユーザー指示に従い、固定保存した実行バイナリのSHAと、ビルド前後・試験後のソースinventoryを候補別に記録する。後の共有変更へPASSを自動適用しない。

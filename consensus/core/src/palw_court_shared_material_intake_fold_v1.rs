@@ -34,7 +34,8 @@ fn debit_submitter_storage_fee_v1(
     if collateral < fee {
         return Err(refused("material storage fee exceeds the submitter bond"));
     }
-    if u128::from(collateral).saturating_sub(b.committed_at(&submitter, now)?) < u128::from(fee) {
+    let held = super::palw_court_capacity_fold_v1::fee_reserved_principal_v1(b, &submitter, now)?;
+    if u128::from(collateral).saturating_sub(held) < u128::from(fee) {
         return Err(refused("material storage fee exceeds the submitter free principal"));
     }
     let debited = b.slash_bond(submitter, u128::from(fee))?;

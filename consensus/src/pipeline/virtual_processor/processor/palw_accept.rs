@@ -37,6 +37,15 @@ impl std::ops::Deref for PalwResolvedBlockInputsV1 {
 }
 
 impl VirtualStateProcessor {
+    /// Expose production-resolved inputs to real-node test adapters.
+    #[cfg(test)]
+    pub(in crate::pipeline::virtual_processor) fn palw_test_resolved_transition_extras_v1(
+        &self,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+    ) -> kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
+        self.palw_transition_extras_for(point).into_legacy_extras()
+    }
+
     pub fn palw_producer_facts_v2_impl(
         &self,
         class_id: kaspa_hashes::Hash64,
@@ -640,6 +649,52 @@ impl VirtualStateProcessor {
         })
     }
 
+    #[allow(clippy::type_complexity,clippy::too_many_arguments)]
+    pub(super) fn palw_v2_accepted_objects_with_native_original_context_v19(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        objects: Vec<PalwCarriedObjectV1>,
+        block: BlockHash,
+        own_attempt_class: Option<kaspa_hashes::Hash64>,
+        round_fee_incomes: &[kaspa_consensus_core::palw_bond_budget_v1::PalwRoundFeeIncomeV1],
+        escrow_settlements: &[kaspa_consensus_core::palw_funded_escrow_v1::PalwEscrowSettlementFactV1],
+        native_original_context: Option<&kaspa_consensus_core::palw_state_v2::PalwNativeOriginalInputContextV19<'_>>,
+    ) -> Result<
+        (
+            Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>,
+            kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1,
+            Vec<kaspa_consensus_core::palw_state_v2::PalwCarrierRefundV1>,
+            std::collections::BTreeMap<
+                kaspa_consensus_core::Hash64,
+                kaspa_consensus_core::palw_tir_public_fp_envelope_v1::PalwTirPublicFpEnvelopeV1,
+            >,
+            std::collections::BTreeMap<
+                kaspa_consensus_core::Hash64,
+                kaspa_consensus_core::palw_funded_original_coordinator_v1::PalwFundedOriginalPairingV1,
+            >,
+            kaspa_consensus_core::palw_fp_answer_accounting_v1::PalwFpClaimAnswersV1,
+            kaspa_consensus_core::palw_claim_local_v1::prefix_v1::PalwPrefixDependenciesV1,
+            std::collections::BTreeMap<kaspa_hashes::Hash64, Vec<kaspa_hashes::Hash64>>,
+        ),
+        PalwLocalTransitionFaultV1,
+    > {
+        kaspa_consensus_core::palw_attempt_rules_v1::palw_with_prompt_root_block_memo_v2(point.block, || {
+            self.palw_v2_accepted_objects_and_refunds_with_context_inner_v19(
+                state,
+                state_params,
+                point,
+                objects,
+                block,
+                own_attempt_class,
+                round_fee_incomes,
+                escrow_settlements,
+                native_original_context,
+            )
+        })
+    }
+
     pub(super) fn palw_v2_accepted_objects_and_refunds_inner(
         &self,
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
@@ -653,6 +708,46 @@ impl VirtualStateProcessor {
         own_attempt_class: Option<kaspa_hashes::Hash64>,
         round_fee_incomes: &[kaspa_consensus_core::palw_bond_budget_v1::PalwRoundFeeIncomeV1],
         escrow_settlements: &[kaspa_consensus_core::palw_funded_escrow_v1::PalwEscrowSettlementFactV1],
+    ) -> Result<
+        (
+            Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>,
+            kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1,
+            Vec<kaspa_consensus_core::palw_state_v2::PalwCarrierRefundV1>,
+            std::collections::BTreeMap<
+                kaspa_consensus_core::Hash64,
+                kaspa_consensus_core::palw_tir_public_fp_envelope_v1::PalwTirPublicFpEnvelopeV1,
+            >,
+            std::collections::BTreeMap<
+                kaspa_consensus_core::Hash64,
+                kaspa_consensus_core::palw_funded_original_coordinator_v1::PalwFundedOriginalPairingV1,
+            >,
+            kaspa_consensus_core::palw_fp_answer_accounting_v1::PalwFpClaimAnswersV1,
+            kaspa_consensus_core::palw_claim_local_v1::prefix_v1::PalwPrefixDependenciesV1,
+            std::collections::BTreeMap<kaspa_hashes::Hash64, Vec<kaspa_hashes::Hash64>>,
+        ),
+        PalwLocalTransitionFaultV1,
+    > {
+        self.palw_v2_accepted_objects_and_refunds_with_context_inner_v19(
+            state,state_params,point,objects,block,own_attempt_class,
+            round_fee_incomes,escrow_settlements,None,
+        )
+    }
+
+    #[allow(clippy::type_complexity,clippy::too_many_arguments)]
+    pub(super) fn palw_v2_accepted_objects_and_refunds_with_context_inner_v19(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        objects: Vec<PalwCarriedObjectV1>,
+        block: BlockHash,
+        // The class of the block's own attempt (from its header), `None` for a block with none: past
+        // `palw_audit_2026_09_23` the fold's step 3 holds room for it on the class gate, and the
+        // rehearsal must refuse the commitments the fold will (2026-09-24 DoS audit review of #11).
+        own_attempt_class: Option<kaspa_hashes::Hash64>,
+        round_fee_incomes: &[kaspa_consensus_core::palw_bond_budget_v1::PalwRoundFeeIncomeV1],
+        escrow_settlements: &[kaspa_consensus_core::palw_funded_escrow_v1::PalwEscrowSettlementFactV1],
+        native_original_context: Option<&kaspa_consensus_core::palw_state_v2::PalwNativeOriginalInputContextV19<'_>>,
     ) -> Result<
         (
             Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>,
@@ -1978,16 +2073,7 @@ impl VirtualStateProcessor {
                     let applied = if let Some(next) = rehearsed_registration.take() {
                         Ok(next)
                     } else if audit_active {
-                        kaspa_consensus_core::palw_state_v2::palw_v2_apply_one_object_retained_v1(
-                            &folded,
-                            state_params,
-                            point,
-                            &object,
-                            self.palw_unavailable_abstains_at(point.daa_score),
-                            self.palw_capability_bound_at(point.daa_score),
-                            self.palw_uncertified_weightless_at(point.daa_score),
-                            self.palw_da_court_at(point.daa_score),
-                            &*prefix_dependencies.attach_v1(&fp_answers, kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
+                        let original_extras = prefix_dependencies.attach_v1(&fp_answers, kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
                                 own_attempt_class,
                                 history_custody_pledges: history_custody_pledges.clone(),
                                 tir_public_originals: tir_public_originals.clone(),
@@ -1997,8 +2083,33 @@ impl VirtualStateProcessor {
                                 producer_custody_delegations: producer_custody_delegations.clone(),
                                 model_classes_registered_in_block: model_classes_registered_in_block.clone(),
                                 ..self.palw_transition_extras_for_rehearsal_v1(point, std::slice::from_ref(&object), &fee_extras)
-                            })?,
-                        )
+                            })?;
+                        if let Some(context)=native_original_context {
+                            kaspa_consensus_core::palw_state_v2::palw_v2_apply_one_object_with_native_original_input_context_v19(
+                            &folded,
+                            state_params,
+                            point,
+                            &object,
+                            self.palw_unavailable_abstains_at(point.daa_score),
+                            self.palw_capability_bound_at(point.daa_score),
+                            self.palw_uncertified_weightless_at(point.daa_score),
+                            self.palw_da_court_at(point.daa_score),
+                            &*original_extras,
+                                context,
+                            )
+                        }else{
+                            kaspa_consensus_core::palw_state_v2::palw_v2_apply_one_object_retained_v1(
+                            &folded,
+                            state_params,
+                            point,
+                            &object,
+                            self.palw_unavailable_abstains_at(point.daa_score),
+                            self.palw_capability_bound_at(point.daa_score),
+                            self.palw_uncertified_weightless_at(point.daa_score),
+                            self.palw_da_court_at(point.daa_score),
+                            &*original_extras,
+                            )
+                        }
                     } else {
                         // The pre-audit path: rehearse the object through a whole-block transition
                         // at a synthetic point one blue score along. Byte-identical to before the
@@ -2625,7 +2736,10 @@ impl VirtualStateProcessor {
                 kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeResource(r)=>E::Resource(r),
                 e=>E::Decode(e.to_string()),
             })?;
-            return Ok(Some(plan.terms.plan.rent_sompi));
+            let archive=funded.get(&plan.original_claim).is_some_and(|p|kaspa_consensus_core::palw_court_original_escrow_v1::original_archive_profile_kind_v2(&p.envelope().funding.terms).is_some());
+            // Existing burn takes min(declared, actual carrier fee). Require
+            // the complete signed literal rent before granting paid coverage.
+            return Ok(Some(if archive{envelope.declared_rent_sompi}else{plan.terms.plan.rent_sompi}));
         }
         if let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::TirPublicControlV1 { control } = object {
             use kaspa_consensus_core::palw_tir_public_carriage_v1::{

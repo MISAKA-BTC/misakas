@@ -1118,9 +1118,16 @@ mod tests {
         )
         .expect("certified: the fold takes the spend");
         assert!(paid.safe_weight() > certified.safe_weight(), "and weighs it (Gate C's weight site passes a certified claim)");
-        // A public-check certification licenses the same way.
-        let public = with_certification(&state, Some(O::PublicCheckCertified), 140);
-        assert!(admit_gc(&public, &ctx(6, 150, 6), &late, &env).is_ok());
+        // The legacy outcome still decodes with its old wire tag, but matching
+        // public/local replay cannot replace selected-verifier approval.
+        let legacy: O = borsh::from_slice(&[1]).unwrap();
+        assert_eq!(legacy, O::PublicCheckCertified);
+        assert_eq!(borsh::to_vec(&legacy).unwrap(), vec![1]);
+        let public = with_certification(&state, Some(legacy), 140);
+        assert!(matches!(
+            admit_gc(&public, &ctx(6, 150, 6), &late, &env),
+            Err(PalwFpAdmissionV3Error::Uncertified(_))
+        ));
 
         // Siblings: one parent, two chains that differ only in the certification row. Each reads its own.
         assert!(admit_gc(&certified, &ctx(6, 150, 6), &late, &env).is_ok());

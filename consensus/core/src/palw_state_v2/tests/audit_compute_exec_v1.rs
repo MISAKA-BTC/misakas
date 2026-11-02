@@ -203,7 +203,7 @@ fn rfc0038_answer_fold_indexes_the_settled_carrier_and_not_another_same_claim_tx
     let other = h64(0x07EE);
     let mut fenced = answered(&armed, &[(0xC0, &answer)]);
     fenced.fp_winning_carriers.insert(h64(0xC0), settled);
-    let (state, _) =
+    let (state, delta) =
         apply_derived(&chain, &p, &ctx(4, 103, 4), &[derived_commit(0xC0, &prompt, 24, leaves(8, 24))], &fenced).expect("C0 applies");
     let raw = state
         .kernel_route
@@ -215,4 +215,24 @@ fn rfc0038_answer_fold_indexes_the_settled_carrier_and_not_another_same_claim_tx
     let stored = crate::Hash64::try_from(raw.as_slice()).expect("the row is the carrier id");
     assert_eq!(stored, settled);
     assert_ne!(stored, other);
+
+    // The real carriage/row delta carries the winner together with the paid answer;
+    // a cold restore, a replay and a reorg must not select a new carrier independently.
+    let raw_carriage = borsh::to_vec(&PalwStateCarriageV2::from_state(&state)).unwrap();
+    let carriage: PalwStateCarriageV2 = borsh::from_slice(&raw_carriage).unwrap();
+    let restored = carriage.into_state_v3(&p, Some(state.state_root()), false, None).unwrap();
+    assert_eq!(restored, state);
+    assert_eq!(apply_delta_v2(&chain, &delta, &p).unwrap(), state);
+    let parent = revert_delta_v2(&restored, &delta, &p).unwrap();
+    assert_eq!(parent, chain);
+    assert!(!parent.kernel_route.as_ref().unwrap().aux.contains_key(
+        &(PALW_FP_WINNING_CARRIER_TABLE_V1, h64(0xC0).as_byte_slice().to_vec())));
+    let mut alternate = fenced.clone();
+    alternate.fp_winning_carriers.insert(h64(0xC0), other);
+    let (branch, branch_delta) = apply_derived(&parent, &p, &ctx(5, 103, 4),
+        &[derived_commit(0xC0, &prompt, 24, leaves(8, 24))], &alternate).unwrap();
+    assert_eq!(branch.kernel_route.as_ref().unwrap().aux[
+        &(PALW_FP_WINNING_CARRIER_TABLE_V1, h64(0xC0).as_byte_slice().to_vec())],
+        borsh::to_vec(&other).unwrap());
+    assert_eq!(revert_delta_v2(&branch, &branch_delta, &p).unwrap(), chain);
 }

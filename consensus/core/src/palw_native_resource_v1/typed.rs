@@ -447,6 +447,19 @@ impl NativeHeapV1 for misaka_palw_kernel::flat_quota11::stage14::source26::Stage
         self.native_inventory_parts_v1().native_heap_v1(path)
     }
 }
+// Exact owned transport DTO inventory. These exhaustive field visitors account
+// the envelope alone; a readonly archive quote must not substitute the entire
+// carrier Transaction. Terms are visited structurally, so a future owned field
+// cannot silently inherit the current fixed-width terms' zero heap.
+native_struct!(crate::palw_court_original_escrow_v1::FundingTermsV1;
+    version, network_domain, claim, job_identity, execution_root, source_id,
+    relative_graph_id, fee_profile_id, capital_profile_id, retention_profile_id,
+    settlement_policy_id, accept_from_daa, accept_until_daa, material_until_daa,
+    funding_output_index, funding_amount_sompi, payer_key_id, refund_payload, nonce);
+native_struct!(crate::palw_court_original_escrow_v1::FundingConsentV1; terms, signature);
+native_struct!(crate::palw_tir_funded_original_envelope_v1::PalwTirFundedOriginalEnvelopeV1;
+    version, original_envelope, funding, payer_pubkey);
+
 /// G14 int: the funded-original pairing holds a whole carrier `Transaction` (whose private `TransactionMass`/`SmallVec` script
 /// layouts the generator cannot visit), so its heap is hand-counted: input/output vector capacities, each input's signature
 /// script, each output's script bytes (conservatively counted as heap whether or not the SmallVec spilled), the payload, and the

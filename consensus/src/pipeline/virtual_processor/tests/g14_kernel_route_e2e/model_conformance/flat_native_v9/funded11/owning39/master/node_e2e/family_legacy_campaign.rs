@@ -12,6 +12,11 @@ use kaspa_consensus_core::palw_tokenizer_artifact_inventory_v1::*;
 use misaka_palw_sdk::onboarding_chain::{EnvelopeSigner, SignedRegistrationRequestV1};
 use std::path::Path;
 
+mod adjudication;
+mod refund;
+pub(super) use refund::{refund_family_escrow_v2, refund_family_escrow_reorg_v3};
+pub(super) use adjudication::{adjudicate_forged_family_claim_v2, complete_honest_family_court_v2};
+
 struct FamilyCardSignerV2(usize);
 impl EnvelopeSigner for FamilyCardSignerV2 {
     fn public_key(&self) -> Vec<u8> {
@@ -235,8 +240,27 @@ pub(super) struct AdmittedFamilyOriginalV2 {
     pub claim: Hash64,
     pub carrier: Transaction,
     pub folding: Block,
-    pub origin: kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+    /// Stored carrying provenance is not an authenticated full native point.
+    pub stored_origin: (Hash64,u64,u64),
+    /// Present only when actual source admission authenticates the full point.
+    pub actual_origin: Option<kaspa_consensus_core::palw_state_v2::PalwBlockContextV2>,
     pub inventories: Vec<(Hash64, Vec<(kaspa_consensus_core::palw_court_family_material_v1::FamilyMaterialTargetV1, u64)>)>,
+    /// Confirmed ordinary outputs of the original carrier, separate from escrow.
+    pub material_funding: Vec<(Hash64, kaspa_consensus_core::palw_court_family_material_v1::FamilyMaterialTargetV1, TransactionOutpoint)>,
+    pub target_ids: Vec<(Hash64, kaspa_consensus_core::palw_court_family_material_v1::FamilyMaterialTargetV1, Hash64)>,
+}
+
+/// Compare against the independently retained accepted outer transaction, not
+/// an inner TFO2/FPA1 id reconstructed from the winning row itself.
+pub(super) fn assert_family_winning_carrier_v2(state: &PalwChainStateV2, admitted: &AdmittedFamilyOriginalV2) {
+    let expected = borsh::to_vec(&admitted.carrier.id()).unwrap();
+    let route = state.kernel_route_state_v1().expect("accepted original has its native route");
+    assert_eq!(
+        route.aux.get(&(kaspa_consensus_core::palw_fp_answer_accounting_v1::PALW_FP_WINNING_CARRIER_TABLE_V1,
+            admitted.claim.as_byte_slice().to_vec())),
+        Some(&expected),
+        "winning carrier is exactly the accepted signed outer transaction, including FPR2/FPA1 wrappers"
+    );
 }
 
 /// Reprice at the node's actual next admission point, then sign each independent
@@ -245,8 +269,28 @@ pub(super) struct AdmittedFamilyOriginalV2 {
 pub(super) async fn admit_family_original_v2(
     net: &mut Net,
     capture: &FamilyCaptureV2,
-    mut provenance: Option<kaspa_consensus_core::palw_claim_local_v1::prefix_v1::PalwPrefixDependencyEnvelopeV1>,
+    provenance: Option<kaspa_consensus_core::palw_claim_local_v1::prefix_v1::PalwPrefixDependencyEnvelopeV1>,
 ) -> AdmittedFamilyOriginalV2 {
+    admit_family_original_archive_mode_v1(net,capture,provenance,None).await
+}
+pub(super) async fn admit_family_original_archive_mode_v1(
+    net:&mut Net,capture:&FamilyCaptureV2,
+    provenance:Option<kaspa_consensus_core::palw_claim_local_v1::prefix_v1::PalwPrefixDependencyEnvelopeV1>,
+    archive_budget:Option<kaspa_consensus_core::palw_state_v2::PalwOriginalArchivePayerBudgetV1>,
+)->AdmittedFamilyOriginalV2 {
+    admit_family_original_archive_case_v1(net,capture,provenance,archive_budget,ArchiveCarrierCaseV1::Positive).await.expect("positive actual archive carrier")
+}
+#[derive(Clone,Copy,PartialEq,Eq)]
+pub(super) enum ArchiveCarrierCaseV1{Positive,RentShort,CapitalShort}
+pub(super) async fn admit_family_original_archive_case_v1(
+    net:&mut Net,capture:&FamilyCaptureV2,
+    mut provenance:Option<kaspa_consensus_core::palw_claim_local_v1::prefix_v1::PalwPrefixDependencyEnvelopeV1>,
+    archive_budget:Option<kaspa_consensus_core::palw_state_v2::PalwOriginalArchivePayerBudgetV1>,
+    case:ArchiveCarrierCaseV1,
+)->Option<AdmittedFamilyOriginalV2> {
+    admit_family_original_archive_case_kind_v2(net,capture,provenance,archive_budget,case,false).await
+}
+pub(super) async fn admit_family_original_archive_case_kind_v2(net:&mut Net,capture:&FamilyCaptureV2,mut provenance:Option<kaspa_consensus_core::palw_claim_local_v1::prefix_v1::PalwPrefixDependencyEnvelopeV1>,archive_budget:Option<kaspa_consensus_core::palw_state_v2::PalwOriginalArchivePayerBudgetV1>,case:ArchiveCarrierCaseV1,mixed:bool)->Option<AdmittedFamilyOriginalV2>{
     use kaspa_consensus_core::palw_court_family_supplier_v1::*;
     use kaspa_consensus_core::palw_court_original_escrow_v1::{COURT_ORIGINAL_FUNDING_SIGNATURE_CONTEXT_V1, FundingConsentV1};
     use kaspa_consensus_core::palw_history_custody_v1::*;
@@ -260,7 +304,9 @@ pub(super) async fn admit_family_original_v2(
     let claim = fp.claim_id();
     let old = net.chain.tip_state().1;
     let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
-        block: Hash64::from_u64_word(0xfa42),
+        // Quote context uses the real accepted parent; the future birth is
+        // recovered only from executed Source8 after the carrier folds.
+        block: if archive_budget.is_some(){net.chain.sink()}else{Hash64::from_u64_word(0xfa42)},
         daa_score: net.daa() + 2,
         blue_score: old.last_point().unwrap().blue_score + 2,
         subsidy: 0,
@@ -301,10 +347,12 @@ pub(super) async fn admit_family_original_v2(
     }
     // Exact producer projection, checked by the quote against the signed FP.
     let object = capture.object.clone();
+    let (quoted_input,_) = net.funding[card].clone();
+    let candidate_inputs=vec![TransactionInput::new(quoted_input,Vec::new(),0,1)];
     let native = net
         .chain
         .vp()
-        .palw_family_original_native_quote_v2_impl(point, object, envelope.clone(), table)
+        .palw_family_original_native_quote_v3_impl(point,object,envelope.clone(),table,&candidate_inputs,provenance.as_ref())
         .expect("native full original Source/graph/four-role inventory quote");
     assert_eq!(native.accepted_daa_v2(), point.daa_score);
     let schedule = kaspa_consensus_core::palw_g14_values_v1::palw_g14_funded_original_schedule_estimate_v1();
@@ -346,7 +394,7 @@ pub(super) async fn admit_family_original_v2(
         terms.accept_until_daa = point.daa_score;
         terms.respond_until_daa = native.hard_until_v2();
         terms.material_until_daa = native.material_until_v2();
-        let terms = kaspa_consensus_core::palw_state_v2::palw_family_supplier_terms_quote_v1(inventory, terms).unwrap();
+        let terms = kaspa_consensus_core::palw_state_v2::palw_family_supplier_terms_quote_v3(inventory, terms).unwrap();
         suppliers.push(
             sign_family_supplier_v1(terms, |who, message, context| {
                 assert_eq!(*who, producer);
@@ -355,7 +403,11 @@ pub(super) async fn admit_family_original_v2(
             .unwrap(),
         );
     }
-    let inventories = native
+    let target_ids = native.inventories_v2().iter().zip(&suppliers).flat_map(|(inventory, consent)| {
+        let contract = consent.id_v1().unwrap();
+        inventory.targets_v1().iter().map(move |(target, _)| (contract, *target, inventory.target_id_v1(*target).unwrap()))
+    }).collect();
+    let inventories: Vec<_> = native
         .inventories_v2()
         .iter()
         .zip(&suppliers)
@@ -367,6 +419,24 @@ pub(super) async fn admit_family_original_v2(
         suppliers,
         semantic_table: capture.original.semantic_table.clone(),
     };
+    let funded = funded.with_signature_aliases_v3().unwrap();
+    let mut funding_amount=native.required_original_funding_v2();
+    let funded=if let Some(budget)=archive_budget {
+        let spk=kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(&refund.as_bytes());
+        let mut draft=Transaction::new(crate::constants::TX_VERSION,candidate_inputs.clone(),vec![TransactionOutput::new(0,spk.clone()),TransactionOutput::new(funding_amount,spk)],0,kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT,0,funded.encode_v2().unwrap());
+        draft.finalize();
+        let quote=if mixed{net.chain.vp().palw_original_archive_native_quote_v2_impl(point,&capture.object,&draft,&draft.payload,provenance.as_ref(),budget)}else{net.chain.vp().palw_original_archive_native_quote_v1_impl(point,&capture.object,&draft,&draft.payload,provenance.as_ref(),budget)}.expect("normal public archive quote from actual accepted node state");
+        let expected=if mixed{kaspa_consensus_core::palw_court_original_escrow_v1::OriginalArchiveProfileKindV2::MixedV2}else{kaspa_consensus_core::palw_court_original_escrow_v1::OriginalArchiveProfileKindV2::MaterialV1};
+        let mut terms=PalwTirFundedOriginalEnvelopeV1::decode_v1(&funded.funded_original).unwrap().funding.terms;
+        quote.bind_existing_funding_terms_v1(&mut terms).unwrap();
+        assert_eq!(kaspa_consensus_core::palw_court_original_escrow_v1::original_archive_profile_kind_v2(&terms),Some(expected));
+        eprintln!("[archive-node-quote] payer rent ceiling={} capital ceiling={} native input capacity={} final H={} full rent={} funding={}",budget.additional_carrier_rent_sompi,budget.dedicated_archive_capital_sompi,quote.input_archive_capacity_bytes_v1(),quote.material_until_daa_v1(),quote.declared_rent_sompi_v1(),quote.funding_output_amount_sompi_v1());
+        funding_amount=quote.funding_output_amount_sompi_v1();
+        envelope.declared_rent_sompi=quote.declared_rent_sompi_v1();
+        let signature=signer.sign_with_context(terms.id_v1().as_byte_slice(),COURT_ORIGINAL_FUNDING_SIGNATURE_CONTEXT_V1).unwrap();
+        let tfo=PalwTirFundedOriginalEnvelopeV1::new_v1(envelope.encode_v1().unwrap(),FundingConsentV1{terms,signature},signer.public_key()).unwrap();
+        PalwTirFundedOriginalEnvelopeV2{funded_original:tfo.encode_v1().unwrap(),..funded}.with_signature_aliases_v3().unwrap()
+    }else{funded};
     let mut payload = funded.encode_v2().unwrap();
     payload =
         kaspa_consensus_core::palw_fp_answer_accounting_v1::palw_fp_answer_envelope_retain_encode_v1(&payload, &capture.generated)
@@ -378,16 +448,30 @@ pub(super) async fn admit_family_original_v2(
     }
     let (input, entry) = net.funding[card].clone();
     let fee = envelope.declared_rent_sompi.checked_add(FEE).unwrap();
+    // Material control capital exists in the same confirmed carrier as the
+    // original. A later splitter would consume the first promised opportunity.
+    let mut material_outputs = Vec::new();
+    for (contract, targets) in &inventories {
+        for (target, bound) in targets {
+            if *target == kaspa_consensus_core::palw_court_family_material_v1::FamilyMaterialTargetV1::SemanticTable { continue; }
+            let controls = bound.div_ceil(kaspa_consensus_core::palw_court_family_material_v1::FAMILY_MATERIAL_PART_BYTES_V1 as u64).checked_add(2).unwrap();
+            material_outputs.push((*contract, *target, FEE.checked_mul(controls.checked_add(1).unwrap()).unwrap()));
+        }
+    }
+    let lane_total = material_outputs.iter().try_fold(0u64, |sum, (_, _, value)| sum.checked_add(*value)).unwrap();
     let change = entry
         .amount
-        .checked_sub(native.required_original_funding_v2())
+        .checked_sub(lane_total)
+        .and_then(|n| n.checked_sub(funding_amount))
         .and_then(|n| n.checked_sub(fee))
         .expect("actual finite genesis float must fund original escrow and native carrier rent");
     let spk = kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(&refund.as_bytes());
+    let mut outputs = vec![TransactionOutput::new(change, spk.clone()), TransactionOutput::new(funding_amount, spk.clone())];
+    outputs.extend(material_outputs.iter().map(|(_, _, amount)| TransactionOutput::new(*amount, spk.clone())));
     let mut carrier = Transaction::new(
         crate::constants::TX_VERSION,
-        vec![TransactionInput::new(input, Vec::new(), 0, 1)],
-        vec![TransactionOutput::new(change, spk.clone()), TransactionOutput::new(native.required_original_funding_v2(), spk.clone())],
+        {assert_eq!(input,candidate_inputs[0].previous_outpoint);candidate_inputs},
+        outputs,
         0,
         kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT,
         0,
@@ -395,10 +479,44 @@ pub(super) async fn admit_family_original_v2(
     );
     crate::pipeline::virtual_processor::tests::t12_round_lane_e2e::sign_spend(
         &mut carrier,
-        entry,
+        entry.clone(),
         card,
         net.config.params.storage_mass_parameter,
     );
+    if case!=ArchiveCarrierCaseV1::Positive{
+        assert!(archive_budget.is_some());
+        if case==ArchiveCarrierCaseV1::RentShort{
+            // Same full signed literal/profile; real outer fee is rent-1.
+            carrier.outputs[0].value=carrier.outputs[0].value.checked_add(FEE).and_then(|v|v.checked_add(1)).unwrap();
+        }else{
+            let mut short_funded=funded.clone();
+            let mut short_base=PalwTirFundedOriginalEnvelopeV1::decode_v1(&short_funded.funded_original).unwrap();
+            short_base.funding.terms.funding_amount_sompi-=1;
+            short_base.funding.signature=signer.sign_with_context(short_base.funding.terms.id_v1().as_byte_slice(),COURT_ORIGINAL_FUNDING_SIGNATURE_CONTEXT_V1).unwrap();
+            short_funded.funded_original=short_base.encode_v1().unwrap();
+            let mut payload=kaspa_consensus_core::palw_fp_answer_accounting_v1::palw_fp_answer_envelope_retain_encode_v1(&short_funded.with_signature_aliases_v3().unwrap().encode_v2().unwrap(),&capture.generated).unwrap().to_vec();
+            if let Some(p)=&provenance{let mut p=p.clone();p.inner=payload;payload=p.encode_v1().unwrap();}
+            carrier.payload=payload;carrier.outputs[1].value-=1;carrier.outputs[0].value+=1;
+        }
+        carrier.finalize();
+        crate::pipeline::virtual_processor::tests::t12_round_lane_e2e::sign_spend(&mut carrier,entry.clone(),card,net.config.params.storage_mass_parameter);
+        assert!(carrier.id_is_current());
+        // This is a PALW allocation refusal, not a UTXO/block rollback. Submit
+        // a real block even if local mempool policy rejects the allocation.
+        let carrying=net.chain.heartbeat(net.ttpb(),vec![carrier.clone()]).await;
+        assert!(carrying.transactions.iter().any(|tx|tx.id()==carrier.id()));
+        net.chain.heartbeat(net.ttpb(),Vec::new()).await;
+        let state=net.chain.tip_state().1;
+        assert!(state.claim(&claim).is_none(),"underpaid native allocation must be dropped");
+        assert!(state.funded_escrows_v1().values().all(|row|row.claim!=claim),"no Source17-funded allocation/escrow may survive");
+        assert!(state.family_supplier_rows_v1().unwrap().iter().all(|(_,row)|row.consent.terms.claim!=claim));
+        assert_eq!(net.chain.ctx.consensus.get_virtual_utxo_entry(TransactionOutpoint::new(carrier.id(),0)).unwrap().amount,carrier.outputs[0].value,"ordinary signed carrier UTXO change survives");
+        assert_eq!(net.chain.ctx.consensus.get_virtual_utxo_entry(TransactionOutpoint::new(carrier.id(),1)).unwrap().amount,carrier.outputs[1].value,"unadmitted own output remains ordinary UTXO");
+        assert!(net.chain.ctx.consensus.get_virtual_utxo_entry(input).is_none(),"actual input was spent despite allocation refusal");
+        let cold=PalwStateCarriageV2::from_state(&state).into_state(&net.bundle.state,Some(state.state_root())).unwrap();
+        assert_eq!(cold.state_root(),state.state_root(),"ordinary negative state has no dangling financial/source indices");
+        return None;
+    }
     net.mempool(&carrier).expect("actual signed native inputs and TFO2 pass this node's mempool");
     let carrying = net.chain.heartbeat(net.ttpb(), vec![carrier.clone()]).await;
     assert!(carrying.transactions.iter().any(|tx| tx.id() == carrier.id()));
@@ -406,6 +524,11 @@ pub(super) async fn admit_family_original_v2(
     let state = net.chain.tip_state().1;
     let admitted = state.claim(&claim).expect("actual accepted carrier must install its original, not an ordinary fallback");
     assert_eq!(admitted.accepted_daa, point.daa_score, "singleton admission is never silently shifted");
+    let winning = borsh::to_vec(&carrier.id()).unwrap();
+    assert_eq!(state.kernel_route_state_v1().unwrap().aux.get(&(
+        kaspa_consensus_core::palw_fp_answer_accounting_v1::PALW_FP_WINNING_CARRIER_TABLE_V1,
+        claim.as_byte_slice().to_vec(),
+    )), Some(&winning), "actual native acceptance records the literal outer carrier id");
     assert_eq!(
         state.family_supplier_rows_v1().unwrap().iter().filter(|(_, row)| row.consent.terms.claim == claim).count(),
         native.inventories_v2().len()
@@ -415,18 +538,33 @@ pub(super) async fn admit_family_original_v2(
         .values()
         .find(|row| row.funding_outpoint == TransactionOutpoint::new(carrier.id(), 1))
         .expect("actual own output is the locked escrow");
-    assert_eq!(escrow.amount_sompi, native.required_original_funding_v2());
+    assert_eq!(escrow.amount_sompi, funding_amount);
     assert_eq!(
         net.chain.ctx.consensus.get_virtual_utxo_entry(TransactionOutpoint::new(carrier.id(), 1)).unwrap().amount,
         escrow.amount_sompi
     );
-    net.funding[card] = (TransactionOutpoint::new(carrier.id(), 0), UtxoEntry::new(change, spk, 0, false));
-    let origin = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
-        block: admitted.accepted_block,
-        daa_score: admitted.accepted_daa,
-        blue_score: admitted.accepted_blue_score,
-        subsidy: 0,
-    };
+    let change_outpoint = TransactionOutpoint::new(carrier.id(), 0);
+    net.funding[card] = (change_outpoint, net.chain.ctx.consensus.get_virtual_utxo_entry(change_outpoint).unwrap());
+    let material_funding = material_outputs.iter().enumerate().map(|(index, (contract, target, amount))| {
+        let outpoint = TransactionOutpoint::new(carrier.id(), u32::try_from(index + 2).unwrap());
+        assert_eq!(net.chain.ctx.consensus.get_virtual_utxo_entry(outpoint).unwrap().amount, *amount);
+        (*contract, *target, outpoint)
+    }).collect();
+    let stored_origin = (admitted.accepted_block,admitted.accepted_daa,admitted.accepted_blue_score);
+    let actual_origin = if net.bundle.state.claim_local_settlement_active_at(state.last_point().unwrap().daa_score) {
+        Some(*kaspa_consensus_core::palw_state_v2::palw_actual_fp_accepting_point_from_live_stored_v1(
+            &state,claim,stored_origin).expect("actual source admission must authenticate the complete birth point"))
+    } else {None};
+    if archive_budget.is_some(){
+        let actual=actual_origin.expect("new profile requires actual Source8 birth, never prospective point block label");
+        let status=kaspa_consensus_core::palw_state_v2::palw_original_archive_status_v1(&state,claim,actual).unwrap().expect("normal constructed Source17 receipt");
+        assert!(status.constructed_v1()&&status.material_ready_v1());
+        assert_eq!(status.contract_v1(),escrow.contract_id);
+        assert_eq!(status.source_v1(),envelope.pledge.source_id);
+        assert!(!state.kernel_route_state_v1().unwrap().aux.contains_key(&(kaspa_consensus_core::palw_claim_local_v1::PALW_CLAIM_LOCAL_TABLE_V1,kaspa_consensus_core::palw_claim_local_v1::palw_claim_liability_frame_key_v1(actual.block).to_vec())),"pure original source uses scoped archive rather than birth F1");
+        let restored=PalwStateCarriageV2::from_state(&state).into_state(&net.bundle.state,Some(state.state_root())).unwrap();
+        assert_eq!(kaspa_consensus_core::palw_state_v2::palw_original_archive_status_v1(&restored,claim,actual).unwrap(),Some(status));
+    }
     let locked = TransactionOutpoint::new(carrier.id(), 1);
     let locked_entry = net.chain.ctx.consensus.get_virtual_utxo_entry(locked).unwrap();
     let mut unauthorized = Transaction::new(
@@ -445,10 +583,8 @@ pub(super) async fn admit_family_original_v2(
         net.config.params.storage_mass_parameter,
     );
     assert!(net.mempool(&unauthorized).is_err(), "a genuinely signed payer spend cannot bypass accepted original escrow");
-    let rejected = net.chain.heartbeat(net.ttpb(), vec![unauthorized.clone()]).await;
-    assert!(!rejected.transactions.iter().any(|tx| tx.id() == unauthorized.id()), "real template excludes the unauthorized spend");
     assert_eq!(net.chain.ctx.consensus.get_virtual_utxo_entry(locked).unwrap().amount, locked_entry.amount);
-    AdmittedFamilyOriginalV2 { claim, carrier, folding, origin, inventories }
+    Some(AdmittedFamilyOriginalV2 { claim, carrier, folding, stored_origin, actual_origin, inventories, material_funding, target_ids })
 }
 
 /// Actual A/C admission phase of the joint campaign. Explicit paths are
@@ -508,12 +644,16 @@ pub(super) async fn admit_source_and_prefix_consumer_v2(
         Some(PalwPrefixDependencyEnvelopeV1 { inner: vec![1], exports: vec![signed], consumed: None }),
     )
     .await;
+    // Confirm the source's promised materials before starting a later consumer's
+    // clock. The caller may repeat supply: completed targets are checked/skipped.
+    supply_family_materials_v2(net, &source, &a).await;
     let state = net.chain.tip_state().1;
-    let context = state.claim_local_admission_context_v1(&net.bundle.state, &a.origin, a.claim).unwrap().unwrap();
+    let origin=a.actual_origin.expect("Prefix provenance requires an authenticated actual birth");
+    let context = state.claim_local_admission_context_v1(&net.bundle.state, &origin, a.claim).unwrap().unwrap();
     let (actual_export, identity) = context.prefix_export_v1(0).unwrap().unwrap();
-    assert_eq!(identity.accepted_block, a.origin.block);
-    assert_eq!(identity.accepted_daa, a.origin.daa_score);
-    assert_eq!(identity.accepted_blue_score, a.origin.blue_score);
+    assert_eq!(identity.accepted_block, origin.block);
+    assert_eq!(identity.accepted_daa, origin.daa_score);
+    assert_eq!(identity.accepted_blue_score, origin.blue_score);
     // The use signs the actual authenticated birth returned by executed state,
     // never a predicted containing block or a producer-supplied origin.
     let usage = PalwPrefixUseIntentV1 {
@@ -552,6 +692,10 @@ pub(super) async fn admit_source_and_prefix_consumer_v2(
         restored.state_root(),
         "actual signed A/C accepted carriers restore through full native validation"
     );
+    assert_family_winning_carrier_v2(&state, &a);
+    assert_family_winning_carrier_v2(&state, &c);
+    assert_family_winning_carrier_v2(&restored, &a);
+    assert_family_winning_carrier_v2(&restored, &c);
     assert_ne!(state.claim(&a.claim).unwrap().bond, state.claim(&c.claim).unwrap().bond);
     (source, a, consumer, c)
 }
@@ -594,7 +738,7 @@ pub(super) async fn supply_family_materials_v2(net: &mut Net, capture: &FamilyCa
                 range: PalwStepRangeOpeningV1 {
                     first_leaf_index: first,
                     leaf_hashes: capture.hashes[first as usize..first as usize + count as usize].to_vec(),
-                    siblings: step_merkle_range_siblings_v1(&capture.hashes, first, u64::from(count)).unwrap(),
+                    siblings: step_merkle_range_siblings_v1(&capture.hashes, usize::try_from(first).unwrap(), usize::try_from(count).unwrap()).unwrap(),
                 },
             },
             Q::RowsNode { level, index } => {
@@ -649,14 +793,16 @@ pub(super) async fn supply_family_materials_v2(net: &mut Net, capture: &FamilyCa
             },
         }
     };
+    let supplier_rows = state.family_supplier_rows_v1().unwrap();
     let mut lanes = Vec::new();
     for (contract, targets) in &admitted.inventories {
         let mut targets = targets.clone();
         targets.sort_by_key(|(target, _)| !matches!(target, T::Input(M::FullIds)));
         for (target, bound) in targets {
-            if target == T::SemanticTable {
-                continue;
-            } // supplied by actual original carrier
+            let row = &supplier_rows.iter().find(|(id, _)| id == contract).unwrap().1;
+            let target_id = admitted.target_ids.iter().find(|(id, native_target, _)| id == contract && *native_target == target).unwrap().2;
+            if row.completed.contains_key(&target_id) { continue; }
+            assert_ne!(target, T::SemanticTable, "the actual original carrier completes its exact table target");
             let body = match target {
                 T::TokenizerRaw => borsh::to_vec(&capture.raw).unwrap(),
                 T::Input(M::Parameter { leaf }) => {
@@ -697,7 +843,7 @@ pub(super) async fn supply_family_materials_v2(net: &mut Net, capture: &FamilyCa
             ));
         }
     }
-    send_parallel_family_controls_v2(net, capture.card, admitted.claim, lanes).await;
+    send_parallel_family_controls_v2(net, capture.card, admitted, lanes).await;
     let state = net.chain.tip_state().1;
     for (contract, targets) in &admitted.inventories {
         assert_eq!(
@@ -711,6 +857,9 @@ pub(super) async fn supply_family_materials_v2(net: &mut Net, capture: &FamilyCa
         restored.state_root(),
         "actual node multipart material and financial sidecars survive native cold restore"
     );
+    assert_family_winning_carrier_v2(&state, admitted);
+    assert_family_winning_carrier_v2(&restored, admitted);
+    adjudication::supply_missing_family_numerical_material_v2(net, capture, admitted).await;
 }
 
 /// Actual claim-level selected approval after the honest consumer's independent
@@ -786,57 +935,30 @@ pub(super) async fn certify_honest_family_claim_v2(net: &mut Net, admitted: &Adm
 /// Real confirmed UTXO lanes remove the harness's one-float-per-card
 /// serialization. All target dependencies remain on their own lane, and IDs
 /// finish before row/tile bodies that authenticate against complete IDs.
-async fn send_parallel_family_controls_v2(net: &mut Net, card: usize, claim: Hash64, objects: Vec<(bool, Vec<Obj>)>) {
+async fn send_parallel_family_controls_v2(net: &mut Net, card: usize, admitted: &AdmittedFamilyOriginalV2, objects: Vec<(bool, Vec<Obj>)>) {
     use kaspa_consensus_core::palw_lifecycle_objects_v2::{PALW_LIFECYCLE_TX_VERSION_V2, PalwLifecycleTxPayloadV2};
     use std::collections::VecDeque;
     if objects.is_empty() {
         return;
     }
     let starting = net.daa();
-    let (input, entry) = net.funding[card].clone();
-    let script = entry.script_public_key.clone();
-    let amounts: Vec<_> = objects.iter().map(|(_, items)| FEE.checked_mul(items.len() as u64 + 1).unwrap()).collect();
-    let total = amounts.iter().try_fold(FEE, |sum, n| sum.checked_add(*n)).unwrap();
-    let change = entry.amount.checked_sub(total).expect("parallel material controls spend only finite actual producer UTXOs");
-    let mut outputs = vec![TransactionOutput::new(change, script.clone())];
-    outputs.extend(amounts.iter().map(|n| TransactionOutput::new(*n, script.clone())));
-    let mut splitter = Transaction::new(
-        crate::constants::TX_VERSION,
-        vec![TransactionInput::new(input, vec![], 0, 1)],
-        outputs,
-        0,
-        kaspa_consensus_core::subnets::SUBNETWORK_ID_NATIVE,
-        0,
-        vec![],
-    );
-    crate::pipeline::virtual_processor::tests::t12_round_lane_e2e::sign_spend(
-        &mut splitter,
-        entry,
-        card,
-        net.config.params.storage_mass_parameter,
-    );
-    net.mempool(&splitter).expect("actual producer signs and funds independent material control lanes");
-    let carrying = net.chain.heartbeat(net.ttpb(), vec![splitter.clone()]).await;
-    assert!(carrying.transactions.iter().any(|t| t.id() == splitter.id()));
-    net.chain.heartbeat(net.ttpb(), Vec::new()).await;
-    let main = TransactionOutpoint::new(splitter.id(), 0);
-    net.funding[card] = (main, net.chain.ctx.consensus.get_virtual_utxo_entry(main).unwrap());
-    let mut lanes: Vec<_> = objects
-        .into_iter()
-        .enumerate()
-        .map(|(index, (early, items))| {
-            let outpoint = TransactionOutpoint::new(splitter.id(), index as u32 + 1);
-            (early, outpoint, net.chain.ctx.consensus.get_virtual_utxo_entry(outpoint).unwrap(), VecDeque::from(items))
-        })
-        .collect();
+    let claim = admitted.claim;
+    let mut lanes: Vec<_> = objects.into_iter().map(|(early, items)| {
+        let Obj::CourtFamilyMaterialV1 { control } = &items[0] else { panic!("material lane must contain only native family controls") };
+        let outpoint = admitted.material_funding.iter().find(|(contract, target, _)| *contract == control.contract && *target == control.target).unwrap().2;
+        let entry = net.chain.ctx.consensus.get_virtual_utxo_entry(outpoint).expect("original-confirmed actual material funding output");
+        assert!(entry.amount >= FEE.checked_mul(items.len() as u64 + 1).unwrap());
+        let total = items.len();
+        (early, outpoint, entry, VecDeque::from(items), total)
+    }).collect();
     let frame = kaspa_consensus_core::palw_tir_public_claim_v1::palw_tir_public_claim_v1(&net.chain.tip_state().1, claim)
         .unwrap()
         .plan_v1()
         .clone();
     let mut inputs_checked = false;
     let mut batches = 0;
-    while lanes.iter().any(|(_, _, _, items)| !items.is_empty()) {
-        let early = lanes.iter().any(|(early, _, _, items)| *early && !items.is_empty());
+    while lanes.iter().any(|(_, _, _, items, _)| !items.is_empty()) {
+        let early = lanes.iter().any(|(early, _, _, items, _)| *early && !items.is_empty());
         if !early && !inputs_checked {
             assert!(
                 net.daa() + 2 < frame.preparation_until_daa,
@@ -856,10 +978,29 @@ async fn send_parallel_family_controls_v2(net: &mut Net, card: usize, claim: Has
         }
         let mut offered = Vec::new();
         let mut indexes = Vec::new();
-        for (index, (is_early, input, entry, items)) in lanes.iter().enumerate() {
-            if items.is_empty() || (*is_early != early) {
-                continue;
-            }
+        let state = net.chain.tip_state().1;
+        let service = state.court_service_state_v1().unwrap();
+        let rows = state.family_supplier_rows_v1().unwrap();
+        let mut next_assignment = None;
+        for (index, (_is_early, input, entry, items, _total)) in lanes.iter().enumerate() {
+            if items.is_empty() { continue; }
+            let Obj::CourtFamilyMaterialV1 { control } = items.front().unwrap() else { unreachable!() };
+            let row = &rows.iter().find(|(id, _)| *id == control.contract).unwrap().1;
+            let target = admitted.target_ids.iter().find(|(id, native_target, _)| *id == control.contract && *native_target == control.target).unwrap().2;
+            use kaspa_consensus_core::palw_court_family_material_v1::FamilyMaterialActionV1 as A;
+            let ordinal = match &control.action {
+                A::Begin { .. } => 0,
+                A::Part { offset, .. } => offset / kaspa_consensus_core::palw_court_family_material_v1::FAMILY_MATERIAL_PART_BYTES_V1 as u64 + 1,
+                A::Finish { .. } => u64::try_from(row.targets.iter().find(|t| t.id == target).unwrap().packets.len() - 1).unwrap(),
+                A::BeginReserved { .. } => panic!("this campaign serves only its primary original-paid inventory"),
+            };
+            let target_row = row.targets.iter().find(|t| t.id == target).unwrap();
+            let packet = target_row.packets[usize::try_from(ordinal).unwrap()];
+            let assigned = service.book.assigned_daa(&packet).unwrap();
+            let accepting = net.daa().checked_add(2).unwrap();
+            assert!(assigned >= accepting, "actual primary assignment must remain reachable after its causal predecessor: assigned={assigned} accepting={accepting}");
+            next_assignment = Some(next_assignment.map_or(assigned, |old: u64| old.min(assigned)));
+            if assigned != accepting { continue; }
             let payload = borsh::to_vec(&PalwLifecycleTxPayloadV2 {
                 version: PALW_LIFECYCLE_TX_VERSION_V2,
                 object: items.front().unwrap().clone(),
@@ -868,7 +1009,7 @@ async fn send_parallel_family_controls_v2(net: &mut Net, card: usize, claim: Has
             let mut tx = Transaction::new(
                 crate::constants::TX_VERSION,
                 vec![TransactionInput::new(*input, vec![], 0, 1)],
-                vec![TransactionOutput::new(entry.amount.checked_sub(FEE).unwrap(), script.clone())],
+                vec![TransactionOutput::new(entry.amount.checked_sub(FEE).unwrap(), entry.script_public_key.clone())],
                 0,
                 kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE,
                 0,
@@ -883,6 +1024,12 @@ async fn send_parallel_family_controls_v2(net: &mut Net, card: usize, claim: Has
             net.mempool(&tx).expect("parallel material lane is signed and spends an actually confirmed output");
             offered.push(tx);
             indexes.push(index);
+        }
+        if offered.is_empty() {
+            let target = next_assignment.expect("remaining actual material lane has a rooted assignment").checked_sub(2).unwrap();
+            assert!(target > net.daa());
+            net.beat_to(target).await;
+            continue;
         }
         let carrying = net.chain.heartbeat(net.ttpb(), offered.clone()).await;
         let mut included = 0;
@@ -929,7 +1076,7 @@ async fn send_parallel_family_controls_v2(net: &mut Net, card: usize, claim: Has
     );
     // The one-FEE lane changes remain actual unspent outputs in the node.
     // They are excluded from the main float, never replaced by a nominal sum.
-    for (_, outpoint, entry, items) in lanes {
+    for (_, outpoint, entry, items, _) in lanes {
         assert!(items.is_empty());
         assert_eq!(net.chain.ctx.consensus.get_virtual_utxo_entry(outpoint).unwrap().amount, entry.amount);
     }
@@ -948,4 +1095,65 @@ async fn family_native39_real_node_original_material_packing_from_producer_captu
     register_family_capture_class_v2(&mut net, &capture).await;
     let admitted = admit_family_original_v2(&mut net, &capture, None).await;
     supply_family_materials_v2(&mut net, &capture, &admitted).await;
+    settle_family_escrow_fee_v2(&mut net, &capture, &admitted).await;
+}
+
+/// Spend the actual admitted escrow through native script validation, mempool,
+/// block packing, UTXO acceptance and the rooted settlement fold. Fee funding is
+/// a separate real input; the escrow's scheduled burn is never collectible.
+pub(super) async fn settle_family_escrow_fee_v2(net: &mut Net, capture: &FamilyCaptureV2, admitted: &AdmittedFamilyOriginalV2) {
+    use kaspa_consensus_core::palw_funded_escrow_v1 as escrow;
+    let before = net.chain.tip_state().1;
+    let row = *before.funded_escrows_v1().values().find(|r| r.claim == admitted.claim).expect("accepted original escrow");
+    assert!(row.liability_open && row.is_fresh_v1());
+    let [work, relay, burn] = kaspa_consensus_core::palw_g14_values_v1::palw_g14_escrow_split_v1(row.fee_sompi);
+    let remainder = row.amount_sompi.checked_sub(row.fee_sompi).unwrap();
+    assert!(work > 0 && relay > 0 && burn > 0 && remainder > 0);
+    let locked_entry = net.chain.ctx.consensus.get_virtual_utxo_entry(row.funding_outpoint).unwrap();
+    assert_eq!(locked_entry.amount, row.amount_sompi);
+    let (fee_outpoint, _) = net.funding[capture.card].clone();
+    let fee_entry = net.chain.ctx.consensus.get_virtual_utxo_entry(fee_outpoint).unwrap();
+    let fee_change = fee_entry.amount.checked_sub(FEE).expect("actual payer input funds normal carrier fee");
+    let pay = |amount, payload: Hash64| TransactionOutput::new(amount, kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(&payload.as_bytes()));
+    let mut spend = Transaction::new(
+        crate::constants::TX_VERSION,
+        vec![TransactionInput::new(row.funding_outpoint, Vec::new(), 0, 1), TransactionInput::new(fee_outpoint, Vec::new(), 0, 1)],
+        vec![pay(work, row.seat_payee), pay(relay, row.relay_payee), pay(remainder, row.refund_payload), TransactionOutput::new(fee_change, fee_entry.script_public_key.clone())],
+        0, kaspa_consensus_core::subnets::SUBNETWORK_ID_NATIVE, 0, Vec::new(),
+    );
+    let signers = vec![(locked_entry.clone(), capture.card), (fee_entry.clone(), capture.card)];
+    sign_spend_many(&mut spend, &signers, net.config.params.storage_mass_parameter);
+    spend.finalize();
+    let schedule = escrow::palw_escrow_fee_schedule_v1(&row).expect("admission recorded real schedule/payees");
+    let plan = escrow::palw_escrow_qualified_spend_v1(&row, &spend, &[locked_entry.amount, fee_entry.amount], net.daa(), Some(&schedule)).unwrap();
+    assert_eq!((plan.paid_now, plan.burned_now, plan.continued_now), (work + relay, burn, remainder));
+    let actual_fee = locked_entry.amount + fee_entry.amount - spend.outputs.iter().map(|o| o.value).sum::<u64>();
+    assert_eq!(actual_fee, FEE + burn, "ordinary fee and scheduled burn draw on distinct actual inputs");
+    assert_eq!(net.chain.vp().palw_collectible_transaction_fee_v1(&spend, actual_fee, burn, net.daa()), FEE,
+        "the scheduled destruction cannot enter the accepting miner's collectible fee");
+    let mut stolen = spend.clone();
+    stolen.outputs[2].value -= 1;
+    stolen.outputs[3].value += 1;
+    sign_spend_many(&mut stolen, &signers, net.config.params.storage_mass_parameter);
+    stolen.finalize();
+    let view: kaspa_consensus_core::utxo::utxo_collection::UtxoCollection =
+        [(row.funding_outpoint, locked_entry), (fee_outpoint, fee_entry.clone())].into_iter().collect();
+    net.chain.vp().validate_transaction_in_utxo_context(&stolen, &view, net.daa(),
+        crate::processes::transaction_validator::tx_validation_in_utxo_context::TxValidationFlags::Full, None)
+        .expect("the rejected redistribution has genuine ordinary input signatures and amounts");
+    assert!(net.mempool(&stolen).is_err(), "even genuine payer signatures cannot move escrow capital to normal change");
+    net.mempool(&spend).expect("exact scheduled spend passes native scripts and escrow lock");
+    let carrying = net.chain.heartbeat(net.ttpb(), vec![spend.clone()]).await;
+    assert!(carrying.transactions.iter().any(|tx| tx.id() == spend.id()));
+    net.chain.heartbeat(net.ttpb(), Vec::new()).await;
+    let after = net.chain.tip_state().1;
+    let continued = after.funded_escrows_v1()[&row.contract_id];
+    assert_eq!(continued, plan.new, "the actual accepted input and rooted monetary effects are one settlement");
+    assert!(net.chain.ctx.consensus.get_virtual_utxo_entry(row.funding_outpoint).is_none());
+    for (index, amount) in [(0, work), (1, relay), (2, remainder), (3, fee_change)] {
+        assert_eq!(net.chain.ctx.consensus.get_virtual_utxo_entry(TransactionOutpoint::new(spend.id(), index)).unwrap().amount, amount);
+    }
+    assert_eq!(continued.amount_sompi, continued.paid_sompi + continued.burned_sompi + continued.returned_sompi + continued.unreleased_v1().unwrap());
+    assert!(net.mempool(&spend).is_err(), "actual escrow input cannot be accepted twice");
+    net.funding[capture.card] = (TransactionOutpoint::new(spend.id(), 3), UtxoEntry::new(fee_change, fee_entry.script_public_key, 0, false));
 }

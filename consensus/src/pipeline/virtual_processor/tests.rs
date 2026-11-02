@@ -17673,3 +17673,67 @@ mod evm_view_vertical_v2;
 
 #[path = "tests/native_bond_exit_capacity_v3.rs"]
 mod native_bond_exit_capacity_v3;
+
+
+/// Actual TestConsensus -> checked ConsensusApi -> selected-sink reader -> cold
+/// DbPalwStateV2Store. Reuse the existing accepted-block/private-class fixture;
+/// no synthetic state, native paid authority, claim, or reader Result is installed.
+#[tokio::test]
+async fn rfc0038_checked_winner_api_actual_cold_tip_corruption_and_missing_state_refuse() {
+    use kaspa_consensus_core::{palw_mode_v2::PalwConsensusMode, palw_native_resource_v1::NativeDecodeErrorV1};
+    use kaspa_database::{create_temp_db, prelude::{CachePolicy, ConnBuilder}, registry::DatabaseStorePrefixes};
+
+    let catalog = palw_v2_test_catalog();
+    let bundle = palw_v2_test_bundle_funded_for(&catalog, 8);
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+            *p = p.clone().with_palw_v2_cadence();
+        }).build();
+    let (_life, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+    let (tx, _rx) = async_channel::unbounded();
+    let mut ctx = TestContext::new(TestConsensus::with_db(db.clone(), &config, tx));
+    for _ in 0..3 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+    let claim = kaspa_hashes::Hash64::from_u64_word(0x38_0001);
+    let vp = ctx.consensus.virtual_processor();
+    let cold = || {
+        // Both caches are actual production caches. Reopen them rather than
+        // allowing a previously authenticated Arc to hide newly corrupted disk.
+        let reopened = vp.palw_state_v2_store.read().clone_with_new_cache(CachePolicy::Empty);
+        *vp.palw_state_v2_store.write() = reopened;
+        *vp.palw_reader_snapshot.lock() = None;
+    };
+    cold();
+    let (tip, state) = vp.palw_v2_reader_state(&bundle.state).unwrap().expect("real accepted state exists");
+    assert_eq!(tip, vp.lkg_virtual_state.load().ghostdag_data.selected_parent);
+    assert_eq!(state.last_point().unwrap().block, tip);
+    drop(state);
+    assert_eq!(ctx.consensus.palw_fp_accounting_winning_carrier_v1(claim).unwrap(), None,
+        "successful materialized state without this index permits legacy unique fallback, not reader failure");
+    let prefix: Vec<u8> = DatabaseStorePrefixes::PalwStateV2Tip.into();
+    let original = db.get(&prefix).unwrap().expect("actual native tip writer persisted its row");
+    assert!(original.len() > 1);
+
+    // Preserve the real identity row and corrupt ONLY the actual serialized tip.
+    // Its stored native root/accepted point are never fabricated or recomputed.
+    db.put(&prefix, [0xff]).unwrap();
+    cold();
+    assert!(matches!(vp.palw_v2_reader_state(&bundle.state), Err(_)), "cold native store must reject the actual corrupt row");
+    assert!(ctx.consensus.palw_kernel_route_v1().is_none(), "legacy Option reader loses this failure");
+    assert!(matches!(ctx.consensus.palw_fp_accounting_winning_carrier_v1(claim), Err(NativeDecodeErrorV1::Decode(_))),
+        "checked API must refuse, never return Ok(None) and enable unique fallback");
+
+    // Exact original bytes restore the original accepted state through a cold
+    // production read; no test-created state is substituted for the old root.
+    db.put(&prefix, original).unwrap();
+    cold();
+    assert_eq!(ctx.consensus.palw_fp_accounting_winning_carrier_v1(claim).unwrap(), None);
+    vp.palw_state_v2_store.write().delete_tip_for_tests().unwrap();
+    cold();
+    assert!(matches!(vp.palw_v2_reader_state(&bundle.state), Ok(None)));
+    assert!(matches!(ctx.consensus.palw_fp_accounting_winning_carrier_v1(claim), Err(NativeDecodeErrorV1::Decode(_))),
+        "even genuine missing state must not become a successfully absent index");
+}

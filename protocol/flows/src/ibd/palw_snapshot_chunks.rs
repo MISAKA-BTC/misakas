@@ -31,6 +31,17 @@ pub(super) fn snapshot_failure(why: NativeSnapshotDecodeErrorV1) -> ProtocolErro
     }
 }
 
+// An unavailable response has no authenticated stream identity. Require the
+// explicit empty chunked sentinel emitted by the server before allowing the
+// one-time legacy fallback; malformed stream replies must never downgrade.
+fn explicit_chunk_unavailable_v1(msg: &kaspa_p2p_lib::pb::PruningPointPalwStateMessage) -> bool {
+    !msg.found && msg.chunked && msg.palw_state.is_empty() && msg.class_carriages.is_empty()
+        && msg.pruning_point_hash.is_none() && msg.snapshot_root.is_empty()
+        && msg.chunk_index == 0 && msg.chunk_count == 0 && msg.total_bytes == 0
+        && msg.chunk_hash.is_empty() && msg.snapshot_codec == 0
+        && msg.snapshot_nonce.is_empty() && msg.decoded_bytes == 0
+}
+
 fn row_fallback_allowed_v1(codec:u32,result:&Result<Option<Snapshot>,ProtocolError>)->bool {
     codec==SNAPSHOT_CODEC_ROWS_V1 && matches!(result,Err(ProtocolError::PruningSidecarUnavailable("PALW chunked state",_)))
 }
@@ -40,6 +51,30 @@ fn fallback_nonce_v1(previous:&[u8])->Vec<u8>{
 #[cfg(test)]
 mod row_fallback_tests {
     use super::*;
+    #[test]
+    fn rfc37_malformed_unavailable_reply_cannot_trigger_a_codec_downgrade() {
+        use kaspa_p2p_lib::pb::PruningPointPalwStateMessage;
+        let unavailable = || PruningPointPalwStateMessage { chunked: true, ..Default::default() };
+        assert!(explicit_chunk_unavailable_v1(&unavailable()));
+        let mut malformed = Vec::new();
+        let mut reply = unavailable(); reply.chunked = false; malformed.push(reply);
+        let mut reply = unavailable(); reply.found = true; malformed.push(reply);
+        let mut reply = unavailable(); reply.palw_state = vec![1]; malformed.push(reply);
+        let mut reply = unavailable(); reply.class_carriages.push(kaspa_p2p_lib::pb::PalwClassCarriageEntry::default()); malformed.push(reply);
+        let mut reply = unavailable(); reply.pruning_point_hash = Some(kaspa_consensus_core::Hash64::from_u64_word(1).into()); malformed.push(reply);
+        let mut reply = unavailable(); reply.snapshot_root = vec![1; 64]; malformed.push(reply);
+        let mut reply = unavailable(); reply.chunk_index = 1; malformed.push(reply);
+        let mut reply = unavailable(); reply.chunk_count = 1; malformed.push(reply);
+        let mut reply = unavailable(); reply.total_bytes = 1; malformed.push(reply);
+        let mut reply = unavailable(); reply.chunk_hash = vec![1; 64]; malformed.push(reply);
+        let mut reply = unavailable(); reply.snapshot_codec = SNAPSHOT_CODEC_ROWS_V1; malformed.push(reply);
+        let mut reply = unavailable(); reply.snapshot_nonce = vec![1; 32]; malformed.push(reply);
+        let mut reply = unavailable(); reply.decoded_bytes = 1; malformed.push(reply);
+        for reply in malformed {
+            assert!(!explicit_chunk_unavailable_v1(&reply), "{reply:?}");
+        }
+    }
+
     #[test]
     fn rfc37_fallback_is_once_for_explicit_unavailability_and_never_authentication_failure(){
         let unavailable=Err(ProtocolError::PruningSidecarUnavailable("PALW chunked state","point".into()));
@@ -156,6 +191,9 @@ impl IbdFlow {
                 }
             };
             if !msg.found {
+                if !explicit_chunk_unavailable_v1(&msg) {
+                    return Err(ProtocolError::Other("malformed PALW snapshot unavailable reply"));
+                }
                 return Err(ProtocolError::PruningSidecarUnavailable("PALW chunked state", point.to_string()));
             }
             if !msg.chunked || !msg.class_carriages.is_empty() || msg.chunk_index != index {
@@ -218,13 +256,17 @@ impl IbdFlow {
             .map_err(|why| ProtocolError::LocalNativeResourceUnavailable(format!("PALW snapshot decoding worker stopped: {why}")))?
             .map_err(snapshot_failure)?;
         let (snapshot,native_lease)=if let Some(inventory)=inventory {
-            consensus.clone().spawn_blocking(move |api| {
+            let row_root=inventory.state_root();
+            let collection_count=inventory.collection_count();
+            let checked=consensus.clone().spawn_blocking(move |api| {
                 api.palw_validate_row_stream_snapshot_v1(point,&snapshot.0,&inventory)?;
                 Ok::<_,kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1<String>>((snapshot,native_lease))
             }).await.map_err(|error|match error {
                 kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Resource(why)=>ProtocolError::LocalNativeCapacityUnavailable(why),
                 kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Decode(why)=>ProtocolError::OtherOwned(format!("PALW row inventory differs from complete native state: {why}")),
-            })?
+            })?;
+            Self::record_authenticated_row_snapshot_v1(point,row_root,collection_count);
+            checked
         } else {(snapshot,native_lease)};
         self.native_palw_receive_lease_v1 = native_lease;
         // Declarations were length checked and filtered during streaming decode. Native

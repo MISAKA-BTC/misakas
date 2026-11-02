@@ -74,6 +74,7 @@ async fn certify_root(cw: &mut Cw, s: &Session) {
         };
         attestations.push((card, cw.net.route(card, &K::AttestEligibilityExamV1 { attestation })));
     }
+    let subject_before=cw.net.chain.tip_state().1.claim(&claim).unwrap().clone();
     cw.net.send(attestations).await;
     let deadline = cw.net.daa() + POLICY.prosecution_window_daa + 200;
     while chain_cert(&cw.net, claim).unwrap().outcome.is_none() {
@@ -81,6 +82,34 @@ async fn certify_root(cw: &mut Cw, s: &Session) {
         cw.net.beat_to(cw.net.daa() + 1).await;
     }
     assert!(chain_cert(&cw.net, claim).unwrap().outcome.unwrap().0.certifies());
+    let state=cw.net.chain.tip_state().1;
+    assert_eq!(state.claim(&claim),Some(&subject_before),"actual selected approval is a sidecar-only effect, not a rewritten base claim");
+    let point=*state.last_point().unwrap();
+    let _held=kaspa_consensus_core::palw_state_v2::palw_claim_local_owned_checkpoint_v1(&state,&cw.net.bundle.state,&point).unwrap().unwrap();
+    let checkpoint=kaspa_consensus_core::palw_state_v2::palw_claim_local_checkpoint_snapshot_v2(&state).unwrap().unwrap();
+    let key=certification_claim_key_v1(&palw_certification_id_v1(&claim));
+    let mut approval_frame=None;
+    for ((table,key_frame),bytes) in &state.kernel_route_state_v1().unwrap().aux {
+        if *table!=kaspa_consensus_core::palw_claim_local_v1::PALW_CLAIM_LOCAL_TABLE_V1||key_frame.len()!=65||key_frame[0]!=b'F'{continue}
+        let frame=kaspa_consensus_core::palw_claim_local_v1::palw_decode_claim_liability_frame_v1(bytes).unwrap();
+        if frame.native_changes.iter().any(|change|change.owner==kaspa_consensus_core::palw_claim_local_v1::PalwClaimLocalRowOwnerV1::KernelRoute&&change.table==PALW_SECURITY_CERTIFICATION_TABLE_V1&&change.key==key&&change.new.as_ref().is_some_and(|raw|borsh::from_slice::<PalwClaimCertificationRowV1>(raw).is_ok_and(|row|row.outcome.is_some_and(|(outcome,_)|outcome.certifies())))) {
+            assert!(!frame.native_changes.iter().any(|change|change.owner==kaspa_consensus_core::palw_claim_local_v1::PalwClaimLocalRowOwnerV1::ChainClaims&&change.key.as_slice()==claim.as_byte_slice()),"this regression needs genuine approval without a base-claim write");
+            if approval_frame.as_ref().is_none_or(|(blue,_)|*blue<frame.point.blue_score){approval_frame=Some((frame.point.blue_score,kaspa_consensus_core::palw_claim_local_v1::palw_liability_material_id_v1(bytes)));}
+        }
+    }
+    let (_,material)=approval_frame.expect("real selected signatures and prosecution tick produced an actual certifying sidecar journal");
+    use kaspa_consensus_core::palw_claim_local_v1::PalwClaimLocalWorkRefV1 as W;
+    let source=&checkpoint.records[&W::ChainClaim{claim}];
+    assert!(source.certified&&!source.liability_closed,"actual approval is retained through the open material duty");
+    assert!(source.material.contains(&material),"an old unapproved birth frame is not the selected-approval context");
+    // A's genuine sidecar decision can change dependent C's eligibility, but
+    // does not make C or an unrelated B the owner of A's approval material.
+    for work in [W::ExecSession{root:s.real.claim},W::KernelClaim{claim:Hash64::from_bytes(s.prefix.claim.id)}] {
+        let record=&checkpoint.records[&work];
+        if record.accepting_block!=source.accepting_block {
+            assert!(!record.material.contains(&material),"unrelated/dependent work must reach A through the actual edge, not acquire A's latest frame");
+        }
+    }
 }
 
 #[tokio::test]

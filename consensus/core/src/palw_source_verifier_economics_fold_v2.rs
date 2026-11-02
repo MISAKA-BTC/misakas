@@ -255,6 +255,10 @@ pub(super) fn approve(
     put(b, &key, &d)?;
     put(b, &work_actor_key(d.work, &actor), &d.id())?;
     put(b, &pair_key(7, d.claim, d.id()), &PalwSourceVerifierDutyRefV2 { actor, work: d.work })?;
+    if b.params.claim_local_settlement_active_at(ctx.daa_score)
+        && super::palw_claim_local_kernel_contract_duties_v9::watches_work_v9(&b.state, d.work)? {
+        super::palw_claim_local_kernel_contract_duties_v9::note_checker_reserved_v9(b, ctx, &d, income_context(&g, funding))?;
+    }
     g.liabilities += 1;
     put(b, &[0], &g)
 }
@@ -430,6 +434,10 @@ pub(super) fn sweep(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> 
             }
             let income = super::palw_bond_budget_fold_v1::source_income_id_v1(income_context(&g, d.funding), d.id(), &actor);
             b.bind_material_income_root_v1(ctx.daa_score, d.claim, income)?;
+            if b.params.claim_local_settlement_active_at(ctx.daa_score)
+                && super::palw_claim_local_kernel_contract_duties_v9::watches_duty_v9(&b.state,d.id())? {
+                super::palw_claim_local_kernel_contract_duties_v9::note_checker_material_bound_v9(b,d.id())?;
+            }
             b.settle_source_income_v1(ctx, income_context(&g, d.funding), d.id(), actor, d.accepted_daa, d.until_daa, d.fee)?;
             let q = queue_credit(b, ctx, &f, actor, Some(d.id()), d.fee)?;
             d.entitlement = PalwSourceVerifierEntitlementV2::Queued { block: q.queued_block, queue: q.queue };

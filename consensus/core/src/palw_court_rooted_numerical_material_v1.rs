@@ -10,11 +10,11 @@ fn bad(s:impl Into<String>)->E<String>{E::Decode(s.into())}
 fn decode<T:crate::palw_native_resource_v1::NativeWireScanV1+borsh::BorshDeserialize>(bytes:&[u8])->Result<Held<T>,E<String>>{
     crate::palw_native_resource_v1::retain_native_value_decode_classified_v1(bytes,||borsh::from_slice::<T>(bytes)).map_err(|e|match e{E::Resource(r)=>E::Resource(r),E::Decode(e)=>bad(e.to_string())})
 }
-pub(crate) struct RootedNumericalMaterialV1{
+pub struct RootedNumericalMaterialV1{
     units:Vec<Held<Unit>>,parameters:Vec<Held<Parameter>>,ids:Option<Held<Ids>>,flat:Option<Held<Vec<u32>>>,tiles:Vec<PromptTile>,tile_leases:Vec<Option<crate::palw_native_resource_v1::NativeDemandLeaseV1>>,
 }
 impl RootedNumericalMaterialV1{
-    pub(crate) fn retain_v1(state:&PalwChainStateV2,claim:Hash64)->Result<Held<Self>,E<String>>{
+    pub fn retain_v1(state:&PalwChainStateV2,claim:Hash64)->Result<Held<Self>,E<String>>{
         let c=crate::palw_court_shared_tir_state_v1::context(state,claim).map_err(bad)?;
         let frame=crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(state,claim).ok_or_else(||bad("original missing"))?;
         let record=state.tir_class_v1(&frame.original_v1().job.class_id).ok_or_else(||bad("class missing"))?;
@@ -56,9 +56,23 @@ impl RootedNumericalMaterialV1{
         // parameter/source identities. No caller supply can fill a missing row.
         Ok(Held::from_owner_reserved_v1(out,lease))
     }
-    pub(crate) fn store_v1<'a>(&'a self,state:&PalwChainStateV2,claim:Hash64,scope:Hash64)->Result<crate::palw_court_shared_tir_builder_store_v1::SharedTirBuilderStoreV1<'a>,String>{
+    pub fn store_v1<'a>(&'a self,state:&PalwChainStateV2,claim:Hash64,scope:Hash64)->Result<crate::palw_court_shared_tir_builder_store_v1::SharedTirBuilderStoreV1<'a>,String>{
         use crate::palw_court_shared_tir_builder_store_v1::{SharedTirBuilderStoreV1 as Store,PromptMaterialV1 as P};
         let prompt=match (&self.flat,self.tiles.is_empty()){(Some(p),true)=>P::Flat(p),(None,false)=>P::Merkle(&self.tiles),(None,true)=>P::Missing,_=>return Err("rooted material has two prompt forms".into())};
         Store::new_with_retained_material_v1(state,claim,scope,&self.units,&self.parameters,self.ids.as_deref(),prompt)
     }
+}
+
+/// Run one read-only evidence construction against authenticated material owned
+/// by this exact rooted state. The retained decoder and source leases live
+/// through the callback; missing material never falls back to producer data.
+pub fn with_rooted_numerical_material_v1<T>(
+    state: &PalwChainStateV2,
+    claim: Hash64,
+    build: impl FnOnce(&dyn crate::palw_tir_court_v1::PalwTirEvidenceStoreV1) -> T,
+) -> Result<T, E<String>> {
+    let material = RootedNumericalMaterialV1::retain_v1(state, claim)?;
+    let scope = crate::palw_court_shared_tir_state_v1::context(state, claim).map_err(bad)?.scope_id;
+    let store = material.store_v1(state, claim, scope).map_err(bad)?;
+    Ok(build(&store))
 }

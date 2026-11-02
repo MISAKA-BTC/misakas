@@ -40,21 +40,21 @@ pub(super) fn readiness(
     state: &PalwChainStateV2, params: &PalwStateParamsV2, now: u64,
     id: Hash64, born: &PalwClaimStateV2, target: Hash64, target_birth: &PalwClaimStateV2, retiring: bool,
 ) -> Result<RewardReadinessV1, PalwStateV2Error> {
-    let Some(mut cursor) = origin_for(state, params, id, born)? else { return Ok(held()) };
+    let Some(mut cursor) = super::super::palw_claim_local_source_origin_v8::SourceOriginV8::for_claim(state, params, id, born)? else { return Ok(held()) };
     let mut result = RewardReadinessV1::Ready;
     loop {
         // No prefix edge: this claim is independent of every export conviction.
-        let Some(consumed) = prefix_use(&cursor)? else { return Ok(result) };
+        let Some(consumed) = cursor.prefix_use()? else { return Ok(result) };
         let identity = consumed.intent.source;
         let point = match state.claim_local_prefix_source_point_v1(&identity) {
             Ok(point) => point,
             Err(PalwStateV2Error::NativeResource(error)) => return Err(PalwStateV2Error::NativeResource(error)),
             Err(_) => return Ok(held()),
         };
-        let Some(next) = state.claim_local_admission_context_v1(params, &point, identity.source_claim)? else {
+        let Some(next) = super::super::palw_claim_local_source_origin_v8::SourceOriginV8::at_point(state,params,identity.source_claim,&point)? else {
             return Ok(held());
         };
-        let ordinal = next.frame().inputs.iter().filter_map(|input| match input {
+        let ordinal = next.inputs().iter().filter_map(|input| match input {
             PalwClaimLocalInputV1::PrefixDependency { claim, envelope } if *claim == identity.source_claim => Some(envelope),
             _ => None,
         }).flat_map(|envelope| envelope.exports.iter()).find(|e| e.intent.id_v1() == identity.intent).map(|e| e.intent.ordinal);
@@ -70,8 +70,18 @@ pub(super) fn readiness(
         if reserve.convicted_daa.is_some() {
             return Ok(RewardReadinessV1::Denied);
         }
+        // Exact E remains the consumer edge's authority after its source retires.
+        // source() can return Ready from an A5/S1 compact terminal or retirement
+        // journal without entering live_source's material-clock check.
+        if now <= reserve.material_until {
+            result = result.join(RewardReadinessV1::Hold(reserve.material_until));
+        }
         result = result.join(source(state, params, now, identity.source_claim, next.original_claim(), target, target_birth, retiring)?);
         if result == RewardReadinessV1::Denied { return Ok(result); }
         cursor = next;
     }
 }
+
+#[cfg(test)]
+#[path = "palw_claim_local_prefix_rewards_tests_v2.rs"]
+mod retired_export_readiness_tests_v2;

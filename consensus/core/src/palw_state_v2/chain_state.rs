@@ -40,6 +40,10 @@ impl PalwChainStateV2 {
             class_court_windows: BTreeMap::new(),
             vertex: crate::palw_vertex_v1::PalwVertexStateV1::default(),
             exec_v2: crate::palw_work_slice_v2::PalwExecV2StateV1::default(),
+            exec_v2_source_roots: BTreeMap::new(),
+            claim_local_legacy_carriers_v9: BTreeSet::new(),
+            claim_local_legacy_carriers_ready_v9: true,
+            execution_cohort_census_v15: palw_claim_local_execution_cohort_census_v15::ExecutionCohortCensusV15::genesis_v15(),
             exec_v2_rewards: BTreeMap::new(),
             exec_v2_reward_holds: BTreeMap::new(),
             exec_v2_origins: BTreeMap::new(),
@@ -52,6 +56,7 @@ impl PalwChainStateV2 {
             seat_availability: BTreeMap::new(),
             seat_root_readiness: BTreeMap::new(),
             kernel_route: None,
+            claim_local_gc_v3:Default::default(),
             bond_budget: None,
             panel_duties: BTreeMap::new(),
             panel_reserve_sompi: 0,
@@ -154,6 +159,7 @@ impl PalwChainStateV2 {
             staged_inventory_by_owner: BTreeSet::new(),
             staged_tir_by_owner: BTreeSet::new(),
             staged_tir_by_claim: BTreeMap::new(),
+            material_contracts_by_member_v8: BTreeSet::new(),
             staged_court_service_by_claim: BTreeMap::new(),
             staged_tir_claims_by_producer: BTreeSet::new(),
             staged_tir_responders: BTreeSet::new(),
@@ -3536,6 +3542,7 @@ impl PalwChainStateV2 {
         self.assert_vertex_consistency_v1()?;
         self.assert_exec_v2_consistency_v1(params)?;
         self.assert_monetary_material_consistency_v1(params)?;
+        super::palw_monetary_material_scope_v8::validate_v8(self)?;
         super::palw_court_family_supplier_fold_v1::validate_family_suppliers_v1(self,params)?;
         super::palw_court_family_material_fold_v1::validate_family_material_rows_v1(self)?;
         crate::palw_native39_frontier_v1::validate_native39_frontier_v1(self,params)?;

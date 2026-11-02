@@ -145,12 +145,18 @@ pub(super) fn expected_claim_local_checkpoint_v1(
     params: &PalwStateParamsV2,
     point: &PalwBlockContextV2,
 ) -> Result<Option<NativeRetainedV1<PalwClaimLocalCheckpointV1>>, PalwStateV2Error> {
+    expected_with_base_observer_v3(state,params,point,&mut |_|Ok(()))
+}
+fn expected_with_base_observer_v3(
+    state:&PalwChainStateV2,params:&PalwStateParamsV2,point:&PalwBlockContextV2,
+    observer:&mut dyn FnMut(&BTreeMap<PalwClaimLocalWorkRefV1,PalwClaimLocalRecordV1>)->Result<(),PalwStateV2Error>,
+)->Result<Option<NativeRetainedV1<PalwClaimLocalCheckpointV1>>,PalwStateV2Error>{
     if !params.claim_local_settlement_active_at(point.daa_score) {
         return Ok(None);
     }
     // Admit the concrete projection and its construction peak before maps, deep
     // copies or material encodings allocate. The returned owner keeps the lease.
-    let requests = resources::requests(state).map_err(PalwStateV2Error::NativeResource)?;
+    let requests=palw_claim_local_checkpoint_construction_requests_v24(state,params,point)?;
     let lease = reserve_native_requests_v1(requests).map_err(PalwStateV2Error::NativeResource)?;
     let now = point.daa_score;
     // Accepting (chain) block of each retained admission frame, by its point.
@@ -193,7 +199,13 @@ pub(super) fn expected_claim_local_checkpoint_v1(
         } else {
             false
         };
-        let birth = frame_points.get(&(c.accepted_daa, c.accepted_blue_score)).copied();
+        // A8 binds the actual executing/accepting point even when an Attempt
+        // was carried by a different RED block and its old full F is gone.
+        let scoped_birth = match super::palw_claim_local_source_admission_v8::for_stored_claim_v8(state,*id,c)? {
+            Some(source)=>Some(source.accepting_point().block),
+            None=>super::palw_claim_local_execution_cohort_archive_v15::snapshot_point_v15(state,*id,c)?.map(|point|point.block),
+        };
+        let birth = scoped_birth.or_else(||frame_points.get(&(c.accepted_daa, c.accepted_blue_score)).copied());
         let mut manifest = BTreeSet::new();
         if !liability_closed {
             let row = borsh::to_vec(c).expect("canonical claim row");
@@ -223,8 +235,8 @@ pub(super) fn expected_claim_local_checkpoint_v1(
                 // birth, and a bound execution root's stored prefix / slice evidence rows.
                 // Shared execution roots stay on `execution_root`; they are not copied here.
                 inputs: {
-                    let origin = rewards::origin_for(state, params, *id, c)?;
-                    let mut inputs = rewards::dependency_inputs_v1(state, *id, c, origin.as_ref())?;
+                    let origin = if super::palw_claim_local_source_admission_v8::has_source_admission_v8(state,*id,c)? { None } else { rewards::origin_for(state,params,*id,c)? };
+                    let mut inputs = rewards::dependency_inputs_v1(state, params, *id, c, origin.as_ref())?;
                     drop(origin);
                     inputs.retain(|input| match input {
                         PalwClaimLocalWorkRefV1::KernelClaim { claim } => {
@@ -258,6 +270,10 @@ pub(super) fn expected_claim_local_checkpoint_v1(
     let native_context=native_checkpoint::context(state)?;
     let open_kernels = attach_kernel_dependency_records_v1(state, now, &kernel_refs, &mut records, &mut material)?;
     native_checkpoint::attach(state,params,now,&native_context,&mut records,&mut material)?;
+    // Actual native base roles are observed BEFORE current material projection.
+    // This includes equal IDs shared between base and projected roles.
+    observer(&records)?;
+    super::palw_claim_local_material_projection_v2::attach(state,point,&mut records,&mut material)?;
     let mut liability_state = if liability.open.is_empty() { Vec::new() } else { borsh::to_vec(&liability).expect("canonical liability") };
     if !open_kernels.is_empty() {
         // Open kernel inputs must stay inside the bound projection. Absent any
@@ -280,6 +296,7 @@ pub(super) fn expected_claim_local_checkpoint_v1(
 pub(super) fn stored_claim_local_checkpoint_v1(
     state: &PalwChainStateV2,
 ) -> Result<Option<crate::palw_native_resource_v1::NativeRetainedV1<PalwClaimLocalCheckpointV1>>, PalwStateV2Error> {
+    if let Some(checkpoint)=super::palw_claim_local_checkpoint_descriptor_v3::load(state)?{return Ok(Some(checkpoint))}
     if let Some(checkpoint)=super::palw_claim_local_descriptor_v2::load(state)?{return Ok(Some(checkpoint))}
     let key = palw_claim_local_checkpoint_key_v1();
     let Some(bytes) = state.kernel_route.as_ref().and_then(|r| r.aux.get(&(PALW_CLAIM_LOCAL_TABLE_V1, key.to_vec()))) else {
@@ -336,16 +353,21 @@ pub(super) fn write_claim_local_checkpoint_v1(
     builder: &mut TransitionBuilder<'_>,
     parent: &PalwChainStateV2,
     ctx: &PalwBlockContextV2,
+    objects:&[PalwConsensusObjectV2],work:PalwBlockWorkV3<'_>,merged:&[PalwMergedWorkV1<'_>],
 ) -> Result<(), PalwStateV2Error> {
     if !builder.params.claim_local_settlement_active_at(ctx.daa_score) {
         return Ok(());
     }
+    if super::palw_claim_local_checkpoint_descriptor_v3::try_material_checkpoint_v3(builder,parent,ctx,objects,work,merged)?{return Ok(())}
     // All native changes and this point's retained frame have already executed,
     // but LastPoint is journalled at the fold's final step. Historical readers
     // must see the actual executed point while deriving this checkpoint. Restore
     // the marker even on refusal; the normal LastPoint delta remains the owner.
     let previous_point = builder.state.last_point.replace(*ctx);
-    let checkpoint = expected_claim_local_checkpoint_v1(&builder.state, builder.params, ctx);
+    let mut bases=None;
+    let checkpoint = expected_with_base_observer_v3(&builder.state,builder.params,ctx,&mut |records|{
+        bases=Some(super::palw_claim_local_checkpoint_descriptor_v3::prepare_bases_v3(records)?);Ok(())
+    });
     builder.state.last_point = previous_point;
     let Some(checkpoint) = checkpoint? else { return Ok(()) };
     // Self-check: the fold's own value must pass the same validation a reader applies.
@@ -400,7 +422,7 @@ pub(super) fn write_claim_local_checkpoint_v1(
         }
     }
     super::palw_kernel_route_fold_v1::ensure_route_header(builder, ctx)?;
-    super::palw_claim_local_descriptor_v2::write(builder,&checkpoint)?;
+    super::palw_claim_local_checkpoint_descriptor_v3::write_prepared_v3(builder,&checkpoint,bases.as_ref().ok_or_else(||bad("actual checkpoint base observation missing"))?)?;
     // RFC-0023 §4.3/§4.5: past the fence fork choice, settlement and the pruning input read ONE frontier,
     // and it moves only on irreversible claim-local credit: the parent's frontier, raised by this block's
     // irreversible anchor. The shared-prefix / Gate C value computed earlier in this block is superseded
@@ -420,9 +442,10 @@ pub(super) fn write_claim_local_checkpoint_v1(
 /// Load-time / import-time check: past the fence the stored row must equal the recomputation at
 /// the state's own last point (pruned IBD imports land here through the carriage load).
 pub(super) fn assert_claim_local_checkpoint_v1(state: &PalwChainStateV2, params: &PalwStateParamsV2) -> Result<(), PalwStateV2Error> {
+    super::palw_claim_local_context_store_v2::validate_context_rows_v2(state,params).map_err(super::palw_claim_local_paid_archive_v2::state_error)?;
     let Some(point) = state.last_point else { return Ok(()) };
     let stored = stored_claim_local_checkpoint_v1(state)?;
-    let expected = expected_claim_local_checkpoint_v1(state, params, &point)?;
+    let expected=expected_with_base_observer_v3(state,params,&point,&mut |records|super::palw_claim_local_checkpoint_descriptor_v3::validate_actual_bases_v3(state,records))?;
     match (stored, expected) {
         (None, None) => Ok(()),
         (Some(_), None) => Err(bad("claim-local checkpoint below its fence")),
@@ -524,4 +547,43 @@ pub fn palw_claim_local_owned_checkpoint_v1(state:&PalwChainStateV2,params:&Palw
     }
     expected_claim_local_checkpoint_v1(state,params,point)?.map(crate::palw_claim_local_v1::PalwOwnedValidatedClaimCheckpointV1::from_expected_native_v1)
         .transpose().map_err(checkpoint_err)
+}
+
+#[cfg(test)]
+pub(super) fn prepared_expected_for_test_v3(state:&PalwChainStateV2,params:&PalwStateParamsV2,point:&PalwBlockContextV2)->Result<(NativeRetainedV1<PalwClaimLocalCheckpointV1>,super::palw_claim_local_checkpoint_descriptor_v3::PreparedBasesV3),PalwStateV2Error>{
+ let mut bases=None;let cp=expected_with_base_observer_v3(state,params,point,&mut |records|{bases=Some(super::palw_claim_local_checkpoint_descriptor_v3::prepare_bases_v3(records)?);Ok(())})?.ok_or_else(||bad("test checkpoint fence dormant"))?;
+ Ok((cp,bases.ok_or_else(||bad("test actual base observation missing"))?))
+}
+
+/// Typed local construction inventory, independent of consensus/credit. Includes
+/// native contexts, maps, canonical material and duplicate/dedup peaks; transient
+/// decode readers still retain their separately admitted leases.
+pub fn palw_claim_local_checkpoint_construction_requests_v20(state:&PalwChainStateV2)->Result<u64,PalwStateV2Error>{
+    resources::requests_compatibility_v24(state).map_err(PalwStateV2Error::NativeResource)?.checked_add(super::palw_claim_local_material_projection_v2::requests(state)?).ok_or(PalwStateV2Error::Overflow("scoped checkpoint construction"))
+}
+/// Exact native params/point quote for the normal constructor and local checker.
+/// The older no-params API remains a conservative compatibility inventory.
+pub fn palw_claim_local_checkpoint_construction_requests_v24(state:&PalwChainStateV2,params:&PalwStateParamsV2,point:&PalwBlockContextV2)->Result<u64,PalwStateV2Error>{
+ resources::requests_targeted_v24(state,params,point).map_err(PalwStateV2Error::NativeResource)?.checked_add(super::palw_claim_local_material_projection_v2::requests(state)?).ok_or(PalwStateV2Error::Overflow("targeted scoped checkpoint construction"))
+}
+/// Additional caller-local logical capacity, around the SAME normal constructor.
+/// Global logical/physical admission remains active; this never substitutes a
+/// local checker for those checks. The returned ticket owns its reservation
+/// until the opaque owner itself is dropped; the checkpoint cannot be extracted
+/// separately from that reservation.
+pub struct PalwLocallyAdmittedClaimCheckpointV20{
+    checkpoint:Option<crate::palw_claim_local_v1::PalwOwnedValidatedClaimCheckpointV1>,
+    _local_lease:crate::palw_native_resource_v1::NativeDemandLeaseV1,
+}
+impl PalwLocallyAdmittedClaimCheckpointV20{
+    pub fn checkpoint(&self)->Option<&crate::palw_claim_local_v1::PalwOwnedValidatedClaimCheckpointV1>{self.checkpoint.as_ref()}
+    pub fn allocation_footprint_v20(&self)->Result<Option<crate::palw_claim_local_v1::PalwCheckpointOwnedFootprintV20>,crate::palw_native_resource_v1::NativeCoverageV1>{self.checkpoint.as_ref().map(|c|c.allocation_footprint_v20()).transpose()}
+}
+pub fn palw_claim_local_owned_checkpoint_with_checker_v20(
+    state:&PalwChainStateV2,params:&PalwStateParamsV2,point:&PalwBlockContextV2,
+    checker:&std::sync::Arc<crate::palw_native_resource_v1::NativeDemandCheckerV1>,
+)->Result<PalwLocallyAdmittedClaimCheckpointV20,PalwStateV2Error>{
+    let requests=palw_claim_local_checkpoint_construction_requests_v24(state,params,point)?;
+    let lease=checker.reserve_requests_v1(requests,0).map_err(PalwStateV2Error::NativeResource)?;
+    let checkpoint=palw_claim_local_owned_checkpoint_v1(state,params,point)?;Ok(PalwLocallyAdmittedClaimCheckpointV20{checkpoint,_local_lease:lease})
 }

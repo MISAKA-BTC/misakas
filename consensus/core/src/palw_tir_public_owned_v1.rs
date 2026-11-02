@@ -1256,7 +1256,7 @@ impl PalwTirPublicOwnedPlanV1 {
             clock,
             envelope,
         };
-        if clock.version==crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_CLOCK_FAMILY_VERSION_V3{plan.owner_tenure_family_v3()?;}
+        if crate::palw_tir_frame_cost_v1::is_family_clock_v3(clock.version){plan.owner_tenure_family_v3()?;}
         Ok(plan)
     }
 }
@@ -1921,7 +1921,7 @@ impl PalwTirPublicOwnedV1 {
     /// move a reorg is still undoing. Derived from the native plan, not a new constant; whether it is long enough for a real node's
     /// owner loop is a measured value of the arming record (UNKNOWN until measured).
     pub fn owner_idle_grace_daa_v1(&self) -> u64 {
-        if self.contract.plan.clock.version==crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_CLOCK_FAMILY_VERSION_V3 {
+        if crate::palw_tir_frame_cost_v1::is_family_clock_v3(self.contract.plan.clock.version) {
             // Invalid native plans fail their structural check. Refuse to
             // prematurely evict even if an unchecked hostile row is inspected.
             self.contract.plan.owner_idle_grace_family_v3().unwrap_or(u64::MAX)

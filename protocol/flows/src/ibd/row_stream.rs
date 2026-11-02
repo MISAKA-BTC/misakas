@@ -47,7 +47,25 @@ pub(super) fn witness_root(consensus:&dyn ConsensusApi,pruning_point:BlockHash)-
         .ok_or_else(||"exact pruning-session flat-state witness unavailable".into())
 }
 
+// One bounded diagnostic slot, never a state-import authority or storage marker.
+// It lets node integration checks distinguish an authenticated codec2 receive
+// from a negotiated109 connection which used the explicit107 fallback.
+static LAST_AUTHENTICATED_ROW_SNAPSHOT_V1: std::sync::Mutex<Option<(u64, BlockHash, Hash64, u64)>> = std::sync::Mutex::new(None);
+
 impl IbdFlow {
+    /// Process-local receive telemetry: sequence, pruning point, authenticated
+    /// state root, complete collection count. This records staging validation;
+    /// ordinary atomic import and stable-generation publication are separate.
+    pub fn last_authenticated_row_snapshot_v1() -> Option<(u64, BlockHash, Hash64, u64)> {
+        *LAST_AUTHENTICATED_ROW_SNAPSHOT_V1.lock().unwrap()
+    }
+
+    pub(super) fn record_authenticated_row_snapshot_v1(point: BlockHash, root: Hash64, collections: u64) {
+        let mut last = LAST_AUTHENTICATED_ROW_SNAPSHOT_V1.lock().unwrap();
+        let sequence = last.as_ref().map_or(1, |receipt| receipt.0.saturating_add(1));
+        *last = Some((sequence, point, root, collections));
+    }
+
     pub(super) async fn accept_pruning_point_palw_row_stream(
         &mut self,
         consensus: &ConsensusProxy,

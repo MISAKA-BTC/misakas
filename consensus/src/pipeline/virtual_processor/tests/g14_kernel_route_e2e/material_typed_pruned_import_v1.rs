@@ -371,4 +371,4 @@ fn assert_same_tip(
 }
 
 #[path = "material_typed_pruned_wire_v1.rs"]
-mod wire;
+pub(in crate::pipeline::virtual_processor::tests) mod wire;

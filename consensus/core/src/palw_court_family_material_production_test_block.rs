@@ -6,6 +6,7 @@ if let (Some(raw),Some(table))=(&family_raw,&family_table) {
     use crate::palw_court_shared_material_intake_v1::MaterialTargetV1 as MT;
     use crate::palw_tir_public_source_v1::{PalwTirPublicRequestV1 as Q,PalwTirPublicResponseV1 as R};
     use crate::palw_tir_court_v1::PalwTirEvidenceStoreV1;
+    include!("palw_court_family_independent_draft_native_test_block.rs");
     let mut material_state=accepted.clone();
     let source=fx.frame.source_identity_native_v2(&fx.record,&fx.layout,fx.rules.maximum_leaves).unwrap();
     let profile=crate::palw_court_shared_tir_state_v1::context(&accepted,claim).unwrap().profile_id;
@@ -25,11 +26,11 @@ if let (Some(raw),Some(table))=(&family_raw,&family_table) {
         Q::TraceTile{row,tile}=>{let pin=fx.execution.row_pin(row,tile*crate::palw_step_refute::PALW_LOGITS_TILE_LANES as u32).unwrap();R::TraceTile{row_root:pin.row_root,row_opening:pin.row_opening,lanes:pin.beat_tile_lanes,opening:pin.beat_opening}}
         Q::Ids{offset}=>R::Ids{rows_root,ids:fx.execution.generated[offset as usize..fx.execution.generated.len().min(offset as usize+crate::palw_tir_public_source_v1::PALW_TIR_PUBLIC_IDS_PER_CHUNK_V1 as usize)].to_vec()},
     }};
-    // Each transport transition is a separate candidate at the same admitted DAA;
-    // changing the number of source targets cannot silently shorten signed horizons.
+    // Fold real empty accepting blocks up to each exact native assignment;
+    // no holding row or clock jump substitutes for a material transfer.
     let mut elapsed=0u64;
     let mut completed_roles=std::collections::BTreeSet::new();
-    for (consent,inventory) in consents.iter().zip(&inventories) {
+    for (consent,inventory) in consents.iter().zip(inventories.iter()) {
         if consent.terms.role==FamilySupplierRoleV1::SemanticTable {
             let supplied=fm::read_authenticated_family_table_inventory_v1(&material_state,claim).unwrap().expect("actual original supplied its table");
             assert_eq!(supplied.bytes,crate::palw_fp_constraint_job_v1::palw_token_table_file_encode_v1(table));
@@ -65,14 +66,44 @@ if let (Some(raw),Some(table))=(&family_raw,&family_table) {
             actions.push(fm::FamilyMaterialActionV1::Part{draft,offset:(part*fm::FAMILY_MATERIAL_PART_BYTES_V1) as u64,bytes:bytes.to_vec()});
         }
         actions.push(fm::FamilyMaterialActionV1::Finish{draft});
+        let catalog=fs::family_contract_for_material_v1(&material_state,contract).unwrap().unwrap();
+        let target_row=catalog.targets.iter().find(|t|t.id==inventory.target_id_v1(target).unwrap()).unwrap();
+        let transfer_ids=target_row.packets.clone();drop(catalog);
         for action in actions {
+            let ordinal=match &action {fm::FamilyMaterialActionV1::Begin{..}=>0,fm::FamilyMaterialActionV1::Part{offset,..}=>usize::try_from(offset/(fm::FAMILY_MATERIAL_PART_BYTES_V1 as u64)+1).unwrap(),fm::FamilyMaterialActionV1::Finish{..}=>transfer_ids.len()-1,_=>unreachable!()};
+            let assigned=material_state.court_service_state_v1().unwrap().book.assigned_daa(&transfer_ids[ordinal]).unwrap();
+            let mut daa=material_state.last_point().unwrap().daa_score;
+            assert!(assigned>daa,"rooted material assignment must remain in the future");
+            while daa+1<assigned {
+                daa+=1;elapsed+=1;
+                let beat=PalwBlockContextV2{daa_score:daa,blue_score:ctx.blue_score+elapsed,block:h(0x430000+elapsed),subsidy:0};
+                material_state=apply_palw_transition_v2_with_extras(&material_state,&family_params,&beat,&[],None,false,false,false,false,&active).unwrap().0;
+            }
             elapsed+=1;
             let signed=fm::sign_family_material_v1(fm::SignedFamilyMaterialV1{version:1,contract,target,submitter:producer,action,signature:vec![]},network,
                 |_,message,context|Some(mldsa::sign(&kp.signing_key,message,context,seed).unwrap().as_ref().to_vec())).unwrap();
-            let next_ctx=PalwBlockContextV2{daa_score:ctx.daa_score+1,blue_score:ctx.blue_score+elapsed,block:h(0x420000+elapsed),subsidy:0};
+            let next_ctx=PalwBlockContextV2{daa_score:assigned,blue_score:ctx.blue_score+elapsed,block:h(0x420000+elapsed),subsidy:0};
             let object=PalwConsensusObjectV2::CourtFamilyMaterialV1{control:Box::new(signed)};
+            let (physical,_,reserved,_)=crate::palw_court_transport_v1::family_material_accounted_v2(&material_state,&family_params,assigned,&object).unwrap().unwrap();
+            assert!(reserved,"every actual primary transfer consumes its exact original-funded service opportunity");
+            assert!(physical.work>0);
             let before=material_state.clone();
+            let historical_before=if scoped {Some(super::super::palw_claim_local_rewards_v1::frames(&before).count())}else{None};
             let (next,delta)=apply_palw_transition_v2_with_extras(&material_state,&family_params,&next_ctx,std::slice::from_ref(&object),None,false,false,false,false,&active).unwrap();
+            if let Some(count)=historical_before {
+                assert_eq!(super::super::palw_claim_local_rewards_v1::frames(&next).count(),count,"pure authenticated family control must not retain another full-world F frame; delta={:?}",delta.entries.iter().map(std::mem::discriminant).collect::<Vec<_>>());
+                let checkpoint=palw_claim_local_checkpoint_snapshot_v2(&next).unwrap().expect("same-point resolved checkpoint");
+                assert_eq!(checkpoint.point,next_ctx);
+                let id=crate::palw_claim_local_v1::PalwClaimLocalWorkRefV1::ChainClaim{claim};
+                assert!(checkpoint.records.get(&id).is_some_and(|r|!r.material.is_empty()),"actual unresolved original has retained scoped material");
+                for ((table,key),bytes) in &next.kernel_route.as_ref().unwrap().aux {
+                    if matches!(*table,169|192) {
+                        let material=crate::palw_claim_local_v1::palw_liability_material_id_v1(bytes);
+                        assert!(checkpoint.records[&id].material.contains(&material),"current family row must be in actual owner manifest: table={table} key={key:?}");
+                        assert_eq!(checkpoint.material.get(&material).map(Vec::as_slice),Some(bytes.as_slice()));
+                    }
+                }
+            }
             assert!(delta.entries.iter().all(|entry|!matches!(entry,
                 PalwDeltaEntryV2::KernelRouteRow{table,key,..} if *table==FAMILY_SUPPLIER_TABLE_V1&&key.len()==64)),
                 "an authenticated target completion never journals the immutable signed consent/catalogue");
@@ -94,11 +125,13 @@ if let (Some(raw),Some(table))=(&family_raw,&family_table) {
         assert_eq!(row.completed.len(),inventory.targets_v1().len(),"every actual required target of this role completed through authenticated ingress");
         assert!(completed_roles.insert(consent.terms.role));
     }
-    assert_eq!(completed_roles.len(),4,"all four roles supplied through actual original or multipart ingress");
+    assert_eq!(completed_roles.len(),consents.len(),"all four roles supplied through actual original or multipart ingress");
     let encoded=borsh::to_vec(&PalwStateCarriageV2::from_state(&material_state)).unwrap();
     let restored=borsh::from_slice::<PalwStateCarriageV2>(&encoded).unwrap().into_state(&family_params,Some(material_state.state_root())).unwrap();
     assert_eq!(restored.state_root(),material_state.state_root(),"cold restore re-authenticates stored material and exact completed targets");
+    let restored=include!("palw_court_family_material_legacy_numerical_ingress_test_block.rs");
     include!("palw_court_family_material_adjudication_test_block.rs");
+    include!("palw_court_family_material_semantic_adjudication_test_block.rs");
 }
 
 }

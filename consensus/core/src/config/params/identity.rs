@@ -2203,7 +2203,7 @@ impl Params {
             h.write(at.daa_score().to_le_bytes());
         }
         // Compute-claim audit CX-01/CX-02's answer accounting, NAMED likewise. Some-only.
-        if let Some(at) = self.palw_court_family_supplier_v1.filter(|f| *f != ForkActivation::never()) { h.write(b"palw_court_family_supplier_v1"); h.write(at.daa_score().to_le_bytes()); for profile in crate::palw_state_v2::family_supplier_profiles_v1().expect("fixed native family profiles"){h.write(profile.as_byte_slice());} }
+        if let Some(at) = self.palw_court_family_supplier_v1.filter(|f| *f != ForkActivation::never()) { h.write(b"palw_court_family_supplier_v1"); h.write(at.daa_score().to_le_bytes()); for profile in crate::palw_state_v2::family_supplier_profiles_v1().expect("fixed native family profiles"){h.write(profile.as_byte_slice());} h.write(b"palw_court_family_signature_alias_wire_v3"); h.write(3u16.to_le_bytes()); h.write(b"palw_court_family_independent_draft_v2"); for profile in crate::palw_state_v2::family_supplier_profiles_v2().expect("fixed independent draft profiles"){h.write(profile.as_byte_slice());} h.write(b"palw_court_family_generated_semantic_profile_v3"); for profile in crate::palw_state_v2::family_supplier_profiles_v3().expect("fixed generated semantic profiles"){h.write(profile.as_byte_slice());} }
         if let Some(at) = self.palw_fp_answer_accounting_v1.filter(|f| *f != ForkActivation::never()) {
             h.write(b"palw_fp_answer_accounting_v1");
             h.write(at.daa_score().to_le_bytes());
@@ -5792,7 +5792,7 @@ impl Params {
             h.write(b"palw_public_evidence_reward_v1");
             h.write(activation.daa_score().to_le_bytes());
         }
-        if let Some(activation) = palw_court_family_supplier_v1.filter(|f| *f != ForkActivation::never()) { h.write(b"palw_court_family_supplier_v1"); h.write(activation.daa_score().to_le_bytes()); for profile in crate::palw_state_v2::family_supplier_profiles_v1().expect("fixed native family profiles"){h.write(profile.as_byte_slice());} }
+        if let Some(activation) = palw_court_family_supplier_v1.filter(|f| *f != ForkActivation::never()) { h.write(b"palw_court_family_supplier_v1"); h.write(activation.daa_score().to_le_bytes()); for profile in crate::palw_state_v2::family_supplier_profiles_v1().expect("fixed native family profiles"){h.write(profile.as_byte_slice());} h.write(b"palw_court_family_signature_alias_wire_v3"); h.write(3u16.to_le_bytes()); h.write(b"palw_court_family_independent_draft_v2"); for profile in crate::palw_state_v2::family_supplier_profiles_v2().expect("fixed independent draft profiles"){h.write(profile.as_byte_slice());} h.write(b"palw_court_family_generated_semantic_profile_v3"); for profile in crate::palw_state_v2::family_supplier_profiles_v3().expect("fixed generated semantic profiles"){h.write(profile.as_byte_slice());} }
         if let Some(activation) = palw_fp_answer_accounting_v1.filter(|f| *f != ForkActivation::never()) {
             h.write(b"palw_fp_answer_accounting_v1");
             h.write(activation.daa_score().to_le_bytes());

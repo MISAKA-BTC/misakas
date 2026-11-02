@@ -38,7 +38,11 @@ pub(in crate::palw_state_v2) fn drain_consumed_queues_v2(
     let mut payouts = keys::<Hash64>(count)?;
     payouts.extend(builder.state.pending_payouts.keys().copied().take(PALW_V2_MAX_PAYOUTS_PER_BLOCK));
     for claim_id in payouts {
+        let first=builder.entries.len();
         builder.write_payout(claim_id, None)?;
+        // This exact validated coinbase prefix owns a physical cash deletion;
+        // the queue may coalesce several claims and ordinary user funds.
+        palw_claim_local_material_projection_v2::mark(builder,Hash64::default(),palw_claim_local_material_projection_v2::FamilyEventV2::ConsumedCashQueue(claim_id),first)?;
     }
     // Dedicated checker fee/refund ACK reads only this exact consumed prefix;
     // principal refunds do not depend on an R engine being active.

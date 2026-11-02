@@ -10,6 +10,7 @@ use crate::{
     palw_state_v2::{PalwBondKeyV2, PalwChainStateV2},
 };
 use borsh::{BorshDeserialize, BorshSerialize};
+pub const FAMILY_MATERIAL_SIGNATURE_CONTEXT_V2: &[u8] = b"misaka-palw/court-family-material/v2/mldsa87";
 pub const FAMILY_MATERIAL_SIGNATURE_CONTEXT_V1: &[u8] = b"misaka-palw/court-family-material/v1/mldsa87";
 pub const FAMILY_MATERIAL_PART_BYTES_V1: usize = crate::palw_tir_public_owned_v1::PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, BorshSerialize, BorshDeserialize)]
@@ -23,6 +24,7 @@ pub enum FamilyMaterialActionV1 {
     Begin { total_bytes: u64, body_hash: Hash64 },
     Part { draft: Hash64, offset: u64, bytes: Vec<u8> },
     Finish { draft: Hash64 },
+    BeginReserved { total_bytes: u64, body_hash: Hash64, quote: FamilyDraftQuoteV2 },
 }
 impl BorshDeserialize for FamilyMaterialActionV1 {
     fn deserialize_reader<R: std::io::Read>(r: &mut R) -> std::io::Result<Self> {
@@ -34,6 +36,7 @@ impl BorshDeserialize for FamilyMaterialActionV1 {
                 bytes: crate::palw_public_binding_v1::read_bounded_bytes_v1(r, FAMILY_MATERIAL_PART_BYTES_V1)?,
             },
             2 => Self::Finish { draft: Hash64::deserialize_reader(r)? },
+            3 => Self::BeginReserved { total_bytes: u64::deserialize_reader(r)?, body_hash: Hash64::deserialize_reader(r)?, quote: FamilyDraftQuoteV2::deserialize_reader(r)? },
             _ => return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "family material action")),
         })
     }
@@ -49,21 +52,23 @@ pub struct SignedFamilyMaterialV1 {
 }
 impl SignedFamilyMaterialV1 {
     pub fn signing_message_v1(&self, network: Hash64) -> Result<Hash64, String> {
-        if self.version != 1 || network == Hash64::default() || self.contract == Hash64::default() {
+        if !matches!(self.version, 1 | 2) || (self.version == 1 && matches!(self.action, FamilyMaterialActionV1::BeginReserved { .. })) || network == Hash64::default() || self.contract == Hash64::default() {
             return Err("family material version/network/contract".into());
         }
         digest(
-            b"misaka-palw/family-material/control/v1",
+            if self.version == 2 { b"misaka-palw/family-material/control/v2" } else { b"misaka-palw/family-material/control/v1" },
             &(network, self.version, self.contract, self.target, self.submitter, &self.action),
         )
     }
+    pub fn signature_context_v2(&self) -> &'static [u8] { if self.version == 2 { FAMILY_MATERIAL_SIGNATURE_CONTEXT_V2 } else { FAMILY_MATERIAL_SIGNATURE_CONTEXT_V1 } }
+    pub fn reserved_response_horizon_v2(&self) -> Option<u64> { match &self.action { FamilyMaterialActionV1::BeginReserved { quote, .. } => Some(quote.respond_until_daa), _ => None } }
     pub fn verify_v1(&self, network: Hash64, key: &[u8]) -> Result<(), String> {
         if self.signature.len() != crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN
             || !crate::palw_constraint_stream_carriage_v1::palw_staged_verify_mldsa87_v1(
                 key,
                 self.signing_message_v1(network)?.as_byte_slice(),
                 &self.signature,
-                FAMILY_MATERIAL_SIGNATURE_CONTEXT_V1,
+                self.signature_context_v2(),
             )
         {
             return Err("family material signature invalid".into());
@@ -96,8 +101,17 @@ pub struct NativeFamilyInventoryV1 {
     maximum_bytes: u64,
     // Local data-identity memo for this opaque native derivation; never encoded.
     source_inputs: Hash64,
+    native_inclusion_margin_daa_v2:u64,
+    // Opaque native-only derivation purpose; never a carrier-selected subset.
+    generated_semantic_only_v3:bool,
+    carrier_projection_v3:Option<FamilyCarrierProjectionFactsV3>,
 }
 impl NativeFamilyInventoryV1 {
+    pub fn carrier_input_bound_v3(&self)->Option<u64>{self.carrier_projection_v3.map(|f|f.input_bound)}
+    pub fn carrier_coordinates_v3(&self)->Option<Hash64>{self.carrier_projection_v3.map(|f|f.coordinates)}
+    pub(crate) fn carrier_projection_v3(&self)->Option<FamilyCarrierProjectionFactsV3>{self.carrier_projection_v3}
+    pub(crate) fn generated_semantic_only_v3(&self)->bool { self.generated_semantic_only_v3 }
+    pub(crate) fn native_inclusion_margin_v2(&self)->u64 { self.native_inclusion_margin_daa_v2 }
     pub fn claim_v1(&self) -> Hash64 {
         self.claim
     }
@@ -272,7 +286,7 @@ pub(crate) fn read_authenticated_family_table_inventory_v1(
     if now > row.material_until_daa {
         return Ok(None);
     }
-    let inventory = derive_current_family_inventory_classified_v1(state, claim, Role::SemanticTable)?;
+    let inventory = derive_bound_current_family_inventory_classified_v3(state,claim,Role::SemanticTable)?;
     let target = inventory.target_id_v1(FamilyMaterialTargetV1::SemanticTable).map_err(bad)?;
     let body = crate::palw_tir_public_owned_v1::palw_tir_public_body_hash_v1(&row.bytes);
     let contracts = state.family_supplier_rows_v1().map_err(|why| match why {
@@ -371,6 +385,26 @@ pub(crate) fn derive_family_inventory_with_table_v1(
     role: Role,
     table_inventory: Option<&CheckedFamilyTableInventoryV1>,
 ) -> Result<Held<NativeFamilyInventoryV1>, E<String>> {
+    derive_family_inventory_with_table_mode_v3(state,frame,source,graph,profile,program,cover,semantics,role,table_inventory,false)
+}
+/// Newly signed profile3 generated-selection/stop service. Numeric and consumed
+/// prefix boundary streams retain their original all-branch SourceGraph duties.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn derive_family_inventory_with_table_v3(
+    state:&PalwChainStateV2,frame:&Frame,source:&Held<Source>,graph:&crate::palw_court_source_material_graph_v3::NativeSourceMaterialGraphV3,
+    profile:Hash64,program:&misaka_palw_tir::program::TirProgramV1,cover:&crate::palw_tir_public_source_v1::parameter_cover_v1::OriginalRootInputCoverV1,
+    semantics:Option<&crate::palw_class_semantics_v1::PalwClassSemanticsV1>,role:Role,table_inventory:Option<&CheckedFamilyTableInventoryV1>,
+)->Result<Held<NativeFamilyInventoryV1>,E<String>>{
+    derive_family_inventory_with_table_mode_v3(state,frame,source,graph,profile,program,cover,semantics,role,table_inventory,true)
+}
+fn generated_semantic_query_v2(query:&Query)->bool { matches!(query,Query::RowsNode{..}|Query::TileNode{..}|Query::TraceTile{..}) }
+#[allow(clippy::too_many_arguments)]
+fn derive_family_inventory_with_table_mode_v3(
+    state:&PalwChainStateV2,frame:&Frame,source:&Held<Source>,graph:&crate::palw_court_source_material_graph_v3::NativeSourceMaterialGraphV3,
+    profile:Hash64,program:&misaka_palw_tir::program::TirProgramV1,cover:&crate::palw_tir_public_source_v1::parameter_cover_v1::OriginalRootInputCoverV1,
+    semantics:Option<&crate::palw_class_semantics_v1::PalwClassSemanticsV1>,role:Role,table_inventory:Option<&CheckedFamilyTableInventoryV1>,semantic_v3:bool,
+)->Result<Held<NativeFamilyInventoryV1>,E<String>>{
+    let semantic_v3=semantic_v3&&role==Role::PrefixGeneratedSelectionAndStop;
     graph.check_frame_binding_v3(frame, source, profile).map_err(bad)?;
     if cover.parameters_v1().source_id != source.source_id_v1() || cover.parameters_v1().original_leaves != source.leaf_count_v1() {
         return Err(bad("family input cover changes original"));
@@ -415,7 +449,11 @@ pub(crate) fn derive_family_inventory_with_table_v1(
             }
             // The literal snapshot (including a historical None relation) is bound below.
             // Material supply does not invent a stronger prefix-state semantic relation.
-            add(set.len(), 1)?
+            if semantic_v3 {
+                let mut count=1u64; // exact full FullIds body
+                for ordinal in 0..set.len() {if generated_semantic_query_v2(&set.request_at(ordinal).map_err(bad)?) {count=add(count,1)?;}}
+                count
+            }else{add(set.len(), 1)?}
         }
     };
     let mut memory = TirNativeRequestsV1::new();
@@ -486,9 +524,7 @@ pub(crate) fn derive_family_inventory_with_table_v1(
         Role::PrefixGeneratedSelectionAndStop => {
             for ordinal in 0..set.len() {
                 let request = set.request_at(ordinal).map_err(bad)?;
-                if matches!(request, Query::Ids { .. }) {
-                    continue;
-                }
+                if matches!(request,Query::Ids{..}) || (semantic_v3&&!generated_semantic_query_v2(&request)) {continue;}
                 targets.push((
                     FamilyMaterialTargetV1::Input(MaterialTargetV1::Unit { ordinal }),
                     crate::palw_tir_public_owned_v1::request_body_bound_v1(source, request).map_err(bad)?.0,
@@ -500,18 +536,21 @@ pub(crate) fn derive_family_inventory_with_table_v1(
             ));
         }
     }
+    if semantic_v3&&targets.len() as u64!=count {return Err(bad("generated semantic count/enumeration mismatch"));}
     targets.sort_unstable_by_key(|x| x.0);
     if targets.windows(2).any(|w| w[0].0 == w[1].0) {
         return Err(bad("family native target repeats"));
     }
     let maximum_bytes = targets.iter().try_fold(0u64, |n, (_, bytes)| add(n, *bytes))?;
     let semantic_id = sem.map(|s| s.commitment());
-    let id = digest(
-        b"misaka-palw/family-material/inventory/v1",
-        &(claim, source.source_id_v1(), graph.scope_v3(), role, semantic_id, &targets),
-    )
-    .map_err(bad)?;
-    let source_inputs = family_inventory_source_inputs_v1(state, frame, profile, semantics, role, table_inventory)?;
+    let id = if semantic_v3 {
+        digest(b"misaka-palw/family-material/generated-semantic-inventory/v3",&(3u16,claim,source.source_id_v1(),graph.scope_v3(),role,semantic_id,&targets))
+    }else{
+        // Literal historical V1 tuple/domain and complete enumeration.
+        digest(b"misaka-palw/family-material/inventory/v1",&(claim,source.source_id_v1(),graph.scope_v3(),role,semantic_id,&targets))
+    }.map_err(bad)?;
+    let old_inputs=family_inventory_source_inputs_v1(state,frame,profile,semantics,role,table_inventory)?;
+    let source_inputs=if semantic_v3 {digest(b"misaka-palw/family-material/generated-semantic-inputs/v3",&(3u16,old_inputs)).map_err(bad)?}else{old_inputs};
     Ok(Held::from_owner_reserved_v1(
         NativeFamilyInventoryV1 {
             claim,
@@ -522,6 +561,9 @@ pub(crate) fn derive_family_inventory_with_table_v1(
             targets,
             maximum_bytes,
             source_inputs,
+            native_inclusion_margin_daa_v2:frame.plan_v1().acquisition.config.prices.inclusion_margin_daa,
+            generated_semantic_only_v3:semantic_v3,
+            carrier_projection_v3:None,
         },
         lease,
     ))
@@ -532,6 +574,33 @@ pub(crate) fn derive_current_family_inventory_classified_v1(
     claim: Hash64,
     role: Role,
 ) -> Result<Held<NativeFamilyInventoryV1>, E<String>> {
+    derive_current_family_inventory_mode_v3(state,claim,role,false)
+}
+/// A retained contract chooses its exact signed historical derivation. Today's
+/// Active state, new defaults or a role-only lookup cannot reinterpret its ID.
+pub(crate) fn derive_contract_family_inventory_classified_v3(
+    state:&PalwChainStateV2,contract:&crate::palw_court_family_supplier_v1::FamilySupplierRowV1,
+)->Result<Held<NativeFamilyInventoryV1>,E<String>>{
+    let t=&contract.consent.terms;
+    let generation=crate::palw_court_family_supplier_v1::signed_profile_generation_v3(t).map_err(bad)?;
+    let mode=generation==3;
+    let inventory=derive_current_family_inventory_mode_v3(state,t.claim,t.role,mode)?;
+    let frame=crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(state,t.claim).ok_or_else(||bad("bound family source original absent"))?;
+    if frame.plan_v1().allocation_id!=contract.allocation||frame.plan_v1().terms.accepted_daa!=contract.accepted_daa||inventory.source_v1()!=t.source||inventory.relative_graph_v1()!=t.relative_graph{return Err(bad("family contract changes retained original source scope"))}
+    if generation==3 {
+        let id=contract.consent.id_v1().map_err(bad)?;
+        let key=crate::palw_court_family_supplier_v1::family_carrier_projection_key_v3(id);
+        let raw=state.kernel_route_state_v1().and_then(|route|route.aux.iter().find_map(|((table,k),v)|(*table==crate::palw_court_family_supplier_v1::FAMILY_SUPPLIER_TABLE_V1&&k.as_slice()==key).then_some(v))).ok_or_else(||bad("profile3 carrier birth facts absent"))?;
+        let row:crate::palw_court_family_supplier_v1::FamilyCarrierProjectionRowV3=borsh::from_slice(raw).map_err(|e|bad(e.to_string()))?;
+        if row.version!=3||row.contract!=id||row.claim!=t.claim||row.accepted_daa!=contract.accepted_daa||row.source!=t.source||row.allocation!=contract.allocation||row.accepted_block==Hash64::default()||row.funding_contract==Hash64::default(){return Err(bad("profile3 carrier birth facts scope changed"))}
+        state.check_family_carrier_birth_v3(contract,&row).map_err(|e|match e{crate::palw_state_v2::PalwStateV2Error::NativeResource(c)=>E::Resource(c),other=>bad(other.to_string())})?;
+        if let Some(escrow)=state.funded_escrows_v1().get(&row.funding_contract){if escrow.claim!=t.claim||escrow.accepted_daa!=row.accepted_daa{return Err(bad("carrier facts differ from native funded birth"))}}
+        let inventory=bind_family_carrier_facts_v3(inventory,row.facts)?;
+        if inventory.id_v1()!=t.inventory{return Err(bad("profile3 carrier facts change signed inventory"))}
+        Ok(inventory)
+    }else{Ok(inventory)}
+}
+fn derive_current_family_inventory_mode_v3(state:&PalwChainStateV2,claim:Hash64,role:Role,semantic_v3:bool)->Result<Held<NativeFamilyInventoryV1>,E<String>>{
     let frame = crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(state, claim)
         .ok_or_else(|| bad("family material original missing"))?;
     let c = crate::palw_court_shared_tir_state_v1::context(state, claim).map_err(bad)?;
@@ -572,7 +641,21 @@ pub(crate) fn derive_current_family_inventory_classified_v1(
             max_edges: edges,
         },
     )?;
-    derive_family_inventory_v1(state, frame, &source, &graph, c.profile_id, &program, &cover, state.claim_semantics_v1(&claim), role)
+    let semantics=state.claim_semantics_v1(&claim);
+    let table=if role==Role::SemanticTable {semantics.map(|sem|read_family_table_inventory_v1(state,claim,sem,source.vocab_v1())).transpose()?.flatten()}else{None};
+    derive_family_inventory_with_table_mode_v3(state,frame,&source,&graph,c.profile_id,&program,&cover,semantics,role,table.as_ref(),semantic_v3)
+}
+/// Rooted consumers select the unique contract of the current native birth.
+/// Old standalone/legacy material keeps the literal V1 derivation when no
+/// family contract owns that role. A later raw-ID birth is never an alias.
+pub(crate) fn derive_bound_current_family_inventory_classified_v3(state:&PalwChainStateV2,claim:Hash64,role:Role)->Result<Held<NativeFamilyInventoryV1>,E<String>>{
+    let frame=crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(state,claim).ok_or_else(||bad("current bound family original absent"))?;
+    let accepted=frame.plan_v1().terms.accepted_daa;
+    let rows=state.family_supplier_rows_v1().map_err(|e|match e{crate::palw_state_v2::PalwStateV2Error::NativeResource(c)=>E::Resource(c),other=>bad(other.to_string())})?;
+    let mut matches=rows.iter().filter(|(_,row)|row.consent.terms.claim==claim&&row.consent.terms.role==role&&row.accepted_daa==accepted);
+    let Some((_,contract))=matches.next()else{return derive_current_family_inventory_classified_v1(state,claim,role)};
+    if matches.next().is_some(){return Err(bad("current family role has ambiguous signed birth contracts"))}
+    derive_contract_family_inventory_classified_v3(state,contract)
 }
 pub(crate) fn derive_current_family_inventory_v1(
     state: &PalwChainStateV2,
@@ -685,7 +768,9 @@ pub(crate) fn authenticate_family_material_classified_v1(
     } else {
         None
     };
-    let current_inputs = family_inventory_source_inputs_v1(state, frame, c.profile_id, semantics, inventory.role, table.as_ref())?;
+    let old_inputs=family_inventory_source_inputs_v1(state,frame,c.profile_id,semantics,inventory.role,table.as_ref())?;
+    let current_inputs=if inventory.generated_semantic_only_v3 {digest(b"misaka-palw/family-material/generated-semantic-inputs/v3",&(3u16,old_inputs)).map_err(bad)?}else{old_inputs};
+    let current_inputs=if let Some(facts)=inventory.carrier_projection_v3 {digest(b"misaka-palw/family-material/carrier-bound-inputs/v3",&(3u16,current_inputs,facts)).map_err(bad)?}else{current_inputs};
     if current_inputs != inventory.source_inputs {
         return Err(bad("family body belongs to stale or substituted native inventory"));
     }
@@ -966,6 +1051,7 @@ impl crate::palw_native_resource_v1::NativeWireScanV1 for FamilyMaterialActionV1
                 s = s.merge(Vec::<u8>::scan_native_wire_v1(r)?)?;
             }
             2 => s = s.merge(Hash64::scan_native_wire_v1(r)?)?,
+            3 => { s = s.merge(u64::scan_native_wire_v1(r)?)?; s = s.merge(Hash64::scan_native_wire_v1(r)?)?; s = s.merge(FamilyDraftQuoteV2::scan_native_wire_v1(r)?)?; },
             _ => return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "family material action")),
         }
         Ok(s)
@@ -982,7 +1068,7 @@ pub fn sign_family_material_v1(
     mut sign: impl FnMut(&PalwBondKeyV2, &[u8], &[u8]) -> Option<Vec<u8>>,
 ) -> Option<SignedFamilyMaterialV1> {
     let message = control.signing_message_v1(network).ok()?;
-    control.signature = sign(&control.submitter, message.as_byte_slice(), FAMILY_MATERIAL_SIGNATURE_CONTEXT_V1)
+    control.signature = sign(&control.submitter, message.as_byte_slice(), control.signature_context_v2())
         .filter(|s| s.len() == crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN)?;
     Some(control)
 }
@@ -1148,4 +1234,136 @@ pub fn family_tokenizer_raw_payload_v1(body: &[u8], actual_bytes: u64) -> Result
         return Err("family tokenizer raw frame differs from actual EOF".into());
     }
     Ok(&body[4..])
+}
+
+/// Exact independently priced upload consent. The book's historical scalar
+/// geometry is authenticated at birth and retained so restore does not require
+/// today's expanded service book or today's free principal.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct FamilyDraftQuoteV2 {
+    pub version: u16, pub accept_from_daa: u64, pub accept_until_daa:u64, pub respond_until_daa: u64,
+    pub profile: Hash64, pub book: Hash64, pub book_bytes: u64, pub book_heap:u64,
+    pub fee_sompi: u64, pub collateral_sompi: u64, pub reserved_memory: u64,
+    pub retained_bytes: u64, pub journal_bytes: u64,
+    pub prior_rows:u64,pub prior_key_bytes:u64,pub prior_events:u64,
+}
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub(crate) struct FamilyDraftReservationV2 {
+    pub contract: Hash64, pub version: u16, pub claim: Hash64, pub draft: Hash64,
+    pub accepted_daa: u64, pub expires_daa: u64, pub material_until_daa: u64,
+    pub quote: FamilyDraftQuoteV2, pub transfer_first_daa:u64,pub transfer_span_daa:u64,pub begin: SignedFamilyMaterialV1,
+}
+crate::palw_native_resource_v1::native_struct!(FamilyDraftQuoteV2;version,accept_from_daa,accept_until_daa,respond_until_daa,profile,book,book_bytes,book_heap,fee_sompi,collateral_sompi,reserved_memory,retained_bytes,journal_bytes,prior_rows,prior_key_bytes,prior_events);
+crate::palw_native_resource_v1::native_struct!(FamilyDraftReservationV2;contract,version,claim,draft,accepted_daa,expires_daa,material_until_daa,quote,transfer_first_daa,transfer_span_daa,begin);
+crate::palw_native_resource_v1::wire::wire_struct!(FamilyDraftQuoteV2;u16,u64,u64,u64,Hash64,Hash64,u64,u64,u64,u64,u64,u64,u64,u64,u64,u64);
+impl crate::palw_native_resource_v1::NativeWireScanV1 for FamilyDraftReservationV2 {
+ fn scan_native_wire_v1<R:std::io::Read>(r:&mut crate::palw_native_resource_v1::NativeWireReaderV1<R>)->std::io::Result<crate::palw_native_resource_v1::NativeWireShapeV1>{
+  use crate::palw_native_resource_v1::NativeWireScanV1;use std::io::Read;
+  r.step()?;r.skip(64+2+64+64+3*8)?;
+  // The quote's reserved_memory is a stack-read predecode request. No raw
+  // row length or peer-estimated multiplication substitutes for this schema.
+  r.skip(2+3*8+2*64+4*8)?;let mut word=[0;8];r.read_exact(&mut word)?;let held=u64::from_le_bytes(word);r.skip(7*8)?;
+  let mut shape=SignedFamilyMaterialV1::scan_native_wire_v1(r)?;shape.heap=shape.heap.checked_add(held).ok_or_else(||std::io::Error::other("draft predecode capacity overflow"))?;Ok(shape)
+ }
+}
+
+#[derive(Clone,Debug,PartialEq,Eq,BorshSerialize,BorshDeserialize)]
+pub(crate) struct FamilyPrimaryDraftV2 { pub contract:Hash64,pub version:u16,pub claim:Hash64,pub target:Hash64,pub draft:Hash64,pub material_until_daa:u64 }
+crate::palw_native_resource_v1::native_struct!(FamilyPrimaryDraftV2;contract,version,claim,target,draft,material_until_daa);
+crate::palw_native_resource_v1::wire::wire_struct!(FamilyPrimaryDraftV2;Hash64,u16,Hash64,Hash64,Hash64,u64);
+
+/// New birth identity includes the exact independently signed quote. Retrying
+/// the same bytes after expiry at a new quoted point cannot collide with a
+/// historical receipt. Primary and legacy V1 identities remain literal.
+pub fn family_material_draft_id_v2(contract:Hash64,target:FamilyMaterialTargetV1,submitter:PalwBondKeyV2,total:u64,body_hash:Hash64,quote:&FamilyDraftQuoteV2)->Result<Hash64,String>{digest(b"misaka-palw/family-material/draft/v2",&(contract,target,submitter,total,body_hash,quote))}
+
+/// Fixed retained facts of actual carrier coordinates. Reading this wire value
+/// alone grants no native quote capability; ingress derives Native below.
+#[derive(Clone,Copy,Debug,PartialEq,Eq,BorshSerialize,BorshDeserialize)]
+pub(crate) struct FamilyCarrierProjectionFactsV3 {
+    pub input_count:u64,pub distinct_txids:u64,pub prefix_use:Option<Hash64>,pub input_bound:u64,pub coordinates:Hash64,
+}
+impl FamilyCarrierProjectionFactsV3 {
+    pub(crate) fn check_v3(&self)->Result<(),String>{
+        if self.input_count==0||self.input_count>u64::from(u32::MAX)||self.distinct_txids==0||self.distinct_txids>self.input_count||self.coordinates==Hash64::default()||self.prefix_use==Some(Hash64::default())||self.input_bound!=self.distinct_txids.checked_add(u64::from(self.prefix_use.is_some())).ok_or("carrier input bound overflow")?{return Err("carrier projection facts change native shape".into())}Ok(())
+    }
+}
+crate::palw_native_resource_v1::native_struct!(FamilyCarrierProjectionFactsV3;input_count,distinct_txids,prefix_use,input_bound,coordinates);
+crate::palw_native_resource_v1::wire::wire_struct!(FamilyCarrierProjectionFactsV3;u64,u64,Option<Hash64>,u64,Hash64);
+/// No decoder/producer scalar constructor: only actual native transaction input
+/// coordinates plus an authenticated same-carrier PrefixUse can create this.
+#[derive(Clone,Copy,Debug)]
+pub(crate) struct NativeFamilyCarrierInputsV3 {facts:FamilyCarrierProjectionFactsV3}
+struct CarrierCoordinatesV3<'a>(&'a [crate::tx::TransactionInput]);
+impl BorshSerialize for CarrierCoordinatesV3<'_>{fn serialize<W:std::io::Write>(&self,w:&mut W)->std::io::Result<()>{
+    u32::try_from(self.0.len()).map_err(|_|std::io::Error::new(std::io::ErrorKind::InvalidData,"carrier input count"))?.serialize(w)?;
+    for input in self.0{input.previous_outpoint.serialize(w)?;}Ok(())
+}}
+impl NativeFamilyCarrierInputsV3 {
+    pub(crate) fn derive_v3(inputs:&[crate::tx::TransactionInput],prefix:Option<&crate::palw_claim_local_v1::prefix_v1::PalwSignedPrefixUseV1>,claim:Hash64,network:Hash64,executor:&[u8])->Result<Self,E<String>>{
+        if inputs.is_empty(){return Err(bad("profile3 carrier must have an actual ordinary input"))}
+        let n=u64::from(u32::try_from(inputs.len()).map_err(|_|bad("carrier input count exceeds native wire"))?);
+        let mut q=TirNativeRequestsV1::new();q.exact_v1::<crate::palw_native_resource_v1::BTreeNodeEnvelopeV1<Hash64,()>>(n).map_err(E::Resource)?;
+        let _lease=crate::palw_native_resource_v1::reserve_native_requests_v1(q.bytes_v1()).map_err(E::Resource)?;
+        let mut ids=std::collections::BTreeSet::new();for input in inputs {ids.insert(input.previous_outpoint.transaction_id);}
+        let prefix_use=if let Some(signed)=prefix {
+            if signed.intent.base_commitment!=claim||signed.intent.network!=network{return Err(bad("carrier PrefixUse differs from exact original"))}
+            signed.intent.verify_signature_v1(executor,&signed.signature).map_err(|e|bad(e.to_string()))?;
+            Some(signed.intent.id_v1())
+        }else{None};
+        let distinct_txids=ids.len() as u64;
+        let facts=FamilyCarrierProjectionFactsV3{input_count:n,distinct_txids,prefix_use,input_bound:add(distinct_txids,u64::from(prefix_use.is_some()))?,coordinates:digest(b"misaka-palw/family-carrier-coordinates/v3",&(3u16,claim,network,CarrierCoordinatesV3(inputs),prefix_use)).map_err(bad)?};
+        facts.check_v3().map_err(bad)?;Ok(Self{facts})
+    }
+    pub(crate) fn facts_v3(&self)->FamilyCarrierProjectionFactsV3{self.facts}
+}
+pub(crate) fn bind_family_carrier_inputs_v3(inventory:Held<NativeFamilyInventoryV1>,carrier:&NativeFamilyCarrierInputsV3)->Result<Held<NativeFamilyInventoryV1>,E<String>>{
+    bind_family_carrier_facts_v3(inventory,carrier.facts)
+}
+fn bind_family_carrier_facts_v3(inventory:Held<NativeFamilyInventoryV1>,facts:FamilyCarrierProjectionFactsV3)->Result<Held<NativeFamilyInventoryV1>,E<String>>{
+    facts.check_v3().map_err(bad)?;
+    let(mut inventory,lease)=inventory.into_parts_v1();
+    if inventory.carrier_projection_v3.is_some(){return Err(bad("family carrier facts already bound"))}
+    inventory.id=digest(b"misaka-palw/family-material/carrier-bound-inventory/v3",&(3u16,inventory.id,facts)).map_err(bad)?;
+    inventory.source_inputs=digest(b"misaka-palw/family-material/carrier-bound-inputs/v3",&(3u16,inventory.source_inputs,facts)).map_err(bad)?;
+    inventory.carrier_projection_v3=Some(facts);
+    Ok(Held::from_owner_reserved_v1(inventory,lease))
+}
+
+#[cfg(test)]
+mod carrier_projection_v3_tests{
+    use super::*;
+    #[test]
+    fn family_profile3_carrier_facts_use_actual_distinct_inputs_and_survive_signing(){
+        use crate::tx::{TransactionInput,TransactionOutpoint};
+        let h=Hash64::from_u64_word;
+        let mut inputs=vec![TransactionInput::new(TransactionOutpoint::new(h(1),0),vec![],0,1),TransactionInput::new(TransactionOutpoint::new(h(1),1),vec![],0,1),TransactionInput::new(TransactionOutpoint::new(h(2),0),vec![],0,1)];
+        let before=NativeFamilyCarrierInputsV3::derive_v3(&inputs,None,h(3),h(4),&[]).unwrap().facts_v3();
+        assert_eq!((before.input_count,before.distinct_txids,before.input_bound),(3,2,2));
+        inputs[0].signature_script=vec![7;33];
+        assert_eq!(NativeFamilyCarrierInputsV3::derive_v3(&inputs,None,h(3),h(4),&[]).unwrap().facts_v3(),before,"final input signatures do not require an unknown transaction identity in the quote");
+        inputs[0].previous_outpoint.index=2;
+        let changed=NativeFamilyCarrierInputsV3::derive_v3(&inputs,None,h(3),h(4),&[]).unwrap().facts_v3();
+        assert_ne!(before.coordinates,changed.coordinates);assert_eq!(before.input_bound,changed.input_bound);
+        assert!(NativeFamilyCarrierInputsV3::derive_v3(&[],None,h(3),h(4),&[]).is_err());
+        let mut impossible=before;impossible.input_bound=1;assert!(impossible.check_v3().is_err());
+    }
+}
+
+pub(crate) struct FamilySourceFingerprintInputsV16<'a>{
+    pub record:&'a crate::palw_tir_admission_v1::PalwTirClassRecordV1,
+    pub layout:&'a crate::palw_tir_class_v1::PalwTirLayoutV1,
+    pub semantics:Option<&'a crate::palw_class_semantics_v1::PalwClassSemanticsV1>,
+    pub eof:Option<&'a crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryCertificateV1>,
+    pub cover_limits:(u64,u64,u64,u64),
+}
+/// Literal legacy digest tuple/order/domain preserved. Source16 can supply its
+/// actual admitted signed-source snapshot, separately from B's postblock view.
+pub(crate) fn family_inventory_source_inputs_typed_v16(
+    frame:&Frame,profile:Hash64,role:Role,table:Option<&CheckedFamilyTableInventoryV1>,
+    inputs:&FamilySourceFingerprintInputsV16<'_>,
+)->Result<Hash64,E<String>>{
+    let eof=if role==Role::TokenizerArtifact{inputs.eof}else{None};
+    let table=if role==Role::SemanticTable{table.map(|t|(t.root,t.tokenizer,t.vocab,t.bytes))}else{None};
+    digest(b"misaka-palw/family-material/local-source-inputs/v1",&(frame,inputs.record,inputs.layout,inputs.semantics,eof,profile,role,table,inputs.cover_limits)).map_err(bad)
 }

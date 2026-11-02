@@ -4,7 +4,7 @@
 {
     let frame=crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(&accepted,claim).unwrap().clone();
     let p=frame.plan_v1();
-    assert_eq!(p.acquisition.clock.version,crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_CLOCK_FAMILY_VERSION_V3);
+    assert_eq!(p.acquisition.clock.version,crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_CLOCK_FAMILY_MATERIAL_V4);
     assert_eq!(p.acquisition.config.reorg_retention_daa,crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA);
     let mut legacy_rules=fx.rules;
     legacy_rules.clock.version=crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_CLOCK_FAMILY_VERSION_V3;

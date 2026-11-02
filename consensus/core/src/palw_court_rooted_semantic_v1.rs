@@ -60,7 +60,7 @@ pub fn palw_retain_rooted_family_table_v1(state:&PalwChainStateV2,claim:Hash64)-
         if Some(value.root_v1())!=sem.token_table_root||value.tokenizer_id_v1()!=sem.tokenizer_id{return Err(bad("admission table changes immutable statement"))}
         return Ok(Some(value))
     }
-    let inventory=m::derive_current_family_inventory_classified_v1(state,claim,Role::SemanticTable)?;
+    let inventory=m::derive_bound_current_family_inventory_classified_v3(state,claim,Role::SemanticTable)?;
     let Some(body)=m::read_authenticated_family_material_classified_v1(state,&inventory,Target::SemanticTable)? else{return Ok(None)};
     let value=decode(&body.bytes)?;let sem=state.claim_semantics_v1(&claim).ok_or_else(||bad("semantic snapshot missing"))?;
     if Some(value.root_v1())!=sem.token_table_root||value.tokenizer_id_v1()!=sem.tokenizer_id{return Err(bad("rooted table changes immutable statement"));}
@@ -68,7 +68,7 @@ pub fn palw_retain_rooted_family_table_v1(state:&PalwChainStateV2,claim:Hash64)-
 }
 pub fn palw_retain_rooted_tokenizer_raw_v1(state:&PalwChainStateV2,claim:Hash64)->Result<Option<Held<Vec<u8>>>,E<String>>{
     if crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(state,claim).is_none() || state.claim_semantics_v1(&claim).is_none_or(|s|s.raw_tokenizer_bytes.is_none()){return Ok(None)}
-    let inventory=m::derive_current_family_inventory_classified_v1(state,claim,Role::TokenizerArtifact)?;
+    let inventory=m::derive_bound_current_family_inventory_classified_v3(state,claim,Role::TokenizerArtifact)?;
     let Some(body)=m::read_authenticated_family_material_classified_v1(state,&inventory,Target::TokenizerRaw)? else{return Ok(None)};
     let sem=state.claim_semantics_v1(&claim).ok_or_else(||bad("semantic snapshot missing"))?;
     let raw=m::family_tokenizer_raw_payload_v1(&body.bytes,sem.raw_tokenizer_bytes.ok_or_else(||bad("actual tokenizer EOF absent"))?).map_err(bad)?;

@@ -9,6 +9,7 @@ pub(super) struct PreparedOriginalFrameV1 {
     registered: Option<(u64, crate::palw_tir_fence2_v1::PalwTirDemandRulesV1)>,
     network: Option<Hash64>,
     semantic_snapshot: Option<crate::palw_class_semantics_v1::PalwClassSemanticsV1>,
+    input_footprint_v12: Option<NativePreparedInputArchiveFootprintV12>,
 }
 impl PreparedOriginalFrameV1 {
     pub(super) fn frame_v1(&self) -> &Frame {

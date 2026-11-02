@@ -1502,21 +1502,36 @@ fn rfc40_export_reservation_survives_source_terminal_and_releases_only_after_mat
         }
     }
     let (registered, _) = apply(&PalwChainStateV2::genesis(), &base, &ctx(1, 100, 1), &registrations, None);
+    let mut p = base.with_claim_local_settlement_from_daa(Some(101));
+    p.econ_contracts_v1.horizon_extension = Some((101, crate::palw_econ_contracts_v1::PalwHorizonExtensionPolicyV1::unapproved_probe_v1()));
+    // Explicit native rule material for this budget-boundary fixture. E's
+    // financial archive must retain its real supplied network/fork identity;
+    // the later closed-source seam uses the SAME supplied native ruleset.
+    let native_ruleset = crate::Hash::from_bytes([98; 32]);
+    let mut extras = PalwTransitionExtrasV1 {
+        claim_local_rule_context_v1: Some(([99; 32], [98; 32])),
+        native_fact_ruleset: Some(native_ruleset),
+        kernel_route: Some(crate::palw_kernel_route_v1::PalwKernelRouteExtrasV1 {
+            network_domain: h64(99), ruleset_digest: h64(98), chain_genesis: h64(97), ..Default::default()
+        }),
+        ..Default::default()
+    };
+    // Source birth itself uses the SAME active stage-2 rules and real native
+    // rule material. A later adapter must not retroactively activate an old
+    // untracked birth or manufacture an admission context at cold restore.
     let point = ctx(2, 101, 2);
     let id = h64(0xFC);
     let mut commit = fp_commit(0xFC, 20, 1);
     if let PalwConsensusObjectV2::FreePromptCommitted { executor_pubkey, .. } = &mut commit {
         *executor_pubkey = producer_key.clone();
     }
-    let (source, _) = apply(&registered, &base, &point, &[commit], None);
-    let mut p = base.with_claim_local_settlement_from_daa(Some(101));
-    p.econ_contracts_v1.horizon_extension = Some((101, crate::palw_econ_contracts_v1::PalwHorizonExtensionPolicyV1::unapproved_probe_v1()));
-    let mut extras = PalwTransitionExtrasV1 {
-        kernel_route: Some(crate::palw_kernel_route_v1::PalwKernelRouteExtrasV1 {
-            network_domain: h64(99), ruleset_digest: h64(98), chain_genesis: h64(97), ..Default::default()
-        }),
-        ..Default::default()
-    };
+    let (source, _) = apply_palw_transition_v2_with_extras(
+        &registered,&p,&point,&[commit],None,false,false,false,false,&extras,
+    ).unwrap();
+    assert!(super::super::palw_claim_local_source_admission_v8::for_stored_claim_v8(
+        &source,id,source.claim(&id).unwrap(),
+    ).unwrap().is_some(),"actual active source admission owns its genuine birth archive");
+    assert!(super::super::palw_claim_local_checkpoint_fold_v1::stored_claim_local_checkpoint_v1(&source).unwrap().is_some());
     let intent = PalwPrefixExportIntentV1 {
         version: 1, network: h64(99), source_namespace: 1, source_nonce: h64(9), base_commitment: id,
         producer_key_id: crate::mldsa87_primitives::mldsa87_key_id(&producer_key), ordinal: 0,
@@ -1532,6 +1547,7 @@ fn rfc40_export_reservation_survives_source_terminal_and_releases_only_after_mat
         consumed: None,
     });
     let mut refused = TransitionBuilder::new(&source, &p, false, false, false, false, &extras);
+    refused.claim_local_lock_point_v6 = Some(point);
     assert!(super::super::palw_claim_local_prefix_reservation_v1::admit(&mut refused, &point, id).is_err());
     drop(refused);
     extras.prefix_dependencies_v1.insert(id, PalwPrefixDependencyEnvelopeV1 {
@@ -1539,18 +1555,31 @@ fn rfc40_export_reservation_survives_source_terminal_and_releases_only_after_mat
         exports: vec![PalwSignedPrefixExportV1 { intent, signature }],
         consumed: None,
     });
+    for false_birth in [ctx(3, 101, 2), ctx(2, 102, 2), ctx(2, 101, 3)] {
+        let mut wrong_birth = TransitionBuilder::new(&source, &p, false, false, false, false, &extras);
+    wrong_birth.claim_local_lock_point_v6 = Some(point);
+        assert!(super::super::palw_claim_local_prefix_reservation_v1::admit(&mut wrong_birth, &false_birth, id).is_err(),
+            "valid producer signature cannot substitute the actual admitted block/DAA/blue score");
+        assert_eq!(wrong_birth.state.state_root(), source.state_root(), "refused birth installs no reservation");
+    }
     let mut builder = TransitionBuilder::new(&source, &p, false, false, false, false, &extras);
+    // Direct budget/financial-adapter boundary: supply the SAME real executing
+    // point which the ordinary native entry initializes before dispatch. This
+    // neither creates provenance nor bypasses the actual stored-birth checks.
+    builder.claim_local_lock_point_v6 = Some(point);
     let producer = source.claims.get(&id).unwrap().bond;
     let committed_before = builder.committed_at(&producer, point.daa_score).unwrap();
     super::super::palw_claim_local_prefix_reservation_v1::admit(&mut builder, &point, id).unwrap();
     let reservation = builder.state.prefix_export_reservation_v1(&point, id).unwrap().unwrap();
+    super::super::palw_claim_local_prefix_financial_archive_v4::assert_native_body_pin_replace_gc_reorg_cold_v4(&mut builder,&reservation);
     assert_ne!(reservation.budget_id, id);
     assert!(reservation.liability_sompi > 0);
     assert_eq!(builder.state.prefix_export_reserved_at_checked_v1(&producer, 101).unwrap(), reservation.liability_sompi);
     assert_eq!(builder.committed_at(&producer, 101).unwrap(), committed_before + reservation.liability_sompi,
         "withdrawal and every ordinary work gate must see the extra source principal");
     assert_eq!(builder.state.prefix_export_reserved_at_v1(&producer, 400), reservation.liability_sompi);
-    assert_eq!(builder.state.prefix_export_reserved_at_v1(&producer, 401), 0);
+    assert_eq!(builder.state.prefix_export_reserved_at_v1(&producer, 401), reservation.liability_sompi,
+        "passing the signed clock alone does not demonstrate an actual material release");
 
     builder.bond_budget_op(super::super::palw_bond_budget_fold_v1::PalwBudgetGrowthV1::point(), |budget, _, journal| {
         budget.close_at(&id, None, journal);
@@ -1563,12 +1592,71 @@ fn rfc40_export_reservation_survives_source_terminal_and_releases_only_after_mat
     assert_eq!(export.reserved.final_weight, 0);
     super::super::palw_claim_local_prefix_reservation_v1::sweep(&mut builder, &ctx(3, 400, 3)).unwrap();
     assert!(builder.state.bond_budget.as_ref().unwrap().claim_row(&reservation.budget_id).unwrap().open);
+    // A retained monetary covenant is held until its ordinary Release action
+    // removes it, even after the source's absolute material clock has elapsed.
+    // This is the reservation boundary fixture, not an enrollment/signature test.
+    use crate::palw_monetary_material_v1::*;
+    let material_root = h64(0xFC01);
+    let material = PalwMonetaryMaterialRowV1 {
+        terms: PalwMonetaryMaterialTermsV1 {
+            version: 1, root: material_root, dependencies: vec![id], exec_plan_root: None,
+            sponsor: producer, nonce: h64(0xFC02), policy: h64(0xFC03), max_material_bytes: 1024,
+            material_manifest: None, native_session: None, window_daa: 10, enrollment_until_daa: 400,
+            payment_relative_until_finality: true,
+        },
+        consent: h64(0xFC04), sequence: 0, accepted_daa: 101, root_seen: true, native_binding: None,
+        providers: vec![], challenges: vec![], last_tail_until: None, tail_block: None,
+        tail_blue_score: None, last_payment: None, payment_history_root: Hash64::default(),
+        service_fee_count: 0, service_fee_total_sompi: 0, service_fee_paid_sompi: 0,
+        service_fee_history_root: Hash64::default(), queued_entitlements: Default::default(),
+    };
+    builder.write_kernel_row_encoded_v1(PALW_MONETARY_MATERIAL_TABLE_V1, material_root.as_byte_slice(), Some(&material)).unwrap();
     super::super::palw_claim_local_prefix_reservation_v1::sweep(&mut builder, &ctx(4, 401, 4)).unwrap();
+    assert!(builder.state.bond_budget.as_ref().unwrap().claim_row(&reservation.budget_id).unwrap().open);
+    assert_eq!(builder.state.prefix_export_reserved_at_v1(&producer, 401), reservation.liability_sompi);
+    // Corrupt material state must fail closed as well, never free principal.
+    builder.write_kernel_row(PALW_MONETARY_MATERIAL_TABLE_V1, material_root.as_byte_slice().to_vec(), Some(vec![0])).unwrap();
+    super::super::palw_claim_local_prefix_reservation_v1::sweep(&mut builder, &ctx(5, 402, 5)).unwrap();
+    assert!(builder.state.bond_budget.as_ref().unwrap().claim_row(&reservation.budget_id).unwrap().open);
+    builder.write_kernel_row_encoded_v1::<PalwMonetaryMaterialRowV1>(PALW_MONETARY_MATERIAL_TABLE_V1, material_root.as_byte_slice(), None).unwrap();
+    super::super::palw_claim_local_prefix_reservation_v1::sweep(&mut builder, &ctx(6, 403, 6)).unwrap();
+    assert_eq!(builder.state.prefix_export_reserved_at_v1(&producer, 403), 0);
     if let Some(row) = builder.state.bond_budget.as_ref().unwrap().claim_row(&reservation.budget_id) {
         assert!(!row.open);
         assert!(!row.live, "synthetic export reservation has no later ordinary retirement hook");
         assert!(row.in_window, "only the budget rolling window may retain a released row");
     }
+    // Collector boundary: absence of a completed source record cannot discharge
+    // provenance. The closed record below is an explicit ledger fixture; native
+    // A/C court acceptance is exercised by the separate real-node campaign.
+    let original = source.claim(&id).unwrap().clone();
+    let later = ctx(7, original.trace_retention_daa + 2, 7);
+    // Match compact_and_collect's ordinary block-clock guard.
+    builder.state.last_point = Some(later);
+    super::super::palw_claim_local_prefix_reservation_v1::collect_closed_exports_v1(&mut builder, &later).unwrap();
+    assert!(builder.state.prefix_export_reservation_v1(&point, id).unwrap().is_some());
+    let closed = super::super::palw_claim_local_compact_sources_v1::PalwClosedClaimSourceV1 {
+        version: 1, ruleset: native_ruleset, claim: id, birth: point, original: original.clone(),
+        terminal_phase: PalwClaimPhaseV2::Final { final_daa: 300 }, closed_at: later,
+        material_until: original.trace_retention_daa, winner: None, approval: vec![], permitted: true,
+    };
+    let mut closed_key = [0u8; 65]; closed_key[0] = b'S'; closed_key[1..].copy_from_slice(id.as_byte_slice());
+    builder.write_kernel_row_encoded_v1(crate::palw_claim_local_v1::PALW_CLAIM_LOCAL_TABLE_V1, &closed_key, Some(&closed)).unwrap();
+    super::super::palw_claim_local_prefix_reservation_v1::collect_closed_exports_v1(&mut builder, &later).unwrap();
+    assert!(builder.state.prefix_export_reservation_v1(&point, id).unwrap().is_some(), "live original still needs its export outcome");
+    let mut convicted = reservation; convicted.convicted_daa = Some(350);
+    super::super::palw_claim_local_prefix_reservation_v1::deny_closed_source_v1(&mut builder, &convicted).unwrap();
+    assert!(!super::super::palw_claim_local_compact_sources_v1::read(&builder.state, id).unwrap().unwrap().permitted,
+        "a later export conviction is retained even after ordinary source retirement");
+    builder.write_claim(id, None).unwrap();
+    let before_gc = builder.checkpoint();
+    let root_before_gc = builder.state.state_root();
+    super::super::palw_claim_local_prefix_reservation_v1::collect_closed_exports_v1(&mut builder, &later).unwrap();
+    assert!(builder.state.prefix_export_reservation_v1(&point, id).unwrap().is_none());
+    assert!(!super::super::palw_claim_local_compact_sources_v1::read(&builder.state, id).unwrap().unwrap().permitted);
+    builder.restore(before_gc);
+    assert_eq!(builder.state.state_root(), root_before_gc, "GC undo restores exact retained provenance and closed outcome");
+    assert!(builder.state.prefix_export_reservation_v1(&point, id).unwrap().is_some());
 }
 
 #[test]

@@ -65,7 +65,10 @@ impl FundingTermsV1 {
     pub fn check_v1(&self) -> Result<(), FundingRefusalV1> {
         if self.version != 1
             || self.funding_amount_sompi == 0
-            || self.accept_from_daa >= self.accept_until_daa
+            // The acceptance window is closed at both ends, including an
+            // explicitly signed singleton birth. Match the envelope and native
+            // acceptance check; an inverted interval is the invalid case.
+            || self.accept_from_daa > self.accept_until_daa
             || self.material_until_daa <= self.accept_until_daa
             || [
                 self.network_domain,
@@ -389,6 +392,32 @@ mod tests {
     }
 
     #[test]
+    fn signed_singleton_funding_window_accepts_only_its_exact_birth() {
+        let (public, mut consent, tx, scope) = fixture();
+        consent.terms.accept_until_daa = consent.terms.accept_from_daa;
+        let keys = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([91; 32]);
+        consent.signature = libcrux_ml_dsa::ml_dsa_87::sign(
+            &keys.signing_key,
+            consent.terms.id_v1().as_byte_slice(),
+            COURT_ORIGINAL_FUNDING_SIGNATURE_CONTEXT_V1,
+            [94; 32],
+        ).unwrap().as_ref().to_vec();
+        let bytes = borsh::to_vec(&consent).unwrap();
+        let restored: FundingConsentV1 = borsh::from_slice(&bytes).unwrap();
+        for daa in [9, 10, 11] {
+            let result = prepare_funding_v1(inspect_transaction_v1(&tx, 0).unwrap(), &restored, &public, &scope, h(1), daa);
+            if daa == 10 {
+                assert_eq!(result.unwrap().accepted_daa(), daa);
+            } else {
+                assert_eq!(result.unwrap_err(), FundingRefusalV1::AcceptanceWindow);
+            }
+        }
+        let mut inverted = restored;
+        inverted.terms.accept_until_daa = 9;
+        assert_eq!(inverted.check_v1(), Err(FundingRefusalV1::Contract));
+    }
+
+    #[test]
     fn actual_amount_index_unknown_version_free_script_and_stale_txid_are_refused() {
         let (public, consent, tx, _) = fixture();
         assert_eq!(inspect_transaction_v1(&tx, 1).unwrap_err(), FundingRefusalV1::OutputMissing);
@@ -531,4 +560,43 @@ mod tests {
             std::io::ErrorKind::UnexpectedEof
         );
     }
+}
+
+
+/// Pure versioned profile recognition only; does not establish payment, scope or authority.
+pub fn original_archive_profile_selected_v1(t:&FundingTermsV1)->bool {
+    const TAGS:[[u8;8];4]=[*b"OAR1FEE0",*b"OAR1CAP0",*b"OAR1RET0",*b"OAR1SET0"];
+    [t.fee_profile_id,t.capital_profile_id,t.retention_profile_id,t.settlement_policy_id].iter().enumerate()
+        .all(|(i,p)|p.as_byte_slice()[..8]==TAGS[i])
+}
+
+// Existing fixed FundingTerms codec reused by native financial metadata.
+impl crate::palw_native_resource_v1::NativeWireScanV1 for FundingTermsV1 {
+    fn scan_native_wire_v1<R:std::io::Read>(r:&mut crate::palw_native_resource_v1::NativeWireReaderV1<R>)->std::io::Result<crate::palw_native_resource_v1::NativeWireShapeV1>{
+        r.step()?;
+        if r.short()?!=1{return Err(std::io::Error::new(std::io::ErrorKind::InvalidData,"funding terms version"));}
+        // Exact existing fixed Borsh fields: ten scope IDs, four u64 values,
+        // one output u32, then payer/refund/nonce. No signature authority.
+        r.skip(10*64+3*8+4+8+3*64)?;
+        Ok(crate::palw_native_resource_v1::NativeWireShapeV1::default())
+    }
+}
+impl crate::palw_native_resource_v1::NativeWireScanV1 for FundingConsentV1 {
+    fn scan_native_wire_v1<R:std::io::Read>(r:&mut crate::palw_native_resource_v1::NativeWireReaderV1<R>)->std::io::Result<crate::palw_native_resource_v1::NativeWireShapeV1>{
+        use crate::palw_native_resource_v1::{NativeWireScanV1,NativeWireShapeV1};
+        let shape=FundingTermsV1::scan_native_wire_v1(r)?;
+        let n=r.word()? as u64;
+        if n!=crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN as u64{return Err(std::io::Error::new(std::io::ErrorKind::InvalidData,"funding signature width"));}
+        r.skip(n)?;
+        shape.merge(NativeWireShapeV1{outer_entries:n,byte_entries:n,..Default::default()}.allocation(n.checked_mul(2).ok_or_else(||std::io::Error::new(std::io::ErrorKind::OutOfMemory,"funding signature shape overflow"))?,1)?)
+    }
+}
+
+/// Distinct signed cohort recognition only. No payment/actor/acceptance authority.
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+pub enum OriginalArchiveProfileKindV2{MaterialV1,MixedV2}
+pub fn original_archive_profile_kind_v2(t:&FundingTermsV1)->Option<OriginalArchiveProfileKindV2>{
+    if original_archive_profile_selected_v1(t){return Some(OriginalArchiveProfileKindV2::MaterialV1)}
+    const TAGS:[[u8;8];4]=[*b"OAR2FEE0",*b"OAR2CAP0",*b"OAR2RET0",*b"OAR2SET0"];
+    [t.fee_profile_id,t.capital_profile_id,t.retention_profile_id,t.settlement_policy_id].iter().enumerate().all(|(i,p)|p.as_byte_slice()[..8]==TAGS[i]).then_some(OriginalArchiveProfileKindV2::MixedV2)
 }

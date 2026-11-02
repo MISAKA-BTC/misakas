@@ -178,6 +178,7 @@ pub fn palw_court_accounted_op_v1(
     now: u64,
     object: &PalwConsensusObjectV2,
 ) -> Result<Option<(PalwCourtCostV1, bool)>, &'static str> {
+    if let Some((cost,_,_,_))=family_material_accounted_v2(state,params,now,object).map_err(|_|"native family material transport accounting refused")? {return Ok(Some((cost,false)))}
     let transport = palw_court_transport_cost_v1(state, params.court_transport_v1(), now, object)?;
     let policy = params.court_capacity_at_v1(now);
     if transport.is_some() && policy.is_none() {
@@ -253,4 +254,76 @@ mod tests {
             assert!(full.checked_add(PalwCourtCostV1 { work: 1, bytes: 1, memory: 1 }).is_none());
         }
     }
+}
+
+/// New signed cohort only. The existing session move's weight represents one
+/// indivisible service-control slot; source work/io remains its pinned packet
+/// cost in service supply accounting. This classification is shared by the
+/// acceptance walk and block fold, so multiple material controls cannot evade
+/// the actual one-control budget by being signed or split into small bodies.
+pub(crate) fn family_material_accounted_v2(state:&PalwChainStateV2,params:&PalwStateParamsV2,now:u64,object:&PalwConsensusObjectV2)->Result<Option<(crate::palw_court_capacity_v1::PalwCourtCostV1,crate::palw_court_service_v1::ServiceCost,bool,Hash64)>,String>{
+ use crate::palw_court_family_material_v1 as m;use crate::palw_court_service_v1::ServiceCost;
+ let PalwConsensusObjectV2::CourtFamilyMaterialV1{control:s}=object else{return Ok(None)};
+ if !params.family_supplier_active_at(now){return Ok(None)}
+ use borsh::BorshDeserialize;
+ let key=(crate::palw_court_family_supplier_v1::FAMILY_SUPPLIER_TABLE_V1,s.contract.as_byte_slice().to_vec());
+ let raw=state.kernel_route_state_v1().and_then(|r|r.aux.get(&key)).ok_or("family transport contract missing")?;
+ // Fixed-size terms and the borrowed signatures/catalogue header only. The
+ // cost classifier must never turn an allocation refusal into invalid input.
+ let mut reader=raw.as_slice();let version=u16::deserialize_reader(&mut reader).map_err(|e|e.to_string())?;
+ let terms=crate::palw_court_family_supplier_v1::FamilySupplierTermsV1::deserialize_reader(&mut reader).map_err(|e|e.to_string())?;
+ if version!=2||terms.signing_message_v1()?!=s.contract{return Err("family transport contract identity".into())}
+ if crate::palw_court_family_supplier_v1::signed_profile_generation_v3(&terms)?==1{return Ok(None)}
+ for _ in 0..2{let n=u32::deserialize_reader(&mut reader).map_err(|e|e.to_string())? as usize;if n!=crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN{return Err("family transport consent signature width".into())}reader=reader.get(n..).ok_or("short family transport consent")?;}
+ let allocation=Hash64::deserialize_reader(&mut reader).map_err(|e|e.to_string())?;
+ let source=crate::palw_g14_values_v1::PALW_G14_SOURCE_PACKET_COST_V1;
+ let bytes=payload_bytes(object).map_err(str::to_owned)?;
+ let service=ServiceCost{bytes:bytes.max(source.bytes),..source};
+ let policy=params.court_capacity_at_v1(now).unwrap_or(crate::palw_g14_values_v1::PALW_G14_COURT_CAPACITY_POLICY_ESTIMATE_V1);
+ let mut memory=bytes.checked_mul(policy.memory_per_byte).ok_or("family transport memory overflow")?;
+ let (draft,ordinal)=match &s.action{m::FamilyMaterialActionV1::Begin{..}=>(None,Some(0)),m::FamilyMaterialActionV1::BeginReserved{..}=>(None,None),m::FamilyMaterialActionV1::Part{draft,offset,..}=>(Some(*draft),Some(offset/(m::FAMILY_MATERIAL_PART_BYTES_V1 as u64)+1)),m::FamilyMaterialActionV1::Finish{draft}=>{
+  let key=m::material_aux_key_v1(1,*draft,None);
+  let raw=state.kernel_route_state_v1().and_then(|r|r.aux.get(&(m::FAMILY_MATERIAL_TABLE_V1,key))).ok_or("family Finish draft missing")?;
+  // Fixed native row: decoding allocates no vector or untrusted count.
+  let d=borsh::from_slice::<m::FamilyMaterialDraftV1>(raw).map_err(|e|e.to_string())?;
+  memory=memory.checked_add(d.total_bytes.checked_mul(2).ok_or("family Finish memory overflow")?).ok_or("family Finish memory overflow")?;
+  (Some(*draft),Some(d.total_bytes.div_ceil(m::FAMILY_MATERIAL_PART_BYTES_V1 as u64)+1))
+ }};
+ let target=crate::palw_court_shared_tir_stream_v1::stream_digest(b"misaka-palw/family-material/target/v1",&(terms.inventory,s.target))?;
+ // The native catalogue reserves every upper-bound Part and places Finish
+ // last. An actual body may need fewer Parts; it must still use that rooted
+ // Finish opportunity rather than reclassifying an unused tail Part.
+ let primary_ordinal=if matches!(s.action,m::FamilyMaterialActionV1::Finish{..}) {
+  u64::deserialize_reader(&mut reader).map_err(|e|e.to_string())?; // accepted DAA
+  let count=u32::deserialize_reader(&mut reader).map_err(|e|e.to_string())?;
+  let mut found=None;
+  for _ in 0..count {
+   let id=Hash64::deserialize_reader(&mut reader).map_err(|e|e.to_string())?;
+   u64::deserialize_reader(&mut reader).map_err(|e|e.to_string())?; // native bound
+   let packets=u32::deserialize_reader(&mut reader).map_err(|e|e.to_string())?;
+   if packets<3{return Err("family transport native target packet shape".into())}
+   let skip=usize::try_from(packets).map_err(|e|e.to_string())?.checked_mul(64).ok_or("family transport catalogue overflow")?;
+   reader=reader.get(skip..).ok_or("family transport short target catalogue")?;
+   if id==target {if found.replace(u64::from(packets)-1).is_some(){return Err("family transport duplicate native target".into())}}
+  }
+  Some(found.ok_or("family transport Finish native target absent")?)
+ }else{ordinal};
+ let mut packet=primary_ordinal.map(|ordinal|crate::palw_court_shared_tir_stream_v1::stream_digest(b"misaka-palw/family-supplier/service-packet/v1",&(s.contract,allocation,target,ordinal)).map(|id|id.as_bytes())).transpose()?;
+ if let Some(draft)=draft {
+  let key=m::material_aux_key_v1(5,draft,None);
+  if let Some(raw)=state.kernel_route_state_v1().and_then(|r|r.aux.get(&(m::FAMILY_MATERIAL_TABLE_V1,key))){
+   let mut reader=raw.as_slice();let contract=Hash64::deserialize_reader(&mut reader).map_err(|e|e.to_string())?;
+   let version=u16::deserialize_reader(&mut reader).map_err(|e|e.to_string())?;
+   let claim=Hash64::deserialize_reader(&mut reader).map_err(|e|e.to_string())?;
+   let identity=Hash64::deserialize_reader(&mut reader).map_err(|e|e.to_string())?;
+   for _ in 0..3{u64::deserialize_reader(&mut reader).map_err(|e|e.to_string())?;}
+   let quote=m::FamilyDraftQuoteV2::deserialize_reader(&mut reader).map_err(|e|e.to_string())?;
+   if version!=2||contract!=s.contract||claim!=terms.claim||identity!=draft{return Err("family transport independent draft scope".into())}
+   if let Some(ordinal)=ordinal{let ordinal=ordinal.checked_sub(1).ok_or("independent draft transfer ordinal")?;packet=Some(crate::palw_court_shared_tir_stream_v1::stream_digest(b"misaka-palw/family-draft/service/v2",&(identity,quote,ordinal))?.as_bytes());}
+  }
+ }
+ let reserved=packet.and_then(|id|state.court_service_state_v1().map(|book|(id,book))).is_some_and(|(id,book)|book.book.assigned_daa(&id)==Some(now)&&book.book.packet(&id).is_some_and(|p|service.bytes<=p.cost.bytes&&service.work<=p.cost.work&&service.io<=p.cost.io&&service.controls<=p.cost.controls));
+ let cost=crate::palw_court_capacity_v1::PalwCourtCostV1{bytes,work:policy.block_budget.work,memory};
+ let message=s.signing_message_v1(terms.network)?;
+ Ok(Some((cost,service,reserved,message)))
 }

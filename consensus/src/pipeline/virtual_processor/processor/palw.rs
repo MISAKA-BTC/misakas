@@ -17,12 +17,12 @@ mod native_checkpoint_headers_v1;
 /// collateral read is never evidence that a spend or its peer is invalid.
 fn bond_exit_state_error_v1(error:kaspa_consensus_core::palw_state_v2::PalwStateV2Error)->PalwLocalTransitionFaultV1{
     use kaspa_consensus_core::{palw_state_v2::PalwStateV2Error as E,palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1 as C};
-    match error{E::NativeResource(why)=>PalwLocalTransitionFaultV1::Resource(why),E::NativeContextUnavailable(why)=>PalwLocalTransitionFaultV1::Context(why),_=>PalwLocalTransitionFaultV1::Context(C::StoreUnreadable)}
+    match error{E::NativeResource(why)=>PalwLocalTransitionFaultV1::Resource(why),E::NativeContextUnavailable(why)=>PalwLocalTransitionFaultV1::Context(why),other=>{warn!("native bond-exit state preparation failed: {other}");PalwLocalTransitionFaultV1::Context(C::StoreUnreadable)}}
 }
 pub(super) fn bond_exit_store_error_v1(error:kaspa_database::prelude::StoreError)->PalwLocalTransitionFaultV1{
     use kaspa_database::prelude::StoreError as E;
     use kaspa_consensus_core::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1 as C;
-    match error{E::LocalResourceUnavailable(why)=>PalwLocalTransitionFaultV1::Resource(kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<kaspa_consensus_core::palw_state_v2::PalwChainStateV2>("bond exit own reader",&why)),E::KeyNotFound(_)=>PalwLocalTransitionFaultV1::Context(C::HistoryUnavailable),_=>PalwLocalTransitionFaultV1::Context(C::StoreUnreadable)}
+    match error{E::LocalResourceUnavailable(why)=>PalwLocalTransitionFaultV1::Resource(kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<kaspa_consensus_core::palw_state_v2::PalwChainStateV2>("bond exit own reader",&why)),E::KeyNotFound(_)=>PalwLocalTransitionFaultV1::Context(C::HistoryUnavailable),other=>{warn!("native bond-exit own-store preparation failed: {other}");PalwLocalTransitionFaultV1::Context(C::StoreUnreadable)}}
 }
 
 // Capacity/context failures are retry, never a semantic conviction refusal.
@@ -1659,6 +1659,84 @@ impl VirtualStateProcessor {
         extras.tir_public_originals.insert(claim,envelope);
         kaspa_consensus_core::palw_state_v2::palw_family_original_native_quote_v2(&state,params,&point,&extras,&object,semantic_table)
             .map_err(|e|e.to_string())
+    }
+
+    pub fn palw_family_original_native_quote_v3_impl(
+        &self,
+        point:kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        object:kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+        envelope:kaspa_consensus_core::palw_tir_public_fp_envelope_v1::PalwTirPublicFpEnvelopeV1,
+        semantic_table:Option<&[u8]>,
+        carrier_inputs:&[kaspa_consensus_core::tx::TransactionInput],
+        provenance:Option<&kaspa_consensus_core::palw_claim_local_v1::prefix_v1::PalwPrefixDependencyEnvelopeV1>,
+    )->Result<kaspa_consensus_core::palw_state_v2::PalwFamilyOriginalNativeQuoteV3,String>{
+        let params=self.palw_state_params_v2.as_ref().ok_or("PALW V2 state parameters unavailable")?;
+        let (_,state)=self.palw_v2_reader_state(params).map_err(|e|e.to_string())?.ok_or("PALW V2 accepted snapshot unavailable")?;
+        if state.last_point().is_some_and(|last|point.daa_score<last.daa_score||point.blue_score<=last.blue_score){
+            return Err("family quote prospective point must follow the accepted snapshot clock".into());
+        }
+        envelope.matches_object_v1(&object)?;
+        let claim=envelope.original_fp_v1()?.claim_id();
+        let mut extras=self.palw_transition_extras_for_objects(&state,&point,std::slice::from_ref(&object)).into_legacy_extras();
+        if let Some(history)=&envelope.history_pledge{extras.history_custody_pledges.insert(history.claim,history.clone());}
+        extras.tir_public_originals.insert(claim,envelope);
+        if let Some(provenance)=provenance{extras.prefix_dependencies_v1.insert(claim,provenance.clone());}
+        kaspa_consensus_core::palw_state_v2::palw_family_original_native_quote_v3(&state,params,&point,&extras,&object,semantic_table,carrier_inputs)
+            .map_err(|e|e.to_string())
+    }
+
+    /// Normal read-only construction on this node's authenticated accepted state.
+    /// The draft's transaction outputs and signed supplier inventory are inspected;
+    /// the returned quote grants neither acceptance nor paid archive standing.
+    pub fn palw_original_archive_native_quote_v1_impl(
+        &self,
+        point:kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        object:&kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+        draft:&kaspa_consensus_core::tx::Transaction,
+        funded_payload:&[u8],
+        provenance:Option<&kaspa_consensus_core::palw_claim_local_v1::prefix_v1::PalwPrefixDependencyEnvelopeV1>,
+        budget:kaspa_consensus_core::palw_state_v2::PalwOriginalArchivePayerBudgetV1,
+    )->Result<kaspa_consensus_core::palw_state_v2::PalwOriginalArchiveNativeQuoteV1,String>{
+        let params=self.palw_state_params_v2.as_ref().ok_or("PALW V2 state parameters unavailable")?;
+        let (_,state)=self.palw_v2_reader_state(params).map_err(|e|e.to_string())?.ok_or("PALW V2 accepted snapshot unavailable")?;
+        if state.last_point().is_some_and(|last|point.daa_score<last.daa_score||point.blue_score<=last.blue_score){return Err("archive quote must follow the accepted snapshot clock".into());}
+        let pairing=kaspa_consensus_core::palw_funded_original_coordinator_v1::palw_funded_original_pairing_payload_v1(draft,funded_payload)?;
+        let envelope=pairing.envelope().original_v1()?;
+        envelope.matches_object_v1(object)?;
+        let claim=envelope.original_fp_v1()?.claim_id();
+        let mut extras=self.palw_transition_extras_for_objects(&state,&point,std::slice::from_ref(object)).into_legacy_extras();
+        if let Some(history)=&envelope.history_pledge{extras.history_custody_pledges.insert(history.claim,history.clone());}
+        extras.tir_public_originals.insert(claim,envelope);
+        extras.tir_funded_originals.insert(claim,pairing);
+        if let Some(provenance)=provenance{extras.prefix_dependencies_v1.insert(claim,provenance.clone());}
+        kaspa_consensus_core::palw_state_v2::palw_original_archive_native_quote_v1(&state,params,&point,&extras,object,budget).map_err(|e|e.to_string())
+    }
+
+    /// Normal read-only construction on this node's authenticated accepted state.
+    /// The draft's transaction outputs and signed supplier inventory are inspected;
+    /// the returned quote grants neither acceptance nor paid archive standing.
+    pub fn palw_original_archive_native_quote_v2_impl(
+        &self,
+        point:kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        object:&kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+        draft:&kaspa_consensus_core::tx::Transaction,
+        funded_payload:&[u8],
+        provenance:Option<&kaspa_consensus_core::palw_claim_local_v1::prefix_v1::PalwPrefixDependencyEnvelopeV1>,
+        budget:kaspa_consensus_core::palw_state_v2::PalwOriginalArchivePayerBudgetV1,
+    )->Result<kaspa_consensus_core::palw_state_v2::PalwOriginalArchiveNativeQuoteV1,String>{
+        let params=self.palw_state_params_v2.as_ref().ok_or("PALW V2 state parameters unavailable")?;
+        let (_,state)=self.palw_v2_reader_state(params).map_err(|e|e.to_string())?.ok_or("PALW V2 accepted snapshot unavailable")?;
+        if state.last_point().is_some_and(|last|point.daa_score<last.daa_score||point.blue_score<=last.blue_score){return Err("archive quote must follow the accepted snapshot clock".into());}
+        let pairing=kaspa_consensus_core::palw_funded_original_coordinator_v1::palw_funded_original_pairing_payload_v1(draft,funded_payload)?;
+        let envelope=pairing.envelope().original_v1()?;
+        envelope.matches_object_v1(object)?;
+        let claim=envelope.original_fp_v1()?.claim_id();
+        let mut extras=self.palw_transition_extras_for_objects(&state,&point,std::slice::from_ref(object)).into_legacy_extras();
+        if let Some(history)=&envelope.history_pledge{extras.history_custody_pledges.insert(history.claim,history.clone());}
+        extras.tir_public_originals.insert(claim,envelope);
+        extras.tir_funded_originals.insert(claim,pairing);
+        if let Some(provenance)=provenance{extras.prefix_dependencies_v1.insert(claim,provenance.clone());}
+        kaspa_consensus_core::palw_state_v2::palw_original_archive_native_quote_v2(&state,params,&point,&extras,object,budget).map_err(|e|e.to_string())
     }
 
     pub fn palw_staged_tir_prefix_leaf_index_v1_impl(
