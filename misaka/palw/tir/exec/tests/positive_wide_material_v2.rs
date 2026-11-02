@@ -96,10 +96,14 @@ struct SignedMiner {
 }
 impl SignedMiner {
     fn new(f: &impl OracleFixture, wrong: bool) -> Self {
+        assert_eq!(f.class().tokenizer_id, Hash64::from_u64_word(18));
+        let output = if wrong { d(99) } else { digest(palw_attempt_output_root_v1(f.job(), EXPECTED)) };
+        Self::for_output(f, output)
+    }
+    fn for_output(f: &impl OracleFixture, output: Digest) -> Self {
         let class = f.class();
         let job = f.job();
         let artifact = f.artifact();
-        assert_eq!(class.tokenizer_id, Hash64::from_u64_word(18));
         assert_eq!(job.tokenizer_id, Hash64::from_u64_word(0));
         let pair = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([91; 32]);
         let key = *pair.verification_key.as_ref();
@@ -117,7 +121,7 @@ impl SignedMiner {
             selector: greedy_selector_id(),
             required_form: ClaimForm::PositiveResultV2,
         };
-        let mut result = MinerResultCommit {
+        let result = MinerResultCommit {
             version: CONTRACT_VERSION,
             revision: CONTRACT_REVISION,
             scope: rooted.scope,
@@ -136,13 +140,10 @@ impl SignedMiner {
             prefill: job.declared_prefill_tokens,
             decode: job.exact_decode_tokens,
             max_context: job.max_context_tokens,
-            output: digest(palw_attempt_output_root_v1(job, EXPECTED)),
+            output,
             dependencies: d(21),
             service_contract: d(22),
         };
-        if wrong {
-            result.output = d(99);
-        }
         let signature =
             *libcrux_ml_dsa::ml_dsa_87::sign(&pair.signing_key, &result.id().0.0, RESULT_SIGN_CONTEXT, [0; 32]).unwrap().as_ref();
         Self { rooted, result, key, signature }
@@ -598,3 +599,7 @@ mod loaded_bridge_tests;
 
 #[path = "positive_wide_material_v2/trace_free_bridge_tests.rs"]
 mod trace_free_bridge_tests;
+
+#[cfg(unix)]
+#[path = "positive_wide_material_v2/trained_roles.rs"]
+mod trained_roles;

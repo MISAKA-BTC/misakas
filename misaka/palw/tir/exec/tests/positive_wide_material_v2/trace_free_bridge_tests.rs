@@ -41,7 +41,7 @@ fn ledger(l: Arc<Ledger>) -> TirMemoryReserverV1 {
         Ok(Box::new(Guard(l.clone(), bytes)))
     })
 }
-fn metadata_limits() -> MetadataOwnerLimitsV2 {
+pub(super) fn metadata_limits() -> MetadataOwnerLimitsV2 {
     let l = super::loaded_bridge_tests::startup_limits();
     MetadataOwnerLimitsV2 {
         header: l.header,
@@ -58,7 +58,7 @@ fn metadata_limits() -> MetadataOwnerLimitsV2 {
         max_total_io_calls: 1 << 24,
     }
 }
-fn load_limits() -> LocalForwardLoadLimitsV2 {
+pub(super) fn load_limits() -> LocalForwardLoadLimitsV2 {
     let l = super::loaded_bridge_tests::startup_limits();
     let mut params = l.params;
     params.max_attempts = 4;
