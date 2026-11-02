@@ -122,6 +122,12 @@ impl PruningProofManager {
 
         // Build the descriptor based on the new proof before modifying it
         let descriptor = PruningProofDescriptor::from_proof(&proof, pruning_point, true);
+        // Validation re-derives exact level-0 GHOSTDAG over the complete past
+        // when this proof starts at genesis. The trusted package is only a
+        // recent sub-DAG: its decoder removes out-of-package mergeset entries
+        // and replaces an out-of-package selected parent with ORIGIN, even
+        // when those blocks are present in this proof.
+        let complete_level_zero = proof[0].first().is_some_and(|header| header.hash == self.genesis_hash);
 
         // Create a copy of the proof, since we're going to be mutating the proof passed to us
         let proof_sets = (0..=self.max_block_level)
@@ -194,7 +200,9 @@ impl PruningProofManager {
             );
 
             self.relations_store.write().insert(header.hash, parents.clone()).unwrap();
-            let gd = if let Some(gd) = trusted_gd_map.get(&header.hash) {
+            let trusted_gd =
+                trusted_gd_map.get(&header.hash).filter(|_| !(complete_level_zero && proof_sets[0].contains(&header.hash)));
+            let gd = if let Some(gd) = trusted_gd {
                 gd.clone()
             } else {
                 let calculated_gd = self.ghostdag_manager.ghostdag(&parents);

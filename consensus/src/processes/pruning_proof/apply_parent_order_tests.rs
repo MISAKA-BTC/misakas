@@ -111,6 +111,15 @@ fn apply_checkpoint_fixture(
     upper: Option<Vec<Arc<Header>>>,
     validate: bool,
 ) -> (DbLifetime, Arc<ConsensusServices>) {
+    apply_checkpoint_fixture_with_trusted(headers, upper, validate, &[])
+}
+
+fn apply_checkpoint_fixture_with_trusted(
+    headers: Vec<Arc<Header>>,
+    upper: Option<Vec<Arc<Header>>>,
+    validate: bool,
+    trusted: &[TrustedBlock],
+) -> (DbLifetime, Arc<ConsensusServices>) {
     let genesis = headers.first().unwrap().hash;
     assert!(headers.first().unwrap().parents_by_level.is_empty(), "checkpoint fixture uses canonical genesis parents");
     let (lifetime, services) = fixture_at_level(if upper.is_some() { 1 } else { 0 }, Some(genesis));
@@ -126,9 +135,109 @@ fn apply_checkpoint_fixture(
     if validate {
         ppm.validate_pruning_point_proof_standalone(&proof).unwrap();
     }
-    ppm.apply_proof(proof, &[]).unwrap();
+    ppm.apply_proof(proof, trusted).unwrap();
     ppm.import_pruning_points(&[root, point]).unwrap();
     (lifetime, services)
+}
+
+fn assert_same_ghostdag(actual: &GhostdagData, expected: &GhostdagData) {
+    assert_eq!(actual.blue_score, expected.blue_score);
+    assert_eq!(actual.blue_work, expected.blue_work);
+    assert_eq!(actual.selected_parent, expected.selected_parent);
+    assert_eq!(actual.mergeset_blues, expected.mergeset_blues);
+    assert_eq!(actual.mergeset_reds, expected.mergeset_reds);
+    assert_eq!(actual.blues_anticone_sizes, expected.blues_anticone_sizes);
+}
+
+#[test]
+fn complete_proof_reconstructs_checkpoint_chain_and_mergesets_clamped_by_trusted_subdag() {
+    use kaspa_consensus_core::{block::Block, trusted::ExternalGhostdagData};
+    let root = checkpoint_header(300, &[], 0, 0);
+    let checkpoint = checkpoint_header(200, &[300], 1, 100);
+    let off_chain = checkpoint_header(100, &[300], 1, 100);
+    // Both siblings are blue, so the point's declared score/work include both.
+    let point = checkpoint_header(50, &[200, 100], 3, 2759);
+    let headers = vec![root.clone(), checkpoint.clone(), off_chain.clone(), point.clone()];
+    let (_control_lifetime, control) = apply_checkpoint_fixture(headers.clone(), None, true);
+    let control = &control.pruning_proof_manager;
+    let trusted_set = BlockHashSet::from_iter([checkpoint.hash, point.hash]);
+    let trusted = [checkpoint.clone(), point.clone()].map(|header| {
+        let mut data: ExternalGhostdagData = control.ghostdag_store.get_data(header.hash).unwrap().as_ref().into();
+        // The P2P trusted-subdag decoder filters against its own package, not
+        // the full proof. Genesis and the other blue sibling are absent here.
+        data.mergeset_blues.retain(|hash| trusted_set.contains(hash));
+        data.mergeset_reds.retain(|hash| trusted_set.contains(hash));
+        data.blues_anticone_sizes.retain(|hash, _| trusted_set.contains(hash));
+        if !trusted_set.contains(&data.selected_parent) {
+            data.selected_parent = ORIGIN;
+        }
+        TrustedBlock::new(Block::from_header_arc(header), data)
+    });
+    assert!(trusted[0].ghostdag.selected_parent.is_origin());
+    assert!(!trusted[1].ghostdag.mergeset_blues.contains(&off_chain.hash));
+
+    let (_lifetime, services) = apply_checkpoint_fixture_with_trusted(headers, None, true, &trusted);
+    let ppm = &services.pruning_proof_manager;
+    for header in [&root, &checkpoint, &off_chain, &point] {
+        assert_same_ghostdag(
+            &ppm.ghostdag_store.get_data(header.hash).unwrap(),
+            &control.ghostdag_store.get_data(header.hash).unwrap(),
+        );
+    }
+    assert!(ppm.chain_contains_checkpoint(point.hash, checkpoint.hash, checkpoint.daa_score).unwrap());
+    assert!(ppm.chain_contains_checkpoint(point.hash, root.hash, root.daa_score).unwrap());
+    assert!(ppm.reachability_store.read().try_is_dag_ancestor_of(off_chain.hash, point.hash).unwrap());
+    assert!(!ppm.chain_contains_checkpoint(point.hash, off_chain.hash, off_chain.daa_score).unwrap());
+}
+
+#[test]
+fn truncated_proof_still_uses_trusted_ghostdag_for_original_members() {
+    use kaspa_consensus_core::{block::Block, trusted::ExternalGhostdagData};
+    let (_lifetime, services) = fixture_at_level(0, None);
+    let ppm = &services.pruning_proof_manager;
+    crate::processes::relations::init(&mut *ppm.relations_store.write());
+    ppm.ghostdag_store.insert(ORIGIN, ppm.ghostdag_manager.origin_ghostdag_data()).unwrap();
+    let root = checkpoint_header(300, &[], 0, 0);
+    let point = checkpoint_header(50, &[300], 1, 2759);
+    assert_ne!(root.hash, ppm.genesis_hash);
+    let trusted = ExternalGhostdagData {
+        blue_score: point.blue_score,
+        blue_work: point.blue_work,
+        selected_parent: ORIGIN,
+        mergeset_blues: vec![],
+        mergeset_reds: vec![],
+        blues_anticone_sizes: Default::default(),
+    };
+    ppm.apply_proof(vec![vec![root, point.clone()]], &[TrustedBlock::new(Block::from_header_arc(point.clone()), trusted.clone())])
+        .unwrap();
+    assert_same_ghostdag(&ppm.ghostdag_store.get_data(point.hash).unwrap(), &trusted.into());
+}
+
+#[test]
+fn complete_proof_still_uses_trusted_ghostdag_for_added_anticone_window_members() {
+    use kaspa_consensus_core::{block::Block, subnets::SUBNETWORK_ID_NATIVE, trusted::ExternalGhostdagData, tx::Transaction};
+    let headers = checkpoint_chain();
+    let extra = checkpoint_header(400, &[300], 1, 100);
+    let trusted = ExternalGhostdagData {
+        blue_score: extra.blue_score,
+        blue_work: extra.blue_work,
+        selected_parent: ORIGIN,
+        mergeset_blues: vec![],
+        mergeset_reds: vec![],
+        blues_anticone_sizes: Default::default(),
+    };
+    // An added anticone entry must carry a body. Its body is not validated by
+    // apply_proof; this fixture tests preservation of the trusted GD contract.
+    let body = vec![Transaction::new(0, vec![], vec![], 0, SUBNETWORK_ID_NATIVE, 0, vec![])];
+    let (_lifetime, services) = apply_checkpoint_fixture_with_trusted(
+        headers.clone(),
+        None,
+        true,
+        &[TrustedBlock::new(Block::from_arcs(extra.clone(), body), trusted.clone())],
+    );
+    let ppm = &services.pruning_proof_manager;
+    assert_same_ghostdag(&ppm.ghostdag_store.get_data(extra.hash).unwrap(), &trusted.into());
+    assert!(ppm.chain_contains_checkpoint(headers.last().unwrap().hash, headers[1].hash, headers[1].daa_score).unwrap());
 }
 
 fn checkpoint_header(hash: u64, parents: &[u64], score: u64, daa: u64) -> Arc<Header> {
