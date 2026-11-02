@@ -2290,7 +2290,7 @@ impl IbdFlow {
                     c.import_pruning_points(pruning_points)?;
 
                     info!("Building the proof which was just applied (sanity test)");
-                    let built_proof = c.get_pruning_point_proof();
+                    let built_proof = c.try_get_pruning_point_proof()?;
                     let mut mismatch_detected = false;
                     for (i, (ref_level, built_level)) in ref_proof.iter().zip(built_proof.iter()).enumerate() {
                         if ref_level.iter().map(|h| h.hash).collect::<BlockHashSet>()

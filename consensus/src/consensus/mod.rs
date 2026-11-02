@@ -5027,6 +5027,10 @@ impl ConsensusApi for Consensus {
         self.services.pruning_proof_manager.get_pruning_point_proof()
     }
 
+    fn try_get_pruning_point_proof(&self) -> PruningImportResult<Arc<PruningPointProof>> {
+        self.services.pruning_proof_manager.try_get_pruning_point_proof()
+    }
+
     fn create_virtual_selected_chain_block_locator(
         &self,
         low: Option<BlockHash>,

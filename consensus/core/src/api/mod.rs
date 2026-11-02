@@ -2803,6 +2803,15 @@ pub trait ConsensusApi: Send + Sync {
         unimplemented!()
     }
 
+    /// Fallible local construction; unsupported implementations must not call an
+    /// infallible legacy getter and turn missing state into a process panic.
+    fn try_get_pruning_point_proof(&self) -> PruningImportResult<Arc<PruningPointProof>> {
+        Err(crate::errors::pruning::PruningImportError::PruningPointImportContextUnavailable(
+            BlockHash::default(),
+            "fallible pruning proof construction unsupported".into(),
+        ))
+    }
+
     fn create_virtual_selected_chain_block_locator(
         &self,
         low: Option<BlockHash>,

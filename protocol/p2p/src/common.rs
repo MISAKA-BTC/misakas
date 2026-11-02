@@ -137,6 +137,7 @@ impl ProtocolError {
                 | Self::OutgoingRouteCapacityReached(_)
                 | Self::RuleError(RuleError::LocalNativeCapacityUnavailable(_))
                 | Self::RuleError(RuleError::LocalNativeStateContextUnavailable(_))
+                | Self::PruningImportError(PruningImportError::PruningPointImportContextUnavailable(_, _))
                 | Self::PruningImportError(PruningImportError::PruningImportRuleError(RuleError::LocalNativeCapacityUnavailable(_)))
                 | Self::PruningImportError(PruningImportError::PruningImportRuleError(RuleError::LocalNativeStateContextUnavailable(
                     _

@@ -483,7 +483,13 @@ impl PruningProcessor {
 
         info!("Header and Block pruning: preparing proof and anticone data...");
 
-        let proof = self.pruning_proof_manager.get_pruning_point_proof();
+        let proof = match self.pruning_proof_manager.try_get_pruning_point_proof() {
+            Ok(proof) => proof,
+            Err(error) => {
+                warn!("Pruning paused before deletion: local proof unavailable: {error}");
+                return;
+            }
+        };
         let data = self
             .pruning_proof_manager
             .get_pruning_point_anticone_and_trusted_data()
@@ -841,7 +847,10 @@ impl PruningProcessor {
         );
 
         if self.config.enable_sanity_checks {
-            self.assert_proof_rebuilding(proof, new_pruning_point);
+            if let Err(error) = self.assert_proof_rebuilding(proof, new_pruning_point) {
+                warn!("Pruning checkpoint not advanced: local proof rebuild unavailable: {error}");
+                return;
+            }
             self.assert_data_rebuilding(data, new_pruning_point);
         }
 
@@ -934,9 +943,13 @@ impl PruningProcessor {
         virtual_state.ghostdag_data.blue_score >= pp_bs + self.config.params.pruning_depth()
     }
 
-    fn assert_proof_rebuilding(&self, ref_proof: Arc<PruningPointProof>, new_pruning_point: BlockHash) {
+    fn assert_proof_rebuilding(
+        &self,
+        ref_proof: Arc<PruningPointProof>,
+        new_pruning_point: BlockHash,
+    ) -> Result<(), crate::processes::pruning_proof::ProofInternalError> {
         info!("Rebuilding the pruning proof after pruning data (sanity test)");
-        let built_proof = self.pruning_proof_manager.build_pruning_point_proof(new_pruning_point);
+        let built_proof = self.pruning_proof_manager.try_build_pruning_point_proof(new_pruning_point)?;
         if ref_proof.len() != built_proof.len() {
             panic!("Rebuilt proof does not match the original one ({} ref vs. {} rebuilt levels)", ref_proof.len(), built_proof.len());
         }
@@ -946,6 +959,7 @@ impl PruningProcessor {
             }
         }
         info!("Proof was rebuilt successfully following pruning");
+        Ok(())
     }
 
     fn assert_data_rebuilding(&self, ref_data: Arc<PruningPointTrustedData>, new_pruning_point: BlockHash) {
