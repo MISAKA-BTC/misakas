@@ -174,3 +174,23 @@ are preserved. See [optimized-runtime-20261102](optimized-runtime-20261102/READM
 for exact source/build/input pins, failed build and disk admission records,
 retired generated-cache provenance, raw logs and qualification limits. No
 production setting or activation was changed; all seven stages remain required.
+
+## Profile-guided empty scratch reuse
+
+A ten-second actual trained-worker sample identifies repeated producer table
+growth and membership hashing as significant work. The builder now retains
+only empty pending/table capacity under its unchanged simultaneous frame
+owner. Success and each early return clear both structures. Reused versus
+fresh-builder/seed materials and all per-material charge fields agree; an
+actual partial frame-cap failure spends the same work again on retry. All 36
+selected tests and strict selected Clippy pass.
+
+Under the same finite caps and 240-second CPU limit, the actual unchanged
+trained job logs 49,152 / 213,298 numeric relations before SIGXCPU. At the common
+40,960 prefix, material preparation improves from 150.472 s to 115.060 s while
+Node submit remains approximately 87.5 s, with equal provider use, evaluator
+counter peaks and logical requests. It still produces no complete Node or
+native outcome. See [the actual CPU sample](source-profile-20261102/README.md)
+and [scratch-reuse evidence](trace-scratch-20261102/README.md). This advances
+measurement/performance work while preserving every native, recovery, role,
+certification, physical-cost and activation requirement above.

@@ -1,0 +1,38 @@
+[
+  {
+    "original_path": "/tmp/misaka-trace-scratch-clippy-20261102.py",
+    "preserved_path": "handoff/positive-court/trace-scratch-20261102/operator-scripts/misaka-trace-scratch-clippy-20261102.py",
+    "sha256": "acbb09b0342d9340503cfb93b4e8554d54be9812f57ed8609afebe3c2b563313",
+    "scope": "final operator-file bytes at checkpoint; executed commands/source/input snapshots are pinned independently in raw records"
+  },
+  {
+    "original_path": "/tmp/misaka-trace-scratch-clippy-controller-20261102.py",
+    "preserved_path": "handoff/positive-court/trace-scratch-20261102/operator-scripts/misaka-trace-scratch-clippy-controller-20261102.py",
+    "sha256": "a143bbe2a41bae499600ba3ec853a749e22812efad91c342a2b22ee43f634072",
+    "scope": "final operator-file bytes at checkpoint; executed commands/source/input snapshots are pinned independently in raw records"
+  },
+  {
+    "original_path": "/tmp/misaka-trace-scratch-controller-20261102.py",
+    "preserved_path": "handoff/positive-court/trace-scratch-20261102/operator-scripts/misaka-trace-scratch-controller-20261102.py",
+    "sha256": "54a43aded3ed12b6a59f0dc42f4c68569deee00bd0391dde1d3fb09c50024009",
+    "scope": "final operator-file bytes at checkpoint; executed commands/source/input snapshots are pinned independently in raw records"
+  },
+  {
+    "original_path": "/tmp/misaka-trace-scratch-evidence-20261102.py",
+    "preserved_path": "handoff/positive-court/trace-scratch-20261102/operator-scripts/misaka-trace-scratch-evidence-20261102.py",
+    "sha256": "bdc362e2bf496da3eab576b52675632e7243c675c758fc07c943842710626a25",
+    "scope": "final operator-file bytes at checkpoint; executed commands/source/input snapshots are pinned independently in raw records"
+  },
+  {
+    "original_path": "/tmp/misaka-trace-scratch-model-20261102.py",
+    "preserved_path": "handoff/positive-court/trace-scratch-20261102/operator-scripts/misaka-trace-scratch-model-20261102.py",
+    "sha256": "4274cb2a2250d8bc0b8129911de1f01bc5e7b00349baa520d7c9104e7b8ae768",
+    "scope": "final operator-file bytes at checkpoint; executed commands/source/input snapshots are pinned independently in raw records"
+  },
+  {
+    "original_path": "/tmp/misaka-trace-scratch-validation-20261102.py",
+    "preserved_path": "handoff/positive-court/trace-scratch-20261102/operator-scripts/misaka-trace-scratch-validation-20261102.py",
+    "sha256": "6441443556eeff8dc06b4ef26cfdcab2e0ef0f589ea0dfc5f6dbd24d5ad65131",
+    "scope": "final operator-file bytes at checkpoint; executed commands/source/input snapshots are pinned independently in raw records"
+  }
+]
