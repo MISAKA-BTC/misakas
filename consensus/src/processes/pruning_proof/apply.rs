@@ -67,7 +67,10 @@ impl PruningProofManager {
         // Only a genesis-rooted level 0 has the complete DAG needed to judge
         // historical selected-chain checkpoints (and exact work validation).
         if root != self.genesis_hash {
-            return Err(unavailable("historical checkpoint chain requires a genesis-rooted level-0 proof".into()));
+            return Err(unavailable(format!(
+                "historical checkpoint chain requires a genesis-rooted level-0 proof: observed root {root}, expected genesis {}",
+                self.genesis_hash
+            )));
         }
         let read_header =
             |hash| self.headers_store.get_header(hash).map_err(|e| unavailable(format!("checkpoint header {hash}: {e}")));
