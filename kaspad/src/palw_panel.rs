@@ -7834,7 +7834,7 @@ impl PalwPanelService {
         prune_foreign_retention_v1(dir, &pinned, std::time::SystemTime::now(), FOREIGN_RETENTION_MAX_FILES, |claim| {
             // One fallible, generation-checked borrowed read. Option getters
             // merge absent claims with pressure/DB errors and cannot authorize GC.
-            session.palw_material_retention_owed_v1(*claim)
+            session.with_consensus_api_v1(|consensus| consensus.palw_material_retention_owed_v1(*claim))
         });
     }
 
