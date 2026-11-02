@@ -201,8 +201,18 @@ impl RequestPruningPointPalwStateFlow {
                 continue;
             }
             // Legacy peers share the same node-wide materialization/session backstop.
-            // The empty lease file is removed as soon as this one response is queued.
+            // The session/native lease follows the response through the final HTTP
+            // Bytes owner, including a stalled peer after dequeue and compression.
             let Ok(mut snapshot_lease) = crate::palw_snapshot_chunks::SnapshotSpill::new() else {
+                self.router.enqueue(make_message!(Payload::PruningPointPalwState, PruningPointPalwStateMessage::default())).await?;
+                continue;
+            };
+            // Admit the complete legacy serialization before creating its Vecs.
+            // The native state itself has a separate native-resource reservation.
+            let Ok(snapshot_bytes) = kaspa_core::memory_budget::global_memory_budget().try_reserve(
+                kaspa_core::memory_budget::MemoryClass::Snapshot,
+                crate::palw_gossip::PALW_PRUNING_STATE_MAX_BYTES as u64 + (1 << 20),
+            ) else {
                 self.router.enqueue(make_message!(Payload::PruningPointPalwState, PruningPointPalwStateMessage::default())).await?;
                 continue;
             };
@@ -253,6 +263,7 @@ impl RequestPruningPointPalwStateFlow {
                     }
                 })
                 .await;
+            snapshot_bytes.materialized();
             let reply = match carriage {
                 Some(c) => PruningPointPalwStateMessage {
                     found: true,
@@ -304,7 +315,13 @@ impl RequestPruningPointPalwStateFlow {
             )
             .unwrap_or(0); // A not-found reply has no state payload and spends only the attempt floor.
             self.ctx.palw_gossip().charge_sidecar_serve(peer, served);
-            self.router.enqueue(make_message!(Payload::PruningPointPalwState, reply)).await?;
+            self.router
+                .enqueue_preallocated(
+                    make_message!(Payload::PruningPointPalwState, reply),
+                    snapshot_bytes,
+                    vec![Box::new(snapshot_lease)],
+                )
+                .await?;
         }
     }
     async fn serve_chunked(&mut self, msg: RequestPruningPointPalwStateMessage) -> Result<(), ProtocolError> {

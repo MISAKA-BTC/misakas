@@ -31,6 +31,7 @@ use kaspa_rpc_core::{
     notify::{channel::NotificationChannel, connection::ChannelConnection},
 };
 use kaspa_utils::networking::NetAddress;
+use kaspa_utils_tower::transport::Outbound;
 use kaspa_utils_tower::{
     counters::TowerConnectionCounters,
     middleware::{CountBytesBody, MapRequestBodyLayer, MapResponseBodyLayer},
@@ -239,7 +240,7 @@ impl Drop for ConnectionHandler {
 
 #[tonic::async_trait]
 impl Rpc for ConnectionHandler {
-    type MessageStreamStream = Pin<Box<dyn Stream<Item = Result<KaspadResponse, tonic::Status>> + Send + Sync + 'static>>;
+    type MessageStreamStream = Pin<Box<dyn Stream<Item = Result<Outbound<KaspadResponse>, tonic::Status>> + Send + Sync + 'static>>;
 
     /// Handle the new arriving client connection
     async fn message_stream(

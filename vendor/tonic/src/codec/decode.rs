@@ -15,6 +15,28 @@ use sync_wrapper::SyncWrapper;
 use tokio_stream::Stream;
 use tracing::{debug, trace};
 
+const MAX_RETAINED_DECODER_BUFFER_SIZE: usize = 1024 * 1024;
+
+// Advance/clear reduce len (and may hide the original capacity); callers also pass
+// the size of the completed message. Copy only a bounded unread suffix, never a
+// second whole large frame. Large unread next frames remain owned and intact.
+fn release_completed_decode_buffers(
+    inner: &mut StreamingInner,
+    completed_len: usize,
+    prior_capacity: usize,
+    settings: BufferSettings,
+) {
+    let limit = MAX_RETAINED_DECODER_BUFFER_SIZE.max(settings.buffer_size);
+    if inner.buf.len() <= limit && (completed_len > limit || prior_capacity > limit || inner.buf.capacity() > limit) {
+        let mut next = BytesMut::with_capacity(settings.buffer_size.max(inner.buf.len()));
+        next.extend_from_slice(&inner.buf);
+        inner.buf = next;
+    }
+    if inner.decompress_buf.is_empty() && (completed_len > limit || inner.decompress_buf.capacity() > limit) {
+        inner.decompress_buf = BytesMut::new();
+    }
+}
+
 /// Streaming requests and responses.
 ///
 /// This will wrap some inner [`Body`] and [`Decoder`] and provide an interface
@@ -40,10 +62,7 @@ impl<T> Unpin for Streaming<T> {}
 #[derive(Debug, Clone)]
 enum State {
     ReadHeader,
-    ReadBody {
-        compression: Option<CompressionEncoding>,
-        len: usize,
-    },
+    ReadBody { compression: Option<CompressionEncoding>, len: usize },
     Error(Option<Status>),
 }
 
@@ -69,13 +88,7 @@ impl<T> Streaming<T> {
         B::Error: Into<crate::BoxError>,
         D: Decoder<Item = T, Error = Status> + Send + 'static,
     {
-        Self::new(
-            decoder,
-            body,
-            Direction::Response(status_code),
-            encoding,
-            max_message_size,
-        )
+        Self::new(decoder, body, Direction::Response(status_code), encoding, max_message_size)
     }
 
     /// Create empty response. For creating responses that have no content (headers + trailers only)
@@ -90,24 +103,13 @@ impl<T> Streaming<T> {
 
     /// Create a new streaming request in the grpc response format for decoding a request [Body]
     /// into message of type T
-    pub fn new_request<B, D>(
-        decoder: D,
-        body: B,
-        encoding: Option<CompressionEncoding>,
-        max_message_size: Option<usize>,
-    ) -> Self
+    pub fn new_request<B, D>(decoder: D, body: B, encoding: Option<CompressionEncoding>, max_message_size: Option<usize>) -> Self
     where
         B: HttpBody + Send + 'static,
         B::Error: Into<crate::BoxError>,
         D: Decoder<Item = T, Error = Status> + Send + 'static,
     {
-        Self::new(
-            decoder,
-            body,
-            Direction::Request,
-            encoding,
-            max_message_size,
-        )
+        Self::new(decoder, body, Direction::Request, encoding, max_message_size)
     }
 
     fn new<B, D>(
@@ -127,10 +129,8 @@ impl<T> Streaming<T> {
             decoder: SyncWrapper::new(Box::new(decoder)),
             inner: StreamingInner {
                 body: SyncWrapper::new(Body::new(
-                    body.map_frame(|frame| {
-                        frame.map_data(|mut buf| buf.copy_to_bytes(buf.remaining()))
-                    })
-                    .map_err(|err| Status::map_error(err.into())),
+                    body.map_frame(|frame| frame.map_data(|mut buf| buf.copy_to_bytes(buf.remaining())))
+                        .map_err(|err| Status::map_error(err.into())),
                 )),
                 state: State::ReadHeader,
                 direction,
@@ -145,10 +145,7 @@ impl<T> Streaming<T> {
 }
 
 impl StreamingInner {
-    fn decode_chunk(
-        &mut self,
-        buffer_settings: BufferSettings,
-    ) -> Result<Option<DecodeBuf<'_>>, Status> {
+    fn decode_chunk(&mut self, buffer_settings: BufferSettings) -> Result<Option<DecodeBuf<'_>>, Status> {
         if let State::ReadHeader = self.state {
             if self.buf.remaining() < HEADER_SIZE {
                 return Ok(None);
@@ -165,7 +162,9 @@ impl StreamingInner {
                             // An ill-constructed message with its Compressed-Flag bit set but lacking a grpc-encoding
                             // entry different from identity in its metadata MUST fail with INTERNAL status,
                             // its associated description indicating the invalid Compressed-Flag condition.
-                            return Err(Status::internal( "protocol error: received message with compressed-flag but no grpc-encoding was specified"));
+                            return Err(Status::internal(
+                                "protocol error: received message with compressed-flag but no grpc-encoding was specified",
+                            ));
                         }
                     }
                 }
@@ -183,23 +182,16 @@ impl StreamingInner {
             };
 
             let len = self.buf.get_u32() as usize;
-            let limit = self
-                .max_message_size
-                .unwrap_or(DEFAULT_MAX_RECV_MESSAGE_SIZE);
+            let limit = self.max_message_size.unwrap_or(DEFAULT_MAX_RECV_MESSAGE_SIZE);
             if len > limit {
-                return Err(Status::out_of_range(
-                    format!(
-                        "Error, decoded message length too large: found {len} bytes, the limit is: {limit} bytes"
-                    ),
-                ));
+                return Err(Status::out_of_range(format!(
+                    "Error, decoded message length too large: found {len} bytes, the limit is: {limit} bytes"
+                )));
             }
 
             self.buf.reserve(len);
 
-            self.state = State::ReadBody {
-                compression: compression_encoding,
-                len,
-            }
+            self.state = State::ReadBody { compression: compression_encoding, len }
         }
 
         if let State::ReadBody { len, compression } = self.state {
@@ -211,16 +203,11 @@ impl StreamingInner {
 
             let decode_buf = if let Some(encoding) = compression {
                 self.decompress_buf.clear();
-                let limit = self
-                    .max_message_size
-                    .unwrap_or(DEFAULT_MAX_RECV_MESSAGE_SIZE);
+                let limit = self.max_message_size.unwrap_or(DEFAULT_MAX_RECV_MESSAGE_SIZE);
                 let limited_out_buf = (&mut self.decompress_buf).limit(limit);
 
                 if let Err(err) = decompress(
-                    CompressionSettings {
-                        encoding,
-                        buffer_growth_interval: buffer_settings.buffer_size,
-                    },
+                    CompressionSettings { encoding, buffer_growth_interval: buffer_settings.buffer_size },
                     &mut self.buf,
                     limited_out_buf,
                     len,
@@ -231,9 +218,7 @@ impl StreamingInner {
                         )));
                     }
                     let message = if let Direction::Response(status) = self.direction {
-                        format!(
-                            "Error decompressing: {err}, while receiving response with status: {status}"
-                        )
+                        format!("Error decompressing: {err}, while receiving response with status: {status}")
                     } else {
                         format!("Error decompressing: {err}, while sending request")
                     };
@@ -377,17 +362,28 @@ impl<T> Streaming<T> {
     }
 
     fn decode_chunk(&mut self) -> Result<Option<T>, Status> {
-        match self
-            .inner
-            .decode_chunk(self.decoder.get_mut().buffer_settings())?
-        {
-            Some(mut decode_buf) => match self.decoder.get_mut().decode(&mut decode_buf)? {
-                Some(msg) => {
-                    self.inner.state = State::ReadHeader;
-                    Ok(Some(msg))
+        let settings = self.decoder.get_mut().buffer_settings();
+        let prior_capacity = self.inner.buf.capacity();
+        match self.inner.decode_chunk(settings)? {
+            Some(mut decode_buf) => {
+                let completed_len = decode_buf.remaining();
+                let decoded = self.decoder.get_mut().decode(&mut decode_buf);
+                drop(decode_buf);
+                // Error paths terminate the stream too: do not retain a hostile
+                // large payload until a later poll or connection timeout.
+                if decoded.is_err() {
+                    self.inner.buf = BytesMut::new();
+                    self.inner.decompress_buf = BytesMut::new();
                 }
-                None => Ok(None),
-            },
+                match decoded? {
+                    Some(msg) => {
+                        self.inner.state = State::ReadHeader;
+                        release_completed_decode_buffers(&mut self.inner, completed_len, prior_capacity, settings);
+                        Ok(Some(msg))
+                    }
+                    None => Ok(None),
+                }
+            }
             None => Ok(None),
         }
     }
@@ -405,8 +401,15 @@ impl<T> Stream for Streaming<T> {
                 return Poll::Ready(status.take().map(Err));
             }
 
-            if let Some(item) = self.decode_chunk()? {
-                return Poll::Ready(Some(Ok(item)));
+            match self.decode_chunk() {
+                Ok(Some(item)) => return Poll::Ready(Some(Ok(item))),
+                Ok(None) => {}
+                Err(error) => {
+                    self.inner.buf = BytesMut::new();
+                    self.inner.decompress_buf = BytesMut::new();
+                    self.inner.state = State::Error(None);
+                    return Poll::Ready(Some(Err(error)));
+                }
             }
 
             if ready!(self.inner.poll_frame(cx))?.is_none() {
@@ -427,3 +430,7 @@ impl<T> fmt::Debug for Streaming<T> {
 
 #[cfg(test)]
 static_assertions::assert_impl_all!(Streaming<()>: Send, Sync);
+
+#[cfg(all(test, feature = "gzip"))]
+#[path = "oversized_decode_tests.rs"]
+mod oversized_decode_tests;

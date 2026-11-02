@@ -9,6 +9,18 @@ mod encode;
 use crate::Status;
 use std::io;
 
+/// Allocation/session tickets retained by the final encoded Bytes owner.
+/// A ticket must describe shared ownership only; physical copies need new tickets.
+pub type RetainedResources = Vec<Box<dyn RetainedResource>>;
+/// Type-erased RAII ownership ticket, never serialized on the wire.
+pub trait RetainedResource: Send + Sync + 'static {}
+impl<T: Send + Sync + 'static> RetainedResource for T {}
+impl std::fmt::Debug for dyn RetainedResource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("RetainedResource")
+    }
+}
+
 pub use self::buffer::{DecodeBuf, EncodeBuf};
 pub use self::compression::{CompressionEncoding, EnabledCompressionEncodings};
 pub use self::decode::Streaming;
@@ -72,19 +84,13 @@ pub struct BufferSettings {
 impl BufferSettings {
     /// Create a new `BufferSettings`
     pub fn new(buffer_size: usize, yield_threshold: usize) -> Self {
-        Self {
-            buffer_size,
-            yield_threshold,
-        }
+        Self { buffer_size, yield_threshold }
     }
 }
 
 impl Default for BufferSettings {
     fn default() -> Self {
-        Self {
-            buffer_size: DEFAULT_CODEC_BUFFER_SIZE,
-            yield_threshold: DEFAULT_YIELD_THRESHOLD,
-        }
+        Self { buffer_size: DEFAULT_CODEC_BUFFER_SIZE, yield_threshold: DEFAULT_YIELD_THRESHOLD }
     }
 }
 
@@ -131,6 +137,21 @@ pub trait Encoder {
 
     /// Encodes a message into the provided buffer.
     fn encode(&mut self, item: Self::Item, dst: &mut EncodeBuf<'_>) -> Result<(), Self::Error>;
+
+    /// Reserve simultaneous encoder allocations before tonic grows its buffers.
+    fn prepare_encode(&mut self, _item: &Self::Item) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    /// Exact protobuf size, when known, to avoid geometric buffer growth.
+    fn encoded_len(&self, _item: &Self::Item) -> Option<usize> {
+        None
+    }
+
+    /// Transfer queue and encoder tickets to the resulting transport frame.
+    fn take_resources(&mut self) -> RetainedResources {
+        Vec::new()
+    }
 
     /// Controls how tonic creates and expands encode buffers.
     fn buffer_settings(&self) -> BufferSettings {
