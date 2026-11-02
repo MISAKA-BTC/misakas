@@ -84,15 +84,65 @@ fn repeated_packed_and_unpacked_primitives_charge_all_elements() {
 }
 
 #[test]
-fn duplicate_fields_and_merged_child_fragments_remain_bounded() {
+fn packed_scalar_batch_charges_intermediate_reallocation_overlap() {
+    let message = Scalars { varints: vec![1; 768], ..Default::default() };
+    let wire = message.encode_to_vec();
+    let decoded = Scalars::decode(wire.as_slice()).unwrap();
+    assert_eq!(decoded.varints.capacity(), 1024);
+    let estimate = compare::<Scalars>(&wire);
+    assert_eq!(estimate.retained_bytes, 1024 * 8);
+    assert_eq!(estimate.peak_bytes, (512 + 1024) * 8, "packed decoding pushes through the intermediate Vec capacities");
+}
+
+#[test]
+fn duplicate_blob_fields_remain_bounded_but_nested_merge_is_explicitly_unsupported() {
     let mut wire = Vec::new();
     for n in [1, 9, 17, 33, 65, 129] {
         wire.extend(field(3, &vec![7; n]));
     }
+    compare::<Node>(&wire);
     for n in [1, 5, 17, 65] {
         wire.extend(field(1, &Node { values: vec![1; n], blobs: vec![vec![2; n]], ..Default::default() }.encode_to_vec()));
     }
-    compare::<Node>(&wire);
+    assert!(Node::decode(wire.as_slice()).is_ok(), "this is valid protobuf with merge semantics");
+    assert_eq!(Node::wire_heap_bound(&wire, 0).unwrap_err().0, "unsupported repeated singular/message-oneof merge");
+}
+
+#[test]
+fn singular_merged_256_by_three_fragments_require_explicit_unsupported() {
+    let child = Node { values: vec![1; 256], ..Default::default() }.encode_to_vec();
+    let fragment = field(1, &child);
+    let independent = Node::wire_heap_bound(&fragment, 0).unwrap().retained_bytes * 3;
+    let wire = fragment.repeat(3);
+    let decoded = Node::decode(wire.as_slice()).unwrap();
+    let values = &decoded.child.as_ref().unwrap().values;
+    assert_eq!(values.len(), 768);
+    assert_eq!(values.capacity(), 1024);
+    let actual = decoded.retained_heap_bytes();
+    println!("singular merge: independent={independent} actual={actual}");
+    assert!(independent < actual, "the old fragment-sum estimate must reproduce the undercount");
+    assert!(Node::wire_heap_bound(&wire, 0).is_err(), "unsupported merge must not return a false heap bound");
+}
+
+#[test]
+fn real_p2p_oneof_merged_256_by_three_fragments_require_explicit_unsupported() {
+    let fragment = p2p::KaspadMessage {
+        payload: Some(p2p::kaspad_message::Payload::BlockHeaders(p2p::BlockHeadersMessage {
+            block_headers: vec![p2p::BlockHeader::default(); 256],
+        })),
+        ..Default::default()
+    }
+    .encode_to_vec();
+    let independent = p2p::KaspadMessage::wire_heap_bound(&fragment, 0).unwrap().retained_bytes * 3;
+    let wire = fragment.repeat(3);
+    let decoded = p2p::KaspadMessage::decode(wire.as_slice()).unwrap();
+    let Some(p2p::kaspad_message::Payload::BlockHeaders(headers)) = &decoded.payload else { panic!("headers payload") };
+    assert_eq!(headers.block_headers.len(), 768);
+    assert_eq!(headers.block_headers.capacity(), 1024);
+    let actual = decoded.retained_heap_bytes();
+    println!("P2P oneof merge: independent={independent} actual={actual}");
+    assert!(independent < actual, "the old fragment-sum estimate must reproduce the undercount");
+    assert!(p2p::KaspadMessage::wire_heap_bound(&wire, 0).is_err(), "unsupported merge must not return a false heap bound");
 }
 
 #[test]

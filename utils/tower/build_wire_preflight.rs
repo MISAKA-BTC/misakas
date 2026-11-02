@@ -87,6 +87,7 @@ fn field_body(desc: &Descriptor, ty: &Type, state: proc_macro2::TokenStream) -> 
             quote! { let value = cursor.bytes(wire)?; #utf8 #array estimate.blob(value.len(), #blob_state)?; }
         }
         "message" => {
+            let unique = if desc.repeated { quote!() } else { quote!((#state).singular_message_once()?;) };
             // For Vec<Box<M>>, the array stores pointers and each child owns M.
             let (inner, inner_boxed) = peel(element, false);
             let box_bytes = if boxed || inner_boxed {
@@ -95,6 +96,7 @@ fn field_body(desc: &Descriptor, ty: &Type, state: proc_macro2::TokenStream) -> 
                 quote!()
             };
             quote! {
+                #unique
                 let value = cursor.bytes(wire)?;
                 let child = <#inner as #q::WirePreflight>::wire_heap_bound(value, depth.checked_add(1).ok_or(#q::PreflightError("protobuf recursion overflow"))?)?;
                 #box_bytes estimate.child(child)?; #array
@@ -135,7 +137,12 @@ fn instrument(items: &mut Vec<Item>) {
                     if let Some(oneof) = desc.oneof {
                         let tags = desc.tags;
                         assert!(!tags.is_empty(), "oneof must list its wire tags");
-                        cases.push(quote!(#(#tags)|* => estimate.child(<#oneof as kaspa_utils_tower::wire_preflight::OneofPreflight>::wire_field_bound(tag, wire, &mut cursor, depth)?)?,));
+                        cases.push(quote!(#(#tags)|* => {
+                            if <#oneof as kaspa_utils_tower::wire_preflight::OneofPreflight>::is_message_tag(tag) {
+                                states[#index].singular_message_once()?;
+                            }
+                            estimate.child(<#oneof as kaspa_utils_tower::wire_preflight::OneofPreflight>::wire_field_bound(tag, wire, &mut cursor, depth)?)?;
+                        },));
                     } else {
                         let tag = desc.tag.expect("prost field tag");
                         let body = field_body(&desc, &field.ty, quote!(&mut states[#index]));
@@ -161,9 +168,13 @@ fn instrument(items: &mut Vec<Item>) {
             Item::Enum(oneof) if derive(&oneof.attrs, "Oneof") => {
                 let name = &oneof.ident;
                 let mut cases = Vec::new();
+                let mut message_tags = Vec::new();
                 for variant in &oneof.variants {
                     let desc = descriptor(&variant.attrs);
                     let tag = desc.tag.expect("prost oneof tag");
+                    if desc.kind == "message" {
+                        message_tags.push(tag);
+                    }
                     let Fields::Unnamed(fields) = &variant.fields else { panic!("prost oneof tuple") };
                     assert_eq!(fields.unnamed.len(), 1);
                     let body = field_body(&desc, &fields.unnamed.first().unwrap().ty, quote!(&mut state));
@@ -172,6 +183,9 @@ fn instrument(items: &mut Vec<Item>) {
                 let generated = quote! {
                     #[allow(unused_mut, unused_variables)]
                     impl kaspa_utils_tower::wire_preflight::OneofPreflight for #name {
+                        fn is_message_tag(tag: u32) -> bool {
+                            false #(|| tag == #message_tags)*
+                        }
                         fn wire_field_bound(tag: u32, wire: kaspa_utils_tower::wire_preflight::WireType, cursor: &mut kaspa_utils_tower::wire_preflight::Cursor<'_>, depth: usize) -> kaspa_utils_tower::wire_preflight::Result<kaspa_utils_tower::wire_preflight::HeapBound> {
                             let mut estimate = kaspa_utils_tower::wire_preflight::HeapBound::default();
                             let mut state = kaspa_utils_tower::wire_preflight::FieldState::default();

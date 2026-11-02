@@ -1,0 +1,26 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 19.02s
+     Running unittests src/lib.rs (testing/transport-memory/target/debug/deps/misaka_transport_memory_harness-5edf3293e2221b36)
+
+running 2 tests
+test preflight_tests::real_p2p_oneof_merged_256_by_three_fragments_require_explicit_unsupported ... P2P oneof merge: independent=239616 actual=319488
+
+thread 'preflight_tests::real_p2p_oneof_merged_256_by_three_fragments_require_explicit_unsupported' (607879) panicked at src/preflight_tests.rs:132:5:
+unsupported merge must not return a false heap bound
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+test preflight_tests::singular_merged_256_by_three_fragments_require_explicit_unsupported ... 
+thread 'preflight_tests::singular_merged_256_by_three_fragments_require_explicit_unsupported' (607880) panicked at src/preflight_tests.rs:111:5:
+unsupported merge must not return a false heap bound
+singular merge: independent=6696 actual=8376
+FAILED
+
+failures:
+
+failures:
+    preflight_tests::real_p2p_oneof_merged_256_by_three_fragments_require_explicit_unsupported
+    preflight_tests::singular_merged_256_by_three_fragments_require_explicit_unsupported
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 32 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--lib`
+
