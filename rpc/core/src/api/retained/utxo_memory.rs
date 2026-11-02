@@ -4,11 +4,13 @@
 //! Each generated UTXO entry owns nested optional messages plus independent
 //! address, Hash64 hex and script hex strings. 512 bytes is an intentionally
 //! conservative inline/nested-structure envelope on supported 64-bit targets;
-//! 3x covers Vec growth overlap. Dynamic strings are counted separately.
+//! 3x covers Vec growth overlap. Dynamic strings and construction scratch are
+//! separate: address encoding can hold several base32 vectors, and current
+//! to_rpc_hex holds both its 2x Vec and its copied 2x String at once.
 pub const UTXO_PROTO_BASE_BYTES: u64 = 4096;
 pub fn utxo_proto_per_entry_bytes(max_address_payload_bytes: u64, max_script_bytes: u64) -> Option<u64> {
     max_address_payload_bytes.checked_mul(2)
-        .and_then(|n|max_script_bytes.checked_mul(2).and_then(|script|n.checked_add(script)))
+        .and_then(|n|max_script_bytes.checked_mul(4).and_then(|script|n.checked_add(script)))
         // address prefix/checksum allowance, Hash64 hex, allocation slack
         .and_then(|n|n.checked_add(3*512+64+128+64))
 }
