@@ -26,6 +26,12 @@ pub trait UtxoIndexApi: Send + Sync + Debug {
     ///
     /// Note: Use a read lock when accessing this method
     fn get_utxos_by_script_public_keys(&self, script_public_keys: ScriptPublicKeys) -> StoreResult<UtxoSetByScriptPublicKey>;
+    /// Same result below the cap; stop before retaining an entry beyond it.
+    fn get_utxos_by_script_public_keys_bounded(
+        &self,
+        script_public_keys: ScriptPublicKeys,
+        max_entries: usize,
+    ) -> StoreResult<UtxoSetByScriptPublicKey>;
 
     /// Retrieve a bounded page of utxos for a single script public key (cursor = the opaque resume
     /// token from the previous page; `None` starts at the beginning). Returns the page plus the next
@@ -82,6 +88,16 @@ impl UtxoIndexProxy {
 
     pub async fn get_utxos_by_script_public_keys(self, script_public_keys: ScriptPublicKeys) -> StoreResult<UtxoSetByScriptPublicKey> {
         spawn_blocking(move || self.inner.read().get_utxos_by_script_public_keys(script_public_keys)).await.unwrap()
+    }
+
+    pub async fn get_utxos_by_script_public_keys_bounded(
+        self,
+        script_public_keys: ScriptPublicKeys,
+        max_entries: usize,
+    ) -> StoreResult<UtxoSetByScriptPublicKey> {
+        spawn_blocking(move || self.inner.read().get_utxos_by_script_public_keys_bounded(script_public_keys, max_entries))
+            .await
+            .unwrap()
     }
 
     pub async fn get_utxos_by_script_public_key_chunk(

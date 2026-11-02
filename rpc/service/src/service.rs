@@ -938,16 +938,17 @@ impl RpcCoreService {
         self.core_shutdown_request.listener.clone()
     }
 
-    async fn get_utxo_set_by_script_public_key<'a>(
+    async fn get_utxo_set_by_script_public_key_bounded<'a>(
         &self,
         addresses: impl Iterator<Item = &'a RpcAddress>,
-    ) -> UtxoSetByScriptPublicKey {
+        max_entries: usize,
+    ) -> RpcResult<UtxoSetByScriptPublicKey> {
         self.utxoindex
             .clone()
-            .unwrap()
-            .get_utxos_by_script_public_keys(addresses.map(pay_to_address_script).collect())
+            .ok_or(RpcError::NoUtxoIndex)?
+            .get_utxos_by_script_public_keys_bounded(addresses.map(pay_to_address_script).collect(), max_entries)
             .await
-            .unwrap_or_default()
+            .map_err(|why| RpcError::General(why.to_string()))
     }
 
     async fn get_balance_by_script_public_key<'a>(&self, addresses: impl Iterator<Item = &'a RpcAddress>) -> BalanceByScriptPublicKey {
@@ -5038,39 +5039,18 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             return Err(RpcError::ConsensusInTransitionalIbdState);
         }
 
-        // TODO: discuss if the entry order is part of the method requirements
-        //       (the current impl does not retain an entry order matching the request addresses order)
-        //
-        // NOTE (large-UTXO availability): this method is unbounded — it loads and serializes *every*
-        // UTXO of the requested addresses (see the pagination TODO in
-        // indexes/utxoindex/src/stores/indexed_utxos.rs). A heavily-fragmented address (e.g. a mining
-        // payout that is never consolidated) can hold hundreds of thousands of UTXOs, producing a
-        // response that exceeds the wRPC frame cap (MAX_WRPC_MESSAGE_SIZE = 128 MiB) or the client's
-        // own message-size / request timeout, which surfaces to the caller as "connection closed".
-        // The measurement below lets operators pinpoint such cases (entry count + scan/convert time +
-        // an estimated serialized size) instead of guessing at the disconnect cause.
+        // The legacy response keeps its existing 250k cap. Enforce it inside
+        // the DB scan, before the complete index map and RPC vector exist.
+        const LARGE_UTXO_HARD_CAP: usize = 250_000;
         let started = Instant::now();
         let num_addresses = request.addresses.len();
-        let entry_map = self.get_utxo_set_by_script_public_key(request.addresses.iter()).await;
+        let entry_map = self.get_utxo_set_by_script_public_key_bounded(request.addresses.iter(), LARGE_UTXO_HARD_CAP).await?;
         let entries = self.index_converter.get_utxos_by_addresses_entries(&entry_map);
         let num_entries = entries.len();
         let elapsed = started.elapsed();
         // ~200 bytes/entry is a conservative borsh estimate (outpoint 36 + compact utxo entry +
         // 64-byte PubKeyHashMlDsa87 script + repeated address); JSON is ~2.5x larger.
         let est_borsh_mib = (num_entries.saturating_mul(200)) as f64 / (1024.0 * 1024.0);
-        // Audit H-02: HARD CAP the legacy unbounded method. Past this the borsh
-        // response (~200 B/entry) approaches/exceeds the 128 MiB wRPC frame cap and
-        // the serialize+write would exhaust node memory/CPU/socket (the remote DoS
-        // the auditor describes). Return an explicit error BEFORE serializing and
-        // steer the caller to the paginated getUtxosByAddressPage or the
-        // balance-only getBalancesByAddresses, instead of silently continuing.
-        const LARGE_UTXO_HARD_CAP: usize = 250_000;
-        if num_entries > LARGE_UTXO_HARD_CAP {
-            return Err(RpcError::General(format!(
-                "getUtxosByAddresses: {num_entries} UTXOs across {num_addresses} address(es) exceeds the {LARGE_UTXO_HARD_CAP} hard cap \
-(~{est_borsh_mib:.0} MiB); use getUtxosByAddressPage (cursor-paginated) or getBalancesByAddresses (balance only)."
-            )));
-        }
         const LARGE_UTXO_RESPONSE_THRESHOLD: usize = 50_000;
         if num_entries >= LARGE_UTXO_RESPONSE_THRESHOLD {
             let msg = format!(
