@@ -603,7 +603,9 @@ pub fn derive_tir_public_allocation_v1(
     inventory: Option<&crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryCertificateV1>,
     rules: PalwTirPublicAllocationRulesV1,
 ) -> Result<PalwTirPublicAllocationQuoteV1, String> {
-    if rules.clock.version==crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_CLOCK_FAMILY_VERSION_V3{return Err("family clock cannot enter legacy allocation".into());}
+    if crate::palw_tir_frame_cost_v1::is_family_clock_v3(rules.clock.version) {
+        return Err("family clock cannot enter legacy allocation".into());
+    }
     let public_header = crate::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1::Tir(header.clone());
     crate::palw_staged_preclaim_v1::check_preclaim_identity_v1(
         geometry,
@@ -715,9 +717,13 @@ fn derive_tir_public_allocation_native_mode_v3(
     family: bool,
 ) -> Result<PalwTirPublicAllocationQuoteV1, crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
     if family {
-        rules.clock.version=crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_CLOCK_FAMILY_VERSION_V3;
-    }else if rules.clock.version==crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_CLOCK_FAMILY_VERSION_V3{
-        return Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode("family clock cannot enter legacy native allocation".into()));
+        if rules.clock.version != crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_CLOCK_FAMILY_MATERIAL_V4 {
+            rules.clock.version = crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_CLOCK_FAMILY_VERSION_V3;
+        }
+    } else if crate::palw_tir_frame_cost_v1::is_family_clock_v3(rules.clock.version) {
+        return Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(
+            "family clock cannot enter legacy native allocation".into(),
+        ));
     }
     #[cfg(test)]
     note_native_header_identity_v2(0);
@@ -836,30 +842,54 @@ fn finish_allocation_source_v2(
         if original.job.is_constraint() {
             families.push((
                 crate::palw_staged_bundle_v1::PalwStagedFamilyV1::Constraint,
-                if let Some(table)=table {
+                if let Some(table) = table {
                     // A constrained selection is at an authenticated generated
                     // row position < exact_decode_tokens; prompt IDs never enter
                     // this grammar prefix (ConstraintStreamCourt::prefix_cursor).
-                    let prefix=original.decode_tokens_executed.checked_sub(1).ok_or("constraint allocation has no generated row")?;
-                    PalwRenderingResourcePlanV1::derive_with_authenticated_table_v2(prefix,view.vocab_size,rules.config.prices,semantics,table)?
-                } else {PalwRenderingResourcePlanV1::derive(4095, view.vocab_size, rules.config.prices)?},
+                    let prefix = original.decode_tokens_executed.checked_sub(1).ok_or("constraint allocation has no generated row")?;
+                    PalwRenderingResourcePlanV1::derive_with_authenticated_table_v2(
+                        prefix,
+                        view.vocab_size,
+                        rules.config.prices,
+                        semantics,
+                        table,
+                    )?
+                } else {
+                    PalwRenderingResourcePlanV1::derive(4095, view.vocab_size, rules.config.prices)?
+                },
             ));
         }
         // NEW allocation only: this shared finishing kernel already quotes the
         // original Flat view bridge. The old V1 Flat-TIR refusal is unchanged.
         let geometry_source = PalwPreclaimSourceGeometryV1 {
-            vocab: view.vocab_size, logits_scheme_id: view.logits_scheme_id, lane: view.lane,
-            profile_bytes: u64::from(record.program_bytes), step_leaf_count: source.leaf_count_v1(),
+            vocab: view.vocab_size,
+            logits_scheme_id: view.logits_scheme_id,
+            lane: view.lane,
+            profile_bytes: u64::from(record.program_bytes),
+            step_leaf_count: source.leaf_count_v1(),
         };
-        if rules.clock.version==crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_CLOCK_FAMILY_VERSION_V3 {
+        if crate::palw_tir_frame_cost_v1::is_family_clock_v3(rules.clock.version) {
             crate::palw_staged_preclaim_v1::finish_preclaim_quote_family_v3(
-                geometry, original, semantics, inventory, families, geometry_source,
-                rules.maximum_custodians, rules.config, table,
+                geometry,
+                original,
+                semantics,
+                inventory,
+                families,
+                geometry_source,
+                rules.maximum_custodians,
+                rules.config,
+                table,
             )?
         } else {
             crate::palw_staged_preclaim_v1::finish_preclaim_quote_v1(
-                geometry, original, semantics, inventory, families, geometry_source,
-                rules.maximum_custodians, rules.config,
+                geometry,
+                original,
+                semantics,
+                inventory,
+                families,
+                geometry_source,
+                rules.maximum_custodians,
+                rules.config,
             )?
         }
     } else {
@@ -947,10 +977,12 @@ fn finish_allocation_source_v2(
     // WorkDebit and each move one margin, each turn one `acquisition_daa`, the controls' writes and the executor's carriers after
     // Open too): 6e7–2.4e8 DAA at 6 custodians. Cold work and Ready stay before Open (the preparation door).
     // §11 (c): the owner queue's worst wait (the fair start admits a newcomer within ⌈(q + 1) / K_owner⌉ tenures) precedes it.
-    let open_window=add(rules.config.acquisition_daa,rules.config.prices.inclusion_margin_daa)?;
-    let queue_wait=if rules.clock.version==crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_CLOCK_FAMILY_VERSION_V3 {
-        crate::palw_tir_frame_cost_v1::tir_public_owner_queue_wait_family_v3(open_window,&acquisition)?
-    }else{crate::palw_tir_frame_cost_v1::tir_public_owner_queue_wait_v1(open_window,&rules.config,&rules.clock)?};
+    let open_window = add(rules.config.acquisition_daa, rules.config.prices.inclusion_margin_daa)?;
+    let queue_wait = if crate::palw_tir_frame_cost_v1::is_family_clock_v3(rules.clock.version) {
+        crate::palw_tir_frame_cost_v1::tir_public_owner_queue_wait_family_v3(open_window, &acquisition)?
+    } else {
+        crate::palw_tir_frame_cost_v1::tir_public_owner_queue_wait_v1(open_window, &rules.config, &rules.clock)?
+    };
     let post_inclusion = add(acquisition.envelope.inclusion_daa, queue_wait)?;
     let generic_end = add(open, post_inclusion.max(1))?;
     let stream = if let Some(quote) = &mut semantic {
@@ -970,28 +1002,62 @@ fn finish_allocation_source_v2(
     let door = collect.checked_sub(geometry.accepted_daa).ok_or("native TIR door underflow")?;
     if door > rules.clock.maximum_door_daa {
         #[cfg(test)]
-        if table.is_some(){
-            eprintln!("[family-native-allocation-door] birth={} preparation={} prepSpan={} open={} acquisitionSpan={} queueWait={} genericEnd={} stream={} filing={} collect={} custodians={} leaves={}",
-                geometry.accepted_daa,preparation_until_daa,preparation.preparation_daa,open,acquisition.envelope.inclusion_daa,queue_wait,generic_end,stream,filing,collect,rules.maximum_custodians,source.leaf_count_v1());
-            if let Some(semantic)=&semantic{for stage in &semantic.plan.stages{eprintln!("[family-native-semantic-door] family={:?} open={} stream={} collect={} componentSpan={} componentMoves={} acquisitionSpan={:?}",stage.family,stage.terms.open_until_daa,stage.terms.stream_until_daa,stage.terms.collect_until_daa,stage.terms.plan.inclusion_daa,stage.terms.plan.maximum_moves,stage.acquisition.map(|a|a.inclusion_daa));}}
+        if table.is_some() {
+            eprintln!(
+                "[family-native-allocation-door] birth={} preparation={} prepSpan={} open={} acquisitionSpan={} queueWait={} genericEnd={} stream={} filing={} collect={} custodians={} leaves={}",
+                geometry.accepted_daa,
+                preparation_until_daa,
+                preparation.preparation_daa,
+                open,
+                acquisition.envelope.inclusion_daa,
+                queue_wait,
+                generic_end,
+                stream,
+                filing,
+                collect,
+                rules.maximum_custodians,
+                source.leaf_count_v1()
+            );
+            if let Some(semantic) = &semantic {
+                for stage in &semantic.plan.stages {
+                    eprintln!(
+                        "[family-native-semantic-door] family={:?} open={} stream={} collect={} componentSpan={} componentMoves={} acquisitionSpan={:?}",
+                        stage.family,
+                        stage.terms.open_until_daa,
+                        stage.terms.stream_until_daa,
+                        stage.terms.collect_until_daa,
+                        stage.terms.plan.inclusion_daa,
+                        stage.terms.plan.maximum_moves,
+                        stage.acquisition.map(|a| a.inclusion_daa)
+                    );
+                }
+            }
         }
         return incomplete(PalwTirPublicAllocationMissingV1::DoorBeyondLiabilityHorizon {
             required: door,
             allowed: rules.clock.maximum_door_daa,
         });
     }
-    let material = add(collect, rules.config.reorg_retention_daa)?;
-    if rules.clock.version==crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_CLOCK_FAMILY_VERSION_V3 {
+    let mut material = add(collect, rules.config.reorg_retention_daa)?;
+    if rules.clock.version == crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_CLOCK_FAMILY_MATERIAL_V4 {
+        // The full extended claim window, even when the fast original stream
+        // finishes earlier. Native selection verifies this unchanged profile's
+        // retention term covers the actual disclosure window. Existing old3
+        // allocations retain collect+reorg byte for byte.
+        material = material
+            .max(add(add(geometry.accepted_daa, crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA)?, rules.config.reorg_retention_daa)?);
+    }
+    if crate::palw_tir_frame_cost_v1::is_family_clock_v3(rules.clock.version) {
         // New native family allocation only: the original final filing margin
         // can exceed the semantic bundle's own collection margin. Every family
         // retains its material until the SAME final original evidence horizon;
         // this is fixed before IDs/signatures, never a runtime extension.
-        if let Some(quote)=&mut semantic {
-            quote.plan.terms.material_until_daa=material;
-            quote.plan.terms.bond_exit_after_daa=material;
+        if let Some(quote) = &mut semantic {
+            quote.plan.terms.material_until_daa = material;
+            quote.plan.terms.bond_exit_after_daa = material;
             for stage in &mut quote.plan.stages {
-                stage.terms.material_until_daa=material;
-                stage.terms.bond_exit_after_daa=material;
+                stage.terms.material_until_daa = material;
+                stage.terms.bond_exit_after_daa = material;
             }
             quote.plan.check_v1()?;
         }
@@ -1013,11 +1079,14 @@ fn finish_allocation_source_v2(
         rules_id: if let Some(table) = table {
             let sem = semantics.ok_or("family table allocation lacks immutable semantics")?;
             let bytes = table.exact_bytes_for_context_v2(sem, source.vocab_v1())?;
-            let literal = borsh::to_vec(&(rules.commitment_v1()?, sem.token_table_root, sem.tokenizer_id, source.vocab_v1(), bytes)).map_err(|e| e.to_string())?;
+            let literal = borsh::to_vec(&(rules.commitment_v1()?, sem.token_table_root, sem.tokenizer_id, source.vocab_v1(), bytes))
+                .map_err(|e| e.to_string())?;
             hash(b"misaka-palw/tir-public/family-allocation-rules/v2", &literal)?
-        } else if rules.clock.version==crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_CLOCK_FAMILY_VERSION_V3 {
-            hash(b"misaka-palw/tir-public/family-allocation-rules/no-table/v3",&rules.commitment_v1()?)?
-        } else { rules.commitment_v1()? },
+        } else if crate::palw_tir_frame_cost_v1::is_family_clock_v3(rules.clock.version) {
+            hash(b"misaka-palw/tir-public/family-allocation-rules/no-table/v3", &rules.commitment_v1()?)?
+        } else {
+            rules.commitment_v1()?
+        },
         resource_plan_id: Hash64::default(),
         allocation_id: Hash64::default(),
         semantic: semantic.map(|quote| quote.plan),
@@ -1211,9 +1280,11 @@ pub fn check_tir_public_allocation_retained_v2(
     rules: PalwTirPublicAllocationRulesV1,
 ) -> Result<(), crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
     carried.check_v1().map_err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode)?;
-    match derive_tir_public_allocation_native_v2(geometry,original,header,record,layout,semantics,inventory,rules)? {
-        PalwTirPublicAllocationQuoteV1::Complete(expected) if expected.as_ref()==carried=>Ok(()),
-        other=>Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(format!("carried legacy TIR plan substitutes native derivation: {other:?}"))),
+    match derive_tir_public_allocation_native_v2(geometry, original, header, record, layout, semantics, inventory, rules)? {
+        PalwTirPublicAllocationQuoteV1::Complete(expected) if expected.as_ref() == carried => Ok(()),
+        other => Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(format!(
+            "carried legacy TIR plan substitutes native derivation: {other:?}"
+        ))),
     }
 }
 #[allow(clippy::too_many_arguments)]
@@ -1230,14 +1301,13 @@ pub fn check_tir_public_allocation_family_retained_v2(
     table: Option<&crate::palw_court_family_material_v1::CheckedFamilyTableInventoryV1>,
 ) -> Result<(), crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
     carried.check_v1().map_err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode)?;
-    let result: Result<(), String> =
-        match derive_tir_public_allocation_family_native_v2(geometry, original, header, record, layout, semantics, inventory, rules, table)? {
-            PalwTirPublicAllocationQuoteV1::Complete(expected) if expected.as_ref() == carried => Ok(()),
-            PalwTirPublicAllocationQuoteV1::Complete(_) => Err("carried TIR plan substitutes native derivation".into()),
-            PalwTirPublicAllocationQuoteV1::Incomplete { missing, .. } => {
-                Err(format!("native TIR allocation is incomplete: {missing:?}"))
-            }
-        };
+    let result: Result<(), String> = match derive_tir_public_allocation_family_native_v2(
+        geometry, original, header, record, layout, semantics, inventory, rules, table,
+    )? {
+        PalwTirPublicAllocationQuoteV1::Complete(expected) if expected.as_ref() == carried => Ok(()),
+        PalwTirPublicAllocationQuoteV1::Complete(_) => Err("carried TIR plan substitutes native derivation".into()),
+        PalwTirPublicAllocationQuoteV1::Incomplete { missing, .. } => Err(format!("native TIR allocation is incomplete: {missing:?}")),
+    };
     result.map_err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode)
 }
 
@@ -1245,6 +1315,122 @@ pub fn check_tir_public_allocation_family_retained_v2(
 mod tests {
     use super::*;
     include!("palw_tir_allocation_counting_lengths_tests_v2.rs");
+    #[test]
+    fn family_material_clock4_exact_floor_preserves_clock3_and_pricing() {
+        let kp = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([0x6d; 32]);
+        let network = Hash64::from_u64_word(0xF074);
+        let (fx, sem, eof, _, table) =
+            crate::palw_tir_public_claim_v1::palw_tir_public_family_source_frame_with_executor_network_fixture_v1(
+                kp.verification_key.as_ref(),
+                network,
+                false,
+            );
+        let bytes = crate::palw_fp_constraint_job_v1::palw_token_table_file_encode_v1(&table);
+        let checked =
+            crate::palw_court_family_material_v1::prepare_family_table_inventory_v1(&bytes, &sem, fx.record.logits_vocab).unwrap();
+        let original = fx.frame.original_v1();
+        let geometry = PalwStagedClaimGeometryV1 {
+            class_id: original.job.class_id,
+            producer: crate::palw_state_v2::PalwBondKeyV2(original.job.executor_bond),
+            execution_root: original.execution_root,
+            job_identity: crate::palw_fp_execution_v3::palw_fp_job_pin_v1(original),
+            accepted_daa: fx.frame.plan_v1().terms.accepted_daa,
+        };
+        let derive = |g: &PalwStagedClaimGeometryV1, o: &crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3, version| {
+            let mut rules = fx.rules;
+            rules.clock.version = version;
+            derive_tir_public_allocation_family_native_v2(
+                g,
+                o,
+                fx.frame.header_v1(),
+                &fx.record,
+                &fx.layout,
+                Some(&sem),
+                Some(&eof),
+                rules,
+                Some(&checked),
+            )
+        };
+        let PalwTirPublicAllocationQuoteV1::Complete(old) =
+            derive(&geometry, original, crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_CLOCK_FAMILY_VERSION_V3).unwrap()
+        else {
+            panic!("real original clock3 quote")
+        };
+        let PalwTirPublicAllocationQuoteV1::Complete(new) =
+            derive(&geometry, original, crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_CLOCK_FAMILY_MATERIAL_V4).unwrap()
+        else {
+            panic!("real original clock4 quote")
+        };
+        assert_eq!(&*old, fx.frame.plan_v1(), "released clock3 remains exact");
+        let floor = geometry
+            .accepted_daa
+            .checked_add(crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA)
+            .and_then(|h| h.checked_add(fx.rules.config.reorg_retention_daa))
+            .unwrap();
+        assert!(old.terms.material_until_daa < floor);
+        assert_eq!(new.terms.material_until_daa, old.terms.material_until_daa.max(floor));
+        assert_eq!(
+            (new.terms.open_until_daa, new.terms.stream_until_daa, new.terms.collect_until_daa),
+            (old.terms.open_until_daa, old.terms.stream_until_daa, old.terms.collect_until_daa)
+        );
+        assert_eq!(new.terms.plan, old.terms.plan, "same already signed pricing grammar/rates");
+        assert_eq!(new.acquisition.owner_tenure_family_v3().unwrap(), old.acquisition.owner_tenure_family_v3().unwrap());
+        assert_ne!(new.resource_plan_id, old.resource_plan_id);
+        assert_ne!(new.allocation_id, old.allocation_id);
+        let mut rules = fx.rules;
+        rules.clock.version = crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_CLOCK_FAMILY_MATERIAL_V4;
+        check_tir_public_allocation_family_retained_v2(
+            &new,
+            &geometry,
+            original,
+            fx.frame.header_v1(),
+            &fx.record,
+            &fx.layout,
+            Some(&sem),
+            Some(&eof),
+            rules,
+            Some(&checked),
+        )
+        .unwrap();
+        rules.clock.version = crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_CLOCK_FAMILY_VERSION_V3;
+        assert!(
+            check_tir_public_allocation_family_retained_v2(
+                &new,
+                &geometry,
+                original,
+                fx.frame.header_v1(),
+                &fx.record,
+                &fx.layout,
+                Some(&sem),
+                Some(&eof),
+                rules,
+                Some(&checked)
+            )
+            .is_err(),
+            "carried material never supplies its own native derivation authority"
+        );
+        let pledge =
+            crate::palw_tir_public_custody_v1::PalwTirPublicCustodyPledgeV1::for_plan_v1(original, &new, geometry.accepted_daa)
+                .unwrap();
+        assert_eq!(
+            pledge.material_until_daa - pledge.accept_until_daa,
+            new.terms.material_until_daa - geometry.accepted_daa,
+            "material floor is not counted again as a reorg policy term"
+        );
+        let mut near = geometry;
+        near.accepted_daa = u64::MAX - 15_000;
+        let mut unsigned = original.clone();
+        unsigned.trace_retention_daa = u64::MAX - 1;
+        assert!(matches!(
+            derive(&near, &unsigned, crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_CLOCK_FAMILY_VERSION_V3),
+            Ok(PalwTirPublicAllocationQuoteV1::Complete(_))
+        ));
+        assert!(
+            derive(&near, &unsigned, crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_CLOCK_FAMILY_MATERIAL_V4).is_err(),
+            "checked material floor has no saturated/default MAX authority"
+        );
+    }
+
     struct Fixture {
         geometry: PalwStagedClaimGeometryV1,
         original: crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,

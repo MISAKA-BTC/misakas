@@ -288,9 +288,9 @@ fn fabricated_verifier_fee_events_without_a_rooted_draw_cannot_settle() {
     // The verifier holds two drawn slots of the claim: the kernel pays both in one batch, two distinct obligations.
     let mut batch = check_fee_quad(poster, verifier, 5, claim);
     batch.extend(check_fee_quad(poster, verifier, 5, claim));
-    let before=b.state.clone();
+    let before = b.state.clone();
     assert!(super::super::palw_kernel_route_fold_v1::apply_settlements(&mut b, &batch, false, 100).is_err());
-    assert_eq!(b.state,before,"fabricated check-fee events without a rooted claim/draw cannot spend or close an obligation");
+    assert_eq!(b.state, before, "fabricated check-fee events without a rooted claim/draw cannot spend or close an obligation");
 }
 
 #[test]

@@ -166,7 +166,7 @@ mod tests {
     }
     /// Synthetic transport fields only: signatures are deliberately not valid
     /// consent, and UTXO entries in these tests are not native acceptance proof.
-    fn envelope() -> PalwTirFundedOriginalEnvelopeV1 {
+    pub(super) fn envelope() -> PalwTirFundedOriginalEnvelopeV1 {
         let frame = crate::palw_tir_public_claim_v1::palw_tir_public_claim_fixture_v1();
         let fp = crate::palw_freeprompt_v3::PalwFpCommitmentTxPayloadV3 {
             version: crate::palw_freeprompt_v3::PALW_FP_V3_VERSION,
@@ -400,5 +400,162 @@ mod tests {
             facts.outpoint(),
             "final carrier id is native, not self-referenced in signed terms"
         );
+    }
+}
+
+/// Existing unframed Borsh body (Source16 tag14), not the TFO1 transport magic.
+/// Scan the actual inner TFP/FP validation workspace too: the bounded custom
+/// Borsh decoder checks those literals before returning this retained value.
+impl crate::palw_native_resource_v1::NativeWireScanV1 for PalwTirFundedOriginalEnvelopeV1 {
+    fn scan_native_wire_v1<R: Read>(
+        r: &mut crate::palw_native_resource_v1::NativeWireReaderV1<R>,
+    ) -> io::Result<crate::palw_native_resource_v1::NativeWireShapeV1> {
+        use crate::palw_native_resource_v1::{NativeWireReaderV1, NativeWireShapeV1};
+        r.step()?;
+        let start = r.remaining();
+        if r.short()? != 1 {
+            return Err(invalid("unframed TFO1 version"));
+        }
+        let n = r.word()? as u64;
+        if n == 0 || n > PALW_TIR_PUBLIC_FP_ENVELOPE_MAX_BYTES_V1 as u64 {
+            return Err(invalid("TFO1 original length bound"));
+        }
+        let mut shape = NativeWireShapeV1 { outer_entries: n, byte_entries: n, ..Default::default() }.allocation(n * 2, 1)?;
+        // A nested limited reader cannot consume FundingConsent or payer bytes.
+        let mut tfp = NativeWireReaderV1::new((&mut *r).take(n), n);
+        let mut magic = [0; 4];
+        tfp.read_exact(&mut magic)?;
+        if &magic != crate::palw_tir_public_fp_envelope_v1::PALW_TIR_PUBLIC_FP_ENVELOPE_MAGIC_V1 || tfp.short()? != 1 {
+            return Err(invalid("inner TFP1 framing/version"));
+        }
+        if u64::deserialize_reader(&mut tfp)? == 0 {
+            return Err(invalid("inner TFP1 rent"));
+        }
+        let payload = tfp.word()? as u64;
+        if payload == 0 || payload > crate::palw_freeprompt_v3::PALW_FP_COMMITMENT_TX_MAX_BYTES as u64 {
+            return Err(invalid("inner FP payload bound"));
+        }
+        let mut fp = NativeWireReaderV1::new((&mut tfp).take(payload), payload);
+        if fp.short()? != crate::palw_freeprompt_v3::PALW_FP_V3_VERSION {
+            return Err(invalid("inner original FP version"));
+        }
+        let mut scratch = crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3::scan_native_wire_v1(&mut fp)?;
+        let tokens = fp.word()? as u64;
+        if tokens > crate::palw_freeprompt_v3::PALW_FP_COMMITMENT_TX_MAX_BYTES as u64 / 4 || tokens > fp.remaining() / 4 {
+            return Err(invalid("inner prompt count"));
+        }
+        fp.skip(tokens * 4)?;
+        scratch = scratch.merge(
+            NativeWireShapeV1 { collection_entries: tokens, ..Default::default() }
+                .allocation(tokens * 2, std::mem::size_of::<u32>())?,
+        )?;
+        let sig = fp.word()? as u64;
+        if sig != MLDSA87_SIGNATURE_LEN as u64 {
+            return Err(invalid("inner FP signature width"));
+        }
+        fp.skip(sig)?;
+        scratch = scratch.merge(NativeWireShapeV1 { byte_entries: sig, ..Default::default() }.allocation(sig * 2, 1)?)?;
+        if fp.remaining() != 0 {
+            return Err(invalid("inner FP trailing bytes"));
+        }
+        // The TFP owns original_payload while decode_original checks a
+        // canonical reserialization Vec. Charge these two actual byte buffers.
+        scratch = scratch.allocation(payload * 2, 1)?;
+        let header_start = tfp.remaining();
+        let header = crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1::scan_native_wire_v1(&mut tfp)?;
+        if header_start - tfp.remaining() > crate::palw_tir_public_fp_envelope_v1::PALW_TIR_PUBLIC_FP_HEADER_MAX_BYTES_V1 as u64 {
+            return Err(invalid("inner header bound"));
+        }
+        // check_shape clones header; expected job context also owns network ID.
+        // Their two-pass native shape is an upper for those real temporaries.
+        scratch = scratch.merge(header)?.merge(header)?;
+        let pledge_start = tfp.remaining();
+        scratch = scratch.merge(crate::palw_tir_public_custody_v1::PalwTirPublicCustodyPledgeV1::scan_native_wire_v1(&mut tfp)?)?;
+        if pledge_start - tfp.remaining() > crate::palw_tir_public_fp_envelope_v1::PALW_TIR_PUBLIC_FP_PLEDGE_MAX_BYTES_V1 as u64 {
+            return Err(invalid("inner pledge bound"));
+        }
+        match tfp.byte()? {
+            0 => {}
+            1 => {
+                let before = tfp.remaining();
+                scratch = scratch.merge(crate::palw_history_custody_v1::PalwHistoryCustodyPledgeV1::scan_native_wire_v1(&mut tfp)?)?;
+                if before - tfp.remaining() > crate::palw_tir_public_fp_envelope_v1::PALW_TIR_PUBLIC_FP_PLEDGE_MAX_BYTES_V1 as u64 {
+                    return Err(invalid("inner history pledge bound"));
+                }
+            }
+            _ => return Err(invalid("inner history Option tag")),
+        }
+        if tfp.remaining() != 0 {
+            return Err(invalid("inner TFP1 trailing bytes"));
+        }
+        shape = shape.merge(scratch)?;
+        shape = shape.merge(FundingConsentV1::scan_native_wire_v1(r)?)?;
+        let key = r.word()? as u64;
+        if key != MLDSA87_PUBKEY_LEN as u64 {
+            return Err(invalid("TFO1 payer key width"));
+        }
+        r.skip(key)?;
+        shape = shape.merge(NativeWireShapeV1 { byte_entries: key, ..Default::default() }.allocation(key * 2, 1)?)?;
+        if start - r.remaining() + 4 > PALW_TIR_FUNDED_ORIGINAL_MAX_BYTES_V1 as u64 {
+            return Err(invalid("TFO1 existing total bound"));
+        }
+        Ok(shape)
+    }
+}
+
+#[cfg(test)]
+mod native_scan_tests {
+    use super::*;
+    use crate::palw_native_resource_v1::{NativeHeapV1, preflight_native_value_v1, retain_native_value_decode_classified_v1};
+    #[test]
+    fn funded_original_unframed_native_scanner_bounds_and_retained_codec() {
+        let e = super::tests::envelope();
+        // Source16 tag14 stores this Borsh body under its Vec wrapper; no TFO1
+        // transport magic is present inside the canonical envelope body.
+        let raw = borsh::to_vec(&e).unwrap();
+        let shape = preflight_native_value_v1::<PalwTirFundedOriginalEnvelopeV1>(raw.as_slice(), raw.len() as u64).unwrap();
+        assert!(
+            shape.logical_requests_v1()
+                >= e.native_heap_v1("actual envelope scan").bytes().unwrap()
+                    + std::mem::size_of::<PalwTirFundedOriginalEnvelopeV1>() as u64
+        );
+        let retained =
+            retain_native_value_decode_classified_v1(&raw, || borsh::from_slice::<PalwTirFundedOriginalEnvelopeV1>(&raw)).unwrap();
+        assert_eq!(*retained, e);
+        let terms = borsh::to_vec(&e.funding.terms).unwrap();
+        preflight_native_value_v1::<crate::palw_court_original_escrow_v1::FundingTermsV1>(terms.as_slice(), terms.len() as u64)
+            .unwrap();
+        let consent = borsh::to_vec(&e.funding).unwrap();
+        preflight_native_value_v1::<FundingConsentV1>(consent.as_slice(), consent.len() as u64).unwrap();
+        let refuses =
+            |bytes: &[u8]| assert!(preflight_native_value_v1::<PalwTirFundedOriginalEnvelopeV1>(bytes, bytes.len() as u64).is_err());
+        refuses(&e.encode_v1().unwrap());
+        for cut in [0, 1, 2, 5, raw.len() - 1] {
+            refuses(&raw[..cut]);
+        }
+        let mut wrong = raw.clone();
+        wrong[0] = 2;
+        refuses(&wrong);
+        let mut hostile = raw.clone();
+        hostile[2..6].copy_from_slice(&u32::MAX.to_le_bytes());
+        refuses(&hostile);
+        let funding = 6 + e.original_envelope.len();
+        let mut wrong = raw.clone();
+        wrong[funding] = 2;
+        refuses(&wrong);
+        let signature = funding + terms.len();
+        let mut wrong = raw.clone();
+        wrong[signature..signature + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+        refuses(&wrong);
+        let key = signature + 4 + MLDSA87_SIGNATURE_LEN;
+        let mut wrong = raw.clone();
+        wrong[key..key + 4].copy_from_slice(&((MLDSA87_PUBKEY_LEN - 1) as u32).to_le_bytes());
+        refuses(&wrong);
+        let mut wrong = raw.clone();
+        wrong[6] = b'X';
+        refuses(&wrong);
+        let mut trailing = raw;
+        trailing.push(0);
+        refuses(&trailing);
     }
 }

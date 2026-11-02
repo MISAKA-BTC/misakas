@@ -2461,10 +2461,22 @@ const fn a2_row(slot: PalwA2SlotV1, fence: &'static str, owner: &'static str, la
 /// written). The Lead allocates; A2U keeps the table; a lane fills its row's code at merge, and the reconciliation tests hold it to the
 /// row.
 pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
-    a2_row(PalwA2SlotV1::KernelNested { what: "MonetaryMaterialActionV1 EnrollFeeV2(9)/ReplaceFeeV2(10): dual signed finite fee only, V1 service unchanged" },
-        "palw_settlement_once_v1", "RFC0039 adopted provider fee horizon", true),
-    a2_row(PalwA2SlotV1::StateEncoding { what: "kernel route aux191 key132 exact enrollment/provider fee consent and refund physical receipt" },
-        "palw_settlement_once_v1", "RFC0039 finite provider fee state", true),
+    a2_row(
+        PalwA2SlotV1::KernelNested {
+            what: "MonetaryMaterialActionV1 EnrollFeeV2(9)/ReplaceFeeV2(10): dual signed finite fee only, V1 service unchanged",
+        },
+        "palw_settlement_once_v1",
+        "RFC0039 adopted provider fee horizon",
+        true,
+    ),
+    a2_row(
+        PalwA2SlotV1::StateEncoding {
+            what: "kernel route aux191 key132 exact enrollment/provider fee consent and refund physical receipt",
+        },
+        "palw_settlement_once_v1",
+        "RFC0039 finite provider fee state",
+        true,
+    ),
     a2_row(
         PalwA2SlotV1::KernelNested {
             what: "PalwMonetaryMaterialActionV1::RecoveryV2 (7), Enroll/Replace/Acknowledge/RetireProviderStream; ChallengeCurrentV4 (8)",

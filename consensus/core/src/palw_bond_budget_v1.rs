@@ -828,10 +828,10 @@ impl Params {
 
     pub fn validate_palw_reporter_income_v2(&self) -> Result<(), PalwModeV2Error> {
         let from = self.palw_reporter_income_v2.filter(|at| *at != ForkActivation::never()).map(|at| at.daa_score());
-        if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode {
-            if bundle.state.reporter_income_from() != from {
-                return Err(PalwModeV2Error::Invalid("reporter income fence disagrees with its state mirror"));
-            }
+        if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode
+            && bundle.state.reporter_income_from() != from
+        {
+            return Err(PalwModeV2Error::Invalid("reporter income fence disagrees with its state mirror"));
         }
         let Some(at) = self.palw_reporter_income_v2.filter(|at| *at != ForkActivation::never()) else { return Ok(()) };
         if !self
@@ -851,10 +851,10 @@ impl Params {
 
     pub fn validate_palw_material_income_v3(&self) -> Result<(), PalwModeV2Error> {
         let from = self.palw_material_income_v3.filter(|at| *at != ForkActivation::never()).map(|at| at.daa_score());
-        if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode {
-            if bundle.state.material_income_from() != from {
-                return Err(PalwModeV2Error::Invalid("material income fence disagrees with its state mirror"));
-            }
+        if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode
+            && bundle.state.material_income_from() != from
+        {
+            return Err(PalwModeV2Error::Invalid("material income fence disagrees with its state mirror"));
         }
         let Some(at) = self.palw_material_income_v3.filter(|at| *at != ForkActivation::never()) else { return Ok(()) };
         if !self
@@ -3799,12 +3799,16 @@ mod tests {
         assert_eq!((state.root_parts(), journal.len()), before, "repeatforget cannot reopen or duplicate liability");
         // The deployed H_L may extend beyond W. Exercise both boundaries in
         // actual clock order; release_due is not a rewind operation.
-        let mut boundaries=[window-1,window,liability_until-1,liability_until];
+        let mut boundaries = [window - 1, window, liability_until - 1, liability_until];
         boundaries.sort_unstable();
-        for now in boundaries{
-            state.release_due(now,&mut journal);
-            assert_eq!(state.claim_row(&h(72)).is_some(),now<window,"financial W boundary is unchanged at {now}");
-            assert_eq!(state.kept_liability_v1(&bond(0)),if now<liability_until{liability}else{0},"independent H_L boundary is unchanged at {now}");
+        for now in boundaries {
+            state.release_due(now, &mut journal);
+            assert_eq!(state.claim_row(&h(72)).is_some(), now < window, "financial W boundary is unchanged at {now}");
+            assert_eq!(
+                state.kept_liability_v1(&bond(0)),
+                if now < liability_until { liability } else { 0 },
+                "independent H_L boundary is unchanged at {now}"
+            );
         }
         assert!(state.claim_row(&h(72)).is_none(), "the exact collected native mainrow is reclaimed when its ownwindow ends");
         state.check_consistency().unwrap();

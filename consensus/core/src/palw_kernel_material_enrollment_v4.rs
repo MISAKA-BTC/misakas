@@ -41,7 +41,7 @@ pub fn kernel_material_enrollment_v4(
     request: &PalwProspectiveKernelMaterialRequestV4,
     verified: PalwProspectiveKernelMaterialOwnedV4,
 ) -> Result<PalwKernelMaterialIngressOwnedV4, String> {
-    kernel_material_enrollment_checked_v4(state, params, now, raw_depth, request, verified).map_err(|error|error.to_string())
+    kernel_material_enrollment_checked_v4(state, params, now, raw_depth, request, verified).map_err(|error| error.to_string())
 }
 /// Classified preparation; local capacity/context never becomes collateral shortage.
 pub fn kernel_material_enrollment_checked_v4(

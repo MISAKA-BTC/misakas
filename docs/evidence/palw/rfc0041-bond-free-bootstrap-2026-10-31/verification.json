@@ -1,0 +1,270 @@
+{
+  "candidate": "C7",
+  "rfc": "0041",
+  "status": "PASS — scoped implementation and private node integration",
+  "not_a_blanket_pass_for_later_edits": true,
+  "head": "cfaa62b6dbc7087aef190c9db910e06ca5cfc9e9",
+  "worktree": "/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/agent-aa4dfb62c6c3c943d",
+  "user_continuation_rule": "Other sessions continue editing; retain results separately for each tested candidate.",
+  "source_manifest": "candidate-c7-source.json",
+  "source_manifest_sha256": "f0e36d8a89536942e0a26aec26bda3eb75dc47ed121f70632bcffe79c21f9f74",
+  "source_files": 7110,
+  "build": {
+    "success": true,
+    "log": "candidate-c7-build.jsonl",
+    "log_sha256": "170938385a78d3be5e06db472c663dafe0e601f74161a9606b33f91036a8c420",
+    "rustc": "rustc 1.93.0 (254b59607 2026-01-19)",
+    "artifacts": [
+      {
+        "crate": "kaspad_lib",
+        "features": [
+          "default",
+          "evm"
+        ],
+        "profile": {
+          "opt_level": "0",
+          "debuginfo": 0,
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": true
+        },
+        "executable_at_build": "/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/agent-aa4dfb62c6c3c943d/target-rc/debug/deps/kaspad_lib-42a71b1e45d90f5f"
+      },
+      {
+        "crate": "kaspa_consensus",
+        "features": [
+          "default",
+          "evm",
+          "pq-only"
+        ],
+        "profile": {
+          "opt_level": "0",
+          "debuginfo": 0,
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": true
+        },
+        "executable_at_build": "/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/agent-aa4dfb62c6c3c943d/target-rc/debug/deps/kaspa_consensus-a74cf3a5a906300e"
+      },
+      {
+        "crate": "kaspa_consensus_core",
+        "features": [
+          "default",
+          "evm",
+          "pq-only"
+        ],
+        "profile": {
+          "opt_level": "0",
+          "debuginfo": 0,
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": true
+        },
+        "executable_at_build": "/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/agent-aa4dfb62c6c3c943d/target-rc/debug/deps/kaspa_consensus_core-57adb114c08684a8"
+      },
+      {
+        "crate": "kaspa_mining",
+        "features": [
+          "evm"
+        ],
+        "profile": {
+          "opt_level": "0",
+          "debuginfo": 0,
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": true
+        },
+        "executable_at_build": "/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/agent-aa4dfb62c6c3c943d/target-rc/debug/deps/kaspa_mining-85767ad198622aad"
+      },
+      {
+        "crate": "misaka_palw_sdk",
+        "features": [],
+        "profile": {
+          "opt_level": "0",
+          "debuginfo": 0,
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": true
+        },
+        "executable_at_build": "/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/agent-aa4dfb62c6c3c943d/target-rc/debug/deps/misaka_palw_sdk-b3bcc36326bd42ad"
+      },
+      {
+        "crate": "kaspa_p2p_flows",
+        "features": [
+          "evm"
+        ],
+        "profile": {
+          "opt_level": "0",
+          "debuginfo": 0,
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": true
+        },
+        "executable_at_build": "/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/agent-aa4dfb62c6c3c943d/target-rc/debug/deps/kaspa_p2p_flows-e401c48a36c59035"
+      },
+      {
+        "crate": "kaspa_p2p_lib",
+        "features": [],
+        "profile": {
+          "opt_level": "0",
+          "debuginfo": 0,
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": true
+        },
+        "executable_at_build": "/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/agent-aa4dfb62c6c3c943d/target-rc/debug/deps/kaspa_p2p_lib-4bf99658de3d5841"
+      }
+    ],
+    "command": "CARGO_TARGET_DIR=target-rc CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 cargo --config profile.dev.package.kaspa-consensus-core.opt-level=0 --config profile.dev.package.kaspa-consensus.opt-level=0 test --locked -p kaspa-consensus-core -p kaspa-consensus -p kaspad -p kaspa-p2p-flows -p kaspa-p2p-lib -p misaka-palw-sdk -p kaspa-mining --features kaspa-consensus/evm --lib --no-run --message-format=json"
+  },
+  "executed": [
+    {
+      "crate": "kaspa_consensus_core",
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0,
+      "tests": [
+        "config::params::rc_genesis_bonds::bond_free_recovery_clock_tests::rfc0041_recovery_wait_uses_genesis_timestamp_and_fails_closed_on_overflow",
+        "palw_admission_v2::tests::rfc0041_recovery_keeps_artifact_pwu_and_lottery_checks",
+        "palw_state_v2::tests::rfc0041_empty_genesis_recovers_until_an_ordinary_bond_may_take_work"
+      ],
+      "command": [
+        "/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/agent-aa4dfb62c6c3c943d/target-rc/debug/deps/kaspa_consensus_core-57adb114c08684a8",
+        "rfc0041",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "binary_sha256": "88b41bef977f8e9daeddc6d1c6b2ae0cdb2dce9717e968cd4c3c237a0e3749ce",
+      "log": "candidate-c7-core.log",
+      "log_sha256": "19221e6cf47e7b4dbb4571db72aefe93203d1b221cb6e01151343923050d10fb",
+      "elapsed_seconds": 0.025
+    },
+    {
+      "crate": "kaspa_consensus",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "tests": [
+        "pipeline::virtual_processor::tests::t12_round_lane_e2e::bond_free_bootstrap::rfc0041_production_recovery_pays_then_public_bonds_start_palw"
+      ],
+      "command": [
+        "/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/agent-aa4dfb62c6c3c943d/target-rc/debug/deps/kaspa_consensus-a74cf3a5a906300e",
+        "pipeline::virtual_processor::tests::t12_round_lane_e2e::bond_free_bootstrap::rfc0041_production_recovery_pays_then_public_bonds_start_palw",
+        "--exact",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "binary_sha256": "c3f2a210eed40f4e61026be19dbfd87d4931db6ceff13bb820648a2ff8c80be7",
+      "log": "candidate-c7-node.log",
+      "log_sha256": "81ba20b72bc5f7f4233716b2fb3bf1d6d69a794010419b09c52281cd947a21fe",
+      "elapsed_seconds": 1315.115
+    }
+  ],
+  "runner_classification_note": "Raw direct-run records conservatively say diagnostic. This record binds the successful C7 build, exact nonzero listings and executed binary/log hashes; it does not promote earlier/later candidates.",
+  "cache_path_note": "Executable paths identify their location at execution; subsequent Cargo builds may overwrite those cache paths. The execution identity is the recorded binary SHA256.",
+  "funding": {
+    "base": "A real recovery subsidy is paid by the next block coinbase; it registers no role or certified claim.",
+    "registration": "Owned MAIN_PREMINE_INDEX genesis UTXO -> signed competing ordinary spend on the winning branch -> real change -> eight signed funded registrations and successive real changes. Not one BASE reward funding eight bonds.",
+    "collateral_sompi_per_bond": 93906321001040
+  },
+  "coverage": [
+    "Empty genesis registry; exact genesis timestamp + 1800000ms boundary; overflow fails closed.",
+    "Early recovery, forged signature and losing class lottery refused with unchanged sink and virtual UTXOs; artifact/PWU/lottery core checks.",
+    "Actual recovery coinbase subsidy; no automatic bond/seat/certified credit.",
+    "Real heavier-branch reorg with competing signed spend; orphan bond/collateral absent; winning change is usable.",
+    "Eight normal spend signatures, bond registration signatures and operator possession signatures; unchanged 1000 DAA ordinary maturity.",
+    "Unchanged approved Gate C 75/41 policy; 5040 DAA verifier maturity; actual PALW and selected Panel; forged receipt quorum refused.",
+    "Signed valid Panel quorum on funded carrier; Final alone not certified; later anchor/global pool draw excludes producer; all 75 positions approve via the drawn ordinary bonds.",
+    "Unshortened 5040 DAA prosecution window; SecurityCertified; Consensus stopped and reopened on same DB; exact state root and UTXO equality; normal heartbeat continues."
+  ],
+  "limits": [
+    "Private TestConsensus production pipeline, simulated header clock, network PoW skipped as inherited harness; class lottery and signatures enforced.",
+    "EVM compiled in unified build but inert in this harness; RFC0012 EVM settlement is a separate lane.",
+    "Trace/output/transcript fixtures; not an actual LLM inference/re-execution campaign. Selected-verifier approval relies on explicit honest-stake/participation assumptions; signatures authenticate approvals.",
+    "No public deployment, live genesis replacement, model review, model coefficient change, or deferred image/video/improvement activation.",
+    "C7 source inventory is a candidate build-time record; later shared edits are distinct candidates, as explicitly requested by the user."
+  ],
+  "other_build_history": [
+    {
+      "build": 1,
+      "success": null,
+      "errors": [
+        "function `decode_claim_local_value_v1` is private"
+      ],
+      "sha256": "f3cac6691300cbdd01f48839ee8d56bbd9433c0579c839fe668550826351fd97",
+      "raw_log": "/Users/wata/Downloads/MISAKA-full-implementation-20261031/handoff/results/session-c-final/build1.jsonl"
+    },
+    {
+      "build": 2,
+      "success": false,
+      "errors": [
+        "the trait bound `&Vec<u8>: std::io::Read` is not satisfied"
+      ],
+      "sha256": "263de11a49f40ad306338f3524671ab34f1f46d4e75d0e99d136dfb6daeacf54",
+      "raw_log": "/Users/wata/Downloads/MISAKA-full-implementation-20261031/handoff/results/session-c-final/build2.jsonl"
+    },
+    {
+      "build": 3,
+      "success": false,
+      "errors": [
+        "the trait bound `&Vec<u8>: std::io::Read` is not satisfied",
+        "the trait bound `std::string::String: From<std::io::Error>` is not satisfied"
+      ],
+      "sha256": "9a0e833629c495b2286e192d590c85f89daeccc1180ef331d92581b5d49213ff",
+      "raw_log": "/Users/wata/Downloads/MISAKA-full-implementation-20261031/handoff/results/session-c-final/build3.jsonl"
+    },
+    {
+      "build": 4,
+      "success": false,
+      "errors": [
+        "mismatched types"
+      ],
+      "sha256": "922c4b65d0eb71158eae21ff1aab0e01020e59786a86e5e957b86a09aa35d200",
+      "raw_log": "/Users/wata/Downloads/MISAKA-full-implementation-20261031/handoff/results/session-c-final/build4.jsonl"
+    },
+    {
+      "build": 5,
+      "success": false,
+      "errors": [
+        "the trait bound `PalwTirPublicSourceV1: NativeHeapV1` is not satisfied"
+      ],
+      "sha256": "dcdb34cd1bff152a53d4483bfbf5060b75ad83909e780dd20c58440718c74788",
+      "raw_log": "/Users/wata/Downloads/MISAKA-full-implementation-20261031/handoff/results/session-c-final/build5.jsonl"
+    },
+    {
+      "build": 6,
+      "success": true,
+      "errors": [],
+      "sha256": "fe9876d202ab92c70a24400c55306bcfa9c80e68d8e40b97aaf50e5bebb3ca92",
+      "raw_log": "/Users/wata/Downloads/MISAKA-full-implementation-20261031/handoff/results/session-c-final/build6.jsonl"
+    },
+    {
+      "build": 7,
+      "success": true,
+      "errors": [],
+      "sha256": "170938385a78d3be5e06db472c663dafe0e601f74161a9606b33f91036a8c420",
+      "raw_log": "/Users/wata/Downloads/MISAKA-full-implementation-20261031/handoff/results/session-c-final/build7.jsonl"
+    },
+    {
+      "build": 8,
+      "success": true,
+      "errors": [],
+      "sha256": "7249ff99b42f53fae35ba06f048974672e89a118751b5f73e53acdbbbff7aa49",
+      "raw_log": "/Users/wata/Downloads/MISAKA-full-implementation-20261031/handoff/results/session-c-final/build8.jsonl"
+    },
+    {
+      "build": 9,
+      "success": false,
+      "errors": [
+        "no method named `close_conviction_with_subject_audit_v1` found for mutable reference `&mut palw_state_v2::TransitionBuilder<'_>` in the current scope"
+      ],
+      "sha256": "c4806083554be7da74a8b811ca2a01fbceadde50d210457919d61bba20b91b1e",
+      "raw_log": "/Users/wata/Downloads/MISAKA-full-implementation-20261031/handoff/results/session-c-final/build9.jsonl"
+    }
+  ],
+  "latest_observed_later_candidate": {
+    "candidate": "build9",
+    "status": "FAILED — outside RFC0041, pending owner integration",
+    "reason": "Prefix court calls close_conviction_with_subject_audit_v1 while the shared TransitionBuilder hunk was not yet present."
+  }
+}

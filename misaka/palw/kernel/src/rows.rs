@@ -642,10 +642,12 @@ pub fn root_of_rows(
         }
         finish(s)
     };
-    let table_roots = (0u8..32).map(|table| {
-        let count = by_table.get(&table).map_or(0, |rows| rows.len() as u64);
-        (table, (count, coll(table)))
-    }).collect();
+    let table_roots = (0u8..32)
+        .map(|table| {
+            let count = by_table.get(&table).map_or(0, |rows| rows.len() as u64);
+            (table, (count, coll(table)))
+        })
+        .collect();
     root_from_table_digests_v1(policy, config_root, scalars, opv, &table_roots)
 }
 
@@ -659,11 +661,16 @@ pub fn root_from_table_digests_v1(
     opv: Option<&OpvPolicyV1>,
     table_roots: &BTreeMap<u8, (u64, Digest)>,
 ) -> Digest {
-    let coll = |table: u8| table_roots.get(&table).map_or_else(|| {
-        let mut state = keyed(&collection_domain(table));
-        state.update(&0u64.to_le_bytes());
-        finish(state)
-    }, |(_, root)| *root);
+    let coll = |table: u8| {
+        table_roots.get(&table).map_or_else(
+            || {
+                let mut state = keyed(&collection_domain(table));
+                state.update(&0u64.to_le_bytes());
+                finish(state)
+            },
+            |(_, root)| *root,
+        )
+    };
     let present = |table: u8| table_roots.get(&table).is_some_and(|(count, _)| *count > 0);
     let header =
         LedgerHeaderV1 { version: LEDGER_STATE_VERSION_V1, policy: *policy, config_root, daa: scalars.daa, burned: scalars.burned };
@@ -688,8 +695,11 @@ pub fn root_from_table_digests_v1(
     let _ = LEDGER_ROOT_DOMAIN_V1;
     let v1 = parts.root();
     // RFC-0004 Part II: the typed tables, each only when non-empty (an untyped ledger's root is unchanged).
-    let typed: Vec<(u8, Digest)> =
-        crate::rows::TYPED_TABLES_V1.iter().filter(|t| table_roots.get(*t).is_some_and(|(count, _)| *count > 0)).map(|t| (*t, coll(*t))).collect();
+    let typed: Vec<(u8, Digest)> = crate::rows::TYPED_TABLES_V1
+        .iter()
+        .filter(|t| table_roots.get(*t).is_some_and(|(count, _)| *count > 0))
+        .map(|t| (*t, coll(*t)))
+        .collect();
     // RFC-0015: with no OPV policy the root is the historical one, byte for byte; with one it is the OPV root form.
     let base = match opv {
         None => v1,
@@ -709,10 +719,7 @@ pub fn root_from_table_digests_v1(
     let base = if seg { seg_root_extension_v1(&base, &coll(TABLE_TILED_JOBS_V1), &coll(TABLE_SEG_PROGRESS_V1)) } else { base };
     let base = crate::spec::typed_root_v1(base, &typed);
     // OPV-BOOT GAP-B1a / C4R4 F-C4R4-08: tables 25, 26 and 18 extend the root only once any of them holds a row.
-    let base = if [TABLE_CLAIM_BEACON_SALTS_V1, TABLE_FORFEITED_CLAIM_SEALS_V1, TABLE_JOB_POSTERS_V1]
-        .iter()
-        .any(|t| present(*t))
-    {
+    let base = if [TABLE_CLAIM_BEACON_SALTS_V1, TABLE_FORFEITED_CLAIM_SEALS_V1, TABLE_JOB_POSTERS_V1].iter().any(|t| present(*t)) {
         beacon_seal_root_extension_v1(
             &base,
             &coll(TABLE_CLAIM_BEACON_SALTS_V1),
@@ -723,17 +730,9 @@ pub fn root_from_table_digests_v1(
         base
     };
     // `palw_verifier_pay_v1`: table 27 extends the root only once it holds a row.
-    let base = if present(TABLE_VERIFIER_PAY_V1) {
-        verifier_pay_root_extension_v1(&base, &coll(TABLE_VERIFIER_PAY_V1))
-    } else {
-        base
-    };
+    let base = if present(TABLE_VERIFIER_PAY_V1) { verifier_pay_root_extension_v1(&base, &coll(TABLE_VERIFIER_PAY_V1)) } else { base };
     // The court scope (`palw_provider_court_v1`, G14-S): table 28 extends the root only once it holds a row.
-    let base = if present(TABLE_COURT_SCOPE_V1) {
-        court_scope_root_extension_v1(&base, &coll(TABLE_COURT_SCOPE_V1))
-    } else {
-        base
-    };
+    let base = if present(TABLE_COURT_SCOPE_V1) { court_scope_root_extension_v1(&base, &coll(TABLE_COURT_SCOPE_V1)) } else { base };
     // Fixed order, each only once its table holds a row (an unarmed network roots as before): 27, 28, 29 (RFC-02's conformance
     // classes), 30 beacon sources, 31 EXEC reward holds, then codex's flat-v7 (table 0) and flat-v9 (table 19) registries.
     let base = if present(TABLE_CONFORMANCE_CLASSES_V1) {
@@ -741,11 +740,8 @@ pub fn root_from_table_digests_v1(
     } else {
         base
     };
-    let base = if present(TABLE_BEACON_SOURCES_V1) {
-        beacon_source_root_extension_v1(&base, &coll(TABLE_BEACON_SOURCES_V1))
-    } else {
-        base
-    };
+    let base =
+        if present(TABLE_BEACON_SOURCES_V1) { beacon_source_root_extension_v1(&base, &coll(TABLE_BEACON_SOURCES_V1)) } else { base };
     let base = if present(TABLE_EXEC_REWARD_HOLDS_V1) {
         exec_reward_root_extension_v1(&base, &coll(TABLE_EXEC_REWARD_HOLDS_V1))
     } else {

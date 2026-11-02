@@ -566,11 +566,7 @@ pub(crate) fn palw_producer_ready_v1(
 ///
 /// The chain pays the existing coinbase only when the live registry is empty as well
 /// (`palw_base_coinbase_recovery_due_v1`). This function does not register the placeholder.
-pub(crate) fn palw_base_coinbase_recovery_draws_v1(
-    bond_label: &str,
-    facts: &PalwProducerFactsV2,
-    hold: &PalwProducerHoldV1,
-) -> bool {
+pub(crate) fn palw_base_coinbase_recovery_draws_v1(bond_label: &str, facts: &PalwProducerFactsV2, hold: &PalwProducerHoldV1) -> bool {
     use kaspa_consensus_core::palw_producer_v2::PALW_NOT_READY_BOND_UNKNOWN_V2;
     use kaspa_consensus_core::palw_real_share_v1::palw_is_floor_not_idle_refusal_v1;
     if bond_label != kaspa_consensus_core::config::params::palw_base_coinbase_recovery_bond_label_v1() || !facts.is_base_class {
@@ -1325,26 +1321,26 @@ impl PalwProducerService {
                 // RFC-0041: a bond-free genesis mines the base class anyway. The chain pays the
                 // existing idle-floor coinbase and does not register the placeholder outpoint.
                 if !palw_base_coinbase_recovery_draws_v1(&self.config.bond, &facts, &hold) {
-                // **The reason alone is not a diagnosis.** "this class's epoch budget is already
-                // spent" is what a class that exhausted its cap says AND what a class that was
-                // never granted one says, and those are opposite problems: the first resolves at
-                // the next boundary, the second is a class holding share with no entry in the
-                // budget table. Telling them apart took reading consensus source; the numbers that
-                // separate them are right here, so carry them.
-                let detail = palw_producer_hold_detail_v1(&facts, &hold, rcore_plus.is_some());
-                // Once per change, then no more than once every 5 minutes while it persists: a
-                // hold that never changes is still worth seeing in a log an operator scrolls.
-                self.flow_context.update_palw_runtime(|r| r.set_producer("holding", &detail));
-                let stale = last_hold_at.is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(300));
-                if last_hold.as_deref() != Some(detail.as_str()) || stale {
-                    log_producer_hold_v1(&detail, true, last_progress_at.elapsed());
-                    last_hold = Some(detail);
-                    last_hold_at = Some(std::time::Instant::now());
-                }
-                if !self.tick(std::time::Duration::from_secs(5)).await {
-                    break;
-                }
-                continue;
+                    // **The reason alone is not a diagnosis.** "this class's epoch budget is already
+                    // spent" is what a class that exhausted its cap says AND what a class that was
+                    // never granted one says, and those are opposite problems: the first resolves at
+                    // the next boundary, the second is a class holding share with no entry in the
+                    // budget table. Telling them apart took reading consensus source; the numbers that
+                    // separate them are right here, so carry them.
+                    let detail = palw_producer_hold_detail_v1(&facts, &hold, rcore_plus.is_some());
+                    // Once per change, then no more than once every 5 minutes while it persists: a
+                    // hold that never changes is still worth seeing in a log an operator scrolls.
+                    self.flow_context.update_palw_runtime(|r| r.set_producer("holding", &detail));
+                    let stale = last_hold_at.is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(300));
+                    if last_hold.as_deref() != Some(detail.as_str()) || stale {
+                        log_producer_hold_v1(&detail, true, last_progress_at.elapsed());
+                        last_hold = Some(detail);
+                        last_hold_at = Some(std::time::Instant::now());
+                    }
+                    if !self.tick(std::time::Duration::from_secs(5)).await {
+                        break;
+                    }
+                    continue;
                 }
             }
             // **F2: the share with this producer's unmerged attempts counted** — the tip's count is
@@ -3147,10 +3143,7 @@ mod p6_tests {
         use kaspa_consensus_core::palw_state_v2::PalwBondStatusV2;
         let placeholder = palw_base_coinbase_recovery_bond_outpoint_v1();
         let ordinary = outpoint(9);
-        assert_eq!(
-            super::palw_adopt_ordinary_bond_v1(placeholder, Some((ordinary, PalwBondStatusV2::Active))),
-            Some(ordinary)
-        );
+        assert_eq!(super::palw_adopt_ordinary_bond_v1(placeholder, Some((ordinary, PalwBondStatusV2::Active))), Some(ordinary));
         assert_eq!(
             super::palw_adopt_ordinary_bond_v1(
                 placeholder,
@@ -3180,11 +3173,7 @@ mod p6_tests {
         facts.class_admission_refusal = Some("idle-only fallback".into());
         assert!(!super::palw_base_coinbase_recovery_draws_v1(&label, &facts, &unknown));
         facts.class_admission_refusal = None;
-        assert!(!super::palw_base_coinbase_recovery_draws_v1(
-            &label,
-            &facts,
-            &PalwProducerHoldV1::NotReady("the bond is retiring"),
-        ));
+        assert!(!super::palw_base_coinbase_recovery_draws_v1(&label, &facts, &PalwProducerHoldV1::NotReady("the bond is retiring"),));
     }
 
     fn bond_registered(n: u64, key: [u8; 4], operator: u8, collateral: u64) -> PalwConsensusObjectV2 {

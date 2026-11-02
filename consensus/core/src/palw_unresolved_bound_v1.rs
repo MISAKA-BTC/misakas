@@ -98,10 +98,15 @@ impl Params {
         let network_domain = self.palw_rfc0608_network_domain_v1();
         let policy_root = self.palw_unresolved_bound_policy_root_v1();
         if !records.iter().any(|r| {
-            r.network_domain == network_domain && Some(r.policy_root) == policy_root && r.activation_daa == at
-                && r.lag_measurement != [0; 32] && r.node_crossing_restart_replay != [0; 32] && r.review != [0; 32]
+            r.network_domain == network_domain
+                && Some(r.policy_root) == policy_root
+                && r.activation_daa == at
+                && r.lag_measurement != [0; 32]
+                && r.node_crossing_restart_replay != [0; 32]
+                && r.review != [0; 32]
                 && r.lag_measurement != r.node_crossing_restart_replay
-                && r.review != r.lag_measurement && r.review != r.node_crossing_restart_replay
+                && r.review != r.lag_measurement
+                && r.review != r.node_crossing_restart_replay
         }) {
             return Err(PalwModeV2Error::Invalid(
                 "palw_unresolved_bound_v1 cannot be armed: no pinned steady-state lag measurement, node crossing/restart/replay and independent review for this exact network, height and state policy",

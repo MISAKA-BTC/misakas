@@ -2277,26 +2277,48 @@ mod amendment_1 {
     /// These fixtures preseed native verification rows. Execute their real fold
     /// below stage2, then test only the actual returned journal's archive. They
     /// cannot establish a missing native admission history or checkpoint credit.
-    fn projected_step(before:&PalwChainStateV2,p:&PalwStateParamsV2,word:u64,daa:u64,objects:&[PalwConsensusObjectV2],extras:&PalwTransitionExtrasV1)
-        ->(PalwStateParamsV2,PalwChainStateV2,PalwStateDeltaV2){
-        let below=p.clone().with_claim_local_settlement_from_daa(None);
-        let (after,mut delta)=step_with(before,&below,word,daa,objects,extras).unwrap();
-        let mut builder=TransitionBuilder::new(before,&below,false,false,false,false,extras);
-        builder.state=after;builder.entries=delta.entries;
-        palw_claim_local_fold_v1::retain_changed_claim_projection_fixture_v1(&mut builder,before,&ctx(word,daa,word),objects).unwrap();
-        delta.entries=builder.entries;
-        (below.clone(),builder.state,delta)
+    fn projected_step(
+        before: &PalwChainStateV2,
+        p: &PalwStateParamsV2,
+        word: u64,
+        daa: u64,
+        objects: &[PalwConsensusObjectV2],
+        extras: &PalwTransitionExtrasV1,
+    ) -> (PalwStateParamsV2, PalwChainStateV2, PalwStateDeltaV2) {
+        let below = p.clone().with_claim_local_settlement_from_daa(None);
+        let (after, mut delta) = step_with(before, &below, word, daa, objects, extras).unwrap();
+        let mut builder = TransitionBuilder::new(before, &below, false, false, false, false, extras);
+        builder.state = after;
+        builder.entries = delta.entries;
+        palw_claim_local_fold_v1::retain_changed_claim_projection_fixture_v1(&mut builder, before, &ctx(word, daa, word), objects)
+            .unwrap();
+        delta.entries = builder.entries;
+        (below.clone(), builder.state, delta)
     }
 
     #[test]
-    fn rfc23s2_native_checkpoint_refuses_seeded_rows_without_admission_frames(){
-        let (p,mut before,claim)=world(Some(0));with_route(&mut before,claim,Some(PLAN));
-        let prefix=Prefix::new(&mut before,claim,ClaimStateV1::Final{final_daa:105},false);
-        let active=p.with_claim_local_settlement_from_daa(Some(110));let extras=claim_local_extras(xx_declare());
-        let root=before.state_root();
-        let error=apply_palw_transition_v2_with_extras(&before,&active,&ctx(40,110,40),&[open_object(prefix.decl(claim))],None,true,false,false,false,&extras).unwrap_err();
-        assert!(error.to_string().contains("retained authenticated admission frame"),"{error}");
-        assert_eq!(before.state_root(),root);
+    fn rfc23s2_native_checkpoint_refuses_seeded_rows_without_admission_frames() {
+        let (p, mut before, claim) = world(Some(0));
+        with_route(&mut before, claim, Some(PLAN));
+        let prefix = Prefix::new(&mut before, claim, ClaimStateV1::Final { final_daa: 105 }, false);
+        let active = p.with_claim_local_settlement_from_daa(Some(110));
+        let extras = claim_local_extras(xx_declare());
+        let root = before.state_root();
+        let error = apply_palw_transition_v2_with_extras(
+            &before,
+            &active,
+            &ctx(40, 110, 40),
+            &[open_object(prefix.decl(claim))],
+            None,
+            true,
+            false,
+            false,
+            false,
+            &extras,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("retained authenticated admission frame"), "{error}");
+        assert_eq!(before.state_root(), root);
     }
 
     #[test]
@@ -2308,7 +2330,7 @@ mod amendment_1 {
         let prefix = Prefix::new(&mut before, claim, ClaimStateV1::Final { final_daa: 105 }, false);
         let p = p.with_claim_local_settlement_from_daa(Some(110));
         let extras = claim_local_extras(xx_declare());
-        let (p,after,delta)=projected_step(&before,&p,40,110,&[open_object(prefix.decl(claim))],&extras);
+        let (p, after, delta) = projected_step(&before, &p, 40, 110, &[open_object(prefix.decl(claim))], &extras);
         let f = claim_local_frame(&after, 40);
         assert!(
             f.native_changes.iter().any(|c| c.owner == PalwClaimLocalRowOwnerV1::ExecV2 && c.table == PALW_EXEC_V2_TABLE_ROOTS_V1)
@@ -2341,7 +2363,7 @@ mod amendment_1 {
         let p = p.with_claim_local_settlement_from_daa(Some(120));
         let covered = slices.iter().map(|s| s.covered.clone()).collect();
         let extras = claim_local_extras(xx_slices(covered));
-        let (_below,after,_)=projected_step(&before,&p,50,120,&[],&extras);
+        let (_below, after, _) = projected_step(&before, &p, 50, 120, &[], &extras);
         let f = claim_local_frame(&after, 50);
         let origins = f.exec_dependency_origins_v1().unwrap();
         assert!(origins.unbound_roots.is_empty());
@@ -2361,7 +2383,8 @@ mod amendment_1 {
         // A refused covered slice must not create an input edge.
         let mut refused = slices[0].covered.clone();
         refused.slice.slice_index = 99;
-        let (_below,no_slice,refused_delta)=projected_step(&before,&p,51,120,&[],&claim_local_extras(xx_slices(vec![refused])));
+        let (_below, no_slice, refused_delta) =
+            projected_step(&before, &p, 51, 120, &[], &claim_local_extras(xx_slices(vec![refused])));
         assert_eq!(no_slice.exec_v2_state_v1(), before.exec_v2_state_v1());
         assert!(refused_delta.entries.iter().any(|entry| matches!(entry, PalwDeltaEntryV2::ExecV2Verdict {code, ..} if *code != 0)));
         assert!(refused_delta.entries.iter().all(|entry| !matches!(entry, PalwDeltaEntryV2::ExecV2Row { .. })));
@@ -2386,7 +2409,7 @@ mod amendment_1 {
             signer: bond_key(20),
             signature: Vec::new(),
         };
-        let (_below,after,_)=projected_step(&before,&p,41,111,&[object],&claim_local_extras(xx()));
+        let (_below, after, _) = projected_step(&before, &p, 41, 111, &[object], &claim_local_extras(xx()));
         let origins = claim_local_frame(&after, 41).exec_dependency_origins_v1().unwrap();
         assert_eq!(origins.unbound_roots, vec![claim]);
         assert!(origins.edges.iter().all(|edge| !matches!(edge.input, PalwClaimLocalWorkRefV1::KernelClaim { .. })));
@@ -3586,8 +3609,14 @@ mod amendment_1 {
         let root = s.exec_v2_root_v1(&claim).unwrap();
         assert_eq!((root.pending, root.verified_work), (0, root.total_work - root.prefix_work()), "every slice verified");
         assert!(!root.ready_for_final() && s.exec_v2_holds_final_v1(&claim), "the pending prefix holds the REAL claim's Final");
-        assert!(!matches!(s.claim(&claim).unwrap().phase,PalwClaimPhaseV2::Final{..}),"pending prefix cannot manufacture a Final legacy archival source");
-        assert!(crate::palw_native_closed_facts_v1::read_native_closed_facts_v1(&s).unwrap().is_empty(),"pre-Final prefix supplies no irreversible closed work");
+        assert!(
+            !matches!(s.claim(&claim).unwrap().phase, PalwClaimPhaseV2::Final { .. }),
+            "pending prefix cannot manufacture a Final legacy archival source"
+        );
+        assert!(
+            crate::palw_native_closed_facts_v1::read_native_closed_facts_v1(&s).unwrap().is_empty(),
+            "pre-Final prefix supplies no irreversible closed work"
+        );
         assert!(deadline_of(&s, claim).is_none());
         // (a) the prefix verifies: the hold is released.
         let ok = kernel_block(&p, &s, 61, 131, vec![prefix.write(ClaimStateV1::Final { final_daa: 131 }, false)]);
@@ -5023,51 +5052,141 @@ mod amendment_1 {
         );
     }
     #[test]
-    fn rfc23s2_retired_exec_snapshot_rejects_unselected_final_after_actual_retirement(){
+    fn rfc23s2_retired_exec_snapshot_rejects_unselected_final_after_actual_retirement() {
         // Actual EXEC declaration/slice/Final/retirement folds; the existing
         // fixture supplies job identity, kernel lifecycle and selected-approval
         // rows at named test seams. This is not the native producer/node campaign.
         use crate::palw_state_v2::palw_claim_local_rewards_v1::retired_exec_source_closed_v1;
-        let params=xp(Some(0)).with_claim_retirement_daa(1).unwrap();
-        let (p,s,root_id,slices,prefix)=session_with_params(params,1_000,ClaimStateV1::Final{final_daa:105},false,None);
-        let s=license(&p,&s,root_id,45,111);let s=carry_all(&p,&s,&slices);
-        let finals=slices.iter().map(|k|k.write(ClaimStateV1::Final{final_daa:130},false)).collect();
-        let s=kernel_block(&p,&s,60,130,finals);
-        let final_state=run_to_terminal(&p,s,root_id,70,131);
-        let terminal=final_state.claim(&root_id).unwrap().clone();
-        assert!(matches!(terminal.phase,PalwClaimPhaseV2::Final{..}));
-        assert!(matches!(final_state.exec_v2_root_v1(&root_id).unwrap().phase,PalwWorkRootPhaseV2::Settled{..}));
-        let route=final_state.kernel_route.as_ref().unwrap();
-        let expiry=final_state.exec_v2_root_v1(&root_id).unwrap().expiry_daa;
-        let liability_until=crate::palw_state_v2::palw_kernel_route_fold_v1::exec_liability_floor_v1(expiry,p.window_court(),&route.header.policy).unwrap()
-            .max(final_state.exec_v2_reward_vesting_v1(&root_id).map_or(0,|r|r.liability_until))
-            .max(std::iter::once(prefix.claim_id).chain(slices.iter().map(|s|s.claim_id)).map(|id|{
-                let raw=&route.rows[&(TABLE_CLAIMS_V1,palw_exec_v2_kernel_key_v1(&id))];
-                borsh::from_slice::<ClaimRowV1>(raw).unwrap().liability_until.unwrap()
-            }).max().unwrap());
-        let unknown=PalwStateCarriageV2::from_state(&final_state);
-        assert!(!retired_exec_source_closed_v1(&unknown,&p,root_id,&terminal,liability_until+1).unwrap(),"local/optimistic Final cannot replace actual selected enrollment");
-        let before=PalwStateCarriageV2::from_state(&final_state);
-        assert!(!retired_exec_source_closed_v1(&before,&p,root_id,&terminal,liability_until).unwrap(),"exact native duty remains open through its frozen horizon");
-        assert!(!retired_exec_source_closed_v1(&before,&p,root_id,&terminal,liability_until+1).unwrap(),"elapsed native clocks never create selected authority");
-        let mut state=final_state;
-        let mut retirement_prior=None;
-        for _ in 0..16{
-            if state.claim(&root_id).is_none(){break}
-            let next=deadline_of(&state,root_id).expect("actual retirement deadline").max(state.last_point().unwrap().daa_score+1);
-            let prior=PalwStateCarriageV2::from_state(&state);
-            let point=state.last_point().unwrap().blue_score+1;
-            state=step(&state,&p,point,next,&[]).unwrap().0;
-            if state.claim(&root_id).is_none(){retirement_prior=Some(prior);break}
+        let params = xp(Some(0)).with_claim_retirement_daa(1).unwrap();
+        let (p, s, root_id, slices, prefix) = session_with_params(params, 1_000, ClaimStateV1::Final { final_daa: 105 }, false, None);
+        let s = license(&p, &s, root_id, 45, 111);
+        let s = carry_all(&p, &s, &slices);
+        let finals = slices.iter().map(|k| k.write(ClaimStateV1::Final { final_daa: 130 }, false)).collect();
+        let s = kernel_block(&p, &s, 60, 130, finals);
+        let final_state = run_to_terminal(&p, s, root_id, 70, 131);
+        let terminal = final_state.claim(&root_id).unwrap().clone();
+        assert!(matches!(terminal.phase, PalwClaimPhaseV2::Final { .. }));
+        assert!(matches!(final_state.exec_v2_root_v1(&root_id).unwrap().phase, PalwWorkRootPhaseV2::Settled { .. }));
+        let route = final_state.kernel_route.as_ref().unwrap();
+        let expiry = final_state.exec_v2_root_v1(&root_id).unwrap().expiry_daa;
+        let liability_until =
+            crate::palw_state_v2::palw_kernel_route_fold_v1::exec_liability_floor_v1(expiry, p.window_court(), &route.header.policy)
+                .unwrap()
+                .max(final_state.exec_v2_reward_vesting_v1(&root_id).map_or(0, |r| r.liability_until))
+                .max(
+                    std::iter::once(prefix.claim_id)
+                        .chain(slices.iter().map(|s| s.claim_id))
+                        .map(|id| {
+                            let raw = &route.rows[&(TABLE_CLAIMS_V1, palw_exec_v2_kernel_key_v1(&id))];
+                            borsh::from_slice::<ClaimRowV1>(raw).unwrap().liability_until.unwrap()
+                        })
+                        .max()
+                        .unwrap(),
+                );
+        let unknown = PalwStateCarriageV2::from_state(&final_state);
+        assert!(
+            !retired_exec_source_closed_v1(&unknown, &p, root_id, &terminal, liability_until + 1).unwrap(),
+            "local/optimistic Final cannot replace actual selected enrollment"
+        );
+        let before = PalwStateCarriageV2::from_state(&final_state);
+        assert!(
+            !retired_exec_source_closed_v1(&before, &p, root_id, &terminal, liability_until).unwrap(),
+            "exact native duty remains open through its frozen horizon"
+        );
+        assert!(
+            !retired_exec_source_closed_v1(&before, &p, root_id, &terminal, liability_until + 1).unwrap(),
+            "elapsed native clocks never create selected authority"
+        );
+        let mut state = final_state;
+        let mut retirement_prior = None;
+        for _ in 0..16 {
+            if state.claim(&root_id).is_none() {
+                break;
+            }
+            let next =
+                deadline_of(&state, root_id).expect("actual retirement deadline").max(state.last_point().unwrap().daa_score + 1);
+            let prior = PalwStateCarriageV2::from_state(&state);
+            let point = state.last_point().unwrap().blue_score + 1;
+            state = step(&state, &p, point, next, &[]).unwrap().0;
+            if state.claim(&root_id).is_none() {
+                retirement_prior = Some(prior);
+                break;
+            }
         }
-        let retirement_prior=retirement_prior.expect("actual deadline retirement removes original");
-        let now=state.last_point().unwrap().daa_score.max(liability_until+1);
-        assert!(!retired_exec_source_closed_v1(&retirement_prior,&p,root_id,&terminal,now).unwrap(),"actual retirement cannot invent selected source approval");
-        let restored=PalwStateCarriageV2::from_state(&state).into_state(&p,Some(state.state_root())).unwrap();
-        assert_eq!(restored.state_root(),state.state_root());
-        let mut missing=retirement_prior.clone();
-        missing.kernel_route.as_mut().unwrap().rows.remove(&(TABLE_CLAIMS_V1,palw_exec_v2_kernel_key_v1(&prefix.claim_id)));
-        assert!(!retired_exec_source_closed_v1(&missing,&p,root_id,&terminal,now).unwrap(),"absence of original native material is never a successful closure");
+        let retirement_prior = retirement_prior.expect("actual deadline retirement removes original");
+        let now = state.last_point().unwrap().daa_score.max(liability_until + 1);
+        assert!(
+            !retired_exec_source_closed_v1(&retirement_prior, &p, root_id, &terminal, now).unwrap(),
+            "actual retirement cannot invent selected source approval"
+        );
+        let restored = PalwStateCarriageV2::from_state(&state).into_state(&p, Some(state.state_root())).unwrap();
+        assert_eq!(restored.state_root(), state.state_root());
+        let mut missing = retirement_prior.clone();
+        missing.kernel_route.as_mut().unwrap().rows.remove(&(TABLE_CLAIMS_V1, palw_exec_v2_kernel_key_v1(&prefix.claim_id)));
+        assert!(
+            !retired_exec_source_closed_v1(&missing, &p, root_id, &terminal, now).unwrap(),
+            "absence of original native material is never a successful closure"
+        );
     }
+}
 
+#[test]
+fn exec_material_reverse_index_is_unhashed_rebuilds_on_cold_restore_and_scopes_exact_raw_predicate() {
+    let (p, state, root) = opened();
+    let original_bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&state)).unwrap();
+    let mut no_index = state.clone();
+    no_index.exec_v2_source_roots.clear();
+    assert_eq!(state.state_root(), no_index.state_root());
+    assert_eq!(original_bytes, borsh::to_vec(&PalwStateCarriageV2::from_state(&no_index)).unwrap());
+    let restored =
+        borsh::from_slice::<PalwStateCarriageV2>(&original_bytes).unwrap().into_state(&p, Some(state.state_root())).unwrap();
+    assert_eq!(restored.exec_v2_source_roots, state.exec_v2_source_roots);
+    super::super::palw_exec_v2_material_scope_v7::assert_consistent_v7(&restored).unwrap();
+    let prefix = state.exec_v2.roots[&root].prefix_claim;
+    let scope = super::super::palw_exec_v2_material_scope_v7::source_roots_v7(&restored, prefix).unwrap();
+    assert!(scope.contains(&prefix));
+    assert!(scope.contains(&root));
+}
+
+#[test]
+fn exec_material_reverse_index_counts_shared_prefix_and_slices_and_replays_each_direction() {
+    // Index lifecycle fixture, not an approval or a new admitted EXEC source.
+    let (p, state, root) = opened();
+    let extras = xx();
+    let mut b = TransitionBuilder::new(&state, &p, false, false, false, false, &extras);
+    let source = h64(0xEE51);
+    let mut row = b.state.exec_v2.roots[&root].clone();
+    row.prefix_claim = source;
+    b.write_exec_root(root, Some(row.clone())).unwrap();
+    let slice = PalwWorkSliceRowV2 {
+        slice_id: h64(0xEE52),
+        range: PalwWorkRangeV1 { start: 0, end: 1 },
+        executor: bond_key(20),
+        carrier: h64(0xEE53),
+        accepted_daa: 120,
+        predecessor_state_root: h64(0xEE54),
+        result_state_root: h64(0xEE55),
+        evidence_root: source,
+        da_root: h64(0xEE56),
+        stage: PalwWorkSliceStageV2::Pending,
+    };
+    b.write_exec_slice((root, 0), Some(slice.clone())).unwrap();
+    b.write_exec_slice((root, 1), Some(slice)).unwrap();
+    assert_eq!(b.state.exec_v2_source_roots[&(source, root)], 3);
+    b.write_exec_slice((root, 0), None).unwrap();
+    assert_eq!(b.state.exec_v2_source_roots[&(source, root)], 2);
+    b.write_exec_root(root, None).unwrap();
+    assert_eq!(b.state.exec_v2_source_roots[&(source, root)], 1);
+    assert!(
+        super::super::palw_exec_v2_material_scope_v7::reverse_roots_v7(&b.state, source).next().is_none(),
+        "orphan raw slice does not make a native composite root"
+    );
+    b.write_exec_root(root, Some(row)).unwrap();
+    assert_eq!(b.state.exec_v2_source_roots[&(source, root)], 2);
+    let delta = PalwStateDeltaV2 { point: ctx(90, 130, 90), entries: b.entries.clone() };
+    let replayed = apply_delta_v2(&state, &delta, &p).unwrap();
+    assert_eq!(replayed.exec_v2_source_roots, b.state.exec_v2_source_roots);
+    let reverted = revert_delta_v2(&replayed, &delta, &p).unwrap();
+    assert_eq!(reverted.exec_v2_source_roots, state.exec_v2_source_roots);
+    super::super::palw_exec_v2_material_scope_v7::assert_consistent_v7(&reverted).unwrap();
 }

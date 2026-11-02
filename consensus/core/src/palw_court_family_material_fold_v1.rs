@@ -2,9 +2,12 @@
 //! completion. Expiry releases storage, never invents a service default or slash.
 use super::palw_court_family_supplier_fold_v1 as supplier;
 use super::*;
+#[path = "palw_court_family_draft_reservation_v2.rs"]
+pub(crate) mod draft_reservations;
 use crate::palw_court_family_material_v1 as m;
 use crate::palw_native_resource_v1::{NativeRetainedV1 as Held, NativeWireScanV1};
 use borsh::{BorshDeserialize, BorshSerialize};
+pub use draft_reservations::palw_family_material_begin_quote_v2;
 fn refused(s: impl ToString) -> PalwStateV2Error {
     PalwStateV2Error::CarriageInconsistent(s.to_string())
 }
@@ -38,39 +41,76 @@ fn put<T: BorshSerialize>(b: &mut TransitionBuilder<'_>, key: &[u8], row: &T) ->
 }
 /// Install the canonical preclaim table witness in the same original journal.
 /// This records an EOF inventory only; it does not mark supplier service complete.
-pub(super) fn install_family_table_inventory_v1(b:&mut TransitionBuilder<'_>,claim:Hash64,bytes:&[u8],carrier:crate::tx::TransactionOutpoint)->Result<(),PalwStateV2Error>{
-    let frame=crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(&b.state,claim).ok_or_else(||refused("family table inventory original missing"))?;
-    let sem=b.state.claim_semantics_v1(&claim).ok_or_else(||refused("family table immutable snapshot missing"))?;
-    let class=frame.original_v1().job.class_id;
-    let record=b.state.tir_class_v1(&class).ok_or_else(||refused("family table native record missing"))?;
-    m::prepare_family_table_inventory_v1(bytes,sem,record.logits_vocab).map_err(native)?;
-    let hard=frame.plan_v1().terms.accepted_daa.checked_add(crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA).ok_or_else(||refused("family table original hard overflow"))?;
-    let until=crate::palw_court_service_state_v2::tir_service_required_material_until_v1(frame,hard).map_err(refused)?;
-    let key=m::material_aux_key_v1(4,claim,None);
-    let _scratch=crate::palw_native_resource_v1::reserve_native_requests_v1(bytes.len() as u64).map_err(PalwStateV2Error::NativeResource)?;
-    let rules=b.extras.tir_public_allocation_rules_v1.ok_or_else(||refused("family table original native rules absent"))?;
-    let allocation_rules_v2=Some(m::FamilyOriginalRuleContextV2::from_native_v2(rules));
-    let row=m::FamilyTableInventoryRowV1{claim,carrier,allocation_id:frame.plan_v1().allocation_id,allocation_rules_v2,bytes:bytes.to_vec(),material_until_daa:until};
-    if let Some(old)=read::<m::FamilyTableInventoryRowV1>(&b.state,&key)? {if *old!=row{return Err(refused("family table immutable inventory collision"))}else{return Ok(())}}
-    put(b,&key,&row)
+pub(super) fn install_family_table_inventory_v1(
+    b: &mut TransitionBuilder<'_>,
+    claim: Hash64,
+    bytes: &[u8],
+    carrier: crate::tx::TransactionOutpoint,
+) -> Result<(), PalwStateV2Error> {
+    let frame = crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(&b.state, claim)
+        .ok_or_else(|| refused("family table inventory original missing"))?;
+    let sem = b.state.claim_semantics_v1(&claim).ok_or_else(|| refused("family table immutable snapshot missing"))?;
+    let class = frame.original_v1().job.class_id;
+    let record = b.state.tir_class_v1(&class).ok_or_else(|| refused("family table native record missing"))?;
+    m::prepare_family_table_inventory_v1(bytes, sem, record.logits_vocab).map_err(native)?;
+    let hard = frame
+        .plan_v1()
+        .terms
+        .accepted_daa
+        .checked_add(crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA)
+        .ok_or_else(|| refused("family table original hard overflow"))?;
+    let until = crate::palw_court_service_state_v2::tir_service_required_material_until_v1(frame, hard).map_err(refused)?;
+    let key = m::material_aux_key_v1(4, claim, None);
+    let _scratch =
+        crate::palw_native_resource_v1::reserve_native_requests_v1(bytes.len() as u64).map_err(PalwStateV2Error::NativeResource)?;
+    let rules = b.extras.tir_public_allocation_rules_v1.ok_or_else(|| refused("family table original native rules absent"))?;
+    let allocation_rules_v2 = Some(m::FamilyOriginalRuleContextV2::from_native_v2(rules));
+    let row = m::FamilyTableInventoryRowV1 {
+        claim,
+        carrier,
+        allocation_id: frame.plan_v1().allocation_id,
+        allocation_rules_v2,
+        bytes: bytes.to_vec(),
+        material_until_daa: until,
+    };
+    if let Some(old) = read::<m::FamilyTableInventoryRowV1>(&b.state, &key)? {
+        if *old != row { return Err(refused("family table immutable inventory collision")) } else { return Ok(()) }
+    }
+    put(b, &key, &row)
 }
 /// The original TFO2 carrier already supplied this authenticated literal.
 /// Nonexclusive availability discharges the exact target, without inventing an
 /// uploader, a second transport, a service opportunity, or an accelerated fee.
-pub(super) fn complete_family_table_inventory_v1(b:&mut TransitionBuilder<'_>,ctx:&PalwBlockContextV2,claim:Hash64)->Result<(),PalwStateV2Error>{
+pub(super) fn complete_family_table_inventory_v1(
+    b: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    claim: Hash64,
+) -> Result<(), PalwStateV2Error> {
     use crate::palw_court_family_supplier_v1::FamilySupplierRoleV1 as Role;
-    let contracts=b.state.family_supplier_rows_v1()?;
-    for (id,contract) in contracts.iter().filter(|(_,row)|row.consent.terms.claim==claim&&row.consent.terms.role==Role::SemanticTable){
-        let inventory=m::derive_current_family_inventory_classified_v1(&b.state,claim,Role::SemanticTable).map_err(native)?;
-        if inventory.id_v1()!=contract.consent.terms.inventory{return Err(refused("admission table changes signed native inventory"));}
-        let witness=read::<m::FamilyTableInventoryRowV1>(&b.state,&m::material_aux_key_v1(4,claim,None))?.ok_or_else(||refused("admission table witness absent"))?;
-        let frame=crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(&b.state,claim).ok_or_else(||refused("admission table original absent"))?;
-        if witness.claim!=claim||witness.allocation_id!=frame.plan_v1().allocation_id||witness.material_until_daa!=contract.consent.terms.material_until_daa||ctx.daa_score>contract.consent.terms.respond_until_daa{return Err(refused("admission table origin/horizon differs"));}
-        let target=m::FamilyMaterialTargetV1::SemanticTable;
-        m::authenticate_family_material_classified_v1(&b.state,&inventory,target,&witness.bytes).map_err(native)?;
-        let target_id=inventory.target_id_v1(target).map_err(refused)?;
-        let digest=crate::palw_tir_public_owned_v1::palw_tir_public_body_hash_v1(&witness.bytes);
-        supplier::complete_family_target_v1(b,ctx,*id,target_id,digest)?;
+    let contracts = b.state.family_supplier_rows_v1()?;
+    for (id, contract) in
+        contracts.iter().filter(|(_, row)| row.consent.terms.claim == claim && row.consent.terms.role == Role::SemanticTable)
+    {
+        let inventory = m::derive_contract_family_inventory_classified_v3(&b.state, contract).map_err(native)?;
+        if inventory.id_v1() != contract.consent.terms.inventory {
+            return Err(refused("admission table changes signed native inventory"));
+        }
+        let witness = read::<m::FamilyTableInventoryRowV1>(&b.state, &m::material_aux_key_v1(4, claim, None))?
+            .ok_or_else(|| refused("admission table witness absent"))?;
+        let frame = crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(&b.state, claim)
+            .ok_or_else(|| refused("admission table original absent"))?;
+        if witness.claim != claim
+            || witness.allocation_id != frame.plan_v1().allocation_id
+            || witness.material_until_daa != contract.consent.terms.material_until_daa
+            || ctx.daa_score > contract.consent.terms.respond_until_daa
+        {
+            return Err(refused("admission table origin/horizon differs"));
+        }
+        let target = m::FamilyMaterialTargetV1::SemanticTable;
+        m::authenticate_family_material_classified_v1(&b.state, &inventory, target, &witness.bytes).map_err(native)?;
+        let target_id = inventory.target_id_v1(target).map_err(refused)?;
+        let digest = crate::palw_tir_public_owned_v1::palw_tir_public_body_hash_v1(&witness.bytes);
+        supplier::complete_family_target_v1(b, ctx, *id, target_id, digest)?;
     }
     Ok(())
 }
@@ -80,9 +120,35 @@ pub(super) fn apply_family_material_v1(
     s: &m::SignedFamilyMaterialV1,
 ) -> Result<(), PalwStateV2Error> {
     let checkpoint = b.try_checkpoint()?;
-    let result = apply_inner(b, ctx, s);
+    let first = b.entries.len();
+    let result = apply_inner(b, ctx, s).and_then(|()| {
+        if !b.params.claim_local_settlement_active_at(ctx.daa_score) {
+            return Ok(());
+        }
+        let contract = supplier::family_contract_for_material_v1(&b.state, s.contract)?
+            .ok_or_else(|| refused("executed family material lost its contract"))?;
+        let network = b.extras.tir_public_network_domain_v1.ok_or_else(|| refused("executed family material lost network"))?;
+        let message = s.signing_message_v1(network).map_err(refused)?;
+        super::palw_claim_local_material_projection_v2::mark(
+            b,
+            contract.consent.terms.claim,
+            super::palw_claim_local_material_projection_v2::FamilyEventV2::Delivery(message),
+            first,
+        )
+    });
     if result.is_err() {
         b.restore(checkpoint);
+    }
+    if let Some((message, spent, reserved)) = b.court_family_charged_v2.take()
+        && result.is_ok()
+        && reserved
+        && b.extras.tir_public_network_domain_v1.is_some_and(|n| s.signing_message_v1(n).ok() == Some(message))
+    {
+        let remaining = &mut b.court_family_unreserved_service_spent_v2;
+        remaining.bytes -= spent.bytes;
+        remaining.work -= spent.work;
+        remaining.io -= spent.io;
+        remaining.controls -= spent.controls;
     }
     result
 }
@@ -106,7 +172,7 @@ fn apply_inner(
     if ctx.daa_score < contract.accepted_daa || ctx.daa_score > terms.respond_until_daa || ctx.daa_score > terms.material_until_daa {
         return Err(refused("family material outside accepted response/material interval"));
     }
-    let inventory = m::derive_current_family_inventory_classified_v1(&b.state, terms.claim, terms.role).map_err(native)?;
+    let inventory = m::derive_contract_family_inventory_classified_v3(&b.state, &contract).map_err(native)?;
     if inventory.id_v1() != terms.inventory
         || inventory.source_v1() != terms.source
         || inventory.relative_graph_v1() != terms.relative_graph
@@ -122,30 +188,41 @@ fn apply_inner(
         supplier::complete_family_target_v1(b, ctx, s.contract, target_id, body.digest)?;
         // A completed authenticated target may discharge another independently signed
         // contract. It is not retransferred, repriced or accepted on a bare boolean.
-        if let m::FamilyMaterialActionV1::Finish { draft } = s.action {
-            if let Some(old) = read::<m::FamilyMaterialDraftV1>(&b.state, &m::material_aux_key_v1(1, draft, None))? {
-                if old.submitter == s.submitter && old.contract == s.contract && old.target == s.target {
-                    clear_draft(b, draft, &old)?;
-                }
-            }
+        if let m::FamilyMaterialActionV1::Finish { draft } = s.action
+            && let Some(old) = read::<m::FamilyMaterialDraftV1>(&b.state, &m::material_aux_key_v1(1, draft, None))?
+            && old.submitter == s.submitter
+            && old.contract == s.contract
+            && old.target == s.target
+        {
+            clear_draft(b, draft, &old)?;
         }
         return Ok(());
     }
     match &s.action {
-        m::FamilyMaterialActionV1::Begin { total_bytes, body_hash } => {
+        m::FamilyMaterialActionV1::Begin { total_bytes, body_hash }
+        | m::FamilyMaterialActionV1::BeginReserved { total_bytes, body_hash, .. } => {
             if *total_bytes == 0 || *total_bytes > bound || *body_hash == Hash64::default() {
                 return Err(refused("family material declared width/hash differs from native target bound"));
             }
-            let id = m::family_material_draft_id_v1(s.contract, s.target, s.submitter, *total_bytes, *body_hash).map_err(refused)?;
+            let id = match &s.action {
+                m::FamilyMaterialActionV1::BeginReserved { quote, .. } => {
+                    m::family_material_draft_id_v2(s.contract, s.target, s.submitter, *total_bytes, *body_hash, quote)
+                }
+                _ => m::family_material_draft_id_v1(s.contract, s.target, s.submitter, *total_bytes, *body_hash),
+            }
+            .map_err(refused)?;
             let key = m::material_aux_key_v1(1, id, None);
             if read::<m::FamilyMaterialDraftV1>(&b.state, &key)?.is_some() {
                 return Ok(());
             }
             let schedule = crate::palw_court_shared_material_intake_v1::material_intake_schedule_v1()
                 .map_err(|_| refused("family material storage schedule absent"))?;
-            let fee = total_bytes.checked_mul(schedule.sompi_per_byte).ok_or_else(|| refused("family storage fee overflow"))?;
+            let fee = match draft_reservations::begin_fee(b, ctx, s, &contract, *total_bytes, *body_hash)? {
+                Some(fee) => fee,
+                None => total_bytes.checked_mul(schedule.sompi_per_byte).ok_or_else(|| refused("family storage fee overflow"))?,
+            };
             let collateral = b.state.bond(&s.submitter).ok_or(PalwStateV2Error::MissingBond(s.submitter))?.collateral;
-            if u128::from(collateral).saturating_sub(b.committed_at(&s.submitter, ctx.daa_score)?) < u128::from(fee) {
+            if supplier::family_free_principal_v1(b, &s.submitter, ctx.daa_score)? < u128::from(fee) {
                 return Err(refused("family material storage debit exceeds uncommitted principal"));
             }
             if collateral < fee || b.slash_bond(s.submitter, u128::from(fee))? != fee {
@@ -174,7 +251,7 @@ fn apply_inner(
         m::FamilyMaterialActionV1::Part { draft, offset, bytes } => {
             let key = m::material_aux_key_v1(1, *draft, None);
             let old = read::<m::FamilyMaterialDraftV1>(&b.state, &key)?.ok_or_else(|| refused("family material draft absent"))?;
-            check_draft(&old, *draft, s, ctx.daa_score, bound)?;
+            check_draft(&b.state, &old, *draft, s, ctx.daa_score, bound)?;
             if bytes.is_empty()
                 || bytes.len() > m::FAMILY_MATERIAL_PART_BYTES_V1
                 || offset % m::FAMILY_MATERIAL_PART_BYTES_V1 as u64 != 0
@@ -211,7 +288,7 @@ fn apply_inner(
         m::FamilyMaterialActionV1::Finish { draft } => {
             let key = m::material_aux_key_v1(1, *draft, None);
             let old = read::<m::FamilyMaterialDraftV1>(&b.state, &key)?.ok_or_else(|| refused("family material draft absent"))?;
-            check_draft(&old, *draft, s, ctx.daa_score, bound)?;
+            check_draft(&b.state, &old, *draft, s, ctx.daa_score, bound)?;
             if old.offset != old.total_bytes {
                 return Err(refused("family material Finish before actual EOF"));
             }
@@ -301,6 +378,7 @@ fn apply_inner(
     Ok(())
 }
 fn check_draft(
+    state: &PalwChainStateV2,
     d: &m::FamilyMaterialDraftV1,
     id: Hash64,
     s: &m::SignedFamilyMaterialV1,
@@ -314,7 +392,8 @@ fn check_draft(
         || d.total_bytes > bound
         || d.offset > d.total_bytes
         || now > d.expires_daa
-        || m::family_material_draft_id_v1(d.contract, d.target, d.submitter, d.total_bytes, d.body_hash).map_err(refused)? != id
+        || (m::family_material_draft_id_v1(d.contract, d.target, d.submitter, d.total_bytes, d.body_hash).map_err(refused)? != id
+            && !draft_reservations::matches_independent_id(state, d, id)?)
     {
         return Err(refused("family material draft scope/width/expiry"));
     }
@@ -344,9 +423,17 @@ pub(super) fn sweep_family_material_v1(b: &mut TransitionBuilder<'_>, ctx: &Palw
     b.native_reservation
         .grow_v1((count as u64).checked_mul(128).ok_or_else(|| refused("family sweep key count overflow"))?)
         .map_err(PalwStateV2Error::NativeResource)?;
-    let mut expired = Vec::new();
+    let scoped = b.params.claim_local_settlement_active_at(ctx.daa_score);
+    b.native_reservation
+        .grow_v1(
+            (count as u64)
+                .checked_mul(std::mem::size_of::<(Vec<u8>, Hash64)>() as u64)
+                .ok_or_else(|| refused("family expiry owner inventory"))?,
+        )
+        .map_err(PalwStateV2Error::NativeResource)?;
+    let mut expired = Vec::with_capacity(count);
     if let Some(route) = b.state.kernel_route_state_v1() {
-        for ((table, key), _) in &route.aux {
+        for ((table, key), raw) in &route.aux {
             if *table != m::FAMILY_MATERIAL_TABLE_V1 {
                 continue;
             }
@@ -357,21 +444,51 @@ pub(super) fn sweep_family_material_v1(b: &mut TransitionBuilder<'_>, ctx: &Palw
                 (73, Some(2)) => {
                     read::<m::FamilyMaterialPartV1>(&b.state, key)?.ok_or_else(|| refused("family part disappeared"))?.expires_daa
                 }
-                (65,Some(4))=>read::<m::FamilyTableInventoryRowV1>(&b.state,key)?.ok_or_else(||refused("family table inventory disappeared"))?.material_until_daa,
+                (65, Some(4)) => {
+                    read::<m::FamilyTableInventoryRowV1>(&b.state, key)?
+                        .ok_or_else(|| refused("family table inventory disappeared"))?
+                        .material_until_daa
+                }
                 (65, Some(3)) => {
                     read::<m::FamilyMaterialBodyV1>(&b.state, key)?
                         .ok_or_else(|| refused("family body disappeared"))?
                         .material_until_daa
                 }
+                (65, Some(5 | 6)) => {
+                    let (claim, until) = if key[0] == 5 {
+                        let row =
+                            read::<m::FamilyDraftReservationV2>(&b.state, key)?.ok_or_else(|| refused("draft receipt absent"))?;
+                        (row.claim, row.material_until_daa)
+                    } else {
+                        let row = read::<m::FamilyPrimaryDraftV2>(&b.state, key)?.ok_or_else(|| refused("primary receipt absent"))?;
+                        (row.claim, row.material_until_daa)
+                    };
+                    if crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(&b.state, claim).is_some() {
+                        continue;
+                    }
+                    until
+                }
                 _ => return Err(refused("unallocated family material row key")),
             };
             if ctx.daa_score > deadline {
-                expired.push(key.clone());
+                let claim = if scoped {
+                    super::palw_claim_local_material_projection_v2::expiry_owner(b, key, raw)?
+                } else {
+                    Hash64::default()
+                };
+                expired.push((key.clone(), claim));
             }
         }
     }
-    for key in expired {
+    for (key, claim) in expired {
+        let first = b.entries.len();
         remove(b, key)?;
+        super::palw_claim_local_material_projection_v2::mark(
+            b,
+            claim,
+            super::palw_claim_local_material_projection_v2::FamilyEventV2::Expiry,
+            first,
+        )?;
     }
     Ok(())
 }
@@ -381,7 +498,7 @@ pub(super) fn sweep_family_material_v1(b: &mut TransitionBuilder<'_>, ctx: &Palw
 pub(crate) fn validate_family_material_rows_v1(state: &PalwChainStateV2) -> Result<(), PalwStateV2Error> {
     let Some(route) = state.kernel_route_state_v1() else { return Ok(()) };
     let now = state.last_point().map_or(0, |p| p.daa_score);
-    for ((table, key), _) in &route.aux {
+    for (table, key) in route.aux.keys() {
         if *table != m::FAMILY_MATERIAL_TABLE_V1 {
             continue;
         }
@@ -391,11 +508,13 @@ pub(crate) fn validate_family_material_rows_v1(state: &PalwChainStateV2) -> Resu
                 let row = supplier::family_contract_for_material_v1(state, d.contract)?
                     .ok_or_else(|| refused("family draft lost signed contract"))?;
                 let terms = &row.consent.terms;
-                let inventory = m::derive_current_family_inventory_classified_v1(state, terms.claim, terms.role).map_err(native)?;
+                let inventory = m::derive_contract_family_inventory_classified_v3(state, &row).map_err(native)?;
                 let bound = inventory.target_bound_v1(d.target).map_err(refused)?;
-                let id =
+                let id = Hash64::from_bytes(key[1..].try_into().map_err(refused)?);
+                let primary =
                     m::family_material_draft_id_v1(d.contract, d.target, d.submitter, d.total_bytes, d.body_hash).map_err(refused)?;
-                if *key != m::material_aux_key_v1(1, id, None)
+                if (id != primary && !draft_reservations::matches_independent_id(state, &d, id)?)
+                    || *key != m::material_aux_key_v1(1, id, None)
                     || inventory.id_v1() != terms.inventory
                     || d.total_bytes == 0
                     || d.total_bytes > bound
@@ -405,6 +524,17 @@ pub(crate) fn validate_family_material_rows_v1(state: &PalwChainStateV2) -> Resu
                     || now > d.expires_daa
                 {
                     return Err(refused("family restored draft changes native scope/clock"));
+                }
+                if draft_reservations::requires_reserved_begin_v2(&row)? {
+                    let target_id = inventory.target_id_v1(d.target).map_err(refused)?;
+                    let primary = read::<m::FamilyPrimaryDraftV2>(state, &m::material_aux_key_v1(6, target_id, None))?;
+                    let is_primary = primary.is_some_and(|p| p.draft == id && d.submitter == terms.supplier);
+                    let paid = read::<m::FamilyDraftReservationV2>(state, &m::material_aux_key_v1(5, id, None))?;
+                    if !is_primary
+                        && !paid.is_some_and(|p| p.draft == id && p.contract == d.contract && p.begin.submitter == d.submitter)
+                    {
+                        return Err(refused("restored draft lacks original prepaid slot or signed independent reservation"));
+                    }
                 }
                 for offset in (0..d.offset).step_by(m::FAMILY_MATERIAL_PART_BYTES_V1) {
                     let p = read::<m::FamilyMaterialPartV1>(state, &m::material_aux_key_v1(2, id, Some(offset)))?
@@ -433,18 +563,37 @@ pub(crate) fn validate_family_material_rows_v1(state: &PalwChainStateV2) -> Resu
                     return Err(refused("family orphan or substituted material chunk"));
                 }
             }
-            (65,Some(4))=>{
-                let row=read::<m::FamilyTableInventoryRowV1>(state,key)?.ok_or_else(||refused("family table inventory disappeared"))?;
-                if *key!=m::material_aux_key_v1(4,row.claim,None)||now>row.material_until_daa {return Err(refused("family table inventory key/expiry"));}
-                let frame=crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(state,row.claim).ok_or_else(||refused("family table inventory original missing"))?;
-                if row.allocation_id!=frame.plan_v1().allocation_id{return Err(refused("family table inventory changed original allocation"));}
-                let sem=state.claim_semantics_v1(&row.claim).ok_or_else(||refused("family table inventory snapshot missing"))?;
-                let record=state.tir_class_v1(&frame.original_v1().job.class_id).ok_or_else(||refused("family table inventory registered class missing"))?;
-                let hard=frame.plan_v1().terms.accepted_daa.checked_add(crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA).ok_or_else(||refused("family table restored hard overflow"))?;
-                let until=crate::palw_court_service_state_v2::tir_service_required_material_until_v1(frame,hard).map_err(refused)?;
-                if row.material_until_daa!=until{return Err(refused("family table inventory changes original retention"));}
-                m::prepare_family_table_inventory_v1(&row.bytes,sem,record.logits_vocab).map_err(native)?;
-                if !state.family_supplier_rows_v1()?.iter().any(|(_,supplier)|supplier.consent.terms.claim==row.claim && supplier.consent.terms.role==crate::palw_court_family_supplier_v1::FamilySupplierRoleV1::SemanticTable) {
+            (65, Some(4)) => {
+                let row =
+                    read::<m::FamilyTableInventoryRowV1>(state, key)?.ok_or_else(|| refused("family table inventory disappeared"))?;
+                if *key != m::material_aux_key_v1(4, row.claim, None) || now > row.material_until_daa {
+                    return Err(refused("family table inventory key/expiry"));
+                }
+                let frame = crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(state, row.claim)
+                    .ok_or_else(|| refused("family table inventory original missing"))?;
+                if row.allocation_id != frame.plan_v1().allocation_id {
+                    return Err(refused("family table inventory changed original allocation"));
+                }
+                let sem = state.claim_semantics_v1(&row.claim).ok_or_else(|| refused("family table inventory snapshot missing"))?;
+                let record = state
+                    .tir_class_v1(&frame.original_v1().job.class_id)
+                    .ok_or_else(|| refused("family table inventory registered class missing"))?;
+                let hard = frame
+                    .plan_v1()
+                    .terms
+                    .accepted_daa
+                    .checked_add(crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA)
+                    .ok_or_else(|| refused("family table restored hard overflow"))?;
+                let until =
+                    crate::palw_court_service_state_v2::tir_service_required_material_until_v1(frame, hard).map_err(refused)?;
+                if row.material_until_daa != until {
+                    return Err(refused("family table inventory changes original retention"));
+                }
+                m::prepare_family_table_inventory_v1(&row.bytes, sem, record.logits_vocab).map_err(native)?;
+                if !state.family_supplier_rows_v1()?.iter().any(|(_, supplier)| {
+                    supplier.consent.terms.claim == row.claim
+                        && supplier.consent.terms.role == crate::palw_court_family_supplier_v1::FamilySupplierRoleV1::SemanticTable
+                }) {
                     return Err(refused("family table inventory lost its admitted semantic supplier contract"));
                 }
             }
@@ -453,7 +602,7 @@ pub(crate) fn validate_family_material_rows_v1(state: &PalwChainStateV2) -> Resu
                 let row = supplier::family_contract_for_material_v1(state, body.contract)?
                     .ok_or_else(|| refused("family body lost signed contract"))?;
                 let terms = &row.consent.terms;
-                let inventory = m::derive_current_family_inventory_classified_v1(state, terms.claim, terms.role).map_err(native)?;
+                let inventory = m::derive_contract_family_inventory_classified_v3(state, &row).map_err(native)?;
                 let target = inventory.target_id_v1(body.target).map_err(refused)?;
                 if *key != m::material_aux_key_v1(3, target, None)
                     || body.material_until_daa != terms.material_until_daa
@@ -463,8 +612,13 @@ pub(crate) fn validate_family_material_rows_v1(state: &PalwChainStateV2) -> Resu
                 }
                 check_body(state, &inventory, body.target, &body, now)?;
             }
+            (65, Some(5)) => {}
+            (65, Some(6)) => {
+                draft_reservations::validate_primary(state, key)?;
+            }
             _ => return Err(refused("unallocated family material row namespace")),
         }
     }
+    draft_reservations::validate(state)?;
     Ok(())
 }

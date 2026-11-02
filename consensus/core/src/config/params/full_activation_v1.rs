@@ -247,10 +247,11 @@ pub const PALW_T12_FULL_ACTIVATION_FENCES_V1: &[PalwPostLaunchFenceV1] = &[
     PALW_T12_FULL_NATIVE_LIABILITY_HORIZON_ENTRY,
     PALW_T12_FULL_REWARD_LIABILITY_HORIZON_ENTRY,
     PALW_T12_FULL_UNRESOLVED_BOUND_ENTRY,
-    // `palw_claim_local_settlement_v1` (RFC-0023 stage 2) is NOT on this list (audit fix-cd): its validation refuses every armed
-    // height ("material retention / transition drills are unmeasured"), which no code change can supply, so with it the list could
-    // never validate as a whole. Rule E's side frontier now reads the claim-local irreversible anchors past that fence (audit D-1),
-    // but the measurements remain the user's; it rejoins (before Gate C) with its measured record behind the standard gate.
+    // RFC-0023 stage 2 stays outside this list while the fixed reviewed
+    // readiness registry is empty. Its standard gate requires genuine retained
+    // campaign/drill/resource records for the exact genesis, height and Params.
+    // Rule E reads claim-local irreversible anchors after that separate fence;
+    // this inventory does not manufacture a measurement or arm its height.
     PALW_T12_FULL_GATE_C_ENTRY,
     PALW_T12_FULL_DAG_SIBLING_ATTRIBUTION_ENTRY,
     PALW_T12_FULL_PANEL_ANCHOR_PERMISSIONLESS_ENTRY,

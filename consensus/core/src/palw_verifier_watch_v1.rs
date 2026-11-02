@@ -370,61 +370,92 @@ pub fn draw_watchers_v1(
     Ok(slots)
 }
 
-fn decode_watch_row<T: borsh::BorshDeserialize + borsh::BorshSerialize + crate::palw_native_resource_v1::NativeWireScanV1>(bytes:&[u8])
-    ->Result<crate::palw_native_resource_v1::NativeRetainedV1<T>,crate::palw_state_v2::PalwStateV2Error>{
-    crate::palw_claim_local_v1::decode_claim_local_value_v1(bytes).map_err(|e|match e{
-        crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(e)=>crate::palw_state_v2::PalwStateV2Error::NativeResource(e),
-        crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(e)=>crate::palw_state_v2::PalwStateV2Error::CarriageInconsistent(e.to_string()),
+fn decode_watch_row<T: borsh::BorshDeserialize + borsh::BorshSerialize + crate::palw_native_resource_v1::NativeWireScanV1>(
+    bytes: &[u8],
+) -> Result<crate::palw_native_resource_v1::NativeRetainedV1<T>, crate::palw_state_v2::PalwStateV2Error> {
+    crate::palw_claim_local_v1::decode_claim_local_value_v1(bytes).map_err(|e| match e {
+        crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(e) => crate::palw_state_v2::PalwStateV2Error::NativeResource(e),
+        crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(e) => {
+            crate::palw_state_v2::PalwStateV2Error::CarriageInconsistent(e.to_string())
+        }
     })
 }
 impl PalwFrozenWatcherPoolV1 {
-    fn validate(&self,policy:&PalwVerifierWatchPolicyV1,from:u64)->Result<(),&'static str>{
+    fn validate(&self, policy: &PalwVerifierWatchPolicyV1, from: u64) -> Result<(), &'static str> {
         policy.validate()?;
-        if self.policy!=policy.id()||self.frozen_daa<from||self.frozen_daa/policy.epoch_length_daa!=self.epoch{
+        if self.policy != policy.id() || self.frozen_daa < from || self.frozen_daa / policy.epoch_length_daa != self.epoch {
             return Err("frozen watcher pool policy/epoch mismatch");
         }
-        let mut previous=None;
+        let mut previous = None;
         for m in &self.members {
-            if m.stake==0||previous.is_some_and(|old|old>=m.watcher)
-                ||m.registered_daa.checked_add(self.maturity_window).is_none_or(|at|at>self.frozen_daa){return Err("noncanonical or immature frozen watcher");}
-            previous=Some(m.watcher);
+            if m.stake == 0
+                || previous.is_some_and(|old| old >= m.watcher)
+                || m.registered_daa.checked_add(self.maturity_window).is_none_or(|at| at > self.frozen_daa)
+            {
+                return Err("noncanonical or immature frozen watcher");
+            }
+            previous = Some(m.watcher);
         }
         Ok(())
     }
 }
 impl crate::palw_state_v2::PalwChainStateV2 {
-    pub(crate) fn assert_verifier_watch_draw_consistency_v1(&self,params:&crate::palw_state_v2::PalwStateParamsV2)
-        ->Result<(),crate::palw_state_v2::PalwStateV2Error>{
+    pub(crate) fn assert_verifier_watch_draw_consistency_v1(
+        &self,
+        params: &crate::palw_state_v2::PalwStateParamsV2,
+    ) -> Result<(), crate::palw_state_v2::PalwStateV2Error> {
         use crate::palw_state_v2::PalwStateV2Error as E;
-        let bad=|s:&str|E::CarriageInconsistent(s.into());
-        let Some(route)=self.kernel_route() else{return Ok(());};
-        for ((table,k),bytes) in &route.aux {
-            if *table!=TABLE||!matches!(k.first(),Some(&POOL)|Some(&CONTEXT)){continue;}
-            let (from,policy)=params.verifier_watch_v1.as_ref().ok_or_else(||bad("watcher draw rows without policy"))?;
-            if k.len()!=65{return Err(bad("watcher draw key shape"));}
-            if k[0]==POOL {
-                let row=decode_watch_row::<PalwFrozenWatcherPoolV1>(bytes)?;row.validate(policy,*from).map_err(bad)?;
-                if k[1..]!=row.id(){return Err(bad("watcher pool key identity"));}
-                let (maturity,early)=params.verifier_watch_maturity_v1.ok_or_else(||bad("watcher maturity authority absent"))?;
-                let floor=crate::config::params::palw_bond_maturity_window_in_force_v1(maturity,early,row.frozen_daa).unwrap_or(0)
-                    .max(params.rfc0018_v1().map_or(0,|p|p.certification.verifier_maturity_daa));
-                if row.maturity_window<floor{return Err(bad("frozen pool bypasses native maturity floor"));}
+        let bad = |s: &str| E::CarriageInconsistent(s.into());
+        let Some(route) = self.kernel_route() else {
+            return Ok(());
+        };
+        for ((table, k), bytes) in &route.aux {
+            if *table != TABLE || !matches!(k.first(), Some(&POOL) | Some(&CONTEXT)) {
+                continue;
+            }
+            let (from, policy) = params.verifier_watch_v1.as_ref().ok_or_else(|| bad("watcher draw rows without policy"))?;
+            if k.len() != 65 {
+                return Err(bad("watcher draw key shape"));
+            }
+            if k[0] == POOL {
+                let row = decode_watch_row::<PalwFrozenWatcherPoolV1>(bytes)?;
+                row.validate(policy, *from).map_err(bad)?;
+                if k[1..] != row.id() {
+                    return Err(bad("watcher pool key identity"));
+                }
+                let (maturity, early) = params.verifier_watch_maturity_v1.ok_or_else(|| bad("watcher maturity authority absent"))?;
+                let floor = crate::config::params::palw_bond_maturity_window_in_force_v1(maturity, early, row.frozen_daa)
+                    .unwrap_or(0)
+                    .max(params.rfc0018_v1().map_or(0, |p| p.certification.verifier_maturity_daa));
+                if row.maturity_window < floor {
+                    return Err(bad("frozen pool bypasses native maturity floor"));
+                }
             } else {
-                let row=decode_watch_row::<PalwWatcherClaimContextV1>(bytes)?;row.pool.validate(policy,*from).map_err(bad)?;
-                if k[1..]!=row.claim||row.beacon.commitment_root!=row.claim||row.beacon.policy!=policy.beacon
-                    ||row.beacon.ruleset_id!=route.header.policy.ruleset_digest
-                    ||row.beacon.subject_kind!=misaka_palw_challenge::SubjectKindV1::ClaimVerification
-                    ||row.beacon.commitment_position/policy.epoch_length_daa!=row.pool.epoch
-                    ||row.beacon.challenge_epoch!=row.pool.epoch||row.pool.frozen_daa>row.beacon.commitment_position
-                    ||!row.beacon.excluded_profiles.contains(&row.pool.class)
-                    ||row.beacon.eligible_profiles.contains(&row.pool.class)
-                    ||row.hard_deadline<=row.beacon.commitment_position
-                    ||row.hard_deadline.checked_sub(row.beacon.commitment_position).is_none_or(|n|n>policy.maximum_claim_horizon_daa){
+                let row = decode_watch_row::<PalwWatcherClaimContextV1>(bytes)?;
+                row.pool.validate(policy, *from).map_err(bad)?;
+                if k[1..] != row.claim
+                    || row.beacon.commitment_root != row.claim
+                    || row.beacon.policy != policy.beacon
+                    || row.beacon.ruleset_id != route.header.policy.ruleset_digest
+                    || row.beacon.subject_kind != misaka_palw_challenge::SubjectKindV1::ClaimVerification
+                    || row.beacon.commitment_position / policy.epoch_length_daa != row.pool.epoch
+                    || row.beacon.challenge_epoch != row.pool.epoch
+                    || row.pool.frozen_daa > row.beacon.commitment_position
+                    || !row.beacon.excluded_profiles.contains(&row.pool.class)
+                    || row.beacon.eligible_profiles.contains(&row.pool.class)
+                    || row.hard_deadline <= row.beacon.commitment_position
+                    || row
+                        .hard_deadline
+                        .checked_sub(row.beacon.commitment_position)
+                        .is_none_or(|n| n > policy.maximum_claim_horizon_daa)
+                {
                     return Err(bad("watcher context differs from its original claim/epoch/window"));
                 }
-                if let Some(slots)=&row.selected {
-                    if !slots.is_empty()&&slots.len()!=usize::from(policy.slots){return Err(bad("watcher draw slot count"));}
-                    if slots.iter().any(|s|!row.pool.members.iter().any(|m|m.watcher==*s&&m.operator!=row.excluded_operator)){
+                if let Some(slots) = &row.selected {
+                    if !slots.is_empty() && slots.len() != usize::from(policy.slots) {
+                        return Err(bad("watcher draw slot count"));
+                    }
+                    if slots.iter().any(|s| !row.pool.members.iter().any(|m| m.watcher == *s && m.operator != row.excluded_operator)) {
                         return Err(bad("watcher draw names an excluded or absent member"));
                     }
                 }

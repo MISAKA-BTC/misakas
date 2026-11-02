@@ -23,9 +23,10 @@
 //!    deadline, `NotCertified` / `Vetoed`; no population is `NoPopulation`; no draw by `certify_by_daa` is `Expired`. One attempt per
 //!    claim, counted per class; never retried.
 //!
-//! A **public-check path** (`PublicCheckCertified`) exists for classes with a pinned deterministic public check (G14-complete public
-//! material): [`PALW_SECURITY_PUBLIC_CHECK_CLASSES_PINNED_V1`] is EMPTY in this binary, so the path certifies nothing until a class is
-//! pinned with its measurement record.
+//! The legacy `PublicCheckCertified` wire tag remains readable for history. The
+//! permanent user decision of 2026-10-15 excludes it from new consensus credit:
+//! matching public/local re-execution never replaces drawn-verifier approval.
+//! No class registration or measurement record can enable that shortcut.
 //!
 //! **PREMISE-BASED, not an unconditional proof (user decision 2026-10-15).** The pillar is the drawn verifiers' signed approval, under
 //! the explicit premise that **the honest fraction of drawn verifier stake is at least the threshold** (`k/m`). No cryptographic
@@ -118,8 +119,8 @@ pub const PALW_CERT_VERIFIER_MATURITY_DAYS_DESIGN_V1: u64 = 7;
 pub const PALW_CERT_DRAWS_PER_EPOCH_DESIGN_V1: u32 = 4_096;
 pub const PALW_CERT_EPOCH_DAYS_DESIGN_V1: u64 = 1;
 
-/// Classes whose claims a deterministic public check certifies (G14-complete public material, with a pinned measurement record).
-/// EMPTY: no class qualifies in this binary.
+/// Legacy API retained as an empty list. Public/local re-execution cannot
+/// replace selected-verifier approval (permanent user decision, 2026-10-15).
 pub const PALW_SECURITY_PUBLIC_CHECK_CLASSES_PINNED_V1: &[[u8; 64]] = &[];
 
 /// The certification policy (mirrored on the state params beside Gate C's fence).
@@ -197,6 +198,7 @@ impl PalwSecurityCertificationPolicyV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum PalwCertificationOutcomeV1 {
     Certified,
+    /// Historical wire tag only; never authorizes new consensus credit.
     PublicCheckCertified,
     /// Fewer than `k` positives by the deadline (silence, unavailability, non-reproduction). Not a slash.
     NotCertified,
@@ -212,7 +214,7 @@ pub enum PalwCertificationOutcomeV1 {
 
 impl PalwCertificationOutcomeV1 {
     pub fn certifies(self) -> bool {
-        matches!(self, Self::Certified | Self::PublicCheckCertified)
+        matches!(self, Self::Certified)
     }
 }
 
@@ -515,8 +517,9 @@ pub fn palw_certification_draw_v1(
 }
 
 /// Whether a class has a pinned deterministic public check (the additional path).
-pub fn palw_certification_public_check_v1(class_id: &EligDigestV1) -> bool {
-    PALW_SECURITY_PUBLIC_CHECK_CLASSES_PINNED_V1.contains(class_id)
+pub fn palw_certification_public_check_v1(_class_id: &EligDigestV1) -> bool {
+    // Keep the legacy API, without a future pinning path around approval.
+    false
 }
 
 /// The facts about the claim the verdict reads, at `now`.
@@ -528,7 +531,7 @@ pub struct PalwCertificationClaimFactsV1 {
 
 /// **The verdict** at `now` (`None`: undecided — wait). Order: a claim no longer `Final` withdraws; a draw that never happened by
 /// `certify_by_daa` expires; the veto; `k` positives with the prosecution window elapsed and nothing pending certify; the deadline
-/// fails the rest. A public-check class certifies once the prosecution window has elapsed with nothing pending.
+/// fails the rest. Public/local re-execution alone never certifies a claim.
 pub fn palw_certification_verdict_v1(
     policy: &PalwSecurityCertificationPolicyV1,
     row: &PalwClaimCertificationRowV1,
@@ -543,9 +546,6 @@ pub fn palw_certification_verdict_v1(
         return Some(O::Withdrawn);
     }
     let prosecution_elapsed = now >= row.final_daa.saturating_add(policy.prosecution_window_daa);
-    if palw_certification_public_check_v1(&row.class_id) {
-        return (prosecution_elapsed && !facts.accusation_pending).then_some(O::PublicCheckCertified);
-    }
     if row.anchor.is_none() {
         return (now > row.committed_daa.saturating_add(policy.certify_by_daa)).then_some(O::Expired);
     }

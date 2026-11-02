@@ -217,15 +217,26 @@ impl TokenizerSeedV1 {
 
 enum TableHoldingV1 {
     Local(Arc<PalwTokenTableV1>),
-    Rooted(Arc<kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<kaspa_consensus_core::palw_court_rooted_semantic_v1::RootedSemanticTableV1>>),
+    Rooted(
+        Arc<
+            kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<
+                kaspa_consensus_core::palw_court_rooted_semantic_v1::RootedSemanticTableV1,
+            >,
+        >,
+    ),
 }
 impl std::ops::Deref for TableHoldingV1 {
-    type Target=PalwTokenTableV1;
-    fn deref(&self)->&Self::Target{match self{Self::Local(t)=>t,Self::Rooted(t)=>t.table_v1()}}
+    type Target = PalwTokenTableV1;
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Local(t) => t,
+            Self::Rooted(t) => t.table_v1(),
+        }
+    }
 }
 struct RootedRawSpillV1 {
-    _file:tempfile::NamedTempFile,
-    _storage:Option<kaspa_utils::storage_budget::StorageReservation>,
+    _file: tempfile::NamedTempFile,
+    _storage: Option<kaspa_utils::storage_budget::StorageReservation>,
 }
 struct Candidate {
     path: PathBuf,
@@ -486,7 +497,7 @@ pub(crate) struct TokenizerSchedulerV1 {
     pending: Option<Pending>,
     moves: u64,
     context: Hash64,
-    _rooted_raw:Option<RootedRawSpillV1>,
+    _rooted_raw: Option<RootedRawSpillV1>,
 }
 impl TokenizerSchedulerV1 {
     /// Test-only entry; the service opens through `open_with_original_v1`.
@@ -516,7 +527,16 @@ impl TokenizerSchedulerV1 {
         original: Option<&PalwConstraintStreamSeedV1>,
     ) -> Result<Self, String> {
         let original = original.cloned().map(TokenizerSeedV1::Legacy);
-        Self::open_inner_v1(path, target, TokenizerOriginalV1::Legacy(binding), job, TableHoldingV1::Local(table), progress, ledger, original.as_ref())
+        Self::open_inner_v1(
+            path,
+            target,
+            TokenizerOriginalV1::Legacy(binding),
+            job,
+            TableHoldingV1::Local(table),
+            progress,
+            ledger,
+            original.as_ref(),
+        )
     }
 
     /// A TIR claim's tokenizer stage (behind `palw_staged_tir_route_v1`): the statement and
@@ -534,30 +554,57 @@ impl TokenizerSchedulerV1 {
         original: Option<&kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwConstraintStreamNativeSeedV1>,
     ) -> Result<Self, String> {
         let original = original.cloned().map(TokenizerSeedV1::Native);
-        Self::open_inner_v1(path, target, TokenizerOriginalV1::Tir { view, header }, job, TableHoldingV1::Local(table), progress, ledger, original.as_ref())
+        Self::open_inner_v1(
+            path,
+            target,
+            TokenizerOriginalV1::Tir { view, header },
+            job,
+            TableHoldingV1::Local(table),
+            progress,
+            ledger,
+            original.as_ref(),
+        )
     }
 
     /// Authenticated supplier bodies use the exact existing native seed/move path.
     /// The private spool is held through every witness read and removed on drop.
     pub(crate) fn open_native_rooted_v1(
-        raw:kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<Vec<u8>>,
-        table:kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<kaspa_consensus_core::palw_court_rooted_semantic_v1::RootedSemanticTableV1>,
-        target:&PalwOffenceTargetV1,
-        view:&kaspa_consensus_core::palw_decode_view_v1::PalwDecodeViewV1,
-        header:&kaspa_consensus_core::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
-        job:&PalwFreePromptJobV3,progress:&PalwStagedOwnedProgressV1,ledger:&Arc<PalwMemoryLedgerV1>,
-        original:Option<&kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwConstraintStreamNativeSeedV1>,
-    )->Result<Self,String>{
+        raw: kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<Vec<u8>>,
+        table: kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<
+            kaspa_consensus_core::palw_court_rooted_semantic_v1::RootedSemanticTableV1,
+        >,
+        target: &PalwOffenceTargetV1,
+        view: &kaspa_consensus_core::palw_decode_view_v1::PalwDecodeViewV1,
+        header: &kaspa_consensus_core::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        job: &PalwFreePromptJobV3,
+        progress: &PalwStagedOwnedProgressV1,
+        ledger: &Arc<PalwMemoryLedgerV1>,
+        original: Option<&kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwConstraintStreamNativeSeedV1>,
+    ) -> Result<Self, String> {
         use std::io::Write;
-        let storage=kaspa_utils::storage_budget::reserve_global_after_reclaim(
-            kaspa_utils::storage_budget::StorageCategory::PalwRetained,raw.len() as u64).map_err(|e|e.to_string())?;
-        let mut file=tempfile::Builder::new().prefix("misaka-rooted-tokenizer-")
-            .tempfile_in(kaspa_utils::storage_budget::managed_temp_dir()).map_err(|e|e.to_string())?;
-        file.write_all(&raw).map_err(|e|e.to_string())?;file.flush().map_err(|e|e.to_string())?;
-        let seed=original.cloned().map(TokenizerSeedV1::Native);
-        let mut worker=Self::open_inner_v1(file.path(),target,TokenizerOriginalV1::Tir{view,header},job,
-            TableHoldingV1::Rooted(Arc::new(table)),progress,ledger,seed.as_ref())?;
-        worker._rooted_raw=Some(RootedRawSpillV1{_file:file,_storage:storage});
+        let storage = kaspa_utils::storage_budget::reserve_global_after_reclaim(
+            kaspa_utils::storage_budget::StorageCategory::PalwRetained,
+            raw.len() as u64,
+        )
+        .map_err(|e| e.to_string())?;
+        let mut file = tempfile::Builder::new()
+            .prefix("misaka-rooted-tokenizer-")
+            .tempfile_in(kaspa_utils::storage_budget::managed_temp_dir())
+            .map_err(|e| e.to_string())?;
+        file.write_all(&raw).map_err(|e| e.to_string())?;
+        file.flush().map_err(|e| e.to_string())?;
+        let seed = original.cloned().map(TokenizerSeedV1::Native);
+        let mut worker = Self::open_inner_v1(
+            file.path(),
+            target,
+            TokenizerOriginalV1::Tir { view, header },
+            job,
+            TableHoldingV1::Rooted(Arc::new(table)),
+            progress,
+            ledger,
+            seed.as_ref(),
+        )?;
+        worker._rooted_raw = Some(RootedRawSpillV1 { _file: file, _storage: storage });
         Ok(worker)
     }
 
@@ -617,7 +664,7 @@ impl TokenizerSchedulerV1 {
                 candidate.actual_length,
             )?,
         };
-        Ok(Self { candidate, witness, court, sealed: false, pending: None, moves: 1, context, _rooted_raw:None })
+        Ok(Self { candidate, witness, court, sealed: false, pending: None, moves: 1, context, _rooted_raw: None })
     }
     /// Each decision is derived from one authenticated accepted snapshot. Signing/fee
     /// funding use the ordinary service carrier path after this blocking worker returns.

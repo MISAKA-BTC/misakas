@@ -470,11 +470,15 @@ pub trait ConsensusApi: Send + Sync {
     /// input 0 of the next `wallet send`. Empty on every network that is not `ConsensusV2`.
     /// Authoritative must-not-spend set. Implementations without an own checked
     /// registry reader must report unavailable rather than grant an empty set.
-    fn palw_locked_bond_outpoints_checked_v3(&self)->Result<Vec<crate::tx::TransactionOutpoint>,crate::palw_state_v2::PalwStateV2Error>{
-        Err(crate::palw_state_v2::PalwStateV2Error::NativeContextUnavailable(crate::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1::HistoryUnavailable))
+    fn palw_locked_bond_outpoints_checked_v3(
+        &self,
+    ) -> Result<Vec<crate::tx::TransactionOutpoint>, crate::palw_state_v2::PalwStateV2Error> {
+        Err(crate::palw_state_v2::PalwStateV2Error::NativeContextUnavailable(
+            crate::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1::HistoryUnavailable,
+        ))
     }
     /// Historical diagnostic-only compatibility; do not use to authorize funding.
-    #[deprecated(note="diagnostic-only compatibility; funding must use palw_locked_bond_outpoints_checked_v3")]
+    #[deprecated(note = "diagnostic-only compatibility; funding must use palw_locked_bond_outpoints_checked_v3")]
     fn palw_locked_bond_outpoints_v2(&self) -> Vec<crate::tx::TransactionOutpoint> {
         Vec::new()
     }
@@ -755,7 +759,10 @@ pub trait ConsensusApi: Send + Sync {
         &self,
         _checkpoint: BlockHash,
         _request: &crate::palw_prospective_kernel_material_v4::PalwProspectiveKernelMaterialRequestV4,
-    ) -> Result<crate::palw_kernel_material_enrollment_v4::PalwKernelMaterialIngressOwnedV4, crate::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4> {
+    ) -> Result<
+        crate::palw_kernel_material_enrollment_v4::PalwKernelMaterialIngressOwnedV4,
+        crate::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4,
+    > {
         Err(crate::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::history_unavailable_v4())
     }
     fn palw_kernel_material_ingress_v4(
@@ -810,7 +817,10 @@ pub trait ConsensusApi: Send + Sync {
         _context: &crate::palw_kernel_material_context_v4::PalwProspectiveKernelMaterialContextV4,
         _bundle: &crate::palw_prospective_kernel_material_v4::PalwProspectiveKernelBundleV4,
         _intent: &crate::palw_kernel_material_replacement_v4::PalwKernelMaterialReplacementIntentV4,
-    ) -> Result<crate::palw_kernel_material_replacement_v4::PalwKernelMaterialReplacementOwnedV4, crate::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4> {
+    ) -> Result<
+        crate::palw_kernel_material_replacement_v4::PalwKernelMaterialReplacementOwnedV4,
+        crate::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4,
+    > {
         Err(crate::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::history_unavailable_v4())
     }
     fn palw_kernel_material_replacement_v4(
@@ -2469,6 +2479,18 @@ pub trait ConsensusApi: Send + Sync {
         None
     }
 
+    /// Checked current-cohort accounting winner. `Ok(None)` means a successfully
+    /// materialized ConsensusV2 state has no route or no winner row. Missing state,
+    /// storage/codec failure and local resource refusal must never become absence.
+    /// Implementations without this reader withhold approval rather than invoke
+    /// the legacy unique-carrier fallback.
+    fn palw_fp_accounting_winning_carrier_v1(
+        &self,
+        _claim: kaspa_hashes::Hash64,
+    ) -> Result<Option<kaspa_hashes::Hash64>, crate::palw_native_resource_v1::NativeDecodeErrorV1<&'static str>> {
+        Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode("accounting winning carrier reader unavailable"))
+    }
+
     /// **G14 phase 3: where a V2 class stands on the onboarding path** (artifact bindings, kernel binding, conformance commitment, the
     /// activation gate's verdict and reason) at the virtual's DAA. `None` for an unknown class and off ConsensusV2.
     fn palw_onboarding_v1(&self, _class_id: kaspa_hashes::Hash64) -> Option<crate::palw_onboarding_v1::OnboardingReadV1> {
@@ -2571,21 +2593,33 @@ pub trait ConsensusApi: Send + Sync {
     /// The owner retains its native allocation lease; a table is data identity,
     /// not permission to skip the ordinary signed court and adjudication gates.
     fn palw_rooted_family_table_v1(
-        &self, _claim: crate::Hash64,
-    ) -> Result<Option<crate::palw_native_resource_v1::NativeRetainedV1<crate::palw_court_rooted_semantic_v1::RootedSemanticTableV1>>,
-                crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
+        &self,
+        _claim: crate::Hash64,
+    ) -> Result<
+        Option<crate::palw_native_resource_v1::NativeRetainedV1<crate::palw_court_rooted_semantic_v1::RootedSemanticTableV1>>,
+        crate::palw_native_resource_v1::NativeDecodeErrorV1<String>,
+    > {
         Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(
             crate::palw_native_resource_v1::NativeCoverageV1::unsupported::<crate::palw_state_v2::PalwChainStateV2>(
-                "rooted semantic material reader", "consensus backend has no rooted family material reader")))
+                "rooted semantic material reader",
+                "consensus backend has no rooted family material reader",
+            ),
+        ))
     }
 
     fn palw_rooted_tokenizer_raw_v1(
-        &self, _claim: crate::Hash64,
-    ) -> Result<Option<crate::palw_native_resource_v1::NativeRetainedV1<Vec<u8>>>,
-                crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
+        &self,
+        _claim: crate::Hash64,
+    ) -> Result<
+        Option<crate::palw_native_resource_v1::NativeRetainedV1<Vec<u8>>>,
+        crate::palw_native_resource_v1::NativeDecodeErrorV1<String>,
+    > {
         Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(
             crate::palw_native_resource_v1::NativeCoverageV1::unsupported::<crate::palw_state_v2::PalwChainStateV2>(
-                "rooted tokenizer material reader", "consensus backend has no rooted family material reader")))
+                "rooted tokenizer material reader",
+                "consensus backend has no rooted family material reader",
+            ),
+        ))
     }
 
     /// Snapshot-bound material, with explicit negotiated complete coverage.
@@ -2619,7 +2653,9 @@ pub trait ConsensusApi: Send + Sync {
     ) -> Result<(), crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
         Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(
             crate::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
-                "row-stream snapshot validation", "consensus has no full row inventory validator"),
+                "row-stream snapshot validation",
+                "consensus has no full row inventory validator",
+            ),
         ))
     }
 

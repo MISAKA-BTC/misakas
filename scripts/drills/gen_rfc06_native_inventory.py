@@ -8,6 +8,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 CORE = ROOT / 'consensus/core/src'
 OUT = CORE / 'palw_native_resource_v1/generated.rs'
+# Exact files emitted this run, shared with the canonical wire entry point.
+GENERATED_OUTPUTS = {OUT}
 
 def clean(s):
     return re.sub(r'/\*.*?\*/|//[^\n]*', '', s, flags=re.S)
@@ -93,7 +95,7 @@ for base,crate in [(CORE,'crate'),(ROOT/'misaka/palw/panel/src','misaka_palw_pan
         item=dict(attrs=attrs,kind=kind,name=name,path=path,body=body,form=form,module=module,type_public=m.group(0).startswith('pub'),file=str(file.relative_to(ROOT)))
         defs[path]=item;byname.setdefault(name,[]).append(item)
 
-primitive={'u8','u16','u32','u64','u128','usize','i8','i16','i32','i64','i128','isize','bool','f32','f64','String','Hash64','BlockHash','TransactionId','Hash','Hash32','Digest','()'}
+primitive={'u8','u16','u32','u64','u128','usize','i8','i16','i32','i64','i128','isize','bool','f32','f64','String','Hash64','BlockHash','TransactionId','Hash','Hash32','Digest','()','PalwLegacyCarrierLocatorV9'}
 # `PalwSharedCourtV1<T>` (G14) is a generic Arc newtype whose Borsh layout is T's: a container with hand-written visitors.
 containers={'Vec','Option','Box','Arc','BTreeMap','BTreeSet','HashMap','HashSet','VecDeque','IndexMap','IndexSet','SmallVec','Cow','PalwSharedCourtV1','NativeRetainedV1'}
 queue=['crate::palw_claim_local_v1::prefix_v1::PalwPrefixExportRefutationV1','crate::palw_claim_local_v1::prefix_v1::PalwPrefixExportReservationV1','crate::palw_claim_local_v1::PalwClaimLocalPolicyContextV1','crate::palw_freeprompt_v3::PalwReceiptSpendUnsignedV3','crate::header::Header','crate::palw_attempt_material_v3::PalwAttemptMaterialEnvelopeV3','crate::palw_material_session_enrollment_v4::PalwNativeRecoverySessionQuoteV4','crate::palw_material_capacity_v1::PalwKernelMaterialBundleV1','crate::palw_material_capacity_v1::PalwSegmentedMaterialBundleV1','misaka_palw_kernel::public::PositionResponseV1','misaka_palw_kernel::seg_da::SegPartResponseV1',
@@ -141,6 +143,8 @@ queue=['crate::palw_claim_local_v1::prefix_v1::PalwPrefixExportRefutationV1','cr
        # RFC-0018 (2026-10-15): the SecurityCertified rows of kernel route aux 136.
        'crate::palw_security_certification_v1::PalwClaimCertificationRowV1','crate::palw_security_certification_v1::PalwCertificationClassRowV1',
        'crate::palw_security_certification_v1::PalwCertificationNetworkRowV1',
+       # Existing kernel Gate C hold row, decoded by native checkpoint/effects.
+       'crate::palw_security_certification_v1::PalwKernelCertifiedRewardHoldV1',
        # RFC-0006 consumer v2 (2026-10-15): the router binding rows of kernel route aux 139.
        'crate::palw_router_binding_v2::PalwRouterBindingRowV2',
        # RFC-0006 RFC06-8 (2026-10-15): the class registration origins of kernel route aux 141 (dormant fence).
@@ -233,7 +237,7 @@ while queue:
  if item is None:
     unresolved.append(path);continue
  kind=item['kind']; form=item['form']; body=item['body']
- if path=='crate::palw_kernel_route_v1::KernelLedgerCacheV1':continue
+ if path in {'crate::palw_kernel_route_v1::KernelLedgerCacheV1','crate::palw_claim_local_context_gc_v3::ContextGcV3','crate::palw_claim_local_execution_cohort_census_v15::ExecutionCohortCensusV15'}:continue
  # Funded-original pairing (holds a whole carrier Transaction) and its test-only schedule: hand-written visitors in typed.rs.
  if path in FUNDED_MANUAL:unresolved.append(path);continue
  if kind=='struct' and form=='named':
@@ -279,10 +283,38 @@ while queue:
 
 # Opaque public types: preserve the actual type name in every refusal. Handwritten
 # private-owner visitors are intentionally omitted here.
-manual={'crate::palw_funded_original_coordinator_v1::PalwFundedOriginalPairingV1','crate::palw_funded_original_coordinator_v1::PalwFundedOriginalScheduleV1','misaka_palw_kernel::flat_quota11::stage14::source26::StageSourcePlanRecordV26','misaka_palw_panel::PanelCandidatesV1','misaka_palw_panel::PermissionlessPanelStateV1','crate::palw_kernel_route_v1::KernelLedgerCacheV1','kaspa_math::Uint512','kaspa_math::Uint576','misaka_palw_kernel::ledger::KernelLedgerV1','misaka_palw_kernel::opv::OpvStateV1'}
+manual={'crate::palw_claim_local_execution_cohort_census_v15::ExecutionCohortCensusV15','crate::palw_claim_local_context_gc_v3::ContextGcV3','crate::palw_funded_original_coordinator_v1::PalwFundedOriginalPairingV1','crate::palw_funded_original_coordinator_v1::PalwFundedOriginalScheduleV1','misaka_palw_kernel::flat_quota11::stage14::source26::StageSourcePlanRecordV26','misaka_palw_panel::PanelCandidatesV1','misaka_palw_panel::PermissionlessPanelStateV1','crate::palw_kernel_route_v1::KernelLedgerCacheV1','kaspa_math::Uint512','kaspa_math::Uint576','misaka_palw_kernel::ledger::KernelLedgerV1','misaka_palw_kernel::opv::OpvStateV1'}
 header='//! Generated explicit native field inventory. Regenerate with\n//! scripts/drills/gen_rfc06_native_inventory.py after schema changes.\n//! Every field/variant is exhaustive; private layouts are visited beside owners.\nuse super::*;\n'
+# Reviewed NativeHeap implementations already live beside these owners. Keep
+# traversal/visited intact so nested fields and structural wire coverage remain
+# discoverable; suppress only duplicate heap implementation emission.
+OWNER_NATIVE_HEAP = {
+    'crate::palw_court_original_escrow_v1::FundingTermsV1',
+    'crate::palw_court_original_escrow_v1::FundingConsentV1',
+    'crate::palw_tir_funded_original_envelope_v1::PalwTirFundedOriginalEnvelopeV1',
+    'crate::palw_court_family_material_v1::CheckedFamilyTableInventoryV1',
+    'crate::palw_court_family_material_v1::FamilyOriginalRuleContextV2',
+    'crate::palw_court_family_material_v1::FamilyMaterialTargetV1',
+    'crate::palw_court_family_material_v1::FamilyMaterialActionV1',
+    'crate::palw_court_family_material_v1::SignedFamilyMaterialV1',
+    'crate::palw_court_family_material_v1::FamilyTableInventoryRowV1',
+    'crate::palw_court_family_material_v1::FamilyMaterialDraftV1',
+    'crate::palw_court_family_material_v1::FamilyMaterialPartV1',
+    'crate::palw_court_family_material_v1::FamilyMaterialBodyV1',
+    'crate::palw_court_family_material_v1::FamilyDraftQuoteV2',
+    'crate::palw_court_family_material_v1::FamilyDraftReservationV2',
+    'crate::palw_court_family_material_v1::FamilyPrimaryDraftV2',
+    'crate::palw_court_family_material_v1::FamilyCarrierProjectionFactsV3',
+    'crate::palw_native_settlement_v1::PalwSettlementPolicyV1',
+    'crate::palw_native_settlement_v1::PalwDnsRetirementV1',
+    'crate::palw_native39_settlement_checkpoint_v1::Native39SettlementFoldV1',
+    'crate::palw_fork_choice_commitment_v1::PalwWeightAllocationSlotV1',
+    'crate::palw_fork_choice_commitment_v1::PalwForkChoiceLeafV1',
+}
+manual.update(OWNER_NATIVE_HEAP)
 private={}; public=[]
 for item,code,is_private in generated:
+    if item['path'] in OWNER_NATIVE_HEAP:continue
     if is_private:
         private.setdefault(item['module'],[]).append(code)
     else:public.append(code.replace('crate::palw_bond_budget_v1::material::','crate::palw_bond_budget_v1::').replace('crate::palw_bond_budget_v1::consumer::','crate::palw_bond_budget_v1::'))
@@ -292,8 +324,9 @@ for old in private_dir.glob('*.rs'):
     if old.read_text().startswith('// Generated owner-local field visitor') and old.stem not in {m.replace('::','_') for m in private}:old.unlink()
 for module,codes in private.items():
     filename=module.replace('::','_')+'.rs'
+    GENERATED_OUTPUTS.add(private_dir/filename)
     (private_dir/filename).write_text('// Generated owner-local field visitor. Root/hash/codec unchanged.\n#[allow(unused_imports)]\nuse crate::palw_native_resource_v1::{NativeHeapV1, NativeCoverageV1, native_struct, native_tuple_struct, native_enum, native_unit};\n'+'\n'.join(codes)+'\n')
-print(f'wrote {OUT.relative_to(ROOT)}: {len(generated)} explicit types, {len(set(unresolved)-manual)} opaque/unresolved types')
+print(f'wrote {OUT.relative_to(ROOT)}: {len(public)+sum(len(v) for v in private.values())} emitted explicit types, {len(set(unresolved)-manual)} opaque/unresolved types')
 print('Private owners: '+', '.join(private))
 print('\n'.join(sorted(set(unresolved)-manual)))
 
@@ -301,11 +334,13 @@ ledger=defs['misaka_palw_kernel::ledger::KernelLedgerV1']; fs=fields(ledger)
 hidden=[(name,typ) for name,typ,public in fs if not public]
 bridge="\n// Generated read-only native inventory bridge; every ledger field is exhaustive.\nimpl KernelLedgerV1 {\n    pub fn native_inventory_hidden_v1(&self) -> ("+','.join('&'+typ for _,typ in hidden)+",) {\n        let Self { "+', '.join(name if not public else name+': _' for name,_,public in fs)+" } = self;\n        ("+', '.join(name for name,_ in hidden)+",)\n    }\n}\n"
 bridge_path=ROOT/'misaka/palw/kernel/src/native_inventory_ledger_v1.rs'
+GENERATED_OUTPUTS.add(bridge_path)
 bridge_path.write_text('use super::*;\n'+bridge)
 publicfields=[name for name,_,public in fs if public]
 visitor='impl NativeHeapV1 for misaka_palw_kernel::ledger::KernelLedgerV1 {\n fn native_heap_v1(&self,path:&str)->NativeCoverageV1 {\n  let mut sum=self.native_inventory_hidden_v1().native_heap_v1(path);\n'
 visitor+=''.join('  sum=sum.add::<Self>(self.'+name+'.native_heap_v1(path),path);\n' for name in publicfields)
 visitor+='  sum\n }\n}\n'
+GENERATED_OUTPUTS.add(OUT.parent/'kernel_ledger.rs')
 (OUT.parent/'kernel_ledger.rs').write_text('//! Generated matching public/private ledger visitor.\nuse super::*;\n'+visitor)
 
 source_plan_path='misaka_palw_kernel::flat_quota11::stage14::source26::StageSourcePlanRecordV26'
@@ -317,4 +352,5 @@ if source_plan_path in visited:
  marker='// Generated source26 native inventory bridge; private fields remain private.'
  owner=ROOT/item['file'];text=owner.read_text();text=text.split(marker)[0].rstrip()
  text+='\n\n'+marker+'\nimpl StageSourcePlanRecordV26 {\n pub fn native_inventory_parts_v1(&self)->'+typ+' {\n let Self { '+','.join(n for n,_,_ in fs)+' }=self;\n '+body+'\n }\n}\n'
+ GENERATED_OUTPUTS.add(owner)
  owner.write_text(text)

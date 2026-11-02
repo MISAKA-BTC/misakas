@@ -190,8 +190,8 @@ impl NativeRetainedV1<crate::palw_state_v2::PalwStateCarriageV2> {
         check: impl FnOnce(&crate::palw_state_v2::PalwChainStateV2) -> Result<(), crate::palw_state_v2::PalwStateV2Error>,
     ) -> Result<super::NativeChainStateV1, NativeStateMutationErrorV1> {
         let Self { value, _lease } = self;
-        let restored = super::restore::restore_checked_v1(point, value, params, expected_root,
-            uncertified_weightless, canonical_work_daa, check);
+        let restored =
+            super::restore::restore_checked_v1(point, value, params, expected_root, uncertified_weightless, canonical_work_daa, check);
         drop(_lease);
         restored
     }
@@ -204,6 +204,11 @@ pub(crate) fn value_requests_v1<T: NativeHeapV1>(value: &T) -> Result<u64, Nativ
     if !enabled() {
         return Ok(0);
     }
+    typed_value_requests_v1(value)
+}
+/// Always compute the audited typed request, including when the process-wide
+/// checker is dormant. Explicit local checkers use this same sizing path.
+pub(crate) fn typed_value_requests_v1<T: NativeHeapV1>(value: &T) -> Result<u64, NativeCoverageV1> {
     let bound = value.native_heap_v1("native retained payload").add::<T>(
         NativeCoverageV1::Bounded { bytes: (size_of::<NativeRetainedV1<T>>() + size_of::<[usize; 3]>()) as u64 },
         "native retained Arc/owner",
@@ -238,10 +243,36 @@ pub fn retain_native_carriage_decode_classified_v1<T, E: fmt::Display>(
     canonical: &[u8],
     decode: impl FnOnce() -> Result<T, E>,
 ) -> Result<NativeRetainedV1<T>, NativeDecodeErrorV1<E>> {
-    let lease = if enabled() {
-        let preflight = preflight_native_carriage_v1(canonical, canonical.len() as u64).map_err(|why| {
-            NativeDecodeErrorV1::Resource(NativeCoverageV1::unsupported::<T>("actual cold native carriage shape", &why.to_string()))
-        })?;
+    // Preserve this existing generic API's contract. A concrete storage boundary
+    // can map malformed wire into its own typed error with the API below.
+    retain_native_carriage_decode_with_preflight_error_v1(
+        point,
+        canonical,
+        |why| NativeDecodeErrorV1::Resource(NativeCoverageV1::unsupported::<T>("actual cold native carriage shape", &why.to_string())),
+        decode,
+    )
+}
+
+/// One actual preflight/reservation and one decode. The concrete caller owns
+/// its codec-versus-resource error mapping; no blanket From<io::Error> bound
+/// changes the existing generic callers or detaches the allocation ticket.
+pub fn retain_native_carriage_decode_with_preflight_error_v1<T, E: fmt::Display>(
+    point: crate::BlockHash,
+    canonical: &[u8],
+    preflight_error: impl FnOnce(io::Error) -> NativeDecodeErrorV1<E>,
+    decode: impl FnOnce() -> Result<T, E>,
+) -> Result<NativeRetainedV1<T>, NativeDecodeErrorV1<E>> {
+    retain_carriage_decode_with_mode_v1(point, canonical, enabled(), preflight_error, decode)
+}
+fn retain_carriage_decode_with_mode_v1<T, E: fmt::Display>(
+    point: crate::BlockHash,
+    canonical: &[u8],
+    admission: bool,
+    preflight_error: impl FnOnce(io::Error) -> NativeDecodeErrorV1<E>,
+    decode: impl FnOnce() -> Result<T, E>,
+) -> Result<NativeRetainedV1<T>, NativeDecodeErrorV1<E>> {
+    let lease = if admission {
+        let preflight = preflight_native_carriage_v1(canonical, canonical.len() as u64).map_err(preflight_error)?;
         reserve_native_wire_v1(point, &preflight).map_err(NativeDecodeErrorV1::Resource)?
     } else {
         None
@@ -253,6 +284,27 @@ pub fn retain_native_carriage_decode_classified_v1<T, E: fmt::Display>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn cold_carriage_preflight_keeps_truncation_before_decode() {
+        let carriage = crate::palw_state_v2::PalwStateCarriageV2::from_state(&crate::palw_state_v2::PalwChainStateV2::genesis());
+        let mut bytes = borsh::to_vec(&carriage).unwrap();
+        bytes.truncate(1); // inside mandatory u16 version; optional-tail EOF is valid legacy carriage
+        let called = std::cell::Cell::new(false);
+        let result = retain_carriage_decode_with_mode_v1(
+            crate::BlockHash::from_u64_word(37),
+            &bytes,
+            true,
+            NativeDecodeErrorV1::Decode,
+            || {
+                called.set(true);
+                Ok::<_, io::Error>(())
+            },
+        );
+        assert!(!called.get(), "malformed framing is refused before typed allocation");
+        assert!(
+            matches!(result, Err(NativeDecodeErrorV1::Decode(ref why)) if matches!(why.kind(), io::ErrorKind::InvalidData | io::ErrorKind::UnexpectedEof))
+        );
+    }
     #[test]
     fn cache_replacement_cannot_release_live_shared_payload_ticket() {
         let checker = NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 { memory_bytes: 64, database_bytes: 0 });
@@ -360,6 +412,9 @@ pub fn native_delta_replay_requests_v1(
                 let mut shape = NativeWireShapeV1::default();
                 for bytes in [old, new].into_iter().flatten() {
                     shape = shape.merge(preflight_kernel_served_row_v1(*table, key, bytes).map_err(bad)?).map_err(bad)?;
+                    if *table == crate::palw_monetary_material_v1::PALW_MONETARY_MATERIAL_TABLE_V1 {
+                        shape = shape.merge(s::material_member_replay_shape_v8(bytes).map_err(bad)?).map_err(bad)?;
+                    }
                 }
                 Ok(shape)
             }
@@ -408,6 +463,12 @@ pub fn native_delta_replay_requests_v1(
         .add::<s::PalwChainStateV2>(NativeCoverageV1::Bounded {bytes:trees},component)
         .add::<s::PalwChainStateV2>(NativeCoverageV1::Bounded {bytes:old_ledger},component)
         .add::<s::PalwChainStateV2>(NativeCoverageV1::Bounded {bytes:(size_of::<NativeRetainedV1<s::PalwChainStateV2>>() + size_of::<[usize;3]>()) as u64},component);
+    let bound = bound
+        .add::<s::PalwChainStateV2>(NativeCoverageV1::Bounded { bytes: s::context_gc_replay_requests_v3(state, delta)? }, component);
+    let bound = bound.add::<s::PalwChainStateV2>(
+        NativeCoverageV1::Bounded { bytes: s::execution_cohort_replay_requests_v15(state, delta)? },
+        component,
+    );
     bound.bytes().ok_or(bound)
 }
 

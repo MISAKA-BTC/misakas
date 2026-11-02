@@ -2715,10 +2715,11 @@ pub fn palw_filed_offence_commit_key_v1(
         K::PrefixExportRefuted => {
             // Fixed-width leading identity only; no untrusted tile Vec allocation
             // in this prediction helper. The authoritative court checks the rest.
-            if evidence.first().copied() != Some(1) { return None; }
-            let identity = borsh::from_slice::<crate::palw_claim_local_v1::prefix_v1::PalwPrefixExportIdentityV1>(
-                evidence.get(1..209)?,
-            ).ok()?;
+            if evidence.first().copied() != Some(1) {
+                return None;
+            }
+            let identity =
+                borsh::from_slice::<crate::palw_claim_local_v1::prefix_v1::PalwPrefixExportIdentityV1>(evidence.get(1..209)?).ok()?;
             Some(crate::palw_claim_local_v1::prefix_v1::prefix_export_offence_id_v1(accused, &identity))
         }
         K::PanelFalseValid | K::CourtExecutorGuilty | K::DaDefault | K::CourtConviction => None,

@@ -78,10 +78,16 @@ mod tests {
         assert!(palw_relay_refusal_is_misbehaviour_v1(&wrap(TxRuleError::PalwH1CarrierInvalid("junk proof".into()))));
         assert!(!palw_relay_refusal_is_misbehaviour_v1(&wrap(TxRuleError::PalwH1CarrierRefused("span ahead".into()))));
         assert!(!palw_relay_refusal_is_misbehaviour_v1(&wrap(TxRuleError::PalwH1CarrierThrottled("busy".into()))));
-        let local:RuleError=TxRuleError::LocalNativeCapacityUnavailable(kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<u8>("own collateral reader","busy")).into();
+        let local: RuleError = TxRuleError::LocalNativeCapacityUnavailable(
+            kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<u8>("own collateral reader", "busy"),
+        )
+        .into();
         assert!(local.is_local_native_retry_v1());
         assert!(!palw_relay_refusal_is_misbehaviour_v1(&MiningManagerError::MempoolError(local)));
-        let local:RuleError=TxRuleError::LocalNativeStateContextUnavailable(kaspa_consensus_core::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1::HistoryUnavailable).into();
+        let local: RuleError = TxRuleError::LocalNativeStateContextUnavailable(
+            kaspa_consensus_core::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1::HistoryUnavailable,
+        )
+        .into();
         assert!(local.is_local_native_retry_v1());
         assert!(!palw_relay_refusal_is_misbehaviour_v1(&MiningManagerError::MempoolError(local)));
 

@@ -593,9 +593,9 @@ pub(super) fn sweep_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlo
                     &claim_id,
                     &claim,
                 )?;
-                let source_horizon=super::palw_legacy_pending_facts_v1::legacy_retiring_horizon_v1(builder,ctx,claim_id,&claim)?;
-                builder.retire_claim(claim_id, &claim)?;
-                super::palw_legacy_pending_facts_v1::note_legacy_retirement_v1(builder,ctx,claim_id,&claim,source_horizon)?;
+                let source_horizon = super::palw_legacy_pending_facts_v1::legacy_retiring_horizon_v1(builder, ctx, claim_id, &claim)?;
+                builder.retire_claim_at_v18(ctx, claim_id, &claim)?;
+                super::palw_legacy_pending_facts_v1::note_legacy_retirement_v1(builder, ctx, claim_id, &claim, source_horizon)?;
             }
             PalwClaimPhaseV2::Final { .. } | PalwClaimPhaseV2::Voided { .. } => {
                 // Any other terminal claim owns no deadline; finding one is index corruption.

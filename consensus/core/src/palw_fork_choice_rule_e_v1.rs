@@ -812,17 +812,22 @@ pub fn palw_rule_e_sides_with_capital_v2(
 /// closed its liability. Neither whole-tip frontier nor raw hash aliasing is
 /// authority to include a native anchor in a side's exclusive past.
 fn native_frontiers_v1(
-    mut pair:PalwRuleEPairV1,a:&PalwChainStateV2,b:&PalwChainStateV2,params:&PalwStateParamsV2,
-    exclusive_a:impl Fn(&crate::palw_state_v2::PalwClaimLocalNativeFrontierRecordV1)->bool,
-    exclusive_b:impl Fn(&crate::palw_state_v2::PalwClaimLocalNativeFrontierRecordV1)->bool,
-)->Result<PalwRuleEPairV1,PalwRuleEErrorV1>{
-    let aa=crate::palw_state_v2::palw_claim_local_native_frontier_records_v1(a,params).map_err(|_|PalwRuleEErrorV1::NotWeighable)?;
-    let bb=crate::palw_state_v2::palw_claim_local_native_frontier_records_v1(b,params).map_err(|_|PalwRuleEErrorV1::NotWeighable)?;
-    for r in aa.iter().filter(|r|r.irreversible&&exclusive_a(r)&&bb.binary_search_by_key(&r.work,|q|q.work).is_err()){
-        pair.a.safe_frontier_blue_score=pair.a.safe_frontier_blue_score.max(r.accepted_blue_score);
+    mut pair: PalwRuleEPairV1,
+    a: &PalwChainStateV2,
+    b: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    exclusive_a: impl Fn(&crate::palw_state_v2::PalwClaimLocalNativeFrontierRecordV1) -> bool,
+    exclusive_b: impl Fn(&crate::palw_state_v2::PalwClaimLocalNativeFrontierRecordV1) -> bool,
+) -> Result<PalwRuleEPairV1, PalwRuleEErrorV1> {
+    let aa =
+        crate::palw_state_v2::palw_claim_local_native_frontier_records_v1(a, params).map_err(|_| PalwRuleEErrorV1::NotWeighable)?;
+    let bb =
+        crate::palw_state_v2::palw_claim_local_native_frontier_records_v1(b, params).map_err(|_| PalwRuleEErrorV1::NotWeighable)?;
+    for r in aa.iter().filter(|r| r.irreversible && exclusive_a(r) && bb.binary_search_by_key(&r.work, |q| q.work).is_err()) {
+        pair.a.safe_frontier_blue_score = pair.a.safe_frontier_blue_score.max(r.accepted_blue_score);
     }
-    for r in bb.iter().filter(|r|r.irreversible&&exclusive_b(r)&&aa.binary_search_by_key(&r.work,|q|q.work).is_err()){
-        pair.b.safe_frontier_blue_score=pair.b.safe_frontier_blue_score.max(r.accepted_blue_score);
+    for r in bb.iter().filter(|r| r.irreversible && exclusive_b(r) && aa.binary_search_by_key(&r.work, |q| q.work).is_err()) {
+        pair.b.safe_frontier_blue_score = pair.b.safe_frontier_blue_score.max(r.accepted_blue_score);
     }
     Ok(pair)
 }
@@ -844,7 +849,7 @@ pub fn palw_rule_e_sides_above_fork_v1(
     // RFC-0018 §6: a common bond's capital is its collateral in `F` — the common past's value, never a post-fork deposit. Only where
     // the network declares `palw_rule_e_participation_v2` (A-2: otherwise every side carries 0, byte-identical to a leaf-v2 client's).
     let v2 = palw_rule_e_v2_declared(params);
-    let pair=palw_rule_e_sides_with_capital_v2(
+    let pair = palw_rule_e_sides_with_capital_v2(
         a,
         b,
         params,
@@ -857,7 +862,7 @@ pub fn palw_rule_e_sides_above_fork_v1(
         fork.bonds_iter().count(),
         if v2 { crate::palw_rfc0018_v1::palw_rule_e_common_capital_of_v2(fork) } else { 0 },
     )?;
-    native_frontiers_v1(pair,a,b,params,|r|r.accepted_blue_score>fork_blue_score,|r|r.accepted_blue_score>fork_blue_score)
+    native_frontiers_v1(pair, a, b, params, |r| r.accepted_blue_score > fork_blue_score, |r| r.accepted_blue_score > fork_blue_score)
 }
 
 /// Whether the network declares RFC-0018's v2 participation at any height (the mirror) — the node then carries the capital.
@@ -981,7 +986,7 @@ pub fn palw_rule_e_sides_by_claim_set_v1(
         .map(|(k, c)| (k, if v2 { c } else { 0 }))
         .collect();
     let total: u128 = common.values().map(|c| *c as u128).sum();
-    let pair=palw_rule_e_sides_with_capital_v2(
+    let pair = palw_rule_e_sides_with_capital_v2(
         a,
         b,
         params,
@@ -996,10 +1001,12 @@ pub fn palw_rule_e_sides_by_claim_set_v1(
     )?;
     // Native193 witnesses are retained through their exact issuance/retirement
     // horizon; the same conservative retention test applies across disjoint DAGs.
-    let retained=|r:&crate::palw_state_v2::PalwClaimLocalNativeFrontierRecordV1,other:u64|
-        params.claim_retirement_daa()==0 || r.accepted_daa.saturating_add(params.claim_retirement_daa())>
-            other.saturating_add(PALW_RULE_E_IBD_RETENTION_MARGIN_DAA_V1);
-    native_frontiers_v1(pair,a,b,params,|r|retained(r,b_daa),|r|retained(r,a_daa))
+    let retained = |r: &crate::palw_state_v2::PalwClaimLocalNativeFrontierRecordV1, other: u64| {
+        params.claim_retirement_daa() == 0
+            || r.accepted_daa.saturating_add(params.claim_retirement_daa())
+                > other.saturating_add(PALW_RULE_E_IBD_RETENTION_MARGIN_DAA_V1)
+    };
+    native_frontiers_v1(pair, a, b, params, |r| retained(r, b_daa), |r| retained(r, a_daa))
 }
 
 /// **A consensus instance's standing, as the IBD flow hands it to rule E**: the state at the block the instance is weighed at

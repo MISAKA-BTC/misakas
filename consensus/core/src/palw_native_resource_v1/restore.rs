@@ -51,8 +51,17 @@ fn restore_with_reservation_v1(
     enabled: bool,
     reserve: impl FnOnce(u64) -> Result<Option<NativeDemandLeaseV1>, NativeCoverageV1>,
 ) -> Result<NativeChainStateV1, NativeStateMutationErrorV1> {
-    restore_with_reservation_and_check_v1(point, carriage, params, expected_root, uncertified_weightless,
-        canonical_work_daa, enabled, reserve, |_| Ok(()))
+    restore_with_reservation_and_check_v1(
+        point,
+        carriage,
+        params,
+        expected_root,
+        uncertified_weightless,
+        canonical_work_daa,
+        enabled,
+        reserve,
+        |_| Ok(()),
+    )
 }
 
 /// Keep the already-reserved root/consistency workspace alive while the caller
@@ -66,9 +75,17 @@ pub(super) fn restore_checked_v1(
     canonical_work_daa: Option<u64>,
     check: impl FnOnce(&crate::palw_state_v2::PalwChainStateV2) -> Result<(), PalwStateV2Error>,
 ) -> Result<NativeChainStateV1, NativeStateMutationErrorV1> {
-    restore_with_reservation_and_check_v1(point, carriage, params, expected_root, uncertified_weightless,
-        canonical_work_daa, native_logical_admission_enabled_v1() || native_resource_admission_enabled_v1(),
-        reserve_native_requests_v1, check)
+    restore_with_reservation_and_check_v1(
+        point,
+        carriage,
+        params,
+        expected_root,
+        uncertified_weightless,
+        canonical_work_daa,
+        native_logical_admission_enabled_v1() || native_resource_admission_enabled_v1(),
+        reserve_native_requests_v1,
+        check,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]

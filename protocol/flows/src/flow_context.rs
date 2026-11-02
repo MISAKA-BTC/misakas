@@ -123,18 +123,22 @@ pub(crate) const PROTOCOL_VERSION_PALW_PREFIX_HISTORY: u32 = 108;
 /// RFC0037 adopted protocol assignment. Advertising it requires the explicit
 /// local --palw-row-stream-ibd opt-in; deployment defaults remain version108.
 pub(crate) const PROTOCOL_VERSION_PALW_ROW_STREAM: u32 = 109;
-pub(crate) fn palw_row_stream_negotiated_v1(version: u32) -> bool { version >= PROTOCOL_VERSION_PALW_ROW_STREAM }
-fn local_protocol_version_v1(enabled: bool) -> u32 { if enabled { PROTOCOL_VERSION_PALW_ROW_STREAM } else { PROTOCOL_VERSION } }
+pub(crate) fn palw_row_stream_negotiated_v1(version: u32) -> bool {
+    version >= PROTOCOL_VERSION_PALW_ROW_STREAM
+}
+fn local_protocol_version_v1(enabled: bool) -> u32 {
+    if enabled { PROTOCOL_VERSION_PALW_ROW_STREAM } else { PROTOCOL_VERSION }
+}
 #[cfg(test)]
 mod row_stream_protocol_tests {
     use super::*;
     #[test]
     fn row_stream_protocol_assignment_requires_explicit_local_opt_in() {
-        assert_eq!(local_protocol_version_v1(false),108);
-        assert_eq!(local_protocol_version_v1(true),109);
-        for peer in [106,107,108,109,u32::MAX] {
+        assert_eq!(local_protocol_version_v1(false), 108);
+        assert_eq!(local_protocol_version_v1(true), 109);
+        for peer in [106, 107, 108, 109, u32::MAX] {
             assert!(!palw_row_stream_negotiated_v1(local_protocol_version_v1(false).min(peer)));
-            assert_eq!(palw_row_stream_negotiated_v1(local_protocol_version_v1(true).min(peer)),peer>=109);
+            assert_eq!(palw_row_stream_negotiated_v1(local_protocol_version_v1(true).min(peer)), peer >= 109);
         }
     }
 }
@@ -2594,9 +2598,14 @@ impl ConnectionInitializer for FlowContext {
 
         // Register all flows according to version
         let (flows, applied_protocol_version) = match peer_version.protocol_version.min(local_protocol_version) {
-            PROTOCOL_VERSION_PALW_ROW_STREAM => (v8::register(self.clone(),router.clone(),PROTOCOL_VERSION_PALW_ROW_STREAM),PROTOCOL_VERSION_PALW_ROW_STREAM),
-            PROTOCOL_VERSION => (v8::register(self.clone(),router.clone(),PROTOCOL_VERSION),PROTOCOL_VERSION),
-            PROTOCOL_VERSION_PALW_SNAPSHOT_COMPRESSED => (v8::register(self.clone(),router.clone(),PROTOCOL_VERSION_PALW_SNAPSHOT_COMPRESSED),PROTOCOL_VERSION_PALW_SNAPSHOT_COMPRESSED),
+            PROTOCOL_VERSION_PALW_ROW_STREAM => {
+                (v8::register(self.clone(), router.clone(), PROTOCOL_VERSION_PALW_ROW_STREAM), PROTOCOL_VERSION_PALW_ROW_STREAM)
+            }
+            PROTOCOL_VERSION => (v8::register(self.clone(), router.clone(), PROTOCOL_VERSION), PROTOCOL_VERSION),
+            PROTOCOL_VERSION_PALW_SNAPSHOT_COMPRESSED => (
+                v8::register(self.clone(), router.clone(), PROTOCOL_VERSION_PALW_SNAPSHOT_COMPRESSED),
+                PROTOCOL_VERSION_PALW_SNAPSHOT_COMPRESSED,
+            ),
             PROTOCOL_VERSION_PALW_SNAPSHOT_CHUNKS => (
                 v8::register(self.clone(), router.clone(), PROTOCOL_VERSION_PALW_SNAPSHOT_CHUNKS),
                 PROTOCOL_VERSION_PALW_SNAPSHOT_CHUNKS,

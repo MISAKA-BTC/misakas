@@ -225,8 +225,7 @@ impl TransitionBuilder<'_> {
     /// retryable) and leaves the rows and the journal unchanged.
     pub(super) fn write_kernel_row(&mut self, table: u8, key: Vec<u8>, new: Option<Vec<u8>>) -> Result<(), PalwStateV2Error> {
         self.reserve_kernel_row_write_v1(table, &key, &new, true)?;
-        self.apply_kernel_row_v1(table, key, new);
-        Ok(())
+        self.apply_kernel_row_v1(table, key, new)
     }
 
     /// [`Self::write_kernel_row`] for a key/row whose buffers the caller already admitted before encoding
@@ -238,12 +237,17 @@ impl TransitionBuilder<'_> {
         new: Option<Vec<u8>>,
     ) -> Result<(), PalwStateV2Error> {
         self.reserve_kernel_row_write_v1(table, &key, &new, false)?;
-        self.apply_kernel_row_v1(table, key, new);
-        Ok(())
+        self.apply_kernel_row_v1(table, key, new)
     }
 
-    fn apply_kernel_row_v1(&mut self, table: u8, key: Vec<u8>, new: Option<Vec<u8>>) {
-        let Some(kernel) = self.state.kernel_route.as_mut() else { return };
+    fn apply_kernel_row_v1(&mut self, table: u8, key: Vec<u8>, new: Option<Vec<u8>>) -> Result<(), PalwStateV2Error> {
+        let cohort_update =
+            super::palw_claim_local_execution_cohort_census_v15::prepare_writer_v15(self, table, &key, new.as_deref())?;
+        let compact_update =
+            super::palw_claim_local_execution_cohort_census_v15::prepare_compact_writer_v15(self, table, &key, new.as_deref())?;
+        let gc_update = super::palw_claim_local_context_gc_v3::prepare_writer_v3(self, table, &key, &new)?;
+        let member_update = super::palw_monetary_material_scope_v8::prepare_writer_v8(self, table, &key, &new)?;
+        let Some(kernel) = self.state.kernel_route.as_mut() else { return Ok(()) };
         let ledger_table = table < PALW_KERNEL_ROUTE_TABLE_BOND_KEYS_V1;
         if ledger_table {
             // A ledger row changes: the cached ledger is no longer the rows' (the flush sets it again once it has written them).
@@ -254,9 +258,23 @@ impl TransitionBuilder<'_> {
             Some(bytes) => map.insert((table, key.clone()), bytes.clone()),
             None => map.remove(&(table, key.clone())),
         };
-        if old != new {
+        let compact_native_changed = old != new;
+        if compact_native_changed {
             self.entries.push(PalwDeltaEntryV2::KernelRouteRow { table, key, old, new });
         }
+        if let Some(plan) = member_update {
+            super::palw_monetary_material_scope_v8::apply_v8(&mut self.state, &plan);
+        }
+        if let Some(plan) = cohort_update {
+            super::palw_claim_local_execution_cohort_census_v15::commit_frame_change_v15(&mut self.state, plan);
+        }
+        if let Some(plan) = compact_update {
+            super::palw_claim_local_execution_cohort_census_v15::commit_compact_writer_v15(self, &plan, compact_native_changed);
+        }
+        if let Some(plan) = gc_update {
+            super::palw_claim_local_context_gc_v3::commit_writer_v3(self, plan);
+        }
+        Ok(())
     }
 
     /// **The one writer of the kernel route's header**, journaled `KernelRouteHeader`.

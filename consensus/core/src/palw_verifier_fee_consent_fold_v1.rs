@@ -99,9 +99,12 @@ fn apply_inner(
         if reserved < terms.fee || route.ledger_reserved_of(&poster_bond) != reserved {
             return Err(refused("consenting fee is not covered by its rooted draw reservation"));
         }
-        let committed = builder.committed_at(&poster_bond, now)?;
+        // A-6 court/DA/deposit/occupancy duties are separate from A-1 on
+        // R-core networks. Use the shared fee view, including its historical
+        // de-duplication, before detaching this one already-funded draw fee.
+        let principal = super::palw_court_capacity_fold_v1::fee_reserved_principal_v1(builder, &poster_bond, now)?;
         let residual =
-            committed.checked_sub(u128::from(terms.fee)).ok_or_else(|| refused("consenting fee native reservation mismatch"))?;
+            principal.checked_sub(u128::from(terms.fee)).ok_or_else(|| refused("consenting fee native reservation mismatch"))?;
         if u128::from(collateral - terms.fee) < residual {
             return Err(refused("consenting fee would consume other reserved principal"));
         }
@@ -225,7 +228,7 @@ pub(super) fn prepare_hold(
         .get(&(TABLE, conviction_key))
         .map(|b| borsh::from_slice::<u64>(b).map_err(|_| refused("malformed fee conviction")))
         .transpose()?
-        .or_else(|| match kernel.life.state {
+        .or(match kernel.life.state {
             misaka_palw_kernel::lifecycle::ClaimStateV1::Convicted { daa } => Some(daa),
             _ => None,
         });

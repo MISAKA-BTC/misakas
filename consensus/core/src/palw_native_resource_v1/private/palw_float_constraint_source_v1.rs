@@ -4,6 +4,9 @@ use crate::palw_native_resource_v1::{NativeCoverageV1, NativeHeapV1, native_enum
 native_struct!(crate::palw_float_constraint_source_v1::PalwFloatConstraintSourceSessionV1; claim, owner, reserved_daa, bundle_id, source_id, respond_until_daa, collect_until_daa, nomination_until_daa, producer, custodians, binding_root, job_context, expected, prefill, decode, vocab, slots, nomination, authenticated, ready, collected);
 native_struct!(crate::palw_float_constraint_source_v1::PalwFloatSourceSlotV1; ids, row, facts);
 
+// Reflected owner-local layouts may require parent-private names; this import
+// is intentionally conditional on that layout, like the visitor imports below.
+#[allow(unused_imports)]
 use super::*;
 use crate::palw_native_resource_v1::wire::wire_struct;
 #[allow(unused_imports)]

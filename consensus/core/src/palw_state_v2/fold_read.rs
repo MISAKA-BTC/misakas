@@ -225,7 +225,8 @@ impl PalwFoldReadV1<'_> {
         // bond accuses past its collateral (review M1: courts and the one ledger counted). Through
         // the one accuser gate ([`PalwRcoreGateV1::Accuser`]), the room the court opening and the held
         // dissection read (`TransitionBuilder::check_accuser_room`), refused the way it refuses.
-        let committed = palw_bond_committed_checked_v2(state, accuser, now_daa, self.second_clock_depth(now_daa), self.params.window_court)?;
+        let committed =
+            palw_bond_committed_checked_v2(state, accuser, now_daa, self.second_clock_depth(now_daa), self.params.window_court)?;
         let room = palw_rcore_gate_room_of_v1(
             record.collateral,
             self.params.fp_max_exposure_ratio_permille,
@@ -1668,14 +1669,28 @@ impl PalwFoldReadV1<'_> {
             self.params.min_collateral_sompi
         };
         let escaped = self.second_clock_depth(now_daa);
-        let bytes=(self.state.bonds.len() as u64).checked_mul(std::mem::size_of::<u128>() as u64).ok_or(PalwStateV2Error::Overflow("floor capital rooms"))?;
-        let _rooms_lease=crate::palw_native_resource_v1::reserve_native_requests_v1(bytes).map_err(PalwStateV2Error::NativeResource)?;
-        let mut rooms=Vec::with_capacity(self.state.bonds.len());
-        for (key,record) in &self.state.bonds {
-            if !palw_bond_may_take_work_v2(record,floor)||!palw_bond_may_judge_class_v4(self.state,key,record,&base,false,None){continue}
-            let committed=palw_bond_committed_checked_v2(self.state,key,now_daa,escaped,self.params.window_court)?;
-            rooms.push(palw_rcore_gate_room_of_v1(record.collateral,self.params.fp_max_exposure_ratio_permille,committed,
-                self.accuser_ledger_v1(key,now_daa),PalwRcoreGateV1::Work).saturating_sub(anchor_reserve));
+        let bytes = (self.state.bonds.len() as u64)
+            .checked_mul(std::mem::size_of::<u128>() as u64)
+            .ok_or(PalwStateV2Error::Overflow("floor capital rooms"))?;
+        let _rooms_lease =
+            crate::palw_native_resource_v1::reserve_native_requests_v1(bytes).map_err(PalwStateV2Error::NativeResource)?;
+        let mut rooms = Vec::with_capacity(self.state.bonds.len());
+        for (key, record) in &self.state.bonds {
+            if !palw_bond_may_take_work_v2(record, floor) || !palw_bond_may_judge_class_v4(self.state, key, record, &base, false, None)
+            {
+                continue;
+            }
+            let committed = palw_bond_committed_checked_v2(self.state, key, now_daa, escaped, self.params.window_court)?;
+            rooms.push(
+                palw_rcore_gate_room_of_v1(
+                    record.collateral,
+                    self.params.fp_max_exposure_ratio_permille,
+                    committed,
+                    self.accuser_ledger_v1(key, now_daa),
+                    PalwRcoreGateV1::Work,
+                )
+                .saturating_sub(anchor_reserve),
+            );
         }
         let mut waiting: BTreeMap<PalwBondKeyV2, u64> = BTreeMap::new();
         for (_, key) in self.state.unresolved.iter() {

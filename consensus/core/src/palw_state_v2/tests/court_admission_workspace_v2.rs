@@ -173,3 +173,67 @@ fn court_admission_opened_row_handoff_is_admitted_before_clone_and_dormant_is_fr
     assert!(off.entries.is_empty());
     assert_eq!(c0.outstanding(), (0, 0));
 }
+
+#[test]
+fn paid_ingress_new_occupancy_and_fee_share_principal_at_object_boundary() {
+    let (s, p, claim) = source();
+    let challenge = p.window_challenge();
+    // The shared scheduler fixture uses an unpriced placeholder (rho=0).
+    // This regression needs an explicit private positive occupancy price to
+    // test fee/principal competition; it does not change any network preset.
+    let mut capacity = p.court_capacity_v1().unwrap();
+    assert_eq!(capacity.policy.rho_sompi, 0);
+    capacity.policy.rho_sompi = 1;
+    let priced = p.with_test_only_lattice_windows_v1(challenge, 10).unwrap().with_court_capacity_v1(Some(capacity));
+    // The shared fixture also permits 1000-permille work exposure, leaving
+    // no accuser half for positive occupancy. Keep that refusal explicit,
+    // then exercise the paid boundary with the private 500-permille split.
+    assert_eq!(priced.fp_max_exposure_ratio_permille(), 1000);
+    let empty_extras = PalwTransitionExtrasV1::default();
+    let mut no_room = TransitionBuilder::new(&s, &priced, false, false, false, false, &empty_extras);
+    let before = no_room.state.state_root();
+    assert!(matches!(
+        court_admission_v1(&mut no_room, &ctx(3, 100, 3), claim, bond_key(2), 10),
+        Err(PalwStateV2Error::AccusationExposureCeiling { edge: "court occupancy escrow", .. })
+    ));
+    assert_eq!(no_room.state.state_root(), before);
+    assert!(no_room.entries.is_empty());
+    drop(no_room);
+    let base = priced.with_fp_exposure_ceiling(500).unwrap();
+    for rcore in [false, true] {
+        let p = base.clone().with_rcore_plus_mirrors(rcore.then_some(0), 0, Vec::new());
+        let e = PalwTransitionExtrasV1::default();
+        let point = ctx(3, 100, 3);
+        let who = bond_key(2);
+        let mut probe = TransitionBuilder::new(&s, &p, false, false, false, false, &e);
+        assert_eq!(court_admission_v1(&mut probe, &point, claim, who, 10).unwrap(), PalwCourtAdmissionV1::Queued);
+        let held = probe
+            .committed_at(&who, point.daa_score)
+            .unwrap()
+            .checked_add(probe.read().accuser_ledger_v1(&who, point.daa_score))
+            .unwrap();
+        assert!(held > 0, "the newly installed occupancy escrow must hold real A-6 principal");
+        let collateral = s.bond(&who).unwrap().collateral;
+        let exact_fee = collateral.checked_sub(u64::try_from(held).unwrap()).unwrap();
+        assert!(exact_fee > 0);
+        drop(probe);
+        let root = s.state_root();
+        let object = court_open(claim, s.claim(&claim).unwrap().trace_root, bond_key(1), who);
+        for fee in [exact_fee + 1, exact_fee] {
+            set_palw_court_ingress_test_schedule_v1(Some(PalwCourtIngressScheduleV1 { fee_sompi_per_session: fee }));
+            let _schedule = Schedule;
+            let result = palw_v2_apply_one_object_v1(&s, &p, &point, &object, false, false, false, false, &e);
+            if fee > exact_fee {
+                let error = result.unwrap_err();
+                assert!(format!("{error:?}").contains("free principal"), "{error:?}");
+                assert_eq!(s.state_root(), root);
+                assert!(!s.legacy_disputes[&claim].courts.contains_key(&who), "refused object cannot publish a capacity row");
+            } else {
+                let next = result.unwrap();
+                assert_eq!(next.bond(&who).unwrap().collateral, u64::try_from(held).unwrap());
+                assert!(matches!(next.legacy_disputes[&claim].courts[&who].stage, PalwCourtStageV1::Queued { .. }));
+                assert_eq!(next.bond(&who).unwrap().slashed - s.bond(&who).unwrap().slashed, fee);
+            }
+        }
+    }
+}

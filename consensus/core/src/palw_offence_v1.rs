@@ -395,9 +395,10 @@ pub fn palw_ledger_evidence_id_v1(kind: PalwOffenceKindV1, evidence: &[u8], name
         // Keyed per (seat, claim) by `palw_false_valid_offence_id_v2`, and kind 4 per claim by
         // `palw_executor_refuted_offence_id_v1` — never by the bytes: one false Valid, or one
         // refuted execution, is one offence whatever contradiction or wrapper a filer attaches.
-        PalwOffenceKindV1::PanelFalseValidV2 | PalwOffenceKindV1::ExecutorRefuted | PalwOffenceKindV1::TirIdentityMismatch | PalwOffenceKindV1::PrefixExportRefuted => {
-            Err(PalwOffenceVerifyError::AttributionDormant)
-        }
+        PalwOffenceKindV1::PanelFalseValidV2
+        | PalwOffenceKindV1::ExecutorRefuted
+        | PalwOffenceKindV1::TirIdentityMismatch
+        | PalwOffenceKindV1::PrefixExportRefuted => Err(PalwOffenceVerifyError::AttributionDormant),
         // Records the fold writes; never filed (the skeleton review's F1).
         PalwOffenceKindV1::DaDefault | PalwOffenceKindV1::CourtConviction => {
             Err(PalwOffenceVerifyError::KindNotFileable(kind.not_fileable_reason_v1()))
@@ -722,9 +723,10 @@ where
         // Never through this gate: past `palw_offence_attribution` the processor sends kind 3 to
         // `palw_check_panel_false_valid_v2` and kind 4 to `palw_check_executor_refuted_v1`, and
         // below it neither kind exists.
-        PalwOffenceKindV1::PanelFalseValidV2 | PalwOffenceKindV1::ExecutorRefuted | PalwOffenceKindV1::TirIdentityMismatch | PalwOffenceKindV1::PrefixExportRefuted => {
-            Err(PalwOffenceVerifyError::AttributionDormant)
-        }
+        PalwOffenceKindV1::PanelFalseValidV2
+        | PalwOffenceKindV1::ExecutorRefuted
+        | PalwOffenceKindV1::TirIdentityMismatch
+        | PalwOffenceKindV1::PrefixExportRefuted => Err(PalwOffenceVerifyError::AttributionDormant),
         // Records the fold writes; never filed (the skeleton review's F1).
         PalwOffenceKindV1::DaDefault | PalwOffenceKindV1::CourtConviction => {
             Err(PalwOffenceVerifyError::KindNotFileable(kind.not_fileable_reason_v1()))
@@ -1438,7 +1440,10 @@ mod tests {
             assert_eq!(kind as u8, tag);
             assert_eq!(borsh::to_vec(&kind).unwrap(), vec![tag], "{kind:?}");
             assert_eq!(borsh::from_slice::<PalwOffenceKindV1>(&[tag]).unwrap(), kind);
-            let fold_only = !matches!(kind, PalwOffenceKindV1::ExecutorRefuted | PalwOffenceKindV1::TirIdentityMismatch | PalwOffenceKindV1::PrefixExportRefuted);
+            let fold_only = !matches!(
+                kind,
+                PalwOffenceKindV1::ExecutorRefuted | PalwOffenceKindV1::TirIdentityMismatch | PalwOffenceKindV1::PrefixExportRefuted
+            );
             assert_eq!(kind.is_fold_recorded_only_v1(), fold_only, "{kind:?}");
             let refused = |e: &PalwOffenceVerifyError| {
                 if fold_only {

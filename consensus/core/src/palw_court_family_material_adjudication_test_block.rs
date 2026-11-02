@@ -32,7 +32,9 @@ let initial_claim=court_state.claim(&claim).unwrap().clone();
 let initial_slashed=court_state.bond(&producer).unwrap().slashed;
 let mut apply=|state:&PalwChainStateV2,op:crate::palw_court_shared_op_carriage_v1::PalwSharedCourtOpV1|{
     elapsed+=1;
-    let point=PalwBlockContextV2{daa_score:ctx.daa_score+1,blue_score:ctx.blue_score+elapsed,block:h(0x430000+elapsed),subsidy:0};
+    let last=*state.last_point().unwrap();
+    let point=PalwBlockContextV2{daa_score:last.daa_score.checked_add(1).unwrap(),blue_score:last.blue_score.checked_add(1).unwrap(),block:h(0x430000+elapsed),subsidy:0};
+    assert!(point.daa_score<crate::palw_court_shared_tir_state_v1::context(state,claim).unwrap().hard_daa,"actual court must fit the unchanged original hard");
     let mut extras=active.clone();let mut rules=native;rules.at=point;extras.native_court_rules_v1=Some(rules);
     let object=PalwConsensusObjectV2::SharedCourtOpV1{op:Box::new(op)};
     let (next,delta)=apply_palw_transition_v2_with_extras(state,&family_params,&point,&[object],None,false,false,false,false,&extras).unwrap();

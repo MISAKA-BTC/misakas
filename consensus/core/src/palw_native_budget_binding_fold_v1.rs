@@ -89,7 +89,7 @@ pub(super) fn sweep_native_budget_bindings_v1(b: &mut TransitionBuilder<'_>, now
             "allocation refused",
         ))
     })?;
-    for ((table, key), _) in &route.aux {
+    for (table, key) in route.aux.keys() {
         if *table != NATIVE_BUDGET_BINDING_TABLE_V1 || key.first() != Some(&1) {
             continue;
         }

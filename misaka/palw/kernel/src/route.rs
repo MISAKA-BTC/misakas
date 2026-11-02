@@ -757,8 +757,12 @@ pub enum KernelRouteObjectV1 {
         attestation: crate::capacity_attestation_v1::CapacityAttestationV1,
     } = 76,
     /// Explicit finite fee consent and Clean attestation, authenticated by its verifier.
-    ConsentVerifierFeeV1 { terms: crate::verifier_fee_consent_v1::VerifierFeeConsentV1 } = 77,
-    WatchVerifierPoolV1 { terms: crate::verifier_watch_v1::VerifierWatchTermsV1 } = 78,
+    ConsentVerifierFeeV1 {
+        terms: crate::verifier_fee_consent_v1::VerifierFeeConsentV1,
+    } = 77,
+    WatchVerifierPoolV1 {
+        terms: crate::verifier_watch_v1::VerifierWatchTermsV1,
+    } = 78,
 }
 
 /// The digest of a filed proof's exact bytes: `H("misaka-palw/kernel/proof-digest/v1"; borsh(proof))`.

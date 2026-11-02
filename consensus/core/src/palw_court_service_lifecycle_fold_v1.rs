@@ -38,6 +38,16 @@ pub(super) fn install_court_service_binding_v1(
     if !court_service_f02_active_v1(b) {
         return Ok(false);
     }
+    if b.params.family_supplier_active_at(ctx.daa_score) {
+        let profile2 = super::palw_court_family_supplier_fold_v1::family_supplier_profiles_v2()?[0];
+        let profile3 = super::palw_court_family_supplier_fold_v1::family_supplier_profiles_v3()?[0];
+        if b.extras.tir_funded_originals.get(&claim).is_some_and(|p| {
+            !p.suppliers_v2().is_empty()
+                && p.suppliers_v2().iter().all(|c| c.terms.fee_profile == profile2 || c.terms.fee_profile == profile3)
+        }) {
+            return Ok(false);
+        }
+    }
     let Some(profile) = crate::palw_court_service_binding_v1::PALW_COURT_SERVICE_PROFILE_V1 else { return Ok(false) };
     install_court_service_binding_with_profile_v1(b, ctx, claim, &profile).map(|()| true)
 }
@@ -136,7 +146,22 @@ pub(super) fn observe_court_service_block_v1(b: &mut TransitionBuilder<'_>, ctx:
         return Ok(());
     }
     let spent = b.court_cost_spent;
-    let unreserved = crate::palw_court_service_v1::ServiceCost { bytes: spent.bytes, work: spent.work, io: 0, controls: 0 };
+    let family = b.court_family_packing_spent_v2;
+    let source = b.court_family_unreserved_service_spent_v2;
+    let unreserved = crate::palw_court_service_v1::ServiceCost {
+        bytes: spent
+            .bytes
+            .checked_sub(family.bytes)
+            .and_then(|n| n.checked_add(source.bytes))
+            .ok_or_else(|| refused("family physical byte packing sum"))?,
+        work: spent
+            .work
+            .checked_sub(family.work)
+            .and_then(|n| n.checked_add(source.work))
+            .ok_or_else(|| refused("family physical work packing sum"))?,
+        io: source.io,
+        controls: source.controls,
+    };
     let block: [u8; 64] = *ctx.block.as_byte_slice();
     let mut next = old.clone();
     match next.book.observe_block(ctx.daa_score, block, unreserved) {

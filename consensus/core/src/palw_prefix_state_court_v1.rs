@@ -245,7 +245,7 @@ pub(crate) mod tests {
         assert_eq!(palw_prefix_kv_export_state_root_v1(&binding, 4, &tiles, 1 << 32), Ok(root));
         assert!(palw_prefix_kv_state_root_v1(&binding, 4, &tiles, 1 << 32).is_err());
         assert!(palw_prefix_kv_export_state_root_v1(&binding, 5, &tiles, 1 << 32).is_err());
-        assert!(palw_prefix_kv_export_state_root_v1(&binding, 4, &tiles[..tiles.len()-1], 1 << 32).is_err());
+        assert!(palw_prefix_kv_export_state_root_v1(&binding, 4, &tiles[..tiles.len() - 1], 1 << 32).is_err());
     }
 
     #[test]

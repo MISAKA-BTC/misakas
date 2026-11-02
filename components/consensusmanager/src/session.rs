@@ -1147,11 +1147,15 @@ impl ConsensusSessionOwned {
     }
 
     /// Same store-tip read profile as `palw_producer_facts_v2` below. Empty off ConsensusV2.
-    pub fn palw_locked_bond_outpoints_checked_v3(&self)->Result<Vec<kaspa_consensus_core::tx::TransactionOutpoint>,kaspa_consensus_core::palw_state_v2::PalwStateV2Error>{
+    pub fn palw_locked_bond_outpoints_checked_v3(
+        &self,
+    ) -> Result<Vec<kaspa_consensus_core::tx::TransactionOutpoint>, kaspa_consensus_core::palw_state_v2::PalwStateV2Error> {
         self.consensus.palw_locked_bond_outpoints_checked_v3()
     }
 
-    #[deprecated(note="diagnostic-only compatibility; funding must use palw_locked_bond_outpoints_checked_v3")]
+    // Preserve the deprecated API's diagnostic fallback semantics when forwarding.
+    #[allow(deprecated)]
+    #[deprecated(note = "diagnostic-only compatibility; funding must use palw_locked_bond_outpoints_checked_v3")]
     pub fn palw_locked_bond_outpoints_v2(&self) -> Vec<kaspa_consensus_core::tx::TransactionOutpoint> {
         self.consensus.palw_locked_bond_outpoints_v2()
     }

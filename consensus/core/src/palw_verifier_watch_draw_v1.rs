@@ -28,8 +28,7 @@ pub(super) fn freeze_epoch(builder: &mut TransitionBuilder<'_>, point: &PalwBloc
     };
     let policy = policy.clone();
     policy.validate().map_err(bad)?;
-    let role =
-        builder.params.rfc0018_v1().ok_or_else(|| bad("watcher pool needs the existing native verifier maturity policy"))?;
+    let role = builder.params.rfc0018_v1().ok_or_else(|| bad("watcher pool needs the existing native verifier maturity policy"))?;
     let (native_maturity, early) =
         builder.params.verifier_watch_maturity_v1.ok_or_else(|| bad("watcher native maturity authority absent"))?;
     let native_window = crate::config::params::palw_bond_maturity_window_in_force_v1(native_maturity, early, point.daa_score);

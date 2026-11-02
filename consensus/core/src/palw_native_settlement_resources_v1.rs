@@ -171,9 +171,8 @@ pub fn reserve_native_settlement_sweep_v1<'a, Memo>(
         for (_, _, fresh) in &row.fp_spends {
             facts = facts.checked_add(fresh.len()).ok_or_else(|| NativeCoverageV1::overflow::<NativeDeltaEvidenceV1>(path))?;
         }
-        facts = facts
-            .checked_add(row.native39_quanta.len())
-            .ok_or_else(|| NativeCoverageV1::overflow::<NativeDeltaEvidenceV1>(path))?;
+        facts =
+            facts.checked_add(row.native39_quanta.len()).ok_or_else(|| NativeCoverageV1::overflow::<NativeDeltaEvidenceV1>(path))?;
         voided = voided.checked_add(row.voided.len()).ok_or_else(|| NativeCoverageV1::overflow::<NativeDeltaEvidenceV1>(path))?;
         native39_revoked = native39_revoked
             .checked_add(row.native39_revoked.len())

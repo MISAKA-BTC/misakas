@@ -85,6 +85,10 @@ pub(super) struct FundedOriginalPlanV1 {
     semantic_table: Option<crate::palw_native_resource_v1::NativeRetainedV1<Vec<u8>>>,
     family_evidence: Option<PreparedFamilyActorEvidenceV1>,
     _retention_lease: Option<crate::palw_native_resource_v1::NativeDemandLeaseV1>,
+    archive: Option<
+        crate::palw_native_resource_v1::NativeRetainedV1<original_archive_reservation_proposal_v1::NativeOriginalArchiveReservationV1>,
+    >,
+    _archive_lease: Option<crate::palw_native_resource_v1::NativeDemandLeaseV1>,
 }
 /// Checked native catalog evidence, produced only after joint supplier signatures,
 /// actual escrow funding and complete rooted service reservation have been checked.
@@ -119,6 +123,8 @@ impl PreparedFamilyActorEvidenceV1 {
             return Err(Invalid("family catalog lacks actual funded original"));
         }
         let binding = book.claims.get(&plan.original_claim).ok_or(Invalid("family catalog lacks atomic original reservation"))?;
+        let material_barrier =
+            super::palw_court_family_supplier_fold_v1::family_material_barrier_v2(family).map_err(FundedOriginalRefusalV1::State)?;
         for packet in derivation
             .signer_packets
             .iter()
@@ -126,7 +132,11 @@ impl PreparedFamilyActorEvidenceV1 {
             .chain(std::iter::once(&derivation.retention_packet))
             .chain(&derivation.retention_tail_v2)
         {
-            if !binding.packet_ids.contains(&packet.id) || book.book.packet(&packet.id) != Some(packet) {
+            let mut expected = packet.clone();
+            if material_barrier != 0 && expected.cost.io > 0 {
+                expected.release_daa = expected.release_daa.max(material_barrier);
+            }
+            if !binding.packet_ids.contains(&packet.id) || book.book.packet(&packet.id) != Some(&expected) {
                 return Err(Invalid("family catalog original branch lacks exact reservation"));
             }
         }
@@ -223,7 +233,8 @@ pub(super) fn admit_original_v1(
     prepared: Option<PreparedOriginalFrameV1>,
 ) -> Result<Option<OriginalAdmissionV1>, PalwStateV2Error> {
     let funded = b.extras.tir_funded_originals.contains_key(&claim);
-    if b.params.family_supplier_active_at(ctx.daa_score)
+    if (funded || prepared.is_some())
+        && b.params.family_supplier_active_at(ctx.daa_score)
         && (!b.extras.family_supplier_active || b.extras.tir_funded_originals.get(&claim).is_none_or(|p| p.suppliers_v2().is_empty()))
     {
         return Err(refused("new public original requires complete TFO2 supplier contracts past its own fence"));
@@ -251,6 +262,181 @@ fn funded_settlement_payees_v1(b: &TransitionBuilder<'_>, frame: &Frame) -> Opti
     Some((seat, relay))
 }
 
+#[path = "palw_tir_prepared_final_archive_view_v11.rs"]
+mod archive_service_view_v11;
+#[path = "palw_original_archive_reservation_proposal_v1.rs"]
+pub(super) mod original_archive_reservation_proposal_v1;
+#[cfg(test)]
+#[path = "palw_tir_prepared_final_service_facts_adapter_v11.rs"]
+mod prepared_final_service_facts_adapter_v11;
+
+/// Payer choices only. Native geometry, tariffs and paid authority are never
+/// supplied by this value. Existing signed profiles retain their old meaning.
+#[derive(Clone, Copy, Debug)]
+pub struct PalwOriginalArchivePayerBudgetV1 {
+    pub additional_carrier_rent_sompi: u64,
+    pub dedicated_archive_capital_sompi: u64,
+}
+/// Read-only native construction result. This is not a funded receipt or an
+/// accepted birth. Apply it to the existing TFP/FundingTerms constructors and
+/// obtain the same payer's normal FundingConsent signature before broadcasting.
+#[derive(Clone, Copy, Debug)]
+pub struct PalwOriginalArchiveNativeQuoteV1 {
+    claim: Hash64,
+    source: Hash64,
+    relative_graph: Hash64,
+    material_until: u64,
+    profiles: [Hash64; 4],
+    declared_rent: u64,
+    required_funding: u64,
+    input_capacity: u64,
+}
+impl PalwOriginalArchiveNativeQuoteV1 {
+    pub fn material_until_daa_v1(&self) -> u64 {
+        self.material_until
+    }
+    pub fn profiles_v1(&self) -> [Hash64; 4] {
+        self.profiles
+    }
+    pub fn declared_rent_sompi_v1(&self) -> u64 {
+        self.declared_rent
+    }
+    pub fn funding_output_amount_sompi_v1(&self) -> u64 {
+        self.required_funding
+    }
+    pub fn input_archive_capacity_bytes_v1(&self) -> u64 {
+        self.input_capacity
+    }
+    pub fn bind_existing_funding_terms_v1(
+        &self,
+        t: &mut crate::palw_court_original_escrow_v1::FundingTermsV1,
+    ) -> Result<(), PalwStateV2Error> {
+        if (t.claim, t.source_id, t.relative_graph_id) != (self.claim, self.source, self.relative_graph)
+            || t.material_until_daa > self.material_until
+        {
+            return Err(refused("archive quote changes actual original funding scope"));
+        }
+        t.material_until_daa = self.material_until;
+        t.fee_profile_id = self.profiles[0];
+        t.capital_profile_id = self.profiles[1];
+        t.retention_profile_id = self.profiles[2];
+        t.settlement_policy_id = self.profiles[3];
+        t.funding_amount_sompi = self.required_funding;
+        Ok(())
+    }
+}
+/// Normal construction API, after the existing family v3 inventory/consent
+/// quote and before broadcasting. `extras` contains the actual signed draft
+/// TFP/TFO/family consent pairing. It may use the original base profiles; this
+/// read-only quote installs nothing. Rebuild the TFP literal with returned rent,
+/// bind returned terms and re-sign the same existing FundingConsentV1 context,
+/// then rebuild the same TFO2 carrier. Supplier duties/fees stay unchanged.
+/// Future block inputs are not fabricated: the payer reserves finite capacity
+/// and the actual native full fold must fit it before publication.
+pub fn palw_original_archive_native_quote_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    ctx: &PalwBlockContextV2,
+    extras: &PalwTransitionExtrasV1,
+    object: &PalwConsensusObjectV2,
+    budget: PalwOriginalArchivePayerBudgetV1,
+) -> Result<PalwOriginalArchiveNativeQuoteV1, PalwStateV2Error> {
+    original_archive_native_quote_internal_v2(state, params, ctx, extras, object, budget, false)
+}
+/// Quote value layout is unchanged; only the explicit constructor selects OAR2.
+/// This alias grants no payment or accepted-source standing.
+pub type PalwOriginalArchiveNativeQuoteV2 = PalwOriginalArchiveNativeQuoteV1;
+/// Same payer fields/units, distinct OAR2 profile and version2 receipt capacity.
+pub fn palw_original_archive_native_quote_v2(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    ctx: &PalwBlockContextV2,
+    extras: &PalwTransitionExtrasV1,
+    object: &PalwConsensusObjectV2,
+    budget: PalwOriginalArchivePayerBudgetV1,
+) -> Result<PalwOriginalArchiveNativeQuoteV2, PalwStateV2Error> {
+    original_archive_native_quote_internal_v2(state, params, ctx, extras, object, budget, true)
+}
+fn original_archive_native_quote_internal_v2(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    ctx: &PalwBlockContextV2,
+    extras: &PalwTransitionExtrasV1,
+    object: &PalwConsensusObjectV2,
+    budget: PalwOriginalArchivePayerBudgetV1,
+    mixed: bool,
+) -> Result<PalwOriginalArchiveNativeQuoteV1, PalwStateV2Error> {
+    let PalwConsensusObjectV2::FreePromptCommitted { public_job: Some(job), .. } = object else {
+        return Err(refused("archive quote requires actual public original"));
+    };
+    let claim = crate::palw_freeprompt_v3::fp_claim_id_v3(job);
+    let b = TransitionBuilder::try_new(state, params, false, false, false, false, extras)?.with_native_original_parent_v19(state);
+    let prepared = prepare_paired_original_v1(&b, ctx, object, Some(job))?
+        .ok_or_else(|| refused("archive quote lacks actual signed paired original"))?;
+    quote_prepared_original_final_archive_v11(&b, ctx, claim, prepared, |view| {
+        let ceilings = original_archive_reservation_proposal_v1::OriginalArchivePayerCeilingsV1 {
+            additional_carrier_rent: budget.additional_carrier_rent_sompi,
+            dedicated_escrow_capital: budget.dedicated_archive_capital_sompi,
+        };
+        let q = if mixed {
+            original_archive_reservation_proposal_v1::quote_original_archive_reservation_v2(&b, ctx, view, object, ceilings)
+        } else {
+            original_archive_reservation_proposal_v1::quote_original_archive_reservation_v1(&b, ctx, view, object, ceilings)
+        }?;
+        let scope = view.scope_v11();
+        Ok(PalwOriginalArchiveNativeQuoteV1 {
+            claim,
+            source: scope.1,
+            relative_graph: scope.5,
+            material_until: q.material_until_v1(),
+            profiles: q.profiles_v1(),
+            declared_rent: q.total_declared_rent_v1()?,
+            required_funding: q.signed_funding_amount_v1()?,
+            input_capacity: q.input_capacity_v1(),
+        })
+    })
+    .map_err(FundedOriginalRefusalV1::into_state_v1)
+}
+
+// Diagnostic construction only: all ordinary signatures and actual native
+// prepared facts are still required before the one real full fold.
+#[cfg(test)]
+fn palw_original_archive_native_quote_legacy_oar2_v3(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    ctx: &PalwBlockContextV2,
+    extras: &PalwTransitionExtrasV1,
+    object: &PalwConsensusObjectV2,
+    budget: PalwOriginalArchivePayerBudgetV1,
+) -> Result<PalwOriginalArchiveNativeQuoteV1, PalwStateV2Error> {
+    let PalwConsensusObjectV2::FreePromptCommitted { public_job: Some(job), .. } = object else {
+        return Err(refused("archive quote requires actual public original"));
+    };
+    let claim = crate::palw_freeprompt_v3::fp_claim_id_v3(job);
+    let b = TransitionBuilder::try_new(state, params, false, false, false, false, extras)?.with_native_original_parent_v19(state);
+    let prepared = prepare_paired_original_v1(&b, ctx, object, Some(job))?
+        .ok_or_else(|| refused("archive quote lacks actual signed paired original"))?;
+    quote_prepared_original_final_archive_v11(&b, ctx, claim, prepared, |view| {
+        let ceilings = original_archive_reservation_proposal_v1::OriginalArchivePayerCeilingsV1 {
+            additional_carrier_rent: budget.additional_carrier_rent_sompi,
+            dedicated_escrow_capital: budget.dedicated_archive_capital_sompi,
+        };
+        let q = original_archive_reservation_proposal_v1::quote_original_archive_legacy_oar2_v3(&b, ctx, view, object, ceilings)?;
+        let scope = view.scope_v11();
+        Ok(PalwOriginalArchiveNativeQuoteV1 {
+            claim,
+            source: scope.1,
+            relative_graph: scope.5,
+            material_until: q.material_until_v1(),
+            profiles: q.profiles_v1(),
+            declared_rent: q.total_declared_rent_v1()?,
+            required_funding: q.signed_funding_amount_v1()?,
+            input_capacity: q.input_capacity_v1(),
+        })
+    })
+    .map_err(FundedOriginalRefusalV1::into_state_v1)
+}
+
 /// **The coordinator's checks — reads only; nothing is written.** Order: pairing/literal → schedule (the pinned estimate past
 /// `tir_public_conviction_active`, typed-missing below it) → native geometry and requirements (budgets from the schedule) → actor
 /// catalog (current authority, re-signed source pledge) and each missing role contract → source graph (service namespace) → native
@@ -262,6 +448,43 @@ pub(super) fn coordinate_funded_original_v1(
     claim: Hash64,
     prepared: PreparedOriginalFrameV1,
 ) -> Result<FundedOriginalPlanV1, FundedOriginalRefusalV1> {
+    type NoQuoteV11 =
+        for<'v> fn(&archive_service_view_v11::PreparedOriginalArchiveServiceViewV11<'v>) -> Result<(), FundedOriginalRefusalV1>;
+    match coordinate_original_scoped_archive_v11::<(), NoQuoteV11>(b, ctx, claim, prepared, None)? {
+        std::ops::ControlFlow::Continue(plan) => Ok(plan),
+        std::ops::ControlFlow::Break(()) => Err(FundedOriginalRefusalV1::Invalid("native funded path returned archive-only result")),
+    }
+}
+/// Quote-only normal success. Callback cannot leak local complete-book refs;
+/// an owned B/Item5 fact result is returned BEFORE funding inspection/debit.
+/// The original funded path below retains EVERY original funding/evidence check.
+fn quote_prepared_original_final_archive_v11<R, F>(
+    b: &TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    claim: Hash64,
+    prepared: PreparedOriginalFrameV1,
+    consume: F,
+) -> Result<R, FundedOriginalRefusalV1>
+where
+    F: for<'v> FnOnce(&archive_service_view_v11::PreparedOriginalArchiveServiceViewV11<'v>) -> Result<R, FundedOriginalRefusalV1>,
+{
+    match coordinate_original_scoped_archive_v11(b, ctx, claim, prepared, Some(consume))? {
+        std::ops::ControlFlow::Break(facts) => Ok(facts),
+        std::ops::ControlFlow::Continue(_) => {
+            Err(FundedOriginalRefusalV1::Invalid("native archive-only path unexpectedly produced funded plan"))
+        }
+    }
+}
+fn coordinate_original_scoped_archive_v11<R, F>(
+    b: &TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    claim: Hash64,
+    prepared: PreparedOriginalFrameV1,
+    quote: Option<F>,
+) -> Result<std::ops::ControlFlow<R, FundedOriginalPlanV1>, FundedOriginalRefusalV1>
+where
+    F: for<'v> FnOnce(&archive_service_view_v11::PreparedOriginalArchiveServiceViewV11<'v>) -> Result<R, FundedOriginalRefusalV1>,
+{
     use FundedOriginalRefusalV1::{Invalid, Missing as M};
     let pairing = b.extras.tir_funded_originals.get(&claim).ok_or(Invalid("no transaction-local funded pairing"))?;
     let literal = b.extras.tir_public_originals.get(&claim).ok_or(Invalid("funded pairing without its literal TFP1"))?;
@@ -277,7 +500,7 @@ pub(super) fn coordinate_funded_original_v1(
     let network = b.extras.tir_public_network_domain_v1.ok_or(M(FundedMissingV1::NetworkDomain))?;
     // Native geometry and requirements, all from the successful preparation; the budgets are part of the schedule.
     let geometry = prepared.enrich_native_geometry_v1(b, ctx).map_err(geometry_refusal)?;
-    let requirements = geometry
+    let mut requirements = geometry
         .prepare_requirements_v1(
             b,
             ctx,
@@ -288,6 +511,9 @@ pub(super) fn coordinate_funded_original_v1(
             },
         )
         .map_err(requirements_refusal)?;
+    if !pairing.suppliers_v2().is_empty() {
+        requirements.bind_carrier_inputs_v3(&pairing.carrier().inputs, b).map_err(FundedOriginalRefusalV1::State)?;
+    }
     // Responsible actors: current authority re-derived (producer bond active, key, operator, pledge signature) and every role the
     // catalog names as un-contracted must be adopted by the schedule — never assumed for an unconsenting future actor.
     let actors = requirements.actor_catalog_v1(b, ctx).map_err(geometry_refusal)?;
@@ -370,7 +596,7 @@ pub(super) fn coordinate_funded_original_v1(
             None,
         )
     };
-    let family = if pairing.suppliers_v2().is_empty() {
+    let mut family = if pairing.suppliers_v2().is_empty() {
         Vec::new()
     } else {
         if !b.params.family_supplier_active_at(ctx.daa_score)
@@ -385,8 +611,39 @@ pub(super) fn coordinate_funded_original_v1(
             .map_err(FundedOriginalRefusalV1::State)?
     };
     let (_, mut complete) = funded_book_candidate_v1(b, &requirements, &derivation, &admission, &signers)?;
-    super::palw_court_family_supplier_fold_v1::reserve_family_plans_v1(&mut complete, claim, &family)
+    super::palw_court_family_supplier_fold_v1::reserve_family_plans_v1(&mut complete, claim, &mut family, graph)
         .map_err(FundedOriginalRefusalV1::State)?;
+    if let Some(consume) = quote {
+        let view = archive_service_view_v11::PreparedOriginalArchiveServiceViewV11::from_native_calendar_v11(
+            &requirements,
+            b,
+            ctx,
+            &family,
+            &derivation,
+            &complete,
+        )?;
+        // Normal quote-only return. No fresh escrow/funding/paid plan is made.
+        // All native local requirements/complete/family/derivation leases drop
+        // after the callback-owned result has been constructed.
+        return Ok(std::ops::ControlFlow::Break(consume(&view)?));
+    }
+    let archive = if original_archive_reservation_proposal_v1::original_archive_terms_selected_v2(&pairing.envelope().funding.terms) {
+        Some(original_archive_reservation_proposal_v1::prepare_archive_finance_at_native_v1(
+            b,
+            ctx,
+            &requirements,
+            &family,
+            &derivation,
+            &complete,
+        )?)
+    } else {
+        None
+    };
+    let _archive_lease = archive
+        .as_ref()
+        .map(|q| original_archive_reservation_proposal_v1::reserve_original_archive_capacity_v1(&mut complete, q))
+        .transpose()?
+        .flatten();
     // Capital (RFC-0035 §7.1): Σ branch capital (≥ the schedule floor), less the producer deposit the native work room already
     // holds, plus the fee once.
     let required_amount = crate::palw_funded_original_admission_v1::funded_required_amount_v1(
@@ -396,21 +653,35 @@ pub(super) fn coordinate_funded_original_v1(
         plan.terms.plan.deposit_sompi,
     )
     .ok_or(Invalid("required capital overflow"))?;
+    let required_amount = if let Some(q) = archive.as_ref() {
+        required_amount.checked_add(q.capital_v1()).ok_or(Invalid("archive additional capital overflow"))?
+    } else {
+        required_amount
+    };
     if required_amount == 0 {
         return Err(M(FundedMissingV1::Schedule));
     }
-    let hard = crate::palw_funded_escrow_v1::palw_funded_escrow_hard_deadline_v1(b.params.claim_hard_deadline_v1(), ctx.daa_score)
-        .map_err(|_| M(FundedMissingV1::HardDeadline))?;
+    let hard = if family.is_empty() {
+        // Preserve the original TFO1/X3 contract. TFO2 has its own signed
+        // native service graph and fixed original Court hard, also used by
+        // the public pre-signing quote and every supplier response horizon.
+        crate::palw_funded_escrow_v1::palw_funded_escrow_hard_deadline_v1(b.params.claim_hard_deadline_v1(), ctx.daa_score)
+            .map_err(|_| M(FundedMissingV1::HardDeadline))?
+    } else {
+        ctx.daa_score
+            .checked_add(crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA)
+            .ok_or(Invalid("native family original hard overflow"))?
+    };
     let expected = crate::palw_court_original_escrow_v1::OriginalFundingScopeV1 {
         claim,
         job_identity: pledge.job_identity,
         execution_root: frame.original_v1().execution_root,
         source_id: plan.source_id,
         relative_graph_id: graph.scope_v3(),
-        fee_profile_id: schedule.fee_profile_id(),
-        capital_profile_id: schedule.capital_profile_id(),
-        retention_profile_id: schedule.retention_profile_id(),
-        settlement_policy_id: schedule.settlement_policy_id(),
+        fee_profile_id: archive.as_ref().map(|q| q.profiles_v1()[0]).unwrap_or_else(|| schedule.fee_profile_id()),
+        capital_profile_id: archive.as_ref().map(|q| q.profiles_v1()[1]).unwrap_or_else(|| schedule.capital_profile_id()),
+        retention_profile_id: archive.as_ref().map(|q| q.profiles_v1()[2]).unwrap_or_else(|| schedule.retention_profile_id()),
+        settlement_policy_id: archive.as_ref().map(|q| q.profiles_v1()[3]).unwrap_or_else(|| schedule.settlement_policy_id()),
         required_amount_sompi: required_amount,
         required_material_until_daa: plan.terms.material_until_daa.max(hard),
     };
@@ -446,17 +717,22 @@ pub(super) fn coordinate_funded_original_v1(
         true,
     )
     .map_err(|_| Invalid("escrow row shape"))?;
+    if archive.is_some() {
+        row.version = crate::palw_funded_escrow_v1::PALW_FUNDED_ESCROW_ORIGINAL_ARCHIVE_ROW_VERSION_V1;
+    }
     // The escrow settlement resolver has no fence argument of its own. Record the admitting schedule's fee and the rooted
     // payouts only while the same conviction fence that resolved the schedule is active, and only when the fee fits the escrow.
     if b.extras.tir_public_conviction_active {
-        if let Some((seat_payee, relay_payee)) = funded_settlement_payees_v1(b, frame) {
-            let fee = schedule.fee_sompi();
-            if fee > 0 && fee <= row.amount_sompi {
-                row.fee_sompi = fee;
-                row.seat_payee = seat_payee;
-                row.relay_payee = relay_payee;
-            }
+        let (seat_payee, relay_payee) =
+            funded_settlement_payees_v1(b, frame).ok_or(Invalid("funded original lacks native settlement payees"))?;
+        let fee = schedule.fee_sompi();
+        if fee == 0 || fee > row.amount_sompi {
+            return Err(Invalid("funded original fee does not fit actual escrow"));
         }
+        row.fee_sompi = fee;
+        row.seat_payee = seat_payee;
+        row.relay_payee = relay_payee;
+        row.check_v1().map_err(|_| Invalid("funded original settlement policy"))?;
     }
     // Capacity: one row per contract and per outpoint (also re-checked by the writer).
     if b.state.funded_escrows_v1().contains_key(&row.contract_id)
@@ -478,7 +754,7 @@ pub(super) fn coordinate_funded_original_v1(
         .map(crate::palw_native_resource_v1::NativeRetainedV1::try_from_clone_v1)
         .transpose()
         .map_err(|e| FundedOriginalRefusalV1::State(PalwStateV2Error::NativeResource(e)))?;
-    Ok(FundedOriginalPlanV1 {
+    Ok(std::ops::ControlFlow::Continue(FundedOriginalPlanV1 {
         requirements,
         row,
         derivation,
@@ -488,7 +764,9 @@ pub(super) fn coordinate_funded_original_v1(
         semantic_table,
         family_evidence,
         _retention_lease,
-    })
+        archive,
+        _archive_lease,
+    }))
 }
 
 /// **Install** at the existing original install point (after `reserve_for_claim` / `write_claim`), inside the same checkpoint.
@@ -507,10 +785,12 @@ pub(super) fn install_original_admission_v1(
                 derivation,
                 admission,
                 signers,
-                family,
+                mut family,
                 semantic_table,
                 family_evidence,
                 _retention_lease,
+                archive,
+                _archive_lease,
             } = *plan;
             if row.accepted_daa != ctx.daa_score || b.state.claim(&row.claim).is_none() || !row.liability_open {
                 return Err(refused("RFC-0035 A funded install lacks this block's native FP acceptance"));
@@ -519,7 +799,18 @@ pub(super) fn install_original_admission_v1(
             let before = b.state.court_service_state_v1().cloned();
             let (after_signer, mut full) = funded_book_candidate_v1(b, &requirements, &derivation, &admission, &signers)
                 .map_err(FundedOriginalRefusalV1::into_state_v1)?;
-            super::palw_court_family_supplier_fold_v1::reserve_family_plans_v1(&mut full, row.claim, &family)?;
+            super::palw_court_family_supplier_fold_v1::reserve_family_plans_v1(
+                &mut full,
+                row.claim,
+                &mut family,
+                requirements.source_graph_v1().map_err(requirements_refusal).map_err(FundedOriginalRefusalV1::into_state_v1)?,
+            )?;
+            let _archive_install_lease = archive
+                .as_ref()
+                .map(|q| original_archive_reservation_proposal_v1::reserve_original_archive_capacity_v1(&mut full, q))
+                .transpose()
+                .map_err(FundedOriginalRefusalV1::into_state_v1)?
+                .flatten();
             if let Some(evidence) = family_evidence.as_ref() {
                 let checked =
                     PreparedFamilyActorEvidenceV1::derive_v1(&requirements, &family, &derivation, &full, &row, row.amount_sompi)
@@ -563,6 +854,7 @@ pub(super) fn install_original_admission_v1(
             // G14 lane F03b (ADR-0192 A/A): the shared frontier rides the same all-branch book (idempotent with the plain hook).
             super::palw_court_service_lifecycle_fold_v1::install_shared_frontier_context_v1(b, ctx, claim_id)?;
             let original_funding_outpoint = row.funding_outpoint;
+            let original_archive_contract = row.contract_id;
             b.install_funded_escrow_v1(row)?;
             if let Some(table) = semantic_table.as_ref() {
                 super::palw_court_family_material_fold_v1::install_family_table_inventory_v1(
@@ -578,7 +870,31 @@ pub(super) fn install_original_admission_v1(
             }
             // The paired object's checkpoint restores the complete install if
             // either reserved capacity or the distinct-claim cap refuses it.
-            b.check_funded_original_court_admission_native_v2(claim_id, ctx.daa_score)
+            b.check_funded_original_court_admission_native_v2(claim_id, ctx.daa_score)?;
+            if let Some(q) = archive.as_ref() {
+                original_archive_reservation_proposal_v1::install_original_archive_receipt_v1(b, ctx, q, original_archive_contract)?;
+            }
+            if let Some(receipt) =
+                original_archive_reservation_proposal_v1::verified_original_archive_reservation_v1(&b.state, claim_id, *ctx)?
+            {
+                let contract = receipt.contract_v1();
+                super::palw_claim_local_born_tir_source_v16::capture_original_install_v16(b, ctx, claim_id, contract)?;
+            } else {
+                #[cfg(test)]
+                if b.extras.original_archive_data_observer_v16 {
+                    let contract = b
+                        .extras
+                        .tir_funded_originals
+                        .get(&claim_id)
+                        .ok_or_else(|| refused("test data observer lost actual original pairing"))?
+                        .envelope()
+                        .funding
+                        .terms
+                        .id_v1();
+                    super::palw_claim_local_born_tir_source_v16::capture_original_install_v16(b, ctx, claim_id, contract)?;
+                }
+            }
+            Ok(())
         }
     }
 }
@@ -632,12 +948,44 @@ pub fn palw_family_original_native_quote_v2(
     object: &PalwConsensusObjectV2,
     semantic_table: Option<&[u8]>,
 ) -> Result<PalwFamilyOriginalNativeQuoteV2, PalwStateV2Error> {
+    palw_family_original_native_quote_with_purpose_v3(state, params, ctx, extras, object, semantic_table, None, false)
+}
+/// Explicit active generated-semantic quote. V2 remains the historical complete
+/// supplier inventory preview; neither quote grants admission or funds.
+pub type PalwFamilyOriginalNativeQuoteV3 = PalwFamilyOriginalNativeQuoteV2;
+pub fn palw_family_original_native_quote_v3(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    ctx: &PalwBlockContextV2,
+    extras: &PalwTransitionExtrasV1,
+    object: &PalwConsensusObjectV2,
+    semantic_table: Option<&[u8]>,
+    carrier_inputs: &[crate::tx::TransactionInput],
+) -> Result<PalwFamilyOriginalNativeQuoteV3, PalwStateV2Error> {
+    palw_family_original_native_quote_with_purpose_v3(state, params, ctx, extras, object, semantic_table, Some(carrier_inputs), true)
+}
+fn palw_family_original_native_quote_with_purpose_v3(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    ctx: &PalwBlockContextV2,
+    extras: &PalwTransitionExtrasV1,
+    object: &PalwConsensusObjectV2,
+    semantic_table: Option<&[u8]>,
+    carrier_inputs: Option<&[crate::tx::TransactionInput]>,
+    generated_semantic_v3: bool,
+) -> Result<PalwFamilyOriginalNativeQuoteV2, PalwStateV2Error> {
     if !params.family_supplier_active_at(ctx.daa_score) || !extras.family_supplier_active || !extras.tir_public_conviction_active {
         return Err(refused("family native quote owning fence is dormant"));
     }
     let PalwConsensusObjectV2::FreePromptCommitted { public_job: Some(job), .. } = object else {
         return Err(refused("family native quote requires actual public original"));
     };
+    if generated_semantic_v3 {
+        let claim = crate::palw_freeprompt_v3::fp_claim_id_v3(job);
+        if let Some(provenance) = extras.prefix_dependencies_v1.get(&claim) {
+            crate::palw_claim_local_v1::prefix_v1::check_admission_v1(state, params, ctx, object, Some(provenance))?;
+        }
+    }
     let quoted =
         crate::palw_native_resource_v1::NativeRetainedV1::try_from_clone_v1(extras).map_err(PalwStateV2Error::NativeResource)?;
     let (mut quote_extras, _quote_ticket) = quoted.into_parts_v1();
@@ -654,11 +1002,11 @@ pub fn palw_family_original_native_quote_v2(
         quote_extras.family_original_table_inventories_v2.insert(crate::palw_freeprompt_v3::fp_claim_id_v3(job), table);
     }
     let extras = &quote_extras;
-    let b = TransitionBuilder::try_new(state, params, false, false, false, false, extras)?;
+    let b = TransitionBuilder::try_new(state, params, false, false, false, false, extras)?.with_native_original_parent_v19(state);
     let prepared = prepare_paired_original_v1(&b, ctx, object, Some(job))?
         .ok_or_else(|| refused("family native quote lacks signed paired original"))?;
     let schedule = palw_funded_original_schedule_v1(extras).map_err(|e| refused(format!("family native quote schedule: {e:?}")))?;
-    let requirements = prepared
+    let mut requirements = prepared
         .enrich_native_geometry_v1(&b, ctx)
         .map_err(geometry_refusal)
         .map_err(FundedOriginalRefusalV1::into_state_v1)?
@@ -673,7 +1021,17 @@ pub fn palw_family_original_native_quote_v2(
         )
         .map_err(requirements_refusal)
         .map_err(FundedOriginalRefusalV1::into_state_v1)?;
-    let (inventories, inventory_lease) = requirements.family_inventories_v1(&b, ctx, semantic_table)?;
+    if generated_semantic_v3 {
+        requirements.bind_carrier_inputs_v3(
+            carrier_inputs.ok_or_else(|| refused("profile3 native quote missing candidate carrier inputs"))?,
+            &b,
+        )?;
+    }
+    let (inventories, inventory_lease) = if generated_semantic_v3 {
+        requirements.family_inventories_v3(&b, ctx, semantic_table)?
+    } else {
+        requirements.family_inventories_v1(&b, ctx, semantic_table)?
+    };
     let frame = requirements.frame_v1();
     let p = frame.plan_v1();
     let admission = schedule.admission_v1().ok_or_else(|| refused("family native quote all-branch schedule absent"))?;
@@ -712,4 +1070,50 @@ pub fn palw_family_original_native_quote_v2(
         _retention_lease: retention_lease,
         _derivation: derivation,
     })
+}
+
+/// Read-only verified identity/readiness. No constructor, funding authority or
+/// detached actor claim is carried out of the native state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwOriginalArchiveStatusV1 {
+    contract: Hash64,
+    source: Hash64,
+    constructed: bool,
+    material_ready: bool,
+}
+impl PalwOriginalArchiveStatusV1 {
+    pub fn contract_v1(&self) -> Hash64 {
+        self.contract
+    }
+    pub fn source_v1(&self) -> Hash64 {
+        self.source
+    }
+    pub fn constructed_v1(&self) -> bool {
+        self.constructed
+    }
+    pub fn material_ready_v1(&self) -> bool {
+        self.material_ready
+    }
+}
+pub fn palw_original_archive_status_v1(
+    state: &PalwChainStateV2,
+    claim: Hash64,
+    point: PalwBlockContextV2,
+) -> Result<Option<PalwOriginalArchiveStatusV1>, PalwStateV2Error> {
+    let Some(r) = original_archive_reservation_proposal_v1::verified_original_archive_reservation_v1(state, claim, point)? else {
+        return Ok(None);
+    };
+    let mut material_ready = false;
+    if r.constructed_v1() && !r.released_v1() {
+        super::palw_claim_local_source_admission_v8::for_accepting_point_v8(state, claim, point)?
+            .ok_or_else(|| refused("verified archive lacks exact Source8 birth"))?;
+        super::palw_claim_local_born_tir_source_v16::verify_original_archive_body_bounds_v1(state, claim, point, r.body_bounds_v1())?;
+        material_ready = true;
+    }
+    Ok(Some(PalwOriginalArchiveStatusV1 {
+        contract: r.contract_v1(),
+        source: r.source_v1(),
+        constructed: r.constructed_v1(),
+        material_ready,
+    }))
 }

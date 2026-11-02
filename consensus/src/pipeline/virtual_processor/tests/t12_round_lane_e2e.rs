@@ -427,6 +427,9 @@ impl T12Chain {
         let (t, _) = self.vp().heartbeat_adapt_block_template(t).expect("the heartbeat lane is open on testnet-12");
         assert_eq!(t.block.header.pow_algo_id, kaspa_consensus_core::pow_layer0::POW_ALGO_ID_HEARTBEAT_V1);
         self.ctx.simulated_time = self.ctx.simulated_time.max(t.block.header.timestamp);
+        // The adapter can advance the final stamp. Keep the opted-in instance
+        // validation clock on that same simulated instant before insertion.
+        self.arm_clock();
         self.heartbeats += 1;
         self.insert_chain_block(t.block, "a heartbeat").await
     }

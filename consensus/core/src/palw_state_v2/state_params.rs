@@ -965,9 +965,16 @@ impl PalwStateParamsV2 {
         self.reporter_income_active_at(daa) && self.material_income_from_daa.is_some_and(|from| daa >= from)
     }
 
-    pub fn with_family_supplier_from(mut self, from:Option<u64>)->Self { self.family_supplier_from_daa=from;self }
-    pub fn family_supplier_from(&self)->Option<u64>{self.family_supplier_from_daa}
-    pub fn family_supplier_active_at(&self,daa:u64)->bool {self.family_supplier_from_daa.is_some_and(|from|daa>=from)}
+    pub fn with_family_supplier_from(mut self, from: Option<u64>) -> Self {
+        self.family_supplier_from_daa = from;
+        self
+    }
+    pub fn family_supplier_from(&self) -> Option<u64> {
+        self.family_supplier_from_daa
+    }
+    pub fn family_supplier_active_at(&self, daa: u64) -> bool {
+        self.family_supplier_from_daa.is_some_and(|from| daa >= from)
+    }
 
     /// RFC-0008 once-only settlement registry mirror (`Params::palw_settlement_once_v1`).
     pub fn with_settlement_once_from(mut self, from: Option<u64>) -> Self {

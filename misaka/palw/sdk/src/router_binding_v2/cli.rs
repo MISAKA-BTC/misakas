@@ -77,7 +77,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
 
 /// This is an offline input exporter, never a native outcome observer.
 fn court_expectation_command(args: &[String]) -> Result<(), String> {
-    if args.len() % 2 != 0 {
+    if !args.len().is_multiple_of(2) {
         return Err("court-expectation requires named option/value pairs".into());
     }
     let mut options = BTreeMap::new();

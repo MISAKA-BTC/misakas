@@ -105,8 +105,13 @@ pub(super) fn charge_court_op_v1(
     else {
         return Ok(());
     };
-    let policy =
-        builder.params.court_capacity_at_v1(ctx.daa_score).ok_or_else(|| refused("court operation has no active capacity budget"))?;
+    let family = crate::palw_court_transport_v1::family_material_accounted_v2(&builder.state, builder.params, ctx.daa_score, object)
+        .map_err(refused)?;
+    let policy = builder
+        .params
+        .court_capacity_at_v1(ctx.daa_score)
+        .or_else(|| family.as_ref().map(|_| crate::palw_g14_values_v1::PALW_G14_COURT_CAPACITY_POLICY_ESTIMATE_V1))
+        .ok_or_else(|| refused("court operation has no active capacity budget"))?;
     let budget = if one_move { policy.one_move_budget } else { policy.block_budget };
     let already = if one_move { builder.court_one_move_spent } else { builder.court_cost_spent };
     let spent = already.checked_add(cost).ok_or_else(|| refused("the block's court budget accumulation overflows"))?;
@@ -115,6 +120,20 @@ pub(super) fn charge_court_op_v1(
             "the block's court budget {budget:?} ({}) cannot take this operation ({cost:?}; {already:?} already spent)",
             if one_move { "one-move accusations" } else { "court sessions" }
         )));
+    }
+    if let Some((cost, service, reserved, message)) = family {
+        use crate::palw_court_service_v1::ServiceCost;
+        let old = builder.court_family_unreserved_service_spent_v2;
+        let next = ServiceCost {
+            bytes: old.bytes.checked_add(service.bytes).ok_or_else(|| refused("family source byte accumulation"))?,
+            work: old.work.checked_add(service.work).ok_or_else(|| refused("family source work accumulation"))?,
+            io: old.io.checked_add(service.io).ok_or_else(|| refused("family source IO accumulation"))?,
+            controls: old.controls.checked_add(service.controls).ok_or_else(|| refused("family source control accumulation"))?,
+        };
+        builder.court_family_packing_spent_v2 =
+            builder.court_family_packing_spent_v2.checked_add(cost).ok_or_else(|| refused("family packing accumulation"))?;
+        builder.court_family_unreserved_service_spent_v2 = next;
+        builder.court_family_charged_v2 = Some((message, service, reserved));
     }
     if one_move {
         builder.court_one_move_spent = spent;
@@ -683,13 +702,57 @@ fn charge_court_ingress_fee_v1(
     if collateral < fee {
         return Err(refused(format!("the court ingress fee {fee} exceeds the opener's collateral {collateral}")));
     }
-    if u128::from(collateral).saturating_sub(builder.committed_at(&opener, now)?) < u128::from(fee) {
+    let held = fee_reserved_principal_v1(builder, &opener, now)?;
+    if u128::from(collateral).saturating_sub(held) < u128::from(fee) {
         return Err(refused("the court ingress fee exceeds the opener free principal"));
     }
     if builder.slash_bond(opener, u128::from(fee))? != fee {
         return Err(refused("the court ingress fee was not debited in full"));
     }
     Ok(())
+}
+
+/// Principal unavailable to a fee burn or prepaid service debit. A-1 omits
+/// A-6, including a capacity row installed by the current object. Before
+/// R-core+, only classic court/DA exposure is already inside A-1; newer
+/// legacy-dispute and staged deposits still need protecting separately.
+/// Read the same rooted rows/indexes as A-6 without allocating a projection.
+pub(super) fn fee_reserved_principal_v1(
+    builder: &TransitionBuilder<'_>,
+    bond: &PalwBondKeyV2,
+    now: u64,
+) -> Result<u128, PalwStateV2Error> {
+    let mut accuser = builder.read().accuser_ledger_v1(bond, now);
+    if !builder.params.rcore_plus_active_at(now) {
+        let s = &builder.state;
+        let courts = s
+            .courts_by_challenger
+            .range((*bond, ZERO_HASH64)..)
+            .take_while(|(challenger, _)| challenger == bond)
+            .filter_map(|(_, session)| s.court_sessions.get(session))
+            .filter_map(|session| s.claims.get(&session.claim))
+            .try_fold(0u128, |sum, claim| sum.checked_add(claim.reserved))
+            .ok_or(PalwStateV2Error::Overflow("fee classic court principal"))?;
+        let da = s
+            .da_by_accuser
+            .range((*bond, ZERO_HASH64)..)
+            .take_while(|(accuser, _)| accuser == bond)
+            .try_fold(0u128, |sum, (_, claim)| {
+                let open = s.da_sessions.get(&(*claim, *bond)).map_or(0, |row| row.exposure);
+                let held = s.da_claims.get(claim).map_or(Some(0), |row| {
+                    row.refuted_held
+                        .iter()
+                        .filter(|(accuser, _)| accuser == bond)
+                        .try_fold(0u128, |total, (_, amount)| total.checked_add(*amount))
+                })?;
+                sum.checked_add(open)?.checked_add(held)
+            })
+            .ok_or(PalwStateV2Error::Overflow("fee classic DA principal"))?;
+        accuser = accuser
+            .checked_sub(courts.checked_add(da).ok_or(PalwStateV2Error::Overflow("fee duplicated classic principal"))?)
+            .ok_or_else(|| refused("fee classic principal exceeds the accuser ledger"))?;
+    }
+    builder.committed_at(bond, now)?.checked_add(accuser).ok_or(PalwStateV2Error::Overflow("fee reserved principal"))
 }
 
 /// **Court admission** where a court session is about to open (`open_dissection_at_named_leaf_v1`, `CourtOpened`). Past the fence:

@@ -1,13 +1,15 @@
 //! RFC-0042 independent supplier capital and finite fee tranche. Every money
 //! mutation uses the existing journal, once ledger, real bond debit and R book.
 use super::*;
+#[path = "palw_court_family_calendar_search_v2.rs"]
+pub(super) mod calendar_search;
 use crate::palw_court_family_material_v1::{FAMILY_MATERIAL_PART_BYTES_V1, FamilyMaterialTargetV1, NativeFamilyInventoryV1};
 use crate::palw_court_family_supplier_v1::*;
 use crate::palw_court_service_v1::{ServiceAssessment, ServiceCost, ServicePacket};
 use crate::palw_settlement_once_v1::*;
 use crate::palw_staged_court_state_v1::PalwStagedCourtRowV1 as Row;
-fn refused(s: impl Into<String>) -> PalwStateV2Error {
-    PalwStateV2Error::CarriageInconsistent(s.into())
+fn refused(s: impl ToString) -> PalwStateV2Error {
+    PalwStateV2Error::CarriageInconsistent(s.to_string())
 }
 fn digest<T: borsh::BorshSerialize>(domain: &[u8], x: &T) -> Result<Hash64, PalwStateV2Error> {
     crate::palw_court_shared_tir_stream_v1::stream_digest(domain, x).map_err(refused)
@@ -54,18 +56,98 @@ pub(super) fn write_family_supplier_v1(
         FamilySupplierStatusV2 { version: 2, contract: id, defaulted_daa: row.defaulted_daa, fee_state: row.fee_state.clone() };
     b.write_kernel_row_encoded_v1(FAMILY_SUPPLIER_TABLE_V1, &key, Some(&status))
 }
-pub(super) fn family_contract_for_material_v1(
+pub(crate) fn family_contract_for_material_v1(
     state: &PalwChainStateV2,
     id: Hash64,
 ) -> Result<Option<crate::palw_native_resource_v1::NativeRetainedV1<FamilySupplierRowV1>>, PalwStateV2Error> {
-    let rows = state.family_supplier_rows_v1()?;
-    let (rows, lease) = rows.into_parts_v1();
-    Ok(rows
-        .into_iter()
-        .find(|(key, _)| *key == id)
-        .map(|(_, row)| crate::palw_native_resource_v1::NativeRetainedV1::from_owner_reserved_v1(row, lease)))
+    use crate::palw_native_resource_v1::{BTreeNodeEnvelopeV1, NativeRetainedV1, TirNativeRequestsV1};
+    use borsh::BorshDeserialize;
+    let Some(route) = state.kernel_route_state_v1() else { return Ok(None) };
+    let _key_lease = crate::palw_native_resource_v1::reserve_native_requests_v1(129).map_err(PalwStateV2Error::NativeResource)?;
+    let Some(raw) = route.aux.get(&(FAMILY_SUPPLIER_TABLE_V1, id.as_byte_slice().to_vec())) else { return Ok(None) };
+    let shape = crate::palw_native_resource_v1::preflight_native_value_v1::<FamilySupplierRowV1>(raw.as_slice(), raw.len() as u64)
+        .map_err(|e| match e.kind() {
+            std::io::ErrorKind::OutOfMemory => PalwStateV2Error::NativeResource(
+                crate::palw_native_resource_v1::NativeCoverageV1::overflow::<FamilySupplierRowV1>("family direct catalogue scan"),
+            ),
+            std::io::ErrorKind::Unsupported | std::io::ErrorKind::TimedOut => {
+                PalwStateV2Error::NativeResource(crate::palw_native_resource_v1::NativeCoverageV1::unsupported::<FamilySupplierRowV1>(
+                    "family direct catalogue scan",
+                    &e.to_string(),
+                ))
+            }
+            _ => refused(e.to_string()),
+        })?;
+    let mut reader = raw.as_slice();
+    let version = u16::deserialize_reader(&mut reader).map_err(|e| refused(e.to_string()))?;
+    let terms = FamilySupplierTermsV1::deserialize_reader(&mut reader).map_err(|e| refused(e.to_string()))?;
+    for _ in 0..2 {
+        let n = u32::deserialize_reader(&mut reader).map_err(|e| refused(e.to_string()))? as usize;
+        if n != crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN {
+            return Err(refused("family direct consent signature width"));
+        }
+        reader = reader.get(n..).ok_or_else(|| refused("family direct header short signature"))?;
+    }
+    let _allocation = Hash64::deserialize_reader(&mut reader).map_err(|e| refused(e.to_string()))?;
+    let accepted = u64::deserialize_reader(&mut reader).map_err(|e| refused(e.to_string()))?;
+    let targets = u32::deserialize_reader(&mut reader).map_err(|e| refused(e.to_string()))? as u64;
+    let mut q = TirNativeRequestsV1::new();
+    q.add_v1(shape.logical_requests_v1()).map_err(PalwStateV2Error::NativeResource)?;
+    q.exact_v1::<BTreeNodeEnvelopeV1<Hash64, Hash64>>(targets).map_err(PalwStateV2Error::NativeResource)?;
+    let lease = crate::palw_native_resource_v1::reserve_native_requests_v1(q.bytes_v1()).map_err(PalwStateV2Error::NativeResource)?;
+    let mut row: FamilySupplierRowV1 = borsh::from_slice(raw).map_err(|e| refused(e.to_string()))?;
+    if version != 2
+        || row.consent.id_v1().map_err(|e| refused(e.to_string()))? != id
+        || accepted < terms.accept_from_daa
+        || accepted > terms.accept_until_daa
+        || row.targets.is_empty()
+        || row.targets.windows(2).any(|p| p[0].id >= p[1].id)
+        || row.targets.iter().any(|t| t.max_bytes == 0 || t.packets.is_empty())
+        || !row.completed.is_empty()
+        || row.defaulted_daa.is_some()
+        || row.fee_state != FamilySupplierFeeStateV1::Held
+    {
+        return Err(refused("family direct immutable catalogue"));
+    }
+    let status_key = family_status_key_v2(id);
+    let raw = route.aux.get(&(FAMILY_SUPPLIER_TABLE_V1, status_key.to_vec())).ok_or_else(|| refused("family direct status absent"))?;
+    let status: FamilySupplierStatusV2 = borsh::from_slice(raw).map_err(|e| refused(e.to_string()))?;
+    if status.version != 2
+        || status.contract != id
+        || status.defaulted_daa.is_some_and(|d| d < accepted || d > terms.material_until_daa)
+    {
+        return Err(refused("family direct status scope"));
+    }
+    row.version = 1;
+    row.defaulted_daa = status.defaulted_daa;
+    row.fee_state = status.fee_state;
+    for target in &row.targets {
+        let key = family_completion_key_v2(id, target.id);
+        if let Some(raw) = route.aux.get(&(FAMILY_SUPPLIER_TABLE_V1, key.to_vec())) {
+            let done: FamilySupplierCompletionV2 = borsh::from_slice(raw).map_err(|e| refused(e.to_string()))?;
+            if done.version != 2 || done.contract != id || done.target != target.id || done.digest == Hash64::default() {
+                return Err(refused("family direct completion scope"));
+            }
+            row.completed.insert(target.id, done.digest);
+        }
+    }
+    Ok(Some(NativeRetainedV1::from_owner_reserved_v1(row, lease)))
 }
 fn delete_family_supplier_v2(b: &mut TransitionBuilder<'_>, id: Hash64, row: &FamilySupplierRowV1) -> Result<(), PalwStateV2Error> {
+    if crate::palw_court_family_supplier_v1::signed_profile_generation_v3(&row.consent.terms).map_err(refused)? == 3 {
+        b.write_kernel_row_encoded_v1::<FamilyCarrierProjectionRowV3>(
+            FAMILY_SUPPLIER_TABLE_V1,
+            &family_carrier_projection_key_v3(id),
+            None,
+        )?;
+    }
+    for target in &row.targets {
+        b.write_kernel_row_encoded_v1::<FamilyPrimaryWindowV2>(
+            FAMILY_SUPPLIER_TABLE_V1,
+            &family_primary_window_key_v2(id, target.id),
+            None,
+        )?;
+    }
     for target in row.completed.keys() {
         b.write_kernel_row_encoded_v1::<FamilySupplierCompletionV2>(
             FAMILY_SUPPLIER_TABLE_V1,
@@ -92,10 +174,17 @@ fn reserve_copy(b: &mut TransitionBuilder<'_>, row: &FamilySupplierRowV1) -> Res
 pub(super) struct FamilySupplierPlanV1 {
     pub row: FamilySupplierRowV1,
     pub packets: Vec<ServicePacket>,
+    pub windows: Vec<FamilyPrimaryWindowV2>,
+    carrier_projection_v3: Option<crate::palw_court_family_material_v1::FamilyCarrierProjectionFactsV3>,
+    primary_order: Vec<Hash64>,
+    primary_span_daa: u64,
     _lease: Option<crate::palw_native_resource_v1::NativeDemandLeaseV1>,
 }
 
-/// Profile IDs include the exact unchanged prices and this derivation version.
+/// Profile IDs include the exact unchanged prices and owner3 derivation.
+/// Original-material rule4 preserves that pricing/calendar grammar. Its exact
+/// rule/graph ID and longer declared H are signed independently in each consent;
+/// old signatures on a shorter H or a rule3 inventory cannot authorize rule4.
 pub fn family_supplier_profiles_v1() -> Result<[Hash64; 4], PalwStateV2Error> {
     use crate::palw_g14_values_v1 as g;
     let values = (
@@ -115,6 +204,54 @@ pub fn family_supplier_profiles_v1() -> Result<[Hash64; 4], PalwStateV2Error> {
         digest(b"misaka-palw/family-supplier/capital-profile/v1", &values)?,
         digest(b"misaka-palw/family-supplier/retention-profile/v1", &values)?,
         digest(b"misaka-palw/family-supplier/settlement-profile/v1", &(values, true, true))?,
+    ])
+}
+
+/// Explicit independently funded draft contract. Old V1 profile IDs and old
+/// restore derivation remain literal; this profile is signed by new cohorts.
+pub fn family_supplier_profiles_v2() -> Result<[Hash64; 4], PalwStateV2Error> {
+    let native_geometry = (
+        std::mem::size_of::<PalwDeltaEntryV2>() as u64,
+        std::mem::size_of::<crate::palw_native_resource_v1::BTreeNodeEnvelopeV1<(u8, Vec<u8>), Vec<u8>>>() as u64,
+        std::mem::size_of::<
+            crate::palw_native_resource_v1::BTreeNodeEnvelopeV1<
+                crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1,
+                crate::palw_staged_court_state_v1::PalwStagedCourtRowV1,
+            >,
+        >() as u64,
+        std::mem::size_of::<ServicePacket>() as u64,
+        std::mem::size_of::<FamilyPrimaryWindowV2>() as u64,
+    );
+    let old = (
+        family_supplier_profiles_v1()?,
+        crate::palw_g14_values_v1::PALW_G14_COURT_CAPACITY_POLICY_ESTIMATE_V1,
+        crate::palw_court_family_material_v1::FAMILY_MATERIAL_SIGNATURE_CONTEXT_V2,
+        b"native-primary-point-calendar-stride-and-ttl/v2".as_slice(),
+        native_geometry,
+    );
+    Ok([
+        digest(b"misaka-palw/family-supplier/fee-profile/v2", &(old, 2u16))?,
+        digest(b"misaka-palw/family-supplier/capital-profile/v2", &(old, 2u16))?,
+        digest(b"misaka-palw/family-supplier/retention-profile/v2", &(old, 2u16))?,
+        digest(b"misaka-palw/family-supplier/settlement-profile/v2", &(old, 2u16))?,
+    ])
+}
+
+/// New generated semantic custody purpose. Prior profile1/2 hashes and
+/// inventory/calendar/fee derivations remain literal for accepted cohorts.
+pub fn family_supplier_profiles_v3() -> Result<[Hash64; 4], PalwStateV2Error> {
+    let previous = family_supplier_profiles_v2()?;
+    let convention = (
+        3u16,
+        previous,
+        b"generated-semantic-native-rows-tiles-fullids/actual-carrier-born-facts/m-backed-primary-metadata/v3".as_slice(),
+        std::mem::size_of::<FamilyCarrierProjectionRowV3>() as u64,
+    );
+    Ok([
+        digest(b"misaka-palw/family-supplier/fee-profile/v3", &convention)?,
+        digest(b"misaka-palw/family-supplier/capital-profile/v3", &convention)?,
+        digest(b"misaka-palw/family-supplier/retention-profile/v3", &convention)?,
+        digest(b"misaka-palw/family-supplier/settlement-profile/v3", &convention)?,
     ])
 }
 
@@ -255,6 +392,199 @@ pub fn palw_family_supplier_terms_quote_v1(
     expected.validate_shape_v1().map_err(refused)?;
     Ok(expected)
 }
+fn primary_projection_bytes_v2(inventory: &NativeFamilyInventoryV1) -> Result<u64, PalwStateV2Error> {
+    let targets = inventory.targets_v1().len() as u64;
+    let parts =
+        inventory.targets_v1().iter().try_fold(0u64, |n, (_, bytes)| add(n, bytes.div_ceil(FAMILY_MATERIAL_PART_BYTES_V1 as u64)))?;
+    let mut mutable = 272u64;
+    let mut material_journal = 0u64;
+    for (target, n) in inventory.targets_v1() {
+        let t = borsh::object_length(target).map_err(|e| refused(e.to_string()))? as u64;
+        let draft = 64 + t + 68 + 8 + 64 + 8 + 8 + 8;
+        mutable = add(mutable, draft)?;
+        let p = n.div_ceil(FAMILY_MATERIAL_PART_BYTES_V1 as u64);
+        let literals =
+            add(mul(add(*n, 354 + t + 3)?, 2)?, add(mul(add(*n, mul(p, 166 + 3)?)?, 2)?, mul(add(p, 1)?, mul(draft + 74 + 3, 2)?)?)?)?;
+        let entries = add(mul(p, 3)?, 4)?;
+        material_journal = add(material_journal, add(literals, mul(entries, std::mem::size_of::<PalwDeltaEntryV2>() as u64)?)?)?;
+    }
+    let shared = if matches!(
+        inventory.role_v1(),
+        FamilySupplierRoleV1::ParameterAndPrompt | FamilySupplierRoleV1::PrefixGeneratedSelectionAndStop
+    ) {
+        targets
+    } else {
+        0
+    };
+    let table = u64::from(inventory.role_v1() == FamilySupplierRoleV1::SemanticTable);
+    let rows = add(add(add(add(mul(targets, 5)?, parts)?, 2)?, shared)?, table)?;
+    let keys = add(add(add(add(129, mul(targets, 453)?)?, mul(parts, 73)?)?, mul(shared, 129)?)?, mul(table, 65)?)?;
+    let p = super::palw_claim_local_material_projection_v2::projection_geometry_v2(rows, keys, add(targets, 1)?, mutable, 1)?;
+    // Each first target has at most Begin+all Part+Finish; each finite status
+    // has create/default/queue/paid/delete. Current index copies and old/new
+    // mutable journal rows must be funded even with no historical full F copy.
+    let events = add(add(parts, mul(targets, 4)?)?, 5)?;
+    let index = add(add(74, mul(rows, 77)?)?, keys)?;
+    let marker = 64 + 2 + 64 + 64 + 64 + 8 + 74 + (2 + 64 + 64 + 8 + 8 + 138);
+    let mut mirror = 0u64;
+    if shared != 0 {
+        for (target, n) in inventory.targets_v1() {
+            let t = borsh::object_length(target).map_err(|e| refused(e.to_string()))? as u64;
+            // MaterialRow's exact fixed envelope (also bounds SharedIds), the
+            // native staged node, and both resident/writer raw byte owners.
+            let node = std::mem::size_of::<
+                crate::palw_native_resource_v1::BTreeNodeEnvelopeV1<
+                    crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1,
+                    crate::palw_staged_court_state_v1::PalwStagedCourtRowV1,
+                >,
+            >() as u64;
+            mirror = add(mirror, add(mul(*n, 2)?, add(410 + t + 129 + 1, node)?)?)?;
+        }
+    }
+    let raw_nodes = add(add(mul(targets, 4)?, parts)?, table)?;
+    let raw_node_bytes =
+        mul(raw_nodes, std::mem::size_of::<crate::palw_native_resource_v1::BTreeNodeEnvelopeV1<(u8, Vec<u8>), Vec<u8>>>() as u64)?;
+    // Mirror create/delete and each immutable marker/calendar create/delete.
+    let journal =
+        add(add(material_journal, mul(mirror, 2)?)?, mul(mul(targets, 4)?, std::mem::size_of::<PalwDeltaEntryV2>() as u64)?)?;
+    let cost_projection = mul(add(parts, mul(targets, 2)?)?, std::mem::size_of::<ServiceCost>() as u64)?;
+    add(
+        cost_projection,
+        add(
+            add(add(add(p.retained_heap, raw_node_bytes)?, mirror)?, mul(targets, marker)?)?,
+            add(journal, add(mul(events, mul(index, 2)?)?, mul(targets, mul(marker + 3, 2)?)?)?)?,
+        )?,
+    )
+}
+pub fn palw_family_supplier_terms_quote_v2(
+    inventory: &NativeFamilyInventoryV1,
+    expected: FamilySupplierTermsV1,
+) -> Result<FamilySupplierTermsV1, PalwStateV2Error> {
+    use crate::palw_g14_values_v1 as g;
+    let ttl = crate::palw_g14_values_v1::PALW_G14_MATERIAL_INTAKE_ESTIMATE_V1.draft_ttl_daa;
+    let span =
+        crate::palw_g14_values_v1::PALW_G14_COURT_SERVICE_INCLUSION_DELAY_DAA_ESTIMATE_V1.max(inventory.native_inclusion_margin_v2());
+    for (_, bytes) in inventory.targets_v1() {
+        if mul(add(bytes.div_ceil(FAMILY_MATERIAL_PART_BYTES_V1 as u64), 2)?, span)? > ttl {
+            return Err(refused("native primary body cannot fit existing multipart TTL/inclusion chain"));
+        }
+    }
+    let mut out = palw_family_supplier_terms_quote_v1(inventory, expected)?;
+    let [fee, capital, retention, settlement] = family_supplier_profiles_v2()?;
+    out.fee_profile = fee;
+    out.capital_profile = capital;
+    out.retention_profile = retention;
+    out.settlement_policy = settlement;
+    let extra = primary_projection_bytes_v2(inventory)?;
+    out.collateral_sompi = add(
+        out.collateral_sompi,
+        mul(
+            add(retention_service_bytes_v1(inventory)?, extra)?
+                .div_ceil(g::PALW_G14_COURT_SERVICE_PROFILE_ESTIMATE_V1.budget.bytes)
+                .checked_sub(retention_nodes_v1(inventory)?)
+                .ok_or_else(|| refused("primary quote holding node count"))?,
+            g::PALW_G14_CAPITAL_PER_SOURCE_NODE_SOMPI_V1,
+        )?,
+    )?;
+    out.fee_sompi = add(out.fee_sompi, mul(extra, g::PALW_G14_MATERIAL_INTAKE_ESTIMATE_V1.sompi_per_byte)?)?;
+    Ok(out)
+}
+/// Only this new quote selects generated semantic scope; old V2 callers
+/// still obtain exactly their historical complete-inventory amounts/profile.
+pub fn palw_family_supplier_terms_quote_v3(
+    inventory: &NativeFamilyInventoryV1,
+    expected: FamilySupplierTermsV1,
+) -> Result<FamilySupplierTermsV1, PalwStateV2Error> {
+    if inventory.role_v1() == FamilySupplierRoleV1::PrefixGeneratedSelectionAndStop && !inventory.generated_semantic_only_v3() {
+        return Err(refused("new profile3 requires exact generated semantic native inventory"));
+    }
+    let facts = inventory.carrier_projection_v3().ok_or_else(|| refused("profile3 quote lacks actual carrier input projection"))?;
+    let mut out = palw_family_supplier_terms_quote_v2(inventory, expected)?;
+    let extra = add(carrier_projection_storage_v3(inventory, facts)?, primary_m_backed_metadata_storage_v3(inventory)?)?;
+    let old_retained = add(retention_service_bytes_v1(inventory)?, primary_projection_bytes_v2(inventory)?)?;
+    let quantum = crate::palw_g14_values_v1::PALW_G14_COURT_SERVICE_PROFILE_ESTIMATE_V1.budget.bytes;
+    out.collateral_sompi = add(
+        out.collateral_sompi,
+        mul(
+            add(old_retained, extra)?
+                .div_ceil(quantum)
+                .checked_sub(old_retained.div_ceil(quantum))
+                .ok_or_else(|| refused("profile3 carrier holding count"))?,
+            crate::palw_g14_values_v1::PALW_G14_CAPITAL_PER_SOURCE_NODE_SOMPI_V1,
+        )?,
+    )?;
+    out.fee_sompi = add(out.fee_sompi, mul(extra, crate::palw_g14_values_v1::PALW_G14_MATERIAL_INTAKE_ESTIMATE_V1.sompi_per_byte)?)?;
+    let [fee, capital, retention, settlement] = family_supplier_profiles_v3()?;
+    out.fee_profile = fee;
+    out.capital_profile = capital;
+    out.retention_profile = retention;
+    out.settlement_policy = settlement;
+    Ok(out)
+}
+/// Actual current descriptor codec keeps these immutable birth facts as M
+/// bodies. Correct only the new3 projection; old1/2 pricing/classifier is literal.
+fn primary_m_backed_metadata_storage_v3(inventory: &NativeFamilyInventoryV1) -> Result<u64, PalwStateV2Error> {
+    let count = inventory.targets_v1().len() as u64;
+    let marker = crate::palw_court_family_material_v1::FamilyPrimaryDraftV2 {
+        contract: Hash64::default(),
+        version: 2,
+        claim: Hash64::default(),
+        target: Hash64::default(),
+        draft: Hash64::default(),
+        material_until_daa: 0,
+    };
+    let calendar =
+        FamilyPrimaryWindowV2 { version: 2, contract: Hash64::default(), target: Hash64::default(), first_daa: 0, span_daa: 0 };
+    let m = borsh::object_length(&marker).map_err(refused)? as u64;
+    let c = borsh::object_length(&calendar).map_err(refused)? as u64;
+    let rows = mul(count, 2)?;
+    let keys = mul(count, 65 + 129)?;
+    let bytes = mul(count, add(m, c)?)?;
+    let old = super::palw_claim_local_material_projection_v2::projection_geometry_v2(rows, keys, 0, 0, 0)?;
+    let actual = super::palw_claim_local_material_projection_v2::projection_geometry_v2(rows, keys, rows, bytes, 0)?;
+    let current = actual.retained_heap.checked_sub(old.retained_heap).ok_or_else(|| refused("new3 M metadata ownership underflow"))?;
+    // Each immutable marker/calendar is born once and deleted once. These
+    // are body/Q-reference journals, separate from the existing index M and
+    // already priced raw AUX create/delete journal.
+    let lifecycle = mul(count, add(add(470, mul(m, 2)?)?, add(470, mul(c, 2)?)?)?)?;
+    add(current, lifecycle)
+}
+fn carrier_projection_storage_v3(
+    inventory: &NativeFamilyInventoryV1,
+    facts: crate::palw_court_family_material_v1::FamilyCarrierProjectionFactsV3,
+) -> Result<u64, PalwStateV2Error> {
+    facts.check_v3().map_err(refused)?;
+    let row = FamilyCarrierProjectionRowV3 {
+        version: 3,
+        contract: Hash64::default(),
+        claim: Hash64::default(),
+        accepted_daa: 0,
+        accepted_block: Hash64::default(),
+        accepted_blue_score: 0,
+        source: Hash64::default(),
+        allocation: Hash64::default(),
+        funding_contract: Hash64::default(),
+        facts,
+    };
+    let wire = borsh::object_length(&row).map_err(refused)? as u64;
+    let literal = add(65 + 9, wire)?;
+    let node = std::mem::size_of::<crate::palw_native_resource_v1::BTreeNodeEnvelopeV1<(u8, Vec<u8>), Vec<u8>>>() as u64;
+    let q = super::palw_claim_local_material_projection_v2::projection_geometry_v2(1, 65, 1, wire, 0)?;
+    let parts =
+        inventory.targets_v1().iter().try_fold(0u64, |n, (_, bytes)| add(n, bytes.div_ceil(FAMILY_MATERIAL_PART_BYTES_V1 as u64)))?;
+    let events = add(add(parts, mul(inventory.targets_v1().len() as u64, 4)?)?, 7)?; // includes birth sidecar create/delete
+    let own_projection_journal = mul(events, 2 * (77 + 65) + 2 * 64)?;
+    let own_material_lifecycle = add(470, mul(wire, 2)?)?; // M-backed Q+body create/delete, index M excluded
+    // Raw birth row/node, current owner reference, and complete create+delete
+    // undo plus its native journal membership. Cross-cohort index/R pending.
+    add(
+        add(own_projection_journal, own_material_lifecycle)?,
+        add(
+            add(add(literal, node)?, q.retained_heap)?,
+            add(mul(add(literal, 3)?, 2)?, mul(2, std::mem::size_of::<PalwDeltaEntryV2>() as u64)?)?,
+        )?,
+    )
+}
 pub(super) fn derive_family_supplier_plan_v1(
     state: &PalwChainStateV2,
     ctx: &PalwBlockContextV2,
@@ -290,8 +620,35 @@ fn derive_family_supplier_plan_inner_v1(
     let route = state.kernel_route().ok_or_else(|| refused("family supplier native route absent"))?;
     expected.network = Hash64::from_bytes(route.header.policy.network_domain);
     expected.ruleset = Hash64::from_bytes(route.header.policy.ruleset_digest);
-    expected = palw_family_supplier_terms_quote_v1(inventory, expected)?;
-    let packet_count = add(inventory.packet_count_v1().map_err(refused)?, retention_nodes_v1(inventory)?)?;
+    let generation = if admission {
+        3
+    } else {
+        crate::palw_court_family_supplier_v1::signed_profile_generation_v3(&consent.terms).map_err(refused)?
+    };
+    let independently_reserved = generation >= 2;
+    expected = match generation {
+        1 => palw_family_supplier_terms_quote_v1(inventory, expected)?,
+        2 => palw_family_supplier_terms_quote_v2(inventory, expected)?,
+        3 => palw_family_supplier_terms_quote_v3(inventory, expected)?,
+        _ => return Err(refused("unknown family native profile generation")),
+    };
+    let carrier_projection_v3 = if generation == 3 {
+        Some(inventory.carrier_projection_v3().ok_or_else(|| refused("profile3 plan lacks carrier facts"))?)
+    } else {
+        None
+    };
+    let mut extra_retention = if independently_reserved { primary_projection_bytes_v2(inventory)? } else { 0 };
+    if let Some(facts) = carrier_projection_v3 {
+        extra_retention = add(
+            extra_retention,
+            add(carrier_projection_storage_v3(inventory, facts)?, primary_m_backed_metadata_storage_v3(inventory)?)?,
+        )?;
+    }
+    let extra_nodes = add(retention_service_bytes_v1(inventory)?, extra_retention)?
+        .div_ceil(g::PALW_G14_COURT_SERVICE_PROFILE_ESTIMATE_V1.budget.bytes)
+        .checked_sub(retention_nodes_v1(inventory)?)
+        .ok_or_else(|| refused("new primary holding node count"))?;
+    let packet_count = add(add(inventory.packet_count_v1().map_err(refused)?, retention_nodes_v1(inventory)?)?, extra_nodes)?;
     let supplier = state.bond(&expected.supplier).ok_or(PalwStateV2Error::MissingBond(expected.supplier))?;
     let sponsor = state.bond(&expected.sponsor).ok_or(PalwStateV2Error::MissingBond(expected.sponsor))?;
     if admission
@@ -312,6 +669,8 @@ fn derive_family_supplier_plan_inner_v1(
     q.exact_v1::<FamilySupplierPlanV1>(1).map_err(PalwStateV2Error::NativeResource)?;
     q.exact_v1::<ServicePacket>(packet_count).map_err(PalwStateV2Error::NativeResource)?;
     q.exact_v1::<FamilySupplierTargetV1>(inventory.targets_v1().len() as u64).map_err(PalwStateV2Error::NativeResource)?;
+    q.exact_v1::<FamilyPrimaryWindowV2>(inventory.targets_v1().len() as u64).map_err(PalwStateV2Error::NativeResource)?;
+    q.exact_v1::<Hash64>(inventory.targets_v1().len() as u64).map_err(PalwStateV2Error::NativeResource)?;
     q.exact_v1::<[u8; 64]>(packet_count).map_err(PalwStateV2Error::NativeResource)?;
     q.add_v1(crate::palw_native_resource_v1::native_value_requests_v1(consent).map_err(PalwStateV2Error::NativeResource)?)
         .map_err(PalwStateV2Error::NativeResource)?;
@@ -342,8 +701,8 @@ fn derive_family_supplier_plan_inner_v1(
         }
         targets.push(FamilySupplierTargetV1 { id: target_id, max_bytes: *n, packets: ids });
     }
-    let retained = retention_service_bytes_v1(inventory)?;
-    for ordinal in 0..retention_nodes_v1(inventory)? {
+    let retained = add(retention_service_bytes_v1(inventory)?, extra_retention)?;
+    for ordinal in 0..add(retention_nodes_v1(inventory)?, extra_nodes)? {
         let packet = digest(b"misaka-palw/family-supplier/retention-packet/v1", &(id, allocation, ordinal))?;
         let quantum = g::PALW_G14_COURT_SERVICE_PROFILE_ESTIMATE_V1.budget.bytes;
         let bytes = (retained - ordinal * quantum).min(quantum);
@@ -355,7 +714,16 @@ fn derive_family_supplier_plan_inner_v1(
         });
     }
     targets.sort_unstable_by_key(|t| t.id);
-    Ok(FamilySupplierPlanV1 {
+    let mut primary_order = Vec::with_capacity(inventory.targets_v1().len());
+    if independently_reserved {
+        let is_ids = |t: &&(FamilyMaterialTargetV1, u64)| {
+            matches!(t.0, FamilyMaterialTargetV1::Input(crate::palw_court_shared_material_intake_v1::MaterialTargetV1::FullIds))
+        };
+        for (target, _) in inventory.targets_v1().iter().filter(is_ids).chain(inventory.targets_v1().iter().filter(|t| !is_ids(t))) {
+            primary_order.push(inventory.target_id_v1(*target).map_err(refused)?);
+        }
+    }
+    let mut prepared = FamilySupplierPlanV1 {
         row: FamilySupplierRowV1 {
             version: 1,
             consent: consent.clone(),
@@ -367,19 +735,138 @@ fn derive_family_supplier_plan_inner_v1(
             fee_state: FamilySupplierFeeStateV1::Held,
         },
         packets,
+        windows: Vec::with_capacity(inventory.targets_v1().len()),
+        carrier_projection_v3,
+        primary_order,
+        primary_span_daa: crate::palw_g14_values_v1::PALW_G14_COURT_SERVICE_INCLUSION_DELAY_DAA_ESTIMATE_V1
+            .max(inventory.native_inclusion_margin_v2()),
         _lease: lease,
-    })
+    };
+    if independently_reserved && !admission {
+        load_primary_windows_v2(state, &mut prepared)?;
+    }
+    Ok(prepared)
 }
 
 /// Extend the same original's all-branch candidate book; no second state commit.
 pub(super) fn reserve_family_plans_v1(
     book: &mut crate::palw_court_service_state_v2::CourtServiceStateV2,
     claim: Hash64,
-    plans: &[FamilySupplierPlanV1],
+    plans: &mut [FamilySupplierPlanV1],
+    graph: &crate::palw_court_source_material_graph_v3::NativeSourceMaterialGraphV3,
 ) -> Result<(), PalwStateV2Error> {
-    for plan in plans {
+    let extra = plans.iter().try_fold(0u64, |n, p| add(n, p.packets.len() as u64))?;
+    let _lease = crate::palw_native_resource_v1::reserve_native_requests_v1(add(
+        primary_calendar_requests_v2(&book.book, add(book.book.packets.len() as u64, extra)?)?,
+        mul(graph.edge_count_v3(), 4 * 64)?,
+    )?)
+    .map_err(PalwStateV2Error::NativeResource)?;
+    let mut next = book.clone();
+    reserve_family_plans_inner_v2(&mut next, claim, plans, graph)?;
+    *book = next;
+    Ok(())
+}
+fn reserve_family_plans_inner_v2(
+    book: &mut crate::palw_court_service_state_v2::CourtServiceStateV2,
+    claim: Hash64,
+    plans: &mut [FamilySupplierPlanV1],
+    graph: &crate::palw_court_source_material_graph_v3::NativeSourceMaterialGraphV3,
+) -> Result<(), PalwStateV2Error> {
+    let new = plans.iter().any(|p| !p.primary_order.is_empty());
+    let mut original = Vec::new();
+    if new {
+        let binding = book.claims.get(&claim).ok_or_else(|| refused("material barrier original binding absent"))?;
+        original.try_reserve_exact(binding.packet_ids.len()).map_err(|e| refused(e.to_string()))?;
+        for id in &binding.packet_ids {
+            let p = book.book.packet(id).ok_or_else(|| refused("material barrier original packet absent"))?;
+            if book.book.last_observed_daa.is_some_and(|d| p.release_daa <= d) {
+                return Err(refused("material barrier cannot detach an observed promise"));
+            }
+            original.push(p.clone());
+        }
+        for p in &original {
+            let at = book.book.assignments.remove(&p.id).ok_or_else(|| refused("material barrier original assignment absent"))?;
+            if book.book.supply.contains_key(&at) {
+                return Err(refused("material barrier cannot detach recorded supply"));
+            }
+            let left = book.book.remaining.get_mut(&at).ok_or_else(|| refused("material barrier residual absent"))?;
+            left.bytes = add(left.bytes, p.cost.bytes)?;
+            left.work = add(left.work, p.cost.work)?;
+            left.io = add(left.io, p.cost.io)?;
+            left.controls = add(left.controls, p.cost.controls)?;
+            if *left == book.book.budget {
+                book.book.remaining.remove(&at);
+            }
+            book.book.packets.remove(&p.id);
+        }
+    }
+    let mut global_cursor = plans
+        .iter()
+        .filter(|p| !p.primary_order.is_empty())
+        .try_fold(0u64, |at, p| Ok::<_, PalwStateV2Error>(at.max(add(p.row.accepted_daa, p.primary_span_daa)?)))?;
+    for plan in plans.iter_mut() {
         let hard = plan.row.consent.terms.respond_until_daa;
-        book.book.reserve(&plan.packets, hard).map_err(|e| refused(format!("family all-branch reservation: {e:?}")))?;
+        if plan.primary_order.is_empty() {
+            book.book.reserve(&plan.packets, hard).map_err(|e| refused(format!("family all-branch reservation: {e:?}")))?;
+        } else {
+            plan.windows.clear();
+            let id = plan.row.consent.id_v1().map_err(refused)?;
+            let ttl = crate::palw_court_shared_material_intake_v1::material_intake_schedule_v1()
+                .map_err(|_| refused("primary draft TTL absent"))?
+                .draft_ttl_daa;
+            let span = plan.primary_span_daa;
+            if span == 0 {
+                return Err(refused("primary inclusion clock absent"));
+            }
+            let mut cursor = global_cursor;
+            for target_id in &plan.primary_order {
+                let target =
+                    plan.row.targets.iter().find(|t| t.id == *target_id).ok_or_else(|| refused("primary order lost native target"))?;
+                let duration = mul(target.packets.len() as u64, span)?;
+                if duration > ttl {
+                    return Err(refused("native target cannot complete its existing multipart TTL/inclusion chain"));
+                }
+                let last = hard
+                    .checked_sub(crate::palw_g14_values_v1::PALW_G14_COURT_SERVICE_PROFILE_ESTIMATE_V1.service_span_daa)
+                    .and_then(|v| v.checked_sub(duration))
+                    .ok_or_else(|| refused("primary window cannot fit original hard"))?;
+                let first = cursor;
+                let requests = primary_calendar_requests_v2(&book.book, target.packets.len() as u64)?;
+                let _search_lease =
+                    crate::palw_native_resource_v1::reserve_native_requests_v1(requests).map_err(PalwStateV2Error::NativeResource)?;
+                let mut trial = Vec::with_capacity(target.packets.len());
+                for packet in &target.packets {
+                    trial.push(
+                        plan.packets
+                            .iter()
+                            .find(|p| p.id == *packet)
+                            .ok_or_else(|| refused("primary calendar packet absent"))?
+                            .clone(),
+                    );
+                }
+                let costs = trial.iter().map(|p| p.cost).collect::<Vec<_>>();
+                let start = calendar_search::first_fit_width_v2(&book.book, &costs, first, last, span, 1)
+                    .map_err(refused)?
+                    .ok_or_else(|| refused("no legal causal primary chain fits existing native capacity/TTL"))?;
+                for (ordinal, p) in trial.iter_mut().enumerate() {
+                    p.release_daa = add(start, mul(ordinal as u64, span)?)?;
+                    p.service_before = add(p.release_daa, 1)?;
+                }
+                book.book.reserve(&trial, hard).map_err(|e| refused(format!("selected primary calendar: {e:?}")))?;
+                let window = FamilyPrimaryWindowV2 { version: 2, contract: id, target: *target_id, first_daa: start, span_daa: span };
+                cursor = add(window.first_daa, duration)?;
+                global_cursor = cursor;
+                for p in trial {
+                    let old = plan
+                        .packets
+                        .iter_mut()
+                        .find(|old| old.id == p.id)
+                        .ok_or_else(|| refused("primary calendar publication packet absent"))?;
+                    *old = p;
+                }
+                plan.windows.push(window);
+            }
+        }
         let binding = book.claims.get_mut(&claim).ok_or_else(|| refused("family original binding absent"))?;
         binding.packet_ids.extend(plan.packets.iter().map(|p| p.id));
         for target in &plan.row.targets {
@@ -388,13 +875,152 @@ pub(super) fn reserve_family_plans_v1(
                 .iter()
                 .filter_map(|id| book.book.assigned_daa(id))
                 .max()
-                .ok_or_else(|| refused("family packet assignment absent"))?;
+                .ok_or_else(|| refused("family assignment absent"))?;
             if add(latest, crate::palw_g14_values_v1::PALW_G14_COURT_SERVICE_PROFILE_ESTIMATE_V1.service_span_daa)? > hard {
-                return Err(refused("family response window cannot fit original hard horizon"));
+                return Err(refused("family response exceeds original hard"));
             }
         }
     }
+    if new {
+        let barrier = family_material_barrier_v2(plans)?;
+        let source_ids = graph.packet_ids_v3();
+        #[cfg(test)]
+        {
+            let source_earliest = original.iter().filter(|p| source_ids.contains(&p.id)).map(|p| p.service_before).min();
+            let signer_earliest =
+                original.iter().filter(|p| p.cost.io > 0 && !source_ids.contains(&p.id)).map(|p| p.service_before).min();
+            let transfer_count = plans.iter().map(|p| p.row.targets.iter().map(|t| t.packets.len()).sum::<usize>()).sum::<usize>();
+            let total = plans.iter().map(|p| p.packets.len()).sum::<usize>();
+            eprintln!(
+                "[native-family-temporal-capacity] claim={} materialBarrier={} earliestOriginalSource={:?} earliestSigner={:?} familyTransfers={} familyHolding={} nativeBudget={:?}",
+                claim,
+                barrier,
+                source_earliest,
+                signer_earliest,
+                transfer_count,
+                total - transfer_count,
+                book.book.budget
+            );
+            for p in plans.iter() {
+                for w in &p.windows {
+                    let t = p.row.targets.iter().find(|t| t.id == w.target).unwrap();
+                    eprintln!(
+                        "[native-family-target-window] role={:?} target={} first={} stride={} transfers={} finish={} afterFinish={}",
+                        p.row.consent.terms.role,
+                        t.id,
+                        w.first_daa,
+                        w.span_daa,
+                        t.packets.len(),
+                        w.first_daa + (t.packets.len() as u64 - 1) * w.span_daa,
+                        w.first_daa + t.packets.len() as u64 * w.span_daa
+                    );
+                }
+            }
+        }
+
+        let mut sources = Vec::new();
+        let mut signers = Vec::new();
+        let mut holding = Vec::new();
+        for mut p in original {
+            if p.cost.io > 0 {
+                p.release_daa = p.release_daa.max(barrier);
+                if p.release_daa >= p.service_before {
+                    return Err(refused("material barrier cannot precede an existing Court early deadline"));
+                }
+            }
+            if source_ids.contains(&p.id) {
+                sources.push(p)
+            } else if p.cost.io > 0 {
+                signers.push(p)
+            } else {
+                holding.push(p)
+            }
+        }
+        let hard = book.claims.get(&claim).ok_or_else(|| refused("material barrier original lost"))?.hard_deadline_daa;
+        book.book.reserve(&signers, hard).map_err(|e| refused(format!("material to signer barrier: {e:?}")))?;
+        graph.bind_projection_v3(sources).map_err(refused)?.reserve_v3(&mut book.book, hard).map_err(refused)?;
+        book.book.reserve(&holding, hard).map_err(|e| refused(format!("original holding after material barrier: {e:?}")))?;
+        for plan in plans.iter() {
+            let holding = plan
+                .packets
+                .iter()
+                .filter(|p| !plan.row.targets.iter().any(|t| t.packets.contains(&p.id)))
+                .cloned()
+                .collect::<Vec<_>>();
+            book.book.reserve(&holding, hard).map_err(|e| refused(format!("supplier holding after material barrier: {e:?}")))?;
+        }
+    }
     book.check_live_v1().map_err(refused)
+}
+pub(super) fn family_material_barrier_v2(plans: &[FamilySupplierPlanV1]) -> Result<u64, PalwStateV2Error> {
+    let count = plans.iter().try_fold(0u64, |n, p| add(n, p.windows.len() as u64))?;
+    let _lease = crate::palw_native_resource_v1::reserve_native_requests_v1(mul(count, std::mem::size_of::<(u64, u64)>() as u64)?)
+        .map_err(PalwStateV2Error::NativeResource)?;
+    let mut intervals = Vec::with_capacity(usize::try_from(count).map_err(refused)?);
+    for p in plans {
+        for w in &p.windows {
+            let t = p.row.targets.iter().find(|t| t.id == w.target).ok_or_else(|| refused("material barrier target absent"))?;
+            intervals.push((w.first_daa, add(w.first_daa, mul(t.packets.len() as u64, w.span_daa)?)?));
+        }
+    }
+    intervals.sort_unstable();
+    let mut end = 0;
+    for (first, until) in intervals {
+        if first < end {
+            return Err(refused("restored primary roles overlap their native inclusion stride"));
+        }
+        end = until;
+    }
+    Ok(end)
+}
+fn load_primary_windows_v2(state: &PalwChainStateV2, plan: &mut FamilySupplierPlanV1) -> Result<(), PalwStateV2Error> {
+    let id = plan.row.consent.id_v1().map_err(refused)?;
+    let ttl = crate::palw_court_shared_material_intake_v1::material_intake_schedule_v1()
+        .map_err(|_| refused("restored primary TTL absent"))?
+        .draft_ttl_daa;
+    let mut cursor = add(plan.row.accepted_daa, plan.primary_span_daa)?;
+    for target_id in &plan.primary_order {
+        let target =
+            plan.row.targets.iter().find(|t| t.id == *target_id).ok_or_else(|| refused("restored primary role order lost target"))?;
+        let key = family_primary_window_key_v2(id, target.id);
+        let raw = state
+            .kernel_route_state_v1()
+            .and_then(|r| r.aux.iter().find_map(|((t, k), v)| (*t == FAMILY_SUPPLIER_TABLE_V1 && k.as_slice() == key).then_some(v)))
+            .ok_or_else(|| refused("restored primary calendar absent"))?;
+        let w: FamilyPrimaryWindowV2 = borsh::from_slice(raw).map_err(|e| refused(e.to_string()))?;
+        let span = plan.primary_span_daa;
+        let duration = mul(target.packets.len() as u64, span)?;
+        let end = add(w.first_daa, duration)?;
+        if w.version != 2
+            || w.contract != id
+            || w.target != target.id
+            || w.span_daa != span
+            || w.first_daa < cursor
+            || duration > ttl
+            || add(end, crate::palw_g14_values_v1::PALW_G14_COURT_SERVICE_PROFILE_ESTIMATE_V1.service_span_daa)?
+                > plan.row.consent.terms.respond_until_daa
+        {
+            return Err(refused("restored primary calendar changes native clock/TTL/scope"));
+        }
+        for (ordinal, id) in target.packets.iter().enumerate() {
+            let p = plan.packets.iter_mut().find(|p| p.id == *id).ok_or_else(|| refused("restored primary packet absent"))?;
+            p.release_daa = add(w.first_daa, mul(ordinal as u64, span)?)?;
+            p.service_before = add(p.release_daa, 1)?;
+        }
+        cursor = end;
+        plan.windows.push(w);
+    }
+    Ok(())
+}
+
+/// Free real principal after both ledgers. R-core separates an accuser's
+/// Court/DA deposits from A-1 work commitments; fees and supplier capital must
+/// preserve both. The shared fee reader subtracts only the classic deposits
+/// already present in pre-R-core reserved exposure, without dropping new A-6 rows.
+pub(super) fn family_free_principal_v1(b: &TransitionBuilder<'_>, bond: &PalwBondKeyV2, now: u64) -> Result<u128, PalwStateV2Error> {
+    let collateral = b.state.bond(bond).ok_or(PalwStateV2Error::MissingBond(*bond))?.collateral;
+    let reserved = super::palw_court_capacity_fold_v1::fee_reserved_principal_v1(b, bond, now)?;
+    Ok(u128::from(collateral).saturating_sub(reserved))
 }
 
 /// Full sponsor totals and supplier totals are checked together, including one
@@ -416,8 +1042,7 @@ pub(super) fn check_family_funding_v1(
         }
     }
     for (who, needed) in needed {
-        let bond = b.state.bond(&who).ok_or(PalwStateV2Error::MissingBond(who))?;
-        if u128::from(bond.collateral).saturating_sub(b.committed_at(&who, now)?) < needed {
+        if family_free_principal_v1(b, &who, now)? < needed {
             return Err(refused("family sponsor/supplier has insufficient uncommitted real principal"));
         }
     }
@@ -469,6 +1094,32 @@ pub(super) fn install_family_plans_v1(
             return Err(refused("family sponsor full fee debit"));
         }
         write_family_supplier_v1(b, id, &row)?;
+        if let Some(facts) = plan.carrier_projection_v3 {
+            let birth = FamilyCarrierProjectionRowV3 {
+                version: 3,
+                contract: id,
+                claim: row.consent.terms.claim,
+                accepted_daa: row.accepted_daa,
+                accepted_block: ctx.block,
+                accepted_blue_score: ctx.blue_score,
+                source: row.consent.terms.source,
+                allocation: row.allocation,
+                funding_contract: b
+                    .extras
+                    .tir_funded_originals
+                    .get(&row.consent.terms.claim)
+                    .ok_or_else(|| refused("profile3 native funding pairing vanished"))?
+                    .envelope()
+                    .funding
+                    .terms
+                    .id_v1(),
+                facts,
+            };
+            b.write_kernel_row_encoded_v1(FAMILY_SUPPLIER_TABLE_V1, &family_carrier_projection_key_v3(id), Some(&birth))?;
+        }
+        for window in plan.windows {
+            b.write_kernel_row_encoded_v1(FAMILY_SUPPLIER_TABLE_V1, &family_primary_window_key_v2(id, window.target), Some(&window))?;
+        }
     }
     Ok(())
 }
@@ -501,52 +1152,54 @@ pub(super) fn tick_family_suppliers_v1(b: &mut TransitionBuilder<'_>, ctx: &Palw
     }
     let rows = b.state.family_supplier_rows_v1()?;
     for (id, original) in rows.iter() {
+        let first = b.entries.len();
         reserve_copy(b, original)?;
         let mut row = original.clone();
         let t = row.consent.terms.clone();
         // Supplied reserved units are opportunities only under the adopted
         // inclusion premise, inside the original's native bounded duty clock.
-        if row.defaulted_daa.is_none() && ctx.daa_score <= t.material_until_daa {
-            if let (Some(service), Some(premise)) = (b.state.court_service_state_v1(), b.extras.court_service_inclusion_premise_v1) {
-                let span = crate::palw_g14_values_v1::PALW_G14_COURT_SERVICE_PROFILE_ESTIMATE_V1.service_span_daa;
-                let mut default = false;
-                for target in &row.targets {
-                    if row.completed.contains_key(&target.id) {
-                        continue;
-                    }
-                    let units = target.packets.iter().map(|id| service.book.assigned_daa(id)).collect::<Option<Vec<_>>>();
-                    let Some(units) = units else { return Err(refused("family service packet lost before material horizon")) };
-                    let due = add(*units.iter().max().ok_or_else(|| refused("family empty packet set"))?, span)?;
-                    if premise.version == 1
-                        && due <= t.respond_until_daa
-                        && ctx.daa_score > due
-                        && target.packets.iter().all(|id| service.book.assess(id) == ServiceAssessment::OpportunityProvided)
-                        && units.iter().all(|u| u.checked_add(premise.inclusion_delay_daa).is_some_and(|included| included <= due))
-                    {
-                        default = true;
-                        break;
-                    }
+        if row.defaulted_daa.is_none()
+            && ctx.daa_score <= t.material_until_daa
+            && let (Some(service), Some(premise)) = (b.state.court_service_state_v1(), b.extras.court_service_inclusion_premise_v1)
+        {
+            let span = crate::palw_g14_values_v1::PALW_G14_COURT_SERVICE_PROFILE_ESTIMATE_V1.service_span_daa;
+            let mut default = false;
+            for target in &row.targets {
+                if row.completed.contains_key(&target.id) {
+                    continue;
                 }
-                if default {
-                    let charge = digest(b"misaka-palw/family-supplier/service-default/v1", id)?;
-                    let once = b.settle_once_liable_v1(
-                        ctx.daa_score,
-                        PalwSettlementObligationV1::of(PalwSettlementLegV1::MaterialProviderDefault, charge.as_bytes()),
-                        PalwSettlementConsumerV1::MonetaryMaterial,
-                        t.collateral_sompi,
-                        PalwSettlementDebitV1::Collateral {
-                            bond: crate::palw_kernel_route_v1::palw_kernel_bond_id_v1(&t.supplier),
-                            amount: t.collateral_sompi,
-                        },
-                        super::palw_settlement_liability_fold_v1::PalwLegLiabilityV1::NoLiableClaim(
-                            "family supplier objective service-bond debit, no computation credit",
-                        ),
-                    )?;
-                    if !once.pays() || b.slash_bond(t.supplier, u128::from(t.collateral_sompi))? != t.collateral_sompi {
-                        return Err(refused("family full service collateral charge"));
-                    }
-                    row.defaulted_daa = Some(ctx.daa_score);
+                let units = target.packets.iter().map(|id| service.book.assigned_daa(id)).collect::<Option<Vec<_>>>();
+                let Some(units) = units else { return Err(refused("family service packet lost before material horizon")) };
+                let due = add(*units.iter().max().ok_or_else(|| refused("family empty packet set"))?, span)?;
+                if premise.version == 1
+                    && due <= t.respond_until_daa
+                    && ctx.daa_score > due
+                    && target.packets.iter().all(|id| service.book.assess(id) == ServiceAssessment::OpportunityProvided)
+                    && units.iter().all(|u| u.checked_add(premise.inclusion_delay_daa).is_some_and(|included| included <= due))
+                {
+                    default = true;
+                    break;
                 }
+            }
+            if default {
+                let charge = digest(b"misaka-palw/family-supplier/service-default/v1", id)?;
+                let once = b.settle_once_liable_v1(
+                    ctx.daa_score,
+                    PalwSettlementObligationV1::of(PalwSettlementLegV1::MaterialProviderDefault, charge.as_bytes()),
+                    PalwSettlementConsumerV1::MonetaryMaterial,
+                    t.collateral_sompi,
+                    PalwSettlementDebitV1::Collateral {
+                        bond: crate::palw_kernel_route_v1::palw_kernel_bond_id_v1(&t.supplier),
+                        amount: t.collateral_sompi,
+                    },
+                    super::palw_settlement_liability_fold_v1::PalwLegLiabilityV1::NoLiableClaim(
+                        "family supplier objective service-bond debit, no computation credit",
+                    ),
+                )?;
+                if !once.pays() || b.slash_bond(t.supplier, u128::from(t.collateral_sompi))? != t.collateral_sompi {
+                    return Err(refused("family full service collateral charge"));
+                }
+                row.defaulted_daa = Some(ctx.daa_score);
             }
         }
         if matches!(row.fee_state, FamilySupplierFeeStateV1::Held) {
@@ -567,6 +1220,12 @@ pub(super) fn tick_family_suppliers_v1(b: &mut TransitionBuilder<'_>, ctx: &Palw
             // fee and collateral horizons remain the signed finite horizons.
             delete_family_supplier_v2(b, *id, &row)?;
         }
+        super::palw_claim_local_material_projection_v2::mark(
+            b,
+            t.claim,
+            super::palw_claim_local_material_projection_v2::FamilyEventV2::Finance,
+            first,
+        )?;
     }
     Ok(())
 }
@@ -596,10 +1255,17 @@ pub(super) fn acknowledge_family_fee_payments_v1(
         {
             return Err(refused("family physical receipt substitution"));
         }
+        let first = b.entries.len();
         reserve_copy(b, original)?;
         let mut row = original.clone();
         row.fee_state = FamilySupplierFeeStateV1::Paid { payee, daa: ctx.daa_score };
         write_family_supplier_v1(b, *id, &row)?;
+        super::palw_claim_local_material_projection_v2::mark(
+            b,
+            row.consent.terms.claim,
+            super::palw_claim_local_material_projection_v2::FamilyEventV2::Finance,
+            first,
+        )?;
     }
     Ok(())
 }
@@ -609,13 +1275,32 @@ pub(crate) fn validate_family_suppliers_v1(state: &PalwChainStateV2, params: &Pa
     let now = state.last_point().map_or(0, |p| p.daa_score);
     // The new clock is never an interpretation of a historical TFO1 frame or
     // a standalone owner row. It requires its own admitted, signed cohort.
-    for (_, stored) in &state.staged_courts {
+    for stored in state.staged_courts.values() {
         match stored {
-            Row::TirClaim(frame)
-                if frame.plan_v1().acquisition.clock.version
-                    == crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_CLOCK_FAMILY_VERSION_V3 =>
-            {
+            Row::TirClaim(frame) if crate::palw_tir_frame_cost_v1::is_family_clock_v3(frame.plan_v1().acquisition.clock.version) => {
                 let p = frame.plan_v1();
+                if p.acquisition.clock.version == crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_CLOCK_FAMILY_MATERIAL_V4 {
+                    if params.court_clock_v2_from_daa().is_none_or(|from| p.terms.accepted_daa < from) {
+                        return Err(refused("family material4 lacks its original clock-v2 fence"));
+                    }
+                    let disclose = crate::palw_state_v2::palw_da_disclose_window_daa_v1(params);
+                    let reorg = frame.descriptor_v1().native_config.reorg_retention_daa;
+                    if reorg < disclose {
+                        return Err(refused("family material4 retained profile does not cover actual disclosure"));
+                    }
+                    use crate::palw_court_clock_v2::{PalwCourtDependencyKindV2 as Kind, PalwCourtDependencyV2 as Dep};
+                    let deps = [
+                        Dep { kind: Kind::Custody, signed_horizon_daa: frame.custody_v1().pledge_v1().material_until_daa },
+                        Dep { kind: Kind::Custody, signed_horizon_daa: p.terms.material_until_daa },
+                    ];
+                    crate::palw_court_clock_v2::palw_court_clock_v2_dependencies_cover_v2(
+                        p.terms.accepted_daa,
+                        disclose,
+                        reorg,
+                        deps.iter(),
+                    )
+                    .map_err(|_| refused("family material4 retained custody/route fails actual F07 coverage"))?;
+                }
                 if !params.family_supplier_active_at(p.terms.accepted_daa)
                     || !rows.iter().any(|(_, r)| r.consent.terms.claim == p.original_claim)
                 {
@@ -623,8 +1308,7 @@ pub(crate) fn validate_family_suppliers_v1(state: &PalwChainStateV2, params: &Pa
                 }
             }
             Row::TirAcquisition(row)
-                if row.owned.contract_v1().plan.clock.version
-                    == crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_CLOCK_FAMILY_VERSION_V3 =>
+                if crate::palw_tir_frame_cost_v1::is_family_clock_v3(row.owned.contract_v1().plan.clock.version) =>
             {
                 let claim = row.owned.contract_v1().claim;
                 let frame = crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(state, claim)
@@ -658,13 +1342,28 @@ pub(crate) fn validate_family_suppliers_v1(state: &PalwChainStateV2, params: &Pa
         let supplier = state.bond(&t.supplier).ok_or(PalwStateV2Error::MissingBond(t.supplier))?;
         let sponsor = state.bond(&t.sponsor).ok_or(PalwStateV2Error::MissingBond(t.sponsor))?;
         row.consent.verify_v1(t, row.accepted_daa, &supplier.pubkey, &sponsor.pubkey).map_err(refused)?;
+        if crate::palw_court_family_supplier_v1::signed_profile_generation_v3(t).map_err(refused)? == 3 {
+            let key = family_carrier_projection_key_v3(*id);
+            let raw = state
+                .kernel_route_state_v1()
+                .and_then(|route| {
+                    route
+                        .aux
+                        .iter()
+                        .find_map(|((table, k), v)| (*table == FAMILY_SUPPLIER_TABLE_V1 && k.as_slice() == key).then_some(v))
+                })
+                .ok_or_else(|| refused("retained profile3 carrier birth facts absent"))?;
+            let birth: FamilyCarrierProjectionRowV3 = borsh::from_slice(raw).map_err(refused)?;
+            state.check_family_carrier_birth_v3(row, &birth)?;
+        }
         if now <= t.material_until_daa {
             live_claims.insert(t.claim);
-            let inv = crate::palw_court_family_material_v1::derive_current_family_inventory_classified_v1(state, t.claim, t.role)
-                .map_err(|e| match e {
+            let inv = crate::palw_court_family_material_v1::derive_contract_family_inventory_classified_v3(state, row).map_err(
+                |e| match e {
                     crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(c) => PalwStateV2Error::NativeResource(c),
                     crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(e) => refused(e),
-                })?;
+                },
+            )?;
             if inv.id_v1() != t.inventory
                 || inv.max_material_bytes_v1() != t.max_material_bytes
                 || inv.source_v1() != t.source
@@ -791,7 +1490,7 @@ fn validate_original_family_universe_v2(
     let frame = crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(state, claim)
         .ok_or_else(|| refused("family original disappeared inside material horizon"))?;
     let plan = frame.plan_v1();
-    if plan.acquisition.clock.version != crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_CLOCK_FAMILY_VERSION_V3 {
+    if !crate::palw_tir_frame_cost_v1::is_family_clock_v3(plan.acquisition.clock.version) {
         return Err(refused("new family original substitutes historical owner timing"));
     }
     let class = frame.original_v1().job.class_id;
@@ -886,8 +1585,7 @@ fn validate_original_family_universe_v2(
         }
         seen[role] = true;
         let inventory =
-            crate::palw_court_family_material_v1::derive_current_family_inventory_classified_v1(state, claim, row.consent.terms.role)
-                .map_err(map_native)?;
+            crate::palw_court_family_material_v1::derive_contract_family_inventory_classified_v3(state, row).map_err(map_native)?;
         let ctx = PalwBlockContextV2 { block: Hash64::default(), daa_score: row.accepted_daa, blue_score: 0, subsidy: 0 };
         family.push(derive_family_supplier_plan_inner_v1(
             state,
@@ -902,29 +1600,58 @@ fn validate_original_family_universe_v2(
     if seen != required {
         return Err(refused("family restored original missing native supplier role"));
     }
+    let independent = super::palw_court_family_material_fold_v1::draft_reservations::rows(state)?;
+    let mut independent_count = 0u64;
+    for row in independent.iter().filter(|r| r.claim == claim) {
+        independent_count =
+            add(independent_count, super::palw_court_family_material_fold_v1::draft_reservations::packets(row)?.len() as u64)?;
+    }
     let count = family
         .iter()
         .try_fold(original.branch_count(), |n, p| n.checked_add(p.packets.len() as u64))
         .ok_or_else(|| refused("family restored packet count overflow"))?;
     let mut q = crate::palw_native_resource_v1::TirNativeRequestsV1::new();
-    q.exact_v1::<crate::palw_native_resource_v1::BTreeNodeEnvelopeV1<[u8; 64], ()>>(count)
+    q.exact_v1::<crate::palw_native_resource_v1::BTreeNodeEnvelopeV1<[u8; 64], ()>>(add(count, independent_count)?)
         .map_err(PalwStateV2Error::NativeResource)?;
     let _universe_lease =
         crate::palw_native_resource_v1::reserve_native_requests_v1(q.bytes_v1()).map_err(PalwStateV2Error::NativeResource)?;
     let binding = service.claims.get(&claim).ok_or_else(|| refused("family restored original binding missing"))?;
     let mut universe = std::collections::BTreeSet::new();
+    let barrier = family_material_barrier_v2(&family)?;
     for packet in original
         .signer_packets
         .iter()
         .chain(&original.source_packets)
         .chain(std::iter::once(&original.retention_packet))
         .chain(&original.retention_tail_v2)
-        .chain(family.iter().flat_map(|p| p.packets.iter()))
     {
-        if !universe.insert(packet.id) || service.book.packet(&packet.id) != Some(packet) {
-            return Err(refused("family restored original packet missing, duplicated or cost changed"));
+        let mut expected = packet.clone();
+        if barrier != 0 && expected.cost.io > 0 {
+            expected.release_daa = expected.release_daa.max(barrier);
+        }
+        if !universe.insert(expected.id) || service.book.packet(&expected.id) != Some(&expected) {
+            return Err(refused("family restored original packet/barrier missing, duplicated or cost changed"));
         }
     }
+    for packet in family.iter().flat_map(|p| p.packets.iter()) {
+        if !universe.insert(packet.id) || service.book.packet(&packet.id) != Some(packet) {
+            return Err(refused("family restored supplier packet missing or cost changed"));
+        }
+    }
+    for row in independent.iter().filter(|r| r.claim == claim) {
+        for packet in super::palw_court_family_material_fold_v1::draft_reservations::packets(row)?.iter() {
+            if !universe.insert(packet.id) || service.book.packet(&packet.id) != Some(packet) {
+                return Err(refused("restored independent draft packet universe differs"));
+            }
+        }
+    }
+    let _archive_universe_lease =
+        super::palw_tir_public_fold_v1::original_archive_reservation_proposal_v1::validate_original_archive_packets_v1(
+            state,
+            claim,
+            service,
+            &mut universe,
+        )?;
     if universe != binding.packet_ids {
         return Err(refused("family restored original reservation universe differs"));
     }
@@ -941,7 +1668,7 @@ fn queue_fee(
     let payee = if refund { t.sponsor } else { t.supplier };
     let payload = b.state.bond(&payee).ok_or(PalwStateV2Error::MissingBond(payee))?.payout_payload;
     let queue = crate::palw_kernel_route_v1::palw_kernel_payout_key_v1(&payload);
-    if b.state.pending_payouts.get(&queue).is_none() && b.state.pending_payouts.len() >= PALW_V2_MAX_PAYOUTS_PER_BLOCK {
+    if !b.state.pending_payouts.contains_key(&queue) && b.state.pending_payouts.len() >= PALW_V2_MAX_PAYOUTS_PER_BLOCK {
         return Ok(());
     }
     if b.state.pending_payouts.get(&queue).map_or(0, |p| p.amount).checked_add(t.fee_sompi).is_none() {
@@ -1036,5 +1763,140 @@ mod encoded_width_tests {
             };
             assert_eq!(control_bytes(target, kind, payload).unwrap(), borsh::object_length(&wire).unwrap() as u64);
         }
+    }
+}
+
+fn primary_calendar_requests_v2(
+    book: &crate::palw_court_service_v1::ServiceReservations,
+    packets: u64,
+) -> Result<u64, PalwStateV2Error> {
+    use crate::palw_native_resource_v1::BTreeNodeEnvelopeV1 as Node;
+    let old = crate::palw_native_resource_v1::native_value_requests_v1(book).map_err(PalwStateV2Error::NativeResource)?;
+    // Trial Vec, seen/owner membership, sort references, residual/assignment/
+    // packet map extension, plus the constructor's two whole service-book owners.
+    let entry = (std::mem::size_of::<ServicePacket>()
+        + std::mem::size_of::<ServiceCost>()
+        + 2 * std::mem::size_of::<Node<[u8; 64], ()>>()
+        + std::mem::size_of::<&ServicePacket>()
+        + std::mem::size_of::<Node<u64, ServiceCost>>()
+        + std::mem::size_of::<Node<[u8; 64], u64>>()
+        + std::mem::size_of::<Node<[u8; 64], ServicePacket>>()) as u64;
+    add(mul(old, 4)?, mul(packets, mul(entry, 4)?)?)
+}
+
+/// Exact source birth authentication for retained new3 metadata. No future
+/// block or fabricated subsidy-bearing point participates in pre-signing.
+impl PalwChainStateV2 {
+    pub(crate) fn check_family_carrier_birth_v3(
+        &self,
+        contract: &FamilySupplierRowV1,
+        birth: &FamilyCarrierProjectionRowV3,
+    ) -> Result<(), PalwStateV2Error> {
+        use crate::palw_claim_local_v1::PalwClaimLocalInputV1 as Input;
+        let terms = &contract.consent.terms;
+        if crate::palw_court_family_supplier_v1::signed_profile_generation_v3(terms).map_err(refused)? != 3
+            || birth.contract != contract.consent.id_v1().map_err(refused)?
+            || birth.claim != terms.claim
+            || birth.accepted_daa != contract.accepted_daa
+            || birth.source != terms.source
+            || birth.allocation != contract.allocation
+        {
+            return Err(refused("profile3 carrier birth contract scope differs"));
+        }
+        birth.facts.check_v3().map_err(refused)?;
+        let frame = crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(self, terms.claim);
+        if let Some(frame) = frame
+            && (frame.plan_v1().allocation_id != birth.allocation
+                || frame.plan_v1().terms.accepted_daa != birth.accepted_daa
+                || frame.plan_v1().source_id != birth.source)
+        {
+            return Err(refused("profile3 retained frame differs from its own native source birth"));
+        }
+        if let Some(view) = super::palw_claim_local_source_admission_v8::for_birth_point_v8(
+            self,
+            birth.claim,
+            birth.accepted_block,
+            birth.accepted_daa,
+            birth.accepted_blue_score,
+        )? {
+            // This full point is returned by the authenticated directory; do
+            // not reconstruct it from the tuple with a guessed subsidy.
+            let actual_point = view.accepting_point();
+            let original = view.original_claim();
+            if (actual_point.block, actual_point.daa_score, actual_point.blue_score)
+                != (birth.accepted_block, birth.accepted_daa, birth.accepted_blue_score)
+                || !matches!(original.source, PalwClaimSourceV2::FreePrompt { .. })
+            {
+                return Err(refused("profile3 archived carrier birth point/source differs"));
+            }
+            let mut jobs = view.inputs().iter().filter_map(|input| match input {
+                Input::FreePromptNative { claim, job_pin, public_job: Some(job), .. } if *claim == birth.claim => {
+                    Some((*job_pin, job.as_ref()))
+                }
+                _ => None,
+            });
+            let (pin, job) = jobs.next().ok_or_else(|| refused("profile3 exact source archive lacks its native FP job"))?;
+            if jobs.next().is_some() || pin != original.job_identity {
+                return Err(refused("profile3 exact source archive FP job is ambiguous"));
+            }
+            self.check_public_fp_job_v1(&birth.claim, original, job)?;
+            let mut originals = view.inputs().iter().filter_map(|input| match input {
+                Input::TirOriginal { claim, envelope } if *claim == birth.claim => Some(envelope.as_ref()),
+                _ => None,
+            });
+            let archived = originals.next().ok_or_else(|| refused("profile3 exact source archive lacks actual TFP1"))?;
+            if originals.next().is_some()
+                || archived.pledge.claim != birth.claim
+                || archived.pledge.source_id != birth.source
+                || archived.pledge.job_identity != original.job_identity
+                || archived.pledge.producer != original.bond
+            {
+                return Err(refused("profile3 archived TFP1 does not match source birth"));
+            }
+            if let Some(frame) = frame
+                && (frame.original_v1() != job
+                    || frame.header_v1() != &archived.header
+                    || frame.plan_v1().resource_plan_id != archived.pledge.resource_plan_id)
+            {
+                return Err(refused("profile3 retained original differs from exact archived TFP1"));
+            }
+            let prefix = view.prefix_use().map_err(super::palw_claim_local_paid_archive_v2::state_error)?;
+            if prefix.map(|signed| signed.intent.id_v1()) != birth.facts.prefix_use {
+                return Err(refused("profile3 signed PrefixUse differs from actual archived source"));
+            }
+            if let Some(signed) = prefix {
+                signed.intent.verify_signature_v1(&job.job.executor_pubkey, &signed.signature).map_err(|e| refused(e.to_string()))?;
+            }
+            let edges = view
+                .inputs()
+                .iter()
+                .filter(|input| matches!(input,Input::ConsumedCarrier{consumer,..}if *consumer==birth.claim))
+                .count() as u64;
+            if edges > birth.facts.distinct_txids {
+                return Err(refused("profile3 archived carrier edges exceed signed native input bound"));
+            }
+            return Ok(());
+        }
+        // Non-scoped direct fixtures legitimately have no V8 archive. The
+        // still-retained exact same-born native claim is independent authority;
+        // a later raw-ID claim or a frame alone cannot supply it.
+        if let Some(live) = self.claim(&birth.claim) {
+            if !matches!(live.source, PalwClaimSourceV2::FreePrompt { .. })
+                || (live.accepted_block, live.accepted_daa, live.accepted_blue_score)
+                    != (birth.accepted_block, birth.accepted_daa, birth.accepted_blue_score)
+            {
+                return Err(refused("profile3 carrier metadata cannot alias a later raw claim birth"));
+            }
+            if let Some(frame) = frame {
+                self.check_public_fp_job_v1(&birth.claim, live, frame.original_v1())?;
+            }
+            return Ok(());
+        }
+        Err(PalwStateV2Error::NativeResource(crate::palw_native_resource_v1::NativeCoverageV1::unsupported::<
+            FamilyCarrierProjectionRowV3,
+        >(
+            "profile3 exact source birth unavailable",
+            "no exact V8 admission or same-born live claim; frame/funding alone is not full birth provenance",
+        )))
     }
 }

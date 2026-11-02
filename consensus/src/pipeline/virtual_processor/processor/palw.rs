@@ -2,27 +2,47 @@
 
 use super::*;
 
-#[path = "routed_material_v2.rs"]
-mod routed_material_v2;
-#[path = "source_bootstrap_v1.rs"]
-mod source_bootstrap_v1;
-#[path = "row_stream_v1.rs"]
-mod row_stream_v1;
-#[path = "rooted_family_material_v1.rs"]
-mod rooted_family_material_v1;
 #[path = "native_checkpoint_headers_v1.rs"]
 mod native_checkpoint_headers_v1;
+#[path = "rooted_family_material_v1.rs"]
+mod rooted_family_material_v1;
+#[path = "routed_material_v2.rs"]
+mod routed_material_v2;
+#[path = "row_stream_v1.rs"]
+mod row_stream_v1;
+#[path = "source_bootstrap_v1.rs"]
+mod source_bootstrap_v1;
 
 /// Exit decisions read this node's authenticated parent state. A failed local
 /// collateral read is never evidence that a spend or its peer is invalid.
-fn bond_exit_state_error_v1(error:kaspa_consensus_core::palw_state_v2::PalwStateV2Error)->PalwLocalTransitionFaultV1{
-    use kaspa_consensus_core::{palw_state_v2::PalwStateV2Error as E,palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1 as C};
-    match error{E::NativeResource(why)=>PalwLocalTransitionFaultV1::Resource(why),E::NativeContextUnavailable(why)=>PalwLocalTransitionFaultV1::Context(why),_=>PalwLocalTransitionFaultV1::Context(C::StoreUnreadable)}
+fn bond_exit_state_error_v1(error: kaspa_consensus_core::palw_state_v2::PalwStateV2Error) -> PalwLocalTransitionFaultV1 {
+    use kaspa_consensus_core::{
+        palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1 as C, palw_state_v2::PalwStateV2Error as E,
+    };
+    match error {
+        E::NativeResource(why) => PalwLocalTransitionFaultV1::Resource(why),
+        E::NativeContextUnavailable(why) => PalwLocalTransitionFaultV1::Context(why),
+        other => {
+            warn!("native bond-exit state preparation failed: {other}");
+            PalwLocalTransitionFaultV1::Context(C::StoreUnreadable)
+        }
+    }
 }
-pub(super) fn bond_exit_store_error_v1(error:kaspa_database::prelude::StoreError)->PalwLocalTransitionFaultV1{
-    use kaspa_database::prelude::StoreError as E;
+pub(super) fn bond_exit_store_error_v1(error: kaspa_database::prelude::StoreError) -> PalwLocalTransitionFaultV1 {
     use kaspa_consensus_core::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1 as C;
-    match error{E::LocalResourceUnavailable(why)=>PalwLocalTransitionFaultV1::Resource(kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<kaspa_consensus_core::palw_state_v2::PalwChainStateV2>("bond exit own reader",&why)),E::KeyNotFound(_)=>PalwLocalTransitionFaultV1::Context(C::HistoryUnavailable),_=>PalwLocalTransitionFaultV1::Context(C::StoreUnreadable)}
+    use kaspa_database::prelude::StoreError as E;
+    match error {
+        E::LocalResourceUnavailable(why) => {
+            PalwLocalTransitionFaultV1::Resource(kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<
+                kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+            >("bond exit own reader", &why))
+        }
+        E::KeyNotFound(_) => PalwLocalTransitionFaultV1::Context(C::HistoryUnavailable),
+        other => {
+            warn!("native bond-exit own-store preparation failed: {other}");
+            PalwLocalTransitionFaultV1::Context(C::StoreUnreadable)
+        }
+    }
 }
 
 // Capacity/context failures are retry, never a semantic conviction refusal.
@@ -505,9 +525,16 @@ impl VirtualStateProcessor {
     /// the chain walk and the template read (`palw_v2_locked_bond_outpoints`,
     /// `palw_v2_bond_burn_obligations`), so the mempool refuses exactly the spends every block skips.
     /// `None` when the network has no V2 registry or the registry has no tip yet.
-    pub(in crate::pipeline::virtual_processor) fn palw_mempool_bond_gate(&self, now_daa: u64) -> Result<Option<Arc<PalwMempoolBondGate>>,PalwLocalTransitionFaultV1> {
-        let Some(params)=self.palw_state_params_v2.as_ref()else{return Ok(None)};
-        let Some((tip,state))=self.palw_v2_reader_state(params).map_err(bond_exit_store_error_v1)?else{return Err(PalwLocalTransitionFaultV1::Context(kaspa_consensus_core::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1::HistoryUnavailable))};
+    pub(in crate::pipeline::virtual_processor) fn palw_mempool_bond_gate(
+        &self,
+        now_daa: u64,
+    ) -> Result<Option<Arc<PalwMempoolBondGate>>, PalwLocalTransitionFaultV1> {
+        let Some(params) = self.palw_state_params_v2.as_ref() else { return Ok(None) };
+        let Some((tip, state)) = self.palw_v2_reader_state(params).map_err(bond_exit_store_error_v1)? else {
+            return Err(PalwLocalTransitionFaultV1::Context(
+                kaspa_consensus_core::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1::HistoryUnavailable,
+            ));
+        };
         let mut cache = self.palw_mempool_locked_cache.lock();
         if let Some((cached_tip, cached_daa, gate)) = cache.as_ref()
             && *cached_tip == tip
@@ -1619,21 +1646,35 @@ impl VirtualStateProcessor {
         if !params.family_supplier_active_at(point.daa_score) {
             return Err("new-family original allocation fence is dormant".into());
         }
-        let (_, state) = self.palw_v2_reader_state(params).map_err(|e| e.to_string())?
-            .ok_or("PALW V2 accepted snapshot unavailable")?;
+        let (_, state) =
+            self.palw_v2_reader_state(params).map_err(|e| e.to_string())?.ok_or("PALW V2 accepted snapshot unavailable")?;
         if state.last_point().is_some_and(|last| point.daa_score < last.daa_score || point.blue_score <= last.blue_score) {
             return Err("family original allocation point must follow the accepted snapshot clock".into());
         }
         let mut extras = self.palw_transition_extras_for(&point).into_legacy_extras();
-        if let Some(bytes)=semantic_table {
-            let sem=state.class_semantics_v1(&original.job.class_id).ok_or("family allocation immutable semantics absent")?;
-            let record=state.tir_class_v1(&original.job.class_id).ok_or("family allocation registered class absent")?;
-            let table=kaspa_consensus_core::palw_court_family_material_v1::prepare_family_table_inventory_v1(bytes,sem,record.logits_vocab).map_err(|e|e.to_string())?;
-            extras.family_original_table_inventories_v2.insert(kaspa_consensus_core::palw_freeprompt_v3::fp_claim_id_v3(&original),table);
+        if let Some(bytes) = semantic_table {
+            let sem = state.class_semantics_v1(&original.job.class_id).ok_or("family allocation immutable semantics absent")?;
+            let record = state.tir_class_v1(&original.job.class_id).ok_or("family allocation registered class absent")?;
+            let table = kaspa_consensus_core::palw_court_family_material_v1::prepare_family_table_inventory_v1(
+                bytes,
+                sem,
+                record.logits_vocab,
+            )
+            .map_err(|e| e.to_string())?;
+            extras
+                .family_original_table_inventories_v2
+                .insert(kaspa_consensus_core::palw_freeprompt_v3::fp_claim_id_v3(&original), table);
         }
         kaspa_consensus_core::palw_state_v2::palw_tir_public_original_quote_v1(
-            &state, params, &extras, point.daa_score, &original, &header,
-        ).map_err(|e| e.to_string())?.ok_or_else(|| "native original allocation is unavailable at the prospective point".into())
+            &state,
+            params,
+            &extras,
+            point.daa_score,
+            &original,
+            &header,
+        )
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "native original allocation is unavailable at the prospective point".into())
     }
 
     /// Native builder quote for the new family contract at one explicit
@@ -1642,23 +1683,142 @@ impl VirtualStateProcessor {
     /// capacity and singleton-clock checks at that point.
     pub fn palw_family_original_native_quote_v2_impl(
         &self,
-        point:kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
-        object:kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
-        envelope:kaspa_consensus_core::palw_tir_public_fp_envelope_v1::PalwTirPublicFpEnvelopeV1,
-        semantic_table:Option<&[u8]>,
-    )->Result<kaspa_consensus_core::palw_state_v2::PalwFamilyOriginalNativeQuoteV2,String>{
-        let params=self.palw_state_params_v2.as_ref().ok_or("PALW V2 state parameters unavailable")?;
-        let (_,state)=self.palw_v2_reader_state(params).map_err(|e|e.to_string())?.ok_or("PALW V2 accepted snapshot unavailable")?;
-        if state.last_point().is_some_and(|last|point.daa_score<last.daa_score||point.blue_score<=last.blue_score){
+        point: kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        object: kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+        envelope: kaspa_consensus_core::palw_tir_public_fp_envelope_v1::PalwTirPublicFpEnvelopeV1,
+        semantic_table: Option<&[u8]>,
+    ) -> Result<kaspa_consensus_core::palw_state_v2::PalwFamilyOriginalNativeQuoteV2, String> {
+        let params = self.palw_state_params_v2.as_ref().ok_or("PALW V2 state parameters unavailable")?;
+        let (_, state) =
+            self.palw_v2_reader_state(params).map_err(|e| e.to_string())?.ok_or("PALW V2 accepted snapshot unavailable")?;
+        if state.last_point().is_some_and(|last| point.daa_score < last.daa_score || point.blue_score <= last.blue_score) {
             return Err("family quote prospective point must follow the accepted snapshot clock".into());
         }
         envelope.matches_object_v1(&object)?;
-        let claim=envelope.original_fp_v1()?.claim_id();
-        let mut extras=self.palw_transition_extras_for_objects(&state,&point,std::slice::from_ref(&object)).into_legacy_extras();
-        if let Some(history)=&envelope.history_pledge{extras.history_custody_pledges.insert(history.claim,history.clone());}
-        extras.tir_public_originals.insert(claim,envelope);
-        kaspa_consensus_core::palw_state_v2::palw_family_original_native_quote_v2(&state,params,&point,&extras,&object,semantic_table)
-            .map_err(|e|e.to_string())
+        let claim = envelope.original_fp_v1()?.claim_id();
+        let mut extras = self.palw_transition_extras_for_objects(&state, &point, std::slice::from_ref(&object)).into_legacy_extras();
+        if let Some(history) = &envelope.history_pledge {
+            extras.history_custody_pledges.insert(history.claim, history.clone());
+        }
+        extras.tir_public_originals.insert(claim, envelope);
+        kaspa_consensus_core::palw_state_v2::palw_family_original_native_quote_v2(
+            &state,
+            params,
+            &point,
+            &extras,
+            &object,
+            semantic_table,
+        )
+        .map_err(|e| e.to_string())
+    }
+
+    pub fn palw_family_original_native_quote_v3_impl(
+        &self,
+        point: kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        object: kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+        envelope: kaspa_consensus_core::palw_tir_public_fp_envelope_v1::PalwTirPublicFpEnvelopeV1,
+        semantic_table: Option<&[u8]>,
+        carrier_inputs: &[kaspa_consensus_core::tx::TransactionInput],
+        provenance: Option<&kaspa_consensus_core::palw_claim_local_v1::prefix_v1::PalwPrefixDependencyEnvelopeV1>,
+    ) -> Result<kaspa_consensus_core::palw_state_v2::PalwFamilyOriginalNativeQuoteV3, String> {
+        let params = self.palw_state_params_v2.as_ref().ok_or("PALW V2 state parameters unavailable")?;
+        let (_, state) =
+            self.palw_v2_reader_state(params).map_err(|e| e.to_string())?.ok_or("PALW V2 accepted snapshot unavailable")?;
+        if state.last_point().is_some_and(|last| point.daa_score < last.daa_score || point.blue_score <= last.blue_score) {
+            return Err("family quote prospective point must follow the accepted snapshot clock".into());
+        }
+        envelope.matches_object_v1(&object)?;
+        let claim = envelope.original_fp_v1()?.claim_id();
+        let mut extras = self.palw_transition_extras_for_objects(&state, &point, std::slice::from_ref(&object)).into_legacy_extras();
+        if let Some(history) = &envelope.history_pledge {
+            extras.history_custody_pledges.insert(history.claim, history.clone());
+        }
+        extras.tir_public_originals.insert(claim, envelope);
+        if let Some(provenance) = provenance {
+            extras.prefix_dependencies_v1.insert(claim, provenance.clone());
+        }
+        kaspa_consensus_core::palw_state_v2::palw_family_original_native_quote_v3(
+            &state,
+            params,
+            &point,
+            &extras,
+            &object,
+            semantic_table,
+            carrier_inputs,
+        )
+        .map_err(|e| e.to_string())
+    }
+
+    /// Normal read-only construction on this node's authenticated accepted state.
+    /// The draft's transaction outputs and signed supplier inventory are inspected;
+    /// the returned quote grants neither acceptance nor paid archive standing.
+    pub fn palw_original_archive_native_quote_v1_impl(
+        &self,
+        point: kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+        draft: &kaspa_consensus_core::tx::Transaction,
+        funded_payload: &[u8],
+        provenance: Option<&kaspa_consensus_core::palw_claim_local_v1::prefix_v1::PalwPrefixDependencyEnvelopeV1>,
+        budget: kaspa_consensus_core::palw_state_v2::PalwOriginalArchivePayerBudgetV1,
+    ) -> Result<kaspa_consensus_core::palw_state_v2::PalwOriginalArchiveNativeQuoteV1, String> {
+        let params = self.palw_state_params_v2.as_ref().ok_or("PALW V2 state parameters unavailable")?;
+        let (_, state) =
+            self.palw_v2_reader_state(params).map_err(|e| e.to_string())?.ok_or("PALW V2 accepted snapshot unavailable")?;
+        if state.last_point().is_some_and(|last| point.daa_score < last.daa_score || point.blue_score <= last.blue_score) {
+            return Err("archive quote must follow the accepted snapshot clock".into());
+        }
+        let pairing =
+            kaspa_consensus_core::palw_funded_original_coordinator_v1::palw_funded_original_pairing_payload_v1(draft, funded_payload)?;
+        let envelope = pairing.envelope().original_v1()?;
+        envelope.matches_object_v1(object)?;
+        let claim = envelope.original_fp_v1()?.claim_id();
+        let mut extras = self.palw_transition_extras_for_objects(&state, &point, std::slice::from_ref(object)).into_legacy_extras();
+        if let Some(history) = &envelope.history_pledge {
+            extras.history_custody_pledges.insert(history.claim, history.clone());
+        }
+        extras.tir_public_originals.insert(claim, envelope);
+        extras.tir_funded_originals.insert(claim, pairing);
+        if let Some(provenance) = provenance {
+            extras.prefix_dependencies_v1.insert(claim, provenance.clone());
+        }
+        kaspa_consensus_core::palw_state_v2::palw_original_archive_native_quote_v1(&state, params, &point, &extras, object, budget)
+            .map_err(|e| e.to_string())
+    }
+
+    /// Normal read-only construction on this node's authenticated accepted state.
+    /// The draft's transaction outputs and signed supplier inventory are inspected;
+    /// the returned quote grants neither acceptance nor paid archive standing.
+    pub fn palw_original_archive_native_quote_v2_impl(
+        &self,
+        point: kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+        draft: &kaspa_consensus_core::tx::Transaction,
+        funded_payload: &[u8],
+        provenance: Option<&kaspa_consensus_core::palw_claim_local_v1::prefix_v1::PalwPrefixDependencyEnvelopeV1>,
+        budget: kaspa_consensus_core::palw_state_v2::PalwOriginalArchivePayerBudgetV1,
+    ) -> Result<kaspa_consensus_core::palw_state_v2::PalwOriginalArchiveNativeQuoteV1, String> {
+        let params = self.palw_state_params_v2.as_ref().ok_or("PALW V2 state parameters unavailable")?;
+        let (_, state) =
+            self.palw_v2_reader_state(params).map_err(|e| e.to_string())?.ok_or("PALW V2 accepted snapshot unavailable")?;
+        if state.last_point().is_some_and(|last| point.daa_score < last.daa_score || point.blue_score <= last.blue_score) {
+            return Err("archive quote must follow the accepted snapshot clock".into());
+        }
+        let pairing =
+            kaspa_consensus_core::palw_funded_original_coordinator_v1::palw_funded_original_pairing_payload_v1(draft, funded_payload)?;
+        let envelope = pairing.envelope().original_v1()?;
+        envelope.matches_object_v1(object)?;
+        let claim = envelope.original_fp_v1()?.claim_id();
+        let mut extras = self.palw_transition_extras_for_objects(&state, &point, std::slice::from_ref(object)).into_legacy_extras();
+        if let Some(history) = &envelope.history_pledge {
+            extras.history_custody_pledges.insert(history.claim, history.clone());
+        }
+        extras.tir_public_originals.insert(claim, envelope);
+        extras.tir_funded_originals.insert(claim, pairing);
+        if let Some(provenance) = provenance {
+            extras.prefix_dependencies_v1.insert(claim, provenance.clone());
+        }
+        kaspa_consensus_core::palw_state_v2::palw_original_archive_native_quote_v2(&state, params, &point, &extras, object, budget)
+            .map_err(|e| e.to_string())
     }
 
     pub fn palw_staged_tir_prefix_leaf_index_v1_impl(
@@ -4089,16 +4249,28 @@ impl VirtualStateProcessor {
     /// `palw_v2_locked_bond_outpoints` answers on the block path — one predicate, two callers.
     /// Authoritative wallet/funding answer. Active registry state that could
     /// not be read is unavailable, never an empty must-not-spend set.
-    pub fn palw_locked_bond_outpoints_checked_v3_impl(&self)->Result<Vec<TransactionOutpoint>,kaspa_consensus_core::palw_state_v2::PalwStateV2Error>{
+    pub fn palw_locked_bond_outpoints_checked_v3_impl(
+        &self,
+    ) -> Result<Vec<TransactionOutpoint>, kaspa_consensus_core::palw_state_v2::PalwStateV2Error> {
         self.palw_locked_bond_outpoints_checked_v3_at(self.lkg_virtual_state.load().daa_score)
     }
-    fn palw_locked_bond_outpoints_checked_v3_at(&self,now_daa:u64)->Result<Vec<TransactionOutpoint>,kaspa_consensus_core::palw_state_v2::PalwStateV2Error>{
-        let Some(params)=self.palw_state_params_v2.as_ref()else{return Ok(Vec::new())};
-        let Some((_,state))=self.palw_v2_reader_state(params).map_err(|e|bond_exit_store_error_v1(e).into_state_error_v1())?else{
-            return Err(kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeContextUnavailable(kaspa_consensus_core::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1::HistoryUnavailable));
+    fn palw_locked_bond_outpoints_checked_v3_at(
+        &self,
+        now_daa: u64,
+    ) -> Result<Vec<TransactionOutpoint>, kaspa_consensus_core::palw_state_v2::PalwStateV2Error> {
+        let Some(params) = self.palw_state_params_v2.as_ref() else { return Ok(Vec::new()) };
+        let Some((_, state)) = self.palw_v2_reader_state(params).map_err(|e| bond_exit_store_error_v1(e).into_state_error_v1())?
+        else {
+            return Err(kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeContextUnavailable(
+                kaspa_consensus_core::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1::HistoryUnavailable,
+            ));
         };
-        let mut out:Vec<_>=self.palw_v2_locked_bond_outpoints(&state,now_daa).map_err(PalwLocalTransitionFaultV1::into_state_error_v1)?.into_iter().collect();
-        out.sort_by(|a,b|(a.transaction_id,a.index).cmp(&(b.transaction_id,b.index)));
+        let mut out: Vec<_> = self
+            .palw_v2_locked_bond_outpoints(&state, now_daa)
+            .map_err(PalwLocalTransitionFaultV1::into_state_error_v1)?
+            .into_iter()
+            .collect();
+        out.sort_by(|a, b| (a.transaction_id, a.index).cmp(&(b.transaction_id, b.index)));
         Ok(out)
     }
     /// Historical diagnostic compatibility only. Funding and wallet callers
@@ -4119,7 +4291,11 @@ impl VirtualStateProcessor {
         let Ok(Some((_, state))) = self.palw_v2_reader_state(state_params) else {
             return Vec::new();
         };
-        let mut out: Vec<TransactionOutpoint> = self.palw_v2_locked_bond_outpoints(&state, now_daa).unwrap_or_else(|_|state.bonds_iter().map(|(key,_)|key.0).collect()).into_iter().collect();
+        let mut out: Vec<TransactionOutpoint> = self
+            .palw_v2_locked_bond_outpoints(&state, now_daa)
+            .unwrap_or_else(|_| state.bonds_iter().map(|(key, _)| key.0).collect())
+            .into_iter()
+            .collect();
         // Deterministic order, so two nodes answering the same question give the same answer and a
         // paging caller cannot be handed a shuffled set.
         out.sort_by(|a, b| (a.transaction_id, a.index).cmp(&(b.transaction_id, b.index)));
@@ -4130,7 +4306,7 @@ impl VirtualStateProcessor {
         &self,
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
         now_daa: u64,
-    ) -> Result<std::collections::HashSet<TransactionOutpoint>,PalwLocalTransitionFaultV1> {
+    ) -> Result<std::collections::HashSet<TransactionOutpoint>, PalwLocalTransitionFaultV1> {
         let Some(_bond_params) = self.palw_bond_params_v2.as_ref() else {
             return Ok(Default::default());
         };
@@ -4140,8 +4316,12 @@ impl VirtualStateProcessor {
         // RFC-0015 §8.3.3 / §13.2 (2026-10-15): on a network with an OPV policy a bond's live duties (its OPV reservation to the
         // liability horizon, its budget window to `d + W` and liability hold) hold its collateral even below the audit fence.
         let duty_gate = self.palw_audit_2026_09_23_at(now_daa) || self.palw_kernel_opv_fence().is_some();
-        let mut out=std::collections::HashSet::new();
-        for(key,record)in state.bonds_iter(){if self.palw_v2_bond_is_locked(state,key,record,now_daa,duty_gate)?{out.insert(key.0);}}
+        let mut out = std::collections::HashSet::new();
+        for (key, record) in state.bonds_iter() {
+            if self.palw_v2_bond_is_locked(state, key, record, now_daa, duty_gate)? {
+                out.insert(key.0);
+            }
+        }
         Ok(out)
     }
 
@@ -4159,7 +4339,7 @@ impl VirtualStateProcessor {
         record: &kaspa_consensus_core::palw_state_v2::PalwBondStateV2,
         now_daa: u64,
         duty_gate: bool,
-    ) -> Result<bool,PalwLocalTransitionFaultV1> {
+    ) -> Result<bool, PalwLocalTransitionFaultV1> {
         let delay = self.palw_bond_withdrawal_delay_at(now_daa);
         match self.palw_state_params_v2.as_ref() {
             Some(params) => kaspa_consensus_core::palw_state_v2::palw_bond_collateral_is_locked_checked_v7(
@@ -4171,7 +4351,8 @@ impl VirtualStateProcessor {
                 delay,
                 self.palw_settled_anchor_depth_at(now_daa),
                 duty_gate,
-            ).map_err(bond_exit_state_error_v1),
+            )
+            .map_err(bond_exit_state_error_v1),
             None => Ok(kaspa_consensus_core::palw_state_v2::palw_bond_collateral_is_locked_v5(
                 state,
                 key,
@@ -4311,8 +4492,9 @@ impl VirtualStateProcessor {
             return false;
         }
         let Some(state_params) = self.palw_state_params_v2.as_ref() else { return false };
-        let Ok(envelope) = kaspa_consensus_core::palw_attempt_material_v3::native_attempt_base_v3(&header.palw_commitment)
-        else { return false };
+        let Ok(envelope) = kaspa_consensus_core::palw_attempt_material_v3::native_attempt_base_v3(&header.palw_commitment) else {
+            return false;
+        };
         kaspa_consensus_core::palw_admission_v2::check_palw_base_recovery_work_v1(
             state,
             state_params,
@@ -4320,7 +4502,8 @@ impl VirtualStateProcessor {
             header.daa_score,
             self.palw_execution_anchor_v1(header, &envelope.attempt),
             self.palw_epoch_budget_fences_at(header.daa_score),
-        ).is_ok()
+        )
+        .is_ok()
     }
 
     /// The carve of `block`'s own attempt where the fold skipped it — see
@@ -4894,7 +5077,7 @@ impl VirtualStateProcessor {
         &self,
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
         now_daa: u64,
-    ) -> Result<std::collections::HashMap<TransactionOutpoint, u64>,PalwLocalTransitionFaultV1> {
+    ) -> Result<std::collections::HashMap<TransactionOutpoint, u64>, PalwLocalTransitionFaultV1> {
         let Some(_bond_params) = self.palw_bond_params_v2.as_ref() else {
             return Ok(Default::default());
         };
@@ -4902,11 +5085,13 @@ impl VirtualStateProcessor {
         // RFC-0015 §8.3.3 / §13.2 (2026-10-15): on a network with an OPV policy a bond's live duties (its OPV reservation to the
         // liability horizon, its budget window to `d + W` and liability hold) hold its collateral even below the audit fence.
         let duty_gate = self.palw_audit_2026_09_23_at(now_daa) || self.palw_kernel_opv_fence().is_some();
-        let mut out=std::collections::HashMap::new();
-        for(key,record)in state.bonds_iter(){
-            if !self.palw_v2_bond_is_locked(state,key,record,now_daa,duty_gate)?{
-                let owed=kaspa_consensus_core::palw_state_v2::palw_bond_burn_obligation_v2(record);
-                if owed>0{out.insert(key.0,owed);}
+        let mut out = std::collections::HashMap::new();
+        for (key, record) in state.bonds_iter() {
+            if !self.palw_v2_bond_is_locked(state, key, record, now_daa, duty_gate)? {
+                let owed = kaspa_consensus_core::palw_state_v2::palw_bond_burn_obligation_v2(record);
+                if owed > 0 {
+                    out.insert(key.0, owed);
+                }
             }
         }
         Ok(out)
@@ -10812,9 +10997,9 @@ impl VirtualStateProcessor {
                 claim_id,
                 claim,
             ) {
-                Ok(object)=>out.push(object),
-                Err(PalwPanelBindingFaultV1::Refused(_))=>{},
-                Err(PalwPanelBindingFaultV1::Local(why))=>return Err(why),
+                Ok(object) => out.push(object),
+                Err(PalwPanelBindingFaultV1::Refused(_)) => {}
+                Err(PalwPanelBindingFaultV1::Local(why)) => return Err(why),
             }
         }
         Ok(out)
@@ -10940,7 +11125,12 @@ impl VirtualStateProcessor {
         // (empty below `palw_floor_refusal_retry` and wherever the block carries no draw points), so the
         // line below says which way a refused claim went.
         let floor_retries = match kaspa_consensus_core::palw_state_v2::palw_sw8_thin_draws_v1(
-            &folded, state_params, &extras, block_daa, anchor_delay, reach.min(block_daa),
+            &folded,
+            state_params,
+            &extras,
+            block_daa,
+            anchor_delay,
+            reach.min(block_daa),
         ) {
             Ok(retries) => retries,
             Err(kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeResource(why)) => return Err(why.into()),
@@ -11002,7 +11192,7 @@ impl VirtualStateProcessor {
                     continue;
                 }
                 Err(PalwPanelBindingFaultV1::Refused(None)) => continue,
-                Err(PalwPanelBindingFaultV1::Local(why))=>return Err(why),
+                Err(PalwPanelBindingFaultV1::Local(why)) => return Err(why),
             };
             // Finding 5: under SW-8 this block is the claim's one chance to bind, so a derived
             // binding the gate or the fold refuses is reported as the draw's refusal is — the claim
@@ -11169,7 +11359,7 @@ impl VirtualStateProcessor {
                 policy,
             ),
         };
-        let seats = drawn.map_err(|why|PalwPanelBindingFaultV1::from_panel_error_v1(why,policy.stake.is_some()))?;
+        let seats = drawn.map_err(|why| PalwPanelBindingFaultV1::from_panel_error_v1(why, policy.stake.is_some()))?;
         // ADR-0147: nothing to ask here. The outsider is IN the derived panel — the draw policy
         // carries the fence — and the acceptance layer demands that panel exactly, so a node
         // proposes only what its own fold will take. The identity test that stood here

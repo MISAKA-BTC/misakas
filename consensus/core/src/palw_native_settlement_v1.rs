@@ -114,32 +114,77 @@ pub struct MatureUsefulWorkV1 {
 /// Exact priced legacy source identity before its material horizon is known.
 /// This type carries no maturity and cannot be passed to a positive settlement
 /// reader. The owning pending ledger completes its horizon independently.
-#[derive(Clone,Copy,Debug,PartialEq,Eq,borsh::BorshSerialize,borsh::BorshDeserialize)]
-pub(crate) struct NativeLegacyPricedWorkV1{
-    pub identity:Hash64,pub anchor:Hash64,pub operator:Hash64,pub class:Hash64,
-    pub anchor_blue:u64,pub accepted_blue:u64,pub anchor_daa:u64,pub accepted_daa:u64,pub work:u128,
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub(crate) struct NativeLegacyPricedWorkV1 {
+    pub identity: Hash64,
+    pub anchor: Hash64,
+    pub operator: Hash64,
+    pub class: Hash64,
+    pub anchor_blue: u64,
+    pub accepted_blue: u64,
+    pub anchor_daa: u64,
+    pub accepted_daa: u64,
+    pub work: u128,
 }
-impl NativeLegacyPricedWorkV1{
-    pub(crate) fn mature_v1(self,matured_daa:u64)->MatureUsefulWorkV1{
-        MatureUsefulWorkV1{identity:self.identity,anchor:self.anchor,operator:self.operator,class:self.class,
-            anchor_blue:self.anchor_blue,accepted_blue:self.accepted_blue,anchor_daa:self.anchor_daa,accepted_daa:self.accepted_daa,matured_daa,work:self.work}
+impl NativeLegacyPricedWorkV1 {
+    pub(crate) fn mature_v1(self, matured_daa: u64) -> MatureUsefulWorkV1 {
+        MatureUsefulWorkV1 {
+            identity: self.identity,
+            anchor: self.anchor,
+            operator: self.operator,
+            class: self.class,
+            anchor_blue: self.anchor_blue,
+            accepted_blue: self.accepted_blue,
+            anchor_daa: self.anchor_daa,
+            accepted_daa: self.accepted_daa,
+            matured_daa,
+            work: self.work,
+        }
     }
 }
 /// Price actual accepted data only. Approval, material, dispute and dependency
 /// readiness deliberately remain separate; this does not issue work credit.
-pub(crate) fn native_legacy_priced_source_v1(rules:&NativeFactRulesV1<'_>,claim:&PalwClaimStateV2,quantum:Option<u32>,accepting:(u64,u64))->Option<NativeLegacyPricedWorkV1>{
-    if !matches!(claim.phase,PalwClaimPhaseV2::Final{..})||claim.class_id==rules.params.base_class_id(){return None}
-    let work_id=claim.work_id?;let bond=rules.state.bond(&claim.bond)?;
-    let (identity,work,accepted_daa,accepted_blue)=match (&claim.source,quantum){
-        (PalwClaimSourceV2::Attempt,None)=>(work_id,rules.state.palw_claim_canonical_weight_v1(claim,rules.canonical_work_daa)?,claim.accepted_daa,claim.accepted_blue_score),
-        (PalwClaimSourceV2::FreePrompt{quanta,spent},Some(q)) if spent.contains(&q)=>{
-            let pricing=PalwFpPricingV1::of(rules.params,rules.canonical_work_daa);if !pricing.prices_in_compute(claim){return None}
-            (fp_slice_identity(&work_id,q),palw_fp_spend_weight_v1(rules.state,claim,*quanta,&pricing),accepting.0,accepting.1)
-        },_=>return None,
+pub(crate) fn native_legacy_priced_source_v1(
+    rules: &NativeFactRulesV1<'_>,
+    claim: &PalwClaimStateV2,
+    quantum: Option<u32>,
+    accepting: (u64, u64),
+) -> Option<NativeLegacyPricedWorkV1> {
+    if !matches!(claim.phase, PalwClaimPhaseV2::Final { .. }) || claim.class_id == rules.params.base_class_id() {
+        return None;
+    }
+    let work_id = claim.work_id?;
+    let bond = rules.state.bond(&claim.bond)?;
+    let (identity, work, accepted_daa, accepted_blue) = match (&claim.source, quantum) {
+        (PalwClaimSourceV2::Attempt, None) => (
+            work_id,
+            rules.state.palw_claim_canonical_weight_v1(claim, rules.canonical_work_daa)?,
+            claim.accepted_daa,
+            claim.accepted_blue_score,
+        ),
+        (PalwClaimSourceV2::FreePrompt { quanta, spent }, Some(q)) if spent.contains(&q) => {
+            let pricing = PalwFpPricingV1::of(rules.params, rules.canonical_work_daa);
+            if !pricing.prices_in_compute(claim) {
+                return None;
+            }
+            (fp_slice_identity(&work_id, q), palw_fp_spend_weight_v1(rules.state, claim, *quanta, &pricing), accepting.0, accepting.1)
+        }
+        _ => return None,
     };
-    if work==0{return None}
-    Some(NativeLegacyPricedWorkV1{identity,anchor:claim.accepted_block,operator:bond.operator_id,class:claim.class_id,
-        anchor_blue:claim.accepted_blue_score,accepted_blue,anchor_daa:claim.accepted_daa,accepted_daa,work})
+    if work == 0 {
+        return None;
+    }
+    Some(NativeLegacyPricedWorkV1 {
+        identity,
+        anchor: claim.accepted_block,
+        operator: bond.operator_id,
+        class: claim.class_id,
+        anchor_blue: claim.accepted_blue_score,
+        accepted_blue,
+        anchor_daa: claim.accepted_daa,
+        accepted_daa,
+        work,
+    })
 }
 
 /// One native39 receipt quantum that became an issuance obligation in this block.
@@ -424,12 +469,23 @@ pub fn fp_slice_identity(work_id: &Hash64, index: u32) -> Hash64 {
 }
 
 /// Shared native39 liability clock used by the rooted anchor and delta consumer.
-pub fn native39_matured_daa_v1(params:&PalwStateParamsV2,quantum_maturity:u64,anchor_daa:u64,established_daa:u64,expires:u64)->Option<u64>{
-    let cert=params.rfc0018_v1()?.certification;
-    if cert.validate().is_err(){return None}
-    Some(anchor_daa.saturating_add(quantum_maturity)
-        .max(established_daa.saturating_add(params.claim_retirement_daa()))
-        .max(expires.saturating_add(cert.lifetime_daa()).saturating_add(cert.prosecution_window_daa)))
+pub fn native39_matured_daa_v1(
+    params: &PalwStateParamsV2,
+    quantum_maturity: u64,
+    anchor_daa: u64,
+    established_daa: u64,
+    expires: u64,
+) -> Option<u64> {
+    let cert = params.rfc0018_v1()?.certification;
+    if cert.validate().is_err() {
+        return None;
+    }
+    Some(
+        anchor_daa
+            .saturating_add(quantum_maturity)
+            .max(established_daa.saturating_add(params.claim_retirement_daa()))
+            .max(expires.saturating_add(cert.lifetime_daa()).saturating_add(cert.prosecution_window_daa)),
+    )
 }
 
 /// Turn one block's extracted evidence into facts. `accepting` is that block's `(daa, blue)`. Missing information
@@ -468,11 +524,11 @@ pub fn native_facts_and_skips_with_native39_v1(
             skipped.voided = skipped.voided.saturating_add(1);
             continue;
         }
-        let Some(certification) = certification else {
+        let Some(_) = certification else {
             skipped.unpriced = skipped.unpriced.saturating_add(1);
             continue;
         };
-        if crate::palw_native_receipt_v39::native_mining_accusation_pending_v39(&rules.state, &quantum.claim) {
+        if crate::palw_native_receipt_v39::native_mining_accusation_pending_v39(rules.state, &quantum.claim) {
             skipped.open_da = skipped.open_da.saturating_add(1);
             continue;
         }
@@ -486,7 +542,14 @@ pub fn native_facts_and_skips_with_native39_v1(
         }
         // `established >= admitted`, and `expires` is `established + receipt_lifetime`, so this is at least
         // `palw_native_mining_liability_until_v39` (admission + certification life + receipt life + prosecution).
-        let matured_daa=native39_matured_daa_v1(rules.params,rules.quantum_maturity_daa,quantum.anchor_daa,quantum.established_daa,quantum.expires).expect("validated certification above");
+        let matured_daa = native39_matured_daa_v1(
+            rules.params,
+            rules.quantum_maturity_daa,
+            quantum.anchor_daa,
+            quantum.established_daa,
+            quantum.expires,
+        )
+        .expect("validated certification above");
         facts.push(MatureUsefulWorkV1 {
             identity: fp_slice_identity(&quantum.work_id, quantum.quantum),
             anchor: quantum.anchor,
@@ -560,15 +623,32 @@ pub fn native_facts_and_skips_v1(
     voided: &BTreeSet<Hash64>,
     accepting: (u64, u64),
 ) -> (Vec<MatureUsefulWorkV1>, SkippedEvidenceV1) {
-    let attempts=evidence.finalized_attempts.iter()
-        .filter(|(_,claim)|!crate::palw_rfc0018_v1::palw_gate_c_governs_v1(rules.params,claim))
-        .map(|(id,claim)|(*id,claim))
-        .chain(evidence.certified_claims.iter().filter_map(|id|rules.state.claim(id)
-            .filter(|c|matches!(c.source,PalwClaimSourceV2::Attempt)).map(|c|(*id,c))));
-    let mut result=native_legacy_facts_borrowed_v1(rules,attempts,evidence.fp_spends.iter().map(|(id,c,q)|(*id,c,q.as_slice())),
-        &evidence.exec_liability_until,voided,accepting);
-    result.1.uncertified=result.1.uncertified.saturating_add(evidence.finalized_attempts.iter()
-        .filter(|(_,claim)|crate::palw_rfc0018_v1::palw_gate_c_governs_v1(rules.params,claim)).count() as u64);
+    let attempts = evidence
+        .finalized_attempts
+        .iter()
+        .filter(|(_, claim)| !crate::palw_rfc0018_v1::palw_gate_c_governs_v1(rules.params, claim))
+        .map(|(id, claim)| (*id, claim))
+        .chain(
+            evidence
+                .certified_claims
+                .iter()
+                .filter_map(|id| rules.state.claim(id).filter(|c| matches!(c.source, PalwClaimSourceV2::Attempt)).map(|c| (*id, c))),
+        );
+    let mut result = native_legacy_facts_borrowed_v1(
+        rules,
+        attempts,
+        evidence.fp_spends.iter().map(|(id, c, q)| (*id, c, q.as_slice())),
+        &evidence.exec_liability_until,
+        voided,
+        accepting,
+    );
+    result.1.uncertified = result.1.uncertified.saturating_add(
+        evidence
+            .finalized_attempts
+            .iter()
+            .filter(|(_, claim)| crate::palw_rfc0018_v1::palw_gate_c_governs_v1(rules.params, claim))
+            .count() as u64,
+    );
     result
 }
 
@@ -576,12 +656,14 @@ pub fn native_facts_and_skips_v1(
 /// with the delta reader. Callers retain the actual source records and reserve
 /// the output vector before constructing a pending archival source.
 fn native_legacy_facts_borrowed_v1<'a>(
-    rules:&NativeFactRulesV1<'_>,
-    attempts:impl Iterator<Item=(Hash64,&'a PalwClaimStateV2)>,
-    fp_spends:impl Iterator<Item=(Hash64,&'a PalwClaimStateV2,&'a [u32])>,
-    exec_liability_until:&BTreeMap<Hash64,u64>,voided:&BTreeSet<Hash64>,accepting:(u64,u64),
-)->(Vec<MatureUsefulWorkV1>,SkippedEvidenceV1){
-    let (accepting_daa, accepting_blue) = accepting;
+    rules: &NativeFactRulesV1<'_>,
+    attempts: impl Iterator<Item = (Hash64, &'a PalwClaimStateV2)>,
+    fp_spends: impl Iterator<Item = (Hash64, &'a PalwClaimStateV2, &'a [u32])>,
+    exec_liability_until: &BTreeMap<Hash64, u64>,
+    voided: &BTreeSet<Hash64>,
+    accepting: (u64, u64),
+) -> (Vec<MatureUsefulWorkV1>, SkippedEvidenceV1) {
+    let (accepting_daa, _accepting_blue) = accepting;
     let mut skipped = SkippedEvidenceV1::default();
     // **The trace retention a claim holds NOW.** Read the later of the live and recorded obligation. Current legacy `CourtOpened`
     // and named-leaf accusations refuse terminal claims: a class-window extension is admitted before Final, holds that Final and
@@ -634,10 +716,10 @@ fn native_legacy_facts_borrowed_v1<'a>(
             skipped.unpriced += 1;
             continue;
         };
-        if let Some(priced)=native_legacy_priced_source_v1(rules,claim,None,accepting){
+        if let Some(priced) = native_legacy_priced_source_v1(rules, claim, None, accepting) {
             facts.push(priced.mature_v1(retention.max(final_daa.saturating_add(retirement))));
         }
-        let _=(identity,work,bond);
+        let _ = (identity, work, bond);
     }
     let pricing = PalwFpPricingV1::of(rules.params, rules.canonical_work_daa);
     for (id, claim, fresh) in fp_spends {
@@ -693,8 +775,10 @@ fn native_legacy_facts_borrowed_v1<'a>(
             .max(final_daa.saturating_add(retirement));
         let work = palw_fp_spend_weight_v1(rules.state, claim, *quanta, &pricing);
         for index in fresh {
-            if let Some(priced)=native_legacy_priced_source_v1(rules,claim,Some(*index),accepting){facts.push(priced.mature_v1(matured_daa));}
-            let _=(work_id,bond,work);
+            if let Some(priced) = native_legacy_priced_source_v1(rules, claim, Some(*index), accepting) {
+                facts.push(priced.mature_v1(matured_daa));
+            }
+            let _ = (work_id, bond, work);
         }
     }
     (facts, skipped)
@@ -1377,7 +1461,9 @@ mod tests {
             PALW_SETTLEMENT_ONCE_ROW_VERSION_V1, PALW_SETTLEMENT_ONCE_TABLE_V1, PalwSettlementConsumerV1, PalwSettlementDebitV1,
             PalwSettlementLegV1, PalwSettlementObligationV1, PalwSettlementOnceRowV1,
         };
-        use crate::palw_state_v2::{PalwBlockContextV2, PalwBondKeyV2, PalwChainStateV2, PalwDeltaEntryV2, PalwStateDeltaV2, PalwStateParamsV2};
+        use crate::palw_state_v2::{
+            PalwBlockContextV2, PalwBondKeyV2, PalwChainStateV2, PalwDeltaEntryV2, PalwStateDeltaV2, PalwStateParamsV2,
+        };
         use crate::tx::TransactionOutpoint;
         let claim = [9u8; 64];
         let receipt_id = native_mining_receipt_id_v39(claim);
@@ -1449,7 +1535,11 @@ mod tests {
         let spend = PalwStateDeltaV2 {
             point: PalwBlockContextV2 { block: h(9), daa_score: 20, blue_score: 21, subsidy: 0 },
             entries: vec![
-                row(MINING_TABLE_V39, native_mining_row_key_v39(MINING_RECEIPT_KIND_V39, &receipt.id), borsh::to_vec(&(root, &receipt)).unwrap()),
+                row(
+                    MINING_TABLE_V39,
+                    native_mining_row_key_v39(MINING_RECEIPT_KIND_V39, &receipt.id),
+                    borsh::to_vec(&(root, &receipt)).unwrap(),
+                ),
                 row(PALW_SETTLEMENT_ONCE_TABLE_V1, obligation.id_v1().to_vec(), borsh::to_vec(&marker).unwrap()),
                 row(PALW_SETTLEMENT_ONCE_TABLE_V1, missing.id_v1().to_vec(), borsh::to_vec(&missing_marker).unwrap()),
                 row(PALW_SECURITY_CERTIFICATION_TABLE_V1, certification_claim_key_v1(&[4; 64]), borsh::to_vec(&legacy_row).unwrap()),
@@ -1502,7 +1592,10 @@ mod tests {
         assert_eq!(facts[0].identity, fp_slice_identity(&Hash64::from_bytes([5; 64]), 0));
         assert_eq!(
             facts[0].matured_daa,
-            20u64.saturating_add(7).max(10u64.saturating_add(30)).max(50u64.saturating_add(cert.lifetime_daa()).saturating_add(cert.prosecution_window_daa))
+            20u64
+                .saturating_add(7)
+                .max(10u64.saturating_add(30))
+                .max(50u64.saturating_add(cert.lifetime_daa()).saturating_add(cert.prosecution_window_daa))
         );
         assert_eq!(skipped.missing_receipt, 1);
         assert_eq!(skipped.voided, 0, "a legacy void id does not clear the native39 quantum");
