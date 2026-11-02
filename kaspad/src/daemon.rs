@@ -1250,7 +1250,7 @@ Do you confirm? (y/n)";
                 }
             });
         }
-        let utxoindex = UtxoIndexProxy::new(UtxoIndex::new(consensus_manager.clone(), utxoindex_db).unwrap());
+        let utxoindex = UtxoIndexProxy::new(UtxoIndex::new_before_processors(consensus_manager.clone(), utxoindex_db).unwrap());
         let index_service = Arc::new(IndexService::new(&notify_service.notifier(), subscription_context.clone(), Some(utxoindex)));
         Some(index_service)
     } else {
