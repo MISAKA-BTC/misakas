@@ -6,7 +6,7 @@ use super::*;
 use crate::{
     palw_logits_q24_v2::WideLogitsEventV2,
     palw_positive_check_v2::expanded_plan::wide_v2::ExpandedPlanV2,
-    palw_tir_court_v1::source_only::wide_v2::{TirSourceOnlyMaterialV2, authenticate_source_only_v2},
+    palw_tir_court_v1::source_only::wide_v2::{EvaluationDiagnosticsV2, TirSourceOnlyMaterialV2, authenticate_source_only_v2},
     palw_tir_step_v1::wide_v2::verify_tir_binding_v2,
 };
 mod record_access_sealed {
@@ -251,13 +251,32 @@ impl<R: WideRecordAccessV2> FullRelationCheckerV2<R> {
         material: &TirSourceOnlyMaterialV2<'_>,
         legacy: Option<StepTargetV2<'_>>,
     ) -> Result<(), FullRelationError> {
+        self.submit_observed(material, legacy, None)
+    }
+    /// Same attempt and cumulative charges as submit. Diagnostics expose local
+    /// source evaluation only; a Complete observation is not Panel acceptance.
+    pub fn submit_with_diagnostics(
+        &mut self,
+        material: &TirSourceOnlyMaterialV2<'_>,
+        legacy: Option<StepTargetV2<'_>>,
+        diagnostics: &mut EvaluationDiagnosticsV2,
+    ) -> Result<(), FullRelationError> {
+        *diagnostics = EvaluationDiagnosticsV2::default();
+        self.submit_observed(material, legacy, Some(diagnostics))
+    }
+    fn submit_observed(
+        &mut self,
+        material: &TirSourceOnlyMaterialV2<'_>,
+        legacy: Option<StepTargetV2<'_>>,
+        diagnostics: Option<&mut EvaluationDiagnosticsV2>,
+    ) -> Result<(), FullRelationError> {
         if self.progress.outcome != CheckOutcome::Checking {
             return Err(FullRelationError::Closed);
         }
         if self.progress.next_relation == self.prepared.plan.summary().relations {
             return Err(FullRelationError::Incomplete);
         }
-        let result = self.submit_inner(material, legacy);
+        let result = self.submit_inner(material, legacy, diagnostics);
         if let Err(e) = &result {
             self.progress.outcome = match e {
                 FullRelationError::PanelMismatch => CheckOutcome::WitnessRejected,
@@ -271,6 +290,7 @@ impl<R: WideRecordAccessV2> FullRelationCheckerV2<R> {
         &mut self,
         material: &TirSourceOnlyMaterialV2<'_>,
         legacy: Option<StepTargetV2<'_>>,
+        diagnostics: Option<&mut EvaluationDiagnosticsV2>,
     ) -> Result<(), FullRelationError> {
         let limits = self.prepared.limits;
         // All four reservations are calculated before any progress is changed.
@@ -315,12 +335,20 @@ impl<R: WideRecordAccessV2> FullRelationCheckerV2<R> {
                 if legacy.is_some() {
                     return Err(FullRelationError::Delivery);
                 }
-                source.evaluate_node(*ctx, *node, *first_lane, *lane_count).map_err(source_error)?
+                match diagnostics {
+                    Some(d) => source.evaluate_node_with_diagnostics(*ctx, *node, *first_lane, *lane_count, d),
+                    None => source.evaluate_node(*ctx, *node, *first_lane, *lane_count),
+                }
+                .map_err(source_error)?
             }
             ExpandedRelationKind::Legacy(leaf) => {
                 let target = legacy.as_ref().ok_or(FullRelationError::Delivery)?;
                 self.authenticate_legacy(leaf, target, limits.source.max_material_bytes)?;
-                source.evaluate_legacy(leaf).map_err(source_error)?
+                match diagnostics {
+                    Some(d) => source.evaluate_legacy_with_diagnostics(leaf, d),
+                    None => source.evaluate_legacy(leaf),
+                }
+                .map_err(source_error)?
             }
         };
         let values = evaluation.values();

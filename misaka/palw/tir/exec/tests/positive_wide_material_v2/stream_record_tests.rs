@@ -9,7 +9,7 @@ use kaspa_consensus_core::{
     palw_step_refute::PalwStepInputRowV1,
     palw_tir_court_v1::{
         PalwTirParamOpeningV1,
-        source_only::wide_v2::{TirSourceOnlyMaterialV2, WideGeneratedIdsPinV2},
+        source_only::wide_v2::{EvaluationDiagnosticsV2, EvaluationStageV2, TirSourceOnlyMaterialV2, WideGeneratedIdsPinV2},
     },
 };
 use std::{
@@ -188,7 +188,10 @@ fn detached_disk_claims_and_materials_finish_real_node_after_producer_run_is_rel
                 decode_tokens: pin.as_ref(),
             };
             let target = frame.target.as_ref().map(|t| StepTargetV2 { opening: &t.0, preimage: &t.1, trace: t.2.as_ref() });
-            let step = node.submit(&material, target).unwrap();
+            let mut diagnostics = EvaluationDiagnosticsV2::default();
+            let step = node.submit_with_diagnostics(&material, target, &mut diagnostics).unwrap();
+            assert_eq!(diagnostics.stage, EvaluationStageV2::Complete);
+            assert!(diagnostics.work.is_some() && diagnostics.workspace_bytes.is_some());
             assert_eq!(node.checked_relations(), i + 1);
             assert_eq!(step, if i + 1 == n { StreamSubmitV2::NeedEof } else { StreamSubmitV2::Continue });
         }

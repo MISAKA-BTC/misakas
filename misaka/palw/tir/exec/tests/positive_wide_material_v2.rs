@@ -267,6 +267,14 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
         claims[i][0] += 1;
     }
     let panel = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([92; 32]);
+    let observed_record = prep
+        .freeze_record(
+            capture.binding().unwrap(),
+            capture.run().generated().to_vec(),
+            principal(panel.verification_key.as_ref()),
+            claims.clone(),
+        )
+        .unwrap();
     let record = prep
         .freeze_record(
             capture.binding().unwrap(),
@@ -279,6 +287,8 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
         .unwrap()
         .as_ref();
     // This separately authenticated Node preparation owns all numerical checking.
+    assert_eq!(record.signing_digest(), observed_record.signing_digest());
+    let mut observed = signed.preparation(f).begin(observed_record, panel.verification_key.as_ref(), &sig).unwrap();
     let mut checker = signed.preparation(f).begin(record, panel.verification_key.as_ref(), &sig).unwrap();
     let before = builder.meter();
     let mut rejected = false;
@@ -287,6 +297,12 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
         let material = builder.material(index as u64, progress.legacy_frontier).unwrap();
         assert!(builder.material(index as u64, progress.legacy_frontier).is_err());
         let outcome = checker.submit(&material.as_borrowed(), material.target());
+        let mut diagnostics = kaspa_consensus_core::palw_tir_court_v1::source_only::wide_v2::EvaluationDiagnosticsV2::default();
+        let observed_outcome = observed.submit_with_diagnostics(&material.as_borrowed(), material.target(), &mut diagnostics);
+        assert_eq!(observed_outcome, outcome);
+        assert_eq!(observed.progress(), checker.progress(), "observation must not change coverage, verdict or spent charges");
+        assert_eq!(diagnostics.stage, kaspa_consensus_core::palw_tir_court_v1::source_only::wide_v2::EvaluationStageV2::Complete);
+        assert!(diagnostics.work.is_some() && diagnostics.workspace_bytes.is_some());
         if outcome == Err(FullRelationError::PanelMismatch) {
             assert!(wrong_panel);
             assert_eq!(checker.progress().outcome, CheckOutcome::WitnessRejected);
@@ -300,7 +316,9 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     if wrong_panel {
         assert!(rejected);
     } else {
-        assert_eq!(checker.finish().unwrap(), if wrong_miner { CheckOutcome::OutputMismatch } else { CheckOutcome::Matched });
+        let expected = if wrong_miner { CheckOutcome::OutputMismatch } else { CheckOutcome::Matched };
+        assert_eq!(observed.finish().unwrap(), expected);
+        assert_eq!(checker.finish().unwrap(), expected);
     }
     signed.authenticate();
 }
@@ -609,3 +627,6 @@ mod trained_roles;
 
 #[path = "positive_wide_material_v2/retained_handoff_tests.rs"]
 mod retained_handoff_tests;
+
+#[path = "positive_wide_material_v2/evaluation_diagnostics_tests.rs"]
+mod evaluation_diagnostics_tests;

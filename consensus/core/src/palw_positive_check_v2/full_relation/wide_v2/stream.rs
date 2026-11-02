@@ -438,6 +438,25 @@ impl<R: ClaimsReaderV2> StreamFullRelationCheckerV2<R> {
         material: &TirSourceOnlyMaterialV2<'_>,
         target: Option<StepTargetV2<'_>>,
     ) -> Result<StreamSubmitV2, FullRelationError> {
+        self.submit_observed(material, target, None)
+    }
+    /// The same one-pass stream/check attempt. Local cost observations cannot
+    /// replace complete coverage, EOF/root/signature or the native credit gate.
+    pub fn submit_with_diagnostics(
+        &mut self,
+        material: &TirSourceOnlyMaterialV2<'_>,
+        target: Option<StepTargetV2<'_>>,
+        diagnostics: &mut EvaluationDiagnosticsV2,
+    ) -> Result<StreamSubmitV2, FullRelationError> {
+        *diagnostics = EvaluationDiagnosticsV2::default();
+        self.submit_observed(material, target, Some(diagnostics))
+    }
+    fn submit_observed(
+        &mut self,
+        material: &TirSourceOnlyMaterialV2<'_>,
+        target: Option<StepTargetV2<'_>>,
+        diagnostics: Option<&mut EvaluationDiagnosticsV2>,
+    ) -> Result<StreamSubmitV2, FullRelationError> {
         if self.closed {
             return Err(FullRelationError::Closed);
         }
@@ -456,7 +475,11 @@ impl<R: ClaimsReaderV2> StreamFullRelationCheckerV2<R> {
                 }
             }
         }
-        match self.inner.submit(material, target) {
+        let result = match diagnostics {
+            Some(d) => self.inner.submit_with_diagnostics(material, target, d),
+            None => self.inner.submit(material, target),
+        };
+        match result {
             Ok(()) => {
                 self.inner.record.current = None;
                 Ok(if self.inner.progress.next_relation == self.stream.count {

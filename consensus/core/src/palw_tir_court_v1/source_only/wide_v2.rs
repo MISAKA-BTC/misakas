@@ -187,6 +187,29 @@ impl TirSourceOnlyEvaluationV2 {
     }
 }
 
+/// Local observation of this ONE source evaluation. Neither a completed stage
+/// nor work counters authenticate a Panel record or grant credit. No wire form.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct EvaluationDiagnosticsV2 {
+    pub stage: EvaluationStageV2,
+    /// Set only after a successful conservative workspace quote.
+    pub workspace_bytes: Option<u64>,
+    /// Available on completed evaluation or the evaluator's actual WorkLimit.
+    /// Other errors do not report an invented zero/completed work count.
+    pub work: Option<DemandWork>,
+    pub source_reads: u64,
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum EvaluationStageV2 {
+    #[default]
+    NotStarted,
+    TargetGeometry,
+    Workspace,
+    Evaluation,
+    CanonicalClosure,
+    Complete,
+}
+
 impl AuthenticatedTirSourceOnlyV2<'_> {
     /// Artifact identity only: read an already authenticated parameter lane.
     /// This does not evaluate a model or authenticate a Panel intermediate.
@@ -214,14 +237,46 @@ impl AuthenticatedTirSourceOnlyV2<'_> {
         first_lane: u64,
         lane_count: u32,
     ) -> Result<TirSourceOnlyEvaluationV2, TirSourceOnlyErrorV1> {
-        self.evaluate(Target::Node { ctx, node, first_lane, lane_count })
+        self.evaluate(Target::Node { ctx, node, first_lane, lane_count }, None)
     }
     pub fn evaluate_legacy(self, leaf: &PalwTirLeafV1) -> Result<TirSourceOnlyEvaluationV2, TirSourceOnlyErrorV1> {
-        self.evaluate(Target::Legacy(*leaf))
+        self.evaluate(Target::Legacy(*leaf), None)
     }
-    fn evaluate(self, target: Target) -> Result<TirSourceOnlyEvaluationV2, TirSourceOnlyErrorV1> {
+    /// Observe the same evaluation, with the same limits/errors and no retry.
+    pub fn evaluate_node_with_diagnostics(
+        self,
+        ctx: DemandContext,
+        node: u16,
+        first_lane: u64,
+        lane_count: u32,
+        diagnostics: &mut EvaluationDiagnosticsV2,
+    ) -> Result<TirSourceOnlyEvaluationV2, TirSourceOnlyErrorV1> {
+        self.evaluate(Target::Node { ctx, node, first_lane, lane_count }, Some(diagnostics))
+    }
+    /// The observation is local resource use, not an authenticated verdict.
+    pub fn evaluate_legacy_with_diagnostics(
+        self,
+        leaf: &PalwTirLeafV1,
+        diagnostics: &mut EvaluationDiagnosticsV2,
+    ) -> Result<TirSourceOnlyEvaluationV2, TirSourceOnlyErrorV1> {
+        self.evaluate(Target::Legacy(*leaf), Some(diagnostics))
+    }
+    fn evaluate(
+        self,
+        target: Target,
+        mut diagnostics: Option<&mut EvaluationDiagnosticsV2>,
+    ) -> Result<TirSourceOnlyEvaluationV2, TirSourceOnlyErrorV1> {
+        if let Some(d) = diagnostics.as_deref_mut() {
+            *d = EvaluationDiagnosticsV2 { stage: EvaluationStageV2::TargetGeometry, ..Default::default() };
+        }
         let mut geometry = target_geometry(&self.verified, self.binding, self.frontier, target, self.limits)?;
+        if let Some(d) = diagnostics.as_deref_mut() {
+            d.stage = EvaluationStageV2::Workspace;
+        }
         let workspace_bytes = workspace_quote(&self.verified, geometry.lane_count, &self.rules, self.limits)?;
+        if let Some(d) = diagnostics.as_deref_mut() {
+            d.workspace_bytes = Some(workspace_bytes);
+        }
         geometry.prepare_elements(target)?;
         let reads = Rc::new(Cell::new(0));
         let mut source = TirSource {
@@ -250,9 +305,25 @@ impl AuthenticatedTirSourceOnlyV2<'_> {
             used_supplied: BTreeSet::new(),
             read_budget: Some((reads.clone(), self.limits.max_source_reads)),
         };
-        let (values, work) = evaluate_target(&self.verified, target, &geometry, &mut source, &self.rules)
-            .map_err(|error| evaluation_error(error, reads.get(), self.limits.max_source_reads))?;
+        if let Some(d) = diagnostics.as_deref_mut() {
+            d.stage = EvaluationStageV2::Evaluation;
+        }
+        let result = evaluate_target(&self.verified, target, &geometry, &mut source, &self.rules);
+        if let Some(d) = diagnostics.as_deref_mut() {
+            d.source_reads = reads.get();
+            d.work = match &result {
+                Ok((_, work)) | Err(DemandError::WorkLimit(work)) => Some(*work),
+                _ => None,
+            };
+        }
+        let (values, work) = result.map_err(|error| evaluation_error(error, reads.get(), self.limits.max_source_reads))?;
+        if let Some(d) = diagnostics.as_deref_mut() {
+            d.stage = EvaluationStageV2::CanonicalClosure;
+        }
         canonical(self.material, &self.operands, &self.prompt_tiles, &source.used, self.rules.prompt_form)?;
+        if let Some(d) = diagnostics {
+            d.stage = EvaluationStageV2::Complete;
+        }
         Ok(TirSourceOnlyEvaluationV2 {
             values,
             work,
