@@ -14,6 +14,10 @@ cfg-if.workspace = true
 log.workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+kaspa-core.workspace = true
+prost.workspace = true
+tonic.workspace = true
+tonic-prost.workspace = true
 bytes.workspace = true
 futures.workspace = true
 http-body.workspace = true

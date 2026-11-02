@@ -3,8 +3,10 @@ use crate::pb::RejectMessage;
 use crate::pb::{KaspadMessage, kaspad_message::Payload as KaspadMessagePayload};
 use crate::{KaspadMessagePayloadType, common::ProtocolError};
 use crate::{Peer, make_message};
+use kaspa_core::memory_budget::MemoryBudget;
 use kaspa_core::{debug, error, info, trace, warn};
 use kaspa_utils::networking::PeerId;
+use kaspa_utils_tower::transport::{Outbound, connection_budget};
 use parking_lot::{Mutex, RwLock};
 use seqlock::SeqLock;
 use std::fmt::{Debug, Display};
@@ -144,7 +146,8 @@ pub struct Router {
     routing_map_by_id: RwLock<HashMap<u32, MpscSender<KaspadMessage>>>,
 
     /// The outgoing route for sending messages to this peer
-    outgoing_route: MpscSender<KaspadMessage>,
+    outgoing_route: MpscSender<Outbound<KaspadMessage>>,
+    outgoing_budget: Arc<MemoryBudget>,
 
     /// A channel sender for internal event management. Used to send information from each router to a central hub object
     hub_sender: MpscSender<HubEvent>,
@@ -190,7 +193,7 @@ impl Router {
         is_outbound: bool,
         hub_sender: MpscSender<HubEvent>,
         mut incoming_stream: Streaming<KaspadMessage>,
-        outgoing_route: MpscSender<KaspadMessage>,
+        outgoing_route: MpscSender<Outbound<KaspadMessage>>,
     ) -> Arc<Self> {
         let (start_sender, start_receiver) = oneshot_channel();
         let (shutdown_sender, mut shutdown_receiver) = oneshot_channel();
@@ -203,6 +206,7 @@ impl Router {
             routing_map_by_type: RwLock::new(HashMap::new()),
             routing_map_by_id: RwLock::new(HashMap::new()),
             outgoing_route,
+            outgoing_budget: connection_budget(),
             hub_sender,
             mutable_state: Mutex::new(RouterMutableState::new(Some(start_sender), Some(shutdown_sender))),
         });
@@ -421,7 +425,35 @@ impl Router {
 
     /// Enqueues a locally-originated message to be sent to the network peer
     pub async fn enqueue(&self, msg: KaspadMessage) -> Result<(), ProtocolError> {
+        self.enqueue_with_resources(msg, Vec::new()).await
+    }
+
+    /// Carry generation/session reservations through queue, codec, and final HTTP
+    /// Bytes ownership. Dropping the queue item or a failed send releases all tickets.
+    pub async fn enqueue_with_resources(
+        &self,
+        msg: KaspadMessage,
+        resources: tonic::codec::RetainedResources,
+    ) -> Result<(), ProtocolError> {
         assert!(msg.payload.is_some(), "Kaspad P2P message should always have a value");
+        let msg = Outbound::with_resources(msg, &self.outgoing_budget, resources)
+            .map_err(|_| ProtocolError::OutgoingRouteCapacityReached(self.to_string()))?;
+        self.enqueue_admitted(msg)
+    }
+
+    /// Transfer a preconstruction ticket without an additional global raw charge.
+    pub async fn enqueue_preallocated(
+        &self,
+        msg: KaspadMessage,
+        lease: kaspa_core::memory_budget::MemoryLease,
+        resources: tonic::codec::RetainedResources,
+    ) -> Result<(), ProtocolError> {
+        let msg = Outbound::with_preallocated(msg, &self.outgoing_budget, lease, resources)
+            .map_err(|_| ProtocolError::OutgoingRouteCapacityReached(self.to_string()))?;
+        self.enqueue_admitted(msg)
+    }
+
+    fn enqueue_admitted(&self, msg: Outbound<KaspadMessage>) -> Result<(), ProtocolError> {
         match self.outgoing_route.try_send(msg) {
             Ok(_) => Ok(()),
             Err(TrySendError::Closed(_)) => Err(ProtocolError::ConnectionClosed),
@@ -543,6 +575,7 @@ mod candidate_summary_route_tests {
             outgoing_route,
             hub_sender,
             mutable_state: Mutex::new(RouterMutableState::new(None, None)),
+            outgoing_budget: connection_budget(),
         }
     }
 

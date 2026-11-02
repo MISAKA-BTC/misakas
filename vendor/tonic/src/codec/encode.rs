@@ -1,7 +1,5 @@
-use super::compression::{
-    compress, CompressionEncoding, CompressionSettings, SingleMessageCompressionOverride,
-};
-use super::{BufferSettings, EncodeBuf, Encoder, DEFAULT_MAX_SEND_MESSAGE_SIZE, HEADER_SIZE};
+use super::compression::{compress, CompressionEncoding, CompressionSettings, SingleMessageCompressionOverride};
+use super::{BufferSettings, EncodeBuf, Encoder, RetainedResources, DEFAULT_MAX_SEND_MESSAGE_SIZE, HEADER_SIZE};
 use crate::Status;
 use bytes::{BufMut, Bytes, BytesMut};
 use http::HeaderMap;
@@ -24,10 +22,7 @@ fn take_encoded_buffer(buf: &mut BytesMut, settings: BufferSettings) -> Bytes {
         // slow reader own that large backing when its actual wire frame is
         // tiny. The ratio gate bounds this extra copy to <=1/4 of that backing;
         // large plain frames still move without a second full-message copy.
-        if !buf.is_empty()
-            && buf.capacity() / buf.len() >= 4
-            && buf.capacity() - buf.len() > reuse_limit
-        {
+        if !buf.is_empty() && buf.capacity() / buf.len() >= 4 && buf.capacity() - buf.len() > reuse_limit {
             let frame = Bytes::copy_from_slice(buf);
             *buf = BytesMut::with_capacity(settings.buffer_size);
             return frame;
@@ -37,6 +32,25 @@ fn take_encoded_buffer(buf: &mut BytesMut, settings: BufferSettings) -> Bytes {
         std::mem::replace(buf, BytesMut::with_capacity(settings.buffer_size)).freeze()
     } else {
         buf.split_to(buf.len()).freeze()
+    }
+}
+
+#[derive(Debug)]
+struct RetainedFrame {
+    bytes: Bytes,
+    _resources: RetainedResources,
+}
+impl AsRef<[u8]> for RetainedFrame {
+    fn as_ref(&self) -> &[u8] {
+        self.bytes.as_ref()
+    }
+}
+fn take_retained_frame(buf: &mut BytesMut, settings: BufferSettings, resources: &mut RetainedResources) -> Bytes {
+    let bytes = take_encoded_buffer(buf, settings);
+    if resources.is_empty() {
+        bytes
+    } else {
+        Bytes::from_owner(RetainedFrame { bytes, _resources: std::mem::take(resources) })
     }
 }
 
@@ -65,6 +79,7 @@ struct EncodedBytes<T, U> {
     buf: BytesMut,
     uncompression_buf: BytesMut,
     error: Option<Status>,
+    resources: RetainedResources,
 }
 
 impl<T: Encoder, U: Stream> EncodedBytes<T, U> {
@@ -79,17 +94,10 @@ impl<T: Encoder, U: Stream> EncodedBytes<T, U> {
         let buf = BytesMut::with_capacity(buffer_settings.buffer_size);
 
         let compression_encoding =
-            if compression_override == SingleMessageCompressionOverride::Disable {
-                None
-            } else {
-                compression_encoding
-            };
+            if compression_override == SingleMessageCompressionOverride::Disable { None } else { compression_encoding };
 
-        let uncompression_buf = if compression_encoding.is_some() {
-            BytesMut::with_capacity(buffer_settings.buffer_size)
-        } else {
-            BytesMut::new()
-        };
+        let uncompression_buf =
+            if compression_encoding.is_some() { BytesMut::with_capacity(buffer_settings.buffer_size) } else { BytesMut::new() };
 
         Self {
             source: source.fuse(),
@@ -99,6 +107,7 @@ impl<T: Encoder, U: Stream> EncodedBytes<T, U> {
             buf,
             uncompression_buf,
             error: None,
+            resources: Vec::new(),
         }
     }
 }
@@ -111,15 +120,8 @@ where
     type Item = Result<Bytes, Status>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let EncodedBytesProj {
-            mut source,
-            encoder,
-            compression_encoding,
-            max_message_size,
-            buf,
-            uncompression_buf,
-            error,
-        } = self.project();
+        let EncodedBytesProj { mut source, encoder, compression_encoding, max_message_size, buf, uncompression_buf, error, resources } =
+            self.project();
         let buffer_settings = encoder.buffer_settings();
 
         if let Some(status) = error.take() {
@@ -135,23 +137,23 @@ where
                     return Poll::Ready(None);
                 }
                 Poll::Pending | Poll::Ready(None) => {
-                    return Poll::Ready(Some(Ok(take_encoded_buffer(buf, buffer_settings))));
+                    return Poll::Ready(Some(Ok(take_retained_frame(buf, buffer_settings, resources))));
                 }
                 Poll::Ready(Some(Ok(item))) => {
-                    if let Err(status) = encode_item(
-                        encoder,
-                        buf,
-                        uncompression_buf,
-                        *compression_encoding,
-                        *max_message_size,
-                        buffer_settings,
-                        item,
-                    ) {
+                    if let Err(status) =
+                        encode_item(encoder, buf, uncompression_buf, *compression_encoding, *max_message_size, buffer_settings, item)
+                    {
+                        // An error terminates this body; free partial buffers and tickets now.
+                        *buf = BytesMut::new();
+                        *uncompression_buf = BytesMut::new();
+                        resources.clear();
+                        drop(encoder.take_resources());
                         return Poll::Ready(Some(Err(status)));
                     }
+                    resources.append(&mut encoder.take_resources());
 
                     if buf.len() >= buffer_settings.yield_threshold {
-                        return Poll::Ready(Some(Ok(take_encoded_buffer(buf, buffer_settings))));
+                        return Poll::Ready(Some(Ok(take_retained_frame(buf, buffer_settings, resources))));
                     }
                 }
                 Poll::Ready(Some(Err(status))) => {
@@ -159,7 +161,7 @@ where
                         return Poll::Ready(Some(Err(status)));
                     }
                     *error = Some(status);
-                    return Poll::Ready(Some(Ok(take_encoded_buffer(buf, buffer_settings))));
+                    return Poll::Ready(Some(Ok(take_retained_frame(buf, buffer_settings, resources))));
                 }
             }
         }
@@ -178,6 +180,30 @@ fn encode_item<T>(
 where
     T: Encoder<Error = Status>,
 {
+    encoder.prepare_encode(&item).map_err(|err| Status::resource_exhausted(format!("Encoder admission: {err}")))?;
+    if let Some(size) = encoder.encoded_len(&item) {
+        // The admission above includes both simultaneous allocations. Fresh exact
+        // large buffers avoid doubling an old scratch allocation during growth.
+        let limit = max_message_size.unwrap_or(DEFAULT_MAX_SEND_MESSAGE_SIZE);
+        if size > limit {
+            return Err(Status::out_of_range("message exceeds configured encoding limit"));
+        }
+        if size > MAX_RETAINED_ENCODER_BUFFER_SIZE {
+            if compression_encoding.is_some() {
+                *uncompression_buf = BytesMut::with_capacity(size);
+                // gzip expansion is bounded by framing; the extra 1/8 plus 64KiB
+                // also covers the generic compressor's growth interval rounding.
+                let mut next =
+                    BytesMut::with_capacity(buf.len().saturating_add(size).saturating_add(size / 8).saturating_add(64 * 1024));
+                next.extend_from_slice(buf);
+                *buf = next;
+            } else {
+                let mut next = BytesMut::with_capacity(buf.len().saturating_add(size).saturating_add(HEADER_SIZE));
+                next.extend_from_slice(buf);
+                *buf = next;
+            }
+        }
+    }
     let offset = buf.len();
 
     buf.reserve(HEADER_SIZE);
@@ -197,10 +223,7 @@ where
         let uncompressed_len = uncompression_buf.len();
 
         let compressed = compress(
-            CompressionSettings {
-                encoding,
-                buffer_growth_interval: buffer_settings.buffer_size,
-            },
+            CompressionSettings { encoding, buffer_growth_interval: buffer_settings.buffer_size },
             uncompression_buf,
             buf,
             uncompressed_len,
@@ -208,9 +231,7 @@ where
         release_oversized_scratch(uncompression_buf, uncompressed_len, buffer_settings);
         compressed.map_err(|err| Status::internal(format!("Error compressing: {err}")))?;
     } else {
-        encoder
-            .encode(item, &mut EncodeBuf::new(buf))
-            .map_err(|err| Status::internal(format!("Error encoding: {err}")))?;
+        encoder.encode(item, &mut EncodeBuf::new(buf)).map_err(|err| Status::internal(format!("Error encoding: {err}")))?;
     }
 
     // now that we know length, we can write the header
@@ -231,9 +252,7 @@ fn finish_encoding(
     }
 
     if len > u32::MAX as usize {
-        return Err(Status::resource_exhausted(format!(
-            "Cannot return body with more than 4GB of data but got {len} bytes"
-        )));
+        return Err(Status::resource_exhausted(format!("Cannot return body with more than 4GB of data but got {len} bytes")));
     }
     {
         let mut buf = &mut buf[..HEADER_SIZE];
@@ -283,11 +302,7 @@ impl<T: Encoder, U: Stream> EncodeBody<T, U> {
                 SingleMessageCompressionOverride::default(),
                 max_message_size,
             ),
-            state: EncodeState {
-                error: None,
-                role: Role::Client,
-                is_end_stream: false,
-            },
+            state: EncodeState { error: None, role: Role::Client, is_end_stream: false },
         }
     }
 
@@ -301,18 +316,8 @@ impl<T: Encoder, U: Stream> EncodeBody<T, U> {
         max_message_size: Option<usize>,
     ) -> Self {
         Self {
-            inner: EncodedBytes::new(
-                encoder,
-                source,
-                compression_encoding,
-                compression_override,
-                max_message_size,
-            ),
-            state: EncodeState {
-                error: None,
-                role: Role::Server,
-                is_end_stream: false,
-            },
+            inner: EncodedBytes::new(encoder, source, compression_encoding, compression_override, max_message_size),
+            state: EncodeState { error: None, role: Role::Server, is_end_stream: false },
         }
     }
 }
@@ -327,11 +332,7 @@ impl EncodeState {
                 }
 
                 self.is_end_stream = true;
-                let status = if let Some(status) = self.error.take() {
-                    status
-                } else {
-                    Status::ok("")
-                };
+                let status = if let Some(status) = self.error.take() { status } else { Status::ok("") };
                 Some(status.to_header_map())
             }
         }
@@ -350,10 +351,7 @@ where
         self.state.is_end_stream
     }
 
-    fn poll_frame(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
+    fn poll_frame(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
         let self_proj = self.project();
         match ready!(self_proj.inner.poll_next(cx)) {
             Some(Ok(d)) => Some(Ok(Frame::data(d))).into(),
@@ -364,11 +362,7 @@ where
                     Some(Ok(Frame::trailers(status.to_header_map()?))).into()
                 }
             },
-            None => self_proj
-                .state
-                .trailers()
-                .map(|t| t.map(Frame::trailers))
-                .into(),
+            None => self_proj.state.trailers().map(|t| t.map(Frame::trailers)).into(),
         }
     }
 }
