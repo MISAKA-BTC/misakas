@@ -317,6 +317,10 @@ jobs:
     name: Building WASM32 SDK
     permissions:
       contents: read
+    # Match the CI SDK job: retain debug locations without full type/variable
+    # information across the ten variants, keeping all runtime checks unchanged.
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "1"
     steps:
       - name: Checkout sources
         uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3
