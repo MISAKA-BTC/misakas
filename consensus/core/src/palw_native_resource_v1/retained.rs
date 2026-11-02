@@ -112,7 +112,7 @@ impl<T: NativeHeapV1> NativeRetainedV1<T> {
     /// source's complete typed request is an explicit conservative copy bound.
     fn try_project_v1<U>(&self, f: impl FnOnce(&T) -> U) -> Result<NativeRetainedV1<U>, NativeCoverageV1> {
         let lease = if enabled() || self._lease.is_some() {
-            reserve_native_pending_requests_v1(value_requests_v1(&self.value)?)?
+            reserve_native_pending_requests_v1(tracked_value_requests_v1(&self.value)?)?
         } else {
             None
         };
@@ -193,14 +193,22 @@ impl<T: Clone + NativeHeapV1> NativeRetainedV1<T> {
 fn enabled() -> bool {
     native_logical_admission_enabled_v1() || native_resource_admission_enabled_v1()
 }
+/// Compatibility quote for optional-capability writers. An ordinary raw
+/// transition has no preconstruction ticket; changing its zero quote would
+/// make its final postcondition demand bytes no writer ever reserved.
 pub(crate) fn value_requests_v1<T: NativeHeapV1>(value: &T) -> Result<u64, NativeCoverageV1> {
+    if !enabled() {
+        return Ok(0);
+    }
+    tracked_value_requests_v1(value)
+}
+/// Actual typed quote only for an explicitly tracked owner/construction.
+/// This must not replace value_requests_v1 in legacy raw writer paths.
+pub(crate) fn tracked_value_requests_v1<T: NativeHeapV1>(value: &T) -> Result<u64, NativeCoverageV1> {
     let bound = value.native_heap_v1("native retained payload").add::<T>(
         NativeCoverageV1::Bounded { bytes: (size_of::<NativeRetainedV1<T>>() + size_of::<[usize; 3]>()) as u64 },
         "native retained Arc/owner",
     );
-    if !enabled() {
-        return Ok(bound.bytes().unwrap_or(0));
-    }
     bound.bytes().ok_or(bound)
 }
 
