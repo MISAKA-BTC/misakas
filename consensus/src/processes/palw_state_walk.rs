@@ -27,8 +27,6 @@ use crate::model::stores::palw_state_v2::DbPalwStateV2Store;
 
 #[derive(thiserror::Error, Debug)]
 pub enum PalwStateWalkError {
-    #[error("local consensus is exiting between state deltas")]
-    ConsensusExiting,
     #[error("no PALW state anchor is stored — a node that has never written one cannot walk")]
     NoAnchor,
     #[error("block {0} has no stored PALW delta — a missing delta is an error, never an empty one")]
@@ -114,7 +112,16 @@ pub fn walk_chain_path_retained_v1(
     removed: &[BlockHash],
     added: &[BlockHash],
 ) -> Result<kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1, PalwStateWalkError> {
-    walk_chain_path_retained_until_v1(store, params, state, removed, added, || false)
+    match walk_chain_path_retained_until_v1(store, params, state, removed, added, || false)? {
+        PalwStateWalkOutcomeV1::Complete(state) => Ok(state),
+        PalwStateWalkOutcomeV1::ConsensusExiting => unreachable!("the compatibility walk never requests shutdown"),
+    }
+}
+
+#[derive(Debug)]
+pub(crate) enum PalwStateWalkOutcomeV1 {
+    Complete(kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1),
+    ConsensusExiting,
 }
 
 /// Shutdown checks run between complete delta folds; this walk never writes stores.
@@ -125,11 +132,11 @@ pub(crate) fn walk_chain_path_retained_until_v1(
     removed: &[BlockHash],
     added: &[BlockHash],
     mut should_stop: impl FnMut() -> bool,
-) -> Result<kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1, PalwStateWalkError> {
+) -> Result<PalwStateWalkOutcomeV1, PalwStateWalkError> {
     for (blocks, revert) in [(removed, true), (added, false)] {
         for block in blocks {
             if should_stop() {
-                return Err(PalwStateWalkError::ConsensusExiting);
+                return Ok(PalwStateWalkOutcomeV1::ConsensusExiting);
             }
             let delta = store
                 .delta_of_retained_v1(*block)
@@ -142,9 +149,9 @@ pub(crate) fn walk_chain_path_retained_until_v1(
         }
     }
     if should_stop() {
-        return Err(PalwStateWalkError::ConsensusExiting);
+        return Ok(PalwStateWalkOutcomeV1::ConsensusExiting);
     }
-    Ok(state)
+    Ok(PalwStateWalkOutcomeV1::Complete(state))
 }
 
 fn load_delta(
@@ -449,7 +456,7 @@ mod tests {
         request.recv_timeout(Duration::from_secs(5)).unwrap();
         flag.store(true, Ordering::Release);
         resume.send(()).unwrap();
-        assert!(matches!(worker.join().unwrap(), Err(PalwStateWalkError::ConsensusExiting)));
+        assert!(matches!(worker.join().unwrap(), Ok(PalwStateWalkOutcomeV1::ConsensusExiting)));
         let after: Vec<_> = db.iterator(rocksdb::IteratorMode::Start).map(Result::unwrap).collect();
         assert_eq!(before, after, "cancelling a reconstruction never writes partial state or changes block/delta rows");
         let fresh = DbPalwStateV2Store::new(db.clone(), CachePolicy::Count(64));
@@ -471,7 +478,7 @@ mod tests {
             &[h64(0xDEAD)],
             || true,
         );
-        assert!(matches!(stopped, Err(PalwStateWalkError::ConsensusExiting)), "shutdown precedes missing-row classification");
+        assert!(matches!(stopped, Ok(PalwStateWalkOutcomeV1::ConsensusExiting)), "shutdown precedes missing-row classification");
     }
 
     /// The walk agrees with the in-memory book — the same states, reached two ways. If a store
