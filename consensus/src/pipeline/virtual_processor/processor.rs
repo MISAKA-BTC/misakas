@@ -2082,7 +2082,7 @@ impl VirtualStateProcessor {
                             &added,
                             || self.is_consensus_exiting.load(Ordering::Acquire),
                         ) {
-                            Ok(state) => {
+                            Ok(crate::processes::palw_state_walk::PalwStateWalkOutcomeV1::Complete(state)) => {
                                 warn!(
                                     "PALW V2 state tip stood at {tip_block} while the UTXO walk starts at {from} (an unclean shutdown between the two commits); re-derived the state at {from} over {} reverted and {} applied deltas",
                                     removed.len(),
@@ -2090,10 +2090,10 @@ impl VirtualStateProcessor {
                                 );
                                 Some(state)
                             }
+                            Ok(crate::processes::palw_state_walk::PalwStateWalkOutcomeV1::ConsensusExiting) => {
+                                return Err(PalwLocalTransitionFaultV1::Shutdown);
+                            }
                             Err(e) => {
-                                if matches!(e, crate::processes::palw_state_walk::PalwStateWalkError::ConsensusExiting) {
-                                    return Err(PalwLocalTransitionFaultV1::Shutdown);
-                                }
                                 if let Some(context) = e.native_context_v1() {
                                     return Err(PalwLocalTransitionFaultV1::Context(context));
                                 }
@@ -2132,7 +2132,7 @@ impl VirtualStateProcessor {
                                             &snap_added,
                                             || self.is_consensus_exiting.load(Ordering::Acquire),
                                         ) {
-                                            Ok(state) => {
+                                            Ok(crate::processes::palw_state_walk::PalwStateWalkOutcomeV1::Complete(state)) => {
                                                 warn!(
                                                     "PALW V2 state tip stands at {tip_block}, the UTXO walk starts at {from}, and the path between them cannot be walked ({e}); \
                                                      rebuilt the state at {from} from the pruning snapshot at {snap_block} instead ({} block(s) reverted, {} applied). \
@@ -2142,13 +2142,10 @@ impl VirtualStateProcessor {
                                                 );
                                                 Some(state)
                                             }
+                                            Ok(crate::processes::palw_state_walk::PalwStateWalkOutcomeV1::ConsensusExiting) => {
+                                                return Err(PalwLocalTransitionFaultV1::Shutdown);
+                                            }
                                             Err(snap_err) => {
-                                                if matches!(
-                                                    snap_err,
-                                                    crate::processes::palw_state_walk::PalwStateWalkError::ConsensusExiting
-                                                ) {
-                                                    return Err(PalwLocalTransitionFaultV1::Shutdown);
-                                                }
                                                 if let Some(context) = snap_err.native_context_v1() {
                                                     return Err(PalwLocalTransitionFaultV1::Context(context));
                                                 }
