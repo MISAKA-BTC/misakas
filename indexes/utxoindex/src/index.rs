@@ -163,6 +163,14 @@ impl UtxoIndexApi for UtxoIndex {
         self.store.get_utxos_by_script_public_key(script_public_keys)
     }
 
+    fn get_utxos_by_script_public_keys_bounded(
+        &self,
+        script_public_keys: ScriptPublicKeys,
+        max_entries: usize,
+    ) -> StoreResult<UtxoSetByScriptPublicKey> {
+        self.store.get_utxos_by_script_public_key_bounded(script_public_keys, max_entries)
+    }
+
     /// Retrieve a bounded page of utxos for a single script public key from the utxoindex db.
     fn get_utxos_by_script_public_key_chunk(
         &self,

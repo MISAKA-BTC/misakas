@@ -38,6 +38,14 @@ impl Store {
         self.utxos_by_script_public_key_store.get_utxos_from_script_public_keys(script_public_keys)
     }
 
+    pub fn get_utxos_by_script_public_key_bounded(
+        &self,
+        script_public_keys: ScriptPublicKeys,
+        max_entries: usize,
+    ) -> StoreResult<UtxoSetByScriptPublicKey> {
+        self.utxos_by_script_public_key_store.get_utxos_from_script_public_keys_bounded(script_public_keys, max_entries)
+    }
+
     pub fn get_utxos_by_script_public_key_chunk(
         &self,
         script_public_key: &ScriptPublicKey,
