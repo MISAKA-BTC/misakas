@@ -1,0 +1,25 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running unittests src/lib.rs (/tmp/misaka-transport-target/debug/deps/misaka_transport_memory_harness-5edf3293e2221b36)
+
+running 1 test
+test inbound_gap_tests::exhausted_process_budget_must_refuse_plain_and_gzip_before_decoded_heap ... INBOUND_GAP gzip=false wire=8203 schema_peak=3833856 decoded_heap=2555904 bank_full=1048576 bank_after_dequeue=1048576 accumulated_headers=4097
+INBOUND_GAP gzip=true wire=55 schema_peak=3833856 decoded_heap=2555904 bank_full=1048576 bank_after_dequeue=1048576 accumulated_headers=8194
+
+thread 'inbound_gap_tests::exhausted_process_budget_must_refuse_plain_and_gzip_before_decoded_heap' (1165822) panicked at src/inbound_gap_tests.rs:82:5:
+assertion `left == right` failed: KNOWN GAP: a full process bank admitted and retained decoded protobuf allocations
+  left: 2
+ right: 0
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    inbound_gap_tests::exhausted_process_budget_must_refuse_plain_and_gzip_before_decoded_heap
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 36 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `--lib`

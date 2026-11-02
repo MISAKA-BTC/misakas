@@ -91,3 +91,10 @@ preallocated snapshot purpose/pending phases, queue saturation, encoding progres
 large/small/idle scratch capacity, shared Bytes, and unread next frames. They do
 not establish whole-Node OOM safety, Court deadlines under load, IBD/reorg combined
 operation, native maximum-context execution, or multiple deployed processes.
+
+
+Receive follow-up (2026-11-03): the exact implementation cut and bounded known-
+failing reproductions for items1/2 are recorded in `INBOUND-INTEGRATION.md`.
+Production codec/route/peer policy is unchanged. Connecting the current inspector
+would reject valid duplicate message/oneof encodings; wrapping only an incoming
+queue item returns its ticket before the production unwrap macro's payload dies.

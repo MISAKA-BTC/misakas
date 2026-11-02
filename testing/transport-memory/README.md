@@ -32,3 +32,9 @@ Run the large field check:
 ```sh
 CARGO_BUILD_JOBS=1 CARGO_TARGET_DIR=/tmp/misaka-transport-target cargo test --locked --manifest-path testing/transport-memory/Cargo.toml largest_legitimate_bytes_field -- --ignored --test-threads=1 --nocapture
 ```
+
+The remaining receive-owner cut and intentionally failing opt-in counterexamples
+are described in [INBOUND-INTEGRATION.md](INBOUND-INTEGRATION.md). They reproduce
+actual decoding with an exhausted process bank and the actual payload-extraction
+macro returning a queue-only ticket before the payload dies. They are ignored in
+the normal suite and are not a deployed receive admission fix.

@@ -5,6 +5,20 @@ fn main() {
         unsafe { std::env::set_var("PROTOC", protoc_bin_vendored::protoc_bin_path().unwrap()) };
     }
     let out = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
+    // Compile the actual production payload-extraction macro in the isolated
+    // lifetime counterexample, without pulling consensus/Node into this harness.
+    let common_path = "../../protocol/p2p/src/common.rs";
+    let common = syn::parse_file(&std::fs::read_to_string(common_path).unwrap()).unwrap();
+    let macros: Vec<_> = common
+        .items
+        .iter()
+        .filter(|item| matches!(item, syn::Item::Macro(item) if item.ident.as_ref().is_some_and(|id| id == "unwrap_message")))
+        .collect();
+    assert_eq!(macros.len(), 1, "production unwrap macro changed");
+    let item = macros[0];
+    std::fs::write(out.join("production_unwrap_message.rs"), quote::quote!(#item).to_string()).unwrap();
+    println!("cargo:rerun-if-changed={common_path}");
+
     for (name, dir, package, req, res) in [
         ("p2p", "../../protocol/p2p/proto", "protowire", "KaspadMessage", "KaspadMessage"),
         ("rpc", "../../rpc/grpc/core/proto", "protowire.kaspapq", "KaspadRequest", "KaspadResponse"),

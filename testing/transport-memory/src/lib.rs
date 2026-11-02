@@ -27,3 +27,25 @@ mod protocol_tests;
 #[cfg(test)]
 #[path = "../../../utils/tower/tests/transport_budget.rs"]
 mod transport_budget_tests;
+
+// These tiny types instantiate only the unused error arms of the real macro.
+// The reproduction exercises its successful move, not protocol error policy.
+#[cfg(test)]
+pub mod common {
+    #[derive(Debug)]
+    pub struct PayloadKind;
+    impl From<&crate::p2p::kaspad_message::Payload> for PayloadKind {
+        fn from(_: &crate::p2p::kaspad_message::Payload) -> Self {
+            Self
+        }
+    }
+    #[derive(Debug)]
+    pub enum ProtocolError {
+        UnexpectedMessage(&'static str, Option<PayloadKind>),
+        ConnectionClosed,
+    }
+}
+#[cfg(test)]
+include!(concat!(env!("OUT_DIR"), "/production_unwrap_message.rs"));
+#[cfg(test)]
+mod inbound_gap_tests;
