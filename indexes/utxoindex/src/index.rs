@@ -171,6 +171,16 @@ impl UtxoIndexApi for UtxoIndex {
         self.store.get_utxos_by_script_public_key_bounded(script_public_keys, max_entries)
     }
 
+    fn get_utxos_by_script_public_keys_reserved(
+        &self,
+        script_public_keys: ScriptPublicKeys,
+        max_entries: usize,
+        per_entry_bytes: u64,
+        base_bytes: u64,
+    ) -> StoreResult<(UtxoSetByScriptPublicKey, kaspa_core::memory_budget::MemoryLease)> {
+        self.store.get_utxos_by_script_public_key_reserved(script_public_keys, max_entries, per_entry_bytes, base_bytes)
+    }
+
     /// Retrieve a bounded page of utxos for a single script public key from the utxoindex db.
     fn get_utxos_by_script_public_key_chunk(
         &self,

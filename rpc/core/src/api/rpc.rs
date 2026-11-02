@@ -350,6 +350,16 @@ pub trait RpcApi: Sync + Send + AnySync {
     async fn get_utxos_by_addresses(&self, addresses: Vec<RpcAddress>) -> RpcResult<Vec<RpcUtxosByAddressesEntry>> {
         Ok(self.get_utxos_by_addresses_call(None, GetUtxosByAddressesRequest::new(addresses)).await?.entries)
     }
+    /// Internal generation-to-transport ownership. Existing client/mock
+    /// implementations keep their original call semantics by default.
+    async fn get_utxos_by_addresses_retained_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetUtxosByAddressesRequest,
+    ) -> RpcResult<crate::RetainedRpcReply<GetUtxosByAddressesResponse>> {
+        self.get_utxos_by_addresses_call(connection, request).await.map(crate::RetainedRpcReply::untracked)
+    }
+
     async fn get_utxos_by_addresses_call(
         &self,
         connection: Option<&DynRpcConnection>,
