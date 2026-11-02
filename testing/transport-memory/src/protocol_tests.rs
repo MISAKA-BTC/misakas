@@ -3,6 +3,40 @@ use http_body_util::BodyExt;
 use prost::Message;
 use tonic::codec::{Codec, EncodeBody};
 
+#[test]
+fn utxo_conversion_quote_covers_actual_generated_protobuf_capacities() {
+    use transport::RetainedSize;
+    for (entries, address_payload, script_bytes) in [(0usize, 0usize, 0usize), (1, 64, 74), (4097, 64, 74), (3, 256, 8192)] {
+        // Match the production shape: owned address, Hash64 hex, script hex,
+        // nested optional outpoint/utxo/script structs, and no verbose entry.
+        let mut rows = Vec::with_capacity(if entries == 0 { 0 } else { entries.next_power_of_two() });
+        for index in 0..entries {
+            rows.push(rpc::RpcUtxosByAddressesEntry {
+                address: "a".repeat(2 * address_payload + 64),
+                outpoint: Some(rpc::RpcOutpoint { transaction_id: "b".repeat(128), index: index as u32 }),
+                utxo_entry: Some(rpc::RpcUtxoEntry {
+                    amount: 1,
+                    script_public_key: Some(rpc::RpcScriptPublicKey { version: 0, script_public_key: "c".repeat(2 * script_bytes) }),
+                    ..Default::default()
+                }),
+            });
+        }
+        let message = rpc::KaspadResponse {
+            id: 7,
+            payload: Some(rpc::kaspad_response::Payload::GetUtxosByAddressesResponse(rpc::GetUtxosByAddressesResponseMessage {
+                entries: rows,
+                error: None,
+            })),
+        };
+        let actual_owned = (std::mem::size_of::<rpc::KaspadResponse>() as u64) + message.retained_heap_bytes() + 128;
+        let quote = utxo_memory::utxo_proto_reservation_bytes(entries as u64, address_payload as u64, script_bytes as u64).unwrap();
+        assert!(
+            actual_owned <= quote,
+            "entries={entries} address={address_payload} script={script_bytes} quote={quote} actual={actual_owned}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn snapshot_ticket_keeps_its_class_without_reviving_pending_bytes() {
     let snapshot_bank = memory_budget::MemoryBudget::new(4 << 20, [4 << 20; 4]);

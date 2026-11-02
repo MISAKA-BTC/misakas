@@ -5,6 +5,8 @@ extern crate self as kaspa_utils_tower;
 pub mod memory_budget;
 #[path = "../../../utils/tower/src/transport.rs"]
 pub mod transport;
+#[path = "../../../rpc/core/src/api/retained/utxo_memory.rs"]
+pub mod utxo_memory;
 #[path = "../../../utils/tower/src/wire_preflight.rs"]
 pub mod wire_preflight;
 pub mod p2p {

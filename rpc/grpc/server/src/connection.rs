@@ -353,6 +353,23 @@ impl Connection {
             self.close();
             GrpcServerError::OutgoingRouteCapacityReached(self.to_string())
         })?;
+        self.enqueue_admitted(response)
+    }
+
+    pub(crate) async fn enqueue_preallocated(
+        &self,
+        response: KaspadResponse,
+        lease: kaspa_core::memory_budget::MemoryLease,
+    ) -> GrpcServerResult<()> {
+        assert!(response.payload.is_some(), "Kaspad gRPC message should always have a value");
+        let response = Outbound::with_preallocated(response, &self.inner.outgoing_budget, lease, Vec::new()).map_err(|_| {
+            self.close();
+            GrpcServerError::OutgoingRouteCapacityReached(self.to_string())
+        })?;
+        self.enqueue_admitted(response)
+    }
+
+    fn enqueue_admitted(&self, response: Outbound<KaspadResponse>) -> GrpcServerResult<()> {
         match self.inner.outgoing_route.try_send(response) {
             Ok(_) => Ok(()),
             Err(TrySendError::Closed(_)) => Err(GrpcServerError::ConnectionClosed),
