@@ -73,6 +73,12 @@ async fn legacy_evm_256mib_and_p2p_320mib_envelopes_remain_usable() {
             assert!(retained_peak < 1536 << 20);
             assert_eq!(frame[0], u8::from(gzip));
             let frame_bytes = frame.len();
+            if !gzip {
+                use crate::wire_preflight::WirePreflight;
+                let schema = p2p::KaspadMessage::wire_heap_bound(&frame[5..], 0).unwrap();
+                assert_eq!(schema.retained_bytes, payload_bytes as u64);
+                assert_eq!(schema.peak_bytes, payload_bytes as u64);
+            }
             drop(body);
             let mut receive_codec = transport::BudgetedProstCodec::<p2p::KaspadMessage, p2p::KaspadMessage>::default();
             let mut receive = tonic::Streaming::new_request(

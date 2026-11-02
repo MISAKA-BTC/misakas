@@ -11,3 +11,14 @@ It checks 256 MiB EVM and near-320 MiB P2P frames, plain/gzip round trips, bound
 reservation peaks, and final lease return. It does not measure process RSS or
 cover consensus, DB, native model execution, RPC response construction, inbound
 decoded-message lifetimes, or critical notification replay.
+
+The generated `WirePreflight` inspectors are tested independently against actual
+prost-decoded capacities (nested empty values, recursive Box, repeated primitive
+packing, strings, duplicate fragments, unknown fields, malformed input and depth).
+They are not connected to the runtime decoder yet. Their peak describes logical
+decoded capacities through tonic's contiguous input buffer, excluding receive/
+decompression buffers, stack and allocator metadata. Run the large field check:
+
+```sh
+CARGO_BUILD_JOBS=1 CARGO_TARGET_DIR=/tmp/misaka-transport-target cargo test --locked --manifest-path testing/transport-memory/Cargo.toml largest_legitimate_bytes_field -- --ignored --test-threads=1 --nocapture
+```

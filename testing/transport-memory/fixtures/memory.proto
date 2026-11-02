@@ -1,0 +1,23 @@
+syntax = "proto3";
+package oom.memory;
+message Node {
+  Node child = 1;
+  repeated Node children = 2;
+  bytes data = 3;
+  repeated bytes blobs = 4;
+  repeated string labels = 5;
+  repeated uint64 values = 6;
+  string label = 7;
+  oneof choice {
+    bytes selected = 8;
+    Node nested = 9;
+    uint32 scalar = 10;
+    string text = 11;
+  }
+}
+message Scalars {
+  repeated uint64 varints = 1;
+  repeated fixed64 wide = 2;
+  repeated sfixed32 small = 3;
+  optional bool flag = 4;
+}

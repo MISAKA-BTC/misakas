@@ -26,6 +26,11 @@ P1 incomplete ownership boundaries:
    decoded protobuf heap expansion still need schema-aware admission before
    allocating. The current decoder capacity fix releases completed large scratch;
    it does not limit simultaneous receive/decode allocations across connections.
+   Generated `WirePreflight` now inspects the fixed schemas before allocation and
+   has independent decode/capacity fixtures, but runtime reservation and transfer
+   into an inbound owner have not been connected. It bounds logical capacity;
+   allocator metadata, fragmented resident pages, stack, input and decompress
+   backing remain separate owners/costs.
 2. P2P incoming routes and RPC incoming handler queues still own plain protobuf
    values. Their decoded allocations and flow accumulators need tickets that
    travel into the final state owner; holding a ticket only until dequeue fails

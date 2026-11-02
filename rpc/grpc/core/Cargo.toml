@@ -39,6 +39,9 @@ triggered.workspace = true
 workflow-core.workspace = true
 
 [build-dependencies]
+syn = { version = "2", features = ["full"] }
+quote = "1"
+proc-macro2 = "1"
 tonic-prost-build = { workspace = true }
 protoc-bin-vendored = { workspace = true }
 

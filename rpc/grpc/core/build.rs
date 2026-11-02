@@ -29,6 +29,7 @@ fn main() {
         "KaspadResponse",
     );
     println!("cargo:rerun-if-changed=../../../utils/tower/build_transport.rs");
+    println!("cargo:rerun-if-changed=../../../utils/tower/build_wire_preflight.rs");
 
     // recompile protobufs only if any of the proto files changes.
     for file in protowire_files {
