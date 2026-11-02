@@ -50,6 +50,9 @@ fn take_retained_frame(buf: &mut BytesMut, settings: BufferSettings, resources: 
     if resources.is_empty() {
         bytes
     } else {
+        // A small split_to can leave an empty encoder tail sharing this frame's
+        // backing. Budgeted streams must drop that alias before its ticket returns.
+        *buf = BytesMut::with_capacity(settings.buffer_size);
         Bytes::from_owner(RetainedFrame { bytes, _resources: std::mem::take(resources) })
     }
 }
@@ -153,6 +156,11 @@ where
                         return Poll::Ready(Some(Err(status)));
                     }
                     resources.append(&mut encoder.take_resources());
+                    if !resources.is_empty() && compression_encoding.is_some() {
+                        // This peak ticket travels with the HTTP frame; its old
+                        // compression backing must not remain on an idle stream.
+                        *uncompression_buf = BytesMut::with_capacity(buffer_settings.buffer_size);
+                    }
 
                     if buf.len() >= buffer_settings.yield_threshold {
                         return Poll::Ready(Some(Ok(take_retained_frame(buf, buffer_settings, resources))));
