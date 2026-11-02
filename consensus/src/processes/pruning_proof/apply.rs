@@ -13,6 +13,7 @@ use kaspa_consensus_core::{
     errors::pruning::{PruningImportError, PruningImportResult},
     header::Header,
     pruning::PruningPointProof,
+    topological_order::{is_parent_first, stable_topological_order},
     trusted::TrustedBlock,
 };
 use kaspa_core::{debug, trace};
@@ -81,10 +82,10 @@ impl PruningProofManager {
                 expanded_proof[current_proof_level as usize].push(tb.block.header.clone());
             });
         }
-        // topologically sort every level in the proof
-        expanded_proof.iter_mut().for_each(|level_proof| {
-            level_proof.sort_by(|a, b| a.blue_work.cmp(&b.blue_work));
-        });
+        // Zero-weight PALW parents and children may tie on blue work. Sorting
+        // by work alone is not topological, especially after appending trusted
+        // headers. Do not let the level-0 ancestor filter silently omit a parent.
+        self.order_expanded_proof(&mut expanded_proof)?;
 
         self.populate_reachability_and_headers(&expanded_proof)?;
 
@@ -176,6 +177,26 @@ impl PruningProofManager {
         Ok(())
     }
 
+    /// Preserve the existing work order wherever it already respects parent
+    /// dependencies. This changes import construction order, not GHOSTDAG order.
+    fn order_expanded_proof(&self, proof: &mut PruningPointProof) -> PruningImportResult<()> {
+        let point = proof.first().and_then(|level| level.last()).map_or(ORIGIN, |header| header.hash);
+        for (level, headers) in proof.iter_mut().enumerate() {
+            let mut ordered = std::mem::take(headers);
+            ordered.sort_by(|a, b| a.blue_work.cmp(&b.blue_work));
+            let parents = |header: &Arc<Header>| self.parents_manager.parents_at_level(header, level as BlockLevel).to_vec();
+            ordered = stable_topological_order(ordered, |header| header.hash, parents);
+            if !is_parent_first(&ordered, |header| header.hash, parents) {
+                return Err(PruningImportError::PruningPointImportContextUnavailable(
+                    point,
+                    format!("proof level {level} has cyclic parent dependencies"),
+                ));
+            }
+            *headers = ordered;
+        }
+        Ok(())
+    }
+
     /// Block levels for `headers`, in order, computed in bounded parallel batches.
     ///
     /// Callers must gate every header first to enforce the network's algorithm and shape rules.
@@ -223,9 +244,6 @@ impl PruningProofManager {
         let levels = self.gated_block_levels(proof)?;
         for header in proof.iter().flatten().cloned() {
             if let Vacant(e) = dag.entry(header.hash) {
-                let block_level = levels[&header.hash];
-                self.headers_store.insert(header.hash, header.clone(), block_level).unwrap();
-
                 let mut parents = BlockHashSet::with_capacity(header.direct_parents().len() * 2);
                 // We collect all available parent relations in order to maximize reachability information.
                 // By taking into account parents from all levels we ensure that the induced DAG has valid
@@ -249,10 +267,24 @@ impl PruningProofManager {
 
         debug!("Estimated proof size: {}, actual size: {}", capacity_estimate, dag.len());
 
-        for reverse_sortable_block in up_heap.into_sorted_iter() {
-            // TODO: Convert to into_iter_sorted once it gets stable
-            let hash = reverse_sortable_block.0.hash;
+        // The heap's (work, hash) order can put an equal-work child before its
+        // parent. Reachability queries require every in-proof parent to exist,
+        // including parent relations contributed by higher levels.
+        let ordered = stable_topological_order(
+            up_heap.into_sorted_iter().map(|block| block.0.hash).collect(),
+            |hash| *hash,
+            |hash| dag[hash].parents.iter().copied().collect::<Vec<_>>(),
+        );
+        if !is_parent_first(&ordered, |hash| *hash, |hash| dag[hash].parents.iter().copied().collect::<Vec<_>>()) {
+            return Err(PruningImportError::PruningPointImportContextUnavailable(
+                ordered.first().copied().unwrap_or(ORIGIN),
+                "proof reachability has cyclic parent dependencies".into(),
+            ));
+        }
+
+        for hash in ordered {
             let dag_entry = dag.get(&hash).unwrap();
+            self.headers_store.insert(hash, dag_entry.header.clone(), levels[&hash]).unwrap();
 
             // Filter only existing parents
             let parents_in_dag = BinaryHeap::from_iter(
@@ -266,13 +298,37 @@ impl PruningProofManager {
 
             let reachability_read = self.reachability_store.upgradable_read();
 
-            // Find the maximal parent antichain from the possibly redundant set of existing parents
+            // Find the maximal parent antichain. With equal work, hash order
+            // can visit an ancestor before its descendant, so remove previously
+            // visited ancestors too instead of assuming descendants arrive first.
+            let ancestor = |this, queried| {
+                reachability_read.try_is_dag_ancestor_of(this, queried).map_err(|error| {
+                    PruningImportError::PruningPointImportContextUnavailable(
+                        hash,
+                        format!("reachability parent query {this} -> {queried}: {error:?}"),
+                    )
+                })
+            };
             let mut reachability_parents: Vec<SortableBlock> = Vec::new();
             for parent in parents_in_dag.into_sorted_iter() {
-                if reachability_read.is_dag_ancestor_of_any(parent.hash, &mut reachability_parents.iter().map(|parent| parent.hash)) {
+                let mut covered = false;
+                for existing in &reachability_parents {
+                    if ancestor(parent.hash, existing.hash)? {
+                        covered = true;
+                        break;
+                    }
+                }
+                if covered {
                     continue;
                 }
-
+                let mut i = 0;
+                while i < reachability_parents.len() {
+                    if ancestor(reachability_parents[i].hash, parent.hash)? {
+                        reachability_parents.remove(i);
+                    } else {
+                        i += 1;
+                    }
+                }
                 reachability_parents.push(parent);
             }
             let reachability_parents_hashes =
@@ -309,3 +365,7 @@ impl PruningProofManager {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "apply_parent_order_tests.rs"]
+mod parent_order_tests;
