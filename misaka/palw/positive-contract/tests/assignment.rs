@@ -216,7 +216,7 @@ fn finite_policy() -> policy::AssignmentPolicyV2 {
 }
 
 #[test]
-fn assignment_policy_is_finite_and_has_a_separate_fired_ruleset_recipe() {
+fn assignment_policy_is_finite_and_commits_every_bound() {
     let p = finite_policy();
     p.validate_shape().unwrap();
     let mut t = bundle().terms;
@@ -241,12 +241,6 @@ fn assignment_policy_is_finite_and_has_a_separate_fired_ruleset_recipe() {
         assert_ne!(changed.id(), p.id());
         assert!(changed.validate_shape().is_err());
     }
-    let fired = d(60);
-    let id = policy::assignment_ruleset_id(fired, p.positive_policy, p.id());
-    assert_ne!(id, misaka_palw_positive_contract::native::ruleset_id(fired, p.positive_policy));
-    assert_ne!(id, policy::assignment_ruleset_id(d(61), p.positive_policy, p.id()));
-    assert_ne!(id, policy::assignment_ruleset_id(fired, d(62), p.id()));
-    assert_ne!(id, policy::assignment_ruleset_id(fired, p.positive_policy, d(63)));
 }
 
 #[test]

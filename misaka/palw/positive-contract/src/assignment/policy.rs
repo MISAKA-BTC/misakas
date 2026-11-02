@@ -159,8 +159,3 @@ impl AssignmentPolicyV2 {
         Ok(())
     }
 }
-
-/// Separate recipe; the existing r1 native::ruleset_id bytes/meaning stay exact.
-pub fn assignment_ruleset_id(fired_fork: Digest, positive_policy: Digest, assignment_policy: Digest) -> Digest {
-    hash(b"misaka/positive/assignment-ruleset/v2/r1", &(fired_fork, positive_policy, assignment_policy))
-}

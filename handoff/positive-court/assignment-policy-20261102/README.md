@@ -54,3 +54,15 @@ single consumption; P and all use-specific credit/fund consumers; real role
 services; restart/reorg/IBD/pruning; complete canonical LLM/resource/retention/
 concurrency measurements and separately approved activation. None of these is
 inferred from a finite policy shape or an authenticated declaration.
+
+
+## Superseding rule-scope correction
+
+The separate Assignment ruleset recipe described above was incompatible with
+the existing r1 Result-row predicate. Its earlier nine passing cases did not
+check that boundary. The recipe is withdrawn and the complete fired-policy
+resolver now feeds the unchanged r1 recipe; the actual row-compatibility and
+retired-candidate regressions are in
+[the correction record](../assignment-ruleset-correction-20261102/README.md).
+No native Assignment was accepted under the withdrawn candidate. Earlier
+command/result artifacts remain unchanged.

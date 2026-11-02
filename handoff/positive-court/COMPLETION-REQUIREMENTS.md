@@ -389,3 +389,16 @@ This does not resolve native capacity/service/P branch bounds, actual carrier
 locks, atomic accepted rows/history, Result single consumption, P/credit/fund
 consumers, native recovery, full measurements or activation. The full goal is
 active and incomplete; a valid dormant policy is not native success.
+
+
+## Assignment/r1 rule-scope compatibility correction — 2026-11-02
+
+The separate Assignment ruleset candidate at 67dd5f28b was incompatible with
+existing Result-row validation and is withdrawn. The native admission-clock
+resolver commits all fired policy contents and omits future companion values,
+then uses the exact unchanged r1 native ruleset recipe. Six contract plus five
+Core fence/row regressions and strict selected Clippy pass on one source map.
+The old candidate is explicitly rejected by the unchanged Result-row check;
+see [the correction evidence](assignment-ruleset-correction-20261102/README.md).
+This corrects the earlier policy increment; it supplies no accepted native
+Assignment or funds/Case/P/credit/activation. All remaining stages persist.

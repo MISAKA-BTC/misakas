@@ -3,7 +3,7 @@
 use super::{ForkActivation, Params};
 use crate::{Hash, Hash64, palw_mode_v2::PalwModeV2Error};
 pub use misaka_palw_positive_contract::assignment::policy::AssignmentPolicyV2;
-use misaka_palw_positive_contract::{assignment::policy::assignment_ruleset_id, identity::Digest};
+use misaka_palw_positive_contract::{identity::Digest, native::ruleset_id};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PositiveAssignmentFenceV2 {
@@ -11,13 +11,67 @@ pub struct PositiveAssignmentFenceV2 {
     pub policy: AssignmentPolicyV2,
 }
 impl PositiveAssignmentFenceV2 {
+    /// Use the unchanged r1 recipe. The actual fired-rule resolver below
+    /// commits the complete Assignment policy through its fork input.
     pub fn ruleset_id(&self, fired_fork: Hash) -> Hash64 {
         let mut fired = [0; 64];
         fired[..32].copy_from_slice(&fired_fork.as_bytes());
-        Hash64::from_bytes(assignment_ruleset_id(Digest(fired), self.policy.positive_policy, self.policy.id()).0)
+        Hash64::from_bytes(ruleset_id(Digest(fired), self.policy.positive_policy).0)
     }
 }
+/// Read-only rule derivation, not accepted-prefix/native admission authority.
+/// This is deliberately not the advertised ForkIdV1 (height list only), nor
+/// the genesis-only handshake identity. Future companion policies are removed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PositiveAssignmentRuleScopeV2 {
+    fired_rules: Hash,
+    ruleset: Hash64,
+    positive_policy: Digest,
+    assignment_policy: Digest,
+}
+impl PositiveAssignmentRuleScopeV2 {
+    pub fn fired_rules(&self) -> Hash {
+        self.fired_rules
+    }
+    pub fn fired_rules_digest(&self) -> Digest {
+        let mut bytes = [0; 64];
+        bytes[..32].copy_from_slice(&self.fired_rules.as_bytes());
+        Digest(bytes)
+    }
+    pub fn ruleset(&self) -> Hash64 {
+        self.ruleset
+    }
+    pub fn positive_policy(&self) -> Digest {
+        self.positive_policy
+    }
+    pub fn assignment_policy(&self) -> Digest {
+        self.assignment_policy
+    }
+}
+
 impl Params {
+    /// Resolve from the actual native admission clock. All already-fired
+    /// heights and their full companion policies participate; scheduled
+    /// future heights/policies do not. Persist this original scope for later
+    /// Case/restore rather than recomputing it under a future fork.
+    pub fn palw_positive_assignment_rule_scope_v2_at(&self, daa: u64) -> Option<PositiveAssignmentRuleScopeV2> {
+        let fence = self.palw_positive_assignment_v2_at(daa)?;
+        let mut fired = self.clone();
+        fired.for_each_fence(&mut |at| {
+            if *at > daa {
+                *at = u64::MAX;
+            }
+        });
+        fired.normalize_values_a_scheduled_fence_drags_with_it();
+        let fired_rules = fired.consensus_params_id();
+        Some(PositiveAssignmentRuleScopeV2 {
+            fired_rules,
+            ruleset: fence.ruleset_id(fired_rules),
+            positive_policy: fence.policy.positive_policy,
+            assignment_policy: fence.policy.id(),
+        })
+    }
+
     /// Current intake selection only. Existing assignments retain their own
     /// accepted full policy preimage/clock; this accessor must not rewrite it.
     pub fn palw_positive_assignment_v2_at(&self, daa: u64) -> Option<&PositiveAssignmentFenceV2> {

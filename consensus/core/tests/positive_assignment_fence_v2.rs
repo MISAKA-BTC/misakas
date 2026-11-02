@@ -126,11 +126,11 @@ fn assigned_policy_is_some_only_future_aware_and_never_is_wholly_dormant() {
     never.validate_palw_positive_assignment_v2().unwrap();
 }
 #[test]
-fn assignment_selection_requires_the_exact_active_positive_policy_and_separate_ruleset() {
+fn assignment_selection_requires_the_exact_active_positive_policy_and_r1_ruleset() {
     let mut p = selected(0);
     let fence = p.palw_positive_assignment_v2_at(0).unwrap();
-    let fired = kaspa_consensus_core::Hash::from_bytes([5; 32]);
-    assert_ne!(fence.ruleset_id(fired), p.palw_positive_court_v2.as_ref().unwrap().ruleset_id(fired));
+    let scope = p.palw_positive_assignment_rule_scope_v2_at(0).unwrap();
+    assert_eq!(fence.ruleset_id(scope.fired_rules()), p.palw_positive_court_v2.as_ref().unwrap().ruleset_id(scope.fired_rules()));
     let before = p.consensus_identity_id();
     p.palw_positive_assignment_v2.as_mut().unwrap().policy.physical_service_profile = d(99);
     assert_ne!(p.consensus_identity_id(), before);
@@ -140,4 +140,89 @@ fn assignment_selection_requires_the_exact_active_positive_policy_and_separate_r
     p.palw_positive_court_v2 = None;
     assert!(p.palw_positive_assignment_v2_at(0).is_none());
     assert!(p.validate_palw_positive_assignment_v2().is_err());
+}
+
+#[test]
+fn fired_assignment_rule_scope_commits_policy_contents_and_excludes_future_policies() {
+    let mut p = selected(1000);
+    p.palw_positive_court_v2.as_mut().unwrap().activation = ForkActivation::always();
+    assert!(p.palw_positive_assignment_rule_scope_v2_at(999).is_none());
+    let original = p.palw_positive_assignment_rule_scope_v2_at(1000).unwrap();
+    // Advertised ForkIdV1 commits a height list, not companion policy contents.
+    let advertised = kaspa_consensus_core::fork_id_v1::fork_id_v1(&p, 1000).fired;
+    let mut changed = p.clone();
+    changed.palw_positive_assignment_v2.as_mut().unwrap().policy.max_history_frames += 1;
+    assert_eq!(kaspa_consensus_core::fork_id_v1::fork_id_v1(&changed, 1000).fired, advertised);
+    let different = changed.palw_positive_assignment_rule_scope_v2_at(1000).unwrap();
+    assert_ne!(different.fired_rules(), original.fired_rules());
+    assert_ne!(different.ruleset(), original.ruleset());
+    assert_ne!(different.assignment_policy(), original.assignment_policy());
+
+    changed = p.clone();
+    changed.palw_native_mining_v39 =
+        Some(kaspa_consensus_core::palw_native_mining_v39::PalwNativeMiningFenceV39::unapproved_probe_at(
+            ForkActivation::new(5000),
+            [7; 64],
+        ));
+    assert_ne!(changed.consensus_params_id(), p.consensus_params_id());
+    assert_eq!(changed.palw_positive_assignment_rule_scope_v2_at(1000).unwrap(), original);
+    assert_ne!(changed.palw_positive_assignment_rule_scope_v2_at(5000).unwrap().fired_rules(), original.fired_rules());
+}
+
+#[test]
+fn assigned_scope_passes_the_unchanged_r1_result_row_recipe_and_rejects_the_retired_candidate() {
+    use misaka_palw_positive_contract::{identity::*, messages::*, rows::*};
+    let p = selected(0);
+    let scope = p.palw_positive_assignment_rule_scope_v2_at(0).unwrap();
+    let key = [7; PUBKEY_BYTES];
+    let origin = AcceptedOrigin {
+        accepting_block: NativeHash64([1; 64]),
+        carrier_block: NativeHash64([2; 64]),
+        carrier_transaction: NativeHash64([3; 64]),
+        accepted_tx_ordinal: 0,
+        event_ordinal: 0,
+        accepted_daa: 0,
+        accepted_blue_score: 0,
+    };
+    let result = MinerResultCommit {
+        version: 2,
+        revision: 1,
+        scope: ChainScope { network: d(1), ruleset: Digest(scope.ruleset().as_bytes()), branch: d(2) },
+        job: d(3),
+        execution: d(4),
+        miner: principal(&key),
+        registered_class: d(5),
+        artifact: d(6),
+        program: d(7),
+        input: d(8),
+        tokenizer: d(0),
+        execution_rules: d(0),
+        selector: d(9),
+        generation_seed: [10; 32],
+        temperature_q24: 0,
+        prefill: 1,
+        decode: 2,
+        max_context: 3,
+        output: d(11),
+        dependencies: d(12),
+        service_contract: d(13),
+    };
+    // Shape fixture only: these dummy signature/origin bytes grant no acceptance.
+    let row = ResultRow {
+        result,
+        miner_key: key,
+        miner_signature: [0; SIGNATURE_BYTES],
+        origin,
+        policy: scope.positive_policy(),
+        fired_fork: scope.fired_rules_digest(),
+        funding_scope: FundingScopeId(d(14)),
+        dependencies: AcceptedMaterial { origin, digest: d(12) },
+        role_assignment: AcceptedMaterial { origin, digest: d(15) },
+    };
+    NativeRowBody::Result(row.clone()).validate_shape().unwrap();
+    let bytes = borsh::to_vec(&(scope.fired_rules_digest(), scope.positive_policy(), scope.assignment_policy())).unwrap();
+    let retired = blake2b_simd::Params::new().hash_length(64).key(b"misaka/positive/assignment-ruleset/v2/r1").hash(&bytes);
+    let mut wrong = row;
+    wrong.result.scope.ruleset = Digest(retired.as_bytes().try_into().unwrap());
+    assert!(NativeRowBody::Result(wrong).validate_shape().is_err());
 }
