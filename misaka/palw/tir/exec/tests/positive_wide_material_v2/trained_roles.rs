@@ -296,7 +296,10 @@ fn node_limits() -> FullRelationLimits {
     // limits keep that workspace inside its real owner; any larger closure
     // still refuses. No relation, arithmetic or original model is changed.
     l.plan.max_elements_per_relation = 1 << 14;
-    l.plan.max_terms_per_relation = 1 << 17;
+    // The original measured closure at node 262 needs 131,376 terms, including
+    // its upstream work: 131,072 covers only the matrix product. This finite
+    // ceiling still quotes inside the existing real 1-GiB workspace owner.
+    l.plan.max_terms_per_relation = 1 << 18;
     l.plan.max_peak_target_bytes = 16 << 20;
     l.source.max_target_bytes = 16 << 20;
     l.source.max_material_bytes = 16 << 20;
@@ -575,6 +578,11 @@ fn run_loaded(file: &mut File, inputs: LocalForwardInputsV2<'_>, l: &Ledger, res
     let mut frontier = 0;
     let mut producer_material_ns = 0u128;
     let mut node_check_ns = 0u128;
+    let mut observed_evaluations = 0u64;
+    let mut peak_elements = 0u64;
+    let mut peak_terms = 0u64;
+    let mut peak_reads = 0u64;
+    let mut peak_workspace = 0u64;
     for i in 0..relations {
         let relation = prep.plan().relation_at(i).ok_or("relation omitted")?;
         let material_started = Instant::now();
@@ -588,9 +596,21 @@ fn run_loaded(file: &mut File, inputs: LocalForwardInputsV2<'_>, l: &Ledger, res
         })?;
         producer_material_ns += material_started.elapsed().as_nanos();
         let node_started = Instant::now();
-        let result = node.submit(&material.as_borrowed(), material.target()).map_err(|e| {
+        let mut diagnostics = kaspa_consensus_core::palw_tir_court_v1::source_only::wide_v2::EvaluationDiagnosticsV2::default();
+        let result = node.submit_with_diagnostics(&material.as_borrowed(), material.target(), &mut diagnostics).map_err(|e| {
+            report(
+                "node-refused",
+                start,
+                l,
+                serde_json::json!({"checked_relations":node.checked_relations(),"required_relations":relations,
+                "source_reads":diagnostics.source_reads,"workspace_bytes":diagnostics.workspace_bytes,
+                "computed_elements":diagnostics.work.map(|w|w.elements),"reduction_terms":diagnostics.work.map(|w|w.terms),
+                "diagnostic_stage":format!("{:?}",diagnostics.stage),"producer_material_ns":producer_material_ns,
+                "previous_successful_node_ns":node_check_ns,"failed_node_ns":node_started.elapsed().as_nanos(),
+                "per_relation_terms_cap":node_limits().plan.max_terms_per_relation,"whole_record_authenticated":false}),
+            );
             format!(
-                "Node relation {i}/{relations}: {e:?}; kind={:?}; material={:?}; file_usage={:?}; work={:?}",
+                "Node relation {i}/{relations}: {e:?}; kind={:?}; material={:?}; file_usage={:?}; work={:?}; evaluation={diagnostics:?}",
                 relation.kind,
                 material.as_borrowed().preflight(prep.source_limits()),
                 io.used.get(),
@@ -602,6 +622,15 @@ fn run_loaded(file: &mut File, inputs: LocalForwardInputsV2<'_>, l: &Ledger, res
             result == if i + 1 == relations { StreamSubmitV2::NeedEof } else { StreamSubmitV2::Continue },
             "Node stream completion order",
         )?;
+        if let Some(cost) = diagnostics.work {
+            observed_evaluations += 1;
+            peak_elements = peak_elements.max(cost.elements);
+            peak_terms = peak_terms.max(cost.terms);
+        }
+        peak_reads = peak_reads.max(diagnostics.source_reads);
+        if let Some(bytes) = diagnostics.workspace_bytes {
+            peak_workspace = peak_workspace.max(bytes);
+        }
         if matches!(relation.kind, ExpandedRelationKind::Legacy(_)) {
             frontier += 1;
         }
@@ -610,7 +639,8 @@ fn run_loaded(file: &mut File, inputs: LocalForwardInputsV2<'_>, l: &Ledger, res
                 "node-progress",
                 start,
                 l,
-                serde_json::json!({"checked_relations":node.checked_relations(),"required_relations":relations,"file_usage":format!("{:?}",io.used.get()),"producer_material_ns":producer_material_ns,"node_check_ns":node_check_ns}),
+                serde_json::json!({"checked_relations":node.checked_relations(),"required_relations":relations,"file_usage":format!("{:?}",io.used.get()),"producer_material_ns":producer_material_ns,"node_check_ns":node_check_ns,"observed_evaluations":observed_evaluations,
+                "peak_elements":peak_elements,"peak_terms":peak_terms,"peak_reads":peak_reads,"peak_workspace_bytes":peak_workspace}),
             );
         }
     }
