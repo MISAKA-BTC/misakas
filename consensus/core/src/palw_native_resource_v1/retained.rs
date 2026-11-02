@@ -111,7 +111,11 @@ impl<T: NativeHeapV1> NativeRetainedV1<T> {
     /// Reserve a separately owned payload before a fallible construction. The
     /// source's complete typed request is an explicit conservative copy bound.
     fn try_project_v1<U>(&self, f: impl FnOnce(&T) -> U) -> Result<NativeRetainedV1<U>, NativeCoverageV1> {
-        let lease = reserve_native_pending_requests_v1(value_requests_v1(&self.value)?)?;
+        let lease = if enabled() || self._lease.is_some() {
+            reserve_native_pending_requests_v1(value_requests_v1(&self.value)?)?
+        } else {
+            None
+        };
         Ok(NativeRetainedV1::from_owner_reserved_v1(f(&self.value), lease))
     }
 }
@@ -121,7 +125,14 @@ impl<T: Clone + NativeHeapV1> NativeRetainedV1<T> {
     /// not later mutations or a larger derived projection of the input.
     pub fn try_from_clone_v1(source: &T) -> Result<Self, NativeCoverageV1> {
         let requests = value_requests_v1(source)?;
-        Self::clone_after_reservation_v1(source, requests, reserve_native_pending_requests_v1)
+        // Bare-source clones have legacy consumers that flatten errors into
+        // semantic strings. Keep their default optional-capability semantics;
+        // a reviewed retained source uses try_project_v1 instead.
+        if enabled() {
+            Self::clone_after_reservation_v1(source, requests, reserve_native_pending_requests_v1)
+        } else {
+            Self::clone_after_reservation_v1(source, requests, reserve_native_requests_v1)
+        }
     }
     fn clone_after_reservation_v1(
         source: &T,
@@ -157,10 +168,7 @@ impl<T: Clone + NativeHeapV1> NativeRetainedV1<T> {
             let extra = growth.bytes().ok_or_else(|| M::TypedRam(growth.clone()))?;
             base.checked_add(extra).ok_or_else(|| M::Bound("native owner mutation request overflow".into()))?
         } else {
-            match (value_requests_v1(&self.value).ok().filter(|n| *n != 0), growth.bytes()) {
-                (Some(base), Some(extra)) => base.checked_add(extra).unwrap_or(0),
-                _ => 0,
-            }
+            0
         };
         let lease = reserve_native_pending_requests_v1(requests).map_err(M::TypedRam)?;
         let mut value = self.value.clone();
@@ -210,13 +218,7 @@ pub fn retain_native_carriage_decode_v1<T, E: fmt::Display>(
             .map_err(|why| NativeCoverageV1::unsupported::<T>("actual cold native carriage shape", &why.to_string()))?;
         reserve_native_wire_v1(point, &preflight)?
     } else {
-        // Best-effort audited admission on the default node. Unknown legacy
-        // schema keeps its existing decode semantics rather than becoming an
-        // implicit strict-capability requirement.
-        match preflight_native_carriage_v1(canonical, canonical.len() as u64) {
-            Ok(preflight) => reserve_native_wire_v1(point, &preflight)?,
-            Err(_) => None,
-        }
+        None
     };
     let value =
         decode().map_err(|why| NativeCoverageV1::unsupported::<T>("cold native carriage decode/root validation", &why.to_string()))?;
@@ -343,8 +345,10 @@ impl NativeRetainedV1<crate::palw_state_v2::PalwChainStateV2> {
     ) -> Result<Self, NativeStateMutationErrorV1> {
         let requests = if enabled() {
             native_delta_replay_requests_v1(&self.value, delta).map_err(NativeDecodeErrorV1::Resource)?
-        } else {
+        } else if self._lease.is_some() {
             native_delta_replay_requests_v1(&self.value, delta).unwrap_or(0)
+        } else {
+            0
         };
         let lease = reserve_native_pending_requests_v1(requests).map_err(NativeDecodeErrorV1::Resource)?;
         let value = if revert {
@@ -366,8 +370,10 @@ impl NativeRetainedV1<crate::palw_state_v2::PalwChainStateV2> {
     ) -> Result<Self, NativeStateMutationErrorV1> {
         let requests = if enabled() {
             native_delta_replay_requests_v1(&self.value, delta).map_err(NativeDecodeErrorV1::Resource)?
-        } else {
+        } else if self._lease.is_some() {
             native_delta_replay_requests_v1(&self.value, delta).unwrap_or(0)
+        } else {
+            0
         };
         self.into_delta_after_reservation_v1(delta, params, revert, requests, reserve_native_pending_requests_v1)
     }
@@ -476,10 +482,7 @@ pub fn retain_native_value_decode_v1<T: NativeWireScanV1, E: fmt::Display>(
             .map_err(|e| NativeCoverageV1::unsupported::<T>("cold native typed value", &e.to_string()))?;
         reserve_native_pending_requests_v1(shape.logical_requests_v1())?
     } else {
-        match preflight_native_value_v1::<T>(canonical, canonical.len() as u64) {
-            Ok(shape) => reserve_native_pending_requests_v1(shape.logical_requests_v1())?,
-            Err(_) => None,
-        }
+        None
     };
     let value = decode().map_err(|e| NativeCoverageV1::unsupported::<T>("cold native typed value decode", &e.to_string()))?;
     Ok(NativeRetainedV1::from_owner_reserved_v1(value, lease))
