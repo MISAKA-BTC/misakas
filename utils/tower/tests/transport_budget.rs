@@ -36,7 +36,7 @@ async fn slow_transport_slices_hold_snapshot_session_after_dequeue_and_codec_dro
     let expected = blob.encode_to_vec();
     let queued = Outbound::with_resources(blob, &local, vec![Box::new(Session(Arc::clone(&dropped)))]).unwrap();
     let mut codec = BudgetedProstCodec::<Blob, Blob>::default();
-    let mut body = EncodeBody::new_client(codec.encoder(), tokio_stream::iter([Ok(queued)]), None, None);
+    let mut body = EncodeBody::new_client(codec.encoder(), futures::stream::iter([Ok(queued)]), None, None);
     let bytes = body.frame().await.unwrap().unwrap().into_data().unwrap();
     assert_eq!(&bytes[5..], expected);
     let shared_transport_slice = bytes.slice(5..);
@@ -63,17 +63,31 @@ async fn cancelled_queue_returns_session_and_unused_capacity_tickets() {
     assert_eq!(local.snapshot().reserved_bytes, 0);
     assert_eq!(dropped.load(Ordering::SeqCst), 1);
     // Capacity is usable again immediately; no wait/deadlock to wake.
-    assert!(Outbound::try_new(Blob { value: vec![1; 512 << 10] }, &local).is_ok());
+    assert!(Outbound::try_new(Blob { value: Vec::with_capacity(512 << 10) }, &local).is_ok());
 }
 
 #[tokio::test]
-async fn codec_admission_failure_releases_original_without_waiting() {
+async fn codec_peak_is_admitted_before_queue_acceptance_without_waiting() {
     let local = bank(512 << 10);
-    let queued = Outbound::try_new(Blob { value: vec![1; 128 << 10] }, &local).unwrap();
+    assert!(Outbound::try_new(Blob { value: vec![1; 128 << 10] }, &local).is_err());
+    assert_eq!(local.snapshot().reserved_bytes, 0);
+    assert_eq!(local.snapshot().pending_bytes, 0);
+}
+
+#[tokio::test]
+async fn all_accepted_large_items_encode_without_needing_more_admission() {
+    let local = bank(34 << 20);
+    let mut items = Vec::new();
+    while let Ok(item) = Outbound::try_new(Blob { value: vec![1; 4 << 20] }, &local) {
+        items.push(Ok(item));
+    }
+    assert_eq!(items.len(), 2);
     let mut codec = BudgetedProstCodec::<Blob, Blob>::default();
-    let mut body = EncodeBody::new_client(codec.encoder(), tokio_stream::iter([Ok(queued)]), None, None);
-    let status = body.frame().await.unwrap().unwrap_err();
-    assert_eq!(status.code(), tonic::Code::ResourceExhausted);
+    let mut body = EncodeBody::new_client(codec.encoder(), futures::stream::iter(items), None, None);
+    for _ in 0..2 {
+        drop(body.frame().await.unwrap().unwrap());
+    }
+    drop(body);
     assert_eq!(local.snapshot().reserved_bytes, 0);
 }
 

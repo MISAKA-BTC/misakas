@@ -26,10 +26,12 @@ pub fn budget_generated_transport(path: &Path, request: &str, response: &str) {
     // names in their original modules and follows nested Vec/Option/Box storage.
     let mut output = String::new();
     let mut item: Option<(String, usize, bool, Vec<String>)> = None;
+    let mut services = false;
     for line in source.lines() {
         output.push_str(line);
         output.push('\n');
-        if output.contains("/// Generated client implementations.") {
+        services |= line == "/// Generated client implementations.";
+        if services {
             continue;
         }
         let text = line.trim();

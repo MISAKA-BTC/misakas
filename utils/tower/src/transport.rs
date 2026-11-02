@@ -52,7 +52,7 @@ pub fn connection_budget() -> Arc<MemoryBudget> {
 pub struct Outbound<T> {
     message: T,
     resources: RetainedResources,
-    connection: Arc<MemoryBudget>,
+    scratch: Vec<MemoryLease>,
 }
 impl<T: Message + RetainedSize> Outbound<T> {
     pub fn try_new(message: T, connection: &Arc<MemoryBudget>) -> Result<Self, Status> {
@@ -94,11 +94,18 @@ impl<T: Message + RetainedSize> Outbound<T> {
         };
         let local =
             connection.try_reserve_retained(MemoryClass::Transport, owned).map_err(|e| Status::resource_exhausted(e.to_string()))?;
+        // Every accepted item already owns the simultaneous codec peak. A raw
+        // backlog cannot consume the last bytes needed by all encoders.
+        let peak = (message.encoded_len() as u64).saturating_add(64 << 10).saturating_mul(3);
+        let encoder_process =
+            global_memory_budget().try_reserve(MemoryClass::Transport, peak).map_err(|e| Status::resource_exhausted(e.to_string()))?;
+        let encoder_local =
+            connection.try_reserve(MemoryClass::Transport, peak).map_err(|e| Status::resource_exhausted(e.to_string()))?;
         process.materialized();
         local.materialized();
         resources.push(Box::new(process));
         resources.push(Box::new(local));
-        Ok(Self { message, resources: std::mem::take(resources), connection: Arc::clone(connection) })
+        Ok(Self { message, resources: std::mem::take(resources), scratch: vec![encoder_process, encoder_local] })
     }
 }
 
@@ -138,24 +145,11 @@ impl<T: Message> Encoder for BudgetedEncoder<T> {
     fn encoded_len(&self, item: &Self::Item) -> Option<usize> {
         Some(item.message.encoded_len())
     }
-    fn prepare_encode(&mut self, item: &Self::Item) -> Result<(), Status> {
-        // The fresh large buffers in tonic avoid geometric capacity growth. Three
-        // times the wire length covers plain scratch, gzip output (including its
-        // framing expansion) and the optional compact-frame copy simultaneously.
-        let bytes = (item.message.encoded_len() as u64).saturating_add(64 << 10).saturating_mul(3);
-        let lease: MemoryLease = global_memory_budget()
-            .try_reserve(MemoryClass::Transport, bytes)
-            .map_err(|e| Status::resource_exhausted(e.to_string()))?;
-        let local =
-            item.connection.try_reserve(MemoryClass::Transport, bytes).map_err(|e| Status::resource_exhausted(e.to_string()))?;
-        self.scratch.push(lease);
-        self.scratch.push(local);
-        Ok(())
-    }
     fn encode(&mut self, mut item: Self::Item, dst: &mut EncodeBuf<'_>) -> Result<(), Status> {
         item.message.encode(dst).map_err(|e| Status::internal(e.to_string()))?;
         // No further allocations use this envelope after encoding/compression.
         // Keep its conservative bytes charged until the HTTP owner's last drop.
+        self.scratch.append(&mut item.scratch);
         self.resources.append(&mut item.resources);
         Ok(())
     }

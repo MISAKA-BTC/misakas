@@ -7,6 +7,7 @@ use kaspa_grpc_core::{
     ops::KaspadPayloadOps,
     protowire::{KaspadRequest, KaspadResponse},
 };
+use kaspa_utils_tower::transport::RetainedSize;
 use std::{
     collections::VecDeque,
     sync::{Arc, Mutex},
@@ -20,11 +21,17 @@ struct Pending {
     op: KaspadPayloadOps,
     request: KaspadRequest,
     sender: KaspadResponseSender,
+    _memory: kaspa_core::memory_budget::MemoryLease,
 }
 
 impl Pending {
-    fn new(op: KaspadPayloadOps, request: KaspadRequest, sender: KaspadResponseSender) -> Self {
-        Self { timestamp: Instant::now(), op, request, sender }
+    fn new(
+        op: KaspadPayloadOps,
+        request: KaspadRequest,
+        sender: KaspadResponseSender,
+        memory: kaspa_core::memory_budget::MemoryLease,
+    ) -> Self {
+        Self { timestamp: Instant::now(), op, request, sender, _memory: memory }
     }
 
     fn is_matching(&self, response: &KaspadResponse, response_op: KaspadPayloadOps) -> bool {
@@ -44,16 +51,32 @@ impl QueueResolver {
 }
 
 impl Resolver for QueueResolver {
-    fn register_request(&self, op: KaspadPayloadOps, request: &KaspadRequest) -> KaspadResponseReceiver {
+    fn register_request(&self, op: KaspadPayloadOps, request: &KaspadRequest) -> Result<KaspadResponseReceiver> {
+        // The compatibility resolver really clones the request. Charge the
+        // physical copy before clone; sharing the outgoing lease would undercount.
+        let bytes = request.retained_heap_bytes().saturating_add(std::mem::size_of::<Pending>() as u64).saturating_add(128);
+        let memory = kaspa_core::memory_budget::global_memory_budget()
+            .try_reserve(kaspa_core::memory_budget::MemoryClass::Transport, bytes)
+            .map_err(|error| Error::TonicStatus(tonic::Status::resource_exhausted(error.to_string())))?;
         let (sender, receiver) = oneshot::channel::<Result<KaspadResponse>>();
         {
-            let pending = Pending::new(op, request.clone(), sender);
-
             let mut pending_calls = self.pending_calls.lock().unwrap();
+            if pending_calls.len() >= super::MAX_PENDING_REQUESTS {
+                return Err(Error::ChannelSendError);
+            }
+            let pending = Pending::new(op, request.clone(), sender, memory.clone());
             pending_calls.push_back(pending);
+            memory.materialized();
             drop(pending_calls);
         }
-        receiver
+        Ok(receiver)
+    }
+
+    fn cancel_request(&self, request_id: u64) {
+        let mut pending = self.pending_calls.lock().unwrap();
+        if let Some(index) = pending.iter().position(|call| call.request.id == request_id) {
+            pending.remove(index);
+        }
     }
 
     fn handle_response(&self, response: KaspadResponse) {
@@ -110,5 +133,61 @@ impl Resolver for QueueResolver {
                 index += 1;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn request_copy_is_admitted_and_cancellation_drops_its_ticket() {
+        let resolver = Arc::new(QueueResolver::new());
+        let request = KaspadRequest {
+            id: 17,
+            payload: Some(kaspa_grpc_core::protowire::kaspad_request::Payload::GetBlockRequest(
+                kaspa_grpc_core::protowire::GetBlockRequestMessage { hash: "a".repeat(1 << 20), include_transactions: true },
+            )),
+        };
+        let receiver = resolver.register_request(KaspadPayloadOps::GetBlock, &request).unwrap();
+        assert!(resolver.pending_calls.lock().unwrap().front().unwrap()._memory.bytes() >= 1 << 20);
+        let guard = crate::resolver::PendingRequestGuard::new(resolver.clone(), request.id);
+        drop(guard);
+        assert!(resolver.pending_calls.lock().unwrap().is_empty());
+        assert!(receiver.blocking_recv().is_err());
+    }
+    #[test]
+    fn sent_request_keeps_its_matching_position_when_caller_cancels() {
+        let resolver = Arc::new(QueueResolver::new());
+        let request = KaspadRequest { id: 18, ..Default::default() };
+        let receiver = resolver.register_request(KaspadPayloadOps::GetInfo, &request).unwrap();
+        let mut guard = crate::resolver::PendingRequestGuard::new(resolver.clone(), request.id);
+        guard.sent();
+        drop(receiver);
+        drop(guard);
+        assert_eq!(resolver.pending_calls.lock().unwrap().front().unwrap().request.id, 18);
+    }
+    #[test]
+    fn cancelled_sent_call_consumes_its_late_same_op_reply_before_next_call() {
+        use kaspa_grpc_core::protowire::{GetInfoRequestMessage, GetInfoResponseMessage, kaspad_request, kaspad_response};
+        let resolver = Arc::new(QueueResolver::new());
+        let request_a = KaspadRequest { id: 21, payload: Some(kaspad_request::Payload::GetInfoRequest(GetInfoRequestMessage {})) };
+        let receiver_a = resolver.register_request(KaspadPayloadOps::GetInfo, &request_a).unwrap();
+        let mut guard_a = crate::resolver::PendingRequestGuard::new(resolver.clone(), request_a.id);
+        guard_a.sent();
+        drop(receiver_a);
+        drop(guard_a);
+        let request_b = KaspadRequest { id: 22, ..request_a };
+        let mut receiver_b = resolver.register_request(KaspadPayloadOps::GetInfo, &request_b).unwrap();
+        resolver.handle_response(KaspadResponse {
+            id: 701,
+            payload: Some(kaspad_response::Payload::GetInfoResponse(GetInfoResponseMessage::default())),
+        });
+        assert!(matches!(receiver_b.try_recv(), Err(tokio::sync::oneshot::error::TryRecvError::Empty)));
+        assert_eq!(resolver.pending_calls.lock().unwrap().front().unwrap().request.id, 22);
+        resolver.handle_response(KaspadResponse {
+            id: 702,
+            payload: Some(kaspad_response::Payload::GetInfoResponse(GetInfoResponseMessage::default())),
+        });
+        assert_eq!(receiver_b.blocking_recv().unwrap().unwrap().id, 702);
     }
 }

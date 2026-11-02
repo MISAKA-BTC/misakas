@@ -1,0 +1,27 @@
+[package]
+name = "misaka-transport-memory-harness"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Deliberately independent: this executes the actual pinned codec, adapter,
+# generated protocols and std-only bank without compiling consensus or a Node.
+[workspace]
+
+[dependencies]
+bytes = "=1.11.1"
+prost = "=0.14.3"
+tonic = { path = "../../vendor/tonic", version = "=0.14.5", default-features = false, features = ["codegen", "gzip", "transport"] }
+tonic-prost = "=0.14.5"
+http-body-util = "0.1"
+futures = "0.3"
+tokio = { version = "1", features = ["rt", "macros", "sync"] }
+tokio-stream = "0.1"
+
+[build-dependencies]
+tonic-prost-build = "=0.14.5"
+tonic-build = "=0.14.5"
+protoc-bin-vendored = "=3.2.0"
+
+[patch.crates-io]
+tonic = { path = "../../vendor/tonic" }

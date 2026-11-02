@@ -88,6 +88,9 @@ pub enum ProtocolError {
     #[error("local native transfer resource unavailable: {0}")]
     LocalNativeResourceUnavailable(String),
 
+    #[error("local transport byte capacity unavailable: {0}")]
+    LocalTransportCapacityUnavailable(String),
+
     #[error("misbehaving peer: {0}")]
     MisbehavingPeer(String),
 
@@ -130,6 +133,8 @@ impl ProtocolError {
             self,
             Self::LocalNativeCapacityUnavailable(_)
                 | Self::LocalNativeResourceUnavailable(_)
+                | Self::LocalTransportCapacityUnavailable(_)
+                | Self::OutgoingRouteCapacityReached(_)
                 | Self::RuleError(RuleError::LocalNativeCapacityUnavailable(_))
                 | Self::RuleError(RuleError::LocalNativeStateContextUnavailable(_))
                 | Self::PruningImportError(PruningImportError::PruningImportRuleError(RuleError::LocalNativeCapacityUnavailable(_)))
@@ -144,7 +149,7 @@ impl ProtocolError {
     }
 
     pub fn can_send_outgoing_message(&self) -> bool {
-        !matches!(self, Self::ConnectionClosed | Self::OutgoingRouteCapacityReached(_))
+        !matches!(self, Self::ConnectionClosed | Self::OutgoingRouteCapacityReached(_) | Self::LocalTransportCapacityUnavailable(_))
     }
 
     pub fn to_reject_message(&self) -> String {
@@ -294,6 +299,17 @@ macro_rules! dequeue_with_request_id {
 #[cfg(test)]
 mod reject_classification_tests {
     use super::*;
+
+    #[test]
+    fn local_transport_refusals_never_judge_candidate_chain_validity() {
+        for error in [
+            ProtocolError::LocalTransportCapacityUnavailable("byte budget".into()),
+            ProtocolError::OutgoingRouteCapacityReached("count budget".into()),
+        ] {
+            assert!(error.is_local_native_resource_unavailable());
+            assert!(!error.can_send_outgoing_message());
+        }
+    }
 
     /// **A reject is either about this node or about the peer, and the text has to say which.**
     ///
