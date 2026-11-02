@@ -375,3 +375,17 @@ policy/fence/carrier/row/restore schema, actual leases, native funding locks,
 Assignment single-writer/once/history, Case/P/consumer integration, recovery,
 measurements and activation remain required. Staged policy/fence/consent code
 outside the checkout is preparation, not implemented or tested runtime code.
+
+
+## Assignment finite policy/consent/fence increment — 2026-11-02
+
+The complete fixed Assignment policy, separate fired ruleset recipe, bounded
+source/prover declaration preimages and dormant Some-only Params fence are
+implemented. Six contract cases and three fence cases, plus strict selected
+library/test Clippy, pass on one source map. Six shipped preset fingerprint
+triples exactly match the actual pre-change binary baseline, including T12.
+See [assignment-policy-20261102](assignment-policy-20261102/README.md).
+This does not resolve native capacity/service/P branch bounds, actual carrier
+locks, atomic accepted rows/history, Result single consumption, P/credit/fund
+consumers, native recovery, full measurements or activation. The full goal is
+active and incomplete; a valid dormant policy is not native success.

@@ -8,6 +8,9 @@ use crate::{
 };
 use borsh::{BorshDeserialize, BorshSerialize};
 
+pub mod consents;
+pub mod policy;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, BorshSerialize, BorshDeserialize)]
 pub struct AssignmentId(pub Digest);
 

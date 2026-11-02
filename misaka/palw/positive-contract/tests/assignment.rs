@@ -178,3 +178,152 @@ fn a_role_signature_cannot_be_relabelled_or_moved_to_another_bundle() {
         assert!(other.authenticate_role(role, verification, signature.as_ref()).is_err());
     }
 }
+
+fn finite_policy() -> policy::AssignmentPolicyV2 {
+    policy::AssignmentPolicyV2 {
+        version: 2,
+        revision: 1,
+        mode: AssignmentModeV2::CanonicalTirAssignmentV1,
+        positive_policy: d(40),
+        derivation_policy: policy::canonical_assignment_derivation_id(),
+        source_policy: d(11),
+        assignment_fee_schedule: d(41),
+        case_fee_schedule: d(42),
+        reserve_schedule: d(12),
+        physical_service_profile: d(43),
+        cancellation_policy: d(18),
+        live: policy::AssignmentLiveCapsV2 { global: 10, per_poster: 2, per_worker: 2, per_prover: 2, per_class: 4 },
+        max_frame_bytes: 32_000,
+        max_program_bytes: 65_536,
+        max_layout_entries: 1000,
+        max_source_catalog_entries: 1000,
+        max_role_candidates: 5,
+        max_prover_joins: 2,
+        max_history_frames: 100,
+        max_history_bytes: 100_000,
+        max_retained_bytes: 200_000,
+        max_replay_bytes: 300_000,
+        max_replay_work: 1_000_000,
+        max_heap_bytes: 1_000_000,
+        accept_window_daa: 100,
+        result_window_daa: 100,
+        build_window_daa: 100,
+        check_window_daa: 100,
+        fraud_tail_daa: 100,
+        refund_window_daa: 100,
+        retention_window_daa: 1000,
+    }
+}
+
+#[test]
+fn assignment_policy_is_finite_and_has_a_separate_fired_ruleset_recipe() {
+    let p = finite_policy();
+    p.validate_shape().unwrap();
+    let mut t = bundle().terms;
+    t.derivation_policy = p.derivation_policy;
+    p.check_terms(&t, 0).unwrap();
+    assert!(p.check_terms(&t, 100).is_err());
+    for mutate in [
+        |p: &mut policy::AssignmentPolicyV2| p.live.global = 0,
+        |p: &mut policy::AssignmentPolicyV2| p.live.per_poster = 11,
+        |p: &mut policy::AssignmentPolicyV2| p.max_role_candidates = 2,
+        |p: &mut policy::AssignmentPolicyV2| p.max_prover_joins = u32::MAX,
+        |p: &mut policy::AssignmentPolicyV2| p.max_frame_bytes = u64::MAX,
+        |p: &mut policy::AssignmentPolicyV2| p.max_history_bytes = p.max_retained_bytes + 1,
+        |p: &mut policy::AssignmentPolicyV2| p.max_replay_work = 0,
+        |p: &mut policy::AssignmentPolicyV2| p.refund_window_daa = u64::MAX - 1,
+        |p: &mut policy::AssignmentPolicyV2| p.retention_window_daa = 599,
+        |p: &mut policy::AssignmentPolicyV2| p.physical_service_profile = d(0),
+        |p: &mut policy::AssignmentPolicyV2| p.derivation_policy = d(10),
+    ] {
+        let mut changed = p;
+        mutate(&mut changed);
+        assert_ne!(changed.id(), p.id());
+        assert!(changed.validate_shape().is_err());
+    }
+    let fired = d(60);
+    let id = policy::assignment_ruleset_id(fired, p.positive_policy, p.id());
+    assert_ne!(id, misaka_palw_positive_contract::native::ruleset_id(fired, p.positive_policy));
+    assert_ne!(id, policy::assignment_ruleset_id(d(61), p.positive_policy, p.id()));
+    assert_ne!(id, policy::assignment_ruleset_id(fired, d(62), p.id()));
+    assert_ne!(id, policy::assignment_ruleset_id(fired, p.positive_policy, d(63)));
+}
+
+#[test]
+fn source_and_prover_declarations_share_signed_bounds_and_do_not_create_pre_case_services() {
+    use consents::*;
+    use misaka_palw_positive_contract::messages::AggregateBudget;
+    let mut b = bundle();
+    let source = AssignmentSourceConsentV2 {
+        version: 2,
+        revision: 1,
+        assignment: b.terms.id(),
+        worker: b.terms.worker,
+        source_catalog: b.source_catalog,
+        source_policy: b.terms.source_policy,
+        budget: AggregateBudget {
+            rounds: 10,
+            unique_source_bytes: 1000,
+            transmitted_bytes: 2000,
+            additional_work: 1000,
+            retained_bytes: 1000,
+            retention_until: 500,
+            fee: 10,
+            witness_attempts: 2,
+        },
+        service_before_daa: 400,
+    };
+    let prover = AssignmentProverConsentV2 {
+        version: 2,
+        revision: 1,
+        assignment: b.terms.id(),
+        prover: b.terms.prover,
+        positive_policy: d(40),
+        max_attempts: 2,
+        max_build_work: 1000,
+        max_submitted_bytes: 1000,
+        max_retained_bytes: 1000,
+        retention_until_daa: 500,
+        build_before_daa: 400,
+        max_service_fee: 10,
+        cancellation_policy: b.cancellation_policy,
+    };
+    b.source_consent = source.id();
+    b.prover_consent = prover.id();
+    source.check(&b).unwrap();
+    prover.check(&b, d(40)).unwrap();
+    for mutate in [
+        |s: &mut AssignmentSourceConsentV2| s.worker = bond(99),
+        |s: &mut AssignmentSourceConsentV2| s.source_catalog = d(99),
+        |s: &mut AssignmentSourceConsentV2| s.budget.rounds = u64::MAX,
+        |s: &mut AssignmentSourceConsentV2| s.budget.unique_source_bytes = 2001,
+        |s: &mut AssignmentSourceConsentV2| s.budget.retention_until = 399,
+        |s: &mut AssignmentSourceConsentV2| s.budget.fee = 41,
+        |s: &mut AssignmentSourceConsentV2| s.service_before_daa = 451,
+    ] {
+        let mut changed = source;
+        mutate(&mut changed);
+        let mut changed_bundle = b;
+        changed_bundle.source_consent = changed.id();
+        assert!(changed.check(&changed_bundle).is_err());
+    }
+    for mutate in [
+        |p: &mut AssignmentProverConsentV2| p.prover = bond(99),
+        |p: &mut AssignmentProverConsentV2| p.positive_policy = d(99),
+        |p: &mut AssignmentProverConsentV2| p.max_build_work = 0,
+        |p: &mut AssignmentProverConsentV2| p.max_attempts = 0,
+        |p: &mut AssignmentProverConsentV2| p.retention_until_daa = 399,
+        |p: &mut AssignmentProverConsentV2| p.build_before_daa = 451,
+        |p: &mut AssignmentProverConsentV2| p.max_service_fee = 41,
+        |p: &mut AssignmentProverConsentV2| p.cancellation_policy = d(99),
+    ] {
+        let mut changed = prover;
+        mutate(&mut changed);
+        let mut changed_bundle = b;
+        changed_bundle.prover_consent = changed.id();
+        assert!(changed.check(&changed_bundle, d(40)).is_err());
+    }
+    let changed_bundle = AssignmentAdmissionBundleV2 { source_consent: d(99), ..b };
+    assert_ne!(changed_bundle.id(), b.id());
+    assert!(source.check(&changed_bundle).is_err());
+}
