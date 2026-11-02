@@ -101,26 +101,11 @@ impl SignedMiner {
         Self::for_output(f, output)
     }
     fn for_output(f: &impl OracleFixture, output: Digest) -> Self {
-        let class = f.class();
         let job = f.job();
-        let artifact = f.artifact();
         assert_eq!(job.tokenizer_id, Hash64::from_u64_word(0));
         let pair = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([91; 32]);
         let key = *pair.verification_key.as_ref();
-        let rooted = AdmissionContext {
-            scope: ChainScope { network: d(1), ruleset: d(2), branch: d(3) },
-            expected_job: digest(job.job_id),
-            expected_execution: digest(job.context_hash()),
-            expected_miner: principal(&key),
-            expected_input: digest(job.prompt_token_ids_hash),
-            registered_class: digest(class.class_id(&artifact)),
-            artifact: digest(artifact),
-            program: digest(class.graph_ir_root()),
-            tokenizer: digest(job.tokenizer_id),
-            execution_rules: digest(job.cu_ruleset_id),
-            selector: greedy_selector_id(),
-            required_form: ClaimForm::PositiveResultV2,
-        };
+        let rooted = Self::context(f, &key);
         let result = MinerResultCommit {
             version: CONTRACT_VERSION,
             revision: CONTRACT_REVISION,
@@ -147,6 +132,25 @@ impl SignedMiner {
         let signature =
             *libcrux_ml_dsa::ml_dsa_87::sign(&pair.signing_key, &result.id().0.0, RESULT_SIGN_CONTEXT, [0; 32]).unwrap().as_ref();
         Self { rooted, result, key, signature }
+    }
+    fn context(f: &impl OracleFixture, key: &[u8; PUBKEY_BYTES]) -> AdmissionContext {
+        let class = f.class();
+        let job = f.job();
+        let artifact = f.artifact();
+        AdmissionContext {
+            scope: ChainScope { network: d(1), ruleset: d(2), branch: d(3) },
+            expected_job: digest(job.job_id),
+            expected_execution: digest(job.context_hash()),
+            expected_miner: principal(key),
+            expected_input: digest(job.prompt_token_ids_hash),
+            registered_class: digest(class.class_id(&artifact)),
+            artifact: digest(artifact),
+            program: digest(class.graph_ir_root()),
+            tokenizer: digest(job.tokenizer_id),
+            execution_rules: digest(job.cu_ruleset_id),
+            selector: greedy_selector_id(),
+            required_form: ClaimForm::PositiveResultV2,
+        }
     }
     fn authenticate(&self) -> AuthenticatedResult<'_> {
         self.result.authenticate(&self.key, &self.signature).unwrap()

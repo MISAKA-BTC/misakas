@@ -81,6 +81,7 @@ struct End {
     outcome: u8,
     checked: u64,
     submit_ns: u128,
+    finish_ns: u128,
     elements: u64,
     terms: u64,
     reads: u64,
@@ -91,9 +92,20 @@ struct End {
     request_peak: u64,
     wire_received: u64,
     wire_sent: u64,
+    wire_calls: u64,
     model_read_denials: u32,
     pid: u32,
 }
+impl End {
+    fn diagnostic(&self) -> serde_json::Value {
+        serde_json::json!({"outcome":self.outcome,"checked":self.checked,"submit_ns":self.submit_ns,"finish_ns":self.finish_ns,
+            "elements":self.elements,"terms":self.terms,"source_reads":self.reads,"workspace_peak":self.workspace_peak,
+            "cpu_user_us":self.cpu_user_us,"cpu_system_us":self.cpu_system_us,"process_maxrss":self.process_maxrss,
+            "request_peak":self.request_peak,"wire_received":self.wire_received,"wire_sent_before_report":self.wire_sent,
+            "wire_calls_before_report":self.wire_calls,"model_read_denials":self.model_read_denials,"pid":self.pid})
+    }
+}
+
 fn usage() -> (u64, u64, i64) {
     let mut u = std::mem::MaybeUninit::<libc::rusage>::uninit();
     assert_eq!(unsafe { libc::getrusage(libc::RUSAGE_SELF, u.as_mut_ptr()) }, 0);
@@ -106,10 +118,18 @@ fn usage() -> (u64, u64, i64) {
 }
 fn emit(phase: &str, l: &Ledger, detail: serde_json::Value) {
     let (user, system, rss) = usage();
+    let role = if phase.starts_with("cold-node") {
+        "node"
+    } else if phase == "ordinary-miner-process-complete" {
+        "miner"
+    } else {
+        "panel"
+    };
+    let isolated_node = phase.starts_with("cold-node") || phase.starts_with("isolated-parent") || phase == "three-processes-complete";
     println!(
         "ROLE_ISOLATED {}",
         serde_json::json!({"phase":phase,"pid":std::process::id(),"native_authority":false,
-        "canonical_job":false,"full_context_execution":false,"node_process_isolated":true,"cpu_user_us":user,"cpu_system_us":system,
+        "canonical_job":false,"full_context_execution":false,"node_process_isolated":isolated_node,"role":role,"cpu_user_us":user,"cpu_system_us":system,
         "process_maxrss_native_units":rss,"logical_request_peak":l.peak.load(Ordering::SeqCst),"detail":detail})
     );
 }
@@ -347,7 +367,9 @@ fn child_scope(l: &Ledger, reserve: &TirMemoryReserverV1) -> R<()> {
             break;
         }
     }
+    let finish_start = Instant::now();
     let outcome = node.finish().map_err(ioerr)?;
+    let finish_ns = finish_start.elapsed().as_nanos();
     let tag = match outcome {
         CheckOutcome::Matched => 1,
         CheckOutcome::OutputMismatch => 2,
@@ -359,6 +381,7 @@ fn child_scope(l: &Ledger, reserve: &TirMemoryReserverV1) -> R<()> {
         outcome: tag,
         checked: node.checked_relations(),
         submit_ns: submit,
+        finish_ns,
         elements,
         terms,
         reads,
@@ -369,6 +392,7 @@ fn child_scope(l: &Ledger, reserve: &TirMemoryReserverV1) -> R<()> {
         request_peak: l.peak.load(Ordering::SeqCst),
         wire_received: channel.0.borrow().received,
         wire_sent: channel.0.borrow().sent,
+        wire_calls: channel.0.borrow().calls,
         model_read_denials: denials,
         pid: std::process::id(),
     };
@@ -376,7 +400,7 @@ fn child_scope(l: &Ledger, reserve: &TirMemoryReserverV1) -> R<()> {
     emit(
         "cold-node-authenticated-end",
         l,
-        serde_json::json!({"outcome":tag,"checked":end.checked,"required":relations,"submit_ns":submit,"wire_received":end.wire_received}),
+        serde_json::json!({"outcome":tag,"checked":end.checked,"required":relations,"report":end.diagnostic()}),
     );
     drop(node);
     Ok(())
@@ -499,7 +523,7 @@ fn transfer<Rd: Read>(
     emit(
         "isolated-parent-complete",
         l,
-        serde_json::json!({"child_pid":end.pid,"child_outcome":end.outcome,"child_checked":end.checked,"material_ns":material_ns,
+        serde_json::json!({"child_report":end.diagnostic(),"parent_wire_received":channel.0.borrow().received,"parent_wire_calls":channel.0.borrow().calls,"child_pid":end.pid,"child_outcome":end.outcome,"child_checked":end.checked,"material_ns":material_ns,
         "transfer_wall_ns":start.elapsed().as_nanos(),"wire_sent":channel.0.borrow().sent,"node_submit_ns":end.submit_ns,"child_cpu_user_us":end.cpu_user_us,"child_cpu_system_us":end.cpu_system_us,
         "child_request_peak":end.request_peak,"child_process_maxrss":end.process_maxrss,"model_read_denials":end.model_read_denials}),
     );
@@ -657,4 +681,132 @@ fn oversized_outer_frame_and_exhausted_io_refuse_before_body_allocation() {
     let used = a.0.borrow().calls;
     assert!(a.read(&mut [0]).is_err());
     assert_eq!(a.0.borrow().calls, used);
+}
+
+// Three separate role address spaces. Miner runs and exits before Panel loads
+// metadata, so its complete subledger never overlaps Panel/Node reservations.
+const ROLE_CONTROL: u64 = 16 << 20;
+const MINER_CAP: u64 = REQUEST_CAP - ROLE_CONTROL;
+const MINER_TEST: &str = "trained_roles::isolated_process::miner_child";
+#[derive(BorshSerialize, BorshDeserialize)]
+struct MinerReport {
+    submission: MinerSubmission,
+    pid: u32,
+    cpu_user_us: u64,
+    cpu_system_us: u64,
+    maxrss: i64,
+    request_peak: u64,
+    panel_runs: u64,
+}
+#[test]
+#[ignore = "private Miner subprocess entry; actual original model and finite parent reservation required"]
+fn miner_child() {
+    assert_eq!(std::env::var("MISAKA_THREE_MINER").as_deref(), Ok("original-ordinary-only"));
+    assert_eq!(std::env::var("MISAKA_RUN_TRAINED_ROLES").as_deref(), Ok("pythia70m-original-16-1"));
+    cpu_limit(MeasurementWindow::Standard);
+    require_source_program_local_profile_v1().unwrap();
+    let l = Arc::new(Ledger::default());
+    let reserve = ledger_with_cap(l.clone(), MINER_CAP);
+    let early = reserve("miner-bootstrap-and-returned-submission", hash(CLASS), hash(CONTEXT), E).unwrap();
+    let submission = with_trained(&l, &reserve, &early, |file, inputs| {
+        let loaded = load_original_weights(file, inputs, &l, &reserve)?;
+        ordinary_loaded(&loaded, inputs, &l, &reserve)
+    })
+    .unwrap();
+    assert_eq!(l.panel_runs.load(Ordering::SeqCst), 0);
+    assert_eq!(l.live.load(Ordering::SeqCst), E);
+    let (user, system, rss) = usage();
+    let report = MinerReport {
+        submission,
+        pid: std::process::id(),
+        cpu_user_us: user,
+        cpu_system_us: system,
+        maxrss: rss,
+        request_peak: l.peak.load(Ordering::SeqCst),
+        panel_runs: 0,
+    };
+    {
+        let mut channel = Channel::new(unsafe { UnixStream::from_raw_fd(0) }).unwrap();
+        put(&mut channel, &bytes(&report, HEADER_CAP).unwrap(), HEADER_CAP).unwrap();
+    }
+    emit("ordinary-miner-process-complete", &l, serde_json::json!({"witness_runs":0,"returned_result":true}));
+    drop(report);
+    drop(early);
+    assert_eq!(l.live.load(Ordering::SeqCst), 0);
+}
+fn collect_miner(l: &Ledger, reserve: &TirMemoryReserverV1) -> R<MinerReport> {
+    require(l.live.load(Ordering::SeqCst) == ROLE_CONTROL, "Miner must precede parent metadata owners")?;
+    let _miner = reserve("miner-entire-subledger-before-spawn", hash(CLASS), hash(CONTEXT), MINER_CAP)?;
+    let (parent, child) = UnixStream::pair().map_err(ioerr)?;
+    let mut channel = Channel::new(parent).map_err(ioerr)?;
+    let fd: OwnedFd = child.into();
+    let mut command = Command::new(std::env::current_exe().map_err(ioerr)?);
+    command
+        .args(["--exact", MINER_TEST, "--ignored", "--nocapture", "--test-threads=1"])
+        .env("MISAKA_THREE_MINER", "original-ordinary-only")
+        .stdin(Stdio::from(fd))
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit());
+    let mut child = ChildGuard(command.spawn().map_err(ioerr)?);
+    drop(command);
+    let report: MinerReport = borsh::from_slice(&get(&mut channel, HEADER_CAP)?).map_err(ioerr)?;
+    require(report.pid == child.0.id(), "Miner report PID mismatch")?;
+    require(child.0.wait().map_err(ioerr)?.success(), "Miner did not exit cleanly")?;
+    require(channel.read(&mut [0]).map_err(ioerr)? == 0, "Miner extra report bytes")?;
+    require(report.panel_runs == 0 && report.request_peak <= MINER_CAP, "Miner resource/witness observation")?;
+    emit(
+        "miner-result-received",
+        l,
+        serde_json::json!({"miner_pid":report.pid,"miner_cpu_user_us":report.cpu_user_us,"miner_cpu_system_us":report.cpu_system_us,
+        "miner_maxrss":report.maxrss,"miner_request_peak":report.request_peak,"miner_witness_runs":report.panel_runs,
+        "wire_received":channel.0.borrow().received,"miner_exited_before_panel":true}),
+    );
+    Ok(report)
+}
+#[test]
+#[ignore = "actual original Miner-only process and finite aggregate request/outer resource monitor required"]
+fn trained_miner_process_only() {
+    assert_eq!(std::env::var("MISAKA_THREE_ROLES").as_deref(), Ok("original-16-1-three-processes"));
+    cpu_limit(MeasurementWindow::Standard);
+    let l = Arc::new(Ledger::default());
+    let reserve = ledger(l.clone());
+    let control = reserve("parent-role-ipc-control", hash(CLASS), hash(CONTEXT), ROLE_CONTROL).unwrap();
+    let report = collect_miner(&l, &reserve).unwrap();
+    assert_ne!(report.pid, std::process::id());
+    assert_eq!(report.submission.key, worker_key());
+    report.submission.result.authenticate(&report.submission.key, &report.submission.signature).unwrap();
+    assert_eq!(report.submission.generated, [273]);
+    assert_eq!(report.submission.result.execution, digest(hash(CONTEXT)));
+    assert_eq!(l.live.load(Ordering::SeqCst), ROLE_CONTROL);
+    drop(report);
+    drop(control);
+    assert_eq!(l.live.load(Ordering::SeqCst), 0);
+}
+#[test]
+#[ignore = "actual original Miner, Panel and sandboxed Node in three address spaces; aggregate/CPU/IO/wall monitors required"]
+fn trained_three_processes() {
+    assert_eq!(std::env::var("MISAKA_THREE_ROLES").as_deref(), Ok("original-16-1-three-processes"));
+    assert_eq!(std::env::var("MISAKA_TRAINED_COST_WINDOW").as_deref(), Ok("1440s-8gib-16mi-calls"));
+    cpu_limit(MeasurementWindow::ExtendedCost);
+    require_source_program_local_profile_v1().unwrap();
+    let l = Arc::new(Ledger::default());
+    let reserve = ledger(l.clone());
+    let control = reserve("parent-role-ipc-control", hash(CLASS), hash(CONTEXT), ROLE_CONTROL).unwrap();
+    let report = collect_miner(&l, &reserve).unwrap();
+    let miner_pid = report.pid;
+    let early = reserve("panel-bootstrap-and-retained-miner-submission", hash(CLASS), hash(CONTEXT), E).unwrap();
+    with_trained(&l, &reserve, &early, |file, inputs| {
+        run_loaded(file, inputs, &l, &reserve, MeasurementWindow::ExtendedCost, true, Some(report.submission))
+    })
+    .unwrap();
+    assert_eq!(l.panel_runs.load(Ordering::SeqCst), 1);
+    assert_eq!(l.live.load(Ordering::SeqCst), E + ROLE_CONTROL);
+    emit(
+        "three-processes-complete",
+        &l,
+        serde_json::json!({"miner_pid":miner_pid,"panel_pid":std::process::id(),"panel_runs":1,"miner_exited":true}),
+    );
+    drop(early);
+    drop(control);
+    assert_eq!(l.live.load(Ordering::SeqCst), 0);
 }

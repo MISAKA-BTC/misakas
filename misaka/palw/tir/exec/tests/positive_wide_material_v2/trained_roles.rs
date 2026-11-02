@@ -407,7 +407,7 @@ fn report(phase: &str, start: Instant, l: &Ledger, extra: serde_json::Value) {
         "ROLE_MEASURE {}",
         serde_json::json!({"phase":phase,"wall_ns":start.elapsed().as_nanos(),"requested_live":l.live.load(Ordering::SeqCst),
         "requested_peak":l.peak.load(Ordering::SeqCst),"requested_cumulative":l.cumulative.load(Ordering::SeqCst),
-        "process_maxrss_native_units":u.ru_maxrss,"node_process_isolated":false,"process_user_seconds":u.ru_utime.tv_sec as f64+u.ru_utime.tv_usec as f64/1e6,
+        "process_maxrss_native_units":u.ru_maxrss,"node_process_isolated":false,"pid":std::process::id(),"process_user_seconds":u.ru_utime.tv_sec as f64+u.ru_utime.tv_usec as f64/1e6,
         "process_system_seconds":u.ru_stime.tv_sec as f64+u.ru_stime.tv_usec as f64/1e6,"physical_rss_hard_quota":false,
         "native_authority":false,"canonical_job":false,"full_context_execution":false,"detail":extra})
     );
@@ -421,15 +421,12 @@ fn cpu_limit(window: MeasurementWindow) {
     assert_eq!(unsafe { libc::setrlimit(libc::RLIMIT_FSIZE, &file) }, 0);
 }
 
-fn run_loaded(
+fn load_original_weights<'a>(
     file: &mut File,
-    inputs: LocalForwardInputsV2<'_>,
+    inputs: LocalForwardInputsV2<'a>,
     l: &Ledger,
     reserve: &TirMemoryReserverV1,
-    window: MeasurementWindow,
-    isolated: bool,
-) -> R<()> {
-    let job = inputs.original_context;
+) -> R<LocalWideForwardArtifactV2<'a>> {
     let start = Instant::now();
     let mut ll = super::trace_free_bridge_tests::load_limits();
     ll.params.max_tensor_bytes = 256 << 20;
@@ -448,6 +445,14 @@ fn run_loaded(
     let mut lb = LocalForwardLoadBudgetV2::new(ll).map_err(|_| "load budget")?;
     let loaded = load_local_wide_forward_v2(file, inputs, &mut lb, reserve).map_err(|_| "owned original weights")?;
     report("original-owned-weights", start, l, serde_json::json!({"read_bytes":lb.usage().params.read_bytes}));
+    Ok(loaded)
+}
+fn ordinary_loaded(
+    loaded: &LocalWideForwardArtifactV2<'_>,
+    inputs: LocalForwardInputsV2<'_>,
+    l: &Ledger,
+    reserve: &TirMemoryReserverV1,
+) -> R<MinerSubmission> {
     let start = Instant::now();
     let ordinary_limits = LocalWideForwardLimitsV2 {
         max_positions: 2048,
@@ -474,7 +479,10 @@ fn run_loaded(
         .forward_local(INPUT, &mut rb, reserve)
         .map_err(|e| format!("ordinary Miner inference {e:?}; budget={:?}", rb.usage()))?;
     require(l.panel_runs.load(Ordering::SeqCst) == 0, "Miner used witness runner")?;
-    let signed = SignedMiner::for_output(&Pins { class: inputs.class, artifact: hash(ROOT), job }, digest(ordinary.output_root()));
+    let signed = SignedMiner::for_output(
+        &Pins { class: inputs.class, artifact: hash(ROOT), job: inputs.original_context },
+        digest(ordinary.output_root()),
+    );
     let generated = ordinary.generated().to_vec();
     report(
         "ordinary-miner",
@@ -482,7 +490,55 @@ fn run_loaded(
         l,
         serde_json::json!({"generated":generated,"output":format!("{}",ordinary.output_root()),"witness_runs":0}),
     );
-    drop(ordinary);
+    Ok(MinerSubmission { result: signed.result, key: signed.key, signature: signed.signature, generated })
+}
+#[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
+struct MinerSubmission {
+    result: MinerResultCommit,
+    key: [u8; PUBKEY_BYTES],
+    signature: [u8; SIGNATURE_BYTES],
+    generated: Vec<u32>,
+}
+impl MinerSubmission {
+    fn authenticate(self, f: &impl OracleFixture) -> R<(SignedMiner, Vec<u32>)> {
+        let key = *libcrux_ml_dsa::ml_dsa_87::generate_key_pair([91; 32]).verification_key.as_ref();
+        require(self.key == key, "independently assigned local Miner key mismatch")?;
+        let rooted = SignedMiner::context(f, &key);
+        rooted.check(ClaimForm::PositiveResultV2, &self.result).map_err(|e| format!("Miner local job binding {e:?}"))?;
+        let job = f.job();
+        require(
+            self.result.generation_seed == job.execution_seed
+                && self.result.prefill == job.declared_prefill_tokens
+                && self.result.decode == job.exact_decode_tokens
+                && self.result.max_context == job.max_context_tokens
+                && self.result.temperature_q24 == 0,
+            "Miner execution settings mismatch",
+        )?;
+        // These are fixed local diagnostic commitments, not native dependency
+        // or source-duty preimages. No credit is granted by their equality.
+        require(self.result.dependencies == d(21) && self.result.service_contract == d(22), "Miner local contract mismatch")?;
+        self.result.authenticate(&self.key, &self.signature).map_err(|e| format!("Miner signature {e:?}"))?;
+        require(self.generated.len() as u64 == u64::from(f.job().exact_decode_tokens), "Miner generated count")?;
+        require(self.result.output == digest(palw_attempt_output_root_v1(f.job(), &self.generated)), "Miner generated commitment")?;
+        Ok((SignedMiner { rooted, result: self.result, key: self.key, signature: self.signature }, self.generated))
+    }
+}
+fn run_loaded(
+    file: &mut File,
+    inputs: LocalForwardInputsV2<'_>,
+    l: &Ledger,
+    reserve: &TirMemoryReserverV1,
+    window: MeasurementWindow,
+    isolated: bool,
+    submission: Option<MinerSubmission>,
+) -> R<()> {
+    let job = inputs.original_context;
+    let loaded = load_original_weights(file, inputs, l, reserve)?;
+    let submission = match submission {
+        Some(signed) => signed,
+        None => ordinary_loaded(&loaded, inputs, l, reserve)?,
+    };
+    let (signed, generated) = submission.authenticate(&Pins { class: inputs.class, artifact: hash(ROOT), job })?;
     let mut panel_bounds = panel_limits();
     let planned_relations = match window {
         MeasurementWindow::Standard => None,
@@ -631,7 +687,7 @@ fn run_loaded(
     tape.rewind();
     if isolated {
         #[cfg(target_os = "macos")]
-        return isolated_process::send_trained(
+        let outcome = isolated_process::send_trained(
             file,
             &builder,
             &prep,
@@ -643,6 +699,18 @@ fn run_loaded(
             l,
             reserve,
         );
+        #[cfg(target_os = "macos")]
+        {
+            let usage = io.used.get();
+            report(
+                "isolated-provider-complete",
+                Instant::now(),
+                l,
+                serde_json::json!({"actual_read_bytes":usage.bytes,"actual_read_calls":usage.calls,
+                "actual_openings":usage.openings,"attempts":usage.attempts,"aggregate_tape_bytes":work.meter().tape_bytes}),
+            );
+            return outcome;
+        }
         #[cfg(not(target_os = "macos"))]
         return Err("cold-process diagnostic requires the tested macOS sandbox".into());
     }
@@ -908,6 +976,16 @@ fn run_trained(
     window: MeasurementWindow,
     isolated: bool,
 ) -> R<()> {
+    with_trained(l, reserve, early, |file, inputs| {
+        if storage_only { quote_storage(inputs, l) } else { run_loaded(file, inputs, l, reserve, window, isolated, None) }
+    })
+}
+fn with_trained<T>(
+    l: &Ledger,
+    reserve: &TirMemoryReserverV1,
+    early: &(dyn Send + Sync),
+    body: impl for<'a> FnOnce(&'a mut File, LocalForwardInputsV2<'a>) -> R<T>,
+) -> R<T> {
     let fixture = File::open(FIXTURE).map_err(|_| "fixture open")?;
     let bytes = fixture.metadata().map_err(|_| "fixture stat")?.len();
     require(bytes <= 1 << 20, "fixture byte cap before JSON")?;
@@ -964,12 +1042,7 @@ fn run_trained(
         l,
         serde_json::json!({"model":"EleutherAI/pythia-70m","revision":"a39f36b100fe8a5377810d56c3f4789b9c53ac42","original_class":CLASS,"original_artifact":ROOT,"context":CONTEXT}),
     );
-    owner
-        .with_inputs(&mut mb, |file, inputs| {
-            if storage_only { quote_storage(inputs, l) } else { run_loaded(file, inputs, l, reserve, window, isolated) }
-        })
-        .map_err(|_| "metadata changed")??;
-    Ok(())
+    owner.with_inputs(&mut mb, body).map_err(|_| "metadata changed")?
 }
 
 #[test]
@@ -1148,3 +1221,32 @@ fn provider_guards_io_and_failed_root_attempts_never_refund_the_caller_budget() 
 #[cfg(target_os = "macos")]
 #[path = "trained_roles/isolated_process.rs"]
 mod isolated_process;
+
+#[test]
+fn detached_miner_signature_job_key_and_generated_commitment_are_checked_before_panel_work() {
+    run_wide_common::with_fixture(1, |f, _| {
+        for mutation in 0..8 {
+            let signed = SignedMiner::new(f, false);
+            let mut submission =
+                MinerSubmission { result: signed.result, key: signed.key, signature: signed.signature, generated: EXPECTED.to_vec() };
+            match mutation {
+                1 => submission.signature[0] ^= 1,
+                2 => submission.result.input = d(244),
+                3 => submission.key[0] ^= 1,
+                4 => submission.generated[0] ^= 1,
+                5 => submission.result.generation_seed[0] ^= 1,
+                6 => submission.result.prefill += 1,
+                7 => submission.result.service_contract = d(243),
+                _ => {}
+            }
+            if mutation >= 5 {
+                let pair = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([91; 32]);
+                submission.signature =
+                    *libcrux_ml_dsa::ml_dsa_87::sign(&pair.signing_key, &submission.result.id().0.0, RESULT_SIGN_CONTEXT, [0; 32])
+                        .unwrap()
+                        .as_ref();
+            }
+            assert_eq!(submission.authenticate(f).is_ok(), mutation == 0);
+        }
+    });
+}
