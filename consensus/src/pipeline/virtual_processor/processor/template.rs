@@ -16,7 +16,7 @@ impl VirtualStateProcessor {
     /// Resolve its OWN selected-parent context before a selector can evict any
     /// carrier, and on the alternate prebuilt-transaction entry as well. Local
     /// history/store/capacity refusal is never a transaction or peer verdict.
-    fn palw_source_bootstrap_template_preflight_v1(
+    pub(super) fn palw_source_bootstrap_template_preflight_v1(
         &self,
         virtual_state: &VirtualState,
         prepared: &super::template_parent_snapshot_v1::PreparedTemplateParentV1,

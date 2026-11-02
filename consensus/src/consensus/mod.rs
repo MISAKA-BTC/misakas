@@ -1338,6 +1338,10 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_producer_facts_v2_impl(class_id, bond)
     }
 
+    fn palw_producer_context_v1(&self, parent: BlockHash, daa: u64, root: kaspa_hashes::Hash64) -> Result<u64, String> {
+        self.virtual_processor.palw_producer_context_v1(parent, daa, root)
+    }
+
     fn palw_fp_commitment_price_v1(
         &self,
         class_id: kaspa_hashes::Hash64,
