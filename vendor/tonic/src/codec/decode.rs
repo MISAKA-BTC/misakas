@@ -32,7 +32,10 @@ fn release_completed_decode_buffers(
         next.extend_from_slice(&inner.buf);
         inner.buf = next;
     }
-    if inner.decompress_buf.is_empty() && (completed_len > limit || inner.decompress_buf.capacity() > limit) {
+    // This helper runs only after a completed message or between messages.
+    // No next-frame bytes ever live in the decompression scratch. Bytes aliases
+    // returned by a decoder keep their own backing allocation alive.
+    if completed_len > limit || inner.decompress_buf.capacity() > limit {
         inner.decompress_buf = BytesMut::new();
     }
 }
@@ -145,6 +148,15 @@ impl<T> Streaming<T> {
 }
 
 impl StreamingInner {
+    fn clear_decode_buffers(&mut self) {
+        self.buf = BytesMut::new();
+        self.decompress_buf = BytesMut::new();
+    }
+
+    fn incomplete_message(&self) -> bool {
+        self.buf.has_remaining() || matches!(self.state, State::ReadBody { .. })
+    }
+
     fn decode_chunk(&mut self, buffer_settings: BufferSettings) -> Result<Option<DecodeBuf<'_>>, Status> {
         if let State::ReadHeader = self.state {
             if self.buf.remaining() < HEADER_SIZE {
@@ -245,13 +257,12 @@ impl StreamingInner {
                     return Poll::Ready(Ok(None));
                 }
 
-                let _ = std::mem::replace(&mut self.state, State::Error(Some(status.clone())));
                 debug!("decoder inner stream error: {:?}", status);
                 return Poll::Ready(Err(status));
             }
             None => {
                 // FIXME: improve buf usage.
-                return Poll::Ready(if self.buf.has_remaining() {
+                return Poll::Ready(if self.incomplete_message() {
                     trace!("unexpected EOF decoding stream, state: {:?}", self.state);
                     Err(Status::internal("Unexpected EOF decoding stream."))
                 } else {
@@ -264,6 +275,9 @@ impl StreamingInner {
             self.buf.put(frame.into_data().unwrap());
             Ok(Some(()))
         } else if frame.is_trailers() {
+            if self.incomplete_message() {
+                return Poll::Ready(Err(Status::internal("Unexpected EOF decoding stream.")));
+            }
             if let Some(trailers) = &mut self.trailers {
                 trailers.extend(frame.into_trailers().unwrap());
             } else {
@@ -372,8 +386,7 @@ impl<T> Streaming<T> {
                 // Error paths terminate the stream too: do not retain a hostile
                 // large payload until a later poll or connection timeout.
                 if decoded.is_err() {
-                    self.inner.buf = BytesMut::new();
-                    self.inner.decompress_buf = BytesMut::new();
+                    self.inner.clear_decode_buffers();
                 }
                 match decoded? {
                     Some(msg) => {
@@ -405,18 +418,33 @@ impl<T> Stream for Streaming<T> {
                 Ok(Some(item)) => return Poll::Ready(Some(Ok(item))),
                 Ok(None) => {}
                 Err(error) => {
-                    self.inner.buf = BytesMut::new();
-                    self.inner.decompress_buf = BytesMut::new();
+                    self.inner.clear_decode_buffers();
                     self.inner.state = State::Error(None);
                     return Poll::Ready(Some(Err(error)));
                 }
             }
 
-            if ready!(self.inner.poll_frame(cx))?.is_none() {
-                match self.inner.response() {
-                    Ok(()) => return Poll::Ready(None),
-                    Err(err) => self.inner.state = State::Error(Some(err)),
+            let frame = match self.inner.poll_frame(cx) {
+                Poll::Pending => {
+                    if matches!(self.inner.state, State::ReadHeader) {
+                        let settings = self.decoder.get_mut().buffer_settings();
+                        let prior_capacity = self.inner.buf.capacity();
+                        release_completed_decode_buffers(&mut self.inner, 0, prior_capacity, settings);
+                    }
+                    return Poll::Pending;
                 }
+                Poll::Ready(Err(error)) => {
+                    self.inner.clear_decode_buffers();
+                    self.inner.state = State::Error(None);
+                    return Poll::Ready(Some(Err(error)));
+                }
+                Poll::Ready(Ok(frame)) => frame,
+            };
+            if frame.is_none() {
+                let result = self.inner.response();
+                self.inner.clear_decode_buffers();
+                self.inner.state = State::Error(None);
+                return Poll::Ready(result.err().map(Err));
             }
         }
     }
