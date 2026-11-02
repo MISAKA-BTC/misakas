@@ -3105,6 +3105,16 @@ pub trait ConsensusApi: Send + Sync {
         unimplemented!()
     }
 
+    /// No-UTXO-body RPC projection. Implementations without the audited pinned
+    /// codec keep legacy behavior explicitly untracked; this is not cold-source
+    /// admission for header, metadata or EVM allocations.
+    fn get_block_rpc_projection_v1(&self, hash: BlockHash) -> ConsensusResult<crate::block::RpcBlockProjectionV1> {
+        let mut block = self.get_block_even_if_header_only(hash)?;
+        let ids = block.transactions.iter().map(|tx| tx.id()).collect();
+        block.transactions = Default::default();
+        Ok(crate::block::RpcBlockProjectionV1 { block, transaction_ids: crate::block::RetainedTransactionIdsV1 { ids, memory: None } })
+    }
+
     fn get_block_even_if_header_only(&self, hash: BlockHash) -> ConsensusResult<Block> {
         unimplemented!()
     }

@@ -5775,6 +5775,30 @@ impl ConsensusApi for Consensus {
         Ok(self.storage.evm_payload_store.get(hash).optional().unwrap().unwrap_or_default())
     }
 
+    fn get_block_rpc_projection_v1(&self, hash: BlockHash) -> ConsensusResult<kaspa_consensus_core::block::RpcBlockProjectionV1> {
+        use kaspa_consensus_core::block::{RetainedTransactionIdsV1, RpcBlockProjectionV1};
+        let _guard = self.pruning_lock.blocking_read();
+        let unavailable = |error| ConsensusError::GeneralOwned(format!("RPC block source: {error}"));
+        let status = self
+            .statuses_store
+            .read()
+            .get(hash)
+            .optional()
+            .map_err(unavailable)?
+            .filter(|status| status.has_block_header())
+            .ok_or(ConsensusError::HeaderNotFound(hash))?;
+        let ids = if status.is_header_only() {
+            RetainedTransactionIdsV1::default()
+        } else {
+            self.block_transactions_store.rpc_transaction_ids_v1(hash).optional().map_err(unavailable)?.unwrap_or_default()
+        };
+        let header =
+            self.headers_store.get_header(hash).optional().map_err(unavailable)?.ok_or(ConsensusError::HeaderNotFound(hash))?;
+        // Keep the IDs' owner intact across fallible/uncovered source reads.
+        let block = Block { header, transactions: Default::default(), evm_payload: Arc::new(self.get_block_evm_payload(hash)?) };
+        Ok(RpcBlockProjectionV1 { block, transaction_ids: ids })
+    }
+
     fn get_block_even_if_header_only(&self, hash: BlockHash) -> ConsensusResult<Block> {
         let Some(status) = self.statuses_store.read().get(hash).optional().unwrap().filter(|&status| status.has_block_header()) else {
             return Err(ConsensusError::HeaderNotFound(hash));
