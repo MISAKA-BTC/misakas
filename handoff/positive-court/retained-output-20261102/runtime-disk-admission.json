@@ -1,0 +1,12 @@
+{
+  "scope": "this fixed original 16/1 job only, no native service admission",
+  "known_capture_bytes": 93329660,
+  "known_claim_borsh_bytes": 212467948,
+  "maximum_tape_bytes_for_this_job": 305797608,
+  "free_disk_stop_floor": 536870912,
+  "additional_control_margin": 16777216,
+  "required_initial_free": 859445736,
+  "observed_free": 864063488,
+  "nominal_shared_tape_cap": 335544320,
+  "stop_floor_unchanged": true
+}
