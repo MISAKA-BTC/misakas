@@ -36,7 +36,7 @@ async fn slow_transport_slices_hold_snapshot_session_after_dequeue_and_codec_dro
     let expected = blob.encode_to_vec();
     let queued = Outbound::with_resources(blob, &local, vec![Box::new(Session(Arc::clone(&dropped)))]).unwrap();
     let mut codec = BudgetedProstCodec::<Blob, Blob>::default();
-    let mut body = EncodeBody::new_client(codec.encoder(), tokio_stream::iter([Ok(queued)]), None, None);
+    let mut body = EncodeBody::new_client(codec.encoder(), futures::stream::iter([Ok(queued)]), None, None);
     let bytes = body.frame().await.unwrap().unwrap().into_data().unwrap();
     assert_eq!(&bytes[5..], expected);
     let shared_transport_slice = bytes.slice(5..);
@@ -71,7 +71,7 @@ async fn codec_admission_failure_releases_original_without_waiting() {
     let local = bank(512 << 10);
     let queued = Outbound::try_new(Blob { value: vec![1; 128 << 10] }, &local).unwrap();
     let mut codec = BudgetedProstCodec::<Blob, Blob>::default();
-    let mut body = EncodeBody::new_client(codec.encoder(), tokio_stream::iter([Ok(queued)]), None, None);
+    let mut body = EncodeBody::new_client(codec.encoder(), futures::stream::iter([Ok(queued)]), None, None);
     let status = body.frame().await.unwrap().unwrap_err();
     assert_eq!(status.code(), tonic::Code::ResourceExhausted);
     assert_eq!(local.snapshot().reserved_bytes, 0);
