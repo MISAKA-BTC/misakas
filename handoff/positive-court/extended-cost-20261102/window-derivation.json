@@ -1,0 +1,46 @@
+{
+  "scope": "test-only separate opt-in diagnostic window; all original relations/arithmetic/per-relation limits remain; engineering planning estimates, not full-job bounds or activation evidence",
+  "basis": {
+    "record": "../trace-scratch-20261102/model-run-summary.json",
+    "original_job": "noncanonical 16 prompt / 1 decode, registered max context 2048",
+    "checked_numeric_prefix": 49152,
+    "required_relations": 213298,
+    "cpu_limit_seconds": 240,
+    "actual_provider_calls": 2313705,
+    "actual_provider_bytes": 1170576257
+  },
+  "planning_estimates_uniform_prefix_only": {
+    "scale_factor": 4.339558919270833,
+    "cpu_seconds": 1041.494140625,
+    "provider_calls": 10040459.169311523,
+    "provider_bytes": 5079784636.751017,
+    "warning": "later relation distributions may differ; none is a proven full-job upper bound"
+  },
+  "standard_window": {
+    "cpu_seconds": 240,
+    "outer_wall_seconds": 360,
+    "actual_provider_bytes": 4294967296,
+    "actual_provider_calls": 4194304
+  },
+  "extended_diagnostic_window": {
+    "cpu_seconds": 1440,
+    "outer_wall_seconds": 1800,
+    "actual_provider_bytes": 8589934592,
+    "actual_provider_calls": 16777216
+  },
+  "unchanged": {
+    "shared_logical_request_bytes": 8589934592,
+    "per_relation_elements": 16384,
+    "per_relation_terms": 262144,
+    "per_relation_source_reads": 262144,
+    "per_relation_workspace_bytes": 1073741824,
+    "authentication_owner_bytes": 268435456,
+    "opening_attempts": 1048576,
+    "provider_build_attempts": 2,
+    "cumulative_tape_bytes": 335544320,
+    "sampled_target_pg_rss_stop_bytes": 4294967296,
+    "sampled_disk_stop_bytes": 536870912
+  },
+  "fixed_parameter_or_native_activation_changed": false,
+  "purpose": "observe full-job costs or the next real finite refusal; cannot qualify an accepted production profile by itself"
+}

@@ -194,3 +194,26 @@ native outcome. See [the actual CPU sample](source-profile-20261102/README.md)
 and [scratch-reuse evidence](trace-scratch-20261102/README.md). This advances
 measurement/performance work while preserving every native, recovery, role,
 certification, physical-cost and activation requirement above.
+
+## Separate full-cost diagnostic and complete-plan copy allowance
+
+An additional, explicitly gated private test retains all 213,298 original
+relations while allowing finite 1,440-second CPU, 8-GiB actual file reads and
+2^24 read calls. The standard 240-second window remains. Actual cumulative
+completed elements/terms/source reads and final EOF/signature timing are now
+observable without replaying evaluations. These diagnostic bounds do not
+change any production profile or grant native rights.
+
+The first actual extended execution completes exactly 65,529 numeric relations
+and then refuses a material's conservative copy charge against the old 2-TiB
+cumulative ceiling; exit 101 and the failed test remain preserved. All spent
+charges are retained. The next extended window derives
+`213,298 * (2 * 16 MiB) + existing 2 TiB` from the original expanded plan,
+yielding 9,356,116,492,288 symbolic copy/IO bytes. These are not actual file
+traffic, RAM or native fees. It preserves all other evaluation, source,
+attempt, tape, actual-read and resource bounds. Corrected selected runtime
+tests (36) and strict Clippy pass. The corrected actual run is monitored
+separately; its historical running snapshot does not prove a complete outcome.
+See [extended-cost evidence](extended-cost-20261102/README.md). Full trained
+checking, isolated role costs and every native/integration/activation condition
+above remain required.
