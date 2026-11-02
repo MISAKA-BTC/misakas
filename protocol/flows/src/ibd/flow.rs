@@ -377,6 +377,13 @@ impl IbdFlow {
                         // the server returns as a matter of course — it holds one snapshot, keyed
                         // to its own pruning point, so any peer whose pruning point advanced during
                         // a multi-minute header sync answers `found: false` to an honest request.
+                        if e.is_local_consensus_exiting() {
+                            // Keep any incomplete adopted import held, using the
+                            // existing local-failure ownership rules. Never retry
+                            // or condemn this peer/chain during node shutdown.
+                            self.ctx.finish_ibd_after_local_resource_failure();
+                            return Err(e);
+                        }
                         if e.is_local_native_resource_unavailable() {
                             if self.ctx.finish_ibd_after_local_resource_failure() {
                                 return Err(e);
@@ -656,6 +663,10 @@ impl IbdFlow {
                 //
                 // Transport failures leave the candidate where it was, so the ordinary retry and
                 // source-rotation machinery gets its turn. The lease bounds how long that can go on.
+                if e.is_local_consensus_exiting() {
+                    self.ctx.chain_participation().end_decision();
+                    return;
+                }
                 let local_resource = e.is_local_native_resource_unavailable();
                 let proof_was_judged = !local_resource
                     && !matches!(

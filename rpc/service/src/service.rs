@@ -529,6 +529,15 @@ fn parse_evm_tx_hash(s: &str) -> RpcResult<kaspa_hashes::EvmH256> {
     Ok(kaspa_hashes::EvmH256::from_bytes(bytes))
 }
 
+// Preserve shutdown as a local RPC error rather than a verdict on this block.
+fn submit_block_report(result: Result<(), ProtocolError>) -> RpcResult<SubmitBlockResponse> {
+    match result {
+        Ok(()) => Ok(SubmitBlockResponse { report: SubmitBlockReport::Success }),
+        Err(error) if error.is_local_consensus_exiting() => Err(RpcError::General(error.to_string())),
+        Err(_) => Ok(SubmitBlockResponse { report: SubmitBlockReport::Reject(SubmitBlockRejectReason::BlockInvalid) }),
+    }
+}
+
 pub struct RpcCoreService {
     consensus_manager: Arc<ConsensusManager>,
     notifier: Arc<Notifier<Notification, ChannelConnection>>,
@@ -1015,26 +1024,29 @@ impl RpcApi for RpcCoreService {
         }
 
         trace!("incoming SubmitBlockRequest for block {}", hash);
-        match self.flow_context.submit_rpc_block(&session, block.clone()).await {
-            Ok(_) => Ok(SubmitBlockResponse { report: SubmitBlockReport::Success }),
+        let result = self.flow_context.submit_rpc_block(&session, block.clone()).await;
+        match &result {
+            Ok(_) => {}
+            Err(error) if error.is_local_consensus_exiting() => {
+                debug!("RPC block {hash} virtual processing stopped locally: {error}");
+            }
             Err(ProtocolError::RuleError(RuleError::BadMerkleRoot(h1, h2))) => {
                 warn!(
                     "The RPC submitted block {} triggered a {} error: {}.
 NOTE: This error usually indicates an RPC conversion error between the node and the miner. This is likely to reflect using a NON-SUPPORTED miner.",
                     hash,
                     stringify!(RuleError::BadMerkleRoot),
-                    RuleError::BadMerkleRoot(h1, h2)
+                    RuleError::BadMerkleRoot(*h1, *h2)
                 );
                 if self.config.net.is_mainnet() {
                     warn!("Printing the full block for debug purposes:\n{:?}", block);
                 }
-                Ok(SubmitBlockResponse { report: SubmitBlockReport::Reject(SubmitBlockRejectReason::BlockInvalid) })
             }
             Err(err) => {
                 warn!("The RPC submitted block triggered an error: {}\nPrinting the full block for debug purposes:\n{:?}", err, block);
-                Ok(SubmitBlockResponse { report: SubmitBlockReport::Reject(SubmitBlockRejectReason::BlockInvalid) })
             }
         }
+        submit_block_report(result)
     }
 
     async fn get_block_template_call(
@@ -7316,5 +7328,20 @@ mod complete_reward_cursor_tests {
         ] {
             assert!(parse_exec_reward_cursor(&bad).is_err(), "{bad}");
         }
+    }
+}
+
+#[cfg(test)]
+mod submit_block_shutdown_tests {
+    use super::*;
+    #[test]
+    fn local_shutdown_is_not_block_invalid_and_other_reports_are_preserved() {
+        let local = submit_block_report(Err(ProtocolError::RuleError(RuleError::ConsensusExiting)));
+        assert!(matches!(local, Err(RpcError::General(message)) if message.contains("exiting")));
+        assert!(matches!(submit_block_report(Ok(())), Ok(SubmitBlockResponse { report: SubmitBlockReport::Success })));
+        assert!(matches!(
+            submit_block_report(Err(ProtocolError::RuleError(RuleError::NoTransactions))),
+            Ok(SubmitBlockResponse { report: SubmitBlockReport::Reject(SubmitBlockRejectReason::BlockInvalid) })
+        ));
     }
 }

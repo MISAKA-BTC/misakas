@@ -279,6 +279,7 @@ impl Consensus {
 
         let virtual_processor = Arc::new(VirtualStateProcessor::new(
             virtual_receiver,
+            is_consensus_exiting.clone(),
             pruning_sender,
             pruning_receiver.clone(),
             virtual_pool,

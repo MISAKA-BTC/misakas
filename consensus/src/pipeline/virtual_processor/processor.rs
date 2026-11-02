@@ -1,3 +1,6 @@
+#[cfg(test)]
+mod shutdown_tests;
+
 use crate::{
     consensus::{
         services::{
@@ -221,6 +224,7 @@ pub(crate) enum PalwWeighFaultV2 {
 /// candidate walks and virtual resolution. They never disqualify a peer block.
 #[derive(Clone, Debug)]
 pub(crate) enum PalwLocalTransitionFaultV1 {
+    Shutdown,
     Resource(kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1),
     Context(kaspa_consensus_core::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1),
 }
@@ -266,6 +270,7 @@ impl From<kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1> for P
 impl std::fmt::Display for PalwLocalTransitionFaultV1 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Shutdown => f.write_str("local consensus is exiting"),
             Self::Resource(e) => write!(f, "{e}"),
             Self::Context(e) => write!(f, "{e}"),
         }
@@ -274,6 +279,7 @@ impl std::fmt::Display for PalwLocalTransitionFaultV1 {
 impl PalwLocalTransitionFaultV1 {
     pub(crate) fn into_rule_error_v1(self) -> RuleError {
         match self {
+            Self::Shutdown => RuleError::ConsensusExiting,
             Self::Resource(e) => RuleError::LocalNativeCapacityUnavailable(e),
             Self::Context(e) => RuleError::LocalNativeStateContextUnavailable(e),
         }
@@ -404,6 +410,8 @@ struct PalwUtxoCommitV2 {
 }
 
 pub struct VirtualStateProcessor {
+    // Shared with Consensus and pruning; checked only outside block commits.
+    is_consensus_exiting: Arc<std::sync::atomic::AtomicBool>,
     // Channels
     receiver: CrossbeamReceiver<VirtualStateProcessingMessage>,
     pruning_sender: CrossbeamSender<PruningProcessingMessage>,
@@ -1300,6 +1308,7 @@ impl VirtualStateProcessor {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         receiver: CrossbeamReceiver<VirtualStateProcessingMessage>,
+        is_consensus_exiting: Arc<std::sync::atomic::AtomicBool>,
         pruning_sender: CrossbeamSender<PruningProcessingMessage>,
         pruning_receiver: CrossbeamReceiver<PruningProcessingMessage>,
         thread_pool: Arc<ThreadPool>,
@@ -1360,6 +1369,7 @@ impl VirtualStateProcessor {
         }
         Self {
             receiver,
+            is_consensus_exiting,
             pruning_sender,
             pruning_receiver,
             thread_pool,
@@ -1773,7 +1783,11 @@ impl VirtualStateProcessor {
     }
 
     pub fn worker(self: &Arc<Self>) {
-        'outer: while let Ok(msg) = self.receiver.recv() {
+        self.worker_with_receiver(&self.receiver);
+    }
+
+    fn worker_with_receiver(self: &Arc<Self>, receiver: &CrossbeamReceiver<VirtualStateProcessingMessage>) {
+        'outer: while let Ok(msg) = receiver.recv() {
             if msg.is_exit_message() {
                 break;
             }
@@ -1782,12 +1796,18 @@ impl VirtualStateProcessor {
             // This is done since virtual processing is not a per-block
             // operation, so it benefits from max available info
 
-            let messages: Vec<VirtualStateProcessingMessage> = std::iter::once(msg).chain(self.receiver.try_iter()).collect();
+            let messages: Vec<VirtualStateProcessingMessage> = std::iter::once(msg).chain(receiver.try_iter()).collect();
             trace!("virtual processor received {} tasks", messages.len());
 
             let resolution = self.resolve_virtual();
-            if let Err(ref unavailable) = resolution {
-                warn!("virtual resolution deferred by local native preparation: {unavailable}; no block is disqualified");
+            match &resolution {
+                Err(PalwLocalTransitionFaultV1::Shutdown) => {
+                    debug!("virtual resolution stopped at a shutdown boundary; no block is disqualified")
+                }
+                Err(unavailable) => {
+                    warn!("virtual resolution deferred by local native preparation: {unavailable}; no block is disqualified")
+                }
+                Ok(()) => {}
             }
 
             let statuses_read = self.statuses_store.read();
@@ -1810,7 +1830,12 @@ impl VirtualStateProcessor {
         self.pruning_sender.send(PruningProcessingMessage::Exit).unwrap();
     }
 
+    fn check_shutdown_boundary(&self) -> Result<(), PalwLocalTransitionFaultV1> {
+        if self.is_consensus_exiting.load(Ordering::Acquire) { Err(PalwLocalTransitionFaultV1::Shutdown) } else { Ok(()) }
+    }
+
     fn resolve_virtual(self: &Arc<Self>) -> Result<(), PalwLocalTransitionFaultV1> {
+        self.check_shutdown_boundary()?;
         let pruning_point = self.pruning_point_store.read().pruning_point().unwrap();
         let virtual_read = self.virtual_stores.upgradable_read();
         let prev_state = virtual_read.state.get().unwrap();
@@ -1869,6 +1894,7 @@ impl VirtualStateProcessor {
             finality_point,
             pruning_point,
         )?;
+        self.check_shutdown_boundary()?;
         let (virtual_parents, virtual_ghostdag_data) =
             self.pick_virtual_parents(new_sink, virtual_parent_candidates, pruning_point, round_tips);
         assert_eq!(virtual_ghostdag_data.selected_parent, new_sink);
@@ -1888,6 +1914,7 @@ impl VirtualStateProcessor {
             "the lead cap's policy leaves only merged tips out, never the sink"
         );
 
+        self.check_shutdown_boundary()?;
         let new_virtual_state = match self.calculate_and_commit_virtual_state(
             virtual_read,
             virtual_parents,
@@ -1991,6 +2018,7 @@ impl VirtualStateProcessor {
         from: BlockHash,
         to: BlockHash,
     ) -> Result<BlockHash, PalwLocalTransitionFaultV1> {
+        self.check_shutdown_boundary()?;
         // kaspa-pq Phase 10/11 (ADR-0009 Addendum B §B.1): walk the active-bond
         // view in lockstep with `diff` so it always equals the bond set as-of
         // the block whose UTXO state `diff` represents. No-op on networks
@@ -2046,8 +2074,13 @@ impl VirtualStateProcessor {
                         let removed: Vec<BlockHash> = path.removed.to_vec();
                         let added: Vec<BlockHash> = path.added.to_vec();
                         let store = self.palw_state_v2_store.read();
-                        match crate::processes::palw_state_walk::walk_chain_path_retained_v1(
-                            &store, params, tip_state, &removed, &added,
+                        match crate::processes::palw_state_walk::walk_chain_path_retained_until_v1(
+                            &store,
+                            params,
+                            tip_state,
+                            &removed,
+                            &added,
+                            || self.is_consensus_exiting.load(Ordering::Acquire),
                         ) {
                             Ok(state) => {
                                 warn!(
@@ -2058,6 +2091,9 @@ impl VirtualStateProcessor {
                                 Some(state)
                             }
                             Err(e) => {
+                                if matches!(e, crate::processes::palw_state_walk::PalwStateWalkError::ConsensusExiting) {
+                                    return Err(PalwLocalTransitionFaultV1::Shutdown);
+                                }
                                 if let Some(context) = e.native_context_v1() {
                                     return Err(PalwLocalTransitionFaultV1::Context(context));
                                 }
@@ -2088,12 +2124,13 @@ impl VirtualStateProcessor {
                                         let snap_path = self.dag_traversal_manager.calculate_chain_path(snap_block, from, None);
                                         let snap_removed: Vec<BlockHash> = snap_path.removed.to_vec();
                                         let snap_added: Vec<BlockHash> = snap_path.added.to_vec();
-                                        match crate::processes::palw_state_walk::walk_chain_path_retained_v1(
+                                        match crate::processes::palw_state_walk::walk_chain_path_retained_until_v1(
                                             &store,
                                             params,
                                             snap_state,
                                             &snap_removed,
                                             &snap_added,
+                                            || self.is_consensus_exiting.load(Ordering::Acquire),
                                         ) {
                                             Ok(state) => {
                                                 warn!(
@@ -2106,6 +2143,12 @@ impl VirtualStateProcessor {
                                                 Some(state)
                                             }
                                             Err(snap_err) => {
+                                                if matches!(
+                                                    snap_err,
+                                                    crate::processes::palw_state_walk::PalwStateWalkError::ConsensusExiting
+                                                ) {
+                                                    return Err(PalwLocalTransitionFaultV1::Shutdown);
+                                                }
                                                 if let Some(context) = snap_err.native_context_v1() {
                                                     return Err(PalwLocalTransitionFaultV1::Context(context));
                                                 }
@@ -2160,6 +2203,7 @@ impl VirtualStateProcessor {
 
         // Walk down to the reorg split point
         for current in self.reachability_service.default_backward_chain_iterator(from) {
+            self.check_shutdown_boundary()?;
             if self.reachability_service.is_chain_ancestor_of(current, to) {
                 split_point = Some(current);
                 break;
@@ -2232,6 +2276,7 @@ impl VirtualStateProcessor {
         // worker overlapped with this thread's serial UTXO validation. Inert
         // when the lane is inactive, on short walks (steady state: 1 block),
         // and on non-evm builds. Commits stay HERE, in canonical order.
+        self.check_shutdown_boundary()?;
         let evm_pipeline = self.maybe_spawn_evm_pipeline(split_point, to);
 
         // A variable holding the most recent UTXO-valid block on `chain(to)` (note that it's maintained such
@@ -2242,6 +2287,7 @@ impl VirtualStateProcessor {
         let mut chain_block_counter = 0;
         let mut chain_disqualified_counter = 0;
         for (selected_parent, current) in self.reachability_service.forward_chain_iterator(split_point, to, true).tuple_windows() {
+            self.check_shutdown_boundary()?;
             if selected_parent != diff_point {
                 // This indicates that the selected parent is disqualified, propagate up and continue
                 let statuses_guard = self.statuses_store.upgradable_read();
@@ -3032,6 +3078,7 @@ impl VirtualStateProcessor {
                 Err(err) => panic!("unexpected error {err}"),
             }
         }
+        self.check_shutdown_boundary()?;
         // ADR-0042 Unit C: the walked state is the state AT `diff_point`, which is exactly what
         // the tip row means — so it is written where the walk ends rather than at each block. A
         // per-block tip write would be the same value re-derived N times, and the delta rows are
@@ -5150,6 +5197,7 @@ impl VirtualStateProcessor {
 
         // ADR-0125: a round block is never a sink. Each round tip stands for its anchor, and the set
         // is reduced to an antichain again — the heap's invariant below.
+        self.check_shutdown_boundary()?;
         let tips = self.palw_project_round_blocks(tips);
 
         // The initial diff point is the previous sink
@@ -5168,6 +5216,7 @@ impl VirtualStateProcessor {
         // resumes seamlessly.
         if let Some(preferred) = self.dns_stake_preferred_tip(prev_sink, &tips, finality_point) {
             diff_point = self.calculate_utxo_state_relatively(stores, diff, bond_view, diff_point, preferred)?;
+            self.check_shutdown_boundary()?;
             if diff_point == preferred && self.dns_reorg_outcome_checked(preferred, prev_sink, bond_view)?.is_accept() {
                 info!(
                     "DNS stake preference: this chain's own overlay is dead (anchor stale past TTL) and tip {preferred} carries a confirmation-grade live overlay within the work-deficit bound; moving the sink there (previous sink {prev_sink}). Templates now extend the live-overlay branch."
@@ -5208,6 +5257,7 @@ impl VirtualStateProcessor {
         // since we check that every pushed block is not in the past of current heap
         // (and it can't be in the future by induction)
         loop {
+            self.check_shutdown_boundary()?;
             // **An exhausted heap is a diagnosis, not a reason to die.**
             //
             // The heap is seeded from `tips` and grows only by a candidate's parents that are AT OR
@@ -5257,6 +5307,7 @@ impl VirtualStateProcessor {
             };
             if candidate_at_or_above_finality {
                 diff_point = self.calculate_utxo_state_relatively(stores, diff, bond_view, diff_point, candidate)?;
+                self.check_shutdown_boundary()?;
                 if diff_point == candidate {
                     // This indicates that candidate has valid UTXO state and that `diff` represents its diff from virtual
 
