@@ -1,0 +1,18 @@
+production_gc_sha256=5108e8931955d6787bda5c87f7d99a65dfa1290bffef26016a0bd734c2df9441
+
+running 3 tests
+test foreign_gc_read_failures_keep_material_but_healthy_absence_does_not_pin_forever ... ok
+test foreign_gc_rereads_accepted_retention_after_restart_and_branch_change ... ok
+test the_foreign_retention_keeps_a_live_claims_material_past_the_age_bound ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+snapshot_helper_sha256=4742e2a3e700a7a07cd145e31be84a496e2fac0bf40864edbb25e88986b2898d
+
+running 4 tests
+test snapshot_authority::tests::matching_complete_snapshot_preserves_exact_absence_and_physical_payment_clock ... ok
+test snapshot_authority::tests::healthy_absent_or_discharged_claims_can_be_collected_after_recovery ... ok
+test snapshot_authority::tests::failed_cold_missing_or_changed_reads_never_authorize_material_gc ... ok
+test snapshot_authority::tests::unavailable_or_other_generation_material_snapshot_cannot_discharge_retention ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

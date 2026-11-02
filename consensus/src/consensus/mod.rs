@@ -1410,6 +1410,34 @@ impl ConsensusApi for Consensus {
         palw_derived_claim_view_v1(&state, claim_id)
     }
 
+    fn palw_material_retention_owed_v1(&self, claim: kaspa_hashes::Hash64) -> Result<bool, String> {
+        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.config.params.palw_consensus_mode
+        else {
+            return Ok(false);
+        };
+        let before = self.lkg_virtual_state.load();
+        let complete = || {
+            self.virtual_processor
+                .pruning_import_status()
+                .map_err(|error| error.to_string())
+                .map(|(session, stable)| (stable && session.active.is_none()).then_some(session.epoch))
+        };
+        let import_before = complete()?;
+        let snapshot = self.virtual_processor.palw_v2_gc_reader_state_v1();
+        let after = self.lkg_virtual_state.load();
+        let stable = import_before.is_some()
+            && import_before == complete()?
+            && before.ghostdag_data.selected_parent == after.ghostdag_data.selected_parent
+            && before.daa_score == after.daa_score;
+        let now = after.daa_score;
+        palw_material_hold::material_owed_from_snapshot_v1(stable, after.ghostdag_data.selected_parent, snapshot, |state| {
+            (self.config.params.palw_rcore_plus_active_at(now)
+                && state.claim(&claim).is_some_and(|row| kaspa_consensus_core::palw_da_rcore_v1::palw_da_material_owed_v1(row, now)))
+                || (self.config.params.palw_material_income_active_at(now)
+                    && state.material_income_hold_until_v1(&bundle.state, claim).is_some_and(|until| until == u64::MAX || now < until))
+        })
+    }
+
     fn palw_material_income_hold_until_v1(&self, claim: kaspa_hashes::Hash64) -> Option<u64> {
         let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.config.params.palw_consensus_mode
         else {

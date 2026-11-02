@@ -4358,6 +4358,28 @@ impl VirtualStateProcessor {
         }
     }
 
+    /// Retention reads borrow only resident state; they never reconstruct or
+    /// deep-clone the complete native state to decide whether a file may be deleted.
+    pub(crate) fn palw_v2_gc_reader_state_v1(
+        &self,
+    ) -> kaspa_database::prelude::StoreResult<
+        Option<(BlockHash, Arc<kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1>)>,
+    > {
+        let sink = self.lkg_virtual_state.load().ghostdag_data.selected_parent;
+        if let Some((at, state)) = self.palw_reader_snapshot.lock().as_ref()
+            && *at == sink
+        {
+            return Ok(Some((sink, Arc::clone(state))));
+        }
+        let snapshot = self.palw_state_v2_store.read().load_tip_resident_v1()?;
+        if snapshot.as_ref().is_some_and(|(at, _)| *at != sink) {
+            return Err(kaspa_database::prelude::StoreError::LocalResourceUnavailable(
+                "PALW GC tip and selected parent differ; retry".into(),
+            ));
+        }
+        Ok(snapshot)
+    }
+
     /// **LIVE-R1 N3: the PALW state every `palw_*` reader answers from — the state AT the committed
     /// virtual sink**, with the same signature as the store's `load_tip_cached` it replaces.
     ///
