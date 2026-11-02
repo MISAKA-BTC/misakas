@@ -515,7 +515,10 @@ impl ConsensusFactory for Factory {
 
         #[cfg(test)]
         self.register_retained_fixture_instance_v1(&consensus, false);
-        Ok((ConsensusInstance::new(session_lock, consensus.clone()), Arc::new(Ctl::new(self.management_store.clone(), db, consensus))))
+        Ok((
+            ConsensusInstance::new_initializing(session_lock, consensus.clone()),
+            Arc::new(Ctl::new(self.management_store.clone(), db, consensus)),
+        ))
     }
 
     fn new_staging_consensus(&self) -> ConsensusCreationResult<(ConsensusInstance, DynConsensusCtl)> {
@@ -602,7 +605,10 @@ impl ConsensusFactory for Factory {
 
         #[cfg(test)]
         self.register_retained_fixture_instance_v1(&consensus, true);
-        Ok((ConsensusInstance::new(session_lock, consensus.clone()), Arc::new(Ctl::new(self.management_store.clone(), db, consensus))))
+        Ok((
+            ConsensusInstance::new_initializing(session_lock, consensus.clone()),
+            Arc::new(Ctl::new(self.management_store.clone(), db, consensus)),
+        ))
     }
 
     fn close(&self) {

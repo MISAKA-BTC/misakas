@@ -1512,8 +1512,8 @@ impl TransitionBuilder<'_> {
             };
             if let Some(service) = service {
                 // Do not re-date unrelated claims midway through an accepting block. G14 lane r6-d1-release (user decision D1): a
-                // bound claim keeps its normal (pre-Final / Final) deadline — DL-1 arms it. A terminal binding holds retirement,
-                // while its exact operational collateral-release deadline remains armed.
+                // bound claim keeps its normal (pre-Final / Final) deadline. A terminal binding holds retirement,
+                // while its exact operational exposure-release deadline remains armed.
                 let held_terminal: Vec<Hash64> = service
                     .claims
                     .keys()

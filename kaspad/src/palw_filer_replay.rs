@@ -1588,6 +1588,7 @@ mod tests {
     /// A seat duty on `claim`, produced by `executor`.
     fn duty(claim: u64, executor: u64) -> PalwSeatDutyV2 {
         PalwSeatDutyV2 {
+            model_panel_one: false,
             accepted_block: h(0xB0 + claim),
             claim_id: h(claim),
             class_id: h(0xC1),

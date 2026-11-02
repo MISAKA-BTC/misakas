@@ -1,0 +1,34 @@
+{
+  "binary": "/root/t12-rel/native-hold-artifact-8cac52ec4ed1/kaspad",
+  "binarySha256": "e6d638a4f2a9fa32b6072c32ad5ce929f015efa189b721ceee2be5a9aa52e83e",
+  "boots": [
+    {
+      "unit": "misaka-fork-probe-fresh-1793449054",
+      "params": "edf472294c89dab0e64e625dbdfcd039b91081b05f89eacf8ba2aa25baa3a189",
+      "schedule": "4024a6e74d7aeb170d99e67c6d8fbe7884d71a716ccb778cd1ee526d01781b04",
+      "genesis": "a27f8f44fe4d91a5bed940be9dbd6d260ccb95cc00d948b1c08ddb6bd1a5f02542a6cf35c7a4d959ba4863ac1557861671763e5cc22937c697870283a8ca1f23",
+      "daa": 0,
+      "synced": false
+    },
+    {
+      "unit": "misaka-fork-probe-resume-1793449111",
+      "params": "edf472294c89dab0e64e625dbdfcd039b91081b05f89eacf8ba2aa25baa3a189",
+      "schedule": "4024a6e74d7aeb170d99e67c6d8fbe7884d71a716ccb778cd1ee526d01781b04",
+      "genesis": "a27f8f44fe4d91a5bed940be9dbd6d260ccb95cc00d948b1c08ddb6bd1a5f02542a6cf35c7a4d959ba4863ac1557861671763e5cc22937c697870283a8ca1f23",
+      "daa": 0,
+      "synced": false
+    }
+  ],
+  "passed": true,
+  "pendingReportUnchanged": true,
+  "partialDatabasePreserved": true,
+  "additionalAsideCreated": false,
+  "report": {
+    "confirmation": "held (no mining, no attesting, unsynced) until at least 2 long-lived outbound peers relay blocks extending the synced chain",
+    "dataDirectory": "/root/t12-rel/probe-native-hold-8cac-20261031/app/misaka-testnet-12/datadir",
+    "previousDataDirectoryMovedTo": null,
+    "startedUnixMs": 1793449110000,
+    "status": "syncing"
+  },
+  "registryProtection": "/root/.misaka mounted read-only for probe services"
+}

@@ -4091,6 +4091,21 @@ impl PalwChainStateV2 {
         if params.rcore_plus_from_daa().is_some() {
             for (id, claim) in &self.claims {
                 let rcore = &claim.rcore;
+                let one = params.model_panel_one_governs_v1(claim.accepted_daa);
+                let tagged_one = rcore.licence_door == Some(crate::palw_economic_safety_v1::PalwLicenceDoorTagV1::G14PanelOne);
+                let missing_required_tag = one
+                    && !tagged_one
+                    && (rcore.licence_door.is_some()
+                        || matches!(claim.phase, PalwClaimPhaseV2::ReceiptLicensed { .. } | PalwClaimPhaseV2::Final { .. }));
+                if tagged_one && !one
+                    || missing_required_tag
+                    || tagged_one && (rcore.basis_k != 1 || rcore.served_mask != 1 || rcore.unserved_seen || rcore.escrow_released)
+                    || one && self.panels.get(id).is_some_and(|panel| panel.seats.len() != 1)
+                {
+                    return Err(PalwStateV2Error::CarriageInconsistent(format!(
+                        "claim {id} has inconsistent G14 single-seat scope or licence"
+                    )));
+                }
                 match &claim.phase {
                     PalwClaimPhaseV2::Provisional | PalwClaimPhaseV2::PanelBound { .. } if *rcore != PalwClaimRcoreV1::default() => {
                         return Err(PalwStateV2Error::CarriageInconsistent(format!(
@@ -4218,30 +4233,6 @@ impl PalwChainStateV2 {
             exposure == self.reserved_exposure
         };
         if !exposure_matches {
-            // Opt-in debug diagnostics only: keep the comparison and refusal unchanged.
-            // Visit each key once without allocating another ledger; never dump whole maps.
-            #[cfg(debug_assertions)]
-            if std::env::var_os("MISAKA_EXPOSURE_DIAGNOSTICS").as_deref() == Some(std::ffi::OsStr::new("1")) {
-                let keys = exposure.keys().chain(self.reserved_exposure.keys().filter(|bond| !exposure.contains_key(*bond)));
-                for bond in keys.filter(|bond| exposure.get(*bond) != self.reserved_exposure.get(*bond)).take(4) {
-                    let (mut live, mut finalized, mut voided) = (0usize, 0usize, 0usize);
-                    for claim in self.claims.values().filter(|claim| claim.bond == *bond) {
-                        match &claim.phase {
-                            PalwClaimPhaseV2::Final { .. } => finalized += 1,
-                            PalwClaimPhaseV2::Voided { .. } => voided += 1,
-                            _ => live += 1,
-                        }
-                    }
-                    let seat_duties = self.panel_duties.values().filter(|row| row.seats.contains_key(bond)).count();
-                    eprintln!(
-                        "[exposure-diagnostic] bond={bond:?} derived={:?} stored={:?} last_daa={:?} \
-                         producer_claims_live={live} final={finalized} voided={voided} seat_duties={seat_duties}",
-                        exposure.get(bond),
-                        self.reserved_exposure.get(bond),
-                        self.last_point.as_ref().map(|point| point.daa_score),
-                    );
-                }
-            }
             return Err(PalwStateV2Error::CarriageInconsistent(
                 "reserved_exposure differs from the native duties it summarizes".into(),
             ));

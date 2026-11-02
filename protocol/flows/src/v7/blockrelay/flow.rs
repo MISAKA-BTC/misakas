@@ -83,6 +83,9 @@ pub struct HandleRelayInvsFlow {
     invs_route: TwoWayIncomingRoute,
     /// A route for other messages such as Block and BlockLocator
     msg_route: IncomingRoute,
+    /// Optional candidate queries can time out without closing this connection. Their late
+    /// responses must never enter the Block/BlockLocator response queue (t12 incident 2026-10-31).
+    summary_route: IncomingRoute,
     /// A channel sender for sending blocks to be handled by the IBD flow (of this peer)
     ibd_sender: JobSender<Block>,
     /// Header format determined by protocol version
@@ -118,11 +121,13 @@ impl HandleRelayInvsFlow {
         ibd_sender: JobSender<Block>,
         header_format: HeaderFormat,
     ) -> Self {
+        let summary_route = router.subscribe(vec![]);
         Self {
             ctx,
             router,
             invs_route: TwoWayIncomingRoute::new(invs_route),
             msg_route,
+            summary_route,
             ibd_sender,
             header_format,
             heartbeat_budget: crate::palw_heartbeat_relay::PalwHeartbeatInvBudgetV1::new(kaspa_core::time::unix_now()),
@@ -531,7 +536,7 @@ impl HandleRelayInvsFlow {
             self.ctx.chain_participation().state().as_str(),
             "",
         );
-        // `make_request!`, not `make_message!`. This flow's `msg_route` subscribes to no payload
+        // `make_request!`, not `make_message!`. This flow's `summary_route` subscribes to no payload
         // types (`router.subscribe(vec![])`) — replies reach it by REQUEST ID, which is how
         // `request_block` above gets its block back. Sent as a plain message the request carries
         // BLANK_ROUTE_ID, the peer's reply is addressed to nothing, and the summary is silently
@@ -541,9 +546,9 @@ impl HandleRelayInvsFlow {
         // and not one rejection. Requests going out, nothing coming back, and no error to explain
         // it — the signature of a reply with nowhere to go.
         self.router
-            .enqueue(make_request!(Payload::RequestIbdCandidateSummary, RequestIbdCandidateSummaryMessage {}, self.msg_route.id()))
+            .enqueue(make_request!(Payload::RequestIbdCandidateSummary, RequestIbdCandidateSummaryMessage {}, self.summary_route.id()))
             .await?;
-        let msg = dequeue_with_timeout!(self.msg_route, Payload::IbdCandidateSummary, IBD_CANDIDATE_SUMMARY_TIMEOUT)?;
+        let msg = dequeue_with_timeout!(self.summary_route, Payload::IbdCandidateSummary, IBD_CANDIDATE_SUMMARY_TIMEOUT)?;
         let summary: IbdCandidateSummary = Versioned(self.header_format, msg).try_into()?;
 
         // Rules first: a chain built under different consensus params or a different genesis is not

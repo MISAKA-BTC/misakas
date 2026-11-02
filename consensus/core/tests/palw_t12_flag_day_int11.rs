@@ -30,7 +30,8 @@ use kaspa_consensus_core::config::drill::{
 use kaspa_consensus_core::config::params::{
     ForkActivation, PALW_T12_DECODE_RULES_DAA, PALW_T12_INT11_FENCES_V1, PALW_T12_INT11_FLAG_DAY_DAA, PALW_T12_INT11_RHO100_DAA,
     PALW_T12_INT11_RHO100_FENCES_V1, PALW_T12_INT11_RHO100_OFFSET_DAA, PALW_T12_INT11_RHO250_DAA, PALW_T12_INT11_RHO250_FENCES_V1,
-    PALW_T12_INT11_RHO1000_DAA, PALW_T12_INT11_RHO1000_FENCES_V1, PALW_T12_MODEL_COURT_WINDOW_DAA, PALW_T12_POST_LAUNCH_FENCES_V1,
+    PALW_T12_INT11_RHO1000_DAA, PALW_T12_INT11_RHO1000_FENCES_V1, PALW_T12_MODEL_COURT_WINDOW_DAA,
+    PALW_T12_MODEL_PANEL_ONE_FENCE_DAA_V1, PALW_T12_MODEL_PANEL_ONE_RETENTION_FENCE_DAA_V1, PALW_T12_POST_LAUNCH_FENCES_V1,
     PALW_T12_POST_LAUNCH_FENCES_V2, PALW_T12_POST_LAUNCH_FENCES_V3, PALW_T12_TIR_FENCE2_DAA, PALW_T12_TIR_FLAG_DAY_DAA, Params,
     palw_t12_arm_int11_flag_day_at_v1, palw_t12_drill_params_v1, palw_t12_launch_params_v1, palw_t12_release_v1_params,
     palw_t12_release_v2_params, palw_t12_release_v3_params, palw_t12_release_v4_params, palw_t12_release_v5_params,
@@ -240,11 +241,15 @@ fn testnet12_ships_the_list_armed_at_h_over_the_int10_release() {
         kaspa_consensus_core::config::params::PALW_T12_G14_17000_FENCES_V1,
         Some(18_400),
     );
-    assert_eq!(
-        ids(&palw_t12_shipped_params()),
-        ids(&int13),
-        "testnet-12 as shipped IS the int-12 release with the int-13 list and the G14 flag day"
-    );
+    // Later scheduled additions retain the historical fences and handshake identity.
+    int13.palw_model_panel_one_v1 = Some(ForkActivation::new(PALW_T12_MODEL_PANEL_ONE_FENCE_DAA_V1));
+    int13.palw_model_panel_one_retention_v1 = Some(ForkActivation::new(PALW_T12_MODEL_PANEL_ONE_RETENTION_FENCE_DAA_V1));
+    int13.sync_palw_g14_gates_v1();
+    let current_ids = ids(&palw_t12_shipped_params());
+    assert_ne!(current_ids.0, ids(&shipped).0, "ModelOne and retention additions change the typed params id");
+    assert_ne!(current_ids.2, ids(&shipped).2, "ModelOne and retention additions change the schedule id");
+    assert_eq!(current_ids.1, ids(&shipped).1, "scheduled heights remain normalized out of the handshake identity");
+    assert_eq!(current_ids, ids(&int13), "shipped is int-12 plus int-13/G14 and the later ModelOne/retention fences");
     let (bp, bi, bs) = ids(&baseline);
     let (sp, si, ss) = ids(&shipped);
     assert_ne!(sp, bp, "the ruleset names the fences");

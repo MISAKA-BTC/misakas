@@ -1,6 +1,8 @@
-# RFC-0042 — Court全分岐の供給者同意・実原資・native予約
+# RFC-0042 (CourtSupplierConsent) — Court全分岐の供給者同意・実原資・native予約
 
-Status: **Adopted / 実装中・統合未検証・未有効化** (2026-10-30)。[ADR-0210](../adr/0210-court-family-supplier-consent-and-native-reservation.md)。
+> **並行割当衝突:** 同番号の [RFC-0042 (AllModelG14PanelOne)](0042-all-model-g14-panel-one.md) は別の主文書です。両方の元番号・完全パス・採択内容・wire/署名domainを保持し、修飾名と完全パスで区別します。[番号台帳](../maintenance/numbering.md#2026-11-02-並行割当衝突)。
+
+Status: **Adopted / 実装中・統合未検証・未有効化** (2026-10-30)。[ADR-0210 (CourtSupplierConsent)](../adr/0210-court-family-supplier-consent-and-native-reservation.md)。
 ユーザー回答「新契約を採択して接続まで進める」を記録する。
 [具体案](../design/palw/integration/g14-17000/family-supplier-contract-proposal-2026-10-30.md)と
 [RFC-0035](0035-court-original-funded-contract-and-role-consent.md)の役割別同意をnative受付へ接続する。

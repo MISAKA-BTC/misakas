@@ -1,0 +1,24 @@
+✔ an exact admitted one-seat Final is joined without increasing execution round counts (3.066208ms)
+✔ the actually received 481352 header is never admitted from its presence or a blue flag (0.997584ms)
+✔ class, executor, block and claimed identity mismatches cannot borrow another admission (1.309583ms)
+✔ found=false, truncated/retired row absence and unavailable RPC remain unknown and retryable (2.887958ms)
+✔ a feed candidate may be confirmed only by a matching found detail response (1.638625ms)
+✔ PAV3 metadata reads the unchanged base attempt at the correct offset (1.050209ms)
+✔ an unavailable operator RPC cannot supply stray rows as admitted claims (0.969083ms)
+✔ two free-prompt claims sharing a carrier cannot share cached admission or phase (1.418584ms)
+✔ a refused round from an older node is execution, never RED (1.009625ms)
+✔ a genuine red is red and an unclassified off-chain block stays unknown (0.105541ms)
+✔ heartbeat and BASE-0 keep separate labels beside ordinary consensus blocks (0.1035ms)
+✔ accepted rounds remain execution even if an older kind says REAL_ROUND (0.075834ms)
+✔ only the explicit whole-claim all-model single-seat arming record enables the new view (1.49575ms)
+✔ active G14 renders class facts with ready=0 and withBond=false without asserting mining or certification (1.919084ms)
+✔ inactive or unknown arming preserves the legacy readiness hold renderer (1.96275ms)
+✔ active policy does not fabricate class availability from an unavailable producer-facts read (0.558959ms)
+ℹ tests 16
+ℹ suites 0
+ℹ pass 16
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 105.961042

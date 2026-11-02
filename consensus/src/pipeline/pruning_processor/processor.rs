@@ -244,10 +244,11 @@ impl PruningProcessor {
         // we need to complete it
         #[allow(clippy::collapsible_if)]
         if retention_checkpoint != retention_period_root {
-            if let Err(why) = self
-                .virtual_processor
-                .with_pruning_snapshots_before_delete_v1(pruning_point, || self.prune(pruning_point, retention_period_root))
-            {
+            if let Err(why) = self.virtual_processor.with_pruning_snapshots_before_delete_while_v1(
+                pruning_point,
+                || !self.is_consensus_exiting.load(Ordering::Relaxed),
+                || self.prune(pruning_point, retention_period_root),
+            ) {
                 warn!("Pruning recovery deferred before snapshot readiness at {pruning_point}: {why}");
                 return false;
             }
@@ -314,9 +315,11 @@ impl PruningProcessor {
 
             // Both normal advancement and cold recovery require exact servable
             // snapshots before the first below-point row may be removed.
-            if let Err(why) = self.virtual_processor.with_pruning_snapshots_before_delete_v1(new_pruning_point, || {
-                self.prune(new_pruning_point, adjusted_retention_period_root)
-            }) {
+            if let Err(why) = self.virtual_processor.with_pruning_snapshots_before_delete_while_v1(
+                new_pruning_point,
+                || !self.is_consensus_exiting.load(Ordering::Relaxed),
+                || self.prune(new_pruning_point, adjusted_retention_period_root),
+            ) {
                 warn!("Pruning deferred before snapshot readiness at {new_pruning_point}: {why}");
                 return false;
             }

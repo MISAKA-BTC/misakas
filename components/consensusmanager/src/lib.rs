@@ -6,6 +6,7 @@ use std::{collections::VecDeque, ops::Deref, sync::Arc, thread::JoinHandle};
 
 mod batch;
 mod session;
+mod startup;
 
 pub use batch::BlockProcessingBatch;
 pub use session::{
@@ -149,7 +150,15 @@ impl ConsensusManager {
     }
 
     fn worker(&self) {
-        let handles = self.inner.read().current.ctl.clone().start();
+        let handles = {
+            let current = self.inner.read();
+            let handles = current.current.ctl.clone().start();
+            // start() completes interrupted pruning and spawns every block
+            // processor. Keep the manager exclusion until this exact instance
+            // admits sessions, so adoption cannot publish a different instance.
+            current.current.consensus.finish_startup();
+            handles
+        };
         self.inner.write().handles.extend(handles);
         // If current consensus is switched, this loop will join the replaced handles, and will switch to waiting for the new ones
         let mut g = self.inner.write();
@@ -210,6 +219,7 @@ pub struct StagingConsensus {
 impl StagingConsensus {
     fn new(manager: Arc<ConsensusManager>, staging: ConsensusInner) -> Self {
         let handles = VecDeque::from_iter(staging.ctl.start());
+        staging.consensus.finish_startup();
         Self { manager, staging, handles }
     }
 

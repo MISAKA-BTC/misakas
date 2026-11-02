@@ -49,6 +49,7 @@ pub fn palw_tir_shard_watch_duties_v1(
                 continue;
             }
             out.push(PalwSeatDutyV2 {
+                model_panel_one: false,
                 accepted_block: claim.accepted_block,
                 claim_id: *claim_id,
                 class_id: claim.class_id,

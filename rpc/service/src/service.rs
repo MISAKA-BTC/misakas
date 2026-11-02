@@ -598,7 +598,8 @@ impl RpcCoreService {
     /// IBD, candidate review, or quarantine reports unsynced here regardless of how recent its sink
     /// looks.
     async fn is_node_synced(&self, session: &ConsensusSessionOwned, sink_daa_score_timestamp: DaaScoreTimestamp) -> bool {
-        self.mining_rule_engine.is_sink_recent_and_connected(sink_daa_score_timestamp)
+        self.flow_context.is_consensus_participation_allowed()
+            && self.mining_rule_engine.is_sink_recent_and_connected(sink_daa_score_timestamp)
             && !session.async_is_consensus_in_transitional_ibd_state().await
     }
 
@@ -2280,6 +2281,7 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         let Some(read) = session.spawn_blocking(|c| c.palw_model_registry_v1()).await else {
             return Ok(GetPalwModelRegistryResponse::default());
         };
+        let model_one = self.config.params.palw_model_panel_one_v1_fence().is_some_and(|f| f.is_active(read.tip_daa));
         let globals = read.globals;
         // The Activation Pool's P4 (user decision 2026-09-25): the figure a reader is shown is the
         // non-binding recommended pool of the terms in force, not the registry's derived bond.
@@ -2366,7 +2368,9 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             tip_daa: read.tip_daa,
             scheduled: read.fence_daa.is_some(),
             fence_daa: read.fence_daa.unwrap_or(0),
-            active: read.active,
+            // The retained lifecycle rows describe the historical registry.
+            // New model claims use their claim-local G14 admission after the fence.
+            active: read.active && !model_one,
             grace_until_daa: read.grace_until_daa,
             span_daa: read.span_daa,
             reference_work_per_span: globals.map(|g| g.reference_work_per_span.to_string()).unwrap_or_else(|| "0".to_string()),
@@ -2474,7 +2478,18 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         // ADR-0131 Decision 1: the census the chain holds, and each class's compute from the graph it
         // registered (the carriage) or, for a genesis class that carried none, from this build.
         let seat_count = match &self.config.params.palw_consensus_mode {
-            kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => bundle.panel.seat_count(),
+            kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => {
+                if self
+                    .config
+                    .params
+                    .palw_model_panel_one_v1_fence()
+                    .is_some_and(|f| f.is_active(self.consensus_manager.consensus().unguarded_session().get_virtual_daa_score()))
+                {
+                    1
+                } else {
+                    bundle.panel.seat_count()
+                }
+            }
             _ => 0,
         };
         let session = self.consensus_manager.consensus().unguarded_session();

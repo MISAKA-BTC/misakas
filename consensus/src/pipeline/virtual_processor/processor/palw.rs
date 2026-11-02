@@ -5828,7 +5828,8 @@ impl VirtualStateProcessor {
         // **ADR-0100 Decision 4: a claim drawn per shard gets its next ready PART**, one shard a
         // call, by the same greedy rule as the whole licence below and checked by the same
         // function the chain will check it with, at the same point.
-        if self.palw_shard_licensing_at(point.daa_score)
+        if !state.claim(&claim).is_some_and(|c| state_params.model_panel_one_governs_v1(c.accepted_daa))
+            && self.palw_shard_licensing_at(point.daa_score)
             && let Some(plan) = kaspa_consensus_core::palw_shard_licensing_v1::palw_claim_licenses_by_parts_v1(
                 state,
                 &claim,
@@ -6333,6 +6334,9 @@ impl VirtualStateProcessor {
         claim: kaspa_hashes::Hash64,
         candidates: &[kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV3],
     ) -> Option<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
+        if state.claim(&claim).is_some_and(|c| state_params.model_panel_one_governs_v1(c.accepted_daa)) {
+            return None;
+        }
         // RFC-0007's path rule: a claim that licenses by tally takes no receipt-path object, so none is offered for it.
         if kaspa_consensus_core::palw_vertex_v1::palw_vertex_claim_licenses_by_tally_v1(state, state_params, point.daa_score, &claim) {
             return None;
@@ -11273,6 +11277,9 @@ impl VirtualStateProcessor {
         claim: &kaspa_consensus_core::palw_state_v2::PalwClaimStateV2,
     ) -> Result<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2, PalwPanelBindingFaultV1> {
         use kaspa_consensus_core::palw_state_v2::PalwClaimPhaseV2;
+        if self.palw_state_params_v2.as_ref().is_some_and(|p| p.model_panel_one_governs_v1(claim.accepted_daa)) {
+            return Err(None); // The G14 post-commit fold owns this assignment.
+        }
         if !matches!(claim.phase, PalwClaimPhaseV2::Provisional) {
             return Err(PalwPanelBindingFaultV1::Refused(None));
         }
@@ -11825,6 +11832,20 @@ impl VirtualStateProcessor {
         self.palw_round_lane_status_v1(round).map(|status| status.view)
     }
 
+    /// Node-local observer optimization at the caller's EXACT captured sink.
+    /// The template memo authenticates target/root/import epoch/pruning generation.
+    /// A failed optimization preserves the original reader's complete Option and
+    /// legacy pruning-snapshot fallback; it never adds an observer admission gate.
+    pub(in crate::pipeline::virtual_processor) fn palw_observer_state_at_cached_v1(
+        &self,
+        at: BlockHash,
+    ) -> Option<(BlockHash, Arc<kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1>)> {
+        match self.palw_template_parent_checked_v1(at) {
+            Ok(state) => Some((at, state)),
+            Err(_) => self.palw_v2_state_at(at),
+        }
+    }
+
     /// **ADR-0125 §7.4: the round's view from the selected-parent PALW snapshot**, never the store tip.
     ///
     /// The schedule reported is the one in force for the view's span — the state's `round_schedule`,
@@ -11832,6 +11853,70 @@ impl VirtualStateProcessor {
     /// participants, waiting for their seed) is not a schedule and is never reported as one, and a
     /// span whose snapshot found no seed anchor answers with no schedule and no permits.
     pub fn palw_round_lane_status_v1(&self, round: u64) -> Option<kaspa_consensus_core::palw_execution_lane_v1::PalwExecLaneStatusV1> {
+        let lane = self.palw_execution_lane?;
+        let virtual_state = self.virtual_stores.read().state.get().unwrap();
+        if !lane.activation.is_active(virtual_state.daa_score) {
+            return None;
+        }
+        let sink = virtual_state.ghostdag_data.selected_parent;
+        let anchor = self
+            .ghostdag_store
+            .get_selected_parent(sink)
+            .ok()
+            .filter(|anchor| !kaspa_consensus_core::blockhash::BlockHashExtensions::is_origin(anchor))?;
+        let span_daa = lane.schedule_span_daa_at(virtual_state.daa_score);
+        let span = kaspa_consensus_core::palw_execution_lane_v1::palw_execution_span_v1(
+            self.headers_store.get_daa_score(anchor).ok()?,
+            span_daa,
+        );
+        let (_at, state) = self.palw_observer_state_at_cached_v1(sink)?;
+        let width = lane.width_of_span_len(span, span_daa);
+        // The verdict's own rule (route-matrix #2), read at virtual's score — the score the next chain
+        // block, which merges a round block built now, is judged at.
+        let tickets_only = self.palw_round_permits_are_tickets_at(virtual_state.daa_score);
+        let permits = state
+            .round_schedule(span)
+            .map(|schedule| {
+                kaspa_consensus_core::palw_execution_lane_v1::palw_execution_permits_v2(schedule, round, width, tickets_only)
+            })
+            .unwrap_or_default();
+        let used = (0..width).filter(|index| state.round_permit_used(span, round, *index)).collect();
+        let (finals_span, finals) = state.round_finals();
+        Some(kaspa_consensus_core::palw_execution_lane_v1::PalwExecLaneStatusV1 {
+            view: kaspa_consensus_core::palw_execution_lane_v1::PalwExecRoundViewV1 {
+                round,
+                span,
+                width,
+                genesis_timestamp_ms: self.genesis.timestamp,
+                permits,
+                used,
+            },
+            schedule: state.round_schedule(span).cloned(),
+            accepted_in_span: state.round_permits_accepted(span),
+            finals_span,
+            finals: finals.len() as u64,
+            tickets_only,
+        })
+    }
+
+    /// **Lane SCAN: the executions the sink's PALW state holds** — see
+    /// [`kaspa_consensus_core::palw_exec_view_v1::palw_recent_executions_v1`]. Read at the sink, like
+    /// every `palw_*` node read.
+    pub fn palw_recent_executions_v1(
+        &self,
+        limit: usize,
+    ) -> Option<(Vec<kaspa_consensus_core::palw_exec_view_v1::PalwExecutionRowV1>, usize)> {
+        let sink = self.virtual_stores.read().state.get().unwrap().ghostdag_data.selected_parent;
+        let (_at, state) = self.palw_observer_state_at_cached_v1(sink)?;
+        Some(kaspa_consensus_core::palw_exec_view_v1::palw_recent_executions_v1(&state, limit))
+    }
+
+    // Exact 69e observer body: differential oracle, absent from production.
+    #[cfg(test)]
+    pub(in crate::pipeline::virtual_processor) fn palw_round_lane_status_uncached_for_tests_v1(
+        &self,
+        round: u64,
+    ) -> Option<kaspa_consensus_core::palw_execution_lane_v1::PalwExecLaneStatusV1> {
         let lane = self.palw_execution_lane?;
         let virtual_state = self.virtual_stores.read().state.get().unwrap();
         if !lane.activation.is_active(virtual_state.daa_score) {
@@ -11878,10 +11963,9 @@ impl VirtualStateProcessor {
         })
     }
 
-    /// **Lane SCAN: the executions the sink's PALW state holds** — see
-    /// [`kaspa_consensus_core::palw_exec_view_v1::palw_recent_executions_v1`]. Read at the sink, like
-    /// every `palw_*` node read.
-    pub fn palw_recent_executions_v1(
+    // Exact 69e observer body: differential oracle, absent from production.
+    #[cfg(test)]
+    pub(in crate::pipeline::virtual_processor) fn palw_recent_executions_uncached_for_tests_v1(
         &self,
         limit: usize,
     ) -> Option<(Vec<kaspa_consensus_core::palw_exec_view_v1::PalwExecutionRowV1>, usize)> {

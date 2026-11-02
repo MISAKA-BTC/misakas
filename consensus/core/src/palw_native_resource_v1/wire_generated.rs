@@ -1541,6 +1541,7 @@ impl NativeWireScanV1 for crate::palw_economic_safety_v1::PalwLicenceDoorTagV1 {
                 sum = sum.merge(<u16 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
+            4 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }

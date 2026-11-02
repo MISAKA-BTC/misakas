@@ -2,10 +2,11 @@
 //!
 //! We use newtypes in order to simplify changing the underlying lock in the future
 
+use futures::FutureExt;
 use kaspa_consensus_core::{
     BlockHash, BlockHashSet, BlueWorkType, ChainPath, Hash64,
     acceptance_data::{AcceptanceData, MergesetBlockAcceptanceData},
-    api::{BlockCount, BlockValidationFutures, ConsensusApi, ConsensusStats, DynConsensus},
+    api::{BlockCount, BlockValidationFuture, BlockValidationFutures, ConsensusApi, ConsensusStats, DynConsensus},
     block::Block,
     blockstatus::BlockStatus,
     daa_score_timestamp::DaaScoreTimestamp,
@@ -26,6 +27,49 @@ use std::{ops::Deref, sync::Arc};
 pub use tokio::task::spawn_blocking;
 
 use crate::BlockProcessingBatch;
+use crate::startup::StartupGate;
+
+type SharedValidationTasks = (futures::future::Shared<BlockValidationFuture>, futures::future::Shared<BlockValidationFuture>);
+
+fn deferred_block_submissions(
+    startup: Arc<StartupGate>,
+    consensus: DynConsensus,
+    submit: impl FnOnce(DynConsensus) -> Vec<BlockValidationFutures> + Send + 'static,
+    count: usize,
+) -> Vec<BlockValidationFutures> {
+    // One shared initialization queues the whole batch in its original order,
+    // exactly once, even if only a virtual task or a later task is polled first.
+    let submitted = async move {
+        startup.wait().await;
+        submit(consensus)
+            .into_iter()
+            .map(|tasks| (tasks.block_task.shared(), tasks.virtual_state_task.shared()))
+            .collect::<Vec<SharedValidationTasks>>()
+    }
+    .boxed()
+    .shared();
+    (0..count)
+        .map(|index| {
+            let block = submitted.clone();
+            let virtual_state = submitted.clone();
+            BlockValidationFutures {
+                block_task: async move { block.await[index].0.clone().await }.boxed(),
+                virtual_state_task: async move { virtual_state.await[index].1.clone().await }.boxed(),
+            }
+        })
+        .collect()
+}
+
+fn submit_block_after_startup(
+    startup: &Arc<StartupGate>,
+    consensus: &DynConsensus,
+    submit: impl FnOnce(DynConsensus) -> BlockValidationFutures + Send + 'static,
+) -> BlockValidationFutures {
+    if startup.is_started() {
+        return submit(consensus.clone());
+    }
+    deferred_block_submissions(startup.clone(), consensus.clone(), |consensus| vec![submit(consensus)], 1).pop().unwrap()
+}
 
 #[allow(dead_code)]
 #[derive(Clone)]
@@ -79,26 +123,42 @@ impl SessionLock {
 pub struct ConsensusInstance {
     session_lock: SessionLock,
     consensus: DynConsensus,
+    startup: Arc<StartupGate>,
 }
 
 impl ConsensusInstance {
     pub fn new(session_lock: SessionLock, consensus: DynConsensus) -> Self {
-        Self { session_lock, consensus }
+        // Compatibility constructor for already-running instances and test
+        // factories. Production factories explicitly construct initializing instances.
+        Self { session_lock, consensus, startup: Arc::new(StartupGate::new(true)) }
+    }
+
+    pub fn new_initializing(session_lock: SessionLock, consensus: DynConsensus) -> Self {
+        Self { session_lock, consensus, startup: Arc::new(StartupGate::new(false)) }
+    }
+
+    pub(crate) fn finish_startup(&self) {
+        self.startup.finish();
     }
 
     /// Returns a blocking session to be used in **non async** environments.
     /// Users would usually need to call something like `futures::executor::block_on` in order
     /// to acquire the session, but we prefer leaving this decision to the caller
     pub async fn session_blocking(&self) -> ConsensusSessionBlocking<'_> {
+        self.startup.wait().await;
         let g = self.session_lock.read().await;
-        ConsensusSessionBlocking::new(g, self.consensus.clone())
+        let mut session = ConsensusSessionBlocking::new(g, self.consensus.clone());
+        session.startup = self.startup.clone();
+        session
     }
 
     /// Returns an unguarded *blocking* consensus session. There's no guarantee that data will not be pruned between
     /// two sequential consensus calls. This session doesn't hold the consensus pruning lock, so it should
     /// be preferred upon [`session_blocking()`](Self::session_blocking) when data consistency is not important.
     pub fn unguarded_session_blocking(&self) -> ConsensusSessionBlocking<'static> {
-        ConsensusSessionBlocking::new_without_session_guard(self.consensus.clone())
+        let mut session = ConsensusSessionBlocking::new_without_session_guard(self.consensus.clone());
+        session.startup = self.startup.clone();
+        session
     }
 
     /// Returns a consensus session for accessing consensus operations in a bulk. The user can safely assume
@@ -108,30 +168,44 @@ impl ConsensusInstance {
     /// session object, see [`ConsensusSessionOwned::spawn_blocking()`](ConsensusSessionOwned::spawn_blocking). The caller is responsible to make sure
     /// that the overall lifetime of this session is not too long (~2 seconds max)
     pub async fn session(&self) -> ConsensusSessionOwned {
+        self.startup.wait().await;
         let g = self.session_lock.read_owned().await;
-        ConsensusSessionOwned::new(g, self.consensus.clone())
+        let mut session = ConsensusSessionOwned::new(g, self.consensus.clone());
+        session.startup = self.startup.clone();
+        session
     }
 
     /// Returns an unguarded consensus session. There's no guarantee that data will not be pruned between
     /// two sequential consensus calls. This session doesn't hold the consensus pruning lock, so it should
     /// be preferred upon [`session()`](Self::session) when data consistency is not important.
     pub fn unguarded_session(&self) -> ConsensusSessionOwned {
-        ConsensusSessionOwned::new_without_session_guard(self.consensus.clone())
+        let mut session = ConsensusSessionOwned::new_without_session_guard(self.consensus.clone());
+        session.startup = self.startup.clone();
+        session
     }
 }
 
 pub struct ConsensusSessionBlocking<'a> {
     _session_guard: Option<SessionReadGuard<'a>>,
     consensus: DynConsensus,
+    startup: Arc<StartupGate>,
 }
 
 impl<'a> ConsensusSessionBlocking<'a> {
     pub fn new(session_guard: SessionReadGuard<'a>, consensus: DynConsensus) -> Self {
-        Self { _session_guard: Some(session_guard), consensus }
+        Self { _session_guard: Some(session_guard), consensus, startup: Arc::new(StartupGate::new(true)) }
     }
 
     pub fn new_without_session_guard(consensus: DynConsensus) -> Self {
-        Self { _session_guard: None, consensus }
+        Self { _session_guard: None, consensus, startup: Arc::new(StartupGate::new(true)) }
+    }
+
+    pub fn validate_and_insert_block(&self, block: Block) -> BlockValidationFutures {
+        submit_block_after_startup(&self.startup, &self.consensus, move |consensus| consensus.validate_and_insert_block(block))
+    }
+
+    pub fn validate_and_insert_trusted_block(&self, block: TrustedBlock) -> BlockValidationFutures {
+        submit_block_after_startup(&self.startup, &self.consensus, move |consensus| consensus.validate_and_insert_trusted_block(block))
     }
 }
 
@@ -150,15 +224,16 @@ impl Deref for ConsensusSessionBlocking<'_> {
 pub struct ConsensusSessionOwned {
     _session_guard: Option<SessionOwnedReadGuard>,
     consensus: DynConsensus,
+    startup: Arc<StartupGate>,
 }
 
 impl ConsensusSessionOwned {
     pub fn new(session_guard: SessionOwnedReadGuard, consensus: DynConsensus) -> Self {
-        Self { _session_guard: Some(session_guard), consensus }
+        Self { _session_guard: Some(session_guard), consensus, startup: Arc::new(StartupGate::new(true)) }
     }
 
     pub fn new_without_session_guard(consensus: DynConsensus) -> Self {
-        Self { _session_guard: None, consensus }
+        Self { _session_guard: None, consensus, startup: Arc::new(StartupGate::new(true)) }
     }
 
     /// Access the same guarded session from a caller already running in a blocking worker.
@@ -184,7 +259,7 @@ impl ConsensusSessionOwned {
 
 impl ConsensusSessionOwned {
     pub fn validate_and_insert_block(&self, block: Block) -> BlockValidationFutures {
-        self.consensus.validate_and_insert_block(block)
+        submit_block_after_startup(&self.startup, &self.consensus, move |consensus| consensus.validate_and_insert_block(block))
     }
 
     pub fn validate_and_insert_block_batch(&self, mut batch: Vec<Block>) -> BlockProcessingBatch {
@@ -199,18 +274,23 @@ impl ConsensusSessionOwned {
             |block| block.hash(),
             |block| block.header.direct_parents().to_vec(),
         );
-        let (block_tasks, virtual_state_tasks) = batch
-            .iter()
-            .map(|b| {
-                let BlockValidationFutures { block_task, virtual_state_task } = self.consensus.validate_and_insert_block(b.clone());
-                (block_task, virtual_state_task)
-            })
-            .unzip();
+        let tasks = if self.startup.is_started() {
+            batch.iter().map(|b| self.consensus.validate_and_insert_block(b.clone())).collect()
+        } else {
+            let queued = batch.clone();
+            deferred_block_submissions(
+                self.startup.clone(),
+                self.consensus.clone(),
+                move |consensus| queued.into_iter().map(|block| consensus.validate_and_insert_block(block)).collect(),
+                batch.len(),
+            )
+        };
+        let (block_tasks, virtual_state_tasks) = tasks.into_iter().map(|tasks| (tasks.block_task, tasks.virtual_state_task)).unzip();
         BlockProcessingBatch::new(batch, block_tasks, virtual_state_tasks)
     }
 
     pub fn validate_and_insert_trusted_block(&self, tb: TrustedBlock) -> BlockValidationFutures {
-        self.consensus.validate_and_insert_trusted_block(tb)
+        submit_block_after_startup(&self.startup, &self.consensus, move |consensus| consensus.validate_and_insert_trusted_block(tb))
     }
 
     pub fn calculate_transaction_non_contextual_masses(&self, transaction: &Transaction) -> NonContextualMasses {
@@ -1888,3 +1968,7 @@ pub type ConsensusProxy = ConsensusSessionOwned;
 #[cfg(test)]
 #[path = "session_guard_lifetime_tests.rs"]
 mod session_guard_lifetime_tests;
+
+#[cfg(test)]
+#[path = "startup_tests.rs"]
+mod startup_tests;

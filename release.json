@@ -1,8 +1,8 @@
 {
   "schema": "misaka/release/v1",
   "network": "testnet-12",
-  "consensus_params_fingerprint": "3e6da238306cfdb7e71599d5ef8fb314f1b3ff33a50673af1321f3da9cfa5b94",
-  "consensus_schedule_id": "b4706ae535fc2c9e4f0a0fe1b6cb0456025f3e00c1b8aba5cde02191f46f9194",
+  "consensus_params_fingerprint": "253d22bbc32fbcf3f23e9333524435478a5a7b87ac9a360de6513dde4cdc5248",
+  "consensus_schedule_id": "ec5f56fa48cdeafb3a6fc953c02a2dcd53f0f54025fe7243a87972884a47eb5e",
   "genesis": "a27f8f44fe4d91a5bed940be9dbd6d260ccb95cc00d948b1c08ddb6bd1a5f02542a6cf35c7a4d959ba4863ac1557861671763e5cc22937c697870283a8ca1f23",
   "consensus_frozen": false
 }

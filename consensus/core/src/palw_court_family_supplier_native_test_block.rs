@@ -302,6 +302,11 @@
         let f1=crate::palw_claim_local_v1::palw_claim_liability_frame_key_v1(ctx.block);
         assert!(!accepted.kernel_route_state_v1().unwrap().aux.contains_key(&(crate::palw_claim_local_v1::PALW_CLAIM_LOCAL_TABLE_V1,f1.to_vec())));
     }
+    if production && !prefix && !archive_finance && source_history.is_none() && source_export_request.is_none() {
+        // Separate branch of the actual signed TFO2 admission above: no Claim,
+        // service binding, phase or financial row is manufactured for this test.
+        include!("palw_bound_original_operational_release_native_test_v43.rs");
+    }
     if source_export_request.is_some(){
         // Return history only after the real signed native fold and its scoped
         // archive. Identity comes from the actual executed source view.

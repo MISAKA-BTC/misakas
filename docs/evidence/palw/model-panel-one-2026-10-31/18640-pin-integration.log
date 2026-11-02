@@ -1,0 +1,533 @@
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/g14-producer-panel-one/MISAKA-testnet/consensus/core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 26.40s
+     Running tests/evm_bridge_ledger_is_t12_only.rs (/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/g14-18400-deploy/target/ci-gates/debug/deps/evm_bridge_ledger_is_t12_only-52cf6b48cd64ccdc)
+
+running 4 tests
+test on_testnet11_an_inert_ledger_is_absence_and_a_future_height_is_not_yet_a_rule ... ok
+test the_ledger_is_the_only_thing_that_moved_testnet12 ... ok
+test the_ledger_moves_testnet12s_fingerprint_and_identity ... ok
+test the_ledger_is_armed_on_testnet12_and_nowhere_else ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+
+     Running tests/g14_close_gates.rs (/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/g14-18400-deploy/target/ci-gates/debug/deps/g14_close_gates-aefcd6c3c02cbea3)
+
+running 12 tests
+test armable_g14_fences_refuse_without_a_measured_record ... ok
+test an_arming_record_admits_exactly_its_network_and_height ... ok
+test g14_genesis_from_block_zero_only_families_with_an_armed_route_earn ... ok
+test certified_and_final_rewards_are_held_until_the_liability_horizon ... ok
+test kimi_is_out_of_scope_in_both_coverage_dispositions ... ok
+test legacy_fp_selection_and_constraint_jobs_are_refused_until_their_route_is_armed ... ok
+test g14_genesis_ruleset_validates_and_its_exception_reaches_no_shipped_preset ... ok
+test n4_v5_image_and_panel_da_claims_take_no_new_reward ... ok
+test legacy_route_claim_without_a_g14_path_earns_nothing_past_14000 ... ok
+test staged_court_validation_requires_the_legacy_filer_fence ... ok
+test x3_candidate_is_derived_from_existing_horizons_and_stays_refused ... ok
+test testnet12_identity_did_not_move ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.38s
+
+     Running tests/g14_close_legacy.rs (/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/g14-18400-deploy/target/ci-gates/debug/deps/g14_close_legacy-210f6dae0a46cec6)
+
+running 9 tests
+test fp_recoverable_families_have_no_remaining_lg14a_dependency ... ok
+test g06_a_reserver_opens_its_dissection_beside_a_decoy_court_and_holds_final ... ok
+test g07_residual_the_network_court_cap_is_shared ... ok
+test g13_a_valid_lock_lives_to_the_liability_horizon ... ok
+test g07_a_coalition_cannot_spend_the_outsiders_budget ... ok
+test g14_close_legacy_from_genesis ... ok
+test lg14_arming_needs_a_record_naming_the_network_and_height ... ok
+test testnet12_identity_did_not_move ... ok
+test g14_f03_outsider_court_lane_opens_past_decoy_occupancy ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.84s
+
+     Running tests/g14_court_capacity.rs (/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/g14-18400-deploy/target/ci-gates/debug/deps/g14_court_capacity-cdb3ac2badcd25b1)
+
+running 17 tests
+test court_capacity_arming_needs_a_measured_record ... ok
+test fused_leaf_route_counts_only_with_court_capacity ... ok
+test g07_bond_splitting_does_not_avoid_the_occupancy_fee ... ok
+test g07_an_earlier_deadline_flood_cannot_push_a_queued_prosecution_past_its_deadline ... ok
+test g07_restart_and_reorg_mid_queue_are_identical ... ok
+test g07_the_block_budget_holds_at_maximum_load ... ok
+test g07_unarmed_the_43rd_prosecution_is_refused_at_capacity ... ok
+test g07r2_a_court_demanding_claim_promises_the_retention_its_guarantee_needs ... ok
+test g07_saturation_and_continuous_refill_an_honest_prosecution_reaches_its_verdict ... ok
+test g07r2_a_late_honest_reserve_row_is_never_refused_and_convicts ... ok
+test g07r2_one_move_accusations_have_their_own_budget ... ok
+test g07r2_the_reserve_bound_serves_every_first_row_by_its_deadline ... ok
+test palw_court_op_timing_harness ... ignored
+test testnet12_identity_did_not_move ... ok
+test the_scheduler_admits_only_what_every_queued_deadline_survives ... ok
+test v7_restart_reorg_ibd_and_pruned_import_mid_queue_agree ... ok
+test g07r2_an_unserved_prosecution_means_the_claim_earns_nothing ... ok
+
+test result: ok. 16 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 54.25s
+
+     Running tests/palw_activation_pool_is_t12_only.rs (/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/g14-18400-deploy/target/ci-gates/debug/deps/palw_activation_pool_is_t12_only-d1799c31422c892c)
+
+running 5 tests
+test testnet11_devnet_and_mainnet_fingerprint_as_they_did_before_the_pool ... ok
+test the_activation_pool_is_armed_on_testnet12_only ... ok
+test the_pool_and_its_terms_move_testnet12s_fingerprint ... ok
+test the_pool_carries_its_fork_id_name ... ok
+test the_pool_is_genesis_only_and_needs_the_registry_the_jury_and_the_audit ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s
+
+     Running tests/palw_anchor_at_ceiling_is_t12_only.rs (/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/g14-18400-deploy/target/ci-gates/debug/deps/palw_anchor_at_ceiling_is_t12_only-1c998b9501bb2d76)
+
+running 4 tests
+test an_armed_build_below_its_fence_handshakes_with_the_shipped_build ... ok
+test arming_moves_the_params_and_schedule_ids_but_not_the_identity ... ok
+test the_fence_is_dormant_on_every_other_preset_and_testnet12_arms_it_at_750 ... ok
+test the_fence_needs_rcore_plus_at_or_below_it ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.33s
+
+     Running tests/palw_bond_maturity_early_is_t12_only.rs (/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/g14-18400-deploy/target/ci-gates/debug/deps/palw_bond_maturity_early_is_t12_only-678d0a7368799ba5)
+
+running 6 tests
+test an_armed_build_below_its_fence_handshakes_with_the_shipped_build ... ok
+test a_bond_registered_at_daa_13_leaves_the_draw_at_the_fence_and_returns_at_its_own_window ... ok
+test one_window_on_both_fences ... ok
+test arming_moves_the_params_and_schedule_ids_but_not_the_identity ... ok
+test the_fence_is_dormant_on_every_other_preset_and_testnet12_arms_it_at_750 ... ok
+test what_the_fence_refuses ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.54s
+
+     Running tests/palw_capacity_aggregate_liability_is_t12_only.rs (/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/g14-18400-deploy/target/ci-gates/debug/deps/palw_capacity_aggregate_liability_is_t12_only-56ca7795503e2e99)
+
+running 5 tests
+test testnet12_s_value_is_rho_1_from_the_height_and_the_fold_s_mirror_follows_it ... ok
+test the_fence_is_dormant_on_every_shipped_preset_and_testnet12_is_the_release ... ok
+test arming_or_appending_a_step_moves_the_params_and_schedule_ids_but_not_the_identity ... ok
+test the_fork_id_gates_the_height_and_every_appended_step ... ok
+test the_fence_needs_rcore_plus_the_attribution_fence_a_legal_schedule_and_its_mirror ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.46s
+
+     Running tests/palw_capacity_batch_licence_is_t12_only.rs (/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/g14-18400-deploy/target/ci-gates/debug/deps/palw_capacity_batch_licence_is_t12_only-f46be7d2f16cfbc0)
+
+running 4 tests
+test an_armed_build_below_the_fence_handshakes_with_the_shipped_build ... ok
+test arming_the_fence_moves_the_params_and_schedule_ids_but_not_the_identity ... ok
+test the_fence_is_dormant_on_every_shipped_preset_and_testnet12_is_the_release ... ok
+test validate_names_the_prerequisites_and_the_mirror ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.31s
+
+     Running tests/palw_capacity_escrow_at_licence_is_t12_only.rs (/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/g14-18400-deploy/target/ci-gates/debug/deps/palw_capacity_escrow_at_licence_is_t12_only-db1a7ed76aebb6d1)
+
+running 5 tests
+test an_armed_build_below_the_fence_handshakes_with_the_shipped_build ... ok
+test the_capacity_entry_sets_the_fence_and_its_mirror ... ok
+test arming_the_fence_moves_the_params_and_schedule_ids_but_not_the_identity ... ok
+test the_fence_is_dormant_on_every_shipped_preset_and_testnet12_is_the_release ... ok
+test the_fence_needs_option_a_rcore_and_attribution_at_or_below_it_and_its_mirror ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.35s
+
+     Running tests/palw_capacity_network_room_is_t12_only.rs (/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/g14-18400-deploy/target/ci-gates/debug/deps/palw_capacity_network_room_is_t12_only-f78ce516cf6a2270)
+
+running 4 tests
+test the_capacity_list_carries_it_and_the_750_list_does_not ... ok
+test arming_the_fence_moves_the_params_and_schedule_ids_but_not_the_identity ... ok
+test the_fence_is_dormant_on_every_shipped_preset_and_testnet12_is_the_release ... ok
+test the_fence_needs_f_r_f_s_and_lane_a_and_its_mirror ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s
+
+     Running tests/palw_capacity_network_verify_is_t12_only.rs (/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/g14-18400-deploy/target/ci-gates/debug/deps/palw_capacity_network_verify_is_t12_only-2bb030a560d7e3d6)
+
+running 4 tests
+test it_is_in_no_list_but_its_own_and_the_drill_names_it ... ok
+test arming_the_fence_moves_the_params_and_schedule_ids_but_not_the_identity ... ok
+test the_fence_is_dormant_on_every_shipped_preset_and_testnet12_is_the_release ... ok
+test the_fence_needs_f_n_at_or_below_it_and_its_mirror ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.27s
+
+     Running tests/palw_capacity_s567_is_t12_only.rs (/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/g14-18400-deploy/target/ci-gates/debug/deps/palw_capacity_s567_is_t12_only-641d990d23423a08)
+
+running 4 tests
+test arming_each_moves_the_params_and_schedule_ids_but_not_the_identity ... ok
+test each_needs_its_prerequisites_at_or_below_it_and_its_mirror ... ok
+test the_fences_are_dormant_on_every_shipped_preset_and_testnet12_is_the_release ... ok
+test they_are_in_no_list_but_the_int11_one ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.31s
+
+     Running tests/palw_capacity_stage2_is_t12_only.rs (/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/g14-18400-deploy/target/ci-gates/debug/deps/palw_capacity_stage2_is_t12_only-b572be51376421a4)
+
+running 4 tests
+test the_capacity_list_carries_both_and_arms_whole ... ok
+test arming_either_fence_moves_the_params_and_schedule_ids_but_not_the_identity ... ok
+test the_fences_are_dormant_on_every_shipped_preset_and_testnet12_is_the_release ... ok
+test the_fences_need_their_prerequisites_their_mirrors_and_a_credit_needs_the_door ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.27s
+
+     Running tests/palw_capacity_verify_room_is_t12_only.rs (/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/g14-18400-deploy/target/ci-gates/debug/deps/palw_capacity_verify_room_is_t12_only-c1a9ab6d08f8ee1e)
+
+running 4 tests
+test an_armed_build_below_the_fence_handshakes_with_the_shipped_build ... ok
+test arming_the_fence_moves_the_params_and_schedule_ids_but_not_the_identity ... ok
+test the_fence_is_dormant_on_every_shipped_preset_and_testnet12_is_the_release ... ok
+test validate_names_the_prerequisites_and_the_mirror ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.42s
+
+     Running tests/palw_capacity_weight_cap_is_t12_only.rs (/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/g14-18400-deploy/target/ci-gates/debug/deps/palw_capacity_weight_cap_is_t12_only-2a12992d9d8340aa)
+
+running 5 tests
+test an_armed_build_below_the_weight_cap_handshakes_with_the_shipped_build ... ok
+test the_capacity_list_sets_the_weight_cap_and_its_mirror_together ... ok
+test arming_the_weight_cap_moves_the_params_and_schedule_ids_but_not_the_identity ... ok
+test the_weight_cap_is_dormant_on_every_shipped_preset_and_testnet12_is_the_release ... ok
+test the_weight_cap_needs_rcore_plus_strict_win_and_the_operator_anchor_at_or_below_it_and_its_mirror ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.43s
+
+     Running tests/palw_class_verify_deadline_is_t12_only.rs (/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/g14-18400-deploy/target/ci-gates/debug/deps/palw_class_verify_deadline_is_t12_only-e1d29332bc2d3bbf)
+
+running 6 tests
+test a_measured_row_at_d_cap_validates_on_testnet12_s_own_horizon ... ok
+test testnet11s_rules_are_unmoved_for_a_class_past_24_spans ... ok
+test testnet11_devnet_and_mainnet_fingerprint_as_they_did_before_the_fence ... ok
+test testnet12_derives_its_pruning_depth_from_the_d_cap_lattice_and_nobody_else_moves ... ok
+test the_fence_is_armed_on_testnet12_only ... ok
+test the_fence_moves_testnet12s_fingerprint ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+
+     Running tests/palw_clock_floor_is_t12_only.rs (/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/g14-18400-deploy/target/ci-gates/debug/deps/palw_clock_floor_is_t12_only-655eb10dd5c29875)
+
+running 3 tests
+test the_clock_floor_is_armed_on_testnet12_only ... ok
+test testnet11_devnet_and_mainnet_fingerprint_as_they_did_before_the_floor ... ok
+test the_floor_moves_testnet12s_fingerprint_and_needs_the_cursor ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+
+     Running tests/palw_clock_lead_cap_is_t12_only.rs (/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/g14-18400-deploy/target/ci-gates/debug/deps/palw_clock_lead_cap_is_t12_only-17fcd5fc5b5db388)
+
+running 3 tests
+test the_cap_moves_testnet12s_fingerprint_and_a_never_collapses ... ok
+test every_other_preset_fingerprints_as_it_did_before_the_cap ... ok
+test the_lead_cap_is_armed_on_testnet12_only ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s
+
+     Running tests/palw_exec_maturity_is_t12_only.rs (/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/g14-18400-deploy/target/ci-gates/debug/deps/palw_exec_maturity_is_t12_only-ead522dcf22e9851)
+
+running 5 tests
+test the_economic_safety_table_is_the_same_at_1200_and_at_120 ... ok
+test testnet11_devnet_and_mainnet_fingerprint_as_they_did_before_the_maturity ... ok
+test the_maturity_is_stated_on_testnet12_only ... ok
+test the_maturity_moves_testnet12s_fingerprint_and_nothing_else_did ... ok
+test the_maturity_rides_its_bundle_inside_the_horizon ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.31s
+
+     Running tests/palw_final_lock_full_collateral_is_t12_only.rs (/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/g14-18400-deploy/target/ci-gates/debug/deps/palw_final_lock_full_collateral_is_t12_only-66f197c1539f011a)
+
+running 4 tests
+test an_armed_build_below_the_split_handshakes_with_the_shipped_build ... ok
+test arming_the_split_moves_the_params_and_schedule_ids_but_not_the_identity ... ok
+test the_split_is_dormant_on_every_other_preset_and_testnet12_arms_it_at_750 ... ok
+test the_split_needs_rcore_plus_and_a_synced_mirror ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.41s
+
+     Running tests/palw_final_lock_life_is_t12_only.rs (/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/g14-18400-deploy/target/ci-gates/debug/deps/palw_final_lock_life_is_t12_only-0d1f6b06f122f9fe)
+
+running 4 tests
+test an_armed_build_below_the_shortening_handshakes_with_the_shipped_build ... ok
+test arming_the_shortening_moves_the_params_and_schedule_ids_but_not_the_identity ... ok
+test the_shortening_is_dormant_on_every_other_preset_and_testnet12_arms_it_at_750 ... ok
+test the_shortening_needs_rcore_plus_and_a_synced_mirror ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.37s
+
+     Running tests/palw_final_lock_life_retro_is_t12_only.rs (/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/g14-18400-deploy/target/ci-gates/debug/deps/palw_final_lock_life_retro_is_t12_only-2039c3689375d2fd)
+
+running 4 tests
+test an_armed_build_below_the_retro_life_handshakes_with_the_fleet_build ... ok
+test arming_the_retro_life_moves_the_params_and_schedule_ids_but_not_the_identity ... ok
+test the_retro_life_is_dormant_on_every_preset_and_testnet12_is_the_daa750_release ... ok
+test the_retro_life_needs_the_v02_lock_life_at_or_below_it_and_a_synced_mirror ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.39s
+
+     Running tests/palw_floor_refusal_retry_is_t12_only.rs (/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/g14-18400-deploy/target/ci-gates/debug/deps/palw_floor_refusal_retry_is_t12_only-74c2ae755dd8b3c4)
+
+running 6 tests
+test an_armed_build_keeps_the_released_build_until_the_height ... ok
+test arming_moves_the_params_and_schedule_ids_and_never_the_identity ... ok
+test every_shipped_id_is_the_release_ones ... ok
+test the_fence_is_dormant_below_the_second_flag_day_and_testnet12_arms_it_there ... ok
+test the_fence_is_refused_unsynced_below_rcore_and_off_testnet12 ... ok
+test the_second_flag_day_list_is_the_one_place_its_fences_are_set ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.92s
+
+     Running tests/palw_hb_transparency_same_chain_fence.rs (/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/g14-18400-deploy/target/ci-gates/debug/deps/palw_hb_transparency_same_chain_fence-cf89295858844385)
+
+running 6 tests
+test arming_moves_the_params_and_schedule_ids_and_not_the_identity ... ok
+test an_armed_build_peers_with_the_launched_build_until_the_height ... ok
+test at_the_maturity_windows_height_the_fence_is_invisible_to_the_fork_id ... ok
+test on_testnet12_it_is_a_height_never_a_genesis_rule ... ok
+test it_is_refused_without_the_transparency_it_narrows ... ok
+test the_same_chain_fence_is_dormant_on_every_other_preset_and_t12_arms_it_at_750 ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.37s
+
+     Running tests/palw_lane_accept_parents_first_is_t12_only.rs (/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/g14-18400-deploy/target/ci-gates/debug/deps/palw_lane_accept_parents_first_is_t12_only-c556870f97a17628)
+
+running 5 tests
+test an_armed_build_below_its_fence_handshakes_with_the_shipped_build ... ok
+test arming_moves_the_params_and_schedule_ids_but_not_the_identity ... ok
+test the_fence_needs_consensus_v2_and_the_execution_lane_at_or_below_it ... ok
+test the_fence_is_dormant_on_every_other_preset_and_testnet12_arms_it_at_750 ... ok
+test the_release_list_arms_it_and_the_drill_moves_it ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.79s
+
+     Running tests/palw_model_sink_bound_is_t12_only.rs (/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/g14-18400-deploy/target/ci-gates/debug/deps/palw_model_sink_bound_is_t12_only-0a631808d2b51941)
+
+running 5 tests
+test an_armed_build_below_the_binding_handshakes_with_the_shipped_build ... ok
+test arming_the_binding_moves_the_params_and_schedule_ids_but_not_the_identity ... ok
+test the_binding_is_dormant_on_every_other_preset_and_testnet12_arms_it_at_750 ... ok
+test the_rule_names_every_unbound_sink ... ok
+test the_binding_needs_the_market_and_the_refund_route_at_or_below_it ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.35s
+
+     Running tests/palw_offence_attribution_is_t12_only.rs (/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/g14-18400-deploy/target/ci-gates/debug/deps/palw_offence_attribution_is_t12_only-09ad1a05ca140a65)
+
+running 4 tests
+test a_later_height_is_refused_by_validation ... ok
+test testnet11_devnet_and_mainnet_fingerprint_as_they_did_before_the_attribution_fence ... ok
+test the_fence_moves_testnet12s_fingerprint_and_nothing_else_did ... ok
+test the_attribution_fence_is_armed_on_testnet12_only ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s
+
+     Running tests/palw_offence_attribution_t11_verdicts.rs (/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/g14-18400-deploy/target/ci-gates/debug/deps/palw_offence_attribution_t11_verdicts-88983b8bfd788818)
+
+running 4 tests
+test t11_the_v1_fold_is_the_fold_it_was ... ok
+test t11_the_v1_gate_accepts_the_forced_id_object_and_refuses_the_real_shaped_one ... ok
+test t11_attribution_tags_and_kinds_are_refused_as_they_were ... ok
+test t11_the_v2_kind_is_dormant_at_the_gate_and_in_the_fold ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.40s
+
+     Running tests/palw_operator_anchor_is_t12_only.rs (/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/g14-18400-deploy/target/ci-gates/debug/deps/palw_operator_anchor_is_t12_only-fc6f3cc4792e564c)
+
+running 5 tests
+test an_armed_build_below_its_fence_handshakes_with_the_shipped_build ... ok
+test testnet12_s_operators_are_its_eight_genesis_cards ... ok
+test arming_moves_the_params_and_schedule_ids_but_not_the_identity ... ok
+test the_fence_is_dormant_on_every_other_preset_and_testnet12_arms_it_at_750 ... ok
+test the_fence_needs_rcore_plus_and_a_genesis_operator_list ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.64s
+
+     Running tests/palw_panel_liveness_is_t12_only.rs (/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/g14-18400-deploy/target/ci-gates/debug/deps/palw_panel_liveness_is_t12_only-ae4cbff246dff18f)
+
+running 3 tests
+test arming_the_list_moves_the_params_and_schedule_ids_but_not_the_identity ... ok
+test each_fence_needs_its_prerequisites_at_or_below_it_and_its_mirror ... ok
+test the_fences_are_dormant_on_every_shipped_preset_and_testnet12_is_the_release ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s
+
+     Running tests/palw_panel_seed_execution_is_t12_only.rs (/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/g14-18400-deploy/target/ci-gates/debug/deps/palw_panel_seed_execution_is_t12_only-c25480284be39261)
+
+running 4 tests
+test an_armed_build_below_its_fence_handshakes_with_the_shipped_build ... ok
+test arming_moves_the_params_and_schedule_ids_but_not_the_identity ... ok
+test the_fence_is_dormant_on_every_other_preset_and_testnet12_arms_it_at_750 ... ok
+test the_fence_needs_rcore_plus_at_or_below_it ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.31s
+
+     Running tests/palw_rcore_plus_is_t12_only.rs (/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/g14-18400-deploy/target/ci-gates/debug/deps/palw_rcore_plus_is_t12_only-5a71434fc8b57995)
+
+running 4 tests
+test every_other_preset_moves_only_by_the_v22_version_re_pin ... ok
+test the_fence_is_armed_on_testnet12_only ... ok
+test the_fence_off_twin_validates_and_the_fence_moves_only_testnet12 ... ok
+test validate_refuses_the_fence_without_each_prerequisite ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.27s
+
+     Running tests/palw_readiness_horizon_is_t12_only.rs (/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/g14-18400-deploy/target/ci-gates/debug/deps/palw_readiness_horizon_is_t12_only-7c6c6b2df2989fb8)
+
+running 6 tests
+test on_testnet12_a_row_at_age_24_is_fresh_and_at_25_it_is_not ... ok
+test the_horizon_carries_its_fork_id_name ... ok
+test testnet11_devnet_and_mainnet_fingerprint_as_they_did_before_the_horizon ... ok
+test the_horizon_is_armed_on_testnet12_only ... ok
+test the_horizon_moves_testnet12s_fingerprint_and_nothing_else_did ... ok
+test the_horizon_is_genesis_only_bounded_and_mirrored ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.34s
+
+     Running tests/palw_registry_resilience_is_t12_only.rs (/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/g14-18400-deploy/target/ci-gates/debug/deps/palw_registry_resilience_is_t12_only-b905c8e3a74ca47d)
+
+running 5 tests
+test an_armed_build_keeps_the_launch_build_until_the_height ... ok
+test arming_moves_the_params_and_schedule_ids_and_never_the_identity ... ok
+test every_shipped_id_is_the_release_ones ... ok
+test the_fence_is_refused_unsynced_below_its_prerequisites_and_off_testnet12 ... ok
+test the_fence_ships_dormant_on_every_preset ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.24s
+
+     Running tests/palw_same_fingerprint_same_verdict.rs (/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/g14-18400-deploy/target/ci-gates/debug/deps/palw_same_fingerprint_same_verdict-9afaaeeed9f7b8ce)
+
+running 3 tests
+test the_pinned_verdicts_belong_to_a_named_manifest ... ok
+test write_the_corpus ... ignored, writes the stored corpus
+test the_stored_corpus_gets_the_verdicts_this_build_pinned ... ok
+
+test result: ok. 2 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/palw_the_release_did_not_move.rs (/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/g14-18400-deploy/target/ci-gates/debug/deps/palw_the_release_did_not_move-76465bf22c4195ac)
+
+running 9 tests
+test arming_one_fence_of_the_bundle_on_the_release_is_refused ... ok
+test every_fence_the_reward_work_added_is_dormant_everywhere ... ok
+test p4_does_not_forbid_the_bundle_and_the_release_still_does_not_arm_it ... ok
+test the_daa_clock_fence_is_past_the_stalled_tip ... ok
+test the_execution_quanta_fence_is_past_the_clock ... ok
+test the_shipped_release_fingerprint_did_not_move ... ok
+test the_objective_offence_fence_is_past_the_clock ... ok
+test the_verification_s3_and_s2_fences_are_past_s1_and_the_lock_ledger ... ok
+test the_work_price_denominator_cannot_reach_the_payer_past_the_bundle ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+     Running tests/palw_tir_fences_are_dormant.rs (/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/g14-18400-deploy/target/ci-gates/debug/deps/palw_tir_fences_are_dormant-77a2f0c789abdc33)
+
+running 2 tests
+test every_armed_row_is_its_pinned_row_with_the_ir_flag_day_at_2000 ... ok
+test every_shipped_ruleset_keeps_its_three_ids ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.17s
+
+     Running tests/panel_room_t11_dormant_parity.rs (/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/g14-18400-deploy/target/ci-gates/debug/deps/panel_room_t11_dormant_parity-5b618a54d58cbae3)
+
+running 1 test
+test below_the_audit_fence_the_panel_room_folds_as_the_parent_did ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 17.12s
+
+     Running tests/pruning_proof_strict_economic_fence.rs (/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/g14-18400-deploy/target/ci-gates/debug/deps/pruning_proof_strict_economic_fence-419ab3cafc7128aa)
+
+running 5 tests
+test armed_at_genesis_is_a_real_rule_difference_that_separates_identities ... ok
+test a_scheduled_never_collapses_to_the_dormant_identity ... ok
+test arming_moves_the_params_id_and_the_schedule_id_but_not_the_identity_id ... ok
+test the_two_strict_economic_fences_are_independent_heights ... ok
+test shipped_testnet_12_arms_the_fence_at_750 ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+
+     Running tests/rcore_m5_v22_golden.rs (/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/g14-18400-deploy/target/ci-gates/debug/deps/rcore_m5_v22_golden-dc6443ab78d40511)
+
+running 2 tests
+test t41_the_v22_record_encodings_are_pinned ... ok
+test t41_the_v22_golden_vectors_empty_and_inhabited ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.14s
+
+     Running tests/reorg_strict_win_fence.rs (/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/g14-18400-deploy/target/ci-gates/debug/deps/reorg_strict_win_fence-34d75df3816dcff8)
+
+running 4 tests
+test armed_at_genesis_is_a_real_rule_difference_that_separates_identities ... ok
+test a_scheduled_never_collapses_to_the_dormant_identity ... ok
+test arming_moves_the_params_id_and_the_schedule_id_but_not_the_identity_id ... ok
+test shipped_testnet_12_arms_the_fence_at_750 ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s
+
+     Running tests/shard_unarmed_byte_identity.rs (/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/g14-18400-deploy/target/ci-gates/debug/deps/shard_unarmed_byte_identity-62dccd59c4923fb6)
+
+running 2 tests
+test the_unarmed_t12_fold_is_byte_identical_to_the_integration_line ... ok
+test the_unarmed_rfc0006_lane_a_fold_is_byte_identical_to_the_integration_line ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.31s
+
+     Running tests/t12_deploy_kit_constants.rs (/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/g14-18400-deploy/target/ci-gates/debug/deps/t12_deploy_kit_constants-8738d1b31d9333cf)
+
+running 5 tests
+test the_kit_names_the_all_model_single_seat_migration ... ok
+test the_deploy_kit_and_the_explorer_name_this_builds_classes_and_premine_layout ... ok
+test the_kit_names_the_full_activation_height_the_preset_arms ... ok
+test the_kit_names_the_int11_flag_day_height_and_offset_the_preset_arms ... ok
+test the_kit_names_the_int13_flag_day_height_the_preset_arms ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+     Running tests/t12_fleet_identity_247ade1f9.rs (/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/g14-18400-deploy/target/ci-gates/debug/deps/t12_fleet_identity_247ade1f9-ec8e4ec5280f429e)
+
+running 4 tests
+test dump_t12_shipped_ids ... ok
+test fleet_ids_match_247ade1f9 ... ok
+test slice_at_17000_keeps_the_handshake_identity ... ok
+test g14_17000_list_keeps_everything_below_17000 ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+
+     Running tests/t12_mainnet_values_moved_only_these.rs (/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/g14-18400-deploy/target/ci-gates/debug/deps/t12_mainnet_values_moved_only_these-962a9d2bb56d488f)
+
+running 2 tests
+test the_three_mainnet_values_are_the_only_thing_that_moved_testnet12 ... ok
+test testnet12_runs_the_three_mainnet_values ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+
+     Running tests/t12_regenesis.rs (/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/g14-18400-deploy/target/ci-gates/debug/deps/t12_regenesis-6e9bb1902db0106d)
+
+running 15 tests
+test no_model_class_declares_a_share ... ok
+test every_rule_is_in_force_from_genesis ... ok
+test t12_bond_collateral_matches_the_card ... ok
+test t12_arms_every_fence_t11_armed ... ok
+test t12_community_table_is_t11_plus_four ... ok
+test t12_genesis_mints_exactly_the_cap ... ok
+test t12_certifies_both_lanes_of_the_classes_it_registers ... ok
+test t12_genesis_reads_its_root_from_the_committed_manifest ... ok
+test t12_keeps_t11_peer_port ... ok
+test t12_genesis_roots_are_all_read_from_committed_manifests ... ok
+test t12_reserves_the_escrow_from_genesis ... ok
+test t12_runs_mainnet_s_tolerance_and_level_ceiling ... ok
+test the_fleets_premine_indices_are_unchanged_on_t12s_own_txid ... ok
+test the_held_rows_are_the_fleets_classes ... ok
+test t12_shares_no_premine_outpoint_or_genesis_with_the_sentinel_chains ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.21s
+
+     Running tests/t12_two_clock_ring.rs (/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/g14-18400-deploy/target/ci-gates/debug/deps/t12_two_clock_ring-14b5e24bb74779ee)
+
+running 7 tests
+test a_ring_delta_applied_to_the_wrong_state_is_refused ... ok
+test a_dormant_network_ticks_at_final_and_never_touches_the_ring ... ok
+test the_ring_prune_count_boundaries ... ok
+test the_carriage_round_trips_a_non_empty_ring ... ok
+test the_second_clock_depth_boundaries ... ok
+test the_settled_anchor_floor_reads_the_ring ... ok
+test the_ring_pushes_prunes_and_reverts_through_the_fold ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s
+

@@ -1,7 +1,9 @@
-# ADR-0210 — Court全分岐の供給者契約と原子的native予約
+# ADR-0210 (CourtSupplierConsent) — Court全分岐の供給者契約と原子的native予約
+
+> **並行割当衝突:** 同番号の [ADR-0210 (AllModelG14PanelOne)](0210-all-model-g14-panel-one.md) は別の主文書です。両方の元番号・完全パス・採択内容・wire/署名domainを保持し、修飾名と完全パスで区別します。[番号台帳](../maintenance/numbering.md#2026-11-02-並行割当衝突)。
 
 Decision: **Accepted / 実装中・統合未検証・未有効化** (2026-10-30)。
-[RFC-0042](../rfc/0042-court-family-supplier-consent-and-native-reservation.md)を採用する。
+[RFC-0042 (CourtSupplierConsent)](../rfc/0042-court-family-supplier-consent-and-native-reservation.md)を採用する。
 承認者はユーザー。具体案と署名実装を提示した採択質問に対する回答は、
 **「新契約を採択して接続まで進める」**。公開ネットワークの有効化・配備は別である。
 

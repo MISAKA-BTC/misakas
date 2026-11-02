@@ -68,20 +68,21 @@ const UNMOVED: &[(&str, &str, &str, &str)] = &[
 /// `palw_offence_attribution_is_t12_only`, `evm_bridge_ledger_is_t12_only` and
 /// `t12_mainnet_values_moved_only_these` hold unchanged with it taken away — so nothing else moved).
 /// The re-pin (`scripts/release/t12_repin.py`, `maturity.*`) moves it with every other twin.
-// re-pin 2026-10-30 @64535b7bf7e8: User selected DAA18400 for the unpublished G14 schedule on 2026-10-30; preserve the current main CI fixes (was 4bcf0e45…, 684f43a7…)
+// re-pin 2026-10-31 @cc5a7dd0e096: undeployed model-one fence delayed to 18640 for verified fleet rollout (was e134e9eb…, 487cf08b…)
+// re-pin 2026-11-01: same without-rule constructor; new 20000 retention fence retained; unreleased 18850 withdrawn.
 const T12_WITHOUT_THE_MATURITY: (&str, &str, &str) = (
-    "3be11627f5162fbe83ad836e742dc7cff19119a1296a068dd05d1c344e3f72d7",
+    "2cd8a0f384bec89f7620c48e333dbcedd86cc4c53ba9c017c1741c2298086762",
     "e4add02e255f61615fbe0195a08ea893614bc4a234f4c635a0706d9e3b3d7b53",
-    "a80e4aaf0d8dee128122b1ea3a957629814561cfd61a2c2f3d2f71db01594e99",
+    "ef08398440288ca356dc9b6f5381233abcfafcc97c0dc75e37b688ed5e5555ff",
 );
 
 /// testnet-12 with the 120-DAA maturity: the shipped preset's full ids (= `palw_readiness_horizon_is_t12_only`'s
 /// `T12_WITH_THE_HORIZON`). Taken from this test's own output.
-// re-pin 2026-10-30 @64535b7bf7e8: User selected DAA18400 for the unpublished G14 schedule on 2026-10-30; preserve the current main CI fixes (was 73e67678…, fd42c167…)
+// re-pin 2026-11-01: future ModelOne retention fence at 20000 (unreleased 18850 withdrawn); derived for retention-20000; new-source regression evidence recorded separately
 const T12_WITH_THE_MATURITY: (&str, &str, &str) = (
-    "3e6da238306cfdb7e71599d5ef8fb314f1b3ff33a50673af1321f3da9cfa5b94",
+    "253d22bbc32fbcf3f23e9333524435478a5a7b87ac9a360de6513dde4cdc5248",
     "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-    "b4706ae535fc2c9e4f0a0fe1b6cb0456025f3e00c1b8aba5cde02191f46f9194",
+    "ec5f56fa48cdeafb3a6fc953c02a2dcd53f0f54025fe7243a87972884a47eb5e",
 );
 
 fn shipped(name: &str) -> Params {

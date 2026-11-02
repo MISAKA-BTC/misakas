@@ -1,0 +1,9 @@
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/g14-producer-panel-one/MISAKA-testnet/consensus/core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 57.59s
+     Running unittests src/lib.rs (/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/g14-18400-deploy/target/ci-gates/debug/deps/kaspa_consensus_core-e242d74f72be430d)
+
+running 1 test
+test palw_model_panel_one_v1::tests::historical_int13_release_does_not_inherit_the_new_fork ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5306 filtered out; finished in 0.07s
+

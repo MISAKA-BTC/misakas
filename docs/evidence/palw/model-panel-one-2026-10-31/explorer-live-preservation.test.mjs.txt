@@ -1,0 +1,22 @@
+import {readFileSync} from 'node:fs';import assert from 'node:assert/strict';import {test} from 'node:test';import vm from 'node:vm';
+const before=readFileSync('/tmp/misaka-chain-20261031/explorer-live-claim-join-before.js','utf8');
+const after=readFileSync(process.env.MISAKA_SCAN_SOURCE || '/tmp/misaka-chain-20261031/explorer-live-claim-join-candidate.js','utf8');
+const section=(s,a,b)=>s.slice(s.indexOf(a),s.indexOf(b,s.indexOf(a)));
+function classifier(s){const c=vm.createContext({llmIsFloor:id=>id==='floor',esc:String});vm.runInContext(s.match(/^const scanIsRound =.*$/m)[0]+section(s,'function scanKindOf(','function scanKindPill(')+section(s,'function scanTypeOf(','function scanBlockContext('),c);return b=>JSON.parse(JSON.stringify(c.scanTypeOf(b)));}
+test('live execution-round classification is preserved, independently of the isolated baseline',()=>{
+ const a=classifier(before),b=classifier(after);
+ for(const r of [{algo:10,nodeKind:'REAL_ROUND',laneClass:'BLUE'},{algo:10,laneClass:'RED'},{algo:10,laneClass:''}])assert.deepEqual(b(r),a(r));
+});
+test('live real Attempt, heartbeat, floor and red classification remains unchanged',()=>{
+ const a=classifier(before),b=classifier(after);
+ for(const r of [{algo:6,nodeKind:'REAL',classId:'model',isChain:true},{algo:6,nodeKind:'REAL',classId:'model',laneClass:'RED'},{algo:8,nodeKind:'LEGACY_HEARTBEAT',isChain:true},{algo:6,classId:'floor',nodeKind:'LEGACY_FLOOR',isChain:true}])assert.deepEqual(b(r),a(r));
+ assert.equal(b({algo:6,nodeKind:'REAL',classId:'model',isChain:true}).cat,'consensus');
+});
+test('live arrival order uses observed arrival time before historical timestamp',()=>{
+ const rows=[{hash:'old-header-new-arrival',arrivalMs:300,timestamp:1,blueScore:1,daaScore:1},{hash:'newer-header',timestamp:200,blueScore:2,daaScore:2}];
+ const order=s=>{const c=vm.createContext({});vm.runInContext(section(s,'function recentArrivalOrder(','// The Recent blocks MODEL cell.'),c);return rows.slice().sort(c.recentArrivalOrder).map(r=>r.hash)};
+ assert.deepEqual(order(after),order(before));assert.equal(order(after)[0],'old-header-new-arrival');
+});
+test('existing live home cold-fill, bounded paging and body hydration fixes are untouched',()=>{
+ for (const [start,end] of [['async function coldFill(', '// ---- ONE "Recent blocks"'], ['async function hydrateBlockBodies(', 'async function collectRecentBlocks(']]) assert.equal(section(after,start,end),section(before,start,end));
+});

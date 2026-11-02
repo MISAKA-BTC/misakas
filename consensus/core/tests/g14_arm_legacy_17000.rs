@@ -71,6 +71,9 @@ fn record(fence: PalwG14GatedFenceV1, p: &Params, measured: Option<&PalwCourtMea
 /// testnet-12 with the candidates armed at [`AT`] (each on its `Params` field, mirrors synced), and the TEST records the gated ones need.
 fn armed(outsider_lane: bool) -> (Params, Vec<PalwG14ArmingRecordV1>) {
     let mut p = palw_t12_shipped_params();
+    // Test the historical legacy gates without the later ModelOne dependencies.
+    p.palw_model_panel_one_v1 = None;
+    p.palw_model_panel_one_retention_v1 = None;
     // The candidate list is this test's ruleset. The shipped G14 arming stays on the launch params.
     palw_t12_arm_after_int13_at_v1(&mut p, PALW_T12_G14_17000_FENCES_V1, None);
     let at = Some(ForkActivation::new(AT));

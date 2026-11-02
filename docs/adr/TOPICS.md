@@ -184,6 +184,7 @@
 - [ADR-0177 — Model-bond coinbase allocation without model-availability consensus](0177-model-bond-allocation-without-availability-consensus.md)
 - [ADR-0179 — モデル階層: genesis・年次フォーク 1.0、登録モデル 0.3](0179-model-tiers-genesis-annual-1-0-registered-0-3.md)
 - [ADR-0191 — TIR court: dispute-local decomposition for long-context claims (Proposed)](0191-tir-dispute-local-decomposition-long-context.md)
+- [ADR-0210 — (AllModelG14PanelOne) — 全モデルの新規 producer claim を G14 の 1 席経路へ移す](0210-all-model-g14-panel-one.md)
 
 ## Operations / interfaces / recovery
 
@@ -229,5 +230,5 @@
 - [ADR-0199 — 共有court終端materialと非独占提出方式](0199-shared-court-terminal-material-and-nonblocking-ingress.md)
 - [ADR-0202 — shared court originalの実原資と役割別同意](0202-court-original-funded-contract-and-role-consent.md)
 - [ADR-0206 — PanelDa の G14 経路 — 期限付きの必須公開](0206-panel-da-mandatory-disclosure-g14-route.md)
-- [ADR-0210 — Court全分岐の供給者契約と原子的native予約](0210-court-family-supplier-consent-and-native-reservation.md)
+- [ADR-0210 — (CourtSupplierConsent) — Court全分岐の供給者契約と原子的native予約](0210-court-family-supplier-consent-and-native-reservation.md)
 
