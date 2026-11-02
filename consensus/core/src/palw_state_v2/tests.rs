@@ -1,7 +1,10 @@
 //! **`palw_state_v2`'s unit tests**, moved out of `palw_state_v2.rs` (2026-10-12, a behaviour-preserving split: the module path
 //! `crate::palw_state_v2::tests` and every test in it are unchanged; only the file moved).
 
+mod g14_model_panel_one_retention_v1;
+mod g14_model_panel_one_v1;
 mod kernel_route_locator_v1;
+mod owned_delta_replay_v1;
 // Liveness audit (lane lifecycle): per-object rehearsal / per-block fold cost vs state rows.
 mod claim_local_rewards_v1;
 mod claim_local_v1;

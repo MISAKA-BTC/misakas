@@ -210,3 +210,4 @@
 | ADR-0207 | [通常 verifier fee と有限 provider 契約の判断](0207-finite-fee-consent-and-provider-payment-bounds.md) | 原文と後続改定を参照 |
 | ADR-0208 | [再利用 prefix の生成元 identity を明示する案](0208-authenticated-prefix-work-dependencies.md) | 原文と後続改定を参照 |
 | ADR-0209 | [genesis bond を廃止し、BASE 回復と通常 bond 登録で起動する](0209-genesis-bond-free-bootstrap.md) | 原文と後続改定を参照 |
+| ADR-0210 | [全モデルの新規 producer claim を G14 の 1 席経路へ移す](0210-all-model-g14-panel-one.md) | 原文と後続改定を参照 |

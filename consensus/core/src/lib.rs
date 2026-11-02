@@ -537,6 +537,7 @@ pub mod palw_model_eligibility_v1;
 pub mod palw_model_fit_v1;
 pub mod palw_model_lines_v1;
 pub mod palw_model_market_v1;
+pub mod palw_model_panel_one_v1;
 /// RFC-0002 P0 (RFC02-T): the protected candidate refutation — fence `palw_model_refutation_seal_v1`, dormant, refused when armed.
 pub mod palw_model_refutation_seal_v4;
 /// Model-add tracking: machine-readable refusal codes and the constructed→folded pipeline.

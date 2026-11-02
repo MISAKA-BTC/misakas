@@ -1257,3 +1257,55 @@ fn panelda_fence_boundary_is_byte_identical_below() {
         apply_derived(&public.state, &p, &at(), std::slice::from_ref(&public.object), &public.extras).expect("PublicDa folds");
     assert!(s.panel_da_disclosure_v1(&public.claim).is_none(), "PublicDa writes no row");
 }
+
+/// The migration's endogenous draw binds a real admitted TFP1 ORIGINAL to one
+/// whole-claim custodian. Initial admission is covered by the existing native
+/// lane fixture; this exercises assignment and immutable custody together.
+#[test]
+fn model_panel_one_tir_original_assignment_and_receipt_timeout() {
+    let mut l = lane(false);
+    l.p = l.p.clone().with_fp_exposure_ceiling(500).unwrap().with_rcore_plus_mirrors(Some(0), 12_900, Vec::new());
+    l.extras.panel_economy_active = true;
+    *l.state.class_shares.values_mut().find(|share| **share >= 2).unwrap() -= 1;
+    l.state.class_shares.insert(l.class_id, 1);
+    let (mut s, _) = apply_derived(&l.state, &l.p, &at(), std::slice::from_ref(&l.object), &l.extras).unwrap();
+    tn1_bond(&mut s, SEAT, vec![0x53; 4]);
+    let p = l.p.clone().with_model_panel_one_from_daa(Some(AT_DAA)).with_anchor_window_from_daa(Some(0));
+    let mut extras = l.extras.clone();
+    extras.round_lane = round_extras(1, Vec::new()).round_lane;
+    extras.audit_2026_09_23_active = true;
+    extras.objective_offence_daa = Some(0);
+    s.round_seed_anchor =
+        Some(crate::palw_execution_lane_v1::PalwExecSeedAnchorV1 { span: AT_DAA + 1, block: h64(0xA001), execution_key: h64(0xA002) });
+    let (bound, _) = apply_derived(&s, &p, &tn1_ctx(AT_DAA + 1), &[], &extras).expect("one-seat TIR assignment");
+    let panel = bound.panel(&l.claim).expect("assigned");
+    assert_eq!(panel.seats.len(), 1);
+    let frame = crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(&bound, l.claim).unwrap();
+    assert_eq!(frame.original_custody_v1().panel_v1().unwrap().seats.len(), 1);
+    let timeout = *bound.deadlines.iter().find(|(_, id)| *id == l.claim).unwrap();
+    let (redrawn, _) =
+        apply_derived(&bound, &p, &tn1_ctx(timeout.0 + 1), &[], &extras).expect("a silent TIR seat does not invalidate a block");
+    let mut redrawn = redrawn;
+    redrawn.round_seed_anchor = Some(crate::palw_execution_lane_v1::PalwExecSeedAnchorV1 {
+        span: timeout.0 + 2,
+        block: h64(0xA003),
+        execution_key: h64(0xA004),
+    });
+    let before = redrawn.state_root();
+    let (ended, delta) = apply_derived(&redrawn, &p, &tn1_ctx(timeout.0 + 2), &[], &extras)
+        .expect("immutable original custody never wedges the next block");
+    assert!(matches!(
+        ended.claim(&l.claim).unwrap().phase,
+        PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::PanelUnavailable, .. }
+    ));
+    assert_eq!(ended.bond(&bond_key(PRODUCER)).unwrap().collateral, bound.bond(&bond_key(PRODUCER)).unwrap().collateral);
+    let retained = crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(&ended, l.claim).unwrap();
+    assert_eq!(retained.original_custody_v1().panel_v1(), frame.original_custody_v1().panel_v1());
+    ended.assert_internal_consistency(&p).unwrap();
+    ended.assert_deadline_consistency(&p).unwrap();
+    assert_eq!(revert_delta_v2(&ended, &delta, &p).unwrap().state_root(), before);
+    assert_eq!(
+        PalwStateCarriageV2::from_state(&ended).into_state(&p, Some(ended.state_root())).unwrap().state_root(),
+        ended.state_root()
+    );
+}

@@ -835,6 +835,10 @@ jobs:
   build-wasm32:
     name: Build WASM32 SDK
     runs-on: ubuntu-latest
+    # The SDK retains ten release/dev variants; full dev type information filled
+    # the runner disk. Keep limited debug information and all runtime checks.
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "1"
     steps:
       - name: Checkout sources
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4

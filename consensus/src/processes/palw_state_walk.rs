@@ -121,7 +121,7 @@ pub fn walk_chain_path_retained_v1(
                     e => PalwStateWalkError::Store(e),
                 })?
                 .1;
-            state = state.try_delta_v1(&delta, params, revert).map_err(PalwStateWalkError::from)?;
+            state = state.into_delta_v1(&delta, params, revert).map_err(PalwStateWalkError::from)?;
         }
     }
     Ok(state)
@@ -351,6 +351,40 @@ mod tests {
         // Reverting the whole of A reaches the fork exactly.
         let at_fork = walk_chain_path(&store, &p, a_state, &removed, &[]).unwrap();
         assert_eq!(at_fork, fork_state);
+    }
+
+    #[test]
+    fn owned_delta_replay_retained_store_walk_matches_reference_reorg_and_failures() {
+        use kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1;
+        let (_lt, _db, store, p, _fork, fork_state, a_blocks, a_state, b_blocks, b_state) = fixture();
+        let shared = std::sync::Arc::new(NativeChainStateV1::retain_existing_v1(a_state.clone()).unwrap());
+        let removed_a: Vec<_> = a_blocks.iter().rev().copied().collect();
+        let owned = walk_chain_path_retained_v1(&store, &p, shared.try_clone_v1().unwrap(), &removed_a, &b_blocks).unwrap();
+        let reference = walk_chain_path(&store, &p, a_state.clone(), &removed_a, &b_blocks).unwrap();
+        assert_eq!(*owned, reference);
+        assert_eq!(*owned, b_state);
+        assert_eq!(owned.state_root(), reference.state_root());
+        assert_eq!(owned.last_point(), reference.last_point());
+        assert_eq!(
+            borsh::to_vec(&kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2::from_state(&owned)).unwrap(),
+            borsh::to_vec(&kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2::from_state(&reference)).unwrap(),
+        );
+        assert_eq!(**shared, a_state, "source Arc was cloned once before consuming replay");
+        let removed_b: Vec<_> = b_blocks.iter().rev().copied().collect();
+        let restored = walk_chain_path_retained_v1(&store, &p, owned, &removed_b, &a_blocks).unwrap();
+        assert_eq!(*restored, a_state);
+        let at_fork = walk_chain_path_retained_v1(&store, &p, restored, &removed_a, &[]).unwrap();
+        assert_eq!(*at_fork, fork_state);
+        let empty = walk_chain_path_retained_v1(&store, &p, at_fork, &[], &[]).unwrap();
+        assert_eq!(*empty, fork_state);
+        let missing = h64(0xDEAD);
+        let old = walk_chain_path(&store, &p, a_state.clone(), &[], &[missing]).unwrap_err();
+        let new = walk_chain_path_retained_v1(&store, &p, shared.try_clone_v1().unwrap(), &[], &[missing]).unwrap_err();
+        assert!(matches!((&old, &new), (PalwStateWalkError::MissingDelta(a), PalwStateWalkError::MissingDelta(b)) if a == b));
+        let old = walk_chain_path(&store, &p, a_state, &[], &[b_blocks[0]]).unwrap_err();
+        let new = walk_chain_path_retained_v1(&store, &p, shared.try_clone_v1().unwrap(), &[], &[b_blocks[0]]).unwrap_err();
+        assert!(matches!((&old, &new), (PalwStateWalkError::State(a), PalwStateWalkError::State(b)) if a == b));
+        assert!(new.native_capacity_v1().is_none());
     }
 
     /// The walk agrees with the in-memory book — the same states, reached two ways. If a store

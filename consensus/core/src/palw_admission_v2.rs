@@ -1035,6 +1035,31 @@ pub fn check_palw_attempt_witness_pin_v1(
     Ok(())
 }
 
+/// Preserve one raw signed deadline per class when the separate acceptance-clock
+/// obligation is active. A derived stored obligation must not make the shorter
+/// stateless header shape another valid lottery draw for a fused model.
+pub(crate) fn check_palw_attempt_model_one_retention_pin_v1(
+    state: &PalwChainStateV2,
+    state_params: &PalwStateParamsV2,
+    attempt: &crate::palw_attempt_v2::PalwAttemptUnsignedV2,
+    header_daa: u64,
+    accepted_daa: u64,
+) -> Result<(), PalwAdmissionV2Error> {
+    if !state_params.model_panel_one_retention_active_at(accepted_daa) {
+        return Ok(());
+    }
+    let derived = header_daa.saturating_add(crate::palw_court_capacity_v1::palw_attempt_trace_retention_daa_v1(
+        state,
+        state_params,
+        &attempt.class_id,
+        header_daa,
+    ));
+    if attempt.trace_retention_daa != derived {
+        return Err(PalwAdmissionV2Error::TraceRetentionNotDerived { claimed: attempt.trace_retention_daa, derived });
+    }
+    Ok(())
+}
+
 /// The composed admission a wiring layer should call: stateless shape → stateless signature →
 /// the DA pins → the stateful list → the class lottery, in that order, one entry point — so no
 /// pipeline can wire five layers and forget one. (The PoW itself is the finalizer's, upstream of
@@ -1101,6 +1126,7 @@ where
     envelope.validate_stateless_v2(network_domain, pre_pow_hash, timestamp, nonce)?;
     envelope.validate_signature_v2(verify_mldsa87)?;
     check_palw_attempt_da_pins_v1(state_params, &envelope.attempt, daa_score)?;
+    check_palw_attempt_model_one_retention_pin_v1(state, state_params, &envelope.attempt, daa_score, ctx.daa_score)?;
     check_palw_attempt_witness_pin_v1(state, state_params, &envelope.attempt, daa_score)?;
     let attempt_id =
         check_palw_attempt_admission_v2_with_bootstrap(state, state_params, admission, ctx, envelope, bootstrap_bond, budget_fences)?;

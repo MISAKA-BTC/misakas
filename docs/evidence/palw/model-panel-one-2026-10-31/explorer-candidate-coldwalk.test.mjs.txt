@@ -1,0 +1,19 @@
+import {readFileSync} from 'node:fs';import assert from 'node:assert/strict';import {test} from 'node:test';import vm from 'node:vm';
+const dir='/tmp/misaka-chain-20261031/';
+async function runColdBlock(file){
+ const source=readFileSync(file,'utf8'),a=source.indexOf('  if (!llmCursor){',source.indexOf('async function refreshLlmInner(){')),b=source.indexOf('\n  const chainSeen =',a);
+ assert(a>=0&&b>a,'cold initialization must exist');
+ const calls=[],dag={sink:'current-sink',network:'testnet-12'};
+ const ctx=vm.createContext({rpc:async method=>{assert.equal(method,'getBlockDagInfo');return dag},recentChainAnchor:async(d,depth)=>{assert.equal(d,dag);calls.push(depth);return 'selected-parent-anchor'}});
+ const cursor=await vm.runInContext('(async()=>{ let llmCursor=null;'+source.slice(a,b)+';return llmCursor;})()',ctx);
+ return {cursor,calls};
+}
+for(const [label,path] of [['shipped source','/Users/wata/.codex/worktrees/g14-producer-panel-one/MISAKA-testnet/contrib/misakascan-t12/app.js'],['main-preserving candidate',dir+'explorer-claim-join-user-candidate.js'],['live-preserving candidate',dir+'explorer-live-claim-join-candidate.js']]){
+ test(label+' executes the selected-parent walker on cold LLM initialization',async()=>{
+  const r=await runColdBlock(path);assert.equal(r.cursor,'selected-parent-anchor');assert.deepEqual(r.calls,[12]);
+ });
+}
+test('the pre-correction main candidate demonstrates the missed helper contract',async()=>{
+ const r=await runColdBlock(dir+'explorer-claim-join-user-candidate-before-coldwalk-correction.js');
+ assert.equal(r.cursor,'current-sink');assert.deepEqual(r.calls,[]);
+});

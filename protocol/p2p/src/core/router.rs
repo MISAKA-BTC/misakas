@@ -522,3 +522,79 @@ mod prefix_history_tests {
         )));
     }
 }
+
+#[cfg(test)]
+mod candidate_summary_route_tests {
+    use super::*;
+    use crate::pb::{BlockLocatorMessage, BlockMessage, IbdCandidateSummaryMessage};
+    use crate::{dequeue_with_timeout, make_response};
+    use std::time::Duration;
+
+    fn router() -> Router {
+        let (outgoing_route, _) = mpsc_channel(8);
+        let (hub_sender, _) = mpsc_channel(8);
+        Router {
+            identity: Default::default(),
+            net_address: "127.0.0.1:26311".parse().unwrap(),
+            is_outbound: true,
+            connection_started: Instant::now(),
+            routing_map_by_type: Default::default(),
+            routing_map_by_id: Default::default(),
+            outgoing_route,
+            hub_sender,
+            mutable_state: Mutex::new(RouterMutableState::new(None, None)),
+        }
+    }
+
+    // t12 2026-10-31: optional summary timeout was tolerated, but its late reply
+    // reached the next block request and disconnected an otherwise usable peer.
+    #[tokio::test]
+    async fn a_shared_summary_route_reproduces_the_relay_disconnect() {
+        let router = router();
+        let mut route = router.subscribe(vec![]);
+        let expired: Result<_, ProtocolError> =
+            dequeue_with_timeout!(route, KaspadMessagePayload::IbdCandidateSummary, Duration::from_millis(1));
+        assert!(expired.is_err());
+        router
+            .route_to_flow(make_response!(
+                KaspadMessagePayload::IbdCandidateSummary,
+                IbdCandidateSummaryMessage::default(),
+                route.id()
+            ))
+            .unwrap();
+        router.route_to_flow(make_response!(KaspadMessagePayload::Block, BlockMessage::default(), route.id())).unwrap();
+        let block: Result<_, ProtocolError> = dequeue_with_timeout!(route, KaspadMessagePayload::Block);
+        assert!(matches!(block, Err(ProtocolError::UnexpectedMessage(..))));
+    }
+
+    #[tokio::test]
+    async fn late_candidate_summaries_do_not_poison_block_or_locator_responses() {
+        let router = router();
+        let mut relay = router.subscribe(vec![]);
+        let mut summary = router.subscribe(vec![]);
+        let expired: Result<_, ProtocolError> =
+            dequeue_with_timeout!(summary, KaspadMessagePayload::IbdCandidateSummary, Duration::from_millis(1));
+        assert!(expired.is_err());
+        // A late reply before the block, then another before the locator.
+        for payload in
+            [KaspadMessagePayload::Block(BlockMessage::default()), KaspadMessagePayload::BlockLocator(BlockLocatorMessage::default())]
+        {
+            router
+                .route_to_flow(make_response!(
+                    KaspadMessagePayload::IbdCandidateSummary,
+                    IbdCandidateSummaryMessage::default(),
+                    summary.id()
+                ))
+                .unwrap();
+            router.route_to_flow(KaspadMessage { payload: Some(payload), response_id: relay.id(), request_id: 0 }).unwrap();
+        }
+        let block: Result<_, ProtocolError> = dequeue_with_timeout!(relay, KaspadMessagePayload::Block);
+        assert!(block.is_ok());
+        let locator: Result<_, ProtocolError> = dequeue_with_timeout!(relay, KaspadMessagePayload::BlockLocator);
+        assert!(locator.is_ok());
+        // Late replies stay on the live optional route; they do not cause a no-route disconnect.
+        assert!(summary.try_recv().is_ok());
+        assert!(summary.try_recv().is_ok());
+        assert!(relay.try_recv().is_err());
+    }
+}

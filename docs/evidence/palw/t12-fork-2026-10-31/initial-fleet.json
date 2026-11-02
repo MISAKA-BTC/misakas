@@ -1,0 +1,114 @@
+{
+  "observed": "2026-10-31 around 18:20 JST (09:20 UTC)",
+  "liveBinarySha256": "0a8d81f996c5d0abaa376113035f452bf42aa67c33d4fa12a76925ee9693acf3",
+  "nodes": [
+    {
+      "host": "seed3",
+      "port": 26314,
+      "virtualDaaScore": 18536,
+      "sink": "d5beca7571353e1f1ad8acff88784cb460b65ca01099653f37536822e45ec5fe0c0925910e0f6b8ffca6d7f751db7259c8c47cf12d474aa0fb33e494bcc7a747",
+      "tipCount": 6,
+      "isSynced": true,
+      "consensusParamsId": "3e6da238306cfdb7e71599d5ef8fb314f1b3ff33a50673af1321f3da9cfa5b94",
+      "consensusScheduleId": "b4706ae535fc2c9e4f0a0fe1b6cb0456025f3e00c1b8aba5cde02191f46f9194",
+      "genesisHash": "a27f8f44fe4d91a5bed940be9dbd6d260ccb95cc00d948b1c08ddb6bd1a5f02542a6cf35c7a4d959ba4863ac1557861671763e5cc22937c697870283a8ca1f23",
+      "error": null
+    },
+    {
+      "host": "ibm",
+      "port": 26314,
+      "virtualDaaScore": 18441,
+      "sink": "7632e597321fcdecbe5fba0fabd06a4227898cc258a64fb7328ecf048cb416f26ab4d3d242abaaa4fd4ad8d532b639c7d1f6786e99e19582eb1a4e12412cf42a",
+      "tipCount": 187,
+      "isSynced": false,
+      "consensusParamsId": "3e6da238306cfdb7e71599d5ef8fb314f1b3ff33a50673af1321f3da9cfa5b94",
+      "consensusScheduleId": "b4706ae535fc2c9e4f0a0fe1b6cb0456025f3e00c1b8aba5cde02191f46f9194",
+      "genesisHash": "a27f8f44fe4d91a5bed940be9dbd6d260ccb95cc00d948b1c08ddb6bd1a5f02542a6cf35c7a4d959ba4863ac1557861671763e5cc22937c697870283a8ca1f23",
+      "error": null
+    },
+    {
+      "host": "ibm",
+      "port": 26324,
+      "virtualDaaScore": 0,
+      "sink": "a27f8f44fe4d91a5bed940be9dbd6d260ccb95cc00d948b1c08ddb6bd1a5f02542a6cf35c7a4d959ba4863ac1557861671763e5cc22937c697870283a8ca1f23",
+      "tipCount": 1,
+      "isSynced": false,
+      "consensusParamsId": "3e6da238306cfdb7e71599d5ef8fb314f1b3ff33a50673af1321f3da9cfa5b94",
+      "consensusScheduleId": "b4706ae535fc2c9e4f0a0fe1b6cb0456025f3e00c1b8aba5cde02191f46f9194",
+      "genesisHash": "a27f8f44fe4d91a5bed940be9dbd6d260ccb95cc00d948b1c08ddb6bd1a5f02542a6cf35c7a4d959ba4863ac1557861671763e5cc22937c697870283a8ca1f23",
+      "error": null
+    },
+    {
+      "host": "ibm",
+      "port": 26334,
+      "virtualDaaScore": 18536,
+      "sink": "e2a76bfcef81cbdd47af22a36cb7633a8620acd7ca65ed357b337bec07a188dcb8df6a2f60011f297fe23e2d2307d99c9f2381b9895476077944cda198765e7f",
+      "tipCount": 27,
+      "isSynced": true,
+      "consensusParamsId": "3e6da238306cfdb7e71599d5ef8fb314f1b3ff33a50673af1321f3da9cfa5b94",
+      "consensusScheduleId": "b4706ae535fc2c9e4f0a0fe1b6cb0456025f3e00c1b8aba5cde02191f46f9194",
+      "genesisHash": "a27f8f44fe4d91a5bed940be9dbd6d260ccb95cc00d948b1c08ddb6bd1a5f02542a6cf35c7a4d959ba4863ac1557861671763e5cc22937c697870283a8ca1f23",
+      "error": null
+    },
+    {
+      "host": "5104",
+      "port": 26314,
+      "virtualDaaScore": 18427,
+      "sink": "c899f720c44ceca2e12d13bb2dd846d7e45ff2b70ef2e958086cd5c44a66b840206062e4df7f30ca9690036afc73cd0e1012c4a091c90d692a05587388c6204f",
+      "tipCount": 43,
+      "isSynced": false,
+      "consensusParamsId": "3e6da238306cfdb7e71599d5ef8fb314f1b3ff33a50673af1321f3da9cfa5b94",
+      "consensusScheduleId": "b4706ae535fc2c9e4f0a0fe1b6cb0456025f3e00c1b8aba5cde02191f46f9194",
+      "genesisHash": "a27f8f44fe4d91a5bed940be9dbd6d260ccb95cc00d948b1c08ddb6bd1a5f02542a6cf35c7a4d959ba4863ac1557861671763e5cc22937c697870283a8ca1f23",
+      "error": null
+    },
+    {
+      "host": "5104",
+      "port": 26334,
+      "virtualDaaScore": 18429,
+      "sink": "dcbe406a46183b6d508aeb9d67019ce9c9f5b7d66fefd823c6af2b820ad82562422d22a60bef71f20fcf5f46eb9f2ae965b158c0a378d63706b440aba6d5e0b8",
+      "tipCount": 42,
+      "isSynced": false,
+      "consensusParamsId": "3e6da238306cfdb7e71599d5ef8fb314f1b3ff33a50673af1321f3da9cfa5b94",
+      "consensusScheduleId": "b4706ae535fc2c9e4f0a0fe1b6cb0456025f3e00c1b8aba5cde02191f46f9194",
+      "genesisHash": "a27f8f44fe4d91a5bed940be9dbd6d260ccb95cc00d948b1c08ddb6bd1a5f02542a6cf35c7a4d959ba4863ac1557861671763e5cc22937c697870283a8ca1f23",
+      "error": null
+    },
+    {
+      "host": "5104",
+      "port": 26344,
+      "virtualDaaScore": 18426,
+      "sink": "832850c51ebed1f814fc73598a05246c1f8efe64995e4f2bfae8603f2597f8e1afac57acf5997c74c40c20ca280dce2dea46e9d5de147b39f31f4810ed08785e",
+      "tipCount": 45,
+      "isSynced": false,
+      "consensusParamsId": "3e6da238306cfdb7e71599d5ef8fb314f1b3ff33a50673af1321f3da9cfa5b94",
+      "consensusScheduleId": "b4706ae535fc2c9e4f0a0fe1b6cb0456025f3e00c1b8aba5cde02191f46f9194",
+      "genesisHash": "a27f8f44fe4d91a5bed940be9dbd6d260ccb95cc00d948b1c08ddb6bd1a5f02542a6cf35c7a4d959ba4863ac1557861671763e5cc22937c697870283a8ca1f23",
+      "error": null
+    },
+    {
+      "host": "113",
+      "port": 26314,
+      "virtualDaaScore": 18511,
+      "sink": "d6556768a93b0c3ae17b8abb887c227aef4c30bb6a4e186961d7be3c592c0cee82f1c113877754c62493ed875b95089babdce8ba4de1272468fa9ba6074d1313",
+      "tipCount": 31,
+      "isSynced": false,
+      "consensusParamsId": "3e6da238306cfdb7e71599d5ef8fb314f1b3ff33a50673af1321f3da9cfa5b94",
+      "consensusScheduleId": "b4706ae535fc2c9e4f0a0fe1b6cb0456025f3e00c1b8aba5cde02191f46f9194",
+      "genesisHash": "a27f8f44fe4d91a5bed940be9dbd6d260ccb95cc00d948b1c08ddb6bd1a5f02542a6cf35c7a4d959ba4863ac1557861671763e5cc22937c697870283a8ca1f23",
+      "error": null
+    },
+    {
+      "host": "113",
+      "port": 26354,
+      "virtualDaaScore": 18536,
+      "sink": "c8dc4f2c18fcb57306570f7eb4161ebd3799cb28931fcd1599e6157e980459d929ef59cca90bd02af65bf01b5f63f630260ce2d2b76e1e4e70987f118518896d",
+      "tipCount": 19,
+      "isSynced": true,
+      "consensusParamsId": "3e6da238306cfdb7e71599d5ef8fb314f1b3ff33a50673af1321f3da9cfa5b94",
+      "consensusScheduleId": "b4706ae535fc2c9e4f0a0fe1b6cb0456025f3e00c1b8aba5cde02191f46f9194",
+      "genesisHash": "a27f8f44fe4d91a5bed940be9dbd6d260ccb95cc00d948b1c08ddb6bd1a5f02542a6cf35c7a4d959ba4863ac1557861671763e5cc22937c697870283a8ca1f23",
+      "error": null
+    }
+  ]
+}

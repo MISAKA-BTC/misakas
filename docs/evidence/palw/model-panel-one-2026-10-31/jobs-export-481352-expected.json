@@ -1,0 +1,14 @@
+{
+  "block": "48135274990f64bfdf3448339361a713331f7c4d0a3b871ff2a43a331cd0cdab4889a112dd1e84fa975cf81716da1a642dcf5406acd62cd1635e9019ece9605f",
+  "class_id": "ebf44d0aa09ff7d1310a7855ab4005c275cdce557e32c269b0f3a984ea80ca73ad1ea0c9b1c0539c8ae04abb5fe24399e67e05bb0895a3dee82253e772246d01",
+  "claim": "aafbaf3ef4dcfe415c3ebf4ae16ecbb619d8bc23b6ce684cc28b950bdc44d2677f928f096f513481f248c3c66082a8eec4a290808f40ff37a87c812f671883cc",
+  "prompt_derived": false,
+  "prompt_ids": null,
+  "prefill": null,
+  "decode": null,
+  "accepted_absent": true,
+  "rows": 1,
+  "hash_mismatch": 0,
+  "sourceClaimAccepted": false,
+  "expectedDerivation": "independent Python BLAKE2b-512 keyed attempt-id/v1 over exact Borsh unsigned attempt length+bytes; identity only"
+}

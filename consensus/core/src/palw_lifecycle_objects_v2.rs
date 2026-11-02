@@ -2284,6 +2284,12 @@ pub const PALW_INT12_WIRE_CHANGES_V1: &[(&str, PalwInt12WireChangeV1)] = &[
         PalwInt12WireChangeV1::NotCarried("the fold's journal (stored deltas), never a block's carriage"),
     ),
     (
+        "consensus/core/src/palw_economic_safety_v1.rs::PalwLicenceDoorTagV1",
+        PalwInt12WireChangeV1::NotCarried(
+            "stored only in claim, liability and vesting rows; tags 0..3 retain their exact Borsh bytes, and G14PanelOne=4 is appended only for claims governed by palw_model_panel_one_v1 from acceptance DAA 18,640; no lifecycle payload carries this stored route tag",
+        ),
+    ),
+    (
         "consensus/core/src/palw_offence_v1.rs::PalwPanelContradictionV1",
         PalwInt12WireChangeV1::CarriedReread { fence: "palw_legacy_public_filer_v1", digest: 0xf024b12c046c9d4c },
     ),

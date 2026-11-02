@@ -68,6 +68,49 @@ pub fn move_datadir_aside(db_dir: &Path, report_path: &Path) -> Result<Option<Pa
     Ok(aside)
 }
 
+/// Resume an interrupted verified resync without moving its partially synced database again.
+/// A pending report is durable operator intent: an ordinary process restart must not remove
+/// the outbound-peer confirmation hold. Missing/confirmed reports need no hold; an unreadable
+/// or inconsistent report refuses startup instead of silently releasing it.
+pub fn pending_resync_aside(db_dir: &Path, report_path: &Path) -> Result<Option<Option<PathBuf>>, String> {
+    let bytes = match std::fs::read(report_path) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("could not read {}: {e}", report_path.display())),
+    };
+    let report: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(|e| format!("invalid resync report {}: {e}", report_path.display()))?;
+    match report.get("status").and_then(|v| v.as_str()) {
+        Some("confirmed") => Ok(None),
+        Some("syncing") => {
+            let reported_db = report
+                .get("dataDirectory")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| format!("pending resync report {} has no dataDirectory", report_path.display()))?;
+            if Path::new(reported_db) != db_dir {
+                return Err(format!(
+                    "pending resync report {} belongs to {reported_db}, not {}",
+                    report_path.display(),
+                    db_dir.display()
+                ));
+            }
+            let aside = match report.get("previousDataDirectoryMovedTo") {
+                Some(serde_json::Value::Null) => None,
+                Some(serde_json::Value::String(path)) if !path.is_empty() => Some(PathBuf::from(path)),
+                _ => {
+                    return Err(format!(
+                        "pending resync report {} has an invalid previousDataDirectoryMovedTo",
+                        report_path.display()
+                    ));
+                }
+            };
+            kaspa_core::warn!("VERIFIED RESYNC: resuming pending confirmation for {} without moving the database", db_dir.display());
+            Ok(Some(aside))
+        }
+        _ => Err(format!("resync report {} has an unknown status", report_path.display())),
+    }
+}
+
 /// The reporter the flow context calls once the synced chain is confirmed: rewrites the report.
 pub fn confirmed_reporter(report_path: PathBuf, aside: Option<PathBuf>) -> kaspa_p2p_flows::flow_context::ResyncReporter {
     std::sync::Arc::new(move |r: &kaspa_p2p_flows::flow_context::ResyncReport| {
@@ -96,6 +139,47 @@ fn write_report(path: &Path, report: &serde_json::Value) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn interrupted_resync_retains_its_hold_and_partial_database_on_restart() {
+        let root = std::env::temp_dir().join(format!("resync-restart-{}-{}", std::process::id(), kaspa_core::time::unix_now()));
+        let db = root.join("datadir");
+        let report = root.join(REPORT_FILE);
+        assert_eq!(pending_resync_aside(&db, &report).unwrap(), None);
+        std::fs::create_dir_all(&db).unwrap();
+        std::fs::write(db.join("OLD"), b"fork").unwrap();
+        let aside = move_datadir_aside(&db, &report).unwrap().unwrap();
+        std::fs::create_dir_all(&db).unwrap();
+        std::fs::write(db.join("PARTIAL"), b"validated sync progress").unwrap();
+        let before = std::fs::read(&report).unwrap();
+        // Consecutive normal restarts keep the original aside and do not reset sync progress.
+        for _ in 0..2 {
+            assert_eq!(pending_resync_aside(&db, &report).unwrap(), Some(Some(aside.clone())));
+            assert_eq!(std::fs::read(db.join("PARTIAL")).unwrap(), b"validated sync progress");
+            assert_eq!(std::fs::read(aside.join("OLD")).unwrap(), b"fork");
+            assert_eq!(std::fs::read(&report).unwrap(), before);
+        }
+        assert!(pending_resync_aside(&root.join("another-db"), &report).is_err());
+        confirmed_reporter(report.clone(), Some(aside))(&kaspa_p2p_flows::flow_context::ResyncReport {
+            confirmed_unix_ms: 1,
+            sink: kaspa_consensus_core::BlockHash::from_u64_word(7),
+            sink_daa: 101,
+            confirming_outbound_peers: 2,
+            eligible_outbound_peers: 3,
+        });
+        assert_eq!(pending_resync_aside(&db, &report).unwrap(), None);
+        std::fs::write(&report, b"{truncated").unwrap();
+        assert!(pending_resync_aside(&db, &report).is_err());
+        for invalid in [
+            serde_json::json!({"status": "unknown"}),
+            serde_json::json!({"status": "syncing"}),
+            serde_json::json!({"status": "syncing", "dataDirectory": db.display().to_string(), "previousDataDirectoryMovedTo": true}),
+        ] {
+            std::fs::write(&report, serde_json::to_vec(&invalid).unwrap()).unwrap();
+            assert!(pending_resync_aside(&db, &report).is_err());
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     /// The data directory is moved, not deleted; the report says where; a second resync in the same
     /// millisecond cannot overwrite the first's aside; an empty directory has nothing to move.
@@ -126,6 +210,7 @@ mod tests {
 
         std::fs::create_dir_all(&db).unwrap();
         assert_eq!(move_datadir_aside(&db, &report).unwrap(), None, "an empty directory has nothing to move");
+        assert_eq!(pending_resync_aside(&db, &report).unwrap(), Some(None), "an interrupted fresh sync is also held");
         std::fs::remove_dir_all(&root).unwrap();
     }
 }

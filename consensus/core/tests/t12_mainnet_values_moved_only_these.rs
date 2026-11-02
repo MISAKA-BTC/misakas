@@ -41,11 +41,12 @@ fn at_the_parent(mut p: Params) -> Params {
 
 /// `palw_offence_attribution_is_t12_only`'s `T12_BEFORE_THE_ATTRIBUTION` at `8270cf03` (testnet-12
 /// with the attribution fence taken away), before this change moved it.
-// re-pin 2026-10-30 @64535b7bf7e8: User selected DAA18400 for the unpublished G14 schedule on 2026-10-30; preserve the current main CI fixes (was d15e80d7…, 7df51396…)
+// re-pin 2026-10-31 @cc5a7dd0e096: undeployed model-one fence delayed to 18640 for verified fleet rollout (was ce2ad41e…, 821ef65e…)
+// re-pin 2026-11-01: actual derived twin retaining the new 20000 retention fence; unreleased 18850 withdrawn.
 const PARENT_WITHOUT_THE_ATTRIBUTION: (&str, &str, &str) = (
-    "396ba2c678b99de2e9afe5071c6288cddfac109d5ab46ba99f04b76bb913fe64",
+    "9c1f87a544310db5d9406a49484786be572c95834fa76dc97d8a74230272edc4",
     "df8d548dea8dc91bf12a34c6ba2f79d81c0736fb40212012080e4cce35cd5cfe",
-    "3f258e13da0c13843bf7af3e19c3c3e6cef756baa6dd9d64d69c428a0d1d99d2",
+    "b710371cbce67ba55cf9c343537e4303c3ce4aef9f48dafae465d75463127f38",
 );
 
 #[test]

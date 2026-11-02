@@ -180,9 +180,15 @@ fn with_the_height_none_the_shipped_ruleset_is_the_fleets_int13_release() {
     assert_eq!(ids(&palw_t12_release_v6_params()), int12_ids(), "v6 is int-12's, byte for byte");
     assert_eq!(ids(&shipped).1, int12_ids().1, "a scheduled height is normalised out of the handshake identity");
     let mut again = shipped.clone();
+    // Reconstruct the historical baseline without later ModelOne/retention additions.
+    again.palw_model_panel_one_v1 = None;
+    again.palw_model_panel_one_retention_v1 = None;
     palw_t12_arm_after_int13_at_v1(&mut again, PALW_T12_G14_17000_FENCES_V1, None);
     assert_eq!(ids(&again), ids(&palw_t12_release_v7_params()), "clearing the G14 list is the v7 baseline");
     palw_t12_arm_after_int13_at_v1(&mut again, PALW_T12_G14_17000_FENCES_V1, Some(18_400));
+    again.palw_model_panel_one_v1 = shipped.palw_model_panel_one_v1;
+    again.palw_model_panel_one_retention_v1 = shipped.palw_model_panel_one_retention_v1;
+    again.sync_palw_g14_gates_v1();
     assert_eq!(ids(&again), ids(&shipped), "re-arming the G14 list restores the shipped ruleset");
 }
 

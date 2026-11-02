@@ -160,3 +160,145 @@ async fn pruning_snapshot_readiness_missing_active_tip_is_context_not_inactive_s
     assert!(vp.block_transactions_store.get(point).is_ok());
     drop(restore);
 }
+
+#[tokio::test]
+async fn detached_pruning_capture_allows_real_store_writer_and_serves_exact_historical_root() {
+    let mut ctx = context();
+    let mut points = Vec::new();
+    for _ in 0..4 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+        points.push(ctx.consensus.get_sink());
+    }
+    let vp = ctx.consensus.virtual_processor();
+    let point = points[0];
+    let expected = {
+        let store = vp.palw_state_v2_store.read().clone();
+        let (tip, state) = store.load_tip_retained_v1(vp.palw_state_params_v2.as_ref().unwrap()).unwrap().unwrap();
+        let path = vp.dag_traversal_manager.calculate_chain_path(tip, point, None);
+        let state = crate::processes::palw_state_walk::walk_chain_path_retained_v1(
+            &store,
+            vp.palw_state_params_v2.as_ref().unwrap(),
+            state,
+            &path.removed.to_vec(),
+            &path.added.to_vec(),
+        )
+        .unwrap();
+        kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2::from_state(&state)
+    };
+    let checks = std::cell::Cell::new(0usize);
+    let deleted = std::cell::Cell::new(false);
+    vp.with_pruning_snapshots_before_delete_while_v1(
+        point,
+        || {
+            // The actual production capture pauses here between real delta replays.
+            // A different OS thread must acquire the same writer virtual commits use.
+            let writer_entered =
+                std::thread::scope(|scope| scope.spawn(|| vp.palw_state_v2_store.try_write().is_some()).join().unwrap());
+            assert!(writer_entered, "snapshot replay must not retain the global PALW read/write guard");
+            checks.set(checks.get() + 1);
+            true
+        },
+        || deleted.set(true),
+    )
+    .unwrap();
+    assert!(checks.get() >= 8, "the fixture traversed real historical deltas");
+    assert!(deleted.get());
+    let served = ctx.consensus.pruning_point_palw_state_shared_v1(point).unwrap();
+    assert_eq!(&**served, &expected, "detaching changes lock ownership, never the historical serving bytes/root");
+    assert_eq!(served.last_point.as_ref().unwrap().block, point);
+}
+
+#[tokio::test]
+async fn pruning_capture_cancellation_between_deltas_never_publishes_or_deletes() {
+    let mut ctx = context();
+    let mut points = Vec::new();
+    for _ in 0..4 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+        points.push(ctx.consensus.get_sink());
+    }
+    let vp = ctx.consensus.virtual_processor();
+    let calls = std::cell::Cell::new(0usize);
+    let deleted = std::cell::Cell::new(false);
+    let refusal = vp.with_pruning_snapshots_before_delete_while_v1(
+        points[0],
+        || {
+            calls.set(calls.get() + 1);
+            calls.get() < 5
+        },
+        || deleted.set(true),
+    );
+    assert!(matches!(refusal, Err(PalwPruningCaptureFaultV1::Context("pruning capture interrupted"))));
+    assert!(!deleted.get());
+    assert!(ctx.consensus.pruning_point_palw_state_shared_v1(points[0]).is_none());
+    for point in points {
+        assert!(vp.palw_state_v2_store.read().has_delta(point).unwrap());
+        assert!(vp.block_transactions_store.get(point).is_ok());
+    }
+}
+
+#[tokio::test]
+async fn pruning_capture_same_point_new_import_epoch_refuses_stale_publication() {
+    let mut ctx = context();
+    let mut points = Vec::new();
+    for _ in 0..4 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+        points.push(ctx.consensus.get_sink());
+    }
+    let vp = ctx.consensus.virtual_processor();
+    let genesis = ctx.consensus.params().genesis.hash;
+    let calls = std::cell::Cell::new(0usize);
+    let deleted = std::cell::Cell::new(false);
+    let refusal = vp.with_pruning_snapshots_before_delete_while_v1(
+        points[0],
+        || {
+            calls.set(calls.get() + 1);
+            if calls.get() == 4 {
+                // Real durable session begin at the SAME pruning point, not a mocked epoch.
+                vp.begin_pruning_point_import(genesis).unwrap();
+            }
+            true
+        },
+        || deleted.set(true),
+    );
+    assert!(matches!(refusal, Err(PalwPruningCaptureFaultV1::Context("pruning/import generation changed during capture"))));
+    assert!(!deleted.get());
+    assert!(ctx.consensus.pruning_point_palw_state_shared_v1(points[0]).is_none());
+    assert!(vp.palw_state_v2_store.read().has_delta(points[0]).unwrap());
+    assert!(vp.block_transactions_store.get(points[0]).is_ok());
+}
+
+#[tokio::test]
+async fn pruning_capture_uses_shorter_verified_checkpoint_instead_of_far_live_tip() {
+    let mut ctx = context();
+    let mut points = Vec::new();
+    for _ in 0..6 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+        points.push(ctx.consensus.get_sink());
+    }
+    let vp = ctx.consensus.virtual_processor();
+    let params = vp.palw_state_params_v2.as_ref().unwrap();
+    let target = points[1];
+    let (expected, expected_root) = {
+        let store = vp.palw_state_v2_store.read().clone();
+        let (tip, state) = store.load_tip_retained_v1(params).unwrap().unwrap();
+        let path = vp.dag_traversal_manager.calculate_chain_path(tip, target, None);
+        let state =
+            crate::processes::palw_state_walk::walk_chain_path_retained_v1(&store, params, state, &path.removed, &path.added).unwrap();
+        (kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2::from_state(&state), state.state_root())
+    };
+    // Install a real verified earlier checkpoint using the production capture.
+    vp.capture_pruning_point_palw_state(points[0]).unwrap();
+    // The tip's long rollback path now lacks a delta unrelated to the short
+    // retained checkpoint -> target path. Success proves that path is not used.
+    let mut batch = rocksdb::WriteBatch::default();
+    vp.palw_state_v2_store.write().delete_delta_batch(&mut batch, points[5]).unwrap();
+    vp.db.write(batch).unwrap();
+    let entered = std::cell::Cell::new(false);
+    vp.with_pruning_snapshots_before_delete_v1(target, || entered.set(true)).unwrap();
+    assert!(entered.get());
+    let served = ctx.consensus.pruning_point_palw_state_shared_v1(target).unwrap();
+    assert_eq!(&**served, &expected);
+    assert_eq!(vp.palw_state_v2_store.read().pruning_snapshot_record().unwrap().unwrap().state_root, expected_root);
+    assert_eq!(served.last_point.as_ref().unwrap().block, target);
+    assert!(vp.block_transactions_store.get(target).is_ok());
+}

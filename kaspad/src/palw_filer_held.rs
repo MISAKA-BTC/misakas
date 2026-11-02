@@ -1071,6 +1071,7 @@ mod tests {
     /// A seat duty of `me` on `claim`, produced by bond `executor`.
     fn seat_duty(claim: Hash64, executor: u64) -> PalwSeatDutyV2 {
         PalwSeatDutyV2 {
+            model_panel_one: false,
             accepted_block: h(0xB0),
             claim_id: claim,
             class_id: h(0xC1A55),

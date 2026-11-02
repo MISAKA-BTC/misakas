@@ -1,0 +1,168 @@
+{
+  "recordedUtc": "2026-11-01T14:45:59.384562+00:00",
+  "scope": "census observation + Peers UI only",
+  "deployedSourceCommit": "0feaf511e1dbe25205b823f02bfaf01ba76d58dd",
+  "remoteResult": {
+    "completedUtc": "2026-11-01T14:43:47.850453+00:00",
+    "status": "success",
+    "scope": "census service/timer + frontend only; no node,DB,binary,hold,REST,nginx changes",
+    "backup": "/root/misaka-incident-20261031/peer-census-deploy-20261101/backup",
+    "files": {
+      "/var/www/misaka-explorer/app.js": "862c49fffc9c7526c03d71c08290c911726f07b74d03726367d74f371c9205d6",
+      "/var/www/misaka-explorer/index.html": "87bfd77e973cb3b1b20ad96ea637c53a5e6bf7f350480cc824aca787b9a69f70",
+      "/var/www/misaka-explorer/peer-census.json": "6fe9826e15cd8d13af7f96a5f070dddc78b5b44451ed6960d0bd1e38b4dde90b",
+      "/etc/systemd/system/misakascan-peer-census.service.d/90-t12-runtime-observation.conf": "238a01f5896ddace51c47a64682cfbfc5b7cf635139f99f8e4cf037e5d6e670b",
+      "/usr/local/libexec/misakascan-peer-census.py": "b1c029b5dc53413def71b3ab12ca5dc0009b2add51d6f1fb704c359c668dc766",
+      "/usr/local/libexec/peer-census-rpc.mjs": "b2940637215a86427f91dd1ea92d2c765cad9643f41e2d05e0e438b21ba9cf77"
+    },
+    "timerActive": "active",
+    "timerEnabled": "enabled",
+    "serviceResult": "success",
+    "feed": {
+      "generated_at": "2026-11-01T14:43:47.281243+00:00",
+      "available": true,
+      "availability_reason": null,
+      "network": "testnet-12",
+      "this_node_daa": 18935,
+      "source": {
+        "network": "testnet-12",
+        "daa": 18935,
+        "p2pId": "d8292f0c-ca0e-4a74-b26d-12adc0a8e1e2",
+        "isSynced": false,
+        "genesisHash": "a27f8f44fe4d91a5bed940be9dbd6d260ccb95cc00d948b1c08ddb6bd1a5f02542a6cf35c7a4d959ba4863ac1557861671763e5cc22937c697870283a8ca1f23",
+        "params": "edf472294c89dab0e64e625dbdfcd039b91081b05f89eacf8ba2aa25baa3a189",
+        "schedule": "4024a6e74d7aeb170d99e67c6d8fbe7884d71a716ccb778cd1ee526d01781b04",
+        "fences": [
+          750,
+          1000,
+          1300,
+          1700,
+          2000,
+          3600,
+          5300,
+          5395,
+          5490,
+          5585,
+          15500,
+          18400,
+          18640
+        ]
+      },
+      "observed_to": "2026-11-01T14:43:44+00:00",
+      "unparsed_rejections": 0
+    },
+    "eventGroups": 157,
+    "directions": {
+      "peer_rejected_local": 11,
+      "local_rejected_peer": 146
+    }
+  },
+  "before": {
+    "utc": "2026-11-01T14:43:45.261171+00:00",
+    "files": {
+      "/var/www/misaka-explorer/app.js": {
+        "backup": "/root/misaka-incident-20261031/peer-census-deploy-20261101/backup/app.js",
+        "sha256": "13176ce4caae3ff41ef34973605ced825809e1f680eb8b7379387e4c6d59ea3b"
+      },
+      "/var/www/misaka-explorer/index.html": {
+        "backup": "/root/misaka-incident-20261031/peer-census-deploy-20261101/backup/index.html",
+        "sha256": "8098d01ddc5e25968c8503ba2fddd5c86ac02d36e1841d185977f9c14fc83329"
+      },
+      "/var/www/misaka-explorer/peer-census.json": {
+        "backup": "/root/misaka-incident-20261031/peer-census-deploy-20261101/backup/peer-census.json",
+        "sha256": "951d3a4fde6975aad03a621f52cdae9a38f2559a40b55e371cb128e91e1d1fc8"
+      },
+      "/etc/systemd/system/misakascan-peer-census.service": {
+        "backup": "/root/misaka-incident-20261031/peer-census-deploy-20261101/backup/misakascan-peer-census.service",
+        "sha256": "55023db3dabae68dd81cb54072fa377b466ab3fe28c275a6ee9dbb6b2228e87a"
+      },
+      "/etc/systemd/system/misakascan-peer-census.timer": {
+        "backup": "/root/misaka-incident-20261031/peer-census-deploy-20261101/backup/misakascan-peer-census.timer",
+        "sha256": "9f33c5db1aa2d291a9ca7b4ab3a2147384473c3116d6de284ffc9931d2f16feb"
+      },
+      "/usr/local/bin/misakascan-peer-census.py": {
+        "backup": "/root/misaka-incident-20261031/peer-census-deploy-20261101/backup/misakascan-peer-census.py",
+        "sha256": "2eddb45120b70b0fe566399101653f80d8183c2c6b601d9c5b406216bee4038f"
+      }
+    },
+    "timerActive": true,
+    "timerEnabled": "enabled",
+    "dropins": []
+  },
+  "publicVerification": {
+    "checkedUtc": "2026-11-01T14:44:37.075069+00:00",
+    "appSha256": "862c49fffc9c7526c03d71c08290c911726f07b74d03726367d74f371c9205d6",
+    "indexSha256": "87bfd77e973cb3b1b20ad96ea637c53a5e6bf7f350480cc824aca787b9a69f70",
+    "appIndexQuery": "t12-peer-observation-0feaf511e",
+    "feed": {
+      "generated_at": "2026-11-01T14:43:47.281243+00:00",
+      "available": true,
+      "availability_reason": null,
+      "network": "testnet-12",
+      "this_node_daa": 18935,
+      "source": {
+        "network": "testnet-12",
+        "daa": 18935,
+        "p2pId": "d8292f0c-ca0e-4a74-b26d-12adc0a8e1e2",
+        "isSynced": false,
+        "genesisHash": "a27f8f44fe4d91a5bed940be9dbd6d260ccb95cc00d948b1c08ddb6bd1a5f02542a6cf35c7a4d959ba4863ac1557861671763e5cc22937c697870283a8ca1f23",
+        "params": "edf472294c89dab0e64e625dbdfcd039b91081b05f89eacf8ba2aa25baa3a189",
+        "schedule": "4024a6e74d7aeb170d99e67c6d8fbe7884d71a716ccb778cd1ee526d01781b04",
+        "fences": [
+          750,
+          1000,
+          1300,
+          1700,
+          2000,
+          3600,
+          5300,
+          5395,
+          5490,
+          5585,
+          15500,
+          18400,
+          18640
+        ]
+      },
+      "observed_to": "2026-11-01T14:43:44+00:00",
+      "unparsed_rejections": 0
+    },
+    "eventGroups": 157,
+    "directions": {
+      "peer_rejected_local": 11,
+      "local_rejected_peer": 146
+    },
+    "publicControls": "20/20 fixture checks against exact downloaded source; no browser-pixel assertion"
+  },
+  "rollbackCandidate": {
+    "localPath": "/tmp/misaka-chain-20261031/rollback-peer-census-113.py",
+    "sha256": "5c632aff263421e25861786d3030b537324692ac8dec9e2b71074c816479d64b",
+    "executed": false,
+    "guards": "refuse if deployed app,index,drop-in or helper changed; verify immutable backup hashes before stopping census"
+  },
+  "deploymentScript": {
+    "remotePath": "/root/misaka-incident-20261031/peer-census-deploy-20261101/deploy-peer-census-113.py",
+    "sha256": "903d0a1ee368ba46a0b30d899122c3bc26510813dbb4e3ea4f7d49cb52fcccbb"
+  },
+  "productionChanges": [
+    "New libexec metadata helpers",
+    "Own service drop-in; existing2min timer restored active/enabled",
+    "Atomic app.js replacement with preapproved live-preserving candidate",
+    "Only index app query string changed"
+  ],
+  "notChanged": [
+    "node6/7 lifecycle by this agent",
+    "DBs",
+    "node binary",
+    "holds",
+    "REST",
+    "nginx",
+    "publisher WIP",
+    "original main user files"
+  ],
+  "limitations": [
+    "No browser-pixel check;20source fixtures against exact public download passed",
+    "This does not resolve the underlying canonical-chain split or establish Qwen acceptance/Final",
+    "Parent-coordinated node pause after validation can correctly cause later available=false"
+  ]
+}

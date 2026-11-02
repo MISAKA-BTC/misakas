@@ -1,0 +1,119 @@
+    Blocking waiting for file lock on build directory
+    Checking byteorder v1.5.0
+    Checking futures-channel v0.3.31
+    Checking zerocopy v0.7.35
+    Checking futures-util v0.3.31
+    Checking tokio v1.54.1
+    Checking arrayvec v0.7.6
+    Checking ppv-lite86 v0.2.20
+    Checking serde_json v1.0.151
+    Checking wasm-bindgen v0.2.100
+    Checking rand_chacha v0.3.1
+    Checking rand v0.8.6
+    Checking js-sys v0.3.77
+    Checking futures-executor v0.3.31
+    Checking futures v0.3.31
+    Checking async-io v2.3.4
+    Checking workflow-log v0.18.0
+    Checking async-global-executor v2.4.1
+    Checking rand_chacha v0.9.0
+    Checking async-std v1.13.0
+    Checking web-sys v0.3.77
+    Checking serde-wasm-bindgen v0.6.5
+    Checking rand v0.9.4
+    Checking hash32 v0.3.1
+    Checking heapless v0.8.0
+    Checking wasm-bindgen-futures v0.4.50
+    Checking blake2b_simd v1.0.2
+    Checking faster-hex v0.10.1
+   Compiling kaspa-utils v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/utils)
+   Compiling either v1.13.0
+    Checking workflow-core v0.18.0
+    Checking workflow-panic-hook v0.18.0
+    Checking uuid v1.18.1
+    Checking workflow-wasm v0.18.0
+   Compiling kaspa-hashes v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/crypto/hashes)
+    Checking ahash v0.8.11
+    Checking http v1.1.0
+    Checking hashbrown v0.14.5
+    Checking http-body v1.0.1
+    Checking log4rs v1.4.0
+    Checking malachite-base v0.4.16
+    Checking alloy-rlp v0.3.15
+    Checking misaka-palw-gen v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/misaka/palw/gen)
+    Checking misaka-palw-challenge v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/misaka/palw/challenge)
+    Checking misaka-palw-tir v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/misaka/palw/tir/core)
+    Checking malachite-nz v0.4.16
+    Checking tokio-util v0.7.12
+    Checking const-hex v1.19.1
+    Checking ruint v1.20.0
+    Checking hashbrown v0.15.5
+    Checking misaka-palw-kernel v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/misaka/palw/kernel)
+    Checking kaspa-math v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/math)
+    Checking kaspa-core v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/core)
+    Checking misaka-palw-panel v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/misaka/palw/panel)
+    Checking kaspa-merkle v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/crypto/merkle)
+    Checking kaspa-muhash v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/crypto/muhash)
+    Checking kaspa-addresses v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/crypto/addresses)
+    Checking workflow-serializer v0.18.0
+    Checking kaspa-txscript-errors v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/crypto/txscript/errors)
+    Checking alloy-primitives v0.8.26
+   Compiling itertools v0.14.0
+   Compiling prost-derive v0.14.3
+    Checking http-body-util v0.1.2
+    Checking kaspa-consensus-core v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/consensus/core)
+    Checking h2 v0.4.19
+    Checking hyper v1.9.0
+   Compiling prost v0.14.3
+    Checking hyper-util v0.1.20
+    Checking alloy-eip2930 v0.1.0
+   Compiling itertools v0.13.0
+    Checking rustls-webpki v0.103.16
+   Compiling bindgen v0.72.1
+   Compiling prost-types v0.14.3
+    Checking tower v0.5.3
+    Checking kaspa-wasm-core v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/wasm/core)
+   Compiling prost-build v0.14.3
+    Checking axum-core v0.5.6
+   Compiling librocksdb-sys v0.17.3+10.4.2
+    Checking rustls v0.23.46
+    Checking alloy-eip7702 v0.1.1
+    Checking revm-primitives v10.0.0
+    Checking axum v0.8.9
+   Compiling tonic-prost-build v0.14.5
+    Checking tokio-rustls v0.26.4
+    Checking kaspa-txscript v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/crypto/txscript)
+    Checking hyper-timeout v0.5.1
+    Checking tokio-stream v0.1.16
+    Checking hex v0.4.3
+    Checking aurora-engine-modexp v1.2.0
+    Checking substrate-bn v0.6.0
+    Checking tonic v0.14.5
+    Checking kaspa-notify v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/notify)
+    Checking kaspa-mining-errors v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/mining/errors)
+   Compiling kaspa-p2p-lib v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/protocol/p2p)
+    Checking alloy-eip7702 v0.4.2
+    Checking tower-http v0.5.2
+    Checking nybbles v0.3.4
+    Checking revm-precompile v11.0.3
+    Checking alloy-trie v0.7.9
+    Checking tonic-prost v0.14.5
+    Checking kaspa-utils-tower v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/utils/tower)
+    Checking alloy-eips v0.8.3
+    Checking kaspa-consensus-notify v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/consensus/notify)
+    Checking attohttpc v0.30.1
+    Checking revm-interpreter v10.0.3
+    Checking revm v14.0.3
+    Checking igd-next v0.17.0
+    Checking kaspa-consensusmanager v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/components/consensusmanager)
+    Checking alloy-consensus v0.8.3
+    Checking kaspa-evm v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/misaka/evm/core)
+    Checking kaspa-mining v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/mining)
+    Checking kaspa-p2p-mining v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/protocol/mining)
+    Checking kaspa-pow v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/consensus/pow)
+    Checking rocksdb v0.24.0
+    Checking kaspa-database v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/database)
+    Checking kaspa-addressmanager v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/components/addressmanager)
+    Checking kaspa-connectionmanager v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/components/connectionmanager)
+    Checking kaspa-p2p-flows v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/protocol/flows)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 13m 14s

@@ -289,6 +289,9 @@ fn review12_1_a_public_registration_replays_for_ever_and_the_fold_refuses_it_onl
     // The replay is at DAA 20,000, above the G14 flag day. This finding is the registration
     // bound, so the G14 route (which a direct fold does not supply extras for) stays off.
     let mut p = t12();
+    p.palw_model_panel_one_v1 = None;
+    p.palw_model_panel_one_retention_v1 = None;
+    p.sync_palw_g14_gates_v1();
     palw_t12_arm_after_int13_at_v1(&mut p, PALW_T12_G14_17000_FENCES_V1, None);
     let b = bundle_of(&p);
     let extras = t12_extras(&p, &b);

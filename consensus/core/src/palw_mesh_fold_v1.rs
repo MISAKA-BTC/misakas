@@ -312,6 +312,7 @@ pub(super) fn on_claim_accepted_v1(
     // **RFC-0007 Part IV.2**: a claim of a `Capped` class is a capped claim — its row holds it out of the bind window's backstop
     // until the class's holders are seated (and then its re-verification window). The deadline is re-armed from the one function.
     if builder.params.capped_active_at(ctx.daa_score)
+        && !builder.params.model_panel_one_governs_v1(claim.accepted_daa)
         && builder
             .state
             .model_lifecycles

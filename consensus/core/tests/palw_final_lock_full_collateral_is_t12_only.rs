@@ -43,11 +43,11 @@ use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
 /// release `0e8ec984e` was `b8564b88…` / `5de80e64…` / `93da24cc…`, which `palw_t12_launch_params_v1()`
 /// still hashes to): params, identity, schedule — the same pins `palw_clock_lead_cap_is_t12_only`'s
 /// `T12_WITH_THE_CAP` holds.
-// re-pin 2026-10-30 @64535b7bf7e8: User selected DAA18400 for the unpublished G14 schedule on 2026-10-30; preserve the current main CI fixes (was 73e67678…, fd42c167…)
+// re-pin 2026-11-01: future ModelOne retention fence at 20000 (unreleased 18850 withdrawn); derived for retention-20000; new-source regression evidence recorded separately
 const T12_RELEASE: (&str, &str, &str) = (
-    "3e6da238306cfdb7e71599d5ef8fb314f1b3ff33a50673af1321f3da9cfa5b94",
+    "253d22bbc32fbcf3f23e9333524435478a5a7b87ac9a360de6513dde4cdc5248",
     "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-    "b4706ae535fc2c9e4f0a0fe1b6cb0456025f3e00c1b8aba5cde02191f46f9194",
+    "ec5f56fa48cdeafb3a6fc953c02a2dcd53f0f54025fe7243a87972884a47eb5e",
 );
 
 /// Heights an operator might pick after launch: a low one a drill crosses, the common post-launch

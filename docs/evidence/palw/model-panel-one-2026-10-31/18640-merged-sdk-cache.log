@@ -1,0 +1,66 @@
+   Compiling serde_json v1.0.151
+   Compiling kaspa-utils v1.1.0 (/Users/wata/.codex/worktrees/g14-producer-panel-one/MISAKA-testnet/utils)
+   Compiling kaspa-hashes v1.1.0 (/Users/wata/.codex/worktrees/g14-producer-panel-one/MISAKA-testnet/crypto/hashes)
+   Compiling wasm-bindgen v0.2.100
+   Compiling js-sys v0.3.77
+   Compiling workflow-log v0.18.0
+   Compiling libm v0.2.8
+   Compiling web-sys v0.3.77
+   Compiling serde-wasm-bindgen v0.6.5
+   Compiling wasm-bindgen-futures v0.4.50
+   Compiling malachite-base v0.4.16
+   Compiling workflow-core v0.18.0
+   Compiling workflow-panic-hook v0.18.0
+   Compiling workflow-wasm v0.18.0
+   Compiling misaka-palw-tir v1.1.0 (/Users/wata/.codex/worktrees/g14-producer-panel-one/MISAKA-testnet/misaka/palw/tir/core)
+   Compiling log4rs v1.4.0
+   Compiling malachite-nz v0.4.16
+   Compiling misaka-palw-gen v1.1.0 (/Users/wata/.codex/worktrees/g14-producer-panel-one/MISAKA-testnet/misaka/palw/gen)
+   Compiling misaka-palw-challenge v1.1.0 (/Users/wata/.codex/worktrees/g14-producer-panel-one/MISAKA-testnet/misaka/palw/challenge)
+   Compiling misaka-palw-kernel v1.1.0 (/Users/wata/.codex/worktrees/g14-producer-panel-one/MISAKA-testnet/misaka/palw/kernel)
+   Compiling kaspa-math v1.1.0 (/Users/wata/.codex/worktrees/g14-producer-panel-one/MISAKA-testnet/math)
+   Compiling kaspa-core v1.1.0 (/Users/wata/.codex/worktrees/g14-producer-panel-one/MISAKA-testnet/core)
+   Compiling misaka-palw-panel v1.1.0 (/Users/wata/.codex/worktrees/g14-producer-panel-one/MISAKA-testnet/misaka/palw/panel)
+   Compiling kaspa-merkle v1.1.0 (/Users/wata/.codex/worktrees/g14-producer-panel-one/MISAKA-testnet/crypto/merkle)
+   Compiling kaspa-muhash v1.1.0 (/Users/wata/.codex/worktrees/g14-producer-panel-one/MISAKA-testnet/crypto/muhash)
+   Compiling kaspa-addresses v1.1.0 (/Users/wata/.codex/worktrees/g14-producer-panel-one/MISAKA-testnet/crypto/addresses)
+   Compiling kaspa-txscript-errors v1.1.0 (/Users/wata/.codex/worktrees/g14-producer-panel-one/MISAKA-testnet/crypto/txscript/errors)
+   Compiling utf8parse v0.2.2
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/g14-producer-panel-one/MISAKA-testnet/consensus/core)
+   Compiling anstyle-parse v0.2.5
+   Compiling misaka-palw-tir-artifact v1.1.0 (/Users/wata/.codex/worktrees/g14-producer-panel-one/MISAKA-testnet/misaka/palw/tir/artifact)
+   Compiling misaka-palw-tir-exec v1.1.0 (/Users/wata/.codex/worktrees/g14-producer-panel-one/MISAKA-testnet/misaka/palw/tir/exec)
+   Compiling colorchoice v1.0.2
+   Compiling is_terminal_polyfill v1.70.1
+   Compiling anstyle-query v1.1.1
+   Compiling anstream v0.6.15
+   Compiling kaspa-wasm-core v1.1.0 (/Users/wata/.codex/worktrees/g14-producer-panel-one/MISAKA-testnet/wasm/core)
+   Compiling strsim v0.11.1
+   Compiling tinyvec_macros v0.1.1
+   Compiling tinyvec v1.8.0
+   Compiling clap_builder v4.5.51
+   Compiling clap v4.5.51
+   Compiling unicode-normalization v0.1.25
+   Compiling misaka-palw-sdk v1.1.0 (/Users/wata/.codex/worktrees/g14-producer-panel-one/MISAKA-testnet/misaka/palw/sdk)
+   Compiling misaka-palw-host-security v1.1.0 (/Users/wata/.codex/worktrees/g14-producer-panel-one/MISAKA-testnet/misaka/palw/security)
+   Compiling unicode-properties v0.1.4
+   Compiling misaka-palw-tir-ref2 v1.1.0 (/Users/wata/.codex/worktrees/g14-producer-panel-one/MISAKA-testnet/testing/reference/palw-tir-ref2)
+   Compiling kaspa-txscript v1.1.0 (/Users/wata/.codex/worktrees/g14-producer-panel-one/MISAKA-testnet/crypto/txscript)
+   Compiling kaspa-pq-validator-core v1.1.0 (/Users/wata/.codex/worktrees/g14-producer-panel-one/MISAKA-testnet/misaka/pq/validator-core)
+   Compiling misaka-palw-base0 v1.1.0 (/Users/wata/.codex/worktrees/g14-producer-panel-one/MISAKA-testnet/misaka/palw/base0)
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/g14-producer-panel-one/MISAKA-testnet/consensus/core)
+   Compiling misaka-palw-tir-exec v1.1.0 (/Users/wata/.codex/worktrees/g14-producer-panel-one/MISAKA-testnet/misaka/palw/tir/exec)
+   Compiling kaspa-txscript v1.1.0 (/Users/wata/.codex/worktrees/g14-producer-panel-one/MISAKA-testnet/crypto/txscript)
+   Compiling kaspa-pq-validator-core v1.1.0 (/Users/wata/.codex/worktrees/g14-producer-panel-one/MISAKA-testnet/misaka/pq/validator-core)
+   Compiling misaka-palw-base0 v1.1.0 (/Users/wata/.codex/worktrees/g14-producer-panel-one/MISAKA-testnet/misaka/palw/base0)
+   Compiling misaka-palw-tir-sketch v1.1.0 (/Users/wata/.codex/worktrees/g14-producer-panel-one/MISAKA-testnet/misaka/palw/tir/sketch)
+   Compiling misaka-palw-tir-lower v1.1.0 (/Users/wata/.codex/worktrees/g14-producer-panel-one/MISAKA-testnet/misaka/palw/tir/lower)
+   Compiling misaka-palw-sdk v1.1.0 (/Users/wata/.codex/worktrees/g14-producer-panel-one/MISAKA-testnet/misaka/palw/sdk)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9m 31s
+     Running unittests src/lib.rs (/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/g14-18400-deploy/target/ci-gates/debug/deps/misaka_palw_sdk-5014e0709b6723d7)
+
+running 1 test
+test preflight::judge_cache_key_tests::the_cache_key_names_the_ruleset_not_only_the_network ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 181 filtered out; finished in 0.03s
+
