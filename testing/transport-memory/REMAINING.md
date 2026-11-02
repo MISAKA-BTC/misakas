@@ -39,6 +39,11 @@ P1 incomplete ownership boundaries:
    into an inbound owner have not been connected. It bounds logical capacity;
    allocator metadata, fragmented resident pages, stack, input and decompress
    backing remain separate owners/costs.
+   Duplicate singular/message-oneof wire fragments currently return explicit
+   unsupported errors: prost merges their nested repeated fields, and summing
+   independent fragment capacities can undercount the merged allocation.
+   Runtime integration must preserve that protobuf compatibility or explicitly
+   negotiate/document a narrower encoding; no such rejection is deployed here.
    Budgeted encoded frames discard even sub-1-MiB scratch aliases before their
    tickets return; baseline codec buffers/connection metadata remain outside the
    audited message owners and need aggregate admission at connection creation.

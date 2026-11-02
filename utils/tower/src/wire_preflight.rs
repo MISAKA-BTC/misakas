@@ -62,17 +62,23 @@ impl HeapBound {
         if state.elements > state.capacity {
             // RawVec::MIN_NON_ZERO_CAP and geometric push growth, pinned by
             // capacity comparison fixtures against this toolchain/prost version.
-            let mut next = state.capacity.max(if size == 1 {
+            let minimum = if size == 1 {
                 8
             } else if size <= 1024 {
                 4
             } else {
                 1
-            });
-            while next < state.elements {
+            };
+            let mut next = if state.capacity == 0 { minimum } else { mul(state.capacity, 2)? };
+            let mut old = state.capacity;
+            loop {
+                self.grow(mul(old, size)?, mul(next, size)?)?;
+                if next >= state.elements {
+                    break;
+                }
+                old = next;
                 next = mul(next, 2)?;
             }
-            self.grow(mul(state.capacity, size)?, mul(next, size)?)?;
             state.capacity = next;
         }
         Ok(())
@@ -82,12 +88,26 @@ impl HeapBound {
 pub struct FieldState {
     capacity: u64,
     elements: u64,
+    message_seen: bool,
+}
+impl FieldState {
+    /// Prost merges repeated occurrences of a singular message into one value.
+    /// Independent fragment bounds cannot model that value's aggregate Vec
+    /// growth. Until merge-aware state exists, do not return a false bound.
+    pub fn singular_message_once(&mut self) -> Result<()> {
+        if self.message_seen {
+            return Err(PreflightError("unsupported repeated singular/message-oneof merge"));
+        }
+        self.message_seen = true;
+        Ok(())
+    }
 }
 
 pub trait WirePreflight {
     fn wire_heap_bound(bytes: &[u8], depth: usize) -> Result<HeapBound>;
 }
 pub trait OneofPreflight {
+    fn is_message_tag(tag: u32) -> bool;
     fn wire_field_bound(tag: u32, wire: WireType, cursor: &mut Cursor<'_>, depth: usize) -> Result<HeapBound>;
 }
 
