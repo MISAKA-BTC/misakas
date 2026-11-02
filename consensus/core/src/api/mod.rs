@@ -426,6 +426,14 @@ pub trait ConsensusApi: Send + Sync {
         None
     }
 
+    /// Local pre-execution context for a new PALW Attempt. The selected parent,
+    /// candidate clock, committed native state and required bootstrap history
+    /// must belong to one stable import generation. No remote input supplies it.
+    /// Returns that generation for a second check immediately before inference.
+    fn palw_producer_context_v1(&self, _parent: BlockHash, _daa: u64, _root: Hash64) -> Result<u64, String> {
+        Err("local producer context is unavailable".into())
+    }
+
     /// **What the free-prompt lane would charge one commitment, before anyone pays to carry it**
     /// (ADR-0148; `GetPalwFreePromptPrice`): the fold's own price at the virtual's DAA, and the
     /// bond's room for it. `None` off `ConsensusV2` and where the node holds no PALW state.

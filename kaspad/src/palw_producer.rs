@@ -58,6 +58,44 @@ use misaka_palw_base0::produce::base0_rc_job_anchor_v1;
 
 pub const PALW_PRODUCER: &str = "palw-producer";
 
+/// Local attempt-only readiness. Peer safety comes from the existing
+/// PartitionWatch gate, never from one consensus-refusal record.
+fn palw_producer_view_guard_v1(
+    facts: (Hash64, u64),
+    template: (Hash64, u64),
+    expected_epoch: Option<u64>,
+    participation: bool,
+    same_instance: bool,
+    context: Result<u64, String>,
+) -> Result<u64, String> {
+    if facts != template {
+        return Err("holding: producer facts and template belong to different selected views".into());
+    }
+    palw_producer_epoch_guard_v1(expected_epoch, participation, same_instance, context)
+}
+
+/// Publication may follow ordinary parent advancement during a long draw.
+/// Active-instance replacement or a changed/incomplete import still invalidates
+/// the execution's local authority; it cannot be relabelled with the new epoch.
+fn palw_producer_epoch_guard_v1(
+    expected_epoch: Option<u64>,
+    participation: bool,
+    same_instance: bool,
+    context: Result<u64, String>,
+) -> Result<u64, String> {
+    if !participation {
+        return Err("holding: chain participation is closed".into());
+    }
+    if !same_instance {
+        return Err("holding: active consensus changed before inference/publication".into());
+    }
+    let epoch = context.map_err(|why| format!("holding: producer selected context unavailable: {why}"))?;
+    if expected_epoch.is_some_and(|expected| expected != epoch) {
+        return Err("holding: producer import generation changed before inference/publication".into());
+    }
+    Ok(epoch)
+}
+
 /// **DRILL ONLY (`--palw-drill-tamper-auto-leaf`, the G14 collusion drill): the sentinel `drill_tamper_leaf` value that picks the
 /// lie's leaf per draw** — the first step leaf in the second half of the honest run that the capture holds, that has canonical step
 /// coordinates and that is not a fused-attention leaf (the in-process E2E's choice, `lg14a_legacy_filer_e2e::real_attempt`), so the
@@ -1775,6 +1813,65 @@ impl PalwProducerService {
         None
     }
 
+    /// This guard applies only to starting new inference. Existing material,
+    /// Court responders and the worker's earlier receipt lane remain running.
+    async fn checked_producer_context_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        facts: &PalwProducerFactsV2,
+        template: &kaspa_consensus_core::block::BlockTemplate,
+        expected_epoch: Option<u64>,
+    ) -> Result<u64, String> {
+        let facts_view = (facts.chain_point, facts.daa_score);
+        let template_view = (template.selected_parent_hash, template.block.header.daa_score);
+        if facts_view != template_view {
+            return Err("holding: producer facts and template belong to different selected views".into());
+        }
+        let root = template.block.header.palw_state_root;
+        // Strict state/history loading can block; it must not occupy the async
+        // runtime that also supplies existing Court and material duties.
+        let context =
+            session.clone().spawn_blocking(move |c| c.palw_producer_context_v1(template_view.0, template_view.1, root)).await;
+        let current = self.consensus_manager.consensus().unguarded_session();
+        let same_instance =
+            session.with_consensus_api_v1(|observed| current.with_consensus_api_v1(|active| std::ptr::eq(observed, active)));
+        palw_producer_view_guard_v1(
+            facts_view,
+            template_view,
+            expected_epoch,
+            self.flow_context.is_consensus_participation_allowed(),
+            same_instance,
+            context,
+        )
+    }
+
+    async fn checked_producer_publish_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        expected_epoch: u64,
+    ) -> Result<(), String> {
+        let context = session
+            .clone()
+            .spawn_blocking(|c| {
+                let (import, stable) = c.pruning_import_status().map_err(|why| why.to_string())?;
+                if !stable || import.active.is_some() {
+                    return Err("producer import is incomplete".into());
+                }
+                Ok(import.epoch)
+            })
+            .await;
+        let current = self.consensus_manager.consensus().unguarded_session();
+        let same_instance =
+            session.with_consensus_api_v1(|observed| current.with_consensus_api_v1(|active| std::ptr::eq(observed, active)));
+        palw_producer_epoch_guard_v1(
+            Some(expected_epoch),
+            self.flow_context.is_consensus_participation_allowed(),
+            same_instance,
+            context,
+        )?;
+        Ok(())
+    }
+
     async fn produce_one(
         &self,
         session: &kaspa_consensusmanager::ConsensusProxy,
@@ -1795,6 +1892,10 @@ impl PalwProducerService {
             .get_block_template(session, miner_data)
             .await
             .map_err(|e| format!("no block template: {e}"))?;
+        // Even isSynced=true can describe a stranded local branch. The
+        // existing PartitionWatch participation gate supplies the peer evidence;
+        // a single heavy refused candidate is never a new stopping condition.
+        let context_epoch = self.checked_producer_context_v1(session, facts, &template, None).await?;
         // DRILL (`--palw-drill-real-submit-delay-s`): the clock a REAL attempt's delay is counted from.
         let template_at = std::time::Instant::now();
         // **Either attempt id, because the template's id is the CHAIN's answer** (ADR-0072 SA-4).
@@ -2100,6 +2201,10 @@ impl PalwProducerService {
                 ));
             }
         };
+        // Backend preparation and resource admission may take time. Hold new
+        // inference if the selected parent/state/history/import or active
+        // consensus changed meanwhile; dropping this call releases its leases.
+        self.checked_producer_context_v1(session, facts, &template, Some(context_epoch)).await?;
         let (job_for_blocking, prompt_for_blocking) = (job.clone(), prompt.clone());
         let tamper = self.config.drill_tamper_leaf;
         let (drill_fault, drill_sparse_seed) = (self.config.drill_fault, self.config.drill_sparse_fault_seed);
@@ -2154,6 +2259,7 @@ impl PalwProducerService {
         .await
         .ok_or_else(|| format!("{PALW_PRODUCER_EXITING}: the draw in flight is abandoned"))?
         .map_err(|e| format!("the execution task did not finish: {e}"))??;
+        self.checked_producer_publish_v1(session, context_epoch).await?;
         require_fresh_routing_v2()?;
         let storage_read_mib = crate::palw_backends::log_draw_storage_v1(PALW_PRODUCER, &storage_before, &self.class_holdings);
         let draw_millis = draw_started.elapsed().as_millis() as u64;
@@ -2405,6 +2511,7 @@ impl PalwProducerService {
             // block submitted into it waits forever on its validation result — the AsyncRuntime's
             // join, and the process, with it (8+ minutes at 0 % CPU on a graph-v7@2048 producer whose
             // 97 s draw finished after SIGINT). So the submit and the announcement both yield to it.
+            self.checked_producer_publish_v1(session, context_epoch).await?;
             require_fresh_routing_v2()?;
             if !facts.is_base_class {
                 info!(
@@ -3948,3 +4055,7 @@ mod p6_tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "palw_producer_context_tests.rs"]
+mod producer_context_tests;
