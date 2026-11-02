@@ -310,6 +310,13 @@ pub fn reserve_native_wire_v1(
 /// establish its actual schema bound before construction and retain the lease
 /// through every owning cache/consumer; raw encoded lengths are not that bound.
 pub fn reserve_native_requests_v1(memory: u64) -> Result<Option<NativeDemandLeaseV1>, NativeCoverageV1> {
+    // Preserve the default semantics of legacy consumers. Some flatten their
+    // old optional-capability failures into semantic strings; enabling local
+    // pressure here globally could misclassify a valid block. Reviewed owners
+    // use the explicit pending API / cold-wire admission instead.
+    if !native_logical_admission_enabled_v1() && !native_resource_admission_enabled_v1() {
+        return Ok(None);
+    }
     reserve_native_requests_phase_v1(memory, false)
 }
 /// A reviewed construction boundary: callers seal the returned lease only
