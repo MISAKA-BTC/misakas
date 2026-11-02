@@ -328,6 +328,12 @@ impl ScriptPublicKey {
     pub fn script(&self) -> &[u8] {
         &self.script
     }
+
+    /// Heap bytes reserved by a spilled script. Inline bytes are already part
+    /// of ScriptPublicKey's size and must not be counted a second time.
+    pub fn heap_capacity_bytes(&self) -> usize {
+        if self.script.spilled() { self.script.capacity() } else { 0 }
+    }
 }
 
 #[wasm_bindgen]
