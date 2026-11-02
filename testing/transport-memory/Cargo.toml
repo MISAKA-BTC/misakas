@@ -11,6 +11,7 @@ publish = false
 [dependencies]
 bytes = "=1.11.1"
 prost = "=0.14.3"
+borsh = "=1.5.1"
 tonic = { path = "../../vendor/tonic", version = "=0.14.5", default-features = false, features = ["codegen", "gzip", "transport"] }
 tonic-prost = "=0.14.5"
 http-body-util = "0.1"

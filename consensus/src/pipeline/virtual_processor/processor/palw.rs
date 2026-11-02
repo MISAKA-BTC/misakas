@@ -3125,8 +3125,18 @@ impl VirtualStateProcessor {
         snapshot: &kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2,
         complete: bool,
     ) -> Result<Vec<(kaspa_hashes::Hash64, Vec<u8>)>, String> {
+        self.palw_class_carriages_for_snapshot_bounded_v1_impl(snapshot, complete, u64::MAX)
+    }
+
+    pub fn palw_class_carriages_for_snapshot_bounded_v1_impl(
+        &self,
+        snapshot: &kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2,
+        complete: bool,
+        max_declaration_bytes: u64,
+    ) -> Result<Vec<(kaspa_hashes::Hash64, Vec<u8>)>, String> {
         let store = self.palw_class_carriage_store.read();
         let mut declarations = Vec::new();
+        let mut declaration_bytes = 0u64;
         for (id, class) in &snapshot.classes {
             if snapshot.tir_classes.contains_key(id) || snapshot.gen_classes.contains_key(id) {
                 continue; // These carry their IR/program records in the state itself.
@@ -3162,6 +3172,11 @@ impl VirtualStateProcessor {
                             &record.carriage,
                         )?;
                     }
+                    declaration_bytes = declaration_bytes
+                        .checked_add(68)
+                        .and_then(|n| n.checked_add(record.carriage.len() as u64))
+                        .filter(|n| *n <= max_declaration_bytes)
+                        .ok_or_else(|| "snapshot declarations exceed reserved canonical byte envelope".to_string())?;
                     declarations.push((*id, record.carriage.clone()));
                 }
                 Err(error) if complete => return Err(error),

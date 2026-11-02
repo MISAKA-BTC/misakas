@@ -238,32 +238,42 @@ impl RequestPruningPointPalwStateFlow {
                     continue;
                 }
             }
-            let (carriage, class_carriages) = session
+            let (carriage, class_carriages, snapshot_bytes, snapshot_lease) = session
                 .spawn_blocking(move |c| {
-                    match c.pruning_point_palw_state_shared_v1(pp) {
-                        Some(state) => {
-                            let declarations = match c.palw_class_carriages_for_snapshot_v1(&state, false) {
-                                Ok(declarations) => declarations,
-                                Err(error) => {
-                                    kaspa_core::warn!("[palw-sidecar] snapshot declarations for {pp}: {error}");
-                                    return (None, Vec::new());
-                                }
-                            };
-                            // Refuse before allocating a whole encoded Vec on the legacy
-                            // path. Chunked and legacy peers use the same canonical total.
-                            match crate::palw_snapshot_chunks::encode_legacy_snapshot(&state, &declarations) {
-                                Ok(bytes) => (Some(bytes), declarations),
-                                Err(error) => {
-                                    kaspa_core::warn!("[palw-sidecar] cannot serve PALW snapshot for {pp}: {error}");
-                                    (None, Vec::new())
-                                }
-                            }
+                    // Capture BOTH guards in the blocking owner. Dropping an
+                    // awaiting flow must not release them while this task runs.
+                    let mut snapshot_bytes = snapshot_bytes;
+                    let answer = (|| {
+                        let Some(state) = c.pruning_point_palw_state_shared_v1(pp) else {
+                            return Ok::<_, std::io::Error>(None);
+                        };
+                        let cap = crate::palw_gossip::PALW_PRUNING_STATE_MAX_BYTES as u64;
+                        let state_bytes = crate::snapshot_memory::encoded_size(&*state, cap)?;
+                        let remaining = cap
+                            .checked_sub(state_bytes)
+                            .and_then(|n| n.checked_sub(14))
+                            .ok_or_else(|| std::io::Error::other("snapshot canonical envelope exceeds cap"))?;
+                        snapshot_bytes
+                            .grow(crate::snapshot_memory::declaration_metadata_bytes(state.classes.len())?)
+                            .map_err(std::io::Error::other)?;
+                        let declarations =
+                            c.palw_class_carriages_for_snapshot_bounded_v1(&state, false, remaining).map_err(std::io::Error::other)?;
+                        let encoded = crate::palw_snapshot_chunks::encode_legacy_snapshot(&state, &declarations)?;
+                        Ok(Some((encoded, declarations)))
+                    })();
+                    let (carriage, declarations) = match answer {
+                        Ok(Some((bytes, declarations))) => (Some(bytes), declarations),
+                        Ok(None) => (None, Vec::new()),
+                        Err(error) => {
+                            kaspa_core::warn!("[palw-sidecar] cannot serve bounded PALW snapshot for {pp}: {error}");
+                            (None, Vec::new())
                         }
-                        None => (None, Vec::new()),
-                    }
+                    };
+                    // Tuple fields free actual data before generation tickets if
+                    // the async receiver was cancelled while this task ran.
+                    (carriage, declarations, snapshot_bytes, snapshot_lease)
                 })
                 .await;
-            snapshot_bytes.materialized();
             let reply = match carriage {
                 Some(c) => PruningPointPalwStateMessage {
                     found: true,
@@ -314,6 +324,7 @@ impl RequestPruningPointPalwStateFlow {
                 reply.class_carriages.iter().map(|e| e.carriage.len() as u64),
             )
             .unwrap_or(0); // A not-found reply has no state payload and spends only the attempt floor.
+            snapshot_bytes.materialized(); // Includes protobuf class-entry conversion above.
             self.ctx.palw_gossip().charge_sidecar_serve(peer, served);
             self.router
                 .enqueue_preallocated(

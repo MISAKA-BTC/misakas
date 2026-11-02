@@ -3,6 +3,8 @@ extern crate self as kaspa_core;
 extern crate self as kaspa_utils_tower;
 #[path = "../../../core/src/memory_budget.rs"]
 pub mod memory_budget;
+#[path = "../../../protocol/flows/src/snapshot_memory.rs"]
+pub mod snapshot_memory;
 #[path = "../../../utils/tower/src/transport.rs"]
 pub mod transport;
 #[path = "../../../rpc/core/src/api/retained/utxo_memory.rs"]

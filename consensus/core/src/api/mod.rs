@@ -2541,6 +2541,17 @@ pub trait ConsensusApi: Send + Sync {
         Err("this consensus does not index snapshot declarations".into())
     }
 
+    /// Limit canonical declaration bytes before creating independent carriage
+    /// clones. The caller separately admits encoded state and metadata storage.
+    fn palw_class_carriages_for_snapshot_bounded_v1(
+        &self,
+        _snapshot: &crate::palw_state_v2::PalwStateCarriageV2,
+        _complete: bool,
+        _max_declaration_bytes: u64,
+    ) -> Result<Vec<(kaspa_hashes::Hash64, Vec<u8>)>, String> {
+        Err("this consensus cannot pre-bound snapshot declarations".into())
+    }
+
     /// Read-only validation, performed before pruning-state installation.
     fn palw_validate_snapshot_declarations_v1(
         &self,

@@ -293,14 +293,14 @@ fn snapshot_payload_size_with_cap(state_bytes: u64, declarations: impl IntoItera
 /// Preflight canonical serialization without allocating the encoded state. The
 /// existing bounded SizeWriter also stops oversized carriages during their walk.
 pub(crate) fn snapshot_encoded_size(carriage: &PalwStateCarriageV2, declarations: &[(Hash64, Vec<u8>)]) -> io::Result<u64> {
-    let mut size = SizeWriter(0, crate::palw_gossip::PALW_PRUNING_STATE_MAX_BYTES as u64);
-    carriage.serialize(&mut size)?;
-    snapshot_payload_size(size.0, declarations.iter().map(|(_, bytes)| bytes.len() as u64))
+    let state_bytes = crate::snapshot_memory::encoded_size(carriage, crate::palw_gossip::PALW_PRUNING_STATE_MAX_BYTES as u64)?;
+    snapshot_payload_size(state_bytes, declarations.iter().map(|(_, bytes)| bytes.len() as u64))
 }
 
 pub(crate) fn encode_legacy_snapshot(carriage: &PalwStateCarriageV2, declarations: &[(Hash64, Vec<u8>)]) -> io::Result<Vec<u8>> {
-    snapshot_encoded_size(carriage, declarations)?;
-    borsh::to_vec(carriage)
+    let state_bytes = crate::snapshot_memory::encoded_size(carriage, crate::palw_gossip::PALW_PRUNING_STATE_MAX_BYTES as u64)?;
+    snapshot_payload_size(state_bytes, declarations.iter().map(|(_, bytes)| bytes.len() as u64))?;
+    crate::snapshot_memory::encode_exact(carriage, state_bytes)
 }
 
 // PalwStateCarriageV2 reads its optional tagged tails to EOF. A direct tuple is
@@ -1271,6 +1271,7 @@ mod tests {
         let envelope = borsh::to_vec(&SnapshotEnvelope { carriage: &carriage, declarations: &declarations }).unwrap();
         assert_eq!(snapshot_encoded_size(&carriage, &declarations).unwrap(), envelope.len() as u64);
         let legacy = encode_legacy_snapshot(&carriage, &declarations).unwrap();
+        assert_eq!(legacy.capacity(), legacy.len(), "precounted legacy serialization has no unreserved growth tail");
         assert_eq!(legacy, borsh::to_vec(&carriage).unwrap(), "legacy state bytes and optional tails are unchanged");
         let old_field_sum = legacy.len() + declarations.iter().map(|(_, bytes)| bytes.len()).sum::<usize>();
         assert_eq!(envelope.len() - old_field_sum, 14 + 68 * declarations.len());

@@ -11,10 +11,14 @@ use std::{
 struct RawEncoder {
     fail_after_copy: bool,
     queued: Arc<Mutex<Option<Vec<u8>>>>,
+    resources: RetainedResources,
 }
 impl Encoder for RawEncoder {
     type Item = Vec<u8>;
     type Error = Status;
+    fn take_resources(&mut self) -> RetainedResources {
+        std::mem::take(&mut self.resources)
+    }
     fn encode(&mut self, item: Vec<u8>, buf: &mut EncodeBuf<'_>) -> Result<(), Status> {
         buf.put_slice(&item);
         if self.fail_after_copy {
@@ -206,4 +210,31 @@ fn highly_compressed_frame_does_not_retain_uncompressed_sized_backing() {
         "wire frame retained sparse large allocation"
     );
     assert!(s.buf.capacity() <= 1024 * 1024);
+}
+
+#[test]
+fn budgeted_sub_ceiling_frame_has_no_idle_scratch_alias_after_ticket_return() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    struct Ticket(Arc<AtomicUsize>);
+    impl Drop for Ticket {
+        fn drop(&mut self) { self.0.fetch_add(1, Ordering::SeqCst); }
+    }
+    for gzip in [false, true] {
+        let data = vec![29; 512 << 10]; // Below the ordinary 1 MiB reuse ceiling.
+        let released = Arc::new(AtomicUsize::new(0));
+        let mut s = stream(data.clone(), gzip);
+        s.encoder.resources.push(Box::new(Ticket(Arc::clone(&released))));
+        let frame = next(&mut s);
+        assert_eq!(&frame[..], reference_frame(&data, gzip));
+        assert_no_large_backing(&mut s, data.len());
+        let held_slice = frame.slice(1..);
+        drop(frame);
+        assert_eq!(released.load(Ordering::SeqCst), 0);
+        drop(held_slice);
+        assert_eq!(released.load(Ordering::SeqCst), 1);
+        assert_no_large_backing(&mut s, data.len());
+        assert!(Pin::new(&mut s)
+            .poll_next(&mut Context::from_waker(Waker::noop()))
+            .is_pending());
+    }
 }

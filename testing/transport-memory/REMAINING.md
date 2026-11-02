@@ -11,6 +11,10 @@ Implemented:
 - Legacy PALW snapshot serializations reserve before construction, transfer the
   same ticket without a second global raw charge, and keep native/session/disk
   ownership through the final HTTP Bytes owner, including cloned/sliced frames.
+  Serialization now uses an exact-capacity bounded writer; declaration clones
+  check their canonical remaining cap first, and class-count-derived metadata is
+  admitted before collecting them. Blocking work captures both generation and
+  session/native guards, including cancellation of its awaiting flow.
 - Oversized receive/decompression scratch returns at completed-message boundaries
   while preserving unread next frames and separately shared decoded Bytes.
 - RPC pending maps have a 4096 count ceiling. Legacy request clones reserve their
@@ -35,6 +39,9 @@ P1 incomplete ownership boundaries:
    into an inbound owner have not been connected. It bounds logical capacity;
    allocator metadata, fragmented resident pages, stack, input and decompress
    backing remain separate owners/costs.
+   Budgeted encoded frames discard even sub-1-MiB scratch aliases before their
+   tickets return; baseline codec buffers/connection metadata remain outside the
+   audited message owners and need aggregate admission at connection creation.
 2. P2P incoming routes and RPC incoming handler queues still own plain protobuf
    values. Their decoded allocations and flow accumulators need tickets that
    travel into the final state owner; holding a ticket only until dequeue fails
@@ -45,6 +52,9 @@ P1 incomplete ownership boundaries:
    schema/request-derived bounds or use negotiated streaming, before materializing.
    EVM/overlay snapshot serving likewise constructs before the generic output
    ticket; the explicit generation ticket currently covers legacy PALW only.
+   PALW source record reads/cache insertion and declaration validation scratch
+   remain separate owners. Chunked/compressed snapshot declaration collection
+   still uses the older getter and needs the same construction-ticket seam.
    get_utxos_by_addresses is covered through the retained gRPC path after the
    service/gRPC integration; its legacy wRPC/direct Rust serializer returns a
    plain response and still lacks the end-to-end serializer/transport ticket.

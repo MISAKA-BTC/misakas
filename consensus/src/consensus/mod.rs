@@ -4686,6 +4686,15 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_class_carriages_for_snapshot_v1_impl(snapshot, complete)
     }
 
+    fn palw_class_carriages_for_snapshot_bounded_v1(
+        &self,
+        snapshot: &kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2,
+        complete: bool,
+        max_declaration_bytes: u64,
+    ) -> Result<Vec<(kaspa_hashes::Hash64, Vec<u8>)>, String> {
+        self.virtual_processor.palw_class_carriages_for_snapshot_bounded_v1_impl(snapshot, complete, max_declaration_bytes)
+    }
+
     fn palw_validate_snapshot_declarations_v1(
         &self,
         snapshot: &kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2,
