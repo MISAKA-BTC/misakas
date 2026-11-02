@@ -33,6 +33,19 @@ enum Task {
 // admitted frame plus pending storage fit the existing 1024-byte/frame owner.
 // Force a review if the private task grows beyond the conservative lane size.
 const _: () = assert!(std::mem::size_of::<Task>() <= 64);
+// Capacity belongs to the builder's existing frame owner for its whole life.
+// Contents are scratch only: every walk clears BOTH collections before entry,
+// including after a prior walk returned early. No computed value is retained.
+pub(super) struct WalkScratch {
+    pending: Vec<Task>,
+    seen: HashSet<Task>,
+}
+impl WalkScratch {
+    pub(super) fn new(cap: u64) -> Result<Self, Error> {
+        let cap = usize::try_from(cap).map_err(|_| "wide trace capacity")?;
+        Ok(Self { pending: vec_exact(cap)?, seen: HashSet::new() })
+    }
+}
 // Ref itself lacks Ord; this private key has no serialized representation.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 enum RefKey {
@@ -58,13 +71,21 @@ impl From<Ref> for RefKey {
 struct Walk<'b, 'c, 'a> {
     b: &'b WidePanelBuilderV2<'c, 'a>,
     frontier: u64,
-    pending: Vec<Task>,
+    pending: &'b mut Vec<Task>,
     // Membership only: traversal order comes from pending, never this table.
     // Reads remain ordered sets for canonical source/proof construction. Keep
     // the existing 1024-byte/frame owner and all spent-work/frame limits; no
     // smaller memory quote or refunded visits are inferred from this change.
-    seen: HashSet<Task>,
+    seen: &'b mut HashSet<Task>,
     reads: Reads,
+}
+impl Drop for Walk<'_, '_, '_> {
+    fn drop(&mut self) {
+        // Success and every early return retain only capacity. Failed walks
+        // cannot leave pending tasks or membership for another relation.
+        self.pending.clear();
+        self.seen.clear();
+    }
 }
 impl Walk<'_, '_, '_> {
     fn push(&mut self, t: Task) -> Result<(), Error> {
@@ -312,8 +333,11 @@ impl Walk<'_, '_, '_> {
     }
 }
 pub(super) fn discover(b: &WidePanelBuilderV2<'_, '_>, r: &ExpandedRelation) -> Result<Reads, Error> {
-    let cap = usize::try_from(b.capture.session.limits.max_trace_frames).map_err(|_| "wide trace capacity")?;
-    let mut w = Walk { b, frontier: r.legacy_frontier, pending: vec_exact(cap)?, seen: HashSet::new(), reads: Reads::default() };
+    let mut scratch = b.walk_scratch.try_borrow_mut().map_err(|_| "wide trace scratch already borrowed")?;
+    let WalkScratch { pending, seen } = &mut *scratch;
+    pending.clear();
+    seen.clear();
+    let mut w = Walk { b, frontier: r.legacy_frontier, pending, seen, reads: Reads::default() };
     match r.kind {
         ExpandedRelationKind::RecomputeNode { ctx, node, first_lane, lane_count, .. } => {
             for l in first_lane..first_lane + u64::from(lane_count) {
@@ -350,5 +374,5 @@ pub(super) fn discover(b: &WidePanelBuilderV2<'_, '_>, r: &ExpandedRelation) -> 
         w.b.capture.session.charge(Charge::Visit, 1)?;
         w.run_task(t)?;
     }
-    Ok(w.reads)
+    Ok(std::mem::take(&mut w.reads))
 }

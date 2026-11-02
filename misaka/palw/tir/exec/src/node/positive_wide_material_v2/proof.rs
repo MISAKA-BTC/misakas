@@ -1,4 +1,4 @@
-use super::trace::discover;
+use super::trace::{WalkScratch, discover};
 use super::*;
 use crate::node::{inventory::TirParamOpenerV1, memory::tir_full_tree_storage_need_v1, tree::TirStepTreeV1};
 use kaspa_consensus_core::{
@@ -64,6 +64,7 @@ pub struct WidePanelBuilderV2<'c, 'a> {
     tree: TirStepTreeV1,
     row_tree: TirStepTreeV1,
     tile_trees: Vec<TirStepTreeV1>,
+    pub(super) walk_scratch: RefCell<WalkScratch>,
     live: Cell<bool>,
     _lease: TirMemoryLeaseV1,
 }
@@ -219,6 +220,9 @@ impl<'c, 'a> WidePanelBuilderV2<'c, 'a> {
         capture.session.charge(Charge::Visit, owners.metadata_auth_work)?;
         let inventory = PalwTirInventoryIndexV1::new(e.space.program()).ok_or("wide Panel inventory")?;
         let binding = capture.binding()?;
+        // Acquired builder lease already owns frames concurrently with all
+        // material/authentication stages. Retain capacity, never walk contents.
+        let walk_scratch = RefCell::new(WalkScratch::new(l.max_trace_frames)?);
         capture.builder_live.set(true);
         Ok(Self {
             capture,
@@ -231,6 +235,7 @@ impl<'c, 'a> WidePanelBuilderV2<'c, 'a> {
             tree,
             row_tree,
             tile_trees,
+            walk_scratch,
             live: Cell::new(false),
             _lease: lease,
         })

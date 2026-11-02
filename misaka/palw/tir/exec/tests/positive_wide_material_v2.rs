@@ -276,7 +276,7 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     let source = TirParamsSourceV1(f.params);
     let inventory = TirHeldInventoryV1::build(f.program, &source).unwrap();
     assert_eq!(inventory.tree.root(), f.artifact);
-    let builder =
+    let mut builder =
         WidePanelBuilderV2::prepare(&capture, &prep, &result, &signed.rooted, &inventory, provider(), owners(), &reserver).unwrap();
     let tape = builder.claims_tape(tempfile::tempfile().unwrap()).unwrap();
     let mut claims = vec![];
@@ -326,8 +326,8 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
         let material = builder.material(index as u64, progress.legacy_frontier).unwrap();
         assert!(builder.material(index as u64, progress.legacy_frontier).is_err());
         // The existing source/frame owners remain live; additionally own both
-        // serialized test exports before allocation. Each fresh walk has its
-        // own randomized membership table, but canonical bytes and cost agree.
+        // serialized test exports before allocation. Reused scratch and a
+        // fresh builder/seed must both preserve canonical bytes and spent work.
         let _exports = reserver("test-repeated-material-exports", f.job.shape_profile_id, f.job.context_hash(), 4 << 20).unwrap();
         let first_bytes = material_encoding(&material);
         assert!(first_bytes.len() <= 2 << 20);
@@ -342,13 +342,26 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
         drop(material);
         let repeated = builder.material(index as u64, progress.legacy_frontier).unwrap();
         let second_bytes = material_encoding(&repeated);
-        assert_eq!(first_bytes, second_bytes, "membership seed cannot change canonical materials");
+        assert_eq!(first_bytes, second_bytes, "cleared scratch cannot change canonical materials");
         assert_eq!(
             material_meter_delta(after_first, before_first),
             material_meter_delta(builder.meter(), after_first),
-            "repeat/seed changes cannot omit or refund cumulative work"
+            "scratch reuse cannot omit or refund cumulative work"
         );
         drop(repeated);
+        drop(second_bytes);
+        drop(builder);
+        builder = WidePanelBuilderV2::prepare(&capture, &prep, &result, &signed.rooted, &inventory, provider(), owners(), &reserver)
+            .unwrap();
+        let before_fresh = builder.meter();
+        let fresh = builder.material(index as u64, progress.legacy_frontier).unwrap();
+        assert_eq!(first_bytes, material_encoding(&fresh), "fresh membership seed cannot change canonical materials");
+        assert_eq!(
+            material_meter_delta(after_first, before_first),
+            material_meter_delta(builder.meter(), before_fresh),
+            "fresh capacity/seed cannot omit or refund cumulative work"
+        );
+        drop(fresh);
         if outcome == Err(FullRelationError::PanelMismatch) {
             assert!(wrong_panel);
             assert_eq!(checker.progress().outcome, CheckOutcome::WitnessRejected);
@@ -426,6 +439,45 @@ fn unknown_provider_scratch_is_refused_without_resetting_session_costs() {
         assert!(after.visits > before.visits);
         assert!(after.copied_bytes > before.copied_bytes);
         assert!(after.provider_bytes > before.provider_bytes);
+    });
+}
+#[test]
+fn failed_partial_trace_is_cleared_before_retry_without_refunding_work() {
+    run_wide_common::with_fixture(1, |f, _| {
+        let space = PalwTirStepSpaceV2::new(&f.class).unwrap();
+        let runner = TirClassRunnerWideQ24V2::new(&space, f.plan, f.params, f.job.shape_profile_id).unwrap();
+        let reserver = reserve();
+        let mut l = bounds();
+        l.max_trace_frames = 1;
+        let work = WidePanelWorkV2::new(l, f.job.shape_profile_id, f.job.context_hash(), &disk_reserve()).unwrap();
+        let capture = capture_one_pass_v2(
+            CaptureExpectedV2 { class: &f.class, artifact: f.artifact, job: &f.job, space: &space, prompt: PROMPT },
+            &runner,
+            run_bounds(),
+            &work,
+            tempfile::tempfile().unwrap(),
+            &reserver,
+        )
+        .unwrap();
+        let signed = SignedMiner::new(f, false);
+        let result = signed.authenticate();
+        let prep = signed.preparation(f);
+        let source = TirParamsSourceV1(f.params);
+        let inventory = TirHeldInventoryV1::build(f.program, &source).unwrap();
+        let builder =
+            WidePanelBuilderV2::prepare(&capture, &prep, &result, &signed.rooted, &inventory, provider(), owners(), &reserver)
+                .unwrap();
+        let attempt = || match builder.material(0, 0) {
+            Ok(_) => panic!("one-frame trace unexpectedly completed"),
+            Err(e) => e,
+        };
+        let before = builder.meter();
+        assert!(attempt().contains("frame cap"));
+        let after_first = builder.meter();
+        assert!(attempt().contains("frame cap"));
+        let delta = material_meter_delta(after_first, before);
+        assert!(delta.visits >= 256 && delta.copied_bytes > 0);
+        assert_eq!(delta, material_meter_delta(builder.meter(), after_first));
     });
 }
 #[test]
