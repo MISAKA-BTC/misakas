@@ -437,7 +437,7 @@ impl Router {
     ) -> Result<(), ProtocolError> {
         assert!(msg.payload.is_some(), "Kaspad P2P message should always have a value");
         let msg = Outbound::with_resources(msg, &self.outgoing_budget, resources)
-            .map_err(|_| ProtocolError::OutgoingRouteCapacityReached(self.to_string()))?;
+            .map_err(|error| ProtocolError::LocalTransportCapacityUnavailable(error.to_string()))?;
         self.enqueue_admitted(msg)
     }
 
@@ -449,7 +449,7 @@ impl Router {
         resources: tonic::codec::RetainedResources,
     ) -> Result<(), ProtocolError> {
         let msg = Outbound::with_preallocated(msg, &self.outgoing_budget, lease, resources)
-            .map_err(|_| ProtocolError::OutgoingRouteCapacityReached(self.to_string()))?;
+            .map_err(|error| ProtocolError::LocalTransportCapacityUnavailable(error.to_string()))?;
         self.enqueue_admitted(msg)
     }
 

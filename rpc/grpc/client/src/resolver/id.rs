@@ -18,11 +18,12 @@ use tokio::sync::oneshot;
 struct Pending {
     timestamp: Instant,
     sender: KaspadResponseSender,
+    _memory: kaspa_core::memory_budget::MemoryLease,
 }
 
 impl Pending {
-    fn new(sender: KaspadResponseSender) -> Self {
-        Self { timestamp: Instant::now(), sender }
+    fn new(sender: KaspadResponseSender, memory: kaspa_core::memory_budget::MemoryLease) -> Self {
+        Self { timestamp: Instant::now(), sender, _memory: memory }
     }
 }
 
@@ -38,14 +39,25 @@ impl IdResolver {
 }
 
 impl Resolver for IdResolver {
-    fn register_request(&self, _: KaspadPayloadOps, request: &KaspadRequest) -> KaspadResponseReceiver {
+    fn register_request(&self, _: KaspadPayloadOps, request: &KaspadRequest) -> Result<KaspadResponseReceiver> {
+        let memory = kaspa_core::memory_budget::global_memory_budget()
+            .try_reserve(kaspa_core::memory_budget::MemoryClass::Transport, 512)
+            .map_err(|error| Error::TonicStatus(tonic::Status::resource_exhausted(error.to_string())))?;
         let (sender, receiver) = oneshot::channel::<Result<KaspadResponse>>();
         {
             let mut pending_calls = self.pending_calls.lock().unwrap();
-            pending_calls.insert(request.id, Pending::new(sender));
+            if pending_calls.len() >= super::MAX_PENDING_REQUESTS {
+                return Err(Error::ChannelSendError);
+            }
+            pending_calls.insert(request.id, Pending::new(sender, memory.clone()));
+            memory.materialized();
             drop(pending_calls);
         }
-        receiver
+        Ok(receiver)
+    }
+
+    fn cancel_request(&self, request_id: u64) {
+        self.pending_calls.lock().unwrap().remove(&request_id);
     }
 
     fn handle_response(&self, response: KaspadResponse) {
@@ -82,5 +94,33 @@ impl Resolver for IdResolver {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn rejected_and_cancelled_calls_do_not_remain_pending() {
+        let resolver = Arc::new(IdResolver::new());
+        let request = KaspadRequest { id: 7, ..Default::default() };
+        let receiver = resolver.register_request(KaspadPayloadOps::GetInfo, &request).unwrap();
+        let guard = crate::resolver::PendingRequestGuard::new(resolver.clone(), 7);
+        assert_eq!(resolver.pending_calls.lock().unwrap().len(), 1);
+        drop(guard); // queue rejection or cancellation of the call future
+        assert!(resolver.pending_calls.lock().unwrap().is_empty());
+        assert!(receiver.blocking_recv().is_err());
+    }
+    #[test]
+    fn too_many_pending_calls_fail_without_wait_and_resume_after_cancel() {
+        let resolver = IdResolver::new();
+        let mut replies = Vec::new();
+        for id in 0..super::super::MAX_PENDING_REQUESTS as u64 {
+            replies.push(resolver.register_request(KaspadPayloadOps::GetInfo, &KaspadRequest { id, ..Default::default() }).unwrap());
+        }
+        assert!(resolver.register_request(KaspadPayloadOps::GetInfo, &KaspadRequest { id: 9000, ..Default::default() }).is_err());
+        resolver.cancel_request(0);
+        assert!(resolver.register_request(KaspadPayloadOps::GetInfo, &KaspadRequest { id: 9000, ..Default::default() }).is_ok());
+        drop(replies);
     }
 }

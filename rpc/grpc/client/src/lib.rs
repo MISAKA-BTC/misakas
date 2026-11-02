@@ -773,9 +773,12 @@ impl Inner {
 
             trace!("GRPC client: resolver call: {:?}", request);
             if request.payload.is_some() {
-                let receiver = self.resolver().register_request(op, &request);
+                let resolver = self.resolver();
+                let receiver = resolver.register_request(op, &request)?;
+                let mut pending = crate::resolver::PendingRequestGuard::new(resolver, id);
                 let request = kaspa_utils_tower::transport::Outbound::try_new(request, &self.request_budget)?;
                 self.request_sender.try_send(request).map_err(|_| Error::ChannelSendError)?;
+                pending.sent();
                 receiver.await?
             } else {
                 Err(Error::MissingRequestPayload)
