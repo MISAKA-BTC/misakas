@@ -26,7 +26,7 @@ LazyFree observations record sampling start time, success/failure and bytes. Rea
 | Native tip and pruning carriage caches | Shared cold-reader gate prevents duplicate simultaneous materialization, with key reread after waiting. Cache hits retain Arc ownership and do not wait on the cold gate. DB writers do not acquire the cold gate; decode errors release it for retries. |
 | Strict native WriteBatch and installation | Existing allocation tickets already remain through commit/abandonment. The checker now joins the process bank. Disk quota remains separate. |
 | Ordinary native DB batches / bare state extraction | **Not fully covered.** Legacy bare-value extraction releases its wrapper ticket. Ordinary untracked writers can retain serialized batch copies; no blanket strict-mode enablement was introduced. |
-| General native request/growth APIs | Resident accounting connects known bytes to the shared bank. A materialization boundary was not guessed for existing callers; use explicit pending APIs only after reviewing the construction owner. |
+| General native request/growth APIs | Existing general request API remains disabled without strict capability, because some legacy consumers flatten failures into semantic strings. When armed, known bytes join the bank as resident accounting. Default admission is limited to explicit new pending APIs and recognized cold-wire/retained boundaries. A materialization boundary was not guessed for existing callers. |
 | PALW model/replay workspace | Existing PALW execution/share/host ledger retained; model workspace is not charged again into the process bank. This is not complete retained-allocation coverage for model caches. |
 | RocksDB native caches, ordinary DAG/UTXO caches, allocator retained arenas, all SDK allocations | **Not fully covered.** Their RSS consumes live headroom, but unaudited retained allocations do not each own process-bank tickets. |
 
@@ -34,7 +34,7 @@ Native request tickets can still carry conservative whole-operation peaks for an
 
 ## Legacy growth boundaries not converted in the first implementation
 
-`grow_memory_v1` remains resident accounting for compatibility. `grow_pending_memory_v1` explicitly reserves new promises and requires `materialized_v1` after the actual construction. These production call sites require follow-up boundary review (not including historical source copies under docs or unit tests):
+`reserve_native_requests_v1` preserves compatibility (`None` without explicit strict capability); it is not globally activated across its legacy consumers. `grow_memory_v1` remains resident accounting for compatibility. `grow_pending_memory_v1` explicitly reserves new promises and requires `materialized_v1` after the actual construction. These production call sites require follow-up boundary review (not including historical source copies under docs or unit tests):
 
 | Source | Additional allocation / owner |
 | --- | --- |
