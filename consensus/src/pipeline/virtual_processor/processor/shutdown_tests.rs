@@ -1,12 +1,14 @@
 use super::*;
 use crate::consensus::test_consensus::TestConsensus;
 use crate::pipeline::deps_manager::BlockTask;
+use futures_util::FutureExt;
 use kaspa_consensus_core::{
     api::ConsensusApi,
     blockstatus::BlockStatus,
     config::{ConfigBuilder, params::MAINNET_PARAMS},
 };
 use kaspa_consensus_notify::notification::PruningPointUtxoSetOverrideNotification;
+use kaspa_notify::{scope::PruningPointUtxoSetOverrideScope, subscriber::SubscriptionManager};
 
 #[test]
 fn stopping_virtual_drains_queued_tasks_preserves_db_and_critical_notifications() {
@@ -30,6 +32,10 @@ fn stopping_virtual_drains_queued_tasks_preserves_db_and_critical_notifications(
     );
     let before: Vec<_> = vp.db.iterator(rocksdb::IteratorMode::Start).map(Result::unwrap).collect();
     let root = tc.notification_root();
+    root.start_notify(0, PruningPointUtxoSetOverrideScope {}.into())
+        .now_or_never()
+        .expect("root subscription setup is synchronous")
+        .unwrap();
     root.send(Notification::PruningPointUtxoSetOverride(PruningPointUtxoSetOverrideNotification {})).unwrap();
     assert!(!root.is_closed());
 
