@@ -271,7 +271,7 @@ impl Store<'_> {
         };
         let additional = output_requests(scope, renderings, eog)?;
         if let Some(ticket) = lease.as_mut() {
-            ticket.grow_memory_v1(additional).map_err(E::Resource)?;
+            ticket.grow_pending_memory_v1(additional).map_err(E::Resource)?;
         }
         let value = decode_material(scope, renderings, eog, raw)?;
         Ok(NativeRetainedV1::from_owner_reserved_v1(value, lease))
@@ -497,7 +497,7 @@ impl Store<'_> {
         let (binding, mut lease) = self.semantic_table_context_reserved_v1(state, claim, reserve_native_requests_v1)?;
         let additional = table_requests::<SemanticTableMaterialV1>(binding, renderings, eog)?;
         if let Some(ticket) = lease.as_mut() {
-            ticket.grow_memory_v1(additional).map_err(E::Resource)?;
+            ticket.grow_pending_memory_v1(additional).map_err(E::Resource)?;
         }
         let (renderings, eog, counts) = decode_table(binding, renderings, eog)?;
         Ok(NativeRetainedV1::from_owner_reserved_v1(SemanticTableMaterialV1 { binding, renderings, eog, counts }, lease))
