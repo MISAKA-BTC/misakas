@@ -567,11 +567,21 @@ impl VirtualStateProcessor {
         Option<kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1>,
         kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1,
     > {
-        match self.palw_candidate_state_v2_checked(candidate) {
-            Ok(state) => Ok(Some(state)),
+        match self.palw_candidate_state_v2_checked_until(candidate, || self.is_consensus_exiting.load(Ordering::Acquire)) {
+            Ok(crate::processes::palw_state_walk::PalwStateWalkOutcomeV1::Complete(state)) => Ok(Some(state)),
+            Ok(crate::processes::palw_state_walk::PalwStateWalkOutcomeV1::ConsensusExiting) => Err(Self::palw_selection_shutdown_v1()),
             Err(PalwWeighFaultV2::NativeCapacityUnavailable) => Err(Self::palw_selection_capacity_unavailable_v1()),
             Err(PalwWeighFaultV2::NoOpinion | PalwWeighFaultV2::StoreUnreadable) => Ok(None),
         }
+    }
+
+    // Existing selection APIs carry local unavailable coverage. Keep shutdown
+    // explicit in its cause; the virtual candidate boundary returns the typed
+    // ConsensusExiting result before interpreting this as a gate verdict.
+    fn palw_selection_shutdown_v1() -> kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1 {
+        kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<
+            kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1,
+        >("local consensus shutdown", "candidate reconstruction stopped at a delta boundary")
     }
 
     fn palw_selection_capacity_unavailable_v1() -> kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1 {
@@ -648,24 +658,33 @@ impl VirtualStateProcessor {
         // pruned delta is genuinely an absence and still abstains, for the reason the horizon
         // paragraph above gives; a store that will not read is this node's own fault and the
         // honest answer to "may this reorg proceed" is no.
-        let (challenger_state, ancestor_state) =
-            match (self.palw_candidate_state_v2_checked(candidate), self.palw_candidate_state_v2_checked(ancestor)) {
-                (Ok(challenger), Ok(ancestor_state)) => (challenger, ancestor_state),
-                (Err(PalwWeighFaultV2::NativeCapacityUnavailable), _) | (_, Err(PalwWeighFaultV2::NativeCapacityUnavailable)) => {
-                    return Err(Self::palw_selection_capacity_unavailable_v1());
-                }
-                (Err(PalwWeighFaultV2::StoreUnreadable), _) | (_, Err(PalwWeighFaultV2::StoreUnreadable)) => {
-                    warn!(
-                        "deep reorg refused: this node's own PALW snapshot is unavailable, so ADR-0065 D2 cannot clear \
+        let (challenger_state, ancestor_state) = match (
+            self.palw_candidate_state_v2_checked_until(candidate, || self.is_consensus_exiting.load(Ordering::Acquire)),
+            self.palw_candidate_state_v2_checked_until(ancestor, || self.is_consensus_exiting.load(Ordering::Acquire)),
+        ) {
+            (
+                Ok(crate::processes::palw_state_walk::PalwStateWalkOutcomeV1::Complete(challenger)),
+                Ok(crate::processes::palw_state_walk::PalwStateWalkOutcomeV1::Complete(ancestor_state)),
+            ) => (challenger, ancestor_state),
+            (Ok(crate::processes::palw_state_walk::PalwStateWalkOutcomeV1::ConsensusExiting), _)
+            | (_, Ok(crate::processes::palw_state_walk::PalwStateWalkOutcomeV1::ConsensusExiting)) => {
+                return Err(Self::palw_selection_shutdown_v1());
+            }
+            (Err(PalwWeighFaultV2::NativeCapacityUnavailable), _) | (_, Err(PalwWeighFaultV2::NativeCapacityUnavailable)) => {
+                return Err(Self::palw_selection_capacity_unavailable_v1());
+            }
+            (Err(PalwWeighFaultV2::StoreUnreadable), _) | (_, Err(PalwWeighFaultV2::StoreUnreadable)) => {
+                warn!(
+                    "deep reorg refused: this node's own PALW snapshot is unavailable, so ADR-0065 D2 cannot clear \
                          candidate {candidate} — a veto that cannot read its evidence does not wave the reorg through"
-                    );
-                    return Ok(DnsReorgOutcome::FrontierProvenanceViolation);
-                }
-                _ => {
-                    warn!("PALW frontier provenance abstains: this node cannot materialize both sides of the fork at {ancestor}");
-                    return Ok(DnsReorgOutcome::GateInactive);
-                }
-            };
+                );
+                return Ok(DnsReorgOutcome::FrontierProvenanceViolation);
+            }
+            _ => {
+                warn!("PALW frontier provenance abstains: this node cannot materialize both sides of the fork at {ancestor}");
+                return Ok(DnsReorgOutcome::GateInactive);
+            }
+        };
 
         let minted: std::collections::BTreeSet<_> =
             challenger_state.bonds_iter().map(|(k, _)| *k).filter(|k| ancestor_state.bond(k).is_none()).collect();
@@ -747,6 +766,22 @@ impl VirtualStateProcessor {
         &self,
         candidate: BlockHash,
     ) -> Result<kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1, PalwWeighFaultV2> {
+        match self.palw_candidate_state_v2_checked_until(candidate, || false)? {
+            crate::processes::palw_state_walk::PalwStateWalkOutcomeV1::Complete(state) => Ok(state),
+            crate::processes::palw_state_walk::PalwStateWalkOutcomeV1::ConsensusExiting => {
+                unreachable!("the ordinary reader does not request shutdown")
+            }
+        }
+    }
+
+    fn palw_candidate_state_v2_checked_until(
+        &self,
+        candidate: BlockHash,
+        mut should_stop: impl FnMut() -> bool,
+    ) -> Result<crate::processes::palw_state_walk::PalwStateWalkOutcomeV1, PalwWeighFaultV2> {
+        if should_stop() {
+            return Ok(crate::processes::palw_state_walk::PalwStateWalkOutcomeV1::ConsensusExiting);
+        }
         let Some(state_params) = self.palw_state_params_v2.as_ref() else { return Err(PalwWeighFaultV2::NoOpinion) };
         let store = self.palw_state_v2_store.read();
         let (tip_block, tip_state) = match store.load_tip_retained_v1(state_params) {
@@ -798,30 +833,36 @@ impl VirtualStateProcessor {
         // reads back perfectly and whose delta rows are corrupt. A pruned or absent delta really
         // is an absence and still abstains; anything the STORE refused, and any delta of this
         // node's own that will not compose with this node's own state, is a fault.
-        crate::processes::palw_state_walk::walk_chain_path_retained_v1(&store, state_params, tip_state, &removed, &added).map_err(
-            |e| {
-                use crate::processes::palw_state_walk::PalwStateWalkError as W;
-                if e.native_capacity_v1().is_some() {
-                    warn!("PALW candidate walk awaits local native capacity: {e}");
-                    return PalwWeighFaultV2::NativeCapacityUnavailable;
-                }
-                if let Some(context) = e.native_context_v1() {
-                    use kaspa_consensus_core::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1 as F;
-                    return match context {
-                        F::Capacity(_) | F::CapacityUnavailable => PalwWeighFaultV2::NativeCapacityUnavailable,
-                        F::HistoryUnavailable => PalwWeighFaultV2::NoOpinion,
-                        F::StoreUnreadable => PalwWeighFaultV2::StoreUnreadable,
-                    };
-                }
-                match e {
-                    W::MissingDelta(_) | W::NoAnchor => PalwWeighFaultV2::NoOpinion,
-                    W::Store(_) | W::State(_) | W::Resource(_) => {
-                        warn!("PALW state fault: this node's own V2 delta rows would not walk ({e}); it can weigh no candidate");
-                        PalwWeighFaultV2::StoreUnreadable
-                    }
-                }
-            },
+        crate::processes::palw_state_walk::walk_chain_path_retained_until_v1(
+            &store,
+            state_params,
+            tip_state,
+            &removed,
+            &added,
+            should_stop,
         )
+        .map_err(|e| {
+            use crate::processes::palw_state_walk::PalwStateWalkError as W;
+            if e.native_capacity_v1().is_some() {
+                warn!("PALW candidate walk awaits local native capacity: {e}");
+                return PalwWeighFaultV2::NativeCapacityUnavailable;
+            }
+            if let Some(context) = e.native_context_v1() {
+                use kaspa_consensus_core::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1 as F;
+                return match context {
+                    F::Capacity(_) | F::CapacityUnavailable => PalwWeighFaultV2::NativeCapacityUnavailable,
+                    F::HistoryUnavailable => PalwWeighFaultV2::NoOpinion,
+                    F::StoreUnreadable => PalwWeighFaultV2::StoreUnreadable,
+                };
+            }
+            match e {
+                W::MissingDelta(_) | W::NoAnchor => PalwWeighFaultV2::NoOpinion,
+                W::Store(_) | W::State(_) | W::Resource(_) => {
+                    warn!("PALW state fault: this node's own V2 delta rows would not walk ({e}); it can weigh no candidate");
+                    PalwWeighFaultV2::StoreUnreadable
+                }
+            }
+        })
     }
 
     /// **The block whose PALW standing represents this consensus** — its virtual sink, normally.

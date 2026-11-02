@@ -20,6 +20,14 @@ fn stopping_virtual_drains_queued_tasks_preserves_db_and_critical_notifications(
     tc.shutdown(handles);
     assert!(vp.is_consensus_exiting.load(Ordering::Acquire));
     assert!(matches!(vp.check_shutdown_boundary(), Err(PalwLocalTransitionFaultV1::Shutdown)));
+    assert!(
+        matches!(vp.palw_candidate_state_v2_checked(sink), Err(PalwWeighFaultV2::NoOpinion)),
+        "ordinary/in-block readers retain their non-PALW behavior even while this instance stops"
+    );
+    assert!(
+        vp.palw_candidate_state_for_selection_v2(sink).is_err(),
+        "selection shutdown must never become absent state or GateInactive"
+    );
     let before: Vec<_> = vp.db.iterator(rocksdb::IteratorMode::Start).map(Result::unwrap).collect();
     let root = tc.notification_root();
     root.send(Notification::PruningPointUtxoSetOverride(PruningPointUtxoSetOverrideNotification {})).unwrap();
